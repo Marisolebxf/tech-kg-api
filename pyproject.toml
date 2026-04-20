@@ -20,5 +20,5 @@ dependencies = [
     "redis>=7.4.0",
     "sqlalchemy>=2.0.49",
     "uvicorn>=0.44.0",
-    "zai>=0.0.2",
+    "zai-sdk>=0.2.2",
 ]

@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from app.routers.entity_linking import router as entity_linking_router
 from app.routers.entity_extraction import router as entity_extraction_router
+from app.routers.relation_extraction import router as relation_extraction_router
 
 app = FastAPI(
     title="Tech KG API",
@@ -10,6 +11,7 @@ app = FastAPI(
 
 app.include_router(entity_linking_router, prefix="/api/v1")
 app.include_router(entity_extraction_router, prefix="/api/v1")
+app.include_router(relation_extraction_router, prefix="/api/v1")
 
 
 @app.get("/hello")

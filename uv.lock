@@ -95,6 +95,15 @@ wheels = [
 ]
 
 [[package]]
+name = "cachetools"
+version = "7.0.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/af/dd/57fe3fdb6e65b25a5987fd2cdc7e22db0aef508b91634d2e57d22928d41b/cachetools-7.0.5.tar.gz", hash = "sha256:0cd042c24377200c1dcd225f8b7b12b0ca53cc2c961b43757e774ebe190fd990", size = 37367, upload-time = "2026-03-09T20:51:29.451Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/06/f3/39cf3367b8107baa44f861dc802cbf16263c945b62d8265d36034fc07bea/cachetools-7.0.5-py3-none-any.whl", hash = "sha256:46bc8ebefbe485407621d0a4264b23c080cedd913921bad7ac3ed2f26c183114", size = 13918, upload-time = "2026-03-09T20:51:27.33Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.2.25"
 source = { registry = "https://pypi.org/simple" }
@@ -446,6 +455,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pyjwt"
+version = "2.12.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c2/27/a3b6e5bf6ff856d2509292e95c8f57f0df7017cf5394921fc4e4ef40308a/pyjwt-2.12.1.tar.gz", hash = "sha256:c74a7a2adf861c04d002db713dd85f84beb242228e671280bf709d765b03672b", size = 102564, upload-time = "2026-03-13T19:27:37.25Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/7a/8dd906bd22e79e47397a61742927f6747fe93242ef86645ee9092e610244/pyjwt-2.12.1-py3-none-any.whl", hash = "sha256:28ca37c070cad8ba8cd9790cd940535d40274d22f80ab87f3ac6a713e6e8454c", size = 29726, upload-time = "2026-03-13T19:27:35.677Z" },
+]
+
+[[package]]
 name = "pytest"
 version = "9.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -522,6 +540,15 @@ wheels = [
 ]
 
 [[package]]
+name = "sniffio"
+version = "1.3.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+]
+
+[[package]]
 name = "sqlalchemy"
 version = "2.0.49"
 source = { registry = "https://pypi.org/simple" }
@@ -592,7 +619,7 @@ dependencies = [
     { name = "redis" },
     { name = "sqlalchemy" },
     { name = "uvicorn" },
-    { name = "zai" },
+    { name = "zai-sdk" },
 ]
 
 [package.metadata]
@@ -612,7 +639,7 @@ requires-dist = [
     { name = "redis", specifier = ">=7.4.0" },
     { name = "sqlalchemy", specifier = ">=2.0.49" },
     { name = "uvicorn", specifier = ">=0.44.0" },
-    { name = "zai", specifier = ">=0.0.2" },
+    { name = "zai-sdk", specifier = ">=0.2.2" },
 ]
 
 [[package]]
@@ -659,7 +686,18 @@ wheels = [
 ]
 
 [[package]]
-name = "zai"
-version = "0.0.2"
+name = "zai-sdk"
+version = "0.2.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/50/53/619231e36ad895c0fb56d94805db588d8d911878d7f207653a748f0e722a/zai-0.0.2.tar.gz", hash = "sha256:9abe369c3a653d4a8c325551d6e0539c047e567c6862fd0c73f5d3acfa8acb94", size = 997, upload-time = "2018-11-07T09:12:58.861Z" }
+dependencies = [
+    { name = "cachetools" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-core" },
+    { name = "pyjwt" },
+    { name = "sniffio" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/64/a1/0f392da4afd53977383c03ad5c4cc4079b958fb4acd9f8bdeb8fa1e2e5e5/zai_sdk-0.2.2.tar.gz", hash = "sha256:841af188586c41f0f98abcad17b162dc97461c3ab8b3d09f93b0333ebdfe72c3", size = 76605, upload-time = "2026-02-02T16:10:28.502Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ba/02/d586e861e711f8449c567b01b004d7c5f65ee07c75709992a84e3ef9c40e/zai_sdk-0.2.2-py3-none-any.whl", hash = "sha256:675e9ff3fc2a86e38631331469b935589ae60492127f2c2822c7555214f2dd25", size = 125579, upload-time = "2026-02-02T16:10:26.975Z" },
+]

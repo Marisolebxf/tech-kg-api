@@ -11,7 +11,11 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
+from dotenv import load_dotenv
+
 from graph_db.base import GraphDatabase
+
+load_dotenv()
 
 
 # ---------------------------------------------------------------------------

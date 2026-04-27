@@ -7,13 +7,18 @@ import json
 import re
 import os
 from dotenv import load_dotenv
-from zai import ZhipuAiClient
+
+try:
+    from zai import ZhipuAiClient
+except ImportError:  # pragma: no cover - SDK may be absent or incompatible
+    ZhipuAiClient = None
+
 load_dotenv() 
 # API Key 从环境变量读取，不硬编码
 API_KEY = os.getenv("ZHIPUAI_API_KEY", "")
 MODEL   = os.getenv("MODEL","glm-5.1")
 
-client = ZhipuAiClient(api_key=API_KEY)
+client = ZhipuAiClient(api_key=API_KEY) if ZhipuAiClient and API_KEY else None
 
 # 实体类型定义
 ENTITY_TYPES = {
@@ -68,6 +73,8 @@ def extract(text: str, source_type: str = "general") -> list:
     :return: 实体列表
     """
     if not text or not text.strip():
+        return []
+    if client is None:
         return []
 
     try:

@@ -42,6 +42,41 @@ uv run uvicorn app.main:app --reload
 - <http://localhost:8000/api>
 - <http://localhost:8000/docs> （自动生成的接口文档）
 
+## Neo4j GraphRAG Demo
+
+项目内置了一个基于 Neo4j 的 GraphRAG demo，路径如下：
+
+- `GET /api/v1/graphrag/demo/overview`
+- `POST /api/v1/graphrag/demo/init`
+- `POST /api/v1/graphrag/demo/query`
+
+建议流程：
+
+```bash
+# 1) 先准备 Neo4j，并在 .env 中填好连接信息
+cp .env.example .env
+
+# 2) 启动服务
+uv run uvicorn app.main:app --reload
+
+# 3) 初始化 demo 图谱
+curl -X POST http://localhost:8000/api/v1/graphrag/demo/init \
+  -H "Content-Type: application/json" \
+  -d '{"reset": true}'
+
+# 4) 发起查询
+curl -X POST http://localhost:8000/api/v1/graphrag/demo/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "GraphRAG 和普通向量检索有什么区别？", "top_k": 3}'
+```
+
+这个 demo 采用的是一个轻量 GraphRAG 流程：
+
+1. 文本 chunk 存入 Neo4j，并附带一个本地 hash embedding
+2. 查询时先做 chunk 相似度召回
+3. 再沿 `MENTIONS` 和 `RELATED_TO` 关系做一跳图扩展
+4. 最后返回证据块、相关实体和拼接答案
+
 ## 运行测试
 
 ```bash

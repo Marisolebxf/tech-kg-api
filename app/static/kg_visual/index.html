@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识图谱可视化 Demo</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; display: flex; height: 100vh; }
+
+/* 左侧面板 */
+.panel {
+  width: 360px; min-width: 360px; background: #fff; padding: 16px;
+  overflow-y: auto; border-right: 1px solid #e8e8e8; display: flex; flex-direction: column; gap: 12px;
+}
+.panel h1 { font-size: 18px; color: #333; }
+.panel h2 { font-size: 13px; color: #888; margin-bottom: 6px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+.section { background: #fafafa; border-radius: 8px; padding: 12px; }
+.section label { display: block; font-size: 12px; color: #555; margin-bottom: 3px; }
+.section input, .section textarea, .section select {
+  width: 100%; padding: 5px 8px; border: 1px solid #d9d9d9; border-radius: 4px;
+  font-size: 12px; margin-bottom: 6px; outline: none; transition: border .2s;
+}
+.section input:focus, .section textarea:focus { border-color: #4096ff; }
+.btn-row { display: flex; gap: 6px; flex-wrap: wrap; }
+button {
+  padding: 5px 12px; border: none; border-radius: 4px; font-size: 12px;
+  cursor: pointer; transition: background .2s;
+}
+button:active { transform: scale(.97); }
+.btn-primary { background: #1677ff; color: #fff; }
+.btn-primary:hover { background: #4096ff; }
+.btn-danger { background: #ff4d4f; color: #fff; }
+.btn-danger:hover { background: #ff7875; }
+.btn-default { background: #fff; border: 1px solid #d9d9d9; color: #333; }
+.btn-default:hover { background: #f5f5f5; }
+.btn-success { background: #52c41a; color: #fff; }
+.btn-success:hover { background: #73d13d; }
+.btn-warning { background: #faad14; color: #fff; }
+.btn-warning:hover { background: #ffc53d; }
+textarea { resize: vertical; min-height: 50px; font-family: monospace; font-size: 12px; }
+.inline-row { display: flex; gap: 4px; align-items: center; }
+.inline-row input { flex: 1; margin-bottom: 0; }
+
+/* Toast */
+#toast {
+  position: fixed; top: 16px; right: 16px; padding: 8px 16px; border-radius: 6px;
+  color: #fff; font-size: 12px; z-index: 999; opacity: 0; transition: opacity .3s;
+  pointer-events: none;
+}
+#toast.show { opacity: 1; }
+#toast.success { background: #52c41a; }
+#toast.error { background: #ff4d4f; }
+
+/* 右侧 */
+.chart-area { flex: 1; display: flex; flex-direction: column; position: relative; }
+#chart { flex: 1; }
+.stats { position: absolute; top: 10px; right: 14px; font-size: 12px; color: #999; z-index: 10; }
+
+/* 属性详情面板（右侧浮层） */
+.detail-panel {
+  position: absolute; top: 0; right: 0; width: 340px; height: 100%;
+  background: #fff; box-shadow: -2px 0 8px rgba(0,0,0,.1); z-index: 20;
+  display: none; flex-direction: column; overflow: hidden;
+}
+.detail-panel.open { display: flex; }
+.detail-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 16px; border-bottom: 1px solid #eee; background: #fafafa;
+}
+.detail-header h3 { font-size: 15px; color: #333; }
+.detail-body { padding: 14px 16px; overflow-y: auto; flex: 1; }
+.prop-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.prop-table th, .prop-table td { padding: 6px 8px; border-bottom: 1px solid #f0f0f0; text-align: left; }
+.prop-table th { width: 80px; color: #888; font-weight: normal; background: #fafafa; }
+.prop-table td { color: #333; }
+.prop-table .del-prop { color: #ff4d4f; cursor: pointer; font-size: 11px; margin-left: 6px; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; margin-right: 4px; color: #fff; }
+.related-item { padding: 6px 0; border-bottom: 1px solid #f5f5f5; font-size: 12px; }
+.related-item .rel-label { color: #1677ff; font-weight: 500; }
+.add-prop-row { display: flex; gap: 4px; margin-top: 8px; }
+.add-prop-row input { flex: 1; margin-bottom: 0; }
+</style>
+</head>
+<body>
+
+<div class="panel">
+  <h1>知识图谱可视化</h1>
+
+  <!-- 快捷操作 -->
+  <div class="section">
+    <h2>快捷操作</h2>
+    <div class="btn-row">
+      <button class="btn-success" onclick="loadExample()">加载示例</button>
+      <button class="btn-primary" onclick="fetchGraph()">刷新图谱</button>
+      <button class="btn-danger" onclick="clearGraph()">清空图谱</button>
+    </div>
+  </div>
+
+  <!-- 添加节点 -->
+  <div class="section">
+    <h2>添加实体</h2>
+    <label>实体 ID</label>
+    <input id="nodeId" placeholder="如：李白">
+    <label>名称</label>
+    <input id="nodeName" placeholder="如：李太白（留空则同 ID）">
+    <label>类别</label>
+    <input id="nodeCat" placeholder="如：人物" value="默认">
+    <label>属性（每行 key:value）</label>
+    <textarea id="nodeProps" placeholder="字:太白&#10;号:青莲居士&#10;朝代:唐"></textarea>
+    <button class="btn-primary" onclick="addNode()">添加实体</button>
+  </div>
+
+  <!-- 添加关系 -->
+  <div class="section">
+    <h2>添加关系</h2>
+    <label>源实体</label>
+    <input id="linkSrc" placeholder="如：李白">
+    <label>目标实体</label>
+    <input id="linkTgt" placeholder="如：唐朝">
+    <label>关系类型</label>
+    <input id="linkRel" placeholder="如：生于" value="相关">
+    <label>关系属性（每行 key:value）</label>
+    <textarea id="linkProps" placeholder="时期:盛唐&#10;描述:李白盛唐时期"></textarea>
+    <button class="btn-primary" onclick="addLink()">添加关系</button>
+  </div>
+
+  <!-- 删除 -->
+  <div class="section">
+    <h2>删除操作</h2>
+    <label>删除实体 ID</label>
+    <div class="inline-row">
+      <input id="delNodeId" placeholder="如：李白">
+      <button class="btn-danger" onclick="deleteNode()">删除</button>
+    </div>
+    <label>删除关系（源 / 目标 / 类型）</label>
+    <div class="inline-row">
+      <input id="delLinkSrc" placeholder="源" style="flex:1">
+      <input id="delLinkTgt" placeholder="目标" style="flex:1">
+    </div>
+    <div class="inline-row" style="margin-top:2px">
+      <input id="delLinkRel" placeholder="关系类型" value="相关" style="flex:1">
+      <button class="btn-danger" onclick="deleteLink()">删除</button>
+    </div>
+  </div>
+
+  <!-- JSON 全量导入 -->
+  <div class="section">
+    <h2>全量导入 (JSON)</h2>
+    <textarea id="jsonInput" placeholder='{"nodes":[{"id":"A","name":"A","category":"类","properties":{}}],"links":[{"source":"A","target":"B","relation":"关系","properties":{}}]}'></textarea>
+    <button class="btn-default" onclick="importJSON()">导入</button>
+  </div>
+</div>
+
+<!-- 图表区域 -->
+<div class="chart-area">
+  <div id="chart"></div>
+  <div class="stats" id="stats"></div>
+
+  <!-- 属性详情浮层 -->
+  <div class="detail-panel" id="detailPanel">
+    <div class="detail-header">
+      <h3 id="detailTitle">实体详情</h3>
+      <button class="btn-default" onclick="closeDetail()" style="padding:2px 8px;font-size:16px">&times;</button>
+    </div>
+    <div class="detail-body" id="detailBody"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const API = '/api/v1/kg-visual';
+let myChart = null;
+let currentGraphData = { nodes: [], links: [] };
+
+const CATEGORY_COLORS = {
+  '人物': '#5470c6', '朝代': '#ee6666', '地点': '#91cc75',
+  '作品': '#fac858', '默认': '#73c0de', '事件': '#fc8452', '组织': '#9a60b4',
+};
+
+function toast(msg, type = 'success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'show ' + type;
+  setTimeout(() => { el.className = ''; }, 2000);
+}
+
+function parseProps(text) {
+  const props = {};
+  if (!text) return props;
+  text.split('\n').forEach(line => {
+    const idx = line.indexOf(':');
+    if (idx > 0) {
+      const k = line.slice(0, idx).trim();
+      const v = line.slice(idx + 1).trim();
+      if (k) props[k] = v;
+    }
+  });
+  return props;
+}
+
+async function api(method, path, body = null, params = null) {
+  let url = API + path;
+  if (params) {
+    const qs = new URLSearchParams(params).toString();
+    url += (url.includes('?') ? '&' : '?') + qs;
+  }
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body && method !== 'DELETE') opts.body = JSON.stringify(body);
+  const res = await fetch(url, opts);
+  const data = await res.json();
+  if (!res.ok) {
+    toast(data.detail || '操作失败', 'error');
+    return null;
+  }
+  toast(data.message || '操作成功');
+  return data.data;
+}
+
+// ---------- 渲染图谱 ----------
+function render(data) {
+  if (!data || !myChart) return;
+  currentGraphData = data;
+  const categories = [...new Set(data.nodes.map(n => n.category))];
+  const catIdx = Object.fromEntries(categories.map((c, i) => [c, i]));
+
+  // 为有属性的节点加大尺寸
+  const nodeData = data.nodes.map(n => {
+    const propCount = Object.keys(n.properties || {}).length;
+    return {
+      id: n.id, name: n.name || n.id, category: catIdx[n.category] ?? 0,
+      symbolSize: Math.max(30, 20 + propCount * 4),
+      itemStyle: { color: CATEGORY_COLORS[n.category] || CATEGORY_COLORS['默认'] },
+      _raw: n,
+    };
+  });
+
+  const linkData = data.links.map(l => ({
+    source: l.source, target: l.target,
+    value: l.relation,
+    lineStyle: { curveness: 0.15 },
+    _raw: l,
+  }));
+
+  const option = {
+    tooltip: {
+      formatter(params) {
+        if (params.dataType === 'edge') {
+          const r = params.data._raw;
+          let html = `<b>${r.source} —[${r.relation}]→ ${r.target}</b>`;
+          const props = r.properties || {};
+          if (Object.keys(props).length) {
+            html += '<br>' + Object.entries(props).map(([k,v]) => `${k}: ${v}`).join('<br>');
+          }
+          return html;
+        }
+        const r = params.data._raw;
+        let html = `<b>${r.name || r.id}</b> <span style="color:#999">[${r.category}]</span>`;
+        const props = r.properties || {};
+        if (Object.keys(props).length) {
+          html += '<br>' + Object.entries(props).map(([k,v]) => `${k}: ${v}`).join('<br>');
+        }
+        return html;
+      }
+    },
+    legend: [{ data: categories, orient: 'vertical', right: 10, top: 20 }],
+    series: [{
+      type: 'graph',
+      layout: 'force',
+      roam: true,
+      draggable: true,
+      label: { show: true, fontSize: 11 },
+      force: { repulsion: 350, edgeLength: [80, 200], gravity: 0.04 },
+      categories: categories.map(c => ({
+        name: c,
+        itemStyle: { color: CATEGORY_COLORS[c] || CATEGORY_COLORS['默认'] }
+      })),
+      data: nodeData,
+      links: linkData,
+      emphasis: { focus: 'adjacency', lineStyle: { width: 4 } },
+      edgeLabel: {
+        show: true, fontSize: 10, formatter: '{c}',
+        color: '#999',
+      },
+      lineStyle: { opacity: 0.8, width: 1.5 },
+    }]
+  };
+  myChart.setOption(option, true);
+  document.getElementById('stats').textContent =
+    `实体: ${data.nodes.length}  关系: ${data.links.length}`;
+}
+
+// ---------- 节点详情面板 ----------
+function showNodeDetail(nodeId) {
+  const node = currentGraphData.nodes.find(n => n.id === nodeId);
+  if (!node) return;
+  const panel = document.getElementById('detailPanel');
+  const body = document.getElementById('detailBody');
+  document.getElementById('detailTitle').textContent = node.name || node.id;
+
+  const color = CATEGORY_COLORS[node.category] || CATEGORY_COLORS['默认'];
+  const related = currentGraphData.links.filter(l => l.source === nodeId || l.target === nodeId);
+  const props = node.properties || {};
+
+  let html = `<div style="margin-bottom:12px">
+    <span class="tag" style="background:${color}">${node.category}</span>
+    <span style="color:#999;font-size:12px">ID: ${node.id}</span>
+  </div>`;
+
+  // 属性表格
+  html += '<h4 style="font-size:13px;color:#555;margin-bottom:6px">属性</h4>';
+  if (Object.keys(props).length) {
+    html += '<table class="prop-table"><tbody>';
+    for (const [k, v] of Object.entries(props)) {
+      html += `<tr><th>${k}</th><td>${v}<span class="del-prop" onclick="delNodeProp('${nodeId}','${k}')">删除</span></td></tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<p style="color:#bbb;font-size:12px">暂无属性</p>';
+  }
+
+  // 添加属性
+  html += `<div class="add-prop-row">
+    <input id="addPropKey" placeholder="属性名">
+    <input id="addPropVal" placeholder="属性值">
+    <button class="btn-primary" onclick="addNodeProp('${nodeId}')" style="white-space:nowrap">添加</button>
+  </div>`;
+
+  // 关联关系
+  html += '<h4 style="font-size:13px;color:#555;margin:14px 0 6px">关联关系</h4>';
+  if (related.length) {
+    related.forEach(l => {
+      const direction = l.source === nodeId ? '→' : '←';
+      const other = l.source === nodeId ? l.target : l.source;
+      const relColor = l.source === nodeId ? '#1677ff' : '#52c41a';
+      const linkProps = l.properties || {};
+      let propStr = Object.keys(linkProps).length
+        ? ' (' + Object.entries(linkProps).map(([k,v]) => `${k}=${v}`).join(', ') + ')'
+        : '';
+      html += `<div class="related-item">
+        <span class="rel-label" style="color:${relColor}">${l.relation}</span>
+        ${direction} ${other}${propStr}
+      </div>`;
+    });
+  } else {
+    html += '<p style="color:#bbb;font-size:12px">无关联关系</p>';
+  }
+
+  body.innerHTML = html;
+  panel.classList.add('open');
+}
+
+function showLinkDetail(source, target, relation) {
+  const link = currentGraphData.links.find(l => l.source === source && l.target === target && l.relation === relation);
+  if (!link) return;
+  const panel = document.getElementById('detailPanel');
+  const body = document.getElementById('detailBody');
+  document.getElementById('detailTitle').textContent = '关系详情';
+  const props = link.properties || {};
+
+  let html = `<div style="margin-bottom:12px">
+    <b>${source}</b> <span style="color:#1677ff">—[${relation}]→</span> <b>${target}</b>
+  </div>`;
+
+  html += '<h4 style="font-size:13px;color:#555;margin-bottom:6px">关系属性</h4>';
+  if (Object.keys(props).length) {
+    html += '<table class="prop-table"><tbody>';
+    for (const [k, v] of Object.entries(props)) {
+      html += `<tr><th>${k}</th><td>${v}</td></tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<p style="color:#bbb;font-size:12px">暂无属性</p>';
+  }
+
+  html += `<div class="add-prop-row">
+    <input id="addLinkPropKey" placeholder="属性名">
+    <input id="addLinkPropVal" placeholder="属性值">
+    <button class="btn-primary" onclick="addLinkProp('${source}','${target}','${relation}')" style="white-space:nowrap">添加</button>
+  </div>`;
+
+  body.innerHTML = html;
+  panel.classList.add('open');
+}
+
+function closeDetail() {
+  document.getElementById('detailPanel').classList.remove('open');
+}
+
+// ---------- 属性操作 ----------
+async function addNodeProp(nodeId) {
+  const key = document.getElementById('addPropKey').value.trim();
+  const val = document.getElementById('addPropVal').value.trim();
+  if (!key) return toast('请输入属性名', 'error');
+  const res = await fetch(API + `/graph/node/${encodeURIComponent(nodeId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ properties: { [key]: val } }),
+  });
+  const data = await res.json();
+  if (!res.ok) { toast(data.detail, 'error'); return; }
+  toast('属性已添加');
+  await fetchGraph();
+  showNodeDetail(nodeId);
+}
+
+async function delNodeProp(nodeId, key) {
+  const res = await fetch(API + `/graph/node/${encodeURIComponent(nodeId)}/property/${encodeURIComponent(key)}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (!res.ok) { toast(data.detail, 'error'); return; }
+  toast('属性已删除');
+  await fetchGraph();
+  showNodeDetail(nodeId);
+}
+
+async function addLinkProp(source, target, relation) {
+  const key = document.getElementById('addLinkPropKey').value.trim();
+  const val = document.getElementById('addLinkPropVal').value.trim();
+  if (!key) return toast('请输入属性名', 'error');
+  const res = await fetch(API + `/graph/link?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}&relation=${encodeURIComponent(relation)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ properties: { [key]: val } }),
+  });
+  const data = await res.json();
+  if (!res.ok) { toast(data.detail, 'error'); return; }
+  toast('关系属性已添加');
+  await fetchGraph();
+  showLinkDetail(source, target, relation);
+}
+
+// ---------- 接口调用 ----------
+async function fetchGraph() { const d = await api('GET', '/graph'); render(d); closeDetail(); }
+async function loadExample() { const d = await api('GET', '/graph/example'); render(d); }
+async function clearGraph() { const d = await api('DELETE', '/graph'); render(d); closeDetail(); }
+
+async function addNode() {
+  const id = document.getElementById('nodeId').value.trim();
+  const name = document.getElementById('nodeName').value.trim();
+  const category = document.getElementById('nodeCat').value.trim() || '默认';
+  const properties = parseProps(document.getElementById('nodeProps').value);
+  if (!id) return toast('请输入实体 ID', 'error');
+  const d = await api('POST', '/graph/node', { id, name: name || id, category, properties });
+  if (d) render(d);
+}
+
+async function addLink() {
+  const source = document.getElementById('linkSrc').value.trim();
+  const target = document.getElementById('linkTgt').value.trim();
+  const relation = document.getElementById('linkRel').value.trim() || '相关';
+  const properties = parseProps(document.getElementById('linkProps').value);
+  if (!source || !target) return toast('请输入源和目标实体', 'error');
+  const d = await api('POST', '/graph/link', { source, target, relation, properties });
+  if (d) render(d);
+}
+
+async function deleteNode() {
+  const id = document.getElementById('delNodeId').value.trim();
+  if (!id) return toast('请输入实体 ID', 'error');
+  const d = await api('DELETE', `/graph/node/${encodeURIComponent(id)}`);
+  if (d) { render(d); closeDetail(); }
+}
+
+async function deleteLink() {
+  const source = document.getElementById('delLinkSrc').value.trim();
+  const target = document.getElementById('delLinkTgt').value.trim();
+  const relation = document.getElementById('delLinkRel').value.trim() || '相关';
+  if (!source || !target) return toast('请输入源和目标实体', 'error');
+  const d = await api('DELETE', '/graph/link', null, { source, target, relation });
+  if (d) { render(d); closeDetail(); }
+}
+
+async function importJSON() {
+  const raw = document.getElementById('jsonInput').value.trim();
+  if (!raw) return toast('请输入 JSON', 'error');
+  try {
+    const body = JSON.parse(raw);
+    if (!body.nodes || !body.links) return toast('JSON 须包含 nodes 和 links', 'error');
+    const d = await api('POST', '/graph', body);
+    if (d) render(d);
+  } catch { toast('JSON 格式错误', 'error'); }
+}
+
+// ---------- 初始化 ----------
+window.addEventListener('load', () => {
+  myChart = echarts.init(document.getElementById('chart'));
+  window.addEventListener('resize', () => myChart.resize());
+
+  // 点击节点 → 显示属性详情
+  myChart.on('click', (params) => {
+    if (params.dataType === 'node') {
+      showNodeDetail(params.data.id);
+    } else if (params.dataType === 'edge') {
+      const r = params.data._raw;
+      if (r) showLinkDetail(r.source, r.target, r.relation);
+    }
+  });
+
+  loadExample();
+});
+</script>
+</body>
+</html>

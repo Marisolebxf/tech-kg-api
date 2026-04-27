@@ -41,6 +41,17 @@ uv run uvicorn app.main:app --reload
 - <http://localhost:8000/hello>
 - <http://localhost:8000/api>
 - <http://localhost:8000/docs> （自动生成的接口文档）
+- <http://localhost:8000/kg-visual> （ECharts 知识图谱可视化 demo）
+
+## 知识图谱可视化 Demo
+
+项目内置了一个 ECharts 前端页面和轻量内存图谱 API，可用于快速演示实体、关系、属性的增删改查与图谱可视化。
+
+- 页面：`GET /kg-visual`
+- 图谱数据：`GET /api/v1/kg-visual/graph`
+- 加载示例：`GET /api/v1/kg-visual/graph/example`
+- 节点操作：`POST/PUT/DELETE /api/v1/kg-visual/graph/node...`
+- 关系操作：`POST/PUT/DELETE /api/v1/kg-visual/graph/link`
 
 ## Neo4j GraphRAG Demo
 

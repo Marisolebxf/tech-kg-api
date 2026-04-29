@@ -5,6 +5,9 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+   env:
+        LLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        ZHIPUAI_API_KEY: ${{ secrets.GLM_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 

@@ -1,18 +1,35 @@
-name: CI
+name: Code Quality and Unit Tests
 
-on: [push, pull_request]
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
+
+    env:
+      GRAPH_DB_PASSWORD: ${{ secrets.GRAPH_DB_PASSWORD }}
+      LLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+      ZHIPUAI_API_KEY: ${{ secrets.GLM_API_KEY }}
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --dev
 
-      - name: Run tests
-        run: uv run pytest
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Run unit tests
+        run: PYTHONPATH=. uv run pytest tests/unit -v

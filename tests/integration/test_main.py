@@ -130,7 +130,7 @@ def test_extract_abstract():
     assert data["source_type"] == "abstract"
     assert isinstance(data["entities"], list)
 
-
+ 
 def test_extract_general():
     """通用模式"""
     resp = client.post("/api/v1/entity/extraction", json={

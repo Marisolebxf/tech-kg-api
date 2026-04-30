@@ -1,0 +1,39 @@
+name: Container Deployment and Integration Tests
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      GRAPH_DB_PASSWORD: ${{ secrets.GRAPH_DB_PASSWORD }}
+      LLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+      ZHIPUAI_API_KEY: ${{ secrets.GLM_API_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker compose build
+
+      - name: Deploy FastAPI and Neo4j
+        run: docker compose up -d
+
+      - name: Wait for services to be ready
+        run: |
+          echo "Waiting for FastAPI to start..."
+          sleep 20
+          curl -f http://localhost:8000/docs
+
+      - name: Run integration tests
+        run: docker compose exec -T api env PYTHONPATH=. uv run pytest tests/integration -v
+
+      - name: Tear down
+        if: always()
+        run: docker compose down

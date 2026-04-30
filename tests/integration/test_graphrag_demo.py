@@ -3,7 +3,6 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.services.graphrag_demo import _cosine_similarity, _fallback_answer, _hash_embedding
 
-
 client = TestClient(app)
 
 

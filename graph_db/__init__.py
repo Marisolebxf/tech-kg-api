@@ -32,7 +32,10 @@ Quick start::
     db.close()
 """
 
+# Lazy-import backends so they self-register
+from graph_db.backends import Neo4jGraphDatabase
 from graph_db.base import GraphDatabase, Transaction
+from graph_db.config import GraphDBConfig, connect, get_backend_names, register_backend
 from graph_db.models import (
     ConstraintSpec,
     Edge,
@@ -43,11 +46,7 @@ from graph_db.models import (
     Path,
     QueryResult,
 )
-from graph_db.config import GraphDBConfig, connect, register_backend, get_backend_names
 from graph_db.query import QueryBuilder
-
-# Lazy-import backends so they self-register
-from graph_db.backends import Neo4jGraphDatabase
 
 # Service layer
 from graph_db.services import (

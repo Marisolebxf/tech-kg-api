@@ -51,7 +51,7 @@ class QueryBuilder:
         rel_type: str | None = None,
         target: str | None = None,
         direction: str = "right",
-    ) -> "QueryBuilder":
+    ) -> QueryBuilder:
         """Add a MATCH clause.
 
         Args:
@@ -92,7 +92,7 @@ class QueryBuilder:
         rel_type: str | None = None,
         target: str | None = None,
         direction: str = "right",
-    ) -> "QueryBuilder":
+    ) -> QueryBuilder:
         """Add an OPTIONAL MATCH clause (same args as ``match``)."""
         label_str = ":" + ":".join(labels) if labels else ""
         node_pattern = f"({var}{label_str})"
@@ -114,7 +114,7 @@ class QueryBuilder:
     # WHERE
     # ------------------------------------------------------------------
 
-    def where(self, condition: str) -> "QueryBuilder":
+    def where(self, condition: str) -> QueryBuilder:
         """Add a WHERE clause.
 
         Use ``$param`` placeholders for parameterized values.
@@ -122,12 +122,12 @@ class QueryBuilder:
         self._clauses.append(f"WHERE {condition}")
         return self
 
-    def and_where(self, condition: str) -> "QueryBuilder":
+    def and_where(self, condition: str) -> QueryBuilder:
         """Append an AND condition."""
         self._clauses.append(f"AND {condition}")
         return self
 
-    def or_where(self, condition: str) -> "QueryBuilder":
+    def or_where(self, condition: str) -> QueryBuilder:
         """Append an OR condition."""
         self._clauses.append(f"OR {condition}")
         return self
@@ -136,7 +136,7 @@ class QueryBuilder:
     # WITH
     # ------------------------------------------------------------------
 
-    def with_(self, *items: str) -> "QueryBuilder":
+    def with_(self, *items: str) -> QueryBuilder:
         """Add a WITH clause.
 
         Args:
@@ -149,7 +149,7 @@ class QueryBuilder:
     # RETURN
     # ------------------------------------------------------------------
 
-    def return_(self, *items: str, distinct: bool = False) -> "QueryBuilder":
+    def return_(self, *items: str, distinct: bool = False) -> QueryBuilder:
         """Add a RETURN clause.
 
         Args:
@@ -164,15 +164,15 @@ class QueryBuilder:
     # ORDER BY / SKIP / LIMIT
     # ------------------------------------------------------------------
 
-    def order_by(self, *fields: str) -> "QueryBuilder":
+    def order_by(self, *fields: str) -> QueryBuilder:
         self._clauses.append(f"ORDER BY {', '.join(fields)}")
         return self
 
-    def skip(self, n: int) -> "QueryBuilder":
+    def skip(self, n: int) -> QueryBuilder:
         self._clauses.append(f"SKIP {n}")
         return self
 
-    def limit(self, n: int) -> "QueryBuilder":
+    def limit(self, n: int) -> QueryBuilder:
         self._clauses.append(f"LIMIT {n}")
         return self
 
@@ -180,32 +180,32 @@ class QueryBuilder:
     # CREATE / MERGE / SET / DELETE
     # ------------------------------------------------------------------
 
-    def create(self, pattern: str) -> "QueryBuilder":
+    def create(self, pattern: str) -> QueryBuilder:
         """Add a CREATE clause with a raw pattern string."""
         self._clauses.append(f"CREATE {pattern}")
         return self
 
-    def merge(self, pattern: str) -> "QueryBuilder":
+    def merge(self, pattern: str) -> QueryBuilder:
         """Add a MERGE clause with a raw pattern string."""
         self._clauses.append(f"MERGE {pattern}")
         return self
 
-    def set(self, *assignments: str) -> "QueryBuilder":
+    def set(self, *assignments: str) -> QueryBuilder:
         """Add a SET clause."""
         self._clauses.append(f"SET {', '.join(assignments)}")
         return self
 
-    def on_create_set(self, *assignments: str) -> "QueryBuilder":
+    def on_create_set(self, *assignments: str) -> QueryBuilder:
         """Add ON CREATE SET clause (must follow a MERGE)."""
         self._clauses.append(f"ON CREATE SET {', '.join(assignments)}")
         return self
 
-    def on_match_set(self, *assignments: str) -> "QueryBuilder":
+    def on_match_set(self, *assignments: str) -> QueryBuilder:
         """Add ON MATCH SET clause (must follow a MERGE)."""
         self._clauses.append(f"ON MATCH SET {', '.join(assignments)}")
         return self
 
-    def delete(self, *vars: str, detach: bool = False) -> "QueryBuilder":
+    def delete(self, *vars: str, detach: bool = False) -> QueryBuilder:
         """Add a DELETE (or DETACH DELETE) clause."""
         keyword = "DETACH DELETE" if detach else "DELETE"
         self._clauses.append(f"{keyword} {', '.join(vars)}")
@@ -215,7 +215,7 @@ class QueryBuilder:
     # UNWIND
     # ------------------------------------------------------------------
 
-    def unwind(self, list_expr: str, var: str) -> "QueryBuilder":
+    def unwind(self, list_expr: str, var: str) -> QueryBuilder:
         """Add an UNWIND clause."""
         self._clauses.append(f"UNWIND {list_expr} AS {var}")
         return self
@@ -224,7 +224,7 @@ class QueryBuilder:
     # WITH / CALL (subqueries)
     # ------------------------------------------------------------------
 
-    def call(self, subquery: str) -> "QueryBuilder":
+    def call(self, subquery: str) -> QueryBuilder:
         """Add a CALL subquery clause."""
         self._clauses.append(f"CALL {{ {subquery} }}")
         return self
@@ -233,7 +233,7 @@ class QueryBuilder:
     # Parameters
     # ------------------------------------------------------------------
 
-    def params(self, **kwargs: Any) -> "QueryBuilder":
+    def params(self, **kwargs: Any) -> QueryBuilder:
         """Bind query parameters.
 
         Merges into the existing parameter map; later values win.
@@ -253,7 +253,7 @@ class QueryBuilder:
         """Build the query and return (cypher, params) tuple."""
         return self.build(), dict(self._params)
 
-    def reset(self) -> "QueryBuilder":
+    def reset(self) -> QueryBuilder:
         """Clear all clauses and parameters."""
         self._clauses.clear()
         self._params.clear()

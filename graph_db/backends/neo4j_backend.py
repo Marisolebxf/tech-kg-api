@@ -6,7 +6,8 @@ Uses the official ``neo4j`` Python driver under the hood.
 from __future__ import annotations
 
 import logging
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import neo4j
 from neo4j import GraphDatabase as Neo4jDriver
@@ -32,6 +33,7 @@ logger = logging.getLogger("graph_db.neo4j")
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _neo4j_node_to_model(n: Neo4jNode) -> Node:
     return Node(id=n.element_id, labels=list(n.labels), properties=dict(n))
@@ -73,7 +75,9 @@ def _parse_records(result) -> list[dict[str, Any]]:
     return records
 
 
-def _labels_clause(labels: list[str], var: str = "n", identity_props: dict[str, Any] | None = None) -> str:
+def _labels_clause(
+    labels: list[str], var: str = "n", identity_props: dict[str, Any] | None = None
+) -> str:
     """Build Cypher node pattern: ``(n:Label1:Label2 {k: $id_k})``.
 
     If *identity_props* is provided, the property match clause is placed
@@ -101,6 +105,7 @@ def _identity_params(identity_props: dict[str, Any]) -> dict[str, Any]:
 # Neo4j Transaction wrapper
 # ---------------------------------------------------------------------------
 
+
 class Neo4jTransaction:
     """Wraps a ``neo4j.Transaction`` to implement the ``Transaction`` protocol."""
 
@@ -111,9 +116,7 @@ class Neo4jTransaction:
 
     # -- Node CRUD --
 
-    def create_node(
-        self, labels: list[str], properties: dict[str, Any] | None = None
-    ) -> Node:
+    def create_node(self, labels: list[str], properties: dict[str, Any] | None = None) -> Node:
         lbl = _labels_clause(labels)
         cypher = f"CREATE {lbl} SET n = $props RETURN n"
         result = self._tx.run(cypher, props=properties or {})
@@ -142,7 +145,8 @@ class Neo4jTransaction:
     def update_node(self, node_id: Any, properties: dict[str, Any]) -> Node:
         result = self._tx.run(
             "MATCH (n) WHERE elementId(n) = $id SET n += $props RETURN n",
-            id=node_id, props=properties,
+            id=node_id,
+            props=properties,
         )
         rec = result.single()
         return _neo4j_node_to_model(rec["n"])
@@ -200,16 +204,15 @@ class Neo4jTransaction:
         return _neo4j_rel_to_model(rec["r"])
 
     def get_edge(self, edge_id: Any) -> Edge | None:
-        result = self._tx.run(
-            "MATCH ()-[r]->() WHERE elementId(r) = $id RETURN r", id=edge_id
-        )
+        result = self._tx.run("MATCH ()-[r]->() WHERE elementId(r) = $id RETURN r", id=edge_id)
         rec = result.single()
         return _neo4j_rel_to_model(rec["r"]) if rec else None
 
     def update_edge(self, edge_id: Any, properties: dict[str, Any]) -> Edge:
         result = self._tx.run(
             "MATCH ()-[r]->() WHERE elementId(r) = $id SET r += $props RETURN r",
-            id=edge_id, props=properties,
+            id=edge_id,
+            props=properties,
         )
         rec = result.single()
         return _neo4j_rel_to_model(rec["r"])
@@ -224,9 +227,7 @@ class Neo4jTransaction:
 
     # -- Raw query --
 
-    def run(
-        self, query: str, params: dict[str, Any] | None = None
-    ) -> QueryResult:
+    def run(self, query: str, params: dict[str, Any] | None = None) -> QueryResult:
         result = self._tx.run(query, params or {})
         return QueryResult(records=_parse_records(result))
 
@@ -240,7 +241,7 @@ class Neo4jTransaction:
 
     # -- Context manager --
 
-    def __enter__(self) -> "Neo4jTransaction":
+    def __enter__(self) -> Neo4jTransaction:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -251,6 +252,7 @@ class Neo4jTransaction:
 # ---------------------------------------------------------------------------
 # Neo4j GraphDatabase implementation
 # ---------------------------------------------------------------------------
+
 
 class Neo4jGraphDatabase(GraphDatabase):
     """Neo4j implementation of the generic GraphDatabase API.
@@ -313,14 +315,14 @@ class Neo4jGraphDatabase(GraphDatabase):
     # Node CRUD
     # ==================================================================
 
-    def create_node(
-        self, labels: list[str], properties: dict[str, Any] | None = None
-    ) -> Node:
+    def create_node(self, labels: list[str], properties: dict[str, Any] | None = None) -> Node:
         with self._session() as session:
+
             def _create(tx):
                 lbl = _labels_clause(labels)
                 result = tx.run(f"CREATE {lbl} SET n = $props RETURN n", props=properties or {})
                 return _neo4j_node_to_model(result.single()["n"])
+
             return session.execute_write(_create)
 
     def merge_node(
@@ -330,42 +332,42 @@ class Neo4jGraphDatabase(GraphDatabase):
         properties: dict[str, Any] | None = None,
     ) -> Node:
         with self._session() as session:
+
             def _merge(tx):
                 pattern = _labels_clause(labels, identity_props=identity_props)
                 cypher = f"MERGE {pattern} SET n += $props RETURN n"
                 params = _identity_params(identity_props)
                 params["props"] = properties or {}
                 return _neo4j_node_to_model(tx.run(cypher, params).single()["n"])
+
             return session.execute_write(_merge)
 
     def get_node(self, node_id: Any) -> Node | None:
         with self._session() as session:
+
             def _get(tx):
-                result = tx.run(
-                    "MATCH (n) WHERE elementId(n) = $id RETURN n", id=node_id
-                )
+                result = tx.run("MATCH (n) WHERE elementId(n) = $id RETURN n", id=node_id)
                 rec = result.single()
                 return _neo4j_node_to_model(rec["n"]) if rec else None
+
             return session.execute_read(_get)
 
-    def get_nodes_by_label(
-        self, label: str, *, limit: int = 100, offset: int = 0
-    ) -> PagedResult:
+    def get_nodes_by_label(self, label: str, *, limit: int = 100, offset: int = 0) -> PagedResult:
         with self._session() as session:
+
             def _query(tx):
-                total = tx.run(
-                    f"MATCH (n:{label}) RETURN count(n) AS cnt"
-                ).single()["cnt"]
+                total = tx.run(f"MATCH (n:{label}) RETURN count(n) AS cnt").single()["cnt"]
                 result = tx.run(
-                    f"MATCH (n:{label}) RETURN n ORDER BY elementId(n) "
-                    f"SKIP $offset LIMIT $limit",
-                    offset=offset, limit=limit,
+                    f"MATCH (n:{label}) RETURN n ORDER BY elementId(n) SKIP $offset LIMIT $limit",
+                    offset=offset,
+                    limit=limit,
                 )
                 nodes = [_neo4j_node_to_model(rec["n"]) for rec in result]
                 return PagedResult(
                     items=nodes,
                     page=PageInfo(offset=offset, limit=limit, total=total),
                 )
+
             return session.execute_read(_query)
 
     def find_nodes(
@@ -388,10 +390,11 @@ class Neo4jGraphDatabase(GraphDatabase):
         params["limit"] = limit
 
         with self._session() as session:
+
             def _query(tx):
-                cnt = tx.run(
-                    f"MATCH {lbl}{where_clause} RETURN count(n) AS cnt", params
-                ).single()["cnt"]
+                cnt = tx.run(f"MATCH {lbl}{where_clause} RETURN count(n) AS cnt", params).single()[
+                    "cnt"
+                ]
                 result = tx.run(
                     f"MATCH {lbl}{where_clause} RETURN n "
                     f"ORDER BY elementId(n) SKIP $offset LIMIT $limit",
@@ -402,37 +405,42 @@ class Neo4jGraphDatabase(GraphDatabase):
                     items=nodes,
                     page=PageInfo(offset=offset, limit=limit, total=cnt),
                 )
+
             return session.execute_read(_query)
 
     def update_node(self, node_id: Any, properties: dict[str, Any]) -> Node:
         with self._session() as session:
+
             def _update(tx):
                 result = tx.run(
                     "MATCH (n) WHERE elementId(n) = $id SET n += $props RETURN n",
-                    id=node_id, props=properties,
+                    id=node_id,
+                    props=properties,
                 )
                 return _neo4j_node_to_model(result.single()["n"])
+
             return session.execute_write(_update)
 
     def delete_node(self, node_id: Any, *, detach: bool = False) -> bool:
         keyword = "DETACH DELETE" if detach else "DELETE"
         with self._session() as session:
+
             def _delete(tx):
                 result = tx.run(
-                    f"MATCH (n) WHERE elementId(n) = $id {keyword} n "
-                    f"RETURN count(n) AS cnt",
+                    f"MATCH (n) WHERE elementId(n) = $id {keyword} n RETURN count(n) AS cnt",
                     id=node_id,
                 )
                 rec = result.single()
                 return rec["cnt"] > 0 if rec else False
+
             try:
                 return session.execute_write(_delete)
-            except neo4j.exceptions.ConstraintError:
+            except neo4j.exceptions.ConstraintError as e:
                 # Node has relationships and detach=False
                 raise ValueError(
                     f"Cannot delete node {node_id}: it still has relationships. "
                     "Use detach=True to delete with relationships."
-                )
+                ) from e
 
     # ==================================================================
     # Edge CRUD
@@ -446,6 +454,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         properties: dict[str, Any] | None = None,
     ) -> Edge:
         with self._session() as session:
+
             def _create(tx):
                 cypher = (
                     "MATCH (a) WHERE elementId(a) = $source_id "
@@ -454,10 +463,12 @@ class Neo4jGraphDatabase(GraphDatabase):
                 )
                 result = tx.run(
                     cypher,
-                    source_id=source_id, target_id=target_id,
+                    source_id=source_id,
+                    target_id=target_id,
                     props=properties or {},
                 )
                 return _neo4j_rel_to_model(result.single()["r"])
+
             return session.execute_write(_create)
 
     def merge_edge(
@@ -470,6 +481,7 @@ class Neo4jGraphDatabase(GraphDatabase):
     ) -> Edge:
         props_clause = _identity_props_clause(identity_props, var="r")
         with self._session() as session:
+
             def _merge(tx):
                 cypher = (
                     "MATCH (a) WHERE elementId(a) = $source_id "
@@ -483,10 +495,12 @@ class Neo4jGraphDatabase(GraphDatabase):
                 params["props"] = properties or {}
                 result = tx.run(cypher, params)
                 return _neo4j_rel_to_model(result.single()["r"])
+
             return session.execute_write(_merge)
 
     def get_edge(self, edge_id: Any) -> Edge | None:
         with self._session() as session:
+
             def _get(tx):
                 result = tx.run(
                     "MATCH ()-[r]->() WHERE elementId(r) = $id RETURN r",
@@ -494,26 +508,28 @@ class Neo4jGraphDatabase(GraphDatabase):
                 )
                 rec = result.single()
                 return _neo4j_rel_to_model(rec["r"]) if rec else None
+
             return session.execute_read(_get)
 
     def get_edges_by_type(
         self, edge_type: str, *, limit: int = 100, offset: int = 0
     ) -> PagedResult:
         with self._session() as session:
+
             def _query(tx):
-                cnt = tx.run(
-                    f"MATCH ()-[r:{edge_type}]->() RETURN count(r) AS cnt"
-                ).single()["cnt"]
+                cnt = tx.run(f"MATCH ()-[r:{edge_type}]->() RETURN count(r) AS cnt").single()["cnt"]
                 result = tx.run(
                     f"MATCH ()-[r:{edge_type}]->() RETURN r "
                     f"ORDER BY elementId(r) SKIP $offset LIMIT $limit",
-                    offset=offset, limit=limit,
+                    offset=offset,
+                    limit=limit,
                 )
                 edges = [_neo4j_rel_to_model(rec["r"]) for rec in result]
                 return PagedResult(
                     items=edges,
                     page=PageInfo(offset=offset, limit=limit, total=cnt),
                 )
+
             return session.execute_read(_query)
 
     def find_edges(
@@ -535,10 +551,10 @@ class Neo4jGraphDatabase(GraphDatabase):
         params["limit"] = limit
 
         with self._session() as session:
+
             def _query(tx):
                 cnt = tx.run(
-                    f"MATCH ()-[r:{edge_type}]->(){where_clause} "
-                    f"RETURN count(r) AS cnt", params
+                    f"MATCH ()-[r:{edge_type}]->(){where_clause} RETURN count(r) AS cnt", params
                 ).single()["cnt"]
                 result = tx.run(
                     f"MATCH ()-[r:{edge_type}]->(){where_clause} "
@@ -550,29 +566,33 @@ class Neo4jGraphDatabase(GraphDatabase):
                     items=edges,
                     page=PageInfo(offset=offset, limit=limit, total=cnt),
                 )
+
             return session.execute_read(_query)
 
     def update_edge(self, edge_id: Any, properties: dict[str, Any]) -> Edge:
         with self._session() as session:
+
             def _update(tx):
                 result = tx.run(
-                    "MATCH ()-[r]->() WHERE elementId(r) = $id "
-                    "SET r += $props RETURN r",
-                    id=edge_id, props=properties,
+                    "MATCH ()-[r]->() WHERE elementId(r) = $id SET r += $props RETURN r",
+                    id=edge_id,
+                    props=properties,
                 )
                 return _neo4j_rel_to_model(result.single()["r"])
+
             return session.execute_write(_update)
 
     def delete_edge(self, edge_id: Any) -> bool:
         with self._session() as session:
+
             def _delete(tx):
                 result = tx.run(
-                    "MATCH ()-[r]->() WHERE elementId(r) = $id "
-                    "DELETE r RETURN count(r) AS cnt",
+                    "MATCH ()-[r]->() WHERE elementId(r) = $id DELETE r RETURN count(r) AS cnt",
                     id=edge_id,
                 )
                 rec = result.single()
                 return rec["cnt"] > 0 if rec else False
+
             return session.execute_write(_delete)
 
     # ==================================================================
@@ -596,13 +616,15 @@ class Neo4jGraphDatabase(GraphDatabase):
             pattern = f"(n)-[r{type_clause}]-()"
 
         with self._session() as session:
+
             def _query(tx):
                 result = tx.run(
-                    f"MATCH {pattern} WHERE elementId(n) = $id "
-                    f"RETURN r LIMIT $limit",
-                    id=node_id, limit=limit,
+                    f"MATCH {pattern} WHERE elementId(n) = $id RETURN r LIMIT $limit",
+                    id=node_id,
+                    limit=limit,
                 )
                 return [_neo4j_rel_to_model(rec["r"]) for rec in result]
+
             return session.execute_read(_query)
 
     def get_neighbours(
@@ -622,13 +644,15 @@ class Neo4jGraphDatabase(GraphDatabase):
             pattern = f"(n)-[r{type_clause}]-(m)"
 
         with self._session() as session:
+
             def _query(tx):
                 result = tx.run(
-                    f"MATCH {pattern} WHERE elementId(n) = $id "
-                    f"RETURN DISTINCT m LIMIT $limit",
-                    id=node_id, limit=limit,
+                    f"MATCH {pattern} WHERE elementId(n) = $id RETURN DISTINCT m LIMIT $limit",
+                    id=node_id,
+                    limit=limit,
                 )
                 return [_neo4j_node_to_model(rec["m"]) for rec in result]
+
             return session.execute_read(_query)
 
     def shortest_path(
@@ -647,6 +671,7 @@ class Neo4jGraphDatabase(GraphDatabase):
             return Path(nodes=[node], edges=[])
         rel_pattern = f":{edge_type}" if edge_type else ""
         with self._session() as session:
+
             def _query(tx):
                 cypher = (
                     "MATCH (a) WHERE elementId(a) = $source_id "
@@ -657,35 +682,34 @@ class Neo4jGraphDatabase(GraphDatabase):
                 result = tx.run(cypher, source_id=source_id, target_id=target_id)
                 rec = result.single()
                 return _neo4j_path_to_model(rec["p"]) if rec else None
+
             return session.execute_read(_query)
 
     # ==================================================================
     # Query execution
     # ==================================================================
 
-    def execute_query(
-        self, query: str, params: dict[str, Any] | None = None
-    ) -> QueryResult:
+    def execute_query(self, query: str, params: dict[str, Any] | None = None) -> QueryResult:
         with self._session() as session:
             result = session.run(query, params or {})
             return QueryResult(records=_parse_records(result))
 
-    def execute_read(
-        self, query: str, params: dict[str, Any] | None = None
-    ) -> QueryResult:
+    def execute_read(self, query: str, params: dict[str, Any] | None = None) -> QueryResult:
         with self._session() as session:
+
             def _read(tx):
                 result = tx.run(query, params or {})
                 return QueryResult(records=_parse_records(result))
+
             return session.execute_read(_read)
 
-    def execute_write(
-        self, query: str, params: dict[str, Any] | None = None
-    ) -> QueryResult:
+    def execute_write(self, query: str, params: dict[str, Any] | None = None) -> QueryResult:
         with self._session() as session:
+
             def _write(tx):
                 result = tx.run(query, params or {})
                 return QueryResult(records=_parse_records(result))
+
             return session.execute_write(_write)
 
     # ==================================================================
@@ -707,14 +731,13 @@ class Neo4jGraphDatabase(GraphDatabase):
         labels: list[str],
     ) -> list[Node]:
         lbl = _labels_clause(labels, var="n")
-        cypher = (
-            f"UNWIND $items AS item "
-            f"CREATE {lbl} SET n = item RETURN n"
-        )
+        cypher = f"UNWIND $items AS item CREATE {lbl} SET n = item RETURN n"
         with self._session() as session:
+
             def _batch(tx):
                 result = tx.run(cypher, items=list(items))
                 return [_neo4j_node_to_model(rec["n"]) for rec in result]
+
             return session.execute_write(_batch)
 
     def batch_create_edges(
@@ -729,14 +752,19 @@ class Neo4jGraphDatabase(GraphDatabase):
             f"CREATE (a)-[r:{edge_type}]->(b) SET r = item.props RETURN r"
         )
         params = [
-            {"source_id": it["source_id"], "target_id": it["target_id"],
-             "props": {k: v for k, v in it.items() if k not in ("source_id", "target_id")}}
+            {
+                "source_id": it["source_id"],
+                "target_id": it["target_id"],
+                "props": {k: v for k, v in it.items() if k not in ("source_id", "target_id")},
+            }
             for it in items
         ]
         with self._session() as session:
+
             def _batch(tx):
                 result = tx.run(cypher, items=params)
                 return [_neo4j_rel_to_model(rec["r"]) for rec in result]
+
             return session.execute_write(_batch)
 
     # ==================================================================
@@ -746,8 +774,7 @@ class Neo4jGraphDatabase(GraphDatabase):
     def create_index(self, spec: IndexSpec) -> None:
         if spec.unique:
             cypher = (
-                f"CREATE CONSTRAINT FOR (n:{spec.label}) "
-                f"REQUIRE n.{spec.properties[0]} IS UNIQUE"
+                f"CREATE CONSTRAINT FOR (n:{spec.label}) REQUIRE n.{spec.properties[0]} IS UNIQUE"
             )
         else:
             if len(spec.properties) == 1:
@@ -760,15 +787,14 @@ class Neo4jGraphDatabase(GraphDatabase):
                 session.run(cypher)
             except neo4j.exceptions.ClientError as e:
                 if "AlreadyExists" in e.code or "already exists" in str(e):
-                    raise ValueError(f"Index already exists: {e.message}")
+                    raise ValueError(f"Index already exists: {e.message}") from e
                 raise
 
     def drop_index(self, label: str, properties: list[str]) -> None:
         with self._session() as session:
             result = session.run("SHOW INDEXES")
             for rec in result:
-                if (rec.get("labelsOrTypes") == [label]
-                        and rec.get("properties") == properties):
+                if rec.get("labelsOrTypes") == [label] and rec.get("properties") == properties:
                     session.run(f"DROP INDEX {rec['name']}")
                     return
             raise ValueError(f"No index found for {label}.{properties}")
@@ -789,14 +815,16 @@ class Neo4jGraphDatabase(GraphDatabase):
                 if label and label not in lbls:
                     continue
                 try:
-                    indexes.append(IndexSpec(
-                        label=lbls[0],
-                        properties=props,
-                        unique=(
-                            rec.get("uniqueness") == "UNIQUE"
-                            or rec.get("owningConstraint") is not None
-                        ),
-                    ))
+                    indexes.append(
+                        IndexSpec(
+                            label=lbls[0],
+                            properties=props,
+                            unique=(
+                                rec.get("uniqueness") == "UNIQUE"
+                                or rec.get("owningConstraint") is not None
+                            ),
+                        )
+                    )
                 except Exception:
                     continue
             return indexes
@@ -824,7 +852,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 session.run(cypher)
             except neo4j.exceptions.ClientError as e:
                 if "AlreadyExists" in e.code or "already exists" in str(e):
-                    raise ValueError(f"Constraint already exists: {e.message}")
+                    raise ValueError(f"Constraint already exists: {e.message}") from e
                 raise
 
     def drop_constraint(self, name: str) -> None:
@@ -833,7 +861,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 session.run(f"DROP CONSTRAINT {name}")
             except neo4j.exceptions.DatabaseError as e:
                 if "ConstraintDropFailed" in e.code or "No such constraint" in str(e):
-                    raise ValueError(f"Constraint '{name}' does not exist")
+                    raise ValueError(f"Constraint '{name}' does not exist") from e
                 raise
 
     def list_constraints(self) -> list[ConstraintSpec]:
@@ -845,12 +873,14 @@ class Neo4jGraphDatabase(GraphDatabase):
             constraints = []
             for rec in result:
                 try:
-                    constraints.append(ConstraintSpec(
-                        name=rec.get("name", ""),
-                        label=(rec.get("labelsOrTypes") or [""])[0],
-                        property=(rec.get("properties") or [""])[0],
-                        kind="unique",
-                    ))
+                    constraints.append(
+                        ConstraintSpec(
+                            name=rec.get("name", ""),
+                            label=(rec.get("labelsOrTypes") or [""])[0],
+                            property=(rec.get("properties") or [""])[0],
+                            kind="unique",
+                        )
+                    )
                 except Exception:
                     continue
             return constraints

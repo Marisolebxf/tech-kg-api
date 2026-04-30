@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from graph_db.base import GraphDatabase
 from graph_db.models import Edge, PagedResult

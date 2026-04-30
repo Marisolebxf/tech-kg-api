@@ -6,14 +6,14 @@ that are database-agnostic and can be mapped to/from any graph backend.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
-
 
 # ---------------------------------------------------------------------------
 # Primitive models
 # ---------------------------------------------------------------------------
+
 
 class Node(BaseModel):
     """A node (vertex) in the graph.
@@ -70,6 +70,7 @@ class Path(BaseModel):
 # Query result models
 # ---------------------------------------------------------------------------
 
+
 class QueryResult(BaseModel):
     """Result of a graph query (e.g. Cypher execution).
 
@@ -80,7 +81,7 @@ class QueryResult(BaseModel):
     """
 
     records: list[dict[str, Any]] = Field(default_factory=list)
-    summary: Optional[dict[str, Any]] = None
+    summary: dict[str, Any] | None = None
 
     @property
     def is_empty(self) -> bool:
@@ -113,6 +114,7 @@ class PagedResult(BaseModel):
 # ---------------------------------------------------------------------------
 # Index / constraint models
 # ---------------------------------------------------------------------------
+
 
 class IndexSpec(BaseModel):
     """Specification for a database index.

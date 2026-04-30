@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from app.services.text_ngram import build_ngram_vocab, encode_texts, text_to_vector
+from app.services.text_ngram import build_ngram_vocab, encode_texts
 
 # 默认示例数据（中文 KG / 英文 KG）
 KG_A = [

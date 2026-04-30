@@ -22,6 +22,7 @@ load_dotenv()
 # Configuration dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class GraphDBConfig:
     """Configuration for a graph database connection.
@@ -47,12 +48,13 @@ class GraphDBConfig:
     extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_env(cls, prefix: str = "GRAPH_DB") -> "GraphDBConfig":
+    def from_env(cls, prefix: str = "GRAPH_DB") -> GraphDBConfig:
         """Load configuration from environment variables.
 
         Environment variable names are derived from the prefix and
         the field name, e.g. ``GRAPH_DB_URI``, ``GRAPH_DB_USERNAME``.
         """
+
         def _env(name: str) -> str | None:
             return os.environ.get(f"{prefix}_{name}")
 
@@ -67,7 +69,7 @@ class GraphDBConfig:
         )
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "GraphDBConfig":
+    def from_dict(cls, d: dict[str, Any]) -> GraphDBConfig:
         """Create a config from a plain dict (keys match field names)."""
         known = {f.name for f in cls.__dataclass_fields__.values()}
         filtered = {k: v for k, v in d.items() if k in known}
@@ -96,6 +98,7 @@ def _ensure_backends() -> None:
         return
     # Import and register Neo4j backend
     from graph_db.backends.neo4j_backend import Neo4jGraphDatabase
+
     register_backend("neo4j", Neo4jGraphDatabase)
 
 
@@ -129,8 +132,7 @@ def connect(config: GraphDBConfig | None = None, **kwargs: Any) -> GraphDatabase
     cls = _BACKEND_REGISTRY.get(backend_name)
     if cls is None:
         raise ValueError(
-            f"Unknown backend '{backend_name}'. "
-            f"Available: {list(_BACKEND_REGISTRY.keys())}"
+            f"Unknown backend '{backend_name}'. Available: {list(_BACKEND_REGISTRY.keys())}"
         )
 
     # Instantiate with backend-specific args

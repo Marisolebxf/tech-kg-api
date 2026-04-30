@@ -7,7 +7,8 @@ interface so that application code remains database-agnostic.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Protocol, Sequence, runtime_checkable
+from collections.abc import Sequence
+from typing import Any, Protocol, runtime_checkable
 
 from graph_db.models import (
     ConstraintSpec,
@@ -19,10 +20,10 @@ from graph_db.models import (
     QueryResult,
 )
 
-
 # ---------------------------------------------------------------------------
 # Transaction protocol — lightweight context-manager wrapper
 # ---------------------------------------------------------------------------
+
 
 @runtime_checkable
 class Transaction(Protocol):
@@ -36,12 +37,13 @@ class Transaction(Protocol):
             # auto-commit on success, auto-rollback on exception
     """
 
-    def create_node(
-        self, labels: list[str], properties: dict[str, Any] | None = None
-    ) -> Node: ...
+    def create_node(self, labels: list[str], properties: dict[str, Any] | None = None) -> Node: ...
 
     def merge_node(
-        self, labels: list[str], identity_props: dict[str, Any], properties: dict[str, Any] | None = None
+        self,
+        labels: list[str],
+        identity_props: dict[str, Any],
+        properties: dict[str, Any] | None = None,
     ) -> Node: ...
 
     def get_node(self, node_id: Any) -> Node | None: ...
@@ -73,15 +75,13 @@ class Transaction(Protocol):
 
     def delete_edge(self, edge_id: Any) -> bool: ...
 
-    def run(
-        self, query: str, params: dict[str, Any] | None = None
-    ) -> QueryResult: ...
+    def run(self, query: str, params: dict[str, Any] | None = None) -> QueryResult: ...
 
     def commit(self) -> None: ...
 
     def rollback(self) -> None: ...
 
-    def __enter__(self) -> "Transaction": ...
+    def __enter__(self) -> Transaction: ...
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None: ...
 
@@ -89,6 +89,7 @@ class Transaction(Protocol):
 # ---------------------------------------------------------------------------
 # Abstract graph database
 # ---------------------------------------------------------------------------
+
 
 class GraphDatabase(ABC):
     """Database-agnostic graph database interface.
@@ -124,7 +125,7 @@ class GraphDatabase(ABC):
 
     # ----- convenience context manager -----
 
-    def __enter__(self) -> "GraphDatabase":
+    def __enter__(self) -> GraphDatabase:
         self.connect()
         return self
 
@@ -136,9 +137,7 @@ class GraphDatabase(ABC):
     # ==================================================================
 
     @abstractmethod
-    def create_node(
-        self, labels: list[str], properties: dict[str, Any] | None = None
-    ) -> Node:
+    def create_node(self, labels: list[str], properties: dict[str, Any] | None = None) -> Node:
         """Create a node with the given labels and properties.
 
         Returns the created node with its database-assigned ``id``.
@@ -298,9 +297,7 @@ class GraphDatabase(ABC):
     # ==================================================================
 
     @abstractmethod
-    def execute_query(
-        self, query: str, params: dict[str, Any] | None = None
-    ) -> QueryResult:
+    def execute_query(self, query: str, params: dict[str, Any] | None = None) -> QueryResult:
         """Execute a raw query string (Cypher / Gremlin) and return results.
 
         This is the *escape hatch* — use it when the CRUD / traversal
@@ -308,15 +305,11 @@ class GraphDatabase(ABC):
         """
 
     @abstractmethod
-    def execute_read(
-        self, query: str, params: dict[str, Any] | None = None
-    ) -> QueryResult:
+    def execute_read(self, query: str, params: dict[str, Any] | None = None) -> QueryResult:
         """Execute a read-only query (may be routed to a read replica)."""
 
     @abstractmethod
-    def execute_write(
-        self, query: str, params: dict[str, Any] | None = None
-    ) -> QueryResult:
+    def execute_write(self, query: str, params: dict[str, Any] | None = None) -> QueryResult:
         """Execute a write query with auto-retry on transient errors."""
 
     # ==================================================================

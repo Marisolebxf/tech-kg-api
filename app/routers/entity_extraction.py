@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException
 
 from app.schemas.entity_extraction import ExtractRequest, ExtractResponse
-from app.services.entity_extractor import extract, FOCUS_TYPES
+from app.services.entity_extractor import FOCUS_TYPES, extract
 
 router = APIRouter(prefix="/entity", tags=["实体抽取"])
 
@@ -25,14 +25,11 @@ def run_extraction(body: ExtractRequest) -> ExtractResponse:
 
     if body.source_type not in FOCUS_TYPES:
         raise HTTPException(
-            status_code=400,
-            detail=f"source_type 不合法，可选值：{list(FOCUS_TYPES.keys())}"
+            status_code=400, detail=f"source_type 不合法，可选值：{list(FOCUS_TYPES.keys())}"
         )
 
     entities = extract(body.text, body.source_type)
 
     return ExtractResponse(
-        source_type=body.source_type,
-        entity_count=len(entities),
-        entities=entities
+        source_type=body.source_type, entity_count=len(entities), entities=entities
     )

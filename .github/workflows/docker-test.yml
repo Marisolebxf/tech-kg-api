@@ -19,6 +19,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Create .env for docker compose
+        run: |
+          cat > .env <<EOF
+          GRAPH_DB_BACKEND=neo4j
+          GRAPH_DB_URI=bolt://neo4j:7687
+          GRAPH_DB_USERNAME=neo4j
+          GRAPH_DB_PASSWORD=${GRAPH_DB_PASSWORD}
+          GRAPH_DB_DATABASE=neo4j
+          LLM_API_KEY=${LLM_API_KEY}
+          ZHIPUAI_API_KEY=${ZHIPUAI_API_KEY}
+          LLM_MODEL=glm-5.1
+          EOF
+
       - name: Build Docker image
         run: docker compose build
 

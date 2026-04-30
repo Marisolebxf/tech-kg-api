@@ -108,4 +108,5 @@ def run_batch_extraction(
 def get_examples() -> list[dict]:
     """获取示例文本列表。"""
     from app.services.relation_extraction import EXAMPLE_TEXTS
+
     return EXAMPLE_TEXTS

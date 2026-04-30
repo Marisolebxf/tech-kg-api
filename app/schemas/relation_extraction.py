@@ -1,7 +1,5 @@
 """关系抽取 API 的请求/响应模型。"""
 
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict, Field
 
 

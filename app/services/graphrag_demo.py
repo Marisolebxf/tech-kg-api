@@ -95,19 +95,84 @@ DEMO_DOCUMENTS = [
 
 
 DEMO_ENTITIES = [
-    {"entity_id": "ent-graphrag", "name": "GraphRAG", "type": "Method", "description": "Graph-based retrieval augmented generation."},
-    {"entity_id": "ent-rag", "name": "Naive RAG", "type": "Method", "description": "Plain retrieval augmented generation over chunks."},
-    {"entity_id": "ent-neo4j", "name": "Neo4j", "type": "Database", "description": "Graph database used to store chunks, entities and edges."},
-    {"entity_id": "ent-microsoft", "name": "Microsoft", "type": "Organization", "description": "Maintainer of the open-source GraphRAG project."},
-    {"entity_id": "ent-community", "name": "Community Detection", "type": "Technique", "description": "Grouping entities into topical communities."},
-    {"entity_id": "ent-claim", "name": "Claim Extraction", "type": "Technique", "description": "Extracting explicit claims from documents."},
-    {"entity_id": "ent-global-search", "name": "Global Search", "type": "QueryMode", "description": "Question answering over broad corpus themes."},
-    {"entity_id": "ent-entity", "name": "Entity", "type": "GraphPrimitive", "description": "A real-world object represented in the graph."},
-    {"entity_id": "ent-relation", "name": "Relation", "type": "GraphPrimitive", "description": "An edge connecting entities or evidence."},
-    {"entity_id": "ent-vector", "name": "Vector Retrieval", "type": "Retriever", "description": "Embedding similarity search over chunks."},
-    {"entity_id": "ent-multihop", "name": "Multi-hop Retrieval", "type": "Retriever", "description": "Traversing multiple graph edges to gather evidence."},
-    {"entity_id": "ent-explainability", "name": "Explainability", "type": "Benefit", "description": "Ability to inspect retrieved paths and evidence."},
-    {"entity_id": "ent-chunk", "name": "Chunk", "type": "GraphPrimitive", "description": "A text segment stored with an embedding."},
+    {
+        "entity_id": "ent-graphrag",
+        "name": "GraphRAG",
+        "type": "Method",
+        "description": "Graph-based retrieval augmented generation.",
+    },
+    {
+        "entity_id": "ent-rag",
+        "name": "Naive RAG",
+        "type": "Method",
+        "description": "Plain retrieval augmented generation over chunks.",
+    },
+    {
+        "entity_id": "ent-neo4j",
+        "name": "Neo4j",
+        "type": "Database",
+        "description": "Graph database used to store chunks, entities and edges.",
+    },
+    {
+        "entity_id": "ent-microsoft",
+        "name": "Microsoft",
+        "type": "Organization",
+        "description": "Maintainer of the open-source GraphRAG project.",
+    },
+    {
+        "entity_id": "ent-community",
+        "name": "Community Detection",
+        "type": "Technique",
+        "description": "Grouping entities into topical communities.",
+    },
+    {
+        "entity_id": "ent-claim",
+        "name": "Claim Extraction",
+        "type": "Technique",
+        "description": "Extracting explicit claims from documents.",
+    },
+    {
+        "entity_id": "ent-global-search",
+        "name": "Global Search",
+        "type": "QueryMode",
+        "description": "Question answering over broad corpus themes.",
+    },
+    {
+        "entity_id": "ent-entity",
+        "name": "Entity",
+        "type": "GraphPrimitive",
+        "description": "A real-world object represented in the graph.",
+    },
+    {
+        "entity_id": "ent-relation",
+        "name": "Relation",
+        "type": "GraphPrimitive",
+        "description": "An edge connecting entities or evidence.",
+    },
+    {
+        "entity_id": "ent-vector",
+        "name": "Vector Retrieval",
+        "type": "Retriever",
+        "description": "Embedding similarity search over chunks.",
+    },
+    {
+        "entity_id": "ent-multihop",
+        "name": "Multi-hop Retrieval",
+        "type": "Retriever",
+        "description": "Traversing multiple graph edges to gather evidence.",
+    },
+    {
+        "entity_id": "ent-explainability",
+        "name": "Explainability",
+        "type": "Benefit",
+        "description": "Ability to inspect retrieved paths and evidence.",
+    },
+    {
+        "entity_id": "ent-chunk",
+        "name": "Chunk",
+        "type": "GraphPrimitive",
+        "description": "A text segment stored with an embedding.",
+    },
 ]
 
 
@@ -172,7 +237,7 @@ def _hash_embedding(text: str, dim: int = 32) -> list[float]:
 def _cosine_similarity(left: list[float], right: list[float]) -> float:
     if not left or not right or len(left) != len(right):
         return 0.0
-    return sum(a * b for a, b in zip(left, right))
+    return sum(a * b for a, b in zip(left, right, strict=True))
 
 
 def _build_context_preview(chunks: list[ChunkCandidate]) -> str:
@@ -195,10 +260,7 @@ def _fallback_answer(query: str, chunks: list[ChunkCandidate]) -> str:
     top = chunks[0]
     entity_names = [entity["name"] for entity in top.entities[:4]]
     related_names = [entity["name"] for entity in top.related_entities[:4]]
-    answer = (
-        f"基于 demo 图谱，最相关的证据来自《{top.document_title}》。"
-        f"它说明 {top.text}"
-    )
+    answer = f"基于 demo 图谱，最相关的证据来自《{top.document_title}》。它说明 {top.text}"
     if entity_names:
         answer += f" 这一跳直接命中的实体有 {', '.join(entity_names)}。"
     if related_names:
@@ -332,9 +394,7 @@ def init_demo_graph(reset: bool = False) -> dict:
         chunk_count = db.node_count("DemoChunk")
         entity_count = db.node_count("DemoEntity")
         relationship_count = (
-            db.edge_count("HAS_CHUNK")
-            + db.edge_count("MENTIONS")
-            + db.edge_count("RELATED_TO")
+            db.edge_count("HAS_CHUNK") + db.edge_count("MENTIONS") + db.edge_count("RELATED_TO")
         )
         return {
             "document_count": document_count,

@@ -33,7 +33,9 @@ class TraversalService:
         edge_type: str | None = None,
         limit: int = 100,
     ) -> list[Node]:
-        return self._db.get_neighbours(node_id, direction=direction, edge_type=edge_type, limit=limit)
+        return self._db.get_neighbours(
+            node_id, direction=direction, edge_type=edge_type, limit=limit
+        )
 
     def node_edges(
         self,
@@ -43,7 +45,9 @@ class TraversalService:
         edge_type: str | None = None,
         limit: int = 100,
     ) -> list[Edge]:
-        return self._db.get_node_edges(node_id, direction=direction, edge_type=edge_type, limit=limit)
+        return self._db.get_node_edges(
+            node_id, direction=direction, edge_type=edge_type, limit=limit
+        )
 
     def shortest_path(
         self,
@@ -53,4 +57,6 @@ class TraversalService:
         edge_type: str | None = None,
         max_depth: int = 10,
     ) -> Path | None:
-        return self._db.shortest_path(source_id, target_id, edge_type=edge_type, max_depth=max_depth)
+        return self._db.shortest_path(
+            source_id, target_id, edge_type=edge_type, max_depth=max_depth
+        )

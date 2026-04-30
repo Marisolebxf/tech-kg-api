@@ -1,12 +1,11 @@
 """实体抽取 请求/响应数据模型"""
 
-from typing import Optional
 from pydantic import BaseModel
 
 
 class ExtractRequest(BaseModel):
     text: str
-    source_type: Optional[str] = "general"
+    source_type: str | None = "general"
     """
     source_type 可选值：
     - work        工作经历（抽取：机构、职位、时间段）
@@ -19,7 +18,7 @@ class ExtractRequest(BaseModel):
         "json_schema_extra": {
             "example": {
                 "text": "2010年—至今，北京大学计算机科学与技术系，教授",
-                "source_type": "work"
+                "source_type": "work",
             }
         }
     }

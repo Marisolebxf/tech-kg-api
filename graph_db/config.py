@@ -94,12 +94,18 @@ def _ensure_backends() -> None:
     """Lazily register built-in backends."""
     if _BACKEND_REGISTRY:
         return
-    # Import and register Neo4j backend
-    from graph_db.backends.neo4j_backend import Neo4jGraphDatabase
-    register_backend("neo4j", Neo4jGraphDatabase)
-    # Import and register TRS Graph backend
-    from graph_db.backends.trs_graph_backend import TRSGraphDatabase
-    register_backend("trs_graph", TRSGraphDatabase)
+    # Import and register Neo4j backend (optional — may not be installed)
+    try:
+        from graph_db.backends.neo4j_backend import Neo4jGraphDatabase
+        register_backend("neo4j", Neo4jGraphDatabase)
+    except ImportError:
+        pass
+    # Import and register TRS Graph backend (optional — may not be installed)
+    try:
+        from graph_db.backends.trs_graph_backend import TRSGraphDatabase
+        register_backend("trs_graph", TRSGraphDatabase)
+    except ImportError:
+        pass
 
 
 def connect(config: GraphDBConfig | None = None, **kwargs: Any) -> GraphDatabase:

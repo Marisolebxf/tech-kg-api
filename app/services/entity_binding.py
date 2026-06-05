@@ -52,7 +52,8 @@ _llm_client = ZhipuAiClient(api_key=_API_KEY) if ZhipuAiClient and _API_KEY else
 
 TALENT_DATA: list[dict[str, Any]] = [
     {
-        "talent_id": "talent_001",
+        "id": "talent_001",
+        "scholar_id": "talent_001",
         "name_zh": "张伟",
         "name_en": "Wei Zhang",
         "scholar_org_name_zh": "清华大学",
@@ -64,7 +65,8 @@ TALENT_DATA: list[dict[str, Any]] = [
         "status": 1,
     },
     {
-        "talent_id": "talent_002",
+        "id": "talent_002",
+        "scholar_id": "talent_002",
         "name_zh": "李明",
         "name_en": "Ming Li",
         "scholar_org_name_zh": "北京大学",
@@ -76,7 +78,8 @@ TALENT_DATA: list[dict[str, Any]] = [
         "status": 1,
     },
     {
-        "talent_id": "talent_003",
+        "id": "talent_003",
+        "scholar_id": "talent_003",
         "name_zh": "王芳",
         "name_en": "Fang Wang",
         "scholar_org_name_zh": "浙江大学",
@@ -88,7 +91,8 @@ TALENT_DATA: list[dict[str, Any]] = [
         "status": 1,
     },
     {
-        "talent_id": "talent_004",
+        "id": "talent_004",
+        "scholar_id": "talent_004",
         "name_zh": "刘洋",
         "name_en": "Yang Liu",
         "scholar_org_name_zh": "清华大学",
@@ -100,7 +104,8 @@ TALENT_DATA: list[dict[str, Any]] = [
         "status": 1,
     },
     {
-        "talent_id": "talent_005",
+        "id": "talent_005",
+        "scholar_id": "talent_005",
         "name_zh": "陈静",
         "name_en": "Jing Chen",
         "scholar_org_name_zh": "复旦大学",
@@ -115,68 +120,74 @@ TALENT_DATA: list[dict[str, Any]] = [
 
 PAPER_DATA: list[dict[str, Any]] = [
     {
+        "id": "paper_001",
         "paper_id": "paper_001",
-        "title_zh": "基于知识图谱的实体对齐方法研究",
-        "title_en": "Entity Alignment in Knowledge Graphs",
+        "zh_name": "基于知识图谱的实体对齐方法研究",
+        "en_name": "Entity Alignment in Knowledge Graphs",
         "authors": "张伟",
         "author_id": "auth_001",
         "institution": "清华大学",
-        "pub_date": "2024-03-15",
+        "cover_date_start": "2024-03-15",
         "keywords": "知识图谱;实体对齐",
         "doi": "10.1234/kg001",
     },
     {
+        "id": "paper_002",
         "paper_id": "paper_002",
-        "title_zh": "NLP前沿技术综述",
-        "title_en": "Advances in NLP",
+        "zh_name": "NLP前沿技术综述",
+        "en_name": "Advances in NLP",
         "authors": "李明",
         "author_id": "auth_002",
         "institution": "北京大学",
-        "pub_date": "2024-05-20",
+        "cover_date_start": "2024-05-20",
         "keywords": "自然语言处理;深度学习",
         "doi": "10.1234/nlp002",
     },
     {
+        "id": "paper_003",
         "paper_id": "paper_003",
-        "title_zh": "深度学习在CV中的应用",
-        "title_en": "Deep Learning for Computer Vision",
+        "zh_name": "深度学习在CV中的应用",
+        "en_name": "Deep Learning for Computer Vision",
         "authors": "王芳",
         "author_id": "auth_003",
         "institution": "浙大",
-        "pub_date": "2024-01-10",
+        "cover_date_start": "2024-01-10",
         "keywords": "计算机视觉;深度学习",
         "doi": "10.1234/cv003",
     },
     {
+        "id": "paper_004",
         "paper_id": "paper_004",
-        "title_zh": "机器学习优化方法研究",
-        "title_en": "Optimization Methods in ML",
+        "zh_name": "机器学习优化方法研究",
+        "en_name": "Optimization Methods in ML",
         "authors": "刘洋",
         "author_id": "auth_004",
         "institution": "清华大学计算机系",
-        "pub_date": "2023-11-08",
+        "cover_date_start": "2023-11-08",
         "keywords": "机器学习;优化算法",
         "doi": "10.1234/ml004",
     },
     {
+        "id": "paper_005",
         "paper_id": "paper_005",
-        "title_zh": "知识图谱构建技术研究",
-        "title_en": "Knowledge Graph Construction",
+        "zh_name": "知识图谱构建技术研究",
+        "en_name": "Knowledge Graph Construction",
         "authors": "张伟",
         "author_id": "auth_005",
         "institution": "Tsinghua University",
-        "pub_date": "2024-06-01",
+        "cover_date_start": "2024-06-01",
         "keywords": "知识图谱;图构建",
         "doi": "10.1234/kg005",
     },
     {
+        "id": "paper_006",
         "paper_id": "paper_006",
-        "title_zh": "数据挖掘方法综述",
-        "title_en": "Data Mining Survey",
+        "zh_name": "数据挖掘方法综述",
+        "en_name": "Data Mining Survey",
         "authors": "陈静",
         "author_id": "auth_006",
         "institution": "复旦大学",
-        "pub_date": "2023-09-15",
+        "cover_date_start": "2023-09-15",
         "keywords": "数据挖掘;机器学习",
         "doi": "10.1234/dm006",
     },
@@ -186,41 +197,37 @@ PATENT_DATA: list[dict[str, Any]] = [
     {
         "patent_id": "patent_001",
         "title_zh": "知识图谱构建方法",
-        "title_en": "Knowledge Graph Construction Method",
         "first_inventor_name": "张伟",
         "first_applicant_name": "清华大学",
         "country": "CN",
-        "ipc": "G06F16.36",
+        "classification_ipcr": "G06F16.36",
         "keywords": "知识图谱;图数据库",
     },
     {
         "patent_id": "patent_002",
         "title_zh": "自然语言处理装置",
-        "title_en": "NLP Processing Apparatus",
         "first_inventor_name": "李明",
         "first_applicant_name": "北京大学",
         "country": "CN",
-        "ipc": "G06F40.30",
+        "classification_ipcr": "G06F40.30",
         "keywords": "自然语言处理;语义分析",
     },
     {
         "patent_id": "patent_003",
         "title_zh": "图像识别系统",
-        "title_en": "Image Recognition System",
         "first_inventor_name": "王芳",
         "first_applicant_name": "浙江大学",
         "country": "CN",
-        "ipc": "G06V10.00",
+        "classification_ipcr": "G06V10.00",
         "keywords": "计算机视觉;图像识别",
     },
     {
         "patent_id": "patent_004",
         "title_zh": "智能推荐算法",
-        "title_en": "Intelligent Recommendation Algorithm",
         "first_inventor_name": "赵磊",
         "first_applicant_name": "中科院",
         "country": "CN",
-        "ipc": "G06F16.95",
+        "classification_ipcr": "G06F16.95",
         "keywords": "推荐系统;协同过滤",
     },
 ]
@@ -260,6 +267,85 @@ ORG_DATA: list[dict[str, Any]] = [
 # nGQL constants for edge types and indexes
 # ---------------------------------------------------------------------------
 
+# Valid property names per NebulaGraph tag (from DESCRIBE TAG)
+VALID_TAG_PROPS: dict[str, set[str]] = {
+    "talent": {
+        "scholar_id", "name_en", "name_zh", "avatar", "scholar_org_name_en",
+        "scholar_org_name_zh", "bio", "bio_zh", "work_experience_en",
+        "work_experience_zh", "education_background_en", "education_background_zh",
+        "paper_nums", "citation_nums", "h_index", "status", "create_time",
+        "update_time", "academician", "fields",
+    },
+    "cn_paper": {
+        "id", "doi", "en_name", "zh_name", "publication_id", "paper_type",
+        "publication_type", "publication_zh_name", "issn", "volume", "issue",
+        "first_page", "last_page", "cover_year_start", "cover_date_start",
+        "language_classify", "abstract_available", "open_access", "paper_url",
+        "data_source", "created_time", "updated_time", "logic_id",
+        "title_sequence", "language_code", "language", "original_title",
+        "abstract_sequence", "original_abstract", "en_abstract", "zh_abstract",
+        "paper_id", "author_sequence", "author_id", "email", "correspond",
+        "institution", "affiliation", "country", "name_abbr", "iscn",
+        "eissn", "founding_time", "jn_official", "zh_description", "format",
+        "postal_code", "chief_editor", "organizer", "publisher_place",
+        "award", "cite_nums", "annual_publication", "review", "impact_factor",
+        "sub_quartile", "classify_list", "warning", "is_sci",
+        "publication_cycle", "paper_nums", "scope", "scope_zone", "keywords",
+        "relevant", "authors",
+    },
+    "patent": {
+        "id", "patent_id", "publication_number", "application_kind",
+        "country_code", "country", "publication_reference",
+        "application_reference", "pct_or_regional_filing_data",
+        "pct_or_regional_publishing_data", "priority_filings", "applicants",
+        "assignees", "inventors", "first_applicant_name",
+        "first_current_assignee_name", "first_inventor_name",
+        "classification_ipcr", "classification_cpc", "keywords",
+        "claims_localized", "description_localized", "figures", "language",
+        "granted_number", "spif_application_number", "spif_publication_number",
+        "prior_art_year", "prior_art_date", "relevants", "db_source",
+        "create_time", "update_time", "reference_cited", "cited_by_nums",
+        "cited_by", "patent_citations", "non_patent_citations",
+        "title_localized", "title_zh", "abstract_localized", "abstract_zh",
+        "dates_of_public_availability", "status", "legal_events",
+        "patent_legal_prs_data", "anticipated_expiration", "expiration_year",
+        "transfer_effective_date", "transferor_sequence", "transferor_name",
+        "transferee_sequence", "transferee_name", "simple_family",
+        "family_citations", "cited_by_family", "other_versions", "worldwides",
+    },
+    "cn_organization": {
+        "org_id", "name_cn", "external_id", "province", "city", "address",
+        "addr_lng", "addr_lat", "postal_code", "phone", "email", "lerep",
+        "org_type", "org_size", "registration_org", "incorporation_year",
+        "incorporation_date", "start_date", "end_date", "listing_status",
+        "listing_date", "registered_capital_value", "capital_currency_code",
+        "data_source", "created_time", "updated_time", "inv_org_id",
+        "owners_name", "owners_type", "ownership_percentage",
+        "executives_name", "executives_position", "industry_class",
+        "main_activities", "description", "main_prod", "year", "total_assets",
+        "total_liabilities", "operating_revenue", "main_business_revenue",
+        "total_profit", "pure_profit", "total_tax_paid", "owners_equity",
+        "employees_number", "news_title", "news_date", "news_content",
+        "original_textlink", "update_content", "current_name", "update_name",
+        "update_date", "acquiring_org_id", "acquiring_name",
+        "acquired_org_id", "acquired_name", "ma_amount", "currency_code",
+        "funding_round", "funding_amount", "funding_currency_code",
+        "post_valuation", "completion_date", "investors_name",
+        "org_name", "org_name_en", "org_desc", "est_year", "univ_type",
+        "web_link", "contact_number", "fax_number", "org_tag", "tag_level",
+        "stock_code", "stock_noun", "stock_type", "listed_date",
+        "listed_status", "status",
+    },
+}
+
+
+def _filter_props(tag: str, props: dict[str, Any]) -> dict[str, Any]:
+    """Return only properties that exist in the NebulaGraph tag schema."""
+    valid = VALID_TAG_PROPS.get(tag, set())
+    if not valid:
+        return props
+    return {k: v for k, v in props.items() if k in valid}
+
 EDGE_NGQLS: dict[str, str] = {
     "bind_talent_paper_author": (
         "CREATE EDGE IF NOT EXISTS bind_talent_paper_author"
@@ -275,16 +361,11 @@ EDGE_NGQLS: dict[str, str] = {
     ),
 }
 
-INDEX_NGQLS: list[str] = [
-    "CREATE TAG INDEX IF NOT EXISTS idx_talent_name ON talent(name_zh)",
-    "CREATE TAG INDEX IF NOT EXISTS idx_talent_name_en ON talent(name_en)",
-    "CREATE TAG INDEX IF NOT EXISTS idx_talent_org ON talent(scholar_org_name_zh)",
-    "CREATE TAG INDEX IF NOT EXISTS idx_paper_author ON cn_paper(authors)",
-    "CREATE TAG INDEX IF NOT EXISTS idx_paper_author_id ON cn_paper(author_id)",
-    "CREATE TAG INDEX IF NOT EXISTS idx_paper_inst ON cn_paper(institution)",
-    "CREATE TAG INDEX IF NOT EXISTS idx_patent_inventor ON patent(first_inventor_name)",
-    "CREATE TAG INDEX IF NOT EXISTS idx_patent_applicant ON patent(first_applicant_name)",
-    "CREATE TAG INDEX IF NOT EXISTS idx_org_name ON cn_organization(name_cn)",
+INDEX_NGQLS: list[str] = []  # Index creation handled via Java service createIndex API
+
+# nGQL to add missing demo fields to existing tags
+ALTER_TAG_NGQLS: list[str] = [
+    "ALTER TAG cn_paper ADD (authors string DEFAULT \"\")",
 ]
 
 # ---------------------------------------------------------------------------
@@ -422,42 +503,53 @@ class EntityBindingService:
             except Exception as e:
                 logger.warning("Failed to create index %s: %s", idx_name, e)
 
+        # Add missing demo fields to existing tags
+        for ngql in ALTER_TAG_NGQLS:
+            try:
+                self.db.execute_write(ngql)
+                logger.info("Altered tag: %s", ngql)
+            except Exception as e:
+                logger.warning("Failed to alter tag: %s", e)
+
         # Insert talent nodes
         talent_count = 0
         for t in TALENT_DATA:
             try:
+                vid = t.get("scholar_id", t.get("id", ""))
                 self.db.merge_node(
                     labels=["talent"],
-                    identity_props={"talent_id": t["talent_id"]},
-                    properties=t,
+                    identity_props={"vid": vid},
+                    properties=_filter_props("talent", dict(t)),
                 )
                 talent_count += 1
             except Exception as e:
-                logger.warning("Failed to insert talent %s: %s", t.get("talent_id"), e)
+                logger.warning("Failed to insert talent %s: %s", t.get("scholar_id", t.get("id", "")), e)
         nodes_inserted["talent"] = talent_count
 
         # Insert paper nodes
         paper_count = 0
         for p in PAPER_DATA:
             try:
+                vid = p.get("paper_id", p.get("id", ""))
                 self.db.merge_node(
                     labels=["cn_paper"],
-                    identity_props={"paper_id": p["paper_id"]},
-                    properties=p,
+                    identity_props={"vid": vid},
+                    properties=_filter_props("cn_paper", dict(p)),
                 )
                 paper_count += 1
             except Exception as e:
-                logger.warning("Failed to insert paper %s: %s", p.get("paper_id"), e)
+                logger.warning("Failed to insert paper %s: %s", p.get("paper_id", p.get("id", "")), e)
         nodes_inserted["cn_paper"] = paper_count
 
         # Insert patent nodes
         patent_count = 0
         for p in PATENT_DATA:
             try:
+                vid = p.get("patent_id", "")
                 self.db.merge_node(
                     labels=["patent"],
-                    identity_props={"patent_id": p["patent_id"]},
-                    properties=p,
+                    identity_props={"vid": vid},
+                    properties=_filter_props("patent", dict(p)),
                 )
                 patent_count += 1
             except Exception as e:
@@ -468,10 +560,11 @@ class EntityBindingService:
         org_count = 0
         for o in ORG_DATA:
             try:
+                vid = o.get("org_id", "")
                 self.db.merge_node(
                     labels=["cn_organization"],
-                    identity_props={"org_id": o["org_id"]},
-                    properties=o,
+                    identity_props={"vid": vid},
+                    properties=_filter_props("cn_organization", dict(o)),
                 )
                 org_count += 1
             except Exception as e:
@@ -495,7 +588,11 @@ class EntityBindingService:
     # ------------------------------------------------------------------
 
     def _fetch_all_nodes(self, label: str) -> list[dict[str, Any]]:
-        """Fetch all nodes of a given label using pagination."""
+        """Fetch all nodes of a given label using pagination.
+
+        Returns a list of dicts that include both the node VID (as ``id``)
+        and all tag properties.
+        """
         all_nodes: list[dict[str, Any]] = []
         offset = 0
         page_size = 200
@@ -504,7 +601,10 @@ class EntityBindingService:
             try:
                 result = self.db.get_nodes_by_label(label, limit=page_size, offset=offset)
                 for node in result.items:
-                    all_nodes.append(node.properties)
+                    props = dict(node.properties)
+                    # Ensure the VID is available as "id" for edge creation
+                    props["id"] = str(node.id)
+                    all_nodes.append(props)
                 if not result.page.has_next:
                     break
                 offset += page_size
@@ -577,8 +677,8 @@ class EntityBindingService:
 
             # Write binding edge for non-rejected pairs
             if status != "rejected":
-                source_id = talent.get("talent_id", "")
-                target_id = paper.get("paper_id", "")
+                source_id = talent.get("id", "") or talent.get("scholar_id", "")
+                target_id = paper.get("id", "") or paper.get("paper_id", "")
                 try:
                     self.db.create_edge(
                         source_id=source_id,
@@ -597,14 +697,14 @@ class EntityBindingService:
                     logger.warning("Failed to create binding edge %s->%s: %s", source_id, target_id, e)
 
             # Build detail
-            source_name = talent.get("name_zh", "") or talent.get("name_en", "") or str(talent.get("talent_id", ""))
-            target_name = paper.get("title_zh", "") or paper.get("title_en", "") or str(paper.get("paper_id", ""))
+            source_name = talent.get("name_zh", "") or talent.get("name_en", "") or str(talent.get("id", ""))
+            target_name = paper.get("zh_name", "") or paper.get("en_name", "") or str(paper.get("paper_id", ""))
             details.append(BindingPairDetail(
                 source_name=source_name,
-                source_id=str(talent.get("talent_id", "")),
+                source_id=str(talent.get("id", "") or talent.get("scholar_id", "")),
                 source_label=source_label,
                 target_name=target_name,
-                target_id=str(paper.get("paper_id", "")),
+                target_id=str(paper.get("id", "") or paper.get("paper_id", "")),
                 target_label=target_label,
                 confidence=confidence,
                 method=method,
@@ -686,7 +786,7 @@ class EntityBindingService:
 
             # Write binding edge for non-rejected pairs
             if status != "rejected":
-                source_id = talent.get("talent_id", "")
+                source_id = talent.get("id", "") or talent.get("scholar_id", "")
                 target_id = patent.get("patent_id", "")
                 try:
                     self.db.create_edge(
@@ -706,11 +806,11 @@ class EntityBindingService:
                     logger.warning("Failed to create binding edge %s->%s: %s", source_id, target_id, e)
 
             # Build detail
-            source_name = talent.get("name_zh", "") or talent.get("name_en", "") or str(talent.get("talent_id", ""))
-            target_name = patent.get("title_zh", "") or patent.get("title_en", "") or str(patent.get("patent_id", ""))
+            source_name = talent.get("name_zh", "") or talent.get("name_en", "") or str(talent.get("id", ""))
+            target_name = patent.get("title_zh", "") or patent.get("title_localized", "") or str(patent.get("patent_id", ""))
             details.append(BindingPairDetail(
                 source_name=source_name,
-                source_id=str(talent.get("talent_id", "")),
+                source_id=str(talent.get("id", "") or talent.get("scholar_id", "")),
                 source_label=source_label,
                 target_name=target_name,
                 target_id=str(patent.get("patent_id", "")),
@@ -925,19 +1025,21 @@ class EntityBindingService:
     # Get binding detail
     # ------------------------------------------------------------------
 
-    def get_binding_detail(self, binding_type: str) -> list[dict[str, Any]]:
+    def get_binding_detail(self, binding_type: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         """Get detailed list of binding edges for a specific type."""
         edge_type = self.BINDING_EDGE_MAP.get(binding_type)
         if not edge_type:
             return []
 
         details: list[dict[str, Any]] = []
-        offset = 0
-        page_size = 200
+        current_offset = offset
+        page_size = min(limit, 200)
+        remaining = limit
 
-        while True:
+        while remaining > 0:
             try:
-                result = self.db.get_edges_by_type(edge_type, limit=page_size, offset=offset)
+                fetch_size = min(page_size, remaining)
+                result = self.db.get_edges_by_type(edge_type, limit=fetch_size, offset=current_offset)
                 for edge in result.items:
                     details.append({
                         "edge_id": str(edge.id),
@@ -946,9 +1048,10 @@ class EntityBindingService:
                         "edge_type": edge.type,
                         "properties": edge.properties,
                     })
+                    remaining -= 1
                 if not result.page.has_next:
                     break
-                offset += page_size
+                current_offset += fetch_size
             except Exception as e:
                 logger.warning("Error fetching detail for %s: %s", edge_type, e)
                 break
@@ -1058,7 +1161,7 @@ class EntityBindingService:
                         break
                     for edge in result.items:
                         try:
-                            self.db.delete_edge(edge.id)
+                            self.db.delete_edge(edge.id, edge_type=edge.type)
                             edges_deleted += 1
                         except Exception as e:
                             logger.warning("Failed to delete edge %s: %s", edge.id, e)

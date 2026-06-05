@@ -74,24 +74,22 @@ class TestTrsEdgeToModel:
 class TestBuildNodeCreateBody:
     def test_single_label(self):
         body = _build_node_create_body(["Person"], {"name": "Alice"})
-        assert body["label"] == "Person"
+        assert body["labels"] == ["Person"]
         assert body["properties"] == {"name": "Alice"}
-        assert "_additional_labels" not in body["properties"]
 
     def test_multiple_labels(self):
         body = _build_node_create_body(["Person", "Employee"], {"name": "Bob"})
-        assert body["label"] == "Person"
-        assert body["properties"]["_additional_labels"] == ["Employee"]
-        assert body["properties"]["name"] == "Bob"
+        assert body["labels"] == ["Person", "Employee"]
+        assert body["properties"] == {"name": "Bob"}
 
     def test_no_labels(self):
         body = _build_node_create_body([], {"key": "val"})
-        assert body["label"] == "Vertex"
+        assert body["labels"] == ["Vertex"]
         assert body["properties"] == {"key": "val"}
 
     def test_no_properties(self):
         body = _build_node_create_body(["Tag"])
-        assert body["label"] == "Tag"
+        assert body["labels"] == ["Tag"]
         assert body["properties"] == {}
 
 

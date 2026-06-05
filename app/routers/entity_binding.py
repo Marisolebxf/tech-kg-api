@@ -38,6 +38,8 @@ def init_data():
         service = _get_service()
         result = service.init_data()
         service.db.close()
+        if isinstance(result, InitDataResponse):
+            return result
         return InitDataResponse(**result)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"初始化数据失败: {exc}") from exc
@@ -94,6 +96,8 @@ def get_graph():
         service = _get_service()
         result = service.get_binding_graph()
         service.db.close()
+        if isinstance(result, BindingGraphResponse):
+            return result
         return BindingGraphResponse(**result)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"获取图数据失败: {exc}") from exc
@@ -105,6 +109,8 @@ def clear_bindings(clear_data: bool = Query(False)):
         service = _get_service()
         result = service.clear_bindings(clear_data=clear_data)
         service.db.close()
+        if isinstance(result, ClearResponse):
+            return result
         return ClearResponse(**result)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"清除失败: {exc}") from exc

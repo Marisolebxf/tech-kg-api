@@ -59,17 +59,13 @@ def _trs_edge_to_model(data: dict[str, Any]) -> Edge:
 def _build_node_create_body(labels: list[str], properties: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build request body for node creation.
 
-    TRS Graph supports only one TAG per vertex. The first label becomes the
-    TAG; any extra labels are stored in the ``_additional_labels`` property.
+    TRS Graph expects ``labels`` as a list. The service maps the first label
+    to the NebulaGraph TAG.
     """
-    tag = labels[0] if labels else "Vertex"
-    extra_labels = labels[1:] if len(labels) > 1 else []
     body: dict[str, Any] = {
-        "label": tag,
+        "labels": labels if labels else ["Vertex"],
         "properties": dict(properties) if properties else {},
     }
-    if extra_labels:
-        body["properties"]["_additional_labels"] = extra_labels
     return body
 
 
@@ -290,16 +286,10 @@ class TRSGraphDatabase(GraphDatabase):
         identity_props: dict[str, Any],
         properties: dict[str, Any] | None = None,
     ) -> Node:
-        tag = labels[0] if labels else "Vertex"
-        extra_labels = labels[1:] if len(labels) > 1 else []
-        all_props = dict(properties) if properties else {}
-        if extra_labels:
-            all_props["_additional_labels"] = extra_labels
-        # Merge identity props into all_props so the service can match
         body = {
-            "label": tag,
+            "labels": labels if labels else ["Vertex"],
             "identityProps": identity_props,
-            "properties": all_props,
+            "properties": dict(properties) if properties else {},
         }
         resp = self._request("POST", "/api/v1/nodes/merge", json=body)
         resp.raise_for_status()
@@ -317,8 +307,8 @@ class TRSGraphDatabase(GraphDatabase):
     ) -> PagedResult:
         resp = self._request(
             "GET",
-            "/api/v1/nodes",
-            params={"label": label, "limit": limit, "offset": offset},
+            f"/api/v1/nodes/label/{label}",
+            params={"limit": limit, "offset": offset},
         )
         resp.raise_for_status()
         data = resp.json()
@@ -337,17 +327,13 @@ class TRSGraphDatabase(GraphDatabase):
         limit: int = 100,
         offset: int = 0,
     ) -> PagedResult:
-        label = labels[0] if labels else "Vertex"
-        resp = self._request(
-            "GET",
-            "/api/v1/nodes",
-            params={
-                "label": label,
-                "properties": properties,
-                "limit": limit,
-                "offset": offset,
-            },
-        )
+        body = {
+            "labels": labels if labels else ["Vertex"],
+            "properties": properties,
+            "limit": limit,
+            "offset": offset,
+        }
+        resp = self._request("POST", "/api/v1/nodes/find", json=body)
         resp.raise_for_status()
         data = resp.json()
         items = [_trs_node_to_model(n) for n in data.get("items", [])]
@@ -369,7 +355,13 @@ class TRSGraphDatabase(GraphDatabase):
         }
         resp = self._request("PUT", f"/api/v1/nodes/{node_id}", json=body)
         resp.raise_for_status()
-        return _trs_node_to_model(resp.json())
+        data = resp.json()
+        # Service may return a map wrapper: {"id": ..., "labels": [...], "properties": {...}}
+        if "id" in data:
+            return _trs_node_to_model(data)
+        # Or it may return just properties — merge with existing
+        existing.properties.update(properties)
+        return existing
 
     def delete_node(self, node_id: Any, *, detach: bool = False) -> bool:
         params = {}
@@ -393,9 +385,9 @@ class TRSGraphDatabase(GraphDatabase):
         properties: dict[str, Any] | None = None,
     ) -> Edge:
         body = {
+            "type": edge_type,
             "sourceId": str(source_id),
             "targetId": str(target_id),
-            "type": edge_type,
             "properties": dict(properties) if properties else {},
         }
         resp = self._request("POST", "/api/v1/edges", json=body)
@@ -410,13 +402,12 @@ class TRSGraphDatabase(GraphDatabase):
         identity_props: dict[str, Any],
         properties: dict[str, Any] | None = None,
     ) -> Edge:
-        all_props = dict(properties) if properties else {}
         body = {
+            "type": edge_type,
             "sourceId": str(source_id),
             "targetId": str(target_id),
-            "type": edge_type,
             "identityProps": identity_props,
-            "properties": all_props,
+            "properties": dict(properties) if properties else {},
         }
         resp = self._request("POST", "/api/v1/edges/merge", json=body)
         resp.raise_for_status()
@@ -424,17 +415,16 @@ class TRSGraphDatabase(GraphDatabase):
 
     def get_edge(self, edge_id: Any) -> Edge | None:
         # TRS Graph edge ID format: "sourceId->targetId@ranking"
-        # The service endpoint is /api/v1/edges/{sourceId}/{targetId}/{ranking}
+        # The service endpoint is GET /api/v1/edges/{sourceId}/{targetId}?type=...&ranking=0
         try:
             source, target, ranking = _parse_edge_id(str(edge_id))
         except (ValueError, IndexError):
-            # Fallback: try direct fetch if ID format is different
-            resp = self._request("GET", f"/api/v1/edges/{edge_id}")
-            if resp.status_code == 404:
-                return None
-            resp.raise_for_status()
-            return _trs_edge_to_model(resp.json())
-        resp = self._request("GET", f"/api/v1/edges/{source}/{target}/{ranking}")
+            return None
+        resp = self._request(
+            "GET",
+            f"/api/v1/edges/{source}/{target}",
+            params={"type": "unknown", "ranking": ranking},
+        )
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
@@ -445,8 +435,8 @@ class TRSGraphDatabase(GraphDatabase):
     ) -> PagedResult:
         resp = self._request(
             "GET",
-            "/api/v1/edges",
-            params={"type": edge_type, "limit": limit, "offset": offset},
+            f"/api/v1/edges/type/{edge_type}",
+            params={"limit": limit, "offset": offset},
         )
         resp.raise_for_status()
         data = resp.json()
@@ -465,16 +455,13 @@ class TRSGraphDatabase(GraphDatabase):
         limit: int = 100,
         offset: int = 0,
     ) -> PagedResult:
-        resp = self._request(
-            "GET",
-            "/api/v1/edges",
-            params={
-                "type": edge_type,
-                "properties": properties,
-                "limit": limit,
-                "offset": offset,
-            },
-        )
+        body = {
+            "type": edge_type,
+            "properties": properties,
+            "limit": limit,
+            "offset": offset,
+        }
+        resp = self._request("POST", "/api/v1/edges/find", json=body)
         resp.raise_for_status()
         data = resp.json()
         items = [_trs_edge_to_model(e) for e in data.get("items", [])]
@@ -486,14 +473,27 @@ class TRSGraphDatabase(GraphDatabase):
 
     def update_edge(self, edge_id: Any, properties: dict[str, Any]) -> Edge:
         source, target, ranking = _parse_edge_id(str(edge_id))
-        body = {"properties": properties}
-        resp = self._request("PUT", f"/api/v1/edges/{source}/{target}/{ranking}", json=body)
+        body = {
+            "type": "unknown",
+            "ranking": ranking,
+            "properties": properties,
+        }
+        resp = self._request("PUT", f"/api/v1/edges/{source}/{target}", json=body)
         resp.raise_for_status()
         return _trs_edge_to_model(resp.json())
 
-    def delete_edge(self, edge_id: Any) -> bool:
+    def delete_edge(self, edge_id: Any, *, edge_type: str | None = None) -> bool:
         source, target, ranking = _parse_edge_id(str(edge_id))
-        resp = self._request("DELETE", f"/api/v1/edges/{source}/{target}/{ranking}")
+        params: dict[str, Any] = {"ranking": ranking}
+        if edge_type:
+            params["type"] = edge_type
+        else:
+            params["type"] = "unknown"
+        resp = self._request(
+            "DELETE",
+            f"/api/v1/edges/{source}/{target}",
+            params=params,
+        )
         if resp.status_code == 404:
             return False
         resp.raise_for_status()
@@ -513,11 +513,11 @@ class TRSGraphDatabase(GraphDatabase):
     ) -> list[Edge]:
         params: dict[str, Any] = {"direction": direction, "limit": limit}
         if edge_type:
-            params["type"] = edge_type
+            params["edgeType"] = edge_type
         resp = self._request("GET", f"/api/v1/traversal/{node_id}/edges", params=params)
         resp.raise_for_status()
         data = resp.json()
-        return [_trs_edge_to_model(e) for e in data.get("items", data if isinstance(data, list) else [])]
+        return [_trs_edge_to_model(e) for e in (data if isinstance(data, list) else data.get("items", []))]
 
     def get_neighbours(
         self,
@@ -529,11 +529,11 @@ class TRSGraphDatabase(GraphDatabase):
     ) -> list[Node]:
         params: dict[str, Any] = {"direction": direction, "limit": limit}
         if edge_type:
-            params["type"] = edge_type
+            params["edgeType"] = edge_type
         resp = self._request("GET", f"/api/v1/traversal/{node_id}/neighbours", params=params)
         resp.raise_for_status()
         data = resp.json()
-        return [_trs_node_to_model(n) for n in data.get("items", data if isinstance(data, list) else [])]
+        return [_trs_node_to_model(n) for n in (data if isinstance(data, list) else data.get("items", []))]
 
     def shortest_path(
         self,
@@ -580,7 +580,7 @@ class TRSGraphDatabase(GraphDatabase):
         body = {"query": query}
         if params:
             body["params"] = params
-        resp = self._request("POST", "/api/v1/read", json=body)
+        resp = self._request("POST", "/api/v1/query/read", json=body)
         resp.raise_for_status()
         data = resp.json()
         return QueryResult(records=data.get("records", []), summary=data.get("summary"))
@@ -591,7 +591,7 @@ class TRSGraphDatabase(GraphDatabase):
         body = {"query": query}
         if params:
             body["params"] = params
-        resp = self._request("POST", "/api/v1/write", json=body)
+        resp = self._request("POST", "/api/v1/query/write", json=body)
         resp.raise_for_status()
         data = resp.json()
         return QueryResult(records=data.get("records", []), summary=data.get("summary"))
@@ -612,8 +612,11 @@ class TRSGraphDatabase(GraphDatabase):
         items: Sequence[dict[str, Any]],
         labels: list[str],
     ) -> list[Node]:
-        bodies = [_build_node_create_body(labels, item) for item in items]
-        resp = self._request("POST", "/api/v1/nodes/batch", json=bodies)
+        body = {
+            "labels": labels if labels else ["Vertex"],
+            "items": list(items),
+        }
+        resp = self._request("POST", "/api/v1/nodes/batch", json=body)
         resp.raise_for_status()
         data = resp.json()
         return [_trs_node_to_model(n) for n in data if isinstance(n, dict)]
@@ -623,17 +626,21 @@ class TRSGraphDatabase(GraphDatabase):
         items: Sequence[dict[str, Any]],
         edge_type: str,
     ) -> list[Edge]:
-        bodies = []
+        # Each item should contain sourceId, targetId, and optionally ranking + properties
+        normalized_items = []
         for item in items:
-            source_id = item.pop("source_id", item.pop("sourceId", ""))
-            target_id = item.pop("target_id", item.pop("targetId", ""))
-            bodies.append({
-                "sourceId": str(source_id),
-                "targetId": str(target_id),
-                "type": edge_type,
-                "properties": dict(item),
-            })
-        resp = self._request("POST", "/api/v1/edges/batch", json=bodies)
+            entry = dict(item)
+            # Ensure sourceId/targetId keys are present
+            if "source_id" in entry and "sourceId" not in entry:
+                entry["sourceId"] = str(entry.pop("source_id"))
+            if "target_id" in entry and "targetId" not in entry:
+                entry["targetId"] = str(entry.pop("target_id"))
+            normalized_items.append(entry)
+        body = {
+            "type": edge_type,
+            "items": normalized_items,
+        }
+        resp = self._request("POST", "/api/v1/edges/batch", json=body)
         resp.raise_for_status()
         data = resp.json()
         return [_trs_edge_to_model(e) for e in data if isinstance(e, dict)]

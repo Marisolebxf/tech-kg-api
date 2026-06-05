@@ -97,6 +97,9 @@ def _ensure_backends() -> None:
     # Import and register Neo4j backend
     from graph_db.backends.neo4j_backend import Neo4jGraphDatabase
     register_backend("neo4j", Neo4jGraphDatabase)
+    # Import and register TRS Graph backend
+    from graph_db.backends.trs_graph_backend import TRSGraphDatabase
+    register_backend("trs_graph", TRSGraphDatabase)
 
 
 def connect(config: GraphDBConfig | None = None, **kwargs: Any) -> GraphDatabase:
@@ -139,6 +142,12 @@ def connect(config: GraphDBConfig | None = None, **kwargs: Any) -> GraphDatabase
             uri=config.uri,
             auth=(config.username, config.password),
             database=config.database,
+        )
+    elif backend_name == "trs_graph":
+        db = cls(
+            base_url=config.uri,
+            graph_space=config.database,
+            timeout=config.connection_timeout,
         )
     else:
         db = cls()

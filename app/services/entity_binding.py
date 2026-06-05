@@ -275,6 +275,15 @@ VALID_TAG_PROPS: dict[str, set[str]] = {
         "work_experience_zh", "education_background_en", "education_background_zh",
         "paper_nums", "citation_nums", "h_index", "status", "create_time",
         "update_time", "academician", "fields",
+        # Paper-related fields embedded in talent TAG
+        "paper_id", "year", "citations", "publish_time", "publication_id",
+        "related_paper_id", "zh_name", "en_name", "authors", "paper_url",
+        "cover_date_start", "zh_abstract", "en_abstract", "doi",
+        "publication_en_name",
+        # Co-author fields
+        "co_scholar_id", "co_scholar_name_en", "co_scholar_name_zh",
+        "co_scholar_avatar", "co_scholar_org_name_en", "co_scholar_org_name_zh",
+        "co_paper_count",
     },
     "cn_paper": {
         "id", "doi", "en_name", "zh_name", "publication_id", "paper_type",

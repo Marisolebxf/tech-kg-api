@@ -129,6 +129,7 @@ Step 4: 结果写入 — 创建绑定边，写入置信度和状态
 
 **人才 ↔ 论文作者：**
 
+- 每个 cn_paper 节点代表一条作者-论文关系，`authors` 字段存储该作者姓名
 - `talent.name_zh` / `name_en` 与 `cn_paper` 中 `authors` 字段做姓名匹配
 - 辅助：`talent.scholar_org_name_zh` 与 `cn_paper.institution` 做机构相似度（Jaccard）
 - 规则评分：`name_match(0.7) + org_similarity(0.3)`，阈值 ≥ 0.5 进入 LLM 精排
@@ -272,7 +273,7 @@ class BindingGraphResponse(BaseModel):
 | talent_004 | 刘洋 | Yang Liu | 清华大学 | 机器学习 |
 | talent_005 | 陈静 | Jing Chen | 复旦大学 | 数据挖掘 |
 
-**cn_paper（6 条）** — 论文库（厂商B）的论文+作者信息：
+**cn_paper（6 条）** — 论文库（厂商B）的论文+作者信息。每个节点代表一条作者-论文关系，VID 使用 `paper_001` 格式，`id`/`paper_id` 作为普通属性存储：
 
 | VID | zh_name | authors | author_id | institution |
 |---|---|---|---|---|

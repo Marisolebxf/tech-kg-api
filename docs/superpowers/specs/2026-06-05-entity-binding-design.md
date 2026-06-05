@@ -127,23 +127,27 @@ Step 4: 结果写入 — 创建绑定边，写入置信度和状态
 
 ### 2.3 Step 2：规则召回
 
+以下字段名均来自 TRS Graph `entity_binding_demo` 空间的实际 TAG 定义。
+
 **人才 ↔ 论文作者：**
 
 - 每个 cn_paper 节点代表一条作者-论文关系，`authors` 字段存储该作者姓名
-- `talent.name_zh` / `name_en` 与 `cn_paper` 中 `authors` 字段做姓名匹配
+- `talent.name_zh` / `talent.name_en` 与 `cn_paper.authors` 字段做姓名匹配
 - 辅助：`talent.scholar_org_name_zh` 与 `cn_paper.institution` 做机构相似度（Jaccard）
-- 规则评分：`name_match(0.7) + org_similarity(0.3)`，阈值 ≥ 0.5 进入 LLM 精排
+- 辅助：`talent.fields` 与 `cn_paper.keywords` 做研究方向相似度（Jaccard），作为加分项
+- 规则评分：`name_match(0.6) + org_similarity(0.3) + field_similarity(0.1)`，阈值 ≥ 0.5 进入 LLM 精排
 
 **人才 ↔ 专利发明人：**
 
 - `talent.name_zh` 与 `patent.first_inventor_name` 姓名匹配
-- 辅助：`talent.scholar_org_name_zh` 与 `patent.applicants` 机构匹配
-- 同样评分逻辑
+- 辅助：`talent.scholar_org_name_zh` 与 `patent.first_applicant_name` 机构匹配
+- 规则评分：`name_match(0.7) + org_similarity(0.3)`，阈值 ≥ 0.5 进入 LLM 精排
 
 **机构 ↔ 机构：**
 
 - `cn_organization.name_cn` 相似度（编辑距离 + Jaccard）
-- 辅助：省份/城市一致加分
+- 辅助：`cn_organization.province`/`cn_organization.city` 一致加分
+- 辅助：`cn_organization.org_type` 一致加分
 - 评分 ≥ 0.6 进入 LLM 精排
 
 ### 2.4 Step 3：LLM 精排
@@ -263,63 +267,75 @@ class BindingGraphResponse(BaseModel):
 
 ### 4.1 测试数据
 
-**talent（5 条）** — 人才库（厂商A）的专家：
+以下字段名均对应 TRS Graph `entity_binding_demo` 空间中实际 TAG 定义的字段。插入时使用 `trs-graph-service` API，VID 由 `scholar_id`/`id`/`patent_id`/`org_id` 字段自动生成。
 
-| VID | name_zh | name_en | scholar_org_name_zh | fields |
+**talent（5 条）** — 人才库（厂商A）的专家，对应 `talent` TAG：
+
+| VID (scholar_id) | name_zh | name_en | scholar_org_name_zh | scholar_org_name_en | fields | paper_nums | citation_nums | h_index | status |
+|---|---|---|---|---|---|---|---|---|---|
+| talent_001 | 张伟 | Wei Zhang | 清华大学 | Tsinghua University | 知识图谱 | 35 | 1200 | 12 | 1 |
+| talent_002 | 李明 | Ming Li | 北京大学 | Peking University | 自然语言处理 | 28 | 890 | 10 | 1 |
+| talent_003 | 王芳 | Fang Wang | 浙江大学 | Zhejiang University | 计算机视觉 | 22 | 560 | 8 | 1 |
+| talent_004 | 刘洋 | Yang Liu | 清华大学 | Tsinghua University | 机器学习 | 40 | 2100 | 15 | 1 |
+| talent_005 | 陈静 | Jing Chen | 复旦大学 | Fudan University | 数据挖掘 | 18 | 430 | 7 | 1 |
+
+**cn_paper（6 条）** — 论文库（厂商B）的论文+作者信息，对应 `cn_paper` TAG。每个节点代表一条作者-论文关系：
+
+| VID (id) | zh_name | en_name | authors | author_id | author_sequence | institution | cover_date_start | keywords | doi |
+|---|---|---|---|---|---|---|---|---|---|
+| paper_001 | 基于知识图谱的实体对齐方法研究 | Entity Alignment in Knowledge Graphs | 张伟 | auth_001 | 1 | 清华大学 | 2024-03-15 | 知识图谱;实体对齐 | 10.1234/kg001 |
+| paper_002 | NLP前沿技术综述 | Advances in NLP | 李明 | auth_002 | 1 | 北京大学 | 2024-05-20 | 自然语言处理;深度学习 | 10.1234/nlp002 |
+| paper_003 | 深度学习在CV中的应用 | Deep Learning for Computer Vision | 王芳 | auth_003 | 1 | 浙大 | 2024-01-10 | 计算机视觉;深度学习 | 10.1234/cv003 |
+| paper_004 | 机器学习优化方法研究 | Optimization Methods in ML | 刘洋 | auth_004 | 1 | 清华大学计算机系 | 2023-11-08 | 机器学习;优化算法 | 10.1234/ml004 |
+| paper_005 | 知识图谱构建技术研究 | Knowledge Graph Construction | 张伟 | auth_005 | 1 | Tsinghua University | 2024-06-01 | 知识图谱;图构建 | 10.1234/kg005 |
+| paper_006 | 数据挖掘方法综述 | Data Mining Survey | 陈静 | auth_006 | 1 | 复旦大学 | 2023-09-15 | 数据挖掘;机器学习 | 10.1234/dm006 |
+
+**patent（4 条）** — 专利库，对应 `patent` TAG：
+
+| VID (patent_id) | title_zh | title_localized | first_inventor_name | first_applicant_name | country_code | classification_ipcr | keywords |
+|---|---|---|---|---|---|---|---|
+| patent_001 | 知识图谱构建方法 | Knowledge Graph Construction Method | 张伟 | 清华大学 | CN | G06F16.36 | 知识图谱;图数据库 |
+| patent_002 | 自然语言处理装置 | NLP Processing Apparatus | 李明 | 北京大学 | CN | G06F40.30 | 自然语言处理;语义分析 |
+| patent_003 | 图像识别系统 | Image Recognition System | 王芳 | 浙江大学 | CN | G06V10.00 | 计算机视觉;图像识别 |
+| patent_004 | 智能推荐算法 | Intelligent Recommendation Algorithm | 赵磊 | 中科院 | CN | G06F16.95 | 推荐系统;协同过滤 |
+
+**cn_organization（4 条）** — 机构库，对应 `cn_organization` TAG：
+
+| VID (org_id) | name_cn | province | city | org_type |
 |---|---|---|---|---|
-| talent_001 | 张伟 | Wei Zhang | 清华大学 | 知识图谱 |
-| talent_002 | 李明 | Ming Li | 北京大学 | 自然语言处理 |
-| talent_003 | 王芳 | Fang Wang | 浙江大学 | 计算机视觉 |
-| talent_004 | 刘洋 | Yang Liu | 清华大学 | 机器学习 |
-| talent_005 | 陈静 | Jing Chen | 复旦大学 | 数据挖掘 |
-
-**cn_paper（6 条）** — 论文库（厂商B）的论文+作者信息。每个节点代表一条作者-论文关系，VID 使用 `paper_001` 格式，`id`/`paper_id` 作为普通属性存储：
-
-| VID | zh_name | authors | author_id | institution |
-|---|---|---|---|---|
-| paper_001 | 基于知识图谱的... | 张伟 | auth_001 | 清华大学 |
-| paper_002 | NLP前沿技术... | 李明 | auth_002 | 北京大学 |
-| paper_003 | 深度学习在CV中的应用 | 王芳 | auth_003 | 浙大 |
-| paper_004 | 机器学习优化方法 | 刘洋 | auth_004 | 清华大学计算机系 |
-| paper_005 | 知识图谱构建研究 | 张伟 | auth_005 | Tsinghua University |
-| paper_006 | 数据挖掘综述 | 陈静 | auth_006 | 复旦大学 |
-
-**patent（4 条）** — 专利库的专利：
-
-| VID | title_zh | first_inventor_name | applicants |
-|---|---|---|---|
-| patent_001 | 知识图谱构建方法 | 张伟 | 清华大学 |
-| patent_002 | 自然语言处理装置 | 李明 | 北京大学 |
-| patent_003 | 图像识别系统 | 王芳 | 浙江大学 |
-| patent_004 | 智能推荐算法 | 赵磊 | 中科院 |
-
-**cn_organization（4 条）** — 机构库：
-
-| VID | name_cn | province | city |
-|---|---|---|---|
-| org_001 | 清华大学 | 北京市 | 北京 |
-| org_002 | 北京大学 | 北京市 | 北京 |
-| org_003 | 浙江大学 | 浙江省 | 杭州 |
-| org_004 | 清华大学计算机系 | 北京市 | 北京 |
+| org_001 | 清华大学 | 北京市 | 北京 | 高等院校 |
+| org_002 | 北京大学 | 北京市 | 北京 | 高等院校 |
+| org_003 | 浙江大学 | 浙江省 | 杭州 | 高等院校 |
+| org_004 | 清华大学计算机系 | 北京市 | 北京 | 院系 |
 
 ### 4.2 设计要点
 
-- **同名不同写**：`王芳` 在 talent 中 org 是"浙江大学"，在 cn_paper 中 institution 是"浙大" — 规则召回应能匹配，LLM 精排应能确认
-- **跨语言**：`张伟` 在 talent 中 org 是"清华大学"，在 paper_005 中 institution 是"Tsinghua University" — 规则召回可能漏掉（英文），LLM 应能识别
+- **同名不同写**：`王芳` 在 talent 中 `scholar_org_name_zh` 是"浙江大学"，在 cn_paper 中 `institution` 是"浙大" — 规则召回应能匹配，LLM 精排应能确认
+- **跨语言**：`张伟` 在 talent 中 `scholar_org_name_zh` 是"清华大学"，在 paper_005 中 `institution` 是"Tsinghua University" — 规则召回可能漏掉（英文），LLM 应能识别
 - **机构层级**：`清华大学` 和 `清华大学计算机系` — 机构绑定应能识别为相关实体
-- **无匹配项**：`patent_004` 的发明人"赵磊"在人才库中不存在 — 不应产生绑定
+- **无匹配项**：`patent_004` 的 `first_inventor_name` "赵磊"在人才库中不存在 — 不应产生绑定
 - **歧义项**：如有同名不同人的情况 — LLM 应能区分
 
 ### 4.3 索引创建
 
+索引字段均对应 TRS Graph `entity_binding_demo` 空间中实际 TAG 定义的字段：
+
 ```nGQL
+-- talent TAG 索引（用于规则召回时按姓名/机构快速查找）
 CREATE TAG INDEX IF NOT EXISTS idx_talent_name ON talent(name_zh);
 CREATE TAG INDEX IF NOT EXISTS idx_talent_name_en ON talent(name_en);
 CREATE TAG INDEX IF NOT EXISTS idx_talent_org ON talent(scholar_org_name_zh);
+
+-- cn_paper TAG 索引（用于按作者/机构查找论文）
 CREATE TAG INDEX IF NOT EXISTS idx_paper_author ON cn_paper(authors);
 CREATE TAG INDEX IF NOT EXISTS idx_paper_author_id ON cn_paper(author_id);
 CREATE TAG INDEX IF NOT EXISTS idx_paper_inst ON cn_paper(institution);
+
+-- patent TAG 索引（用于按发明人/申请人查找专利）
 CREATE TAG INDEX IF NOT EXISTS idx_patent_inventor ON patent(first_inventor_name);
+CREATE TAG INDEX IF NOT EXISTS idx_patent_applicant ON patent(first_applicant_name);
+
+-- cn_organization TAG 索引（用于按名称查找机构）
 CREATE TAG INDEX IF NOT EXISTS idx_org_name ON cn_organization(name_cn);
 ```
 

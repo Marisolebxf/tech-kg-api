@@ -1,5 +1,7 @@
 """Entity binding API endpoints."""
 
+import os
+
 from fastapi import APIRouter, HTTPException, Query
 
 from graph_db import connect, GraphDBConfig
@@ -17,13 +19,23 @@ router = APIRouter(prefix="/binding", tags=["Entity Binding"])
 
 
 def _get_service() -> EntityBindingService:
-    """Create an EntityBindingService with TRS Graph backend."""
-    config = GraphDBConfig(
-        backend="trs_graph",
-        uri="http://localhost:8090",
-        database="entity_binding_demo",
-        connection_timeout=30,
-    )
+    """Create an EntityBindingService using GRAPH_DB_* env vars.
+
+    Env vars (with defaults):
+        GRAPH_DB_BACKEND     - "trs_graph" (default) or "neo4j"
+        GRAPH_DB_URI         - "http://localhost:8090" (trs) or "bolt://localhost:7687" (neo4j)
+        GRAPH_DB_DATABASE    - "entity_binding_demo" (trs) or "neo4j" (neo4j)
+        GRAPH_DB_CONNECTION_TIMEOUT - 30
+    """
+    config = GraphDBConfig.from_env(prefix="GRAPH_DB")
+    # Sensible defaults when env vars are absent
+    if not os.environ.get("GRAPH_DB_BACKEND"):
+        config.backend = "trs_graph"
+    if config.backend == "trs_graph":
+        if config.uri == "bolt://localhost:7687":  # still the neo4j default
+            config.uri = os.environ.get("GRAPH_DB_URI", "http://localhost:8090")
+        if config.database == "neo4j":  # still the neo4j default
+            config.database = os.environ.get("GRAPH_DB_DATABASE", "entity_binding_demo")
     db = connect(config)
     try:
         return EntityBindingService(db)

@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>实体绑定演示 - Tech KG</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f7fa; color: #333; }
+
+        .header { background: linear-gradient(135deg, #1a73e8, #34a853); color: white; padding: 20px 32px; }
+        .header h1 { font-size: 24px; font-weight: 600; }
+        .header p { font-size: 14px; opacity: 0.85; margin-top: 4px; }
+
+        .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+
+        /* 操作区 */
+        .actions { background: white; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+        .actions h2 { font-size: 16px; margin-bottom: 12px; color: #555; }
+        .btn-group { display: flex; flex-wrap: wrap; gap: 10px; }
+        .btn { padding: 8px 18px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; transition: all 0.2s; font-weight: 500; }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-primary { background: #1a73e8; color: white; }
+        .btn-primary:hover:not(:disabled) { background: #1557b0; }
+        .btn-success { background: #34a853; color: white; }
+        .btn-success:hover:not(:disabled) { background: #2d9249; }
+        .btn-danger { background: #ea4335; color: white; }
+        .btn-danger:hover:not(:disabled) { background: #d33426; }
+        .btn-warning { background: #fbbc04; color: #333; }
+        .btn-warning:hover:not(:disabled) { background: #e5ab04; }
+        .btn-outline { background: white; color: #1a73e8; border: 1px solid #1a73e8; }
+        .btn-outline:hover:not(:disabled) { background: #f0f6ff; }
+        .separator { width: 1px; background: #ddd; margin: 0 6px; }
+
+        /* 统计区 */
+        .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
+        .stat-card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); text-align: center; }
+        .stat-card .number { font-size: 36px; font-weight: 700; }
+        .stat-card .label { font-size: 14px; color: #888; margin-top: 4px; }
+        .stat-card.total .number { color: #1a73e8; }
+        .stat-card.confirmed .number { color: #34a853; }
+        .stat-card.candidate .number { color: #fbbc04; }
+
+        /* 详情表 */
+        .detail-section { background: white; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+        .detail-section h2 { font-size: 16px; margin-bottom: 12px; color: #555; }
+        .filter-row { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; }
+        .filter-row label { font-size: 14px; color: #666; }
+        .filter-row select { padding: 6px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #f8f9fa; text-align: left; padding: 10px 12px; font-size: 13px; color: #666; font-weight: 600; border-bottom: 2px solid #eee; }
+        td { padding: 10px 12px; font-size: 13px; border-bottom: 1px solid #f0f0f0; }
+        tr:hover td { background: #f8faff; }
+        .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+        .badge-confirmed { background: #e6f4ea; color: #1e7e34; }
+        .badge-candidate { background: #fef7e0; color: #b45309; }
+        .confidence-bar { width: 60px; height: 6px; background: #eee; border-radius: 3px; display: inline-block; vertical-align: middle; margin-right: 6px; }
+        .confidence-fill { height: 100%; border-radius: 3px; background: #1a73e8; }
+
+        /* 关系图 */
+        .graph-section { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+        .graph-section h2 { font-size: 16px; margin-bottom: 12px; color: #555; }
+        .graph-legend { display: flex; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }
+        .legend-item { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+        .legend-dot { width: 12px; height: 12px; border-radius: 50%; }
+        #graph-container { width: 100%; height: 500px; border: 1px solid #eee; border-radius: 8px; overflow: hidden; }
+
+        /* Loading */
+        .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; margin-right: 6px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Toast */
+        .toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 8px; color: white; font-size: 14px; z-index: 1000; opacity: 0; transition: opacity 0.3s; }
+        .toast.show { opacity: 1; }
+        .toast-success { background: #34a853; }
+        .toast-error { background: #ea4335; }
+        .toast-info { background: #1a73e8; }
+
+        .empty-msg { text-align: center; padding: 40px; color: #aaa; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>实体绑定演示</h1>
+        <p>Tech KG Entity Binding Demo - 规则召回 + LLM 精排</p>
+    </div>
+
+    <div class="container">
+        <!-- 操作区 -->
+        <div class="actions">
+            <h2>操作区</h2>
+            <div class="btn-group">
+                <button class="btn btn-primary" onclick="initData()">初始化数据</button>
+                <div class="separator"></div>
+                <button class="btn btn-success" onclick="executeBinding('all')">执行全部绑定</button>
+                <button class="btn btn-outline" onclick="executeBinding('talent_paper')">人才-论文绑定</button>
+                <button class="btn btn-outline" onclick="executeBinding('talent_patent')">人才-专利绑定</button>
+                <button class="btn btn-outline" onclick="executeBinding('org_org')">机构-机构绑定</button>
+                <div class="separator"></div>
+                <button class="btn btn-warning" onclick="clearBindings(false)">清除绑定</button>
+                <button class="btn btn-danger" onclick="clearBindings(true)">清除全部数据</button>
+            </div>
+        </div>
+
+        <!-- 统计区 -->
+        <div class="stats">
+            <div class="stat-card total">
+                <div class="number" id="stat-total">0</div>
+                <div class="label">总绑定数</div>
+            </div>
+            <div class="stat-card confirmed">
+                <div class="number" id="stat-confirmed">0</div>
+                <div class="label">已确认</div>
+            </div>
+            <div class="stat-card candidate">
+                <div class="number" id="stat-candidate">0</div>
+                <div class="label">候选</div>
+            </div>
+        </div>
+
+        <!-- 绑定详情表 -->
+        <div class="detail-section">
+            <h2>绑定详情</h2>
+            <div class="filter-row">
+                <label>绑定类型：</label>
+                <select id="detail-type" onchange="loadDetail()">
+                    <option value="talent_paper">人才-论文</option>
+                    <option value="talent_patent">人才-专利</option>
+                    <option value="org_org">机构-机构</option>
+                </select>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>源实体</th>
+                        <th>目标实体</th>
+                        <th>置信度</th>
+                        <th>方法</th>
+                        <th>规则分</th>
+                        <th>LLM分</th>
+                        <th>状态</th>
+                    </tr>
+                </thead>
+                <tbody id="detail-tbody">
+                    <tr><td colspan="7" class="empty-msg">暂无数据</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 关系图 -->
+        <div class="graph-section">
+            <h2>关系图</h2>
+            <div class="graph-legend">
+                <div class="legend-item"><div class="legend-dot" style="background:#1a73e8"></div>人才</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#34a853"></div>论文</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#ea4335"></div>专利</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#fbbc04"></div>机构</div>
+                <div class="legend-item" style="margin-left:16px;"><span style="border-bottom:2px dashed #999;display:inline-block;width:30px;"></span> 候选绑定</div>
+                <div class="legend-item"><span style="border-bottom:2px solid #999;display:inline-block;width:30px;"></span> 确认绑定</div>
+            </div>
+            <div id="graph-container"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api/v1/binding';
+        const TYPE_COLORS = {
+            talent: '#1a73e8',
+            cn_paper: '#34a853',
+            patent: '#ea4335',
+            cn_organization: '#fbbc04'
+        };
+        const TYPE_LABELS = {
+            talent: '人才',
+            cn_paper: '论文',
+            patent: '专利',
+            cn_organization: '机构'
+        };
+
+        let loading = false;
+
+        function setLoading(isLoading) {
+            loading = isLoading;
+            document.querySelectorAll('.btn').forEach(btn => btn.disabled = isLoading);
+        }
+
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            requestAnimationFrame(() => toast.classList.add('show'));
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        async function apiCall(url, options = {}) {
+            const response = await fetch(url, options);
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.detail || '请求失败');
+            }
+            return data;
+        }
+
+        async function initData() {
+            if (loading) return;
+            setLoading(true);
+            try {
+                const result = await apiCall(`${API_BASE}/init-data`, { method: 'POST' });
+                showToast('数据初始化成功', 'success');
+                await refreshAll();
+            } catch (e) {
+                showToast('初始化失败: ' + e.message, 'error');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function executeBinding(type) {
+            if (loading) return;
+            setLoading(true);
+            try {
+                const result = await apiCall(`${API_BASE}/execute`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ binding_type: type })
+                });
+                showToast('绑定执行成功', 'success');
+                await refreshAll();
+            } catch (e) {
+                showToast('绑定执行失败: ' + e.message, 'error');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function clearBindings(clearData) {
+            if (loading) return;
+            if (!confirm(clearData ? '确定要清除全部数据吗？此操作不可恢复！' : '确定要清除绑定吗？')) return;
+            setLoading(true);
+            try {
+                const result = await apiCall(`${API_BASE}/clear?clear_data=${clearData}`, { method: 'DELETE' });
+                showToast(clearData ? '全部数据已清除' : '绑定已清除', 'success');
+                await refreshAll();
+            } catch (e) {
+                showToast('清除失败: ' + e.message, 'error');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function loadStats() {
+            try {
+                const stats = await apiCall(`${API_BASE}/stats`);
+                document.getElementById('stat-total').textContent = stats.total_bindings ?? 0;
+                document.getElementById('stat-confirmed').textContent = stats.confirmed ?? 0;
+                document.getElementById('stat-candidate').textContent = stats.candidate ?? 0;
+            } catch (e) {
+                console.error('加载统计失败:', e);
+            }
+        }
+
+        async function loadDetail() {
+            const bindingType = document.getElementById('detail-type').value;
+            const tbody = document.getElementById('detail-tbody');
+            try {
+                const data = await apiCall(`${API_BASE}/detail?binding_type=${bindingType}&limit=100`);
+                const bindings = data.bindings || data || [];
+                if (!bindings.length) {
+                    tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">暂无数据</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = bindings.map(b => {
+                    const confidence = (b.confidence ?? 0);
+                    const pct = Math.round(confidence * 100);
+                    const statusClass = b.status === 'confirmed' ? 'badge-confirmed' : 'badge-candidate';
+                    const statusText = b.status === 'confirmed' ? '已确认' : '候选';
+                    return `<tr>
+                        <td>${escapeHtml(b.source_name || b.source_entity || '')}</td>
+                        <td>${escapeHtml(b.target_name || b.target_entity || '')}</td>
+                        <td>
+                            <div class="confidence-bar"><div class="confidence-fill" style="width:${pct}%"></div></div>
+                            ${pct}%
+                        </td>
+                        <td>${escapeHtml(b.method || '')}</td>
+                        <td>${b.rule_score != null ? b.rule_score.toFixed(3) : '-'}</td>
+                        <td>${b.llm_score != null ? b.llm_score.toFixed(3) : '-'}</td>
+                        <td><span class="badge ${statusClass}">${statusText}</span></td>
+                    </tr>`;
+                }).join('');
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">加载失败</td></tr>';
+                console.error('加载详情失败:', e);
+            }
+        }
+
+        async function loadGraph() {
+            try {
+                const data = await apiCall(`${API_BASE}/graph`);
+                const nodes = data.nodes || [];
+                const edges = data.edges || [];
+                renderGraph(nodes, edges);
+            } catch (e) {
+                console.error('加载图数据失败:', e);
+                document.getElementById('graph-container').innerHTML = '<div class="empty-msg">加载图数据失败</div>';
+            }
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function renderGraph(nodes, edges) {
+            const container = document.getElementById('graph-container');
+            container.innerHTML = '';
+            if (!nodes.length) {
+                container.innerHTML = '<div class="empty-msg">暂无图数据</div>';
+                return;
+            }
+
+            const width = container.clientWidth;
+            const height = container.clientHeight || 500;
+
+            const svg = d3.select('#graph-container')
+                .append('svg')
+                .attr('width', width)
+                .attr('height', height);
+
+            // Arrow marker
+            svg.append('defs').append('marker')
+                .attr('id', 'arrowhead')
+                .attr('viewBox', '0 -5 10 10')
+                .attr('refX', 22)
+                .attr('refY', 0)
+                .attr('markerWidth', 6)
+                .attr('markerHeight', 6)
+                .attr('orient', 'auto')
+                .append('path')
+                .attr('d', 'M0,-5L10,0L0,5')
+                .attr('fill', '#999');
+
+            const simulation = d3.forceSimulation(nodes)
+                .force('link', d3.forceLink(edges).id(d => d.id).distance(120))
+                .force('charge', d3.forceManyBody().strength(-300))
+                .force('center', d3.forceCenter(width / 2, height / 2))
+                .force('collision', d3.forceCollide().radius(30));
+
+            const link = svg.append('g')
+                .selectAll('line')
+                .data(edges)
+                .join('line')
+                .attr('stroke', d => d.status === 'candidate' ? '#ccc' : '#999')
+                .attr('stroke-width', 1.5)
+                .attr('stroke-dasharray', d => d.status === 'candidate' ? '5,5' : 'none')
+                .attr('marker-end', 'url(#arrowhead)');
+
+            // Edge labels
+            const edgeLabel = svg.append('g')
+                .selectAll('text')
+                .data(edges)
+                .join('text')
+                .attr('font-size', 10)
+                .attr('fill', '#888')
+                .attr('text-anchor', 'middle')
+                .text(d => d.confidence != null ? (d.confidence * 100).toFixed(0) + '%' : '');
+
+            const node = svg.append('g')
+                .selectAll('g')
+                .data(nodes)
+                .join('g')
+                .call(d3.drag()
+                    .on('start', dragstarted)
+                    .on('drag', dragged)
+                    .on('end', dragended));
+
+            node.append('circle')
+                .attr('r', 14)
+                .attr('fill', d => TYPE_COLORS[d.entity_type] || '#999')
+                .attr('stroke', 'white')
+                .attr('stroke-width', 2);
+
+            node.append('text')
+                .attr('dy', -20)
+                .attr('text-anchor', 'middle')
+                .attr('font-size', 11)
+                .attr('fill', '#333')
+                .text(d => {
+                    const name = d.name || d.id;
+                    return name.length > 8 ? name.slice(0, 8) + '...' : name;
+                });
+
+            node.append('title')
+                .text(d => `${TYPE_LABELS[d.entity_type] || d.entity_type}: ${d.name || d.id}`);
+
+            simulation.on('tick', () => {
+                link
+                    .attr('x1', d => d.source.x)
+                    .attr('y1', d => d.source.y)
+                    .attr('x2', d => d.target.x)
+                    .attr('y2', d => d.target.y);
+
+                edgeLabel
+                    .attr('x', d => (d.source.x + d.target.x) / 2)
+                    .attr('y', d => (d.source.y + d.target.y) / 2 - 4);
+
+                node.attr('transform', d => `translate(${d.x},${d.y})`);
+            });
+
+            function dragstarted(event, d) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }
+
+            function dragged(event, d) {
+                d.fx = event.x;
+                d.fy = event.y;
+            }
+
+            function dragended(event, d) {
+                if (!event.active) simulation.alphaTarget(0);
+                d.fx = null;
+                d.fy = null;
+            }
+        }
+
+        async function refreshAll() {
+            await Promise.all([loadStats(), loadDetail(), loadGraph()]);
+        }
+
+        // Auto-load on page load
+        document.addEventListener('DOMContentLoaded', refreshAll);
+    </script>
+</body>
+</html>

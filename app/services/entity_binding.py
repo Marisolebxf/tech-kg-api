@@ -464,6 +464,7 @@ class EntityBindingService:
     TALENT_PAPER_SEMANTIC_FALLBACK = 0.78
     TALENT_PATENT_SEMANTIC_FALLBACK = 0.8
     ORG_ORG_SEMANTIC_FALLBACK = 0.82
+    INITIAL_CANDIDATE_CONFIDENCE = 0.35
 
     BINDING_EDGE_MAP = {
         "talent_paper": "bind_talent_paper_author",
@@ -586,6 +587,8 @@ class EntityBindingService:
                 logger.warning("Failed to insert org %s: %s", o.get("org_id"), e)
         nodes_inserted["cn_organization"] = org_count
 
+        self._seed_initial_candidate_edges()
+
         msg = (
             f"初始化完成: 创建边类型{len(edge_types_created)}个, "
             f"索引{len(indexes_created)}个, "
@@ -628,6 +631,98 @@ class EntityBindingService:
                 break
 
         return all_nodes
+
+    def _replace_binding_edges(
+        self,
+        edge_type: str,
+        details: list[BindingPairDetail],
+    ) -> None:
+        offset = 0
+        page_size = 200
+        while True:
+            result = self.db.get_edges_by_type(edge_type, limit=page_size, offset=offset)
+            if not result.items:
+                break
+            for edge in result.items:
+                try:
+                    self.db.delete_edge(edge.id, edge_type=edge.type)
+                except Exception as exc:
+                    logger.warning("Failed to delete old edge %s: %s", edge.id, exc)
+            offset = 0
+
+        for detail in details:
+            try:
+                self.db.create_edge(
+                    source_id=detail.source_id,
+                    target_id=detail.target_id,
+                    edge_type=edge_type,
+                    properties={
+                        "confidence": detail.confidence,
+                        "method": detail.method,
+                        "bound_at": datetime.now(timezone.utc).isoformat(),
+                        "rule_score": detail.rule_score,
+                        "llm_score": detail.llm_score,
+                        "status": detail.status,
+                    },
+                )
+            except Exception as exc:
+                logger.warning("Failed to replace binding edge %s->%s: %s", detail.source_id, detail.target_id, exc)
+
+    def _seed_initial_candidate_edges(self) -> None:
+        seeders = [
+            ("talent_paper", self.matcher.match_talent_paper, "talent", "paper", self.BINDING_EDGE_MAP["talent_paper"]),
+            ("talent_patent", self.matcher.match_talent_patent, "talent", "patent", self.BINDING_EDGE_MAP["talent_patent"]),
+            ("org_org", lambda orgs, _: self.matcher.match_org_org(orgs, orgs), "org_a", "org_b", self.BINDING_EDGE_MAP["org_org"]),
+        ]
+
+        talents = self._fetch_all_nodes("talent")
+        papers = self._fetch_all_nodes("cn_paper")
+        patents = self._fetch_all_nodes("patent")
+        orgs = self._fetch_all_nodes("cn_organization")
+
+        dataset_map = {
+            "talent_paper": (talents, papers),
+            "talent_patent": (talents, patents),
+            "org_org": (orgs, orgs),
+        }
+
+        for binding_type, matcher_func, left_key, right_key, edge_type in seeders:
+            left_items, right_items = dataset_map[binding_type]
+            if not left_items or not right_items:
+                continue
+            raw_candidates = matcher_func(left_items, right_items)
+            details: list[BindingPairDetail] = []
+            seen_pairs: set[tuple[str, str]] = set()
+            for candidate in raw_candidates:
+                left = candidate[left_key]
+                right = candidate[right_key]
+                source_id = str(left.get("id") or left.get("scholar_id") or left.get("org_id") or "")
+                target_id = str(right.get("id") or right.get("paper_id") or right.get("patent_id") or right.get("org_id") or "")
+                pair_key = tuple(sorted((source_id, target_id))) if binding_type == "org_org" else (source_id, target_id)
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+                source_name = (
+                    left.get("name_zh") or left.get("name_cn") or left.get("zh_name") or left.get("title_zh") or left.get("name_en") or source_id
+                )
+                target_name = (
+                    right.get("name_zh") or right.get("name_cn") or right.get("zh_name") or right.get("title_zh") or right.get("name_en") or target_id
+                )
+                details.append(BindingPairDetail(
+                    source_name=str(source_name),
+                    source_id=source_id,
+                    source_label=self.SOURCE_LABEL_MAP[binding_type],
+                    target_name=str(target_name),
+                    target_id=target_id,
+                    target_label=self.TARGET_LABEL_MAP[binding_type],
+                    confidence=self.INITIAL_CANDIDATE_CONFIDENCE,
+                    method="rule-init",
+                    rule_score=float(candidate.get("rule_score", 0.0)),
+                    llm_score=0.0,
+                    status="candidate",
+                    reason="Initialized from rule recall",
+                ))
+            self._replace_binding_edges(edge_type, details)
 
     @staticmethod
     def _merge_candidates(
@@ -745,36 +840,16 @@ class EntityBindingService:
                 status = "rejected"
                 rejected += 1
 
-            # Write binding edge for non-rejected pairs
-            if status != "rejected":
-                source_id = talent.get("id", "") or talent.get("scholar_id", "")
-                target_id = paper.get("id", "") or paper.get("paper_id", "")
-                try:
-                    self.db.create_edge(
-                        source_id=source_id,
-                        target_id=target_id,
-                        edge_type=edge_type,
-                        properties={
-                            "confidence": confidence,
-                            "method": method,
-                            "bound_at": datetime.now(timezone.utc).isoformat(),
-                            "rule_score": max(rule_score, semantic_score),
-                            "llm_score": llm_score,
-                            "status": status,
-                        },
-                    )
-                except Exception as e:
-                    logger.warning("Failed to create binding edge %s->%s: %s", source_id, target_id, e)
-
-            # Build detail
-            source_name = talent.get("name_zh", "") or talent.get("name_en", "") or str(talent.get("id", ""))
+            source_id = str(talent.get("id", "") or talent.get("scholar_id", ""))
+            target_id = str(paper.get("id", "") or paper.get("paper_id", ""))
+            source_name = talent.get("name_zh", "") or talent.get("name_en", "") or str(talent.get("scholar_id", ""))
             target_name = paper.get("zh_name", "") or paper.get("en_name", "") or str(paper.get("paper_id", ""))
             details.append(BindingPairDetail(
                 source_name=source_name,
-                source_id=str(talent.get("id", "") or talent.get("scholar_id", "")),
+                source_id=source_id,
                 source_label=source_label,
                 target_name=target_name,
-                target_id=str(paper.get("id", "") or paper.get("paper_id", "")),
+                target_id=target_id,
                 target_label=target_label,
                 confidence=confidence,
                 method=method,
@@ -784,7 +859,10 @@ class EntityBindingService:
                 reason=reason,
             ))
 
+        self._replace_binding_edges(edge_type, [detail for detail in details if detail.status != "rejected"])
+
         return BindingResult(
+
             binding_type=binding_type,
             total_candidates=len(candidates),
             confirmed=confirmed,
@@ -862,36 +940,16 @@ class EntityBindingService:
                 status = "rejected"
                 rejected += 1
 
-            # Write binding edge for non-rejected pairs
-            if status != "rejected":
-                source_id = talent.get("id", "") or talent.get("scholar_id", "")
-                target_id = patent.get("patent_id", "")
-                try:
-                    self.db.create_edge(
-                        source_id=source_id,
-                        target_id=target_id,
-                        edge_type=edge_type,
-                        properties={
-                            "confidence": confidence,
-                            "method": method,
-                            "bound_at": datetime.now(timezone.utc).isoformat(),
-                            "rule_score": max(rule_score, semantic_score),
-                            "llm_score": llm_score,
-                            "status": status,
-                        },
-                    )
-                except Exception as e:
-                    logger.warning("Failed to create binding edge %s->%s: %s", source_id, target_id, e)
-
-            # Build detail
-            source_name = talent.get("name_zh", "") or talent.get("name_en", "") or str(talent.get("id", ""))
-            target_name = patent.get("title_zh", "") or patent.get("title_localized", "") or str(patent.get("patent_id", ""))
+            source_id = str(talent.get("id", "") or talent.get("scholar_id", ""))
+            target_id = str(patent.get("patent_id", ""))
+            source_name = talent.get("name_zh", "") or talent.get("name_en", "") or str(talent.get("scholar_id", ""))
+            target_name = patent.get("title_zh", "") or str(patent.get("patent_id", ""))
             details.append(BindingPairDetail(
                 source_name=source_name,
-                source_id=str(talent.get("id", "") or talent.get("scholar_id", "")),
+                source_id=source_id,
                 source_label=source_label,
                 target_name=target_name,
-                target_id=str(patent.get("patent_id", "")),
+                target_id=target_id,
                 target_label=target_label,
                 confidence=confidence,
                 method=method,
@@ -901,7 +959,10 @@ class EntityBindingService:
                 reason=reason,
             ))
 
+        self._replace_binding_edges(edge_type, [detail for detail in details if detail.status != "rejected"])
+
         return BindingResult(
+
             binding_type=binding_type,
             total_candidates=len(candidates),
             confirmed=confirmed,
@@ -979,36 +1040,16 @@ class EntityBindingService:
                 status = "rejected"
                 rejected += 1
 
-            # Write binding edge for non-rejected pairs
-            if status != "rejected":
-                source_id = org_a.get("org_id", "")
-                target_id = org_b.get("org_id", "")
-                try:
-                    self.db.create_edge(
-                        source_id=source_id,
-                        target_id=target_id,
-                        edge_type=edge_type,
-                        properties={
-                            "confidence": confidence,
-                            "method": method,
-                            "bound_at": datetime.now(timezone.utc).isoformat(),
-                            "rule_score": max(rule_score, semantic_score),
-                            "llm_score": llm_score,
-                            "status": status,
-                        },
-                    )
-                except Exception as e:
-                    logger.warning("Failed to create binding edge %s->%s: %s", source_id, target_id, e)
-
-            # Build detail
+            source_id = str(org_a.get("org_id", ""))
+            target_id = str(org_b.get("org_id", ""))
             source_name = org_a.get("name_cn", "") or str(org_a.get("org_id", ""))
             target_name = org_b.get("name_cn", "") or str(org_b.get("org_id", ""))
             details.append(BindingPairDetail(
                 source_name=source_name,
-                source_id=str(org_a.get("org_id", "")),
+                source_id=source_id,
                 source_label=source_label,
                 target_name=target_name,
-                target_id=str(org_b.get("org_id", "")),
+                target_id=target_id,
                 target_label=target_label,
                 confidence=confidence,
                 method=method,
@@ -1018,7 +1059,10 @@ class EntityBindingService:
                 reason=reason,
             ))
 
+        self._replace_binding_edges(edge_type, [detail for detail in details if detail.status != "rejected"])
+
         return BindingResult(
+
             binding_type=binding_type,
             total_candidates=len(candidates),
             confirmed=confirmed,
@@ -1105,6 +1149,11 @@ class EntityBindingService:
             + (stats.talent_patent.total_candidates if stats.talent_patent else 0)
             + (stats.org_org.total_candidates if stats.org_org else 0)
         )
+        stats.total_candidate = (
+            (stats.talent_paper.candidate if stats.talent_paper else 0)
+            + (stats.talent_patent.candidate if stats.talent_patent else 0)
+            + (stats.org_org.candidate if stats.org_org else 0)
+        )
 
         return stats
 
@@ -1188,9 +1237,35 @@ class EntityBindingService:
     # ------------------------------------------------------------------
 
     def get_binding_graph(self) -> BindingGraphResponse:
-        """Fetch all binding edges and build nodes/edges arrays for D3.js visualization."""
+        """Fetch current binding edges and build nodes/edges arrays for D3.js visualization."""
         nodes_map: dict[str, dict] = {}
         edges_list: list[dict] = []
+
+        def _ensure_node(node_id: str) -> None:
+            if node_id in nodes_map:
+                return
+            try:
+                node = self.db.get_node(node_id)
+                if node is not None:
+                    name = (
+                        node.properties.get("name_zh")
+                        or node.properties.get("name_cn")
+                        or node.properties.get("zh_name")
+                        or node.properties.get("title_zh")
+                        or node.properties.get("name_en")
+                        or node.properties.get("en_name")
+                        or str(node.id)
+                    )
+                    label = node.labels[0] if node.labels else "unknown"
+                    nodes_map[node_id] = {
+                        "id": node_id,
+                        "name": name,
+                        "label": label,
+                    }
+                    return
+            except Exception:
+                pass
+            nodes_map[node_id] = {"id": node_id, "name": node_id, "label": "unknown"}
 
         for binding_type, edge_type in self.BINDING_EDGE_MAP.items():
             offset = 0
@@ -1202,50 +1277,8 @@ class EntityBindingService:
                     for edge in result.items:
                         source_id = str(edge.source_id)
                         target_id = str(edge.target_id)
-
-                        # Fetch source node if not already cached
-                        if source_id not in nodes_map:
-                            try:
-                                src_node = self.db.get_node(source_id)
-                                if src_node is not None:
-                                    name = (
-                                        src_node.properties.get("name_zh")
-                                        or src_node.properties.get("name_cn")
-                                        or src_node.properties.get("zh_name")
-                                        or src_node.properties.get("title_zh")
-                                        or str(src_node.id)
-                                    )
-                                    label = src_node.labels[0] if src_node.labels else "unknown"
-                                    nodes_map[source_id] = {
-                                        "id": source_id,
-                                        "name": name,
-                                        "label": label,
-                                    }
-                            except Exception:
-                                nodes_map[source_id] = {"id": source_id, "name": source_id, "label": "unknown"}
-
-                        # Fetch target node if not already cached
-                        if target_id not in nodes_map:
-                            try:
-                                tgt_node = self.db.get_node(target_id)
-                                if tgt_node is not None:
-                                    name = (
-                                        tgt_node.properties.get("name_zh")
-                                        or tgt_node.properties.get("name_cn")
-                                        or tgt_node.properties.get("zh_name")
-                                        or tgt_node.properties.get("title_zh")
-                                        or str(tgt_node.id)
-                                    )
-                                    label = tgt_node.labels[0] if tgt_node.labels else "unknown"
-                                    nodes_map[target_id] = {
-                                        "id": target_id,
-                                        "name": name,
-                                        "label": label,
-                                    }
-                            except Exception:
-                                nodes_map[target_id] = {"id": target_id, "name": target_id, "label": "unknown"}
-
-                        # Build edge for D3
+                        _ensure_node(source_id)
+                        _ensure_node(target_id)
                         edges_list.append({
                             "source": source_id,
                             "target": target_id,

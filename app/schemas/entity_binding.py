@@ -38,6 +38,7 @@ class BindingStatsResponse(BaseModel):
     org_org: Optional[BindingResult] = None
     total_confirmed: int = 0
     total_candidates: int = 0
+    total_candidate: int = 0
 
 
 class BindingGraphResponse(BaseModel):

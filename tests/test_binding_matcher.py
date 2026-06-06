@@ -1,6 +1,7 @@
 """Tests for the rule-based binding matcher."""
 import pytest
 from app.services.binding_matcher import BindingMatcher, jaccard_similarity, edit_distance_similarity
+from app.services.semantic_matcher import SemanticMatcher
 
 
 class TestJaccardSimilarity:
@@ -103,3 +104,30 @@ class TestBindingMatcherOrgOrg:
         org_b = {"name_cn": "浙江大学", "province": "浙江省", "city": "杭州", "org_type": "高等院校"}
         pairs = self.matcher.match_org_org([org_a], [org_b])
         assert len(pairs) == 0
+
+
+class TestSemanticMatcher:
+    def setup_method(self):
+        self.matcher = SemanticMatcher()
+
+    def test_talent_text_builder_contains_core_fields(self):
+        text = self.matcher._build_talent_text({
+            "name_zh": "张伟",
+            "name_en": "Wei Zhang",
+            "scholar_org_name_zh": "清华大学",
+            "fields": "知识图谱",
+        })
+        assert "张伟" in text
+        assert "清华大学" in text
+        assert "知识图谱" in text
+
+    def test_paper_text_builder_contains_core_fields(self):
+        text = self.matcher._build_paper_text({
+            "authors": "张伟",
+            "institution": "Tsinghua University",
+            "zh_name": "知识图谱构建技术研究",
+            "keywords": "知识图谱;图构建",
+        })
+        assert "张伟" in text
+        assert "Tsinghua University" in text
+        assert "知识图谱构建技术研究" in text

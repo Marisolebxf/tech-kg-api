@@ -26,6 +26,7 @@ from app.schemas.entity_binding import (
     InitDataResponse,
 )
 from app.services.binding_matcher import BindingMatcher
+from app.services.semantic_matcher import SemanticMatcher
 from graph_db.base import GraphDatabase
 
 logger = logging.getLogger(__name__)
@@ -460,6 +461,10 @@ def _llm_judge(
 class EntityBindingService:
     """Core binding service: recall → rule matching → LLM refinement → write edges."""
 
+    TALENT_PAPER_SEMANTIC_FALLBACK = 0.78
+    TALENT_PATENT_SEMANTIC_FALLBACK = 0.8
+    ORG_ORG_SEMANTIC_FALLBACK = 0.82
+
     BINDING_EDGE_MAP = {
         "talent_paper": "bind_talent_paper_author",
         "talent_patent": "bind_talent_patent_inventor",
@@ -481,6 +486,7 @@ class EntityBindingService:
     def __init__(self, db: GraphDatabase):
         self.db = db
         self.matcher = BindingMatcher()
+        self.semantic_matcher = SemanticMatcher()
 
     # ------------------------------------------------------------------
     # Init test data
@@ -623,6 +629,53 @@ class EntityBindingService:
 
         return all_nodes
 
+    @staticmethod
+    def _merge_candidates(
+        rule_candidates: list[dict[str, Any]],
+        semantic_candidates: list[dict[str, Any]],
+        *,
+        left_key: str,
+        right_key: str,
+        undirected: bool = False,
+    ) -> list[dict[str, Any]]:
+        merged: dict[tuple[str, str], dict[str, Any]] = {}
+
+        for candidate in rule_candidates:
+            left = candidate[left_key]
+            right = candidate[right_key]
+            left_id = str(left.get("id") or left.get("scholar_id") or left.get("org_id") or "")
+            right_id = str(right.get("id") or right.get("paper_id") or right.get("patent_id") or right.get("org_id") or "")
+            key = tuple(sorted((left_id, right_id))) if undirected else (left_id, right_id)
+            merged[key] = dict(candidate)
+            merged[key].setdefault("semantic_score", 0.0)
+
+        for candidate in semantic_candidates:
+            left = candidate[left_key]
+            right = candidate[right_key]
+            left_id = str(left.get("id") or left.get("scholar_id") or left.get("org_id") or "")
+            right_id = str(right.get("id") or right.get("paper_id") or right.get("patent_id") or right.get("org_id") or "")
+            key = tuple(sorted((left_id, right_id))) if undirected else (left_id, right_id)
+            if key in merged:
+                merged[key]["semantic_score"] = max(
+                    float(merged[key].get("semantic_score", 0.0)),
+                    float(candidate.get("semantic_score", 0.0)),
+                )
+            else:
+                merged[key] = dict(candidate)
+                merged[key].setdefault("rule_score", 0.0)
+
+        return list(merged.values())
+
+    @staticmethod
+    def _resolve_binding_result(
+        rule_score: float,
+        semantic_score: float,
+        fallback_threshold: float,
+    ) -> tuple[bool, float, str, str]:
+        if semantic_score >= fallback_threshold:
+            return True, semantic_score, "semantic-only", "Semantic recall fallback"
+        return rule_score >= 0.7, rule_score, "rule-only", "LLM unavailable, rule-based fallback"
+
     # ------------------------------------------------------------------
     # Bind talent ↔ paper
     # ------------------------------------------------------------------
@@ -641,8 +694,15 @@ class EntityBindingService:
         if not talents or not papers:
             return BindingResult(binding_type=binding_type)
 
-        # Step 2: Rule-based matching
-        candidates = self.matcher.match_talent_paper(talents, papers)
+        # Step 2: Rule-based + semantic matching
+        rule_candidates = self.matcher.match_talent_paper(talents, papers)
+        semantic_candidates = self.semantic_matcher.match_talent_paper(talents, papers)
+        candidates = self._merge_candidates(
+            rule_candidates,
+            semantic_candidates,
+            left_key="talent",
+            right_key="paper",
+        )
 
         # Step 3: LLM refinement + write edges
         details: list[BindingPairDetail] = []
@@ -653,7 +713,8 @@ class EntityBindingService:
         for cand in candidates:
             talent = cand["talent"]
             paper = cand["paper"]
-            rule_score = cand["rule_score"]
+            rule_score = float(cand.get("rule_score", 0.0))
+            semantic_score = float(cand.get("semantic_score", 0.0))
 
             # LLM judge
             talent_desc = _summarize_entity(talent, "学者")
@@ -664,16 +725,16 @@ class EntityBindingService:
                 is_same = llm_result["is_same"]
                 llm_score = llm_result["confidence"]
                 reason = llm_result["reason"]
-                method = "rule+llm"
+                method = "rule+llm" if rule_score > 0 else "semantic+llm"
             else:
-                # Fallback: rule score only
-                is_same = rule_score >= 0.7
-                llm_score = 0.0
-                reason = "LLM unavailable, rule-based fallback"
-                method = "rule-only"
+                is_same, llm_score, method, reason = self._resolve_binding_result(
+                    rule_score,
+                    semantic_score,
+                    self.TALENT_PAPER_SEMANTIC_FALLBACK,
+                )
 
             # Status logic
-            confidence = llm_score if llm_result is not None else rule_score
+            confidence = llm_score if llm_result is not None else max(rule_score, semantic_score)
             if is_same and confidence >= 0.7:
                 status = "confirmed"
                 confirmed += 1
@@ -697,7 +758,7 @@ class EntityBindingService:
                             "confidence": confidence,
                             "method": method,
                             "bound_at": datetime.now(timezone.utc).isoformat(),
-                            "rule_score": rule_score,
+                            "rule_score": max(rule_score, semantic_score),
                             "llm_score": llm_score,
                             "status": status,
                         },
@@ -717,7 +778,7 @@ class EntityBindingService:
                 target_label=target_label,
                 confidence=confidence,
                 method=method,
-                rule_score=rule_score,
+                rule_score=max(rule_score, semantic_score),
                 llm_score=llm_score,
                 status=status,
                 reason=reason,
@@ -750,8 +811,15 @@ class EntityBindingService:
         if not talents or not patents:
             return BindingResult(binding_type=binding_type)
 
-        # Step 2: Rule-based matching
-        candidates = self.matcher.match_talent_patent(talents, patents)
+        # Step 2: Rule-based + semantic matching
+        rule_candidates = self.matcher.match_talent_patent(talents, patents)
+        semantic_candidates = self.semantic_matcher.match_talent_patent(talents, patents)
+        candidates = self._merge_candidates(
+            rule_candidates,
+            semantic_candidates,
+            left_key="talent",
+            right_key="patent",
+        )
 
         # Step 3: LLM refinement + write edges
         details: list[BindingPairDetail] = []
@@ -762,7 +830,8 @@ class EntityBindingService:
         for cand in candidates:
             talent = cand["talent"]
             patent = cand["patent"]
-            rule_score = cand["rule_score"]
+            rule_score = float(cand.get("rule_score", 0.0))
+            semantic_score = float(cand.get("semantic_score", 0.0))
 
             # LLM judge
             talent_desc = _summarize_entity(talent, "学者")
@@ -773,16 +842,16 @@ class EntityBindingService:
                 is_same = llm_result["is_same"]
                 llm_score = llm_result["confidence"]
                 reason = llm_result["reason"]
-                method = "rule+llm"
+                method = "rule+llm" if rule_score > 0 else "semantic+llm"
             else:
-                # Fallback: rule score only
-                is_same = rule_score >= 0.7
-                llm_score = 0.0
-                reason = "LLM unavailable, rule-based fallback"
-                method = "rule-only"
+                is_same, llm_score, method, reason = self._resolve_binding_result(
+                    rule_score,
+                    semantic_score,
+                    self.TALENT_PATENT_SEMANTIC_FALLBACK,
+                )
 
             # Status logic
-            confidence = llm_score if llm_result is not None else rule_score
+            confidence = llm_score if llm_result is not None else max(rule_score, semantic_score)
             if is_same and confidence >= 0.7:
                 status = "confirmed"
                 confirmed += 1
@@ -806,7 +875,7 @@ class EntityBindingService:
                             "confidence": confidence,
                             "method": method,
                             "bound_at": datetime.now(timezone.utc).isoformat(),
-                            "rule_score": rule_score,
+                            "rule_score": max(rule_score, semantic_score),
                             "llm_score": llm_score,
                             "status": status,
                         },
@@ -826,7 +895,7 @@ class EntityBindingService:
                 target_label=target_label,
                 confidence=confidence,
                 method=method,
-                rule_score=rule_score,
+                rule_score=max(rule_score, semantic_score),
                 llm_score=llm_score,
                 status=status,
                 reason=reason,
@@ -858,8 +927,16 @@ class EntityBindingService:
         if not orgs or len(orgs) < 2:
             return BindingResult(binding_type=binding_type)
 
-        # Step 2: Rule-based matching (orgs vs orgs)
-        candidates = self.matcher.match_org_org(orgs, orgs)
+        # Step 2: Rule-based + semantic matching (orgs vs orgs)
+        rule_candidates = self.matcher.match_org_org(orgs, orgs)
+        semantic_candidates = self.semantic_matcher.match_org_org(orgs)
+        candidates = self._merge_candidates(
+            rule_candidates,
+            semantic_candidates,
+            left_key="org_a",
+            right_key="org_b",
+            undirected=True,
+        )
 
         # Step 3: LLM refinement + write edges
         details: list[BindingPairDetail] = []
@@ -870,7 +947,8 @@ class EntityBindingService:
         for cand in candidates:
             org_a = cand["org_a"]
             org_b = cand["org_b"]
-            rule_score = cand["rule_score"]
+            rule_score = float(cand.get("rule_score", 0.0))
+            semantic_score = float(cand.get("semantic_score", 0.0))
 
             # LLM judge
             org_a_desc = _summarize_entity(org_a, "机构")
@@ -881,16 +959,16 @@ class EntityBindingService:
                 is_same = llm_result["is_same"]
                 llm_score = llm_result["confidence"]
                 reason = llm_result["reason"]
-                method = "rule+llm"
+                method = "rule+llm" if rule_score > 0 else "semantic+llm"
             else:
-                # Fallback: rule score only
-                is_same = rule_score >= 0.7
-                llm_score = 0.0
-                reason = "LLM unavailable, rule-based fallback"
-                method = "rule-only"
+                is_same, llm_score, method, reason = self._resolve_binding_result(
+                    rule_score,
+                    semantic_score,
+                    self.ORG_ORG_SEMANTIC_FALLBACK,
+                )
 
             # Status logic
-            confidence = llm_score if llm_result is not None else rule_score
+            confidence = llm_score if llm_result is not None else max(rule_score, semantic_score)
             if is_same and confidence >= 0.7:
                 status = "confirmed"
                 confirmed += 1
@@ -914,7 +992,7 @@ class EntityBindingService:
                             "confidence": confidence,
                             "method": method,
                             "bound_at": datetime.now(timezone.utc).isoformat(),
-                            "rule_score": rule_score,
+                            "rule_score": max(rule_score, semantic_score),
                             "llm_score": llm_score,
                             "status": status,
                         },
@@ -934,7 +1012,7 @@ class EntityBindingService:
                 target_label=target_label,
                 confidence=confidence,
                 method=method,
-                rule_score=rule_score,
+                rule_score=max(rule_score, semantic_score),
                 llm_score=llm_score,
                 status=status,
                 reason=reason,
@@ -1044,17 +1122,55 @@ class EntityBindingService:
         current_offset = offset
         page_size = min(limit, 200)
         remaining = limit
+        node_cache: dict[str, dict[str, Any]] = {}
+
+        def _node_summary(node_id: str) -> dict[str, Any]:
+            if node_id in node_cache:
+                return node_cache[node_id]
+            try:
+                node = self.db.get_node(node_id)
+                if node is None:
+                    node_cache[node_id] = {"name": node_id, "label": "unknown"}
+                else:
+                    name = (
+                        node.properties.get("name_zh")
+                        or node.properties.get("name_cn")
+                        or node.properties.get("zh_name")
+                        or node.properties.get("title_zh")
+                        or node.properties.get("name_en")
+                        or node.properties.get("en_name")
+                        or str(node.id)
+                    )
+                    label = node.labels[0] if node.labels else "unknown"
+                    node_cache[node_id] = {"name": name, "label": label}
+            except Exception:
+                node_cache[node_id] = {"name": node_id, "label": "unknown"}
+            return node_cache[node_id]
 
         while remaining > 0:
             try:
                 fetch_size = min(page_size, remaining)
                 result = self.db.get_edges_by_type(edge_type, limit=fetch_size, offset=current_offset)
                 for edge in result.items:
+                    source_id = str(edge.source_id)
+                    target_id = str(edge.target_id)
+                    source_node = _node_summary(source_id)
+                    target_node = _node_summary(target_id)
                     details.append({
                         "edge_id": str(edge.id),
-                        "source_id": str(edge.source_id),
-                        "target_id": str(edge.target_id),
+                        "source_id": source_id,
+                        "target_id": target_id,
+                        "source_name": source_node["name"],
+                        "source_label": source_node["label"],
+                        "target_name": target_node["name"],
+                        "target_label": target_node["label"],
                         "edge_type": edge.type,
+                        "confidence": edge.properties.get("confidence", 0),
+                        "method": edge.properties.get("method", ""),
+                        "rule_score": edge.properties.get("rule_score", 0),
+                        "llm_score": edge.properties.get("llm_score", 0),
+                        "status": edge.properties.get("status", ""),
+                        "reason": edge.properties.get("reason", ""),
                         "properties": edge.properties,
                     })
                     remaining -= 1

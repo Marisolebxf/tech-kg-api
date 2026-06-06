@@ -12,6 +12,7 @@ dependencies = [
     "neo4j>=6.1.0",
     "networkx>=3.6.1",
     "numpy>=2.4.4",
+    "sentence-transformers>=5.5.1",
     "openai>=2.32.0",
     "pandas>=3.0.2",
     "pydantic>=2.13.1",

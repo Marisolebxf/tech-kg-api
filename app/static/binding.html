@@ -330,7 +330,11 @@
             const svg = d3.select('#graph-container')
                 .append('svg')
                 .attr('width', width)
-                .attr('height', height);
+                .attr('height', height)
+                .style('touch-action', 'none')
+                .style('user-select', 'none');
+
+            const viewport = svg.append('g').attr('class', 'viewport');
 
             // Arrow marker
             svg.append('defs').append('marker')
@@ -351,45 +355,91 @@
                 .force('center', d3.forceCenter(width / 2, height / 2))
                 .force('collision', d3.forceCollide().radius(30));
 
-            const link = svg.append('g')
+            const zoom = d3.zoom()
+                .scaleExtent([0.2, 3])
+                .on('zoom', (event) => {
+                    viewport.attr('transform', event.transform);
+                });
+
+            svg.call(zoom);
+
+            const controls = d3.select('#graph-container')
+                .append('div')
+                .style('position', 'absolute')
+                .style('right', '14px')
+                .style('bottom', '14px')
+                .style('display', 'flex')
+                .style('gap', '8px')
+                .style('z-index', '10');
+
+            function addZoomButton(label, onClick) {
+                controls.append('button')
+                    .text(label)
+                    .style('width', '34px')
+                    .style('height', '34px')
+                    .style('border', '1px solid #d0d7e2')
+                    .style('border-radius', '8px')
+                    .style('background', '#fff')
+                    .style('cursor', 'pointer')
+                    .style('box-shadow', '0 1px 3px rgba(0,0,0,0.08)')
+                    .on('click', onClick);
+            }
+
+            addZoomButton('+', () => svg.transition().duration(180).call(zoom.scaleBy, 1.2));
+            addZoomButton('−', () => svg.transition().duration(180).call(zoom.scaleBy, 0.83));
+            addZoomButton('1:1', () => svg.transition().duration(180).call(zoom.transform, d3.zoomIdentity));
+
+            const link = viewport.append('g')
                 .selectAll('line')
                 .data(edges)
                 .join('line')
                 .attr('stroke', d => d.status === 'candidate' ? '#ccc' : '#999')
                 .attr('stroke-width', 1.5)
                 .attr('stroke-dasharray', d => d.status === 'candidate' ? '5,5' : 'none')
-                .attr('marker-end', 'url(#arrowhead)');
+                .attr('marker-end', 'url(#arrowhead)')
+                .style('pointer-events', 'none');
 
             // Edge labels
-            const edgeLabel = svg.append('g')
+            const edgeLabel = viewport.append('g')
                 .selectAll('text')
                 .data(edges)
                 .join('text')
                 .attr('font-size', 10)
                 .attr('fill', '#888')
                 .attr('text-anchor', 'middle')
+                .style('pointer-events', 'none')
                 .text(d => d.confidence != null ? (d.confidence * 100).toFixed(0) + '%' : '');
 
-            const node = svg.append('g')
+            const node = viewport.append('g')
                 .selectAll('g')
                 .data(nodes)
                 .join('g')
+                .style('cursor', 'grab')
+                .style('touch-action', 'none')
                 .call(d3.drag()
                     .on('start', dragstarted)
                     .on('drag', dragged)
                     .on('end', dragended));
 
             node.append('circle')
+                .attr('r', 22)
+                .attr('fill', 'transparent')
+                .attr('stroke', 'none')
+                .style('pointer-events', 'all');
+
+            node.append('circle')
                 .attr('r', 14)
                 .attr('fill', d => TYPE_COLORS[d.entity_type] || '#999')
                 .attr('stroke', 'white')
-                .attr('stroke-width', 2);
+                .attr('stroke-width', 2)
+                .style('pointer-events', 'none');
 
             node.append('text')
                 .attr('dy', -20)
                 .attr('text-anchor', 'middle')
                 .attr('font-size', 11)
                 .attr('fill', '#333')
+                .style('pointer-events', 'none')
                 .text(d => {
                     const name = d.name || d.id;
                     return name.length > 8 ? name.slice(0, 8) + '...' : name;
@@ -413,9 +463,11 @@
             });
 
             function dragstarted(event, d) {
+                event.sourceEvent?.stopPropagation();
                 if (!event.active) simulation.alphaTarget(0.3).restart();
                 d.fx = d.x;
                 d.fy = d.y;
+                d3.select(event.sourceEvent?.currentTarget || this).style('cursor', 'grabbing');
             }
 
             function dragged(event, d) {
@@ -427,6 +479,7 @@
                 if (!event.active) simulation.alphaTarget(0);
                 d.fx = null;
                 d.fy = null;
+                d3.select(event.sourceEvent?.currentTarget || this).style('cursor', 'grab');
             }
         }
 

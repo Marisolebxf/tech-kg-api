@@ -1,11 +1,18 @@
 # tech-kg-api
 
-亿级知识图谱 API 接口仓库
+亿级知识图谱 monorepo：后端 API（Python）+ 前端（Vue）。
 
 ## 环境要求
 
-- Python 3.11+
+后端：
+
+- Python 3.13+
 - [uv](https://docs.astral.sh/uv/)
+
+前端：
+
+- Node.js 20+
+- [pnpm](https://pnpm.io/)
 
 ## 快速开始
 
@@ -16,27 +23,26 @@ git clone https://github.com/Marisolebxf/tech-kg-api.git
 cd tech-kg-api
 ```
 
-### 2. 安装依赖
+### 2. 启动后端
 
 ```bash
+cd backend
 uv sync
-```
-
-### 3. 配置环境变量
-
-```bash
 cp .env.example .env
 # 编辑 .env，设置 Neo4j 密码
 # GRAPH_DB_PASSWORD=<your_password>
-```
-
-### 4. 启动服务
-
-```bash
 uv run uvicorn app.main:app --reload
 ```
 
-启动后访问：
+### 3. 启动前端
+
+```bash
+cd frontend
+pnpm install
+pnpm dev
+```
+
+后端启动后访问：
 
 - <http://localhost:8000/hello>
 - <http://localhost:8000/api>
@@ -64,6 +70,8 @@ uv run uvicorn app.main:app --reload
 建议流程：
 
 ```bash
+cd backend
+
 # 1) 先准备 Neo4j，并在 .env 中填好连接信息
 cp .env.example .env
 
@@ -91,28 +99,34 @@ curl -X POST http://localhost:8000/api/v1/graphrag/demo/query \
 ## 运行测试
 
 ```bash
+cd backend
 uv run pytest
 ```
 
 ## 项目结构
 
 ```
-tech-kg-api/
-  ├── app/                    # FastAPI 主服务
-  │   ├── main.py             # 主入口
-  │   ├── routers/            # HTTP 路由
-  │   ├── schemas/            # 请求/响应模型
-  │   └── services/           # 业务逻辑
-  ├── graph_db/               # 图数据库 service 层
-  │   ├── services/           # Service 类（NodeService, EdgeService 等）
-  │   ├── backends/           # 后端实现（Neo4j）
-  │   ├── query/              # Cypher 查询构建器
-  │   ├── base.py             # 抽象基类
-  │   ├── config.py           # 配置 & 连接工厂
-  │   └── models.py           # 数据模型
-  ├── tests/
-  ├── .env.example            # 环境变量模板
-  └── pyproject.toml
+tech-kg-api/                    # monorepo 根目录
+  ├── frontend/               # 前端（Vue + Vite）
+  ├── backend/                # 后端（Python，含算法）
+  │   ├── app/                # FastAPI 主服务
+  │   │   ├── main.py         # 主入口
+  │   │   ├── routers/        # HTTP 路由
+  │   │   ├── schemas/        # 请求/响应模型
+  │   │   └── services/       # 业务逻辑 / 算法
+  │   ├── graph_db/           # 图数据库 service 层
+  │   │   ├── services/       # Service 类（NodeService, EdgeService 等）
+  │   │   ├── backends/       # 后端实现（Neo4j）
+  │   │   ├── query/          # Cypher 查询构建器
+  │   │   ├── base.py         # 抽象基类
+  │   │   ├── config.py       # 配置 & 连接工厂
+  │   │   └── models.py       # 数据模型
+  │   ├── schemas/            # 数据库建表 SQL
+  │   ├── DataTable/          # 表结构设计文档
+  │   ├── tests/
+  │   ├── .env.example        # 环境变量模板
+  │   └── pyproject.toml
+  └── docker-compose.yml      # 顶层编排
 ```
 
 ## graph_db Service 层

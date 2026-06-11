@@ -1,0 +1,8 @@
+packages: []
+
+allowBuilds:
+  '@vue-office/docx': true
+  '@vue-office/pdf': true
+  core-js: true
+  esbuild: true
+  vue-demi: true

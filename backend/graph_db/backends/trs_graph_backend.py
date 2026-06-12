@@ -7,7 +7,8 @@ over HTTP to perform all graph database operations on NebulaGraph.
 from __future__ import annotations
 
 import logging
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import httpx
 
@@ -29,6 +30,7 @@ logger = logging.getLogger("graph_db.trs_graph")
 # ---------------------------------------------------------------------------
 # Internal conversion helpers
 # ---------------------------------------------------------------------------
+
 
 def _trs_node_to_model(data: dict[str, Any]) -> Node:
     """Convert trs-graph-service Node JSON to graph_db Node model.
@@ -56,7 +58,9 @@ def _trs_edge_to_model(data: dict[str, Any]) -> Edge:
     )
 
 
-def _build_node_create_body(labels: list[str], properties: dict[str, Any] | None = None) -> dict[str, Any]:
+def _build_node_create_body(
+    labels: list[str], properties: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Build request body for node creation.
 
     TRS Graph expects ``labels`` as a list. The service maps the first label
@@ -97,6 +101,7 @@ def _strip_quotes(val: Any) -> str:
 # Pseudo-transaction
 # ---------------------------------------------------------------------------
 
+
 class TRSTransaction:
     """Pseudo-transaction that caches write operations and executes on commit().
 
@@ -105,7 +110,7 @@ class TRSTransaction:
     No atomicity guarantee is provided.
     """
 
-    def __init__(self, db: "TRSGraphDatabase"):
+    def __init__(self, db: TRSGraphDatabase):
         self._db = db
         self._queue: list[tuple[str, Any]] = []
         self._committed = False
@@ -113,9 +118,7 @@ class TRSTransaction:
 
     # -- Node CRUD (queued) --
 
-    def create_node(
-        self, labels: list[str], properties: dict[str, Any] | None = None
-    ) -> Node:
+    def create_node(self, labels: list[str], properties: dict[str, Any] | None = None) -> Node:
         result = self._db.create_node(labels, properties)
         return result
 
@@ -173,9 +176,7 @@ class TRSTransaction:
 
     # -- Raw query --
 
-    def run(
-        self, query: str, params: dict[str, Any] | None = None
-    ) -> QueryResult:
+    def run(self, query: str, params: dict[str, Any] | None = None) -> QueryResult:
         return self._db.execute_query(query, params)
 
     # -- Commit / Rollback --
@@ -189,7 +190,7 @@ class TRSTransaction:
 
     # -- Context manager --
 
-    def __enter__(self) -> "TRSTransaction":
+    def __enter__(self) -> TRSTransaction:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -200,6 +201,7 @@ class TRSTransaction:
 # ---------------------------------------------------------------------------
 # TRS Graph Database implementation
 # ---------------------------------------------------------------------------
+
 
 class TRSGraphDatabase(GraphDatabase):
     """TRS Graph implementation of the generic GraphDatabase API.
@@ -290,9 +292,7 @@ class TRSGraphDatabase(GraphDatabase):
     # Node CRUD
     # ==================================================================
 
-    def create_node(
-        self, labels: list[str], properties: dict[str, Any] | None = None
-    ) -> Node:
+    def create_node(self, labels: list[str], properties: dict[str, Any] | None = None) -> Node:
         body = _build_node_create_body(labels, properties)
         resp = self._request("POST", "/api/v1/nodes", json=body)
         resp.raise_for_status()
@@ -320,9 +320,7 @@ class TRSGraphDatabase(GraphDatabase):
         resp.raise_for_status()
         return _trs_node_to_model(resp.json())
 
-    def get_nodes_by_label(
-        self, label: str, *, limit: int = 100, offset: int = 0
-    ) -> PagedResult:
+    def get_nodes_by_label(self, label: str, *, limit: int = 100, offset: int = 0) -> PagedResult:
         resp = self._request(
             "GET",
             f"/api/v1/nodes/label/{label}",
@@ -501,7 +499,9 @@ class TRSGraphDatabase(GraphDatabase):
             page=PageInfo(offset=offset, limit=limit, total=total),
         )
 
-    def update_edge(self, edge_id: Any, properties: dict[str, Any], edge_type: str | None = None) -> Edge:
+    def update_edge(
+        self, edge_id: Any, properties: dict[str, Any], edge_type: str | None = None
+    ) -> Edge:
         source, target, ranking = _parse_edge_id(str(edge_id))
         # Look up edge type if not provided
         if not edge_type:
@@ -551,7 +551,10 @@ class TRSGraphDatabase(GraphDatabase):
         resp = self._request("GET", f"/api/v1/traversal/{node_id}/edges", params=params)
         resp.raise_for_status()
         data = resp.json()
-        return [_trs_edge_to_model(e) for e in (data if isinstance(data, list) else data.get("items", []))]
+        return [
+            _trs_edge_to_model(e)
+            for e in (data if isinstance(data, list) else data.get("items", []))
+        ]
 
     def get_neighbours(
         self,
@@ -567,7 +570,10 @@ class TRSGraphDatabase(GraphDatabase):
         resp = self._request("GET", f"/api/v1/traversal/{node_id}/neighbours", params=params)
         resp.raise_for_status()
         data = resp.json()
-        return [_trs_node_to_model(n) for n in (data if isinstance(data, list) else data.get("items", []))]
+        return [
+            _trs_node_to_model(n)
+            for n in (data if isinstance(data, list) else data.get("items", []))
+        ]
 
     def shortest_path(
         self,
@@ -607,9 +613,7 @@ class TRSGraphDatabase(GraphDatabase):
     # Query execution
     # ==================================================================
 
-    def execute_query(
-        self, query: str, params: dict[str, Any] | None = None
-    ) -> QueryResult:
+    def execute_query(self, query: str, params: dict[str, Any] | None = None) -> QueryResult:
         body = {"query": query}
         if params:
             body["params"] = params
@@ -618,9 +622,7 @@ class TRSGraphDatabase(GraphDatabase):
         data = resp.json()
         return QueryResult(records=data.get("records", []), summary=data.get("summary"))
 
-    def execute_read(
-        self, query: str, params: dict[str, Any] | None = None
-    ) -> QueryResult:
+    def execute_read(self, query: str, params: dict[str, Any] | None = None) -> QueryResult:
         body = {"query": query}
         if params:
             body["params"] = params
@@ -629,9 +631,7 @@ class TRSGraphDatabase(GraphDatabase):
         data = resp.json()
         return QueryResult(records=data.get("records", []), summary=data.get("summary"))
 
-    def execute_write(
-        self, query: str, params: dict[str, Any] | None = None
-    ) -> QueryResult:
+    def execute_write(self, query: str, params: dict[str, Any] | None = None) -> QueryResult:
         body = {"query": query}
         if params:
             body["params"] = params
@@ -738,6 +738,7 @@ class TRSGraphDatabase(GraphDatabase):
                 if p.startswith("[") and p.endswith("]"):
                     try:
                         import json
+
                         parsed = json.loads(p)
                         if isinstance(parsed, list):
                             clean_props.extend(_strip_quotes(x) for x in parsed)
@@ -745,11 +746,13 @@ class TRSGraphDatabase(GraphDatabase):
                     except (json.JSONDecodeError, ValueError):
                         pass
                 clean_props.append(p)
-            indexes.append(IndexSpec(
-                label=idx_label,
-                properties=clean_props,
-                unique=item.get("unique", False),
-            ))
+            indexes.append(
+                IndexSpec(
+                    label=idx_label,
+                    properties=clean_props,
+                    unique=item.get("unique", False),
+                )
+            )
         return indexes
 
     def create_constraint(self, spec: ConstraintSpec) -> None:
@@ -773,12 +776,14 @@ class TRSGraphDatabase(GraphDatabase):
         items = data if isinstance(data, list) else data.get("items", [])
         constraints = []
         for item in items:
-            constraints.append(ConstraintSpec(
-                name=_strip_quotes(item.get("name", "")),
-                label=_strip_quotes(item.get("label", "")),
-                property=_strip_quotes(item.get("property", "")),
-                kind=item.get("kind", "unique"),
-            ))
+            constraints.append(
+                ConstraintSpec(
+                    name=_strip_quotes(item.get("name", "")),
+                    label=_strip_quotes(item.get("label", "")),
+                    property=_strip_quotes(item.get("property", "")),
+                    kind=item.get("kind", "unique"),
+                )
+            )
         return constraints
 
     # ==================================================================

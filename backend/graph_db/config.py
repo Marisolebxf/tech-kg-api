@@ -101,12 +101,14 @@ def _ensure_backends() -> None:
     # Import and register Neo4j backend (optional — may not be installed)
     try:
         from graph_db.backends.neo4j_backend import Neo4jGraphDatabase
+
         register_backend("neo4j", Neo4jGraphDatabase)
     except ImportError:
         pass
     # Import and register TRS Graph backend (optional — may not be installed)
     try:
         from graph_db.backends.trs_graph_backend import TRSGraphDatabase
+
         register_backend("trs_graph", TRSGraphDatabase)
     except ImportError:
         pass
@@ -142,8 +144,7 @@ def connect(config: GraphDBConfig | None = None, **kwargs: Any) -> GraphDatabase
     cls = _BACKEND_REGISTRY.get(backend_name)
     if cls is None:
         raise ValueError(
-            f"Unknown backend '{backend_name}'. "
-            f"Available: {list(_BACKEND_REGISTRY.keys())}"
+            f"Unknown backend '{backend_name}'. Available: {list(_BACKEND_REGISTRY.keys())}"
         )
 
     # Instantiate with backend-specific args

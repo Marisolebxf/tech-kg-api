@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -18,10 +17,10 @@ from graph_db.backends.trs_graph_backend import (
 )
 from graph_db.models import Edge, Node
 
-
 # ---------------------------------------------------------------------------
 # Conversion helper tests
 # ---------------------------------------------------------------------------
+
 
 class TestTrsNodeToModel:
     def test_basic_conversion(self):
@@ -116,6 +115,7 @@ class TestParseEdgeId:
 # ---------------------------------------------------------------------------
 # Connection lifecycle tests
 # ---------------------------------------------------------------------------
+
 
 def _make_mock_response(status_code: int = 200, json_data: dict | None = None) -> MagicMock:
     resp = MagicMock(spec=httpx.Response)
@@ -245,6 +245,7 @@ class TestRequestNotConnected:
 # Transaction tests
 # ---------------------------------------------------------------------------
 
+
 class TestTRSTransaction:
     def test_commit_sets_flag(self):
         db = TRSGraphDatabase()
@@ -278,14 +279,13 @@ class TestTRSTransaction:
 # CRUD operation tests (with mocked HTTP)
 # ---------------------------------------------------------------------------
 
+
 class TestCRUDOperations:
     def _setup_db(self, mock_client_cls, response_data=None, status_code=200):
         """Helper to set up a connected TRSGraphDatabase with a mock client."""
         mock_client = MagicMock()
         mock_client.get.return_value = _make_mock_response(200, {"status": "UP"})
-        mock_client.request.return_value = _make_mock_response(
-            status_code, response_data or {}
-        )
+        mock_client.request.return_value = _make_mock_response(status_code, response_data or {})
         mock_client_cls.return_value = mock_client
         db = TRSGraphDatabase()
         db.connect()
@@ -417,7 +417,13 @@ class TestCRUDOperations:
                 {"id": "b", "labels": ["Person"], "properties": {}},
             ],
             "edges": [
-                {"id": "a->b@0", "type": "KNOWS", "sourceId": "a", "targetId": "b", "properties": {}},
+                {
+                    "id": "a->b@0",
+                    "type": "KNOWS",
+                    "sourceId": "a",
+                    "targetId": "b",
+                    "properties": {},
+                },
             ],
         }
         db, mock_client = self._setup_db(mock_client_cls, path_data)
@@ -447,13 +453,12 @@ class TestCRUDOperations:
 # Schema management tests
 # ---------------------------------------------------------------------------
 
+
 class TestSchemaManagement:
     def _setup_db(self, mock_client_cls, response_data=None, status_code=200):
         mock_client = MagicMock()
         mock_client.get.return_value = _make_mock_response(200, {"status": "UP"})
-        mock_client.request.return_value = _make_mock_response(
-            status_code, response_data or {}
-        )
+        mock_client.request.return_value = _make_mock_response(status_code, response_data or {})
         mock_client_cls.return_value = mock_client
         db = TRSGraphDatabase()
         db.connect()
@@ -521,7 +526,12 @@ class TestSchemaManagement:
     def test_list_constraints_with_quoted_values(self, mock_client_cls):
         # Server bug: may return extra quotes
         constraint_data = [
-            {"name": '"person_name_uq"', "label": '"Person"', "property": '"name"', "kind": "unique"},
+            {
+                "name": '"person_name_uq"',
+                "label": '"Person"',
+                "property": '"name"',
+                "kind": "unique",
+            },
         ]
         db, mock_client = self._setup_db(mock_client_cls, constraint_data)
 

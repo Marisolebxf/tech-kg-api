@@ -32,10 +32,8 @@ Quick start::
     db.close()
 """
 
-# Lazy-import backends so they self-register
-from graph_db.backends import Neo4jGraphDatabase
 from graph_db.base import GraphDatabase, Transaction
-from graph_db.config import GraphDBConfig, connect, get_backend_names, register_backend
+from graph_db.config import GraphDBConfig, connect, register_backend, get_backend_names
 from graph_db.models import (
     ConstraintSpec,
     Edge,
@@ -47,6 +45,9 @@ from graph_db.models import (
     QueryResult,
 )
 from graph_db.query import QueryBuilder
+
+# Backends are lazy-imported via graph_db.backends __getattr__ to avoid
+# requiring optional drivers (e.g. neo4j) at import time.
 
 # Service layer
 from graph_db.services import (
@@ -79,6 +80,7 @@ __all__ = [
     "QueryBuilder",
     # Backends
     "Neo4jGraphDatabase",
+    "TRSGraphDatabase",
     # Service layer
     "NodeService",
     "EdgeService",
@@ -86,3 +88,14 @@ __all__ = [
     "QueryService",
     "SchemaService",
 ]
+
+
+def __getattr__(name: str):
+    """Lazy-import backend classes so optional drivers are only required when used."""
+    if name == "Neo4jGraphDatabase":
+        from graph_db.backends.neo4j_backend import Neo4jGraphDatabase
+        return Neo4jGraphDatabase
+    if name == "TRSGraphDatabase":
+        from graph_db.backends.trs_graph_backend import TRSGraphDatabase
+        return TRSGraphDatabase
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

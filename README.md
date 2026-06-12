@@ -29,8 +29,7 @@ cd tech-kg-api
 cd backend
 uv sync
 cp .env.example .env
-# 编辑 .env，设置 Neo4j 密码
-# GRAPH_DB_PASSWORD=<your_password>
+# 编辑 .env，选择图数据库后端并填写连接信息
 uv run uvicorn app.main:app --reload
 ```
 
@@ -74,6 +73,7 @@ cd backend
 
 # 1) 先准备 Neo4j，并在 .env 中填好连接信息
 cp .env.example .env
+# 编辑 .env 设置 GRAPH_DB_BACKEND=neo4j 及 Neo4j 密码
 
 # 2) 启动服务
 uv run uvicorn app.main:app --reload
@@ -114,10 +114,10 @@ tech-kg-api/                    # monorepo 根目录
   │   │   ├── routers/        # HTTP 路由
   │   │   ├── schemas/        # 请求/响应模型
   │   │   └── services/       # 业务逻辑 / 算法
-  │   ├── graph_db/           # 图数据库 service 层
+  │   ├── graph_db/           # 图数据库抽象层
   │   │   ├── services/       # Service 类（NodeService, EdgeService 等）
-  │   │   ├── backends/       # 后端实现（Neo4j）
-  │   │   ├── query/          # Cypher 查询构建器
+  │   │   ├── backends/       # 后端实现（Neo4j, TRS Graph）
+  │   │   ├── query/          # 查询构建器
   │   │   ├── base.py         # 抽象基类
   │   │   ├── config.py       # 配置 & 连接工厂
   │   │   └── models.py       # 数据模型
@@ -129,25 +129,46 @@ tech-kg-api/                    # monorepo 根目录
   └── docker-compose.yml      # 顶层编排
 ```
 
-## graph_db Service 层
+## graph_db 图数据库抽象层
 
-`graph_db` 是项目内的图数据库操作服务层，封装了节点、边、遍历、查询、Schema 等 CRUD 操作，供 `app/` 中其他服务调用。
+`graph_db` 是项目内的图数据库操作抽象层，封装了节点、边、遍历、查询、Schema 等 CRUD 操作，通过可插拔的后端实现支持多种图数据库。当前支持：
+
+| 后端 | 说明 | 配置 |
+|------|------|------|
+| **Neo4j** | 原生 Neo4j 驱动，支持 Cypher 查询 | `GRAPH_DB_BACKEND=neo4j` |
+| **TRS Graph** | 通过 trs-graph-service REST API 操作 NebulaGraph | `GRAPH_DB_BACKEND=trs_graph` |
+
+后端通过 `.env` 中 `GRAPH_DB_BACKEND` 切换，业务代码无需修改。
+
+> **TRS Graph 已知限制**：NebulaGraph 要求所有属性必须在 TAG/EDGE TYPE schema 中预定义，不支持动态添加属性。写入（create/update）时如果包含 schema 中不存在的属性会返回 400 错误。此外 `find_nodes`/`find_edges` 不支持按属性过滤（仅按 label/type），需用 `execute_query` + nGQL 实现属性查询。
 
 ### 连接数据库
 
 ```python
 from graph_db import connect, GraphDBConfig
 
-db = connect(GraphDBConfig.from_env())
+# 自动从 .env 读取配置
+db = connect()
 ```
 
 或直接指定参数：
 
 ```python
+# Neo4j
 db = connect(GraphDBConfig(
+    backend="neo4j",
     uri="bolt://localhost:7687",
     username="neo4j",
     password="your_password",
+    database="neo4j",
+))
+
+# TRS Graph
+db = connect(GraphDBConfig(
+    backend="trs_graph",
+    uri="http://localhost:8090",
+    database="tech-kg",
+    auth="ysukeg",
 ))
 ```
 
@@ -170,16 +191,16 @@ node = nodes.get(alice.id)
 # 按标签列表
 result = nodes.list_by_label("Person", limit=10, offset=0)
 
-# 按标签 + 属性查找
+# 按标签 + 属性查找（⚠ TRS Graph 不支持属性过滤，仅按 label 返回）
 result = nodes.find(["Person"], {"name": "Alice"})
 
-# 更新属性
-nodes.update(alice.id, {"age": 31, "city": "北京"})
+# 更新属性（⚠ 属性必须在 TAG schema 中已定义，否则 400）
+nodes.update(alice.id, {"age": 31})
 
 # 删除（detach=True 同时删除关联关系）
 nodes.delete(alice.id, detach=True)
 
-# 批量创建
+# 批量创建（⚠ TRS Graph 创建成功但不返回节点数据，返回空列表）
 result = nodes.batch_create(
     [{"name": f"Person_{i}", "age": 20 + i} for i in range(100)],
     labels=["Person"],
@@ -209,11 +230,11 @@ edge = edges.get(edge.id)
 # 按类型列表
 result = edges.list_by_type("KNOWS", limit=10)
 
-# 按类型 + 属性查找
+# 按类型 + 属性查找（⚠ TRS Graph 不支持属性过滤，仅按 type 返回）
 result = edges.find("KNOWS", {"since": 2020})
 
-# 更新属性
-edges.update(edge.id, {"level": "best"})
+# 更新属性（⚠ 属性必须在 EDGE TYPE schema 中已定义）
+edges.update(edge.id, {"since": 2021})
 
 # 删除
 edges.delete(edge.id)
@@ -244,7 +265,7 @@ path = traversal.shortest_path(alice.id, bob.id, edge_type="KNOWS", max_depth=10
 # path.edges -> [Edge, ...]
 ```
 
-### Cypher 查询（QueryService）
+### 查询执行（QueryService）
 
 ```python
 from graph_db.services import QueryService
@@ -264,6 +285,8 @@ result = query.read("MATCH (n) RETURN count(n) AS total")
 # 写入查询（自动重试瞬态错误）
 result = query.write("CREATE (n:Test {ts: timestamp()}) RETURN n")
 ```
+
+> **注意**：TRS Graph 后端使用 NebulaGraph nGQL 语法（`GO` / `MATCH` / `FETCH PROP`），而非 Cypher。
 
 ### Schema 管理（SchemaService）
 
@@ -316,14 +339,46 @@ schema.edge_types()                          # 所有关系类型
 db.close()
 ```
 
+### 在业务代码中使用
+
+在 `app/services/` 中写业务代码时，推荐模式：
+
+```python
+from graph_db import connect
+
+def _get_db():
+    """获取 graph 数据库连接（自动从 .env 读配置）"""
+    return connect()
+
+def create_scholar(name: str, org: str):
+    db = _get_db()
+    try:
+        # merge_node: 按 identity_props 匹配，有则更新无则创建
+        return db.merge_node(
+            ["talent"],                          # labels = NebulaGraph TAG
+            {"name_zh": name},                   # identity_props: 匹配条件
+            {"scholar_org_name_zh": org},         # properties: 写入属性
+        )
+    finally:
+        db.close()
+
+def get_scholar_papers(scholar_id: str):
+    db = _get_db()
+    try:
+        return db.get_neighbours(scholar_id, direction="out", edge_type="author")
+    finally:
+        db.close()
+```
+
 ## 环境变量
 
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
-| `GRAPH_DB_BACKEND` | `neo4j` | 图数据库后端类型 |
-| `GRAPH_DB_URI` | `bolt://localhost:7687` | 数据库连接 URI |
-| `GRAPH_DB_USERNAME` | `neo4j` | 数据库用户名 |
-| `GRAPH_DB_PASSWORD` | — | 数据库密码（必填） |
-| `GRAPH_DB_DATABASE` | `neo4j` | 目标数据库名 |
+| `GRAPH_DB_BACKEND` | `trs_graph` | 图数据库后端类型（`neo4j` / `trs_graph`） |
+| `GRAPH_DB_URI` | `http://localhost:8090` | 数据库连接 URI |
+| `GRAPH_DB_USERNAME` | `neo4j` | 数据库用户名（Neo4j） |
+| `GRAPH_DB_PASSWORD` | — | 数据库密码（Neo4j） |
+| `GRAPH_DB_AUTH` | — | API Key，作为 `X-API-Key` 请求头（TRS Graph） |
+| `GRAPH_DB_DATABASE` | `tech-kg` | 目标数据库名 / 图空间名 |
 | `GRAPH_DB_MAX_CONNECTION_POOL_SIZE` | `50` | 连接池大小 |
 | `GRAPH_DB_CONNECTION_TIMEOUT` | `30` | 连接超时（秒） |

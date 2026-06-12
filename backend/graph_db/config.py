@@ -42,6 +42,7 @@ class GraphDBConfig:
     uri: str = "bolt://localhost:7687"
     username: str = "neo4j"
     password: str = ""
+    auth: str = ""
     database: str = "neo4j"
     max_connection_pool_size: int = 50
     connection_timeout: int = 30
@@ -63,6 +64,7 @@ class GraphDBConfig:
             uri=_env("URI") or "bolt://localhost:7687",
             username=_env("USERNAME") or "neo4j",
             password=_env("PASSWORD") or "",
+            auth=_env("AUTH") or "",
             database=_env("DATABASE") or "neo4j",
             max_connection_pool_size=int(_env("MAX_CONNECTION_POOL_SIZE") or 50),
             connection_timeout=int(_env("CONNECTION_TIMEOUT") or 30),
@@ -96,10 +98,18 @@ def _ensure_backends() -> None:
     """Lazily register built-in backends."""
     if _BACKEND_REGISTRY:
         return
-    # Import and register Neo4j backend
-    from graph_db.backends.neo4j_backend import Neo4jGraphDatabase
-
-    register_backend("neo4j", Neo4jGraphDatabase)
+    # Import and register Neo4j backend (optional — may not be installed)
+    try:
+        from graph_db.backends.neo4j_backend import Neo4jGraphDatabase
+        register_backend("neo4j", Neo4jGraphDatabase)
+    except ImportError:
+        pass
+    # Import and register TRS Graph backend (optional — may not be installed)
+    try:
+        from graph_db.backends.trs_graph_backend import TRSGraphDatabase
+        register_backend("trs_graph", TRSGraphDatabase)
+    except ImportError:
+        pass
 
 
 def connect(config: GraphDBConfig | None = None, **kwargs: Any) -> GraphDatabase:
@@ -132,7 +142,8 @@ def connect(config: GraphDBConfig | None = None, **kwargs: Any) -> GraphDatabase
     cls = _BACKEND_REGISTRY.get(backend_name)
     if cls is None:
         raise ValueError(
-            f"Unknown backend '{backend_name}'. Available: {list(_BACKEND_REGISTRY.keys())}"
+            f"Unknown backend '{backend_name}'. "
+            f"Available: {list(_BACKEND_REGISTRY.keys())}"
         )
 
     # Instantiate with backend-specific args
@@ -141,6 +152,13 @@ def connect(config: GraphDBConfig | None = None, **kwargs: Any) -> GraphDatabase
             uri=config.uri,
             auth=(config.username, config.password),
             database=config.database,
+        )
+    elif backend_name == "trs_graph":
+        db = cls(
+            base_url=config.uri,
+            graph_space=config.database,
+            timeout=config.connection_timeout,
+            api_key=config.auth or None,
         )
     else:
         db = cls()

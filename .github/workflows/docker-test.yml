@@ -11,7 +11,6 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      GRAPH_DB_PASSWORD: ${{ secrets.GRAPH_DB_PASSWORD }}
       LLM_API_KEY: ${{ secrets.GLM_API_KEY }}
       ZHIPUAI_API_KEY: ${{ secrets.GLM_API_KEY }}
 
@@ -22,11 +21,19 @@ jobs:
       - name: Create .env for docker compose
         run: |
           cat > .env <<EOF
-          GRAPH_DB_BACKEND=neo4j
-          GRAPH_DB_URI=bolt://neo4j:7687
-          GRAPH_DB_USERNAME=neo4j
-          GRAPH_DB_PASSWORD=${GRAPH_DB_PASSWORD}
-          GRAPH_DB_DATABASE=neo4j
+          GRAPH_DB_BACKEND=trsgraph
+          TRSGRAPH_HOST=127.0.0.1
+          TRSGRAPH_PORT=9669
+          TRSGRAPH_USERNAME=root
+          TRSGRAPH_PASSWORD=trsadmin
+          TRSGRAPH_SPACE=techkg
+          MYSQL_HOST=127.0.0.1
+          MYSQL_PORT=3306
+          MYSQL_DATABASE=techkg
+          MYSQL_USERNAME=root
+          MYSQL_PASSWORD=123456789
+          REDIS_HOST=127.0.0.1
+          REDIS_PORT=6379
           LLM_API_KEY=${LLM_API_KEY}
           ZHIPUAI_API_KEY=${ZHIPUAI_API_KEY}
           LLM_MODEL=glm-5.1
@@ -35,17 +42,22 @@ jobs:
       - name: Build Docker image
         run: docker compose build
 
-      - name: Deploy FastAPI and Neo4j
+      - name: Deploy FastAPI
         run: docker compose up -d
 
       - name: Wait for services to be ready
         run: |
           echo "Waiting for FastAPI to start..."
           sleep 20
-          curl -f http://localhost:8000/docs
+          docker compose exec -T api python - <<'PY'
+          import urllib.request
+
+          response = urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=5)
+          assert response.read().decode() == '{"status":"ok"}'
+          PY
 
       - name: Run integration tests
-        run: docker compose exec -T api env PYTHONPATH=. uv run pytest tests/integration -v
+        run: docker compose exec -T api env PYTHONPATH=. uv run pytest tests/integration -m "not external" -v
 
       - name: Tear down
         if: always()

@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS dwd_zh_paper_reference (
+    `logical_id` VARCHAR(128) NOT NULL COMMENT '标题信息表逻辑主键',
+    `paper_id` VARCHAR(64) NOT NULL COMMENT '文献记录的唯一主键标识。',
+    `publication_id` BIGINT NOT NULL COMMENT '关联出版物的id，用于获取期刊详情信息',
+    `reference_doi` VARCHAR(512) NOT NULL COMMENT '论文的唯一标识编码。',
+    `reference_name_zh` VARCHAR(1024) COMMENT '参考文献的中文标题名称。',
+    `reference_publication_name_zh` VARCHAR(1024) COMMENT '参考文献出版物的中文名称。',
+    `reference_year` YEAR COMMENT '文献正式发表的年份。',
+    `reference_volume` VARCHAR(128) COMMENT '参考文献发表所在期刊的卷号。',
+    `reference_issue` VARCHAR(128) COMMENT '参考文献发表所在期刊的期号。',
+    `reference_first_page` VARCHAR(255) COMMENT '参考文献在期刊中的起始页码。',
+    `reference_last_page` VARCHAR(255) COMMENT '参考文献在期刊中的结束页码。',
+    `data_source` VARCHAR(255) NOT NULL COMMENT '来源贴源库表名',
+    `created_time` DATETIME NOT NULL COMMENT '数据在要素库中的创建时间。',
+    `updated_time` DATETIME NOT NULL COMMENT '该条数据最近一次更新的时间。',
+    KEY `idx_06_logical_id` (`logical_id`),
+    KEY `idx_06_paper_id` (`paper_id`),
+    KEY `idx_06_publication_id` (`publication_id`),
+    KEY `idx_06_reference_doi` (`reference_doi`),
+    KEY `idx_06_reference_publication_name_zh` (`reference_publication_name_zh`(191)),
+    KEY `idx_06_reference_year` (`reference_year`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='中文论文参考文献信息';

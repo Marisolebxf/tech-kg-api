@@ -8,22 +8,5 @@ services:
       - .env
     volumes:
       - ./backend:/app
-    command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    depends_on:
-      - neo4j
+    command: uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped
-
-  neo4j:
-    image: neo4j:5.15-community
-    container_name: tech-kg-neo4j
-    ports:
-      - "7474:7474"
-      - "7687:7687"
-    environment:
-      - NEO4J_AUTH=neo4j/${GRAPH_DB_PASSWORD}
-    volumes:
-      - neo4j_data:/data
-    restart: unless-stopped
-
-volumes:
-  neo4j_data:

@@ -1,5 +1,5 @@
-# 使用 Python 3.13 slim 镜像
-FROM python:3.13-slim
+# 使用 Python 3.11.13 slim 镜像
+FROM python:3.11.13-slim
 
 # 设置工作目录
 WORKDIR /app
@@ -20,4 +20,4 @@ COPY . .
 EXPOSE 8000
 
 # 启动命令
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

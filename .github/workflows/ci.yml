@@ -15,7 +15,12 @@ jobs:
         working-directory: backend
 
     env:
-      GRAPH_DB_PASSWORD: ${{ secrets.GRAPH_DB_PASSWORD }}
+      GRAPH_DB_BACKEND: trsgraph
+      TRSGRAPH_HOST: 127.0.0.1
+      TRSGRAPH_PORT: 9669
+      TRSGRAPH_USERNAME: root
+      TRSGRAPH_PASSWORD: trsadmin
+      TRSGRAPH_SPACE: techkg
       LLM_API_KEY: ${{ secrets.GLM_API_KEY }}
       ZHIPUAI_API_KEY: ${{ secrets.GLM_API_KEY }}
 
@@ -35,10 +40,5 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
-      - name: Run unit tests if present
-        run: |
-          if [ -d tests/unit ]; then
-            PYTHONPATH=. uv run pytest tests/unit -v
-          else
-            echo "No unit tests found, skipping."
-          fi
+      - name: Run unit and non-external integration tests
+        run: PYTHONPATH=. uv run pytest tests -m "not external" -v

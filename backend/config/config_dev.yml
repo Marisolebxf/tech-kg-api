@@ -1,0 +1,56 @@
+app:
+  name: tech-kg-api
+  env: dev
+  debug: true
+
+server:
+  host: 0.0.0.0
+  port: 8000
+  reload: true
+
+mysql:
+  host: ${MYSQL_HOST:127.0.0.1}
+  port: ${MYSQL_PORT:3306}
+  database: ${MYSQL_DATABASE:techkg}
+  username: ${MYSQL_USERNAME:root}
+  password: ${MYSQL_PASSWORD:123456789}
+  pool_size: 10
+  max_overflow: 20
+
+redis:
+  host: ${REDIS_HOST:127.0.0.1}
+  port: ${REDIS_PORT:6379}
+  password: ${REDIS_PASSWORD:}
+  database: ${REDIS_DATABASE:0}
+
+graph_db:
+  backend: ${GRAPH_DB_BACKEND:trsgraph}
+  host: ${TRSGRAPH_HOST:127.0.0.1}
+  port: ${TRSGRAPH_PORT:9669}
+  username: ${TRSGRAPH_USERNAME:root}
+  password: ${TRSGRAPH_PASSWORD:trsadmin}
+  space: ${TRSGRAPH_SPACE:techkg}
+  max_connection_pool_size: ${GRAPH_DB_MAX_CONNECTION_POOL_SIZE:50}
+  connection_timeout: ${GRAPH_DB_CONNECTION_TIMEOUT:30}
+
+kafka:
+  bootstrap_servers: ${KAFKA_BOOTSTRAP_SERVERS:127.0.0.1:9092}
+  consumer_group: ${KAFKA_CONSUMER_GROUP:techkg}
+
+milvus:
+  host: ${MILVUS_HOST:127.0.0.1}
+  port: ${MILVUS_PORT:19530}
+
+llm:
+  api_key: ${LLM_API_KEY:${ZHIPUAI_API_KEY:}}
+  base_url: ${LLM_BASE_URL:https://open.bigmodel.cn/api/paas/v4}
+  model: ${LLM_MODEL:${MODEL:glm-5.1}}
+
+observability:
+  service_name: tech-kg-api
+  otlp_endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:}
+  trace_enabled: true
+
+logging:
+  level: DEBUG
+  json: false

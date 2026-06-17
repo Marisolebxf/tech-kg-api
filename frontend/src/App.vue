@@ -248,6 +248,7 @@ function splitNodeTitle(title: string) {
 
 const detailRows = computed(() => {
   const center = centerNode.value
+  if (!center) return []
   const centerInfo = splitNodeTitle(center.title)
   const rows = [
     [centerInfo.label, centerInfo.name],

@@ -504,7 +504,13 @@ const flowSteps = [
 ]
 
 function runTest() {
+  loadEnterpriseRelation()
   resultTab.value = 'structured'
+}
+
+function saveParamsAndRun() {
+  showParams.value = false
+  loadEnterpriseRelation()
 }
 
 function cloneNodes(nodes: GraphNode[]) {
@@ -1086,7 +1092,7 @@ function openMonthPicker() {
     </main>
 
     <div v-if="showParams" class="modal-mask" role="dialog" aria-modal="true" aria-label="测试参数设置">
-      <form class="param-modal" @submit.prevent="showParams = false">
+      <form class="param-modal" @submit.prevent="saveParamsAndRun">
         <header>
           <h2>
             <span class="param-title-icon" aria-hidden="true">

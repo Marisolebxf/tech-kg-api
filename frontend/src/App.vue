@@ -287,7 +287,7 @@ const params = ref({
 const requestRows = [
   ['scholarId', 'string', '是', '专家ID'],
   ['enterpriseId', 'string', '是', '企业ID'],
-  ['relationType', 'string', '是', '关联关系类型（任职/合作/研发合作/项目合作/技术合作）'],
+  ['relationType', 'string', '是', '关联关系类型'],
 ]
 
 const responseRows = [
@@ -890,7 +890,6 @@ function zoomGraph(event: WheelEvent) {
             <div class="table-grid">
               <section class="doc-table">
                 <h2>请求参数</h2>
-                <div class="doc-table-scroll">
                 <table>
                   <thead>
                     <tr>
@@ -909,7 +908,6 @@ function zoomGraph(event: WheelEvent) {
                     </tr>
                   </tbody>
                 </table>
-                </div>
               </section>
 
               <section class="doc-table">

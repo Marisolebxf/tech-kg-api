@@ -1397,7 +1397,7 @@ td {
 }
 
 .doc-table-scroll {
-  max-height: 168px;
+  max-height: 142px;
   overflow-y: auto;
   border: 1px solid #e5e7eb;
   border-radius: 6px;

@@ -85,6 +85,29 @@ def test_build_does_not_duplicate_existing_relation_type():
     assert "任职/合作/任职" not in stmt
 
 
+def test_response_dedupes_multiple_edges_to_same_enterprise():
+    scholar = _node({"name_zh": "张三"})
+    org1 = _node({"org_id": "ENT001", "name_cn": "华智科技"})
+    # 同一企业多条边（不同 rank，历史遗留）
+    edge_a = MagicMock(id="S001->ENT001@0", target_id="ENT001", properties={"relation_type": "任职"})
+    edge_b = MagicMock(id="S001->ENT001@2", target_id="ENT001", properties={"relation_type": "研发合作"})
+    nodes = {"S001": scholar, "ENT001": org1}  # E001 不存在 → 不构建，只返回现有关系
+
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(nid))
+    graph.execute_write = MagicMock()
+    graph.get_node_edges = MagicMock(return_value=[edge_a, edge_b])
+
+    svc = ExpertEnterpriseRelationService()
+    svc._graph = graph  # noqa: SLF001
+    resp = svc.build({"scholarId": "S001", "enterpriseId": "E001", "relationType": "合作"})
+    # 同一企业只出现一次，关系类型合并
+    assert len(resp["relations"]) == 1
+    assert resp["relations"][0]["enterpriseId"] == "ENT001"
+    assert resp["relations"][0]["enterpriseName"] == "华智科技"
+    assert resp["relations"][0]["relationType"] == "任职/研发合作"
+
+
 def test_build_scholar_missing():
     graph = MagicMock()
     graph.get_node = MagicMock(return_value=None)

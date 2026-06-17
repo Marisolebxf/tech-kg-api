@@ -33,18 +33,18 @@ SCHEMA_DDL: list[str] = [
 
 
 def init_schema() -> None:
-    settings = TRSGraphSettings.from_env()
     # 1) 在默认空间上下文建 techkg 空间
-    bootstrap = TRSGraphClient(settings)
+    bootstrap = TRSGraphClient(TRSGraphSettings.from_env())
     bootstrap.connect()
     try:
         for stmt in CREATE_SPACE_DDL:
             bootstrap.execute_write(stmt)
     finally:
         bootstrap.close()
-    # 2) 切到 techkg 建 schema
-    techkg = TRSGraphClient(settings)
-    techkg._settings.space = "techkg"  # noqa: SLF001
+    # 2) 切到 techkg 建 schema（独立 settings，避免共享引用被改）
+    techkg_settings = TRSGraphSettings.from_env()
+    techkg_settings.space = "techkg"
+    techkg = TRSGraphClient(techkg_settings)
     techkg.connect()
     try:
         for stmt in SCHEMA_DDL:

@@ -38,9 +38,9 @@ const showFeatureMenu = ref(false)
 const isReasoningExpanded = ref(true)
 const activeFeatureLabel = ref('重点科技企业关系')
 const activeSubFunctionName = ref('专家-企业关系构建')
-const graphWidth = 1080
-const graphHeight = 720
-const graphZoom = ref(0.68)
+const graphWidth = 1320
+const graphHeight = 960
+const graphZoom = ref(0.56)
 
 const graphStageRef = ref<HTMLElement | null>(null)
 const activeDrag = ref<{ key: GraphNodeKey; offsetX: number; offsetY: number } | null>(null)
@@ -218,7 +218,7 @@ async function loadEnterpriseRelation() {
     const rels: any[] = Array.isArray(data.relations) ? data.relations : []
     const cx = graphWidth / 2
     const cy = graphHeight / 2
-    const radius = 280
+    const radius = 380
     const n = rels.length
     graphNodes.value = [
       { key: 'expert', title: `专家：${data.scholarName ?? params.value.scholarId}`, subtitle: '专家', x: cx - 150, y: cy - 47, width: 300, height: 94, kind: 'expert' },

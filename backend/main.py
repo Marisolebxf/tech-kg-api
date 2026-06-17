@@ -4,15 +4,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from biz.router.register import register_routers
-from infra.graph_db import close_trs_graph_client
+from infra.graph_db import close_techkg_client, close_trs_graph_client
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """trs-graph client connects lazily on first use; close on shutdown."""
+    """trs-graph clients connect lazily on first use; close on shutdown."""
     try:
         yield
     finally:
+        close_techkg_client()
         close_trs_graph_client()
 
 

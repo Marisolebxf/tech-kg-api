@@ -4,7 +4,7 @@ import { computed, ref } from 'vue'
 type MainTab = 'test' | 'developer'
 type ResultTab = 'structured' | 'api'
 type CodeTab = 'Python' | 'Node.js' | 'cURL'
-type GraphNodeKey = 'expert' | 'company1' | 'company2' | 'company3' | 'company4' | 'company5'
+type GraphNodeKey = string
 
 interface GraphNode {
   key: GraphNodeKey
@@ -202,31 +202,29 @@ async function loadEnterpriseRelation() {
   loading.value = true
   apiError.value = ''
   try {
-    const relationTypes = params.value.relationTypes
-      .split(',')
-      .map((s: string) => s.trim())
-      .filter(Boolean)
     const resp = await fetch(currentApiPath.value, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         scholarId: params.value.scholarId,
         enterpriseId: params.value.enterpriseId,
-        relationTypes,
+        relationType: params.value.relationType,
       }),
     })
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     const data = await resp.json()
     buildResult.value = data
+    // 画板：中心专家 + 该专家全部企业关系
+    const rels: any[] = Array.isArray(data.relations) ? data.relations : []
     graphNodes.value = [
       { key: 'expert', title: `专家：${data.scholarName ?? params.value.scholarId}`, subtitle: '专家', x: 412, y: 292, width: 300, height: 94, kind: 'expert' },
-      {
-        key: 'company1' as GraphNodeKey,
-        title: `企业：${data.enterpriseName ?? params.value.enterpriseId}`,
+      ...rels.map((r: any, i: number) => ({
+        key: `company${i + 1}` as GraphNodeKey,
+        title: `企业：${r.enterpriseName ?? r.enterpriseId}`,
         subtitle: '企业',
-        relation: relationTypes.join(' / ') || '-',
-        x: 35, y: 45, width: 360, height: 110, kind: 'company' as const,
-      },
+        relation: r.relationType || '-',
+        x: 35 + (i % 3) * 360, y: 45 + Math.floor(i / 3) * 250, width: 360, height: 110, kind: 'company' as const,
+      })),
     ]
   } catch (e: any) {
     apiError.value = e.message || String(e)
@@ -269,15 +267,11 @@ const apiExample = computed(() =>
     buildResult.value ?? {
       status: 'success',
       scholarId: params.value.scholarId,
-      enterpriseId: params.value.enterpriseId,
-      relations: params.value.relationTypes
-        .split(',')
-        .map((s: string, i: number) => ({
-          relationId: `${params.value.scholarId}->${params.value.enterpriseId}@${i}`,
-          relationType: s.trim(),
-          effective: true,
-        }))
-        .filter((r: any) => r.relationType),
+      scholarName: '',
+      builtRelationId: `${params.value.scholarId}->${params.value.enterpriseId}@0`,
+      relationType: params.value.relationType,
+      effective: true,
+      relations: [],
     },
     null,
     2,
@@ -287,25 +281,27 @@ const apiExample = computed(() =>
 const params = ref({
   scholarId: 'E10001',
   enterpriseId: 'ENT001',
-  relationTypes: 'employment,advisor,rd_cooperation',
+  relationType: '任职',
 })
 
 const requestRows = [
   ['scholarId', 'string', '是', '专家ID'],
   ['enterpriseId', 'string', '是', '企业ID'],
-  ['relationTypes', 'array', '是', '关联关系类型列表'],
+  ['relationType', 'string', '是', '关联关系类型（任职/合作/研发合作/项目合作/技术合作）'],
 ]
 
 const responseRows = [
   ['status', 'string', '状态'],
   ['scholarId', 'string', '专家ID'],
   ['scholarName', 'string', '专家姓名'],
-  ['enterpriseId', 'string', '企业ID'],
-  ['enterpriseName', 'string', '企业名称'],
-  ['relations', 'array', '构建的关系列表'],
+  ['builtRelationId', 'string', '构建的关系ID'],
+  ['relationType', 'string', '关系类型标签'],
+  ['effective', 'boolean', '生效标识'],
+  ['relations', 'array', '该人才全部企业关系'],
   ['relations[].relationId', 'string', '关系ID'],
+  ['relations[].enterpriseId', 'string', '企业ID'],
+  ['relations[].enterpriseName', 'string', '企业名称'],
   ['relations[].relationType', 'string', '关系类型标签'],
-  ['relations[].effective', 'boolean', '生效标识'],
 ]
 
 const pythonCodeExample = computed(() => `import requests
@@ -314,7 +310,7 @@ url = "http://localhost:3001${currentApiPath.value}"
 payload = {
     "scholarId": "${params.value.scholarId}",
     "enterpriseId": "${params.value.enterpriseId}",
-    "relationTypes": [${params.value.relationTypes.split(',').map((s: string) => `"${s.trim()}"`).filter(Boolean).join(', ')}]
+    "relationType": "${params.value.relationType}"
 }
 
 response = requests.post(url, json=payload)
@@ -328,7 +324,7 @@ const nodeCodeExample = computed(() => `const response = await fetch("http://loc
   body: JSON.stringify({
     scholarId: "${params.value.scholarId}",
     enterpriseId: "${params.value.enterpriseId}",
-    relationTypes: [${params.value.relationTypes.split(',').map((s: string) => `"${s.trim()}"`).filter(Boolean).join(', ')}]
+    relationType: "${params.value.relationType}"
   })
 })
 
@@ -340,7 +336,7 @@ const curlCodeExample = computed(() => `curl -X POST "http://localhost:3001${cur
   -d '{
     "scholarId": "${params.value.scholarId}",
     "enterpriseId": "${params.value.enterpriseId}",
-    "relationTypes": [${params.value.relationTypes.split(',').map((s: string) => `"${s.trim()}"`).filter(Boolean).join(', ')}]
+    "relationType": "${params.value.relationType}"
   }'`)
 
 const codeExample = computed(() => {
@@ -1016,8 +1012,14 @@ function zoomGraph(event: WheelEvent) {
           <input v-model="params.enterpriseId" placeholder="企业ID" />
         </label>
         <label class="param-field required">
-          <span>relationTypes</span>
-          <input v-model="params.relationTypes" placeholder="逗号分隔，如 employment,advisor,rd_cooperation" />
+          <span>relationType</span>
+          <select v-model="params.relationType">
+            <option>任职</option>
+            <option>合作</option>
+            <option>研发合作</option>
+            <option>项目合作</option>
+            <option>技术合作</option>
+          </select>
         </label>
 
         <footer>

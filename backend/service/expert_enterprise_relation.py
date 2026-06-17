@@ -1,4 +1,4 @@
-"""专家-企业关系构建服务（向 techkg 图写入 EMPLOYED_BY 边）。"""
+"""专家-企业关系构建服务（向 techkg 图写入 EMPLOYED_BY 边并返回该专家全部企业关系）。"""
 
 from __future__ import annotations
 
@@ -6,6 +6,15 @@ from typing import Any
 
 from infra.graph_db import TRSGraphClient, get_techkg_client
 from service.base_module import KGModuleScaffoldService
+
+# 关系类型 → 边 rank（同专家-企业对不同关系类型用不同 rank，幂等）
+RELATION_RANK: dict[str, int] = {
+    "任职": 0,
+    "合作": 1,
+    "研发合作": 2,
+    "项目合作": 3,
+    "技术合作": 4,
+}
 
 
 class ExpertEnterpriseRelationService(KGModuleScaffoldService):
@@ -23,54 +32,59 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
     def build(self, payload: dict[str, Any]) -> dict[str, Any]:
         scholar_id = payload.get("scholarId", "")
         enterprise_id = payload.get("enterpriseId", "")
-        relation_types = payload.get("relationTypes", []) or []
+        relation_type = payload.get("relationType", "")
         graph = self._client()
 
-        def _result(effective: bool) -> list[dict[str, Any]]:
-            return [
-                {
-                    "relationId": f"{scholar_id}->{enterprise_id}@{i}",
-                    "relationType": rt,
-                    "effective": effective,
-                }
-                for i, rt in enumerate(relation_types)
-            ]
-
-        # 1) 两端节点必须存在，并取名称
         scholar = graph.get_node(scholar_id)
-        enterprise = graph.get_node(enterprise_id)
         scholar_name = scholar.properties.get("name_zh") if scholar else None
-        enterprise_name = enterprise.properties.get("name_cn") if enterprise else None
-        if scholar is None or enterprise is None:
-            return {
-                "status": "success",
-                "scholarId": scholar_id,
-                "enterpriseId": enterprise_id,
-                "scholarName": scholar_name,
-                "enterpriseName": enterprise_name,
-                "relations": _result(False),
-            }
 
-        # 2) 对每个关系类型写一条 EMPLOYED_BY 边（rank=index）
+        built_relation_id: str | None = None
+        effective = False
+        if scholar is not None:
+            enterprise = graph.get_node(enterprise_id)
+            if enterprise is not None and relation_type:
+                rank = RELATION_RANK.get(relation_type, 0)
+                built_relation_id = f"{scholar_id}->{enterprise_id}@{rank}"
+                stmt = (
+                    f"INSERT EDGE EMPLOYED_BY(relation_type,role,start_date,end_date,source) "
+                    f'VALUES "{scholar_id}"->"{enterprise_id}"@{rank}:'
+                    f'("{relation_type}","","","","build");'
+                )
+                try:
+                    graph.execute_write(stmt)
+                    effective = True
+                except Exception:
+                    effective = False
+
+        # 查询该专家的全部企业关系（含刚构建的）
         relations: list[dict[str, Any]] = []
-        for i, rt in enumerate(relation_types):
-            rid = f"{scholar_id}->{enterprise_id}@{i}"
-            stmt = (
-                f"INSERT EDGE EMPLOYED_BY(relation_type,role,start_date,end_date,source) "
-                f'VALUES "{scholar_id}"->"{enterprise_id}"@{i}:'
-                f'("{rt}","","","","build");'
-            )
+        if scholar is not None:
             try:
-                graph.execute_write(stmt)
-                relations.append({"relationId": rid, "relationType": rt, "effective": True})
+                edges = graph.get_node_edges(
+                    scholar_id, direction="out", edge_type="EMPLOYED_BY", limit=100
+                )
             except Exception:
-                relations.append({"relationId": rid, "relationType": rt, "effective": False})
+                edges = []
+            for e in edges:
+                org = graph.get_node(e.target_id)
+                if org is None:
+                    continue
+                op = org.properties
+                relations.append(
+                    {
+                        "relationId": e.id,
+                        "enterpriseId": str(op.get("org_id", e.target_id)),
+                        "enterpriseName": op.get("name_cn", "") or "",
+                        "relationType": e.properties.get("relation_type", "") or "",
+                    }
+                )
 
         return {
             "status": "success",
             "scholarId": scholar_id,
-            "enterpriseId": enterprise_id,
             "scholarName": scholar_name,
-            "enterpriseName": enterprise_name,
+            "builtRelationId": built_relation_id,
+            "relationType": relation_type,
+            "effective": effective,
             "relations": relations,
         }

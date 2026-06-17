@@ -38,16 +38,17 @@ class TestExpertEnterpriseAPI:
                 json={
                     "scholarId": "E10001",
                     "enterpriseId": "ENT001",
-                    "relationTypes": ["employment", "advisor", "rd_cooperation"],
+                    "relationType": "任职",
                 },
             )
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "success"
         assert data["scholarId"] == "E10001"
-        assert data["enterpriseId"] == "ENT001"
         assert data["scholarName"] == "张明远"
-        assert data["enterpriseName"] == "华智科技有限公司"
+        assert data["builtRelationId"] == "E10001->ENT001@0"
+        assert data["relationType"] == "任职"
+        assert data["effective"] is True
+        # 返回该专家全部企业关系
         assert isinstance(data["relations"], list)
-        assert len(data["relations"]) == 3
-        assert all(r["effective"] for r in data["relations"])
+        assert any(r["enterpriseId"] == "ENT001" for r in data["relations"])

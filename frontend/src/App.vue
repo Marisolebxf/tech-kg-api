@@ -302,7 +302,7 @@ async function loadEnterpriseRelation() {
   }
 }
 
-watch(activeSubFunctionName, (v) => { if (v === '专家-企业关系构建') loadEnterpriseRelation() })
+watch(activeSubFunctionName, (v) => { if (v === '专家-企业关系构建') loadEnterpriseRelation() }, { immediate: true })
 
 const companyNodes = computed(() => graphNodes.value.filter((node) => node.kind === 'company'))
 const centerNode = computed(() => graphNodes.value.find((node) => node.kind === 'expert') ?? graphNodes.value[0])

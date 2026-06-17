@@ -1,7 +1,1184 @@
 <script setup lang="ts">
-import HelloWorld from './components/HelloWorld.vue'
+import { computed, ref } from 'vue'
+
+type MainTab = 'test' | 'developer'
+type ResultTab = 'structured' | 'api'
+type CodeTab = 'Python' | 'Node.js' | 'cURL'
+type GraphNodeKey = 'expert' | 'company1' | 'company2' | 'company3' | 'company4' | 'company5'
+
+interface GraphNode {
+  key: GraphNodeKey
+  title: string
+  subtitle: string
+  relation?: string
+  x: number
+  y: number
+  width: number
+  height: number
+  kind: 'expert' | 'company'
+}
+
+interface RelationSubFunction {
+  featureName: string
+  apiPath: string
+  nodes: GraphNode[]
+}
+
+interface RelationFeature {
+  navLabel: string
+  subFunctions: RelationSubFunction[]
+}
+
+const mainTab = ref<MainTab>('test')
+const resultTab = ref<ResultTab>('structured')
+const activeCodeTab = ref<CodeTab>('Python')
+const showParams = ref(false)
+const showTechPlan = ref(false)
+const showFeatureMenu = ref(false)
+const isReasoningExpanded = ref(true)
+const activeFeatureLabel = ref('重点科技企业关系')
+const activeSubFunctionName = ref('专家-企业关系构建')
+const graphWidth = 1080
+const graphHeight = 720
+const graphZoom = ref(0.68)
+const datePickerMode = ref<'start' | 'end'>('start')
+const monthPickerRef = ref<HTMLInputElement | null>(null)
+
+const graphStageRef = ref<HTMLElement | null>(null)
+const activeDrag = ref<{ key: GraphNodeKey; offsetX: number; offsetY: number } | null>(null)
+
+const enterpriseGraphNodes: GraphNode[] = [
+  {
+    key: 'expert',
+    title: '专家A：张明远',
+    subtitle: '人工智能专家',
+    x: 412,
+    y: 292,
+    width: 300,
+    height: 94,
+    kind: 'expert',
+  },
+  {
+    key: 'company1',
+    title: '企业1：华智科技有限公司',
+    subtitle: '重点关注企业',
+    relation: '任职',
+    x: 35,
+    y: 45,
+    width: 360,
+    height: 88,
+    kind: 'company',
+  },
+  {
+    key: 'company2',
+    title: '企业2：启航智造科技有限公司',
+    subtitle: '重点关注企业',
+    relation: '顾问',
+    x: 685,
+    y: 45,
+    width: 360,
+    height: 88,
+    kind: 'company',
+  },
+  {
+    key: 'company3',
+    title: '企业3：中科创新装备有限公司',
+    subtitle: '重点关注企业',
+    relation: '研发合作',
+    x: 20,
+    y: 500,
+    width: 360,
+    height: 88,
+    kind: 'company',
+  },
+  {
+    key: 'company4',
+    title: '企业4：云启数据技术有限公司',
+    subtitle: '重点关注企业',
+    relation: '技术合作',
+    x: 700,
+    y: 500,
+    width: 360,
+    height: 88,
+    kind: 'company',
+  },
+  {
+    key: 'company5',
+    title: '企业5：未来芯片科技有限公司',
+    subtitle: '重点关注企业',
+    relation: '项目合作',
+    x: 390,
+    y: 610,
+    width: 360,
+    height: 88,
+    kind: 'company',
+  },
+]
+
+function makeRelationGraph(
+  centerTitle: string,
+  targetPrefix: string,
+  targetSubtitle: string,
+  relations: string[],
+): GraphNode[] {
+  return [
+    {
+      key: 'expert',
+      title: centerTitle,
+      subtitle: '人工智能专家',
+      x: 412,
+      y: 292,
+      width: 300,
+      height: 94,
+      kind: 'expert',
+    },
+    ...relations.map((relation, index) => {
+      const positions = [
+        { key: 'company1' as GraphNodeKey, x: 35, y: 45 },
+        { key: 'company2' as GraphNodeKey, x: 685, y: 45 },
+        { key: 'company3' as GraphNodeKey, x: 20, y: 500 },
+        { key: 'company4' as GraphNodeKey, x: 700, y: 500 },
+        { key: 'company5' as GraphNodeKey, x: 390, y: 610 },
+      ]
+      const position = positions[index]
+
+      return {
+        key: position.key,
+        title: `${targetPrefix}${index + 1}：${['李佳宁', '王子涵', '陈思远', '赵明轩', '刘若溪'][index]}`,
+        subtitle: targetSubtitle,
+        relation,
+        x: position.x,
+        y: position.y,
+        width: 360,
+        height: 88,
+        kind: 'company' as const,
+      }
+    }),
+  ]
+}
+
+const relationFeatures: RelationFeature[] = [
+  {
+    navLabel: '科技专家直接关系',
+    subFunctions: [
+      {
+        featureName: '科技专家直接关系构建',
+        apiPath: '/api/v1/expert/direct-relation/build',
+        nodes: makeRelationGraph('专家A：张明远', '专家', '科技专家', ['论文合作', '项目合作', '同事', '校友', '共同专利']),
+      },
+    ],
+  },
+  {
+    navLabel: '科技节点间接关系',
+    subFunctions: [
+      {
+        featureName: '科技节点间接关系构建',
+        apiPath: '/api/v1/tech-node/indirect-relation/build',
+        nodes: makeRelationGraph('节点A：人工智能', '节点', '科技节点', ['上位概念', '关联方向', '应用场景', '技术路径', '成果转化']),
+      },
+    ],
+  },
+  {
+    navLabel: '科技两点合作成果',
+    subFunctions: [
+      {
+        featureName: '科技两点合作成果构建',
+        apiPath: '/api/v1/tech-node/collaboration-result/build',
+        nodes: makeRelationGraph('节点A：人工智能', '成果', '合作成果', ['论文成果', '专利成果', '项目成果', '标准成果', '奖项成果']),
+      },
+    ],
+  },
+  {
+    navLabel: '科技专家同事关系',
+    subFunctions: [
+      {
+        featureName: '科技专家同事关系构建',
+        apiPath: '/api/v1/expert/colleague-relation/build',
+        nodes: makeRelationGraph('专家A：张明远', '专家', '科技专家', ['同单位', '同部门', '联合项目', '共同论文', '共同专利']),
+      },
+    ],
+  },
+  {
+    navLabel: '科技专家校友关系',
+    subFunctions: [
+      {
+        featureName: '科技专家校友关系构建',
+        apiPath: '/api/v1/expert/alumni-relation/build',
+        nodes: makeRelationGraph('专家A：张明远', '专家', '科技专家', ['本科校友', '硕士校友', '博士校友', '导师关系', '同实验室']),
+      },
+    ],
+  },
+  {
+    navLabel: '专家论文合作关系',
+    subFunctions: [
+      {
+        featureName: '专家论文合作关系构建',
+        apiPath: '/api/v1/expert/paper-collaboration/build',
+        nodes: makeRelationGraph('专家A：张明远', '论文', '合作论文', ['第一作者', '通讯作者', '共同作者', '同主题', '引用关系']),
+      },
+    ],
+  },
+  {
+    navLabel: '重点科技企业关系',
+    subFunctions: [
+      {
+        featureName: '专家-企业关系构建',
+        apiPath: '/api/v1/enterprise/relation/build',
+        nodes: enterpriseGraphNodes,
+      },
+    ],
+  },
+  {
+    navLabel: '产业链点事件关系',
+    subFunctions: [
+      {
+        featureName: '产业链点事件关系构建',
+        apiPath: '/api/v1/industry-chain/event-relation/build',
+        nodes: makeRelationGraph('链点A：核心零部件', '事件', '产业链事件', ['供应中断', '产能扩张', '政策影响', '技术替代', '价格波动']),
+      },
+    ],
+  },
+  {
+    navLabel: '科技产业链全景图',
+    subFunctions: [
+      {
+        featureName: '科技产业链全景图构建',
+        apiPath: '/api/v1/industry-chain/panorama/build',
+        nodes: makeRelationGraph('链点A：核心零部件', '链点', '产业链节点', ['上游供应', '中游制造', '下游应用', '关键企业', '风险事件']),
+      },
+    ],
+  },
+]
+
+const currentFeature = computed(
+  () => relationFeatures.find((feature) => feature.navLabel === activeFeatureLabel.value) ?? relationFeatures[5],
+)
+const currentSubFunction = computed(
+  () =>
+    currentFeature.value.subFunctions.find((item) => item.featureName === activeSubFunctionName.value) ??
+    currentFeature.value.subFunctions[0],
+)
+const selectedFeature = computed(() => currentSubFunction.value.featureName)
+const featureOptions = computed(() => currentFeature.value.subFunctions.map((feature) => feature.featureName))
+const currentApiPath = computed(() => currentSubFunction.value.apiPath)
+const graphNodes = ref<GraphNode[]>(enterpriseGraphNodes.map((node) => ({ ...node })))
+
+const companyNodes = computed(() => graphNodes.value.filter((node) => node.kind === 'company'))
+const centerNode = computed(() => graphNodes.value.find((node) => node.kind === 'expert') ?? graphNodes.value[0])
+
+function splitNodeTitle(title: string) {
+  const [label, ...nameParts] = title.split('：')
+  return {
+    label: label || '节点',
+    name: nameParts.join('：') || title,
+  }
+}
+
+const detailRows = computed(() => {
+  const center = centerNode.value
+  const centerInfo = splitNodeTitle(center.title)
+  const rows = [
+    [centerInfo.label, centerInfo.name],
+    [`${centerInfo.label}类型`, center.subtitle],
+  ]
+
+  companyNodes.value.forEach((node) => {
+    const targetInfo = splitNodeTitle(node.title)
+    rows.push([targetInfo.label, targetInfo.name])
+    rows.push(['关系类型', node.relation ?? '-'])
+  })
+
+  return rows
+})
+
+const apiExample = computed(() => {
+  const center = centerNode.value
+  const centerInfo = splitNodeTitle(center.title)
+  return JSON.stringify(
+    {
+      feature: currentSubFunction.value.featureName,
+      source: {
+        id: center.key,
+        label: centerInfo.label,
+        name: centerInfo.name,
+        type: center.subtitle,
+      },
+      relations: companyNodes.value.map((node) => {
+        const targetInfo = splitNodeTitle(node.title)
+        return {
+          target_id: node.key,
+          target_label: targetInfo.label,
+          target_name: targetInfo.name,
+          target_type: node.subtitle,
+          relationType: node.relation,
+        }
+      }),
+      status: 'success',
+    },
+    null,
+    2,
+  )
+})
+
+const params = ref({
+  dataSource: '全部数据源',
+  expertAId: 'E10001',
+  relationType: '全部关系',
+  start: '2018.03',
+  end: '2022.12',
+})
+
+const requestRows = [
+  ['dataSource', 'string', '是', '数据来源'],
+  ['expertAId', 'string', '是', '专家唯一标识'],
+  ['relationType', 'string', '否', '关系类型'],
+  ['timeRange', 'object', '否', '时间范围'],
+]
+
+const responseRows = [
+  ['expert', 'string', '专家姓名'],
+  ['expert_id', 'string', '专家唯一标识'],
+  ['title', 'string', '专家职称'],
+  ['enterprises[]', 'array', '企业关系列表'],
+]
+
+const pythonCodeExample = computed(() => `import requests
+
+url = "http://localhost:3001${currentApiPath.value}"
+payload = {
+    "dataSource": "${params.value.dataSource === '全部数据源' ? 'all' : params.value.dataSource}",
+    "expertAId": "${params.value.expertAId}",
+    "relationType": "${params.value.relationType === '全部关系' ? 'all' : params.value.relationType}",
+    "timeRange": {
+        "start": "${params.value.start}",
+        "end": "${params.value.end}"
+    }
+}
+
+response = requests.post(url, json=payload)
+print(response.json())`)
+
+const nodeCodeExample = computed(() => `const response = await fetch("http://localhost:3001${currentApiPath.value}", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    dataSource: "${params.value.dataSource === '全部数据源' ? 'all' : params.value.dataSource}",
+    expertAId: "${params.value.expertAId}",
+    relationType: "${params.value.relationType === '全部关系' ? 'all' : params.value.relationType}",
+    timeRange: {
+      start: "${params.value.start}",
+      end: "${params.value.end}"
+    }
+  })
+})
+
+const data = await response.json()
+console.log(data)`)
+
+const curlCodeExample = computed(() => `curl -X POST "http://localhost:3001${currentApiPath.value}" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "dataSource": "${params.value.dataSource === '全部数据源' ? 'all' : params.value.dataSource}",
+    "expertAId": "${params.value.expertAId}",
+    "relationType": "${params.value.relationType === '全部关系' ? 'all' : params.value.relationType}",
+    "timeRange": {
+      "start": "${params.value.start}",
+      "end": "${params.value.end}"
+    }
+  }'`)
+
+const codeExample = computed(() => {
+  if (activeCodeTab.value === 'Node.js') return nodeCodeExample.value
+  if (activeCodeTab.value === 'cURL') return curlCodeExample.value
+  return pythonCodeExample.value
+})
+
+const pythonCodeLines = computed(() => [
+  [{ text: 'import requests', tone: 'keyword' }],
+  [],
+  [
+    { text: 'url', tone: 'plain' },
+    { text: ' = ', tone: 'muted' },
+    { text: `"http://localhost:3001${currentApiPath.value}"`, tone: 'soft' },
+  ],
+  [
+    { text: 'payload', tone: 'plain' },
+    { text: ' = ', tone: 'muted' },
+    { text: '{', tone: 'plain' },
+  ],
+  [
+    { text: '  "dataSource"', tone: 'string' },
+    { text: ': ', tone: 'muted' },
+    { text: '"all"', tone: 'string' },
+    { text: ',', tone: 'plain' },
+  ],
+  [
+    { text: '  "expertAId"', tone: 'string' },
+    { text: ': ', tone: 'muted' },
+    { text: '"E10001"', tone: 'string' },
+    { text: ',', tone: 'plain' },
+  ],
+  [
+    { text: '  "relationType"', tone: 'string' },
+    { text: ': ', tone: 'muted' },
+    { text: '"all"', tone: 'string' },
+    { text: ',', tone: 'plain' },
+  ],
+  [
+    { text: '  "timeRange"', tone: 'string' },
+    { text: ': ', tone: 'muted' },
+    { text: '{', tone: 'plain' },
+  ],
+  [
+    { text: '    "start"', tone: 'string' },
+    { text: ': ', tone: 'muted' },
+    { text: '"2018.03"', tone: 'string' },
+    { text: ',', tone: 'plain' },
+  ],
+  [
+    { text: '    "end"', tone: 'string' },
+    { text: ': ', tone: 'muted' },
+    { text: '"2022.12"', tone: 'string' },
+  ],
+  [{ text: '  }', tone: 'plain' }],
+  [{ text: '}', tone: 'plain' }],
+  [],
+  [
+    { text: 'response', tone: 'keyword' },
+    { text: ' = ', tone: 'muted' },
+    { text: 'requests.post', tone: 'keyword' },
+    { text: '(url, json=payload)', tone: 'plain' },
+  ],
+])
+
+const renderedCodeLines = computed(() => (activeCodeTab.value === 'Python' ? pythonCodeLines.value : null))
+
+const flowSteps = [
+  ['input', '输入数据', '接收专家ID、数据来源、关系类型与时间范围等测试参数'],
+  ['standardize', '标准化处理', '汇聚专家画像、企业标签、成果与合作记录等图谱数据'],
+  ['reasoning', '关系推理', '基于任职、合作与企业标签规则，推理专家-企业关系'],
+  ['output', '结果输出', '输出专家信息、企业关系列表和执行状态等结构化结果'],
+]
+
+function runTest() {
+  resultTab.value = 'structured'
+}
+
+function cloneNodes(nodes: GraphNode[]) {
+  return nodes.map((node) => ({ ...node }))
+}
+
+function selectFeatureByNav(navLabel: string) {
+  const feature = relationFeatures.find((item) => item.navLabel === navLabel)
+  if (!feature) return
+  const firstSubFunction = feature.subFunctions[0]
+
+  activeFeatureLabel.value = feature.navLabel
+  activeSubFunctionName.value = firstSubFunction.featureName
+  graphNodes.value = cloneNodes(firstSubFunction.nodes)
+  resultTab.value = 'structured'
+  showFeatureMenu.value = false
+}
+
+function selectFeatureByName(featureName: string) {
+  const subFunction = currentFeature.value.subFunctions.find((item) => item.featureName === featureName)
+  if (!subFunction) return
+
+  activeSubFunctionName.value = subFunction.featureName
+  graphNodes.value = cloneNodes(subFunction.nodes)
+  resultTab.value = 'structured'
+  showFeatureMenu.value = false
+}
+
+function getNode(key: GraphNodeKey) {
+  return graphNodes.value.find((node) => node.key === key)
+}
+
+function nodeStyle(node: GraphNode) {
+  return {
+    left: `${node.x}px`,
+    top: `${node.y}px`,
+    width: `${node.width}px`,
+    height: `${node.height}px`,
+    zIndex: activeDrag.value?.key === node.key ? 6 : 2,
+  }
+}
+
+const graphStageStyle = computed(() => ({
+  width: `${graphWidth}px`,
+  height: `${graphHeight}px`,
+  transform: `translate(-50%, -50%) scale(${graphZoom.value})`,
+}))
+
+function nodeCenter(node: GraphNode) {
+  return {
+    x: node.x + node.width / 2,
+    y: node.y + node.height / 2,
+  }
+}
+
+function boundaryPoint(node: GraphNode, toward: { x: number; y: number }) {
+  const center = nodeCenter(node)
+  const dx = toward.x - center.x
+  const dy = toward.y - center.y
+  const halfWidth = node.width / 2
+  const halfHeight = node.height / 2
+
+  if (dx === 0 && dy === 0) return center
+
+  const scaleX = dx === 0 ? Number.POSITIVE_INFINITY : halfWidth / Math.abs(dx)
+  const scaleY = dy === 0 ? Number.POSITIVE_INFINITY : halfHeight / Math.abs(dy)
+  const scale = Math.min(scaleX, scaleY)
+
+  return {
+    x: center.x + dx * scale,
+    y: center.y + dy * scale,
+  }
+}
+
+function relationPath(node: GraphNode) {
+  const expert = getNode('expert')
+  if (!expert) return ''
+
+  const from = nodeCenter(expert)
+  const to = nodeCenter(node)
+  const start = boundaryPoint(expert, to)
+  const end = boundaryPoint(node, from)
+  const verticalGap = Math.abs(end.y - start.y)
+  const control = {
+    x: (start.x + end.x) / 2,
+    y: (start.y + end.y) / 2 + (end.y < start.y ? -verticalGap * 0.42 : verticalGap * 0.18),
+  }
+
+  return `M ${start.x} ${start.y} Q ${control.x} ${control.y} ${end.x} ${end.y}`
+}
+
+function relationLabelStyle(node: GraphNode) {
+  const expert = getNode('expert')
+  if (!expert) return {}
+
+  const from = nodeCenter(expert)
+  const to = nodeCenter(node)
+  const dx = to.x - from.x
+  const dy = to.y - from.y
+  const length = Math.hypot(dx, dy) || 1
+  const normal = {
+    x: (-dy / length) * 28,
+    y: (dx / length) * 28,
+  }
+  const directionOffset = to.y < from.y ? -12 : 12
+
+  return {
+    left: `${(from.x + to.x) / 2 + normal.x - 34}px`,
+    top: `${(from.y + to.y) / 2 + normal.y + directionOffset - 18}px`,
+  }
+}
+
+function relationTone(relation = '') {
+  if (relation === '任职') return 'relation-blue'
+  if (relation === '顾问') return 'relation-purple'
+  return 'relation-orange'
+}
+
+function relationMarker(relation = '') {
+  if (relation === '任职') return 'url(#arrow-blue)'
+  if (relation === '顾问') return 'url(#arrow-purple)'
+  return 'url(#arrow-orange)'
+}
+
+function startDrag(event: PointerEvent, node: GraphNode) {
+  const stage = graphStageRef.value
+  if (!stage) return
+
+  const rect = stage.getBoundingClientRect()
+  const scaleX = graphWidth / rect.width
+  const scaleY = graphHeight / rect.height
+  activeDrag.value = {
+    key: node.key,
+    offsetX: (event.clientX - rect.left) * scaleX - node.x,
+    offsetY: (event.clientY - rect.top) * scaleY - node.y,
+  }
+  ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+}
+
+function dragNode(event: PointerEvent) {
+  const drag = activeDrag.value
+  const stage = graphStageRef.value
+  if (!drag || !stage) return
+
+  const node = getNode(drag.key)
+  if (!node) return
+
+  const rect = stage.getBoundingClientRect()
+  const scaleX = graphWidth / rect.width
+  const scaleY = graphHeight / rect.height
+  const nextX = (event.clientX - rect.left) * scaleX - drag.offsetX
+  const nextY = (event.clientY - rect.top) * scaleY - drag.offsetY
+
+  node.x = Math.max(0, Math.min(graphWidth - node.width, nextX))
+  node.y = Math.max(0, Math.min(graphHeight - node.height, nextY))
+}
+
+function stopDrag() {
+  activeDrag.value = null
+}
+
+function zoomGraph(event: WheelEvent) {
+  event.preventDefault()
+  const nextZoom = graphZoom.value + (event.deltaY > 0 ? -0.06 : 0.06)
+  graphZoom.value = Math.max(0.55, Math.min(1.25, Number(nextZoom.toFixed(2))))
+}
+
+function pickMonth(value: string) {
+  if (!value) return
+  const month = value.replace('-', '.')
+
+  if (datePickerMode.value === 'start') {
+    params.value.start = month
+    datePickerMode.value = 'end'
+  } else {
+    params.value.end = month
+    datePickerMode.value = 'start'
+  }
+}
+
+function openMonthPicker() {
+  const picker = monthPickerRef.value
+  if (!picker) return
+  const pickerWithShow = picker as HTMLInputElement & { showPicker?: () => void }
+
+  if (pickerWithShow.showPicker) {
+    pickerWithShow.showPicker()
+  } else {
+    picker.click()
+  }
+}
 </script>
 
 <template>
-  <HelloWorld />
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 64 64">
+            <defs>
+              <path id="logoTextTop" d="M12 31a20 20 0 0 1 40 0" />
+              <path id="logoTextBottom" d="M52 35a20 20 0 0 1-40 0" />
+            </defs>
+            <circle class="logo-ring-outer" cx="32" cy="32" r="29" />
+            <circle class="logo-ring-inner" cx="32" cy="32" r="22" />
+            <text class="logo-cn">
+              <textPath href="#logoTextTop" startOffset="50%" text-anchor="middle">赛知图谱科技馆</textPath>
+            </text>
+            <text class="logo-en">
+              <textPath href="#logoTextBottom" startOffset="50%" text-anchor="middle">ScienceCorpus</textPath>
+            </text>
+            <path class="logo-brain" d="M25 24c-4 1-7 4-7 8 0 5 4 8 9 8h12c5 0 8-4 8-9 0-5-4-9-9-9-2-4-8-5-13-2" />
+            <path class="logo-brain" d="M24 27c4 0 6 2 7 5" />
+            <path class="logo-brain" d="M34 23c1 4 0 7-3 9" />
+            <path class="logo-brain" d="M39 28c-2 2-5 3-8 2" />
+            <path class="logo-line" d="M25 39v8" />
+            <path class="logo-line" d="M32 39v13" />
+            <path class="logo-line" d="M39 39v8" />
+            <circle class="logo-dot" cx="25" cy="48" r="1.8" />
+            <circle class="logo-dot" cx="32" cy="53" r="1.8" />
+            <circle class="logo-dot" cx="39" cy="48" r="1.8" />
+          </svg>
+        </span>
+        <strong>知识图谱平台</strong>
+        <button class="sidebar-toggle" type="button" aria-label="折叠侧边栏">
+          <span></span>
+          <span></span>
+          <span></span>
+        </button>
+      </div>
+
+      <nav class="nav-list" aria-label="主导航">
+        <button class="nav-item" type="button">
+          <span class="nav-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <circle cx="7" cy="6" r="3" />
+              <circle cx="17" cy="6" r="3" />
+              <circle cx="7" cy="18" r="3" />
+              <path d="M10 6h4" />
+              <path d="M7 9v6" />
+              <path d="M10 18h8" />
+            </svg>
+          </span>
+          <span>流程编排</span>
+          <span class="nav-caret" aria-hidden="true"></span>
+        </button>
+        <button class="nav-item" type="button">
+          <span class="nav-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <rect x="8" y="3" width="8" height="5" rx="1.5" />
+              <circle cx="5" cy="19" r="2" />
+              <circle cx="12" cy="19" r="2" />
+              <circle cx="19" cy="19" r="2" />
+              <path d="M12 8v6" />
+              <path d="M5 17v-3h14v3" />
+            </svg>
+          </span>
+          <span>图谱服务</span>
+        </button>
+        <section class="nav-section">
+          <button class="nav-item expanded" type="button" @click="isReasoningExpanded = !isReasoningExpanded">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <circle cx="12" cy="5" r="2.2" />
+                <circle cx="5" cy="12" r="2.2" />
+                <circle cx="19" cy="12" r="2.2" />
+                <circle cx="12" cy="19" r="2.2" />
+                <path d="M10.3 6.5L6.7 10.3" />
+                <path d="M13.7 6.5l3.6 3.8" />
+                <path d="M6.7 13.7l3.6 3.8" />
+                <path d="M17.3 13.7l-3.6 3.8" />
+                <path d="M9 12h6" />
+              </svg>
+            </span>
+            <span>知识推理服务</span>
+            <span class="nav-caret" :class="{ expanded: isReasoningExpanded }" aria-hidden="true"></span>
+          </button>
+          <div v-if="isReasoningExpanded" class="nav-children">
+            <button
+              v-for="feature in relationFeatures"
+              :key="feature.navLabel"
+              class="nav-child"
+              :class="{ active: feature.navLabel === activeFeatureLabel }"
+              type="button"
+              @click="selectFeatureByNav(feature.navLabel)"
+            >
+              {{ feature.navLabel }}
+            </button>
+          </div>
+        </section>
+      </nav>
+
+      <div class="sidebar-user">
+        <span class="user-avatar" aria-hidden="true"></span>
+        <strong>Ben</strong>
+        <button class="user-message" type="button" aria-label="消息"></button>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <section class="page-card">
+        <div class="module-head">
+          <div class="tabbar" role="tablist" aria-label="功能页签">
+            <button
+              class="main-tab"
+              :class="{ active: mainTab === 'test' }"
+              type="button"
+              @click="mainTab = 'test'"
+            >
+              算法测试
+            </button>
+            <button
+              class="main-tab"
+              :class="{ active: mainTab === 'developer' }"
+              type="button"
+              @click="mainTab = 'developer'"
+            >
+              开发者接口
+            </button>
+          </div>
+          <button class="text-action" type="button" @click="showTechPlan = true">
+            <span class="info-icon" data-tooltip="查看技术方案">i</span>
+            技术方案
+          </button>
+        </div>
+
+        <div class="control-line" :class="{ 'developer-control-line': mainTab === 'developer' }">
+          <div class="feature-line">
+            <span>子功能名称:</span>
+            <div class="feature-dropdown">
+              <button
+                class="feature-select"
+                :class="{ open: showFeatureMenu }"
+                type="button"
+                aria-haspopup="listbox"
+                :aria-expanded="showFeatureMenu"
+                @click="showFeatureMenu = !showFeatureMenu"
+              >
+                <span>{{ selectedFeature }}</span>
+                <span class="select-arrow" aria-hidden="true"></span>
+              </button>
+              <div v-if="showFeatureMenu" class="feature-menu" role="listbox">
+                <button
+                  v-for="option in featureOptions"
+                  :key="option"
+                  class="feature-option"
+                  :class="{ active: selectedFeature === option }"
+                  type="button"
+                  role="option"
+                  :aria-selected="selectedFeature === option"
+                  @click="selectFeatureByName(option)"
+                >
+                  {{ option }}
+                </button>
+              </div>
+            </div>
+            <span class="info-icon" data-tooltip="当前子功能用于构建专家与重点企业之间的关系图谱">i</span>
+          </div>
+
+          <template v-if="mainTab === 'developer'">
+            <div class="inline-api-field">
+              <span>接口路径：</span>
+              <div class="inline-input">{{ currentApiPath }}</div>
+            </div>
+            <div class="inline-method">
+              <span>请求方法：</span>
+              <strong>POST</strong>
+            </div>
+          </template>
+
+          <div v-if="mainTab === 'test'" class="actions">
+            <button class="secondary-button" type="button" @click="showParams = true">参数设置</button>
+            <button class="primary-button" type="button" @click="runTest">执行测试</button>
+          </div>
+        </div>
+
+        <template v-if="mainTab === 'test'">
+          <div class="test-grid">
+            <section class="graph-panel" aria-label="企业关系图谱">
+              <div class="graph-canvas" @wheel="zoomGraph">
+                <div
+                  ref="graphStageRef"
+                  class="graph-stage"
+                  :style="graphStageStyle"
+                  @pointermove="dragNode"
+                  @pointerup="stopDrag"
+                  @pointercancel="stopDrag"
+                  @pointerleave="stopDrag"
+                >
+                  <svg class="graph-lines" :viewBox="`0 0 ${graphWidth} ${graphHeight}`" aria-hidden="true">
+                    <defs>
+                      <marker
+                        id="arrow-blue"
+                        viewBox="0 0 10 10"
+                        refX="9"
+                        refY="5"
+                        markerWidth="9"
+                        markerHeight="9"
+                        orient="auto-start-reverse"
+                      >
+                        <path d="M 0 0 L 10 5 L 0 10 z" fill="#2f7cff" />
+                      </marker>
+                      <marker
+                        id="arrow-purple"
+                        viewBox="0 0 10 10"
+                        refX="9"
+                        refY="5"
+                        markerWidth="9"
+                        markerHeight="9"
+                        orient="auto-start-reverse"
+                      >
+                        <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b5cf6" />
+                      </marker>
+                      <marker
+                        id="arrow-orange"
+                        viewBox="0 0 10 10"
+                        refX="9"
+                        refY="5"
+                        markerWidth="9"
+                        markerHeight="9"
+                        orient="auto-start-reverse"
+                      >
+                        <path d="M 0 0 L 10 5 L 0 10 z" fill="#f59e0b" />
+                      </marker>
+                    </defs>
+                    <path
+                      v-for="node in companyNodes"
+                      :key="`${node.key}-path`"
+                      class="relation-edge"
+                      :class="relationTone(node.relation)"
+                      :d="relationPath(node)"
+                      :marker-end="relationMarker(node.relation)"
+                    />
+                  </svg>
+
+                  <span
+                    v-for="node in companyNodes"
+                    :key="`${node.key}-label`"
+                    class="relation-label"
+                    :class="relationTone(node.relation)"
+                    :style="relationLabelStyle(node)"
+                  >
+                    {{ node.relation }}
+                  </span>
+
+                <div
+                  v-for="node in graphNodes"
+                  :key="node.key"
+                  class="graph-node"
+                  :class="[{ dragging: activeDrag?.key === node.key }, node.kind === 'expert' ? 'expert-node' : 'company-node']"
+                  :style="nodeStyle(node)"
+                  @pointerdown="startDrag($event, node)"
+                >
+                  <strong>{{ node.title }}</strong>
+                  <span>{{ node.subtitle }}</span>
+                </div>
+                </div>
+              </div>
+            </section>
+
+            <aside class="result-panel">
+              <div class="result-tabs">
+                <button
+                  :class="{ active: resultTab === 'structured' }"
+                  type="button"
+                  @click="resultTab = 'structured'"
+                >
+                  结构化结果
+                </button>
+                <button
+                  :class="{ active: resultTab === 'api' }"
+                  type="button"
+                  @click="resultTab = 'api'"
+                >
+                  API结果示例
+                </button>
+              </div>
+
+              <div v-if="resultTab === 'structured'" class="detail-list">
+                <div v-for="row in detailRows" :key="`${row[0]}-${row[1]}`" class="detail-row">
+                  <span>{{ row[0] }}</span>
+                  <strong>{{ row[1] }}</strong>
+                </div>
+              </div>
+              <pre v-else class="api-code">{{ apiExample }}</pre>
+            </aside>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="developer-surface">
+            <div class="table-grid">
+              <section class="doc-table">
+                <h2>请求参数</h2>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>字段名</th>
+                      <th>类型</th>
+                      <th>必填</th>
+                      <th>说明</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="row in requestRows" :key="row[0]">
+                      <td>{{ row[0] }}</td>
+                      <td>{{ row[1] }}</td>
+                      <td>{{ row[2] }}</td>
+                      <td>{{ row[3] }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </section>
+
+              <section class="doc-table">
+                <h2>返回字段</h2>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>字段名</th>
+                      <th>类型</th>
+                      <th>说明</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="row in responseRows" :key="row[0]">
+                      <td>{{ row[0] }}</td>
+                      <td>{{ row[1] }}</td>
+                      <td>{{ row[2] }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </section>
+            </div>
+
+            <section class="code-panel">
+              <div class="code-head">
+                <h2>代码示例</h2>
+                <div class="code-tabs">
+                  <button
+                    :class="{ active: activeCodeTab === 'Python' }"
+                    type="button"
+                    @click="activeCodeTab = 'Python'"
+                  >
+                    Python
+                  </button>
+                  <button
+                    :class="{ active: activeCodeTab === 'Node.js' }"
+                    type="button"
+                    @click="activeCodeTab = 'Node.js'"
+                  >
+                    Node.js
+                  </button>
+                  <button
+                    :class="{ active: activeCodeTab === 'cURL' }"
+                    type="button"
+                    @click="activeCodeTab = 'cURL'"
+                  >
+                    cURL
+                  </button>
+                </div>
+              </div>
+              <div v-if="renderedCodeLines" class="highlight-code" aria-label="Python代码示例">
+                <div v-for="(line, index) in renderedCodeLines" :key="index" class="code-line">
+                  <span class="line-number">{{ index + 1 }}</span>
+                  <span class="line-content">
+                    <template v-for="(part, partIndex) in line" :key="partIndex">
+                      <span :class="`code-${part.tone}`">{{ part.text }}</span>
+                    </template>
+                  </span>
+                </div>
+              </div>
+              <pre v-else>{{ codeExample }}</pre>
+              <button class="copy-button" type="button" aria-label="复制代码">□</button>
+            </section>
+          </div>
+        </template>
+      </section>
+    </main>
+
+    <div v-if="showParams" class="modal-mask" role="dialog" aria-modal="true" aria-label="测试参数设置">
+      <form class="param-modal" @submit.prevent="showParams = false">
+        <header>
+          <h2>
+            <span class="param-title-icon" aria-hidden="true">
+              <svg viewBox="0 0 20 20">
+                <circle cx="10" cy="10" r="2.5" />
+                <path d="M10 2.5v2" />
+                <path d="M10 15.5v2" />
+                <path d="M2.5 10h2" />
+                <path d="M15.5 10h2" />
+                <path d="M4.7 4.7l1.4 1.4" />
+                <path d="M13.9 13.9l1.4 1.4" />
+                <path d="M15.3 4.7l-1.4 1.4" />
+                <path d="M6.1 13.9l-1.4 1.4" />
+              </svg>
+            </span>
+            测试参数设置
+          </h2>
+          <span class="required-hint"><b>*</b> 为必填项</span>
+          <button class="icon-button" type="button" aria-label="关闭" @click="showParams = false">×</button>
+        </header>
+
+        <label class="param-field required">
+          <span>dataSource</span>
+          <select v-model="params.dataSource">
+            <option>全部数据源</option>
+            <option>专家库</option>
+            <option>企业库</option>
+          </select>
+        </label>
+        <label class="param-field required">
+          <span>expertAId</span>
+          <input v-model="params.expertAId" placeholder="专家ID" />
+        </label>
+        <label class="param-field required">
+          <span>relationType</span>
+          <select v-model="params.relationType">
+            <option>全部关系</option>
+            <option>任职</option>
+            <option>顾问</option>
+            <option>研发合作</option>
+            <option>技术合作</option>
+          </select>
+        </label>
+        <label class="param-field">
+          <span>timeRange</span>
+          <div class="range-control">
+            <input v-model="params.start" placeholder="开始时间" />
+            <span>–</span>
+            <input v-model="params.end" placeholder="结束时间" />
+            <button class="calendar-button" type="button" aria-label="选择时间范围" @click="openMonthPicker">
+              <span class="calendar-icon" aria-hidden="true"></span>
+            </button>
+          </div>
+          <input
+            ref="monthPickerRef"
+            class="month-picker-input"
+            type="month"
+            :value="datePickerMode === 'start' ? params.start.replace('.', '-') : params.end.replace('.', '-')"
+            @change="pickMonth(($event.target as HTMLInputElement).value)"
+          />
+        </label>
+
+        <footer>
+          <button class="secondary-button" type="button" @click="showParams = false">取消</button>
+          <button class="primary-button" type="submit">保存并执行</button>
+        </footer>
+      </form>
+    </div>
+
+    <div v-if="showTechPlan" class="modal-mask" role="dialog" aria-modal="true" aria-label="技术方案">
+      <section class="tech-modal">
+        <header>
+          <h2>技术方案</h2>
+          <button class="icon-button" type="button" aria-label="关闭" @click="showTechPlan = false">×</button>
+        </header>
+
+        <article>
+          <h3>功能描述</h3>
+          <p>
+            本模块面向重点关注科技企业关系构建，基于专家画像、企业基础信息、任职/顾问/研发合作等关系数据，以及知识图谱中的专家、企业与成果节点，识别专家与重点企业之间的关联路径，输出可解释的企业关系网络和结构化推理结果。
+          </p>
+        </article>
+
+        <article>
+          <h3>推理流程</h3>
+          <div class="flow-grid">
+            <template v-for="(step, index) in flowSteps" :key="step[1]">
+              <div class="flow-card">
+                <span class="flow-icon" aria-hidden="true">
+                  <svg v-if="step[0] === 'input'" viewBox="0 0 32 32">
+                    <rect x="6" y="6" width="20" height="16" rx="2.5" />
+                    <path d="M16 10v8" />
+                    <path d="M12.5 14.5L16 18l3.5-3.5" />
+                    <path d="M12 26h8" />
+                    <path d="M16 22v4" />
+                  </svg>
+                  <svg v-else-if="step[0] === 'standardize'" viewBox="0 0 32 32">
+                    <path d="M7 9h7" />
+                    <path d="M20 9h5" />
+                    <circle cx="17" cy="9" r="3" />
+                    <path d="M7 16h14" />
+                    <path d="M27 16h-1" />
+                    <circle cx="24" cy="16" r="3" />
+                    <path d="M7 23h4" />
+                    <path d="M17 23h8" />
+                    <circle cx="14" cy="23" r="3" />
+                  </svg>
+                  <svg v-else-if="step[0] === 'reasoning'" viewBox="0 0 32 32">
+                    <circle cx="8" cy="9" r="3" />
+                    <circle cx="23" cy="8" r="3" />
+                    <circle cx="24" cy="23" r="3" />
+                    <circle cx="9" cy="22" r="3" />
+                    <path d="M11 10l9 10" />
+                    <path d="M20 9l-8 11" />
+                    <path d="M12 22h9" />
+                  </svg>
+                  <svg v-else viewBox="0 0 32 32">
+                    <path d="M9 6h12l4 4v13H9z" />
+                    <path d="M21 6v5h5" />
+                    <path d="M13 14h8" />
+                    <path d="M13 18h7" />
+                    <circle cx="22" cy="23" r="3" />
+                    <path d="M24 25l3 3" />
+                  </svg>
+                </span>
+                <strong>{{ step[1] }}</strong>
+                <p>{{ step[2] }}</p>
+              </div>
+              <span v-if="index < flowSteps.length - 1" class="flow-arrow">→</span>
+            </template>
+          </div>
+        </article>
+      </section>
+    </div>
+  </div>
 </template>

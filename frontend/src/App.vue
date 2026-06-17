@@ -41,8 +41,6 @@ const activeSubFunctionName = ref('专家-企业关系构建')
 const graphWidth = 1080
 const graphHeight = 720
 const graphZoom = ref(0.68)
-const datePickerMode = ref<'start' | 'end'>('start')
-const monthPickerRef = ref<HTMLInputElement | null>(null)
 
 const graphStageRef = ref<HTMLElement | null>(null)
 const activeDrag = ref<{ key: GraphNodeKey; offsetX: number; offsetY: number } | null>(null)
@@ -265,36 +263,39 @@ const graphNodes = ref<GraphNode[]>(enterpriseGraphNodes.map((node) => ({ ...nod
 
 const loading = ref(false)
 const apiError = ref('')
+const buildResult = ref<any>(null)
 
 async function loadEnterpriseRelation() {
   if (currentSubFunction.value.featureName !== '专家-企业关系构建') return
   loading.value = true
   apiError.value = ''
   try {
+    const relationTypes = params.value.relationTypes
+      .split(',')
+      .map((s: string) => s.trim())
+      .filter(Boolean)
     const resp = await fetch(currentApiPath.value, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        dataSource: params.value.dataSource === '全部数据源' ? 'all' : params.value.dataSource,
-        expertAId: params.value.expertAId,
-        relationType: params.value.relationType === '全部关系' ? 'all' : params.value.relationType,
-        timeRange: { start: params.value.start, end: params.value.end },
+        scholarId: params.value.scholarId,
+        enterpriseId: params.value.enterpriseId,
+        relationTypes,
       }),
     })
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     const data = await resp.json()
-    if (data.expert) {
-      graphNodes.value = [
-        { key: 'expert', title: `专家：${data.expert}`, subtitle: data.title || '', x: 412, y: 292, width: 300, height: 94, kind: 'expert' },
-        ...data.enterprises.slice(0, 5).map((e: any, i: number) => ({
-          key: (`company${i + 1}` as GraphNodeKey),
-          title: `企业${i + 1}：${e.name}`,
-          subtitle: e.type || '企业',
-          relation: e.relation || '',
-          x: 35 + (i % 3) * 360, y: 45 + Math.floor(i / 3) * 250, width: 360, height: 110, kind: 'company' as const,
-        })),
-      ]
-    }
+    buildResult.value = data
+    graphNodes.value = [
+      { key: 'expert', title: `专家：${params.value.scholarId}`, subtitle: '专家', x: 412, y: 292, width: 300, height: 94, kind: 'expert' },
+      {
+        key: 'company1' as GraphNodeKey,
+        title: `企业：${params.value.enterpriseId}`,
+        subtitle: '企业',
+        relation: relationTypes.join(' / ') || '-',
+        x: 35, y: 45, width: 360, height: 110, kind: 'company' as const,
+      },
+    ]
   } catch (e: any) {
     apiError.value = e.message || String(e)
   } finally {
@@ -332,68 +333,55 @@ const detailRows = computed(() => {
   return rows
 })
 
-const apiExample = computed(() => {
-  const center = centerNode.value
-  const centerInfo = splitNodeTitle(center.title)
-  return JSON.stringify(
-    {
-      feature: currentSubFunction.value.featureName,
-      source: {
-        id: center.key,
-        label: centerInfo.label,
-        name: centerInfo.name,
-        type: center.subtitle,
-      },
-      relations: companyNodes.value.map((node) => {
-        const targetInfo = splitNodeTitle(node.title)
-        return {
-          target_id: node.key,
-          target_label: targetInfo.label,
-          target_name: targetInfo.name,
-          target_type: node.subtitle,
-          relationType: node.relation,
-        }
-      }),
+const apiExample = computed(() =>
+  JSON.stringify(
+    buildResult.value ?? {
       status: 'success',
+      scholarId: params.value.scholarId,
+      enterpriseId: params.value.enterpriseId,
+      relations: params.value.relationTypes
+        .split(',')
+        .map((s: string, i: number) => ({
+          relationId: `${params.value.scholarId}->${params.value.enterpriseId}@${i}`,
+          relationType: s.trim(),
+          effective: true,
+        }))
+        .filter((r: any) => r.relationType),
     },
     null,
     2,
-  )
-})
+  ),
+)
 
 const params = ref({
-  dataSource: '全部数据源',
-  expertAId: 'E10001',
-  relationType: '全部关系',
-  start: '2018.03',
-  end: '2022.12',
+  scholarId: 'E10001',
+  enterpriseId: 'ENT001',
+  relationTypes: 'employment,advisor,rd_cooperation',
 })
 
 const requestRows = [
-  ['dataSource', 'string', '是', '数据来源'],
-  ['expertAId', 'string', '是', '专家唯一标识'],
-  ['relationType', 'string', '否', '关系类型'],
-  ['timeRange', 'object', '否', '时间范围'],
+  ['scholarId', 'string', '是', '专家ID'],
+  ['enterpriseId', 'string', '是', '企业ID'],
+  ['relationTypes', 'array', '是', '关联关系类型列表'],
 ]
 
 const responseRows = [
-  ['expert', 'string', '专家姓名'],
-  ['expert_id', 'string', '专家唯一标识'],
-  ['title', 'string', '专家职称'],
-  ['enterprises[]', 'array', '企业关系列表'],
+  ['status', 'string', '状态'],
+  ['scholarId', 'string', '专家ID'],
+  ['enterpriseId', 'string', '企业ID'],
+  ['relations', 'array', '构建的关系列表'],
+  ['relations[].relationId', 'string', '关系ID'],
+  ['relations[].relationType', 'string', '关系类型标签'],
+  ['relations[].effective', 'boolean', '生效标识'],
 ]
 
 const pythonCodeExample = computed(() => `import requests
 
 url = "http://localhost:3001${currentApiPath.value}"
 payload = {
-    "dataSource": "${params.value.dataSource === '全部数据源' ? 'all' : params.value.dataSource}",
-    "expertAId": "${params.value.expertAId}",
-    "relationType": "${params.value.relationType === '全部关系' ? 'all' : params.value.relationType}",
-    "timeRange": {
-        "start": "${params.value.start}",
-        "end": "${params.value.end}"
-    }
+    "scholarId": "${params.value.scholarId}",
+    "enterpriseId": "${params.value.enterpriseId}",
+    "relationTypes": [${params.value.relationTypes.split(',').map((s: string) => `"${s.trim()}"`).filter(Boolean).join(', ')}]
 }
 
 response = requests.post(url, json=payload)
@@ -405,13 +393,9 @@ const nodeCodeExample = computed(() => `const response = await fetch("http://loc
     "Content-Type": "application/json"
   },
   body: JSON.stringify({
-    dataSource: "${params.value.dataSource === '全部数据源' ? 'all' : params.value.dataSource}",
-    expertAId: "${params.value.expertAId}",
-    relationType: "${params.value.relationType === '全部关系' ? 'all' : params.value.relationType}",
-    timeRange: {
-      start: "${params.value.start}",
-      end: "${params.value.end}"
-    }
+    scholarId: "${params.value.scholarId}",
+    enterpriseId: "${params.value.enterpriseId}",
+    relationTypes: [${params.value.relationTypes.split(',').map((s: string) => `"${s.trim()}"`).filter(Boolean).join(', ')}]
   })
 })
 
@@ -421,13 +405,9 @@ console.log(data)`)
 const curlCodeExample = computed(() => `curl -X POST "http://localhost:3001${currentApiPath.value}" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "dataSource": "${params.value.dataSource === '全部数据源' ? 'all' : params.value.dataSource}",
-    "expertAId": "${params.value.expertAId}",
-    "relationType": "${params.value.relationType === '全部关系' ? 'all' : params.value.relationType}",
-    "timeRange": {
-      "start": "${params.value.start}",
-      "end": "${params.value.end}"
-    }
+    "scholarId": "${params.value.scholarId}",
+    "enterpriseId": "${params.value.enterpriseId}",
+    "relationTypes": [${params.value.relationTypes.split(',').map((s: string) => `"${s.trim()}"`).filter(Boolean).join(', ')}]
   }'`)
 
 const codeExample = computed(() => {
@@ -678,30 +658,6 @@ function zoomGraph(event: WheelEvent) {
   graphZoom.value = Math.max(0.55, Math.min(1.25, Number(nextZoom.toFixed(2))))
 }
 
-function pickMonth(value: string) {
-  if (!value) return
-  const month = value.replace('-', '.')
-
-  if (datePickerMode.value === 'start') {
-    params.value.start = month
-    datePickerMode.value = 'end'
-  } else {
-    params.value.end = month
-    datePickerMode.value = 'start'
-  }
-}
-
-function openMonthPicker() {
-  const picker = monthPickerRef.value
-  if (!picker) return
-  const pickerWithShow = picker as HTMLInputElement & { showPicker?: () => void }
-
-  if (pickerWithShow.showPicker) {
-    pickerWithShow.showPicker()
-  } else {
-    picker.click()
-  }
-}
 </script>
 
 <template>
@@ -1115,44 +1071,16 @@ function openMonthPicker() {
         </header>
 
         <label class="param-field required">
-          <span>dataSource</span>
-          <select v-model="params.dataSource">
-            <option>全部数据源</option>
-            <option>专家库</option>
-            <option>企业库</option>
-          </select>
+          <span>scholarId</span>
+          <input v-model="params.scholarId" placeholder="专家ID" />
         </label>
         <label class="param-field required">
-          <span>expertAId</span>
-          <input v-model="params.expertAId" placeholder="专家ID" />
+          <span>enterpriseId</span>
+          <input v-model="params.enterpriseId" placeholder="企业ID" />
         </label>
         <label class="param-field required">
-          <span>relationType</span>
-          <select v-model="params.relationType">
-            <option>全部关系</option>
-            <option>任职</option>
-            <option>顾问</option>
-            <option>研发合作</option>
-            <option>技术合作</option>
-          </select>
-        </label>
-        <label class="param-field">
-          <span>timeRange</span>
-          <div class="range-control">
-            <input v-model="params.start" placeholder="开始时间" />
-            <span>–</span>
-            <input v-model="params.end" placeholder="结束时间" />
-            <button class="calendar-button" type="button" aria-label="选择时间范围" @click="openMonthPicker">
-              <span class="calendar-icon" aria-hidden="true"></span>
-            </button>
-          </div>
-          <input
-            ref="monthPickerRef"
-            class="month-picker-input"
-            type="month"
-            :value="datePickerMode === 'start' ? params.start.replace('.', '-') : params.end.replace('.', '-')"
-            @change="pickMonth(($event.target as HTMLInputElement).value)"
-          />
+          <span>relationTypes</span>
+          <input v-model="params.relationTypes" placeholder="逗号分隔，如 employment,advisor,rd_cooperation" />
         </label>
 
         <footer>

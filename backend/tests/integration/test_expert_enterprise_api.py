@@ -17,8 +17,8 @@ def _techkg_usable() -> bool:
     """探测 techkg 图是否可达且可查询（含鉴权）。"""
     try:
         client = get_techkg_client()
-        # find_nodes 是 service 的首个图调用；能执行即视为可用（空结果也算）
-        client.find_nodes(["Scholar"], {"scholar_id": "__probe__"}, limit=1)
+        # get_node 是 service 的首个图调用；能执行即视为可用
+        client.get_node("__probe__")
         return True
     except GraphRepoError:
         return False
@@ -29,21 +29,23 @@ def _techkg_usable() -> bool:
 @pytest.mark.external
 class TestExpertEnterpriseAPI:
     @pytest.mark.asyncio
-    async def test_build_returns_shape(self):
+    async def test_build_constructs_relations(self):
         if not _techkg_usable():
             pytest.skip("techkg graph not usable (service/auth/schema unavailable)")
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.post(
                 "/api/v1/kg-construction/expert-enterprise-relations/build",
                 json={
-                    "dataSource": "all",
-                    "expertAId": "talent_001",
-                    "relationType": "all",
-                    "timeRange": None,
+                    "scholarId": "E10001",
+                    "enterpriseId": "ENT001",
+                    "relationTypes": ["employment", "advisor", "rd_cooperation"],
                 },
             )
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "success"
-        assert isinstance(data["enterprises"], list)
-        assert "expert_id" in data
+        assert data["scholarId"] == "E10001"
+        assert data["enterpriseId"] == "ENT001"
+        assert isinstance(data["relations"], list)
+        assert len(data["relations"]) == 3
+        assert all(r["effective"] for r in data["relations"])

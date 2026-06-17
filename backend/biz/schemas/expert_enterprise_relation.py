@@ -5,32 +5,20 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
-class TimeRange(BaseModel):
-    start: str | None = None
-    end: str | None = None
-
-
 class ExpertEnterpriseBuildRequest(BaseModel):
-    dataSource: str = "all"
-    expertAId: str
-    relationType: str = "all"
-    timeRange: TimeRange | None = None
+    scholarId: str
+    enterpriseId: str
+    relationTypes: list[str] = Field(default_factory=list)
 
 
-class EnterpriseItem(BaseModel):
-    enterprise_id: str
-    name: str
-    type: str = ""
-    province: str = ""
-    relation: str = ""
-    role: str = ""
-    start_date: str = ""
-    end_date: str = ""
+class BuiltRelation(BaseModel):
+    relationId: str
+    relationType: str
+    effective: bool
 
 
 class ExpertEnterpriseBuildResponse(BaseModel):
     status: str = "success"
-    expert: str | None = None
-    expert_id: str | None = None
-    title: str | None = None
-    enterprises: list[EnterpriseItem] = Field(default_factory=list)
+    scholarId: str
+    enterpriseId: str
+    relations: list[BuiltRelation] = Field(default_factory=list)

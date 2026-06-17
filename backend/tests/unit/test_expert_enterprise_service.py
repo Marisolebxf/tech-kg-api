@@ -5,121 +5,78 @@ from unittest.mock import MagicMock
 from service.expert_enterprise_relation import ExpertEnterpriseRelationService
 
 
-def _graph_with_expert_and_org():
+def _graph_with_nodes():
     graph = MagicMock()
-    scholar_node = MagicMock(
-        id="S1",
-        labels=["Scholar"],
-        properties={"scholar_id": "S1", "name_zh": "张伟", "scholar_org_name_zh": "清华大学"},
-    )
-    org_node = MagicMock(
-        id="O1",
-        labels=["Organization"],
-        properties={
-            "org_id": "O1",
-            "name_cn": "清华大学",
-            "province": "北京市",
-            "org_type": "高校",
-        },
-    )
-    edge = MagicMock(
-        id="S1->O1@0",
-        type="EMPLOYED_BY",
-        source_id="S1",
-        target_id="O1",
-        properties={"relation_type": "任职", "role": "", "start_date": "", "end_date": ""},
-    )
-    # get_node(vid)：专家 id 返回 scholar，其余返回 org
-    graph.get_node = MagicMock(side_effect=lambda nid: scholar_node if nid == "S1" else org_node)
-    graph.get_node_edges = MagicMock(return_value=[edge])
+    # 两端节点都存在
+    graph.get_node = MagicMock(return_value=MagicMock())
+    graph.execute_write = MagicMock()
     return graph
 
 
-def test_build_returns_expert_and_enterprises():
-    svc = ExpertEnterpriseRelationService()
-    svc._graph = _graph_with_expert_and_org()  # noqa: SLF001
-    resp = svc.build(
-        {"expertAId": "S1", "relationType": "all", "dataSource": "all", "timeRange": None}
-    )
-    assert resp["status"] == "success"
-    assert resp["expert"] == "张伟"
-    assert resp["expert_id"] == "S1"
-    assert resp["enterprises"][0]["name"] == "清华大学"
-    assert resp["enterprises"][0]["relation"] == "任职"
-
-
-def test_build_expert_not_found():
-    graph = MagicMock()
-    graph.get_node = MagicMock(return_value=None)
-    svc = ExpertEnterpriseRelationService()
-    svc._graph = graph  # noqa: SLF001
-    resp = svc.build(
-        {"expertAId": "ZZZ", "relationType": "all", "dataSource": "all", "timeRange": None}
-    )
-    assert resp["status"] == "success"
-    assert resp["expert"] is None
-    assert resp["enterprises"] == []
-
-
-def test_build_filters_by_relation_type():
-    graph = MagicMock()
-    scholar_node = MagicMock(
-        id="S1", labels=["Scholar"], properties={"scholar_id": "S1", "name_zh": "张伟"}
-    )
-    org_node = MagicMock(
-        id="O1", labels=["Organization"], properties={"org_id": "O1", "name_cn": "清华大学"}
-    )
-    edge_match = MagicMock(
-        id="S1->O1@0",
-        type="EMPLOYED_BY",
-        source_id="S1",
-        target_id="O1",
-        properties={"relation_type": "任职", "start_date": "", "end_date": ""},
-    )
-    edge_other = MagicMock(
-        id="S1->O2@0",
-        type="EMPLOYED_BY",
-        source_id="S1",
-        target_id="O2",
-        properties={"relation_type": "合作", "start_date": "", "end_date": ""},
-    )
-    graph.get_node = MagicMock(side_effect=lambda nid: scholar_node if nid == "S1" else org_node)
-    graph.get_node_edges = MagicMock(return_value=[edge_match, edge_other])
-    svc = ExpertEnterpriseRelationService()
-    svc._graph = graph  # noqa: SLF001
-    resp = svc.build(
-        {"expertAId": "S1", "relationType": "任职", "dataSource": "all", "timeRange": None}
-    )
-    assert len(resp["enterprises"]) == 1
-    assert resp["enterprises"][0]["relation"] == "任职"
-
-
-def test_build_filters_by_time_range():
-    graph = MagicMock()
-    scholar_node = MagicMock(
-        id="S1", labels=["Scholar"], properties={"scholar_id": "S1", "name_zh": "张伟"}
-    )
-    org_node = MagicMock(
-        id="O1", labels=["Organization"], properties={"org_id": "O1", "name_cn": "清华大学"}
-    )
-    # 边的 end_date 早于 timeRange.start → 被滤掉
-    edge_old = MagicMock(
-        id="S1->O1@0",
-        type="EMPLOYED_BY",
-        source_id="S1",
-        target_id="O1",
-        properties={"relation_type": "任职", "start_date": "2010.01", "end_date": "2012.12"},
-    )
-    graph.get_node = MagicMock(side_effect=lambda nid: scholar_node if nid == "S1" else org_node)
-    graph.get_node_edges = MagicMock(return_value=[edge_old])
+def test_build_writes_edge_per_relation_type():
+    graph = _graph_with_nodes()
     svc = ExpertEnterpriseRelationService()
     svc._graph = graph  # noqa: SLF001
     resp = svc.build(
         {
-            "expertAId": "S1",
-            "relationType": "all",
-            "dataSource": "all",
-            "timeRange": {"start": "2018.01", "end": "2022.12"},
+            "scholarId": "S001",
+            "enterpriseId": "E001",
+            "relationTypes": ["employment", "advisor", "rd_cooperation"],
         }
     )
-    assert resp["enterprises"] == []
+    assert resp["status"] == "success"
+    assert resp["scholarId"] == "S001"
+    assert resp["enterpriseId"] == "E001"
+    assert len(resp["relations"]) == 3
+    assert [r["relationType"] for r in resp["relations"]] == [
+        "employment",
+        "advisor",
+        "rd_cooperation",
+    ]
+    assert [r["relationId"] for r in resp["relations"]] == [
+        "S001->E001@0",
+        "S001->E001@1",
+        "S001->E001@2",
+    ]
+    assert all(r["effective"] for r in resp["relations"])
+    # 每个类型写一条边
+    assert graph.execute_write.call_count == 3
+    stmts = " ".join(str(c.args[0]) for c in graph.execute_write.call_args_list)
+    assert "employment" in stmts and "advisor" in stmts and "rd_cooperation" in stmts
+    assert "INSERT EDGE EMPLOYED_BY" in stmts
+
+
+def test_build_missing_node_returns_ineffective():
+    graph = MagicMock()
+    graph.get_node = MagicMock(return_value=None)  # 节点不存在
+    graph.execute_write = MagicMock()
+    svc = ExpertEnterpriseRelationService()
+    svc._graph = graph  # noqa: SLF001
+    resp = svc.build(
+        {
+            "scholarId": "S001",
+            "enterpriseId": "E001",
+            "relationTypes": ["employment"],
+        }
+    )
+    assert resp["relations"] == [
+        {"relationId": "S001->E001@0", "relationType": "employment", "effective": False},
+    ]
+    graph.execute_write.assert_not_called()
+
+
+def test_build_write_failure_marks_ineffective():
+    graph = MagicMock()
+    graph.get_node = MagicMock(return_value=MagicMock())
+    graph.execute_write = MagicMock(side_effect=RuntimeError("boom"))
+    svc = ExpertEnterpriseRelationService()
+    svc._graph = graph  # noqa: SLF001
+    resp = svc.build(
+        {
+            "scholarId": "S001",
+            "enterpriseId": "E001",
+            "relationTypes": ["employment", "advisor"],
+        }
+    )
+    assert len(resp["relations"]) == 2
+    assert all(r["effective"] is False for r in resp["relations"])

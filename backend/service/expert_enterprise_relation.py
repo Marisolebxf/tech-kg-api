@@ -1,4 +1,4 @@
-"""专家-企业关系构建服务（查 techkg 图）。"""
+"""专家-企业关系构建服务（向 techkg 图写入 EMPLOYED_BY 边）。"""
 
 from __future__ import annotations
 
@@ -21,61 +21,48 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
         return self._graph
 
     def build(self, payload: dict[str, Any]) -> dict[str, Any]:
-        expert_a_id = payload.get("expertAId", "")
-        relation_type = payload.get("relationType", "all")
-        time_range = payload.get("timeRange") or {}
-        tr_start = time_range.get("start") if isinstance(time_range, dict) else None
-        tr_end = time_range.get("end") if isinstance(time_range, dict) else None
+        scholar_id = payload.get("scholarId", "")
+        enterprise_id = payload.get("enterpriseId", "")
+        relation_types = payload.get("relationTypes", []) or []
         graph = self._client()
 
-        # 1) 按 vid(=scholar_id=expertAId) 取专家节点
-        scholar = graph.get_node(expert_a_id)
-        if scholar is None:
+        def _result(effective: bool) -> list[dict[str, Any]]:
+            return [
+                {
+                    "relationId": f"{scholar_id}->{enterprise_id}@{i}",
+                    "relationType": rt,
+                    "effective": effective,
+                }
+                for i, rt in enumerate(relation_types)
+            ]
+
+        # 1) 两端节点必须存在
+        if graph.get_node(scholar_id) is None or graph.get_node(enterprise_id) is None:
             return {
                 "status": "success",
-                "expert": None,
-                "expert_id": expert_a_id,
-                "title": None,
-                "enterprises": [],
+                "scholarId": scholar_id,
+                "enterpriseId": enterprise_id,
+                "relations": _result(False),
             }
-        props = scholar.properties
 
-        # 2) 取 EMPLOYED_BY 边
-        edges = graph.get_node_edges(
-            scholar.id, direction="out", edge_type="EMPLOYED_BY", limit=100
-        )
-        enterprises: list[dict[str, Any]] = []
-        for e in edges:
-            if relation_type and relation_type != "all":
-                if e.properties.get("relation_type", "任职") != relation_type:
-                    continue
-            e_start = e.properties.get("start_date", "") or ""
-            e_end = e.properties.get("end_date", "") or ""
-            if tr_start and e_end and e_end < tr_start:
-                continue
-            if tr_end and e_start and e_start > tr_end:
-                continue
-            org = graph.get_node(e.target_id)
-            if org is None:
-                continue
-            op = org.properties
-            enterprises.append(
-                {
-                    "enterprise_id": str(op.get("org_id", org.id)),
-                    "name": op.get("name_cn", "") or "",
-                    "type": op.get("org_type", "") or "",
-                    "province": op.get("province", "") or "",
-                    "relation": e.properties.get("relation_type", "任职"),
-                    "role": e.properties.get("role", "") or "",
-                    "start_date": e.properties.get("start_date", "") or "",
-                    "end_date": e.properties.get("end_date", "") or "",
-                }
+        # 2) 对每个关系类型写一条 EMPLOYED_BY 边（rank=index）
+        relations: list[dict[str, Any]] = []
+        for i, rt in enumerate(relation_types):
+            rid = f"{scholar_id}->{enterprise_id}@{i}"
+            stmt = (
+                f"INSERT EDGE EMPLOYED_BY(relation_type,role,start_date,end_date,source) "
+                f'VALUES "{scholar_id}"->"{enterprise_id}"@{i}:'
+                f'("{rt}","","","","build");'
             )
+            try:
+                graph.execute_write(stmt)
+                relations.append({"relationId": rid, "relationType": rt, "effective": True})
+            except Exception:
+                relations.append({"relationId": rid, "relationType": rt, "effective": False})
 
         return {
             "status": "success",
-            "expert": props.get("name_zh") or None,
-            "expert_id": props.get("scholar_id") or expert_a_id,
-            "title": "",
-            "enterprises": enterprises,
+            "scholarId": scholar_id,
+            "enterpriseId": enterprise_id,
+            "relations": relations,
         }

@@ -28,9 +28,9 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
         tr_end = time_range.get("end") if isinstance(time_range, dict) else None
         graph = self._client()
 
-        # 1) 按 scholar_id 找专家节点
-        found = graph.find_nodes(["Scholar"], {"scholar_id": expert_a_id}, limit=1)
-        if not found.items:
+        # 1) 按 vid(=scholar_id=expertAId) 取专家节点
+        scholar = graph.get_node(expert_a_id)
+        if scholar is None:
             return {
                 "status": "success",
                 "expert": None,
@@ -38,7 +38,6 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
                 "title": None,
                 "enterprises": [],
             }
-        scholar = found.items[0]
         props = scholar.properties
 
         # 2) 取 EMPLOYED_BY 边

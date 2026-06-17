@@ -29,13 +29,9 @@ def _graph_with_expert_and_org():
         target_id="O1",
         properties={"relation_type": "任职", "role": "", "start_date": "", "end_date": ""},
     )
-    graph.find_nodes = MagicMock(
-        side_effect=lambda labels, props, **k: (
-            MagicMock(items=[scholar_node]) if "Scholar" in labels else MagicMock(items=[org_node])
-        )
-    )
+    # get_node(vid)：专家 id 返回 scholar，其余返回 org
+    graph.get_node = MagicMock(side_effect=lambda nid: scholar_node if nid == "S1" else org_node)
     graph.get_node_edges = MagicMock(return_value=[edge])
-    graph.get_node = MagicMock(return_value=org_node)
     return graph
 
 
@@ -54,7 +50,7 @@ def test_build_returns_expert_and_enterprises():
 
 def test_build_expert_not_found():
     graph = MagicMock()
-    graph.find_nodes = MagicMock(return_value=MagicMock(items=[]))
+    graph.get_node = MagicMock(return_value=None)
     svc = ExpertEnterpriseRelationService()
     svc._graph = graph  # noqa: SLF001
     resp = svc.build(
@@ -87,9 +83,8 @@ def test_build_filters_by_relation_type():
         target_id="O2",
         properties={"relation_type": "合作", "start_date": "", "end_date": ""},
     )
-    graph.find_nodes = MagicMock(return_value=MagicMock(items=[scholar_node]))
+    graph.get_node = MagicMock(side_effect=lambda nid: scholar_node if nid == "S1" else org_node)
     graph.get_node_edges = MagicMock(return_value=[edge_match, edge_other])
-    graph.get_node = MagicMock(return_value=org_node)
     svc = ExpertEnterpriseRelationService()
     svc._graph = graph  # noqa: SLF001
     resp = svc.build(
@@ -115,9 +110,8 @@ def test_build_filters_by_time_range():
         target_id="O1",
         properties={"relation_type": "任职", "start_date": "2010.01", "end_date": "2012.12"},
     )
-    graph.find_nodes = MagicMock(return_value=MagicMock(items=[scholar_node]))
+    graph.get_node = MagicMock(side_effect=lambda nid: scholar_node if nid == "S1" else org_node)
     graph.get_node_edges = MagicMock(return_value=[edge_old])
-    graph.get_node = MagicMock(return_value=org_node)
     svc = ExpertEnterpriseRelationService()
     svc._graph = graph  # noqa: SLF001
     resp = svc.build(

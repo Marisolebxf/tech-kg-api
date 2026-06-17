@@ -214,17 +214,26 @@ async function loadEnterpriseRelation() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     const data = await resp.json()
     buildResult.value = data
-    // 画板：中心专家 + 该专家全部企业关系
+    // 画板：以人才为中心，企业均匀环绕
     const rels: any[] = Array.isArray(data.relations) ? data.relations : []
+    const cx = graphWidth / 2
+    const cy = graphHeight / 2
+    const radius = 280
+    const n = rels.length
     graphNodes.value = [
-      { key: 'expert', title: `专家：${data.scholarName ?? params.value.scholarId}`, subtitle: '专家', x: 412, y: 292, width: 300, height: 94, kind: 'expert' },
-      ...rels.map((r: any, i: number) => ({
-        key: `company${i + 1}` as GraphNodeKey,
-        title: `企业：${r.enterpriseName ?? r.enterpriseId}`,
-        subtitle: '企业',
-        relation: r.relationType || '-',
-        x: 35 + (i % 3) * 360, y: 45 + Math.floor(i / 3) * 250, width: 360, height: 110, kind: 'company' as const,
-      })),
+      { key: 'expert', title: `专家：${data.scholarName ?? params.value.scholarId}`, subtitle: '专家', x: cx - 150, y: cy - 47, width: 300, height: 94, kind: 'expert' },
+      ...rels.map((r: any, i: number) => {
+        const ang = (2 * Math.PI * i) / (n || 1) - Math.PI / 2
+        const ccx = cx + radius * Math.cos(ang)
+        const ccy = cy + radius * Math.sin(ang)
+        return {
+          key: `company${i + 1}` as GraphNodeKey,
+          title: `企业：${r.enterpriseName ?? r.enterpriseId}`,
+          subtitle: '企业',
+          relation: r.relationType || '-',
+          x: ccx - 180, y: ccy - 55, width: 360, height: 110, kind: 'company' as const,
+        }
+      }),
     ]
   } catch (e: any) {
     apiError.value = e.message || String(e)

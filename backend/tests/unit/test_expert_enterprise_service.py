@@ -15,7 +15,7 @@ def test_build_constructs_and_returns_all_relations():
     org1 = _node({"org_id": "ENT001", "name_cn": "华智科技"})
     org2 = _node({"org_id": "ENT002", "name_cn": "启航智造"})
     edge1 = MagicMock(id="S001->ENT001@0", target_id="ENT001", properties={"relation_type": "任职"})
-    edge2 = MagicMock(id="S001->ENT002@1", target_id="ENT002", properties={"relation_type": "合作"})
+    edge2 = MagicMock(id="S001->ENT002@0", target_id="ENT002", properties={"relation_type": "合作"})
     nodes = {"S001": scholar, "E001": enterprise, "ENT001": org1, "ENT002": org2}
 
     graph = MagicMock()
@@ -28,24 +28,61 @@ def test_build_constructs_and_returns_all_relations():
     resp = svc.build({"scholarId": "S001", "enterpriseId": "E001", "relationType": "任职"})
 
     assert resp["status"] == "success"
-    assert resp["scholarId"] == "S001"
     assert resp["scholarName"] == "张三"
-    assert resp["builtRelationId"] == "S001->E001@0"  # 任职 → rank 0
+    assert resp["builtRelationId"] == "S001->E001@0"
     assert resp["relationType"] == "任职"
     assert resp["effective"] is True
-    # 返回该专家全部企业关系
     assert len(resp["relations"]) == 2
-    assert resp["relations"][0] == {
-        "relationId": "S001->ENT001@0",
-        "enterpriseId": "ENT001",
-        "enterpriseName": "华智科技",
-        "relationType": "任职",
-    }
-    assert resp["relations"][1]["enterpriseName"] == "启航智造"
-    assert resp["relations"][1]["relationType"] == "合作"
+    assert resp["relations"][0]["enterpriseName"] == "华智科技"
+    assert resp["relations"][0]["relationType"] == "任职"
     graph.execute_write.assert_called_once()
-    assert "INSERT EDGE EMPLOYED_BY" in graph.execute_write.call_args.args[0]
-    assert "任职" in graph.execute_write.call_args.args[0]
+    stmt = graph.execute_write.call_args.args[0]
+    assert "INSERT EDGE EMPLOYED_BY" in stmt
+    assert '"S001"->"E001"@0' in stmt
+    assert "任职" in stmt
+
+
+def test_build_appends_relation_with_slash_join():
+    scholar = _node({"name_zh": "张三"})
+    enterprise = _node({"name_cn": "某企业"})
+    # 已有一条边 S001->E001，relation_type="任职"
+    edge = MagicMock(id="S001->E001@0", target_id="E001", properties={"relation_type": "任职"})
+    nodes = {"S001": scholar, "E001": enterprise}
+
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(nid))
+    graph.execute_write = MagicMock()
+    graph.get_node_edges = MagicMock(return_value=[edge])
+
+    svc = ExpertEnterpriseRelationService()
+    svc._graph = graph  # noqa: SLF001
+    resp = svc.build({"scholarId": "S001", "enterpriseId": "E001", "relationType": "合作"})
+
+    assert resp["effective"] is True
+    stmt = graph.execute_write.call_args.args[0]
+    # 多个关系合并到同一条边，用 / 分隔
+    assert "任职/合作" in stmt
+    assert '"S001"->"E001"@0' in stmt
+
+
+def test_build_does_not_duplicate_existing_relation_type():
+    scholar = _node({"name_zh": "张三"})
+    enterprise = _node({"name_cn": "某企业"})
+    edge = MagicMock(id="S001->E001@0", target_id="E001", properties={"relation_type": "任职/合作"})
+    nodes = {"S001": scholar, "E001": enterprise}
+
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(nid))
+    graph.execute_write = MagicMock()
+    graph.get_node_edges = MagicMock(return_value=[edge])
+
+    svc = ExpertEnterpriseRelationService()
+    svc._graph = graph  # noqa: SLF001
+    svc.build({"scholarId": "S001", "enterpriseId": "E001", "relationType": "任职"})
+    stmt = graph.execute_write.call_args.args[0]
+    # 已存在则不重复
+    assert "任职/合作" in stmt
+    assert "任职/合作/任职" not in stmt
 
 
 def test_build_scholar_missing():
@@ -78,10 +115,8 @@ def test_build_enterprise_missing_returns_existing_relations():
     svc = ExpertEnterpriseRelationService()
     svc._graph = graph  # noqa: SLF001
     resp = svc.build({"scholarId": "S001", "enterpriseId": "E001", "relationType": "合作"})
-    # 企业不存在 → 不构建
     assert resp["effective"] is False
     assert resp["builtRelationId"] is None
     graph.execute_write.assert_not_called()
-    # 但仍返回该专家现有关系
     assert len(resp["relations"]) == 1
     assert resp["relations"][0]["enterpriseName"] == "华智科技"

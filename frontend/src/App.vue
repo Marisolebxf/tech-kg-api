@@ -368,40 +368,22 @@ const pythonCodeLines = computed(() => [
     { text: '{', tone: 'plain' },
   ],
   [
-    { text: '  "dataSource"', tone: 'string' },
+    { text: '  "scholarId"', tone: 'string' },
     { text: ': ', tone: 'muted' },
-    { text: '"all"', tone: 'string' },
+    { text: `"${params.value.scholarId}"`, tone: 'string' },
     { text: ',', tone: 'plain' },
   ],
   [
-    { text: '  "expertAId"', tone: 'string' },
+    { text: '  "enterpriseId"', tone: 'string' },
     { text: ': ', tone: 'muted' },
-    { text: '"E10001"', tone: 'string' },
+    { text: `"${params.value.enterpriseId}"`, tone: 'string' },
     { text: ',', tone: 'plain' },
   ],
   [
     { text: '  "relationType"', tone: 'string' },
     { text: ': ', tone: 'muted' },
-    { text: '"all"', tone: 'string' },
-    { text: ',', tone: 'plain' },
+    { text: `"${params.value.relationType}"`, tone: 'string' },
   ],
-  [
-    { text: '  "timeRange"', tone: 'string' },
-    { text: ': ', tone: 'muted' },
-    { text: '{', tone: 'plain' },
-  ],
-  [
-    { text: '    "start"', tone: 'string' },
-    { text: ': ', tone: 'muted' },
-    { text: '"2018.03"', tone: 'string' },
-    { text: ',', tone: 'plain' },
-  ],
-  [
-    { text: '    "end"', tone: 'string' },
-    { text: ': ', tone: 'muted' },
-    { text: '"2022.12"', tone: 'string' },
-  ],
-  [{ text: '  }', tone: 'plain' }],
   [{ text: '}', tone: 'plain' }],
   [],
   [
@@ -409,6 +391,10 @@ const pythonCodeLines = computed(() => [
     { text: ' = ', tone: 'muted' },
     { text: 'requests.post', tone: 'keyword' },
     { text: '(url, json=payload)', tone: 'plain' },
+  ],
+  [
+    { text: 'print', tone: 'keyword' },
+    { text: '(response.json())', tone: 'plain' },
   ],
 ])
 

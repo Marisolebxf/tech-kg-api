@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 type MainTab = 'test' | 'developer'
 type ResultTab = 'structured' | 'api'
@@ -223,7 +223,7 @@ const relationFeatures: RelationFeature[] = [
     subFunctions: [
       {
         featureName: '专家-企业关系构建',
-        apiPath: '/api/v1/enterprise/relation/build',
+        apiPath: '/api/v1/kg-construction/expert-enterprise-relations/build',
         nodes: enterpriseGraphNodes,
       },
     ],
@@ -262,6 +262,47 @@ const selectedFeature = computed(() => currentSubFunction.value.featureName)
 const featureOptions = computed(() => currentFeature.value.subFunctions.map((feature) => feature.featureName))
 const currentApiPath = computed(() => currentSubFunction.value.apiPath)
 const graphNodes = ref<GraphNode[]>(enterpriseGraphNodes.map((node) => ({ ...node })))
+
+const loading = ref(false)
+const apiError = ref('')
+
+async function loadEnterpriseRelation() {
+  if (currentSubFunction.value.featureName !== '专家-企业关系构建') return
+  loading.value = true
+  apiError.value = ''
+  try {
+    const resp = await fetch(currentApiPath.value, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dataSource: params.value.dataSource === '全部数据源' ? 'all' : params.value.dataSource,
+        expertAId: params.value.expertAId,
+        relationType: params.value.relationType === '全部关系' ? 'all' : params.value.relationType,
+        timeRange: { start: params.value.start, end: params.value.end },
+      }),
+    })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const data = await resp.json()
+    if (data.expert) {
+      graphNodes.value = [
+        { key: 'expert', title: `专家：${data.expert}`, subtitle: data.title || '', x: 412, y: 292, width: 300, height: 94, kind: 'expert' },
+        ...data.enterprises.slice(0, 5).map((e: any, i: number) => ({
+          key: (`company${i + 1}` as GraphNodeKey),
+          title: `企业${i + 1}：${e.name}`,
+          subtitle: e.type || '企业',
+          relation: e.relation || '',
+          x: 35 + (i % 3) * 360, y: 45 + Math.floor(i / 3) * 250, width: 360, height: 110, kind: 'company' as const,
+        })),
+      ]
+    }
+  } catch (e: any) {
+    apiError.value = e.message || String(e)
+  } finally {
+    loading.value = false
+  }
+}
+
+watch(activeSubFunctionName, (v) => { if (v === '专家-企业关系构建') loadEnterpriseRelation() })
 
 const companyNodes = computed(() => graphNodes.value.filter((node) => node.kind === 'company'))
 const centerNode = computed(() => graphNodes.value.find((node) => node.kind === 'expert') ?? graphNodes.value[0])

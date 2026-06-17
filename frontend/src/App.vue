@@ -401,7 +401,7 @@ const pythonCodeLines = computed(() => [
 const renderedCodeLines = computed(() => (activeCodeTab.value === 'Python' ? pythonCodeLines.value : null))
 
 const flowSteps = [
-  ['input', '输入数据', '接收专家ID、数据来源、关系类型与时间范围等测试参数'],
+  ['input', '输入数据', '接收专家ID、企业ID、专家企业关系的测试参数'],
   ['standardize', '标准化处理', '汇聚专家画像、企业标签、成果与合作记录等图谱数据'],
   ['reasoning', '关系推理', '基于任职、合作与企业标签规则，推理专家-企业关系'],
   ['output', '结果输出', '输出专家信息、企业关系列表和执行状态等结构化结果'],

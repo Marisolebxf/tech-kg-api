@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 
 type MainTab = 'test' | 'developer'
 type ResultTab = 'structured' | 'api'
@@ -44,74 +44,6 @@ const graphZoom = ref(0.68)
 
 const graphStageRef = ref<HTMLElement | null>(null)
 const activeDrag = ref<{ key: GraphNodeKey; offsetX: number; offsetY: number } | null>(null)
-
-const enterpriseGraphNodes: GraphNode[] = [
-  {
-    key: 'expert',
-    title: '专家A：张明远',
-    subtitle: '人工智能专家',
-    x: 412,
-    y: 292,
-    width: 300,
-    height: 94,
-    kind: 'expert',
-  },
-  {
-    key: 'company1',
-    title: '企业1：华智科技有限公司',
-    subtitle: '重点关注企业',
-    relation: '任职',
-    x: 35,
-    y: 45,
-    width: 360,
-    height: 88,
-    kind: 'company',
-  },
-  {
-    key: 'company2',
-    title: '企业2：启航智造科技有限公司',
-    subtitle: '重点关注企业',
-    relation: '顾问',
-    x: 685,
-    y: 45,
-    width: 360,
-    height: 88,
-    kind: 'company',
-  },
-  {
-    key: 'company3',
-    title: '企业3：中科创新装备有限公司',
-    subtitle: '重点关注企业',
-    relation: '研发合作',
-    x: 20,
-    y: 500,
-    width: 360,
-    height: 88,
-    kind: 'company',
-  },
-  {
-    key: 'company4',
-    title: '企业4：云启数据技术有限公司',
-    subtitle: '重点关注企业',
-    relation: '技术合作',
-    x: 700,
-    y: 500,
-    width: 360,
-    height: 88,
-    kind: 'company',
-  },
-  {
-    key: 'company5',
-    title: '企业5：未来芯片科技有限公司',
-    subtitle: '重点关注企业',
-    relation: '项目合作',
-    x: 390,
-    y: 610,
-    width: 360,
-    height: 88,
-    kind: 'company',
-  },
-]
 
 function makeRelationGraph(
   centerTitle: string,
@@ -222,7 +154,7 @@ const relationFeatures: RelationFeature[] = [
       {
         featureName: '专家-企业关系构建',
         apiPath: '/api/v1/kg-construction/expert-enterprise-relations/build',
-        nodes: enterpriseGraphNodes,
+        nodes: [],
       },
     ],
   },
@@ -259,7 +191,7 @@ const currentSubFunction = computed(
 const selectedFeature = computed(() => currentSubFunction.value.featureName)
 const featureOptions = computed(() => currentFeature.value.subFunctions.map((feature) => feature.featureName))
 const currentApiPath = computed(() => currentSubFunction.value.apiPath)
-const graphNodes = ref<GraphNode[]>(enterpriseGraphNodes.map((node) => ({ ...node })))
+const graphNodes = ref<GraphNode[]>([])
 
 const loading = ref(false)
 const apiError = ref('')
@@ -287,10 +219,10 @@ async function loadEnterpriseRelation() {
     const data = await resp.json()
     buildResult.value = data
     graphNodes.value = [
-      { key: 'expert', title: `专家：${params.value.scholarId}`, subtitle: '专家', x: 412, y: 292, width: 300, height: 94, kind: 'expert' },
+      { key: 'expert', title: `专家：${data.scholarName ?? params.value.scholarId}`, subtitle: '专家', x: 412, y: 292, width: 300, height: 94, kind: 'expert' },
       {
         key: 'company1' as GraphNodeKey,
-        title: `企业：${params.value.enterpriseId}`,
+        title: `企业：${data.enterpriseName ?? params.value.enterpriseId}`,
         subtitle: '企业',
         relation: relationTypes.join(' / ') || '-',
         x: 35, y: 45, width: 360, height: 110, kind: 'company' as const,
@@ -302,8 +234,6 @@ async function loadEnterpriseRelation() {
     loading.value = false
   }
 }
-
-watch(activeSubFunctionName, (v) => { if (v === '专家-企业关系构建') loadEnterpriseRelation() }, { immediate: true })
 
 const companyNodes = computed(() => graphNodes.value.filter((node) => node.kind === 'company'))
 const centerNode = computed(() => graphNodes.value.find((node) => node.kind === 'expert') ?? graphNodes.value[0])
@@ -368,7 +298,9 @@ const requestRows = [
 const responseRows = [
   ['status', 'string', '状态'],
   ['scholarId', 'string', '专家ID'],
+  ['scholarName', 'string', '专家姓名'],
   ['enterpriseId', 'string', '企业ID'],
+  ['enterpriseName', 'string', '企业名称'],
   ['relations', 'array', '构建的关系列表'],
   ['relations[].relationId', 'string', '关系ID'],
   ['relations[].relationType', 'string', '关系类型标签'],
@@ -961,6 +893,7 @@ function zoomGraph(event: WheelEvent) {
             <div class="table-grid">
               <section class="doc-table">
                 <h2>请求参数</h2>
+                <div class="doc-table-scroll">
                 <table>
                   <thead>
                     <tr>
@@ -979,10 +912,12 @@ function zoomGraph(event: WheelEvent) {
                     </tr>
                   </tbody>
                 </table>
+                </div>
               </section>
 
               <section class="doc-table">
                 <h2>返回字段</h2>
+                <div class="doc-table-scroll">
                 <table>
                   <thead>
                     <tr>
@@ -999,6 +934,7 @@ function zoomGraph(event: WheelEvent) {
                     </tr>
                   </tbody>
                 </table>
+                </div>
               </section>
             </div>
 

@@ -21,4 +21,6 @@ class ExpertEnterpriseBuildResponse(BaseModel):
     status: str = "success"
     scholarId: str
     enterpriseId: str
+    scholarName: str | None = None
+    enterpriseName: str | None = None
     relations: list[BuiltRelation] = Field(default_factory=list)

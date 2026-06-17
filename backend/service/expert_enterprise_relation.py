@@ -36,12 +36,18 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
                 for i, rt in enumerate(relation_types)
             ]
 
-        # 1) 两端节点必须存在
-        if graph.get_node(scholar_id) is None or graph.get_node(enterprise_id) is None:
+        # 1) 两端节点必须存在，并取名称
+        scholar = graph.get_node(scholar_id)
+        enterprise = graph.get_node(enterprise_id)
+        scholar_name = scholar.properties.get("name_zh") if scholar else None
+        enterprise_name = enterprise.properties.get("name_cn") if enterprise else None
+        if scholar is None or enterprise is None:
             return {
                 "status": "success",
                 "scholarId": scholar_id,
                 "enterpriseId": enterprise_id,
+                "scholarName": scholar_name,
+                "enterpriseName": enterprise_name,
                 "relations": _result(False),
             }
 
@@ -64,5 +70,7 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
             "status": "success",
             "scholarId": scholar_id,
             "enterpriseId": enterprise_id,
+            "scholarName": scholar_name,
+            "enterpriseName": enterprise_name,
             "relations": relations,
         }

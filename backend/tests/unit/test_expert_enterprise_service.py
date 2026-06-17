@@ -7,8 +7,10 @@ from service.expert_enterprise_relation import ExpertEnterpriseRelationService
 
 def _graph_with_nodes():
     graph = MagicMock()
-    # 两端节点都存在
-    graph.get_node = MagicMock(return_value=MagicMock())
+    # 两端节点都存在，带名称属性
+    scholar = MagicMock(properties={"name_zh": "张三"})
+    enterprise = MagicMock(properties={"name_cn": "某企业"})
+    graph.get_node = MagicMock(side_effect=lambda nid: scholar if nid == "S001" else enterprise)
     graph.execute_write = MagicMock()
     return graph
 
@@ -27,6 +29,8 @@ def test_build_writes_edge_per_relation_type():
     assert resp["status"] == "success"
     assert resp["scholarId"] == "S001"
     assert resp["enterpriseId"] == "E001"
+    assert resp["scholarName"] == "张三"
+    assert resp["enterpriseName"] == "某企业"
     assert len(resp["relations"]) == 3
     assert [r["relationType"] for r in resp["relations"]] == [
         "employment",

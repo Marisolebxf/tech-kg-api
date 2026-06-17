@@ -28,11 +28,15 @@ def test_response_assemble():
         status="success",
         scholarId="S001",
         enterpriseId="E001",
+        scholarName="张三",
+        enterpriseName="某企业",
         relations=[
             BuiltRelation(relationId="S001->E001@0", relationType="employment", effective=True),
             BuiltRelation(relationId="S001->E001@1", relationType="advisor", effective=True),
         ],
     )
     assert resp.status == "success"
+    assert resp.scholarName == "张三"
+    assert resp.enterpriseName == "某企业"
     assert resp.relations[0].relationType == "employment"
     assert resp.relations[1].effective is True

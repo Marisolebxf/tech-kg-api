@@ -46,6 +46,8 @@ class TestExpertEnterpriseAPI:
         assert data["status"] == "success"
         assert data["scholarId"] == "E10001"
         assert data["enterpriseId"] == "ENT001"
+        assert data["scholarName"] == "张明远"
+        assert data["enterpriseName"] == "华智科技有限公司"
         assert isinstance(data["relations"], list)
         assert len(data["relations"]) == 3
         assert all(r["effective"] for r in data["relations"])

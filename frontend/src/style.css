@@ -1395,3 +1395,22 @@ td {
     min-height: 320px;
   }
 }
+
+.doc-table-scroll {
+  max-height: 168px;
+  overflow-y: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+}
+
+.doc-table-scroll table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.doc-table-scroll thead {
+  position: sticky;
+  top: 0;
+  background: #f9fafb;
+  z-index: 1;
+}

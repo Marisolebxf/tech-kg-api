@@ -581,11 +581,10 @@ h1 {
   align-items: center;
   width: 258px;
   height: 34px;
-  border: 1px solid #d8e0ec;
-  border-radius: 4px;
-  background: #fff;
+  border: none;
+  background: transparent;
   color: #4b5563;
-  padding: 0 10px;
+  padding: 0;
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;

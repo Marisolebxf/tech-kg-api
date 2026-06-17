@@ -3,7 +3,7 @@ services:
     build: ./backend
     container_name: tech-kg-api
     ports:
-      - "8000:8000"
+      - "8001:8000"
     environment:
       TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
       TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-techkg}
@@ -22,7 +22,7 @@ services:
     build: ./frontend
     container_name: tech-kg-web
     ports:
-      - "8080:80"
+      - "8088:80"
     depends_on:
       - api
     restart: unless-stopped

@@ -4,8 +4,8 @@ FROM python:3.11.13-slim
 # 设置工作目录
 WORKDIR /app
 
-# 安装 uv
-RUN pip install uv -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 安装 uv（默认 PyPI；如需国内镜像可改 -i https://pypi.tuna.tsinghua.edu.cn/simple）
+RUN pip install uv
 
 # 复制依赖文件
 COPY pyproject.toml uv.lock ./

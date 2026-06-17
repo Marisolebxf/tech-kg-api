@@ -35,6 +35,8 @@ __all__ = [
     "TRSGraphSettings",
     "get_trs_graph_client",
     "close_trs_graph_client",
+    "get_techkg_client",
+    "close_techkg_client",
     "GraphNode",
     "GraphEdge",
     "GraphPath",
@@ -73,3 +75,31 @@ def close_trs_graph_client() -> None:
         if _client is not None:
             _client.close()
             _client = None
+
+
+_techkg_client: TRSGraphClient | None = None
+
+
+def get_techkg_client() -> TRSGraphClient:
+    """techkg 图空间单例（space 固定为 'techkg'，其余读 TRS_GRAPH_* env）。"""
+    global _techkg_client
+    if _techkg_client is not None:
+        return _techkg_client
+    with _client_lock:
+        if _techkg_client is not None:
+            return _techkg_client
+        settings = TRSGraphSettings.from_env()
+        settings.space = "techkg"
+        client = TRSGraphClient(settings)
+        client.connect()
+        _techkg_client = client
+    return _techkg_client
+
+
+def close_techkg_client() -> None:
+    """关闭并释放 techkg 单例。"""
+    global _techkg_client
+    with _client_lock:
+        if _techkg_client is not None:
+            _techkg_client.close()
+            _techkg_client = None

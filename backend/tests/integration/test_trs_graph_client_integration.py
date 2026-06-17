@@ -2,7 +2,7 @@
 
 Skipped automatically when the service is unavailable. Run manually::
 
-    pytest tests/integration/test_graph_repo_integration.py -v
+    pytest tests/integration/test_trs_graph_client_integration.py -v
 
 Configure via TRS_GRAPH_* env vars (see TRSGraphSettings.from_env);
 defaults are TRS_GRAPH_BASE_URL=http://localhost:8090,

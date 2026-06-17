@@ -885,7 +885,7 @@ class TestDbInfo:
 
 
 class TestSingleton:
-    def test_get_graph_repo_caches(self, monkeypatch):
+    def test_get_trs_graph_client_caches(self, monkeypatch):
         # Force connectable settings; patch connect/is_connected to avoid real network.
         monkeypatch.setenv("TRS_GRAPH_BASE_URL", "http://test")
         monkeypatch.setenv("TRS_GRAPH_SPACE", "s")
@@ -899,7 +899,7 @@ class TestSingleton:
         close_trs_graph_client()
         assert graph_pkg._client is None
 
-    def test_get_graph_repo_resets_when_connect_fails(self, monkeypatch):
+    def test_get_trs_graph_client_resets_when_connect_fails(self, monkeypatch):
         monkeypatch.setenv("TRS_GRAPH_BASE_URL", "http://test")
         monkeypatch.setenv("TRS_GRAPH_SPACE", "s")
         monkeypatch.setenv("TRS_GRAPH_API_KEY", "")

@@ -890,6 +890,7 @@ function zoomGraph(event: WheelEvent) {
             <div class="table-grid">
               <section class="doc-table">
                 <h2>请求参数</h2>
+                <div class="doc-table-scroll">
                 <table>
                   <thead>
                     <tr>
@@ -908,6 +909,7 @@ function zoomGraph(event: WheelEvent) {
                     </tr>
                   </tbody>
                 </table>
+                </div>
               </section>
 
               <section class="doc-table">

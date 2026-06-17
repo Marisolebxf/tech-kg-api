@@ -23,6 +23,9 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
     def build(self, payload: dict[str, Any]) -> dict[str, Any]:
         expert_a_id = payload.get("expertAId", "")
         relation_type = payload.get("relationType", "all")
+        time_range = payload.get("timeRange") or {}
+        tr_start = time_range.get("start") if isinstance(time_range, dict) else None
+        tr_end = time_range.get("end") if isinstance(time_range, dict) else None
         graph = self._client()
 
         # 1) 按 scholar_id 找专家节点
@@ -47,6 +50,12 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
             if relation_type and relation_type != "all":
                 if e.properties.get("relation_type", "任职") != relation_type:
                     continue
+            e_start = e.properties.get("start_date", "") or ""
+            e_end = e.properties.get("end_date", "") or ""
+            if tr_start and e_end and e_end < tr_start:
+                continue
+            if tr_end and e_start and e_start > tr_end:
+                continue
             org = graph.get_node(e.target_id)
             if org is None:
                 continue

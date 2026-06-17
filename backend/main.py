@@ -2,9 +2,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from biz.router.register import register_routers
 from infra.graph_db import close_techkg_client, close_trs_graph_client
+from infra.graph_db.exceptions import GraphRepoError
 
 
 @asynccontextmanager
@@ -25,6 +27,11 @@ app = FastAPI(
 )
 
 register_routers(app)
+
+
+@app.exception_handler(GraphRepoError)
+async def graph_error_handler(request, exc: GraphRepoError) -> JSONResponse:
+    return JSONResponse(status_code=502, content={"status": "error", "message": str(exc)})
 
 
 @app.get("/health", tags=["system"])

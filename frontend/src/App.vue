@@ -206,6 +206,17 @@ const loading = ref(false)
 const apiError = ref('')
 const buildResult = ref<any>(null)
 
+const activeError = computed(() => {
+  if (subFunctionKey.value === 'annotate') return annotationError.value
+  if (subFunctionKey.value === 'analyze') return analysisError.value
+  return apiError.value
+})
+const activeLoading = computed(() => {
+  if (subFunctionKey.value === 'annotate') return annotationLoading.value
+  if (subFunctionKey.value === 'analyze') return analysisLoading.value
+  return loading.value
+})
+
 async function loadEnterpriseRelation() {
   if (currentSubFunction.value.featureName !== '专家-企业关系构建') return
   loading.value = true
@@ -1196,10 +1207,15 @@ function zoomGraph(event: WheelEvent) {
               </div>
 
               <div v-if="resultTab === 'structured'" class="detail-list">
-                <div v-for="row in detailRows" :key="`${row[0]}-${row[1]}`" class="detail-row">
-                  <span>{{ row[0] }}</span>
-                  <strong>{{ row[1] }}</strong>
-                </div>
+                <div v-if="activeLoading" class="detail-row"><span>状态</span><strong>加载中…</strong></div>
+                <div v-else-if="activeError" class="detail-row detail-error"><span>错误</span><strong>{{ activeError }}</strong></div>
+                <template v-else>
+                  <div v-for="row in detailRows" :key="`${row[0]}-${row[1]}`" class="detail-row">
+                    <span>{{ row[0] }}</span>
+                    <strong>{{ row[1] }}</strong>
+                  </div>
+                  <div v-if="detailRows.length === 0" class="detail-row"><span>提示</span><strong>点击「执行测试」查看结果</strong></div>
+                </template>
               </div>
               <pre v-else class="api-code">{{ apiExample }}</pre>
             </aside>
@@ -1550,5 +1566,9 @@ function zoomGraph(event: WheelEvent) {
   border-radius: 8px;
   color: #be123c;
   font-size: 13px;
+}
+
+.detail-error strong {
+  color: #be123c;
 }
 </style>

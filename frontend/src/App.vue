@@ -642,15 +642,24 @@ const dimensionOpts = computed(() =>
 const techFieldOpts = computed(() => optionsData.value.techFields)
 const cpcOpts = computed(() => optionsData.value.cpcCodes)
 
-const openMulti = ref('')
-function toggleMulti(key: string) {
-  openMulti.value = openMulti.value === key ? '' : key
+type MultiKey = 'relationTypes' | 'analysisDimensions' | 'patentCPC'
+function multiArr(key: MultiKey): string[] {
+  if (key === 'relationTypes') return params.value.relationTypes
+  if (key === 'analysisDimensions') return analysisParams.value.analysisDimensions
+  return analysisParams.value.patentCPC
 }
-function selectedLabels(selected: string[], opts: OptionItem[]) {
-  return opts
-    .filter((o) => selected.includes(o.value))
-    .map((o) => o.label)
-    .join('、')
+function pushMulti(key: MultiKey, value: string) {
+  if (!value) return
+  const arr = multiArr(key)
+  if (!arr.includes(value)) arr.push(value)
+}
+function removeMulti(key: MultiKey, value: string) {
+  const arr = multiArr(key)
+  const i = arr.indexOf(value)
+  if (i >= 0) arr.splice(i, 1)
+}
+function selectedItems(selected: string[], opts: OptionItem[]) {
+  return opts.filter((o) => selected.includes(o.value))
 }
 
 const pythonCodeExample = computed(() => {
@@ -1433,7 +1442,7 @@ function zoomGraph(event: WheelEvent) {
     </main>
 
     <div v-if="showParams" class="modal-mask" role="dialog" aria-modal="true" aria-label="测试参数设置">
-      <form class="param-modal" @submit.prevent="saveParamsAndRun" @click="openMulti = ''">
+      <form class="param-modal" @submit.prevent="saveParamsAndRun">
         <header>
           <h2>
             <span class="param-title-icon" aria-hidden="true">
@@ -1474,17 +1483,14 @@ function zoomGraph(event: WheelEvent) {
           </label>
           <label class="param-field required">
             <span>relationTypes</span>
-            <div class="multiselect" @click.stop>
-              <button type="button" class="ms-button" @click="toggleMulti('relationTypes')">
-                <span>{{ params.relationTypes.length ? selectedLabels(params.relationTypes, relationTypeOpts) : '请选择' }}</span>
-                <span class="select-arrow" aria-hidden="true"></span>
-              </button>
-              <div v-if="openMulti === 'relationTypes'" class="ms-panel">
-                <label v-for="o in relationTypeOpts" :key="o.value" class="param-checkbox">
-                  <input type="checkbox" :value="o.value" v-model="params.relationTypes" />
-                  <span>{{ o.label }}</span>
-                </label>
-              </div>
+            <select class="ms-add" @change="pushMulti('relationTypes', ($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''">
+              <option value="" disabled selected>请选择（可多选，每选一项加一条）</option>
+              <option v-for="o in relationTypeOpts" :key="o.value" :value="o.value">{{ o.label }}</option>
+            </select>
+            <div class="ms-tags">
+              <span v-for="o in selectedItems(params.relationTypes, relationTypeOpts)" :key="o.value" class="ms-tag">
+                {{ o.label }}<button type="button" class="ms-tag-x" @click="removeMulti('relationTypes', o.value)">×</button>
+              </span>
             </div>
           </label>
         </template>
@@ -1531,32 +1537,26 @@ function zoomGraph(event: WheelEvent) {
           </label>
           <label class="param-field required">
             <span>analysisDimensions</span>
-            <div class="multiselect" @click.stop>
-              <button type="button" class="ms-button" @click="toggleMulti('analysisDimensions')">
-                <span>{{ analysisParams.analysisDimensions.length ? selectedLabels(analysisParams.analysisDimensions, dimensionOpts) : '请选择' }}</span>
-                <span class="select-arrow" aria-hidden="true"></span>
-              </button>
-              <div v-if="openMulti === 'analysisDimensions'" class="ms-panel">
-                <label v-for="o in dimensionOpts" :key="o.value" class="param-checkbox">
-                  <input type="checkbox" :value="o.value" v-model="analysisParams.analysisDimensions" />
-                  <span>{{ o.label }}</span>
-                </label>
-              </div>
+            <select class="ms-add" @change="pushMulti('analysisDimensions', ($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''">
+              <option value="" disabled selected>请选择（可多选，每选一项加一条）</option>
+              <option v-for="o in dimensionOpts" :key="o.value" :value="o.value">{{ o.label }}</option>
+            </select>
+            <div class="ms-tags">
+              <span v-for="o in selectedItems(analysisParams.analysisDimensions, dimensionOpts)" :key="o.value" class="ms-tag">
+                {{ o.label }}<button type="button" class="ms-tag-x" @click="removeMulti('analysisDimensions', o.value)">×</button>
+              </span>
             </div>
           </label>
           <label class="param-field">
             <span>patentCPC</span>
-            <div class="multiselect" @click.stop>
-              <button type="button" class="ms-button" @click="toggleMulti('patentCPC')">
-                <span>{{ analysisParams.patentCPC.length ? analysisParams.patentCPC.join('、') : '请选择' }}</span>
-                <span class="select-arrow" aria-hidden="true"></span>
-              </button>
-              <div v-if="openMulti === 'patentCPC'" class="ms-panel">
-                <label v-for="c in cpcOpts" :key="c" class="param-checkbox">
-                  <input type="checkbox" :value="c" v-model="analysisParams.patentCPC" />
-                  <span>{{ c }}</span>
-                </label>
-              </div>
+            <select class="ms-add" @change="pushMulti('patentCPC', ($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''">
+              <option value="" disabled selected>请选择（可多选，每选一项加一条）</option>
+              <option v-for="c in cpcOpts" :key="c" :value="c">{{ c }}</option>
+            </select>
+            <div class="ms-tags">
+              <span v-for="c in analysisParams.patentCPC" :key="c" class="ms-tag">
+                {{ c }}<button type="button" class="ms-tag-x" @click="removeMulti('patentCPC', c)">×</button>
+              </span>
             </div>
           </label>
         </template>
@@ -1694,15 +1694,7 @@ function zoomGraph(event: WheelEvent) {
   gap: 12px;
 }
 
-.multiselect {
-  position: relative;
-  width: 100%;
-}
-
-.ms-button {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.ms-add {
   width: 100%;
   padding: 8px 12px;
   border: 1px solid #d0d7de;
@@ -1710,35 +1702,40 @@ function zoomGraph(event: WheelEvent) {
   font-size: 14px;
   background: #fff;
   color: #334155;
-  cursor: pointer;
   min-height: 36px;
 }
 
-.ms-button .select-arrow {
-  width: 0;
-  height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 5px solid #6b7280;
-  margin-left: 8px;
+.ms-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
 }
 
-.ms-panel {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  max-height: 220px;
-  overflow-y: auto;
-  padding: 8px 12px;
-  background: #fff;
-  border: 1px solid #d0d7de;
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.ms-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px 3px 10px;
+  background: #eef4ff;
+  border: 1px solid #c7d8ff;
+  border-radius: 14px;
+  font-size: 13px;
+  color: #2f7cff;
+}
+
+.ms-tag-x {
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.ms-tag-x:hover {
+  color: #be123c;
 }
 
 .result {

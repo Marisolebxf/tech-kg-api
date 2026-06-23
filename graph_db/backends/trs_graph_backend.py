@@ -6,6 +6,7 @@ over HTTP to perform all graph database operations on NebulaGraph.
 
 from __future__ import annotations
 
+import os
 import logging
 from typing import Any, Sequence
 
@@ -78,6 +79,18 @@ def _parse_edge_id(edge_id: str) -> tuple[str, str, int]:
     ranking = int(parts[1]) if len(parts) > 1 else 0
     src_dst = parts[0].split("->")
     return src_dst[0], src_dst[1], ranking
+
+
+def _extract_batch_items(payload: Any) -> list[dict[str, Any]]:
+    """Normalize batch endpoints that may return either a raw list or a wrapper."""
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in ("items", "data", "records", "nodes", "edges"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +229,7 @@ class TRSGraphDatabase(GraphDatabase):
         self._base_url = base_url.rstrip("/")
         self._graph_space = graph_space
         self._timeout = timeout
+        self._api_key = kwargs.get("api_key") or os.getenv("TRS_GRAPH_API_KEY", "")
         self._client: httpx.Client | None = None
         # Allow passing config= for compatibility with connect() factory
         self._config = kwargs.get("config")
@@ -225,11 +239,10 @@ class TRSGraphDatabase(GraphDatabase):
     def connect(self) -> None:
         if self._client is not None:
             return
-        self._client = httpx.Client(
-            base_url=self._base_url,
-            headers={"X-Graph-Space": self._graph_space},
-            timeout=self._timeout,
-        )
+        headers = {"X-Graph-Space": self._graph_space}
+        if self._api_key:
+            headers["X-API-Key"] = self._api_key
+        self._client = httpx.Client(base_url=self._base_url, headers=headers, timeout=self._timeout)
         # Verify connectivity
         resp = self._client.get("/health")
         resp.raise_for_status()
@@ -618,8 +631,8 @@ class TRSGraphDatabase(GraphDatabase):
         }
         resp = self._request("POST", "/api/v1/nodes/batch", json=body)
         resp.raise_for_status()
-        data = resp.json()
-        return [_trs_node_to_model(n) for n in data if isinstance(n, dict)]
+        data = _extract_batch_items(resp.json())
+        return [_trs_node_to_model(n) for n in data]
 
     def batch_create_edges(
         self,
@@ -642,8 +655,8 @@ class TRSGraphDatabase(GraphDatabase):
         }
         resp = self._request("POST", "/api/v1/edges/batch", json=body)
         resp.raise_for_status()
-        data = resp.json()
-        return [_trs_edge_to_model(e) for e in data if isinstance(e, dict)]
+        data = _extract_batch_items(resp.json())
+        return [_trs_edge_to_model(e) for e in data]
 
     # ==================================================================
     # Schema management

@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -23,9 +24,15 @@ from app.schemas.entity_binding import (
     BindingResult,
     BindingStatsResponse,
     ClearResponse,
+    ExpertRelationDemoResponse,
+    ExpertRelationGraph,
+    ExpertRelationGraphEdge,
+    ExpertRelationGraphNode,
+    ExpertRelationScenario,
     InitDataResponse,
 )
 from app.services.binding_matcher import BindingMatcher
+from app.services.semantic_matcher import SemanticMatcher
 from graph_db.base import GraphDatabase
 
 logger = logging.getLogger(__name__)
@@ -116,6 +123,58 @@ TALENT_DATA: list[dict[str, Any]] = [
         "h_index": 7,
         "status": 1,
     },
+    {
+        "id": "talent_006",
+        "scholar_id": "talent_006",
+        "name_zh": "赵晨",
+        "name_en": "Chen Zhao",
+        "scholar_org_name_zh": "清华大学",
+        "scholar_org_name_en": "Tsinghua University",
+        "fields": "知识图谱",
+        "paper_nums": 26,
+        "citation_nums": 760,
+        "h_index": 9,
+        "status": 1,
+    },
+    {
+        "id": "talent_007",
+        "scholar_id": "talent_007",
+        "name_zh": "孙睿",
+        "name_en": "Rui Sun",
+        "scholar_org_name_zh": "北京大学",
+        "scholar_org_name_en": "Peking University",
+        "fields": "自然语言处理",
+        "paper_nums": 24,
+        "citation_nums": 680,
+        "h_index": 9,
+        "status": 1,
+    },
+    {
+        "id": "talent_008",
+        "scholar_id": "talent_008",
+        "name_zh": "高原",
+        "name_en": "Yuan Gao",
+        "scholar_org_name_zh": "浙江大学",
+        "scholar_org_name_en": "Zhejiang University",
+        "fields": "计算机视觉",
+        "paper_nums": 21,
+        "citation_nums": 540,
+        "h_index": 8,
+        "status": 1,
+    },
+    {
+        "id": "talent_009",
+        "scholar_id": "talent_009",
+        "name_zh": "何涛",
+        "name_en": "Tao He",
+        "scholar_org_name_zh": "清华大学",
+        "scholar_org_name_en": "Tsinghua University",
+        "fields": "机器学习",
+        "paper_nums": 31,
+        "citation_nums": 990,
+        "h_index": 11,
+        "status": 1,
+    },
 ]
 
 PAPER_DATA: list[dict[str, Any]] = [
@@ -191,6 +250,54 @@ PAPER_DATA: list[dict[str, Any]] = [
         "keywords": "数据挖掘;机器学习",
         "doi": "10.1234/dm006",
     },
+    {
+        "id": "paper_007",
+        "paper_id": "paper_007",
+        "zh_name": "知识图谱推理方法研究",
+        "en_name": "Knowledge Graph Reasoning Methods",
+        "authors": "赵晨",
+        "author_id": "auth_007",
+        "institution": "清华大学",
+        "cover_date_start": "2024-02-18",
+        "keywords": "知识图谱;推理",
+        "doi": "10.1234/kg007",
+    },
+    {
+        "id": "paper_008",
+        "paper_id": "paper_008",
+        "zh_name": "大模型驱动的自然语言处理应用",
+        "en_name": "LLM for NLP Applications",
+        "authors": "孙睿",
+        "author_id": "auth_008",
+        "institution": "北京大学",
+        "cover_date_start": "2024-04-12",
+        "keywords": "自然语言处理;大模型",
+        "doi": "10.1234/nlp008",
+    },
+    {
+        "id": "paper_009",
+        "paper_id": "paper_009",
+        "zh_name": "多模态视觉理解综述",
+        "en_name": "Multimodal Vision Understanding",
+        "authors": "高原",
+        "author_id": "auth_009",
+        "institution": "浙江大学",
+        "cover_date_start": "2024-03-26",
+        "keywords": "计算机视觉;多模态",
+        "doi": "10.1234/cv009",
+    },
+    {
+        "id": "paper_010",
+        "paper_id": "paper_010",
+        "zh_name": "机器学习系统优化实践",
+        "en_name": "Machine Learning System Optimization",
+        "authors": "何涛",
+        "author_id": "auth_010",
+        "institution": "清华大学",
+        "cover_date_start": "2024-05-30",
+        "keywords": "机器学习;系统优化",
+        "doi": "10.1234/ml010",
+    },
 ]
 
 PATENT_DATA: list[dict[str, Any]] = [
@@ -230,6 +337,42 @@ PATENT_DATA: list[dict[str, Any]] = [
         "classification_ipcr": "G06F16.95",
         "keywords": "推荐系统;协同过滤",
     },
+    {
+        "patent_id": "patent_005",
+        "title_zh": "知识图谱推理系统",
+        "first_inventor_name": "赵晨",
+        "first_applicant_name": "清华大学",
+        "country": "CN",
+        "classification_ipcr": "G06F16.35",
+        "keywords": "知识图谱;推理",
+    },
+    {
+        "patent_id": "patent_006",
+        "title_zh": "自然语言处理训练装置",
+        "first_inventor_name": "孙睿",
+        "first_applicant_name": "北京大学",
+        "country": "CN",
+        "classification_ipcr": "G06F40.20",
+        "keywords": "自然语言处理;大模型",
+    },
+    {
+        "patent_id": "patent_007",
+        "title_zh": "视觉分析方法",
+        "first_inventor_name": "高原",
+        "first_applicant_name": "浙江大学",
+        "country": "CN",
+        "classification_ipcr": "G06V20.10",
+        "keywords": "计算机视觉;视觉分析",
+    },
+    {
+        "patent_id": "patent_008",
+        "title_zh": "机器学习训练平台",
+        "first_inventor_name": "何涛",
+        "first_applicant_name": "清华大学",
+        "country": "CN",
+        "classification_ipcr": "G06N20.00",
+        "keywords": "机器学习;训练平台",
+    },
 ]
 
 ORG_DATA: list[dict[str, Any]] = [
@@ -263,6 +406,141 @@ ORG_DATA: list[dict[str, Any]] = [
     },
 ]
 
+EXPERT_DIRECT_RELATION_FALLBACK_DATA: list[dict[str, Any]] = [
+    {
+        "key": "expert-fallback-01",
+        "label": "科技专家直接关系（张明远 / 李佳宁）",
+        "last_test_time": "2026-07-23 11:00:00",
+        "expert_a": {"id": "fallback_zhangmingyuan", "name": "张明远", "title": "研究员"},
+        "expert_b": {"id": "fallback_lijianing", "name": "李佳宁", "title": "副研究员"},
+        "relation_type": "直接关系",
+        "institution": "中国科学院自动化研究所",
+        "directions": ["知识图谱", "机器学习"],
+        "duration": "",
+        "achievements": [],
+        "api_example": {
+            "relation_type": "expert_direct_relation",
+            "relation_subtype": "direct",
+            "expert_a": {"name": "张明远", "title": "研究员"},
+            "expert_b": {"name": "李佳宁", "title": "副研究员"},
+            "institution": "中国科学院自动化研究所",
+            "reasons": ["同机构", "共论文"],
+            "relation_strength": 82,
+            "relation_summary": "同机构 + 共论文",
+        },
+    },
+    {
+        "key": "expert-fallback-02",
+        "label": "科技专家直接关系（李佳宁 / 周欣怡）",
+        "last_test_time": "2026-07-23 11:10:00",
+        "expert_a": {"id": "fallback_lijianing", "name": "李佳宁", "title": "副研究员"},
+        "expert_b": {"id": "fallback_zhouxinyi", "name": "周欣怡", "title": "教授"},
+        "relation_type": "直接关系",
+        "institution": "智能决策联合实验室",
+        "directions": ["智能决策", "知识工程"],
+        "duration": "",
+        "achievements": [],
+        "api_example": {
+            "relation_type": "expert_direct_relation",
+            "relation_subtype": "direct",
+            "expert_a": {"name": "李佳宁", "title": "副研究员"},
+            "expert_b": {"name": "周欣怡", "title": "教授"},
+            "institution": "智能决策联合实验室",
+            "reasons": ["共项目", "Co-Author"],
+            "relation_strength": 79,
+            "relation_summary": "共项目 + Co-Author",
+        },
+    },
+    {
+        "key": "expert-fallback-03",
+        "label": "科技专家直接关系（周欣怡 / 赵文博）",
+        "last_test_time": "2026-08-01 15:40:00",
+        "expert_a": {"id": "fallback_zhouxinyi", "name": "周欣怡", "title": "教授"},
+        "expert_b": {"id": "fallback_zhaowenbo", "name": "赵文博", "title": "副教授"},
+        "relation_type": "直接关系",
+        "institution": "北京航空航天大学计算机学院",
+        "directions": ["智能决策", "大模型"],
+        "duration": "",
+        "achievements": [],
+        "api_example": {
+            "relation_type": "expert_direct_relation",
+            "relation_subtype": "direct",
+            "expert_a": {"name": "周欣怡", "title": "教授"},
+            "expert_b": {"name": "赵文博", "title": "副教授"},
+            "institution": "北京航空航天大学计算机学院",
+            "reasons": ["同机构", "共专利", "共论文"],
+            "relation_strength": 91,
+            "relation_summary": "同机构 + 共专利 + 共论文",
+        },
+    },
+    {
+        "key": "expert-fallback-04",
+        "label": "科技专家直接关系（赵文博 / 陈星宇）",
+        "last_test_time": "2026-08-05 10:20:00",
+        "expert_a": {"id": "fallback_zhaowenbo", "name": "赵文博", "title": "副教授"},
+        "expert_b": {"id": "fallback_chenxingyu", "name": "陈星宇", "title": "研究员"},
+        "relation_type": "直接关系",
+        "institution": "清华大学智能产业研究院",
+        "directions": ["大模型", "产业智能"],
+        "duration": "",
+        "achievements": [],
+        "api_example": {
+            "relation_type": "expert_direct_relation",
+            "relation_subtype": "direct",
+            "expert_a": {"name": "赵文博", "title": "副教授"},
+            "expert_b": {"name": "陈星宇", "title": "研究员"},
+            "institution": "清华大学智能产业研究院",
+            "reasons": ["共项目", "共论文"],
+            "relation_strength": 84,
+            "relation_summary": "共项目 + 共论文",
+        },
+    },
+    {
+        "key": "expert-fallback-05",
+        "label": "科技专家直接关系（陈星宇 / 刘成）",
+        "last_test_time": "2026-08-09 09:15:00",
+        "expert_a": {"id": "fallback_chenxingyu", "name": "陈星宇", "title": "研究员"},
+        "expert_b": {"id": "fallback_liucheng", "name": "刘成", "title": "高级工程师"},
+        "relation_type": "直接关系",
+        "institution": "国家智能计算实验室",
+        "directions": ["算力调度", "智能计算"],
+        "duration": "",
+        "achievements": [],
+        "api_example": {
+            "relation_type": "expert_direct_relation",
+            "relation_subtype": "direct",
+            "expert_a": {"name": "陈星宇", "title": "研究员"},
+            "expert_b": {"name": "刘成", "title": "高级工程师"},
+            "institution": "国家智能计算实验室",
+            "reasons": ["Co-Author", "共专利"],
+            "relation_strength": 80,
+            "relation_summary": "Co-Author + 共专利",
+        },
+    },
+    {
+        "key": "expert-fallback-06",
+        "label": "科技专家直接关系（刘成 / 张明远）",
+        "last_test_time": "2026-08-12 14:00:00",
+        "expert_a": {"id": "fallback_liucheng", "name": "刘成", "title": "高级工程师"},
+        "expert_b": {"id": "fallback_zhangmingyuan", "name": "张明远", "title": "研究员"},
+        "relation_type": "直接关系",
+        "institution": "国家智能计算实验室",
+        "directions": ["智能计算", "知识图谱"],
+        "duration": "",
+        "achievements": [],
+        "api_example": {
+            "relation_type": "expert_direct_relation",
+            "relation_subtype": "direct",
+            "expert_a": {"name": "刘成", "title": "高级工程师"},
+            "expert_b": {"name": "张明远", "title": "研究员"},
+            "institution": "国家智能计算实验室",
+            "reasons": ["共项目", "同机构"],
+            "relation_strength": 78,
+            "relation_summary": "共项目 + 同机构",
+        },
+    },
+]
+
 # ---------------------------------------------------------------------------
 # nGQL constants for edge types and indexes
 # ---------------------------------------------------------------------------
@@ -273,7 +551,7 @@ VALID_TAG_PROPS: dict[str, set[str]] = {
         "scholar_id", "name_en", "name_zh", "avatar", "scholar_org_name_en",
         "scholar_org_name_zh", "bio", "bio_zh", "work_experience_en",
         "work_experience_zh", "education_background_en", "education_background_zh",
-        "paper_nums", "citation_nums", "h_index", "status", "create_time",
+        "paper_nums", "citation_nums", "h_index", "status", "title", "create_time",
         "update_time", "academician", "fields",
         # Paper-related fields embedded in talent TAG
         "paper_id", "year", "citations", "publish_time", "publication_id",
@@ -374,6 +652,7 @@ INDEX_NGQLS: list[str] = []  # Index creation handled via Java service createInd
 
 # nGQL to add missing demo fields to existing tags
 ALTER_TAG_NGQLS: list[str] = [
+    "ALTER TAG talent ADD (title string DEFAULT \"\")",
     "ALTER TAG cn_paper ADD (authors string DEFAULT \"\")",
 ]
 
@@ -457,8 +736,17 @@ def _llm_judge(
 # ---------------------------------------------------------------------------
 
 
+def _chunked(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
 class EntityBindingService:
     """Core binding service: recall → rule matching → LLM refinement → write edges."""
+
+    TALENT_PAPER_SEMANTIC_FALLBACK = 0.78
+    TALENT_PATENT_SEMANTIC_FALLBACK = 0.8
+    ORG_ORG_SEMANTIC_FALLBACK = 0.82
+    INITIAL_CANDIDATE_CONFIDENCE = 0.35
 
     BINDING_EDGE_MAP = {
         "talent_paper": "bind_talent_paper_author",
@@ -481,6 +769,76 @@ class EntityBindingService:
     def __init__(self, db: GraphDatabase):
         self.db = db
         self.matcher = BindingMatcher()
+        self.semantic_matcher = SemanticMatcher()
+
+    @staticmethod
+    def _graph_batch_size() -> int:
+        return max(1, int(os.getenv("GRAPH_BATCH_SIZE", "200")))
+
+    def _batch_create_nodes(self, label: str, nodes: list[dict[str, Any]], vid_getter) -> int:
+        if not nodes:
+            return 0
+        batch_size = self._graph_batch_size()
+        written = 0
+        for chunk in _chunked(nodes, batch_size):
+            try:
+                self.db.batch_create_nodes(chunk, [label])
+                written += len(chunk)
+            except Exception as exc:
+                logger.warning("Batch create nodes failed for %s, falling back to merge loop: %s", label, exc)
+                for node in chunk:
+                    try:
+                        vid = str(vid_getter(node))
+                        self.db.merge_node(
+                            labels=[label],
+                            identity_props={"vid": vid},
+                            properties=dict(node),
+                        )
+                        written += 1
+                    except Exception as item_exc:
+                        logger.warning("Failed to persist %s node %s: %s", label, vid_getter(node), item_exc)
+        return written
+
+    def _batch_create_edges(self, edge_type: str, edges: list[dict[str, Any]]) -> int:
+        if not edges:
+            return 0
+        batch_size = self._graph_batch_size()
+        written = 0
+        for chunk in _chunked(edges, batch_size):
+            try:
+                self.db.batch_create_edges(chunk, edge_type)
+                written += len(chunk)
+            except Exception as exc:
+                logger.warning("Batch create edges failed for %s, falling back to single writes: %s", edge_type, exc)
+                for edge in chunk:
+                    try:
+                        self.db.create_edge(
+                            source_id=edge["source_id"],
+                            target_id=edge["target_id"],
+                            edge_type=edge_type,
+                            properties={k: v for k, v in edge.items() if k not in {"source_id", "target_id"}},
+                        )
+                        written += 1
+                    except Exception as item_exc:
+                        logger.warning(
+                            "Failed to persist %s edge %s->%s: %s",
+                            edge_type,
+                            edge["source_id"],
+                            edge["target_id"],
+                            item_exc,
+                        )
+        return written
+
+    def _load_init_source_data(self) -> dict[str, list[dict[str, Any]]]:
+        """Load graph seed data from MySQL when available, otherwise use demos."""
+        mysql_data = self.semantic_matcher.load_mysql_binding_data()
+        return {
+            "talents": mysql_data.get("talents") or TALENT_DATA,
+            "papers": mysql_data.get("papers") or PAPER_DATA,
+            "patents": PATENT_DATA,
+            "orgs": mysql_data.get("orgs") or ORG_DATA,
+            "source": mysql_data.get("source") or "demo",
+        }
 
     # ------------------------------------------------------------------
     # Init test data
@@ -491,6 +849,11 @@ class EntityBindingService:
         edge_types_created: list[str] = []
         indexes_created: list[str] = []
         nodes_inserted: dict[str, int] = {}
+        source_data = self._load_init_source_data()
+        talents = source_data["talents"]
+        papers = source_data["papers"]
+        patents = source_data["patents"]
+        orgs = source_data["orgs"]
 
         # Create edge types via nGQL
         for edge_name, ngql in EDGE_NGQLS.items():
@@ -521,69 +884,58 @@ class EntityBindingService:
                 logger.warning("Failed to alter tag: %s", e)
 
         # Insert talent nodes
-        talent_count = 0
-        for t in TALENT_DATA:
-            try:
-                vid = t.get("scholar_id", t.get("id", ""))
-                self.db.merge_node(
-                    labels=["talent"],
-                    identity_props={"vid": vid},
-                    properties=_filter_props("talent", dict(t)),
-                )
-                talent_count += 1
-            except Exception as e:
-                logger.warning("Failed to insert talent %s: %s", t.get("scholar_id", t.get("id", "")), e)
+        talent_nodes = []
+        for t in talents:
+            vid = str(t.get("scholar_id", t.get("id", "")))
+            props = _filter_props("talent", dict(t))
+            props["vid"] = vid
+            talent_nodes.append(props)
+        talent_count = self._batch_create_nodes("talent", talent_nodes, lambda item: item.get("vid", ""))
         nodes_inserted["talent"] = talent_count
 
         # Insert paper nodes
-        paper_count = 0
-        for p in PAPER_DATA:
-            try:
-                vid = p.get("paper_id", p.get("id", ""))
-                self.db.merge_node(
-                    labels=["cn_paper"],
-                    identity_props={"vid": vid},
-                    properties=_filter_props("cn_paper", dict(p)),
-                )
-                paper_count += 1
-            except Exception as e:
-                logger.warning("Failed to insert paper %s: %s", p.get("paper_id", p.get("id", "")), e)
+        paper_nodes = []
+        for p in papers:
+            vid = str(p.get("paper_id", p.get("id", "")))
+            props = _filter_props("cn_paper", dict(p))
+            props["vid"] = vid
+            paper_nodes.append(props)
+        paper_count = self._batch_create_nodes("cn_paper", paper_nodes, lambda item: item.get("vid", ""))
         nodes_inserted["cn_paper"] = paper_count
 
         # Insert patent nodes
-        patent_count = 0
-        for p in PATENT_DATA:
-            try:
-                vid = p.get("patent_id", "")
-                self.db.merge_node(
-                    labels=["patent"],
-                    identity_props={"vid": vid},
-                    properties=_filter_props("patent", dict(p)),
-                )
-                patent_count += 1
-            except Exception as e:
-                logger.warning("Failed to insert patent %s: %s", p.get("patent_id"), e)
+        patent_nodes = []
+        for p in patents:
+            vid = str(p.get("patent_id", ""))
+            props = _filter_props("patent", dict(p))
+            props["vid"] = vid
+            patent_nodes.append(props)
+        patent_count = self._batch_create_nodes("patent", patent_nodes, lambda item: item.get("vid", ""))
         nodes_inserted["patent"] = patent_count
 
         # Insert organization nodes
-        org_count = 0
-        for o in ORG_DATA:
-            try:
-                vid = o.get("org_id", "")
-                self.db.merge_node(
-                    labels=["cn_organization"],
-                    identity_props={"vid": vid},
-                    properties=_filter_props("cn_organization", dict(o)),
-                )
-                org_count += 1
-            except Exception as e:
-                logger.warning("Failed to insert org %s: %s", o.get("org_id"), e)
+        org_nodes = []
+        for o in orgs:
+            vid = str(o.get("org_id", ""))
+            props = _filter_props("cn_organization", dict(o))
+            props["vid"] = vid
+            org_nodes.append(props)
+        org_count = self._batch_create_nodes("cn_organization", org_nodes, lambda item: item.get("vid", ""))
         nodes_inserted["cn_organization"] = org_count
 
+        try:
+            self.semantic_matcher.prewarm_binding_indexes(source_data)
+        except Exception as exc:
+            logger.warning("Failed to prewarm semantic indexes during init data: %s", exc)
+
+        self._seed_initial_candidate_edges()
+
+        source_label = "MySQL" if source_data.get("source") == "mysql" else "demo"
         msg = (
             f"初始化完成: 创建边类型{len(edge_types_created)}个, "
             f"索引{len(indexes_created)}个, "
-            f"插入节点{sum(nodes_inserted.values())}个"
+            f"插入节点{sum(nodes_inserted.values())}个, "
+            f"数据源={source_label}"
         )
         return InitDataResponse(
             edge_types_created=edge_types_created,
@@ -623,6 +975,142 @@ class EntityBindingService:
 
         return all_nodes
 
+    def _replace_binding_edges(
+        self,
+        edge_type: str,
+        details: list[BindingPairDetail],
+    ) -> None:
+        offset = 0
+        page_size = 200
+        while True:
+            result = self.db.get_edges_by_type(edge_type, limit=page_size, offset=offset)
+            if not result.items:
+                break
+            for edge in result.items:
+                try:
+                    self.db.delete_edge(edge.id, edge_type=edge.type)
+                except Exception as exc:
+                    logger.warning("Failed to delete old edge %s: %s", edge.id, exc)
+            offset = 0
+
+        batch_edges = [
+            {
+                "source_id": detail.source_id,
+                "target_id": detail.target_id,
+                "confidence": detail.confidence,
+                "method": detail.method,
+                "bound_at": datetime.now(timezone.utc).isoformat(),
+                "rule_score": detail.rule_score,
+                "llm_score": detail.llm_score,
+                "status": detail.status,
+            }
+            for detail in details
+        ]
+        self._batch_create_edges(edge_type, batch_edges)
+
+    def _seed_initial_candidate_edges(self) -> None:
+        seeders = [
+            ("talent_paper", self.matcher.match_talent_paper, "talent", "paper", self.BINDING_EDGE_MAP["talent_paper"]),
+            ("talent_patent", self.matcher.match_talent_patent, "talent", "patent", self.BINDING_EDGE_MAP["talent_patent"]),
+            ("org_org", lambda orgs, _: self.matcher.match_org_org(orgs, orgs), "org_a", "org_b", self.BINDING_EDGE_MAP["org_org"]),
+        ]
+
+        talents = self._fetch_all_nodes("talent")
+        papers = self._fetch_all_nodes("cn_paper")
+        patents = self._fetch_all_nodes("patent")
+        orgs = self._fetch_all_nodes("cn_organization")
+
+        dataset_map = {
+            "talent_paper": (talents, papers),
+            "talent_patent": (talents, patents),
+            "org_org": (orgs, orgs),
+        }
+
+        for binding_type, matcher_func, left_key, right_key, edge_type in seeders:
+            left_items, right_items = dataset_map[binding_type]
+            if not left_items or not right_items:
+                continue
+            raw_candidates = matcher_func(left_items, right_items)
+            details: list[BindingPairDetail] = []
+            seen_pairs: set[tuple[str, str]] = set()
+            for candidate in raw_candidates:
+                left = candidate[left_key]
+                right = candidate[right_key]
+                source_id = str(left.get("id") or left.get("scholar_id") or left.get("org_id") or "")
+                target_id = str(right.get("id") or right.get("paper_id") or right.get("patent_id") or right.get("org_id") or "")
+                pair_key = tuple(sorted((source_id, target_id))) if binding_type == "org_org" else (source_id, target_id)
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+                source_name = (
+                    left.get("name_zh") or left.get("name_cn") or left.get("zh_name") or left.get("title_zh") or left.get("name_en") or source_id
+                )
+                target_name = (
+                    right.get("name_zh") or right.get("name_cn") or right.get("zh_name") or right.get("title_zh") or right.get("name_en") or target_id
+                )
+                details.append(BindingPairDetail(
+                    source_name=str(source_name),
+                    source_id=source_id,
+                    source_label=self.SOURCE_LABEL_MAP[binding_type],
+                    target_name=str(target_name),
+                    target_id=target_id,
+                    target_label=self.TARGET_LABEL_MAP[binding_type],
+                    confidence=self.INITIAL_CANDIDATE_CONFIDENCE,
+                    method="rule-init",
+                    rule_score=float(candidate.get("rule_score", 0.0)),
+                    llm_score=0.0,
+                    status="candidate",
+                    reason="Initialized from rule recall",
+                ))
+            self._replace_binding_edges(edge_type, details)
+
+    @staticmethod
+    def _merge_candidates(
+        rule_candidates: list[dict[str, Any]],
+        semantic_candidates: list[dict[str, Any]],
+        *,
+        left_key: str,
+        right_key: str,
+        undirected: bool = False,
+    ) -> list[dict[str, Any]]:
+        merged: dict[tuple[str, str], dict[str, Any]] = {}
+
+        for candidate in rule_candidates:
+            left = candidate[left_key]
+            right = candidate[right_key]
+            left_id = str(left.get("id") or left.get("scholar_id") or left.get("org_id") or "")
+            right_id = str(right.get("id") or right.get("paper_id") or right.get("patent_id") or right.get("org_id") or "")
+            key = tuple(sorted((left_id, right_id))) if undirected else (left_id, right_id)
+            merged[key] = dict(candidate)
+            merged[key].setdefault("semantic_score", 0.0)
+
+        for candidate in semantic_candidates:
+            left = candidate[left_key]
+            right = candidate[right_key]
+            left_id = str(left.get("id") or left.get("scholar_id") or left.get("org_id") or "")
+            right_id = str(right.get("id") or right.get("paper_id") or right.get("patent_id") or right.get("org_id") or "")
+            key = tuple(sorted((left_id, right_id))) if undirected else (left_id, right_id)
+            if key in merged:
+                merged[key]["semantic_score"] = max(
+                    float(merged[key].get("semantic_score", 0.0)),
+                    float(candidate.get("semantic_score", 0.0)),
+                )
+            else:
+                merged[key] = dict(candidate)
+                merged[key].setdefault("rule_score", 0.0)
+
+        return list(merged.values())
+
+    @staticmethod
+    def _resolve_binding_result(
+        rule_score: float,
+        semantic_score: float,
+        fallback_threshold: float,
+    ) -> tuple[bool, float, str, str]:
+        if semantic_score >= fallback_threshold:
+            return True, semantic_score, "semantic-only", "Semantic recall fallback"
+        return rule_score >= 0.7, rule_score, "rule-only", "LLM unavailable, rule-based fallback"
+
     # ------------------------------------------------------------------
     # Bind talent ↔ paper
     # ------------------------------------------------------------------
@@ -641,8 +1129,15 @@ class EntityBindingService:
         if not talents or not papers:
             return BindingResult(binding_type=binding_type)
 
-        # Step 2: Rule-based matching
-        candidates = self.matcher.match_talent_paper(talents, papers)
+        # Step 2: Rule-based + semantic matching
+        rule_candidates = self.matcher.match_talent_paper(talents, papers)
+        semantic_candidates = self.semantic_matcher.match_talent_paper(talents, papers)
+        candidates = self._merge_candidates(
+            rule_candidates,
+            semantic_candidates,
+            left_key="talent",
+            right_key="paper",
+        )
 
         # Step 3: LLM refinement + write edges
         details: list[BindingPairDetail] = []
@@ -653,7 +1148,8 @@ class EntityBindingService:
         for cand in candidates:
             talent = cand["talent"]
             paper = cand["paper"]
-            rule_score = cand["rule_score"]
+            rule_score = float(cand.get("rule_score", 0.0))
+            semantic_score = float(cand.get("semantic_score", 0.0))
 
             # LLM judge
             talent_desc = _summarize_entity(talent, "学者")
@@ -664,16 +1160,16 @@ class EntityBindingService:
                 is_same = llm_result["is_same"]
                 llm_score = llm_result["confidence"]
                 reason = llm_result["reason"]
-                method = "rule+llm"
+                method = "rule+llm" if rule_score > 0 else "semantic+llm"
             else:
-                # Fallback: rule score only
-                is_same = rule_score >= 0.7
-                llm_score = 0.0
-                reason = "LLM unavailable, rule-based fallback"
-                method = "rule-only"
+                is_same, llm_score, method, reason = self._resolve_binding_result(
+                    rule_score,
+                    semantic_score,
+                    self.TALENT_PAPER_SEMANTIC_FALLBACK,
+                )
 
             # Status logic
-            confidence = llm_score if llm_result is not None else rule_score
+            confidence = llm_score if llm_result is not None else max(rule_score, semantic_score)
             if is_same and confidence >= 0.7:
                 status = "confirmed"
                 confirmed += 1
@@ -684,46 +1180,29 @@ class EntityBindingService:
                 status = "rejected"
                 rejected += 1
 
-            # Write binding edge for non-rejected pairs
-            if status != "rejected":
-                source_id = talent.get("id", "") or talent.get("scholar_id", "")
-                target_id = paper.get("id", "") or paper.get("paper_id", "")
-                try:
-                    self.db.create_edge(
-                        source_id=source_id,
-                        target_id=target_id,
-                        edge_type=edge_type,
-                        properties={
-                            "confidence": confidence,
-                            "method": method,
-                            "bound_at": datetime.now(timezone.utc).isoformat(),
-                            "rule_score": rule_score,
-                            "llm_score": llm_score,
-                            "status": status,
-                        },
-                    )
-                except Exception as e:
-                    logger.warning("Failed to create binding edge %s->%s: %s", source_id, target_id, e)
-
-            # Build detail
-            source_name = talent.get("name_zh", "") or talent.get("name_en", "") or str(talent.get("id", ""))
+            source_id = str(talent.get("id", "") or talent.get("scholar_id", ""))
+            target_id = str(paper.get("id", "") or paper.get("paper_id", ""))
+            source_name = talent.get("name_zh", "") or talent.get("name_en", "") or str(talent.get("scholar_id", ""))
             target_name = paper.get("zh_name", "") or paper.get("en_name", "") or str(paper.get("paper_id", ""))
             details.append(BindingPairDetail(
                 source_name=source_name,
-                source_id=str(talent.get("id", "") or talent.get("scholar_id", "")),
+                source_id=source_id,
                 source_label=source_label,
                 target_name=target_name,
-                target_id=str(paper.get("id", "") or paper.get("paper_id", "")),
+                target_id=target_id,
                 target_label=target_label,
                 confidence=confidence,
                 method=method,
-                rule_score=rule_score,
+                rule_score=max(rule_score, semantic_score),
                 llm_score=llm_score,
                 status=status,
                 reason=reason,
             ))
 
+        self._replace_binding_edges(edge_type, [detail for detail in details if detail.status != "rejected"])
+
         return BindingResult(
+
             binding_type=binding_type,
             total_candidates=len(candidates),
             confirmed=confirmed,
@@ -750,8 +1229,15 @@ class EntityBindingService:
         if not talents or not patents:
             return BindingResult(binding_type=binding_type)
 
-        # Step 2: Rule-based matching
-        candidates = self.matcher.match_talent_patent(talents, patents)
+        # Step 2: Rule-based + semantic matching
+        rule_candidates = self.matcher.match_talent_patent(talents, patents)
+        semantic_candidates = self.semantic_matcher.match_talent_patent(talents, patents)
+        candidates = self._merge_candidates(
+            rule_candidates,
+            semantic_candidates,
+            left_key="talent",
+            right_key="patent",
+        )
 
         # Step 3: LLM refinement + write edges
         details: list[BindingPairDetail] = []
@@ -762,7 +1248,8 @@ class EntityBindingService:
         for cand in candidates:
             talent = cand["talent"]
             patent = cand["patent"]
-            rule_score = cand["rule_score"]
+            rule_score = float(cand.get("rule_score", 0.0))
+            semantic_score = float(cand.get("semantic_score", 0.0))
 
             # LLM judge
             talent_desc = _summarize_entity(talent, "学者")
@@ -773,16 +1260,16 @@ class EntityBindingService:
                 is_same = llm_result["is_same"]
                 llm_score = llm_result["confidence"]
                 reason = llm_result["reason"]
-                method = "rule+llm"
+                method = "rule+llm" if rule_score > 0 else "semantic+llm"
             else:
-                # Fallback: rule score only
-                is_same = rule_score >= 0.7
-                llm_score = 0.0
-                reason = "LLM unavailable, rule-based fallback"
-                method = "rule-only"
+                is_same, llm_score, method, reason = self._resolve_binding_result(
+                    rule_score,
+                    semantic_score,
+                    self.TALENT_PATENT_SEMANTIC_FALLBACK,
+                )
 
             # Status logic
-            confidence = llm_score if llm_result is not None else rule_score
+            confidence = llm_score if llm_result is not None else max(rule_score, semantic_score)
             if is_same and confidence >= 0.7:
                 status = "confirmed"
                 confirmed += 1
@@ -793,46 +1280,29 @@ class EntityBindingService:
                 status = "rejected"
                 rejected += 1
 
-            # Write binding edge for non-rejected pairs
-            if status != "rejected":
-                source_id = talent.get("id", "") or talent.get("scholar_id", "")
-                target_id = patent.get("patent_id", "")
-                try:
-                    self.db.create_edge(
-                        source_id=source_id,
-                        target_id=target_id,
-                        edge_type=edge_type,
-                        properties={
-                            "confidence": confidence,
-                            "method": method,
-                            "bound_at": datetime.now(timezone.utc).isoformat(),
-                            "rule_score": rule_score,
-                            "llm_score": llm_score,
-                            "status": status,
-                        },
-                    )
-                except Exception as e:
-                    logger.warning("Failed to create binding edge %s->%s: %s", source_id, target_id, e)
-
-            # Build detail
-            source_name = talent.get("name_zh", "") or talent.get("name_en", "") or str(talent.get("id", ""))
-            target_name = patent.get("title_zh", "") or patent.get("title_localized", "") or str(patent.get("patent_id", ""))
+            source_id = str(talent.get("id", "") or talent.get("scholar_id", ""))
+            target_id = str(patent.get("patent_id", ""))
+            source_name = talent.get("name_zh", "") or talent.get("name_en", "") or str(talent.get("scholar_id", ""))
+            target_name = patent.get("title_zh", "") or str(patent.get("patent_id", ""))
             details.append(BindingPairDetail(
                 source_name=source_name,
-                source_id=str(talent.get("id", "") or talent.get("scholar_id", "")),
+                source_id=source_id,
                 source_label=source_label,
                 target_name=target_name,
-                target_id=str(patent.get("patent_id", "")),
+                target_id=target_id,
                 target_label=target_label,
                 confidence=confidence,
                 method=method,
-                rule_score=rule_score,
+                rule_score=max(rule_score, semantic_score),
                 llm_score=llm_score,
                 status=status,
                 reason=reason,
             ))
 
+        self._replace_binding_edges(edge_type, [detail for detail in details if detail.status != "rejected"])
+
         return BindingResult(
+
             binding_type=binding_type,
             total_candidates=len(candidates),
             confirmed=confirmed,
@@ -858,8 +1328,16 @@ class EntityBindingService:
         if not orgs or len(orgs) < 2:
             return BindingResult(binding_type=binding_type)
 
-        # Step 2: Rule-based matching (orgs vs orgs)
-        candidates = self.matcher.match_org_org(orgs, orgs)
+        # Step 2: Rule-based + semantic matching (orgs vs orgs)
+        rule_candidates = self.matcher.match_org_org(orgs, orgs)
+        semantic_candidates = self.semantic_matcher.match_org_org(orgs)
+        candidates = self._merge_candidates(
+            rule_candidates,
+            semantic_candidates,
+            left_key="org_a",
+            right_key="org_b",
+            undirected=True,
+        )
 
         # Step 3: LLM refinement + write edges
         details: list[BindingPairDetail] = []
@@ -870,7 +1348,8 @@ class EntityBindingService:
         for cand in candidates:
             org_a = cand["org_a"]
             org_b = cand["org_b"]
-            rule_score = cand["rule_score"]
+            rule_score = float(cand.get("rule_score", 0.0))
+            semantic_score = float(cand.get("semantic_score", 0.0))
 
             # LLM judge
             org_a_desc = _summarize_entity(org_a, "机构")
@@ -881,16 +1360,16 @@ class EntityBindingService:
                 is_same = llm_result["is_same"]
                 llm_score = llm_result["confidence"]
                 reason = llm_result["reason"]
-                method = "rule+llm"
+                method = "rule+llm" if rule_score > 0 else "semantic+llm"
             else:
-                # Fallback: rule score only
-                is_same = rule_score >= 0.7
-                llm_score = 0.0
-                reason = "LLM unavailable, rule-based fallback"
-                method = "rule-only"
+                is_same, llm_score, method, reason = self._resolve_binding_result(
+                    rule_score,
+                    semantic_score,
+                    self.ORG_ORG_SEMANTIC_FALLBACK,
+                )
 
             # Status logic
-            confidence = llm_score if llm_result is not None else rule_score
+            confidence = llm_score if llm_result is not None else max(rule_score, semantic_score)
             if is_same and confidence >= 0.7:
                 status = "confirmed"
                 confirmed += 1
@@ -901,46 +1380,29 @@ class EntityBindingService:
                 status = "rejected"
                 rejected += 1
 
-            # Write binding edge for non-rejected pairs
-            if status != "rejected":
-                source_id = org_a.get("org_id", "")
-                target_id = org_b.get("org_id", "")
-                try:
-                    self.db.create_edge(
-                        source_id=source_id,
-                        target_id=target_id,
-                        edge_type=edge_type,
-                        properties={
-                            "confidence": confidence,
-                            "method": method,
-                            "bound_at": datetime.now(timezone.utc).isoformat(),
-                            "rule_score": rule_score,
-                            "llm_score": llm_score,
-                            "status": status,
-                        },
-                    )
-                except Exception as e:
-                    logger.warning("Failed to create binding edge %s->%s: %s", source_id, target_id, e)
-
-            # Build detail
+            source_id = str(org_a.get("org_id", ""))
+            target_id = str(org_b.get("org_id", ""))
             source_name = org_a.get("name_cn", "") or str(org_a.get("org_id", ""))
             target_name = org_b.get("name_cn", "") or str(org_b.get("org_id", ""))
             details.append(BindingPairDetail(
                 source_name=source_name,
-                source_id=str(org_a.get("org_id", "")),
+                source_id=source_id,
                 source_label=source_label,
                 target_name=target_name,
-                target_id=str(org_b.get("org_id", "")),
+                target_id=target_id,
                 target_label=target_label,
                 confidence=confidence,
                 method=method,
-                rule_score=rule_score,
+                rule_score=max(rule_score, semantic_score),
                 llm_score=llm_score,
                 status=status,
                 reason=reason,
             ))
 
+        self._replace_binding_edges(edge_type, [detail for detail in details if detail.status != "rejected"])
+
         return BindingResult(
+
             binding_type=binding_type,
             total_candidates=len(candidates),
             confirmed=confirmed,
@@ -1027,6 +1489,11 @@ class EntityBindingService:
             + (stats.talent_patent.total_candidates if stats.talent_patent else 0)
             + (stats.org_org.total_candidates if stats.org_org else 0)
         )
+        stats.total_candidate = (
+            (stats.talent_paper.candidate if stats.talent_paper else 0)
+            + (stats.talent_patent.candidate if stats.talent_patent else 0)
+            + (stats.org_org.candidate if stats.org_org else 0)
+        )
 
         return stats
 
@@ -1044,17 +1511,55 @@ class EntityBindingService:
         current_offset = offset
         page_size = min(limit, 200)
         remaining = limit
+        node_cache: dict[str, dict[str, Any]] = {}
+
+        def _node_summary(node_id: str) -> dict[str, Any]:
+            if node_id in node_cache:
+                return node_cache[node_id]
+            try:
+                node = self.db.get_node(node_id)
+                if node is None:
+                    node_cache[node_id] = {"name": node_id, "label": "unknown"}
+                else:
+                    name = (
+                        node.properties.get("name_zh")
+                        or node.properties.get("name_cn")
+                        or node.properties.get("zh_name")
+                        or node.properties.get("title_zh")
+                        or node.properties.get("name_en")
+                        or node.properties.get("en_name")
+                        or str(node.id)
+                    )
+                    label = node.labels[0] if node.labels else "unknown"
+                    node_cache[node_id] = {"name": name, "label": label}
+            except Exception:
+                node_cache[node_id] = {"name": node_id, "label": "unknown"}
+            return node_cache[node_id]
 
         while remaining > 0:
             try:
                 fetch_size = min(page_size, remaining)
                 result = self.db.get_edges_by_type(edge_type, limit=fetch_size, offset=current_offset)
                 for edge in result.items:
+                    source_id = str(edge.source_id)
+                    target_id = str(edge.target_id)
+                    source_node = _node_summary(source_id)
+                    target_node = _node_summary(target_id)
                     details.append({
                         "edge_id": str(edge.id),
-                        "source_id": str(edge.source_id),
-                        "target_id": str(edge.target_id),
+                        "source_id": source_id,
+                        "target_id": target_id,
+                        "source_name": source_node["name"],
+                        "source_label": source_node["label"],
+                        "target_name": target_node["name"],
+                        "target_label": target_node["label"],
                         "edge_type": edge.type,
+                        "confidence": edge.properties.get("confidence", 0),
+                        "method": edge.properties.get("method", ""),
+                        "rule_score": edge.properties.get("rule_score", 0),
+                        "llm_score": edge.properties.get("llm_score", 0),
+                        "status": edge.properties.get("status", ""),
+                        "reason": edge.properties.get("reason", ""),
                         "properties": edge.properties,
                     })
                     remaining -= 1
@@ -1072,9 +1577,35 @@ class EntityBindingService:
     # ------------------------------------------------------------------
 
     def get_binding_graph(self) -> BindingGraphResponse:
-        """Fetch all binding edges and build nodes/edges arrays for D3.js visualization."""
+        """Fetch current binding edges and build nodes/edges arrays for D3.js visualization."""
         nodes_map: dict[str, dict] = {}
         edges_list: list[dict] = []
+
+        def _ensure_node(node_id: str) -> None:
+            if node_id in nodes_map:
+                return
+            try:
+                node = self.db.get_node(node_id)
+                if node is not None:
+                    name = (
+                        node.properties.get("name_zh")
+                        or node.properties.get("name_cn")
+                        or node.properties.get("zh_name")
+                        or node.properties.get("title_zh")
+                        or node.properties.get("name_en")
+                        or node.properties.get("en_name")
+                        or str(node.id)
+                    )
+                    label = node.labels[0] if node.labels else "unknown"
+                    nodes_map[node_id] = {
+                        "id": node_id,
+                        "name": name,
+                        "label": label,
+                    }
+                    return
+            except Exception:
+                pass
+            nodes_map[node_id] = {"id": node_id, "name": node_id, "label": "unknown"}
 
         for binding_type, edge_type in self.BINDING_EDGE_MAP.items():
             offset = 0
@@ -1086,50 +1617,8 @@ class EntityBindingService:
                     for edge in result.items:
                         source_id = str(edge.source_id)
                         target_id = str(edge.target_id)
-
-                        # Fetch source node if not already cached
-                        if source_id not in nodes_map:
-                            try:
-                                src_node = self.db.get_node(source_id)
-                                if src_node is not None:
-                                    name = (
-                                        src_node.properties.get("name_zh")
-                                        or src_node.properties.get("name_cn")
-                                        or src_node.properties.get("zh_name")
-                                        or src_node.properties.get("title_zh")
-                                        or str(src_node.id)
-                                    )
-                                    label = src_node.labels[0] if src_node.labels else "unknown"
-                                    nodes_map[source_id] = {
-                                        "id": source_id,
-                                        "name": name,
-                                        "label": label,
-                                    }
-                            except Exception:
-                                nodes_map[source_id] = {"id": source_id, "name": source_id, "label": "unknown"}
-
-                        # Fetch target node if not already cached
-                        if target_id not in nodes_map:
-                            try:
-                                tgt_node = self.db.get_node(target_id)
-                                if tgt_node is not None:
-                                    name = (
-                                        tgt_node.properties.get("name_zh")
-                                        or tgt_node.properties.get("name_cn")
-                                        or tgt_node.properties.get("zh_name")
-                                        or tgt_node.properties.get("title_zh")
-                                        or str(tgt_node.id)
-                                    )
-                                    label = tgt_node.labels[0] if tgt_node.labels else "unknown"
-                                    nodes_map[target_id] = {
-                                        "id": target_id,
-                                        "name": name,
-                                        "label": label,
-                                    }
-                            except Exception:
-                                nodes_map[target_id] = {"id": target_id, "name": target_id, "label": "unknown"}
-
-                        # Build edge for D3
+                        _ensure_node(source_id)
+                        _ensure_node(target_id)
                         edges_list.append({
                             "source": source_id,
                             "target": target_id,
@@ -1149,6 +1638,558 @@ class EntityBindingService:
         return BindingGraphResponse(
             nodes=list(nodes_map.values()),
             edges=edges_list,
+        )
+
+    def get_expert_direct_relation_demo(
+        self,
+        data_source: str = "all",
+        expert_a_id: str | None = None,
+        expert_b_id: str | None = None,
+        institution: str | None = None,
+        relation_type: str = "direct",
+        start_time: str | None = None,
+        end_time: str | None = None,
+    ) -> ExpertRelationDemoResponse:
+        query_params = {
+            "dataSource": (data_source or "all").strip().lower(),
+            "expertAId": (expert_a_id or "").strip(),
+            "expertBId": (expert_b_id or "").strip(),
+            "institution": (institution or "").strip(),
+            "relationType": (relation_type or "direct").strip(),
+            "startTime": (start_time or "").strip(),
+            "endTime": (end_time or "").strip(),
+        }
+        scenarios = self.build_expert_direct_relation_scenarios(
+            data_source=query_params["dataSource"],
+            relation_type=query_params["relationType"],
+        )
+        scenarios = self.filter_expert_direct_relation_scenarios(scenarios, query_params)
+        for scenario in scenarios:
+            scenario.api_example["query_params"] = query_params
+        return ExpertRelationDemoResponse(scenarios=scenarios)
+
+    def build_expert_direct_relation_scenarios(
+        self,
+        data_source: str = "all",
+        relation_type: str = "direct",
+    ) -> list[ExpertRelationScenario]:
+        normalized_source = (data_source or "all").strip().lower()
+        normalized_relation = (relation_type or "direct").strip().lower()
+        scenarios: list[ExpertRelationScenario] = []
+        if normalized_source in {"all", "graph", "real"}:
+            try:
+                scenarios.extend(self._build_real_expert_relation_scenarios())
+            except Exception as exc:
+                logger.warning("Build real expert relation scenarios failed, fallback will be used: %s", exc)
+        if normalized_source in {"all", "fallback", "demo"} or len(scenarios) < 12:
+            fallback_scenarios = self._build_fallback_expert_relation_scenarios()
+            existing_keys = {scenario.key for scenario in scenarios}
+            for scenario in fallback_scenarios:
+                if scenario.key in existing_keys:
+                    continue
+                scenarios.append(scenario)
+                existing_keys.add(scenario.key)
+                if normalized_source in {"all", "graph", "real"} and len(scenarios) >= 12:
+                    break
+        scenarios = self._select_expert_relation_scenarios(scenarios, normalized_relation)
+        return [self._scope_relation_reason_for_query(scenario, normalized_relation) for scenario in scenarios]
+
+    @staticmethod
+    def _scenario_complexity_score(scenario: ExpertRelationScenario) -> tuple[int, float, str]:
+        api_example = scenario.api_example or {}
+        reasons = api_example.get("reasons") or []
+        if not isinstance(reasons, list):
+            reasons = [reasons]
+        reason_count = len([reason for reason in reasons if str(reason).strip()])
+        relation_strength = float(api_example.get("relation_strength") or 0.0)
+        relation_summary = str(api_example.get("relation_summary") or "")
+        return reason_count, relation_strength, relation_summary
+
+    def _select_expert_relation_scenarios(
+        self,
+        scenarios: list[ExpertRelationScenario],
+        relation_type: str,
+    ) -> list[ExpertRelationScenario]:
+        normalized = (relation_type or "direct").strip().lower()
+        if normalized not in {"two_hop", "three_hop"} or len(scenarios) <= 1:
+            return scenarios
+
+        ranked: list[tuple[float, int, float, int, ExpertRelationScenario]] = []
+        for index, scenario in enumerate(scenarios):
+            reason_count, relation_strength, _summary = self._scenario_complexity_score(scenario)
+            complexity_score = float(reason_count * 10 + relation_strength)
+            ranked.append((complexity_score, reason_count, relation_strength, index, scenario))
+
+        ranked.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
+        pivot = max(1, len(ranked) // 2)
+        if normalized == "two_hop":
+            selected = ranked[:pivot]
+        else:
+            selected = ranked[pivot:]
+            if not selected:
+                selected = ranked[-pivot:]
+        return [item[4] for item in selected]
+
+    @staticmethod
+    def filter_expert_direct_relation_scenarios(
+        scenarios: list[ExpertRelationScenario],
+        query_params: dict[str, str],
+    ) -> list[ExpertRelationScenario]:
+        expert_a_query = query_params.get("expertAId", "")
+        expert_b_query = query_params.get("expertBId", "")
+        institution_query = query_params.get("institution", "")
+        relation_query = query_params.get("relationType", "direct")
+        start_dt = EntityBindingService._parse_query_datetime(query_params.get("startTime", ""))
+        end_dt = EntityBindingService._parse_query_datetime(query_params.get("endTime", ""))
+
+        def get_row_value(scenario: ExpertRelationScenario, row_key: str) -> Any:
+            for key, value in scenario.detail_rows:
+                if key == row_key:
+                    return value
+            return ""
+
+        def match_expert(scenario: ExpertRelationScenario, side: str, query: str) -> bool:
+            if not query or query == "全部":
+                return True
+            query_text = query.lower()
+            expert = scenario.api_example.get("expert_a" if side == "a" else "expert_b", {})
+            row_name = str(get_row_value(scenario, "专家 A" if side == "a" else "专家 B"))
+            graph_nodes = [node for node in scenario.graph.nodes if node.kind == ("expertA" if side == "a" else "expertB")]
+            values = [row_name, str(expert.get("name", "")), str(expert.get("id", ""))]
+            values.extend([node.id for node in graph_nodes])
+            values.extend([node.subtitle for node in graph_nodes])
+            return any(query_text in str(value).lower() for value in values if value)
+
+        def match_institution(scenario: ExpertRelationScenario) -> bool:
+            if not institution_query or institution_query == "全部":
+                return True
+            query_text = institution_query.lower()
+            values = [
+                str(scenario.api_example.get("institution", "")),
+                str(get_row_value(scenario, "直接关系")),
+            ]
+            values.extend([node.subtitle for node in scenario.graph.nodes if node.kind == "institution"])
+            return any(query_text in str(value).lower() for value in values if value)
+
+        def match_relation(scenario: ExpertRelationScenario) -> bool:
+            normalized = (relation_query or "direct").strip().lower()
+            if normalized in {"", "all", "direct", "two_hop", "three_hop"}:
+                return True
+            expected = (EntityBindingService._relation_reason_label(normalized) or relation_query).lower()
+            reasons = scenario.api_example.get("reasons") or get_row_value(scenario, "判定依据") or []
+            if not isinstance(reasons, list):
+                reasons = [reasons]
+            return any(expected in str(reason).lower() for reason in reasons)
+
+        def match_time(scenario: ExpertRelationScenario) -> bool:
+            test_dt = EntityBindingService._parse_query_datetime(scenario.last_test_time)
+            if not test_dt:
+                return True
+            if start_dt and test_dt < start_dt:
+                return False
+            if end_dt and test_dt > end_dt:
+                return False
+            return True
+
+        return [
+            scenario
+            for scenario in scenarios
+            if match_expert(scenario, "a", expert_a_query)
+            and match_expert(scenario, "b", expert_b_query)
+            and match_institution(scenario)
+            and match_relation(scenario)
+            and match_time(scenario)
+        ]
+
+    def _build_real_expert_relation_scenarios(self) -> list[ExpertRelationScenario]:
+        talent_result = self.db.get_nodes_by_label("talent", limit=200, offset=0)
+        paper_result = self.db.get_nodes_by_label("cn_paper", limit=400, offset=0)
+        patent_result = self.db.get_nodes_by_label("patent", limit=400, offset=0)
+
+        talents = [node.properties for node in talent_result.items]
+        papers = [node.properties for node in paper_result.items]
+        patents = [node.properties for node in patent_result.items]
+        if len(talents) < 2:
+            return []
+
+        org_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for talent in talents:
+            org_name = str(talent.get("scholar_org_name_zh") or talent.get("scholar_org_name_en") or "").strip()
+            if org_name:
+                org_groups[org_name].append(talent)
+
+        relation_pairs_map: dict[tuple[str, str], dict[str, Any]] = {}
+        talent_by_name: dict[str, dict[str, Any]] = {}
+        for talent in talents:
+            talent_by_name[self._get_talent_display_name(talent)] = talent
+
+        def add_relation_pair(
+            expert_a: dict[str, Any],
+            expert_b: dict[str, Any],
+            relation_reason: str,
+            relation_weight: int,
+            institution: str = "",
+        ) -> None:
+            expert_a_id = str(expert_a.get("scholar_id") or self._get_talent_display_name(expert_a))
+            expert_b_id = str(expert_b.get("scholar_id") or self._get_talent_display_name(expert_b))
+            pair_key = tuple(sorted((expert_a_id, expert_b_id)))
+            shared_directions = self._collect_shared_directions(expert_a, expert_b)
+            record = relation_pairs_map.setdefault(
+                pair_key,
+                {
+                    "expert_a": expert_a,
+                    "expert_b": expert_b,
+                    "institution": institution or str(expert_a.get("scholar_org_name_zh") or expert_b.get("scholar_org_name_zh") or "").strip(),
+                    "shared_directions": shared_directions,
+                    "reasons": [],
+                    "weight": 0,
+                },
+            )
+            if relation_reason not in record["reasons"]:
+                record["reasons"].append(relation_reason)
+            record["weight"] += relation_weight
+            if shared_directions:
+                record["shared_directions"] = sorted(set(record["shared_directions"]) | set(shared_directions))
+            if institution and not record["institution"]:
+                record["institution"] = institution
+
+        for institution, members in org_groups.items():
+            if len(members) < 2:
+                continue
+            members = sorted(members, key=lambda item: str(item.get("name_zh") or item.get("name_en") or item.get("scholar_id") or ""))
+            for index, expert_a in enumerate(members):
+                for expert_b in members[index + 1:]:
+                    add_relation_pair(expert_a, expert_b, "同机构", 3, institution)
+
+        for paper in papers:
+            authors = self._extract_names_from_text(paper.get("authors"))
+            if len(authors) < 2:
+                continue
+            for index, author_a in enumerate(authors):
+                expert_a = talent_by_name.get(author_a)
+                if not expert_a:
+                    continue
+                for author_b in authors[index + 1:]:
+                    expert_b = talent_by_name.get(author_b)
+                    if not expert_b:
+                        continue
+                    add_relation_pair(
+                        expert_a,
+                        expert_b,
+                        "共论文",
+                        4,
+                        str(paper.get("institution") or expert_a.get("scholar_org_name_zh") or expert_b.get("scholar_org_name_zh") or "").strip(),
+                    )
+
+        inventor_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for patent in patents:
+            applicant = str(patent.get("first_applicant_name") or "").strip()
+            inventor_name = str(patent.get("first_inventor_name") or "").strip()
+            expert = talent_by_name.get(inventor_name)
+            if expert and applicant:
+                inventor_groups[applicant].append(expert)
+        for applicant, inventors in inventor_groups.items():
+            unique_inventors = []
+            seen_ids = set()
+            for inventor in inventors:
+                inventor_id = str(inventor.get("scholar_id") or self._get_talent_display_name(inventor))
+                if inventor_id in seen_ids:
+                    continue
+                seen_ids.add(inventor_id)
+                unique_inventors.append(inventor)
+            for index, expert_a in enumerate(unique_inventors):
+                for expert_b in unique_inventors[index + 1:]:
+                    add_relation_pair(expert_a, expert_b, "共专利", 4, applicant)
+
+        for talent in talents:
+            co_scholar_names = self._extract_names_from_text(
+                talent.get("co_scholar_name_zh") or talent.get("co_scholar_name_en") or talent.get("co_scholar_id")
+            )
+            for co_name in co_scholar_names:
+                co_expert = talent_by_name.get(co_name)
+                if not co_expert:
+                    continue
+                co_paper_count = int(talent.get("co_paper_count") or 1)
+                add_relation_pair(
+                    talent,
+                    co_expert,
+                    "Co-Author",
+                    max(3, co_paper_count),
+                    str(talent.get("co_scholar_org_name_zh") or talent.get("scholar_org_name_zh") or co_expert.get("scholar_org_name_zh") or "").strip(),
+                )
+
+        for institution, members in org_groups.items():
+            if len(members) < 2:
+                continue
+            members = sorted(members, key=lambda item: str(item.get("name_zh") or item.get("name_en") or item.get("scholar_id") or ""))
+            for index, expert_a in enumerate(members):
+                for expert_b in members[index + 1:]:
+                    if self._collect_shared_directions(expert_a, expert_b):
+                        add_relation_pair(expert_a, expert_b, "共同项目", 2, institution)
+
+        relation_pairs = list(relation_pairs_map.values())
+        relation_pairs.sort(
+            key=lambda item: (
+                item["weight"],
+                len(item["reasons"]),
+                len(item["shared_directions"]),
+                int(item["expert_a"].get("h_index") or 0) + int(item["expert_b"].get("h_index") or 0),
+                str(item["expert_a"].get("name_zh") or item["expert_a"].get("name_en") or ""),
+                str(item["expert_b"].get("name_zh") or item["expert_b"].get("name_en") or ""),
+            ),
+            reverse=True,
+        )
+
+        scenarios: list[ExpertRelationScenario] = []
+        for pair in relation_pairs[:12]:
+            expert_a_name = self._get_talent_display_name(pair["expert_a"])
+            expert_b_name = self._get_talent_display_name(pair["expert_b"])
+            relation_type = "直接关系"
+            institution = pair["institution"] or "科研合作网络"
+            relation_strength = min(100, 45 + pair["weight"] * 8 + len(pair["reasons"]) * 6)
+            api_example = {
+                "relation_type": "expert_direct_relation",
+                "relation_subtype": "direct",
+                "expert_a": {"name": expert_a_name, "title": self._infer_talent_title(pair["expert_a"])},
+                "expert_b": {"name": expert_b_name, "title": self._infer_talent_title(pair["expert_b"])},
+                "institution": institution,
+                "reasons": pair["reasons"],
+                "relation_strength": relation_strength,
+                "relation_summary": " + ".join(pair["reasons"]),
+            }
+            scenario_data = {
+                "key": f"expert-{pair['expert_a'].get('scholar_id', expert_a_name)}-{pair['expert_b'].get('scholar_id', expert_b_name)}",
+                "label": f"科技专家直接关系（{expert_a_name} / {expert_b_name}）",
+                "last_test_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "expert_a_id": str(pair["expert_a"].get("scholar_id") or expert_a_name),
+                "expert_b_id": str(pair["expert_b"].get("scholar_id") or expert_b_name),
+                "expert_a": {"name": expert_a_name, "title": self._infer_talent_title(pair["expert_a"]), "id": str(pair["expert_a"].get("scholar_id") or expert_a_name)},
+                "expert_b": {"name": expert_b_name, "title": self._infer_talent_title(pair["expert_b"]), "id": str(pair["expert_b"].get("scholar_id") or expert_b_name)},
+                "relation_type": relation_type,
+                "institution": institution,
+                "directions": pair["shared_directions"],
+                "duration": "",
+                "achievements": [],
+                "api_example": api_example,
+            }
+            scenarios.append(self._build_expert_relation_scenario(scenario_data))
+        return scenarios
+
+    @staticmethod
+    def _build_fallback_expert_relation_scenarios() -> list[ExpertRelationScenario]:
+        return [EntityBindingService._build_expert_relation_scenario(item) for item in EXPERT_DIRECT_RELATION_FALLBACK_DATA]
+
+    @staticmethod
+    def _relation_reason_label(relation_type: str | None) -> str:
+        reason_map = {
+            "same_institution": "同机构",
+            "co_paper": "共论文",
+            "co_patent": "共专利",
+            "co_author": "Co-Author",
+            "co_project": "共同项目",
+        }
+        normalized = (relation_type or "direct").strip().lower()
+        return reason_map.get(normalized, "")
+
+    def _scope_relation_reason_for_query(
+        self,
+        scenario: ExpertRelationScenario,
+        relation_type: str | None,
+    ) -> ExpertRelationScenario:
+        selected_reason = self._relation_reason_label(relation_type)
+        if not selected_reason:
+            return scenario
+        reasons = scenario.api_example.get("reasons") or []
+        if not isinstance(reasons, list):
+            reasons = [reasons]
+        scoped_reasons = [reason for reason in reasons if selected_reason.lower() == str(reason).lower()]
+        if not scoped_reasons:
+            scoped_reasons = [selected_reason]
+        scenario.api_example["reasons"] = scoped_reasons
+        scenario.api_example["relation_summary"] = " + ".join(scoped_reasons)
+        scenario.detail_rows = [
+            [key, scoped_reasons if key == "判定依据" else (" + ".join(scoped_reasons) if key == "关系摘要" else value)]
+            for key, value in scenario.detail_rows
+        ]
+        return scenario
+
+    @staticmethod
+    def _parse_query_datetime(raw_value: str | None) -> datetime | None:
+        if not raw_value:
+            return None
+        value = raw_value.strip()
+        if not value:
+            return None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(value, fmt)
+            except ValueError:
+                continue
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _build_expert_relation_scenario(item: dict[str, Any]) -> ExpertRelationScenario:
+        graph = EntityBindingService._build_expert_demo_graph(
+            item["expert_a"],
+            item["expert_b"],
+            item["relation_type"],
+            item["institution"],
+            item["directions"],
+            item["duration"],
+            item["achievements"],
+            expert_a_id=str(item.get("expert_a_id") or item["expert_a"].get("id") or item["expert_a"].get("scholar_id") or item["expert_a"]["name"]),
+            expert_b_id=str(item.get("expert_b_id") or item["expert_b"].get("id") or item["expert_b"].get("scholar_id") or item["expert_b"]["name"]),
+        )
+        detail_rows = [
+            ["专家 A", item["expert_a"]["name"]],
+            ["专家 A 职称", item["expert_a"]["title"]],
+            ["专家 B", item["expert_b"]["name"]],
+            ["专家 B 职称", item["expert_b"]["title"]],
+            ["关系类型", f"科技专家直接关系 / {item['relation_type']}"],
+            ["直接关系", item["institution"]],
+            ["判定依据", item.get("api_example", {}).get("reasons", [])],
+            ["关系强度", item.get("api_example", {}).get("relation_strength", 0)],
+            ["关系摘要", item.get("api_example", {}).get("relation_summary", "")],
+        ]
+        return ExpertRelationScenario(
+            key=item["key"],
+            label=item["label"],
+            last_test_time=item["last_test_time"],
+            graph=graph,
+            detail_rows=detail_rows,
+            api_example=item["api_example"],
+        )
+
+    @staticmethod
+    def _get_talent_display_name(talent: dict[str, Any]) -> str:
+        return str(talent.get("name_zh") or talent.get("name_en") or talent.get("scholar_id") or "未知专家")
+
+    @staticmethod
+    def _infer_talent_title(talent: dict[str, Any]) -> str:
+        h_index = int(talent.get("h_index") or 0)
+        if h_index >= 12:
+            return "研究员"
+        if h_index >= 9:
+            return "副研究员"
+        return "助理研究员"
+
+    @staticmethod
+    def _split_text_values(raw_value: Any) -> list[str]:
+        text = str(raw_value or "")
+        parts = re.split(r"[;,；、|\s]+", text)
+        return [part.strip() for part in parts if part.strip()]
+
+    def _extract_names_from_text(self, raw_value: Any) -> list[str]:
+        values = self._split_text_values(raw_value)
+        result: list[str] = []
+        for value in values:
+            cleaned = value.strip()
+            if not cleaned:
+                continue
+            if cleaned not in result:
+                result.append(cleaned)
+        return result
+
+    def _collect_shared_directions(self, expert_a: dict[str, Any], expert_b: dict[str, Any]) -> list[str]:
+        fields_a = set(self._split_text_values(expert_a.get("fields")))
+        fields_b = set(self._split_text_values(expert_b.get("fields")))
+        return sorted(fields_a & fields_b)
+
+    def _merge_direction_values(self, expert_a: dict[str, Any], expert_b: dict[str, Any]) -> list[str]:
+        merged: list[str] = []
+        for value in self._split_text_values(expert_a.get("fields")) + self._split_text_values(expert_b.get("fields")):
+            if value not in merged:
+                merged.append(value)
+        return merged[:4]
+
+    def _collect_shared_papers(
+        self,
+        expert_a: dict[str, Any],
+        expert_b: dict[str, Any],
+        papers: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        expert_names = {self._get_talent_display_name(expert_a), self._get_talent_display_name(expert_b)}
+        institution = str(expert_a.get("scholar_org_name_zh") or expert_a.get("scholar_org_name_en") or "").strip()
+        shared: list[dict[str, Any]] = []
+        for paper in papers:
+            authors = str(paper.get("authors") or "")
+            if not all(name in authors for name in expert_names):
+                continue
+            paper_institution = str(paper.get("institution") or "").strip()
+            if institution and paper_institution and institution not in paper_institution and paper_institution not in institution:
+                continue
+            shared.append(paper)
+        return shared
+
+    def _collect_shared_patents(
+        self,
+        expert_a: dict[str, Any],
+        expert_b: dict[str, Any],
+        patents: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        institution = str(expert_a.get("scholar_org_name_zh") or expert_a.get("scholar_org_name_en") or "").strip()
+        expert_names = {self._get_talent_display_name(expert_a), self._get_talent_display_name(expert_b)}
+        shared: list[dict[str, Any]] = []
+        for patent in patents:
+            inventor_name = str(patent.get("first_inventor_name") or "").strip()
+            applicant_name = str(patent.get("first_applicant_name") or "").strip()
+            if inventor_name not in expert_names:
+                continue
+            if institution and applicant_name and institution not in applicant_name and applicant_name not in institution:
+                continue
+            shared.append(patent)
+        return shared
+
+    @staticmethod
+    def _build_relation_duration(shared_papers: list[dict[str, Any]]) -> str:
+        years: list[str] = []
+        for paper in shared_papers:
+            cover_date = str(paper.get("cover_date_start") or "").strip()
+            if cover_date:
+                years.append(cover_date[:7])
+        if not years:
+            return "长期合作"
+        years.sort()
+        if len(years) == 1:
+            return f"{years[0]} - {years[0]}"
+        return f"{years[0]} - {years[-1]}"
+
+    @staticmethod
+    def _split_duration(duration: str) -> dict[str, str]:
+        if " - " in duration:
+            start, end = duration.split(" - ", 1)
+            return {"start": start, "end": end}
+        return {"start": duration, "end": duration}
+
+    @staticmethod
+    def _build_expert_demo_graph(
+        expert_a: dict[str, str],
+        expert_b: dict[str, str],
+        relation_type: str,
+        institution: str,
+        directions: list[str],
+        duration: str,
+        achievements: list[dict[str, Any]],
+        expert_a_id: str = "expertA",
+        expert_b_id: str = "expertB",
+    ) -> ExpertRelationGraph:
+        institution_id = f"institution-{institution}"
+        return ExpertRelationGraph(
+            width=860,
+            height=640,
+            nodes=[
+                ExpertRelationGraphNode(id=expert_a_id, kind="expertA", x=90, y=140, icon="👤", title=f"专家A：{expert_a['name']}", subtitle=expert_a["title"]),
+                ExpertRelationGraphNode(id=expert_b_id, kind="expertB", x=550, y=140, icon="👤", title=f"专家B：{expert_b['name']}", subtitle=expert_b["title"]),
+                ExpertRelationGraphNode(id=institution_id, kind="institution", x=270, y=340, icon="🏛", title="直接关系", subtitle=institution),
+            ],
+            edges=[
+                ExpertRelationGraphEdge(type="curve", from_=[276, 196], to=[550, 196], stroke="#a355ec", marker="#a355ec", width=4, label=relation_type, label_x=398, label_y=178, label_color="#8f52db"),
+                ExpertRelationGraphEdge(type="curve", from_=[220, 240], c1=[250, 290], c2=[330, 335], to=[402, 392], stroke="#6ca2ff", marker="#6ca2ff", width=4, label="直连", label_x=275, label_y=320, label_color="#6b8fd6"),
+                ExpertRelationGraphEdge(type="curve", from_=[640, 240], c1=[620, 290], c2=[540, 335], to=[458, 392], stroke="#6ca2ff", marker="#6ca2ff", width=4, label="直连", label_x=555, label_y=320, label_color="#6b8fd6"),
+            ],
         )
 
     # ------------------------------------------------------------------

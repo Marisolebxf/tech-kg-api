@@ -35,3 +35,24 @@ class ExtractResponse(BaseModel):
     source_type: str
     entity_count: int
     entities: list[EntityItem]
+    task_id: Optional[str] = None
+    task_status: str = "completed"
+    persist_to_graph: bool = False
+
+
+class ExtractionTaskStatusResponse(BaseModel):
+    task_id: str
+    task_kind: str = ""
+    status: str
+    source_type: str
+    entity_count: int = 0
+    written_entities: int = 0
+    job_node_id: str = ""
+    source_hash: str = ""
+    storage_backend: str = ""
+    execution_backend: str = ""
+    error: str = ""
+    queued_at: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    updated_at: str = ""

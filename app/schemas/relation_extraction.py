@@ -46,3 +46,55 @@ class BatchRelationExtractionRequest(BaseModel):
         pattern="^(rule|llm|hybrid)$",
         description="抽取方法: rule / llm / hybrid",
     )
+
+
+class RelationEntityItem(BaseModel):
+    """关系抽取中的实体项。"""
+
+    id: str
+    text: str
+    type: str
+
+
+class RelationTripleItem(BaseModel):
+    """关系抽取中的三元组项。"""
+
+    head: dict[str, Any]
+    relation: str
+    tail: dict[str, Any]
+    confidence: float = 1.0
+    source: str = "unknown"
+
+
+class RelationExtractionResponse(BaseModel):
+    """关系抽取结果响应。"""
+
+    text: str
+    method: str
+    entities: list[dict[str, Any]]
+    relations: list[dict[str, Any]]
+    task_id: str | None = None
+    task_status: str = "completed"
+    persist_to_graph: bool = False
+
+
+class RelationExtractionTaskStatusResponse(BaseModel):
+    """关系抽取后台任务状态。"""
+
+    task_id: str
+    task_kind: str = ""
+    status: str
+    method: str
+    entity_count: int = 0
+    relation_count: int = 0
+    written_entities: int = 0
+    written_relations: int = 0
+    job_node_id: str = ""
+    source_hash: str = ""
+    storage_backend: str = ""
+    execution_backend: str = ""
+    error: str = ""
+    queued_at: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    updated_at: str = ""

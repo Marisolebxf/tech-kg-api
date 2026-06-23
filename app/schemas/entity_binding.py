@@ -38,6 +38,7 @@ class BindingStatsResponse(BaseModel):
     org_org: Optional[BindingResult] = None
     total_confirmed: int = 0
     total_candidates: int = 0
+    total_candidate: int = 0
 
 
 class BindingGraphResponse(BaseModel):
@@ -55,3 +56,52 @@ class InitDataResponse(BaseModel):
 class ClearResponse(BaseModel):
     message: str = ""
     edges_deleted: int = 0
+
+
+class ExpertRelationGraphNode(BaseModel):
+    id: str
+    kind: str
+    x: int
+    y: int
+    icon: str = ""
+    title: str
+    subtitle: str = ""
+    desc: str = ""
+    chips: list[str] = []
+    achievements: list[dict] = []
+
+
+class ExpertRelationGraphEdge(BaseModel):
+    type: str = "curve"
+    from_: list[int]
+    c1: Optional[list[int]] = None
+    c2: Optional[list[int]] = None
+    to: list[int]
+    stroke: str
+    marker: str
+    width: int = 4
+    dash: str = ""
+    label: str = ""
+    label_x: int
+    label_y: int
+    label_color: str = "#8f52db"
+
+
+class ExpertRelationGraph(BaseModel):
+    width: int = 860
+    height: int = 640
+    nodes: list[ExpertRelationGraphNode] = []
+    edges: list[ExpertRelationGraphEdge] = []
+
+
+class ExpertRelationScenario(BaseModel):
+    key: str
+    label: str
+    last_test_time: str
+    graph: ExpertRelationGraph
+    detail_rows: list[list]
+    api_example: dict
+
+
+class ExpertRelationDemoResponse(BaseModel):
+    scenarios: list[ExpertRelationScenario] = []

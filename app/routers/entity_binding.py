@@ -12,8 +12,10 @@ from app.schemas.entity_binding import (
     BindingGraphResponse,
     InitDataResponse,
     ClearResponse,
+    ExpertRelationDemoResponse,
 )
 from app.services.entity_binding import EntityBindingService
+from app.services.expert_direct_cache import get_expert_direct_relation_demo_cached
 
 router = APIRouter(prefix="/binding", tags=["Entity Binding"])
 
@@ -126,3 +128,91 @@ def clear_bindings(clear_data: bool = Query(False)):
         return ClearResponse(**result)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"清除失败: {exc}") from exc
+
+
+def _get_expert_direct_demo(
+    data_source: str = Query("all", alias="dataSource"),
+    expert_a_id: str | None = Query(None, alias="expertAId"),
+    expert_b_id: str | None = Query(None, alias="expertBId"),
+    institution: str | None = Query(None),
+    relation_type: str = Query("direct", alias="relationType"),
+    start_time: str | None = Query(None, alias="startTime"),
+    end_time: str | None = Query(None, alias="endTime"),
+):
+    try:
+        result = get_expert_direct_relation_demo_cached(
+            relation_type=relation_type,
+            data_source=data_source,
+            expert_a_id=expert_a_id,
+            expert_b_id=expert_b_id,
+            institution=institution,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        if isinstance(result, ExpertRelationDemoResponse):
+            return result
+        return ExpertRelationDemoResponse(**result)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"获取专家直接关系Demo失败: {exc}") from exc
+
+
+@router.get("/expert-direct", response_model=ExpertRelationDemoResponse)
+@router.get("/expert-direct-demo", response_model=ExpertRelationDemoResponse)
+def get_expert_direct_demo(
+    data_source: str = Query("all", alias="dataSource"),
+    expert_a_id: str | None = Query(None, alias="expertAId"),
+    expert_b_id: str | None = Query(None, alias="expertBId"),
+    institution: str | None = Query(None),
+    relation_type: str = Query("direct", alias="relationType"),
+    start_time: str | None = Query(None, alias="startTime"),
+    end_time: str | None = Query(None, alias="endTime"),
+):
+    return _get_expert_direct_demo(
+        data_source=data_source,
+        expert_a_id=expert_a_id,
+        expert_b_id=expert_b_id,
+        institution=institution,
+        relation_type=relation_type,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+
+@router.get("/expert-direct-two-hop", response_model=ExpertRelationDemoResponse)
+def get_expert_direct_two_hop(
+    data_source: str = Query("all", alias="dataSource"),
+    expert_a_id: str | None = Query(None, alias="expertAId"),
+    expert_b_id: str | None = Query(None, alias="expertBId"),
+    institution: str | None = Query(None),
+    start_time: str | None = Query(None, alias="startTime"),
+    end_time: str | None = Query(None, alias="endTime"),
+):
+    return _get_expert_direct_demo(
+        data_source=data_source,
+        expert_a_id=expert_a_id,
+        expert_b_id=expert_b_id,
+        institution=institution,
+        relation_type="two_hop",
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+
+@router.get("/expert-direct-three-hop", response_model=ExpertRelationDemoResponse)
+def get_expert_direct_three_hop(
+    data_source: str = Query("all", alias="dataSource"),
+    expert_a_id: str | None = Query(None, alias="expertAId"),
+    expert_b_id: str | None = Query(None, alias="expertBId"),
+    institution: str | None = Query(None),
+    start_time: str | None = Query(None, alias="startTime"),
+    end_time: str | None = Query(None, alias="endTime"),
+):
+    return _get_expert_direct_demo(
+        data_source=data_source,
+        expert_a_id=expert_a_id,
+        expert_b_id=expert_b_id,
+        institution=institution,
+        relation_type="three_hop",
+        start_time=start_time,
+        end_time=end_time,
+    )

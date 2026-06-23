@@ -25,6 +25,7 @@ SCHEMA_DDL: list[str] = [
     "city string, org_type string, listing_status string, incorporation_year int64);",
     "CREATE EDGE IF NOT EXISTS EMPLOYED_BY(relation_type string, role string, "
     "start_date string, end_date string, source string);",
+    "ALTER EDGE EMPLOYED_BY ADD (tech_field string);",
     "CREATE TAG INDEX IF NOT EXISTS scholar_id_idx ON Scholar(scholar_id(64));",
     "CREATE TAG INDEX IF NOT EXISTS org_name_idx ON Organization(name_cn(128));",
     "CREATE TAG INDEX IF NOT EXISTS org_id_idx ON Organization(org_id(64));",
@@ -48,7 +49,10 @@ def init_schema() -> None:
     techkg.connect()
     try:
         for stmt in SCHEMA_DDL:
-            techkg.execute_write(stmt)
+            try:
+                techkg.execute_write(stmt)
+            except Exception as exc:  # noqa: BLE001
+                print(f"skip ddl (may already exist): {exc}")
     finally:
         techkg.close()
 

@@ -5,7 +5,7 @@ def test_binding_index(async_client: TestClient) -> None:
     response = async_client.get("/")
 
     assert response.status_code == 200
-    assert "科技专家直接关系 Demo" in response.text
+    assert "科技专家关系推理平台" in response.text or "知识图谱平台" in response.text
 
 
 def test_binding_two_hop_and_three_hop_are_different(async_client: TestClient) -> None:
@@ -23,8 +23,8 @@ def test_binding_two_hop_and_three_hop_are_different(async_client: TestClient) -
     assert [item["key"] for item in two_hop] != [item["key"] for item in three_hop]
 
 
-def test_binding_demo_default(async_client: TestClient) -> None:
-    response = async_client.get("/api/v1/binding/expert-direct-demo")
+def test_binding_relation_default(async_client: TestClient) -> None:
+    response = async_client.get("/api/v1/binding/expert-direct-relation")
 
     assert response.status_code == 200
     payload = response.json()

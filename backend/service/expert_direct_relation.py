@@ -145,7 +145,7 @@ EXPERT_DIRECT_RELATION_FALLBACK_DATA: list[dict[str, Any]] = [
 class ExpertDirectRelationService(KGModuleScaffoldService):
     module_code = "expert_direct_relation"
 
-    def build_demo_response(
+    def build_relation_response(
         self,
         data_source: str = "all",
         expert_a_id: str | None = None,
@@ -304,7 +304,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         relation_type = item["relation_type"]
         directions = item.get("directions", [])
         achievements = item.get("achievements", [])
-        graph = ExpertDirectRelationService._build_demo_graph(
+        graph = ExpertDirectRelationService._build_relation_graph(
             expert_a=expert_a,
             expert_b=expert_b,
             relation_type=relation_type,
@@ -336,7 +336,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         }
 
     @staticmethod
-    def _build_demo_graph(
+    def _build_relation_graph(
         expert_a: dict[str, str],
         expert_b: dict[str, str],
         relation_type: str,

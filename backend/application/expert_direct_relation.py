@@ -10,7 +10,7 @@ class ExpertDirectRelationApplication:
     def describe(self) -> dict[str, object]:
         return self._service.describe()
 
-    def get_demo_response(
+    def get_relation_response(
         self,
         data_source: str = "all",
         expert_a_id: str | None = None,
@@ -20,7 +20,7 @@ class ExpertDirectRelationApplication:
         start_time: str | None = None,
         end_time: str | None = None,
     ) -> dict[str, object]:
-        return self._service.build_demo_response(
+        return self._service.build_relation_response(
             data_source=data_source,
             expert_a_id=expert_a_id,
             expert_b_id=expert_b_id,

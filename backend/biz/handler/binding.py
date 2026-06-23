@@ -10,7 +10,7 @@ router = APIRouter(prefix="/binding")
 application = ExpertDirectRelationApplication()
 
 
-def _build_demo_response(
+def _build_relation_response(
     relation_type: str,
     data_source: str = "all",
     expert_a_id: Optional[str] = None,
@@ -19,7 +19,7 @@ def _build_demo_response(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
 ) -> dict[str, object]:
-    return application.get_demo_response(
+    return application.get_relation_response(
         data_source=data_source,
         expert_a_id=expert_a_id,
         expert_b_id=expert_b_id,
@@ -30,8 +30,8 @@ def _build_demo_response(
     )
 
 
-@router.get("/expert-direct-demo")
-async def expert_direct_demo(
+@router.get("/expert-direct-relation")
+async def expert_direct_relation(
     dataSource: str = "all",
     expertAId: Optional[str] = None,
     expertBId: Optional[str] = None,
@@ -40,7 +40,7 @@ async def expert_direct_demo(
     startTime: Optional[str] = None,
     endTime: Optional[str] = None,
 ) -> dict[str, object]:
-    return _build_demo_response(
+    return _build_relation_response(
         relation_type=relationType,
         data_source=dataSource,
         expert_a_id=expertAId,
@@ -60,7 +60,7 @@ async def expert_direct_two_hop(
     startTime: Optional[str] = None,
     endTime: Optional[str] = None,
 ) -> dict[str, object]:
-    return _build_demo_response(
+    return _build_relation_response(
         relation_type="two_hop",
         data_source=dataSource,
         expert_a_id=expertAId,
@@ -80,7 +80,7 @@ async def expert_direct_three_hop(
     startTime: Optional[str] = None,
     endTime: Optional[str] = None,
 ) -> dict[str, object]:
-    return _build_demo_response(
+    return _build_relation_response(
         relation_type="three_hop",
         data_source=dataSource,
         expert_a_id=expertAId,

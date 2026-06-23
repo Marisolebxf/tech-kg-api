@@ -22,8 +22,20 @@ def test_count_by_cpc_section_groups_by_first_letter():
     dao = PatentDAO(session)
     dist = dao.count_by_cpc_section("某公司")
     sections = {d["cpcSection"]: d["count"] for d in dist}
-    assert sections["G"] == 3
+    assert sections["G"] == 2
     assert sections["H"] == 1
+
+
+def test_count_dedups_duplicate_codes_within_patent():
+    session = MagicMock()
+    session.execute.return_value.scalars.return_value = [
+        _pat("A", "某公司", {"main": ["G06N3/04"], "add": ["G06N3/04"]}),
+        _pat("B", "某公司", {"main": ["G06N3/04", "G06F40/30"]}),
+    ]
+    dao = PatentDAO(session)
+    dist = dao.count_by_cpc_section("某公司")
+    sections = {d["cpcSection"]: d["count"] for d in dist}
+    assert sections["G"] == 2
 
 
 def test_list_by_assignee_filters_by_cpc_prefix():

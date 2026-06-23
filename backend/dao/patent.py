@@ -27,7 +27,7 @@ class PatentDAO:
             rows = [
                 p for p in rows
                 if any(
-                    any(c.startswith(pre) for c in self._cpc_codes(p))
+                    any(c.upper().startswith(pre) for c in self._cpc_codes(p))
                     for pre in prefixes
                 )
             ]
@@ -37,10 +37,9 @@ class PatentDAO:
         rows = self.list_by_assignee(name_cn)
         counts: dict[str, int] = {}
         for p in rows:
-            for c in self._cpc_codes(p):
-                section = (c[:1] or "").upper()
-                if section:
-                    counts[section] = counts.get(section, 0) + 1
+            sections = {c[:1].upper() for c in self._cpc_codes(p) if c[:1]}
+            for section in sections:
+                counts[section] = counts.get(section, 0) + 1
         return [{"cpcSection": k, "count": v} for k, v in sorted(counts.items())]
 
     @staticmethod
@@ -51,7 +50,7 @@ class PatentDAO:
         if isinstance(raw, str):
             try:
                 raw = json.loads(raw)
-            except (json.JSONDecodeError, ValueError):
+            except ValueError:
                 return []
         codes: list[str] = []
         if isinstance(raw, dict):

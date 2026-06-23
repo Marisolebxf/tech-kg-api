@@ -157,6 +157,8 @@ const relationFeatures: RelationFeature[] = [
         apiPath: '/api/v1/kg-construction/expert-enterprise-relations/build',
         nodes: [],
       },
+      { featureName: '角色与合作详情标注', apiPath: '/api/v1/kg-construction/relation-detail-annotations/annotate', nodes: [] },
+      { featureName: '企业背景关联分析', apiPath: '/api/v1/kg-construction/enterprise-background-analyses/analyze', nodes: [] },
     ],
   },
   {
@@ -192,6 +194,12 @@ const currentSubFunction = computed(
 const selectedFeature = computed(() => currentSubFunction.value.featureName)
 const featureOptions = computed(() => currentFeature.value.subFunctions.map((feature) => feature.featureName))
 const currentApiPath = computed(() => currentSubFunction.value.apiPath)
+const subFunctionKey = computed<'build' | 'annotate' | 'analyze'>(() => {
+  const n = activeSubFunctionName.value
+  if (n === '角色与合作详情标注') return 'annotate'
+  if (n === '企业背景关联分析') return 'analyze'
+  return 'build'
+})
 const graphNodes = ref<GraphNode[]>([])
 
 const loading = ref(false)
@@ -254,11 +262,49 @@ function splitNodeTitle(title: string) {
   }
 }
 
-const detailRows = computed(() => {
+const dimensionChinese: Record<string, string> = {
+  industry_status: '行业地位',
+  core_tech: '核心技术',
+  financial: '经营财务',
+}
+
+const detailRows = computed<(string | number)[][]>(() => {
+  if (subFunctionKey.value === 'annotate') {
+    const resp = annotationResp.value
+    if (!resp) return []
+    const period = resp.period ?? annotationParams.value.period
+    return [
+      ['关系ID', resp.relationId ?? annotationParams.value.relationId],
+      ['角色', resp.roleLabel ?? '-'],
+      ['角色等级', resp.roleLevel ?? '-'],
+      ['角色类型', resp.roleType ?? annotationParams.value.roleType],
+      ['技术领域', resp.techField ?? annotationParams.value.techField],
+      ['周期', `${period?.start ?? ''} ~ ${period?.end ?? ''}`],
+      ['标注结果', resp.annotated ? '成功' : '失败'],
+    ]
+  }
+  if (subFunctionKey.value === 'analyze') {
+    const resp = analysisResp.value
+    if (!resp) return []
+    const rows: (string | number)[][] = [['企业名称', resp.enterpriseName ?? '-']]
+    const dims = resp.dimensions ?? {}
+    Object.keys(dims).forEach((key) => {
+      const d = dims[key]
+      const label = dimensionChinese[key] ?? key
+      const value = d?.available ? d.conclusion ?? '-' : d?.summary ?? '-'
+      rows.push([label, value])
+    })
+    rows.push(['核心技术布局', resp.coreTechLayout ?? '-'])
+    const dist = Array.isArray(resp.patentDistribution) ? resp.patentDistribution : []
+    dist.forEach((p: any) => {
+      rows.push([`CPC:${p.cpcSection ?? '-'}`, p.count ?? 0])
+    })
+    return rows
+  }
   const center = centerNode.value
   if (!center) return []
   const centerInfo = splitNodeTitle(center.title)
-  const rows = [
+  const rows: (string | number)[][] = [
     [centerInfo.label, centerInfo.name],
     [`${centerInfo.label}类型`, center.subtitle],
   ]
@@ -272,8 +318,38 @@ const detailRows = computed(() => {
   return rows
 })
 
-const apiExample = computed(() =>
-  JSON.stringify(
+const apiExample = computed(() => {
+  if (subFunctionKey.value === 'annotate') {
+    return JSON.stringify(
+      annotationResp.value ?? {
+        status: 'success',
+        relationId: annotationParams.value.relationId,
+        roleType: annotationParams.value.roleType,
+        roleLabel: '',
+        roleLevel: '',
+        techField: annotationParams.value.techField,
+        period: annotationParams.value.period,
+        annotated: false,
+      },
+      null,
+      2,
+    )
+  }
+  if (subFunctionKey.value === 'analyze') {
+    return JSON.stringify(
+      analysisResp.value ?? {
+        status: 'success',
+        enterpriseId: analysisParams.value.enterpriseId,
+        enterpriseName: '',
+        dimensions: {},
+        patentDistribution: [],
+        coreTechLayout: '',
+      },
+      null,
+      2,
+    )
+  }
+  return JSON.stringify(
     buildResult.value ?? {
       status: 'success',
       scholarId: params.value.scholarId,
@@ -285,8 +361,8 @@ const apiExample = computed(() =>
     },
     null,
     2,
-  ),
-)
+  )
+})
 
 const params = ref({
   scholarId: 'E10001',
@@ -302,25 +378,72 @@ const relationTypeOptions = [
   { value: 'tech_cooperation', label: '技术合作' },
 ]
 
-const requestRows = [
-  ['scholarId', 'string', '是', '专家ID'],
-  ['enterpriseId', 'string', '是', '企业ID'],
-  ['relationTypes', 'string[]', '是', '关联关系类型（多选，英文编码）'],
-]
+const requestRows = computed<(string)[][]>(() => {
+  if (subFunctionKey.value === 'annotate') {
+    return [
+      ['relationId', 'string', '是', '政企关系ID'],
+      ['roleType', 'string', '是', '角色类型'],
+      ['techField', 'string', '否', '技术领域'],
+      ['period.start', 'string', '否', '开始日期'],
+      ['period.end', 'string', '否', '结束日期'],
+    ]
+  }
+  if (subFunctionKey.value === 'analyze') {
+    return [
+      ['enterpriseId', 'string', '是', '企业ID'],
+      ['analysisDimensions', 'string[]', '是', '分析维度'],
+      ['patentCPC', 'string[]', '否', '专利CPC分类号'],
+    ]
+  }
+  return [
+    ['scholarId', 'string', '是', '专家ID'],
+    ['enterpriseId', 'string', '是', '企业ID'],
+    ['relationTypes', 'string[]', '是', '关联关系类型（多选，英文编码）'],
+  ]
+})
 
-const responseRows = [
-  ['status', 'string', '状态'],
-  ['scholarId', 'string', '专家ID'],
-  ['scholarName', 'string', '专家姓名'],
-  ['builtRelationId', 'string', '构建的关系ID'],
-  ['relationType', 'string', '关系类型标签'],
-  ['effective', 'boolean', '生效标识'],
-  ['relations', 'array', '该人才全部企业关系'],
-  ['relations[].relationId', 'string', '关系ID'],
-  ['relations[].enterpriseId', 'string', '企业ID'],
-  ['relations[].enterpriseName', 'string', '企业名称'],
-  ['relations[].relationType', 'string', '关系类型标签'],
-]
+const responseRows = computed<(string)[][]>(() => {
+  if (subFunctionKey.value === 'annotate') {
+    return [
+      ['status', 'string', '状态'],
+      ['relationId', 'string', '政企关系ID'],
+      ['roleType', 'string', '角色类型'],
+      ['roleLabel', 'string', '角色标签'],
+      ['roleLevel', 'string', '角色等级'],
+      ['techField', 'string', '技术领域'],
+      ['period', 'object', '合作时段'],
+      ['annotated', 'boolean', '标注结果'],
+    ]
+  }
+  if (subFunctionKey.value === 'analyze') {
+    return [
+      ['status', 'string', '状态'],
+      ['enterpriseId', 'string', '企业ID'],
+      ['enterpriseName', 'string', '企业名称'],
+      ['dimensions', 'object', '各维度分析'],
+      ['dimensions[].available', 'boolean', '维度是否有数据'],
+      ['dimensions[].conclusion', 'string', '维度结论'],
+      ['dimensions[].summary', 'string', '降级摘要'],
+      ['patentDistribution', 'array', '专利分布'],
+      ['patentDistribution[].cpcSection', 'string', 'CPC部类'],
+      ['patentDistribution[].count', 'int', '专利数'],
+      ['coreTechLayout', 'string', '核心技术布局'],
+    ]
+  }
+  return [
+    ['status', 'string', '状态'],
+    ['scholarId', 'string', '专家ID'],
+    ['scholarName', 'string', '专家姓名'],
+    ['builtRelationId', 'string', '构建的关系ID'],
+    ['relationType', 'string', '关系类型标签'],
+    ['effective', 'boolean', '生效标识'],
+    ['relations', 'array', '该人才全部企业关系'],
+    ['relations[].relationId', 'string', '关系ID'],
+    ['relations[].enterpriseId', 'string', '企业ID'],
+    ['relations[].enterpriseName', 'string', '企业名称'],
+    ['relations[].relationType', 'string', '关系类型标签'],
+  ]
+})
 
 // #2 角色与合作详情标注
 const annotationParams = ref({
@@ -395,9 +518,45 @@ async function loadAnalysis() {
   }
 }
 
-const pythonCodeExample = computed(() => `import requests
+const pythonCodeExample = computed(() => {
+  const url = `http://localhost:3001${currentApiPath.value}`
+  if (subFunctionKey.value === 'annotate') {
+    return `import requests
 
-url = "http://localhost:3001${currentApiPath.value}"
+url = "${url}"
+payload = {
+    "relationId": "${annotationParams.value.relationId}",
+    "roleType": "${annotationParams.value.roleType}",
+    "techField": "${annotationParams.value.techField}",
+    "period": {
+        "start": "${annotationParams.value.period.start}",
+        "end": "${annotationParams.value.period.end}"
+    }
+}
+
+response = requests.post(url, json=payload)
+print(response.json())`
+  }
+  if (subFunctionKey.value === 'analyze') {
+    const cpc = analysisParams.value.patentCPC
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    return `import requests
+
+url = "${url}"
+payload = {
+    "enterpriseId": "${analysisParams.value.enterpriseId}",
+    "analysisDimensions": ${JSON.stringify(analysisParams.value.analysisDimensions)},
+    "patentCPC": ${JSON.stringify(cpc)}
+}
+
+response = requests.post(url, json=payload)
+print(response.json())`
+  }
+  return `import requests
+
+url = "${url}"
 payload = {
     "scholarId": "${params.value.scholarId}",
     "enterpriseId": "${params.value.enterpriseId}",
@@ -405,9 +564,52 @@ payload = {
 }
 
 response = requests.post(url, json=payload)
-print(response.json())`)
+print(response.json())`
+})
 
-const nodeCodeExample = computed(() => `const response = await fetch("http://localhost:3001${currentApiPath.value}", {
+const nodeCodeExample = computed(() => {
+  const url = `http://localhost:3001${currentApiPath.value}`
+  if (subFunctionKey.value === 'annotate') {
+    return `const response = await fetch("${url}", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    relationId: "${annotationParams.value.relationId}",
+    roleType: "${annotationParams.value.roleType}",
+    techField: "${annotationParams.value.techField}",
+    period: {
+      start: "${annotationParams.value.period.start}",
+      end: "${annotationParams.value.period.end}"
+    }
+  })
+})
+
+const data = await response.json()
+console.log(data)`
+  }
+  if (subFunctionKey.value === 'analyze') {
+    const cpc = analysisParams.value.patentCPC
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    return `const response = await fetch("${url}", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    enterpriseId: "${analysisParams.value.enterpriseId}",
+    analysisDimensions: ${JSON.stringify(analysisParams.value.analysisDimensions)},
+    patentCPC: ${JSON.stringify(cpc)}
+  })
+})
+
+const data = await response.json()
+console.log(data)`
+  }
+  return `const response = await fetch("${url}", {
   method: "POST",
   headers: {
     "Content-Type": "application/json"
@@ -420,15 +622,45 @@ const nodeCodeExample = computed(() => `const response = await fetch("http://loc
 })
 
 const data = await response.json()
-console.log(data)`)
+console.log(data)`
+})
 
-const curlCodeExample = computed(() => `curl -X POST "http://localhost:3001${currentApiPath.value}" \\
+const curlCodeExample = computed(() => {
+  const url = `http://localhost:3001${currentApiPath.value}`
+  if (subFunctionKey.value === 'annotate') {
+    return `curl -X POST "${url}" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "relationId": "${annotationParams.value.relationId}",
+    "roleType": "${annotationParams.value.roleType}",
+    "techField": "${annotationParams.value.techField}",
+    "period": {
+      "start": "${annotationParams.value.period.start}",
+      "end": "${annotationParams.value.period.end}"
+    }
+  }'`
+  }
+  if (subFunctionKey.value === 'analyze') {
+    const cpc = analysisParams.value.patentCPC
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    return `curl -X POST "${url}" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "enterpriseId": "${analysisParams.value.enterpriseId}",
+    "analysisDimensions": ${JSON.stringify(analysisParams.value.analysisDimensions)},
+    "patentCPC": ${JSON.stringify(cpc)}
+  }'`
+  }
+  return `curl -X POST "${url}" \\
   -H "Content-Type: application/json" \\
   -d '{
     "scholarId": "${params.value.scholarId}",
     "enterpriseId": "${params.value.enterpriseId}",
     "relationTypes": ${JSON.stringify(params.value.relationTypes)}
-  }'`)
+  }'`
+})
 
 const codeExample = computed(() => {
   if (activeCodeTab.value === 'Node.js') return nodeCodeExample.value
@@ -480,7 +712,9 @@ const pythonCodeLines = computed(() => [
   ],
 ])
 
-const renderedCodeLines = computed(() => (activeCodeTab.value === 'Python' ? pythonCodeLines.value : null))
+const renderedCodeLines = computed(() =>
+  subFunctionKey.value === 'build' && activeCodeTab.value === 'Python' ? pythonCodeLines.value : null,
+)
 
 const flowSteps = [
   ['input', '输入数据', '接收专家ID、企业ID、专家企业关系的测试参数'],
@@ -489,14 +723,21 @@ const flowSteps = [
   ['output', '结果输出', '输出专家信息、企业关系列表和执行状态等结构化结果'],
 ]
 
+function dispatchLoader() {
+  const key = subFunctionKey.value
+  if (key === 'annotate') loadAnnotation()
+  else if (key === 'analyze') loadAnalysis()
+  else loadEnterpriseRelation()
+}
+
 function runTest() {
-  loadEnterpriseRelation()
+  dispatchLoader()
   resultTab.value = 'structured'
 }
 
 function saveParamsAndRun() {
   showParams.value = false
-  loadEnterpriseRelation()
+  dispatchLoader()
 }
 
 function cloneNodes(nodes: GraphNode[]) {
@@ -521,6 +762,9 @@ function selectFeatureByName(featureName: string) {
 
   activeSubFunctionName.value = subFunction.featureName
   graphNodes.value = cloneNodes(subFunction.nodes)
+  buildResult.value = null
+  annotationResp.value = null
+  analysisResp.value = null
   resultTab.value = 'structured'
   showFeatureMenu.value = false
 }
@@ -850,8 +1094,8 @@ function zoomGraph(event: WheelEvent) {
         </div>
 
         <template v-if="mainTab === 'test'">
-          <div class="test-grid">
-            <section class="graph-panel" aria-label="企业关系图谱">
+          <div class="test-grid" :class="{ 'single-column': subFunctionKey !== 'build' }">
+            <section v-if="subFunctionKey === 'build'" class="graph-panel" aria-label="企业关系图谱">
               <div class="graph-canvas" @wheel="zoomGraph">
                 <div
                   ref="graphStageRef"
@@ -960,74 +1204,6 @@ function zoomGraph(event: WheelEvent) {
               <pre v-else class="api-code">{{ apiExample }}</pre>
             </aside>
           </div>
-
-          <section class="panel">
-            <h3>角色与合作详情标注</h3>
-            <div class="params">
-              <input v-model="annotationParams.relationId" placeholder="政企关系ID" />
-              <select v-model="annotationParams.roleType">
-                <option v-for="o in roleOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-              </select>
-              <input v-model="annotationParams.techField" placeholder="技术领域" />
-              <input v-model="annotationParams.period.start" placeholder="开始日期" />
-              <input v-model="annotationParams.period.end" placeholder="结束日期" />
-              <button class="primary-button" type="button" :disabled="annotationLoading" @click="loadAnnotation">
-                {{ annotationLoading ? '标注中…' : '标注' }}
-              </button>
-            </div>
-            <p v-if="annotationError" class="panel-error">{{ annotationError }}</p>
-            <div v-if="annotationResp" class="result">
-              <p>
-                角色：{{ annotationResp.roleLabel }}（{{ annotationResp.roleLevel }}） | 标注：{{
-                  annotationResp.annotated
-                }}
-              </p>
-              <p>关系ID：{{ annotationResp.relationId }} | 技术领域：{{ annotationResp.techField }}</p>
-              <p v-if="annotationResp.period">
-                周期：{{ annotationResp.period.start }} ~ {{ annotationResp.period.end }}
-              </p>
-            </div>
-          </section>
-
-          <section class="panel">
-            <h3>企业背景关联分析</h3>
-            <div class="params">
-              <input v-model="analysisParams.enterpriseId" placeholder="企业ID" />
-              <label v-for="o in dimensionOptions" :key="o.value" class="param-checkbox">
-                <input type="checkbox" :value="o.value" v-model="analysisParams.analysisDimensions" />
-                <span>{{ o.label }}</span>
-              </label>
-              <input v-model="analysisParams.patentCPC" placeholder="专利CPC（逗号分隔）" />
-              <button class="primary-button" type="button" :disabled="analysisLoading" @click="loadAnalysis">
-                {{ analysisLoading ? '分析中…' : '分析' }}
-              </button>
-            </div>
-            <p v-if="analysisError" class="panel-error">{{ analysisError }}</p>
-            <div v-if="analysisResp" class="result">
-              <p>企业：{{ analysisResp.enterpriseName }}</p>
-              <div v-for="(d, k) in analysisResp.dimensions" :key="k" class="panel-dimension">
-                <strong>{{ k }}</strong>
-                <span>{{ d.available ? d.conclusion : d.summary }}</span>
-              </div>
-              <p>核心技术布局：{{ analysisResp.coreTechLayout }}</p>
-              <div class="doc-table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>CPC部类</th>
-                      <th>专利数</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="p in analysisResp.patentDistribution" :key="p.cpcSection">
-                      <td>{{ p.cpcSection }}</td>
-                      <td>{{ p.count }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </section>
         </template>
 
         <template v-else>
@@ -1148,23 +1324,70 @@ function zoomGraph(event: WheelEvent) {
           <button class="icon-button" type="button" aria-label="关闭" @click="showParams = false">×</button>
         </header>
 
-        <label class="param-field required">
-          <span>scholarId</span>
-          <input v-model="params.scholarId" placeholder="专家ID" />
-        </label>
-        <label class="param-field required">
-          <span>enterpriseId</span>
-          <input v-model="params.enterpriseId" placeholder="企业ID" />
-        </label>
-        <label class="param-field required">
-          <span>relationTypes</span>
-          <div class="param-checkbox-group">
-            <label v-for="o in relationTypeOptions" :key="o.value" class="param-checkbox">
-              <input type="checkbox" :value="o.value" v-model="params.relationTypes" />
-              <span>{{ o.label }}</span>
-            </label>
-          </div>
-        </label>
+        <template v-if="subFunctionKey === 'build'">
+          <label class="param-field required">
+            <span>scholarId</span>
+            <input v-model="params.scholarId" placeholder="专家ID" />
+          </label>
+          <label class="param-field required">
+            <span>enterpriseId</span>
+            <input v-model="params.enterpriseId" placeholder="企业ID" />
+          </label>
+          <label class="param-field required">
+            <span>relationTypes</span>
+            <div class="param-checkbox-group">
+              <label v-for="o in relationTypeOptions" :key="o.value" class="param-checkbox">
+                <input type="checkbox" :value="o.value" v-model="params.relationTypes" />
+                <span>{{ o.label }}</span>
+              </label>
+            </div>
+          </label>
+        </template>
+
+        <template v-else-if="subFunctionKey === 'annotate'">
+          <label class="param-field required">
+            <span>relationId</span>
+            <input v-model="annotationParams.relationId" placeholder="政企关系ID" />
+          </label>
+          <label class="param-field required">
+            <span>roleType</span>
+            <select v-model="annotationParams.roleType">
+              <option v-for="o in roleOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+            </select>
+          </label>
+          <label class="param-field">
+            <span>techField</span>
+            <input v-model="annotationParams.techField" placeholder="技术领域" />
+          </label>
+          <label class="param-field">
+            <span>period.start</span>
+            <input v-model="annotationParams.period.start" placeholder="开始日期" />
+          </label>
+          <label class="param-field">
+            <span>period.end</span>
+            <input v-model="annotationParams.period.end" placeholder="结束日期" />
+          </label>
+        </template>
+
+        <template v-else-if="subFunctionKey === 'analyze'">
+          <label class="param-field required">
+            <span>enterpriseId</span>
+            <input v-model="analysisParams.enterpriseId" placeholder="企业ID" />
+          </label>
+          <label class="param-field required">
+            <span>analysisDimensions</span>
+            <div class="param-checkbox-group">
+              <label v-for="o in dimensionOptions" :key="o.value" class="param-checkbox">
+                <input type="checkbox" :value="o.value" v-model="analysisParams.analysisDimensions" />
+                <span>{{ o.label }}</span>
+              </label>
+            </div>
+          </label>
+          <label class="param-field">
+            <span>patentCPC</span>
+            <input v-model="analysisParams.patentCPC" placeholder="专利CPC（逗号分隔）" />
+          </label>
+        </template>
 
         <footer>
           <button class="secondary-button" type="button" @click="showParams = false">取消</button>
@@ -1242,6 +1465,10 @@ function zoomGraph(event: WheelEvent) {
 </template>
 
 <style scoped>
+.test-grid.single-column {
+  grid-template-columns: 1fr;
+}
+
 .panel {
   margin-top: 24px;
   padding: 20px 24px;

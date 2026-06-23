@@ -35,8 +35,12 @@ def validate_relation_types(codes: list[str]) -> list[str]:
 
 
 def relation_label(codes: list[str]) -> str:
-    """英文码列表 → 中文标签（/ 拼接）。"""
-    return "/".join(RELATION_TYPES[c] for c in codes)
+    """英文码列表 → 中文标签（/ 拼接）。
+
+    对不在码表中的值（例如图里已存的中文标签或未知码）原样保留，避免
+    真实数据混入历史中文标签时抛 KeyError。
+    """
+    return "/".join(RELATION_TYPES.get(c, c) for c in codes)
 
 
 def role_info(role_type: str) -> tuple[str, str]:

@@ -279,7 +279,7 @@ const apiExample = computed(() =>
       scholarId: params.value.scholarId,
       scholarName: '',
       builtRelationId: `${params.value.scholarId}->${params.value.enterpriseId}@0`,
-      relationType: params.value.relationTypes.join('/'),
+      relationTypes: params.value.relationTypes,
       effective: true,
       relations: [],
     },

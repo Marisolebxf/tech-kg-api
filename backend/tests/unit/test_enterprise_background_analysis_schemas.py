@@ -17,9 +17,7 @@ def test_request_accepts_valid_dimensions():
 
 def test_request_rejects_unknown_dimension():
     with pytest.raises(ValidationError):
-        EnterpriseBackgroundAnalysisRequest(
-            enterpriseId="E001", analysisDimensions=["bogus"]
-        )
+        EnterpriseBackgroundAnalysisRequest(enterpriseId="E001", analysisDimensions=["bogus"])
 
 
 def test_request_rejects_empty_dimensions():

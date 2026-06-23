@@ -45,7 +45,9 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
             if "industry_status" in dimensions:
                 facts["industry_status"] = self._industry_status(org, org_dao, enterprise_id)
             if "core_tech" in dimensions:
-                facts["core_tech"] = self._core_tech(org_dao, pat_dao, enterprise_id, name, patent_cpc)
+                facts["core_tech"] = self._core_tech(
+                    org_dao, pat_dao, enterprise_id, name, patent_cpc
+                )
             if "financial" in dimensions:
                 facts["financial"] = self._financial(org_dao, enterprise_id)
 
@@ -55,7 +57,9 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
 
         llm = get_llm_client()
         conclusions: dict[str, str] = self._synthesize_dimensions(llm, facts) if llm else {}
-        core_layout = (self._synthesize_core_layout(llm, facts) if llm else "") or self._template_core_layout(facts)
+        core_layout = (
+            self._synthesize_core_layout(llm, facts) if llm else ""
+        ) or self._template_core_layout(facts)
 
         for dim, data in facts.items():
             if not data.get("available"):
@@ -166,7 +170,8 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
             return {}
         prompt = (
             "你是产业分析助手。根据以下企业背景结构化数据，为每个维度生成一句中文分析结论。"
-            "只输出 JSON，键为维度名，值为结论字符串。\n" + json.dumps(avail, ensure_ascii=False, default=str)
+            "只输出 JSON，键为维度名，值为结论字符串。\n"
+            + json.dumps(avail, ensure_ascii=False, default=str)
         )
         text = llm.synthesize(prompt)
         if not text:

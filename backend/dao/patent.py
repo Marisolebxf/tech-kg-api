@@ -25,10 +25,10 @@ class PatentDAO:
         if cpc_prefixes:
             prefixes = [p.upper() for p in cpc_prefixes]
             rows = [
-                p for p in rows
+                p
+                for p in rows
                 if any(
-                    any(c.upper().startswith(pre) for c in self._cpc_codes(p))
-                    for pre in prefixes
+                    any(c.upper().startswith(pre) for c in self._cpc_codes(p)) for pre in prefixes
                 )
             ]
         return rows

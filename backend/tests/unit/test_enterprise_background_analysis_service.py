@@ -119,7 +119,11 @@ def test_analyze_core_tech_and_industry_status_dimensions(monkeypatch):
     pat_dao.list_by_assignee.return_value = [pat1]
     pat_dao.count_by_cpc_section.return_value = []
     resp = EnterpriseBackgroundAnalysisService().analyze(
-        {"enterpriseId": "E001", "analysisDimensions": ["industry_status", "core_tech"], "patentCPC": ["G06N"]}
+        {
+            "enterpriseId": "E001",
+            "analysisDimensions": ["industry_status", "core_tech"],
+            "patentCPC": ["G06N"],
+        }
     )
     assert resp["dimensions"]["industry_status"]["available"] is True
     assert resp["dimensions"]["industry_status"]["facts"]["province"] == "浙江"

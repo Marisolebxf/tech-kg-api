@@ -1,6 +1,6 @@
 """专家-企业关系构建 路由。"""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from application.expert_enterprise_relation import ExpertEnterpriseRelationApplication
 from biz.schemas.expert_enterprise_relation import (
@@ -21,4 +21,7 @@ async def describe_expert_enterprise_relation() -> dict[str, object]:
 async def build_expert_enterprise_relation(
     req: ExpertEnterpriseBuildRequest,
 ) -> ExpertEnterpriseBuildResponse:
-    return application.build(req.model_dump())
+    try:
+        return application.build(req.model_dump())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from service.enterprise_relation_catalog import validate_relation_types
 
 
 class ExpertEnterpriseBuildRequest(BaseModel):
     scholarId: str
     enterpriseId: str
-    relationType: str
+    relationTypes: list[str]
+
+    @field_validator("relationTypes")
+    @classmethod
+    def _validate_relation_types(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("relationTypes 不能为空")
+        return validate_relation_types(v)
 
 
 class RelationItem(BaseModel):

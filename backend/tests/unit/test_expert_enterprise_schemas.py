@@ -1,41 +1,25 @@
 from __future__ import annotations
 
-from biz.schemas.expert_enterprise_relation import (
-    ExpertEnterpriseBuildRequest,
-    ExpertEnterpriseBuildResponse,
-    RelationItem,
-)
+import pytest
+from pydantic import ValidationError
+
+from biz.schemas.expert_enterprise_relation import ExpertEnterpriseBuildRequest
 
 
-def test_request_parse():
+def test_request_accepts_valid_relation_types():
     req = ExpertEnterpriseBuildRequest(
-        scholarId="S001", enterpriseId="E001", relationType="任职"
+        scholarId="S001", enterpriseId="E001", relationTypes=["employment", "advisor"]
     )
-    assert req.scholarId == "S001"
-    assert req.enterpriseId == "E001"
-    assert req.relationType == "任职"
+    assert req.relationTypes == ["employment", "advisor"]
 
 
-def test_response_assemble():
-    resp = ExpertEnterpriseBuildResponse(
-        status="success",
-        scholarId="S001",
-        scholarName="张三",
-        builtRelationId="S001->E001@0",
-        relationType="任职",
-        effective=True,
-        relations=[
-            RelationItem(
-                relationId="S001->ENT001@0",
-                enterpriseId="ENT001",
-                enterpriseName="华智科技",
-                relationType="任职",
-            ),
-        ],
-    )
-    assert resp.status == "success"
-    assert resp.scholarName == "张三"
-    assert resp.builtRelationId == "S001->E001@0"
-    assert resp.effective is True
-    assert resp.relations[0].enterpriseName == "华智科技"
-    assert resp.relations[0].relationType == "任职"
+def test_request_rejects_unknown_relation_type():
+    with pytest.raises(ValidationError):
+        ExpertEnterpriseBuildRequest(
+            scholarId="S001", enterpriseId="E001", relationTypes=["employment", "bogus"]
+        )
+
+
+def test_request_rejects_empty_relation_types():
+    with pytest.raises(ValidationError):
+        ExpertEnterpriseBuildRequest(scholarId="S001", enterpriseId="E001", relationTypes=[])

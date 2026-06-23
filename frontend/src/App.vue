@@ -1,7 +1,7 @@
-<script setup lang="ts">
-import HelloWorld from './components/HelloWorld.vue'
-</script>
-
 <template>
-  <HelloWorld />
+  <BindingPage />
 </template>
+
+<script setup lang="ts">
+import BindingPage from './pages/BindingPage.vue'
+</script>

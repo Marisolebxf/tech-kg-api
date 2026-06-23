@@ -100,3 +100,34 @@ def test_analyze_llm_failure_falls_back_to_template(monkeypatch):
     )
     assert resp["dimensions"]["financial"]["available"] is True
     assert resp["dimensions"]["financial"]["conclusion"]
+
+
+def test_analyze_core_tech_and_industry_status_dimensions(monkeypatch):
+    org_dao, pat_dao = MagicMock(), MagicMock()
+    _setup(monkeypatch, _org(), org_dao, pat_dao, llm=None)
+    prod = MagicMock()
+    prod.industry_class = "人工智能"
+    prod.main_activities = "算法研发"
+    prod.main_prod = "AI芯片"
+    org_dao.get_products.return_value = prod
+    org_dao.get_tags.return_value = []
+    org_dao.get_industry_chain.return_value = []
+    org_dao.get_chain_products.return_value = []
+    pat1 = MagicMock()
+    pat1.patent_id = "P1"
+    pat1.first_current_assignee_name = "某公司"
+    pat_dao.list_by_assignee.return_value = [pat1]
+    pat_dao.count_by_cpc_section.return_value = []
+    resp = EnterpriseBackgroundAnalysisService().analyze(
+        {"enterpriseId": "E001", "analysisDimensions": ["industry_status", "core_tech"], "patentCPC": ["G06N"]}
+    )
+    assert resp["dimensions"]["industry_status"]["available"] is True
+    assert resp["dimensions"]["industry_status"]["facts"]["province"] == "浙江"
+    assert resp["dimensions"]["core_tech"]["available"] is True
+    assert resp["dimensions"]["core_tech"]["facts"]["mainProducts"] == "AI芯片"
+    assert resp["dimensions"]["core_tech"]["facts"]["patentCount"] == 1
+    # 模板结论（无 LLM）
+    assert resp["dimensions"]["industry_status"]["conclusion"]
+    assert "AI芯片" in resp["dimensions"]["core_tech"]["conclusion"]
+    # core_tech 模板小结
+    assert "AI芯片" in resp["coreTechLayout"]

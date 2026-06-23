@@ -43,7 +43,7 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
 
             facts: dict[str, dict[str, Any]] = {}
             if "industry_status" in dimensions:
-                facts["industry_status"] = self._industry_status(org_dao, enterprise_id)
+                facts["industry_status"] = self._industry_status(org, org_dao, enterprise_id)
             if "core_tech" in dimensions:
                 facts["core_tech"] = self._core_tech(org_dao, pat_dao, enterprise_id, name, patent_cpc)
             if "financial" in dimensions:
@@ -55,13 +55,12 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
 
         llm = get_llm_client()
         conclusions: dict[str, str] = self._synthesize_dimensions(llm, facts) if llm else {}
-        core_layout = self._synthesize_core_layout(llm, facts) if llm else ""
+        core_layout = (self._synthesize_core_layout(llm, facts) if llm else "") or self._template_core_layout(facts)
 
         for dim, data in facts.items():
             if not data.get("available"):
                 continue
             data["conclusion"] = conclusions.get(dim) or self._template_conclusion(dim, data)
-        core_layout = core_layout or self._template_core_layout(facts)
 
         return {
             "status": "success",
@@ -74,8 +73,7 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
 
     # ----- 维度聚合 -----
 
-    def _industry_status(self, org_dao: OrganizationDAO, org_id: str) -> dict[str, Any]:
-        org = org_dao.get_by_id(org_id)
+    def _industry_status(self, org: Any, org_dao: OrganizationDAO, org_id: str) -> dict[str, Any]:
         if org is None:
             return {"available": False, "summary": "暂无数据"}
         facts = {
@@ -142,9 +140,9 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
                 "facts": {
                     "source": "annual",
                     "period": f.year,
-                    "operatingRevenue": f.operating_revenue,
-                    "pureProfit": f.pure_profit,
-                    "totalAssets": f.total_assets,
+                    "operatingRevenue": _num(f.operating_revenue),
+                    "pureProfit": _num(f.pure_profit),
+                    "totalAssets": _num(f.total_assets),
                     "employees": f.employees_number,
                 },
             }

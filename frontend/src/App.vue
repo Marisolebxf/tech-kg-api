@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import axios from 'axios'
 
 type MainTab = 'test' | 'developer'
 type ResultTab = 'structured' | 'api'
@@ -208,7 +209,7 @@ async function loadEnterpriseRelation() {
       body: JSON.stringify({
         scholarId: params.value.scholarId,
         enterpriseId: params.value.enterpriseId,
-        relationType: params.value.relationType,
+        relationTypes: params.value.relationTypes,
       }),
     })
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
@@ -278,7 +279,7 @@ const apiExample = computed(() =>
       scholarId: params.value.scholarId,
       scholarName: '',
       builtRelationId: `${params.value.scholarId}->${params.value.enterpriseId}@0`,
-      relationType: params.value.relationType,
+      relationType: params.value.relationTypes.join('/'),
       effective: true,
       relations: [],
     },
@@ -290,13 +291,21 @@ const apiExample = computed(() =>
 const params = ref({
   scholarId: 'E10001',
   enterpriseId: 'ENT001',
-  relationType: '任职',
+  relationTypes: ['employment'] as string[],
 })
+
+const relationTypeOptions = [
+  { value: 'employment', label: '任职' },
+  { value: 'advisor', label: '顾问' },
+  { value: 'rd_cooperation', label: '研发合作' },
+  { value: 'project_cooperation', label: '项目合作' },
+  { value: 'tech_cooperation', label: '技术合作' },
+]
 
 const requestRows = [
   ['scholarId', 'string', '是', '专家ID'],
   ['enterpriseId', 'string', '是', '企业ID'],
-  ['relationType', 'string', '是', '关联关系类型'],
+  ['relationTypes', 'string[]', '是', '关联关系类型（多选，英文编码）'],
 ]
 
 const responseRows = [
@@ -313,13 +322,86 @@ const responseRows = [
   ['relations[].relationType', 'string', '关系类型标签'],
 ]
 
+// #2 角色与合作详情标注
+const annotationParams = ref({
+  relationId: 'S001->E001@0',
+  roleType: 'chief_scientist',
+  techField: '人工智能',
+  period: { start: '2021-01-01', end: '2024-12-31' },
+})
+const roleOptions = [
+  { value: 'chief_scientist', label: '首席科学家' },
+  { value: 'cto', label: '技术总监' },
+  { value: 'technical_advisor', label: '技术顾问' },
+  { value: 'rd_lead', label: '研发负责人' },
+  { value: 'engineer', label: '工程师' },
+]
+const annotationResp = ref<any>(null)
+const annotationError = ref('')
+const annotationLoading = ref(false)
+
+async function loadAnnotation() {
+  annotationLoading.value = true
+  annotationError.value = ''
+  try {
+    const { data } = await axios.post(
+      '/api/v1/kg-construction/relation-detail-annotations/annotate',
+      annotationParams.value,
+    )
+    annotationResp.value = data
+  } catch (e: any) {
+    annotationError.value = e?.response?.data?.detail || e?.message || String(e)
+  } finally {
+    annotationLoading.value = false
+  }
+}
+
+// #3 企业背景关联分析
+const analysisParams = ref({
+  enterpriseId: 'E001',
+  analysisDimensions: ['industry_status', 'core_tech', 'financial'] as string[],
+  patentCPC: 'G06N,G06F',
+})
+const dimensionOptions = [
+  { value: 'industry_status', label: '行业地位' },
+  { value: 'core_tech', label: '核心技术' },
+  { value: 'financial', label: '经营财务' },
+]
+const analysisResp = ref<any>(null)
+const analysisError = ref('')
+const analysisLoading = ref(false)
+
+async function loadAnalysis() {
+  analysisLoading.value = true
+  analysisError.value = ''
+  try {
+    const cpc = analysisParams.value.patentCPC
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const { data } = await axios.post(
+      '/api/v1/kg-construction/enterprise-background-analyses/analyze',
+      {
+        enterpriseId: analysisParams.value.enterpriseId,
+        analysisDimensions: analysisParams.value.analysisDimensions,
+        patentCPC: cpc,
+      },
+    )
+    analysisResp.value = data
+  } catch (e: any) {
+    analysisError.value = e?.response?.data?.detail || e?.message || String(e)
+  } finally {
+    analysisLoading.value = false
+  }
+}
+
 const pythonCodeExample = computed(() => `import requests
 
 url = "http://localhost:3001${currentApiPath.value}"
 payload = {
     "scholarId": "${params.value.scholarId}",
     "enterpriseId": "${params.value.enterpriseId}",
-    "relationType": "${params.value.relationType}"
+    "relationTypes": ${JSON.stringify(params.value.relationTypes)}
 }
 
 response = requests.post(url, json=payload)
@@ -333,7 +415,7 @@ const nodeCodeExample = computed(() => `const response = await fetch("http://loc
   body: JSON.stringify({
     scholarId: "${params.value.scholarId}",
     enterpriseId: "${params.value.enterpriseId}",
-    relationType: "${params.value.relationType}"
+    relationTypes: ${JSON.stringify(params.value.relationTypes)}
   })
 })
 
@@ -345,7 +427,7 @@ const curlCodeExample = computed(() => `curl -X POST "http://localhost:3001${cur
   -d '{
     "scholarId": "${params.value.scholarId}",
     "enterpriseId": "${params.value.enterpriseId}",
-    "relationType": "${params.value.relationType}"
+    "relationTypes": ${JSON.stringify(params.value.relationTypes)}
   }'`)
 
 const codeExample = computed(() => {
@@ -380,9 +462,9 @@ const pythonCodeLines = computed(() => [
     { text: ',', tone: 'plain' },
   ],
   [
-    { text: '  "relationType"', tone: 'string' },
+    { text: '  "relationTypes"', tone: 'string' },
     { text: ': ', tone: 'muted' },
-    { text: `"${params.value.relationType}"`, tone: 'string' },
+    { text: `${JSON.stringify(params.value.relationTypes)}`, tone: 'string' },
   ],
   [{ text: '}', tone: 'plain' }],
   [],
@@ -878,6 +960,74 @@ function zoomGraph(event: WheelEvent) {
               <pre v-else class="api-code">{{ apiExample }}</pre>
             </aside>
           </div>
+
+          <section class="panel">
+            <h3>角色与合作详情标注</h3>
+            <div class="params">
+              <input v-model="annotationParams.relationId" placeholder="政企关系ID" />
+              <select v-model="annotationParams.roleType">
+                <option v-for="o in roleOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+              </select>
+              <input v-model="annotationParams.techField" placeholder="技术领域" />
+              <input v-model="annotationParams.period.start" placeholder="开始日期" />
+              <input v-model="annotationParams.period.end" placeholder="结束日期" />
+              <button class="primary-button" type="button" :disabled="annotationLoading" @click="loadAnnotation">
+                {{ annotationLoading ? '标注中…' : '标注' }}
+              </button>
+            </div>
+            <p v-if="annotationError" class="panel-error">{{ annotationError }}</p>
+            <div v-if="annotationResp" class="result">
+              <p>
+                角色：{{ annotationResp.roleLabel }}（{{ annotationResp.roleLevel }}） | 标注：{{
+                  annotationResp.annotated
+                }}
+              </p>
+              <p>关系ID：{{ annotationResp.relationId }} | 技术领域：{{ annotationResp.techField }}</p>
+              <p v-if="annotationResp.period">
+                周期：{{ annotationResp.period.start }} ~ {{ annotationResp.period.end }}
+              </p>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h3>企业背景关联分析</h3>
+            <div class="params">
+              <input v-model="analysisParams.enterpriseId" placeholder="企业ID" />
+              <label v-for="o in dimensionOptions" :key="o.value" class="param-checkbox">
+                <input type="checkbox" :value="o.value" v-model="analysisParams.analysisDimensions" />
+                <span>{{ o.label }}</span>
+              </label>
+              <input v-model="analysisParams.patentCPC" placeholder="专利CPC（逗号分隔）" />
+              <button class="primary-button" type="button" :disabled="analysisLoading" @click="loadAnalysis">
+                {{ analysisLoading ? '分析中…' : '分析' }}
+              </button>
+            </div>
+            <p v-if="analysisError" class="panel-error">{{ analysisError }}</p>
+            <div v-if="analysisResp" class="result">
+              <p>企业：{{ analysisResp.enterpriseName }}</p>
+              <div v-for="(d, k) in analysisResp.dimensions" :key="k" class="panel-dimension">
+                <strong>{{ k }}</strong>
+                <span>{{ d.available ? d.conclusion : d.summary }}</span>
+              </div>
+              <p>核心技术布局：{{ analysisResp.coreTechLayout }}</p>
+              <div class="doc-table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>CPC部类</th>
+                      <th>专利数</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="p in analysisResp.patentDistribution" :key="p.cpcSection">
+                      <td>{{ p.cpcSection }}</td>
+                      <td>{{ p.count }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
         </template>
 
         <template v-else>
@@ -1007,14 +1157,13 @@ function zoomGraph(event: WheelEvent) {
           <input v-model="params.enterpriseId" placeholder="企业ID" />
         </label>
         <label class="param-field required">
-          <span>relationType</span>
-          <select v-model="params.relationType">
-            <option>任职</option>
-            <option>合作</option>
-            <option>研发合作</option>
-            <option>项目合作</option>
-            <option>技术合作</option>
-          </select>
+          <span>relationTypes</span>
+          <div class="param-checkbox-group">
+            <label v-for="o in relationTypeOptions" :key="o.value" class="param-checkbox">
+              <input type="checkbox" :value="o.value" v-model="params.relationTypes" />
+              <span>{{ o.label }}</span>
+            </label>
+          </div>
         </label>
 
         <footer>
@@ -1091,3 +1240,88 @@ function zoomGraph(event: WheelEvent) {
     </div>
   </div>
 </template>
+
+<style scoped>
+.panel {
+  margin-top: 24px;
+  padding: 20px 24px;
+  background: var(--panel);
+  border: 1px solid #e6ebf2;
+  border-radius: 12px;
+}
+
+.panel h3 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.params {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.params input[type='text'],
+.params input:not([type]),
+.params select {
+  padding: 8px 12px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  font-size: 14px;
+  min-width: 120px;
+  background: #fff;
+}
+
+.params input[type='checkbox'] {
+  margin-right: 4px;
+}
+
+.param-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 14px;
+  color: #334155;
+  cursor: pointer;
+}
+
+.param-checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.result {
+  padding: 12px 0;
+  font-size: 14px;
+  color: #334155;
+  line-height: 1.7;
+}
+
+.result p {
+  margin: 4px 0;
+}
+
+.panel-dimension {
+  margin: 6px 0;
+}
+
+.panel-dimension strong {
+  color: #1f2937;
+  margin-right: 8px;
+}
+
+.panel-error {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  border-radius: 8px;
+  color: #be123c;
+  font-size: 13px;
+}
+</style>

@@ -42,6 +42,12 @@ KG_CONSTRUCTION_MODULES: tuple[dict[str, object], ...] = (
         "status": "scaffold",
     },
     {
+        "code": "relation_detail_annotation",
+        "name": "角色与合作详情标注",
+        "description": "对专家-企业关系补充角色身份、技术领域、合作任职时段等详情属性，精细化政企关系语义描述。",
+        "status": "scaffold",
+    },
+    {
         "code": "industry_chain_topn_event",
         "name": "科技产业链点TOP-N事件关系",
         "description": "针对产业链节点筛选核心事件，构建事件与专家、人才、产业节点的关联。",

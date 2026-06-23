@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import axios from 'axios'
 
 type MainTab = 'test' | 'developer'
@@ -494,7 +494,7 @@ const responseRows = computed<(string)[][]>(() => {
 
 // #2 角色与合作详情标注
 const annotationParams = ref({
-  relationId: 'S001->E001@0',
+  relationId: 'E10001->ENT001@0',
   roleType: 'chief_scientist',
   techField: '人工智能',
   period: { start: '2021-01-01', end: '2024-12-31' },
@@ -540,9 +540,9 @@ async function loadAnnotation() {
 
 // #3 企业背景关联分析
 const analysisParams = ref({
-  enterpriseId: 'E001',
+  enterpriseId: 'ENT001',
   analysisDimensions: ['industry_status', 'core_tech', 'financial'] as string[],
-  patentCPC: 'G06N,G06F',
+  patentCPC: ['G06N', 'G06F'] as string[],
 })
 const dimensionOptions = [
   { value: 'industry_status', label: '行业地位' },
@@ -557,16 +557,12 @@ async function loadAnalysis() {
   analysisLoading.value = true
   analysisError.value = ''
   try {
-    const cpc = analysisParams.value.patentCPC
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
     const { data } = await axios.post(
       '/api/v1/kg-construction/enterprise-background-analyses/analyze',
       {
         enterpriseId: analysisParams.value.enterpriseId,
         analysisDimensions: analysisParams.value.analysisDimensions,
-        patentCPC: cpc,
+        patentCPC: analysisParams.value.patentCPC,
       },
     )
     analysisResp.value = data
@@ -597,6 +593,66 @@ async function loadAnalysis() {
   }
 }
 
+// 测试参数下拉选项（后端动态拉取）
+interface OptionItem {
+  value: string
+  label: string
+}
+const optionsData = ref<{
+  scholars: { scholarId: string; name: string }[]
+  enterprises: { enterpriseId: string; name: string }[]
+  edges: { relationId: string; scholarId: string; enterpriseId: string }[]
+  relationTypes: OptionItem[]
+  roles: OptionItem[]
+  dimensions: OptionItem[]
+  techFields: string[]
+  cpcCodes: string[]
+}>({
+  scholars: [],
+  enterprises: [],
+  edges: [],
+  relationTypes: [],
+  roles: [],
+  dimensions: [],
+  techFields: [],
+  cpcCodes: [],
+})
+
+onMounted(async () => {
+  try {
+    const { data } = await axios.get('/api/v1/kg-construction/options')
+    optionsData.value = data
+  } catch (e) {
+    // 拉取失败时回退到本地静态选项
+  }
+})
+
+const scholarOptions = computed(() => optionsData.value.scholars)
+const enterpriseOptions = computed(() => optionsData.value.enterprises)
+const edgeOptions = computed(() => optionsData.value.edges)
+const relationTypeOpts = computed(() =>
+  optionsData.value.relationTypes.length ? optionsData.value.relationTypes : relationTypeOptions,
+)
+const roleOpts = computed(() =>
+  optionsData.value.roles.length ? optionsData.value.roles : roleOptions,
+)
+const dimensionOpts = computed(() =>
+  optionsData.value.dimensions.length ? optionsData.value.dimensions : dimensionOptions,
+)
+const techFieldOpts = computed(() => optionsData.value.techFields)
+const cpcOpts = computed(() => optionsData.value.cpcCodes)
+
+const openMulti = ref('')
+function toggleMulti(key: string) {
+  openMulti.value = openMulti.value === key ? '' : key
+}
+function selectedLabels(selected: string[], opts: OptionItem[]) {
+  return opts
+    .filter((o) => selected.includes(o.value))
+    .map((o) => o.label)
+    .join('、')
+}
+
 const pythonCodeExample = computed(() => {
   const url = `http://localhost:3001${currentApiPath.value}`
   if (subFunctionKey.value === 'annotate') {
@@ -618,9 +674,6 @@ print(response.json())`
   }
   if (subFunctionKey.value === 'analyze') {
     const cpc = analysisParams.value.patentCPC
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
     return `import requests
 
 url = "${url}"
@@ -670,9 +723,6 @@ console.log(data)`
   }
   if (subFunctionKey.value === 'analyze') {
     const cpc = analysisParams.value.patentCPC
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
     return `const response = await fetch("${url}", {
   method: "POST",
   headers: {
@@ -721,9 +771,6 @@ const curlCodeExample = computed(() => {
   }
   if (subFunctionKey.value === 'analyze') {
     const cpc = analysisParams.value.patentCPC
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
     return `curl -X POST "${url}" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -1386,7 +1433,7 @@ function zoomGraph(event: WheelEvent) {
     </main>
 
     <div v-if="showParams" class="modal-mask" role="dialog" aria-modal="true" aria-label="测试参数设置">
-      <form class="param-modal" @submit.prevent="saveParamsAndRun">
+      <form class="param-modal" @submit.prevent="saveParamsAndRun" @click="openMulti = ''">
         <header>
           <h2>
             <span class="param-title-icon" aria-hidden="true">
@@ -1411,19 +1458,33 @@ function zoomGraph(event: WheelEvent) {
         <template v-if="subFunctionKey === 'build'">
           <label class="param-field required">
             <span>scholarId</span>
-            <input v-model="params.scholarId" placeholder="专家ID" />
+            <select v-model="params.scholarId">
+              <option v-for="s in scholarOptions" :key="s.scholarId" :value="s.scholarId">
+                {{ s.name }}（{{ s.scholarId }}）
+              </option>
+            </select>
           </label>
           <label class="param-field required">
             <span>enterpriseId</span>
-            <input v-model="params.enterpriseId" placeholder="企业ID" />
+            <select v-model="params.enterpriseId">
+              <option v-for="e in enterpriseOptions" :key="e.enterpriseId" :value="e.enterpriseId">
+                {{ e.name }}（{{ e.enterpriseId }}）
+              </option>
+            </select>
           </label>
           <label class="param-field required">
             <span>relationTypes</span>
-            <div class="param-checkbox-group">
-              <label v-for="o in relationTypeOptions" :key="o.value" class="param-checkbox">
-                <input type="checkbox" :value="o.value" v-model="params.relationTypes" />
-                <span>{{ o.label }}</span>
-              </label>
+            <div class="multiselect" @click.stop>
+              <button type="button" class="ms-button" @click="toggleMulti('relationTypes')">
+                <span>{{ params.relationTypes.length ? selectedLabels(params.relationTypes, relationTypeOpts) : '请选择' }}</span>
+                <span class="select-arrow" aria-hidden="true"></span>
+              </button>
+              <div v-if="openMulti === 'relationTypes'" class="ms-panel">
+                <label v-for="o in relationTypeOpts" :key="o.value" class="param-checkbox">
+                  <input type="checkbox" :value="o.value" v-model="params.relationTypes" />
+                  <span>{{ o.label }}</span>
+                </label>
+              </div>
             </div>
           </label>
         </template>
@@ -1431,17 +1492,23 @@ function zoomGraph(event: WheelEvent) {
         <template v-else-if="subFunctionKey === 'annotate'">
           <label class="param-field required">
             <span>relationId</span>
-            <input v-model="annotationParams.relationId" placeholder="政企关系ID" />
+            <select v-model="annotationParams.relationId">
+              <option v-for="e in edgeOptions" :key="e.relationId" :value="e.relationId">
+                {{ e.scholarId }} → {{ e.enterpriseId }}
+              </option>
+            </select>
           </label>
           <label class="param-field required">
             <span>roleType</span>
             <select v-model="annotationParams.roleType">
-              <option v-for="o in roleOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+              <option v-for="o in roleOpts" :key="o.value" :value="o.value">{{ o.label }}</option>
             </select>
           </label>
           <label class="param-field">
             <span>techField</span>
-            <input v-model="annotationParams.techField" placeholder="技术领域" />
+            <select v-model="annotationParams.techField">
+              <option v-for="f in techFieldOpts" :key="f" :value="f">{{ f }}</option>
+            </select>
           </label>
           <label class="param-field">
             <span>period.start</span>
@@ -1456,20 +1523,41 @@ function zoomGraph(event: WheelEvent) {
         <template v-else-if="subFunctionKey === 'analyze'">
           <label class="param-field required">
             <span>enterpriseId</span>
-            <input v-model="analysisParams.enterpriseId" placeholder="企业ID" />
+            <select v-model="analysisParams.enterpriseId">
+              <option v-for="e in enterpriseOptions" :key="e.enterpriseId" :value="e.enterpriseId">
+                {{ e.name }}（{{ e.enterpriseId }}）
+              </option>
+            </select>
           </label>
           <label class="param-field required">
             <span>analysisDimensions</span>
-            <div class="param-checkbox-group">
-              <label v-for="o in dimensionOptions" :key="o.value" class="param-checkbox">
-                <input type="checkbox" :value="o.value" v-model="analysisParams.analysisDimensions" />
-                <span>{{ o.label }}</span>
-              </label>
+            <div class="multiselect" @click.stop>
+              <button type="button" class="ms-button" @click="toggleMulti('analysisDimensions')">
+                <span>{{ analysisParams.analysisDimensions.length ? selectedLabels(analysisParams.analysisDimensions, dimensionOpts) : '请选择' }}</span>
+                <span class="select-arrow" aria-hidden="true"></span>
+              </button>
+              <div v-if="openMulti === 'analysisDimensions'" class="ms-panel">
+                <label v-for="o in dimensionOpts" :key="o.value" class="param-checkbox">
+                  <input type="checkbox" :value="o.value" v-model="analysisParams.analysisDimensions" />
+                  <span>{{ o.label }}</span>
+                </label>
+              </div>
             </div>
           </label>
           <label class="param-field">
             <span>patentCPC</span>
-            <input v-model="analysisParams.patentCPC" placeholder="专利CPC（逗号分隔）" />
+            <div class="multiselect" @click.stop>
+              <button type="button" class="ms-button" @click="toggleMulti('patentCPC')">
+                <span>{{ analysisParams.patentCPC.length ? analysisParams.patentCPC.join('、') : '请选择' }}</span>
+                <span class="select-arrow" aria-hidden="true"></span>
+              </button>
+              <div v-if="openMulti === 'patentCPC'" class="ms-panel">
+                <label v-for="c in cpcOpts" :key="c" class="param-checkbox">
+                  <input type="checkbox" :value="c" v-model="analysisParams.patentCPC" />
+                  <span>{{ c }}</span>
+                </label>
+              </div>
+            </div>
           </label>
         </template>
 
@@ -1604,6 +1692,53 @@ function zoomGraph(event: WheelEvent) {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.multiselect {
+  position: relative;
+  width: 100%;
+}
+
+.ms-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  font-size: 14px;
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+  min-height: 36px;
+}
+
+.ms-button .select-arrow {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid #6b7280;
+  margin-left: 8px;
+}
+
+.ms-panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px 12px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .result {

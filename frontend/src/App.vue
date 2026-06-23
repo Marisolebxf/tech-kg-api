@@ -88,6 +88,36 @@ function makeRelationGraph(
   ]
 }
 
+function buildRadialGraph(
+  centerTitle: string,
+  centerSubtitle: string,
+  items: { title: string; subtitle: string; relation: string }[],
+): GraphNode[] {
+  const cx = graphWidth / 2
+  const cy = graphHeight / 2
+  const radius = 380
+  const n = items.length
+  return [
+    { key: 'expert', title: centerTitle, subtitle: centerSubtitle, x: cx - 150, y: cy - 47, width: 300, height: 94, kind: 'expert' },
+    ...items.map((item, i) => {
+      const ang = (2 * Math.PI * i) / (n || 1) - Math.PI / 2
+      const ccx = cx + radius * Math.cos(ang)
+      const ccy = cy + radius * Math.sin(ang)
+      return {
+        key: `company${i + 1}` as GraphNodeKey,
+        title: item.title,
+        subtitle: item.subtitle,
+        relation: item.relation,
+        x: ccx - 180,
+        y: ccy - 55,
+        width: 360,
+        height: 110,
+        kind: 'company' as const,
+      }
+    }),
+  ]
+}
+
 const relationFeatures: RelationFeature[] = [
   {
     navLabel: '科技专家直接关系',
@@ -215,6 +245,12 @@ const activeLoading = computed(() => {
   if (subFunctionKey.value === 'annotate') return annotationLoading.value
   if (subFunctionKey.value === 'analyze') return analysisLoading.value
   return loading.value
+})
+
+const graphAriaLabel = computed(() => {
+  if (subFunctionKey.value === 'annotate') return '角色标注图谱'
+  if (subFunctionKey.value === 'analyze') return '企业背景分析图谱'
+  return '企业关系图谱'
 })
 
 async function loadEnterpriseRelation() {
@@ -483,8 +519,20 @@ async function loadAnnotation() {
       annotationParams.value,
     )
     annotationResp.value = data
+    // 画板：专家 -> 企业，边上标注角色
+    const parts = String(annotationParams.value.relationId || '').split('->')
+    const src = parts[0] || ''
+    const dst = (parts[1] || '').split('@')[0] || ''
+    graphNodes.value = buildRadialGraph(`专家：${src}`, '专家', [
+      {
+        title: `企业：${dst}`,
+        subtitle: data.techField || '企业',
+        relation: data.roleLabel || data.roleType || '标注',
+      },
+    ])
   } catch (e: any) {
     annotationError.value = e?.response?.data?.detail || e?.message || String(e)
+    graphNodes.value = []
   } finally {
     annotationLoading.value = false
   }
@@ -522,8 +570,28 @@ async function loadAnalysis() {
       },
     )
     analysisResp.value = data
+    // 画板：企业为中心，分析维度辐射
+    const dimLabel: Record<string, string> = {
+      industry_status: '行业地位',
+      core_tech: '核心技术',
+      financial: '经营财务',
+    }
+    const items = analysisParams.value.analysisDimensions.map((d) => {
+      const dd = data.dimensions?.[d] || {}
+      return {
+        title: dimLabel[d] || d,
+        subtitle: dd.available ? dd.conclusion || '已分析' : dd.summary || '暂无数据',
+        relation: dd.available ? '已分析' : '暂无数据',
+      }
+    })
+    graphNodes.value = buildRadialGraph(
+      `企业：${data.enterpriseName || analysisParams.value.enterpriseId}`,
+      '企业',
+      items,
+    )
   } catch (e: any) {
     analysisError.value = e?.response?.data?.detail || e?.message || String(e)
+    graphNodes.value = []
   } finally {
     analysisLoading.value = false
   }
@@ -1105,8 +1173,8 @@ function zoomGraph(event: WheelEvent) {
         </div>
 
         <template v-if="mainTab === 'test'">
-          <div class="test-grid" :class="{ 'single-column': subFunctionKey !== 'build' }">
-            <section v-if="subFunctionKey === 'build'" class="graph-panel" aria-label="企业关系图谱">
+          <div class="test-grid">
+            <section class="graph-panel" :aria-label="graphAriaLabel">
               <div class="graph-canvas" @wheel="zoomGraph">
                 <div
                   ref="graphStageRef"

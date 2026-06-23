@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
-from service.enterprise_relation_catalog import ROLE_CATALOG
+from service.enterprise_relation_catalog import role_info
 
 
 class Period(BaseModel):
@@ -21,8 +21,7 @@ class RelationDetailAnnotationRequest(BaseModel):
     @field_validator("roleType")
     @classmethod
     def _validate_role(cls, v: str) -> str:
-        if v not in ROLE_CATALOG:
-            raise ValueError(f"非法角色类型: {v}")
+        role_info(v)
         return v
 
 

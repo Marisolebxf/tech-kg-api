@@ -5,9 +5,9 @@
   "type": "module",
   "packageManager": "pnpm@9.15.9",
   "scripts": {
-    "dev": "vite",
-    "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "dev": "NODE_OPTIONS=--require=./scripts/node18-crypto-shim.cjs vite --host 127.0.0.1 --port 8880",
+    "build": "vue-tsc -b && NODE_OPTIONS=--require=./scripts/node18-crypto-shim.cjs vite build",
+    "preview": "NODE_OPTIONS=--require=./scripts/node18-crypto-shim.cjs vite preview --host 127.0.0.1 --port 8880"
   },
   "dependencies": {
     "@microsoft/fetch-event-source": "^2.0.1",

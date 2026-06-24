@@ -25,13 +25,13 @@ jobs:
           TRSGRAPH_HOST=127.0.0.1
           TRSGRAPH_PORT=9669
           TRSGRAPH_USERNAME=root
-          TRSGRAPH_PASSWORD=trsadmin
+          TRSGRAPH_PASSWORD=ci_test_password
           TRSGRAPH_SPACE=techkg
           MYSQL_HOST=127.0.0.1
           MYSQL_PORT=3306
           MYSQL_DATABASE=techkg
           MYSQL_USERNAME=root
-          MYSQL_PASSWORD=123456789
+          MYSQL_PASSWORD=ci_test_password
           REDIS_HOST=127.0.0.1
           REDIS_PORT=6379
           LLM_API_KEY=${LLM_API_KEY}

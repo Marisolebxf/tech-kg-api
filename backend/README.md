@@ -126,7 +126,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from db_model import DwdScholar
 
-engine = create_engine("mysql+pymysql://root:123456789@127.0.0.1:3306/techkg")
+engine = create_engine("mysql+pymysql://root:<password>@127.0.0.1:3306/techkg")
 
 # 插入
 with Session(engine) as session:

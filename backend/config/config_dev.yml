@@ -13,7 +13,7 @@ mysql:
   port: ${MYSQL_PORT:3306}
   database: ${MYSQL_DATABASE:techkg}
   username: ${MYSQL_USERNAME:root}
-  password: ${MYSQL_PASSWORD:123456789}
+  password: ${MYSQL_PASSWORD:your_mysql_password_here}
   pool_size: 10
   max_overflow: 20
 
@@ -28,7 +28,7 @@ graph_db:
   host: ${TRSGRAPH_HOST:127.0.0.1}
   port: ${TRSGRAPH_PORT:9669}
   username: ${TRSGRAPH_USERNAME:root}
-  password: ${TRSGRAPH_PASSWORD:trsadmin}
+  password: ${TRSGRAPH_PASSWORD:your_trsgraph_password_here}
   space: ${TRSGRAPH_SPACE:techkg}
   max_connection_pool_size: ${GRAPH_DB_MAX_CONNECTION_POOL_SIZE:50}
   connection_timeout: ${GRAPH_DB_CONNECTION_TIMEOUT:30}

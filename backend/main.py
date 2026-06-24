@@ -37,10 +37,15 @@ FRONTEND_SOURCE_INDEX = PROJECT_ROOT / "frontend" / "index.html"
 
 
 @app.get("/", include_in_schema=False)
-@app.get("/binding", include_in_schema=False)
 async def serve_frontend_index() -> FileResponse:
     index_file = FRONTEND_INDEX if FRONTEND_INDEX.exists() else FRONTEND_SOURCE_INDEX
     return FileResponse(index_file)
+
+
+@app.get("/legacy/binding", include_in_schema=False)
+async def serve_legacy_binding() -> FileResponse:
+    legacy_file = PROJECT_ROOT / "frontend" / "public" / "legacy" / "binding.html"
+    return FileResponse(legacy_file)
 
 
 @app.exception_handler(GraphRepoError)

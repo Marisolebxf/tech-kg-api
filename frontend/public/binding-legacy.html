@@ -26,14 +26,18 @@
             grid-template-columns: 230px 1fr;
             gap: 20px;
             min-height: calc(100dvh - 94px);
+            height: calc(100dvh - 94px);
         }
         .sidebar {
             background: #D8E7FC;
             border: 0;
             border-radius: 0;
             box-shadow: none;
-            padding: 24px 18px;
+            padding: 24px 18px 0;
             backdrop-filter: blur(10px);
+            min-height: 100%;
+            display: flex;
+            flex-direction: column;
         }
         .brand {
             display: flex;
@@ -49,13 +53,14 @@
             border-radius: 14px;
             overflow: hidden;
             flex: 0 0 32px;
-            background: #0040FF;
+            background: transparent;
             display: flex;
             align-items: center;
             justify-content: center;
             box-shadow: none;
         }
-        .brand-logo svg {
+        .brand-logo svg,
+        .brand-logo img {
             width: 32px;
             height: 32px;
             display: block;
@@ -71,6 +76,12 @@
             color: #1D2129;
             font-size: 14px;
             margin-bottom: 6px;
+        }
+        .nav-item .nav-arrow {
+            margin-left: auto;
+            color: #c7d2e5;
+            font-size: 16px;
+            line-height: 1;
         }
         .nav-item.active {
             background: rgba(255,255,255,0.64);
@@ -102,6 +113,7 @@
             margin-top: 8px;
             margin-left: 18px;
             padding-left: 20px;
+            flex: 1 1 auto;
         }
         .menu-list::before {
             content: "";
@@ -128,14 +140,31 @@
             box-shadow: none;
         }
         .user-card {
-            margin-top: 28px;
-            padding: 14px;
+            margin-top: auto;
+            margin-bottom: 0;
+            padding: 16px 14px;
             border-radius: 16px;
-            background: #f6f9ff;
+            background: rgba(255, 255, 255, 0.72);
             color: #6480af;
             font-size: 14px;
+            border: 1px solid #dce8fb;
+            box-shadow: 0 10px 22px rgba(76, 112, 166, 0.08);
         }
-        .user-name { font-weight: 600; color: #2f4877; margin-top: 6px; }
+        .user-card-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: #7a8fb3;
+            margin-bottom: 6px;
+        }
+        .user-name {
+            display: inline-flex;
+            align-items: center;
+            min-height: 28px;
+            padding: 0 2px;
+            font-weight: 700;
+            color: #2f4877;
+            margin-top: 0;
+        }
         .content {
             background: rgba(255, 255, 255, 0.4);
             border: 1.6px solid rgba(255, 255, 255, 0.48);
@@ -143,16 +172,25 @@
             box-shadow: 0 16px 40px rgba(77, 114, 176, 0.10);
             padding: 18px;
             backdrop-filter: blur(10px);
-            min-height: calc(100dvh - 94px);
+            min-height: 100%;
+            height: 100%;
             overflow: hidden;
+            display: flex;
+            flex-direction: column;
         }
         .content-shell {
             background: #fff;
             border-radius: 22px;
             padding: 18px;
-            min-height: calc(100dvh - 132px);
+            min-height: 0;
+            height: auto;
+            min-height: 100%;
+            flex: 1 1 auto;
             box-shadow: inset 0 0 0 1px #edf2fb;
             overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-self: stretch;
         }
         .tabs {
             display: flex;
@@ -247,9 +285,10 @@
             display: grid;
             grid-template-columns: minmax(620px, 1fr) 420px;
             gap: 20px;
-            align-items: start;
-            height: calc(100dvh - 250px);
-            min-height: 620px;
+            align-items: stretch;
+            min-height: 0;
+            flex: 1 1 auto;
+            height: 100%;
         }
         .panel {
             border: 1px solid #edf1f7;
@@ -871,9 +910,17 @@
             font-size: 16px;
         }
         .view-panel { display: none; }
-        .view-panel.active { display: block; }
+        .view-panel.active {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            flex: 1 1 auto;
+            height: 100%;
+        }
         .developer-view {
-            height: calc(100% - 58px);
+            flex: 1 1 auto;
+            min-height: 0;
+            height: 100%;
             overflow-y: auto;
             overflow-x: hidden;
             background: #f8fbff;
@@ -911,6 +958,7 @@
             border-radius: 14px;
             padding: 14px;
             box-shadow: 0 10px 24px rgba(77, 114, 176, 0.06);
+            box-sizing: border-box;
         }
         .dev-grid > .dev-card {
             height: 360px;
@@ -950,7 +998,13 @@
         }
         .dev-table th { background: #f7f9fc; color: #6b7890; font-weight: 600; }
         .dev-table tr:last-child td { border-bottom: 0; }
-        .code-card { min-height: 360px; display: flex; flex-direction: column; position: relative; }
+        .code-card {
+            min-height: 360px;
+            flex: 1 1 auto;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
         .code-header {
             display: flex;
             align-items: center;
@@ -969,7 +1023,8 @@
         .code-tab.active { background: #fff; color: #2f64e4; box-shadow: 0 4px 12px rgba(77, 114, 176, 0.10); }
         .code-block {
             flex: 1;
-            max-height: 360px;
+            min-height: 0;
+            max-height: none;
             overflow: auto;
             border-radius: 10px;
             background: #fbfcff;
@@ -1013,23 +1068,33 @@
             <aside class="sidebar">
                 <div class="brand">
                     <div class="brand-logo" aria-label="知识图谱平台标识">
-                        <svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-                            <rect width="32" height="32" rx="14" fill="#0040FF"/>
-                            <circle cx="16" cy="16" r="12.8" fill="none" stroke="#ffffff" stroke-width="1.6"/>
-                            <circle cx="16" cy="16" r="9.8" fill="none" stroke="#ffffff" stroke-width="1.2"/>
-                            <circle cx="16" cy="16" r="6" fill="#ffffff"/>
-                            <circle cx="12.2" cy="11.8" r="1.2" fill="#0040FF"/>
-                            <circle cx="19.8" cy="11.8" r="1.2" fill="#0040FF"/>
-                            <circle cx="10.2" cy="17.2" r="1.2" fill="#ffffff"/>
-                            <circle cx="21.8" cy="17.2" r="1.2" fill="#ffffff"/>
-                            <path d="M12.5 17.4c0-2.4 1.8-4.4 3.5-4.4s3.5 2 3.5 4.4" fill="none" stroke="#0040FF" stroke-width="1.4" stroke-linecap="round"/>
-                            <path d="M13.9 19.2h4.2M14.8 20.8h2.4" stroke="#0040FF" stroke-width="1.2" stroke-linecap="round"/>
-                        </svg>
+                        <img src="/static/brand-icon.svg" alt="" aria-hidden="true" onerror="if(!this.dataset.fallback){this.dataset.fallback='1';this.src='./brand-icon.svg';}" />
                     </div>
                     <div>
                         <div class="brand-title">知识图谱平台</div>
                         <div class="brand-subtitle">Knowledge Graph Platform</div>
                     </div>
+                </div>
+                <div class="nav-item">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 19 17" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M2 15.75h15" />
+                            <path d="M4.75 15.75V8.75" />
+                            <path d="M9.5 15.75V4.25" />
+                            <path d="M14.25 15.75V11.25" />
+                        </svg>
+                    </span>
+                    <span>数据概览</span>
+                </div>
+                <div class="nav-item">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+                            <rect x="3.5" y="3.5" width="13" height="13" rx="3.2" />
+                            <rect x="6.4" y="6.4" width="7.2" height="7.2" rx="1.5" />
+                        </svg>
+                    </span>
+                    <span>数据管理</span>
+                    <span class="nav-arrow" aria-hidden="true">▸</span>
                 </div>
                 <div class="nav-item"><span class="nav-icon"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h5"/><path d="M4 14h5"/><circle cx="3" cy="6" r="1.5"/><circle cx="3" cy="14" r="1.5"/><circle cx="12" cy="10" r="1.5"/><path d="M9 6c2.2 0 3 1.2 3 4"/><path d="M9 14c2.2 0 3-1.2 3-4"/><path d="M13.5 10H17"/></svg></span><span>流程编排</span></div>
                 <div class="nav-item"><span class="nav-icon"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 6h10"/><path d="M10 6v7"/><path d="M5 13h10"/><circle cx="5" cy="15" r="1.7"/><circle cx="10" cy="15" r="1.7"/><circle cx="15" cy="15" r="1.7"/></svg></span><span>图谱服务</span></div>
@@ -1045,7 +1110,10 @@
                     <div class="menu-link">产业链点事件关系</div>
                     <div class="menu-link">科技产业链全景图</div>
                 </div>
-                <div class="user-card">当前账号<div class="user-name">Ben</div></div>
+                <div class="user-card">
+                    <div class="user-card-label">当前账号</div>
+                    <div class="user-name">Ben</div>
+                </div>
             </aside>
 
             <main class="content">

@@ -35,3 +35,8 @@ Thumbs.db
 .coverage
 htmlcov/
 server.log
+
+# 本地专用，不提交
+docs/superpowers/
+backend/app/
+/app/

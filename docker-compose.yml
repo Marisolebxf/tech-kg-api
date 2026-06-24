@@ -3,10 +3,29 @@ services:
     build: ./backend
     container_name: tech-kg-api
     ports:
-      - "8000:8000"
-    env_file:
-      - .env
-    volumes:
-      - ./backend:/app
-    command: uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+      - "8001:8000"
+    environment:
+      TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
+      TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-techkg}
+      TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
+      TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
+      MYSQL_HOST: ${MYSQL_HOST:-host.docker.internal}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-techkg}
+      MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-glm-4.7-flash}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    container_name: tech-kg-web
+    ports:
+      - "8088:80"
+    depends_on:
+      - api
     restart: unless-stopped

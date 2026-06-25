@@ -1,329 +1,609 @@
 # tech-kg-api
 
-亿级知识图谱 monorepo：后端 API（Python）+ 前端（Vue）。
+亿级知识图谱项目，包含 Python 后端（FastAPI）和 Vue 前端（Vite）。
 
-## 环境要求
+---
 
-后端：
+## 仓库完整目录结构
 
-- Python 3.13+
-- [uv](https://docs.astral.sh/uv/)
-
-前端：
-
-- Node.js 20+
-- [pnpm](https://pnpm.io/)
-
-## 快速开始
-
-### 1. 克隆仓库
-
-```bash
-git clone https://github.com/Marisolebxf/tech-kg-api.git
-cd tech-kg-api
+```text
+tech-kg-api/
+├── backend/                          # Python + FastAPI 后端
+│   ├── main.py                       # 应用入口，创建 FastAPI 实例
+│   ├── biz/                          # 接口层
+│   │   ├── router/
+│   │   │   └── register.py           # 统一路由注册（所有模块 router 在此挂载）
+│   │   └── handler/                  # 各模块 HTTP Handler（定义路由 + 参数校验）
+│   │       ├── kg_construction.py    # 模块清单接口
+│   │       ├── expert_direct_relation.py
+│   │       ├── expert_indirect_relation.py
+│   │       ├── expert_cooperation_achievement.py
+│   │       ├── expert_colleague_relation.py
+│   │       ├── expert_alumni_relation.py
+│   │       ├── expert_paper_cooperation.py
+│   │       ├── expert_enterprise_relation.py
+│   │       ├── industry_chain_topn_event.py
+│   │       └── industry_chain_panorama.py
+│   ├── application/                  # 用例编排层（调 service，组装输入输出）
+│   │   ├── expert_direct_relation.py
+│   │   ├── expert_indirect_relation.py
+│   │   ├── expert_cooperation_achievement.py
+│   │   ├── expert_colleague_relation.py
+│   │   ├── expert_alumni_relation.py
+│   │   ├── expert_paper_cooperation.py
+│   │   ├── expert_enterprise_relation.py
+│   │   ├── industry_chain_topn_event.py
+│   │   ├── industry_chain_panorama.py
+│   │   └── kg_construction.py
+│   ├── service/                      # 领域服务层（核心业务逻辑 + 推理算法）
+│   │   ├── base_module.py            # 模块脚手架基类
+│   │   ├── module_catalog.py         # 模块注册表
+│   │   ├── kg_construction.py        # 模块清单服务
+│   │   ├── expert_direct_relation.py
+│   │   ├── expert_indirect_relation.py
+│   │   ├── expert_cooperation_achievement.py
+│   │   ├── expert_colleague_relation.py
+│   │   ├── expert_alumni_relation.py
+│   │   ├── expert_paper_cooperation.py
+│   │   ├── expert_enterprise_relation.py
+│   │   ├── industry_chain_topn_event.py
+│   │   └── industry_chain_panorama.py
+│   ├── dao/                          # 数据访问层（查 MySQL、ES、图数据库）
+│   │   ├── scholar.py                # 专家/人才数据
+│   │   ├── paper.py                  # 论文数据
+│   │   ├── patent.py                 # 专利数据
+│   │   ├── project.py                # 项目数据
+│   │   ├── organization.py           # 机构数据
+│   │   ├── relation.py               # 关系数据
+│   │   └── industry_chain.py         # 产业链数据
+│   ├── db_model/                     # SQLAlchemy ORM 模型（93 张表）
+│   │   ├── scholar.py
+│   │   ├── chinese_paper.py
+│   │   ├── foreign_paper.py
+│   │   ├── paper_common.py
+│   │   ├── patent.py
+│   │   ├── domestic_project.py
+│   │   ├── foreign_project.py
+│   │   ├── domestic_organization.py
+│   │   ├── foreign_organization.py
+│   │   ├── industry_chain.py
+│   │   ├── policy.py
+│   │   └── report.py
+│   ├── schemas/                      # 数据库 Schema 文档
+│   │   ├── ddl/                      # 各数据域 DDL 文件（93 张表）
+│   │   │   ├── scholar/              # 人才专家（6 表）
+│   │   │   ├── chinese_paper/        # 中文论文（4 表）
+│   │   │   ├── foreign_paper/        # 外文论文（6 表）
+│   │   │   ├── paper_common/         # 论文通用（2 表）
+│   │   │   ├── patent/               # 专利（9 表）
+│   │   │   ├── domestic_project/     # 国内项目（2 表）
+│   │   │   ├── foreign_project/      # 国外项目（2 表）
+│   │   │   ├── domestic_organization/# 国内机构（41 表）
+│   │   │   ├── foreign_organization/ # 国外机构（10 表）
+│   │   │   ├── industry_chain/       # 产业链（5 表）
+│   │   │   ├── policy/               # 政策（4 表）
+│   │   │   └── report/               # 报告（2 表）
+│   │   └── specifications/           # 各数据域字段规范文档
+│   ├── infra/                        # 基础设施连接
+│   │   ├── mysql.py                  # MySQL 连接管理
+│   │   ├── redis.py                  # Redis 连接管理
+│   │   ├── graph_db.py               # TRSGraph 图数据库连接
+│   │   └── llm.py                    # 大模型服务连接
+│   ├── idl/                          # 接口定义文件（API 契约）
+│   ├── config/                       # 环境配置
+│   │   ├── config_dev.yml            # 开发环境
+│   │   ├── config_stage.yml          # 测试环境
+│   │   └── config_product.yml        # 生产环境
+│   ├── middleware/                   # 中间件（日志、鉴权、trace_id）
+│   ├── utils/                        # 工具函数（日志、配置加载、常量）
+│   ├── script/                       # 维护脚本
+│   │   ├── init_db.py                # 数据库初始化
+│   │   └── sync_schema_from_mysql.py # 从远程 MySQL 同步 Schema
+│   ├── tests/                        # 测试
+│   ├── legacy/                       # 历史代码参考
+│   ├── .env.example                  # 环境变量模板
+│   ├── pyproject.toml                # Python 依赖
+│   ├── Dockerfile                    # 容器构建
+│   └── docker-compose.yml            # 本地编排
+│
 ```
 
-### 2. 启动后端
+### 后端简易目录（一句话说明每层干什么）
+
+```text
+backend/
+├── main.py              # 入口：启动 FastAPI
+├── biz/handler/         # 路由层：定义 HTTP 接口（URL + 参数校验）
+├── application/         # 编排层：组合调用 service，拼装返回值
+├── service/             # 业务层：★ 核心推理算法写这里 ★
+├── dao/                 # 数据层：查数据库（MySQL/ES/图库）
+├── db_model/            # ORM：表结构映射（93 张表）
+├── infra/               # 连接：MySQL/Redis/TRSGraph/LLM 客户端
+├── config/              # 配置：dev/stage/product 三套环境
+├── schemas/             # DDL：建表语句 + 字段规范
+├── idl/                 # 契约：接口文档
+├── script/              # 脚本：初始化、同步
+└── tests/               # 测试
+```
+
+> 简单说：**请求进来 → handler 接 → application 编排 → service 算 → dao 查数据 → 返回结果**
+
+│
+├── frontend/                         # Vue 3 + Vite 前端
+│   ├── src/
+│   │   ├── main.ts                   # 前端入口
+│   │   ├── App.vue                   # 根组件
+│   │   ├── api/
+│   │   │   └── http.ts               # Axios 实例（/api 代理 + 拦截器）
+│   │   ├── layouts/
+│   │   │   └── AppLayout.vue         # 全局布局（侧边栏 + 内容区）
+│   │   ├── router/
+│   │   │   └── index.ts              # 路由配置（9 个模块路由）
+│   │   ├── stores/
+│   │   │   └── app.ts                # Pinia 全局状态
+│   │   ├── styles/
+│   │   │   ├── reset.css             # 浏览器重置
+│   │   │   ├── tokens.css            # 设计变量（颜色/间距/字号）
+│   │   │   └── global.css            # 通用组件样式
+│   │   ├── views/
+│   │   │   ├── expert-colleague/     # 【已实现】科技专家同事关系
+│   │   │   │   ├── ExpertColleagueView.vue
+│   │   │   │   ├── mock.ts
+│   │   │   │   ├── types.ts
+│   │   │   │   └── components/
+│   │   │   └── reasoning-placeholder/# 【占位模板】其他 8 个模块
+│   │   │       └── ReasoningPlaceholderView.vue
+│   │   ├── components/               # 跨页面公共组件
+│   │   └── assets/
+│   │       ├── icons/                # SVG 图标
+│   │       └── images/               # 图片资源
+│   ├── public/                       # 静态文件
+│   ├── index.html
+│   ├── vite.config.ts                # Vite 配置 + API 代理
+│   ├── package.json
+│   ├── pnpm-lock.yaml
+│   └── .env.example                  # 前端环境变量
+│
+├── docker-compose.yml                # 项目级容器编排
+├── .gitignore
+└── README.md                         
+```
+
+---
+
+## 模块扩展约定：单文件 → 包目录
+
+当你的模块逻辑变复杂，单个 `.py` 文件装不下时，**将文件升级为同名包（目录）**：
+
+```text
+# 初始：简单模块，一个文件够用
+service/
+├── expert_alumni_relation.py          # class ExpertAlumniRelationService
+
+# 升级：模块变复杂，拆为目录
+service/
+├── expert_alumni_relation/            # 变成包
+│   ├── __init__.py                    # from .service import ExpertAlumniRelationService
+│   ├── service.py                     # 主服务类
+│   ├── rules.py                       # 推理规则
+│   ├── evidence.py                    # 证据聚合
+│   ├── scorer.py                      # 置信度计算
+│   └── constants.py                   # 模块内常量
+
+# handler、application 同理可升级：
+biz/handler/
+├── expert_alumni_relation/
+│   ├── __init__.py
+│   ├── router.py                      # 路由定义
+│   ├── request.py                     # 请求模型
+│   └── response.py                    # 响应模型
+```
+
+**关键：`__init__.py` 必须导出上层需要的类/对象，保证 import 路径不变。**
+
+```python
+# service/expert_alumni_relation/__init__.py
+from .service import ExpertAlumniRelationService  # noqa: F401
+```
+
+这样 `application/expert_alumni_relation.py` 中的 `from service.expert_alumni_relation import ExpertAlumniRelationService` 无需修改，其他模块完全不受影响。
+
+handler 升级为包时，需确保 `register.py` 中 `from biz.handler.expert_alumni_relation import router` 仍然能正常导入（在 `__init__.py` 中导出 `router`）。
+
+---
+
+## 九个模块总览
+
+| # | 模块名称 | 后端 module_code | 后端 API 前缀 | 前端路径 | 前端状态 |
+|---|---------|-----------------|--------------|---------|---------|
+| 1 | 科技专家直接关系 | `expert_direct_relation` | `/api/v1/kg-construction/expert-direct-relations` | `/expert-direct` | 占位 |
+| 2 | 科技节点间接关系 | `expert_indirect_relation` | `/api/v1/kg-construction/expert-indirect-relations` | `/node-indirect` | 占位 |
+| 3 | 科技两点合作成果 | `expert_cooperation_achievement` | `/api/v1/kg-construction/expert-cooperation-achievements` | `/two-point-achievement` | 占位 |
+| 4 | 科技专家同事关系 | `expert_colleague_relation` | `/api/v1/kg-construction/expert-colleague-relations` | `/expert-colleague` | ✅ 已实现 |
+| 5 | 科技专家校友关系 | `expert_alumni_relation` | `/api/v1/kg-construction/expert-alumni-relations` | `/expert-alumni` | 占位 |
+| 6 | 专家论文合作关系 | `expert_paper_cooperation` | `/api/v1/kg-construction/expert-paper-cooperations` | `/paper-cooperation` | 占位 |
+| 7 | 重点科技企业关系 | `expert_enterprise_relation` | `/api/v1/kg-construction/expert-enterprise-relations` | `/enterprise-relation` | 占位 |
+| 8 | 产业链点事件关系 | `industry_chain_topn_event` | `/api/v1/kg-construction/industry-chain-topn-events` | `/industry-chain-event` | 占位 |
+| 9 | 科技产业链全景图 | `industry_chain_panorama` | `/api/v1/kg-construction/industry-chain-panoramas` | `/industry-chain-panorama` | 占位 |
+
+---
+
+## 九个模块 — 后端文件完整路径
+
+> **当前状态：后端九个模块全部为脚手架占位文件，尚无实际业务逻辑。**
+>
+> 现有代码内容：
+> - **Handler**：只注册了 `GET /` 返回模块描述，没有 `/infer` 推理接口
+> - **Application**：只转发 `describe()` 方法
+> - **Service**：只继承 `KGModuleScaffoldService` 基类，设了 `module_code`，无推理算法
+> - **DAO**：空类占位（`ScholarDAO` 等只有 docstring）
+> - **infra**：连接类空占位（`MySQLClient`、`RedisClient` 等未实现）
+>
+> 各负责人需要在对应文件中填充实际代码。
+
+### 模块 1：科技专家直接关系
+
+| 层 | 文件路径 |
+|----|---------|
+| Handler | `backend/biz/handler/expert_direct_relation.py` |
+| Application | `backend/application/expert_direct_relation.py` |
+| Service | `backend/service/expert_direct_relation.py` |
+| 推荐 DAO | `dao/scholar.py`, `dao/relation.py` |
+
+### 模块 2：科技节点间接关系
+
+| 层 | 文件路径 |
+|----|---------|
+| Handler | `backend/biz/handler/expert_indirect_relation.py` |
+| Application | `backend/application/expert_indirect_relation.py` |
+| Service | `backend/service/expert_indirect_relation.py` |
+| 推荐 DAO | `dao/scholar.py`, `dao/relation.py`, `dao/organization.py` |
+
+### 模块 3：科技两点合作成果
+
+| 层 | 文件路径 |
+|----|---------|
+| Handler | `backend/biz/handler/expert_cooperation_achievement.py` |
+| Application | `backend/application/expert_cooperation_achievement.py` |
+| Service | `backend/service/expert_cooperation_achievement.py` |
+| 推荐 DAO | `dao/scholar.py`, `dao/paper.py`, `dao/patent.py`, `dao/project.py` |
+
+### 模块 4：科技专家同事关系 ✅
+
+| 层 | 文件路径 |
+|----|---------|
+| Handler | `backend/biz/handler/expert_colleague_relation.py` |
+| Application | `backend/application/expert_colleague_relation.py` |
+| Service | `backend/service/expert_colleague_relation.py` |
+| 推荐 DAO | `dao/scholar.py`, `dao/organization.py`, `dao/relation.py` |
+
+### 模块 5：科技专家校友关系
+
+| 层 | 文件路径 |
+|----|---------|
+| Handler | `backend/biz/handler/expert_alumni_relation.py` |
+| Application | `backend/application/expert_alumni_relation.py` |
+| Service | `backend/service/expert_alumni_relation.py` |
+| 推荐 DAO | `dao/scholar.py`, `dao/organization.py` |
+
+### 模块 6：专家论文合作关系
+
+| 层 | 文件路径 |
+|----|---------|
+| Handler | `backend/biz/handler/expert_paper_cooperation.py` |
+| Application | `backend/application/expert_paper_cooperation.py` |
+| Service | `backend/service/expert_paper_cooperation.py` |
+| 推荐 DAO | `dao/scholar.py`, `dao/paper.py` |
+
+### 模块 7：重点科技企业关系
+
+| 层 | 文件路径 |
+|----|---------|
+| Handler | `backend/biz/handler/expert_enterprise_relation.py` |
+| Application | `backend/application/expert_enterprise_relation.py` |
+| Service | `backend/service/expert_enterprise_relation.py` |
+| 推荐 DAO | `dao/organization.py`, `dao/relation.py`, `dao/industry_chain.py` |
+
+### 模块 8：产业链点事件关系
+
+| 层 | 文件路径 |
+|----|---------|
+| Handler | `backend/biz/handler/industry_chain_topn_event.py` |
+| Application | `backend/application/industry_chain_topn_event.py` |
+| Service | `backend/service/industry_chain_topn_event.py` |
+| 推荐 DAO | `dao/industry_chain.py`, `dao/organization.py` |
+
+### 模块 9：科技产业链全景图
+
+| 层 | 文件路径 |
+|----|---------|
+| Handler | `backend/biz/handler/industry_chain_panorama.py` |
+| Application | `backend/application/industry_chain_panorama.py` |
+| Service | `backend/service/industry_chain_panorama.py` |
+| 推荐 DAO | `dao/industry_chain.py`, `dao/organization.py` |
+
+---
+
+## 九个模块 — 前端文件完整路径
+
+> **当前状态：除"科技专家同事关系"（模块4）已完整实现外，其余 8 个模块前端均使用通用占位模板 `ReasoningPlaceholderView.vue` 渲染，无独立页面。**
+>
+> 各负责人需为自己的模块创建独立页面目录并注册路由。
+
+| # | 模块 | 页面目录 | 路由注册 | API 文件 |
+|---|------|---------|---------|---------|
+| 1 | 科技专家直接关系 | `frontend/src/views/expert-direct/` | `router/index.ts` | `api/expert-direct.ts` |
+| 2 | 科技节点间接关系 | `frontend/src/views/node-indirect/` | `router/index.ts` | `api/node-indirect.ts` |
+| 3 | 科技两点合作成果 | `frontend/src/views/two-point-achievement/` | `router/index.ts` | `api/two-point-achievement.ts` |
+| 4 | 科技专家同事关系 | `frontend/src/views/expert-colleague/` ✅ | `router/index.ts` ✅ | `api/expert-colleague.ts` |
+| 5 | 科技专家校友关系 | `frontend/src/views/expert-alumni/` | `router/index.ts` | `api/expert-alumni.ts` |
+| 6 | 专家论文合作关系 | `frontend/src/views/paper-cooperation/` | `router/index.ts` | `api/paper-cooperation.ts` |
+| 7 | 重点科技企业关系 | `frontend/src/views/enterprise-relation/` | `router/index.ts` | `api/enterprise-relation.ts` |
+| 8 | 产业链点事件关系 | `frontend/src/views/industry-chain-event/` | `router/index.ts` | `api/industry-chain-event.ts` |
+| 9 | 科技产业链全景图 | `frontend/src/views/industry-chain-panorama/` | `router/index.ts` | `api/industry-chain-panorama.ts` |
+
+> 每个前端页面目录下应包含：`XxxView.vue`、`mock.ts`、`types.ts`、`components/`
+
+---
+
+## 后端代码调用链路
+
+```text
+HTTP 请求
+  ↓
+main.py                                    # FastAPI 应用入口
+  ↓
+biz/router/register.py                     # 挂载所有 handler 的 router
+  ↓
+biz/handler/{module}.py                    # 路由定义 + 请求参数校验
+  ↓
+application/{module}.py                    # 用例编排（组合多个 service）
+  ↓
+service/{module}.py                        # 核心业务逻辑（推理算法）
+  ↓
+dao/{data_domain}.py                       # 数据查询（MySQL/ES/TRSGraph）
+  ↓
+infra/mysql.py | infra/graph_db.py         # 底层连接
+```
+
+---
+
+## 各模块开发指引
+
+### 每个模块需要改动的文件清单
+
+以你负责的模块 `{module}` 为例：
+
+| 层级 | 后端文件 | 职责 |
+|------|---------|------|
+| Handler | `backend/biz/handler/{module}.py` | 定义 HTTP 路由、请求/响应模型 |
+| Application | `backend/application/{module}.py` | 用例编排，调用 service |
+| Service | `backend/service/{module}.py` | **核心：写推理算法和业务规则** |
+| DAO | `backend/dao/scholar.py` 等 | 查数据库，按需新增方法 |
+| IDL | `backend/idl/{module}.md` | 接口文档（请求参数/返回字段） |
+
+| 层级 | 前端文件 | 职责 |
+|------|---------|------|
+| 页面 | `frontend/src/views/{module}/XxxView.vue` | 页面 UI + 交互逻辑 |
+| Mock | `frontend/src/views/{module}/mock.ts` | 开发阶段模拟数据 |
+| 类型 | `frontend/src/views/{module}/types.ts` | TS 类型定义 |
+| API | `frontend/src/api/{module}.ts` | 调后端接口 |
+| 路由 | `frontend/src/router/index.ts` | 注册路由到独立组件 |
+
+---
+
+### 后端开发步骤（以"科技专家校友关系"为例）
+
+**Step 1：定义接口（Handler）**
+
+编辑 `backend/biz/handler/expert_alumni_relation.py`：
+
+```python
+from fastapi import APIRouter
+from pydantic import BaseModel
+from application.expert_alumni_relation import ExpertAlumniRelationApplication
+
+router = APIRouter(prefix="/kg-construction/expert-alumni-relations")
+application = ExpertAlumniRelationApplication()
+
+class InferRequest(BaseModel):
+    data_source: str = "all"
+    expert_a_id: str
+    expert_b_id: str
+    relation_type: str = "alumni"
+
+class InferResponse(BaseModel):
+    code: int = 0
+    data: dict
+
+@router.get("")
+async def describe():
+    return application.describe()
+
+@router.post("/infer", response_model=InferResponse)
+async def infer(request: InferRequest):
+    result = application.infer(request)
+    return {"code": 0, "data": result}
+```
+
+**Step 2：编排用例（Application）**
+
+编辑 `backend/application/expert_alumni_relation.py`：
+
+```python
+from service.expert_alumni_relation import ExpertAlumniRelationService
+
+class ExpertAlumniRelationApplication:
+    def __init__(self):
+        self._service = ExpertAlumniRelationService()
+
+    def describe(self):
+        return self._service.describe()
+
+    def infer(self, request):
+        return self._service.infer(
+            expert_a_id=request.expert_a_id,
+            expert_b_id=request.expert_b_id,
+            relation_type=request.relation_type,
+        )
+```
+
+**Step 3：实现业务逻辑（Service）— 重点**
+
+编辑 `backend/service/expert_alumni_relation.py`：
+
+```python
+from service.base_module import KGModuleScaffoldService
+from dao.scholar import ScholarDAO
+
+class ExpertAlumniRelationService(KGModuleScaffoldService):
+    module_code = "expert_alumni_relation"
+
+    def __init__(self):
+        super().__init__()
+        self._scholar_dao = ScholarDAO()
+
+    def infer(self, expert_a_id: str, expert_b_id: str, relation_type: str) -> dict:
+        # 1. 查询专家 A、B 的教育履历
+        # 2. 匹配学校 + 时间重叠
+        # 3. 计算置信度
+        # 4. 汇总证据链
+        # 5. 返回结构化结果
+        return {
+            "relation_type": "校友关系",
+            "confidence": 88,
+            "school": "...",
+            "overlap_period": "...",
+            # ...
+        }
+```
+
+**Step 4：数据查询（DAO）**
+
+在现有 `backend/dao/scholar.py` 中添加需要的查询方法，或按需新建 DAO 文件。
+
+---
+
+### 前端开发步骤（以"科技专家校友关系"为例）
+
+**Step 1：创建页面目录**
 
 ```bash
+mkdir -p frontend/src/views/expert-alumni/components
+```
+
+**Step 2：复制模板并修改**
+
+将 `expert-colleague/ExpertColleagueView.vue` 复制为 `expert-alumni/ExpertAlumniView.vue`，修改：
+- 图谱数据（SVG 节点和连线）
+- 结果表格字段
+- Mock 数据
+- 技术方案弹窗描述
+
+**Step 3：注册路由**
+
+编辑 `frontend/src/router/index.ts`：
+
+```typescript
+import ExpertAlumniView from '../views/expert-alumni/ExpertAlumniView.vue'
+
+// 从 placeholderRoutes 中删除 /expert-alumni
+// 在 routes 中添加：
+{
+  path: '/expert-alumni',
+  name: 'expert-alumni',
+  component: ExpertAlumniView,
+  meta: { title: '科技专家校友关系' },
+},
+```
+
+**Step 4：对接 API**
+
+```typescript
+// frontend/src/api/expert-alumni.ts
+import { http } from './http'
+
+export function inferAlumniRelation(params: Record<string, unknown>) {
+  return http.post('/api/v1/kg-construction/expert-alumni-relations/infer', params)
+}
+```
+
+页面中调用，替换 mock 数据。
+
+---
+
+## DAO 数据域对照
+
+| DAO 文件 | 数据域 | ORM 模型 | 适用模块 |
+|---------|--------|----------|---------|
+| `dao/scholar.py` | 专家/人才 | `db_model/scholar.py` (6表) | 所有专家类模块 |
+| `dao/paper.py` | 论文 | `db_model/chinese_paper.py` + `foreign_paper.py` | 论文合作 |
+| `dao/patent.py` | 专利 | `db_model/patent.py` (9表) | 合作成果 |
+| `dao/project.py` | 项目 | `db_model/domestic_project.py` + `foreign_project.py` | 合作成果 |
+| `dao/organization.py` | 机构 | `db_model/domestic_organization.py` (41表) | 同事/企业关系 |
+| `dao/relation.py` | 关系 | — | 所有模块 |
+| `dao/industry_chain.py` | 产业链 | `db_model/industry_chain.py` (5表) | 产业链类模块 |
+
+---
+
+## 基础设施连接（infra）
+
+| 文件 | 连接目标 | 用途 |
+|------|---------|------|
+| `infra/mysql.py` | MySQL | 结构化数据查询 |
+| `infra/redis.py` | Redis | 缓存 |
+| `infra/graph_db.py` | TRSGraph | 图数据库查询 |
+| `infra/llm.py` | 大模型网关 | NLP/推理辅助 |
+
+---
+
+## 连接信息
+
+| 组件 | 地址 | 账号 | 密码/说明 |
+|------|------|------|----------|
+| 源 MySQL | `183.240.141.251:3318/gkx` | `gkx_reader_zp` | `Zp_Use_Gkx_db@123456`，只读 |
+| 服务器 MySQL | `10.50.125.110:5306/trendAdmin` | `root` | `q123456Q.` |
+| 本地 MySQL | `127.0.0.1:3306/techkg` | `root` | `123456789` |
+| Redis | `10.50.125.110:8379`，DB 0 | - | `redisTrend1.` |
+| 本地 Redis | `127.0.0.1:6379`，DB 0 | - | 无密码 |
+| MongoDB | `10.50.125.110:47017/test` | `root` | `x+s9zI&VA!s` |
+| ElasticSearch | `http://123.57.233.22:9200` | `elastic` | `*7A0#7i7@DzKD1pr` |
+| Nginx/GLM 网关 | `https://analysis_ckcest.aminer.cn/microtrend-api-beta/` | - | HTTP 网关 |
+| MinIO | `http://127.0.0.1:9000` | `minioadmin` | `minioadmin` |
+| Kafka | `127.0.0.1:9092` | - | Consumer Group `techkg` |
+| Milvus | `127.0.0.1:19530` | - | - |
+| TRSGraph | `127.0.0.1:9669` | `root` | `trsadmin` |
+
+---
+
+## 启动
+
+```bash
+# 后端
 cd backend
 uv sync
 cp .env.example .env
-# 编辑 .env，设置 Neo4j 密码
-# GRAPH_DB_PASSWORD=<your_password>
-uv run uvicorn app.main:app --reload
-```
+uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
-### 3. 启动前端
-
-```bash
+# 前端
 cd frontend
 pnpm install
 pnpm dev
 ```
 
-后端启动后访问：
-
-- <http://localhost:8000/hello>
-- <http://localhost:8000/api>
-- <http://localhost:8000/docs> （自动生成的接口文档）
-- <http://localhost:8000/kg-visual> （ECharts 知识图谱可视化 demo）
-
-## 知识图谱可视化 Demo
-
-项目内置了一个 ECharts 前端页面和轻量内存图谱 API，可用于快速演示实体、关系、属性的增删改查与图谱可视化。
-
-- 页面：`GET /kg-visual`
-- 图谱数据：`GET /api/v1/kg-visual/graph`
-- 加载示例：`GET /api/v1/kg-visual/graph/example`
-- 节点操作：`POST/PUT/DELETE /api/v1/kg-visual/graph/node...`
-- 关系操作：`POST/PUT/DELETE /api/v1/kg-visual/graph/link`
-
-## Neo4j GraphRAG Demo
-
-项目内置了一个基于 Neo4j 的 GraphRAG demo，路径如下：
-
-- `GET /api/v1/graphrag/demo/overview`
-- `POST /api/v1/graphrag/demo/init`
-- `POST /api/v1/graphrag/demo/query`
-
-建议流程：
-
-```bash
-cd backend
-
-# 1) 先准备 Neo4j，并在 .env 中填好连接信息
-cp .env.example .env
-
-# 2) 启动服务
-uv run uvicorn app.main:app --reload
-
-# 3) 初始化 demo 图谱
-curl -X POST http://localhost:8000/api/v1/graphrag/demo/init \
-  -H "Content-Type: application/json" \
-  -d '{"reset": true}'
-
-# 4) 发起查询
-curl -X POST http://localhost:8000/api/v1/graphrag/demo/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "GraphRAG 和普通向量检索有什么区别？", "top_k": 3}'
-```
-
-这个 demo 采用的是一个轻量 GraphRAG 流程：
-
-1. 文本 chunk 存入 Neo4j，并附带一个本地 hash embedding
-2. 查询时先做 chunk 相似度召回
-3. 再沿 `MENTIONS` 和 `RELATED_TO` 关系做一跳图扩展
-4. 最后返回证据块、相关实体和拼接答案
-
-## 运行测试
-
-```bash
-cd backend
-uv run pytest
-```
-
-## 项目结构
-
-```
-tech-kg-api/                    # monorepo 根目录
-  ├── frontend/               # 前端（Vue + Vite）
-  ├── backend/                # 后端（Python，含算法）
-  │   ├── app/                # FastAPI 主服务
-  │   │   ├── main.py         # 主入口
-  │   │   ├── routers/        # HTTP 路由
-  │   │   ├── schemas/        # 请求/响应模型
-  │   │   └── services/       # 业务逻辑 / 算法
-  │   ├── graph_db/           # 图数据库 service 层
-  │   │   ├── services/       # Service 类（NodeService, EdgeService 等）
-  │   │   ├── backends/       # 后端实现（Neo4j）
-  │   │   ├── query/          # Cypher 查询构建器
-  │   │   ├── base.py         # 抽象基类
-  │   │   ├── config.py       # 配置 & 连接工厂
-  │   │   └── models.py       # 数据模型
-  │   ├── schemas/            # 数据库建表 SQL
-  │   ├── DataTable/          # 表结构设计文档
-  │   ├── tests/
-  │   ├── .env.example        # 环境变量模板
-  │   └── pyproject.toml
-  └── docker-compose.yml      # 顶层编排
-```
-
-## graph_db Service 层
-
-`graph_db` 是项目内的图数据库操作服务层，封装了节点、边、遍历、查询、Schema 等 CRUD 操作，供 `app/` 中其他服务调用。
-
-### 连接数据库
-
-```python
-from graph_db import connect, GraphDBConfig
-
-db = connect(GraphDBConfig.from_env())
-```
-
-或直接指定参数：
-
-```python
-db = connect(GraphDBConfig(
-    uri="bolt://localhost:7687",
-    username="neo4j",
-    password="your_password",
-))
-```
-
-### 节点操作（NodeService）
-
-```python
-from graph_db.services import NodeService
-
-nodes = NodeService(db)
-
-# 创建
-alice = nodes.create(["Person"], {"name": "Alice", "age": 30})
-
-# 幂等创建/更新
-bob = nodes.merge(["Person"], {"name": "Bob"}, {"age": 25})
-
-# 按 ID 获取
-node = nodes.get(alice.id)
-
-# 按标签列表
-result = nodes.list_by_label("Person", limit=10, offset=0)
-
-# 按标签 + 属性查找
-result = nodes.find(["Person"], {"name": "Alice"})
-
-# 更新属性
-nodes.update(alice.id, {"age": 31, "city": "北京"})
-
-# 删除（detach=True 同时删除关联关系）
-nodes.delete(alice.id, detach=True)
-
-# 批量创建
-result = nodes.batch_create(
-    [{"name": f"Person_{i}", "age": 20 + i} for i in range(100)],
-    labels=["Person"],
-)
-```
-
-### 关系操作（EdgeService）
-
-```python
-from graph_db.services import EdgeService
-
-edges = EdgeService(db)
-
-# 创建
-edge = edges.create(alice.id, bob.id, "KNOWS", {"since": 2020})
-
-# 幂等创建/更新
-edge = edges.merge(
-    alice.id, bob.id, "KNOWS",
-    identity_props={"since": 2020},
-    properties={"level": "close"},
-)
-
-# 按 ID 获取
-edge = edges.get(edge.id)
-
-# 按类型列表
-result = edges.list_by_type("KNOWS", limit=10)
-
-# 按类型 + 属性查找
-result = edges.find("KNOWS", {"since": 2020})
-
-# 更新属性
-edges.update(edge.id, {"level": "best"})
-
-# 删除
-edges.delete(edge.id)
-
-# 批量创建
-result = edges.batch_create(
-    [{"source_id": alice.id, "target_id": bob.id, "weight": i} for i in range(10)],
-    edge_type="LINKS",
-)
-```
-
-### 图遍历（TraversalService）
-
-```python
-from graph_db.services import TraversalService
-
-traversal = TraversalService(db)
-
-# 邻居节点（direction: "out" / "in" / "both"）
-neighbours = traversal.neighbours(alice.id, direction="out", edge_type="KNOWS", limit=20)
-
-# 节点的边
-node_edges = traversal.node_edges(alice.id, direction="both", limit=20)
-
-# 最短路径
-path = traversal.shortest_path(alice.id, bob.id, edge_type="KNOWS", max_depth=10)
-# path.nodes -> [Node, ...]
-# path.edges -> [Edge, ...]
-```
-
-### Cypher 查询（QueryService）
-
-```python
-from graph_db.services import QueryService
-
-query = QueryService(db)
-
-# 通用查询
-result = query.execute(
-    "MATCH (n:Person) WHERE n.age > $age RETURN n.name AS name",
-    params={"age": 25},
-)
-# result.records -> [{"name": "Alice"}, ...]
-
-# 只读查询（可路由到读副本）
-result = query.read("MATCH (n) RETURN count(n) AS total")
-
-# 写入查询（自动重试瞬态错误）
-result = query.write("CREATE (n:Test {ts: timestamp()}) RETURN n")
-```
-
-### Schema 管理（SchemaService）
-
-```python
-from graph_db.services import SchemaService
-from graph_db.models import IndexSpec, ConstraintSpec
-
-schema = SchemaService(db)
-
-# 创建索引
-schema.create_index(IndexSpec(label="Person", properties=["name"], unique=False))
-
-# 创建唯一约束
-schema.create_index(IndexSpec(label="Person", properties=["name"], unique=True))
-
-# 列出索引
-indexes = schema.list_indexes()
-
-# 删除索引
-schema.drop_index(label="Person", properties=["name"])
-
-# 创建约束
-schema.create_constraint(ConstraintSpec(
-    name="person_name_unique", label="Person", property="name", kind="unique",
-))
-
-# 列出约束
-constraints = schema.list_constraints()
-
-# 删除约束
-schema.drop_constraint("person_name_unique")
-```
-
-### 数据库信息（SchemaService）
-
-```python
-schema = SchemaService(db)
-
-schema.node_count()                          # 节点总数
-schema.node_count(label="Person")            # 按标签计数
-schema.edge_count()                          # 边总数
-schema.edge_count(edge_type="KNOWS")         # 按类型计数
-schema.labels()                              # 所有标签
-schema.edge_types()                          # 所有关系类型
-```
-
-### 关闭连接
-
-```python
-db.close()
-```
-
-## 环境变量
-
-| 变量名 | 默认值 | 说明 |
-|--------|--------|------|
-| `GRAPH_DB_BACKEND` | `neo4j` | 图数据库后端类型 |
-| `GRAPH_DB_URI` | `bolt://localhost:7687` | 数据库连接 URI |
-| `GRAPH_DB_USERNAME` | `neo4j` | 数据库用户名 |
-| `GRAPH_DB_PASSWORD` | — | 数据库密码（必填） |
-| `GRAPH_DB_DATABASE` | `neo4j` | 目标数据库名 |
-| `GRAPH_DB_MAX_CONNECTION_POOL_SIZE` | `50` | 连接池大小 |
-| `GRAPH_DB_CONNECTION_TIMEOUT` | `30` | 连接超时（秒） |
+| 服务 | 地址 |
+|------|------|
+| 后端 API | http://localhost:8000 |
+| API 文档 | http://localhost:8000/docs |
+| 前端页面 | http://localhost:5174 |
+
+---
+
+## 技术栈
+
+| 端 | 技术 |
+|----|------|
+| 前端 | Vue 3 / TypeScript / Vite / Vue Router / Pinia / pnpm |
+| 后端 | Python 3.12 / FastAPI / SQLAlchemy / uv |
+| 数据库 | MySQL / Redis / MongoDB / ElasticSearch / TRSGraph / Milvus |
+| 部署 | Docker / docker-compose |

@@ -1,0 +1,22 @@
+CREATE TABLE `dwd_zh_paper` (
+  `id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '文献记录的唯一主键标识。',
+  `paper_type` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '文献所属出版物的章节名称，栏目等。',
+  `publication_id` bigint NOT NULL COMMENT '关联出版物的id，用于获取期刊详情信息',
+  `paper_url` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '文献数据的原始来源地址。',
+  `doi` varchar(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '论文的唯一标识编码。',
+  `cover_date_start` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '文献正式发表的日期。',
+  `ch_name` varchar(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '文献的中文标题名称。',
+  `ch_abstract` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '文献内容的中文摘要信息。',
+  `keywords` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '描述论文主题内容的关键词。',
+  `volume` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '文献发表所在期刊的卷号。',
+  `issue` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '文献发表所在期刊的期号。',
+  `first_page` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '论文在期刊中的起始页码。',
+  `last_page` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '论文在期刊中的结束页码。',
+  `reference_nums` int DEFAULT NULL COMMENT '论文参考文献的总数量。',
+  `reference_content` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '论文所引用参考文献的具体内容。',
+  `citation_nums` int DEFAULT NULL COMMENT '论文被其他文献引用的数量。',
+  `citation_content` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '引用该论文的相关文献信息。',
+  `relevant` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '与当前文献内容或主题相关的文献信息。',
+  `authors` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '论文作者的结构化id列表。',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='深势-中文论文详情信息';

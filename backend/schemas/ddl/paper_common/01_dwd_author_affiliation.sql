@@ -1,0 +1,20 @@
+CREATE TABLE `dwd_author_affiliation` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `auid` bigint NOT NULL COMMENT '作者ID',
+  `affiliation_id` bigint DEFAULT NULL COMMENT '机构ID',
+  `afid` bigint DEFAULT NULL COMMENT '机构显示ID',
+  `affiliation_id_parent` bigint DEFAULT NULL COMMENT '父机构ID',
+  `preferred_name` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构标准名称',
+  `afdispname` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构显示名称',
+  `sort_name` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构排序名称',
+  `address_part` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '详细地址',
+  `city` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '城市',
+  `state` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '州/省份',
+  `country` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '国家',
+  `country_tag` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '国家编码',
+  `postal_code` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '邮政编码',
+  `type_afid` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构类型：dept/parent',
+  `relationship` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '关系：author/derived',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '入库时间',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=1648 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='作者-机构关联表';

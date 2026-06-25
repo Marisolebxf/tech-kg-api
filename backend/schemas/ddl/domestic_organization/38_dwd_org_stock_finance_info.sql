@@ -1,0 +1,23 @@
+CREATE TABLE `dwd_org_stock_finance_info` (
+  `org_id` varchar(50) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL COMMENT '机构id',
+  `name_cn` varchar(50) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL COMMENT '机构名称',
+  `social_credit_code` varchar(50) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL COMMENT '统一社会信用代码',
+  `stock_code` varchar(50) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL COMMENT '股票代码',
+  `occur_period` varchar(50) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL COMMENT '数据期',
+  `total_assets` decimal(20,2) DEFAULT NULL COMMENT '资产总额(元)',
+  `fixed_assets` decimal(20,2) DEFAULT NULL COMMENT '固定资产总额(元)',
+  `total_liabilities` decimal(20,2) DEFAULT NULL COMMENT '负债总额(元)',
+  `operating_revenue` decimal(20,2) DEFAULT NULL COMMENT '营业收入(元)',
+  `gross_revenue` decimal(20,2) DEFAULT NULL COMMENT '营业总收入(元)',
+  `main_business_revenue` decimal(20,2) DEFAULT NULL COMMENT '主营业务收入(元)',
+  `total_profit` decimal(20,2) DEFAULT NULL COMMENT '利润总额(元)',
+  `pure_profit` decimal(20,2) DEFAULT NULL COMMENT '净利润(元)',
+  `total_tax_paid` decimal(20,2) DEFAULT NULL COMMENT '纳税总额(元)',
+  `oper_cash_flow` decimal(20,2) DEFAULT NULL COMMENT '经营活动现金流(元)',
+  `owners_equity` decimal(20,2) DEFAULT NULL COMMENT '所有者权益合计(元)',
+  `employees_number` int DEFAULT NULL COMMENT '从业人数',
+  `research_development_amount` decimal(20,2) DEFAULT NULL COMMENT '研发投入金额(元)',
+  `data_source` varchar(50) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL COMMENT '数据来源',
+  `created_time` varchar(50) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL COMMENT '创建时间',
+  `updated_time` varchar(50) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL COMMENT '更新时间'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COMMENT='前海数据上市企业主要财务指标';

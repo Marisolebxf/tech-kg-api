@@ -119,7 +119,9 @@ def clean_generated_dirs() -> None:
             path.unlink()
 
 
-def fetch_metadata(conn: pymysql.Connection) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+def fetch_metadata(
+    conn: pymysql.Connection,
+) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
     database = os.getenv("MYSQL_DATABASE", "gkx")
     with conn.cursor() as cur:
         cur.execute(
@@ -234,7 +236,9 @@ def write_specifications(
         (SPEC_DIR / f"{domain}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_schema_readme(tables: list[dict[str, Any]], columns_by_table: dict[str, list[dict[str, Any]]]) -> None:
+def write_schema_readme(
+    tables: list[dict[str, Any]], columns_by_table: dict[str, list[dict[str, Any]]]
+) -> None:
     by_domain: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for table in tables:
         by_domain[domain_for_table(table["TABLE_NAME"])].append(table)
@@ -371,7 +375,9 @@ def column_line(column: dict[str, Any], primary_keys: set[str]) -> str:
     return f"    {attr_name(col_name)} = Column({', '.join(args + kwargs)})"
 
 
-def write_db_models(tables: list[dict[str, Any]], columns_by_table: dict[str, list[dict[str, Any]]]) -> None:
+def write_db_models(
+    tables: list[dict[str, Any]], columns_by_table: dict[str, list[dict[str, Any]]]
+) -> None:
     by_domain: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for table in tables:
         by_domain[domain_for_table(table["TABLE_NAME"])].append(table)
@@ -404,21 +410,25 @@ def write_db_models(tables: list[dict[str, Any]], columns_by_table: dict[str, li
             all_classes.append((domain, cls))
             lines.append(f"class {cls}(Base):")
             if table["TABLE_COMMENT"]:
-                lines.append(f"    \"\"\"{table['TABLE_COMMENT']}\"\"\"")
+                lines.append(f'    """{table["TABLE_COMMENT"]}"""')
             lines.append(f"    __tablename__ = {table_name!r}")
             if table["TABLE_COMMENT"]:
-                lines.append(f"    __table_args__ = {{\"comment\": {table['TABLE_COMMENT']!r}}}")
+                lines.append(f'    __table_args__ = {{"comment": {table["TABLE_COMMENT"]!r}}}')
             lines.append("")
             for column in cols:
                 lines.append(column_line(column, primary_keys))
             if not primary_keys and cols:
                 mapper_col = attr_name(cols[0]["COLUMN_NAME"])
                 lines.append("")
-                lines.append("    # Source table has no physical primary key; this is ORM identity only.")
-                lines.append(f"    __mapper_args__ = {{\"primary_key\": [{mapper_col}]}}")
+                lines.append(
+                    "    # Source table has no physical primary key; this is ORM identity only."
+                )
+                lines.append(f'    __mapper_args__ = {{"primary_key": [{mapper_col}]}}')
             lines.extend(["", ""])
 
-        (DB_MODEL_DIR / f"{domain}.py").write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+        (DB_MODEL_DIR / f"{domain}.py").write_text(
+            "\n".join(lines).rstrip() + "\n", encoding="utf-8"
+        )
 
     init_lines = ["from db_model.base import Base"]
     for domain in sorted({domain for domain, _ in all_classes}):
@@ -444,7 +454,9 @@ def main() -> None:
     write_specifications(tables, columns_by_table)
     write_schema_readme(tables, columns_by_table)
     write_db_models(tables, columns_by_table)
-    print(f"Synced {len(tables)} tables and {sum(len(v) for v in columns_by_table.values())} columns.")
+    print(
+        f"Synced {len(tables)} tables and {sum(len(v) for v in columns_by_table.values())} columns."
+    )
 
 
 if __name__ == "__main__":

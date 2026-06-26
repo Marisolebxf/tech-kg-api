@@ -1,0 +1,23 @@
+CREATE TABLE `ods_zh_policy_tuoersi` (
+  `title` text CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci,
+  `policy_level` varchar(100) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `industry_classify` varchar(512) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `create_time` varchar(50) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `area` varchar(100) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `publish_department` varchar(100) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `publish_time` varchar(50) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `issue_no` varchar(100) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `keywords` text CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci,
+  `source` varchar(100) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `data_type` varchar(50) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `index_no` varchar(50) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `content_type` varchar(50) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `url` varchar(256) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `abstract` text CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci,
+  `content` mediumtext CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci,
+  `content_na` mediumtext CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci,
+  `elements` varchar(100) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `attachments` varchar(512) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `attachment_url` varchar(512) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `labels` text CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COMMENT='拓尔思国内政策信息5月样例数据';

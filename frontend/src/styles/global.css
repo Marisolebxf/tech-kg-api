@@ -1,0 +1,135 @@
+.kg-page {
+  min-height: 100vh;
+  background: var(--page-bg);
+}
+
+.kg-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 14px rgba(72, 132, 214, 0.06);
+}
+
+.kg-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 52px;
+  padding: 0 var(--space-16);
+  border-bottom: 1px solid var(--border);
+}
+
+.kg-panel__title {
+  position: relative;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 600;
+}
+
+.kg-panel__title::before {
+  position: absolute;
+  top: 3px;
+  left: -10px;
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--primary);
+  content: "";
+}
+
+.kg-panel__body {
+  padding: var(--space-16);
+}
+
+.kg-muted {
+  color: var(--text-tertiary);
+}
+
+.kg-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kg-stat__value {
+  color: var(--text-primary);
+  font-size: 20px;
+  line-height: 1.2;
+  font-weight: 500;
+}
+
+.kg-stat__label {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.kg-control {
+  height: var(--control-height);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.kg-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-height);
+  padding: 0 var(--space-16);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-inverse);
+  background: var(--primary);
+  font-size: 16px;
+  line-height: 22px;
+}
+
+.kg-button:hover {
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
+}
+
+.kg-button--secondary {
+  color: var(--primary);
+  background: var(--surface);
+}
+
+.kg-button--text {
+  border-color: transparent;
+  color: var(--primary);
+  background: transparent;
+}
+
+.kg-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-24);
+}
+
+.kg-tabs__item {
+  position: relative;
+  height: 44px;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: 16px;
+}
+
+.kg-tabs__item.is-active {
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.kg-tabs__item.is-active::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: var(--primary);
+  content: "";
+}

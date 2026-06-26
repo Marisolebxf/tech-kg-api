@@ -1,206 +1,139 @@
-# 中文论文数据表规范
+# 中文论文字段规范
 
-本规范依据第三方最新《要素库设计方案》整理，共 9 张表、128 个字段。
+来源数据库：`gkx`
+生成日期：`2026-06-25`
 
-## 重要说明
+| 表名 | 表注释 | 估算行数 | 字段数 |
+|---|---|---:|---:|
+| `dwd_zh_author` | 深势-中文文献作者详情信息 | 7965 | 7 |
+| `dwd_zh_journal` | 深势-中文期刊详情信息 | 1932 | 33 |
+| `dwd_zh_paper` | 深势-中文论文详情信息 | 1584 | 19 |
+| `ods_zh_journal` | 维普中文报告信息 | 0 | 41 |
 
-附件只提供中文表名和中文字段名，没有提供英文表名、英文字段名。
-`dwd_zh_paper` 与 `dwd_zh_journal` 可从附件关联字段中确认；其余英文名称为项目建议命名，
-用于当前开发。第三方正式英文命名到达后，应先更新本规范，再同步修改 DDL。
+## `dwd_zh_author`
 
-## 建模约定
+表注释：深势-中文文献作者详情信息
 
-1. 中文字段、类型、长度、字段顺序、可空性和索引要求保持附件规范。
-2. “是否有空值”为“否”的字段使用 `NOT NULL`。
-3. “是否索引”为“是”的字段建立普通索引。
-   对 `VARCHAR(1024)` 等超长字符列使用 191 字符前缀索引，以兼容 `utf8mb4` 的索引长度限制。
-4. 附件没有主键列，因此不擅自添加主键或唯一约束。
-5. `date(4)` 的发表年份映射为 MySQL `YEAR`，其余类型直接映射。
-6. 本阶段不生成示范数据。
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `id` | `varchar(32)` | NO | PRI |  |  | 文献作者的唯一主键 id |
+| 2 | `paper_id` | `varchar(64)` | NO |  |  |  | 文献记录的唯一主键标识。 |
+| 3 | `en_name` | `varchar(255)` | YES |  |  |  | 文献作者的英文名称 |
+| 4 | `zh_name` | `varchar(255)` | YES |  |  |  | 文献作者中文名 |
+| 5 | `affiliation` | `mediumtext` | YES |  |  |  | 文献作者地址 |
+| 6 | `email` | `mediumtext` | YES |  |  |  | 文献作者email |
+| 7 | `correspond` | `tinyint` | YES |  |  |  | 是否为通讯作者 |
 
-## 表名映射
+## `dwd_zh_journal`
 
-| 中文表名 | 建议英文表名 | 来源 | 字段数 |
-|---|---|---|---:|
-| 中文论文详情信息 | `dwd_zh_paper` | 附件关联字段可确认 | 22 |
-| 中文论文标题信息 | `dwd_zh_paper_title` | 项目建议命名 | 11 |
-| 中文论文摘要信息 | `dwd_zh_paper_abstract` | 项目建议命名 | 10 |
-| 中文文献作者详情信息 | `dwd_zh_paper_author` | 项目建议命名 | 13 |
-| 中文期刊详情信息 | `dwd_zh_journal` | 附件关联字段可确认 | 33 |
-| 中文论文参考文献信息 | `dwd_zh_paper_reference` | 项目建议命名 | 14 |
-| 中文论文引用文献信息 | `dwd_zh_paper_citation` | 项目建议命名 | 9 |
-| 中文论文分类信息 | `dwd_zh_paper_classification` | 项目建议命名 | 8 |
-| 中文论文关联文献信息 | `dwd_zh_paper_related` | 项目建议命名 | 8 |
+表注释：深势-中文期刊详情信息
 
-## 1. 中文论文详情信息 `dwd_zh_paper`
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `id` | `bigint` | NO | PRI |  |  | 期刊记录的唯一标识。 |
+| 2 | `iscn` | `varchar(16)` | YES |  |  |  | 期刊的国内统一刊号。 |
+| 3 | `issn` | `varchar(16)` | YES |  |  |  | 期刊的国际标准连续出版物编号。 |
+| 4 | `zh_name` | `varchar(1024)` | YES |  |  |  | 期刊的中文名称。 |
+| 5 | `en_name` | `varchar(1024)` | YES |  |  |  | 期刊的英文名称。 |
+| 6 | `publication_type` | `varchar(255)` | YES |  |  |  | 出版物类别，例如期刊，会议等 |
+| 7 | `name_abbr` | `varchar(255)` | YES |  |  |  | 期刊名称的简称或缩写。 |
+| 8 | `country` | `varchar(255)` | YES |  |  |  | 期刊所属或出版所在的国家。 |
+| 9 | `zh_description` | `mediumtext` | YES |  |  |  | 期刊的中文简介或说明。 |
+| 10 | `format` | `varchar(63)` | YES |  |  |  | 期刊的版面开本规格。 |
+| 11 | `founding_time` | `int` | YES |  |  |  | 期刊首次创办或发行的时间。 |
+| 12 | `language_classify` | `tinyint` | YES |  |  |  | 期刊出版使用的语言类型。 |
+| 13 | `eissn` | `varchar(16)` | YES |  |  |  | 期刊电子版的国际标准连续出版物编号。 |
+| 14 | `jn_official` | `mediumtext` | YES |  |  |  | 期刊官方网站地址。 |
+| 15 | `postal_code` | `varchar(32)` | YES |  |  |  | 期刊邮政发行使用的代号。 |
+| 16 | `chief_editor` | `varchar(128)` | YES |  |  |  | 期刊当前或记录中的主编信息。 |
+| 17 | `organizer` | `varchar(1024)` | YES |  |  |  | 负责主办该期刊的单位名称。 |
+| 18 | `publisher_place` | `varchar(64)` | YES |  |  |  | 期刊出版发行的地点。 |
+| 19 | `publication_cycle` | `varchar(64)` | YES |  |  |  | 期刊的出版频率或发行周期。 |
+| 20 | `award` | `mediumtext` | YES |  |  |  | 期刊获得的奖项或荣誉信息。 |
+| 21 | `cite_nums` | `int` | YES |  |  |  | 期刊或文献的累计被引用次数。 |
+| 22 | `paper_nums` | `int` | YES |  |  |  | 期刊已发表论文的数量。 |
+| 23 | `review` | `tinyint` | YES |  |  |  | 标识该期刊是否为综述类期刊。 |
+| 24 | `annual_publication` | `int` | YES |  |  |  | 期刊每年发表文章的数量。 |
+| 25 | `impact_factor` | `decimal(20,10)` | YES |  |  |  | 期刊的影响因子指标。 |
+| 26 | `open_access` | `tinyint` | YES |  |  |  | 标识期刊或论文是否为开放获取。 |
+| 27 | `scope` | `varchar(20)` | YES |  |  |  | 期刊所属的大类学科领域。 |
+| 28 | `scope_zone` | `varchar(20)` | YES |  |  |  | 期刊所属的细分学科领域。 |
+| 29 | `warning` | `tinyint` | YES |  |  |  | 标识期刊是否处于预警状态。 |
+| 30 | `is_sci` | `tinyint` | YES |  |  |  | 标识期刊是否被 SCI 收录。 |
+| 31 | `sub_quartile` | `tinyint` | YES |  |  |  | 期刊在相关评价体系中的分区信息。 |
+| 32 | `classify_list` | `mediumtext` | YES |  |  |  | 文献或期刊对应的学科分类编号。 |
+| 33 | `updated_time` | `datetime` | NO |  |  |  | 该条数据最近一次更新的时间。 |
 
-| 中文字段 | 建议英文字段 | 类型 | 长度 | 可空 | 索引 | 描述 | 样例 | 关联字段 |
-|---|---|---|---|---|---|---|---|---|
-| 文献id | `paper_id` | varchar | 64 | 否 | 是 | 文献记录的唯一主键标识。 | 1.06E+18 | - |
-| 论文唯一识别号 | `doi` | varchar | 512 | 是 | 是 | 论文的唯一标识编码。 | 10.16856/j.cnki.52-1141/c.2024.05.012 | - |
-| 文献英文题名 | `name_en` | varchar | 1024 | 是 | 是 | 文献的英文标题名称。 | A Normative Analysis of the General Personality Right Provisions in China’s Civil Code | - |
-| 文献中文题名 | `name_zh` | varchar | 1024 | 是 | 是 | 文献的中文标题名称。 | 对《民法典》一般人格权条款之规范性分析 | - |
-| 关联出版物信息 | `publication_id` | bigint | - | 否 | 是 | 关联出版物的id，用于获取期刊详情信息 | 1010176 | dwd_zh_journal.id |
-| 文献类型 | `paper_type` | varchar | 255 | 是 | 否 | 文献所属出版物的章节名称，栏目等。 | 人文学苑 | - |
-| 出版刊物类别 | `publication_type` | varchar | 255 | 是 | 否 | 出版物类别，例如期刊，会议等 | Journal | - |
-| 出版物中文名 | `publication_name_zh` | varchar | 1024 | 是 | 是 | 期刊的中文名称。 | 贵阳学院学报(社会科学版) | - |
-| ISSN | `issn` | varchar | 16 | 是 | 否 | 期刊的国际标准连续出版物编号。 | 1673-6133 | - |
-| 文献所在期刊的卷号 | `volume` | varchar | 128 | 是 | 否 | 文献发表所在期刊的卷号。 | 2024 | - |
-| 文献所在期刊的期号 | `issue` | varchar | 128 | 是 | 否 | 文献发表所在期刊的期号。 | 5 | - |
-| 论文在期刊的首页-页码 | `first_page` | varchar | 255 | 是 | 否 | 论文在期刊中的起始页码。 | 110 | - |
-| 论文在期刊的末尾页-页码 | `last_page` | varchar | 255 | 是 | 否 | 论文在期刊中的结束页码。 | 114 | - |
-| 文献发表年份 | `publication_year` | varchar | 255 | 是 | 否 | 文献正式发表的日期。 | 2024 | - |
-| 文献发表日期 | `publication_date` | varchar | 255 | 是 | 否 | 文献正式发表的日期。 | 2024/7/21 | - |
-| 语言 | `language` | tinyint | 1 | 是 | 否 | 期刊出版使用的语言类型。 | 0 | - |
-| 摘要是否可用 | `abstract_available` | varchar | 1 | 是 | 否 | 摘要是否可用。 | 1 | - |
-| 是否OA | `open_access` | tinyint | 1 | 是 | 否 | 标识期刊或论文是否为开放获取。 | 2 | - |
-| 数据来源链接 | `source_url` | text | - | 是 | 否 | 文献数据的原始来源地址。 | https://kns.cnki.net/kns8/Detail?sfield=fn&recid=&FileName=GYSZ202405018&DbName=&DbCode=&yx=&pr=&URLID= | - |
-| 数据来源 | `data_source` | varchar | 255 | 否 | 否 | 来源贴源库表名 | ods_zh_paper | - |
-| 创建时间 | `created_time` | datetime | - | 否 | 否 | 数据在要素库中的创建时间。 | 15/4/2026 14:59:34 | - |
-| 更新时间 | `updated_time` | datetime | - | 否 | 否 | 该条数据最近一次更新的时间。 | 15/4/2026 14:59:34 | - |
+## `dwd_zh_paper`
 
-## 2. 中文论文标题信息 `dwd_zh_paper_title`
+表注释：深势-中文论文详情信息
 
-| 中文字段 | 建议英文字段 | 类型 | 长度 | 可空 | 索引 | 描述 | 样例 | 关联字段 |
-|---|---|---|---|---|---|---|---|---|
-| 逻辑主键 | `logical_id` | varchar | 128 | 否 | 是 | 标题信息表逻辑主键 | 519258703810295763 | - |
-| 文献id | `paper_id` | varchar | 64 | 否 | 是 | 文献记录的唯一主键标识。 | 1021982887920009221 | dwd_zh_paper.id |
-| 标题序号 | `title_sequence` | int | 1 | 否 | 是 | 同一文献多个标题的顺序号。 | 1 | - |
-| 文献英文名 | `name_en` | varchar | 1024 | 是 | 否 | 文献的英文标题名称。 | A Normative Analysis of the General Personality Right Provisions in China’s Civil Code | - |
-| 文献中文名 | `name_zh` | varchar | 1024 | 是 | 否 | 文献的中文标题名称。 | 对《民法典》一般人格权条款之规范性分析 | - |
-| 语言代码 | `language_code` | varchar | 12 | 是 | 否 | 标题的语言代码。 | CN | - |
-| 语种 | `language` | varchar | 255 | 是 | 否 | 标题的语言类型。 | China | - |
-| 是否原始标题 | `is_original_title` | varchar | 1 | 是 | 否 | 是否为原始标题。 | 1 | - |
-| 数据来源 | `data_source` | varchar | 255 | 否 | 否 | 来源贴源库表名 | ods_zh_paper | - |
-| 创建时间 | `created_time` | datetime | - | 否 | 否 | 数据在要素库中的创建时间。 | 15/4/2026 14:59:34 | - |
-| 更新时间 | `updated_time` | datetime | - | 否 | 否 | 该条数据最近一次更新的时间。 | 15/4/2026 14:59:34 | - |
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `id` | `varchar(64)` | NO | PRI |  |  | 文献记录的唯一主键标识。 |
+| 2 | `paper_type` | `varchar(255)` | YES |  |  |  | 文献所属出版物的章节名称，栏目等。 |
+| 3 | `publication_id` | `bigint` | NO |  |  |  | 关联出版物的id，用于获取期刊详情信息 |
+| 4 | `paper_url` | `mediumtext` | YES |  |  |  | 文献数据的原始来源地址。 |
+| 5 | `doi` | `varchar(512)` | YES |  |  |  | 论文的唯一标识编码。 |
+| 6 | `cover_date_start` | `varchar(255)` | YES |  |  |  | 文献正式发表的日期。 |
+| 7 | `ch_name` | `varchar(1024)` | YES |  |  |  | 文献的中文标题名称。 |
+| 8 | `ch_abstract` | `mediumtext` | YES |  |  |  | 文献内容的中文摘要信息。 |
+| 9 | `keywords` | `mediumtext` | YES |  |  |  | 描述论文主题内容的关键词。 |
+| 10 | `volume` | `varchar(128)` | YES |  |  |  | 文献发表所在期刊的卷号。 |
+| 11 | `issue` | `varchar(128)` | YES |  |  |  | 文献发表所在期刊的期号。 |
+| 12 | `first_page` | `varchar(255)` | YES |  |  |  | 论文在期刊中的起始页码。 |
+| 13 | `last_page` | `varchar(255)` | YES |  |  |  | 论文在期刊中的结束页码。 |
+| 14 | `reference_nums` | `int` | YES |  |  |  | 论文参考文献的总数量。 |
+| 15 | `reference_content` | `mediumtext` | YES |  |  |  | 论文所引用参考文献的具体内容。 |
+| 16 | `citation_nums` | `int` | YES |  |  |  | 论文被其他文献引用的数量。 |
+| 17 | `citation_content` | `mediumtext` | YES |  |  |  | 引用该论文的相关文献信息。 |
+| 18 | `relevant` | `mediumtext` | YES |  |  |  | 与当前文献内容或主题相关的文献信息。 |
+| 19 | `authors` | `mediumtext` | YES |  |  |  | 论文作者的结构化id列表。 |
 
-## 3. 中文论文摘要信息 `dwd_zh_paper_abstract`
+## `ods_zh_journal`
 
-| 中文字段 | 建议英文字段 | 类型 | 长度 | 可空 | 索引 | 描述 | 样例 | 关联字段 |
-|---|---|---|---|---|---|---|---|---|
-| 逻辑主键 | `logical_id` | varchar | 128 | 否 | 是 | 标题信息表逻辑主键 | 519258703810295763 | - |
-| 文献id | `paper_id` | varchar | 64 | 否 | 是 | 文献记录的唯一主键标识。 | 1021982887920009221 | dwd_zh_paper.id |
-| 摘要序号 | `abstract_sequence` | int | - | 否 | 是 | 同一文献多个摘要的顺序号 | 1 | - |
-| 语种 | `language` | varchar | 255 | 是 | 否 | 文献或期刊出版使用的语言类型。 | China | - |
-| 是否原始摘要 | `is_original_abstract` | varchar | 1 | 否 | 否 | 是否为原始摘要。 | 1 | - |
-| 摘要 英文 | `abstract_en` | longtext | - | 是 | 否 | 文献内容的英文摘要信息。 | It is generally believed that the concept of general personality right originated in Germany, where German law regards human dignity and free development of personality as the core values of general personality right. China’s Civil Code does not copy this formulation directly; instead, it generally stipulates the general personality right arising from personal freedom and human dignity.<br>The provision on general personality right is a framework provision, and general personality right is a legal interest protected by civil law, encompassing two core values: human dignity and personal freedom. Specifically, human dignity refers, on the one hand, to the subject’s entitlement to legal protection of its capacity for civil rights, and on the other hand, to the abstract totality of personality interests protected by law by virtue of such capacity. Personal freedom refers to all personal freedoms related to the realization of human dignity in the entire social life of every individual.<br>Among these, human dignity is the foundational value of personal freedom, providing justification and directional guidance for personal freedom. | - |
-| 摘要 中文 | `abstract_zh` | longtext | - | 是 | 否 | 文献内容的中文摘要信息。 | 通常认为，一般人格权概念起源于德国，德国法将“人的尊严”及“人格自由发展”作为一般人格权的核心价值。我国《民法典》没有照搬这种说法，而是以概括的方式规定了基于人身自由及人格尊严而产生的一般人格权。一般人格权条款是一种框架性条款，而一般人格权是一种受民法保护的法益，包含“人格尊严”及“人身自由”两大核心价值。具体来说，人格尊严一方面指主体请求法律保护其民事权利能力的能力，另一方面指主体因其民事权利能力而受法律保护的人格权益抽象总和；人身自由指每个人在全部社会生活中一切与人格尊严实现有关系的所有人身自由。其中，人格尊严乃人身自由的渊源性价值，其为人身自由提供了正当化理由及方向指引。 | - |
-| 数据来源 | `data_source` | varchar | 255 | 否 | 否 | 来源贴源库表名 | ods_en_paper | - |
-| 创建时间 | `created_time` | datetime | - | 否 | 否 | 数据在要素库中的创建时间。 | 15/4/2026 14:59:34 | - |
-| 更新时间 | `updated_time` | datetime | - | 否 | 否 | 该条数据最近一次更新的时间。 | 15/4/2026 14:59:34 | - |
+表注释：维普中文报告信息
 
-## 4. 中文文献作者详情信息 `dwd_zh_paper_author`
-
-| 中文字段 | 建议英文字段 | 类型 | 长度 | 可空 | 索引 | 描述 | 样例 | 关联字段 |
-|---|---|---|---|---|---|---|---|---|
-| 逻辑主键 | `logical_id` | varchar | 128 | 否 | 是 | 标题信息表逻辑主键 | 519258703810295763 | - |
-| 文献id | `paper_id` | varchar | 64 | 否 | 是 | 文献记录的唯一主键标识。 | 1021982887920009221 | dwd_zh_paper.id |
-| 作者顺序 | `author_sequence` | int | 10 | 否 | 是 | 作者在文献中的顺序。 | 1 | - |
-| 文献作者 id | `author_id` | varchar | 32 | 否 | 是 | 文献作者的唯一主键 id | 712509015837511680 | - |
-| 文献作者英文名 | `author_name_en` | varchar | 255 | 否 | 否 | 文献作者的英文名称 | Yuan Jiaqian | - |
-| 文献作者中文名 | `author_name_zh` | varchar | 255 | 是 | 否 | 文献作者中文名 | 袁嘉谦 | - |
-| 文献作者email | `author_email` | json | - | 是 | 否 | 文献作者email | ["shiyu618@tmmu.edu.cn"] | - |
-| 是否为通讯作者 | `is_corresponding_author` | tinyint | 1 | 是 | 否 | 是否为通讯作者 | 1 | - |
-| 作者单位名称 | `organization_name` | text | - | 是 | 否 | 作者所属机构或单位的名称。 | The Second Affiliated Hospital of Army Medical University, | - |
-| 文献作者地址 | `author_address` | json | - | 是 | 否 | 文献作者地址 | ["Department of Nursing, The Second Affiliated Hospital of Army Medical University, 400037 Chongqing, China"] | - |
-| 数据来源 | `data_source` | varchar | 255 | 否 | 否 | 来源贴源库表名 | ods_zh_paper | - |
-| 创建时间 | `created_time` | datetime | - | 否 | 否 | 数据在要素库中的创建时间。 | 15/4/2026 14:59:34 | - |
-| 更新时间 | `updated_time` | datetime | - | 否 | 否 | 该条数据最近一次更新的时间。 | 15/4/2026 14:59:34 | - |
-
-## 5. 中文期刊详情信息 `dwd_zh_journal`
-
-| 中文字段 | 建议英文字段 | 类型 | 长度 | 可空 | 索引 | 描述 | 样例 | 关联字段 |
-|---|---|---|---|---|---|---|---|---|
-| 逻辑主键 | `logical_id` | varchar | 128 | 否 | 是 | 标题信息表逻辑主键 | 519258703810295763 | - |
-| 文献id | `paper_id` | varchar | 64 | 否 | 是 | 文献记录的唯一主键标识。 | 1021982887920009221 | dwd_zh_paper.id |
-| 期刊id | `journal_id` | bigint | - | 否 | 是 | 期刊记录的唯一标识。 | 1010176 | - |
-| 出版刊物类别 | `publication_type` | varchar | 255 | 是 | 否 | 出版物类别，例如期刊，会议等 | Journal | - |
-| 国家 | `country` | varchar | 255 | 是 | 否 | 期刊所属或出版所在的国家。 | 中国 | - |
-| 期刊名（中文） | `journal_name_zh` | varchar | 1024 | 是 | 是 | 期刊的中文名称。 | 贵阳学院学报(社会科学版) | - |
-| 简称 | `journal_abbreviation` | varchar | 255 | 是 | 是 | 期刊名称的简称或缩写。 | GYSZ | - |
-| 期刊名（英文） | `journal_name_en` | varchar | 1024 | 是 | 是 | 期刊的英文名称。 | Journal of Guiyang University(Social Sciences) | - |
-| 国内刊号 | `iscn` | varchar | 16 | 是 | 否 | 期刊的国内统一刊号。 | 52-1141/C | - |
-| ISSN | `issn` | varchar | 16 | 是 | 否 | 期刊的国际标准连续出版物编号。 | 1673-6133 | - |
-| EISSN | `eissn` | varchar | 16 | 是 | 否 | 期刊电子版的国际标准连续出版物编号。 | 1869-1919 | - |
-| 创刊时间 | `founding_year` | int | - | 是 | 否 | 期刊首次创办或发行的时间。 | 1983 | - |
-| 期刊官网 | `official_website` | text | - | 是 | 否 | 期刊官方网站地址。 | https://gysz.cbpt.cnki.net/?utm_source=chatgpt.com | - |
-| 期刊描述 | `description` | text | - | 是 | 否 | 期刊的中文简介或说明。 | 《贵阳学院学报（社会科学版）》由贵州省教育厅主管、贵阳学院主办，是面向国内外公开发行的综合性社会科学学术期刊，常设阳明文化、区域经济、文学语言、教育教学、法学思政等特色栏目，重点刊发哲学社会科学各领域原创性学术成果，立足贵州、服务地方学术发展与学科建设。 | - |
-| 开本 | `format` | tinytext | - | 是 | 否 | 期刊的版面开本规格。 | 16开 | - |
-| 邮发代号 | `postal_code` | varchar | 32 | 是 | 否 | 期刊邮政发行使用的代号。 | 82-578 | - |
-| 主编 | `chief_editor` | varchar | 128 | 是 | 否 | 期刊当前或记录中的主编信息。 | 梅宏 | - |
-| 主办单位 | `organizer` | varchar | 1024 | 是 | 否 | 负责主办该期刊的单位名称。 | 贵阳学院 | - |
-| 出版地 | `publication_place` | varchar | 64 | 是 | 否 | 期刊出版发行的地点。 | 贵州省贵阳市 | - |
-| 获奖情况 | `awards` | text | - | 是 | 否 | 期刊获得的奖项或荣誉信息。 | AMI入库 | - |
-| 被引用量 | `citation_count` | int | - | 是 | 否 | 期刊或文献的累计被引用次数。 | 1924/9/22 | - |
-| 年文章数 | `annual_publication_count` | int | - | 是 | 否 | 期刊每年发表文章的数量。 | 4335 | - |
-| 是否为综述性期刊 | `is_review_journal` | tinyint | 1 | 是 | 否 | 标识该期刊是否为综述类期刊。 | 1900/1/1 | - |
-| 影响指数 | `impact_factor` | double | - | 是 | 否 | 期刊的影响因子指标。 | 0.446 | - |
-| 分区 | `quartile` | tinyint | 1 | 是 | 否 | 期刊在相关评价体系中的分区信息。Subject Quartile in Category分区 | 9 | - |
-| 分类号 | `classification_code` | text | - | 是 | 否 | 文献或期刊对应的学科分类编号。 | D923 | - |
-| 是否预警 | `warning_flag` | tinyint | 1 | 是 | 否 | 标识期刊是否处于预警状态。 | 0 | - |
-| 是否SCI | `sci_flag` | tinyint | 1 | 是 | 否 | 标识期刊是否被 SCI 收录。 | 0 | - |
-| 出版周期 | `publication_cycle` | varchar | 64 | 是 | 否 | 期刊的出版频率或发行周期。 | 双月 | - |
-| 出版论文量 | `paper_count` | int | - | 是 | 否 | 期刊已发表论文的数量。 | 4025 | - |
-| 数据来源 | `data_source` | varchar | 255 | 否 | 否 | 来源贴源库表名 | ods_zh_paper | - |
-| 创建时间 | `created_time` | datetime | - | 否 | 否 | 数据在要素库中的创建时间。 | 15/4/2026 14:59:34 | - |
-| 更新时间 | `updated_time` | datetime | - | 否 | 否 | 该条数据最近一次更新的时间。 | 15/4/2026 14:59:34 | - |
-
-## 6. 中文论文参考文献信息 `dwd_zh_paper_reference`
-
-| 中文字段 | 建议英文字段 | 类型 | 长度 | 可空 | 索引 | 描述 | 样例 | 关联字段 |
-|---|---|---|---|---|---|---|---|---|
-| 逻辑主键 | `logical_id` | varchar | 128 | 否 | 是 | 标题信息表逻辑主键 | 519258703810295763 | - |
-| 文献id | `paper_id` | varchar | 64 | 否 | 是 | 文献记录的唯一主键标识。 | 1021982887920009221 | dwd_zh_paper.id |
-| 关联出版物信息 | `publication_id` | bigint | - | 否 | 是 | 关联出版物的id，用于获取期刊详情信息 | 1010176 | dwd_zh_journal.id |
-| 参考文献唯一识别号 | `reference_doi` | varchar | 512 | 否 | 是 | 论文的唯一标识编码。 | 10.3390/f15071270 | - |
-| 参考文献中文名 | `reference_name_zh` | varchar | 1024 | 是 | 否 | 参考文献的中文标题名称。 | 对《民法典》一般人格权条款之规范性分析 | - |
-| 参考文献出版物中文名 | `reference_publication_name_zh` | varchar | 1024 | 是 | 是 | 参考文献出版物的中文名称。 | 贵阳学院学报 | - |
-| 参考文献发表年份 | `reference_year` | date | 4 | 是 | 是 | 文献正式发表的年份。 | 2026 | - |
-| 参考文献所在期刊的卷号 | `reference_volume` | varchar | 128 | 是 | 否 | 参考文献发表所在期刊的卷号。 | 15 | - |
-| 参考文献所在期刊的期号 | `reference_issue` | varchar | 128 | 是 | 否 | 参考文献发表所在期刊的期号。 | 7 | - |
-| 参考文献在期刊的首页-页码 | `reference_first_page` | varchar | 255 | 是 | 否 | 参考文献在期刊中的起始页码。 | 481 | - |
-| 参考文献在期刊的末尾页-页码 | `reference_last_page` | varchar | 255 | 是 | 否 | 参考文献在期刊中的结束页码。 | 491 | - |
-| 数据来源 | `data_source` | varchar | 255 | 否 | 否 | 来源贴源库表名 | ods_zh_paper | - |
-| 创建时间 | `created_time` | datetime | - | 否 | 否 | 数据在要素库中的创建时间。 | 15/4/2026 14:59:34 | - |
-| 更新时间 | `updated_time` | datetime | - | 否 | 否 | 该条数据最近一次更新的时间。 | 15/4/2026 14:59:34 | - |
-
-## 7. 中文论文引用文献信息 `dwd_zh_paper_citation`
-
-| 中文字段 | 建议英文字段 | 类型 | 长度 | 可空 | 索引 | 描述 | 样例 | 关联字段 |
-|---|---|---|---|---|---|---|---|---|
-| 逻辑主键 | `logical_id` | varchar | 128 | 否 | 是 | 标题信息表逻辑主键 | 519258703810295763 | - |
-| 文献id | `paper_id` | varchar | 64 | 否 | 是 | 文献记录的唯一主键标识。 | 1021982887920009221 | dwd_zh_paper.id |
-| 关联出版物信息 | `publication_id` | bigint | - | 否 | 是 | 关联出版物的id，用于获取期刊详情信息 | 1010176 | dwd_zh_journal.id |
-| 引用文献唯一识别号 | `citation_doi` | varchar | 512 | 否 | 是 | 论文的唯一标识编码。 | 10.3390/f15071270 | - |
-| 引用文献中文名 | `citation_name_zh` | varchar | 1024 | 是 | 否 | 引用文献的中文标题名称。 | 对《民法典》一般人格权条款之规范性分析 | - |
-| 引用文献出版物中文名 | `citation_publication_name_zh` | varchar | 1024 | 是 | 是 | 参考文献出版物的中文名称。 | 贵阳学院学报 | - |
-| 数据来源 | `data_source` | varchar | 255 | 否 | 否 | 来源贴源库表名 | ods_zn_paper | - |
-| 创建时间 | `created_time` | datetime | - | 否 | 否 | 数据在要素库中的创建时间。 | 15/4/2026 14:59:34 | - |
-| 更新时间 | `updated_time` | datetime | - | 否 | 否 | 该条数据最近一次更新的时间。 | 15/4/2026 14:59:34 | - |
-
-## 8. 中文论文分类信息 `dwd_zh_paper_classification`
-
-| 中文字段 | 建议英文字段 | 类型 | 长度 | 可空 | 索引 | 描述 | 样例 | 关联字段 |
-|---|---|---|---|---|---|---|---|---|
-| 逻辑主键 | `logical_id` | varchar | 128 | 否 | 是 | 标题信息表逻辑主键 | 519258703810295763 | - |
-| 文献id | `paper_id` | varchar | 64 | 否 | 是 | 文献记录的唯一主键标识。 | 1021982887920009221 | dwd_zh_paper.id |
-| 大类学科分类 | `subject_category` | varchar | 20 | 是 | 否 | 期刊所属的大类学科领域。 | 教育学 | - |
-| 小类学科分类 | `subject_subcategory` | varchar | 20 | 是 | 否 | 期刊所属的细分学科领域。 | 教育学和教育研究 | - |
-| 论文关键字 | `keywords` | longtext | - | 是 | 否 | 描述论文主题内容的关键词。 | 一般人格权，人格尊严，人身自由 | - |
-| 数据来源 | `data_source` | varchar | 255 | 否 | 否 | 来源贴源库表名 | ods_zh_paper | - |
-| 创建时间 | `created_time` | datetime | - | 否 | 否 | 数据在要素库中的创建时间。 | 15/4/2026 14:59:34 | - |
-| 更新时间 | `updated_time` | datetime | - | 否 | 否 | 该条数据最近一次更新的时间。 | 15/4/2026 14:59:34 | - |
-
-## 9. 中文论文关联文献信息 `dwd_zh_paper_related`
-
-| 中文字段 | 建议英文字段 | 类型 | 长度 | 可空 | 索引 | 描述 | 样例 | 关联字段 |
-|---|---|---|---|---|---|---|---|---|
-| 逻辑主键 | `logical_id` | varchar | 128 | 否 | 是 | 标题信息表逻辑主键 | 519258703810295763 | - |
-| 文献id | `paper_id` | varchar | 64 | 否 | 是 | 文献记录的唯一主键标识。 | 1021982887920009221 | dwd_zh_paper.id |
-| 相关文献 | `related_papers` | json | - | 是 | 否 | 与当前文献内容或主题相关的文献信息。 | [{"paperId": 990433260943179779, "doi": "10.3389/fpls.2024.1396183", "enName": "Estimation of the rice aboveground biomass based on the first derivative spectrum and Boruta algorithm", "chName": "\u57fa\u4e8e\u4e00\u9636\u5bfc\u6570\u8c31\u548cBoruta\u7b97\u6cd5\u7684\u6c34\u7a3b\u5730\u4e0a\u751f\u7269\u91cf\u4f30\u7b97", "authors": ["Ying Nian", "Xiangxiang Su", "Hu Yue", "Yongji Zhu", "Jun Li", "Weiqiang Wang", "Yali Sheng", "Qiang Ma", "Jikai Liu", "Xinwei Li"], "publicationName": "Frontiers in Plant Science", "coverDateStart": "2024-04-25", "publicationId": 5023, "publicationCover": "https://assets.catalystplus.cn/journal_cover/5023.png"}, {"paperId": 997221033939304752, "doi": "10.15666/aeer/2202_16671682", "enName": "HYPERSPECTRAL ESTIMATION OF FOXTAIL MILLET (SETARIA ITALICA) GRAIN PROTEIN CONTENTS BY USING PHOTOSYNTHETIC RATE PARAMETERS UNDER DIFFERENT PHOTOPERIODS", "chName": "\u4e0d\u540c\u5149\u5468\u671f\u4e0b\u5149\u5408\u901f\u7387\u53c2\u6570\u9ad8\u5149\u8c31\u4f30\u7b97\u8c37\u5b50\u7c7d\u7c92\u86cb\u767d\u8d28\u542b\u91cf", "authors": ["H.Y. LI", "R. LI", "X. TIAN", "L. CHEN", "H.G. WANG", "S. FAHAD", "Z.J. QIAO", "J.J. WANG"], "publicationName": "Applied Ecology and Environmental Research", "coverDateStart": "2024-01-01", "publicationId": 3306, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3306.png"}, {"paperId": 998777710836711449, "doi": "10.3390/foods13101570", "enName": "Discrimination of New and Aged Seeds Based on On-Line Near-Infrared Spectroscopy Technology Combined with Machine Learning", "chName": "\u57fa\u4e8e\u5728\u7ebf\u8fd1\u7ea2\u5916\u5149\u8c31\u6280\u672f\u7ed3\u5408\u673a\u5668\u5b66\u4e60\u7684\u65b0\u65e7\u79cd\u5b50\u5224\u522b", "authors": ["Yanqiu Zhu", "Shuxiang Fan", "Min Zuo", "Baohua Zhang", "Qingzhen Zhu", "Jianlei Kong"], "publicationName": "Foods", "coverDateStart": "2024-05-18", "publicationId": 1446, "publicationCover": "https://assets.catalystplus.cn/journal_cover/1446.png"}, {"paperId": 1003116434844287000, "doi": "10.3390/math12111693", "enName": "Imaging Hyperspectral Feature Fusion for Estimation of Rapeseed Pod's Water Content and Recognition of Pod's Maturity Level", "chName": "\u6210\u50cf\u9ad8\u5149\u8c31\u7279\u5f81\u878d\u5408\u6cb9\u83dc\u7c7d\u835a\u542b\u6c34\u91cf\u4f30\u7b97\u53ca\u6210\u719f\u5ea6\u8bc6\u522b", "authors": ["Zanzhong Zhao", "Guiping Liao"], "publicationName": "Mathematics", "coverDateStart": "2024-05-31", "publicationId": 1106, "publicationCover": "https://assets.catalystplus.cn/journal_cover/1106.png"}, {"paperId": 997073534775721987, "doi": "10.3390/agriculture14050757", "enName": "Agriculture, Vol. 14, Pages 757: Establishing a Hyperspectral Model for the Chlorophyll and Crude Protein Content in Alpine Meadows Using a Backward Feature Elimination Method", "chName": "\u519c\u4e1a\uff0c\u5377\u3002 14\uff0c\u7b2c757\u9875\uff1a\u5229\u7528\u540e\u5411\u7279\u5f81\u6d88\u9664\u6cd5\u5efa\u7acb\u9ad8\u5bd2\u8349\u7538\u53f6\u7eff\u7d20\u548c\u7c97\u86cb\u767d\u542b\u91cf\u7684\u9ad8\u5149\u8c31\u6a21\u578b", "authors": ["Tong Ji", "Xiaoni Liu"], "publicationName": "Agriculture (Switzerland)", "coverDateStart": "2024-05-14", "publicationId": 96453, "publicationCover": "https://assets.catalystplus.cn/journal_cover/96453.png"}, {"paperId": 985356771520413727, "doi": "10.3390/f15040681", "enName": "Remote Sensing Estimation of Forest Carbon Stock Based on Machine Learning Algorithms", "chName": "\u57fa\u4e8e\u673a\u5668\u5b66\u4e60\u7b97\u6cd5\u7684\u68ee\u6797\u78b3\u50a8\u91cf\u9065\u611f\u4f30\u7b97", "authors": ["Fengyun Cheng", "Guanglong Ou", "Meng Wang", "Chang Liu"], "publicationName": "Forests", "coverDateStart": "2024-04-11", "publicationId": 1536, "publicationCover": "https://assets.catalystplus.cn/journal_cover/1536.png"}, {"paperId": 986447403877924903, "doi": "10.1038/s41598-024-59151-y", "enName": "Quantitative measurement of internal quality of carrots using hyperspectral imaging and multivariate analysis", "chName": "\u5229\u7528\u9ad8\u5149\u8c31\u6210\u50cf\u548c\u591a\u53d8\u91cf\u5206\u6790\u5b9a\u91cf\u6d4b\u91cf\u80e1\u841d\u535c\u7684\u5185\u90e8\u8d28\u91cf", "authors": ["Arcel Mutombo Mulowayi", "Zhen Hui Shen", "Witness Joseph Nyimbo", "Zhi Feng Di", "Nyumah Fallah", "Shu He Zheng"], "publicationName": "Scientific Reports", "coverDateStart": "2024-04-14", "publicationId": 9354, "publicationCover": "https://assets.catalystplus.cn/journal_cover/9354.png"}, {"paperId": 997184027360231563, "doi": "10.3390/agronomy14040785", "enName": "Classification and Identification of Pinecone Mulching in Blueberry Cultivation Based on Crop Leaf Characteristics and Hyperspectral Data", "chName": "\u57fa\u4e8e\u4f5c\u7269\u53f6\u7247\u7279\u5f81\u548c\u9ad8\u5149\u8c31\u6570\u636e\u7684\u84dd\u8393\u683d\u57f9\u677e\u679c\u8986\u76d6\u5206\u7c7b\u4e0e\u8bc6\u522b", "authors": ["Ukhan Jeong", "Taeyoung Jang", "Dohee Kim", "Eun Ju Cheong"], "publicationName": "Agronomy", "coverDateStart": "2024-04-10", "publicationId": 1538, "publicationCover": "https://assets.catalystplus.cn/journal_cover/1538.png"}, {"paperId": 999138525494378504, "doi": "10.1155/2024/8180765", "enName": "Feature Variable Selection Based on VIS-NIR Spectra and Soil Moisture Content Prediction Model Construction", "chName": "\u57fa\u4e8eVIS-NIR\u5149\u8c31\u7684\u7279\u5f81\u53d8\u91cf\u9009\u62e9\u53ca\u571f\u58e4\u542b\u6c34\u91cf\u9884\u6d4b\u6a21\u578b\u6784\u5efa", "authors": ["Nan Zhou", "Jin Hong", "Bo Song", "Shichao Wu", "Yichen Wei", "Tao Wang"], "publicationName": "Journal of Spectroscopy", "coverDateStart": "2024-05-19", "publicationId": 3603, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3603.png"}, {"paperId": 996243330503278604, "doi": "10.3390/plants13101314", "enName": "Monitoring of Chlorophyll Content of Potato in Northern Shaanxi Based on Different Spectral Parameters", "chName": "\u57fa\u4e8e\u4e0d\u540c\u5149\u8c31\u53c2\u6570\u7684\u9655\u5317\u9a6c\u94c3\u85af\u53f6\u7eff\u7d20\u542b\u91cf\u76d1\u6d4b", "authors": ["Hongzhao Shi", "Xingxing Lu", "Tao Sun", "Xiaochi Liu", "Xiangyang Huang", "Zijun Tang", "Zhijun Li", "Youzhen Xiang", "Fucang Zhang", "Jingbo Zhen"], "publicationName": "Plants", "coverDateStart": "2024-05-11", "publicationId": 9593, "publicationCover": "https://assets.catalystplus.cn/journal_cover/9593.png"}, {"paperId": 986086009512919065, "doi": "10.3390/rs16081382", "enName": "Crop Canopy Nitrogen Estimation from Mixed Pixels in Agricultural Lands Using Imaging Spectroscopy", "chName": "\u4f7f\u7528\u6210\u50cf\u5149\u8c31\u6cd5\u4ece\u519c\u7530\u6df7\u5408\u50cf\u7d20\u4f30\u7b97\u4f5c\u7269\u51a0\u5c42\u6c2e", "authors": ["Elahe Jamalinia", "Jie Dai", "Nicholas R. Vaughn", "Roberta E. Martin", "Kelly Hondula", "Marcel K\u00f6nig", "Joseph Heckler", "Gregory P. Asner"], "publicationName": "Remote Sensing", "coverDateStart": "2024-04-14", "publicationId": 3949, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3949.png"}, {"paperId": 990071629771964430, "doi": "10.3390/su16093509", "enName": "Multi-Model Comprehensive Inversion of Surface Soil Moisture from Landsat Images Based on Machine Learning Algorithms", "chName": "\u57fa\u4e8e\u673a\u5668\u5b66\u4e60\u7b97\u6cd5\u7684Landsat\u5f71\u50cf\u591a\u6a21\u578b\u7efc\u5408\u53cd\u6f14\u8868\u5c42\u571f\u58e4\u6c34\u5206", "authors": ["Weitao Lv", "Xiasong Hu", "Xilai Li", "Jimei Zhao", "Changyi Liu", "Shuaifei Li", "Guorong Li", "Haili Zhu"], "publicationName": "Sustainability", "coverDateStart": "2024-04-24", "publicationId": 3177, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3177.png"}, {"paperId": 998421673394831377, "doi": "10.3390/app14104245", "enName": "Applied Sciences, Vol. 14, Pages 4245: Wheat Yield Estimation Study Using Hyperspectral Vegetation Indices", "chName": "\u5e94\u7528\u79d1\u5b66\uff0c\u5377\u3002 14\uff0c\u7b2c 4245 \u9875\uff1a\u4f7f\u7528\u9ad8\u5149\u8c31\u690d\u88ab\u6307\u6570\u7684\u5c0f\u9ea6\u4ea7\u91cf\u4f30\u7b97\u7814\u7a76", "authors": ["Renhong Wu", "Yuqing Fan", "Liuya Zhang", "Debao Yuan", "Guitang Gao"], "publicationName": "Applied Sciences (Switzerland)", "coverDateStart": "2024-05-17", "publicationId": 96529, "publicationCover": "https://assets.catalystplus.cn/journal_cover/96529.png"}, {"paperId": 993333866712268801, "doi": "10.3390/plants13091270", "enName": "Hyperspectral and Fluorescence Imaging Approaches for Nondestructive Detection of Rice Chlorophyll", "chName": "\u7528\u4e8e\u6c34\u7a3b\u53f6\u7eff\u7d20\u65e0\u635f\u68c0\u6d4b\u7684\u9ad8\u5149\u8c31\u548c\u8367\u5149\u6210\u50cf\u65b9\u6cd5", "authors": ["Ju Zhou", "Feiyi Li", "Xinwu Wang", "Heng Yin", "Wenjing Zhang", "Jiaoyang Du", "Haibo Pu"], "publicationName": "Plants", "coverDateStart": "2024-05-03", "publicationId": 9593, "publicationCover": "https://assets.catalystplus.cn/journal_cover/9593.png"}, {"paperId": 1000430169330024483, "doi": "10.3390/f15060900", "enName": "Estimation of Rubber Plantation Biomass Based on Variable Optimization from Sentinel-2 Remote Sensing Imagery", "chName": "\u57fa\u4e8eSentinel-2\u9065\u611f\u5f71\u50cf\u53d8\u91cf\u4f18\u5316\u7684\u6a61\u80f6\u56ed\u751f\u7269\u91cf\u4f30\u7b97", "authors": ["Yanglimin Fu", "Hongjian Tan", "Weili Kou", "Weiheng Xu", "Huan Wang", "Ning Lu"], "publicationName": "Forests", "coverDateStart": "2024-05-23", "publicationId": 1536, "publicationCover": "https://assets.catalystplus.cn/journal_cover/1536.png"}, {"paperId": 997184027364425760, "doi": "10.3390/agronomy14040806", "enName": "In Situ Nondestructive Detection of Nitrogen Content in Soybean Leaves Based on Hyperspectral Imaging Technology", "chName": "\u57fa\u4e8e\u9ad8\u5149\u8c31\u6210\u50cf\u6280\u672f\u7684\u5927\u8c46\u53f6\u7247\u6c2e\u542b\u91cf\u539f\u4f4d\u65e0\u635f\u68c0\u6d4b", "authors": ["Yakun Zhang", "Mengxin Guan", "Libo Wang", "Xiahua Cui", "Tingting Li", "Fu Zhang"], "publicationName": "Agronomy", "coverDateStart": "2024-04-12", "publicationId": 1538, "publicationCover": "https://assets.catalystplus.cn/journal_cover/1538.png"}, {"paperId": 992967305749069829, "doi": "10.3390/land13050611", "enName": "Estimating the Aboveground Fresh Weight of Sugarcane Using Multispectral Images and Light Detection and Ranging (LiDAR)", "chName": "\u4f7f\u7528\u591a\u5149\u8c31\u56fe\u50cf\u548c\u5149\u63a2\u6d4b\u4e0e\u6d4b\u8ddd (LiDAR) \u4f30\u7b97\u7518\u8517\u7684\u5730\u4e0a\u9c9c\u91cd", "authors": ["Charot M. Vargas", "Muditha K. Heenkenda", "Kerin F. Romero"], "publicationName": "Land", "coverDateStart": "2024-05-02", "publicationId": 3102, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3102.png"}, {"paperId": 994781064679391237, "doi": "10.3390/rs16101655", "enName": "Hyperspectral Imaging Spectroscopy for Non-Destructive Determination of Grape Berry Total Soluble Solids and Titratable Acidity", "chName": "\u9ad8\u5149\u8c31\u6210\u50cf\u5149\u8c31\u6cd5\u65e0\u635f\u6d4b\u5b9a\u8461\u8404\u6d46\u53ef\u6eb6\u6027\u56fa\u4f53\u603b\u91cf\u548c\u53ef\u6ef4\u5b9a\u9178\u5ea6", "authors": ["Hongyi Lyu", "Miles Grafton", "Thiagarajah Ramilan", "Matthew Irwin", "Eduardo Sandoval"], "publicationName": "Remote Sensing", "coverDateStart": "2024-05-08", "publicationId": 3949, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3949.png"}, {"paperId": 1000942880266649603, "doi": "10.3390/rs16111869", "enName": "Optimized Transfer Learning for Chlorophyll Content Estimations across Datasets of Different Species Using Sun-Induced Chlorophyll Fluorescence and Reflectance", "chName": "\u4f7f\u7528\u592a\u9633\u8bf1\u5bfc\u7684\u53f6\u7eff\u7d20\u8367\u5149\u548c\u53cd\u5c04\u7387\u5bf9\u4e0d\u540c\u7269\u79cd\u7684\u6570\u636e\u96c6\u7684\u53f6\u7eff\u7d20\u542b\u91cf\u4f30\u8ba1\u8fdb\u884c\u4f18\u5316\u8fc1\u79fb\u5b66\u4e60", "authors": ["Yu-an Zhou", "Zichen Huang", "Weijun Zhou", "Haiyan Cen"], "publicationName": "Remote Sensing", "coverDateStart": "2024-05-24", "publicationId": 3949, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3949.png"}, {"paperId": 1002025604184276996, "doi": "10.3390/agriculture14060834", "enName": "Agriculture, Vol. 14, Pages 834: Assessing Contents of Sugars, Vitamins, and Nutrients in Baby Leaf Lettuce from Hyperspectral Data with Machine Learning Models", "chName": "\u519c\u4e1a\uff0c\u5377\u3002 14\uff0c\u7b2c 834 \u9875\uff1a\u5229\u7528\u673a\u5668\u5b66\u4e60\u6a21\u578b\u6839\u636e\u9ad8\u5149\u8c31\u6570\u636e\u8bc4\u4f30\u5ae9\u53f6\u751f\u83dc\u4e2d\u7cd6\u3001\u7ef4\u751f\u7d20\u548c\u8425\u517b\u7d20\u7684\u542b\u91cf", "authors": ["Sulaymon Eshkabilov", "Ivan Simko"], "publicationName": "Agriculture (Switzerland)", "coverDateStart": "2024-05-27", "publicationId": 96453, "publicationCover": "https://assets.catalystplus.cn/journal_cover/96453.png"}, {"paperId": 997218197469921465, "doi": "10.31357/ait.v3i2.7351", "enName": "Performance of UAV-derived Normalized Difference Vegetation Index (NDVI) for Early Estimation of Rice Yield", "chName": "\u65e0\u4eba\u673a\u884d\u751f\u7684\u5f52\u4e00\u5316\u690d\u88ab\u6307\u6570 (NDVI) \u5728\u6c34\u7a3b\u4ea7\u91cf\u65e9\u671f\u4f30\u7b97\u4e2d\u7684\u8868\u73b0", "authors": ["P.P. Dharmaratne", "W.M.U.K. Rathnayake", "A.D.A.J.K. Weerasinghe", "A.S.A. Salgadoe"], "publicationName": "Advances in Technology", "coverDateStart": "2024-04-08", "publicationId": 89261, "publicationCover": "https://assets.catalystplus.cn/journal_cover/89261.png"}, {"paperId": 997184027360231780, "doi": "10.3390/agronomy14040789", "enName": "Visible Near-Infrared Hyperspectral Soil Organic Matter Prediction Based on Combinatorial Modeling", "chName": "\u57fa\u4e8e\u7ec4\u5408\u5efa\u6a21\u7684\u53ef\u89c1\u8fd1\u7ea2\u5916\u9ad8\u5149\u8c31\u571f\u58e4\u6709\u673a\u8d28\u9884\u6d4b", "authors": ["Xiuquan Zhang", "Dequan Liu", "Junwei Ma", "Xiaolei Wang", "Zhiwei Li", "Decong Zheng"], "publicationName": "Agronomy", "coverDateStart": "2024-04-11", "publicationId": 1538, "publicationCover": "https://assets.catalystplus.cn/journal_cover/1538.png"}, {"paperId": 985357116439003137, "doi": "10.3390/su16083195", "enName": "Study on Soil Total Nitrogen Content Prediction Method Based on Synthetic Neural Network Model", "chName": "\u57fa\u4e8e\u5408\u6210\u795e\u7ecf\u7f51\u7edc\u6a21\u578b\u7684\u571f\u58e4\u5168\u6c2e\u542b\u91cf\u9884\u6d4b\u65b9\u6cd5\u7814\u7a76", "authors": ["He Liu", "Jiamu Wang", "Shuyan Liu", "Qingran Hu", "Dongyan Huang"], "publicationName": "Sustainability", "coverDateStart": "2024-04-11", "publicationId": 3177, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3177.png"}, {"paperId": 996962754789113857, "doi": "10.1155/2024/7599132", "enName": "Soybean Saponin Content Detection Based on Spectral and Image Information Combination", "chName": "\u57fa\u4e8e\u5149\u8c31\u4e0e\u56fe\u50cf\u4fe1\u606f\u7ed3\u5408\u7684\u5927\u8c46\u7682\u82f7\u542b\u91cf\u68c0\u6d4b", "authors": ["Hongmin Sun", "Xifan Meng", "Yingpeng Han", "Xiao Li", "Xiaoming Li", "Yongguang Li"], "publicationName": "Journal of Spectroscopy", "coverDateStart": "2024-05-13", "publicationId": 3603, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3603.png"}, {"paperId": 997690648054202368, "doi": "10.3390/app14104145", "enName": "Applied Sciences, Vol. 14, Pages 4145: Prediction of Kiwifruit Sweetness with Vis/NIR Spectroscopy Based on Scatter Correction and Feature Selection Techniques", "chName": "\u5e94\u7528\u79d1\u5b66\uff0c\u5377\u3002 14\uff0c\u7b2c 4145 \u9875\uff1a\u57fa\u4e8e\u6563\u5c04\u6821\u6b63\u548c\u7279\u5f81\u9009\u62e9\u6280\u672f\u7684\u53ef\u89c1\u5149/\u8fd1\u7ea2\u5916\u5149\u8c31\u9884\u6d4b\u7315\u7334\u6843\u751c\u5ea6", "authors": ["Chang Wan", "Rong Yue", "Zhenfa Li", "Kai Fan", "Xiaokai Chen", "Fenling Li"], "publicationName": "Applied Sciences (Switzerland)", "coverDateStart": "2024-05-15", "publicationId": 96529, "publicationCover": "https://assets.catalystplus.cn/journal_cover/96529.png"}, {"paperId": 998058499835428899, "doi": "10.3390/su16104153", "enName": "Using Optimized Spectral Indices and Machine Learning Algorithms to Assess Soil Copper Concentration in Mining Areas", "chName": "\u4f7f\u7528\u4f18\u5316\u7684\u5149\u8c31\u6307\u6570\u548c\u673a\u5668\u5b66\u4e60\u7b97\u6cd5\u8bc4\u4f30\u77ff\u533a\u571f\u58e4\u94dc\u6d53\u5ea6", "authors": ["Chang Meng", "Mei Hong", "Yuncai Hu", "Fei Li"], "publicationName": "Sustainability", "coverDateStart": "2024-05-16", "publicationId": 3177, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3177.png"}, {"paperId": 995140717162528799, "doi": "10.3390/f15050823", "enName": "Influence of Leaf Area Index Inversion and the Light Transmittance Mechanism in the Apple Tree Canopy", "chName": "\u82f9\u679c\u6811\u51a0\u5c42\u53f6\u9762\u79ef\u6307\u6570\u53cd\u6f14\u7684\u5f71\u54cd\u53ca\u900f\u5149\u673a\u5236", "authors": ["Linghui Zhou", "Yaxiong Wang", "Chongchong Chen", "Siyuan Tong", "Feng Kang"], "publicationName": "Forests", "coverDateStart": "2024-05-08", "publicationId": 1536, "publicationCover": "https://assets.catalystplus.cn/journal_cover/1536.png"}, {"paperId": 990795160616960003, "doi": "10.3390/foods13091320", "enName": "Nondestructive Detection of Sunflower Seed Vigor and Moisture Content Based on Hyperspectral Imaging and Chemometrics", "chName": "\u57fa\u4e8e\u9ad8\u5149\u8c31\u6210\u50cf\u548c\u5316\u5b66\u8ba1\u91cf\u5b66\u7684\u8475\u82b1\u7c7d\u6d3b\u529b\u548c\u6c34\u5206\u542b\u91cf\u65e0\u635f\u68c0\u6d4b", "authors": ["Peng Huang", "Jinfu Yuan", "Pan Yang", "Futong Xiao", "Yongpeng Zhao"], "publicationName": "Foods", "coverDateStart": "2024-04-26", "publicationId": 1446, "publicationCover": "https://assets.catalystplus.cn/journal_cover/1446.png"}, {"paperId": 996243432315813892, "doi": "10.3389/fpls.2024.1404238", "enName": "Combining features selection strategy and features fusion strategy for SPAD estimation of winter wheat based on UAV multispectral imagery", "chName": "\u57fa\u4e8e\u65e0\u4eba\u673a\u591a\u5149\u8c31\u5f71\u50cf\u7684\u7279\u5f81\u9009\u62e9\u7b56\u7565\u548c\u7279\u5f81\u878d\u5408\u7b56\u7565\u76f8\u7ed3\u5408\u7684\u51ac\u5c0f\u9ea6SPAD\u4f30\u8ba1", "authors": ["Xiangxiang Su", "Ying Nian", "Hiba Shaghaleh", "Amar Hamad", "Hu Yue", "Yongji Zhu", "Jun Li", "Weiqiang Wang", "Hong Wang", "Qiang Ma", "Jikai Liu", "Xinwei Li", "Yousef Alhaj Hamoud"], "publicationName": "Frontiers in Plant Science", "coverDateStart": "2024-05-11", "publicationId": 5023, "publicationCover": "https://assets.catalystplus.cn/journal_cover/5023.png"}, {"paperId": 995508455315865606, "doi": "10.1111/1750-3841.17102", "enName": "Rapid determination of starch and alcohol contents in fermented grains by hyperspectral imaging combined with data fusion techniques", "chName": "\u9ad8\u5149\u8c31\u6210\u50cf\u7ed3\u5408\u6570\u636e\u878d\u5408\u6280\u672f\u5feb\u901f\u6d4b\u5b9a\u53d1\u9175\u8c37\u7269\u4e2d\u6dc0\u7c89\u548c\u9152\u7cbe\u542b\u91cf", "authors": ["Yan Liang", "Jianping Tian", "Xinjun Hu", "Yuexiang Huang", "Kangling He", "Liangliang Xie", "Haili Yang", "Dan Huang", "Yifei Zhou", "Yuanyuan Xia"], "publicationName": "Journal of Food Science", "coverDateStart": "2024-05-09", "publicationId": 1510, "publicationCover": "https://assets.catalystplus.cn/journal_cover/1510.png"}, {"paperId": 991156970436165646, "doi": "10.3390/rs16091537", "enName": "Aboveground Biomass Inversion Based on Object-Oriented Classification and Pearson\u2013mRMR\u2013Machine Learning Model", "chName": "\u57fa\u4e8e\u9762\u5411\u5bf9\u8c61\u5206\u7c7b\u548c Pearson-mRMR-\u673a\u5668\u5b66\u4e60\u6a21\u578b\u7684\u5730\u4e0a\u751f\u7269\u91cf\u53cd\u6f14", "authors": ["Xinyang Chen", "Keming Yang", "Jun Ma", "Kegui Jiang", "Xinru Gu", "Lishun Peng"], "publicationName": "Remote Sensing", "coverDateStart": "2024-04-27", "publicationId": 3949, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3949.png"}, {"paperId": 1003117283444260872, "doi": "10.3390/rs16111962", "enName": "Random Forest-Based Soil Moisture Estimation Using Sentinel-2, Landsat-8/9, and UAV-Based Hyperspectral Data", "chName": "\u4f7f\u7528 Sentinel-2\u3001Landsat-8/9 \u548c\u57fa\u4e8e\u65e0\u4eba\u673a\u7684\u9ad8\u5149\u8c31\u6570\u636e\u8fdb\u884c\u968f\u673a\u68ee\u6797\u571f\u58e4\u6e7f\u5ea6\u4f30\u7b97", "authors": ["Hadi Shokati", "Mahmoud Mashal", "Aliakbar Noroozi", "Ali Akbar Abkar", "Saham Mirzaei", "Zahra Mohammadi-Doqozloo", "Ruhollah Taghizadeh-Mehrjardi", "Pegah Khosravani", "Kamal Nabiollahi", "Thomas Scholten"], "publicationName": "Remote Sensing", "coverDateStart": "2024-05-31", "publicationId": 3949, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3949.png"}, {"paperId": 985357383343538182, "doi": "10.3390/agriculture14040605", "enName": "Agriculture, Vol. 14, Pages 605: Utilizing the Fusion Characteristics of Multispectral and Electronic Noses to Detect Soil Main Nutrient Content", "chName": "\u519c\u4e1a\uff0c\u5377\u3002 14\u3001\u7b2c605\u9875\uff1a\u5229\u7528\u591a\u5149\u8c31\u4e0e\u7535\u5b50\u9f3b\u878d\u5408\u7279\u6027\u68c0\u6d4b\u571f\u58e4\u4e3b\u8981\u517b\u5206\u542b\u91cf", "authors": ["Lili Fu", "Shuyan Liu", "Dongyan Huang", "Jingli Wang", "Xinming Jiang", "Gang Wang"], "publicationName": "Agriculture (Switzerland)", "coverDateStart": "2024-04-11", "publicationId": 96453, "publicationCover": "https://assets.catalystplus.cn/journal_cover/96453.png"}, {"paperId": 1001664392711897093, "doi": "10.3390/rs16111910", "enName": "Estimation of Biochemical Compounds in Tradescantia Leaves Using VIS-NIR-SWIR Hyperspectral and Chlorophyll a Fluorescence Sensors", "chName": "\u4f7f\u7528 VIS-NIR-SWIR \u9ad8\u5149\u8c31\u548c\u53f6\u7eff\u7d20 a \u8367\u5149\u4f20\u611f\u5668\u4f30\u7b97\u7d2b\u9732\u8349\u53f6\u5b50\u4e2d\u7684\u751f\u5316\u5316\u5408\u7269", "authors": ["Renan Falcioni", "Roney Berti de Oliveira", "Marcelo Luiz Chicati", "Werner Camargos Antunes", "Jos\u00e9 Alexandre M. Dematt\u00ea", "Marcos Rafael Nanni"], "publicationName": "Remote Sensing", "coverDateStart": "2024-05-26", "publicationId": 3949, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3949.png"}, {"paperId": 1002755368905867278, "doi": "10.3390/plants13111498", "enName": "Soybean (Glycine max L.) Leaf Moisture Estimation Based on Multisource Unmanned Aerial Vehicle Image Feature Fusion", "chName": "\u57fa\u4e8e\u591a\u6e90\u65e0\u4eba\u673a\u56fe\u50cf\u7279\u5f81\u878d\u5408\u7684\u5927\u8c46(Glycine max L.)\u53f6\u7247\u6c34\u5206\u4f30\u8ba1", "authors": ["Wanli Yang", "Zhijun Li", "Guofu Chen", "Shihao Cui", "Yue Wu", "Xiaochi Liu", "Wen Meng", "Yucheng Liu", "Jinyao He", "Danmao Liu", "Yifan Zhou", "Zijun Tang", "Youzhen Xiang", "Fucang Zhang"], "publicationName": "Plants", "coverDateStart": "2024-05-29", "publicationId": 9593, "publicationCover": "https://assets.catalystplus.cn/journal_cover/9593.png"}, {"paperId": 987169712938942505, "doi": "10.1038/s41598-024-59160-x", "enName": "Using sentinel-2 satellite images and machine learning algorithms to predict tropical pasture forage mass, crude protein, and fiber content", "chName": "\u4f7f\u7528 Sentinel-2 \u536b\u661f\u56fe\u50cf\u548c\u673a\u5668\u5b66\u4e60\u7b97\u6cd5\u6765\u9884\u6d4b\u70ed\u5e26\u7267\u573a\u8349\u6599\u8d28\u91cf\u3001\u7c97\u86cb\u767d\u548c\u7ea4\u7ef4\u542b\u91cf", "authors": ["Marcia Helena Machado da Rocha Fernandes", "Jalme de Souza FernandesJunior", "Jordan Melissa Adams", "Mingyung Lee", "Ricardo Andrade Reis", "Luis Orlindo Tedeschi"], "publicationName": "Scientific Reports", "coverDateStart": "2024-04-16", "publicationId": 9354, "publicationCover": "https://assets.catalystplus.cn/journal_cover/9354.png"}, {"paperId": 990794684911583246, "doi": "10.3390/app14093636", "enName": "Applied Sciences, Vol. 14, Pages 3636: Optimal Timing of Carrot Crop Monitoring and Yield Assessment Using Sentinel-2 Images: A Machine-Learning Approach", "chName": "\u5e94\u7528\u79d1\u5b66\uff0c\u5377\u3002 14\uff0c\u7b2c 3636 \u9875\uff1a\u4f7f\u7528 Sentinel-2 \u56fe\u50cf\u8fdb\u884c\u80e1\u841d\u535c\u4f5c\u7269\u76d1\u6d4b\u548c\u4ea7\u91cf\u8bc4\u4f30\u7684\u6700\u4f73\u65f6\u673a\uff1a\u673a\u5668\u5b66\u4e60\u65b9\u6cd5", "authors": ["Rangaswamy Madugundu", "Khalid A. Al-Gaadi", "ElKamil Tola", "Mohamed K. Edrris", "Haroon F. Edrees", "Ahmed A. Alameen"], "publicationName": "Applied Sciences (Switzerland)", "coverDateStart": "2024-04-26", "publicationId": 96529, "publicationCover": "https://assets.catalystplus.cn/journal_cover/96529.png"}, {"paperId": 990137633868873744, "doi": "10.48550/arXiv.2404.14653", "enName": "Machine Vision Based Assessment of Fall Color Changes in Apple Trees: Exploring Relationship with Leaf Nitrogen Concentration", "chName": "\u57fa\u4e8e\u673a\u5668\u89c6\u89c9\u7684\u82f9\u679c\u6811\u79cb\u5b63\u989c\u8272\u53d8\u5316\u8bc4\u4f30\uff1a\u63a2\u7d22\u4e0e\u53f6\u7247\u6c2e\u6d53\u5ea6\u7684\u5173\u7cfb", "authors": ["Achyut Paudel", "Jostan Brown", "Priyanka Upadhyaya", "Atif Bilal Asad", "Safal Kshetri", "Manoj Karkee", "Joseph R. Davidson", "Cindy Grimm", "Ashley Thompson"], "publicationName": "Computer Vision and Pattern Recognition", "coverDateStart": "2024-04-23", "publicationId": 108597, "publicationCover": "https://assets.catalystplus.cn/journal_cover/108597.png"}, {"paperId": 1001302559106793510, "doi": "10.3390/rs16111900", "enName": "Hyperspectral Data for Early Identification and Classification of Potassium Deficiency in Soybean Plants (Glycine max (L.) Merrill)", "chName": "\u7528\u4e8e\u5927\u8c46\u690d\u682a\u7f3a\u94be\u65e9\u671f\u8bc6\u522b\u548c\u5206\u7c7b\u7684\u9ad8\u5149\u8c31\u6570\u636e\uff08Glycine max (L.) Merrill\uff09", "authors": ["Renato Herrig Furlanetto", "Lu\u00eds Guilherme Teixeira Crusiol", "Marcos Rafael Nanni", "Adilson de Oliveira Junior", "Rubson Natal Ribeiro Sibaldelli"], "publicationName": "Remote Sensing", "coverDateStart": "2024-05-25", "publicationId": 3949, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3949.png"}, {"paperId": 998777245591928840, "doi": "10.1101/2024.05.14.594109", "enName": "High-throughput Phenotyping of Soybean Biomass: Conventional Trait Estimation and Novel Latent Feature Extraction Using UAV Remote Sensing and Deep Learning Models", "chName": "\u5927\u8c46\u751f\u7269\u8d28\u7684\u9ad8\u901a\u91cf\u8868\u578b\u5206\u6790\uff1a\u4f7f\u7528\u65e0\u4eba\u673a\u9065\u611f\u548c\u6df1\u5ea6\u5b66\u4e60\u6a21\u578b\u8fdb\u884c\u4f20\u7edf\u6027\u72b6\u4f30\u8ba1\u548c\u65b0\u7684\u6f5c\u5728\u7279\u5f81\u63d0\u53d6", "authors": ["Okada", "M.", "Barras", "C.", "Toda", "Y.", "Hamazaki", "K.", "Ohmori", "Yamasaki", "Takahashi", "H.", "Takanashi", "Tsuda", "Yokota Hirai", "Tsujimoto", "Kaga", "A.", "Nakazono", "Fujiwara", "T.", "Iwata"], "publicationName": "bioRxiv", "coverDateStart": "2024-05-18", "publicationId": 99067, "publicationCover": "https://assets.catalystplus.cn/journal_cover/99067.png"}, {"paperId": 997208809015345309, "doi": "10.3390/agriengineering6020063", "enName": "Synergetic Use of Sentinel-1 and Sentinel-2 Data for Wheat-Crop Height Monitoring Using Machine Learning", "chName": "\u5229\u7528\u673a\u5668\u5b66\u4e60\u534f\u540c\u4f7f\u7528 Sentinel-1 \u548c Sentinel-2 \u6570\u636e\u8fdb\u884c\u5c0f\u9ea6\u4f5c\u7269\u9ad8\u5ea6\u76d1\u6d4b", "authors": ["Lwandile Nduku", "Cilence Munghemezulu", "Zinhle Mashaba-Munghemezulu", "Phathutshedzo Eugene Ratshiedana", "Sipho Sibanda", "Johannes George Chirima"], "publicationName": "AgriEngineering", "coverDateStart": "2024-04-22", "publicationId": 59952, "publicationCover": "https://assets.catalystplus.cn/journal_cover/59952.png"}, {"paperId": 987531966083497986, "doi": "10.3389/fpls.2024.1376915", "enName": "Efficient residual network using hyperspectral images for corn variety identification", "chName": "\u5229\u7528\u9ad8\u5149\u8c31\u56fe\u50cf\u8fdb\u884c\u9ad8\u6548\u6b8b\u5dee\u7f51\u7edc\u8fdb\u884c\u7389\u7c73\u54c1\u79cd\u8bc6\u522b", "authors": ["Xueyong Li", "Mingjia Zhai", "Liyuan Zheng", "Ling Zhou", "Xiwang Xie", "Wenyi Zhao", "Weidong Zhang"], "publicationName": "Frontiers in Plant Science", "coverDateStart": "2024-04-17", "publicationId": 5023, "publicationCover": "https://assets.catalystplus.cn/journal_cover/5023.png"}, {"paperId": 989705695592972297, "doi": "10.3390/agriculture14040638", "enName": "Agriculture, Vol. 14, Pages 638: Rice Yield Estimation Using Multi-Temporal Remote Sensing Data and Machine Learning: A Case Study of Jiangsu, China", "chName": "\u519c\u4e1a\uff0c\u5377\u3002 14\uff0c\u7b2c 638 \u9875\uff1a\u5229\u7528\u591a\u65f6\u76f8\u9065\u611f\u6570\u636e\u548c\u673a\u5668\u5b66\u4e60\u4f30\u7b97\u6c34\u7a3b\u4ea7\u91cf\uff1a\u4e2d\u56fd\u6c5f\u82cf\u7701\u7684\u6848\u4f8b\u7814\u7a76", "authors": ["Zhangxin Liu", "Haoran Ju", "Qiyun Ma", "Chengming Sun", "Yuping Lv", "Kaihua Liu", "Tianao Wu", "Minghan Cheng"], "publicationName": "Agriculture (Switzerland)", "coverDateStart": "2024-04-23", "publicationId": 96453, "publicationCover": "https://assets.catalystplus.cn/journal_cover/96453.png"}, {"paperId": 1000431855968714794, "doi": "10.1016/j.saa.2024.124496", "enName": "Coupled Vis-NIR spectroscopy with chemometrics strategy for soil organic carbon prediction in the Agro-pastoral Transitional zone of northwest China", "chName": "\u53ef\u89c1\u5149-\u8fd1\u7ea2\u5916\u5149\u8c31\u8026\u5408\u5316\u5b66\u8ba1\u91cf\u5b66\u7b56\u7565\u9884\u6d4b\u897f\u5317\u519c\u7267\u4ea4\u9519\u5e26\u571f\u58e4\u6709\u673a\u78b3", "authors": ["Zhenyu Dong", "Ni Wang", "Jiancang Xie", "Xinyue Ke"], "publicationName": "Spectrochimica Acta Part A Molecular and Biomolecular Spectroscopy", "coverDateStart": "2024-05-23", "publicationId": 3421, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3421.png"}, {"paperId": 997208809015345481, "doi": "10.3390/agriengineering6020054", "enName": "Estimating Cotton Yield in the Brazilian Cerrado Using Linear Regression Models from MODIS Vegetation Index Time Series", "chName": "\u4f7f\u7528 MODIS \u690d\u88ab\u6307\u6570\u65f6\u95f4\u5e8f\u5217\u7684\u7ebf\u6027\u56de\u5f52\u6a21\u578b\u4f30\u7b97\u5df4\u897f\u585e\u62c9\u591a\u7684\u68c9\u82b1\u4ea7\u91cf", "authors": ["Daniel A. B. de Siqueira", "Carlos M. P. Vaz", "Fl\u00e1vio S. da Silva", "Ednaldo J. Ferreira", "Eduardo A. Speranza", "J\u00falio C. Franchini", "Rafael Galbieri", "Jean L. Belot", "M\u00e1rcio de Souza", "Fabiano J. Perina", "S\u00e9rgio das Chagas"], "publicationName": "AgriEngineering", "coverDateStart": "2024-04-09", "publicationId": 59952, "publicationCover": "https://assets.catalystplus.cn/journal_cover/59952.png"}, {"paperId": 990794990433075230, "doi": "10.3390/rs16091523", "enName": "Combining LiDAR and Spaceborne Multispectral Data for Mapping Successional Forest Stages in Subtropical Forests", "chName": "\u7ed3\u5408\u6fc0\u5149\u96f7\u8fbe\u548c\u661f\u8f7d\u591a\u5149\u8c31\u6570\u636e\u7ed8\u5236\u4e9a\u70ed\u5e26\u68ee\u6797\u7684\u6f14\u66ff\u68ee\u6797\u9636\u6bb5", "authors": ["Bill Herbert Ziegelmaier Neto", "Marcos Benedito Schimalski", "Veraldo Liesenberg", "Camile Sothe", "Rorai Pereira Martins-Neto", "Mireli Moura Pitz Floriani"], "publicationName": "Remote Sensing", "coverDateStart": "2024-04-26", "publicationId": 3949, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3949.png"}, {"paperId": 988619270646661127, "doi": "10.3390/rs16081447", "enName": "Canopy-Level Spectral Variation and Classification of Diverse Crop Species with Fine Spatial Resolution Imaging Spectroscopy", "chName": "\u5229\u7528\u7cbe\u7ec6\u7a7a\u95f4\u5206\u8fa8\u7387\u6210\u50cf\u5149\u8c31\u5bf9\u4e0d\u540c\u4f5c\u7269\u7269\u79cd\u7684\u51a0\u5c42\u5149\u8c31\u53d8\u5316\u548c\u5206\u7c7b", "authors": ["Jie Dai", "Marcel K\u00f6nig", "Elahe Jamalinia", "Kelly L. Hondula", "Nicholas R. Vaughn", "Joseph Heckler", "Gregory P. Asner"], "publicationName": "Remote Sensing", "coverDateStart": "2024-04-20", "publicationId": 3949, "publicationCover": "https://assets.catalystplus.cn/journal_cover/3949.png"}, {"paperId": 997184027360232227, "doi": "10.3390/agronomy14050883", "enName": "Time Series Field Estimation of Rice Canopy Height Using an Unmanned Aerial Vehicle-Based RGB/Multispectral Platform", "chName": "\u4f7f\u7528\u57fa\u4e8e\u65e0\u4eba\u673a\u7684 RGB/\u591a\u5149\u8c31\u5e73\u53f0\u5bf9\u6c34\u7a3b\u51a0\u5c42\u9ad8\u5ea6\u8fdb\u884c\u65f6\u95f4\u5e8f\u5217\u73b0\u573a\u4f30\u8ba1", "authors": ["Ziqiu Li", "Xiangqian Feng", "Juan Li", "Danying Wang", "Weiyuan Hong", "Jinhua Qin", "Aidong Wang", "Hengyu Ma", "Qin Yao", "Song Chen"], "publicationName": "Agronomy", "coverDateStart": "2024-04-23", "publicationId": 1538, "publicationCover": "https://assets.catalystpl | - |
-| 相关文献文献唯一识别号 | `related_doi` | varchar | 512 | 否 | 是 | 论文的唯一标识编码。 | 10.3390/f15071270 | - |
-| 相关文献中文名 | `related_name_zh` | varchar | 1024 | 是 | 否 | 相关文献的英文标题名称。 | A Normative Analysis of the General Personality Right Provisions in China’s Civil Code | - |
-| 数据来源 | `data_source` | varchar | 255 | 否 | 否 | 来源贴源库表名 | ods_zh_paper | - |
-| 创建时间 | `created_time` | datetime | - | 否 | 否 | 数据在要素库中的创建时间。 | 15/4/2026 14:59:34 | - |
-| 更新时间 | `updated_time` | datetime | - | 否 | 否 | 该条数据最近一次更新的时间。 | 15/4/2026 14:59:34 | - |
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `lngid` | `varchar(50)` | YES |  |  |  |  |
+| 2 | `media_c` | `varchar(50)` | YES |  |  |  |  |
+| 3 | `media_e` | `varchar(50)` | YES |  |  |  |  |
+| 4 | `gch` | `varchar(50)` | YES |  |  |  |  |
+| 5 | `gch5` | `varchar(50)` | YES |  |  |  |  |
+| 6 | `years` | `int` | YES |  |  |  |  |
+| 7 | `vol` | `int` | YES |  |  |  |  |
+| 8 | `num` | `int` | YES |  |  |  |  |
+| 9 | `title_c` | `text` | YES |  |  |  |  |
+| 10 | `title_e` | `text` | YES |  |  |  |  |
+| 11 | `keyword_c` | `text` | YES |  |  |  |  |
+| 12 | `keyword_e` | `text` | YES |  |  |  |  |
+| 13 | `remark_c` | `text` | YES |  |  |  |  |
+| 14 | `remark_e` | `text` | YES |  |  |  |  |
+| 15 | `firstclass` | `varchar(50)` | YES |  |  |  |  |
+| 16 | `class` | `varchar(50)` | YES |  |  |  |  |
+| 17 | `beginpage` | `varchar(50)` | YES |  |  |  |  |
+| 18 | `endpage` | `varchar(50)` | YES |  |  |  |  |
+| 19 | `jumppage` | `varchar(50)` | YES |  |  |  |  |
+| 20 | `pagecount` | `int` | YES |  |  |  |  |
+| 21 | `firstwriter` | `varchar(50)` | YES |  |  |  |  |
+| 22 | `showwriter` | `text` | YES |  |  |  |  |
+| 23 | `firstorgan` | `text` | YES |  |  |  |  |
+| 24 | `showorgan` | `text` | YES |  |  |  |  |
+| 25 | `showwriter_e` | `text` | YES |  |  |  |  |
+| 26 | `showorgan_e` | `text` | YES |  |  |  |  |
+| 27 | `author_e` | `text` | YES |  |  |  |  |
+| 28 | `publishdate` | `int` | YES |  |  |  |  |
+| 29 | `doi` | `varchar(50)` | YES |  |  |  |  |
+| 30 | `intpdf` | `int` | YES |  |  |  |  |
+| 31 | `pdfsize` | `int` | YES |  |  |  |  |
+| 32 | `range` | `text` | YES |  |  |  |  |
+| 33 | `language` | `int` | YES |  |  |  |  |
+| 34 | `type` | `int` | YES |  |  |  |  |
+| 35 | `issn` | `varchar(50)` | YES |  |  |  |  |
+| 36 | `cnno` | `varchar(50)` | YES |  |  |  |  |
+| 37 | `classtypes` | `text` | YES |  |  |  |  |
+| 38 | `showclasstypes` | `text` | YES |  |  |  |  |
+| 39 | `subject_edu` | `varchar(50)` | YES |  |  |  |  |
+| 40 | `corr_author` | `varchar(50)` | YES |  |  |  |  |
+| 41 | `fulltextaddress` | `text` | YES |  |  |  |  |

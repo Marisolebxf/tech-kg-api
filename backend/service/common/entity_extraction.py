@@ -20,7 +20,22 @@ load_dotenv()
 API_KEY = os.getenv("ZHIPUAI_API_KEY", "")
 MODEL = os.getenv("MODEL", "glm-5.1")
 
-client = ZhipuAiClient(api_key=API_KEY) if ZhipuAiClient and API_KEY else None
+_client = None
+
+
+def get_client():
+    """Create the LLM client lazily so import/startup never depends on network config."""
+    global _client
+    if _client is not None:
+        return _client
+    if not ZhipuAiClient or not API_KEY:
+        return None
+    try:
+        _client = ZhipuAiClient(api_key=API_KEY)
+    except Exception as e:
+        print(f"[extraction] 客户端初始化失败: {e}")
+        return None
+    return _client
 
 # 实体类型定义
 ENTITY_TYPES = {
@@ -74,6 +89,7 @@ def extract(text: str, source_type: str = "general") -> list:
     """
     if not text or not text.strip():
         return []
+    client = get_client()
     if client is None:
         return []
 

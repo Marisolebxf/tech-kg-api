@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from app.services.text_ngram import build_ngram_vocab, encode_texts, text_to_vector
+from service.common.text_ngram import build_ngram_vocab, encode_texts, text_to_vector
 
 KB = [
     {

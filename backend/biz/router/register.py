@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from biz.handler.common_capability import router as common_capability_router
 from biz.handler.expert_alumni_relation import router as expert_alumni_relation_router
 from biz.handler.expert_colleague_relation import router as expert_colleague_relation_router
 from biz.handler.expert_cooperation_achievement import (
@@ -15,6 +16,7 @@ from biz.handler.kg_construction import router as kg_construction_router
 
 
 def register_routers(app: FastAPI) -> None:
+    app.include_router(common_capability_router, prefix="/api/v1")
     app.include_router(kg_construction_router, prefix="/api/v1")
     app.include_router(expert_direct_relation_router, prefix="/api/v1")
     app.include_router(expert_indirect_relation_router, prefix="/api/v1")

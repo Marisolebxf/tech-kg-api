@@ -6,6 +6,9 @@ Usage:
 
 Reads connection info from environment variables (or .env via python-dotenv):
     MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USERNAME, MYSQL_PASSWORD
+
+Defaults target the laboratory/server-side copied database, not the read-only
+vendor source database used by sync_schema_from_mysql.py.
 """
 
 from __future__ import annotations
@@ -38,11 +41,11 @@ DDL_DIR = Path(__file__).resolve().parent.parent / "schemas" / "ddl"
 def get_connection() -> pymysql.Connection:
     load_dotenv()
     return pymysql.connect(
-        host=os.getenv("MYSQL_HOST", "183.240.141.251"),
-        port=int(os.getenv("MYSQL_PORT", "3318")),
-        user=os.getenv("MYSQL_USERNAME", "gkx_reader_zp"),
-        password=os.getenv("MYSQL_PASSWORD", ""),
-        database=os.getenv("MYSQL_DATABASE", "gkx"),
+        host=os.getenv("MYSQL_HOST", "127.0.0.1"),
+        port=int(os.getenv("MYSQL_PORT", "3306")),
+        user=os.getenv("MYSQL_USERNAME", "root"),
+        password=os.getenv("MYSQL_PASSWORD", "123456789"),
+        database=os.getenv("MYSQL_DATABASE", "gkx_local"),
         charset="utf8mb4",
         autocommit=True,
     )

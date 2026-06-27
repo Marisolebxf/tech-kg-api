@@ -303,17 +303,19 @@ VITE_NGINX_GATEWAY_URL=https://analysis_ckcest.aminer.cn/microtrend-api-beta/
 
 ## 启动
 
-```bash
-# 前端
-cd frontend
-pnpm install
-pnpm dev          # http://localhost:5174
+下面命令从项目根目录 `tech-kg-api/` 执行：
 
-# 后端
+```bash
+# 终端一：后端
 cd backend
 uv sync
 cp .env.example .env
 uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+# 终端二：前端
+cd frontend
+pnpm install
+pnpm dev          # http://localhost:5174
 ```
 
 ## 技术栈

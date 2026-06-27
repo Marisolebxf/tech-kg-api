@@ -23,7 +23,8 @@ tech-kg-api/
 │   │       ├── expert_paper_cooperation.py
 │   │       ├── expert_enterprise_relation.py
 │   │       ├── industry_chain_topn_event.py
-│   │       └── industry_chain_panorama.py
+│   │       ├── industry_chain_panorama.py
+│   │       └── common_capability.py      # 公共能力接口
 │   ├── application/                  # 用例编排层（调 service，组装输入输出）
 │   │   ├── expert_direct_relation.py
 │   │   ├── expert_indirect_relation.py
@@ -34,10 +35,12 @@ tech-kg-api/
 │   │   ├── expert_enterprise_relation.py
 │   │   ├── industry_chain_topn_event.py
 │   │   ├── industry_chain_panorama.py
-│   │   └── kg_construction.py
+│   │   ├── kg_construction.py
+│   │   └── common_capability.py
 │   ├── service/                      # 领域服务层（核心业务逻辑 + 推理算法）
 │   │   ├── base_module.py            # 模块脚手架基类
 │   │   ├── module_catalog.py         # 模块注册表
+│   │   ├── common/                   # 公共实体/关系/NLP 能力
 │   │   ├── kg_construction.py        # 模块清单服务
 │   │   ├── expert_direct_relation.py
 │   │   ├── expert_indirect_relation.py
@@ -49,6 +52,7 @@ tech-kg-api/
 │   │   ├── industry_chain_topn_event.py
 │   │   └── industry_chain_panorama.py
 │   ├── dao/                          # 数据访问层（查 MySQL、ES、图数据库）
+│   │   ├── base.py                   # 通用 SQLAlchemy CRUD 基类
 │   │   ├── scholar.py                # 专家/人才数据
 │   │   ├── paper.py                  # 论文数据
 │   │   ├── patent.py                 # 专利数据
@@ -85,7 +89,7 @@ tech-kg-api/
 │   │   │   └── report/               # 报告（2 表）
 │   │   └── specifications/           # 各数据域字段规范文档
 │   ├── infra/                        # 基础设施连接
-│   │   ├── mysql.py                  # MySQL 连接管理
+│   │   ├── mysql.py                  # MySQL engine/session 管理
 │   │   ├── redis.py                  # Redis 连接管理
 │   │   ├── graph_db.py               # TRSGraph 图数据库连接
 │   │   └── llm.py                    # 大模型服务连接
@@ -100,7 +104,6 @@ tech-kg-api/
 │   │   ├── init_db.py                # 数据库初始化
 │   │   └── sync_schema_from_mysql.py # 从远程 MySQL 同步 Schema
 │   ├── tests/                        # 测试
-│   ├── legacy/                       # 历史代码参考
 │   ├── .env.example                  # 环境变量模板
 │   ├── pyproject.toml                # Python 依赖
 │   ├── Dockerfile                    # 容器构建
@@ -368,6 +371,28 @@ infra/mysql.py | infra/graph_db.py         # 底层连接
 
 ---
 
+## 公共能力接口
+
+公共实体/关系/NLP 能力已放入 `backend/service/common/`，供九个业务模块复用。统一接口前缀：
+
+```text
+/api/v1/common-capabilities
+```
+
+| 能力 | 接口 |
+|------|------|
+| 能力元信息 | `GET /api/v1/common-capabilities/metadata` |
+| 实体抽取 | `POST /api/v1/common-capabilities/entity-extraction` |
+| 实体对齐 | `POST /api/v1/common-capabilities/entity-alignment` |
+| 实体消歧 | `POST /api/v1/common-capabilities/entity-disambiguation` |
+| 关系抽取 | `POST /api/v1/common-capabilities/relation-extraction` |
+| 批量关系抽取 | `POST /api/v1/common-capabilities/relation-extraction/batch` |
+| 关系抽取示例 | `GET /api/v1/common-capabilities/relation-extraction/examples` |
+
+当前只保留实体抽取、实体对齐、实体消歧、关系抽取等公共能力；旧图数据库 demo、旧 schema 说明和数据表说明不进入当前后端运行链路。
+
+---
+
 ## 各模块开发指引
 
 ### 每个模块需要改动的文件清单
@@ -534,8 +559,11 @@ export function inferAlumniRelation(params: Record<string, unknown>) {
 
 ## DAO 数据域对照
 
+数据库访问统一走 `dao/`，不要在业务 `service/` 中直接操作 ORM 或拼 SQL。`backend/infra/mysql.py` 负责 SQLAlchemy engine/session，`backend/dao/base.py` 提供通用 CRUD，`backend/dao/scholar.py` 是专家/人才 DAO 示例。
+
 | DAO 文件 | 数据域 | ORM 模型 | 适用模块 |
 |---------|--------|----------|---------|
+| `dao/base.py` | 通用能力 | `db_model/base.py` | 所有 DAO 的 CRUD 基类 |
 | `dao/scholar.py` | 专家/人才 | `db_model/scholar.py` (6表) | 所有专家类模块 |
 | `dao/paper.py` | 论文 | `db_model/chinese_paper.py` + `foreign_paper.py` | 论文合作 |
 | `dao/patent.py` | 专利 | `db_model/patent.py` (9表) | 合作成果 |
@@ -557,26 +585,73 @@ export function inferAlumniRelation(params: Record<string, unknown>) {
 
 ---
 
-## 连接信息
+## 环境和连接信息
+
+本仓库现在是 Python FastAPI 后端 + Vue 前端。旧 `tech-kg-engine` 仓库里的 Java/SpringBlade 说明只适合作为历史参考，不能直接照搬。
+
+### 实验室服务器 / Docker 开发环境
+
+最终服务会部署在实验室服务器上。数据厂商提供的 `gkx` 只有使用权限，不直接作为业务写入库；团队已经把厂商数据复制到实验室服务器 MySQL 的 `gkx_local`，后续开发和服务默认连接这份副本。
+
+| 组件 | 本机访问地址 | Compose 服务名 | 账号 | 密码/说明 |
+|------|--------------|----------------|------|----------|
+| MySQL 数据副本 | `127.0.0.1:3306/gkx_local` | `tdsql-mysql` | `root` | `123456789`，复制自厂商 `gkx` |
+| Redis | `127.0.0.1:6379`，DB 0 | `redis` | - | 无密码 |
+| Kafka | `127.0.0.1:9092` | `kafka` | - | Consumer Group `techkg` |
+| Milvus | `127.0.0.1:19530` | `milvus` | - | 向量库 |
+| MinIO | API `127.0.0.1:9000`，控制台 `127.0.0.1:9001` | `minio` | `minioadmin` | `minioadmin` |
+
+> 注意：宿主机上访问 MySQL 用 `127.0.0.1:3306`；API 容器内部访问同一个 MySQL 要用 Compose 服务名 `tdsql-mysql:3306`。
+> 如果服务器已经有名为 `mysql` 的容器并且其中已有 `gkx_local`，不要再启动 `tdsql-mysql`，避免 3306 端口冲突；只需要让后端连接现有 `127.0.0.1:3306/gkx_local`。
+
+### 远程数据源和服务器资源
+
+下面这些不是当前业务默认写入库，主要用于同步真实 Schema、读取源数据或连接其他服务器资源：
 
 | 组件 | 地址 | 账号 | 密码/说明 |
 |------|------|------|----------|
-| 源 MySQL | `183.240.141.251:3318/gkx` | `gkx_reader_zp` | `Zp_Use_Gkx_db@123456`，只读 |
-| 服务器 MySQL | `10.50.125.110:5306/trendAdmin` | `root` | `q123456Q.` |
-| 本地 MySQL | `127.0.0.1:3306/techkg` | `root` | `123456789` |
-| Redis | `10.50.125.110:8379`，DB 0 | - | `redisTrend1.` |
-| 本地 Redis | `127.0.0.1:6379`，DB 0 | - | 无密码 |
+| 厂商源 MySQL | `183.240.141.251:3318/gkx` | `gkx_reader_zp` | `Zp_Use_Gkx_db@123456`，只读/只使用，不直接写入 |
+| 服务器管理库 | `10.50.125.110:5306/trendAdmin` | `root` | `q123456Q.`，管理类业务库，不是厂商数据副本 |
+| Redis | `10.50.125.110:8379`，DB 0 | - | `redisTrend1.`，服务器 Redis |
 | MongoDB | `10.50.125.110:47017/test` | `root` | `x+s9zI&VA!s` |
 | ElasticSearch | `http://123.57.233.22:9200` | `elastic` | `*7A0#7i7@DzKD1pr` |
 | Nginx/GLM 网关 | `https://analysis_ckcest.aminer.cn/microtrend-api-beta/` | - | HTTP 网关 |
-| MinIO | `http://127.0.0.1:9000` | `minioadmin` | `minioadmin` |
-| Kafka | `127.0.0.1:9092` | - | Consumer Group `techkg` |
-| Milvus | `127.0.0.1:19530` | - | - |
-| TRSGraph | `127.0.0.1:9669` | `root` | `trsadmin` |
+| TRSGraph | `127.0.0.1:9669` | `root` | `trsadmin`，后端和 TRSGraph 同机时使用；否则改 `TRSGRAPH_HOST` |
+
+### 配置文件定位
+
+旧 Java 文档里有“配置文件定位”，是为了说明 Spring Boot 的 `application-*.yml` 和 Docker Compose 分别管什么。Python 版也需要这张表，避免把厂商源库 `gkx`、实验室副本 `gkx_local`、容器内服务名混在一起。
+
+| 文件 | 位置 | 用途 |
+|------|------|------|
+| 项目级 Docker 编排 | `docker-compose.yml` | 启动本地 MySQL/Redis/Kafka/Milvus/MinIO，也可启动 API 容器 |
+| 后端 Docker 镜像 | `backend/Dockerfile` | 构建 FastAPI 后端镜像 |
+| 后端环境变量 | `backend/.env` | 本机或服务器直接启动后端时读取的实际连接信息 |
+| 后端环境变量模板 | `backend/.env.example` | 新同学复制为 `.env` 后按环境修改 |
+| 后端开发配置 | `backend/config/config_dev.yml` | Python 后端 dev 环境默认值和环境变量占位 |
+| 后端测试/生产配置 | `backend/config/config_stage.yml`, `backend/config/config_product.yml` | stage/product 环境，敏感值必须从环境变量传入 |
+| 前端 Vite 配置 | `frontend/vite.config.ts` | `/api` 代理、开发服务器端口、构建选项 |
+
+### Docker 和代码部署的关系
+
+Docker 里的 MySQL/Redis/Kafka/Milvus 是基础设施。只改 Python/Vue 代码时，通常不需要重建数据库容器；重启后端/前端即可。数据库容器的数据保存在 Docker volume 里，重建 API 镜像不会清空 MySQL 数据；只有删除 volume 或重新初始化数据库才会影响已有数据。
+
+数据库内容能不能改，取决于你连的是哪个库：
+
+| 目标库 | 是否建议修改数据 | 说明 |
+|--------|------------------|------|
+| 实验室副本 MySQL `gkx_local` | 可以 | 当前业务默认库，复制自厂商 `gkx`，团队可在这里做开发和补充数据 |
+| 厂商源 MySQL `gkx` | 不建议，也通常没权限 | 数据厂商提供，只用于读取/同步，不直接写入 |
+| 服务器管理库 `trendAdmin` | 谨慎 | 共享管理库，只有明确需要时再改 |
+| 历史库 `techkg` | 视情况 | 旧 Java/早期实验库名，若服务器上仍有数据，先确认用途再迁移或停用 |
 
 ---
 
 ## 启动
+
+### 方式一：服务器已有 MySQL 副本
+
+如果实验室服务器已经有 `mysql` 容器，并且里面已经有 `gkx_local`，不要再启动 `tdsql-mysql`。这种情况下只启动后端和前端：
 
 ```bash
 # 后端
@@ -586,9 +661,50 @@ cp .env.example .env
 uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 # 前端
-cd frontend
+cd ../frontend
 pnpm install
 pnpm dev
+```
+
+### 方式二：从零启动 Docker 基础设施
+
+如果本机或服务器没有 MySQL/Redis/Kafka/Milvus，可以由项目 Compose 启动。首次初始化会执行 `backend/schemas/ddl/` 下的 DDL，目标库是 `gkx_local`：
+
+```bash
+# 在项目根目录
+docker compose up -d tdsql-mysql redis kafka milvus
+
+cd backend
+uv sync
+cp .env.example .env
+MYSQL_HOST=127.0.0.1 MYSQL_PORT=3306 MYSQL_DATABASE=gkx_local MYSQL_USERNAME=root MYSQL_PASSWORD=123456789 \
+  uv run python script/init_db.py
+
+uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+cd ../frontend
+pnpm install
+pnpm dev
+```
+
+### 方式三：Docker 启动后端 API 容器
+
+```bash
+# 在项目根目录；会构建并启动 api，同时拉起依赖服务
+docker compose up --build api
+```
+
+### 质量检查命令
+
+```bash
+# 后端
+cd backend
+uv run ruff check .
+uv run pytest tests -m "not external"
+
+# 前端
+cd ../frontend
+pnpm build
 ```
 
 | 服务 | 地址 |

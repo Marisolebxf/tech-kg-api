@@ -35,7 +35,9 @@ class ScholarDAO(BaseDAO[DwdScholar]):
         like_keyword = f"%{keyword}%"
         statement = (
             select(DwdScholar)
-            .where(or_(DwdScholar.name_zh.like(like_keyword), DwdScholar.name_en.like(like_keyword)))
+            .where(
+                or_(DwdScholar.name_zh.like(like_keyword), DwdScholar.name_en.like(like_keyword))
+            )
             .offset(offset)
             .limit(limit)
         )

@@ -37,10 +37,14 @@ class MySQLClient:
         self.port = port or _get_int_env("MYSQL_PORT", 3306)
         self.database = database or os.getenv("MYSQL_DATABASE", "gkx_local")
         self.username = username or os.getenv("MYSQL_USERNAME", "root")
-        self.password = password if password is not None else os.getenv("MYSQL_PASSWORD", "123456789")
+        self.password = (
+            password if password is not None else os.getenv("MYSQL_PASSWORD", "123456789")
+        )
         self.pool_size = pool_size or _get_int_env("MYSQL_POOL_SIZE", 10)
         self.max_overflow = max_overflow or _get_int_env("MYSQL_MAX_OVERFLOW", 20)
-        self.echo = echo if echo is not None else os.getenv("SQLALCHEMY_ECHO", "false").lower() == "true"
+        self.echo = (
+            echo if echo is not None else os.getenv("SQLALCHEMY_ECHO", "false").lower() == "true"
+        )
 
         self._engine: Engine | None = None
         self._session_factory: sessionmaker[Session] | None = None

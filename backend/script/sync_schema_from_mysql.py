@@ -76,8 +76,7 @@ def connect() -> pymysql.Connection:
     return pymysql.connect(
         host=os.getenv("SOURCE_MYSQL_HOST") or os.getenv("MYSQL_HOST", "183.240.141.251"),
         port=int(os.getenv("SOURCE_MYSQL_PORT") or os.getenv("MYSQL_PORT", "3318")),
-        user=os.getenv("SOURCE_MYSQL_USERNAME")
-        or os.getenv("MYSQL_USERNAME", "gkx_reader_zp"),
+        user=os.getenv("SOURCE_MYSQL_USERNAME") or os.getenv("MYSQL_USERNAME", "gkx_reader_zp"),
         password=os.getenv("SOURCE_MYSQL_PASSWORD") or os.getenv("MYSQL_PASSWORD", ""),
         database=source_database_name(),
         charset="utf8mb4",

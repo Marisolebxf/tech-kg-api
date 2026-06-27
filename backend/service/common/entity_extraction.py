@@ -37,6 +37,7 @@ def get_client():
         return None
     return _client
 
+
 # 实体类型定义
 ENTITY_TYPES = {
     "Scholar": "学者/人名",

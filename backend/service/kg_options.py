@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import select
 
 from db_model.organization import DwdOrgRegInfo
+from db_model.scholar import Scholar
 from infra.graph_db import get_techkg_client
 from infra.mysql import get_mysql_client
 from service.enterprise_relation_catalog import RELATION_TYPES, ROLE_CATALOG
@@ -24,12 +25,15 @@ CPC_CODES: list[str] = ["G06N", "G06F", "G06N3/04", "H04L9/00", "H01M10/0525", "
 
 
 def _scholars() -> list[dict[str, str]]:
+    """从 techkg `scholar` 表读真实学者（如 COOP-SCH001 陈建国）。"""
     out: list[dict[str, str]] = []
     try:
-        res = get_techkg_client().get_nodes_by_label("Scholar", limit=500)
-        for n in res.items:
-            p = n.properties or {}
-            out.append({"scholarId": str(n.id), "name": p.get("name_zh") or str(n.id)})
+        session = get_mysql_client().session()
+        try:
+            for r in session.execute(select(Scholar).limit(500)).scalars():
+                out.append({"scholarId": r.scholar_id, "name": r.name_zh or r.scholar_id})
+        finally:
+            session.close()
     except Exception as exc:  # noqa: BLE001
         logger.warning("load scholars failed: %s", exc)
     return out

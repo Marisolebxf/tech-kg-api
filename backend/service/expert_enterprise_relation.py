@@ -8,7 +8,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import select
+
+from db_model.scholar import Scholar
 from infra.graph_db import TRSGraphClient, get_techkg_client
+from infra.mysql import get_mysql_client
 from service.base_module import KGModuleScaffoldService
 from service.enterprise_relation_catalog import relation_label, validate_relation_types
 
@@ -50,6 +54,38 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
             return []
         return [e for e in edges if str(e.target_id) == str(enterprise_id)]
 
+    def _provision_scholar(self, graph: TRSGraphClient, scholar_id: str) -> Any:
+        """图库无该学者时，从 MySQL scholar 表查真实信息并创建图库节点。
+
+        图库节点 demo（E10001 等）不含真实姓名；真实学者在 techkg `scholar` 表
+        （如 COOP-SCH001 陈建国）。首次 build 真实学者时按需建点，使后续返回真实姓名。
+        """
+        session = get_mysql_client().session()
+        try:
+            s = session.execute(
+                select(Scholar).where(Scholar.scholar_id == scholar_id)
+            ).scalar_one_or_none()
+        finally:
+            session.close()
+        if s is None:
+            return None
+        try:
+            graph.create_node(
+                ["Scholar"],
+                {
+                    "scholar_id": s.scholar_id,
+                    "name_zh": s.name_zh or "",
+                    "name_en": s.name_en or "",
+                    "scholar_org_name_zh": s.org_name_zh or "",
+                    "h_index": int(s.h_index) if s.h_index is not None else 0,
+                    "citation_nums": int(s.citation_nums) if s.citation_nums is not None else 0,
+                    "paper_nums": int(s.paper_nums) if s.paper_nums is not None else 0,
+                },
+            )
+        except Exception:
+            return None
+        return graph.get_node(scholar_id)
+
     def build(self, payload: dict[str, Any]) -> dict[str, Any]:
         scholar_id = payload.get("scholarId", "")
         enterprise_id = payload.get("enterpriseId", "")
@@ -58,8 +94,10 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
 
         scholar = graph.get_node(scholar_id)
         if scholar is None:
+            scholar = self._provision_scholar(graph, scholar_id)
+        if scholar is None:
             raise KeyError(f"专家不存在: {scholar_id}")
-        scholar_name = scholar.properties.get("name_zh")
+        scholar_name = scholar.properties.get("name_zh") or scholar_id
 
         enterprise = graph.get_node(enterprise_id)
         if enterprise is None:

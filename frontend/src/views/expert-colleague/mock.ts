@@ -1,0 +1,135 @@
+import type {
+  ColleagueInferenceResult,
+  ColleagueRelation,
+  ExpertProfile,
+  RelationLink,
+  RelationNode,
+} from './types'
+
+export const expertProfile: ExpertProfile = {
+  id: 'expert-001',
+  name: '张明远',
+  title: '研究员 / 博士生导师',
+  organization: '中国科学院自动化研究所',
+  field: '人工智能、知识图谱、自然语言处理',
+  location: '北京',
+  paperCount: 186,
+  patentCount: 24,
+  colleagueCount: 42,
+}
+
+export const colleagues: ColleagueRelation[] = [
+  {
+    id: 'c-001',
+    name: '李若辰',
+    organization: '中国科学院自动化研究所',
+    department: '模式识别国家重点实验室',
+    relationType: '同机构同部门',
+    evidence: '共同任职、共同项目、论文合作',
+    cooperationYears: '2018-2025',
+    strength: 92,
+  },
+  {
+    id: 'c-002',
+    name: '王清禾',
+    organization: '清华大学',
+    department: '计算机科学与技术系',
+    relationType: '项目同事',
+    evidence: '国家重点研发计划项目成员',
+    cooperationYears: '2020-2024',
+    strength: 78,
+  },
+  {
+    id: 'c-003',
+    name: '赵予安',
+    organization: '北京智源人工智能研究院',
+    department: '知识计算中心',
+    relationType: '平台同事',
+    evidence: '联合实验室与平台聘任',
+    cooperationYears: '2021-2025',
+    strength: 71,
+  },
+  {
+    id: 'c-004',
+    name: '陈思源',
+    organization: '中国科学院大学',
+    department: '人工智能学院',
+    relationType: '导师团队',
+    evidence: '研究生培养、论文合作',
+    cooperationYears: '2019-2025',
+    strength: 66,
+  },
+]
+
+export const relationNodes: RelationNode[] = [
+  { id: 'center', name: '张明远', role: 'center' },
+  { id: 'org-cas', name: '中科院自动化所', role: 'organization' },
+  { id: 'org-tsinghua', name: '清华大学', role: 'organization' },
+  { id: 'c-001', name: '李若辰', role: 'colleague' },
+  { id: 'c-002', name: '王清禾', role: 'colleague' },
+  { id: 'c-003', name: '赵予安', role: 'colleague' },
+  { id: 'c-004', name: '陈思源', role: 'colleague' },
+]
+
+export const relationLinks: RelationLink[] = [
+  { source: 'center', target: 'c-001', label: '同机构' },
+  { source: 'center', target: 'c-002', label: '项目' },
+  { source: 'center', target: 'c-003', label: '平台' },
+  { source: 'center', target: 'c-004', label: '团队' },
+  { source: 'c-001', target: 'org-cas', label: '任职' },
+  { source: 'c-002', target: 'org-tsinghua', label: '任职' },
+]
+
+export const inferenceResult: ColleagueInferenceResult = {
+  featureName: '同事关系推理构建',
+  endpoint: '/api/v1/colleague/relation/infer',
+  method: 'POST',
+  lastTestTime: '2026-07-23 11:00:00',
+  expertA: {
+    id: 'E10001',
+    name: '张明远',
+    title: '研究员',
+  },
+  expertB: {
+    id: 'E10002',
+    name: '李佳宁',
+    title: '副研究员',
+  },
+  relationType: '同事关系',
+  organization: '中国科学院自动化研究所',
+  overlapPeriod: '2018.03 - 2022.12',
+  researchDirections: ['知识图谱', '机器学习'],
+  collaborations: {
+    paper: 4,
+    patent: 2,
+    project: 2,
+  },
+  requestParams: [
+    { field: 'dataSource', type: 'string', required: '是', description: '数据来源' },
+    { field: 'expertAId', type: 'string', required: '否', description: '专家A唯一标识' },
+    { field: 'expertBId', type: 'string', required: '否', description: '专家B唯一标识' },
+    { field: 'relationType', type: 'string', required: '否', description: '关系类型过滤，可选 colleague / alumni / coauthor' },
+    { field: 'startTime', type: 'string', required: '否', description: '时间范围起始值，格式 YYYY.MM' },
+    { field: 'endTime', type: 'string', required: '否', description: '时间范围结束值，格式 YYYY.MM' },
+    { field: 'organizationId', type: 'string', required: '否', description: '共同机构唯一标识' },
+    { field: 'departmentId', type: 'string', required: '否', description: '共同部门或团队唯一标识' },
+    { field: 'overlapThreshold', type: 'number', required: '否', description: '任职时间重叠阈值，单位月' },
+    { field: 'includeAchievements', type: 'boolean', required: '否', description: '是否返回论文、专利、项目等协作成果' },
+    { field: 'includeEvidence', type: 'boolean', required: '否', description: '是否返回命中证据明细' },
+    { field: 'limit', type: 'number', required: '否', description: '返回候选关系数量上限' },
+  ],
+  responseFields: [
+    { field: 'relationType', type: 'string', description: '同事关系类型（现同事 / 前同事 / 可能同事）' },
+    { field: 'organization', type: 'string', description: '共同任职机构名称' },
+    { field: 'overlapPeriod', type: 'object', description: '时间交集区间' },
+    { field: 'confidence', type: 'number', description: '关系推理置信度，0-100' },
+    { field: 'expertA', type: 'object', description: '专家A基础信息与任职信息' },
+    { field: 'expertB', type: 'object', description: '专家B基础信息与任职信息' },
+    { field: 'department', type: 'string', description: '共同部门或团队名称' },
+    { field: 'researchDirections', type: 'array', description: '共同研究方向列表' },
+    { field: 'collaboration', type: 'object', description: '协作成果统计，包括论文、专利、项目' },
+    { field: 'evidenceList', type: 'array', description: '命中证据列表及来源记录' },
+    { field: 'source', type: 'string', description: '主要证据来源' },
+    { field: 'status', type: 'string', description: '推理任务状态' },
+  ],
+}

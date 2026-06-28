@@ -90,3 +90,21 @@ class DwdScholarCoauthor(Base):
     status = Column(SmallInteger, comment="记录状态，0 表示无效，1 表示有效")
     create_time = Column(DateTime, comment="记录创建时间")
     update_time = Column(DateTime, comment="记录最后更新时间")
+
+
+class Scholar(Base):
+    """techkg 本地 scholar 表（真实业务学者，如 COOP-SCH001 陈建国）。"""
+
+    __tablename__ = "scholar"
+
+    scholar_id = Column(String(32), primary_key=True, comment="学者唯一标识")
+    name_zh = Column(String(128), comment="中文姓名")
+    name_en = Column(String(128), comment="英文姓名")
+    org_name_zh = Column(String(1024), comment="所属机构中文名称")
+    title = Column(String(64), comment="职称")
+    gender = Column(String(8), comment="性别")
+    research_direction = Column(Text, comment="研究方向")
+    paper_nums = Column(BigInteger, comment="论文数")
+    citation_nums = Column(BigInteger, comment="被引次数")
+    h_index = Column(BigInteger, comment="H 指数")
+    updated_at = Column(DateTime, comment="更新时间")

@@ -1,12 +1,10 @@
 """专家-企业关系构建 路由。"""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from application.expert_enterprise_relation import ExpertEnterpriseRelationApplication
-from biz.schemas.expert_enterprise_relation import (
-    ExpertEnterpriseBuildRequest,
-    ExpertEnterpriseBuildResponse,
-)
+from biz.schemas.common import ApiResponse
+from biz.schemas.expert_enterprise_relation import ExpertEnterpriseBuildRequest
 
 router = APIRouter(prefix="/kg-construction/expert-enterprise-relations")
 application = ExpertEnterpriseRelationApplication()
@@ -17,11 +15,10 @@ async def describe_expert_enterprise_relation() -> dict[str, object]:
     return application.describe()
 
 
-@router.post("/build", response_model=ExpertEnterpriseBuildResponse)
-async def build_expert_enterprise_relation(
-    req: ExpertEnterpriseBuildRequest,
-) -> ExpertEnterpriseBuildResponse:
+@router.post("/build", response_model=ApiResponse)
+async def build_expert_enterprise_relation(req: ExpertEnterpriseBuildRequest) -> ApiResponse:
     try:
-        return application.build(req.model_dump())
+        result = application.build(req.model_dump())
+        return ApiResponse(data=result)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return ApiResponse(code=404, success=False, msg=str(exc))

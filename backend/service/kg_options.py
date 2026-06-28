@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from db_model.domestic_organization import DwdOrgRegInfo
 from sqlalchemy import select
 
+from db_model.domestic_organization import DwdOrgRegInfo
 from db_model.scholar import Scholar
 from infra.graph_db import get_techkg_client
 from infra.mysql import get_mysql_client

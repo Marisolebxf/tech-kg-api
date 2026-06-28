@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from collections.abc import Sequence
 from typing import Any
 
@@ -38,6 +39,32 @@ from infra.graph_db.models import (
 )
 
 logger = logging.getLogger("infra.graph_db")
+
+# The trs-graph-service only treats these property keys as the Nebula vertex id
+# (see NodeService.extractVid / NgqlBuilder.extractOrGenerateVid). When none of
+# them is present the service generates a UUID vid internally but then *cannot
+# read the node back* (it looks up vid/id/name and finds nothing → 404). So the
+# client must guarantee one of these keys is set before calling the service.
+_VID_KEYS: tuple[str, ...] = ("vid", "id", "name")
+
+
+def _ensure_vid(props: dict[str, Any]) -> dict[str, Any]:
+    """Return props with a vid guaranteed.
+
+    If a vid/id/name key is already present, props is returned unchanged. If
+    props is non-empty but has no vid-key, the *first* property's value is
+    promoted to the vid (this matches the techkg convention where the natural
+    key — e.g. org_id / scholar_id — is also the vertex id). If props is empty,
+    a random uuid is generated.
+    """
+    if any(k in props for k in _VID_KEYS):
+        return props
+    if props:
+        first_value = next(iter(props.values()))
+        props["vid"] = str(first_value)
+    else:
+        props["vid"] = uuid.uuid4().hex
+    return props
 
 
 class TRSGraphClient:
@@ -134,6 +161,7 @@ class TRSGraphClient:
     # ==================================================================
 
     def create_node(self, labels: list[str], properties: dict[str, Any] | None = None) -> GraphNode:
+        properties = _ensure_vid(dict(properties) if properties else {})
         body = _build_node_create_body(labels, properties)
         resp = self._request("POST", "/api/v1/nodes", json=body)
         return _trs_node_to_model(resp.json())
@@ -144,6 +172,7 @@ class TRSGraphClient:
         identity_props: dict[str, Any],
         properties: dict[str, Any] | None = None,
     ) -> GraphNode:
+        identity_props = _ensure_vid(dict(identity_props) if identity_props else {})
         body = {
             "labels": labels if labels else ["Vertex"],
             "identityProps": identity_props,
@@ -170,7 +199,10 @@ class TRSGraphClient:
         data = resp.json()
         items = [_trs_node_to_model(n) for n in data.get("items", [])]
         return GraphPagedResult(
-            items=items, total=data.get("total", len(items)), limit=limit, offset=offset
+            items=items,
+            total=data.get("page", {}).get("total", len(items)),
+            limit=limit,
+            offset=offset,
         )
 
     def find_nodes(
@@ -191,7 +223,10 @@ class TRSGraphClient:
         data = resp.json()
         items = [_trs_node_to_model(n) for n in data.get("items", [])]
         return GraphPagedResult(
-            items=items, total=data.get("total", len(items)), limit=limit, offset=offset
+            items=items,
+            total=data.get("page", {}).get("total", len(items)),
+            limit=limit,
+            offset=offset,
         )
 
     def update_node(self, node_id: Any, properties: dict[str, Any]) -> GraphNode:
@@ -293,7 +328,10 @@ class TRSGraphClient:
         data = resp.json()
         items = [_trs_edge_to_model(e) for e in data.get("items", [])]
         return GraphPagedResult(
-            items=items, total=data.get("total", len(items)), limit=limit, offset=offset
+            items=items,
+            total=data.get("page", {}).get("total", len(items)),
+            limit=limit,
+            offset=offset,
         )
 
     def find_edges(
@@ -309,7 +347,10 @@ class TRSGraphClient:
         data = resp.json()
         items = [_trs_edge_to_model(e) for e in data.get("items", [])]
         return GraphPagedResult(
-            items=items, total=data.get("total", len(items)), limit=limit, offset=offset
+            items=items,
+            total=data.get("page", {}).get("total", len(items)),
+            limit=limit,
+            offset=offset,
         )
 
     def update_edge(
@@ -386,7 +427,7 @@ class TRSGraphClient:
             "maxDepth": max_depth,
         }
         if edge_type:
-            params["type"] = edge_type
+            params["edgeType"] = edge_type
         try:
             resp = self._request("GET", "/api/v1/traversal/path/shortest", params=params)
         except GraphNotFoundError:
@@ -441,7 +482,10 @@ class TRSGraphClient:
         items: Sequence[dict[str, Any]],
         labels: list[str],
     ) -> list[GraphNode]:
-        body = {"labels": labels if labels else ["Vertex"], "items": list(items)}
+        norm_items = []
+        for item in items:
+            norm_items.append(_ensure_vid(dict(item)))
+        body = {"labels": labels if labels else ["Vertex"], "items": norm_items}
         resp = self._request("POST", "/api/v1/nodes/batch", json=body)
         data = resp.json()
         if isinstance(data, list) and data and isinstance(data[0], dict):
@@ -555,7 +599,7 @@ class TRSGraphClient:
     def edge_count(self, edge_type: str | None = None) -> int:
         params: dict[str, Any] = {}
         if edge_type:
-            params["type"] = edge_type
+            params["edgeType"] = edge_type
         resp = self._request("GET", "/api/v1/schema/stats/edge-count", params=params)
         return resp.json().get("count", 0)
 

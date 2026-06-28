@@ -255,6 +255,47 @@ class TestNodeCrud:
         assert n.properties == {"name": "Alice"}
         repo.close()
 
+    def test_create_node_injects_vid_when_missing(self):
+        """Without a vid/id/name key the client must inject one so the service
+        can read the node back (otherwise the service 404s on its internal
+        read-back). The first property value is promoted to the vid, matching
+        the techkg natural-key-as-vid convention."""
+        seen = {}
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            seen["body"] = json.loads(request.content)
+            props = seen["body"]["properties"]
+            vid = props["vid"]
+            return httpx.Response(200, json={"id": vid, "labels": ["Org"], "properties": props})
+
+        repo = _make_repo(handler)
+        n = repo.create_node(["Org"], {"org_id": "ENT001", "name_cn": "Acme"})
+        # org_id value promoted to vid; org_id kept as a tag property
+        assert seen["body"]["properties"]["vid"] == "ENT001"
+        assert seen["body"]["properties"]["org_id"] == "ENT001"
+        assert n.id == "ENT001"
+        repo.close()
+
+    def test_merge_node_injects_vid_from_identity(self):
+        seen = {}
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            seen["body"] = json.loads(request.content)
+            vid = seen["body"]["identityProps"]["vid"]
+            return httpx.Response(
+                200, json={"id": vid, "labels": ["Scholar"], "properties": {"scholar_id": vid}}
+            )
+
+        repo = _make_repo(handler)
+        n = repo.merge_node(["Scholar"], {"scholar_id": "E10001"}, {"name_zh": "专家"})
+        assert seen["body"]["identityProps"]["vid"] == "E10001"
+        assert n.id == "E10001"
+        repo.close()
+
     def test_get_node_found(self):
         def handler(request):
             if request.url.path == "/health":
@@ -281,15 +322,39 @@ class TestNodeCrud:
                 return _health_ok(request)
             assert request.url.path == "/api/v1/nodes/label/Person"
             assert request.url.params["limit"] == "10"
+            # real trs-graph-service shape: total nested under "page"
             return httpx.Response(
                 200,
-                json={"items": [{"id": "1", "labels": ["Person"], "properties": {}}], "total": 1},
+                json={
+                    "items": [{"id": "1", "labels": ["Person"], "properties": {}}],
+                    "page": {"offset": 0, "limit": 10, "total": 1, "hasNext": False},
+                },
             )
 
         repo = _make_repo(handler)
         page = repo.get_nodes_by_label("Person", limit=10, offset=0)
         assert page.total == 1
         assert page.items[0].id == "1"
+        repo.close()
+
+    def test_get_nodes_by_label_total_exceeds_items(self):
+        """total must come from page.total, not fall back to len(items)."""
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            return httpx.Response(
+                200,
+                json={
+                    "items": [{"id": "1", "labels": ["Person"], "properties": {}}],
+                    "page": {"offset": 0, "limit": 1, "total": 200, "hasNext": True},
+                },
+            )
+
+        repo = _make_repo(handler)
+        page = repo.get_nodes_by_label("Person", limit=1)
+        assert page.total == 200
+        assert len(page.items) == 1
         repo.close()
 
     def test_find_nodes(self):
@@ -450,6 +515,32 @@ class TestTraversal:
 
         repo = _make_repo(handler)
         assert repo.shortest_path("1", "2") is None
+        repo.close()
+
+    def test_shortest_path_passes_edgeType_param(self):
+        """The traversal shortest-path endpoint expects ?edgeType= (not ?type=);
+        sending the wrong name silently ignores the edge-type filter."""
+
+        def handler(request):
+            if request.url.path == "/health":
+                return httpx.Response(200, json={"status": "UP"})
+            assert request.url.path == "/api/v1/traversal/path/shortest"
+            assert request.url.params["edgeType"] == "KNOWS"
+            assert "type" not in request.url.params
+            return httpx.Response(
+                200,
+                json={
+                    "nodes": [
+                        {"id": "1", "labels": ["P"], "properties": {}},
+                        {"id": "2", "labels": ["P"], "properties": {}},
+                    ],
+                    "edges": [],
+                },
+            )
+
+        repo = _make_repo(handler)
+        path = repo.shortest_path("1", "2", edge_type="KNOWS")
+        assert path is not None and len(path.nodes) == 2
         repo.close()
 
 
@@ -861,6 +952,22 @@ class TestDbInfo:
 
         repo = _make_repo(handler)
         assert repo.edge_count() == 7
+        repo.close()
+
+    def test_edge_count_passes_edgeType_param(self):
+        """The service's edge-count endpoint expects ?edgeType= (not ?type=);
+        sending the wrong name makes it count ALL edges in the space."""
+
+        def handler(request):
+            if request.url.path == "/health":
+                return httpx.Response(200, json={"status": "UP"})
+            assert request.url.path == "/api/v1/schema/stats/edge-count"
+            assert request.url.params["edgeType"] == "EMPLOYED_BY"
+            assert "type" not in request.url.params
+            return httpx.Response(200, json={"count": 5})
+
+        repo = _make_repo(handler)
+        assert repo.edge_count("EMPLOYED_BY") == 5
         repo.close()
 
     def test_labels(self):

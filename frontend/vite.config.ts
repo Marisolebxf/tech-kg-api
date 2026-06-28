@@ -11,7 +11,7 @@ export default defineConfig(({ mode }) => {
         '/api': {
           target: env.VITE_API_TARGET || 'http://localhost:8000',
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api/, ''),
+          // 本地后端路由挂在 /api/v1，保留 /api 前缀，不做 rewrite
         },
       },
     },

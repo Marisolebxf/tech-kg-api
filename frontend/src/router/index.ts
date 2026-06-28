@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+import EnterpriseRelationView from '../views/enterprise-relation/EnterpriseRelationView.vue'
 import ExpertColleagueView from '../views/expert-colleague/ExpertColleagueView.vue'
 import ReasoningPlaceholderView from '../views/reasoning-placeholder/ReasoningPlaceholderView.vue'
 
@@ -35,12 +36,6 @@ const placeholderRoutes = [
     endpoint: '/api/v1/paper/cooperation/relation/infer',
   },
   {
-    path: '/enterprise-relation',
-    name: 'enterprise-relation',
-    title: '重点科技企业关系',
-    endpoint: '/api/v1/enterprise/relation/infer',
-  },
-  {
     path: '/industry-chain-event',
     name: 'industry-chain-event',
     title: '产业链点事件关系',
@@ -67,6 +62,14 @@ export const router = createRouter({
       component: ExpertColleagueView,
       meta: {
         title: '科技专家同事关系',
+      },
+    },
+    {
+      path: '/enterprise-relation',
+      name: 'enterprise-relation',
+      component: EnterpriseRelationView,
+      meta: {
+        title: '重点科技企业关系',
       },
     },
     ...placeholderRoutes.map((route) => ({

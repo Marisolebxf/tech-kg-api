@@ -2,7 +2,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-
 DataSource = Literal["all", "knowledge_graph", "cnki", "wanfang", "web_of_science"]
 
 

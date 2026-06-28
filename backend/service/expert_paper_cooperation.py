@@ -11,7 +11,6 @@ import pymysql
 from biz.schema.expert_paper_cooperation import ExpertPaperCooperationDemoRequest
 from service.base_module import KGModuleScaffoldService
 
-
 TOPIC_ALIAS_MAP = {
     "academic graph": "学术图谱",
     "scholarly graph": "学术图谱",

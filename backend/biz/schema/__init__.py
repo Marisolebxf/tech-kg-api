@@ -4,3 +4,10 @@ from .expert_paper_cooperation import (
     ExpertPaperCooperationGraphViewResponse,
     ExpertPaperCooperationStructuredResultOnlyResponse,
 )
+
+__all__ = [
+    "ExpertPaperCooperationDemoRequest",
+    "ExpertPaperCooperationDemoResponse",
+    "ExpertPaperCooperationGraphViewResponse",
+    "ExpertPaperCooperationStructuredResultOnlyResponse",
+]

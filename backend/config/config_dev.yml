@@ -11,17 +11,36 @@ server:
 mysql:
   host: ${MYSQL_HOST:127.0.0.1}
   port: ${MYSQL_PORT:3306}
-  database: ${MYSQL_DATABASE:techkg}
+  database: ${MYSQL_DATABASE:gkx_local}
   username: ${MYSQL_USERNAME:root}
   password: ${MYSQL_PASSWORD:123456789}
   pool_size: 10
   max_overflow: 20
 
 redis:
-  host: ${REDIS_HOST:127.0.0.1}
-  port: ${REDIS_PORT:6379}
-  password: ${REDIS_PASSWORD:}
+  host: ${REDIS_HOST:10.50.125.110}
+  port: ${REDIS_PORT:8379}
+  password: ${REDIS_PASSWORD:redisTrend1.}
   database: ${REDIS_DATABASE:0}
+
+server_mysql:
+  host: ${SERVER_MYSQL_HOST:10.50.125.110}
+  port: ${SERVER_MYSQL_PORT:5306}
+  database: ${SERVER_MYSQL_DATABASE:trendAdmin}
+  username: ${SERVER_MYSQL_USERNAME:root}
+  password: ${SERVER_MYSQL_PASSWORD:q123456Q.}
+
+mongo:
+  uri: "${MONGO_URI:mongodb://root:x+s9zI&VA!s@10.50.125.110:47017}"
+  database: ${MONGO_DATABASE:test}
+
+elasticsearch:
+  url: ${ELASTICSEARCH_URL:http://123.57.233.22:9200}
+  username: ${ELASTICSEARCH_USERNAME:elastic}
+  password: "${ELASTICSEARCH_PASSWORD:*7A0#7i7@DzKD1pr}"
+
+nginx:
+  gateway_url: ${NGINX_GATEWAY_URL:https://analysis_ckcest.aminer.cn/microtrend-api-beta/}
 
 graph_db:
   backend: ${GRAPH_DB_BACKEND:trsgraph}

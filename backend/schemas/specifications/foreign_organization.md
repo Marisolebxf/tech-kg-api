@@ -1,160 +1,150 @@
-# 国外机构数据表规范
+# 国外机构字段规范
 
-本规范依据第三方最新《要素库设计方案》生成，覆盖 8 张表和 76 个字段。
+来源数据库：`gkx`
+生成日期：`2026-06-25`
 
-## 建模约定
+| 表名 | 表注释 | 估算行数 | 字段数 |
+|---|---|---:|---:|
+| `dwd_forg_agg_identifier` | 国外企业代码表 | 3232 | 6 |
+| `dwd_forg_base_info` | 国外企业基本信息表 | 1000 | 13 |
+| `dwd_forg_beneficiary_info` | 国外企业受益人表 | 5865 | 7 |
+| `dwd_forg_contact` | 国外企业联系方式表 | 999 | 5 |
+| `dwd_forg_executive_info` | 国外企业高管表 | 4731 | 8 |
+| `dwd_forg_industry` | 国外企业行业分类表 | 7674 | 5 |
+| `dwd_forg_investment` | 国外企业子公司情况表 | 12523 | 5 |
+| `dwd_forg_profile` | 国外企业简介表 | 934 | 3 |
+| `dwd_forg_shareholder` | 国外企业股东表 | 20670 | 6 |
+| `dwd_forg_ultimate_control` | 国外企业实控人表 | 1027 | 5 |
 
-1. 表名、字段名、字段长度和字段顺序保持第三方规范。
-2. “是否有空值”为“否”的字段使用 `NOT NULL`。
-3. 本次规范没有字段标记为索引，也没有主键列，因此不擅自添加索引、主键或唯一约束。
-4. 数据类型或字符长度缺失的字段暂用 `TEXT`，待第三方确认后调整。
-5. 本阶段不生成示范数据。
+## `dwd_forg_agg_identifier`
 
-## 类型映射
+表注释：国外企业代码表
 
-| 第三方类型 | MySQL 类型 |
-|---|---|
-| 字符且有长度 | `VARCHAR(n)` |
-| 字符但无长度 | `TEXT` |
-| 文本 | `TEXT` |
-| 数值 `20` | `BIGINT` |
-| 数值 `20,2` | `DECIMAL(20,2)` |
-| 日期 | `DATE` |
-| 类型缺失 | `TEXT`（待确认） |
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `ename_en` | `varchar(500)` | YES |  |  |  | 企业英文名称 |
+| 2 | `code_category` | `varchar(100)` | YES |  |  |  | 代码大类 |
+| 3 | `code_subcategory` | `varchar(100)` | YES |  |  |  | 代码小类 |
+| 4 | `code_cn_name` | `varchar(255)` | YES |  |  |  | 代码中文名称 |
+| 5 | `code_name` | `varchar(255)` | YES |  |  |  | 代码名称 |
+| 6 | `code_value` | `varchar(255)` | YES |  |  |  | 代码值 |
 
-## 待确认字段
+## `dwd_forg_base_info`
 
-- `dwd_forg_base_info.company_type`：第三方未提供数据类型和长度，当前使用 `TEXT`。
-- `dwd_forg_base_info.registration_org`：第三方未提供数据类型和长度，当前使用 `TEXT`。
-- `dwd_forg_base_info.external_id`：类型为字符但未提供长度，当前使用 `TEXT`。
-- `dwd_forg_base_info.postal_code`：类型为字符但未提供长度，当前使用 `TEXT`。
-- `dwd_forg_act_contro_info.path`：类型为字符但未提供长度，当前使用 `TEXT`。
+表注释：国外企业基本信息表
 
-## 表目录
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `ename_en` | `varchar(500)` | YES |  |  |  | 企业英文名称 |
+| 2 | `ename_local` | `varchar(500)` | YES |  |  |  | 企业名称（本地语种） |
+| 3 | `ename_pv` | `varchar(500)` | YES |  |  |  | 曾用名 |
+| 4 | `ipo_status` | `varchar(50)` | YES |  |  |  | 企业状态 |
+| 5 | `employees_num` | `varchar(255)` | YES |  |  |  | 员工人数 |
+| 6 | `start_year` | `varchar(50)` | YES |  |  |  | 成立年份 |
+| 7 | `start_date` | `varchar(50)` | YES |  |  |  | 成立日期 |
+| 8 | `address` | `varchar(255)` | YES |  |  |  | 国家或地区 |
+| 9 | `reg_city` | `varchar(255)` | YES |  |  |  | 城市 |
+| 10 | `address1` | `varchar(255)` | YES |  |  |  | 地址第1行 |
+| 11 | `address2` | `varchar(255)` | YES |  |  |  | 地址第2行 |
+| 12 | `address3` | `varchar(255)` | YES |  |  |  | 地址第3行 |
+| 13 | `address4` | `varchar(255)` | YES |  |  |  | 地址第4行 |
 
-| 序号 | 中文表名 | 英文表名 | 字段数 |
-|---:|---|---|---:|
-| 1 | 海外机构基本信息 | `dwd_forg_base_info` | 20 |
-| 2 | 海外机构股东股权关联信息 | `dwd_forg_shareholder_info` | 5 |
-| 3 | 海外机构子公司股权关联信息 | `dwd_forg_subsidiary_info` | 6 |
-| 4 | 海外机构高管信息 | `dwd_forg_executive_info` | 6 |
-| 5 | 海外机构公司经营信息 | `dwd_forg_product_info` | 3 |
-| 6 | 海外机构受益人信息（新增表） | `dwd_forg_beneficiary_info` | 10 |
-| 7 | 海外机构实控人信息（新增表） | `dwd_forg_act_contro_info` | 11 |
-| 8 | 海外上市企业财务信息 | `dwd_forg_stock_fin_info` | 15 |
+## `dwd_forg_beneficiary_info`
 
-## 1. 海外机构基本信息 `dwd_forg_base_info`
+表注释：国外企业受益人表
 
-| 中文字段 | 英文字段 | 数据类型 | 长度/精度 | 可空 | 索引 | 字段描述 | 数据样例 | 备注 |
-|---|---|---|---|---|---|---|---|---|
-| 机构id | `org_id` | 字符 | 255 | 否 | - | - | - | - |
-| 机构名称 | `name_en` | 字符 | 255 | 否 | - | - | - | - |
-| 机构本地名称 | `name_alias` | 字符 | 255 | 是 | - | - | - | 当地语种企业名称 |
-| 国家代码 | `country_code` | 字符 | 255 | 是 | - | - | - | - |
-| 国家 | `country` | 字符 | 255 | 是 | - | - | - | - |
-| 当地官方唯一注册码 | `external_id` | 字符 | - | 是 | - | - | - | - |
-| 所在城市 | `city` | 字符 | 255 | 是 | - | - | - | - |
-| 公司地址 | `address` | 文本 | 5000 | 是 | - | - | - | - |
-| 邮政编码（无数据） | `postal_code` | 字符 | - | 是 | - | - | - | - |
-| 联系电话 | `phone` | 字符 | 255 | 是 | - | - | - | - |
-| 电子邮箱 | `email` | 字符 | 255 | 是 | - | - | - | - |
-| 企业类型 | `company_type` | 缺失 | - | 是 | - | - | - | - |
-| 注册机构（无数据） | `registration_org` | 缺失 | - | 是 | - | - | - | - |
-| 成立年份 | `incorporation_year` | 数值 | 20 | 是 | - | - | - | - |
-| 成立日期/注册日期/核准日期 | `incorporation_date` | 日期 | 0 | 是 | - | - | - | - |
-| 上市状态 | `listing_status` | 字符 | 255 | 是 | - | - | - | - |
-| 注册资本 | `registered_capital_value` | 数值 | 20 | 是 | - | - | - | - |
-| 注册资本货币代码 | `registered_capital_currency_code` | 字符 | 255 | 是 | - | - | - | - |
-| 公司行业分类 | `industry_class` | 字符 | 255 | 是 | - | - | - | - |
-| 行业分类标准（新增字段） | `industry_type` | 字符 | 255 | 是 | - | - | - | - |
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `ename_en` | `varchar(500)` | YES |  |  |  | 企业英文名称 |
+| 2 | `bo_name` | `varchar(500)` | YES |  |  |  | 受益人名称 |
+| 3 | `bo_gender` | `varchar(255)` | YES |  |  |  | 受益人性别 |
+| 4 | `bo_birthdate` | `varchar(255)` | YES |  |  |  | 受益人出生日期 |
+| 5 | `bo_country_code` | `varchar(255)` | YES |  |  |  | 受益人所在国家代码 |
+| 6 | `bo_manager` | `varchar(255)` | YES |  |  |  | 受益人是否同时是管理层 |
+| 7 | `path` | `text` | YES |  |  |  | 路径 |
 
-## 2. 海外机构股东股权关联信息 `dwd_forg_shareholder_info`
+## `dwd_forg_contact`
 
-| 中文字段 | 英文字段 | 数据类型 | 长度/精度 | 可空 | 索引 | 字段描述 | 数据样例 | 备注 |
-|---|---|---|---|---|---|---|---|---|
-| 机构id | `org_id` | 字符 | 255 | 否 | - | - | - | - |
-| 股东名称 | `owners_name` | 字符 | 255 | 是 | - | - | - | - |
-| 股权占比(%) | `ownership_percentage` | 数值 | 20,2 | 是 | - | - | - | - |
-| 股东所在国家代码 | `owners_country_code` | 字符 | 255 | 是 | - | - | - | - |
-| 股东所在国家 | `owners_country` | 字符 | 255 | 是 | - | - | - | - |
+表注释：国外企业联系方式表
 
-## 3. 海外机构子公司股权关联信息 `dwd_forg_subsidiary_info`
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `ename_en` | `varchar(500)` | YES |  |  |  | 企业英文名称 |
+| 2 | `phone` | `varchar(255)` | YES |  |  |  | 电话 |
+| 3 | `domain` | `varchar(255)` | YES |  |  |  | 域名 |
+| 4 | `website` | `varchar(255)` | YES |  |  |  | 网址 |
+| 5 | `email` | `varchar(255)` | YES |  |  |  | 邮箱 |
 
-| 中文字段 | 英文字段 | 数据类型 | 长度/精度 | 可空 | 索引 | 字段描述 | 数据样例 | 备注 |
-|---|---|---|---|---|---|---|---|---|
-| 机构id | `org_id` | 字符 | 255 | 否 | - | - | - | - |
-| 子公司id | `affiliate` | 字符 | 255 | 是 | - | - | - | - |
-| 子公司名称 | `affiliates_name` | 字符 | 255 | 是 | - | - | - | - |
-| 子公司国家代码 | `affiliates_country_code` | 字符 | 255 | 是 | - | - | - | - |
-| 子公司国家 | `affiliates_country` | 字符 | 255 | 是 | - | - | - | - |
-| 子公司唯一注册码 | `affiliates_company_id` | 字符 | 255 | 是 | - | - | - | - |
+## `dwd_forg_executive_info`
 
-## 4. 海外机构高管信息 `dwd_forg_executive_info`
+表注释：国外企业高管表
 
-| 中文字段 | 英文字段 | 数据类型 | 长度/精度 | 可空 | 索引 | 字段描述 | 数据样例 | 备注 |
-|---|---|---|---|---|---|---|---|---|
-| 机构id | `org_id` | 字符 | 255 | 否 | - | - | - | - |
-| 高管姓名 | `executives_name` | 字符 | 255 | 是 | - | - | - | - |
-| 职位名称 | `executives_position` | 字符 | 255 | 是 | - | - | - | - |
-| 高管出生日期(新增字段) | `dm_birthdate` | 日期 | - | 是 | - | - | - | - |
-| 高管国籍(新增字段) | `dm_nationalities` | 字符 | 255 | 是 | - | - | - | - |
-| 高管履历(新增字段) | `dm_biography` | 字符 | 255 | 是 | - | - | - | - |
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `ename_en` | `varchar(500)` | YES |  |  |  | 企业英文名称 |
+| 2 | `executives_name` | `varchar(500)` | YES |  |  |  | 高管名称 |
+| 3 | `dm_age` | `varchar(200)` | YES |  |  |  | 高管年龄 |
+| 4 | `dm_sex` | `varchar(500)` | YES |  |  |  | 高管性别 |
+| 5 | `executives_position` | `varchar(500)` | YES |  |  |  | 高管职位 |
+| 6 | `dm_birthdate` | `varchar(500)` | YES |  |  |  | 高管出生日期 |
+| 7 | `dm_nationalities` | `varchar(500)` | YES |  |  |  | 高管国籍 |
+| 8 | `dm_biography` | `text` | YES |  |  |  | 高管履历 |
 
-## 5. 海外机构公司经营信息 `dwd_forg_product_info`
+## `dwd_forg_industry`
 
-| 中文字段 | 英文字段 | 数据类型 | 长度/精度 | 可空 | 索引 | 字段描述 | 数据样例 | 备注 |
-|---|---|---|---|---|---|---|---|---|
-| 机构id | `org_id` | 字符 | 255 | 否 | - | - | - | - |
-| 业务描述 | `description` | 字符 | 255 | 是 | - | - | - | - |
-| 主要产品 | `main_products` | 字符 | 255 | 是 | - | - | - | - |
+表注释：国外企业行业分类表
 
-## 6. 海外机构受益人信息（新增表） `dwd_forg_beneficiary_info`
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `ename_en` | `varchar(500)` | YES |  |  |  | 企业英文名称 |
+| 2 | `industry_type` | `varchar(255)` | YES |  |  |  | 行业分类标准 |
+| 3 | `industry_level` | `varchar(255)` | YES |  |  |  | 行业分类层级 |
+| 4 | `industry_code` | `varchar(255)` | YES |  |  |  | 行业代码 |
+| 5 | `industry_label_cn` | `varchar(500)` | YES |  |  |  | 行业描述 |
 
-| 中文字段 | 英文字段 | 数据类型 | 长度/精度 | 可空 | 索引 | 字段描述 | 数据样例 | 备注 |
-|---|---|---|---|---|---|---|---|---|
-| 机构id | `org_id` | 字符 | 255 | 否 | - | - | - | - |
-| 受益人名称 | `bo_name` | 字符 | 255 | 是 | - | - | - | - |
-| 受益人性别 | `bo_gender` | 字符 | 255 | 是 | - | - | - | - |
-| 受益人出生日期 | `bo_birthdate` | 日期 | - | 是 | - | - | - | - |
-| 受益人所在国家代码 | `bo_country_code` | 字符 | 255 | 是 | - | - | - | - |
-| 受益人关系路径 | `path` | 字符 | 255 | 是 | - | - | - | - |
-| 受益人是否同时是管理层 | `bo_manager` | 字符 | 255 | 是 | - | - | - | - |
-| 总持股比例 | `total_percent` | 数值 | 20,2 | 是 | - | - | - | - |
-| 直接持股比例 | `direct_percent` | 数值 | 20,2 | 是 | - | - | - | - |
-| 间接持股比例 | `indirect_percent` | 数值 | 20,2 | 是 | - | - | - | - |
+## `dwd_forg_investment`
 
-## 7. 海外机构实控人信息（新增表） `dwd_forg_act_contro_info`
+表注释：国外企业子公司情况表
 
-| 中文字段 | 英文字段 | 数据类型 | 长度/精度 | 可空 | 索引 | 字段描述 | 数据样例 | 备注 |
-|---|---|---|---|---|---|---|---|---|
-| 机构id | `org_id` | 字符 | 255 | 否 | - | - | - | - |
-| 企业国家代码 | `country_code` | 字符 | 255 | 是 | - | - | - | - |
-| 实控人ID | `entity_eid` | 字符 | 255 | 是 | - | - | - | - |
-| 实控人名称 | `entity_name` | 字符 | 255 | 是 | - | - | - | - |
-| 实控人类型 | `entity_type` | 字符 | 255 | 是 | - | - | - | - |
-| 实控人国家代码 | `entity_country_code` | 字符 | 255 | 是 | - | - | - | - |
-| 直接持股比例 | `direct_pct` | 字符 | 255 | 是 | - | - | - | - |
-| 总持股比例 | `total_pct` | 字符 | 255 | 是 | - | - | - | - |
-| 直接持股比例数值 | `direct_pct_num` | 数值 | 20,2 | 是 | - | - | - | - |
-| 总持股比例数值 | `total_pct_num` | 数值 | 20,2 | 是 | - | - | - | - |
-| 路径 | `path` | 字符 | - | 是 | - | - | - | - |
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `ename_en` | `varchar(500)` | YES |  |  |  | 企业英文名称 |
+| 2 | `invested_name` | `varchar(500)` | YES |  |  |  | 子公司名称 |
+| 3 | `invested_eid` | `varchar(32)` | YES |  |  |  | 子公司国家代码 |
+| 4 | `direct_pct` | `varchar(255)` | YES |  |  |  | 直接持股比例（%） |
+| 5 | `total_pct` | `varchar(255)` | YES |  |  |  | 总持股比例（%） |
 
-## 8. 海外上市企业财务信息 `dwd_forg_stock_fin_info`
+## `dwd_forg_profile`
 
-| 中文字段 | 英文字段 | 数据类型 | 长度/精度 | 可空 | 索引 | 字段描述 | 数据样例 | 备注 |
-|---|---|---|---|---|---|---|---|---|
-| 机构id | `org_id` | 字符 | 255 | 否 | - | - | - | - |
-| 报告期 | `occur_period` | 日期 | - | 是 | - | - | - | - |
-| 资产总额 | `total_assets` | 数值 | 20,2 | 是 | - | - | - | - |
-| 固定资产总额 | `fixed_assets` | 数值 | 20,2 | 是 | - | - | - | - |
-| 负债总额 | `total_liabilities` | 数值 | 20,2 | 是 | - | - | - | - |
-| 营业收入 | `operating_revenue` | 数值 | 20,2 | 是 | - | - | - | - |
-| 主营业务收入 | `main_business_revenue` | 数值 | 20,2 | 是 | - | - | - | 商品及服务收入 |
-| 利润总额 | `total_profit` | 数值 | 20,2 | 是 | - | - | - | 税前利润 |
-| 净利润 | `pure_profit` | 数值 | 20,2 | 是 | - | - | - | 税后净利润 |
-| 企业所得税 | `total_tax_paid` | 数值 | 20,2 | 是 | - | - | - | 所得税 |
-| 经营活动现金流 | `oper_cash_flow` | 数值 | 20,2 | 是 | - | - | - | 经营活动产生的现金流量净额 |
-| 所有者权益合计 | `owners_equity` | 数值 | 20,2 | 是 | - | - | - | 股东权益合计 |
-| 从业人数 | `employees_number` | 数值 | 20,2 | 是 | - | - | - | 员工人数 |
-| 研发投入金额 | `research_development_amount` | 数值 | 20,2 | 是 | - | - | - | 研发费用一费用化及资本化一合计一补充披露 |
-| 研发人员数（无数据） | `research_development_employees_number` | 数值 | 20,2 | 是 | - | - | - | - |
+表注释：国外企业简介表
+
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `ename_en` | `varchar(1000)` | YES |  |  |  | 企业英文名称 |
+| 2 | `business_desc` | `varchar(2000)` | YES |  |  |  | 业务简介 |
+| 3 | `products_services` | `varchar(2000)` | YES |  |  |  | 主要产品与服务 |
+
+## `dwd_forg_shareholder`
+
+表注释：国外企业股东表
+
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `ename_en` | `varchar(500)` | YES |  |  |  | 企业英文名称 |
+| 2 | `sh_name` | `varchar(255)` | YES |  |  |  | 股东名称 |
+| 3 | `sh_entity_type` | `varchar(255)` | YES |  |  |  | 股东类型 |
+| 4 | `sh_country_code` | `varchar(255)` | YES |  |  |  | 股东所在国家代码 |
+| 5 | `sh_direct_pct` | `varchar(50)` | YES |  |  |  | 股东直接持股比例（%） |
+| 6 | `sh_total_pct` | `varchar(50)` | YES |  |  |  | 股东总持股比例（%） |
+
+## `dwd_forg_ultimate_control`
+
+表注释：国外企业实控人表
+
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `ename_en` | `varchar(500)` | YES |  |  |  | 企业英文名称 |
+| 2 | `entity_name` | `varchar(255)` | YES |  |  |  | 实控人名称 |
+| 3 | `entity_country_code` | `varchar(32)` | YES |  |  |  | 实控人国家代码 |
+| 4 | `direct_pct` | `varchar(255)` | YES |  |  |  | 实控人直接持股比例（%） |
+| 5 | `total_pct` | `varchar(255)` | YES |  |  |  | 实控人总持股比例（%） |

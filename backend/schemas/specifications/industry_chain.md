@@ -1,99 +1,107 @@
-# 产业链数据表规范
+# 产业链字段规范
 
-本规范依据第三方最新《要素库设计方案》整理，共 4 张表、46 个字段。
+来源数据库：`gkx`
+生成日期：`2026-06-25`
 
-## 重要说明
+| 表名 | 表注释 | 估算行数 | 字段数 |
+|---|---|---:|---:|
+| `dwd_industry_chain_info` | 产业链图谱 | 180 | 16 |
+| `dwd_industry_chain_news_info` | 产业动态资讯 | 461 | 10 |
+| `dwd_org_industry_chain_dtl` | 产业关联企业信息 | 2888 | 10 |
+| `dwd_org_industry_chain_pat_dtl` | 产业链关联专利信息 | 888 | 14 |
+| `dwd_org_industry_chain_prod_dtl` | 产业链企业关联产品信息 | 6080 | 10 |
 
-附件表头中的“中文表名”和“英文表名”与数据内容相反：
-`dwd_*` 值实际为英文表名，“产业链图谱”等值实际为中文表名。本规范按数据实际含义纠正。
+## `dwd_industry_chain_info`
 
-## 建模约定
+表注释：产业链图谱
 
-1. 字段英文名、字段顺序、类型、长度、可空性和索引要求采用附件规范。
-2. “是否为空”为“否”的字段使用 `NOT NULL`；该列为空时按允许为空处理。
-3. “是否索引”为“是”的字段建立普通索引；该列为空时不建立索引。
-4. 附件未提供主键、唯一键或外键定义，因此不擅自添加相关约束。
-5. `数值(20)` 映射为 `BIGINT`，`数值(20,2)` 映射为 `DECIMAL(20,2)`。
-6. `parent_name` 未提供数据类型和长度，当前暂用 `TEXT`。
-7. 本阶段不生成示范数据。
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `chain_code` | `varchar(255)` | YES |  |  |  | 产业链代码 |
+| 2 | `chain_name` | `varchar(255)` | YES |  |  |  | 产业链名称 |
+| 3 | `node_id` | `varchar(255)` | YES |  |  |  | 节点代码 |
+| 4 | `node_name` | `varchar(255)` | YES |  |  |  | 节点名称 |
+| 5 | `node_type` | `int` | YES |  |  |  | 节点类型 |
+| 6 | `level` | `int` | YES |  |  |  | 节点层级 |
+| 7 | `node_seq` | `int` | YES |  |  |  | 节点序号 |
+| 8 | `parent_id` | `varchar(255)` | YES |  |  |  | 父级节点代码 |
+| 9 | `parent_name` | `varchar(255)` | YES |  |  |  | 父级节点名称 |
+| 10 | `node_imp_level` | `int` | YES |  |  |  | 节点重要性等级 |
+| 11 | `downstream_lin` | `varchar(255)` | YES |  |  |  | 下游节点代码 |
+| 12 | `node_stage` | `int` | YES |  |  |  | 节点环节 |
+| 13 | `node_path` | `text` | YES |  |  |  | 节点路径 |
+| 14 | `data_source` | `varchar(255)` | YES |  |  |  | 数据来源 |
+| 15 | `created_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED | 创建时间 |
+| 16 | `updated_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED on update CURRENT_TIMESTAMP | 更新时间 |
 
-## 待确认项
+## `dwd_industry_chain_news_info`
 
-- `dwd_industry_chain_info.parent_name`：附件缺少数据类型、长度、可空性和索引定义。
-- `dwd_industry_chain_news_info.relaese_date`：附件英文名疑似将 `release_date` 拼写为 `relaese_date`，DDL 暂按附件原名保留。
-- 多个字段的“是否为空”或“是否索引”为空，当前按可空、不建索引处理。
+表注释：产业动态资讯
 
-## 表目录
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `chain_code` | `varchar(255)` | YES |  |  |  | 产业链代码 |
+| 2 | `chain_name` | `varchar(255)` | YES |  |  |  | 产业链名称 |
+| 3 | `news_id` | `varchar(255)` | YES |  |  |  | 资讯id |
+| 4 | `title` | `varchar(255)` | YES |  |  |  | 标题 |
+| 5 | `relaese_date` | `date` | YES |  |  |  | 发布时间 |
+| 6 | `summary` | `text` | YES |  |  |  | 摘要 |
+| 7 | `source` | `varchar(255)` | YES |  |  |  | 来源 |
+| 8 | `data_source` | `varchar(255)` | YES |  |  |  | 数据来源 |
+| 9 | `created_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED | 创建时间 |
+| 10 | `updated_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED on update CURRENT_TIMESTAMP | 更新时间 |
 
-| 序号 | 中文表名 | 英文表名 | 字段数 |
-|---:|---|---|---:|
-| 1 | 产业链图谱 | `dwd_industry_chain_info` | 16 |
-| 2 | 产业关联企业信息 | `dwd_org_industry_chain_dtl` | 10 |
-| 3 | 产业链企业关联产品信息 | `dwd_org_industry_chain_prod_dtl` | 10 |
-| 4 | 产业动态资讯 | `dwd_industry_chain_news_info` | 10 |
+## `dwd_org_industry_chain_dtl`
 
-## 1. 产业链图谱 `dwd_industry_chain_info`
+表注释：产业关联企业信息
 
-| 中文字段 | 英文字段 | 原始类型 | 长度/精度 | SQL 类型 | 可空 | 索引 | 描述 | 样例 | 值域 |
-|---|---|---|---|---|---|---|---|---|---|
-| 产业链代码 | `chain_code` | 字符 | 255 | `VARCHAR(255)` | 否 | 是 | 产业链唯一id，用于关联其它表。 | - | - |
-| 产业链名称 | `chain_name` | 字符 | 255 | `VARCHAR(255)` | 否 | 否 | - | - | - |
-| 节点代码 | `node_id` | 字符 | 255 | `VARCHAR(255)` | 否 | 是 | 产业链节点唯一id，用于关联其它表。 | - | - |
-| 节点名称 | `node_name` | 字符 | 255 | `VARCHAR(255)` | 否 | 否 | - | - | - |
-| 节点类型 | `node_type` | 数值 | 20 | `BIGINT` | 否 | 否 | 1-大类节点：为构建图谱结构设置的虚拟节点，不直接关联企业，可通过其下属业务节点间接关联企业。<br>2-业务节点：具备实际业务含义的节点，在数据处理环节直接关联企业。<br>3 展示节点：与产业链相关性极弱，仅做图谱关系展示，不关联企业。 | - | 1,2，3 |
-| 节点层级 | `level` | 数值 | 20 | `BIGINT` | 否 | 否 | 产业链节点分类层级中，节点所处层级。 | - | 1,2,3,4,5 |
-| 节点序号 | `node_seq` | 数值 | 20 | `BIGINT` | 未明确（按可空） | 否 | 同一父级节点下的子节点排序参考值。 | - | 1至20 |
-| 父级节点代码 | `parent_id` | 字符 | 255 | `VARCHAR(255)` | 未明确（按可空） | 否 | 产业链节点唯一id，用于关联其它表。 | - | - |
-| 父级节点名称 | `parent_name` | 缺失 | - | `TEXT` | 未明确（按可空） | 未明确（不建索引） | - | - | - |
-| 节点重要性等级 | `node_imp_level` | 数值 | 20 | `BIGINT` | 未明确（按可空） | 是 | 产业链节点在整个产业链体系中重要性。1为重要性最高，5为重要性最低。仅适用于节点类型为2的业务节点。 | - | 1,2,3,4,5 |
-| 下游节点代码 | `downstream_link_code` | 字符 | 255 | `VARCHAR(255)` | 未明确（按可空） | 否 | 产业链节点唯一id，用于关联其它表。 | - | - |
-| 节点环节 | `node_stage` | 数值 | 20 | `BIGINT` | 未明确（按可空） | 否 | 适用于上中下游型产业链，1-上游，2-中游，3-下游。 | - | 1,2,3 |
-| 节点路径 | `node_path` | 文本 | 5000 | `TEXT` | 未明确（按可空） | 否 | - | - | - |
-| 数据来源 | `data_source` | 字符 | 255 | `VARCHAR(255)` | 否 | 否 | - | - | - |
-| 创建时间 | `created_time` | 日期时间 | - | `DATETIME` | 否 | 否 | - | - | - |
-| 更新时间 | `updated_time` | 日期时间 | - | `DATETIME` | 否 | 否 | - | - | - |
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `chain_code` | `varchar(255)` | YES |  |  |  | 产业链代码 |
+| 2 | `chain_name` | `varchar(255)` | YES |  |  |  | 产业链名称 |
+| 3 | `node_id` | `varchar(255)` | YES |  |  |  | 节点代码 |
+| 4 | `node_name` | `varchar(255)` | YES |  |  |  | 节点名称 |
+| 5 | `antitypic` | `varchar(255)` | YES |  |  |  | 企业id |
+| 6 | `credit_code` | `varchar(255)` | YES |  |  |  | 统一社会信用代码 |
+| 7 | `chain_score` | `decimal(20,2)` | YES |  |  |  | 产业链评分 |
+| 8 | `data_source` | `varchar(255)` | YES |  |  |  | 数据来源 |
+| 9 | `created_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED | 创建时间 |
+| 10 | `updated_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED on update CURRENT_TIMESTAMP | 更新时间 |
 
-## 2. 产业关联企业信息 `dwd_org_industry_chain_dtl`
+## `dwd_org_industry_chain_pat_dtl`
 
-| 中文字段 | 英文字段 | 原始类型 | 长度/精度 | SQL 类型 | 可空 | 索引 | 描述 | 样例 | 值域 |
-|---|---|---|---|---|---|---|---|---|---|
-| 产业链代码 | `chain_code` | 字符 | 255 | `VARCHAR(255)` | 否 | 是 | 产业链唯一id，用于关联其它表。 | - | - |
-| 产业链名称 | `chain_name` | 字符 | 255 | `VARCHAR(255)` | 否 | 否 | - | - | - |
-| 节点代码 | `node_id` | 字符 | 255 | `VARCHAR(255)` | 否 | 是 | 产业链节点唯一id，用于关联其它表。 | - | - |
-| 节点名称 | `node_name` | 字符 | 255 | `VARCHAR(255)` | 否 | 否 | - | - | - |
-| 企业id | `antitypic` | 字符 | 255 | `VARCHAR(255)` | 否 | 是 | 企业身份唯一id，用于关联其它表。 | - | - |
-| 统一社会信用代码 | `credit_code` | 字符 | 255 | `VARCHAR(255)` | 未明确（按可空） | 否 | - | - | - |
-| 产业链评分 | `chain_score` | 数值 | 20,2 | `DECIMAL(20,2)` | 未明确（按可空） | 否 | - | - | - |
-| 数据来源 | `data_source` | 字符 | 255 | `VARCHAR(255)` | 否 | 否 | - | - | - |
-| 创建时间 | `created_time` | 日期时间 | - | `DATETIME` | 否 | 否 | - | - | - |
-| 更新时间 | `updated_time` | 日期时间 | - | `DATETIME` | 否 | 否 | - | - | - |
+表注释：产业链关联专利信息
 
-## 3. 产业链企业关联产品信息 `dwd_org_industry_chain_prod_dtl`
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `chain_code` | `varchar(255)` | YES |  |  |  | 产业链代码 |
+| 2 | `chain_name` | `varchar(255)` | YES |  |  |  | 产业链名称 |
+| 3 | `node_id` | `varchar(255)` | YES |  |  |  | 节点代码 |
+| 4 | `node_name` | `varchar(255)` | YES |  |  |  | 节点名称 |
+| 5 | `apno` | `varchar(255)` | YES |  |  |  | 申请号 |
+| 6 | `apdt` | `date` | YES |  |  |  | 申请日 |
+| 7 | `pat_name` | `varchar(500)` | YES |  |  |  | 专利名称 |
+| 8 | `pn` | `varchar(255)` | YES |  |  |  | 公布(公告)号 |
+| 9 | `pbdt` | `date` | YES |  |  |  | 公布(公告)日 |
+| 10 | `current_assign` | `text` | YES |  |  |  | 申请(专利权)人 |
+| 11 | `inventors` | `text` | YES |  |  |  | 发明(设计)人 |
+| 12 | `data_source` | `varchar(255)` | YES |  |  |  | 数据来源 |
+| 13 | `created_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED | 创建时间 |
+| 14 | `updated_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED on update CURRENT_TIMESTAMP | 更新时间 |
 
-| 中文字段 | 英文字段 | 原始类型 | 长度/精度 | SQL 类型 | 可空 | 索引 | 描述 | 样例 | 值域 |
-|---|---|---|---|---|---|---|---|---|---|
-| 产业链代码 | `chain_code` | 字符 | 255 | `VARCHAR(255)` | 否 | 是 | 产业链唯一id，用于关联其它表。 | - | - |
-| 产业链名称 | `chain_name` | 字符 | 255 | `VARCHAR(255)` | 否 | 否 | - | - | - |
-| 企业id | `antitypic` | 字符 | 255 | `VARCHAR(255)` | 否 | 是 | 企业身份唯一id，用于关联其它表。 | - | - |
-| 企业名称 | `company_name` | 字符 | 500 | `VARCHAR(500)` | 未明确（按可空） | 否 | - | - | - |
-| 统一社会信用代码 | `credit_code` | 字符 | 255 | `VARCHAR(255)` | 未明确（按可空） | 否 | - | - | - |
-| 主营产品名称 | `tech_product` | 字符 | 255 | `VARCHAR(255)` | 否 | 否 | - | - | - |
-| 主营产品排序 | `tech_product_seq` | 数值 | 20 | `BIGINT` | 未明确（按可空） | 否 | - | - | - |
-| 数据来源 | `data_source` | 字符 | 255 | `VARCHAR(255)` | 否 | 否 | - | - | - |
-| 创建时间 | `created_time` | 日期时间 | - | `DATETIME` | 否 | 否 | - | - | - |
-| 更新时间 | `updated_time` | 日期时间 | - | `DATETIME` | 否 | 否 | - | - | - |
+## `dwd_org_industry_chain_prod_dtl`
 
-## 4. 产业动态资讯 `dwd_industry_chain_news_info`
+表注释：产业链企业关联产品信息
 
-| 中文字段 | 英文字段 | 原始类型 | 长度/精度 | SQL 类型 | 可空 | 索引 | 描述 | 样例 | 值域 |
-|---|---|---|---|---|---|---|---|---|---|
-| 产业链代码 | `chain_code` | 字符 | 255 | `VARCHAR(255)` | 否 | 是 | 产业链唯一id，用于关联其它表。 | - | - |
-| 产业链名称 | `chain_name` | 字符 | 255 | `VARCHAR(255)` | 否 | 否 | - | - | - |
-| 资讯id | `news_id` | 字符 | 255 | `VARCHAR(255)` | 否 | 否 | 资讯唯一id | - | - |
-| 标题 | `title` | 字符 | 255 | `VARCHAR(255)` | 未明确（按可空） | 未明确（不建索引） | - | - | - |
-| 发布时间 | `relaese_date` | 日期 | - | `DATE` | 未明确（按可空） | 未明确（不建索引） | - | - | - |
-| 摘要 | `summary` | 文本 | 5000 | `TEXT` | 未明确（按可空） | 未明确（不建索引） | - | - | - |
-| 来源 | `source` | 字符 | 255 | `VARCHAR(255)` | 未明确（按可空） | 未明确（不建索引） | - | - | - |
-| 数据来源 | `data_source` | 字符 | 255 | `VARCHAR(255)` | 否 | 否 | - | - | - |
-| 创建时间 | `created_time` | 日期时间 | - | `DATETIME` | 否 | 否 | - | - | - |
-| 更新时间 | `updated_time` | 日期时间 | - | `DATETIME` | 否 | 未明确（不建索引） | - | - | - |
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `chain_code` | `varchar(255)` | YES |  |  |  | 产业链代码 |
+| 2 | `chain_name` | `varchar(255)` | YES |  |  |  | 产业链名称 |
+| 3 | `antitypic` | `varchar(255)` | YES |  |  |  | 企业id |
+| 4 | `company_name` | `varchar(500)` | YES |  |  |  | 企业名称 |
+| 5 | `credit_code` | `varchar(255)` | YES |  |  |  | 统一社会信用代码 |
+| 6 | `tech_product` | `varchar(255)` | YES |  |  |  | 主营产品名称 |
+| 7 | `tech_product_s` | `int` | YES |  |  |  | 主营产品排序 |
+| 8 | `data_source` | `varchar(255)` | YES |  |  |  | 数据来源 |
+| 9 | `created_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED | 创建时间 |
+| 10 | `updated_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED on update CURRENT_TIMESTAMP | 更新时间 |

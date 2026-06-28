@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from biz.handler.common_capability import router as common_capability_router
 from biz.handler.enterprise_background_analysis import (
     router as enterprise_background_analysis_router,
 )
@@ -20,6 +21,7 @@ from biz.handler.relation_detail_annotation import router as relation_detail_ann
 
 
 def register_routers(app: FastAPI) -> None:
+    app.include_router(common_capability_router, prefix="/api/v1")
     app.include_router(kg_construction_router, prefix="/api/v1")
     app.include_router(options_router, prefix="/api/v1")
     app.include_router(expert_direct_relation_router, prefix="/api/v1")

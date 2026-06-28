@@ -11,7 +11,7 @@ server:
 mysql:
   host: ${MYSQL_HOST}
   port: ${MYSQL_PORT:3306}
-  database: ${MYSQL_DATABASE:techkg}
+  database: ${MYSQL_DATABASE:gkx_local}
   username: ${MYSQL_USERNAME}
   password: ${MYSQL_PASSWORD}
   pool_size: 30
@@ -19,9 +19,28 @@ mysql:
 
 redis:
   host: ${REDIS_HOST}
-  port: ${REDIS_PORT:6379}
+  port: ${REDIS_PORT:8379}
   password: ${REDIS_PASSWORD}
   database: ${REDIS_DATABASE:0}
+
+server_mysql:
+  host: ${SERVER_MYSQL_HOST}
+  port: ${SERVER_MYSQL_PORT:5306}
+  database: ${SERVER_MYSQL_DATABASE:trendAdmin}
+  username: ${SERVER_MYSQL_USERNAME:root}
+  password: ${SERVER_MYSQL_PASSWORD}
+
+mongo:
+  uri: "${MONGO_URI}"
+  database: ${MONGO_DATABASE:test}
+
+elasticsearch:
+  url: ${ELASTICSEARCH_URL}
+  username: ${ELASTICSEARCH_USERNAME:elastic}
+  password: "${ELASTICSEARCH_PASSWORD}"
+
+nginx:
+  gateway_url: ${NGINX_GATEWAY_URL}
 
 graph_db:
   backend: ${GRAPH_DB_BACKEND:trsgraph}

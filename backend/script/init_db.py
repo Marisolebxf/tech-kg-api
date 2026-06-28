@@ -6,6 +6,9 @@ Usage:
 
 Reads connection info from environment variables (or .env via python-dotenv):
     MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USERNAME, MYSQL_PASSWORD
+
+Defaults target the laboratory/server-side copied database, not the read-only
+vendor source database used by sync_schema_from_mysql.py.
 """
 
 from __future__ import annotations
@@ -19,14 +22,17 @@ from dotenv import load_dotenv
 
 DOMAIN_ORDER = [
     "scholar",
-    "patent",
     "chinese_paper",
     "foreign_paper",
+    "paper_common",
+    "patent",
     "domestic_project",
     "foreign_project",
     "domestic_organization",
     "foreign_organization",
     "industry_chain",
+    "policy",
+    "report",
 ]
 
 DDL_DIR = Path(__file__).resolve().parent.parent / "schemas" / "ddl"
@@ -39,7 +45,7 @@ def get_connection() -> pymysql.Connection:
         port=int(os.getenv("MYSQL_PORT", "3306")),
         user=os.getenv("MYSQL_USERNAME", "root"),
         password=os.getenv("MYSQL_PASSWORD", "123456789"),
-        database=os.getenv("MYSQL_DATABASE", "techkg"),
+        database=os.getenv("MYSQL_DATABASE", "gkx_local"),
         charset="utf8mb4",
         autocommit=True,
     )
@@ -47,9 +53,7 @@ def get_connection() -> pymysql.Connection:
 
 def execute_sql_file(cursor: pymysql.cursors.Cursor, path: Path) -> None:
     sql = path.read_text(encoding="utf-8")
-    statements = [s.strip() for s in sql.split(";") if s.strip()]
-    for stmt in statements:
-        cursor.execute(stmt)
+    cursor.execute(sql.rstrip().rstrip(";"))
 
 
 def main() -> None:

@@ -1,208 +1,70 @@
-# 国内项目数据表规范
+# 国内项目字段规范
 
-本规范依据第三方最新《要素库设计方案》整理。
-附件包含 2 张表、74 条字段定义，折叠 JSON 子字段并排除明确删除项后，生成 42 个物理字段。
+来源数据库：`gkx`
+生成日期：`2026-06-25`
 
-## 建模约定
-
-1. 表名、物理字段名、字段类型、长度、可空性、索引和主键均采用附件提供值。
-2. “是否为主键”为“是”的字段建立主键；“是否索引”为“是”的非主键字段建立普通索引。
-3. “是否为索引主键”作为数据索引侧元数据保留，不直接转换为 SQL 唯一约束。
-4. `output_*` 字段按附件定义保存为 JSON 列；“字段英文名称（json解析）”仅描述 JSON 对象内部属性，不单独创建 SQL 列。
-5. 备注明确写有“深化设计中删除”的字段不进入 DDL，但继续保留在本规范的原始定义中。
-6. 附件只定义表间关联信息，未明确外键约束，因此本阶段不添加外键。
-7. 本阶段不生成示范数据。
-
-## 表结构汇总
-
-| 中文表名 | 英文表名 | 附件定义数 | 物理字段数 |
+| 表名 | 表注释 | 估算行数 | 字段数 |
 |---|---|---:|---:|
-| 国内项目信息表 | `dwd_zh_project` | 22 | 22 |
-| 国内项目-产出信息 | `dwd_zh_project_output` | 52 | 20 |
+| `ods_zh_project` | 深势-国内项目信息表 | 1519 | 23 |
+| `ods_zh_project_output` | 深势-国内项目产出信息表 | 1372 | 24 |
 
-## 排除字段
+## `ods_zh_project`
 
-| 字段 | 原因 |
-|---|---|
-| `clinical_trials_count` | 附件备注：因完整率过低，深化设计中删除 |
-| `products_count` | 附件备注：因完整率过低，深化设计中删除 |
-| `output_products` | JSON 主字段备注：因完整率过低，深化设计中删除 |
+表注释：深势-国内项目信息表
 
-## 1. 国内项目信息表 `dwd_zh_project`
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `id` | `varchar(64)` | NO | PRI |  |  | 主键 |
+| 2 | `project_number` | `varchar(64)` | NO |  |  |  | 项目编号 |
+| 3 | `title` | `varchar(1000)` | NO |  |  |  | 项目名称 |
+| 4 | `project_source` | `varchar(128)` | YES |  |  |  | 项目来源 |
+| 5 | `funded_institution` | `varchar(255)` | YES |  |  |  | 依托单位 |
+| 6 | `project_level` | `varchar(64)` | YES |  |  |  | 项目级别 |
+| 7 | `funded_amount` | `decimal(12,2)` | YES |  |  |  | 资助金额 |
+| 8 | `discipline` | `varchar(500)` | YES |  |  |  | 学科 |
+| 9 | `discipline_code` | `varchar(128)` | YES |  |  |  | 学科代码 |
+| 10 | `fund_category` | `varchar(128)` | YES |  |  |  | 基金类别 |
+| 11 | `funded_province` | `varchar(64)` | YES |  |  |  | 资助省份 |
+| 12 | `participating_institution` | `varchar(255)` | YES |  |  |  | 参与单位 |
+| 13 | `approval_year` | `date` | YES |  |  |  | 批准年度 |
+| 14 | `approval_time` | `date` | YES |  |  |  | 批准日期 |
+| 15 | `research_period` | `varchar(128)` | YES |  |  |  | 研究周期 |
+| 16 | `project_host` | `varchar(100)` | YES |  |  |  | 项目负责人 |
+| 17 | `participants` | `mediumtext` | YES |  |  |  | 参与人员 |
+| 18 | `keywords` | `mediumtext` | YES |  |  |  | 关键词 |
+| 19 | `abstract` | `mediumtext` | YES |  |  |  | 项目摘要 |
+| 20 | `final_report_abstract` | `mediumtext` | YES |  |  |  | 结题摘要 |
+| 21 | `project_page_url` | `varchar(1024)` | YES |  |  |  | 项目详情页 |
+| 22 | `create_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED |  |
+| 23 | `update_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED |  |
 
-### 物理字段
+## `ods_zh_project_output`
 
-| 中文字段 | 英文字段 | SQL 类型 | 可空 | 索引 | 主键 | 索引主键 | 描述 | 样例 | 关联字段 |
-|---|---|---|---|---|---|---|---|---|---|
-| 项目索引 | `id` | `VARCHAR(64)` | 否 | 是 | 是 | 否 | 项目记录的唯一主键标识。 | 0e59f723-d192-4e7d-b867-dee122736044 | - |
-| 项目编号 | `project_number` | `VARCHAR(64)` | 是 | 是 | 否 | 是 | 项目在管理系统中的编号。 | 52305117 | - |
-| 项目名称 | `title` | `VARCHAR(512)` | 是 | 否 | 否 | 否 | 项目的名称或标题。 | 敏捷机动空天飞行器超静载荷微振动主动抑制与超稳指向控制 | - |
-| 项目来源 | `project_source` | `VARCHAR(64)` | 是 | 否 | 否 | 否 | 项目所属的资助来源或立项来源。 | 国家自然科学基金(NSFC) | - |
-| 项目受资助机构 | `funded_institution` | `VARCHAR(128)` | 是 | 否 | 否 | 否 | 获得项目资助的机构名称。 | 清华大学 | - |
-| 项目级别 | `project_level` | `ENUM('国家级', '省级', '市级', '县级', '其他')` | 是 | 否 | 否 | 否 | 项目所属的级别或层次。 | 国家级 | - |
-| 受资助金额 | `funded_amount` | `DECIMAL(18,2)` | 是 | 否 | 否 | 否 | 项目获得的资助经费金额，单位为万元。 | 10 | - |
-| 学科 | `discipline` | `VARCHAR(256)` | 是 | 否 | 否 | 否 | 项目所属的学科领域。 | 工程与材料科学-机械设计与制造-机械动力学 | - |
-| 学科代码 | `discipline_code` | `VARCHAR(256)` | 是 | 是 | 否 | 否 | 项目所属学科的分类代码。 | E-E05-E0503 | - |
-| 基金类别 | `fund_category` | `VARCHAR(64)` | 是 | 否 | 否 | 否 | 项目对应的基金或资助类别。 | 青年科学基金项目 | - |
-| 项目受资助省 | `funded_province` | `VARCHAR(32)` | 是 | 否 | 否 | 否 | 项目受资助机构所在的省份。 | 北京市 | - |
-| 参与机构 | `participating_institution` | `JSON` | 是 | 否 | 否 | 否 | 参与项目研究或实施的机构信息。 | ["北京大学", "清华大学"] | - |
-| 立项年度 | `approval_year` | `INT` | 是 | 是 | 否 | 否 | 项目获批立项的年份。 | 2023 | - |
-| 立项时间 | `approval_time` | `DATE` | 是 | 否 | 否 | 否 | 项目正式获批立项的时间。 | 2024/1/1 | - |
-| 研究期限 | `research_period` | `VARCHAR(64)` | 是 | 否 | 否 | 否 | 项目计划开展研究的时间期限。 | 2024-01-01 至 2024-12-31 | - |
-| 项目主持人 | `project_host` | `VARCHAR(16)` | 是 | 否 | 否 | 否 | 项目的主要负责人或主持人。 | 李青 | - |
-| 参与者 | `participants` | `JSON` | 是 | 否 | 否 | 否 | 参与项目研究或实施的人员信息。 | ["孙超", "魏宇杰", "肖左利", "唐少强"] | - |
-| 关键词 | `keywords` | `JSON` | 是 | 否 | 否 | 否 | 描述项目研究主题的关键词。 | ["敏捷机动", "空天飞行器", "超静载荷", "微振动", "主动抑制与超稳指向控制"] | - |
-| 项目标书摘要 | `abstract` | `LONGTEXT` | 是 | 否 | 否 | 否 | 项目申请书或标书中的摘要内容。 | 空天飞行器是世界大国争夺制空权和制天权的关键武器平台之一，近年来美国空天飞行器发展迅速，我国在空间飞行器平台研制中也取得重大进展，迫切需要装备并充分利用定向能、侦查遥感、激光通信等精密载荷以提升其战略应用潜力，然而空天飞行器突出的敏捷机动性和复杂的动力学特性极大限制了其在轨应用能力。本项目将针对敏捷机动空天飞行器的复杂动力学扰动问题，开展空天飞行器宽频多幅微振动的多尺度集成建模方法研究；设计主动减振界面隔离空天飞行器平台微振动，探索博弈鲁棒控制方法优化减振界面等效动刚度，保证隔振效率的同时兼顾平台敏捷机动性；针对敏感载荷端制冷扰动及目标相对运动，研究载荷指向宽频扰动补偿方法，探索基于在线辨识的自适应复合控制方法，抑制载荷光轴的不确定、时变扰动；最后将在前期研制设备的基础上开发实验系统验证本项目研究方法的有效性。本项目研究将为敏捷机动空天飞行器装备应用敏感精密载荷提供技术支持 | - |
-| 项目结题摘要 | `final_report_abstract` | `LONGTEXT` | 是 | 否 | 否 | 否 | 项目结题报告中的摘要内容。 | 空天飞行器是一种兼具航天和航空技术优势的飞行器，是世界各国争夺制空权和制天权的关键武器平台之一，配备先进载荷对于提升其任务能力和战略优势至关重要。然而，空天飞行器的敏捷性、机动性需求以及复杂的微振动环境与多种精密载荷的超静、超稳与超准要求形成矛盾，严重限制了载荷的可实现性能。本项目首先建立了空天飞行器微振动扰源与整器结构的多尺度集成动力学模型，研究了典型扰源微振动的产生和传递机理；在微振动建模和特性分析的基础上，针对空天飞行器设计了综合传递路径超静舱隔振和载荷端快反镜补偿的两级扰动抑制方案，并展开研究了敏捷机动情况下超静舱的宽频带微振动主动抑制和复杂时变扰动下载荷的超精超稳指向控制问题，提出了敏捷机动与隔振的博弈控制方法，实现超静舱动刚度优化以解决机动与隔振的矛盾，并针对复杂时变扰动给出了一种基于在线扰动估计和控制更新的自适应补偿方法；最后，设计并开发了多自由度超静舱和快反镜指向试验系统并完成了地面试验验证。本项目研究成果为敏捷机动空天飞行器精密载荷的高性能应用提供了技术支撑。基于以上研究内容，共完成发表期刊论文8篇，录用期刊论文1篇，其中，该项目负责人作为第一/通信作者的期刊论文7篇，申请发明专利共3件 | - |
-| 项目页面 URL | `project_page_url` | `TEXT` | 是 | 否 | 否 | 否 | 项目详情页面的访问链接。 | https://kd.nsfc.cn/finalDetails?id=016e481a2d298a66455093a678eff7a9 | - |
-| 更新时间 | `updated_time` | `DATETIME` | 否 | 否 | 否 | 否 | 该条数据最近一次更新的时间。 | 15/4/2026 14:59:34 | - |
+表注释：深势-国内项目产出信息表
 
-## 2. 国内项目-产出信息 `dwd_zh_project_output`
-
-### 物理字段
-
-| 中文字段 | 英文字段 | SQL 类型 | 可空 | 索引 | 主键 | 索引主键 | 描述 | 样例 | 关联字段 |
-|---|---|---|---|---|---|---|---|---|---|
-| 项目索引 | `id` | `VARCHAR(64)` | 否 | 是 | 是 | 否 | 项目记录的唯一主键标识。 | 0e59f723-d192-4e7d-b867-dee122736044 | dwd_zh_project.id |
-| 项目总产出数量 | `total_outputs` | `INT` | 是 | 否 | 否 | 否 | 项目产生的成果总数量。 | 20 | - |
-| 期刊文章数量 | `journal_articles_count` | `INT` | 是 | 否 | 否 | 否 | 项目产出的期刊论文数量。 | 18 | - |
-| 会议论文数量 | `conference_papers_count` | `INT` | 是 | 否 | 否 | 否 | 项目产出的会议论文数量。 | 0 | - |
-| 学位论文数量 | `degree_papers_count` | `INT` | 是 | 否 | 否 | 否 | 项目产出的学位论文数量。 | 2 | - |
-| 专利数量 | `patents_count` | `INT` | 是 | 否 | 否 | 否 | 项目产出的专利数量。 | 0 | - |
-| 图书专著数量 | `books_count` | `INT` | 是 | 否 | 否 | 否 | 项目产出的图书或专著数量。 | 0 | - |
-| 奖项数量 | `awards_count` | `INT` | 是 | 否 | 否 | 否 | 项目获得的奖项数量。 | 0 | - |
-| 报告数量 | `reports_count` | `INT` | 是 | 否 | 否 | 否 | 项目产出的报告数量。 | 0 | - |
-| 其他产出数量 | `other_outputs_count` | `INT` | 是 | 否 | 否 | 否 | 项目产生的其他成果数量。 | 0 | - |
-| 产出的期刊文章标题 | `output_journal_articles` | `JSON` | 是 | 否 | 否 | 否 | 项目产出的期刊文章内容 | - | - |
-| 产出的专利标题 | `output_patents` | `JSON` | 是 | 否 | 否 | 否 | 项目产出专利标题 | - | - |
-| 产出的会议论文标题 | `output_conference_papers` | `JSON` | 是 | 否 | 否 | 否 | 项目产出会议论文标题 | - | - |
-| 产出的学位论文标题 | `output_degree_papers` | `JSON` | 是 | 否 | 否 | 否 | 项目产出学位论文标题 | - | - |
-| 产出的临床试验信息 | `output_clinical_trials` | `JSON` | 是 | 否 | 否 | 否 | 项目产出临床试验标题 | - | - |
-| 产出的图书专著信息 | `output_books` | `JSON` | 是 | 否 | 否 | 否 | 项目产出图书专著标题 | - | - |
-| 产出的奖项信息 | `output_awards` | `JSON` | 是 | 否 | 否 | 否 | 项目产出奖项标题 | - | - |
-| 产出的报告信息 | `output_reports` | `JSON` | 是 | 否 | 否 | 否 | 项目产出报告标题 | - | - |
-| 其他产出信息 | `output_other` | `JSON` | 是 | 否 | 否 | 否 | 项目其他产出标题 | - | - |
-| 更新时间 | `updated_time` | `DATETIME` | 否 | 否 | 否 | 否 | 该条数据最近一次更新的时间。 | 15/4/2026 14:59:34 | - |
-
-### JSON 子字段
-
-| JSON 列 | JSON 属性 | 中文含义 | 描述 | 状态 |
-|---|---|---|---|---|
-| `output_journal_articles` | `title` | 产出的期刊文章标题 | 项目产出的期刊文章内容 | 保留 |
-| `output_journal_articles` | `authors` | 产出的期刊文章作者 | 项目产出期刊的文章作者 | 保留 |
-| `output_journal_articles` | `journal` | 产出的期刊文章期刊 | 项目产出期刊 | 保留 |
-| `output_journal_articles` | `year` | 产出的期刊文章年份 | 项目产出期刊的年份 | 保留 |
-| `output_journal_articles` | `issue` | 产出的期刊文章期数 | 项目产出期刊的期数 | 保留 |
-| `output_journal_articles` | `keywords` | 产出的期刊文章关键词 | 项目产出期刊的关键词 | 保留 |
-| `output_journal_articles` | `abstract` | 产出的期刊文章摘要 | 项目产出期刊的摘要 | 保留 |
-| `output_journal_articles` | `source_url` | 产出的期刊文章来源URL | 项目产出期刊的源地址 | 保留 |
-| `output_patents` | `patent_title` | 产出的专利标题 | 项目产出专利标题 | 保留 |
-| `output_patents` | `patent_inventor` | 产出的专利发明人 | 项目产出专利发明人 | 保留 |
-| `output_patents` | `patent_number` | 产出的专利号 | 项目产出专利号 | 保留 |
-| `output_patents` | `abstract` | 产出的专利摘要 | 项目产出专利摘要 | 保留 |
-| `output_patents` | `keywords` | 产出的专利关键词 | 项目产出专利关键词 | 保留 |
-| `output_conference_papers` | `title` | 产出的会议论文标题 | 项目产出会议论文标题 | 保留 |
-| `output_conference_papers` | `authors` | 产出的会议论文作者 | 项目产出会议论文作者 | 保留 |
-| `output_conference_papers` | `year` | 产出的会议论文年丰 | 项目产出会议论文年份 | 保留 |
-| `output_conference_papers` | `name` | 产出的会议论文名称 | 项目产出会议论文名 | 保留 |
-| `output_degree_papers` | `title` | 产出的学位论文标题 | 项目产出学位论文标题 | 保留 |
-| `output_degree_papers` | `authors` | 产出的学位论文作者 | 项目产出学位论文作者 | 保留 |
-| `output_degree_papers` | `keywords` | 产出的学位论文关键词 | 项目产出学位论文关键词 | 保留 |
-| `output_clinical_trials` | `title` | 产出的临床试验信息 | 项目产出临床试验标题 | 保留 |
-| `output_clinical_trials` | `authors` | 产出的临床试验信息 | 项目产出临床试验作者 | 保留 |
-| `output_clinical_trials` | `keywords` | 产出的临床试验信息 | 项目产出临床试验关键词 | 保留 |
-| `output_books` | `title` | 产出的图书专著信息 | 项目产出图书专著标题 | 保留 |
-| `output_books` | `authors` | 产出的图书专著信息 | 项目产出图书专著作者 | 保留 |
-| `output_books` | `keywords` | 产出的图书专著信息 | 项目产出图书专著关键词 | 保留 |
-| `output_products` | `title` | 产出的产品信息 | 项目产出产品标题 | 不建表：深化设计中删除 |
-| `output_products` | `authors` | 产出的产品信息 | 项目产出产品作者 | 不建表：深化设计中删除 |
-| `output_products` | `keywords` | 产出的产品信息 | 项目产出产品关键词 | 不建表：深化设计中删除 |
-| `output_awards` | `title` | 产出的奖项信息 | 项目产出奖项标题 | 保留 |
-| `output_awards` | `authors` | 产出的奖项信息 | 项目产出奖项作者 | 保留 |
-| `output_awards` | `keywords` | 产出的奖项信息 | 项目产出奖项关键词 | 保留 |
-| `output_reports` | `title` | 产出的报告信息 | 项目产出报告标题 | 保留 |
-| `output_reports` | `authors` | 产出的报告信息 | 项目产出报告作者 | 保留 |
-| `output_reports` | `keywords` | 产出的报告信息 | 项目产出报告关键词 | 保留 |
-| `output_reports` | `abstract` | 产出的报告信息 | 项目产出报告摘要 | 保留 |
-| `output_other` | `title` | 其他产出信息 | 项目其他产出标题 | 保留 |
-| `output_other` | `authors` | 其他产出信息 | 项目其他产出作者 | 保留 |
-| `output_other` | `keywords` | 其他产出信息 | 项目其他产出关键词 | 保留 |
-
-## 原始字段定义
-
-| 序号 | 表名 | 中文字段 | 英文字段 | JSON 属性 | 原始类型 | 长度 | 可空 | 索引 | 主键 | 索引主键 | 完整率 | 备注 |
-|---:|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 国内项目信息表 | 项目索引 | `id` | - | varchar | 64 | 否 | 是 | 是 | 否 | 100 | - |
-| 2 | 国内项目信息表 | 项目编号 | `project_number` | - | varchar | 64 | 是 | 是 | 否 | 是 | 98.68 | - |
-| 3 | 国内项目信息表 | 项目名称 | `title` | - | varchar | 512 | 是 | 否 | 否 | 否 | 100 | - |
-| 4 | 国内项目信息表 | 项目来源 | `project_source` | - | varchar | 64 | 是 | 否 | 否 | 否 | 100 | - |
-| 5 | 国内项目信息表 | 项目受资助机构 | `funded_institution` | - | varchar | 128 | 是 | 否 | 否 | 否 | 100 | - |
-| 6 | 国内项目信息表 | 项目级别 | `project_level` | - | enum | - | 是 | 否 | 否 | 否 | 100 | - |
-| 7 | 国内项目信息表 | 受资助金额 | `funded_amount` | - | decimal | 18,2 | 是 | 否 | 否 | 否 | 98.86 | - |
-| 8 | 国内项目信息表 | 学科 | `discipline` | - | varchar | 256 | 是 | 否 | 否 | 否 | 97.31 | - |
-| 9 | 国内项目信息表 | 学科代码 | `discipline_code` | - | varchar | 256 | 是 | 是 | 否 | 否 | 97.31 | - |
-| 10 | 国内项目信息表 | 基金类别 | `fund_category` | - | varchar | 64 | 是 | 否 | 否 | 否 | 99.85 | - |
-| 11 | 国内项目信息表 | 项目受资助省 | `funded_province` | - | varchar | 32 | 是 | 否 | 否 | 否 | 100 | - |
-| 12 | 国内项目信息表 | 参与机构 | `participating_institution` | - | json | - | 是 | 否 | 否 | 否 | 100 | - |
-| 13 | 国内项目信息表 | 立项年度 | `approval_year` | - | int | - | 是 | 是 | 否 | 否 | 99.88 | - |
-| 14 | 国内项目信息表 | 立项时间 | `approval_time` | - | date | - | 是 | 否 | 否 | 否 | 72.15 | - |
-| 15 | 国内项目信息表 | 研究期限 | `research_period` | - | varchar | 64 | 是 | 否 | 否 | 否 | 72.15 | - |
-| 16 | 国内项目信息表 | 项目主持人 | `project_host` | - | varchar | 16 | 是 | 否 | 否 | 否 | 100 | - |
-| 17 | 国内项目信息表 | 参与者 | `participants` | - | json | - | 是 | 否 | 否 | 否 | 64.99 | - |
-| 18 | 国内项目信息表 | 关键词 | `keywords` | - | json | - | 是 | 否 | 否 | 否 | 99.26 | - |
-| 19 | 国内项目信息表 | 项目标书摘要 | `abstract` | - | longtext | - | 是 | 否 | 否 | 否 | 69.1 | - |
-| 20 | 国内项目信息表 | 项目结题摘要 | `final_report_abstract` | - | longtext | - | 是 | 否 | 否 | 否 | 47.03 | 1. 2014 年才启动全文公开，2014 年前结题项目无公开摘要。2. 基金委对近 10 年 + 无涉密 / 敏感 / 商业秘密的项目才开放；涉密、涉及核心技术或未脱敏项目不予公开 |
-| 21 | 国内项目信息表 | 项目页面 URL | `project_page_url` | - | text | - | 是 | 否 | 否 | 否 | 72.15 | - |
-| 22 | 国内项目信息表 | 更新时间 | `updated_time` | - | datetime | - | 否 | 否 | 否 | 否 | 100 | - |
-| 23 | 国内项目-产出信息 | 项目索引 | `id` | - | varchar | 64 | 否 | 是 | 是 | 否 | 100 | - |
-| 24 | 国内项目-产出信息 | 项目总产出数量 | `total_outputs` | - | int | - | 是 | 否 | 否 | 否 | 82.91 | - |
-| 25 | 国内项目-产出信息 | 期刊文章数量 | `journal_articles_count` | - | int | - | 是 | 否 | 否 | 否 | 81.45 | - |
-| 26 | 国内项目-产出信息 | 会议论文数量 | `conference_papers_count` | - | int | - | 是 | 否 | 否 | 否 | 20.98 | - |
-| 27 | 国内项目-产出信息 | 学位论文数量 | `degree_papers_count` | - | int | - | 是 | 否 | 否 | 否 | 5.05 | - |
-| 28 | 国内项目-产出信息 | 专利数量 | `patents_count` | - | int | - | 是 | 否 | 否 | 否 | 11.02 | - |
-| 29 | 国内项目-产出信息 | 临床试验数量 | `clinical_trials_count` | - | int | - | 是 | 否 | 否 | 否 | 0 | 因完整率过低，深化设计中删除 |
-| 30 | 国内项目-产出信息 | 图书专著数量 | `books_count` | - | int | - | 是 | 否 | 否 | 否 | 5.34 | - |
-| 31 | 国内项目-产出信息 | 产品数量 | `products_count` | - | int | - | 是 | 否 | 否 | 否 | 0 | 因完整率过低，深化设计中删除 |
-| 32 | 国内项目-产出信息 | 奖项数量 | `awards_count` | - | int | - | 是 | 否 | 否 | 否 | 8.04 | 奖项类型：常见的是国家自然科学奖、国家技术发明奖、国家科学技术进步奖 |
-| 33 | 国内项目-产出信息 | 报告数量 | `reports_count` | - | int | - | 是 | 否 | 否 | 否 | 57.39 | - |
-| 34 | 国内项目-产出信息 | 其他产出数量 | `other_outputs_count` | - | int | - | 是 | 否 | 否 | 否 | 17.2 | - |
-| 35 | 国内项目-产出信息 | 产出的期刊文章标题 | `output_journal_articles` | `title` | json | - | 是 | 否 | 否 | 否 | 81.45 | - |
-| 36 | 国内项目-产出信息 | 产出的期刊文章作者 | `output_journal_articles` | `authors` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 37 | 国内项目-产出信息 | 产出的期刊文章期刊 | `output_journal_articles` | `journal` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 38 | 国内项目-产出信息 | 产出的期刊文章年份 | `output_journal_articles` | `year` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 39 | 国内项目-产出信息 | 产出的期刊文章期数 | `output_journal_articles` | `issue` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 40 | 国内项目-产出信息 | 产出的期刊文章关键词 | `output_journal_articles` | `keywords` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 41 | 国内项目-产出信息 | 产出的期刊文章摘要 | `output_journal_articles` | `abstract` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 42 | 国内项目-产出信息 | 产出的期刊文章来源URL | `output_journal_articles` | `source_url` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 43 | 国内项目-产出信息 | 产出的专利标题 | `output_patents` | `patent_title` | json | - | 是 | 否 | 否 | 否 | 11.02 | - |
-| 44 | 国内项目-产出信息 | 产出的专利发明人 | `output_patents` | `patent_inventor` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 45 | 国内项目-产出信息 | 产出的专利号 | `output_patents` | `patent_number` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 46 | 国内项目-产出信息 | 产出的专利摘要 | `output_patents` | `abstract` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 47 | 国内项目-产出信息 | 产出的专利关键词 | `output_patents` | `keywords` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 48 | 国内项目-产出信息 | 产出的会议论文标题 | `output_conference_papers` | `title` | json | - | 是 | 否 | 否 | 否 | 20.98 | - |
-| 49 | 国内项目-产出信息 | 产出的会议论文作者 | `output_conference_papers` | `authors` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 50 | 国内项目-产出信息 | 产出的会议论文年丰 | `output_conference_papers` | `year` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 51 | 国内项目-产出信息 | 产出的会议论文名称 | `output_conference_papers` | `name` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 52 | 国内项目-产出信息 | 产出的学位论文标题 | `output_degree_papers` | `title` | json | - | 是 | 否 | 否 | 否 | 5.05 | - |
-| 53 | 国内项目-产出信息 | 产出的学位论文作者 | `output_degree_papers` | `authors` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 54 | 国内项目-产出信息 | 产出的学位论文关键词 | `output_degree_papers` | `keywords` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 55 | 国内项目-产出信息 | 产出的临床试验信息 | `output_clinical_trials` | `title` | json | - | 是 | 否 | 否 | 否 | 6.12 | - |
-| 56 | 国内项目-产出信息 | 产出的临床试验信息 | `output_clinical_trials` | `authors` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 57 | 国内项目-产出信息 | 产出的临床试验信息 | `output_clinical_trials` | `keywords` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 58 | 国内项目-产出信息 | 产出的图书专著信息 | `output_books` | `title` | json | - | 是 | 否 | 否 | 否 | 5.34 | - |
-| 59 | 国内项目-产出信息 | 产出的图书专著信息 | `output_books` | `authors` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 60 | 国内项目-产出信息 | 产出的图书专著信息 | `output_books` | `keywords` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 61 | 国内项目-产出信息 | 产出的产品信息 | `output_products` | `title` | json | - | 是 | 否 | 否 | 否 | 0 | 因完整率过低，深化设计中删除 |
-| 62 | 国内项目-产出信息 | 产出的产品信息 | `output_products` | `authors` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 63 | 国内项目-产出信息 | 产出的产品信息 | `output_products` | `keywords` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 64 | 国内项目-产出信息 | 产出的奖项信息 | `output_awards` | `title` | json | - | 是 | 否 | 否 | 否 | 8.04 | - |
-| 65 | 国内项目-产出信息 | 产出的奖项信息 | `output_awards` | `authors` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 66 | 国内项目-产出信息 | 产出的奖项信息 | `output_awards` | `keywords` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 67 | 国内项目-产出信息 | 产出的报告信息 | `output_reports` | `title` | json | - | 是 | 否 | 否 | 否 | 57.39 | - |
-| 68 | 国内项目-产出信息 | 产出的报告信息 | `output_reports` | `authors` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 69 | 国内项目-产出信息 | 产出的报告信息 | `output_reports` | `keywords` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 70 | 国内项目-产出信息 | 产出的报告信息 | `output_reports` | `abstract` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 71 | 国内项目-产出信息 | 其他产出信息 | `output_other` | `title` | json | - | 是 | 否 | 否 | 否 | 17.2 | - |
-| 72 | 国内项目-产出信息 | 其他产出信息 | `output_other` | `authors` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 73 | 国内项目-产出信息 | 其他产出信息 | `output_other` | `keywords` | 继承 JSON 主字段 | - | 是 | 否 | 否 | 否 | - | - |
-| 74 | 国内项目-产出信息 | 更新时间 | `updated_time` | - | datetime | - | 否 | 否 | 否 | 否 | 100 | - |
+| 序号 | 字段名 | 类型 | 可空 | 键 | 默认值 | 额外信息 | 字段注释 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `id` | `varchar(64)` | NO | PRI |  |  | UUID主键 |
+| 2 | `total_outputs` | `int` | YES |  |  |  | 项目总产出数量 |
+| 3 | `journal_articles_count` | `int` | YES |  |  |  | 期刊文章数量 |
+| 4 | `conference_papers_count` | `int` | YES |  |  |  | 会议论文数量 |
+| 5 | `books_count` | `int` | YES |  |  |  | 图书专著数量 |
+| 6 | `degree_papers_count` | `int` | YES |  |  |  | 学位论文数量 |
+| 7 | `patents_count` | `int` | YES |  |  |  | 专利数量 |
+| 8 | `clinical_trials_count` | `int` | YES |  |  |  | 临床试验数量 |
+| 9 | `products_count` | `int` | YES |  |  |  | 产品数量 |
+| 10 | `awards_count` | `int` | YES |  |  |  | 奖项数量 |
+| 11 | `reports_count` | `int` | YES |  |  |  | 报告数量 |
+| 12 | `other_outputs_count` | `int` | YES |  |  |  | 其他产出数量 |
+| 13 | `output_journal_articles` | `mediumtext` | YES |  |  |  | 期刊文章 |
+| 14 | `output_conference_papers` | `mediumtext` | YES |  |  |  | 会议论文 |
+| 15 | `output_books` | `mediumtext` | YES |  |  |  | 图书专著 |
+| 16 | `output_degree_papers` | `mediumtext` | YES |  |  |  | 学位论文 |
+| 17 | `output_patents` | `mediumtext` | YES |  |  |  | 专利 |
+| 18 | `output_clinical_trials` | `mediumtext` | YES |  |  |  | 临床试验 |
+| 19 | `output_products` | `mediumtext` | YES |  |  |  | 产品 |
+| 20 | `output_awards` | `mediumtext` | YES |  |  |  | 奖项 |
+| 21 | `output_reports` | `mediumtext` | YES |  |  |  | 报告 |
+| 22 | `output_other` | `mediumtext` | YES |  |  |  | 其他成果 |
+| 23 | `create_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED |  |
+| 24 | `update_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED |  |

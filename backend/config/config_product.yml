@@ -10,8 +10,8 @@ server:
 
 mysql:
   host: ${MYSQL_HOST}
-  port: ${MYSQL_PORT:3318}
-  database: ${MYSQL_DATABASE:gkx}
+  port: ${MYSQL_PORT:3306}
+  database: ${MYSQL_DATABASE:gkx_local}
   username: ${MYSQL_USERNAME}
   password: ${MYSQL_PASSWORD}
   pool_size: 30

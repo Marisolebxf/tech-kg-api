@@ -2,7 +2,11 @@
 
 The script reads connection settings from environment variables:
 
-    MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USERNAME, MYSQL_PASSWORD
+    SOURCE_MYSQL_HOST, SOURCE_MYSQL_PORT, SOURCE_MYSQL_DATABASE,
+    SOURCE_MYSQL_USERNAME, SOURCE_MYSQL_PASSWORD
+
+For one-off runs it also accepts MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE,
+MYSQL_USERNAME, MYSQL_PASSWORD as fallbacks.
 
 It generates:
 
@@ -23,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import pymysql
+from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMAS_DIR = ROOT / "schemas"
@@ -62,13 +67,18 @@ DOMAIN_LABELS = {
 }
 
 
+def source_database_name() -> str:
+    return os.getenv("SOURCE_MYSQL_DATABASE") or os.getenv("MYSQL_DATABASE", "gkx")
+
+
 def connect() -> pymysql.Connection:
+    load_dotenv()
     return pymysql.connect(
-        host=os.getenv("MYSQL_HOST", "127.0.0.1"),
-        port=int(os.getenv("MYSQL_PORT", "3306")),
-        user=os.getenv("MYSQL_USERNAME", "root"),
-        password=os.getenv("MYSQL_PASSWORD", ""),
-        database=os.getenv("MYSQL_DATABASE", "gkx"),
+        host=os.getenv("SOURCE_MYSQL_HOST") or os.getenv("MYSQL_HOST", "183.240.141.251"),
+        port=int(os.getenv("SOURCE_MYSQL_PORT") or os.getenv("MYSQL_PORT", "3318")),
+        user=os.getenv("SOURCE_MYSQL_USERNAME") or os.getenv("MYSQL_USERNAME", "gkx_reader_zp"),
+        password=os.getenv("SOURCE_MYSQL_PASSWORD") or os.getenv("MYSQL_PASSWORD", ""),
+        database=source_database_name(),
         charset="utf8mb4",
         cursorclass=pymysql.cursors.DictCursor,
     )
@@ -122,7 +132,7 @@ def clean_generated_dirs() -> None:
 def fetch_metadata(
     conn: pymysql.Connection,
 ) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
-    database = os.getenv("MYSQL_DATABASE", "gkx")
+    database = source_database_name()
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -199,7 +209,7 @@ def write_specifications(
         lines = [
             f"# {DOMAIN_LABELS[domain]}字段规范",
             "",
-            f"来源数据库：`{os.getenv('MYSQL_DATABASE', 'gkx')}`",
+            f"来源数据库：`{source_database_name()}`",
             f"生成日期：`{date.today().isoformat()}`",
             "",
             "| 表名 | 表注释 | 估算行数 | 字段数 |",
@@ -247,7 +257,7 @@ def write_schema_readme(
     lines = [
         "# 数据库 Schema 说明",
         "",
-        "本目录维护与远程 MySQL 数据库 `gkx` 当前真实结构一致的字段规范和建表脚本。",
+        "本目录维护与厂商源 MySQL 数据库 `gkx` 当前真实结构一致的字段规范和建表脚本。",
         "DDL 与字段说明由 `script/sync_schema_from_mysql.py` 从 `information_schema` 和 `SHOW CREATE TABLE` 生成。",
         "",
         f"生成日期：`{date.today().isoformat()}`",
@@ -284,7 +294,7 @@ def write_schema_readme(
             "",
             "## 维护规则",
             "",
-            "1. 当前目录以远程数据库 `gkx` 的真实表结构为准，不再保留旧版 62 表的冗余拆分定义。",
+            "1. 当前目录以厂商源数据库 `gkx` 的真实表结构为准，不再保留旧版 62 表的冗余拆分定义。",
             "2. 表之间不额外补充物理外键；若源库没有主键或索引，本目录也不人为添加。",
             "3. 若远程库结构变化，重新执行同步脚本生成 DDL、字段规范和 ORM。",
             "4. 同步脚本只读取数据库元数据，不读取业务数据，也不会修改远程数据库。",
@@ -292,11 +302,11 @@ def write_schema_readme(
             "## 同步命令",
             "",
             "```bash",
-            "MYSQL_HOST=183.240.141.251 \\",
-            "MYSQL_PORT=3318 \\",
-            "MYSQL_DATABASE=gkx \\",
-            "MYSQL_USERNAME=gkx_reader_zp \\",
-            "MYSQL_PASSWORD='***' \\",
+            "SOURCE_MYSQL_HOST=183.240.141.251 \\",
+            "SOURCE_MYSQL_PORT=3318 \\",
+            "SOURCE_MYSQL_DATABASE=gkx \\",
+            "SOURCE_MYSQL_USERNAME=gkx_reader_zp \\",
+            "SOURCE_MYSQL_PASSWORD='***' \\",
             "uv run python script/sync_schema_from_mysql.py",
             "```",
         ]

@@ -9,11 +9,11 @@ server:
   reload: true
 
 mysql:
-  host: ${MYSQL_HOST:183.240.141.251}
-  port: ${MYSQL_PORT:3318}
-  database: ${MYSQL_DATABASE:gkx}
-  username: ${MYSQL_USERNAME:gkx_reader_zp}
-  password: ${MYSQL_PASSWORD}
+  host: ${MYSQL_HOST:127.0.0.1}
+  port: ${MYSQL_PORT:3306}
+  database: ${MYSQL_DATABASE:gkx_local}
+  username: ${MYSQL_USERNAME:root}
+  password: ${MYSQL_PASSWORD:123456789}
   pool_size: 10
   max_overflow: 20
 

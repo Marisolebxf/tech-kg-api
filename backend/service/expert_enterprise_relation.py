@@ -60,13 +60,17 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
         图库节点 demo（E10001 等）不含真实姓名；真实学者在 techkg `scholar` 表
         （如 COOP-SCH001 陈建国）。首次 build 真实学者时按需建点，使后续返回真实姓名。
         """
-        session = get_mysql_client().session()
         try:
-            s = session.execute(
-                select(Scholar).where(Scholar.scholar_id == scholar_id)
-            ).scalar_one_or_none()
-        finally:
-            session.close()
+            session = get_mysql_client().session()
+            try:
+                s = session.execute(
+                    select(Scholar).where(Scholar.scholar_id == scholar_id)
+                ).scalar_one_or_none()
+            finally:
+                session.close()
+        except Exception:
+            # MySQL 不可用（如 CI 无 DB），返回 None 让 build 抛 KeyError
+            return None
         if s is None:
             return None
         try:

@@ -7,14 +7,14 @@ from sqlalchemy.orm import Session
 
 from dao.organization import OrganizationDAO
 from db_model.base import Base
-from db_model.industry_chain import DwdOrgIndustryChainDtl, DwdOrgIndustryChainProdDtl
-from db_model.organization import (
+from db_model.domestic_organization import (
     DwdOrgAnnualFinancialInfo,
     DwdOrgOrgProductInfo,
     DwdOrgRegInfo,
     DwdOrgStockFinanceInfo,
     DwdOrgTagInfo,
 )
+from db_model.industry_chain import DwdOrgIndustryChainDtl, DwdOrgIndustryChainProdDtl
 
 _NOW = datetime(2024, 1, 1)
 

@@ -4,19 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from db_model.domestic_organization import (
+    DwdOrgAnnualFinancialInfo,
+    DwdOrgOrgProductInfo,
+    DwdOrgRegInfo,
+    DwdOrgStockFinanceInfo,
+    DwdOrgTagInfo,
+)
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db_model.industry_chain import (
     DwdOrgIndustryChainDtl,
     DwdOrgIndustryChainProdDtl,
-)
-from db_model.organization import (
-    DwdOrgAnnualFinancialInfo,
-    DwdOrgOrgProductInfo,
-    DwdOrgRegInfo,
-    DwdOrgStockFinanceInfo,
-    DwdOrgTagInfo,
 )
 
 

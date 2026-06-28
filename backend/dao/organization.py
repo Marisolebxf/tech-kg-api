@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from db_model.domestic_organization import (
     DwdOrgAnnualFinancialInfo,
     DwdOrgOrgProductInfo,
@@ -11,9 +14,6 @@ from db_model.domestic_organization import (
     DwdOrgStockFinanceInfo,
     DwdOrgTagInfo,
 )
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
 from db_model.industry_chain import (
     DwdOrgIndustryChainDtl,
     DwdOrgIndustryChainProdDtl,

@@ -21,7 +21,15 @@ DIMENSIONS: list[tuple[str, str]] = [
     ("financial", "经营财务"),
 ]
 TECH_FIELDS: list[str] = ["人工智能", "集成电路", "新能源", "生物医药", "高端装备", "新材料"]
-CPC_CODES: list[str] = ["G06N", "G06F", "G06N3/04", "H04L9/00", "H01M10/0525", "A61B5/00", "G16H50/20"]
+CPC_CODES: list[str] = [
+    "G06N",
+    "G06F",
+    "G06N3/04",
+    "H04L9/00",
+    "H01M10/0525",
+    "A61B5/00",
+    "G16H50/20",
+]
 
 
 def _scholars() -> list[dict[str, str]]:

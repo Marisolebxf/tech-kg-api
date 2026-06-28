@@ -475,6 +475,8 @@ class OdsPatentWeipu(Base):
 
     # Source table has no physical primary key; this is ORM identity only.
     __mapper_args__ = {"primary_key": [lngid]}
+
+
 class DwdPatent(Base):
     __tablename__ = "dwd_patent"
 

@@ -1,6 +1,6 @@
 # 数据库 Schema 说明
 
-本目录维护与远程 MySQL 数据库 `gkx` 当前真实结构一致的字段规范和建表脚本。
+本目录维护与厂商源 MySQL 数据库 `gkx` 当前真实结构一致的字段规范和建表脚本。
 DDL 与字段说明由 `script/sync_schema_from_mysql.py` 从 `information_schema` 和 `SHOW CREATE TABLE` 生成。
 
 生成日期：`2026-06-25`
@@ -35,7 +35,7 @@ schemas/
 
 ## 维护规则
 
-1. 当前目录以远程数据库 `gkx` 的真实表结构为准，不再保留旧版 62 表的冗余拆分定义。
+1. 当前目录以厂商源数据库 `gkx` 的真实表结构为准，不再保留旧版 62 表的冗余拆分定义。
 2. 表之间不额外补充物理外键；若源库没有主键或索引，本目录也不人为添加。
 3. 若远程库结构变化，重新执行同步脚本生成 DDL、字段规范和 ORM。
 4. 同步脚本只读取数据库元数据，不读取业务数据，也不会修改远程数据库。
@@ -43,10 +43,10 @@ schemas/
 ## 同步命令
 
 ```bash
-MYSQL_HOST=183.240.141.251 \
-MYSQL_PORT=3318 \
-MYSQL_DATABASE=gkx \
-MYSQL_USERNAME=gkx_reader_zp \
-MYSQL_PASSWORD='***' \
+SOURCE_MYSQL_HOST=183.240.141.251 \
+SOURCE_MYSQL_PORT=3318 \
+SOURCE_MYSQL_DATABASE=gkx \
+SOURCE_MYSQL_USERNAME=gkx_reader_zp \
+SOURCE_MYSQL_PASSWORD='***' \
 uv run python script/sync_schema_from_mysql.py
 ```

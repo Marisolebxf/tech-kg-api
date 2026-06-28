@@ -20,7 +20,7 @@ jobs:
 
       - name: Create .env for docker compose
         run: |
-          cat > .env <<EOF
+          cat > backend/.env <<EOF
           GRAPH_DB_BACKEND=trsgraph
           TRSGRAPH_HOST=127.0.0.1
           TRSGRAPH_PORT=9669
@@ -29,7 +29,7 @@ jobs:
           TRSGRAPH_SPACE=techkg
           MYSQL_HOST=127.0.0.1
           MYSQL_PORT=3306
-          MYSQL_DATABASE=techkg
+          MYSQL_DATABASE=gkx_local
           MYSQL_USERNAME=root
           MYSQL_PASSWORD=123456789
           REDIS_HOST=127.0.0.1

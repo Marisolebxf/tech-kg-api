@@ -35,7 +35,6 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-exclude = ["legacy"]
 
 
 [tool.ruff.lint]

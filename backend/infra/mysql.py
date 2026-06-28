@@ -20,11 +20,22 @@ def _get_int_env(name: str, default: int) -> int:
     return int(value)
 
 
+def build_db_url() -> str:
+    """根据 MYSQL_* 环境变量拼装 SQLAlchemy URL（兼容旧调用）。"""
+    host = os.getenv("MYSQL_HOST", "127.0.0.1")
+    port = os.getenv("MYSQL_PORT", "3306")
+    user = os.getenv("MYSQL_USERNAME", "root")
+    pwd = os.getenv("MYSQL_PASSWORD", "")
+    db = os.getenv("MYSQL_DATABASE", "techkg")
+    return f"mysql+pymysql://{user}:{pwd}@{host}:{port}/{db}?charset=utf8mb4"
+
+
 class MySQLClient:
     """SQLAlchemy engine and session factory for the default MySQL database."""
 
     def __init__(
         self,
+        url: str | None = None,
         *,
         host: str | None = None,
         port: int | None = None,
@@ -35,6 +46,7 @@ class MySQLClient:
         max_overflow: int | None = None,
         echo: bool | None = None,
     ) -> None:
+        self._explicit_url = url
         self.host = host or os.getenv("MYSQL_HOST", "127.0.0.1")
         self.port = port or _get_int_env("MYSQL_PORT", 3306)
         self.database = database or os.getenv("MYSQL_DATABASE", "techkg")
@@ -53,6 +65,8 @@ class MySQLClient:
 
     @property
     def url(self) -> str:
+        if self._explicit_url:
+            return self._explicit_url
         username = quote_plus(self.username)
         password = quote_plus(self.password)
         return (
@@ -63,15 +77,17 @@ class MySQLClient:
     @property
     def engine(self) -> Engine:
         if self._engine is None:
-            self._engine = create_engine(
-                self.url,
+            kwargs: dict[str, Any] = dict(
                 pool_pre_ping=True,
                 pool_recycle=3600,
-                pool_size=self.pool_size,
-                max_overflow=self.max_overflow,
                 echo=self.echo,
                 future=True,
             )
+            # SQLite（测试用）不支持 pool_size/max_overflow
+            if not self.url.startswith("sqlite"):
+                kwargs["pool_size"] = self.pool_size
+                kwargs["max_overflow"] = self.max_overflow
+            self._engine = create_engine(self.url, **kwargs)
         return self._engine
 
     @property

@@ -19,7 +19,9 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
         }
     )
 
-    dataSource: DataSource = Field(..., description="论文数据源：all、knowledge_graph、cnki、wanfang、web_of_science。")
+    dataSource: DataSource = Field(
+        ..., description="论文数据源：all、knowledge_graph、cnki、wanfang、web_of_science。"
+    )
     expertAId: str = Field(..., min_length=1, description="专家A唯一标识。")
     expertBId: str = Field(..., min_length=1, description="专家B唯一标识。")
     startTime: str | None = Field(default=None, description="统计开始时间，格式 YYYY-MM-DD。")
@@ -126,7 +128,6 @@ class SharedContributionSummary(BaseModel):
     venueSummary: str | None = None
     citationSummary: str | None = None
     impactSummary: str | None = None
-
 
 
 class ExpertPaperCooperationDemoResponse(BaseModel):

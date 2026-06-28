@@ -94,7 +94,7 @@ const structuredRows = computed(() => [
   ['学术影响力评分', impactScore.value ? `${impactScore.value}` : '—'],
   ['稳定团队成员', stableTeamText.value],
   ['核心合作人员', collaboratorText.value],
-  ['共同贡献', contributionText.value],
+  ['合作贡献', contributionText.value],
 ])
 
 const developerRequestFields = [
@@ -120,7 +120,7 @@ const developerResponseFields = [
   { name: 'stableTeamName', type: 'string|null', description: '长期稳定合作团队名称' },
   { name: 'stableTeamMembers', type: 'array', description: '长期稳定合作团队成员' },
   { name: 'coreCollaborators', type: 'array', description: '核心合作人员' },
-  { name: 'sharedContribution', type: 'array', description: '共同贡献标签' },
+  { name: 'sharedContribution', type: 'array', description: '合作贡献标签' },
 ] as const
 
 const codeSamples = computed(() => ({
@@ -252,6 +252,9 @@ onMounted(() => {
               <marker id="paper-arrow-orange" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
                 <path d="M0,0 L8,4 L0,8 Z" fill="#ff7d00" />
               </marker>
+              <marker id="paper-arrow-gray" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                <path d="M0,0 L8,4 L0,8 Z" fill="#8a93a3" />
+              </marker>
             </defs>
 
             <g class="graph-edges">
@@ -265,13 +268,13 @@ onMounted(() => {
               <text class="edge-label edge-label--green" x="494" y="176">参与合作</text>
 
               <path class="edge edge--green" d="M302 308 C236 314, 166 338, 122 382" marker-end="url(#paper-arrow-green)" />
-              <text class="edge-label edge-label--green" x="160" y="324">主题分布</text>
+              <text class="edge-label edge-label--green" x="160" y="324">论文主题</text>
 
-              <path class="edge edge--dash" d="M360 308 V372" />
+              <path class="edge edge--dash" d="M360 308 V382" marker-end="url(#paper-arrow-gray)" />
               <text class="edge-label" x="378" y="344">合作周期</text>
 
-              <path class="edge edge--orange" d="M418 308 C480 320, 552 344, 600 382" marker-end="url(#paper-arrow-orange)" />
-              <text class="edge-label edge-label--orange" x="526" y="324">共同贡献</text>
+              <path class="edge edge--orange" d="M418 308 C480 320, 542 342, 604 366" marker-end="url(#paper-arrow-orange)" />
+              <text class="edge-label edge-label--orange" x="526" y="324">合作贡献</text>
             </g>
 
             <g class="box box--blue" transform="translate(28 36)">
@@ -311,7 +314,7 @@ onMounted(() => {
 
             <g class="box box--orange" transform="translate(490 372)">
               <rect width="198" height="122" rx="8" />
-              <text x="99" y="28">共同贡献</text>
+              <text x="99" y="28">合作贡献</text>
               <text x="99" y="52">{{ journalSummary }}</text>
               <text x="99" y="74">总被引 {{ citation.total }} / 最高 {{ citation.max }}</text>
               <text x="99" y="96">评分 {{ impactScore }}</text>

@@ -67,7 +67,9 @@ class ExpertPaperCooperationService(KGModuleScaffoldService):
     def analyze_mysql_demo(self, body: ExpertPaperCooperationDemoRequest) -> dict[str, Any]:
         return _build_analyze_result(body)
 
-    def build_structured_result_only(self, body: ExpertPaperCooperationDemoRequest) -> dict[str, Any]:
+    def build_structured_result_only(
+        self, body: ExpertPaperCooperationDemoRequest
+    ) -> dict[str, Any]:
         result = _build_analyze_result(body)
         return {"structuredResult": result["structuredResult"]}
 
@@ -78,7 +80,9 @@ class ExpertPaperCooperationService(KGModuleScaffoldService):
         contribution_cards: list[str] = []
         if structured["journalLevelCount"] or structured["conferenceLevelCount"]:
             contribution_cards.append(
-                _format_level_summary(structured["journalLevelCount"], structured["conferenceLevelCount"])
+                _format_level_summary(
+                    structured["journalLevelCount"], structured["conferenceLevelCount"]
+                )
             )
         contribution_cards.append(f"总被引{citation['total']}")
         contribution_cards.append(f"最高{citation['max']}")
@@ -156,12 +160,54 @@ class ExpertPaperCooperationService(KGModuleScaffoldService):
                 },
             ],
             "edges": [
-                {"source": "expertA", "target": "expertB", "label": "论文合作", "color": "purple", "lineType": "solid", "data": {}},
-                {"source": "expertA", "target": "cooperation", "label": "", "color": "blue", "lineType": "solid", "data": {}},
-                {"source": "expertB", "target": "cooperation", "label": "", "color": "green", "lineType": "solid", "data": {}},
-                {"source": "cooperation", "target": "topics", "label": "", "color": "green", "lineType": "solid", "data": {}},
-                {"source": "cooperation", "target": "period", "label": "", "color": "gray", "lineType": "dashed", "data": {}},
-                {"source": "cooperation", "target": "contribution", "label": "", "color": "orange", "lineType": "solid", "data": {}},
+                {
+                    "source": "expertA",
+                    "target": "expertB",
+                    "label": "论文合作",
+                    "color": "purple",
+                    "lineType": "solid",
+                    "data": {},
+                },
+                {
+                    "source": "expertA",
+                    "target": "cooperation",
+                    "label": "",
+                    "color": "blue",
+                    "lineType": "solid",
+                    "data": {},
+                },
+                {
+                    "source": "expertB",
+                    "target": "cooperation",
+                    "label": "",
+                    "color": "green",
+                    "lineType": "solid",
+                    "data": {},
+                },
+                {
+                    "source": "cooperation",
+                    "target": "topics",
+                    "label": "",
+                    "color": "green",
+                    "lineType": "solid",
+                    "data": {},
+                },
+                {
+                    "source": "cooperation",
+                    "target": "period",
+                    "label": "",
+                    "color": "gray",
+                    "lineType": "dashed",
+                    "data": {},
+                },
+                {
+                    "source": "cooperation",
+                    "target": "contribution",
+                    "label": "",
+                    "color": "orange",
+                    "lineType": "solid",
+                    "data": {},
+                },
             ],
             "metrics": {
                 "paperCount": structured["cooperationPaperCount"],
@@ -175,7 +221,13 @@ class ExpertPaperCooperationService(KGModuleScaffoldService):
                 "mode": "mysql_demo_graph_view",
                 "baseEndpoint": "/api/v1/kg-construction/expert-paper-cooperation-relations/demo/analyze",
                 "mysqlDatabase": _paper_coop_database(),
-                "mysqlTables": ["scholar", "paper", "paper_author", "venue", "scholar_paper_cooperation"],
+                "mysqlTables": [
+                    "scholar",
+                    "paper",
+                    "paper_author",
+                    "venue",
+                    "scholar_paper_cooperation",
+                ],
             },
         }
 
@@ -193,8 +245,12 @@ def _paper_coop_mysql_settings() -> dict[str, Any]:
     return {
         "host": os.getenv("PAPER_COOP_MYSQL_HOST") or os.getenv("LOCAL_MYSQL_HOST") or "127.0.0.1",
         "port": int(os.getenv("PAPER_COOP_MYSQL_PORT") or os.getenv("LOCAL_MYSQL_PORT") or 3306),
-        "user": os.getenv("PAPER_COOP_MYSQL_USERNAME") or os.getenv("LOCAL_MYSQL_USERNAME") or "root",
-        "password": os.getenv("PAPER_COOP_MYSQL_PASSWORD") or os.getenv("LOCAL_MYSQL_PASSWORD") or "123456789",
+        "user": os.getenv("PAPER_COOP_MYSQL_USERNAME")
+        or os.getenv("LOCAL_MYSQL_USERNAME")
+        or "root",
+        "password": os.getenv("PAPER_COOP_MYSQL_PASSWORD")
+        or os.getenv("LOCAL_MYSQL_PASSWORD")
+        or "123456789",
         "database": _paper_coop_database(),
         "charset": "utf8mb4",
         "autocommit": True,
@@ -210,7 +266,7 @@ def _parse_year(value: str | None) -> int | None:
 def _sql_literal(value: str | None) -> str:
     if value is None:
         return "NULL"
-    return "'" + str(value).replace('\\', '\\\\').replace("'", "''") + "'"
+    return "'" + str(value).replace("\\", "\\\\").replace("'", "''") + "'"
 
 
 def _json_list(value: Any) -> list[str]:
@@ -313,7 +369,10 @@ def _sql_in(values: list[str]) -> str:
 
 
 def _empty_distribution(start_year: int, end_year: int) -> list[dict[str, int]]:
-    return [{"year": year, "paperCount": 0, "citationCount": 0} for year in range(start_year, end_year + 1)]
+    return [
+        {"year": year, "paperCount": 0, "citationCount": 0}
+        for year in range(start_year, end_year + 1)
+    ]
 
 
 def _build_expert_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -482,7 +541,9 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
 
     papers: list[dict[str, Any]] = []
     topic_counter: Counter[str] = Counter()
-    year_counter: dict[int, dict[str, int]] = defaultdict(lambda: {"paperCount": 0, "citationCount": 0})
+    year_counter: dict[int, dict[str, int]] = defaultdict(
+        lambda: {"paperCount": 0, "citationCount": 0}
+    )
     journal_level_counter: Counter[str] = Counter()
     conference_level_counter: Counter[str] = Counter()
     coauthor_counter: Counter[str] = Counter()
@@ -547,8 +608,14 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
         citation_max = int(pair_summary.get("citationMax") or 0)
 
     years = [paper["year"] for paper in papers if paper["year"]]
-    start_year = min(years) if years else int(pair_summary.get("firstYear") or _parse_year(body.startTime) or 0)
-    end_year = max(years) if years else int(pair_summary.get("lastYear") or _parse_year(body.endTime) or 0)
+    start_year = (
+        min(years)
+        if years
+        else int(pair_summary.get("firstYear") or _parse_year(body.startTime) or 0)
+    )
+    end_year = (
+        max(years) if years else int(pair_summary.get("lastYear") or _parse_year(body.endTime) or 0)
+    )
 
     topic_list = [name for name, _ in topic_counter.most_common()]
     if not topic_list:
@@ -584,7 +651,9 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
         coauthor_items = _json_object_list(pair_summary.get("coreCollaborators"))
 
     stable_team_threshold = 2 if paper_count >= 2 else math.inf
-    stable_team_members = [item for item in coauthor_items if item["sharedPaperCount"] >= stable_team_threshold]
+    stable_team_members = [
+        item for item in coauthor_items if item["sharedPaperCount"] >= stable_team_threshold
+    ]
     if not stable_team_members:
         stable_team_members = _json_object_list(pair_summary.get("stableTeamMembers"))
 
@@ -613,7 +682,9 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
                 break
 
     if not shared_contribution_tags:
-        shared_contribution_tags = [tag for tag in _json_list(pair_summary.get("sharedContribution")) if tag]
+        shared_contribution_tags = [
+            tag for tag in _json_list(pair_summary.get("sharedContribution")) if tag
+        ]
 
     if paper_count:
         venue_weight_score = sum(_score_paper(paper) for paper in papers)
@@ -638,7 +709,9 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
         "cooperationTimeRange": {
             "startYear": int(start_year) if start_year else 0,
             "endYear": int(end_year) if end_year else 0,
-            "displayText": f"{int(start_year)} - {int(end_year)}" if start_year and end_year else "",
+            "displayText": f"{int(start_year)} - {int(end_year)}"
+            if start_year and end_year
+            else "",
         },
         "paperTopics": topic_list[:8],
         "cooperationPaperCount": paper_count,
@@ -661,7 +734,9 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
             if year in year_map:
                 year_map[year].update(values)
     else:
-        year_distribution = [{"year": year, **values} for year, values in sorted(year_counter.items())]
+        year_distribution = [
+            {"year": year, **values} for year, values in sorted(year_counter.items())
+        ]
 
     return {
         "taskName": "科技专家论文合作关系",
@@ -670,7 +745,9 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
         "expertB": expert_b,
         "structuredResult": structured_result,
         "papers": papers,
-        "topicDistribution": [{"name": name, "value": value} for name, value in topic_counter.most_common()],
+        "topicDistribution": [
+            {"name": name, "value": value} for name, value in topic_counter.most_common()
+        ],
         "yearDistribution": year_distribution,
         "stableTeam": {
             "teamFlag": bool(pair_summary.get("teamFlag")) or bool(stable_team_members),
@@ -689,7 +766,13 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
             "method": "POST",
             "sourceMode": "mysql_demo_tables",
             "mysqlDatabase": _paper_coop_database(),
-            "mysqlTables": ["scholar", "paper", "paper_author", "venue", "scholar_paper_cooperation"],
+            "mysqlTables": [
+                "scholar",
+                "paper",
+                "paper_author",
+                "venue",
+                "scholar_paper_cooperation",
+            ],
             "note": "结构化结果与图谱预览均来源于 MySQL 合作论文原始数据聚合。",
         },
     }

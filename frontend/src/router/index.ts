@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import ExpertColleagueView from '../views/expert-colleague/ExpertColleagueView.vue'
+import ExpertPaperCooperationView from '../views/expert-paper-cooperation/ExpertPaperCooperationView.vue'
 import ReasoningPlaceholderView from '../views/reasoning-placeholder/ReasoningPlaceholderView.vue'
 
 const placeholderRoutes = [
@@ -27,12 +28,6 @@ const placeholderRoutes = [
     name: 'expert-alumni',
     title: '科技专家校友关系',
     endpoint: '/api/v1/expert/alumni/relation/infer',
-  },
-  {
-    path: '/paper-cooperation',
-    name: 'paper-cooperation',
-    title: '专家论文合作关系',
-    endpoint: '/api/v1/paper/cooperation/relation/infer',
   },
   {
     path: '/enterprise-relation',
@@ -67,6 +62,14 @@ export const router = createRouter({
       component: ExpertColleagueView,
       meta: {
         title: '科技专家同事关系',
+      },
+    },
+    {
+      path: '/paper-cooperation',
+      name: 'paper-cooperation',
+      component: ExpertPaperCooperationView,
+      meta: {
+        title: '专家论文合作关系',
       },
     },
     ...placeholderRoutes.map((route) => ({

@@ -20,6 +20,7 @@ class DwdOrgAnnualFinancialInfo(Base):
 
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
+    org_type = Column("org_type", String(50), nullable=True, comment="机构类型")
     social_credit_code = Column(
         "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
     )

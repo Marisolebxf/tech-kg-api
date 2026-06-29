@@ -170,3 +170,22 @@ class DwdScholarTalentFlag(Base):
     academician = Column("academician", Integer(), nullable=False, comment="是否为院士：0:否,1:是")
     create_time = Column("create_time", DateTime(), nullable=False, comment="创建时间")
     update_time = Column("update_time", DateTime(), nullable=False, comment="记录最后更新时间")
+
+
+class Scholar(Base):
+    """techkg 本地 scholar 表（真实业务学者，如 COOP-SCH001 陈建国）。"""
+
+    __tablename__ = "scholar"
+    __table_args__ = {"comment": "techkg 本地学者表"}
+
+    scholar_id = Column("scholar_id", String(32), primary_key=True, comment="学者唯一标识")
+    name_zh = Column("name_zh", String(128), nullable=True, comment="中文姓名")
+    name_en = Column("name_en", String(128), nullable=True, comment="英文姓名")
+    org_name_zh = Column("org_name_zh", String(1024), nullable=True, comment="所属机构中文名称")
+    title = Column("title", String(64), nullable=True, comment="职称")
+    gender = Column("gender", String(8), nullable=True, comment="性别")
+    research_direction = Column("research_direction", Text(), nullable=True, comment="研究方向")
+    paper_nums = Column("paper_nums", BigInteger(), nullable=True, comment="论文数")
+    citation_nums = Column("citation_nums", BigInteger(), nullable=True, comment="被引次数")
+    h_index = Column("h_index", BigInteger(), nullable=True, comment="H 指数")
+    updated_at = Column("updated_at", DateTime(), nullable=True, comment="更新时间")

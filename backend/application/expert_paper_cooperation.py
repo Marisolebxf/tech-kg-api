@@ -15,4 +15,3 @@ class ExpertPaperCooperationApplication:
         self, body: ExpertPaperCooperationDemoRequest
     ) -> dict[str, Any]:
         return self._service.build_structured_result_only(body)
-

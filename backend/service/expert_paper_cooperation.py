@@ -60,175 +60,11 @@ SHARED_CONTRIBUTION_THEME_MAP = {
 class ExpertPaperCooperationService(KGModuleScaffoldService):
     module_code = "expert_paper_cooperation"
 
-    def analyze_demo(self, body: ExpertPaperCooperationDemoRequest) -> dict[str, Any]:
-        return _build_analyze_result(body)
-
-    def analyze_mysql_demo(self, body: ExpertPaperCooperationDemoRequest) -> dict[str, Any]:
-        return _build_analyze_result(body)
-
     def build_structured_result_only(
         self, body: ExpertPaperCooperationDemoRequest
     ) -> dict[str, Any]:
         result = _build_analyze_result(body)
         return {"structuredResult": result["structuredResult"]}
-
-    def build_graph_view(self, body: ExpertPaperCooperationDemoRequest) -> dict[str, Any]:
-        result = _build_analyze_result(body)
-        structured = result["structuredResult"]
-        citation = structured["citation"]
-        contribution_cards: list[str] = []
-        if structured["journalLevelCount"] or structured["conferenceLevelCount"]:
-            contribution_cards.append(
-                _format_level_summary(
-                    structured["journalLevelCount"], structured["conferenceLevelCount"]
-                )
-            )
-        contribution_cards.append(f"总被引{citation['total']}")
-        contribution_cards.append(f"最高{citation['max']}")
-        contribution_cards.append(f"评分{structured['academicImpactScore']}")
-
-        return {
-            "taskName": "科技专家论文合作关系图谱视图",
-            "input": body.model_dump(),
-            "nodes": [
-                {
-                    "id": "expertA",
-                    "type": "expert",
-                    "label": f"专家A：{result['expertA']['name']}",
-                    "subtitle": result["expertA"]["organization"],
-                    "color": "blue",
-                    "x": 120,
-                    "y": 80,
-                    "items": [],
-                    "data": result["expertA"],
-                },
-                {
-                    "id": "expertB",
-                    "type": "expert",
-                    "label": f"专家B：{result['expertB']['name']}",
-                    "subtitle": result["expertB"]["organization"],
-                    "color": "green",
-                    "x": 760,
-                    "y": 80,
-                    "items": [],
-                    "data": result["expertB"],
-                },
-                {
-                    "id": "cooperation",
-                    "type": "summary",
-                    "label": "合作论文",
-                    "subtitle": f"共同论文{structured['cooperationPaperCount']}篇 / 合作频次{structured['cooperationFrequency']}次",
-                    "color": "purple",
-                    "x": 430,
-                    "y": 290,
-                    "items": [],
-                    "data": {},
-                },
-                {
-                    "id": "topics",
-                    "type": "topicGroup",
-                    "label": "论文主题",
-                    "subtitle": None,
-                    "color": "green",
-                    "x": 110,
-                    "y": 570,
-                    "items": structured["paperTopics"],
-                    "data": {"distribution": result["topicDistribution"]},
-                },
-                {
-                    "id": "period",
-                    "type": "period",
-                    "label": "合作周期",
-                    "subtitle": structured["cooperationTimeRange"]["displayText"],
-                    "color": "orange",
-                    "x": 500,
-                    "y": 610,
-                    "items": [],
-                    "data": {"yearDistribution": result["yearDistribution"]},
-                },
-                {
-                    "id": "contribution",
-                    "type": "contribution",
-                    "label": "共同贡献",
-                    "subtitle": None,
-                    "color": "orange",
-                    "x": 810,
-                    "y": 590,
-                    "items": contribution_cards,
-                    "data": result["sharedContribution"],
-                },
-            ],
-            "edges": [
-                {
-                    "source": "expertA",
-                    "target": "expertB",
-                    "label": "论文合作",
-                    "color": "purple",
-                    "lineType": "solid",
-                    "data": {},
-                },
-                {
-                    "source": "expertA",
-                    "target": "cooperation",
-                    "label": "",
-                    "color": "blue",
-                    "lineType": "solid",
-                    "data": {},
-                },
-                {
-                    "source": "expertB",
-                    "target": "cooperation",
-                    "label": "",
-                    "color": "green",
-                    "lineType": "solid",
-                    "data": {},
-                },
-                {
-                    "source": "cooperation",
-                    "target": "topics",
-                    "label": "",
-                    "color": "green",
-                    "lineType": "solid",
-                    "data": {},
-                },
-                {
-                    "source": "cooperation",
-                    "target": "period",
-                    "label": "",
-                    "color": "gray",
-                    "lineType": "dashed",
-                    "data": {},
-                },
-                {
-                    "source": "cooperation",
-                    "target": "contribution",
-                    "label": "",
-                    "color": "orange",
-                    "lineType": "solid",
-                    "data": {},
-                },
-            ],
-            "metrics": {
-                "paperCount": structured["cooperationPaperCount"],
-                "citationTotal": citation["total"],
-                "citationMax": citation["max"],
-                "cooperationFrequency": structured["cooperationFrequency"],
-                "academicImpactScore": structured["academicImpactScore"],
-            },
-            "structuredResult": structured,
-            "source": {
-                "mode": "mysql_demo_graph_view",
-                "baseEndpoint": "/api/v1/kg-construction/expert-paper-cooperation-relations/demo/analyze",
-                "mysqlDatabase": _paper_coop_database(),
-                "mysqlTables": [
-                    "scholar",
-                    "paper",
-                    "paper_author",
-                    "venue",
-                    "scholar_paper_cooperation",
-                ],
-            },
-        }
 
 
 def _paper_coop_database() -> str:
@@ -761,7 +597,7 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
             "impactSummary": f"评分{academic_impact_score}",
         },
         "apiResultExample": {
-            "endpoint": "/api/v1/kg-construction/expert-paper-cooperation-relations/demo/analyze",
+            "endpoint": "/api/v1/kg-construction/expert-paper-cooperation-relations/demo/structured-result",
             "method": "POST",
             "sourceMode": "mysql_demo_tables",
             "mysqlDatabase": _paper_coop_database(),

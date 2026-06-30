@@ -19,7 +19,6 @@ export interface StructuredResultPayload {
   academicImpactScore: number
   citation: { total: number; max: number }
   cooperationTimeRange: { startYear: number; endYear: number; displayText: string }
-  stableTeamName?: string | null
   stableTeamMembers?: string[]
   coreCollaborators?: string[]
   sharedContribution?: string[]

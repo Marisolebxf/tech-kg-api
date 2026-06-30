@@ -33,8 +33,8 @@ const dataSourceOptions: Array<{ label: string; value: DataSource }> = [
 
 const defaultParams: ExpertPaperCooperationDemoRequest = {
   dataSource: 'knowledge_graph',
-  expertAId: 'COOP-SCH001',
-  expertBId: 'COOP-SCH002',
+  expertAId: '4P566No1',
+  expertBId: 'd492835p',
   startTime: '2021-01-01',
   endTime: '2024-12-31',
 }
@@ -58,7 +58,18 @@ const authorA = computed(() => result.value?.authorList?.[0] ?? '专家 A')
 const authorB = computed(() => result.value?.authorList?.[1] ?? '专家 B')
 const authorUnitA = computed(() => result.value?.authorUnits?.[0] ?? '待返回')
 const authorUnitB = computed(() => result.value?.authorUnits?.[1] ?? '待返回')
-const previewTopics = computed(() => (result.value?.paperTopics ?? []).slice(0, 4))
+const allPaperTopics = computed(() => result.value?.paperTopics ?? [])
+const graphPreviewTopics = computed(() => allPaperTopics.value.slice(0, 2))
+
+function truncateText(value: string, maxLength: number) {
+  if (value.length <= maxLength) {
+    return value
+  }
+  return `${value.slice(0, maxLength)}...`
+}
+
+const authorUnitPreviewA = computed(() => truncateText(authorUnitA.value, 16))
+const authorUnitPreviewB = computed(() => truncateText(authorUnitB.value, 16))
 const stableTeamMembers = computed(() => result.value?.stableTeamMembers ?? [])
 const coreCollaborators = computed(() => result.value?.coreCollaborators ?? [])
 const contributionTags = computed(() => result.value?.sharedContribution ?? [])
@@ -67,7 +78,7 @@ const paperCount = computed(() => result.value?.cooperationPaperCount ?? 0)
 const citation = computed(() => result.value?.citation ?? { total: 0, max: 0 })
 const impactScore = computed(() => result.value?.academicImpactScore ?? 0)
 const frequency = computed(() => result.value?.cooperationFrequency ?? 0)
-const topicText = computed(() => previewTopics.value.join('、') || '—')
+const topicText = computed(() => allPaperTopics.value.join('、') || '—')
 const stableTeamText = computed(() => stableTeamMembers.value.join('、') || '—')
 const collaboratorText = computed(() => coreCollaborators.value.join('、') || '—')
 const contributionText = computed(() => contributionTags.value.join('、') || '—')
@@ -117,16 +128,15 @@ const developerResponseFields = [
   { name: 'citation', type: 'object', description: '论文被引情况' },
   { name: 'cooperationFrequency', type: 'number', description: '合作频次' },
   { name: 'academicImpactScore', type: 'number', description: '学术影响力评分' },
-  { name: 'stableTeamName', type: 'string|null', description: '长期稳定合作团队名称' },
   { name: 'stableTeamMembers', type: 'array', description: '长期稳定合作团队成员' },
   { name: 'coreCollaborators', type: 'array', description: '核心合作人员' },
   { name: 'sharedContribution', type: 'array', description: '合作贡献标签' },
 ] as const
 
 const codeSamples = computed(() => ({
-  python: `import json\nimport requests\n\nurl = "http://127.0.0.1:8891${endpoint}"\npayload = {\n    "dataSource": "knowledge_graph",\n    "expertAId": "COOP-SCH001",\n    "expertBId": "COOP-SCH002",\n    "startTime": "2021-01-01",\n    "endTime": "2024-12-31"\n}\n\nresponse = requests.post(url, json=payload, timeout=30)\nresponse.raise_for_status()\nresult = response.json()\nprint(json.dumps(result.get("structuredResult", {}), ensure_ascii=False, indent=2))`,
-  node: `const url = "http://127.0.0.1:8891${endpoint}";\n\nconst payload = {\n  dataSource: "knowledge_graph",\n  expertAId: "COOP-SCH001",\n  expertBId: "COOP-SCH002",\n  startTime: "2021-01-01",\n  endTime: "2024-12-31",\n};\n\nasync function fetchStructuredResult() {\n  const response = await fetch(url, {\n    method: "POST",\n    headers: { "Content-Type": "application/json" },\n    body: JSON.stringify(payload),\n  });\n\n  if (!response.ok) throw new Error(\`HTTP \${response.status}\`);\n  const result = await response.json();\n  console.log(result.structuredResult);\n}\n\nfetchStructuredResult().catch(console.error);`,
-  curl: `curl --location "http://127.0.0.1:8891${endpoint}" \\\n  --header "Content-Type: application/json" \\\n  --data '{\n    "dataSource": "knowledge_graph",\n    "expertAId": "COOP-SCH001",\n    "expertBId": "COOP-SCH002",\n    "startTime": "2021-01-01",\n    "endTime": "2024-12-31"\n  }'`,
+  python: `import json\nimport requests\n\nurl = "http://127.0.0.1:8891${endpoint}"\npayload = {\n    "dataSource": "knowledge_graph",\n    "expertAId": "4P566No1",\n    "expertBId": "d492835p",\n    "startTime": "2021-01-01",\n    "endTime": "2024-12-31"\n}\n\nresponse = requests.post(url, json=payload, timeout=30)\nresponse.raise_for_status()\nresult = response.json()\nprint(json.dumps(result.get("structuredResult", {}), ensure_ascii=False, indent=2))`,
+  node: `const url = "http://127.0.0.1:8891${endpoint}";\n\nconst payload = {\n  dataSource: "knowledge_graph",\n  expertAId: "4P566No1",\n  expertBId: "d492835p",\n  startTime: "2021-01-01",\n  endTime: "2024-12-31",\n};\n\nasync function fetchStructuredResult() {\n  const response = await fetch(url, {\n    method: "POST",\n    headers: { "Content-Type": "application/json" },\n    body: JSON.stringify(payload),\n  });\n\n  if (!response.ok) throw new Error(\`HTTP \${response.status}\`);\n  const result = await response.json();\n  console.log(result.structuredResult);\n}\n\nfetchStructuredResult().catch(console.error);`,
+  curl: `curl --location "http://127.0.0.1:8891${endpoint}" \\\n  --header "Content-Type: application/json" \\\n  --data '{\n    "dataSource": "knowledge_graph",\n    "expertAId": "4P566No1",\n    "expertBId": "d492835p",\n    "startTime": "2021-01-01",\n    "endTime": "2024-12-31"\n  }'`,
 }))
 
 function formatNow() {
@@ -281,14 +291,18 @@ onMounted(() => {
               <rect width="156" height="82" rx="8" />
               <text x="78" y="28">专家A</text>
               <text x="78" y="52">{{ authorA }}</text>
-              <text x="78" y="70">{{ authorUnitA }}</text>
+              <foreignObject x="12" y="60" width="132" height="18">
+                <div class="svg-unit-text" :title="authorUnitA">{{ authorUnitPreviewA }}</div>
+              </foreignObject>
             </g>
 
             <g class="box box--green" transform="translate(534 36)">
               <rect width="156" height="82" rx="8" />
               <text x="78" y="28">专家B</text>
               <text x="78" y="52">{{ authorB }}</text>
-              <text x="78" y="70">{{ authorUnitB }}</text>
+              <foreignObject x="12" y="60" width="132" height="18">
+                <div class="svg-unit-text" :title="authorUnitB">{{ authorUnitPreviewB }}</div>
+              </foreignObject>
             </g>
 
             <g class="box box--purple" transform="translate(246 234)">
@@ -300,9 +314,9 @@ onMounted(() => {
             <g class="box box--green" transform="translate(16 382)">
               <rect width="218" height="112" rx="8" />
               <text x="109" y="28">论文主题</text>
-              <template v-for="(item, index) in previewTopics" :key="item">
-                <rect class="chip" :x="24 + (index % 2) * 88" :y="44 + Math.floor(index / 2) * 30" width="74" height="22" rx="6" />
-                <text :x="61 + (index % 2) * 88" :y="59 + Math.floor(index / 2) * 30">{{ item }}</text>
+              <template v-for="(item, index) in graphPreviewTopics" :key="item">
+                <rect class="chip" :x="24" :y="46 + index * 30" width="170" height="22" rx="6" />
+                <text :x="109" :y="61 + index * 30">{{ truncateText(item, 24) }}</text>
               </template>
             </g>
 
@@ -333,7 +347,11 @@ onMounted(() => {
             </div>
           </div>
           <dl v-if="resultMode === 'structured'" class="result-panel__table scroll-on-demand">
-            <div v-for="([label, value]) in structuredRows" :key="label">
+            <div
+              v-for="([label, value]) in structuredRows"
+              :key="label"
+              :class="{ 'is-long': ['论文主题', '稳定团队成员', '核心合作人员', '合作贡献'].includes(label) }"
+            >
               <dt>{{ label }}</dt>
               <dd>{{ value }}</dd>
             </div>
@@ -705,6 +723,18 @@ onMounted(() => {
   dominant-baseline: middle;
 }
 
+.svg-unit-text {
+  width: 132px;
+  overflow: hidden;
+  color: #174ea6;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .box--green rect {
   fill: #f5fff7;
   stroke: var(--graph-green);
@@ -712,6 +742,10 @@ onMounted(() => {
 
 .box--green text {
   fill: #237804;
+}
+
+.box--green .svg-unit-text {
+  color: #237804;
 }
 
 .box--purple rect {
@@ -828,7 +862,7 @@ onMounted(() => {
 
 .result-panel__table div {
   display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
+  grid-template-columns: 160px minmax(0, 1fr);
   min-height: 44px;
   border-bottom: 1px solid var(--border);
 }
@@ -840,16 +874,29 @@ onMounted(() => {
   margin: 0;
   padding: 0 var(--space-16);
   font-size: 16px;
+  line-height: 1.6;
 }
 
 .result-panel__table dt {
   justify-content: flex-end;
   border-right: 1px solid var(--border);
   color: var(--text-tertiary);
+  font-size: 15px;
+  white-space: nowrap;
 }
 
 .result-panel__table dd {
+  min-width: 0;
   color: var(--text-primary);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.result-panel__table div.is-long dt,
+.result-panel__table div.is-long dd {
+  align-items: flex-start;
+  padding-top: var(--space-12);
+  padding-bottom: var(--space-12);
 }
 
 .result-panel__tag {

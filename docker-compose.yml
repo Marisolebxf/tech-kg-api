@@ -14,6 +14,7 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-techkg}
       MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
+      PAPER_COOP_MYSQL_DATABASE: ${PAPER_COOP_MYSQL_DATABASE:-gkx_local}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-glm-4.7-flash}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}

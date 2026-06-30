@@ -69,10 +69,7 @@ class ExpertPaperCooperationService(KGModuleScaffoldService):
 
 def _paper_coop_database() -> str:
     return (
-        os.getenv("PAPER_COOP_MYSQL_DATABASE")
-        or os.getenv("LOCAL_MYSQL_DATABASE")
-        or os.getenv("MYSQL_DATABASE")
-        or "techkg"
+        os.getenv("PAPER_COOP_MYSQL_DATABASE") or os.getenv("LOCAL_MYSQL_DATABASE") or "gkx_local"
     )
 
 
@@ -191,9 +188,9 @@ def _run_mysql_json_query(sql: str) -> list[dict[str, Any]]:
 
 def _source_filter_sql(data_source: str) -> str:
     if data_source == "web_of_science":
-        return " AND p.paper_language = 'en'"
+        return " AND COALESCE(p.en_name, '') <> ''"
     if data_source in {"cnki", "wanfang"}:
-        return " AND p.paper_language = 'cn'"
+        return " AND COALESCE(p.zh_name, '') <> ''"
     return ""
 
 
@@ -210,13 +207,95 @@ def _empty_distribution(start_year: int, end_year: int) -> list[dict[str, int]]:
     ]
 
 
+def _is_usable_text(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    question_count = text.count("?") + text.count("�")
+    return question_count == 0 or question_count / max(1, len(text)) < 0.25
+
+
+def _pick_text(*values: Any, default: str = "") -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text and _is_usable_text(text):
+            return text
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return default
+
+
+def _split_semicolon_text(value: Any) -> list[str]:
+    if not value:
+        return []
+    items: list[str] = []
+    for chunk in str(value).replace("；", ";").split(";"):
+        item = chunk.strip()
+        if item and item not in items:
+            items.append(item)
+    return items
+
+
+def _parse_author_names(value: Any) -> list[str]:
+    if not value:
+        return []
+    normalized = str(value).replace("；", ",").replace(";", ",")
+    names: list[str] = []
+    for chunk in normalized.split(","):
+        name = chunk.strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _infer_venue_type(row: dict[str, Any]) -> str:
+    raw = str(row.get("venueType") or "").lower()
+    venue = str(row.get("venue") or "").lower()
+    if "conference" in raw or "proceeding" in raw:
+        return "conference"
+    conference_tokens = ["conference", "proceedings", "cvpr", "iccv", "eccv", "aaai", "ijcai"]
+    if any(token in venue for token in conference_tokens):
+        return "conference"
+    return "journal"
+
+
+def _infer_venue_level(row: dict[str, Any]) -> str:
+    jcr_zone = str(row.get("jcrZone") or "").strip()
+    if jcr_zone:
+        return f"JCR-{jcr_zone}"
+    scope_zone = str(row.get("scopeZone") or "").strip()
+    if scope_zone:
+        return f"中科院-{scope_zone}"
+    sub_quartile = row.get("subQuartile")
+    if sub_quartile not in {None, ""}:
+        return f"分区-{sub_quartile}"
+    if int(row.get("top") or 0) == 1:
+        return "Top期刊"
+    if int(row.get("isSci") or 0) == 1:
+        return "SCI"
+    return "未分级"
+
+
+def _build_level_count_key(paper: dict[str, Any]) -> str:
+    level = paper.get("venueLevel") or "未分级"
+    impact = paper.get("impactFactor")
+    if impact not in {None, "", 0} and level == "未分级":
+        return "IF收录"
+    return level
+
+
 def _build_expert_payload(row: dict[str, Any]) -> dict[str, Any]:
+    research_direction = _split_semicolon_text(row.get("researchDirection"))
     return {
         "expertId": row["scholarId"],
-        "name": row["name"],
-        "organization": row.get("organization") or "未知机构",
-        "title": row.get("title") or "未知职称",
-        "researchDirection": _json_list(row.get("researchDirection")),
+        "name": _pick_text(row.get("nameZh"), row.get("nameEn"), default=row["scholarId"]),
+        "organization": _pick_text(
+            row.get("organizationZh"), row.get("organizationEn"), default="未知机构"
+        ),
+        "title": row.get("title") or "科技专家",
+        "researchDirection": research_direction,
         "paperCount": int(row.get("paperCount") or 0),
         "citationCount": int(row.get("citationCount") or 0),
         "hIndex": float(row.get("hIndex") or 0),
@@ -226,51 +305,37 @@ def _build_expert_payload(row: dict[str, Any]) -> dict[str, Any]:
 def _fetch_experts(expert_a_id: str, expert_b_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
     sql = f"""
     SELECT JSON_OBJECT(
-        'scholarId', scholar_id,
-        'name', name_zh,
-        'organization', org_name_zh,
-        'title', title,
-        'researchDirection', research_direction,
-        'paperCount', paper_nums,
-        'citationCount', citation_nums,
-        'hIndex', h_index
+        'scholarId', s.scholar_id,
+        'nameZh', s.name_zh,
+        'nameEn', s.name_en,
+        'organizationZh', s.scholar_org_name_zh,
+        'organizationEn', s.scholar_org_name_en,
+        'researchDirection', rd.fields,
+        'paperCount', s.paper_nums,
+        'citationCount', s.citation_nums,
+        'hIndex', s.h_index
     )
-    FROM scholar
-    WHERE scholar_id IN ({_sql_literal(expert_a_id)}, {_sql_literal(expert_b_id)});
+    FROM dwd_scholar s
+    LEFT JOIN dwd_scholar_research_direction rd ON rd.scholar_id = s.scholar_id
+    WHERE s.scholar_id IN ({_sql_literal(expert_a_id)}, {_sql_literal(expert_b_id)})
+      AND s.status = 1;
     """
     rows = _run_mysql_json_query(sql)
     by_id = {row["scholarId"]: row for row in rows}
     if expert_a_id not in by_id or expert_b_id not in by_id:
-        raise ValueError("MySQL techkg 中不存在输入的专家ID")
+        raise ValueError("gkx_local 中不存在输入的专家ID，请使用 dwd_scholar.scholar_id")
     return _build_expert_payload(by_id[expert_a_id]), _build_expert_payload(by_id[expert_b_id])
 
 
 def _fetch_pair_summary(expert_a_id: str, expert_b_id: str) -> dict[str, Any]:
     sql = f"""
     SELECT JSON_OBJECT(
-        'expertAId', expert_a_id,
-        'expertBId', expert_b_id,
-        'paperCount', paper_count,
-        'firstYear', first_year,
-        'lastYear', last_year,
-        'citationTotal', citation_total,
-        'citationMax', citation_max,
-        'cooperationFrequency', cooperation_frequency,
-        'academicImpactScore', academic_impact_score,
-        'journalLevelCount', journal_level_count_json,
-        'conferenceLevelCount', conference_level_count_json,
-        'commonTopics', common_topics_json,
-        'authorUnits', author_units_json,
-        'teamFlag', team_flag,
-        'stableTeamName', stable_team_name,
-        'stableTeamMembers', stable_team_members_json,
-        'coreCollaborators', core_collaborators_json,
-        'sharedContribution', shared_contribution_json
+        'cooperationFrequency', COALESCE(MAX(co_paper_count), 0)
     )
-    FROM scholar_paper_cooperation
-    WHERE (expert_a_id = {_sql_literal(expert_a_id)} AND expert_b_id = {_sql_literal(expert_b_id)})
-       OR (expert_a_id = {_sql_literal(expert_b_id)} AND expert_b_id = {_sql_literal(expert_a_id)})
-    LIMIT 1;
+    FROM dwd_scholar_coauthor
+    WHERE status = 1
+      AND ((scholar_id = {_sql_literal(expert_a_id)} AND co_scholar_id = {_sql_literal(expert_b_id)})
+        OR (scholar_id = {_sql_literal(expert_b_id)} AND co_scholar_id = {_sql_literal(expert_a_id)}));
     """
     rows = _run_mysql_json_query(sql)
     return rows[0] if rows else {}
@@ -279,71 +344,104 @@ def _fetch_pair_summary(expert_a_id: str, expert_b_id: str) -> dict[str, Any]:
 def _fetch_shared_papers(body: ExpertPaperCooperationDemoRequest) -> list[dict[str, Any]]:
     start_year = _parse_year(body.startTime)
     end_year = _parse_year(body.endTime)
-    filters: list[str] = []
+    filters: list[str] = ["r1.status = 1", "r2.status = 1", "p.status = 1"]
     if start_year is not None:
-        filters.append(f"p.publish_year >= {start_year}")
+        filters.append(f"r1.year >= {start_year}")
     if end_year is not None:
-        filters.append(f"p.publish_year <= {end_year}")
-    filters_sql = "".join(f" AND {item}" for item in filters) + _source_filter_sql(body.dataSource)
+        filters.append(f"r1.year <= {end_year}")
+    filters_sql = " AND ".join(filters) + _source_filter_sql(body.dataSource)
 
     sql = f"""
     SELECT JSON_OBJECT(
-        'paperId', p.paper_id,
-        'title', p.title,
-        'paperLanguage', p.paper_language,
-        'publishYear', p.publish_year,
-        'publishDate', DATE_FORMAT(p.publish_date, '%Y-%m-%d'),
-        'venueId', p.venue_id,
-        'venue', COALESCE(p.venue_name, v.venue_name, '未知期刊/会议'),
-        'venueType', COALESCE(p.venue_type, v.venue_type, 'journal'),
-        'venueLevel', COALESCE(p.venue_level, v.venue_level, '未分级'),
-        'citationCount', COALESCE(p.citation_count, 0),
-        'keywords', p.keywords,
+        'paperId', p.id,
+        'titleZh', p.zh_name,
+        'titleEn', p.en_name,
+        'publishYear', r1.year,
+        'publishDate', DATE_FORMAT(COALESCE(r1.publish_time, r2.publish_time, p.cover_date_start), '%Y-%m-%d'),
+        'venueId', r1.publication_id,
+        'venue', COALESCE(NULLIF(p.publication_en_name, ''), ej.en_name, zj.en_name, zj.zh_name, '未知期刊/会议'),
+        'venueType', COALESCE(ej.publication_type, zj.publication_type, ''),
+        'jcrZone', ej.jcr_zone,
+        'scopeZone', zj.scope_zone,
+        'subQuartile', zj.sub_quartile,
+        'top', COALESCE(ej.top, 0),
+        'isSci', COALESCE(ej.is_sci, zj.is_sci, 0),
+        'impactFactor', COALESCE(ej.impact_factor, zj.impact_factor, 0),
+        'citationCount', GREATEST(COALESCE(r1.citations, 0), COALESCE(r2.citations, 0)),
+        'authors', p.authors,
         'doi', p.doi,
         'paperUrl', p.paper_url,
-        'abstractText', p.abstract_text
+        'abstractText', COALESCE(NULLIF(p.zh_abstract, ''), p.en_abstract, '')
     )
-    FROM paper p
-    JOIN paper_author pa ON pa.paper_id = p.paper_id AND pa.scholar_id = {_sql_literal(body.expertAId)}
-    JOIN paper_author pb ON pb.paper_id = p.paper_id AND pb.scholar_id = {_sql_literal(body.expertBId)}
-    LEFT JOIN venue v ON v.venue_id = p.venue_id
-    WHERE 1 = 1 {filters_sql}
-    ORDER BY p.publish_year ASC, COALESCE(p.citation_count, 0) DESC, p.paper_id;
+    FROM dwd_scholar_paper_relation r1
+    JOIN dwd_scholar_paper_relation r2
+      ON r1.paper_id = r2.paper_id
+     AND r2.scholar_id = {_sql_literal(body.expertBId)}
+    JOIN dwd_scholar_papers p ON p.id = r1.paper_id
+    LEFT JOIN dwd_en_journal ej ON ej.id = r1.publication_id
+    LEFT JOIN dwd_zh_journal zj ON zj.id = r1.publication_id
+    WHERE r1.scholar_id = {_sql_literal(body.expertAId)}
+      AND {filters_sql}
+    ORDER BY r1.year ASC, GREATEST(COALESCE(r1.citations, 0), COALESCE(r2.citations, 0)) DESC, p.id
+    LIMIT 1000;
     """
     return _run_mysql_json_query(sql)
 
 
-def _fetch_paper_authors(paper_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
-    if not paper_ids:
-        return {}
+def _fetch_paper_authors(paper_rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    by_paper: dict[str, list[dict[str, Any]]] = {}
+    for row in paper_rows:
+        authors: list[dict[str, Any]] = []
+        for index, name in enumerate(_parse_author_names(row.get("authors")), start=1):
+            authors.append(
+                {
+                    "scholarId": None,
+                    "name": name,
+                    "order": index,
+                    "organization": None,
+                    "isCorresponding": False,
+                    "role": "",
+                }
+            )
+        by_paper[str(row["paperId"])] = authors
+    return by_paper
+
+
+def _fetch_pair_core_coauthors(expert_a_id: str, expert_b_id: str) -> list[dict[str, Any]]:
     sql = f"""
     SELECT JSON_OBJECT(
-        'paperId', paper_id,
-        'scholarId', scholar_id,
-        'authorName', author_name,
-        'authorOrder', author_order,
-        'orgName', org_name,
-        'isCorresponding', is_corresponding,
-        'authorRole', author_role
+        'expertId', ca.co_scholar_id,
+        'nameZh', ca.co_scholar_name_zh,
+        'nameEn', ca.co_scholar_name_en,
+        'organizationZh', ca.co_scholar_org_name_zh,
+        'organizationEn', ca.co_scholar_org_name_en,
+        'sharedPaperCount', LEAST(COALESCE(ca.co_paper_count, 0), COALESCE(cb.co_paper_count, 0))
     )
-    FROM paper_author
-    WHERE paper_id IN {_sql_in(paper_ids)}
-    ORDER BY paper_id, author_order;
+    FROM dwd_scholar_coauthor ca
+    JOIN dwd_scholar_coauthor cb ON cb.co_scholar_id = ca.co_scholar_id
+    WHERE ca.scholar_id = {_sql_literal(expert_a_id)}
+      AND cb.scholar_id = {_sql_literal(expert_b_id)}
+      AND ca.status = 1
+      AND cb.status = 1
+      AND ca.co_scholar_id NOT IN ({_sql_literal(expert_a_id)}, {_sql_literal(expert_b_id)})
+    ORDER BY LEAST(COALESCE(ca.co_paper_count, 0), COALESCE(cb.co_paper_count, 0)) DESC
+    LIMIT 10;
     """
     rows = _run_mysql_json_query(sql)
-    by_paper: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    result: list[dict[str, Any]] = []
     for row in rows:
-        by_paper[row["paperId"]].append(
+        result.append(
             {
-                "scholarId": row.get("scholarId"),
-                "name": row.get("authorName"),
-                "order": int(row.get("authorOrder") or 0),
-                "organization": row.get("orgName"),
-                "isCorresponding": bool(int(row.get("isCorresponding") or 0)),
-                "role": row.get("authorRole") or "",
+                "expertId": row.get("expertId"),
+                "name": _pick_text(row.get("nameZh"), row.get("nameEn"), default="未知合作者"),
+                "organization": _pick_text(
+                    row.get("organizationZh"), row.get("organizationEn"), default=""
+                ),
+                "sharedPaperCount": int(row.get("sharedPaperCount") or 0),
+                "topics": [],
             }
         )
-    return dict(by_paper)
+    return result
 
 
 def _format_level_summary(journal_levels: dict[str, int], conference_levels: dict[str, int]) -> str:
@@ -358,21 +456,28 @@ def _format_level_summary(journal_levels: dict[str, int], conference_levels: dic
 def _score_paper(paper: dict[str, Any]) -> float:
     level = paper.get("venueLevel") or ""
     level_weight = {
-        "CCF-A": 12,
-        "CCF-A1": 12,
-        "CCF-A2": 10,
-        "CCF-B": 8,
-        "CCF-B1": 8,
-        "CCF-C": 5,
+        "JCR-Q1": 12,
+        "JCR-Q2": 9,
+        "JCR-Q3": 6,
+        "JCR-Q4": 4,
+        "Top期刊": 10,
+        "SCI": 7,
+        "中科院-1": 10,
+        "中科院-2": 8,
+        "中科院-3": 6,
+        "中科院-4": 4,
     }.get(level, 4)
-    return float(level_weight + int(paper.get("citationCount") or 0) / 12)
+    impact_factor = float(paper.get("impactFactor") or 0)
+    return float(
+        level_weight + min(10.0, impact_factor) + int(paper.get("citationCount") or 0) / 12
+    )
 
 
 def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, Any]:
     expert_a, expert_b = _fetch_experts(body.expertAId, body.expertBId)
     pair_summary = _fetch_pair_summary(body.expertAId, body.expertBId)
     paper_rows = _fetch_shared_papers(body)
-    author_map = _fetch_paper_authors([row["paperId"] for row in paper_rows])
+    author_map = _fetch_paper_authors(paper_rows)
 
     papers: list[dict[str, Any]] = []
     topic_counter: Counter[str] = Counter()
@@ -387,17 +492,19 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
     citation_max = 0
 
     for row in paper_rows:
-        raw_topics = _json_list(row.get("keywords"))
-        topics = [_normalize_topic(item) for item in raw_topics]
-        authors = author_map.get(row["paperId"], [])
+        topics = []
+        authors = author_map.get(str(row["paperId"]), [])
+        venue_type = _infer_venue_type(row)
+        venue_level = _infer_venue_level(row)
         paper = {
-            "paperId": row["paperId"],
-            "title": row.get("title") or "未命名论文",
+            "paperId": str(row["paperId"]),
+            "title": _pick_text(row.get("titleZh"), row.get("titleEn"), default="未命名论文"),
             "year": int(row.get("publishYear") or 0),
             "publishDate": row.get("publishDate"),
             "venue": row.get("venue") or "未知期刊/会议",
-            "venueType": row.get("venueType") or "journal",
-            "venueLevel": row.get("venueLevel") or "未分级",
+            "venueType": venue_type,
+            "venueLevel": venue_level,
+            "impactFactor": float(row.get("impactFactor") or 0),
             "citationCount": int(row.get("citationCount") or 0),
             "topics": topics,
             "doi": row.get("doi"),
@@ -414,9 +521,9 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
         year_counter[paper["year"]]["citationCount"] += paper["citationCount"]
 
         if "conference" in (paper["venueType"] or "").lower():
-            conference_level_counter[paper["venueLevel"]] += 1
+            conference_level_counter[_build_level_count_key(paper)] += 1
         else:
-            journal_level_counter[paper["venueLevel"]] += 1
+            journal_level_counter[_build_level_count_key(paper)] += 1
 
         paper_topics = [topic for topic in topics if _is_research_topic(topic)][:4]
         for author in authors:
@@ -454,11 +561,13 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
 
     topic_list = [name for name, _ in topic_counter.most_common()]
     if not topic_list:
+        a_topics = [_normalize_topic(item) for item in expert_a.get("researchDirection", [])]
+        b_topics = [_normalize_topic(item) for item in expert_b.get("researchDirection", [])]
+        common_topics = [topic for topic in a_topics if topic in set(b_topics)]
         topic_list = [
-            _normalize_topic(item)
-            for item in _json_list(pair_summary.get("commonTopics"))
-            if _is_research_topic(_normalize_topic(item))
+            topic for topic in common_topics + a_topics + b_topics if _is_research_topic(topic)
         ]
+        topic_list = list(dict.fromkeys(topic_list))
 
     if not journal_level_counter:
         journal_level_counter.update(_json_dict(pair_summary.get("journalLevelCount")))
@@ -483,12 +592,30 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
         key=lambda item: (-item["sharedPaperCount"], item["name"] or ""),
     )
     if not coauthor_items:
-        coauthor_items = _json_object_list(pair_summary.get("coreCollaborators"))
+        coauthor_items = _fetch_pair_core_coauthors(body.expertAId, body.expertBId)
+    if not coauthor_items:
+        excluded_names = {expert_a["name"], expert_b["name"]}
+        author_counter: Counter[str] = Counter()
+        for paper in papers:
+            for author in paper["authors"]:
+                name = author.get("name")
+                if name and name not in excluded_names:
+                    author_counter[name] += 1
+        coauthor_items = [
+            {
+                "expertId": name,
+                "name": name,
+                "organization": "",
+                "sharedPaperCount": count,
+                "topics": [],
+            }
+            for name, count in author_counter.most_common(10)
+        ]
 
     stable_team_threshold = 2 if paper_count >= 2 else math.inf
     stable_team_members = [
         item for item in coauthor_items if item["sharedPaperCount"] >= stable_team_threshold
-    ]
+    ][:5]
     if not stable_team_members:
         stable_team_members = _json_object_list(pair_summary.get("stableTeamMembers"))
 
@@ -555,8 +682,6 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
         "citation": {"total": citation_total, "max": citation_max},
         "cooperationFrequency": cooperation_frequency,
         "academicImpactScore": float(academic_impact_score),
-        "stableTeamName": pair_summary.get("stableTeamName")
-        or (f"{expert_a['name']}—{expert_b['name']}长期合作团队" if stable_team_members else None),
         "stableTeamMembers": [item["name"] for item in stable_team_members],
         "coreCollaborators": [item["name"] for item in coauthor_items[:5]],
         "sharedContribution": shared_contribution_tags,
@@ -586,7 +711,6 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
         "yearDistribution": year_distribution,
         "stableTeam": {
             "teamFlag": bool(pair_summary.get("teamFlag")) or bool(stable_team_members),
-            "teamName": structured_result["stableTeamName"],
             "members": stable_team_members,
         },
         "coreCollaborators": coauthor_items[:5],
@@ -602,12 +726,14 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
             "sourceMode": "mysql_demo_tables",
             "mysqlDatabase": _paper_coop_database(),
             "mysqlTables": [
-                "scholar",
-                "paper",
-                "paper_author",
-                "venue",
-                "scholar_paper_cooperation",
+                "dwd_scholar",
+                "dwd_scholar_paper_relation",
+                "dwd_scholar_papers",
+                "dwd_scholar_coauthor",
+                "dwd_scholar_research_direction",
+                "dwd_en_journal",
+                "dwd_zh_journal",
             ],
-            "note": "结构化结果与图谱预览均来源于 MySQL 合作论文原始数据聚合。",
+            "note": "结构化结果由 gkx_local 中专家-论文关系表自连接计算，并用专家研究方向与期刊信息补充展示字段。",
         },
     }

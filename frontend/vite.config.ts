@@ -9,7 +9,7 @@ export default defineConfig(({ mode }) => {
     server: {
       proxy: {
         '/api': {
-          target: env.VITE_API_TARGET || 'http://localhost:8000',
+          target: env.VITE_API_TARGET || 'http://127.0.0.1:8002',
           changeOrigin: true,
           // 本地后端路由挂在 /api/v1，保留 /api 前缀，不做 rewrite
         },

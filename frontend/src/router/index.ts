@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import EnterpriseRelationView from '../views/enterprise-relation/EnterpriseRelationView.vue'
+import ExpertDirectRelationView from '../views/expert-direct/ExpertDirectRelationView.vue'
 import ExpertColleagueView from '../views/expert-colleague/ExpertColleagueView.vue'
 import ExpertPaperCooperationView from '../views/expert-paper-cooperation/ExpertPaperCooperationView.vue'
 import ReasoningPlaceholderView from '../views/reasoning-placeholder/ReasoningPlaceholderView.vue'
@@ -10,7 +11,7 @@ const placeholderRoutes = [
     path: '/expert-direct',
     name: 'expert-direct',
     title: '科技专家直接关系',
-    endpoint: '/api/v1/expert/direct/relation/infer',
+    endpoint: '/api/v1/kg-construction/expert-direct-relations/query',
   },
   {
     path: '/node-indirect',
@@ -75,7 +76,17 @@ export const router = createRouter({
         title: '专家论文合作关系',
       },
     },
-    ...placeholderRoutes.map((route) => ({
+    {
+      path: '/expert-direct',
+      name: 'expert-direct',
+      component: ExpertDirectRelationView,
+      meta: {
+        title: '科技专家直接关系',
+        featureName: '科技专家直接关系推理构建',
+        endpoint: '/api/v1/kg-construction/expert-direct-relations/query',
+      },
+    },
+    ...placeholderRoutes.filter((route) => route.name !== 'expert-direct').map((route) => ({
       path: route.path,
       name: route.name,
       component: ReasoningPlaceholderView,

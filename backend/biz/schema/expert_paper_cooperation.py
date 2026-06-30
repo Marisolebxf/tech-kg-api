@@ -10,8 +10,8 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
         json_schema_extra={
             "example": {
                 "dataSource": "knowledge_graph",
-                "expertAId": "COOP-SCH001",
-                "expertBId": "COOP-SCH002",
+                "expertAId": "4P566No1",
+                "expertBId": "d492835p",
                 "startTime": "2021-01-01",
                 "endTime": "2024-12-31",
             }
@@ -66,10 +66,9 @@ class StructuredPaperCooperationResult(BaseModel):
     citation: CitationSummary = Field(..., description="论文被引情况。")
     cooperationFrequency: int = Field(..., description="合作频次。")
     academicImpactScore: float = Field(..., description="学术影响力/核心贡献评分。")
-    stableTeamName: str | None = Field(default=None, description="长期稳定合作团队名称。")
     stableTeamMembers: list[str] = Field(default_factory=list, description="长期稳定合作团队成员。")
     coreCollaborators: list[str] = Field(default_factory=list, description="核心合作人员。")
-    sharedContribution: list[str] = Field(default_factory=list, description="共同贡献标签。")
+    sharedContribution: list[str] = Field(default_factory=list, description="合作贡献标签。")
 
 
 class ExpertPaperCooperationStructuredResultOnlyResponse(BaseModel):

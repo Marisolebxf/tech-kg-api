@@ -1,13 +1,14 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Query
 
+from application.expert_direct_relation import ExpertDirectRelationApplication
 from biz.schema.expert_direct_relation import (
     DataSource,
     ExpertDirectRelationQueryRequest,
     ExpertDirectRelationQueryResponse,
     MAX_QUERY_LIMIT,
 )
-
-from application.expert_direct_relation import ExpertDirectRelationApplication
 
 router = APIRouter(prefix="/kg-construction/expert-direct-relations")
 application = ExpertDirectRelationApplication()
@@ -35,13 +36,13 @@ async def query_expert_direct_relation(
 
 @router.get("/query", response_model=ExpertDirectRelationQueryResponse)
 async def query_expert_direct_relation_get(
-    dataSource: DataSource = Query(default="all"),
-    expertAId: str | None = Query(default=None),
-    expertBId: str | None = Query(default=None),
-    institution: str | None = Query(default=None),
-    startTime: str | None = Query(default=None),
-    endTime: str | None = Query(default=None),
-    limit: int = Query(default=10, ge=1),
+    dataSource: Annotated[DataSource, Query()] = "all",
+    expertAId: Annotated[str | None, Query()] = None,
+    expertBId: Annotated[str | None, Query()] = None,
+    institution: Annotated[str | None, Query()] = None,
+    startTime: Annotated[str | None, Query()] = None,
+    endTime: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1)] = 10,
 ) -> dict[str, object]:
     return application.query(
         data_source=dataSource,

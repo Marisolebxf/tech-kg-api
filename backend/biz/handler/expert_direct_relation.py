@@ -4,10 +4,10 @@ from fastapi import APIRouter, Query
 
 from application.expert_direct_relation import ExpertDirectRelationApplication
 from biz.schema.expert_direct_relation import (
+    MAX_QUERY_LIMIT,
     DataSource,
     ExpertDirectRelationQueryRequest,
     ExpertDirectRelationQueryResponse,
-    MAX_QUERY_LIMIT,
 )
 
 router = APIRouter(prefix="/kg-construction/expert-direct-relations")

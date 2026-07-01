@@ -447,7 +447,6 @@ const detailRows = computed<(string | number)[][]>(() => {
       ['专家ID', r.scholarId ?? '-'],
       ['所属机构', r.scholarOrg ?? '-'],
       ['是否降级', r.degraded ? '是（LLM不可用，正则抽取）' : '否'],
-      ['数据来源', r.cached ? '图库已构建关系（未重跑）' : '本次重新挖掘'],
       ['挖掘关系数', r.totalMined ?? 0],
     ]
     if (r.reminder) rows.push(['提醒', r.reminder])

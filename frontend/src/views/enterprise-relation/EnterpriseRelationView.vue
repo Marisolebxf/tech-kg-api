@@ -354,7 +354,10 @@ async function handleSearch() {
         },
       ])
     } else if (activeSub.value === 'mining') {
-      const body = (await http.post(currentSub.value.endpoint, miningParams.value)) as any
+      // 挖掘完整流程含 LLM 抽取+建图+标注+背景分析，可能耗时 60-90s，单独放宽超时
+      const body = (await http.post(currentSub.value.endpoint, miningParams.value, {
+        timeout: 180_000,
+      })) as any
       if (!body?.success) throw new Error(body?.msg || '挖掘失败')
       miningResult.value = body.data
       graphNodes.value = []

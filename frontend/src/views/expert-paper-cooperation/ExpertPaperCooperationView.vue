@@ -48,8 +48,10 @@ const showTechModal = ref(false)
 const loading = ref(false)
 const copied = ref(false)
 const error = ref('')
+const formError = ref('')
 const lastTestTime = ref('待执行')
 const apiExample = ref<ExpertPaperCooperationStructuredResultOnlyResponse | null>(null)
+const apiResultDisplay = ref<unknown>(null)
 const appliedParams = ref<ExpertPaperCooperationDemoRequest>({ ...defaultParams })
 const draftParams = ref<ExpertPaperCooperationDemoRequest>({ ...defaultParams })
 
@@ -94,18 +96,18 @@ const journalSummary = computed(() => {
 })
 
 const structuredRows = computed(() => [
-  ['作者列表', `${authorA.value}、${authorB.value}`],
-  ['作者单位', `${authorUnitA.value} / ${authorUnitB.value}`],
-  ['合作发表时间', periodText.value || '—'],
-  ['论文主题', topicText.value],
-  ['合作论文数量', paperCount.value ? `${paperCount.value} 篇` : '—'],
-  ['期刊/会议级别', journalSummary.value],
-  ['论文被引情况', `总被引${citation.value.total} / 最高${citation.value.max}`],
-  ['合作频次', frequency.value ? `${frequency.value} 次` : '—'],
-  ['学术影响力评分', impactScore.value ? `${impactScore.value}` : '—'],
-  ['稳定团队成员', stableTeamText.value],
-  ['核心合作人员', collaboratorText.value],
-  ['合作贡献', contributionText.value],
+  ['作者列表', result.value ? `${authorA.value}、${authorB.value}` : ''],
+  ['作者单位', result.value ? `${authorUnitA.value} / ${authorUnitB.value}` : ''],
+  ['合作发表时间', result.value ? periodText.value || '—' : ''],
+  ['论文主题', result.value ? topicText.value : ''],
+  ['合作论文数量', result.value && paperCount.value ? `${paperCount.value} 篇` : ''],
+  ['期刊/会议级别', result.value ? journalSummary.value : ''],
+  ['论文被引情况', result.value ? `总被引${citation.value.total} / 最高${citation.value.max}` : ''],
+  ['合作频次', result.value && frequency.value ? `${frequency.value} 次` : ''],
+  ['学术影响力评分', result.value && impactScore.value ? `${impactScore.value}` : ''],
+  ['稳定团队成员', result.value ? stableTeamText.value : ''],
+  ['核心合作人员', result.value ? collaboratorText.value : ''],
+  ['合作贡献', result.value ? contributionText.value : ''],
 ])
 
 const developerRequestFields = [
@@ -155,6 +157,9 @@ function extractErrorMessage(raw: unknown) {
   if (axios.isAxiosError(raw)) {
     const detail = raw.response?.data?.detail
     if (typeof detail === 'string') {
+      if (detail.includes('不存在输入的专家ID')) {
+        return '数据库中不存在输入的专家ID，请重新输入'
+      }
       return detail
     }
   }
@@ -164,14 +169,92 @@ function extractErrorMessage(raw: unknown) {
   return '执行测试失败，请稍后重试。'
 }
 
+function extractApiResult(raw: unknown) {
+  if (axios.isAxiosError(raw)) {
+    return raw.response?.data ?? { message: raw.message }
+  }
+  if (raw instanceof Error) {
+    return { message: raw.message }
+  }
+  return raw ?? null
+}
+
+function isValidDateText(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) {
+    return false
+  }
+  const [, yearText, monthText, dayText] = match
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  const date = new Date(year, month - 1, day)
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
+}
+
+function normalizeParams(payload: ExpertPaperCooperationDemoRequest): ExpertPaperCooperationDemoRequest {
+  return {
+    ...payload,
+    expertAId: payload.expertAId.trim(),
+    expertBId: payload.expertBId.trim(),
+    startTime: payload.startTime.trim(),
+    endTime: payload.endTime.trim(),
+  }
+}
+
+function validateParams(payload: ExpertPaperCooperationDemoRequest) {
+  const expertIdPattern = /^[A-Za-z0-9_-]+$/
+  if (!payload.dataSource) {
+    return '请选择数据来源。'
+  }
+  if (!payload.expertAId) {
+    return '请输入专家 A ID。'
+  }
+  if (!payload.expertBId) {
+    return '请输入专家 B ID。'
+  }
+  if (payload.expertAId.length > 64 || payload.expertBId.length > 64) {
+    return '专家 ID 长度不能超过 64 个字符。'
+  }
+  if (!expertIdPattern.test(payload.expertAId) || !expertIdPattern.test(payload.expertBId)) {
+    return '专家 ID 仅支持字母、数字、下划线和中划线。'
+  }
+  if (payload.expertAId === payload.expertBId) {
+    return '专家 A ID 和专家 B ID 不能相同。'
+  }
+  if (payload.startTime && !isValidDateText(payload.startTime)) {
+    return '开始时间格式错误，请使用有效日期 YYYY-MM-DD。'
+  }
+  if (payload.endTime && !isValidDateText(payload.endTime)) {
+    return '结束时间格式错误，请使用有效日期 YYYY-MM-DD。'
+  }
+  if (payload.startTime && payload.endTime && payload.startTime > payload.endTime) {
+    return '开始时间不能晚于结束时间。'
+  }
+  return ''
+}
+
 async function runTest(payload: ExpertPaperCooperationDemoRequest = appliedParams.value) {
+  const normalizedPayload = normalizeParams(payload)
+  const validationMessage = validateParams(normalizedPayload)
+  if (validationMessage) {
+    error.value = validationMessage
+    formError.value = validationMessage
+    return
+  }
+
   loading.value = true
   error.value = ''
+  formError.value = ''
   try {
-    apiExample.value = await fetchExpertPaperCooperationStructuredResult(payload)
+    apiExample.value = await fetchExpertPaperCooperationStructuredResult(normalizedPayload)
+    apiResultDisplay.value = apiExample.value
+    appliedParams.value = { ...normalizedPayload }
     lastTestTime.value = formatNow()
     resultMode.value = 'structured'
   } catch (rawError) {
+    apiExample.value = null
+    apiResultDisplay.value = extractApiResult(rawError)
     error.value = extractErrorMessage(rawError)
   } finally {
     loading.value = false
@@ -179,7 +262,16 @@ async function runTest(payload: ExpertPaperCooperationDemoRequest = appliedParam
 }
 
 async function handleSaveAndRun() {
-  appliedParams.value = { ...draftParams.value }
+  const normalizedPayload = normalizeParams(draftParams.value)
+  const validationMessage = validateParams(normalizedPayload)
+  if (validationMessage) {
+    formError.value = validationMessage
+    error.value = validationMessage
+    return
+  }
+
+  appliedParams.value = { ...normalizedPayload }
+  draftParams.value = { ...normalizedPayload }
   showConfigModal.value = false
   await runTest(appliedParams.value)
 }
@@ -356,7 +448,7 @@ onMounted(() => {
               <dd>{{ value }}</dd>
             </div>
           </dl>
-          <pre v-else class="result-panel__code scroll-on-demand">{{ JSON.stringify(apiExample, null, 2) }}</pre>
+          <pre v-else class="result-panel__code scroll-on-demand">{{ apiResultDisplay ? JSON.stringify(apiResultDisplay, null, 2) : '' }}</pre>
         </section>
       </aside>
     </div>
@@ -469,6 +561,7 @@ onMounted(() => {
             <input v-model="draftParams.endTime" placeholder="YYYY-MM-DD" />
             <img class="calendar-icon" :src="iconCalendar" alt="" aria-hidden="true" />
           </label>
+          <p v-if="formError" class="config-form__error">{{ formError }}</p>
         </div>
         <footer class="modal__footer">
           <button class="kg-button kg-button--secondary" type="button" @click="showConfigModal = false">取消</button>
@@ -1301,6 +1394,14 @@ onMounted(() => {
   grid-template-columns: 96px 1fr;
   align-items: center;
   gap: var(--space-8);
+}
+
+.config-form__error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .config-form label > span {

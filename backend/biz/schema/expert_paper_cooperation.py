@@ -1,8 +1,11 @@
+from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 DataSource = Literal["all", "knowledge_graph", "cnki", "wanfang", "web_of_science"]
+EXPERT_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
+DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 
 
 class ExpertPaperCooperationDemoRequest(BaseModel):
@@ -21,15 +24,62 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
     dataSource: DataSource = Field(
         ..., description="论文数据源：all、knowledge_graph、cnki、wanfang、web_of_science。"
     )
-    expertAId: str = Field(..., min_length=1, description="专家A唯一标识。")
-    expertBId: str = Field(..., min_length=1, description="专家B唯一标识。")
-    startTime: str | None = Field(default=None, description="统计开始时间，格式 YYYY-MM-DD。")
-    endTime: str | None = Field(default=None, description="统计结束时间，格式 YYYY-MM-DD。")
+    expertAId: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=EXPERT_ID_PATTERN,
+        description="专家A唯一标识，仅支持字母、数字、下划线和中划线。",
+    )
+    expertBId: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=EXPERT_ID_PATTERN,
+        description="专家B唯一标识，仅支持字母、数字、下划线和中划线。",
+    )
+    startTime: str | None = Field(
+        default=None, pattern=DATE_PATTERN, description="统计开始时间，格式 YYYY-MM-DD。"
+    )
+    endTime: str | None = Field(
+        default=None, pattern=DATE_PATTERN, description="统计结束时间，格式 YYYY-MM-DD。"
+    )
+
+    @field_validator("expertAId", "expertBId", mode="before")
+    @classmethod
+    def normalize_expert_id(cls, value: str) -> str:
+        if value is None:
+            return value
+        return str(value).strip()
+
+    @field_validator("startTime", "endTime", mode="before")
+    @classmethod
+    def normalize_optional_date(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = str(value).strip()
+        return value or None
+
+    @field_validator("startTime", "endTime")
+    @classmethod
+    def validate_calendar_date(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("时间格式错误，请使用有效日期 YYYY-MM-DD") from exc
+        return value
 
     @model_validator(mode="after")
     def validate_experts(self):
         if self.expertAId == self.expertBId:
             raise ValueError("expertAId 和 expertBId 不能相同")
+        if self.startTime and self.endTime:
+            start_date = date.fromisoformat(self.startTime)
+            end_date = date.fromisoformat(self.endTime)
+            if start_date > end_date:
+                raise ValueError("startTime 不能晚于 endTime")
         return self
 
 

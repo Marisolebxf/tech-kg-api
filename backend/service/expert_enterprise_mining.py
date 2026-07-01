@@ -297,13 +297,16 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
             org = org_dao.get_by_id(org_id)
             if org is None:
                 return
+            # 企业可能来自 dwd_org_reg_info(listing_status/province) 或 stock_base(listed_status)
             graph.create_node(
                 ["Organization"],
                 {
                     "org_id": org.org_id,
                     "name_cn": org.name_cn or "",
-                    "province": org.province or "",
-                    "listing_status": org.listing_status or "",
+                    "province": getattr(org, "province", None) or "",
+                    "listing_status": getattr(org, "listing_status", None)
+                    or getattr(org, "listed_status", None)
+                    or "",
                 },
             )
         except Exception as exc:  # noqa: BLE001

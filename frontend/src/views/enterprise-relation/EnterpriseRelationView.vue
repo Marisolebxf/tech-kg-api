@@ -15,12 +15,12 @@ interface GraphNode {
   title: string
   subtitle: string
   relation?: string
-  infoLines?: { text: string; tone: string }[]
+  roleKey?: string
   x: number
   y: number
   width: number
   height: number
-  kind: 'expert' | 'company'
+  kind: 'expert' | 'company' | 'role'
 }
 
 const GW = 1320
@@ -132,7 +132,7 @@ const dimensionChinese: Record<string, string> = {
 function buildRadialGraph(
   centerTitle: string,
   centerSubtitle: string,
-  items: { title: string; subtitle: string; relation?: string; infoLines?: { text: string; tone: string }[] }[],
+  items: { title: string; subtitle: string; relation?: string }[],
 ): GraphNode[] {
   const cx = GW / 2
   const cy = GH / 2
@@ -158,7 +158,6 @@ function buildRadialGraph(
         title: item.title,
         subtitle: item.subtitle,
         relation: item.relation,
-        infoLines: item.infoLines,
         x: ccx - 180,
         y: ccy - 55,
         width: 360,
@@ -169,6 +168,70 @@ function buildRadialGraph(
   ]
 }
 
+// 挖掘专用图：专家→企业（关系类型一条边）+ 企业→任职身份方块（角色）
+function buildMiningGraph(
+  scholarTitle: string,
+  rels: {
+    enterpriseName?: string
+    enterpriseId?: string
+    relationLabel?: string
+    relationType?: string
+    roleLabel?: string
+    role?: string
+    techField?: string
+  }[],
+): GraphNode[] {
+  const cx = GW / 2
+  const cy = GH / 2
+  const radius = 300
+  const n = rels.length
+  const nodes: GraphNode[] = [
+    {
+      key: 'expert',
+      title: scholarTitle,
+      subtitle: '专家',
+      x: cx - 150,
+      y: cy - 47,
+      width: 300,
+      height: 94,
+      kind: 'expert',
+    },
+  ]
+  rels.forEach((r, i) => {
+    const ang = (2 * Math.PI * i) / (n || 1) - Math.PI / 2
+    const ccx = cx + radius * Math.cos(ang)
+    const ccy = cy + radius * Math.sin(ang)
+    const ckey = `c${i + 1}`
+    const rkey = `r${i + 1}`
+    nodes.push({
+      key: ckey,
+      title: `企业：${r.enterpriseName ?? r.enterpriseId ?? '-'}`,
+      subtitle: r.techField ? `技术领域：${r.techField}` : '',
+      relation: r.relationLabel || r.relationType || '任职',
+      roleKey: rkey,
+      x: ccx - 180,
+      y: ccy - 55,
+      width: 360,
+      height: 110,
+      kind: 'company',
+    })
+    // 任职身份方块：沿同一径向再往外
+    const rcx = cx + (radius + 230) * Math.cos(ang)
+    const rcy = cy + (radius + 230) * Math.sin(ang)
+    nodes.push({
+      key: rkey,
+      title: '任职身份',
+      subtitle: r.roleLabel || r.role || '-',
+      x: rcx - 90,
+      y: rcy - 34,
+      width: 180,
+      height: 68,
+      kind: 'role',
+    })
+  })
+  return nodes
+}
+
 const graphZoom = ref(0.56)
 const graphStageRef = ref<HTMLElement | null>(null)
 const activeDrag = ref<{ key: string; offsetX: number; offsetY: number } | null>(null)
@@ -177,83 +240,63 @@ const companyNodes = computed(() => graphNodes.value.filter((n) => n.kind === 'c
 
 interface GraphEdge {
   key: string
-  node: GraphNode
+  fromKey: string
+  toKey: string
   text: string
   tone: string
   marker: string
-  offsetIndex: number
-  total: number
 }
-// 每个企业节点展开为 1~N 条边（mining 用 infoLines 多边；其余用单条 relation）
+// 边：专家→企业（关系类型）+ 企业→任职身份方块（角色）。mining 有角色方块，其余只有前者。
 const graphEdges = computed<GraphEdge[]>(() => {
   const edges: GraphEdge[] = []
   for (const node of companyNodes.value) {
-    if (node.infoLines && node.infoLines.length) {
-      node.infoLines.forEach((ln, i) =>
-        edges.push({
-          key: `${node.key}-l${i}`,
-          node,
-          text: ln.text,
-          tone: ln.tone,
-          marker: toneMarker(ln.tone),
-          offsetIndex: i,
-          total: node.infoLines!.length,
-        }),
-      )
-    } else {
-      const tone = relationTone(node.relation)
+    const tone = relationTone(node.relation)
+    edges.push({
+      key: `${node.key}-rel`,
+      fromKey: 'expert',
+      toKey: node.key,
+      text: node.relation || '',
+      tone,
+      marker: relationMarker(node.relation),
+    })
+    if (node.roleKey && getNode(node.roleKey)) {
       edges.push({
-        key: `${node.key}-l0`,
-        node,
-        text: node.relation || '',
-        tone,
-        marker: relationMarker(node.relation),
-        offsetIndex: 0,
-        total: 1,
+        key: `${node.key}-role`,
+        fromKey: node.key,
+        toKey: node.roleKey,
+        text: '任职身份',
+        tone: 'relation-purple',
+        marker: 'url(#arrow-purple)',
       })
     }
   }
   return edges
 })
-function toneMarker(tone: string) {
-  if (tone === 'relation-blue') return 'url(#arrow-blue)'
-  if (tone === 'relation-purple') return 'url(#arrow-purple)'
-  return 'url(#arrow-orange)'
-}
-function parallelOffset(from: { x: number; y: number }, to: { x: number; y: number }, idx: number, total: number, spacing = 22) {
-  const dx = to.x - from.x
-  const dy = to.y - from.y
-  const len = Math.hypot(dx, dy) || 1
-  const off = (idx - (total - 1) / 2) * spacing
-  return { x: (-dy / len) * off, y: (dx / len) * off }
-}
 function edgePath(edge: GraphEdge) {
-  const expert = getNode('expert')
-  if (!expert) return ''
-  const from = nodeCenter(expert)
-  const to = nodeCenter(edge.node)
-  const start = boundaryPoint(expert, to)
-  const end = boundaryPoint(edge.node, from)
-  const off = parallelOffset(from, to, edge.offsetIndex, edge.total)
-  const s = { x: start.x + off.x, y: start.y + off.y }
-  const e = { x: end.x + off.x, y: end.y + off.y }
-  const verticalGap = Math.abs(e.y - s.y)
+  const from = getNode(edge.fromKey)
+  const to = getNode(edge.toKey)
+  if (!from || !to) return ''
+  const fc = nodeCenter(from)
+  const tc = nodeCenter(to)
+  const start = boundaryPoint(from, tc)
+  const end = boundaryPoint(to, fc)
+  const verticalGap = Math.abs(end.y - start.y)
   const ctrl = {
-    x: (s.x + e.x) / 2,
-    y: (s.y + e.y) / 2 + (e.y < s.y ? -verticalGap * 0.42 : verticalGap * 0.18),
+    x: (start.x + end.x) / 2,
+    y: (start.y + end.y) / 2 + (end.y < start.y ? -verticalGap * 0.3 : verticalGap * 0.12),
   }
-  return `M ${s.x} ${s.y} Q ${ctrl.x} ${ctrl.y} ${e.x} ${e.y}`
+  return `M ${start.x} ${start.y} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`
 }
 function edgeLabelStyle(edge: GraphEdge) {
-  const expert = getNode('expert')
-  if (!expert) return {}
-  const from = nodeCenter(expert)
-  const to = nodeCenter(edge.node)
-  const off = parallelOffset(from, to, edge.offsetIndex, edge.total)
-  const directionOffset = to.y < from.y ? -12 : 12
+  const from = getNode(edge.fromKey)
+  const to = getNode(edge.toKey)
+  if (!from || !to) return {}
+  const fc = nodeCenter(from)
+  const tc = nodeCenter(to)
+  const directionOffset = tc.y < fc.y ? -12 : 12
   return {
-    left: `${(from.x + to.x) / 2 + off.x - 50}px`,
-    top: `${(from.y + to.y) / 2 + off.y + directionOffset - 18}px`,
+    left: `${(fc.x + tc.x) / 2 - 40}px`,
+    top: `${(fc.y + tc.y) / 2 + directionOffset - 18}px`,
   }
 }
 
@@ -418,19 +461,9 @@ async function handleSearch() {
       const rels: any[] = Array.isArray(body.data?.minedRelations) ? body.data.minedRelations : []
       // 仅 matched（已匹配到企业表）的关系画进图；unmatched 不画节点
       const matched = rels.filter((r: any) => r.status !== 'unmatched')
-      graphNodes.value = buildRadialGraph(
+      graphNodes.value = buildMiningGraph(
         `专家：${body.data?.scholarName ?? miningParams.value.scholarId}`,
-        '专家',
-        matched.map((r: any) => ({
-          title: `企业：${r.enterpriseName ?? r.enterpriseId}`,
-          subtitle: r.techField ? `技术领域：${r.techField}` : r.roleLabel || '企业',
-          // 多条平行边分别展示 关系类型 / 角色 / 置信度
-          infoLines: [
-            { text: r.relationLabel || '-', tone: 'relation-blue' },
-            { text: r.roleLabel || '-', tone: 'relation-purple' },
-            { text: r.matchScore != null ? `置信度 ${r.matchScore}` : '缓存', tone: 'relation-orange' },
-          ],
-        })),
+        matched,
       )
     } else {
       const body = (await http.post(currentSub.value.endpoint, analyzeParams.value)) as any
@@ -854,7 +887,7 @@ onMounted(() => {
               v-for="node in graphNodes"
               :key="node.key"
               class="graph-node"
-              :class="[{ dragging: activeDrag?.key === node.key }, node.kind === 'expert' ? 'expert-node' : 'company-node']"
+              :class="[{ dragging: activeDrag?.key === node.key }, node.kind === 'expert' ? 'expert-node' : node.kind === 'role' ? 'role-node' : 'company-node']"
               :style="nodeStyle(node)"
               @pointerdown="startDrag($event, node)"
             >
@@ -1483,6 +1516,23 @@ onMounted(() => {
   margin-top: 8px;
   color: #314662;
   font-size: 18px;
+}
+
+.role-node {
+  border: 1px dashed #8b5cf6;
+  background: linear-gradient(180deg, #faf8ff, #f3effe);
+  padding: 0 14px;
+}
+
+.role-node strong {
+  color: #8b5cf6;
+  font-size: 16px;
+}
+
+.role-node span {
+  margin-top: 4px;
+  color: #5b3ba5;
+  font-size: 16px;
 }
 
 .relation-label {

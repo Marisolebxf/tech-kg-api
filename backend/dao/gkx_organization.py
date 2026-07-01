@@ -64,10 +64,16 @@ class GkxOrganizationDAO:
                 cols = [c[0] for c in self._s.execute(text(f"SHOW COLUMNS FROM {t}")).all()]
             except Exception:  # noqa: BLE001
                 continue
-            if "org_id" not in cols or "name_cn" not in cols:
+            if "org_id" not in cols:
+                continue
+            # 企业名优先 name_cn，无则用 org_name（如 innovation_carrier 用 org_name）
+            name_col = (
+                "name_cn" if "name_cn" in cols else ("org_name" if "org_name" in cols else None)
+            )
+            if name_col is None:
                 continue
             rows = self._s.execute(
-                text(f"SELECT DISTINCT org_id, name_cn FROM {t} WHERE org_id IS NOT NULL")
+                text(f"SELECT DISTINCT org_id, {name_col} FROM {t} WHERE org_id IS NOT NULL")
             ).all()
             for oid, name in rows:
                 if oid and oid not in by_id and name:

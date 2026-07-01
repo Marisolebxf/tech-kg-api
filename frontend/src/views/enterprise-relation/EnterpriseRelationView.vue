@@ -110,6 +110,7 @@ const miningParams = ref({
   scholarId: '007Rb117',
   topN: 5,
   analysisDimensions: ['industry_status', 'core_tech', 'financial'] as string[],
+  regenerate: false,
 })
 
 const buildResult = ref<any>(null)
@@ -429,6 +430,7 @@ const detailRows = computed<(string | number)[][]>(() => {
       ['专家ID', r.scholarId ?? '-'],
       ['所属机构', r.scholarOrg ?? '-'],
       ['是否降级', r.degraded ? '是（LLM不可用，正则抽取）' : '否'],
+      ['数据来源', r.cached ? '图库已构建关系（未重跑）' : '本次重新挖掘'],
       ['挖掘关系数', r.totalMined ?? 0],
     ]
     const rels = Array.isArray(r.minedRelations) ? r.minedRelations : []
@@ -482,6 +484,7 @@ const apiExample = computed(() => {
               scholarName: '',
               scholarOrg: '',
               degraded: false,
+              cached: false,
               minedRelations: [],
               skipped: [],
               totalMined: 0,
@@ -521,6 +524,7 @@ const requestRows = computed<string[][]>(() => {
       ['scholarId', 'string', '是', '学者ID（gkx dwd_scholar.scholar_id，如 007Rb117）'],
       ['topN', 'int', '否', 'TOP-N，默认5，上限10'],
       ['analysisDimensions', 'string[]', '否', '分析维度，默认三维度全选'],
+      ['regenerate', 'bool', '否', '是否强制重新挖掘；默认false，已构建则直接返回图库关系'],
     ]
   }
   return [
@@ -570,6 +574,7 @@ const responseRows = computed<string[][]>(() => {
       ['data.scholarName', 'string', '学者姓名'],
       ['data.scholarOrg', 'string', '学者所属机构'],
       ['data.degraded', 'boolean', '是否降级（LLM不可用）'],
+      ['data.cached', 'boolean', '是否来自图库已构建关系（未重跑）'],
       ['data.minedRelations', 'array', '挖掘出的企业关系列表'],
       ['data.minedRelations[].enterpriseName', 'string', '企业名称'],
       ['data.minedRelations[].relationLabel', 'string', '关系类型中文'],
@@ -1033,6 +1038,11 @@ onMounted(() => {
                 </div>
               </div>
             </div>
+            <label class="config-check">
+              <input type="checkbox" v-model="miningParams.regenerate" />
+              <span><i></i>regenerate</span>
+              <small>勾选则忽略图库已构建关系，强制重新挖掘；不勾选时若已构建直接返回（快）</small>
+            </label>
           </template>
         </div>
         <footer class="modal__footer">

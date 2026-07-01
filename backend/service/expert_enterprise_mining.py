@@ -17,7 +17,7 @@ from service.enterprise_background_analysis import EnterpriseBackgroundAnalysisS
 from service.enterprise_mining_disambiguator import disambiguate, merge_matches
 from service.enterprise_mining_extractor import extract_relations
 from service.enterprise_relation_catalog import relation_label, role_info
-from service.expert_enterprise_relation import ExpertEnterpriseRelationService
+from service.expert_enterprise_relation import EDGE_TYPE, ExpertEnterpriseRelationService
 from service.relation_detail_annotation import RelationDetailAnnotationService
 
 logger = logging.getLogger(__name__)
@@ -65,8 +65,30 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
     # ----- 主流程 -----
     def mine(self, payload: dict[str, Any]) -> dict[str, Any]:
         scholar_id = payload.get("scholarId", "")
+        regenerate = bool(payload.get("regenerate", False))
         top_n = min(max(int(payload.get("topN") or 5), 1), 10)
         dims = payload.get("analysisDimensions") or DEFAULT_DIMENSIONS
+
+        graph = self._graph_client()
+
+        # regenerate=False 时，先查图库已构建的 EMPLOYED_BY 关系；有则直接返回，不跑 LLM/三接口
+        if not regenerate:
+            existing = self._collect_existing_relations(graph, scholar_id)
+            if existing:
+                scholar_node = graph.get_node(scholar_id)
+                sp = scholar_node.properties if scholar_node is not None else {}
+                return {
+                    "status": "success",
+                    "scholarId": scholar_id,
+                    "scholarName": sp.get("name_zh", "") or "",
+                    "scholarOrg": sp.get("scholar_org_name_zh", "") or "",
+                    "profile": {},
+                    "degraded": False,
+                    "cached": True,
+                    "minedRelations": existing,
+                    "skipped": [],
+                    "totalMined": len(existing),
+                }
 
         session = self._session()
         scholar = self._scholar_dao_factory(session).get_by_id(scholar_id)
@@ -98,7 +120,6 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
         merged.sort(key=lambda x: x["score"], reverse=True)
         top = merged[:top_n]
 
-        graph = self._graph_client()
         self._provision_scholar_node(graph, scholar)
         org_dao = self._org_dao_factory(session)
 
@@ -175,10 +196,75 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
             "scholarOrg": scholar.scholar_org_name_zh or "",
             "profile": {"bio_zh": scholar.bio_zh or "", "researchDirections": directions},
             "degraded": degraded,
+            "cached": False,
             "minedRelations": relations,
             "skipped": skipped,
             "totalMined": len(relations),
         }
+
+    # ----- 图库已建关系读取（regenerate=False 快速路径）-----
+    def _collect_existing_relations(
+        self, graph: TRSGraphClient, scholar_id: str
+    ) -> list[dict[str, Any]]:
+        """读取学者在图库中已构建的 EMPLOYED_BY 关系。
+
+        关系已持久化在 trs 图库（build 写边、annotate 写角色/领域/时段），故
+        regenerate=False 时直接返回，避免重跑 LLM 抽取/消歧/三接口。matchScore/
+        evidence/analyze 未落图，故置空。
+        """
+        try:
+            edges = graph.get_node_edges(
+                scholar_id, direction="out", edge_type=EDGE_TYPE, limit=100
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("collect existing relations failed: %s", exc)
+            return []
+        if not edges:
+            return []
+        relations: list[dict[str, Any]] = []
+        for e in edges:
+            try:
+                org = graph.get_node(e.target_id)
+                if org is None:
+                    continue
+                op = org.properties or {}
+                ep = e.properties or {}
+            except Exception:  # noqa: BLE001
+                continue
+            eid = str(op.get("org_id", e.target_id))
+            rt_codes = [c for c in str(ep.get("relation_type", "") or "").split("/") if c]
+            role = str(ep.get("role", "") or "")
+            role_label = ""
+            if role:
+                try:
+                    role_label, _ = role_info(role)
+                except Exception:  # noqa: BLE001
+                    role_label = ""
+            relations.append(
+                {
+                    "rank": len(relations) + 1,
+                    "enterpriseId": eid,
+                    "enterpriseName": op.get("name_cn", "") or "",
+                    "matchScore": None,
+                    "relationType": rt_codes[0] if rt_codes else "",
+                    "relationLabel": relation_label(rt_codes) if rt_codes else "",
+                    "role": role,
+                    "roleLabel": role_label,
+                    "techField": str(ep.get("tech_field", "") or ""),
+                    "period": {
+                        "start": str(ep.get("start_date", "") or ""),
+                        "end": str(ep.get("end_date", "") or ""),
+                    },
+                    "evidence": "",
+                    "build": {
+                        "effective": True,
+                        "builtRelationId": str(e.id) or f"{scholar_id}->{eid}@0",
+                    },
+                    "annotate": {"annotated": bool(role)},
+                    "analyze": None,
+                }
+            )
+        return relations
 
     # ----- 图库建点 -----
     @staticmethod

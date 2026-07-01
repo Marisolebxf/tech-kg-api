@@ -11,3 +11,4 @@ class ExpertEnterpriseMiningRequest(BaseModel):
     analysisDimensions: list[str] = Field(
         default_factory=lambda: ["industry_status", "core_tech", "financial"]
     )
+    regenerate: bool = False

@@ -1195,8 +1195,8 @@ onMounted(() => {
               </div>
             </div>
             <label class="config-check">
-              <input type="checkbox" v-model="miningParams.regenerate" />
               <span>regenerate</span>
+              <input type="checkbox" v-model="miningParams.regenerate" />
             </label>
           </template>
         </div>

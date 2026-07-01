@@ -360,7 +360,19 @@ async function handleSearch() {
       })) as any
       if (!body?.success) throw new Error(body?.msg || '挖掘失败')
       miningResult.value = body.data
-      graphNodes.value = []
+      const rels: any[] = Array.isArray(body.data?.minedRelations) ? body.data.minedRelations : []
+      graphNodes.value = buildRadialGraph(
+        `专家：${body.data?.scholarName ?? miningParams.value.scholarId}`,
+        '专家',
+        rels.map((r: any) => ({
+          title: `企业：${r.enterpriseName ?? r.enterpriseId}`,
+          subtitle: r.roleLabel || '企业',
+          relation:
+            r.matchScore != null
+              ? `${r.relationLabel || '-'}（置信度${r.matchScore}）`
+              : r.relationLabel || '-',
+        })),
+      )
     } else {
       const body = (await http.post(currentSub.value.endpoint, analyzeParams.value)) as any
       if (!body?.success) throw new Error(body?.msg || '分析失败')

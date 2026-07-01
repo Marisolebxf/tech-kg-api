@@ -93,18 +93,18 @@ const options = ref<Options>({
 })
 
 const buildParams = ref({
-  scholarId: 'COOP-SCH001',
-  enterpriseId: 'ENT001',
+  scholarId: '',
+  enterpriseId: '',
   relationTypes: ['employment'] as string[],
 })
 const annotateParams = ref({
-  relationId: 'COOP-SCH001->ENT001@0',
+  relationId: '',
   roleType: 'chief_scientist',
   techField: '人工智能',
   period: { start: '2021-01-01', end: '2024-12-31' },
 })
 const analyzeParams = ref({
-  enterpriseId: '1470d623589175f1fe06fb5466b77f55',
+  enterpriseId: '',
   analysisDimensions: ['industry_status', 'core_tech', 'financial'] as string[],
   patentCPC: ['G06N', 'G06F'] as string[],
 })
@@ -392,6 +392,14 @@ async function loadOptions() {
       techFields: data.techFields ?? [],
       cpcCodes: data.cpcCodes ?? [],
     }
+    // 默认值取首个真实选项（gkx 学者/企业/关系边）
+    const sch = data.scholars?.[0]?.scholarId
+    const ent = data.enterprises?.[0]?.enterpriseId
+    const edg = data.edges?.[0]?.relationId
+    if (sch && !buildParams.value.scholarId) buildParams.value.scholarId = sch
+    if (ent && !buildParams.value.enterpriseId) buildParams.value.enterpriseId = ent
+    if (ent && !analyzeParams.value.enterpriseId) analyzeParams.value.enterpriseId = ent
+    if (edg && !annotateParams.value.relationId) annotateParams.value.relationId = edg
   } catch {
     // 选项拉取失败不阻塞页面
   }

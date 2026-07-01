@@ -31,6 +31,7 @@ const resultTab = ref<'structured' | 'api'>('structured')
 const activeCode = ref<'python' | 'node' | 'curl'>('python')
 const showConfig = ref(false)
 const showTech = ref(false)
+const miningDimsOpen = ref(false)
 const copied = ref(false)
 
 const subFunctions = [
@@ -414,6 +415,12 @@ function removeMulti(key: MultiKey, value: string) {
   const arr = multiArr(key)
   const i = arr.indexOf(value)
   if (i >= 0) arr.splice(i, 1)
+}
+function toggleMulti(key: MultiKey, value: string) {
+  const arr = multiArr(key)
+  const i = arr.indexOf(value)
+  if (i >= 0) arr.splice(i, 1)
+  else arr.push(value)
 }
 function selectedItems(selected: string[], opts: OptionItem[]) {
   return opts.filter((o) => selected.includes(o.value ?? ''))
@@ -1129,7 +1136,6 @@ onMounted(() => {
                 v-model="miningParams.scholarId"
                 placeholder="gkx 学者ID，如 007Rb117 / 14i45118"
               />
-              <small>挖掘读 gkx_local.dwd_scholar，需用 gkx 真实 scholar_id（非 COOP-SCH demo id）</small>
             </label>
             <label>
               <span><i></i>topN</span>
@@ -1143,30 +1149,54 @@ onMounted(() => {
             </label>
             <div class="config-multi">
               <span><i></i>analysisDimensions</span>
-              <div class="ms-field">
-                <select
-                  class="ms-add"
-                  @change="pushMulti('analysisDimensions', ($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''"
+              <div class="ms-dropdown">
+                <button
+                  type="button"
+                  class="ms-dropdown__box"
+                  :class="{ 'is-open': miningDimsOpen }"
+                  @click="miningDimsOpen = !miningDimsOpen"
                 >
-                  <option value="" disabled selected>请选择（可多选，每选一项加一条）</option>
-                  <option v-for="d in options.dimensions" :key="d.value" :value="d.value">{{ d.label }}</option>
-                </select>
-                <div class="ms-tags">
+                  <span
+                    v-if="!selectedItems(miningParams.analysisDimensions, options.dimensions).length"
+                    class="ms-placeholder"
+                    >请选择（可多选）</span
+                  >
                   <span
                     v-for="d in selectedItems(miningParams.analysisDimensions, options.dimensions)"
                     :key="d.value"
                     class="ms-tag"
                   >
                     {{ d.label
-                    }}<button type="button" class="ms-tag-x" @click="removeMulti('analysisDimensions', d.value ?? '')">×</button>
+                    }}<button
+                      type="button"
+                      class="ms-tag-x"
+                      @click.stop="removeMulti('analysisDimensions', d.value ?? '')"
+                    >×</button>
                   </span>
-                </div>
+                  <img class="select-icon" :src="iconSelectArrow" alt="" aria-hidden="true" />
+                </button>
+                <template v-if="miningDimsOpen">
+                  <div class="ms-dropdown__backdrop" @click="miningDimsOpen = false"></div>
+                  <div class="ms-dropdown__panel">
+                    <label
+                      v-for="d in options.dimensions"
+                      :key="d.value"
+                      class="ms-option"
+                    >
+                      <input
+                        type="checkbox"
+                        :checked="miningParams.analysisDimensions.includes(d.value ?? '')"
+                        @change="toggleMulti('analysisDimensions', d.value ?? '')"
+                      />
+                      <span>{{ d.label }}</span>
+                    </label>
+                  </div>
+                </template>
               </div>
             </div>
             <label class="config-check">
               <input type="checkbox" v-model="miningParams.regenerate" />
               <span><i></i>regenerate</span>
-              <small>勾选则忽略图库已构建关系，强制重新挖掘；不勾选时若已构建直接返回（快）</small>
             </label>
           </template>
         </div>
@@ -1996,6 +2026,79 @@ onMounted(() => {
 
 .ms-tag-x:hover {
   color: var(--danger);
+}
+
+/* 自定义多选下拉（选中项展示在框内） */
+.ms-dropdown {
+  position: relative;
+}
+
+.ms-dropdown__box {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--control-height);
+  width: 100%;
+  padding: 5px 36px 5px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ms-dropdown__box.is-open {
+  border-color: var(--primary);
+}
+
+.ms-dropdown__box .select-icon {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+}
+
+.ms-placeholder {
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+
+.ms-dropdown__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 19;
+}
+
+.ms-dropdown__panel {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 6px 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.ms-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.ms-option:hover {
+  background: var(--primary-subtle);
 }
 
 .modal__section-title {

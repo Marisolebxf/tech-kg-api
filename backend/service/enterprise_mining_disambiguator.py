@@ -6,6 +6,19 @@ from rapidfuzz import fuzz, process
 
 MATCH_THRESHOLD = 70.0
 
+# 公司通用后缀：匹配前剥离，避免"股份有限公司/有限公司"等共有后缀在 partial_ratio
+# 中虚高打分，把不相关的公司误匹配（如"菲鹏生物股份有限公司"误中"上海微创…股份有限公司"）。
+_COMPANY_SUFFIXES = ("股份有限公司", "有限责任公司", "有限公司", "集团", "公司", "厂")
+
+
+def _strip_suffix(name: str) -> str:
+    """剥离公司通用后缀（仅剥最外层一个）。"""
+    n = (name or "").strip()
+    for suf in _COMPANY_SUFFIXES:
+        if n.endswith(suf) and len(n) > len(suf):
+            return n[: -len(suf)].strip()
+    return n
+
 
 def _combined_score(
     query: str, choice: str, score_cutoff: float | None = None, **_: object
@@ -22,6 +35,9 @@ def _combined_score(
 def disambiguate(name: str, candidates: list[tuple[str, str]]) -> dict | None:
     """把 LLM 抽取的企业名匹配到 gkx 真实企业。
 
+    匹配前对查询名与候选名均剥离公司通用后缀，避免共有后缀虚高打分；返回的 name_cn
+    仍为候选原始全称。
+
     Args:
         name: LLM 抽取的企业名（可能为简称）。
         candidates: [(org_id, name_cn), ...] 候选集。
@@ -31,12 +47,19 @@ def disambiguate(name: str, candidates: list[tuple[str, str]]) -> dict | None:
     """
     if not candidates:
         return None
-    names = [c[1] for c in candidates]
-    match = process.extractOne(name, names, scorer=_combined_score, score_cutoff=MATCH_THRESHOLD)
+    query = _strip_suffix(name)
+    stripped = [(oid, _strip_suffix(nc)) for oid, nc in candidates]
+    names = [s[1] for s in stripped]
+    match = process.extractOne(query, names, scorer=_combined_score, score_cutoff=MATCH_THRESHOLD)
     if match is None:
         return None
-    matched_name, score, idx = match
-    return {"org_id": candidates[idx][0], "name_cn": matched_name, "score": round(float(score), 1)}
+    _matched, score, idx = match
+    # 返回候选原始全称（非剥离后），便于前端展示
+    return {
+        "org_id": candidates[idx][0],
+        "name_cn": candidates[idx][1],
+        "score": round(float(score), 1),
+    }
 
 
 def merge_matches(matches: list[dict]) -> list[dict]:

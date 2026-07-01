@@ -25,6 +25,12 @@ def test_disambiguate_below_threshold_returns_none():
     assert disambiguate("完全不相关的名字XYZ", candidates) is None
 
 
+def test_disambiguate_rejects_common_suffix_false_positive():
+    """共有'股份有限公司'后缀不应把不相关公司误匹配（菲鹏生物 vs 上海微创）。"""
+    candidates = [("id1", "上海微创医疗机器人(集团)股份有限公司")]
+    assert disambiguate("菲鹏生物股份有限公司", candidates) is None
+
+
 def test_disambiguate_empty_candidates():
     assert disambiguate("某公司", []) is None
 

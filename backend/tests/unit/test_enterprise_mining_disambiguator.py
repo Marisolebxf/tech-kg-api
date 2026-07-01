@@ -37,6 +37,28 @@ def test_disambiguate_rejects_suffix_only_fragment():
     assert disambiguate("科技有限公司", candidates) is None
 
 
+def test_disambiguate_short_name_via_containment():
+    """简称（腾讯/华为/阿里巴巴）通过包含匹配命中主体企业，而非未匹配。"""
+    candidates = [
+        ("id_tec", "深圳市腾讯计算机系统有限公司"),
+        ("id_hw", "华为技术有限公司"),
+        ("id_ali", "杭州阿里巴巴海外数字商业有限公司"),
+        ("id_fish", "海南腾讯渔业有限公司"),
+    ]
+    assert disambiguate("腾讯", candidates)["org_id"] == "id_tec"
+    assert disambiguate("华为", candidates)["org_id"] == "id_hw"
+    assert disambiguate("阿里巴巴", candidates)["org_id"] == "id_ali"
+
+
+def test_disambiguate_lab_affiliation_via_containment():
+    """实验室归属（腾讯Jarvis实验室）按前导中文片段命中主体企业。"""
+    candidates = [("id_tec", "深圳市腾讯计算机系统有限公司"), ("id_fish", "海南腾讯渔业有限公司")]
+    m = disambiguate("腾讯Jarvis实验室", candidates)
+    assert m is not None
+    assert m["org_id"] == "id_tec"
+    assert m["score"] == 100.0
+
+
 def test_disambiguate_empty_candidates():
     assert disambiguate("某公司", []) is None
 

@@ -174,6 +174,7 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
                 "status": "matched",
                 "enterpriseId": m["org_id"],
                 "enterpriseName": m["name_cn"],
+                "extractedName": m.get("extracted_name", ""),
                 "matchScore": m["score"],
                 "confidenceAnalysis": _confidence_analysis(m["score"]),
                 "relationType": relation_type,

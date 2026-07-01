@@ -46,14 +46,25 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
             name = org.name_cn
 
             facts: dict[str, dict[str, Any]] = {}
+            # 各维度独立容错：gkx 表结构与模型可能存在列漂移，单维度查询失败时降级为
+            # available=False，不应导致整个 analyze 抛系统异常（标书：无数据返回空结果）。
+            dim_calls: dict[str, Any] = {}
             if "industry_status" in dimensions:
-                facts["industry_status"] = self._industry_status(org, org_dao, enterprise_id)
+                dim_calls["industry_status"] = lambda: self._industry_status(
+                    org, org_dao, enterprise_id
+                )
             if "core_tech" in dimensions:
-                facts["core_tech"] = self._core_tech(
+                dim_calls["core_tech"] = lambda: self._core_tech(
                     org_dao, pat_dao, enterprise_id, name, patent_cpc
                 )
             if "financial" in dimensions:
-                facts["financial"] = self._financial(org_dao, enterprise_id)
+                dim_calls["financial"] = lambda: self._financial(org_dao, enterprise_id)
+            for dim, fn in dim_calls.items():
+                try:
+                    facts[dim] = fn()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("analyze dimension %s failed: %s", dim, exc)
+                    facts[dim] = {"available": False, "summary": "暂无数据"}
 
             patent_dist = self._patent_distribution(pat_dao, name)
         finally:
@@ -86,7 +97,7 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
         if org is None:
             return {"available": False, "summary": "暂无数据"}
         facts = {
-            "orgType": org.org_type,
+            "orgType": getattr(org, "org_type", None),
             "listingStatus": org.listing_status,
             "registeredCapital": _num(org.registered_capital_value),
             "province": org.province,

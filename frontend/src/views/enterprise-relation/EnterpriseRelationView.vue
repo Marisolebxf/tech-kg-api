@@ -1001,10 +1001,12 @@ onMounted(() => {
           <template v-else>
             <label>
               <span><i>*</i>scholarId</span>
-              <select v-model="miningParams.scholarId">
-                <option v-for="s in options.scholars" :key="s.scholarId" :value="s.scholarId">{{ s.name }}（{{ s.scholarId }}）</option>
-              </select>
-              <img class="select-icon" :src="iconSelectArrow" alt="" aria-hidden="true" />
+              <input
+                type="text"
+                v-model="miningParams.scholarId"
+                placeholder="gkx 学者ID，如 007Rb117 / 14i45118"
+              />
+              <small>挖掘读 gkx_local.dwd_scholar，需用 gkx 真实 scholar_id（非 COOP-SCH demo id）</small>
             </label>
             <label>
               <span><i></i>topN</span>

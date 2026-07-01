@@ -8,7 +8,7 @@ import iconInfo from '../../assets/icons/icon-info.svg'
 import iconModalSetting from '../../assets/icons/icon-modal-setting.svg'
 import iconSelectArrow from '../../assets/icons/icon-select-arrow.svg'
 
-type SubKey = 'build' | 'annotate' | 'analyze'
+type SubKey = 'build' | 'annotate' | 'analyze' | 'mining'
 
 interface GraphNode {
   key: string
@@ -47,6 +47,11 @@ const subFunctions = [
     key: 'analyze' as SubKey,
     name: '企业背景关联分析',
     endpoint: '/v1/kg-construction/enterprise-background-analyses/analyze',
+  },
+  {
+    key: 'mining' as SubKey,
+    name: '专家企业关系挖掘',
+    endpoint: '/v1/kg-construction/expert-enterprise-mining/mine',
   },
 ]
 const activeSub = ref<SubKey>('build')
@@ -97,14 +102,20 @@ const annotateParams = ref({
   period: { start: '2021-01-01', end: '2024-12-31' },
 })
 const analyzeParams = ref({
-  enterpriseId: 'ENT001',
+  enterpriseId: '1470d623589175f1fe06fb5466b77f55',
   analysisDimensions: ['industry_status', 'core_tech', 'financial'] as string[],
   patentCPC: ['G06N', 'G06F'] as string[],
+})
+const miningParams = ref({
+  scholarId: '007Rb117',
+  topN: 5,
+  analysisDimensions: ['industry_status', 'core_tech', 'financial'] as string[],
 })
 
 const buildResult = ref<any>(null)
 const annotationResp = ref<any>(null)
 const analysisResp = ref<any>(null)
+const miningResult = ref<any>(null)
 const loading = ref(false)
 const errorMsg = ref('')
 const lastTestTime = ref('待执行')
@@ -289,7 +300,10 @@ async function loadOptions() {
 type MultiKey = 'relationTypes' | 'analysisDimensions' | 'patentCPC'
 function multiArr(key: MultiKey): string[] {
   if (key === 'relationTypes') return buildParams.value.relationTypes
-  if (key === 'analysisDimensions') return analyzeParams.value.analysisDimensions
+  if (key === 'analysisDimensions')
+    return activeSub.value === 'mining'
+      ? miningParams.value.analysisDimensions
+      : analyzeParams.value.analysisDimensions
   return analyzeParams.value.patentCPC
 }
 function pushMulti(key: MultiKey, value: string) {
@@ -338,6 +352,11 @@ async function handleSearch() {
           relation: body.data?.roleLabel || body.data?.roleType || '标注',
         },
       ])
+    } else if (activeSub.value === 'mining') {
+      const body = (await http.post(currentSub.value.endpoint, miningParams.value)) as any
+      if (!body?.success) throw new Error(body?.msg || '挖掘失败')
+      miningResult.value = body.data
+      graphNodes.value = []
     } else {
       const body = (await http.post(currentSub.value.endpoint, analyzeParams.value)) as any
       if (!body?.success) throw new Error(body?.msg || '分析失败')
@@ -367,6 +386,7 @@ async function handleSearch() {
 const activeResult = computed(() => {
   if (activeSub.value === 'annotate') return annotationResp.value
   if (activeSub.value === 'analyze') return analysisResp.value
+  if (activeSub.value === 'mining') return miningResult.value
   return buildResult.value
 })
 
@@ -399,6 +419,25 @@ const detailRows = computed<(string | number)[][]>(() => {
     rows.push(['核心技术布局', r.coreTechLayout ?? '-'])
     const dist = Array.isArray(r.patentDistribution) ? r.patentDistribution : []
     dist.forEach((p: any) => rows.push([`CPC:${p.cpcSection ?? '-'}`, p.count ?? 0]))
+    return rows
+  }
+  if (activeSub.value === 'mining') {
+    const r = miningResult.value
+    if (!r) return []
+    const rows: (string | number)[][] = [
+      ['专家', r.scholarName ?? r.scholarId ?? '-'],
+      ['专家ID', r.scholarId ?? '-'],
+      ['所属机构', r.scholarOrg ?? '-'],
+      ['是否降级', r.degraded ? '是（LLM不可用，正则抽取）' : '否'],
+      ['挖掘关系数', r.totalMined ?? 0],
+    ]
+    const rels = Array.isArray(r.minedRelations) ? r.minedRelations : []
+    rels.forEach((rel: any) =>
+      rows.push([
+        rel.enterpriseName ?? rel.enterpriseId,
+        `${rel.relationLabel ?? '-'} / ${rel.roleLabel ?? '-'} / 置信度${rel.matchScore ?? '-'}`,
+      ]),
+    )
     return rows
   }
   const r = buildResult.value
@@ -436,15 +475,26 @@ const apiExample = computed(() => {
             patentDistribution: [],
             coreTechLayout: '',
           }
-        : {
-            status: 'success',
-            scholarId: buildParams.value.scholarId,
-            scholarName: '',
-            builtRelationId: `${buildParams.value.scholarId}->${buildParams.value.enterpriseId}@0`,
-            relationType: '',
-            effective: false,
-            relations: [],
-          }
+        : activeSub.value === 'mining'
+          ? {
+              status: 'success',
+              scholarId: miningParams.value.scholarId,
+              scholarName: '',
+              scholarOrg: '',
+              degraded: false,
+              minedRelations: [],
+              skipped: [],
+              totalMined: 0,
+            }
+          : {
+              status: 'success',
+              scholarId: buildParams.value.scholarId,
+              scholarName: '',
+              builtRelationId: `${buildParams.value.scholarId}->${buildParams.value.enterpriseId}@0`,
+              relationType: '',
+              effective: false,
+              relations: [],
+            }
   const data = activeResult.value ?? fallback
   return JSON.stringify({ code: 200, success: true, data, msg: 'success' }, null, 2)
 })
@@ -464,6 +514,13 @@ const requestRows = computed<string[][]>(() => {
       ['enterpriseId', 'string', '是', '企业ID'],
       ['analysisDimensions', 'string[]', '是', '分析维度'],
       ['patentCPC', 'string[]', '否', '专利CPC分类号'],
+    ]
+  }
+  if (activeSub.value === 'mining') {
+    return [
+      ['scholarId', 'string', '是', '学者ID（gkx dwd_scholar.scholar_id，如 007Rb117）'],
+      ['topN', 'int', '否', 'TOP-N，默认5，上限10'],
+      ['analysisDimensions', 'string[]', '否', '分析维度，默认三维度全选'],
     ]
   }
   return [
@@ -504,6 +561,28 @@ const responseRows = computed<string[][]>(() => {
       ['msg', 'string', '返回消息'],
     ]
   }
+  if (activeSub.value === 'mining') {
+    return [
+      ['code', 'int', '业务状态码（200 成功）'],
+      ['success', 'boolean', '是否成功'],
+      ['data', 'object', '结果对象'],
+      ['data.scholarId', 'string', '学者ID'],
+      ['data.scholarName', 'string', '学者姓名'],
+      ['data.scholarOrg', 'string', '学者所属机构'],
+      ['data.degraded', 'boolean', '是否降级（LLM不可用）'],
+      ['data.minedRelations', 'array', '挖掘出的企业关系列表'],
+      ['data.minedRelations[].enterpriseName', 'string', '企业名称'],
+      ['data.minedRelations[].relationLabel', 'string', '关系类型中文'],
+      ['data.minedRelations[].roleLabel', 'string', '角色中文'],
+      ['data.minedRelations[].matchScore', 'float', '消歧置信度'],
+      ['data.minedRelations[].build', 'object', '构建结果'],
+      ['data.minedRelations[].annotate', 'object', '标注结果'],
+      ['data.minedRelations[].analyze', 'object', '企业背景分析结果'],
+      ['data.skipped', 'array', '未匹配企业列表'],
+      ['data.totalMined', 'int', '挖掘关系总数'],
+      ['msg', 'string', '返回消息'],
+    ]
+  }
   return [
     ['code', 'int', '业务状态码（200 成功）'],
     ['success', 'boolean', '是否成功'],
@@ -525,6 +604,8 @@ const techDesc = computed(() => {
     return '为已存在的专家-企业关系边（EMPLOYED_BY）标注角色（首席科学家/CTO 等）、技术领域与合作时段，角色按目录映射 L1/L2/L3 等级。'
   if (activeSub.value === 'analyze')
     return '聚合企业行业地位、核心技术、经营财务维度数据，并结合 LLM 合成企业背景分析结论，LLM 不可用时降级返回结构化数据。'
+  if (activeSub.value === 'mining')
+    return '输入学者ID，从学者履历中抽取关联企业并消歧，自动构建、标注并分析专家-企业关系，LLM 不可用时降级为正则抽取。'
   return '基于专家任职履历与企业信息，构建专家-企业任职/合作关系边（EMPLOYED_BY），支持多种关系类型组合，按企业去重返回该专家全部企业关系。'
 })
 
@@ -535,7 +616,9 @@ const codeSamples = computed<Record<string, string>>(() => {
       ? JSON.stringify(annotateParams.value, null, 2)
       : activeSub.value === 'analyze'
         ? JSON.stringify(analyzeParams.value, null, 2)
-        : JSON.stringify(buildParams.value, null, 2)
+        : activeSub.value === 'mining'
+          ? JSON.stringify(miningParams.value, null, 2)
+          : JSON.stringify(buildParams.value, null, 2)
   return {
     python: `import requests
 
@@ -861,7 +944,7 @@ onMounted(() => {
             <label><span><i></i>period.end</span><input v-model="annotateParams.period.end" placeholder="2024-12-31" /></label>
           </template>
 
-          <template v-else>
+          <template v-else-if="activeSub === 'analyze'">
             <label>
               <span><i>*</i>enterpriseId</span>
               <select v-model="analyzeParams.enterpriseId">
@@ -904,6 +987,48 @@ onMounted(() => {
                 <div class="ms-tags">
                   <span v-for="c in analyzeParams.patentCPC" :key="c" class="ms-tag">
                     {{ c }}<button type="button" class="ms-tag-x" @click="removeMulti('patentCPC', c)">×</button>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else>
+            <label>
+              <span><i>*</i>scholarId</span>
+              <select v-model="miningParams.scholarId">
+                <option v-for="s in options.scholars" :key="s.scholarId" :value="s.scholarId">{{ s.name }}（{{ s.scholarId }}）</option>
+              </select>
+              <img class="select-icon" :src="iconSelectArrow" alt="" aria-hidden="true" />
+            </label>
+            <label>
+              <span><i></i>topN</span>
+              <input
+                type="number"
+                min="1"
+                max="10"
+                :value="miningParams.topN"
+                @input="miningParams.topN = Number(($event.target as HTMLInputElement).value)"
+              />
+            </label>
+            <div class="config-multi">
+              <span><i></i>analysisDimensions</span>
+              <div class="ms-field">
+                <select
+                  class="ms-add"
+                  @change="pushMulti('analysisDimensions', ($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''"
+                >
+                  <option value="" disabled selected>请选择（可多选，每选一项加一条）</option>
+                  <option v-for="d in options.dimensions" :key="d.value" :value="d.value">{{ d.label }}</option>
+                </select>
+                <div class="ms-tags">
+                  <span
+                    v-for="d in selectedItems(miningParams.analysisDimensions, options.dimensions)"
+                    :key="d.value"
+                    class="ms-tag"
+                  >
+                    {{ d.label
+                    }}<button type="button" class="ms-tag-x" @click="removeMulti('analysisDimensions', d.value ?? '')">×</button>
                   </span>
                 </div>
               </div>

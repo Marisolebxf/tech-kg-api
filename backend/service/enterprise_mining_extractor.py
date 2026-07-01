@@ -26,8 +26,9 @@ DEFAULT_ROLE = "engineer"
 
 _EXTRACT_PROMPT = """你是科技专家-企业关系抽取助手。下面是学者{name}的简介、工作经历、教育背景与所属机构。
 请从中抽取该学者与【企业】（公司/集团/厂/股份，不含高校/研究所/政府/医院）的关联关系。
+重要：enterprise_name 必须是企业的完整全称（如"福建帝视信息科技有限公司"），不要只抽"科技有限公司""有限公司"等后缀碎片。
 只返回 JSON 数组，每个元素形如：
-{{"enterprise_name":"企业全称或简称","relation_type":"employment|advisor|rd_cooperation|project_cooperation|tech_cooperation","role":"chief_scientist|cto|technical_advisor|rd_lead|engineer","tech_field":"技术领域","period_start":"YYYY-MM-DD或空","period_end":"YYYY-MM-DD或空","evidence":"原文依据片段"}}
+{{"enterprise_name":"企业完整全称","relation_type":"employment|advisor|rd_cooperation|project_cooperation|tech_cooperation","role":"chief_scientist|cto|technical_advisor|rd_lead|engineer","tech_field":"技术领域","period_start":"YYYY-MM-DD或空","period_end":"YYYY-MM-DD或空","evidence":"原文依据片段"}}
 无可抽取的企业关系时返回 []。只输出 JSON，不要解释。
 
 中文简介：{bio_zh}

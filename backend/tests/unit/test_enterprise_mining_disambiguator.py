@@ -31,6 +31,12 @@ def test_disambiguate_rejects_common_suffix_false_positive():
     assert disambiguate("菲鹏生物股份有限公司", candidates) is None
 
 
+def test_disambiguate_rejects_suffix_only_fragment():
+    """抽取名剥后缀后过短（如'科技有限公司'→'科技'）应拒绝，不误匹配垃圾名。"""
+    candidates = [("id1", "科技有限公司"), ("id2", "福建帝视信息科技有限公司")]
+    assert disambiguate("科技有限公司", candidates) is None
+
+
 def test_disambiguate_empty_candidates():
     assert disambiguate("某公司", []) is None
 

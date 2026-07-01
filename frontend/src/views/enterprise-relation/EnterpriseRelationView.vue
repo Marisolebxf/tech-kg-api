@@ -15,6 +15,7 @@ interface GraphNode {
   title: string
   subtitle: string
   relation?: string
+  infoLines?: { text: string; tone: string }[]
   x: number
   y: number
   width: number
@@ -131,7 +132,7 @@ const dimensionChinese: Record<string, string> = {
 function buildRadialGraph(
   centerTitle: string,
   centerSubtitle: string,
-  items: { title: string; subtitle: string; relation: string }[],
+  items: { title: string; subtitle: string; relation?: string; infoLines?: { text: string; tone: string }[] }[],
 ): GraphNode[] {
   const cx = GW / 2
   const cy = GH / 2
@@ -157,6 +158,7 @@ function buildRadialGraph(
         title: item.title,
         subtitle: item.subtitle,
         relation: item.relation,
+        infoLines: item.infoLines,
         x: ccx - 180,
         y: ccy - 55,
         width: 360,
@@ -172,6 +174,88 @@ const graphStageRef = ref<HTMLElement | null>(null)
 const activeDrag = ref<{ key: string; offsetX: number; offsetY: number } | null>(null)
 
 const companyNodes = computed(() => graphNodes.value.filter((n) => n.kind === 'company'))
+
+interface GraphEdge {
+  key: string
+  node: GraphNode
+  text: string
+  tone: string
+  marker: string
+  offsetIndex: number
+  total: number
+}
+// 每个企业节点展开为 1~N 条边（mining 用 infoLines 多边；其余用单条 relation）
+const graphEdges = computed<GraphEdge[]>(() => {
+  const edges: GraphEdge[] = []
+  for (const node of companyNodes.value) {
+    if (node.infoLines && node.infoLines.length) {
+      node.infoLines.forEach((ln, i) =>
+        edges.push({
+          key: `${node.key}-l${i}`,
+          node,
+          text: ln.text,
+          tone: ln.tone,
+          marker: toneMarker(ln.tone),
+          offsetIndex: i,
+          total: node.infoLines!.length,
+        }),
+      )
+    } else {
+      const tone = relationTone(node.relation)
+      edges.push({
+        key: `${node.key}-l0`,
+        node,
+        text: node.relation || '',
+        tone,
+        marker: relationMarker(node.relation),
+        offsetIndex: 0,
+        total: 1,
+      })
+    }
+  }
+  return edges
+})
+function toneMarker(tone: string) {
+  if (tone === 'relation-blue') return 'url(#arrow-blue)'
+  if (tone === 'relation-purple') return 'url(#arrow-purple)'
+  return 'url(#arrow-orange)'
+}
+function parallelOffset(from: { x: number; y: number }, to: { x: number; y: number }, idx: number, total: number, spacing = 22) {
+  const dx = to.x - from.x
+  const dy = to.y - from.y
+  const len = Math.hypot(dx, dy) || 1
+  const off = (idx - (total - 1) / 2) * spacing
+  return { x: (-dy / len) * off, y: (dx / len) * off }
+}
+function edgePath(edge: GraphEdge) {
+  const expert = getNode('expert')
+  if (!expert) return ''
+  const from = nodeCenter(expert)
+  const to = nodeCenter(edge.node)
+  const start = boundaryPoint(expert, to)
+  const end = boundaryPoint(edge.node, from)
+  const off = parallelOffset(from, to, edge.offsetIndex, edge.total)
+  const s = { x: start.x + off.x, y: start.y + off.y }
+  const e = { x: end.x + off.x, y: end.y + off.y }
+  const verticalGap = Math.abs(e.y - s.y)
+  const ctrl = {
+    x: (s.x + e.x) / 2,
+    y: (s.y + e.y) / 2 + (e.y < s.y ? -verticalGap * 0.42 : verticalGap * 0.18),
+  }
+  return `M ${s.x} ${s.y} Q ${ctrl.x} ${ctrl.y} ${e.x} ${e.y}`
+}
+function edgeLabelStyle(edge: GraphEdge) {
+  const expert = getNode('expert')
+  if (!expert) return {}
+  const from = nodeCenter(expert)
+  const to = nodeCenter(edge.node)
+  const off = parallelOffset(from, to, edge.offsetIndex, edge.total)
+  const directionOffset = to.y < from.y ? -12 : 12
+  return {
+    left: `${(from.x + to.x) / 2 + off.x - 50}px`,
+    top: `${(from.y + to.y) / 2 + off.y + directionOffset - 18}px`,
+  }
+}
 
 function getNode(key: string) {
   return graphNodes.value.find((n) => n.key === key)
@@ -204,35 +288,6 @@ function boundaryPoint(node: GraphNode, toward: { x: number; y: number }) {
   const scaleY = dy === 0 ? Number.POSITIVE_INFINITY : halfHeight / Math.abs(dy)
   const scale = Math.min(scaleX, scaleY)
   return { x: center.x + dx * scale, y: center.y + dy * scale }
-}
-function relationPath(node: GraphNode) {
-  const expert = getNode('expert')
-  if (!expert) return ''
-  const from = nodeCenter(expert)
-  const to = nodeCenter(node)
-  const start = boundaryPoint(expert, to)
-  const end = boundaryPoint(node, from)
-  const verticalGap = Math.abs(end.y - start.y)
-  const control = {
-    x: (start.x + end.x) / 2,
-    y: (start.y + end.y) / 2 + (end.y < start.y ? -verticalGap * 0.42 : verticalGap * 0.18),
-  }
-  return `M ${start.x} ${start.y} Q ${control.x} ${control.y} ${end.x} ${end.y}`
-}
-function relationLabelStyle(node: GraphNode) {
-  const expert = getNode('expert')
-  if (!expert) return {}
-  const from = nodeCenter(expert)
-  const to = nodeCenter(node)
-  const dx = to.x - from.x
-  const dy = to.y - from.y
-  const length = Math.hypot(dx, dy) || 1
-  const normal = { x: (-dy / length) * 28, y: (dx / length) * 28 }
-  const directionOffset = to.y < from.y ? -12 : 12
-  return {
-    left: `${(from.x + to.x) / 2 + normal.x - 34}px`,
-    top: `${(from.y + to.y) / 2 + normal.y + directionOffset - 18}px`,
-  }
 }
 function relationTone(relation = '') {
   if (relation === '任职') return 'relation-blue'
@@ -368,11 +423,13 @@ async function handleSearch() {
         '专家',
         matched.map((r: any) => ({
           title: `企业：${r.enterpriseName ?? r.enterpriseId}`,
-          subtitle: r.roleLabel || '企业',
-          relation:
-            r.matchScore != null
-              ? `${r.relationLabel || '-'}（置信度${r.matchScore}）`
-              : r.relationLabel || '-',
+          subtitle: r.techField ? `技术领域：${r.techField}` : r.roleLabel || '企业',
+          // 多条平行边分别展示 关系类型 / 角色 / 置信度
+          infoLines: [
+            { text: r.relationLabel || '-', tone: 'relation-blue' },
+            { text: r.roleLabel || '-', tone: 'relation-purple' },
+            { text: r.matchScore != null ? `置信度 ${r.matchScore}` : '缓存', tone: 'relation-orange' },
+          ],
         })),
       )
     } else {
@@ -451,15 +508,20 @@ const detailRows = computed<(string | number)[][]>(() => {
     ]
     if (r.reminder) rows.push(['提醒', r.reminder])
     const rels = Array.isArray(r.minedRelations) ? r.minedRelations : []
-    rels.forEach((rel: any) => {
+    rels.forEach((rel: any, i: number) => {
       if (rel.status === 'unmatched') {
-        rows.push([`${rel.enterpriseName ?? '-'}（未匹配）`, rel.reminder ?? '未在企业表中找到'])
-      } else {
-        rows.push([
-          rel.enterpriseName ?? rel.enterpriseId,
-          `${rel.relationLabel ?? '-'} / ${rel.roleLabel ?? '-'} / 置信度${rel.matchScore ?? '-'}`,
-        ])
+        rows.push([`企业${i + 1}（未匹配）`, `${rel.enterpriseName ?? '-'}：${rel.reminder ?? '未在企业表中找到'}`])
+        return
       }
+      const period = rel.period ? `${rel.period.start || '?'} ~ ${rel.period.end || '至今'}` : '-'
+      rows.push([`企业${i + 1} 名称`, rel.enterpriseName ?? rel.enterpriseId ?? '-'])
+      rows.push([`  关系类型`, rel.relationLabel || rel.relationType || '-'])
+      rows.push([`  角色`, rel.roleLabel || rel.role || '-'])
+      if (rel.techField) rows.push([`  技术领域`, rel.techField])
+      rows.push([`  合作时段`, period])
+      rows.push([`  置信度`, rel.matchScore != null ? rel.matchScore : '-'])
+      if (rel.confidenceAnalysis) rows.push([`  置信度分析`, rel.confidenceAnalysis])
+      if (rel.evidence) rows.push([`  证据`, rel.evidence])
     })
     return rows
   }
@@ -770,21 +832,21 @@ onMounted(() => {
                 </marker>
               </defs>
               <path
-                v-for="node in companyNodes"
-                :key="`${node.key}-path`"
+                v-for="edge in graphEdges"
+                :key="`${edge.key}-path`"
                 class="relation-edge"
-                :class="relationTone(node.relation)"
-                :d="relationPath(node)"
-                :marker-end="relationMarker(node.relation)"
+                :class="edge.tone"
+                :d="edgePath(edge)"
+                :marker-end="edge.marker"
               />
             </svg>
             <span
-              v-for="node in companyNodes"
-              :key="`${node.key}-label`"
+              v-for="edge in graphEdges"
+              :key="`${edge.key}-label`"
               class="relation-label"
-              :class="relationTone(node.relation)"
-              :style="relationLabelStyle(node)"
-            >{{ node.relation }}</span>
+              :class="edge.tone"
+              :style="edgeLabelStyle(edge)"
+            >{{ edge.text }}</span>
             <div
               v-for="node in graphNodes"
               :key="node.key"

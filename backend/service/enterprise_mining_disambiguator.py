@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from rapidfuzz import fuzz, process
 
-MATCH_THRESHOLD = 70.0
+MATCH_THRESHOLD = 85.0
+MIN_NAME_LEN = 3  # 剥后缀后最短有效名长，过滤"科技有限公司"等后缀碎片
 
 # 公司通用后缀：匹配前剥离，避免"股份有限公司/有限公司"等共有后缀在 partial_ratio
 # 中虚高打分，把不相关的公司误匹配（如"菲鹏生物股份有限公司"误中"上海微创…股份有限公司"）。
@@ -48,16 +49,27 @@ def disambiguate(name: str, candidates: list[tuple[str, str]]) -> dict | None:
     if not candidates:
         return None
     query = _strip_suffix(name)
-    stripped = [(oid, _strip_suffix(nc)) for oid, nc in candidates]
-    names = [s[1] for s in stripped]
+    # 抽取名剥后缀后过短（如"科技有限公司"→"科技"）多为后缀碎片，直接拒绝
+    if len(query) < MIN_NAME_LEN:
+        return None
+    # 过滤候选中剥后缀后过短的垃圾名（如"科技有限公司"），保留原始索引映射
+    valid: list[tuple[int, str]] = []
+    for i, (_oid, nc) in enumerate(candidates):
+        s = _strip_suffix(nc)
+        if len(s) >= MIN_NAME_LEN:
+            valid.append((i, s))
+    if not valid:
+        return None
+    names = [s for _, s in valid]
     match = process.extractOne(query, names, scorer=_combined_score, score_cutoff=MATCH_THRESHOLD)
     if match is None:
         return None
-    _matched, score, idx = match
+    _matched, score, vi = match
+    orig_idx = valid[vi][0]
     # 返回候选原始全称（非剥离后），便于前端展示
     return {
-        "org_id": candidates[idx][0],
-        "name_cn": candidates[idx][1],
+        "org_id": candidates[orig_idx][0],
+        "name_cn": candidates[orig_idx][1],
         "score": round(float(score), 1),
     }
 

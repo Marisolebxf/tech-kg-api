@@ -25,6 +25,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_DIMENSIONS = ["industry_status", "core_tech", "financial"]
 
 
+def _confidence_analysis(score: float | None) -> str:
+    """根据消歧置信度给出分析说明。"""
+    if score is None:
+        return ""
+    if score >= 100:
+        return "精确匹配（企业名完全一致）"
+    if score >= 95:
+        return "高置信模糊匹配（高度相似）"
+    return "较高置信模糊匹配（建议人工复核）"
+
+
 class ExpertEnterpriseMiningService(KGModuleScaffoldService):
     module_code = "expert_enterprise_mining"
 
@@ -135,6 +146,7 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
                 "enterpriseId": m["org_id"],
                 "enterpriseName": m["name_cn"],
                 "matchScore": m["score"],
+                "confidenceAnalysis": _confidence_analysis(m["score"]),
                 "relationType": relation_type,
                 "relationLabel": relation_label(m["relation_types"]),
                 "role": m["role"],
@@ -274,6 +286,7 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
                     "enterpriseId": eid,
                     "enterpriseName": op.get("name_cn", "") or "",
                     "matchScore": None,
+                    "confidenceAnalysis": "图库已构建关系（缓存读取，未重跑消歧）",
                     "relationType": rt_codes[0] if rt_codes else "",
                     "relationLabel": relation_label(rt_codes) if rt_codes else "",
                     "role": role,

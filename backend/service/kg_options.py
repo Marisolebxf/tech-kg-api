@@ -1,4 +1,4 @@
-"""测试参数下拉选项聚合：图库(学者/关系边) + MySQL(企业) + 目录(关系类型/角色/维度/领域/CPC)。"""
+"""测试参数下拉选项聚合：图库(关系边) + gkx(学者/企业) + 目录(关系类型/角色/维度/领域/CPC)。"""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from typing import Any
 
 from sqlalchemy import select
 
-from db_model.domestic_organization import DwdOrgRegInfo
-from db_model.scholar import Scholar
+from db_model.domestic_organization import DwdOrgRegInfo, DwdOrgStockBase
+from db_model.scholar import DwdScholar
+from infra.gkx import get_gkx_session
 from infra.graph_db import get_techkg_client
-from infra.mysql import get_mysql_client
 from service.enterprise_relation_catalog import RELATION_TYPES, ROLE_CATALOG
 
 logger = logging.getLogger(__name__)
@@ -33,12 +33,12 @@ CPC_CODES: list[str] = [
 
 
 def _scholars() -> list[dict[str, str]]:
-    """从 techkg `scholar` 表读真实学者（如 COOP-SCH001 陈建国）。"""
+    """从 gkx_local.dwd_scholar 读真实学者（如 007Rb117 吴边）。"""
     out: list[dict[str, str]] = []
     try:
-        session = get_mysql_client().session()
+        session = get_gkx_session()
         try:
-            for r in session.execute(select(Scholar).limit(500)).scalars():
+            for r in session.execute(select(DwdScholar).limit(200)).scalars():
                 out.append({"scholarId": r.scholar_id, "name": r.name_zh or r.scholar_id})
         finally:
             session.close()
@@ -48,12 +48,20 @@ def _scholars() -> list[dict[str, str]]:
 
 
 def _enterprises() -> list[dict[str, str]]:
+    """从 gkx_local 读真实企业（上市公司优先，补注册企业），取前 200 条。"""
     out: list[dict[str, str]] = []
     try:
-        session = get_mysql_client().session()
+        session = get_gkx_session()
         try:
+            seen: set[str] = set()
+            for r in session.execute(select(DwdOrgStockBase).limit(200)).scalars():
+                if r.org_id and r.org_id not in seen:
+                    seen.add(r.org_id)
+                    out.append({"enterpriseId": r.org_id, "name": r.name_cn or r.org_id})
             for r in session.execute(select(DwdOrgRegInfo).limit(200)).scalars():
-                out.append({"enterpriseId": r.org_id, "name": r.name_cn})
+                if r.org_id and r.org_id not in seen:
+                    seen.add(r.org_id)
+                    out.append({"enterpriseId": r.org_id, "name": r.name_cn or r.org_id})
         finally:
             session.close()
     except Exception as exc:  # noqa: BLE001

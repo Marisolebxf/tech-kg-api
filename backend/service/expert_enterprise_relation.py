@@ -8,11 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
-
-from db_model.scholar import Scholar
+from dao.gkx_organization import GkxOrganizationDAO
+from dao.gkx_scholar import GkxScholarDAO
+from infra.gkx import get_gkx_session
 from infra.graph_db import TRSGraphClient, get_techkg_client
-from infra.mysql import get_mysql_client
 from service.base_module import KGModuleScaffoldService
 from service.enterprise_relation_catalog import relation_label, validate_relation_types
 
@@ -55,21 +54,15 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
         return [e for e in edges if str(e.target_id) == str(enterprise_id)]
 
     def _provision_scholar(self, graph: TRSGraphClient, scholar_id: str) -> Any:
-        """图库无该学者时，从 MySQL scholar 表查真实信息并创建图库节点。
-
-        图库节点 demo（E10001 等）不含真实姓名；真实学者在 techkg `scholar` 表
-        （如 COOP-SCH001 陈建国）。首次 build 真实学者时按需建点，使后续返回真实姓名。
-        """
+        """图库无该学者时，从 gkx_local.dwd_scholar 查真实信息并创建图库节点。"""
         try:
-            session = get_mysql_client().session()
+            session = get_gkx_session()
             try:
-                s = session.execute(
-                    select(Scholar).where(Scholar.scholar_id == scholar_id)
-                ).scalar_one_or_none()
+                s = GkxScholarDAO(session).get_by_id(scholar_id)
             finally:
                 session.close()
         except Exception:
-            # MySQL 不可用（如 CI 无 DB），返回 None 让 build 抛 KeyError
+            # gkx 不可用（如 CI 无 DB），返回 None 让 build 抛 KeyError
             return None
         if s is None:
             return None
@@ -80,15 +73,43 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
                     "scholar_id": s.scholar_id,
                     "name_zh": s.name_zh or "",
                     "name_en": s.name_en or "",
-                    "scholar_org_name_zh": s.org_name_zh or "",
-                    "h_index": int(s.h_index) if s.h_index is not None else 0,
-                    "citation_nums": int(s.citation_nums) if s.citation_nums is not None else 0,
-                    "paper_nums": int(s.paper_nums) if s.paper_nums is not None else 0,
+                    "scholar_org_name_zh": s.scholar_org_name_zh or "",
+                    "h_index": int(s.h_index or 0),
+                    "citation_nums": int(s.citation_nums or 0),
+                    "paper_nums": int(s.paper_nums or 0),
                 },
             )
         except Exception:
             return None
         return graph.get_node(scholar_id)
+
+    def _provision_enterprise(self, graph: TRSGraphClient, enterprise_id: str) -> Any:
+        """图库无该企业时，从 gkx 企业表查真实信息并创建图库节点。"""
+        try:
+            session = get_gkx_session()
+            try:
+                org = GkxOrganizationDAO(session).get_by_id(enterprise_id)
+            finally:
+                session.close()
+        except Exception:
+            return None
+        if org is None:
+            return None
+        try:
+            graph.create_node(
+                ["Organization"],
+                {
+                    "org_id": org.org_id,
+                    "name_cn": org.name_cn or "",
+                    "province": getattr(org, "province", None) or "",
+                    "listing_status": getattr(org, "listing_status", None)
+                    or getattr(org, "listed_status", None)
+                    or "",
+                },
+            )
+        except Exception:
+            return None
+        return graph.get_node(enterprise_id)
 
     def build(self, payload: dict[str, Any]) -> dict[str, Any]:
         scholar_id = payload.get("scholarId", "")
@@ -104,6 +125,8 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
         scholar_name = scholar.properties.get("name_zh") or scholar_id
 
         enterprise = graph.get_node(enterprise_id)
+        if enterprise is None:
+            enterprise = self._provision_enterprise(graph, enterprise_id)
         if enterprise is None:
             raise KeyError(f"企业不存在: {enterprise_id}")
 

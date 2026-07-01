@@ -54,6 +54,12 @@ KG_CONSTRUCTION_MODULES: tuple[dict[str, object], ...] = (
         "status": "scaffold",
     },
     {
+        "code": "expert_enterprise_mining",
+        "name": "专家企业关系挖掘",
+        "description": "输入学者ID，从其传记文本自动抽取关联企业、实体消歧后调用构建/标注/分析接口完成专家-企业关系挖掘。",
+        "status": "scaffold",
+    },
+    {
         "code": "industry_chain_topn_event",
         "name": "科技产业链点TOP-N事件关系",
         "description": "针对产业链节点筛选核心事件，构建事件与专家、人才、产业节点的关联。",

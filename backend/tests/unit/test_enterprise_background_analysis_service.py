@@ -9,6 +9,22 @@ import service.enterprise_background_analysis as mod
 from service.enterprise_background_analysis import EnterpriseBackgroundAnalysisService
 
 
+def test_industry_status_tolerates_missing_org_type():
+    """gkx 的 DwdOrgRegInfo 无 org_type 列，_industry_status 不应抛 AttributeError。"""
+    from db_model.domestic_organization import DwdOrgRegInfo
+
+    org = MagicMock(spec=DwdOrgRegInfo)  # spec 限制：访问 org_type 会 AttributeError
+    org.name_cn = "某公司"
+    svc = EnterpriseBackgroundAnalysisService()
+    org_dao = MagicMock()
+    org_dao.get_tags.return_value = []
+    org_dao.get_industry_chain.return_value = []
+    org_dao.get_chain_products.return_value = []
+    result = svc._industry_status(org, org_dao, "O1")
+    assert result["available"] is True
+    assert result["facts"]["orgType"] is None  # getattr 兜底，不再抛错
+
+
 def _org():
     o = MagicMock()
     o.name_cn = "某公司"
@@ -26,9 +42,8 @@ def _setup(monkeypatch, org, org_dao, pat_dao, llm=None):
     monkeypatch.setattr(mod, "PatentDAO", lambda session: pat_dao)
     monkeypatch.setattr(mod, "get_llm_client", lambda: llm)
     session = MagicMock()
-    mc = MagicMock()
-    mc.session.return_value = session
-    monkeypatch.setattr(mod, "get_mysql_client", lambda: mc)
+    # analyze 缺省通过 get_gkx_session 取会话（Task 3 重构后不再用 get_mysql_client）
+    monkeypatch.setattr(mod, "get_gkx_session", lambda: session)
     org_dao.get_by_id.return_value = org
 
 

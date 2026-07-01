@@ -11,6 +11,7 @@ from db_model.domestic_organization import (
     DwdOrgAnnualFinancialInfo,
     DwdOrgOrgProductInfo,
     DwdOrgRegInfo,
+    DwdOrgStockBase,
     DwdOrgStockFinanceInfo,
     DwdOrgTagInfo,
 )
@@ -26,8 +27,16 @@ class OrganizationDAO:
     def __init__(self, session: Session) -> None:
         self._s = session
 
-    def get_by_id(self, org_id: str) -> DwdOrgRegInfo | None:
-        return self._s.get(DwdOrgRegInfo, org_id)
+    def get_by_id(self, org_id: str) -> DwdOrgRegInfo | DwdOrgStockBase | None:
+        """先查注册信息表，未命中再查上市公司表（上市公司可能不在 reg_info）。"""
+        row = self._s.execute(
+            select(DwdOrgRegInfo).where(DwdOrgRegInfo.org_id == org_id)
+        ).scalar_one_or_none()
+        if row is not None:
+            return row
+        return self._s.execute(
+            select(DwdOrgStockBase).where(DwdOrgStockBase.org_id == org_id)
+        ).scalar_one_or_none()
 
     def get_by_name(self, name_cn: str) -> DwdOrgRegInfo | None:
         stmt = select(DwdOrgRegInfo).where(DwdOrgRegInfo.name_cn == name_cn).limit(1)

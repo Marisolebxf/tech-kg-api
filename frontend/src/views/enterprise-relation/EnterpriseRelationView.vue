@@ -8,18 +8,19 @@ import iconInfo from '../../assets/icons/icon-info.svg'
 import iconModalSetting from '../../assets/icons/icon-modal-setting.svg'
 import iconSelectArrow from '../../assets/icons/icon-select-arrow.svg'
 
-type SubKey = 'build' | 'annotate' | 'analyze'
+type SubKey = 'build' | 'annotate' | 'analyze' | 'mining'
 
 interface GraphNode {
   key: string
   title: string
   subtitle: string
   relation?: string
+  roleKey?: string
   x: number
   y: number
   width: number
   height: number
-  kind: 'expert' | 'company'
+  kind: 'expert' | 'company' | 'role'
 }
 
 const GW = 1320
@@ -47,6 +48,11 @@ const subFunctions = [
     key: 'analyze' as SubKey,
     name: '企业背景关联分析',
     endpoint: '/v1/kg-construction/enterprise-background-analyses/analyze',
+  },
+  {
+    key: 'mining' as SubKey,
+    name: '专家企业关系挖掘',
+    endpoint: '/v1/kg-construction/expert-enterprise-mining/mine',
   },
 ]
 const activeSub = ref<SubKey>('build')
@@ -86,25 +92,32 @@ const options = ref<Options>({
 })
 
 const buildParams = ref({
-  scholarId: 'COOP-SCH001',
-  enterpriseId: 'ENT001',
+  scholarId: '',
+  enterpriseId: '',
   relationTypes: ['employment'] as string[],
 })
 const annotateParams = ref({
-  relationId: 'COOP-SCH001->ENT001@0',
+  relationId: '',
   roleType: 'chief_scientist',
   techField: '人工智能',
   period: { start: '2021-01-01', end: '2024-12-31' },
 })
 const analyzeParams = ref({
-  enterpriseId: 'ENT001',
+  enterpriseId: '',
   analysisDimensions: ['industry_status', 'core_tech', 'financial'] as string[],
   patentCPC: ['G06N', 'G06F'] as string[],
+})
+const miningParams = ref({
+  scholarId: '14i45118',
+  topN: 5,
+  analysisDimensions: ['industry_status', 'core_tech', 'financial'] as string[],
+  regenerate: false,
 })
 
 const buildResult = ref<any>(null)
 const annotationResp = ref<any>(null)
 const analysisResp = ref<any>(null)
+const miningResult = ref<any>(null)
 const loading = ref(false)
 const errorMsg = ref('')
 const lastTestTime = ref('待执行')
@@ -119,7 +132,7 @@ const dimensionChinese: Record<string, string> = {
 function buildRadialGraph(
   centerTitle: string,
   centerSubtitle: string,
-  items: { title: string; subtitle: string; relation: string }[],
+  items: { title: string; subtitle: string; relation?: string }[],
 ): GraphNode[] {
   const cx = GW / 2
   const cy = GH / 2
@@ -155,11 +168,137 @@ function buildRadialGraph(
   ]
 }
 
+// 挖掘专用图：专家→企业（关系类型一条边）+ 企业→任职身份方块（角色）
+function buildMiningGraph(
+  scholarTitle: string,
+  rels: {
+    enterpriseName?: string
+    enterpriseId?: string
+    relationLabel?: string
+    relationType?: string
+    roleLabel?: string
+    role?: string
+    techField?: string
+  }[],
+): GraphNode[] {
+  const cx = GW / 2
+  const cy = GH / 2
+  const radius = 300
+  const n = rels.length
+  const nodes: GraphNode[] = [
+    {
+      key: 'expert',
+      title: scholarTitle,
+      subtitle: '专家',
+      x: cx - 150,
+      y: cy - 47,
+      width: 300,
+      height: 94,
+      kind: 'expert',
+    },
+  ]
+  rels.forEach((r, i) => {
+    const ang = (2 * Math.PI * i) / (n || 1) - Math.PI / 2
+    const ccx = cx + radius * Math.cos(ang)
+    const ccy = cy + radius * Math.sin(ang)
+    const ckey = `c${i + 1}`
+    const rkey = `r${i + 1}`
+    nodes.push({
+      key: ckey,
+      title: `企业：${r.enterpriseName ?? r.enterpriseId ?? '-'}`,
+      subtitle: r.techField ? `技术领域：${r.techField}` : '',
+      relation: r.relationLabel || r.relationType || '任职',
+      roleKey: rkey,
+      x: ccx - 180,
+      y: ccy - 55,
+      width: 360,
+      height: 110,
+      kind: 'company',
+    })
+    // 任职身份方块：沿同一径向再往外
+    const rcx = cx + (radius + 230) * Math.cos(ang)
+    const rcy = cy + (radius + 230) * Math.sin(ang)
+    nodes.push({
+      key: rkey,
+      title: '任职身份',
+      subtitle: r.roleLabel || r.role || '-',
+      x: rcx - 90,
+      y: rcy - 34,
+      width: 180,
+      height: 68,
+      kind: 'role',
+    })
+  })
+  return nodes
+}
+
 const graphZoom = ref(0.56)
 const graphStageRef = ref<HTMLElement | null>(null)
 const activeDrag = ref<{ key: string; offsetX: number; offsetY: number } | null>(null)
 
 const companyNodes = computed(() => graphNodes.value.filter((n) => n.kind === 'company'))
+
+interface GraphEdge {
+  key: string
+  fromKey: string
+  toKey: string
+  text: string
+  tone: string
+  marker: string
+}
+// 边：专家→企业（关系类型）+ 企业→任职身份方块（角色）。mining 有角色方块，其余只有前者。
+const graphEdges = computed<GraphEdge[]>(() => {
+  const edges: GraphEdge[] = []
+  for (const node of companyNodes.value) {
+    const tone = relationTone(node.relation)
+    edges.push({
+      key: `${node.key}-rel`,
+      fromKey: 'expert',
+      toKey: node.key,
+      text: node.relation || '',
+      tone,
+      marker: relationMarker(node.relation),
+    })
+    if (node.roleKey && getNode(node.roleKey)) {
+      edges.push({
+        key: `${node.key}-role`,
+        fromKey: node.key,
+        toKey: node.roleKey,
+        text: '任职身份',
+        tone: 'relation-purple',
+        marker: 'url(#arrow-purple)',
+      })
+    }
+  }
+  return edges
+})
+function edgePath(edge: GraphEdge) {
+  const from = getNode(edge.fromKey)
+  const to = getNode(edge.toKey)
+  if (!from || !to) return ''
+  const fc = nodeCenter(from)
+  const tc = nodeCenter(to)
+  const start = boundaryPoint(from, tc)
+  const end = boundaryPoint(to, fc)
+  const verticalGap = Math.abs(end.y - start.y)
+  const ctrl = {
+    x: (start.x + end.x) / 2,
+    y: (start.y + end.y) / 2 + (end.y < start.y ? -verticalGap * 0.3 : verticalGap * 0.12),
+  }
+  return `M ${start.x} ${start.y} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`
+}
+function edgeLabelStyle(edge: GraphEdge) {
+  const from = getNode(edge.fromKey)
+  const to = getNode(edge.toKey)
+  if (!from || !to) return {}
+  const fc = nodeCenter(from)
+  const tc = nodeCenter(to)
+  const directionOffset = tc.y < fc.y ? -12 : 12
+  return {
+    left: `${(fc.x + tc.x) / 2 - 40}px`,
+    top: `${(fc.y + tc.y) / 2 + directionOffset - 18}px`,
+  }
+}
 
 function getNode(key: string) {
   return graphNodes.value.find((n) => n.key === key)
@@ -192,35 +331,6 @@ function boundaryPoint(node: GraphNode, toward: { x: number; y: number }) {
   const scaleY = dy === 0 ? Number.POSITIVE_INFINITY : halfHeight / Math.abs(dy)
   const scale = Math.min(scaleX, scaleY)
   return { x: center.x + dx * scale, y: center.y + dy * scale }
-}
-function relationPath(node: GraphNode) {
-  const expert = getNode('expert')
-  if (!expert) return ''
-  const from = nodeCenter(expert)
-  const to = nodeCenter(node)
-  const start = boundaryPoint(expert, to)
-  const end = boundaryPoint(node, from)
-  const verticalGap = Math.abs(end.y - start.y)
-  const control = {
-    x: (start.x + end.x) / 2,
-    y: (start.y + end.y) / 2 + (end.y < start.y ? -verticalGap * 0.42 : verticalGap * 0.18),
-  }
-  return `M ${start.x} ${start.y} Q ${control.x} ${control.y} ${end.x} ${end.y}`
-}
-function relationLabelStyle(node: GraphNode) {
-  const expert = getNode('expert')
-  if (!expert) return {}
-  const from = nodeCenter(expert)
-  const to = nodeCenter(node)
-  const dx = to.x - from.x
-  const dy = to.y - from.y
-  const length = Math.hypot(dx, dy) || 1
-  const normal = { x: (-dy / length) * 28, y: (dx / length) * 28 }
-  const directionOffset = to.y < from.y ? -12 : 12
-  return {
-    left: `${(from.x + to.x) / 2 + normal.x - 34}px`,
-    top: `${(from.y + to.y) / 2 + normal.y + directionOffset - 18}px`,
-  }
 }
 function relationTone(relation = '') {
   if (relation === '任职') return 'relation-blue'
@@ -281,6 +391,14 @@ async function loadOptions() {
       techFields: data.techFields ?? [],
       cpcCodes: data.cpcCodes ?? [],
     }
+    // 默认值取首个真实选项（gkx 学者/企业/关系边）
+    const sch = data.scholars?.[0]?.scholarId
+    const ent = data.enterprises?.[0]?.enterpriseId
+    const edg = data.edges?.[0]?.relationId
+    if (sch && !buildParams.value.scholarId) buildParams.value.scholarId = sch
+    if (ent && !buildParams.value.enterpriseId) buildParams.value.enterpriseId = ent
+    if (ent && !analyzeParams.value.enterpriseId) analyzeParams.value.enterpriseId = ent
+    if (edg && !annotateParams.value.relationId) annotateParams.value.relationId = edg
   } catch {
     // 选项拉取失败不阻塞页面
   }
@@ -289,7 +407,10 @@ async function loadOptions() {
 type MultiKey = 'relationTypes' | 'analysisDimensions' | 'patentCPC'
 function multiArr(key: MultiKey): string[] {
   if (key === 'relationTypes') return buildParams.value.relationTypes
-  if (key === 'analysisDimensions') return analyzeParams.value.analysisDimensions
+  if (key === 'analysisDimensions')
+    return activeSub.value === 'mining'
+      ? miningParams.value.analysisDimensions
+      : analyzeParams.value.analysisDimensions
   return analyzeParams.value.patentCPC
 }
 function pushMulti(key: MultiKey, value: string) {
@@ -338,6 +459,20 @@ async function handleSearch() {
           relation: body.data?.roleLabel || body.data?.roleType || '标注',
         },
       ])
+    } else if (activeSub.value === 'mining') {
+      // 挖掘完整流程含 LLM 抽取+建图+标注+背景分析，可能耗时 60-90s，单独放宽超时
+      const body = (await http.post(currentSub.value.endpoint, miningParams.value, {
+        timeout: 180_000,
+      })) as any
+      if (!body?.success) throw new Error(body?.msg || '挖掘失败')
+      miningResult.value = body.data
+      const rels: any[] = Array.isArray(body.data?.minedRelations) ? body.data.minedRelations : []
+      // 仅 matched（已匹配到企业表）的关系画进图；unmatched 不画节点
+      const matched = rels.filter((r: any) => r.status !== 'unmatched')
+      graphNodes.value = buildMiningGraph(
+        `专家：${body.data?.scholarName ?? miningParams.value.scholarId}`,
+        matched,
+      )
     } else {
       const body = (await http.post(currentSub.value.endpoint, analyzeParams.value)) as any
       if (!body?.success) throw new Error(body?.msg || '分析失败')
@@ -367,6 +502,7 @@ async function handleSearch() {
 const activeResult = computed(() => {
   if (activeSub.value === 'annotate') return annotationResp.value
   if (activeSub.value === 'analyze') return analysisResp.value
+  if (activeSub.value === 'mining') return miningResult.value
   return buildResult.value
 })
 
@@ -399,6 +535,38 @@ const detailRows = computed<(string | number)[][]>(() => {
     rows.push(['核心技术布局', r.coreTechLayout ?? '-'])
     const dist = Array.isArray(r.patentDistribution) ? r.patentDistribution : []
     dist.forEach((p: any) => rows.push([`CPC:${p.cpcSection ?? '-'}`, p.count ?? 0]))
+    return rows
+  }
+  if (activeSub.value === 'mining') {
+    const r = miningResult.value
+    if (!r) return []
+    const rows: (string | number)[][] = [
+      ['专家', r.scholarName ?? r.scholarId ?? '-'],
+      ['专家ID', r.scholarId ?? '-'],
+      ['所属机构', r.scholarOrg ?? '-'],
+      ['是否降级', r.degraded ? '是（LLM不可用，正则抽取）' : '否'],
+      ['挖掘关系数', r.totalMined ?? 0],
+    ]
+    if (r.reminder) rows.push(['提醒', r.reminder])
+    const rels = Array.isArray(r.minedRelations) ? r.minedRelations : []
+    rels.forEach((rel: any, i: number) => {
+      if (rel.status === 'unmatched') {
+        rows.push([`企业${i + 1}（未匹配）`, `${rel.enterpriseName ?? '-'}：${rel.reminder ?? '未在企业表中找到'}`])
+        return
+      }
+      const period = rel.period ? `${rel.period.start || '?'} ~ ${rel.period.end || '至今'}` : '-'
+      rows.push([`企业${i + 1} 名称`, rel.enterpriseName ?? rel.enterpriseId ?? '-'])
+      if (rel.extractedName && rel.extractedName !== rel.enterpriseName) {
+        rows.push([`  抽取名→匹配`, `${rel.extractedName} → ${rel.enterpriseName}`])
+      }
+      rows.push([`  关系类型`, rel.relationLabel || rel.relationType || '-'])
+      rows.push([`  角色`, rel.roleLabel || rel.role || '-'])
+      if (rel.techField) rows.push([`  技术领域`, rel.techField])
+      rows.push([`  合作时段`, period])
+      rows.push([`  置信度`, rel.matchScore != null ? rel.matchScore : '-'])
+      if (rel.confidenceAnalysis) rows.push([`  置信度分析`, rel.confidenceAnalysis])
+      if (rel.evidence) rows.push([`  任职/合作依据`, rel.evidence])
+    })
     return rows
   }
   const r = buildResult.value
@@ -436,15 +604,28 @@ const apiExample = computed(() => {
             patentDistribution: [],
             coreTechLayout: '',
           }
-        : {
-            status: 'success',
-            scholarId: buildParams.value.scholarId,
-            scholarName: '',
-            builtRelationId: `${buildParams.value.scholarId}->${buildParams.value.enterpriseId}@0`,
-            relationType: '',
-            effective: false,
-            relations: [],
-          }
+        : activeSub.value === 'mining'
+          ? {
+              status: 'success',
+              scholarId: miningParams.value.scholarId,
+              scholarName: '',
+              scholarOrg: '',
+              degraded: false,
+              cached: false,
+              reminder: '',
+              minedRelations: [],
+              skipped: [],
+              totalMined: 0,
+            }
+          : {
+              status: 'success',
+              scholarId: buildParams.value.scholarId,
+              scholarName: '',
+              builtRelationId: `${buildParams.value.scholarId}->${buildParams.value.enterpriseId}@0`,
+              relationType: '',
+              effective: false,
+              relations: [],
+            }
   const data = activeResult.value ?? fallback
   return JSON.stringify({ code: 200, success: true, data, msg: 'success' }, null, 2)
 })
@@ -464,6 +645,14 @@ const requestRows = computed<string[][]>(() => {
       ['enterpriseId', 'string', '是', '企业ID'],
       ['analysisDimensions', 'string[]', '是', '分析维度'],
       ['patentCPC', 'string[]', '否', '专利CPC分类号'],
+    ]
+  }
+  if (activeSub.value === 'mining') {
+    return [
+      ['scholarId', 'string', '是', '学者ID（gkx dwd_scholar.scholar_id，如 007Rb117）'],
+      ['topN', 'int', '否', 'TOP-N，默认5，上限10'],
+      ['analysisDimensions', 'string[]', '否', '分析维度，默认三维度全选'],
+      ['regenerate', 'bool', '否', '是否强制重新挖掘；默认false，已构建则直接返回图库关系'],
     ]
   }
   return [
@@ -504,6 +693,32 @@ const responseRows = computed<string[][]>(() => {
       ['msg', 'string', '返回消息'],
     ]
   }
+  if (activeSub.value === 'mining') {
+    return [
+      ['code', 'int', '业务状态码（200 成功）'],
+      ['success', 'boolean', '是否成功'],
+      ['data', 'object', '结果对象'],
+      ['data.scholarId', 'string', '学者ID'],
+      ['data.scholarName', 'string', '学者姓名'],
+      ['data.scholarOrg', 'string', '学者所属机构'],
+      ['data.degraded', 'boolean', '是否降级（LLM不可用）'],
+      ['data.cached', 'boolean', '是否来自图库已构建关系（未重跑）'],
+      ['data.reminder', 'string', '汇总提醒（未匹配/未抽取说明）'],
+      ['data.minedRelations', 'array', '挖掘出的企业关系列表（含 matched 与 unmatched）'],
+      ['data.minedRelations[].status', 'string', 'matched=已匹配建关系；unmatched=未在企业表找到'],
+      ['data.minedRelations[].enterpriseName', 'string', '企业名称'],
+      ['data.minedRelations[].relationLabel', 'string', '关系类型中文'],
+      ['data.minedRelations[].roleLabel', 'string', '角色中文'],
+      ['data.minedRelations[].matchScore', 'float', '消歧置信度'],
+      ['data.minedRelations[].reminder', 'string', '未匹配提醒（仅 unmatched）'],
+      ['data.minedRelations[].build', 'object', '构建结果'],
+      ['data.minedRelations[].annotate', 'object', '标注结果'],
+      ['data.minedRelations[].analyze', 'object', '企业背景分析结果'],
+      ['data.skipped', 'array', '未匹配企业列表'],
+      ['data.totalMined', 'int', '成功构建的关系总数（不含 unmatched）'],
+      ['msg', 'string', '返回消息'],
+    ]
+  }
   return [
     ['code', 'int', '业务状态码（200 成功）'],
     ['success', 'boolean', '是否成功'],
@@ -525,6 +740,8 @@ const techDesc = computed(() => {
     return '为已存在的专家-企业关系边（EMPLOYED_BY）标注角色（首席科学家/CTO 等）、技术领域与合作时段，角色按目录映射 L1/L2/L3 等级。'
   if (activeSub.value === 'analyze')
     return '聚合企业行业地位、核心技术、经营财务维度数据，并结合 LLM 合成企业背景分析结论，LLM 不可用时降级返回结构化数据。'
+  if (activeSub.value === 'mining')
+    return '输入学者ID，从学者履历中抽取关联企业并消歧，自动构建、标注并分析专家-企业关系，LLM 不可用时降级为正则抽取。'
   return '基于专家任职履历与企业信息，构建专家-企业任职/合作关系边（EMPLOYED_BY），支持多种关系类型组合，按企业去重返回该专家全部企业关系。'
 })
 
@@ -535,7 +752,9 @@ const codeSamples = computed<Record<string, string>>(() => {
       ? JSON.stringify(annotateParams.value, null, 2)
       : activeSub.value === 'analyze'
         ? JSON.stringify(analyzeParams.value, null, 2)
-        : JSON.stringify(buildParams.value, null, 2)
+        : activeSub.value === 'mining'
+          ? JSON.stringify(miningParams.value, null, 2)
+          : JSON.stringify(buildParams.value, null, 2)
   return {
     python: `import requests
 
@@ -657,26 +876,26 @@ onMounted(() => {
                 </marker>
               </defs>
               <path
-                v-for="node in companyNodes"
-                :key="`${node.key}-path`"
+                v-for="edge in graphEdges"
+                :key="`${edge.key}-path`"
                 class="relation-edge"
-                :class="relationTone(node.relation)"
-                :d="relationPath(node)"
-                :marker-end="relationMarker(node.relation)"
+                :class="edge.tone"
+                :d="edgePath(edge)"
+                :marker-end="edge.marker"
               />
             </svg>
             <span
-              v-for="node in companyNodes"
-              :key="`${node.key}-label`"
+              v-for="edge in graphEdges"
+              :key="`${edge.key}-label`"
               class="relation-label"
-              :class="relationTone(node.relation)"
-              :style="relationLabelStyle(node)"
-            >{{ node.relation }}</span>
+              :class="edge.tone"
+              :style="edgeLabelStyle(edge)"
+            >{{ edge.text }}</span>
             <div
               v-for="node in graphNodes"
               :key="node.key"
               class="graph-node"
-              :class="[{ dragging: activeDrag?.key === node.key }, node.kind === 'expert' ? 'expert-node' : 'company-node']"
+              :class="[{ dragging: activeDrag?.key === node.key }, node.kind === 'expert' ? 'expert-node' : node.kind === 'role' ? 'role-node' : 'company-node']"
               :style="nodeStyle(node)"
               @pointerdown="startDrag($event, node)"
             >
@@ -861,7 +1080,7 @@ onMounted(() => {
             <label><span><i></i>period.end</span><input v-model="annotateParams.period.end" placeholder="2024-12-31" /></label>
           </template>
 
-          <template v-else>
+          <template v-else-if="activeSub === 'analyze'">
             <label>
               <span><i>*</i>enterpriseId</span>
               <select v-model="analyzeParams.enterpriseId">
@@ -908,6 +1127,53 @@ onMounted(() => {
                 </div>
               </div>
             </div>
+          </template>
+
+          <template v-else>
+            <label>
+              <span><i>*</i>scholarId</span>
+              <input
+                type="text"
+                v-model="miningParams.scholarId"
+                placeholder="gkx 学者ID，如 007Rb117 / 14i45118"
+              />
+            </label>
+            <label>
+              <span><i></i>topN</span>
+              <input
+                type="number"
+                min="1"
+                max="10"
+                :value="miningParams.topN"
+                @input="miningParams.topN = Number(($event.target as HTMLInputElement).value)"
+              />
+            </label>
+            <div class="config-multi">
+              <span><i></i>analysisDimensions</span>
+              <div class="ms-field">
+                <select
+                  class="ms-add"
+                  @change="pushMulti('analysisDimensions', ($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''"
+                >
+                  <option value="" disabled selected>请选择（可多选，每选一项加一条）</option>
+                  <option v-for="d in options.dimensions" :key="d.value" :value="d.value">{{ d.label }}</option>
+                </select>
+                <div class="ms-tags">
+                  <span
+                    v-for="d in selectedItems(miningParams.analysisDimensions, options.dimensions)"
+                    :key="d.value"
+                    class="ms-tag"
+                  >
+                    {{ d.label
+                    }}<button type="button" class="ms-tag-x" @click="removeMulti('analysisDimensions', d.value ?? '')">×</button>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <label class="config-check">
+              <span>regenerate</span>
+              <input type="checkbox" v-model="miningParams.regenerate" />
+            </label>
           </template>
         </div>
         <footer class="modal__footer">
@@ -1256,6 +1522,23 @@ onMounted(() => {
   margin-top: 8px;
   color: #314662;
   font-size: 18px;
+}
+
+.role-node {
+  border: 1px dashed #8b5cf6;
+  background: linear-gradient(180deg, #faf8ff, #f3effe);
+  padding: 0 14px;
+}
+
+.role-node strong {
+  color: #8b5cf6;
+  font-size: 16px;
+}
+
+.role-node span {
+  margin-top: 4px;
+  color: #5b3ba5;
+  font-size: 16px;
 }
 
 .relation-label {
@@ -1650,6 +1933,23 @@ onMounted(() => {
 
 .config-form i {
   width: 10px;
+}
+
+.config-form label.config-check {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  align-items: center;
+  gap: var(--space-8);
+  min-height: var(--control-height);
+}
+
+.config-form label.config-check > span {
+  color: #86909c;
+}
+
+.config-form label.config-check input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
 }
 
 .config-form .select-icon {

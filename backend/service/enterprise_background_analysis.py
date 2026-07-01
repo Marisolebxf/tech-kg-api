@@ -6,10 +6,12 @@ import json
 import logging
 from typing import Any
 
+from sqlalchemy.orm import Session
+
 from dao.organization import OrganizationDAO
 from dao.patent import PatentDAO
+from infra.gkx import get_gkx_session
 from infra.llm import get_llm_client
-from infra.mysql import get_mysql_client
 from service.base_module import KGModuleScaffoldService
 
 logger = logging.getLogger(__name__)
@@ -27,12 +29,14 @@ def _num(v: Any) -> float | None:
 class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
     module_code = "enterprise_background_analysis"
 
-    def analyze(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def analyze(self, payload: dict[str, Any], session: Session | None = None) -> dict[str, Any]:
         enterprise_id = payload.get("enterpriseId", "")
         dimensions = payload.get("analysisDimensions", []) or []
         patent_cpc = payload.get("patentCPC", []) or []
 
-        session = get_mysql_client().session()
+        own_session = session is None
+        if own_session:
+            session = get_gkx_session()
         try:
             org_dao = OrganizationDAO(session)
             pat_dao = PatentDAO(session)
@@ -53,7 +57,8 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
 
             patent_dist = self._patent_distribution(pat_dao, name)
         finally:
-            session.close()
+            if own_session:
+                session.close()
 
         llm = get_llm_client()
         conclusions: dict[str, str] = self._synthesize_dimensions(llm, facts) if llm else {}
@@ -105,7 +110,11 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
         cpc_prefixes: list[str],
     ) -> dict[str, Any]:
         prod = org_dao.get_products(org_id)
-        patents = pat_dao.list_by_assignee(name_cn, cpc_prefixes)
+        try:
+            patents = pat_dao.list_by_assignee(name_cn, cpc_prefixes)
+        except Exception as exc:  # noqa: BLE001  gkx 无 dwd_patent 表等
+            logger.warning("patent list failed: %s", exc)
+            patents = []
         if prod is None and not patents:
             return {"available": False, "summary": "暂无数据"}
         facts = {

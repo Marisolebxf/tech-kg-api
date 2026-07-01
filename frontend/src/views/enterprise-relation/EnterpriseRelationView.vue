@@ -107,7 +107,7 @@ const analyzeParams = ref({
   patentCPC: ['G06N', 'G06F'] as string[],
 })
 const miningParams = ref({
-  scholarId: '007Rb117',
+  scholarId: '14i45118',
   topN: 5,
   analysisDimensions: ['industry_status', 'core_tech', 'financial'] as string[],
   regenerate: false,

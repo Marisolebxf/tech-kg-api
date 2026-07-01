@@ -15,7 +15,8 @@ def _org(org_id="O1", name_cn="某有限公司"):
 def _mock_session():
     """构造 MagicMock 会话，使 DAO 列表方法返回空列表。"""
     sess = MagicMock()
-    sess.get.return_value = _org()
+    # get_by_id 用 execute().scalar_one_or_none()
+    sess.execute.return_value.scalar_one_or_none.return_value = _org()
     sess.execute.return_value.all.return_value = []
     sess.execute.return_value.scalars.return_value = []
     return sess

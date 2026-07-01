@@ -1196,7 +1196,7 @@ onMounted(() => {
             </div>
             <label class="config-check">
               <input type="checkbox" v-model="miningParams.regenerate" />
-              <span><i></i>regenerate</span>
+              <span>regenerate</span>
             </label>
           </template>
         </div>
@@ -1959,6 +1959,17 @@ onMounted(() => {
   width: 10px;
 }
 
+.config-form label.config-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.config-form label.config-check > span {
+  color: #86909c;
+}
+
 .config-form .select-icon {
   right: 10px;
   top: 50%;
@@ -2091,10 +2102,16 @@ onMounted(() => {
 .ms-option {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 14px;
+  gap: 6px;
+  padding: 4px 12px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.ms-option input[type='checkbox'] {
+  width: 13px;
+  height: 13px;
 }
 
 .ms-option:hover {

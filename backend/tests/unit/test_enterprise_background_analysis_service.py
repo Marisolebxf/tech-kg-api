@@ -26,9 +26,8 @@ def _setup(monkeypatch, org, org_dao, pat_dao, llm=None):
     monkeypatch.setattr(mod, "PatentDAO", lambda session: pat_dao)
     monkeypatch.setattr(mod, "get_llm_client", lambda: llm)
     session = MagicMock()
-    mc = MagicMock()
-    mc.session.return_value = session
-    monkeypatch.setattr(mod, "get_mysql_client", lambda: mc)
+    # analyze 缺省通过 get_gkx_session 取会话（Task 3 重构后不再用 get_mysql_client）
+    monkeypatch.setattr(mod, "get_gkx_session", lambda: session)
     org_dao.get_by_id.return_value = org
 
 

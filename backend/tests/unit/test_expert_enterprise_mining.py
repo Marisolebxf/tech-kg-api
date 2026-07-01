@@ -215,5 +215,11 @@ def test_mine_unmatched_enterprise_goes_to_skipped():
     ]
     svc = _make_service(scholar, candidates, items, llm_degraded=False)
     result = svc.mine({"scholarId": "007Rb117"})
-    assert result["totalMined"] == 0
+    assert result["totalMined"] == 0  # 无匹配成功
     assert len(result["skipped"]) == 1
+    # 未匹配企业带入关系列表，带 status=unmatched + reminder
+    unmatched = [r for r in result["minedRelations"] if r.get("status") == "unmatched"]
+    assert len(unmatched) == 1
+    assert unmatched[0]["enterpriseName"] == "完全无关的名字XYZ"
+    assert "未在 gkx 企业表中找到" in unmatched[0]["reminder"]
+    assert result["reminder"]  # 顶层汇总提醒非空

@@ -361,10 +361,12 @@ async function handleSearch() {
       if (!body?.success) throw new Error(body?.msg || '挖掘失败')
       miningResult.value = body.data
       const rels: any[] = Array.isArray(body.data?.minedRelations) ? body.data.minedRelations : []
+      // 仅 matched（已匹配到企业表）的关系画进图；unmatched 不画节点
+      const matched = rels.filter((r: any) => r.status !== 'unmatched')
       graphNodes.value = buildRadialGraph(
         `专家：${body.data?.scholarName ?? miningParams.value.scholarId}`,
         '专家',
-        rels.map((r: any) => ({
+        matched.map((r: any) => ({
           title: `企业：${r.enterpriseName ?? r.enterpriseId}`,
           subtitle: r.roleLabel || '企业',
           relation:
@@ -448,13 +450,18 @@ const detailRows = computed<(string | number)[][]>(() => {
       ['数据来源', r.cached ? '图库已构建关系（未重跑）' : '本次重新挖掘'],
       ['挖掘关系数', r.totalMined ?? 0],
     ]
+    if (r.reminder) rows.push(['提醒', r.reminder])
     const rels = Array.isArray(r.minedRelations) ? r.minedRelations : []
-    rels.forEach((rel: any) =>
-      rows.push([
-        rel.enterpriseName ?? rel.enterpriseId,
-        `${rel.relationLabel ?? '-'} / ${rel.roleLabel ?? '-'} / 置信度${rel.matchScore ?? '-'}`,
-      ]),
-    )
+    rels.forEach((rel: any) => {
+      if (rel.status === 'unmatched') {
+        rows.push([`${rel.enterpriseName ?? '-'}（未匹配）`, rel.reminder ?? '未在企业表中找到'])
+      } else {
+        rows.push([
+          rel.enterpriseName ?? rel.enterpriseId,
+          `${rel.relationLabel ?? '-'} / ${rel.roleLabel ?? '-'} / 置信度${rel.matchScore ?? '-'}`,
+        ])
+      }
+    })
     return rows
   }
   const r = buildResult.value
@@ -500,6 +507,7 @@ const apiExample = computed(() => {
               scholarOrg: '',
               degraded: false,
               cached: false,
+              reminder: '',
               minedRelations: [],
               skipped: [],
               totalMined: 0,
@@ -590,16 +598,19 @@ const responseRows = computed<string[][]>(() => {
       ['data.scholarOrg', 'string', '学者所属机构'],
       ['data.degraded', 'boolean', '是否降级（LLM不可用）'],
       ['data.cached', 'boolean', '是否来自图库已构建关系（未重跑）'],
-      ['data.minedRelations', 'array', '挖掘出的企业关系列表'],
+      ['data.reminder', 'string', '汇总提醒（未匹配/未抽取说明）'],
+      ['data.minedRelations', 'array', '挖掘出的企业关系列表（含 matched 与 unmatched）'],
+      ['data.minedRelations[].status', 'string', 'matched=已匹配建关系；unmatched=未在企业表找到'],
       ['data.minedRelations[].enterpriseName', 'string', '企业名称'],
       ['data.minedRelations[].relationLabel', 'string', '关系类型中文'],
       ['data.minedRelations[].roleLabel', 'string', '角色中文'],
       ['data.minedRelations[].matchScore', 'float', '消歧置信度'],
+      ['data.minedRelations[].reminder', 'string', '未匹配提醒（仅 unmatched）'],
       ['data.minedRelations[].build', 'object', '构建结果'],
       ['data.minedRelations[].annotate', 'object', '标注结果'],
       ['data.minedRelations[].analyze', 'object', '企业背景分析结果'],
       ['data.skipped', 'array', '未匹配企业列表'],
-      ['data.totalMined', 'int', '挖掘关系总数'],
+      ['data.totalMined', 'int', '成功构建的关系总数（不含 unmatched）'],
       ['msg', 'string', '返回消息'],
     ]
   }

@@ -85,6 +85,7 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
                     "profile": {},
                     "degraded": False,
                     "cached": True,
+                    "reminder": "",
                     "minedRelations": existing,
                     "skipped": [],
                     "totalMined": len(existing),
@@ -130,6 +131,7 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
             role_label, _ = role_info(m["role"])
             entry: dict[str, Any] = {
                 "rank": rank,
+                "status": "matched",
                 "enterpriseId": m["org_id"],
                 "enterpriseName": m["name_cn"],
                 "matchScore": m["score"],
@@ -189,6 +191,30 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
                 logger.warning("mining analyze failed for %s: %s", m["org_id"], exc)
             relations.append(entry)
 
+        matched_count = len(relations)
+        # 未在企业表中找到的抽取企业，也带入关系列表并提醒（status=unmatched）
+        for idx, sk in enumerate(skipped, start=matched_count + 1):
+            relations.append(
+                {
+                    "rank": idx,
+                    "status": "unmatched",
+                    "enterpriseName": sk["name"],
+                    "matchScore": None,
+                    "reminder": "未在 gkx 企业表中找到匹配，无法构建关系",
+                    "build": None,
+                    "annotate": None,
+                    "analyze": None,
+                }
+            )
+
+        if matched_count == 0 and not skipped:
+            reminder = "未从学者传记中抽取出关联企业（学者可能为纯学术背景，或 LLM 不可用）"
+        elif skipped:
+            names = "、".join(s["name"] for s in skipped)
+            reminder = f"其中 {len(skipped)} 个企业未在企业表中找到匹配：{names}"
+        else:
+            reminder = ""
+
         return {
             "status": "success",
             "scholarId": scholar_id,
@@ -197,9 +223,10 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
             "profile": {"bio_zh": scholar.bio_zh or "", "researchDirections": directions},
             "degraded": degraded,
             "cached": False,
+            "reminder": reminder,
             "minedRelations": relations,
             "skipped": skipped,
-            "totalMined": len(relations),
+            "totalMined": matched_count,
         }
 
     # ----- 图库已建关系读取（regenerate=False 快速路径）-----
@@ -243,6 +270,7 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
             relations.append(
                 {
                     "rank": len(relations) + 1,
+                    "status": "matched",
                     "enterpriseId": eid,
                     "enterpriseName": op.get("name_cn", "") or "",
                     "matchScore": None,

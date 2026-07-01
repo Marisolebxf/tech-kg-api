@@ -295,19 +295,24 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
             if graph.get_node(org_id) is not None:
                 return
             org = org_dao.get_by_id(org_id)
-            if org is None:
+            if org is not None:
+                # 主表企业：含 province/listing_status 等完整字段
+                # （reg_info 用 listing_status，stock_base 用 listed_status）
+                graph.create_node(
+                    ["Organization"],
+                    {
+                        "org_id": org.org_id,
+                        "name_cn": org.name_cn or "",
+                        "province": getattr(org, "province", None) or "",
+                        "listing_status": getattr(org, "listing_status", None)
+                        or getattr(org, "listed_status", None)
+                        or "",
+                    },
+                )
                 return
-            # 企业可能来自 dwd_org_reg_info(listing_status/province) 或 stock_base(listed_status)
-            graph.create_node(
-                ["Organization"],
-                {
-                    "org_id": org.org_id,
-                    "name_cn": org.name_cn or "",
-                    "province": getattr(org, "province", None) or "",
-                    "listing_status": getattr(org, "listing_status", None)
-                    or getattr(org, "listed_status", None)
-                    or "",
-                },
-            )
+            # 仅出现在 detail 表的企业：从候选缓存取名字建最小节点（build/annotate 只需节点存在）
+            name = org_dao.get_name_by_id(org_id) if hasattr(org_dao, "get_name_by_id") else None
+            if name:
+                graph.create_node(["Organization"], {"org_id": org_id, "name_cn": name})
         except Exception as exc:  # noqa: BLE001
             logger.warning("provision org node failed: %s", exc)

@@ -46,7 +46,7 @@ def extract_relations(llm: Any, profile: dict[str, Any]) -> tuple[list[dict], bo
         return _fallback_extract(profile), True
     text = llm.synthesize(_build_prompt(profile))
     parsed = _parse_json_array(text) if text else None
-    if not parsed:
+    if parsed is None:
         logger.warning("LLM 抽取解析失败，降级正则")
         return _fallback_extract(profile), True
     items = [_normalize(it) for it in parsed if isinstance(it, dict)]

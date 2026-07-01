@@ -33,6 +33,8 @@ class LLMClient:
                 model=self._model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=max_tokens,
+                # 统一关闭沉思（thinking），避免推理模型返回思考文本导致 JSON 解析失败
+                extra_body={"thinking": {"type": "disabled"}},
             )
             return resp.choices[0].message.content or None
         except Exception as exc:  # noqa: BLE001

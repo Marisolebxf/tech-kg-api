@@ -145,12 +145,16 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
         candidates = self._org_dao_factory(session).list_name_id()
         matches: list[dict] = []
         skipped: list[dict] = []
+        skipped_names: set[str] = set()
         for it in items:
             m = disambiguate(it["enterprise_name"], candidates)
             if m is None:
-                skipped.append(
-                    {"name": it["enterprise_name"], "reason": "未匹配到企业(置信度低于阈值)"}
-                )
+                # 未匹配企业按名去重，避免重复提醒
+                if it["enterprise_name"] not in skipped_names:
+                    skipped_names.add(it["enterprise_name"])
+                    skipped.append(
+                        {"name": it["enterprise_name"], "reason": "未匹配到企业(置信度低于阈值)"}
+                    )
                 continue
             matches.append({**it, **m})
         merged = merge_matches(matches)

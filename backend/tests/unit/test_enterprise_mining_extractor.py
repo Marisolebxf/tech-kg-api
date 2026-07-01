@@ -55,3 +55,12 @@ def test_extract_llm_nonjson_falls_back():
     llm.synthesize.return_value = "这不是JSON"
     items, degraded = extract_relations(llm, PROFILE)
     assert degraded is True
+
+
+def test_extract_llm_returns_empty_array_not_degraded():
+    """LLM 正确返回 []（无企业）时不应降级，degraded=False。"""
+    llm = MagicMock()
+    llm.synthesize.return_value = "[]"
+    items, degraded = extract_relations(llm, PROFILE)
+    assert degraded is False
+    assert items == []

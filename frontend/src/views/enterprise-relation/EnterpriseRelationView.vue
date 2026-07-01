@@ -1960,14 +1960,20 @@ onMounted(() => {
 }
 
 .config-form label.config-check {
-  display: flex;
+  display: grid;
+  grid-template-columns: 96px 1fr;
   align-items: center;
-  gap: 8px;
-  padding-top: 4px;
+  gap: var(--space-8);
+  min-height: var(--control-height);
 }
 
 .config-form label.config-check > span {
   color: #86909c;
+}
+
+.config-form label.config-check input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
 }
 
 .config-form .select-icon {

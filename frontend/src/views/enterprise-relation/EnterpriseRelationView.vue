@@ -515,13 +515,16 @@ const detailRows = computed<(string | number)[][]>(() => {
       }
       const period = rel.period ? `${rel.period.start || '?'} ~ ${rel.period.end || '至今'}` : '-'
       rows.push([`企业${i + 1} 名称`, rel.enterpriseName ?? rel.enterpriseId ?? '-'])
+      if (rel.extractedName && rel.extractedName !== rel.enterpriseName) {
+        rows.push([`  抽取名→匹配`, `${rel.extractedName} → ${rel.enterpriseName}`])
+      }
       rows.push([`  关系类型`, rel.relationLabel || rel.relationType || '-'])
       rows.push([`  角色`, rel.roleLabel || rel.role || '-'])
       if (rel.techField) rows.push([`  技术领域`, rel.techField])
       rows.push([`  合作时段`, period])
       rows.push([`  置信度`, rel.matchScore != null ? rel.matchScore : '-'])
       if (rel.confidenceAnalysis) rows.push([`  置信度分析`, rel.confidenceAnalysis])
-      if (rel.evidence) rows.push([`  证据`, rel.evidence])
+      if (rel.evidence) rows.push([`  任职/合作依据`, rel.evidence])
     })
     return rows
   }

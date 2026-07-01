@@ -223,3 +223,16 @@ def test_mine_unmatched_enterprise_goes_to_skipped():
     assert unmatched[0]["enterpriseName"] == "完全无关的名字XYZ"
     assert "未在 gkx 企业表中找到" in unmatched[0]["reminder"]
     assert result["reminder"]  # 顶层汇总提醒非空
+
+
+def test_mine_zero_extracted_reminder_mentions_non_enterprise_org():
+    """0 抽取且学者机构为非企业（医院/研究所等）时，提醒应点明机构类型，而非'未抽取'。"""
+    scholar = _scholar()  # scholar_org_name_zh = 中国科学院微生物研究所（科研院所）
+    # 工作经历换成医院，验证医院识别
+    scholar.scholar_org_name_zh = "首都医科大学附属北京妇产医院微创妇科"
+    svc = _make_service(scholar, [("id1", "某生物科技有限公司")], [], llm_degraded=True)
+    result = svc.mine({"scholarId": "007Rb117"})
+    assert result["totalMined"] == 0
+    assert "医疗机构" in result["reminder"]
+    assert "首都医科大学附属北京妇产医院" in result["reminder"]
+    assert "未从学者传记中抽取出" not in result["reminder"]

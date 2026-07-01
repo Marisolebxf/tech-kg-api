@@ -36,6 +36,31 @@ def _confidence_analysis(score: float | None) -> str:
     return "较高置信模糊匹配（建议人工复核）"
 
 
+# 非企业机构关键词 → 类别标签（用于学者所属机构识别，给出更准确的提醒）
+_NON_ENTERPRISE_KINDS: tuple[tuple[str, str], ...] = (
+    ("医院", "医疗机构"),
+    ("研究所", "科研院所"),
+    ("研究院", "科研院所"),
+    ("科学院", "科研院所"),
+    ("实验室", "科研机构"),
+    ("大学", "高校"),
+    ("学院", "高校"),
+    ("学会", "学术组织"),
+    ("基金会", "基金会"),
+    ("政府", "政府机构"),
+)
+
+
+def _classify_org(org_name: str) -> str:
+    """学者所属机构若是非企业（医院/高校/研究所等），返回类别标签；否则返回空串。"""
+    if not org_name:
+        return ""
+    for kw, label in _NON_ENTERPRISE_KINDS:
+        if kw in org_name:
+            return label
+    return ""
+
+
 class ExpertEnterpriseMiningService(KGModuleScaffoldService):
     module_code = "expert_enterprise_mining"
 
@@ -220,7 +245,17 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
             )
 
         if matched_count == 0 and not skipped:
-            reminder = "未从学者传记中抽取出关联企业（学者可能为纯学术背景，或 LLM 不可用）"
+            org = scholar.scholar_org_name_zh or ""
+            org_kind = _classify_org(org)
+            if org_kind:
+                reminder = (
+                    f"学者所属机构为'{org}'（{org_kind}），非科技企业，"
+                    f"未在企业表中找到对应实体，未构建企业关联"
+                )
+            elif degraded:
+                reminder = "LLM 不可用（正则降级），未从学者传记中抽取出企业关联"
+            else:
+                reminder = "未从学者传记中抽取出关联企业（学者可能为纯学术背景）"
         elif skipped:
             names = "、".join(s["name"] for s in skipped)
             reminder = f"其中 {len(skipped)} 个企业未在企业表中找到匹配：{names}"

@@ -81,20 +81,51 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
 
         if normalized_source != "fallback":
             try:
-                rows = self._scholar_dao.list_direct_coauthor_relations(
+                rows.extend(
+                    self._scholar_dao.list_direct_coauthor_relations(
+                        expert_a_id=expert_a_id,
+                        expert_b_id=expert_b_id,
+                        institution=institution,
+                        start_time=start_time,
+                        end_time=end_time,
+                        limit=normalized_limit,
+                    )
+                )
+                rows.extend(
+                    self._scholar_dao.list_direct_patent_relations(
+                        expert_a_id=expert_a_id,
+                        expert_b_id=expert_b_id,
+                        institution=institution,
+                        start_time=start_time,
+                        end_time=end_time,
+                        limit=normalized_limit,
+                    )
+                )
+                rows.extend(
+                    self._scholar_dao.list_direct_project_relations(
+                        expert_a_id=expert_a_id,
+                        expert_b_id=expert_b_id,
+                        institution=institution,
+                        start_time=start_time,
+                        end_time=end_time,
+                        limit=normalized_limit,
+                    )
+                )
+                rows = self._orient_rows(
+                    rows=self._sort_rows(rows)[:normalized_limit],
                     expert_a_id=expert_a_id,
                     expert_b_id=expert_b_id,
-                    institution=institution,
-                    start_time=start_time,
-                    end_time=end_time,
-                    limit=normalized_limit,
                 )
                 source = {"requested": normalized_source, "actual": "mysql", "fallback": False}
             except Exception:
                 rows = []
 
         if not rows and source["actual"] != "mysql":
-            rows = FALLBACK_ITEMS[: max(1, min(normalized_limit, len(FALLBACK_ITEMS)))]
+            rows = self._orient_rows(
+                rows=FALLBACK_ITEMS[: max(1, min(normalized_limit, len(FALLBACK_ITEMS)))],
+                expert_a_id=expert_a_id,
+                expert_b_id=expert_b_id,
+            )
 
         items = [self._build_item(row) for row in rows]
         graph = self._build_graph(items)
@@ -116,14 +147,21 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
     def _build_item(self, row: dict[str, Any]) -> dict[str, Any]:
         expert_a_org = str(row.get("expert_a_org") or "")
         expert_b_org = str(row.get("expert_b_org") or "")
-        institution = expert_a_org or expert_b_org or "合作关系"
-        co_paper_count = int(row.get("co_paper_count") or 0)
+        institution = str(row.get("institution") or expert_a_org or expert_b_org or "合作关系")
+        evidence_kind = str(row.get("evidence_kind") or "paper")
+        evidence_count = int(row.get("evidence_count") or row.get("co_paper_count") or 0)
+        evidence_titles = row.get("evidence_titles") or []
 
-        reason_tags = ["共论文"] if co_paper_count else ["合作关系"]
+        if evidence_kind == "patent":
+            reason_tags = ["共专利"] if evidence_count else ["专利关联"]
+        elif evidence_kind == "project":
+            reason_tags = ["共项目"] if evidence_count else ["项目关联"]
+        else:
+            reason_tags = ["共论文"] if evidence_count else ["合作关系"]
         if expert_a_org and expert_b_org and expert_a_org == expert_b_org:
             reason_tags.insert(0, "同机构")
 
-        relation_strength = min(99, max(60, 60 + co_paper_count * 5 + len(reason_tags) * 4))
+        relation_strength = min(99, max(60, 60 + evidence_count * 5 + len(reason_tags) * 4))
         relation_time = row.get("relation_time")
         last_updated_at = (
             relation_time.strftime("%Y-%m-%d %H:%M:%S")
@@ -156,7 +194,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             "expertA": expert_a,
             "expertB": expert_b,
             "institution": institution,
-            "coPaperCount": co_paper_count,
+            "coPaperCount": evidence_count if evidence_kind == "paper" else 0,
             "relationStrength": relation_strength,
             "reasonTags": reason_tags,
             "relationSummary": " + ".join(reason_tags),
@@ -170,7 +208,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 ["专家 B H指数", expert_b["hIndex"]],
                 ["关系类型", "直接关系"],
                 ["共同机构/主关系", institution],
-                ["合作论文数", co_paper_count],
+                ["证据类型", self._evidence_label(evidence_kind)],
+                ["证据数量", evidence_count],
+                ["证据示例", "；".join(str(title) for title in evidence_titles[:3])],
                 ["判定依据", reason_tags],
                 ["关系摘要", " + ".join(reason_tags)],
             ],
@@ -218,7 +258,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 {
                     "source": expert_a["expertId"],
                     "target": expert_b["expertId"],
-                    "label": f"直接关系 / 合作论文 {item['coPaperCount']}",
+                    "label": f"直接关系 / {item['relationSummary']}",
                     "data": {"strength": item["relationStrength"]},
                 }
             )
@@ -240,6 +280,74 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             )
 
         return {"nodes": nodes, "edges": edges}
+
+    def _sort_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(
+            rows,
+            key=lambda row: (
+                int(row.get("evidence_count") or row.get("co_paper_count") or 0),
+                row.get("relation_time") or "",
+            ),
+            reverse=True,
+        )
+
+    def _orient_rows(
+        self,
+        *,
+        rows: list[dict[str, Any]],
+        expert_a_id: str | None,
+        expert_b_id: str | None,
+    ) -> list[dict[str, Any]]:
+        return [
+            self._orient_row(row, expert_a_id=expert_a_id, expert_b_id=expert_b_id) for row in rows
+        ]
+
+    def _orient_row(
+        self,
+        row: dict[str, Any],
+        *,
+        expert_a_id: str | None,
+        expert_b_id: str | None,
+    ) -> dict[str, Any]:
+        a_keyword = (expert_a_id or "").strip().lower()
+        b_keyword = (expert_b_id or "").strip().lower()
+        if not a_keyword and not b_keyword:
+            return row
+
+        left_matches_a = self._matches_row_side(row, "a", a_keyword)
+        right_matches_a = self._matches_row_side(row, "b", a_keyword)
+        left_matches_b = self._matches_row_side(row, "a", b_keyword)
+
+        should_swap = False
+        if a_keyword and right_matches_a and not left_matches_a:
+            should_swap = True
+        if a_keyword and b_keyword and right_matches_a and left_matches_b:
+            should_swap = True
+
+        if not should_swap:
+            return row
+
+        swapped = dict(row)
+        for field in ("id", "name", "org", "h_index", "paper_nums", "citation_nums"):
+            swapped[f"expert_a_{field}"] = row.get(f"expert_b_{field}")
+            swapped[f"expert_b_{field}"] = row.get(f"expert_a_{field}")
+        return swapped
+
+    def _matches_row_side(self, row: dict[str, Any], side: str, keyword: str) -> bool:
+        if not keyword:
+            return False
+        values = [
+            str(row.get(f"expert_{side}_id") or "").strip().lower(),
+            str(row.get(f"expert_{side}_name") or "").strip().lower(),
+        ]
+        return keyword in values
+
+    def _evidence_label(self, evidence_kind: str) -> str:
+        if evidence_kind == "patent":
+            return "共同专利"
+        if evidence_kind == "project":
+            return "共同项目"
+        return "共同论文"
 
     def fallback_limit(self) -> int:
         return int(os.getenv("EXPERT_DIRECT_RELATION_REAL_LIMIT", "20"))

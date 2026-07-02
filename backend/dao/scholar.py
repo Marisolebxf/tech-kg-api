@@ -1,7 +1,18 @@
+from __future__ import annotations
+
+import json
+import re
+from collections import defaultdict
+from collections.abc import Iterable
+from itertools import combinations
+
 from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session
 
 from dao.base import BaseDAO
+from db_model.domestic_project import OdsZhProject
+from db_model.foreign_project import OdsEnProject
+from db_model.patent import OdsPatent
 from db_model.scholar import DwdScholar
 
 
@@ -128,23 +139,60 @@ class ScholarDAO(BaseDAO[DwdScholar]):
                         AND COALESCE(cs.status, 1) = 1
                     WHERE COALESCE(c.status, 1) = 1
                         AND (
-                            :expert_a = ''
-                            OR c.scholar_id = :expert_a
-                            OR COALESCE(s.name_zh, '') LIKE :expert_a_like
-                            OR COALESCE(s.name_en, '') LIKE :expert_a_like
+                            (
+                                :expert_a = ''
+                                AND :expert_b = ''
+                            )
                             OR (
-                                :expert_b = ''
+                                :expert_a != ''
+                                AND :expert_b = ''
                                 AND (
-                                    c.co_scholar_id = :expert_a
+                                    c.scholar_id = :expert_a
+                                    OR COALESCE(s.name_zh, '') LIKE :expert_a_like
+                                    OR COALESCE(s.name_en, '') LIKE :expert_a_like
+                                    OR c.co_scholar_id = :expert_a
                                     OR COALESCE(cs.name_zh, '') LIKE :expert_a_like
                                     OR COALESCE(cs.name_en, '') LIKE :expert_a_like
                                     OR COALESCE(c.co_scholar_name_zh, '') LIKE :expert_a_like
                                     OR COALESCE(c.co_scholar_name_en, '') LIKE :expert_a_like
                                 )
                             )
+                            OR (
+                                :expert_a != ''
+                                AND :expert_b != ''
+                                AND (
+                                    (
+                                        c.scholar_id = :expert_a
+                                        OR COALESCE(s.name_zh, '') LIKE :expert_a_like
+                                        OR COALESCE(s.name_en, '') LIKE :expert_a_like
+                                    )
+                                    AND (
+                                        c.co_scholar_id = :expert_b
+                                        OR COALESCE(cs.name_zh, '') LIKE :expert_b_like
+                                        OR COALESCE(cs.name_en, '') LIKE :expert_b_like
+                                        OR COALESCE(c.co_scholar_name_zh, '') LIKE :expert_b_like
+                                        OR COALESCE(c.co_scholar_name_en, '') LIKE :expert_b_like
+                                    )
+                                )
+                                OR (
+                                    (
+                                        c.scholar_id = :expert_b
+                                        OR COALESCE(s.name_zh, '') LIKE :expert_b_like
+                                        OR COALESCE(s.name_en, '') LIKE :expert_b_like
+                                    )
+                                    AND (
+                                        c.co_scholar_id = :expert_a
+                                        OR COALESCE(cs.name_zh, '') LIKE :expert_a_like
+                                        OR COALESCE(cs.name_en, '') LIKE :expert_a_like
+                                        OR COALESCE(c.co_scholar_name_zh, '') LIKE :expert_a_like
+                                        OR COALESCE(c.co_scholar_name_en, '') LIKE :expert_a_like
+                                    )
+                                )
+                            )
                         )
                         AND (
                             :expert_b = ''
+                            OR :expert_a != ''
                             OR c.co_scholar_id = :expert_b
                             OR COALESCE(cs.name_zh, '') LIKE :expert_b_like
                             OR COALESCE(cs.name_en, '') LIKE :expert_b_like
@@ -214,3 +262,375 @@ class ScholarDAO(BaseDAO[DwdScholar]):
         finally:
             if should_close:
                 session.close()
+
+    def list_direct_patent_relations(
+        self,
+        *,
+        expert_a_id: str | None = None,
+        expert_b_id: str | None = None,
+        institution: str | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, object]]:
+        session, should_close = self._get_session()
+        try:
+            normalized_limit = max(1, min(int(limit or 20), 100))
+            candidate_limit = max(50, min(normalized_limit * 20, 500))
+            stmt = select(OdsPatent).limit(candidate_limit)
+            rows = list(session.scalars(stmt).all())
+            return self._build_pair_relations(
+                session=session,
+                rows=rows,
+                expert_a_id=expert_a_id,
+                expert_b_id=expert_b_id,
+                institution=institution,
+                start_time=start_time,
+                end_time=end_time,
+                limit=normalized_limit,
+                row_kind="patent",
+            )
+        finally:
+            if should_close:
+                session.close()
+
+    def list_direct_project_relations(
+        self,
+        *,
+        expert_a_id: str | None = None,
+        expert_b_id: str | None = None,
+        institution: str | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, object]]:
+        session, should_close = self._get_session()
+        try:
+            normalized_limit = max(1, min(int(limit or 20), 100))
+            candidate_limit = max(50, min(normalized_limit * 20, 500))
+            rows = list(session.scalars(select(OdsZhProject).limit(candidate_limit)).all())
+            rows.extend(list(session.scalars(select(OdsEnProject).limit(candidate_limit)).all()))
+            return self._build_pair_relations(
+                session=session,
+                rows=rows,
+                expert_a_id=expert_a_id,
+                expert_b_id=expert_b_id,
+                institution=institution,
+                start_time=start_time,
+                end_time=end_time,
+                limit=normalized_limit,
+                row_kind="project",
+            )
+        finally:
+            if should_close:
+                session.close()
+
+    def _build_pair_relations(
+        self,
+        *,
+        session: Session,
+        rows: Iterable[object],
+        expert_a_id: str | None,
+        expert_b_id: str | None,
+        institution: str | None,
+        start_time: str | None,
+        end_time: str | None,
+        limit: int,
+        row_kind: str,
+    ) -> list[dict[str, object]]:
+        exact_name_map = self._load_exact_name_map(session)
+        institution_keyword = (institution or "").strip().lower()
+        expert_a_keyword = (expert_a_id or "").strip()
+        expert_b_keyword = (expert_b_id or "").strip()
+
+        pair_bucket: dict[tuple[str, str, str], dict[str, object]] = {}
+
+        for row in rows:
+            payload = self._extract_relation_payload(row, row_kind=row_kind)
+            if payload is None:
+                continue
+            if (
+                institution_keyword
+                and institution_keyword not in payload["institution_text"].lower()
+            ):
+                continue
+            if not self._within_time_range(payload["relation_time"], start_time, end_time):
+                continue
+
+            mapped = self._map_people_to_scholars(payload["people"], exact_name_map)
+            unique_people = {item["scholar_id"]: item for item in mapped}.values()
+            mapped_people = list(unique_people)
+            if len(mapped_people) < 2:
+                continue
+
+            for left, right in combinations(mapped_people, 2):
+                if not self._match_pair_filters(
+                    left=left,
+                    right=right,
+                    expert_a_keyword=expert_a_keyword,
+                    expert_b_keyword=expert_b_keyword,
+                ):
+                    continue
+
+                ordered_left, ordered_right = self._order_pair(
+                    left=left,
+                    right=right,
+                    expert_a_keyword=expert_a_keyword,
+                )
+                pair_key = (ordered_left["scholar_id"], ordered_right["scholar_id"], row_kind)
+                bucket = pair_bucket.setdefault(
+                    pair_key,
+                    self._init_pair_bucket(
+                        left=ordered_left,
+                        right=ordered_right,
+                        relation_time=payload["relation_time"],
+                        institution=payload["institution"],
+                        row_kind=row_kind,
+                    ),
+                )
+                bucket["evidence_count"] = int(bucket["evidence_count"]) + 1
+                bucket["evidence_titles"].append(payload["title"])
+                if payload["relation_time"] and (
+                    bucket["relation_time"] is None
+                    or payload["relation_time"] > bucket["relation_time"]
+                ):
+                    bucket["relation_time"] = payload["relation_time"]
+                if not bucket["institution"] and payload["institution"]:
+                    bucket["institution"] = payload["institution"]
+
+        results = list(pair_bucket.values())
+        results.sort(
+            key=lambda item: (
+                int(item.get("evidence_count") or 0),
+                item.get("relation_time") or "",
+            ),
+            reverse=True,
+        )
+        return results[:limit]
+
+    def _load_exact_name_map(self, session: Session) -> dict[str, list[DwdScholar]]:
+        scholars = list(session.scalars(select(DwdScholar).where(DwdScholar.status == 1)).all())
+        mapping: dict[str, list[DwdScholar]] = defaultdict(list)
+        for scholar in scholars:
+            for name in (scholar.name_zh, scholar.name_en):
+                normalized = self._normalize_person_name(name)
+                if normalized:
+                    mapping[normalized].append(scholar)
+        return mapping
+
+    def _extract_relation_payload(self, row: object, *, row_kind: str) -> dict[str, object] | None:
+        if row_kind == "patent":
+            inventors = self._extract_people_tokens(
+                getattr(row, "current_inventor", None)
+                or getattr(row, "inventor", None)
+                or getattr(row, "dwpi_inventor", None)
+                or ""
+            )
+            relation_time = getattr(row, "filing_date", None) or getattr(
+                row, "publication_date", None
+            )
+            institution = self._first_non_empty(
+                getattr(row, "assignee", None),
+                getattr(row, "current_assignee", None),
+                getattr(row, "dwpi_assignee", None),
+            )
+            title = self._first_non_empty(
+                getattr(row, "title_localized", None), getattr(row, "id", None)
+            )
+            return {
+                "people": inventors,
+                "relation_time": relation_time,
+                "institution": institution,
+                "institution_text": institution or "",
+                "title": title or "",
+            }
+
+        participants = self._extract_people_tokens(
+            self._join_non_empty(
+                getattr(row, "project_host", None),
+                getattr(row, "participants", None),
+            )
+        )
+        institution = self._first_non_empty(
+            getattr(row, "funded_institution", None),
+            getattr(row, "participating_institution", None),
+        )
+        relation_time = getattr(row, "approval_time", None) or getattr(row, "approval_year", None)
+        title = self._first_non_empty(
+            getattr(row, "title", None), getattr(row, "project_number", None)
+        )
+        return {
+            "people": participants,
+            "relation_time": relation_time,
+            "institution": institution,
+            "institution_text": self._join_non_empty(
+                getattr(row, "funded_institution", None),
+                getattr(row, "participating_institution", None),
+            ),
+            "title": title or "",
+        }
+
+    def _map_people_to_scholars(
+        self,
+        people: Iterable[str],
+        exact_name_map: dict[str, list[DwdScholar]],
+    ) -> list[dict[str, object]]:
+        mapped: list[dict[str, object]] = []
+        for person in people:
+            normalized = self._normalize_person_name(person)
+            if not normalized:
+                continue
+            candidates = exact_name_map.get(normalized, [])
+            if len(candidates) != 1:
+                continue
+            scholar = candidates[0]
+            mapped.append(
+                {
+                    "scholar_id": scholar.scholar_id,
+                    "name": scholar.name_zh or scholar.name_en or scholar.scholar_id,
+                    "organization": (
+                        scholar.scholar_org_name_zh or scholar.scholar_org_name_en or ""
+                    ),
+                    "h_index": scholar.h_index or 0,
+                    "paper_nums": scholar.paper_nums or 0,
+                    "citation_nums": scholar.citation_nums or 0,
+                }
+            )
+        return mapped
+
+    def _match_pair_filters(
+        self,
+        *,
+        left: dict[str, object],
+        right: dict[str, object],
+        expert_a_keyword: str,
+        expert_b_keyword: str,
+    ) -> bool:
+        if expert_a_keyword and not (
+            self._match_person_keyword(left, expert_a_keyword)
+            or self._match_person_keyword(right, expert_a_keyword)
+        ):
+            return False
+        if expert_b_keyword and not (
+            self._match_person_keyword(left, expert_b_keyword)
+            or self._match_person_keyword(right, expert_b_keyword)
+        ):
+            return False
+        if expert_a_keyword and expert_b_keyword:
+            return (
+                self._match_person_keyword(left, expert_a_keyword)
+                and self._match_person_keyword(right, expert_b_keyword)
+            ) or (
+                self._match_person_keyword(left, expert_b_keyword)
+                and self._match_person_keyword(right, expert_a_keyword)
+            )
+        return True
+
+    def _order_pair(
+        self,
+        *,
+        left: dict[str, object],
+        right: dict[str, object],
+        expert_a_keyword: str,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        if expert_a_keyword and self._match_person_keyword(right, expert_a_keyword):
+            return right, left
+        return left, right
+
+    def _init_pair_bucket(
+        self,
+        *,
+        left: dict[str, object],
+        right: dict[str, object],
+        relation_time: object,
+        institution: str | None,
+        row_kind: str,
+    ) -> dict[str, object]:
+        return {
+            "relation_key": f"direct:{row_kind}:{left['scholar_id']}:{right['scholar_id']}",
+            "expert_a_id": left["scholar_id"],
+            "expert_a_name": left["name"],
+            "expert_a_org": left["organization"],
+            "expert_a_h_index": left["h_index"],
+            "expert_a_paper_nums": left["paper_nums"],
+            "expert_a_citation_nums": left["citation_nums"],
+            "expert_b_id": right["scholar_id"],
+            "expert_b_name": right["name"],
+            "expert_b_org": right["organization"],
+            "expert_b_h_index": right["h_index"],
+            "expert_b_paper_nums": right["paper_nums"],
+            "expert_b_citation_nums": right["citation_nums"],
+            "evidence_kind": row_kind,
+            "evidence_count": 0,
+            "evidence_titles": [],
+            "relation_time": relation_time,
+            "institution": institution or "",
+        }
+
+    def _match_person_keyword(self, person: dict[str, object], keyword: str) -> bool:
+        normalized = keyword.strip().lower()
+        return normalized in {
+            str(person.get("scholar_id") or "").strip().lower(),
+            str(person.get("name") or "").strip().lower(),
+        }
+
+    def _within_time_range(
+        self,
+        relation_time: object,
+        start_time: str | None,
+        end_time: str | None,
+    ) -> bool:
+        if relation_time is None:
+            return not start_time and not end_time
+        relation_date = str(relation_time)[:10]
+        if start_time and relation_date < start_time:
+            return False
+        if end_time and relation_date > end_time:
+            return False
+        return True
+
+    def _extract_people_tokens(self, raw: str) -> list[str]:
+        if not raw:
+            return []
+        text_value = str(raw).strip()
+        if not text_value:
+            return []
+        parsed = self._parse_json_people(text_value)
+        if parsed:
+            return parsed
+        parts = re.split(r"[;,/|、，；\n\r\t]+", text_value)
+        return [part.strip() for part in parts if part.strip()]
+
+    def _parse_json_people(self, raw: str) -> list[str]:
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return []
+        names: list[str] = []
+        if isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, str):
+                    names.append(item)
+                elif isinstance(item, dict):
+                    for key in ("name", "name_zh", "name_en", "inventor", "person"):
+                        value = item.get(key)
+                        if isinstance(value, str) and value.strip():
+                            names.append(value.strip())
+                            break
+        return names
+
+    def _normalize_person_name(self, value: str | None) -> str:
+        if value is None:
+            return ""
+        return str(value).strip().strip('"').strip("'")
+
+    def _join_non_empty(self, *parts: object) -> str:
+        values = [str(part).strip() for part in parts if str(part or "").strip()]
+        return " / ".join(values)
+
+    def _first_non_empty(self, *parts: object) -> str | None:
+        for part in parts:
+            value = str(part or "").strip()
+            if value:
+                return value
+        return None

@@ -20,15 +20,13 @@ VALID_RELATION_TYPES = {
     "project_cooperation",
     "tech_cooperation",
 }
-VALID_ROLES = {"chief_scientist", "cto", "technical_advisor", "rd_lead", "engineer"}
 DEFAULT_RELATION_TYPE = "tech_cooperation"
-DEFAULT_ROLE = "engineer"
 
 _EXTRACT_PROMPT = """你是科技专家-企业关系抽取助手。下面是学者{name}的简介、工作经历、教育背景与所属机构。
 请从中抽取该学者与【企业】（公司/集团/厂/股份，不含高校/研究所/政府/医院）的关联关系。
 重要：enterprise_name 必须是企业的完整全称（如"福建帝视信息科技有限公司"），不要只抽"科技有限公司""有限公司"等后缀碎片。
 只返回 JSON 数组，每个元素形如：
-{{"enterprise_name":"企业完整全称","relation_type":"employment|advisor|rd_cooperation|project_cooperation|tech_cooperation","role":"chief_scientist|cto|technical_advisor|rd_lead|engineer","tech_field":"技术领域","period_start":"YYYY-MM-DD或空","period_end":"YYYY-MM-DD或空","evidence":"原文依据片段"}}
+{{"enterprise_name":"企业完整全称","relation_type":"employment|advisor|rd_cooperation|project_cooperation|tech_cooperation","role":"该学者在此企业的角色/职位，从原文提取（如 博士后/研究员/副教授/高级工程师/首席科学家/CTO/技术顾问 等，原文是什么写什么）","tech_field":"技术领域","period_start":"YYYY-MM-DD或空","period_end":"YYYY-MM-DD或空","evidence":"原文依据片段"}}
 无可抽取的企业关系时返回 []。只输出 JSON，不要解释。
 
 中文简介：{bio_zh}
@@ -78,11 +76,11 @@ def _parse_json_array(text: str) -> list | None:
 
 def _normalize(it: dict) -> dict:
     rt = it.get("relation_type")
-    role = it.get("role")
     return {
         "enterprise_name": (it.get("enterprise_name") or "").strip(),
         "relation_type": rt if rt in VALID_RELATION_TYPES else DEFAULT_RELATION_TYPE,
-        "role": role if role in VALID_ROLES else DEFAULT_ROLE,
+        # role 不再限定为企业角色码，保留 LLM 从原文抽取的真实职位（博士/研究员/副教授/高级工程师/…）
+        "role": (it.get("role") or "").strip(),
         "tech_field": (it.get("tech_field") or "").strip(),
         "period_start": _norm_date(it.get("period_start")),
         "period_end": _norm_date(it.get("period_end")),
@@ -118,7 +116,7 @@ def _fallback_extract(profile: dict[str, Any]) -> list[dict]:
                 {
                     "enterprise_name": tok,
                     "relation_type": "employment",
-                    "role": DEFAULT_ROLE,
+                    "role": "",
                     "tech_field": "",
                     "period_start": "",
                     "period_end": "",

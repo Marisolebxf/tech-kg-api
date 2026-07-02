@@ -6,7 +6,6 @@ from service.enterprise_relation_catalog import (
     RELATION_TYPES,
     ROLE_CATALOG,
     InvalidRelationTypeError,
-    InvalidRoleTypeError,
     relation_label,
     role_info,
     validate_relation_types,
@@ -37,9 +36,10 @@ def test_role_info_returns_label_and_level():
     assert role_info("engineer") == ("工程师", "L3")
 
 
-def test_role_info_rejects_unknown():
-    with pytest.raises(InvalidRoleTypeError):
-        role_info("ceo")
+def test_role_info_tolerates_unknown():
+    # 非码表角色（如挖掘抽取的真实职位）原样保留、等级置空，不再抛错
+    assert role_info("ceo") == ("ceo", "")
+    assert role_info("博士后") == ("博士后", "")
 
 
 def test_catalog_contents():

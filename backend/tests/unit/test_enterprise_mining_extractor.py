@@ -34,12 +34,12 @@ def test_extract_parses_llm_json():
 def test_extract_invalid_relation_type_defaults():
     llm = MagicMock()
     llm.synthesize.return_value = (
-        '[{"enterprise_name":"X公司","relation_type":"bogus","role":"bogus"}]'
+        '[{"enterprise_name":"X公司","relation_type":"bogus","role":"博士后"}]'
     )
     items, degraded = extract_relations(llm, PROFILE)
     assert degraded is False
-    assert items[0]["relation_type"] == "tech_cooperation"  # 非法 → 默认
-    assert items[0]["role"] == "engineer"
+    assert items[0]["relation_type"] == "tech_cooperation"  # 非法关系类型 → 默认
+    assert items[0]["role"] == "博士后"  # 角色不限定，保留原文
 
 
 def test_extract_llm_none_falls_back_to_regex():

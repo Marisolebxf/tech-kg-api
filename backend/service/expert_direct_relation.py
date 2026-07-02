@@ -317,7 +317,6 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         left_matches_a = self._matches_row_side(row, "a", a_keyword)
         right_matches_a = self._matches_row_side(row, "b", a_keyword)
         left_matches_b = self._matches_row_side(row, "a", b_keyword)
-        right_matches_b = self._matches_row_side(row, "b", b_keyword)
 
         should_swap = False
         if a_keyword and right_matches_a and not left_matches_a:

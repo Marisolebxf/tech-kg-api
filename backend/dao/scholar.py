@@ -309,9 +309,7 @@ class ScholarDAO(BaseDAO[DwdScholar]):
             normalized_limit = max(1, min(int(limit or 20), 100))
             candidate_limit = max(50, min(normalized_limit * 20, 500))
             rows = list(session.scalars(select(OdsZhProject).limit(candidate_limit)).all())
-            rows.extend(
-                list(session.scalars(select(OdsEnProject).limit(candidate_limit)).all())
-            )
+            rows.extend(list(session.scalars(select(OdsEnProject).limit(candidate_limit)).all()))
             return self._build_pair_relations(
                 session=session,
                 rows=rows,
@@ -411,9 +409,7 @@ class ScholarDAO(BaseDAO[DwdScholar]):
         return results[:limit]
 
     def _load_exact_name_map(self, session: Session) -> dict[str, list[DwdScholar]]:
-        scholars = list(
-            session.scalars(select(DwdScholar).where(DwdScholar.status == 1)).all()
-        )
+        scholars = list(session.scalars(select(DwdScholar).where(DwdScholar.status == 1)).all())
         mapping: dict[str, list[DwdScholar]] = defaultdict(list)
         for scholar in scholars:
             for name in (scholar.name_zh, scholar.name_en):
@@ -422,9 +418,7 @@ class ScholarDAO(BaseDAO[DwdScholar]):
                     mapping[normalized].append(scholar)
         return mapping
 
-    def _extract_relation_payload(
-        self, row: object, *, row_kind: str
-    ) -> dict[str, object] | None:
+    def _extract_relation_payload(self, row: object, *, row_kind: str) -> dict[str, object] | None:
         if row_kind == "patent":
             inventors = self._extract_people_tokens(
                 getattr(row, "current_inventor", None)
@@ -461,9 +455,7 @@ class ScholarDAO(BaseDAO[DwdScholar]):
             getattr(row, "funded_institution", None),
             getattr(row, "participating_institution", None),
         )
-        relation_time = getattr(row, "approval_time", None) or getattr(
-            row, "approval_year", None
-        )
+        relation_time = getattr(row, "approval_time", None) or getattr(row, "approval_year", None)
         title = self._first_non_empty(
             getattr(row, "title", None), getattr(row, "project_number", None)
         )

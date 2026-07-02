@@ -84,9 +84,10 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
 
     # ----- 依赖懒加载 -----
     def _session(self):
-        if self._gkx_session is None:
-            self._gkx_session = get_gkx_session()
-        return self._gkx_session
+        # 注入的（测试）直接用；生产每次新建 session，避免单例服务跨请求复用中毒 session
+        if self._gkx_session is not None:
+            return self._gkx_session
+        return get_gkx_session()
 
     def _graph_client(self) -> TRSGraphClient:
         if self._graph is None:

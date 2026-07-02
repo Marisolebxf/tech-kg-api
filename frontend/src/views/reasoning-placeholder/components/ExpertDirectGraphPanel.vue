@@ -94,7 +94,15 @@ function expertSubtitle(itemIndex: number) {
 function relationLines(itemIndex: number, fallback: string) {
   const item = items.value[itemIndex]
   if (!item) return [fallback]
-  return [item.relationSummary || fallback, `合作论文 ${item.coPaperCount ?? 0}`]
+  const detailRow = item.detailRows?.find((row) => row[0] === '证据类型')
+  const countRow = item.detailRows?.find((row) => row[0] === '证据数量')
+  const evidenceType = typeof detailRow?.[1] === 'string' ? detailRow[1] : ''
+  const evidenceCount = countRow?.[1]
+  const secondLine =
+    evidenceType && evidenceCount !== undefined && evidenceCount !== null
+      ? `${evidenceType} ${evidenceCount}`
+      : `关系强度 ${item.relationStrength ?? 0}`
+  return [item.relationSummary || fallback, secondLine]
 }
 
 const referenceNodes = computed<ReferenceNode[]>(() => {
@@ -144,7 +152,7 @@ const referenceEdges = computed<ReferenceEdge[]>(() => {
     {
       key: 'institution-primary',
       d: line(460, 124, 460, centerNode.y),
-      labelLines: ['任职'],
+      labelLines: ['关联机构'],
       labelX: 486,
       labelY: 204,
       width: 2,

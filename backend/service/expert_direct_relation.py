@@ -147,7 +147,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
     def _build_item(self, row: dict[str, Any]) -> dict[str, Any]:
         expert_a_org = str(row.get("expert_a_org") or "")
         expert_b_org = str(row.get("expert_b_org") or "")
-        institution = str(row.get("institution") or expert_a_org or expert_b_org or "合作关系")
+        institution = str(
+            row.get("institution") or expert_a_org or expert_b_org or "合作关系"
+        )
         evidence_kind = str(row.get("evidence_kind") or "paper")
         evidence_count = int(row.get("evidence_count") or row.get("co_paper_count") or 0)
         evidence_titles = row.get("evidence_titles") or []

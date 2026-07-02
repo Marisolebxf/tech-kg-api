@@ -309,7 +309,9 @@ class ScholarDAO(BaseDAO[DwdScholar]):
             normalized_limit = max(1, min(int(limit or 20), 100))
             candidate_limit = max(50, min(normalized_limit * 20, 500))
             rows = list(session.scalars(select(OdsZhProject).limit(candidate_limit)).all())
-            rows.extend(list(session.scalars(select(OdsEnProject).limit(candidate_limit)).all()))
+            rows.extend(
+                list(session.scalars(select(OdsEnProject).limit(candidate_limit)).all())
+            )
             return self._build_pair_relations(
                 session=session,
                 rows=rows,
@@ -349,7 +351,10 @@ class ScholarDAO(BaseDAO[DwdScholar]):
             payload = self._extract_relation_payload(row, row_kind=row_kind)
             if payload is None:
                 continue
-            if institution_keyword and institution_keyword not in payload["institution_text"].lower():
+            if (
+                institution_keyword
+                and institution_keyword not in payload["institution_text"].lower()
+            ):
                 continue
             if not self._within_time_range(payload["relation_time"], start_time, end_time):
                 continue
@@ -388,7 +393,8 @@ class ScholarDAO(BaseDAO[DwdScholar]):
                 bucket["evidence_count"] = int(bucket["evidence_count"]) + 1
                 bucket["evidence_titles"].append(payload["title"])
                 if payload["relation_time"] and (
-                    bucket["relation_time"] is None or payload["relation_time"] > bucket["relation_time"]
+                    bucket["relation_time"] is None
+                    or payload["relation_time"] > bucket["relation_time"]
                 ):
                     bucket["relation_time"] = payload["relation_time"]
                 if not bucket["institution"] and payload["institution"]:
@@ -416,7 +422,9 @@ class ScholarDAO(BaseDAO[DwdScholar]):
                     mapping[normalized].append(scholar)
         return mapping
 
-    def _extract_relation_payload(self, row: object, *, row_kind: str) -> dict[str, object] | None:
+    def _extract_relation_payload(
+        self, row: object, *, row_kind: str
+    ) -> dict[str, object] | None:
         if row_kind == "patent":
             inventors = self._extract_people_tokens(
                 getattr(row, "current_inventor", None)
@@ -424,13 +432,17 @@ class ScholarDAO(BaseDAO[DwdScholar]):
                 or getattr(row, "dwpi_inventor", None)
                 or ""
             )
-            relation_time = getattr(row, "filing_date", None) or getattr(row, "publication_date", None)
+            relation_time = getattr(row, "filing_date", None) or getattr(
+                row, "publication_date", None
+            )
             institution = self._first_non_empty(
                 getattr(row, "assignee", None),
                 getattr(row, "current_assignee", None),
                 getattr(row, "dwpi_assignee", None),
             )
-            title = self._first_non_empty(getattr(row, "title_localized", None), getattr(row, "id", None))
+            title = self._first_non_empty(
+                getattr(row, "title_localized", None), getattr(row, "id", None)
+            )
             return {
                 "people": inventors,
                 "relation_time": relation_time,
@@ -449,8 +461,12 @@ class ScholarDAO(BaseDAO[DwdScholar]):
             getattr(row, "funded_institution", None),
             getattr(row, "participating_institution", None),
         )
-        relation_time = getattr(row, "approval_time", None) or getattr(row, "approval_year", None)
-        title = self._first_non_empty(getattr(row, "title", None), getattr(row, "project_number", None))
+        relation_time = getattr(row, "approval_time", None) or getattr(
+            row, "approval_year", None
+        )
+        title = self._first_non_empty(
+            getattr(row, "title", None), getattr(row, "project_number", None)
+        )
         return {
             "people": participants,
             "relation_time": relation_time,
@@ -480,7 +496,9 @@ class ScholarDAO(BaseDAO[DwdScholar]):
                 {
                     "scholar_id": scholar.scholar_id,
                     "name": scholar.name_zh or scholar.name_en or scholar.scholar_id,
-                    "organization": scholar.scholar_org_name_zh or scholar.scholar_org_name_en or "",
+                    "organization": (
+                        scholar.scholar_org_name_zh or scholar.scholar_org_name_en or ""
+                    ),
                     "h_index": scholar.h_index or 0,
                     "paper_nums": scholar.paper_nums or 0,
                     "citation_nums": scholar.citation_nums or 0,

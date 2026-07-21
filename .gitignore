@@ -35,6 +35,7 @@ Thumbs.db
 .coverage
 htmlcov/
 server.log
+backend/output/organization_graph/
 
 # 本地专用，不提交
 docs/superpowers/

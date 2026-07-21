@@ -1,0 +1,30 @@
+-- 机构领域本体。由 organization_graph_etl.py 在 dev 空间执行。
+-- dev 已存在；脚本不会创建、删除或切换其他图空间。
+
+CREATE TAG IF NOT EXISTS Organization(org_id string, name_cn string, name_en string, external_id string, province string, city string, area string, country_code string, country string, address string, postal_code string, phone string, email string, legal_rep string, org_type string, org_size string, founded_year int64, listing_status string, listed_date string, registered_capital double, capital_currency string, industry_class string, stock_code string, stock_noun string, stock_type string, org_kind string, description string, main_products string, extra_json string, source_system string, source_table string, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string);
+CREATE TAG IF NOT EXISTS Person(name_cn string, name_en string, person_kind string, country_code string, country string, birth_date string, gender string, biography string, extra_json string, source_system string, source_table string, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string);
+CREATE TAG IF NOT EXISTS News(title string, content string, release_date string, original_url string, extra_json string, source_system string, source_table string, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string);
+CREATE TAG IF NOT EXISTS Event(event_type string, raw_id string, title string, content string, case_no string, case_cause string, occur_date string, amount double, currency string, extra_json string, source_system string, source_table string, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string);
+CREATE TAG IF NOT EXISTS DataSource(source_table string, table_cn_name string, tier string, library string);
+
+CREATE EDGE IF NOT EXISTS LEGAL_REP_OF(extra_json string, source_table string, source_record_id string, ingest_batch string, ingest_time string);
+CREATE EDGE IF NOT EXISTS SHAREHOLDER_OF(ownership_percentage double, extra_json string, source_table string, source_record_id string, ingest_batch string, ingest_time string);
+CREATE EDGE IF NOT EXISTS EXECUTIVE_OF(position string, extra_json string, source_table string, source_record_id string, ingest_batch string, ingest_time string);
+CREATE EDGE IF NOT EXISTS INVESTS_IN(investment_amount double, investment_ratio double, extra_json string, source_table string, source_record_id string, ingest_batch string, ingest_time string);
+CREATE EDGE IF NOT EXISTS ACQUIRES(ma_amount double, currency_code string, extra_json string, source_table string, source_record_id string, ingest_batch string, ingest_time string);
+CREATE EDGE IF NOT EXISTS SUBSIDIARY_OF(extra_json string, source_table string, source_record_id string, ingest_batch string, ingest_time string);
+CREATE EDGE IF NOT EXISTS BENEFICIAL_OWNER_OF(direct_percent double, indirect_percent double, total_percent double, extra_json string, source_table string, source_record_id string, ingest_batch string, ingest_time string);
+CREATE EDGE IF NOT EXISTS ACTUAL_CONTROLLER_OF(direct_pct double, total_pct double, extra_json string, source_table string, source_record_id string, ingest_batch string, ingest_time string);
+CREATE EDGE IF NOT EXISTS HAS_NEWS(extra_json string, source_table string, source_record_id string, ingest_batch string, ingest_time string);
+CREATE EDGE IF NOT EXISTS INVOLVED_IN(role string, extra_json string, source_table string, source_record_id string, ingest_batch string, ingest_time string);
+CREATE EDGE IF NOT EXISTS SOURCED_FROM(source_table string, source_record_id string, ingest_batch string, ingest_time string);
+CREATE EDGE IF NOT EXISTS DERIVED_FROM(transform string, source_table string, source_record_id string, ingest_batch string, ingest_time string);
+
+CREATE TAG INDEX IF NOT EXISTS organization_org_id_idx ON Organization(org_id(128));
+CREATE TAG INDEX IF NOT EXISTS organization_name_cn_idx ON Organization(name_cn(128));
+CREATE TAG INDEX IF NOT EXISTS person_name_cn_idx ON Person(name_cn(128));
+CREATE TAG INDEX IF NOT EXISTS event_type_idx ON Event(event_type(64));
+CREATE TAG INDEX IF NOT EXISTS event_source_table_idx ON Event(source_table(128));
+CREATE TAG INDEX IF NOT EXISTS datasource_table_idx ON DataSource(source_table(128));
+CREATE EDGE INDEX IF NOT EXISTS involved_in_idx ON INVOLVED_IN();
+CREATE EDGE INDEX IF NOT EXISTS sourced_from_idx ON SOURCED_FROM();

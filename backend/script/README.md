@@ -8,8 +8,6 @@
 |---|---|---|
 | `init_db.py` | 执行 `schemas/ddl/` 下全部 DDL | 默认连接实验室/本地 Docker MySQL `127.0.0.1:3306/gkx_local` |
 | `sync_schema_from_mysql.py` | 从源 MySQL 同步 DDL、字段规范和 ORM | 优先读取 `SOURCE_MYSQL_*`，只读 `information_schema` 和 `SHOW CREATE TABLE` |
-| `init_project_schema.py` | 在 TRSGraph **`dev`** 建项目域 Tag/Edge | 读 `script/ngql/project_schema.ngql`；`CREATE SPACE IF NOT EXISTS dev` |
-| `load_project_graph.py` | 项目表 → `dev` 入图 ETL（Stage1–7） | `--id-prefix fake-` 演示；`--limit N` 抽样 |
 
 ## 常用命令
 
@@ -44,16 +42,4 @@ MYSQL_DATABASE=target_database \
 MYSQL_USERNAME=target_user \
 MYSQL_PASSWORD='target_password' \
 uv run python script/init_db.py
-```
-
-项目入图（以 ontology `Project` 为准，图空间 `dev`）：
-
-```bash
-# 假数据
-docker exec -i mysql mysql -uroot -p123456789 --default-character-set=utf8mb4 gkx_local \
-  < schemas/seed/project_fake_data.sql
-
-# Schema + ETL
-TRS_GRAPH_SPACE=dev uv run python -m script.init_project_schema
-TRS_GRAPH_SPACE=dev uv run python -m script.load_project_graph --id-prefix fake-
 ```

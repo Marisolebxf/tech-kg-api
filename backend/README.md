@@ -212,56 +212,6 @@ uv run python script/sync_schema_from_mysql.py
 
 脚本说明见 `script/README.md`，接口契约目录说明见 `idl/README.md`。
 
-## 国内外项目入图（TRSGraph `dev`）
-
-本体与字段映射见仓库内 [`docs/mapping_project.md`](../docs/mapping_project.md)（对齐 `ontology.md` 的 Tag `Project`，不以旧 `ZhProject`/`EnProject` 为准）。
-
-### 1. 灌入假数据（`gkx_local`）
-
-```bash
-docker exec -i mysql mysql -uroot -p123456789 --default-character-set=utf8mb4 gkx_local \
-  < schemas/seed/project_fake_data.sql
-```
-
-### 2. 初始化 Schema（图空间 `dev`）
-
-```bash
-cd backend
-# trs-graph-service 需 X-API-Key；本机 Compose 默认见 docker-compose.yml 的 TRS_GRAPH_API_KEY
-export TRS_GRAPH_BASE_URL=http://localhost:8090
-export TRS_GRAPH_SPACE=dev
-export TRS_GRAPH_API_KEY="${TRS_GRAPH_API_KEY:-ysukeg}"
-uv run python -m script.init_project_schema
-```
-
-DDL 原文：`script/ngql/project_schema.ngql`。验收语句：`script/ngql/project_accept_demo.ngql`。
-
-### 3. 装载项目实体与边
-
-仅装载假数据前缀（推荐演示）：
-
-```bash
-uv run python -m script.load_project_graph --id-prefix fake-
-```
-
-按数量抽样装载真实数据：
-
-```bash
-uv run python -m script.load_project_graph --limit 200
-```
-
-### 4. Studio 验收
-
-打开 http://211.81.248.211:7002 ，连接 Graph `211.81.248.211:9677`，选择空间 `dev`，执行：
-
-```ngql
-USE dev;
-FETCH PROP ON Project "project_fake-zh-proj-001" YIELD properties(vertex);
-GO FROM "project_fake-zh-proj-001" OVER LEADS, FUNDED_BY YIELD dst(edge);
-GO FROM "project_fake-zh-proj-001" OVER HAS_KEYWORD YIELD dst(edge);
-GO FROM "project_fake-zh-proj-001" OVER OUTPUT_OF REVERSELY YIELD src(edge);
-```
-
 ## 启动
 
 下面命令从项目根目录 `tech-kg-api/` 执行。

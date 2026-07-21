@@ -60,9 +60,7 @@ class TableSpec:
 TABLE_SPECS: tuple[TableSpec, ...] = (
     TableSpec("dwd_org_base_info", "机构基本信息", "org_base", "Organization"),
     TableSpec("dwd_org_heis_info", "高校基本信息", "org_base", "Organization"),
-    TableSpec(
-        "dwd_research_institute_base_info", "科研机构基本信息", "org_base", "Organization"
-    ),
+    TableSpec("dwd_research_institute_base_info", "科研机构基本信息", "org_base", "Organization"),
     TableSpec("dwd_special_hongkong_company", "香港企业", "org_base", "Organization"),
     TableSpec("dwd_special_taiwan_company", "台湾企业", "org_base", "Organization"),
     TableSpec("dwd_special_aomen_company", "澳门企业", "org_base", "Organization"),
@@ -70,23 +68,15 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
     TableSpec("dwd_org_org_product_info", "国内机构经营信息", "org_enrich", "Organization"),
     TableSpec("dwd_org_stock_base", "上市企业基本信息", "org_enrich", "Organization"),
     TableSpec("dwd_forg_product_info", "海外机构经营信息", "org_enrich", "Organization"),
-    TableSpec(
-        "dwd_org_shareholder_info", "国内机构股东信息", "relation", "SHAREHOLDER_OF"
-    ),
-    TableSpec(
-        "dwd_forg_shareholder_info", "海外机构股东信息", "relation", "SHAREHOLDER_OF"
-    ),
+    TableSpec("dwd_org_shareholder_info", "国内机构股东信息", "relation", "SHAREHOLDER_OF"),
+    TableSpec("dwd_forg_shareholder_info", "海外机构股东信息", "relation", "SHAREHOLDER_OF"),
     TableSpec("dwd_org_executive_info", "国内机构高管信息", "relation", "EXECUTIVE_OF"),
     TableSpec("dwd_forg_executive_info", "海外机构高管信息", "relation", "EXECUTIVE_OF"),
     TableSpec("dwd_org_invest_info", "投资事件", "relation", "INVESTS_IN"),
     TableSpec("dwd_org_merger_acquisition_info", "并购事件", "relation", "ACQUIRES"),
     TableSpec("dwd_forg_subsidiary_info", "海外机构子公司", "relation", "SUBSIDIARY_OF"),
-    TableSpec(
-        "dwd_forg_beneficiary_info", "海外机构受益人", "relation", "BENEFICIAL_OWNER_OF"
-    ),
-    TableSpec(
-        "dwd_forg_act_contro_info", "海外机构实际控制人", "relation", "ACTUAL_CONTROLLER_OF"
-    ),
+    TableSpec("dwd_forg_beneficiary_info", "海外机构受益人", "relation", "BENEFICIAL_OWNER_OF"),
+    TableSpec("dwd_forg_act_contro_info", "海外机构实际控制人", "relation", "ACTUAL_CONTROLLER_OF"),
     TableSpec("dwd_org_important_news_info", "重点资讯", "news", "News + HAS_NEWS"),
     TableSpec(
         "dwd_org_annual_financial_info",
@@ -208,18 +198,10 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
         "bankruptcy",
         ("bankruptcy_party_id",),
     ),
-    TableSpec(
-        "dwd_bid_base_out", "招投标公告", "bid_base", "Event", "bid", ("u_id",)
-    ),
-    TableSpec(
-        "dwd_bid_win_candidate_out", "中标候选人", "bid_party", "INVOLVED_IN", "bid"
-    ),
-    TableSpec(
-        "dwd_bid_purchase_agency_out", "采购代理", "bid_party", "INVOLVED_IN", "bid"
-    ),
-    TableSpec(
-        "dwd_bid_target_item_out", "招投标标的物", "bid_content", "Event.content", "bid"
-    ),
+    TableSpec("dwd_bid_base_out", "招投标公告", "bid_base", "Event", "bid", ("u_id",)),
+    TableSpec("dwd_bid_win_candidate_out", "中标候选人", "bid_party", "INVOLVED_IN", "bid"),
+    TableSpec("dwd_bid_purchase_agency_out", "采购代理", "bid_party", "INVOLVED_IN", "bid"),
+    TableSpec("dwd_bid_target_item_out", "招投标标的物", "bid_content", "Event.content", "bid"),
 )
 
 TABLE_BY_NAME = {spec.name: spec for spec in TABLE_SPECS}
@@ -227,54 +209,195 @@ assert len(TABLE_SPECS) == 39 and len(TABLE_BY_NAME) == 39
 
 TAG_PROPERTIES: dict[str, tuple[str, ...]] = {
     "Organization": (
-        "org_id", "name_cn", "name_en", "external_id", "province", "city", "area",
-        "country_code", "country", "address", "postal_code", "phone", "email",
-        "legal_rep", "org_type", "org_size", "founded_year", "listing_status",
-        "listed_date", "registered_capital", "capital_currency", "industry_class",
-        "stock_code", "stock_noun", "stock_type", "org_kind", "description",
-        "main_products", "extra_json", "source_system", "source_table",
-        "source_record_id", "source_url", "ingest_batch", "ingest_time",
+        "org_id",
+        "name_cn",
+        "name_en",
+        "external_id",
+        "province",
+        "city",
+        "area",
+        "country_code",
+        "country",
+        "address",
+        "postal_code",
+        "phone",
+        "email",
+        "legal_rep",
+        "org_type",
+        "org_size",
+        "founded_year",
+        "listing_status",
+        "listed_date",
+        "registered_capital",
+        "capital_currency",
+        "industry_class",
+        "stock_code",
+        "stock_noun",
+        "stock_type",
+        "org_kind",
+        "description",
+        "main_products",
+        "extra_json",
+        "source_system",
+        "source_table",
+        "source_record_id",
+        "source_url",
+        "ingest_batch",
+        "ingest_time",
         "source_update_time",
     ),
     "Person": (
-        "name_cn", "name_en", "person_kind", "country_code", "country", "birth_date",
-        "gender", "biography", "extra_json", "source_system", "source_table",
-        "source_record_id", "source_url", "ingest_batch", "ingest_time",
+        "name_cn",
+        "name_en",
+        "person_kind",
+        "country_code",
+        "country",
+        "birth_date",
+        "gender",
+        "biography",
+        "extra_json",
+        "source_system",
+        "source_table",
+        "source_record_id",
+        "source_url",
+        "ingest_batch",
+        "ingest_time",
         "source_update_time",
     ),
     "News": (
-        "title", "content", "release_date", "original_url", "extra_json", "source_system",
-        "source_table", "source_record_id", "source_url", "ingest_batch", "ingest_time",
+        "title",
+        "content",
+        "release_date",
+        "original_url",
+        "extra_json",
+        "source_system",
+        "source_table",
+        "source_record_id",
+        "source_url",
+        "ingest_batch",
+        "ingest_time",
         "source_update_time",
     ),
     "Event": (
-        "event_type", "raw_id", "title", "content", "case_no", "case_cause",
-        "occur_date", "amount", "currency", "extra_json", "source_system",
-        "source_table", "source_record_id", "source_url", "ingest_batch", "ingest_time",
+        "event_type",
+        "raw_id",
+        "title",
+        "content",
+        "case_no",
+        "case_cause",
+        "occur_date",
+        "amount",
+        "currency",
+        "extra_json",
+        "source_system",
+        "source_table",
+        "source_record_id",
+        "source_url",
+        "ingest_batch",
+        "ingest_time",
         "source_update_time",
     ),
     "DataSource": ("source_table", "table_cn_name", "tier", "library"),
 }
 
 EDGE_PROPERTIES: dict[str, tuple[str, ...]] = {
-    "LEGAL_REP_OF": ("extra_json", "source_table", "source_record_id", "ingest_batch", "ingest_time"),
-    "SHAREHOLDER_OF": ("ownership_percentage", "extra_json", "source_table", "source_record_id", "ingest_batch", "ingest_time"),
-    "EXECUTIVE_OF": ("position", "extra_json", "source_table", "source_record_id", "ingest_batch", "ingest_time"),
-    "INVESTS_IN": ("investment_amount", "investment_ratio", "extra_json", "source_table", "source_record_id", "ingest_batch", "ingest_time"),
-    "ACQUIRES": ("ma_amount", "currency_code", "extra_json", "source_table", "source_record_id", "ingest_batch", "ingest_time"),
-    "SUBSIDIARY_OF": ("extra_json", "source_table", "source_record_id", "ingest_batch", "ingest_time"),
-    "BENEFICIAL_OWNER_OF": ("direct_percent", "indirect_percent", "total_percent", "extra_json", "source_table", "source_record_id", "ingest_batch", "ingest_time"),
-    "ACTUAL_CONTROLLER_OF": ("direct_pct", "total_pct", "extra_json", "source_table", "source_record_id", "ingest_batch", "ingest_time"),
+    "LEGAL_REP_OF": (
+        "extra_json",
+        "source_table",
+        "source_record_id",
+        "ingest_batch",
+        "ingest_time",
+    ),
+    "SHAREHOLDER_OF": (
+        "ownership_percentage",
+        "extra_json",
+        "source_table",
+        "source_record_id",
+        "ingest_batch",
+        "ingest_time",
+    ),
+    "EXECUTIVE_OF": (
+        "position",
+        "extra_json",
+        "source_table",
+        "source_record_id",
+        "ingest_batch",
+        "ingest_time",
+    ),
+    "INVESTS_IN": (
+        "investment_amount",
+        "investment_ratio",
+        "extra_json",
+        "source_table",
+        "source_record_id",
+        "ingest_batch",
+        "ingest_time",
+    ),
+    "ACQUIRES": (
+        "ma_amount",
+        "currency_code",
+        "extra_json",
+        "source_table",
+        "source_record_id",
+        "ingest_batch",
+        "ingest_time",
+    ),
+    "SUBSIDIARY_OF": (
+        "extra_json",
+        "source_table",
+        "source_record_id",
+        "ingest_batch",
+        "ingest_time",
+    ),
+    "BENEFICIAL_OWNER_OF": (
+        "direct_percent",
+        "indirect_percent",
+        "total_percent",
+        "extra_json",
+        "source_table",
+        "source_record_id",
+        "ingest_batch",
+        "ingest_time",
+    ),
+    "ACTUAL_CONTROLLER_OF": (
+        "direct_pct",
+        "total_pct",
+        "extra_json",
+        "source_table",
+        "source_record_id",
+        "ingest_batch",
+        "ingest_time",
+    ),
     "HAS_NEWS": ("extra_json", "source_table", "source_record_id", "ingest_batch", "ingest_time"),
-    "INVOLVED_IN": ("role", "extra_json", "source_table", "source_record_id", "ingest_batch", "ingest_time"),
+    "INVOLVED_IN": (
+        "role",
+        "extra_json",
+        "source_table",
+        "source_record_id",
+        "ingest_batch",
+        "ingest_time",
+    ),
     "SOURCED_FROM": ("source_table", "source_record_id", "ingest_batch", "ingest_time"),
-    "DERIVED_FROM": ("transform", "source_table", "source_record_id", "ingest_batch", "ingest_time"),
+    "DERIVED_FROM": (
+        "transform",
+        "source_table",
+        "source_record_id",
+        "ingest_batch",
+        "ingest_time",
+    ),
 }
 
 NUMERIC_TAG_PROPERTIES = {"founded_year", "registered_capital", "amount"}
 NUMERIC_EDGE_PROPERTIES = {
-    "ownership_percentage", "investment_amount", "investment_ratio", "ma_amount",
-    "direct_percent", "indirect_percent", "total_percent", "direct_pct", "total_pct",
+    "ownership_percentage",
+    "investment_amount",
+    "investment_ratio",
+    "ma_amount",
+    "direct_percent",
+    "indirect_percent",
+    "total_percent",
+    "direct_pct",
+    "total_pct",
 }
 
 
@@ -318,7 +441,10 @@ class GraphBuffer:
         overwrite = set(overwrite_fields)
         existing = self.nodes.get(key)
         if existing is None:
-            full = {name: default_property(name, numeric=name in NUMERIC_TAG_PROPERTIES) for name in TAG_PROPERTIES[tag]}
+            full = {
+                name: default_property(name, numeric=name in NUMERIC_TAG_PROPERTIES)
+                for name in TAG_PROPERTIES[tag]
+            }
             full.update(clean)
             existing = NodeRecord(tag=tag, vid=vid, props=full)
             self.nodes[key] = existing
@@ -346,11 +472,7 @@ class GraphBuffer:
         }
         if props:
             full.update(
-                {
-                    name: normalize_value(value)
-                    for name, value in props.items()
-                    if name in allowed
-                }
+                {name: normalize_value(value) for name, value in props.items() if name in allowed}
             )
         key = (edge_type, source, target, rank)
         edge = EdgeRecord(edge_type=edge_type, source=source, target=target, rank=rank, props=full)
@@ -462,7 +584,9 @@ def datasource_vid(table: str, *, raw: bool = False) -> str:
 
 def stable_rank(value: str) -> int:
     # Nebula edge rank 为有符号 int64；保留 63 位正数。
-    return int.from_bytes(hashlib.sha256(value.encode("utf-8")).digest()[:8], "big") & ((1 << 63) - 1)
+    return int.from_bytes(hashlib.sha256(value.encode("utf-8")).digest()[:8], "big") & (
+        (1 << 63) - 1
+    )
 
 
 def stable_record_id(table: str, row: dict[str, Any], preferred: Iterable[str] = ()) -> str:
@@ -505,7 +629,9 @@ def provenance_props(
     }
 
 
-def edge_provenance(table: str, record_id: str, ingest_batch: str, ingest_time: str) -> dict[str, Any]:
+def edge_provenance(
+    table: str, record_id: str, ingest_batch: str, ingest_time: str
+) -> dict[str, Any]:
     return {
         "source_table": table,
         "source_record_id": record_id,
@@ -544,9 +670,7 @@ def get_table_metadata(session: Session) -> dict[str, dict[str, Any]]:
         "WHERE c.TABLE_SCHEMA=DATABASE() AND c.TABLE_NAME IN (" + bind_names + ") "
         "ORDER BY c.TABLE_NAME,c.ORDINAL_POSITION"
     )
-    result: dict[str, dict[str, Any]] = {
-        name: {"comment": "", "columns": []} for name in names
-    }
+    result: dict[str, dict[str, Any]] = {name: {"comment": "", "columns": []} for name in names}
     for row in session.execute(sql, params).mappings():
         item = dict(row)
         table = item.pop("TABLE_NAME")
@@ -604,12 +728,27 @@ def organization_props(
     ingest_batch: str,
     ingest_time: str,
 ) -> dict[str, Any]:
-    incorporation = text_value(first_value(row, "incorporation_year", "est_year", "incorporation_date"))
+    incorporation = text_value(
+        first_value(row, "incorporation_year", "est_year", "incorporation_date")
+    )
     return {
         "org_id": text_value(first_value(row, "org_id", "company_id", "entity_eid")),
-        "name_cn": text_value(first_value(row, "name_cn", "org_loc_name", "company_name", "n_company_name", "traditional_name", "name_alias", "name_en")),
+        "name_cn": text_value(
+            first_value(
+                row,
+                "name_cn",
+                "org_loc_name",
+                "company_name",
+                "n_company_name",
+                "traditional_name",
+                "name_alias",
+                "name_en",
+            )
+        ),
         "name_en": text_value(first_value(row, "name_en", "en_name")),
-        "external_id": text_value(first_value(row, "external_id", "company_code", "school_code", "credit_no")),
+        "external_id": text_value(
+            first_value(row, "external_id", "company_code", "school_code", "credit_no")
+        ),
         "province": text_value(first_value(row, "province", "project_region_province")),
         "city": text_value(first_value(row, "city", "project_region_city")),
         "area": text_value(first_value(row, "area", "project_region_district")),
@@ -620,19 +759,35 @@ def organization_props(
         "phone": text_value(first_value(row, "phone")),
         "email": text_value(first_value(row, "email")),
         "legal_rep": text_value(first_value(row, "lerep", "legal_person", "legal_name")),
-        "org_type": text_value(first_value(row, "org_type", "univ_type", "company_type", "industry_type")),
+        "org_type": text_value(
+            first_value(row, "org_type", "univ_type", "company_type", "industry_type")
+        ),
         "org_size": text_value(first_value(row, "person_num", "employees_number")),
         "founded_year": int_value(incorporation),
         "listing_status": text_value(first_value(row, "listing_status", "listed_status")),
         "listed_date": text_value(first_value(row, "listing_date", "listed_date")),
-        "registered_capital": float_value(first_value(row, "registered_capital_value", "capital_num", "capital")),
-        "capital_currency": text_value(first_value(row, "capital_currency", "registered_capital_currency_code", "currency_code", "currency")),
-        "industry_class": text_value(first_value(row, "industry", "industry_class", "industry_l1_name")),
+        "registered_capital": float_value(
+            first_value(row, "registered_capital_value", "capital_num", "capital")
+        ),
+        "capital_currency": text_value(
+            first_value(
+                row,
+                "capital_currency",
+                "registered_capital_currency_code",
+                "currency_code",
+                "currency",
+            )
+        ),
+        "industry_class": text_value(
+            first_value(row, "industry", "industry_class", "industry_l1_name")
+        ),
         "stock_code": text_value(first_value(row, "stock_code")),
         "stock_noun": text_value(first_value(row, "stock_noun")),
         "stock_type": text_value(first_value(row, "stock_type")),
         "org_kind": org_kind_for(table),
-        "description": text_value(first_value(row, "description", "main_activities", "business_scope")),
+        "description": text_value(
+            first_value(row, "description", "main_activities", "business_scope")
+        ),
         "main_products": text_value(first_value(row, "main_products", "main_prod")),
         "extra_json": json_text({key: normalize_value(value) for key, value in row.items()}),
         **provenance_props(table, record_id, row, ingest_batch, ingest_time),
@@ -654,12 +809,12 @@ def add_datasource_links(
             "source_table": spec.name,
             "table_cn_name": spec.cn_name,
             "tier": "DWD",
-            "library": "国内机构要素库" if not spec.name.startswith("dwd_forg_") else "国外机构要素库",
+            "library": "国内机构要素库"
+            if not spec.name.startswith("dwd_forg_")
+            else "国外机构要素库",
         },
     )
-    edge_props = edge_provenance(
-        spec.name, record_id, buffer.ingest_batch, buffer.ingest_time
-    )
+    edge_props = edge_provenance(spec.name, record_id, buffer.ingest_batch, buffer.ingest_time)
     for vid in business_vids:
         buffer.add_edge("SOURCED_FROM", vid, ds_vid, record_id, edge_props)
 
@@ -758,45 +913,83 @@ def relation_endpoints(
     props: dict[str, Any] = {}
     if table == "dwd_org_shareholder_info":
         owner_name = first_value(row, "owners_name", "inv_name")
-        if text_value(row.get("inv_org_id")) or text_value(row.get("owners_type")) in {"机构", "企业", "organization", "company"}:
+        if text_value(row.get("inv_org_id")) or text_value(row.get("owners_type")) in {
+            "机构",
+            "企业",
+            "organization",
+            "company",
+        }:
             source = ensure_org(buffer, row.get("inv_org_id"), owner_name, table, record_id, row)
         else:
-            source = ensure_person(buffer, owner_name, table, record_id, row, person_kind="shareholder")
+            source = ensure_person(
+                buffer, owner_name, table, record_id, row, person_kind="shareholder"
+            )
         props["ownership_percentage"] = float_value(row.get("ownership_percentage"))
         return source, target, props
     if table == "dwd_forg_shareholder_info":
         owner_name = row.get("owners_name")
-        looks_org = bool(re.search(r"\b(?:ltd|inc|corp|company|plc|llc|group|fund)\b", text_value(owner_name), re.I))
+        looks_org = bool(
+            re.search(
+                r"\b(?:ltd|inc|corp|company|plc|llc|group|fund)\b", text_value(owner_name), re.I
+            )
+        )
         source = (
-            ensure_org(buffer, "name_" + md5_hex(normalized_name(owner_name)), owner_name, table, record_id, row)
+            ensure_org(
+                buffer,
+                "name_" + md5_hex(normalized_name(owner_name)),
+                owner_name,
+                table,
+                record_id,
+                row,
+            )
             if looks_org
             else ensure_person(buffer, owner_name, table, record_id, row, person_kind="shareholder")
         )
         props["ownership_percentage"] = float_value(row.get("ownership_percentage"))
         return source, target, props
     if table in {"dwd_org_executive_info", "dwd_forg_executive_info"}:
-        source = ensure_person(buffer, row.get("executives_name"), table, record_id, row, person_kind="executive")
+        source = ensure_person(
+            buffer, row.get("executives_name"), table, record_id, row, person_kind="executive"
+        )
         props["position"] = text_value(row.get("executives_position"))
         return source, target, props
     if table == "dwd_org_invest_info":
         source = target
-        target = ensure_org(buffer, row.get("inv_org_id"), row.get("inv_name"), table, record_id, row)
+        target = ensure_org(
+            buffer, row.get("inv_org_id"), row.get("inv_name"), table, record_id, row
+        )
         props.update(
             investment_amount=float_value(row.get("investment_amount")),
             investment_ratio=float_value(row.get("investment_ratio")),
         )
         return source, target, props
     if table == "dwd_org_merger_acquisition_info":
-        source = ensure_org(buffer, row.get("acquiring_org_id"), row.get("acquiring_name"), table, record_id, row)
-        target = ensure_org(buffer, row.get("acquired_org_id"), row.get("acquired_name"), table, record_id, row)
-        props.update(ma_amount=float_value(row.get("ma_amount")), currency_code=text_value(row.get("currency_code")))
+        source = ensure_org(
+            buffer, row.get("acquiring_org_id"), row.get("acquiring_name"), table, record_id, row
+        )
+        target = ensure_org(
+            buffer, row.get("acquired_org_id"), row.get("acquired_name"), table, record_id, row
+        )
+        props.update(
+            ma_amount=float_value(row.get("ma_amount")),
+            currency_code=text_value(row.get("currency_code")),
+        )
         return source, target, props
     if table == "dwd_forg_subsidiary_info":
         source = target
-        target = ensure_org(buffer, first_value(row, "affiliate", "affiliates_company_id"), row.get("affiliates_name"), table, record_id, row)
+        target = ensure_org(
+            buffer,
+            first_value(row, "affiliate", "affiliates_company_id"),
+            row.get("affiliates_name"),
+            table,
+            record_id,
+            row,
+        )
         return source, target, props
     if table == "dwd_forg_beneficiary_info":
-        source = ensure_person(buffer, row.get("bo_name"), table, record_id, row, person_kind="beneficial_owner")
+        source = ensure_person(
+            buffer, row.get("bo_name"), table, record_id, row, person_kind="beneficial_owner"
+        )
         props.update(
             direct_percent=float_value(row.get("direct_percent")),
             indirect_percent=float_value(row.get("indirect_percent")),
@@ -805,11 +998,21 @@ def relation_endpoints(
         return source, target, props
     if table == "dwd_forg_act_contro_info":
         entity_name = row.get("entity_name")
-        if text_value(row.get("entity_type")).lower() in {"company", "organization", "机构", "企业"}:
+        if text_value(row.get("entity_type")).lower() in {
+            "company",
+            "organization",
+            "机构",
+            "企业",
+        }:
             source = ensure_org(buffer, row.get("entity_eid"), entity_name, table, record_id, row)
         else:
-            source = ensure_person(buffer, entity_name, table, record_id, row, person_kind="actual_controller")
-        props.update(direct_pct=float_value(first_value(row, "direct_pct_num", "direct_pct")), total_pct=float_value(first_value(row, "total_pct_num", "total_pct")))
+            source = ensure_person(
+                buffer, entity_name, table, record_id, row, person_kind="actual_controller"
+            )
+        props.update(
+            direct_pct=float_value(first_value(row, "direct_pct_num", "direct_pct")),
+            total_pct=float_value(first_value(row, "total_pct_num", "total_pct")),
+        )
         return source, target, props
     raise ValueError(f"未实现关系表: {table}")
 
@@ -827,38 +1030,74 @@ def event_props(
 ) -> dict[str, Any]:
     title = first_value(
         row,
-        "title", "project_name", "case_title", "job_title", "funding_round",
-        "update_name", "abn_reason", "violation_type", "category", "case_type",
+        "title",
+        "project_name",
+        "case_title",
+        "job_title",
+        "funding_round",
+        "update_name",
+        "abn_reason",
+        "violation_type",
+        "category",
+        "case_type",
     )
     content = first_value(
         row,
-        "content", "project_content", "job_description", "penalty_content",
-        "violation_fact", "illegal_fact", "legal_obligation", "update_content",
-        "dishonest_behavior", "exec_target",
+        "content",
+        "project_content",
+        "job_description",
+        "penalty_content",
+        "violation_fact",
+        "illegal_fact",
+        "legal_obligation",
+        "update_content",
+        "dishonest_behavior",
+        "exec_target",
     )
     occur_date = first_value(
         row,
-        "publish_time", "public_date", "publish_date", "penalty_date", "procedure_date",
-        "completion_date", "release_date", "update_date", "abn_date", "filing_date",
-        "occur_period", "year",
+        "publish_time",
+        "public_date",
+        "publish_date",
+        "penalty_date",
+        "procedure_date",
+        "completion_date",
+        "release_date",
+        "update_date",
+        "abn_date",
+        "filing_date",
+        "occur_period",
+        "year",
     )
     amount = first_value(
         row,
-        "amount", "funding_amount", "fine_amount", "exec_target", "total_amount",
-        "project_budget_amount", "total_assets",
+        "amount",
+        "funding_amount",
+        "fine_amount",
+        "exec_target",
+        "total_amount",
+        "project_budget_amount",
+        "total_assets",
     )
     currency = first_value(
         row,
-        "currency", "currency_code", "funding_currency_code", "amount_unit",
-        "total_amount_unit", "project_budget_amount_unit",
+        "currency",
+        "currency_code",
+        "funding_currency_code",
+        "amount_unit",
+        "total_amount_unit",
+        "project_budget_amount_unit",
     )
     raw_id = event_raw_id(spec, row)
     return {
         "event_type": spec.event_type,
         "raw_id": raw_id,
         "title": text_value(title) or spec.cn_name,
-        "content": text_value(content) or json_text({key: normalize_value(value) for key, value in row.items()}),
-        "case_no": text_value(first_value(row, "case_no", "reg_no", "decision_no", "project_number")),
+        "content": text_value(content)
+        or json_text({key: normalize_value(value) for key, value in row.items()}),
+        "case_no": text_value(
+            first_value(row, "case_no", "reg_no", "decision_no", "project_number")
+        ),
         "case_cause": text_value(first_value(row, "case_cause", "case_type", "case_type_tag")),
         "occur_date": text_value(occur_date),
         "amount": float_value(amount),
@@ -875,25 +1114,58 @@ def transform_row(spec: TableSpec, row: dict[str, Any], buffer: GraphBuffer) -> 
 
     if spec.kind in {"org_base", "org_enrich"}:
         org_id = first_value(row, "org_id", "company_id")
-        vid = ensure_org(buffer, org_id, first_value(row, "name_cn", "name_en", "org_loc_name", "company_name"), spec.name, record_id, row)
+        vid = ensure_org(
+            buffer,
+            org_id,
+            first_value(row, "name_cn", "name_en", "org_loc_name", "company_name"),
+            spec.name,
+            record_id,
+            row,
+        )
         buffer.add_node(
             "Organization",
             vid,
             organization_props(spec.name, row, record_id, buffer.ingest_batch, buffer.ingest_time),
             overwrite_fields=(
-                "name_cn", "name_en", "external_id", "province", "city", "area",
-                "country_code", "country", "address", "postal_code", "phone", "email",
-                "legal_rep", "org_type", "org_size", "founded_year", "listing_status",
-                "listed_date", "registered_capital", "capital_currency", "industry_class",
-                "stock_code", "stock_noun", "stock_type", "description", "main_products",
+                "name_cn",
+                "name_en",
+                "external_id",
+                "province",
+                "city",
+                "area",
+                "country_code",
+                "country",
+                "address",
+                "postal_code",
+                "phone",
+                "email",
+                "legal_rep",
+                "org_type",
+                "org_size",
+                "founded_year",
+                "listing_status",
+                "listed_date",
+                "registered_capital",
+                "capital_currency",
+                "industry_class",
+                "stock_code",
+                "stock_noun",
+                "stock_type",
+                "description",
+                "main_products",
             ),
         )
         linked_vids.append(vid)
         legal_rep = first_value(row, "lerep", "legal_person")
         if legal_rep:
-            pvid = ensure_person(buffer, legal_rep, spec.name, record_id, row, person_kind="legal_representative")
+            pvid = ensure_person(
+                buffer, legal_rep, spec.name, record_id, row, person_kind="legal_representative"
+            )
             buffer.add_edge(
-                "LEGAL_REP_OF", pvid, vid, record_id,
+                "LEGAL_REP_OF",
+                pvid,
+                vid,
+                record_id,
                 edge_provenance(spec.name, record_id, buffer.ingest_batch, buffer.ingest_time),
             )
             linked_vids.append(pvid)
@@ -903,7 +1175,9 @@ def transform_row(spec: TableSpec, row: dict[str, Any], buffer: GraphBuffer) -> 
         business_props.update(
             edge_provenance(spec.name, record_id, buffer.ingest_batch, buffer.ingest_time)
         )
-        business_props["extra_json"] = json_text({key: normalize_value(value) for key, value in row.items()})
+        business_props["extra_json"] = json_text(
+            {key: normalize_value(value) for key, value in row.items()}
+        )
         buffer.add_edge(spec.graph_target, source, target, record_id, business_props)
         linked_vids.extend((source, target))
 
@@ -918,39 +1192,112 @@ def transform_row(spec: TableSpec, row: dict[str, Any], buffer: GraphBuffer) -> 
                 "content": text_value(row.get("news_content")),
                 "release_date": text_value(row.get("news_date")),
                 "original_url": text_value(row.get("original_textlink")),
-                "extra_json": json_text({key: normalize_value(value) for key, value in row.items()}),
-                **provenance_props(spec.name, record_id, row, buffer.ingest_batch, buffer.ingest_time),
+                "extra_json": json_text(
+                    {key: normalize_value(value) for key, value in row.items()}
+                ),
+                **provenance_props(
+                    spec.name, record_id, row, buffer.ingest_batch, buffer.ingest_time
+                ),
             },
         )
-        buffer.add_edge("HAS_NEWS", org, news_id, record_id, edge_provenance(spec.name, record_id, buffer.ingest_batch, buffer.ingest_time))
+        buffer.add_edge(
+            "HAS_NEWS",
+            org,
+            news_id,
+            record_id,
+            edge_provenance(spec.name, record_id, buffer.ingest_batch, buffer.ingest_time),
+        )
         linked_vids.extend((org, news_id))
 
     elif spec.kind in {"event", "bankruptcy_base", "bid_base"}:
         raw_id = event_raw_id(spec, row)
         evid = event_vid(spec.name, raw_id)
-        buffer.add_node("Event", evid, event_props(spec, row, record_id, buffer.ingest_batch, buffer.ingest_time))
+        buffer.add_node(
+            "Event",
+            evid,
+            event_props(spec, row, record_id, buffer.ingest_batch, buffer.ingest_time),
+        )
         linked_vids.append(evid)
         if spec.kind == "bankruptcy_base":
             if first_value(row, "admin_org_id", "admin_org"):
-                org = ensure_org(buffer, row.get("admin_org_id"), row.get("admin_org"), spec.name, record_id, row)
-                buffer.add_edge("INVOLVED_IN", org, evid, record_id, {**edge_provenance(spec.name, record_id, buffer.ingest_batch, buffer.ingest_time), "role": "bankruptcy_administrator"})
+                org = ensure_org(
+                    buffer, row.get("admin_org_id"), row.get("admin_org"), spec.name, record_id, row
+                )
+                buffer.add_edge(
+                    "INVOLVED_IN",
+                    org,
+                    evid,
+                    record_id,
+                    {
+                        **edge_provenance(
+                            spec.name, record_id, buffer.ingest_batch, buffer.ingest_time
+                        ),
+                        "role": "bankruptcy_administrator",
+                    },
+                )
                 linked_vids.append(org)
         elif spec.kind == "event":
-            org = ensure_org(buffer, row.get("org_id"), first_value(row, "name_cn", "company_name", "taxpayer_name", "exec_person_name"), spec.name, record_id, row)
-            buffer.add_edge("INVOLVED_IN", org, evid, record_id, {**edge_provenance(spec.name, record_id, buffer.ingest_batch, buffer.ingest_time), "role": text_value(first_value(row, "case_role", "exec_person_type")) or "subject"})
+            org = ensure_org(
+                buffer,
+                row.get("org_id"),
+                first_value(row, "name_cn", "company_name", "taxpayer_name", "exec_person_name"),
+                spec.name,
+                record_id,
+                row,
+            )
+            buffer.add_edge(
+                "INVOLVED_IN",
+                org,
+                evid,
+                record_id,
+                {
+                    **edge_provenance(
+                        spec.name, record_id, buffer.ingest_batch, buffer.ingest_time
+                    ),
+                    "role": text_value(first_value(row, "case_role", "exec_person_type"))
+                    or "subject",
+                },
+            )
             linked_vids.append(org)
 
     elif spec.kind == "bankruptcy_party":
         evid = event_vid("dwd_org_bankruptcy_public_cases", row.get("case_no"))
         org = ensure_org(buffer, row.get("org_id"), row.get("name_cn"), spec.name, record_id, row)
-        buffer.add_edge("INVOLVED_IN", org, evid, record_id, {**edge_provenance(spec.name, record_id, buffer.ingest_batch, buffer.ingest_time), "role": text_value(row.get("party_role_type")) or "bankruptcy_party", "extra_json": json_text(row)})
+        buffer.add_edge(
+            "INVOLVED_IN",
+            org,
+            evid,
+            record_id,
+            {
+                **edge_provenance(spec.name, record_id, buffer.ingest_batch, buffer.ingest_time),
+                "role": text_value(row.get("party_role_type")) or "bankruptcy_party",
+                "extra_json": json_text(row),
+            },
+        )
         linked_vids.extend((org, evid))
 
     elif spec.kind == "bid_party":
         evid = event_vid("dwd_bid_base_out", row.get("u_id"))
-        org = ensure_org(buffer, first_value(row, "org_id", "company_id"), first_value(row, "name_cn", "company_name"), spec.name, record_id, row)
+        org = ensure_org(
+            buffer,
+            first_value(row, "org_id", "company_id"),
+            first_value(row, "name_cn", "company_name"),
+            spec.name,
+            record_id,
+            row,
+        )
         role = "winner_candidate" if spec.name == "dwd_bid_win_candidate_out" else "purchase_agency"
-        buffer.add_edge("INVOLVED_IN", org, evid, record_id, {**edge_provenance(spec.name, record_id, buffer.ingest_batch, buffer.ingest_time), "role": role, "extra_json": json_text(row)})
+        buffer.add_edge(
+            "INVOLVED_IN",
+            org,
+            evid,
+            record_id,
+            {
+                **edge_provenance(spec.name, record_id, buffer.ingest_batch, buffer.ingest_time),
+                "role": role,
+                "extra_json": json_text(row),
+            },
+        )
         linked_vids.extend((org, evid))
 
     elif spec.kind == "bid_content":
@@ -961,9 +1308,13 @@ def transform_row(spec: TableSpec, row: dict[str, Any], buffer: GraphBuffer) -> 
             {
                 "event_type": "bid",
                 "raw_id": text_value(row.get("u_id")),
-                "title": text_value(first_value(row, "project_name", "target_item_name", "bid_item_name")),
+                "title": text_value(
+                    first_value(row, "project_name", "target_item_name", "bid_item_name")
+                ),
                 "content": json_text({key: normalize_value(value) for key, value in row.items()}),
-                **provenance_props(spec.name, record_id, row, buffer.ingest_batch, buffer.ingest_time),
+                **provenance_props(
+                    spec.name, record_id, row, buffer.ingest_batch, buffer.ingest_time
+                ),
             },
             overwrite_fields=("content",),
         )
@@ -983,7 +1334,11 @@ def render_node_insert(tag: str, records: list[NodeRecord]) -> str:
             for name in props
         ]
         values.append(f"{ngql_literal(record.vid)}:({','.join(literals)})")
-    return f"INSERT VERTEX `{tag}` ({','.join(f'`{name}`' for name in props)}) VALUES " + ",".join(values) + ";"
+    return (
+        f"INSERT VERTEX `{tag}` ({','.join(f'`{name}`' for name in props)}) VALUES "
+        + ",".join(values)
+        + ";"
+    )
 
 
 def render_edge_insert(edge_type: str, records: list[EdgeRecord]) -> str:
@@ -997,12 +1352,18 @@ def render_edge_insert(edge_type: str, records: list[EdgeRecord]) -> str:
         values.append(
             f"{ngql_literal(record.source)}->{ngql_literal(record.target)}@{record.rank}:({','.join(literals)})"
         )
-    return f"INSERT EDGE `{edge_type}` ({','.join(f'`{name}`' for name in props)}) VALUES " + ",".join(values) + ";"
+    return (
+        f"INSERT EDGE `{edge_type}` ({','.join(f'`{name}`' for name in props)}) VALUES "
+        + ",".join(values)
+        + ";"
+    )
 
 
 def split_schema_statements(schema: str) -> list[str]:
     lines = [line for line in schema.splitlines() if not line.lstrip().startswith("--")]
-    return [statement.strip() + ";" for statement in "\n".join(lines).split(";") if statement.strip()]
+    return [
+        statement.strip() + ";" for statement in "\n".join(lines).split(";") if statement.strip()
+    ]
 
 
 def graph_client(space: str) -> TRSGraphClient:
@@ -1110,7 +1471,9 @@ def render_rollback(buffer: GraphBuffer, batch_size: int) -> str:
             statements.append(f"DELETE EDGE `{edge_type}` {refs};")
     vids = sorted({record.vid for record in buffer.nodes.values()})
     for batch in chunked(vids, batch_size):
-        statements.append("DELETE VERTEX " + ",".join(ngql_literal(vid) for vid in batch) + " WITH EDGE;")
+        statements.append(
+            "DELETE VERTEX " + ",".join(ngql_literal(vid) for vid in batch) + " WITH EDGE;"
+        )
     return "\n".join(statements) + "\n"
 
 
@@ -1119,9 +1482,7 @@ def write_artifacts(buffer: GraphBuffer, output_dir: Path, batch_size: int) -> N
     (output_dir / "manifest.json").write_text(
         json.dumps(manifest_dict(buffer), ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    (output_dir / "rollback.ngql").write_text(
-        render_rollback(buffer, batch_size), encoding="utf-8"
-    )
+    (output_dir / "rollback.ngql").write_text(render_rollback(buffer, batch_size), encoding="utf-8")
     inserts: list[str] = []
     for tag in TAG_PROPERTIES:
         records = sorted(
@@ -1165,10 +1526,16 @@ def graph_stats(space: str) -> dict[str, Any]:
     try:
         for tag in TAG_PROPERTIES:
             response = client.execute_read(f"MATCH (v:`{tag}`) RETURN count(v) AS count;")
-            result["tags"][tag] = int(response.records[0].get("count", 0)) if response.records else 0
+            result["tags"][tag] = (
+                int(response.records[0].get("count", 0)) if response.records else 0
+            )
         for edge_type in EDGE_PROPERTIES:
-            response = client.execute_read(f"MATCH ()-[e:`{edge_type}`]->() RETURN count(e) AS count;")
-            result["edges"][edge_type] = int(response.records[0].get("count", 0)) if response.records else 0
+            response = client.execute_read(
+                f"MATCH ()-[e:`{edge_type}`]->() RETURN count(e) AS count;"
+            )
+            result["edges"][edge_type] = (
+                int(response.records[0].get("count", 0)) if response.records else 0
+            )
     finally:
         client.close()
     return result
@@ -1272,11 +1639,23 @@ EVENT_FIELD_MAP = {
 
 RELATION_FIELD_MAP: dict[tuple[str, str], str] = {
     ("dwd_org_shareholder_info", "inv_org_id"): "SHAREHOLDER_OF 起点 Organization.org_id",
-    ("dwd_org_shareholder_info", "owners_name"): "SHAREHOLDER_OF 起点 Person.name_cn 或 Organization.name_cn",
+    (
+        "dwd_org_shareholder_info",
+        "owners_name",
+    ): "SHAREHOLDER_OF 起点 Person.name_cn 或 Organization.name_cn",
     ("dwd_org_shareholder_info", "owners_type"): "判定股东节点为 Person 或 Organization",
-    ("dwd_org_shareholder_info", "ownership_percentage"): "SHAREHOLDER_OF.ownership_percentage（转 double）",
-    ("dwd_forg_shareholder_info", "owners_name"): "SHAREHOLDER_OF 起点名称；按企业后缀判定 Person/Organization",
-    ("dwd_forg_shareholder_info", "ownership_percentage"): "SHAREHOLDER_OF.ownership_percentage（转 double）",
+    (
+        "dwd_org_shareholder_info",
+        "ownership_percentage",
+    ): "SHAREHOLDER_OF.ownership_percentage（转 double）",
+    (
+        "dwd_forg_shareholder_info",
+        "owners_name",
+    ): "SHAREHOLDER_OF 起点名称；按企业后缀判定 Person/Organization",
+    (
+        "dwd_forg_shareholder_info",
+        "ownership_percentage",
+    ): "SHAREHOLDER_OF.ownership_percentage（转 double）",
     ("dwd_org_executive_info", "executives_name"): "EXECUTIVE_OF 起点 Person.name_cn",
     ("dwd_forg_executive_info", "executives_name"): "EXECUTIVE_OF 起点 Person.name_en/name_cn",
     ("dwd_org_executive_info", "executives_position"): "EXECUTIVE_OF.position",
@@ -1292,17 +1671,38 @@ RELATION_FIELD_MAP: dict[tuple[str, str], str] = {
     ("dwd_org_merger_acquisition_info", "ma_amount"): "ACQUIRES.ma_amount（转 double）",
     ("dwd_org_merger_acquisition_info", "currency_code"): "ACQUIRES.currency_code",
     ("dwd_forg_subsidiary_info", "affiliate"): "SUBSIDIARY_OF 终点 Organization.org_id",
-    ("dwd_forg_subsidiary_info", "affiliates_company_id"): "SUBSIDIARY_OF 终点 Organization.external_id/备用标识",
-    ("dwd_forg_subsidiary_info", "affiliates_name"): "SUBSIDIARY_OF 终点 Organization.name_en/name_cn",
+    (
+        "dwd_forg_subsidiary_info",
+        "affiliates_company_id",
+    ): "SUBSIDIARY_OF 终点 Organization.external_id/备用标识",
+    (
+        "dwd_forg_subsidiary_info",
+        "affiliates_name",
+    ): "SUBSIDIARY_OF 终点 Organization.name_en/name_cn",
     ("dwd_forg_beneficiary_info", "bo_name"): "BENEFICIAL_OWNER_OF 起点 Person.name_en/name_cn",
-    ("dwd_forg_beneficiary_info", "direct_percent"): "BENEFICIAL_OWNER_OF.direct_percent（转 double）",
-    ("dwd_forg_beneficiary_info", "indirect_percent"): "BENEFICIAL_OWNER_OF.indirect_percent（转 double）",
-    ("dwd_forg_beneficiary_info", "total_percent"): "BENEFICIAL_OWNER_OF.total_percent（转 double）",
+    (
+        "dwd_forg_beneficiary_info",
+        "direct_percent",
+    ): "BENEFICIAL_OWNER_OF.direct_percent（转 double）",
+    (
+        "dwd_forg_beneficiary_info",
+        "indirect_percent",
+    ): "BENEFICIAL_OWNER_OF.indirect_percent（转 double）",
+    (
+        "dwd_forg_beneficiary_info",
+        "total_percent",
+    ): "BENEFICIAL_OWNER_OF.total_percent（转 double）",
     ("dwd_forg_act_contro_info", "entity_eid"): "ACTUAL_CONTROLLER_OF 起点标识",
-    ("dwd_forg_act_contro_info", "entity_name"): "ACTUAL_CONTROLLER_OF 起点 Person/Organization 名称",
+    (
+        "dwd_forg_act_contro_info",
+        "entity_name",
+    ): "ACTUAL_CONTROLLER_OF 起点 Person/Organization 名称",
     ("dwd_forg_act_contro_info", "entity_type"): "判定控制人节点为 Person 或 Organization",
     ("dwd_forg_act_contro_info", "direct_pct"): "ACTUAL_CONTROLLER_OF.direct_pct（转 double）",
-    ("dwd_forg_act_contro_info", "direct_pct_num"): "ACTUAL_CONTROLLER_OF.direct_pct（数值字段优先）",
+    (
+        "dwd_forg_act_contro_info",
+        "direct_pct_num",
+    ): "ACTUAL_CONTROLLER_OF.direct_pct（数值字段优先）",
     ("dwd_forg_act_contro_info", "total_pct"): "ACTUAL_CONTROLLER_OF.total_pct（转 double）",
     ("dwd_forg_act_contro_info", "total_pct_num"): "ACTUAL_CONTROLLER_OF.total_pct（数值字段优先）",
 }
@@ -1310,9 +1710,15 @@ RELATION_FIELD_MAP: dict[tuple[str, str], str] = {
 
 def describe_field(spec: TableSpec, column: str) -> tuple[str, str]:
     if column == "data_source":
-        return "DataSource.source_table + DERIVED_FROM", "非 MOCK 值建原始 DataSource；方向为原始来源表 -> 当前要素表"
+        return (
+            "DataSource.source_table + DERIVED_FROM",
+            "非 MOCK 值建原始 DataSource；方向为原始来源表 -> 当前要素表",
+        )
     if column in {"updated_time", "update_time"}:
-        return f"{spec.graph_target.split(' + ')[0]}.source_update_time / 边 extra_json", "统一转 ISO 字符串；关系表保留在 edge.extra_json"
+        return (
+            f"{spec.graph_target.split(' + ')[0]}.source_update_time / 边 extra_json",
+            "统一转 ISO 字符串；关系表保留在 edge.extra_json",
+        )
     if column in {"created_time", "create_time"}:
         return "目标节点/边 extra_json", "保留源值，不作为图写入时间；ingest_time 由 ETL 生成"
     relation = RELATION_FIELD_MAP.get((spec.name, column))
@@ -1322,7 +1728,10 @@ def describe_field(spec: TableSpec, column: str) -> tuple[str, str]:
         return ORG_FIELD_MAP[column], "空值不覆盖已有非空属性；数值字段做容错转换"
     if spec.kind == "news" and column in EVENT_FIELD_MAP:
         return EVENT_FIELD_MAP[column], "资讯 VID 由表名和稳定记录键生成"
-    if spec.kind in {"event", "bankruptcy_base", "bid_base", "bid_content"} and column in EVENT_FIELD_MAP:
+    if (
+        spec.kind in {"event", "bankruptcy_base", "bid_base", "bid_content"}
+        and column in EVENT_FIELD_MAP
+    ):
         return EVENT_FIELD_MAP[column], "同时完整保留在 Event.extra_json/content JSON"
     if spec.kind == "bankruptcy_party":
         special = {
@@ -1347,7 +1756,10 @@ def describe_field(spec: TableSpec, column: str) -> tuple[str, str]:
         if column in special:
             return special[column], "按 u_id 连接招投标 Event"
     if spec.kind == "bid_content" and column == "u_id":
-        return "Event.raw_id（连接 dwd_bid_base_out）", "同一事件 VID，标的物字段整体并入 Event.content JSON"
+        return (
+            "Event.raw_id（连接 dwd_bid_base_out）",
+            "同一事件 VID，标的物字段整体并入 Event.content JSON",
+        )
     if spec.kind == "relation" and column == "org_id":
         return f"{spec.graph_target} 终点 Organization.org_id", "生成 org_{org_id}"
     if spec.kind in {"event", "news"} and column == "org_id":
@@ -1359,7 +1771,10 @@ def describe_field(spec: TableSpec, column: str) -> tuple[str, str]:
     if spec.kind == "news":
         return f"News.extra_json.{column}", "本体无独立属性，原样保留"
     if spec.kind in {"event", "bankruptcy_base", "bid_base", "bid_content"}:
-        return f"Event.extra_json.{column}", "本体无独立属性，原样保留；事件内容类表也进入 content JSON"
+        return (
+            f"Event.extra_json.{column}",
+            "本体无独立属性，原样保留；事件内容类表也进入 content JSON",
+        )
     return f"{spec.graph_target}.extra_json.{column}", "本体无独立属性，原样保留在关系/节点 JSON"
 
 
@@ -1443,7 +1858,11 @@ def output_dir_for(batch: str) -> Path:
 
 def command_init_schema(args: argparse.Namespace) -> None:
     initialize_schema(args.space)
-    print(json.dumps({"status": "ok", "space": args.space, "schema": str(SCHEMA_PATH)}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {"status": "ok", "space": args.space, "schema": str(SCHEMA_PATH)}, ensure_ascii=False
+        )
+    )
 
 
 def command_generate_mapping(args: argparse.Namespace) -> None:
@@ -1453,7 +1872,12 @@ def command_generate_mapping(args: argparse.Namespace) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     field_count = sum(len(item["columns"]) for item in metadata.values())
-    print(json.dumps({"status": "ok", "path": str(target), "tables": len(metadata), "fields": field_count}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {"status": "ok", "path": str(target), "tables": len(metadata), "fields": field_count},
+            ensure_ascii=False,
+        )
+    )
 
 
 def command_load(args: argparse.Namespace) -> None:
@@ -1474,7 +1898,9 @@ def command_load(args: argparse.Namespace) -> None:
     summary = manifest_dict(buffer)
     summary.pop("nodes")
     summary.pop("edges")
-    summary.update(status="dry-run" if args.dry_run else "loaded", space=args.space, output_dir=str(output_dir))
+    summary.update(
+        status="dry-run" if args.dry_run else "loaded", space=args.space, output_dir=str(output_dir)
+    )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
@@ -1495,7 +1921,12 @@ def command_rollback(args: argparse.Namespace) -> None:
             execute_with_retry(client, statement)
     finally:
         client.close()
-    print(json.dumps({"status": "rolled-back", "space": args.space, "script": str(script)}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {"status": "rolled-back", "space": args.space, "script": str(script)},
+            ensure_ascii=False,
+        )
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1507,7 +1938,9 @@ def build_parser() -> argparse.ArgumentParser:
     schema_parser.add_argument("--space", default=DEFAULT_SPACE)
     schema_parser.set_defaults(func=command_init_schema)
 
-    mapping_parser = subparsers.add_parser("generate-mapping", help="从 live schema 生成逐字段映射文档")
+    mapping_parser = subparsers.add_parser(
+        "generate-mapping", help="从 live schema 生成逐字段映射文档"
+    )
     mapping_parser.add_argument("--output")
     mapping_parser.set_defaults(func=command_generate_mapping)
 

@@ -23,10 +23,7 @@ def build_gkx_element_url() -> str:
     database = os.getenv("GKX_ELEMENT_MYSQL_DATABASE", "gkx_element")
     username = quote_plus(os.getenv("GKX_ELEMENT_MYSQL_USERNAME", "root"))
     password = quote_plus(os.getenv("GKX_ELEMENT_MYSQL_PASSWORD", ""))
-    return (
-        f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}"
-        "?charset=utf8mb4"
-    )
+    return f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}?charset=utf8mb4"
 
 
 _client: MySQLClient | None = None

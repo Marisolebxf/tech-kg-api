@@ -271,16 +271,43 @@ tech-kg-api/                       # monorepo 根
 └── docker-compose.yml             # api(8001) + web(8088)
 ```
 
+## 项目入图（space=`dev`）
+
+国内外项目按 ontology 统一 Tag `Project` 入图（**不以**旧 `ZhProject`/`EnProject` 为准）。字段级映射见 [`docs/mapping_project.md`](docs/mapping_project.md)。
+
+```bash
+# 1) MySQL 假数据（幂等）
+docker exec -i mysql mysql -uroot -p123456789 --default-character-set=utf8mb4 gkx_local \
+  < backend/schemas/seed/project_fake_data.sql
+
+# 2) 建 schema（CREATE SPACE IF NOT EXISTS dev + Tag/Edge）
+cd backend
+TRS_GRAPH_SPACE=dev uv run python -m script.init_project_schema
+
+# 3) ETL（Stage1–7）；演示建议只灌假数据前缀
+TRS_GRAPH_SPACE=dev uv run python -m script.load_project_graph --id-prefix fake-
+```
+
+验收 nGQL：
+
+```ngql
+USE dev;
+FETCH PROP ON Project "project_fake-zh-proj-001" YIELD properties(vertex);
+GO FROM "project_fake-zh-proj-001" OVER LEADS, FUNDED_BY YIELD dst(edge);
+GO FROM "project_fake-zh-proj-001" OVER HAS_KEYWORD YIELD dst(edge);
+GO FROM "project_fake-zh-proj-001" OVER OUTPUT_OF REVERSELY YIELD src(edge);
+```
+
 ## 环境变量
 
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
 | `TRS_GRAPH_BASE_URL` | `http://localhost:8090` | trs-graph-service 地址 |
-| `TRS_GRAPH_SPACE` | `entity_binding_demo` | 图空间（`get_techkg_client` 固定 `techkg`，忽略此项） |
+| `TRS_GRAPH_SPACE` | `entity_binding_demo` | 图空间（`get_techkg_client` 固定 `techkg`；项目入图脚本显式 `dev`） |
 | `TRS_GRAPH_API_KEY` | — | `X-API-Key` 认证（必填） |
 | `TRS_GRAPH_TIMEOUT` | `30` | 请求超时（秒） |
 | `MYSQL_HOST` / `MYSQL_PORT` | `127.0.0.1` / `3306` | MySQL 连接 |
-| `MYSQL_DATABASE` / `MYSQL_USERNAME` / `MYSQL_PASSWORD` | `techkg` / `root` / — | MySQL 库/账密 |
+| `MYSQL_DATABASE` / `MYSQL_USERNAME` / `MYSQL_PASSWORD` | `techkg` / `root` / — | MySQL 库/账密（项目入图默认 `gkx_local`） |
 | `LLM_API_KEY` | — | 智谱 GLM key；未配置时 #3 自动降级 |
 | `LLM_MODEL` | `glm-4.7-flash` | LLM 模型（推理模型，读 `message.content`） |
 | `LLM_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | LLM 接口地址 |

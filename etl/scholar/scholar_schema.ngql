@@ -1,0 +1,172 @@
+-- =====================================================
+-- 学者领域图 Schema (nGQL)
+-- 图空间：dev（TRSGraph / NebulaGraph 3.x 语法）
+-- 参考：ontology.md 本体设计、mapping.md §2 学者映射
+-- =====================================================
+
+USE dev;
+
+-- =====================================================
+-- 1. 扩展已有 Tag：Person
+-- =====================================================
+-- dev 空间已有字段：name_en, name_zh, email, source
+-- 学者领域追加以下字段：
+ALTER TAG Person ADD (
+    avatar           string  NULL,   -- 头像 URL（dwd_scholar.avatar）
+    scholar_org      string  NULL,   -- 所属机构中文名（dwd_scholar.scholar_org_name_zh）
+    bio_zh           string  NULL,   -- 中文简介（dwd_scholar.bio_zh）
+    paper_nums       int64   NULL,   -- 论文数量（dwd_scholar.paper_nums）
+    citation_nums    int64   NULL,   -- 被引次数（dwd_scholar.citation_nums）
+    h_index          int64   NULL,   -- H 指数（dwd_scholar.h_index）
+    scholar_status   int64   NULL,   -- 状态 0/1（dwd_scholar.status）
+    is_academician   string  NULL,   -- 是否院士（dwd_scholar_talent_flag.academician）
+    research_fields  string  NULL,   -- 研究方向（dwd_scholar_research_direction.fields）
+    -- 溯源属性块（ontology.md §5.1）
+    -- 工作经历（dwd_scholar.work_experience_*）
+    work_experience_date             string  NULL,
+    work_experience_institution_en   string  NULL,
+    work_experience_department_en    string  NULL,
+    work_experience_position_en      string  NULL,
+    work_experience_institution_zh   string  NULL,
+    work_experience_department_zh    string  NULL,
+    work_experience_position_zh      string  NULL,
+    -- 教育背景（dwd_scholar.education_background_*）
+    education_background_date        string  NULL,
+    education_background_institution_en string NULL,
+    education_background_degree_en   string  NULL,
+    education_background_institution_zh string NULL,
+    education_background_degree_zh   string  NULL,
+    -- 溯源属性块（ontology.md §5.1）
+    source_system    string  NULL,
+    source_table     string  NULL,
+    source_record_id string  NULL,
+    source_url       string  NULL,
+    ingest_batch     string  NULL,
+    ingest_time      string  NULL,
+    source_update_time string NULL
+);
+
+-- =====================================================
+-- 2. 扩展已有 Tag：Paper
+-- =====================================================
+-- dev 空间已有字段：title_en, title_zh, doi, publication_year,
+--   publication_date, language, document_type, publication_type,
+--   volume, issue, start_page, end_page, is_oa,
+--   source_url, source, created_time, updated_time
+-- 学者领域追加：
+ALTER TAG Paper ADD (
+    abstract_zh      string  NULL,   -- 中文摘要（dwd_scholar_papers.zh_abstract）
+    abstract_en      string  NULL,   -- 英文摘要（dwd_scholar_papers.en_abstract）
+    publication_name string  NULL,   -- 期刊/会议名（dwd_scholar_papers.publication_en_name）
+    -- 溯源属性块
+    source_system    string  NULL,
+    source_table     string  NULL,
+    source_record_id string  NULL,
+    ingest_batch     string  NULL,
+    ingest_time      string  NULL,
+    source_update_time string NULL
+);
+
+-- =====================================================
+-- 3. 新建 Tag：Organization
+-- =====================================================
+CREATE TAG IF NOT EXISTS Organization (
+    name_cn          string  NULL,   -- 中文机构名
+    name_en          string  NULL,   -- 英文机构名
+    org_kind         string  NULL,   -- 机构类别（scholar_affiliation 等）
+    source_system    string  NULL,
+    source_table     string  NULL,
+    source_record_id string  NULL,
+    ingest_batch     string  NULL,
+    ingest_time      string  NULL
+);
+
+-- =====================================================
+-- 4. 新建 Tag：DataSource（溯源，ontology.md §5.3）
+-- =====================================================
+CREATE TAG IF NOT EXISTS DataSource (
+    source_table     string  NULL,   -- 源表名，VID 格式 ds_{source_table}
+    table_cn_name    string  NULL,   -- 表中文名
+    tier             string  NULL,   -- 层级：raw / element
+    library          string  NULL    -- 数据库：gkx_element / gkx_local
+);
+
+-- =====================================================
+-- 5. 新建 Edge：COAUTHOR_WITH（mapping.md §2.4）
+-- Person -> Person
+-- =====================================================
+CREATE EDGE IF NOT EXISTS COAUTHOR_WITH (
+    co_paper_count   int64   NULL,   -- 合作论文数（dwd_scholar_coauthor.co_paper_count）
+    source_table     string  NULL,
+    source_record_id string  NULL,
+    ingest_batch     string  NULL,
+    ingest_time      string  NULL
+);
+
+-- =====================================================
+-- 6. 新建 Edge：SOURCED_FROM（ontology.md §5.3）
+-- Entity -> DataSource
+-- =====================================================
+CREATE EDGE IF NOT EXISTS SOURCED_FROM (
+    source_table     string  NULL,
+    source_record_id string  NULL,
+    ingest_batch     string  NULL,
+    ingest_time      string  NULL
+);
+
+-- =====================================================
+-- 7. 扩展已有 Edge：AFFILIATED_WITH（mapping.md §2.1）
+-- Person -> Organization
+-- =====================================================
+-- dev 空间已有字段：affiliation_name, source
+ALTER EDGE AFFILIATED_WITH ADD (
+    source_table     string  NULL,
+    source_record_id string  NULL,
+    ingest_batch     string  NULL,
+    ingest_time      string  NULL
+);
+
+-- =====================================================
+-- 8. 扩展已有 Edge：AUTHORED_BY（mapping.md §2.5）
+-- Paper -> Person
+-- =====================================================
+-- dev 空间已有字段：author_order, is_corresponding
+ALTER EDGE AUTHORED_BY ADD (
+    citations        int64   NULL,   -- 被引次数（dwd_scholar_paper_relation.citations）
+    source_table     string  NULL,
+    source_record_id string  NULL,
+    ingest_batch     string  NULL,
+    ingest_time      string  NULL
+);
+
+-- =====================================================
+-- 9. 预置 DataSource 顶点（对应 6 张学者领域源表）
+-- =====================================================
+INSERT VERTEX DataSource(source_table, table_cn_name, tier, library) VALUES
+    "ds_dwd_scholar":                    ("dwd_scholar",                    "学者",         "element", "gkx_element"),
+    "ds_dwd_scholar_talent_flag":        ("dwd_scholar_talent_flag",        "学者人才标识", "element", "gkx_element"),
+    "ds_dwd_scholar_research_direction": ("dwd_scholar_research_direction", "学者研究方向", "element", "gkx_element"),
+    "ds_dwd_scholar_papers":             ("dwd_scholar_papers",             "学者论文信息", "element", "gkx_element"),
+    "ds_dwd_scholar_paper_relation":     ("dwd_scholar_paper_relation",     "学者论文关系", "element", "gkx_element"),
+    "ds_dwd_scholar_coauthor":           ("dwd_scholar_coauthor",           "学者合作者关系", "element", "gkx_element");
+
+-- =====================================================
+-- 10. 验证查询示例
+-- =====================================================
+
+-- 查询学者及机构
+-- MATCH (p:Person)-[:AFFILIATED_WITH]->(o:Organization)
+-- WHERE p.Person.source_record_id STARTS WITH "kgtest"
+-- RETURN p.Person.name_zh, o.Organization.name_cn LIMIT 10;
+
+-- 查询合作网络
+-- GO FROM "person_kgtest_20260721_001" OVER COAUTHOR_WITH
+-- YIELD dst(edge) AS co_scholar, properties(edge).co_paper_count AS papers;
+
+-- 查询论文作者
+-- GO FROM "paper_990000001" OVER AUTHORED_BY
+-- YIELD dst(edge) AS author, properties(edge).citations AS cited;
+
+-- 溯源查询（实体 -> DataSource）
+-- GO FROM "person_kgtest_20260721_001" OVER SOURCED_FROM
+-- YIELD dst(edge) AS ds_vid, properties(edge).source_record_id AS record_id;

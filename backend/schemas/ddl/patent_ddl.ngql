@@ -1,0 +1,28 @@
+-- Patent基本实体Schema；属性名称和类型与原graph-schema/graph/ddl.ngql保持一致。
+CREATE TAG IF NOT EXISTS Patent (
+  publication_number string,
+  application_kind string,
+  country_code string,
+  country string,
+  title string,
+  abstract string,
+  language string,
+  status string,
+  granted_number string,
+  application_date string,
+  publication_date string,
+  anticipated_expiration date,
+  citation_nums int64,
+  cited_by_nums int64,
+  source_system string,
+  source_table string,
+  source_record_id string,
+  source_url string,
+  ingest_batch string,
+  ingest_time datetime,
+  source_update_time datetime
+);
+
+CREATE TAG INDEX IF NOT EXISTS idx_patent_pubnum ON Patent(publication_number(64));
+CREATE TAG INDEX IF NOT EXISTS idx_patent_country ON Patent(country_code(8));
+CREATE TAG INDEX IF NOT EXISTS idx_patent_vid ON Patent();

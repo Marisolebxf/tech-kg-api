@@ -1,7 +1,7 @@
 """将gkx_element专利基本属性装载到TRSGraph dev空间。
 
 本脚本只创建Patent节点，不创建任何Edge。MySQL使用专利ETL独立连接；
-TRSGraph写入统一复用infra.graph_db公共客户端的execute_write/execute_read。
+TRSGraph写入统一复用 infra.graph_db 公共客户端的 execute_write/execute_read。
 
 示例：
     TRS_GRAPH_SPACE=dev PATENT_MYSQL_PASSWORD=*** \
@@ -28,20 +28,49 @@ logger = logging.getLogger("script.load_patent_graph")
 
 DDL_FILE = Path(__file__).resolve().parents[1] / "schemas" / "ddl" / "patent_ddl.ngql"
 PATENT_PROPERTIES = (
+    "patent_id",
     "publication_number",
     "application_kind",
     "country_code",
     "country",
-    "title",
-    "abstract",
-    "language",
-    "status",
-    "granted_number",
-    "application_date",
+    "publication_kind",
     "publication_date",
+    "publication_year",
+    "publication_month",
+    "application_number",
+    "application_country",
+    "application_date",
+    "application_year",
+    "application_month",
+    "pct_application_number",
+    "pct_application_date",
+    "pct_national_stage_date",
+    "pct_publication_number",
+    "pct_publication_date",
+    "title_original",
+    "title_en",
+    "title_zh",
+    "abstract_original",
+    "abstract_en",
+    "abstract_zh",
+    "language",
+    "granted_number",
+    "main_ipcr",
+    "further_ipcr",
+    "main_cpc",
+    "further_cpc",
+    "keywords",
+    "status",
+    "grant_date",
+    "grant_year",
+    "grant_month",
     "anticipated_expiration",
+    "expiration_year",
     "citation_nums",
     "cited_by_nums",
+    "non_patent_citation_nums",
+    "patent_value",
+    "simple_family_number",
     "source_system",
     "source_table",
     "source_record_id",
@@ -53,37 +82,49 @@ PATENT_PROPERTIES = (
 
 SELECT_SQL = """
 SELECT
-  p.id,
-  p.patent_id,
-  p.publication_number,
-  p.application_kind,
-  p.country_code,
-  p.country,
-  p.language,
-  p.granted_number,
-  p.application_reference_3 AS application_date,
-  p.publication_reference_2 AS publication_date,
-  p.update_time,
-  t.title_localized,
-  t.title_zh,
-  a.abstract_localized,
-  a.abstract_zh,
+  p.id, p.patent_id, p.publication_number, p.application_kind, p.country_code, p.country,
+  JSON_UNQUOTE(JSON_EXTRACT(p.publication_reference, '$.kind')) AS publication_kind,
+  JSON_UNQUOTE(JSON_EXTRACT(p.publication_reference, '$.pbdt')) AS publication_date,
+  JSON_UNQUOTE(JSON_EXTRACT(p.publication_reference, '$.pbdt_year')) AS publication_year,
+  JSON_UNQUOTE(JSON_EXTRACT(p.publication_reference, '$.pbdt_month')) AS publication_month,
+  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apno')) AS application_number,
+  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.country')) AS application_country,
+  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apdt')) AS application_date,
+  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apdt_year')) AS application_year,
+  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apdt_month')) AS application_month,
+  JSON_UNQUOTE(JSON_EXTRACT(p.pct_or_regional_filing_data, '$.apno')) AS pct_application_number,
+  JSON_UNQUOTE(JSON_EXTRACT(p.pct_or_regional_filing_data, '$.apdt')) AS pct_application_date,
+  JSON_UNQUOTE(JSON_EXTRACT(p.pct_or_regional_filing_data, '$.etdt')) AS pct_national_stage_date,
+  JSON_UNQUOTE(JSON_EXTRACT(p.pct_or_regional_publishing_data, '$.pn')) AS pct_publication_number,
+  JSON_UNQUOTE(JSON_EXTRACT(p.pct_or_regional_publishing_data, '$.pbdt')) AS pct_publication_date,
+  p.language, p.granted_number,
+  p.main_classification_ipcr AS main_ipcr, p.further_classification_ipcr AS further_ipcr,
+  p.main_classification_cpc AS main_cpc, p.further_classification_cpc AS further_cpc,
+  p.keywords, p.value AS patent_value, p.update_time,
+  t.titles, t.title_localized, t.title_zh,
+  a.abstracts, a.abstract_localized, a.abstract_zh,
   l.status,
-  l.anticipated_expiration,
-  c.reference_cited AS citation_nums,
-  c.cited_by_nums
+  JSON_UNQUOTE(JSON_EXTRACT(l.dates_of_public_availability, '$.date')) AS grant_date,
+  JSON_UNQUOTE(JSON_EXTRACT(l.dates_of_public_availability, '$.year')) AS grant_year,
+  JSON_UNQUOTE(JSON_EXTRACT(l.dates_of_public_availability, '$.month')) AS grant_month,
+  l.anticipated_expiration, l.expiration_year,
+  c.reference_cited AS citation_nums, c.cited_by_nums,
+  c.non_patent_count AS non_patent_citation_nums,
+  f.simple_family_number
 FROM dwd_patent p
 LEFT JOIN dwd_patent_title t ON t.patent_id = p.patent_id
 LEFT JOIN dwd_patent_abstract a ON a.patent_id = p.patent_id
 LEFT JOIN dwd_patent_legal l ON l.patent_id = p.patent_id
 LEFT JOIN dwd_patent_cited c ON c.patent_id = p.patent_id
+LEFT JOIN dwd_patent_family f ON f.patent_id = p.patent_id
 ORDER BY p.id
 LIMIT %s OFFSET %s
 """
 
 
+
 def mysql_connection() -> pymysql.Connection:
-    """创建专利ETL独立MySQL连接，不使用项目MySQL公共能力。"""
+    """创建专利 ETL 独立 MySQL 连接，不使用项目 MySQL 公共能力。"""
     password = os.getenv("PATENT_MYSQL_PASSWORD")
     if password is None:
         raise RuntimeError("缺少PATENT_MYSQL_PASSWORD环境变量")
@@ -125,7 +166,7 @@ def init_schema() -> None:
 
 
 def localized_text(raw: Any, language: str, fallback: Any = "") -> str:
-    """兼容对象和旧多语言数组，提取指定语言文本。"""
+    """从 JSON 对象或旧多语言数组中提取指定语言文本。"""
     if raw is None:
         return str(fallback or "")
     value = raw
@@ -145,6 +186,42 @@ def localized_text(raw: Any, language: str, fallback: Any = "") -> str:
             if isinstance(item, dict) and item.get("language") == language:
                 return str(item.get("text") or "")
     return str(fallback or "")
+
+
+def first_localized_text(raw: Any, fallback: Any = "") -> str:
+    """提取多语言 JSON 中第一个非空文本。"""
+    if raw is None:
+        return str(fallback or "")
+    value = raw
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    if isinstance(value, dict):
+        for candidate in value.values():
+            if isinstance(candidate, list):
+                text = "\n".join(str(item) for item in candidate if item is not None)
+            else:
+                text = str(candidate or "")
+            if text:
+                return text
+    return str(fallback or "")
+
+
+def normalized_language(raw: Any) -> str:
+    """将 JSON 语言数组统一为逗号分隔字符串。"""
+    if raw is None:
+        return ""
+    value = raw
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    if isinstance(value, list):
+        return ",".join(str(item).strip() for item in value if str(item).strip())
+    return str(value)
 
 
 def ngql_string(value: Any) -> str:
@@ -173,29 +250,72 @@ def ngql_datetime(value: Any) -> str:
     return f"datetime({ngql_string(text)})"
 
 
+def ngql_int(value: Any) -> str:
+    if value is None or str(value).strip() == "":
+        return "0"
+    return str(int(value))
+
+
 def patent_payload(
     row: dict[str, Any], batch_id: str, ingest_time: datetime
 ) -> tuple[str, list[str]]:
     patent_id = str(row["patent_id"]).strip()
     if not patent_id:
         raise ValueError("patent_id为空")
-    title = localized_text(row.get("title_localized"), "zh", row.get("title_zh"))
-    abstract = localized_text(row.get("abstract_localized"), "zh", row.get("abstract_zh"))
+
+    title_original = first_localized_text(row.get("titles"), row.get("title_zh"))
+    title_en = localized_text(row.get("title_localized"), "en")
+    title_zh = str(row.get("title_zh") or "") or localized_text(row.get("titles"), "zh")
+    abstract_original = first_localized_text(row.get("abstracts"), row.get("abstract_zh"))
+    abstract_en = localized_text(row.get("abstract_localized"), "en")
+    abstract_zh = str(row.get("abstract_zh") or "") or localized_text(
+        row.get("abstracts"), "zh"
+    )
+
     values = [
+        ngql_string(patent_id),
         ngql_string(row.get("publication_number")),
         ngql_string(row.get("application_kind")),
         ngql_string(row.get("country_code")),
         ngql_string(row.get("country")),
-        ngql_string(title),
-        ngql_string(abstract),
-        ngql_string(row.get("language")),
-        ngql_string(row.get("status")),
-        ngql_string(row.get("granted_number")),
-        ngql_string(row.get("application_date")),
+        ngql_string(row.get("publication_kind")),
         ngql_string(row.get("publication_date")),
+        ngql_int(row.get("publication_year")),
+        ngql_string(row.get("publication_month")),
+        ngql_string(row.get("application_number")),
+        ngql_string(row.get("application_country")),
+        ngql_string(row.get("application_date")),
+        ngql_int(row.get("application_year")),
+        ngql_string(row.get("application_month")),
+        ngql_string(row.get("pct_application_number")),
+        ngql_string(row.get("pct_application_date")),
+        ngql_string(row.get("pct_national_stage_date")),
+        ngql_string(row.get("pct_publication_number")),
+        ngql_string(row.get("pct_publication_date")),
+        ngql_string(title_original),
+        ngql_string(title_en),
+        ngql_string(title_zh),
+        ngql_string(abstract_original),
+        ngql_string(abstract_en),
+        ngql_string(abstract_zh),
+        ngql_string(normalized_language(row.get("language"))),
+        ngql_string(row.get("granted_number")),
+        ngql_string(row.get("main_ipcr")),
+        ngql_string(row.get("further_ipcr")),
+        ngql_string(row.get("main_cpc")),
+        ngql_string(row.get("further_cpc")),
+        ngql_string(row.get("keywords")),
+        ngql_string(row.get("status")),
+        ngql_string(row.get("grant_date")),
+        ngql_int(row.get("grant_year")),
+        ngql_string(row.get("grant_month")),
         ngql_date(row.get("anticipated_expiration")),
-        str(int(row.get("citation_nums") or 0)),
-        str(int(row.get("cited_by_nums") or 0)),
+        ngql_int(row.get("expiration_year")),
+        ngql_int(row.get("citation_nums")),
+        ngql_int(row.get("cited_by_nums")),
+        ngql_int(row.get("non_patent_citation_nums")),
+        ngql_int(row.get("patent_value")),
+        ngql_string(row.get("simple_family_number")),
         ngql_string("gkx_element"),
         ngql_string("dwd_patent"),
         ngql_string(patent_id),

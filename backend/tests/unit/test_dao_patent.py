@@ -9,7 +9,8 @@ def _pat(patent_id, assignee, cpc):
     p = MagicMock()
     p.patent_id = patent_id
     p.first_current_assignee_name = assignee
-    p.classification_cpc = cpc
+    p.main_classification_cpc = cpc.get("main", [])
+    p.further_classification_cpc = cpc.get("add", [])
     return p
 
 

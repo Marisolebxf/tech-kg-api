@@ -1,73 +1,100 @@
-# 专利实体源表映射（第一阶段）
+# 专利数据到图谱的完整映射
 
-> 依据：`graph-schema/graph/mapping.md`第5章。  
-> 本阶段只映射Patent基本属性，不处理5.2—5.5的实体关系。
+数据源：2026-07-22 调整后的 gkx_element 七张专利表。
+当前执行范围：只装载 Patent 顶点和属性；后续边映射先设计、不执行。
 
-## 1. 装载粒度
+## 1. 七张表的职责
 
-- 主记录：`dwd_patent`每个`patent_id`生成一个Patent节点。
-- VID：`patent_{patent_id}`。
-- 关联方式：标题、摘要、法律状态和引用统计分表按`patent_id`左连接。
-- 当前数据量：主表2,000条；预期生成2,000个Patent节点。
-
-## 2. 字段级映射
-
-| 序号 | 源表 | 源字段/表达式 | 源类型 | 转换规则 | Patent目标 | 目标类型 | 备注 |
-|---:|---|---|---|---|---|---|---|
-| 1 | `dwd_patent` | `patent_id` | varchar(64) | `patent_`拼接原值 | VID | fixed string | 图节点主标识 |
-| 2 | `dwd_patent` | `publication_number` | varchar(64) | 原值 | `publication_number` | string | 原有属性 |
-| 3 | `dwd_patent` | `application_kind` | varchar(1) | 原值 | `application_kind` | string | 原有属性 |
-| 4 | `dwd_patent` | `country_code` | varchar(8) | 原值 | `country_code` | string | 原有属性 |
-| 5 | `dwd_patent` | `country` | varchar(20) | 原值 | `country` | string | 原有属性 |
-| 6 | `dwd_patent_title` | `title_localized` | varchar(1024) | 解析JSON并提取`$.zh`；缺失时回退`title_zh` | `title` | string | 修正旧版`.text`映射 |
-| 7 | `dwd_patent_abstract` | `abstract_localized` | text | 解析JSON并提取`$.zh`；缺失时回退`abstract_zh` | `abstract` | string | 修正旧版`.text`映射 |
-| 8 | `dwd_patent` | `language` | varchar(16) | 原值 | `language` | string | 原有属性 |
-| 9 | `dwd_patent_legal` | `status` | varchar(64) | 原值 | `status` | string | 旧文档误写为主表字段 |
-| 10 | `dwd_patent` | `granted_number` | varchar(64) | 原值 | `granted_number` | string | 原有属性 |
-| 11 | `dwd_patent` | `application_reference_3` | varchar(10) | 原值 | `application_date` | string | 旧文档JSON字段已拆列 |
-| 12 | `dwd_patent` | `publication_reference_2` | varchar(10) | 原值 | `publication_date` | string | 旧文档JSON字段已拆列 |
-| 13 | `dwd_patent_legal` | `anticipated_expiration` | varchar(10) | 合法日期转`date()` | `anticipated_expiration` | date | 旧文档未注明分表 |
-| 14 | `dwd_patent_cited` | `reference_cited` | int | 空值按0 | `citation_nums` | int64 | 旧字段名`citation_nums`不存在 |
-| 15 | `dwd_patent_cited` | `cited_by_nums` | int | 空值按0 | `cited_by_nums` | int64 | 原有属性 |
-| 16 | 固定值 | `gkx_element` | — | 固定值 | `source_system` | string | 标准溯源 |
-| 17 | 固定值 | `dwd_patent` | — | 固定值 | `source_table` | string | 标准溯源 |
-| 18 | `dwd_patent` | `patent_id` | varchar(64) | 原值 | `source_record_id` | string | 标准溯源 |
-| 19 | — | 无对应字段 | — | 空字符串 | `source_url` | string | 标准溯源 |
-| 20 | ETL | `batch_id` | — | 命令参数或自动生成 | `ingest_batch` | string | 标准溯源 |
-| 21 | ETL | 当前时间 | — | UTC+8时间转datetime | `ingest_time` | datetime | 标准溯源 |
-| 22 | `dwd_patent` | `update_time` | datetime | 原值 | `source_update_time` | datetime | 标准溯源 |
-
-## 3. 本阶段SQL关联
-
-```sql
-SELECT ...
-FROM dwd_patent p
-LEFT JOIN dwd_patent_title t ON t.patent_id = p.patent_id
-LEFT JOIN dwd_patent_abstract a ON a.patent_id = p.patent_id
-LEFT JOIN dwd_patent_legal l ON l.patent_id = p.patent_id
-LEFT JOIN dwd_patent_cited c ON c.patent_id = p.patent_id
-ORDER BY p.id
-LIMIT %s OFFSET %s;
-```
-
-## 4. 暂缓字段
-
-以下字段不丢弃，但本期不入图：
-
-| 字段组 | 来源 | 后续用途 |
+| 表 | 当前阶段 | 后续阶段 |
 |---|---|---|
-| 发明人 | `inventors`、`inventors_2` | Person/INVENTED_BY |
-| 申请人和权利人 | `applicants*`、`assignees*` | Organization/APPLIED_BY |
-| 引用明细 | `patent_citations`、`cited_by` | CITES/CITED_BY |
-| 关键词 | `keywords` | Keyword/HAS_KEYWORD |
-| 分类、PCT、优先权 | `dwd_patent`相关字段 | 后续扩展Patent属性或分类实体 |
-| 法律事件 | `dwd_patent_legal.legal_events` | 后续事件实体 |
-| 家族信息 | `dwd_patent_family` | 后续家族建模 |
-| 转移信息 | `dwd_patent_transfer` | 后续转移事件建模 |
-| 权利要求、说明书、图片 | 主表JSON字段 | 后续长文本/检索方案 |
+| dwd_patent | Patent 主键、书目、申请/PCT、分类和评价属性 | 展开发明人、申请人、权利人、代理、分类、关键词 |
+| dwd_patent_title | 三语标题属性 | 无新实体 |
+| dwd_patent_abstract | 三语摘要属性 | 可接全文检索 |
+| dwd_patent_legal | 当前法律状态、授权/到期快照 | 法律事件 Event |
+| dwd_patent_cited | 引用数量属性 | Patent 引用边及非专利文献边 |
+| dwd_patent_transfer | 当前不入 Patent | 转移 Event 和主体边 |
+| dwd_patent_family | 家族号属性 | PatentFamily 和成员/家族引用边 |
 
-## 5. 数据质量说明
+七表以 patent_id 连接；当前行数为 2000、2000、2000、2000、2000、100、2000。
 
-- 当前部分分类、代理、价值、PCT及转移字段为样例或推导数据，本期均未映射为Patent基本属性。
-- 本期映射的标题、摘要和日期采用当前数据库真实物理列，不使用旧版JSON列假设。
-- 关系相关字段将在后续扩展时逐字段补充。
+## 2. 粒度、VID 和关联
+
+- 一条 dwd_patent 生成一个 Patent。
+- VID 为 patent_{patent_id}，例如 patent_CN103073024B。
+- source_record_id 等于 patent_id。
+- title、abstract、legal、cited、family 按 patent_id 左连接。
+- 可选值缺失时字符串置空、数值置 0。
+
+## 3. 当前 50 个属性映射
+
+| 分组 | Patent 属性 | SQL 来源 |
+|---|---|---|
+| 标识 | patent_id、publication_number | 主表 |
+| 地域/类型 | application_kind、country_code、country | 主表 |
+| 公开 | publication_kind/date/year/month | publication_reference JSON |
+| 申请 | application_number/country/date/year/month | application_reference JSON |
+| PCT | pct_application_number/date、pct_national_stage_date | filing JSON |
+| PCT公开 | pct_publication_number/date | publishing JSON |
+| 标题 | title_original/en/zh | titles、title_localized.en、title_zh |
+| 摘要 | abstract_original/en/zh | abstracts、abstract_localized.en、abstract_zh |
+| 语言 | language | JSON 数组连接 |
+| 授权号 | granted_number | 主表 |
+| 分类快照 | main_ipcr、further_ipcr、main_cpc、further_cpc | 主表 |
+| 关键词快照 | keywords | 主表 JSON 序列化 |
+| 法律快照 | status、grant_date/year/month、anticipated_expiration、expiration_year | legal |
+| 统计/评价 | citation_nums、cited_by_nums、non_patent_citation_nums、patent_value | cited + 主表 |
+| 家族 | simple_family_number | family |
+| 溯源 | 7 个标准字段 | 固定值、ETL 参数、update_time |
+
+装载 SQL 不再读取旧版 _2/_3 列，嵌套值统一用 JSON_EXTRACT。
+
+## 4. 后续实体
+
+| 实体 | VID建议 | 来源 |
+|---|---|---|
+| Person | 已有人员 ID 优先，否则 person_{name_hash} 桩 | inventors、agents、examiners、自然人申请人/权利人 |
+| Organization | 机构 ID/信用代码优先，否则 org_{name_hash} 桩 | applicants、assignees、agency |
+| Keyword | keyword_{normalized_hash} | keywords |
+| Classification | class_{scheme}_{code} | IPCR/CPC/LOC/FI/UPC/F-term |
+| PatentFamily | patent_family_{simple_family_number} | family |
+| PatentApplication | patent_app_{country}_{apno} | priority_filings、related_documents |
+| Event | event_{type}_{source_id}_{sequence} | legal_events、PRS、transfer |
+| Document | DOI/标准号优先，否则内容哈希 | non_patent_citations |
+
+名称哈希顶点只是待消歧桩，后续通过对齐或 SAME_AS 与既有 Person/Organization 合并。
+
+## 5. 后续边和边属性
+
+| Edge | 方向 | 来源 | Edge 属性 |
+|---|---|---|---|
+| INVENTED_BY | Patent→Person | inventors | sequence |
+| APPLIED_BY | Patent→主体 | applicants | sequence、role |
+| OWNED_BY | Patent→主体 | assignees | sequence、is_current |
+| REPRESENTED_BY | Patent→Person | agents | sequence |
+| HANDLED_BY | Patent→Organization | agency | sequence |
+| EXAMINED_BY | Patent→Person | examiners | level、department |
+| CLAIMS_PRIORITY_TO | Patent→PatentApplication | priority_filings | sequence、lang、country、apdt、kind |
+| RELATED_DOCUMENT | Patent→申请/专利 | related_documents | date、country、relation_type |
+| CITES | Patent→Patent | patent_citations/cited_by | citation_date、country、region、kind |
+| CITES_NON_PATENT | Patent→Document | non_patent_citations | citation_date |
+| HAS_KEYWORD | Patent→Keyword | keywords | language、source |
+| CLASSIFIED_AS | Patent→Classification | 分类字段 | scheme、is_main、sequence |
+| MEMBER_OF_FAMILY | Patent→PatentFamily | family | country、status、application_date |
+| HAS_LEGAL_EVENT | Patent→Event | legal_events/PRS | date、code |
+| HAS_TRANSFER | Patent→Event | transfer | effective_date、country |
+| TRANSFER_FROM/TO | Event→主体 | transfer_before/after | sequence |
+
+每条边追加 source_table、source_record_id、ingest_batch、ingest_time。
+
+## 6. 不进入图属性
+
+claims、description、figures、完整法律事件和完整非专利引用文本保留在 MySQL/检索层。它们没有丢失，只是不复制到亿级图存储。
+
+## 7. 数据质量和增量规则
+
+1. patent_id 非空且唯一，七表以它关联。
+2. JSON 数组空值统一为 []，JSON 对象使用通知表规定的键名。
+3. 日期为 YYYY-MM-DD，年份为整数，年月为 YYYY-MM。
+4. 重跑同一专利用同 VID 覆盖；source_update_time 判断增量。
+5. 建边前先做 Person、Organization、Patent 引用对象规范化和消歧。
+6. 引用或家族成员不在主表时只建最小桩顶点，不伪造业务属性。

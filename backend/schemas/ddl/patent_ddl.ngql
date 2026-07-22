@@ -1,19 +1,49 @@
--- Patent基本实体Schema；属性名称和类型与原graph-schema/graph/ddl.ngql保持一致。
+-- Patent 实体 Schema（2026-07-22 全球专利要素库确认版）。
+-- 本阶段只落 Patent 固有属性；人员、机构、引用、转移、家族成员等关系数据留待边阶段。
 CREATE TAG IF NOT EXISTS Patent (
+  patent_id string,
   publication_number string,
   application_kind string,
   country_code string,
   country string,
-  title string,
-  abstract string,
-  language string,
-  status string,
-  granted_number string,
-  application_date string,
+  publication_kind string,
   publication_date string,
+  publication_year int64,
+  publication_month string,
+  application_number string,
+  application_country string,
+  application_date string,
+  application_year int64,
+  application_month string,
+  pct_application_number string,
+  pct_application_date string,
+  pct_national_stage_date string,
+  pct_publication_number string,
+  pct_publication_date string,
+  title_original string,
+  title_en string,
+  title_zh string,
+  abstract_original string,
+  abstract_en string,
+  abstract_zh string,
+  language string,
+  granted_number string,
+  main_ipcr string,
+  further_ipcr string,
+  main_cpc string,
+  further_cpc string,
+  keywords string,
+  status string,
+  grant_date string,
+  grant_year int64,
+  grant_month string,
   anticipated_expiration date,
+  expiration_year int64,
   citation_nums int64,
   cited_by_nums int64,
+  non_patent_citation_nums int64,
+  patent_value int64,
+  simple_family_number string,
   source_system string,
   source_table string,
   source_record_id string,
@@ -23,6 +53,5 @@ CREATE TAG IF NOT EXISTS Patent (
   source_update_time datetime
 );
 
-CREATE TAG INDEX IF NOT EXISTS idx_patent_pubnum ON Patent(publication_number(64));
-CREATE TAG INDEX IF NOT EXISTS idx_patent_country ON Patent(country_code(8));
-CREATE TAG INDEX IF NOT EXISTS idx_patent_vid ON Patent();
+-- 空 Tag 索引用于 MATCH/LOOKUP 全量枚举和统计；VID 自身已被 TRSGraph 原生索引。
+CREATE TAG INDEX IF NOT EXISTS idx_patent_scan ON Patent();

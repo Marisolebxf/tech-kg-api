@@ -1,20 +1,13 @@
-"""将gkx_element专利基本属性装载到TRSGraph dev空间。
-
-本脚本只创建Patent节点，不创建任何Edge。MySQL使用专利ETL独立连接；
-TRSGraph写入统一复用 infra.graph_db 公共客户端的 execute_write/execute_read。
-
-示例：
-    TRS_GRAPH_SPACE=dev PATENT_MYSQL_PASSWORD=*** \
-      uv run python -m script.load_patent_graph --init-schema --load --verify
-"""
+"""从 gkx_element 映射并装载 Patent、Keyword 和 HAS_KEYWORD 到 dev。"""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
-import time
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -22,396 +15,213 @@ from typing import Any
 import pymysql
 from pymysql.cursors import DictCursor
 
+# 流程：MySQL读取 → 字段映射 → 生成nGQL → 公共图客户端写入dev。
 from infra.graph_db import get_trs_graph_client
 
-logger = logging.getLogger("script.load_patent_graph")
+logger = logging.getLogger(__name__)
 
-DDL_FILE = Path(__file__).resolve().parents[1] / "schemas" / "ddl" / "patent_ddl.ngql"
+# 1. Patent目标属性
 PATENT_PROPERTIES = (
-    "patent_id",
-    "publication_number",
-    "application_kind",
-    "country_code",
-    "country",
-    "publication_kind",
-    "publication_date",
-    "publication_year",
-    "publication_month",
-    "application_number",
-    "application_country",
-    "application_date",
-    "application_year",
-    "application_month",
-    "pct_application_number",
-    "pct_application_date",
-    "pct_national_stage_date",
-    "pct_publication_number",
-    "pct_publication_date",
-    "title_original",
-    "title_en",
-    "title_zh",
-    "abstract_original",
-    "abstract_en",
-    "abstract_zh",
-    "language",
-    "granted_number",
-    "main_ipcr",
-    "further_ipcr",
-    "main_cpc",
-    "further_cpc",
-    "keywords",
-    "status",
-    "grant_date",
-    "grant_year",
-    "grant_month",
-    "anticipated_expiration",
-    "expiration_year",
-    "citation_nums",
-    "cited_by_nums",
-    "non_patent_citation_nums",
-    "patent_value",
-    "simple_family_number",
-    "source_system",
-    "source_table",
-    "source_record_id",
-    "source_url",
-    "ingest_batch",
-    "ingest_time",
-    "source_update_time",
+    "patent_id", "publication_number", "application_number", "application_kind",
+    "country_code", "country", "publication_date", "application_date",
+    "granted_number", "grant_date", "status", "anticipated_expiration",
+    "title_original", "title_en", "title_zh", "abstract_zh", "language",
+    "main_ipcr", "further_ipcr", "main_cpc", "further_cpc", "keywords",
+    "citation_nums", "cited_by_nums", "patent_value", "simple_family_number",
+    "source_system", "source_table", "source_record_id", "source_url",
+    "ingest_batch", "ingest_time", "source_update_time",
 )
 
-SELECT_SQL = """
-SELECT
-  p.id, p.patent_id, p.publication_number, p.application_kind, p.country_code, p.country,
-  JSON_UNQUOTE(JSON_EXTRACT(p.publication_reference, '$.kind')) AS publication_kind,
-  JSON_UNQUOTE(JSON_EXTRACT(p.publication_reference, '$.pbdt')) AS publication_date,
-  JSON_UNQUOTE(JSON_EXTRACT(p.publication_reference, '$.pbdt_year')) AS publication_year,
-  JSON_UNQUOTE(JSON_EXTRACT(p.publication_reference, '$.pbdt_month')) AS publication_month,
-  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apno')) AS application_number,
-  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.country')) AS application_country,
-  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apdt')) AS application_date,
-  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apdt_year')) AS application_year,
-  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apdt_month')) AS application_month,
-  JSON_UNQUOTE(JSON_EXTRACT(p.pct_or_regional_filing_data, '$.apno')) AS pct_application_number,
-  JSON_UNQUOTE(JSON_EXTRACT(p.pct_or_regional_filing_data, '$.apdt')) AS pct_application_date,
-  JSON_UNQUOTE(JSON_EXTRACT(p.pct_or_regional_filing_data, '$.etdt')) AS pct_national_stage_date,
-  JSON_UNQUOTE(JSON_EXTRACT(p.pct_or_regional_publishing_data, '$.pn')) AS pct_publication_number,
-  JSON_UNQUOTE(JSON_EXTRACT(p.pct_or_regional_publishing_data, '$.pbdt')) AS pct_publication_date,
-  p.language, p.granted_number,
-  p.main_classification_ipcr AS main_ipcr, p.further_classification_ipcr AS further_ipcr,
-  p.main_classification_cpc AS main_cpc, p.further_classification_cpc AS further_cpc,
-  p.keywords, p.value AS patent_value, p.update_time,
-  t.titles, t.title_localized, t.title_zh,
-  a.abstracts, a.abstract_localized, a.abstract_zh,
-  l.status,
-  JSON_UNQUOTE(JSON_EXTRACT(l.dates_of_public_availability, '$.date')) AS grant_date,
-  JSON_UNQUOTE(JSON_EXTRACT(l.dates_of_public_availability, '$.year')) AS grant_year,
-  JSON_UNQUOTE(JSON_EXTRACT(l.dates_of_public_availability, '$.month')) AS grant_month,
-  l.anticipated_expiration, l.expiration_year,
-  c.reference_cited AS citation_nums, c.cited_by_nums,
-  c.non_patent_count AS non_patent_citation_nums,
-  f.simple_family_number
-FROM dwd_patent p
-LEFT JOIN dwd_patent_title t ON t.patent_id = p.patent_id
-LEFT JOIN dwd_patent_abstract a ON a.patent_id = p.patent_id
-LEFT JOIN dwd_patent_legal l ON l.patent_id = p.patent_id
-LEFT JOIN dwd_patent_cited c ON c.patent_id = p.patent_id
-LEFT JOIN dwd_patent_family f ON f.patent_id = p.patent_id
-ORDER BY p.id
-LIMIT %s OFFSET %s
-"""
-
+# 2. MySQL数据读取
+SQL_FILE = Path(__file__).resolve().parents[1] / "dao" / "sql" / "patent_entity_extract.sql"
+SELECT_SQL = SQL_FILE.read_text(encoding="utf-8")
 
 
 def mysql_connection() -> pymysql.Connection:
-    """创建专利 ETL 独立 MySQL 连接，不使用项目 MySQL 公共能力。"""
+    """连接MySQL数据源。"""
     password = os.getenv("PATENT_MYSQL_PASSWORD")
     if password is None:
-        raise RuntimeError("缺少PATENT_MYSQL_PASSWORD环境变量")
+        raise RuntimeError("缺少 PATENT_MYSQL_PASSWORD 环境变量")
     return pymysql.connect(
         host=os.getenv("PATENT_MYSQL_HOST", "127.0.0.1"),
         port=int(os.getenv("PATENT_MYSQL_PORT", "3306")),
         user=os.getenv("PATENT_MYSQL_USERNAME", "root"),
         password=password,
         database=os.getenv("PATENT_MYSQL_DATABASE", "gkx_element"),
-        charset="utf8mb4",
-        cursorclass=DictCursor,
-        autocommit=True,
+        charset="utf8mb4", cursorclass=DictCursor, autocommit=True,
     )
 
 
-def split_ngql(content: str) -> list[str]:
-    """按分号拆分当前简单DDL，并忽略整行注释。"""
-    clean_lines = [line for line in content.splitlines() if not line.lstrip().startswith("--")]
-    return [part.strip() for part in "\n".join(clean_lines).split(";") if part.strip()]
+# 3. 字段解析与映射
+def parse_json(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
 
 
-def init_schema() -> None:
-    graph = get_trs_graph_client()
-    for statement in split_ngql(DDL_FILE.read_text(encoding="utf-8")):
-        last_error: Exception | None = None
-        for attempt in range(1, 6):
-            try:
-                graph.execute_write(statement)
-                last_error = None
-                break
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
-                if attempt == 5:
-                    break
-                time.sleep(attempt)
-        if last_error is not None:
-            raise last_error
-    logger.info("Patent Schema初始化完成")
-
-
-def localized_text(raw: Any, language: str, fallback: Any = "") -> str:
-    """从 JSON 对象或旧多语言数组中提取指定语言文本。"""
-    if raw is None:
-        return str(fallback or "")
-    value = raw
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except json.JSONDecodeError:
-            return value
-    if isinstance(value, dict):
-        candidate = value.get(language)
-        if isinstance(candidate, list):
-            return "\n".join(str(item) for item in candidate)
-        if candidate is not None:
-            return str(candidate)
+def original_text(value: Any) -> str:
+    value = parse_json(value)
     if isinstance(value, list):
         for item in value:
-            if isinstance(item, dict) and item.get("language") == language:
-                return str(item.get("text") or "")
-    return str(fallback or "")
+            if isinstance(item, dict) and (text := item.get("text") or item.get("content")):
+                return "\n".join(map(str, text)) if isinstance(text, list) else str(text)
+    return str(value or "")
 
 
-def first_localized_text(raw: Any, fallback: Any = "") -> str:
-    """提取多语言 JSON 中第一个非空文本。"""
-    if raw is None:
-        return str(fallback or "")
-    value = raw
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except json.JSONDecodeError:
-            return value
-    if isinstance(value, dict):
-        for candidate in value.values():
-            if isinstance(candidate, list):
-                text = "\n".join(str(item) for item in candidate if item is not None)
-            else:
-                text = str(candidate or "")
-            if text:
-                return text
-    return str(fallback or "")
+def normalized_language(value: Any) -> str:
+    value = parse_json(value)
+    return ",".join(map(str, value)) if isinstance(value, list) else str(value or "")
 
 
-def normalized_language(raw: Any) -> str:
-    """将 JSON 语言数组统一为逗号分隔字符串。"""
-    if raw is None:
-        return ""
-    value = raw
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except json.JSONDecodeError:
-            return value
-    if isinstance(value, list):
-        return ",".join(str(item).strip() for item in value if str(item).strip())
-    return str(value)
+def keyword_values(value: Any) -> list[str]:
+    value = parse_json(value)
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if isinstance(item, dict):
+            item = item.get("zhName") or item.get("enName") or item.get("name") or ""
+        keyword = " ".join(unicodedata.normalize("NFKC", str(item)).strip().split())
+        key = keyword.casefold()
+        if keyword and key not in seen:
+            seen.add(key)
+            result.append(keyword)
+    return result
+
+
+def keyword_vid(keyword: str) -> str:
+    normalized = keyword.casefold().encode("utf-8")
+    return f"keyword_{hashlib.md5(normalized).hexdigest()}"  # noqa: S324
+
+
+def json_snapshot(value: Any) -> str:
+    value = parse_json(value)
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":")) if value is not None else ""
 
 
 def ngql_string(value: Any) -> str:
     text = "" if value is None else str(value)
-    escaped = (
-        text.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\r", "\\r")
-        .replace("\n", "\\n")
-        .replace("\t", "\\t")
-    )
+    escaped = (text.replace("\\", "\\\\").replace('"', '\\"')
+               .replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t"))
     return f'"{escaped}"'
 
 
 def ngql_date(value: Any) -> str:
-    if value is None or str(value).strip() == "":
-        return 'date("1970-01-01")'
-    return f"date({ngql_string(str(value)[:10])})"
+    return f"date({ngql_string(str(value)[:10])})" if value else "NULL"
 
 
 def ngql_datetime(value: Any) -> str:
-    if isinstance(value, datetime):
-        text = value.strftime("%Y-%m-%dT%H:%M:%S")
-    else:
-        text = str(value or "1970-01-01 00:00:00").replace(" ", "T")[:19]
+    if value is None:
+        return "NULL"
+    text = value.strftime("%Y-%m-%dT%H:%M:%S") if isinstance(value, datetime) else str(value).replace(" ", "T")[:19]
     return f"datetime({ngql_string(text)})"
 
 
 def ngql_int(value: Any) -> str:
-    if value is None or str(value).strip() == "":
-        return "0"
-    return str(int(value))
+    return str(int(value or 0))
 
 
-def patent_payload(
-    row: dict[str, Any], batch_id: str, ingest_time: datetime
-) -> tuple[str, list[str]]:
-    patent_id = str(row["patent_id"]).strip()
+def patent_payload(row: dict[str, Any], batch_id: str, ingest_time: datetime) -> tuple[str, list[str]]:
+    """将一条MySQL记录映射为Patent VID和33个属性。"""
+    patent_id = str(row.get("patent_id") or "").strip()
     if not patent_id:
-        raise ValueError("patent_id为空")
-
-    title_original = first_localized_text(row.get("titles"), row.get("title_zh"))
-    title_en = localized_text(row.get("title_localized"), "en")
-    title_zh = str(row.get("title_zh") or "") or localized_text(row.get("titles"), "zh")
-    abstract_original = first_localized_text(row.get("abstracts"), row.get("abstract_zh"))
-    abstract_en = localized_text(row.get("abstract_localized"), "en")
-    abstract_zh = str(row.get("abstract_zh") or "") or localized_text(
-        row.get("abstracts"), "zh"
-    )
-
+        raise ValueError("patent_id 为空")
     values = [
-        ngql_string(patent_id),
-        ngql_string(row.get("publication_number")),
-        ngql_string(row.get("application_kind")),
-        ngql_string(row.get("country_code")),
-        ngql_string(row.get("country")),
-        ngql_string(row.get("publication_kind")),
-        ngql_string(row.get("publication_date")),
-        ngql_int(row.get("publication_year")),
-        ngql_string(row.get("publication_month")),
-        ngql_string(row.get("application_number")),
-        ngql_string(row.get("application_country")),
-        ngql_string(row.get("application_date")),
-        ngql_int(row.get("application_year")),
-        ngql_string(row.get("application_month")),
-        ngql_string(row.get("pct_application_number")),
-        ngql_string(row.get("pct_application_date")),
-        ngql_string(row.get("pct_national_stage_date")),
-        ngql_string(row.get("pct_publication_number")),
-        ngql_string(row.get("pct_publication_date")),
-        ngql_string(title_original),
-        ngql_string(title_en),
-        ngql_string(title_zh),
-        ngql_string(abstract_original),
-        ngql_string(abstract_en),
-        ngql_string(abstract_zh),
-        ngql_string(normalized_language(row.get("language"))),
-        ngql_string(row.get("granted_number")),
-        ngql_string(row.get("main_ipcr")),
-        ngql_string(row.get("further_ipcr")),
-        ngql_string(row.get("main_cpc")),
-        ngql_string(row.get("further_cpc")),
-        ngql_string(row.get("keywords")),
-        ngql_string(row.get("status")),
-        ngql_string(row.get("grant_date")),
-        ngql_int(row.get("grant_year")),
-        ngql_string(row.get("grant_month")),
-        ngql_date(row.get("anticipated_expiration")),
-        ngql_int(row.get("expiration_year")),
-        ngql_int(row.get("citation_nums")),
-        ngql_int(row.get("cited_by_nums")),
-        ngql_int(row.get("non_patent_citation_nums")),
-        ngql_int(row.get("patent_value")),
-        ngql_string(row.get("simple_family_number")),
-        ngql_string("gkx_element"),
-        ngql_string("dwd_patent"),
-        ngql_string(patent_id),
-        ngql_string(""),
-        ngql_string(batch_id),
-        ngql_datetime(ingest_time),
-        ngql_datetime(row.get("update_time")),
+        ngql_string(patent_id), ngql_string(row.get("publication_number")),
+        ngql_string(row.get("application_number")), ngql_string(row.get("application_kind")),
+        ngql_string(row.get("country_code")), ngql_string(row.get("country")),
+        ngql_date(row.get("publication_date")), ngql_date(row.get("application_date")),
+        ngql_string(row.get("granted_number")), ngql_date(row.get("grant_date")),
+        ngql_string(row.get("status")), ngql_date(row.get("anticipated_expiration")),
+        ngql_string(original_text(row.get("titles"))), ngql_string(row.get("title_en")),
+        ngql_string(row.get("title_zh")), ngql_string(row.get("abstract_zh")),
+        ngql_string(normalized_language(row.get("language"))), ngql_string(row.get("main_ipcr")),
+        ngql_string(json_snapshot(row.get("further_ipcr"))), ngql_string(row.get("main_cpc")),
+        ngql_string(json_snapshot(row.get("further_cpc"))), ngql_string(json_snapshot(row.get("keywords"))),
+        ngql_int(row.get("citation_nums")), ngql_int(row.get("cited_by_nums")),
+        ngql_int(row.get("patent_value")), ngql_string(row.get("simple_family_number")),
+        ngql_string("gkx_element"), ngql_string("dwd_patent"), ngql_string(patent_id), ngql_string(""),
+        ngql_string(batch_id), ngql_datetime(ingest_time), ngql_datetime(row.get("update_time")),
     ]
     return f"patent_{patent_id}", values
 
 
-def insert_statement(payloads: list[tuple[str, list[str]]]) -> str:
-    rows = ",\n".join(f"{ngql_string(vid)}:({', '.join(values)})" for vid, values in payloads)
-    return f"INSERT VERTEX Patent({', '.join(PATENT_PROPERTIES)}) VALUES\n{rows};"
+# 4. nGQL构造：Patent、Keyword和HAS_KEYWORD
+def patent_statement(payloads: list[tuple[str, list[str]]]) -> str:
+    """生成Patent顶点nGQL。"""
+    rows = ",".join(f"{ngql_string(vid)}:({','.join(values)})" for vid, values in payloads)
+    return f"INSERT VERTEX Patent({','.join(PATENT_PROPERTIES)}) VALUES {rows};"
 
 
-def fetch_batch(connection: pymysql.Connection, limit: int, offset: int) -> list[dict[str, Any]]:
-    with connection.cursor() as cursor:
-        cursor.execute(SELECT_SQL, (limit, offset))
-        return list(cursor.fetchall())
+def keyword_statements(rows: list[dict[str, Any]]) -> tuple[str, str]:
+    """生成Keyword顶点和HAS_KEYWORD边nGQL。"""
+    vertices: dict[str, str] = {}
+    edges: set[tuple[str, str]] = set()
+    for row in rows:
+        patent_vid = f"patent_{str(row['patent_id']).strip()}"
+        for keyword in keyword_values(row.get("keywords")):
+            vid = keyword_vid(keyword)
+            vertices[vid] = keyword
+            edges.add((patent_vid, vid))
+    vertex_ngql = ""
+    edge_ngql = ""
+    if vertices:
+        values = ",".join(f"{ngql_string(vid)}:({ngql_string(word)})" for vid, word in vertices.items())
+        vertex_ngql = f"INSERT VERTEX Keyword(keyword) VALUES {values};"
+    if edges:
+        values = ",".join(f"{ngql_string(src)}->{ngql_string(dst)}:()" for src, dst in edges)
+        edge_ngql = f"INSERT EDGE HAS_KEYWORD() VALUES {values};"
+    return vertex_ngql, edge_ngql
 
 
-def load_patents(
-    *, batch_size: int, offset: int, limit: int | None, batch_id: str, dry_run: bool
-) -> int:
-    graph = None if dry_run else get_trs_graph_client()
+# 5. 主流程：读取MySQL并通过公共图客户端写入dev
+def load_patents(batch_size: int, batch_id: str) -> tuple[int, int, int]:
+    os.environ["TRS_GRAPH_SPACE"] = "dev"
+    graph = get_trs_graph_client()  # 公共图数据库能力
     connection = mysql_connection()
+    loaded = keyword_count = edge_count = 0
     ingest_time = datetime.now().replace(microsecond=0)
-    loaded = 0
-    current_offset = offset
     try:
-        while limit is None or loaded < limit:
-            requested = batch_size if limit is None else min(batch_size, limit - loaded)
-            rows = fetch_batch(connection, requested, current_offset)
+        while True:
+            with connection.cursor() as cursor:
+                # MySQL按批读取
+                cursor.execute(SELECT_SQL, (batch_size, loaded))
+                rows = list(cursor.fetchall())
             if not rows:
                 break
-            payloads = [patent_payload(row, batch_id, ingest_time) for row in rows]
-            statement = insert_statement(payloads)
-            if dry_run:
-                logger.info(
-                    "dry-run批次 offset=%d rows=%d nGQL字符=%d",
-                    current_offset,
-                    len(rows),
-                    len(statement),
-                )
-            else:
-                assert graph is not None
-                graph.execute_write(statement)
+            for start in range(0, len(rows), 10):
+                group = rows[start:start + 10]
+                # 写入Patent
+                graph.execute_write(patent_statement([
+                    patent_payload(row, batch_id, ingest_time) for row in group
+                ]))
+                vertex_ngql, edge_ngql = keyword_statements(group)
+                if vertex_ngql:
+                    graph.execute_write(vertex_ngql)  # 写入Keyword
+                if edge_ngql:
+                    graph.execute_write(edge_ngql)  # 写入HAS_KEYWORD
+                references = sum(len(keyword_values(row.get("keywords"))) for row in group)
+                keyword_count += references
+                edge_count += references
             loaded += len(rows)
-            current_offset += len(rows)
-            logger.info("Patent装载进度：%d", loaded)
-            if len(rows) < requested:
-                break
+            logger.info("装载进度 Patent=%d", loaded)
     finally:
         connection.close()
-    return loaded
-
-
-def verify() -> list[dict[str, Any]]:
-    graph = get_trs_graph_client()
-    result = graph.execute_read("MATCH (p:Patent) RETURN count(p) AS patent_count")
-    logger.info("dev空间Patent统计：%s", result.records)
-    return result.records
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="装载Patent基本实体到TRSGraph")
-    parser.add_argument("--init-schema", action="store_true")
-    parser.add_argument("--load", action="store_true")
-    parser.add_argument("--verify", action="store_true")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--batch-size", type=int, default=20)
-    parser.add_argument("--offset", type=int, default=0)
-    parser.add_argument("--limit", type=int)
-    parser.add_argument("--batch-id", default=f"PATENT_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-    return parser.parse_args()
+    return loaded, keyword_count, edge_count
 
 
 def main() -> None:
-    args = parse_args()
-    if not (args.init_schema or args.load or args.verify):
-        raise SystemExit("至少指定--init-schema、--load或--verify之一")
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    if args.init_schema:
-        init_schema()
-    if args.load:
-        count = load_patents(
-            batch_size=args.batch_size,
-            offset=args.offset,
-            limit=args.limit,
-            batch_id=args.batch_id,
-            dry_run=args.dry_run,
-        )
-        logger.info("本次处理Patent节点：%d", count)
-    if args.verify and not args.dry_run:
-        verify()
+    parser = argparse.ArgumentParser(description="从 MySQL 装载专利图数据到 dev")
+    parser.add_argument("--batch-size", type=int, default=50)
+    parser.add_argument("--batch-id", default=f"PATENT_{datetime.now():%Y%m%d_%H%M%S}")
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO)
+    patent_count, keyword_count, edge_count = load_patents(args.batch_size, args.batch_id)
+    logger.info("完成 Patent=%d，Keyword引用=%d，HAS_KEYWORD=%d", patent_count, keyword_count, edge_count)
 
 
 if __name__ == "__main__":

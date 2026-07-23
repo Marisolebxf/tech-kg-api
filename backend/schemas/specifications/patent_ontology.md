@@ -1,102 +1,137 @@
-# 专利实体本体设计
+# 专利本体设计（第一阶段）
 
-依据：2026-07-22 业务确认的全球专利要素库表结构。
-当前落地范围：dev 只创建 Patent 顶点及其固有属性，不创建专利相关 Edge；本文同时规划后续边阶段。
+## 1. 业务目标
 
-## 1. 建模原则
+专利本体用于支撑以下业务：
 
-1. dwd_patent.patent_id 是七张表的稳定关联主键，VID 统一为 patent_{patent_id}。
-2. 专利自身稳定、单值或适合检索的快照信息作为 Patent 属性。
-3. 人员、机构、关键词、分类、家族、事件和引用专利具有独立身份或可复用，后续建为顶点并通过边连接。
-4. JSON 数组后续逐元素展开；当前只对少量分类、关键词保留序列化检索快照。
-5. 权利要求、说明书、图片和完整法律事件体量大，保留在 MySQL/全文检索层，通过 patent_id 回查。
-6. 统计值、法律状态和第一责任主体是可变快照；历史变化后续由 Event 表达。
+1. 专家专利成果查询：查询专家发明、共同发明的专利。
+2. 专家直接关系：以共同专利作为专家合作的直接证据。
+3. 专家间接关系：通过专利、申请机构、权利机构和关键词发现关联路径。
+4. 两点合作成果：汇总两名专家的共同专利、合作次数、时间和成果影响力。
+5. 专家—企业关系：识别专家与专利申请机构、当前权利机构之间的成果合作。
+6. 专家技术方向：利用专利关键词、IPC/CPC分类分析专家研究方向。
 
-## 2. 当前实体
+专利数据不能单独证明同事或校友关系。同事关系需要任职经历，校友关系需要教育经历。
 
-| Tag | 来源 | VID | 粒度 |
+## 2. 模型概览
+
+- 图空间：`dev`（正式环境迁移到统一 `gkx_graph`）。
+- 专利Tag：`Patent`。
+- Patent VID：`patent_{patent_id}`。
+- 实体类型沿用全域本体，不因当前专利表缺少关联字段而删除。
+- 专利业务涉及6类既有实体；基于已确认的专利、项目和产业链数据可落地7类必要事实关系和33个Patent属性。
+
+## 3. 实体类型
+
+| Tag | 数据来源 | VID | 在专利业务中的作用 |
 |---|---|---|---|
-| Patent | dwd_patent 联合 title、abstract、legal、cited、family | patent_{patent_id} | 一项专利记录一个顶点 |
+| `Patent` | `dwd_patent`及六张专利要素分表 | `patent_{patent_id}` | 专利成果主体 |
+| `Person` | `dwd_patent.inventors` | 权威人员ID优先，否则待消歧ID | 发明人、科技专家 |
+| `Organization` | applicants、assignees | 权威机构ID优先，否则待消歧ID | 申请机构、当前权利机构 |
+| `Keyword` | `dwd_patent.keywords[].zhName/enName` | `keyword_{md5(normalized)}` | 专利主题和跨域主题聚合 |
+| `Project` | 全域项目数据 | `project_{project_id}` | 项目实体已存在；当前七张专利表没有项目关联字段 |
+| `IndustryNode` | 全域产业链数据 | `node_{node_id}` | 产业链节点已存在；当前七张专利表没有节点关联字段 |
 
-## 3. 当前 Patent 属性
+IPC/IPCR、CPC不建实体，作为Patent属性并同步到分类明细表。`Project`和`IndustryNode`保留为既有实体，但当前不生成专利到它们的关系；`Technology`、`Award`、`Classification`、`PatentFamily`、`PatentApplication`、`Document`和专利`Event`第一阶段不建。
 
-### 3.1 标识、公开、申请和 PCT
+## 4. Patent属性
 
-| 属性 | 类型 | 来源 |
+### 4.1 核心业务属性（26个）
+
+| 属性 | 类型 | 业务含义 |
 |---|---|---|
-| patent_id、publication_number | string | 主表同名字段 |
-| application_kind、country_code、country | string | 主表同名字段 |
-| publication_kind/date/year/month | string/string/int/string | publication_reference 的 kind/pbdt/pbdt_year/pbdt_month |
-| application_number/country/date/year/month | string/string/string/int/string | application_reference 的 apno/country/apdt/apdt_year/apdt_month |
-| pct_application_number/date、pct_national_stage_date | string | pct_or_regional_filing_data 的 apno/apdt/etdt |
-| pct_publication_number/date | string | pct_or_regional_publishing_data 的 pn/pbdt |
-| granted_number | string | 主表 |
+| `patent_id` | string | 专利唯一标识 |
+| `publication_number` | string | 专利公布号 |
+| `application_number` | string | 专利申请号 |
+| `application_kind` | string | 专利申请类型 |
+| `country_code` | string | 国家/地区代码 |
+| `country` | string | 国家/地区名称 |
+| `publication_date` | date | 公开日期 |
+| `application_date` | date | 申请日期 |
+| `granted_number` | string | 授权号 |
+| `grant_date` | date | 授权日期 |
+| `status` | string | 当前法律状态 |
+| `anticipated_expiration` | date | 预计到期日 |
+| `title_original` | string | 原文标题 |
+| `title_en` | string | 英文标题 |
+| `title_zh` | string | 中文标题 |
+| `abstract_zh` | string | 中文展示摘要 |
+| `language` | string | 原文语言 |
+| `main_ipcr` | string | IPC/IPCR主分类 |
+| `further_ipcr` | string | IPC/IPCR附加分类 |
+| `main_cpc` | string | CPC主分类 |
+| `further_cpc` | string | CPC附加分类 |
+| `keywords` | string | 关键词检索快照 |
+| `citation_nums` | int64 | 引用专利数量 |
+| `cited_by_nums` | int64 | 专利被引数量 |
+| `patent_value` | int64 | 专利价值 |
+| `simple_family_number` | string | 简单家族号，用于成果去重 |
 
-### 3.2 文本、分类和检索快照
+### 4.2 溯源属性（7个）
 
-| 属性 | 类型 | 来源/规则 |
+| 属性 | 类型 | 含义 |
 |---|---|---|
-| title_original/en/zh | string | titles、title_localized.en、title_zh |
-| abstract_original/en/zh | string | abstracts、abstract_localized.en、abstract_zh |
-| language | string | JSON 语言数组转逗号分隔字符串 |
-| main_ipcr、main_cpc | string | 主分类号 |
-| further_ipcr、further_cpc | string | 附加分类 JSON 序列化快照 |
-| keywords | string | 关键词 JSON 序列化快照；后续同时生成 Keyword 边 |
+| `source_system` | string | 来源系统 |
+| `source_table` | string | 主来源表 |
+| `source_record_id` | string | 来源记录ID |
+| `source_url` | string | 原文地址 |
+| `ingest_batch` | string | 入图批次 |
+| `ingest_time` | datetime | 入图时间 |
+| `source_update_time` | datetime | 来源更新时间 |
 
-### 3.3 法律、评价、统计与溯源
+## 5. 关系类型
 
-| 属性 | 类型 | 来源 |
-|---|---|---|
-| status | string | dwd_patent_legal.status |
-| grant_date/year/month | string/int/string | dates_of_public_availability |
-| anticipated_expiration、expiration_year | date/int | legal 表 |
-| citation_nums、cited_by_nums、non_patent_citation_nums | int | cited 表 |
-| patent_value | int | dwd_patent.value |
-| simple_family_number | string | family 表 |
-| source_system/source_table/source_record_id/source_url | string | 标准溯源 |
-| ingest_batch/ingest_time/source_update_time | string/datetime/datetime | ETL 与主表 update_time |
+### 5.1 源数据事实关系
 
-当前共 50 个属性。
+| Edge | 方向 | 关系说明 | 属性 | 属性说明 | 来源 |
+|---|---|---|---|---|---|
+| `INVENTED_BY` | Patent → Person | 表示某人是该专利的发明人 | `sequence` | 该人员在当前专利发明人列表中的顺序 | `dwd_patent.inventors` |
+| `APPLIED_BY` | Patent → Organization/Person | 表示专利申请时的申请主体 | `sequence` | 该主体在当前专利申请人列表中的顺序 | `dwd_patent.applicants` |
+| `OWNED_BY` | Patent → Organization/Person | 表示专利当前归属的权利主体 | `sequence` | 该主体在当前专利权利人列表中的顺序 | `dwd_patent.assignees` |
+| `CITES` | Patent → Patent | 表示一项专利引用另一项专利 | 无 | 无 | `dwd_patent_cited.patent_citations/cited_by` |
+| `HAS_KEYWORD` | Patent → Keyword | 表示专利包含某个主题关键词 | 无 | 无 | `dwd_patent.keywords` |
+| `OUTPUT_OF` | Patent → Project | 表示该专利是某个项目的产出成果 | 无 | 无 | `dwd_zh_project_output.output_patents` |
+| `BELONGS_TO_NODE` | Organization → IndustryNode | 表示机构归属于某个产业链节点，供专利间接关联产业链 | 无 | 无 | `dwd_org_industry_tags` |
 
-## 4. 不作为 Patent 固有属性的数据
+每条边统一保存以下溯源属性：
 
-| 源数据 | 后续顶点 | 后续边 | 主要边属性 |
-|---|---|---|---|
-| inventors | Person | INVENTED_BY | sequence |
-| applicants | Organization 或 Person | APPLIED_BY | sequence、role |
-| assignees | Organization 或 Person | OWNED_BY | sequence、is_current |
-| agents | Person | REPRESENTED_BY | sequence、role |
-| agency | Organization | HANDLED_BY | sequence、role |
-| examiners | Person | EXAMINED_BY | level、department |
-| priority_filings | PatentApplication/专利桩 | CLAIMS_PRIORITY_TO | sequence、country、apdt、kind、lang |
-| related_documents | PatentApplication/专利桩 | RELATED_DOCUMENT | relation_type、date、country |
-| patent_citations、cited_by | Patent | CITES | citation_date、country、region、kind |
-| non_patent_citations | Document | CITES_NON_PATENT | citation_date |
-| keywords | Keyword | HAS_KEYWORD | language、source |
-| IPCR/CPC/LOC/FI/UPC/F-term | Classification | CLASSIFIED_AS | scheme、is_main、sequence |
-| 家族成员和全球同族 | PatentFamily 与 Patent | MEMBER_OF_FAMILY | country、status、application_date |
-| legal_events、PRS | Event(legal_event) | HAS_LEGAL_EVENT | date、code、event |
-| dwd_patent_transfer | Event(patent_transfer)与主体 | HAS_TRANSFER、TRANSFER_FROM/TO | effective_date、country、sequence |
-
-first_applicant_name、first_current_assignee_name、first_inventor_name 是关系数组的派生加速字段，不作为独立事实；后续由 sequence=1 的边获得。
-
-## 5. 只留在数据/检索层
-
-| 数据 | 原因 |
+| 属性 | 属性说明 |
 |---|---|
-| claims | 超长、多语言、数组，亿级图中重复存储成本高 |
-| description | 超长说明书，适合 MySQL/Elasticsearch |
-| figures | 图片元数据及附件应由对象存储/文档服务管理 |
-| 完整法律事件文本 | 多事件且会增长，后续转 Event |
-| 完整非专利引用原文 | 需先与文献库消歧 |
+| `source_table` | 生成该关系的来源表名 |
+| `source_record_id` | 来源记录ID；JSON数组关系可使用主记录ID与数组序号组成组合键 |
+| `ingest_batch` | 本次入图任务的批次号 |
+| `ingest_time` | 该关系写入图数据库的时间 |
 
-## 6. 当前完整性结论
+## 6. 业务查询路径
 
-Patent 的标识、申请/公开/PCT、三语标题摘要、分类快照、法律状态、授权与到期、引用统计、价值、家族标识和溯源均已覆盖。没有把未来边的端点数据误当成 Patent 属性，也没有把说明书等超长内容强塞入图数据库。
+本节仅说明如何组合已存储的实体和事实边完成查询，不定义新的Edge，也不将查询结果写入图数据库。
 
-## 7. 索引策略
+| 业务场景 | 图查询路径 |
+|---|---|
+| 专家专利成果 | Person ← INVENTED_BY — Patent |
+| 两名专家共同专利 | Person ← INVENTED_BY — Patent — INVENTED_BY → Person |
+| 专家—企业合作 | Person ← INVENTED_BY — Patent → APPLIED_BY/OWNED_BY → Organization |
+| 专家技术相似 | 比较两名专家专利的Keyword和IPC/CPC属性重合度 |
+| 专家间接关系 | 通过Patent、Organization、Project、Keyword和IndustryNode进行路径分析 |
+| 项目专利成果 | Patent — OUTPUT_OF → Project |
+| 专家—产业链 | Patent → Organization — BELONGS_TO_NODE → IndustryNode |
+| 成果影响力 | Patent.citation_nums、cited_by_nums、patent_value |
 
-- 已知 patent_id 时直接构造 VID；VID 已由 TRSGraph 原生索引，无需 patent_id 二级索引。
-- 当前仅建 Patent() 空 Tag 索引 idx_patent_scan，用于 MATCH 全量枚举和统计。
-- 只有出现明确的属性检索接口且不能传 patent_id 时，才按查询新增属性索引。
-- country_code 等高重复字段不单独建索引，避免亿级写放大和巨大结果集。
+共同发明、技术相似和专家—企业合作均通过上述路径查询，不新增或物化对应Edge。`OUTPUT_OF`由项目产出表生成，`BELONGS_TO_NODE`由产业链企业标签表生成；专利通过机构间接关联产业链节点。
+
+## 7. 不进入第一阶段图谱的数据与数据缺口
+
+| 数据 | 保留位置 |
+|---|---|
+| PCT、详细优先权、分案/继续申请 | MySQL标准层 |
+| agents、agency、examiners | MySQL标准层 |
+| LOC、FI、UPC、F-term | MySQL标准层 |
+| claims、description、完整多语言摘要 | MySQL/全文检索 |
+| figures | 对象存储/文档服务 |
+| 非专利引用 | MySQL标准层 |
+| 完整法律/PRS事件 | MySQL标准层 |
+| 专利转让历史 | MySQL标准层 |
+| 完整家族成员及家族引用 | MySQL标准层 |
+| 各表管理字段 | MySQL/装载审计 |
+
+以上数据不删除，通过`patent_id`或`source_record_id`回查。

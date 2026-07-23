@@ -22,14 +22,39 @@ logger = logging.getLogger(__name__)
 
 # 1. Patent目标属性
 PATENT_PROPERTIES = (
-    "patent_id", "publication_number", "application_number", "application_kind",
-    "country_code", "country", "publication_date", "application_date",
-    "granted_number", "grant_date", "status", "anticipated_expiration",
-    "title_original", "title_en", "title_zh", "abstract_zh", "language",
-    "main_ipcr", "further_ipcr", "main_cpc", "further_cpc", "keywords",
-    "citation_nums", "cited_by_nums", "patent_value", "simple_family_number",
-    "source_system", "source_table", "source_record_id", "source_url",
-    "ingest_batch", "ingest_time", "source_update_time",
+    "patent_id",
+    "publication_number",
+    "application_number",
+    "application_kind",
+    "country_code",
+    "country",
+    "publication_date",
+    "application_date",
+    "granted_number",
+    "grant_date",
+    "status",
+    "anticipated_expiration",
+    "title_original",
+    "title_en",
+    "title_zh",
+    "abstract_zh",
+    "language",
+    "main_ipcr",
+    "further_ipcr",
+    "main_cpc",
+    "further_cpc",
+    "keywords",
+    "citation_nums",
+    "cited_by_nums",
+    "patent_value",
+    "simple_family_number",
+    "source_system",
+    "source_table",
+    "source_record_id",
+    "source_url",
+    "ingest_batch",
+    "ingest_time",
+    "source_update_time",
 )
 
 # 2. MySQL数据读取
@@ -48,7 +73,9 @@ def mysql_connection() -> pymysql.Connection:
         user=os.getenv("PATENT_MYSQL_USERNAME", "root"),
         password=password,
         database=os.getenv("PATENT_MYSQL_DATABASE", "gkx_element"),
-        charset="utf8mb4", cursorclass=DictCursor, autocommit=True,
+        charset="utf8mb4",
+        cursorclass=DictCursor,
+        autocommit=True,
     )
 
 
@@ -105,8 +132,13 @@ def json_snapshot(value: Any) -> str:
 
 def ngql_string(value: Any) -> str:
     text = "" if value is None else str(value)
-    escaped = (text.replace("\\", "\\\\").replace('"', '\\"')
-               .replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t"))
+    escaped = (
+        text.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+    )
     return f'"{escaped}"'
 
 
@@ -117,7 +149,11 @@ def ngql_date(value: Any) -> str:
 def ngql_datetime(value: Any) -> str:
     if value is None:
         return "NULL"
-    text = value.strftime("%Y-%m-%dT%H:%M:%S") if isinstance(value, datetime) else str(value).replace(" ", "T")[:19]
+    text = (
+        value.strftime("%Y-%m-%dT%H:%M:%S")
+        if isinstance(value, datetime)
+        else str(value).replace(" ", "T")[:19]
+    )
     return f"datetime({ngql_string(text)})"
 
 
@@ -125,27 +161,47 @@ def ngql_int(value: Any) -> str:
     return str(int(value or 0))
 
 
-def patent_payload(row: dict[str, Any], batch_id: str, ingest_time: datetime) -> tuple[str, list[str]]:
+def patent_payload(
+    row: dict[str, Any], batch_id: str, ingest_time: datetime
+) -> tuple[str, list[str]]:
     """将一条MySQL记录映射为Patent VID和33个属性。"""
     patent_id = str(row.get("patent_id") or "").strip()
     if not patent_id:
         raise ValueError("patent_id 为空")
     values = [
-        ngql_string(patent_id), ngql_string(row.get("publication_number")),
-        ngql_string(row.get("application_number")), ngql_string(row.get("application_kind")),
-        ngql_string(row.get("country_code")), ngql_string(row.get("country")),
-        ngql_date(row.get("publication_date")), ngql_date(row.get("application_date")),
-        ngql_string(row.get("granted_number")), ngql_date(row.get("grant_date")),
-        ngql_string(row.get("status")), ngql_date(row.get("anticipated_expiration")),
-        ngql_string(original_text(row.get("titles"))), ngql_string(row.get("title_en")),
-        ngql_string(row.get("title_zh")), ngql_string(row.get("abstract_zh")),
-        ngql_string(normalized_language(row.get("language"))), ngql_string(row.get("main_ipcr")),
-        ngql_string(json_snapshot(row.get("further_ipcr"))), ngql_string(row.get("main_cpc")),
-        ngql_string(json_snapshot(row.get("further_cpc"))), ngql_string(json_snapshot(row.get("keywords"))),
-        ngql_int(row.get("citation_nums")), ngql_int(row.get("cited_by_nums")),
-        ngql_int(row.get("patent_value")), ngql_string(row.get("simple_family_number")),
-        ngql_string("gkx_element"), ngql_string("dwd_patent"), ngql_string(patent_id), ngql_string(""),
-        ngql_string(batch_id), ngql_datetime(ingest_time), ngql_datetime(row.get("update_time")),
+        ngql_string(patent_id),
+        ngql_string(row.get("publication_number")),
+        ngql_string(row.get("application_number")),
+        ngql_string(row.get("application_kind")),
+        ngql_string(row.get("country_code")),
+        ngql_string(row.get("country")),
+        ngql_date(row.get("publication_date")),
+        ngql_date(row.get("application_date")),
+        ngql_string(row.get("granted_number")),
+        ngql_date(row.get("grant_date")),
+        ngql_string(row.get("status")),
+        ngql_date(row.get("anticipated_expiration")),
+        ngql_string(original_text(row.get("titles"))),
+        ngql_string(row.get("title_en")),
+        ngql_string(row.get("title_zh")),
+        ngql_string(row.get("abstract_zh")),
+        ngql_string(normalized_language(row.get("language"))),
+        ngql_string(row.get("main_ipcr")),
+        ngql_string(json_snapshot(row.get("further_ipcr"))),
+        ngql_string(row.get("main_cpc")),
+        ngql_string(json_snapshot(row.get("further_cpc"))),
+        ngql_string(json_snapshot(row.get("keywords"))),
+        ngql_int(row.get("citation_nums")),
+        ngql_int(row.get("cited_by_nums")),
+        ngql_int(row.get("patent_value")),
+        ngql_string(row.get("simple_family_number")),
+        ngql_string("gkx_element"),
+        ngql_string("dwd_patent"),
+        ngql_string(patent_id),
+        ngql_string(""),
+        ngql_string(batch_id),
+        ngql_datetime(ingest_time),
+        ngql_datetime(row.get("update_time")),
     ]
     return f"patent_{patent_id}", values
 
@@ -170,7 +226,9 @@ def keyword_statements(rows: list[dict[str, Any]]) -> tuple[str, str]:
     vertex_ngql = ""
     edge_ngql = ""
     if vertices:
-        values = ",".join(f"{ngql_string(vid)}:({ngql_string(word)})" for vid, word in vertices.items())
+        values = ",".join(
+            f"{ngql_string(vid)}:({ngql_string(word)})" for vid, word in vertices.items()
+        )
         vertex_ngql = f"INSERT VERTEX Keyword(keyword) VALUES {values};"
     if edges:
         values = ",".join(f"{ngql_string(src)}->{ngql_string(dst)}:()" for src, dst in edges)
@@ -194,11 +252,11 @@ def load_patents(batch_size: int, batch_id: str) -> tuple[int, int, int]:
             if not rows:
                 break
             for start in range(0, len(rows), 10):
-                group = rows[start:start + 10]
+                group = rows[start : start + 10]
                 # 写入Patent
-                graph.execute_write(patent_statement([
-                    patent_payload(row, batch_id, ingest_time) for row in group
-                ]))
+                graph.execute_write(
+                    patent_statement([patent_payload(row, batch_id, ingest_time) for row in group])
+                )
                 vertex_ngql, edge_ngql = keyword_statements(group)
                 if vertex_ngql:
                     graph.execute_write(vertex_ngql)  # 写入Keyword
@@ -221,7 +279,9 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     patent_count, keyword_count, edge_count = load_patents(args.batch_size, args.batch_id)
-    logger.info("完成 Patent=%d，Keyword引用=%d，HAS_KEYWORD=%d", patent_count, keyword_count, edge_count)
+    logger.info(
+        "完成 Patent=%d，Keyword引用=%d，HAS_KEYWORD=%d", patent_count, keyword_count, edge_count
+    )
 
 
 if __name__ == "__main__":

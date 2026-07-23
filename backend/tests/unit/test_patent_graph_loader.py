@@ -1,6 +1,6 @@
+import re
 from datetime import datetime
 from pathlib import Path
-import re
 
 from script.load_patent_graph import (
     PATENT_PROPERTIES,
@@ -15,19 +15,33 @@ from script.load_patent_graph import (
 
 def patent_row():
     return {
-        "patent_id": "CN1A", "publication_number": "CN-1-A",
-        "application_number": "CN-APP-1", "application_kind": "A",
-        "country_code": "CN", "country": "China",
-        "publication_date": "2021-01-01", "application_date": "2020-01-01",
-        "granted_number": "CN1B", "grant_date": "2022-01-01",
-        "status": "Granted", "anticipated_expiration": "2040-01-01",
+        "patent_id": "CN1A",
+        "publication_number": "CN-1-A",
+        "application_number": "CN-APP-1",
+        "application_kind": "A",
+        "country_code": "CN",
+        "country": "China",
+        "publication_date": "2021-01-01",
+        "application_date": "2020-01-01",
+        "granted_number": "CN1B",
+        "grant_date": "2022-01-01",
+        "status": "Granted",
+        "anticipated_expiration": "2040-01-01",
         "titles": '[{"lang":"zh","text":"原文标题"}]',
-        "title_en": "English title", "title_zh": "中文标题", "abstract_zh": "中文摘要",
-        "language": '["zh"]', "main_ipcr": "G06F", "further_ipcr": '["G06N"]',
-        "main_cpc": "G06F", "further_cpc": '["G06N"]',
+        "title_en": "English title",
+        "title_zh": "中文标题",
+        "abstract_zh": "中文摘要",
+        "language": '["zh"]',
+        "main_ipcr": "G06F",
+        "further_ipcr": '["G06N"]',
+        "main_cpc": "G06F",
+        "further_cpc": '["G06N"]',
         "keywords": '[{"zhName":"知识图谱","enName":"knowledge graph"}, " AI ", "ai"]',
-        "citation_nums": 2, "cited_by_nums": 3, "patent_value": 100,
-        "simple_family_number": "F1", "update_time": datetime(2026, 7, 22, 10, 0),
+        "citation_nums": 2,
+        "cited_by_nums": 3,
+        "patent_value": 100,
+        "simple_family_number": "F1",
+        "update_time": datetime(2026, 7, 22, 10, 0),
     }
 
 

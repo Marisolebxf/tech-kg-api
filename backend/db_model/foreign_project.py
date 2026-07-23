@@ -11,10 +11,10 @@ from sqlalchemy import (
 from db_model.base import Base
 
 
-class OdsEnProject(Base):
-    """深势-国外项目信息表"""
+class DwdEnProject(Base):
+    """深势-国外项目信息表（对齐 gkx_element.dwd_en_project）"""
 
-    __tablename__ = "ods_en_project"
+    __tablename__ = "dwd_en_project"
     __table_args__ = {"comment": "深势-国外项目信息表"}
 
     id = Column("id", String(64), primary_key=True, nullable=False, comment="主键")
@@ -33,22 +33,24 @@ class OdsEnProject(Base):
     participating_institution = Column(
         "participating_institution", String(255), nullable=True, comment="参与单位"
     )
-    approval_year = Column("approval_year", Date(), nullable=True, comment="批准年度")
+    approval_year = Column("approval_year", Integer(), nullable=True, comment="批准年度")
     approval_time = Column("approval_time", Date(), nullable=True, comment="批准日期")
     research_period = Column("research_period", String(128), nullable=True, comment="研究周期")
     project_host = Column("project_host", String(100), nullable=True, comment="项目负责人")
     participants = Column("participants", Text(), nullable=True, comment="参与人员")
     keywords = Column("keywords", Text(), nullable=True, comment="关键词")
     abstract = Column("abstract", Text(), nullable=True, comment="项目摘要")
+    final_report_abstract = Column(
+        "final_report_abstract", Text(), nullable=True, comment="结题摘要"
+    )
     project_page_url = Column("project_page_url", String(1024), nullable=True, comment="项目详情页")
-    create_time = Column("create_time", DateTime(), nullable=True)
-    update_time = Column("update_time", DateTime(), nullable=True)
+    updated_time = Column("updated_time", DateTime(), nullable=True)
 
 
-class OdsEnProjectOutput(Base):
-    """深势-国外项目产出信息表"""
+class DwdEnProjectOutput(Base):
+    """深势-国外项目产出信息表（对齐 gkx_element.dwd_en_project_output）"""
 
-    __tablename__ = "ods_en_project_output"
+    __tablename__ = "dwd_en_project_output"
     __table_args__ = {"comment": "深势-国外项目产出信息表"}
 
     id = Column("id", String(64), primary_key=True, nullable=False, comment="UUID主键")
@@ -59,7 +61,6 @@ class OdsEnProjectOutput(Base):
     conference_papers_count = Column(
         "conference_papers_count", Integer(), nullable=True, comment="会议论文数量"
     )
-    books_count = Column("books_count", Integer(), nullable=True, comment="图书专著数量")
     degree_papers_count = Column(
         "degree_papers_count", Integer(), nullable=True, comment="学位论文数量"
     )
@@ -67,7 +68,7 @@ class OdsEnProjectOutput(Base):
     clinical_trials_count = Column(
         "clinical_trials_count", Integer(), nullable=True, comment="临床试验数量"
     )
-    products_count = Column("products_count", Integer(), nullable=True, comment="产品数量")
+    books_count = Column("books_count", Integer(), nullable=True, comment="图书专著数量")
     awards_count = Column("awards_count", Integer(), nullable=True, comment="奖项数量")
     reports_count = Column("reports_count", Integer(), nullable=True, comment="报告数量")
     other_outputs_count = Column(
@@ -76,18 +77,15 @@ class OdsEnProjectOutput(Base):
     output_journal_articles = Column(
         "output_journal_articles", Text(), nullable=True, comment="期刊文章"
     )
+    output_patents = Column("output_patents", Text(), nullable=True, comment="专利")
     output_conference_papers = Column(
         "output_conference_papers", Text(), nullable=True, comment="会议论文"
     )
-    output_books = Column("output_books", Text(), nullable=True, comment="图书专著")
     output_degree_papers = Column("output_degree_papers", Text(), nullable=True, comment="学位论文")
-    output_patents = Column("output_patents", Text(), nullable=True, comment="专利")
     output_clinical_trials = Column(
         "output_clinical_trials", Text(), nullable=True, comment="临床试验"
     )
-    output_products = Column("output_products", Text(), nullable=True, comment="产品")
+    output_books = Column("output_books", Text(), nullable=True, comment="图书专著")
     output_awards = Column("output_awards", Text(), nullable=True, comment="奖项")
     output_reports = Column("output_reports", Text(), nullable=True, comment="报告")
     output_other = Column("output_other", Text(), nullable=True, comment="其他成果")
-    create_time = Column("create_time", DateTime(), nullable=True)
-    update_time = Column("update_time", DateTime(), nullable=True)

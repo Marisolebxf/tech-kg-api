@@ -1,7 +1,7 @@
-"""MySQL gkx_local 项目表 → TRSGraph space=`dev` ETL。
+"""MySQL gkx_element 项目表 → TRSGraph space=`dev` ETL。
 
 Stage:
-  1. Project 顶点（ods_zh_project / ods_en_project）
+  1. Project 顶点（dwd_zh_project / dwd_en_project）
   2. FUNDED_BY / LEADS（机构/人桩）
   3. PARTICIPATES_IN / HAS_PARTICIPANT
   4. HAS_KEYWORD
@@ -53,7 +53,7 @@ __all__ = [
 logger = logging.getLogger("script.load_project_graph")
 
 GRAPH_SPACE = "dev"
-SOURCE_SYSTEM = "gkx_local"
+SOURCE_SYSTEM = "gkx_element"
 STUB_SOURCE = "project_stub"
 
 
@@ -228,8 +228,8 @@ def _load_project_rows(
     rows: list[tuple[Any, str, str]] = []
     batch = 200
     for list_fn, source, table in (
-        (dao.list_zh, "zh_project", "ods_zh_project"),
-        (dao.list_en, "en_project", "ods_en_project"),
+        (dao.list_zh, "zh_project", "dwd_zh_project"),
+        (dao.list_en, "en_project", "dwd_en_project"),
     ):
         offset = 0
         while True:
@@ -307,7 +307,12 @@ def stage_funded_and_leads(
             ovid = _merge_stub_org(
                 graph, institution, ingest_batch=ingest_batch, ingest_time=ingest_time
             )
-            _merge_edge(graph, pvid, ovid, "FUNDED_BY", {
+            _merge_edge(
+                graph,
+                pvid,
+                ovid,
+                "FUNDED_BY",
+                {
                     "funded_amount": float(row.funded_amount or 0),
                     "fund_category": row.fund_category or "",
                     **ep,
@@ -378,8 +383,8 @@ def stage_outputs(
 ) -> int:
     count = 0
     for list_fn, table in (
-        (dao.list_zh_output, "ods_zh_project_output"),
-        (dao.list_en_output, "ods_en_project_output"),
+        (dao.list_zh_output, "dwd_zh_project_output"),
+        (dao.list_en_output, "dwd_en_project_output"),
     ):
         offset = 0
         batch = 200
@@ -477,9 +482,13 @@ def stage_rel_tables(
         if not exists:
             logger.info("rel table %s not found — skip", table)
             continue
-        rows = session.execute(
-            text(f"SELECT project_id, {src_col} AS src_id FROM `{table}` LIMIT 10000")
-        ).mappings().all()
+        rows = (
+            session.execute(
+                text(f"SELECT project_id, {src_col} AS src_id FROM `{table}` LIMIT 10000")
+            )
+            .mappings()
+            .all()
+        )
         for row in rows:
             project_id = str(row["project_id"])
             src_id = str(row["src_id"])
@@ -526,17 +535,17 @@ def stage_datasource(
     ingest_time: str,
 ) -> None:
     tables = {
-        "ods_zh_project": "深势-国内项目信息表",
-        "ods_en_project": "深势-国外项目信息表",
-        "ods_zh_project_output": "深势-国内项目产出信息表",
-        "ods_en_project_output": "深势-国外项目产出信息表",
+        "dwd_zh_project": "深势-国内项目信息表",
+        "dwd_en_project": "深势-国外项目信息表",
+        "dwd_zh_project_output": "深势-国内项目产出信息表",
+        "dwd_en_project_output": "深势-国外项目产出信息表",
     }
     for table, cn_name in tables.items():
         ds_vid = f"ds_{table}"
         props = {
             "source_table": table,
             "table_cn_name": cn_name,
-            "tier": "raw",
+            "tier": "element",
             "library": SOURCE_SYSTEM,
         }
         _merge_node(graph, ["DataSource"], ds_vid, props)
@@ -544,7 +553,12 @@ def stage_datasource(
     for row, _source, table in projects:
         pvid = project_vid(row.id)
         ds_vid = f"ds_{table}"
-        _merge_edge(graph, pvid, ds_vid, "SOURCED_FROM", {
+        _merge_edge(
+            graph,
+            pvid,
+            ds_vid,
+            "SOURCED_FROM",
+            {
                 "source_table": table,
                 "source_record_id": str(row.id),
                 "ingest_batch": ingest_batch,
@@ -574,13 +588,9 @@ def load_project_graph(
             graph, projects, ingest_batch=ingest_batch, ingest_time=ingest_time
         )
         logger.info("stage2 FUNDED_BY / LEADS")
-        stage_funded_and_leads(
-            graph, projects, ingest_batch=ingest_batch, ingest_time=ingest_time
-        )
+        stage_funded_and_leads(graph, projects, ingest_batch=ingest_batch, ingest_time=ingest_time)
         logger.info("stage3 PARTICIPATES_IN / HAS_PARTICIPANT")
-        stage_participants(
-            graph, projects, ingest_batch=ingest_batch, ingest_time=ingest_time
-        )
+        stage_participants(graph, projects, ingest_batch=ingest_batch, ingest_time=ingest_time)
         logger.info("stage4 HAS_KEYWORD")
         stage_keywords(graph, projects, ingest_batch=ingest_batch, ingest_time=ingest_time)
         logger.info("stage5 outputs")
@@ -596,9 +606,7 @@ def load_project_graph(
             graph, session, ingest_batch=ingest_batch, ingest_time=ingest_time
         )
         logger.info("stage7 DataSource + SOURCED_FROM")
-        stage_datasource(
-            graph, projects, ingest_batch=ingest_batch, ingest_time=ingest_time
-        )
+        stage_datasource(graph, projects, ingest_batch=ingest_batch, ingest_time=ingest_time)
         logger.info("done: %s", stats)
         return stats
     finally:
@@ -608,7 +616,9 @@ def load_project_graph(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Load project subgraph into TRSGraph space=dev")
-    parser.add_argument("--id-prefix", default=None, help="Only load rows whose id starts with prefix")
+    parser.add_argument(
+        "--id-prefix", default=None, help="Only load rows whose id starts with prefix"
+    )
     parser.add_argument("--limit", type=int, default=None, help="Max project rows (zh+en combined)")
     parser.add_argument("--ingest-batch", default=None, help="Optional ingest batch id")
     args = parser.parse_args()

@@ -5,10 +5,10 @@
 
 | 表名 | 表注释 | 估算行数 | 字段数 |
 |---|---|---:|---:|
-| `ods_en_project` | 深势-国外项目信息表 | 1463 | 22 |
-| `ods_en_project_output` | 深势-国外项目产出信息表 | 1297 | 24 |
+| `dwd_en_project` | 深势-国外项目信息表 | 1463 | 22 |
+| `dwd_en_project_output` | 深势-国外项目产出信息表 | 1297 | 24 |
 
-## `ods_en_project`
+## `dwd_en_project`
 
 表注释：深势-国外项目信息表
 
@@ -37,7 +37,7 @@
 | 21 | `create_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED |  |
 | 22 | `update_time` | `datetime` | YES |  | CURRENT_TIMESTAMP | DEFAULT_GENERATED |  |
 
-## `ods_en_project_output`
+## `dwd_en_project_output`
 
 表注释：深势-国外项目产出信息表
 

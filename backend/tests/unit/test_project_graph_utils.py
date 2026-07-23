@@ -63,7 +63,7 @@ def test_build_project_props():
     props = build_project_props(
         row,
         source="zh_project",
-        source_table="ods_zh_project",
+        source_table="dwd_zh_project",
         ingest_batch="BATCH_1",
         ingest_time="2026-07-21T00:00:00Z",
     )
@@ -71,6 +71,8 @@ def test_build_project_props():
     assert props["title"] == "测试项目"
     assert props["funded_amount"] == 100.5
     assert props["source"] == "zh_project"
+    assert props["source_system"] == "gkx_element"
+    assert props["source_table"] == "dwd_zh_project"
     assert props["ingest_batch"] == "BATCH_1"
 
 

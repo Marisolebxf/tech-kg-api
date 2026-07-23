@@ -136,7 +136,7 @@ def build_project_props(
     ingest_batch: str,
     ingest_time: str,
 ) -> dict[str, Any]:
-    """从 ods_*_project ORM 行构建 Project 属性（不含产出计数）。"""
+    """从 dwd_*_project ORM 行构建 Project 属性（不含产出计数）。"""
     return {
         "vid": project_vid(row.id),
         "project_number": row.project_number or "",
@@ -155,13 +155,15 @@ def build_project_props(
         "final_report_abstract": getattr(row, "final_report_abstract", None) or "",
         "project_page_url": row.project_page_url or "",
         "source": source,
-        "source_system": "gkx_local",
+        "source_system": "gkx_element",
         "source_table": source_table,
         "source_record_id": row.id,
         "source_url": row.project_page_url or "",
         "ingest_batch": ingest_batch,
         "ingest_time": ingest_time,
-        "source_update_time": to_str_date(row.update_time),
+        "source_update_time": to_str_date(
+            getattr(row, "updated_time", None) or getattr(row, "update_time", None)
+        ),
     }
 
 
@@ -170,11 +172,11 @@ def build_output_count_props(row: Any) -> dict[str, Any]:
         "total_outputs": to_int(row.total_outputs),
         "journal_articles_count": to_int(row.journal_articles_count),
         "conference_papers_count": to_int(row.conference_papers_count),
-        "books_count": to_int(row.books_count),
+        "books_count": to_int(getattr(row, "books_count", None)),
         "degree_papers_count": to_int(row.degree_papers_count),
         "patents_count": to_int(row.patents_count),
-        "clinical_trials_count": to_int(row.clinical_trials_count),
-        "products_count": to_int(row.products_count),
+        "clinical_trials_count": to_int(getattr(row, "clinical_trials_count", None)),
+        "products_count": to_int(getattr(row, "products_count", None)),
         "awards_count": to_int(row.awards_count),
         "reports_count": to_int(row.reports_count),
         "other_outputs_count": to_int(row.other_outputs_count),

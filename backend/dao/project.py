@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from dao.base import BaseDAO
 from db_model.base import Base
-from db_model.domestic_project import OdsZhProject, OdsZhProjectOutput
-from db_model.foreign_project import OdsEnProject, OdsEnProjectOutput
+from db_model.domestic_project import DwdZhProject, DwdZhProjectOutput
+from db_model.foreign_project import DwdEnProject, DwdEnProjectOutput
 
 ModelT = TypeVar("ModelT", bound=Base)
 
@@ -27,28 +27,28 @@ class ProjectDAO:
 
     def list_zh(
         self, *, offset: int = 0, limit: int = 100, id_prefix: str | None = None
-    ) -> list[OdsZhProject]:
+    ) -> list[DwdZhProject]:
         return self._zh.list_filtered(offset=offset, limit=limit, id_prefix=id_prefix)
 
     def list_en(
         self, *, offset: int = 0, limit: int = 100, id_prefix: str | None = None
-    ) -> list[OdsEnProject]:
+    ) -> list[DwdEnProject]:
         return self._en.list_filtered(offset=offset, limit=limit, id_prefix=id_prefix)
 
     def list_zh_output(
         self, *, offset: int = 0, limit: int = 100, id_prefix: str | None = None
-    ) -> list[OdsZhProjectOutput]:
+    ) -> list[DwdZhProjectOutput]:
         return self._zh_output.list_filtered(offset=offset, limit=limit, id_prefix=id_prefix)
 
     def list_en_output(
         self, *, offset: int = 0, limit: int = 100, id_prefix: str | None = None
-    ) -> list[OdsEnProjectOutput]:
+    ) -> list[DwdEnProjectOutput]:
         return self._en_output.list_filtered(offset=offset, limit=limit, id_prefix=id_prefix)
 
-    def get_zh(self, project_id: str) -> OdsZhProject | None:
+    def get_zh(self, project_id: str) -> DwdZhProject | None:
         return self._zh.get(project_id)
 
-    def get_en(self, project_id: str) -> OdsEnProject | None:
+    def get_en(self, project_id: str) -> DwdEnProject | None:
         return self._en.get(project_id)
 
 
@@ -65,17 +65,17 @@ class _FilteredIdDAO(BaseDAO[ModelT], Generic[ModelT]):
         return self.list_by_statement(statement)
 
 
-class _ZhProjectDAO(_FilteredIdDAO[OdsZhProject]):
-    model = OdsZhProject
+class _ZhProjectDAO(_FilteredIdDAO[DwdZhProject]):
+    model = DwdZhProject
 
 
-class _EnProjectDAO(_FilteredIdDAO[OdsEnProject]):
-    model = OdsEnProject
+class _EnProjectDAO(_FilteredIdDAO[DwdEnProject]):
+    model = DwdEnProject
 
 
-class _ZhProjectOutputDAO(_FilteredIdDAO[OdsZhProjectOutput]):
-    model = OdsZhProjectOutput
+class _ZhProjectOutputDAO(_FilteredIdDAO[DwdZhProjectOutput]):
+    model = DwdZhProjectOutput
 
 
-class _EnProjectOutputDAO(_FilteredIdDAO[OdsEnProjectOutput]):
-    model = OdsEnProjectOutput
+class _EnProjectOutputDAO(_FilteredIdDAO[DwdEnProjectOutput]):
+    model = DwdEnProjectOutput

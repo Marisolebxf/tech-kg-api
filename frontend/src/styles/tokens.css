@@ -1,19 +1,19 @@
 :root {
-  --page-bg: #b5d3fc;
+  --page-bg: #d8e7fc;
   --surface: #ffffff;
-  --surface-subtle: #f3f5f9;
+  --surface-subtle: #f7f8fa;
   --surface-muted: #eef0f4;
   --surface-active: rgba(255, 255, 255, 0.56);
-  --text-primary: #2b2f36;
-  --text-secondary: #666e8b;
-  --text-tertiary: #8a93a3;
-  --text-quaternary: #b5d3fc;
+  --text-primary: #1d2129;
+  --text-secondary: #4e5969;
+  --text-tertiary: #86909c;
+  --text-quaternary: #c9cdd4;
   --text-inverse: #ffffff;
   --border: #e5e6eb;
   --border-strong: #c9cdd4;
-  --primary: #0040ff;
-  --primary-hover: #2f64ff;
-  --primary-active: #0032c7;
+  --primary: #165dff;
+  --primary-hover: #4080ff;
+  --primary-active: #0e42d2;
   --primary-subtle: #e8f3ff;
   --success: #00b42a;
   --success-subtle: #e8ffea;
@@ -40,7 +40,17 @@
   --space-24: 24px;
   --space-32: 32px;
   --header-height: 56px;
-  --sidebar-width: 260px;
-  --control-height: 36px;
+  --sidebar-width: 280px;
+  --sidebar-width-collapsed: 64px;
+  --control-height: 32px;
+  --node-main: #1e8ff3;
+  --node-expert: #1e8ff3;
+  --node-org: #48c914;
+  --node-company: #48c914;
+  --node-paper: #762bd7;
+  --node-topic: #2f6bff;
+  --node-project: #ffad17;
+  --node-event: #eb2aa3;
+  --node-chain: #14b8a6;
   --font-family: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
 }

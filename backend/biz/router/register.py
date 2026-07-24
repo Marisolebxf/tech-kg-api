@@ -14,6 +14,7 @@ from biz.handler.expert_enterprise_mining import router as expert_enterprise_min
 from biz.handler.expert_enterprise_relation import router as expert_enterprise_relation_router
 from biz.handler.expert_indirect_relation import router as expert_indirect_relation_router
 from biz.handler.expert_paper_cooperation import router as expert_paper_cooperation_router
+from biz.handler.graph_search import router as graph_search_router
 from biz.handler.industry_chain_panorama import router as industry_chain_panorama_router
 from biz.handler.industry_chain_topn_event import router as industry_chain_topn_event_router
 from biz.handler.kg_construction import router as kg_construction_router
@@ -37,3 +38,4 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(expert_enterprise_mining_router, prefix="/api/v1")
     app.include_router(industry_chain_topn_event_router, prefix="/api/v1")
     app.include_router(industry_chain_panorama_router, prefix="/api/v1")
+    app.include_router(graph_search_router, prefix="/api/v1")

@@ -17,10 +17,11 @@ import os
 import time
 from urllib.parse import quote_plus
 
+from sqlalchemy import text
+
 from infra.graph_db import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
 from infra.mysql import MySQLClient
-from sqlalchemy import text
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ MAX_WORKERS = 10  # 并发线程数
 
 
 # ---------- 连接 ----------
+
 
 def get_graph_client() -> TRSGraphClient:
     settings = TRSGraphSettings(
@@ -55,6 +57,7 @@ def get_mysql_client() -> MySQLClient:
 
 # ---------- 工具 ----------
 
+
 def esc(v) -> str:
     """转义 nGQL 字符串值。"""
     if v is None:
@@ -63,7 +66,9 @@ def esc(v) -> str:
     return f'"{s}"'
 
 
-def batch_insert_vertex(client: TRSGraphClient, tag: str, fields: list[str], rows: list[tuple], label: str) -> int:
+def batch_insert_vertex(
+    client: TRSGraphClient, tag: str, fields: list[str], rows: list[tuple], label: str
+) -> int:
     """INSERT VERTEX（单条），返回成功条数。"""
     ok = 0
     field_list = ",".join(fields)
@@ -77,11 +82,13 @@ def batch_insert_vertex(client: TRSGraphClient, tag: str, fields: list[str], row
             if ok == 0:
                 logger.warning(f"  {label} 首条失败: {exc} | nGQL: {ngql[:120]}")
         if (i + 1) % 100 == 0:
-            logger.info(f"  {label} 进度: {i+1}/{len(rows)} (成功 {ok})")
+            logger.info(f"  {label} 进度: {i + 1}/{len(rows)} (成功 {ok})")
     return ok
 
 
-def batch_insert_edge(client: TRSGraphClient, edge: str, fields: list[str], rows: list[tuple], label: str) -> int:
+def batch_insert_edge(
+    client: TRSGraphClient, edge: str, fields: list[str], rows: list[tuple], label: str
+) -> int:
     """INSERT EDGE（单条），rows = [(src_vid, dst_vid, val1, val2, ...)]。返回成功条数。"""
     ok = 0
     field_list = ",".join(fields) if fields else ""
@@ -98,46 +105,129 @@ def batch_insert_edge(client: TRSGraphClient, edge: str, fields: list[str], rows
             if ok == 0:
                 logger.warning(f"  {label} 首条失败: {exc} | nGQL: {ngql[:120]}")
         if (i + 1) % 100 == 0:
-            logger.info(f"  {label} 进度: {i+1}/{len(rows)} (成功 {ok})")
+            logger.info(f"  {label} 进度: {i + 1}/{len(rows)} (成功 {ok})")
     return ok
 
 
 # ---------- ETL 各步骤 ----------
 
+
 def load_zh_papers(client: TRSGraphClient, session) -> int:
-    rows = session.execute(text(
-        "SELECT id, doi, en_name, zh_name, cover_year_start, cover_date_start, "
-        "language_classify, paper_type, publication_type, volume, issue, first_page, last_page, "
-        "open_access, paper_url, data_source, created_time, updated_time FROM dwd_zh_paper"
-    )).all()
+    rows = session.execute(
+        text(
+            "SELECT id, doi, en_name, zh_name, cover_year_start, cover_date_start, "
+            "language_classify, paper_type, publication_type, volume, issue, first_page, last_page, "
+            "open_access, paper_url, data_source, created_time, updated_time FROM dwd_zh_paper"
+        )
+    ).all()
     vertices = []
     for r in rows:
         vid = f"paper_{r[0]}"
-        vals = (r[2], r[3], r[1], r[4], str(r[5]) if r[5] else None, r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15] or "zh_paper", str(r[16]) if r[16] else None, str(r[17]) if r[17] else None)
+        vals = (
+            r[2],
+            r[3],
+            r[1],
+            r[4],
+            str(r[5]) if r[5] else None,
+            r[6],
+            r[7],
+            r[8],
+            r[9],
+            r[10],
+            r[11],
+            r[12],
+            r[13],
+            r[14],
+            r[15] or "zh_paper",
+            str(r[16]) if r[16] else None,
+            str(r[17]) if r[17] else None,
+        )
         vertices.append((vid, vals))
-    ok = batch_insert_vertex(client, "Paper",
-        ["title_en","title_zh","doi","publication_year","publication_date","language",
-         "document_type","publication_type","volume","issue","start_page","end_page","is_oa",
-         "source_url","source","created_time","updated_time"], vertices, "zh_paper")
+    ok = batch_insert_vertex(
+        client,
+        "Paper",
+        [
+            "title_en",
+            "title_zh",
+            "doi",
+            "publication_year",
+            "publication_date",
+            "language",
+            "document_type",
+            "publication_type",
+            "volume",
+            "issue",
+            "start_page",
+            "end_page",
+            "is_oa",
+            "source_url",
+            "source",
+            "created_time",
+            "updated_time",
+        ],
+        vertices,
+        "zh_paper",
+    )
     logger.info(f"  中文论文 Paper: {ok}/{len(vertices)}")
     return ok
 
 
 def load_en_papers(client: TRSGraphClient, session) -> int:
-    rows = session.execute(text(
-        "SELECT id, doi, en_name, zh_name, cover_year_start, cover_date_start, "
-        "language, paper_type, publication_type, volume, issue, first_page, last_page, "
-        "open_access, paper_url, data_source, created_time, updated_time FROM dwd_en_paper"
-    )).all()
+    rows = session.execute(
+        text(
+            "SELECT id, doi, en_name, zh_name, cover_year_start, cover_date_start, "
+            "language, paper_type, publication_type, volume, issue, first_page, last_page, "
+            "open_access, paper_url, data_source, created_time, updated_time FROM dwd_en_paper"
+        )
+    ).all()
     vertices = []
     for r in rows:
         vid = f"paper_{r[0]}"
-        vals = (r[2], r[3], r[1], r[4], str(r[5]) if r[5] else None, r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15] or "en_paper", str(r[16]) if r[16] else None, str(r[17]) if r[17] else None)
+        vals = (
+            r[2],
+            r[3],
+            r[1],
+            r[4],
+            str(r[5]) if r[5] else None,
+            r[6],
+            r[7],
+            r[8],
+            r[9],
+            r[10],
+            r[11],
+            r[12],
+            r[13],
+            r[14],
+            r[15] or "en_paper",
+            str(r[16]) if r[16] else None,
+            str(r[17]) if r[17] else None,
+        )
         vertices.append((vid, vals))
-    ok = batch_insert_vertex(client, "Paper",
-        ["title_en","title_zh","doi","publication_year","publication_date","language",
-         "document_type","publication_type","volume","issue","start_page","end_page","is_oa",
-         "source_url","source","created_time","updated_time"], vertices, "en_paper")
+    ok = batch_insert_vertex(
+        client,
+        "Paper",
+        [
+            "title_en",
+            "title_zh",
+            "doi",
+            "publication_year",
+            "publication_date",
+            "language",
+            "document_type",
+            "publication_type",
+            "volume",
+            "issue",
+            "start_page",
+            "end_page",
+            "is_oa",
+            "source_url",
+            "source",
+            "created_time",
+            "updated_time",
+        ],
+        vertices,
+        "en_paper",
+    )
     logger.info(f"  英文论文 Paper: {ok}/{len(vertices)}")
     return ok
 
@@ -148,10 +238,12 @@ def load_authors(client: TRSGraphClient, session) -> int:
     persons = []
     edges = []
     for tbl, src_label in [("dwd_zh_author", "zh_paper"), ("dwd_en_author", "en_paper")]:
-        rows = session.execute(text(
-            f"SELECT paper_id, author_sequence, author_id, en_name, zh_name, email, correspond, "
-            f"affiliation FROM {tbl}"
-        )).all()
+        rows = session.execute(
+            text(
+                f"SELECT paper_id, author_sequence, author_id, en_name, zh_name, email, correspond, "
+                f"affiliation FROM {tbl}"
+            )
+        ).all()
         for r in rows:
             paper_vid = f"paper_{r[0]}"
             author_id = r[2]
@@ -164,6 +256,7 @@ def load_authors(client: TRSGraphClient, session) -> int:
                 if email_val and email_val != "[]":
                     # 取 JSON 数组第一个
                     import json
+
                     try:
                         emails = json.loads(email_val)
                         email_val = emails[0] if emails else None
@@ -171,8 +264,12 @@ def load_authors(client: TRSGraphClient, session) -> int:
                         pass
                 persons.append((person_vid, (r[3], r[4], email_val, src_label)))
             edges.append((paper_vid, person_vid, r[1] or 0, r[6] or 0))
-    ok_p = batch_insert_vertex(client, "Person", ["name_en","name_zh","email","source"], persons, "author")
-    ok_e = batch_insert_edge(client, "AUTHORED_BY", ["author_order","is_corresponding"], edges, "authored_by")
+    ok_p = batch_insert_vertex(
+        client, "Person", ["name_en", "name_zh", "email", "source"], persons, "author"
+    )
+    ok_e = batch_insert_edge(
+        client, "AUTHORED_BY", ["author_order", "is_corresponding"], edges, "authored_by"
+    )
     logger.info(f"  作者 Person: {ok_p}/{len(persons)}, AUTHORED_BY: {ok_e}/{len(edges)}")
     return ok_p
 
@@ -184,46 +281,117 @@ def load_journals(client: TRSGraphClient, session) -> int:
     edges = []
 
     # 中文期刊
-    rows = session.execute(text(
-        "SELECT paper_id, publication_id, zh_name, en_name, name_abbr, issn, eissn, country, "
-        "founding_time, impact_factor, is_sci, cite_nums, annual_publication, publication_cycle "
-        "FROM dwd_zh_journal WHERE publication_id IS NOT NULL"
-    )).all()
+    rows = session.execute(
+        text(
+            "SELECT paper_id, publication_id, zh_name, en_name, name_abbr, issn, eissn, country, "
+            "founding_time, impact_factor, is_sci, cite_nums, annual_publication, publication_cycle "
+            "FROM dwd_zh_journal WHERE publication_id IS NOT NULL"
+        )
+    ).all()
     for r in rows:
         pub_id = r[1]
         jvid = f"journal_{pub_id}"
         if jvid not in journal_seen:
             journal_seen.add(jvid)
-            journals.append((jvid, (r[2], r[3], r[4], r[5], r[6], r[7], str(r[8]) if r[8] else None, r[9], r[10], None, r[11], r[12], r[13], "zh_journal")))
+            journals.append(
+                (
+                    jvid,
+                    (
+                        r[2],
+                        r[3],
+                        r[4],
+                        r[5],
+                        r[6],
+                        r[7],
+                        str(r[8]) if r[8] else None,
+                        r[9],
+                        r[10],
+                        None,
+                        r[11],
+                        r[12],
+                        r[13],
+                        "zh_journal",
+                    ),
+                )
+            )
         paper_vid = f"paper_{r[0]}"
         edges.append((paper_vid, jvid, None, None, None, None, None))
 
     # 英文期刊
-    rows = session.execute(text(
-        "SELECT publication_id, en_name, name_abbr, issn_print, issn_online, country, "
-        "establish_time, impact_factor, jcr_zone, is_sci, annual_publication, publish_period "
-        "FROM dwd_en_journal WHERE publication_id IS NOT NULL"
-    )).all()
+    rows = session.execute(
+        text(
+            "SELECT publication_id, en_name, name_abbr, issn_print, issn_online, country, "
+            "establish_time, impact_factor, jcr_zone, is_sci, annual_publication, publish_period "
+            "FROM dwd_en_journal WHERE publication_id IS NOT NULL"
+        )
+    ).all()
     for r in rows:
         pub_id = r[0]
         jvid = f"journal_{pub_id}"
         if jvid not in journal_seen:
             journal_seen.add(jvid)
-            journals.append((jvid, (None, r[1], r[2], r[3], r[4], r[5], str(r[6]) if r[6] else None, r[7], r[9] or 0, r[8], None, r[10], r[11], "en_journal")))
+            journals.append(
+                (
+                    jvid,
+                    (
+                        None,
+                        r[1],
+                        r[2],
+                        r[3],
+                        r[4],
+                        r[5],
+                        str(r[6]) if r[6] else None,
+                        r[7],
+                        r[9] or 0,
+                        r[8],
+                        None,
+                        r[10],
+                        r[11],
+                        "en_journal",
+                    ),
+                )
+            )
         # 英文期刊没有 paper_id 关联，PUBLISHED_IN 边从 dwd_en_paper 的 publication_id 建
     # 英文论文 → 期刊边
-    en_rows = session.execute(text("SELECT id, publication_id, volume, issue, first_page, last_page, cover_year_start FROM dwd_en_paper WHERE publication_id IS NOT NULL")).all()
+    en_rows = session.execute(
+        text(
+            "SELECT id, publication_id, volume, issue, first_page, last_page, cover_year_start FROM dwd_en_paper WHERE publication_id IS NOT NULL"
+        )
+    ).all()
     for r in en_rows:
         paper_vid = f"paper_{r[0]}"
         jvid = f"journal_{r[1]}"
         edges.append((paper_vid, jvid, r[2], r[3], r[4], r[5], r[6]))
 
-    ok_j = batch_insert_vertex(client, "Journal",
-        ["name_zh","name_en","name_abbr","issn","eissn","country","founding_time",
-         "impact_factor","is_sci","jcr_zone","cite_nums","annual_publication","publication_cycle","source"],
-        journals, "journal")
-    ok_e = batch_insert_edge(client, "PUBLISHED_IN",
-        ["volume","issue","start_page","end_page","publication_year"], edges, "published_in")
+    ok_j = batch_insert_vertex(
+        client,
+        "Journal",
+        [
+            "name_zh",
+            "name_en",
+            "name_abbr",
+            "issn",
+            "eissn",
+            "country",
+            "founding_time",
+            "impact_factor",
+            "is_sci",
+            "jcr_zone",
+            "cite_nums",
+            "annual_publication",
+            "publication_cycle",
+            "source",
+        ],
+        journals,
+        "journal",
+    )
+    ok_e = batch_insert_edge(
+        client,
+        "PUBLISHED_IN",
+        ["volume", "issue", "start_page", "end_page", "publication_year"],
+        edges,
+        "published_in",
+    )
     logger.info(f"  期刊 Journal: {ok_j}/{len(journals)}, PUBLISHED_IN: {ok_e}/{len(edges)}")
     return ok_j
 
@@ -232,7 +400,9 @@ def load_references(client: TRSGraphClient, session) -> int:
     """参考文献 → CITES 边（Paper → Paper）。"""
     edges = []
     for tbl in ["dwd_zh_paper_reference", "dwd_en_paper_reference"]:
-        rows = session.execute(text(f"SELECT id, doi FROM {tbl} WHERE doi IS NOT NULL AND doi != ''")).all()
+        rows = session.execute(
+            text(f"SELECT id, doi FROM {tbl} WHERE doi IS NOT NULL AND doi != ''")
+        ).all()
         for r in rows:
             src_vid = f"paper_{r[0]}"
             # 参考文献用 doi 作为目标 Paper 的标识（如果存在同名 Paper）
@@ -247,7 +417,9 @@ def load_citations(client: TRSGraphClient, session) -> int:
     """引用 → CITED_BY 边（Paper → Paper）。"""
     edges = []
     for tbl in ["dwd_zh_paper_citation", "dwd_en_paper_citation"]:
-        rows = session.execute(text(f"SELECT id, doi FROM {tbl} WHERE doi IS NOT NULL AND doi != ''")).all()
+        rows = session.execute(
+            text(f"SELECT id, doi FROM {tbl} WHERE doi IS NOT NULL AND doi != ''")
+        ).all()
         for r in rows:
             src_vid = f"paper_{r[0]}"
             dst_vid = f"paper_cit_{r[1]}"
@@ -261,28 +433,80 @@ def load_reports(client: TRSGraphClient, session) -> int:
     """加载中文+英文报告 → Report 节点。"""
     reports = []
     # 中文报告
-    rows = session.execute(text(
-        "SELECT report_id, title_cn, report_category, report_type, abstract_cn, keywords_cn, "
-        "page_count, preparation_time, source_url FROM dwd_zh_report"
-    )).all()
+    rows = session.execute(
+        text(
+            "SELECT report_id, title_cn, report_category, report_type, abstract_cn, keywords_cn, "
+            "page_count, preparation_time, source_url FROM dwd_zh_report"
+        )
+    ).all()
     for r in rows:
         vid = f"report_{r[0]}"
-        reports.append((vid, (r[1], None, r[2], r[3], r[4], r[5], r[6], str(r[7]) if r[7] else None, r[8], "zh_report")))
+        reports.append(
+            (
+                vid,
+                (
+                    r[1],
+                    None,
+                    r[2],
+                    r[3],
+                    r[4],
+                    r[5],
+                    r[6],
+                    str(r[7]) if r[7] else None,
+                    r[8],
+                    "zh_report",
+                ),
+            )
+        )
     # 英文报告
-    rows = session.execute(text(
-        "SELECT report_id, title_en, document_type, page_count, publication_date, source_url, abstract_en, keywords_en FROM dwd_en_report"
-    )).all()
+    rows = session.execute(
+        text(
+            "SELECT report_id, title_en, document_type, page_count, publication_date, source_url, abstract_en, keywords_en FROM dwd_en_report"
+        )
+    ).all()
     for r in rows:
         vid = f"report_{r[0]}"
-        reports.append((vid, (None, r[1], None, r[2], r[6], r[7], r[3], str(r[4]) if r[4] else None, r[5], "en_report")))
-    ok = batch_insert_vertex(client, "Report",
-        ["title_cn","title_en","report_category","report_type","abstract","keywords",
-         "page_count","publication_date","source_url","source"], reports, "report")
+        reports.append(
+            (
+                vid,
+                (
+                    None,
+                    r[1],
+                    None,
+                    r[2],
+                    r[6],
+                    r[7],
+                    r[3],
+                    str(r[4]) if r[4] else None,
+                    r[5],
+                    "en_report",
+                ),
+            )
+        )
+    ok = batch_insert_vertex(
+        client,
+        "Report",
+        [
+            "title_cn",
+            "title_en",
+            "report_category",
+            "report_type",
+            "abstract",
+            "keywords",
+            "page_count",
+            "publication_date",
+            "source_url",
+            "source",
+        ],
+        reports,
+        "report",
+    )
     logger.info(f"  报告 Report: {ok}/{len(reports)}")
     return ok
 
 
 # ---------- 主流程 ----------
+
 
 def main() -> None:
     logger.info("=== 论文/期刊/报告 ETL: gkx_element → TRSGraph(dev) ===\n")
@@ -306,7 +530,7 @@ def main() -> None:
         # load_citations(graph, session)
         # logger.info("\n6. 加载报告 Report 节点")
         # load_reports(graph, session)
-        logger.info(f"\n=== ETL 完成，耗时 {time.time()-t0:.1f}s ===")
+        logger.info(f"\n=== ETL 完成，耗时 {time.time() - t0:.1f}s ===")
     finally:
         session.close()
         mysql.dispose()

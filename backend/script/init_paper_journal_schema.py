@@ -87,10 +87,14 @@ def main() -> None:
     print(f"=== 初始化 {SPACE} 空间 Schema ===")
 
     # 1. 重建空间（先 DROP 再 CREATE，确保 schema 是全 string）
-    run(client, f'DROP SPACE IF EXISTS {SPACE};', f"DROP SPACE {SPACE}")
+    run(client, f"DROP SPACE IF EXISTS {SPACE};", f"DROP SPACE {SPACE}")
     print("  等待 DROP 传播 (5s)...")
     time.sleep(5)
-    run(client, f'CREATE SPACE IF NOT EXISTS {SPACE}(vid_type=FIXED_STRING(256), partition_num=10, replica_factor=1);', f"CREATE SPACE {SPACE}")
+    run(
+        client,
+        f"CREATE SPACE IF NOT EXISTS {SPACE}(vid_type=FIXED_STRING(256), partition_num=10, replica_factor=1);",
+        f"CREATE SPACE {SPACE}",
+    )
     print("  等待空间传播 (10s)...")
     time.sleep(10)
 

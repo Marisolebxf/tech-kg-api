@@ -121,13 +121,15 @@ def get_dev_graph_client() -> TRSGraphClient:
 def _merge_stub_person(
     graph: TRSGraphClient, name: str, *, ingest_batch: str, ingest_time: str
 ) -> str:
+    """增量写 Person 桩：已存在则跳过，避免覆盖同事数据。"""
     vid = person_vid(name)
+    if graph.get_node(vid) is not None:
+        return vid
     is_ascii = all(ord(c) < 128 for c in name)
-    # Compatible with colleague Person schema on space=dev (name_cn/name_en, no `source`)
+    # 现网 Person：name_zh/name_en（无 name_cn / person_kind）
     props = {
-        "name_cn": "" if is_ascii else name,
+        "name_zh": "" if is_ascii else name,
         "name_en": name if is_ascii else "",
-        "person_kind": STUB_SOURCE,
         **_stub_provenance(ingest_batch=ingest_batch, ingest_time=ingest_time, record_id=vid),
     }
     _merge_node(graph, ["Person"], vid, props)
@@ -137,16 +139,22 @@ def _merge_stub_person(
 def _merge_stub_org(
     graph: TRSGraphClient, name: str, *, ingest_batch: str, ingest_time: str
 ) -> str:
+    """增量写 Organization 桩：已存在则跳过。"""
     cleaned = normalize_name(name).rstrip("；;")
     vid = org_vid(cleaned)
+    if graph.get_node(vid) is not None:
+        return vid
     is_ascii = all(ord(c) < 128 for c in cleaned)
-    # Compatible with colleague Organization schema (org_id + name_cn/name_en, no `source`)
+    # 现网 Organization：无 org_id / source_url / source_update_time
     props = {
-        "org_id": vid,
         "name_cn": cleaned,
         "name_en": cleaned if is_ascii else "",
         "org_kind": STUB_SOURCE,
-        **_stub_provenance(ingest_batch=ingest_batch, ingest_time=ingest_time, record_id=vid),
+        "source_system": SOURCE_SYSTEM,
+        "source_table": "project_stub",
+        "source_record_id": vid,
+        "ingest_batch": ingest_batch,
+        "ingest_time": ingest_time,
     }
     _merge_node(graph, ["Organization"], vid, props)
     return vid
@@ -155,13 +163,12 @@ def _merge_stub_org(
 def _merge_keyword(
     graph: TRSGraphClient, keyword: str, *, ingest_batch: str, ingest_time: str
 ) -> str:
+    """现网 Keyword 仅有 keyword 列；已存在则跳过。"""
+    del ingest_batch, ingest_time  # 现网 Tag 无溯源列
     vid = keyword_vid(keyword)
-    props = {
-        "keyword": keyword.strip().lower(),
-        **_stub_provenance(ingest_batch=ingest_batch, ingest_time=ingest_time, record_id=vid),
-    }
-    props["source_table"] = "project_keyword"
-    _merge_node(graph, ["Keyword"], vid, props)
+    if graph.get_node(vid) is not None:
+        return vid
+    _merge_node(graph, ["Keyword"], vid, {"keyword": keyword.strip().lower()})
     return vid
 
 
@@ -176,7 +183,9 @@ def _merge_stub_paper(
     ingest_batch: str,
     ingest_time: str,
 ) -> None:
-    # Colleague Paper schema uses title_zh/title_en (no bare `title` / `source`)
+    """增量写 Paper 桩：已存在则跳过。现网用 title_zh/title_en。"""
+    if graph.get_node(vid) is not None:
+        return
     is_ascii = all(ord(c) < 128 for c in title) if title else True
     props = {
         "title_zh": "" if is_ascii else title,
@@ -204,17 +213,19 @@ def _merge_stub_patent(
     ingest_batch: str,
     ingest_time: str,
 ) -> None:
+    """增量写 Patent 桩：已存在则跳过。现网用 title_zh/title_en；datetime 列不写空串。"""
+    del ingest_batch, ingest_time
+    if graph.get_node(vid) is not None:
+        return
+    is_ascii = all(ord(c) < 128 for c in title) if title else True
     props = {
-        "title": title or "",
+        "title_zh": "" if is_ascii else (title or ""),
+        "title_en": (title or "") if is_ascii else "",
         "publication_number": publication_number or "",
-        "source": STUB_SOURCE,
         "source_system": SOURCE_SYSTEM,
         "source_table": source_table,
         "source_record_id": source_record_id,
         "source_url": "",
-        "ingest_batch": ingest_batch,
-        "ingest_time": ingest_time,
-        "source_update_time": "",
     }
     _merge_node(graph, ["Patent"], vid, props)
 
@@ -542,6 +553,9 @@ def stage_datasource(
     }
     for table, cn_name in tables.items():
         ds_vid = f"ds_{table}"
+        # 已存在则跳过，避免覆盖同事 DataSource
+        if graph.get_node(ds_vid) is not None:
+            continue
         props = {
             "source_table": table,
             "table_cn_name": cn_name,

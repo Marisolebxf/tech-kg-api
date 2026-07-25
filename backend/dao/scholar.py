@@ -10,8 +10,8 @@ from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session
 
 from dao.base import BaseDAO
-from db_model.project import DwdEnProject, DwdZhProject
 from db_model.patent import OdsPatent
+from db_model.project import DwdEnProject, DwdZhProject
 from db_model.scholar import DwdScholar
 
 

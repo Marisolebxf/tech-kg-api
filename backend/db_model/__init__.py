@@ -48,12 +48,6 @@ from db_model.domestic_organization import (
     DwdOrgTbJudicialSale,
     DwdOrgTbJudicialSaleInfoCompany,
 )
-from db_model.project import (
-    DwdEnProject,
-    DwdEnProjectOutput,
-    DwdZhProject,
-    DwdZhProjectOutput,
-)
 from db_model.foreign_organization import (
     DwdForgAggIdentifier,
     DwdForgBaseInfo,
@@ -101,6 +95,12 @@ from db_model.policy import (
     OdsZhPolicy,
     OdsZhPolicy6,
     OdsZhPolicyTuoersi,
+)
+from db_model.project import (
+    DwdEnProject,
+    DwdEnProjectOutput,
+    DwdZhProject,
+    DwdZhProjectOutput,
 )
 from db_model.report import (
     OdsEnReport,

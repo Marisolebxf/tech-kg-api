@@ -1,0 +1,174 @@
+-- Project domain schema for TRSGraph space `dev`
+-- Ontology: Tag Project (unified zh/en). Stub tags for cross-domain edges.
+
+CREATE TAG IF NOT EXISTS Project(
+  project_number string,
+  title string,
+  project_source string,
+  project_level string,
+  funded_amount double,
+  discipline string,
+  discipline_code string,
+  fund_category string,
+  funded_region string,
+  approval_year string,
+  approval_time string,
+  research_period string,
+  abstract string,
+  final_report_abstract string,
+  project_page_url string,
+  source string,
+  total_outputs int64,
+  journal_articles_count int64,
+  conference_papers_count int64,
+  books_count int64,
+  degree_papers_count int64,
+  patents_count int64,
+  clinical_trials_count int64,
+  products_count int64,
+  awards_count int64,
+  reports_count int64,
+  other_outputs_count int64,
+  source_system string,
+  source_table string,
+  source_record_id string,
+  source_url string,
+  ingest_batch string,
+  ingest_time string,
+  source_update_time string
+);
+
+-- Stub / minimal peer tags (source=project_stub for stubs)
+CREATE TAG IF NOT EXISTS Person(
+  name_zh string,
+  name_en string,
+  source string,
+  source_system string,
+  source_table string,
+  source_record_id string,
+  source_url string,
+  ingest_batch string,
+  ingest_time string,
+  source_update_time string
+);
+
+CREATE TAG IF NOT EXISTS Organization(
+  name_cn string,
+  name_en string,
+  source string,
+  source_system string,
+  source_table string,
+  source_record_id string,
+  source_url string,
+  ingest_batch string,
+  ingest_time string,
+  source_update_time string
+);
+
+CREATE TAG IF NOT EXISTS Keyword(
+  keyword string,
+  source_system string,
+  source_table string,
+  source_record_id string,
+  source_url string,
+  ingest_batch string,
+  ingest_time string,
+  source_update_time string
+);
+
+CREATE TAG IF NOT EXISTS Paper(
+  title string,
+  doi string,
+  source string,
+  source_system string,
+  source_table string,
+  source_record_id string,
+  source_url string,
+  ingest_batch string,
+  ingest_time string,
+  source_update_time string
+);
+
+CREATE TAG IF NOT EXISTS Patent(
+  title string,
+  publication_number string,
+  source string,
+  source_system string,
+  source_table string,
+  source_record_id string,
+  source_url string,
+  ingest_batch string,
+  ingest_time string,
+  source_update_time string
+);
+
+CREATE TAG IF NOT EXISTS DataSource(
+  source_table string,
+  table_cn_name string,
+  tier string,
+  library string,
+  source_system string,
+  source_record_id string,
+  source_url string,
+  ingest_batch string,
+  ingest_time string,
+  source_update_time string
+);
+
+CREATE EDGE IF NOT EXISTS FUNDED_BY(
+  funded_amount double,
+  fund_category string,
+  source_table string,
+  source_record_id string,
+  ingest_batch string,
+  ingest_time string
+);
+
+CREATE EDGE IF NOT EXISTS LEADS(
+  source_table string,
+  source_record_id string,
+  ingest_batch string,
+  ingest_time string
+);
+
+CREATE EDGE IF NOT EXISTS HAS_PARTICIPANT(
+  source_table string,
+  source_record_id string,
+  ingest_batch string,
+  ingest_time string
+);
+
+CREATE EDGE IF NOT EXISTS PARTICIPATES_IN(
+  source_table string,
+  source_record_id string,
+  ingest_batch string,
+  ingest_time string
+);
+
+CREATE EDGE IF NOT EXISTS HAS_KEYWORD(
+  source_table string,
+  source_record_id string,
+  ingest_batch string,
+  ingest_time string
+);
+
+CREATE EDGE IF NOT EXISTS OUTPUT_OF(
+  source_table string,
+  source_record_id string,
+  ingest_batch string,
+  ingest_time string
+);
+
+CREATE EDGE IF NOT EXISTS SOURCED_FROM(
+  source_record_id string,
+  ingest_batch string,
+  ingest_time string
+);
+
+CREATE TAG INDEX IF NOT EXISTS project_number_idx ON Project(project_number(64));
+CREATE TAG INDEX IF NOT EXISTS project_title_idx ON Project(title(128));
+
+-- 说明：space=dev 上 Person/Organization/Paper/DataSource 可能已由同事创建为更宽 schema。
+-- ETL（load_project_graph.py）会适配已有字段（如 Person.name_cn、Paper.title_zh），
+-- 桩桩用 org_kind/person_kind=`project_stub`，避免写入不存在的 `source` 列。
+-- 若需补列，请逐列 ALTER TAG ADD，勿批量 ADD 已存在列。

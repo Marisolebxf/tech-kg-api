@@ -1,4 +1,4 @@
-CREATE TABLE `ods_zh_project_output` (
+CREATE TABLE `dwd_en_project_output` (
   `id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT 'UUID主键',
   `total_outputs` int DEFAULT NULL COMMENT '项目总产出数量',
   `journal_articles_count` int DEFAULT NULL COMMENT '期刊文章数量',
@@ -24,4 +24,4 @@ CREATE TABLE `ods_zh_project_output` (
   `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
   `update_time` datetime DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='深势-国内项目产出信息表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='深势-国外项目产出信息表';

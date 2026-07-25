@@ -10,8 +10,7 @@ from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session
 
 from dao.base import BaseDAO
-from db_model.domestic_project import OdsZhProject
-from db_model.foreign_project import OdsEnProject
+from db_model.project import DwdEnProject, DwdZhProject
 from db_model.patent import OdsPatent
 from db_model.scholar import DwdScholar
 
@@ -308,8 +307,8 @@ class ScholarDAO(BaseDAO[DwdScholar]):
         try:
             normalized_limit = max(1, min(int(limit or 20), 100))
             candidate_limit = max(50, min(normalized_limit * 20, 500))
-            rows = list(session.scalars(select(OdsZhProject).limit(candidate_limit)).all())
-            rows.extend(list(session.scalars(select(OdsEnProject).limit(candidate_limit)).all()))
+            rows = list(session.scalars(select(DwdZhProject).limit(candidate_limit)).all())
+            rows.extend(list(session.scalars(select(DwdEnProject).limit(candidate_limit)).all()))
             return self._build_pair_relations(
                 session=session,
                 rows=rows,

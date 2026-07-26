@@ -7,7 +7,7 @@ handler 层只调 TRSGraphClient 方法，不直接写 nGQL。
 from __future__ import annotations
 
 import threading
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
@@ -185,7 +185,7 @@ async def get_subgraph(
     depth: int = Query(1, ge=1, le=3, description="跳数 1-3"),
     limit: int = Query(50, ge=1, le=200, description="每跳最大边数"),
     edge_type: str | None = Query(None, description="边类型过滤，如 AUTHORED_BY"),
-    direction: str = Query("both", description="方向: out/in/both"),
+    direction: Literal["out", "in", "both"] = Query("both", description="方向: out/in/both"),
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:
     """查某节点的 N 跳子图（点 + 边），前端直接渲染图谱。"""
@@ -199,6 +199,7 @@ async def get_subgraph(
 
         nodes: list[GraphNodeData] = [_node_to_data(center)]
         edges: list[GraphEdgeData] = []
+        seen_edge_ids: set[str] = set()
         seen_vids = {str(center.id)}
 
         # 逐跳扩展
@@ -210,7 +211,15 @@ async def get_subgraph(
                     vid, direction=direction, edge_type=edge_type, limit=limit
                 )
                 for e in edge_list:
-                    edges.append(_edge_to_data(e))
+                    edge_data = _edge_to_data(e)
+
+                    edge_key = (
+                        edge_data.id or f"{edge_data.source}|{edge_data.type}|{edge_data.target}"
+                    )
+
+                    if edge_key not in seen_edge_ids:
+                        seen_edge_ids.add(edge_key)
+                        edges.append(edge_data)
                     neighbor_id = str(e.target_id if str(e.source_id) == vid else e.source_id)
                     if neighbor_id not in seen_vids:
                         neighbor = client.get_node(neighbor_id)
@@ -235,7 +244,7 @@ async def get_subgraph(
 @router.get("/node/{node_id}/edges", response_model=ApiResponse)
 async def get_node_edges(
     node_id: str,
-    direction: str = Query("both", description="out/in/both"),
+    direction: Literal["out", "in", "both"] = Query("both", description="out/in/both"),
     edge_type: str | None = Query(None, description="边类型过滤"),
     limit: int = Query(50, ge=1, le=200),
     space: str | None = Query(None, description="图空间"),
@@ -254,7 +263,7 @@ async def get_node_edges(
 @router.get("/node/{node_id}/neighbours", response_model=ApiResponse)
 async def get_neighbours(
     node_id: str,
-    direction: str = Query("both", description="out/in/both"),
+    direction: Literal["out", "in", "both"] = Query("both", description="out/in/both"),
     edge_type: str | None = Query(None, description="边类型过滤"),
     limit: int = Query(50, ge=1, le=200),
     space: str | None = Query(None, description="图空间"),

@@ -8,7 +8,7 @@
 |---|---|---|
 | `init_db.py` | 执行 `schemas/ddl/` 下全部 DDL | 默认连接实验室/本地 Docker MySQL `127.0.0.1:3306/gkx_local` |
 | `sync_schema_from_mysql.py` | 从源 MySQL 同步 DDL、字段规范和 ORM | 优先读取 `SOURCE_MYSQL_*`，只读 `information_schema` 和 `SHOW CREATE TABLE` |
-| `paper_journal_relation/` | 论文/期刊实体关系抽取 ETL | 从 `gkx_element` 论文关系表抽取 Paper→Paper 有向边（RELATED_TO / CITES / CITED_BY）写入 TRSGraph `dev` 空间，详见子目录 README |
+| `paper_journal_relation/` | 论文/期刊实体关系抽取 ETL | 从 `gkx_element` 论文关系表抽取「从论文出发」的有向边（Paper→Paper: RELATED_TO/CITES/CITED_BY；Paper→Keyword: HAS_KEYWORD；Paper→Report: REFERENCED_BY）写入 TRSGraph `dev` 空间，使用 `infra.graph_db.TRSGraphClient`，详见子目录 README |
 
 ## 常用命令
 

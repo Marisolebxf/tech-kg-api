@@ -10,7 +10,7 @@ import navReview from '../assets/icons/nav-review.svg'
 import navSchema from '../assets/icons/nav-schema.svg'
 import navServices from '../assets/icons/nav-services.svg'
 import navTasks from '../assets/icons/nav-tasks.svg'
-import navFlow from '../assets/icons/nav-flow.svg'
+// import navFlow from '../assets/icons/nav-flow.svg'
 import navTools from '../assets/icons/nav-tools.svg'
 import { useAppStore } from '../stores/app'
 import avatarBen from '../assets/images/avatar-ben.png'
@@ -254,10 +254,12 @@ onBeforeUnmount(() => {
               <img class="app-nav__icon" :src="navReview" alt="" aria-hidden="true" />
               <span v-if="!appStore.collapsed">人工处理</span>
             </RouterLink>
+            <!-- 抽取 Pipeline 入口暂时隐藏，需要时取消注释恢复
             <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/pipelines" :title="appStore.collapsed ? '抽取 Pipeline' : undefined">
               <img class="app-nav__icon" :src="navFlow" alt="" aria-hidden="true" />
               <span v-if="!appStore.collapsed">抽取 Pipeline</span>
             </RouterLink>
+            -->
 
             <div v-if="!appStore.collapsed" class="app-nav__group"><span>平台管理</span></div>
             <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/configurations" :title="appStore.collapsed ? '配置管理' : undefined">

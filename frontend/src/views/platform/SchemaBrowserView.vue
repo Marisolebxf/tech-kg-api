@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useToast } from '../../composables/use-toast'
 
 type Entity = { name: string; label: string; level: '核心实体' | '支撑实体'; key: string; source: string; description: string }
 type Relation = { name: string; label: string; source: string; target: string; basis: string; level?: '标准' | '扩展' }
@@ -10,7 +11,7 @@ const keyword = ref('')
 // const schemaVersionMessage = ref('')
 const tabs = ['标准实体', '事实关系', '推理关系', '属性定义']
 
-const entities: Entity[] = [
+const entities = ref<Entity[]>([
   { name: 'Expert', label: '专家 / 人才 / 学者', level: '核心实体', key: 'scholar_id / expert_id', source: 'dwd_scholar / dwd_paper_author / dwd_project_person / dwd_patent_inventor', description: '统一承载科研与产业人才主体' },
   { name: 'Organization', label: '机构 / 企业', level: '核心实体', key: 'org_id / external_id / credit_code', source: 'dwd_org_reg_info / dwd_forg_base_info / dwd_paper_affiliation / dwd_patent_applicant', description: '高校、科研机构、企业、医院和政府机构统一建模，用 org_category 区分' },
   { name: 'Paper', label: '论文', level: '核心实体', key: 'DOI / paper_id', source: 'dwd_zh_paper_detail / dwd_en_paper_detail / dwd_paper_reference', description: '论文成果与引用信息' },
@@ -25,9 +26,9 @@ const entities: Entity[] = [
   { name: 'Person', label: '通用人员', level: '支撑实体', key: 'person_id', source: 'dwd_org_executive / dwd_org_shareholder / dwd_patent_inventor / dwd_paper_author', description: '已确认为同一自然人，但不能确认为专家时使用' },
   { name: 'Publication', label: '期刊 / 会议 / 出版物', level: '支撑实体', key: 'ISSN / EISSN / publication_id', source: 'dim_publication / dwd_journal', description: '论文发表载体及其动态指标' },
   { name: 'IndustryChain', label: '产业链', level: '支撑实体', key: 'chain_code', source: 'dim_industry_chain / dwd_industry_chain_info', description: '表示整条产业链，与 IndustryChainNode 明确分层' },
-]
+])
 
-const factRelations: Relation[] = [
+const factRelations = ref<Relation[]>([
   { name: 'HAS_RESEARCH_FIELD', label: '专家研究方向', source: 'Expert', target: 'ResearchField', basis: '专家方向拆分、标准化' },
   { name: 'PUBLISH', label: '发表论文', source: 'Expert', target: 'Paper', basis: '作者对齐后生成，保留作者顺序' },
   { name: 'WORKS_AT', label: '任职', source: 'Expert / Person', target: 'Organization', basis: '工作经历抽取机构、职位和时间' },
@@ -72,9 +73,9 @@ const factRelations: Relation[] = [
   { name: 'ORG_FIELD', label: '企业技术领域', source: 'Organization', target: 'ResearchField', basis: '行业分类、经营范围和产品领域归一' },
   { name: 'HAS_FINANCIAL_RECORD', label: '机构年度财务', source: 'Organization', target: 'FinancialRecord', basis: '需要保留年度历史时生成', level: '扩展' },
   { name: 'BELONGS_TO_PATENT_FAMILY', label: '专利属于家族', source: 'Patent', target: 'PatentFamily', basis: '专利家族对齐后生成', level: '扩展' },
-]
+])
 
-const inferenceRelations: Relation[] = [
+const inferenceRelations = ref<Relation[]>([
   { name: 'CO_AUTHOR', label: '论文合作', source: 'Expert', target: 'Expert', basis: '共同发表同一论文' },
   { name: 'COLLEAGUE', label: '同事关系', source: 'Expert', target: 'Expert', basis: '同一机构任职且时间重叠，或共同参与项目' },
   { name: 'ALUMNI', label: '校友关系', source: 'Expert', target: 'Expert', basis: '同校就读，结合专业、学历和时间' },
@@ -84,7 +85,7 @@ const inferenceRelations: Relation[] = [
   { name: 'EXPERT_COMPANY_RELATION', label: '专家企业关系', source: 'Expert', target: 'Organization', basis: '任职、专利、项目、高管与产品领域综合判定' },
   { name: 'CHAIN_EVENT_IMPACT', label: '产业链事件影响', source: 'IndustryChainNode', target: 'Event', basis: '事件热度、关联企业数、政策影响和趋势' },
   { name: 'CHAIN_OVERVIEW_RELATION', label: '产业链全景关联', source: 'IndustryChainNode', target: '多类实体', basis: '节点、企业、产品、专家、政策和事件综合关联' },
-]
+])
 
 const attributes = [
   { entity: 'Expert', key: 'expert_id', core: 'name_zh, name_en, avatar, organization_name_zh, bio_zh, bio_en', dynamic: 'paper_count, citation_count, h_index', source: 'dwd_scholar' },
@@ -107,11 +108,106 @@ const attributes = [
 //   { version: 'v1.6', status: '历史版本', time: '2026-06-10 20:06', entities: '10 个标准实体', relations: '31 标准 / 6 推理', change: '建立专家、机构、论文与项目的基础 Schema', publisher: '张建图' },
 // ]
 
+const { showToast } = useToast()
+
+const modalOpen = ref(false)
+const form = ref<Record<string, string>>({})
+const scriptByRow = ref<Record<string, File>>({})
+const fileInput = ref<HTMLInputElement | null>(null)
+const pendingUploadRow = ref('')
+
+const formSpec = computed(() => {
+  switch (activeTab.value) {
+    case '标准实体': return [
+      { key: 'name', label: '实体中文名', type: 'text', required: true },
+      { key: 'label', label: 'Schema 名称', type: 'text', required: true },
+      { key: 'key', label: '主键', type: 'text', required: true },
+      { key: 'source', label: '主要来源表组', type: 'text' },
+      { key: 'description', label: '建模说明', type: 'textarea' },
+    ]
+    case '事实关系': return [
+      { key: 'name', label: '关系中文名', type: 'text', required: true },
+      { key: 'label', label: '关系英文名', type: 'text', required: true },
+      { key: 'source', label: '起点', type: 'text', required: true },
+      { key: 'target', label: '终点', type: 'text', required: true },
+      { key: 'basis', label: '生成依据', type: 'text' },
+    ]
+    case '推理关系': return [
+      { key: 'name', label: '推理关系', type: 'text', required: true },
+      { key: 'label', label: 'Schema 名称', type: 'text', required: true },
+      { key: 'source', label: '起点', type: 'text', required: true },
+      { key: 'target', label: '终点', type: 'text', required: true },
+      { key: 'basis', label: '生成依据', type: 'text' },
+    ]
+    default: return []
+  }
+})
+
+function openCreate() {
+  form.value = {}
+  modalOpen.value = true
+}
+
+function saveItem() {
+  for (const f of formSpec.value) {
+    if (f.required && !form.value[f.key]?.trim()) {
+      showToast(`请填写${f.label}`, 'warning')
+      return
+    }
+  }
+  if (activeTab.value === '标准实体') {
+    entities.value.unshift({
+      name: form.value.name ?? '',
+      label: form.value.label ?? '',
+      level: '支撑实体',
+      key: form.value.key ?? '',
+      source: form.value.source ?? '',
+      description: form.value.description ?? '',
+    })
+  } else if (activeTab.value === '事实关系') {
+    factRelations.value.unshift({
+      name: form.value.name ?? '',
+      label: form.value.label ?? '',
+      source: form.value.source ?? '',
+      target: form.value.target ?? '',
+      basis: form.value.basis ?? '',
+      level: '扩展',
+    })
+  } else if (activeTab.value === '推理关系') {
+    inferenceRelations.value.unshift({
+      name: form.value.name ?? '',
+      label: form.value.label ?? '',
+      source: form.value.source ?? '',
+      target: form.value.target ?? '',
+      basis: form.value.basis ?? '',
+      level: '扩展',
+    })
+  }
+  modalOpen.value = false
+  showToast('已新增', 'success')
+}
+
+function triggerFileUpload(rowName: string) {
+  pendingUploadRow.value = rowName
+  fileInput.value?.click()
+}
+
+function handleFileSelect(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (file && pendingUploadRow.value) {
+    scriptByRow.value[pendingUploadRow.value] = file
+    showToast(`已选择 ${file.name}`, 'success')
+  }
+  input.value = ''
+  pendingUploadRow.value = ''
+}
+
 const normalizedKeyword = computed(() => keyword.value.trim().toLowerCase())
 const matches = (row: unknown) => !normalizedKeyword.value || Object.values(row as Record<string, unknown>).join(' ').toLowerCase().includes(normalizedKeyword.value)
-const filteredEntities = computed(() => entities.filter(matches))
-const filteredFacts = computed(() => factRelations.filter(matches))
-const filteredInference = computed(() => inferenceRelations.filter(matches))
+const filteredEntities = computed(() => entities.value.filter(matches))
+const filteredFacts = computed(() => factRelations.value.filter(matches))
+const filteredInference = computed(() => inferenceRelations.value.filter(matches))
 const filteredAttributes = computed(() => attributes.filter(matches))
 </script>
 
@@ -126,14 +222,14 @@ const filteredAttributes = computed(() => attributes.filter(matches))
 
     <section class="schema-shell">
       <nav class="schema-tabs"><button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="activeTab=tab;keyword=''">{{ tab }}</button></nav>
-      <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeTab === '属性定义'">枚举字典作为属性约束统一维护</span></div><label><span>⌕</span><input v-model="keyword" :placeholder="`搜索${activeTab}`" /></label></div>
+      <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeTab === '属性定义'">枚举字典作为属性约束统一维护</span></div><div class="schema-toolbar__actions"><button v-if="activeTab !== '属性定义'" class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :placeholder="`搜索${activeTab}`" /></label></div></div>
       <!-- <p v-if="schemaVersionMessage" class="schema-version-message">{{ schemaVersionMessage }}</p> -->
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td></tr></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><button type="button" class="schema-action-add" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.name)">＋</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td></tr></tbody></table></div>
+      <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><button type="button" class="schema-action-add" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.name)">＋</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '推理关系'" class="schema-table-wrap"><table><thead><tr><th>推理关系</th><th>Schema 名称</th><th>起点</th><th>终点</th><th>生成依据</th></tr></thead><tbody><tr v-for="row in filteredInference" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td></tr></tbody></table></div>
+      <div v-else-if="activeTab === '推理关系'" class="schema-table-wrap"><table><thead><tr><th>推理关系</th><th>Schema 名称</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredInference" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><button type="button" class="schema-action-add" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.name)">＋</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></td></tr></tbody></table></div>
 
       <div v-else-if="activeTab === '属性定义'" class="schema-table-wrap"><table><thead><tr><th>实体</th><th>主键</th><th>核心属性</th><th>动态属性 / 补充</th><th>主要来源</th></tr></thead><tbody><tr v-for="row in filteredAttributes" :key="row.entity"><td><code>{{ row.entity }}</code></td><td><b>{{ row.key }}</b></td><td class="mono-list">{{ row.core }}</td><td>{{ row.dynamic }}</td><td>{{ row.source }}</td></tr></tbody></table></div>
 
@@ -141,6 +237,28 @@ const filteredAttributes = computed(() => attributes.filter(matches))
       <div v-else class="schema-table-wrap schema-version-table"><table><thead><tr><th>版本</th><th>状态</th><th>发布时间</th><th>实体范围</th><th>关系范围</th><th>变更内容</th><th>发布人</th><th>操作</th></tr></thead><tbody><tr v-for="row in schemaVersions" :key="row.version"><td><code>{{ row.version }}</code></td><td><span :class="row.status === '当前版本' ? 'core' : 'support'">{{ row.status }}</span></td><td>{{ row.time }}</td><td>{{ row.entities }}</td><td>{{ row.relations }}</td><td>{{ row.change }}</td><td>{{ row.publisher }}</td><td><div class="schema-version-actions"><button type="button" @click="schemaVersionMessage = `已打开 ${row.version} 的完整变更清单。`">变更详情</button><button v-if="row.status !== '当前版本'" class="danger" type="button" @click="schemaVersionMessage = `已创建回退至 ${row.version} 的申请，通过影响分析与审批后才会执行。`">申请回退</button></div></td></tr></tbody></table></div>
       -->
     </section>
+
+    <Teleport to="body">
+      <div v-if="modalOpen" class="schema-modal">
+        <button class="schema-modal__mask" type="button" @click="modalOpen = false"></button>
+        <aside class="schema-modal__panel">
+          <header><h2>新增{{ activeTab }}</h2><button type="button" @click="modalOpen = false">×</button></header>
+          <div class="schema-modal__body">
+            <label v-for="f in formSpec" :key="f.key">
+              <span>{{ f.label }}<em v-if="f.required">*</em></span>
+              <input v-if="f.type === 'text'" v-model="form[f.key]" />
+              <textarea v-else v-model="form[f.key]" rows="3"></textarea>
+            </label>
+          </div>
+          <footer>
+            <button type="button" @click="modalOpen = false">取消</button>
+            <button type="button" class="primary" @click="saveItem">保存</button>
+          </footer>
+        </aside>
+      </div>
+    </Teleport>
+
+    <input ref="fileInput" type="file" accept=".py" hidden @change="handleFileSelect" />
   </main>
 </template>
 
@@ -200,4 +318,26 @@ const filteredAttributes = computed(() => attributes.filter(matches))
 .schema-version-message{margin:0;padding:9px 13px;border-bottom:1px solid #b7d0f5;background:#eef5ff;color:#344f7a;font-size:11px}
 .schema-version-table{max-height:470px}.schema-version-table td:nth-child(6){min-width:280px}.schema-version-actions{display:flex;gap:6px}.schema-version-actions button{padding:3px 7px;border:1px solid #bdd0ea;border-radius:4px;background:#fff;color:#165dff;font-size:9px;white-space:nowrap;cursor:pointer}.schema-version-actions button.danger{border-color:#f6b9b4;color:#b42318}
 @media(max-width:1500px){.schema-summary{grid-template-columns:repeat(3,1fr)}}
+
+.schema-toolbar__actions{display:flex;align-items:center;gap:10px}
+.schema-toolbar .primary{height:32px;padding:0 14px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:13px;cursor:pointer}
+.schema-toolbar .primary:hover{background:#0e4ed8}
+.schema-actions{display:flex;gap:6px;align-items:center;white-space:nowrap}
+.schema-action-add{width:24px;height:24px;padding:0;border:1px solid #bfd6fa;border-radius:4px;background:#f2f8ff;color:#165dff;font-size:14px;line-height:22px;cursor:pointer}
+.schema-action-add:hover{background:#e1eeff}
+.script-badge{max-width:120px;padding:0 8px;height:22px;border:1px solid #d8e6fa;border-radius:11px;background:#f7faff;color:#4e5969;font-size:11px;line-height:22px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.schema-modal{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;padding:24px}
+.schema-modal__mask{position:fixed;inset:0;border:0;background:rgba(16,38,76,0.42);backdrop-filter:blur(2px);cursor:pointer}
+.schema-modal__panel{position:relative;z-index:1;width:min(520px,100%);overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3)}
+.schema-modal__panel header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #e5e6eb}
+.schema-modal__panel header h2{margin:0;font-size:15px;font-weight:600;color:#1d2129}
+.schema-modal__panel header button{width:24px;height:24px;border:0;background:transparent;color:#86909c;font-size:18px;cursor:pointer}
+.schema-modal__body{padding:18px;display:flex;flex-direction:column;gap:12px;max-height:60vh;overflow:auto}
+.schema-modal__body label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#4e5969}
+.schema-modal__body label em{color:#f53f3f;font-style:normal;margin-left:2px}
+.schema-modal__body input,.schema-modal__body textarea{height:32px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:13px;color:#1d2129}
+.schema-modal__body textarea{height:auto;padding:6px 8px;resize:vertical}
+.schema-modal__panel footer{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #e5e6eb}
+.schema-modal__panel footer button{height:32px;padding:0 14px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:13px;cursor:pointer}
+.schema-modal__panel footer .primary{background:#165dff;color:#fff;border-color:#165dff}
 </style>

@@ -4,43 +4,51 @@
 }
 
 .kg-panel {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: 0 4px 14px rgba(72, 132, 214, 0.06);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.94)),
+    #f5f9ff;
+  border: 1px solid rgba(167, 201, 250, 0.96);
+  border-radius: 8px;
+  box-shadow:
+    0 12px 28px rgba(48, 105, 194, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(8px);
 }
 
 .kg-panel__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 52px;
-  padding: 0 var(--space-16);
-  border-bottom: 1px solid var(--border);
+  min-height: 48px;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(191, 215, 250, 0.96);
+  background:
+    linear-gradient(90deg, rgba(22, 93, 255, 0.075), transparent 46%),
+    linear-gradient(180deg, rgba(248,252,255,0.9), rgba(232,243,255,0.82));
 }
 
 .kg-panel__title {
   position: relative;
   margin: 0;
   color: var(--text-primary);
-  font-size: 18px;
+  font-size: 17px;
   line-height: 24px;
   font-weight: 600;
 }
 
 .kg-panel__title::before {
   position: absolute;
-  top: 3px;
+  top: 4px;
   left: -10px;
   width: 3px;
-  height: 16px;
+  height: 14px;
   border-radius: 2px;
-  background: var(--primary);
+  background: linear-gradient(180deg, #165dff, #22d3ee);
   content: "";
 }
 
 .kg-panel__body {
-  padding: var(--space-16);
+  padding: 14px;
 }
 
 .kg-muted {
@@ -55,14 +63,14 @@
 
 .kg-stat__value {
   color: var(--text-primary);
-  font-size: 20px;
+  font-size: 24px;
   line-height: 1.2;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .kg-stat__label {
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .kg-control {
@@ -76,15 +84,15 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: var(--control-height);
-  padding: 0 var(--space-16);
+  height: 36px;
+  padding: 0 14px;
   border: 1px solid var(--primary);
   border-radius: var(--radius-sm);
   cursor: pointer;
   color: var(--text-inverse);
   background: var(--primary);
-  font-size: 16px;
-  line-height: 22px;
+  font-size: 14px;
+  line-height: 20px;
 }
 
 .kg-button:hover {
@@ -103,20 +111,28 @@
   background: transparent;
 }
 
+.kg-graph-canvas {
+  background:
+    linear-gradient(#edf3ff 1px, transparent 1px),
+    linear-gradient(90deg, #edf3ff 1px, transparent 1px),
+    #fbfdff;
+  background-size: 24px 24px;
+}
+
 .kg-tabs {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-24);
+  gap: 24px;
 }
 
 .kg-tabs__item {
   position: relative;
-  height: 44px;
+  height: 38px;
   border: 0;
   cursor: pointer;
   color: var(--text-secondary);
   background: transparent;
-  font-size: 16px;
+  font-size: 15px;
 }
 
 .kg-tabs__item.is-active {

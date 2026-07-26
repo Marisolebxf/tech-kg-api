@@ -1,4 +1,10 @@
 node_modules
 dist
 .git
-.vite
+.github
+*.log
+*.local
+.DS_Store
+.idea
+.vscode
+*.docx

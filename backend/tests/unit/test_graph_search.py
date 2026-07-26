@@ -12,7 +12,6 @@ from httpx import Response
 
 from main import app
 
-
 client = TestClient(app)
 
 BASE_URL = "/api/v1/graph-search"

@@ -17,9 +17,9 @@ type ConfigItem = {
 }
 
 const categories = [
-  { key: '数据源', label: '数据源连接', icon: 'DB', count: 6 },
+  // { key: '数据源', label: '数据源连接', icon: 'DB', count: 6 },
   { key: '模型服务', label: '模型与抽取服务', icon: 'AI', count: 4 },
-  { key: 'Schema', label: 'Schema 与字典', icon: 'SC', count: 5 },
+  // { key: 'Schema', label: 'Schema 与字典', icon: 'SC', count: 5 },
   { key: '调度', label: '调度与运行策略', icon: 'CR', count: 3 },
 ]
 
@@ -38,7 +38,8 @@ const items = ref<ConfigItem[]>([
   { id: 'RUNTIME-LARGE', category: '调度', name: '大批量运行资源组', description: '适用于百万级以上批量抽取任务', type: 'Runtime Profile', endpoint: '16 worker · 64 GB', owner: '平台运维组', updatedAt: '2026-07-12 16:55', status: '正常', usage: '并发上限 4' },
 ])
 
-const activeCategory = ref('数据源')
+// const activeCategory = ref('数据源')
+const activeCategory = ref('模型服务')
 const keyword = ref('')
 const statusFilter = ref('全部状态')
 const selected = ref<ConfigItem | null>(null)

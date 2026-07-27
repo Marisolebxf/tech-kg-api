@@ -60,19 +60,45 @@ function edgeClass(edge: GraphEdgeData) {
   return classes.join(' ')
 }
 
-function nodeClass(node: GraphNodeData) {
-  const classes = ['platform-node']
-  if (node.nodeType === 'main') {
-    classes.push('platform-node--main', 'is-main')
-  } else {
-    classes.push(`is-${node.nodeType}`)
+function nodeClass(
+  node: GraphNodeData,
+) {
+  const classes = [
+    'platform-node',
+    `is-${node.nodeType}`,
+  ]
+
+  /*
+   * 中心节点只负责加粗、加大，
+   * 不再改变实体类型颜色。
+   */
+  if (node.level === 0) {
+    classes.push(
+      'platform-node--center',
+    )
   }
-  if (props.selectedNodeId === node.id) classes.push('is-selected')
-  return classes
+
+  if (
+    props.selectedNodeId
+    === node.id
+  ) {
+    classes.push('is-selected')
+  }
+
+  return classes.join(' ')
 }
 
-function nodeRadius(node: GraphNodeData) {
-  return node.nodeType === 'main' ? 16 : Math.min(node.radius ?? 12, 13)
+function nodeRadius(
+  node: GraphNodeData,
+) {
+  if (node.level === 0) {
+    return node.radius ?? 16
+  }
+
+  return Math.min(
+    node.radius ?? 12,
+    13,
+  )
 }
 
 function nodeShape(_node: GraphNodeData) {
@@ -400,5 +426,40 @@ onUnmounted(() => {
 
 .platform-node:not(.platform-node--main):not(.is-main) text {
   transform: translateY(16px);
+}
+
+.platform-node.is-expert .node-shape {
+  fill: #1e8ff3;
+}
+
+.platform-node.is-org .node-shape,
+.platform-node.is-company .node-shape {
+  fill: #48c914;
+}
+
+.platform-node.is-paper .node-shape {
+  fill: #762bd7;
+}
+
+.platform-node.is-project .node-shape {
+  fill: #ffad17;
+}
+
+.platform-node.is-event .node-shape {
+  fill: #eb2aa3;
+}
+
+.platform-node.is-topic .node-shape {
+  fill: #2f6bff;
+}
+
+.platform-node--center .node-shape {
+  stroke: #0b5fc6;
+  stroke-width: 2.6;
+  filter:
+    drop-shadow(
+      0 4px 8px
+      rgba(30, 143, 243, 0.22)
+    );
 }
 </style>

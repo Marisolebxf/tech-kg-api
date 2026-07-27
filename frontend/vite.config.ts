@@ -6,18 +6,25 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: env.VITE_BASE || './',
-    plugins: [vue()],
+
+    plugins: [
+      vue(),
+    ],
+
     server: {
-      // Avoid ENOSPC when system inotify limits can't be raised (no sudo).
+      // 避免服务器无法提高 inotify 限制时出现 ENOSPC。
       watch: {
         usePolling: true,
         interval: 1000,
       },
+
       proxy: {
         '/api': {
-          target: env.VITE_API_TARGET || 'http://localhost:8000',
+          target:
+            env.VITE_API_TARGET
+            || 'http://127.0.0.1:8000',
+
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api/, ''),
         },
       },
     },

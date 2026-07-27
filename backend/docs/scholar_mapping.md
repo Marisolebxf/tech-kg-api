@@ -30,9 +30,9 @@ TRSGraph 边是有向的，按领域分配我只做 **从 Person 出发的边**�
 |--------|------|------|--------|
 | `AFFILIATED_WITH` | Person → Organization | `dwd_scholar` | ✅ |
 | `COAUTHOR_WITH`   | Person → Person       | `dwd_scholar_coauthor` | ✅ |
-| `AUTHORED_BY`     | Paper → Person        | `dwd_scholar_paper_relation` | ❌（属于论文领域，起点是 Paper）|
-| `LEADS`           | Project → Person      | 项目库 | ❌（属于项目领域）|
-| `INVENTED_BY`     | Patent → Person       | 专利库 | ❌（属于专利领域）|
+| `AUTHORED_BY`     | Paper → Person        | `dwd_scholar_paper_relation` | ⚠️ 跨域兜底（可选，见 §5.1） |
+| `LEADS`           | Project → Person      | 项目库 | ❌（属于项目领域，学者侧无源数据）|
+| `INVENTED_BY`     | Patent → Person       | 专利库 | ❌（属于专利领域，学者侧无源数据）|
 | `EXECUTIVE_OF` 等 | Person → Organization | 机构治理表 | ❌（属于机构领域，公司治理关系而非学术从属）|
 
 Organization、Paper、Project、Patent 顶点由对应领域负责创建；本脚本只落 Person 顶点。
@@ -188,9 +188,49 @@ Organization、Paper、Project、Patent 顶点由对应领域负责创建；本�
 | 表 | 说明 |
 |----|------|
 | `dwd_scholar_papers` | 论文实体，属于**论文领域（亚涛）** |
-| `dwd_scholar_paper_relation` | 起点为 Paper，`AUTHORED_BY: Paper → Person` 属于**论文领域** |
+| `dwd_scholar_paper_relation` | 起点为 Paper，`AUTHORED_BY: Paper → Person` 属于**论文领域**；本脚本支持"跨域兜底"以覆盖其漏落，见 §5.1 |
 
 `Person` 侧只做出向边；论文侧的入向边在合并时会通过 `person_{scholar_id}` VID 自动对齐。
+
+### 5.1 跨域兜底：`AUTHORED_BY`（可选）
+
+TRSGraph 边有向、按起点分工时，`AUTHORED_BY: Paper → Person` 的起点在论文领域。
+但 `dwd_scholar_paper_relation` 是**学者领域**能读到的关系表，也承载该边的语义。为避免
+论文领域抽取遗漏 / 排期滞后，脚本 `load_scholar_relations.py` 提供可选的兜底能力：
+
+**规则**：只在图中两端顶点都已存在时才写边，缺一即跳过。
+
+| 端点 | VID | 存在性判定 |
+|------|-----|-----------|
+| 起点 Paper | `paper_{paper_id}` | 每个 `paper_id` 通过 `graph.get_node` 探测一次并缓存 |
+| 终点 Person | `person_{scholar_id}` | 同上（学者顶点由本领域负责，通常全在） |
+
+**字段映射**：
+
+| 源字段 | 图上位置 | 处理 |
+|--------|--------|------|
+| `paper_id` | 起点 VID | `paper_{paper_id}` |
+| `scholar_id` | 终点 VID | `person_{scholar_id}` |
+| `citations` | `AUTHORED_BY.citations` | 缺失置 0 |
+| `year` / `publish_time` / `publication_id` / `related_paper_id` | 不映射 | 论文领域批次里落 Paper / Journal 顶点属性时使用 |
+| `status` | 过滤条件 | 仅取 `status=1` |
+| — | `AUTHORED_BY.source_table` | 固定 `"dwd_scholar_paper_relation"` |
+| — | `AUTHORED_BY.source_record_id` | 组合键 `{paper_id}_{scholar_id}` |
+| — | `AUTHORED_BY.ingest_batch` | 与主流程共用批次号 |
+| — | `AUTHORED_BY.ingest_time` | 时间戳 |
+
+**开关**：默认关闭；显式加 `--include-authored-by-fallback` 才启用。开启后统计信息新增：
+
+```
+AUTHORED_BY (fallback): {
+  written: N,                # 两端都存在，成功写入
+  skipped_missing_paper: X,  # Paper 顶点尚未落地
+  skipped_missing_person: Y  # Person 顶点尚未落地（正常情况下应为 0）
+}
+```
+
+**协作原则**：论文领域用 `dwd_zh_paper_author` / `dwd_en_paper_author` 抽 `AUTHORED_BY`
+仍是主线；本兜底只是补集，`merge_edge` 幂等，两侧写同一条边只更新属性不重复。
 
 ---
 
@@ -200,21 +240,21 @@ Organization、Paper、Project、Patent 顶点由对应领域负责创建；本�
 
 ```mermaid
 flowchart LR
-    subgraph MySQL[gkx_element MySQL]
-        S[(dwd_scholar<br/>status=1)]
-        T[(dwd_scholar_talent_flag)]
-        R[(dwd_scholar_research_direction)]
+    subgraph Src[学者要素数据库]
+        S["学者主表<br/>（有效记录）"]
+        T["人才标识表"]
+        R["研究方向表"]
     end
 
-    subgraph ETL[backend/script/load_scholar_entities.py]
-        PRE[预加载 talent_flag &<br/>research_direction 到内存<br/>scholar_id -> value]
-        DAO[SQLAlchemy 分页读取<br/>batch=500]
-        MAP[属性拼装<br/>Person 顶点]
-        BATCH[ingest_batch =<br/>BATCH_yyyymmdd_HHMMSS_scholar_entities]
+    subgraph ETL[实体抽取程序]
+        PRE["预加载 人才标识 & 研究方向<br/>（内存字典）"]
+        DAO["分批读取学者主表"]
+        MAP["构造学者顶点标识<br/>组装学者属性"]
+        BATCH["生成入图批次号"]
     end
 
-    subgraph Graph[TRSGraph dev]
-        P[[Person 顶点]]
+    subgraph Graph[科技知识图谱]
+        P["学者顶点"]
     end
 
     T --> PRE
@@ -223,87 +263,92 @@ flowchart LR
     PRE --> MAP
     DAO --> MAP
     BATCH --> MAP
-    MAP -->|infra.graph_db.get_trs_graph_client<br/>merge_node| P
+    MAP -->|"调用图数据库客户端<br/>幂等合并"| P
 ```
 
 ### 6.2 关系抽取
 
 ```mermaid
 flowchart LR
-    subgraph MySQL[gkx_element MySQL]
-        S2[(dwd_scholar<br/>status=1)]
-        C[(dwd_scholar_coauthor<br/>status=1)]
+    subgraph Src[学者要素数据库]
+        S2["学者主表<br/>（有效记录）"]
+        C["合作关系表<br/>（有效记录）"]
     end
 
-    subgraph ETL2[backend/script/load_scholar_relations.py]
-        DAO2[SQLAlchemy 分页读取]
-        MAP2[VID 构造 + 属性拼装]
-        BATCH2[ingest_batch =<br/>BATCH_yyyymmdd_HHMMSS_scholar_rel]
+    subgraph ETL2[关系抽取程序]
+        DAO2["分批读取源数据"]
+        VID["构造两端顶点标识<br/>（机构ID优先，缺失则用名称摘要）"]
+        MAP2["组装边属性<br/>（含溯源信息）"]
+        SKIP{"起终点<br/>能否定位？"}
+        BATCH2["生成入图批次号"]
     end
 
-    subgraph Graph2[TRSGraph dev]
-        AW[[Person -[AFFILIATED_WITH]-> Organization]]
-        CW[[Person -[COAUTHOR_WITH]-> Person]]
+    subgraph Graph2[科技知识图谱]
+        AW["学者 → 机构<br/>（从属关系）"]
+        CW["学者 → 学者<br/>（合著关系）"]
     end
 
-    S2 -->|scholar_id + scholar_org_*| DAO2
-    C -->|scholar_id + co_scholar_id +<br/>co_paper_count| DAO2
-    DAO2 --> MAP2
+    S2 -->|"取 学者ID + 所属机构"| DAO2
+    C -->|"取 学者ID + 合作者ID + 合著论文数"| DAO2
+    DAO2 --> VID
+    VID --> SKIP
+    SKIP -- 否 --> DROP["记入跳过计数"]
+    SKIP -- 是 --> MAP2
     BATCH2 --> MAP2
-    MAP2 -->|infra.graph_db.get_trs_graph_client<br/>merge_edge| AW
-    MAP2 -->|infra.graph_db.get_trs_graph_client<br/>merge_edge| CW
+    MAP2 -->|"调用图数据库客户端<br/>幂等合并（来自学者主表）"| AW
+    MAP2 -->|"调用图数据库客户端<br/>幂等合并（来自合作关系表）"| CW
 ```
 
 ---
 
 ## 7. 时序图
 
-### 7.1 单条 `dwd_scholar` 记录的写入
+### 7.1 单位学者的实体入图
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Runner as CLI Runner
-    participant SQLA as SQLAlchemy Session
-    participant Client as TRSGraphClient
-    participant Svc as trs-graph-service<br/>(dev space)
+    participant Runner as 抽取程序
+    participant DB as 学者要素数据库
+    participant Client as 图数据库客户端
+    participant Graph as 科技知识图谱
 
-    Runner->>SQLA: SELECT scholar_id, name_*, org_*, bio_*,<br/>work_experience_*, education_background_*,<br/>paper_nums, citation_nums, h_index, status,<br/>update_time FROM dwd_scholar WHERE status=1
-    SQLA-->>Runner: rows
+    Runner->>DB: 查询学者基本信息<br/>工作经历 / 教育背景 / 学术指标（仅有效记录）
+    DB-->>Runner: 学者记录
 
-    Runner->>SQLA: SELECT scholar_id, academician<br/>FROM dwd_scholar_talent_flag
-    SQLA-->>Runner: talent_flags map
+    Runner->>DB: 一次性加载 人才标识 表
+    DB-->>Runner: 人才标识字典
 
-    Runner->>SQLA: SELECT scholar_id, fields<br/>FROM dwd_scholar_research_direction
-    SQLA-->>Runner: directions map
+    Runner->>DB: 一次性加载 研究方向 表
+    DB-->>Runner: 研究方向字典
 
     loop 每位学者
-        Runner->>Runner: props = merge(row, talent, direction, provenance)
-        Runner->>Client: merge_node(["Person"],<br/>{"source_record_id": scholar_id}, props)
-        Client->>Svc: POST /api/v1/nodes/merge
-        Svc-->>Client: 200 OK
-        Client-->>Runner: GraphNode
+        Runner->>Runner: 合并三张表数据<br/>+ 附加溯源属性
+        Runner->>Client: 请求合并 学者顶点<br/>（以 学者ID 为幂等键）
+        Client->>Graph: 提交合并
+        Graph-->>Client: 处理结果
+        Client-->>Runner: 学者顶点
     end
 ```
 
-### 7.2 单条 `dwd_scholar_coauthor` 记录的写入
+### 7.2 一条合作关系的入图
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Runner as CLI Runner
-    participant SQLA as SQLAlchemy Session
-    participant Client as TRSGraphClient
-    participant Svc as trs-graph-service<br/>(dev space)
+    participant Runner as 抽取程序
+    participant DB as 学者要素数据库
+    participant Client as 图数据库客户端
+    participant Graph as 科技知识图谱
 
-    Runner->>SQLA: SELECT scholar_id, co_scholar_id,<br/>co_paper_count FROM dwd_scholar_coauthor<br/>WHERE status=1
-    SQLA-->>Runner: rows (~156k)
+    Runner->>DB: 查询合作关系表<br/>（仅有效记录）
+    DB-->>Runner: 合作记录（大量）
 
     loop 每条合作关系
-        Runner->>Runner: src=person_{scholar_id}<br/>dst=person_{co_scholar_id}<br/>rid={scholar_id}_{co_scholar_id}
-        Runner->>Client: merge_edge(src, dst,<br/>"COAUTHOR_WITH",<br/>{"source_record_id": rid}, props)
-        Client->>Svc: POST /api/v1/edges/merge
-        Svc-->>Client: 200 OK
+        Runner->>Runner: 构造 起点学者标识 与 终点学者标识<br/>组装 合著论文数 + 溯源属性
+        Runner->>Client: 请求合并 合著关系<br/>（起点→终点，含唯一记录键）
+        Client->>Graph: 提交合并
+        Graph-->>Client: 处理结果
     end
 ```
 

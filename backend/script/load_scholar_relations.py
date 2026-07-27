@@ -4,15 +4,20 @@
   - AFFILIATED_WITH  : Person → Organization   （来源：``dwd_scholar``）
   - COAUTHOR_WITH    : Person → Person         （来源：``dwd_scholar_coauthor``）
 
+跨域兜底（可选，默认关闭；起点属于论文领域）：
+  - AUTHORED_BY      : Paper → Person          （来源：``dwd_scholar_paper_relation``）
+    仅当图中已存在两端顶点时才写入，缺一即跳过。
+
 设计要点：
   * 图客户端使用 ``infra.graph_db.get_trs_graph_client``（读取 ``TRS_GRAPH_*`` 环境变量），
     不直接依赖 nebula3 SDK。
   * MySQL 使用 ``infra.mysql.MySQLClient(database='gkx_element')``，仅覆盖数据库名，其余
     连接参数走 ``MYSQL_HOST/PORT/USERNAME/PASSWORD`` 环境变量。
-  * 只做关系抽取，不新建 Person / Organization 顶点；顶点由其他领域批次写入。
+  * 只做关系抽取，不新建 Person / Organization / Paper 顶点；顶点由对应领域批次写入。
   * 目标顶点使用命名约定：
         Person       -> ``person_{scholar_id}``
         Organization -> ``org_{scholar_org_id}`` 优先，否则 ``org_{md5(name)[:16]}``
+        Paper        -> ``paper_{paper_id}``
   * ``merge_edge`` 幂等写入，重复执行不会产生重复边。
 
 用法::
@@ -20,9 +25,13 @@
     # 干跑：只统计 & 打印前若干条待写入的边，不实际写入
     MYSQL_DATABASE=gkx_element uv run python -m script.load_scholar_relations --dry-run
 
-    # 实际写入 dev 图空间
+    # 实际写入 dev 图空间（默认边集：AFFILIATED_WITH + COAUTHOR_WITH）
     TRS_GRAPH_SPACE=dev MYSQL_DATABASE=gkx_element \
         uv run python -m script.load_scholar_relations
+
+    # 追加跨域兜底：只写两端都已存在的 AUTHORED_BY 边
+    TRS_GRAPH_SPACE=dev MYSQL_DATABASE=gkx_element \
+        uv run python -m script.load_scholar_relations --include-authored-by-fallback
 """
 
 from __future__ import annotations
@@ -36,7 +45,7 @@ from datetime import datetime
 
 from sqlalchemy import select, text
 
-from db_model.scholar import DwdScholarCoauthor
+from db_model.scholar import DwdScholarCoauthor, DwdScholarPaperRelation
 from infra.graph_db import get_trs_graph_client
 from infra.mysql import MySQLClient
 
@@ -50,6 +59,10 @@ BATCH_ID = f"BATCH_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_scholar_rel"
 # ---------------------------------------------------------------------------
 def person_vid(scholar_id: str) -> str:
     return f"person_{scholar_id.strip()}"
+
+
+def paper_vid(paper_id) -> str:
+    return f"paper_{paper_id}"
 
 
 def org_vid(scholar_org_id: str | None, org_name: str | None) -> str | None:
@@ -143,6 +156,34 @@ def _iter_coauthor_rows(session, batch_size: int = 1000) -> Iterable[dict]:
             break
 
 
+def _iter_paper_relations(session, batch_size: int = 2000) -> Iterable[dict]:
+    """从 ``dwd_scholar_paper_relation`` 分页读取学者-论文关联。"""
+    offset = 0
+    while True:
+        rows = session.execute(
+            select(
+                DwdScholarPaperRelation.paper_id,
+                DwdScholarPaperRelation.scholar_id,
+                DwdScholarPaperRelation.citations,
+            )
+            .where(DwdScholarPaperRelation.status == 1)
+            .order_by(DwdScholarPaperRelation.paper_id, DwdScholarPaperRelation.scholar_id)
+            .offset(offset)
+            .limit(batch_size)
+        ).all()
+        if not rows:
+            break
+        for r in rows:
+            yield {
+                "paper_id": r.paper_id,
+                "scholar_id": r.scholar_id,
+                "citations": int(r.citations or 0),
+            }
+        offset += len(rows)
+        if len(rows) < batch_size:
+            break
+
+
 # ---------------------------------------------------------------------------
 # Writers
 # ---------------------------------------------------------------------------
@@ -216,18 +257,84 @@ def load_coauthors(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
     return {"written": ok}
 
 
+def load_authored_by_fallback(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
+    """跨域兜底：写入 AUTHORED_BY 边（Paper → Person）。
+
+    起点属于论文领域，本函数只在 **两端顶点在图中均已存在** 的前提下写入。
+    对每个 Paper / Person VID 通过 ``graph.get_node`` 做一次存在性探测并缓存，
+    避免重复查询同一顶点。
+    """
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    written = shown = 0
+    skipped_missing_paper = skipped_missing_person = 0
+
+    paper_exists: dict[str, bool] = {}
+    person_exists: dict[str, bool] = {}
+
+    def _exists(vid: str, cache: dict[str, bool]) -> bool:
+        if vid in cache:
+            return cache[vid]
+        exists = graph.get_node(vid) is not None
+        cache[vid] = exists
+        return exists
+
+    for rec in _iter_paper_relations(session):
+        src = paper_vid(rec["paper_id"])
+        dst = person_vid(rec["scholar_id"])
+        rid = f"{rec['paper_id']}_{rec['scholar_id']}"
+
+        if not _exists(src, paper_exists):
+            skipped_missing_paper += 1
+            continue
+        if not _exists(dst, person_exists):
+            skipped_missing_person += 1
+            continue
+
+        props = {
+            "citations": rec["citations"],
+            "source_table": "dwd_scholar_paper_relation",
+            "source_record_id": rid,
+            "ingest_batch": BATCH_ID,
+            "ingest_time": now,
+        }
+        if dry_run:
+            if shown < preview:
+                logger.info(
+                    "[dry-run] %s -[AUTHORED_BY]-> %s  citations=%s",
+                    src,
+                    dst,
+                    rec["citations"],
+                )
+                shown += 1
+        else:
+            graph.merge_edge(src, dst, "AUTHORED_BY", {"source_record_id": rid}, props)
+        written += 1
+
+    return {
+        "written": written,
+        "skipped_missing_paper": skipped_missing_paper,
+        "skipped_missing_person": skipped_missing_person,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def run(*, database: str = "gkx_element", dry_run: bool = False) -> dict:
+def run(
+    *,
+    database: str = "gkx_element",
+    dry_run: bool = False,
+    include_authored_by_fallback: bool = False,
+) -> dict:
     mysql = MySQLClient(database=database)
     graph = get_trs_graph_client()
     logger.info(
-        "start batch=%s database=%s dry_run=%s graph_space=%s",
+        "start batch=%s database=%s dry_run=%s graph_space=%s authored_by_fallback=%s",
         BATCH_ID,
         database,
         dry_run,
         os.environ.get("TRS_GRAPH_SPACE", "dev"),
+        include_authored_by_fallback,
     )
 
     session = mysql.session()
@@ -236,10 +343,21 @@ def run(*, database: str = "gkx_element", dry_run: bool = False) -> dict:
         logger.info("AFFILIATED_WITH: %s", aff_stats)
         co_stats = load_coauthors(session, graph, dry_run=dry_run)
         logger.info("COAUTHOR_WITH: %s", co_stats)
+
+        result: dict = {
+            "batch": BATCH_ID,
+            "affiliated_with": aff_stats,
+            "coauthor_with": co_stats,
+        }
+
+        if include_authored_by_fallback:
+            ab_stats = load_authored_by_fallback(session, graph, dry_run=dry_run)
+            logger.info("AUTHORED_BY (fallback): %s", ab_stats)
+            result["authored_by_fallback"] = ab_stats
+
+        return result
     finally:
         session.close()
-
-    return {"batch": BATCH_ID, "affiliated_with": aff_stats, "coauthor_with": co_stats}
 
 
 def _parse_args() -> argparse.Namespace:
@@ -254,6 +372,16 @@ def _parse_args() -> argparse.Namespace:
         default=os.environ.get("MYSQL_DATABASE", "gkx_element"),
         help="MySQL database name (default: gkx_element).",
     )
+    ap.add_argument(
+        "--include-authored-by-fallback",
+        action="store_true",
+        help=(
+            "Also emit AUTHORED_BY edges from dwd_scholar_paper_relation, "
+            "but only when both Paper and Person vertices already exist "
+            "in the graph. Off by default to keep scope on scholar-domain "
+            "outgoing edges."
+        ),
+    )
     return ap.parse_args()
 
 
@@ -262,5 +390,9 @@ if __name__ == "__main__":
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     args = _parse_args()
-    result = run(database=args.database, dry_run=args.dry_run)
+    result = run(
+        database=args.database,
+        dry_run=args.dry_run,
+        include_authored_by_fallback=args.include_authored_by_fallback,
+    )
     logger.info("done: %s", result)

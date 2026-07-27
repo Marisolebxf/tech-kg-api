@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from types import SimpleNamespace
 
@@ -31,9 +32,11 @@ class FakeGraph:
         self,
         *,
         existing: dict[str, set[str]] | None = None,
+        existing_edges: set[tuple[str, str, str, int]] | None = None,
         fail_writes: int = 0,
     ) -> None:
         self.existing = existing or {}
+        self.existing_edges = existing_edges or set()
         self.fail_writes = fail_writes
         self.reads: list[str] = []
         self.writes: list[str] = []
@@ -54,6 +57,19 @@ class FakeGraph:
 
     def execute_read(self, query: str) -> SimpleNamespace:
         self.reads.append(query)
+        if "RETURN id(s) AS source_vid" in query:
+            records = [
+                {
+                    "source_vid": source_vid,
+                    "target_vid": target_vid,
+                    "edge_rank": rank,
+                }
+                for edge_type, source_vid, target_vid, rank in self.existing_edges
+                if f"`{edge_type}`" in query
+                and f'"{source_vid}"' in query
+                and f'"{target_vid}"' in query
+            ]
+            return SimpleNamespace(records=records)
         tag = query.split("`", 2)[1]
         records = [
             {"vid": vid} for vid in sorted(self.existing.get(tag, set())) if f'"{vid}"' in query
@@ -66,6 +82,26 @@ class FakeGraph:
             self.fail_writes -= 1
             raise RuntimeError("graph unavailable")
         return SimpleNamespace(records=[])
+
+
+class EmptyRows:
+    def mappings(self):
+        return self
+
+    def yield_per(self, size: int):
+        return self
+
+    def __iter__(self):
+        return iter(())
+
+
+class CaptureSession:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    def execute(self, statement, params=None):
+        self.calls.append((str(statement), params or {}))
+        return EmptyRows()
 
 
 def investment_spec() -> mod.RelationSpec:
@@ -142,6 +178,24 @@ def test_rank_is_stable_positive_int64() -> None:
     assert 0 <= value < 2**63
 
 
+def test_candidate_rank_uses_canonical_edge_identity() -> None:
+    candidate = investment_candidate()
+    expected = mod.edge_rank(
+        candidate.edge_type,
+        candidate.source_vid,
+        candidate.target_vid,
+        candidate.source_record_id,
+    )
+    rebuilt = mod._candidate(
+        investment_spec(),
+        candidate.source_vid,
+        candidate.target_vid,
+        candidate.source_record_id,
+        candidate.properties,
+    )
+    assert rebuilt.rank == expected
+
+
 def test_parse_json_list_and_invalid_json() -> None:
     assert parse_json_list('["甲", "乙"]') == ["甲", "乙"]
     assert parse_json_list(None) == []
@@ -151,7 +205,7 @@ def test_parse_json_list_and_invalid_json() -> None:
 
 def test_overlong_extra_json_is_replaced_by_valid_bounded_audit_json() -> None:
     rendered = bounded_json({"content": "长" * 500}, max_length=120)
-    parsed = mod.json.loads(rendered)
+    parsed = json.loads(rendered)
     assert parsed["truncated"] is True
     assert parsed["original_length"] > 120
     assert len(parsed["sha256"]) == 64
@@ -207,6 +261,27 @@ def test_duplicate_candidates_are_removed_before_write() -> None:
     assert stats.duplicate == 1
     assert stats.written == 1
     assert len(graph.writes) == 1
+
+
+def test_existing_graph_edge_is_skipped_without_overwrite() -> None:
+    candidate = investment_candidate()
+    graph = FakeGraph(
+        existing={"Organization": {"org_a", "org_b"}},
+        existing_edges={candidate.identity},
+    )
+    stats = RelationStats()
+    _process_candidate_batch(
+        investment_spec(),
+        [candidate],
+        graph=graph,
+        batch_size=10,
+        dry_run=False,
+        stats=stats,
+    )
+    assert stats.existing == 1
+    assert stats.skipped == 1
+    assert stats.written == 0
+    assert graph.writes == []
 
 
 def test_missing_source_and_target_are_counted_and_skipped() -> None:

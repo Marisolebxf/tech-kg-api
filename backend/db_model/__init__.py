@@ -48,10 +48,6 @@ from db_model.domestic_organization import (
     DwdOrgTbJudicialSale,
     DwdOrgTbJudicialSaleInfoCompany,
 )
-from db_model.domestic_project import (
-    OdsZhProject,
-    OdsZhProjectOutput,
-)
 from db_model.foreign_organization import (
     DwdForgAggIdentifier,
     DwdForgBaseInfo,
@@ -71,10 +67,6 @@ from db_model.foreign_paper import (
     DwdEnPaperCitedBy,
     DwdEnPaperInfo,
     OdsEnJournal,
-)
-from db_model.foreign_project import (
-    OdsEnProject,
-    OdsEnProjectOutput,
 )
 from db_model.industry_chain import (
     DwdIndustryChainInfo,
@@ -110,6 +102,12 @@ from db_model.policy import (
     OdsZhPolicy,
     OdsZhPolicy6,
     OdsZhPolicyTuoersi,
+)
+from db_model.project import (
+    DwdEnProject,
+    DwdEnProjectOutput,
+    DwdZhProject,
+    DwdZhProjectOutput,
 )
 from db_model.report import (
     OdsEnReport,
@@ -160,10 +158,10 @@ __all__ = [
     "OdsPatentFamily",
     "OdsPatentLegalStatus",
     "OdsPatentWeipu",
-    "OdsZhProject",
-    "OdsZhProjectOutput",
-    "OdsEnProject",
-    "OdsEnProjectOutput",
+    "DwdZhProject",
+    "DwdZhProjectOutput",
+    "DwdEnProject",
+    "DwdEnProjectOutput",
     "DwdOrgAnnualFinancialInfo",
     "DwdOrgBankruptcyPublicCases",
     "DwdOrgBankruptcyPublicCasesList",

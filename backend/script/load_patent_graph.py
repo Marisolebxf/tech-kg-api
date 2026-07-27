@@ -19,25 +19,20 @@ from pymysql.cursors import DictCursor
 
 # 流程：MySQL读取 → 字段映射 → 生成nGQL → 公共图客户端写入dev。
 from infra.graph_db import get_trs_graph_client
-from script.patent_identifiers import application_number_key, identifier_key
 
 logger = logging.getLogger(__name__)
 
 # 1. Patent目标属性
 PATENT_PROPERTIES = (
     "patent_id",
-    "patent_id_match_key",
     "publication_number",
-    "publication_number_match_key",
     "application_number",
-    "application_number_match_key",
     "application_kind",
     "country_code",
     "country",
     "publication_date",
     "application_date",
     "granted_number",
-    "granted_number_match_key",
     "grant_date",
     "status",
     "anticipated_expiration",
@@ -165,24 +160,20 @@ def ngql_int(value: Any) -> str:
 
 
 def patent_payload(row: dict[str, Any]) -> tuple[str, list[str]]:
-    """映射Patent；原始编号不改写，另存跨数据源比较键。"""
+    """只映射MySQL中的29个Patent正式属性。"""
     patent_id = str(row.get("patent_id") or "").strip()
     if not patent_id:
         raise ValueError("patent_id 为空")
     values = [
         ngql_string(patent_id),
-        ngql_string(identifier_key(patent_id)),
         ngql_string(row.get("publication_number")),
-        ngql_string(identifier_key(row.get("publication_number"))),
         ngql_string(row.get("application_number")),
-        ngql_string(application_number_key(row.get("application_number"))),
         ngql_string(row.get("application_kind")),
         ngql_string(row.get("country_code")),
         ngql_string(row.get("country")),
         ngql_int(row.get("publication_date")),
         ngql_int(row.get("application_date")),
         ngql_string(row.get("granted_number")),
-        ngql_string(identifier_key(row.get("granted_number"))),
         ngql_string(row.get("grant_date")),
         ngql_string(row.get("status")),
         ngql_int(row.get("anticipated_expiration")),
@@ -269,23 +260,6 @@ def ensure_schema(graph: Any) -> None:
     definitions = re.findall(r"CREATE\s+(?:TAG|EDGE)\b.*?;", ddl, flags=re.I | re.S)
     for statement in definitions:
         graph.execute_write(statement)
-    patent_fields = {
-        str(row["Field"]) for row in graph.execute_read("DESCRIBE TAG Patent").records
-    }
-    patent_missing = [
-        field
-        for field in (
-            "patent_id_match_key",
-            "publication_number_match_key",
-            "application_number_match_key",
-            "granted_number_match_key",
-        )
-        if field not in patent_fields
-    ]
-    if patent_missing:
-        graph.execute_write(
-            f"ALTER TAG Patent ADD ({','.join(f'{field} string' for field in patent_missing)});"
-        )
     for name in ("PatentFamily", "MEMBER_OF_FAMILY"):
         command = f"DESCRIBE TAG {name}" if name == "PatentFamily" else f"DESCRIBE EDGE {name}"
         for attempt in range(15):

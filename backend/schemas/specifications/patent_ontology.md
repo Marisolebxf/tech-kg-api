@@ -11,12 +11,12 @@
 
 | Tag | 含义 | 主要属性 |
 |---|---|---|
-| `Patent` | 专利主体 | 下表33个属性（29个源属性加4个编号比较键） |
+| `Patent` | 专利主体 | 下表29个MySQL源属性 |
 | `Keyword` | 专利关键词 | `keyword` |
 | `PatentFamily` | 供应数据给出的简单专利家族 | `family_number` |
 | `Project` | 国内外科研项目 | `source_table`、`source_record_id`、`project_number`、`project_source`、`title` |
 | `Person` | `dwd_scholar`生成的学者自然人 | `name_zh`、`name_en`、`name_cn`、`source_table`、`source_record_id`、`person_kind` |
-| `Organization` | `dwd_org_base_info`、`dwd_forg_base_info`生成的国内外机构 | `name_cn`、`name_en`、`name_alias`、`external_id`、`org_id`、`country_code`、`source_table`、`source_record_id`、`org_kind` |
+| `Organization` | 国内机构、国外机构、高校、科研院所及港澳台正式机构表生成的机构 | `name_cn`、`name_en`、`name_alias`、`external_id`、`org_id`、`country_code`、`source_table`、`source_record_id`、`org_kind` |
 
 采购商自建的`scholar_id`、`org_id`和表主键只在明确共享主外键的数据集内部使用，不作为跨采购源统一标识。
 
@@ -72,25 +72,41 @@
 
 ## 5. 实体关系图
 
+下图只描述图谱Schema中的实体类型、关系类型和方向，不表示代码执行步骤。实际抽取、匹配、缓存、大模型及写入流程见`patent_mapping.md`的“关系抽取流程”。
+
 ```mermaid
 flowchart LR
-  P[Patent 专利]
-  K[Keyword 关键词]
-  F[PatentFamily 专利家族]
-  PJ[Project 项目]
-  PE[Person 人]
-  O[Organization 机构]
-  CP[Patent 被引用专利]
+  patent(("Patent<br/>专利"))
 
-  P -->|HAS_KEYWORD| K
-  P -->|CITES| CP
-  P -->|MEMBER_OF_FAMILY| F
-  P -->|OUTPUT_OF| PJ
-  P -->|INVENTED_BY| PE
-  P -->|APPLIED_BY| PE
-  P -->|APPLIED_BY| O
-  P -->|OWNED_BY| PE
-  P -->|OWNED_BY| O
+  subgraph content["内容与归属"]
+    direction TB
+    keyword["Keyword<br/>关键词"]
+    family["PatentFamily<br/>专利家族"]
+  end
+
+  project["Project<br/>科研项目"]
+
+  subgraph subject["相关主体"]
+    direction TB
+    person["Person<br/>自然人"]
+    organization["Organization<br/>机构"]
+  end
+
+  citedPatent(("Patent<br/>被引用专利"))
+
+  patent -->|"HAS_KEYWORD"| keyword
+  patent -->|"MEMBER_OF_FAMILY"| family
+  patent -->|"OUTPUT_OF"| project
+  patent -->|"INVENTED_BY<br/>APPLIED_BY · OWNED_BY"| person
+  patent -->|"APPLIED_BY · OWNED_BY"| organization
+  patent -->|"CITES"| citedPatent
+
+  classDef core fill:#2563eb,color:#fff,stroke:#1d4ed8,stroke-width:3px
+  classDef entity fill:#f8fafc,color:#0f172a,stroke:#94a3b8,stroke-width:1.5px
+  class patent core
+  class keyword,family,project,person,organization,citedPatent entity
+  style content fill:#f0fdf4,stroke:#86efac,stroke-dasharray:4 3
+  style subject fill:#faf5ff,stroke:#d8b4fe,stroke-dasharray:4 3
 ```
 
 反向查询通过遍历入边完成，不重复创建反向Edge。

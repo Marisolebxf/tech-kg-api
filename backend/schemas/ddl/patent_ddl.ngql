@@ -4,18 +4,14 @@
 
 CREATE TAG IF NOT EXISTS Patent (
   patent_id string,
-  patent_id_match_key string,
   publication_number string,
-  publication_number_match_key string,
   application_number string,
-  application_number_match_key string,
   application_kind string,
   country_code string,
   country string,
   publication_date int64,
   application_date int64,
   granted_number string,
-  granted_number_match_key string,
   grant_date string,
   status string,
   anticipated_expiration int64,

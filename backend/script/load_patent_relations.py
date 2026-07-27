@@ -12,6 +12,7 @@ import time
 import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
@@ -22,15 +23,67 @@ from pymysql.cursors import DictCursor
 
 from infra.graph_db import get_trs_graph_client
 from infra.llm import get_llm_client
-from script.patent_identifiers import application_number_key, identifier_key
 
 logger = logging.getLogger(__name__)
 DDL_FILE = Path(__file__).resolve().parents[1] / "schemas" / "ddl" / "patent_relation_ddl.ngql"
 NAME_CLEAN_RE = re.compile(r"[^0-9a-z\u4e00-\u9fff]+")
+IDENTIFIER_CLEAN_RE = re.compile(r"[^0-9a-z]+")
+CN_APPLICATION_RE = re.compile(r"^(?:cn|zl)?(\d{12})(?:[a-z]|\d)?$")
 PERSON_EDGE_TYPES = {"INVENTED_BY", "APPLIED_BY", "OWNED_BY"}
 ALL_EDGE_TYPES = ("INVENTED_BY", "APPLIED_BY", "OWNED_BY", "CITES", "OUTPUT_OF")
+LLM_CACHE_VERSION = "patent-org-alias-v1"
+
+# 只有机构数据域的正式来源可以作为专利关系目标。人才、项目等领域为了
+# 保存原始机构文本而临时创建的 Organization 不参与匹配。
+CANONICAL_ORGANIZATION_SOURCE_TABLES = frozenset(
+    {
+        "dwd_org_base_info",
+        "dwd_org_heis_info",
+        "dwd_research_institute_base_info",
+        "dwd_forg_base_info",
+        "dwd_special_hongkong_company",
+        "dwd_special_aomen_company",
+        "dwd_special_taiwan_company",
+    }
+)
 
 SHARED_EDGE_PROPERTIES = {
+    "INVENTED_BY": {
+        "sequence": "int64",
+        "source_name": "string",
+        "confidence": "double",
+        "subject_type": "string",
+        "resolution_status": "string",
+        "match_method": "string",
+        "match_evidence": "string",
+        "source_table": "string",
+        "source_record_id": "string",
+    },
+    "APPLIED_BY": {
+        "sequence": "int64",
+        "role": "string",
+        "source_name": "string",
+        "confidence": "double",
+        "subject_type": "string",
+        "resolution_status": "string",
+        "match_method": "string",
+        "match_evidence": "string",
+        "source_table": "string",
+        "source_record_id": "string",
+    },
+    "OWNED_BY": {
+        "sequence": "int64",
+        "role": "string",
+        "is_current": "bool",
+        "source_name": "string",
+        "confidence": "double",
+        "subject_type": "string",
+        "resolution_status": "string",
+        "match_method": "string",
+        "match_evidence": "string",
+        "source_table": "string",
+        "source_record_id": "string",
+    },
     "CITES": {
         "reference_identifier": "string",
         "sequence": "int64",
@@ -72,6 +125,13 @@ class ReviewRecord:
     llm_subject_type: str = ""
     llm_aliases: list[str] = dataclass_field(default_factory=list)
     llm_candidate_entities: list[dict[str, Any]] = dataclass_field(default_factory=list)
+    llm_alias_matched_entities: list[dict[str, Any]] = dataclass_field(default_factory=list)
+    llm_same_entity: bool = False
+    patent_vid: str = ""
+    sequence: int = 0
+    role: str = ""
+    is_current: bool | None = None
+    source_record_id: str = ""
 
 
 def normalize_name(value: Any) -> str:
@@ -80,7 +140,16 @@ def normalize_name(value: Any) -> str:
 
 
 def normalize_identifier(value: Any) -> str:
-    return identifier_key(value)
+    """关系识别时临时规范化编号，不写入Patent属性。"""
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return IDENTIFIER_CLEAN_RE.sub("", text)
+
+
+def application_number_key(value: Any) -> str:
+    """关系识别时统一中国申请号的供应商格式。"""
+    key = normalize_identifier(value)
+    matched = CN_APPLICATION_RE.fullmatch(key)
+    return f"cn{matched.group(1)}" if matched else key
 
 
 def parse_json(value: Any, default: Any) -> Any:
@@ -174,8 +243,13 @@ def make_index(
     for row in rows:
         seen = set()
         for field in fields:
-            for key in names_from(row.get(field)):
-                if key not in seen:
+            keys = (
+                names_from(row.get(field))
+                if field == "name_alias"
+                else {normalize_name(row.get(field))}
+            )
+            for key in keys:
+                if key and key not in seen:
                     result[key].append(row)
                     seen.add(key)
     return result
@@ -195,6 +269,17 @@ def identifier_index(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
     return result
 
 
+def patent_candidates(index: dict[str, list[str]], value: Any) -> list[str]:
+    """同时按通用编号和申请号格式查找，并对候选VID去重。"""
+    keys = {normalize_identifier(value), application_number_key(value)} - {""}
+    return list(dict.fromkeys(vid for key in keys for vid in index.get(key, [])))
+
+
+def is_canonical_organization(row: dict[str, Any]) -> bool:
+    """只按节点来源判断是否为机构领域正式节点。"""
+    return str(row.get("source_table") or "") in CANONICAL_ORGANIZATION_SOURCE_TABLES
+
+
 def edge_statement(edge_type: str, rows: list[EdgeRecord]) -> str:
     if not rows:
         return ""
@@ -209,12 +294,23 @@ def edge_statement(edge_type: str, rows: list[EdgeRecord]) -> str:
 
 
 def execute_batched(
-    graph: Any, rows: list[Any], builder: Callable[[list[Any]], str], batch_size: int = 20
+    graph: Any, rows: list[Any], builder: Callable[[list[Any]], str], batch_size: int = 50
 ) -> None:
-    for start in range(0, len(rows), batch_size):
-        statement = builder(rows[start : start + batch_size])
-        if statement:
+    def write_batch(batch: list[Any]) -> None:
+        statement = builder(batch)
+        if not statement:
+            return
+        try:
             graph.execute_write(statement)
+        except Exception:
+            if len(batch) == 1:
+                raise
+            middle = len(batch) // 2
+            write_batch(batch[:middle])
+            write_batch(batch[middle:])
+
+    for start in range(0, len(rows), batch_size):
+        write_batch(rows[start : start + batch_size])
 
 
 def ensure_schema(graph: Any) -> None:
@@ -231,26 +327,35 @@ def ensure_schema(graph: Any) -> None:
                 f"ALTER EDGE {edge_type} ADD ({','.join(f'{n} {k}' for n, k in missing)});"
             )
     for edge_type in ALL_EDGE_TYPES:
+        wanted = set(SHARED_EDGE_PROPERTIES.get(edge_type, {}))
         for attempt in range(15):
             try:
-                graph.execute_read(f"DESCRIBE EDGE {edge_type}")
-                break
+                visible = {
+                    str(row["Field"])
+                    for row in graph.execute_read(f"DESCRIBE EDGE {edge_type}").records
+                }
+                if wanted <= visible:
+                    break
             except Exception:
                 if attempt == 14:
                     raise
-                time.sleep(1)
+            if attempt == 14:
+                raise RuntimeError(f"{edge_type}新属性未在TRSGraph中生效")
+            time.sleep(1)
 
 
 def canonical_entities(
     graph: Any, connection: pymysql.Connection
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     graph_people = graph_catalog(
-        graph, "Person",
+        graph,
+        "Person",
         ("name_zh", "name_en", "scholar_org", "source_table", "source_record_id"),
     )
     graph_orgs = graph_catalog(
-        graph, "Organization",
-        ("name_cn", "name_en", "name_alias", "source_table", "source_record_id"),
+        graph,
+        "Organization",
+        ("name_cn", "name_en", "name_alias", "source_system", "source_table"),
     )
     people = fetch_all(
         connection,
@@ -265,32 +370,35 @@ def canonical_entities(
     for node in graph_people:
         if str(node.get("source_table") or "") != "dwd_scholar":
             continue
-        source = people_by_id.get(str(node.get("source_record_id") or ""))
-        if source:
-            resolved_people.append(dict(source, vid=str(node["vid"])))
-    domestic = [
-        dict(row, source_table="dwd_org_base_info")
-        for row in fetch_all(connection, "SELECT org_id,name_cn FROM dwd_org_base_info")
-    ]
-    foreign = [
-        dict(row, source_table="dwd_forg_base_info")
-        for row in fetch_all(
-            connection, "SELECT org_id,name_en,name_alias FROM dwd_forg_base_info"
+        # Person是否进入候选只由其正式来源和图中姓名决定。source_record_id
+        # 仅在恰好能定位同源学者记录时补充机构经历，不能作为过滤条件。
+        source = people_by_id.get(str(node.get("source_record_id") or ""), {})
+        person = dict(
+            source,
+            vid=str(node["vid"]),
+            name_zh=node.get("name_zh") or source.get("name_zh"),
+            name_en=node.get("name_en") or source.get("name_en"),
+            scholar_org=node.get("scholar_org"),
+            source_table=node.get("source_table"),
+            source_record_id=node.get("source_record_id"),
         )
+        if person.get("name_zh") or person.get("name_en"):
+            resolved_people.append(person)
+    # 专利侧只有名称，不能拿 source_record_id、org_id 等ID做跨域匹配。
+    # source_table 仅用于排除其他数据域创建的临时机构；名称用于识别，
+    # 图查询返回的真实VID仅在最终写边时使用。
+    resolved_orgs = [
+        {
+            "vid": str(node["vid"]),
+            "name_cn": node.get("name_cn"),
+            "name_en": node.get("name_en"),
+            "name_alias": node.get("name_alias"),
+            "source_system": node.get("source_system"),
+            "source_table": node.get("source_table"),
+        }
+        for node in graph_orgs
+        if is_canonical_organization(node)
     ]
-    orgs_by_source = {
-        (str(row["source_table"]), str(row["org_id"])): row
-        for row in domestic + foreign
-    }
-    resolved_orgs = []
-    for node in graph_orgs:
-        key = (
-            str(node.get("source_table") or ""),
-            str(node.get("source_record_id") or ""),
-        )
-        source = orgs_by_source.get(key)
-        if source:
-            resolved_orgs.append(dict(source, vid=str(node["vid"])))
     return resolved_people, resolved_orgs
 
 
@@ -340,7 +448,7 @@ def project_context(
                 identifier = str(
                     item.get("patent_number") or item.get("publication_number") or ""
                 ).strip()
-                candidates = patent_index.get(application_number_key(identifier), [])
+                candidates = patent_candidates(patent_index, identifier)
                 if len(candidates) != 1:
                     stats["OUTPUT_OF:unmatched_or_ambiguous_patent"] += 1
                     continue
@@ -392,6 +500,7 @@ def person_org_names(row: dict[str, Any]) -> set[str]:
         "scholar_org_name_en",
         "work_experience_institution_zh",
         "work_experience_institution_en",
+        "scholar_org",
     ):
         result.update(names_from(row.get(field)))
     return result
@@ -405,8 +514,11 @@ def review(
     confidence: float | None,
     candidates: list[dict[str, Any]],
     evidence: list[str],
+    **context: Any,
 ) -> ReviewRecord:
-    return ReviewRecord(patent_id, relation, source_name, reason, confidence, candidates, evidence)
+    return ReviewRecord(
+        patent_id, relation, source_name, reason, confidence, candidates, evidence, **context
+    )
 
 
 def common_party_properties(
@@ -445,8 +557,7 @@ def build_relations(
         graph, "Patent", ("patent_id", "publication_number", "application_number", "granted_number")
     )
     source_patent_ids = {
-        str(row["patent_id"])
-        for row in fetch_all(connection, "SELECT patent_id FROM dwd_patent")
+        str(row["patent_id"]) for row in fetch_all(connection, "SELECT patent_id FROM dwd_patent")
     }
     patents = [row for row in patents if str(row.get("patent_id") or "") in source_patent_ids]
     patent_vid_by_id = {str(row["patent_id"]): str(row["vid"]) for row in patents}
@@ -488,6 +599,11 @@ def build_relations(
                             None,
                             [candidate_view(c, "Organization") for c in org_candidates],
                             ["机构名称精确匹配但不唯一"],
+                            patent_vid=patent_vid,
+                            sequence=sequence,
+                            role="applicant" if column == "applicants" else "assignee",
+                            is_current=True if column == "assignees" else None,
+                            source_record_id=f"{row['id']}:{column}:{sequence}",
                         )
                     )
                 else:
@@ -507,6 +623,11 @@ def build_relations(
                             0.60 if len(person_candidates) == 1 else None,
                             [candidate_view(c, "Person") for c in person_candidates],
                             ["申请人/权利人源字段只有sequence和name"],
+                            patent_vid=patent_vid,
+                            sequence=sequence,
+                            role="applicant" if column == "applicants" else "assignee",
+                            is_current=True if column == "assignees" else None,
+                            source_record_id=f"{row['id']}:{column}:{sequence}",
                         )
                     )
 
@@ -601,7 +722,7 @@ def build_relations(
                             0.80,
                             subject_type,
                             "exact_unique_organization_name",
-                            "机构法定名或别名精确匹配且候选唯一",
+                            "机构名称或别名与dev已有Organization精确匹配且候选唯一",
                             f"{row['id']}:{column}:{sequence}",
                             current,
                         ),
@@ -613,13 +734,13 @@ def build_relations(
         connection, "SELECT id,patent_id,patent_citations,cited_by FROM dwd_patent_cited"
     )
     for row in cited_rows:
-        current = patent_index.get(normalize_identifier(row["patent_id"]), [])
+        current = patent_candidates(patent_index, row["patent_id"])
         if len(current) != 1:
             stats["CITES:missing_source"] += 1
             continue
         for column in ("patent_citations", "cited_by"):
             for sequence, identifier in enumerate(parse_json(row.get(column), []), start=1):
-                candidates = patent_index.get(normalize_identifier(identifier), [])
+                candidates = patent_candidates(patent_index, identifier)
                 if len(candidates) != 1:
                     stats["CITES:unmatched_target"] += 1
                     continue
@@ -662,31 +783,57 @@ def _json_object(text: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _candidate_shortlist(
-    name: str, people: list[dict[str, Any]], organizations: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """只把现有实体作为大模型候选，模型不能编造VID。"""
-    key = normalize_name(name)
-    ranked: list[tuple[float, dict[str, Any]]] = []
-    for entity_type, rows, fields in (
-        ("Organization", organizations, ("name_cn", "name_en", "name_alias")),
-        ("Person", people, ("name_zh", "name_en")),
-    ):
-        for row in rows:
-            names = set()
-            for name_field in fields:
-                names.update(names_from(row.get(name_field)))
+def _name_grams(value: str) -> set[str]:
+    """字符与二元组索引兼顾中文简称、英文缩写和格式变化。"""
+    if not value:
+        return set()
+    grams = {f"u:{char}" for char in value}
+    grams.update(f"b:{value[index:index + 2]}" for index in range(len(value) - 1))
+    return grams
+
+
+class CandidateSearchIndex:
+    """预计算实体名称倒排索引，避免每个源名称遍历全部实体。"""
+
+    def __init__(
+        self, people: list[dict[str, Any]], organizations: list[dict[str, Any]]
+    ) -> None:
+        self.entries: list[tuple[set[str], dict[str, Any]]] = []
+        self.postings: dict[str, list[int]] = defaultdict(list)
+        for entity_type, rows, fields in (
+            ("Organization", organizations, ("name_cn", "name_en", "name_alias")),
+            ("Person", people, ("name_zh", "name_en")),
+        ):
+            for row in rows:
+                variants = set()
+                for field in fields:
+                    variants.update(names_from(row.get(field)))
+                if not variants:
+                    continue
+                entry_id = len(self.entries)
+                self.entries.append((variants, candidate_view(row, entity_type)))
+                for gram in set().union(*(_name_grams(name) for name in variants)):
+                    self.postings[gram].append(entry_id)
+
+    def shortlist(self, name: str, limit: int = 8, prefilter: int = 50) -> list[dict[str, Any]]:
+        key = normalize_name(name)
+        overlap: Counter[int] = Counter()
+        for gram in _name_grams(key):
+            overlap.update(self.postings.get(gram, ()))
+        entry_ids = [entry_id for entry_id, _ in overlap.most_common(prefilter)]
+        ranked: list[tuple[float, dict[str, Any]]] = []
+        for entry_id in entry_ids:
+            variants, candidate = self.entries[entry_id]
             score = max(
-                (difflib.SequenceMatcher(None, key, candidate).ratio() for candidate in names),
-                default=0.0,
+                difflib.SequenceMatcher(None, key, variant).ratio() for variant in variants
             )
-            ranked.append((score, candidate_view(row, entity_type)))
-    ranked.sort(key=lambda item: item[0], reverse=True)
-    return [
-        dict(candidate, lexical_score=round(score, 4))
-        for score, candidate in ranked[:8]
-        if score > 0
-    ]
+            if score > 0:
+                ranked.append((score, candidate))
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        return [
+            dict(candidate, lexical_score=round(score, 4))
+            for score, candidate in ranked[:limit]
+        ]
 
 
 def enrich_reviews_with_llm(
@@ -695,30 +842,54 @@ def enrich_reviews_with_llm(
     connection: pymysql.Connection,
     limit: int | None = None,
     batch_size: int = 10,
+    workers: int = 4,
+    cache_path: Path | None = None,
 ) -> int:
-    """辅助判断类型、别名和已有候选；不评分、不自动选定、不写边。"""
-    llm = get_llm_client()
-    if llm is None:
-        logger.warning("未配置公共大模型能力，跳过主体类型和别名分析")
-        return 0
+    """规则未命中后补充别名并反查正式机构，是否写边由后续阈值决定。"""
     people, organizations = canonical_entities(graph, connection)
+    organization_name_index = make_index(organizations, ("name_cn", "name_en", "name_alias"))
+    llm_reviews = [
+        item for item in reviews if item.relation_type in {"APPLIED_BY", "OWNED_BY"}
+    ]
     related: dict[str, set[str]] = defaultdict(set)
-    for item in reviews:
+    for item in llm_reviews:
         related[item.patent_id].add(item.source_name)
     unique: dict[str, list[ReviewRecord]] = defaultdict(list)
-    for item in reviews:
+    for item in llm_reviews:
         unique[item.source_name].append(item)
     names = list(unique)
     if limit is not None:
         names = names[:limit]
-    processed = 0
+    cache = read_llm_cache(cache_path)
+    cached_names = []
+    for name in names:
+        cached = cache.get(normalize_name(name))
+        if not cached:
+            continue
+        result = dict(cached, source_name=name)
+        _apply_llm_results([result], {name: {}}, unique, organization_name_index)
+        cached_names.append(name)
+    if cached_names:
+        logger.info("复用大模型名称缓存=%d", len(cached_names))
+    cached_name_set = set(cached_names)
+    names = [name for name in names if name not in cached_name_set]
+    if not names:
+        return len(cached_names)
+
+    llm = get_llm_client()
+    if llm is None:
+        logger.warning("未配置公共大模型能力，仅复用已有名称缓存")
+        return len(cached_names)
+
+    search_index = CandidateSearchIndex(people, organizations)
+    prepared: list[tuple[dict[str, dict[str, dict[str, Any]]], str]] = []
     for start in range(0, len(names), batch_size):
         batch_names = names[start : start + batch_size]
         inputs = []
         allowed: dict[str, dict[str, dict[str, Any]]] = {}
         for name in batch_names:
             sample = unique[name][0]
-            candidates = _candidate_shortlist(name, people, organizations)
+            candidates = search_index.shortlist(name)
             allowed[name] = {str(candidate["vid"]): candidate for candidate in candidates}
             inputs.append(
                 {
@@ -730,38 +901,187 @@ def enrich_reviews_with_llm(
             )
         prompt = (
             "你是专利关系人工审核助手。判断每个源名称更可能是Person、Organization或Unknown；"
-            "识别可能的中英文名、简称和机构别名；只能从existing_candidates选择candidate_vids。"
+            "如果可能是机构，补充其可能的正式中文名、正式英文名、简称或历史名称到aliases；"
+            "same_legal_entity仅当源名称与补充名称代表同一机构主体时返回true；"
+            "院系与高校、分支机构与总公司、子公司与母公司不属于同一机构主体，必须返回false；"
+            "candidate_vids只能从existing_candidates选择，但aliases可以用于程序再次检索已有正式机构。"
             "禁止计算置信度，禁止决定最终实体。same_patent_names仅作申请人、权利人、发明人的上下文。"
             '严格返回JSON对象：{"results":[{"source_name":"","subject_type":"Person|Organization|Unknown",'
-            '"aliases":[],"candidate_vids":[],"reason":""}]}。输入：'
+            '"same_legal_entity":false,"aliases":[],"candidate_vids":[],"reason":""}]}。输入：'
             + json.dumps(inputs, ensure_ascii=False)
         )
-        raw = llm.synthesize(prompt, max_tokens=min(4096, 600 + 300 * len(inputs)))
-        payload = _json_object(raw or "")
-        results = payload.get("results", []) if payload else []
-        for result in results:
-            if not isinstance(result, dict) or result.get("source_name") not in allowed:
-                continue
-            name = str(result["source_name"])
-            subject_type = str(result.get("subject_type") or "Unknown")
-            if subject_type not in {"Person", "Organization", "Unknown"}:
-                subject_type = "Unknown"
-            aliases = [
-                str(value).strip() for value in result.get("aliases", []) if str(value).strip()
-            ][:8]
-            selected = [
-                allowed[name][str(vid)]
-                for vid in result.get("candidate_vids", [])
-                if str(vid) in allowed[name]
-            ]
-            reason = str(result.get("reason") or "")
-            for item in unique[name]:
-                item.llm_subject_type = subject_type
-                item.llm_aliases = aliases
-                item.llm_candidate_entities = selected
-                item.llm_summary = reason
-            processed += 1
+        prepared.append((allowed, prompt))
+
+    processed = 0
+    completed = 0
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+        futures = {
+            executor.submit(
+                llm.synthesize,
+                prompt,
+                max_tokens=min(4096, 600 + 300 * len(allowed)),
+            ): allowed
+            for allowed, prompt in prepared
+        }
+        for future in as_completed(futures):
+            allowed = futures[future]
+            try:
+                raw = future.result()
+            except Exception:
+                logger.exception("大模型批次调用异常，保留人工审核")
+                raw = ""
+            completed += 1
+            logger.info("大模型批次进度=%d/%d", completed, len(prepared))
+            payload = _json_object(raw or "")
+            results = payload.get("results", []) if payload else []
+            for result in results:
+                if not isinstance(result, dict) or result.get("source_name") not in allowed:
+                    continue
+                cache[normalize_name(result["source_name"])] = {
+                    "subject_type": result.get("subject_type") or "Unknown",
+                    "same_legal_entity": result.get("same_legal_entity") is True,
+                    "aliases": result.get("aliases") or [],
+                    "candidate_vids": [],
+                    "reason": result.get("reason") or "",
+                }
+            processed += _apply_llm_results(
+                results, allowed, unique, organization_name_index
+            )
+    write_llm_cache(cache_path, cache)
+    return processed + len(cached_names)
+
+
+def read_llm_cache(path: Path | None) -> dict[str, dict[str, Any]]:
+    if path is None or not path.exists():
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(item, dict)
+            and item.get("version") == LLM_CACHE_VERSION
+            and item.get("key")
+            and isinstance(item.get("result"), dict)
+        ):
+            result[str(item["key"])] = item["result"]
+    return result
+
+
+def write_llm_cache(path: Path | None, cache: dict[str, dict[str, Any]]) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(
+            json.dumps(
+                {"version": LLM_CACHE_VERSION, "key": key, "result": result},
+                ensure_ascii=False,
+            )
+            + "\n"
+            for key, result in sorted(cache.items())
+        ),
+        encoding="utf-8",
+    )
+
+
+def _apply_llm_results(
+    results: list[Any],
+    allowed: dict[str, dict[str, dict[str, Any]]],
+    reviews_by_name: dict[str, list[ReviewRecord]],
+    organization_name_index: dict[str, list[dict[str, Any]]],
+) -> int:
+    processed = 0
+    for result in results:
+        if not isinstance(result, dict) or result.get("source_name") not in allowed:
+            continue
+        name = str(result["source_name"])
+        subject_type = str(result.get("subject_type") or "Unknown")
+        if subject_type not in {"Person", "Organization", "Unknown"}:
+            subject_type = "Unknown"
+        aliases = [
+            str(value).strip() for value in result.get("aliases", []) if str(value).strip()
+        ][:8]
+        selected = [
+            allowed[name][str(vid)]
+            for vid in result.get("candidate_vids", [])
+            if str(vid) in allowed[name]
+        ]
+        alias_matched: list[dict[str, Any]] = []
+        if subject_type == "Organization":
+            for alias in aliases:
+                for candidate in organization_name_index.get(normalize_name(alias), []):
+                    view = candidate_view(candidate, "Organization")
+                    selected.append(view)
+                    alias_matched.append(view)
+        selected = list({str(candidate["vid"]): candidate for candidate in selected}.values())
+        alias_matched = list(
+            {str(candidate["vid"]): candidate for candidate in alias_matched}.values()
+        )
+        same_entity = result.get("same_legal_entity") is True
+        reason = str(result.get("reason") or "")
+        for item in reviews_by_name[name]:
+            item.llm_subject_type = subject_type
+            item.llm_aliases = aliases
+            item.llm_candidate_entities = selected
+            item.llm_alias_matched_entities = alias_matched
+            item.llm_same_entity = same_entity
+            item.llm_summary = reason
+        processed += 1
     return processed
+
+
+def promote_llm_organization_matches(
+    reviews: list[ReviewRecord], threshold: float = 0.75
+) -> tuple[list[EdgeRecord], list[ReviewRecord]]:
+    """把满足严格条件的大模型别名唯一匹配提升为0.75关系边。"""
+    confidence = 0.75
+    promoted: list[EdgeRecord] = []
+    remaining: list[ReviewRecord] = []
+    for item in reviews:
+        existing_org_candidates = [
+            candidate for candidate in item.candidates if candidate.get("type") == "Organization"
+        ]
+        candidates = item.llm_alias_matched_entities
+        eligible = (
+            item.relation_type in {"APPLIED_BY", "OWNED_BY"}
+            and item.llm_subject_type == "Organization"
+            and item.llm_same_entity
+            and len(candidates) == 1
+            and not existing_org_candidates
+            and bool(item.patent_vid)
+            and confidence >= threshold
+        )
+        if not eligible:
+            remaining.append(item)
+            continue
+        candidate = candidates[0]
+        evidence = (
+            f"大模型判断原名称与正式机构为同一主体；补充名称={item.llm_aliases}；"
+            f"在dev正式机构中唯一命中；理由={item.llm_summary}"
+        )
+        promoted.append(
+            EdgeRecord(
+                item.relation_type,
+                item.patent_vid,
+                str(candidate["vid"]),
+                item.sequence,
+                common_party_properties(
+                    item.sequence,
+                    item.role,
+                    item.source_name,
+                    confidence,
+                    "Organization",
+                    "llm_alias_unique",
+                    evidence,
+                    item.source_record_id,
+                    item.is_current,
+                ),
+            )
+        )
+    return promoted, remaining
 
 
 def write_reviews(path: Path, reviews: list[ReviewRecord]) -> None:
@@ -801,17 +1121,31 @@ def load(
     use_llm: bool = False,
     llm_limit: int | None = None,
     llm_batch_size: int = 10,
+    llm_auto_threshold: float = 0.75,
+    llm_workers: int = 4,
+    llm_cache: Path | None = None,
 ) -> Counter[str]:
     os.environ["TRS_GRAPH_SPACE"] = "dev"
     graph = get_trs_graph_client()
     connection = mysql_connection()
     try:
         edges, reviews, stats = build_relations(graph, connection)
-        stats["review_records"] = len(reviews)
         if use_llm and reviews:
             stats["llm_reviewed_names"] = enrich_reviews_with_llm(
-                reviews, graph, connection, llm_limit, llm_batch_size
+                reviews,
+                graph,
+                connection,
+                llm_limit,
+                llm_batch_size,
+                llm_workers,
+                llm_cache,
             )
+            llm_edges, reviews = promote_llm_organization_matches(
+                reviews, llm_auto_threshold
+            )
+            edges.extend(llm_edges)
+            stats["llm_alias_auto_edges"] = len(llm_edges)
+        stats["review_records"] = len(reviews)
         if review_output:
             write_reviews(review_output, reviews)
         if not apply:
@@ -844,9 +1178,28 @@ def main() -> None:
     parser.add_argument(
         "--llm-batch-size", type=int, default=10, help="每次大模型请求分析的名称数量"
     )
+    parser.add_argument(
+        "--llm-auto-threshold",
+        type=float,
+        default=0.75,
+        help="大模型别名唯一匹配自动建边阈值，默认0.75；设为更高值可只保留审核候选",
+    )
+    parser.add_argument(
+        "--llm-workers", type=int, default=4, help="大模型并发批次数，默认4"
+    )
+    parser.add_argument(
+        "--llm-cache",
+        type=Path,
+        default=Path("/tmp/patent_relation_llm_cache.jsonl"),
+        help="大模型名称识别缓存，默认写入/tmp；生产环境可指定持久卷路径",
+    )
     args = parser.parse_args()
     if args.replace and not args.apply:
         parser.error("--replace必须与--apply一起使用")
+    if not 0 <= args.llm_auto_threshold <= 1:
+        parser.error("--llm-auto-threshold必须在0到1之间")
+    if args.llm_workers < 1:
+        parser.error("--llm-workers必须大于等于1")
     logging.basicConfig(level=logging.INFO)
     for key, value in sorted(
         load(
@@ -856,6 +1209,9 @@ def main() -> None:
             args.use_llm,
             args.llm_limit,
             args.llm_batch_size,
+            args.llm_auto_threshold,
+            args.llm_workers,
+            args.llm_cache,
         ).items()
     ):
         logger.info("%s=%d", key, value)

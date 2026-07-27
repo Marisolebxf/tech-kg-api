@@ -48,18 +48,18 @@ def patent_row():
     }
 
 
-def test_patent_preserves_raw_identifiers_and_adds_match_keys():
+def test_patent_preserves_raw_identifiers_and_only_maps_source_properties():
     vid, values = patent_payload(patent_row())
     mapped = dict(zip(PATENT_PROPERTIES, values, strict=True))
-    assert len(PATENT_PROPERTIES) == 33
+    assert len(PATENT_PROPERTIES) == 29
     assert vid == "patent_CN1A"
     assert mapped["publication_date"] == "20210101"
     assert mapped["anticipated_expiration"] == "20400101"
     assert mapped["db_source"] == '"ods_patent"'
     assert mapped["title_original"] == '"原文标题"'
-    assert mapped["publication_number_match_key"] == '"cn1a"'
+    assert mapped["publication_number"] == '"CN-1-A"'
     assert mapped["application_number"] == '"CN-APP-1"'
-    assert mapped["application_number_match_key"] == '"cnapp1"'
+    assert not any(name.endswith("_match_key") for name in PATENT_PROPERTIES)
     assert "INSERT VERTEX Patent" in patent_statement([(vid, values)])
 
 

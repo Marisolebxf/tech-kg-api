@@ -25,13 +25,12 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Iterable
 
 from sqlalchemy import select, text
 
 from db_model.scholar import (
-    DwdScholar,
     DwdScholarResearchDirection,
     DwdScholarTalentFlag,
 )
@@ -83,14 +82,17 @@ def _iter_scholars(session, batch_size: int = 500) -> Iterable[dict]:
     使用原生 SQL 是为了兼容 ``scholar_org_id`` 列在部分环境尚未部署的情况，
     与 ``load_scholar_relations.py`` 中的做法一致。
     """
-    has_org_id = session.execute(
-        text(
-            "SELECT COUNT(*) FROM information_schema.columns "
-            "WHERE table_schema = DATABASE() "
-            "AND table_name = 'dwd_scholar' "
-            "AND column_name = 'scholar_org_id'"
-        )
-    ).scalar_one() > 0
+    has_org_id = (
+        session.execute(
+            text(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                "WHERE table_schema = DATABASE() "
+                "AND table_name = 'dwd_scholar' "
+                "AND column_name = 'scholar_org_id'"
+            )
+        ).scalar_one()
+        > 0
+    )
     org_id_col = "scholar_org_id" if has_org_id else "NULL AS scholar_org_id"
 
     sql = text(
@@ -189,9 +191,7 @@ def load_persons(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
     for row in _iter_scholars(session):
         sid = row["scholar_id"]
         vid = person_vid(sid)
-        props = _build_person_props(
-            row, talent_flags.get(sid, ""), directions.get(sid, ""), now
-        )
+        props = _build_person_props(row, talent_flags.get(sid, ""), directions.get(sid, ""), now)
         if dry_run:
             if shown < preview:
                 logger.info(

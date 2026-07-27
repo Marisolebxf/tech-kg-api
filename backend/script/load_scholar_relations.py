@@ -31,12 +31,12 @@ import argparse
 import hashlib
 import logging
 import os
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Iterable
 
 from sqlalchemy import select, text
 
-from db_model.scholar import DwdScholar, DwdScholarCoauthor
+from db_model.scholar import DwdScholarCoauthor
 from infra.graph_db import get_trs_graph_client
 from infra.mysql import MySQLClient
 
@@ -72,14 +72,17 @@ def _iter_scholar_affiliations(session, batch_size: int = 500) -> Iterable[dict]
     ``gkx_element`` 中可能尚未部署；使用 ``information_schema`` 探测后按需
     选择 SELECT 列表。
     """
-    has_org_id = session.execute(
-        text(
-            "SELECT COUNT(*) FROM information_schema.columns "
-            "WHERE table_schema = DATABASE() "
-            "AND table_name = 'dwd_scholar' "
-            "AND column_name = 'scholar_org_id'"
-        )
-    ).scalar_one() > 0
+    has_org_id = (
+        session.execute(
+            text(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                "WHERE table_schema = DATABASE() "
+                "AND table_name = 'dwd_scholar' "
+                "AND column_name = 'scholar_org_id'"
+            )
+        ).scalar_one()
+        > 0
+    )
 
     org_id_col = "scholar_org_id" if has_org_id else "NULL AS scholar_org_id"
     sql = text(
@@ -207,9 +210,7 @@ def load_coauthors(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
                 )
                 shown += 1
         else:
-            graph.merge_edge(
-                src, dst, "COAUTHOR_WITH", {"source_record_id": rid}, props
-            )
+            graph.merge_edge(src, dst, "COAUTHOR_WITH", {"source_record_id": rid}, props)
         ok += 1
 
     return {"written": ok}

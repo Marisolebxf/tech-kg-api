@@ -788,16 +788,14 @@ def _name_grams(value: str) -> set[str]:
     if not value:
         return set()
     grams = {f"u:{char}" for char in value}
-    grams.update(f"b:{value[index:index + 2]}" for index in range(len(value) - 1))
+    grams.update(f"b:{value[index : index + 2]}" for index in range(len(value) - 1))
     return grams
 
 
 class CandidateSearchIndex:
     """预计算实体名称倒排索引，避免每个源名称遍历全部实体。"""
 
-    def __init__(
-        self, people: list[dict[str, Any]], organizations: list[dict[str, Any]]
-    ) -> None:
+    def __init__(self, people: list[dict[str, Any]], organizations: list[dict[str, Any]]) -> None:
         self.entries: list[tuple[set[str], dict[str, Any]]] = []
         self.postings: dict[str, list[int]] = defaultdict(list)
         for entity_type, rows, fields in (
@@ -824,15 +822,12 @@ class CandidateSearchIndex:
         ranked: list[tuple[float, dict[str, Any]]] = []
         for entry_id in entry_ids:
             variants, candidate = self.entries[entry_id]
-            score = max(
-                difflib.SequenceMatcher(None, key, variant).ratio() for variant in variants
-            )
+            score = max(difflib.SequenceMatcher(None, key, variant).ratio() for variant in variants)
             if score > 0:
                 ranked.append((score, candidate))
         ranked.sort(key=lambda item: item[0], reverse=True)
         return [
-            dict(candidate, lexical_score=round(score, 4))
-            for score, candidate in ranked[:limit]
+            dict(candidate, lexical_score=round(score, 4)) for score, candidate in ranked[:limit]
         ]
 
 
@@ -848,9 +843,7 @@ def enrich_reviews_with_llm(
     """规则未命中后补充别名并反查正式机构，是否写边由后续阈值决定。"""
     people, organizations = canonical_entities(graph, connection)
     organization_name_index = make_index(organizations, ("name_cn", "name_en", "name_alias"))
-    llm_reviews = [
-        item for item in reviews if item.relation_type in {"APPLIED_BY", "OWNED_BY"}
-    ]
+    llm_reviews = [item for item in reviews if item.relation_type in {"APPLIED_BY", "OWNED_BY"}]
     related: dict[str, set[str]] = defaultdict(set)
     for item in llm_reviews:
         related[item.patent_id].add(item.source_name)
@@ -944,9 +937,7 @@ def enrich_reviews_with_llm(
                     "candidate_vids": [],
                     "reason": result.get("reason") or "",
                 }
-            processed += _apply_llm_results(
-                results, allowed, unique, organization_name_index
-            )
+            processed += _apply_llm_results(results, allowed, unique, organization_name_index)
     write_llm_cache(cache_path, cache)
     return processed + len(cached_names)
 
@@ -1001,9 +992,9 @@ def _apply_llm_results(
         subject_type = str(result.get("subject_type") or "Unknown")
         if subject_type not in {"Person", "Organization", "Unknown"}:
             subject_type = "Unknown"
-        aliases = [
-            str(value).strip() for value in result.get("aliases", []) if str(value).strip()
-        ][:8]
+        aliases = [str(value).strip() for value in result.get("aliases", []) if str(value).strip()][
+            :8
+        ]
         selected = [
             allowed[name][str(vid)]
             for vid in result.get("candidate_vids", [])
@@ -1140,9 +1131,7 @@ def load(
                 llm_workers,
                 llm_cache,
             )
-            llm_edges, reviews = promote_llm_organization_matches(
-                reviews, llm_auto_threshold
-            )
+            llm_edges, reviews = promote_llm_organization_matches(reviews, llm_auto_threshold)
             edges.extend(llm_edges)
             stats["llm_alias_auto_edges"] = len(llm_edges)
         stats["review_records"] = len(reviews)
@@ -1184,9 +1173,7 @@ def main() -> None:
         default=0.75,
         help="大模型别名唯一匹配自动建边阈值，默认0.75；设为更高值可只保留审核候选",
     )
-    parser.add_argument(
-        "--llm-workers", type=int, default=4, help="大模型并发批次数，默认4"
-    )
+    parser.add_argument("--llm-workers", type=int, default=4, help="大模型并发批次数，默认4")
     parser.add_argument(
         "--llm-cache",
         type=Path,

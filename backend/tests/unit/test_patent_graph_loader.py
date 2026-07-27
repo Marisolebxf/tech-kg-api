@@ -75,9 +75,9 @@ def test_keyword_vertices_are_normalized_deduplicated_and_linked():
 
 def test_family_vertex_and_edge_use_source_family_number():
     vertex_ngql, edge_ngql = family_statements([patent_row()])
-    assert 'patent_family_F1' in vertex_ngql
+    assert "patent_family_F1" in vertex_ngql
     assert '"patent_CN1A"->"patent_family_F1"' in edge_ngql
-    assert 'confidence,match_method,match_evidence,source_table,source_record_id' in edge_ngql
+    assert "confidence,match_method,match_evidence,source_table,source_record_id" in edge_ngql
 
 
 def test_ddl_matches_loader_schema():

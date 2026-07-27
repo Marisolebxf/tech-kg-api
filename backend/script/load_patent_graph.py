@@ -223,8 +223,13 @@ def keyword_statements(rows: list[dict[str, Any]]) -> tuple[str, str]:
         )
         vertex_ngql = f"INSERT VERTEX Keyword(keyword) VALUES {values};"
     if edges:
-        values = ",".join(f"{ngql_string(src)}->{ngql_string(dst)}:(1.0,{ngql_string('dwd_patent')},{ngql_string(src.removeprefix('patent_'))})" for src, dst in edges)
-        edge_ngql = f"INSERT EDGE HAS_KEYWORD(confidence,source_table,source_record_id) VALUES {values};"
+        values = ",".join(
+            f"{ngql_string(src)}->{ngql_string(dst)}:(1.0,{ngql_string('dwd_patent')},{ngql_string(src.removeprefix('patent_'))})"
+            for src, dst in edges
+        )
+        edge_ngql = (
+            f"INSERT EDGE HAS_KEYWORD(confidence,source_table,source_record_id) VALUES {values};"
+        )
     return vertex_ngql, edge_ngql
 
 
@@ -243,10 +248,15 @@ def family_statements(rows: list[dict[str, Any]]) -> tuple[str, str]:
     vertex_ngql = ""
     edge_ngql = ""
     if families:
-        values = ",".join(f"{ngql_string(vid)}:({ngql_string(number)})" for vid, number in families.items())
+        values = ",".join(
+            f"{ngql_string(vid)}:({ngql_string(number)})" for vid, number in families.items()
+        )
         vertex_ngql = f"INSERT VERTEX PatentFamily(family_number) VALUES {values};"
     if edges:
-        values = ",".join(f"{ngql_string(src)}->{ngql_string(dst)}:(1.0,{ngql_string('source_family_number')},{ngql_string('simple_family_number由源表直接给出')},{ngql_string('dwd_patent_family')},{ngql_string(source_id)})" for src, dst, source_id in edges)
+        values = ",".join(
+            f"{ngql_string(src)}->{ngql_string(dst)}:(1.0,{ngql_string('source_family_number')},{ngql_string('simple_family_number由源表直接给出')},{ngql_string('dwd_patent_family')},{ngql_string(source_id)})"
+            for src, dst, source_id in edges
+        )
         edge_ngql = f"INSERT EDGE MEMBER_OF_FAMILY(confidence,match_method,match_evidence,source_table,source_record_id) VALUES {values};"
     return vertex_ngql, edge_ngql
 
@@ -270,14 +280,20 @@ def ensure_schema(graph: Any) -> None:
                 if attempt == 14:
                     raise
                 time.sleep(1)
-    existing = {str(row["Field"]) for row in graph.execute_read("DESCRIBE EDGE HAS_KEYWORD").records}
+    existing = {
+        str(row["Field"]) for row in graph.execute_read("DESCRIBE EDGE HAS_KEYWORD").records
+    }
     missing = [("confidence", "double"), ("source_table", "string"), ("source_record_id", "string")]
     missing = [(field, kind) for field, kind in missing if field not in existing]
     if missing:
-        graph.execute_write(f"ALTER EDGE HAS_KEYWORD ADD ({', '.join(f'{field} {kind}' for field, kind in missing)});")
+        graph.execute_write(
+            f"ALTER EDGE HAS_KEYWORD ADD ({', '.join(f'{field} {kind}' for field, kind in missing)});"
+        )
     wanted = {"confidence", "source_table", "source_record_id"}
     for attempt in range(15):
-        visible = {str(row["Field"]) for row in graph.execute_read("DESCRIBE EDGE HAS_KEYWORD").records}
+        visible = {
+            str(row["Field"]) for row in graph.execute_read("DESCRIBE EDGE HAS_KEYWORD").records
+        }
         if wanted <= visible:
             break
         if attempt == 14:
@@ -303,9 +319,7 @@ def load_patents(batch_size: int) -> tuple[int, int, int]:
             for start in range(0, len(rows), 1):
                 group = rows[start : start + 1]
                 # 写入Patent
-                graph.execute_write(
-                    patent_statement([patent_payload(row) for row in group])
-                )
+                graph.execute_write(patent_statement([patent_payload(row) for row in group]))
                 vertex_ngql, edge_ngql = keyword_statements(group)
                 if vertex_ngql:
                     graph.execute_write(vertex_ngql)  # 写入Keyword

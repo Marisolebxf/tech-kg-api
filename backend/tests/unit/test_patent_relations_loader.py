@@ -77,12 +77,8 @@ def test_canonical_organization_is_decided_only_by_source_table():
     }
     assert loader.is_canonical_organization(formal)
     assert not loader.is_canonical_organization(temporary)
-    assert not loader.is_canonical_organization(
-        {"source_table": "dwd_org_bankruptcy_public_cases"}
-    )
-    assert not loader.is_canonical_organization(
-        {"source_table": "dwd_org_merger_acquisition_info"}
-    )
+    assert not loader.is_canonical_organization({"source_table": "dwd_org_bankruptcy_public_cases"})
+    assert not loader.is_canonical_organization({"source_table": "dwd_org_merger_acquisition_info"})
 
 
 def test_scholar_graph_person_is_not_filtered_when_source_record_id_does_not_match(

@@ -204,7 +204,12 @@ def load_persons(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
                 )
                 shown += 1
         else:
-            graph.merge_node(["Person"], {"source_record_id": sid}, props)
+            # 显式传入 vid，避免 `_ensure_vid` 把 source_record_id 当成 VID。
+            graph.merge_node(
+                ["Person"],
+                {"vid": vid, "source_record_id": sid},
+                props,
+            )
         ok += 1
     return {"written": ok}
 

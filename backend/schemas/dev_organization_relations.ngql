@@ -1,0 +1,83 @@
+-- Organization-origin relation schema for TRSGraph dev.
+-- Idempotent: this file creates missing edge types only and never changes vertices.
+USE dev;
+
+CREATE EDGE IF NOT EXISTS `SHAREHOLDER_OF`(
+  `ownership_percentage` double NULL,
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `INVESTS_IN`(
+  `investment_amount` double NULL,
+  `investment_ratio` double NULL,
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `ACQUIRES`(
+  `ma_amount` double NULL,
+  `currency_code` string NULL,
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `SUBSIDIARY_OF`(
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `PARTICIPATES_IN`(
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `HAS_NEWS`(
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `INVOLVED_IN`(
+  `role` string NULL,
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+-- The following two edge types are defined by ontology.md, but dev currently
+-- has neither IndustryNode/Product vertices nor these edge types. Creating the
+-- edge schema does not create target vertices; ETL still skips absent targets.
+CREATE EDGE IF NOT EXISTS `BELONGS_TO_NODE`(
+  `chain_score` double NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `PRODUCES`(
+  `tech_product_seq` int64 NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);

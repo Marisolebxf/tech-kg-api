@@ -1,6 +1,11 @@
 # 国内机构、国外机构要素库 → TRSGraph 图谱详细映射
 
 > 本文档由 `gkx_element` 当前数据库 `information_schema` 自动生成，覆盖 39 张表及其每一个物理字段。
+>
+> 2026-07-23 补充：本文档同时覆盖“只连接已有实体”的
+> `script.organization_relation_etl`。第三节以前的关系结论优先于后面的历史建点说明；
+> 新 ETL 不创建 Organization、Person、Project、Patent、Paper、Journal、News、Event
+> 等任何顶点。
 
 ## 一、统一建模约定
 
@@ -18,7 +23,400 @@
 - 旧 `dwd_org_bid_info` 拆分为 `dwd_bid_base_out`、`dwd_bid_win_candidate_out`、`dwd_bid_purchase_agency_out`、`dwd_bid_target_item_out`。
 - `DERIVED_FROM` 方向以 ontology.md 为准：原始数据源指向加工后的要素数据源。
 
-## 三、逐表逐字段映射
+## 三、当前机构关系 ETL 的判定规则
+
+### 3.1 状态标识
+
+| 状态 | 含义 |
+|---|---|
+| 已确认映射 | `ontology.md` 有正式边；真实 MySQL 表和字段已核验；`dev` 中 Tag、Edge 和 VID 规则已核验 |
+| 推测映射 | 本体允许，但源表只有名称；仅在基础表中完全一致且候选唯一时解析为已有 `org_id` |
+| 暂不映射 | 本体方向不是 Organization 起点，或本体没有对应机构出边 |
+| 需要业务确认 | 字段角色或边名语义存在冲突；代码采用保守规则并保留跳过统计 |
+
+### 3.2 机构领域关系图
+
+```mermaid
+graph LR
+    O["Organization 机构"]
+    O2["Organization 其他机构"]
+    PR["Project 项目"]
+    N["News 资讯"]
+    E["Event 事件"]
+    IN["IndustryNode 产业链节点"]
+    PD["Product 产品"]
+
+    O -->|"SHAREHOLDER_OF"| O2
+    O -->|"INVESTS_IN"| O2
+    O -->|"ACQUIRES"| O2
+    O -->|"SUBSIDIARY_OF"| O2
+    O -->|"PARTICIPATES_IN"| PR
+    O -->|"HAS_NEWS"| N
+    O -->|"INVOLVED_IN"| E
+    O -->|"BELONGS_TO_NODE"| IN
+    O -->|"PRODUCES"| PD
+```
+
+以下本体边不是 Organization 起点，本任务明确不反转：
+
+- `AFFILIATED_WITH`：Person → Organization；
+- `APPLIED_BY`：Patent → Organization；
+- `FUNDED_BY`：Project → Organization；
+- `EXECUTIVE_OF`、`LEGAL_REP_OF`、`BENEFICIAL_OWNER_OF`、
+  `ACTUAL_CONTROLLER_OF`：Person → Organization；
+- `ISSUED_BY`：Policy → Organization；
+- `REPORTED_BY`：Report → Organization。
+
+`ontology.md` 没有定义 Organization → Paper、Organization → Journal 的正式边，
+因此也不自行发明边名。
+
+### 3.3 数据抽取流程
+
+```mermaid
+flowchart LR
+    A["gkx_element 机构及跨域关系表"] --> B["只读分批查询"]
+    B --> C["trim / 空值 / 日期 / 数值 / JSON 清洗"]
+    C --> D["直接 ID 或完全一致且唯一的名称查 org_id"]
+    D --> E["按本体规则生成稳定 VID"]
+    E --> F["按 Tag 批量 FETCH PROP"]
+    F --> G{"Organization 源节点存在？"}
+    F --> H{"目标节点存在？"}
+    G -->|"否"| I["记录 source_missing 并跳过"]
+    H -->|"否"| J["记录 target_missing 并跳过"]
+    G -->|"是"| K["按业务键生成稳定 rank"]
+    H -->|"是"| K
+    K --> L["按 Edge 属性顺序批量构造 INSERT EDGE"]
+    L --> M{"dry-run？"}
+    M -->|"是"| N["输出示例 nGQL 和统计，不写图"]
+    M -->|"否"| O["get_trs_graph_client 写入 dev"]
+    O --> P["输出成功 / 失败 / 跳过统计"]
+```
+
+### 3.4 已确认与受限的关系映射
+
+| 状态 | 业务含义 | 源表 | 起点 | 终点 | Edge Type | 源 VID 字段 | 目标 VID 字段 | 边属性 | 唯一键 / rank |
+|---|---|---|---|---|---|---|---|---|---|
+| 已确认映射 | 国内机构股东关系 | `dwd_org_shareholder_info` | 股东机构 | 被持股机构 | `SHAREHOLDER_OF` | `inv_org_id` | `org_id` | `ownership_percentage` + 溯源 | `inv_org_id + org_id + owners_type` |
+| 推测映射 | 国外机构股东关系 | `dwd_forg_shareholder_info` | 精确唯一命中的股东机构 | `org_id` 对应机构 | `SHAREHOLDER_OF` | `owners_name` 经基础表精确唯一查 ID | `org_id` | `ownership_percentage` + 溯源 | `owners_name + org_id` |
+| 已确认映射 | 对外投资 | `dwd_org_invest_info` | 投资机构 | 被投资机构 | `INVESTS_IN` | `org_id` | `inv_org_id` | `investment_amount`, `investment_ratio` + 溯源 | `org_id + inv_org_id` |
+| 已确认映射 | 并购 | `dwd_org_merger_acquisition_info` | 收购机构 | 被收购机构 | `ACQUIRES` | `acquiring_org_id` | `acquired_org_id` | `ma_amount`, `currency_code` + 溯源 | 两端机构 ID |
+| 需要业务确认 | 海外机构与子公司 | `dwd_forg_subsidiary_info` | `org_id` 对应机构 | `affiliate` / `affiliates_company_id` 对应机构 | `SUBSIDIARY_OF` | `org_id` | `affiliate`，其次 `affiliates_company_id`，最后精确唯一名称 | 溯源 | 两端机构 ID |
+| 推测映射 | 机构参与项目 | `dwd_zh_project`, `dwd_en_project` | 参与机构 | 项目 | `PARTICIPATES_IN` | `participating_institution[]` 中 ID；无 ID时基础表精确唯一查 ID | `id` | 溯源 | `project id + 数组序号 + 机构名` |
+| 已确认映射 | 机构资讯 | `dwd_org_important_news_info` | 机构 | 已有 News | `HAS_NEWS` | `org_id` | 与旧 ETL 相同的稳定记录 ID | `extra_json` + 溯源 | 源行稳定记录 ID |
+| 已确认映射 | 机构事件 | 事件表、事件当事人表 | 机构 | 已有 Event | `INVOLVED_IN` | `org_id` / `company_id` | 事件表稳定业务键 | `role`, `extra_json` + 溯源 | 事件/当事人业务键 |
+| 已确认本体、当前不可写 | 机构所属产业链节点 | `dwd_org_industry_chain_dtl` | 机构 | IndustryNode | `BELONGS_TO_NODE` | `antitypic` | `node_id` | `chain_score` + 溯源 | `antitypic + node_id` |
+| 已确认本体、当前不可写 | 机构生产产品 | `dwd_org_industry_chain_prod_dtl` | 机构 | Product | `PRODUCES` | `antitypic` | `md5(规范化 tech_product)` | `tech_product_seq` + 溯源 | `antitypic + tech_product` |
+
+> 当前 `dev` 没有 `IndustryNode`、`Product` Tag，也没有
+> `BELONGS_TO_NODE`、`PRODUCES` Edge。初始化文件只补 Edge 定义，不建目标实体；
+> 在其他领域负责人创建目标实体前，这两类记录会被跳过。
+
+### 3.5 边级统一字段
+
+| 图属性 | 来源 | 分类 | 转换规则 | 空值处理 |
+|---|---|---|---|---|
+| `source_table` | 当前物理源表名 | 数据来源或追溯字段 | 固定写实际表名 | 不允许为空 |
+| `source_record_id` | 表主键或稳定业务键；无主键时为规范化源行 MD5 | 数据来源或追溯字段 | 稳定、可重复 | 不允许为空 |
+| `ingest_batch` | CLI 参数或 UTC 运行批次 | ETL 控制字段 | `ORG_REL_YYYYMMDDTHHMMSSZ` | 不允许为空 |
+| `ingest_time` | ETL UTC 时间 | ETL 控制字段 | ISO 8601 | 不允许为空 |
+| `extra_json` | 当前关系源行 | 数据来源或追溯字段 | 日期转 ISO，Decimal 转数值，紧凑 JSON | Edge 没有该属性时不写 |
+
+### 3.6 直接产生 Organization → Organization 的表：逐字段判定
+
+#### `dwd_org_shareholder_info`
+
+| 源字段 | 字段角色 | 图谱对象 | 图谱属性/用途 | 转换与空值处理 | 状态 |
+|---|---|---|---|---|---|
+| `org_id` | 目标实体标识 | Organization | 终点 VID `org_{org_id}` | 空值整行跳过 | 已确认映射 |
+| `name_cn` | 目标实体属性 | Organization | 仅审计，不更新节点 | 放入 `extra_json` | 暂不映射 |
+| `external_id` | 目标实体属性 | Organization | 仅审计，不更新节点 | 放入 `extra_json` | 暂不映射 |
+| `inv_org_id` | 源实体标识 | Organization | 起点 VID `org_{inv_org_id}` | 空值整行跳过 | 已确认映射 |
+| `owners_name` | 源实体属性 | Organization | 仅核验股东显示名 | 放入 `extra_json` | 暂不映射 |
+| `owners_type` | 关系判定字段 | `SHAREHOLDER_OF` | 参与稳定业务键；自然人不在本任务起点范围 | trim；最终仍由 Organization Tag 存在性兜底 | 已确认映射 |
+| `ownership_percentage` | 关系属性 | `SHAREHOLDER_OF` | `ownership_percentage` | 去逗号和 `%` 后转 double；非法为 NULL | 已确认映射 |
+| `data_source` | 追溯字段 | `SHAREHOLDER_OF` | `extra_json.data_source` | 原样保留 | 已确认映射 |
+| `created_time` | 追溯字段 | `SHAREHOLDER_OF` | `extra_json.created_time` | ISO 字符串 | 已确认映射 |
+| `updated_time` | ETL/追溯字段 | `SHAREHOLDER_OF` | `extra_json.updated_time` | ISO 字符串；不参与 rank | 已确认映射 |
+
+#### `dwd_forg_shareholder_info`
+
+| 源字段 | 字段角色 | 图谱对象 | 图谱属性/用途 | 转换与空值处理 | 状态 |
+|---|---|---|---|---|---|
+| `org_id` | 目标实体标识 | Organization | 终点 VID `org_{org_id}` | 空值整行跳过 | 已确认映射 |
+| `owners_name` | 源实体候选标识 | Organization | 在七张机构基础表中完全一致且唯一时解析为起点 ID | 未命中、重名、自然人均跳过 | 推测映射 |
+| `ownership_percentage` | 关系属性 | `SHAREHOLDER_OF` | `ownership_percentage` | 转 double；非法为 NULL | 已确认映射 |
+| `owners_country_code` | 源实体属性/追溯 | Organization | 不更新节点，写 `extra_json` | trim；空值保留 NULL | 暂不映射 |
+| `owners_country` | 源实体属性/追溯 | Organization | 不更新节点，写 `extra_json` | trim；空值保留 NULL | 暂不映射 |
+
+#### `dwd_org_invest_info`
+
+| 源字段 | 字段角色 | 图谱对象 | 图谱属性/用途 | 转换与空值处理 | 状态 |
+|---|---|---|---|---|---|
+| `org_id` | 源实体标识 | Organization | 起点 VID | 空值整行跳过 | 已确认映射 |
+| `name_cn` | 源实体属性 | Organization | 只审计，不更新节点 | `extra_json` | 暂不映射 |
+| `external_id` | 源实体属性 | Organization | 只审计，不更新节点 | `extra_json` | 暂不映射 |
+| `inv_org_id` | 目标实体标识 | Organization | 终点 VID | 空值整行跳过 | 已确认映射 |
+| `inv_name` | 目标实体属性 | Organization | 只审计，不更新节点 | `extra_json` | 暂不映射 |
+| `inv_external_id` | 目标实体属性 | Organization | 只审计，不更新节点 | `extra_json` | 暂不映射 |
+| `investment_amount` | 关系属性 | `INVESTS_IN` | `investment_amount` | 转 double；非法为 NULL | 已确认映射 |
+| `investment_ratio` | 关系属性 | `INVESTS_IN` | `investment_ratio` | 去 `%` 转 double；非法为 NULL | 已确认映射 |
+| `data_source` | 追溯字段 | `INVESTS_IN` | `extra_json.data_source` | 原样保留 | 已确认映射 |
+| `created_time` | 追溯字段 | `INVESTS_IN` | `extra_json.created_time` | ISO 字符串 | 已确认映射 |
+| `updated_time` | ETL/追溯字段 | `INVESTS_IN` | `extra_json.updated_time` | ISO 字符串；不参与 rank | 已确认映射 |
+
+#### `dwd_org_merger_acquisition_info`
+
+| 源字段 | 字段角色 | 图谱对象 | 图谱属性/用途 | 转换与空值处理 | 状态 |
+|---|---|---|---|---|---|
+| `acquiring_org_id` | 源实体标识 | Organization | 起点 VID | 空值整行跳过 | 已确认映射 |
+| `acquiring_name` | 源实体属性 | Organization | 只审计，不更新节点 | `extra_json` | 暂不映射 |
+| `acquiring_external_id` | 源实体属性 | Organization | 只审计，不更新节点 | `extra_json` | 暂不映射 |
+| `acquired_org_id` | 目标实体标识 | Organization | 终点 VID | 空值整行跳过 | 已确认映射 |
+| `acquired_name` | 目标实体属性 | Organization | 只审计，不更新节点 | `extra_json` | 暂不映射 |
+| `acquired_external_id` | 目标实体属性 | Organization | 只审计，不更新节点 | `extra_json` | 暂不映射 |
+| `ma_amount` | 关系属性 | `ACQUIRES` | `ma_amount` | 转 double；非法为 NULL | 已确认映射 |
+| `currency_code` | 关系属性 | `ACQUIRES` | `currency_code` | trim；空值为 NULL | 已确认映射 |
+| `data_source` | 追溯字段 | `ACQUIRES` | `extra_json.data_source` | 原样保留 | 已确认映射 |
+| `created_time` | 追溯字段 | `ACQUIRES` | `extra_json.created_time` | ISO 字符串 | 已确认映射 |
+| `updated_time` | ETL/追溯字段 | `ACQUIRES` | `extra_json.updated_time` | ISO 字符串；不参与 rank | 已确认映射 |
+
+#### `dwd_forg_subsidiary_info`
+
+| 源字段 | 字段角色 | 图谱对象 | 图谱属性/用途 | 转换与空值处理 | 状态 |
+|---|---|---|---|---|---|
+| `org_id` | 源实体标识 | Organization | 起点 VID | 空值整行跳过 | 已确认映射 |
+| `affiliate` | 目标实体标识 | Organization | 第一优先终点 ID | 空值时尝试下一字段 | 需要业务确认 |
+| `affiliates_name` | 目标实体候选标识/属性 | Organization | 无 ID 时仅精确唯一解析 | 未命中或重名跳过 | 推测映射 |
+| `affiliates_country_code` | 目标实体属性 | Organization | 只审计，不更新节点 | `extra_json` | 暂不映射 |
+| `affiliates_country` | 目标实体属性 | Organization | 只审计，不更新节点 | `extra_json` | 暂不映射 |
+| `affiliates_company_id` | 目标实体标识 | Organization | 第二优先终点 ID | 空值时才尝试名称 | 需要业务确认 |
+
+### 3.7 项目关系表：每个字段的去向
+
+`dwd_zh_project` 与 `dwd_en_project` 物理字段一致，以下规则同时适用。
+
+| 源字段 | 字段角色 | 图谱对象 | 图谱属性/用途 | 状态 |
+|---|---|---|---|---|
+| `id` | 目标实体标识 | Project | 终点 VID `project_{id}` | 已确认映射 |
+| `project_number` | 目标实体属性 | Project | 不更新节点；仅留源行审计 | 暂不映射 |
+| `title` | 目标实体属性 | Project | 不更新节点；仅留源行审计 | 暂不映射 |
+| `project_source` | 目标实体属性 | Project | 不更新节点 | 暂不映射 |
+| `funded_institution` | 反向关系字段 | `FUNDED_BY` | 本体方向是 Project → Organization，本任务不处理 | 暂不映射 |
+| `project_level` | 目标实体属性 | Project | 不更新节点 | 暂不映射 |
+| `funded_amount` | `FUNDED_BY` 关系属性候选 | Project → Organization | 本任务不创建反向边 | 暂不映射 |
+| `discipline` | 目标实体属性 | Project | 不更新节点 | 暂不映射 |
+| `discipline_code` | 目标实体属性 | Project | 不更新节点 | 暂不映射 |
+| `fund_category` | `FUNDED_BY` 关系属性候选 | Project → Organization | 本任务不创建反向边 | 暂不映射 |
+| `funded_province` | 目标实体属性 | Project | 不更新节点 | 暂不映射 |
+| `participating_institution` | 源实体候选标识数组 | Organization | 展开后生成 Organization → Project | 推测映射 |
+| `approval_year` | 目标实体属性 | Project | 不更新节点 | 暂不映射 |
+| `approval_time` | 目标实体属性 | Project | 不更新节点 | 暂不映射 |
+| `research_period` | 目标实体属性/时间候选 | Project | `PARTICIPATES_IN` 本体无周期属性，不写边 | 暂不映射 |
+| `project_host` | 其他领域关系字段 | `LEADS` | 本体方向 Project → Person | 暂不映射 |
+| `participants` | 其他领域关系字段 | `HAS_PARTICIPANT` | 本体方向 Project → Person | 暂不映射 |
+| `keywords` | 其他领域关系字段 | `HAS_KEYWORD` | 本体方向 Project → Keyword | 暂不映射 |
+| `abstract` | 目标实体属性 | Project | 不更新节点 | 暂不映射 |
+| `final_report_abstract` | 目标实体属性 | Project | 不更新节点 | 暂不映射 |
+| `project_page_url` | 目标实体属性/追溯 | Project | 不更新节点 | 暂不映射 |
+| `updated_time` | ETL/追溯字段 | Project | 不参与边 rank；不更新节点 | 暂不映射 |
+
+`participating_institution` 转换规则：
+
+1. 解析 JSON 数组；
+2. 数组元素含 `org_id` / `organization_id` / `institution_id` 时直接使用；
+3. 只有名称时，在国内企业、高校、科研院所、港澳台机构和国外机构基础表中执行
+   trim 后完全一致查找；
+4. 仅一个 `org_id` 时接受；零个或多个候选均跳过；
+5. 不做大小写折叠、别名、拼音、相似度、向量或大模型匹配。
+
+### 3.8 News、Event、产业链表字段判定
+
+#### `dwd_org_important_news_info`
+
+| 源字段 | 字段角色 | 图谱对象 | 图谱属性/用途 | 状态 |
+|---|---|---|---|---|
+| `org_id` | 源实体标识 | Organization | HAS_NEWS 起点 VID | 已确认映射 |
+| `name_cn` | 源实体属性 | Organization | 不更新节点，写 `extra_json` | 暂不映射 |
+| `external_id` | 源实体属性 | Organization | 不更新节点，写 `extra_json` | 暂不映射 |
+| `news_title` | 目标实体属性/目标定位组成 | News | 参与稳定记录 ID；不更新节点 | 已确认映射 |
+| `news_date` | 目标实体属性/目标定位组成 | News | 参与稳定记录 ID；不更新节点 | 已确认映射 |
+| `news_content` | 目标实体属性/目标定位组成 | News | 参与稳定记录 ID；不更新节点 | 已确认映射 |
+| `original_textlink` | 目标实体追溯属性 | News | 只放边 `extra_json` | 已确认映射 |
+| `data_source` | 追溯字段 | HAS_NEWS | 边 `extra_json` | 已确认映射 |
+| `created_time` | 追溯字段 | HAS_NEWS | 边 `extra_json` | 已确认映射 |
+| `updated_time` | ETL/追溯字段 | HAS_NEWS | 边 `extra_json`；旧 News VID 兼容时参与完整行哈希 | 已确认映射 |
+
+#### 通用机构事件表
+
+以下表的每个物理字段已在后文“逐表逐字段映射”中列出；当前关系 ETL
+不更新 Event，只用其中标识字段定位已有 Event。
+
+| 源表 | 源实体标识 | 目标 Event 业务键 | `INVOLVED_IN.role` | 其余字段分类 |
+|---|---|---|---|---|
+| `dwd_org_annual_financial_info` | `org_id` | `org_id + year` | `subject` | 机构/财务目标属性，全部仅进 `extra_json` |
+| `dwd_org_stock_finance_info` | `org_id` | `org_id + occur_period` | `subject` | 同上 |
+| `dwd_forg_stock_fin_info` | `org_id` | `org_id + occur_period` | `subject` | 同上 |
+| `dwd_org_changerecord_info` | `org_id` | `org_id + update_date + update_content` | `subject` | 变更内容为目标属性，仅审计 |
+| `dwd_org_financing_info` | `org_id` | `org_id + completion_date + funding_round` | `subject` | 金额、币种、投资者为目标属性，仅审计 |
+| `dwd_org_recruit_info` | `org_id` | `org_id + release_date + job_title` | `subject` | 职位、地点、人数为目标属性，仅审计 |
+| `dwd_org_company_abnormal` | `org_id` | `abnormal_id` | `subject` | 其余均为目标 Event 属性/追溯 |
+| `dwd_org_company_punish` | `org_id` | `penalty_id` | `subject` | 其余均为目标 Event 属性/追溯 |
+| `dwd_org_company_illegal` | `org_id` | `sv_id` | `subject` | 其余均为目标 Event 属性/追溯 |
+| `dwd_org_risk_tax_punish` | `org_id` | `tax_vio_id` | `subject` | 其余均为目标 Event 属性/追溯 |
+| `dwd_org_opt_judicial_case` | `org_id` | `case_id` | `case_role`，空时 `subject` | 其余均为目标 Event 属性/追溯 |
+| `dwd_org_risk_shixin` | `org_id` | `dishonest_id` | `subject` | 其余均为目标 Event 属性/追溯 |
+| `dwd_org_risk_zhixing` | `org_id` | `exec_person_id` | `exec_person_type`，空时 `subject` | 其余均为目标 Event 属性/追溯 |
+| `dwd_org_bankruptcy_public_cases_list` | `org_id` | 主事件表 `case_no` | `party_role_type` | 其他当事人字段仅进 `extra_json` |
+| `dwd_bid_win_candidate_out` | `org_id` | `dwd_bid_base_out.u_id` | `winner_candidate` | 排名、金额、标段等仅进 `extra_json` |
+| `dwd_bid_purchase_agency_out` | `company_id` | `dwd_bid_base_out.u_id` | `purchase_agency` | 名称、信用代码、项目字段仅进 `extra_json` |
+
+#### `dwd_org_industry_chain_dtl`
+
+| 源字段 | 字段角色 | 图谱对象 | 图谱属性/用途 | 状态 |
+|---|---|---|---|---|
+| `chain_code` | 目标实体上下文 | IndustryChain | 不参与当前边端点 | 暂不映射 |
+| `chain_name` | 目标实体上下文 | IndustryChain | 不参与当前边端点 | 暂不映射 |
+| `node_id` | 目标实体标识 | IndustryNode | 终点 VID `node_{node_id}` | 已确认映射 |
+| `node_name` | 目标实体属性 | IndustryNode | 不更新目标节点 | 暂不映射 |
+| `antitypic` | 源实体标识 | Organization | 起点 VID `org_{antitypic}` | 已确认映射 |
+| `credit_code` | 源实体属性 | Organization | 仅审计 | 暂不映射 |
+| `chain_score` | 关系属性 | `BELONGS_TO_NODE` | `chain_score` | 已确认映射 |
+| `data_source` | 追溯字段 | Edge | `source_table` 固定物理表；原值不另写 | 暂不映射 |
+| `created_time` | 追溯字段 | Edge | 不参与 rank | 暂不映射 |
+| `updated_time` | ETL/追溯字段 | Edge | 不参与 rank | 暂不映射 |
+
+#### `dwd_org_industry_chain_prod_dtl`
+
+| 源字段 | 字段角色 | 图谱对象 | 图谱属性/用途 | 状态 |
+|---|---|---|---|---|
+| `chain_code` | 上下文 | IndustryChain | 不参与 PRODUCES 端点 | 暂不映射 |
+| `chain_name` | 上下文 | IndustryChain | 不参与 PRODUCES 端点 | 暂不映射 |
+| `antitypic` | 源实体标识 | Organization | 起点 VID `org_{antitypic}` | 已确认映射 |
+| `company_name` | 源实体属性 | Organization | 不更新节点 | 暂不映射 |
+| `credit_code` | 源实体属性 | Organization | 不更新节点 | 暂不映射 |
+| `tech_product` | 目标实体标识/属性 | Product | 终点 VID `product_{md5(NFKC+casefold+trim)}` | 已确认映射 |
+| `tech_product_seq` | 关系属性 | `PRODUCES` | `tech_product_seq` 转 int64 | 已确认映射 |
+| `data_source` | 追溯字段 | Edge | `source_table` 固定物理表；原值不另写 | 暂不映射 |
+| `created_time` | 追溯字段 | Edge | 不参与 rank | 暂不映射 |
+| `updated_time` | ETL/追溯字段 | Edge | 不参与 rank | 暂不映射 |
+
+### 3.9 跨领域机构字段：为何不在本任务中造反向边
+
+| 源表 | 全部相关字段 | 字段判定 | 本体正式方向 | 本任务处理 |
+|---|---|---|---|---|
+| `dwd_zh_author`, `dwd_en_author` | `paper_id`, `author_sequence`, `author_id`, `en_name`, `zh_name`, `email`, `correspond`, `institution`, `affiliation`, `data_source`, `created_time`, `updated_time` | `institution`、`affiliation` 是目标 Organization 名称；其余为 Person/Paper 属性、关系属性或追溯 | Person → Organization (`AFFILIATED_WITH`) | 暂不映射；交由学者/论文领域 |
+| `dwd_scholar` | `scholar_id`, `name_en`, `name_zh`, `avatar`, `scholar_org_name_en`, `scholar_org_name_zh`, `bio`, `bio_zh`, `work_experience_date`, `work_experience_institution_en`, `work_experience_department_en`, `work_experience_position_en`, `work_experience_institution_zh`, `work_experience_department_zh`, `work_experience_position_zh`, `education_background_date`, `education_background_institution_en`, `education_background_degree_en`, `education_background_institution_zh`, `education_background_degree_zh`, `paper_nums`, `citation_nums`, `h_index`, `status`, `create_time`, `update_time` | 机构名称、部门、职务、起止时间可成为 `AFFILIATED_WITH` 属性候选，其余为 Person 属性/追溯 | Person → Organization | 暂不映射；交由学者领域 |
+| `dwd_patent` | `id`, `patent_id`, `publication_number`, `application_kind`, `country_code`, `country`, `publication_reference`, `application_reference`, `pct_or_regional_filing_data`, `pct_or_regional_publishing_data`, `priority_filings`, `applicants`, `assignees`, `inventors`, `first_applicant_name`, `first_current_assignee_name`, `first_inventor_name`, `main_classification_ipcr`, `further_classification_ipcr`, `main_classification_cpc`, `further_classification_cpc`, `keywords`, `claims`, `description`, `figures`, `language`, `granted_number`, `db_source`, `create_time`, `update_time`, `value`, `agents`, `agency`, `examiners`, `related_documents`, `classification_loc`, `classification_fi`, `classification_upc`, `classification_fterm` | `applicants`、`assignees` 含机构候选；`application_reference` 可给申请时间，数组序号可给 `sequence`；其余为 Patent 属性或其他关系 | Patent → Organization (`APPLIED_BY`) | 不反转为 Organization → Patent；交由专利领域 |
+| `dwd_zh_journal` | `paper_id`, `publication_id`, `publication_type`, `country`, `zh_name`, `name_abbr`, `en_name`, `iscn`, `issn`, `eissn`, `founding_time`, `jn_official`, `zh_description`, `format`, `postal_code`, `chief_editor`, `organizer`, `publisher_place`, `award`, `cite_nums`, `annual_publication`, `review`, `impact_factor`, `sub_quartile`, `classify_list`, `warning`, `is_sci`, `publication_cycle`, `paper_nums`, `data_source`, `created_time`, `updated_time` | `organizer` 是主办机构候选，`publisher_place` 是地点；其余为 Journal/Paper 属性或追溯 | ontology.md 未定义 Organization → Journal | 暂不映射；需新增正式本体边后再实现 |
+| `dwd_en_journal` | `id`, `issn`, `zh_name`, `en_name`, `name_abbr`, `publication_type`, `en_description`, `establish_time`, `language`, `country`, `eissn`, `annual_publication`, `review`, `impact_factor`, `jcr_zone`, `open_access`, `review_period`, `scope`, `sub_scope`, `self_rate`, `top`, `warning`, `is_sci`, `publish_period`, `jn_official`, `layout_cost`, `paper_nums`, `updated_time` | 当前没有明确的主办/出版机构 ID 字段 | ontology.md 未定义 Organization → Journal | 暂不映射 |
+| `dwd_zh_report`, `dwd_en_report`, `dwd_zh_report_org`, `dwd_en_report_org` | 报告 ID、`organization`、`source_org`、`source_agency`、`org_id`、`org_name`、作者和追溯字段 | 机构是 Report 的发布/来源方 | Report → Organization (`REPORTED_BY`) | 不反转；交由报告领域 |
+
+### 3.10 幂等、缺失实体和异常规则
+
+- 所有边使用固定 rank：
+  `sha256(edge_type|source_vid|target_vid|source_record_id)` 的前 8 字节，
+  再屏蔽符号位；不使用随机数。
+- 同一源业务键重复运行命中相同 `(src, dst, edge, rank)`；`INSERT EDGE`
+  覆盖同 rank 属性，不生成重复边。
+- 源查询先按业务键构造候选，再在批次内按完整边身份去重。
+- `Organization` 源节点或目标节点缺失：不创建节点，分别累计
+  `source_missing` / `target_missing`，记录源表和 `source_record_id`。
+- 名称未命中或重名：累计 `unresolved_identifier`，不尝试模糊匹配。
+- 单条 JSON、日期、数值脏数据：累计 `invalid` 并继续；图连接失败或批量写失败
+  记录批次 nGQL 前缀并累计 `failed`。
+- 明确选择缺少 Tag/Edge 的单类关系时抛出 `SchemaMismatchError`；
+  `--relation all` 时记录并跳过当前不可用的产业链关系。
+
+### 3.11 运行方式
+
+在 `backend` 目录执行：
+
+```bash
+# 默认即为 dry-run；检查全类关系、已有端点和示例 nGQL，不写图
+TRS_GRAPH_SPACE=dev \
+python -m script.organization_relation_etl --relation all --batch-size 500 --dry-run
+
+# 单类关系 dry-run
+TRS_GRAPH_SPACE=dev \
+python -m script.organization_relation_etl --relation project --batch-size 500 --dry-run
+
+# 仅国内 / 仅国外
+TRS_GRAPH_SPACE=dev \
+python -m script.organization_relation_etl --relation all --domestic-only --dry-run
+TRS_GRAPH_SPACE=dev \
+python -m script.organization_relation_etl --relation all --foreign-only --dry-run
+
+# 显式真实写入；省略 --write 不会写图
+TRS_GRAPH_SPACE=dev \
+python -m script.organization_relation_etl --relation all --batch-size 500 --write
+```
+
+数据库连接只读取 `GKX_ELEMENT_MYSQL_*` 环境变量，不在代码或文档中写账号密码。
+
+### 3.12 dev 验证 nGQL
+
+```ngql
+USE dev;
+
+-- 1. 查询某个机构全部出边
+MATCH (o:Organization)-[e]->(v)
+WHERE id(o) == "org_替换为真实机构ID"
+RETURN id(o) AS org_vid, type(e) AS edge_type, rank(e) AS edge_rank,
+       properties(e) AS edge_properties, id(v) AS target_vid
+LIMIT 200;
+
+-- 2. 按 Edge Type 查询机构关系（示例：投资）
+MATCH (o:Organization)-[e:INVESTS_IN]->(target:Organization)
+RETURN id(o), id(target), e.investment_amount, e.investment_ratio,
+       e.source_table, e.source_record_id
+LIMIT 100;
+
+-- 3. 查询边属性
+MATCH (o:Organization)-[e]->(v)
+WHERE type(e) IN ["SHAREHOLDER_OF", "INVESTS_IN", "ACQUIRES",
+                  "SUBSIDIARY_OF", "PARTICIPATES_IN", "HAS_NEWS", "INVOLVED_IN"]
+RETURN type(e), properties(e)
+LIMIT 100;
+
+-- 4. 统计每种机构出边数量
+MATCH (o:Organization)-[e]->()
+RETURN type(e) AS edge_type, count(*) AS edge_count
+ORDER BY edge_count DESC;
+
+-- 5. 检查没有任何出边和入边的孤立机构
+MATCH (o:Organization)
+WHERE NOT (o)-[]-()
+RETURN id(o), o.Organization.name_cn, o.Organization.name_en
+LIMIT 100;
+
+-- 6. 异常端点检查
+-- Nebula/TRSGraph 不允许边指向物理上不存在的 VID；以下查询用于检查
+-- 是否存在非本体目标 Tag，而不是检查物理悬空边。
+MATCH (o:Organization)-[e]->(v)
+WHERE type(e) == "PARTICIPATES_IN"
+  AND NOT "Project" IN labels(v)
+RETURN id(o), type(e), id(v), labels(v)
+LIMIT 100;
+
+-- 7. 国内机构关系抽样
+MATCH (o:Organization)-[e]->(v)
+WHERE o.Organization.org_kind STARTS WITH "domestic"
+   OR o.Organization.country_code == "CN"
+RETURN id(o), o.Organization.name_cn, type(e), id(v), properties(e)
+LIMIT 100;
+
+-- 8. 国外机构关系抽样
+MATCH (o:Organization)-[e]->(v)
+WHERE o.Organization.org_kind == "foreign_organization"
+   OR (o.Organization.country_code IS NOT NULL
+       AND o.Organization.country_code != ""
+       AND o.Organization.country_code != "CN")
+RETURN id(o), coalesce(o.Organization.name_en, o.Organization.name_cn),
+       type(e), id(v), properties(e)
+LIMIT 100;
+```
+
+## 四、逐表逐字段映射（节点 ETL 历史清单，仍保留）
 
 ### 1. `dwd_org_base_info` — 机构基本信息
 

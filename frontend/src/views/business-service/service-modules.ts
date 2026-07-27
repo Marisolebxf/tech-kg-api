@@ -8,7 +8,7 @@ export type ServiceField = {
 export type ServiceResultRow = {
   label: string
   value: string
-  tone?: 'blue' | 'green' | 'orange' | 'purple'
+  tone?: 'blue' | 'green' | 'orange' | 'purple' | 'red'
 }
 
 export type ServiceSummaryRow = {
@@ -193,7 +193,7 @@ export const serviceModules: ServiceModule[] = [
     subtitle: '汇总两个专家之间的论文、项目、专利和奖项成果。',
     endpoint: '/api/v1/kg-service/two-point-achievements',
     method: 'POST',
-    moduleRequirement: '科技两点合作成果服务针对两个科技专家或人才节点，通过整合知识图谱中与这两个节点相关的合作数据，运用成果关联与归因算法，提取并汇总两者的合作成果信息。服务会对合作成果进行分类统计，标注成果的发表或完成时间、所属领域、获得的奖项或评价，同时分析合作成果的核心贡献与合作模式，为评估两点之间的合作深度与合作价值提供数据支持。',
+    moduleRequirement: '科技两点合作成果服务针对两个科技专家或人才节点，通过整合知识图谱中与这两个节点相关的合作数据，运用成果关联与归因算法，提取并汇总两者的合作成果信息。服务会对合作成果进行分类统计，标注成果的发表或完成时间、所属领域、获得的奖项（含获奖名称、奖项级别）和评价，同时分析合作成果的核心贡献与合作模式，为评估两点之间的合作深度与合作价值提供数据支持。',
     requestFields: [
       { name: 'source_expert_id', type: 'string', required: '是', description: '第一个专家 ID' },
       { name: 'target_expert_id', type: 'string', required: '是', description: '第二个专家 ID' },
@@ -202,11 +202,12 @@ export const serviceModules: ServiceModule[] = [
     ],
     responseFields: commonResponseFields,
     requestExample: { source_expert_id: 'E10001', target_expert_id: 'E10002', achievement_type: '论文/专利/项目', time_range: '2020-2026' },
-    responseExample: { code: 0, message: 'success', data: { papers: 8, patents: 3, projects: 2, contribution: '共同算法模型' } },
+    responseExample: { code: 0, message: 'success', data: { papers: 8, patents: 3, projects: 2, awards: 4, award_details: [{ name: '国家科技进步二等奖', level: '国家级', year: 2023 }, { name: '教育部自然科学一等奖', level: '省部级', year: 2022 }, { name: '北京市科技进步二等奖', level: '省部级', year: 2021 }, { name: '中国专利优秀奖', level: '国家级', year: 2020 }], contribution: '共同算法模型' } },
     resultRows: [
       { label: '合作论文', value: '8', tone: 'blue' },
       { label: '合作专利', value: '3', tone: 'green' },
       { label: '共同项目', value: '2', tone: 'orange' },
+      { label: '获奖成果', value: '4', tone: 'red' },
       { label: '价值评分', value: '91', tone: 'purple' },
     ],
     summaryRows: [
@@ -219,19 +220,21 @@ export const serviceModules: ServiceModule[] = [
       { label: '成果分布', value: '论文 10 篇、项目 4 项、专利 3 件' },
       { label: '代表成果', value: '关系推理方法研究、科研合作网络分析系统' },
       { label: '成果级别与评价', value: '国家级项目 2 项、JCR Q1 论文 5 篇、授权专利 3 件' },
+      { label: '获奖名称', value: '国家科技进步二等奖、教育部自然科学一等奖、北京市科技进步二等奖、中国专利优秀奖' },
+      { label: '奖项级别', value: '国家级 2 项、省部级 2 项' },
       { label: '核心贡献', value: '重点项目攻关、高水平论文产出、科研成果转化' },
       { label: '合作模式', value: '长期稳定型科研合作' },
       { label: '合作价值评分', value: '91' },
     ],
-    evidence: ['按论文、专利、项目分类统计合作成果。', '标注完成时间、所属领域和奖项评价。', '输出核心贡献和合作模式。'],
+    evidence: ['按论文、专利、项目分类统计合作成果。', '标注完成时间、所属领域。', '独立标注获奖名称与奖项级别，不与项目级别、论文级别混同。', '输出核心贡献和合作模式。'],
     rules: [
       {
         name: '成果关联规则',
         type: '成果抽取规则',
         target: '论文、专利、项目、奖项成果实体',
         trigger: '输入两个专家节点并存在共同成果数据',
-        logic: '按专家 ID 聚合共同参与的论文、专利、项目和奖项，校验作者、成员、申请人或参与角色是否同时命中。',
-        output: '合作成果清单、成果类型、完成时间',
+        logic: '按专家 ID 聚合共同参与的论文、专利、项目和奖项，校验作者、成员、申请人或参与角色是否同时命中。奖项实体单独抽取获奖名称、奖项级别、颁奖年份与颁奖机构。',
+        output: '合作成果清单、成果类型、完成时间、获奖清单（含名称与级别）',
         threshold: '成果匹配置信度 >= 0.8',
         audit: '成果归属不清或专家同名时转入人工处理平台',
       },
@@ -240,7 +243,7 @@ export const serviceModules: ServiceModule[] = [
         type: '统计归因规则',
         target: '合作成果及贡献字段',
         trigger: '合作成果完成聚合后',
-        logic: '按成果类型、完成时间、所属领域、奖项评价和贡献描述进行分类统计，识别两点合作模式。',
+        logic: '按成果类型、完成时间、所属领域、获奖名称与奖项级别、贡献描述进行分类统计，识别两点合作模式。',
         output: '分类统计、领域分布、核心贡献、合作模式',
         threshold: '有效成果字段完整率 >= 0.75',
         audit: '关键字段缺失或贡献归因冲突时进入人工补充',
@@ -250,7 +253,7 @@ export const serviceModules: ServiceModule[] = [
         type: '评分规则',
         target: '合作成果数量、影响力和评价数据',
         trigger: '成果归因统计完成后',
-        logic: '综合成果数量、论文被引、项目级别、专利价值和奖项评价计算合作价值评分。',
+        logic: '综合成果数量、论文被引、项目级别、专利价值和奖项级别（国家级/省部级）计算合作价值评分。',
         output: '合作价值评分、合作深度、重点成果推荐',
         threshold: '价值评分 >= 60 自动展示',
         audit: '高价值但数据来源单一时进入人工复核',
@@ -640,7 +643,7 @@ export const serviceModules: ServiceModule[] = [
       { label: '核心专家', value: '张明远、李佳宁、陈思远等' },
       { label: '产业动态事件', value: '智算中心扩容、国产算力适配、多模态模型升级' },
       { label: '图谱规模', value: '186 个节点｜420 条关系' },
-      { label: '更新状态', value: '已完成最新批次动态更新' },
+      { label: '更新状态', value: '尚未更新，点击"刷新数据"或开启自动更新' },
     ],
     evidence: ['整合产业链实体、关系、事件数据。', '展示核心节点、关联关系和数据流向。', '支持层级展开、关系筛选和动态更新。'],
     rules: [

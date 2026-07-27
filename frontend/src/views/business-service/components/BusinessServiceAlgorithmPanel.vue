@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import iconInfo from '../../../assets/icons/icon-info.svg'
 import KgGraphCanvas from '../../../components/kg-graph-canvas.vue'
@@ -14,7 +14,11 @@ const props = defineProps<{
 
 const resultMode = ref<'summary' | 'entity' | 'relation' | 'provenance' | 'rule' | 'api'>('summary')
 const running = ref(false)
-const lastTestTime = ref('2026-07-23 11:00:00')
+const lastTestTime = ref('—')
+const lastUpdateTime = ref<number | null>(null)
+const autoRefresh = ref(false)
+const refreshIntervalSeconds = 10
+let refreshTimer: number | null = null
 const panoramaLayer = ref(3)
 const panoramaRelation = ref('all')
 const parameterValues = ref<Record<string, string>>({})
@@ -125,8 +129,29 @@ const selectedProvenanceTarget = computed(() => {
     confidence: Math.min(from.confidence, to.confidence).toFixed(2),
   }
 })
+function formatTimestamp(date: Date) {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+const updateStatus = computed(() => {
+  if (running.value) return '正在拉取最新批次数据…'
+  if (autoRefresh.value) return `自动更新中（每 ${refreshIntervalSeconds}s 刷新一次）`
+  if (lastUpdateTime.value === null) return '尚未更新，点击"刷新数据"或开启自动更新'
+  const elapsed = Math.floor((Date.now() - lastUpdateTime.value) / 1000)
+  if (elapsed < 5) return `刚刚更新（${elapsed}s 前）`
+  if (elapsed < 60) return `已更新（${elapsed}s 前）`
+  if (elapsed < 3600) return `已更新（${Math.floor(elapsed / 60)}min 前），建议刷新`
+  return `已更新（${Math.floor(elapsed / 3600)}h 前），数据可能过期`
+})
+
 const detailRows = computed(() => {
-  return props.moduleInfo.summaryRows.map((row) => [row.label, row.value] as const)
+  return props.moduleInfo.summaryRows.map((row) => {
+    if (row.label === '更新状态' && isPanorama.value) {
+      return [row.label, updateStatus.value] as const
+    }
+    return [row.label, row.value] as const
+  })
 })
 const apiResultJson = computed(() => JSON.stringify({
   ...JSON.parse(props.responseJson),
@@ -142,6 +167,7 @@ watch(
     selectedGraphNodeId.value = null
     selectedGraphEdgeId.value = null
     resetParameters()
+    autoRefresh.value = false
   },
   { immediate: true },
 )
@@ -171,10 +197,39 @@ function resetParameters() {
 function handleRun() {
   running.value = true
   window.setTimeout(() => {
-    lastTestTime.value = '2026-07-23 11:00:00'
+    const now = new Date()
+    lastTestTime.value = formatTimestamp(now)
+    lastUpdateTime.value = now.getTime()
     running.value = false
   }, 360)
 }
+
+function startAutoRefresh() {
+  if (refreshTimer !== null) return
+  refreshTimer = window.setInterval(() => {
+    handleRun()
+  }, refreshIntervalSeconds * 1000)
+}
+
+function stopAutoRefresh() {
+  if (refreshTimer !== null) {
+    window.clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+}
+
+watch(autoRefresh, (on) => {
+  if (on) {
+    handleRun()
+    startAutoRefresh()
+  } else {
+    stopAutoRefresh()
+  }
+})
+
+onBeforeUnmount(() => {
+  stopAutoRefresh()
+})
 
 function resetPanoramaView() {
   panoramaLayer.value = 3
@@ -251,6 +306,14 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           </select>
         </label>
         <button type="button" @click="resetPanoramaView">恢复全景</button>
+        <span class="graph-panel__filters-divider" aria-hidden="true"></span>
+        <button type="button" class="graph-panel__refresh" :disabled="running" @click="handleRun">
+          {{ running ? '刷新中…' : '↻ 刷新数据' }}
+        </button>
+        <label class="graph-panel__autorefresh">
+          <input type="checkbox" v-model="autoRefresh" />
+          <span>自动更新（{{ refreshIntervalSeconds }}s）</span>
+        </label>
       </div>
       <div class="graph-panel__legend" aria-label="图谱实体类型图例">
         <span v-for="item in graphLegendItems" :key="item.type" :class="`is-${item.type}`">
@@ -511,6 +574,45 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .graph-panel__filters button {
   color: var(--primary);
   cursor: pointer;
+}
+
+.graph-panel__filters button:disabled {
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.graph-panel__filters-divider {
+  width: 1px;
+  height: 24px;
+  margin: 0 4px;
+  border-left: 1px solid var(--border);
+}
+
+.graph-panel__refresh {
+  font-weight: 600;
+}
+
+.graph-panel__autorefresh {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+  min-width: auto !important;
+  cursor: pointer;
+}
+
+.graph-panel__autorefresh input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--primary);
+}
+
+.graph-panel__autorefresh span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .graph-panel__legend {

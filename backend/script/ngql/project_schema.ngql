@@ -152,6 +152,19 @@ CREATE EDGE IF NOT EXISTS HAS_KEYWORD(
   ingest_time string
 );
 
+CREATE EDGE IF NOT EXISTS HAS_OUTPUT(
+  output_type string,
+  output_title string,
+  output_identifier string,
+  match_method string,
+  match_evidence string,
+  confidence double,
+  source_table string,
+  source_record_id string,
+  ingest_batch string,
+  ingest_time string
+);
+
 CREATE EDGE IF NOT EXISTS OUTPUT_OF(
   source_table string,
   source_record_id string,

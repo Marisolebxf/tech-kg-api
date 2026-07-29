@@ -162,24 +162,14 @@ with session_scope() as session:
 | 批量关系抽取 | `POST /api/v1/common-capabilities/relation-extraction/batch` | 多文本关系抽取并合并去重 |
 | 关系抽取示例 | `GET /api/v1/common-capabilities/relation-extraction/examples` | 返回内置示例文本 |
 
-## 数据库 Schema
+## 专利图谱Schema
 
-`schemas/` 和 `db_model/` 已按远程 MySQL 数据库 `gkx` 的真实结构同步，当前包含 93 张表、1686 个字段。
+当前`schemas/`只维护最新专利图谱设计：
 
-| 数据域 | 字段规范 | DDL 目录 | 表数 |
-|---|---|---|---:|
-| 人才专家 | `schemas/specifications/scholar.md` | `schemas/ddl/scholar/` | 6 |
-| 中文论文 | `schemas/specifications/chinese_paper.md` | `schemas/ddl/chinese_paper/` | 4 |
-| 外文论文 | `schemas/specifications/foreign_paper.md` | `schemas/ddl/foreign_paper/` | 6 |
-| 论文通用 | `schemas/specifications/paper_common.md` | `schemas/ddl/paper_common/` | 2 |
-| 专利 | `schemas/specifications/patent.md` | `schemas/ddl/patent/` | 9 |
-| 国内项目 | `schemas/specifications/domestic_project.md` | `schemas/ddl/domestic_project/` | 2 |
-| 国外项目 | `schemas/specifications/foreign_project.md` | `schemas/ddl/foreign_project/` | 2 |
-| 国内机构 | `schemas/specifications/domestic_organization.md` | `schemas/ddl/domestic_organization/` | 41 |
-| 国外机构 | `schemas/specifications/foreign_organization.md` | `schemas/ddl/foreign_organization/` | 10 |
-| 产业链 | `schemas/specifications/industry_chain.md` | `schemas/ddl/industry_chain/` | 5 |
-| 政策 | `schemas/specifications/policy.md` | `schemas/ddl/policy/` | 4 |
-| 报告 | `schemas/specifications/report.md` | `schemas/ddl/report/` | 2 |
+- `schemas/specifications/patent_ontology.md`
+- `schemas/specifications/patent_mapping.md`
+- `dao/sql/patent_entity_extract.sql`
+- `schemas/ddl/patent_ddl.ngql`
 
 ORM 文件：
 

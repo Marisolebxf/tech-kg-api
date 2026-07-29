@@ -1,0 +1,3 @@
+-- Deprecated compatibility marker.
+-- Canonical schema: schemas/dev_organization_schema.ngql
+-- Do not add definitions here.

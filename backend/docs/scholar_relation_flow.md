@@ -127,7 +127,35 @@ milvus.hybrid_search(
 `AFFILIATED_WITH` 终点满足回退 VID 形态：正则 `^org_[a-f0-9]{16}$`。
 这类桩机构由抽取步骤在缺少 `scholar_org_id` 时按机构名 md5 摘要生成。
 
-### 3.2 对齐流程
+### 3.2 对齐流程图
+
+```mermaid
+flowchart TD
+    A[开始] --> B[遍历 AFFILIATED_WITH 边]
+    B --> C[获取桩终点集合并去重]
+    C --> D{还有桩机构?}
+    D -->|否| Z[结束]
+    D -->|是| E[取机构名称<br/>先边属性，再桩顶点属性]
+    E --> F[稠密向量编码<br/>m3e-small]
+    E --> G[BM25 稀疏向量编码]
+    F --> H[组装查询向量]
+    G --> H
+    H --> I[Milvus hybrid_search<br/>RRF融合，top_k=5]
+    I --> J[获取候选机构列表]
+    J --> K{top1 分数 ≥ 0.65?}
+    K -->|是| L[创建 SAME_AS 边<br/>桩机构 → 真实机构]
+    L --> M[记录匹配分、名称、来源、批次号]
+    M --> D
+    K -->|否| N[skipped_low_score]
+    N --> D
+
+    style A fill:#e1f5fe
+    style Z fill:#e1f5fe
+    style L fill:#c8e6c9
+    style N fill:#ffcdd2
+```
+
+### 3.3 对齐时序图
 
 ```mermaid
 sequenceDiagram

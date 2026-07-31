@@ -8,6 +8,7 @@
 |---|---|---|
 | `init_db.py` | 执行 `schemas/ddl/` 下全部 DDL | 默认连接实验室/本地 Docker MySQL `127.0.0.1:3306/gkx_local` |
 | `sync_schema_from_mysql.py` | 从源 MySQL 同步 DDL、字段规范和 ORM | 优先读取 `SOURCE_MYSQL_*`，只读 `information_schema` 和 `SHOW CREATE TABLE` |
+| `paper_journal_relation/` | 论文/期刊实体关系抽取 ETL | 从 `gkx_element` 论文关系表抽取「从论文出发」的有向边（Paper→Paper: RELATED_TO/CITES/CITED_BY；Paper→Keyword: HAS_KEYWORD；Paper→Report: REFERENCED_BY）写入 TRSGraph `dev` 空间，使用 `infra.graph_db.TRSGraphClient`，详见子目录 README |
 | `organization_entity_etl.py` | 装载机构领域实体 | 只新增 `Organization`、`DataSource` 顶点；已有 VID 跳过，不覆盖、不写边 |
 | `organization_relation_etl.py` | 装载机构领域关系 | 唯一关系写入入口；只连接已有端点，相同类型/端点/rank 的边跳过 |
 | `organization_etl_common.py` | 机构 ETL 公共规则 | 统一关系规格、清洗、VID、`source_record_id`、rank、nGQL 与互斥锁 |

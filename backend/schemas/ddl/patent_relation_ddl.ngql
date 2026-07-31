@@ -1,0 +1,44 @@
+-- 专利领域出发的有向关系。
+-- HAS_KEYWORD 已由 patent_ddl.ngql 定义并由 load_patent_graph.py 装载。
+
+CREATE EDGE IF NOT EXISTS INVENTED_BY (
+  sequence int64,
+  source_name string,
+  confidence double,
+  subject_type string,
+  resolution_status string,
+  match_method string,
+  match_evidence string,
+  source_table string,
+  source_record_id string
+);
+
+CREATE EDGE IF NOT EXISTS APPLIED_BY (
+  sequence int64,
+  role string,
+  source_name string,
+  confidence double,
+  subject_type string,
+  resolution_status string,
+  match_method string,
+  match_evidence string,
+  source_table string,
+  source_record_id string
+);
+
+CREATE EDGE IF NOT EXISTS OWNED_BY (
+  sequence int64,
+  role string,
+  is_current bool,
+  source_name string,
+  confidence double,
+  subject_type string,
+  resolution_status string,
+  match_method string,
+  match_evidence string,
+  source_table string,
+  source_record_id string
+);
+
+-- CITES 与 OUTPUT_OF 是跨领域共享 Edge，现有属性保留；
+-- 装载器会通过 DESCRIBE/ALTER 仅补充缺失属性，不删除其他领域属性。

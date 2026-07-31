@@ -47,7 +47,7 @@ class DwdZhProject(Base):
     )
     project_page_url = Column("project_page_url", String(1024), nullable=True, comment="项目详情页")
     create_time = Column("create_time", DateTime(), nullable=True)
-    update_time = Column("update_time", DateTime(), nullable=True)
+    updated_time = Column("updated_time", DateTime(), nullable=False)
 
 
 class DwdZhProjectOutput(Base):
@@ -69,10 +69,6 @@ class DwdZhProjectOutput(Base):
         "degree_papers_count", Integer(), nullable=True, comment="学位论文数量"
     )
     patents_count = Column("patents_count", Integer(), nullable=True, comment="专利数量")
-    clinical_trials_count = Column(
-        "clinical_trials_count", Integer(), nullable=True, comment="临床试验数量"
-    )
-    products_count = Column("products_count", Integer(), nullable=True, comment="产品数量")
     awards_count = Column("awards_count", Integer(), nullable=True, comment="奖项数量")
     reports_count = Column("reports_count", Integer(), nullable=True, comment="报告数量")
     other_outputs_count = Column(
@@ -87,15 +83,11 @@ class DwdZhProjectOutput(Base):
     output_books = Column("output_books", Text(), nullable=True, comment="图书专著")
     output_degree_papers = Column("output_degree_papers", Text(), nullable=True, comment="学位论文")
     output_patents = Column("output_patents", Text(), nullable=True, comment="专利")
-    output_clinical_trials = Column(
-        "output_clinical_trials", Text(), nullable=True, comment="临床试验"
-    )
-    output_products = Column("output_products", Text(), nullable=True, comment="产品")
     output_awards = Column("output_awards", Text(), nullable=True, comment="奖项")
     output_reports = Column("output_reports", Text(), nullable=True, comment="报告")
     output_other = Column("output_other", Text(), nullable=True, comment="其他成果")
     create_time = Column("create_time", DateTime(), nullable=True)
-    update_time = Column("update_time", DateTime(), nullable=True)
+    updated_time = Column("updated_time", DateTime(), nullable=False)
 
 
 class DwdEnProject(Base):
@@ -129,7 +121,7 @@ class DwdEnProject(Base):
     abstract = Column("abstract", Text(), nullable=True, comment="项目摘要")
     project_page_url = Column("project_page_url", String(1024), nullable=True, comment="项目详情页")
     create_time = Column("create_time", DateTime(), nullable=True)
-    update_time = Column("update_time", DateTime(), nullable=True)
+    updated_time = Column("updated_time", DateTime(), nullable=False)
 
 
 class DwdEnProjectOutput(Base):
@@ -154,7 +146,6 @@ class DwdEnProjectOutput(Base):
     clinical_trials_count = Column(
         "clinical_trials_count", Integer(), nullable=True, comment="临床试验数量"
     )
-    products_count = Column("products_count", Integer(), nullable=True, comment="产品数量")
     awards_count = Column("awards_count", Integer(), nullable=True, comment="奖项数量")
     reports_count = Column("reports_count", Integer(), nullable=True, comment="报告数量")
     other_outputs_count = Column(
@@ -172,9 +163,7 @@ class DwdEnProjectOutput(Base):
     output_clinical_trials = Column(
         "output_clinical_trials", Text(), nullable=True, comment="临床试验"
     )
-    output_products = Column("output_products", Text(), nullable=True, comment="产品")
     output_awards = Column("output_awards", Text(), nullable=True, comment="奖项")
     output_reports = Column("output_reports", Text(), nullable=True, comment="报告")
     output_other = Column("output_other", Text(), nullable=True, comment="其他成果")
     create_time = Column("create_time", DateTime(), nullable=True)
-    update_time = Column("update_time", DateTime(), nullable=True)

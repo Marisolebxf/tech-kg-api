@@ -626,3 +626,13 @@ class TRSGraphClient:
             else:
                 result.append(str(item))
         return result
+
+    def list_spaces(self) -> list[str]:
+        """列出所有图空间（无 REST 端点，用 nGQL SHOW SPACES）。"""
+        result = self.execute_write("SHOW SPACES;")
+        names: list[str] = []
+        for rec in result.records:
+            name = rec.get("Name", rec.get("name", ""))
+            if name:
+                names.append(str(name))
+        return names

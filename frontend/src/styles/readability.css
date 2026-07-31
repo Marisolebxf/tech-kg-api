@@ -1,0 +1,495 @@
+/*
+ * Readability layer
+ *
+ * The prototype was initially tuned for a dense design canvas and contained
+ * many 8–10px labels. Keep the information density, but establish a 12–13px
+ * minimum for supporting copy and a 14–16px baseline for actionable content.
+ * `!important` is intentional here: view styles are scoped and are emitted
+ * after the shared styles in production builds.
+ */
+
+:root {
+  --control-height: 36px;
+}
+
+.app-viewport {
+  font-size: 16px;
+}
+
+.app-viewport input,
+.app-viewport select,
+.app-viewport textarea {
+  font-size: 15px !important;
+  line-height: 22px;
+}
+
+.app-viewport table {
+  font-size: 14px;
+}
+
+.app-viewport th,
+.app-viewport td {
+  line-height: 22px;
+}
+
+.app-nav__group em {
+  font-size: 10px !important;
+}
+
+/* Sidebar navigation keeps its original compact hierarchy. Typography below
+   is intentionally scoped to the content of the three governance modules. */
+.app-sidebar .app-nav__item {
+  font-size: 16px;
+}
+
+.app-sidebar .app-nav__item--sub {
+  font-size: 15px;
+}
+
+/* Schema details */
+.schema-page .schema-table-wrap table,
+.schema-page .trace-layout table {
+  font-size: 14px !important;
+}
+
+.schema-page .schema-table-wrap th,
+.schema-page .schema-table-wrap td,
+.schema-page .trace-layout td {
+  font-size: 14px !important;
+  line-height: 22px !important;
+}
+
+.schema-page .schema-table-wrap code,
+.schema-page .trace-layout code,
+.schema-page .mono-list {
+  font-size: 13px !important;
+}
+
+.schema-page :is(.core, .support, .evidence, .auto, .review),
+.schema-page .schema-version-actions button {
+  font-size: 12px !important;
+  line-height: 18px;
+}
+
+.schema-page .schema-toolbar > div span,
+.schema-page .candidate-note p,
+.schema-page .trace-card p,
+.schema-page .trace-card dd,
+.schema-page .trace-layout > aside span {
+  font-size: 13px !important;
+  line-height: 20px !important;
+}
+
+.schema-page .mention-fields span {
+  font-size: 12px !important;
+  line-height: 18px;
+}
+
+/* Task center rows and task-instance details */
+.task-center .task-table table,
+.task-center .task-table th,
+.task-center .task-table td {
+  font-size: 14px !important;
+  line-height: 22px !important;
+}
+
+.task-center .task-table td small,
+.task-center .task-filter > span,
+.task-center .task-summary em {
+  font-size: 12px !important;
+  line-height: 18px;
+}
+
+.task-center .task-table button,
+.task-center .task-filter,
+.task-center .task-categories button {
+  font-size: 14px !important;
+}
+
+.task-center .auto-update-body :is(span, p, button, small),
+.task-center .auto-update-monitor header :is(span, em) {
+  font-size: 12px !important;
+  line-height: 18px;
+}
+
+.detail-page .update-record-panel header p,
+.detail-page .update-record-panel header > span,
+.detail-page .update-record-panel article span,
+.detail-page .rollback-confirm p,
+.detail-page .update-error-banner p {
+  font-size: 12px !important;
+  line-height: 18px;
+}
+
+.detail-page .update-record-panel article strong,
+.detail-page .workflow-step strong,
+.detail-page .workflow-step em,
+.detail-page .workflow-step b,
+.detail-page .overview-grid :is(dt, dd, p, li),
+.detail-page .quality-table table {
+  font-size: 14px !important;
+  line-height: 22px !important;
+}
+
+/* Manual-review list and its per-instance detail/progress pages */
+.ops-page .ops-review-table-scroll table,
+.ops-page .ops-review-table-scroll th,
+.ops-page .ops-review-table-scroll td {
+  font-size: 14px !important;
+  line-height: 22px !important;
+}
+
+.ops-page .ops-review-table-scroll td small,
+.ops-page .review-pagination,
+.ops-page .review-tabs em {
+  font-size: 12px !important;
+  line-height: 18px;
+}
+
+.ops-page .ops-review-table-scroll .link,
+.ops-page .review-tabs button,
+.ops-page .ops-filter.is-review {
+  font-size: 14px !important;
+}
+
+.review-task-detail .review-object-card :is(span, p, em),
+.review-task-detail .review-meta-grid span,
+.review-task-detail .review-progress-panel :is(p, span),
+.review-task-detail .decision-options p,
+.review-task-detail .review-task-footer > span {
+  font-size: 12px !important;
+  line-height: 18px;
+}
+
+.review-task-detail .review-meta-grid strong,
+.review-task-detail .decision-result p,
+.review-task-detail .review-compare :is(strong, p),
+.review-task-detail .review-evidence :is(strong, p),
+.review-task-detail .decision-options label,
+.review-task-detail .review-history :is(strong, p, time),
+.review-task-detail .review-progress-panel article strong {
+  font-size: 14px !important;
+  line-height: 22px !important;
+}
+
+.review-task-detail textarea,
+.review-task-detail button,
+.review-task-detail a {
+  font-size: 14px !important;
+}
+
+/* Short result title must remain on one line in the narrow detail column. */
+.platform-detail .kg-panel__title {
+  white-space: nowrap;
+}
+
+.app-top-actions__user {
+  min-height: 34px;
+  font-size: 14px !important;
+}
+
+.app-top-actions__user strong {
+  font-size: 14px !important;
+}
+
+.app-top-actions__user em,
+.app-top-actions__user > i {
+  font-size: 12px !important;
+}
+
+/* The overview grows with its content and the complete main column scrolls.
+   This avoids the previous nested fixed-height containers clipping the asset
+   charts below the first screen. */
+.app-main.is-overview-page {
+  overflow-y: auto !important;
+  scrollbar-color: #91acd2 transparent !important;
+  scrollbar-width: thin !important;
+}
+
+.app-main.is-overview-page::-webkit-scrollbar {
+  display: block;
+  width: 9px;
+}
+
+.app-main.is-overview-page::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #91acd2 !important;
+  background-clip: padding-box !important;
+}
+
+.app-main.is-overview-page .app-workspace {
+  height: auto !important;
+  min-height: calc(100% - 42px);
+  overflow: visible !important;
+}
+
+.app-main.is-overview-page .platform-page {
+  height: auto !important;
+  min-height: 100%;
+  grid-template-rows: auto auto !important;
+}
+
+.app-main.is-overview-page .platform-content {
+  min-height: auto !important;
+  overflow: visible !important;
+  padding-right: 0;
+  padding-bottom: 24px;
+}
+
+/* Other modules keep their dedicated inner scrolling behavior. */
+.app-main:not(.is-overview-page) .platform-content {
+  scrollbar-color: #91acd2 transparent !important;
+  scrollbar-width: thin !important;
+}
+
+.app-main:not(.is-overview-page) .platform-content::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+}
+
+.app-main:not(.is-overview-page) .platform-content::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #91acd2 !important;
+  background-clip: padding-box !important;
+}
+
+.platform-hero {
+  min-height: 72px !important;
+  padding-block: 13px !important;
+}
+
+.platform-hero h1 {
+  font-size: 24px !important;
+  line-height: 32px !important;
+}
+
+.platform-hero__subtitle,
+.platform-hero__actions span,
+.platform-hero__actions a {
+  font-size: 14px !important;
+}
+
+.platform-hero__flow {
+  font-size: 13px !important;
+  line-height: 20px;
+}
+
+.platform-hero__actions a {
+  height: 36px !important;
+  padding-inline: 14px !important;
+  line-height: 34px !important;
+}
+
+.platform-summary-card > header > div > strong {
+  font-size: 16px !important;
+}
+
+.platform-summary-card > header span,
+.platform-summary-card > header a,
+.platform-summary-card > header button {
+  font-size: 13px !important;
+  line-height: 20px;
+}
+
+.platform-summary-card__main span {
+  font-size: 14px !important;
+}
+
+.platform-summary-card__items {
+  padding-block: 12px !important;
+}
+
+.platform-summary-card__items em {
+  font-size: 12px !important;
+  line-height: 18px;
+}
+
+.platform-summary-card__items strong {
+  font-size: 14px !important;
+  line-height: 20px;
+}
+
+.platform-latest-changes .kg-panel__header span,
+.platform-risk-panel .kg-panel__header span,
+.platform-latest-changes .kg-panel__header > a,
+.platform-risk-panel .kg-panel__header > a {
+  font-size: 13px !important;
+}
+
+.platform-change-feed > a {
+  grid-template-columns: 54px 50px minmax(0, 1fr) 78px !important;
+  min-height: 82px !important;
+  gap: 12px !important;
+  padding: 12px 16px !important;
+}
+
+.platform-change-feed time {
+  font-size: 13px !important;
+}
+
+.platform-change-feed > a > span {
+  font-size: 12px !important;
+  line-height: 18px;
+}
+
+.platform-change-feed > a > div {
+  gap: 4px !important;
+}
+
+.platform-change-feed > a > div strong {
+  font-size: 15px !important;
+  line-height: 22px;
+}
+
+.platform-change-feed > a > div p {
+  font-size: 13px !important;
+  line-height: 20px !important;
+}
+
+.platform-change-feed > a > div em,
+.platform-change-feed > a > b {
+  font-size: 12px !important;
+  line-height: 18px;
+}
+
+.platform-risk-list article {
+  min-height: 96px !important;
+  padding: 15px 16px !important;
+}
+
+.platform-risk-list article span b {
+  font-size: 12px !important;
+  line-height: 18px;
+}
+
+.platform-risk-list article strong {
+  font-size: 15px !important;
+  line-height: 22px;
+}
+
+.platform-risk-list article p,
+.platform-risk-list article a {
+  font-size: 13px !important;
+  line-height: 20px !important;
+}
+
+.platform-structure-chart > header strong {
+  font-size: 16px !important;
+}
+
+.platform-structure-legend article,
+.platform-structure-legend article > span,
+.platform-structure-legend article > strong {
+  font-size: 14px !important;
+  line-height: 20px;
+}
+
+.platform-structure-legend article em,
+.platform-donut em {
+  font-size: 12px !important;
+  line-height: 18px;
+}
+
+.platform-page-head__action,
+.platform-task-filters,
+.platform-trace-link,
+.platform-card-arrow {
+  font-size: 14px !important;
+}
+
+.platform-table th,
+.platform-table td {
+  font-size: 14px !important;
+  line-height: 22px !important;
+}
+
+.platform-table small,
+.platform-table td em,
+.platform-table td code {
+  font-size: 12px !important;
+  line-height: 18px;
+}
+
+.platform-status {
+  font-size: 13px !important;
+  line-height: 20px;
+}
+
+.platform-page button:not(.graph-node):not(.graph-edge),
+.platform-page select,
+.platform-page input,
+.platform-page textarea {
+  min-height: 34px;
+  font-size: 14px;
+}
+
+.platform-page .kg-panel__header > span,
+.platform-page .kg-panel__header > a,
+.platform-page .kg-panel__header > div > span {
+  font-size: 13px !important;
+}
+
+/* Unified typography baseline for every right-side workspace page. The
+   sidebar lives outside `.app-workspace`, so these rules never resize the
+   directory. More specific page rules above keep intentional hierarchy. */
+.app-workspace :where(table),
+.app-workspace :where(th, td) {
+  font-size: 14px !important;
+  line-height: 22px !important;
+}
+
+.app-workspace :where(p, li, dt, dd, label) {
+  font-size: 14px !important;
+  line-height: 22px !important;
+}
+
+.app-workspace :where(button, input, select, textarea) {
+  font-size: 14px !important;
+}
+
+.app-workspace :where(small, time) {
+  font-size: 12px !important;
+  line-height: 18px !important;
+}
+
+.app-workspace :where(code) {
+  font-size: 13px !important;
+  line-height: 20px !important;
+}
+
+.app-workspace :where(.kg-panel__header > span),
+.app-workspace :where(.kg-panel__header > a),
+.app-workspace :where(.kg-panel__header > div > span) {
+  font-size: 13px !important;
+  line-height: 20px !important;
+}
+
+/* Secondary metadata that is expressed with `em` in legacy pages. */
+.knowledge-query :where(em),
+.version-page :where(em),
+.business-service :where(em),
+.result-panel :where(em),
+.service-console :where(em) {
+  font-size: 12px !important;
+  line-height: 18px !important;
+}
+
+.knowledge-query :where(header span, .query-examples span, .trace-column span),
+.version-page :where(header span, td small),
+.business-service :where(.service-console__head span, .graph-panel__time),
+.result-panel :where(dt, dd) {
+  font-size: 13px !important;
+  line-height: 20px !important;
+}
+
+@media (max-width: 1440px) {
+  .platform-hero h1 {
+    font-size: 22px !important;
+  }
+
+  .platform-change-feed > a {
+    min-height: 76px !important;
+  }
+}

@@ -67,8 +67,13 @@ doi 精确匹配只放行真同一篇，是可靠的对齐信号。
 
 ## 运行方式
 
+> 这两个脚本的依赖（pymilvus[model]、sentence-transformers，会拉 torch）在 `[project.optional-dependencies] milvus` 里，**CI 默认不装**。跑脚本前先装：
+> `uv sync --extra milvus`（首次还会下载 m3e-small 模型 ~100MB）。
+
 ```bash
 cd backend
+uv sync --extra milvus   # 装脚本依赖（torch 等）
+
 # 1) 建 Milvus 索引（首次下载 m3e-small ~100MB）
 MILVUS_URI=http://127.0.0.1:19530 \
 TRS_GRAPH_BASE_URL=http://127.0.0.1:8090 TRS_GRAPH_SPACE=dev TRS_GRAPH_API_KEY=ysukeg \

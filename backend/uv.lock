@@ -1349,16 +1349,20 @@ dependencies = [
     { name = "openai" },
     { name = "pandas" },
     { name = "pydantic" },
-    { name = "pymilvus", extra = ["model"] },
     { name = "pymysql" },
     { name = "python-dotenv" },
     { name = "rapidfuzz" },
     { name = "redis" },
-    { name = "sentence-transformers" },
     { name = "sqlalchemy" },
     { name = "uvicorn" },
     { name = "zai-sdk" },
     { name = "zhipuai" },
+]
+
+[package.optional-dependencies]
+milvus = [
+    { name = "pymilvus", extra = ["model"] },
+    { name = "sentence-transformers" },
 ]
 
 [package.dev-dependencies]
@@ -1381,17 +1385,18 @@ requires-dist = [
     { name = "openai", specifier = ">=2.32.0" },
     { name = "pandas", specifier = ">=3.0.2" },
     { name = "pydantic", specifier = "==2.11.7" },
-    { name = "pymilvus", extras = ["model"], specifier = ">=2.4.9,<2.5" },
+    { name = "pymilvus", extras = ["model"], marker = "extra == 'milvus'", specifier = ">=2.4.9,<2.5" },
     { name = "pymysql", specifier = ">=1.1.1" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "rapidfuzz", specifier = ">=3.6.0" },
     { name = "redis", specifier = "==7.0.1" },
-    { name = "sentence-transformers", specifier = ">=3.0.0" },
+    { name = "sentence-transformers", marker = "extra == 'milvus'", specifier = ">=3.0.0" },
     { name = "sqlalchemy", specifier = "==2.0.42" },
     { name = "uvicorn", specifier = ">=0.44.0" },
     { name = "zai-sdk", specifier = ">=0.2.2" },
     { name = "zhipuai", specifier = ">=1.0.7" },
 ]
+provides-extras = ["milvus"]
 
 [package.metadata.requires-dev]
 dev = [

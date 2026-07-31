@@ -24,6 +24,8 @@ dependencies = [
     "uvicorn>=0.44.0",
     "zai-sdk>=0.2.2",
     "zhipuai>=1.0.7",
+    "pymilvus[model]>=2.4.9,<2.5",
+    "sentence-transformers>=3.0.0",
 ]
 
 [dependency-groups]

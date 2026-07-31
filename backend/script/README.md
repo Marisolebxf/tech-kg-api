@@ -8,6 +8,7 @@
 |---|---|---|
 | `init_db.py` | 执行 `schemas/ddl/` 下全部 DDL | 默认连接实验室/本地 Docker MySQL `127.0.0.1:3306/gkx_local` |
 | `sync_schema_from_mysql.py` | 从源 MySQL 同步 DDL、字段规范和 ORM | 优先读取 `SOURCE_MYSQL_*`，只读 `information_schema` 和 `SHOW CREATE TABLE` |
+| `paper_milvus/` | 论文/期刊 Milvus 索引与对齐 | 为 dev 空间 Paper/Journal 实体建 Milvus 索引（BM25+m3e 稠密+混合），并用 doi 精确对齐占位桩到真实 Paper 建 SAME_AS 边，使用 `infra.graph_db.TRSGraphClient` 与子目录内 `milvus.py`，详见子目录 README |
 
 ## 常用命令
 

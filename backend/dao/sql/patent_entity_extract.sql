@@ -13,7 +13,8 @@ SELECT
   p.main_classification_cpc AS main_cpc,
   p.further_classification_cpc AS further_cpc,
   p.keywords, c.reference_cited AS citation_nums, c.cited_by_nums,
-  p.value AS patent_value, f.simple_family_number, p.update_time
+  p.value AS patent_value, f.simple_family_number,
+  p.db_source, p.create_time, p.update_time
 FROM dwd_patent p
 LEFT JOIN dwd_patent_title t ON t.patent_id = p.patent_id
 LEFT JOIN dwd_patent_abstract a ON a.patent_id = p.patent_id

@@ -19,7 +19,7 @@ CREATE TABLE `dwd_en_project` (
   `keywords` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '关键词',
   `abstract` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '项目摘要',
   `project_page_url` varchar(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '项目详情页',
-  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
-  `update_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+  `updated_time` datetime NOT NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='深势-国外项目信息表';

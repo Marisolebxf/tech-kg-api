@@ -1,0 +1,139 @@
+-- Canonical schema for organization entity and relation ETLs.
+-- Both ETLs use this file.  It is idempotent and restricted to the dev space.
+USE dev;
+
+CREATE TAG IF NOT EXISTS `Organization`(
+  `org_id` string NULL,
+  `name_cn` string NULL,
+  `name_en` string NULL,
+  `external_id` string NULL,
+  `province` string NULL,
+  `city` string NULL,
+  `area` string NULL,
+  `country_code` string NULL,
+  `country` string NULL,
+  `address` string NULL,
+  `postal_code` string NULL,
+  `phone` string NULL,
+  `email` string NULL,
+  `legal_rep` string NULL,
+  `org_type` string NULL,
+  `org_size` string NULL,
+  `founded_year` int64 NULL,
+  `listing_status` string NULL,
+  `listed_date` string NULL,
+  `registered_capital` double NULL,
+  `capital_currency` string NULL,
+  `industry_class` string NULL,
+  `stock_code` string NULL,
+  `stock_noun` string NULL,
+  `stock_type` string NULL,
+  `org_kind` string NULL,
+  `description` string NULL,
+  `main_products` string NULL,
+  `extra_json` string NULL,
+  `source_system` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `source_url` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL,
+  `source_update_time` string NULL
+);
+
+CREATE TAG IF NOT EXISTS `DataSource`(
+  `source_table` string NULL,
+  `table_cn_name` string NULL,
+  `tier` string NULL,
+  `library` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `SHAREHOLDER_OF`(
+  `ownership_percentage` double NULL,
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `INVESTS_IN`(
+  `investment_amount` double NULL,
+  `investment_ratio` double NULL,
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `ACQUIRES`(
+  `ma_amount` double NULL,
+  `currency_code` string NULL,
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `SUBSIDIARY_OF`(
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `PARTICIPATES_IN`(
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `HAS_NEWS`(
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `INVOLVED_IN`(
+  `role` string NULL,
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `BELONGS_TO_NODE`(
+  `chain_score` double NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `PRODUCES`(
+  `tech_product_seq` int64 NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE TAG INDEX IF NOT EXISTS `organization_org_id_idx` ON `Organization`(`org_id`(128));
+CREATE TAG INDEX IF NOT EXISTS `organization_name_cn_idx` ON `Organization`(`name_cn`(128));
+CREATE TAG INDEX IF NOT EXISTS `datasource_table_idx` ON `DataSource`(`source_table`(128));
+CREATE EDGE INDEX IF NOT EXISTS `shareholder_of_idx` ON `SHAREHOLDER_OF`();
+CREATE EDGE INDEX IF NOT EXISTS `invests_in_idx` ON `INVESTS_IN`();
+CREATE EDGE INDEX IF NOT EXISTS `acquires_idx` ON `ACQUIRES`();
+CREATE EDGE INDEX IF NOT EXISTS `subsidiary_of_idx` ON `SUBSIDIARY_OF`();
+CREATE EDGE INDEX IF NOT EXISTS `participates_in_idx` ON `PARTICIPATES_IN`();
+CREATE EDGE INDEX IF NOT EXISTS `has_news_idx` ON `HAS_NEWS`();
+CREATE EDGE INDEX IF NOT EXISTS `involved_in_idx` ON `INVOLVED_IN`();
+CREATE EDGE INDEX IF NOT EXISTS `belongs_to_node_idx` ON `BELONGS_TO_NODE`();
+CREATE EDGE INDEX IF NOT EXISTS `produces_idx` ON `PRODUCES`();

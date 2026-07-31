@@ -7,6 +7,8 @@ import hashlib
 import json
 import logging
 import os
+import re
+import time
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -48,13 +50,9 @@ PATENT_PROPERTIES = (
     "cited_by_nums",
     "patent_value",
     "simple_family_number",
-    "source_system",
-    "source_table",
-    "source_record_id",
-    "source_url",
-    "ingest_batch",
-    "ingest_time",
-    "source_update_time",
+    "db_source",
+    "create_time",
+    "update_time",
 )
 
 # 2. MySQL数据读取
@@ -161,10 +159,8 @@ def ngql_int(value: Any) -> str:
     return str(int(value or 0))
 
 
-def patent_payload(
-    row: dict[str, Any], batch_id: str, ingest_time: datetime
-) -> tuple[str, list[str]]:
-    """将一条MySQL记录映射为Patent VID和33个属性。"""
+def patent_payload(row: dict[str, Any]) -> tuple[str, list[str]]:
+    """只映射MySQL中的29个Patent正式属性。"""
     patent_id = str(row.get("patent_id") or "").strip()
     if not patent_id:
         raise ValueError("patent_id 为空")
@@ -175,12 +171,12 @@ def patent_payload(
         ngql_string(row.get("application_kind")),
         ngql_string(row.get("country_code")),
         ngql_string(row.get("country")),
-        ngql_date(row.get("publication_date")),
-        ngql_date(row.get("application_date")),
+        ngql_int(row.get("publication_date")),
+        ngql_int(row.get("application_date")),
         ngql_string(row.get("granted_number")),
-        ngql_date(row.get("grant_date")),
+        ngql_string(row.get("grant_date")),
         ngql_string(row.get("status")),
-        ngql_date(row.get("anticipated_expiration")),
+        ngql_int(row.get("anticipated_expiration")),
         ngql_string(original_text(row.get("titles"))),
         ngql_string(row.get("title_en")),
         ngql_string(row.get("title_zh")),
@@ -195,12 +191,8 @@ def patent_payload(
         ngql_int(row.get("cited_by_nums")),
         ngql_int(row.get("patent_value")),
         ngql_string(row.get("simple_family_number")),
-        ngql_string("gkx_element"),
-        ngql_string("dwd_patent"),
-        ngql_string(patent_id),
-        ngql_string(""),
-        ngql_string(batch_id),
-        ngql_datetime(ingest_time),
+        ngql_string(row.get("db_source")),
+        ngql_datetime(row.get("create_time")),
         ngql_datetime(row.get("update_time")),
     ]
     return f"patent_{patent_id}", values
@@ -235,57 +227,91 @@ def keyword_statements(
         )
         vertex_ngql = f"INSERT VERTEX Keyword(keyword) VALUES {values};"
     if edges:
-        timestamp = "" if ingest_time is None else ingest_time.isoformat()
         values = ",".join(
-            f"{ngql_string(src)}->{ngql_string(dst)}:("
-            f"{ngql_string('dwd_patent')},{ngql_string(record_id)},"
-            f"{ngql_string(batch_id)},{ngql_string(timestamp)},1.0)"
-            for (src, dst), record_id in edges.items()
+            f"{ngql_string(src)}->{ngql_string(dst)}:(1.0,{ngql_string('dwd_patent')},{ngql_string(src.removeprefix('patent_'))})"
+            for src, dst in edges
         )
         edge_ngql = (
-            "INSERT EDGE HAS_KEYWORD(source_table,source_record_id,ingest_batch,"
-            f"ingest_time,confidence) VALUES {values};"
+            f"INSERT EDGE HAS_KEYWORD(confidence,source_table,source_record_id) VALUES {values};"
         )
     return vertex_ngql, edge_ngql
 
 
 def family_statements(rows: list[dict[str, Any]]) -> tuple[str, str]:
-    """按同域simple_family_number生成PatentFamily及确定性归属边。"""
+    """生成PatentFamily顶点和确定的MEMBER_OF_FAMILY边。"""
     families: dict[str, str] = {}
-    edges: dict[tuple[str, str], str] = {}
+    edges: set[tuple[str, str, str]] = set()
     for row in rows:
+        number = str(row.get("simple_family_number") or "").strip()
         patent_id = str(row.get("patent_id") or "").strip()
-        family_number = str(row.get("simple_family_number") or "").strip()
-        if not patent_id or not family_number:
+        if not number or not patent_id:
             continue
-        family_vid = f"patent_family_{family_number}"
-        families[family_vid] = family_number
-        edges[(f"patent_{patent_id}", family_vid)] = patent_id
-    vertices = ",".join(
-        f"{ngql_string(vid)}:({ngql_string(number)})" for vid, number in families.items()
-    )
-    relations = ",".join(
-        f"{ngql_string(src)}->{ngql_string(dst)}:(1.0,"
-        f"{ngql_string('source_family_number')},"
-        f"{ngql_string('simple_family_number由源表直接给出')},"
-        f"{ngql_string('dwd_patent_family')},{ngql_string(record_id)})"
-        for (src, dst), record_id in edges.items()
-    )
-    vertex_ngql = f"INSERT VERTEX PatentFamily(family_number) VALUES {vertices};" if vertices else ""
-    edge_ngql = (
-        "INSERT EDGE MEMBER_OF_FAMILY(confidence,match_method,match_evidence,"
-        f"source_table,source_record_id) VALUES {relations};" if relations else ""
-    )
+        family_vid = f"patent_family_{number}"
+        families[family_vid] = number
+        edges.add((f"patent_{patent_id}", family_vid, patent_id))
+    vertex_ngql = ""
+    edge_ngql = ""
+    if families:
+        values = ",".join(
+            f"{ngql_string(vid)}:({ngql_string(number)})" for vid, number in families.items()
+        )
+        vertex_ngql = f"INSERT VERTEX PatentFamily(family_number) VALUES {values};"
+    if edges:
+        values = ",".join(
+            f"{ngql_string(src)}->{ngql_string(dst)}:(1.0,{ngql_string('source_family_number')},{ngql_string('simple_family_number由源表直接给出')},{ngql_string('dwd_patent_family')},{ngql_string(source_id)})"
+            for src, dst, source_id in edges
+        )
+        edge_ngql = f"INSERT EDGE MEMBER_OF_FAMILY(confidence,match_method,match_evidence,source_table,source_record_id) VALUES {values};"
     return vertex_ngql, edge_ngql
 
 
+DDL_FILE = Path(__file__).resolve().parents[1] / "schemas" / "ddl" / "patent_ddl.ngql"
+
+
+def ensure_schema(graph: Any) -> None:
+    """幂等创建本加载器所需Schema，并为旧HAS_KEYWORD补字段。"""
+    ddl = DDL_FILE.read_text(encoding="utf-8")
+    definitions = re.findall(r"CREATE\s+(?:TAG|EDGE)\b.*?;", ddl, flags=re.I | re.S)
+    for statement in definitions:
+        graph.execute_write(statement)
+    for name in ("PatentFamily", "MEMBER_OF_FAMILY"):
+        command = f"DESCRIBE TAG {name}" if name == "PatentFamily" else f"DESCRIBE EDGE {name}"
+        for attempt in range(15):
+            try:
+                graph.execute_read(command)
+                break
+            except Exception:
+                if attempt == 14:
+                    raise
+                time.sleep(1)
+    existing = {
+        str(row["Field"]) for row in graph.execute_read("DESCRIBE EDGE HAS_KEYWORD").records
+    }
+    missing = [("confidence", "double"), ("source_table", "string"), ("source_record_id", "string")]
+    missing = [(field, kind) for field, kind in missing if field not in existing]
+    if missing:
+        graph.execute_write(
+            f"ALTER EDGE HAS_KEYWORD ADD ({', '.join(f'{field} {kind}' for field, kind in missing)});"
+        )
+    wanted = {"confidence", "source_table", "source_record_id"}
+    for attempt in range(15):
+        visible = {
+            str(row["Field"]) for row in graph.execute_read("DESCRIBE EDGE HAS_KEYWORD").records
+        }
+        if wanted <= visible:
+            break
+        if attempt == 14:
+            raise RuntimeError("HAS_KEYWORD新属性未在TRSGraph中生效")
+        time.sleep(1)
+
+
 # 5. 主流程：读取MySQL并通过公共图客户端写入dev
-def load_patents(batch_size: int, batch_id: str) -> tuple[int, int, int]:
+def load_patents(batch_size: int) -> tuple[int, int, int]:
     os.environ["TRS_GRAPH_SPACE"] = "dev"
     graph = get_trs_graph_client()  # 公共图数据库能力
+    ensure_schema(graph)
     connection = mysql_connection()
     loaded = keyword_count = edge_count = 0
-    ingest_time = datetime.now().replace(microsecond=0)
     try:
         while True:
             with connection.cursor() as cursor:
@@ -294,13 +320,11 @@ def load_patents(batch_size: int, batch_id: str) -> tuple[int, int, int]:
                 rows = list(cursor.fetchall())
             if not rows:
                 break
-            for start in range(0, len(rows), 10):
-                group = rows[start : start + 10]
+            for start in range(0, len(rows), 1):
+                group = rows[start : start + 1]
                 # 写入Patent
-                graph.execute_write(
-                    patent_statement([patent_payload(row, batch_id, ingest_time) for row in group])
-                )
-                vertex_ngql, edge_ngql = keyword_statements(group, batch_id, ingest_time)
+                graph.execute_write(patent_statement([patent_payload(row) for row in group]))
+                vertex_ngql, edge_ngql = keyword_statements(group)
                 if vertex_ngql:
                     graph.execute_write(vertex_ngql)  # 写入Keyword
                 if edge_ngql:
@@ -310,14 +334,9 @@ def load_patents(batch_size: int, batch_id: str) -> tuple[int, int, int]:
                     graph.execute_write(family_vertex_ngql)
                 if family_edge_ngql:
                     graph.execute_write(family_edge_ngql)
-                keyword_references = sum(
-                    len(keyword_values(row.get("keywords"))) for row in group
-                )
-                family_references = sum(
-                    bool(row.get("simple_family_number")) for row in group
-                )
-                keyword_count += keyword_references
-                edge_count += keyword_references + family_references
+                references = sum(len(keyword_values(row.get("keywords"))) for row in group)
+                keyword_count += references
+                edge_count += references
             loaded += len(rows)
             logger.info("装载进度 Patent=%d", loaded)
     finally:
@@ -328,10 +347,9 @@ def load_patents(batch_size: int, batch_id: str) -> tuple[int, int, int]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="从 MySQL 装载专利图数据到 dev")
     parser.add_argument("--batch-size", type=int, default=50)
-    parser.add_argument("--batch-id", default=f"PATENT_{datetime.now():%Y%m%d_%H%M%S}")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    patent_count, keyword_count, edge_count = load_patents(args.batch_size, args.batch_id)
+    patent_count, keyword_count, edge_count = load_patents(args.batch_size)
     logger.info(
         "完成 Patent=%d，Keyword引用=%d，HAS_KEYWORD=%d", patent_count, keyword_count, edge_count
     )

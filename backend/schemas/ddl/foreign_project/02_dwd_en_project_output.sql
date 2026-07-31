@@ -21,7 +21,6 @@ CREATE TABLE `dwd_en_project_output` (
   `output_awards` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '奖项',
   `output_reports` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '报告',
   `output_other` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '其他成果',
-  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
-  `update_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `create_time` datetime DEFAULT NULL COMMENT '创建时间',
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='深势-国外项目产出信息表';

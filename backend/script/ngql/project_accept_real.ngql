@@ -1,0 +1,34 @@
+-- Project domain acceptance, TRSGraph space=dev.
+USE dev;
+
+MATCH (p:Project)
+RETURN p.Project.source AS source, count(p) AS count
+ORDER BY source;
+
+MATCH (p:Project)-[e]->()
+RETURN type(e) AS edge_type, count(e) AS edge_count
+ORDER BY edge_type;
+
+MATCH (p:Project)-[e:SOURCED_FROM]->()
+RETURN count(e) AS sourced_from_count;
+
+MATCH (p:Project)-[e:HAS_OUTPUT]->(o)
+RETURN e.HAS_OUTPUT.output_type AS output_type, labels(o) AS target_tags, count(e) AS count
+ORDER BY output_type;
+
+MATCH (p:Project)
+RETURN
+  id(p) AS vid,
+  p.Project.source_system AS source_system,
+  p.Project.source_table AS source_table,
+  p.Project.source_record_id AS source_record_id,
+  p.Project.source_url AS source_url,
+  p.Project.ingest_batch AS ingest_batch,
+  p.Project.ingest_time AS ingest_time,
+  p.Project.source_update_time AS source_update_time
+LIMIT 10;
+
+MATCH (p:Project)-[e]->()
+RETURN id(p) AS project_vid, count(e) AS edge_count
+ORDER BY edge_count DESC
+LIMIT 10;

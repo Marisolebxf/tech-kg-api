@@ -9,12 +9,12 @@ CREATE TAG IF NOT EXISTS Patent (
   application_kind string,
   country_code string,
   country string,
-  publication_date date,
-  application_date date,
+  publication_date int64,
+  application_date int64,
   granted_number string,
-  grant_date date,
+  grant_date string,
   status string,
-  anticipated_expiration date,
+  anticipated_expiration int64,
   title_original string,
   title_en string,
   title_zh string,
@@ -29,13 +29,9 @@ CREATE TAG IF NOT EXISTS Patent (
   cited_by_nums int64,
   patent_value int64,
   simple_family_number string,
-  source_system string,
-  source_table string,
-  source_record_id string,
-  source_url string,
-  ingest_batch string,
-  ingest_time datetime,
-  source_update_time datetime
+  db_source string,
+  create_time datetime,
+  update_time datetime
 );
 
 -- Keyword跨专利复用；当前只保存规范化后的关键词名称。
@@ -47,15 +43,22 @@ CREATE TAG IF NOT EXISTS PatentFamily (
   family_number string
 );
 
--- 与 dev 现有 Schema 一致的专利事实关系。
-CREATE EDGE IF NOT EXISTS HAS_KEYWORD (source_table string, source_record_id string, ingest_batch string, ingest_time string, confidence double);
-CREATE EDGE IF NOT EXISTS INVENTED_BY (sequence int64, source_name string, confidence double, match_method string, match_evidence string, source_table string, source_record_id string, subject_type string, resolution_status string);
-CREATE EDGE IF NOT EXISTS APPLIED_BY (sequence int64, role string, source_name string, confidence double, match_method string, match_evidence string, source_table string, source_record_id string, subject_type string, resolution_status string);
-CREATE EDGE IF NOT EXISTS OWNED_BY (sequence int64, role string, is_current bool, source_name string, confidence double, match_method string, match_evidence string, source_table string, source_record_id string, subject_type string, resolution_status string);
-CREATE EDGE IF NOT EXISTS CITES (reference_identifier string, sequence int64, confidence double, match_method string, match_evidence string, source_table string, source_record_id string);
-CREATE EDGE IF NOT EXISTS OUTPUT_OF (source_table string, source_record_id string, ingest_batch string, ingest_time string, confidence double, match_method string, match_evidence string);
-CREATE EDGE IF NOT EXISTS MEMBER_OF_FAMILY (confidence double, match_method string, match_evidence string, source_table string, source_record_id string);
+-- 专利表可以直接确定的事实关系。
+CREATE EDGE IF NOT EXISTS HAS_KEYWORD (
+  confidence double,
+  source_table string,
+  source_record_id string
+);
+
+CREATE EDGE IF NOT EXISTS MEMBER_OF_FAMILY (
+  confidence double,
+  match_method string,
+  match_evidence string,
+  source_table string,
+  source_record_id string
+);
 
 -- 空Tag索引用于按Tag全量枚举和统计；单点查询优先使用VID。
 CREATE TAG INDEX IF NOT EXISTS idx_patent_scan ON Patent();
 CREATE TAG INDEX IF NOT EXISTS idx_keyword_scan ON Keyword();
+CREATE TAG INDEX IF NOT EXISTS idx_patent_family_scan ON PatentFamily();

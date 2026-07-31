@@ -93,6 +93,22 @@ ssh -L 19531:127.0.0.1:19531 <user>@211.81.248.211
 
 建立隧道后，客户端连接 `http://127.0.0.1:19531`。
 
+### M3E-small在线向量服务
+
+根目录Compose包含CPU版 `moka-ai/m3e-small` 服务。首次启动会下载模型到持久卷，之后从本地缓存加载：
+
+```bash
+docker compose up -d --build m3e-embedding
+curl http://127.0.0.1:8011/health
+curl -X POST http://127.0.0.1:8011/v1/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"moka-ai/m3e-small","input":["中文专利","English patent"],"dimensions":512}'
+```
+
+服务只绑定服务器回环地址 `127.0.0.1:8011`；Compose内的API通过
+`http://m3e-embedding:8010/v1` 调用。模型输出512维归一化向量，模型缓存保存在
+`m3e-model-cache` Docker卷中。
+
 ### 方式二：本地开发
 
 ```bash

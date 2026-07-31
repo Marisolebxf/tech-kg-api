@@ -249,6 +249,36 @@ def keyword_statements(
     return vertex_ngql, edge_ngql
 
 
+def family_statements(rows: list[dict[str, Any]]) -> tuple[str, str]:
+    """按同域simple_family_number生成PatentFamily及确定性归属边。"""
+    families: dict[str, str] = {}
+    edges: dict[tuple[str, str], str] = {}
+    for row in rows:
+        patent_id = str(row.get("patent_id") or "").strip()
+        family_number = str(row.get("simple_family_number") or "").strip()
+        if not patent_id or not family_number:
+            continue
+        family_vid = f"patent_family_{family_number}"
+        families[family_vid] = family_number
+        edges[(f"patent_{patent_id}", family_vid)] = patent_id
+    vertices = ",".join(
+        f"{ngql_string(vid)}:({ngql_string(number)})" for vid, number in families.items()
+    )
+    relations = ",".join(
+        f"{ngql_string(src)}->{ngql_string(dst)}:(1.0,"
+        f"{ngql_string('source_family_number')},"
+        f"{ngql_string('simple_family_number由源表直接给出')},"
+        f"{ngql_string('dwd_patent_family')},{ngql_string(record_id)})"
+        for (src, dst), record_id in edges.items()
+    )
+    vertex_ngql = f"INSERT VERTEX PatentFamily(family_number) VALUES {vertices};" if vertices else ""
+    edge_ngql = (
+        "INSERT EDGE MEMBER_OF_FAMILY(confidence,match_method,match_evidence,"
+        f"source_table,source_record_id) VALUES {relations};" if relations else ""
+    )
+    return vertex_ngql, edge_ngql
+
+
 # 5. 主流程：读取MySQL并通过公共图客户端写入dev
 def load_patents(batch_size: int, batch_id: str) -> tuple[int, int, int]:
     os.environ["TRS_GRAPH_SPACE"] = "dev"
@@ -275,9 +305,19 @@ def load_patents(batch_size: int, batch_id: str) -> tuple[int, int, int]:
                     graph.execute_write(vertex_ngql)  # 写入Keyword
                 if edge_ngql:
                     graph.execute_write(edge_ngql)  # 写入HAS_KEYWORD
-                references = sum(len(keyword_values(row.get("keywords"))) for row in group)
-                keyword_count += references
-                edge_count += references
+                family_vertex_ngql, family_edge_ngql = family_statements(group)
+                if family_vertex_ngql:
+                    graph.execute_write(family_vertex_ngql)
+                if family_edge_ngql:
+                    graph.execute_write(family_edge_ngql)
+                keyword_references = sum(
+                    len(keyword_values(row.get("keywords"))) for row in group
+                )
+                family_references = sum(
+                    bool(row.get("simple_family_number")) for row in group
+                )
+                keyword_count += keyword_references
+                edge_count += keyword_references + family_references
             loaded += len(rows)
             logger.info("装载进度 Patent=%d", loaded)
     finally:

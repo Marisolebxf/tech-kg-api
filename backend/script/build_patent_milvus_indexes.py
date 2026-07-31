@@ -19,11 +19,19 @@ from script.patent_indexing import HashedBM25, compose_search_text, truncate_utf
 @dataclass(frozen=True)
 class EntitySpec:
     tag: str
-    fields: tuple[str, ...]
+    dense_fields: tuple[str, ...]
+    sparse_fields: tuple[str, ...]
 
 
 PATENT_SPEC = EntitySpec(
     "Patent",
+    (
+        "title_zh",
+        "title_en",
+        "title_original",
+        "abstract_zh",
+        "keywords",
+    ),
     (
         "patent_id",
         "publication_number",
@@ -101,14 +109,28 @@ def dense_embedder() -> tuple[int, Any]:
         return openai_embedder()
     if provider != "local":
         raise ValueError(f"不支持的 PATENT_EMBEDDING_PROVIDER: {provider}")
-    from fastembed import TextEmbedding
+    from sentence_transformers import SentenceTransformer
 
-    model_name = os.getenv("PATENT_LOCAL_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
+    model_name = os.getenv("PATENT_LOCAL_EMBEDDING_MODEL", "moka-ai/m3e-small")
     dim = int(os.getenv("PATENT_EMBEDDING_DIM", "512"))
-    model = TextEmbedding(model_name=model_name)
+    model = SentenceTransformer(model_name, device=os.getenv("PATENT_EMBEDDING_DEVICE", "cpu"))
+    dimension_getter = getattr(model, "get_embedding_dimension", None)
+    if dimension_getter is None:
+        dimension_getter = model.get_sentence_embedding_dimension
+    actual_dim = dimension_getter()
+    if actual_dim != dim:
+        raise ValueError(
+            f"本地模型 {model_name} 输出维度为{actual_dim}，"
+            f"与 PATENT_EMBEDDING_DIM={dim} 不一致"
+        )
 
     def encode(texts: list[str]) -> list[list[float]]:
-        vectors = [vector.tolist() for vector in model.embed(texts, batch_size=8)]
+        vectors = model.encode(
+            texts,
+            batch_size=int(os.getenv("PATENT_EMBEDDING_BATCH_SIZE", "8")),
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        ).tolist()
         if any(len(vector) != dim for vector in vectors):
             raise ValueError(f"本地模型返回维度与 PATENT_EMBEDDING_DIM={dim} 不一致")
         return vectors
@@ -140,6 +162,7 @@ def create_collection(
         schema.add_field(field, DataType.VARCHAR, max_length=128)
     schema.add_field("country_code", DataType.VARCHAR, max_length=32)
     schema.add_field("source_table", DataType.VARCHAR, max_length=256)
+    schema.add_field("semantic_text", DataType.VARCHAR, max_length=16384)
     schema.add_field("search_text", DataType.VARCHAR, max_length=16384)
     schema.add_field("dense_vector", DataType.FLOAT_VECTOR, dim=dim)
     schema.add_field("sparse_vector", DataType.SPARSE_FLOAT_VECTOR)
@@ -181,7 +204,7 @@ def build_one(
         raise RuntimeError(f"Collection {collection_name} 已存在；请选择--resume或--rebuild")
     bm25 = HashedBM25(int(os.getenv("PATENT_BM25_DIM", "262144")))
     for row in graph_rows(graph, spec, page_size):
-        bm25.observe(compose_search_text(row.get("properties") or {}, spec.fields))
+        bm25.observe(compose_search_text(row.get("properties") or {}, spec.sparse_fields))
     if not bm25.document_count:
         raise RuntimeError("dev 图空间中没有 Patent 实体，拒绝创建空索引")
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -206,7 +229,7 @@ def build_one(
         nonlocal total, batch
         if not batch:
             return
-        vectors = embed([item["search_text"] for item in batch])
+        vectors = embed([item["semantic_text"] for item in batch])
         for item, vector in zip(batch, vectors, strict=True):
             item["dense_vector"] = vector
         client.insert(collection_name, batch)
@@ -220,7 +243,8 @@ def build_one(
         if max_rows is not None and total - initial_count >= max_rows:
             break
         props = row.get("properties") or {}
-        text = compose_search_text(props, spec.fields)
+        semantic_text = compose_search_text(props, spec.dense_fields)
+        search_text = compose_search_text(props, spec.sparse_fields)
         batch.append(
             {
                 "vid": str(row["graph_vid"]),
@@ -232,8 +256,9 @@ def build_one(
                 "simple_family_number": str(props.get("simple_family_number") or ""),
                 "country_code": str(props.get("country_code") or ""),
                 "source_table": str(props.get("source_table") or props.get("db_source") or ""),
-                "search_text": truncate_utf8(text, 16000),
-                "sparse_vector": bm25.encode(text),
+                "semantic_text": truncate_utf8(semantic_text, 16000),
+                "search_text": truncate_utf8(search_text, 16000),
+                "sparse_vector": bm25.encode(search_text),
             }
         )
         if len(batch) >= 32:

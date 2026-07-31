@@ -8,6 +8,7 @@ services:
       - .env
     environment:
       MYSQL_HOST: mysql
+      MYSQL_DATABASE: gkx_element
       TRS_GRAPH_BASE_URL: http://trs-graph-service:8090
       TRS_GRAPH_SPACE: dev
       MILVUS_HOST: milvus

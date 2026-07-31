@@ -6,6 +6,7 @@ from script.load_patent_graph import (
     PATENT_PROPERTIES,
     SELECT_SQL,
     SQL_FILE,
+    family_statements,
     keyword_statements,
     keyword_values,
     patent_payload,
@@ -70,6 +71,15 @@ def test_keyword_vertices_are_normalized_deduplicated_and_linked():
     assert edge_ngql.count("patent_CN1A") == 2
 
 
+def test_family_vertex_and_relation_are_deterministic():
+    vertex_ngql, edge_ngql = family_statements([patent_row()])
+    assert '"patent_family_F1":("F1")' in vertex_ngql
+    assert '"patent_CN1A"->"patent_family_F1"' in edge_ngql
+    assert '"source_family_number"' in edge_ngql
+    assert '"dwd_patent_family"' in edge_ngql
+    assert ":(1.0," in edge_ngql
+
+
 def test_ddl_matches_loader_schema():
     ddl_path = Path(__file__).parents[2] / "schemas" / "ddl" / "patent_ddl.ngql"
     ddl = ddl_path.read_text(encoding="utf-8")
@@ -82,7 +92,9 @@ def test_ddl_matches_loader_schema():
     )
     assert ddl_properties == PATENT_PROPERTIES
     assert "CREATE TAG IF NOT EXISTS Keyword" in ddl
+    assert "CREATE TAG IF NOT EXISTS PatentFamily" in ddl
     assert "CREATE EDGE IF NOT EXISTS HAS_KEYWORD" in ddl
+    assert "CREATE EDGE IF NOT EXISTS MEMBER_OF_FAMILY" in ddl
 
 
 def test_entity_sql_is_external_and_complete():

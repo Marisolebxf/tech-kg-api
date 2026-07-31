@@ -1,4 +1,6 @@
+import sys
 from datetime import datetime
+from types import SimpleNamespace
 
 from script.load_patent_relations import (
     edge_statement,
@@ -87,6 +89,60 @@ def test_only_patent_is_configured_for_indexing():
     assert PATENT_SPEC.tag == "Patent"
     assert "Person" not in repr(PATENT_SPEC)
     assert "Organization" not in repr(PATENT_SPEC)
+
+
+def test_dense_and_sparse_patent_fields_have_distinct_roles():
+    from script.build_patent_milvus_indexes import PATENT_SPEC
+
+    assert set(PATENT_SPEC.dense_fields) == {
+        "title_zh",
+        "title_en",
+        "title_original",
+        "abstract_zh",
+        "keywords",
+    }
+    assert "application_number" not in PATENT_SPEC.dense_fields
+    assert "application_number" in PATENT_SPEC.sparse_fields
+    assert "main_ipcr" in PATENT_SPEC.sparse_fields
+
+
+def test_local_embedder_defaults_to_m3e_small(monkeypatch):
+    from script.build_patent_milvus_indexes import dense_embedder
+
+    loaded = {}
+
+    class Vectors(list):
+        def tolist(self):
+            return list(self)
+
+    class FakeSentenceTransformer:
+        def __init__(self, model_name, device):
+            loaded.update(model_name=model_name, device=device)
+
+        def get_sentence_embedding_dimension(self):
+            return 512
+
+        def encode(self, texts, **kwargs):
+            loaded.update(encode_kwargs=kwargs)
+            return Vectors([[0.0] * 512 for _ in texts])
+
+    monkeypatch.delenv("PATENT_EMBEDDING_PROVIDER", raising=False)
+    monkeypatch.delenv("PATENT_LOCAL_EMBEDDING_MODEL", raising=False)
+    monkeypatch.delenv("PATENT_EMBEDDING_DIM", raising=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        SimpleNamespace(SentenceTransformer=FakeSentenceTransformer),
+    )
+
+    dim, encode = dense_embedder()
+    vectors = encode(["中文专利", "English patent"])
+
+    assert dim == 512
+    assert loaded["model_name"] == "moka-ai/m3e-small"
+    assert loaded["device"] == "cpu"
+    assert loaded["encode_kwargs"]["normalize_embeddings"] is True
+    assert len(vectors) == 2
 
 
 def test_existing_entity_indexes_are_read_only_and_require_unique_match():

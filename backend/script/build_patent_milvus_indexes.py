@@ -120,8 +120,7 @@ def dense_embedder() -> tuple[int, Any]:
     actual_dim = dimension_getter()
     if actual_dim != dim:
         raise ValueError(
-            f"本地模型 {model_name} 输出维度为{actual_dim}，"
-            f"与 PATENT_EMBEDDING_DIM={dim} 不一致"
+            f"本地模型 {model_name} 输出维度为{actual_dim}，与 PATENT_EMBEDDING_DIM={dim} 不一致"
         )
 
     def encode(texts: list[str]) -> list[list[float]]:
@@ -280,9 +279,7 @@ def main() -> None:
     parser.add_argument(
         "--rebuild", action="store_true", help="允许删除并重建已存在的 Patent Collection"
     )
-    parser.add_argument(
-        "--resume", action="store_true", help="复用既有Collection并跳过已写入的VID"
-    )
+    parser.add_argument("--resume", action="store_true", help="复用既有Collection并跳过已写入的VID")
     parser.add_argument(
         "--max-rows", type=int, default=None, help="仅用于小批验证；默认索引全部Patent"
     )

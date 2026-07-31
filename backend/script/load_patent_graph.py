@@ -216,9 +216,7 @@ def keyword_statements(
         for index, keyword in enumerate(keyword_values(row.get("keywords"))):
             vid = keyword_vid(keyword)
             vertices[vid] = keyword
-            edges.setdefault(
-                (patent_vid, vid), f"{str(row['patent_id']).strip()}:keywords:{index}"
-            )
+            edges.setdefault((patent_vid, vid), f"{str(row['patent_id']).strip()}:keywords:{index}")
     vertex_ngql = ""
     edge_ngql = ""
     if vertices:

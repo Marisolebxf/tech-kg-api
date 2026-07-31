@@ -43,8 +43,13 @@ CREATE TAG IF NOT EXISTS Keyword (
   keyword string
 );
 
--- 专利表可以直接确定的事实关系，第一阶段不设置业务属性。
-CREATE EDGE IF NOT EXISTS HAS_KEYWORD ();
+-- 与 dev 现有 Schema 一致的专利事实关系。
+CREATE EDGE IF NOT EXISTS HAS_KEYWORD (source_table string, source_record_id string, ingest_batch string, ingest_time string, confidence double);
+CREATE EDGE IF NOT EXISTS INVENTED_BY (sequence int64, source_name string, confidence double, match_method string, match_evidence string, source_table string, source_record_id string, subject_type string, resolution_status string);
+CREATE EDGE IF NOT EXISTS APPLIED_BY (sequence int64, role string, source_name string, confidence double, match_method string, match_evidence string, source_table string, source_record_id string, subject_type string, resolution_status string);
+CREATE EDGE IF NOT EXISTS OWNED_BY (sequence int64, role string, is_current bool, source_name string, confidence double, match_method string, match_evidence string, source_table string, source_record_id string, subject_type string, resolution_status string);
+CREATE EDGE IF NOT EXISTS CITES (reference_identifier string, sequence int64, confidence double, match_method string, match_evidence string, source_table string, source_record_id string);
+CREATE EDGE IF NOT EXISTS OUTPUT_OF (source_table string, source_record_id string, ingest_batch string, ingest_time string, confidence double, match_method string, match_evidence string);
 
 -- 空Tag索引用于按Tag全量枚举和统计；单点查询优先使用VID。
 CREATE TAG INDEX IF NOT EXISTS idx_patent_scan ON Patent();

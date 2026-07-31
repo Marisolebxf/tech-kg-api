@@ -168,6 +168,7 @@ with session_scope() as session:
 
 - `schemas/specifications/patent_ontology.md`
 - `schemas/specifications/patent_mapping.md`
+- `schemas/specifications/patent_relation_extraction.md`
 - `dao/sql/patent_entity_extract.sql`
 - `schemas/ddl/patent_ddl.ngql`
 

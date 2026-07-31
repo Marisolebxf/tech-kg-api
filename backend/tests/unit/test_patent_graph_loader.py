@@ -58,10 +58,15 @@ def test_patent_uses_33_properties_and_date_types():
 def test_keyword_vertices_are_normalized_deduplicated_and_linked():
     row = patent_row()
     assert keyword_values(row["keywords"]) == ["知识图谱", "AI"]
-    vertex_ngql, edge_ngql = keyword_statements([row])
+    vertex_ngql, edge_ngql = keyword_statements(
+        [row], "BATCH", datetime(2026, 7, 23, 10, 0)
+    )
     assert vertex_ngql.count("keyword_") == 2
     assert "INSERT VERTEX Keyword(keyword)" in vertex_ngql
-    assert "INSERT EDGE HAS_KEYWORD()" in edge_ngql
+    assert "INSERT EDGE HAS_KEYWORD(source_table,source_record_id" in edge_ngql
+    assert '"dwd_patent"' in edge_ngql
+    assert '"BATCH"' in edge_ngql
+    assert ",1.0)" in edge_ngql
     assert edge_ngql.count("patent_CN1A") == 2
 
 

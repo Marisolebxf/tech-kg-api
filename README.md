@@ -335,11 +335,11 @@ tech-kg-api/                       # monorepo 根
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
 | `TRS_GRAPH_BASE_URL` | `http://localhost:8090` | trs-graph-service 地址 |
-| `TRS_GRAPH_SPACE` | `entity_binding_demo` | 图空间（`get_techkg_client` 固定 `techkg`，忽略此项） |
+| `TRS_GRAPH_SPACE` | `dev` | 图空间（所有运行时图客户端均读取此项） |
 | `TRS_GRAPH_API_KEY` | — | `X-API-Key` 认证（必填） |
 | `TRS_GRAPH_TIMEOUT` | `30` | 请求超时（秒） |
 | `MYSQL_HOST` / `MYSQL_PORT` | `127.0.0.1` / `3306` | MySQL 连接 |
-| `MYSQL_DATABASE` / `MYSQL_USERNAME` / `MYSQL_PASSWORD` | `techkg` / `root` / — | MySQL 库/账密 |
+| `MYSQL_DATABASE` / `MYSQL_USERNAME` / `MYSQL_PASSWORD` | `gkx_element` / `root` / — | MySQL 库/账密 |
 | `LLM_API_KEY` | — | 智谱 GLM key；未配置时 #3 自动降级 |
 | `LLM_MODEL` | `glm-4.7-flash` | LLM 模型（推理模型，读 `message.content`） |
 | `LLM_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | LLM 接口地址 |

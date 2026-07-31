@@ -4,22 +4,19 @@ services:
     container_name: tech-kg-api
     ports:
       - "8001:8000"
+    env_file:
+      - ./backend/.env
     environment:
-      TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
-      TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-techkg}
-      TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
-      TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
-      MYSQL_HOST: ${MYSQL_HOST:-host.docker.internal}
-      MYSQL_PORT: ${MYSQL_PORT:-3306}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-techkg}
-      MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
-      PAPER_COOP_MYSQL_DATABASE: ${PAPER_COOP_MYSQL_DATABASE:-gkx_local}
-      LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_MODEL: ${LLM_MODEL:-glm-4.7-flash}
-      LLM_BASE_URL: ${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      # API直接加入数据服务所在的Docker网络，通过容器DNS访问，不绕宿主机端口。
+      MYSQL_HOST: mysql
+      TRS_GRAPH_BASE_URL: http://trs-graph-service:8090
+      TRS_GRAPH_SPACE: dev
+      MILVUS_HOST: milvus
+      MILVUS_PORT: 19530
+    networks:
+      - app
+      - engine
+      - graph
     restart: unless-stopped
 
   web:
@@ -29,6 +26,8 @@ services:
       - "8088:80"
     depends_on:
       - api
+    networks:
+      - app
     restart: unless-stopped
 
   milvus-etcd:
@@ -84,3 +83,12 @@ volumes:
   milvus-etcd-data:
   milvus-minio-data:
   milvus-data:
+
+networks:
+  app:
+  engine:
+    external: true
+    name: tech-kg-engine_default
+  graph:
+    external: true
+    name: trs-graph-service_default

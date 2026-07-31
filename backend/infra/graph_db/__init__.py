@@ -81,7 +81,7 @@ _techkg_client: TRSGraphClient | None = None
 
 
 def get_techkg_client() -> TRSGraphClient:
-    """techkg 图空间单例（space 固定为 'techkg'，其余读 TRS_GRAPH_* env）。"""
+    """兼容旧调用名；图空间统一读取 TRS_GRAPH_SPACE。"""
     global _techkg_client
     if _techkg_client is not None:
         return _techkg_client
@@ -89,7 +89,6 @@ def get_techkg_client() -> TRSGraphClient:
         if _techkg_client is not None:
             return _techkg_client
         settings = TRSGraphSettings.from_env()
-        settings.space = "techkg"
         client = TRSGraphClient(settings)
         client.connect()
         _techkg_client = client

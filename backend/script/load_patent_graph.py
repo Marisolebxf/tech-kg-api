@@ -64,15 +64,15 @@ SELECT_SQL = SQL_FILE.read_text(encoding="utf-8")
 
 def mysql_connection() -> pymysql.Connection:
     """连接MySQL数据源。"""
-    password = os.getenv("PATENT_MYSQL_PASSWORD")
+    password = os.getenv("PATENT_MYSQL_PASSWORD") or os.getenv("MYSQL_PASSWORD")
     if password is None:
         raise RuntimeError("缺少 PATENT_MYSQL_PASSWORD 环境变量")
     return pymysql.connect(
-        host=os.getenv("PATENT_MYSQL_HOST", "127.0.0.1"),
-        port=int(os.getenv("PATENT_MYSQL_PORT", "3306")),
-        user=os.getenv("PATENT_MYSQL_USERNAME", "root"),
+        host=os.getenv("PATENT_MYSQL_HOST") or os.getenv("MYSQL_HOST", "127.0.0.1"),
+        port=int(os.getenv("PATENT_MYSQL_PORT") or os.getenv("MYSQL_PORT", "3306")),
+        user=os.getenv("PATENT_MYSQL_USERNAME") or os.getenv("MYSQL_USERNAME", "root"),
         password=password,
-        database=os.getenv("PATENT_MYSQL_DATABASE", "gkx_element"),
+        database=os.getenv("PATENT_MYSQL_DATABASE") or os.getenv("MYSQL_DATABASE", "gkx_element"),
         charset="utf8mb4",
         cursorclass=DictCursor,
         autocommit=True,
@@ -213,16 +213,20 @@ def patent_statement(payloads: list[tuple[str, list[str]]]) -> str:
     return f"INSERT VERTEX Patent({','.join(PATENT_PROPERTIES)}) VALUES {rows};"
 
 
-def keyword_statements(rows: list[dict[str, Any]]) -> tuple[str, str]:
+def keyword_statements(
+    rows: list[dict[str, Any]], batch_id: str = "", ingest_time: datetime | None = None
+) -> tuple[str, str]:
     """生成Keyword顶点和HAS_KEYWORD边nGQL。"""
     vertices: dict[str, str] = {}
-    edges: set[tuple[str, str]] = set()
+    edges: dict[tuple[str, str], str] = {}
     for row in rows:
         patent_vid = f"patent_{str(row['patent_id']).strip()}"
-        for keyword in keyword_values(row.get("keywords")):
+        for index, keyword in enumerate(keyword_values(row.get("keywords"))):
             vid = keyword_vid(keyword)
             vertices[vid] = keyword
-            edges.add((patent_vid, vid))
+            edges.setdefault(
+                (patent_vid, vid), f"{str(row['patent_id']).strip()}:keywords:{index}"
+            )
     vertex_ngql = ""
     edge_ngql = ""
     if vertices:
@@ -231,8 +235,17 @@ def keyword_statements(rows: list[dict[str, Any]]) -> tuple[str, str]:
         )
         vertex_ngql = f"INSERT VERTEX Keyword(keyword) VALUES {values};"
     if edges:
-        values = ",".join(f"{ngql_string(src)}->{ngql_string(dst)}:()" for src, dst in edges)
-        edge_ngql = f"INSERT EDGE HAS_KEYWORD() VALUES {values};"
+        timestamp = "" if ingest_time is None else ingest_time.isoformat()
+        values = ",".join(
+            f"{ngql_string(src)}->{ngql_string(dst)}:("
+            f"{ngql_string('dwd_patent')},{ngql_string(record_id)},"
+            f"{ngql_string(batch_id)},{ngql_string(timestamp)},1.0)"
+            for (src, dst), record_id in edges.items()
+        )
+        edge_ngql = (
+            "INSERT EDGE HAS_KEYWORD(source_table,source_record_id,ingest_batch,"
+            f"ingest_time,confidence) VALUES {values};"
+        )
     return vertex_ngql, edge_ngql
 
 
@@ -257,7 +270,7 @@ def load_patents(batch_size: int, batch_id: str) -> tuple[int, int, int]:
                 graph.execute_write(
                     patent_statement([patent_payload(row, batch_id, ingest_time) for row in group])
                 )
-                vertex_ngql, edge_ngql = keyword_statements(group)
+                vertex_ngql, edge_ngql = keyword_statements(group, batch_id, ingest_time)
                 if vertex_ngql:
                     graph.execute_write(vertex_ngql)  # 写入Keyword
                 if edge_ngql:

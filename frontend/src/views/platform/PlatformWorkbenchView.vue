@@ -16,6 +16,15 @@ import {
   type GraphEdge,
   type GraphNode,
 } from '../../api/graphSearch'
+import {
+  getPlatformOverview,
+  type AssetChangeRow,
+  type AssetOverviewGroup,
+  type AssetOverviewKey,
+  type LatestChange,
+  type ManagementRisk,
+  type StructureItem,
+} from '../../api/platformOverview'
 import KgGraphCanvas from '../../components/kg-graph-canvas.vue'
 import { useToast } from '../../composables/use-toast'
 import {
@@ -335,34 +344,25 @@ watch(
   },
 )
 
-const assetOverviewGroups = [
-  { key: 'entity', title: '实体数据', total: '1.28 亿', totalLabel: '实体总量', added: '+1,183.6 万', addedLabel: '今日新增' },
-  { key: 'relation', title: '关系数据', total: '6.42 亿', totalLabel: '关系总量', added: '+2,040 万', addedLabel: '今日新增' },
-  { key: 'property', title: '属性值数据', total: '18.76 亿', totalLabel: '属性值总量', added: '+3,264 万', addedLabel: '今日新增及更新' },
-] as const
-
-type AssetOverviewKey = (typeof assetOverviewGroups)[number]['key']
+const overviewMeta = ref({
+  platformStatus: '正在加载平台状态',
+  pendingBatchCount: 0,
+  updatedAt: '--',
+})
+const assetOverviewGroups = ref<AssetOverviewGroup[]>([])
 const selectedAssetChange = ref<AssetOverviewKey | null>(null)
-const assetChangeRows = {
-  entity: [
-    { type: '机构 / 企业', object: '华南智能芯片有限公司', change: '新增 Organization', source: 'enterprise_profile', time: '10:30:13' },
-    { type: '专家 / 人才', object: '周启航', change: '新增 Expert', source: 'expert_profile', time: '10:30:18' },
-    { type: '论文成果', object: '《多模态大模型知识推理方法研究》', change: '新增 Paper', source: 'paper_record', time: '10:30:21' },
-    { type: '产品 / 技术产品', object: '边缘推理芯片 X7', change: '新增 Product', source: 'enterprise_product', time: '10:30:26' },
-  ],
-  relation: [
-    { type: '任职关系', object: '周启航 → 中国科学院自动化研究所', change: '新增 WORKS_AT', source: 'expert_employment', time: '10:30:22' },
-    { type: '成果关系', object: '周启航 → 多模态大模型知识推理方法研究', change: '新增 PUBLISH', source: 'paper_author', time: '10:30:25' },
-    { type: '产品关系', object: '华南智能芯片 → 边缘推理芯片 X7', change: '新增 HAS_PRODUCT', source: 'enterprise_product', time: '10:30:29' },
-  ],
-  property: [
-    { type: '企业属性', object: '华南智能芯片·注册资本', change: '新增 registered_capital', source: 'enterprise_profile', time: '10:30:14' },
-    { type: '企业属性', object: '华南智能芯片·上市状态', change: '更新 listing_status', source: 'enterprise_profile', time: '10:30:16' },
-    { type: '论文属性', object: 'P202607140018·发表时间', change: '新增 publish_date', source: 'paper_record', time: '10:30:23' },
-    { type: '关系属性', object: 'WORKS_AT_20418·置信度', change: '更新 confidence', source: 'graph_alignment', time: '10:30:31' },
-  ],
-} satisfies Record<AssetOverviewKey, Array<{ type: string; object: string; change: string; source: string; time: string }>>
-const activeAssetOverview = computed(() => assetOverviewGroups.find((item) => item.key === selectedAssetChange.value))
+const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
+  entity: [],
+  relation: [],
+  property: [],
+})
+const latestChanges = ref<LatestChange[]>([])
+const managementRisks = ref<ManagementRisk[]>([])
+const entityStructure = ref<StructureItem[]>([])
+const relationStructure = ref<StructureItem[]>([])
+const activeAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === selectedAssetChange.value))
+const entityAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'entity'))
+const relationAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'relation'))
 
 const sourceRows = [
   { object: '专家人才基础信息', table: 'expert_profile', domain: '人才域', schedule: '每日定时', frequency: '02:00', latest: '2026-07-13 02:04', status: '正常', task: 'DP-20260713-0150' },
@@ -417,21 +417,6 @@ const buildStats = [
   { label: 'Schema 覆盖', value: '7 / 42', note: '实体类型 / 关系类型' },
 ]
 
-const latestChanges = [
-  { time: '10:30', type: '更新', domain: '机构域', title: '清华大学机构属性更新完成', detail: '机构简称与统一标识已完成标准化更新', impact: '处理实例 PI-20260714-0002', to: '/processing-instance/PI-20260714-0002' },
-  { time: '10:18', type: '对齐', domain: '人才域', title: '陈卓候选专家实体完成对齐', detail: '机构别名经人工确认后，候选实体已合并至标准专家实体', impact: '处理实例 PI-20260713-0008', to: '/processing-instance/PI-20260713-0008' },
-  { time: '10:13', type: '新增', domain: '人才域', title: '张明远标准专家实体构建完成', detail: '完成来源读取、Schema 映射、实体标准化与图谱入库', impact: '处理实例 PI-20260714-0001', to: '/processing-instance/PI-20260714-0001' },
-  { time: '09:48', type: '质量', domain: '论文域', title: '重复论文成果记录等待确认', detail: '同一 paper_id 对应三条来源记录，需要人工确认主记录', impact: '处理实例 PI-20260714-0007', to: '/processing-instance/PI-20260714-0007' },
-  { time: '昨日', type: 'Schema', domain: '全域', title: '统一 Schema v1.8 已发布', detail: '确认 11 个首版必落实体、42 个标准事实关系和 9 类候选实体', impact: '所有新建批次使用 v1.8', to: '/schema' },
-]
-
-const managementRisks = [
-  { title: '大模型抽取流程已阻断', detail: 'PI-20260714-0101 · 326 条受影响 · 张建图', detailTo: '/processing-instance/PI-20260714-0101', reviewTo: '/manual-review/task/PI-20260714-0101' },
-  { title: 'Schema 批量映射失败', detail: 'PI-20260714-0102 · 1,284 条任务受影响 · 张建图', detailTo: '/processing-instance/PI-20260714-0102', reviewTo: '/manual-review/task/PI-20260714-0102' },
-  { title: '张明远候选实体存在冲突', detail: 'PI-20260714-0004 · 实体对齐 · 王审核', detailTo: '/processing-instance/PI-20260714-0004', reviewTo: '/manual-review/task/PI-20260714-0004' },
-]
-
-
 const readonlySchemaRows = [
   { type: '实体', name: 'Expert', fields: 'id, name, aliases, organization, research_fields', rule: '姓名 + 机构 + 成果证据联合消歧' },
   { type: '实体', name: 'Paper', fields: 'id, title, authors, venue, publish_date', rule: 'DOI / 标题指纹唯一约束' },
@@ -447,22 +432,6 @@ const buildPipelineSteps = [
   { id: 'persist', name: '结果入库与异常分流', count: '326 条待处理', status: '待执行', desc: '高置信度结果自动入库，低置信度与冲突对象转入独立人工处理平台' },
 ]
 
-
-const entityStructure = [
-  { label: '专家 / 人才', schema: 'Expert', count: '4,286 万', ratio: 34, tone: '#2e90fa' },
-  { label: '论文成果', schema: 'Paper', count: '2,931 万', ratio: 23, tone: '#7a5af8' },
-  { label: '机构 / 企业', schema: 'Organization', count: '2,164 万', ratio: 17, tone: '#12b76a' },
-  { label: '项目 / 专利', schema: 'Project / Patent', count: '1,438 万', ratio: 11, tone: '#f79009' },
-  { label: '其他实体', schema: 'Event / Product / Field', count: '1,901 万', ratio: 15, tone: '#98a2b3' },
-]
-
-const relationStructure = [
-  { label: '发表 / 引用 / 成果', schema: 'PUBLISH / CITES / OUTPUT', count: '2.04 亿', ratio: 32, tone: '#165dff' },
-  { label: '任职 / 就读 / 作者单位', schema: 'WORKS_AT / STUDY_AT', count: '1.28 亿', ratio: 20, tone: '#2e90fa' },
-  { label: '项目 / 专利参与', schema: 'LEAD_PROJECT / INVENT_PATENT', count: '1.16 亿', ratio: 18, tone: '#06aed4' },
-  { label: '企业 / 产品 / 事件', schema: 'HAS_PRODUCT / HAS_EVENT', count: '0.92 亿', ratio: 14, tone: '#7a5af8' },
-  { label: '其他关系', schema: '产业链 / 推理关系', count: '1.02 亿', ratio: 16, tone: '#98a2b3' },
-]
 
 const taskRows = [
   { batch: 'KG-INC-20260713-018', source: '论文增量批次', domain: '论文 / 人才', stage: '大模型抽取', status: '阻断', progress: 46, entities: '3,261', relations: '8,942', properties: '1,203', autoStored: '0', conflicts: '326', quality: '0.76', next: '异常已隔离，校正后从失败节点重跑' },
@@ -1466,13 +1435,37 @@ async function initializeGraphSpace(): Promise<void> {
   }
 }
 
+async function loadPlatformOverview(): Promise<void> {
+  try {
+    const data = await getPlatformOverview()
+
+    overviewMeta.value = {
+      platformStatus: data.platformStatus,
+      pendingBatchCount: data.pendingBatchCount,
+      updatedAt: data.updatedAt,
+    }
+    assetOverviewGroups.value = data.assetOverviewGroups
+    assetChangeRows.value = data.assetChangeRows
+    latestChanges.value = data.latestChanges
+    managementRisks.value = data.managementRisks
+    entityStructure.value = data.entityStructure
+    relationStructure.value = data.relationStructure
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误'
+    showToast(`首页总览数据加载失败：${message}`, 'warning')
+  }
+}
+
 
 onMounted(async () => {
   /*
-   * 必须先确定图空间，
-   * 然后再执行默认查询。
+   * 首页数据和图空间互不依赖，可以并行加载。
+   * 默认图查询必须等图空间确定后再执行。
    */
-  await initializeGraphSpace()
+  await Promise.all([
+    loadPlatformOverview(),
+    initializeGraphSpace(),
+  ])
 
   if (queryKeyword.value.trim()) {
     await handleQuery()
@@ -1683,7 +1676,7 @@ const pageMeta = computed(() => {
       <div class="platform-hero__main">
         <h1>{{ pageMeta.title }}</h1>
       </div>
-      <div class="platform-hero__actions"><span><i></i>平台服务正常 · 2 个批次待处理</span><!-- <RouterLink to="/tasks?module=图谱版本">当前图谱 KG-2026.07.12.008</RouterLink> --><RouterLink to="/tasks">查看任务</RouterLink><RouterLink to="/manual-review">进入人工处理</RouterLink></div>
+      <div class="platform-hero__actions"><span><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理</span><!-- <RouterLink to="/tasks?module=图谱版本">当前图谱 KG-2026.07.12.008</RouterLink> --><RouterLink to="/tasks">查看任务</RouterLink><RouterLink to="/manual-review">进入人工处理</RouterLink></div>
     </header>
 
     <header v-else class="platform-page-head">
@@ -1713,10 +1706,10 @@ const pageMeta = computed(() => {
       </section>
 
       <section class="kg-panel platform-structure-overview">
-        <div class="kg-panel__header"><div><h2 class="kg-panel__title">当前图谱资产</h2></div><span>实体 1.28 亿 · 关系 6.42 亿 · 数据截至 10:30</span></div>
+        <div class="kg-panel__header"><div><h2 class="kg-panel__title">当前图谱资产</h2></div><span>实体 {{ entityAssetOverview?.total ?? '--' }} · 关系 {{ relationAssetOverview?.total ?? '--' }} · 数据截至 {{ overviewMeta.updatedAt }}</span></div>
         <div class="platform-structure-grid">
-          <div class="platform-structure-chart"><header><strong>实体分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-entity"><span><strong>1.28 亿</strong><em>实体总量</em></span></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.schema"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
-          <div class="platform-structure-chart"><header><strong>关系分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-relation"><span><strong>6.42 亿</strong><em>关系总量</em></span></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.schema"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
+          <div class="platform-structure-chart"><header><strong>实体分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-entity"><span><strong>{{ entityAssetOverview?.total ?? '--' }}</strong><em>{{ entityAssetOverview?.totalLabel ?? '实体总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.schema"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
+          <div class="platform-structure-chart"><header><strong>关系分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-relation"><span><strong>{{ relationAssetOverview?.total ?? '--' }}</strong><em>{{ relationAssetOverview?.totalLabel ?? '关系总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.schema"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
         </div>
       </section>
     </main>
@@ -2384,7 +2377,7 @@ print(response.json())</pre>
 
     <button v-if="selectedAssetChange" class="asset-change-mask" type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null" />
     <aside v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
-      <header><div><span>今日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 10:30</p></div><button type="button" @click="selectedAssetChange = null">×</button></header>
+      <header><div><span>今日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" @click="selectedAssetChange = null">×</button></header>
       <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
       <div class="asset-change-table"><table><thead><tr><th>数据类型</th><th>具体对象</th><th>变更内容</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-for="row in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><strong>{{ row.object }}</strong></td><td>{{ row.change }}</td><td><code>{{ row.source }}</code></td><td>{{ row.time }}</td></tr></tbody></table></div>
       <footer><span>{{ assetChangeRows[selectedAssetChange].length }} 条变化</span><RouterLink to="/tasks">查看对应更新任务 →</RouterLink></footer>

@@ -67,6 +67,7 @@ def truncate_text(text: str, max_chars: int) -> str:
         return text
     return text[:max_chars]
 
+
 DEFAULT_ORG_THRESHOLD = float(os.environ.get("PROJECT_ALIGN_ORG_THRESHOLD", "0.88"))
 DEFAULT_ORG_MARGIN = float(os.environ.get("PROJECT_ALIGN_ORG_MARGIN", "0.08"))
 DEFAULT_PERSON_THRESHOLD = float(os.environ.get("PROJECT_ALIGN_PERSON_THRESHOLD", "0.88"))

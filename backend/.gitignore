@@ -5,4 +5,5 @@ __pycache__/
 *.log
 .env
 .cache/organization_milvus/
+.milvus_artifacts/
 output/organization_alignment_*.jsonl

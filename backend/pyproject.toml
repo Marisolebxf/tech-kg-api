@@ -28,6 +28,13 @@ dependencies = [
     "zhipuai>=1.0.7",
 ]
 
+[project.optional-dependencies]
+milvus = [
+    "milvus-model>=0.2.12",
+    "sentence-transformers>=3.0.0",
+    "jieba>=0.42.1",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",

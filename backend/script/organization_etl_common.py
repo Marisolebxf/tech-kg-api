@@ -23,6 +23,7 @@ logger = logging.getLogger("script.organization_etl_common")
 DEFAULT_SPACE = "dev"
 SOURCE_SYSTEM = "gkx_element"
 MAX_TEXT_LENGTH = 20_000
+MAX_EXTRA_JSON_LENGTH = 64_000
 VID_MAX_BYTES = 64
 EDGE_PROVENANCE = ("source_table", "source_record_id", "ingest_batch", "ingest_time")
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "dev_organization_schema.ngql"
@@ -36,8 +37,20 @@ class RelationDataError(ValueError):
 
 
 @dataclass(frozen=True)
+class DomainTableSpec:
+    """Canonical entity-side mapping for one organization-domain source table."""
+
+    name: str
+    cn_name: str
+    scope: str
+    entity_tag: str | None
+    entity_kind: str
+    raw_id_fields: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class RelationSpec:
-    """One ontology-backed Organization-origin relation extraction specification."""
+    """One ontology-backed organization-domain relation extraction specification."""
 
     key: str
     source_table: str
@@ -49,9 +62,286 @@ class RelationSpec:
     edge_properties: tuple[str, ...]
     numeric_properties: frozenset[str] = frozenset()
     source_record_fields: tuple[str, ...] = ()
+    source_tags: tuple[str, ...] = ("Organization",)
 
 
-RELATION_SPECS: tuple[RelationSpec, ...] = (
+DOMAIN_TABLE_SPECS: tuple[DomainTableSpec, ...] = (
+    DomainTableSpec(
+        "dwd_org_base_info", "机构基本信息", "domestic", "Organization", "organization"
+    ),
+    DomainTableSpec(
+        "dwd_org_shareholder_info",
+        "国内机构股东信息",
+        "domestic",
+        "Person",
+        "shareholder",
+    ),
+    DomainTableSpec(
+        "dwd_org_executive_info", "国内机构高管信息", "domestic", "Person", "executive"
+    ),
+    DomainTableSpec(
+        "dwd_org_org_product_info",
+        "国内机构经营信息",
+        "domestic",
+        "Organization",
+        "organization_enrichment",
+    ),
+    DomainTableSpec(
+        "dwd_org_annual_financial_info",
+        "年报财务信息",
+        "domestic",
+        "Event",
+        "annual_finance",
+        ("org_id", "year"),
+    ),
+    DomainTableSpec(
+        "dwd_org_important_news_info",
+        "重点资讯",
+        "domestic",
+        "News",
+        "news",
+    ),
+    DomainTableSpec(
+        "dwd_org_changerecord_info",
+        "工商变更",
+        "domestic",
+        "Event",
+        "change_record",
+        ("org_id", "update_date", "update_content"),
+    ),
+    DomainTableSpec("dwd_org_merger_acquisition_info", "并购事件", "domestic", None, "relation"),
+    DomainTableSpec(
+        "dwd_org_financing_info",
+        "融资事件",
+        "domestic",
+        "Event",
+        "financing",
+        ("org_id", "completion_date", "funding_round"),
+    ),
+    DomainTableSpec("dwd_org_invest_info", "投资事件", "domestic", None, "relation"),
+    DomainTableSpec(
+        "dwd_org_recruit_info",
+        "招聘信息",
+        "domestic",
+        "Event",
+        "recruit",
+        ("org_id", "release_date", "job_title"),
+    ),
+    DomainTableSpec(
+        "dwd_org_heis_info", "高校基本信息", "domestic", "Organization", "organization"
+    ),
+    DomainTableSpec(
+        "dwd_org_stock_base",
+        "上市企业基本信息",
+        "domestic",
+        "Organization",
+        "organization_enrichment",
+    ),
+    DomainTableSpec(
+        "dwd_org_stock_finance_info",
+        "上市企业财务信息",
+        "domestic",
+        "Event",
+        "stock_finance",
+        ("org_id", "occur_period"),
+    ),
+    DomainTableSpec(
+        "dwd_org_company_abnormal",
+        "经营异常",
+        "domestic",
+        "Event",
+        "abnormal",
+        ("abnormal_id",),
+    ),
+    DomainTableSpec(
+        "dwd_org_company_punish",
+        "行政处罚",
+        "domestic",
+        "Event",
+        "punish",
+        ("penalty_id",),
+    ),
+    DomainTableSpec(
+        "dwd_org_company_illegal",
+        "严重违法",
+        "domestic",
+        "Event",
+        "illegal",
+        ("sv_id",),
+    ),
+    DomainTableSpec(
+        "dwd_org_risk_tax_punish",
+        "税收违法",
+        "domestic",
+        "Event",
+        "tax_punish",
+        ("tax_vio_id",),
+    ),
+    DomainTableSpec(
+        "dwd_org_opt_judicial_case",
+        "司法案件",
+        "domestic",
+        "Event",
+        "judicial_case",
+        ("case_id",),
+    ),
+    DomainTableSpec(
+        "dwd_org_risk_shixin",
+        "失信被执行人",
+        "domestic",
+        "Event",
+        "shixin",
+        ("dishonest_id",),
+    ),
+    DomainTableSpec(
+        "dwd_org_risk_zhixing",
+        "被执行人",
+        "domestic",
+        "Event",
+        "zhixing",
+        ("exec_person_id",),
+    ),
+    DomainTableSpec(
+        "dwd_org_bankruptcy_public_cases",
+        "破产案件",
+        "domestic",
+        "Event",
+        "bankruptcy",
+        ("case_no",),
+    ),
+    DomainTableSpec(
+        "dwd_org_bankruptcy_public_cases_list",
+        "破产案件当事人",
+        "domestic",
+        None,
+        "relation",
+    ),
+    DomainTableSpec(
+        "dwd_special_hongkong_company",
+        "香港企业",
+        "domestic",
+        "Organization",
+        "organization",
+    ),
+    DomainTableSpec(
+        "dwd_special_taiwan_company",
+        "台湾企业",
+        "domestic",
+        "Organization",
+        "organization",
+    ),
+    DomainTableSpec(
+        "dwd_special_aomen_company",
+        "澳门企业",
+        "domestic",
+        "Organization",
+        "organization",
+    ),
+    DomainTableSpec(
+        "dwd_bid_base_out",
+        "招投标公告",
+        "domestic",
+        "Event",
+        "bid",
+        ("u_id",),
+    ),
+    DomainTableSpec("dwd_bid_win_candidate_out", "中标候选人", "domestic", None, "relation"),
+    DomainTableSpec("dwd_bid_purchase_agency_out", "采购代理", "domestic", None, "relation"),
+    DomainTableSpec(
+        "dwd_bid_target_item_out",
+        "招投标标的物",
+        "domestic",
+        "Event",
+        "bid_item",
+        ("u_id", "target_item_name", "bid_section_number"),
+    ),
+    DomainTableSpec(
+        "dwd_research_institute_base_info",
+        "科研机构基本信息",
+        "domestic",
+        "Organization",
+        "organization",
+    ),
+    DomainTableSpec(
+        "dwd_forg_base_info", "海外机构基本信息", "foreign", "Organization", "organization"
+    ),
+    DomainTableSpec("dwd_forg_shareholder_info", "海外机构股东信息", "foreign", None, "relation"),
+    DomainTableSpec("dwd_forg_subsidiary_info", "海外机构子公司", "foreign", None, "relation"),
+    DomainTableSpec(
+        "dwd_forg_executive_info", "海外机构高管信息", "foreign", "Person", "executive"
+    ),
+    DomainTableSpec(
+        "dwd_forg_product_info",
+        "海外机构经营信息",
+        "foreign",
+        "Organization",
+        "organization_enrichment",
+    ),
+    DomainTableSpec(
+        "dwd_forg_beneficiary_info",
+        "海外机构受益人",
+        "foreign",
+        "Person",
+        "beneficial_owner",
+    ),
+    DomainTableSpec(
+        "dwd_forg_act_contro_info",
+        "海外机构实际控制人",
+        "foreign",
+        "Person",
+        "actual_controller",
+    ),
+    DomainTableSpec(
+        "dwd_forg_stock_fin_info",
+        "海外上市企业财务信息",
+        "foreign",
+        "Event",
+        "stock_finance",
+        ("org_id", "occur_period"),
+    ),
+)
+
+DOMAIN_TABLE_BY_NAME = {spec.name: spec for spec in DOMAIN_TABLE_SPECS}
+assert len(DOMAIN_TABLE_SPECS) == 39 and len(DOMAIN_TABLE_BY_NAME) == 39
+
+
+_ALL_RELATION_SPECS: tuple[RelationSpec, ...] = (
+    RelationSpec(
+        "legal_representative",
+        "dwd_org_base_info",
+        "LEGAL_REP_OF",
+        "Organization",
+        "domestic",
+        "legal_representative",
+        ("org_id", "lerep"),
+        ("extra_json", *EDGE_PROVENANCE),
+        source_record_fields=("org_id", "lerep"),
+        source_tags=("Person",),
+    ),
+    RelationSpec(
+        "legal_representative",
+        "dwd_research_institute_base_info",
+        "LEGAL_REP_OF",
+        "Organization",
+        "domestic",
+        "legal_representative",
+        ("org_id", "lerep"),
+        ("extra_json", *EDGE_PROVENANCE),
+        source_record_fields=("org_id", "lerep"),
+        source_tags=("Person",),
+    ),
+    RelationSpec(
+        "legal_representative",
+        "dwd_special_taiwan_company",
+        "LEGAL_REP_OF",
+        "Organization",
+        "domestic",
+        "legal_representative",
+        ("org_id", "legal_person"),
+        ("extra_json", *EDGE_PROVENANCE),
+        source_record_fields=("org_id", "legal_person"),
+        source_tags=("Person",),
+    ),
     RelationSpec(
         "shareholder",
         "dwd_org_shareholder_info",
@@ -63,6 +353,7 @@ RELATION_SPECS: tuple[RelationSpec, ...] = (
         ("ownership_percentage", "extra_json", *EDGE_PROVENANCE),
         frozenset({"ownership_percentage"}),
         ("inv_org_id", "org_id", "owners_type"),
+        ("Person", "Organization"),
     ),
     RelationSpec(
         "shareholder",
@@ -75,6 +366,63 @@ RELATION_SPECS: tuple[RelationSpec, ...] = (
         ("ownership_percentage", "extra_json", *EDGE_PROVENANCE),
         frozenset({"ownership_percentage"}),
         ("owners_name", "org_id"),
+        ("Person", "Organization"),
+    ),
+    RelationSpec(
+        "executive",
+        "dwd_org_executive_info",
+        "EXECUTIVE_OF",
+        "Organization",
+        "domestic",
+        "executive",
+        ("org_id", "executives_name", "executives_position"),
+        ("position", "extra_json", *EDGE_PROVENANCE),
+        source_record_fields=("org_id", "executives_name", "executives_position"),
+        source_tags=("Person",),
+    ),
+    RelationSpec(
+        "executive",
+        "dwd_forg_executive_info",
+        "EXECUTIVE_OF",
+        "Organization",
+        "foreign",
+        "executive",
+        ("org_id", "executives_name", "executives_position"),
+        ("position", "extra_json", *EDGE_PROVENANCE),
+        source_record_fields=("org_id", "executives_name", "dm_birthdate"),
+        source_tags=("Person",),
+    ),
+    RelationSpec(
+        "beneficial_owner",
+        "dwd_forg_beneficiary_info",
+        "BENEFICIAL_OWNER_OF",
+        "Organization",
+        "foreign",
+        "beneficial_owner",
+        ("org_id", "bo_name", "direct_percent", "indirect_percent", "total_percent"),
+        (
+            "direct_percent",
+            "indirect_percent",
+            "total_percent",
+            "extra_json",
+            *EDGE_PROVENANCE,
+        ),
+        frozenset({"direct_percent", "indirect_percent", "total_percent"}),
+        ("org_id", "bo_name", "bo_birthdate"),
+        ("Person",),
+    ),
+    RelationSpec(
+        "actual_controller",
+        "dwd_forg_act_contro_info",
+        "ACTUAL_CONTROLLER_OF",
+        "Organization",
+        "foreign",
+        "actual_controller",
+        ("org_id", "entity_name", "entity_type", "direct_pct", "total_pct"),
+        ("direct_pct", "total_pct", "extra_json", *EDGE_PROVENANCE),
+        frozenset({"direct_pct", "total_pct"}),
+        ("org_id", "entity_eid", "entity_name"),
+        ("Person", "Organization"),
     ),
     RelationSpec(
         "investment",
@@ -119,7 +467,7 @@ RELATION_SPECS: tuple[RelationSpec, ...] = (
         "domestic",
         "project",
         ("id", "participating_institution"),
-        EDGE_PROVENANCE,
+        ("extra_json", *EDGE_PROVENANCE),
         source_record_fields=("id",),
     ),
     RelationSpec(
@@ -130,8 +478,34 @@ RELATION_SPECS: tuple[RelationSpec, ...] = (
         "foreign",
         "project",
         ("id", "participating_institution"),
-        EDGE_PROVENANCE,
+        ("extra_json", *EDGE_PROVENANCE),
         source_record_fields=("id",),
+    ),
+    RelationSpec(
+        "project",
+        "dwd_zh_project",
+        "FUNDED_BY",
+        "Organization",
+        "domestic",
+        "project_funder",
+        ("id", "funded_institution"),
+        ("funded_amount", "fund_category", "extra_json", *EDGE_PROVENANCE),
+        numeric_properties=frozenset({"funded_amount"}),
+        source_record_fields=("id", "funded_institution"),
+        source_tags=("Project",),
+    ),
+    RelationSpec(
+        "project",
+        "dwd_en_project",
+        "FUNDED_BY",
+        "Organization",
+        "foreign",
+        "project_funder",
+        ("id", "funded_institution"),
+        ("funded_amount", "fund_category", "extra_json", *EDGE_PROVENANCE),
+        numeric_properties=frozenset({"funded_amount"}),
+        source_record_fields=("id", "funded_institution"),
+        source_tags=("Project",),
     ),
     RelationSpec(
         "news",
@@ -299,6 +673,17 @@ RELATION_SPECS: tuple[RelationSpec, ...] = (
     ),
     RelationSpec(
         "event",
+        "dwd_org_bankruptcy_public_cases",
+        "INVOLVED_IN",
+        "Event",
+        "domestic",
+        "bankruptcy_admin",
+        ("case_no", "admin_org"),
+        ("role", "extra_json", *EDGE_PROVENANCE),
+        source_record_fields=("case_no", "admin_org_id", "admin_org"),
+    ),
+    RelationSpec(
+        "event",
         "dwd_bid_win_candidate_out",
         "INVOLVED_IN",
         "Event",
@@ -339,13 +724,39 @@ RELATION_SPECS: tuple[RelationSpec, ...] = (
         "domestic",
         "product",
         ("antitypic", "tech_product", "tech_product_seq"),
-        ("tech_product_seq", *EDGE_PROVENANCE),
+        ("tech_product_seq", "extra_json", *EDGE_PROVENANCE),
         frozenset({"tech_product_seq"}),
         ("antitypic", "tech_product"),
     ),
+    RelationSpec(
+        "product",
+        "dwd_org_org_product_info",
+        "PRODUCES",
+        "Product",
+        "domestic",
+        "organization_product",
+        ("org_id", "main_prod"),
+        ("extra_json", *EDGE_PROVENANCE),
+        source_record_fields=("org_id", "main_prod"),
+    ),
+    RelationSpec(
+        "product",
+        "dwd_forg_product_info",
+        "PRODUCES",
+        "Product",
+        "foreign",
+        "organization_product",
+        ("org_id", "main_products"),
+        ("extra_json", *EDGE_PROVENANCE),
+        source_record_fields=("org_id", "main_products"),
+    ),
 )
 
+RELATION_SPECS: tuple[RelationSpec, ...] = tuple(
+    spec for spec in _ALL_RELATION_SPECS if spec.source_table in DOMAIN_TABLE_BY_NAME
+)
 RELATION_KEYS = tuple(dict.fromkeys(spec.key for spec in RELATION_SPECS))
+assert {spec.source_table for spec in RELATION_SPECS} <= set(DOMAIN_TABLE_BY_NAME)
 
 
 def clean_text(value: Any, *, max_length: int = MAX_TEXT_LENGTH) -> str | None:
@@ -428,7 +839,7 @@ def compact_json(value: Any) -> str:
     )
 
 
-def bounded_json(value: Any, *, max_length: int = MAX_TEXT_LENGTH) -> str:
+def bounded_json(value: Any, *, max_length: int = MAX_EXTRA_JSON_LENGTH) -> str:
     rendered = compact_json(value)
     if len(rendered) <= max_length:
         return rendered
@@ -485,6 +896,19 @@ def organization_vid(org_id: Any) -> str:
     return bounded_vid(f"org_{raw}")
 
 
+def person_vid(person_kind: str, *identity_values: Any) -> str:
+    """Build a source-stable person VID without global name-only disambiguation."""
+    normalized = [
+        unicodedata.normalize("NFKC", value).casefold()
+        for raw in identity_values
+        if (value := clean_text(raw)) is not None
+    ]
+    if not normalized:
+        raise RelationDataError("missing stable person identity")
+    identity = "|".join((person_kind, *normalized))
+    return bounded_vid(f"person_{md5_hex(identity)}")
+
+
 def project_vid(project_id: Any) -> str:
     raw = clean_text(project_id)
     if raw is None:
@@ -494,6 +918,13 @@ def project_vid(project_id: Any) -> str:
 
 def event_vid(table: str, record_id: str) -> str:
     return bounded_vid(f"event_{table}_{record_id}")
+
+
+def news_vid(record_id: str) -> str:
+    raw = clean_text(record_id)
+    if raw is None:
+        raise RelationDataError("missing news record id")
+    return bounded_vid(f"news_{raw}")
 
 
 def product_vid(name: Any) -> str:

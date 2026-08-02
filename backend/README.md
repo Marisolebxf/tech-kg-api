@@ -4,33 +4,33 @@
 
 ## 环境和连接信息
 
-当前后端已经从旧 Java/SpringBoot 方案迁移为 Python/FastAPI。最终服务会部署在实验室服务器上；数据厂商提供的 `gkx` 只有使用权限，团队已经复制到服务器 MySQL 的 `gkx_local`，后端默认连接这份副本。
+当前后端已经从旧 Java/SpringBoot 方案迁移为 Python/FastAPI。开发环境默认连接服务器 MySQL 中的科技要素业务库 `gkx_element`。厂商源库 `gkx` 只用于只读同步；`gkx_local` 仅是部分历史模块可能显式指定的兼容库名，不是当前默认业务库。
 
 ### 实验室服务器 / Docker 开发环境
 
 | 组件 | 本机访问地址 | Compose 服务名 | 账号 | 密码/说明 |
 |---|---|---|---|---|
-| MySQL 数据副本 | `127.0.0.1:3306/gkx_local` | `tdsql-mysql` | `root` | `123456789`，复制自厂商 `gkx` |
+| MySQL 科技要素业务库 | `127.0.0.1:3306/gkx_element` | `mysql`（当前 dev 外部网络服务） | 由 `.env` 配置 | 项目 Compose 不创建该服务 |
 | Redis | `127.0.0.1:6379`，DB `0` | `redis` | - | 无密码 |
 | Kafka | `127.0.0.1:9092` | `kafka` | - | Consumer Group `techkg` |
 | Milvus | `127.0.0.1:19530` | `milvus` | - | 无账号密码配置 |
 | MinIO | API `127.0.0.1:9000`，控制台 `127.0.0.1:9001` | `minio` | `minioadmin` | `minioadmin` |
 | RustFS（用户算子） | API `127.0.0.1:9020`，控制台 `127.0.0.1:9021` | `operator-rustfs` | `rustfsadmin` | `rustfsadmin`，Python 通过 S3 API 使用 |
 
-后端如果直接在宿主机运行，连接本地服务用 `127.0.0.1`；后端如果在 Docker Compose 的 `api` 容器内运行，连接 MySQL 要用 `tdsql-mysql`，连接 Redis/Kafka/Milvus 要用服务名 `redis`、`kafka`、`milvus`。
+后端直接在宿主机运行时，MySQL 地址通常使用 `127.0.0.1`；后端在项目 Compose 的 `api` 容器内运行时，通过外部 Docker 网络使用服务名 `mysql`。Milvus 使用 Compose 服务名 `milvus`，M3E 向量服务使用 `m3e-embedding`。实际连接值以 `.env` 和 Compose 的 `environment` 覆盖项为准。 后期环境若使用 `tdsql-mysql`，通过部署环境设置 `MYSQL_HOST=tdsql-mysql`，无需修改代码。
 
-如果服务器已经有名为 `mysql` 的容器并且其中已有 `gkx_local`，不要再启动项目 Compose 里的 `tdsql-mysql`，避免 3306 端口冲突；后端直接连接现有 `127.0.0.1:3306/gkx_local` 即可。
+当前项目 Compose 不创建 MySQL；启动 API 前，应确认外部 Docker 网络中已有名为 `mysql` 的服务，并且其中已存在 `gkx_element`。宿主机直接运行后端时，则按实际端口连接该数据库。
 
 ### 远程数据源和服务器资源
 
 | 组件 | 地址 | 账号 | 密码/说明 |
 |---|---|---|---|
-| 厂商源 MySQL | `183.240.141.251:3318/gkx` | `gkx_reader_zp` | `Zp_Use_Gkx_db@123456`，只读/只使用，不直接写入 |
-| 服务器管理库 | `10.50.125.110:5306/trendAdmin` | `root` | `q123456Q.`，不是厂商数据副本 |
-| 服务器 Redis | `10.50.125.110:8379`，DB `0` | - | `redisTrend1.` |
-| MongoDB | `10.50.125.110:47017/test` | `root` | `x+s9zI&VA!s` |
-| ElasticSearch | `http://123.57.233.22:9200` | `elastic` | `*7A0#7i7@DzKD1pr` |
-| Nginx/GLM 网关 | `https://analysis_ckcest.aminer.cn/microtrend-api-beta/` | - | HTTP 网关 |
+| 厂商源 MySQL | `<vendor-mysql-host>:<port>/<database>` | `<read-only-user>` | 密码通过安全的部署变量提供，不写入仓库 |
+| 服务器管理库 | `<management-db-host>:<port>/<database>` | `<database-user>` | 密码通过安全的部署变量提供，不写入仓库 |
+| 服务器 Redis | `<redis-host>:<port>`，DB `<index>` | - | 密码通过安全的部署变量提供，不写入仓库 |
+| MongoDB | `<mongodb-host>:<port>/<database>` | `<mongodb-user>` | 密码通过安全的部署变量提供，不写入仓库 |
+| ElasticSearch | `<elasticsearch-url>` | `<elasticsearch-user>` | 密码通过安全的部署变量提供，不写入仓库 |
+| Nginx/GLM 网关 | `<gateway-url>` | - | 实际地址通过部署环境配置 |
 | TRSGraph | `127.0.0.1:9669`（后端和 TRSGraph 同机时） | `root` | `trsadmin` |
 
 TRSGraph 由外部 TRSGraph 服务提供，当前 Python 后端只负责连接。环境变量见 `.env.example`，分环境配置见 `config/config_dev.yml`、`config/config_stage.yml`、`config/config_product.yml`。
@@ -44,17 +44,17 @@ TRSGraph 由外部 TRSGraph 服务提供，当前 Python 后端只负责连接�
 | 后端入口 | `main.py` | 创建 FastAPI 应用、注册中间件和路由 |
 | 后端环境变量 | `.env` | 本机或服务器直接启动后端时读取的实际连接信息，不提交 Git |
 | 后端环境变量模板 | `.env.example` | 新环境复制为 `.env` 后按实际环境修改 |
-| 后端开发配置 | `config/config_dev.yml` | dev 默认值和环境变量占位，默认业务库为 `gkx_local` |
+| 后端开发配置 | `config/config_dev.yml` | dev 默认值和环境变量占位，默认业务库为 `gkx_element`、默认图空间为 `dev` |
 | 后端测试配置 | `config/config_stage.yml` | stage 环境配置，敏感值从环境变量传入 |
 | 后端生产配置 | `config/config_product.yml` | product 环境配置，敏感值从环境变量传入 |
 | Python 依赖和检查配置 | `pyproject.toml` | uv 依赖、pytest、ruff 配置 |
 | 后端 Docker 镜像 | `Dockerfile` | 构建 FastAPI 后端镜像 |
 | 后端 Docker 编排 | `docker-compose.yml` | 只启动后端 API 容器，适合已有外部基础设施时使用 |
-| 项目级 Docker 编排 | `../docker-compose.yml` | 启动 Milvus/MinIO、用户算子 RustFS，也可启动 API 容器 |
+| 项目级 Docker 编排 | `../docker-compose.yml` | 启动 API、M3E、Milvus/MinIO 和用户算子 RustFS；MySQL 使用外部现有服务 |
 
 ### Docker 和代码部署的关系
 
-MySQL/Redis/Kafka/Milvus 容器保存的是基础设施和数据。只修改 Python 代码时，通常只需要重启后端进程或重建 API 镜像，不需要重建 MySQL 容器。数据库内容能否修改取决于连接目标：`gkx_local` 是当前业务默认副本库；厂商 `gkx` 是只读源库；`trendAdmin` 是共享管理库；历史 `techkg` 若仍存在，先确认用途再迁移或停用。
+MySQL 和 Milvus 保存业务数据及索引。只修改 Python 代码时，通常只需重启后端进程或重建 API 镜像，不应重建或改动外部 MySQL。当前开发业务库是 `gkx_element`；厂商 `gkx` 是只读源库；`trendAdmin` 是共享管理库；`gkx_local` 和 `techkg` 仅在历史模块明确要求时使用。
 
 ## 目录结构
 
@@ -117,7 +117,7 @@ GET /api/v1/kg-construction/modules/{module_code}
 
 | 层 | 文件 | 作用 |
 |---|---|---|
-| ORM 模型 | `db_model/*.py` | 93 张 `gkx_local` 表的 SQLAlchemy 映射 |
+| ORM 模型 | `db_model/*.py` | 93 张科技要素表的 SQLAlchemy 映射，运行时由 `MYSQL_DATABASE` 选择目标库 |
 | MySQL 连接 | `infra/mysql.py` | 创建 engine、session factory、事务上下文和 FastAPI dependency |
 | 通用 DAO | `dao/base.py` | `get`、`list`、`count`、`create`、`update`、`delete`、`bulk_create` |
 | 示例 DAO | `dao/scholar.py` | 按主键、`scholar_id`、姓名查询专家 |
@@ -169,6 +169,7 @@ with session_scope() as session:
 
 - `schemas/specifications/patent_ontology.md`
 - `schemas/specifications/patent_mapping.md`
+- `schemas/specifications/patent_relation_extraction.md`
 - `dao/sql/patent_entity_extract.sql`
 - `schemas/ddl/patent_ddl.ngql`
 
@@ -193,11 +194,11 @@ db_model/
 同步 schema：
 
 ```bash
-SOURCE_MYSQL_HOST=183.240.141.251 \
-SOURCE_MYSQL_PORT=3318 \
-SOURCE_MYSQL_DATABASE=gkx \
-SOURCE_MYSQL_USERNAME=gkx_reader_zp \
-SOURCE_MYSQL_PASSWORD='***' \
+SOURCE_MYSQL_HOST=<vendor-mysql-host> \
+SOURCE_MYSQL_PORT=<port> \
+SOURCE_MYSQL_DATABASE=<database> \
+SOURCE_MYSQL_USERNAME=<read-only-user> \
+SOURCE_MYSQL_PASSWORD='<set-in-secret-store>' \
 uv run python script/sync_schema_from_mysql.py
 ```
 
@@ -209,7 +210,7 @@ uv run python script/sync_schema_from_mysql.py
 
 ### 方式一：服务器已有 MySQL 副本
 
-如果服务器已经有 `mysql` 容器，并且 `gkx_local` 已经存在，不要再启动项目根目录 Compose 里的 `tdsql-mysql`：
+如果服务器已经有 `mysql` 服务，并且 `gkx_element` 已经存在，可直接启动后端。项目根目录 Compose 不会新建 MySQL：
 
 ```bash
 cd backend
@@ -218,17 +219,15 @@ cp .env.example .env
 uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 方式二：从零启动 Docker 基础设施
+### 方式二：初始化已有开发业务库
 
-如果本机或服务器没有 MySQL/Redis/Kafka/Milvus，先在项目根目录启动基础设施，再启动后端：
+`init_db.py` 不创建数据库，只在已经存在的 `gkx_element` 中执行 `schemas/ddl/` 下由本项目维护的表 DDL。专利厂商源表不由该脚本创建。
 
 ```bash
-docker compose up -d tdsql-mysql redis kafka milvus
-
 cd backend
 uv sync
 cp .env.example .env
-MYSQL_HOST=127.0.0.1 MYSQL_PORT=3306 MYSQL_DATABASE=gkx_local MYSQL_USERNAME=root MYSQL_PASSWORD=123456789 \
+MYSQL_HOST=127.0.0.1 MYSQL_PORT=3306 MYSQL_DATABASE=gkx_element MYSQL_USERNAME=root MYSQL_PASSWORD=实际密码 \
   uv run python script/init_db.py
 
 uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload

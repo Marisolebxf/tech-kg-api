@@ -1,0 +1,30 @@
+services:
+  api:
+    build: .
+    container_name: tech-kg-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-gkx_element}
+      TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://trs-graph-service:8090}
+      TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+    networks:
+      - engine
+      - graph
+    volumes:
+      - .:/app
+    command: uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+
+networks:
+  engine:
+    external: true
+    name: tech-kg-engine_default
+  graph:
+    external: true
+    name: trs-graph-service_default

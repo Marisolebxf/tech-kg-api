@@ -17,8 +17,8 @@ dependencies = [
     "openai>=2.32.0",
     "pandas>=3.0.2",
     "pydantic==2.11.7",
-    "pymilvus==2.4.15",
     "pymysql>=1.1.1",
+    "pymilvus>=2.4.10,<2.5",
     "python-dotenv>=1.2.2",
     "rapidfuzz>=3.6.0",
     "redis==7.0.1",
@@ -27,6 +27,8 @@ dependencies = [
     "uvicorn>=0.44.0",
     "zai-sdk>=0.2.2",
     "zhipuai>=1.0.7",
+    "sentence-transformers>=5.1,<6",
+    "torch>=2.7",
 ]
 
 [dependency-groups]
@@ -36,6 +38,16 @@ dev = [
     "ruff>=0.8.4",
     "pre-commit>=4.0.1",
 ]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.ruff]
 line-length = 100

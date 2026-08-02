@@ -26,7 +26,7 @@ def build_db_url() -> str:
     port = os.getenv("MYSQL_PORT", "3306")
     user = os.getenv("MYSQL_USERNAME", "root")
     pwd = os.getenv("MYSQL_PASSWORD", "")
-    db = os.getenv("MYSQL_DATABASE", "techkg")
+    db = os.getenv("MYSQL_DATABASE", "gkx_element")
     return f"mysql+pymysql://{user}:{pwd}@{host}:{port}/{db}?charset=utf8mb4"
 
 
@@ -49,7 +49,7 @@ class MySQLClient:
         self._explicit_url = url
         self.host = host or os.getenv("MYSQL_HOST", "127.0.0.1")
         self.port = port or _get_int_env("MYSQL_PORT", 3306)
-        self.database = database or os.getenv("MYSQL_DATABASE", "techkg")
+        self.database = database or os.getenv("MYSQL_DATABASE", "gkx_element")
         self.username = username or os.getenv("MYSQL_USERNAME", "root")
         self.password = (
             password if password is not None else os.getenv("MYSQL_PASSWORD", "123456789")

@@ -96,6 +96,22 @@ ssh -L 19531:127.0.0.1:19531 <user>@211.81.248.211
 
 建立隧道后，客户端连接 `http://127.0.0.1:19531`。
 
+### M3E-small在线向量服务
+
+根目录Compose包含CPU版 `moka-ai/m3e-small` 服务。首次启动会下载模型到持久卷，之后从本地缓存加载：
+
+```bash
+docker compose up -d --build m3e-embedding
+curl http://127.0.0.1:8011/health
+curl -X POST http://127.0.0.1:8011/v1/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"moka-ai/m3e-small","input":["中文专利","English patent"],"dimensions":512}'
+```
+
+服务只绑定服务器回环地址 `127.0.0.1:8011`；Compose内的API通过
+`http://m3e-embedding:8010/v1` 调用。模型输出512维归一化向量，模型缓存保存在
+`m3e-model-cache` Docker卷中。
+
 ### 方式二：本地开发
 
 ```bash
@@ -338,11 +354,11 @@ tech-kg-api/                       # monorepo 根
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
 | `TRS_GRAPH_BASE_URL` | `http://localhost:8090` | trs-graph-service 地址 |
-| `TRS_GRAPH_SPACE` | `entity_binding_demo` | 图空间（`get_techkg_client` 固定 `techkg`，忽略此项） |
+| `TRS_GRAPH_SPACE` | `dev` | 图空间（所有运行时图客户端均读取此项） |
 | `TRS_GRAPH_API_KEY` | — | `X-API-Key` 认证（必填） |
 | `TRS_GRAPH_TIMEOUT` | `30` | 请求超时（秒） |
 | `MYSQL_HOST` / `MYSQL_PORT` | `127.0.0.1` / `3306` | MySQL 连接 |
-| `MYSQL_DATABASE` / `MYSQL_USERNAME` / `MYSQL_PASSWORD` | `techkg` / `root` / — | MySQL 库/账密 |
+| `MYSQL_DATABASE` / `MYSQL_USERNAME` / `MYSQL_PASSWORD` | `gkx_element` / `root` / — | MySQL 库/账密 |
 | `LLM_API_KEY` | — | 智谱 GLM key；未配置时 #3 自动降级 |
 | `LLM_MODEL` | `glm-4.7-flash` | LLM 模型（推理模型，读 `message.content`） |
 | `LLM_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | LLM 接口地址 |

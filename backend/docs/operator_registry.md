@@ -5,8 +5,7 @@
 所有算子都使用同一个 Python 接口：
 
 ```python
-def operator(data: list[dict], ctx: dict) -> list[dict]:
-    ...
+def operator(data: list[dict], ctx: dict) -> list[dict]: ...
 ```
 
 - `data`：待处理的 JSON 对象数组。

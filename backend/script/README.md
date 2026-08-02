@@ -6,7 +6,7 @@
 
 | 脚本 | 作用 | 说明 |
 |---|---|---|
-| `init_db.py` | 执行 `schemas/ddl/` 下全部 DDL | 默认连接实验室/本地 Docker MySQL `127.0.0.1:3306/gkx_local` |
+| `init_db.py` | 执行 `schemas/ddl/` 下全部 DDL | 默认连接开发业务库 `127.0.0.1:3306/gkx_element` |
 | `sync_schema_from_mysql.py` | 从源 MySQL 同步 DDL、字段规范和 ORM | 优先读取 `SOURCE_MYSQL_*`，只读 `information_schema` 和 `SHOW CREATE TABLE` |
 | `paper_journal_relation/` | 论文/期刊实体关系抽取 ETL | 从 `gkx_element` 论文关系表抽取「从论文出发」的有向边（Paper→Paper: RELATED_TO/CITES/CITED_BY；Paper→Keyword: HAS_KEYWORD；Paper→Report: REFERENCED_BY）写入 TRSGraph `dev` 空间，使用 `infra.graph_db.TRSGraphClient`，详见子目录 README |
 | `organization_entity_etl.py` | 装载机构领域实体 | 只新增 `Organization`、`DataSource` 顶点；已有 VID 跳过，不覆盖、不写边 |
@@ -61,12 +61,14 @@ uv run python -m script.organization_relation_etl \
 
 ## 常用命令
 
-初始化实验室副本库 `gkx_local`：
+初始化已有的科技要素业务库 `gkx_element` 中由本项目维护的表：
+
+目标数据库必须预先存在；脚本只执行 `schemas/ddl/` 下由本项目维护的建表 DDL，不负责创建数据库，也不创建专利厂商源表。
 
 ```bash
 MYSQL_HOST=127.0.0.1 \
 MYSQL_PORT=3306 \
-MYSQL_DATABASE=gkx_local \
+MYSQL_DATABASE=gkx_element \
 MYSQL_USERNAME=root \
 MYSQL_PASSWORD=123456789 \
 uv run python script/init_db.py

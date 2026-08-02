@@ -8,22 +8,21 @@ services:
     ports:
       - "8001:8000"
     environment:
-      # 默认连接宿主机服务；部署到其他服务器时可直接通过同名环境变量覆盖。
-      TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
+      # 容器内的 localhost 指向 API 容器自身，宿主机服务统一走 host gateway。
+      TRS_GRAPH_BASE_URL: ${CONTAINER_TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
       TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-techkg}
       TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
       TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
-      MYSQL_HOST: ${MYSQL_HOST:-host.docker.internal}
+      MYSQL_HOST: ${CONTAINER_MYSQL_HOST:-host.docker.internal}
       MYSQL_PORT: ${MYSQL_PORT:-3306}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-techkg}
       MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
-      # 论文合作库可独立部署；未单独配置时沿用主 MySQL 连接参数。
-      PAPER_COOP_MYSQL_HOST: ${PAPER_COOP_MYSQL_HOST:-${MYSQL_HOST:-host.docker.internal}}
-      PAPER_COOP_MYSQL_PORT: ${PAPER_COOP_MYSQL_PORT:-${MYSQL_PORT:-3306}}
+      PAPER_COOP_MYSQL_HOST: ${CONTAINER_MYSQL_HOST:-host.docker.internal}
+      PAPER_COOP_MYSQL_PORT: ${MYSQL_PORT:-3306}
       PAPER_COOP_MYSQL_DATABASE: ${PAPER_COOP_MYSQL_DATABASE:-gkx_local}
-      PAPER_COOP_MYSQL_USERNAME: ${PAPER_COOP_MYSQL_USERNAME:-${MYSQL_USERNAME:-root}}
-      PAPER_COOP_MYSQL_PASSWORD: ${PAPER_COOP_MYSQL_PASSWORD:-${MYSQL_PASSWORD:-123456789}}
+      PAPER_COOP_MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
+      PAPER_COOP_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
       MILVUS_HOST: ${MILVUS_HOST:-milvus}
       MILVUS_PORT: ${MILVUS_PORT:-19530}
       LLM_API_KEY: ${LLM_API_KEY:-}

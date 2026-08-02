@@ -1,20 +1,30 @@
 services:
   api:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     container_name: tech-kg-api
     ports:
       - "8001:8000"
     environment:
-      TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
+      # 容器内的 localhost 指向 API 容器自身，宿主机服务统一走 host gateway。
+      TRS_GRAPH_BASE_URL: ${CONTAINER_TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
       TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-techkg}
       TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
       TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
-      MYSQL_HOST: ${MYSQL_HOST:-host.docker.internal}
+      MYSQL_HOST: ${CONTAINER_MYSQL_HOST:-host.docker.internal}
       MYSQL_PORT: ${MYSQL_PORT:-3306}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-techkg}
       MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
+      PAPER_COOP_MYSQL_HOST: ${CONTAINER_MYSQL_HOST:-host.docker.internal}
+      PAPER_COOP_MYSQL_PORT: ${MYSQL_PORT:-3306}
       PAPER_COOP_MYSQL_DATABASE: ${PAPER_COOP_MYSQL_DATABASE:-gkx_local}
+      PAPER_COOP_MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
+      PAPER_COOP_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-glm-4.7-flash}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
@@ -23,7 +33,10 @@ services:
     restart: unless-stopped
 
   web:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
     container_name: tech-kg-web
     ports:
       - "8088:80"

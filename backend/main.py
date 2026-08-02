@@ -1,3 +1,5 @@
+import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -10,11 +12,18 @@ from biz.schemas.common import ApiResponse
 from infra.graph_db import close_techkg_client, close_trs_graph_client
 from infra.graph_db.exceptions import GraphRepoError
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """trs-graph clients connect lazily on first use; close on shutdown."""
     try:
+        if os.getenv("SCHEMA_AUTO_INIT", "false").lower() == "true":
+            from script.init_schema_management import initialize_schema_management
+
+            inserted = initialize_schema_management()
+            logger.info("Schema 管理初始化完成，新增系统 Schema: %s", inserted)
         yield
     finally:
         close_techkg_client()

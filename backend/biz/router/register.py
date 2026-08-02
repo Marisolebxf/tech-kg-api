@@ -21,6 +21,7 @@ from biz.handler.kg_construction import router as kg_construction_router
 from biz.handler.options import router as options_router
 from biz.handler.platform_overview import router as platform_overview_router
 from biz.handler.relation_detail_annotation import router as relation_detail_annotation_router
+from biz.handler.schema_management import router as schema_management_router
 
 
 def register_routers(app: FastAPI) -> None:
@@ -41,3 +42,4 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(industry_chain_topn_event_router, prefix="/api/v1")
     app.include_router(industry_chain_panorama_router, prefix="/api/v1")
     app.include_router(graph_search_router, prefix="/api/v1")
+    app.include_router(schema_management_router, prefix="/api/v1")

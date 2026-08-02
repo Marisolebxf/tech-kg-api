@@ -1,0 +1,32 @@
+CREATE TABLE IF NOT EXISTS `kg_schema_definition` (
+  `id` VARCHAR(36) NOT NULL,
+  `schema_key` VARCHAR(64) NOT NULL,
+  `kind` VARCHAR(16) NOT NULL COMMENT 'entity/relation',
+  `name` VARCHAR(128) NOT NULL,
+  `label` VARCHAR(128) NOT NULL,
+  `description` TEXT NOT NULL,
+  `identity_key` VARCHAR(512) NOT NULL DEFAULT '',
+  `attribute_identity_key` VARCHAR(512) NOT NULL DEFAULT '',
+  `attribute_source` VARCHAR(1024) NOT NULL DEFAULT '',
+  `instance_count` BIGINT NOT NULL DEFAULT 0,
+  `version` VARCHAR(32) NOT NULL DEFAULT 'v1.0',
+  `display_order` INT NOT NULL DEFAULT 10000,
+  `is_core` TINYINT(1) NOT NULL DEFAULT 0,
+  `relation_category` VARCHAR(16) NULL COMMENT 'fact/inferred',
+  `is_system` TINYINT(1) NOT NULL DEFAULT 0,
+  `created_by` VARCHAR(128) NULL,
+  `source_schema_id` VARCHAR(36) NULL,
+  `target_schema_id` VARCHAR(36) NULL,
+  `source_expression` VARCHAR(512) NULL,
+  `target_expression` VARCHAR(512) NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_kg_schema_definition_key` (`schema_key`),
+  UNIQUE KEY `uk_kg_schema_definition_name` (`name`),
+  KEY `idx_kg_schema_definition_kind_created` (`kind`, `created_at`),
+  CONSTRAINT `fk_kg_schema_definition_source`
+    FOREIGN KEY (`source_schema_id`) REFERENCES `kg_schema_definition` (`id`) ON DELETE RESTRICT,
+  CONSTRAINT `fk_kg_schema_definition_target`
+    FOREIGN KEY (`target_schema_id`) REFERENCES `kg_schema_definition` (`id`) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识图谱实体与关系 Schema 定义'

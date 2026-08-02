@@ -26,6 +26,8 @@ dependencies = [
     "uvicorn>=0.44.0",
     "zai-sdk>=0.2.2",
     "zhipuai>=1.0.7",
+    "boto3>=1.35.0",
+    "python-multipart>=0.0.9",
 ]
 
 [dependency-groups]

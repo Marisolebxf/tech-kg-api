@@ -1,9 +1,25 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import {
+  createEntitySchema,
+  createRelationSchema,
+  getSchemaOverview,
+  listAllSchemas,
+  replaceSchemaScript,
+  schemaErrorMessage,
+  type EntitySchemaCreatePayload,
+  type RelationSchemaCreatePayload,
+  type SchemaDefinition,
+  type SchemaOverview,
+} from '../../api/schemaManagement'
 import { useToast } from '../../composables/use-toast'
 
-type Entity = { name: string; label: string; level: '核心实体' | '支撑实体'; key: string; source: string; description: string }
-type Relation = { name: string; label: string; source: string; target: string; basis: string; level?: '标准' | '扩展' }
+type Entity = { id: string; name: string; label: string; level: '核心实体' | '支撑实体'; key: string; source: string; description: string; schema: SchemaDefinition }
+type Relation = { id: string; name: string; label: string; source: string; target: string; basis: string; level?: '标准' | '扩展'; schema: SchemaDefinition }
+type Attribute = { entity: string; key: string; core: string; dynamic: string; source: string }
+type PendingCreate = { tab: string; values: Record<string, string> }
+
+const currentUserId = window.localStorage.getItem('tech-kg-schema-user-id') || 'schema-admin'
 
 const activeTab = ref('标准实体')
 const keyword = ref('')
@@ -11,96 +27,11 @@ const keyword = ref('')
 // const schemaVersionMessage = ref('')
 const tabs = ['标准实体', '事实关系', '推理关系', '属性定义']
 
-const entities = ref<Entity[]>([
-  { name: 'Expert', label: '专家 / 人才 / 学者', level: '核心实体', key: 'scholar_id / expert_id', source: 'dwd_scholar / dwd_paper_author / dwd_project_person / dwd_patent_inventor', description: '统一承载科研与产业人才主体' },
-  { name: 'Organization', label: '机构 / 企业', level: '核心实体', key: 'org_id / external_id / credit_code', source: 'dwd_org_reg_info / dwd_forg_base_info / dwd_paper_affiliation / dwd_patent_applicant', description: '高校、科研机构、企业、医院和政府机构统一建模，用 org_category 区分' },
-  { name: 'Paper', label: '论文', level: '核心实体', key: 'DOI / paper_id', source: 'dwd_zh_paper_detail / dwd_en_paper_detail / dwd_paper_reference', description: '论文成果与引用信息' },
-  { name: 'Project', label: '项目', level: '核心实体', key: 'id / project_number', source: 'dwd_zh_project / dwd_en_project / dwd_project_output', description: '科研项目、资助、参与人员与项目成果' },
-  { name: 'Patent', label: '专利', level: '核心实体', key: 'patent_id / publication_number / application_number', source: 'dwd_patent / dwd_patent_inventor / dwd_patent_applicant', description: '专利成果、法律状态、权利人与技术分类' },
-  { name: 'Report', label: '报告', level: '核心实体', key: 'report_id', source: 'dwd_zh_report / dwd_en_report / dwd_report_author', description: '科技报告及其作者、机构、论文和项目关联' },
-  { name: 'Policy', label: '政策', level: '核心实体', key: 'id / recordId / URL', source: 'dws_zck_policy / dwd_zck_intl_policy / dwd_policy_department', description: '政策文本、发布部门、领域与产业链节点' },
-  { name: 'Event', label: '事件 / 资讯', level: '核心实体', key: 'news_id / URL / 生成 ID', source: 'dwd_org_important_news_info / dwd_industry_chain_news_info / dwd_financing_event', description: '用 event_type 区分资讯、融资、投资、并购、政策等事件' },
-  { name: 'IndustryChainNode', label: '产业链节点', level: '核心实体', key: 'chain_code + node_id', source: 'dwd_industry_chain_info', description: '产业链的上游、中游、下游及具体环节' },
-  { name: 'Product', label: '产品 / 技术产品', level: '核心实体', key: '产品 ID / 标准产品名', source: 'dwd_org_industry_chain_prod_dtl', description: '企业产品、技术产品与产业链节点' },
-  { name: 'ResearchField', label: '研究方向 / 技术领域', level: '核心实体', key: 'field_id / discipline_code / 标准名', source: 'dim_research_field / dim_discipline_code / dim_ipc', description: '统一研究方向、学科、关键词、IPC 与产业技术领域' },
-  { name: 'Person', label: '通用人员', level: '支撑实体', key: 'person_id', source: 'dwd_org_executive / dwd_org_shareholder / dwd_patent_inventor / dwd_paper_author', description: '已确认为同一自然人，但不能确认为专家时使用' },
-  { name: 'Publication', label: '期刊 / 会议 / 出版物', level: '支撑实体', key: 'ISSN / EISSN / publication_id', source: 'dim_publication / dwd_journal', description: '论文发表载体及其动态指标' },
-  { name: 'IndustryChain', label: '产业链', level: '支撑实体', key: 'chain_code', source: 'dim_industry_chain / dwd_industry_chain_info', description: '表示整条产业链，与 IndustryChainNode 明确分层' },
-])
+const entities = ref<Entity[]>([])
 
-const factRelations = ref<Relation[]>([
-  { name: 'HAS_RESEARCH_FIELD', label: '专家研究方向', source: 'Expert', target: 'ResearchField', basis: '专家方向拆分、标准化' },
-  { name: 'PUBLISH', label: '发表论文', source: 'Expert', target: 'Paper', basis: '作者对齐后生成，保留作者顺序' },
-  { name: 'WORKS_AT', label: '任职', source: 'Expert / Person', target: 'Organization', basis: '工作经历抽取机构、职位和时间' },
-  { name: 'STUDY_AT', label: '就读', source: 'Expert / Person', target: 'Organization', basis: '教育背景抽取学校、专业、学历和时间' },
-  { name: 'AFFILIATED_WITH', label: '作者发表时单位', source: 'Expert / Person', target: 'Organization', basis: '论文作者单位对齐后生成' },
-  { name: 'PUBLISHED_IN', label: '论文发表于', source: 'Paper', target: 'Publication', basis: 'ISSN、EISSN 或出版物名对齐' },
-  { name: 'CITES', label: '论文引用', source: 'Paper', target: 'Paper', basis: 'DOI、论文 ID 或题名作者对齐' },
-  { name: 'REFERENCES', label: '论文参考', source: 'Paper', target: 'Paper', basis: '参考文献对齐后生成' },
-  { name: 'PAPER_FIELD', label: '论文研究方向', source: 'Paper', target: 'ResearchField', basis: '关键词与学科分类归一' },
-  { name: 'SHAREHOLDER_OF', label: '股东关系', source: 'Organization / Person', target: 'Organization', basis: '股东名称对齐，保留持股比例' },
-  { name: 'SUBSIDIARY_OF', label: '子公司关系', source: 'Organization', target: 'Organization', basis: '子公司对齐后生成' },
-  { name: 'EXECUTIVE_OF', label: '高管任职', source: 'Expert / Person', target: 'Organization', basis: '高管姓名、职务和机构对齐' },
-  { name: 'HAS_PRODUCT', label: '企业拥有产品', source: 'Organization', target: 'Product', basis: '产品拆分、标准化后生成' },
-  { name: 'HAS_EVENT', label: '主体发生事件', source: 'Organization', target: 'Event', basis: '企业与资讯、融资、并购等事件连接' },
-  { name: 'LEAD_PROJECT', label: '主持项目', source: 'Expert', target: 'Project', basis: '项目主持人对齐后生成' },
-  { name: 'PARTICIPATE_IN', label: '参与项目', source: 'Expert / Person', target: 'Project', basis: '参与者拆分对齐后生成' },
-  { name: 'FUNDED_BY', label: '项目受资助', source: 'Project', target: 'Organization', basis: '资助机构对齐后生成' },
-  { name: 'PARTICIPATE_IN_PROJECT', label: '机构参与项目', source: 'Organization', target: 'Project', basis: '参与机构拆分对齐后生成' },
-  { name: 'PROJECT_FIELD', label: '项目研究方向', source: 'Project', target: 'ResearchField', basis: '学科代码优先，关键词辅助' },
-  { name: 'PROJECT_OUTPUT_PAPER', label: '项目产出论文', source: 'Project', target: 'Paper', basis: 'DOI 或 paper_id 对齐' },
-  { name: 'PROJECT_OUTPUT_PATENT', label: '项目产出专利', source: 'Project', target: 'Patent', basis: '专利号或 patent_id 对齐' },
-  { name: 'PROJECT_OUTPUT_REPORT', label: '项目产出报告', source: 'Project', target: 'Report', basis: '报告对齐后生成' },
-  { name: 'INVENT_PATENT', label: '发明专利', source: 'Expert / Person', target: 'Patent', basis: '发明人对齐后生成' },
-  { name: 'APPLY_PATENT', label: '申请专利', source: 'Organization / Person', target: 'Patent', basis: '申请人对齐后生成' },
-  { name: 'OWN_PATENT', label: '拥有专利', source: 'Organization / Person', target: 'Patent', basis: '当前权利人对齐后生成' },
-  { name: 'PATENT_FIELD', label: '专利技术方向', source: 'Patent', target: 'ResearchField', basis: 'IPC / IPCR / CPC 分类标准化' },
-  { name: 'PATENT_CITES', label: '专利引用', source: 'Patent', target: 'Patent', basis: '被引用专利对齐后生成' },
-  { name: 'AUTHOR_OF_REPORT', label: '报告作者', source: 'Expert / Person', target: 'Report', basis: '报告作者对齐后生成' },
-  { name: 'REPORT_ORG', label: '报告机构', source: 'Report', target: 'Organization', basis: '完成单位对齐后生成' },
-  { name: 'REPORT_RELATED_PAPER', label: '报告关联论文', source: 'Report', target: 'Paper', basis: '相关文献对齐' },
-  { name: 'REPORT_RELATED_PROJECT', label: '报告关联项目', source: 'Report', target: 'Project', basis: '相关项目对齐' },
-  { name: 'REPORT_FIELD', label: '报告研究方向', source: 'Report', target: 'ResearchField', basis: '关键词标准化' },
-  { name: 'POLICY_RELATED_FIELD', label: '政策关联领域', source: 'Policy', target: 'ResearchField', basis: '关键词、全要素和正文抽取' },
-  { name: 'POLICY_RELATED_CHAIN_NODE', label: '政策关联产业链节点', source: 'Policy', target: 'IndustryChainNode', basis: '关键词与语义匹配' },
-  { name: 'POLICY_PUBLISHED_BY', label: '政策发布部门', source: 'Policy', target: 'Organization', basis: '发布部门对齐后生成' },
-  { name: 'HAS_CHAIN_NODE', label: '产业链包含节点', source: 'IndustryChain', target: 'IndustryChainNode', basis: 'chain_code + node_id' },
-  { name: 'PARENT_OF', label: '产业链父子节点', source: 'IndustryChainNode', target: 'IndustryChainNode', basis: 'parent_id 指向 node_id' },
-  { name: 'UPSTREAM_DOWNSTREAM', label: '产业链上下游', source: 'IndustryChainNode', target: 'IndustryChainNode', basis: 'downstream_link_code 生成' },
-  { name: 'BELONGS_TO_CHAIN_NODE', label: '企业属于产业链节点', source: 'Organization', target: 'IndustryChainNode', basis: '企业对齐后保留 chain_score' },
-  { name: 'PRODUCT_CHAIN_NODE', label: '产品关联产业链节点', source: 'Product', target: 'IndustryChainNode', basis: '标准产品连接所属节点' },
-  { name: 'RELATED_EVENT', label: '产业链节点关联事件', source: 'IndustryChainNode', target: 'Event', basis: '产业链资讯生成事件' },
-  { name: 'ORG_FIELD', label: '企业技术领域', source: 'Organization', target: 'ResearchField', basis: '行业分类、经营范围和产品领域归一' },
-  { name: 'HAS_FINANCIAL_RECORD', label: '机构年度财务', source: 'Organization', target: 'FinancialRecord', basis: '需要保留年度历史时生成', level: '扩展' },
-  { name: 'BELONGS_TO_PATENT_FAMILY', label: '专利属于家族', source: 'Patent', target: 'PatentFamily', basis: '专利家族对齐后生成', level: '扩展' },
-])
-
-const inferenceRelations = ref<Relation[]>([
-  { name: 'CO_AUTHOR', label: '论文合作', source: 'Expert', target: 'Expert', basis: '共同发表同一论文' },
-  { name: 'COLLEAGUE', label: '同事关系', source: 'Expert', target: 'Expert', basis: '同一机构任职且时间重叠，或共同参与项目' },
-  { name: 'ALUMNI', label: '校友关系', source: 'Expert', target: 'Expert', basis: '同校就读，结合专业、学历和时间' },
-  { name: 'DIRECT_RELATION', label: '专家直接关系', source: 'Expert', target: 'Expert', basis: '论文、项目、专利、同事、校友和企业合作综合判定' },
-  { name: 'INDIRECT_RELATION', label: '专家间接关系', source: 'Expert', target: '其他实体', basis: '基于标准事实关系做多跳路径分析' },
-  { name: 'COOPERATIVE_OUTPUT', label: '合作成果', source: 'Expert', target: 'Achievement 视图', basis: '共同论文、专利、项目和报告统计' },
-  { name: 'EXPERT_COMPANY_RELATION', label: '专家企业关系', source: 'Expert', target: 'Organization', basis: '任职、专利、项目、高管与产品领域综合判定' },
-  { name: 'CHAIN_EVENT_IMPACT', label: '产业链事件影响', source: 'IndustryChainNode', target: 'Event', basis: '事件热度、关联企业数、政策影响和趋势' },
-  { name: 'CHAIN_OVERVIEW_RELATION', label: '产业链全景关联', source: 'IndustryChainNode', target: '多类实体', basis: '节点、企业、产品、专家、政策和事件综合关联' },
-])
-
-const attributes = [
-  { entity: 'Expert', key: 'expert_id', core: 'name_zh, name_en, avatar, organization_name_zh, bio_zh, bio_en', dynamic: 'paper_count, citation_count, h_index', source: 'dwd_scholar' },
-  { entity: 'Organization', key: 'org_id', core: 'name_zh, name_en, external_id, org_category, province, city, address', dynamic: 'listing_status, registered_capital_value, financial_metrics', source: 'dwd_org_reg_info / dwd_forg_base_info' },
-  { entity: 'Paper', key: 'paper_id', core: 'doi, title_zh, title_en, publish_year, abstract_zh, abstract_en, keywords', dynamic: 'citation_count, is_open_access', source: 'dwd_zh_paper_detail / dwd_en_paper_detail' },
-  { entity: 'Project', key: 'project_id', core: 'project_number, title, project_source, project_level, discipline_code, approval_time', dynamic: 'funded_amount, research_period', source: 'dwd_zh_project / dwd_en_project' },
-  { entity: 'Patent', key: 'patent_id', core: 'publication_number, application_number, country_code, application_date, ipc_main, cpc_main', dynamic: 'legal_status, cited_by_nums, anticipated_expiration', source: 'dwd_patent' },
-  { entity: 'Report', key: 'report_id', core: 'title_zh, title_en, authors_raw, organization_raw, abstract_zh, keywords_zh', dynamic: 'publication_date, preparation_time', source: 'dwd_zh_report / dwd_en_report' },
-  { entity: 'Policy', key: 'policy_id', core: 'title, content, url, issueno, pubtime, region, keywords, publish_department', dynamic: '按政策源更新', source: 'dws_zck_policy / dwd_zck_intl_policy' },
-  { entity: 'Event', key: 'event_id', core: 'event_type, title, event_time, summary, source_url, subject', dynamic: 'event_heat, impact_score', source: 'dwd_industry_chain_news_info / dwd_org_important_news_info' },
-  { entity: 'IndustryChainNode', key: 'chain_code + node_id', core: 'node_name, node_type, level, parent_id, node_stage', dynamic: 'chain_score', source: 'dwd_industry_chain_info' },
-  { entity: 'Product', key: 'product_id / 标准名', core: 'product_name, product_seq, company_name, credit_code', dynamic: '所属节点和企业映射', source: 'dwd_org_industry_chain_prod_dtl' },
-  { entity: 'ResearchField', key: 'field_id / discipline_code', core: 'standard_name, alias, field_type, parent_field', dynamic: '别名与上下位字典', source: 'dim_research_field / dim_discipline_code' },
-]
-
+const factRelations = ref<Relation[]>([])
+const inferenceRelations = ref<Relation[]>([])
+const attributes = ref<Attribute[]>([])
 // 版本记录（已隐藏）
 // const schemaVersions = [
 //   { version: 'v1.8', status: '当前版本', time: '2026-07-12 22:10', entities: '14 个标准实体', relations: '42 标准 / 9 推理', change: '统一候选层字段；新增 Event 类型；调整 3 项关系约束', publisher: '张建图' },
@@ -110,11 +41,26 @@ const attributes = [
 
 const { showToast } = useToast()
 
+const overview = ref<SchemaOverview>({
+  currentVersion: '',
+  environment: '',
+  releasedAt: '',
+  entityTypes: 0,
+  coreEntityTypes: 0,
+  relationTypes: 0,
+  factRelationTypes: 0,
+  inferredRelationTypes: 0,
+  propertyFields: 0,
+  requiredFields: 0,
+  constraintRules: 0,
+  sourceMappings: 0,
+})
 const modalOpen = ref(false)
 const form = ref<Record<string, string>>({})
-const scriptByRow = ref<Record<string, File>>({})
+const scriptByRow = ref<Record<string, { name: string }>>({})
 const fileInput = ref<HTMLInputElement | null>(null)
 const pendingUploadRow = ref('')
+const pendingCreate = ref<PendingCreate | null>(null)
 
 const formSpec = computed(() => {
   switch (activeTab.value) {
@@ -143,80 +89,220 @@ const formSpec = computed(() => {
   }
 })
 
+function mapEntity(schema: SchemaDefinition): Entity {
+  return {
+    id: schema.id,
+    name: schema.name,
+    label: schema.label,
+    level: schema.isCore ? '核心实体' : '支撑实体',
+    key: schema.identityKey,
+    source: schema.mappings.join(' / '),
+    description: schema.description,
+    schema,
+  }
+}
+
+function mapRelation(schema: SchemaDefinition): Relation {
+  return {
+    id: schema.id,
+    name: schema.name,
+    label: schema.label,
+    source: schema.sourceSchemaName || '',
+    target: schema.targetSchemaName || '',
+    basis: schema.description,
+    level: schema.isSystem ? '标准' : '扩展',
+    schema,
+  }
+}
+
+function applyDefinitions(definitions: SchemaDefinition[]) {
+  const entitySchemas = definitions.filter((item) => item.kind === 'entity')
+  entities.value = entitySchemas.map(mapEntity)
+  factRelations.value = definitions
+    .filter((item) => item.kind === 'relation' && item.relationCategory === 'fact')
+    .map(mapRelation)
+  inferenceRelations.value = definitions
+    .filter((item) => item.kind === 'relation' && item.relationCategory === 'inferred')
+    .map(mapRelation)
+  attributes.value = entitySchemas
+    .filter((item) => item.isCore)
+    .map((item) => ({
+      entity: item.name,
+      key: item.attributeIdentityKey || item.identityKey,
+      core: item.properties
+        .filter((property) => property.category === 'core')
+        .map((property) => property.name)
+        .join(', '),
+      dynamic: item.properties
+        .filter((property) => property.category === 'dynamic')
+        .map((property) => property.name)
+        .join(', '),
+      source: item.attributeSource || item.mappings.join(' / '),
+    }))
+  scriptByRow.value = Object.fromEntries(
+    definitions
+      .filter((item) => item.script)
+      .map((item) => [item.name, { name: item.script!.filename }]),
+  )
+}
+
+async function loadSchemas() {
+  const [overviewData, definitions] = await Promise.all([
+    getSchemaOverview(),
+    listAllSchemas(currentUserId),
+  ])
+  overview.value = overviewData
+  applyDefinitions(definitions)
+}
+
 function openCreate() {
   form.value = {}
+  pendingCreate.value = null
   modalOpen.value = true
 }
 
+function schemaKey(name: string) {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replaceAll('_', '-')
+    .toLowerCase()
+}
+
+function mappings(value: string) {
+  return value.split('/').map((item) => item.trim()).filter(Boolean)
+}
+
+function identityProperties(value: string) {
+  const names = value
+    .split(/[\/+，,]/)
+    .map((item) => item.trim().replaceAll(' ', '_'))
+    .filter(Boolean)
+    .map((item, index) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(item) ? item : `field_${index + 1}`)
+  return [...new Set(names)].map((name) => ({
+    name,
+    dataType: 'string',
+    required: true,
+    rule: '唯一标识',
+    category: 'core' as const,
+  }))
+}
+
+function findEntity(value: string) {
+  const normalized = value.trim().toLowerCase()
+  return entities.value.find(
+    (item) => item.name.toLowerCase() === normalized || item.label.toLowerCase() === normalized,
+  )
+}
+
 function saveItem() {
-  for (const f of formSpec.value) {
-    if (f.required && !form.value[f.key]?.trim()) {
-      showToast(`请填写${f.label}`, 'warning')
+  for (const field of formSpec.value) {
+    if (field.required && !form.value[field.key]?.trim()) {
+      showToast(`请填写${field.label}`, 'warning')
       return
     }
   }
-  if (activeTab.value === '标准实体') {
-    entities.value.unshift({
-      name: form.value.name ?? '',
-      label: form.value.label ?? '',
-      level: '支撑实体',
-      key: form.value.key ?? '',
-      source: form.value.source ?? '',
-      description: form.value.description ?? '',
-    })
-  } else if (activeTab.value === '事实关系') {
-    factRelations.value.unshift({
-      name: form.value.name ?? '',
-      label: form.value.label ?? '',
-      source: form.value.source ?? '',
-      target: form.value.target ?? '',
-      basis: form.value.basis ?? '',
-      level: '扩展',
-    })
-  } else if (activeTab.value === '推理关系') {
-    inferenceRelations.value.unshift({
-      name: form.value.name ?? '',
-      label: form.value.label ?? '',
-      source: form.value.source ?? '',
-      target: form.value.target ?? '',
-      basis: form.value.basis ?? '',
-      level: '扩展',
-    })
+  if (activeTab.value !== '标准实体') {
+    if (!findEntity(form.value.source || '') || !findEntity(form.value.target || '')) {
+      showToast('关系起点和终点必须填写已存在实体的 Schema 名称', 'warning')
+      return
+    }
   }
-  modalOpen.value = false
-  showToast('已新增', 'success')
+  pendingCreate.value = { tab: activeTab.value, values: { ...form.value } }
+  pendingUploadRow.value = ''
+  fileInput.value?.click()
+  showToast('请选择该 Schema 对应的 Python 脚本', 'info')
 }
 
-function triggerFileUpload(rowName: string) {
-  pendingUploadRow.value = rowName
+function triggerFileUpload(schemaId: string) {
+  pendingCreate.value = null
+  pendingUploadRow.value = schemaId
   fileInput.value?.click()
 }
 
-function handleFileSelect(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (file && pendingUploadRow.value) {
-    scriptByRow.value[pendingUploadRow.value] = file
-    showToast(`已选择 ${file.name}`, 'success')
+async function createPendingSchema(file: File, pending: PendingCreate) {
+  const values = pending.values
+  if (pending.tab === '标准实体') {
+    const payload: EntitySchemaCreatePayload = {
+      schemaKey: schemaKey(values.label || ''),
+      name: values.label || '',
+      label: values.name || '',
+      description: values.description || '',
+      identityKey: values.key || '',
+      properties: identityProperties(values.key || ''),
+      mappings: mappings(values.source || ''),
+      isCore: false,
+    }
+    await createEntitySchema(payload, file, currentUserId)
+    return
   }
-  input.value = ''
-  pendingUploadRow.value = ''
+
+  const source = findEntity(values.source || '')
+  const target = findEntity(values.target || '')
+  if (!source || !target) {
+    throw new Error('关系起点和终点必须填写已存在实体的 Schema 名称')
+  }
+  const payload: RelationSchemaCreatePayload = {
+    schemaKey: schemaKey(values.label || ''),
+    name: values.label || '',
+    label: values.name || '',
+    description: values.basis || '',
+    sourceSchemaId: source.id,
+    targetSchemaId: target.id,
+    sourceExpression: source.name,
+    targetExpression: target.name,
+    relationCategory: pending.tab === '事实关系' ? 'fact' : 'inferred',
+    properties: [
+      { name: 'source', dataType: `${source.name} ID`, required: true, category: 'core' },
+      { name: 'target', dataType: `${target.name} ID`, required: true, category: 'core' },
+    ],
+  }
+  await createRelationSchema(payload, file, currentUserId)
 }
 
+async function handleFileSelect(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  try {
+    if (pendingCreate.value) {
+      await createPendingSchema(file, pendingCreate.value)
+      modalOpen.value = false
+      showToast('Schema 与 Python 脚本已新增', 'success')
+    } else if (pendingUploadRow.value) {
+      await replaceSchemaScript(pendingUploadRow.value, file, currentUserId)
+      showToast(`已上传 ${file.name}`, 'success')
+    }
+    await loadSchemas()
+  } catch (error) {
+    showToast(schemaErrorMessage(error), 'warning')
+  } finally {
+    input.value = ''
+    pendingUploadRow.value = ''
+    pendingCreate.value = null
+  }
+}
+
+onMounted(async () => {
+  try {
+    await loadSchemas()
+  } catch (error) {
+    showToast(schemaErrorMessage(error), 'warning')
+  }
+})
 const normalizedKeyword = computed(() => keyword.value.trim().toLowerCase())
 const matches = (row: unknown) => !normalizedKeyword.value || Object.values(row as Record<string, unknown>).join(' ').toLowerCase().includes(normalizedKeyword.value)
 const filteredEntities = computed(() => entities.value.filter(matches))
 const filteredFacts = computed(() => factRelations.value.filter(matches))
 const filteredInference = computed(() => inferenceRelations.value.filter(matches))
-const filteredAttributes = computed(() => attributes.filter(matches))
+const filteredAttributes = computed(() => attributes.value.filter(matches))
 </script>
 
 <template>
   <main class="schema-page">
     <section class="schema-summary" aria-label="Schema 概览">
-      <article><span>标准实体</span><strong>14</strong><em>专家、机构、论文等</em></article>
-      <article><span>标准事实关系</span><strong>42</strong><em>专家、机构、成果等</em></article>
-      <article><span>业务推理关系</span><strong>9</strong><em>均基于事实关系计算</em></article>
+      <article><span>标准实体</span><strong>{{ overview.entityTypes }}</strong><em>专家、机构、论文等</em></article>
+      <article><span>标准事实关系</span><strong>{{ overview.factRelationTypes }}</strong><em>专家、机构、成果等</em></article>
+      <article><span>业务推理关系</span><strong>{{ overview.inferredRelationTypes }}</strong><em>均基于事实关系计算</em></article>
       <!-- <article><span>当前 Schema 版本</span><strong>v1.8</strong><em>已发布 · 2026-07-12</em></article> -->
     </section>
 
@@ -225,11 +311,11 @@ const filteredAttributes = computed(() => attributes.filter(matches))
       <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeTab === '属性定义'">枚举字典作为属性约束统一维护</span></div><div class="schema-toolbar__actions"><button v-if="activeTab !== '属性定义'" class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :placeholder="`搜索${activeTab}`" /></label></div></div>
       <!-- <p v-if="schemaVersionMessage" class="schema-version-message">{{ schemaVersionMessage }}</p> -->
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '推理关系'" class="schema-table-wrap"><table><thead><tr><th>推理关系</th><th>Schema 名称</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredInference" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-else-if="activeTab === '推理关系'" class="schema-table-wrap"><table><thead><tr><th>推理关系</th><th>Schema 名称</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredInference" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
       <div v-else-if="activeTab === '属性定义'" class="schema-table-wrap"><table><thead><tr><th>实体</th><th>主键</th><th>核心属性</th><th>动态属性 / 补充</th><th>主要来源</th></tr></thead><tbody><tr v-for="row in filteredAttributes" :key="row.entity"><td><code>{{ row.entity }}</code></td><td><b>{{ row.key }}</b></td><td class="mono-list">{{ row.core }}</td><td>{{ row.dynamic }}</td><td>{{ row.source }}</td></tr></tbody></table></div>
 

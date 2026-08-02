@@ -1,24 +1,43 @@
 services:
   api:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     container_name: tech-kg-api
     ports:
       - "8001:8000"
     env_file:
       - ./backend/.env
     environment:
-      # API直接加入数据服务所在的Docker网络，通过容器DNS访问，不绕宿主机端口。
-      MYSQL_HOST: mysql
-      MYSQL_DATABASE: gkx_element
-      TRS_GRAPH_BASE_URL: http://trs-graph-service:8090
-      TRS_GRAPH_SPACE: dev
-      MILVUS_HOST: milvus
-      MILVUS_PORT: 19530
-      PATENT_EMBEDDING_PROVIDER: openai
-      PATENT_EMBEDDING_BASE_URL: http://m3e-embedding:8010/v1
-      PATENT_EMBEDDING_MODEL: moka-ai/m3e-small
-      PATENT_EMBEDDING_DIM: 512
-      PATENT_EMBEDDING_API_KEY: local-no-auth
+      # 默认通过容器网络访问数据服务；部署到远程服务器时可用同名环境变量覆盖。
+      TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://trs-graph-service:8090}
+      TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-dev}
+      TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
+      TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
+      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-gkx_element}
+      MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
+      # 论文合作库可独立部署；未单独配置时沿用主 MySQL 连接参数。
+      PAPER_COOP_MYSQL_HOST: ${PAPER_COOP_MYSQL_HOST:-${MYSQL_HOST:-mysql}}
+      PAPER_COOP_MYSQL_PORT: ${PAPER_COOP_MYSQL_PORT:-${MYSQL_PORT:-3306}}
+      PAPER_COOP_MYSQL_DATABASE: ${PAPER_COOP_MYSQL_DATABASE:-gkx_local}
+      PAPER_COOP_MYSQL_USERNAME: ${PAPER_COOP_MYSQL_USERNAME:-${MYSQL_USERNAME:-root}}
+      PAPER_COOP_MYSQL_PASSWORD: ${PAPER_COOP_MYSQL_PASSWORD:-${MYSQL_PASSWORD:-123456789}}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-glm-4.7-flash}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+      PATENT_EMBEDDING_PROVIDER: ${PATENT_EMBEDDING_PROVIDER:-openai}
+      PATENT_EMBEDDING_BASE_URL: ${PATENT_EMBEDDING_BASE_URL:-http://m3e-embedding:8010/v1}
+      PATENT_EMBEDDING_MODEL: ${PATENT_EMBEDDING_MODEL:-moka-ai/m3e-small}
+      PATENT_EMBEDDING_DIM: ${PATENT_EMBEDDING_DIM:-512}
+      PATENT_EMBEDDING_API_KEY: ${PATENT_EMBEDDING_API_KEY:-local-no-auth}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - patent-index-state:/app/var/patent_indexes
     depends_on:
@@ -31,7 +50,10 @@ services:
     restart: unless-stopped
 
   m3e-embedding:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     container_name: tech-kg-api-m3e-embedding
     command: [".venv/bin/uvicorn", "script.m3e_embedding_service:app", "--host", "0.0.0.0", "--port", "8010"]
     ports:
@@ -57,7 +79,10 @@ services:
     restart: unless-stopped
 
   web:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
     container_name: tech-kg-web
     ports:
       - "8088:80"
@@ -78,6 +103,8 @@ services:
     volumes:
       - milvus-etcd-data:/etcd
     command: etcd -advertise-client-urls=http://milvus-etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    networks:
+      - app
     restart: unless-stopped
 
   milvus-minio:
@@ -97,6 +124,8 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+    networks:
+      - app
     restart: unless-stopped
 
   milvus:
@@ -114,6 +143,8 @@ services:
     depends_on:
       - milvus-etcd
       - milvus-minio
+    networks:
+      - app
     restart: unless-stopped
 
 volumes:

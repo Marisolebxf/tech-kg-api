@@ -2,9 +2,16 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-RUN corepack enable
+# Docker 构建默认使用阿里 npm 镜像，可通过 build arg 覆盖。
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ENV npm_config_registry=${NPM_REGISTRY} \
+    COREPACK_NPM_REGISTRY=${NPM_REGISTRY}
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+
+# Corepack 下载 pnpm 和 pnpm 安装项目依赖均使用上述镜像。
+RUN corepack enable \
+    && pnpm config set registry "${NPM_REGISTRY}"
 RUN pnpm install --frozen-lockfile
 
 COPY . .

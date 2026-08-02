@@ -15,6 +15,7 @@
 | Kafka | `127.0.0.1:9092` | `kafka` | - | Consumer Group `techkg` |
 | Milvus | `127.0.0.1:19530` | `milvus` | - | 无账号密码配置 |
 | MinIO | API `127.0.0.1:9000`，控制台 `127.0.0.1:9001` | `minio` | `minioadmin` | `minioadmin` |
+| RustFS（用户算子） | API `127.0.0.1:9020`，控制台 `127.0.0.1:9021` | `operator-rustfs` | `rustfsadmin` | `rustfsadmin`，Python 通过 S3 API 使用 |
 
 后端直接在宿主机运行时，MySQL 地址通常使用 `127.0.0.1`；后端在项目 Compose 的 `api` 容器内运行时，通过外部 Docker 网络使用服务名 `mysql`。Milvus 使用 Compose 服务名 `milvus`，M3E 向量服务使用 `m3e-embedding`。实际连接值以 `.env` 和 Compose 的 `environment` 覆盖项为准。 后期环境若使用 `tdsql-mysql`，通过部署环境设置 `MYSQL_HOST=tdsql-mysql`，无需修改代码。
 
@@ -24,12 +25,12 @@
 
 | 组件 | 地址 | 账号 | 密码/说明 |
 |---|---|---|---|
-| 厂商源 MySQL | `183.240.141.251:3318/gkx` | `gkx_reader_zp` | `Zp_Use_Gkx_db@123456`，只读/只使用，不直接写入 |
-| 服务器管理库 | `10.50.125.110:5306/trendAdmin` | `root` | `q123456Q.`，不是厂商数据副本 |
-| 服务器 Redis | `10.50.125.110:8379`，DB `0` | - | `redisTrend1.` |
-| MongoDB | `10.50.125.110:47017/test` | `root` | `x+s9zI&VA!s` |
-| ElasticSearch | `http://123.57.233.22:9200` | `elastic` | `*7A0#7i7@DzKD1pr` |
-| Nginx/GLM 网关 | `https://analysis_ckcest.aminer.cn/microtrend-api-beta/` | - | HTTP 网关 |
+| 厂商源 MySQL | `<vendor-mysql-host>:<port>/<database>` | `<read-only-user>` | 密码通过安全的部署变量提供，不写入仓库 |
+| 服务器管理库 | `<management-db-host>:<port>/<database>` | `<database-user>` | 密码通过安全的部署变量提供，不写入仓库 |
+| 服务器 Redis | `<redis-host>:<port>`，DB `<index>` | - | 密码通过安全的部署变量提供，不写入仓库 |
+| MongoDB | `<mongodb-host>:<port>/<database>` | `<mongodb-user>` | 密码通过安全的部署变量提供，不写入仓库 |
+| ElasticSearch | `<elasticsearch-url>` | `<elasticsearch-user>` | 密码通过安全的部署变量提供，不写入仓库 |
+| Nginx/GLM 网关 | `<gateway-url>` | - | 实际地址通过部署环境配置 |
 | TRSGraph | `127.0.0.1:9669`（后端和 TRSGraph 同机时） | `root` | `trsadmin` |
 
 TRSGraph 由外部 TRSGraph 服务提供，当前 Python 后端只负责连接。环境变量见 `.env.example`，分环境配置见 `config/config_dev.yml`、`config/config_stage.yml`、`config/config_product.yml`。
@@ -49,7 +50,7 @@ TRSGraph 由外部 TRSGraph 服务提供，当前 Python 后端只负责连接�
 | Python 依赖和检查配置 | `pyproject.toml` | uv 依赖、pytest、ruff 配置 |
 | 后端 Docker 镜像 | `Dockerfile` | 构建 FastAPI 后端镜像 |
 | 后端 Docker 编排 | `docker-compose.yml` | 只启动后端 API 容器，适合已有外部基础设施时使用 |
-| 项目级 Docker 编排 | `../docker-compose.yml` | 启动 API、M3E 向量服务和 Milvus 等项目组件；MySQL 使用外部现有服务 |
+| 项目级 Docker 编排 | `../docker-compose.yml` | 启动 API、M3E、Milvus/MinIO 和用户算子 RustFS；MySQL 使用外部现有服务 |
 
 ### Docker 和代码部署的关系
 
@@ -193,11 +194,11 @@ db_model/
 同步 schema：
 
 ```bash
-SOURCE_MYSQL_HOST=183.240.141.251 \
-SOURCE_MYSQL_PORT=3318 \
-SOURCE_MYSQL_DATABASE=gkx \
-SOURCE_MYSQL_USERNAME=gkx_reader_zp \
-SOURCE_MYSQL_PASSWORD='***' \
+SOURCE_MYSQL_HOST=<vendor-mysql-host> \
+SOURCE_MYSQL_PORT=<port> \
+SOURCE_MYSQL_DATABASE=<database> \
+SOURCE_MYSQL_USERNAME=<read-only-user> \
+SOURCE_MYSQL_PASSWORD='<set-in-secret-store>' \
 uv run python script/sync_schema_from_mysql.py
 ```
 

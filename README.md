@@ -21,6 +21,9 @@
 - **MySQL 8.0**（业务数据）
 - （可选）智谱 GLM API Key——仅「企业背景关联分析」用，未配置时自动降级
 
+根 Compose 另外启动一个独立 RustFS，用 S3 兼容协议持久化用户上传的 Python 算子源码。
+它与 Milvus 配套的 MinIO 相互独立，MinIO 不做替换。
+
 ## 快速开始
 
 ### 方式一：Docker（推荐）
@@ -359,4 +362,3 @@ tech-kg-api/                       # monorepo 根
 | `LLM_API_KEY` | — | 智谱 GLM key；未配置时 #3 自动降级 |
 | `LLM_MODEL` | `glm-4.7-flash` | LLM 模型（推理模型，读 `message.content`） |
 | `LLM_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | LLM 接口地址 |
-

@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -9,14 +10,18 @@ from biz.router.register import register_routers
 from biz.schemas.common import ApiResponse
 from infra.graph_db import close_techkg_client, close_trs_graph_client
 from infra.graph_db.exceptions import GraphRepoError
+from service.operator_registry import REGISTRY
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """trs-graph clients connect lazily on first use; close on shutdown."""
+    """启动算子热加载监听，并在退出时释放基础设施资源。"""
+    await asyncio.to_thread(REGISTRY.initialize_store)
+    REGISTRY.start_watcher()
     try:
         yield
     finally:
+        REGISTRY.stop_watcher()
         close_techkg_client()
         close_trs_graph_client()
 

@@ -36,11 +36,23 @@ services:
       PATENT_EMBEDDING_MODEL: ${PATENT_EMBEDDING_MODEL:-moka-ai/m3e-small}
       PATENT_EMBEDDING_DIM: ${PATENT_EMBEDDING_DIM:-512}
       PATENT_EMBEDDING_API_KEY: ${PATENT_EMBEDDING_API_KEY:-local-no-auth}
+      OPERATOR_DIR: /app/operators/user
+      OPERATOR_WORKER_BASE_URIS: ${OPERATOR_WORKER_BASE_URIS:-}
+      OPERATOR_RELOAD_TOKEN: ${OPERATOR_RELOAD_TOKEN:-}
+      OPERATOR_S3_ENDPOINT_URL: http://operator-rustfs:9000
+      OPERATOR_S3_BUCKET: ${OPERATOR_S3_BUCKET:-tech-kg-operators}
+      OPERATOR_S3_PREFIX: ${OPERATOR_S3_PREFIX:-operators}
+      OPERATOR_S3_ACCESS_KEY_ID: ${OPERATOR_S3_ACCESS_KEY_ID:-rustfsadmin}
+      OPERATOR_S3_SECRET_ACCESS_KEY: ${OPERATOR_S3_SECRET_ACCESS_KEY:-rustfsadmin}
+      OPERATOR_S3_REGION: ${OPERATOR_S3_REGION:-us-east-1}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
+      - operator-data:/app/operators/user
       - patent-index-state:/app/var/patent_indexes
     depends_on:
+      operator-rustfs:
+        condition: service_healthy
       m3e-embedding:
         condition: service_healthy
     networks:
@@ -88,6 +100,46 @@ services:
       - "8088:80"
     depends_on:
       - api
+    networks:
+      - app
+    restart: unless-stopped
+
+  operator-rustfs-volume-init:
+    image: alpine:3.22
+    container_name: tech-kg-operator-rustfs-volume-init
+    volumes:
+      - operator-rustfs-data:/data
+    command: ["sh", "-c", "chown -R 10001:10001 /data"]
+    restart: "no"
+
+  operator-rustfs:
+    image: ${RUSTFS_IMAGE:-rustfs/rustfs:latest}
+    container_name: tech-kg-operator-rustfs
+    security_opt:
+      - "no-new-privileges:true"
+    ports:
+      - "9020:9000"
+      - "9021:9001"
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_CORS_ALLOWED_ORIGINS: "*"
+      RUSTFS_ACCESS_KEY: ${OPERATOR_S3_ACCESS_KEY_ID:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${OPERATOR_S3_SECRET_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_UNSAFE_BYPASS_DISK_CHECK: "true"
+    volumes:
+      - operator-rustfs-data:/data
+    depends_on:
+      operator-rustfs-volume-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     networks:
       - app
     restart: unless-stopped
@@ -153,6 +205,8 @@ volumes:
   milvus-data:
   m3e-model-cache:
   patent-index-state:
+  operator-data:
+  operator-rustfs-data:
 
 networks:
   app:

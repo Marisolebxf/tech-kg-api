@@ -18,6 +18,20 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-glm-4.7-flash}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+      OPERATOR_DIR: /app/operators/user
+      OPERATOR_WORKER_BASE_URIS: ${OPERATOR_WORKER_BASE_URIS:-}
+      OPERATOR_RELOAD_TOKEN: ${OPERATOR_RELOAD_TOKEN:-}
+      OPERATOR_S3_ENDPOINT_URL: http://operator-rustfs:9000
+      OPERATOR_S3_BUCKET: ${OPERATOR_S3_BUCKET:-tech-kg-operators}
+      OPERATOR_S3_PREFIX: ${OPERATOR_S3_PREFIX:-operators}
+      OPERATOR_S3_ACCESS_KEY_ID: ${OPERATOR_S3_ACCESS_KEY_ID:-rustfsadmin}
+      OPERATOR_S3_SECRET_ACCESS_KEY: ${OPERATOR_S3_SECRET_ACCESS_KEY:-rustfsadmin}
+      OPERATOR_S3_REGION: ${OPERATOR_S3_REGION:-us-east-1}
+    volumes:
+      - operator-data:/app/operators/user
+    depends_on:
+      operator-rustfs:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -29,6 +43,44 @@ services:
       - "8088:80"
     depends_on:
       - api
+    restart: unless-stopped
+
+  operator-rustfs-volume-init:
+    image: alpine:3.22
+    container_name: tech-kg-operator-rustfs-volume-init
+    volumes:
+      - operator-rustfs-data:/data
+    command: ["sh", "-c", "chown -R 10001:10001 /data"]
+    restart: "no"
+
+  operator-rustfs:
+    image: ${RUSTFS_IMAGE:-rustfs/rustfs:latest}
+    container_name: tech-kg-operator-rustfs
+    security_opt:
+      - "no-new-privileges:true"
+    ports:
+      - "9020:9000"
+      - "9021:9001"
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_CORS_ALLOWED_ORIGINS: "*"
+      RUSTFS_ACCESS_KEY: ${OPERATOR_S3_ACCESS_KEY_ID:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${OPERATOR_S3_SECRET_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_UNSAFE_BYPASS_DISK_CHECK: "true"
+    volumes:
+      - operator-rustfs-data:/data
+    depends_on:
+      operator-rustfs-volume-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     restart: unless-stopped
 
   milvus-etcd:
@@ -84,3 +136,5 @@ volumes:
   milvus-etcd-data:
   milvus-minio-data:
   milvus-data:
+  operator-data:
+  operator-rustfs-data:

@@ -15,6 +15,7 @@
 | Kafka | `127.0.0.1:9092` | `kafka` | - | Consumer Group `techkg` |
 | Milvus | `127.0.0.1:19530` | `milvus` | - | 无账号密码配置 |
 | MinIO | API `127.0.0.1:9000`，控制台 `127.0.0.1:9001` | `minio` | `minioadmin` | `minioadmin` |
+| RustFS（用户算子） | API `127.0.0.1:9020`，控制台 `127.0.0.1:9021` | `operator-rustfs` | `rustfsadmin` | `rustfsadmin`，Python 通过 S3 API 使用 |
 
 后端如果直接在宿主机运行，连接本地服务用 `127.0.0.1`；后端如果在 Docker Compose 的 `api` 容器内运行，连接 MySQL 要用 `tdsql-mysql`，连接 Redis/Kafka/Milvus 要用服务名 `redis`、`kafka`、`milvus`。
 
@@ -49,7 +50,7 @@ TRSGraph 由外部 TRSGraph 服务提供，当前 Python 后端只负责连接�
 | Python 依赖和检查配置 | `pyproject.toml` | uv 依赖、pytest、ruff 配置 |
 | 后端 Docker 镜像 | `Dockerfile` | 构建 FastAPI 后端镜像 |
 | 后端 Docker 编排 | `docker-compose.yml` | 只启动后端 API 容器，适合已有外部基础设施时使用 |
-| 项目级 Docker 编排 | `../docker-compose.yml` | 启动 MySQL/Redis/Kafka/Milvus/MinIO，也可启动 API 容器 |
+| 项目级 Docker 编排 | `../docker-compose.yml` | 启动 Milvus/MinIO、用户算子 RustFS，也可启动 API 容器 |
 
 ### Docker 和代码部署的关系
 

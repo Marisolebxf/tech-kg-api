@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getProcessingInstance, getUpdateBatch, updateBatches } from './update-batch-data'
+import { getTask, type ProcessingInstance, type UpdateBatch } from '../../api/workflowOperations'
 
 type StepStatus = '成功' | '运行中' | '需人工处理' | '待执行'
 type RiskLevel = '低风险' | '中风险' | '高风险'
@@ -22,12 +22,11 @@ type Step = {
 const route = useRoute()
 const router = useRouter()
 const taskId = computed(() => String(route.params.taskId || route.params.instanceId || 'UPD-20260714'))
-const processingInstance = computed(() => getProcessingInstance(taskId.value))
-const batch = computed(() => getUpdateBatch(processingInstance.value?.batchId ?? taskId.value) ?? updateBatches[0])
+const processingInstance = ref<ProcessingInstance>()
+const fallbackBatch: UpdateBatch = { id: '-', name: '任务详情', updateDate: '-', dataWindow: '-', source: '-', trigger: '-', input: 0, entities: 0, relations: 0, completed: 0, abnormal: 0, progress: 0, status: '处理中', startedAt: '-', completedAt: '-' }
+const batch = computed(() => processingInstance.value?.batch ?? fallbackBatch)
 const isConstructionTask = computed(() => processingInstance.value?.stage === '图谱构建' || String(route.params.area) === 'construction')
-const needsTaskReview = computed(() => processingInstance.value
-  ? processingInstance.value.status === '待人工处理'
-  : batch.value.status === '待审核')
+const needsTaskReview = computed(() => ['执行出错', '等待人工审核'].includes(processingInstance.value?.taskStatus ?? ''))
 const activeTab = ref<DetailTab>('overview')
 
 const baseSteps: Omit<Step, 'status' | 'count' | 'abnormal' | 'duration'>[] = [
@@ -45,6 +44,13 @@ const baseSteps: Omit<Step, 'status' | 'count' | 'abnormal' | 'duration'>[] = [
 ]
 
 const steps = computed<Step[]>(() => {
+  if (processingInstance.value?.steps?.length) {
+    return processingInstance.value.steps.map((step) => ({
+      ...step,
+      risk: step.risk ?? (step.status === '需人工处理' ? '高风险' : step.phase === '图谱构建' ? '中风险' : '低风险'),
+      engine: step.engine ?? (step.phase === '图谱构建' ? 'Temporal KG Worker' : 'Temporal Data Worker'),
+    }))
+  }
   const resolved = baseSteps.map<Step>((step, index) => {
   if (!needsTaskReview.value) {
     return { ...step, status: '成功', count: index < 4 ? `${batch.value.input.toLocaleString()} 条` : step.id === 'llm' ? `${batch.value.entities.toLocaleString()} 实体 / ${batch.value.relations.toLocaleString()} 关系` : '已完成', abnormal: '0', duration: step.risk === '高风险' ? '8分24秒' : '1分08秒' }
@@ -104,7 +110,7 @@ const attentionLabel = computed(() => selectedStep.value.risk === '高风险' ? 
 const isProcessLevelIncident = computed(() => ['模型批量输出异常', 'Schema 批量映射失败', '公共字典配置异常'].includes(processingInstance.value?.reviewType ?? ''))
 const isTaskExecutionFailure = computed(() => processingInstance.value?.reviewType === '单任务执行失败')
 const isExecutionInterrupted = computed(() => isProcessLevelIncident.value || isTaskExecutionFailure.value)
-const taskStatus = computed(() => isExecutionInterrupted.value ? '执行中断' : '执行成功')
+const taskStatus = computed(() => processingInstance.value?.taskStatus ?? (isExecutionInterrupted.value ? '执行出错' : '执行完成'))
 const resultStatus = computed(() => isProcessLevelIncident.value ? '流程已阻断' : isTaskExecutionFailure.value ? '未产生结果' : processingInstance.value?.status === '人工处理完成' ? '人工确认通过' : needsTaskReview.value ? '结果待确认' : '结果已通过')
 const resultConfidence = computed(() => isExecutionInterrupted.value || visiblePhase.value === '数据处理' || !processingInstance.value?.confidence ? '—' : processingInstance.value.confidence)
 const incidentScope = computed(() => isProcessLevelIncident.value ? '流程级·高风险（P0）' : needsTaskReview.value ? '任务级·中风险（P1）' : '无异常')
@@ -193,12 +199,24 @@ const selectStep = (id: string) => {
   void router.replace({ query: { ...route.query, step: id } })
 }
 
+async function loadTaskDetail() {
+  try {
+    processingInstance.value = await getTask(taskId.value)
+    if (!route.query.step) {
+      selectedStepId.value = steps.value.find((step) => step.status === '需人工处理')?.id ?? steps.value[0]?.id ?? 'source'
+    }
+  } catch {
+    processingInstance.value = undefined
+  }
+}
+
 watch(() => route.query.step, (step) => {
   if (step && steps.value.some((item) => item.id === String(step))) selectedStepId.value = String(step)
 })
 watch(taskId, () => {
-  selectedStepId.value = String(route.query.step || initialStepId())
+  void loadTaskDetail()
 })
+onMounted(loadTaskDetail)
 </script>
 
 <template>

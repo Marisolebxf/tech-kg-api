@@ -28,8 +28,72 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-glm-4.7-flash}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: tech-kg-workflows
+      WORKFLOW_DATABASE_PATH: /var/lib/tech-kg/workflows.db
+      WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
+    volumes:
+      - workflow-state:/var/lib/tech-kg
+    depends_on:
+      - temporal
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  temporal-postgresql:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/postgres:16-alpine
+    container_name: tech-kg-temporal-postgresql
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    volumes:
+      - temporal-postgresql-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  temporal:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/temporalio/auto-setup:1.29.2
+    container_name: tech-kg-temporal
+    ports:
+      - "7233:7233"
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: temporal-postgresql
+    depends_on:
+      - temporal-postgresql
+    restart: unless-stopped
+
+  temporal-ui:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/temporalio/ui:2.39.0
+    container_name: tech-kg-temporal-ui
+    ports:
+      - "8233:8080"
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on:
+      - temporal
+    restart: unless-stopped
+
+  temporal-worker:
+    build:
+      context: ./backend
+      args:
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+    container_name: tech-kg-temporal-worker
+    command: [".venv/bin/python", "-m", "script.run_temporal_worker"]
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: tech-kg-workflows
+      WORKFLOW_DATABASE_PATH: /var/lib/tech-kg/workflows.db
+      WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
+    volumes:
+      - workflow-state:/var/lib/tech-kg
+    depends_on:
+      - temporal
     restart: unless-stopped
 
   web:
@@ -97,3 +161,5 @@ volumes:
   milvus-etcd-data:
   milvus-minio-data:
   milvus-data:
+  temporal-postgresql-data:
+  workflow-state:

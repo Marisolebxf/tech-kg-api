@@ -42,6 +42,11 @@ jobs:
       - name: Build Docker image
         run: docker compose build
 
+      - name: Create external Docker networks
+        run: |
+          docker network inspect tech-kg-engine_default >/dev/null 2>&1 || docker network create tech-kg-engine_default
+          docker network inspect trs-graph-service_default >/dev/null 2>&1 || docker network create trs-graph-service_default
+
       - name: Deploy FastAPI
         run: docker compose up -d
 

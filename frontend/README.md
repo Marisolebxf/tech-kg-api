@@ -47,17 +47,14 @@ pnpm build
 
 ## Docker 部署
 
-从项目根目录的唯一 Compose 启动前端及其依赖：
-
 ```bash
-cd ..
-docker compose up -d --build web
+docker compose up -d --build
 ```
 
 默认访问：
 
 ```text
-http://localhost:8088/
+http://localhost:8080/
 ```
 
 如果需要部署到 GitHub Pages 这类子路径，可在构建时设置：
@@ -82,6 +79,7 @@ Docker 默认使用相对路径构建，适合部署到站点根路径。
 │   ├── styles/             # 样式与设计变量
 │   └── views/platform/     # 知识图谱平台原型主页面
 ├── Dockerfile
+├── docker-compose.yml
 ├── nginx.conf
 ├── package.json
 ├── pnpm-lock.yaml

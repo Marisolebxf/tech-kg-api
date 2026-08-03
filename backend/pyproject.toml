@@ -20,6 +20,7 @@ dependencies = [
     "pymilvus[model]>=2.4.10,<2.5",
     "pymysql>=1.1.1",
     "python-dotenv>=1.2.2",
+    "python-multipart>=0.0.9",
     "rapidfuzz>=3.6.0",
     "redis==7.0.1",
     "sentence-transformers>=5.1,<6",
@@ -29,6 +30,16 @@ dependencies = [
     "uvicorn>=0.44.0",
     "zai-sdk>=0.2.2",
     "zhipuai>=1.0.7",
+]
+
+[project.optional-dependencies]
+# 论文/期刊 Milvus 脚本（script/paper_milvus/）运行时才需要，CI 不装：
+#   uv sync --extra milvus
+milvus = [
+    "pymilvus[model]>=2.4.9,<2.5",
+     "milvus-model>=0.2.12",
+    "sentence-transformers>=3.0.0",
+    "jieba>=0.42.1",
 ]
 
 [dependency-groups]

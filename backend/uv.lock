@@ -238,6 +238,14 @@ wheels = [
 ]
 
 [[package]]
+name = "flatbuffers"
+version = "25.12.19"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/2d/d2a548598be01649e2d46231d151a6c56d10b964d94043a335ae56ea2d92/flatbuffers-25.12.19-py2.py3-none-any.whl", hash = "sha256:7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4", size = 26661, upload-time = "2025-12-19T23:16:13.622Z" },
+]
+
+[[package]]
 name = "fsspec"
 version = "2026.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -380,6 +388,12 @@ wheels = [
 ]
 
 [[package]]
+name = "jieba"
+version = "0.42.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/cb/18eeb235f833b726522d7ebed54f2278ce28ba9438e3135ab0278d9792a2/jieba-0.42.1.tar.gz", hash = "sha256:055ca12f62674fafed09427f176506079bc135638a14e23e25be909131928db2", size = 19214172, upload-time = "2020-01-20T14:27:23.5Z" }
+
+[[package]]
 name = "jinja2"
 version = "3.1.6"
 source = { registry = "https://pypi.org/simple" }
@@ -490,6 +504,22 @@ wheels = [
 ]
 
 [[package]]
+name = "milvus-model"
+version = "0.2.12"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "onnxruntime" },
+    { name = "protobuf" },
+    { name = "scipy" },
+    { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/08/44/5c2189e9c63166f51c543919d2c1dd20a2ea6ff5ae54f43e098fb477036f/milvus_model-0.2.12.tar.gz", hash = "sha256:1d6fd5c416545062a2db4dc910141e323ed9694df78564938b1f62222087eb15", size = 35417, upload-time = "2025-01-14T03:57:51.246Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/78/47/6296998f79f6a60ea51249c7fcad6642fceee2a9acd16b7e8a5dc7d177e2/milvus_model-0.2.12-py3-none-any.whl", hash = "sha256:66c8e2ae2fd6379747af407e34c0b4003d5755fdacf50ae1327a03510e3d2b50", size = 43244, upload-time = "2025-01-14T03:57:49.105Z" },
+]
+
+[[package]]
 name = "mpmath"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -549,6 +579,24 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/1a/9c/c531f2293b91265d8b48e9b329f54fdd7ffae73cb4134ea10cca4237e9cc/numpy-2.4.6-pp311-pypy311_pp73-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:5dbbdb29840ca3d91ee0fece42fc29278886d908280bfec0a5846c6f901a3eb0", size = 15798374, upload-time = "2026-05-18T23:37:02.674Z" },
     { url = "https://files.pythonhosted.org/packages/1a/b0/413077f6b1153ed3cba361401c6783bbad6114804a000cc22eb71c13e190/numpy-2.4.6-pp311-pypy311_pp73-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:8ad03c0965fb3c692200e74d458ca28c1dbb4ce96f9a479a8aa041ad5fabca02", size = 16747286, upload-time = "2026-05-18T23:37:06.327Z" },
     { url = "https://files.pythonhosted.org/packages/15/ce/e5ec180bc41812edcd8daeb8639d205622c0e8c02259d8ab25a0201b3c2a/numpy-2.4.6-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:2803abfebfc990042cd494d8ce2d5f82e9d847af6d35ec486923aa19dbad5e73", size = 12504263, upload-time = "2026-05-18T23:37:09.715Z" },
+]
+
+[[package]]
+name = "onnxruntime"
+version = "1.28.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "flatbuffers" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "protobuf" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/17/4d/5014667e2a3a77d6e1b74cc3d88948d06163b8e0a33a84c85073322b5dec/onnxruntime-1.28.0-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:f5c5daabd28aad610f83fdcf32acec8fb57e6adc6c6a39fe2a3c755db957b410", size = 19130506, upload-time = "2026-07-25T01:22:34.489Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/97/b7ce1bc8bb6048b5fe9129f55d6506dc19499068ef2e0a0af1ae3c8aa4e7/onnxruntime-1.28.0-cp311-cp311-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:8d66f9ceb29909c70839e4e4fb3435c7b490050d8f162bd5f3aba4ca01ee517f", size = 17039880, upload-time = "2026-07-25T01:21:37.538Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/17/4e5ecd8764f87573c495d834ce79e61ecca47f7a01d1e444a606e570edcb/onnxruntime-1.28.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a166b78ee04f3a37fa1ef82034b6a3ce96d9684e582d4d30b296de83e9998bb5", size = 19193162, upload-time = "2026-07-25T01:21:59.151Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/10/3d946d5d5f2cdcc3c8da36cae63190c516d16349edaffd944bda60ca4c3e/onnxruntime-1.28.0-cp311-cp311-win_amd64.whl", hash = "sha256:0d650aeee29368414367b65529e90afe4bf1bab76254789063b8b2f7ea3013c8", size = 13752539, upload-time = "2026-07-25T01:22:24.524Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/74/1c440be7af1e026280b139caa1be5d11bd4dc368011ddbe8f5362b58e12f/onnxruntime-1.28.0-cp311-cp311-win_arm64.whl", hash = "sha256:0faf85fb447a663c9cdadc39bd6b19bdf7bedded6699e45731b9b36c46fd993d", size = 13449940, upload-time = "2026-07-25T01:22:14.97Z" },
 ]
 
 [[package]]
@@ -734,6 +782,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/92/1d/00ff2f10c8fa0a7ac61a9e1121383fb0b8ebd9e0da97842bc1edc8773cda/pymilvus-2.4.15-py3-none-any.whl", hash = "sha256:0601591ce0498315e19e9ac3f4fdd3051102ca87b6ddff5b33849f522288cff7", size = 212278, upload-time = "2025-02-24T03:02:02.499Z" },
 ]
 
+[package.optional-dependencies]
+model = [
+    { name = "milvus-model" },
+]
+
 [[package]]
 name = "pymysql"
 version = "1.2.0"
@@ -803,6 +856,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/82/ed/0301aeeac3e5353ef3d94b6ec08bbcabd04a72018415dcb29e588514bba8/python_dotenv-1.2.2.tar.gz", hash = "sha256:2c371a91fbd7ba082c2c1dc1f8bf89ca22564a087c2c287cd9b662adde799cf3", size = 50135, upload-time = "2026-03-01T16:00:26.196Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0b/d7/1959b9648791274998a9c3526f6d0ec8fd2233e4d4acce81bbae76b44b2a/python_dotenv-1.2.2-py3-none-any.whl", hash = "sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a", size = 22101, upload-time = "2026-03-01T16:00:25.09Z" },
+]
+
+[[package]]
+name = "python-multipart"
+version = "0.0.32"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/42/55c32bb9b12693c092ad250a0e82edb5b31ddeda6eb772de5f308b3804ad/python_multipart-0.0.32.tar.gz", hash = "sha256:be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e", size = 46881, upload-time = "2026-06-04T16:18:58.647Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/04/e8135ebd1ad02c56ec633277529b2602ff99ff634be76cdba5744cf554fd/python_multipart-0.0.32-py3-none-any.whl", hash = "sha256:ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23", size = 30042, upload-time = "2026-06-04T16:18:57.319Z" },
 ]
 
 [[package]]
@@ -1130,6 +1192,7 @@ dependencies = [
     { name = "pymilvus" },
     { name = "pymysql" },
     { name = "python-dotenv" },
+    { name = "python-multipart" },
     { name = "rapidfuzz" },
     { name = "redis" },
     { name = "sentence-transformers" },
@@ -1140,6 +1203,14 @@ dependencies = [
     { name = "uvicorn" },
     { name = "zai-sdk" },
     { name = "zhipuai" },
+]
+
+[package.optional-dependencies]
+milvus = [
+    { name = "jieba" },
+    { name = "milvus-model" },
+    { name = "pymilvus", extra = ["model"] },
+    { name = "sentence-transformers" },
 ]
 
 [package.dev-dependencies]
@@ -1158,17 +1229,22 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.40.0" },
     { name = "fastapi", specifier = "==0.110.2" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "jieba", marker = "extra == 'milvus'", specifier = ">=0.42.1" },
+    { name = "milvus-model", marker = "extra == 'milvus'", specifier = ">=0.2.12" },
     { name = "networkx", specifier = ">=3.6.1" },
     { name = "numpy", specifier = ">=2.4.4" },
     { name = "openai", specifier = ">=2.32.0" },
     { name = "pandas", specifier = ">=3.0.2" },
     { name = "pydantic", specifier = "==2.11.7" },
     { name = "pymilvus", specifier = ">=2.4.10,<2.5" },
+    { name = "pymilvus", extras = ["model"], marker = "extra == 'milvus'", specifier = ">=2.4.9,<2.5" },
     { name = "pymysql", specifier = ">=1.1.1" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "rapidfuzz", specifier = ">=3.6.0" },
     { name = "redis", specifier = "==7.0.1" },
     { name = "sentence-transformers", specifier = ">=5.1,<6" },
+    { name = "sentence-transformers", marker = "extra == 'milvus'", specifier = ">=3.0.0" },
     { name = "setuptools", specifier = ">=70,<81" },
     { name = "sqlalchemy", specifier = "==2.0.42" },
     { name = "torch", specifier = ">=2.7", index = "https://download.pytorch.org/whl/cpu" },
@@ -1176,6 +1252,7 @@ requires-dist = [
     { name = "zai-sdk", specifier = ">=0.2.2" },
     { name = "zhipuai", specifier = ">=1.0.7" },
 ]
+provides-extras = ["milvus"]
 
 [package.metadata.requires-dev]
 dev = [

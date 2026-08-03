@@ -3,22 +3,23 @@
 本模块暴露两套 API，供不同领域按需使用：
 
 - :func:`get_milvus_client`：进程级 :class:`pymilvus.MilvusClient` 单例，
-  用于学者领域脚本（``build_scholar_milvus_index``、``align_scholar_affiliations``、
-  ``dedupe_scholar_persons``）直接调用 ``hybrid_search`` / ``upsert`` 等 SDK 方法。
+  用于扁平集合（``project`` / ``paper`` / ``scholar_person`` 等）领域脚本，
+  直接调用 ``hybrid_search`` / ``upsert`` 等 SDK 方法。
 - :class:`OrganizationMilvusStore`：机构领域的高层封装，负责集合命名、schema、
   索引、混合检索等；由 ``organization_milvus_index`` / ``organization_relation_etl``
   / ``organization_entity_alignment`` 使用。
 
-两套 API 相互独立，共用同一份 ``pymilvus`` 依赖。``pymilvus`` 是可选重量级依赖
-（携带 protobuf、grpcio 等），非必要模块不引入，通过延迟导入解决。
+两套 API 共享 :class:`MilvusSettings` 配置模型，均从 ``MILVUS_*`` 环境变量读取
+连接参数：``MILVUS_URI`` 优先，其次 ``MILVUS_HOST`` / ``MILVUS_PORT``。``pymilvus``
+是可选重量级依赖（携带 protobuf、grpcio 等），非必要模块不引入，通过延迟导入解决。
 
 环境变量
 --------
-- ``MILVUS_URI``       — 默认 ``http://127.0.0.1:19531``（本项目 docker-compose 部署端口）
+- ``MILVUS_URI``       — 例如 ``http://127.0.0.1:19531``（本项目 docker-compose 部署端口）
+- ``MILVUS_HOST`` / ``MILVUS_PORT`` — 备选，默认 ``127.0.0.1:19530``
 - ``MILVUS_TOKEN``     — 可选，认证 token（Zilliz Cloud / 部署带鉴权时使用）
 - ``MILVUS_DB_NAME``   — 默认 ``default``
 - ``MILVUS_TIMEOUT``   — 默认 30（秒）
-- ``MILVUS_HOST`` / ``MILVUS_PORT`` — 机构领域使用（走 ``connections.connect``）
 
 用法::
 
@@ -35,14 +36,10 @@ import os
 import threading
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# MilvusClient 单例（学者领域）
-# ---------------------------------------------------------------------------
-_DEFAULT_URI = "http://127.0.0.1:19531"
 _DEFAULT_DB = "default"
 _DEFAULT_TIMEOUT = 30
 
@@ -51,14 +48,81 @@ _client: Any = None
 
 
 def _load_milvus_client_cls():
-    """延迟导入 ``pymilvus.MilvusClient``。"""
-    from pymilvus import MilvusClient  # type: ignore
+    """Lazily import ``pymilvus.MilvusClient``.
+
+    pymilvus is an optional heavyweight dependency, so ordinary API imports should
+    not load it.
+    """
+    from pymilvus import MilvusClient  # type: ignore[import-not-found]
 
     return MilvusClient
 
 
+def _host_port_from_env() -> tuple[str, int]:
+    """Resolve host/port from ``MILVUS_URI`` or ``MILVUS_HOST`` / ``MILVUS_PORT``."""
+    uri = os.environ.get("MILVUS_URI")
+    if uri:
+        parsed = urlparse(uri)
+        if parsed.hostname:
+            return parsed.hostname, int(parsed.port or 19530)
+    return (
+        os.environ.get("MILVUS_HOST", "127.0.0.1"),
+        int(os.environ.get("MILVUS_PORT", "19530")),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 通用配置
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class MilvusSettings:
+    """Shared connection and organization-collection settings."""
+
+    host: str = "127.0.0.1"
+    port: int = 19530
+    alias: str = "organization_domain"
+    collection_prefix: str = "org_domain"
+    consistency_level: str = "Strong"
+    uri: str | None = None
+    token: str | None = None
+    db_name: str = _DEFAULT_DB
+    timeout: int = _DEFAULT_TIMEOUT
+
+    @property
+    def client_uri(self) -> str:
+        """Return the URI used by the high-level ``MilvusClient`` API."""
+        return self.uri or f"http://{self.host}:{self.port}"
+
+    @classmethod
+    def from_env(cls) -> MilvusSettings:
+        host, port = _host_port_from_env()
+        return cls(
+            host=host,
+            port=port,
+            alias=os.environ.get("ORG_MILVUS_CONNECTION_ALIAS", "organization_domain"),
+            collection_prefix=os.environ.get("ORG_MILVUS_COLLECTION_PREFIX", "org_domain"),
+            consistency_level=os.environ.get("ORG_MILVUS_CONSISTENCY", "Strong"),
+            uri=os.environ.get("MILVUS_URI") or None,
+            token=os.environ.get("MILVUS_TOKEN") or None,
+            db_name=os.environ.get("MILVUS_DB_NAME", _DEFAULT_DB),
+            timeout=int(os.environ.get("MILVUS_TIMEOUT", str(_DEFAULT_TIMEOUT))),
+        )
+
+
+@dataclass(frozen=True)
+class MilvusSearchHit:
+    """One normalized Milvus hybrid-search result."""
+
+    vid: str
+    score: float
+    fields: dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# MilvusClient 单例（扁平集合领域：project / paper / scholar_person）
+# ---------------------------------------------------------------------------
 def get_milvus_client() -> Any:
-    """返回进程共享的 :class:`pymilvus.MilvusClient` 实例。"""
+    """Return a process-shared ``MilvusClient`` using ``MilvusSettings``."""
     global _client
     if _client is not None:
         return _client
@@ -66,20 +130,25 @@ def get_milvus_client() -> Any:
         if _client is not None:
             return _client
         MilvusClient = _load_milvus_client_cls()
-        uri = os.environ.get("MILVUS_URI", _DEFAULT_URI)
-        token = os.environ.get("MILVUS_TOKEN") or None
-        db_name = os.environ.get("MILVUS_DB_NAME", _DEFAULT_DB)
-        timeout = int(os.environ.get("MILVUS_TIMEOUT", _DEFAULT_TIMEOUT))
-        logger.info("Connecting to Milvus uri=%s db=%s", uri, db_name)
-        kwargs: dict[str, Any] = {"uri": uri, "db_name": db_name, "timeout": timeout}
-        if token:
-            kwargs["token"] = token
+        settings = MilvusSettings.from_env()
+        logger.info(
+            "Connecting to Milvus uri=%s db=%s",
+            settings.client_uri,
+            settings.db_name,
+        )
+        kwargs: dict[str, Any] = {
+            "uri": settings.client_uri,
+            "db_name": settings.db_name,
+            "timeout": settings.timeout,
+        }
+        if settings.token:
+            kwargs["token"] = settings.token
         _client = MilvusClient(**kwargs)
     return _client
 
 
 def reset_milvus_client() -> None:
-    """测试用：释放单例（下次调用重新建连接）。"""
+    """Test helper: drop the ``MilvusClient`` singleton."""
     global _client
     with _client_lock:
         if _client is not None:
@@ -93,36 +162,6 @@ def reset_milvus_client() -> None:
 # ---------------------------------------------------------------------------
 # 机构领域 Milvus 存储（OrganizationMilvusStore）
 # ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class MilvusSettings:
-    """Connection and collection settings for organization-domain indexes."""
-
-    host: str = "127.0.0.1"
-    port: int = 19530
-    alias: str = "organization_domain"
-    collection_prefix: str = "org_domain"
-    consistency_level: str = "Strong"
-
-    @classmethod
-    def from_env(cls) -> MilvusSettings:
-        return cls(
-            host=os.environ.get("MILVUS_HOST", "127.0.0.1"),
-            port=int(os.environ.get("MILVUS_PORT", "19530")),
-            alias=os.environ.get("ORG_MILVUS_CONNECTION_ALIAS", "organization_domain"),
-            collection_prefix=os.environ.get("ORG_MILVUS_COLLECTION_PREFIX", "org_domain"),
-            consistency_level=os.environ.get("ORG_MILVUS_CONSISTENCY", "Strong"),
-        )
-
-
-@dataclass(frozen=True)
-class MilvusSearchHit:
-    """One normalized Milvus hybrid-search result."""
-
-    vid: str
-    score: float
-    fields: dict[str, Any]
-
-
 class OrganizationMilvusStore:
     """Create, populate and query per-entity organization-domain collections."""
 

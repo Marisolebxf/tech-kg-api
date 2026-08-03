@@ -16,6 +16,16 @@ services:
       SCHEMA_S3_SECURE: ${SCHEMA_S3_SECURE:-false}
       SCHEMA_SCRIPT_MAX_BYTES: ${SCHEMA_SCRIPT_MAX_BYTES:-10485760}
       SCHEMA_ADMIN_USER_IDS: ${SCHEMA_ADMIN_USER_IDS:-schema-admin}
+      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-gkx_element}
+      TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://trs-graph-service:8090}
+      TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+    networks:
+      - app
+      - engine
+      - graph
     volumes:
       - .:/app
     command: uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
@@ -41,7 +51,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    networks:
+      - app
     restart: unless-stopped
 
 volumes:
   schema-minio-data:
+
+networks:
+  app:
+  engine:
+    external: true
+    name: tech-kg-engine_default
+  graph:
+    external: true
+    name: trs-graph-service_default

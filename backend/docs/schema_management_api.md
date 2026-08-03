@@ -74,4 +74,4 @@
 
 运行 `uv run python script/init_schema_management.py` 可建表并初始化页面所需的 14 类实体、44 类事实关系和 9 类推理关系。初始化逻辑可重复运行，并会补齐新增字段、同步系统目录且保留已上传脚本。Docker Compose 默认设置 `SCHEMA_AUTO_INIT=true`，API 容器启动时会自动执行同一初始化逻辑。
 
-脚本对象使用 boto3 标准 S3 客户端保存到独立 MinIO 服务，不使用 MinIO Python 客户端。MinIO API 默认暴露在宿主机 `9020`，控制台为 `9021`。
+脚本对象使用 boto3 标准 S3 客户端保存到独立 MinIO 服务，不使用 MinIO Python 客户端。根目录 Compose 为避免与算子 RustFS 冲突，默认将 MinIO API 暴露在宿主机 `9030`，控制台为 `9031`；使用 `backend/docker-compose.yml` 单独启动后端时仍为 `9020` 和 `9021`。

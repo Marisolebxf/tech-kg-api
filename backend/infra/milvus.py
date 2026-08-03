@@ -4,6 +4,11 @@
 - ``get_milvus_client`` — process-level ``MilvusClient`` for flat collections
   (``project`` / ``paper`` / …), same style as scholar/paper feature branches.
 
+Connection settings are read from ``MILVUS_*`` environment variables. ``MILVUS_URI``
+takes precedence; ``MILVUS_HOST`` and ``MILVUS_PORT`` are also supported. Both client
+APIs consume the same ``MilvusSettings`` configuration model and default to
+``http://127.0.0.1:19530``.
+
 ``pymilvus`` is imported lazily so ordinary API processes do not connect on import.
 """
 
@@ -25,6 +30,17 @@ _client_lock = threading.Lock()
 _client: Any = None
 
 
+def _load_milvus_client_cls():
+    """Lazily import ``pymilvus.MilvusClient``.
+
+    pymilvus is an optional heavyweight dependency, so ordinary API imports should
+    not load it.
+    """
+    from pymilvus import MilvusClient  # type: ignore[import-not-found]
+
+    return MilvusClient
+
+
 def _host_port_from_env() -> tuple[str, int]:
     """Resolve host/port from ``MILVUS_URI`` or ``MILVUS_HOST`` / ``MILVUS_PORT``."""
     uri = os.environ.get("MILVUS_URI")
@@ -40,13 +56,22 @@ def _host_port_from_env() -> tuple[str, int]:
 
 @dataclass(frozen=True)
 class MilvusSettings:
-    """Connection and collection settings for organization-domain indexes."""
+    """Shared connection and organization-collection settings."""
 
     host: str = "127.0.0.1"
     port: int = 19530
     alias: str = "organization_domain"
     collection_prefix: str = "org_domain"
     consistency_level: str = "Strong"
+    uri: str | None = None
+    token: str | None = None
+    db_name: str = _DEFAULT_DB
+    timeout: int = _DEFAULT_TIMEOUT
+
+    @property
+    def client_uri(self) -> str:
+        """Return the URI used by the high-level ``MilvusClient`` API."""
+        return self.uri or f"http://{self.host}:{self.port}"
 
     @classmethod
     def from_env(cls) -> MilvusSettings:
@@ -57,6 +82,10 @@ class MilvusSettings:
             alias=os.environ.get("ORG_MILVUS_CONNECTION_ALIAS", "organization_domain"),
             collection_prefix=os.environ.get("ORG_MILVUS_COLLECTION_PREFIX", "org_domain"),
             consistency_level=os.environ.get("ORG_MILVUS_CONSISTENCY", "Strong"),
+            uri=os.environ.get("MILVUS_URI") or None,
+            token=os.environ.get("MILVUS_TOKEN") or None,
+            db_name=os.environ.get("MILVUS_DB_NAME", _DEFAULT_DB),
+            timeout=int(os.environ.get("MILVUS_TIMEOUT", str(_DEFAULT_TIMEOUT))),
         )
 
 
@@ -365,24 +394,27 @@ class OrganizationMilvusStore:
 
 
 def get_milvus_client() -> Any:
-    """Return a process-shared ``pymilvus.MilvusClient`` (Project / paper-style scripts)."""
+    """Return a process-shared ``MilvusClient`` using ``MilvusSettings``."""
     global _client
     if _client is not None:
         return _client
     with _client_lock:
         if _client is not None:
             return _client
-        from pymilvus import MilvusClient  # type: ignore[import-not-found]
-
-        host, port = _host_port_from_env()
-        uri = os.environ.get("MILVUS_URI") or f"http://{host}:{port}"
-        token = os.environ.get("MILVUS_TOKEN") or None
-        db_name = os.environ.get("MILVUS_DB_NAME", _DEFAULT_DB)
-        timeout = int(os.environ.get("MILVUS_TIMEOUT", str(_DEFAULT_TIMEOUT)))
-        logger.info("Connecting to Milvus uri=%s db=%s", uri, db_name)
-        kwargs: dict[str, Any] = {"uri": uri, "db_name": db_name, "timeout": timeout}
-        if token:
-            kwargs["token"] = token
+        MilvusClient = _load_milvus_client_cls()
+        settings = MilvusSettings.from_env()
+        logger.info(
+            "Connecting to Milvus uri=%s db=%s",
+            settings.client_uri,
+            settings.db_name,
+        )
+        kwargs: dict[str, Any] = {
+            "uri": settings.client_uri,
+            "db_name": settings.db_name,
+            "timeout": settings.timeout,
+        }
+        if settings.token:
+            kwargs["token"] = settings.token
         _client = MilvusClient(**kwargs)
     return _client
 

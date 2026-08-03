@@ -77,7 +77,7 @@ class TestSettings:
             monkeypatch.delenv(k, raising=False)
         s = TRSGraphSettings.from_env()
         assert s.base_url == "http://localhost:8090"
-        assert s.space == "entity_binding_demo"
+        assert s.space == "dev"
         assert s.api_key is None
         assert s.timeout == 30
 

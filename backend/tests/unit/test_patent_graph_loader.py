@@ -66,7 +66,7 @@ def test_patent_preserves_raw_identifiers_and_only_maps_source_properties():
 def test_keyword_vertices_are_normalized_deduplicated_and_linked():
     row = patent_row()
     assert keyword_values(row["keywords"]) == ["知识图谱", "AI"]
-    vertex_ngql, edge_ngql = keyword_statements([row])
+    vertex_ngql, edge_ngql = keyword_statements([row], "BATCH", datetime(2026, 7, 23, 10, 0))
     assert vertex_ngql.count("keyword_") == 2
     assert "INSERT VERTEX Keyword(keyword)" in vertex_ngql
     assert "INSERT EDGE HAS_KEYWORD(confidence,source_table,source_record_id)" in edge_ngql

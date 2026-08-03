@@ -14,7 +14,7 @@ class TRSGraphSettings(BaseModel):
     """Connection settings for trs-graph-service."""
 
     base_url: str = "http://localhost:8090"
-    space: str = "entity_binding_demo"
+    space: str = "dev"
     api_key: str | None = None
     timeout: int = 30
 
@@ -27,7 +27,7 @@ class TRSGraphSettings(BaseModel):
 
         return cls(
             base_url=env("BASE_URL") or "http://localhost:8090",
-            space=env("SPACE") or "entity_binding_demo",
+            space=env("SPACE") or "dev",
             api_key=env("API_KEY") or None,
             timeout=int(env("TIMEOUT") or 30),
         )

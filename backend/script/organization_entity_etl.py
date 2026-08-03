@@ -1,8 +1,10 @@
-"""Load Organization and DataSource vertices from gkx_element into TRSGraph ``dev``.
+"""Load organization-domain business vertices from gkx_element into TRSGraph ``dev``.
 
-This is the only organization-domain vertex loader.  It never creates graph
-edges or overwrites an existing VID.  Organization relations are owned exclusively by
-``script.organization_relation_etl``.
+This is the only organization-domain vertex loader.  It creates real
+Organization, Person, News, Event, Project, Product and DataSource vertices,
+but never creates graph edges.  Existing non-empty canonical properties are
+preserved; source payloads are merged into ``extra_json`` for auditability.
+Organization relations are owned exclusively by ``script.organization_relation_etl``.
 
 Examples:
 
@@ -14,6 +16,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 from collections import defaultdict
@@ -29,18 +32,24 @@ from infra.gkx_element import gkx_element_read_session
 from infra.graph_db import TRSGraphClient, get_trs_graph_client
 from script.organization_etl_common import (
     DEFAULT_SPACE,
-    RELATION_SPECS,
+    DOMAIN_TABLE_SPECS,
     SCHEMA_PATH,
+    DomainTableSpec,
     RelationDataError,
     bounded_json,
     chunks,
     clean_text,
     datasource_vid,
+    event_vid,
     exclusive_etl_lock,
+    news_vid,
     ngql_identifier,
     ngql_literal,
     node_provenance,
     organization_vid,
+    person_vid,
+    product_vid,
+    project_vid,
     stable_record_id,
     to_float,
     to_int,
@@ -50,92 +59,148 @@ logger = logging.getLogger("script.organization_entity_etl")
 
 DEFAULT_BATCH_SIZE = 100
 
-ORGANIZATION_PROPERTIES: tuple[str, ...] = (
-    "org_id",
-    "name_cn",
-    "name_en",
-    "external_id",
-    "province",
-    "city",
-    "area",
-    "country_code",
-    "country",
-    "address",
-    "postal_code",
-    "phone",
-    "email",
-    "legal_rep",
-    "org_type",
-    "org_size",
-    "founded_year",
-    "listing_status",
-    "listed_date",
-    "registered_capital",
-    "capital_currency",
-    "industry_class",
-    "stock_code",
-    "stock_noun",
-    "stock_type",
-    "org_kind",
-    "description",
-    "main_products",
-    "extra_json",
-    "source_system",
-    "source_table",
-    "source_record_id",
-    "source_url",
-    "ingest_batch",
-    "ingest_time",
-    "source_update_time",
-)
-ORGANIZATION_NUMERIC_PROPERTIES = frozenset({"founded_year", "registered_capital"})
-DATASOURCE_PROPERTIES: tuple[str, ...] = ("source_table", "table_cn_name", "tier", "library")
-
-
-@dataclass(frozen=True)
-class EntityTableSpec:
-    """One source table that can update an Organization vertex."""
-
-    name: str
-    cn_name: str
-    org_kind: str
-    mode: str = "base"
-
-
-ENTITY_TABLE_SPECS: tuple[EntityTableSpec, ...] = (
-    EntityTableSpec("dwd_org_base_info", "机构基本信息", "domestic_organization"),
-    EntityTableSpec("dwd_org_heis_info", "高校基本信息", "domestic_university"),
-    EntityTableSpec(
-        "dwd_research_institute_base_info",
-        "科研机构基本信息",
-        "domestic_research_institute",
+TAG_PROPERTIES: dict[str, tuple[str, ...]] = {
+    "Organization": (
+        "org_id",
+        "name_cn",
+        "name_en",
+        "external_id",
+        "province",
+        "city",
+        "area",
+        "country_code",
+        "country",
+        "address",
+        "postal_code",
+        "phone",
+        "email",
+        "legal_rep",
+        "org_type",
+        "org_size",
+        "founded_year",
+        "listing_status",
+        "listed_date",
+        "registered_capital",
+        "capital_currency",
+        "industry_class",
+        "stock_code",
+        "stock_noun",
+        "stock_type",
+        "org_kind",
+        "description",
+        "main_products",
+        "extra_json",
+        "source_system",
+        "source_table",
+        "source_record_id",
+        "source_url",
+        "ingest_batch",
+        "ingest_time",
+        "source_update_time",
     ),
-    EntityTableSpec("dwd_special_hongkong_company", "香港企业", "hong_kong_company"),
-    EntityTableSpec("dwd_special_taiwan_company", "台湾企业", "taiwan_company"),
-    EntityTableSpec("dwd_special_aomen_company", "澳门企业", "macao_company"),
-    EntityTableSpec("dwd_forg_base_info", "海外机构基本信息", "foreign_organization"),
-    EntityTableSpec(
-        "dwd_org_org_product_info",
-        "国内机构经营信息",
-        "domestic_organization",
-        "enrichment",
+    "Person": (
+        "name_cn",
+        "name_en",
+        "person_kind",
+        "country_code",
+        "country",
+        "birth_date",
+        "gender",
+        "biography",
+        "extra_json",
+        "source_system",
+        "source_table",
+        "source_record_id",
+        "source_url",
+        "ingest_batch",
+        "ingest_time",
+        "source_update_time",
     ),
-    EntityTableSpec(
-        "dwd_org_stock_base",
-        "上市企业基本信息",
-        "domestic_organization",
-        "enrichment",
+    "News": (
+        "title",
+        "content",
+        "release_date",
+        "original_url",
+        "extra_json",
+        "source_system",
+        "source_table",
+        "source_record_id",
+        "source_url",
+        "ingest_batch",
+        "ingest_time",
+        "source_update_time",
     ),
-    EntityTableSpec(
-        "dwd_forg_product_info",
-        "海外机构经营信息",
-        "foreign_organization",
-        "enrichment",
+    "Event": (
+        "event_type",
+        "raw_id",
+        "title",
+        "content",
+        "case_no",
+        "case_cause",
+        "occur_date",
+        "amount",
+        "currency",
+        "extra_json",
+        "source_system",
+        "source_table",
+        "source_record_id",
+        "source_url",
+        "ingest_batch",
+        "ingest_time",
+        "source_update_time",
     ),
+    "Project": (
+        "project_number",
+        "title",
+        "project_source",
+        "project_level",
+        "funded_amount",
+        "discipline",
+        "discipline_code",
+        "fund_category",
+        "funded_region",
+        "approval_year",
+        "approval_time",
+        "research_period",
+        "abstract",
+        "final_report_abstract",
+        "project_page_url",
+        "extra_json",
+        "source_system",
+        "source_table",
+        "source_record_id",
+        "source_url",
+        "ingest_batch",
+        "ingest_time",
+        "source_update_time",
+    ),
+    "Product": (
+        "name",
+        "category",
+        "description",
+        "extra_json",
+        "source_system",
+        "source_table",
+        "source_record_id",
+        "source_url",
+        "ingest_batch",
+        "ingest_time",
+        "source_update_time",
+    ),
+    "DataSource": ("source_table", "table_cn_name", "tier", "library"),
+}
+TAG_NUMERIC_PROPERTIES: dict[str, frozenset[str]] = {
+    "Organization": frozenset({"founded_year", "registered_capital"}),
+    "Event": frozenset({"amount"}),
+    "Project": frozenset({"funded_amount"}),
+}
+
+ENTITY_TABLE_SPECS: tuple[DomainTableSpec, ...] = tuple(
+    spec for spec in DOMAIN_TABLE_SPECS if spec.entity_tag is not None
 )
 ENTITY_TABLE_BY_NAME = {spec.name: spec for spec in ENTITY_TABLE_SPECS}
 
-TABLE_CN_NAMES: dict[str, str] = {spec.name: spec.cn_name for spec in ENTITY_TABLE_SPECS}
+TABLE_CN_NAMES: dict[str, str] = {spec.name: spec.cn_name for spec in DOMAIN_TABLE_SPECS}
 TABLE_CN_NAMES.update(
     {
         "dwd_org_shareholder_info": "国内机构股东信息",
@@ -147,8 +212,6 @@ TABLE_CN_NAMES.update(
         "dwd_org_invest_info": "投资事件",
         "dwd_org_merger_acquisition_info": "并购事件",
         "dwd_forg_subsidiary_info": "海外机构子公司",
-        "dwd_zh_project": "国内项目",
-        "dwd_en_project": "国外项目",
         "dwd_org_important_news_info": "重点资讯",
         "dwd_org_annual_financial_info": "年报财务信息",
         "dwd_org_stock_finance_info": "上市企业财务信息",
@@ -169,12 +232,9 @@ TABLE_CN_NAMES.update(
         "dwd_bid_win_candidate_out": "中标候选人",
         "dwd_bid_purchase_agency_out": "采购代理",
         "dwd_bid_target_item_out": "招投标标的物",
-        "dwd_industry_chain_node_org": "产业链机构",
-        "dwd_industry_chain_antitypic_org": "产业链典型机构",
     }
 )
-for _relation_spec in RELATION_SPECS:
-    TABLE_CN_NAMES.setdefault(_relation_spec.source_table, _relation_spec.source_table)
+assert len(TABLE_CN_NAMES) == 39
 
 
 @dataclass(frozen=True)
@@ -189,6 +249,7 @@ class EntityStats:
     queried: int = 0
     valid: int = 0
     written: int = 0
+    updated: int = 0
     skipped: int = 0
     existing: int = 0
     invalid: int = 0
@@ -205,8 +266,20 @@ def first_value(row: Mapping[str, Any], *names: str) -> Any:
     return None
 
 
+def organization_kind(table: str) -> str:
+    return {
+        "dwd_org_heis_info": "domestic_university",
+        "dwd_research_institute_base_info": "domestic_research_institute",
+        "dwd_special_hongkong_company": "hong_kong_company",
+        "dwd_special_taiwan_company": "taiwan_company",
+        "dwd_special_aomen_company": "macao_company",
+        "dwd_forg_base_info": "foreign_organization",
+        "dwd_forg_product_info": "foreign_organization",
+    }.get(table, "domestic_organization")
+
+
 def organization_properties(
-    spec: EntityTableSpec,
+    spec: DomainTableSpec,
     row: Mapping[str, Any],
     record_id: str,
     ingest_batch: str,
@@ -271,7 +344,7 @@ def organization_properties(
         "stock_code": clean_text(row.get("stock_code")),
         "stock_noun": clean_text(row.get("stock_noun")),
         "stock_type": clean_text(row.get("stock_type")),
-        "org_kind": spec.org_kind,
+        "org_kind": organization_kind(spec.name),
         "description": clean_text(
             first_value(row, "description", "main_activities", "business_scope")
         ),
@@ -279,22 +352,285 @@ def organization_properties(
         "extra_json": bounded_json(dict(row)),
         **node_provenance(spec.name, record_id, row, ingest_batch, ingest_time),
     }
-    if spec.mode == "enrichment":
+    if spec.entity_kind == "organization_enrichment":
         # Enrichment rows update only fields they actually carry.  This prevents
         # a sparse product/stock row from replacing base attributes with NULL.
         return {name: value for name, value in values.items() if value is not None}
     return values
 
 
+def person_record(
+    spec: DomainTableSpec,
+    row: Mapping[str, Any],
+    record_id: str,
+    ingest_batch: str,
+    ingest_time: str,
+) -> VertexRecord | None:
+    name = clean_text(first_value(row, "executives_name", "bo_name", "entity_name", "owners_name"))
+    if name is None:
+        raise RelationDataError("missing person name")
+    if spec.entity_kind == "shareholder":
+        owner_type = (clean_text(row.get("owners_type")) or "").casefold()
+        organization_types = {"organization", "company", "enterprise", "机构", "企业", "公司"}
+        person_types = {"person", "individual", "natural person", "自然人", "个人"}
+        if clean_text(row.get("inv_org_id")) is not None or owner_type in organization_types:
+            return None
+        if owner_type not in person_types:
+            raise RelationDataError("shareholder endpoint type does not identify a Person")
+    if spec.entity_kind == "actual_controller":
+        entity_type = (clean_text(row.get("entity_type")) or "").casefold()
+        person_types = {"person", "individual", "natural person", "自然人", "个人"}
+        organization_types = {"organization", "company", "enterprise", "机构", "企业", "公司"}
+        if entity_type in organization_types:
+            return None
+        if entity_type not in person_types:
+            raise RelationDataError("actual controller entity_type does not identify a Person")
+    birth_date = clean_text(first_value(row, "dm_birthdate", "bo_birthdate", "birth_date"))
+    country = clean_text(first_value(row, "dm_nationalities", "bo_country_code", "country_code"))
+    target_identity = first_value(row, "org_id", "external_id")
+    vid = person_vid(spec.entity_kind, target_identity, name, birth_date, country)
+    properties = {
+        "name_cn": name,
+        "name_en": name if spec.scope == "foreign" else None,
+        "person_kind": spec.entity_kind,
+        "country_code": clean_text(first_value(row, "bo_country_code", "country_code")),
+        "country": clean_text(first_value(row, "dm_nationalities", "country")),
+        "birth_date": birth_date,
+        "gender": clean_text(first_value(row, "bo_gender", "gender")),
+        "biography": clean_text(row.get("dm_biography")),
+        "extra_json": bounded_json(dict(row)),
+        **node_provenance(spec.name, record_id, row, ingest_batch, ingest_time),
+    }
+    return VertexRecord("Person", vid, properties)
+
+
+def event_properties(
+    spec: DomainTableSpec,
+    row: Mapping[str, Any],
+    record_id: str,
+    ingest_batch: str,
+    ingest_time: str,
+) -> dict[str, Any]:
+    title = first_value(
+        row,
+        "title",
+        "project_name",
+        "case_title",
+        "job_title",
+        "funding_round",
+        "update_name",
+        "abn_reason",
+        "violation_type",
+        "category",
+        "case_type",
+        "target_item_name",
+        "bid_item_name",
+    )
+    content = first_value(
+        row,
+        "content",
+        "project_content",
+        "service_content",
+        "job_description",
+        "penalty_content",
+        "violation_fact",
+        "illegal_fact",
+        "legal_obligation",
+        "update_content",
+        "dishonest_behavior",
+        "exec_target",
+    )
+    occur_date = first_value(
+        row,
+        "publish_time",
+        "public_date",
+        "publish_date",
+        "penalty_date",
+        "procedure_date",
+        "completion_date",
+        "release_date",
+        "update_date",
+        "abn_date",
+        "filing_date",
+        "occur_period",
+        "year",
+    )
+    amount = first_value(
+        row,
+        "amount",
+        "funding_amount",
+        "fine_amount",
+        "exec_target",
+        "total_amount",
+        "project_budget_amount",
+        "total_assets",
+        "unit_price_amount",
+    )
+    return {
+        "event_type": spec.entity_kind,
+        "raw_id": record_id,
+        "title": clean_text(title) or spec.cn_name,
+        "content": clean_text(content) or bounded_json(dict(row)),
+        "case_no": clean_text(
+            first_value(row, "case_no", "reg_no", "decision_no", "project_number")
+        ),
+        "case_cause": clean_text(first_value(row, "case_cause", "case_type", "case_type_tag")),
+        "occur_date": clean_text(occur_date),
+        "amount": to_float(amount),
+        "currency": clean_text(
+            first_value(
+                row,
+                "currency",
+                "currency_code",
+                "funding_currency_code",
+                "amount_unit",
+                "total_amount_unit",
+                "project_budget_amount_unit",
+            )
+        ),
+        "extra_json": bounded_json(dict(row)),
+        **node_provenance(spec.name, record_id, row, ingest_batch, ingest_time),
+    }
+
+
+def project_properties(
+    spec: DomainTableSpec,
+    row: Mapping[str, Any],
+    record_id: str,
+    ingest_batch: str,
+    ingest_time: str,
+) -> dict[str, Any]:
+    project_id = clean_text(row.get("id"))
+    if project_id is None:
+        raise RelationDataError("missing project id")
+    return {
+        "project_number": clean_text(row.get("project_number")),
+        "title": clean_text(row.get("title")),
+        "project_source": clean_text(row.get("project_source")),
+        "project_level": clean_text(row.get("project_level")),
+        "funded_amount": to_float(row.get("funded_amount")),
+        "discipline": clean_text(row.get("discipline")),
+        "discipline_code": clean_text(row.get("discipline_code")),
+        "fund_category": clean_text(row.get("fund_category")),
+        "funded_region": clean_text(row.get("funded_province")),
+        # The shared dev ontology defines Project.approval_year as string.
+        "approval_year": clean_text(row.get("approval_year")),
+        "approval_time": clean_text(row.get("approval_time")),
+        "research_period": clean_text(row.get("research_period")),
+        "abstract": clean_text(row.get("abstract")),
+        "final_report_abstract": clean_text(row.get("final_report_abstract")),
+        "project_page_url": clean_text(row.get("project_page_url")),
+        "extra_json": bounded_json(dict(row)),
+        **node_provenance(spec.name, record_id, row, ingest_batch, ingest_time),
+    }
+
+
+def product_record(
+    spec: DomainTableSpec,
+    row: Mapping[str, Any],
+    record_id: str,
+    ingest_batch: str,
+    ingest_time: str,
+) -> VertexRecord | None:
+    name = clean_text(first_value(row, "main_prod", "main_products", "tech_product"))
+    if name is None:
+        return None
+    properties = {
+        "name": name,
+        "category": clean_text(first_value(row, "target_item_type", "industry_class")),
+        "description": clean_text(first_value(row, "description", "main_activities")),
+        "extra_json": bounded_json(dict(row)),
+        **node_provenance(spec.name, record_id, row, ingest_batch, ingest_time),
+    }
+    return VertexRecord("Product", product_vid(name), properties)
+
+
+def vertices_from_row(
+    spec: DomainTableSpec,
+    row: Mapping[str, Any],
+    ingest_batch: str,
+    ingest_time: str,
+) -> list[VertexRecord]:
+    preferred = spec.raw_id_fields
+    if spec.entity_tag == "Organization" and not preferred:
+        preferred = ("org_id",)
+    record_id = stable_record_id(spec.name, row, preferred)
+    if spec.entity_tag == "Organization":
+        properties = organization_properties(spec, row, record_id, ingest_batch, ingest_time)
+        records = [VertexRecord("Organization", organization_vid(properties["org_id"]), properties)]
+        legal_name = clean_text(first_value(row, "lerep", "legal_person"))
+        if legal_name is not None:
+            legal_record_id = f"{record_id}|legal_representative|{legal_name}"
+            records.append(
+                VertexRecord(
+                    "Person",
+                    person_vid(
+                        "legal_representative",
+                        properties["org_id"],
+                        legal_name,
+                    ),
+                    {
+                        "name_cn": legal_name,
+                        "person_kind": "legal_representative",
+                        "extra_json": bounded_json(dict(row)),
+                        **node_provenance(
+                            spec.name,
+                            legal_record_id,
+                            row,
+                            ingest_batch,
+                            ingest_time,
+                        ),
+                    },
+                )
+            )
+        product = product_record(spec, row, record_id, ingest_batch, ingest_time)
+        if product is not None:
+            records.append(product)
+        return records
+    if spec.entity_tag == "Person":
+        person = person_record(spec, row, record_id, ingest_batch, ingest_time)
+        return [] if person is None else [person]
+    if spec.entity_tag == "News":
+        properties = {
+            "title": clean_text(row.get("news_title")),
+            "content": clean_text(row.get("news_content")),
+            "release_date": clean_text(row.get("news_date")),
+            "original_url": clean_text(row.get("original_textlink")),
+            "extra_json": bounded_json(dict(row)),
+            **node_provenance(spec.name, record_id, row, ingest_batch, ingest_time),
+        }
+        return [
+            VertexRecord(
+                "News",
+                news_vid(f"{spec.name}_{record_id}"),
+                properties,
+            )
+        ]
+    if spec.entity_tag == "Event":
+        return [
+            VertexRecord(
+                "Event",
+                event_vid(spec.name, record_id),
+                event_properties(spec, row, record_id, ingest_batch, ingest_time),
+            )
+        ]
+    if spec.entity_tag == "Project":
+        properties = project_properties(spec, row, record_id, ingest_batch, ingest_time)
+        return [VertexRecord("Project", project_vid(row.get("id")), properties)]
+    raise ValueError(f"unsupported entity tag: {spec.entity_tag}")
+
+
 def vertex_from_row(
-    spec: EntityTableSpec,
+    spec: DomainTableSpec,
     row: Mapping[str, Any],
     ingest_batch: str,
     ingest_time: str,
 ) -> VertexRecord:
-    record_id = stable_record_id(spec.name, row, ("org_id",))
-    properties = organization_properties(spec, row, record_id, ingest_batch, ingest_time)
-    return VertexRecord("Organization", organization_vid(properties["org_id"]), properties)
+    """Compatibility helper for callers that expect exactly one vertex."""
+    records = vertices_from_row(spec, row, ingest_batch, ingest_time)
+    if len(records) != 1:
+        raise RelationDataError(f"source row produced {len(records)} vertices")
+    return records[0]
 
 
 def datasource_records() -> list[VertexRecord]:
@@ -324,14 +660,14 @@ def render_vertex_insert(records: Sequence[VertexRecord]) -> str:
     tag = records[0].tag
     if any(record.tag != tag for record in records):
         raise ValueError("one INSERT VERTEX batch must contain one tag")
-    allowed = ORGANIZATION_PROPERTIES if tag == "Organization" else DATASOURCE_PROPERTIES
+    allowed = TAG_PROPERTIES[tag]
     properties = tuple(name for name in allowed if name in records[0].properties)
     if any(
         tuple(name for name in allowed if name in record.properties) != properties
         for record in records
     ):
         raise ValueError("one INSERT VERTEX batch must have one property signature")
-    numeric = ORGANIZATION_NUMERIC_PROPERTIES if tag == "Organization" else frozenset()
+    numeric = TAG_NUMERIC_PROPERTIES.get(tag, frozenset())
     prop_clause = ",".join(ngql_identifier(name) for name in properties)
     values: list[str] = []
     for record in records:
@@ -353,7 +689,7 @@ def source_columns(session: Session, table: str) -> set[str]:
 
 def iter_source_rows(
     session: Session,
-    spec: EntityTableSpec,
+    spec: DomainTableSpec,
     *,
     max_records: int | None,
 ) -> Iterator[dict[str, Any]]:
@@ -378,10 +714,44 @@ def split_schema_statements(source: str) -> list[str]:
     ]
 
 
+def schema_fields(graph: TRSGraphClient, kind: str, name: str) -> set[str]:
+    result = graph.execute_read(f"DESCRIBE {kind} {ngql_identifier(name)};")
+    fields: set[str] = set()
+    for record in result.records:
+        for key in ("Field", "field", "Property", "property"):
+            value = clean_text(record.get(key))
+            if value is not None:
+                fields.add(value)
+                break
+    return fields
+
+
+def reconcile_existing_schema(graph: TRSGraphClient) -> None:
+    """Add properties that CREATE IF NOT EXISTS cannot add to an existing schema."""
+    additions: tuple[tuple[str, str, str, str], ...] = (
+        ("TAG", "Project", "extra_json", "string NULL"),
+        ("EDGE", "PARTICIPATES_IN", "extra_json", "string NULL"),
+        ("EDGE", "FUNDED_BY", "extra_json", "string NULL"),
+    )
+    for kind, name, field_name, field_type in additions:
+        if field_name in schema_fields(graph, kind, name):
+            continue
+        statement = (
+            f"ALTER {kind} {ngql_identifier(name)} "
+            f"ADD ({ngql_identifier(field_name)} {field_type});"
+        )
+        graph.execute_write(statement)
+
+
 def initialize_schema(graph: TRSGraphClient | None = None) -> None:
     client = graph or get_trs_graph_client()
     for statement in split_schema_statements(SCHEMA_PATH.read_text(encoding="utf-8")):
+        if statement.upper().startswith("USE "):
+            # TRSGraphClient is already bound to TRS_GRAPH_SPACE.  The graph
+            # service rejects a standalone USE statement on the write endpoint.
+            continue
         client.execute_write(statement)
+    reconcile_existing_schema(client)
 
 
 def existing_vids(
@@ -401,6 +771,84 @@ def existing_vids(
     }
 
 
+def existing_vertex_properties(
+    graph: TRSGraphClient,
+    tag: str,
+    vids: Sequence[str],
+) -> dict[str, dict[str, Any]]:
+    if not vids:
+        return {}
+    values = ",".join(ngql_literal(vid) for vid in sorted(set(vids)))
+    query = (
+        f"MATCH (v:{ngql_identifier(tag)}) WHERE id(v) IN [{values}] "
+        "RETURN id(v) AS vid,properties(v) AS props;"
+    )
+    result: dict[str, dict[str, Any]] = {}
+    for record in graph.execute_read(query).records:
+        vid = clean_text(record.get("vid"))
+        props = record.get("props")
+        if vid is not None:
+            result[vid] = dict(props) if isinstance(props, Mapping) else {}
+    return result
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    raw = clean_text(value)
+    if raw is None:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {"legacy_text": raw}
+    return dict(parsed) if isinstance(parsed, Mapping) else {"legacy_value": parsed}
+
+
+def merge_existing_properties(
+    existing: Mapping[str, Any],
+    incoming: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Preserve existing canonical values and merge every source row into extra_json."""
+    updates: dict[str, Any] = {}
+    for name, value in incoming.items():
+        if name == "extra_json" or value is None:
+            continue
+        current = existing.get(name)
+        if current is None or (isinstance(current, str) and not current.strip()):
+            updates[name] = value
+
+    incoming_payload = _json_object(incoming.get("extra_json"))
+    if incoming_payload:
+        existing_payload = _json_object(existing.get("extra_json"))
+        if "source_records" in existing_payload and isinstance(
+            existing_payload["source_records"], Mapping
+        ):
+            source_records = dict(existing_payload["source_records"])
+            envelope = {
+                key: value for key, value in existing_payload.items() if key != "source_records"
+            }
+        else:
+            source_records = {}
+            envelope = {}
+            # A previous bounded audit summary is superseded once the complete
+            # source row can be stored under the larger extra_json limit.
+            if existing_payload and existing_payload.get("truncated") is not True:
+                envelope["existing_payload"] = existing_payload
+        source_key = ":".join(
+            (
+                clean_text(incoming.get("source_table")) or "unknown_table",
+                clean_text(incoming.get("source_record_id")) or "unknown_record",
+            )
+        )
+        source_records[source_key] = incoming_payload
+        envelope["source_records"] = source_records
+        merged_extra = bounded_json(envelope)
+        if merged_extra != clean_text(existing.get("extra_json")):
+            updates["extra_json"] = merged_extra
+    return updates
+
+
 def _write_vertex_batches(
     records: Sequence[VertexRecord],
     *,
@@ -409,9 +857,40 @@ def _write_vertex_batches(
     dry_run: bool,
     stats: EntityStats,
 ) -> None:
+    def write_group(records_to_write: Sequence[VertexRecord], counter: str) -> None:
+        if not records_to_write:
+            return
+        statement = render_vertex_insert(records_to_write)
+        if len(stats.examples) < 3:
+            stats.examples.append(statement[:1_000])
+        try:
+            if graph is None:
+                raise RuntimeError("graph client is required in write mode")
+            graph.execute_write(statement)
+            setattr(stats, counter, getattr(stats, counter) + len(records_to_write))
+        except Exception:
+            if len(records_to_write) > 1:
+                midpoint = len(records_to_write) // 2
+                logger.warning(
+                    "split failed vertex batch tag=%s size=%s statement_chars=%s",
+                    records_to_write[0].tag,
+                    len(records_to_write),
+                    len(statement),
+                )
+                write_group(records_to_write[:midpoint], counter)
+                write_group(records_to_write[midpoint:], counter)
+                return
+            stats.failed += 1
+            logger.exception(
+                "organization vertex write failed tag=%s vid=%s statement=%s",
+                records_to_write[0].tag,
+                records_to_write[0].vid,
+                statement[:500],
+            )
+
     grouped: dict[tuple[str, tuple[str, ...]], list[VertexRecord]] = defaultdict(list)
     for record in records:
-        allowed = ORGANIZATION_PROPERTIES if record.tag == "Organization" else DATASOURCE_PROPERTIES
+        allowed = TAG_PROPERTIES[record.tag]
         signature = tuple(name for name in allowed if name in record.properties)
         grouped[(record.tag, signature)].append(record)
     for group in grouped.values():
@@ -424,25 +903,37 @@ def _write_vertex_batches(
                 continue
             if graph is None:
                 raise RuntimeError("graph client is required in write mode")
-            existing = existing_vids(
+            existing = existing_vertex_properties(
                 graph,
                 batch[0].tag,
                 [record.vid for record in batch],
             )
-            stats.existing += len(existing)
-            stats.skipped += len(existing)
+            existing_records = [record for record in batch if record.vid in existing]
+            stats.existing += len(existing_records)
             pending = [record for record in batch if record.vid not in existing]
-            if not pending:
-                continue
-            statement = render_vertex_insert(pending)
-            if len(stats.examples) < 3:
-                stats.examples.append(statement[:1_000])
-            try:
-                graph.execute_write(statement)
-                stats.written += len(pending)
-            except Exception:
-                stats.failed += len(pending)
-                logger.exception("organization vertex batch failed statement=%s", statement[:500])
+            updates = [
+                VertexRecord(
+                    record.tag,
+                    record.vid,
+                    merge_existing_properties(existing[record.vid], record.properties),
+                )
+                for record in batch
+                if record.vid in existing
+            ]
+            updates = [record for record in updates if record.properties]
+            stats.skipped += len(existing_records) - len(updates)
+
+            for records_to_write, counter in ((pending, "written"), (updates, "updated")):
+                if not records_to_write:
+                    continue
+                update_groups: dict[tuple[str, ...], list[VertexRecord]] = defaultdict(list)
+                for record in records_to_write:
+                    signature = tuple(
+                        name for name in TAG_PROPERTIES[record.tag] if name in record.properties
+                    )
+                    update_groups[signature].append(record)
+                for update_group in update_groups.values():
+                    write_group(update_group, counter)
 
 
 def run_etl(
@@ -500,7 +991,7 @@ def run_etl(
             ):
                 stats.queried += 1
                 try:
-                    record = vertex_from_row(spec, row, ingest_batch, ingest_time)
+                    records = vertices_from_row(spec, row, ingest_batch, ingest_time)
                 except RelationDataError as exc:
                     stats.invalid += 1
                     stats.skipped += 1
@@ -511,8 +1002,11 @@ def run_etl(
                     stats.skipped += 1
                     logger.exception("skip dirty entity row table=%s", spec.name)
                     continue
-                stats.valid += 1
-                pending.append(record)
+                if not records:
+                    stats.skipped += 1
+                    continue
+                stats.valid += len(records)
+                pending.extend(records)
                 if len(pending) >= batch_size:
                     _write_vertex_batches(
                         pending,

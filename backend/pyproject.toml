@@ -20,6 +20,7 @@ dependencies = [
     "pymysql>=1.1.1",
     "pymilvus>=2.4.10,<2.5",
     "python-dotenv>=1.2.2",
+    "python-multipart>=0.0.9",
     "rapidfuzz>=3.6.0",
     "redis==7.0.1",
     "setuptools>=70,<81",

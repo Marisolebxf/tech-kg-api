@@ -113,6 +113,12 @@ from db_model.report import (
     OdsEnReport,
     OdsZhReport,
 )
+from db_model.schema_management import (
+    GraphSchemaDefinition,
+    GraphSchemaMapping,
+    GraphSchemaProperty,
+    GraphSchemaScript,
+)
 from db_model.scholar import (
     DwdScholar,
     DwdScholarCoauthor,
@@ -224,4 +230,8 @@ __all__ = [
     "OdsZhPolicyTuoersi",
     "OdsEnReport",
     "OdsZhReport",
+    "GraphSchemaDefinition",
+    "GraphSchemaProperty",
+    "GraphSchemaMapping",
+    "GraphSchemaScript",
 ]

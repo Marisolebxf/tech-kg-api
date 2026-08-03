@@ -35,6 +35,7 @@ DOMAIN_ORDER = [
     "industry_chain",
     "policy",
     "report",
+    "schema_management",
 ]
 
 DDL_DIR = Path(__file__).resolve().parent.parent / "schemas" / "ddl"

@@ -782,6 +782,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/92/1d/00ff2f10c8fa0a7ac61a9e1121383fb0b8ebd9e0da97842bc1edc8773cda/pymilvus-2.4.15-py3-none-any.whl", hash = "sha256:0601591ce0498315e19e9ac3f4fdd3051102ca87b6ddff5b33849f522288cff7", size = 212278, upload-time = "2025-02-24T03:02:02.499Z" },
 ]
 
+[package.optional-dependencies]
+model = [
+    { name = "milvus-model" },
+]
+
 [[package]]
 name = "pymysql"
 version = "1.2.0"
@@ -1194,6 +1199,7 @@ dependencies = [
 milvus = [
     { name = "jieba" },
     { name = "milvus-model" },
+    { name = "pymilvus", extra = ["model"] },
     { name = "sentence-transformers" },
 ]
 
@@ -1221,6 +1227,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=3.0.2" },
     { name = "pydantic", specifier = "==2.11.7" },
     { name = "pymilvus", specifier = ">=2.4.10,<2.5" },
+    { name = "pymilvus", extras = ["model"], marker = "extra == 'milvus'", specifier = ">=2.4.9,<2.5" },
     { name = "pymysql", specifier = ">=1.1.1" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "rapidfuzz", specifier = ">=3.6.0" },

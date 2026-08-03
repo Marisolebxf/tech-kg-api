@@ -32,8 +32,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# 论文/期刊 Milvus 脚本（script/paper_milvus/）运行时才需要，CI 不装：
+#   uv sync --extra milvus
 milvus = [
-    "milvus-model>=0.2.12",
+    "pymilvus[model]>=2.4.9,<2.5",
+     "milvus-model>=0.2.12",
     "sentence-transformers>=3.0.0",
     "jieba>=0.42.1",
 ]

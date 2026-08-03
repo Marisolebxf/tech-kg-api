@@ -5,8 +5,9 @@
 ```text
 schemas/
 ├── specifications/
-│   ├── patent_ontology.md    本体、实体、属性、关系和业务支撑
-│   └── patent_mapping.md     MySQL字段到图Schema的映射
+│   ├── patent_ontology.md                本体、实体、属性、关系和约束
+│   ├── patent_mapping.md                 源表到实体与索引字段的映射
+│   └── patent_relation_extraction.md     逐关系抽取、对齐和消歧流程
 ├── ddl/
 │   └── patent_ddl.ngql       Patent、Keyword和HAS_KEYWORD图Schema
 └── README.md

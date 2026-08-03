@@ -41,11 +41,143 @@ CREATE TAG IF NOT EXISTS `Organization`(
   `source_update_time` string NULL
 );
 
+CREATE TAG IF NOT EXISTS `Person`(
+  `name_cn` string NULL,
+  `name_en` string NULL,
+  `person_kind` string NULL,
+  `country_code` string NULL,
+  `country` string NULL,
+  `birth_date` string NULL,
+  `gender` string NULL,
+  `biography` string NULL,
+  `extra_json` string NULL,
+  `source_system` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `source_url` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL,
+  `source_update_time` string NULL
+);
+
+CREATE TAG IF NOT EXISTS `News`(
+  `title` string NULL,
+  `content` string NULL,
+  `release_date` string NULL,
+  `original_url` string NULL,
+  `extra_json` string NULL,
+  `source_system` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `source_url` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL,
+  `source_update_time` string NULL
+);
+
+CREATE TAG IF NOT EXISTS `Event`(
+  `event_type` string NULL,
+  `raw_id` string NULL,
+  `title` string NULL,
+  `content` string NULL,
+  `case_no` string NULL,
+  `case_cause` string NULL,
+  `occur_date` string NULL,
+  `amount` double NULL,
+  `currency` string NULL,
+  `extra_json` string NULL,
+  `source_system` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `source_url` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL,
+  `source_update_time` string NULL
+);
+
+CREATE TAG IF NOT EXISTS `Project`(
+  `project_number` string NULL,
+  `title` string NULL,
+  `project_source` string NULL,
+  `project_level` string NULL,
+  `funded_amount` double NULL,
+  `discipline` string NULL,
+  `discipline_code` string NULL,
+  `fund_category` string NULL,
+  `funded_region` string NULL,
+  `approval_year` string NULL,
+  `approval_time` string NULL,
+  `research_period` string NULL,
+  `abstract` string NULL,
+  `final_report_abstract` string NULL,
+  `project_page_url` string NULL,
+  `extra_json` string NULL,
+  `source_system` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `source_url` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL,
+  `source_update_time` string NULL
+);
+
+CREATE TAG IF NOT EXISTS `Product`(
+  `name` string NULL,
+  `category` string NULL,
+  `description` string NULL,
+  `extra_json` string NULL,
+  `source_system` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `source_url` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL,
+  `source_update_time` string NULL
+);
+
 CREATE TAG IF NOT EXISTS `DataSource`(
   `source_table` string NULL,
   `table_cn_name` string NULL,
   `tier` string NULL,
   `library` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `LEGAL_REP_OF`(
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `EXECUTIVE_OF`(
+  `position` string NULL,
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `BENEFICIAL_OWNER_OF`(
+  `direct_percent` double NULL,
+  `indirect_percent` double NULL,
+  `total_percent` double NULL,
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `ACTUAL_CONTROLLER_OF`(
+  `direct_pct` double NULL,
+  `total_pct` double NULL,
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
 );
 
 CREATE EDGE IF NOT EXISTS `SHAREHOLDER_OF`(
@@ -86,6 +218,17 @@ CREATE EDGE IF NOT EXISTS `SUBSIDIARY_OF`(
 );
 
 CREATE EDGE IF NOT EXISTS `PARTICIPATES_IN`(
+  `extra_json` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL
+);
+
+CREATE EDGE IF NOT EXISTS `FUNDED_BY`(
+  `funded_amount` double NULL,
+  `fund_category` string NULL,
+  `extra_json` string NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -119,6 +262,7 @@ CREATE EDGE IF NOT EXISTS `BELONGS_TO_NODE`(
 
 CREATE EDGE IF NOT EXISTS `PRODUCES`(
   `tech_product_seq` int64 NULL,
+  `extra_json` string NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -129,10 +273,15 @@ CREATE TAG INDEX IF NOT EXISTS `organization_org_id_idx` ON `Organization`(`org_
 CREATE TAG INDEX IF NOT EXISTS `organization_name_cn_idx` ON `Organization`(`name_cn`(128));
 CREATE TAG INDEX IF NOT EXISTS `datasource_table_idx` ON `DataSource`(`source_table`(128));
 CREATE EDGE INDEX IF NOT EXISTS `shareholder_of_idx` ON `SHAREHOLDER_OF`();
+CREATE EDGE INDEX IF NOT EXISTS `legal_rep_of_idx` ON `LEGAL_REP_OF`();
+CREATE EDGE INDEX IF NOT EXISTS `executive_of_idx` ON `EXECUTIVE_OF`();
+CREATE EDGE INDEX IF NOT EXISTS `beneficial_owner_of_idx` ON `BENEFICIAL_OWNER_OF`();
+CREATE EDGE INDEX IF NOT EXISTS `actual_controller_of_idx` ON `ACTUAL_CONTROLLER_OF`();
 CREATE EDGE INDEX IF NOT EXISTS `invests_in_idx` ON `INVESTS_IN`();
 CREATE EDGE INDEX IF NOT EXISTS `acquires_idx` ON `ACQUIRES`();
 CREATE EDGE INDEX IF NOT EXISTS `subsidiary_of_idx` ON `SUBSIDIARY_OF`();
 CREATE EDGE INDEX IF NOT EXISTS `participates_in_idx` ON `PARTICIPATES_IN`();
+CREATE EDGE INDEX IF NOT EXISTS `funded_by_idx` ON `FUNDED_BY`();
 CREATE EDGE INDEX IF NOT EXISTS `has_news_idx` ON `HAS_NEWS`();
 CREATE EDGE INDEX IF NOT EXISTS `involved_in_idx` ON `INVOLVED_IN`();
 CREATE EDGE INDEX IF NOT EXISTS `belongs_to_node_idx` ON `BELONGS_TO_NODE`();

@@ -13,6 +13,19 @@ def test_relation_pipeline_uses_the_shared_spec_object() -> None:
     assert relation.RELATION_KEYS is common.RELATION_KEYS
 
 
+def test_all_39_workbook_tables_have_a_lossless_payload_destination() -> None:
+    assert len(common.DOMAIN_TABLE_SPECS) == 39
+    relation_specs_by_table = {
+        spec.source_table: spec
+        for spec in common.RELATION_SPECS
+        if "extra_json" in spec.edge_properties
+    }
+    for table in common.DOMAIN_TABLE_SPECS:
+        entity_keeps_raw_payload = table.entity_tag is not None
+        relation_keeps_raw_payload = table.name in relation_specs_by_table
+        assert entity_keeps_raw_payload or relation_keeps_raw_payload, table.name
+
+
 def test_one_canonical_schema_covers_all_relation_specs() -> None:
     schema = common.SCHEMA_PATH.read_text(encoding="utf-8")
     assert "CREATE TAG IF NOT EXISTS `Organization`" in schema

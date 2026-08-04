@@ -74,7 +74,62 @@ class PlatformOverviewData(CamelCaseModel):
     management_risks: list[ManagementRisk]
     entity_structure: list[StructureItem]
     relation_structure: list[StructureItem]
+    data_mode: Literal["live", "partial", "mock"] = "mock"
+    data_sources: dict[str, str] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class PlatformAssetSummaryData(CamelCaseModel):
+    platform_status: str
+    pending_batch_count: int
+    updated_at: str
+    data_mode: Literal["live", "partial", "mock"]
+    data_sources: dict[str, str]
+    warnings: list[str]
+    items: list[AssetOverviewGroup]
+
+
+class PlatformAssetChangesData(CamelCaseModel):
+    asset_type: AssetOverviewKey
+    rows: list[AssetChangeRow]
+    data_source: str
+
+
+class PlatformActivityData(CamelCaseModel):
+    items: list[LatestChange]
+    data_source: str
+
+
+class PlatformRiskData(CamelCaseModel):
+    items: list[ManagementRisk]
+    data_source: str
+
+
+class PlatformStructureData(CamelCaseModel):
+    entity: list[StructureItem]
+    relation: list[StructureItem]
+    data_source: str
 
 
 class PlatformOverviewResponse(ApiResponse):
     data: PlatformOverviewData
+
+
+class PlatformAssetSummaryResponse(ApiResponse):
+    data: PlatformAssetSummaryData
+
+
+class PlatformAssetChangesResponse(ApiResponse):
+    data: PlatformAssetChangesData
+
+
+class PlatformActivityResponse(ApiResponse):
+    data: PlatformActivityData
+
+
+class PlatformRiskResponse(ApiResponse):
+    data: PlatformRiskData
+
+
+class PlatformStructureResponse(ApiResponse):
+    data: PlatformStructureData

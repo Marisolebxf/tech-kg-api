@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onErrorCaptured, onMounted, ref, watch } from 'vue'
-import { RouterView, useRoute } from 'vue-router'
+import { RouterView, useRoute, useRouter } from 'vue-router'
 
 import iconMenuCollapse from '../assets/icons/icon-menu-collapse.svg'
 import iconSidebarArrow from '../assets/icons/icon-sidebar-arrow.svg'
@@ -12,13 +12,21 @@ import navServices from '../assets/icons/nav-services.svg'
 import navTasks from '../assets/icons/nav-tasks.svg'
 // import navFlow from '../assets/icons/nav-flow.svg'
 import navTools from '../assets/icons/nav-tools.svg'
+import { getPlatformOverviewRisks } from '../api/platformOverview'
 import { useAppStore } from '../stores/app'
+import { useAuthStore } from '../stores/auth'
 import avatarBen from '../assets/images/avatar-ben.png'
 import logoKg from '../assets/images/logo-kg.png'
-import { getReviewPriority, reviewRecords } from '../views/platform/manual-review-data'
 
 const route = useRoute()
+const router = useRouter()
 const appStore = useAppStore()
+const authStore = useAuthStore()
+const currentUser = computed(() => authStore.profile?.user)
+const userAvatar = computed(() => currentUser.value?.avatar || avatarBen)
+const userDisplayName = computed(() => authStore.displayName)
+const userRoleName = computed(() => authStore.primaryRole)
+const userBadge = computed(() => authStore.profile?.roles[0]?.type === 2 ? '机构角色' : '应用角色')
 const pageTitle = computed(() => String(route.meta.title ?? '亿级知识图谱'))
 const showPageContext = computed(() => !route.path.startsWith('/processing-instance/') && !route.path.startsWith('/manual-review/task/') && !route.path.startsWith('/task-detail/'))
 const activePrimaryNav = computed(() => {
@@ -45,21 +53,18 @@ const assistantViewport = ref({ width: 1440, height: 900 })
 // const assistantMessages = ref<Array<{ role: 'assistant' | 'user'; content: string; sources?: string[] }>>([
 //   { role: 'assistant', content: '可询问专家、机构、论文关系，或查询任务与异常。' },
 // ])
-const alertItems = computed(() => reviewRecords.filter((record) => record.status !== '已完成').map((record) => {
-  const priority = getReviewPriority(record)
-  return {
-    id: record.id,
-    blocked: priority.level === 'P0',
-    module: record.module,
-    title: `${record.object}：${record.type}`,
-    meta: `${record.id} · ${record.node} · ${record.evidence}`,
-    time: record.updatedAt,
-    status: record.status,
-    hasReviewDetail: true,
-    detailTo: `/processing-instance/${record.id}`,
-    reviewTo: `/manual-review/task/${record.id}`,
-  }
-}))
+const alertItems = ref<Array<{
+  id: string
+  blocked: boolean
+  module: string
+  title: string
+  meta: string
+  time: string
+  status: string
+  hasReviewDetail: boolean
+  detailTo: string
+  reviewTo: string
+}>>([])
 const blockedAlertCount = computed(() => alertItems.value.filter((item) => item.blocked).length)
 const serviceNavItems = [
   { to: '/expert-direct', label: '专家直接关系', fullLabel: '科技专家直接关系' },
@@ -107,8 +112,19 @@ function toggleUserMenu() {
   userMenuOpen.value = !userMenuOpen.value
 }
 
-function handleAccountAction(action: '个人中心' | '账号与安全' | '操作记录' | '退出登录') {
-  accountFeedback.value = action === '退出登录' ? '正在安全退出系统。' : `已打开${action}。`
+async function handleAccountAction(action: '个人中心' | '账号与安全' | '操作记录' | '退出登录') {
+  userMenuOpen.value = false
+  if (action === '个人中心') {
+    await router.push('/user-center')
+    return
+  }
+  if (action === '退出登录') {
+    accountFeedback.value = '正在安全退出系统。'
+    await authStore.logout()
+    await router.replace('/login')
+    return
+  }
+  accountFeedback.value = `${action}由统一用户中心管理。`
 }
 
 // 问答小助手（已隐藏）
@@ -168,6 +184,26 @@ function handleVisibilityChange() {
   if (document.visibilityState === 'visible') handleViewportResize()
 }
 
+async function loadAlertItems() {
+  try {
+    const risks = await getPlatformOverviewRisks()
+    alertItems.value = risks.map((risk, index) => ({
+      id: `platform-risk-${index + 1}`,
+      blocked: risk.title.includes('阻断'),
+      module: '平台总览',
+      title: risk.title,
+      meta: risk.detail,
+      time: '待处理',
+      status: '待人工处理',
+      hasReviewDetail: true,
+      detailTo: risk.detailTo,
+      reviewTo: risk.reviewTo,
+    }))
+  } catch {
+    alertItems.value = []
+  }
+}
+
 function handleDocumentPointerDown(event: PointerEvent) {
   if (userMenuOpen.value && !userEntryRef.value?.contains(event.target as Node)) userMenuOpen.value = false
 }
@@ -196,6 +232,7 @@ watch(() => route.fullPath, () => {
 })
 
 onMounted(() => {
+  void loadAlertItems()
   assistantViewport.value = { width: window.innerWidth, height: window.innerHeight }
   placeAssistantAtDefault()
   window.addEventListener('resize', handleViewportResize)
@@ -315,13 +352,13 @@ onBeforeUnmount(() => {
                 </aside>
               </div>
               <div ref="userEntryRef" class="app-user-entry">
-                <button class="app-top-actions__user" type="button" aria-label="当前登录用户：图谱管理员张建图" :aria-expanded="userMenuOpen" @click="toggleUserMenu">
-                  <img :src="avatarBen" alt="" aria-hidden="true" />
-                  <span><strong>张建图</strong><em>图谱管理员</em></span>
+                <button class="app-top-actions__user" type="button" :aria-label="`当前登录用户：${userRoleName}${userDisplayName}`" :aria-expanded="userMenuOpen" @click="toggleUserMenu">
+                  <img :src="userAvatar" alt="" aria-hidden="true" />
+                  <span><strong>{{ userDisplayName }}</strong><em>{{ userRoleName }}</em></span>
                   <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4" /></svg>
                 </button>
                 <aside v-if="userMenuOpen" class="app-user-menu">
-                  <header><img :src="avatarBen" alt="" /><div><strong>张建图</strong><span>图谱管理员</span></div><b>管理员</b></header>
+                  <header><img :src="userAvatar" alt="" /><div><strong>{{ userDisplayName }}</strong><span>{{ userRoleName }}</span></div><b>{{ userBadge }}</b></header>
                   <nav>
                     <button type="button" @click="handleAccountAction('个人中心')"><i>人</i><span>个人中心</span></button>
                     <button type="button" @click="handleAccountAction('账号与安全')"><i>安</i><span>账号与安全</span></button>

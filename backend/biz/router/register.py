@@ -1,5 +1,7 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
+from biz.dependencies.auth import require_authenticated_user
+from biz.handler.auth import router as auth_router
 from biz.handler.common_capability import router as common_capability_router
 from biz.handler.enterprise_background_analysis import (
     router as enterprise_background_analysis_router,
@@ -27,23 +29,34 @@ from biz.handler.schema_management import router as schema_management_router
 
 
 def register_routers(app: FastAPI) -> None:
-    app.include_router(common_capability_router, prefix="/api/v1")
-    app.include_router(kg_construction_router, prefix="/api/v1")
-    app.include_router(options_router, prefix="/api/v1")
-    app.include_router(platform_overview_router, prefix="/api/v1")
-    app.include_router(expert_direct_relation_router, prefix="/api/v1")
-    app.include_router(expert_indirect_relation_router, prefix="/api/v1")
-    app.include_router(expert_cooperation_achievement_router, prefix="/api/v1")
-    app.include_router(expert_colleague_relation_router, prefix="/api/v1")
-    app.include_router(expert_alumni_relation_router, prefix="/api/v1")
-    app.include_router(expert_paper_cooperation_router, prefix="/api/v1")
-    app.include_router(expert_enterprise_relation_router, prefix="/api/v1")
-    app.include_router(relation_detail_annotation_router, prefix="/api/v1")
-    app.include_router(enterprise_background_analysis_router, prefix="/api/v1")
-    app.include_router(expert_enterprise_mining_router, prefix="/api/v1")
-    app.include_router(industry_chain_topn_event_router, prefix="/api/v1")
-    app.include_router(industry_chain_panorama_router, prefix="/api/v1")
-    app.include_router(graph_search_router, prefix="/api/v1")
-    app.include_router(schema_management_router, prefix="/api/v1")
-    app.include_router(operator_router, prefix="/api/v1")
+    app.include_router(auth_router, prefix="/api/v1")
+
+    protected_dependencies = [Depends(require_authenticated_user)]
+    protected_routers = (
+        common_capability_router,
+        kg_construction_router,
+        options_router,
+        platform_overview_router,
+        expert_direct_relation_router,
+        expert_indirect_relation_router,
+        expert_cooperation_achievement_router,
+        expert_colleague_relation_router,
+        expert_alumni_relation_router,
+        expert_paper_cooperation_router,
+        expert_enterprise_relation_router,
+        relation_detail_annotation_router,
+        enterprise_background_analysis_router,
+        expert_enterprise_mining_router,
+        industry_chain_topn_event_router,
+        industry_chain_panorama_router,
+        graph_search_router,
+        schema_management_router,
+        operator_router,
+    )
+    for router in protected_routers:
+        app.include_router(
+            router,
+            prefix="/api/v1",
+            dependencies=protected_dependencies,
+        )
     app.include_router(operator_internal_router)

@@ -23,6 +23,7 @@ import {
   type AssetOverviewKey,
   type LatestChange,
   type ManagementRisk,
+  type PlatformOverviewData,
   type StructureItem,
 } from '../../api/platformOverview'
 import KgGraphCanvas from '../../components/kg-graph-canvas.vue'
@@ -348,6 +349,8 @@ const overviewMeta = ref({
   platformStatus: '正在加载平台状态',
   pendingBatchCount: 0,
   updatedAt: '--',
+  dataMode: 'mock' as PlatformOverviewData['dataMode'],
+  warnings: [] as string[],
 })
 const assetOverviewGroups = ref<AssetOverviewGroup[]>([])
 const selectedAssetChange = ref<AssetOverviewKey | null>(null)
@@ -1443,6 +1446,8 @@ async function loadPlatformOverview(): Promise<void> {
       platformStatus: data.platformStatus,
       pendingBatchCount: data.pendingBatchCount,
       updatedAt: data.updatedAt,
+      dataMode: data.dataMode,
+      warnings: data.warnings,
     }
     assetOverviewGroups.value = data.assetOverviewGroups
     assetChangeRows.value = data.assetChangeRows
@@ -1676,7 +1681,7 @@ const pageMeta = computed(() => {
       <div class="platform-hero__main">
         <h1>{{ pageMeta.title }}</h1>
       </div>
-      <div class="platform-hero__actions"><span><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理</span><!-- <RouterLink to="/tasks?module=图谱版本">当前图谱 KG-2026.07.12.008</RouterLink> --><RouterLink to="/tasks">查看任务</RouterLink><RouterLink to="/manual-review">进入人工处理</RouterLink></div>
+      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><!-- <RouterLink to="/tasks?module=图谱版本">当前图谱 KG-2026.07.12.008</RouterLink> --><RouterLink to="/tasks">查看任务</RouterLink><RouterLink to="/manual-review">进入人工处理</RouterLink></div>
     </header>
 
     <header v-else class="platform-page-head">

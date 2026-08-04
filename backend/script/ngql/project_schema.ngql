@@ -118,6 +118,9 @@ CREATE TAG IF NOT EXISTS DataSource(
 CREATE EDGE IF NOT EXISTS FUNDED_BY(
   funded_amount double,
   fund_category string,
+  match_method string,
+  match_evidence string,
+  confidence double,
   source_table string,
   source_record_id string,
   ingest_batch string,
@@ -125,6 +128,9 @@ CREATE EDGE IF NOT EXISTS FUNDED_BY(
 );
 
 CREATE EDGE IF NOT EXISTS LEADS(
+  match_method string,
+  match_evidence string,
+  confidence double,
   source_table string,
   source_record_id string,
   ingest_batch string,
@@ -132,6 +138,9 @@ CREATE EDGE IF NOT EXISTS LEADS(
 );
 
 CREATE EDGE IF NOT EXISTS HAS_PARTICIPANT(
+  match_method string,
+  match_evidence string,
+  confidence double,
   source_table string,
   source_record_id string,
   ingest_batch string,

@@ -7,8 +7,10 @@ Usage:
 Reads connection info from environment variables (or .env via python-dotenv):
     MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USERNAME, MYSQL_PASSWORD
 
-Defaults target the laboratory/server-side copied database, not the read-only
-vendor source database used by sync_schema_from_mysql.py.
+Defaults target the configured development technology-element database
+(`gkx_element`), not the read-only vendor source database used by
+sync_schema_from_mysql.py. The target database must already exist; this script
+only executes the project-maintained table DDL under schemas/ddl/.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ DOMAIN_ORDER = [
     "industry_chain",
     "policy",
     "report",
+    "schema_management",
 ]
 
 DDL_DIR = Path(__file__).resolve().parent.parent / "schemas" / "ddl"
@@ -45,7 +48,7 @@ def get_connection() -> pymysql.Connection:
         port=int(os.getenv("MYSQL_PORT", "3306")),
         user=os.getenv("MYSQL_USERNAME", "root"),
         password=os.getenv("MYSQL_PASSWORD", "123456789"),
-        database=os.getenv("MYSQL_DATABASE", "gkx_local"),
+        database=os.getenv("MYSQL_DATABASE", "gkx_element"),
         charset="utf8mb4",
         autocommit=True,
     )

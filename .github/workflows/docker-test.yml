@@ -13,6 +13,8 @@ jobs:
     env:
       LLM_API_KEY: ${{ secrets.GLM_API_KEY }}
       ZHIPUAI_API_KEY: ${{ secrets.GLM_API_KEY }}
+      # Integration tests provide their own SQLite Schema store; CI has no MySQL service.
+      SCHEMA_AUTO_INIT: "false"
 
     steps:
       - name: Checkout repository
@@ -42,19 +44,39 @@ jobs:
       - name: Build Docker image
         run: docker compose build
 
+      - name: Create external Docker networks
+        run: |
+          docker network inspect tech-kg-engine_default >/dev/null 2>&1 || docker network create tech-kg-engine_default
+          docker network inspect trs-graph-service_default >/dev/null 2>&1 || docker network create trs-graph-service_default
+
       - name: Deploy FastAPI
         run: docker compose up -d
 
       - name: Wait for services to be ready
         run: |
           echo "Waiting for FastAPI to start..."
-          sleep 20
-          docker compose exec -T api python - <<'PY'
-          import urllib.request
+          for attempt in $(seq 1 30); do
+            if response="$(curl --fail --silent --show-error http://127.0.0.1:8001/health)" \
+              && [ "${response}" = '{"status":"ok"}' ]; then
+              echo "FastAPI is ready."
+              exit 0
+            fi
 
-          response = urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=5)
-          assert response.read().decode() == '{"status":"ok"}'
-          PY
+            if ! docker compose ps --status running --services api | grep --quiet '^api$'; then
+              echo "FastAPI container stopped before becoming ready."
+              docker compose ps --all
+              docker compose logs --no-color api operator-rustfs schema-minio
+              exit 1
+            fi
+
+            echo "FastAPI is not ready yet (attempt ${attempt}/30)."
+            sleep 5
+          done
+
+          echo "Timed out waiting for FastAPI."
+          docker compose ps --all
+          docker compose logs --no-color api operator-rustfs schema-minio
+          exit 1
 
       - name: Run integration tests
         run: docker compose exec -T api env PYTHONPATH=. uv run pytest tests/integration -m "not external" -v

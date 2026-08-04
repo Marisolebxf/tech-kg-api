@@ -205,16 +205,18 @@ def patent_statement(payloads: list[tuple[str, list[str]]]) -> str:
     return f"INSERT VERTEX Patent({','.join(PATENT_PROPERTIES)}) VALUES {rows};"
 
 
-def keyword_statements(rows: list[dict[str, Any]]) -> tuple[str, str]:
+def keyword_statements(
+    rows: list[dict[str, Any]], batch_id: str = "", ingest_time: datetime | None = None
+) -> tuple[str, str]:
     """生成Keyword顶点和HAS_KEYWORD边nGQL。"""
     vertices: dict[str, str] = {}
-    edges: set[tuple[str, str]] = set()
+    edges: dict[tuple[str, str], str] = {}
     for row in rows:
         patent_vid = f"patent_{str(row['patent_id']).strip()}"
-        for keyword in keyword_values(row.get("keywords")):
+        for index, keyword in enumerate(keyword_values(row.get("keywords"))):
             vid = keyword_vid(keyword)
             vertices[vid] = keyword
-            edges.add((patent_vid, vid))
+            edges.setdefault((patent_vid, vid), f"{str(row['patent_id']).strip()}:keywords:{index}")
     vertex_ngql = ""
     edge_ngql = ""
     if vertices:

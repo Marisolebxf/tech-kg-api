@@ -36,6 +36,15 @@ services:
       TEMPORAL_TASK_QUEUE: tech-kg-workflows
       WORKFLOW_DATABASE_PATH: /var/lib/tech-kg/workflows.db
       WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
+      SCHEMA_AUTO_INIT: ${SCHEMA_AUTO_INIT:-true}
+      SCHEMA_S3_ENDPOINT_URL: ${SCHEMA_S3_ENDPOINT_URL:-http://schema-minio:9000}
+      SCHEMA_S3_ACCESS_KEY: ${SCHEMA_S3_ACCESS_KEY:-minioadmin}
+      SCHEMA_S3_SECRET_KEY: ${SCHEMA_S3_SECRET_KEY:-minioadmin}
+      SCHEMA_S3_BUCKET: ${SCHEMA_S3_BUCKET:-tech-kg-schema-scripts}
+      SCHEMA_S3_REGION: ${SCHEMA_S3_REGION:-us-east-1}
+      SCHEMA_S3_SECURE: ${SCHEMA_S3_SECURE:-false}
+      SCHEMA_SCRIPT_MAX_BYTES: ${SCHEMA_SCRIPT_MAX_BYTES:-10485760}
+      SCHEMA_ADMIN_USER_IDS: ${SCHEMA_ADMIN_USER_IDS:-schema-admin}
       PATENT_EMBEDDING_PROVIDER: ${PATENT_EMBEDDING_PROVIDER:-openai}
       PATENT_EMBEDDING_BASE_URL: ${PATENT_EMBEDDING_BASE_URL:-http://m3e-embedding:8010/v1}
       PATENT_EMBEDDING_MODEL: ${PATENT_EMBEDDING_MODEL:-moka-ai/m3e-small}
@@ -57,6 +66,8 @@ services:
       - patent-index-state:/app/var/patent_indexes
       - workflow-state:/var/lib/tech-kg
     depends_on:
+      schema-minio:
+        condition: service_healthy
       operator-rustfs:
         condition: service_healthy
       m3e-embedding:
@@ -157,6 +168,23 @@ services:
       - workflow-state:/var/lib/tech-kg
     depends_on:
       - temporal
+  schema-minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    container_name: tech-kg-schema-minio
+    environment:
+      MINIO_ROOT_USER: ${SCHEMA_S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${SCHEMA_S3_SECRET_KEY:-minioadmin}
+    ports:
+      - "9030:9000"
+      - "9031:9001"
+    volumes:
+      - schema-minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks:
       - app
     restart: unless-stopped
@@ -271,6 +299,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  schema-minio-data:
   milvus-etcd-data:
   milvus-minio-data:
   milvus-data:

@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -12,13 +14,20 @@ from infra.graph_db import close_techkg_client, close_trs_graph_client
 from infra.graph_db.exceptions import GraphRepoError
 from service.operator_registry import REGISTRY
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """启动算子热加载监听，并在退出时释放基础设施资源。"""
+    """初始化 Schema 和算子服务，并在退出时释放基础设施资源。"""
     await asyncio.to_thread(REGISTRY.initialize_store)
     REGISTRY.start_watcher()
     try:
+        if os.getenv("SCHEMA_AUTO_INIT", "false").lower() == "true":
+            from script.init_schema_management import initialize_schema_management
+
+            inserted = initialize_schema_management()
+            logger.info("Schema 管理初始化完成，新增系统 Schema: %s", inserted)
         yield
     finally:
         REGISTRY.stop_watcher()

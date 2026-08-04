@@ -8,4 +8,5 @@ __pycache__/
 # Runtime-generated Milvus/BM25 state
 var/
 .cache/organization_milvus/
+.milvus_artifacts/
 output/organization_alignment_*.jsonl

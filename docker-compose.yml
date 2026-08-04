@@ -31,6 +31,11 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-glm-4.7-flash}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: tech-kg-workflows
+      WORKFLOW_DATABASE_PATH: /var/lib/tech-kg/workflows.db
+      WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
       SCHEMA_AUTO_INIT: ${SCHEMA_AUTO_INIT:-true}
       SCHEMA_S3_ENDPOINT_URL: ${SCHEMA_S3_ENDPOINT_URL:-http://schema-minio:9000}
       SCHEMA_S3_ACCESS_KEY: ${SCHEMA_S3_ACCESS_KEY:-minioadmin}
@@ -75,8 +80,24 @@ services:
     volumes:
       - operator-data:/app/operators/user
       - patent-index-state:/app/var/patent_indexes
+      - workflow-state:/var/lib/tech-kg
     depends_on:
-      schema-minio:
+      auth-redis:
+    image: redis:7.4-alpine
+    container_name: tech-kg-auth-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - auth-redis-data:/data
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  schema-minio:
         condition: service_healthy
       operator-rustfs:
         condition: service_healthy
@@ -84,6 +105,8 @@ services:
         condition: service_healthy
       auth-redis:
         condition: service_healthy
+      temporal:
+        condition: service_started
     networks:
       - app
       - engine
@@ -119,21 +142,65 @@ services:
       start_period: 180s
     restart: unless-stopped
 
-  auth-redis:
-    image: redis:7.4-alpine
-    container_name: tech-kg-auth-redis
-    command: ["redis-server", "--appendonly", "yes"]
+  temporal-postgresql:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/postgres:16-alpine
+    container_name: tech-kg-temporal-postgresql
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
     volumes:
-      - auth-redis-data:/data
+      - temporal-postgresql-data:/var/lib/postgresql/data
     networks:
       - app
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
     restart: unless-stopped
 
+  temporal:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/temporalio/auto-setup:1.29.2
+    container_name: tech-kg-temporal
+    ports:
+      - "7233:7233"
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: temporal-postgresql
+    depends_on:
+      - temporal-postgresql
+    networks:
+      - app
+    restart: unless-stopped
+
+  temporal-ui:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/temporalio/ui:2.39.0
+    container_name: tech-kg-temporal-ui
+    ports:
+      - "8233:8080"
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on:
+      - temporal
+    networks:
+      - app
+    restart: unless-stopped
+
+  temporal-worker:
+    build:
+      context: ./backend
+      args:
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+    container_name: tech-kg-temporal-worker
+    command: [".venv/bin/python", "-m", "script.run_temporal_worker"]
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: tech-kg-workflows
+      WORKFLOW_DATABASE_PATH: /var/lib/tech-kg/workflows.db
+      WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
+    volumes:
+      - workflow-state:/var/lib/tech-kg
+    depends_on:
+      - temporal
   schema-minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     container_name: tech-kg-schema-minio
@@ -271,6 +338,8 @@ volumes:
   milvus-etcd-data:
   milvus-minio-data:
   milvus-data:
+  temporal-postgresql-data:
+  workflow-state:
   m3e-model-cache:
   patent-index-state:
   operator-data:

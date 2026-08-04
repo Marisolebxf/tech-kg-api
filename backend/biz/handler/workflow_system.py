@@ -44,11 +44,17 @@ async def upload_python_definition(
     function_name: Annotated[str, Form()] = "workflow",
     definition_id: Annotated[str | None, Form()] = None,
     name: Annotated[str | None, Form()] = None,
+    timeout_seconds: Annotated[int | None, Form(alias="timeoutSeconds")] = None,
 ) -> ApiResponse:
     try:
         content = await file.read()
         definition = service.create_python_definition(
-            file.filename or "workflow.py", content, function_name, definition_id, name
+            file.filename or "workflow.py",
+            content,
+            function_name,
+            definition_id,
+            name,
+            timeout_seconds=timeout_seconds,
         )
         return ApiResponse(data=definition, msg="Python 工作流脚本已上传并完成校验")
     except (UnicodeDecodeError, SyntaxError, ValueError) as exc:

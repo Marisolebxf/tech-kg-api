@@ -5,13 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from infra.graph_db import TRSGraphClient, get_techkg_client
-from service.base_module import KGModuleScaffoldService
+from service.base_module import KGModuleService
 from service.enterprise_relation_catalog import role_info
 
 EDGE_TYPE = "EMPLOYED_BY"
 
 
-class RelationDetailAnnotationService(KGModuleScaffoldService):
+class RelationDetailAnnotationService(KGModuleService):
     module_code = "relation_detail_annotation"
 
     def __init__(self) -> None:

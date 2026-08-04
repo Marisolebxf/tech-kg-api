@@ -102,7 +102,7 @@ class BatchRelationExtractionRequest(BaseModel):
 
 
 @router.get("/metadata")
-async def metadata() -> dict[str, Any]:
+def metadata() -> dict[str, Any]:
     return {
         "capabilities": [
             "entity_extraction",
@@ -116,31 +116,31 @@ async def metadata() -> dict[str, Any]:
 
 
 @router.post("/entity-extraction")
-async def extract_entities(body: EntityExtractionRequest) -> dict[str, Any]:
+def extract_entities(body: EntityExtractionRequest) -> dict[str, Any]:
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="text cannot be empty")
     return application.extract_entities(body.text, body.source_type)
 
 
 @router.post("/entity-alignment")
-async def align_entities(body: EntityAlignmentRequest) -> dict[str, Any]:
+def align_entities(body: EntityAlignmentRequest) -> dict[str, Any]:
     return application.align_entities(body.kg_a, body.kg_b, top_k=body.top_k)
 
 
 @router.post("/entity-disambiguation")
-async def disambiguate_entity(body: EntityDisambiguationRequest) -> dict[str, Any]:
+def disambiguate_entity(body: EntityDisambiguationRequest) -> dict[str, Any]:
     return application.disambiguate_entity(body.text, body.mention, body.kb, top_k=body.top_k)
 
 
 @router.post("/relation-extraction")
-async def extract_relation(body: RelationExtractionRequest) -> dict[str, Any]:
+def extract_relation(body: RelationExtractionRequest) -> dict[str, Any]:
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="text cannot be empty")
     return application.extract_relations(body.text, method=body.method)
 
 
 @router.post("/relation-extraction/batch")
-async def batch_extract_relation(body: BatchRelationExtractionRequest) -> dict[str, Any]:
+def batch_extract_relation(body: BatchRelationExtractionRequest) -> dict[str, Any]:
     texts = [text for text in body.texts if text.strip()]
     if not texts:
         raise HTTPException(status_code=400, detail="texts cannot be empty")
@@ -148,5 +148,5 @@ async def batch_extract_relation(body: BatchRelationExtractionRequest) -> dict[s
 
 
 @router.get("/relation-extraction/examples")
-async def relation_examples() -> list[dict[str, str]]:
+def relation_examples() -> list[dict[str, str]]:
     return application.relation_examples()

@@ -13,6 +13,7 @@ from infra.mysql import get_session
 from infra.s3 import StoredObject
 from main import app
 from script.init_schema_management import initialize_schema_management
+from service.temporal_runtime import temporal_runtime
 
 
 class FakeBody(BytesIO):
@@ -53,6 +54,15 @@ def schema_api(monkeypatch):
 
     app.dependency_overrides[get_session] = override_session
     monkeypatch.setattr("service.schema_management.get_schema_s3_storage", lambda: storage)
+
+    async def start(definition, payload, workflow_id=None):
+        return {
+            "workflowId": workflow_id or f"test-{definition['id']}",
+            "runId": "schema-run-001",
+            "status": "RUNNING",
+        }
+
+    monkeypatch.setattr(temporal_runtime, "start", start)
     yield engine, storage
     app.dependency_overrides.pop(get_session, None)
     engine.dispose()
@@ -131,6 +141,19 @@ async def test_schema_management_full_flow(schema_api) -> None:
         assert entity["script"]["filename"] == "technology.py"
         assert storage.objects
 
+        execution = await client.post(
+            f"/api/v1/schema-management/schemas/{entity['id']}/execute",
+            headers={"X-User-Id": "user-a"},
+            json={"payload": {"technology_id": "T-001"}},
+        )
+        assert execution.status_code == 202
+        execution_data = execution.json()["data"]
+        assert execution_data["taskId"]
+        assert execution_data["executionId"]
+        assert execution_data["workflowId"] == "test-schema-execution"
+        assert execution_data["execution"]["payload"]["schemaId"] == entity["id"]
+        assert execution_data["execution"]["payload"]["sha256"] == entity["script"]["sha256"]
+
         relation_metadata = {
             "schemaKey": "uses-technology",
             "name": "USES_TECHNOLOGY",
@@ -205,4 +228,4 @@ async def test_rejects_invalid_python_script(schema_api) -> None:
             files={"script": ("bad.py", b"def broken(:\n", "text/x-python")},
         )
         assert response.status_code == 400
-        assert "语法错误" in response.json()["detail"]
+        assert "语法错误" in response.json()["msg"]

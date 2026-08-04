@@ -18,7 +18,7 @@ service = workflow_operations_application.service
 
 
 @router.get("", response_model=ApiResponse)
-async def list_reviews(
+def list_reviews(
     status: str | None = None,
     domain: str | None = None,
     category: str | None = None,
@@ -45,7 +45,7 @@ async def list_reviews(
 
 
 @router.get("/{review_id}", response_model=ApiResponse)
-async def get_review(review_id: str) -> ApiResponse:
+def get_review(review_id: str) -> ApiResponse:
     try:
         return ApiResponse(data=service.get_review(review_id))
     except KeyError as exc:
@@ -53,7 +53,7 @@ async def get_review(review_id: str) -> ApiResponse:
 
 
 @router.get("/{review_id}/flow", response_model=ApiResponse)
-async def get_review_flow(review_id: str) -> ApiResponse:
+def get_review_flow(review_id: str) -> ApiResponse:
     try:
         review = service.get_review(review_id)
         return ApiResponse(
@@ -75,7 +75,7 @@ async def handle_review(review_id: str, request: ReviewActionRequest) -> ApiResp
 
 
 @router.put("/{review_id}/result", response_model=ApiResponse)
-async def modify_result(review_id: str, request: ReviewResultRequest) -> ApiResponse:
+def modify_result(review_id: str, request: ReviewResultRequest) -> ApiResponse:
     try:
         return ApiResponse(
             data=service.modify_review_result(review_id, request.model_dump()), msg="任务结果已修改"
@@ -95,7 +95,7 @@ async def retry_review(review_id: str, request: RetryRequest) -> ApiResponse:
 
 
 @router.post("/{review_id}/revoke", response_model=ApiResponse)
-async def revoke_review(review_id: str, request: RevokeRequest) -> ApiResponse:
+def revoke_review(review_id: str, request: RevokeRequest) -> ApiResponse:
     try:
         return ApiResponse(
             data=service.revoke_review(review_id, request.reason, request.handler),

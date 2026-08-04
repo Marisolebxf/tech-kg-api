@@ -2,7 +2,7 @@
 
 本文件只测试路由注册和请求参数校验，不连接真实 TRSGraph。
 项目会将 FastAPI 参数校验异常统一包装为：
-HTTP 200 + 业务 code 422 + success false。
+HTTP 422 + 业务 code 422 + success false。
 """
 
 from typing import Any
@@ -29,8 +29,7 @@ def assert_validation_error(
         field_name: 预期发生错误的查询参数名称。
     """
 
-    # 本项目将参数校验错误统一包装成 HTTP 200。
-    assert response.status_code == 200
+    assert response.status_code == 422
 
     body: dict[str, Any] = response.json()
 

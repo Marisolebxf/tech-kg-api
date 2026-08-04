@@ -1,6 +1,6 @@
 from typing import Any
 
-from biz.schema.expert_paper_cooperation import ExpertPaperCooperationDemoRequest
+from biz.schemas.expert_paper_cooperation import ExpertPaperCooperationDemoRequest
 from service.expert_paper_cooperation import ExpertPaperCooperationService
 
 

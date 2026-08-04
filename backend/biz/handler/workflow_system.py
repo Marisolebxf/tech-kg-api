@@ -26,16 +26,21 @@ async def workflow_health() -> ApiResponse:
 
 
 @router.get("/definitions", response_model=ApiResponse)
-async def list_definitions() -> ApiResponse:
+def list_definitions() -> ApiResponse:
     items = service.repo.list_definitions()
     return ApiResponse(data={"items": items, "total": len(items)})
 
 
-@router.post("/definitions", response_model=ApiResponse)
-async def create_definition(request: WorkflowDefinitionRequest) -> ApiResponse:
-    return ApiResponse(
-        data=service.create_definition(request.model_dump()), msg="自定义工作流定义已保存"
-    )
+@router.post("/definitions", response_model=ApiResponse, status_code=201)
+def create_definition(request: WorkflowDefinitionRequest) -> ApiResponse:
+    try:
+        return ApiResponse(
+            code=201,
+            data=service.create_definition(request.model_dump()),
+            msg="自定义工作流定义已创建",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/definitions/python", response_model=ApiResponse)
@@ -56,32 +61,45 @@ async def upload_python_definition(
 
 
 @router.get("/definitions/{definition_id}", response_model=ApiResponse)
-async def get_definition(definition_id: str) -> ApiResponse:
+def get_definition(definition_id: str) -> ApiResponse:
     definition = service.repo.get_definition(definition_id)
     if definition is None:
         raise HTTPException(status_code=404, detail="工作流定义不存在")
     return ApiResponse(data=definition)
 
 
-@router.post("/definitions/{definition_id}/execute", response_model=ApiResponse)
+@router.post("/definitions/{definition_id}/execute", response_model=ApiResponse, status_code=202)
 async def execute_definition(definition_id: str, request: WorkflowExecuteRequest) -> ApiResponse:
     definition = service.repo.get_definition(definition_id)
     if definition is None:
         raise HTTPException(status_code=404, detail="工作流定义不存在")
-    execution = await service.execute_definition(definition, request.payload, request.workflow_id)
-    return ApiResponse(data=execution, msg="工作流执行请求已受理")
+    try:
+        execution = await service.execute_definition(
+            definition, request.payload, request.workflow_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ApiResponse(code=202, data=execution, msg="工作流执行请求已受理")
 
 
 @router.get("/executions/{execution_id}", response_model=ApiResponse)
-async def get_execution(execution_id: str) -> ApiResponse:
+def get_execution(execution_id: str) -> ApiResponse:
     execution = service.repo.get_execution(execution_id)
     if execution is None:
         raise HTTPException(status_code=404, detail="工作流执行记录不存在")
     return ApiResponse(data=execution)
 
 
+@router.get("/executions/{execution_id}/status", response_model=ApiResponse)
+async def get_execution_status(execution_id: str) -> ApiResponse:
+    try:
+        return ApiResponse(data=await service.execution_status(execution_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="工作流执行记录不存在") from exc
+
+
 @router.get("/schedules", response_model=ApiResponse)
-async def list_schedules() -> ApiResponse:
+def list_schedules() -> ApiResponse:
     items = service.repo.list_schedules()
     return ApiResponse(data={"items": items, "total": len(items)})
 
@@ -95,7 +113,7 @@ async def create_schedule(definition_id: str, request: WorkflowScheduleRequest) 
     try:
         schedule = await temporal_runtime.create_schedule(definition, schedule)
     except Exception as exc:
-        temporal_runtime._client = None
+        temporal_runtime.reset_client()
         schedule["dispatchStatus"] = "LOCAL_SAVED"
         schedule["message"] = str(exc)
     service.repo.save_schedule(schedule)
@@ -111,7 +129,7 @@ async def update_schedule_state(schedule_id: str, request: ScheduleStateRequest)
         await temporal_runtime.pause_schedule(schedule_id, paused=not request.active)
         schedule["dispatchStatus"] = "TEMPORAL_UPDATED"
     except Exception as exc:
-        temporal_runtime._client = None
+        temporal_runtime.reset_client()
         schedule["dispatchStatus"] = "LOCAL_SAVED"
         schedule["message"] = str(exc)
     schedule["active"] = request.active
@@ -119,18 +137,13 @@ async def update_schedule_state(schedule_id: str, request: ScheduleStateRequest)
     return ApiResponse(data=schedule)
 
 
-@router.post("/schedules/{schedule_id}/trigger", response_model=ApiResponse)
+@router.post("/schedules/{schedule_id}/trigger", response_model=ApiResponse, status_code=202)
 async def trigger_schedule(schedule_id: str) -> ApiResponse:
-    if service.repo.get_schedule(schedule_id) is None:
-        raise HTTPException(status_code=404, detail="Schedule 不存在")
     try:
-        await temporal_runtime.trigger_schedule(schedule_id)
-        return ApiResponse(
-            data={"id": schedule_id, "dispatchStatus": "TRIGGERED"}, msg="Schedule 已立即触发"
-        )
-    except Exception as exc:
-        temporal_runtime._client = None
-        return ApiResponse(code=503, success=False, data={"id": schedule_id}, msg=str(exc))
+        result = await service.trigger_schedule(schedule_id)
+        return ApiResponse(code=202, data=result, msg="Schedule 执行请求已受理")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Schedule 不存在") from exc
 
 
 @router.delete("/schedules/{schedule_id}", response_model=ApiResponse)
@@ -140,6 +153,6 @@ async def delete_schedule(schedule_id: str) -> ApiResponse:
     try:
         await temporal_runtime.delete_schedule(schedule_id)
     except Exception:
-        temporal_runtime._client = None
+        temporal_runtime.reset_client()
     service.repo.delete_schedule(schedule_id)
     return ApiResponse(data={"id": schedule_id}, msg="Schedule 已删除")

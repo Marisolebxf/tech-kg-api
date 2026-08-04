@@ -23,11 +23,17 @@ def _get_int_env(name: str, default: int) -> int:
 def build_db_url() -> str:
     """根据 MYSQL_* 环境变量拼装 SQLAlchemy URL（兼容旧调用）。"""
     host = os.getenv("MYSQL_HOST", "127.0.0.1")
-    port = os.getenv("MYSQL_PORT", "3306")
+    port = _get_int_env("MYSQL_PORT", 3306)
     user = os.getenv("MYSQL_USERNAME", "root")
     pwd = os.getenv("MYSQL_PASSWORD", "")
     db = os.getenv("MYSQL_DATABASE", "gkx_element")
-    return f"mysql+pymysql://{user}:{pwd}@{host}:{port}/{db}?charset=utf8mb4"
+    return MySQLClient(
+        host=host,
+        port=port,
+        username=user,
+        password=pwd,
+        database=db,
+    ).url
 
 
 class MySQLClient:
@@ -51,9 +57,7 @@ class MySQLClient:
         self.port = port or _get_int_env("MYSQL_PORT", 3306)
         self.database = database or os.getenv("MYSQL_DATABASE", "gkx_element")
         self.username = username or os.getenv("MYSQL_USERNAME", "root")
-        self.password = (
-            password if password is not None else os.getenv("MYSQL_PASSWORD", "123456789")
-        )
+        self.password = password if password is not None else os.getenv("MYSQL_PASSWORD", "")
         self.pool_size = pool_size or _get_int_env("MYSQL_POOL_SIZE", 10)
         self.max_overflow = max_overflow or _get_int_env("MYSQL_MAX_OVERFLOW", 20)
         self.echo = (

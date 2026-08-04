@@ -10,5 +10,5 @@ application = PlatformOverviewApplication()
 
 
 @router.get("", response_model=PlatformOverviewResponse)
-async def get_platform_overview() -> PlatformOverviewResponse:
+def get_platform_overview() -> PlatformOverviewResponse:
     return PlatformOverviewResponse(data=application.get_overview())

@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 
 from application.expert_direct_relation import ExpertDirectRelationApplication
-from biz.schema.expert_direct_relation import (
+from biz.schemas.expert_direct_relation import (
     MAX_QUERY_LIMIT,
     DataSource,
     ExpertDirectRelationQueryRequest,
@@ -15,12 +15,12 @@ application = ExpertDirectRelationApplication()
 
 
 @router.get("")
-async def describe_expert_direct_relation() -> dict[str, object]:
+def describe_expert_direct_relation() -> dict[str, object]:
     return application.describe()
 
 
 @router.post("/query", response_model=ExpertDirectRelationQueryResponse)
-async def query_expert_direct_relation(
+def query_expert_direct_relation(
     body: ExpertDirectRelationQueryRequest,
 ) -> dict[str, object]:
     return application.query(
@@ -35,7 +35,7 @@ async def query_expert_direct_relation(
 
 
 @router.get("/query", response_model=ExpertDirectRelationQueryResponse)
-async def query_expert_direct_relation_get(
+def query_expert_direct_relation_get(
     dataSource: Annotated[DataSource, Query()] = "all",
     expertAId: Annotated[str | None, Query()] = None,
     expertBId: Annotated[str | None, Query()] = None,

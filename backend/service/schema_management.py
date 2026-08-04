@@ -284,6 +284,29 @@ class SchemaManagementService:
             raise SchemaStorageError("读取 Schema Python 脚本失败") from exc
         return definition.script, body
 
+    def execution_context(self, schema_id: str, user_id: str) -> dict[str, Any]:
+        """Return an authorized, immutable script reference for workflow execution."""
+        user_id = user_id.strip()
+        if not user_id:
+            raise SchemaPermissionError("X-User-Id 不能为空")
+        definition = self._require_schema(schema_id)
+        if (
+            not definition.is_system
+            and definition.created_by != user_id
+            and user_id not in _schema_admin_user_ids()
+        ):
+            raise SchemaPermissionError("只能执行自己创建的 Schema 脚本")
+        if definition.script is None:
+            raise SchemaNotFoundError("该 Schema 没有关联的 Python 脚本")
+        return {
+            "schema": self._serialize(definition, user_id=user_id, detail=True),
+            "script": {
+                "bucket": definition.script.bucket,
+                "objectKey": definition.script.object_key,
+                "sha256": definition.script.sha256,
+            },
+        }
+
     def _create(
         self,
         *,

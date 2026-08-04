@@ -13,7 +13,11 @@ from starlette.background import BackgroundTask
 
 from application.schema_management import SchemaManagementApplication
 from biz.schemas.common import ApiResponse
-from biz.schemas.schema_management import EntitySchemaCreate, RelationSchemaCreate
+from biz.schemas.schema_management import (
+    EntitySchemaCreate,
+    RelationSchemaCreate,
+    SchemaExecuteRequest,
+)
 from infra.mysql import get_session
 from service.schema_management import (
     SchemaConflictError,
@@ -106,6 +110,20 @@ def get_schema_detail(
 ) -> ApiResponse:
     try:
         return ApiResponse(data=_application(session).get_schema(schema_id, user_id))
+    except SchemaManagementError as exc:
+        _raise_domain_error(exc)
+
+
+@router.post("/schemas/{schema_id}/execute", response_model=ApiResponse, status_code=202)
+async def execute_schema_script(
+    schema_id: str,
+    request: SchemaExecuteRequest,
+    session: Annotated[Session, Depends(get_session)],
+    user_id: Annotated[str, Header(alias="X-User-Id", min_length=1, max_length=128)],
+) -> ApiResponse:
+    try:
+        data = await _application(session).execute_schema(schema_id, user_id, request.payload)
+        return ApiResponse(code=202, data=data, msg="Schema 脚本执行请求已受理")
     except SchemaManagementError as exc:
         _raise_domain_error(exc)
 

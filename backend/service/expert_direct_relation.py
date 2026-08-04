@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from dao.scholar import ScholarDAO
-from service.base_module import KGModuleScaffoldService
+from service.base_module import KGModuleService
 
 FALLBACK_ITEMS: list[dict[str, Any]] = [
     {
@@ -47,7 +47,7 @@ FALLBACK_ITEMS: list[dict[str, Any]] = [
 MAX_QUERY_LIMIT = 100
 
 
-class ExpertDirectRelationService(KGModuleScaffoldService):
+class ExpertDirectRelationService(KGModuleService):
     module_code = "expert_direct_relation"
 
     def __init__(self, scholar_dao: ScholarDAO | None = None) -> None:

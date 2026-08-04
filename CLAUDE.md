@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Monorepo: `backend/` (Python FastAPI) + `frontend/` (Vue 3 + TS + Vite). A top-level `docker-compose.yml` builds and runs both.
 
-The README.md at the root is **stale** — it documents an older Neo4j-based `backend/app/` layout that is no longer the live code. Treat the structure below as the source of truth.
+The root and backend README files describe the live FastAPI layout and API contracts.
 
 **Not committed / gitignored — do not add to git:** `backend/app/`, root `app/`, root `graph_db/`, and `docs/superpowers/`. These are local-only or legacy copies. The `backend/legacy/` directory IS tracked but is excluded from ruff and is not part of the live app.
 
@@ -30,7 +30,7 @@ Python is pinned to `>=3.11.13,<3.12` (the Docker image uses `python:3.11.13-sli
 
 - **ruff**: `line-length = 100`, lint selects `E F I UP B`, ignores `E501` (line length not enforced), **excludes `legacy`**. CI runs `ruff format --check .` then `ruff check .`.
 - **pytest**: `asyncio_mode = "auto"` (async tests need no decorator), `testpaths = ["tests"]`.
-- **`external` marker**: tests requiring real MySQL/Redis/TRSGraph/Kafka/Milvus. CI runs `-m "not external"`; mark live-service tests with `@pytest.mark.external`.
+- **`external` marker**: tests requiring real MySQL, TRSGraph, Temporal, or Milvus. CI runs `-m "not external"`; mark live-service tests with `@pytest.mark.external`.
 - Unit tests for the graph client use `httpx.MockTransport` to fake the trs-graph REST API — no live service needed.
 - Integration tests use the `async_client` fixture in `tests/conftest.py` (ASGI transport against `main.app`).
 
@@ -41,10 +41,12 @@ Request flow: `main.py` → `biz/router/register.py` → `biz/handler/*` → `ap
 - **`biz/handler/`** — FastAPI `APIRouter`s (the only place routes are defined). Routers are mounted by `biz/router/register.py` under the `/api/v1` prefix. Handlers are thin: parse request, call an `application` object, return response.
 - **`biz/schemas/`** — Pydantic v2 request/response models, one file per module. Handlers reference these for `response_model` and body parsing.
 - **`application/`** — thin orchestration classes; one per domain module, wraps a `service`.
-- **`service/`** — business logic. Each KG-construction module subclasses `service/base_module.KGModuleScaffoldService` (sets `module_code`, inherits `describe()` from `service/module_catalog.py`). The catalog in `module_catalog.py` is the registry of module codes/names/descriptions.
+- **`service/`** — business logic. Each KG-construction module subclasses `service/base_module.KGModuleService` (sets `module_code`, inherits `describe()` from `service/module_catalog.py`). The catalog in `module_catalog.py` is the registry of module codes/names/descriptions and readiness state.
 - **`dao/`** — MySQL query objects (e.g. `ScholarDAO`), each takes a SQLAlchemy `Session`.
 - **`db_model/`** — SQLAlchemy ORM models (all share `db_model/base.Base`). One model file per table family (`scholar.py`, `organization.py`, `paper.py`, `patent.py`, ...).
-- **`infra/`** — infrastructure singletons: `infra/mysql.py` (sync SQLAlchemy engine + `get_mysql_client()`), `infra/redis.py`, `infra/llm.py`, and `infra/graph_db/` (the trs-graph client). All read config from env vars / `.env` via `python-dotenv` — the `config/*.yml` files are **legacy and not loaded** by the live app.
+- **`infra/`** — infrastructure singletons and lifecycle management for MySQL, S3, Milvus, LLM, and `infra/graph_db/`. Runtime configuration comes from env vars / `.env`; `config/*.yml` is legacy and not loaded by the live app.
+
+All JSON errors use the `ApiResponse` envelope and real HTTP status codes. Async acceptance endpoints return HTTP 202 with a `statusUrl`. Synchronous handlers use `def` so FastAPI runs blocking database and graph calls in its thread pool; use `async def` only when the handler contains real async I/O.
 
 There is one module per KG-construction feature (`expert_direct_relation`, `expert_enterprise_relation`, `industry_chain_panorama`, ...). Adding a feature means adding all five layers (schemas + handler + application + service + dao/model as needed) plus registering the router in `biz/router/register.py`. The 重点关注科技企业关系子系统 modules (below) are the most complete reference implementations.
 
@@ -93,10 +95,13 @@ pnpm preview
 
 ## Docker
 
-`docker-compose.yml` runs two services built from their own Dockerfiles:
+`docker-compose.yml` runs the application plus its local workflow, vector, and object-storage dependencies:
 
-- `api` — `./backend`, host port **8001** → container 8000. Connects to TRSGraph/MySQL via `host.docker.internal` (`extra_hosts: host-gateway`). Env defaults inline; override with a `.env` or shell env.
+- `api` — `./backend`, host port **8001** → container 8000.
 - `web` — `./frontend`, host port **8088** → container 80. Depends on `api`.
+- `temporal`, `temporal-worker`, `temporal-ui`, and PostgreSQL — workflow runtime.
+- `schema-minio` and `operator-rustfs` — separate S3-compatible stores.
+- `milvus`, etcd, MinIO, and `m3e-embedding` — vector search and embeddings.
 
 Backend Dockerfile installs `uv` from **default PyPI** (the Tsinghua mirror 403s on `uv`); don't switch it back to a mirror without testing.
 

@@ -8,8 +8,8 @@ from typing import Any
 
 import pymysql
 
-from biz.schema.expert_paper_cooperation import ExpertPaperCooperationDemoRequest
-from service.base_module import KGModuleScaffoldService
+from biz.schemas.expert_paper_cooperation import ExpertPaperCooperationDemoRequest
+from service.base_module import KGModuleService
 
 TOPIC_ALIAS_MAP = {
     "academic graph": "学术图谱",
@@ -57,7 +57,7 @@ SHARED_CONTRIBUTION_THEME_MAP = {
 }
 
 
-class ExpertPaperCooperationService(KGModuleScaffoldService):
+class ExpertPaperCooperationService(KGModuleService):
     module_code = "expert_paper_cooperation"
 
     def build_structured_result_only(

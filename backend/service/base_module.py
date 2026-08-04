@@ -1,7 +1,7 @@
 from service.module_catalog import get_kg_construction_module
 
 
-class KGModuleScaffoldService:
+class KGModuleService:
     module_code: str
 
     def describe(self) -> dict[str, object]:

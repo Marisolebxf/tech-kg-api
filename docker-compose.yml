@@ -36,6 +36,7 @@ services:
       TEMPORAL_TASK_QUEUE: tech-kg-workflows
       WORKFLOW_DATABASE_PATH: /var/lib/tech-kg/workflows.db
       WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
+      WORKFLOW_RETRY_INTERVAL_SECONDS: ${WORKFLOW_RETRY_INTERVAL_SECONDS:-30}
       SCHEMA_AUTO_INIT: ${SCHEMA_AUTO_INIT:-true}
       SCHEMA_S3_ENDPOINT_URL: ${SCHEMA_S3_ENDPOINT_URL:-http://schema-minio:9000}
       SCHEMA_S3_ACCESS_KEY: ${SCHEMA_S3_ACCESS_KEY:-minioadmin}
@@ -164,10 +165,26 @@ services:
       TEMPORAL_TASK_QUEUE: tech-kg-workflows
       WORKFLOW_DATABASE_PATH: /var/lib/tech-kg/workflows.db
       WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
+      SCHEMA_S3_ENDPOINT_URL: ${SCHEMA_S3_ENDPOINT_URL:-http://schema-minio:9000}
+      SCHEMA_S3_ACCESS_KEY: ${SCHEMA_S3_ACCESS_KEY:-minioadmin}
+      SCHEMA_S3_SECRET_KEY: ${SCHEMA_S3_SECRET_KEY:-minioadmin}
+      SCHEMA_S3_BUCKET: ${SCHEMA_S3_BUCKET:-tech-kg-schema-scripts}
+      SCHEMA_S3_REGION: ${SCHEMA_S3_REGION:-us-east-1}
+      SCHEMA_S3_SECURE: ${SCHEMA_S3_SECURE:-false}
+      TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://trs-graph-service:8090}
+      TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-dev}
+      TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
+      TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
     volumes:
       - workflow-state:/var/lib/tech-kg
     depends_on:
-      - temporal
+      temporal:
+        condition: service_started
+      schema-minio:
+        condition: service_healthy
+    networks:
+      - app
+      - graph
   schema-minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     container_name: tech-kg-schema-minio

@@ -22,6 +22,7 @@ services:
       TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-dev}
       MILVUS_HOST: ${MILVUS_HOST:-milvus}
       MILVUS_PORT: ${MILVUS_PORT:-19530}
+      WORKFLOW_RETRY_INTERVAL_SECONDS: ${WORKFLOW_RETRY_INTERVAL_SECONDS:-30}
     networks:
       - app
       - engine

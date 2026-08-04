@@ -79,7 +79,7 @@ async def test_upload_validation_and_reserved_name(async_client, operator_regist
         },
     )
     assert invalid_response.status_code == 422
-    assert "operator" in invalid_response.json()["detail"]
+    assert "operator" in invalid_response.json()["msg"]
 
     reserved_response = await async_client.post(
         "/api/v1/operators",

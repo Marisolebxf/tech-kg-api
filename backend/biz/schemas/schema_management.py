@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -104,3 +105,7 @@ class RelationSchemaCreate(SchemaCreateBase):
         if not self.target_schema_id and not self.target_expression:
             raise ValueError("必须提供关系终点 Schema 或终点表达式")
         return self
+
+
+class SchemaExecuteRequest(CamelModel):
+    payload: dict[str, Any] = Field(default_factory=dict)

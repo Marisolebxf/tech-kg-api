@@ -8,11 +8,18 @@ from sqlalchemy.orm import Session
 
 from infra.s3 import S3Storage
 from service.schema_management import SchemaManagementService
+from service.workflow_operations import WorkflowOperationsService, workflow_operations_service
 
 
 class SchemaManagementApplication:
-    def __init__(self, session: Session, storage: S3Storage | None = None) -> None:
+    def __init__(
+        self,
+        session: Session,
+        storage: S3Storage | None = None,
+        workflows: WorkflowOperationsService = workflow_operations_service,
+    ) -> None:
         self._service = SchemaManagementService(session, storage=storage)
+        self._workflows = workflows
 
     def overview(self) -> dict[str, Any]:
         return self._service.overview()
@@ -40,3 +47,9 @@ class SchemaManagementApplication:
 
     def get_script(self, schema_id: str):
         return self._service.get_script(schema_id)
+
+    async def execute_schema(
+        self, schema_id: str, user_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        context = self._service.execution_context(schema_id, user_id)
+        return await self._workflows.trigger_schema_execution(payload=payload, **context)

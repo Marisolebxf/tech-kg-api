@@ -1,4 +1,6 @@
-from fastapi import FastAPI
+"""Declarative router registration for the HTTP application."""
+
+from fastapi import APIRouter, FastAPI
 
 from biz.handler.common_capability import router as common_capability_router
 from biz.handler.enterprise_background_analysis import (
@@ -25,31 +27,42 @@ from biz.handler.options import router as options_router
 from biz.handler.platform_overview import router as platform_overview_router
 from biz.handler.relation_detail_annotation import router as relation_detail_annotation_router
 from biz.handler.schema_management import router as schema_management_router
+from biz.handler.system import router as system_router
 from biz.handler.task_center import router as task_center_router
 from biz.handler.workflow_system import router as workflow_system_router
 
+API_PREFIX = "/api/v1"
+
+API_ROUTERS: tuple[APIRouter, ...] = (
+    common_capability_router,
+    kg_construction_router,
+    options_router,
+    platform_overview_router,
+    expert_direct_relation_router,
+    expert_indirect_relation_router,
+    expert_cooperation_achievement_router,
+    expert_colleague_relation_router,
+    expert_alumni_relation_router,
+    expert_paper_cooperation_router,
+    expert_enterprise_relation_router,
+    relation_detail_annotation_router,
+    enterprise_background_analysis_router,
+    expert_enterprise_mining_router,
+    industry_chain_topn_event_router,
+    industry_chain_panorama_router,
+    graph_search_router,
+    task_center_router,
+    manual_review_router,
+    workflow_system_router,
+    schema_management_router,
+    operator_router,
+)
+
+ROOT_ROUTERS: tuple[APIRouter, ...] = (system_router, operator_internal_router)
+
 
 def register_routers(app: FastAPI) -> None:
-    app.include_router(common_capability_router, prefix="/api/v1")
-    app.include_router(kg_construction_router, prefix="/api/v1")
-    app.include_router(options_router, prefix="/api/v1")
-    app.include_router(platform_overview_router, prefix="/api/v1")
-    app.include_router(expert_direct_relation_router, prefix="/api/v1")
-    app.include_router(expert_indirect_relation_router, prefix="/api/v1")
-    app.include_router(expert_cooperation_achievement_router, prefix="/api/v1")
-    app.include_router(expert_colleague_relation_router, prefix="/api/v1")
-    app.include_router(expert_alumni_relation_router, prefix="/api/v1")
-    app.include_router(expert_paper_cooperation_router, prefix="/api/v1")
-    app.include_router(expert_enterprise_relation_router, prefix="/api/v1")
-    app.include_router(relation_detail_annotation_router, prefix="/api/v1")
-    app.include_router(enterprise_background_analysis_router, prefix="/api/v1")
-    app.include_router(expert_enterprise_mining_router, prefix="/api/v1")
-    app.include_router(industry_chain_topn_event_router, prefix="/api/v1")
-    app.include_router(industry_chain_panorama_router, prefix="/api/v1")
-    app.include_router(graph_search_router, prefix="/api/v1")
-    app.include_router(task_center_router, prefix="/api/v1")
-    app.include_router(manual_review_router, prefix="/api/v1")
-    app.include_router(workflow_system_router, prefix="/api/v1")
-    app.include_router(schema_management_router, prefix="/api/v1")
-    app.include_router(operator_router, prefix="/api/v1")
-    app.include_router(operator_internal_router)
+    for router in API_ROUTERS:
+        app.include_router(router, prefix=API_PREFIX)
+    for router in ROOT_ROUTERS:
+        app.include_router(router)

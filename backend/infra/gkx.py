@@ -40,6 +40,8 @@ def get_gkx_session() -> Session:
 
 
 def reset_gkx_client() -> None:
-    """测试用：重置单例。"""
+    """Close and reset the process-wide read-only client."""
     global _gkx_client
+    if _gkx_client is not None:
+        _gkx_client.dispose()
     _gkx_client = None

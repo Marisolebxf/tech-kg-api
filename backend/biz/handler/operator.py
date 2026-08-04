@@ -54,7 +54,7 @@ def _raise_http_error(exc: OperatorRegistryError) -> None:
 
 
 @router.get("", response_model=OperatorListResponse)
-async def list_operators(
+def list_operators(
     app: OperatorApplicationDependency,
     kind: OperatorKind | None = None,
 ) -> dict[str, object]:
@@ -62,7 +62,7 @@ async def list_operators(
 
 
 @router.get("/{name}", response_model=OperatorManifestResponse)
-async def get_operator(name: str, app: OperatorApplicationDependency) -> dict[str, object]:
+def get_operator(name: str, app: OperatorApplicationDependency) -> dict[str, object]:
     try:
         return app.get(name)
     except OperatorRegistryError as exc:
@@ -109,7 +109,7 @@ async def invoke_operator(
 
 
 @internal_router.post("/reload", response_model=OperatorReloadResponse)
-async def reload_operators(
+def reload_operators(
     app: OperatorApplicationDependency,
     body: OperatorSyncRequest | None = None,
     reload_token: Annotated[str | None, Header(alias="X-Operator-Reload-Token")] = None,

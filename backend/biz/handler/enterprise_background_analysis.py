@@ -1,6 +1,6 @@
 """企业背景关联分析 路由。"""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from application.enterprise_background_analysis import EnterpriseBackgroundAnalysisApplication
 from biz.schemas.common import ApiResponse
@@ -11,14 +11,14 @@ application = EnterpriseBackgroundAnalysisApplication()
 
 
 @router.get("")
-async def describe_enterprise_background_analysis() -> dict[str, object]:
+def describe_enterprise_background_analysis() -> dict[str, object]:
     return application.describe()
 
 
 @router.post("/analyze", response_model=ApiResponse)
-async def analyze_enterprise_background(req: EnterpriseBackgroundAnalysisRequest) -> ApiResponse:
+def analyze_enterprise_background(req: EnterpriseBackgroundAnalysisRequest) -> ApiResponse:
     try:
         result = application.analyze(req.model_dump())
         return ApiResponse(data=result)
     except KeyError as exc:
-        return ApiResponse(code=404, success=False, msg=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc

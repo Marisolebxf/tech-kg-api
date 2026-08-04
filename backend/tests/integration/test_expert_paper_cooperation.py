@@ -78,8 +78,7 @@ async def test_expert_paper_cooperation_rejects_invalid_payloads(
 
     response = await async_client.post(ENDPOINT, json=payload)
 
-    # 当前项目全局 RequestValidationError 处理器使用业务 code=422 包装返回。
-    assert response.status_code == 200
+    assert response.status_code == 422
     data = response.json()
     assert data["code"] == 422
     assert data["success"] is False
@@ -93,7 +92,7 @@ async def test_expert_paper_cooperation_rejects_missing_required_field(async_cli
 
     response = await async_client.post(ENDPOINT, json=payload)
 
-    assert response.status_code == 200
+    assert response.status_code == 422
     data = response.json()
     assert data["code"] == 422
     assert data["success"] is False
@@ -151,4 +150,5 @@ async def test_expert_paper_cooperation_returns_500_for_service_error(async_clie
     response = await async_client.post(ENDPOINT, json=VALID_PAYLOAD)
 
     assert response.status_code == 500
-    assert "专家论文合作关系结构化结果生成失败" in response.text
+    assert response.json()["msg"] == "结构化结果生成失败"
+    assert "database timeout" not in response.text

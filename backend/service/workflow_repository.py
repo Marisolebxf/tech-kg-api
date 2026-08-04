@@ -33,10 +33,13 @@ class WorkflowRepository:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=30)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 30000")
+        connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
     def _initialize(self) -> None:
         with self._lock, self._connect() as connection:
+            connection.execute("PRAGMA journal_mode = WAL")
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS batches (
@@ -60,7 +63,7 @@ class WorkflowRepository:
                     key TEXT PRIMARY KEY, payload TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS workflow_definitions (
-                    id TEXT PRIMARY KEY, workflow_type TEXT NOT NULL UNIQUE,
+                    id TEXT PRIMARY KEY, workflow_type TEXT NOT NULL,
                     category TEXT NOT NULL, active INTEGER NOT NULL, payload TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS workflow_executions (
@@ -73,9 +76,77 @@ class WorkflowRepository:
                 );
                 """
             )
+            self._migrate_workflow_definitions(connection)
             count = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
             if count == 0:
                 self._seed(connection)
+            self._ensure_builtin_definitions(connection)
+
+    @staticmethod
+    def _migrate_workflow_definitions(connection: sqlite3.Connection) -> None:
+        """Remove the legacy UNIQUE(workflow_type) constraint without losing definitions."""
+        indexes = connection.execute("PRAGMA index_list(workflow_definitions)").fetchall()
+        has_unique_workflow_type = False
+        for index in indexes:
+            if not index["unique"]:
+                continue
+            columns = connection.execute(f"PRAGMA index_info('{index['name']}')").fetchall()
+            if [column["name"] for column in columns] == ["workflow_type"]:
+                has_unique_workflow_type = True
+                break
+        if not has_unique_workflow_type:
+            return
+
+        connection.executescript(
+            """
+            ALTER TABLE workflow_definitions RENAME TO workflow_definitions_legacy;
+            CREATE TABLE workflow_definitions (
+                id TEXT PRIMARY KEY, workflow_type TEXT NOT NULL,
+                category TEXT NOT NULL, active INTEGER NOT NULL, payload TEXT NOT NULL
+            );
+            INSERT INTO workflow_definitions(id, workflow_type, category, active, payload)
+            SELECT id, workflow_type, category, active, payload
+            FROM workflow_definitions_legacy;
+            DROP TABLE workflow_definitions_legacy;
+            """
+        )
+
+    @staticmethod
+    def _builtin_definitions() -> list[tuple[str, str, str, str]]:
+        return [
+            ("entity-paper", "kg.entity.paper", "entity", "论文实体工作流"),
+            ("entity-scholar", "kg.entity.scholar", "entity", "人才实体工作流"),
+            ("entity-patent", "kg.entity.patent", "entity", "专利实体工作流"),
+            ("entity-organization", "kg.entity.organization", "entity", "机构实体工作流"),
+            ("relation-authorship", "kg.relation.authorship", "relation", "论文作者关系工作流"),
+            ("relation-employment", "kg.relation.employment", "relation", "人才任职关系工作流"),
+            ("relation-citation", "kg.relation.citation", "relation", "论文引用关系工作流"),
+            ("relation-cooperation", "kg.relation.cooperation", "relation", "合作关系工作流"),
+            ("graph-build", "kg.graph.build", "graph", "图谱构建总工作流"),
+            ("schema-execution", "kg.schema.execute", "schema", "Schema 脚本执行工作流"),
+        ]
+
+    def _ensure_builtin_definitions(self, connection: sqlite3.Connection) -> None:
+        for definition_id, workflow_type, category, name in self._builtin_definitions():
+            payload = {
+                "id": definition_id,
+                "name": name,
+                "workflowType": workflow_type,
+                "category": category,
+                "taskQueue": os.getenv("TEMPORAL_TASK_QUEUE", "tech-kg-workflows"),
+                "active": True,
+                "sourceKind": "builtin",
+                "steps": ["读取脚本", "加载输入", "执行转换", "保存结果"]
+                if category == "schema"
+                else ["读取增量", "标准化", "抽取/对齐", "质量校验", "图谱写入"],
+                "createdAt": _now(),
+            }
+            connection.execute(
+                """INSERT OR IGNORE INTO workflow_definitions(
+                       id, workflow_type, category, active, payload
+                   ) VALUES (?, ?, ?, 1, ?)""",
+                (definition_id, workflow_type, category, _json(payload)),
+            )
 
     def _seed(self, connection: sqlite3.Connection) -> None:
         batches = [
@@ -231,35 +302,6 @@ class WorkflowRepository:
         connection.execute(
             "INSERT INTO settings(key, payload) VALUES ('update_policy', ?)", (_json(policy),)
         )
-
-        definitions = [
-            ("entity-paper", "kg.entity.paper", "entity", "论文实体工作流"),
-            ("entity-scholar", "kg.entity.scholar", "entity", "人才实体工作流"),
-            ("entity-patent", "kg.entity.patent", "entity", "专利实体工作流"),
-            ("entity-organization", "kg.entity.organization", "entity", "机构实体工作流"),
-            ("relation-authorship", "kg.relation.authorship", "relation", "论文作者关系工作流"),
-            ("relation-employment", "kg.relation.employment", "relation", "人才任职关系工作流"),
-            ("relation-citation", "kg.relation.citation", "relation", "论文引用关系工作流"),
-            ("relation-cooperation", "kg.relation.cooperation", "relation", "合作关系工作流"),
-            ("graph-build", "kg.graph.build", "graph", "图谱构建总工作流"),
-        ]
-        for definition_id, workflow_type, category, name in definitions:
-            payload = {
-                "id": definition_id,
-                "name": name,
-                "workflowType": workflow_type,
-                "category": category,
-                "taskQueue": os.getenv("TEMPORAL_TASK_QUEUE", "tech-kg-workflows"),
-                "active": True,
-                "sourceKind": "builtin",
-                "steps": ["读取增量", "标准化", "抽取/对齐", "质量校验", "图谱写入"],
-                "createdAt": _now(),
-            }
-            connection.execute(
-                """INSERT INTO workflow_definitions(id, workflow_type, category, active, payload)
-                   VALUES (?, ?, ?, 1, ?)""",
-                (definition_id, workflow_type, category, _json(payload)),
-            )
 
     @staticmethod
     def _steps(blocking: str | None = None) -> list[dict[str, Any]]:
@@ -737,6 +779,16 @@ class WorkflowRepository:
             ).fetchone()
             return json.loads(row["payload"]) if row else None
 
+    def save_batch(self, batch: dict[str, Any]) -> None:
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """INSERT INTO batches(id, update_date, payload) VALUES (?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       update_date = excluded.update_date,
+                       payload = excluded.payload""",
+                (batch["id"], batch["updateDate"], _json(batch)),
+            )
+
     def list_tasks(self, filters: dict[str, Any]) -> list[dict[str, Any]]:
         clauses, params = [], []
         mapping = {
@@ -892,19 +944,24 @@ class WorkflowRepository:
             ).fetchone()
             return json.loads(row["payload"]) if row else None
 
-    def save_definition(self, definition: dict[str, Any]) -> None:
+    def create_definition(self, definition: dict[str, Any]) -> None:
+        """Insert a new definition and reject accidental overwrite."""
         with self._lock, self._connect() as connection:
-            connection.execute(
-                """INSERT OR REPLACE INTO workflow_definitions(id, workflow_type, category, active, payload)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (
-                    definition["id"],
-                    definition["workflowType"],
-                    definition["category"],
-                    int(definition.get("active", True)),
-                    _json(definition),
-                ),
-            )
+            try:
+                connection.execute(
+                    """INSERT INTO workflow_definitions(
+                           id, workflow_type, category, active, payload
+                       ) VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        definition["id"],
+                        definition["workflowType"],
+                        definition["category"],
+                        int(definition.get("active", True)),
+                        _json(definition),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"工作流定义已存在: {definition['id']}") from exc
 
     def save_execution(self, execution: dict[str, Any]) -> None:
         with self._lock, self._connect() as connection:
@@ -922,12 +979,76 @@ class WorkflowRepository:
                 ),
             )
 
+    def save_outcome(
+        self,
+        execution: dict[str, Any],
+        task: dict[str, Any] | None,
+        batch: dict[str, Any] | None,
+    ) -> None:
+        """Commit a Worker outcome and its derived task/batch state in one transaction."""
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """INSERT OR REPLACE INTO workflow_executions(id, definition_id, workflow_id,
+                   run_id, status, started_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    execution["id"],
+                    execution["definitionId"],
+                    execution["workflowId"],
+                    execution.get("runId"),
+                    execution["status"],
+                    execution["startedAt"],
+                    _json(execution),
+                ),
+            )
+            if task is not None:
+                connection.execute(
+                    """INSERT OR REPLACE INTO tasks(id, batch_id, stage, task_status, domain, kind,
+                       processed_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        task["id"],
+                        task["batchId"],
+                        task["stage"],
+                        task["taskStatus"],
+                        task["dataDomain"],
+                        task["kind"],
+                        task["processedAt"],
+                        _json(task),
+                    ),
+                )
+            if batch is not None:
+                connection.execute(
+                    """INSERT INTO batches(id, update_date, payload) VALUES (?, ?, ?)
+                       ON CONFLICT(id) DO UPDATE SET
+                           update_date = excluded.update_date,
+                           payload = excluded.payload""",
+                    (batch["id"], batch["updateDate"], _json(batch)),
+                )
+
     def get_execution(self, execution_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT payload FROM workflow_executions WHERE id = ?", (execution_id,)
             ).fetchone()
             return json.loads(row["payload"]) if row else None
+
+    def get_execution_by_workflow_id(self, workflow_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            rows = self._rows(
+                connection.execute(
+                    "SELECT payload FROM workflow_executions ORDER BY started_at DESC"
+                )
+            )
+        return next((item for item in rows if item["workflowId"] == workflow_id), None)
+
+    def list_queued_executions(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            return self._rows(
+                connection.execute(
+                    """SELECT payload FROM workflow_executions
+                       WHERE status = 'QUEUED' ORDER BY started_at LIMIT ?""",
+                    (limit,),
+                )
+            )
 
     def save_schedule(self, schedule: dict[str, Any]) -> None:
         with self._lock, self._connect() as connection:

@@ -12,13 +12,13 @@ from dao.gkx_organization import GkxOrganizationDAO
 from dao.gkx_scholar import GkxScholarDAO
 from infra.gkx import get_gkx_session
 from infra.graph_db import TRSGraphClient, get_techkg_client
-from service.base_module import KGModuleScaffoldService
+from service.base_module import KGModuleService
 from service.enterprise_relation_catalog import relation_label, validate_relation_types
 
 EDGE_TYPE = "EMPLOYED_BY"
 
 
-class ExpertEnterpriseRelationService(KGModuleScaffoldService):
+class ExpertEnterpriseRelationService(KGModuleService):
     module_code = "expert_enterprise_relation"
 
     def __init__(self) -> None:

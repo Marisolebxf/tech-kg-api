@@ -41,6 +41,9 @@ class LLMClient:
             logger.warning("LLM synthesize failed, degrading: %s", exc)
             return None
 
+    def close(self) -> None:
+        self._client.close()
+
 
 _client: LLMClient | None = None
 
@@ -61,6 +64,8 @@ def get_llm_client() -> LLMClient | None:
 
 
 def reset_llm_client() -> None:
-    """测试用：重置单例。"""
+    """Close and reset the process-wide client."""
     global _client
+    if _client is not None:
+        _client.close()
     _client = None

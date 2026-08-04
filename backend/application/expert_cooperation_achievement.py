@@ -7,3 +7,6 @@ class ExpertCooperationAchievementApplication:
 
     def describe(self) -> dict[str, object]:
         return self._service.describe()
+
+    def query(self, **kwargs):
+        return self._service.query(**kwargs)

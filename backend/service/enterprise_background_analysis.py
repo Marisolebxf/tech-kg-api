@@ -12,7 +12,7 @@ from dao.organization import OrganizationDAO
 from dao.patent import PatentDAO
 from infra.gkx import get_gkx_session
 from infra.llm import get_llm_client
-from service.base_module import KGModuleScaffoldService
+from service.base_module import KGModuleService
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ def _num(v: Any) -> float | None:
         return None
 
 
-class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
+class EnterpriseBackgroundAnalysisService(KGModuleService):
     module_code = "enterprise_background_analysis"
 
     def analyze(self, payload: dict[str, Any], session: Session | None = None) -> dict[str, Any]:

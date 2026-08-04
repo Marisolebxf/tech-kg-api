@@ -12,5 +12,5 @@ router = APIRouter(prefix="/kg-construction/options")
 
 
 @router.get("")
-async def options() -> dict[str, Any]:
+def options() -> dict[str, Any]:
     return get_options()

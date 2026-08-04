@@ -67,7 +67,13 @@ class WorkflowDefinitionRequest(BaseModel):
 
 class WorkflowExecuteRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
-    workflow_id: str | None = Field(default=None, alias="workflowId")
+    workflow_id: str | None = Field(
+        default=None,
+        alias="workflowId",
+        min_length=1,
+        max_length=255,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$",
+    )
 
     model_config = {"populate_by_name": True}
 

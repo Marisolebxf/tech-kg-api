@@ -55,6 +55,15 @@ class ScholarDAO(BaseDAO[DwdScholar]):
             statement = statement.where(DwdScholar.status == 1)
         return self.list_by_statement(statement)
 
+    def list_active(self, *, limit: int = 500) -> list[DwdScholar]:
+        statement = (
+            select(DwdScholar)
+            .where(DwdScholar.status == 1)
+            .order_by(DwdScholar.h_index.desc(), DwdScholar.scholar_id)
+            .limit(max(1, min(limit, 2000)))
+        )
+        return self.list_by_statement(statement)
+
     def list_direct_coauthor_relations(
         self,
         *,

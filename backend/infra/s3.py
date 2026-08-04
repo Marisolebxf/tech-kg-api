@@ -107,6 +107,14 @@ class S3Storage:
     def delete_object(self, bucket: str, object_key: str) -> None:
         self.client.delete_object(Bucket=bucket, Key=object_key)
 
+    def close(self) -> None:
+        """Close the underlying HTTP pool if the client was initialized."""
+        with self._lock:
+            if self._client is not None:
+                self._client.close()
+                self._client = None
+            self._bucket_ready = False
+
 
 _storage: S3Storage | None = None
 _storage_lock = threading.Lock()
@@ -119,3 +127,12 @@ def get_schema_s3_storage() -> S3Storage:
             if _storage is None:
                 _storage = S3Storage()
     return _storage
+
+
+def reset_schema_s3_storage() -> None:
+    """Close and reset the process-wide schema storage client."""
+    global _storage
+    with _storage_lock:
+        if _storage is not None:
+            _storage.close()
+            _storage = None

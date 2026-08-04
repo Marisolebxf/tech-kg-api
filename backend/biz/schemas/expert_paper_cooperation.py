@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Literal
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -72,7 +72,7 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def validate_experts(self):
+    def validate_experts(self) -> Self:
         if self.expertAId == self.expertBId:
             raise ValueError("expertAId 和 expertBId 不能相同")
         if self.startTime and self.endTime:

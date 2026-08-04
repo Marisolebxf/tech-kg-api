@@ -1,364 +1,118 @@
 # tech-kg-api
 
-科技知识图谱 monorepo：后端 API（Python FastAPI）+ 前端（Vue 3）。
-图库为 NebulaGraph，通过 **trs-graph-service**（Java Spring Boot REST 服务）访问，后端用 `infra/graph_db.TRSGraphClient` 做 ORM 风格封装。
-
-## 环境要求
-
-后端：
-
-- Python 3.11.13（`>=3.11.13,<3.12`）
-- [uv](https://docs.astral.sh/uv/)
-
-前端：
-
-- Node.js 20+
-- [pnpm](https://pnpm.io/)
-
-外部依赖：
-
-- **trs-graph-service**（默认 `http://localhost:8090`，NebulaGraph REST 网关）
-- **MySQL 8.0**（业务数据）
-- （可选）智谱 GLM API Key——仅「企业背景关联分析」用，未配置时自动降级
-
-根 Compose 另外启动一个独立 RustFS，用 S3 兼容协议持久化用户上传的 Python 算子源码。
-它与 Milvus 配套的 MinIO 相互独立，MinIO 不做替换。
+科技知识图谱 monorepo：FastAPI 后端、Vue 3 前端，以及本地开发所需的 Temporal、Milvus 和 S3 兼容对象存储。
 
 ## 快速开始
 
-### 方式一：Docker（推荐）
+环境要求：Python 3.11、[uv](https://docs.astral.sh/uv/)、Node.js 20+、pnpm 和 Docker Compose。
 
 ```bash
+# 完整环境
 docker compose up --build
-# 后端 api:  http://localhost:8001  (容器内 8000)
-# 前端 web:  http://localhost:8088  (容器内 80)
-# 接口文档:  http://localhost:8001/docs
-```
 
-`docker-compose.yml` 通过 `host.docker.internal` 连接宿主机上的 trs-graph-service / MySQL；如端口 8001/8088 被占用，改 compose 里的 host 端口即可（不要停其它服务让端口）。
-
-### Milvus standalone
-
-Milvus 已合并到根目录 `docker-compose.yml`，与前后端使用同一份 Compose。为避免与服务器已有的 `tech-kg-engine` Milvus 冲突，本项目使用独立容器、命名卷和端口：Milvus `19531`、健康检查 `9093`、MinIO API `9010`、MinIO Console `9011`。
-
-```bash
-# 只启动本项目的 Milvus、etcd 和 MinIO
-docker compose up -d milvus-etcd milvus-minio milvus
-
-# 查看状态和日志
-docker compose ps milvus-etcd milvus-minio milvus
-docker compose logs -f milvus
-
-# 健康检查
-curl -f http://127.0.0.1:9093/healthz
-```
-
-数据保存在 Docker 命名卷 `tech-kg-api_milvus-etcd-data`、`tech-kg-api_milvus-minio-data` 和 `tech-kg-api_milvus-data` 中。停止容器可执行 `docker compose stop milvus milvus-minio milvus-etcd`；不要使用 `down -v`，否则会删除数据卷。
-
-#### 连接 Milvus
-
-当前服务器部署信息：
-
-| 场景 | URI |
-|------|-----|
-| 服务器本机 | `http://127.0.0.1:19531` |
-| 同一 Docker Compose 网络中的容器 | `http://milvus:19530` |
-| 其他机器远程连接 | `http://211.81.248.211:19531` |
-
-Milvus 版本为 `2.4.17`，默认数据库为 `default`，当前未启用用户名和密码认证。Python 客户端示例：
-
-```bash
-pip install "pymilvus>=2.4,<2.5"
-```
-
-```python
-from pymilvus import MilvusClient
-
-# 在服务器本机运行
-client = MilvusClient(uri="http://127.0.0.1:19531")
-
-# 若代码运行在本项目 Docker Compose 的其他容器中，改用：
-# client = MilvusClient(uri="http://milvus:19530")
-
-# 从其他机器连接当前服务器，改用：
-# client = MilvusClient(uri="http://211.81.248.211:19531")
-
-print(client.list_collections())
-```
-
-远程使用者需要服务器 IP `211.81.248.211`、Milvus 端口 `19531`，并确保其网络可访问该 TCP 端口。MinIO 的 `9010/9011` 端口不需要提供给普通 Milvus 客户端。
-
-当前实例未启用认证，不应将 `19531` 无限制暴露到公网。建议通过防火墙限制来源 IP，或使用 SSH 隧道：
-
-```bash
-ssh -L 19531:127.0.0.1:19531 <user>@211.81.248.211
-```
-
-建立隧道后，客户端连接 `http://127.0.0.1:19531`。
-
-### M3E-small在线向量服务
-
-根目录Compose包含CPU版 `moka-ai/m3e-small` 服务。首次启动会下载模型到持久卷，之后从本地缓存加载：
-
-```bash
-docker compose up -d --build m3e-embedding
-curl http://127.0.0.1:8011/health
-curl -X POST http://127.0.0.1:8011/v1/embeddings \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"moka-ai/m3e-small","input":["中文专利","English patent"],"dimensions":512}'
-```
-
-服务只绑定服务器回环地址 `127.0.0.1:8011`；Compose内的API通过
-`http://m3e-embedding:8010/v1` 调用。模型输出512维归一化向量，模型缓存保存在
-`m3e-model-cache` Docker卷中。
-
-### 方式二：本地开发
-
-```bash
-# 后端
+# 后端本地开发
 cd backend
 uv sync --dev
-cp .env.example .env        # 填 TRS_GRAPH_* / MYSQL_* / LLM_*
-uv run uvicorn main:app --reload   # 入口是 backend/main.py
+cp .env.example .env
+uv run uvicorn main:app --reload
 
-# 前端
+# 前端本地开发
 cd frontend
 pnpm install
-pnpm dev                    # /api 代理到 VITE_API_TARGET（默认 http://localhost:8100）
+pnpm dev
 ```
 
-## 后端架构（DDD 分层）
+默认地址：
 
-请求链路：`main.py` → `biz/router/register.py` → `biz/handler/*` → `application/*` → `service/*` → `dao/*` + `db_model/*` + `infra/*`。
+| 服务 | 地址 |
+| --- | --- |
+| Web | `http://localhost:8088` |
+| API | `http://localhost:8001` |
+| OpenAPI | `http://localhost:8001/docs` |
+| Temporal UI | `http://localhost:8233` |
+| Health | `http://localhost:8001/health` |
+
+后端依赖外部 MySQL 和 trs-graph-service。连接信息通过 `backend/.env` 或部署环境变量提供；不要把真实账号、密码和公网地址写入仓库。
+
+## 后端结构
+
+请求链路：
+
+```text
+main.py
+  -> biz/router/register.py
+  -> biz/handler/*
+  -> application/*
+  -> service/*
+  -> dao/* + db_model/* + infra/*
+```
 
 | 目录 | 职责 |
-|------|------|
-| `biz/handler/` | FastAPI `APIRouter`（路由唯一入口），挂载在 `/api/v1` 下；薄层：解析请求→调 application |
-| `biz/schemas/` | Pydantic v2 请求/响应模型，每模块一文件 |
-| `application/` | 编排层，每模块一个类，包装一个 service |
-| `service/` | 业务逻辑；KG 构造模块继承 `service/base_module.KGModuleScaffoldService`，目录登记在 `service/module_catalog.py` |
-| `dao/` | MySQL 查询对象，各持一个 SQLAlchemy `Session` |
-| `db_model/` | SQLAlchemy ORM 模型（共享 `db_model/base.Base`） |
-| `infra/` | 基础设施单例：`mysql.py` / `redis.py` / `llm.py` / `graph_db/`；均从环境变量 / `.env` 读配置（`config/*.yml` 为 legacy，不加载） |
+| --- | --- |
+| `backend/biz/handler/` | FastAPI 路由；同步业务使用 `def`，真正异步的 I/O 使用 `async def` |
+| `backend/biz/schemas/` | Pydantic 请求和响应模型 |
+| `backend/application/` | 跨服务用例编排 |
+| `backend/service/` | 业务规则、工作流和图谱能力 |
+| `backend/dao/` | SQLAlchemy 数据访问 |
+| `backend/db_model/` | ORM 模型 |
+| `backend/infra/` | MySQL、S3、Milvus、LLM、TRSGraph 等客户端及生命周期 |
+| `backend/script/` | 初始化、索引和 ETL 脚本 |
+| `backend/tests/` | unit 与 integration 测试 |
 
-新增一个 KG 构造功能 = 加 schemas + handler + application + service + dao/model 五层，并在 `biz/router/register.py` 注册路由。
+应用由 `main.create_app()` 创建。路由采用声明式注册；进程关闭时会统一释放数据库连接池和外部客户端。
 
-### 重点关注科技企业关系子系统（3 模块）
+## API 契约
 
-- **专家-企业关系构建** `POST /api/v1/kg-construction/expert-enterprise-relations/build` —— 写 `EMPLOYED_BY` 边，英文码 `/` 拼接存 `relation_type`，响应映射中文标签，按企业去重返回该专家全部关系。
-- **角色与合作详情标注** `POST /api/v1/kg-construction/relation-detail-annotations/annotate` —— 给已有 `EMPLOYED_BY` 边补 role/tech_field/时段，角色按 `ROLE_CATALOG` 映射 L1/L2/L3。
-- **企业背景关联分析** `POST /api/v1/kg-construction/enterprise-background-analyses/analyze` —— 聚合 MySQL（行业地位/核心技术/经营财务）+ LLM 合成结论（失败降级）。
-- **下拉选项聚合** `GET /api/v1/kg-construction/options` —— 供前端参数弹窗动态拉取学者/企业/关系/角色/维度/CPC 选项。
+除 `/health` 外，业务接口位于 `/api/v1`。JSON 响应统一使用：
 
-## TRS 图库客户端（`infra/graph_db`）
-
-图库是 NebulaGraph，经 trs-graph-service 的 REST API 访问。认证用 `X-API-Key` 头，图空间用 `X-Graph-Space` 头。`infra/graph_db/client.TRSGraphClient` 是 ORM 风格客户端。
-
-### 连接
-
-两个线程安全懒加载单例（`infra/graph_db/__init__.py`），首次使用时连接，`main.py` lifespan 关闭时释放：
-
-```python
-from infra.graph_db import get_techkg_client, get_trs_graph_client
-
-client = get_techkg_client()   # 图空间固定 techkg（业务服务都用它）
-# 或
-client = get_trs_graph_client()  # 图空间取 TRS_GRAPH_SPACE 环境变量
+```json
+{
+  "code": 200,
+  "success": true,
+  "data": {},
+  "msg": "success"
+}
 ```
 
-> **vid 约定**：trs-graph-service 只把属性键 `vid`/`id`/`name` 当作顶点 id。客户端在 `create_node`/`merge_node`/`batch_create_nodes` 时若这三者都不存在，会自动把首个属性值提升为 vid（贴合 techkg「自然键即 vid」约定，如 `org_id`/`scholar_id`），否则服务端会生成 UUID 但读不回（404）。
+错误同样使用该结构，并返回真实 HTTP 状态码：参数错误 `422`、未找到 `404`、冲突 `409`、上游图服务错误 `502`、未知错误 `500`。
 
-### 节点 CRUD
+异步受理接口返回 HTTP `202`，响应包含 `taskId`、`executionId`、`workflowId` 和 `statusUrl`。主要接口：
 
-```python
-from infra.graph_db import get_techkg_client
+- `POST /api/v1/task-center/trigger`
+- `POST /api/v1/workflow-system/definitions/{id}/execute`
+- `POST /api/v1/workflow-system/schedules/{id}/trigger`
+- `POST /api/v1/schema-management/schemas/{id}/execute`
+- `GET /api/v1/workflow-system/executions/{id}/status`
 
-g = get_techkg_client()
+详细契约见：
 
-# 创建（properties 含 vid/id/name 之一即作为顶点 id）
-alice = g.create_node(["DemoPerson"], {"name": "Alice", "age": 30})
-# alice.id == "Alice"
+- [后端说明](backend/README.md)
+- [工作流 API](backend/docs/workflow_operations_api.md)
+- [Schema 管理 API](backend/docs/schema_management_api.md)
+- [KG 构造模块 API](backend/docs/kg_modules_api.md)
+- [算子注册](backend/docs/operator_registry.md)
 
-# 幂等创建/更新（identity_props 的值会被提升为 vid）
-bob = g.merge_node(["DemoPerson"], {"demo_id": "bob"}, {"age": 25, "city": "北京"})
-# bob.id == "bob"
+## 基础设施
 
-# 按 vid 获取（不存在返回 None）
-node = g.get_node("Alice")
+- 图数据库：NebulaGraph，经 trs-graph-service HTTP API 访问。
+- 业务数据：MySQL。
+- 工作流：Temporal；API 进程负责控制面，`temporal-worker` 执行 Workflow 和 Activity。
+- Schema 脚本：S3 兼容存储中的 Python 文件。
+- 用户算子：独立 S3 兼容存储，支持热更新。
+- 向量检索：Milvus；M3E 服务提供 512 维嵌入。
 
-# 按标签分页
-page = g.get_nodes_by_label("DemoPerson", limit=10, offset=0)
-# page.items -> [GraphNode, ...]   page.total -> 总数
+Schema 脚本和用户工作流脚本会执行 Python 代码，只能向受信任用户开放。生产环境必须在网关层完成认证、授权、审计、限流和上传访问控制，并建议把脚本执行 Worker 放入受限容器。
 
-# 按标签 + 属性查找（需对应属性已建索引，否则 Nebula 报 IndexNotFound）
-page = g.find_nodes(["DemoPerson"], {"name": "Alice"})
-
-# 更新属性
-alice = g.update_node("Alice", {"age": 31, "city": "深圳"})
-
-# 删除（detach=True 同时删除关联边）
-g.delete_node("Alice", detach=True)
-
-# 批量创建
-g.batch_create_nodes(
-    [{"name": f"P_{i}", "age": 20 + i} for i in range(5)],
-    ["DemoPerson"],
-)
-```
-
-> **索引与扫描的坑**：Nebula 的 `MATCH (n:Tag) RETURN n`（即 `get_nodes_by_label`/`find_nodes`）依赖 TAG 索引扫描。若只建了**属性索引**（如 `ON DemoPerson(name(256))`），则**缺该属性的顶点不会被扫到**。需要枚举某 TAG 的全部顶点时，建一个**空索引**：`CREATE TAG INDEX IF NOT EXISTS dp_full_idx ON DemoPerson();`（边同理用 `ON EdgeType()`）。`find_nodes` 按属性过滤时则用对应属性的索引。
-
-### 边 CRUD
-
-边 id 形如 `"sourceId->targetId@ranking"`。
-
-```python
-# 创建（INSERT EDGE，rank=0，同源同目标同 rank 为 upsert）
-edge = g.create_edge("Alice", "bob", "DemoKnows", {"since": 2020})
-# edge.id == "Alice->bob@0"
-
-# 幂等创建/更新
-edge = g.merge_edge("Alice", "bob", "DemoKnows",
-                    identity_props={"since": 2020},
-                    properties={"level": "close"})
-
-# 按 id 获取（不存在返回 None）
-edge = g.get_edge("Alice->bob@0", edge_type="DemoKnows")
-
-# 按类型分页
-page = g.get_edges_by_type("DemoKnows", limit=10)
-
-# 按类型 + 属性查找（需边属性已建索引）
-page = g.find_edges("DemoKnows", {"since": 2020})
-
-# 更新属性
-edge = g.update_edge("Alice->bob@0", {"level": "best"}, edge_type="DemoKnows")
-
-# 删除
-g.delete_edge("Alice->bob@0", edge_type="DemoKnows")
-
-# 批量创建
-g.batch_create_edges(
-    [{"sourceId": "Alice", "targetId": f"P_{i}", "weight": i} for i in range(3)],
-    "DemoKnows",
-)
-```
-
-### 图遍历
-
-```python
-# 邻居节点（direction: "out" / "in" / "both"）
-nbrs = g.get_neighbours("Alice", direction="out", edge_type="DemoKnows", limit=20)
-
-# 节点的边
-edges = g.get_node_edges("Alice", direction="both", edge_type="DemoKnows", limit=20)
-
-# 最短路径
-path = g.shortest_path("Alice", "bob", edge_type="DemoKnows", max_depth=10)
-# path.nodes -> [GraphNode, ...]   path.edges -> [GraphEdge, ...]   无路径返回 None
-```
-
-### nGQL 透传（execute_query / execute_read / execute_write）
-
-DDL（CREATE/ALTER TAG/EDGE/SPACE）走 nGQL。注意 Nebula 属性投影需用 tag 限定写法 `n.Tag.prop`（`n.prop` 返回空）。
-
-
-```python
-# 通用查询
-r = g.execute_query('MATCH (n:DemoPerson) WHERE id(n)=="Alice" RETURN n LIMIT 1;')
-# r.records -> [{"n": {"id":..., "labels":..., "properties":...}}, ...]
-
-# 只读
-r = g.execute_read("RETURN 1+1 AS two;")
-
-# 写入 / DDL（CREATE SPACE 后有传播延迟，后续 DDL 可能瞬态失败，需重试）
-g.execute_write('CREATE TAG IF NOT EXISTS DemoPerson(name string, age int, city string, demo_id string);')
-g.execute_write('CREATE EDGE IF NOT EXISTS DemoKnows(since int, level string, weight int);')
-g.execute_write('ALTER EDGE EMPLOYED_BY ADD (tech_field string);')
-```
-
-### Schema 管理
-
-```python
-from infra.graph_db import GraphIndexSpec, GraphConstraintSpec
-
-# 创建索引（string 属性自动补长度(256)）
-g.create_index(GraphIndexSpec(label="DemoPerson", properties=["name"], unique=False))
-
-# 列出 / 删除索引
-g.list_indexes(label="DemoPerson")
-g.drop_index("DemoPerson", ["name"])
-
-# 约束（服务端映射为 TAG INDEX）
-g.create_constraint(GraphConstraintSpec(
-    name="demo_person_name_unique", label="DemoPerson", property="name", kind="unique"))
-g.list_constraints()
-g.drop_constraint("demo_person_name_unique")
-
-# 统计与元信息
-g.node_count(label="DemoPerson")   # 按标签计数
-g.edge_count(edge_type="DemoKnows")  # 按类型计数
-g.labels()                          # 所有 TAG
-g.edge_types()                      # 所有 EDGE
-```
-
-### 关闭连接
-
-正常由 `main.py` lifespan 在关闭时调用；如需手动：
-
-```python
-from infra.graph_db import close_techkg_client, close_trs_graph_client
-close_techkg_client()
-close_trs_graph_client()
-```
-
-## 运行测试
+## 验证
 
 ```bash
 cd backend
-uv run ruff format .          # 格式化
-uv run ruff check .           # lint（自动修：--fix）
-uv run pytest                 # 全部
-PYTHONPATH=. uv run pytest tests -m "not external" -v   # CI 跑的（不依赖真实服务）
+uv run ruff format --check .
+uv run ruff check .
+uv run pytest -m "not external"
+
+cd ../frontend
+pnpm build
 ```
 
-- `external` 标记：需要真实 MySQL/Redis/TRSGraph/Kafka/Milvus 的测试，CI 用 `-m "not external"` 跳过。
-- 图客户端单测用 `httpx.MockTransport` 打桩 trs-graph REST，无需真实服务。
-- 集成测试用 `tests/conftest.py` 的 `async_client` fixture（ASGI transport 打 `main.app`）。
-
-## 项目结构
-
-```
-tech-kg-api/                       # monorepo 根
-├── backend/                       # FastAPI 后端
-│   ├── main.py                    # 入口（lifespan + 路由注册）
-│   ├── biz/                       # handler / schemas / router
-│   ├── application/               # 编排层
-│   ├── service/                   # 业务逻辑 + module_catalog
-│   ├── dao/                       # MySQL 查询对象
-│   ├── db_model/                  # SQLAlchemy ORM
-│   ├── infra/                     # mysql / redis / llm / graph_db
-│   │   └── graph_db/              # TRSGraphClient（trs-graph REST 封装）
-│   ├── script/                    # init_db / init_graph_schema / load_graph ETL
-│   ├── schemas/ddl                # 建表 SQL
-│   ├── tests/                     # unit + integration
-│   └── .env.example
-├── frontend/                      # Vue 3 + TS + Vite（单页 App.vue）
-│   ├── Dockerfile / nginx.conf
-│   └── src/App.vue
-└── docker-compose.yml             # api(8001) + web(8088)
-```
-
-## 环境变量
-
-| 变量名 | 默认值 | 说明 |
-|--------|--------|------|
-| `TRS_GRAPH_BASE_URL` | `http://localhost:8090` | trs-graph-service 地址 |
-| `TRS_GRAPH_SPACE` | `dev` | 图空间（所有运行时图客户端均读取此项） |
-| `TRS_GRAPH_API_KEY` | — | `X-API-Key` 认证（必填） |
-| `TRS_GRAPH_TIMEOUT` | `30` | 请求超时（秒） |
-| `MYSQL_HOST` / `MYSQL_PORT` | `127.0.0.1` / `3306` | MySQL 连接 |
-| `MYSQL_DATABASE` / `MYSQL_USERNAME` / `MYSQL_PASSWORD` | `gkx_element` / `root` / — | MySQL 库/账密 |
-| `LLM_API_KEY` | — | 智谱 GLM key；未配置时 #3 自动降级 |
-| `LLM_MODEL` | `glm-4.7-flash` | LLM 模型（推理模型，读 `message.content`） |
-| `LLM_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | LLM 接口地址 |
+需要真实 MySQL、TRSGraph、Temporal 或 Milvus 的测试使用 `external` 标记，不进入默认 CI 测试集。

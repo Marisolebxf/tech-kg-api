@@ -19,6 +19,7 @@ def test_list_kg_construction_modules() -> None:
         "industry_chain_topn_event",
         "industry_chain_panorama",
     }
+    assert {module["status"] for module in modules} == {"ready"}
 
 
 def test_get_kg_construction_module() -> None:

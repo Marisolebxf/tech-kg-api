@@ -12,7 +12,7 @@ from db_model.scholar import DwdScholar
 from infra.gkx import get_gkx_session
 from infra.graph_db import TRSGraphClient, get_techkg_client
 from infra.llm import LLMClient, get_llm_client
-from service.base_module import KGModuleScaffoldService
+from service.base_module import KGModuleService
 from service.enterprise_background_analysis import EnterpriseBackgroundAnalysisService
 from service.enterprise_mining_disambiguator import disambiguate, merge_matches
 from service.enterprise_mining_extractor import extract_relations
@@ -61,7 +61,7 @@ def _classify_org(org_name: str) -> str:
     return ""
 
 
-class ExpertEnterpriseMiningService(KGModuleScaffoldService):
+class ExpertEnterpriseMiningService(KGModuleService):
     module_code = "expert_enterprise_mining"
 
     def __init__(

@@ -12,6 +12,16 @@ def test_build_db_url_from_env(monkeypatch):
     assert build_db_url() == "mysql+pymysql://u:p@h:3307/d?charset=utf8mb4"
 
 
+def test_build_db_url_escapes_credentials(monkeypatch):
+    monkeypatch.setenv("MYSQL_USERNAME", "user@example.com")
+    monkeypatch.setenv("MYSQL_PASSWORD", "p@ss word")
+
+    assert (
+        build_db_url()
+        == "mysql+pymysql://user%40example.com:p%40ss+word@127.0.0.1:3306/gkx_element?charset=utf8mb4"
+    )
+
+
 def test_client_engine_and_session():
     client = MySQLClient(url="sqlite:///:memory:")
     assert client.engine is not None

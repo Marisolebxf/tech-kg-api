@@ -31,6 +31,10 @@ class TemporalRuntime:
             self._client = await Client.connect(self.address, namespace=self.namespace)
         return self._client
 
+    def reset_client(self) -> None:
+        """Discard a failed client so the next operation reconnects."""
+        self._client = None
+
     async def health(self) -> dict[str, Any]:
         try:
             client = await self.client()
@@ -43,7 +47,7 @@ class TemporalRuntime:
                 "message": "Temporal 连接正常" if healthy else "Temporal health check 未通过",
             }
         except Exception as exc:
-            self._client = None
+            self.reset_client()
             return {
                 "status": "不可用",
                 "address": self.address,
@@ -57,9 +61,14 @@ class TemporalRuntime:
     ) -> dict[str, Any]:
         workflow_id = workflow_id or f"{definition['id']}-{uuid4().hex}"
         client = await self.client()
-        workflow_payload = payload
+        control = {"workflowId": workflow_id}
+        workflow_payload = {**payload, "_control": control}
         if definition.get("sourceKind") in {"python", "declarative"}:
-            workflow_payload = {"definitionId": definition["id"], "payload": payload}
+            workflow_payload = {
+                "definitionId": definition["id"],
+                "payload": payload,
+                "_control": control,
+            }
         handle = await client.start_workflow(
             definition["workflowType"],
             workflow_payload,
@@ -102,9 +111,6 @@ class TemporalRuntime:
         )
         return {**schedule, "dispatchStatus": "TEMPORAL_CREATED"}
 
-    async def trigger_schedule(self, schedule_id: str) -> None:
-        await (await self.client()).get_schedule_handle(schedule_id).trigger()
-
     async def pause_schedule(self, schedule_id: str, paused: bool) -> None:
         handle = (await self.client()).get_schedule_handle(schedule_id)
         if paused:
@@ -114,6 +120,23 @@ class TemporalRuntime:
 
     async def delete_schedule(self, schedule_id: str) -> None:
         await (await self.client()).get_schedule_handle(schedule_id).delete()
+
+    async def describe_execution(self, workflow_id: str, run_id: str | None) -> dict[str, Any]:
+        """Read live Temporal state without waiting for a running workflow to finish."""
+        client = await self.client()
+        handle = client.get_workflow_handle(workflow_id, run_id=run_id)
+        description = await handle.describe()
+        status = getattr(description.status, "name", str(description.status))
+        result = None
+        failure = None
+        if status == "COMPLETED":
+            result = await handle.result()
+        elif status in {"FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}:
+            try:
+                await handle.result()
+            except Exception as exc:
+                failure = str(exc)
+        return {"status": status, "output": result, "failure": failure}
 
     async def run_worker(self) -> None:
         client = await self.client()

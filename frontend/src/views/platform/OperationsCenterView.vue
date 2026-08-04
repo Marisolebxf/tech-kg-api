@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
-import { getReviewBatch, getReviewCategory, getReviewConfidence, reviewRecords } from './manual-review-data'
+import { getManualReviews, type ReviewRecord } from '../../api/workflowOperations'
 
 type CenterMode = 'alerts' | 'review'
 
@@ -18,6 +18,8 @@ const severity = ref('全部风险')
 const actionFeedback = ref('')
 const alertCategory = ref('全部异常')
 const blockingOnly = ref(false)
+const reviewRecords = ref<ReviewRecord[]>([])
+const reviewLoadError = ref('')
 
 const alertCategories = ['全部异常', '数据质量', 'Schema 校验', '大模型抽取', '实体对齐', '图谱入库', '服务运行']
 
@@ -70,22 +72,11 @@ const filteredAlertRows = computed(() => alertRows.filter((row) => {
       && (!route.query.batch || text.includes(String(route.query.batch)))
 }))
 
-const reviewRows = computed(() => reviewRecords.map((row) => {
-  const batch = getReviewBatch(row.batch)
-  const confidence = getReviewConfidence(row)
-  return {
-    ...row,
-    category: getReviewCategory(row),
-    dataWindow: batch?.dataWindow ?? '-',
-    confidenceValue: confidence.value,
-    confidenceLabel: confidence.label,
-    confidenceSource: confidence.source,
-  }
-}))
+const reviewRows = computed(() => reviewRecords.value)
 
 const reviewCategories = computed(() => [...new Set(reviewRows.value.map((row) => row.category))])
 const pendingReviewCount = computed(() => reviewRows.value.filter((row) => row.status === '待处理').length)
-const historyReviewCount = computed(() => reviewRows.value.filter((row) => row.status === '已完成').length)
+const historyReviewCount = computed(() => reviewRows.value.filter((row) => row.status !== '待处理').length)
 
 const getReviewCategoryClass = (category: string) => {
   if (category === '结果低于阈值') return 'is-low-confidence'
@@ -98,7 +89,7 @@ const getReviewCategoryClass = (category: string) => {
 
 const filteredReviewRows = computed(() => reviewRows.value.filter((row) => {
   const text = Object.values(row).join(' ')
-  const inTab = reviewTab.value === '历史记录' ? row.status === '已完成' : row.status !== '已完成'
+  const inTab = reviewTab.value === '历史记录' ? row.status !== '待处理' : row.status === '待处理'
   return inTab
     && (!keyword.value || text.includes(keyword.value))
     && (status.value === '全部状态' || row.status === status.value)
@@ -117,6 +108,19 @@ watch(() => route.query.tab, (value) => {
   reviewTab.value = value === 'history' ? '历史记录' : '待处理'
   status.value = '全部状态'
 })
+
+async function loadReviews() {
+  if (props.mode !== 'review') return
+  try {
+    const response = await getManualReviews({ pageSize: 200 })
+    reviewRecords.value = response.items
+    reviewLoadError.value = ''
+  } catch (error) {
+    reviewLoadError.value = error instanceof Error ? error.message : '人工处理队列加载失败'
+  }
+}
+
+onMounted(loadReviews)
 </script>
 
 <template>
@@ -140,7 +144,7 @@ watch(() => route.query.tab, (value) => {
       <div :class="['ops-filter', { 'is-review': mode === 'review' }]">
         <input v-model="keyword" :placeholder="mode === 'review' ? '搜索处理实例 ID、对象或来源记录' : '搜索批次、对象、异常原因'" />
         <select v-if="mode === 'alerts'" v-model="severity"><option>全部风险</option><option>高风险</option><option>中风险</option><option>低风险</option></select>
-        <select v-else v-model="batchFilter"><option>全部更新批次</option><option>UPD-20260714</option><option>UPD-20260713</option></select>
+        <select v-else v-model="batchFilter"><option>全部更新批次</option><option v-for="item in [...new Set(reviewRows.map(row => row.batch))]" :key="item">{{ item }}</option></select>
         <select v-if="mode === 'review'" v-model="reviewCategory"><option>全部处理分类</option><option v-for="item in reviewCategories" :key="item">{{ item }}</option></select>
         <select v-if="mode === 'alerts'" v-model="domain"><option>全部业务域</option><option>人才域</option><option>论文域</option><option>企业域</option></select>
         <select v-if="mode === 'alerts'" v-model="status"><option>全部状态</option><option>待处理</option><option>处理中</option><option>已关闭</option></select>
@@ -154,7 +158,7 @@ watch(() => route.query.tab, (value) => {
 
       <div v-else class="ops-review-table-scroll"><table>
         <thead><tr><th>处理实例 ID</th><th>待处理对象</th><th>处理类型</th><th>来源记录</th><th>所属更新批次</th><th>数据更新时间范围</th><th>结果置信度</th><th>处理人</th><th>状态</th><th>{{ reviewTab === '历史记录' ? '完成时间' : '提交时间' }}</th><th>操作</th></tr></thead>
-        <tbody><tr v-for="row in filteredReviewRows" :key="row.id"><td><code>{{ row.id }}</code></td><td><strong>{{ row.object }}</strong><small>{{ row.objectType }} · {{ row.objectId }}</small></td><td class="review-type-cell"><span :class="getReviewCategoryClass(row.category)">{{ row.category }}</span></td><td>{{ row.sourceTable }}<small>{{ row.sourceRecordId }}</small></td><td><code>{{ row.batch }}</code></td><td>{{ row.dataWindow }}</td><td class="review-confidence-cell"><b>{{ row.confidenceValue }}</b><em v-if="row.confidenceLabel">{{ row.confidenceLabel }}</em></td><td>{{ row.handler }}</td><td><span :class="['review-status', `is-${row.status}`]">{{ row.status }}</span></td><td>{{ row.completedAt || row.updatedAt }}</td><td><RouterLink class="link" :to="`/manual-review/task/${row.id}`">{{ row.status === '已完成' ? '查看记录' : '进入处理' }} →</RouterLink></td></tr><tr v-if="!filteredReviewRows.length"><td class="review-empty" colspan="11">暂无符合条件的{{ reviewTab }}</td></tr></tbody>
+        <tbody><tr v-for="row in filteredReviewRows" :key="row.id"><td><code>{{ row.id }}</code></td><td><strong>{{ row.object }}</strong><small>{{ row.objectType }} · {{ row.objectId }}</small></td><td class="review-type-cell"><span :class="getReviewCategoryClass(row.category)">{{ row.category }}</span></td><td>{{ row.sourceTable }}<small>{{ row.sourceRecordId }}</small></td><td><code>{{ row.batch }}</code></td><td>{{ row.dataWindow }}</td><td class="review-confidence-cell"><b>{{ row.confidenceValue }}</b><em v-if="row.confidenceLabel">{{ row.confidenceLabel }}</em></td><td>{{ row.handler }}</td><td><span :class="['review-status', `is-${row.status}`]">{{ row.status }}</span></td><td>{{ row.completedAt || row.updatedAt }}</td><td><RouterLink class="link" :to="`/manual-review/task/${row.id}`">{{ row.status === '待处理' ? '进入处理' : '查看记录' }} →</RouterLink></td></tr><tr v-if="!filteredReviewRows.length"><td class="review-empty" colspan="11">{{ reviewLoadError || `暂无符合条件的${reviewTab}` }}</td></tr></tbody>
       </table></div>
 
       <footer v-if="mode === 'alerts'" class="alert-pagination"><span>每页显示　<select><option>20</option><option>50</option><option>100</option></select>　共 158 条异常</span><nav><button type="button" disabled>上一页</button><button class="active" type="button">1</button><button type="button">2</button><button type="button">3</button><button type="button">…</button><button type="button">8</button><button type="button">下一页</button></nav></footer>

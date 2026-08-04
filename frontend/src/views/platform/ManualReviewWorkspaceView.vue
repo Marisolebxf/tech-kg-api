@@ -1,18 +1,17 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { getManualReview, retryManualReview, revokeManualReview, submitManualReview } from '../../api/workflowOperations'
 
 import {
   getImpactScope,
-  getReviewRecord,
   getReviewTemplate,
   type ReviewAction,
   type ReviewRecord,
 } from './manual-review-data'
 
 const route = useRoute()
-const sourceRecord = getReviewRecord(String(route.params.instanceId || ''))
-const record = ref<ReviewRecord | undefined>(sourceRecord ? { ...sourceRecord } : undefined)
+const record = ref<ReviewRecord | undefined>()
 const isSupported = computed(() => Boolean(record.value))
 const isHistory = computed(() => record.value?.status === '已完成')
 const isEditable = computed(() => record.value?.status === '待处理')
@@ -123,7 +122,18 @@ const initWorkspace = (item?: ReviewRecord) => {
   }
 }
 
-initWorkspace(record.value)
+async function loadReview() {
+  try {
+    const response = await getManualReview(String(route.params.instanceId || ''))
+    record.value = response as ReviewRecord
+    note.value = response.decisionNote ?? ''
+    initWorkspace(record.value)
+  } catch (error) {
+    feedback.value = error instanceof Error ? error.message : '人工处理详情加载失败'
+  }
+}
+
+onMounted(loadReview)
 
 const candidateCard = computed(() => {
   const item = record.value
@@ -242,8 +252,26 @@ const applySuggestedTitle = () => {
     : 'Incremental Knowledge Graph Construction Methods'
 }
 
-const handleAction = (action: ReviewAction | { id: string; label: string; kind: string; rerun?: boolean }) => {
+const handleAction = async (action: ReviewAction | { id: string; label: string; kind: string; rerun?: boolean }) => {
   if (!record.value || !isEditable.value) return
+  if (action.id === 'retry-task') {
+    try {
+      await retryManualReview(record.value.id, { runtimeConfig: runtimeConfig.value })
+      feedback.value = '已重新下发当前任务，人工处理项保持待处理，可在任务中心查看执行进度。'
+    } catch (error) {
+      feedback.value = error instanceof Error ? error.message : '任务重试失败'
+    }
+    return
+  }
+  if (action.id === 'skip-task') {
+    try {
+      record.value = await revokeManualReview(record.value.id, note.value || '人工确认撤销当前任务') as ReviewRecord
+      feedback.value = '任务已撤销，不再进入下游流程。'
+    } catch (error) {
+      feedback.value = error instanceof Error ? error.message : '任务撤销失败'
+    }
+    return
+  }
   let label = action.label
   if (action.id === 'entity-confirm' || (templateId.value === 'T_ENTITY' && action.kind === 'primary')) {
     label = primaryActionLabel.value
@@ -251,24 +279,35 @@ const handleAction = (action: ReviewAction | { id: string; label: string; kind: 
       label = '驳回候选'
     }
   }
-  record.value.status = '已完成'
-  record.value.decision = label
-  record.value.decisionNote = note.value
-  record.value.completedAt = '2026-07-15 11:08:26'
-  record.value.updatedAt = '刚刚'
-  if (templateId.value === 'T_MAP') {
-    record.value.sourceResult = mappingRows.value.map((row) => `${row.source} → ${row.target}`).join('；')
-  }
   const rerun = 'rerun' in action ? action.rerun : label.includes('重跑') || label.includes('重试')
-  feedback.value = label.includes('驳回') || label.includes('退回')
-    ? '处理结果已回写，该对象将返回上游节点重新处理。'
-    : label.includes('升级')
-      ? '已提交升级，治理员将接手本异常。'
-      : label.includes('隔离') || label.includes('废弃') || label.includes('跳过')
-        ? '处理结果已回写，对象保持隔离或结束，未进入下游。'
-        : rerun
-          ? `修正结果已回写，系统已从「${record.value.node}」创建重跑实例。请到图谱构建查看进度。`
-          : '处理结果已回写。'
+  const result = {
+    templateId: templateId.value,
+    label,
+    mappings: mappingRows.value.map((row) => ({ source: row.source, target: row.target })),
+    entityVerdict: entityVerdict.value,
+    entityType: entityTypeFix.value,
+    relationVerdict: relationVerdict.value,
+    evidence: evidenceItems.value,
+    extraEvidence: extraEvidence.value,
+    attrVerdict: attrVerdict.value,
+    attrManualOrg: attrManualOrg.value,
+    attrManualRange: attrManualRange.value,
+    titleZh: fillTitleZh.value,
+    titleEn: fillTitleEn.value,
+    mergeMaster: mergeMaster.value,
+    mergeFields: mergeFields.value,
+    runtimeConfig: runtimeConfig.value,
+    genericClass: genericClass.value,
+  }
+  try {
+    const response = await submitManualReview(record.value.id, { actionId: action.id, note: note.value, result, handler: record.value.handler, rerun: Boolean(rerun) })
+    record.value = response.review as ReviewRecord
+    feedback.value = rerun
+      ? `修正结果已回写，系统已从「${record.value.node}」创建重跑实例。请到图谱构建查看进度。`
+      : '处理结果已回写。'
+  } catch (error) {
+    feedback.value = error instanceof Error ? error.message : '人工处理提交失败'
+  }
 }
 
 const runPrimary = () => {

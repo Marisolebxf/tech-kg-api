@@ -1,4 +1,4 @@
-export type ReviewStatus = '待处理' | '已完成'
+export type ReviewStatus = '待处理' | '已完成' | '已撤销'
 export type ReviewPriority = 'P0' | 'P1' | 'P2'
 
 export type ReviewBatch = {
@@ -289,7 +289,7 @@ const templateCatalog: Record<ReviewTemplateId, ReviewTemplateMeta> = {
     actions: [
       { id: 'rerun-batch', label: '更换配置后重跑', kind: 'primary', rerun: true },
       { id: 'retry-task', label: '重试本任务', kind: 'secondary', rerun: true },
-      { id: 'skip-task', label: '跳过本任务', kind: 'secondary' },
+      { id: 'skip-task', label: '撤销本任务', kind: 'secondary' },
       { id: 'escalate', label: '暂停并升级治理员', kind: 'danger' },
     ],
   },

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
@@ -166,7 +167,7 @@ class OperatorRegistry:
         self.store = store
         self._lock = threading.RLock()
         self._operators: dict[str, RegisteredOperator] = {}
-        self._file_snapshot: dict[str, tuple[int, int]] = {}
+        self._file_snapshot: dict[str, tuple[int, int, str]] = {}
         self._stop_event = threading.Event()
         self._watcher: threading.Thread | None = None
         self._register_builtins()
@@ -230,12 +231,13 @@ class OperatorRegistry:
             except Exception:  # pragma: no cover - watcher must remain alive
                 logger.exception("算子文件监听失败")
 
-    def _snapshot(self) -> dict[str, tuple[int, int]]:
-        snapshot: dict[str, tuple[int, int]] = {}
+    def _snapshot(self) -> dict[str, tuple[int, int, str]]:
+        snapshot: dict[str, tuple[int, int, str]] = {}
         for path in self.operator_dir.iterdir():
             if path.is_file() and path.suffix in {".py", ".json"}:
                 stat = path.stat()
-                snapshot[path.name] = (stat.st_mtime_ns, stat.st_size)
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                snapshot[path.name] = (stat.st_mtime_ns, stat.st_size, digest)
         return snapshot
 
     def refresh_if_changed(self) -> bool:

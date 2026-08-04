@@ -26,6 +26,9 @@ from biz.handler.platform_overview import router as platform_overview_router
 from biz.handler.relation_detail_annotation import router as relation_detail_annotation_router
 from biz.handler.schema_management import router as schema_management_router
 from biz.handler.task_center import router as task_center_router
+from biz.handler.tech_enterprise_relation_business import (
+    router as tech_enterprise_relation_business_router,
+)
 from biz.handler.workflow_system import router as workflow_system_router
 
 
@@ -51,5 +54,6 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(manual_review_router, prefix="/api/v1")
     app.include_router(workflow_system_router, prefix="/api/v1")
     app.include_router(schema_management_router, prefix="/api/v1")
+    app.include_router(tech_enterprise_relation_business_router, prefix="/api/v1")
     app.include_router(operator_router, prefix="/api/v1")
     app.include_router(operator_internal_router)

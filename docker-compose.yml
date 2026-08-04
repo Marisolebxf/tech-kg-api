@@ -82,22 +82,7 @@ services:
       - patent-index-state:/app/var/patent_indexes
       - workflow-state:/var/lib/tech-kg
     depends_on:
-      auth-redis:
-    image: redis:7.4-alpine
-    container_name: tech-kg-auth-redis
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - auth-redis-data:/data
-    networks:
-      - app
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
-  schema-minio:
+      schema-minio:
         condition: service_healthy
       operator-rustfs:
         condition: service_healthy
@@ -201,6 +186,21 @@ services:
       - workflow-state:/var/lib/tech-kg
     depends_on:
       - temporal
+  auth-redis:
+    image: redis:7.4-alpine
+    container_name: tech-kg-auth-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - auth-redis-data:/data
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   schema-minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     container_name: tech-kg-schema-minio

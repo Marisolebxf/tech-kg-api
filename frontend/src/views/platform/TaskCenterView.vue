@@ -1,8 +1,17 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-// import GraphVersionView from './GraphVersionView.vue'
-import { getUpdateBatch, processingInstances, updateBatches } from './update-batch-data'
+import {
+  getSourceUpdates,
+  getTaskBatches,
+  getTaskOverview,
+  getTasks,
+  saveUpdatePolicy,
+  triggerGraphBuild,
+  type ProcessingInstance,
+  type SourceUpdate,
+  type UpdateBatch,
+} from '../../api/workflowOperations'
 
 const route = useRoute()
 const router = useRouter()
@@ -17,72 +26,33 @@ const scheduleDialogOpen = ref(false)
 const scheduleFrequency = ref('每天')
 const scheduleTime = ref('02:00')
 const updateNotice = ref('')
+const loading = ref(false)
 const canManageUpdates = true
-const selectedChange = ref<null | {
-  change: string
-  type: string
-  id: string
-  content: string
-  time: string
-  source: string
-  field: string
-  before: string
-  after: string
-  result: string
-}>(null)
-
-const changeRows = [
-  { change: '新增', type: '论文', id: 'P202607140018', content: '《多模态大模型知识推理方法研究》', time: '02:00:13', source: 'dwd_zh_paper_detail', field: '整条记录', before: '不存在', after: '新增论文标题、作者、机构、关键词和 DOI 信息', result: '已进入数据清洗与论文实体对齐' },
-  { change: '新增', type: '专家', id: 'EXPERT_20418', content: '周启航 · 中国科学院自动化研究所', time: '02:00:18', source: 'dwd_scholar', field: '整条记录', before: '不存在', after: '新增专家姓名、任职机构与研究方向', result: '已进入专家候选实体对齐' },
-  { change: '修改', type: '专利', id: 'CN2026102841', content: '法律状态：公开 → 实质审查', time: '02:00:22', source: 'dwd_patent', field: 'legal_status', before: '公开', after: '实质审查', result: '已更新专利属性，等待增量图谱入库' },
-  { change: '删除', type: '项目', id: 'PROJ_2024_0892', content: '来源记录已标记删除，图谱对象待下线', time: '02:00:31', source: 'dwd_zh_project', field: 'is_deleted', before: '0', after: '1', result: '已进入删除影响分析，确认关系依赖后下线' },
-]
+const selectedChange = ref<SourceUpdate | null>(null)
+const changeRows = ref<SourceUpdate[]>([])
+const processingInstances = ref<ProcessingInstance[]>([])
+const updateBatches = ref<UpdateBatch[]>([])
+const summary = ref<{ label: string; value: string; hint: string }[]>([])
+const changeSummary = ref({ total: 0, added: 0, updated: 0, deleted: 0, detectedAt: '-', completedAt: '-' })
+const sourceHealth = ref<{ status: string; lastCheckedAt: string }[]>([])
 
 const activeStage = computed<'数据处理' | '图谱构建'>(() => moduleFilter.value === '图谱构建' ? '图谱构建' : '数据处理')
-const processFailureTypes = ['模型批量输出异常', 'Schema 批量映射失败', '公共字典配置异常']
-const taskFailureTypes = ['单任务执行失败']
-const getDataDomain = (item: { objectType: string; sourceTable: string }) => {
-  const text = `${item.objectType} ${item.sourceTable}`
-  if (text.includes('论文')) return '论文域'
-  if (text.includes('专家') || text.includes('人才')) return '人才域'
-  if (text.includes('机构')) return '机构域'
-  if (text.includes('企业')) return '企业域'
-  return '综合数据域'
-}
-const taskRows = computed(() => processingInstances.filter((item) => item.stage === activeStage.value).map((item) => {
-  const batch = getUpdateBatch(item.batchId)
+const taskRows = computed(() => processingInstances.value.filter((item) => item.stage === activeStage.value).map((item) => {
+  const batch = updateBatches.value.find((candidate) => candidate.id === item.batchId)
   const confidence = Number(item.confidence)
-  const isProcessFailure = processFailureTypes.includes(item.reviewType ?? '')
-  const isTaskFailure = taskFailureTypes.includes(item.reviewType ?? '')
-  const executionInterrupted = isProcessFailure || isTaskFailure
   return {
     ...item,
     batchName: batch?.name ?? item.batchId,
     dataWindow: batch?.dataWindow ?? '-',
     updateDate: batch?.updateDate ?? '-',
-    dataDomain: getDataDomain(item),
-    executionStatus: executionInterrupted ? '执行中断' : '执行成功',
-    executionHint: isProcessFailure ? '公共流程已阻断' : isTaskFailure ? '当前任务未完成' : '程序正常结束',
-    confidenceDisplay: executionInterrupted || item.stage === '数据处理' || !item.confidence ? '—' : item.confidence,
-    confidenceHint: executionInterrupted ? '未产生结果' : item.stage === '数据处理' ? '确定性规则，不适用' : confidence < 0.9 ? '低于自动通过阈值' : '达到阈值',
-    currentStep: item.reviewType === '公共字典配置异常' ? '清洗标准化' : item.reviewType === 'Schema 批量映射失败' ? 'Schema 映射' : item.reviewType === '模型批量输出异常' ? '大模型抽取' : item.stage === '数据处理' ? '质量检验' : ['实体冲突', '单任务执行失败'].includes(item.reviewType ?? '') ? '实体对齐消歧' : '大模型抽取与校验',
+    executionHint: item.taskStatus === '执行出错' ? '任务或公共流程已中断' : item.taskStatus === '等待人工审核' ? '结果已隔离' : item.taskStatus === '执行中' ? '工作流运行中' : '程序正常结束',
+    confidenceDisplay: item.taskStatus === '执行出错' || item.stage === '数据处理' || !item.confidence ? '—' : item.confidence,
+    confidenceHint: item.taskStatus === '执行出错' ? '未产生结果' : item.stage === '数据处理' ? '确定性规则，不适用' : confidence < 0.9 ? '低于自动通过阈值' : '达到阈值',
   }
 }))
 
-const summary = computed(() => {
-  const today = processingInstances.filter((item) => item.batchId === 'UPD-20260714')
-  const interrupted = today.filter((item) => [...processFailureTypes, ...taskFailureTypes].includes(item.reviewType ?? ''))
-  const pendingResult = today.filter((item) => !interrupted.includes(item) && item.status === '待人工处理')
-  return [
-    { label: '今日具体任务', value: String(today.length), hint: `数据处理 ${today.filter(item => item.stage === '数据处理').length} · 图谱构建 ${today.filter(item => item.stage === '图谱构建').length}` },
-    { label: '执行成功', value: String(today.length - interrupted.length), hint: '' },
-    { label: '执行中断', value: String(interrupted.length), hint: '' },
-    { label: '结果待确认', value: String(pendingResult.length), hint: '' },
-  ]
-})
-
 const filteredRows = computed(() => taskRows.value.filter((row) => (
-  (statusFilter.value === '全部执行状态' || row.executionStatus === statusFilter.value)
+  (statusFilter.value === '全部执行状态' || row.taskStatus === statusFilter.value)
   && (batchFilter.value === '全部更新批次' || row.batchId === batchFilter.value)
   && (activeStage.value === '数据处理'
     ? (scopeFilter.value === '全部数据域' || row.dataDomain === scopeFilter.value)
@@ -92,10 +62,30 @@ const filteredRows = computed(() => taskRows.value.filter((row) => (
 )))
 
 const taskCategories = computed(() => [
-  { label: '数据处理', value: '数据处理', count: processingInstances.filter((item) => item.stage === '数据处理').length },
-  { label: '图谱构建', value: '图谱构建', count: processingInstances.filter((item) => item.stage === '图谱构建').length },
-  // { label: '图谱版本', value: '图谱版本', count: 3 },
+  { label: '数据处理', value: '数据处理', count: processingInstances.value.filter((item) => item.stage === '数据处理').length },
+  { label: '图谱构建', value: '图谱构建', count: processingInstances.value.filter((item) => item.stage === '图谱构建').length },
 ])
+
+async function loadData() {
+  loading.value = true
+  try {
+    const [overview, tasks, batches, changes] = await Promise.all([
+      getTaskOverview(), getTasks({ pageSize: 200 }), getTaskBatches(), getSourceUpdates({ pageSize: 50 }),
+    ])
+    summary.value = overview.summary
+    changeSummary.value = overview.changeSummary
+    sourceHealth.value = overview.sourceHealth
+    scheduleFrequency.value = overview.updatePolicy.frequency
+    scheduleTime.value = overview.updatePolicy.executionTime
+    processingInstances.value = tasks.items
+    updateBatches.value = batches.items
+    changeRows.value = changes.items
+  } catch (error) {
+    updateNotice.value = error instanceof Error ? error.message : '任务中心数据加载失败'
+  } finally {
+    loading.value = false
+  }
+}
 
 function selectCategory(value: string) {
   moduleFilter.value = value
@@ -109,13 +99,24 @@ function openTask(row: { id: string }) {
   void router.push({ name: 'processing-instance-detail', params: { instanceId: row.id } })
 }
 
-function saveUpdateSchedule() {
-  scheduleDialogOpen.value = false
-  updateNotice.value = `自动更新策略已保存：${scheduleFrequency.value} ${scheduleTime.value} 检测，发现变化后立即更新。`
+async function saveUpdateSchedule() {
+  try {
+    await saveUpdatePolicy({ enabled: true, frequency: scheduleFrequency.value, executionTime: scheduleTime.value, timezone: 'Asia/Shanghai', skipWhenNoChanges: true })
+    scheduleDialogOpen.value = false
+    updateNotice.value = `自动更新策略已保存：${scheduleFrequency.value} ${scheduleTime.value} 检测，发现变化后立即更新。`
+  } catch (error) {
+    updateNotice.value = error instanceof Error ? error.message : '更新策略保存失败'
+  }
 }
 
-function runImmediateUpdate() {
-  updateNotice.value = '已提交立即更新：正在检测数据库变化，检测完成后将创建新的数据更新批次和具体处理实例。'
+async function runImmediateUpdate() {
+  try {
+    await triggerGraphBuild({ reason: '任务中心紧急更新' })
+    updateNotice.value = '已提交立即更新：正在检测数据库变化，检测完成后将创建新的数据更新批次和具体处理实例。'
+    await loadData()
+  } catch (error) {
+    updateNotice.value = error instanceof Error ? error.message : '立即更新提交失败'
+  }
 }
 
 watch(() => route.query.status, (value) => { statusFilter.value = String(value || '全部执行状态') })
@@ -124,14 +125,15 @@ watch(() => route.query.module, (value) => {
   moduleFilter.value = ['数据处理', '图谱构建'].includes(String(value)) ? String(value) : '数据处理'
   scopeFilter.value = moduleFilter.value === '数据处理' ? '全部数据域' : '全部图谱对象'
 })
+onMounted(loadData)
 </script>
 
 <template>
   <div class="task-center">
     <section class="auto-update-monitor" aria-label="图谱自动更新策略与最近变化">
-      <header><div class="monitor-statuses"><span><i></i><strong>数据库连接正常</strong></span></div><em>最近健康检查 10:42 · 最近更新完成 02:18</em></header>
+      <header><div class="monitor-statuses"><span><i></i><strong>{{ sourceHealth.every(item => item.status === '健康' || item.status === '待探测') ? '数据库连接正常' : '部分数据源异常' }}</strong></span></div><em>最近健康检查 {{ sourceHealth[0]?.lastCheckedAt || '-' }} · {{ loading ? '数据刷新中' : '状态已同步' }}</em></header>
       <div class="auto-update-body">
-        <article class="latest-change"><span>最近一次检测 · 共 25,140 条源数据变化</span><strong>新增 18,420　修改 6,408　删除 312</strong><p><b>新增论文 12,846</b><b>新增专家 2,418</b><b>新增专利 / 项目 3,156</b></p><button type="button" @click="changeDrawerOpen=true">查看具体变更数据 →</button></article>
+        <article class="latest-change"><span>最近一次检测 · 共 {{ changeSummary.total.toLocaleString() }} 条源数据变化</span><strong>新增 {{ changeSummary.added.toLocaleString() }}　修改 {{ changeSummary.updated.toLocaleString() }}　删除 {{ changeSummary.deleted.toLocaleString() }}</strong><p><b>论文 / 人才 / 专利 / 项目</b></p><button type="button" @click="changeDrawerOpen=true">查看具体变更数据 →</button></article>
         <article class="update-schedule"><span>自动更新策略</span><strong>{{ scheduleFrequency }} {{ scheduleTime }} 检测并更新</strong><p>下一次：2026-07-15 {{ scheduleTime }} · 无变化则不创建更新批次</p></article>
         <div v-if="canManageUpdates" class="update-actions"><button type="button" @click="scheduleDialogOpen=true">更新策略</button><button type="button" @click="runImmediateUpdate">紧急更新</button><small>需图谱更新权限</small></div>
       </div>
@@ -142,8 +144,8 @@ watch(() => route.query.module, (value) => {
       <button v-for="item in taskCategories" :key="item.value" type="button" :class="{ active: moduleFilter === item.value }" @click="selectCategory(item.value)">{{ item.label }}<em>{{ item.count }}</em></button>
     </nav>
     <section class="task-panel">
-      <div class="task-filter"><input v-model="keyword" placeholder="搜索任务 ID、处理对象、来源表或规则" /><select v-model="batchFilter"><option>全部更新批次</option><option v-for="item in updateBatches" :key="item.id" :value="item.id">{{ item.name }}</option></select><select v-if="activeStage === '数据处理'" v-model="scopeFilter"><option>全部数据域</option><option>论文域</option><option>人才域</option><option>机构域</option><option>企业域</option><option>综合数据域</option></select><select v-else v-model="scopeFilter"><option>全部图谱对象</option><option>实体</option><option>关系</option><option>属性</option></select><select v-model="statusFilter"><option>全部执行状态</option><option>执行成功</option><option>执行中断</option></select><span>{{ filteredRows.length }} 个具体任务</span></div>
-      <div class="task-table"><table><thead><tr><th>任务 ID</th><th>处理对象</th><th>{{ activeStage === '数据处理' ? '数据域 / 处理动作' : '图谱对象 / 处理动作' }}</th><th>当前节点</th><th>执行状态</th><th>模型结果置信度</th><th>处理时间</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRows" :key="row.id" tabindex="0" @click="openTask(row)" @keydown.enter="openTask(row)"><td><code>{{ row.id }}</code><small>{{ row.batchId }}</small></td><td><strong>{{ row.objectName }}</strong><small>{{ row.objectId }}</small></td><td>{{ activeStage === '数据处理' ? row.dataDomain : `${row.kind} · ${row.objectType}` }}<small>{{ row.action }} · {{ row.sourceTable }}</small></td><td>{{ row.currentStep }}</td><td><span :class="row.executionStatus === '执行成功' ? 'execution-success' : 'execution-interrupted'">{{ row.executionStatus }}</span><small>{{ row.executionHint }}</small></td><td><strong :class="{ 'danger-text': row.confidenceDisplay !== '—' && Number(row.confidence) < 0.9 }">{{ row.confidenceDisplay }}</strong><small>{{ row.confidenceHint }}</small></td><td>{{ row.processedAt }}</td><td><button type="button" @click.stop="openTask(row)">查看结果与日志 →</button></td></tr><tr v-if="!filteredRows.length"><td class="empty-row" colspan="8">暂无符合条件的具体任务</td></tr></tbody></table></div>
+      <div class="task-filter"><input v-model="keyword" placeholder="搜索任务 ID、处理对象、来源表或规则" /><select v-model="batchFilter"><option>全部更新批次</option><option v-for="item in updateBatches" :key="item.id" :value="item.id">{{ item.name }}</option></select><select v-if="activeStage === '数据处理'" v-model="scopeFilter"><option>全部数据域</option><option>论文域</option><option>人才域</option><option>机构域</option><option>企业域</option><option>综合数据域</option></select><select v-else v-model="scopeFilter"><option>全部图谱对象</option><option>实体</option><option>关系</option><option>属性</option></select><select v-model="statusFilter"><option>全部执行状态</option><option>执行中</option><option>执行出错</option><option>等待人工审核</option><option>执行完成</option></select><span>{{ filteredRows.length }} 个具体任务</span></div>
+      <div class="task-table"><table><thead><tr><th>任务 ID</th><th>处理对象</th><th>{{ activeStage === '数据处理' ? '数据域 / 处理动作' : '图谱对象 / 处理动作' }}</th><th>当前节点</th><th>执行状态</th><th>模型结果置信度</th><th>处理时间</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRows" :key="row.id" tabindex="0" @click="openTask(row)" @keydown.enter="openTask(row)"><td><code>{{ row.id }}</code><small>{{ row.batchId }}</small></td><td><strong>{{ row.objectName }}</strong><small>{{ row.objectId }}</small></td><td>{{ activeStage === '数据处理' ? row.dataDomain : `${row.kind} · ${row.objectType}` }}<small>{{ row.action }} · {{ row.sourceTable }}</small></td><td>{{ row.currentStep }}</td><td><span :class="row.taskStatus === '执行完成' ? 'execution-success' : row.taskStatus === '执行出错' ? 'execution-interrupted' : ''">{{ row.taskStatus }}</span><small>{{ row.executionHint }}</small></td><td><strong :class="{ 'danger-text': row.confidenceDisplay !== '—' && Number(row.confidence) < 0.9 }">{{ row.confidenceDisplay }}</strong><small>{{ row.confidenceHint }}</small></td><td>{{ row.processedAt }}</td><td><button type="button" @click.stop="openTask(row)">查看结果与日志 →</button></td></tr><tr v-if="!filteredRows.length"><td class="empty-row" colspan="8">暂无符合条件的具体任务</td></tr></tbody></table></div>
     </section>
     <!-- <GraphVersionView v-else embedded /> -->
 
@@ -153,7 +155,7 @@ watch(() => route.query.module, (value) => {
       <section class="change-summary"><article><span>新增</span><strong>18,420</strong></article><article><span>修改</span><strong>6,408</strong></article><article><span>删除</span><strong>312</strong></article></section>
       <nav><button class="active" type="button">全部变更</button><button type="button">论文</button><button type="button">专家</button><button type="button">专利 / 项目</button></nav>
       <div class="change-table"><table><thead><tr><th>变更</th><th>数据类型</th><th>对象标识</th><th>具体数据</th><th>识别时间</th><th>操作</th></tr></thead><tbody><tr v-for="row in changeRows" :key="row.id" tabindex="0" @click="selectedChange=row" @keydown.enter="selectedChange=row"><td><em :class="row.change === '新增' ? 'is-add' : row.change === '修改' ? 'is-update' : 'is-delete'">{{ row.change }}</em></td><td>{{ row.type }}</td><td>{{ row.id }}</td><td>{{ row.content }}</td><td>{{ row.time }}</td><td><button type="button">查看详情 →</button></td></tr></tbody></table></div>
-      <footer><span>共 25,140 条变更</span><RouterLink to="/task-detail/batch/UPD-20260714">查看完整更新任务 →</RouterLink></footer>
+      <footer><span>共 {{ changeSummary.total.toLocaleString() }} 条变更</span><RouterLink :to="`/task-detail/batch/${updateBatches[0]?.id || ''}`">查看完整更新任务 →</RouterLink></footer>
     </aside>
 
     <aside v-if="selectedChange" class="change-record-detail">

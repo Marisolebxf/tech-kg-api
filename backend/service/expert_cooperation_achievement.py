@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from infra.graph_db import TRSGraphClient, get_techkg_client
+from infra.graph_db import TRSGraphClient, get_trs_graph_client
 from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
 
@@ -67,7 +67,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
 
     def _client(self) -> TRSGraphClient:
         if self._graph is None:
-            self._graph = get_techkg_client()
+            self._graph = get_trs_graph_client()
         return self._graph
 
     def query(
@@ -112,15 +112,19 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         papers = sum(1 for i in items if i["type"] == "paper")
         patents = sum(1 for i in items if i["type"] == "patent")
         projects = sum(1 for i in items if i["type"] == "project")
+        core = self._core_contribution(papers, patents, projects)
+        mode = self._cooperation_mode(items, papers, patents, projects)
 
         space = (
             getattr(getattr(graph, "_settings", None), "space", None)
             or TRSGraphSettings.from_env().space
         )
+        source_name = self._display_name(source)
+        target_name = self._display_name(target)
 
-        return {
-            "source": {"id": source_expert_id, "name": self._display_name(source)},
-            "target": {"id": target_expert_id, "name": self._display_name(target)},
+        payload: dict[str, Any] = {
+            "source": {"id": source_expert_id, "name": source_name},
+            "target": {"id": target_expert_id, "name": target_name},
             "summary": {
                 "papers": papers,
                 "patents": patents,
@@ -128,10 +132,27 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "awards": award_count,
             },
             "items": items,
-            "coreContribution": self._core_contribution(papers, patents, projects),
-            "cooperationMode": self._cooperation_mode(items, papers, patents, projects),
+            "coreContribution": core,
+            "cooperationMode": mode,
             "sourceMeta": {"space": space, "graph": "trs-graph", "truncated": False},
         }
+        payload.update(
+            self._frontend_view(
+                source_id=source_expert_id,
+                source_name=source_name,
+                target_id=target_expert_id,
+                target_name=target_name,
+                papers=papers,
+                patents=patents,
+                projects=projects,
+                award_count=award_count,
+                items=items,
+                core=core,
+                mode=mode,
+                space=str(space),
+            )
+        )
+        return payload
 
     @staticmethod
     def _require_node(graph: TRSGraphClient, node_id: str, kind: str) -> Any:
@@ -356,3 +377,230 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 return "单类型合作（专利）"
             return "单类型合作（项目）"
         return "多类型合作"
+
+    def _frontend_view(
+        self,
+        *,
+        source_id: str,
+        source_name: str,
+        target_id: str,
+        target_name: str,
+        papers: int,
+        patents: int,
+        projects: int,
+        award_count: int,
+        items: list[dict[str, Any]],
+        core: str,
+        mode: str,
+        space: str,
+    ) -> dict[str, Any]:
+        total = papers + patents + projects
+        type_labels = []
+        if papers:
+            type_labels.append("论文")
+        if patents:
+            type_labels.append("专利")
+        if projects:
+            type_labels.append("项目")
+
+        summary_rows = [
+            {"label": "专家 A", "value": f"{source_name}（{source_id}）"},
+            {"label": "专家 B", "value": f"{target_name}（{target_id}）"},
+            {"label": "合作成果类型", "value": "、".join(type_labels) if type_labels else "—"},
+            {"label": "成果总量", "value": f"{total} 项"},
+            {
+                "label": "成果分布",
+                "value": f"论文 {papers}、专利 {patents}、项目 {projects}",
+            },
+            {"label": "获奖数量", "value": str(award_count)},
+            {"label": "核心贡献", "value": core},
+            {"label": "合作模式", "value": mode},
+            {"label": "图空间", "value": space},
+        ]
+        if items:
+            first = items[0]
+            summary_rows.insert(
+                5,
+                {
+                    "label": "代表成果",
+                    "value": f"{first.get('title') or first.get('id')}（{first.get('time') or '时间未知'}）",
+                },
+            )
+
+        result_rows = [
+            {"label": "合作论文", "value": str(papers), "tone": "blue"},
+            {"label": "合作专利", "value": str(patents), "tone": "green"},
+            {"label": "共同项目", "value": str(projects), "tone": "orange"},
+            {"label": "获奖成果", "value": str(award_count), "tone": "red"},
+        ]
+
+        evidence = [
+            "按论文、专利、项目邻居求交汇总共同成果。",
+            "回填成果标题、时间、领域与奖项字段（有则输出）。",
+            f"规则归因：核心贡献={core}；合作模式={mode}。",
+        ]
+
+        rules = [
+            {
+                "name": "成果关联规则",
+                "type": "成果抽取规则",
+                "target": "AUTHORED_BY / INVENTED_BY / LEADS / HAS_PARTICIPANT",
+                "trigger": "输入两个专家节点",
+                "logic": "分别收集两边成果邻居，按类型求交得到共同论文/专利/项目。",
+                "output": "items、summary",
+                "threshold": "至少一侧存在成果边才可能命中",
+                "audit": "无共同成果时 summary 全 0，诚实降级",
+            },
+            {
+                "name": "归因统计规则",
+                "type": "统计归因规则",
+                "target": "共同成果条目",
+                "trigger": "求交完成后",
+                "logic": "按类型计数；回填 title/time/fields/awards；生成 coreContribution 与 cooperationMode。",
+                "output": "coreContribution、cooperationMode",
+                "threshold": "有效成果字段尽量回填，缺失不强行编造",
+                "audit": "时间无法解析时，时间过滤放行该条目",
+            },
+            {
+                "name": "合作模式判定规则",
+                "type": "分类规则",
+                "target": "成果数量与时间跨度",
+                "trigger": "归因统计完成后",
+                "logic": "无成果→暂无；单类型→单类型合作；多年跨度且总量充足→长期稳定；否则多类型。",
+                "output": "cooperationMode",
+                "threshold": "跨度>=3 年且总量>=3 判长期稳定",
+                "audit": "仅基于图内结构化字段",
+            },
+        ]
+
+        entities = [
+            {
+                "id": source_id,
+                "label": source_name,
+                "entityType": "科技专家",
+                "nodeType": "main",
+                "confidence": 1.0,
+                "relations": f"合作成果 {total}",
+                "evidence": [f"id={source_id}"],
+                "x": 220.0,
+                "y": 160.0,
+            },
+            {
+                "id": target_id,
+                "label": target_name,
+                "entityType": "科技专家",
+                "nodeType": "expert",
+                "confidence": 1.0,
+                "relations": f"合作成果 {total}",
+                "evidence": [f"id={target_id}"],
+                "x": 520.0,
+                "y": 160.0,
+            },
+        ]
+        relations = [
+            {
+                "id": f"coop-{source_id}-{target_id}",
+                "from": source_id,
+                "to": target_id,
+                "fromName": source_name,
+                "toName": target_name,
+                "label": mode if total else "暂无合作",
+                "category": "合作成果",
+                "summary": f"论文 {papers}、专利 {patents}、项目 {projects}",
+            }
+        ]
+        nodes = list(entities)
+        edges = [
+            {
+                "id": relations[0]["id"],
+                "from": source_id,
+                "to": target_id,
+                "label": relations[0]["label"],
+                "category": "合作成果",
+            }
+        ]
+
+        type_node_map = {
+            "paper": ("paper", "论文", 370.0, 320.0),
+            "patent": ("topic", "专利", 520.0, 340.0),
+            "project": ("project", "项目", 220.0, 340.0),
+        }
+        for idx, item in enumerate(items[:8]):
+            ach_type = str(item.get("type") or "paper")
+            node_type, type_label, base_x, base_y = type_node_map.get(
+                ach_type, ("paper", "成果", 370.0, 320.0)
+            )
+            nid = str(item.get("id") or f"ach-{idx}")
+            title = str(item.get("title") or nid)
+            entity = {
+                "id": nid,
+                "label": title[:18],
+                "entityType": type_label,
+                "nodeType": node_type,
+                "confidence": 0.9,
+                "relations": f"{type_label} · {item.get('time') or '—'}",
+                "evidence": [
+                    f"type={ach_type}",
+                    f"fields={','.join(item.get('fields') or []) or '-'}",
+                ],
+                "x": base_x + (idx % 3) * 40,
+                "y": base_y + (idx // 3) * 36,
+            }
+            entities.append(entity)
+            nodes.append(entity)
+            for expert_id in (source_id, target_id):
+                eid = f"{expert_id}->{nid}"
+                edges.append(
+                    {
+                        "id": eid,
+                        "from": expert_id,
+                        "to": nid,
+                        "label": type_label,
+                        "category": "合作成果",
+                    }
+                )
+
+        provenance = {
+            "sourceDatabase": f"trs-graph / space={space}",
+            "summary": f"共同成果 {total} 项；{mode}",
+            "evidences": [
+                {
+                    "title": "专家 A",
+                    "businessTable": "科技专家",
+                    "technicalTable": "Person",
+                    "recordId": source_id,
+                    "fieldIdentifier": "sourceExpertId",
+                    "summary": source_name,
+                },
+                {
+                    "title": "专家 B",
+                    "businessTable": "科技专家",
+                    "technicalTable": "Person",
+                    "recordId": target_id,
+                    "fieldIdentifier": "targetExpertId",
+                    "summary": target_name,
+                },
+                *[
+                    {
+                        "title": f"{it.get('type')} · {it.get('title') or it.get('id')}",
+                        "businessTable": "合作成果",
+                        "technicalTable": "expert_cooperation_achievement.query",
+                        "recordId": str(it.get("id") or ""),
+                        "fieldIdentifier": str(it.get("type") or ""),
+                        "summary": f"时间 {it.get('time') or '—'}；奖项 {len(it.get('awards') or [])}",
+                    }
+                    for it in items[:8]
+                ],
+            ],
+        }
+
+        return {
+            "summaryRows": summary_rows,
+            "resultRows": result_rows,
+            "evidence": evidence,
+            "rules": rules,
+            "entities": entities,
+            "relations": relations,
+            "graph": {"nodes": nodes, "edges": edges},
+            "provenance": provenance,
+        }

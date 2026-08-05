@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from typing import Any
 
-from infra.graph_db import TRSGraphClient, get_techkg_client
+from infra.graph_db import TRSGraphClient, get_trs_graph_client
 from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
 
@@ -20,6 +21,40 @@ PATENT_EDGE_TYPES = frozenset({"INVENTED_BY"})
 PROJECT_EDGE_TYPES = frozenset({"LEADS", "HAS_PARTICIPANT"})
 COAUTHOR_EDGE = "COAUTHOR_WITH"
 
+# 与前端结果详情「规则」Tab 字段对齐（name/type/target/trigger/logic/output/threshold/audit）
+ALUMNI_RULES: list[dict[str, str]] = [
+    {
+        "name": "教育经历匹配规则",
+        "type": "关系匹配规则",
+        "target": "education_background_institution_*/degree_*/date",
+        "trigger": "专家存在教育院校属性",
+        "logic": "解析结构化教育字段（必要时切分 blob），院校归一后比较；命中同校才认校友。",
+        "output": "校友候选、共享院校、维度列表",
+        "threshold": "至少命中「同校」",
+        "audit": "无教育数据时 total=0，不编造维度",
+    },
+    {
+        "name": "校友维度细分规则",
+        "type": "关系分类规则",
+        "target": "同校 / 同学历 / 同期",
+        "trigger": "同校匹配成功后",
+        "logic": "学位归一相等→同学历；教育年份存在交集→同期。不编造同院系/同导师。",
+        "output": "dimensions、dimensionsCatalog",
+        "threshold": "同校为必要条件",
+        "audit": "数据不具备的维度不得出现在结果中",
+    },
+    {
+        "name": "后续互动关联规则",
+        "type": "关系增强规则",
+        "target": "COAUTHOR_WITH / AUTHORED_BY / INVENTED_BY / LEADS / HAS_PARTICIPANT",
+        "trigger": "校友匹配命中后",
+        "logic": "汇总两人合著边与共同论文/专利/项目计数，生成 interactions.summary。",
+        "output": "interactions",
+        "threshold": "无互动边时计数为 0",
+        "audit": "仅作摘要，不写图",
+    },
+]
+
 
 class ExpertAlumniRelationService(KGModuleScaffoldService):
     module_code = "expert_alumni_relation"
@@ -30,7 +65,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
 
     def _client(self) -> TRSGraphClient:
         if self._graph is None:
-            self._graph = get_techkg_client()
+            self._graph = get_trs_graph_client()
         return self._graph
 
     def query(
@@ -42,14 +77,15 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         education_stage: str | None = None,
         limit: int = 20,
     ) -> dict[str, Any]:
+        if target_expert_id and target_expert_id == expert_id:
+            raise ValueError("expertId 与 targetExpertId 不能相同")
+
         graph = self._client()
         source = self._require_node(graph, expert_id, "专家")
         source_edus = self._parse_educations(getattr(source, "properties", None) or {})
         truncated = False
 
         if target_expert_id:
-            if target_expert_id == expert_id:
-                raise ValueError("expertId 与 targetExpertId 不能相同")
             target = self._require_node(graph, target_expert_id, "专家")
             candidates = [(target_expert_id, target)]
             mode = "pair"
@@ -81,31 +117,30 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             if mode == "list" and len(items) >= limit:
                 break
 
-        if mode == "pair" and not items:
-            # pair 模式无匹配仍返回空列表 total=0
-            pass
-
         space = (
             getattr(getattr(graph, "_settings", None), "space", None)
             or TRSGraphSettings.from_env().space
         )
-
-        return {
-            "expert": {
-                "id": expert_id,
-                "name": self._display_name(source),
-                "educations": source_edus,
-            },
+        expert = {
+            "id": expert_id,
+            "name": self._display_name(source),
+            "educations": source_edus,
+        }
+        source_meta = {
+            "space": space,
+            "graph": "trs-graph",
+            "truncated": truncated and mode == "list",
+        }
+        payload = {
+            "expert": expert,
             "mode": mode,
             "total": len(items),
             "items": items,
             "dimensionsCatalog": sorted(dim_catalog),
-            "sourceMeta": {
-                "space": space,
-                "graph": "trs-graph",
-                "truncated": truncated and mode == "list",
-            },
+            "sourceMeta": source_meta,
         }
+        payload.update(self._frontend_view(payload))
+        return payload
 
     @staticmethod
     def _require_node(graph: TRSGraphClient, node_id: str, kind: str) -> Any:
@@ -375,3 +410,203 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         if tgt == pid and src and src != pid:
             return src
         return None
+
+    def _frontend_view(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """补充前端算法测试页各 Tab 可直接渲染的结构。"""
+        expert = payload["expert"]
+        items: list[dict[str, Any]] = payload["items"]
+        mode = payload["mode"]
+        total = payload["total"]
+        dims = payload["dimensionsCatalog"]
+        meta = payload["sourceMeta"]
+        first = items[0] if items else None
+
+        summary_rows = [
+            {"label": "专家", "value": f"{expert.get('name') or '—'}（{expert.get('id')}）"},
+            {"label": "模式", "value": str(mode)},
+            {"label": "校友数", "value": str(total)},
+            {"label": "维度目录", "value": "、".join(dims) if dims else "—"},
+            {
+                "label": "截断",
+                "value": "是（list 扫描未穷尽）" if meta.get("truncated") else "否",
+            },
+            {"label": "图空间", "value": str(meta.get("space") or "—")},
+        ]
+        if first:
+            summary_rows.extend(
+                [
+                    {
+                        "label": "首条校友",
+                        "value": f"{first.get('name') or '—'}（{first.get('alumniId')}）",
+                    },
+                    {
+                        "label": "共享院校",
+                        "value": "、".join(first.get("sharedInstitutions") or []) or "—",
+                    },
+                    {
+                        "label": "关系维度",
+                        "value": "、".join(first.get("dimensions") or []) or "—",
+                    },
+                    {
+                        "label": "互动摘要",
+                        "value": (first.get("interactions") or {}).get("summary") or "—",
+                    },
+                ]
+            )
+        else:
+            summary_rows.append(
+                {"label": "说明", "value": "未命中校友（无同校教育属性或异校）"}
+            )
+
+        result_rows = [
+            {"label": "校友数量", "value": str(total), "tone": "blue"},
+            {"label": "查询模式", "value": str(mode), "tone": "green"},
+            {
+                "label": "关系维度",
+                "value": str(len(dims)),
+                "tone": "orange",
+            },
+            {
+                "label": "截断标记",
+                "value": "是" if meta.get("truncated") else "否",
+                "tone": "purple",
+            },
+        ]
+
+        evidence = [
+            "同校为成立校友的必要条件（院校字段 NFKC 归一后比较）。",
+            "同学历/同期仅在学位、教育日期可支撑时输出；不输出同院系/同导师。",
+            "互动摘要汇总 COAUTHOR_WITH 与共同论文/专利/项目计数。",
+        ]
+        if not expert.get("educations"):
+            evidence.append("源专家无教育院校属性，本次 total=0 属诚实降级。")
+        if meta.get("truncated"):
+            evidence.append("list 模式扫描达上限，结果可能未穷尽全图 Person。")
+
+        entities, relations, graph = self._build_graph_entities(expert, items)
+        provenance = {
+            "sourceDatabase": f"trs-graph / space={meta.get('space') or 'dev'}",
+            "summary": (
+                f"mode={mode}，命中 {total} 名校友；"
+                f"维度={('、'.join(dims) if dims else '无')}"
+            ),
+            "evidences": [
+                {
+                    "title": "源专家教育属性",
+                    "businessTable": "专家教育经历",
+                    "technicalTable": "Person.education_background_*",
+                    "recordId": str(expert.get("id") or ""),
+                    "fieldIdentifier": "education_background_institution_zh/_en",
+                    "summary": (
+                        f"解析教育经历 {len(expert.get('educations') or [])} 条"
+                    ),
+                },
+                *[
+                    {
+                        "title": f"校友匹配 · {item.get('name') or item.get('alumniId')}",
+                        "businessTable": "校友关系查询结果",
+                        "technicalTable": "expert_alumni_relation.query",
+                        "recordId": str(item.get("alumniId") or ""),
+                        "fieldIdentifier": "/".join(item.get("dimensions") or ["同校"]),
+                        "summary": (
+                            f"共享院校："
+                            f"{'、'.join(item.get('sharedInstitutions') or []) or '—'}；"
+                            f"{(item.get('interactions') or {}).get('summary') or ''}"
+                        ),
+                    }
+                    for item in items[:8]
+                ],
+            ],
+        }
+
+        return {
+            "summaryRows": summary_rows,
+            "resultRows": result_rows,
+            "evidence": evidence,
+            "rules": ALUMNI_RULES,
+            "entities": entities,
+            "relations": relations,
+            "graph": graph,
+            "provenance": provenance,
+        }
+
+    @staticmethod
+    def _build_graph_entities(
+        expert: dict[str, Any], items: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+        cx, cy, radius = 220.0, 200.0, 180.0
+        source_id = str(expert.get("id") or "source")
+        source_name = str(expert.get("name") or source_id)
+        entities: list[dict[str, Any]] = [
+            {
+                "id": source_id,
+                "label": source_name,
+                "entityType": "科技专家",
+                "nodeType": "main",
+                "confidence": 1.0,
+                "relations": f"校友 {len(items)}",
+                "evidence": [
+                    f"educations={len(expert.get('educations') or [])}",
+                ],
+            }
+        ]
+        relations: list[dict[str, Any]] = []
+        nodes = [
+            {
+                **entities[0],
+                "x": cx,
+                "y": cy,
+            }
+        ]
+        edges: list[dict[str, Any]] = []
+
+        for index, item in enumerate(items[:12]):
+            aid = str(item.get("alumniId") or f"alumni-{index}")
+            aname = str(item.get("name") or aid)
+            dims = item.get("dimensions") or []
+            dim_text = "、".join(dims) if dims else "同校"
+            shared = "、".join(item.get("sharedInstitutions") or []) or "—"
+            interaction = (item.get("interactions") or {}).get("summary") or "无互动"
+            entity = {
+                "id": aid,
+                "label": aname,
+                "entityType": "校友专家",
+                "nodeType": "expert",
+                "confidence": 0.9,
+                "relations": dim_text,
+                "evidence": [f"shared={shared}", interaction],
+            }
+            entities.append(entity)
+            angle = (math.pi * 2 * index) / max(len(items[:12]), 1) - math.pi / 2
+            nodes.append(
+                {
+                    **entity,
+                    "x": cx + math.cos(angle) * radius + 200.0,
+                    "y": cy + math.sin(angle) * radius,
+                }
+            )
+            rel_id = f"alumni-{source_id}-{aid}"
+            relation = {
+                "id": rel_id,
+                "from": source_id,
+                "to": aid,
+                "fromName": source_name,
+                "toName": aname,
+                "label": dims[0] if dims else "校友",
+                "category": "校友",
+                "dimensions": dims,
+                "sharedInstitutions": item.get("sharedInstitutions") or [],
+                "interactions": item.get("interactions") or {},
+            }
+            relations.append(relation)
+            edges.append(
+                {
+                    "id": rel_id,
+                    "from": source_id,
+                    "to": aid,
+                    "label": relation["label"],
+                    "category": "校友",
+                }
+            )
+
+        return entities, relations, {"nodes": nodes, "edges": edges}

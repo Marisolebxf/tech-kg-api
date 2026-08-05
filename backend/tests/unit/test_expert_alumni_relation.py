@@ -67,6 +67,15 @@ def test_pair_same_school_and_degree():
     assert "同院系" not in item["dimensions"]
     assert "同导师" not in item["dimensions"]
     assert item["interactions"]["coauthorEdge"] is True
+    assert resp["summaryRows"]
+    assert resp["resultRows"][0]["label"] == "校友数量"
+    assert resp["graph"]["nodes"]
+    assert resp["graph"]["edges"]
+    assert resp["entities"][0]["id"] == "S1"
+    assert resp["relations"][0]["to"] == "S2"
+    assert resp["provenance"]["evidences"]
+    assert resp["rules"][0]["name"] == "教育经历匹配规则"
+    assert "同校" in resp["dimensionsCatalog"]
 
 
 def test_pair_not_alumni():

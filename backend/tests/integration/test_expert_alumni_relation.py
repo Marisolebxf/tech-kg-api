@@ -68,3 +68,29 @@ async def test_query_alumni_relation_not_found(async_client, monkeypatch):
     body = resp.json()
     assert body["code"] == 404
     assert body["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_legacy_alumni_routes(async_client, monkeypatch):
+    resp = await async_client.get("/api/v1/kg-service/expert-alumni-relation")
+    assert resp.status_code == 200
+    assert resp.json()["code"] == "expert_alumni_relation"
+
+    monkeypatch.setattr(
+        handler.application,
+        "query",
+        lambda **kwargs: {
+            "expert": {"id": "S1", "name": "甲", "educations": []},
+            "mode": "pair",
+            "total": 0,
+            "items": [],
+            "dimensionsCatalog": [],
+            "sourceMeta": {"space": "dev", "graph": "trs-graph", "truncated": False},
+        },
+    )
+    resp = await async_client.post(
+        "/api/v1/kg-service/expert-alumni-relation",
+        json={"expertId": "S1", "targetExpertId": "S2"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["code"] == 200

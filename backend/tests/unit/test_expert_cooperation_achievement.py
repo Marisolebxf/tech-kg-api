@@ -83,6 +83,10 @@ def test_query_shared_papers_and_patent_with_awards():
         "单类型合作（专利）",
         "单类型合作（项目）",
     }
+    assert resp["summaryRows"]
+    assert resp["graph"]["nodes"]
+    assert resp["rules"]
+    assert resp["provenance"]["evidences"]
 
 
 def test_query_same_id_raises():

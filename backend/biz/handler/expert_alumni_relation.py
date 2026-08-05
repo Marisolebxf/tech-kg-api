@@ -7,16 +7,16 @@ from biz.schemas.common import ApiResponse
 from biz.schemas.expert_alumni_relation import AlumniRelationQueryRequest
 
 router = APIRouter(prefix="/kg-construction/expert-alumni-relations")
+# 兼容前端/文档遗留路径，避免页面或 curl 打到 404
+legacy_router = APIRouter(prefix="/kg-service/expert-alumni-relation")
 application = ExpertAlumniRelationApplication()
 
 
-@router.get("")
-async def describe_expert_alumni_relation() -> dict[str, object]:
+async def _describe() -> dict[str, object]:
     return application.describe()
 
 
-@router.post("/query", response_model=ApiResponse)
-async def query_expert_alumni_relation(body: AlumniRelationQueryRequest) -> ApiResponse:
+async def _query(body: AlumniRelationQueryRequest) -> ApiResponse:
     try:
         result = application.query(
             expert_id=body.expertId,
@@ -30,3 +30,23 @@ async def query_expert_alumni_relation(body: AlumniRelationQueryRequest) -> ApiR
         return ApiResponse(code=400, success=False, msg=str(exc))
     except KeyError as exc:
         return ApiResponse(code=404, success=False, msg=str(exc))
+
+
+@router.get("")
+async def describe_expert_alumni_relation() -> dict[str, object]:
+    return await _describe()
+
+
+@router.post("/query", response_model=ApiResponse)
+async def query_expert_alumni_relation(body: AlumniRelationQueryRequest) -> ApiResponse:
+    return await _query(body)
+
+
+@legacy_router.get("")
+async def legacy_describe_expert_alumni_relation() -> dict[str, object]:
+    return await _describe()
+
+
+@legacy_router.post("", response_model=ApiResponse)
+async def legacy_query_expert_alumni_relation(body: AlumniRelationQueryRequest) -> ApiResponse:
+    return await _query(body)

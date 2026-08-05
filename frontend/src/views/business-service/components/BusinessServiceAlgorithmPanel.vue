@@ -2,10 +2,23 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import iconInfo from '../../../assets/icons/icon-info.svg'
+import {
+  analyzeExpertIndirectRelation,
+  type ExpertIndirectRelationResult,
+} from '../../../api/expertIndirectRelation'
+import {
+  analyzeExpertPaperCooperation,
+  type ExpertPaperCooperationResult,
+} from '../../../api/expertPaperCooperation'
 import KgGraphCanvas from '../../../components/kg-graph-canvas.vue'
 import { getEdgeProvenance, getNodeProvenance, getServiceGraphPreset } from '../../../data/graph-presets'
 import type { GraphEdgeData, GraphNodeData } from '../../../data/graph-presets'
 import type { ServiceModule } from '../service-modules'
+import {
+  buildIndirectRelationGraph,
+  indirectSummaryRows,
+  parseRelationTypes,
+} from '../indirect-relation-view'
 
 const props = defineProps<{
   moduleInfo: ServiceModule
@@ -24,12 +37,19 @@ const panoramaRelation = ref('all')
 const parameterValues = ref<Record<string, string>>({})
 const selectedGraphNodeId = ref<string | null>(null)
 const selectedGraphEdgeId = ref<string | null>(null)
+const paperResult = ref<ExpertPaperCooperationResult | null>(null)
+const indirectResult = ref<ExpertIndirectRelationResult | null>(null)
+const liveResponse = ref<Record<string, unknown> | null>(null)
+const liveGraph = ref<{ nodes: GraphNodeData[], edges: GraphEdgeData[] } | null>(null)
+const runError = ref('')
 const graphPreset = computed(() => getServiceGraphPreset(props.moduleInfo.key))
-const graphNodes = computed(() => graphPreset.value.nodes)
-const graphEdges = computed(() => graphPreset.value.edges.filter((edge) => (
+const graphNodes = computed(() => liveGraph.value?.nodes ?? graphPreset.value.nodes)
+const graphEdges = computed(() => (liveGraph.value?.edges ?? graphPreset.value.edges).filter((edge) => (
   graphNodes.value.some((node) => node.id === edge.from) &&
   graphNodes.value.some((node) => node.id === edge.to)
 )))
+const isPaperCooperation = computed(() => props.moduleInfo.key === 'paper-cooperation')
+const isIndirectRelation = computed(() => props.moduleInfo.key === 'node-indirect')
 const isPanorama = computed(() => props.moduleInfo.key === 'industry-chain-panorama')
 const panoramaLayerOptions = [
   { value: 1, label: '一级 · 产业环节' },
@@ -133,6 +153,63 @@ function formatTimestamp(date: Date) {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
+function levelSummary(result: ExpertPaperCooperationResult) {
+  const parts = [
+    ...Object.entries(result.journalLevelCount).map(([level, count]) => `期刊 ${level} ${count} 篇`),
+    ...Object.entries(result.conferenceLevelCount).map(([level, count]) => `会议 ${level} ${count} 篇`),
+  ]
+  return parts.join('、') || '暂无分级数据'
+}
+
+function buildPaperCooperationGraph(result: ExpertPaperCooperationResult) {
+  const expertA = result.authorList[0] || '专家 A'
+  const expertB = result.authorList[1] || '专家 B'
+  const topic = result.paperTopics[0] || '暂无主题'
+  const team = result.stableTeamMembers.slice(0, 3).join('、') || '暂无稳定团队'
+  const venue = levelSummary(result)
+  const unitCount = new Set(result.authorUnits.filter(Boolean)).size
+
+  const nodes: GraphNodeData[] = [
+    { id: 'core', label: expertA, nodeType: 'main', x: 215, y: 90, entityType: '科技专家', confidence: 0.95, relations: `合作论文 ${result.cooperationPaperCount}`, evidence: ['专家实体来自知识图谱。'] },
+    { id: 'expert-1', label: expertB, nodeType: 'expert', x: 545, y: 90, entityType: '合作专家', confidence: 0.94, relations: `合作论文 ${result.cooperationPaperCount}`, evidence: ['双方通过共同论文路径关联。'] },
+    { id: 'paper-1', label: `合作论文${result.cooperationPaperCount}篇`, nodeType: 'paper', x: 380, y: 205, entityType: '论文成果', confidence: 0.93, relations: `总被引 ${result.citation.total}`, evidence: ['双方共同出现在论文作者关系中。'] },
+    { id: 'org-1', label: '作者单位', nodeType: 'org', x: 125, y: 340, entityType: '科研机构', confidence: 0.91, relations: `单位 ${unitCount}`, evidence: result.authorUnits },
+    { id: 'topic-1', label: topic, nodeType: 'topic', x: 310, y: 355, entityType: '论文主题', confidence: 0.9, relations: `方向 ${result.paperTopics.length}`, evidence: result.paperTopics },
+    { id: 'venue-1', label: venue, nodeType: 'project', x: 485, y: 355, entityType: '期刊会议级别', confidence: 0.88, relations: `成果 ${result.cooperationPaperCount}`, evidence: [venue] },
+    { id: 'expert-2', label: team, nodeType: 'expert', x: 655, y: 340, entityType: '合作团队', confidence: 0.86, relations: `核心人员 ${result.coreCollaborators.length}`, evidence: result.coreCollaborators },
+  ]
+  const edges: GraphEdgeData[] = [
+    { id: 'pc1', from: 'core', to: 'expert-1', label: '论文合作', category: '论文合作' },
+    { id: 'pc2', from: 'core', to: 'paper-1', label: '共同作者', category: '论文合作' },
+    { id: 'pc3', from: 'expert-1', to: 'paper-1', label: '共同作者', category: '论文合作' },
+    { id: 'pc4', from: 'paper-1', to: 'org-1', label: '作者单位', category: '直接关系' },
+    { id: 'pc5', from: 'paper-1', to: 'topic-1', label: '研究主题', category: '间接关系' },
+    { id: 'pc6', from: 'paper-1', to: 'venue-1', label: '发表级别', category: '直接关系' },
+    { id: 'pc7', from: 'paper-1', to: 'expert-2', label: '团队识别', category: '论文合作' },
+  ]
+  return { nodes, edges }
+}
+
+function paperSummaryRows(result: ExpertPaperCooperationResult) {
+  const period = result.cooperationTimeRange.displayText || '暂无逐篇时间数据'
+  const topics = result.paperTopics.join('、') || '暂无主题数据'
+  const collaborators = result.coreCollaborators.join('、') || '暂无核心合作人员'
+  const contribution = result.sharedContribution.join('、') || '暂无共同贡献标签'
+  return [
+    ['核心专家', `${result.authorList[0] || '-'}｜${result.authorUnits[0] || '未知机构'}`] as const,
+    ['合作专家', `${result.authorList[1] || '-'}｜${result.authorUnits[1] || '未知机构'}`] as const,
+    ['作者单位', result.authorUnits.join('、') || '未知机构'] as const,
+    ['合作发表时间', period] as const,
+    ['论文主题', topics] as const,
+    ['合作论文数量', `${result.cooperationPaperCount} 篇`] as const,
+    ['期刊/会议级别', levelSummary(result)] as const,
+    ['论文被引情况', `总被引 ${result.citation.total} 次｜最高单篇 ${result.citation.max} 次`] as const,
+    ['研究方向', `${topics}（${result.paperTopics.length} 个方向）`] as const,
+    ['共同贡献', contribution] as const,
+    ['核心合作人员', collaborators] as const,
+    ['合作团队特征', result.stableTeamMembers.length ? '长期稳定合作团队' : '暂未识别稳定团队'] as const,
+  ]
+}
 
 const updateStatus = computed(() => {
   if (running.value) return '正在拉取最新批次数据…'
@@ -146,6 +223,15 @@ const updateStatus = computed(() => {
 })
 
 const detailRows = computed(() => {
+  if ((isPaperCooperation.value || isIndirectRelation.value) && runError.value) {
+    return [['执行状态', runError.value] as const]
+  }
+  if (isIndirectRelation.value && indirectResult.value) {
+    return indirectSummaryRows(indirectResult.value)
+  }
+  if (isPaperCooperation.value && paperResult.value) {
+    return paperSummaryRows(paperResult.value)
+  }
   return props.moduleInfo.summaryRows.map((row) => {
     if (row.label === '更新状态' && isPanorama.value) {
       return [row.label, updateStatus.value] as const
@@ -154,8 +240,11 @@ const detailRows = computed(() => {
   })
 })
 const apiResultJson = computed(() => JSON.stringify({
-  ...JSON.parse(props.responseJson),
-  request_params: parameterValues.value,
+  ...(liveResponse.value ?? JSON.parse(props.responseJson)),
+  request_params: {
+    dataSource: isPaperCooperation.value ? 'knowledge_graph' : undefined,
+    ...parameterValues.value,
+  },
 }, null, 2))
 
 watch(
@@ -167,6 +256,11 @@ watch(
     selectedGraphNodeId.value = null
     selectedGraphEdgeId.value = null
     resetParameters()
+    paperResult.value = null
+    indirectResult.value = null
+    liveResponse.value = null
+    liveGraph.value = null
+    runError.value = ''
     autoRefresh.value = false
   },
   { immediate: true },
@@ -194,20 +288,60 @@ function resetParameters() {
   )
 }
 
-function handleRun() {
+async function handleRun() {
   running.value = true
-  window.setTimeout(() => {
+  runError.value = ''
+  if (!isPaperCooperation.value && !isIndirectRelation.value) {
+    window.setTimeout(() => {
+      const now = new Date()
+      lastTestTime.value = formatTimestamp(now)
+      lastUpdateTime.value = now.getTime()
+      running.value = false
+    }, 360)
+    return
+  }
+
+  try {
+    if (isIndirectRelation.value) {
+      const response = await analyzeExpertIndirectRelation({
+        core_node_id: (parameterValues.value.core_node_id || '').trim(),
+        relation_types: parseRelationTypes(parameterValues.value.relation_types || ''),
+        path_depth: Number(parameterValues.value.path_depth || 2),
+        min_strength: Number(parameterValues.value.min_strength || 0.65),
+      })
+      indirectResult.value = response.structuredResult
+      liveResponse.value = { ...response }
+      liveGraph.value = buildIndirectRelationGraph(response.structuredResult)
+    } else {
+      const response = await analyzeExpertPaperCooperation({
+        dataSource: 'knowledge_graph',
+        expertAId: (parameterValues.value.expertAId || '').trim(),
+        expertBId: (parameterValues.value.expertBId || '').trim(),
+        startTime: (parameterValues.value.startTime || '').trim() || undefined,
+        endTime: (parameterValues.value.endTime || '').trim() || undefined,
+      })
+      paperResult.value = response.structuredResult
+      liveResponse.value = { ...response }
+      liveGraph.value = buildPaperCooperationGraph(response.structuredResult)
+    }
+    selectedGraphNodeId.value = null
+    selectedGraphEdgeId.value = null
+    resultMode.value = 'summary'
     const now = new Date()
     lastTestTime.value = formatTimestamp(now)
     lastUpdateTime.value = now.getTime()
+  } catch (error) {
+    runError.value = error instanceof Error ? `执行失败：${error.message}` : '执行失败：接口调用异常'
+    resultMode.value = 'summary'
+  } finally {
     running.value = false
-  }, 360)
+  }
 }
 
 function startAutoRefresh() {
   if (refreshTimer !== null) return
   refreshTimer = window.setInterval(() => {
-    handleRun()
+    void handleRun()
   }, refreshIntervalSeconds * 1000)
 }
 
@@ -220,7 +354,7 @@ function stopAutoRefresh() {
 
 watch(autoRefresh, (on) => {
   if (on) {
-    handleRun()
+    void handleRun()
     startAutoRefresh()
   } else {
     stopAutoRefresh()

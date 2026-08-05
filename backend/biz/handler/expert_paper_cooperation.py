@@ -1,3 +1,5 @@
+import inspect
+
 from fastapi import APIRouter, HTTPException
 
 from application.expert_paper_cooperation import ExpertPaperCooperationApplication
@@ -22,9 +24,10 @@ async def analyze_expert_paper_cooperation_structured_result(
     body: ExpertPaperCooperationDemoRequest,
 ) -> ExpertPaperCooperationStructuredResultOnlyResponse:
     try:
-        return ExpertPaperCooperationStructuredResultOnlyResponse(
-            **application.build_structured_result_only(body)
-        )
+        result = application.build_structured_result_only(body)
+        if inspect.isawaitable(result):
+            result = await result
+        return ExpertPaperCooperationStructuredResultOnlyResponse(**result)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:

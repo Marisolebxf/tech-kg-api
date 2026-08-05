@@ -10,6 +10,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 from httpx import Response
 
+from infra.graph_db.exceptions import GraphRequestError
 from main import app
 
 client = TestClient(app)
@@ -73,6 +74,36 @@ def test_graph_search_routes_registered() -> None:
 
     for path in expected_paths:
         assert path in paths, f"图谱搜索路由未注册：{path}"
+
+
+def test_list_nodes_returns_empty_result_for_unknown_tag(monkeypatch) -> None:
+    """未初始化的可选标签应返回空集合，而不是首页可见的 502。"""
+
+    class GraphClientStub:
+        def get_nodes_by_label(self, label: str, *, limit: int, offset: int):
+            raise GraphRequestError(
+                f"GET /api/v1/nodes/label/{label} -> 400",
+                status_code=400,
+                body='{"message":"SemanticError: `Scholar\': Unknown tag"}',
+            )
+
+    monkeypatch.setattr(
+        "biz.handler.graph_search.get_graph_client",
+        lambda space=None: GraphClientStub(),
+    )
+
+    response = client.get(
+        f"{BASE_URL}/nodes",
+        params={"label": "Scholar", "space": "techkg"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "code": 200,
+        "success": True,
+        "data": {"items": [], "total": 0},
+        "msg": "success",
+    }
 
 
 def test_subgraph_rejects_depth_above_maximum() -> None:

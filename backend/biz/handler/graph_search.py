@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from biz.schemas.common import ApiResponse
 from infra.graph_db import get_graph_client
+from infra.graph_db.exceptions import GraphRequestError
 
 router = APIRouter(prefix="/graph-search", tags=["graph-search"])
 
@@ -101,9 +102,20 @@ def list_nodes(
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:
     client = get_graph_client(space)
-    result = client.get_nodes_by_label(label, limit=limit, offset=offset)
-    items = [_node_to_data(node).model_dump() for node in result.items]
-    return ApiResponse(data=NodeListData(items=items, total=client.node_count(label)).model_dump())
+    try:
+        result = client.get_nodes_by_label(label, limit=limit, offset=offset)
+        items = [_node_to_data(node).model_dump() for node in result.items]
+        total = client.node_count(label)
+    except GraphRequestError as exc:
+        # An empty or partially initialized graph space can legitimately lack
+        # one of the explorer's optional labels. Treat that case as an empty
+        # collection so the homepage remains usable while schema/data are
+        # being initialized. Other upstream failures must still surface.
+        if exc.status_code != 400 or "Unknown tag" not in exc.body:
+            raise
+        items = []
+        total = 0
+    return ApiResponse(data=NodeListData(items=items, total=total).model_dump())
 
 
 @router.post("/nodes/search", response_model=ApiResponse)

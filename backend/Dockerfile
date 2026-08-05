@@ -1,5 +1,5 @@
 # 使用 Python 3.11.13 slim 镜像
-FROM python:3.11.13-slim
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/python:3.11.13-slim
 
 # 设置工作目录
 WORKDIR /app

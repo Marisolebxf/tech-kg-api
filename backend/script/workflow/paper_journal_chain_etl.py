@@ -8,11 +8,16 @@
   payload = {} 或 {"mode": "full"}             → 全量
   payload = {"mode": "incremental", "since": "2026-07-01"} → 只处理 updated_time > since 的数据
 
-封装内容：
-  1. 论文实体（dwd_zh/en_paper → Paper 顶点）
-  2. 论文关系（reference/citation/related → CITES/CITED_BY/RELATED_TO 边）
-  3. 产业链图谱（dwd_industry_chain_info → IndustryNode + HAS_NODE/CHILD_OF；
-     dwd_org_industry_chain_dtl → BELONGS_TO_NODE）
+封装内容（完整覆盖三个原脚本的所有点边）：
+  论文实体：Paper 顶点（dwd_zh/en_paper）
+  论文作者：Person 顶点 + AUTHORED_BY 边（dwd_zh/en_paper_author）
+  期刊：Journal 顶点 + PUBLISHED_IN 边（dwd_zh/en_journal + paper.journal_id）
+  论文关系：CITES / CITED_BY / RELATED_TO 边（reference / citation / related 表）
+  关键词：Keyword 顶点 + HAS_KEYWORD 边（dwd_zh/en_paper_classification）
+  报告：Report 顶点 + REFERENCED_BY 边（dwd_zh_report_paper）
+  产业链：IndustryChain / IndustryNode 顶点 + HAS_NODE / CHILD_OF / DOWNSTREAM_OF 边
+         + BELONGS_TO_NODE 边（org→node）
+         + News 顶点 + COVERS_CHAIN 边（dwd_industry_chain_news_info）
 
 图写入用多值 INSERT VERTEX/EDGE（rank@0 幂等），只插入不删除。
 """
@@ -47,6 +52,7 @@ logger = logging.getLogger(__name__)
 SPACE = "dev"
 BATCH = 500
 INGEST_BATCH = "workflow_etl"
+INGEST_TIME = ""
 _SUFFIX_RE = re.compile(r"__\d+$")
 
 
@@ -118,17 +124,23 @@ def _batch_e(client, edge, fields, rows, double_first=False):
         return 0
 
 
+def _since(sql, since, col="updated_time"):
+    """给 SQL 追加增量条件。"""
+    if since:
+        sql += f" WHERE {col} > '{since}'"
+    return sql
+
+
 # ---------- ETL 步骤 ----------
 
 
 def _load_papers(mysql, graph, since):
-    """论文实体 → Paper 顶点（全量或增量）。"""
+    """论文实体 → Paper 顶点。"""
     total = 0
     with mysql.engine.connect() as conn:
         for tbl in ["dwd_zh_paper", "dwd_en_paper"]:
-            sql = f"SELECT id, doi, zh_name, en_name, publication_year FROM {tbl}"
-            if since:
-                sql += f" WHERE updated_time > '{since}'"
+            sql = f"SELECT id, doi, zh_name, en_name, publication_year, publication_id FROM {tbl}"
+            sql = _since(sql, since)
             rows = conn.execute(text(sql)).all()
             verts = []
             for r in rows:
@@ -139,22 +151,115 @@ def _load_papers(mysql, graph, since):
                         r[2] or "",
                         r[3] or "",
                         str(r[4]) if r[4] else "",
+                        str(r[5]) if r[5] else "",
+                        "gkx",
                     )
                 )
             for i in range(0, len(verts), BATCH):
                 _batch_v(
                     graph,
                     "Paper",
-                    ["doi", "title_zh", "title_en", "publication_year", "source"],
-                    [(v[0], v[1], v[2], v[3], v[4], "gkx") for v in verts[i : i + BATCH]],
+                    [
+                        "doi",
+                        "title_zh",
+                        "title_en",
+                        "publication_year",
+                        "publication_name",
+                        "source",
+                    ],
+                    verts[i : i + BATCH],
                 )
             total += len(verts)
             logger.info("  %s: %d 篇论文", tbl, len(verts))
     return {"papers": total}
 
 
+def _load_authors(mysql, graph, since):
+    """论文作者 → Person 顶点 + AUTHORED_BY 边。"""
+    total_p = total_e = 0
+    with mysql.engine.connect() as conn:
+        for tbl in ["dwd_zh_paper_author", "dwd_en_paper_author"]:
+            sql = f"SELECT paper_id, author_id, author_zh_name, author_en_name, author_email, author_order, is_corresponding_author FROM {tbl}"
+            sql = _since(sql, since)
+            persons = {}
+            edges = []
+            for r in conn.execute(text(sql)).all():
+                pid = _source_paper_id(r[0])
+                aid = str(r[1]) if r[1] else ""
+                if not pid or not aid:
+                    continue
+                if aid not in persons:
+                    persons[aid] = (f"person_{aid}", r[2] or "", r[3] or "")
+                edges.append(
+                    (
+                        f"paper_{pid}",
+                        f"person_{aid}",
+                        str(r[5]) if r[5] is not None else "",
+                        str(r[6]) if r[6] is not None else "",
+                    )
+                )
+            prows = list(persons.values())
+            for i in range(0, len(prows), BATCH):
+                _batch_v(
+                    graph,
+                    "Person",
+                    ["name_zh", "name_en"],
+                    [(p[0], p[1], p[2]) for p in prows[i : i + BATCH]],
+                )
+            for i in range(0, len(edges), BATCH):
+                _batch_e(
+                    graph, "AUTHORED_BY", ["author_order", "is_corresponding"], edges[i : i + BATCH]
+                )
+            total_p += len(persons)
+            total_e += len(edges)
+            logger.info("  %s: %d 作者, %d AUTHORED_BY", tbl, len(persons), len(edges))
+    return {"persons": total_p, "authored_by": total_e}
+
+
+def _load_journals(mysql, graph, since):
+    """期刊 → Journal 顶点 + PUBLISHED_IN 边。"""
+    total_j = total_e = 0
+    with mysql.engine.connect() as conn:
+        # Journal 顶点
+        for tbl in ["dwd_zh_journal", "dwd_en_journal"]:
+            sql = f"SELECT journal_id, journal_en_name, journal_zh_name, issn, country FROM {tbl}"
+            sql = _since(sql, since)
+            verts = []
+            for r in conn.execute(text(sql)).all():
+                jid = str(r[0]) if r[0] else ""
+                if not jid:
+                    continue
+                verts.append((f"journal_{jid}", r[1] or "", r[2] or "", r[3] or "", r[4] or ""))
+            for i in range(0, len(verts), BATCH):
+                _batch_v(
+                    graph,
+                    "Journal",
+                    ["name_en", "name_zh", "issn", "country"],
+                    verts[i : i + BATCH],
+                )
+            total_j += len(verts)
+            logger.info("  %s: %d 期刊", tbl, len(verts))
+
+        # PUBLISHED_IN 边（从 paper 表的 publication_id）
+        for tbl in ["dwd_zh_paper", "dwd_en_paper"]:
+            sql = f"SELECT id, publication_id FROM {tbl} WHERE publication_id IS NOT NULL AND publication_id != ''"
+            if since:
+                sql += f" AND updated_time > '{since}'"
+            edges = []
+            for r in conn.execute(text(sql)).all():
+                pid = _source_paper_id(r[0])
+                jid = str(r[1]) if r[1] else ""
+                if pid and jid:
+                    edges.append((f"paper_{pid}", f"journal_{jid}"))
+            for i in range(0, len(edges), BATCH):
+                _batch_e(graph, "PUBLISHED_IN", [], edges[i : i + BATCH])
+            total_e += len(edges)
+            logger.info("  %s PUBLISHED_IN: %d", tbl, len(edges))
+    return {"journals": total_j, "published_in": total_e}
+
+
 def _load_paper_relations(mysql, graph, since):
-    """论文关系 → CITES/CITED_BY/RELATED_TO 边（全量或增量）。"""
+    """论文关系 → CITES / CITED_BY / RELATED_TO 边。"""
     total = 0
     with mysql.engine.connect() as conn:
         configs = [
@@ -196,16 +301,108 @@ def _load_paper_relations(mysql, graph, since):
     return {"paper_relations": total}
 
 
-def _load_industry_chain(mysql, graph, since):
-    """产业链节点 + 层级边 + 企业关联（全量或增量）。"""
+def _load_keywords(mysql, graph, since):
+    """关键词 → Keyword 顶点 + HAS_KEYWORD 边。"""
+    total_kw = total_e = 0
+    with mysql.engine.connect() as conn:
+        for tbl, lang in [
+            ("dwd_zh_paper_classification", "zh"),
+            ("dwd_en_paper_classification", "en"),
+        ]:
+            sql = f"SELECT id, keywords FROM {tbl} WHERE keywords IS NOT NULL AND keywords != ''"
+            if since:
+                sql += f" AND updated_time > '{since}'"
+            kw_set = {}
+            edges = []
+            for r in conn.execute(text(sql)).all():
+                pid = _source_paper_id(r[0])
+                if not pid:
+                    continue
+                raw = r[1]
+                # 中文逗号分割 / 英文 JSON 数组
+                kws = []
+                if lang == "en":
+                    try:
+                        kws = [str(x).strip() for x in json.loads(raw) if x]
+                    except (json.JSONDecodeError, TypeError):
+                        kws = [s.strip() for s in raw.split(",") if s.strip()]
+                else:
+                    kws = [s.strip() for s in raw.split(",") if s.strip()]
+                for kw in kws:
+                    if not kw:
+                        continue
+                    kw_vid = _md5_vid("keyword", kw, short=False)
+                    if kw_vid not in kw_set:
+                        kw_set[kw_vid] = (kw_vid, kw)
+                    edges.append((f"paper_{pid}", kw_vid))
+            krows = list(kw_set.values())
+            for i in range(0, len(krows), BATCH):
+                _batch_v(graph, "Keyword", ["keyword"], krows[i : i + BATCH])
+            for i in range(0, len(edges), BATCH):
+                _batch_e(graph, "HAS_KEYWORD", [], edges[i : i + BATCH])
+            total_kw += len(kw_set)
+            total_e += len(edges)
+            logger.info("  %s: %d 关键词, %d HAS_KEYWORD", tbl, len(kw_set), len(edges))
+    return {"keywords": total_kw, "has_keyword": total_e}
 
+
+def _load_reports(mysql, graph, since):
+    """报告 → Report 顶点 + REFERENCED_BY 边（Paper→Report）。"""
+    total_r = total_e = 0
+    with mysql.engine.connect() as conn:
+        # Report 顶点
+        for tbl, _lang in [("dwd_zh_report", "zh"), ("dwd_en_report", "en")]:
+            sql = f"SELECT report_id, title_cn, title_en, abstract_cn FROM {tbl}"
+            sql = _since(sql, since)
+            verts = []
+            for r in conn.execute(text(sql)).all():
+                rid = str(r[0]) if r[0] else ""
+                if not rid:
+                    continue
+                verts.append((f"report_{rid}", r[1] or r[2] or "", r[3] or ""))
+            for i in range(0, len(verts), BATCH):
+                _batch_v(graph, "Report", ["title", "abstract"], verts[i : i + BATCH])
+            total_r += len(verts)
+            logger.info("  %s: %d 报告", tbl, len(verts))
+
+        # REFERENCED_BY 边（dwd_zh_report_paper: paper→report）
+        sql = "SELECT paper_id, paper_doi, report_id FROM dwd_zh_report_paper"
+        if since:
+            sql += f" WHERE updated_time > '{since}'"
+        edges = []
+        for r in conn.execute(text(sql)).all():
+            pid = r[0] or ""
+            rids = r[2] or ""
+            if not pid or not rids:
+                continue
+            import json as _json
+
+            try:
+                rid_list = _json.loads(rids) if rids.startswith("[") else [rids]
+            except (ValueError, TypeError):
+                rid_list = [rids]
+            for rid in rid_list:
+                if rid:
+                    edges.append((f"paper_rp_{pid}", f"report_{rid}"))
+        for i in range(0, len(edges), BATCH):
+            _batch_e(graph, "REFERENCED_BY", [], edges[i : i + BATCH])
+        total_e = len(edges)
+        logger.info("  REFERENCED_BY: %d", total_e)
+    return {"reports": total_r, "referenced_by": total_e}
+
+
+def _load_industry_chain(mysql, graph, since):
+    """产业链节点 + 层级边 + 企业关联 + 产业资讯。"""
     total_nodes = 0
     total_edges = 0
     with mysql.engine.connect() as conn:
-        # 链节点 + IndustryChain
-        sql = "SELECT chain_code, chain_name, node_id, node_name, node_type, level, node_seq, node_imp_level, node_stage, node_path, parent_id, downstream_link_code FROM dwd_industry_chain_info"
-        if since:
-            sql += f" WHERE updated_time > '{since}'"
+        # 链节点 + IndustryChain + IndustryNode + HAS_NODE/CHILD_OF/DOWNSTREAM_OF
+        sql = (
+            "SELECT chain_code, chain_name, node_id, node_name, node_type, level, "
+            "node_seq, node_imp_level, node_stage, node_path, parent_id, downstream_link_code "
+            "FROM dwd_industry_chain_info"
+        )
+        sql = _since(sql, since)
         rows = conn.execute(text(sql)).all()
         chains = {}
         nodes = []
@@ -230,7 +427,7 @@ def _load_industry_chain(mysql, graph, since):
                         np_ or "",
                         "dwd_industry_chain_info",
                         INGEST_BATCH,
-                        "",
+                        INGEST_TIME,
                     )
                 )
                 if cc:
@@ -240,7 +437,7 @@ def _load_industry_chain(mysql, graph, since):
                 if dn:
                     down_e.append((f"node_{nid}", f"node_{dn}"))
         chain_rows = [
-            (f"chain_{cc}", cc, cn or "", "dwd_industry_chain_info", INGEST_BATCH, "")
+            (f"chain_{cc}", cc, cn or "", "dwd_industry_chain_info", INGEST_BATCH, INGEST_TIME)
             for cc, cn in chains.items()
         ]
         for i in range(0, len(chain_rows), BATCH):
@@ -277,9 +474,9 @@ def _load_industry_chain(mysql, graph, since):
             _batch_e(graph, "DOWNSTREAM_OF", [], down_e[i : i + BATCH])
         total_nodes = len(nodes)
         total_edges = len(has_node_e) + len(child_e) + len(down_e)
-        logger.info("  产业链: %d 节点, %d 边", total_nodes, total_edges)
+        logger.info("  产业链: %d 节点, %d 层级边", total_nodes, total_edges)
 
-        # 企业→节点 BELONGS_TO_NODE（只连已存在 org）
+        # BELONGS_TO_NODE（只连已存在 org）
         existing_orgs = set()
         try:
             r = graph.execute_read(f"USE {SPACE}; MATCH (v:Organization) RETURN id(v) AS vid;")
@@ -302,7 +499,7 @@ def _load_industry_chain(mysql, graph, since):
                     "dwd_org_industry_chain_dtl",
                     r[0],
                     INGEST_BATCH,
-                    "",
+                    INGEST_TIME,
                 )
             )
         for i in range(0, len(bel), BATCH):
@@ -314,7 +511,74 @@ def _load_industry_chain(mysql, graph, since):
                 double_first=True,
             )
         total_edges += len(bel)
-        logger.info("  BELONGS_TO_NODE: %d 条", len(bel))
+        logger.info("  BELONGS_TO_NODE: %d", len(bel))
+
+        # News 顶点 + COVERS_CHAIN 边
+        sql3 = "SELECT news_id, title, summary, relaese_date, chain_code FROM dwd_industry_chain_news_info"
+        if since:
+            sql3 += f" WHERE updated_time > '{since}'"
+        news_verts = []
+        cover_edges = []
+        for r in conn.execute(text(sql3)).all():
+            nid = str(r[0]) if r[0] else ""
+            if not nid:
+                continue
+            news_verts.append(
+                (
+                    f"news_{nid}",
+                    r[1] or "",
+                    r[2] or "",
+                    str(r[3]) if r[3] else "",
+                    "",
+                    "",
+                    "dwd_industry_chain_news_info",
+                    nid,
+                    "",
+                    "dwd_industry_chain_news_info",
+                    INGEST_BATCH,
+                    INGEST_TIME,
+                    "",
+                )
+            )
+            if r[4]:
+                cover_edges.append(
+                    (
+                        f"news_{nid}",
+                        f"chain_{r[4]}",
+                        "dwd_industry_chain_news_info",
+                        INGEST_BATCH,
+                        INGEST_TIME,
+                    )
+                )
+        for i in range(0, len(news_verts), BATCH):
+            _batch_v(
+                graph,
+                "News",
+                [
+                    "title",
+                    "content",
+                    "release_date",
+                    "original_url",
+                    "extra_json",
+                    "source_system",
+                    "source_table",
+                    "source_record_id",
+                    "source_url",
+                    "ingest_batch",
+                    "ingest_time",
+                    "source_update_time",
+                ],
+                news_verts[i : i + BATCH],
+            )
+        for i in range(0, len(cover_edges), BATCH):
+            _batch_e(
+                graph,
+                "COVERS_CHAIN",
+                ["source_table", "ingest_batch", "ingest_time"],
+                cover_edges[i : i + BATCH],
+            )
+        total_edges += len(cover_edges)
+        logger.info("  News: %d, COVERS_CHAIN: %d", len(news_verts), len(cover_edges))
 
     return {"chain_nodes": total_nodes, "chain_edges": total_edges}
 
@@ -341,12 +605,18 @@ def workflow(payload: dict) -> dict:
     mysql = MySQLClient()
 
     stats = {}
-    logger.info("\n1. 论文实体")
-    stats.update(_load_papers(mysql, graph, since))
-    logger.info("\n2. 论文关系")
-    stats.update(_load_paper_relations(mysql, graph, since))
-    logger.info("\n3. 产业链图谱")
-    stats.update(_load_industry_chain(mysql, graph, since))
+    steps = [
+        ("1. 论文实体", _load_papers),
+        ("2. 论文作者 Person + AUTHORED_BY", _load_authors),
+        ("3. 期刊 Journal + PUBLISHED_IN", _load_journals),
+        ("4. 论文关系 CITES/CITED_BY/RELATED_TO", _load_paper_relations),
+        ("5. 关键词 Keyword + HAS_KEYWORD", _load_keywords),
+        ("6. 报告 Report + REFERENCED_BY", _load_reports),
+        ("7. 产业链图谱", _load_industry_chain),
+    ]
+    for label, fn in steps:
+        logger.info("\n%s", label)
+        stats.update(fn(mysql, graph, since))
 
     graph.close()
     logger.info("\n=== 完成: %s ===", json.dumps(stats, ensure_ascii=False))

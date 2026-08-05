@@ -11,9 +11,6 @@ from biz.handler.expert_cooperation_achievement import (
     legacy_router as expert_cooperation_achievement_legacy_router,
 )
 from biz.handler.expert_cooperation_achievement import (
-    legacy_router as expert_cooperation_achievement_legacy_router,
-)
-from biz.handler.expert_cooperation_achievement import (
     router as expert_cooperation_achievement_router,
 )
 from biz.handler.expert_direct_relation import router as expert_direct_relation_router

@@ -11,16 +11,25 @@ from fastapi.responses import RedirectResponse
 from application.auth import AuthApplication
 from biz.dependencies.auth import AuthApplicationDependency, CurrentUser
 from biz.schemas.auth import (
+    AccountSecurityResponse,
     AuthProfileResponse,
     LoginUrlData,
     LoginUrlResponse,
     LogoutData,
     LogoutResponse,
+    OperationLogResponse,
     PermissionInfoResponse,
 )
 from service.auth import AuthenticationError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _request_metadata(request: Request) -> dict[str, str]:
+    return {
+        "ip_address": request.client.host if request.client else "",
+        "user_agent": request.headers.get("user-agent", ""),
+    }
 
 
 def _raise_auth_error(exc: AuthenticationError) -> None:
@@ -113,6 +122,14 @@ async def oauth_callback(
         _clear_state_cookie(response, application)
         return response
 
+    await application.record_operation(
+        context,
+        action="登录平台",
+        category="登录",
+        detail="通过统一用户中心 OAuth2 登录",
+        **_request_metadata(request),
+    )
+
     response = RedirectResponse(application.frontend_redirect(next_path), status_code=302)
     _clear_state_cookie(response, application)
     response.set_cookie(
@@ -143,13 +160,50 @@ async def get_current_permissions(context: CurrentUser) -> PermissionInfoRespons
     return PermissionInfoResponse(data=context.permission_info)
 
 
+@router.get("/security", response_model=AccountSecurityResponse)
+async def get_account_security(
+    context: CurrentUser,
+    application: AuthApplicationDependency,
+) -> AccountSecurityResponse:
+    return AccountSecurityResponse(data=application.account_security(context))
+
+
+@router.get("/operation-logs", response_model=OperationLogResponse)
+async def get_operation_logs(
+    context: CurrentUser,
+    application: AuthApplicationDependency,
+    page: int = 1,
+    page_size: int = Query(20, alias="pageSize"),
+    category: str | None = None,
+    result: str | None = None,
+    keyword: str | None = None,
+) -> OperationLogResponse:
+    data = await application.operation_logs(
+        context,
+        page=page,
+        page_size=page_size,
+        category=category,
+        result=result,
+        keyword=keyword,
+    )
+    return OperationLogResponse(data=data)
+
+
 @router.post("/refresh", response_model=AuthProfileResponse)
 async def refresh_session(
+    request: Request,
     context: CurrentUser,
     application: AuthApplicationDependency,
 ) -> AuthProfileResponse:
     try:
         refreshed = await application.refresh_session(context)
+        await application.record_operation(
+            refreshed,
+            action="刷新登录会话",
+            category="安全",
+            detail="刷新统一用户中心访问令牌和权限信息",
+            **_request_metadata(request),
+        )
         return AuthProfileResponse(data=application.profile(refreshed))
     except AuthenticationError as exc:
         _raise_auth_error(exc)
@@ -157,10 +211,18 @@ async def refresh_session(
 
 @router.post("/logout", response_model=LogoutResponse)
 async def logout(
+    request: Request,
     response: Response,
     context: CurrentUser,
     application: AuthApplicationDependency,
 ) -> LogoutResponse:
+    await application.record_operation(
+        context,
+        action="退出登录",
+        category="登录",
+        detail="主动退出亿级知识图谱平台",
+        **_request_metadata(request),
+    )
     remote_revoked = await application.logout(context)
     response.delete_cookie(
         application.settings.session_cookie_name,

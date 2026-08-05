@@ -31,6 +31,48 @@ export interface AuthProfile {
   authEnabled: boolean;
 }
 
+export interface AccountSecurityInfo {
+  accountStatus: string;
+  authenticationMethod: string;
+  passwordManagedBy: string;
+  passwordEditableHere: boolean;
+  accountManagementUrl: string;
+  emailBound: boolean;
+  mobileBound: boolean;
+  sessionBackend: string;
+  sessionExpiresAt: number | null;
+  sessionRemainingSeconds: number | null;
+  secureCookie: boolean;
+  recommendations: string[];
+}
+
+export interface OperationLogItem {
+  id: string;
+  action: string;
+  category: string;
+  result: string;
+  detail: string;
+  ipAddress: string;
+  userAgent: string;
+  occurredAt: string;
+}
+
+export interface OperationLogPage {
+  items: OperationLogItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  dataMode: "live" | "mock";
+}
+
+export interface OperationLogQuery {
+  page?: number;
+  pageSize?: number;
+  category?: string;
+  result?: string;
+  keyword?: string;
+}
+
 interface LoginUrlData {
   url: string;
   expiresIn: number;
@@ -57,6 +99,24 @@ export async function refreshCurrentSession(): Promise<AuthProfile> {
     ApiResponse<AuthProfile>,
     ApiResponse<AuthProfile>
   >("/v1/auth/refresh");
+  return unwrapApiResponse(response);
+}
+
+export async function getAccountSecurity(): Promise<AccountSecurityInfo> {
+  const response = await http.get<
+    ApiResponse<AccountSecurityInfo>,
+    ApiResponse<AccountSecurityInfo>
+  >("/v1/auth/security");
+  return unwrapApiResponse(response);
+}
+
+export async function getOperationLogs(
+  params: OperationLogQuery = {},
+): Promise<OperationLogPage> {
+  const response = await http.get<
+    ApiResponse<OperationLogPage>,
+    ApiResponse<OperationLogPage>
+  >("/v1/auth/operation-logs", { params });
   return unwrapApiResponse(response);
 }
 

@@ -118,13 +118,20 @@ async function handleAccountAction(action: '个人中心' | '账号与安全' | 
     await router.push('/user-center')
     return
   }
+  if (action === '账号与安全') {
+    await router.push('/account-security')
+    return
+  }
+  if (action === '操作记录') {
+    await router.push('/operation-logs')
+    return
+  }
   if (action === '退出登录') {
     accountFeedback.value = '正在安全退出系统。'
     await authStore.logout()
     await router.replace('/login')
     return
   }
-  accountFeedback.value = `${action}由统一用户中心管理。`
 }
 
 // 问答小助手（已隐藏）
@@ -360,9 +367,9 @@ onBeforeUnmount(() => {
                 <aside v-if="userMenuOpen" class="app-user-menu">
                   <header><img :src="userAvatar" alt="" /><div><strong>{{ userDisplayName }}</strong><span>{{ userRoleName }}</span></div><b>{{ userBadge }}</b></header>
                   <nav>
-                    <button type="button" @click="handleAccountAction('个人中心')"><i>人</i><span>个人中心</span></button>
-                    <button type="button" @click="handleAccountAction('账号与安全')"><i>安</i><span>账号与安全</span></button>
-                    <button type="button" @click="handleAccountAction('操作记录')"><i>录</i><span>操作记录</span></button>
+                    <button :class="{ active: route.path === '/user-center' }" type="button" @click="handleAccountAction('个人中心')"><i>人</i><span>个人中心</span></button>
+                    <button :class="{ active: route.path === '/account-security' }" type="button" @click="handleAccountAction('账号与安全')"><i>安</i><span>账号与安全</span></button>
+                    <button :class="{ active: route.path === '/operation-logs' }" type="button" @click="handleAccountAction('操作记录')"><i>录</i><span>操作记录</span></button>
                     <button class="danger" type="button" @click="handleAccountAction('退出登录')"><i>退</i><span>退出登录</span></button>
                   </nav>
                   <footer v-if="accountFeedback">{{ accountFeedback }}</footer>
@@ -791,6 +798,7 @@ onBeforeUnmount(() => {
 .app-user-menu>header div { display:grid;gap:3px; }.app-user-menu>header strong { font-size:13px; }.app-user-menu>header span { color:#75839a;font-size:10px; }.app-user-menu>header b { padding:2px 6px;border-radius:99px;background:#eaf2ff;color:#175cd3;font-size:9px;font-weight:500; }
 .app-user-menu>p { margin:0;padding:10px 14px;border-bottom:1px solid #e9eff7;color:#718098;font-size:10px;line-height:17px; }
 .app-user-menu nav { display:grid;padding:6px; }.app-user-menu nav button { display:flex;align-items:center;justify-content:flex-start;gap:10px;height:40px;padding:0 10px;border:0;border-radius:5px;background:#fff;color:#344766;text-align:left;cursor:pointer; }.app-user-menu nav button:hover { background:#f1f6fd;color:#165dff; }.app-user-menu nav button i { display:grid;place-items:center;width:22px;height:22px;border-radius:5px;background:#edf3fb;color:#526783;font-size:9px;font-style:normal; }.app-user-menu nav button span { font-size:11px; }.app-user-menu nav button.danger { margin-top:5px;border-top:1px solid #e8eef6;border-radius:0 0 5px 5px; }.app-user-menu nav button.danger span,.app-user-menu nav button.danger i { color:#b42318; }
+.app-user-menu nav button.active { background:#eaf2ff;color:#165dff; }.app-user-menu nav button.active i { background:#fff;color:#165dff; }
 .app-user-menu>footer { padding:9px 13px;border-top:1px solid #e4ecf6;background:#f7faff;color:#526783;font-size:9px;line-height:15px; }
 
 .app-top-actions__context { color: #65738a; font-size: 13px; }

@@ -120,6 +120,20 @@ async def test_browser_login_cookie_profile_and_logout_flow() -> None:
         assert profile.json()["data"]["user"]["nickname"] == "普通用户"
         assert protected.json() == {"ok": True}
 
+        security = await client.get("/api/v1/auth/security")
+        logs = await client.get("/api/v1/auth/operation-logs")
+        assert security.json()["data"]["passwordManagedBy"] == "统一用户中心"
+        assert security.json()["data"]["passwordEditableHere"] is False
+        assert logs.json()["data"]["total"] == 1
+        assert logs.json()["data"]["items"][0]["action"] == "登录平台"
+
+        refreshed = await client.post("/api/v1/auth/refresh")
+        refreshed_logs = await client.get(
+            "/api/v1/auth/operation-logs", params={"category": "安全"}
+        )
+        assert refreshed.status_code == 200
+        assert refreshed_logs.json()["data"]["items"][0]["action"] == "刷新登录会话"
+
         logged_out = await client.post("/api/v1/auth/logout")
         assert logged_out.json()["data"]["remoteRevoked"] is True
         assert (await client.get("/api/v1/protected")).status_code == 401

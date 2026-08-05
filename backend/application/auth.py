@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from biz.schemas.auth import AuthProfile
+from biz.schemas.auth import AccountSecurityData, AuthProfile, OperationLogPage
 from config.auth import AuthSettings
 from infra.redis import AsyncJsonStore, get_json_store
 from infra.user_center import UserCenterClient
@@ -40,6 +40,15 @@ class AuthApplication:
 
     async def logout(self, context: AuthContext) -> bool:
         return await self.service.logout(context)
+
+    async def record_operation(self, context: AuthContext, **kwargs: str) -> None:
+        await self.service.record_operation(context, **kwargs)
+
+    async def operation_logs(self, context: AuthContext, **kwargs) -> OperationLogPage:
+        return await self.service.operation_logs(context, **kwargs)
+
+    def account_security(self, context: AuthContext) -> AccountSecurityData:
+        return self.service.account_security(context)
 
     def profile(self, context: AuthContext) -> AuthProfile:
         return self.service.profile(context)

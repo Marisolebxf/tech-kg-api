@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from biz.schemas.auth import AuthProfile, RoleSummary, UserProfile
+from biz.schemas.auth import (
+    AccountSecurityData,
+    AuthProfile,
+    OperationLogItem,
+    OperationLogPage,
+    RoleSummary,
+    UserProfile,
+)
 from config.auth import AuthSettings
 from infra.redis import AsyncJsonStore
 from infra.user_center import UserCenterClient, UserCenterError
+
+logger = logging.getLogger(__name__)
 
 
 class AuthenticationError(RuntimeError):
@@ -51,6 +62,7 @@ class AuthService:
     STATE_KEY_PREFIX = "techkg:auth:state:"
     SESSION_KEY_PREFIX = "techkg:auth:session:"
     BEARER_KEY_PREFIX = "techkg:auth:bearer:"
+    AUDIT_KEY_PREFIX = "techkg:auth:audit:"
 
     def __init__(
         self,
@@ -166,8 +178,148 @@ class AuthService:
             await self.delete_session(context.session_id)
         return remote_revoked
 
+    async def record_operation(
+        self,
+        context: AuthContext,
+        *,
+        action: str,
+        category: str,
+        detail: str = "",
+        result: str = "成功",
+        ip_address: str = "",
+        user_agent: str = "",
+    ) -> None:
+        """Best-effort per-user audit trail; an audit write must never break login."""
+
+        try:
+            key = self._audit_key(context)
+            payload = await self.store.get_json(key) or {}
+            items = list(payload.get("items") or [])
+            items.insert(
+                0,
+                OperationLogItem(
+                    id=secrets.token_hex(8),
+                    action=action,
+                    category=category,
+                    result=result,
+                    detail=detail,
+                    ip_address=ip_address[:64],
+                    user_agent=user_agent[:240],
+                    occurred_at=datetime.now(UTC).isoformat(),
+                ).model_dump(by_alias=True),
+            )
+            await self.store.set_json(
+                key,
+                {"items": items[: max(1, self.settings.audit_max_items)]},
+                self.settings.audit_ttl_seconds,
+            )
+        except Exception:
+            logger.warning("无法写入用户操作审计记录", exc_info=True)
+            return
+
+    async def operation_logs(
+        self,
+        context: AuthContext,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        category: str | None = None,
+        result: str | None = None,
+        keyword: str | None = None,
+    ) -> OperationLogPage:
+        payload = await self.store.get_json(self._audit_key(context)) or {}
+        items = [
+            OperationLogItem.model_validate(item)
+            for item in payload.get("items", [])
+            if isinstance(item, dict)
+        ]
+        data_mode = "live"
+        if not items and not self.settings.enabled:
+            items = self._dev_operation_logs()
+            data_mode = "mock"
+        normalized_keyword = (keyword or "").strip().lower()
+        if category:
+            items = [item for item in items if item.category == category]
+        if result:
+            items = [item for item in items if item.result == result]
+        if normalized_keyword:
+            items = [
+                item
+                for item in items
+                if normalized_keyword
+                in f"{item.action} {item.category} {item.detail} {item.ip_address}".lower()
+            ]
+        safe_page = max(1, page)
+        safe_size = min(max(1, page_size), 100)
+        start = (safe_page - 1) * safe_size
+        return OperationLogPage(
+            items=items[start : start + safe_size],
+            total=len(items),
+            page=safe_page,
+            page_size=safe_size,
+            data_mode=data_mode,
+        )
+
+    def account_security(self, context: AuthContext) -> AccountSecurityData:
+        profile = self.profile(context)
+        now = int(time.time())
+        remaining = None
+        if context.expires_at is not None:
+            remaining = max(0, context.expires_at - now)
+        recommendations: list[str] = []
+        if not profile.user.email:
+            recommendations.append("建议在统一用户中心绑定常用邮箱")
+        if not profile.user.mobile:
+            recommendations.append("建议在统一用户中心绑定手机号码")
+        if not recommendations:
+            recommendations.append("账号联系方式完整，请定期在统一用户中心更新密码")
+        return AccountSecurityData(
+            account_status="正常" if profile.user.status == 0 else "停用",
+            authentication_method="统一用户中心 OAuth2",
+            password_managed_by="统一用户中心",
+            account_management_url=self.settings.user_center_portal_url,
+            email_bound=bool(profile.user.email),
+            mobile_bound=bool(profile.user.mobile),
+            session_backend=self.settings.session_backend,
+            session_expires_at=context.expires_at,
+            session_remaining_seconds=remaining,
+            secure_cookie=self.settings.cookie_secure,
+            recommendations=recommendations,
+        )
+
     async def delete_session(self, session_id: str) -> None:
         await self.store.delete(f"{self.SESSION_KEY_PREFIX}{session_id}")
+
+    def _audit_key(self, context: AuthContext) -> str:
+        user_id = str(self.profile(context).user.id)
+        digest = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
+        return f"{self.AUDIT_KEY_PREFIX}{digest}"
+
+    @staticmethod
+    def _dev_operation_logs() -> list[OperationLogItem]:
+        now = datetime.now(UTC)
+        return [
+            OperationLogItem(
+                id="demo-login",
+                action="登录平台",
+                category="登录",
+                result="成功",
+                detail="本地开发模式登录",
+                ip_address="127.0.0.1",
+                user_agent="Local development session",
+                occurred_at=now.isoformat(),
+            ),
+            OperationLogItem(
+                id="demo-permission",
+                action="同步用户权限",
+                category="账号",
+                result="成功",
+                detail="从统一用户中心同步角色和权限",
+                ip_address="127.0.0.1",
+                user_agent="Local development session",
+                occurred_at=(now - timedelta(minutes=8)).isoformat(),
+            ),
+        ]
 
     def profile(self, context: AuthContext) -> AuthProfile:
         permission_info = context.permission_info

@@ -58,6 +58,40 @@ class LogoutData(CamelCaseModel):
     remote_revoked: bool = False
 
 
+class AccountSecurityData(CamelCaseModel):
+    account_status: str
+    authentication_method: str
+    password_managed_by: str
+    password_editable_here: bool = False
+    account_management_url: str
+    email_bound: bool
+    mobile_bound: bool
+    session_backend: str
+    session_expires_at: int | None = None
+    session_remaining_seconds: int | None = None
+    secure_cookie: bool
+    recommendations: list[str] = Field(default_factory=list)
+
+
+class OperationLogItem(CamelCaseModel):
+    id: str
+    action: str
+    category: str
+    result: str
+    detail: str = ""
+    ip_address: str = ""
+    user_agent: str = ""
+    occurred_at: str
+
+
+class OperationLogPage(CamelCaseModel):
+    items: list[OperationLogItem] = Field(default_factory=list)
+    total: int
+    page: int
+    page_size: int
+    data_mode: str = "live"
+
+
 class LoginUrlResponse(ApiResponse):
     data: LoginUrlData
 
@@ -72,3 +106,11 @@ class PermissionInfoResponse(ApiResponse):
 
 class LogoutResponse(ApiResponse):
     data: LogoutData
+
+
+class AccountSecurityResponse(ApiResponse):
+    data: AccountSecurityData
+
+
+class OperationLogResponse(ApiResponse):
+    data: OperationLogPage

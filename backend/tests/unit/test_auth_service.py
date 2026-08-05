@@ -146,3 +146,38 @@ async def test_refresh_and_logout_rotate_then_remove_session() -> None:
     assert user_center.logout_count == 1
     with pytest.raises(AuthenticationError, match="登录已过期"):
         await service.get_session(context.session_id or "")
+
+
+async def test_account_security_and_operation_logs_use_current_user() -> None:
+    service, _ = _service()
+    login_url, _, _ = await service.create_login_url("/overview")
+    state = parse_qs(urlparse(login_url).query)["state"][0]
+    context, _ = await service.complete_login("valid-code", state)
+
+    security = service.account_security(context)
+    await service.record_operation(
+        context,
+        action="登录平台",
+        category="登录",
+        detail="OAuth2 登录",
+        ip_address="127.0.0.1",
+        user_agent="pytest",
+    )
+    await service.record_operation(
+        context,
+        action="刷新登录会话",
+        category="安全",
+        detail="刷新令牌",
+        ip_address="127.0.0.1",
+        user_agent="pytest",
+    )
+    page = await service.operation_logs(context, category="安全", keyword="刷新")
+
+    assert security.account_status == "正常"
+    assert security.authentication_method == "统一用户中心 OAuth2"
+    assert security.email_bound is True
+    assert security.mobile_bound is False
+    assert security.password_editable_here is False
+    assert page.total == 1
+    assert page.items[0].action == "刷新登录会话"
+    assert page.items[0].ip_address == "127.0.0.1"

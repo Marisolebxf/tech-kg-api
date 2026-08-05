@@ -29,6 +29,7 @@ class AuthSettings:
     enabled: bool
     user_center_base_url: str
     sso_login_url: str
+    user_center_portal_url: str
     client_id: str
     client_secret: str
     redirect_uri: str
@@ -38,6 +39,8 @@ class AuthSettings:
     session_ttl_seconds: int
     state_ttl_seconds: int
     bearer_cache_ttl_seconds: int
+    audit_ttl_seconds: int
+    audit_max_items: int
     cookie_secure: bool
     cookie_samesite: str
     cookie_path: str
@@ -74,6 +77,10 @@ class AuthSettings:
             enabled=_env_bool("AUTH_ENABLED", True),
             user_center_base_url=base_url,
             sso_login_url=sso_login_url,
+            user_center_portal_url=os.getenv(
+                "USER_CENTER_ACCOUNT_URL",
+                "https://edu.itic-sci.com/uc/admin/login?redirect=/index",
+            ),
             client_id=os.getenv("USER_CENTER_CLIENT_ID", ""),
             client_secret=os.getenv("USER_CENTER_CLIENT_SECRET", ""),
             redirect_uri=os.getenv(
@@ -86,6 +93,8 @@ class AuthSettings:
             session_ttl_seconds=_env_int("AUTH_SESSION_TTL_SECONDS", 7 * 24 * 3600),
             state_ttl_seconds=_env_int("AUTH_STATE_TTL_SECONDS", 300),
             bearer_cache_ttl_seconds=_env_int("AUTH_BEARER_CACHE_TTL_SECONDS", 60),
+            audit_ttl_seconds=_env_int("AUTH_AUDIT_TTL_SECONDS", 90 * 24 * 3600),
+            audit_max_items=_env_int("AUTH_AUDIT_MAX_ITEMS", 200),
             cookie_secure=_env_bool("AUTH_COOKIE_SECURE", False),
             cookie_samesite=cookie_samesite,
             cookie_path=os.getenv("AUTH_COOKIE_PATH", "/"),

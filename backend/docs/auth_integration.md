@@ -22,6 +22,8 @@ HttpOnly Session Cookie；`client_secret`、统一用户中心 `access_token` �
 - `GET /api/v1/auth/callback`：OAuth2 授权码回调（不在 Swagger 展示）。
 - `GET /api/v1/auth/me`：当前用户、角色、机构和操作权限。
 - `GET /api/v1/auth/permissions`：统一用户中心完整权限结构。
+- `GET /api/v1/auth/security`：账号绑定、认证方式、会话安全和统一用户中心管理入口。
+- `GET /api/v1/auth/operation-logs`：当前用户的登录、会话刷新和退出操作记录。
 - `POST /api/v1/auth/refresh`：刷新当前浏览器会话的 token。
 - `POST /api/v1/auth/logout`：撤销统一用户中心 token 并清除本地会话。
 
@@ -40,11 +42,14 @@ REDIS_URL=redis://auth-redis:6379/0
 AUTH_FRONTEND_URL=https://edu.itic-sci.com/bkg_zp
 AUTH_COOKIE_SECURE=true
 AUTH_COOKIE_PATH=/bkg_zp
+AUTH_AUDIT_TTL_SECONDS=7776000
+AUTH_AUDIT_MAX_ITEMS=200
 USER_CENTER_CLIENT_ID=<统一用户中心分配的客户端编号>
 USER_CENTER_CLIENT_SECRET=<仅保存在服务端的客户端密钥>
 USER_CENTER_REDIRECT_URI=https://edu.itic-sci.com/bkg_zp/api/v1/auth/callback
 USER_CENTER_SSO_LOGIN_URL=https://edu.itic-sci.com/uc/sso/login
 USER_CENTER_OAUTH_BASE_URL=https://edu.itic-sci.com/uc/admin-api/system/oauth2
+USER_CENTER_ACCOUNT_URL=https://edu.itic-sci.com/uc/admin/login?redirect=/index
 ```
 
 如果网关保留 `/bkg_zp` 前缀，前端构建时设置：
@@ -75,3 +80,5 @@ AUTH_SESSION_BACKEND=memory
 - Bearer Token 缓存键只保存 SHA-256 摘要，不把明文 token 放入 Redis key。
 - 权限缓存 TTL 不超过 token 剩余有效期。
 - 回跳路径只接受站内绝对路径，拒绝 `//example.com` 一类开放重定向。
+- 操作记录按用户隔离保存在 Redis，默认保留 90 天、最多 200 条；仅记录操作类型、结果、IP、User-Agent 和时间，不记录密码、Token 或 Client Secret。
+- v1.5 开放授权文档没有提供修改密码接口，因此账号资料和密码修改只跳转统一用户中心，本平台不代理或保存密码。

@@ -4,6 +4,8 @@ import { useAuthStore } from '../stores/auth'
 import BusinessServiceView from '../views/business-service/BusinessServiceView.vue'
 import LoginView from '../views/auth/LoginView.vue'
 import UserCenterView from '../views/auth/UserCenterView.vue'
+import AccountSecurityView from '../views/auth/AccountSecurityView.vue'
+import OperationLogsView from '../views/auth/OperationLogsView.vue'
 import PlatformWorkbenchView from '../views/platform/PlatformWorkbenchView.vue'
 import OperationsCenterView from '../views/platform/OperationsCenterView.vue'
 import ManualReviewWorkspaceView from '../views/platform/ManualReviewWorkspaceView.vue'
@@ -67,6 +69,8 @@ export const router = createRouter({
     { path: '/manual-review', name: 'manual-review', component: OperationsCenterView, props: { mode: 'review' }, meta: { title: '人工处理平台' } },
     { path: '/manual-review/task/:instanceId', name: 'manual-review-detail', component: ManualReviewWorkspaceView, meta: { title: '人工处理详情' } },
     { path: '/user-center', name: 'user-center', component: UserCenterView, meta: { title: '个人中心' } },
+    { path: '/account-security', name: 'account-security', component: AccountSecurityView, meta: { title: '账号与安全' } },
+    { path: '/operation-logs', name: 'operation-logs', component: OperationLogsView, meta: { title: '操作记录' } },
     { path: '/user-permissions', redirect: '/user-center' },
     { path: '/task-detail/:area/:taskId', name: 'task-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情' } },
     { path: '/processing-instance/:instanceId', name: 'processing-instance-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情' } },

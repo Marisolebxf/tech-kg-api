@@ -40,7 +40,52 @@ export interface SchemaScript {
   sha256: string
   uploadedBy: string
   uploadedAt: string | null
+  safetyValidationId: string | null
+  safetyStatus: 'approved' | 'legacy'
+  safetySummary: string
+  safetyIssues: ScriptSafetyIssue[]
+  safetyModel: string | null
+  safetyValidatedAt: string | null
   downloadUrl: string
+}
+
+export interface ScriptSafetyIssue {
+  severity: 'critical' | 'high' | 'medium' | 'low'
+  category: string
+  line: number | null
+  message: string
+  suggestion: string
+}
+
+export type ScriptValidationOperation = 'replace' | 'create_entity' | 'create_relation'
+export type ScriptValidationStatus = 'queued' | 'running' | 'succeeded' | 'failed'
+export type ScriptValidationStage =
+  | 'queued'
+  | 'static_analysis'
+  | 'llm_review'
+  | 'persisting'
+  | 'completed'
+
+export interface ScriptValidation {
+  id: string
+  operation: ScriptValidationOperation
+  schemaId: string | null
+  filename: string
+  sizeBytes: number
+  sha256: string
+  status: ScriptValidationStatus
+  stage: ScriptValidationStage
+  progress: number
+  message: string
+  summary: string
+  issues: ScriptSafetyIssue[]
+  result: SchemaDefinition | null
+  resultSchemaId: string | null
+  errorCode: string | null
+  createdAt: string | null
+  startedAt: string | null
+  completedAt: string | null
+  eventsUrl: string
 }
 
 export interface SchemaDefinition {
@@ -121,7 +166,7 @@ function headers(userId: string) {
 }
 
 function unwrap<T>(response: ApiResponse<T>): T {
-  if (!response.success || response.code !== 200) {
+  if (!response.success) {
     throw new Error(response.msg || `Schema 接口请求失败：${response.code}`)
   }
   return response.data
@@ -213,8 +258,58 @@ export async function replaceSchemaScript(
   )
 }
 
+export async function startScriptValidation(
+  operation: ScriptValidationOperation,
+  script: File,
+  userId: string,
+  options: { schemaId?: string; metadata?: object } = {},
+): Promise<ScriptValidation> {
+  const body = new FormData()
+  body.append('operation', operation)
+  body.append('script', script)
+  if (options.schemaId) body.append('schemaId', options.schemaId)
+  if (options.metadata) body.append('metadata', JSON.stringify(options.metadata))
+  return unwrap(
+    await asApiPromise<ScriptValidation>(
+      http.post(`${PREFIX}/script-validations`, body, { headers: headers(userId) }),
+    ),
+  )
+}
+
+export function watchScriptValidation(
+  eventsUrl: string,
+  userId: string,
+  onUpdate: (validation: ScriptValidation) => void,
+  onConnectionError: () => void,
+): () => void {
+  const separator = eventsUrl.includes('?') ? '&' : '?'
+  const source = new EventSource(
+    `${eventsUrl}${separator}userId=${encodeURIComponent(userId)}`,
+  )
+  const handle = (event: Event) => {
+    const validation = JSON.parse((event as MessageEvent<string>).data) as ScriptValidation
+    onUpdate(validation)
+    if (validation.status === 'succeeded' || validation.status === 'failed') {
+      source.close()
+    }
+  }
+  source.addEventListener('status', handle)
+  source.addEventListener('completed', handle)
+  source.addEventListener('failed', handle)
+  source.onerror = () => {
+    if (source.readyState === EventSource.CLOSED) return
+    source.close()
+    onConnectionError()
+  }
+  return () => source.close()
+}
+
 export function schemaErrorMessage(error: unknown): string {
-  const axiosError = error as AxiosError<{ detail?: string | Array<{ msg?: string }> }>
+  const axiosError = error as AxiosError<{
+    msg?: string
+    detail?: string | Array<{ msg?: string }>
+  }>
+  if (axiosError.response?.data?.msg) return axiosError.response.data.msg
   const detail = axiosError.response?.data?.detail
   if (typeof detail === 'string') return detail
   if (Array.isArray(detail)) {

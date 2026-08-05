@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
-  createEntitySchema,
-  createRelationSchema,
   getSchemaOverview,
   listAllSchemas,
-  replaceSchemaScript,
   schemaErrorMessage,
+  startScriptValidation,
+  watchScriptValidation,
   type EntitySchemaCreatePayload,
   type RelationSchemaCreatePayload,
   type SchemaDefinition,
   type SchemaOverview,
+  type ScriptValidation,
+  type ScriptValidationOperation,
 } from '../../api/schemaManagement'
 import { useToast } from '../../composables/use-toast'
 
@@ -18,6 +19,12 @@ type Entity = { id: string; name: string; label: string; level: '核心实体' |
 type Relation = { id: string; name: string; label: string; source: string; target: string; basis: string; level?: '标准' | '扩展'; schema: SchemaDefinition }
 type Attribute = { entity: string; key: string; core: string; dynamic: string; source: string }
 type PendingCreate = { tab: string; values: Record<string, string> }
+type UploadContext = {
+  operation: ScriptValidationOperation
+  title: string
+  schemaId?: string
+  pending?: PendingCreate
+}
 
 const currentUserId = window.localStorage.getItem('tech-kg-schema-user-id') || 'schema-admin'
 
@@ -58,9 +65,35 @@ const overview = ref<SchemaOverview>({
 const modalOpen = ref(false)
 const form = ref<Record<string, string>>({})
 const scriptByRow = ref<Record<string, { name: string }>>({})
-const fileInput = ref<HTMLInputElement | null>(null)
-const pendingUploadRow = ref('')
 const pendingCreate = ref<PendingCreate | null>(null)
+const validationModalOpen = ref(false)
+const uploadContext = ref<UploadContext | null>(null)
+const selectedScript = ref<File | null>(null)
+const validation = ref<ScriptValidation | null>(null)
+const validationState = ref<'idle' | 'uploading' | 'running' | 'succeeded' | 'failed'>('idle')
+const validationConnectionError = ref('')
+let stopValidationStream: (() => void) | null = null
+
+const validationStepDefinitions = [
+  { key: 'upload', label: '上传到隔离区', description: '文件暂不进入正式脚本库' },
+  { key: 'static', label: '基础与静态检查', description: '校验格式、语法和受限能力' },
+  { key: 'llm', label: 'LLM 安全审查', description: '检查业务逻辑、隐藏载荷和数据泄露风险' },
+  { key: 'persist', label: '保存校验结果', description: '仅通过后保存 Schema 与脚本' },
+] as const
+
+const validationSteps = computed(() => {
+  const state = validationState.value
+  const stage = validation.value?.stage || 'queued'
+  const currentIndex = stage === 'llm_review' ? 2 : stage === 'persisting' || stage === 'completed' ? 3 : 1
+  return validationStepDefinitions.map((step, index) => {
+    let status: 'pending' | 'running' | 'succeeded' | 'failed' = 'pending'
+    if (state === 'uploading') status = index === 0 ? 'running' : 'pending'
+    else if (state === 'succeeded') status = 'succeeded'
+    else if (state === 'running') status = index < currentIndex ? 'succeeded' : index === currentIndex ? 'running' : 'pending'
+    else if (state === 'failed') status = index < currentIndex ? 'succeeded' : index === currentIndex ? 'failed' : 'pending'
+    return { ...step, status }
+  })
+})
 
 const formSpec = computed(() => {
   switch (activeTab.value) {
@@ -208,21 +241,26 @@ function saveItem() {
     }
   }
   pendingCreate.value = { tab: activeTab.value, values: { ...form.value } }
-  pendingUploadRow.value = ''
-  fileInput.value?.click()
-  showToast('请选择该 Schema 对应的 Python 脚本', 'info')
+  openValidationModal({
+    operation: activeTab.value === '标准实体' ? 'create_entity' : 'create_relation',
+    title: `新增${activeTab.value}`,
+    pending: pendingCreate.value,
+  })
 }
 
-function triggerFileUpload(schemaId: string) {
+function triggerFileUpload(schemaId: string, schemaName: string) {
   pendingCreate.value = null
-  pendingUploadRow.value = schemaId
-  fileInput.value?.click()
+  openValidationModal({
+    operation: 'replace',
+    title: `为 ${schemaName} ${scriptByRow.value[schemaName] ? '更换' : '上传'}脚本`,
+    schemaId,
+  })
 }
 
-async function createPendingSchema(file: File, pending: PendingCreate) {
+function buildPendingMetadata(pending: PendingCreate): EntitySchemaCreatePayload | RelationSchemaCreatePayload {
   const values = pending.values
   if (pending.tab === '标准实体') {
-    const payload: EntitySchemaCreatePayload = {
+    return {
       schemaKey: schemaKey(values.label || ''),
       name: values.label || '',
       label: values.name || '',
@@ -232,8 +270,6 @@ async function createPendingSchema(file: File, pending: PendingCreate) {
       mappings: mappings(values.source || ''),
       isCore: false,
     }
-    await createEntitySchema(payload, file, currentUserId)
-    return
   }
 
   const source = findEntity(values.source || '')
@@ -241,7 +277,7 @@ async function createPendingSchema(file: File, pending: PendingCreate) {
   if (!source || !target) {
     throw new Error('关系起点和终点必须填写已存在实体的 Schema 名称')
   }
-  const payload: RelationSchemaCreatePayload = {
+  return {
     schemaKey: schemaKey(values.label || ''),
     name: values.label || '',
     label: values.name || '',
@@ -256,30 +292,84 @@ async function createPendingSchema(file: File, pending: PendingCreate) {
       { name: 'target', dataType: `${target.name} ID`, required: true, category: 'core' },
     ],
   }
-  await createRelationSchema(payload, file, currentUserId)
 }
 
-async function handleFileSelect(event: Event) {
+function openValidationModal(context: UploadContext) {
+  stopValidationStream?.()
+  stopValidationStream = null
+  uploadContext.value = context
+  selectedScript.value = null
+  validation.value = null
+  validationState.value = 'idle'
+  validationConnectionError.value = ''
+  validationModalOpen.value = true
+}
+
+function handleValidationFileSelect(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
-  if (!file) return
+  selectedScript.value = file || null
+  validation.value = null
+  validationState.value = 'idle'
+  validationConnectionError.value = ''
+}
+
+async function beginScriptValidation() {
+  const file = selectedScript.value
+  const context = uploadContext.value
+  if (!file || !context) {
+    showToast('请先选择 Python 脚本', 'warning')
+    return
+  }
+  stopValidationStream?.()
+  stopValidationStream = null
+  validation.value = null
+  validationState.value = 'uploading'
+  validationConnectionError.value = ''
   try {
-    if (pendingCreate.value) {
-      await createPendingSchema(file, pendingCreate.value)
-      modalOpen.value = false
-      showToast('Schema 与 Python 脚本已新增', 'success')
-    } else if (pendingUploadRow.value) {
-      await replaceSchemaScript(pendingUploadRow.value, file, currentUserId)
-      showToast(`已上传 ${file.name}`, 'success')
-    }
-    await loadSchemas()
+    const metadata = context.pending ? buildPendingMetadata(context.pending) : undefined
+    const task = await startScriptValidation(context.operation, file, currentUserId, {
+      schemaId: context.schemaId,
+      metadata,
+    })
+    validation.value = task
+    validationState.value = task.status === 'succeeded' ? 'succeeded' : task.status === 'failed' ? 'failed' : 'running'
+    stopValidationStream = watchScriptValidation(
+      task.eventsUrl,
+      currentUserId,
+      async (update) => {
+        validation.value = update
+        validationState.value = update.status === 'succeeded' ? 'succeeded' : update.status === 'failed' ? 'failed' : 'running'
+        if (update.status === 'succeeded') {
+          if (context.pending) modalOpen.value = false
+          await loadSchemas()
+          showToast('脚本安全校验通过并已保存', 'success')
+        }
+      },
+      () => {
+        validationConnectionError.value = 'SSE 状态连接已中断，请关闭弹窗后重新打开以确认结果。'
+        if (validationState.value === 'running') validationState.value = 'failed'
+      },
+    )
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
-  } finally {
-    input.value = ''
-    pendingUploadRow.value = ''
+    validationState.value = 'failed'
+    validationConnectionError.value = schemaErrorMessage(error)
+  }
+}
+
+function closeValidationModal() {
+  if (validationState.value === 'uploading' || validationState.value === 'running') return
+  stopValidationStream?.()
+  stopValidationStream = null
+  validationModalOpen.value = false
+  selectedScript.value = null
+  validation.value = null
+  validationConnectionError.value = ''
+  uploadContext.value = null
+  if (validationState.value === 'succeeded') {
     pendingCreate.value = null
   }
+  validationState.value = 'idle'
 }
 
 onMounted(async () => {
@@ -289,6 +379,7 @@ onMounted(async () => {
     showToast(schemaErrorMessage(error), 'warning')
   }
 })
+onBeforeUnmount(() => stopValidationStream?.())
 const normalizedKeyword = computed(() => keyword.value.trim().toLowerCase())
 const matches = (row: unknown) => !normalizedKeyword.value || Object.values(row as Record<string, unknown>).join(' ').toLowerCase().includes(normalizedKeyword.value)
 const filteredEntities = computed(() => entities.value.filter(matches))
@@ -311,11 +402,11 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
       <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeTab === '属性定义'">枚举字典作为属性约束统一维护</span></div><div class="schema-toolbar__actions"><button v-if="activeTab !== '属性定义'" class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :placeholder="`搜索${activeTab}`" /></label></div></div>
       <!-- <p v-if="schemaVersionMessage" class="schema-version-message">{{ schemaVersionMessage }}</p> -->
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '推理关系'" class="schema-table-wrap"><table><thead><tr><th>推理关系</th><th>Schema 名称</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredInference" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-else-if="activeTab === '推理关系'" class="schema-table-wrap"><table><thead><tr><th>推理关系</th><th>Schema 名称</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredInference" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
       <div v-else-if="activeTab === '属性定义'" class="schema-table-wrap"><table><thead><tr><th>实体</th><th>主键</th><th>核心属性</th><th>动态属性 / 补充</th><th>主要来源</th></tr></thead><tbody><tr v-for="row in filteredAttributes" :key="row.entity"><td><code>{{ row.entity }}</code></td><td><b>{{ row.key }}</b></td><td class="mono-list">{{ row.core }}</td><td>{{ row.dynamic }}</td><td>{{ row.source }}</td></tr></tbody></table></div>
 
@@ -344,7 +435,63 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
       </div>
     </Teleport>
 
-    <input ref="fileInput" type="file" accept=".py" hidden @change="handleFileSelect" />
+    <Teleport to="body">
+      <div v-if="validationModalOpen" class="schema-modal script-validation-modal">
+        <button class="schema-modal__mask" type="button" :disabled="validationState === 'uploading' || validationState === 'running'" @click="closeValidationModal"></button>
+        <aside class="schema-modal__panel script-validation-panel">
+          <header>
+            <div><h2>{{ uploadContext?.title || '上传 Schema 脚本' }}</h2><p>脚本通过安全校验前不会进入正式脚本库</p></div>
+            <button type="button" :disabled="validationState === 'uploading' || validationState === 'running'" @click="closeValidationModal">×</button>
+          </header>
+
+          <div class="script-validation-body">
+            <label class="script-file-picker" :class="{ disabled: validationState === 'uploading' || validationState === 'running' }">
+              <input type="file" accept=".py,text/x-python" :disabled="validationState === 'uploading' || validationState === 'running'" @change="handleValidationFileSelect" />
+              <span class="script-file-picker__icon">PY</span>
+              <span><strong>{{ selectedScript?.name || '选择 Python 脚本' }}</strong><em>{{ selectedScript ? `${(selectedScript.size / 1024).toFixed(1)} KB` : '仅支持 UTF-8 编码的 .py 文件' }}</em></span>
+              <b>{{ selectedScript ? '重新选择' : '浏览文件' }}</b>
+            </label>
+
+            <section v-if="validationState !== 'idle'" class="validation-progress-card">
+              <div class="validation-progress-head">
+                <span v-if="validationState === 'uploading' || validationState === 'running'" class="validation-spinner" aria-label="校验中"></span>
+                <span v-else-if="validationState === 'succeeded'" class="validation-result-icon success">✓</span>
+                <span v-else class="validation-result-icon failed">!</span>
+                <div>
+                  <strong>{{ validationState === 'succeeded' ? '安全校验通过' : validationState === 'failed' ? '安全校验未通过' : validation?.message || '正在上传脚本' }}</strong>
+                  <p>{{ validation?.summary || validationConnectionError || '请保持弹窗开启，校验完成后将自动保存结果。' }}</p>
+                </div>
+                <b>{{ validation?.progress ?? (validationState === 'uploading' ? 8 : 0) }}%</b>
+              </div>
+              <div class="validation-progress-track"><i :style="{ width: `${validation?.progress ?? (validationState === 'uploading' ? 8 : 0)}%` }"></i></div>
+            </section>
+
+            <ol class="validation-steps">
+              <li v-for="step in validationSteps" :key="step.key" :class="step.status">
+                <i><span v-if="step.status === 'running'" class="validation-spinner small"></span><template v-else-if="step.status === 'succeeded'">✓</template><template v-else-if="step.status === 'failed'">!</template><template v-else>•</template></i>
+                <span><strong>{{ step.label }}</strong><em>{{ step.description }}</em></span>
+              </li>
+            </ol>
+
+            <section v-if="validation?.issues.length || validationConnectionError" class="validation-issues">
+              <header><strong>需要处理的问题</strong><span>{{ validation?.issues.length || 1 }} 项</span></header>
+              <article v-if="validationConnectionError">
+                <b>连接</b><div><strong>{{ validationConnectionError }}</strong><p>如后台仍在校验，重新打开上传流程前请先刷新 Schema 列表。</p></div>
+              </article>
+              <article v-for="(issue, index) in validation?.issues || []" :key="`${issue.category}-${issue.line}-${index}`">
+                <b :class="issue.severity">{{ issue.line ? `第 ${issue.line} 行` : issue.severity.toUpperCase() }}</b>
+                <div><strong>{{ issue.message }}</strong><p>{{ issue.suggestion }}</p></div>
+              </article>
+            </section>
+          </div>
+
+          <footer>
+            <button type="button" :disabled="validationState === 'uploading' || validationState === 'running'" @click="closeValidationModal">{{ validationState === 'succeeded' ? '完成' : '取消' }}</button>
+            <button v-if="validationState !== 'succeeded'" type="button" class="primary" :disabled="!selectedScript || validationState === 'uploading' || validationState === 'running'" @click="beginScriptValidation">{{ validationState === 'failed' ? '重新校验' : '上传并校验' }}</button>
+          </footer>
+        </aside>
+      </div>
+    </Teleport>
   </main>
 </template>
 
@@ -427,4 +574,14 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .schema-modal__panel footer{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #e5e6eb}
 .schema-modal__panel footer button{height:32px;padding:0 14px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:13px;cursor:pointer}
 .schema-modal__panel footer .primary{background:#165dff;color:#fff;border-color:#165dff}
+.schema-modal__panel footer button:disabled,.schema-modal__panel header button:disabled{opacity:.45;cursor:not-allowed}
+.script-validation-modal{z-index:10000}.script-validation-panel{width:min(660px,100%)}
+.script-validation-panel>header{align-items:flex-start}.script-validation-panel>header div{min-width:0}.script-validation-panel>header p{margin:4px 0 0;color:#86909c;font-size:11px}
+.script-validation-body{display:flex;max-height:68vh;overflow:auto;padding:18px;flex-direction:column;gap:14px;background:#f8faff}
+.script-file-picker{display:flex;align-items:center;gap:12px;padding:14px;border:1px dashed #9dbce8;border-radius:8px;background:#fff;cursor:pointer}.script-file-picker.disabled{opacity:.65;cursor:not-allowed}.script-file-picker input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}.script-file-picker__icon{display:grid;flex:0 0 auto;place-items:center;width:42px;height:42px;border-radius:8px;background:#eaf2ff;color:#165dff;font-size:12px;font-weight:700}.script-file-picker>span:nth-of-type(2){display:flex;min-width:0;flex:1;flex-direction:column;gap:4px}.script-file-picker strong{color:#1d2d49;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.script-file-picker em{color:#86909c;font-size:11px;font-style:normal}.script-file-picker>b{padding:6px 10px;border:1px solid #b9cdea;border-radius:5px;color:#165dff;font-size:11px;font-weight:500;white-space:nowrap}
+.validation-progress-card{padding:14px;border:1px solid #cdddf3;border-radius:8px;background:#fff}.validation-progress-head{display:flex;align-items:center;gap:11px}.validation-progress-head>div{min-width:0;flex:1}.validation-progress-head strong{color:#1d2d49;font-size:13px}.validation-progress-head p{margin:3px 0 0;color:#687996;font-size:11px;line-height:17px}.validation-progress-head>b{color:#165dff;font-size:12px}.validation-progress-track{height:5px;margin-top:12px;overflow:hidden;border-radius:999px;background:#e8eef7}.validation-progress-track i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#165dff,#4c8dff);transition:width .35s ease}
+.validation-spinner{display:inline-block;flex:0 0 auto;width:25px;height:25px;border:3px solid #d8e6fa;border-top-color:#165dff;border-radius:50%;animation:validation-spin .8s linear infinite}.validation-spinner.small{width:14px;height:14px;border-width:2px}.validation-result-icon{display:grid;flex:0 0 auto;place-items:center;width:28px;height:28px;border-radius:50%;font-size:15px;font-weight:700}.validation-result-icon.success{background:#e8f8ee;color:#067647}.validation-result-icon.failed{background:#fff0ef;color:#b42318}@keyframes validation-spin{to{transform:rotate(360deg)}}
+.validation-steps{display:grid;margin:0;padding:0;border:1px solid #d8e4f4;border-radius:8px;background:#fff;list-style:none;grid-template-columns:repeat(4,minmax(0,1fr))}.validation-steps li{position:relative;display:flex;min-width:0;align-items:flex-start;gap:8px;padding:13px 10px}.validation-steps li:not(:last-child)::after{position:absolute;top:23px;right:-10px;z-index:2;width:20px;border-top:1px solid #c8d7eb;content:""}.validation-steps li>i{display:grid;flex:0 0 auto;place-items:center;width:22px;height:22px;border-radius:50%;background:#eef2f7;color:#8d9bb0;font-size:12px;font-style:normal;font-weight:700}.validation-steps li>span{display:flex;min-width:0;flex-direction:column;gap:3px}.validation-steps strong{color:#445570;font-size:11px}.validation-steps em{color:#8b98aa;font-size:9px;font-style:normal;line-height:14px}.validation-steps li.running>i{background:#eaf2ff;color:#165dff}.validation-steps li.running strong{color:#165dff}.validation-steps li.succeeded>i{background:#e8f8ee;color:#067647}.validation-steps li.succeeded strong{color:#067647}.validation-steps li.failed>i{background:#fff0ef;color:#b42318}.validation-steps li.failed strong{color:#b42318}
+.validation-issues{overflow:hidden;border:1px solid #f2c6c2;border-radius:8px;background:#fff}.validation-issues>header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:#fff5f4}.validation-issues>header strong{color:#8d2620;font-size:12px}.validation-issues>header span{color:#b42318;font-size:10px}.validation-issues article{display:flex;align-items:flex-start;gap:10px;padding:11px 12px;border-top:1px solid #f6dfdd}.validation-issues article>b{flex:0 0 auto;padding:2px 6px;border-radius:4px;background:#fff0ef;color:#b42318;font-size:9px}.validation-issues article>b.medium,.validation-issues article>b.low{background:#fff4e5;color:#b54708}.validation-issues article>div{min-width:0}.validation-issues article strong{color:#3e4b60;font-size:11px}.validation-issues article p{margin:3px 0 0;color:#76849a;font-size:10px;line-height:15px}
+@media(max-width:720px){.validation-steps{grid-template-columns:1fr}.validation-steps li:not(:last-child)::after{display:none}.script-file-picker{align-items:flex-start}.script-file-picker>b{display:none}}
 </style>

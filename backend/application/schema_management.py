@@ -21,6 +21,10 @@ class SchemaManagementApplication:
         self._service = SchemaManagementService(session, storage=storage)
         self._workflows = workflows
 
+    @property
+    def storage(self) -> S3Storage:
+        return self._service.storage
+
     def overview(self) -> dict[str, Any]:
         return self._service.overview()
 
@@ -47,6 +51,15 @@ class SchemaManagementApplication:
 
     def get_script(self, schema_id: str):
         return self._service.get_script(schema_id)
+
+    def start_script_validation(self, **kwargs) -> dict[str, Any]:
+        return self._service.start_script_validation(**kwargs)
+
+    def get_script_validation(self, validation_id: str, user_id: str) -> dict[str, Any]:
+        return self._service.get_script_validation(validation_id, user_id)
+
+    def run_script_validation(self, validation_id: str) -> dict[str, Any]:
+        return self._service.run_script_validation(validation_id)
 
     async def execute_schema(
         self, schema_id: str, user_id: str, payload: dict[str, Any]

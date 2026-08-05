@@ -19,6 +19,7 @@ from db_model.schema_management import (
     GraphSchemaMapping,
     GraphSchemaProperty,
     GraphSchemaScript,
+    GraphSchemaScriptValidation,
 )
 from infra.mysql import get_engine
 from service.schema_catalog_seed import (
@@ -33,6 +34,7 @@ MANAGED_TABLES = [
     GraphSchemaProperty.__table__,
     GraphSchemaMapping.__table__,
     GraphSchemaScript.__table__,
+    GraphSchemaScriptValidation.__table__,
 ]
 
 INCREMENTAL_COLUMNS = {
@@ -49,6 +51,12 @@ INCREMENTAL_COLUMNS = {
     },
     "kg_schema_script": {
         "uploaded_by": "VARCHAR(128) NOT NULL DEFAULT ''",
+        "safety_validation_id": "VARCHAR(36) NULL",
+        "safety_status": "VARCHAR(16) NOT NULL DEFAULT 'legacy'",
+        "safety_summary": "TEXT NULL",
+        "safety_issues": "TEXT NULL",
+        "safety_model": "VARCHAR(128) NULL",
+        "safety_validated_at": "DATETIME NULL",
     },
 }
 

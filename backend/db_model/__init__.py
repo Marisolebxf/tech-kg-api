@@ -118,6 +118,7 @@ from db_model.schema_management import (
     GraphSchemaMapping,
     GraphSchemaProperty,
     GraphSchemaScript,
+    GraphSchemaScriptValidation,
 )
 from db_model.scholar import (
     DwdScholar,
@@ -234,4 +235,5 @@ __all__ = [
     "GraphSchemaProperty",
     "GraphSchemaMapping",
     "GraphSchemaScript",
+    "GraphSchemaScriptValidation",
 ]

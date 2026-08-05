@@ -15,6 +15,7 @@ jobs:
       ZHIPUAI_API_KEY: ${{ secrets.GLM_API_KEY }}
       # Integration tests provide their own SQLite Schema store; CI has no MySQL service.
       SCHEMA_AUTO_INIT: "false"
+      RUN_REAL_LLM_TESTS: "false"
 
     steps:
       - name: Checkout repository
@@ -39,6 +40,7 @@ jobs:
           LLM_API_KEY=${LLM_API_KEY}
           ZHIPUAI_API_KEY=${ZHIPUAI_API_KEY}
           LLM_MODEL=glm-5.1
+          RUN_REAL_LLM_TESTS=false
           EOF
 
       - name: Build Docker image

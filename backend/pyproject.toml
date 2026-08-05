@@ -74,5 +74,5 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
 markers = [
-    "external: tests that require real external services such as MySQL, Redis, TRSGraph, Kafka, or Milvus",
+    "external: tests that require real external services such as MySQL, Redis, TRSGraph, Kafka, Milvus, or LLM",
 ]

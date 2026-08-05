@@ -154,8 +154,61 @@ class GraphSchemaScript(Base):
     etag: Mapped[str | None] = mapped_column(String(128), nullable=True)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     uploaded_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    safety_validation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    safety_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="legacy", server_default="legacy"
+    )
+    safety_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    safety_issues: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    safety_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    safety_validated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
 
     schema: Mapped[GraphSchemaDefinition] = relationship(back_populates="script")
+
+
+class GraphSchemaScriptValidation(Base):
+    """脚本从隔离上传、安全审查到最终保存的持久化任务。"""
+
+    __tablename__ = "kg_schema_script_validation"
+    __table_args__ = (
+        Index("idx_kg_schema_script_validation_user_created", "uploaded_by", "created_at"),
+        Index("idx_kg_schema_script_validation_status_updated", "status", "updated_at"),
+        {"comment": "Schema 脚本 LLM 安全校验任务"},
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    operation: Mapped[str] = mapped_column(String(32), nullable=False)
+    schema_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bucket: Mapped[str] = mapped_column(String(128), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    etag: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    uploaded_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="queued", server_default="queued"
+    )
+    stage: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="queued", server_default="queued"
+    )
+    progress: Mapped[int] = mapped_column(Integer, nullable=False, default=5, server_default="5")
+    message: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    issues_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_schema_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -10,6 +12,7 @@ from db_model.schema_management import (
     GraphSchemaMapping,
     GraphSchemaProperty,
     GraphSchemaScript,
+    GraphSchemaScriptValidation,
 )
 
 
@@ -171,6 +174,26 @@ class SchemaManagementDAO:
                 setattr(definition.script, key, value)
         self.session.flush()
         return definition.script
+
+    def create_script_validation(self, **values) -> GraphSchemaScriptValidation:
+        validation = GraphSchemaScriptValidation(**values)
+        self.session.add(validation)
+        self.session.flush()
+        return validation
+
+    def get_script_validation(self, validation_id: str) -> GraphSchemaScriptValidation | None:
+        return self.session.get(GraphSchemaScriptValidation, validation_id)
+
+    def update_script_validation(
+        self,
+        validation: GraphSchemaScriptValidation,
+        **values,
+    ) -> GraphSchemaScriptValidation:
+        for key, value in values.items():
+            setattr(validation, key, value)
+        validation.updated_at = datetime.now()
+        self.session.flush()
+        return validation
 
     def referenced_relation_names(self, schema_id: str) -> list[str]:
         statement = select(GraphSchemaDefinition.name).where(

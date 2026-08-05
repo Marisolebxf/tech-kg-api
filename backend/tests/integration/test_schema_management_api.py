@@ -38,6 +38,18 @@ class FakeS3Storage:
         self.objects.pop((bucket, object_key), None)
 
 
+class FakeSafetyLLM:
+    def synthesize(self, prompt: str, max_tokens: int = 2048) -> str:
+        return json.dumps(
+            {
+                "safe": True,
+                "summary": "脚本仅进行内存数据转换，未发现越界能力",
+                "issues": [],
+            },
+            ensure_ascii=False,
+        )
+
+
 @pytest.fixture
 def schema_api(monkeypatch):
     engine = create_engine(
@@ -54,6 +66,7 @@ def schema_api(monkeypatch):
 
     app.dependency_overrides[get_session] = override_session
     monkeypatch.setattr("service.schema_management.get_schema_s3_storage", lambda: storage)
+    monkeypatch.setattr("service.schema_script_security.get_llm_client", lambda: FakeSafetyLLM())
 
     async def start(definition, payload, workflow_id=None):
         return {
@@ -229,3 +242,118 @@ async def test_rejects_invalid_python_script(schema_api) -> None:
         )
         assert response.status_code == 400
         assert "语法错误" in response.json()["msg"]
+
+
+@pytest.mark.asyncio
+async def test_script_validation_sse_saves_only_approved_script(schema_api) -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        listing = await client.get(
+            "/api/v1/schema-management/schemas",
+            params={"kind": "entity", "pageSize": 100, "includeDetails": True},
+        )
+        expert = next(item for item in listing.json()["data"]["items"] if item["name"] == "Expert")
+
+        started = await client.post(
+            "/api/v1/schema-management/script-validations",
+            headers={"X-User-Id": "schema-admin"},
+            data={"operation": "replace", "schemaId": expert["id"]},
+            files={
+                "script": (
+                    "expert-safe.py",
+                    b"def transform(row):\n    return {'name': row.get('name', '').strip()}\n",
+                    "text/x-python",
+                )
+            },
+        )
+        assert started.status_code == 202
+        task = started.json()["data"]
+
+        events = await client.get(task["eventsUrl"], params={"userId": "schema-admin"})
+        assert events.status_code == 200
+        assert "event: completed" in events.text
+        assert '"status":"succeeded"' in events.text
+
+        detail = await client.get(
+            f"/api/v1/schema-management/schemas/{expert['id']}",
+            headers={"X-User-Id": "schema-admin"},
+        )
+        script = detail.json()["data"]["script"]
+        assert script["filename"] == "expert-safe.py"
+        assert script["safetyStatus"] == "approved"
+        assert script["safetyValidationId"] == task["id"]
+        assert script["safetySummary"]
+
+
+@pytest.mark.asyncio
+async def test_script_validation_sse_reports_static_security_problem(schema_api) -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        listing = await client.get(
+            "/api/v1/schema-management/schemas",
+            params={"kind": "entity", "pageSize": 100, "includeDetails": True},
+        )
+        expert = next(item for item in listing.json()["data"]["items"] if item["name"] == "Expert")
+
+        started = await client.post(
+            "/api/v1/schema-management/script-validations",
+            headers={"X-User-Id": "schema-admin"},
+            data={"operation": "replace", "schemaId": expert["id"]},
+            files={
+                "script": (
+                    "expert-risky.py",
+                    b"import os\ndef transform(row):\n    os.system('id')\n    return row\n",
+                    "text/x-python",
+                )
+            },
+        )
+        assert started.status_code == 202
+        task = started.json()["data"]
+
+        events = await client.get(task["eventsUrl"], params={"userId": "schema-admin"})
+        assert events.status_code == 200
+        assert "event: failed" in events.text
+        assert "不允许导入模块 os" in events.text
+
+        detail = await client.get(
+            f"/api/v1/schema-management/schemas/{expert['id']}",
+            headers={"X-User-Id": "schema-admin"},
+        )
+        assert detail.json()["data"]["script"] is None
+
+
+@pytest.mark.asyncio
+async def test_script_validation_sse_creates_schema_after_approval(schema_api) -> None:
+    metadata = {
+        "schemaKey": "security-reviewed-technology",
+        "name": "SecurityReviewedTechnology",
+        "label": "安全审查技术",
+        "description": "通过异步脚本安全校验后创建",
+        "identityKey": "technology_id",
+        "properties": [{"name": "technology_id", "dataType": "string", "required": True}],
+        "mappings": ["technology_profile"],
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        started = await client.post(
+            "/api/v1/schema-management/script-validations",
+            headers={"X-User-Id": "user-a"},
+            data={"operation": "create_entity", "metadata": json.dumps(metadata)},
+            files={
+                "script": (
+                    "technology.py",
+                    b"def transform(row):\n    return row\n",
+                    "text/x-python",
+                )
+            },
+        )
+        assert started.status_code == 202
+        task = started.json()["data"]
+
+        events = await client.get(task["eventsUrl"], params={"userId": "user-a"})
+        assert "event: completed" in events.text
+
+        status = await client.get(
+            f"/api/v1/schema-management/script-validations/{task['id']}",
+            headers={"X-User-Id": "user-a"},
+        )
+        result = status.json()["data"]["result"]
+        assert result["name"] == "SecurityReviewedTechnology"
+        assert result["script"]["safetyStatus"] == "approved"

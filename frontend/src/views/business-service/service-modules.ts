@@ -482,7 +482,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'industry', type: 'string', required: '否', description: '企业行业方向' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { expert_id: 'person_00fdcec8aa4d1ba8554596c3310e36cf', enterprise_name: '', role_type: '', industry: '' },
+    requestExample: { expert_id: 'person_893b432670627d6337b9b7edaab0e917', enterprise_name: '', role_type: '', industry: '' },
     responseExample: { code: 0, message: 'success', data: { enterprises: 9, roles: 4, cooperation_fields: ['芯片设计', '智能制造'] } },
     resultRows: [
       { label: '关联企业', value: '9', tone: 'blue' },

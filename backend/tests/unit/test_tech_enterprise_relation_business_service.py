@@ -98,7 +98,7 @@ async def test_run_parses_governance_and_project_cooperation(monkeypatch):
     monkeypatch.setattr(
         _httpx(),
         "AsyncClient",
-        lambda: _FakeAsyncClient([("/graph-search/subgraph/", _subgraph())]),
+        lambda: _FakeAsyncClient([("/graph-search/filtered-subgraph/", _subgraph())]),
     )
 
     # 默认重点企业筛选：只保留苏州绿的（governance），北京大学（高校）被筛掉
@@ -121,7 +121,7 @@ async def test_project_cooperation_period_and_university_filter(monkeypatch):
     monkeypatch.setattr(
         _httpx(),
         "AsyncClient",
-        lambda: _FakeAsyncClient([("/graph-search/subgraph/", _subgraph())]),
+        lambda: _FakeAsyncClient([("/graph-search/filtered-subgraph/", _subgraph())]),
     )
 
     # 关掉重点企业筛选：北京大学（项目合作）保留，且带合作时间

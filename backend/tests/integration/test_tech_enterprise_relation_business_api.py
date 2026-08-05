@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-# dev 空间里真实存在的专家（左晶，苏州绿的谐波传动科技副董事长）
-EXPERT_ZUO = "person_00fdcec8aa4d1ba8554596c3310e36cf"
+# dev 空间里真实存在的专家（李谦，苏州绿的谐波传动科技董事）
+EXPERT_ZUO = "person_893b432670627d6337b9b7edaab0e917"
 # 李冰：有项目合作->北京大学（带合作时间）
 EXPERT_LIB = "person_940cc7b88047eccfdbbaaa75dd0a90a4"
 
@@ -25,12 +25,12 @@ async def test_run_returns_governance_relation(async_client):
     )
     assert resp.status_code == 200
     data = resp.json()["data"]
-    assert data["expert_name"] == "左晶"
+    assert data["expert_name"] == "李谦"
     assert data["enterprises"] >= 1
     rel = data["relations"][0]
     assert rel["cooperation_type"] == "governance"
     assert rel["cooperation_mode"] == "高管任职"
-    assert rel["role_label"] == "副董事长"
+    assert rel["role_label"] == "董事"
     assert rel["role_level"] == "L1"
     assert "苏州绿的谐波传动科技" in (rel["enterprise_name"] or "")
     assert rel["enterprise_background"]["listing_status"] == "已上市"

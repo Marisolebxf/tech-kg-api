@@ -170,12 +170,28 @@ class KeyEnterpriseRelationService:
     async def run(self, req: KeyEnterpriseRelationRequest) -> KeyEnterpriseRelationResponse:
         resp = KeyEnterpriseRelationResponse(expert_id=req.expert_id)
         async with httpx.AsyncClient() as client:
-            # 1) 一次 subgraph(depth=2) 拿专家 2 跳内全部点边
+            # 1) filtered-subgraph(depth=2) 只拿业务需要的 12 种边，不捞论文/合作者/引用
+            edge_types = ",".join(
+                [
+                    "EXECUTIVE_OF",
+                    "LEGAL_REP_OF",
+                    "ACTUAL_CONTROLLER_OF",
+                    "BENEFICIAL_OWNER_OF",
+                    "SHAREHOLDER_OF",
+                    "AFFILIATED_WITH",
+                    "HAS_PARTICIPANT",
+                    "LEADS",
+                    "PARTICIPATES_IN",
+                    "FUNDED_BY",
+                    "INVENTED_BY",
+                    "APPLIED_BY",
+                ]
+            )
             try:
                 sg_json = await self._get(
                     client,
-                    f"/graph-search/subgraph/{req.expert_id}",
-                    {"space": SPACE, "depth": 2, "limit": 200},
+                    f"/graph-search/filtered-subgraph/{req.expert_id}",
+                    {"space": SPACE, "edge_types": edge_types, "depth": 2, "limit": 50},
                 )
             except Exception as exc:  # noqa: BLE001
                 resp.evidence.append(f"subgraph 查询失败: {exc}")

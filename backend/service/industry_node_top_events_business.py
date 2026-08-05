@@ -1,14 +1,15 @@
 """科技产业链点 TOP-N 事件关系业务编排服务。
 
-流程：
-  1. MySQL（dwd_industry_chain_info / dwd_org_industry_chain_dtl）：按 chain_node_id 取链节点
-     信息 + 关联企业（按 chain_score 排序，limit max_orgs）。
-  2. graph-search 查图 API：对每个企业 GET /graph-search/subgraph/{org_id}?depth=1，取其
-     INVOLVED_IN 事件 + governance 边（EXECUTIVE_OF 等）关联的专家。
-  3. 事件影响力排序：event_type 风险权重 × 金额 × 时间新鲜度 × 企业 chain_score，取 TOP-N。
-  4. 构建 event→org→expert 关联，按事件类型给出风险等级。
+严格按 0803 任务要求：只调用 FastAPI graph-search 查图 API（HTTP），不直连图、不直连 MySQL。
+产业链节点（IndustryNode）、企业-节点关联（BELONGS_TO_NODE）、事件（INVOLVED_IN）、
+专家（EXECUTIVE_OF 等）全部从 dev 图空间经 graph-search API 查。
 
-图访问只走 FastAPI graph-search API（HTTP），不直连图；链节点/企业映射走 MySQL ORM。
+流程：
+  1. GET /graph-search/subgraph/{node_vid}?depth=1  取链节点信息 + 关联企业（BELONGS_TO_NODE）+ 产业链（HAS_NODE）
+  2. GET /graph-search/subgraph/{org_id}?depth=1    每个企业的 INVOLVED_IN 事件
+  3. 事件影响力排序（event_type 权重 × 金额 × 时间新鲜度 × chain_score）→ TOP-N
+  4. GET /graph-search/node/{org_id}/edges?edge_type=EXECUTIVE_OF  TOP 事件企业的专家
+  5. 风险等级 + event→org→expert 关联
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ import math
 import os
 
 import httpx
-from sqlalchemy import select
 
 from biz.schemas.industry_node_top_events_business import (
     EventExpertRelation,
@@ -26,24 +26,14 @@ from biz.schemas.industry_node_top_events_business import (
     IndustryNodeTopEventsResponse,
     TopEventItem,
 )
-from db_model.industry_chain import DwdIndustryChainInfo, DwdOrgIndustryChainDtl
-from infra.mysql import MySQLClient
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE = os.getenv("BUSINESS_API_BASE", "http://127.0.0.1:8000")
 SPACE = "dev"
 
-GOVERNANCE_EDGES = {
-    "EXECUTIVE_OF",
-    "LEGAL_REP_OF",
-    "ACTUAL_CONTROLLER_OF",
-    "BENEFICIAL_OWNER_OF",
-    "SHAREHOLDER_OF",
-    "AFFILIATED_WITH",
-}
+GOVERNANCE_EDGES = {"EXECUTIVE_OF", "LEGAL_REP_OF", "ACTUAL_CONTROLLER_OF"}
 
-# event_type → 影响力权重（风险类高，财务类中，其它低）
 EVENT_WEIGHT = {
     "bankruptcy": 3.0,
     "zhixing": 3.0,
@@ -82,22 +72,17 @@ RISK_EVENT_TYPES = {
 }
 
 
-def _impact_score(
-    event_type: str | None, amount: str | None, occur_date: str | None, chain_score: float
-) -> float:
+def _impact_score(event_type, amount, occur_date, chain_score):
     weight = EVENT_WEIGHT.get(event_type or "", 1.0)
-    amt = 0.0
     try:
         amt = float(amount) if amount else 0.0
     except (TypeError, ValueError):
         amt = 0.0
     amount_factor = math.log10(amt + 1) / 10.0 if amt > 0 else 0.0
-    # 时间新鲜度：按年衰减，2025+=1.0
     recency = 0.5
     if occur_date:
-        s = str(occur_date)[:4]
         try:
-            yr = int(s)
+            yr = int(str(occur_date)[:4])
             recency = max(0.3, 1.0 - (2026 - yr) * 0.15)
         except ValueError:
             recency = 0.5
@@ -105,109 +90,108 @@ def _impact_score(
 
 
 class IndustryNodeTopEventsService:
-    def __init__(self, base_url: str | None = None, timeout: float = 60.0) -> None:
+    def __init__(self, base_url=None, timeout=60.0):
         self.base = (base_url or DEFAULT_BASE).rstrip("/") + "/api/v1"
         self.timeout = timeout
-        self._mysql = MySQLClient()
 
-    async def _get(self, client: httpx.AsyncClient, path: str, params: dict) -> dict:
+    async def _get(self, client, path, params):
         r = await client.get(f"{self.base}{path}", params=params, timeout=self.timeout)
         return r.json()
 
-    def _load_chain_node(self, chain_node_id: str, max_orgs: int):
-        """返回 (node_info, [(org_id, chain_score)])。"""
-        with self._mysql.session_scope() as session:
-            # 只取需要的列，避开 ORM 模型里 downstream_lin 与实际表 downstream_link_code 不一致的 bug
-            node = session.execute(
-                select(
-                    DwdIndustryChainInfo.node_name,
-                    DwdIndustryChainInfo.chain_name,
-                    DwdIndustryChainInfo.node_imp_level,
-                ).where(DwdIndustryChainInfo.node_id == chain_node_id)
-            ).first()
-            node_info = {}
-            if node:
-                node_info = {
-                    "node_name": node[0],
-                    "chain_name": node[1],
-                    "node_imp_level": str(node[2]) if node[2] is not None else None,
-                }
-            rows = session.execute(
-                select(DwdOrgIndustryChainDtl.antitypic, DwdOrgIndustryChainDtl.chain_score)
-                .where(DwdOrgIndustryChainDtl.node_id == chain_node_id)
-                .order_by(DwdOrgIndustryChainDtl.chain_score.desc())
-                .limit(max_orgs)
-            ).all()
-            orgs = [(r[0], float(r[1] or 0)) for r in rows if r[0]]
-        return node_info, orgs
-
     async def run(self, req: IndustryNodeTopEventsRequest) -> IndustryNodeTopEventsResponse:
         resp = IndustryNodeTopEventsResponse(chain_node_id=req.chain_node_id)
-        node_info, orgs = self._load_chain_node(req.chain_node_id, req.max_orgs)
-        resp.chain_node_name = node_info.get("node_name")
-        resp.chain_name = node_info.get("chain_name")
-        resp.node_imp_level = node_info.get("node_imp_level")
-        resp.enterprises = len(orgs)
-        if not orgs:
-            resp.evidence.append(f"链节点 {req.chain_node_id} 下无关联企业")
-            return resp
+        node_vid = (
+            req.chain_node_id
+            if req.chain_node_id.startswith("node_")
+            else f"node_{req.chain_node_id}"
+        )
 
-        # 每个企业一次 subgraph(depth=1)，取事件 + 专家
-        events: list[
-            dict
-        ] = []  # {event_id, event_type, occur_date, amount, title, org_id, org_name, chain_score}
-        experts_by_org: dict[
-            str, list[tuple[str, str | None, str | None]]
-        ] = {}  # org_id -> [(person_id, name, role)]
         async with httpx.AsyncClient() as client:
-            for antitypic, chain_score in orgs:
-                org_id = f"org_{antitypic}"
-                try:
-                    sg = await self._get(
-                        client,
-                        f"/graph-search/subgraph/{org_id}",
-                        {"space": SPACE, "depth": 1, "limit": 50},
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("subgraph %s 失败: %s", org_id, exc)
-                    continue
-                data = sg.get("data") or {}
-                nodes = {
-                    n.get("id"): (n.get("properties") or {}) for n in (data.get("nodes") or [])
-                }
-                org_name = nodes.get(org_id, {}).get("name_cn")
-                for e in data.get("edges") or []:
-                    et = e.get("type", "")
-                    s, t = e.get("source", ""), e.get("target", "")
-                    if et == "INVOLVED_IN":
-                        eid = t if s == org_id else s
-                        ep = nodes.get(eid, {})
-                        events.append(
-                            {
-                                "event_id": eid,
-                                "event_type": ep.get("event_type"),
-                                "occur_date": str(ep.get("occur_date") or "") or None,
-                                "amount": str(ep.get("amount") or "") or None,
-                                "title": ep.get("title"),
-                                "org_id": org_id,
-                                "org_name": org_name,
-                                "chain_score": chain_score,
-                            }
-                        )
-                    elif et in GOVERNANCE_EDGES:
-                        pid = s if t == org_id else t
-                        if pid and pid != org_id:
-                            pp = nodes.get(pid, {})
-                            experts_by_org.setdefault(org_id, []).append(
-                                (
-                                    pid,
-                                    pp.get("name_cn") or pp.get("name_zh"),
-                                    e.get("properties", {}).get("position"),
-                                )
-                            )
+            # 1) filtered-subgraph(depth=1) 只拿 BELONGS_TO_NODE + HAS_NODE，不捞事件/新闻
+            try:
+                sg = await self._get(
+                    client,
+                    f"/graph-search/filtered-subgraph/{node_vid}",
+                    {
+                        "space": SPACE,
+                        "edge_types": "BELONGS_TO_NODE,HAS_NODE",
+                        "depth": 1,
+                        "limit": 200,
+                    },
+                )
+            except Exception as exc:
+                resp.evidence.append(f"链节点查询失败: {exc}")
+                return resp
+            data = sg.get("data") or {}
+            nodes_map = {
+                n.get("id"): (n.get("properties") or {}) for n in (data.get("nodes") or [])
+            }
+            node_props = nodes_map.get(node_vid, {})
+            resp.chain_node_name = node_props.get("node_name")
+            resp.node_imp_level = node_props.get("node_imp_level")
 
-        # 事件类型 / 时间筛选
-        def _keep(ev: dict) -> bool:
+            orgs = []  # [(org_vid, chain_score)]
+            for e in data.get("edges") or []:
+                et = e.get("type", "")
+                s, t = e.get("source", ""), e.get("target", "")
+                if et == "BELONGS_TO_NODE" and t == node_vid:
+                    cs = (e.get("properties") or {}).get("chain_score", 0)
+                    try:
+                        cs = float(cs)
+                    except (TypeError, ValueError):
+                        cs = 0.0
+                    orgs.append((s, cs))
+                elif et == "HAS_NODE" and s != node_vid:
+                    # chain → node，s 是 chain vid
+                    resp.chain_name = nodes_map.get(s, {}).get("chain_name") or resp.chain_name
+                elif et == "HAS_NODE" and t != node_vid:
+                    resp.chain_name = nodes_map.get(t, {}).get("chain_name") or resp.chain_name
+
+            resp.enterprises = len(orgs)
+            # 按 chain_score 排序，只取 top max_orgs 家企业查事件（避免过多调用）
+            orgs.sort(key=lambda x: x[1], reverse=True)
+            orgs = orgs[: req.max_orgs]
+            if not orgs:
+                resp.evidence.append(f"链节点 {req.chain_node_id} 无关联企业")
+                return resp
+
+            # 2) filtered-subgraph(depth=1) 每个企业只拿 INVOLVED_IN 事件
+            events = []
+            for org_vid, chain_score in orgs:
+                try:
+                    osg = await self._get(
+                        client,
+                        f"/graph-search/filtered-subgraph/{org_vid}",
+                        {"space": SPACE, "edge_types": "INVOLVED_IN", "depth": 1, "limit": 50},
+                    )
+                except Exception as exc:
+                    logger.warning("subgraph %s 失败: %s", org_vid, exc)
+                    continue
+                odata = osg.get("data") or {}
+                onodes = {
+                    n.get("id"): (n.get("properties") or {}) for n in (odata.get("nodes") or [])
+                }
+                org_name = onodes.get(org_vid, {}).get("name_cn")
+                for e in odata.get("edges") or []:
+                    if e.get("type") != "INVOLVED_IN":
+                        continue
+                    eid = e.get("target") if e.get("source") == org_vid else e.get("source")
+                    ep = onodes.get(eid, {})
+                    events.append(
+                        {
+                            "event_id": eid,
+                            "event_type": ep.get("event_type"),
+                            "occur_date": str(ep.get("occur_date") or "") or None,
+                            "amount": str(ep.get("amount") or "") or None,
+                            "title": ep.get("title"),
+                            "org_id": org_vid,
+                            "org_name": org_name,
+                            "chain_score": chain_score,
+                        }
+                    )
+
+        # 筛选
+        def _keep(ev):
             if req.event_type and ev.get("event_type") != req.event_type:
                 return False
             if req.time_range and ev.get("occur_date"):
@@ -223,8 +207,8 @@ class IndustryNodeTopEventsService:
             return True
 
         events = [ev for ev in events if _keep(ev)]
-        # 去重（同一事件可能被多个企业触发？按 event_id 去重保留 chain_score 高的）
-        seen: dict[str, dict] = {}
+        # 去重
+        seen = {}
         for ev in events:
             if (
                 ev["event_id"] not in seen
@@ -233,7 +217,7 @@ class IndustryNodeTopEventsService:
                 seen[ev["event_id"]] = ev
         events = list(seen.values())
 
-        # 影响力排序 → TOP-N
+        # 排序 → TOP-N
         for ev in events:
             ev["_score"] = _impact_score(
                 ev.get("event_type"),
@@ -260,7 +244,6 @@ class IndustryNodeTopEventsService:
             for i, ev in enumerate(top)
         ]
 
-        # 风险等级：TOP 事件含风险类→高，含财务类→中，否则低
         top_types = {ev.get("event_type") for ev in top}
         if top_types & RISK_EVENT_TYPES:
             resp.risk_level = "高"
@@ -269,21 +252,20 @@ class IndustryNodeTopEventsService:
         else:
             resp.risk_level = "低"
 
-        # 事件→专家关联：TOP 事件所在企业单独查 governance 边取专家
-        # （subgraph(depth=1) 可能被事件占满，专家没进，故单独查）
+        # 3) TOP 事件企业查专家（governance 边）
         top_org_ids = {ev.get("org_id") for ev in top if ev.get("org_id")}
-        experts_by_org.clear()
+        experts_by_org = {}
         async with httpx.AsyncClient() as client:
             for org_id in top_org_ids:
-                seen_pids: set[str] = set()
-                for et in ("EXECUTIVE_OF", "LEGAL_REP_OF", "ACTUAL_CONTROLLER_OF"):
+                seen_pids = set()
+                for et in GOVERNANCE_EDGES:
                     try:
                         ej = await self._get(
                             client,
                             f"/graph-search/node/{org_id}/edges",
                             {"space": SPACE, "edge_type": et, "direction": "in", "limit": 20},
                         )
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         continue
                     for e in (ej.get("data") or {}).get("edges", []):
                         pid = e.get("source") or e.get("target")
@@ -293,16 +275,16 @@ class IndustryNodeTopEventsService:
                                 (pid, None, (e.get("properties") or {}).get("position"))
                             )
 
-        all_expert_ids: set[str] = set()
+        all_expert_ids = set()
         for ev in top:
-            for pid, pname, role in experts_by_org.get(ev.get("org_id", ""), []):
+            for pid, _, role in experts_by_org.get(ev.get("org_id", ""), []):
                 all_expert_ids.add(pid)
                 resp.relations.append(
                     EventExpertRelation(
                         event_id=ev["event_id"],
                         event_title=ev.get("title"),
                         expert_id=pid,
-                        expert_name=pname,
+                        expert_name=None,
                         role=role,
                         org_id=ev.get("org_id", ""),
                         org_name=ev.get("org_name"),
@@ -310,7 +292,7 @@ class IndustryNodeTopEventsService:
                 )
         resp.experts = len(all_expert_ids)
         resp.evidence = [
-            f"链节点 {req.chain_node_id}({resp.chain_node_name or ''}) 下 {len(orgs)} 家企业",
+            f"链节点 {req.chain_node_id}({resp.chain_node_name or ''}) 关联 {len(orgs)} 家企业",
             f"汇总 {len(events)} 条事件，影响力排序取 TOP {len(top)}",
             f"风险等级 {resp.risk_level}（基于事件类型 {sorted(top_types)}）",
         ]

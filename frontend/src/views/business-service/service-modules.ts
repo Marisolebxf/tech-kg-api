@@ -482,7 +482,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'industry', type: 'string', required: '否', description: '企业行业方向' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { expert_id: 'E10001', enterprise_name: '华南智能芯片', role_type: '顾问/股东/合作方', industry: '集成电路' },
+    requestExample: { expert_id: 'person_00fdcec8aa4d1ba8554596c3310e36cf', enterprise_name: '', role_type: '', industry: '' },
     responseExample: { code: 0, message: 'success', data: { enterprises: 9, roles: 4, cooperation_fields: ['芯片设计', '智能制造'] } },
     resultRows: [
       { label: '关联企业', value: '9', tone: 'blue' },
@@ -552,7 +552,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'time_range', type: 'string', required: '否', description: '事件时间范围' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { chain_node_id: 'IC-CHIP-DESIGN', top_n: 10, event_type: '投融资/政策/风险', time_range: '2025-2026' },
+    requestExample: { chain_node_id: 'IC0007007', top_n: 5, event_type: '', time_range: '' },
     responseExample: { code: 0, message: 'success', data: { events: 10, experts: 18, enterprises: 24, risk_level: '中' } },
     resultRows: [
       { label: 'TOP事件', value: '10', tone: 'blue' },

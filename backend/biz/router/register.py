@@ -17,6 +17,9 @@ from biz.handler.expert_paper_cooperation import router as expert_paper_cooperat
 from biz.handler.graph_search import router as graph_search_router
 from biz.handler.industry_chain_panorama import router as industry_chain_panorama_router
 from biz.handler.industry_chain_topn_event import router as industry_chain_topn_event_router
+from biz.handler.industry_node_top_events_business import (
+    router as industry_node_top_events_business_router,
+)
 from biz.handler.kg_construction import router as kg_construction_router
 from biz.handler.manual_review import router as manual_review_router
 from biz.handler.operator import internal_router as operator_internal_router
@@ -55,5 +58,6 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(workflow_system_router, prefix="/api/v1")
     app.include_router(schema_management_router, prefix="/api/v1")
     app.include_router(tech_enterprise_relation_business_router, prefix="/api/v1")
+    app.include_router(industry_node_top_events_business_router, prefix="/api/v1")
     app.include_router(operator_router, prefix="/api/v1")
     app.include_router(operator_internal_router)

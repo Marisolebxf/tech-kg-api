@@ -56,7 +56,11 @@ function mapLiveGraph(nodes: Array<{
   confidence: number
   relations: string
   evidence: string[]
-}> | undefined, edges: Array<{ id: string; from: string; to: string; label: string; category: string }> | undefined) {
+  level?: number
+}> | undefined, edges: Array<{ id: string; from: string; to: string; label: string; category: string }> | undefined): {
+  nodes: GraphNodeData[]
+  edges: GraphEdgeData[]
+} | null {
   if (!nodes?.length) return null
   const allowed = new Set(['main', 'expert', 'org', 'company', 'paper', 'topic', 'project', 'event'])
   return {
@@ -70,6 +74,7 @@ function mapLiveGraph(nodes: Array<{
       confidence: node.confidence ?? 0.9,
       relations: node.relations ?? '',
       evidence: node.evidence ?? [],
+      level: node.level,
     })),
     edges: (edges || []).map((edge) => ({
       id: edge.id,

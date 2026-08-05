@@ -454,9 +454,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 ]
             )
         else:
-            summary_rows.append(
-                {"label": "说明", "value": "未命中校友（无同校教育属性或异校）"}
-            )
+            summary_rows.append({"label": "说明", "value": "未命中校友（无同校教育属性或异校）"})
 
         result_rows = [
             {"label": "校友数量", "value": str(total), "tone": "blue"},
@@ -487,8 +485,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         provenance = {
             "sourceDatabase": f"trs-graph / space={meta.get('space') or 'dev'}",
             "summary": (
-                f"mode={mode}，命中 {total} 名校友；"
-                f"维度={('、'.join(dims) if dims else '无')}"
+                f"mode={mode}，命中 {total} 名校友；维度={('、'.join(dims) if dims else '无')}"
             ),
             "evidences": [
                 {
@@ -497,9 +494,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                     "technicalTable": "Person.education_background_*",
                     "recordId": str(expert.get("id") or ""),
                     "fieldIdentifier": "education_background_institution_zh/_en",
-                    "summary": (
-                        f"解析教育经历 {len(expert.get('educations') or [])} 条"
-                    ),
+                    "summary": (f"解析教育经历 {len(expert.get('educations') or [])} 条"),
                 },
                 *[
                     {

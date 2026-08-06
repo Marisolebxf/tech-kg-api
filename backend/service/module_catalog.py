@@ -15,7 +15,7 @@ KG_CONSTRUCTION_MODULES: tuple[dict[str, object], ...] = (
         "code": "expert_cooperation_achievement",
         "name": "科技两点合作成果",
         "description": "针对两个专家或人才节点，汇总合作成果、成果分类、时间、领域和贡献模式。",
-        "status": "scaffold",
+        "status": "ready",
     },
     {
         "code": "expert_colleague_relation",
@@ -27,7 +27,7 @@ KG_CONSTRUCTION_MODULES: tuple[dict[str, object], ...] = (
         "code": "expert_alumni_relation",
         "name": "科技专家校友关系",
         "description": "基于教育经历和院校信息，识别专家之间的校友关系及关联维度。",
-        "status": "scaffold",
+        "status": "ready",
     },
     {
         "code": "expert_paper_cooperation",

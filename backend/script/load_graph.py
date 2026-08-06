@@ -25,6 +25,15 @@ def build_scholar_node_props(s) -> dict:
         "h_index": s.h_index or 0,
         "citation_nums": s.citation_nums or 0,
         "paper_nums": s.paper_nums or 0,
+        # 教育背景：校友关系（expert_alumni_relation）匹配的核心字段。
+        # 缺失时回填空串，保持与现有节点属性口径一致。
+        "education_background_institution_zh": s.education_background_institution_zh or "",
+        "education_background_institution_en": s.education_background_institution_en or "",
+        "education_background_degree_zh": s.education_background_degree_zh or "",
+        "education_background_degree_en": s.education_background_degree_en or "",
+        "education_background_date": s.education_background_date or "",
+        "education_background_zh": s.education_background_zh or "",
+        "education_background_en": s.education_background_en or "",
     }
 
 

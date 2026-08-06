@@ -1,4 +1,13 @@
-"""平台首页总览假数据服务。"""
+"""平台首页总览服务：图资产实时统计 + 尚未接入模块的显式降级数据。"""
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Protocol
 
 from biz.schemas.platform_overview import (
     AssetChangeRow,
@@ -8,12 +17,205 @@ from biz.schemas.platform_overview import (
     PlatformOverviewData,
     StructureItem,
 )
+from infra.graph_db import get_trs_graph_client
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class GraphStatsSnapshot:
+    total_nodes: int
+    total_edges: int
+    nodes: dict[str, int]
+    edges: dict[str, int]
+
+
+class GraphStatsProvider(Protocol):
+    def get_stats(self) -> GraphStatsSnapshot: ...
+
+
+class TRSGraphStatsProvider:
+    def get_stats(self) -> GraphStatsSnapshot:
+        client = get_trs_graph_client()
+        labels = client.labels()
+        edge_types = client.edge_types()
+        return GraphStatsSnapshot(
+            total_nodes=client.node_count(),
+            total_edges=client.edge_count(),
+            nodes={label: client.node_count(label) for label in labels},
+            edges={edge_type: client.edge_count(edge_type) for edge_type in edge_types},
+        )
+
+
+def _format_count(value: int) -> str:
+    if value >= 100_000_000:
+        return f"{value / 100_000_000:.2f} 亿"
+    if value >= 10_000:
+        return f"{value / 10_000:.2f} 万"
+    return f"{value:,}"
+
+
+def _ratios(values: list[int]) -> list[int]:
+    total = sum(values)
+    if total <= 0:
+        return [0 for _ in values]
+    result = [round(value * 100 / total) for value in values]
+    result[max(range(len(values)), key=values.__getitem__)] += 100 - sum(result)
+    return result
+
+
+def _entity_bucket(name: str) -> int:
+    normalized = name.upper()
+    if any(token in normalized for token in ("EXPERT", "SCHOLAR", "PERSON", "TALENT")):
+        return 0
+    if any(token in normalized for token in ("PAPER", "JOURNAL", "ARTICLE", "THESIS")):
+        return 1
+    if any(
+        token in normalized
+        for token in ("ORGANIZATION", "ORGANISATION", "ENTERPRISE", "COMPANY", "INSTITUTE")
+    ):
+        return 2
+    if any(token in normalized for token in ("PROJECT", "PATENT")):
+        return 3
+    return 4
+
+
+def _relation_bucket(name: str) -> int:
+    normalized = name.upper()
+    if any(token in normalized for token in ("PUBLISH", "CITE", "AUTHOR", "OUTPUT")):
+        return 0
+    if any(token in normalized for token in ("WORK", "STUDY", "AFFILIAT", "EMPLOY")):
+        return 1
+    if any(token in normalized for token in ("PROJECT", "PATENT", "INVENT")):
+        return 2
+    if any(token in normalized for token in ("PRODUCT", "EVENT", "ENTERPRISE", "COMPANY")):
+        return 3
+    return 4
+
+
+def _build_structure(
+    counts: dict[str, int],
+    *,
+    entity: bool,
+) -> list[StructureItem]:
+    buckets = [0, 0, 0, 0, 0]
+    classifier = _entity_bucket if entity else _relation_bucket
+    for name, count in counts.items():
+        buckets[classifier(name)] += max(0, int(count))
+    ratios = _ratios(buckets)
+    definitions = (
+        [
+            ("专家 / 人才", "Expert / Scholar", "#2e90fa"),
+            ("论文成果", "Paper / Journal", "#7a5af8"),
+            ("机构 / 企业", "Organization / Enterprise", "#12b76a"),
+            ("项目 / 专利", "Project / Patent", "#f79009"),
+            ("其他实体", "Other", "#98a2b3"),
+        ]
+        if entity
+        else [
+            ("发表 / 引用 / 成果", "PUBLISH / CITES / OUTPUT", "#165dff"),
+            ("任职 / 就读 / 作者单位", "WORKS_AT / STUDY_AT", "#2e90fa"),
+            ("项目 / 专利参与", "LEAD_PROJECT / INVENT_PATENT", "#06aed4"),
+            ("企业 / 产品 / 事件", "HAS_PRODUCT / HAS_EVENT", "#7a5af8"),
+            ("其他关系", "Other", "#98a2b3"),
+        ]
+    )
+    return [
+        StructureItem(
+            label=label,
+            schema=schema,
+            count=_format_count(buckets[index]),
+            ratio=ratios[index],
+            tone=tone,
+        )
+        for index, (label, schema, tone) in enumerate(definitions)
+    ]
 
 
 class PlatformOverviewService:
-    """返回首页当前使用的演示数据，不依赖数据库或图服务。"""
+    """优先读取真实图统计；无法读取时保留可演示、可识别的降级结果。"""
+
+    def __init__(self, stats_provider: GraphStatsProvider | None = None) -> None:
+        self._stats_provider = stats_provider or TRSGraphStatsProvider()
+        self._cache_seconds = int(os.getenv("PLATFORM_OVERVIEW_CACHE_SECONDS", "60"))
+        self._cached: tuple[float, PlatformOverviewData] | None = None
 
     def get_overview(self) -> PlatformOverviewData:
+        now = time.monotonic()
+        if self._cached is not None and self._cached[0] > now:
+            return self._cached[1]
+
+        fallback = self._get_fallback_overview()
+        try:
+            stats = self._stats_provider.get_stats()
+        except Exception as exc:
+            logger.warning("首页图资产统计读取失败，使用降级数据: %s", exc)
+            result = fallback.model_copy(
+                update={
+                    "platform_status": "图数据库暂不可用，页面已降级",
+                    "updated_at": datetime.now().strftime("%H:%M"),
+                    "data_mode": "mock",
+                    "data_sources": {
+                        "graphAssets": "demo-fallback",
+                        "todayChanges": "demo-fallback",
+                        "managementRisks": "demo-fallback",
+                    },
+                    "warnings": [
+                        "图数据库统计不可用，资产总量和结构正在展示降级数据。",
+                        "今日变化和管理风险等待任务中心持久化接口接入。",
+                    ],
+                }
+            )
+        else:
+            groups = [
+                AssetOverviewGroup(
+                    key="entity",
+                    title="实体数据",
+                    total=_format_count(stats.total_nodes),
+                    total_label="实体总量",
+                    added="--",
+                    added_label="今日新增（任务中心待接入）",
+                ),
+                AssetOverviewGroup(
+                    key="relation",
+                    title="关系数据",
+                    total=_format_count(stats.total_edges),
+                    total_label="关系总量",
+                    added="--",
+                    added_label="今日新增（任务中心待接入）",
+                ),
+                AssetOverviewGroup(
+                    key="property",
+                    title="属性值数据",
+                    total="--",
+                    total_label="属性值总量（统计接口待接入）",
+                    added="--",
+                    added_label="今日新增及更新（任务中心待接入）",
+                ),
+            ]
+            result = fallback.model_copy(
+                update={
+                    "platform_status": "图数据库连接正常",
+                    "updated_at": datetime.now().strftime("%H:%M"),
+                    "asset_overview_groups": groups,
+                    "entity_structure": _build_structure(stats.nodes, entity=True),
+                    "relation_structure": _build_structure(stats.edges, entity=False),
+                    "data_mode": "partial",
+                    "data_sources": {
+                        "graphAssets": "trsgraph-live",
+                        "todayChanges": "demo-fallback",
+                        "managementRisks": "demo-fallback",
+                    },
+                    "warnings": [
+                        "实体与关系统计来自图数据库实时接口。",
+                        "属性值、今日变化和管理风险等待任务中心接口接入。",
+                    ],
+                }
+            )
+        self._cached = (now + self._cache_seconds, result)
+        return result
+
+    def _get_fallback_overview(self) -> PlatformOverviewData:
         return PlatformOverviewData(
             platform_status="平台服务正常",
             pending_batch_count=2,

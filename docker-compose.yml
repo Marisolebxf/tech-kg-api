@@ -59,6 +59,25 @@ services:
       OPERATOR_S3_ACCESS_KEY_ID: ${OPERATOR_S3_ACCESS_KEY_ID:-rustfsadmin}
       OPERATOR_S3_SECRET_ACCESS_KEY: ${OPERATOR_S3_SECRET_ACCESS_KEY:-rustfsadmin}
       OPERATOR_S3_REGION: ${OPERATOR_S3_REGION:-us-east-1}
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      AUTH_SESSION_BACKEND: redis
+      AUTH_SESSION_COOKIE: ${AUTH_SESSION_COOKIE:-techkg_session}
+      AUTH_SESSION_TTL_SECONDS: ${AUTH_SESSION_TTL_SECONDS:-604800}
+      AUTH_STATE_TTL_SECONDS: ${AUTH_STATE_TTL_SECONDS:-300}
+      AUTH_AUDIT_TTL_SECONDS: ${AUTH_AUDIT_TTL_SECONDS:-7776000}
+      AUTH_AUDIT_MAX_ITEMS: ${AUTH_AUDIT_MAX_ITEMS:-200}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-true}
+      AUTH_COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-lax}
+      AUTH_COOKIE_PATH: ${AUTH_COOKIE_PATH:-/bkg_zp}
+      AUTH_FRONTEND_URL: ${AUTH_FRONTEND_URL:-https://edu.itic-sci.com/bkg_zp}
+      USER_CENTER_SSO_LOGIN_URL: ${USER_CENTER_SSO_LOGIN_URL:-https://edu.itic-sci.com/uc/sso/login}
+      USER_CENTER_OAUTH_BASE_URL: ${USER_CENTER_OAUTH_BASE_URL:-https://edu.itic-sci.com/uc/admin-api/system/oauth2}
+      USER_CENTER_ACCOUNT_URL: ${USER_CENTER_ACCOUNT_URL:-https://edu.itic-sci.com/uc/admin/login?redirect=/index}
+      USER_CENTER_CLIENT_ID: ${USER_CENTER_CLIENT_ID:-}
+      USER_CENTER_CLIENT_SECRET: ${USER_CENTER_CLIENT_SECRET:-}
+      USER_CENTER_REDIRECT_URI: ${USER_CENTER_REDIRECT_URI:-https://edu.itic-sci.com/bkg_zp/api/v1/auth/callback}
+      USER_CENTER_SCOPE: ${USER_CENTER_SCOPE:-user_info}
+      REDIS_URL: ${REDIS_URL:-redis://auth-redis:6379/0}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -74,6 +93,8 @@ services:
         # api 启动不依赖 m3e（仅专利 embedding 接口运行时 HTTP 调用），
         # 改 service_started 避免全新环境等 m3e 下载模型超 healthcheck 导致 api 起不来。
         condition: service_started
+      auth-redis:
+        condition: service_healthy
       temporal:
         condition: service_started
     networks:
@@ -170,6 +191,21 @@ services:
       - workflow-state:/var/lib/tech-kg
     depends_on:
       - temporal
+  auth-redis:
+    image: redis:7.4-alpine
+    container_name: tech-kg-auth-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - auth-redis-data:/data
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   schema-minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     container_name: tech-kg-schema-minio
@@ -196,6 +232,8 @@ services:
       context: ./frontend
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        VITE_BASE: ${VITE_BASE:-./}
+        VITE_API_BASE: ${VITE_API_BASE:-/api}
     container_name: tech-kg-web
     ports:
       - "8088:80"
@@ -311,6 +349,7 @@ volumes:
   patent-index-state:
   operator-data:
   operator-rustfs-data:
+  auth-redis-data:
 
 networks:
   app:

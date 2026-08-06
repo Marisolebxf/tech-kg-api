@@ -24,7 +24,7 @@ import KgGraphCanvas from '../../../components/kg-graph-canvas.vue'
 import { useToast } from '../../../composables/use-toast'
 import { getEdgeProvenance, getNodeProvenance, getServiceGraphPreset } from '../../../data/graph-presets'
 import type { GraphEdgeData, GraphNodeData } from '../../../data/graph-presets'
-import type { ServiceModule } from '../service-modules'
+import type { ServiceModule, ServiceSummaryRow } from '../service-modules'
 import {
   buildIndirectRelationGraph,
   indirectSummaryRows,
@@ -55,12 +55,6 @@ const indirectResult = ref<ExpertIndirectRelationResult | null>(null)
 const liveResponse = ref<Record<string, unknown> | null>(null)
 const liveGraph = ref<{ nodes: GraphNodeData[], edges: GraphEdgeData[] } | null>(null)
 const runError = ref('')
-const graphPreset = computed(() => getServiceGraphPreset(props.moduleInfo.key))
-const graphNodes = computed(() => liveGraph.value?.nodes ?? graphPreset.value.nodes)
-const graphEdges = computed(() => (liveGraph.value?.edges ?? graphPreset.value.edges).filter((edge) => (
-  graphNodes.value.some((node) => node.id === edge.from) &&
-  graphNodes.value.some((node) => node.id === edge.to)
-)))
 const isPaperCooperation = computed(() => props.moduleInfo.key === 'paper-cooperation')
 const isIndirectRelation = computed(() => props.moduleInfo.key === 'node-indirect')
 const liveAlumniResult = ref<AlumniQueryResult | null>(null)
@@ -110,6 +104,51 @@ function mapLiveGraph(nodes: Array<{
       category: edge.category,
     })),
   }
+}
+
+function buildAlumniGraph(data: AlumniQueryResult | null): { nodes: GraphNodeData[]; edges: GraphEdgeData[] } | null {
+  if (!data) return null
+  const items = data.items.slice(0, 12)
+  const cx = 220
+  const cy = 200
+  const nodes: GraphNodeData[] = [{
+    id: data.expert.id,
+    label: data.expert.name || data.expert.id.slice(0, 12),
+    nodeType: 'main',
+    x: cx,
+    y: cy,
+    entityType: '科技专家',
+    confidence: 1,
+    relations: `校友 ${data.total}`,
+    evidence: [`mode=${data.mode}`, `educations=${data.expert.educations?.length ?? 0}`],
+  }]
+  const edges: GraphEdgeData[] = []
+  items.forEach((item, index) => {
+    const angle = (Math.PI * 2 * index) / Math.max(items.length, 1) - Math.PI / 2
+    const radius = 180
+    nodes.push({
+      id: item.alumniId,
+      label: item.name || item.alumniId.slice(0, 12),
+      nodeType: 'expert',
+      x: cx + Math.cos(angle) * radius + 200,
+      y: cy + Math.sin(angle) * radius,
+      entityType: '校友专家',
+      confidence: 0.9,
+      relations: item.dimensions.join('、') || '同校',
+      evidence: [
+        `shared=${item.sharedInstitutions.join('/') || '-'}`,
+        item.interactions?.summary || '无互动',
+      ],
+    })
+    edges.push({
+      id: `alumni-${data.expert.id}-${item.alumniId}`,
+      from: data.expert.id,
+      to: item.alumniId,
+      label: item.dimensions[0] || '校友',
+      category: '校友',
+    })
+  })
+  return { nodes, edges }
 }
 
 const graphPreset = computed(() => getServiceGraphPreset(props.moduleInfo.key))
@@ -450,7 +489,6 @@ const detailRows = computed(() => {
   if (isPaperCooperation.value && paperResult.value) {
     return paperSummaryRows(paperResult.value)
   }
-  return props.moduleInfo.summaryRows.map((row) => {
   const rows = liveSummaryRows.value ?? props.moduleInfo.summaryRows
   return rows.map((row) => {
     if (row.label === '更新状态' && isPanorama.value) {
@@ -544,10 +582,27 @@ function resetParameters() {
   showToast('已重置为默认参数', 'info')
 }
 
+function optionalParam(value: string | undefined): string | undefined {
+  const cleaned = value?.trim()
+  return cleaned ? cleaned : undefined
+}
+
+/** 解析「2020-2026」「2020~2026」「2020/2026」或单边「2020」为 API 起止时间。 */
+function parseTimeRange(raw: string | undefined): { start?: string; end?: string } {
+  if (!raw) return {}
+  const parts = raw.split(/\s*[-~/～至到]\s*/).map((x) => x.trim()).filter(Boolean)
+  if (parts.length >= 2) return { start: parts[0], end: parts[1] }
+  if (parts.length === 1) return { start: parts[0] }
+  return {}
+}
+
 async function handleRun() {
+  if (running.value) return
   running.value = true
   runError.value = ''
-  if (!isPaperCooperation.value && !isIndirectRelation.value) {
+  liveError.value = null
+
+  if (!isPaperCooperation.value && !isIndirectRelation.value && !isLiveModule.value) {
     window.setTimeout(() => {
       const now = new Date()
       lastTestTime.value = formatTimestamp(now)
@@ -568,7 +623,7 @@ async function handleRun() {
       indirectResult.value = response.structuredResult
       liveResponse.value = { ...response }
       liveGraph.value = buildIndirectRelationGraph(response.structuredResult)
-    } else {
+    } else if (isPaperCooperation.value) {
       const response = await analyzeExpertPaperCooperation({
         dataSource: 'knowledge_graph',
         expertAId: (parameterValues.value.expertAId || '').trim(),
@@ -579,75 +634,7 @@ async function handleRun() {
       paperResult.value = response.structuredResult
       liveResponse.value = { ...response }
       liveGraph.value = buildPaperCooperationGraph(response.structuredResult)
-    }
-    selectedGraphNodeId.value = null
-    selectedGraphEdgeId.value = null
-    resultMode.value = 'summary'
-function buildAlumniGraph(data: AlumniQueryResult | null): { nodes: GraphNodeData[]; edges: GraphEdgeData[] } | null {
-  if (!data) return null
-  const items = data.items.slice(0, 12)
-  const cx = 220
-  const cy = 200
-  const nodes: GraphNodeData[] = [{
-    id: data.expert.id,
-    label: data.expert.name || data.expert.id.slice(0, 12),
-    nodeType: 'main',
-    x: cx,
-    y: cy,
-    entityType: '科技专家',
-    confidence: 1,
-    relations: `校友 ${data.total}`,
-    evidence: [`mode=${data.mode}`, `educations=${data.expert.educations?.length ?? 0}`],
-  }]
-  const edges: GraphEdgeData[] = []
-  items.forEach((item, index) => {
-    const angle = (Math.PI * 2 * index) / Math.max(items.length, 1) - Math.PI / 2
-    const radius = 180
-    nodes.push({
-      id: item.alumniId,
-      label: item.name || item.alumniId.slice(0, 12),
-      nodeType: 'expert',
-      x: cx + Math.cos(angle) * radius + 200,
-      y: cy + Math.sin(angle) * radius,
-      entityType: '校友专家',
-      confidence: 0.9,
-      relations: item.dimensions.join('、') || '同校',
-      evidence: [
-        `shared=${item.sharedInstitutions.join('/') || '-'}`,
-        item.interactions?.summary || '无互动',
-      ],
-    })
-    edges.push({
-      id: `alumni-${data.expert.id}-${item.alumniId}`,
-      from: data.expert.id,
-      to: item.alumniId,
-      label: item.dimensions[0] || '校友',
-      category: '校友',
-    })
-  })
-  return { nodes, edges }
-}
-
-function optionalParam(value: string | undefined): string | undefined {
-  const cleaned = value?.trim()
-  return cleaned ? cleaned : undefined
-}
-
-/** 解析「2020-2026」「2020~2026」「2020/2026」或单边「2020」为 API 起止时间。 */
-function parseTimeRange(raw: string | undefined): { start?: string; end?: string } {
-  if (!raw) return {}
-  const parts = raw.split(/\s*[-~/～至到]\s*/).map((x) => x.trim()).filter(Boolean)
-  if (parts.length >= 2) return { start: parts[0], end: parts[1] }
-  if (parts.length === 1) return { start: parts[0] }
-  return {}
-}
-
-async function handleRun() {
-  if (running.value) return
-  running.value = true
-  liveError.value = null
-  try {
-    if (isLiveAlumni.value) {
+    } else if (isLiveAlumni.value) {
       const expertId = parameterValues.value.expertId?.trim()
       if (!expertId) {
         showToast('请填写 expertId', 'warning')
@@ -747,6 +734,9 @@ async function handleRun() {
     const now = new Date()
     lastTestTime.value = formatTimestamp(now)
     lastUpdateTime.value = now.getTime()
+    selectedGraphNodeId.value = null
+    selectedGraphEdgeId.value = null
+    resultMode.value = 'summary'
   } catch (error) {
     runError.value = error instanceof Error ? `执行失败：${error.message}` : '执行失败：接口调用异常'
     resultMode.value = 'summary'

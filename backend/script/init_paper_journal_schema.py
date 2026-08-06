@@ -56,7 +56,9 @@ EDGE_DDL = [
     )""",
     """CREATE EDGE IF NOT EXISTS RELATED_TO()""",
     """CREATE EDGE IF NOT EXISTS AFFILIATED_WITH(
-        affiliation_name string, source string
+        affiliation_name string, source string,
+        work_experience_date string, work_experience_department_zh string,
+        work_experience_position_zh string
     )""",
     """CREATE EDGE IF NOT EXISTS HAS_KEYWORD()""",
     """CREATE EDGE IF NOT EXISTS OUTPUT_OF()""",

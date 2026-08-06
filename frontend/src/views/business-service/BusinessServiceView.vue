@@ -14,7 +14,7 @@ const moduleInfo = computed(() => getServiceModule(selectedModuleKey.value || St
 const requestJson = computed(() => JSON.stringify(moduleInfo.value.requestExample, null, 2))
 const responseJson = computed(() => JSON.stringify(moduleInfo.value.responseExample, null, 2))
 const curlSample = computed(
-  () => `curl -X ${moduleInfo.value.method} "https://api.example.com${moduleInfo.value.endpoint}" \\
+  () => `curl -X ${moduleInfo.value.method} "${moduleInfo.value.endpoint}" \\
   -H "Content-Type: application/json" \\
   -d '${requestJson.value.replaceAll("'", "\\'")}'`,
 )

@@ -146,3 +146,58 @@ export const submitManualReview = (id: string, data: { actionId: string; note: s
 export const retryManualReview = (id: string, payload: Record<string, unknown> = {}) => unwrap(http.post(`/v1/manual-reviews/${id}/retry`, { payload })) as Promise<{ id: string; status: string }>
 export const modifyManualReviewResult = (id: string, result: Record<string, unknown>, note = '') => unwrap(http.put(`/v1/manual-reviews/${id}/result`, { result, note })) as Promise<ReviewRecord>
 export const revokeManualReview = (id: string, reason: string) => unwrap(http.post(`/v1/manual-reviews/${id}/revoke`, { reason })) as Promise<ReviewRecord>
+
+// ---- 工作流定义、Python 脚本上传与执行（任务中心提交脚本用） ----
+
+export interface WorkflowDefinition {
+  id: string
+  name: string
+  workflowType: string
+  category?: string
+  sourceKind?: string
+  functionName?: string
+  scriptPath?: string
+  timeoutSeconds?: number
+  active?: boolean
+  steps?: unknown[]
+  createdAt?: string
+}
+
+export interface WorkflowExecution {
+  id: string
+  definitionId: string
+  workflowId: string
+  runId?: string
+  status: string
+  startedAt: string
+  completedAt?: string
+  payload?: Record<string, unknown>
+  dispatchMode?: string
+  message?: string
+}
+
+export const listDefinitions = () =>
+  unwrap(http.get('/v1/workflow-system/definitions')) as Promise<{ items: WorkflowDefinition[]; total: number }>
+
+export const getDefinition = (id: string) =>
+  unwrap(http.get(`/v1/workflow-system/definitions/${id}`)) as Promise<WorkflowDefinition>
+
+export const uploadPythonDefinition = (
+  file: File,
+  functionName = 'workflow',
+  options: { definitionId?: string; name?: string; timeoutSeconds?: number } = {},
+) => {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('function_name', functionName)
+  if (options.definitionId) form.append('definition_id', options.definitionId)
+  if (options.name) form.append('name', options.name)
+  if (options.timeoutSeconds) form.append('timeoutSeconds', String(options.timeoutSeconds))
+  return unwrap(http.post('/v1/workflow-system/definitions/python', form)) as Promise<WorkflowDefinition>
+}
+
+export const executeDefinition = (id: string, payload: Record<string, unknown> = {}, workflowId?: string) =>
+  unwrap(http.post(`/v1/workflow-system/definitions/${id}/execute`, { payload, workflow_id: workflowId })) as Promise<WorkflowExecution>
+
+export const getExecution = (executionId: string) =>
+  unwrap(http.get(`/v1/workflow-system/executions/${executionId}`)) as Promise<WorkflowExecution>

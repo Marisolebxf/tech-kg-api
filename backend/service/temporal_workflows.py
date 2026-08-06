@@ -10,6 +10,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
 from temporalio import activity, workflow
 
 
@@ -64,6 +65,14 @@ if inspect.isawaitable(result):
     result = asyncio.run(result)
 print(json.dumps(result, ensure_ascii=False))
 """
+    # 上传脚本需要 backend 模块（infra/dao/script）与凭据（MySQL/TRSGraph）。
+    # worker 进程不 import infra，故这里显式加载 backend/.env，并把 backend 目录加入 PYTHONPATH。
+    # 平台已声明上传脚本具备服务器进程权限（见 docs/workflow_operations_api.md），透传 env 不降低安全面。
+    # BACKEND_DIR 在 activity 内计算（workflow sandbox 禁止模块顶层 Path.resolve）。
+    backend_dir = Path(__file__).resolve().parents[1]
+    load_dotenv(backend_dir / ".env")
+    pythonpath = os.pathsep.join(filter(None, [str(backend_dir), str(script_path.parent)]))
+    sub_env = {**os.environ, "PYTHONPATH": pythonpath}
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         "-c",
@@ -73,7 +82,7 @@ print(json.dumps(result, ensure_ascii=False))
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env={"PATH": os.getenv("PATH", ""), "PYTHONPATH": str(script_path.parent)},
+        env=sub_env,
     )
     try:
         stdout, stderr = await asyncio.wait_for(

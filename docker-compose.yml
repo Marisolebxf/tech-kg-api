@@ -90,7 +90,9 @@ services:
       operator-rustfs:
         condition: service_healthy
       m3e-embedding:
-        condition: service_healthy
+        # api 启动不依赖 m3e（仅专利 embedding 接口运行时 HTTP 调用），
+        # 改 service_started 避免全新环境等 m3e 下载模型超 healthcheck 导致 api 起不来。
+        condition: service_started
       auth-redis:
         condition: service_healthy
       temporal:

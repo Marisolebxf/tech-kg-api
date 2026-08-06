@@ -2,15 +2,19 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
+  executeDefinition,
+  getExecution,
   getSourceUpdates,
   getTaskBatches,
   getTaskOverview,
   getTasks,
   saveUpdatePolicy,
   triggerGraphBuild,
+  uploadPythonDefinition,
   type ProcessingInstance,
   type SourceUpdate,
   type UpdateBatch,
+  type WorkflowExecution,
 } from '../../api/workflowOperations'
 
 const route = useRoute()
@@ -119,6 +123,104 @@ async function runImmediateUpdate() {
   }
 }
 
+// ---- 提交 Python 脚本到工作流平台 ----
+const scriptDialogOpen = ref(false)
+const scriptFile = ref<File | null>(null)
+const scriptFunction = ref('workflow')
+const scriptTimeout = ref(120)
+const scriptPayload = ref('{"limit":5,"dry_run":true}')
+const scriptDefinitionId = ref('')
+const scriptExecution = ref<WorkflowExecution | null>(null)
+const scriptBusy = ref(false)
+const scriptNotice = ref('')
+let scriptTimer: ReturnType<typeof setInterval> | null = null
+
+function openScriptDialog() {
+  scriptDialogOpen.value = true
+  scriptNotice.value = ''
+  scriptExecution.value = null
+}
+
+function onScriptFile(event: Event) {
+  const target = event.target as HTMLInputElement
+  scriptFile.value = target.files?.[0] ?? null
+}
+
+async function uploadScript() {
+  if (!scriptFile.value) {
+    scriptNotice.value = '请先选择 .py 脚本文件'
+    return
+  }
+  scriptBusy.value = true
+  scriptNotice.value = '上传中…'
+  try {
+    const definition = await uploadPythonDefinition(scriptFile.value, scriptFunction.value, {
+      timeoutSeconds: scriptTimeout.value,
+    })
+    scriptDefinitionId.value = definition.id
+    scriptNotice.value = `已上传并校验通过，definitionId=${definition.id}，可执行。`
+  } catch (error) {
+    scriptNotice.value = error instanceof Error ? error.message : '脚本上传失败'
+  } finally {
+    scriptBusy.value = false
+  }
+}
+
+async function executeScript() {
+  if (!scriptDefinitionId.value) {
+    scriptNotice.value = '请先上传脚本生成 definition'
+    return
+  }
+  let payload: Record<string, unknown> = {}
+  try {
+    payload = scriptPayload.value.trim() ? JSON.parse(scriptPayload.value) : {}
+  } catch {
+    scriptNotice.value = 'payload 不是合法 JSON'
+    return
+  }
+  scriptBusy.value = true
+  scriptNotice.value = '执行下发中…'
+  try {
+    const execution = await executeDefinition(scriptDefinitionId.value, payload)
+    scriptExecution.value = execution
+    scriptNotice.value = `已下发，executionId=${execution.id}，状态=${execution.status}。轮询中…`
+    startPolling(execution.id)
+  } catch (error) {
+    scriptNotice.value = error instanceof Error ? error.message : '执行下发失败'
+  } finally {
+    scriptBusy.value = false
+  }
+}
+
+function startPolling(executionId: string) {
+  stopPolling()
+  scriptTimer = setInterval(async () => {
+    try {
+      const latest = await getExecution(executionId)
+      scriptExecution.value = latest
+      if (['COMPLETED', 'FAILED', 'QUEUED'].includes(latest.status)) {
+        stopPolling()
+        scriptNotice.value = `执行结束，状态=${latest.status}。${latest.message || ''}`
+      }
+    } catch (error) {
+      stopPolling()
+      scriptNotice.value = error instanceof Error ? error.message : '轮询执行状态失败'
+    }
+  }, 2000)
+}
+
+function stopPolling() {
+  if (scriptTimer) {
+    clearInterval(scriptTimer)
+    scriptTimer = null
+  }
+}
+
+function closeScriptDialog() {
+  stopPolling()
+  scriptDialogOpen.value = false
+}
+
 watch(() => route.query.status, (value) => { statusFilter.value = String(value || '全部执行状态') })
 watch(() => route.query.batch, (value) => { batchFilter.value = String(value || '全部更新批次') })
 watch(() => route.query.module, (value) => {
@@ -135,7 +237,7 @@ onMounted(loadData)
       <div class="auto-update-body">
         <article class="latest-change"><span>最近一次检测 · 共 {{ changeSummary.total.toLocaleString() }} 条源数据变化</span><strong>新增 {{ changeSummary.added.toLocaleString() }}　修改 {{ changeSummary.updated.toLocaleString() }}　删除 {{ changeSummary.deleted.toLocaleString() }}</strong><p><b>论文 / 人才 / 专利 / 项目</b></p><button type="button" @click="changeDrawerOpen=true">查看具体变更数据 →</button></article>
         <article class="update-schedule"><span>自动更新策略</span><strong>{{ scheduleFrequency }} {{ scheduleTime }} 检测并更新</strong><p>下一次：2026-07-15 {{ scheduleTime }} · 无变化则不创建更新批次</p></article>
-        <div v-if="canManageUpdates" class="update-actions"><button type="button" @click="scheduleDialogOpen=true">更新策略</button><button type="button" @click="runImmediateUpdate">紧急更新</button><small>需图谱更新权限</small></div>
+        <div v-if="canManageUpdates" class="update-actions"><button type="button" @click="scheduleDialogOpen=true">更新策略</button><button type="button" @click="runImmediateUpdate">紧急更新</button><button type="button" class="primary" @click="openScriptDialog">提交 Python 脚本</button><small>需图谱更新权限</small></div>
       </div>
     </section>
     <p v-if="updateNotice" class="update-feedback">{{ updateNotice }}</p>
@@ -172,6 +274,25 @@ onMounted(loadData)
       <footer><button type="button" @click="scheduleDialogOpen=false">取消</button><button class="primary" type="button" @click="saveUpdateSchedule">保存策略</button></footer>
     </aside>
 
+    <button v-if="scriptDialogOpen" class="task-update-mask" type="button" aria-label="关闭脚本提交" @click="closeScriptDialog" />
+    <aside v-if="scriptDialogOpen" class="script-dialog schedule-dialog">
+      <header><div><span>工作流平台</span><h2>提交 Python 脚本</h2></div><button type="button" @click="closeScriptDialog">×</button></header>
+      <div class="script-form">
+        <label class="script-file"><span>脚本文件 (.py)</span><input type="file" accept=".py" @change="onScriptFile" /><small>{{ scriptFile?.name || '未选择' }}</small></label>
+        <label><span>函数名</span><input v-model="scriptFunction" placeholder="workflow" /></label>
+        <label><span>超时(秒)</span><input v-model.number="scriptTimeout" type="number" min="1" /></label>
+        <label class="script-payload"><span>payload (JSON)</span><textarea v-model="scriptPayload" rows="3" /></label>
+        <section><strong>说明</strong><p>脚本需定义 <code>{{ scriptFunction }}(payload)</code> 函数；上传后在隔离子进程执行，可 import infra/dao/script，凭据由平台注入。先上传生成 definition，再执行。</p></section>
+      </div>
+      <footer>
+        <button type="button" @click="closeScriptDialog">取消</button>
+        <button type="button" :disabled="scriptBusy" @click="uploadScript">{{ scriptBusy ? '处理中…' : '上传脚本' }}</button>
+        <button class="primary" type="button" :disabled="scriptBusy || !scriptDefinitionId" @click="executeScript">执行</button>
+      </footer>
+      <p v-if="scriptNotice" class="script-notice">{{ scriptNotice }}</p>
+      <pre v-if="scriptExecution" class="script-execution">{{ JSON.stringify(scriptExecution, null, 2) }}</pre>
+    </aside>
+
   </div>
 </template>
 
@@ -191,4 +312,5 @@ onMounted(loadData)
 .task-filter--batch{grid-template-columns:minmax(320px,1fr) 170px 150px auto}.stage-state{display:inline-flex;padding:2px 7px;border-radius:999px;background:#eaf2ff;color:#175cd3;font-size:10px}.stage-state.is-已完成{background:#dcfae6;color:#067647}.stage-state.is-待审核{background:#fff3d8;color:#b54708}.status.is-待审核{background:#fee4e2;color:#b42318}.status.is-处理中{background:#eaf2ff;color:#175cd3}.danger-text{color:#b42318}.task-table td small code{font-size:9px}
 .stage-state.is-已阻断{background:#fee4e2;color:#b42318}
 .execution-success,.execution-interrupted{display:inline-flex;padding:2px 7px;border-radius:999px;font-size:10px}.execution-success{background:#dcfae6;color:#067647}.execution-interrupted{background:#fee4e2;color:#b42318}.task-table td{vertical-align:middle}
+.script-dialog{width:min(640px,calc(100vw - 40px))}.script-form{display:grid;gap:12px;padding:17px}.script-form label{display:grid;gap:5px}.script-form label span{color:#60708a;font-size:10px}.script-form input,.script-form textarea,.script-form select{width:100%;padding:7px 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font-size:11px;font-family:inherit}.script-form textarea{resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.script-form .script-file small{color:#8290a7;font-size:9px}.script-form section{padding:11px;border:1px solid #d6e3f4;border-radius:6px;background:#fff}.script-form section strong{font-size:11px}.script-form section p{margin:5px 0 0;color:#687892;font-size:10px;line-height:17px}.script-form section code{padding:1px 5px;border-radius:4px;background:#eef5ff;color:#175cd3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.script-notice{margin:0;padding:11px 17px;border-top:1px solid #dce8f8;background:#eef5ff;color:#315b95;font-size:10px;line-height:16px}.script-execution{margin:0;padding:13px 17px;max-height:220px;overflow:auto;background:#0f1b2e;color:#cfe2ff;font-size:10px;line-height:15px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 </style>

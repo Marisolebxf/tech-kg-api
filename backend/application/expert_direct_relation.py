@@ -8,7 +8,7 @@ class ExpertDirectRelationApplication:
     def describe(self) -> dict[str, object]:
         return self._service.describe()
 
-    def query(
+    async def query(
         self,
         *,
         data_source: str = "all",
@@ -19,7 +19,7 @@ class ExpertDirectRelationApplication:
         end_time: str | None = None,
         limit: int = 10,
     ) -> dict[str, object]:
-        return self._service.query(
+        return await self._service.query(
             data_source=data_source,
             expert_a_id=expert_a_id,
             expert_b_id=expert_b_id,

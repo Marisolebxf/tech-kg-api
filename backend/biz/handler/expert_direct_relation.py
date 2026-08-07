@@ -23,7 +23,7 @@ async def describe_expert_direct_relation() -> dict[str, object]:
 async def query_expert_direct_relation(
     body: ExpertDirectRelationQueryRequest,
 ) -> dict[str, object]:
-    return application.query(
+    return await application.query(
         data_source=body.dataSource,
         expert_a_id=body.expertAId,
         expert_b_id=body.expertBId,
@@ -44,7 +44,7 @@ async def query_expert_direct_relation_get(
     endTime: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1)] = 10,
 ) -> dict[str, object]:
-    return application.query(
+    return await application.query(
         data_source=dataSource,
         expert_a_id=expertAId,
         expert_b_id=expertBId,

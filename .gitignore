@@ -41,3 +41,6 @@ backend/output/organization_graph/
 docs/superpowers/
 backend/app/
 /app/
+
+# 算子运行时缓存（提交 backend/operators/scholar/ 作为源码，此目录由 FastAPI 上传时生成）
+backend/operators/user/

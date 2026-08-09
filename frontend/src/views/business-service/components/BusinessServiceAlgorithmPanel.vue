@@ -1,18 +1,30 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
+import {
+  describeExpertAlumniRelation,
+  queryExpertAlumniRelation,
+  type AlumniQueryResult,
+} from '../../../api/expertAlumniRelation'
+import {
+  describeExpertCooperationAchievement,
+  queryExpertCooperationAchievement,
+  type CooperationQueryResult,
+} from '../../../api/expertCooperationAchievement'
 import iconInfo from '../../../assets/icons/icon-info.svg'
 import KgGraphCanvas from '../../../components/kg-graph-canvas.vue'
+import { useToast } from '../../../composables/use-toast'
 import { getEdgeProvenance, getNodeProvenance, getServiceGraphPreset } from '../../../data/graph-presets'
 import type { GraphEdgeData, GraphNodeData } from '../../../data/graph-presets'
 import { invokeKgService } from '../../../api/kgService'
-import type { ServiceModule } from '../service-modules'
+import type { ServiceModule, ServiceSummaryRow } from '../service-modules'
 
 const props = defineProps<{
   moduleInfo: ServiceModule
   responseJson: string
 }>()
 
+const { showToast } = useToast()
 const resultMode = ref<'summary' | 'entity' | 'relation' | 'provenance' | 'rule' | 'api'>('summary')
 const running = ref(false)
 const lastTestTime = ref('—')
@@ -24,8 +36,58 @@ const panoramaLayer = ref(3)
 const panoramaRelation = ref('all')
 const parameterValues = ref<Record<string, string>>({})
 const liveResponse = ref<Record<string, any> | null>(null)
+const paramResetToken = ref(0)
 const selectedGraphNodeId = ref<string | null>(null)
 const selectedGraphEdgeId = ref<string | null>(null)
+const liveAlumniResult = ref<AlumniQueryResult | null>(null)
+const liveCoopResult = ref<CooperationQueryResult | null>(null)
+const liveApiPayload = ref<unknown>(null)
+const liveError = ref<string | null>(null)
+const liveDescribe = ref<Record<string, unknown> | null>(null)
+const isLiveAlumni = computed(() => props.moduleInfo.key === 'expert-alumni')
+const isLiveCoop = computed(() => props.moduleInfo.key === 'two-point-achievement')
+const isLiveModule = computed(() => isLiveAlumni.value || isLiveCoop.value)
+
+function mapLiveGraph(nodes: Array<{
+  id: string
+  label: string
+  nodeType?: string
+  x?: number
+  y?: number
+  entityType: string
+  confidence: number
+  relations: string
+  evidence: string[]
+  level?: number
+}> | undefined, edges: Array<{ id: string; from: string; to: string; label: string; category: string }> | undefined): {
+  nodes: GraphNodeData[]
+  edges: GraphEdgeData[]
+} | null {
+  if (!nodes?.length) return null
+  const allowed = new Set(['main', 'expert', 'org', 'company', 'paper', 'topic', 'project', 'event'])
+  return {
+    nodes: nodes.map((node) => ({
+      id: node.id,
+      label: node.label,
+      nodeType: (allowed.has(String(node.nodeType)) ? node.nodeType : 'expert') as GraphNodeData['nodeType'],
+      x: node.x ?? 220,
+      y: node.y ?? 200,
+      entityType: node.entityType,
+      confidence: node.confidence ?? 0.9,
+      relations: node.relations ?? '',
+      evidence: node.evidence ?? [],
+      level: node.level,
+    })),
+    edges: (edges || []).map((edge) => ({
+      id: edge.id,
+      from: edge.from,
+      to: edge.to,
+      label: edge.label,
+      category: edge.category,
+    })),
+  }
+}
+
 const graphPreset = computed(() => getServiceGraphPreset(props.moduleInfo.key))
 
 function buildLiveGraph(res: Record<string, any>, key: string): { nodes: GraphNodeData[]; edges: GraphEdgeData[] } | null {
@@ -78,11 +140,36 @@ function buildLiveGraph(res: Record<string, any>, key: string): { nodes: GraphNo
 }
 
 const liveGraph = computed(() => (liveResponse.value ? buildLiveGraph(liveResponse.value, props.moduleInfo.key) : null))
-const graphNodes = computed(() => liveGraph.value?.nodes ?? graphPreset.value.nodes)
-const graphEdges = computed(() => (liveGraph.value?.edges ?? graphPreset.value.edges).filter((edge) => (
-  graphNodes.value.some((node) => node.id === edge.from) &&
-  graphNodes.value.some((node) => node.id === edge.to)
-)))
+const liveModuleGraph = computed(() => {
+  if (isLiveAlumni.value) {
+    const data = liveAlumniResult.value
+    if (!data) return null
+    return mapLiveGraph(data.graph?.nodes, data.graph?.edges) ?? buildAlumniGraph(data)
+  }
+  if (isLiveCoop.value) {
+    const data = liveCoopResult.value
+    if (!data) return null
+    return mapLiveGraph(data.graph?.nodes, data.graph?.edges)
+  }
+  return null
+})
+const graphNodes = computed(() => {
+  if (isLiveModule.value) return liveModuleGraph.value?.nodes ?? []
+  if (liveGraph.value) return liveGraph.value.nodes
+  return graphPreset.value.nodes
+})
+const graphEdges = computed(() => {
+  const nodes = graphNodes.value
+  const edges = isLiveModule.value
+    ? (liveModuleGraph.value?.edges ?? [])
+    : liveGraph.value
+      ? liveGraph.value.edges
+      : graphPreset.value.edges
+  return edges.filter((edge) => (
+    nodes.some((node) => node.id === edge.from) &&
+    nodes.some((node) => node.id === edge.to)
+  ))
+})
 const isPanorama = computed(() => props.moduleInfo.key === 'industry-chain-panorama')
 const panoramaLayerOptions = [
   { value: 1, label: '一级 · 产业环节' },
@@ -237,19 +324,157 @@ function buildLiveSummary(res: Record<string, any>, key: string): Record<string,
   return out
 }
 
+const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
+  if (!isLiveModule.value) return null
+  if (liveError.value) {
+    return [
+      { label: '调用状态', value: '失败' },
+      { label: '错误信息', value: liveError.value },
+    ]
+  }
+  if (isLiveAlumni.value) {
+    const data = liveAlumniResult.value
+    if (!data) {
+      return [
+        { label: '专家', value: '' },
+        { label: '模式', value: '' },
+        { label: '校友数', value: '' },
+        { label: '维度目录', value: '' },
+        { label: '截断', value: '' },
+        { label: '图空间', value: '' },
+      ]
+    }
+    if (data.summaryRows?.length) {
+      return data.summaryRows.map((row) => ({ label: row.label, value: row.value }))
+    }
+  }
+  if (isLiveCoop.value) {
+    const data = liveCoopResult.value
+    if (!data) {
+      return [
+        { label: '专家 A', value: '' },
+        { label: '专家 B', value: '' },
+        { label: '合作成果类型', value: '' },
+        { label: '成果总量', value: '' },
+        { label: '成果分布', value: '' },
+        { label: '核心贡献', value: '' },
+        { label: '合作模式', value: '' },
+        { label: '图空间', value: '' },
+      ]
+    }
+    if (data.summaryRows?.length) {
+      return data.summaryRows.map((row) => ({ label: row.label, value: row.value }))
+    }
+    const s = data.summary
+    return [
+      { label: '专家 A', value: `${data.source.name}（${data.source.id}）` },
+      { label: '专家 B', value: `${data.target.name}（${data.target.id}）` },
+      { label: '成果分布', value: `论文 ${s.papers}、专利 ${s.patents}、项目 ${s.projects}` },
+      { label: '核心贡献', value: data.coreContribution },
+      { label: '合作模式', value: data.cooperationMode },
+    ]
+  }
+  return null
+})
+
+const liveRules = computed(() => {
+  if (isLiveAlumni.value && liveAlumniResult.value?.rules?.length) return liveAlumniResult.value.rules
+  if (isLiveCoop.value && liveCoopResult.value?.rules?.length) return liveCoopResult.value.rules
+  return props.moduleInfo.rules
+})
+
+const liveEntities = computed(() => {
+  if (isLiveAlumni.value) return liveAlumniResult.value?.entities
+  if (isLiveCoop.value) return liveCoopResult.value?.entities
+  return undefined
+})
+
+const liveRelationsList = computed(() => {
+  if (isLiveAlumni.value) return liveAlumniResult.value?.relations
+  if (isLiveCoop.value) return liveCoopResult.value?.relations
+  return undefined
+})
+
+const liveEntityRows = computed(() => {
+  if (!isLiveModule.value) return null
+  const selected = selectedNode.value
+  if (selected) {
+    const rows: Array<readonly [string, string]> = [
+      ['实体名称', selected.label],
+      ['实体类型', selected.entityType],
+      ['命中关系', selected.relations],
+      ['置信度', selected.confidence.toFixed(2)],
+    ]
+    if (selected.evidence?.length) {
+      rows.push(['证据', selected.evidence.join('；')])
+    }
+    return rows
+  }
+  const entities = liveEntities.value
+  if (!entities?.length) return [] as Array<readonly [string, string]>
+  return entities.flatMap((entity, index) => ([
+    [`实体 ${index + 1}`, `${entity.label}（${entity.id}）`] as const,
+    ['类型', entity.entityType] as const,
+    ['关系', entity.relations] as const,
+  ]))
+})
+
+const liveRelationRows = computed(() => {
+  if (!isLiveModule.value) return null
+  if (selectedEdge.value) return relationDetailRows.value
+  const relations = liveRelationsList.value
+  if (!relations?.length) return [] as Array<readonly [string, string]>
+  return relations.flatMap((rel, index) => {
+    const rows: Array<readonly [string, string]> = [
+      [`关系 ${index + 1}`, `${rel.fromName || rel.from} → ${rel.toName || rel.to}`],
+      ['类型', rel.label],
+    ]
+    if ('dimensions' in rel && Array.isArray(rel.dimensions)) {
+      rows.push(['维度', rel.dimensions.join('、') || '—'])
+    }
+    if ('sharedInstitutions' in rel && Array.isArray(rel.sharedInstitutions)) {
+      rows.push(['院校', rel.sharedInstitutions.join('、') || '—'])
+    }
+    if ('summary' in rel && typeof rel.summary === 'string') {
+      rows.push(['摘要', rel.summary || '—'])
+    }
+    if ('interactions' in rel && rel.interactions && typeof rel.interactions === 'object') {
+      const summary = (rel.interactions as { summary?: string }).summary
+      rows.push(['互动', summary || '—'])
+    }
+    return rows
+  })
+})
+
+const liveProvenance = computed(() => {
+  if (isLiveAlumni.value) return liveAlumniResult.value?.provenance ?? null
+  if (isLiveCoop.value) return liveCoopResult.value?.provenance ?? null
+  return null
+})
+
 const detailRows = computed(() => {
+  // enterprise-relation / industry-chain-event：用 buildLiveSummary 覆盖静态 summaryRows
   const live = liveResponse.value ? buildLiveSummary(liveResponse.value, props.moduleInfo.key) : {}
-  return props.moduleInfo.summaryRows.map((row) => {
+  // expert-alumni / two-point-achievement：用 liveSummaryRows 整套替换
+  const rows = liveSummaryRows.value ?? props.moduleInfo.summaryRows
+  return rows.map((row) => {
     if (row.label === '更新状态' && isPanorama.value) {
       return [row.label, updateStatus.value] as const
     }
     return [row.label, row.label in live ? live[row.label] : row.value] as const
   })
 })
-const apiResultJson = computed(() => JSON.stringify({
-  ...(liveResponse.value ?? JSON.parse(props.responseJson)),
-  request_params: parameterValues.value,
-}, null, 2))
+const apiResultJson = computed(() => JSON.stringify(
+  liveResponse.value
+    ? { ...liveResponse.value, request_params: parameterValues.value }
+    : liveApiPayload.value ?? {
+        describe: liveDescribe.value,
+        ...JSON.parse(props.responseJson),
+        request_params: parameterValues.value,
+      },
+  null,
+  2,
+))
 
 watch(
   () => props.moduleInfo.key,
@@ -260,11 +485,32 @@ watch(
     selectedGraphNodeId.value = null
     selectedGraphEdgeId.value = null
     liveResponse.value = null
+    liveAlumniResult.value = null
+    liveCoopResult.value = null
+    liveApiPayload.value = null
+    liveError.value = null
+    liveDescribe.value = null
     resetParameters()
     autoRefresh.value = false
+    if (isLiveModule.value) {
+      void loadModuleDescribe()
+    }
   },
   { immediate: true },
 )
+
+async function loadModuleDescribe() {
+  try {
+    const meta = isLiveAlumni.value
+      ? await describeExpertAlumniRelation() as unknown as Record<string, unknown>
+      : await describeExpertCooperationAchievement() as unknown as Record<string, unknown>
+    liveDescribe.value = meta
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '模块描述接口失败'
+    liveDescribe.value = { status: 'error', msg: message }
+    showToast(`模块描述接口异常：${message}`, 'warning')
+  }
+}
 
 watch([panoramaLayer, panoramaRelation], () => {
   if (!isPanorama.value) return
@@ -276,7 +522,8 @@ watch([panoramaLayer, panoramaRelation], () => {
 function formatValue(value: unknown) {
   if (Array.isArray(value)) return value.join('、')
   if (typeof value === 'boolean') return value ? '是' : '否'
-  return String(value ?? '-')
+  if (value === undefined || value === null) return ''
+  return String(value)
 }
 
 function resetParameters() {
@@ -286,6 +533,20 @@ function resetParameters() {
       formatValue(props.moduleInfo.requestExample[field.name]),
     ]),
   )
+  paramResetToken.value += 1
+  if (isLiveModule.value) {
+    liveAlumniResult.value = null
+    liveCoopResult.value = null
+    liveApiPayload.value = null
+    liveError.value = null
+    selectedGraphNodeId.value = null
+    selectedGraphEdgeId.value = null
+    resultMode.value = 'summary'
+    lastTestTime.value = '—'
+    lastUpdateTime.value = null
+    void loadModuleDescribe()
+  }
+  showToast('已重置为默认参数', 'info')
 }
 
 function buildPayload(): Record<string, unknown> {
@@ -298,19 +559,199 @@ function buildPayload(): Record<string, unknown> {
   return payload
 }
 
+function buildAlumniGraph(data: AlumniQueryResult | null): { nodes: GraphNodeData[]; edges: GraphEdgeData[] } | null {
+  if (!data) return null
+  const items = data.items.slice(0, 12)
+  const cx = 220
+  const cy = 200
+  const nodes: GraphNodeData[] = [{
+    id: data.expert.id,
+    label: data.expert.name || data.expert.id.slice(0, 12),
+    nodeType: 'main',
+    x: cx,
+    y: cy,
+    entityType: '科技专家',
+    confidence: 1,
+    relations: `校友 ${data.total}`,
+    evidence: [`mode=${data.mode}`, `educations=${data.expert.educations?.length ?? 0}`],
+  }]
+  const edges: GraphEdgeData[] = []
+  items.forEach((item, index) => {
+    const angle = (Math.PI * 2 * index) / Math.max(items.length, 1) - Math.PI / 2
+    const radius = 180
+    nodes.push({
+      id: item.alumniId,
+      label: item.name || item.alumniId.slice(0, 12),
+      nodeType: 'expert',
+      x: cx + Math.cos(angle) * radius + 200,
+      y: cy + Math.sin(angle) * radius,
+      entityType: '校友专家',
+      confidence: 0.9,
+      relations: item.dimensions.join('、') || '同校',
+      evidence: [
+        `shared=${item.sharedInstitutions.join('/') || '-'}`,
+        item.interactions?.summary || '无互动',
+      ],
+    })
+    edges.push({
+      id: `alumni-${data.expert.id}-${item.alumniId}`,
+      from: data.expert.id,
+      to: item.alumniId,
+      label: item.dimensions[0] || '校友',
+      category: '校友',
+    })
+  })
+  return { nodes, edges }
+}
+
+function optionalParam(value: string | undefined): string | undefined {
+  const cleaned = value?.trim()
+  return cleaned ? cleaned : undefined
+}
+
+/** 解析「2020-2026」「2020~2026」「2020/2026」或单边「2020」为 API 起止时间。 */
+function parseTimeRange(raw: string | undefined): { start?: string; end?: string } {
+  if (!raw) return {}
+  const parts = raw.split(/\s*[-~/～至到]\s*/).map((x) => x.trim()).filter(Boolean)
+  if (parts.length >= 2) return { start: parts[0], end: parts[1] }
+  if (parts.length === 1) return { start: parts[0] }
+  return {}
+}
+
 async function handleRun() {
+  if (running.value) return
   running.value = true
+  liveError.value = null
   try {
-    const res = await invokeKgService(props.moduleInfo.endpoint, buildPayload(), 60000)
-    liveResponse.value = res
-    lastTestTime.value = formatTimestamp(new Date())
-    lastUpdateTime.value = Date.now()
-  } catch (e: unknown) {
-    liveResponse.value = {
-      code: 500,
-      success: false,
-      msg: `调用失败: ${e instanceof Error ? e.message : String(e)}`,
+    if (isLiveAlumni.value) {
+      const expertId = parameterValues.value.expertId?.trim()
+      if (!expertId) {
+        showToast('请填写 expertId', 'warning')
+        return
+      }
+      const body = {
+        expertId,
+        targetExpertId: optionalParam(parameterValues.value.targetExpertId),
+        school: optionalParam(parameterValues.value.school),
+        educationStage: optionalParam(parameterValues.value.educationStage),
+        limit: 20,
+      }
+      const resp = await queryExpertAlumniRelation(body) as unknown as {
+        code: number
+        success: boolean
+        data: AlumniQueryResult
+        msg: string
+      }
+      liveApiPayload.value = {
+        describe: liveDescribe.value,
+        request: body,
+        response: resp,
+      }
+      if (!resp.success || resp.code !== 200) {
+        liveAlumniResult.value = null
+        liveError.value = resp.msg || `业务码 ${resp.code}`
+        showToast(liveError.value, 'warning')
+        resultMode.value = 'api'
+      } else {
+        liveAlumniResult.value = resp.data
+        showToast(
+          resp.data.total > 0
+            ? `命中 ${resp.data.total} 名校友（${resp.data.mode}）`
+            : `调用成功，未命中校友（${resp.data.mode}）`,
+          resp.data.total > 0 ? 'success' : 'info',
+        )
+        resultMode.value = 'summary'
+        selectedGraphNodeId.value = null
+        selectedGraphEdgeId.value = null
+      }
+    } else if (isLiveCoop.value) {
+      const sourceExpertId = parameterValues.value.sourceExpertId?.trim()
+      const targetExpertId = parameterValues.value.targetExpertId?.trim()
+      if (!sourceExpertId || !targetExpertId) {
+        showToast('请填写 sourceExpertId 与 targetExpertId', 'warning')
+        return
+      }
+      const typesRaw = optionalParam(parameterValues.value.achievementTypes)
+      const achievementTypes = typesRaw
+        ? typesRaw.split(/[,，/\s]+/).map((x) => x.trim()).filter(Boolean) as Array<'paper' | 'patent' | 'project'>
+        : undefined
+      const { start: timeRangeStart, end: timeRangeEnd } = parseTimeRange(
+        optionalParam(parameterValues.value.timeRange),
+      )
+      const body = {
+        sourceExpertId,
+        targetExpertId,
+        achievementTypes,
+        timeRangeStart,
+        timeRangeEnd,
+        limitPerType: 20,
+      }
+      const resp = await queryExpertCooperationAchievement(body) as unknown as {
+        code: number
+        success: boolean
+        data: CooperationQueryResult
+        msg: string
+      }
+      liveApiPayload.value = {
+        describe: liveDescribe.value,
+        request: body,
+        response: resp,
+      }
+      if (!resp.success || resp.code !== 200) {
+        liveCoopResult.value = null
+        liveError.value = resp.msg || `业务码 ${resp.code}`
+        showToast(liveError.value, 'warning')
+        resultMode.value = 'api'
+      } else {
+        liveCoopResult.value = resp.data
+        const total = (resp.data.summary?.papers || 0)
+          + (resp.data.summary?.patents || 0)
+          + (resp.data.summary?.projects || 0)
+        showToast(
+          total > 0
+            ? `共同成果 ${total} 项（${resp.data.cooperationMode}）`
+            : `调用成功，暂无共同成果（${resp.data.cooperationMode}）`,
+          total > 0 ? 'success' : 'info',
+        )
+        resultMode.value = 'summary'
+        selectedGraphNodeId.value = null
+        selectedGraphEdgeId.value = null
+      }
+    } else if (props.moduleInfo.key === 'enterprise-relation' || props.moduleInfo.key === 'industry-chain-event') {
+      // 重点关注科技企业关系 / 产业链点 TOP-N 事件：走通用 kg-service 端点
+      const body = buildPayload()
+      const res = await invokeKgService(props.moduleInfo.endpoint, body, 60000) as Record<string, any>
+      liveResponse.value = res
+      liveApiPayload.value = {
+        describe: liveDescribe.value,
+        request: body,
+        response: res,
+      }
+      if (res?.success === false || (res?.code !== undefined && res.code !== 200)) {
+        liveError.value = (res?.msg as string) || `业务码 ${res?.code}`
+        showToast(liveError.value, 'warning')
+        resultMode.value = 'api'
+      } else {
+        resultMode.value = 'summary'
+        selectedGraphNodeId.value = null
+        selectedGraphEdgeId.value = null
+        showToast('调用成功', 'success')
+      }
+    } else {
+      await new Promise((resolve) => window.setTimeout(resolve, 360))
     }
+    const now = new Date()
+    lastTestTime.value = formatTimestamp(now)
+    lastUpdateTime.value = now.getTime()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '请求失败'
+    liveError.value = message
+    liveResponse.value = null
+    liveAlumniResult.value = null
+    liveCoopResult.value = null
+    liveApiPayload.value = { request_params: parameterValues.value, error: message }
+    showToast(message, 'warning')
+    resultMode.value = 'api'
   } finally {
     running.value = false
   }
@@ -383,6 +824,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       <label v-for="field in moduleInfo.requestFields" :key="field.name">
         <span><i v-if="field.required === '是'">*</i>{{ field.name }}</span>
         <input
+          :key="`${field.name}-${paramResetToken}`"
           :value="parameterValues[field.name] ?? ''"
           :placeholder="field.description"
           @input="handleParameterInput(field.name, $event)"
@@ -464,11 +906,23 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <dd>{{ value }}</dd>
           </div>
         </dl>
+        <dl v-else-if="resultMode === 'entity' && liveEntityRows" class="result-panel__table">
+          <div v-for="([label, value], index) in liveEntityRows" :key="`entity-${label}-${index}`">
+            <dt>{{ label }}</dt>
+            <dd>{{ value }}</dd>
+          </div>
+        </dl>
         <dl v-else-if="resultMode === 'entity' && selectedNode" class="result-panel__table">
           <div><dt>实体名称</dt><dd>{{ selectedNode.label }}</dd></div>
           <div><dt>实体类型</dt><dd>{{ selectedNode.entityType }}</dd></div>
           <div><dt>命中关系</dt><dd>{{ selectedNode.relations }}</dd></div>
           <div><dt>置信度</dt><dd>{{ selectedNode.confidence.toFixed(2) }}</dd></div>
+        </dl>
+        <dl v-else-if="resultMode === 'relation' && liveRelationRows" class="result-panel__table">
+          <div v-for="([label, value], index) in liveRelationRows" :key="`rel-${label}-${index}`">
+            <dt>{{ label }}</dt>
+            <dd>{{ value }}</dd>
+          </div>
         </dl>
         <dl v-else-if="resultMode === 'relation' && selectedEdge" class="result-panel__table">
           <div v-for="([label, value], index) in relationDetailRows" :key="`${label}-${index}`">
@@ -476,6 +930,24 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <dd>{{ value }}</dd>
           </div>
         </dl>
+        <section v-else-if="resultMode === 'provenance' && liveProvenance" class="result-provenance">
+          <header><strong>数据溯源</strong><span>{{ isLiveCoop ? '合作成果查询' : isLiveAlumni ? '校友查询' : '查询结果' }}</span></header>
+          <div class="result-provenance__target">
+            <strong>{{ liveProvenance.sourceDatabase }}</strong>
+            <span>{{ liveProvenance.summary || '—' }}</span>
+          </div>
+          <h3>证据列表</h3>
+          <div class="result-provenance__evidence-list">
+            <article v-for="(ev, index) in liveProvenance.evidences" :key="`${ev.recordId}-${index}`">
+              <header><strong>{{ ev.title }}</strong></header>
+              <p><b>{{ ev.summary }}</b></p>
+              <span>业务表：{{ ev.businessTable }}</span>
+              <span>技术表：<code>{{ ev.technicalTable }}</code></span>
+              <span>记录 ID：<code>{{ ev.recordId }}</code></span>
+              <span>字段：<code>{{ ev.fieldIdentifier }}</code></span>
+            </article>
+          </div>
+        </section>
         <section v-else-if="resultMode === 'provenance' && selectedProvenance && selectedProvenanceTarget" class="result-provenance">
           <header><strong>当前追溯对象</strong><span>{{ selectedProvenanceTarget.kind }}</span></header>
           <div class="result-provenance__target">
@@ -522,7 +994,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           </div>
         </section>
         <div v-else-if="resultMode === 'rule'" class="result-panel__rules">
-          <article v-for="(rule, index) in moduleInfo.rules" :key="rule.name">
+          <article v-for="(rule, index) in liveRules" :key="rule.name">
             <header>
               <strong>规则 {{ index + 1 }}：{{ rule.name }}</strong>
               <span>{{ rule.type }}</span>
@@ -538,6 +1010,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           </article>
         </div>
         <pre v-else-if="resultMode === 'api'" class="result-panel__code">{{ apiResultJson }}</pre>
+        <dl v-else class="result-panel__table">
+          <div><dt>提示</dt><dd>请先执行测试，或点选图谱节点/边查看详情</dd></div>
+        </dl>
       </section>
     </aside>
   </div>
@@ -551,7 +1026,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   gap: 14px;
   min-height: 92px;
   padding: 14px 16px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .service-console__head {

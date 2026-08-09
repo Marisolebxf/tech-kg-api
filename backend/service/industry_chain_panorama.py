@@ -34,43 +34,43 @@ _LAYER_DEFINITIONS: list[dict[str, Any]] = [
     {
         "key": "core_technology",
         "title": "核心技术",
-        "labels": ["Technology", "ResearchField", "Field"],
-        "name_props": ("name", "label", "field_name"),
+        "labels": ["Keyword", "IndustryNode"],
+        "name_props": ("keyword", "node_name", "name"),
         "metric_prop": "citation_nums",
         "metric_label": "被引次数",
         "type": "technology",
         # 用作产业关键词过滤时的字段候选
-        "keyword_props": ("name", "keywords", "description"),
+        "keyword_props": ("keyword", "node_name"),
     },
     {
         "key": "leading_enterprise",
         "title": "领军企业",
-        "labels": ["Organization", "Enterprise", "Company"],
-        "name_props": ("name", "org_name", "canonical_name"),
+        "labels": ["Organization"],
+        "name_props": ("name_cn", "name_en", "name"),
         "metric_prop": "paper_nums",
         "metric_label": "发表论文数",
         "type": "organization",
-        "keyword_props": ("name", "canonical_name", "aliases"),
+        "keyword_props": ("name_cn", "name_en", "industry_class"),
     },
     {
         "key": "leading_expert",
         "title": "领军专家",
-        "labels": ["Person", "Scholar"],
-        "name_props": ("name_zh", "name_en", "name"),
+        "labels": ["Person"],
+        "name_props": ("name_zh", "name_cn", "name_en"),
         "metric_prop": "h_index",
         "metric_label": "H 指数",
         "type": "expert",
-        "keyword_props": ("scholar_org", "research_fields", "biography"),
+        "keyword_props": ("scholar_org", "research_fields", "bio_zh"),
     },
     {
         "key": "flagship_achievement",
         "title": "代表成果",
         "labels": ["Paper", "Patent", "Project"],
-        "name_props": ("title", "name", "chinese_title"),
+        "name_props": ("title_zh", "title_en", "title", "title_original"),
         "metric_prop": "citation_nums",
         "metric_label": "被引次数",
         "type": "achievement",
-        "keyword_props": ("title", "keywords", "abstract"),
+        "keyword_props": ("title_zh", "title_en", "keywords"),
     },
 ]
 
@@ -286,7 +286,9 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             metric_value_num = int(metric_value) if metric_value is not None else None
         except (TypeError, ValueError):
             metric_value_num = None
-        subtitle_prop = self._first_prop_value(props, ("scholar_org", "org_name", "affiliation"))
+        subtitle_prop = self._first_prop_value(
+            props, ("scholar_org", "org_name", "affiliation", "industry_class", "node_type")
+        )
         return {
             "id": str(node.get("id") or ""),
             "label": label,
@@ -304,11 +306,22 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "id": str(node.get("id") or ""),
             "type": primary_label,
             "label": self._first_prop_value(
-                props, ("name_zh", "name", "title", "canonical_name")
+                props,
+                (
+                    "name_zh",
+                    "name_cn",
+                    "name",
+                    "title_zh",
+                    "title",
+                    "keyword",
+                    "node_name",
+                    "name_en",
+                    "title_en",
+                ),
             )
             or str(node.get("id") or ""),
             "subtitle": self._first_prop_value(
-                props, ("scholar_org", "org_name", "affiliation", "description")
+                props, ("scholar_org", "org_name", "affiliation", "industry_class", "node_type")
             ),
             "data": {"labels": labels},
         }

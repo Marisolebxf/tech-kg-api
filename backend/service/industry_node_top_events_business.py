@@ -6,7 +6,8 @@
 
 流程：
   1. GET /graph-search/subgraph/{node_vid}?depth=1  取链节点信息 + 关联企业（BELONGS_TO_NODE）+ 产业链（HAS_NODE）
-  2. GET /graph-search/subgraph/{org_id}?depth=1    每个企业的 INVOLVED_IN 事件
+  2. GET /graph-search/filtered-subgraph/{org_id}?edge_types=INVOLVED_IN,HAS_NEWS  每个企业的事件 + 资讯
+     News 节点统一记为 event_type=news 参与排序（补"发展趋势"维度）
   3. 事件影响力排序（event_type 权重 × 金额 × 时间新鲜度 × chain_score）→ TOP-N
   4. GET /graph-search/node/{org_id}/edges?edge_type=EXECUTIVE_OF  TOP 事件企业的专家
   5. 风险等级 + event→org→expert 关联
@@ -155,14 +156,20 @@ class IndustryNodeTopEventsService:
                 resp.evidence.append(f"链节点 {req.chain_node_id} 无关联企业")
                 return resp
 
-            # 2) filtered-subgraph(depth=1) 每个企业只拿 INVOLVED_IN 事件
+            # 2) filtered-subgraph(depth=1) 每个企业拿 INVOLVED_IN 事件 + HAS_NEWS 资讯
+            #    News 节点统一记为 event_type=news，参与影响力排序（资讯权重低，补"发展趋势"维度）
             events = []
             for org_vid, chain_score in orgs:
                 try:
                     osg = await self._get(
                         client,
                         f"/graph-search/filtered-subgraph/{org_vid}",
-                        {"space": SPACE, "edge_types": "INVOLVED_IN", "depth": 1, "limit": 50},
+                        {
+                            "space": SPACE,
+                            "edge_types": "INVOLVED_IN,HAS_NEWS",
+                            "depth": 1,
+                            "limit": 50,
+                        },
                     )
                 except Exception as exc:
                     logger.warning("subgraph %s 失败: %s", org_vid, exc)
@@ -173,16 +180,26 @@ class IndustryNodeTopEventsService:
                 }
                 org_name = onodes.get(org_vid, {}).get("name_cn")
                 for e in odata.get("edges") or []:
-                    if e.get("type") != "INVOLVED_IN":
+                    etype = e.get("type")
+                    if etype not in ("INVOLVED_IN", "HAS_NEWS"):
                         continue
                     eid = e.get("target") if e.get("source") == org_vid else e.get("source")
                     ep = onodes.get(eid, {})
+                    if etype == "HAS_NEWS":
+                        # News 节点：title/release_date，无 event_type/amount
+                        ev_type = "news"
+                        occur = str(ep.get("release_date") or "") or None
+                        amount = None
+                    else:
+                        ev_type = ep.get("event_type")
+                        occur = str(ep.get("occur_date") or "") or None
+                        amount = str(ep.get("amount") or "") or None
                     events.append(
                         {
                             "event_id": eid,
-                            "event_type": ep.get("event_type"),
-                            "occur_date": str(ep.get("occur_date") or "") or None,
-                            "amount": str(ep.get("amount") or "") or None,
+                            "event_type": ev_type,
+                            "occur_date": occur,
+                            "amount": amount,
                             "title": ep.get("title"),
                             "org_id": org_vid,
                             "org_name": org_name,

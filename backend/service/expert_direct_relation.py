@@ -96,6 +96,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
 
         source = {"requested": "all", "actual": "fallback", "fallback": True}
         rows: list[dict[str, Any]] = []
+        fallback_reason: str | None = None
 
         try:
             rows = await self._query_via_graph_api(
@@ -107,12 +108,28 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             source = {"requested": "all", "actual": "graph-api", "fallback": False}
         except GraphAPIError as exc:
             logger.warning("graph API unavailable, falling back to seed data: %s", exc)
+            fallback_reason = "graph_api_error"
             rows = []
         except Exception:  # noqa: BLE001 - 图服务异常一律降级
             logger.exception("unexpected error while querying graph API")
+            fallback_reason = "unexpected_error"
             rows = []
 
         if not rows:
+            # 区分"图服务报错"和"图里确实没有这两位专家的合作关系"，
+            # 否则线上只能靠翻日志才知道降级原因。
+            logger.info(
+                "expert direct relation falls back to seed data: reason=%s, a=%s, b=%s",
+                fallback_reason or "empty_result",
+                expert_a_id,
+                expert_b_id,
+            )
+            source = {
+                "requested": "all",
+                "actual": "fallback",
+                "fallback": True,
+                "reason": fallback_reason or "empty_result",
+            }
             rows = FALLBACK_ITEMS[: max(1, min(normalized_limit, len(FALLBACK_ITEMS)))]
 
         rows = self._orient_rows(
@@ -146,7 +163,17 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         institution: str | None,
         limit: int,
     ) -> list[dict[str, Any]]:
-        """通过图查询 API 拉合作关系。"""
+        """通过图查询 API 拉合作关系。
+
+        Args:
+            expert_a_id: 起点专家的 VID / scholar_id / 姓名，可为空。
+            expert_b_id: 另一位专家的标识，可为空。
+            institution: 机构关键词，非空时只保留任一端命中该机构的关系。
+            limit: 最多返回多少条关系。
+
+        Returns:
+            关系行列表，每行包含双方属性与 ``co_paper_count`` 等字段；无命中时为空列表。
+        """
         async with graph_api() as client:
             anchors = await self._resolve_anchors(client, expert_a_id, expert_b_id)
             rows: list[dict[str, Any]] = []
@@ -179,7 +206,16 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         expert_a_id: str | None,
         expert_b_id: str | None,
     ) -> list[dict[str, Any]]:
-        """定位起点专家节点。空条件时取任意若干位学者作为锚点。"""
+        """定位起点专家节点。空条件时取任意若干位学者作为锚点。
+
+        Args:
+            client: 图查询 API 客户端。
+            expert_a_id: 起点专家标识，可为空。
+            expert_b_id: 另一位专家标识，可为空。
+
+        Returns:
+            锚点 Person 节点列表；两个标识都为空时返回库里前若干位学者（仅用于展示）。
+        """
         candidates: list[dict[str, Any]] = []
         for keyword in (expert_a_id, expert_b_id):
             if not keyword:
@@ -194,20 +230,45 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         return list(listing.get("items", []))
 
     async def _find_person(self, client: Any, keyword: str) -> dict[str, Any] | None:
+        """按 VID / scholar_id / 姓名定位一个 Person 节点。
+
+        Args:
+            client: 图查询 API 客户端。
+            keyword: 完整 VID、scholar_id 或中英文姓名。
+
+        Returns:
+            能按 VID 寻址的 Person 节点；找不到时返回 ``None``。
+        """
         # keyword 可能是完整 VID / scholar_id / 姓名
         for candidate_vid in (keyword, f"person_{keyword}"):
             node = await client.get_node(candidate_vid)
             if node is not None:
                 return node
-        # 姓名精确匹配（中文/英文）
+        # 姓名精确匹配（中文/英文）。属性搜索返回的 id 不保证是业务 VID，
+        # 必须先换成可寻址节点，否则后续查边一定为空。
         for name_field in ("name_zh", "name_en"):
             result = await client.search_nodes(
-                label="Person", properties={name_field: keyword}, limit=1
+                label="Person", properties={name_field: keyword}, limit=_MAX_ANCHOR_CANDIDATES
             )
             items = result.get("items") if isinstance(result, dict) else []
-            if items:
-                return items[0]
+            for item in items or []:
+                resolved = await client.resolve_addressable_node(
+                    item, vid_candidates=self._person_vid_candidates(item)
+                )
+                if resolved is not None:
+                    return resolved
         return None
+
+    @staticmethod
+    def _person_vid_candidates(node: dict[str, Any]) -> list[str]:
+        """按 ``person_{scholar_id}`` 命名约定重建候选 VID。"""
+        props = node.get("properties") or {}
+        candidates: list[str] = []
+        for key in ("source_record_id", "scholar_id"):
+            value = str(props.get(key) or "").strip()
+            if value:
+                candidates.append(f"person_{value}")
+        return candidates
 
     def _build_row(
         self,

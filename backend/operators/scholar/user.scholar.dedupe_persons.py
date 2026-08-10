@@ -8,6 +8,17 @@
 
 
 def operator(data, ctx):
+    """执行学者消歧。
+
+    Args:
+        data: 上游数据，本算子忽略（顶点从图库拉取）。
+        ctx: 运行参数，支持 ``dry_run``（默认 True）、``write``（默认 False，是否写
+            SAME_AS 边）、``top_k``（默认 5）、``high_threshold``（默认 0.75）、
+            ``mid_threshold``（默认 0.55）、``report_path``、``preview``（默认 8）。
+
+    Returns:
+        单元素列表，含 ``status``（ok/error）、``params`` 与 ``stats``。
+    """
     from script.dedupe_scholar_persons import run
 
     ctx = ctx or {}

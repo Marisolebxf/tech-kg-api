@@ -6,6 +6,15 @@ data 参数忽略（本算子从 MySQL 读取源数据）。
 
 
 def operator(data, ctx):
+    """执行学者实体入图。
+
+    Args:
+        data: 上游数据，本算子忽略（源数据直接从 MySQL 读）。
+        ctx: 运行参数，支持 ``database``（默认 gkx_element）与 ``dry_run``（默认 True）。
+
+    Returns:
+        单元素列表，含 ``status``（ok/error）、``params`` 与 ``stats``。
+    """
     from script.load_scholar_entities import run
 
     ctx = ctx or {}

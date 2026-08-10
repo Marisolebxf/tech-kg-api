@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -42,9 +43,13 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_DB = "default"
 _DEFAULT_TIMEOUT = 30
+# 连接失败后的冷却窗口：避免并发请求把失败的连接反复重试成重连风暴。
+_CONNECT_RETRY_COOLDOWN_SECONDS = 2.0
 
 _client_lock = threading.Lock()
 _client: Any = None
+_last_connect_error: BaseException | None = None
+_connect_cooldown_until = 0.0
 
 
 def _load_milvus_client_cls():
@@ -123,12 +128,15 @@ class MilvusSearchHit:
 # ---------------------------------------------------------------------------
 def get_milvus_client() -> Any:
     """Return a process-shared ``MilvusClient`` using ``MilvusSettings``."""
-    global _client
+    global _client, _last_connect_error, _connect_cooldown_until
     if _client is not None:
         return _client
     with _client_lock:
         if _client is not None:
             return _client
+        if _last_connect_error is not None and time.monotonic() < _connect_cooldown_until:
+            # 冷却窗口内直接抛上次的错误，不再连一遍
+            raise _last_connect_error
         MilvusClient = _load_milvus_client_cls()
         settings = MilvusSettings.from_env()
         logger.info(
@@ -143,13 +151,19 @@ def get_milvus_client() -> Any:
         }
         if settings.token:
             kwargs["token"] = settings.token
-        _client = MilvusClient(**kwargs)
+        try:
+            _client = MilvusClient(**kwargs)
+        except Exception as exc:
+            _last_connect_error = exc
+            _connect_cooldown_until = time.monotonic() + _CONNECT_RETRY_COOLDOWN_SECONDS
+            raise
+        _last_connect_error = None
     return _client
 
 
 def reset_milvus_client() -> None:
     """Test helper: drop the ``MilvusClient`` singleton."""
-    global _client
+    global _client, _last_connect_error, _connect_cooldown_until
     with _client_lock:
         if _client is not None:
             try:
@@ -157,6 +171,8 @@ def reset_milvus_client() -> None:
             except Exception:  # noqa: BLE001
                 pass
         _client = None
+        _last_connect_error = None
+        _connect_cooldown_until = 0.0
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,16 @@
 
 
 def operator(data, ctx):
+    """执行学者关系入图。
+
+    Args:
+        data: 上游数据，本算子忽略（源数据直接从 MySQL 读）。
+        ctx: 运行参数，支持 ``database``（默认 gkx_element）、``dry_run``（默认 True）、
+            ``include_authored_by_fallback``（默认 False，是否补 AUTHORED_BY 兜底边）。
+
+    Returns:
+        单元素列表，含 ``status``（ok/error）、``params`` 与 ``stats``。
+    """
     from script.load_scholar_relations import run
 
     ctx = ctx or {}

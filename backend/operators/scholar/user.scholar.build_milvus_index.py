@@ -5,6 +5,16 @@
 
 
 def operator(data, ctx):
+    """执行学者 Milvus 索引构建。
+
+    Args:
+        data: 上游数据，本算子忽略（顶点从图库拉取）。
+        ctx: 运行参数，支持 ``dry_run``（默认 True）、``drop_existing``（默认 False）、
+            ``preview``（默认 5）。
+
+    Returns:
+        单元素列表，含 ``status``（ok/error）、``params`` 与 ``stats``。
+    """
     from script.build_scholar_milvus_index import run
 
     ctx = ctx or {}

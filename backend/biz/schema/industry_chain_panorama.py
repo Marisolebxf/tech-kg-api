@@ -31,7 +31,9 @@ class IndustryChainPanoramaQueryRequest(BaseModel):
     industry: str | None = Field(default=None, description="产业关键词，如 人工智能 / 集成电路。")
     anchorId: str | None = Field(default=None, description="核心节点 VID，用于生成扩展子图。")
     depth: int = Field(default=2, ge=1, le=3, description="子图扩展跳数 1-3。")
-    topK: int = Field(default=5, ge=1, description=f"每类实体返回数上限 (最大 {MAX_KEY_ENTITIES})。")
+    topK: int = Field(
+        default=5, ge=1, description=f"每类实体返回数上限 (最大 {MAX_KEY_ENTITIES})。"
+    )
 
     @field_validator("topK")
     @classmethod

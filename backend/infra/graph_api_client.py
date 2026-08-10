@@ -30,6 +30,7 @@ async def foo():
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
@@ -38,6 +39,8 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _API_PREFIX = "/api/v1/graph-search"
+# 进程内回环调用也要设超时：底层 trs-graph-service / Milvus 卡住时不能让请求悬挂。
+_DEFAULT_TIMEOUT_SECONDS = 30.0
 
 
 class GraphAPIError(RuntimeError):
@@ -59,6 +62,15 @@ class GraphAPIClient:
         self._http = http_client
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        """GET ``/api/v1/graph-search{path}``。
+
+        Args:
+            path: 前缀之后的路径，如 ``/nodes``。
+            params: 查询参数。
+
+        Returns:
+            剥壳后的 ``data`` 字段。
+        """
         response = await self._http.get(f"{_API_PREFIX}{path}", params=params)
         return self._unwrap(response)
 
@@ -69,11 +81,32 @@ class GraphAPIClient:
         params: dict[str, Any] | None = None,
         json: Any = None,
     ) -> Any:
+        """POST ``/api/v1/graph-search{path}``。
+
+        Args:
+            path: 前缀之后的路径，如 ``/nodes/search``。
+            params: 查询参数。
+            json: 请求体。
+
+        Returns:
+            剥壳后的 ``data`` 字段。
+        """
         response = await self._http.post(f"{_API_PREFIX}{path}", params=params, json=json)
         return self._unwrap(response)
 
     @staticmethod
     def _unwrap(response: httpx.Response) -> Any:
+        """剥掉 ``ApiResponse`` 外壳。
+
+        Args:
+            response: 图查询接口的原始响应。
+
+        Returns:
+            ``data`` 字段；非 ``ApiResponse`` 结构时原样返回响应体。
+
+        Raises:
+            GraphAPIError: 响应不是 JSON，或 ``success`` 为 ``False``。
+        """
         try:
             payload = response.json()
         except ValueError as exc:  # 非 JSON 响应，直接透传
@@ -130,6 +163,37 @@ class GraphAPIClient:
         if space:
             params["space"] = space
         return await self._post("/nodes/search", params=params, json=properties or {})
+
+    async def resolve_addressable_node(
+        self,
+        node: dict[str, Any],
+        *,
+        vid_candidates: Sequence[str] = (),
+        space: str | None = None,
+    ) -> dict[str, Any] | None:
+        """把属性搜索返回的节点换成能按 VID 寻址的节点。
+
+        ``/nodes/search`` 返回的 ``id`` 不保证是业务 VID（图服务可能返回内部标识），
+        直接拿去查边或扩展子图会查不到数据。这里逐个候选 VID 用 :meth:`get_node`
+        验证，返回第一个能寻址到的节点。
+
+        Args:
+            node: 属性搜索返回的节点。
+            vid_candidates: 额外的候选 VID（按业务命名约定重建，优先级低于原 ``id``）。
+            space: 图空间名。
+
+        Returns:
+            可按 VID 寻址的节点；全部候选都取不到时返回 ``None``。
+        """
+        candidates: list[str] = []
+        for value in (str(node.get("id") or ""), *vid_candidates):
+            if value and value not in candidates:
+                candidates.append(value)
+        for vid in candidates:
+            resolved = await self.get_node(vid, space=space)
+            if resolved is not None:
+                return resolved
+        return None
 
     async def get_node_edges(
         self,
@@ -221,13 +285,20 @@ def _load_app() -> Any:
 
 
 @asynccontextmanager
-async def graph_api(*, base_url: str = "http://kg-internal") -> Any:
+async def graph_api(
+    *,
+    base_url: str = "http://kg-internal",
+    timeout: float = _DEFAULT_TIMEOUT_SECONDS,
+) -> Any:
     """构造一个绑定当前 FastAPI 应用（ASGI transport）的 :class:`GraphAPIClient`。
 
     ``base_url`` 只是给 httpx 一个虚拟主机名，实际不会发起网络请求；请求会经
-    ``ASGITransport`` 直达 FastAPI 路由。
+    ``ASGITransport`` 直达 FastAPI 路由。``timeout`` 用于兜住底层图服务/Milvus
+    卡住的情况，避免请求长期悬挂。
     """
     app = _load_app()
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url=base_url) as http_client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url=base_url, timeout=timeout
+    ) as http_client:
         yield GraphAPIClient(http_client)

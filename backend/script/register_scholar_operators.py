@@ -140,9 +140,7 @@ async def _run(*, invoke: bool) -> int:
                 result = await _invoke_dry_run(client, definition)
                 status_ok = result["status_code"] == 200 and result["data"]
                 first = (result["data"] or [{}])[0] if isinstance(result["data"], list) else {}
-                summary = (
-                    first.get("status") if isinstance(first, dict) else "unknown"
-                )
+                summary = first.get("status") if isinstance(first, dict) else "unknown"
                 print(
                     f"[INVOKE]   HTTP {result['status_code']:3d} "
                     f"{'OK' if status_ok else 'FAIL':4s} "

@@ -377,6 +377,7 @@ def run(
 
     # 落 SAME_AS 边
     written = 0
+    failed = 0
     if write and not dry_run:
         now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         for entry in high_pairs:
@@ -393,21 +394,28 @@ def run(
                 "ingest_batch": BATCH_ID,
                 "ingest_time": now,
             }
-            graph.merge_edge(
-                a_vid,
-                b_vid,
-                "SAME_AS",
-                {"source_record_id": f"{a_vid}__{b_vid}"},
-                props,
-            )
+            # 单条失败不能中断整批：merge_edge 是幂等的，重跑只补未写成功的边。
+            try:
+                graph.merge_edge(
+                    a_vid,
+                    b_vid,
+                    "SAME_AS",
+                    {"source_record_id": f"{a_vid}__{b_vid}"},
+                    props,
+                )
+            except Exception:
+                failed += 1
+                logger.exception("failed to write SAME_AS edge %s -> %s", a_vid, b_vid)
+                continue
             written += 1
-        logger.info("wrote %d SAME_AS edges", written)
+        logger.info("wrote %d SAME_AS edges (%d failed)", written, failed)
 
     return {
         "persons": len(persons),
         "high": len(high_pairs),
         "mid": len(mid_pairs),
         "written": written,
+        "failed": failed,
         "batch": BATCH_ID,
     }
 

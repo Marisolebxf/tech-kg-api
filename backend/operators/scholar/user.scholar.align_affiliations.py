@@ -6,6 +6,16 @@
 
 
 def operator(data, ctx):
+    """执行学者机构对齐。
+
+    Args:
+        data: 上游数据，本算子忽略（候选来自图与 Milvus）。
+        ctx: 运行参数，支持 ``dry_run``（默认 True）、``top_k``（默认 5）、
+            ``min_score``（默认 0.65）、``preview``（默认 5）。
+
+    Returns:
+        单元素列表，含 ``status``（ok/error）、``params`` 与 ``stats``。
+    """
     from script.align_scholar_affiliations import run
 
     ctx = ctx or {}

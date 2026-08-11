@@ -53,4 +53,8 @@ class IndustryNodeTopEventsResponse(BaseModel):
     risk_level: str = ""  # 高/中/低
     top_events: list[TopEventItem] = Field(default_factory=list)
     relations: list[EventExpertRelation] = Field(default_factory=list)
+    # 标书分析维度：节点影响 / 发展趋势 / 机遇挖掘（从 TOP 事件池规则派生）
+    node_impact: str = ""
+    trend: str = ""
+    opportunity: str = ""
     evidence: list[str] = Field(default_factory=list)

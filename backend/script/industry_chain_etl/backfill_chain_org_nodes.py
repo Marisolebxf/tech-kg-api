@@ -119,7 +119,9 @@ def collect_chain_companies(session) -> dict[str, dict]:
     for antitypic, credit_code in dtl_rows:
         if not antitypic:
             continue
-        cc = companies.setdefault(antitypic, {"credit_code": "", "company_name": "", "products": []})
+        cc = companies.setdefault(
+            antitypic, {"credit_code": "", "company_name": "", "products": []}
+        )
         if credit_code and not cc["credit_code"]:
             cc["credit_code"] = str(credit_code)
 
@@ -133,7 +135,9 @@ def collect_chain_companies(session) -> dict[str, dict]:
     for antitypic, company_name, credit_code, tech_product in prod_rows:
         if not antitypic:
             continue
-        cc = companies.setdefault(antitypic, {"credit_code": "", "company_name": "", "products": []})
+        cc = companies.setdefault(
+            antitypic, {"credit_code": "", "company_name": "", "products": []}
+        )
         if credit_code and not cc["credit_code"]:
             cc["credit_code"] = str(credit_code)
         if company_name and not cc["company_name"]:

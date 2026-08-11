@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class BusinessPeriod(BaseModel):
@@ -26,6 +26,23 @@ class KeyEnterpriseRelationRequest(BaseModel):
         True, description="只保留重点科技企业（已上市/公司类），排除高校/研究院/MOCK"
     )
 
+    @field_validator("key_tech_enterprise_only", mode="before")
+    @classmethod
+    def _coerce_bool(cls, v: object) -> object:
+        """前端参数框可能以字符串形式传布尔（'是'/'否'/'true'/'false'），这里宽容转 bool。
+
+        面板 buildPayload 只对 number 做 Number() 转换、boolean 原样透传字符串，
+        故后端需自行兼容；待前端面板（梦蕊任务三）按 field.type 正确转换后此校验仍兼容。
+        """
+        if isinstance(v, bool):
+            return v
+        if v is None:
+            return True
+        s = str(v).strip().lower()
+        if s in ("false", "0", "no", "否", "n", "f", "off"):
+            return False
+        return True  # "是"/"true"/"1"/"yes"/""/其它 → 默认 True
+
 
 class EnterpriseRelationItem(BaseModel):
     enterprise_id: str
@@ -38,6 +55,7 @@ class EnterpriseRelationItem(BaseModel):
     period: BusinessPeriod = Field(default_factory=BusinessPeriod)
     enterprise_background: dict[str, Any] = Field(default_factory=dict)
     source: str = ""  # 来源边类型或 project_id/patent_id
+    risk_summary: str = ""  # 首要企业风险事件摘要（标书「经营状况」之风险提示）
 
 
 class KeyEnterpriseRelationResponse(BaseModel):

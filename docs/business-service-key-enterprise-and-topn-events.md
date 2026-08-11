@@ -92,6 +92,29 @@ flowchart TD
     J --> K["前端 buildLiveGraph + buildLiveSummary 渲染"]
 ```
 
+### 3.4 首要企业风险探测（标书「经营状况」之风险提示）
+
+过滤后对 `relations[0]`（前端 summary 高亮的首要企业）做一次 best-effort 风险事件探测：`GET /graph-search/filtered-subgraph/{org_id}?edge_types=INVOLVED_IN&depth=1`，统计风险类事件（`RISK_EVENT_TYPES`，复用 TOP-N 定义）类型与计数，写入 `relations[0].risk_summary`：
+
+- 有风险事件 → `近 N 条风险事件（类型、…）`
+- 无 → `暂无风险事件记录`
+- 查询失败/超时 → 空串，不阻断主流程
+
+只查首要企业，避免 N×调用控延迟。前端 `风险提示` 直接渲染 `r0.risk_summary`。`_enterprise_background` 另取 `main_products` 供「技术方向」维度。
+
+### 3.5 企业背景字段从 extra_json 摊平提取（标书「行业地位/技术方向/经营状况」）
+
+周威的 org ETL（`merge_existing_properties`）把多源表数据合并进 Organization 节点的 `extra_json`（JSON blob），顶层 tag 属性只留最后写的表（多为 `dwd_org_stock_base`）。因此 `industry_class`/`registered_capital`/`founded_year`/`main_products` 顶层常为 NULL，但 base_info 的注册资本/成立年/行业、product 表的主营/经营范围都埋在 `extra_json` 里：
+
+```
+extra_json = {
+  "existing_payload": { ...dwd_org_base_info: registered_capital_value, incorporation_year, province, lerep, industry_l1_name... },
+  "source_records": { "dwd_org_org_product_info:...": { main_prod, main_activities, description } }
+}
+```
+
+`_flatten_org_props` 摊平顶层 + `existing_payload` + `source_records[*]`，`_enterprise_background` 按候选列名（`industry_l1_name`/`industry`/`industry_class`、`registered_capital_value`/`registered_capital`、`incorporation_year`/`founded_year`、`main_products`/`main_prod`、`legal_rep`/`lerep`…）提取，写入响应 `enterprise_background`，前端 `行业地位/技术方向/经营状况` 直渲。`tech_field`（合作领域）同样取自摊平后的 `industry_l1_name`。
+
 ---
 
 ## 4. 产业链点 TOP-N 事件关系（industry-node-top-events）
@@ -106,7 +129,7 @@ flowchart TD
 
 1. `GET /graph-search/filtered-subgraph/{node_vid}?edge_types=BELONGS_TO_NODE,HAS_NODE&depth=1` → 链节点信息 + 关联企业（BELONGS_TO_NODE，带 chain_score）+ 产业链名（HAS_NODE→IndustryChain）。
 2. 按 chain_score 降序取 top `max_orgs` 家企业。
-3. 每个企业 `GET /graph-search/filtered-subgraph/{org_id}?edge_types=INVOLVED_IN&depth=1` → 事件。
+3. 每个企业 `GET /graph-search/filtered-subgraph/{org_id}?edge_types=INVOLVED_IN,HAS_NEWS&depth=1` → 事件 + 资讯（News 节点统一记 `event_type=news` 参与排序，补「发展趋势」维度）。
 4. TOP 事件企业 `GET /graph-search/node/{org_id}/edges?edge_type=EXECUTIVE_OF&direction=in` → 专家。
 
 > 产业链节点数据由 `script/industry_chain_etl/load_industry_chain_graph.py` 从 gkx_element 灌入 dev 图空间（IndustryNode tag + BELONGS_TO_NODE/HAS_NODE/CHILD_OF/DOWNSTREAM_OF 边）。
@@ -122,6 +145,16 @@ impact_score = EVENT_WEIGHT(event_type)        # 风险类 3.0 / 财务类 2.0 /
 
 按分数降序取 `top_n`。风险等级：TOP 事件含风险类→高，含财务类→中，否则低。
 
+### 4.4 标书分析维度（节点影响 / 发展趋势 / 机遇挖掘）
+
+`IndustryNodeTopEventsService._derive_analysis` 从已取 TOP 事件池**纯规则派生**三段分析文案（无 LLM、无新图调用），写入响应 `node_impact` / `trend` / `opportunity`：
+
+- **节点影响**：主事件类型 + 风险等级 + 波及链上企业数 + 风险/财务/资讯事件计数。
+- **发展趋势**：按 `occur_date` 年份分布聚合；近 2 年（≥2025）占比 > 50% →「短期热度上升」，否则「分布平稳」。
+- **机遇挖掘**：机遇类事件（financing/stock_finance/annual_finance/bid/news）计数 + 涉及企业数，提示产业合作与资本运作机会。
+
+前端 `buildLiveSummary` 直接渲染 `d.node_impact` / `d.trend` / `d.opportunity`，空则回退 count 派生。
+
 ### 4.4 流程图
 
 ```mermaid
@@ -132,7 +165,7 @@ flowchart TD
     D --> E{有企业?}
     E -- 否 --> Z["返回 evidence: 链节点下无关联企业"]
     E -- 是 --> F["按 chain_score 降序取 top max_orgs"]
-    F --> G["每个企业 filtered-subgraph(org, INVOLVED_IN, depth=1)<br/>→ 收集事件"]
+    F --> G["每个企业 filtered-subgraph(org, INVOLVED_IN,HAS_NEWS, depth=1)<br/>→ 收集事件 + 资讯"]
     G --> H["event_type / time_range 筛选 + 按 event_id 去重"]
     H --> I["impact_score 排序 → 取 TOP-N"]
     I --> J["风险等级判定"]
@@ -158,8 +191,8 @@ sequenceDiagram
     GS-->>SVC: 链节点信息 + 关联企业(chain_score)
     SVC->>SVC: 按 chain_score 取 top max_orgs
     loop 每个企业
-        SVC->>GS: GET /filtered-subgraph/{org_id}?edge_types=INVOLVED_IN
-        GS-->>SVC: 事件
+        SVC->>GS: GET /filtered-subgraph/{org_id}?edge_types=INVOLVED_IN,HAS_NEWS
+        GS-->>SVC: 事件 + 资讯
     end
     SVC->>SVC: 筛选/去重/impact_score 排序 → TOP-N
     loop TOP 事件企业

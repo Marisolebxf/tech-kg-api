@@ -71,6 +71,11 @@ RISK_EVENT_TYPES = {
     "pledge",
     "chattel",
 }
+# 机遇类事件：融资/财务/中标/资讯，对应标书「机遇挖掘」维度
+OPP_EVENT_TYPES = {"financing", "stock_finance", "annual_finance", "bid", "news"}
+FINANCE_EVENT_TYPES = {"financing", "stock_finance", "annual_finance"}
+# 趋势研判基准年（脚本环境禁用 Date.now，固定 2026 与 impact_score 一致）
+TREND_BASE_YEAR = 2026
 
 
 def _impact_score(event_type, amount, occur_date, chain_score):
@@ -308,9 +313,77 @@ class IndustryNodeTopEventsService:
                     )
                 )
         resp.experts = len(all_expert_ids)
+        # 标书分析维度：节点影响 / 发展趋势 / 机遇挖掘（从 TOP 事件池规则派生，纯内存无新图调用）
+        resp.node_impact, resp.trend, resp.opportunity = self._derive_analysis(
+            top, top_org_ids, resp.risk_level
+        )
         resp.evidence = [
             f"链节点 {req.chain_node_id}({resp.chain_node_name or ''}) 关联 {len(orgs)} 家企业",
             f"汇总 {len(events)} 条事件，影响力排序取 TOP {len(top)}",
             f"风险等级 {resp.risk_level}（基于事件类型 {sorted(top_types)}）",
+            f"节点影响：{resp.node_impact}",
+            f"发展趋势：{resp.trend}",
+            f"机遇挖掘：{resp.opportunity}",
         ]
         return resp
+
+    @staticmethod
+    def _derive_analysis(
+        top: list[dict], top_org_ids: set, risk_level: str
+    ) -> tuple[str, str, str]:
+        """从 TOP 事件池派生「节点影响/发展趋势/机遇挖掘」三段分析文案。
+
+        纯规则派生（无 LLM、无新图调用），可解释、稳定。空事件返回空串。
+        """
+        if not top:
+            return "", "", ""
+
+        # 节点影响：主类型 + 风险/财务/资讯计数 + 波及企业数
+        type_counts: dict[str, int] = {}
+        for ev in top:
+            t = ev.get("event_type") or "unknown"
+            type_counts[t] = type_counts.get(t, 0) + 1
+        main_type = max(type_counts, key=type_counts.get)
+        risk_n = sum(1 for ev in top if (ev.get("event_type") or "") in RISK_EVENT_TYPES)
+        fin_n = sum(1 for ev in top if (ev.get("event_type") or "") in FINANCE_EVENT_TYPES)
+        news_n = sum(1 for ev in top if ev.get("event_type") == "news")
+        node_impact = (
+            f"TOP {len(top)} 事件以 {main_type} 为主，风险等级 {risk_level}，"
+            f"波及 {len(top_org_ids)} 家链上企业；"
+            f"含 {risk_n} 条风险事件、{fin_n} 条财务事件、{news_n} 条资讯"
+        )
+
+        # 发展趋势：按年分布 + 近 2 年占比判定上升/平稳
+        year_counts: dict[str, int] = {}
+        for ev in top:
+            d = ev.get("occur_date")
+            if d:
+                y = str(d)[:4]
+                if y.isdigit():
+                    year_counts[y] = year_counts.get(y, 0) + 1
+        years = sorted(year_counts)
+        recent = sum(c for y, c in year_counts.items() if int(y) >= TREND_BASE_YEAR - 1)
+        trend_word = "短期热度上升" if recent * 2 > len(top) else "分布平稳"
+        trend = (
+            f"近期 TOP 事件 {len(top)} 条"
+            + (f"，集中在 {'、'.join(years)}" if years else "")
+            + f"；{trend_word}"
+        )
+
+        # 机遇挖掘：融资/中标/资讯类事件提示合作与资本运作机会
+        opp_ev = [ev for ev in top if (ev.get("event_type") or "") in OPP_EVENT_TYPES]
+        opp_orgs = {ev.get("org_id") for ev in opp_ev if ev.get("org_id")}
+        opp_type_counts: dict[str, int] = {}
+        for ev in opp_ev:
+            t = ev.get("event_type") or ""
+            if t:
+                opp_type_counts[t] = opp_type_counts.get(t, 0) + 1
+        opp_desc = "、".join(
+            f"{t} {c} 条" for t, c in sorted(opp_type_counts.items(), key=lambda x: -x[1])
+        )
+        opportunity = (
+            f"{len(opp_ev)} 条融资/中标/资讯类事件提示产业合作与资本运作机会"
+            + (f"（{opp_desc}）" if opp_desc else "")
+            + (f"，涉及 {len(opp_orgs)} 家企业" if opp_orgs else "")
+        )
+        return node_impact, trend, opportunity

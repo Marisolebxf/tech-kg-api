@@ -113,6 +113,119 @@ async def test_run_parses_governance_and_project_cooperation(monkeypatch):
     assert rel.role_level == "L1"
     assert rel.enterprise_background["stock_type"] == "中国_沪市A股_科创板"
     assert resp.enterprises == 1
+    # 首要企业风险探测：mock 无 INVOLVED_IN 风险边 → 兜底文案
+    assert rel.risk_summary == "暂无风险事件记录"
+
+
+def test_key_tech_enterprise_only_coerces_string_bool():
+    """前端参数框可能传 '是'/'否'/'true'/'false' 字符串，schema 应宽容转 bool。"""
+    from biz.schemas.tech_enterprise_relation_business import KeyEnterpriseRelationRequest
+
+    assert (
+        KeyEnterpriseRelationRequest(
+            expert_id="x", key_tech_enterprise_only="是"
+        ).key_tech_enterprise_only
+        is True
+    )
+    assert (
+        KeyEnterpriseRelationRequest(
+            expert_id="x", key_tech_enterprise_only="true"
+        ).key_tech_enterprise_only
+        is True
+    )
+    assert (
+        KeyEnterpriseRelationRequest(
+            expert_id="x", key_tech_enterprise_only="1"
+        ).key_tech_enterprise_only
+        is True
+    )
+    assert KeyEnterpriseRelationRequest(expert_id="x").key_tech_enterprise_only is True  # 默认
+    assert (
+        KeyEnterpriseRelationRequest(
+            expert_id="x", key_tech_enterprise_only="否"
+        ).key_tech_enterprise_only
+        is False
+    )
+    assert (
+        KeyEnterpriseRelationRequest(
+            expert_id="x", key_tech_enterprise_only="false"
+        ).key_tech_enterprise_only
+        is False
+    )
+    assert (
+        KeyEnterpriseRelationRequest(
+            expert_id="x", key_tech_enterprise_only="0"
+        ).key_tech_enterprise_only
+        is False
+    )
+
+
+def test_enterprise_background_extracts_from_extra_json():
+    """周威 ETL 把 base_info/product 表数据塞进 extra_json，_enterprise_background 应摊平提取。"""
+    from service.tech_enterprise_relation_business import _enterprise_background
+
+    props = {
+        "name_cn": "苏州绿的谐波传动科技股份有限公司",
+        "listing_status": "已上市",
+        "stock_code": "688017.SH",
+        "stock_type": "中国_沪市A股_科创板",
+        "source_table": "dwd_org_stock_base",
+        "extra_json": (
+            '{"existing_payload": {"registered_capital_value": 183330125.0, '
+            '"incorporation_year": 2011, "province": "江苏省", "city": "苏州市", '
+            '"lerep": "左昱昱", "industry_l1_name": null, "industry": null}, '
+            '"source_records": {"dwd_org_org_product_info:x": {"main_prod": "谐波减速器,人形机器人关节"}}}'
+        ),
+    }
+    bg = _enterprise_background(props)
+    assert bg["main_products"] == "谐波减速器,人形机器人关节"
+    assert bg["registered_capital_value"] == 183330125.0
+    assert bg["incorporation_year"] == 2011
+    assert bg["legal_rep"] == "左昱昱"
+    assert bg["province"] == "江苏省"
+    assert bg["listing_status"] == "已上市"
+    # industry_l1_name 源表为 null → 不应出现
+    assert "industry_l1_name" not in bg
+
+
+@pytest.mark.asyncio
+async def test_primary_enterprise_risk_probe(monkeypatch):
+    """首要企业有 INVOLVED_IN 风险事件时，risk_summary 含风险类型。"""
+    risk_sub = {
+        "data": {
+            "nodes": [
+                {"id": "org_lvdie", "labels": ["Organization"], "properties": {}},
+                {
+                    "id": "ev_zx",
+                    "labels": ["Event"],
+                    "properties": {"event_type": "zhixing"},
+                },
+                {
+                    "id": "ev_bk",
+                    "labels": ["Event"],
+                    "properties": {"event_type": "bankruptcy"},
+                },
+            ],
+            "edges": [
+                {"type": "INVOLVED_IN", "source": "org_lvdie", "target": "ev_zx", "properties": {}},
+                {"type": "INVOLVED_IN", "source": "org_lvdie", "target": "ev_bk", "properties": {}},
+            ],
+        }
+    }
+    # org 专属路由放前面（FakeAsyncClient 按 key 子串先匹配先返回）
+    routes = [
+        ("/graph-search/filtered-subgraph/org_lvdie", risk_sub),
+        ("/graph-search/filtered-subgraph/", _subgraph()),
+    ]
+    svc = KeyEnterpriseRelationService(base_url="http://x")
+    monkeypatch.setattr(_httpx(), "AsyncClient", lambda: _FakeAsyncClient(routes))
+
+    resp = await svc.run(KeyEnterpriseRelationRequest(expert_id=EXPERT))
+    rel = resp.relations[0]
+    assert rel.enterprise_id == "org_lvdie"
+    assert "2 条风险事件" in rel.risk_summary
+    assert "bankruptcy" in rel.risk_summary
+    assert "zhixing" in rel.risk_summary
 
 
 @pytest.mark.asyncio

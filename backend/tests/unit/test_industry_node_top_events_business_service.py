@@ -162,3 +162,48 @@ async def test_topn_via_graph_search_only(monkeypatch):
     # orgA 有专家
     assert resp.experts == 1
     assert resp.relations[0].expert_id == "person_x"
+    # 标书分析维度：后端真实派生（非空）
+    assert resp.node_impact and "bankruptcy" in resp.node_impact
+    assert resp.trend and "分布平稳" in resp.trend
+    assert resp.opportunity  # 非空（即便 0 条也有兜底文案）
+
+
+def test_derive_analysis_dimensions():
+    """_derive_analysis 从混合事件池派生 节点影响/发展趋势/机遇挖掘 文案。"""
+    top = [
+        {
+            "event_type": "bankruptcy",
+            "occur_date": "2025-05-01",
+            "org_id": "org_a",
+        },
+        {
+            "event_type": "financing",
+            "occur_date": "2026-01-10",
+            "org_id": "org_a",
+        },
+        {
+            "event_type": "news",
+            "occur_date": "2026-03-02",
+            "org_id": "org_b",
+        },
+    ]
+    top_org_ids = {"org_a", "org_b"}
+    node_impact, trend, opportunity = IndustryNodeTopEventsService._derive_analysis(
+        top, top_org_ids, "高"
+    )
+    # 节点影响：含风险/财务/资讯计数
+    assert "1 条风险事件" in node_impact
+    assert "1 条财务事件" in node_impact
+    assert "1 条资讯" in node_impact
+    assert "波及 2 家链上企业" in node_impact
+    # 发展趋势：2025+2026 占 2/3 > 50% → 短期热度上升
+    assert "短期热度上升" in trend
+    assert "2025" in trend and "2026" in trend
+    # 机遇挖掘：financing + news 命中机遇类
+    assert "2 条" in opportunity
+    assert "financing" in opportunity
+    assert "涉及 2 家企业" in opportunity
+
+
+def test_derive_analysis_empty():
+    assert IndustryNodeTopEventsService._derive_analysis([], set(), "低") == ("", "", "")

@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 
@@ -27,6 +28,7 @@ from biz.schemas.tech_enterprise_relation_business import (
     KeyEnterpriseRelationRequest,
     KeyEnterpriseRelationResponse,
 )
+from service.industry_node_top_events_business import RISK_EVENT_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -119,28 +121,87 @@ def _is_key_tech_enterprise(name: str | None, bg: dict) -> bool:
     return False
 
 
+def _flatten_org_props(props: dict) -> dict:
+    """合并顶层属性 + extra_json 里的多表数据。
+
+    周威的 org ETL（merge_existing_properties）把多源表数据塞进 ``extra_json`` 而非
+    顶层 tag 字段——顶层只留最后写的表（多为 stock_base），base_info 的注册资本/成立年/
+    行业、product 表的主营/经营范围都埋在 extra_json 里。这里摊平供 _enterprise_background 取用。
+
+    extra_json 标准结构::
+        {"existing_payload": {...base_info 字段...},
+         "source_records": {"{table}:{id}": {...该表行...}, ...}}
+    非标准 extra_json（如回填链上企业的 {antitypic,credit_code,...}）原样合并，无副作用。
+    """
+    flat: dict[str, object] = dict(props)
+    raw = props.get("extra_json")
+    if not raw:
+        return flat
+    try:
+        ej = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return flat
+    if not isinstance(ej, dict):
+        return flat
+    for bucket in (ej.get("existing_payload"),):
+        if isinstance(bucket, dict):
+            for k, v in bucket.items():
+                if v not in (None, "", []) and flat.get(k) in (None, "", []):
+                    flat[k] = v
+    sr = ej.get("source_records")
+    if isinstance(sr, dict):
+        for row in sr.values():
+            if not isinstance(row, dict):
+                continue
+            for k, v in row.items():
+                if v not in (None, "", []) and flat.get(k) in (None, "", []):
+                    flat[k] = v
+    return flat
+
+
+# 业务背景字段的候选源列名（顶层 tag 名 / MySQL 列名 / extra_json 内字段名）
+_BG_ALIASES = {
+    "industry_l1_name": ("industry_l1_name", "industry", "industry_class"),
+    "industry_l2_name": ("industry_l2_name",),
+    "registered_capital_value": ("registered_capital_value", "registered_capital", "capital_num"),
+    "incorporation_year": ("incorporation_year", "founded_year", "est_year"),
+    "main_products": ("main_products", "main_prod"),
+    "legal_rep": ("legal_rep", "lerep", "legal_person"),
+    "description": ("description", "main_activities", "business_scope"),
+}
+_BG_PASSTHROUGH = (
+    "name_cn",
+    "external_id",
+    "org_type",
+    "listing_status",
+    "capital_currency",
+    "province",
+    "city",
+    "stock_code",
+    "stock_type",
+    "listed_date",
+    "stock_noun",
+)
+
+
 def _enterprise_background(props: dict) -> dict:
+    """企业背景：顶层 Organization 属性 + extra_json 多表数据摊平后取值。
+
+    标书「行业地位/技术方向/经营状况」所需的行业、注册资本、成立年、主营等字段，
+    周威 ETL 写在 extra_json 里，这里经 _flatten_org_props 摊平后再按候选列名提取。
+    """
+    fp = _flatten_org_props(props)
     bg: dict[str, object] = {}
-    for k in (
-        "name_cn",
-        "external_id",
-        "org_type",
-        "industry",
-        "industry_l1_name",
-        "industry_l2_name",
-        "listing_status",
-        "registered_capital_value",
-        "capital_currency",
-        "incorporation_year",
-        "province",
-        "city",
-        "stock_code",
-        "stock_type",
-        "listed_date",
-        "stock_noun",
-    ):
-        if props.get(k) not in (None, "", []):
-            bg[k] = props.get(k)
+    for canon, candidates in _BG_ALIASES.items():
+        for c in candidates:
+            v = fp.get(c)
+            if v not in (None, "", []):
+                bg[canon] = v
+                break
+    for k in _BG_PASSTHROUGH:
+        v = fp.get(k)
+        if v not in (None, "", []):
+            bg[k] = v
     return bg
 
 
@@ -239,6 +300,7 @@ class KeyEnterpriseRelationService:
             if "Organization" not in node_labels.get(org_id, set()):
                 return
             op = node_props.get(org_id, {})
+            bg = _enterprise_background(op)
             relations.append(
                 EnterpriseRelationItem(
                     enterprise_id=org_id,
@@ -253,9 +315,9 @@ class KeyEnterpriseRelationService:
                         and mode in {"法人代表", "实际控制", "受益所有", "股东持股"}
                         else None
                     ),
-                    tech_field=op.get("industry_l1_name") or op.get("industry"),
+                    tech_field=bg.get("industry_l1_name") or op.get("industry"),
                     period=period,
-                    enterprise_background=_enterprise_background(op),
+                    enterprise_background=bg,
                     source=source,
                 )
             )
@@ -318,6 +380,10 @@ class KeyEnterpriseRelationService:
             return True
 
         relations = [r for r in relations if _keep(r)]
+        # 首要企业 best-effort 风险事件探测（标书「经营状况」之风险提示维度）
+        # 只查 relations[0]，避免 N×调用；失败降级为空串，不阻断主流程。
+        if relations:
+            await self._probe_primary_risk(relations[0])
         resp.relations = relations
         resp.enterprises = len({r.enterprise_id for r in relations})
         resp.roles = len({r.role_label for r in relations if r.role_label})
@@ -328,3 +394,50 @@ class KeyEnterpriseRelationService:
             "角色定位来源：EXECUTIVE_OF.position 等边属性 + 边类型映射",
         ]
         return resp
+
+    async def _probe_primary_risk(self, primary: EnterpriseRelationItem) -> None:
+        """对首要关联企业查 INVOLVED_IN 风险事件，回填 risk_summary（best-effort）。"""
+        org_id = primary.enterprise_id
+        if not org_id:
+            return
+        async with httpx.AsyncClient() as client:
+            try:
+                rj = await self._get(
+                    client,
+                    f"/graph-search/filtered-subgraph/{org_id}",
+                    {
+                        "space": SPACE,
+                        "edge_types": "INVOLVED_IN",
+                        "depth": 1,
+                        "limit": 20,
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("首要企业风险探测失败 %s: %s", org_id, exc)
+                primary.risk_summary = ""
+                return
+        risk_types, risk_count = self._count_risk_events(rj, org_id)
+        if risk_count:
+            primary.risk_summary = f"近 {risk_count} 条风险事件（{'、'.join(sorted(risk_types))}）"
+        else:
+            primary.risk_summary = "暂无风险事件记录"
+
+    @staticmethod
+    def _count_risk_events(subgraph_json: dict, org_id: str) -> tuple[set[str], int]:
+        """从 org 的 INVOLVED_IN 子图统计风险类事件类型集合与计数。"""
+        data = subgraph_json.get("data") or {}
+        nodes = {n.get("id"): (n.get("properties") or {}) for n in (data.get("nodes") or [])}
+        risk_types: set[str] = set()
+        risk_count = 0
+        for e in data.get("edges") or []:
+            if e.get("type") != "INVOLVED_IN":
+                continue
+            s, t = e.get("source"), e.get("target")
+            other = t if s == org_id else s
+            if not other or other == org_id:
+                continue
+            et = nodes.get(other, {}).get("event_type") or ""
+            if et in RISK_EVENT_TYPES:
+                risk_types.add(et)
+                risk_count += 1
+        return risk_types, risk_count

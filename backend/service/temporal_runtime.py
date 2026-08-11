@@ -76,18 +76,14 @@ class TemporalRuntime:
         if execution.get("dispatchMode") == "LOCAL_FALLBACK":
             return execution
         client = await self.client()
-        handle = client.get_workflow_handle(
-            execution["workflowId"], run_id=execution.get("runId")
-        )
+        handle = client.get_workflow_handle(execution["workflowId"], run_id=execution.get("runId"))
         description = await handle.describe()
         status = description.status.name
         refreshed = {**execution, "status": status}
         if status == "RUNNING":
             return refreshed
 
-        refreshed["completedAt"] = datetime.now(UTC).astimezone().strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
+        refreshed["completedAt"] = datetime.now(UTC).astimezone().strftime("%Y-%m-%d %H:%M:%S")
         if status == "COMPLETED":
             refreshed["output"] = await handle.result()
             refreshed["message"] = "工作流执行完成"

@@ -25,9 +25,9 @@ class WorkflowRepository:
 
     def __init__(self, database_path: str | None = None) -> None:
         backend_dir = Path(__file__).resolve().parents[1]
-        default_path = Path(
-            os.getenv("TECH_KG_STATE_DIR", str(backend_dir / "var"))
-        ) / "tech-kg-workflows.db"
+        default_path = (
+            Path(os.getenv("TECH_KG_STATE_DIR", str(backend_dir / "var"))) / "tech-kg-workflows.db"
+        )
         self.database_path = database_path or os.getenv("WORKFLOW_DATABASE_PATH", str(default_path))
         Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
@@ -88,9 +88,7 @@ class WorkflowRepository:
         for index in indexes:
             if not index[2]:
                 continue
-            columns = connection.execute(
-                f"PRAGMA index_info({index[1]})"
-            ).fetchall()
+            columns = connection.execute(f"PRAGMA index_info({index[1]})").fetchall()
             if [column[2] for column in columns] == ["workflow_type"]:
                 has_legacy_unique = True
                 break

@@ -249,9 +249,7 @@ def execute_cleanup(graph: TRSGraphClient, plan: dict[str, Any]) -> dict[str, in
         deleted_edges += 1
     for raw in plan["deletableTags"]:
         graph.execute_write(
-            "DELETE TAG {} FROM {};".format(
-                ngql_identifier(raw["tag"]), ngql_literal(raw["vid"])
-            )
+            "DELETE TAG {} FROM {};".format(ngql_identifier(raw["tag"]), ngql_literal(raw["vid"]))
         )
         deleted_tags += 1
     for raw in plan["deletableVertices"]:

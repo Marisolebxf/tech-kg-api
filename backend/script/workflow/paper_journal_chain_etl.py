@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 SPACE = "dev"
 BATCH = 500
 INGEST_BATCH = "workflow_etl"
-INGEST_TIME = ""
+INGEST_TIME = "2026-08-11T00:00:00Z"
 _SUFFIX_RE = re.compile(r"__\d+$")
 
 
@@ -95,9 +95,12 @@ def _batch_v(client, tag, fields, rows):
         return 0
 
 
-def _batch_e(client, edge, fields, rows, double_first=False):
+def _batch_e(client, edge, fields, rows, double_first=False, fixed_confidence=None):
+    """INSERT EDGE。fixed_confidence 非 None 时追加 confidence double 字段（不加引号）。"""
     if not rows:
         return 0
+    if fixed_confidence is not None:
+        fields = [*fields, "confidence"]
     fl = f"({','.join(fields)})" if fields else "()"
     parts = []
     for row in rows:
@@ -113,15 +116,48 @@ def _batch_e(client, edge, fields, rows, double_first=False):
                         vstrs.append("0.0")
                 else:
                     vstrs.append(_esc(v))
+            if fixed_confidence is not None:
+                vstrs.append(str(float(fixed_confidence)))
             parts.append(f"{_vid(s)}->{_vid(t)}:({','.join(vstrs)})")
         else:
-            parts.append(f"{_vid(s)}->{_vid(t)}:()")
+            if fixed_confidence is not None:
+                parts.append(f"{_vid(s)}->{_vid(t)}:({str(float(fixed_confidence))})")
+            else:
+                parts.append(f"{_vid(s)}->{_vid(t)}:()")
     try:
         client.execute_write(f"USE {SPACE}; INSERT EDGE {edge}{fl} VALUES {','.join(parts)};")
         return len(rows)
     except Exception as exc:
         logger.warning("  INSERT EDGE %s 失败 (%d): %s", edge, len(rows), str(exc)[:120])
         return 0
+
+
+def _attach_org_base(client, vids, confidence, source_table):
+    """给实体 vid 批量挂 organization_base mixin tag（confidence + 溯源四件套）。"""
+    if not vids:
+        return 0
+    fields = (
+        "organization_id, confidence, source_system, source_table, source_record_id, "
+        "ingest_batch, ingest_time"
+    )
+    done = 0
+    for i in range(0, len(vids), BATCH):
+        chunk = vids[i : i + BATCH]
+        vals = ",".join(
+            f'{_vid(v)}:("",{float(confidence)},"gkx_element","{source_table}",'
+            f'"{v}","{INGEST_BATCH}","{INGEST_TIME}")'
+            for v in chunk
+        )
+        try:
+            client.execute_write(
+                f"USE {SPACE}; INSERT VERTEX organization_base({fields}) VALUES {vals};"
+            )
+            done += len(chunk)
+        except Exception as exc:
+            logger.warning(
+                "  INSERT VERTEX organization_base 失败 (%d): %s", len(chunk), str(exc)[:120]
+            )
+    return done
 
 
 def _since(sql, since, col="updated_time"):
@@ -169,6 +205,8 @@ def _load_papers(mysql, graph, since):
                     ],
                     verts[i : i + BATCH],
                 )
+            # 挂 organization_base 溯源+置信度 mixin（confidence=1.0 真实实体）
+            _attach_org_base(graph, [v[0] for v in verts], 1.0, tbl)
             total += len(verts)
             logger.info("  %s: %d 篇论文", tbl, len(verts))
     return {"papers": total}
@@ -206,9 +244,14 @@ def _load_authors(mysql, graph, since):
                     ["name_zh", "name_en"],
                     [(p[0], p[1], p[2]) for p in prows[i : i + BATCH]],
                 )
+            _attach_org_base(graph, [p[0] for p in prows], 1.0, tbl)
             for i in range(0, len(edges), BATCH):
                 _batch_e(
-                    graph, "AUTHORED_BY", ["author_order", "is_corresponding"], edges[i : i + BATCH]
+                    graph,
+                    "AUTHORED_BY",
+                    ["author_order", "is_corresponding"],
+                    edges[i : i + BATCH],
+                    fixed_confidence=1.0,
                 )
             total_p += len(persons)
             total_e += len(edges)
@@ -237,6 +280,7 @@ def _load_journals(mysql, graph, since):
                     ["name_en", "name_zh", "issn", "country"],
                     verts[i : i + BATCH],
                 )
+            _attach_org_base(graph, [v[0] for v in verts], 1.0, tbl)
             total_j += len(verts)
             logger.info("  %s: %d 期刊", tbl, len(verts))
 
@@ -252,7 +296,7 @@ def _load_journals(mysql, graph, since):
                 if pid and jid:
                     edges.append((f"paper_{pid}", f"journal_{jid}"))
             for i in range(0, len(edges), BATCH):
-                _batch_e(graph, "PUBLISHED_IN", [], edges[i : i + BATCH])
+                _batch_e(graph, "PUBLISHED_IN", [], edges[i : i + BATCH], fixed_confidence=1.0)
             total_e += len(edges)
             logger.info("  %s PUBLISHED_IN: %d", tbl, len(edges))
     return {"journals": total_j, "published_in": total_e}
@@ -295,7 +339,15 @@ def _load_paper_relations(mysql, graph, since):
                     else:
                         edges.append((f"paper_{src_id}", dst_vid))
             for i in range(0, len(edges), BATCH):
-                _batch_e(graph, edge, [field] if field else [], edges[i : i + BATCH])
+                # CITES/CITED_BY 目标是桩(paper_ref_/cit_) → 0.5；RELATED_TO → 0.7
+                _rel_conf = 0.7 if edge == "RELATED_TO" else 0.5
+                _batch_e(
+                    graph,
+                    edge,
+                    [field] if field else [],
+                    edges[i : i + BATCH],
+                    fixed_confidence=_rel_conf,
+                )
             total += len(edges)
             logger.info("  %s: %d 条边", edge, len(edges))
     return {"paper_relations": total}
@@ -338,8 +390,9 @@ def _load_keywords(mysql, graph, since):
             krows = list(kw_set.values())
             for i in range(0, len(krows), BATCH):
                 _batch_v(graph, "Keyword", ["keyword"], krows[i : i + BATCH])
+            _attach_org_base(graph, [k[0] for k in krows], 1.0, tbl)
             for i in range(0, len(edges), BATCH):
-                _batch_e(graph, "HAS_KEYWORD", [], edges[i : i + BATCH])
+                _batch_e(graph, "HAS_KEYWORD", [], edges[i : i + BATCH], fixed_confidence=1.0)
             total_kw += len(kw_set)
             total_e += len(edges)
             logger.info("  %s: %d 关键词, %d HAS_KEYWORD", tbl, len(kw_set), len(edges))
@@ -362,6 +415,7 @@ def _load_reports(mysql, graph, since):
                 verts.append((f"report_{rid}", r[1] or r[2] or "", r[3] or ""))
             for i in range(0, len(verts), BATCH):
                 _batch_v(graph, "Report", ["title", "abstract"], verts[i : i + BATCH])
+            _attach_org_base(graph, [v[0] for v in verts], 1.0, tbl)
             total_r += len(verts)
             logger.info("  %s: %d 报告", tbl, len(verts))
 
@@ -385,7 +439,7 @@ def _load_reports(mysql, graph, since):
                 if rid:
                     edges.append((f"paper_rp_{pid}", f"report_{rid}"))
         for i in range(0, len(edges), BATCH):
-            _batch_e(graph, "REFERENCED_BY", [], edges[i : i + BATCH])
+            _batch_e(graph, "REFERENCED_BY", [], edges[i : i + BATCH], fixed_confidence=0.8)
         total_e = len(edges)
         logger.info("  REFERENCED_BY: %d", total_e)
     return {"reports": total_r, "referenced_by": total_e}

@@ -115,6 +115,9 @@ async def test_run_parses_governance_and_project_cooperation(monkeypatch):
     assert resp.enterprises == 1
     # 首要企业风险探测：mock 无 INVOLVED_IN 风险边 → 兜底文案
     assert rel.risk_summary == "暂无风险事件记录"
+    # 置信度：governance → 0.9；响应综合 = max(relations) = 0.9
+    assert rel.confidence == 0.9
+    assert resp.confidence == 0.9
 
 
 def test_key_tech_enterprise_only_coerces_string_bool():

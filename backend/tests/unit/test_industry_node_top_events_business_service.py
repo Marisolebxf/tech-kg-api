@@ -166,6 +166,9 @@ async def test_topn_via_graph_search_only(monkeypatch):
     assert resp.node_impact and "bankruptcy" in resp.node_impact
     assert resp.trend and "分布平稳" in resp.trend
     assert resp.opportunity  # 非空（即便 0 条也有兜底文案）
+    # 置信度：风险等级 高 → 0.9；bankruptcy 事件 → 0.9
+    assert resp.confidence == 0.9
+    assert resp.top_events[0].confidence == 0.9
 
 
 def test_derive_analysis_dimensions():

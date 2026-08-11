@@ -49,6 +49,13 @@ PROJECT_ORG_EDGES = {"PARTICIPATES_IN", "FUNDED_BY"}  # Project↔Organization
 PATENT_PERSON_EDGES = {"INVENTED_BY"}  # Patent→Person
 PATENT_ORG_EDGES = {"APPLIED_BY"}  # Patent→Organization
 
+# 关系置信度（标书「企业关联置信度」）：governance 直连最高，项目/专利 2-hop 略低
+COOPERATION_CONFIDENCE = {
+    "governance": 0.9,
+    "project_cooperation": 0.8,
+    "patent_cooperation": 0.8,
+}
+
 _NON_ENTERPRISE_KEYWORDS = (
     "大学",
     "学院",
@@ -319,6 +326,7 @@ class KeyEnterpriseRelationService:
                     period=period,
                     enterprise_background=bg,
                     source=source,
+                    confidence=COOPERATION_CONFIDENCE.get(ctype, 0.7),
                 )
             )
 
@@ -388,6 +396,7 @@ class KeyEnterpriseRelationService:
         resp.enterprises = len({r.enterprise_id for r in relations})
         resp.roles = len({r.role_label for r in relations if r.role_label})
         resp.cooperation_fields = sorted({r.tech_field for r in relations if r.tech_field})
+        resp.confidence = max((r.confidence for r in relations), default=0.0)
         resp.evidence = [
             f"从 dev 空间专家 {req.expert_id} 2 跳子图解析出 {len(relations)} 条专家-企业关系",
             "合作时间来源：项目 research_period / 专利 application_date / 学者 work_experience_date",

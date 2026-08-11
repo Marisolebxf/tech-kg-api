@@ -38,27 +38,34 @@ TAG_DDL = [
     """CREATE TAG IF NOT EXISTS Keyword(
         keyword string
     )""",
+    # 溯源 + 置信度 mixin tag（挂到实体上，dev 已存在；这里供全新初始化）
+    """CREATE TAG IF NOT EXISTS organization_base(
+        organization_id string, confidence double,
+        source_system string, source_table string, source_record_id string, source_url string,
+        ingest_batch string, ingest_time string, source_update_time string, extra_json string
+    )""",
 ]
 
-# Edge DDL — 同上全部 string
+# Edge DDL — 同上全部 string；论文域边带 confidence（标书「关系置信度」）
 EDGE_DDL = [
     """CREATE EDGE IF NOT EXISTS AUTHORED_BY(
-        author_order string, is_corresponding string
+        author_order string, is_corresponding string, confidence double
     )""",
     """CREATE EDGE IF NOT EXISTS PUBLISHED_IN(
-        volume string, issue string, start_page string, end_page string, publication_year string
+        volume string, issue string, start_page string, end_page string, publication_year string,
+        confidence double
     )""",
     """CREATE EDGE IF NOT EXISTS CITES(
-        reference_identifier string
+        reference_identifier string, confidence double
     )""",
     """CREATE EDGE IF NOT EXISTS CITED_BY(
-        citation_identifier string
+        citation_identifier string, confidence double
     )""",
-    """CREATE EDGE IF NOT EXISTS RELATED_TO()""",
+    """CREATE EDGE IF NOT EXISTS RELATED_TO(confidence double)""",
     """CREATE EDGE IF NOT EXISTS AFFILIATED_WITH(
         affiliation_name string, source string
     )""",
-    """CREATE EDGE IF NOT EXISTS HAS_KEYWORD()""",
+    """CREATE EDGE IF NOT EXISTS HAS_KEYWORD(confidence double)""",
     """CREATE EDGE IF NOT EXISTS OUTPUT_OF()""",
 ]
 

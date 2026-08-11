@@ -30,6 +30,7 @@ class TopEventItem(BaseModel):
     rank: int = 0
     org_id: str | None = None
     org_name: str | None = None
+    confidence: float = 0.0  # 事件置信度（按事件类型规则赋值）
 
 
 class EventExpertRelation(BaseModel):
@@ -57,4 +58,5 @@ class IndustryNodeTopEventsResponse(BaseModel):
     node_impact: str = ""
     trend: str = ""
     opportunity: str = ""
+    confidence: float = 0.0  # 综合置信度（按风险等级赋值）
     evidence: list[str] = Field(default_factory=list)

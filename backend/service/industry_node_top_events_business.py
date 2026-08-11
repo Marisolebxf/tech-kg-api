@@ -77,6 +77,18 @@ FINANCE_EVENT_TYPES = {"financing", "stock_finance", "annual_finance"}
 # 趋势研判基准年（脚本环境禁用 Date.now，固定 2026 与 impact_score 一致）
 TREND_BASE_YEAR = 2026
 
+# 事件置信度（标书「实体共现和语义关联置信度」）：风险类最高，资讯类低
+EVENT_CONFIDENCE = {
+    **{et: 0.9 for et in RISK_EVENT_TYPES},
+    **{et: 0.85 for et in ("financing", "stock_finance", "annual_finance")},
+    "bid": 0.8,
+    "news": 0.7,
+    "change_record": 0.7,
+    "recruit": 0.6,
+}
+# 综合置信度按风险等级赋值
+RISK_LEVEL_CONFIDENCE = {"高": 0.9, "中": 0.75, "低": 0.6}
+
 
 def _impact_score(event_type, amount, occur_date, chain_score):
     weight = EVENT_WEIGHT.get(event_type or "", 1.0)
@@ -262,6 +274,7 @@ class IndustryNodeTopEventsService:
                 rank=i + 1,
                 org_id=ev.get("org_id"),
                 org_name=ev.get("org_name"),
+                confidence=EVENT_CONFIDENCE.get(ev.get("event_type") or "", 0.7),
             )
             for i, ev in enumerate(top)
         ]
@@ -273,6 +286,7 @@ class IndustryNodeTopEventsService:
             resp.risk_level = "中"
         else:
             resp.risk_level = "低"
+        resp.confidence = RISK_LEVEL_CONFIDENCE.get(resp.risk_level, 0.6)
 
         # 3) TOP 事件企业查专家（governance 边）
         top_org_ids = {ev.get("org_id") for ev in top if ev.get("org_id")}

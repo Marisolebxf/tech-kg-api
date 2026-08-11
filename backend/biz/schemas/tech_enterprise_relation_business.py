@@ -56,6 +56,7 @@ class EnterpriseRelationItem(BaseModel):
     enterprise_background: dict[str, Any] = Field(default_factory=dict)
     source: str = ""  # 来源边类型或 project_id/patent_id
     risk_summary: str = ""  # 首要企业风险事件摘要（标书「经营状况」之风险提示）
+    confidence: float = 0.0  # 关系置信度（标书「企业关联置信度」）
 
 
 class KeyEnterpriseRelationResponse(BaseModel):
@@ -65,4 +66,5 @@ class KeyEnterpriseRelationResponse(BaseModel):
     roles: int = 0  # 角色类型数
     cooperation_fields: list[str] = Field(default_factory=list)
     relations: list[EnterpriseRelationItem] = Field(default_factory=list)
+    confidence: float = 0.0  # 综合置信度（取关系置信度最大值）
     evidence: list[str] = Field(default_factory=list)

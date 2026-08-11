@@ -241,15 +241,16 @@ class PythonScriptWorkflow:
             request["definitionId"],
             start_to_close_timeout=timedelta(seconds=30),
         )
+        timeout_seconds = max(int(definition.get("timeoutSeconds", 60)), 1)
         return await workflow.execute_activity(
             execute_python_script,
             {
                 "scriptPath": definition["scriptPath"],
                 "functionName": definition.get("functionName", "workflow"),
                 "payload": request.get("payload", {}),
-                "timeoutSeconds": definition.get("timeoutSeconds", 60),
+                "timeoutSeconds": timeout_seconds,
             },
-            start_to_close_timeout=timedelta(minutes=5),
+            start_to_close_timeout=timedelta(seconds=timeout_seconds + 30),
         )
 
 

@@ -25,7 +25,14 @@ SOURCE_SYSTEM = "gkx_element"
 MAX_TEXT_LENGTH = 20_000
 MAX_EXTRA_JSON_LENGTH = 64_000
 VID_MAX_BYTES = 64
-EDGE_PROVENANCE = ("source_table", "source_record_id", "ingest_batch", "ingest_time")
+EDGE_PROVENANCE = (
+    "organization_id",
+    "confidence",
+    "source_table",
+    "source_record_id",
+    "ingest_batch",
+    "ingest_time",
+)
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "dev_organization_schema.ngql"
 MAPPING_PATH = (
     Path(__file__).resolve().parents[1] / "schemas" / "国内外机构要素库全字段图谱映射说明.md"
@@ -779,6 +786,114 @@ def clean_text(value: Any, *, max_length: int = MAX_TEXT_LENGTH) -> str | None:
     return result
 
 
+VIRTUAL_SOURCE_MARKERS: tuple[str, ...] = ("mock", "stub", "virtual", "placeholder", "test")
+VIRTUAL_SOURCE_FIELDS: tuple[str, ...] = ("data_source", "source_system")
+
+
+def is_virtual_source_row(row: Mapping[str, Any]) -> bool:
+    """Reject explicitly labelled synthetic organization source records."""
+    for field_name in VIRTUAL_SOURCE_FIELDS:
+        value = clean_text(row.get(field_name))
+        if value is None:
+            continue
+        normalized = value.casefold().replace("-", "_")
+        for marker in VIRTUAL_SOURCE_MARKERS:
+            if (
+                normalized == marker
+                or normalized.startswith(marker + "_")
+                or normalized.endswith("_" + marker)
+                or ("_" + marker + "_") in normalized
+            ):
+                return True
+    return False
+
+
+ORGANIZATION_ID_FIELDS: tuple[str, ...] = (
+    "organization_id",
+    "org_id",
+    "company_id",
+    "entity_eid",
+    "acquiring_org_id",
+    "admin_org_id",
+    "antitypic",
+)
+
+
+def organization_id_from_row(row: Mapping[str, Any]) -> str | None:
+    """Return the owning organization identifier without inventing one."""
+    for field_name in ORGANIZATION_ID_FIELDS:
+        value = clean_text(row.get(field_name))
+        if value is not None:
+            return value
+    return None
+
+
+def entity_confidence(row: Mapping[str, Any], *, source_table: str) -> float:
+    """Score persisted organization-domain entity evidence deterministically.
+
+    DWD provenance contributes 0.40, stable identifiers 0.30, display identity
+    0.20, and supporting business attributes 0.10. No model value is used.
+    """
+    score = 0.40 if source_table.startswith("dwd_") else 0.30
+    if organization_id_from_row(row) is not None:
+        score += 0.20
+    if any(clean_text(row.get(name)) is not None for name in ("external_id", "credit_no")):
+        score += 0.10
+    if any(
+        clean_text(row.get(name)) is not None
+        for name in (
+            "name_cn",
+            "name_en",
+            "company_name",
+            "org_loc_name",
+            "executives_name",
+            "bo_name",
+            "entity_name",
+            "news_title",
+            "title",
+            "job_title",
+            "target_item_name",
+            "main_prod",
+            "main_products",
+        )
+    ):
+        score += 0.20
+    if any(
+        clean_text(row.get(name)) is not None
+        for name in ("country_code", "country", "province", "city", "address", "updated_time")
+    ):
+        score += 0.10
+    return round(min(max(score, 0.0), 1.0), 4)
+
+
+def relation_confidence(row: Mapping[str, Any], *, source_table: str) -> float:
+    """Score a relation from source reliability and explicit endpoint evidence."""
+    score = 0.55 if source_table.startswith("dwd_") else 0.45
+    id_fields = (
+        "organization_id",
+        "org_id",
+        "company_id",
+        "entity_eid",
+        "inv_org_id",
+        "acquiring_org_id",
+        "acquired_org_id",
+        "affiliate",
+        "affiliates_company_id",
+        "admin_org_id",
+        "antitypic",
+    )
+    explicit_ids = sum(clean_text(row.get(name)) is not None for name in id_fields)
+    if explicit_ids >= 1:
+        score += 0.25
+    if explicit_ids >= 2:
+        score += 0.10
+    if sum(clean_text(value) is not None for value in row.values()) >= 3:
+        score += 0.05
+    if any(clean_text(row.get(name)) is not None for name in ("external_id", "credit_no")):
+        score += 0.05
+    return round(min(max(score, 0.0), 1.0), 4)
+
+
 def to_float(value: Any) -> float | None:
     """Convert common numeric strings without silently treating invalid values as zero."""
     if value is None or isinstance(value, bool):
@@ -986,6 +1101,8 @@ def node_provenance(
     ingest_time: str,
 ) -> dict[str, Any]:
     return {
+        "organization_id": organization_id_from_row(row),
+        "confidence": entity_confidence(row, source_table=table),
         "source_system": SOURCE_SYSTEM,
         "source_table": table,
         "source_record_id": record_id,

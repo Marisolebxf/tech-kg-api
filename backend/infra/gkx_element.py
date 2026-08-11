@@ -1,6 +1,7 @@
 """gkx_element 只读 MySQL 客户端。
 
-机构图 ETL 只从要素库读取数据。连接参数与业务库 MYSQL_* 隔离，避免脚本误连
+机构图 ETL 只从要素库读取数据。优先使用专用的 GKX_ELEMENT_MYSQL_*；未配置时
+复用项目现有 MYSQL_* 连接信息，但数据库名固定为 gkx_element，避免脚本误连
 techkg/gkx_local；会话在执行任何业务 SQL 前显式切换为只读事务。
 """
 
@@ -18,11 +19,16 @@ from infra.mysql import MySQLClient
 
 
 def build_gkx_element_url() -> str:
-    host = os.getenv("GKX_ELEMENT_MYSQL_HOST", "127.0.0.1")
-    port = int(os.getenv("GKX_ELEMENT_MYSQL_PORT", "3306"))
-    database = os.getenv("GKX_ELEMENT_MYSQL_DATABASE", "gkx_element")
-    username = quote_plus(os.getenv("GKX_ELEMENT_MYSQL_USERNAME", "root"))
-    password = quote_plus(os.getenv("GKX_ELEMENT_MYSQL_PASSWORD", ""))
+    host = os.getenv("GKX_ELEMENT_MYSQL_HOST") or os.getenv("MYSQL_HOST", "127.0.0.1")
+    port = int(os.getenv("GKX_ELEMENT_MYSQL_PORT") or os.getenv("MYSQL_PORT", "3306"))
+    database = os.getenv("GKX_ELEMENT_MYSQL_DATABASE") or "gkx_element"
+    username = quote_plus(
+        os.getenv("GKX_ELEMENT_MYSQL_USERNAME") or os.getenv("MYSQL_USERNAME", "root")
+    )
+    password = quote_plus(
+        os.getenv("GKX_ELEMENT_MYSQL_PASSWORD")
+        or os.getenv("MYSQL_PASSWORD", "123456789")
+    )
     return f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}?charset=utf8mb4"
 
 

@@ -154,6 +154,8 @@ class GraphSchemaScript(Base):
     etag: Mapped[str | None] = mapped_column(String(128), nullable=True)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     uploaded_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    workflow_definition_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    workflow_function_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )

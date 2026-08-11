@@ -33,6 +33,7 @@ from infra.graph_db import TRSGraphClient, get_trs_graph_client
 from script.organization_etl_common import (
     DEFAULT_SPACE,
     DOMAIN_TABLE_SPECS,
+    RELATION_SPECS,
     SCHEMA_PATH,
     DomainTableSpec,
     RelationDataError,
@@ -42,6 +43,7 @@ from script.organization_etl_common import (
     datasource_vid,
     event_vid,
     exclusive_etl_lock,
+    is_virtual_source_row,
     news_vid,
     ngql_identifier,
     ngql_literal,
@@ -62,6 +64,8 @@ DEFAULT_BATCH_SIZE = 100
 TAG_PROPERTIES: dict[str, tuple[str, ...]] = {
     "Organization": (
         "org_id",
+        "organization_id",
+        "confidence",
         "name_cn",
         "name_en",
         "external_id",
@@ -107,6 +111,8 @@ TAG_PROPERTIES: dict[str, tuple[str, ...]] = {
         "birth_date",
         "gender",
         "biography",
+        "organization_id",
+        "confidence",
         "extra_json",
         "source_system",
         "source_table",
@@ -121,6 +127,8 @@ TAG_PROPERTIES: dict[str, tuple[str, ...]] = {
         "content",
         "release_date",
         "original_url",
+        "organization_id",
+        "confidence",
         "extra_json",
         "source_system",
         "source_table",
@@ -140,6 +148,8 @@ TAG_PROPERTIES: dict[str, tuple[str, ...]] = {
         "occur_date",
         "amount",
         "currency",
+        "organization_id",
+        "confidence",
         "extra_json",
         "source_system",
         "source_table",
@@ -178,6 +188,8 @@ TAG_PROPERTIES: dict[str, tuple[str, ...]] = {
         "name",
         "category",
         "description",
+        "organization_id",
+        "confidence",
         "extra_json",
         "source_system",
         "source_table",
@@ -188,11 +200,27 @@ TAG_PROPERTIES: dict[str, tuple[str, ...]] = {
         "source_update_time",
     ),
     "DataSource": ("source_table", "table_cn_name", "tier", "library"),
+    "organization_base": (
+        "organization_id",
+        "confidence",
+        "source_system",
+        "source_table",
+        "source_record_id",
+        "source_url",
+        "ingest_batch",
+        "ingest_time",
+        "source_update_time",
+        "extra_json",
+    ),
 }
 TAG_NUMERIC_PROPERTIES: dict[str, frozenset[str]] = {
-    "Organization": frozenset({"founded_year", "registered_capital"}),
-    "Event": frozenset({"amount"}),
+    "Organization": frozenset({"founded_year", "registered_capital", "confidence"}),
+    "Person": frozenset({"confidence"}),
+    "News": frozenset({"confidence"}),
+    "Event": frozenset({"amount", "confidence"}),
     "Project": frozenset({"funded_amount"}),
+    "Product": frozenset({"confidence"}),
+    "organization_base": frozenset({"confidence"}),
 }
 
 ENTITY_TABLE_SPECS: tuple[DomainTableSpec, ...] = tuple(
@@ -557,7 +585,26 @@ def vertices_from_row(
     record_id = stable_record_id(spec.name, row, preferred)
     if spec.entity_tag == "Organization":
         properties = organization_properties(spec, row, record_id, ingest_batch, ingest_time)
-        records = [VertexRecord("Organization", organization_vid(properties["org_id"]), properties)]
+        vid = organization_vid(properties["org_id"])
+        records = [VertexRecord("Organization", vid, properties)]
+        records.append(
+            VertexRecord(
+                "organization_base",
+                vid,
+                {
+                    "organization_id": properties["organization_id"],
+                    "confidence": properties["confidence"],
+                    "source_system": properties["source_system"],
+                    "source_table": properties["source_table"],
+                    "source_record_id": properties["source_record_id"],
+                    "source_url": properties.get("source_url"),
+                    "ingest_batch": properties["ingest_batch"],
+                    "ingest_time": properties["ingest_time"],
+                    "source_update_time": properties.get("source_update_time"),
+                    "extra_json": properties["extra_json"],
+                },
+            )
+        )
         legal_name = clean_text(first_value(row, "lerep", "legal_person"))
         if legal_name is not None:
             legal_record_id = f"{record_id}|legal_representative|{legal_name}"
@@ -628,9 +675,10 @@ def vertex_from_row(
 ) -> VertexRecord:
     """Compatibility helper for callers that expect exactly one vertex."""
     records = vertices_from_row(spec, row, ingest_batch, ingest_time)
-    if len(records) != 1:
-        raise RelationDataError(f"source row produced {len(records)} vertices")
-    return records[0]
+    primary = [record for record in records if record.tag == spec.entity_tag]
+    if len(primary) != 1:
+        raise RelationDataError(f"source row produced {len(primary)} primary vertices")
+    return primary[0]
 
 
 def datasource_records() -> list[VertexRecord]:
@@ -728,11 +776,21 @@ def schema_fields(graph: TRSGraphClient, kind: str, name: str) -> set[str]:
 
 def reconcile_existing_schema(graph: TRSGraphClient) -> None:
     """Add properties that CREATE IF NOT EXISTS cannot add to an existing schema."""
-    additions: tuple[tuple[str, str, str, str], ...] = (
-        ("TAG", "Project", "extra_json", "string NULL"),
-        ("EDGE", "PARTICIPATES_IN", "extra_json", "string NULL"),
-        ("EDGE", "FUNDED_BY", "extra_json", "string NULL"),
-    )
+    additions: list[tuple[str, str, str, str]] = []
+    for tag in ("Organization", "Person", "News", "Event", "Product"):
+        additions.extend(
+            (
+                ("TAG", tag, "organization_id", "string NULL"),
+                ("TAG", tag, "confidence", "double NULL"),
+            )
+        )
+    for edge_type in sorted({spec.edge_type for spec in RELATION_SPECS}):
+        additions.extend(
+            (
+                ("EDGE", edge_type, "organization_id", "string NULL"),
+                ("EDGE", edge_type, "confidence", "double NULL"),
+            )
+        )
     for kind, name, field_name, field_type in additions:
         if field_name in schema_fields(graph, kind, name):
             continue
@@ -745,13 +803,36 @@ def reconcile_existing_schema(graph: TRSGraphClient) -> None:
 
 def initialize_schema(graph: TRSGraphClient | None = None) -> None:
     client = graph or get_trs_graph_client()
-    for statement in split_schema_statements(SCHEMA_PATH.read_text(encoding="utf-8")):
-        if statement.upper().startswith("USE "):
-            # TRSGraphClient is already bound to TRS_GRAPH_SPACE.  The graph
-            # service rejects a standalone USE statement on the write endpoint.
-            continue
+    statements = split_schema_statements(SCHEMA_PATH.read_text(encoding="utf-8"))
+    owned_tags = {
+        "Organization",
+        "organization_base",
+        "Person",
+        "News",
+        "Event",
+        "Product",
+        "DataSource",
+    }
+    owned_edges = {spec.edge_type for spec in RELATION_SPECS}
+    schema_prefixes = tuple(
+        [f"CREATE TAG IF NOT EXISTS `{name}`" for name in owned_tags]
+        + [f"CREATE EDGE IF NOT EXISTS `{name}`" for name in owned_edges]
+    )
+    schema_statements = [
+        statement for statement in statements if statement.startswith(schema_prefixes)
+    ]
+    index_statements = [
+        statement
+        for statement in statements
+        if statement.upper().startswith(("CREATE TAG INDEX", "CREATE EDGE INDEX"))
+        and any(f" ON `{name}`" in statement for name in owned_tags | owned_edges)
+    ]
+    for statement in schema_statements:
         client.execute_write(statement)
+    # Existing dev tags/edges need ALTER before indexes can reference new fields.
     reconcile_existing_schema(client)
+    for statement in index_statements:
+        client.execute_write(statement)
 
 
 def existing_vids(
@@ -815,6 +896,13 @@ def merge_existing_properties(
         if name == "extra_json" or value is None:
             continue
         current = existing.get(name)
+        if name == "confidence":
+            try:
+                if current is None or float(value) > float(current):
+                    updates[name] = value
+            except (TypeError, ValueError):
+                updates[name] = value
+            continue
         if current is None or (isinstance(current, str) and not current.strip()):
             updates[name] = value
 
@@ -911,16 +999,24 @@ def _write_vertex_batches(
             existing_records = [record for record in batch if record.vid in existing]
             stats.existing += len(existing_records)
             pending = [record for record in batch if record.vid not in existing]
-            updates = [
-                VertexRecord(
-                    record.tag,
-                    record.vid,
-                    merge_existing_properties(existing[record.vid], record.properties),
-                )
-                for record in batch
-                if record.vid in existing
-            ]
-            updates = [record for record in updates if record.properties]
+            updates: list[VertexRecord] = []
+            for record in batch:
+                if record.vid not in existing:
+                    continue
+                current = existing[record.vid]
+                changes = merge_existing_properties(current, record.properties)
+                if not changes:
+                    continue
+                # Nebula INSERT VERTEX replaces the complete tag value. Include
+                # every existing owned property so sparse enrichment updates do
+                # not reset confidence, provenance, or canonical fields to NULL.
+                complete = {
+                    name: current[name]
+                    for name in TAG_PROPERTIES[record.tag]
+                    if current.get(name) is not None
+                }
+                complete.update(changes)
+                updates.append(VertexRecord(record.tag, record.vid, complete))
             stats.skipped += len(existing_records) - len(updates)
 
             for records_to_write, counter in ((pending, "written"), (updates, "updated")):
@@ -943,11 +1039,15 @@ def run_etl(
     batch_size: int = DEFAULT_BATCH_SIZE,
     max_records: int | None = None,
     dry_run: bool = True,
+    domestic_only: bool = False,
+    foreign_only: bool = False,
     ingest_batch: str | None = None,
     graph: TRSGraphClient | None = None,
     session: Session | None = None,
 ) -> dict[str, EntityStats]:
     """Load only Organization and DataSource vertices; never create an edge."""
+    if domestic_only and foreign_only:
+        raise ValueError("domestic_only and foreign_only are mutually exclusive")
     if not full:
         raise ValueError("--full must be selected for entity loading")
     if table != "all" and table not in ENTITY_TABLE_BY_NAME:
@@ -961,6 +1061,12 @@ def run_etl(
     ingest_batch = ingest_batch or f"ORG_ENTITY_{now.strftime('%Y%m%dT%H%M%SZ')}"
     client = graph or (None if dry_run else get_trs_graph_client())
     specs = ENTITY_TABLE_SPECS if table == "all" else (ENTITY_TABLE_BY_NAME[table],)
+    if domestic_only:
+        specs = tuple(spec for spec in specs if spec.scope == "domestic")
+    elif foreign_only:
+        specs = tuple(spec for spec in specs if spec.scope == "foreign")
+    if not specs:
+        raise ValueError("no entity source tables selected")
 
     owns_session = session is None
     session_cm = gkx_element_read_session() if owns_session else None
@@ -990,6 +1096,10 @@ def run_etl(
                 max_records=max_records,
             ):
                 stats.queried += 1
+                if is_virtual_source_row(row):
+                    stats.skipped += 1
+                    logger.info("skip synthetic entity source row table=%s", spec.name)
+                    continue
                 try:
                     records = vertices_from_row(spec, row, ingest_batch, ingest_time)
                 except RelationDataError as exc:
@@ -1053,6 +1163,9 @@ def build_parser() -> argparse.ArgumentParser:
     load_parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     load_parser.add_argument("--max-records", type=int)
     load_parser.add_argument("--ingest-batch")
+    scope = load_parser.add_mutually_exclusive_group()
+    scope.add_argument("--domestic-only", action="store_true")
+    scope.add_argument("--foreign-only", action="store_true")
     load_parser.add_argument("--space", choices=(DEFAULT_SPACE,), default=DEFAULT_SPACE)
     return parser
 
@@ -1078,6 +1191,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             batch_size=args.batch_size,
             max_records=args.max_records,
             dry_run=args.dry_run,
+            domestic_only=args.domestic_only,
+            foreign_only=args.foreign_only,
             ingest_batch=ingest_batch,
         )
     summary = {table: asdict(stats) for table, stats in results.items()}

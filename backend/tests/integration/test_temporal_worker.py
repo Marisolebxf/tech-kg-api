@@ -15,6 +15,11 @@ from service.workflow_repository import repository
 async def test_worker_runs_entity_relation_and_uploaded_python_workflows(tmp_path, monkeypatch):
     """启动 Temporal 测试服务与真实 Worker，覆盖内置工作流和上传脚本工作流。"""
     monkeypatch.setenv("WORKFLOW_SCRIPT_DIR", str(tmp_path / "scripts"))
+    monkeypatch.setattr(
+        repository,
+        "database_path",
+        str(tmp_path / "tech-kg-workflows.db"),
+    )
     repository.reset_for_tests()
     python_definition = workflow_operations_service.create_python_definition(
         "triple.py",

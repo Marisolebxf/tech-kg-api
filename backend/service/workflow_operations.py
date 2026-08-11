@@ -203,6 +203,18 @@ class WorkflowOperationsService:
         self.repo.save_execution(execution)
         return execution
 
+    async def get_execution(self, execution_id: str) -> dict[str, Any] | None:
+        execution = self.repo.get_execution(execution_id)
+        if execution is None or execution.get("status") not in {"RUNNING"}:
+            return execution
+        try:
+            execution = await temporal_runtime.refresh_execution(execution)
+        except Exception as exc:
+            temporal_runtime._client = None
+            execution["message"] = f"状态刷新失败: {exc}"
+        self.repo.save_execution(execution)
+        return execution
+
     async def trigger_graph_build(self, request: dict[str, Any]) -> dict[str, Any]:
         definition = self.repo.get_definition("graph-build")
         if definition is None:
@@ -334,7 +346,10 @@ class WorkflowOperationsService:
         safe_id = safe_id or f"python-{uuid4().hex[:8]}"
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,63}", safe_id):
             raise ValueError("definition_id 只能包含小写字母、数字、下划线和连字符")
-        directory = Path(os.getenv("WORKFLOW_SCRIPT_DIR", "/tmp/tech-kg-workflow-scripts"))
+        backend_dir = Path(__file__).resolve().parents[1]
+        directory = Path(
+            os.getenv("WORKFLOW_SCRIPT_DIR", str(backend_dir / "var" / "workflow-scripts"))
+        )
         directory.mkdir(parents=True, exist_ok=True)
         script_path = directory / f"{safe_id}.py"
         script_path.write_bytes(content)

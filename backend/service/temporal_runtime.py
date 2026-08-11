@@ -72,6 +72,32 @@ class TemporalRuntime:
             "status": "RUNNING",
         }
 
+    async def refresh_execution(self, execution: dict[str, Any]) -> dict[str, Any]:
+        if execution.get("dispatchMode") == "LOCAL_FALLBACK":
+            return execution
+        client = await self.client()
+        handle = client.get_workflow_handle(
+            execution["workflowId"], run_id=execution.get("runId")
+        )
+        description = await handle.describe()
+        status = description.status.name
+        refreshed = {**execution, "status": status}
+        if status == "RUNNING":
+            return refreshed
+
+        refreshed["completedAt"] = datetime.now(UTC).astimezone().strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        if status == "COMPLETED":
+            refreshed["output"] = await handle.result()
+            refreshed["message"] = "工作流执行完成"
+        else:
+            try:
+                await handle.result()
+            except Exception as exc:
+                refreshed["message"] = str(exc)
+        return refreshed
+
     async def create_schedule(
         self, definition: dict[str, Any], schedule: dict[str, Any]
     ) -> dict[str, Any]:

@@ -40,6 +40,8 @@ export interface SchemaScript {
   sha256: string
   uploadedBy: string
   uploadedAt: string | null
+  workflowDefinitionId: string | null
+  workflowFunctionName: string | null
   downloadUrl: string
 }
 

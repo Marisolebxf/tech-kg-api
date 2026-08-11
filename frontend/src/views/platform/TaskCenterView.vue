@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   executeDefinition,
   getExecution,
+  listDefinitions,
   getSourceUpdates,
   getTaskBatches,
   getTaskOverview,
@@ -15,6 +16,7 @@ import {
   type SourceUpdate,
   type UpdateBatch,
   type WorkflowExecution,
+  type WorkflowDefinition,
 } from '../../api/workflowOperations'
 
 const route = useRoute()
@@ -127,18 +129,38 @@ async function runImmediateUpdate() {
 const scriptDialogOpen = ref(false)
 const scriptFile = ref<File | null>(null)
 const scriptFunction = ref('workflow')
-const scriptTimeout = ref(120)
-const scriptPayload = ref('{"limit":5,"dry_run":true}')
+const scriptTimeout = ref(3600)
+const scriptPayload = ref('{"stage":"all","scope":"all","max_records":5,"dry_run":true,"alignment_mode":"exact"}')
 const scriptDefinitionId = ref('')
+const scriptDefinitions = ref<WorkflowDefinition[]>([])
 const scriptExecution = ref<WorkflowExecution | null>(null)
 const scriptBusy = ref(false)
 const scriptNotice = ref('')
 let scriptTimer: ReturnType<typeof setInterval> | null = null
 
-function openScriptDialog() {
+async function loadScriptDefinitions() {
+  const response = await listDefinitions()
+  scriptDefinitions.value = response.items.filter((item) => item.sourceKind === 'python')
+}
+
+function selectRegisteredDefinition() {
+  const definition = scriptDefinitions.value.find((item) => item.id === scriptDefinitionId.value)
+  if (!definition) return
+  scriptFunction.value = definition.functionName || 'workflow'
+  scriptTimeout.value = definition.timeoutSeconds || 60
+  scriptNotice.value = `已选择 ${definition.name}，可直接执行，无需重复上传。`
+}
+
+async function openScriptDialog() {
   scriptDialogOpen.value = true
   scriptNotice.value = ''
   scriptExecution.value = null
+  try {
+    await loadScriptDefinitions()
+    selectRegisteredDefinition()
+  } catch (error) {
+    scriptNotice.value = error instanceof Error ? error.message : '工作流定义加载失败'
+  }
 }
 
 function onScriptFile(event: Event) {
@@ -198,7 +220,7 @@ function startPolling(executionId: string) {
     try {
       const latest = await getExecution(executionId)
       scriptExecution.value = latest
-      if (['COMPLETED', 'FAILED', 'QUEUED'].includes(latest.status)) {
+      if (['COMPLETED', 'FAILED', 'CANCELED', 'TERMINATED', 'TIMED_OUT', 'QUEUED'].includes(latest.status)) {
         stopPolling()
         scriptNotice.value = `执行结束，状态=${latest.status}。${latest.message || ''}`
       }
@@ -227,7 +249,16 @@ watch(() => route.query.module, (value) => {
   moduleFilter.value = ['数据处理', '图谱构建'].includes(String(value)) ? String(value) : '数据处理'
   scopeFilter.value = moduleFilter.value === '数据处理' ? '全部数据域' : '全部图谱对象'
 })
-onMounted(loadData)
+onMounted(async () => {
+  await loadData()
+  const definitionId = String(route.query.workflowDefinitionId || '')
+  if (definitionId) {
+    scriptDefinitionId.value = definitionId
+    moduleFilter.value = '图谱构建'
+    scopeFilter.value = '全部图谱对象'
+    await openScriptDialog()
+  }
+})
 </script>
 
 <template>
@@ -278,11 +309,12 @@ onMounted(loadData)
     <aside v-if="scriptDialogOpen" class="script-dialog schedule-dialog">
       <header><div><span>工作流平台</span><h2>提交 Python 脚本</h2></div><button type="button" @click="closeScriptDialog">×</button></header>
       <div class="script-form">
+        <label><span>已注册工作流</span><select v-model="scriptDefinitionId" @change="selectRegisteredDefinition"><option value="">请选择（也可在下方上传新脚本）</option><option v-for="definition in scriptDefinitions" :key="definition.id" :value="definition.id">{{ definition.name }} · {{ definition.id }}</option></select></label>
         <label class="script-file"><span>脚本文件 (.py)</span><input type="file" accept=".py" @change="onScriptFile" /><small>{{ scriptFile?.name || '未选择' }}</small></label>
         <label><span>函数名</span><input v-model="scriptFunction" placeholder="workflow" /></label>
         <label><span>超时(秒)</span><input v-model.number="scriptTimeout" type="number" min="1" /></label>
         <label class="script-payload"><span>payload (JSON)</span><textarea v-model="scriptPayload" rows="3" /></label>
-        <section><strong>说明</strong><p>脚本需定义 <code>{{ scriptFunction }}(payload)</code> 函数；上传后在隔离子进程执行，可 import infra/dao/script，凭据由平台注入。先上传生成 definition，再执行。</p></section>
+        <section><strong>说明</strong><p>Schema 管理上传且定义了 <code>workflow(payload)</code> 的脚本会自动出现在“已注册工作流”中，可直接执行；也可在此上传新脚本。</p></section>
       </div>
       <footer>
         <button type="button" @click="closeScriptDialog">取消</button>

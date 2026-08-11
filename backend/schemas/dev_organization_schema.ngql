@@ -4,6 +4,8 @@ USE dev;
 
 CREATE TAG IF NOT EXISTS `Organization`(
   `org_id` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `name_cn` string NULL,
   `name_en` string NULL,
   `external_id` string NULL,
@@ -41,6 +43,19 @@ CREATE TAG IF NOT EXISTS `Organization`(
   `source_update_time` string NULL
 );
 
+CREATE TAG IF NOT EXISTS `organization_base`(
+  `organization_id` string NULL,
+  `confidence` double NULL,
+  `source_system` string NULL,
+  `source_table` string NULL,
+  `source_record_id` string NULL,
+  `source_url` string NULL,
+  `ingest_batch` string NULL,
+  `ingest_time` string NULL,
+  `source_update_time` string NULL,
+  `extra_json` string NULL
+);
+
 CREATE TAG IF NOT EXISTS `Person`(
   `name_cn` string NULL,
   `name_en` string NULL,
@@ -50,6 +65,8 @@ CREATE TAG IF NOT EXISTS `Person`(
   `birth_date` string NULL,
   `gender` string NULL,
   `biography` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `extra_json` string NULL,
   `source_system` string NULL,
   `source_table` string NULL,
@@ -65,6 +82,8 @@ CREATE TAG IF NOT EXISTS `News`(
   `content` string NULL,
   `release_date` string NULL,
   `original_url` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `extra_json` string NULL,
   `source_system` string NULL,
   `source_table` string NULL,
@@ -85,6 +104,8 @@ CREATE TAG IF NOT EXISTS `Event`(
   `occur_date` string NULL,
   `amount` double NULL,
   `currency` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `extra_json` string NULL,
   `source_system` string NULL,
   `source_table` string NULL,
@@ -126,6 +147,8 @@ CREATE TAG IF NOT EXISTS `Product`(
   `category` string NULL,
   `description` string NULL,
   `extra_json` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `source_system` string NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
@@ -144,6 +167,8 @@ CREATE TAG IF NOT EXISTS `DataSource`(
 
 CREATE EDGE IF NOT EXISTS `LEGAL_REP_OF`(
   `extra_json` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -153,6 +178,8 @@ CREATE EDGE IF NOT EXISTS `LEGAL_REP_OF`(
 CREATE EDGE IF NOT EXISTS `EXECUTIVE_OF`(
   `position` string NULL,
   `extra_json` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -164,6 +191,8 @@ CREATE EDGE IF NOT EXISTS `BENEFICIAL_OWNER_OF`(
   `indirect_percent` double NULL,
   `total_percent` double NULL,
   `extra_json` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -174,6 +203,8 @@ CREATE EDGE IF NOT EXISTS `ACTUAL_CONTROLLER_OF`(
   `direct_pct` double NULL,
   `total_pct` double NULL,
   `extra_json` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -183,6 +214,8 @@ CREATE EDGE IF NOT EXISTS `ACTUAL_CONTROLLER_OF`(
 CREATE EDGE IF NOT EXISTS `SHAREHOLDER_OF`(
   `ownership_percentage` double NULL,
   `extra_json` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -193,6 +226,8 @@ CREATE EDGE IF NOT EXISTS `INVESTS_IN`(
   `investment_amount` double NULL,
   `investment_ratio` double NULL,
   `extra_json` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -203,6 +238,8 @@ CREATE EDGE IF NOT EXISTS `ACQUIRES`(
   `ma_amount` double NULL,
   `currency_code` string NULL,
   `extra_json` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -211,6 +248,8 @@ CREATE EDGE IF NOT EXISTS `ACQUIRES`(
 
 CREATE EDGE IF NOT EXISTS `SUBSIDIARY_OF`(
   `extra_json` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -219,6 +258,8 @@ CREATE EDGE IF NOT EXISTS `SUBSIDIARY_OF`(
 
 CREATE EDGE IF NOT EXISTS `PARTICIPATES_IN`(
   `extra_json` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -229,6 +270,8 @@ CREATE EDGE IF NOT EXISTS `FUNDED_BY`(
   `funded_amount` double NULL,
   `fund_category` string NULL,
   `extra_json` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -237,6 +280,8 @@ CREATE EDGE IF NOT EXISTS `FUNDED_BY`(
 
 CREATE EDGE IF NOT EXISTS `HAS_NEWS`(
   `extra_json` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -246,6 +291,8 @@ CREATE EDGE IF NOT EXISTS `HAS_NEWS`(
 CREATE EDGE IF NOT EXISTS `INVOLVED_IN`(
   `role` string NULL,
   `extra_json` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -254,6 +301,8 @@ CREATE EDGE IF NOT EXISTS `INVOLVED_IN`(
 
 CREATE EDGE IF NOT EXISTS `BELONGS_TO_NODE`(
   `chain_score` double NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -263,6 +312,8 @@ CREATE EDGE IF NOT EXISTS `BELONGS_TO_NODE`(
 CREATE EDGE IF NOT EXISTS `PRODUCES`(
   `tech_product_seq` int64 NULL,
   `extra_json` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `source_table` string NULL,
   `source_record_id` string NULL,
   `ingest_batch` string NULL,
@@ -270,6 +321,8 @@ CREATE EDGE IF NOT EXISTS `PRODUCES`(
 );
 
 CREATE TAG INDEX IF NOT EXISTS `organization_org_id_idx` ON `Organization`(`org_id`(128));
+CREATE TAG INDEX IF NOT EXISTS `organization_id_idx` ON `Organization`(`organization_id`(128));
+CREATE TAG INDEX IF NOT EXISTS `organization_base_id_idx` ON `organization_base`(`organization_id`(128));
 CREATE TAG INDEX IF NOT EXISTS `organization_name_cn_idx` ON `Organization`(`name_cn`(128));
 CREATE TAG INDEX IF NOT EXISTS `datasource_table_idx` ON `DataSource`(`source_table`(128));
 CREATE EDGE INDEX IF NOT EXISTS `shareholder_of_idx` ON `SHAREHOLDER_OF`();

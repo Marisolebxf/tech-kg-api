@@ -97,6 +97,9 @@ TAG_PROPERTIES: dict[str, tuple[str, ...]] = {
         "ingest_batch",
         "ingest_time",
         "source_update_time",
+        "confidence",
+        "organization_base",
+        "organization_id",
     ),
     "Person": (
         "name_cn",
@@ -115,6 +118,9 @@ TAG_PROPERTIES: dict[str, tuple[str, ...]] = {
         "ingest_batch",
         "ingest_time",
         "source_update_time",
+        "confidence",
+        "organization_base",
+        "organization_id",
     ),
     "News": (
         "title",
@@ -287,6 +293,10 @@ def organization_properties(
 ) -> dict[str, Any]:
     """Map one source row without inventing an organization identifier."""
     raw_org_id = first_value(row, "org_id", "company_id", "entity_eid")
+    source_id_field = next(
+        (name for name in ("org_id", "company_id", "entity_eid") if clean_text(row.get(name))),
+        "org_id",
+    )
     org_id = clean_text(raw_org_id)
     if org_id is None:
         raise RelationDataError("missing stable organization id")
@@ -350,6 +360,9 @@ def organization_properties(
         ),
         "main_products": clean_text(first_value(row, "main_products", "main_prod")),
         "extra_json": bounded_json(dict(row)),
+        "confidence": 1.0,
+        "organization_base": spec.name,
+        "organization_id": source_id_field,
         **node_provenance(spec.name, record_id, row, ingest_batch, ingest_time),
     }
     if spec.entity_kind == "organization_enrichment":
@@ -399,6 +412,16 @@ def person_record(
         "gender": clean_text(first_value(row, "bo_gender", "gender")),
         "biography": clean_text(row.get("dm_biography")),
         "extra_json": bounded_json(dict(row)),
+        "confidence": 1.0,
+        "organization_base": spec.name,
+        "organization_id": next(
+            (
+                field
+                for field in ("executives_name", "bo_name", "entity_name", "owners_name")
+                if clean_text(row.get(field))
+            ),
+            "entity_name",
+        ),
         **node_provenance(spec.name, record_id, row, ingest_batch, ingest_time),
     }
     return VertexRecord("Person", vid, properties)
@@ -729,6 +752,12 @@ def schema_fields(graph: TRSGraphClient, kind: str, name: str) -> set[str]:
 def reconcile_existing_schema(graph: TRSGraphClient) -> None:
     """Add properties that CREATE IF NOT EXISTS cannot add to an existing schema."""
     additions: tuple[tuple[str, str, str, str], ...] = (
+        ("TAG", "Organization", "confidence", "double NULL"),
+        ("TAG", "Organization", "organization_base", "string NULL"),
+        ("TAG", "Organization", "organization_id", "string NULL"),
+        ("TAG", "Person", "confidence", "double NULL"),
+        ("TAG", "Person", "organization_base", "string NULL"),
+        ("TAG", "Person", "organization_id", "string NULL"),
         ("TAG", "Project", "extra_json", "string NULL"),
         ("EDGE", "PARTICIPATES_IN", "extra_json", "string NULL"),
         ("EDGE", "FUNDED_BY", "extra_json", "string NULL"),

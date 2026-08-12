@@ -52,6 +52,18 @@ const commonResponseFields: ServiceField[] = [
   { name: 'evidence', type: 'array', description: '支撑本次结果的数据来源和证据' },
 ]
 
+const expertColleagueResponseFields: ServiceField[] = [
+  { name: 'code', type: 'number', description: '服务状态码，成功时为 200/0' },
+  { name: 'success', type: 'boolean', description: '服务是否成功' },
+  { name: 'msg', type: 'string', description: '服务返回信息' },
+  { name: 'data.expert', type: 'object', description: '核心专家实体详情，含 confidence、details、provenance' },
+  { name: 'data.colleagues', type: 'array', description: '同事关系列表，含生效时段、团队、共同工作内容、成果、confidence、evidence' },
+  { name: 'data.graph.nodes', type: 'array', description: '图谱展示节点，node.data 为真实实体详情和溯源字段' },
+  { name: 'data.graph.edges', type: 'array', description: '图谱展示关系边，edge.data 含关系 confidence、evidence、ruleName' },
+  { name: 'data.rules', type: 'array', description: '本接口实际使用的任职时间、团队归属、成果关联规则' },
+  { name: 'data.apiCalls', type: 'array', description: '后端组合调用查图 API 的路径、参数和结果摘要' },
+]
+
 export const serviceModules: ServiceModule[] = [
   {
     key: 'expert-direct',
@@ -268,13 +280,14 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技专家同事关系服务通过提取科技专家在不同时期的工作单位、所属部门、参与团队等机构信息，结合知识图谱中的机构架构与人员任职数据，运用任职时间匹配与团队归属算法，推理并构建专家之间的同事关系。服务会判断同事关系的生效时段、所属团队或项目组，标注同事关系期间的共同工作内容与协作场景，同时关联两者在同事期间产生的合作成果，帮助用户了解科技专家的职业社交圈与工作协作历史。',
     requestFields: [
-      { name: 'expert_id', type: 'string', required: '是', description: '专家唯一标识' },
+      { name: 'expertId', type: 'string', required: '是', description: '专家 VID、scholar_id 或中文姓名' },
       { name: 'organization', type: 'string', required: '否', description: '任职机构筛选' },
       { name: 'department', type: 'string', required: '否', description: '部门或团队筛选' },
-      { name: 'overlap_period', type: 'string', required: '否', description: '任职重叠时间' },
+      { name: 'overlapPeriod', type: 'string', required: '否', description: '任职重叠区间，如 2018-01 至 2022-12' },
+      { name: 'limit', type: 'number', required: '否', description: '返回同事数量上限，默认 20' },
     ],
-    responseFields: commonResponseFields,
-    requestExample: { expert_id: 'E10001', organization: '中国科学院自动化研究所', department: '智能系统实验室', overlap_period: '2018-2022' },
+    responseFields: expertColleagueResponseFields,
+    requestExample: { expertId: 'person_E10001', organization: '中国科学院自动化研究所', department: '智能系统实验室', overlapPeriod: '2018-01 至 2022-12', limit: 20 },
     responseExample: { code: 0, message: 'success', data: { colleagues: 18, teams: 4, overlap_years: 4, achievements: 6 } },
     resultRows: [
       { label: '同事关系', value: '18', tone: 'blue' },
@@ -300,11 +313,11 @@ export const serviceModules: ServiceModule[] = [
       {
         name: '任职时间匹配规则',
         type: '关系匹配规则',
-        target: '专家任职经历、机构任职时间字段',
-        trigger: '专家存在工作单位或团队任职记录',
-        logic: '比较两个专家在机构、部门、实验室或项目组中的任职起止时间，判断是否存在有效重叠区间。',
-        output: '同事关系、生效时段、重叠年限',
-        threshold: '任职时间重叠 >= 3 个月',
+        target: '专家、AFFILIATED_WITH 任职边、机构实体',
+        trigger: '输入专家后查询其任职机构，再反查同机构任职人员',
+        logic: '比较核心专家和候选专家在同一机构任职边上的起止时间，并与请求 overlapPeriod 求交集；存在至少 1 个月有效交集即判定同事。',
+        output: '同事关系、生效时段、重叠月份、重叠年限、关系置信度',
+        threshold: '任职时间存在至少 1 个月交集',
         audit: '任职时间缺失或来源冲突时转入人工处理平台',
       },
       {

@@ -51,11 +51,14 @@ def patent_row():
 def test_patent_preserves_raw_identifiers_and_only_maps_source_properties():
     vid, values = patent_payload(patent_row())
     mapped = dict(zip(PATENT_PROPERTIES, values, strict=True))
-    assert len(PATENT_PROPERTIES) == 29
+    assert len(PATENT_PROPERTIES) == 32
     assert vid == "patent_CN1A"
     assert mapped["publication_date"] == "20210101"
     assert mapped["anticipated_expiration"] == "20400101"
     assert mapped["db_source"] == '"ods_patent"'
+    assert mapped["confidence"] == "1.0"
+    assert mapped["organization_base"] == '"dwd_patent"'
+    assert mapped["organization_id"] == '"patent_id"'
     assert mapped["title_original"] == '"原文标题"'
     assert mapped["publication_number"] == '"CN-1-A"'
     assert mapped["application_number"] == '"CN-APP-1"'
@@ -68,7 +71,9 @@ def test_keyword_vertices_are_normalized_deduplicated_and_linked():
     assert keyword_values(row["keywords"]) == ["知识图谱", "AI"]
     vertex_ngql, edge_ngql = keyword_statements([row], "BATCH", datetime(2026, 7, 23, 10, 0))
     assert vertex_ngql.count("keyword_") == 2
-    assert "INSERT VERTEX Keyword(keyword)" in vertex_ngql
+    assert (
+        "INSERT VERTEX Keyword(keyword,confidence,organization_base,organization_id)" in vertex_ngql
+    )
     assert "INSERT EDGE HAS_KEYWORD(confidence,source_table,source_record_id)" in edge_ngql
     assert edge_ngql.count("patent_CN1A") == 2
 

@@ -46,29 +46,26 @@ def workflow(payload: dict) -> dict:
     payload（默认值与 ``load`` 签名一致）:
       apply (bool, 默认 False) —— False 只分析不写图；True 实际写入 dev。
       replace (bool, 默认 False) —— True 先删除既有受管边再重写（需 apply=True）。
-      use_llm (bool, 默认 False) —— 是否用 LLM 扩展机构别名。
-      llm_limit (int|None, 默认 None)
-      llm_batch_size (int, 默认 10)
-      llm_auto_threshold (float, 默认 0.75)
-      llm_workers (int, 默认 4)
-      review_output (str|None, 默认 None) —— ReviewRecord JSONL 输出路径。
-      llm_cache (str|None, 默认 None) —— LLM 别名缓存路径。
+      use_vector (bool, 默认 True) —— 精确规则未命中时使用Milvus混合召回。
+      vector_threshold (float, 默认 0.88)
+      vector_margin (float, 默认 0.08)
+      vector_top_k (int, 默认 20)
+      vector_state_dir (str|None, 默认 None) —— Organization BM25状态目录。
     """
     if not isinstance(payload, dict):
         raise ValueError(f"payload 必须是 dict，收到: {type(payload).__name__}")
 
     review_output = payload.get("review_output")
-    llm_cache = payload.get("llm_cache")
+    vector_state_dir = payload.get("vector_state_dir")
     kwargs = {
         "apply": bool(payload.get("apply", False)),
         "replace": bool(payload.get("replace", False)),
         "review_output": Path(review_output) if review_output else None,
-        "use_llm": bool(payload.get("use_llm", False)),
-        "llm_limit": payload.get("llm_limit"),
-        "llm_batch_size": int(payload.get("llm_batch_size", 10)),
-        "llm_auto_threshold": float(payload.get("llm_auto_threshold", 0.75)),
-        "llm_workers": int(payload.get("llm_workers", 4)),
-        "llm_cache": Path(llm_cache) if llm_cache else None,
+        "use_vector": bool(payload.get("use_vector", True)),
+        "vector_threshold": float(payload.get("vector_threshold", 0.88)),
+        "vector_margin": float(payload.get("vector_margin", 0.08)),
+        "vector_top_k": int(payload.get("vector_top_k", 20)),
+        "vector_state_dir": Path(vector_state_dir) if vector_state_dir else None,
     }
 
     try:

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -76,6 +77,11 @@ class MilvusSettings:
     @classmethod
     def from_env(cls) -> MilvusSettings:
         host, port = _host_port_from_env()
+        if host == "milvus":
+            try:
+                socket.getaddrinfo(host, port)
+            except socket.gaierror:
+                host = "127.0.0.1"
         return cls(
             host=host,
             port=port,

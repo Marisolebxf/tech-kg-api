@@ -11,7 +11,7 @@
 | 文件 | 说明 |
 |---|---|
 | `backend/script/patent_entity_workflow.py` | `workflow(payload)` → 调 `load_patent_graph.load_patents(batch_size)`，写入 Patent 实体及属性 |
-| `backend/script/patent_relation_workflow.py` | `workflow(payload)` → 调 `load_patent_relations.load(apply, replace, use_llm, ...)`，一次处理全部 5 种专利关系 |
+| `backend/script/patent_relation_workflow.py` | `workflow(payload)` → 调 `load_patent_relations.load(apply, replace, use_vector, ...)`，一次处理全部 5 种专利关系 |
 | `backend/tests/unit/test_patent_entity_workflow.py` | 5 用例 |
 | `backend/tests/unit/test_patent_relation_workflow.py` | 6 用例 |
 
@@ -33,9 +33,9 @@
 
 ### `patent_relation_workflow.py`
 ```json
-{"apply": false, "replace": false, "use_llm": false,
- "llm_limit": null, "llm_batch_size": 10, "llm_auto_threshold": 0.75, "llm_workers": 4,
- "review_output": null, "llm_cache": null}
+{"apply": false, "replace": false, "use_vector": true,
+ "vector_threshold": 0.88, "vector_margin": 0.08, "vector_top_k": 20,
+ "vector_state_dir": null, "review_output": null}
 ```
 默认值与 `load` 签名一致。返回 `{"ok": true, "stats": {<Counter>}}`。
 

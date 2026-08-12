@@ -175,6 +175,9 @@ def _build_person_props(
         "ingest_batch": BATCH_ID,
         "ingest_time": now,
         "source_update_time": row.get("update_time") or "",
+        "confidence": 1.0,
+        "organization_base": "dwd_scholar",
+        "organization_id": "scholar_id",
     }
 
 

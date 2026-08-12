@@ -6,6 +6,7 @@ from biz.handler.enterprise_background_analysis import (
 )
 from biz.handler.expert_alumni_relation import router as expert_alumni_relation_router
 from biz.handler.expert_colleague_relation import router as expert_colleague_relation_router
+from biz.handler.expert_colleague_relation import service_router as expert_colleague_service_router
 from biz.handler.expert_cooperation_achievement import (
     router as expert_cooperation_achievement_router,
 )
@@ -38,6 +39,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(expert_indirect_relation_router, prefix="/api/v1")
     app.include_router(expert_cooperation_achievement_router, prefix="/api/v1")
     app.include_router(expert_colleague_relation_router, prefix="/api/v1")
+    app.include_router(expert_colleague_service_router, prefix="/api/v1")
     app.include_router(expert_alumni_relation_router, prefix="/api/v1")
     app.include_router(expert_paper_cooperation_router, prefix="/api/v1")
     app.include_router(expert_enterprise_relation_router, prefix="/api/v1")

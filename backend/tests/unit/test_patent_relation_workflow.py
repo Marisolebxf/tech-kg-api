@@ -40,12 +40,11 @@ def test_workflow_forwards_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "apply": False,
         "replace": False,
         "review_output": None,
-        "use_llm": False,
-        "llm_limit": None,
-        "llm_batch_size": 10,
-        "llm_auto_threshold": 0.75,
-        "llm_workers": 4,
-        "llm_cache": None,
+        "use_vector": True,
+        "vector_threshold": 0.88,
+        "vector_margin": 0.08,
+        "vector_top_k": 20,
+        "vector_state_dir": None,
     }
 
 
@@ -56,13 +55,12 @@ def test_workflow_forwards_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
         {
             "apply": True,
             "replace": True,
-            "use_llm": True,
-            "llm_limit": 50,
-            "llm_batch_size": 20,
-            "llm_auto_threshold": 0.8,
-            "llm_workers": 8,
+            "use_vector": True,
+            "vector_threshold": 0.91,
+            "vector_margin": 0.12,
+            "vector_top_k": 12,
             "review_output": "/tmp/reviews.jsonl",
-            "llm_cache": "/tmp/cache.jsonl",
+            "vector_state_dir": "/tmp/vector-state",
         }
     )
 
@@ -70,12 +68,11 @@ def test_workflow_forwards_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
         "apply": True,
         "replace": True,
         "review_output": Path("/tmp/reviews.jsonl"),
-        "use_llm": True,
-        "llm_limit": 50,
-        "llm_batch_size": 20,
-        "llm_auto_threshold": 0.8,
-        "llm_workers": 8,
-        "llm_cache": Path("/tmp/cache.jsonl"),
+        "use_vector": True,
+        "vector_threshold": 0.91,
+        "vector_margin": 0.12,
+        "vector_top_k": 12,
+        "vector_state_dir": Path("/tmp/vector-state"),
     }
 
 

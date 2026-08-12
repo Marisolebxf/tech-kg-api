@@ -3,9 +3,10 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import iconInfo from '../../../assets/icons/icon-info.svg'
 import KgGraphCanvas from '../../../components/kg-graph-canvas.vue'
-import { getEdgeProvenance, getNodeProvenance, getServiceGraphPreset } from '../../../data/graph-presets'
+import { convertServiceGraph, runKgService, type KgServiceResponse } from '../../../api/kgService'
+import { getServiceGraphPreset } from '../../../data/graph-presets'
 import type { GraphEdgeData, GraphNodeData } from '../../../data/graph-presets'
-import type { ServiceModule } from '../service-modules'
+import type { ServiceModule, ServiceSummaryRow } from '../service-modules'
 
 const props = defineProps<{
   moduleInfo: ServiceModule
@@ -24,12 +25,22 @@ const panoramaRelation = ref('all')
 const parameterValues = ref<Record<string, string>>({})
 const selectedGraphNodeId = ref<string | null>(null)
 const selectedGraphEdgeId = ref<string | null>(null)
+const liveResult = ref<KgServiceResponse | null>(null)
+const liveError = ref<string | null>(null)
+const liveCenterId = ref<string | null>(null)
 const graphPreset = computed(() => getServiceGraphPreset(props.moduleInfo.key))
-const graphNodes = computed(() => graphPreset.value.nodes)
-const graphEdges = computed(() => graphPreset.value.edges.filter((edge) => (
-  graphNodes.value.some((node) => node.id === edge.from) &&
-  graphNodes.value.some((node) => node.id === edge.to)
-)))
+const liveGraph = computed(() => {
+  if (!liveResult.value?.graph) return null
+  return convertServiceGraph(liveResult.value.graph, liveCenterId.value ?? undefined)
+})
+const graphNodes = computed(() => liveGraph.value?.nodes ?? graphPreset.value.nodes)
+const graphEdges = computed(() => {
+  const edges = liveGraph.value?.edges ?? graphPreset.value.edges
+  return edges.filter((edge) => (
+    graphNodes.value.some((node) => node.id === edge.from) &&
+    graphNodes.value.some((node) => node.id === edge.to)
+  ))
+})
 const isPanorama = computed(() => props.moduleInfo.key === 'industry-chain-panorama')
 const panoramaLayerOptions = [
   { value: 1, label: '一级 · 产业环节' },
@@ -85,6 +96,34 @@ const selectedEdgeNodes = computed(() => {
     to: graphNodes.value.find((node) => node.id === edge?.to),
   }
 })
+function formatDetailValue(value: unknown): string {
+  if (Array.isArray(value)) return value.map(formatDetailValue).join('、')
+  if (value && typeof value === 'object') return JSON.stringify(value)
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  return String(value ?? '-')
+}
+
+function detailEntries(details?: Record<string, unknown>, skip: string[] = []) {
+  if (!details) return [] as Array<readonly [string, string]>
+  const skipped = new Set(skip)
+  return Object.entries(details)
+    .filter(([key, value]) => !skipped.has(key) && value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => [key, formatDetailValue(value)] as const)
+}
+
+const entityDetailRows = computed(() => {
+  const node = selectedNode.value
+  if (!node) return []
+  return [
+    ['实体ID', node.id] as const,
+    ['实体名称', node.label] as const,
+    ['实体类型', node.entityType] as const,
+    ['命中关系', node.relations || '-'] as const,
+    ['置信度', node.confidence.toFixed(2)] as const,
+    ...detailEntries(node.details, ['details', 'provenance', 'confidence', 'evidence', 'relations']),
+  ]
+})
+
 const relationDetailRows = computed(() => {
   const edge = selectedEdge.value
   const from = selectedEdgeNodes.value.from
@@ -95,17 +134,50 @@ const relationDetailRows = computed(() => {
     ['目标实体', `${to.label} / ${to.entityType}`] as const,
     ['关系类型', edge.label] as const,
     ['关系分类', edge.category] as const,
-    ['置信度', `${Math.min(from.confidence, to.confidence).toFixed(2)}`] as const,
-    ['命中规则', props.moduleInfo.rules[0]?.name ?? '已命中关系识别规则'] as const,
+    ['置信度', typeof edge.confidence === 'number' ? edge.confidence.toFixed(2) : '-'] as const,
+    ['命中规则', edge.ruleName ?? props.moduleInfo.rules[0]?.name ?? '已命中关系识别规则'] as const,
+    ...detailEntries(edge.details, ['confidence', 'evidence', 'ruleName']),
+    ...(edge.evidence?.length ? [['证据', edge.evidence.join('；')] as const] : []),
   ]
 })
-const selectedProvenance = computed(() => {
-  if (selectedNode.value) return getNodeProvenance(selectedNode.value)
-  if (selectedEdge.value) {
-    return getEdgeProvenance(selectedEdge.value, selectedEdgeNodes.value.from, selectedEdgeNodes.value.to)
-  }
-  return null
+const liveEntityProvenanceRows = computed(() => {
+  const node = selectedNode.value
+  const provenance = node?.provenance
+  if (!node || !provenance) return []
+  return [
+    ['实体类型', node.entityType] as const,
+    ['源数据表', provenance.sourceTable || '-'] as const,
+    ['来源字段', provenance.sourceField || '-'] as const,
+    ['字段值', provenance.sourceValue || '-'] as const,
+    ['入库批次', provenance.ingestBatch || '-'] as const,
+    ['入库时间', provenance.ingestTime || '-'] as const,
+  ]
 })
+
+const liveRelationEndpointProvenanceRows = computed(() => {
+  const edge = selectedEdge.value
+  const from = selectedEdgeNodes.value.from
+  const to = selectedEdgeNodes.value.to
+  if (!edge || !from || !to) return []
+  return [from, to].map((node, index) => ({
+    role: index === 0 ? '源实体' : '目标实体',
+    name: node.label,
+    entityType: node.entityType,
+    rows: [
+      ['源数据表', node.provenance?.sourceTable || '-'] as const,
+      ['来源字段', node.provenance?.sourceField || '-'] as const,
+      ['字段值', node.provenance?.sourceValue || '-'] as const,
+      ['入库批次', node.provenance?.ingestBatch || '-'] as const,
+      ['入库时间', node.provenance?.ingestTime || '-'] as const,
+    ],
+  }))
+})
+
+const liveRules = computed(() => {
+  const rules = liveResult.value?.rules
+  return Array.isArray(rules) && rules.length ? rules as Array<Record<string, unknown>> : null
+})
+
 const selectedProvenanceTarget = computed(() => {
   const node = selectedNode.value
   if (node) {
@@ -126,7 +198,7 @@ const selectedProvenanceTarget = computed(() => {
     name: `${from.label} → ${to.label}`,
     type: edge.label,
     id: edge.id,
-    confidence: Math.min(from.confidence, to.confidence).toFixed(2),
+    confidence: typeof edge.confidence === 'number' ? edge.confidence.toFixed(2) : '-',
   }
 })
 function formatTimestamp(date: Date) {
@@ -145,18 +217,58 @@ const updateStatus = computed(() => {
   return `已更新（${Math.floor(elapsed / 3600)}h 前），数据可能过期`
 })
 
+const liveSummaryRows = computed<ServiceSummaryRow[] | null>(() => {
+  const result = liveResult.value
+  if (liveError.value) return [{ label: '接口状态', value: liveError.value }]
+  if (!result) return null
+  const summary = (result.summary ?? {}) as Record<string, unknown>
+  const labelMap: Record<string, string> = {
+    coreExpert: '核心专家',
+    coreExpertOrganization: '核心专家机构',
+    primaryColleague: '同事专家',
+    commonOrganization: '共同机构',
+    departmentOrTeam: '所属部门/团队',
+    effectivePeriod: '关系生效时段',
+    overlapDuration: '任职重叠时间',
+    workContent: '共同工作内容',
+    collaborationScenes: '协作场景',
+    periodAchievements: '同事期间成果',
+    colleagueCount: '同事关系数量',
+    teamCount: '共同团队',
+    maxOverlapYears: '最大重叠年限',
+    achievementCount: '关联成果',
+    reviewRequiredCount: '待复核',
+    relationCount: '关系数量',
+    expertCount: '专家数量',
+    paperCount: '论文数量',
+  }
+  const rows: ServiceSummaryRow[] = []
+  if (typeof result.total === 'number') {
+    rows.push({ label: '关系数量', value: String(result.total) })
+  }
+  for (const [key, value] of Object.entries(summary)) {
+    const label = labelMap[key]
+    if (label && value !== null && value !== undefined) {
+      rows.push({ label, value: String(value) })
+    }
+  }
+  return rows.length ? rows : null
+})
 const detailRows = computed(() => {
-  return props.moduleInfo.summaryRows.map((row) => {
+  const base = liveSummaryRows.value ?? props.moduleInfo.summaryRows
+  return base.map((row) => {
     if (row.label === '更新状态' && isPanorama.value) {
       return [row.label, updateStatus.value] as const
     }
     return [row.label, row.value] as const
   })
 })
-const apiResultJson = computed(() => JSON.stringify({
-  ...JSON.parse(props.responseJson),
-  request_params: parameterValues.value,
-}, null, 2))
+const apiResultJson = computed(() => {
+  const envelope = liveResult.value
+    ? { code: 200, success: true, data: liveResult.value, request_params: parameterValues.value }
+    : { ...JSON.parse(props.responseJson), request_params: parameterValues.value }
+  return JSON.stringify(envelope, null, 2)
+})
 
 watch(
   () => props.moduleInfo.key,
@@ -166,6 +278,9 @@ watch(
     panoramaRelation.value = 'all'
     selectedGraphNodeId.value = null
     selectedGraphEdgeId.value = null
+    liveResult.value = null
+    liveError.value = null
+    liveCenterId.value = null
     resetParameters()
     autoRefresh.value = false
   },
@@ -194,14 +309,52 @@ function resetParameters() {
   )
 }
 
-function handleRun() {
+const LIVE_MODULE_KEY = 'expert-colleague'
+
+function buildPayload(): Record<string, unknown> {
+  const payload: Record<string, unknown> = {}
+  for (const field of props.moduleInfo.requestFields) {
+    const raw = parameterValues.value[field.name]
+    if (raw === undefined || raw === null || String(raw).trim() === '') continue
+    if (field.type === 'number') {
+      const numeric = Number(raw)
+      payload[field.name] = Number.isFinite(numeric) ? numeric : raw
+    } else {
+      payload[field.name] = String(raw)
+    }
+  }
+  return payload
+}
+
+async function handleRun() {
   running.value = true
-  window.setTimeout(() => {
+  if (props.moduleInfo.key !== LIVE_MODULE_KEY) {
+    // 其余模块后端尚未实现，沿用示例数据预览。
+    window.setTimeout(() => {
+      const now = new Date()
+      lastTestTime.value = formatTimestamp(now)
+      lastUpdateTime.value = now.getTime()
+      running.value = false
+    }, 360)
+    return
+  }
+
+  liveError.value = null
+  try {
+    const { data, error } = await runKgService(props.moduleInfo.endpoint, buildPayload())
+    if (error) {
+      liveResult.value = null
+      liveError.value = error
+    } else {
+      liveResult.value = data
+      liveCenterId.value = (data?.expert?.id as string | undefined) ?? null
+    }
+  } finally {
     const now = new Date()
     lastTestTime.value = formatTimestamp(now)
     lastUpdateTime.value = now.getTime()
     running.value = false
-  }, 360)
+  }
 }
 
 function startAutoRefresh() {
@@ -292,6 +445,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           <strong>{{ lastTestTime }}</strong>
         </div>
       </div>
+
       <div v-if="isPanorama" class="graph-panel__filters" aria-label="产业链全景图显示控制">
         <label>
           <span>层级展开</span>
@@ -353,10 +507,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           </div>
         </dl>
         <dl v-else-if="resultMode === 'entity' && selectedNode" class="result-panel__table">
-          <div><dt>实体名称</dt><dd>{{ selectedNode.label }}</dd></div>
-          <div><dt>实体类型</dt><dd>{{ selectedNode.entityType }}</dd></div>
-          <div><dt>命中关系</dt><dd>{{ selectedNode.relations }}</dd></div>
-          <div><dt>置信度</dt><dd>{{ selectedNode.confidence.toFixed(2) }}</dd></div>
+          <div v-for="([label, value], index) in entityDetailRows" :key="label + '-' + index">
+            <dt>{{ label }}</dt>
+            <dd>{{ value }}</dd>
+          </div>
         </dl>
         <dl v-else-if="resultMode === 'relation' && selectedEdge" class="result-panel__table">
           <div v-for="([label, value], index) in relationDetailRows" :key="`${label}-${index}`">
@@ -364,40 +518,42 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <dd>{{ value }}</dd>
           </div>
         </dl>
-        <section v-else-if="resultMode === 'provenance' && selectedProvenance && selectedProvenanceTarget" class="result-provenance">
+        <section v-else-if="resultMode === 'provenance' && selectedProvenanceTarget" class="result-provenance">
           <header><strong>当前追溯对象</strong><span>{{ selectedProvenanceTarget.kind }}</span></header>
           <div class="result-provenance__target">
             <strong>{{ selectedProvenanceTarget.name }}</strong>
             <span>{{ selectedProvenanceTarget.kind }}</span>
           </div>
-          <template v-if="selectedNode">
+          <template v-if="selectedNode && liveEntityProvenanceRows.length">
             <h3>实体溯源</h3>
             <dl class="result-provenance__source">
-              <div><dt>实体类型</dt><dd>{{ selectedProvenanceTarget.type }}</dd></div>
-              <div><dt>源数据表</dt><dd><code>{{ selectedProvenance.evidences[0]?.technicalTable }}</code></dd></div>
-              <div><dt>字段标识 ID</dt><dd><code>{{ selectedProvenance.evidences[0]?.fieldIdentifier }}</code></dd></div>
-              <div><dt>构建任务 ID</dt><dd><code>{{ selectedProvenance.task.instanceId }}</code></dd></div>
+              <div v-for="([label, value], index) in liveEntityProvenanceRows" :key="label + '-' + index">
+                <dt>{{ label }}</dt>
+                <dd><code>{{ value }}</code></dd>
+              </div>
             </dl>
-            <div class="result-provenance__task-meta"><RouterLink :to="{ name: 'processing-instance-detail', params: { instanceId: selectedProvenance.task.instanceId }, query: { stage: '图谱构建', objectName: selectedProvenanceTarget.name, objectId: selectedProvenanceTarget.id, objectType: selectedProvenanceTarget.type, kind: selectedProvenanceTarget.kind, sourceTable: selectedProvenance.evidences[0]?.technicalTable, sourceRecordId: selectedProvenance.evidences[0]?.fieldIdentifier } }">查看构建详情 →</RouterLink></div>
+            <div class="result-provenance__task-meta"><span>实体溯源来自 FastAPI 返回的 graph.nodes[].data.provenance</span></div>
           </template>
-          <template v-else-if="selectedProvenance.relationEndpoints?.length">
+          <template v-else-if="selectedEdge && liveRelationEndpointProvenanceRows.length">
             <h3>关系溯源</h3>
-            <dl class="result-provenance__source"><div><dt>关系类型</dt><dd>{{ selectedProvenanceTarget.type }}</dd></div></dl>
+            <dl class="result-provenance__source">
+              <div><dt>关系类型</dt><dd>{{ selectedProvenanceTarget.type }}</dd></div>
+              <div><dt>关系置信度</dt><dd>{{ selectedProvenanceTarget.confidence }}</dd></div>
+            </dl>
             <h3>两端实体来源</h3>
             <div class="result-provenance__evidence-list">
-              <article v-for="endpoint in selectedProvenance.relationEndpoints" :key="endpoint.role">
+              <article v-for="endpoint in liveRelationEndpointProvenanceRows" :key="endpoint.role">
                 <header><strong>{{ endpoint.role }} · {{ endpoint.name }}</strong></header>
                 <p><b>实体类型：{{ endpoint.entityType }}</b></p>
-                <span>源数据表：<code>{{ endpoint.technicalTable }}</code></span>
-                <span>字段标识 ID：<code>{{ endpoint.fieldIdentifier }}</code></span>
+                <span v-for="([label, value], index) in endpoint.rows" :key="endpoint.role + label + index">{{ label }}：<code>{{ value }}</code></span>
               </article>
             </div>
-            <dl class="result-provenance__source"><div><dt>构建任务 ID</dt><dd><code>{{ selectedProvenance.task.instanceId }}</code></dd></div></dl>
-            <div class="result-provenance__task-meta"><RouterLink :to="{ name: 'processing-instance-detail', params: { instanceId: selectedProvenance.task.instanceId }, query: { stage: '图谱构建', objectName: selectedProvenanceTarget.name, objectId: selectedProvenanceTarget.id, objectType: selectedProvenanceTarget.type, kind: selectedProvenanceTarget.kind } }">查看构建详情 →</RouterLink></div>
+            <div class="result-provenance__task-meta"><span>关系边只展示关系置信度；溯源取源实体和目标实体的来源表、来源字段。</span></div>
           </template>
+          <p v-else class="result-panel__empty">当前对象未返回溯源字段。</p>
         </section>
         <div v-else-if="resultMode === 'rule'" class="result-panel__rules">
-          <article v-for="(rule, index) in moduleInfo.rules" :key="rule.name">
+          <article v-for="(rule, index) in (liveRules ?? moduleInfo.rules)" :key="String(rule.name)">
             <header>
               <strong>规则 {{ index + 1 }}：{{ rule.name }}</strong>
               <span>{{ rule.type }}</span>
@@ -409,6 +565,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
               <div><dt>输出结果</dt><dd>{{ rule.output }}</dd></div>
               <div><dt>置信度阈值</dt><dd>{{ rule.threshold }}</dd></div>
               <div><dt>审核策略</dt><dd>{{ rule.audit }}</dd></div>
+              <div v-if="'appliedCount' in rule"><dt>本次命中</dt><dd>{{ rule.appliedCount }}</dd></div>
             </dl>
           </article>
         </div>

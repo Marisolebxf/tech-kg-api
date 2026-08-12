@@ -12,6 +12,8 @@ export interface GraphNodeData {
   relations: string
   evidence: string[]
   level?: number
+  details?: Record<string, unknown>
+  provenance?: LiveEntityProvenance
 }
 
 export interface GraphEdgeData {
@@ -20,6 +22,18 @@ export interface GraphEdgeData {
   to: string
   label: string
   category: string
+  confidence?: number
+  evidence?: string[]
+  ruleName?: string
+  details?: Record<string, unknown>
+}
+
+export interface LiveEntityProvenance {
+  sourceTable?: string
+  sourceField?: string
+  sourceValue?: string
+  ingestBatch?: string
+  ingestTime?: string
 }
 
 export interface GraphPreset {

@@ -115,8 +115,9 @@ async def test_query_infers_colleague_from_edge_time_overlap() -> None:
     assert result["total"] == 1
     relation = result["colleagues"][0]
     assert relation["colleague"]["id"] == "person_b"
-    assert relation["effectivePeriod"] == "2020-2022"
-    assert relation["overlapYears"] == 3
+    assert relation["effectivePeriod"] == "2020-01 至 2022-12"
+    assert relation["overlapMonths"] == 36
+    assert relation["overlapYears"] == 3.0
     assert relation["reviewRequired"] is False
     assert relation["achievements"][0]["id"] == "paper_1"
     assert "论文合作" in relation["collaborationScenes"]
@@ -136,14 +137,44 @@ async def test_non_overlapping_periods_exclude_colleague() -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_edge_time_is_returned_for_manual_review() -> None:
+async def test_missing_edge_time_is_excluded_and_counted_for_review() -> None:
     gateway = FakeGraphSearchGateway()
     # 同事边上缺任职时间 → 走人工复核
     gateway.colleague_aff_edge["properties"].pop("work_experience_date")
 
     result = await ExpertColleagueRelationService().query(gateway, expert_id="person_a")
 
-    relation = result["colleagues"][0]
-    assert relation["effectivePeriod"] == "任职时间待补录"
-    assert relation["reviewRequired"] is True
+    assert result["colleagues"] == []
     assert result["summary"]["reviewRequiredCount"] == 1
+
+
+@pytest.mark.asyncio
+async def test_any_positive_month_overlap_is_included() -> None:
+    gateway = FakeGraphSearchGateway()
+    gateway.expert_aff_edge["properties"]["work_experience_date"] = "2022-01 至 2022-02"
+    gateway.colleague_aff_edge["properties"]["work_experience_date"] = "2022-01 至 2022-12"
+
+    result = await ExpertColleagueRelationService().query(gateway, expert_id="person_a")
+
+    assert result["total"] == 1
+    assert result["colleagues"][0]["overlapMonths"] == 2
+
+
+@pytest.mark.asyncio
+async def test_summary_and_graph_cover_tender_details() -> None:
+    gateway = FakeGraphSearchGateway()
+    result = await ExpertColleagueRelationService().query(gateway, expert_id="person_a")
+
+    summary = result["summary"]
+    assert summary["coreExpert"].startswith("张明远")
+    assert summary["primaryColleague"].startswith("李佳宁")
+    assert summary["commonOrganization"] == "中国科学院自动化研究所"
+    assert summary["effectivePeriod"] == "2020-01 至 2023-12"
+    assert summary["workContent"] == "科技知识图谱关系推理"
+    node_types = {item["type"] for item in result["graph"]["nodes"]}
+    assert {"expert", "organization", "paper"} <= node_types
+    assert {item["label"] for item in result["graph"]["edges"]} >= {
+        "同事关系",
+        "共同任职",
+        "合作成果",
+    }

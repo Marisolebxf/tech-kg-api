@@ -93,6 +93,28 @@ def _test_app() -> FastAPI:
     return app
 
 
+def _portal_cookie_test_app() -> FastAPI:
+    settings = replace(
+        AuthSettings.from_env(),
+        enabled=True,
+        client_id="techkg",
+        client_secret="secret",
+        session_backend="memory",
+        cookie_secure=False,
+        portal_cookie_login_enabled=True,
+        portal_token_cookie_name="access_token",
+    )
+    application = AuthApplication(
+        settings=settings,
+        store=MemoryJsonStore(),
+        user_center=_FakeUserCenter(settings),
+    )
+    app = FastAPI()
+    app.dependency_overrides[get_auth_application] = lambda: application
+    app.include_router(auth_router, prefix="/api/v1")
+    return app
+
+
 async def test_browser_login_cookie_profile_and_logout_flow() -> None:
     async with AsyncClient(
         transport=ASGITransport(app=_test_app()),
@@ -176,3 +198,41 @@ async def test_oauth_callback_rejects_state_from_another_browser() -> None:
         assert callback.status_code == 302
         assert "/#/login?" in callback.headers["location"]
         assert "techkg_session=" not in callback.headers.get("set-cookie", "")
+
+
+async def test_v21_portal_cookie_is_exchanged_for_local_session() -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=_portal_cookie_test_app()),
+        base_url="http://test",
+    ) as client:
+        client.cookies.set("access_token", "portal-access-token", domain="test.local")
+        client.cookies.set("techkg_session", "expired-local-session", domain="test.local")
+        first = await client.get("/api/v1/auth/me")
+
+        assert first.status_code == 200
+        assert first.json()["data"]["user"]["nickname"] == "普通用户"
+        assert client.cookies.get("techkg_session")
+        assert "HttpOnly" in first.headers["set-cookie"]
+        assert "portal-access-token" not in first.headers["set-cookie"]
+
+        logs = await client.get("/api/v1/auth/operation-logs")
+        assert logs.json()["data"]["items"][0]["action"] == "复用门户登录态"
+
+        refreshed = await client.post("/api/v1/auth/refresh")
+        assert refreshed.status_code == 200
+
+        client.cookies.delete("access_token")
+        second = await client.get("/api/v1/auth/me")
+
+    assert second.status_code == 200
+
+
+async def test_portal_cookie_login_is_disabled_by_default() -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=_test_app()),
+        base_url="http://test",
+    ) as client:
+        client.cookies.set("access_token", "portal-access-token")
+        response = await client.get("/api/v1/auth/me")
+
+    assert response.status_code == 401

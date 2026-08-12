@@ -17,7 +17,7 @@ class UserCenterError(RuntimeError):
 
 
 class UserCenterClient:
-    """严格按照《统一用户中心开放授权接口文档 v1.5》调用。"""
+    """严格按照《统一用户中心开放授权接口文档 v2.1》调用。"""
 
     def __init__(
         self,

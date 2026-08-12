@@ -58,7 +58,7 @@ async function refreshProfile() {
       </article>
 
       <article class="profile-card">
-        <div class="profile-card__heading"><strong>角色</strong><span>{{ profile?.roles.length || 0 }} 项</span></div>
+        <div class="profile-card__heading"><strong>角色</strong><span>{{ profile?.roles.length || 0 }} 项 · 应用 {{ profile?.appPermissions.roles.length || 0 }} / 机构 {{ profile?.orgPermissions.roles.length || 0 }}</span></div>
         <div v-if="profile?.roles.length" class="chip-list">
           <span v-for="role in profile.roles" :key="String(role.id)">
             <b>{{ role.name }}</b><small>{{ role.code }} · {{ role.type === 2 ? '机构角色' : '应用角色' }}</small>
@@ -84,6 +84,17 @@ async function refreshProfile() {
           <code v-for="permission in profile.permissions" :key="permission">{{ permission }}</code>
         </div>
         <p v-else class="empty-state">统一用户中心未返回操作权限标识。</p>
+      </article>
+
+      <article class="profile-card profile-card--permissions">
+        <div class="profile-card__heading"><strong>授权菜单</strong><span>{{ profile?.menus.length || 0 }} 项</span></div>
+        <div v-if="profile?.menus.length" class="menu-list">
+          <span v-for="menu in profile.menus" :key="String(menu.id)">
+            <b>{{ menu.name }}</b>
+            <small>{{ menu.linkType === 1 ? '外部链接' : '内部链接' }} · {{ menu.path || '未配置路径' }}</small>
+          </span>
+        </div>
+        <p v-else class="empty-state">统一用户中心未返回当前应用的菜单授权。</p>
       </article>
     </section>
   </div>
@@ -112,6 +123,7 @@ async function refreshProfile() {
 .chip-list { display: grid; gap: 9px; margin-top: 15px; }.chip-list > span { display: grid; gap: 4px; padding: 11px 12px; border: 1px solid #dce8f8; border-radius: 7px; background: #f9fbff; }.chip-list b { font-size: 12px; }.chip-list small { color: #8290a4; font-size: 9px; }
 .organization-list { display: grid; gap: 9px; margin-top: 15px; }.organization-list > div { display: grid; gap: 5px; padding: 11px 12px; border-left: 3px solid #2e90fa; background: #f7faff; }.organization-list strong { font-size: 12px; }.organization-list span { color: #8290a4; font-size: 9px; }
 .profile-card--permissions { grid-column: 1 / -1; min-height: 150px; }.permission-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 15px; }.permission-list code { padding: 5px 8px; border: 1px solid #cfe0f7; border-radius: 5px; background: #eef5ff; color: #175cd3; font-size: 10px; }
+.menu-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; margin-top: 15px; }.menu-list>span { display:grid;gap:4px;padding:10px 12px;border:1px solid #dce8f8;border-radius:7px;background:#f9fbff; }.menu-list b { font-size:11px; }.menu-list small { overflow:hidden;color:#8290a4;font-size:9px;text-overflow:ellipsis;white-space:nowrap; }
 .empty-state { margin: 28px 0 0; color: #96a2b3; font-size: 11px; text-align: center; }
-@media (max-width: 900px) { .profile-grid { grid-template-columns: 1fr; }.profile-card--permissions { grid-column: auto; }.user-center__hero { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 900px) { .profile-grid { grid-template-columns: 1fr; }.profile-card--permissions { grid-column: auto; }.menu-list { grid-template-columns:1fr; }.user-center__hero { align-items: flex-start; flex-direction: column; } }
 </style>

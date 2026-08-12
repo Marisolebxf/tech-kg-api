@@ -22,10 +22,43 @@ export interface RoleSummary {
   type: number;
 }
 
+export interface MenuSummary {
+  id: number | string;
+  parentId: number | string;
+  name: string;
+  type: number;
+  path: string;
+  component: string;
+  componentName: string;
+  icon: string;
+  permission: string;
+  visible: boolean;
+  keepAlive: boolean;
+  alwaysShow: boolean;
+  code: string;
+  linkType: 0 | 1;
+  children: MenuSummary[];
+}
+
+export interface RoleMenuSummary {
+  role: RoleSummary;
+  menus: MenuSummary[];
+}
+
+export interface PermissionSetSummary {
+  roles: RoleSummary[];
+  menus: MenuSummary[];
+  permissions: string[];
+}
+
 export interface AuthProfile {
   user: UserProfile;
   roles: RoleSummary[];
   permissions: string[];
+  menus: MenuSummary[];
+  roleMenus: RoleMenuSummary[];
+  appPermissions: PermissionSetSummary;
+  orgPermissions: PermissionSetSummary;
   organizations: Array<Record<string, unknown>>;
   expiresAt: number | null;
   authEnabled: boolean;

@@ -13,8 +13,11 @@ from typing import Any
 from biz.schemas.auth import (
     AccountSecurityData,
     AuthProfile,
+    MenuSummary,
     OperationLogItem,
     OperationLogPage,
+    PermissionSetSummary,
+    RoleMenuSummary,
     RoleSummary,
     UserProfile,
 )
@@ -127,8 +130,21 @@ class AuthService:
         else:
             current = context
         if not current.refresh_token:
-            await self.delete_session(session_id)
-            raise AuthenticationError("刷新令牌不存在，请重新登录")
+            try:
+                checked = await self.user_center.check_token(current.access_token)
+                permission_info = await self.user_center.get_permission_info(current.access_token)
+            except UserCenterError as exc:
+                await self.delete_session(session_id)
+                raise AuthenticationError(str(exc), status_code=exc.status_code) from exc
+            refreshed = AuthContext(
+                access_token=current.access_token,
+                refresh_token="",
+                expires_at=(int(checked.get("exp")) if checked.get("exp") is not None else None),
+                permission_info=dict(permission_info or {}),
+                session_id=session_id,
+            )
+            await self._save_session(refreshed)
+            return refreshed
         try:
             token = await self.user_center.refresh(current.refresh_token)
             if not token.get("refresh_token"):
@@ -165,6 +181,28 @@ class AuthService:
         if expires_at is not None:
             ttl = max(1, min(ttl, expires_at - int(time.time())))
         await self.store.set_json(key, context.to_record(), ttl)
+        return context
+
+    async def create_session_from_access_token(self, access_token: str) -> AuthContext:
+        """将门户共享的 access_token 校验后转换为本系统 Redis 会话。"""
+
+        try:
+            checked = await self.user_center.check_token(access_token)
+            permission_info = await self.user_center.get_permission_info(access_token)
+        except UserCenterError as exc:
+            raise AuthenticationError(str(exc), status_code=exc.status_code) from exc
+        expires_at = int(checked.get("exp")) if checked.get("exp") else None
+        context = AuthContext(
+            access_token=access_token,
+            permission_info=dict(permission_info or {}),
+            expires_at=expires_at,
+        )
+        if context.expires_at is None:
+            raise AuthenticationError("统一用户中心未返回访问令牌过期时间", status_code=502)
+        if context.expires_at <= int(time.time()):
+            raise AuthenticationError("访问令牌已过期")
+        context.session_id = secrets.token_urlsafe(32)
+        await self._save_session(context)
         return context
 
     async def logout(self, context: AuthContext) -> bool:
@@ -333,10 +371,30 @@ class AuthService:
             if isinstance(role, dict)
         ]
         permissions = sorted({str(item) for item in permission_set.get("permissions", [])})
+        menus = [
+            MenuSummary.model_validate(menu)
+            for menu in permission_set.get("menus", [])
+            if isinstance(menu, dict)
+        ]
+        role_menus = [
+            RoleMenuSummary.model_validate(item)
+            for item in permission_info.get("roleMenuList", [])
+            if isinstance(item, dict)
+        ]
+        app_permissions = PermissionSetSummary.model_validate(
+            permission_info.get("appPermissions") or {}
+        )
+        org_permissions = PermissionSetSummary.model_validate(
+            permission_info.get("orgPermissions") or {}
+        )
         return AuthProfile(
             user=UserProfile.model_validate(raw_user),
             roles=roles,
             permissions=permissions,
+            menus=menus,
+            role_menus=role_menus,
+            app_permissions=app_permissions,
+            org_permissions=org_permissions,
             organizations=[
                 dict(item) for item in permission_info.get("orgs", []) if isinstance(item, dict)
             ],

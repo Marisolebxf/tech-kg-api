@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from application.auth import AuthApplication, get_auth_application
@@ -18,6 +18,7 @@ BearerDependency = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer
 
 async def require_authenticated_user(
     request: Request,
+    response: Response,
     application: AuthApplicationDependency,
     bearer: BearerDependency,
 ) -> AuthContext:
@@ -29,10 +30,39 @@ async def require_authenticated_user(
                 raise AuthenticationError("Authorization 请求头格式不正确")
             return await application.resolve_bearer(bearer.credentials)
 
+        session_error: AuthenticationError | None = None
         session_id = request.cookies.get(application.settings.session_cookie_name)
-        if not session_id:
-            raise AuthenticationError("尚未登录")
-        return await application.get_session(session_id)
+        if session_id:
+            try:
+                return await application.get_session(session_id)
+            except AuthenticationError as exc:
+                session_error = exc
+
+        if application.settings.portal_cookie_login_enabled:
+            access_token = request.cookies.get(application.settings.portal_token_cookie_name)
+            if access_token:
+                context = await application.create_session_from_access_token(access_token)
+                await application.record_operation(
+                    context,
+                    action="复用门户登录态",
+                    category="登录",
+                    detail="通过统一用户中心 v2.1 门户 Cookie 创建本地会话",
+                    ip_address=request.client.host if request.client else "",
+                    user_agent=request.headers.get("user-agent", ""),
+                )
+                response.set_cookie(
+                    key=application.settings.session_cookie_name,
+                    value=context.session_id or "",
+                    max_age=application.settings.session_ttl_seconds,
+                    secure=application.settings.cookie_secure,
+                    httponly=True,
+                    samesite=application.settings.cookie_samesite,
+                    path=application.settings.cookie_path,
+                )
+                return context
+        if session_error is not None:
+            raise session_error
+        raise AuthenticationError("尚未登录")
     except AuthenticationError as exc:
         raise HTTPException(
             status_code=exc.status_code,

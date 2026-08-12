@@ -36,6 +36,8 @@ class AuthSettings:
     frontend_url: str
     scope: str
     session_cookie_name: str
+    portal_token_cookie_name: str
+    portal_cookie_login_enabled: bool
     session_ttl_seconds: int
     state_ttl_seconds: int
     bearer_cache_ttl_seconds: int
@@ -90,6 +92,14 @@ class AuthSettings:
             frontend_url=os.getenv("AUTH_FRONTEND_URL", "http://127.0.0.1:5173"),
             scope=os.getenv("USER_CENTER_SCOPE", "user_info"),
             session_cookie_name=os.getenv("AUTH_SESSION_COOKIE", "techkg_session"),
+            portal_token_cookie_name=os.getenv(
+                "USER_CENTER_PORTAL_TOKEN_COOKIE",
+                "access_token",
+            ),
+            portal_cookie_login_enabled=_env_bool(
+                "USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED",
+                False,
+            ),
             session_ttl_seconds=_env_int("AUTH_SESSION_TTL_SECONDS", 7 * 24 * 3600),
             state_ttl_seconds=_env_int("AUTH_STATE_TTL_SECONDS", 300),
             bearer_cache_ttl_seconds=_env_int("AUTH_BEARER_CACHE_TTL_SECONDS", 60),

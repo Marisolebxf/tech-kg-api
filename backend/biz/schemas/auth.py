@@ -44,10 +44,43 @@ class RoleSummary(CamelCaseModel):
     type: int = 1
 
 
+class MenuSummary(CamelCaseModel):
+    id: int | str
+    parent_id: int | str = 0
+    name: str
+    type: int = 2
+    path: str = ""
+    component: str = ""
+    component_name: str = ""
+    icon: str = ""
+    permission: str = ""
+    visible: bool = True
+    keep_alive: bool = False
+    always_show: bool = False
+    code: str = ""
+    link_type: int = 0
+    children: list[MenuSummary] = Field(default_factory=list)
+
+
+class RoleMenuSummary(CamelCaseModel):
+    role: RoleSummary
+    menus: list[MenuSummary] = Field(default_factory=list)
+
+
+class PermissionSetSummary(CamelCaseModel):
+    roles: list[RoleSummary] = Field(default_factory=list)
+    menus: list[MenuSummary] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+
+
 class AuthProfile(CamelCaseModel):
     user: UserProfile
     roles: list[RoleSummary] = Field(default_factory=list)
     permissions: list[str] = Field(default_factory=list)
+    menus: list[MenuSummary] = Field(default_factory=list)
+    role_menus: list[RoleMenuSummary] = Field(default_factory=list)
+    app_permissions: PermissionSetSummary = Field(default_factory=PermissionSetSummary)
+    org_permissions: PermissionSetSummary = Field(default_factory=PermissionSetSummary)
     organizations: list[dict[str, Any]] = Field(default_factory=list)
     expires_at: int | None = None
     auth_enabled: bool = True

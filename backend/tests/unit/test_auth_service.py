@@ -181,3 +181,35 @@ async def test_account_security_and_operation_logs_use_current_user() -> None:
     assert page.total == 1
     assert page.items[0].action == "刷新登录会话"
     assert page.items[0].ip_address == "127.0.0.1"
+
+
+def test_v21_menu_link_type_and_role_menu_mapping_are_exposed() -> None:
+    service, _ = _service()
+    context = service.dev_context()
+    context.permission_info["allPermissions"]["menus"] = [
+        {
+            "id": 100,
+            "name": "外部服务",
+            "path": "https://example.test/service",
+            "linkType": 1,
+            "children": [],
+        }
+    ]
+    context.permission_info["roleMenuList"] = [
+        {
+            "role": {
+                "id": 1,
+                "name": "管理员",
+                "code": "admin",
+                "type": 1,
+            },
+            "menus": context.permission_info["allPermissions"]["menus"],
+        }
+    ]
+
+    profile = service.profile(context)
+
+    assert profile.menus[0].link_type == 1
+    assert profile.role_menus[0].menus[0].link_type == 1
+    assert profile.app_permissions.roles == []
+    assert profile.org_permissions.roles == []

@@ -77,3 +77,18 @@ async def test_user_center_business_error_is_not_treated_as_success() -> None:
         assert "过期" in str(exc)
     else:
         raise AssertionError("无效 token 必须抛出 UserCenterError")
+
+
+async def test_permission_request_enables_v21_role_menu_mapping() -> None:
+    captured: dict[str, str] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["query"] = request.url.query.decode()
+        return httpx.Response(200, json={"code": 0, "msg": "", "data": {}})
+
+    client = UserCenterClient(_settings(), transport=httpx.MockTransport(handler))
+    await client.get_permission_info("access-1")
+
+    query = parse_qs(captured["query"])
+    assert query["token"] == ["access-1"]
+    assert query["include_role_menu"] == ["true"]

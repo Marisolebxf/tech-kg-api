@@ -33,6 +33,9 @@ class AuthApplication:
     async def resolve_bearer(self, access_token: str) -> AuthContext:
         return await self.service.resolve_bearer(access_token)
 
+    async def create_session_from_access_token(self, access_token: str) -> AuthContext:
+        return await self.service.create_session_from_access_token(access_token)
+
     async def refresh_session(self, context: AuthContext) -> AuthContext:
         if not context.session_id:
             return context

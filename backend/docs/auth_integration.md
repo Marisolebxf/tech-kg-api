@@ -1,4 +1,4 @@
-# 统一用户中心 OAuth2 接入
+# 统一用户中心 OAuth2 v2.1 接入
 
 本系统采用后端托管会话（BFF）模式接入统一用户中心。Vue 前端只拿到
 HttpOnly Session Cookie；`client_secret`、统一用户中心 `access_token` 和
@@ -15,6 +15,25 @@ HttpOnly Session Cookie；`client_secret`、统一用户中心 `access_token` �
 5. FastAPI 将会话写入 Redis、设置 HttpOnly Cookie，然后跳回前端 hash 路由。
 6. 浏览器业务请求使用 Session Cookie；其他厂商调用 API 时可以使用
    `Authorization: Bearer <access_token>`。
+
+## 门户共享登录态（v2.1）
+
+v2.1 新增了同一主域名下由门户 Cookie 共享 `access_token` 的流程。本系统采用
+“后端兑换本地会话”的兼容方式：FastAPI 从请求 Cookie 读取门户 token，调用统一
+用户中心 `/check-token` 与 `/v1/get-permission-info` 完成校验，然后创建 Redis
+会话并下发本系统 HttpOnly Session Cookie。token 不写入 localStorage，也不由 Vue
+主动读取。门户不会提供 `refresh_token`，因此“同步最新权限”会重新执行 token 校验
+和权限查询，并更新同一个 Redis 会话。
+
+该能力默认关闭，只有确认门户实际 Cookie 名称、Domain、Path、SameSite 和 Secure
+属性允许 `/bkg_zp` 请求携带后才开启：
+
+```dotenv
+USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED=true
+USER_CENTER_PORTAL_TOKEN_COOKIE=access_token
+```
+
+未携带门户 Cookie 或校验失败时仍返回 401，前端会继续使用标准 OAuth2 授权码登录。
 
 ## API
 
@@ -50,6 +69,8 @@ USER_CENTER_REDIRECT_URI=https://edu.itic-sci.com/bkg_zp/api/v1/auth/callback
 USER_CENTER_SSO_LOGIN_URL=https://edu.itic-sci.com/uc/sso/login
 USER_CENTER_OAUTH_BASE_URL=https://edu.itic-sci.com/uc/admin-api/system/oauth2
 USER_CENTER_ACCOUNT_URL=https://edu.itic-sci.com/uc/admin/login?redirect=/index
+USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED=false
+USER_CENTER_PORTAL_TOKEN_COOKIE=access_token
 ```
 
 如果网关保留 `/bkg_zp` 前缀，前端构建时设置：
@@ -81,4 +102,6 @@ AUTH_SESSION_BACKEND=memory
 - 权限缓存 TTL 不超过 token 剩余有效期。
 - 回跳路径只接受站内绝对路径，拒绝 `//example.com` 一类开放重定向。
 - 操作记录按用户隔离保存在 Redis，默认保留 90 天、最多 200 条；仅记录操作类型、结果、IP、User-Agent 和时间，不记录密码、Token 或 Client Secret。
-- v1.5 开放授权文档没有提供修改密码接口，因此账号资料和密码修改只跳转统一用户中心，本平台不代理或保存密码。
+- v2.1 权限菜单新增 `linkType`（0=内部链接、1=外部链接），后端会结构化返回菜单及角色—菜单映射；前端展示链接类型但不会把外部地址直接作为未校验的站内路由执行。
+- v2.1 仍未提供修改密码接口，因此账号资料和密码修改只跳转统一用户中心，本平台不代理或保存密码。
+- v2.1 新增的 `/open-api/system` 机构/用户查询、令牌交换和机构角色分配并非登录与 API 鉴权的必需链路，当前任务不调用这些高权限接口。

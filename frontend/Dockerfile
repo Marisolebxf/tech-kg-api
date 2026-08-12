@@ -4,8 +4,12 @@ WORKDIR /app
 
 # Docker 构建默认使用阿里 npm 镜像，可通过 build arg 覆盖。
 ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG VITE_BASE=./
+ARG VITE_API_BASE=/api
 ENV npm_config_registry=${NPM_REGISTRY} \
-    COREPACK_NPM_REGISTRY=${NPM_REGISTRY}
+    COREPACK_NPM_REGISTRY=${NPM_REGISTRY} \
+    VITE_BASE=${VITE_BASE} \
+    VITE_API_BASE=${VITE_API_BASE}
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 

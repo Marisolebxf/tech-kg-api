@@ -36,7 +36,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 SPACE = "dev"
-BATCH = 500
+BATCH = 200
 INGEST_BATCH = "paper_prov_20260811"
 INGEST_TIME = "2026-08-11T00:00:00Z"
 SOURCE_SYSTEM = "gkx_element"
@@ -145,23 +145,30 @@ def insert_tag_batch(
     )
     parts = []
     for vid, rec_id, conf, src_tbl in rows:
+        # organization_id = 实体自身主键 id（与 org 域一致：org→org_id；paper→paper_id 等），
+        # 即溯源表 organization_base 的主键，不是外键指向别的 org。
         parts.append(
-            f'"{vid}":("",{float(conf)},{esc(SOURCE_SYSTEM)},{esc(src_tbl)},'
+            f'"{vid}":({esc(rec_id)},{float(conf)},{esc(SOURCE_SYSTEM)},{esc(src_tbl)},'
             f"{esc(rec_id)},{esc(INGEST_BATCH)},{esc(INGEST_TIME)})"
         )
+    ok = 0
     for i in range(0, len(parts), BATCH):
-        chunk = ",".join(parts[i : i + BATCH])
+        chunk_parts = parts[i : i + BATCH]
+        chunk = ",".join(chunk_parts)
         try:
             # INSERT VERTEX organization_base 给已存在顶点加 mixin tag，保留原 domain tag
             # （此 Nebula 版本不支持 INSERT TAG 语法；INSERT VERTEX 单 tag 是加性，不覆盖其它 tag）
             client.execute_write(
                 f"USE {SPACE}; INSERT VERTEX organization_base({fields}) VALUES {chunk};"
             )
+            ok += len(chunk_parts)
         except Exception as exc:
             logger.warning(
-                "  INSERT VERTEX organization_base 批失败 (%d): %s", len(chunk), str(exc)[:120]
+                "  INSERT VERTEX organization_base 批失败 (%d): %s",
+                len(chunk_parts),
+                str(exc)[:120],
             )
-    return len(rows)
+    return ok
 
 
 def fetch_real_vids(label: str, sql: str, vid_tmpl: str) -> list[tuple[str, str]]:

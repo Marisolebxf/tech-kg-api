@@ -216,8 +216,8 @@ def _load_authors(mysql, graph, since):
     """论文作者 → Person 顶点 + AUTHORED_BY 边。"""
     total_p = total_e = 0
     with mysql.engine.connect() as conn:
-        for tbl in ["dwd_zh_paper_author", "dwd_en_paper_author"]:
-            sql = f"SELECT paper_id, author_id, author_zh_name, author_en_name, author_email, author_order, is_corresponding_author FROM {tbl}"
+        for tbl in ["dwd_zh_author", "dwd_en_author"]:
+            sql = f"SELECT paper_id, author_id, en_name, zh_name, email, author_sequence, correspond FROM {tbl}"
             sql = _since(sql, since)
             persons = {}
             edges = []
@@ -227,7 +227,8 @@ def _load_authors(mysql, graph, since):
                 if not pid or not aid:
                     continue
                 if aid not in persons:
-                    persons[aid] = (f"person_{aid}", r[2] or "", r[3] or "")
+                    # r[2]=en_name, r[3]=zh_name（与 SELECT 顺序一致）
+                    persons[aid] = (f"person_{aid}", r[3] or "", r[2] or "")
                 edges.append(
                     (
                         f"paper_{pid}",

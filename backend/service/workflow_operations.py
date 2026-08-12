@@ -315,6 +315,7 @@ class WorkflowOperationsService:
         function_name: str,
         definition_id: str | None,
         name: str | None,
+        timeout_seconds: int | None = None,
     ) -> dict[str, Any]:
         if len(content) > 1024 * 1024:
             raise ValueError("Python 脚本不能超过 1 MiB")
@@ -337,6 +338,7 @@ class WorkflowOperationsService:
         directory.mkdir(parents=True, exist_ok=True)
         script_path = directory / f"{safe_id}.py"
         script_path.write_bytes(content)
+        timeout = max(int(timeout_seconds), 1) if timeout_seconds else 60
         definition = {
             "id": safe_id,
             "name": name or Path(filename).stem,
@@ -347,7 +349,7 @@ class WorkflowOperationsService:
             "sourceKind": "python",
             "functionName": function_name,
             "scriptPath": str(script_path),
-            "timeoutSeconds": 60,
+            "timeoutSeconds": timeout,
             "steps": [f"python:{function_name}"],
             "createdAt": _now(),
         }

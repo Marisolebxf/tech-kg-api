@@ -76,6 +76,35 @@ class WorkflowRepository:
             count = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
             if count == 0:
                 self._seed(connection)
+            self._ensure_builtin_definitions(connection)
+
+    def _ensure_builtin_definitions(self, connection: sqlite3.Connection) -> None:
+        """Idempotently insert built-in workflow definitions missing from older DBs."""
+        builtins = [
+            ("entity-project", "kg.entity.project", "entity", "国内外项目实体工作流"),
+        ]
+        for definition_id, workflow_type, category, name in builtins:
+            exists = connection.execute(
+                "SELECT 1 FROM workflow_definitions WHERE id = ?", (definition_id,)
+            ).fetchone()
+            if exists:
+                continue
+            payload = {
+                "id": definition_id,
+                "name": name,
+                "workflowType": workflow_type,
+                "category": category,
+                "taskQueue": os.getenv("TEMPORAL_TASK_QUEUE", "tech-kg-workflows"),
+                "active": True,
+                "sourceKind": "builtin",
+                "steps": ["读取增量", "标准化", "抽取/对齐", "质量校验", "图谱写入"],
+                "createdAt": _now(),
+            }
+            connection.execute(
+                """INSERT INTO workflow_definitions(id, workflow_type, category, active, payload)
+                   VALUES (?, ?, ?, 1, ?)""",
+                (definition_id, workflow_type, category, _json(payload)),
+            )
 
     def _seed(self, connection: sqlite3.Connection) -> None:
         batches = [
@@ -237,6 +266,7 @@ class WorkflowRepository:
             ("entity-scholar", "kg.entity.scholar", "entity", "人才实体工作流"),
             ("entity-patent", "kg.entity.patent", "entity", "专利实体工作流"),
             ("entity-organization", "kg.entity.organization", "entity", "机构实体工作流"),
+            ("entity-project", "kg.entity.project", "entity", "国内外项目实体工作流"),
             ("relation-authorship", "kg.relation.authorship", "relation", "论文作者关系工作流"),
             ("relation-employment", "kg.relation.employment", "relation", "人才任职关系工作流"),
             ("relation-citation", "kg.relation.citation", "relation", "论文引用关系工作流"),

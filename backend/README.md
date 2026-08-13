@@ -2,6 +2,9 @@
 
 后端采用 Python + FastAPI，实现知识图谱构建服务和数据访问层。
 
+统一用户中心 OAuth2、Redis 会话和浏览器/第三方 API 鉴权的配置说明见
+[`docs/auth_integration.md`](docs/auth_integration.md)。
+
 ## 环境和连接信息
 
 当前后端已经从旧 Java/SpringBoot 方案迁移为 Python/FastAPI。开发环境默认连接服务器 MySQL 中的科技要素业务库 `gkx_element`。厂商源库 `gkx` 只用于只读同步；`gkx_local` 仅是部分历史模块可能显式指定的兼容库名，不是当前默认业务库。

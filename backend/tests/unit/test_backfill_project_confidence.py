@@ -28,10 +28,28 @@ class _FakeGraph:
 
 def test_backfill_writes_confidence_for_each_node():
     nodes = [
-        _Node("project_a", {"title": "t", "abstract": "a", "funded_amount": 1.0,
-                            "discipline": "d", "approval_year": "2024", "fund_category": "c"}),
-        _Node("project_b", {"title": "", "abstract": "a", "funded_amount": 1.0,
-                            "discipline": "d", "approval_year": "2024", "fund_category": "c"}),
+        _Node(
+            "project_a",
+            {
+                "title": "t",
+                "abstract": "a",
+                "funded_amount": 1.0,
+                "discipline": "d",
+                "approval_year": "2024",
+                "fund_category": "c",
+            },
+        ),
+        _Node(
+            "project_b",
+            {
+                "title": "",
+                "abstract": "a",
+                "funded_amount": 1.0,
+                "discipline": "d",
+                "approval_year": "2024",
+                "fund_category": "c",
+            },
+        ),
     ]
     graph = _FakeGraph(nodes)
     report = backfill_project_confidence(graph, dry_run=False, page_size=500)
@@ -44,8 +62,17 @@ def test_backfill_writes_confidence_for_each_node():
 
 def test_backfill_dry_run_no_writes():
     nodes = [
-        _Node("project_a", {"title": "t", "abstract": "a", "funded_amount": 1.0,
-                            "discipline": "d", "approval_year": "2024", "fund_category": "c"}),
+        _Node(
+            "project_a",
+            {
+                "title": "t",
+                "abstract": "a",
+                "funded_amount": 1.0,
+                "discipline": "d",
+                "approval_year": "2024",
+                "fund_category": "c",
+            },
+        ),
     ]
     graph = _FakeGraph(nodes)
     report = backfill_project_confidence(graph, dry_run=True)

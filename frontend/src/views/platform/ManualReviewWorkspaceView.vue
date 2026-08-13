@@ -4,8 +4,13 @@ import { useRoute } from 'vue-router'
 import { getManualReview, retryManualReview, revokeManualReview, submitManualReview } from '../../api/workflowOperations'
 
 import {
+  getHandleCategory,
   getImpactScope,
+  getReviewConsequence,
   getReviewTemplate,
+  getSedimentHint,
+  isMapTypeFix,
+  resolvePipelineStep,
   type ReviewAction,
   type ReviewRecord,
 } from './manual-review-data'
@@ -13,12 +18,17 @@ import {
 const route = useRoute()
 const record = ref<ReviewRecord | undefined>()
 const isSupported = computed(() => Boolean(record.value))
-const isHistory = computed(() => record.value?.status === '已完成')
+const isHistory = computed(() => record.value?.status === '已完成' || record.value?.status === '已撤销')
 const isEditable = computed(() => record.value?.status === '待处理')
 
 const template = computed(() => (record.value ? getReviewTemplate(record.value) : null))
 const impactScope = computed(() => (record.value ? getImpactScope(record.value) : '任务级'))
-const templateId = computed(() => template.value?.id ?? 'T_GENERIC')
+const templateId = computed(() => template.value?.id ?? 'T_RUNTIME')
+const handleCategory = computed(() => (record.value ? getHandleCategory(record.value) : '质量校验'))
+const consequence = computed(() => (record.value ? getReviewConsequence(record.value) : null))
+const pipelineStep = computed(() => (record.value ? resolvePipelineStep(record.value) : null))
+const sedimentHint = computed(() => (record.value ? getSedimentHint(record.value) : ''))
+const sedimentRule = ref(false)
 
 const note = ref(record.value?.decisionNote ?? '')
 const feedback = ref('')
@@ -67,7 +77,6 @@ const mergeMaster = ref(0)
 const mergeFields = ref({ authors: true, affiliation: true, source_channel: false })
 
 const runtimeConfig = ref('kg-extract-v2.6.1')
-const genericClass = ref('T_ENTITY')
 
 const initWorkspace = (item?: ReviewRecord) => {
   if (!item) return
@@ -91,17 +100,17 @@ const initWorkspace = (item?: ReviewRecord) => {
     }
   }
 
-  if (id === 'T_ENTITY') {
-    entityVerdict.value = item.type.includes('实体类型判断错误')
-      ? 'retype'
-      : item.type === '单任务执行失败'
-        ? 'create'
-        : 'merge'
+  if (id === 'T_MAP' && isMapTypeFix(item)) {
+    entityVerdict.value = 'retype'
     entityTypeFix.value = 'Expert'
   }
 
-  if (id === 'T_RELATION') {
-    const parts = item.object.split('→').map((s) => s.trim())
+  if (id === 'T_LINK') {
+    entityVerdict.value = item.type === '单任务执行失败' ? 'create' : 'merge'
+    entityTypeFix.value = 'Expert'
+  }
+
+  if (id === 'T_EVIDENCE') {
     evidenceItems.value = item.type.includes('合作关系')
       ? [
           { id: '1', label: '华南智能芯片官网新闻', table: item.sourceTable, recordId: item.sourceRecordId, excerpt: '双方将围绕智能芯片设计与云端算力平台展开联合技术研发。', trust: '企业官网 · 可信度 0.82', checked: true },
@@ -111,13 +120,10 @@ const initWorkspace = (item?: ReviewRecord) => {
           { id: '1', label: '参考文献原文片段', table: item.sourceTable, recordId: item.sourceRecordId, excerpt: '文末参考文献中出现《矩阵分析基础》，但未解析到完整 DOI。', trust: '论文原文 · 可信度 0.78', checked: true },
           { id: '2', label: 'DOI / 标题交叉验证', table: '—', recordId: '—', excerpt: '尚未完成被引论文 DOI 与标题一致性校验。', trust: '待补充', checked: false },
         ]
-    if (parts.length >= 2) {
-      // keep for display via record.object
-    }
   }
 
   if (id === 'T_DQ_FILL') {
-    fillTitleZh.value = item.id === 'PI-20260714-0008' ? '' : ''
+    fillTitleZh.value = ''
     fillTitleEn.value = ''
   }
 }
@@ -179,6 +185,9 @@ const stockCard = computed(() => {
   if (item.object.includes('陈卓')) {
     return { name: '陈卓', type: 'Expert', org: '专利发明人对齐', id: 'Expert_88102' }
   }
+  if (item.object.includes('李晓峰')) {
+    return { name: '李晓峰', type: 'Expert', org: '中国科学院自动化研究所', id: 'Expert_20510' }
+  }
   return { name: '张明远', type: 'Expert', org: '中国科学院自动化研究所', id: 'Expert_10028' }
 })
 
@@ -199,14 +208,14 @@ const dupRecords = [
 ]
 
 const primaryActionLabel = computed(() => {
-  if (templateId.value === 'T_ENTITY') {
+  if (templateId.value === 'T_LINK') {
     if (entityVerdict.value === 'merge') return '确认合并并重跑'
     if (entityVerdict.value === 'create') return '确认新建并重跑'
-    if (entityVerdict.value === 'retype') return '改类型并重跑'
     return '驳回候选'
   }
-  if (templateId.value === 'T_RELATION') {
-    if (relationVerdict.value === 'reject') return '驳回该合作关系'
+  if (templateId.value === 'T_MAP' && record.value && isMapTypeFix(record.value)) return '确认类型并重跑'
+  if (templateId.value === 'T_EVIDENCE') {
+    if (relationVerdict.value === 'reject') return '驳回关系（退回抽取）'
     if (relationVerdict.value === 'hold') return '保持隔离，继续补证'
     return '确认关系并重跑入图'
   }
@@ -227,16 +236,19 @@ const relationEvidenceCount = computed(() => (
 const isPrimaryDisabled = computed(() => {
   if (!isEditable.value) return true
   if (templateId.value === 'T_DQ_FILL') return !fillTitleZh.value.trim()
-  if (templateId.value === 'T_RELATION' && relationVerdict.value === 'approve') return relationEvidenceCount.value < 2
+  if (templateId.value === 'T_EVIDENCE' && relationVerdict.value === 'approve') return relationEvidenceCount.value < 2
   return false
 })
 
 const footerHint = computed(() => {
-  if (isHistory.value) return '处理已完成'
-  if (templateId.value === 'T_DQ_FILL' && !fillTitleZh.value.trim()) return '请先补全论文中文标题，再保存并重跑校验'
-  if (templateId.value === 'T_RELATION' && relationVerdict.value === 'approve' && relationEvidenceCount.value < 2) return '确认入图前需补充第二个独立可信来源'
-  if (impactScope.value === '批次级') return `批次级异常 · 确认后将从「${record.value?.node}」恢复公共流程`
-  return `任务级异常 · 确认后将从「${record.value?.node}」重跑本对象`
+  if (isHistory.value) return record.value?.status === '已撤销' ? '任务已撤销' : '处理已完成'
+  if (templateId.value === 'T_DQ_FILL' && !fillTitleZh.value.trim()) return '请先补全必填字段，再保存并重跑'
+  if (templateId.value === 'T_EVIDENCE' && relationVerdict.value === 'approve' && relationEvidenceCount.value < 2) return '确认入图前需补充第二个独立可信来源'
+  const write = consequence.value?.writeTarget ?? '处理结果'
+  const anchor = consequence.value?.rerunAnchor ?? record.value?.node
+  const scopeHint = impactScope.value === '批次级' ? '并恢复被阻断的公共流程' : '仅重跑本对象'
+  const sediment = sedimentRule.value && sedimentHint.value ? ' · 同时沉淀为规则' : ''
+  return `确认后：回写「${write}」，从「${anchor}」重跑，${scopeHint}${sediment}`
 })
 
 const backPath = computed(() => (
@@ -273,7 +285,7 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
     return
   }
   let label = action.label
-  if (action.id === 'entity-confirm' || (templateId.value === 'T_ENTITY' && action.kind === 'primary')) {
+  if (action.id === 'entity-confirm' || action.id === 'confirm-type' || ((templateId.value === 'T_LINK' || (templateId.value === 'T_MAP' && record.value && isMapTypeFix(record.value))) && action.kind === 'primary')) {
     label = primaryActionLabel.value
     if (entityVerdict.value === 'reject') {
       label = '驳回候选'
@@ -282,6 +294,7 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
   const rerun = 'rerun' in action ? action.rerun : label.includes('重跑') || label.includes('重试')
   const result = {
     templateId: templateId.value,
+    mode: templateId.value,
     label,
     mappings: mappingRows.value.map((row) => ({ source: row.source, target: row.target })),
     entityVerdict: entityVerdict.value,
@@ -297,25 +310,34 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
     mergeMaster: mergeMaster.value,
     mergeFields: mergeFields.value,
     runtimeConfig: runtimeConfig.value,
-    genericClass: genericClass.value,
+    handleCategory: handleCategory.value,
+    rerunStepId: consequence.value?.rerunStepId,
+    preferStep: action.id === 'reject-extract' ? 'extract' : undefined,
+    writeTarget: consequence.value?.writeTarget,
+    sedimentRule: sedimentRule.value,
+    actionKind: 'actionKind' in action ? action.actionKind : undefined,
   }
   try {
     const response = await submitManualReview(record.value.id, { actionId: action.id, note: note.value, result, handler: record.value.handler, rerun: Boolean(rerun) })
     record.value = response.review as ReviewRecord
-    feedback.value = rerun
-      ? `修正结果已回写，系统已从「${record.value.node}」创建重跑实例。请到图谱构建查看进度。`
-      : '处理结果已回写。'
+    const messages = [
+      rerun
+        ? `修正结果已回写到「${consequence.value?.writeTarget}」，系统已从「${consequence.value?.rerunAnchor ?? record.value.node}」创建重跑。可到图谱构建查看进度。`
+        : '处理结果已回写。',
+    ]
+    if (sedimentRule.value && sedimentHint.value) messages.push('裁决已勾选沉淀为规则。')
+    feedback.value = messages.join(' ')
   } catch (error) {
     feedback.value = error instanceof Error ? error.message : '人工处理提交失败'
   }
 }
 
 const runPrimary = () => {
-  if (templateId.value === 'T_ENTITY' && entityVerdict.value === 'reject') {
+  if (templateId.value === 'T_LINK' && entityVerdict.value === 'reject') {
     handleAction({ id: 'reject-candidate', label: '驳回候选', kind: 'secondary' })
     return
   }
-  if (templateId.value === 'T_RELATION' && relationVerdict.value !== 'approve') {
+  if (templateId.value === 'T_EVIDENCE' && relationVerdict.value !== 'approve') {
     handleAction({
       id: relationVerdict.value === 'reject' ? 'reject-extract' : 'keep-isolated',
       label: primaryActionLabel.value,
@@ -329,7 +351,7 @@ const runPrimary = () => {
 }
 
 const secondaryActions = computed(() => (
-  templateId.value === 'T_RELATION'
+  templateId.value === 'T_EVIDENCE'
     ? []
     : template.value?.actions.filter((a) => a.kind !== 'primary') ?? []
 ))
@@ -344,68 +366,103 @@ const secondaryActions = computed(() => (
         <p>
           <code>{{ record.id }}</code>
           <span>{{ record.handler }}</span>
-          <em>{{ record.node }} · {{ record.type }} · {{ record.ruleId }}</em>
+          <em>{{ pipelineStep?.name || record.node }} · {{ record.type }} · {{ record.ruleId }}</em>
         </p>
       </div>
       <div class="rw-head__badges">
+        <span class="cat-pill">{{ handleCategory }}</span>
         <span :class="['scope', impactScope === '批次级' ? 'is-batch' : 'is-task']">{{ impactScope }}{{ impactScope === '批次级' ? ' · 已阻断' : '' }}</span>
         <span :class="['status', `is-${record.status}`]">{{ record.status }}</span>
       </div>
     </header>
 
-    <section class="rw-diag" aria-label="异常诊断">
-      <div>
-        <strong>{{ record.object }}</strong>
-        <span>{{ record.objectType }} · {{ record.objectId }}</span>
+    <section class="rw-sec rw-sec--evidence" aria-label="证据">
+      <header class="rw-sec__head"><b>1</b><div><h2>证据</h2><p>对象信息、系统结论与证据摘要 · 本屏信息应足够做出决定</p></div></header>
+      <div class="rw-diag">
+        <div>
+          <strong>{{ record.object }}</strong>
+          <span>{{ record.objectType }} · {{ record.objectId }}</span>
+        </div>
+        <div>
+          <span>来源</span>
+          <em>{{ record.sourceTable }} / {{ record.sourceRecordId }}</em>
+        </div>
+        <div>
+          <span>系统结论</span>
+          <em>{{ record.sourceResult }}</em>
+        </div>
+        <div v-if="record.score">
+          <span>置信度</span>
+          <em>{{ record.score }}</em>
+        </div>
+        <p class="rw-diag__evidence">{{ record.evidence }}</p>
       </div>
-      <div>
-        <span>来源</span>
-        <em>{{ record.sourceTable }} / {{ record.sourceRecordId }}</em>
-      </div>
-      <div>
-        <span>系统结论</span>
-        <em>{{ record.sourceResult }}</em>
-      </div>
-      <div v-if="record.score">
-        <span>置信度</span>
-        <em>{{ record.score }}</em>
-      </div>
-      <p class="rw-diag__evidence">{{ record.evidence }}</p>
     </section>
 
     <main class="rw-body">
       <header class="rw-zone-head">
+        <b class="rw-step-no">2</b>
         <div>
-          <h2>{{ template?.title }}</h2>
+          <h2>裁决 · {{ template?.title }}</h2>
           <p>{{ template?.question }} · {{ record.suggestion }}</p>
         </div>
       </header>
 
-      <!-- T_MAP -->
+      <!-- T_MAP：选值映射（字段/字典/实体类型） -->
       <section v-if="templateId === 'T_MAP'" class="zone zone-map">
-        <p class="zone-banner">{{ impactScope === '批次级' ? '本映射影响公共流程，当前节点及下游已阻断。' : '修正后仅重跑本对象相关任务。' }}</p>
-        <div class="map-head"><span>来源字段</span><span>样例值</span><span>Schema / 字典目标</span></div>
-        <div v-for="row in mappingRows" :key="row.source" class="map-row">
-          <code>{{ row.source }}</code>
-          <span>{{ row.sample }}</span>
-          <select v-model="row.target" :disabled="!isEditable">
-            <option v-for="opt in row.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-          </select>
-        </div>
-        <label v-if="record.type.includes('标准化失败')" class="check-line">
-          <input v-model="keepRawEnum" type="checkbox" :disabled="!isEditable" /> 保留原始值用于追溯
-        </label>
-        <label v-if="record.type === '专利状态标准化失败'" class="inline-select">
-          <span>字典版本</span>
-          <select v-model="dictVersion" :disabled="!isEditable">
-            <option value="v1.2">回滚到 dict-patent-v1.2</option>
-            <option value="v1.3-fix">在 v1.3 新增枚举条目</option>
-          </select>
-        </label>
+        <template v-if="record && isMapTypeFix(record)">
+          <p class="zone-banner">系统实体类型判断与源记录特征不一致，请选择正确类型后从 Schema 映射节点重跑。</p>
+          <div class="entity-compare">
+            <article>
+              <span>当前判定</span>
+              <strong>{{ candidateCard?.name }}</strong>
+              <p>类型：{{ candidateCard?.type }}</p>
+              <p>机构：{{ candidateCard?.org }}</p>
+              <p>置信度 {{ candidateCard?.score }}</p>
+            </article>
+            <b>→</b>
+            <article>
+              <span>建议目标</span>
+              <strong>{{ stockCard?.name }}</strong>
+              <p>类型：{{ stockCard?.type }}</p>
+              <p>机构：{{ stockCard?.org }}</p>
+            </article>
+          </div>
+          <div class="verdict" role="radiogroup" aria-label="类型裁决">
+            <label :class="{ active: entityVerdict === 'retype' }">
+              <input v-model="entityVerdict" type="radio" value="retype" :disabled="!isEditable" />
+              修正类型为
+              <select v-model="entityTypeFix" :disabled="!isEditable">
+                <option v-for="t in entityTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
+              </select>
+            </label>
+          </div>
+        </template>
+        <template v-else>
+          <p class="zone-banner">{{ impactScope === '批次级' ? '本映射影响公共流程，当前节点及下游已阻断。' : '修正后仅重跑本对象相关任务。' }}</p>
+          <div class="map-head"><span>来源字段</span><span>样例值</span><span>Schema / 字典目标</span></div>
+          <div v-for="row in mappingRows" :key="row.source" class="map-row">
+            <code>{{ row.source }}</code>
+            <span>{{ row.sample }}</span>
+            <select v-model="row.target" :disabled="!isEditable">
+              <option v-for="opt in row.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+          </div>
+          <label v-if="record.type.includes('标准化失败')" class="check-line">
+            <input v-model="keepRawEnum" type="checkbox" :disabled="!isEditable" /> 保留原始值用于追溯
+          </label>
+          <label v-if="record.type === '专利状态标准化失败'" class="inline-select">
+            <span>字典版本</span>
+            <select v-model="dictVersion" :disabled="!isEditable">
+              <option value="v1.2">回滚到 dict-patent-v1.2</option>
+              <option value="v1.3-fix">在 v1.3 新增枚举条目</option>
+            </select>
+          </label>
+        </template>
       </section>
 
-      <!-- T_ENTITY -->
-      <section v-else-if="templateId === 'T_ENTITY'" class="zone zone-entity">
+      <!-- T_LINK -->
+      <section v-else-if="templateId === 'T_LINK'" class="zone zone-entity">
         <p v-if="record.type === '单任务执行失败'" class="zone-banner">对齐任务超时未生成候选，请基于源记录人工裁决后重跑。</p>
         <div class="entity-compare">
           <article>
@@ -424,23 +481,15 @@ const secondaryActions = computed(() => (
             <p v-if="stockCard?.id !== '—'">ID：{{ stockCard?.id }}</p>
           </article>
         </div>
-        <div class="verdict" role="radiogroup" aria-label="实体裁决">
+        <div class="verdict" role="radiogroup" aria-label="实体对齐裁决">
           <label :class="{ active: entityVerdict === 'merge' }"><input v-model="entityVerdict" type="radio" value="merge" :disabled="!isEditable" /> 合并到右侧存量实体</label>
           <label :class="{ active: entityVerdict === 'create' }"><input v-model="entityVerdict" type="radio" value="create" :disabled="!isEditable" /> 保留为新建实体</label>
-          <label :class="{ active: entityVerdict === 'retype' }">
-            <input v-model="entityVerdict" type="radio" value="retype" :disabled="!isEditable" />
-            仅修正类型为
-            <select v-model="entityTypeFix" :disabled="!isEditable || entityVerdict !== 'retype'">
-              <option v-for="t in entityTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
-            </select>
-            后重跑
-          </label>
           <label :class="{ active: entityVerdict === 'reject' }"><input v-model="entityVerdict" type="radio" value="reject" :disabled="!isEditable" /> 不是同一实体，驳回候选</label>
         </div>
       </section>
 
-      <!-- T_RELATION -->
-      <section v-else-if="templateId === 'T_RELATION'" class="zone zone-relation">
+      <!-- T_EVIDENCE -->
+      <section v-else-if="templateId === 'T_EVIDENCE'" class="zone zone-relation">
         <div class="relation-metrics">
           <article><span>当前置信度</span><strong>{{ record.score || '—' }}</strong><em>入图阈值 0.85</em></article>
           <article><span>独立证据</span><strong>{{ relationEvidenceCount }} / 2</strong><em>{{ relationEvidenceCount >= 2 ? '已达人工确认要求' : '未达自动入图要求' }}</em></article>
@@ -469,9 +518,9 @@ const secondaryActions = computed(() => (
         </label>
         <h3 class="zone-subtitle">处理结论</h3>
         <div class="verdict relation-verdict">
-          <label :class="{ active: relationVerdict === 'approve' }"><input v-model="relationVerdict" type="radio" value="approve" :disabled="!isEditable" /><span><strong>确认合作关系</strong><small>证据充分，允许该关系进入图谱</small></span></label>
+          <label :class="{ active: relationVerdict === 'approve' }"><input v-model="relationVerdict" type="radio" value="approve" :disabled="!isEditable" /><span><strong>确认关系入图</strong><small>证据充分，允许该关系进入图谱</small></span></label>
           <label :class="{ active: relationVerdict === 'hold' }"><input v-model="relationVerdict" type="radio" value="hold" :disabled="!isEditable" /><span><strong>保持隔离</strong><small>暂不入图，等待补充第二独立来源</small></span></label>
-          <label :class="{ active: relationVerdict === 'reject' }"><input v-model="relationVerdict" type="radio" value="reject" :disabled="!isEditable" /><span><strong>驳回关系</strong><small>认定当前证据不支持合作关系，退回抽取节点</small></span></label>
+          <label :class="{ active: relationVerdict === 'reject' }"><input v-model="relationVerdict" type="radio" value="reject" :disabled="!isEditable" /><span><strong>驳回关系</strong><small>认定当前证据不支持该关系，退回抽取节点</small></span></label>
         </div>
       </section>
 
@@ -529,7 +578,7 @@ const secondaryActions = computed(() => (
           <h3 class="zone-subtitle">补录结果</h3>
           <label class="wide-field"><span>title_zh <b>必填</b></span><input v-model="fillTitleZh" :disabled="!isEditable" placeholder="论文中文标题" /></label>
           <label class="wide-field"><span>title_en</span><input v-model="fillTitleEn" :disabled="!isEditable" placeholder="论文英文标题（可选）" /></label>
-          <p class="fill-rerun-note">保存后将仅从“必填校验”节点重跑当前论文记录，不影响同批次其他数据。</p>
+          <p class="fill-rerun-note">保存后将从「清洗标准化」节点重跑当前记录，不影响同批次其他数据。</p>
         </div>
       </section>
 
@@ -551,8 +600,8 @@ const secondaryActions = computed(() => (
         </div>
       </section>
 
-      <!-- T_RUNTIME -->
-      <section v-else-if="templateId === 'T_RUNTIME'" class="zone zone-runtime">
+      <!-- T_RUNTIME（含未识别工单兜底） -->
+      <section v-else class="zone zone-runtime">
         <dl class="runtime-dl">
           <div><dt>影响范围</dt><dd>{{ impactScope }}{{ impactScope === '批次级' ? ' · 已阻断下游' : ' · 仅本任务' }}</dd></div>
           <div><dt>失败摘要</dt><dd>{{ record.evidence }}</dd></div>
@@ -572,23 +621,6 @@ const secondaryActions = computed(() => (
         </label>
       </section>
 
-      <!-- T_GENERIC -->
-      <section v-else class="zone zone-generic">
-        <p class="zone-banner">未匹配专用模板，请选择建议归类后处置。</p>
-        <p>{{ record.evidence }}</p>
-        <label class="inline-select">
-          <span>建议归类</span>
-          <select v-model="genericClass" :disabled="!isEditable">
-            <option value="T_MAP">映射修复</option>
-            <option value="T_ENTITY">实体裁决</option>
-            <option value="T_RELATION">关系证据</option>
-            <option value="T_ATTR">属性对照</option>
-            <option value="T_DQ_FILL">源数据补全</option>
-            <option value="T_DQ_MERGE">重复定主</option>
-            <option value="T_RUNTIME">运行处置</option>
-          </select>
-        </label>
-      </section>
 
       <div v-if="!isEditable" class="rw-readonly">
         <strong>{{ record.decision }}</strong>
@@ -598,6 +630,20 @@ const secondaryActions = computed(() => (
 
       <p v-if="feedback" class="rw-feedback">{{ feedback }}</p>
     </main>
+
+    <section class="rw-sec rw-sec--consequence" aria-label="后果">
+      <header class="rw-sec__head"><b>3</b><div><h2>后果</h2><p>确认前请核对：回写哪里、从哪重跑、影响范围</p></div></header>
+      <div class="tri-grid">
+        <div><span>回写目标</span><strong>{{ consequence?.writeTarget }}</strong></div>
+        <div><span>重跑锚点</span><strong>{{ consequence?.rerunAnchor }}</strong><em v-if="pipelineStep">· {{ pipelineStep.id }}</em></div>
+        <div><span>影响范围</span><strong>{{ impactScope }}{{ impactScope === '批次级' ? ' · 恢复公共流程' : ' · 仅本对象' }}</strong></div>
+      </div>
+      <p v-if="pipelineStep" class="pipeline-hint">流水线：{{ pipelineStep.phase }} · 节点 <code>{{ pipelineStep.id }}</code>（{{ pipelineStep.name }}）· 原始节点「{{ record.node }}」</p>
+      <label v-if="isEditable && sedimentHint" class="sediment-line">
+        <input v-model="sedimentRule" type="checkbox" />
+        <span>{{ sedimentHint }}</span>
+      </label>
+    </section>
 
     <footer class="rw-foot">
       <span>{{ footerHint }}</span>
@@ -754,6 +800,9 @@ const secondaryActions = computed(() => (
 }
 
 .rw-zone-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
   margin-bottom: 14px;
 }
 
@@ -766,6 +815,139 @@ const secondaryActions = computed(() => (
   margin: 4px 0 0;
   color: #667085;
   font-size: 12px;
+}
+
+.rw-step-no,
+.rw-sec__head > b {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #165dff;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  font-style: normal;
+}
+
+.rw-sec {
+  flex: 0 0 auto;
+  margin-bottom: 10px;
+  padding: 12px 14px;
+  border: 1px solid #d5e3f5;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.rw-sec__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.rw-sec__head h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.rw-sec__head p {
+  margin: 3px 0 0;
+  color: #667085;
+  font-size: 11px;
+}
+
+.rw-sec .rw-diag {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.rw-sec--consequence {
+  border-color: #a9c6f5;
+  background: linear-gradient(160deg, #fdfeff, #f5f9ff);
+}
+
+.cat-pill {
+  padding: 4px 10px;
+  border-radius: 99px;
+  background: #eef4ff;
+  color: #175cd3;
+  font-size: 11px;
+}
+
+.tri-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tri-grid > div {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #d5e3f5;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.tri-grid span {
+  color: #7890b5;
+  font-size: 10px;
+}
+
+.tri-grid strong {
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.tri-grid em {
+  color: #7890b5;
+  font-size: 10px;
+  font-style: normal;
+}
+
+.sediment-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px 12px;
+  border: 1px solid #a6f4c5;
+  border-radius: 6px;
+  background: #ecfdf3;
+  color: #067647;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pipeline-hint {
+  margin: 10px 0 0;
+  color: #667085;
+  font-size: 11px;
+}
+
+.pipeline-hint code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #eef4ff;
+  color: #175cd3;
+  font-size: 11px;
+}
+
+.status.is-已撤销 {
+  background: #f2f4f7;
+  color: #475467;
+}
+
+@media (max-width: 960px) {
+  .tri-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .zone-banner {

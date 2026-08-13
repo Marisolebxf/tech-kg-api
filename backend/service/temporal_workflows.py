@@ -102,7 +102,7 @@ print(json.dumps(result, ensure_ascii=False))
 
 async def _run_domain_pipeline(request: dict[str, Any], kind: str, domain: str) -> dict[str, Any]:
     results = []
-    for step in ("load_increment", "normalize", "extract_align", "validate", "persist"):
+    for step in ("load_increment", "normalize", "extract", "align", "validate", "persist"):
         results.append(
             await workflow.execute_activity(
                 execute_kg_step,

@@ -97,7 +97,7 @@ class AuthService:
         if state_data is None:
             raise AuthenticationError("登录状态已过期或无效，请重新登录", status_code=400)
         try:
-            token = await self.user_center.exchange_code(code)
+            token = await self.user_center.exchange_code(code, state=state)
             context = await self._context_from_token(token)
         except UserCenterError as exc:
             raise AuthenticationError(str(exc), status_code=exc.status_code) from exc
@@ -367,18 +367,18 @@ class AuthService:
         permission_set = dict(permission_info.get("allPermissions") or {})
         roles = [
             RoleSummary.model_validate(role)
-            for role in permission_set.get("roles", [])
+            for role in (permission_set.get("roles") or [])
             if isinstance(role, dict)
         ]
-        permissions = sorted({str(item) for item in permission_set.get("permissions", [])})
+        permissions = sorted({str(item) for item in (permission_set.get("permissions") or [])})
         menus = [
             MenuSummary.model_validate(menu)
-            for menu in permission_set.get("menus", [])
+            for menu in (permission_set.get("menus") or [])
             if isinstance(menu, dict)
         ]
         role_menus = [
             RoleMenuSummary.model_validate(item)
-            for item in permission_info.get("roleMenuList", [])
+            for item in (permission_info.get("roleMenuList") or [])
             if isinstance(item, dict)
         ]
         app_permissions = PermissionSetSummary.model_validate(
@@ -396,7 +396,7 @@ class AuthService:
             app_permissions=app_permissions,
             org_permissions=org_permissions,
             organizations=[
-                dict(item) for item in permission_info.get("orgs", []) if isinstance(item, dict)
+                dict(item) for item in (permission_info.get("orgs") or []) if isinstance(item, dict)
             ],
             expires_at=context.expires_at,
             auth_enabled=self.settings.enabled,

@@ -90,7 +90,9 @@ class AuthSettings:
                 "http://127.0.0.1:8000/api/v1/auth/callback",
             ),
             frontend_url=os.getenv("AUTH_FRONTEND_URL", "http://127.0.0.1:5173"),
-            scope=os.getenv("USER_CENTER_SCOPE", "user_info"),
+            # 新建应用默认可能没有任何可申请的 scope；只有用户中心明确为
+            # 应用分配了授权范围时才通过环境变量声明，避免登录页报“授权范围过大”。
+            scope=os.getenv("USER_CENTER_SCOPE", "").strip(),
             session_cookie_name=os.getenv("AUTH_SESSION_COOKIE", "techkg_session"),
             portal_token_cookie_name=os.getenv(
                 "USER_CENTER_PORTAL_TOKEN_COOKIE",

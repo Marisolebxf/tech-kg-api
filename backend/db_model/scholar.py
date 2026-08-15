@@ -56,6 +56,36 @@ class DwdScholar(Base):
         nullable=True,
         comment="教育背景（中文），学者的中文教育经历信息",
     )
+    education_background_institution_zh = Column(
+        "education_background_institution_zh",
+        Text(),
+        nullable=True,
+        comment="教育背景院校（中文），校友关系匹配的核心字段",
+    )
+    education_background_institution_en = Column(
+        "education_background_institution_en",
+        Text(),
+        nullable=True,
+        comment="教育背景院校（英文）",
+    )
+    education_background_degree_zh = Column(
+        "education_background_degree_zh",
+        Text(),
+        nullable=True,
+        comment="教育背景学位（中文），用于同学历维度判定",
+    )
+    education_background_degree_en = Column(
+        "education_background_degree_en",
+        Text(),
+        nullable=True,
+        comment="教育背景学位（英文）",
+    )
+    education_background_date = Column(
+        "education_background_date",
+        Text(),
+        nullable=True,
+        comment="教育背景时间段，用于同期维度判定",
+    )
     paper_nums = Column("paper_nums", Integer(), nullable=False, comment="论文数量")
     citation_nums = Column("citation_nums", Integer(), nullable=False, comment="被引数量")
     h_index = Column("h_index", Integer(), nullable=False, comment="H指数")

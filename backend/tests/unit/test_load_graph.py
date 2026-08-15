@@ -15,6 +15,13 @@ def test_build_scholar_node_props():
         h_index=10,
         citation_nums=100,
         paper_nums=5,
+        education_background_institution_zh="清华大学",
+        education_background_institution_en="Tsinghua University",
+        education_background_degree_zh="博士",
+        education_background_degree_en="PhD",
+        education_background_date="2010-2015",
+        education_background_zh="清华大学 计算机系",
+        education_background_en="Tsinghua University, CS",
     )
     p = build_scholar_node_props(s)
     assert p == {
@@ -26,6 +33,13 @@ def test_build_scholar_node_props():
         "h_index": 10,
         "citation_nums": 100,
         "paper_nums": 5,
+        "education_background_institution_zh": "清华大学",
+        "education_background_institution_en": "Tsinghua University",
+        "education_background_degree_zh": "博士",
+        "education_background_degree_en": "PhD",
+        "education_background_date": "2010-2015",
+        "education_background_zh": "清华大学 计算机系",
+        "education_background_en": "Tsinghua University, CS",
     }
 
 

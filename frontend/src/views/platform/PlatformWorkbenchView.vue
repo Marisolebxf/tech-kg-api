@@ -23,6 +23,7 @@ import {
   type AssetOverviewKey,
   type LatestChange,
   type ManagementRisk,
+  type PlatformOverviewData,
   type StructureItem,
 } from '../../api/platformOverview'
 import KgGraphCanvas from '../../components/kg-graph-canvas.vue'
@@ -102,18 +103,29 @@ const modules: ServiceModule[] = [
   {
     key: 'two-point-achievement',
     title: '科技两点合作成果',
-    endpoint: '/api/v1/kg-service/two-point-achievements',
+    endpoint: '/api/v1/kg-construction/expert-cooperation-achievements/query',
     method: 'POST',
     requestFields: [
-      { name: 'source_expert_id', type: 'string', required: true, description: '第一个专家唯一标识' },
-      { name: 'target_expert_id', type: 'string', required: true, description: '第二个专家唯一标识' },
-      { name: 'achievement_type', type: 'string', required: false, description: '成果类型' },
-      { name: 'time_range', type: 'string', required: false, description: '成果时间范围' },
+      { name: 'sourceExpertId', type: 'string', required: true, description: '专家 A 图节点 ID' },
+      { name: 'targetExpertId', type: 'string', required: true, description: '专家 B 图节点 ID' },
+      { name: 'achievementTypes', type: 'string', required: false, description: 'paper,patent,project' },
+      { name: 'timeRangeStart', type: 'string', required: false, description: '时间起点' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { source_expert_id: 'E10001', target_expert_id: 'E10002', achievement_type: '论文/专利/项目', time_range: '2020-2026' },
-    responseExample: { data: { papers: 8, patents: 3, projects: 2, contribution: '共同算法模型' } },
-    resultRows: [{ label: '合作论文', value: '8' }, { label: '合作专利', value: '3' }, { label: '共同项目', value: '2' }, { label: '价值评分', value: '91' }],
+    requestExample: {
+      sourceExpertId: 'person_00095d2b6e69e0d4a6365c7fac495d8b',
+      targetExpertId: 'person_5f9b3a46091dbcc38eeb58696187385c',
+      achievementTypes: '',
+      timeRangeStart: '',
+    },
+    responseExample: {
+      data: {
+        summary: { papers: 1, patents: 0, projects: 0, awards: 0 },
+        coreContribution: '共同论文产出',
+        cooperationMode: '单类型合作（论文）',
+      },
+    },
+    resultRows: [{ label: '合作论文', value: '' }, { label: '合作专利', value: '' }, { label: '共同项目', value: '' }, { label: '价值评分', value: '' }],
     evidence: ['按论文、专利、项目分类统计合作成果。', '标注完成时间、所属领域和奖项评价。', '输出核心贡献和合作模式。'],
   },
   {
@@ -136,19 +148,31 @@ const modules: ServiceModule[] = [
   {
     key: 'expert-alumni',
     title: '科技专家校友关系',
-    endpoint: '/api/v1/kg-service/expert-alumni-relation',
+    endpoint: '/api/v1/kg-construction/expert-alumni-relations/query',
     method: 'POST',
     requestFields: [
-      { name: 'expert_id', type: 'string', required: true, description: '专家唯一标识' },
-      { name: 'school', type: 'string', required: false, description: '院校筛选条件' },
-      { name: 'education_stage', type: 'string', required: false, description: '教育阶段筛选' },
-      { name: 'major', type: 'string', required: false, description: '专业或院系筛选' },
+      { name: 'expertId', type: 'string', required: true, description: '源专家图节点 ID' },
+      { name: 'targetExpertId', type: 'string', required: false, description: '目标专家 ID；有则 pair，空则 list' },
+      { name: 'school', type: 'string', required: false, description: '院校关键词过滤' },
+      { name: 'educationStage', type: 'string', required: false, description: '学历/教育阶段过滤' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { expert_id: 'E10001', school: '北京大学', education_stage: '博士', major: '计算机科学' },
-    responseExample: { data: { alumni: 26, dimensions: ['同校', '同院系', '同导师'], interactions: 9 } },
-    resultRows: [{ label: '校友数量', value: '26' }, { label: '关系维度', value: '3' }, { label: '学术互动', value: '9' }, { label: '最高置信度', value: '0.89' }],
-    evidence: ['基于教育经历匹配校友关系。', '细分同校、同院系、同导师等关联维度。', '关联后续学术交流与合作互动。'],
+    requestExample: {
+      expertId: 'person_alumni_test_liu28',
+      targetExpertId: 'person_alumni_test_wang64',
+      school: '',
+      educationStage: '',
+    },
+    responseExample: {
+      data: {
+        total: 1,
+        mode: 'pair',
+        dimensions: ['同校', '同学历', '同期'],
+        sharedInstitutions: ['上海交通大学'],
+      },
+    },
+    resultRows: [{ label: '校友数量', value: '' }, { label: '关系维度', value: '' }, { label: '学术互动', value: '' }, { label: '模式', value: '' }],
+    evidence: ['基于教育经历匹配校友关系。', '细分同校、同学历、同期等关联维度。', '关联后续学术交流与合作互动。'],
   },
   {
     key: 'paper-cooperation',
@@ -348,6 +372,8 @@ const overviewMeta = ref({
   platformStatus: '正在加载平台状态',
   pendingBatchCount: 0,
   updatedAt: '--',
+  dataMode: 'mock' as PlatformOverviewData['dataMode'],
+  warnings: [] as string[],
 })
 const assetOverviewGroups = ref<AssetOverviewGroup[]>([])
 const selectedAssetChange = ref<AssetOverviewKey | null>(null)
@@ -1443,6 +1469,8 @@ async function loadPlatformOverview(): Promise<void> {
       platformStatus: data.platformStatus,
       pendingBatchCount: data.pendingBatchCount,
       updatedAt: data.updatedAt,
+      dataMode: data.dataMode,
+      warnings: data.warnings,
     }
     assetOverviewGroups.value = data.assetOverviewGroups
     assetChangeRows.value = data.assetChangeRows
@@ -1676,7 +1704,7 @@ const pageMeta = computed(() => {
       <div class="platform-hero__main">
         <h1>{{ pageMeta.title }}</h1>
       </div>
-      <div class="platform-hero__actions"><span><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理</span><!-- <RouterLink to="/tasks?module=图谱版本">当前图谱 KG-2026.07.12.008</RouterLink> --><RouterLink to="/tasks">查看任务</RouterLink><RouterLink to="/manual-review">进入人工处理</RouterLink></div>
+      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><!-- <RouterLink to="/tasks?module=图谱版本">当前图谱 KG-2026.07.12.008</RouterLink> --><RouterLink to="/tasks">查看任务</RouterLink><RouterLink to="/manual-review">进入人工处理</RouterLink></div>
     </header>
 
     <header v-else class="platform-page-head">

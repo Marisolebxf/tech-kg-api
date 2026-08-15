@@ -58,6 +58,9 @@ export interface PlatformOverviewData {
   managementRisks: ManagementRisk[]
   entityStructure: StructureItem[]
   relationStructure: StructureItem[]
+  dataMode: 'live' | 'partial' | 'mock'
+  dataSources: Record<string, string>
+  warnings: string[]
 }
 
 const PLATFORM_OVERVIEW_ENDPOINT = '/v1/platform/overview'
@@ -69,4 +72,13 @@ export async function getPlatformOverview(): Promise<PlatformOverviewData> {
   >(PLATFORM_OVERVIEW_ENDPOINT)
 
   return unwrapApiResponse(response)
+}
+
+export async function getPlatformOverviewRisks(): Promise<ManagementRisk[]> {
+  const response = await http.get<
+    ApiResponse<{ items: ManagementRisk[]; dataSource: string }>,
+    ApiResponse<{ items: ManagementRisk[]; dataSource: string }>
+  >(`${PLATFORM_OVERVIEW_ENDPOINT}/risks`)
+
+  return unwrapApiResponse(response).items
 }

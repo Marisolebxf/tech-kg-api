@@ -11,9 +11,13 @@ from service.workflow_repository import repository
 @pytest.fixture(autouse=True)
 def reset_workflow_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("WORKFLOW_SCRIPT_DIR", str(tmp_path / "scripts"))
+    # 把 SQLite 状态库指到 tmp_path，避免共享机器上 /tmp/tech-kg-workflows.db 串到别的用户。
+    saved_path = repository.database_path
+    repository.database_path = str(tmp_path / "tech-kg-workflows.db")
     repository.reset_for_tests()
     yield
     repository.reset_for_tests()
+    repository.database_path = saved_path
 
 
 @pytest.fixture

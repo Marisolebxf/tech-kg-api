@@ -6,6 +6,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: env.VITE_BASE || './',
+    cacheDir: './.tmp/vite',
 
     plugins: [
       vue(),

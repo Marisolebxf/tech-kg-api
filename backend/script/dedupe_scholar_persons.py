@@ -58,6 +58,7 @@ from rapidfuzz import fuzz
 
 from infra.graph_db import get_trs_graph_client
 from infra.milvus import get_milvus_client
+from script.scholar_provenance import confidence_props
 
 logger = logging.getLogger("script.dedupe_scholar_persons")
 
@@ -393,6 +394,16 @@ def run(
                 "source_record_id": f"{a_vid}__{b_vid}",
                 "ingest_batch": BATCH_ID,
                 "ingest_time": now,
+                **confidence_props(
+                    entry["combined"],
+                    "scholar_multisignal_dedupe",
+                    (
+                        f"milvus={entry['signals']['milvus']:.4f};"
+                        f"name={entry['signals']['name']:.4f};"
+                        f"org={entry['signals']['org']:.4f};"
+                        f"fields={entry['signals']['fields']:.4f}"
+                    ),
+                ),
             }
             # 单条失败不能中断整批：merge_edge 是幂等的，重跑只补未写成功的边。
             try:

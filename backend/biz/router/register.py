@@ -25,6 +25,7 @@ from biz.handler.industry_chain_panorama import router as industry_chain_panoram
 from biz.handler.industry_chain_topn_event import router as industry_chain_topn_event_router
 from biz.handler.kg_construction import router as kg_construction_router
 from biz.handler.manual_review import router as manual_review_router
+from biz.handler.manual_review_internal import router as manual_review_internal_router
 from biz.handler.operator import internal_router as operator_internal_router
 from biz.handler.operator import router as operator_router
 from biz.handler.options import router as options_router
@@ -37,6 +38,7 @@ from biz.handler.workflow_system import router as workflow_system_router
 
 def register_routers(app: FastAPI) -> None:
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(manual_review_internal_router, prefix="/api/v1")
 
     protected_dependencies = [Depends(require_authenticated_user)]
     protected_routers = (

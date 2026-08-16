@@ -454,6 +454,7 @@ const buildPipelineSteps = [
   { id: 'read', name: '读取结构化数据', count: '12,604 条', status: '完成', desc: '从 kg_stage 标准表读取专家、论文、企业、项目等记录' },
   { id: 'schema', name: '字段映射入 Schema', count: '7 类实体', status: '完成', desc: '字段映射到统一实体、属性和关系类型' },
   { id: 'llm', name: '大模型抽取', count: '3,261 实体 / 8,942 关系', status: '阻断', desc: '展示模型版本、Prompt、输入输出、置信度和评估结果' },
+  { id: 'align', name: '实体对齐消歧', count: '42 个待确认', status: '待执行', desc: '候选实体与存量图谱召回、消歧与合并，低置信转入人工处理' },
   { id: 'validate', name: '规则验证与证据回链', count: '1,203 属性 / 326 异常', status: '待执行', desc: '用 Schema 约束、存量图谱和原始来源交叉验证抽取结果' },
   { id: 'persist', name: '结果入库与异常分流', count: '326 条待处理', status: '待执行', desc: '高置信度结果自动入库，低置信度与冲突对象转入独立人工处理平台' },
 ]

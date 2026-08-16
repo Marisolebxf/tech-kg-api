@@ -721,7 +721,7 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
             "impactSummary": f"评分{academic_impact_score}",
         },
         "apiResultExample": {
-            "endpoint": "/api/v1/kg-construction/expert-paper-cooperation-relations/demo/structured-result",
+            "endpoint": "/api/v1/kg-construction/expert-paper-cooperation-relations/structured-result",
             "method": "POST",
             "sourceMode": "mysql_demo_tables",
             "mysqlDatabase": _paper_coop_database(),

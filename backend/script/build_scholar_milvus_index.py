@@ -44,6 +44,11 @@ DENSE_DIM = 512  # m3e-small
 DENSE_MODEL_NAME = os.environ.get("SCHOLAR_DENSE_MODEL", "moka-ai/m3e-small")
 BIO_MAX_CHARS = 500
 
+# 只索引本领域直接抽取的学者顶点：source_table == "dwd_scholar"。
+# 其他领域（论文/项目/专利）产生的 person_{md5(name)} 桩节点不入本集合，
+# 它们将作为查询方使用本集合来查真实学者。
+SCHOLAR_SOURCE_TABLE = "dwd_scholar"
+
 
 # ---------------------------------------------------------------------------
 # 文本拼接
@@ -75,23 +80,39 @@ def _compose_text(props: dict) -> str:
 # 从 TRSGraph 拉学者
 # ---------------------------------------------------------------------------
 def _iter_person_vertices(graph: Any, batch_size: int = 200):
-    """按 offset+limit 从 TRSGraph 拉 Person 顶点（含全部业务属性）。"""
+    """按 offset+limit 从 TRSGraph 拉 Person 顶点。
+
+    只保留学者领域直接抽取的顶点（``source_table == "dwd_scholar"``），
+    过滤掉其他领域造出的 ``person_{md5(name)}`` 桩节点——那些没有稳定
+    ``scholar_id``，也不带业务属性，不该占用学者检索/消歧的候选池。
+    """
     offset = 0
+    seen = kept = 0
     while True:
         page = graph.get_nodes_by_label("Person", offset=offset, limit=batch_size)
         items = getattr(page, "items", None) or []
         if not items:
             break
         for node in items:
+            seen += 1
             props = dict(getattr(node, "properties", None) or {})
             vid = str(getattr(node, "id", "") or "")
             if not vid or not vid.startswith("person_"):
                 continue
+            if props.get("source_table") != SCHOLAR_SOURCE_TABLE:
+                continue
             scholar_id = props.get("source_record_id") or vid.removeprefix("person_")
+            kept += 1
             yield {"vid": vid, "scholar_id": scholar_id, "props": props}
         offset += len(items)
         if len(items) < batch_size:
             break
+    logger.info(
+        "person scan: total=%d kept(source_table=%s)=%d",
+        seen,
+        SCHOLAR_SOURCE_TABLE,
+        kept,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +192,24 @@ def _get_bm25_encoder(corpus: list[str]):
     return bm25
 
 
+def _sparse_row_to_dict(sparse_vec, index: int) -> dict[int, float]:
+    """把 BM25 ``encode_documents`` 返回的 csr/coo 行转成 ``{token_id: weight}``。
+
+    ``pymilvus.model.sparse.BM25EmbeddingFunction.encode_documents`` 返回
+    ``scipy.sparse.csr_array`` (shape (n_docs, vocab))，``[i]`` 出来的是 1D
+    ``coo_array``。Milvus 2.4 的 upsert 期望每条稀疏向量是 dict 或 1×N csr，
+    这里统一转 dict 最稳。
+    """
+    row = sparse_vec.getrow(index) if hasattr(sparse_vec, "getrow") else sparse_vec[index]
+    coo = row.tocoo() if hasattr(row, "tocoo") else row
+    if hasattr(coo, "col"):
+        keys = coo.col
+    else:
+        # 1D coo_array: coords 是 (indices,)
+        keys = coo.coords[0]
+    return {int(k): float(v) for k, v in zip(keys, coo.data, strict=False)}
+
+
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
@@ -217,7 +256,7 @@ def run(*, dry_run: bool, drop_existing: bool, preview: int = 5) -> dict:
     logger.info("fitting BM25 on %d docs...", len(texts))
     bm25 = _get_bm25_encoder(texts)
     sparse_vecs = bm25.encode_documents(texts)
-    logger.info("BM25 encoded, nnz sample=%s", int(sparse_vecs[0].nnz) if len(records) else 0)
+    logger.info("BM25 encoded, shape=%s", getattr(sparse_vecs, "shape", None))
 
     # 3) 建集合（或复用）
     client = get_milvus_client()
@@ -239,7 +278,7 @@ def run(*, dry_run: bool, drop_existing: bool, preview: int = 5) -> dict:
                 "dense_vec": dense_vecs[i].tolist()
                 if hasattr(dense_vecs[i], "tolist")
                 else list(dense_vecs[i]),
-                "sparse_vec": sparse_vecs[i],
+                "sparse_vec": _sparse_row_to_dict(sparse_vecs, i),
             }
         )
 

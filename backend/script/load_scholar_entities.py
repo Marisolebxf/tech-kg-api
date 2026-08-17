@@ -36,10 +36,19 @@ from db_model.scholar import (
 )
 from infra.graph_db import get_trs_graph_client
 from infra.mysql import MySQLClient
+from script.scholar_provenance import (
+    CONFIDENCE_SOURCE_PRIMARY_KEY,
+    confidence_props,
+    organization_provenance,
+)
 
 logger = logging.getLogger("script.load_scholar_entities")
 
 BATCH_ID = f"BATCH_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_scholar_entities"
+
+# 学者的机构信息（scholar_org_id / scholar_org_name_*）来自学者表本身，
+# 对齐到正式 Organization 之前，机构溯源表就是 dwd_scholar。
+ORGANIZATION_BASE_TABLE = "dwd_scholar"
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +184,17 @@ def _build_person_props(
         "ingest_batch": BATCH_ID,
         "ingest_time": now,
         "source_update_time": row.get("update_time") or "",
+        # 机构溯源：便于从学者顶点反查其机构来自哪张表的哪条记录
+        **organization_provenance(
+            ORGANIZATION_BASE_TABLE if row.get("scholar_org_id") else None,
+            row.get("scholar_org_id"),
+        ),
+        # 置信度：主键直取，无歧义
+        **confidence_props(
+            CONFIDENCE_SOURCE_PRIMARY_KEY,
+            "source_primary_key",
+            "dwd_scholar.scholar_id 主键直接抽取，未经推断",
+        ),
     }
 
 

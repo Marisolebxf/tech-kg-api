@@ -242,6 +242,21 @@ uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 docker compose up --build api
 ```
 
+启用统一用户中心登录前，复制模板并在本机/部署环境填写应用凭证：
+
+```bash
+cp .env.example .env
+```
+
+至少配置 `AUTH_ENABLED=true`、`AUTH_SESSION_BACKEND=redis`、
+`USER_CENTER_CLIENT_ID`、`USER_CENTER_CLIENT_SECRET` 和已登记的
+`USER_CENTER_REDIRECT_URI`。`USER_CENTER_CLIENT_SECRET` 不属于前端配置，
+不得写入 Vue、Docker 镜像、Git 提交或测试表；服务器部署时使用环境变量或密钥管理系统注入。
+新建应用未分配 OAuth scope 时保持 `USER_CENTER_SCOPE=`，否则用户中心会拒绝过大的授权范围。
+
+如果启动页提示缺少 Client ID/Secret，说明运行进程没有加载上述后端环境变量，
+不是前端缺少配置。配置完成后重启 FastAPI/`api` 容器即可。
+
 健康检查：
 
 ```text

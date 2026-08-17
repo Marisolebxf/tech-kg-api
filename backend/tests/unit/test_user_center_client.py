@@ -30,6 +30,15 @@ def test_build_login_url_contains_authorization_code_parameters() -> None:
     assert query["client_id"] == ["techkg"]
     assert query["redirect_uri"] == ["https://example.test/api/v1/auth/callback"]
     assert query["state"] == ["csrf-state"]
+    assert "scope" not in query
+
+
+def test_build_login_url_includes_configured_scope() -> None:
+    client = UserCenterClient(replace(_settings(), scope="profile read"))
+
+    query = parse_qs(urlparse(client.build_login_url("csrf-state")).query)
+
+    assert query["scope"] == ["profile read"]
 
 
 async def test_exchange_code_uses_basic_auth_and_form_body() -> None:

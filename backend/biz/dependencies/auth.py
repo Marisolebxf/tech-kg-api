@@ -46,7 +46,7 @@ async def require_authenticated_user(
                     context,
                     action="复用门户登录态",
                     category="登录",
-                    detail="通过统一用户中心 v2.1 门户 Cookie 创建本地会话",
+                    detail="通过统一用户中心门户 Cookie 创建本地会话",
                     ip_address=request.client.host if request.client else "",
                     user_agent=request.headers.get("user-agent", ""),
                 )

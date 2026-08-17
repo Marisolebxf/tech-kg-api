@@ -18,6 +18,9 @@ export default defineConfig(({ mode }) => {
         usePolling: true,
         interval: 1000,
       },
+      // 允许经跳板机/端口转发访问，不拦截 host
+      host: '0.0.0.0',
+      allowedHosts: true,
 
       proxy: {
         '/api': {

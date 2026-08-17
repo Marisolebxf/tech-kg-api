@@ -16,16 +16,52 @@ from temporalio import activity, workflow
 
 @activity.defn
 async def execute_kg_step(request: dict[str, Any]) -> dict[str, Any]:
-    """领域步骤执行入口；真实 ETL/抽取模块可按 step 和 domain 在此注册。"""
+    """领域步骤执行入口；project 域真实调用 ETL，其它域保持轻量完成桩。"""
+    domain = request.get("domain")
+    step = request["step"]
+    kind = request.get("kind")
+    payload = request.get("payload", {}) or {}
+    if domain == "project":
+        return await asyncio.to_thread(_run_project_step, step, payload)
     await asyncio.sleep(float(request.get("delaySeconds", 0)))
-    payload = request.get("payload", {})
     return {
-        "step": request["step"],
-        "domain": request.get("domain"),
-        "kind": request.get("kind"),
+        "step": step,
+        "domain": domain,
+        "kind": kind,
         "status": "completed",
         "input": payload,
         "output": payload,
+    }
+
+
+def _run_project_step(step: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Map Temporal pipeline steps onto project ETL stages.
+
+    真实写入集中在 ``persist``（完整流水线），避免 align/persist 重复跑。
+    """
+    from script.workflows.project_ingest_workflow import workflow as project_pipeline
+
+    limit = payload.get("limit")
+    limit_int = int(limit) if limit is not None else 50
+    dry_run = bool(payload.get("dry_run", False))
+    common = {
+        "project_id": payload.get("project_id"),
+        "id_prefix": payload.get("id_prefix"),
+        "limit": limit_int,
+        "ingest_batch": payload.get("ingest_batch"),
+        "dry_run": dry_run,
+    }
+
+    if step == "persist":
+        output = project_pipeline(payload)
+        return {"step": step, "domain": "project", "status": "completed", "output": output}
+
+    # 前置步骤仅记账；ETL 在 persist 一次跑完（schema→load→align→cleanup）
+    return {
+        "step": step,
+        "domain": "project",
+        "status": "deferred_to_persist",
+        "output": common,
     }
 
 
@@ -102,7 +138,7 @@ print(json.dumps(result, ensure_ascii=False))
 
 async def _run_domain_pipeline(request: dict[str, Any], kind: str, domain: str) -> dict[str, Any]:
     results = []
-    for step in ("load_increment", "normalize", "extract_align", "validate", "persist"):
+    for step in ("load_increment", "normalize", "extract", "align", "validate", "persist"):
         results.append(
             await workflow.execute_activity(
                 execute_kg_step,
@@ -146,6 +182,13 @@ class OrganizationEntityWorkflow:
         return await _run_domain_pipeline(request, "entity", "organization")
 
 
+@workflow.defn(name="kg.entity.project")
+class ProjectEntityWorkflow:
+    @workflow.run
+    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
+        return await _run_domain_pipeline(request, "entity", "project")
+
+
 @workflow.defn(name="kg.relation.authorship")
 class AuthorshipRelationWorkflow:
     @workflow.run
@@ -180,7 +223,13 @@ class GraphBuildWorkflow:
 
     @workflow.run
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        entities = request.get("entities") or ["paper", "scholar", "patent", "organization"]
+        entities = request.get("entities") or [
+            "paper",
+            "scholar",
+            "patent",
+            "organization",
+            "project",
+        ]
         relations = request.get("relations") or [
             "authorship",
             "employment",
@@ -259,6 +308,7 @@ WORKFLOW_CLASSES = [
     ScholarEntityWorkflow,
     PatentEntityWorkflow,
     OrganizationEntityWorkflow,
+    ProjectEntityWorkflow,
     AuthorshipRelationWorkflow,
     EmploymentRelationWorkflow,
     CitationRelationWorkflow,

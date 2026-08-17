@@ -48,10 +48,20 @@ from sqlalchemy import select, text
 from db_model.scholar import DwdScholarCoauthor, DwdScholarPaperRelation
 from infra.graph_db import get_trs_graph_client
 from infra.mysql import MySQLClient
+from script.scholar_provenance import (
+    CONFIDENCE_CROSS_DOMAIN_ID,
+    CONFIDENCE_PLACEHOLDER_ORG,
+    CONFIDENCE_SOURCE_PRIMARY_KEY,
+    confidence_props,
+    organization_provenance,
+)
 
 logger = logging.getLogger("script.load_scholar_relations")
 
 BATCH_ID = f"BATCH_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_scholar_rel"
+
+# 学者的机构信息来自学者表本身；对齐到正式 Organization 之前机构溯源表就是 dwd_scholar。
+ORGANIZATION_BASE_TABLE = "dwd_scholar"
 
 
 # ---------------------------------------------------------------------------
@@ -188,9 +198,17 @@ def _iter_paper_relations(session, batch_size: int = 2000) -> Iterable[dict]:
 # Writers
 # ---------------------------------------------------------------------------
 def load_affiliations(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
-    """写入 AFFILIATED_WITH 边。返回统计信息。"""
+    """写入 AFFILIATED_WITH 边。
+
+    置信度按机构标识来源分档：源表带 ``scholar_org_id`` 时为
+    :data:`~script.scholar_provenance.CONFIDENCE_SOURCE_PRIMARY_KEY`；只能按机构名
+    md5 生成桩机构时降为 :data:`~script.scholar_provenance.CONFIDENCE_PLACEHOLDER_ORG`。
+
+    Returns:
+        统计字典，含写入条数、无机构跳过条数、桩机构条数。
+    """
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    ok = skipped = shown = 0
+    ok = skipped = shown = placeholder = 0
 
     for rec in _iter_scholar_affiliations(session):
         src = person_vid(rec["scholar_id"])
@@ -200,6 +218,21 @@ def load_affiliations(session, graph, *, dry_run: bool, preview: int = 5) -> dic
             skipped += 1
             continue
 
+        has_org_id = bool(rec["scholar_org_id"] and rec["scholar_org_id"].strip())
+        if has_org_id:
+            conf = confidence_props(
+                CONFIDENCE_SOURCE_PRIMARY_KEY,
+                "source_org_id",
+                "dwd_scholar.scholar_org_id 直接指向机构，无需名称推断",
+            )
+        else:
+            conf = confidence_props(
+                CONFIDENCE_PLACEHOLDER_ORG,
+                "org_name_md5_placeholder",
+                "源表无 scholar_org_id，机构顶点按机构名 md5 生成桩 VID，待正式 Organization 落地后对齐",
+            )
+            placeholder += 1
+
         props = {
             "affiliation_name": org_name,
             "source": "scholar",
@@ -207,10 +240,21 @@ def load_affiliations(session, graph, *, dry_run: bool, preview: int = 5) -> dic
             "source_record_id": rec["scholar_id"],
             "ingest_batch": BATCH_ID,
             "ingest_time": now,
+            **organization_provenance(
+                ORGANIZATION_BASE_TABLE if has_org_id else None,
+                rec["scholar_org_id"] if has_org_id else None,
+            ),
+            **conf,
         }
         if dry_run:
             if shown < preview:
-                logger.info("[dry-run] %s -[AFFILIATED_WITH]-> %s  %s", src, dst, org_name)
+                logger.info(
+                    "[dry-run] %s -[AFFILIATED_WITH]-> %s  %s  confidence=%s",
+                    src,
+                    dst,
+                    org_name,
+                    props["confidence"],
+                )
                 shown += 1
         else:
             graph.merge_edge(
@@ -222,7 +266,7 @@ def load_affiliations(session, graph, *, dry_run: bool, preview: int = 5) -> dic
             )
         ok += 1
 
-    return {"written": ok, "skipped_no_org": skipped}
+    return {"written": ok, "skipped_no_org": skipped, "placeholder_org": placeholder}
 
 
 def load_coauthors(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
@@ -240,6 +284,11 @@ def load_coauthors(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
             "source_record_id": rid,
             "ingest_batch": BATCH_ID,
             "ingest_time": now,
+            **confidence_props(
+                CONFIDENCE_SOURCE_PRIMARY_KEY,
+                "source_primary_key",
+                "dwd_scholar_coauthor 双方 scholar_id 均为源表主键，无需推断",
+            ),
         }
         if dry_run:
             if shown < preview:
@@ -296,6 +345,11 @@ def load_authored_by_fallback(session, graph, *, dry_run: bool, preview: int = 5
             "source_record_id": rid,
             "ingest_batch": BATCH_ID,
             "ingest_time": now,
+            **confidence_props(
+                CONFIDENCE_CROSS_DOMAIN_ID,
+                "cross_domain_id_match",
+                "paper_id 与 scholar_id 分别命中已存在的 Paper、Person 顶点",
+            ),
         }
         if dry_run:
             if shown < preview:

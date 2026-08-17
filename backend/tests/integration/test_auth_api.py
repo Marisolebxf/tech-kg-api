@@ -20,6 +20,7 @@ class _FakeUserCenter:
         return f"https://sso.test/uc/sso/login?state={state}"
 
     async def exchange_code(self, code: str, *, state: str | None = None) -> dict[str, Any]:
+        assert state
         return {
             "access_token": f"access-{code}",
             "refresh_token": "refresh-token",
@@ -53,10 +54,16 @@ class _FakeUserCenter:
             "allPermissions": {
                 "roles": [{"id": 1, "name": "管理员", "code": "admin", "type": 1}],
                 "permissions": ["overview:read"],
-                "menus": [],
+                "menus": [
+                    {
+                        "id": 1,
+                        "name": "系统管理",
+                        "children": [{"id": 2, "name": "角色管理", "children": None}],
+                    }
+                ],
             },
             "appPermissions": {"roles": [], "permissions": [], "menus": []},
-            "orgPermissions": {"roles": [], "permissions": [], "menus": []},
+            "orgPermissions": {"roles": [], "permissions": None, "menus": None},
             "roleMenuList": [],
             "orgs": [],
         }
@@ -235,4 +242,39 @@ async def test_portal_cookie_login_is_disabled_by_default() -> None:
         client.cookies.set("access_token", "portal-access-token")
         response = await client.get("/api/v1/auth/me")
 
-    assert response.status_code == 401
+        assert response.status_code == 401
+
+
+async def test_operation_logs_reject_invalid_pagination() -> None:
+    app = _test_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        assert (
+            await client.get(
+                "/api/v1/auth/operation-logs",
+                params={"page": 0},
+                headers={"Authorization": "Bearer vendor-token"},
+            )
+        ).status_code == 422
+        assert (
+            await client.get(
+                "/api/v1/auth/operation-logs",
+                params={"pageSize": 101},
+                headers={"Authorization": "Bearer vendor-token"},
+            )
+        ).status_code == 422
+
+
+async def test_operation_logs_invalid_pagination_uses_global_api_envelope() -> None:
+    from main import app as main_app
+
+    transport = ASGITransport(app=main_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/auth/operation-logs",
+            params={"page": 0, "pageSize": 101},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 422
+    assert response.json()["success"] is False

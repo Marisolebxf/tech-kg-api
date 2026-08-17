@@ -41,6 +41,7 @@ def test_project_relations_only_write_project_origin_edges(tmp_path):
     graph = MagicMock()
     matcher = ProjectEntityMatcher()
     matcher.organization.add("清华大学", "org_1")
+    matcher.organization_ids["org_1"] = "1"
     matcher.person.add("张伟", "person_1")
     row = SimpleNamespace(
         id="p1",
@@ -65,6 +66,12 @@ def test_project_relations_only_write_project_origin_edges(tmp_path):
 
     edge_types = [call.args[2] for call in graph.merge_edge.call_args_list]
     assert edge_types == ["FUNDED_BY", "LEADS", "HAS_PARTICIPANT"]
+    funded = graph.merge_edge.call_args_list[0]
+    assert funded.args[4]["confidence"] == 1.0
+    assert funded.args[4]["match_method"] == "name_exact"
+    assert funded.args[4]["organization_id"] == "1"
+    assert funded.args[4]["organization_source_table"] == "organization_base"
+    assert graph.merge_edge.call_args_list[1].args[4]["confidence"] == 1.0
     assert "PARTICIPATES_IN" not in edge_types
     assert "OUTPUT_OF" not in edge_types
     assert "SOURCED_FROM" not in edge_types
@@ -116,6 +123,7 @@ def test_output_creates_project_to_paper_has_output(tmp_path):
     assert call.args[0:3] == ("project_p1", "paper_1", "HAS_OUTPUT")
     assert call.args[3]["source_record_id"] == "p1|journal_article|paper_1"
     assert call.args[4]["match_method"] == "doi_exact"
+    assert call.args[4]["confidence"] == 1.0
 
 
 def test_output_dry_run_has_no_graph_writes(tmp_path):

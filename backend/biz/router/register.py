@@ -23,8 +23,12 @@ from biz.handler.expert_paper_cooperation import router as expert_paper_cooperat
 from biz.handler.graph_search import router as graph_search_router
 from biz.handler.industry_chain_panorama import router as industry_chain_panorama_router
 from biz.handler.industry_chain_topn_event import router as industry_chain_topn_event_router
+from biz.handler.industry_node_top_events_business import (
+    router as industry_node_top_events_business_router,
+)
 from biz.handler.kg_construction import router as kg_construction_router
 from biz.handler.manual_review import router as manual_review_router
+from biz.handler.manual_review_internal import router as manual_review_internal_router
 from biz.handler.operator import internal_router as operator_internal_router
 from biz.handler.operator import router as operator_router
 from biz.handler.options import router as options_router
@@ -32,11 +36,15 @@ from biz.handler.platform_overview import router as platform_overview_router
 from biz.handler.relation_detail_annotation import router as relation_detail_annotation_router
 from biz.handler.schema_management import router as schema_management_router
 from biz.handler.task_center import router as task_center_router
+from biz.handler.tech_enterprise_relation_business import (
+    router as tech_enterprise_relation_business_router,
+)
 from biz.handler.workflow_system import router as workflow_system_router
 
 
 def register_routers(app: FastAPI) -> None:
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(manual_review_internal_router, prefix="/api/v1")
 
     protected_dependencies = [Depends(require_authenticated_user)]
     protected_routers = (
@@ -63,6 +71,8 @@ def register_routers(app: FastAPI) -> None:
         manual_review_router,
         workflow_system_router,
         schema_management_router,
+        tech_enterprise_relation_business_router,
+        industry_node_top_events_business_router,
         operator_router,
     )
     for router in protected_routers:

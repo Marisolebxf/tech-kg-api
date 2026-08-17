@@ -82,6 +82,14 @@ export interface GraphEdgeData {
   inferred?: boolean
 }
 
+export interface LiveEntityProvenance {
+  sourceTable?: string
+  sourceField?: string
+  sourceValue?: string
+  ingestBatch?: string
+  ingestTime?: string
+}
+
 export interface GraphPreset {
   nodes: GraphNodeData[]
   edges: GraphEdgeData[]

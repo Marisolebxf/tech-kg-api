@@ -53,6 +53,9 @@ PATENT_PROPERTIES = (
     "db_source",
     "create_time",
     "update_time",
+    "confidence",
+    "organization_base",
+    "organization_id",
 )
 
 # 2. MySQL数据读取
@@ -160,7 +163,7 @@ def ngql_int(value: Any) -> str:
 
 
 def patent_payload(row: dict[str, Any]) -> tuple[str, list[str]]:
-    """只映射MySQL中的29个Patent正式属性。"""
+    """映射29个业务属性，并附加3个置信度/溯源属性。"""
     patent_id = str(row.get("patent_id") or "").strip()
     if not patent_id:
         raise ValueError("patent_id 为空")
@@ -194,6 +197,9 @@ def patent_payload(row: dict[str, Any]) -> tuple[str, list[str]]:
         ngql_string(row.get("db_source")),
         ngql_datetime(row.get("create_time")),
         ngql_datetime(row.get("update_time")),
+        "1.0",
+        ngql_string("dwd_patent"),
+        ngql_string("patent_id"),
     ]
     return f"patent_{patent_id}", values
 
@@ -221,9 +227,10 @@ def keyword_statements(
     edge_ngql = ""
     if vertices:
         values = ",".join(
-            f"{ngql_string(vid)}:({ngql_string(word)})" for vid, word in vertices.items()
+            f"{ngql_string(vid)}:({ngql_string(word)},1.0,{ngql_string('dwd_patent')},{ngql_string('keywords')})"
+            for vid, word in vertices.items()
         )
-        vertex_ngql = f"INSERT VERTEX Keyword(keyword) VALUES {values};"
+        vertex_ngql = f"INSERT VERTEX Keyword(keyword,confidence,organization_base,organization_id) VALUES {values};"
     if edges:
         values = ",".join(
             f"{ngql_string(src)}->{ngql_string(dst)}:(1.0,{ngql_string('dwd_patent')},{ngql_string(src.removeprefix('patent_'))})"
@@ -251,9 +258,10 @@ def family_statements(rows: list[dict[str, Any]]) -> tuple[str, str]:
     edge_ngql = ""
     if families:
         values = ",".join(
-            f"{ngql_string(vid)}:({ngql_string(number)})" for vid, number in families.items()
+            f"{ngql_string(vid)}:({ngql_string(number)},1.0,{ngql_string('dwd_patent_family')},{ngql_string('simple_family_number')})"
+            for vid, number in families.items()
         )
-        vertex_ngql = f"INSERT VERTEX PatentFamily(family_number) VALUES {values};"
+        vertex_ngql = f"INSERT VERTEX PatentFamily(family_number,confidence,organization_base,organization_id) VALUES {values};"
     if edges:
         values = ",".join(
             f"{ngql_string(src)}->{ngql_string(dst)}:(1.0,{ngql_string('source_family_number')},{ngql_string('simple_family_number由源表直接给出')},{ngql_string('dwd_patent_family')},{ngql_string(source_id)})"
@@ -282,6 +290,32 @@ def ensure_schema(graph: Any) -> None:
                 if attempt == 14:
                     raise
                 time.sleep(1)
+    entity_fields = {"confidence", "organization_base", "organization_id"}
+    for tag in ("Patent", "Keyword", "PatentFamily"):
+        existing_fields = {
+            str(row["Field"]) for row in graph.execute_read(f"DESCRIBE TAG {tag}").records
+        }
+        missing_fields = entity_fields - existing_fields
+        if missing_fields:
+            definitions = {
+                "confidence": "double",
+                "organization_base": "string",
+                "organization_id": "string",
+            }
+            graph.execute_write(
+                f"ALTER TAG {tag} ADD ("
+                + ",".join(f"{field} {definitions[field]}" for field in sorted(missing_fields))
+                + ");"
+            )
+        for attempt in range(15):
+            visible = {
+                str(row["Field"]) for row in graph.execute_read(f"DESCRIBE TAG {tag}").records
+            }
+            if entity_fields <= visible:
+                break
+            if attempt == 14:
+                raise RuntimeError(f"{tag}实体置信度/溯源属性未在TRSGraph中生效")
+            time.sleep(1)
     existing = {
         str(row["Field"]) for row in graph.execute_read("DESCRIBE EDGE HAS_KEYWORD").records
     }

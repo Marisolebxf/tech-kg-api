@@ -379,7 +379,8 @@ async def search_typed_paths(body: TypedPathSearchRequest) -> ApiResponse:
 async def get_subgraph(
     node_id: str,
     depth: int = Query(1, ge=1, le=3, description="跳数 1-3"),
-    limit: int = Query(50, ge=1, le=200, description="每跳最大边数"),
+    limit: int = Query(50, ge=1, le=200, description="每页最大边数"),
+    offset: int = Query(0, ge=0, description="一跳遍历分页偏移量"),
     edge_type: str | None = Query(None, description="边类型过滤，如 AUTHORED_BY"),
     direction: Literal["out", "in", "both"] = Query("both", description="方向: out/in/both"),
     space: str | None = Query(None, description="图空间"),
@@ -404,7 +405,7 @@ async def get_subgraph(
             next_frontier: list[str] = []
             for vid in frontier:
                 edge_list = client.get_node_edges(
-                    vid, direction=direction, edge_type=edge_type, limit=limit
+                    vid, direction=direction, edge_type=edge_type, limit=limit, offset=offset
                 )
                 for e in edge_list:
                     edge_data = _edge_to_data(e)
@@ -426,9 +427,7 @@ async def get_subgraph(
                             next_frontier.append(n_data.id)
             frontier = next_frontier
 
-        # 限制返回量
-        if len(nodes) > limit:
-            nodes = nodes[:limit]
+        # 边按页限制；节点需包含中心点和本页所有边端点。
         if len(edges) > limit:
             edges = edges[:limit]
 

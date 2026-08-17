@@ -389,8 +389,11 @@ class TRSGraphClient:
         direction: str = "both",
         edge_type: str | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[GraphEdge]:
         params: dict[str, Any] = {"direction": direction, "limit": limit}
+        if offset:
+            params["offset"] = offset
         if edge_type:
             params["edgeType"] = edge_type
         resp = self._request("GET", f"/api/v1/traversal/{node_id}/edges", params=params)

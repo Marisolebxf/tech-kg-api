@@ -777,6 +777,15 @@ def schema_fields(graph: TRSGraphClient, kind: str, name: str) -> set[str]:
 def reconcile_existing_schema(graph: TRSGraphClient) -> None:
     """Add properties that CREATE IF NOT EXISTS cannot add to an existing schema."""
     additions: list[tuple[str, str, str, str]] = []
+    additions.extend(
+        (
+            ("TAG", "Organization", "organization_base", "string NULL"),
+            ("TAG", "Person", "organization_base", "string NULL"),
+            ("TAG", "Project", "extra_json", "string NULL"),
+            ("EDGE", "PARTICIPATES_IN", "extra_json", "string NULL"),
+            ("EDGE", "FUNDED_BY", "extra_json", "string NULL"),
+        )
+    )
     for tag in ("Organization", "Person", "News", "Event", "Product"):
         additions.extend(
             (

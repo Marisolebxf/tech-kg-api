@@ -1,15 +1,32 @@
-"""Milvus helpers shared by organization-domain and Project-domain scripts.
+"""Milvus 客户端与领域存储封装。
 
-- ``OrganizationMilvusStore`` — org-domain collections (legacy ``connections`` API).
-- ``get_milvus_client`` — process-level ``MilvusClient`` for flat collections
-  (``project`` / ``paper`` / …), same style as scholar/paper feature branches.
+本模块暴露两套 API，供不同领域按需使用：
 
-Connection settings are read from ``MILVUS_*`` environment variables. ``MILVUS_URI``
-takes precedence; ``MILVUS_HOST`` and ``MILVUS_PORT`` are also supported. Both client
-APIs consume the same ``MilvusSettings`` configuration model and default to
-``http://127.0.0.1:19530``.
+- :func:`get_milvus_client`：进程级 :class:`pymilvus.MilvusClient` 单例，
+  用于扁平集合（``project`` / ``paper`` / ``scholar_person`` 等）领域脚本，
+  直接调用 ``hybrid_search`` / ``upsert`` 等 SDK 方法。
+- :class:`OrganizationMilvusStore`：机构领域的高层封装，负责集合命名、schema、
+  索引、混合检索等；由 ``organization_milvus_index`` / ``organization_relation_etl``
+  / ``organization_entity_alignment`` 使用。
 
-``pymilvus`` is imported lazily so ordinary API processes do not connect on import.
+两套 API 共享 :class:`MilvusSettings` 配置模型，均从 ``MILVUS_*`` 环境变量读取
+连接参数：``MILVUS_URI`` 优先，其次 ``MILVUS_HOST`` / ``MILVUS_PORT``。``pymilvus``
+是可选重量级依赖（携带 protobuf、grpcio 等），非必要模块不引入，通过延迟导入解决。
+
+环境变量
+--------
+- ``MILVUS_URI``       — 例如 ``http://127.0.0.1:19531``（本项目 docker-compose 部署端口）
+- ``MILVUS_HOST`` / ``MILVUS_PORT`` — 备选，默认 ``127.0.0.1:19530``
+- ``MILVUS_TOKEN``     — 可选，认证 token（Zilliz Cloud / 部署带鉴权时使用）
+- ``MILVUS_DB_NAME``   — 默认 ``default``
+- ``MILVUS_TIMEOUT``   — 默认 30（秒）
+
+用法::
+
+    from infra.milvus import get_milvus_client
+
+    client = get_milvus_client()
+    client.list_collections()
 """
 
 from __future__ import annotations
@@ -17,6 +34,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -25,9 +43,13 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_DB = "default"
 _DEFAULT_TIMEOUT = 30
+# 连接失败后的冷却窗口：避免并发请求把失败的连接反复重试成重连风暴。
+_CONNECT_RETRY_COOLDOWN_SECONDS = 2.0
 
 _client_lock = threading.Lock()
 _client: Any = None
+_last_connect_error: BaseException | None = None
+_connect_cooldown_until = 0.0
 
 
 def _load_milvus_client_cls():
@@ -54,6 +76,9 @@ def _host_port_from_env() -> tuple[str, int]:
     )
 
 
+# ---------------------------------------------------------------------------
+# 通用配置
+# ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class MilvusSettings:
     """Shared connection and organization-collection settings."""
@@ -98,6 +123,61 @@ class MilvusSearchHit:
     fields: dict[str, Any]
 
 
+# ---------------------------------------------------------------------------
+# MilvusClient 单例（扁平集合领域：project / paper / scholar_person）
+# ---------------------------------------------------------------------------
+def get_milvus_client() -> Any:
+    """Return a process-shared ``MilvusClient`` using ``MilvusSettings``."""
+    global _client, _last_connect_error, _connect_cooldown_until
+    if _client is not None:
+        return _client
+    with _client_lock:
+        if _client is not None:
+            return _client
+        if _last_connect_error is not None and time.monotonic() < _connect_cooldown_until:
+            # 冷却窗口内直接抛上次的错误，不再连一遍
+            raise _last_connect_error
+        MilvusClient = _load_milvus_client_cls()
+        settings = MilvusSettings.from_env()
+        logger.info(
+            "Connecting to Milvus uri=%s db=%s",
+            settings.client_uri,
+            settings.db_name,
+        )
+        kwargs: dict[str, Any] = {
+            "uri": settings.client_uri,
+            "db_name": settings.db_name,
+            "timeout": settings.timeout,
+        }
+        if settings.token:
+            kwargs["token"] = settings.token
+        try:
+            _client = MilvusClient(**kwargs)
+        except Exception as exc:
+            _last_connect_error = exc
+            _connect_cooldown_until = time.monotonic() + _CONNECT_RETRY_COOLDOWN_SECONDS
+            raise
+        _last_connect_error = None
+    return _client
+
+
+def reset_milvus_client() -> None:
+    """Test helper: drop the ``MilvusClient`` singleton."""
+    global _client, _last_connect_error, _connect_cooldown_until
+    with _client_lock:
+        if _client is not None:
+            try:
+                _client.close()
+            except Exception:  # noqa: BLE001
+                pass
+        _client = None
+        _last_connect_error = None
+        _connect_cooldown_until = 0.0
+
+
+# ---------------------------------------------------------------------------
+# 机构领域 Milvus 存储（OrganizationMilvusStore）
+# ---------------------------------------------------------------------------
 class OrganizationMilvusStore:
     """Create, populate and query per-entity organization-domain collections."""
 
@@ -391,41 +471,3 @@ class OrganizationMilvusStore:
                 )
             )
         return hits
-
-
-def get_milvus_client() -> Any:
-    """Return a process-shared ``MilvusClient`` using ``MilvusSettings``."""
-    global _client
-    if _client is not None:
-        return _client
-    with _client_lock:
-        if _client is not None:
-            return _client
-        MilvusClient = _load_milvus_client_cls()
-        settings = MilvusSettings.from_env()
-        logger.info(
-            "Connecting to Milvus uri=%s db=%s",
-            settings.client_uri,
-            settings.db_name,
-        )
-        kwargs: dict[str, Any] = {
-            "uri": settings.client_uri,
-            "db_name": settings.db_name,
-            "timeout": settings.timeout,
-        }
-        if settings.token:
-            kwargs["token"] = settings.token
-        _client = MilvusClient(**kwargs)
-    return _client
-
-
-def reset_milvus_client() -> None:
-    """Test helper: drop the ``MilvusClient`` singleton."""
-    global _client
-    with _client_lock:
-        if _client is not None:
-            try:
-                _client.close()
-            except Exception:  # noqa: BLE001
-                pass
-        _client = None

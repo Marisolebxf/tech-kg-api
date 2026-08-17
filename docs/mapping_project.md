@@ -60,6 +60,14 @@ flowchart LR
 {project_id}|{output_type}|{target_vid}
 ```
 
+关系边另写审计字段 `match_method` / `match_evidence` / `confidence`（见 §2.4）。
+`FUNDED_BY` 额外写机构溯源：
+
+| 边属性 | 取值 |
+|---|---|
+| `organization_id` | 匹配到的 Organization 的 `source_record_id` / `org_id`，否则从 VID `org_{id}` 解析 |
+| `organization_source_table` | 固定逻辑表名 `organization_base`（标书/前端溯源名；真实 MySQL 多为 `dwd_org_base_info`） |
+
 ### 2.3 精确匹配
 
 - 文本：trim、连续空白压缩、英文小写。
@@ -71,6 +79,16 @@ flowchart LR
 - 0 命中写 `not_found`；多命中写 `ambiguous`；均不建边。
 - Keyword：`keyword_{md5(normalized)}`，不存在时允许创建。
 
+### 2.4 置信度规则（`confidence`）
+
+与代码 `script.project_graph_utils.confidence_from_method` 一致：
+
+| match_method | confidence |
+|---|---|
+| `name_exact` / `doi_exact` / `doi_registry_exact` / `patent_number_exact` / `patent_number_registry_exact` / `title_exact` / `title_year_exact` | `1.0` |
+| Milvus hybrid（evidence 含 `score=`） | `round(score, 4)` |
+| 其它 / 无分数 hybrid | `0.9` |
+| Keyword 自建边 | 主路径可不写 confidence（HAS_KEYWORD 无该列）；成果边按上表 |
 ## 3. `dwd_zh_project` 字段
 
 | # | MySQL 字段 | 现网类型 | 图映射 / disposition |

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from infra.graph_db import GraphRequestError, TRSGraphClient
+from script.project_graph_utils import resolve_organization_id
 
 
 def normalize_text(value: Any) -> str:
@@ -63,6 +64,16 @@ class ProjectEntityMatcher:
         self.patent_title = ExactIndex()
         self.report_title = ExactIndex()
         self.report_title_year = ExactIndex()
+        # vid → 稳定 organization_id（来自 source_record_id / org_id 或 VID 解析）
+        self.organization_ids: dict[str, str] = {}
+
+    def organization_id(self, vid: str) -> str:
+        return resolve_organization_id(vid, cache=self.organization_ids)
+
+    def remember_organization(self, vid: str, row: dict[str, Any]) -> None:
+        oid = resolve_organization_id(vid, node_props=row)
+        if oid:
+            self.organization_ids[str(vid)] = oid
 
     @classmethod
     def from_graph(
@@ -72,11 +83,13 @@ class ProjectEntityMatcher:
         for row in _candidate_rows(
             graph,
             "Organization",
-            ("name_cn", "name_en"),
+            ("name_cn", "name_en", "source_record_id", "org_id"),
             {"name_cn": candidates["organization"], "name_en": candidates["organization"]},
         ):
+            vid = str(row["vid"])
             for prop in ("name_cn", "name_en"):
-                matcher.organization.add(row.get(prop), row["vid"])
+                matcher.organization.add(row.get(prop), vid)
+            matcher.remember_organization(vid, row)
         for row in _candidate_rows(
             graph,
             "Person",

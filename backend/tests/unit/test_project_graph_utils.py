@@ -5,12 +5,16 @@ from types import SimpleNamespace
 from script.project_graph_utils import (
     build_output_count_props,
     build_project_props,
+    confidence_from_method,
+    funded_by_org_props,
     keyword_vid,
     org_vid,
     parse_json_objects,
     parse_list,
     person_vid,
+    project_confidence,
     project_vid,
+    resolve_organization_id,
 )
 
 
@@ -74,6 +78,70 @@ def test_build_project_props():
     assert props["source_system"] == "gkx_element"
     assert props["source_table"] == "dwd_zh_project"
     assert props["ingest_batch"] == "BATCH_1"
+    # 实体置信度：标题/摘要/金额/学科/类别在，approval_year 缺 → 5/6，写入 Project 节点属性
+    assert props["confidence"] == round(5 / 6, 4)
+
+
+def test_project_confidence_rules():
+    # 全字段填充 → 1.0
+    full = SimpleNamespace(
+        title="t",
+        abstract="a",
+        funded_amount=1.0,
+        discipline="d",
+        approval_year="2024",
+        fund_category="c",
+    )
+    assert project_confidence(full) == 1.0
+
+    # 缺标题（强字段）→ 封顶 0.6；即便其余全填
+    no_title = SimpleNamespace(
+        title="",
+        abstract="a",
+        funded_amount=1.0,
+        discipline="d",
+        approval_year="2024",
+        fund_category="c",
+    )
+    assert project_confidence(no_title) == 0.6
+
+    # 部分缺失：4/6 填充且标题存在 → 0.6667
+    partial = SimpleNamespace(
+        title="t",
+        abstract="",
+        funded_amount=1.0,
+        discipline="d",
+        approval_year="2024",
+        fund_category="",
+    )
+    assert project_confidence(partial) == round(4 / 6, 4)
+
+    # 全空 → 下限 0.3
+    empty = SimpleNamespace(
+        title=None,
+        abstract=None,
+        funded_amount=None,
+        discipline=None,
+        approval_year=None,
+        fund_category=None,
+    )
+    assert project_confidence(empty) == 0.3
+
+
+def test_project_confidence_from_node_props_dict():
+    # 回填路径：从图节点属性 dict 计算，与 ORM 行等价
+    props = {
+        "title": "t",
+        "abstract": "a",
+        "funded_amount": 60.0,
+        "discipline": "d",
+        "approval_year": "2012",
+        "fund_category": "面上项目",
+    }
+    assert project_confidence(props) == 1.0
+    # 缺标题封顶 0.6
+    no_title = {**props, "title": ""}
+    assert project_confidence(no_title) == 0.6
 
 
 def test_build_output_count_props():
@@ -92,3 +160,21 @@ def test_build_output_count_props():
     )
     p = build_output_count_props(row)
     assert p["total_outputs"] == 5 and p["patents_count"] == 1 and p["clinical_trials_count"] == 0
+
+
+def test_confidence_from_method_rules():
+    assert confidence_from_method("name_exact") == 1.0
+    assert confidence_from_method("doi_registry_exact") == 1.0
+    assert confidence_from_method("milvus_hybrid", "score=0.9123;margin=0.1") == 0.9123
+    assert confidence_from_method("milvus_hybrid", "no-score") == 0.9
+
+
+def test_resolve_organization_id_and_funded_props():
+    assert resolve_organization_id("org_cas", node_props={"source_record_id": "CAS001"}) == "CAS001"
+    assert resolve_organization_id("org_abc", cache={"org_abc": "OID-9"}) == "OID-9"
+    assert resolve_organization_id("org_xyz") == "xyz"
+    props = funded_by_org_props("OID-1")
+    assert props == {
+        "organization_id": "OID-1",
+        "organization_source_table": "organization_base",
+    }

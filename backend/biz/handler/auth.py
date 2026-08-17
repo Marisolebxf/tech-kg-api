@@ -172,8 +172,8 @@ async def get_account_security(
 async def get_operation_logs(
     context: CurrentUser,
     application: AuthApplicationDependency,
-    page: int = 1,
-    page_size: int = Query(20, alias="pageSize"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, alias="pageSize", ge=1, le=100),
     category: str | None = None,
     result: str | None = None,
     keyword: str | None = None,

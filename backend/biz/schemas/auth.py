@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from biz.schemas.common import ApiResponse
 
@@ -61,16 +61,31 @@ class MenuSummary(CamelCaseModel):
     link_type: int = 0
     children: list[MenuSummary] = Field(default_factory=list)
 
+    @field_validator("children", mode="before")
+    @classmethod
+    def normalize_null_children(cls, value: Any) -> Any:
+        return [] if value is None else value
+
 
 class RoleMenuSummary(CamelCaseModel):
     role: RoleSummary
     menus: list[MenuSummary] = Field(default_factory=list)
+
+    @field_validator("menus", mode="before")
+    @classmethod
+    def normalize_null_menus(cls, value: Any) -> Any:
+        return [] if value is None else value
 
 
 class PermissionSetSummary(CamelCaseModel):
     roles: list[RoleSummary] = Field(default_factory=list)
     menus: list[MenuSummary] = Field(default_factory=list)
     permissions: list[str] = Field(default_factory=list)
+
+    @field_validator("roles", "menus", "permissions", mode="before")
+    @classmethod
+    def normalize_null_lists(cls, value: Any) -> Any:
+        return [] if value is None else value
 
 
 class AuthProfile(CamelCaseModel):

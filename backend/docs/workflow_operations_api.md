@@ -39,10 +39,12 @@
 
 内置工作流类型包括：
 
-- 实体：`kg.entity.paper`、`kg.entity.scholar`、`kg.entity.patent`、`kg.entity.organization`
+- 实体：`kg.entity.paper`、`kg.entity.scholar`、`kg.entity.patent`、`kg.entity.organization`、`kg.entity.project`
 - 关系：`kg.relation.authorship`、`kg.relation.employment`、`kg.relation.citation`、`kg.relation.cooperation`
 - 总流程：`kg.graph.build`
 - 自定义：`kg.custom.configurable`、`kg.custom.python`
+
+`kg.entity.project` 在 Activity 中真实执行国内外项目 ETL：`ensure_schema` → `load_project_graph` → `align_project_relations` → `cleanup_project_stubs`（可通过 payload 的 `limit`/`dry_run`/`skip_*` 控制）。其它实体域步骤目前仍为轻量完成桩。
 
 `kg.graph.build` 会为请求中的每一种实体和关系启动独立子工作流。上传的 Python 函数由 `kg.custom.python` 包装，并在 Activity 隔离子进程执行，避免破坏 Temporal Workflow 的确定性重放。
 

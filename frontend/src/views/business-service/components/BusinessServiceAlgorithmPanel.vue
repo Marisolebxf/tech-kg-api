@@ -46,6 +46,19 @@ const isLiveAlumni = computed(() => props.moduleInfo.key === 'expert-alumni')
 const isLiveCoop = computed(() => props.moduleInfo.key === 'two-point-achievement')
 const isLiveModule = computed(() => isLiveAlumni.value || isLiveCoop.value)
 
+function formatConfidence(
+  value: number | undefined,
+): string {
+  if (
+    typeof value !== 'number'
+    || !Number.isFinite(value)
+  ) {
+    return '暂无'
+  }
+
+  return value.toFixed(2)
+}
+
 function mapLiveGraph(nodes: Array<{
   id: string
   label: string
@@ -53,11 +66,11 @@ function mapLiveGraph(nodes: Array<{
   x?: number
   y?: number
   entityType: string
-  confidence: number
+  confidence?: number
   relations: string
   evidence: string[]
   level?: number
-}> | undefined, edges: Array<{ id: string; from: string; to: string; label: string; category: string }> | undefined): {
+}> | undefined, edges: Array<{ id: string; from: string; to: string; label: string; category: string; confidence?: number}> | undefined): {
   nodes: GraphNodeData[]
   edges: GraphEdgeData[]
 } | null {
@@ -71,7 +84,7 @@ function mapLiveGraph(nodes: Array<{
       x: node.x ?? 220,
       y: node.y ?? 200,
       entityType: node.entityType,
-      confidence: node.confidence ?? 0.9,
+      confidence: node.confidence,
       relations: node.relations ?? '',
       evidence: node.evidence ?? [],
       level: node.level,
@@ -82,6 +95,9 @@ function mapLiveGraph(nodes: Array<{
       to: edge.to,
       label: edge.label,
       category: edge.category,
+
+      // 只读取后端关系置信度
+      confidence: edge.confidence,
     })),
   }
 }
@@ -173,14 +189,44 @@ const relationDetailRows = computed(() => {
   const edge = selectedEdge.value
   const from = selectedEdgeNodes.value.from
   const to = selectedEdgeNodes.value.to
+
   if (!edge || !from || !to) return []
+
   return [
-    ['源实体', `${from.label} / ${from.entityType}`] as const,
-    ['目标实体', `${to.label} / ${to.entityType}`] as const,
-    ['关系类型', edge.label] as const,
-    ['关系分类', edge.category] as const,
-    ['置信度', `${Math.min(from.confidence, to.confidence).toFixed(2)}`] as const,
-    ['命中规则', props.moduleInfo.rules[0]?.name ?? '已命中关系识别规则'] as const,
+    [
+      '源实体',
+      `${from.label} / ${from.entityType}`,
+    ] as const,
+
+    [
+      '目标实体',
+      `${to.label} / ${to.entityType}`,
+    ] as const,
+
+    [
+      '关系类型',
+      edge.label,
+    ] as const,
+
+    [
+      '关系分类',
+      edge.category,
+    ] as const,
+
+    [
+      '置信度',
+
+      // 直接展示后端关系 confidence
+      formatConfidence(
+        edge.confidence,
+      ),
+    ] as const,
+
+    [
+      '命中规则',
+      props.moduleInfo.rules[0]?.name
+      ?? '已命中关系识别规则',
+    ] as const,
   ]
 })
 const selectedProvenance = computed(() => {
@@ -198,20 +244,38 @@ const selectedProvenanceTarget = computed(() => {
       name: node.label,
       type: node.entityType,
       id: node.id,
-      confidence: node.confidence.toFixed(2),
+      confidence:
+        formatConfidence(
+          node.confidence,
+        ),
     }
   }
-  const edge = selectedEdge.value
-  const from = selectedEdgeNodes.value.from
-  const to = selectedEdgeNodes.value.to
-  if (!edge || !from || !to) return null
-  return {
-    kind: '关系',
-    name: `${from.label} → ${to.label}`,
-    type: edge.label,
-    id: edge.id,
-    confidence: Math.min(from.confidence, to.confidence).toFixed(2),
-  }
+const edge = selectedEdge.value
+const from = selectedEdgeNodes.value.from
+const to = selectedEdgeNodes.value.to
+
+if (!edge || !from || !to) {
+  return null
+}
+
+return {
+  kind: '关系',
+
+  name:
+    `${from.label} → ${to.label}`,
+
+  type:
+    edge.label,
+
+  id:
+    edge.id,
+
+  // 关系置信度直接使用后端返回值
+  confidence:
+    formatConfidence(
+      edge.confidence,
+    ),
+}
 })
 function formatTimestamp(date: Date) {
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -308,7 +372,12 @@ const liveEntityRows = computed(() => {
       ['实体名称', selected.label],
       ['实体类型', selected.entityType],
       ['命中关系', selected.relations],
-      ['置信度', selected.confidence.toFixed(2)],
+      [
+        '置信度',
+        formatConfidence(
+          selected.confidence,
+        ),
+      ],
     ]
     if (selected.evidence?.length) {
       rows.push(['证据', selected.evidence.join('；')])
@@ -460,7 +529,6 @@ function buildAlumniGraph(data: AlumniQueryResult | null): { nodes: GraphNodeDat
     x: cx,
     y: cy,
     entityType: '科技专家',
-    confidence: 1,
     relations: `校友 ${data.total}`,
     evidence: [`mode=${data.mode}`, `educations=${data.expert.educations?.length ?? 0}`],
   }]
@@ -475,7 +543,6 @@ function buildAlumniGraph(data: AlumniQueryResult | null): { nodes: GraphNodeDat
       x: cx + Math.cos(angle) * radius + 200,
       y: cy + Math.sin(angle) * radius,
       entityType: '校友专家',
-      confidence: 0.9,
       relations: item.dimensions.join('、') || '同校',
       evidence: [
         `shared=${item.sharedInstitutions.join('/') || '-'}`,
@@ -784,7 +851,16 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           <div><dt>实体名称</dt><dd>{{ selectedNode.label }}</dd></div>
           <div><dt>实体类型</dt><dd>{{ selectedNode.entityType }}</dd></div>
           <div><dt>命中关系</dt><dd>{{ selectedNode.relations }}</dd></div>
-          <div><dt>置信度</dt><dd>{{ selectedNode.confidence.toFixed(2) }}</dd></div>
+          <div>
+            <dt>置信度</dt>
+            <dd>
+              {{
+                formatConfidence(
+                  selectedNode.confidence,
+                )
+              }}
+            </dd>
+          </div>
         </dl>
         <dl v-else-if="resultMode === 'relation' && liveRelationRows" class="result-panel__table">
           <div v-for="([label, value], index) in liveRelationRows" :key="`rel-${label}-${index}`">

@@ -1,4 +1,4 @@
-export type ReviewStatus = '待处理' | '已完成'
+export type ReviewStatus = '待处理' | '已完成' | '已撤销'
 export type ReviewPriority = 'P0' | 'P1' | 'P2'
 
 export type ReviewBatch = {
@@ -25,6 +25,8 @@ export type ReviewRecord = {
   module: string
   node: string
   type: string
+  /** 后端原始分类；展示统一用 getHandleCategory */
+  category?: string
   domain: string
   objectType: string
   objectId: string
@@ -42,6 +44,9 @@ export type ReviewRecord = {
   decision?: string
   decisionNote?: string
   completedAt?: string
+  dataWindow?: string
+  confidenceValue?: string
+  confidenceLabel?: string
 }
 
 export const reviewBatches: ReviewBatch[] = [
@@ -77,10 +82,10 @@ export const reviewRecords: ReviewRecord[] = [
     sourceResult: 'legal_status=未知', suggestion: '映射为“实质审查”并保留原始值', sourceTable: '专利基本信息表', sourceRecordId: 'CN2026101843',
   },
   {
-    id: 'PI-20260714-0104', batch: 'UPD-20260714', module: '图谱构建', node: '实体抽取', type: '实体抽取超时', domain: '人才',
-    objectType: '专家记录', objectId: 'expert_id=EXPERT_20566', object: '李晓峰 / Li Xiaofeng（中国科学院自动化研究所）', ruleId: 'ENTITY-RUNTIME-004',
-    evidence: '当前实体抽取服务超过 30 秒未返回结果', score: '', handler: '王审核', status: '待处理', updatedAt: '07-14 10:08',
-    sourceResult: '当前任务未产生输出', suggestion: '检查超时日志并重跑当前任务', sourceTable: '专家基本信息表', sourceRecordId: 'EXPERT-20566',
+    id: 'PI-20260714-0104', batch: 'UPD-20260714', module: '图谱构建', node: '实体对齐消歧', type: '专家实体对齐歧义', domain: '人才',
+    objectType: '专家实体', objectId: 'expert_id=EXPERT_20566', object: '李晓峰 / Li Xiaofeng（中国科学院自动化研究所）', ruleId: 'ALIGN-AMBIGUITY-004',
+    evidence: '召回 3 个高相似存量专家，无法自动消歧合并', score: '0.81', handler: '王审核', status: '待处理', updatedAt: '07-14 10:08',
+    sourceResult: '候选已隔离，等待人工确认合并目标', suggestion: '核对候选与存量后合并或新建', sourceTable: '专家基本信息表', sourceRecordId: 'EXPERT-20566',
   },
   {
     id: 'PI-20260714-0003', batch: 'UPD-20260714', module: '图谱构建', node: '关系校验', type: '关系类型置信度不足', domain: '论文',
@@ -197,22 +202,28 @@ export const getReviewPriority = (record: ReviewRecord): { level: ReviewPriority
   return { ...common, reason: '当前异常结果已隔离，未进入下游' }
 }
 
-/** 人工审核处置模板 */
+/**
+ * 处置模式（7 种决策形状；分类/阻断节点由 stepId 推导，与模式解耦）。
+ * MAP=选目标值（含字段映射、字典、实体类型）· FILL · MERGE · LINK · EVIDENCE · ATTR · RUNTIME
+ */
 export type ReviewTemplateId =
   | 'T_MAP'
-  | 'T_ENTITY'
-  | 'T_RELATION'
+  | 'T_LINK'
+  | 'T_EVIDENCE'
   | 'T_ATTR'
   | 'T_DQ_FILL'
   | 'T_DQ_MERGE'
   | 'T_RUNTIME'
-  | 'T_GENERIC'
+
+/** @deprecated 兼容旧引用 */
+export type ReviewModeId = ReviewTemplateId
 
 export type ReviewAction = {
   id: string
   label: string
   kind: 'primary' | 'secondary' | 'danger'
   rerun?: boolean
+  actionKind?: 'apply_and_rerun' | 'isolate' | 'reject_upstream' | 'discard' | 'escalate'
 }
 
 export type ReviewTemplateMeta = {
@@ -222,128 +233,155 @@ export type ReviewTemplateMeta = {
   actions: ReviewAction[]
 }
 
+/** MAP 子形态：字段/字典映射 vs 实体类型选择（同一套选值模式） */
+export const isMapTypeFix = (record: ReviewRecord): boolean => (
+  record.type.includes('实体类型判断错误') || /^SCHEMA-TYPE/i.test(record.ruleId || '')
+)
+
 const templateCatalog: Record<ReviewTemplateId, ReviewTemplateMeta> = {
   T_MAP: {
     id: 'T_MAP',
-    title: '映射修复',
-    question: '源字段应对到哪个 Schema / 字典目标？',
+    title: '选值映射',
+    question: '源值应对到哪个目标？',
     actions: [
-      { id: 'save-map-rerun', label: '保存映射并重跑', kind: 'primary', rerun: true },
-      { id: 'rollback-dict', label: '回滚字典并重跑', kind: 'secondary', rerun: true },
-      { id: 'reject-upstream', label: '驳回上游', kind: 'secondary' },
+      { id: 'save-map-rerun', label: '保存映射并重跑', kind: 'primary', rerun: true, actionKind: 'apply_and_rerun' },
+      { id: 'rollback-dict', label: '回滚字典并重跑', kind: 'secondary', rerun: true, actionKind: 'apply_and_rerun' },
+      { id: 'reject-upstream', label: '驳回上游', kind: 'secondary', actionKind: 'reject_upstream' },
     ],
   },
-  T_ENTITY: {
-    id: 'T_ENTITY',
-    title: '实体裁决',
-    question: '候选与存量是否同一实体？类型是否正确？',
+  T_LINK: {
+    id: 'T_LINK',
+    title: '实体对齐裁决',
+    question: '候选与存量是否为同一实体？',
     actions: [
-      { id: 'entity-confirm', label: '确认裁决并重跑', kind: 'primary', rerun: true },
-      { id: 'reject-candidate', label: '驳回候选', kind: 'secondary' },
+      { id: 'entity-confirm', label: '确认裁决并重跑', kind: 'primary', rerun: true, actionKind: 'apply_and_rerun' },
+      { id: 'reject-candidate', label: '驳回候选', kind: 'secondary', actionKind: 'isolate' },
     ],
   },
-  T_RELATION: {
-    id: 'T_RELATION',
-    title: '合作关系证据审核',
-    question: '现有证据是否足以确认该企业合作关系？',
+  T_EVIDENCE: {
+    id: 'T_EVIDENCE',
+    title: '关系证据审核',
+    question: '现有证据是否足以让该关系入图？',
     actions: [
-      { id: 'pass-rerun', label: '证据充分，通过并重跑', kind: 'primary', rerun: true },
-      { id: 'keep-isolated', label: '保持隔离', kind: 'secondary' },
-      { id: 'reject-extract', label: '驳回至抽取节点', kind: 'secondary', rerun: true },
-      { id: 'force-pass', label: '强制通过', kind: 'danger', rerun: true },
+      { id: 'pass-rerun', label: '确认入图并重跑', kind: 'primary', rerun: true, actionKind: 'apply_and_rerun' },
+      { id: 'keep-isolated', label: '保持隔离', kind: 'secondary', actionKind: 'isolate' },
+      { id: 'reject-extract', label: '驳回至抽取节点', kind: 'secondary', rerun: true, actionKind: 'reject_upstream' },
+      { id: 'force-pass', label: '强制通过', kind: 'danger', rerun: true, actionKind: 'apply_and_rerun' },
     ],
   },
   T_ATTR: {
     id: 'T_ATTR',
     title: '属性对照',
-    question: '以哪份来源为准？',
+    question: '冲突属性以哪份来源为准？',
     actions: [
-      { id: 'confirm-attr', label: '确认属性并重跑', kind: 'primary', rerun: true },
-      { id: 'reject-upstream', label: '驳回上游', kind: 'secondary' },
+      { id: 'confirm-attr', label: '确认属性并重跑', kind: 'primary', rerun: true, actionKind: 'apply_and_rerun' },
+      { id: 'reject-upstream', label: '驳回上游', kind: 'secondary', actionKind: 'reject_upstream' },
     ],
   },
   T_DQ_FILL: {
     id: 'T_DQ_FILL',
-    title: '论文标题补录',
-    question: '根据 DOI 与原始字段核对并补全论文标题',
+    title: '必填补全',
+    question: '如何补全缺失的必填字段？',
     actions: [
-      { id: 'save-fill-rerun', label: '保存补全并重跑校验', kind: 'primary', rerun: true },
-      { id: 'discard-record', label: '废弃本记录', kind: 'secondary' },
-      { id: 'reject-upstream', label: '退回上游数据源', kind: 'secondary' },
+      { id: 'save-fill-rerun', label: '保存补全并重跑', kind: 'primary', rerun: true, actionKind: 'apply_and_rerun' },
+      { id: 'discard-record', label: '废弃本记录', kind: 'secondary', actionKind: 'discard' },
+      { id: 'reject-upstream', label: '退回上游数据源', kind: 'secondary', actionKind: 'reject_upstream' },
     ],
   },
   T_DQ_MERGE: {
     id: 'T_DQ_MERGE',
     title: '重复定主',
-    question: '哪条是主记录、如何合并？',
+    question: '哪条是主记录、如何合并字段？',
     actions: [
-      { id: 'merge-rerun', label: '指定主记录并合并重跑', kind: 'primary', rerun: true },
-      { id: 'isolate-dup', label: '全部隔离为疑似重复', kind: 'secondary' },
-      { id: 'reject-upstream', label: '驳回上游', kind: 'secondary' },
+      { id: 'merge-rerun', label: '指定主记录并合并重跑', kind: 'primary', rerun: true, actionKind: 'apply_and_rerun' },
+      { id: 'isolate-dup', label: '全部隔离为疑似重复', kind: 'secondary', actionKind: 'isolate' },
+      { id: 'reject-upstream', label: '驳回上游', kind: 'secondary', actionKind: 'reject_upstream' },
     ],
   },
   T_RUNTIME: {
     id: 'T_RUNTIME',
     title: '运行处置',
-    question: '换配置重跑，还是重试 / 升级？',
+    question: '重试、换配置重跑，还是跳过 / 升级？',
     actions: [
-      { id: 'rerun-batch', label: '更换配置后重跑', kind: 'primary', rerun: true },
-      { id: 'retry-task', label: '重试本任务', kind: 'secondary', rerun: true },
-      { id: 'skip-task', label: '跳过本任务', kind: 'secondary' },
-      { id: 'escalate', label: '暂停并升级治理员', kind: 'danger' },
-    ],
-  },
-  T_GENERIC: {
-    id: 'T_GENERIC',
-    title: '通用兜底',
-    question: '如何临时处置并建议归类？',
-    actions: [
-      { id: 'reject-upstream', label: '驳回上游', kind: 'secondary' },
-      { id: 'escalate', label: '升级治理员', kind: 'secondary' },
-      { id: 'temp-pass', label: '临时放行并重跑', kind: 'danger', rerun: true },
+      { id: 'rerun-batch', label: '更换配置后重跑', kind: 'primary', rerun: true, actionKind: 'apply_and_rerun' },
+      { id: 'retry-task', label: '重试本任务', kind: 'secondary', rerun: true, actionKind: 'apply_and_rerun' },
+      { id: 'skip-task', label: '撤销本任务', kind: 'secondary', actionKind: 'discard' },
+      { id: 'escalate', label: '暂停并升级治理员', kind: 'danger', actionKind: 'escalate' },
     ],
   },
 }
 
+const modeByRulePrefix = (ruleId: string): ReviewTemplateId | null => {
+  const id = ruleId.toUpperCase()
+  if (/^(NORM-DICT|DICT-CONFIG|DQ-ENUM|SCHEMA-MAP|SCHEMA-TYPE)/.test(id)) return 'T_MAP'
+  if (/^(NORM-REQ|DQ-REQUIRED)/.test(id)) return 'T_DQ_FILL'
+  if (/^(NORM-UNIQ|DQ-UNIQUE)/.test(id)) return 'T_DQ_MERGE'
+  if (/^(ALIGN-AMBIG|ALIGN-CONF)/.test(id)) return 'T_LINK'
+  if (/^(VAL-EVID|VAL-REL|REL-)/.test(id)) return 'T_EVIDENCE'
+  if (/^(VAL-ATTR|ATTR-)/.test(id)) return 'T_ATTR'
+  if (/^(EXTRACT-|LLM-|ENTITY-RUNTIME)/.test(id)) return 'T_RUNTIME'
+  return null
+}
+
 export const getReviewTemplateId = (record: ReviewRecord): ReviewTemplateId => {
-  const { type, node, objectType } = record
-  const isEntityContext = node.includes('对齐') || node.includes('实体') || objectType.includes('实体')
+  const fromRule = modeByRulePrefix(record.ruleId || '')
+  if (fromRule) return fromRule
+
+  const { type, node, objectType, ruleId } = record
+  const isEntityContext = /对齐|消歧/.test(node) || objectType.includes('实体')
   const isRelationContext = node.includes('关系') || objectType.includes('关系')
 
-  if (type.includes('Schema 字段映射失败') || type.includes('标准化失败')) return 'T_MAP'
-  if (type.includes('实体重复冲突') || type.includes('实体类型判断错误') || type.includes('实体置信度不足')) return 'T_ENTITY'
-  if (type.includes('关系证据不足')) return 'T_RELATION'
-  if (type.includes('关系类型置信度不足')) return 'T_RELATION'
+  if (
+    type.includes('实体类型判断错误')
+    || type.includes('Schema 字段映射失败')
+    || type.includes('标准化失败')
+    || type.includes('来源类型标准化')
+  ) return 'T_MAP'
+  if (type.includes('实体重复') || type.includes('实体置信') || type.includes('对齐歧义') || type.includes('对齐')) return 'T_LINK'
+  if (type.includes('关系证据不足') || type.includes('关系类型置信度不足')) return 'T_EVIDENCE'
   if (type.includes('属性冲突')) return 'T_ATTR'
   if (type.includes('标题缺失') || type === '必填缺失') return 'T_DQ_FILL'
   if (type.includes('唯一性冲突')) return 'T_DQ_MERGE'
-  if (type === '实体抽取超时') return 'T_RUNTIME'
+  if (type.includes('抽取超时') || type === '大模型输出格式错误') return 'T_RUNTIME'
   if (type === '单任务执行失败') {
-    if (isEntityContext) return 'T_ENTITY'
-    if (isRelationContext) return 'T_RELATION'
+    if (isEntityContext) return 'T_LINK'
+    if (isRelationContext) return 'T_EVIDENCE'
     return 'T_RUNTIME'
   }
-  if (type === '大模型输出格式错误') return 'T_RUNTIME'
-  return 'T_GENERIC'
+  if (ruleId.startsWith('ALIGN-ENTITY')) {
+    return type.includes('类型') ? 'T_MAP' : 'T_LINK'
+  }
+  return 'T_RUNTIME'
 }
 
 export const getReviewTemplate = (record: ReviewRecord): ReviewTemplateMeta => {
   const id = getReviewTemplateId(record)
   const meta = templateCatalog[id]
-  if (id === 'T_RELATION' && record.type.includes('关系类型置信度不足')) {
+  if (id === 'T_MAP' && isMapTypeFix(record)) {
+    return {
+      ...meta,
+      title: '选值映射 · 实体类型',
+      question: '该实体的正确类型是什么？',
+      actions: [
+        { id: 'confirm-type', label: '确认类型并重跑', kind: 'primary', rerun: true, actionKind: 'apply_and_rerun' },
+        { id: 'reject-upstream', label: '驳回上游', kind: 'secondary', actionKind: 'reject_upstream' },
+      ],
+    }
+  }
+  if (id === 'T_EVIDENCE' && record.type.includes('关系类型置信度不足')) {
     return {
       ...meta,
       title: '关系类型确认',
-      question: '原文证据是否支持当前论文引用关系？',
+      question: '原文证据是否支持当前关系类型？',
     }
   }
-  if (id === 'T_RUNTIME' && record.type === '实体抽取超时') {
+  if (id === 'T_RUNTIME' && (record.type.includes('超时') || record.type.includes('抽取超时'))) {
     return {
       ...meta,
       actions: [
-        { id: 'retry-task', label: '重试本任务', kind: 'primary', rerun: true },
-        { id: 'skip-task', label: '跳过本任务', kind: 'secondary' },
-        { id: 'escalate', label: '暂停并升级治理员', kind: 'danger' },
+        { id: 'retry-task', label: '重试本任务', kind: 'primary', rerun: true, actionKind: 'apply_and_rerun' },
+        { id: 'skip-task', label: '跳过本任务', kind: 'secondary', actionKind: 'discard' },
+        { id: 'escalate', label: '暂停并升级治理员', kind: 'danger', actionKind: 'escalate' },
       ],
     }
   }
@@ -356,40 +394,183 @@ export const getReviewTemplate = (record: ReviewRecord): ReviewTemplateMeta => {
   return meta
 }
 
-export type ReviewCategory =
-  | '结果低于阈值'
-  | '大模型抽取异常'
-  | 'Schema 映射异常'
-  | '清洗标准化异常'
-  | '实体抽取异常'
-  | '关系校验异常'
-  | 'Schema 实体分类异常'
-  | '关系证据校验异常'
-  | '属性校验异常'
-  | '唯一性校验异常'
-  | '必填校验异常'
-  | '枚举校验异常'
-  | '实体结果校验异常'
-  | '其他流程异常'
+export type PipelineStepId =
+  | 'source'
+  | 'normalize'
+  | 'schema'
+  | 'extract'
+  | 'align'
+  | 'validate'
+  | 'persist'
 
-const nodeCategoryMap: Record<string, ReviewCategory> = {
-  '大模型抽取': '大模型抽取异常',
-  'Schema 映射': 'Schema 映射异常',
-  '清洗标准化': '清洗标准化异常',
-  '实体抽取': '实体抽取异常',
-  '关系校验': '关系校验异常',
-  'Schema 实体分类': 'Schema 实体分类异常',
-  '关系证据校验': '关系证据校验异常',
-  '属性校验': '属性校验异常',
-  '唯一性校验': '唯一性校验异常',
-  '必填校验': '必填校验异常',
-  '枚举校验': '枚举校验异常',
-  '实体结果校验': '实体结果校验异常',
+export type PipelineStep = {
+  id: PipelineStepId
+  name: string
+  phase: '数据处理' | '图谱构建'
 }
 
-export const getReviewCategory = (record: ReviewRecord): ReviewCategory => {
-  if (getReviewConfidence(record).label === '低于阈值') return '结果低于阈值'
-  return nodeCategoryMap[record.node] ?? '其他流程异常'
+export const PIPELINE_STEPS: PipelineStep[] = [
+  { id: 'source', name: '数据接入', phase: '数据处理' },
+  { id: 'normalize', name: '清洗标准化', phase: '数据处理' },
+  { id: 'schema', name: 'Schema 映射', phase: '图谱构建' },
+  { id: 'extract', name: '实体关系抽取', phase: '图谱构建' },
+  { id: 'align', name: '实体对齐消歧', phase: '图谱构建' },
+  { id: 'validate', name: '质量校验', phase: '图谱构建' },
+  { id: 'persist', name: '图谱入库', phase: '图谱构建' },
+]
+
+const pipelineStepById = Object.fromEntries(
+  PIPELINE_STEPS.map((step) => [step.id, step]),
+) as Record<PipelineStepId, PipelineStep>
+
+export const getPipelineStep = (id: PipelineStepId): PipelineStep => pipelineStepById[id]
+
+/** 阻断节点由工单语义推导；MAP 按子形态落到 schema 或 normalize。 */
+export const resolvePipelineStep = (record: ReviewRecord): PipelineStep => {
+  const tid = getReviewTemplateId(record)
+  const type = record.type
+  const node = record.node || ''
+
+  if (tid === 'T_DQ_FILL' || tid === 'T_DQ_MERGE') return getPipelineStep('normalize')
+  if (tid === 'T_EVIDENCE' || tid === 'T_ATTR') return getPipelineStep('validate')
+  if (tid === 'T_RUNTIME') return getPipelineStep('extract')
+  if (tid === 'T_LINK') return getPipelineStep('align')
+  if (tid === 'T_MAP') {
+    if (isMapTypeFix(record) || type.includes('Schema 字段映射') || /Schema|映射|分类/.test(node)) {
+      return getPipelineStep('schema')
+    }
+    return getPipelineStep('normalize')
+  }
+
+  if (/入库|写入|persist/i.test(node) || /入库|写入/.test(type)) return getPipelineStep('persist')
+  if (/接入|source/i.test(node)) return getPipelineStep('source')
+  if (/质量校验|关系证据|属性校验|证据校验/.test(node) || /关系证据|属性冲突|关系类型置信/.test(type)) {
+    return getPipelineStep('validate')
+  }
+  if (/对齐|消歧|实体结果|align/i.test(node) || /对齐|消歧|实体重复|实体置信/.test(type)) {
+    return getPipelineStep('align')
+  }
+  if (/抽取|大模型|extract|llm/i.test(node) || /抽取|大模型/.test(type)) {
+    return getPipelineStep('extract')
+  }
+  if (/Schema|映射|分类/.test(node) || /Schema|映射|类型判断/.test(type)) {
+    return getPipelineStep('schema')
+  }
+  if (/清洗|标准|必填|唯一|枚举|normalize|quality/i.test(node) || /标准|必填|唯一|枚举/.test(type)) {
+    return getPipelineStep('normalize')
+  }
+  return getPipelineStep('validate')
+}
+
+/** 人工处理业务分类（短名；仅顶部 chips 筛选，列表展示阻断节点） */
+export type HandleCategory =
+  | '清洗标准化'
+  | 'Schema 映射'
+  | '抽取配置'
+  | '实体对齐'
+  | '质量校验'
+
+export const HANDLE_CATEGORIES: HandleCategory[] = [
+  '清洗标准化',
+  'Schema 映射',
+  '抽取配置',
+  '实体对齐',
+  '质量校验',
+]
+
+/** @deprecated 兼容旧调用；请用 getHandleCategory */
+export type ReviewCategory = HandleCategory
+
+const categoryByStep: Partial<Record<PipelineStepId, HandleCategory>> = {
+  normalize: '清洗标准化',
+  schema: 'Schema 映射',
+  extract: '抽取配置',
+  align: '实体对齐',
+  validate: '质量校验',
+}
+
+export const getHandleCategory = (record: ReviewRecord): HandleCategory => {
+  const step = resolvePipelineStep(record)
+  if (step.id === 'source' || step.id === 'persist') return '质量校验'
+  return categoryByStep[step.id] ?? '质量校验'
+}
+
+export const getReviewCategory = (record: ReviewRecord): HandleCategory => getHandleCategory(record)
+
+export const getDecisionQuestion = (record: ReviewRecord): string => {
+  switch (getReviewTemplateId(record)) {
+    case 'T_MAP':
+      if (isMapTypeFix(record)) return '该实体的正确类型是什么？'
+      return record.type.includes('Schema 字段映射')
+        ? '源字段应对到哪个 Schema 属性？'
+        : '源值应对到哪个标准字典值？'
+    case 'T_LINK':
+      return '候选与存量是否为同一实体？'
+    case 'T_EVIDENCE':
+      return '现有证据是否足以让该关系入图？'
+    case 'T_ATTR':
+      return '冲突属性以哪份来源为准？'
+    case 'T_DQ_FILL':
+      return '如何补全缺失的必填字段？'
+    case 'T_DQ_MERGE':
+      return '哪条是主记录、如何合并字段？'
+    case 'T_RUNTIME':
+      return '重试、换配置重跑，还是跳过/升级？'
+    default:
+      return '如何临时处置本条异常？'
+  }
+}
+
+export type ReviewConsequence = {
+  writeTarget: string
+  rerunAnchor: string
+  rerunStepId: PipelineStepId
+  phase: PipelineStep['phase']
+  preferStep?: PipelineStepId
+}
+
+export const getReviewConsequence = (record: ReviewRecord): ReviewConsequence => {
+  const step = resolvePipelineStep(record)
+  const tid = getReviewTemplateId(record)
+  let writeTarget = '处理结果'
+  if (tid === 'T_MAP') {
+    writeTarget = isMapTypeFix(record)
+      ? '实体分类结果'
+      : record.type.includes('Schema 字段映射')
+        ? 'Schema 映射表'
+        : record.type.includes('标准化失败')
+          ? '标准字典'
+          : '标准字典 / 枚举字段'
+  } else if (tid === 'T_LINK') writeTarget = '实体对齐结果'
+  else if (tid === 'T_EVIDENCE') writeTarget = '候选关系隔离区'
+  else if (tid === 'T_ATTR') writeTarget = '属性融合结果'
+  else if (tid === 'T_DQ_FILL') writeTarget = record.sourceTable || '源标准表'
+  else if (tid === 'T_DQ_MERGE') writeTarget = record.sourceTable || '去重结果表'
+  else if (tid === 'T_RUNTIME') writeTarget = '任务执行配置'
+
+  return {
+    writeTarget,
+    rerunAnchor: step.name,
+    rerunStepId: step.id,
+    phase: step.phase,
+  }
+}
+
+export const getSedimentHint = (record: ReviewRecord): string => {
+  switch (getReviewTemplateId(record)) {
+    case 'T_MAP':
+      return isMapTypeFix(record)
+        ? '将类型修正写入分类规则'
+        : '将本次映射写入标准字典，同类源值今后自动处理'
+    case 'T_LINK':
+      return '将别名写入别名表，同类候选自动归一'
+    case 'T_ATTR':
+      return '将来源优先级写入属性融合规则'
+    case 'T_DQ_MERGE':
+      return '将主记录与合并策略写入去重规则'
+    default:
+      return ''
+  }
 }
 
 export const getImpactScope = (record: ReviewRecord): '批次级' | '任务级' => (

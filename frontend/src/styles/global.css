@@ -149,3 +149,72 @@
   background: var(--primary);
   content: "";
 }
+
+.kg-field {
+  display: grid;
+  gap: 6px;
+}
+
+.kg-field__label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.kg-field__required {
+  color: var(--danger);
+  font-style: normal;
+  margin-left: 2px;
+}
+
+.kg-field__control :where(input, select, textarea) {
+  width: 100%;
+  height: var(--control-height);
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.kg-field__control :where(textarea) {
+  height: auto;
+  padding: 6px 10px;
+  line-height: 20px;
+  resize: vertical;
+}
+
+.kg-field__control :where(input, select, textarea):focus {
+  border-color: var(--primary);
+  outline: none;
+}
+
+.kg-field__control :where(input[type='file']) {
+  height: auto;
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+}
+
+.kg-field--error .kg-field__control :where(input, select, textarea) {
+  border-color: var(--danger);
+  background: var(--danger-subtle);
+}
+
+.kg-field--error .kg-field__control :where(input[type='file']) {
+  background: transparent;
+}
+
+.kg-field__error {
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.kg-field__hint {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 16px;
+}

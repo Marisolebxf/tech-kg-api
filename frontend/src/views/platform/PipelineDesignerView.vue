@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from "vue";
+import { useFormValidation, type Rules } from "../../composables/use-form-validation";
 
 type OperatorCategory = "输入" | "处理" | "抽取" | "图谱" | "控制";
 type OperatorDefinition = {
@@ -342,8 +343,14 @@ function handleDrop(index: number) {
   draggedOperator.value = null;
 }
 
+const pipelineForm = computed(() => ({ name: pipelineName.value }));
+const pipelineRules: Rules = {
+  name: { required: "请填写 Pipeline 名称", min: { value: 2, message: "名称至少 2 个字符" }, max: { value: 100, message: "名称不能超过 100 个字符" } },
+};
+const { visibleError: pipelineVisibleError, validate: validatePipeline, touch: touchPipeline } = useFormValidation(pipelineForm, pipelineRules);
+
 function savePipeline(publish = false) {
-  if (!pipelineName.value.trim()) return;
+  if (!validatePipeline()) return;
   pipelineStatus.value = publish ? "已发布" : pipelineStatus.value;
   feedback.value = publish
     ? `Pipeline 已发布，下一次计划执行时间为 2026-07-22 ${scheduleTime.value}。`
@@ -389,11 +396,12 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
       <div class="pipeline-identity">
         <span>PIPELINE DESIGNER</span>
         <div>
-          <input v-model="pipelineName" aria-label="Pipeline 名称" /><em
+          <input v-model="pipelineName" aria-label="Pipeline 名称" :title="pipelineVisibleError('name') ?? ''" :class="{ 'is-error': pipelineVisibleError('name') }" @blur="touchPipeline('name')" /><em
             :class="{ published: pipelineStatus === '已发布' }"
             >{{ pipelineStatus }}</em
           >
         </div>
+        <p v-if="pipelineVisibleError('name')" class="pipeline-name-error">{{ pipelineVisibleError('name') }}</p>
         <p>{{ pipelineDescription }}</p>
       </div>
       <nav>
@@ -846,6 +854,16 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
 .pipeline-identity input:focus {
   outline: 0;
   border-bottom: 1px solid #8fb7f2;
+}
+.pipeline-identity input.is-error {
+  border-bottom: 1px solid #f53f3f;
+  color: #f53f3f;
+}
+.pipeline-name-error {
+  margin: 2px 0 0 !important;
+  color: #f53f3f !important;
+  font-size: 11px !important;
+  white-space: normal !important;
 }
 .pipeline-identity em {
   padding: 3px 8px;

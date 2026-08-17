@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import FormField from '../../components/form-field.vue'
+import { useFormValidation, type Rules } from '../../composables/use-form-validation'
 
 defineProps<{ embedded?: boolean }>()
 
@@ -15,10 +17,18 @@ const rollbackReason = ref('线上数据校验发现异常，需要恢复到该�
 const actionMessage = ref('')
 const current = computed(() => versions[0])
 
+const rollbackForm = computed(() => ({ reason: rollbackReason.value }))
+const rollbackRules: Rules = {
+  reason: { required: '请填写回退原因', min: { value: 10, message: '请至少填写 10 个字符说明回退原因' } },
+}
+const { visibleError: rollbackVisibleError, validate: validateRollback, touch: touchRollback, clearErrors: clearRollbackErrors } = useFormValidation(rollbackForm, rollbackRules)
+
 const submitRollback = () => {
   if (!rollbackVersion.value) return
+  if (!validateRollback()) return
   actionMessage.value = `已提交回退至 ${rollbackVersion.value.version} 的申请。系统将先检查 Schema 兼容性、影响范围和恢复快照，审批通过后再原子切换线上版本。`
   rollbackVersion.value = null
+  clearRollbackErrors()
 }
 </script>
 
@@ -36,7 +46,7 @@ const submitRollback = () => {
     <button v-if="selectedVersion || rollbackVersion" class="version-mask" type="button" aria-label="关闭" @click="selectedVersion=null;rollbackVersion=null" />
     <aside v-if="selectedVersion" class="version-drawer"><header><div><span>图谱版本变更详情</span><h2>{{ selectedVersion.version }}</h2><p>{{ selectedVersion.publishedAt }} · {{ selectedVersion.publisher }}</p></div><button type="button" @click="selectedVersion=null">×</button></header><div><section><h3>本次变更</h3><dl><div><dt>实体变化</dt><dd>{{ selectedVersion.entities }}</dd></div><div><dt>关系变化</dt><dd>{{ selectedVersion.relations }}</dd></div><div><dt>属性变化</dt><dd>{{ selectedVersion.properties }}</dd></div><div><dt>Schema</dt><dd>{{ selectedVersion.schema }}</dd></div></dl></section><section><h3>发布说明</h3><p>{{ selectedVersion.note }}</p></section></div></aside>
 
-    <aside v-if="rollbackVersion" class="rollback-dialog"><header><h2>申请回退图谱版本</h2><button type="button" @click="rollbackVersion=null">×</button></header><p>将线上图谱从 {{ current.version }} 切换回 <strong>{{ rollbackVersion.version }}</strong>。提交后不会立即覆盖数据，必须先完成兼容性和影响检查。</p><label><span>回退原因</span><textarea v-model="rollbackReason" /></label><footer><button type="button" @click="rollbackVersion=null">取消</button><button class="danger" type="button" @click="submitRollback">提交回退申请</button></footer></aside>
+    <aside v-if="rollbackVersion" class="rollback-dialog"><header><h2>申请回退图谱版本</h2><button type="button" @click="rollbackVersion=null">×</button></header><p>将线上图谱从 {{ current.version }} 切换回 <strong>{{ rollbackVersion.version }}</strong>。提交后不会立即覆盖数据，必须先完成兼容性和影响检查。</p><FormField label="回退原因" required :error="rollbackVisibleError('reason')"><textarea v-model="rollbackReason" @blur="touchRollback('reason')" /></FormField><footer><button type="button" @click="rollbackVersion=null">取消</button><button class="danger" type="button" @click="submitRollback">提交回退申请</button></footer></aside>
   </div>
 </template>
 

@@ -53,6 +53,10 @@ const { toasts, dismissToast } = useToast()
   border-color: rgba(255, 125, 0, 0.24);
 }
 
+.kg-toast--error {
+  border-color: rgba(217, 45, 32, 0.24);
+}
+
 .kg-toast button {
   flex: 0 0 auto;
   width: 24px;

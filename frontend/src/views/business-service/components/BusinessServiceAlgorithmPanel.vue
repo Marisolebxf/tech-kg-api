@@ -2,7 +2,9 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import iconInfo from '../../../assets/icons/icon-info.svg'
+import FormField from '../../../components/form-field.vue'
 import KgGraphCanvas from '../../../components/kg-graph-canvas.vue'
+import { useFormValidation, type Rules } from '../../../composables/use-form-validation'
 import { getEdgeProvenance, getNodeProvenance, getServiceGraphPreset } from '../../../data/graph-presets'
 import type { GraphEdgeData, GraphNodeData } from '../../../data/graph-presets'
 import type { ServiceModule } from '../service-modules'
@@ -31,6 +33,11 @@ const graphEdges = computed(() => graphPreset.value.edges.filter((edge) => (
   graphNodes.value.some((node) => node.id === edge.to)
 )))
 const isPanorama = computed(() => props.moduleInfo.key === 'industry-chain-panorama')
+const isIndirect = computed(() => props.moduleInfo.key === 'node-indirect')
+const edgeLabels = ref<Record<string, string[]>>({})
+const labelModalOpen = ref(false)
+const labelInput = ref('')
+const pendingEdgeId = ref('')
 const panoramaLayerOptions = [
   { value: 1, label: '一级 · 产业环节' },
   { value: 2, label: '二级 · 企业/专家/技术' },
@@ -158,26 +165,16 @@ const apiResultJson = computed(() => JSON.stringify({
   request_params: parameterValues.value,
 }, null, 2))
 
-watch(
-  () => props.moduleInfo.key,
-  () => {
-    resultMode.value = 'summary'
-    panoramaLayer.value = 3
-    panoramaRelation.value = 'all'
-    selectedGraphNodeId.value = null
-    selectedGraphEdgeId.value = null
-    resetParameters()
-    autoRefresh.value = false
-  },
-  { immediate: true },
-)
-
-watch([panoramaLayer, panoramaRelation], () => {
-  if (!isPanorama.value) return
-  selectedGraphNodeId.value = null
-  selectedGraphEdgeId.value = null
-  resultMode.value = 'summary'
+const paramRules = computed<Rules>(() => {
+  const rules: Rules = {}
+  for (const field of props.moduleInfo.requestFields) {
+    if (field.required === '是') {
+      rules[field.name] = { required: `请填写${field.name}` }
+    }
+  }
+  return rules
 })
+const { visibleError: paramVisibleError, validate: validateParams, touch: touchParam, clearErrors: clearParamErrors } = useFormValidation(parameterValues, paramRules)
 
 function formatValue(value: unknown) {
   if (Array.isArray(value)) return value.join('、')
@@ -192,7 +189,30 @@ function resetParameters() {
       formatValue(props.moduleInfo.requestExample[field.name]),
     ]),
   )
+  clearParamErrors()
 }
+
+watch(
+  () => props.moduleInfo.key,
+  () => {
+    resultMode.value = 'summary'
+    panoramaLayer.value = 3
+    panoramaRelation.value = 'all'
+    selectedGraphNodeId.value = null
+    selectedGraphEdgeId.value = null
+    edgeLabels.value = {}
+    resetParameters()
+    autoRefresh.value = false
+  },
+  { immediate: true },
+)
+
+watch([panoramaLayer, panoramaRelation], () => {
+  if (!isPanorama.value) return
+  selectedGraphNodeId.value = null
+  selectedGraphEdgeId.value = null
+  resultMode.value = 'summary'
+})
 
 function handleRun() {
   running.value = true
@@ -202,6 +222,11 @@ function handleRun() {
     lastUpdateTime.value = now.getTime()
     running.value = false
   }, 360)
+}
+
+function executeTest() {
+  if (!validateParams()) return
+  handleRun()
 }
 
 function startAutoRefresh() {
@@ -257,6 +282,43 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   selectedGraphNodeId.value = null
   resultMode.value = 'relation'
 }
+
+function openLabelModal(edgeId: string) {
+  pendingEdgeId.value = edgeId
+  labelInput.value = ''
+  clearLabelErrors()
+  labelModalOpen.value = true
+}
+
+const labelRules: Rules = { value: { required: '请输入标注内容' } }
+const labelForm = computed({ get: () => ({ value: labelInput.value }), set: (v) => { labelInput.value = v.value } })
+const { visibleError: labelVisibleError, validate: validateLabel, touch: touchLabel, clearErrors: clearLabelErrors } = useFormValidation(labelForm, labelRules)
+
+function addLabel() {
+  if (!validateLabel()) return
+  const text = labelInput.value.trim()
+  const id = pendingEdgeId.value
+  if (!id) return
+  const existing = edgeLabels.value[id] ?? []
+  if (!existing.includes(text)) {
+    edgeLabels.value = {
+      ...edgeLabels.value,
+      [id]: [...existing, text],
+    }
+  }
+  labelInput.value = ''
+  labelModalOpen.value = false
+}
+
+function removeLabel(edgeId: string, index: number) {
+  const existing = edgeLabels.value[edgeId]
+  if (!existing) return
+  const next = existing.filter((_, i) => i !== index)
+  edgeLabels.value = {
+    ...edgeLabels.value,
+    [edgeId]: next,
+  }
+}
 </script>
 
 <template>
@@ -268,17 +330,23 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       <img class="field-info-icon" :src="iconInfo" alt="" aria-hidden="true" />
     </div>
     <div class="service-console__params">
-      <label v-for="field in moduleInfo.requestFields" :key="field.name">
-        <span><i v-if="field.required === '是'">*</i>{{ field.name }}</span>
+      <FormField
+        v-for="field in moduleInfo.requestFields"
+        :key="field.name"
+        :label="field.name"
+        :required="field.required === '是'"
+        :error="paramVisibleError(field.name)"
+      >
         <input
           :value="parameterValues[field.name] ?? ''"
           :placeholder="field.description"
           @input="handleParameterInput(field.name, $event)"
+          @blur="touchParam(field.name)"
         />
-      </label>
+      </FormField>
     </div>
     <div class="service-console__actions">
-      <button class="kg-button" type="button" @click="handleRun">{{ running ? '测试中...' : '执行测试' }}</button>
+      <button class="kg-button" type="button" @click="executeTest">{{ running ? '测试中...' : '执行测试' }}</button>
       <button class="kg-button kg-button--secondary" type="button" @click="resetParameters">重置参数</button>
     </div>
   </section>
@@ -364,6 +432,26 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <dd>{{ value }}</dd>
           </div>
         </dl>
+        <section
+          v-if="isIndirect && resultMode === 'relation' && selectedEdge"
+          class="edge-annotation"
+        >
+          <header class="edge-annotation__head">
+            <span>间接关系标注</span>
+            <button type="button" class="edge-annotation__add" @click="openLabelModal(selectedEdge.id)">＋ 添加标注</button>
+          </header>
+          <div v-if="(edgeLabels[selectedEdge.id] ?? []).length" class="edge-labels">
+            <span
+              v-for="(tag, index) in edgeLabels[selectedEdge.id]"
+              :key="`${tag}-${index}`"
+              class="edge-label-badge"
+            >
+              {{ tag }}
+              <button type="button" @click="removeLabel(selectedEdge.id, index)">×</button>
+            </span>
+          </div>
+          <p v-else class="edge-labels__empty">暂无标注，点击"添加标注"为该间接关系打标签</p>
+        </section>
         <section v-else-if="resultMode === 'provenance' && selectedProvenance && selectedProvenanceTarget" class="result-provenance">
           <header><strong>当前追溯对象</strong><span>{{ selectedProvenanceTarget.kind }}</span></header>
           <div class="result-provenance__target">
@@ -416,6 +504,33 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       </section>
     </aside>
   </div>
+
+  <Teleport to="body">
+    <div v-if="labelModalOpen" class="label-modal">
+      <button class="label-modal__mask" type="button" aria-label="关闭" @click="labelModalOpen = false"></button>
+      <aside class="label-modal__panel">
+        <header>
+          <h2>添加间接关系标注</h2>
+          <button type="button" @click="labelModalOpen = false">×</button>
+        </header>
+        <div class="label-modal__body">
+          <FormField label="标注内容" required :error="labelVisibleError('value')">
+            <input
+              v-model="labelInput"
+              type="text"
+              placeholder="请输入标注，回车或点击保存"
+              @blur="touchLabel('value')"
+              @keydown.enter.prevent="addLabel"
+            />
+          </FormField>
+        </div>
+        <footer>
+          <button type="button" @click="labelModalOpen = false">取消</button>
+          <button type="button" class="primary" @click="addLabel">保存</button>
+        </footer>
+      </aside>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -972,5 +1087,183 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   .service-console__params {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.edge-annotation {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  background: #f7faff;
+}
+
+.edge-annotation__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.edge-annotation__head span {
+  color: #1d2129;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.edge-annotation__add {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid #165dff;
+  border-radius: 4px;
+  background: #fff;
+  color: #165dff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.edge-annotation__add:hover {
+  background: #f2f8ff;
+}
+
+.edge-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.edge-label-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  height: 24px;
+  border: 1px solid #bfd6fa;
+  border-radius: 12px;
+  background: #e8f3ff;
+  color: #165dff;
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.edge-label-badge button {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #86909c;
+  font-size: 14px;
+  line-height: 14px;
+  cursor: pointer;
+}
+
+.edge-label-badge button:hover {
+  color: #f53f3f;
+}
+
+.edge-labels__empty {
+  margin: 0;
+  color: #86909c;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.label-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.label-modal__mask {
+  position: fixed;
+  inset: 0;
+  border: 0;
+  background: rgba(16, 38, 76, 0.42);
+  backdrop-filter: blur(2px);
+  cursor: pointer;
+}
+
+.label-modal__panel {
+  position: relative;
+  z-index: 1;
+  width: min(440px, 100%);
+  overflow: hidden;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(28, 58, 107, 0.3);
+}
+
+.label-modal__panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid #e5e6eb;
+}
+
+.label-modal__panel header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1d2129;
+}
+
+.label-modal__panel header button {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  color: #86909c;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.label-modal__body {
+  padding: 18px;
+}
+
+.label-modal__body label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: #4e5969;
+}
+
+.label-modal__body input {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #c9cdd4;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #1d2129;
+}
+
+.label-modal__panel footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid #e5e6eb;
+}
+
+.label-modal__panel footer button {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid #c9cdd4;
+  border-radius: 4px;
+  background: #fff;
+  color: #4e5969;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.label-modal__panel footer .primary {
+  background: #165dff;
+  color: #fff;
+  border-color: #165dff;
 }
 </style>

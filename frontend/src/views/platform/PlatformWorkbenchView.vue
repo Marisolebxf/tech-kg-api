@@ -2,8 +2,10 @@
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
+import FormField from '../../components/form-field.vue'
 import KgGraphCanvas from '../../components/kg-graph-canvas.vue'
 import { useToast } from '../../composables/use-toast'
+import { useFormValidation, type Rules } from '../../composables/use-form-validation'
 import {
   getEdgeProvenance,
   getNodeProvenance,
@@ -596,6 +598,7 @@ function openSelectedProcessingInstance() {
 }
 
 function handleQuery() {
+  if (!validateQuery()) return
   void runWithLoading(`查询完成：${selectedQueryType.value} / ${queryKeyword.value}`, () => {
     queryApplied.value = true
     selectedGraphNodeId.value = null
@@ -604,7 +607,12 @@ function handleQuery() {
   })
 }
 
+const queryForm = computed(() => ({ keyword: queryKeyword.value }))
+const queryRules: Rules = { keyword: { required: '请输入查询关键词' } }
+const { visibleError: queryVisibleError, validate: validateQuery, touch: touchQuery } = useFormValidation(queryForm, queryRules)
+
 function handleStartTask() {
+  if (!validateTask()) return
   const priority = processingPriority.value === '紧急' ? '紧急优先' : '普通优先级'
   if (processingScope.value === '全量重建') {
     void runWithLoading(`已生成全量重建确认单：${processingTaskDomain.value} / ${priority}，需二次确认后执行`)
@@ -613,6 +621,12 @@ function handleStartTask() {
   const range = processingScope.value === '指定时间范围' ? ` / ${processingStartDate.value} 至 ${processingEndDate.value}` : ''
   void runWithLoading(`已创建人工触发任务：${processingTaskDomain.value} / ${processingScope.value}${range} / ${priority}`)
 }
+
+const taskForm = computed(() => ({ processingReason: processingReason.value }))
+const taskRules = computed<Rules>(() => ({
+  processingReason: processingPriority.value === '紧急' ? { required: '紧急任务请填写原因' } : {},
+}))
+const { visibleError: taskVisibleError, validate: validateTask, touch: touchTask } = useFormValidation(taskForm, taskRules)
 
 const processingActionLabel = computed(() => processingScope.value === '全量重建' ? '生成确认单' : '创建并执行')
 
@@ -724,11 +738,10 @@ const pageMeta = computed(() => {
             <span>时间范围</span>
             <i><input v-model="processingStartDate" type="date" /><b>至</b><input v-model="processingEndDate" type="date" /></i>
           </label>
-          <label v-if="processingPriority === '紧急'">
-            <span>紧急原因</span>
-            <input v-model="processingReason" placeholder="必填，用于审计与排队依据" />
-          </label>
-          <button class="kg-button" type="button" :disabled="isActionLoading || (processingPriority === '紧急' && !processingReason.trim())" @click="handleStartTask">{{ processingActionLabel }}</button>
+          <FormField v-if="processingPriority === '紧急'" label="紧急原因" required :error="taskVisibleError('processingReason')">
+            <input v-model="processingReason" placeholder="必填，用于审计与排队依据" @blur="touchTask('processingReason')" />
+          </FormField>
+          <button class="kg-button" type="button" :disabled="isActionLoading" @click="handleStartTask">{{ processingActionLabel }}</button>
         </div>
         <div class="platform-update-help"><span><b>普通：</b>按提交顺序排队。</span><span><b>紧急：</b>优先排队，需填写原因。</span></div>
 
@@ -893,10 +906,9 @@ const pageMeta = computed(() => {
           <button class="kg-button" type="button" :disabled="isActionLoading" @click="handleQuery">查询图谱</button>
         </div>
         <div class="platform-form-grid">
-          <label class="platform-query-question">
-            <span>实体名称或关键词</span>
-            <input v-model="queryKeyword" type="search" placeholder="请输入实体名称或关键词，例如：张明远" />
-          </label>
+          <FormField label="实体名称或关键词" required :error="queryVisibleError('keyword')" class="platform-query-question">
+            <input v-model="queryKeyword" type="search" placeholder="请输入实体名称或关键词，例如：张明远" @blur="touchQuery('keyword')" />
+          </FormField>
           <label>
             <span>图谱范围</span>
             <select v-model="selectedQueryType">

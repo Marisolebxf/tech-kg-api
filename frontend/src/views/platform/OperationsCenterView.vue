@@ -1,8 +1,14 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
-import { getReviewBatch, getReviewCategory, getReviewConfidence, reviewRecords } from './manual-review-data'
+import { getManualReviews, getProductionReviews, type ProductionReviewCase, type ReviewRecord } from '../../api/workflowOperations'
+import {
+  getHandleCategory,
+  getImpactScope,
+  HANDLE_CATEGORIES,
+  resolvePipelineStep,
+} from './manual-review-data'
 
 type CenterMode = 'alerts' | 'review'
 
@@ -13,21 +19,26 @@ const status = ref('全部状态')
 const domain = ref('全部业务域')
 const reviewCategory = ref('全部处理分类')
 const batchFilter = ref(String(route.query.batch || '全部更新批次'))
-const reviewTab = ref(route.query.tab === 'history' ? '历史记录' : '待处理')
+const productionMode = import.meta.env.VITE_REVIEW_PRODUCTION_ENABLED === 'true'
+const productionTabs = { '我的待办':'mine', '待领取':'unclaimed', '待审批':'approval', '失败重跑':'failed', '历史记录':'history' } as const
+const reviewTab = ref(productionMode ? (route.query.tab === 'history' ? '历史记录' : '我的待办') : (route.query.tab === 'history' ? '历史记录' : '待处理'))
+const reviewTotal = ref(0)
 const severity = ref('全部风险')
 const actionFeedback = ref('')
 const alertCategory = ref('全部异常')
 const blockingOnly = ref(false)
+const reviewRecords = ref<ReviewRecord[]>([])
+const reviewLoadError = ref('')
 
 const alertCategories = ['全部异常', '数据质量', 'Schema 校验', '大模型抽取', '实体对齐', '图谱入库', '服务运行']
 
 const alertRows = [
   { id: 'ALT-0714-018', level: '高风险', category: '大模型抽取', module: '图谱构建', node: '大模型抽取', domain: '论文', batch: 'UPD-20260714', reason: '同一模型与 Prompt 版本连续产生不符合 Schema 的批量输出', impact: '流程级 · 326 条受影响', strategy: '当前节点及下游已阻断', owner: '张建图', time: '07-14 10:24', status: '待处理', blocked: true, target: '/tasks?module=图谱构建&batch=UPD-20260714' },
   { id: 'ALT-0714-014', level: '中风险', category: '数据质量', module: '数据处理', node: '质量检验', domain: '论文', batch: 'UPD-20260714', reason: '385 条记录命中唯一性、必填或枚举规则', impact: '任务级 · 385 条已隔离', strategy: '其他任务继续执行', owner: '李质量', time: '07-14 09:48', status: '待处理', blocked: false, target: '/tasks?module=数据处理&batch=UPD-20260714' },
-  { id: 'ALT-0713-012', level: '中风险', category: '服务运行', module: '服务调用', node: '专家关系 Tool', domain: '人才', batch: 'CALL-20260713-1058', reason: 'P95 响应耗时超过 2 秒阈值', impact: '调用级 · 18 次慢调用', owner: '李运维', time: '07-13 10:58', status: '处理中', blocked: false, target: '/graph-tools' },
+  { id: 'ALT-0713-012', level: '中风险', category: '服务运行', module: '服务调用', node: '专家关系 Tool', domain: '人才', batch: 'CALL-20260713-1058', reason: 'P95 响应耗时超过 2 秒阈值', impact: '调用级 · 18 次慢调用', owner: '李运维', time: '07-13 10:58', status: '处理中', blocked: false, target: '/tasks?module=服务调用' },
   { id: 'ALT-0713-106', level: '中风险', category: '实体对齐', module: '图谱构建', node: '实体消歧', domain: '专利', batch: 'UPD-20260713', reason: '候选实体置信度低于 0.75', impact: '任务级 · 42 个候选已处理', owner: '王审核', time: '07-13 18:06', status: '已关闭', blocked: false, target: '/tasks?module=图谱构建&batch=UPD-20260713' },
   { id: 'ALT-0712-099', level: '低风险', category: 'Schema 校验', module: '图谱构建', node: '字段映射', domain: '企业', batch: 'KG-INC-20260712-099', reason: '2 个新增字段未匹配当前 Schema', impact: '12 条隔离 · 已恢复', owner: '张建图', time: '07-12 14:08', status: '已关闭', blocked: false, target: '/schema' },
-  { id: 'ALT-0712-088', level: '低风险', category: '服务运行', module: '服务调用', node: '子图分析 Tool', domain: '产业链', batch: 'CALL-20260712-1031', reason: '查询结果达到最大节点数量限制', impact: '3 次截断 · 未阻断', owner: '王算法', time: '07-12 10:31', status: '已关闭', blocked: false, target: '/graph-tools' },
+  { id: 'ALT-0712-088', level: '低风险', category: '服务运行', module: '服务调用', node: '子图分析 Tool', domain: '产业链', batch: 'CALL-20260712-1031', reason: '查询结果达到最大节点数量限制', impact: '3 次截断 · 未阻断', owner: '王算法', time: '07-12 10:31', status: '已关闭', blocked: false, target: '/tasks?module=服务调用' },
   { id: 'ALT-0711-072', level: '中风险', category: '图谱入库', module: '图谱构建', node: '增量写入', domain: '人才', batch: 'KG-FULL-20260711-008', reason: '写入吞吐低于近七日基线 20%', impact: '批次级 · 延迟 26 分钟', owner: '张建图', time: '07-11 23:46', status: '已关闭', blocked: false, target: '/task-detail/construction/KG-FULL-20260711-008?step=persist' },
   { id: 'ALT-0711-061', level: '低风险', category: '数据质量', module: '数据处理', node: '标准表写入', domain: '专利', batch: 'DP-20260711-1800', reason: '任务执行时间接近超时阈值', impact: '1 个批次 · 已恢复', owner: '李质量', time: '07-11 18:22', status: '已关闭', blocked: false, target: '/task-detail/processing/DP-20260711-1800?step=write' },
 ]
@@ -59,6 +70,20 @@ const resetFilters = () => {
   blockingOnly.value = false
 }
 
+const clearTableFilters = () => {
+  keyword.value = ''
+  status.value = '全部状态'
+  if (props.mode === 'alerts') {
+    severity.value = '全部风险'
+    domain.value = '全部业务域'
+    alertCategory.value = '全部异常'
+    blockingOnly.value = false
+  } else {
+    reviewCategory.value = '全部处理分类'
+    batchFilter.value = '全部更新批次'
+  }
+}
+
 const filteredAlertRows = computed(() => alertRows.filter((row) => {
     const text = Object.values(row).join(' ')
     return (!keyword.value || text.includes(keyword.value))
@@ -70,43 +95,47 @@ const filteredAlertRows = computed(() => alertRows.filter((row) => {
       && (!route.query.batch || text.includes(String(route.query.batch)))
 }))
 
-const reviewRows = computed(() => reviewRecords.map((row) => {
-  const batch = getReviewBatch(row.batch)
-  const confidence = getReviewConfidence(row)
-  return {
-    ...row,
-    category: getReviewCategory(row),
-    dataWindow: batch?.dataWindow ?? '-',
-    confidenceValue: confidence.value,
-    confidenceLabel: confidence.label,
-    confidenceSource: confidence.source,
-  }
-}))
+const reviewRows = computed(() => reviewRecords.value)
 
-const reviewCategories = computed(() => [...new Set(reviewRows.value.map((row) => row.category))])
 const pendingReviewCount = computed(() => reviewRows.value.filter((row) => row.status === '待处理').length)
-const historyReviewCount = computed(() => reviewRows.value.filter((row) => row.status === '已完成').length)
+const historyReviewCount = computed(() => reviewRows.value.filter((row) => row.status !== '待处理').length)
+const batchBlockingCount = computed(() => (
+  reviewRows.value.filter((row) => row.status === '待处理' && getImpactScope(row) === '批次级').length
+))
 
 const getReviewCategoryClass = (category: string) => {
-  if (category === '结果低于阈值') return 'is-low-confidence'
-  if (category.includes('抽取')) return 'is-extraction'
+  if (category === '抽取配置') return 'is-extraction'
   if (category.includes('Schema')) return 'is-schema'
-  if (category.includes('标准化') || category.includes('枚举')) return 'is-normalization'
-  if (category === '其他流程异常') return 'is-other'
+  if (category === '清洗标准化') return 'is-normalization'
+  if (category === '实体对齐') return 'is-align'
+  if (category === '质量校验') return 'is-relation'
   return ''
 }
 
-const filteredReviewRows = computed(() => reviewRows.value.filter((row) => {
-  const text = Object.values(row).join(' ')
-  const inTab = reviewTab.value === '历史记录' ? row.status === '已完成' : row.status !== '已完成'
-  return inTab
-    && (!keyword.value || text.includes(keyword.value))
-    && (status.value === '全部状态' || row.status === status.value)
-    && (reviewCategory.value === '全部处理分类' || row.category === reviewCategory.value)
-    && (batchFilter.value === '全部更新批次' || row.batch === batchFilter.value)
-}))
+const filteredReviewRows = computed(() => {
+  const rows = reviewRows.value.filter((row) => {
+    const handleCategory = getHandleCategory(row)
+    const text = [
+      row.id, row.object, row.objectType, row.objectId, row.type, handleCategory,
+      row.sourceTable, row.sourceRecordId, row.batch, row.handler, row.evidence,
+    ].join(' ')
+    const inTab = productionMode ? true : (reviewTab.value === '历史记录' ? row.status !== '待处理' : row.status === '待处理')
+    return inTab
+      && (!keyword.value || text.includes(keyword.value))
+      && (status.value === '全部状态' || row.status === status.value)
+      && (reviewCategory.value === '全部处理分类' || handleCategory === reviewCategory.value)
+      && (batchFilter.value === '全部更新批次' || row.batch === batchFilter.value)
+  })
+  if (reviewTab.value !== '待处理') return rows
+  return [...rows].sort((a, b) => {
+    const sa = getImpactScope(a) === '批次级' ? 0 : 1
+    const sb = getImpactScope(b) === '批次级' ? 0 : 1
+    if (sa !== sb) return sa - sb
+    return b.updatedAt.localeCompare(a.updatedAt)
+  })
+})
 
-const selectReviewTab = (tab: '待处理' | '历史记录') => {
+const selectReviewTab = (tab: string) => {
   reviewTab.value = tab
   status.value = '全部状态'
 }
@@ -114,9 +143,31 @@ const selectReviewTab = (tab: '待处理' | '历史记录') => {
 watch(() => route.query.batch, (value) => { batchFilter.value = String(value || '全部更新批次') })
 watch(() => route.query.keyword, (value) => { keyword.value = String(value || '') })
 watch(() => route.query.tab, (value) => {
-  reviewTab.value = value === 'history' ? '历史记录' : '待处理'
+  reviewTab.value = value === 'history' ? '历史记录' : (productionMode ? '我的待办' : '待处理')
   status.value = '全部状态'
 })
+
+async function loadReviews() {
+  if (props.mode !== 'review') return
+  try {
+    if (productionMode) {
+      const queue = productionTabs[reviewTab.value as keyof typeof productionTabs] || 'mine'
+      const response = await getProductionReviews({ queue, keyword: keyword.value || undefined, page: 1, pageSize: 50 })
+      reviewTotal.value = response.total
+      reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
+        id: row.id, batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待领取', status: row.status === 'RESOLVED' ? '已完成' : row.status === 'CANCELLED' ? '已撤销' : '待处理', updatedAt: row.updatedAt, sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
+      }))
+    } else {
+      const response = await getManualReviews({ pageSize: 200 })
+      reviewTotal.value = response.total
+      reviewRecords.value = response.items
+    }
+    reviewLoadError.value = ''
+  } catch (error) { reviewLoadError.value = error instanceof Error ? error.message : '人工处理队列加载失败' }
+}
+
+watch(reviewTab, loadReviews)
+onMounted(loadReviews)
 </script>
 
 <template>
@@ -133,15 +184,31 @@ watch(() => route.query.tab, (value) => {
 
       <p v-if="actionFeedback" class="ops-feedback">{{ actionFeedback }}</p>
     </template>
+    <template v-else>
+      <section class="ops-metrics is-review-metrics">
+        <article><span>待处理</span><strong>{{ pendingReviewCount }}</strong><em>需人工裁决</em></article>
+        <article><span>批次级阻断</span><strong>{{ batchBlockingCount }}</strong><em>优先处理</em></article>
+        <article><span>历史记录</span><strong>{{ historyReviewCount }}</strong><em>已完成 / 已撤销</em></article>
+      </section>
+    </template>
 
     <section class="ops-panel">
       <div v-if="mode === 'alerts'" class="alert-tabs"><nav><button v-for="item in alertCategories" :key="item" type="button" :class="{ active:alertCategory===item }" @click="alertCategory=item">{{ item }}</button></nav><label><input v-model="blockingOnly" type="checkbox" />仅看已阻断</label></div>
-      <nav v-else class="review-tabs" aria-label="人工处理分类"><button type="button" :class="{ active: reviewTab === '待处理' }" @click="selectReviewTab('待处理')">待处理 <em>{{ pendingReviewCount }}</em></button><button type="button" :class="{ active: reviewTab === '历史记录' }" @click="selectReviewTab('历史记录')">历史记录 <em>{{ historyReviewCount }}</em></button></nav>
+      <nav v-else class="review-tabs" aria-label="人工处理分类"><template v-if="productionMode"><button v-for="(_, label) in productionTabs" :key="label" type="button" :class="{ active: reviewTab === label }" @click="selectReviewTab(label)">{{ label }}</button></template><template v-else><button type="button" :class="{ active: reviewTab === '待处理' }" @click="selectReviewTab('待处理')">待处理 <em>{{ pendingReviewCount }}</em></button><button type="button" :class="{ active: reviewTab === '历史记录' }" @click="selectReviewTab('历史记录')">历史记录 <em>{{ historyReviewCount }}</em></button></template></nav>
+      <div v-if="mode === 'review'" class="review-cat-bar" aria-label="处理分类筛选">
+        <button type="button" :class="{ active: reviewCategory === '全部处理分类' }" @click="reviewCategory = '全部处理分类'">全部</button>
+        <button
+          v-for="item in HANDLE_CATEGORIES"
+          :key="item"
+          type="button"
+          :class="['cat', getReviewCategoryClass(item), { active: reviewCategory === item }]"
+          @click="reviewCategory = item"
+        >{{ item }}</button>
+      </div>
       <div :class="['ops-filter', { 'is-review': mode === 'review' }]">
         <input v-model="keyword" :placeholder="mode === 'review' ? '搜索处理实例 ID、对象或来源记录' : '搜索批次、对象、异常原因'" />
         <select v-if="mode === 'alerts'" v-model="severity"><option>全部风险</option><option>高风险</option><option>中风险</option><option>低风险</option></select>
-        <select v-else v-model="batchFilter"><option>全部更新批次</option><option>UPD-20260714</option><option>UPD-20260713</option></select>
-        <select v-if="mode === 'review'" v-model="reviewCategory"><option>全部处理分类</option><option v-for="item in reviewCategories" :key="item">{{ item }}</option></select>
+        <select v-else v-model="batchFilter"><option>全部更新批次</option><option v-for="item in [...new Set(reviewRows.map(row => row.batch))]" :key="item">{{ item }}</option></select>
         <select v-if="mode === 'alerts'" v-model="domain"><option>全部业务域</option><option>人才域</option><option>论文域</option><option>企业域</option></select>
         <select v-if="mode === 'alerts'" v-model="status"><option>全部状态</option><option>待处理</option><option>处理中</option><option>已关闭</option></select>
         <button type="button" @click="resetFilters">清空筛选</button>
@@ -149,16 +216,59 @@ watch(() => route.query.tab, (value) => {
 
       <div v-if="mode === 'alerts'" class="ops-table-scroll"><table>
         <thead><tr><th>异常编号 / 风险</th><th>异常类型</th><th>模块 / 节点</th><th>业务域</th><th>任务批次</th><th>异常说明</th><th>影响范围 / 阻断策略</th><th>责任人</th><th>发生时间</th><th>状态</th><th>操作</th></tr></thead>
-        <tbody><tr v-for="row in filteredAlertRows" :key="row.id"><td><strong>{{ row.id }}</strong><small :class="`level-${row.level}`">{{ row.level }}</small></td><td><b>{{ row.category }}</b></td><td><b>{{ row.module }}</b><small>{{ row.node }}</small></td><td>{{ row.domain }}</td><td><code>{{ row.batch }}</code></td><td class="alert-reason">{{ row.reason }}</td><td class="alert-impact"><strong>{{ row.impact }}</strong><small>{{ row.strategy || (row.blocked ? '阻断当前节点及下游' : '不阻断流程，按告警策略处理') }}</small></td><td>{{ row.owner }}</td><td>{{ row.time }}</td><td><span :class="['alert-status', `is-${row.status}`]">{{ row.status }}</span></td><td><div class="alert-actions"><RouterLink :to="row.target">查看诊断</RouterLink><RouterLink v-if="row.status !== '已关闭' && row.module !== '服务调用'" :to="`/manual-review?batch=${row.batch}`">人工审核</RouterLink></div></td></tr></tbody>
+        <tbody><tr v-for="row in filteredAlertRows" :key="row.id"><td><strong>{{ row.id }}</strong><small :class="`level-${row.level}`">{{ row.level }}</small></td><td><b>{{ row.category }}</b></td><td><b>{{ row.module }}</b><small>{{ row.node }}</small></td><td>{{ row.domain }}</td><td><code>{{ row.batch }}</code></td><td class="alert-reason">{{ row.reason }}</td><td class="alert-impact"><strong>{{ row.impact }}</strong><small>{{ row.strategy || (row.blocked ? '阻断当前节点及下游' : '不阻断流程，按告警策略处理') }}</small></td><td>{{ row.owner }}</td><td>{{ row.time }}</td><td><span :class="['alert-status', `is-${row.status}`]">{{ row.status }}</span></td><td><div class="alert-actions"><RouterLink :to="row.target">查看诊断</RouterLink><RouterLink v-if="row.status !== '已关闭' && row.module !== '服务调用'" :to="`/manual-review?batch=${row.batch}`">人工审核</RouterLink></div></td></tr><tr v-if="!filteredAlertRows.length"><td colspan="11" class="review-empty">暂无符合条件的异常 <button type="button" class="empty-row__clear" @click="clearTableFilters">清空筛选</button></td></tr></tbody>
       </table></div>
 
       <div v-else class="ops-review-table-scroll"><table>
-        <thead><tr><th>处理实例 ID</th><th>待处理对象</th><th>处理类型</th><th>来源记录</th><th>所属更新批次</th><th>数据更新时间范围</th><th>结果置信度</th><th>处理人</th><th>状态</th><th>{{ reviewTab === '历史记录' ? '完成时间' : '提交时间' }}</th><th>操作</th></tr></thead>
-        <tbody><tr v-for="row in filteredReviewRows" :key="row.id"><td><code>{{ row.id }}</code></td><td><strong>{{ row.object }}</strong><small>{{ row.objectType }} · {{ row.objectId }}</small></td><td class="review-type-cell"><span :class="getReviewCategoryClass(row.category)">{{ row.category }}</span></td><td>{{ row.sourceTable }}<small>{{ row.sourceRecordId }}</small></td><td><code>{{ row.batch }}</code></td><td>{{ row.dataWindow }}</td><td class="review-confidence-cell"><b>{{ row.confidenceValue }}</b><em v-if="row.confidenceLabel">{{ row.confidenceLabel }}</em></td><td>{{ row.handler }}</td><td><span :class="['review-status', `is-${row.status}`]">{{ row.status }}</span></td><td>{{ row.completedAt || row.updatedAt }}</td><td><RouterLink class="link" :to="`/manual-review/task/${row.id}`">{{ row.status === '已完成' ? '查看记录' : '进入处理' }} →</RouterLink></td></tr><tr v-if="!filteredReviewRows.length"><td class="review-empty" colspan="11">暂无符合条件的{{ reviewTab }}</td></tr></tbody>
+        <thead>
+          <tr>
+            <th>处理实例 ID</th>
+            <th>待处理对象</th>
+            <th>阻断节点</th>
+            <th>来源记录</th>
+            <th>更新批次</th>
+            <th>处理人</th>
+            <th>状态</th>
+            <th>{{ reviewTab === '历史记录' ? '完成时间' : '提交时间' }}</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in filteredReviewRows" :key="row.id">
+            <td class="review-id-cell">
+              <RouterLink class="link" :to="`/manual-review/task/${row.id}`">{{ row.id }}</RouterLink>
+            </td>
+            <td>
+              <strong>{{ row.object }}</strong>
+              <small>{{ row.objectType }} · {{ row.type }}</small>
+            </td>
+            <td>
+              <b>{{ resolvePipelineStep(row).name }}</b>
+              <small>{{ resolvePipelineStep(row).phase }} · {{ row.node }}</small>
+              <small :class="getImpactScope(row) === '批次级' ? 'scope-batch' : 'scope-task'">{{ getImpactScope(row) }}{{ getImpactScope(row) === '批次级' ? ' · 已阻断' : '' }}</small>
+            </td>
+            <td class="review-source-cell">
+              <strong>{{ row.sourceTable || '—' }}</strong>
+              <small><code>{{ row.sourceRecordId || '—' }}</code></small>
+            </td>
+            <td><code>{{ row.batch }}</code></td>
+            <td>{{ row.handler }}</td>
+            <td><span :class="['review-status', `is-${row.status}`]">{{ row.status }}</span></td>
+            <td>{{ row.completedAt || row.updatedAt }}</td>
+            <td>
+              <RouterLink class="link" :to="`/manual-review/task/${row.id}`">
+                {{ row.status === '待处理' ? '进入处理' : '查看记录' }} →
+              </RouterLink>
+            </td>
+          </tr>
+          <tr v-if="!filteredReviewRows.length">
+            <td class="review-empty" colspan="9">{{ reviewLoadError || `暂无符合条件的${reviewTab}` }}<button v-if="!reviewLoadError" type="button" class="empty-row__clear" @click="clearTableFilters">清空筛选</button></td>
+          </tr>
+        </tbody>
       </table></div>
 
       <footer v-if="mode === 'alerts'" class="alert-pagination"><span>每页显示　<select><option>20</option><option>50</option><option>100</option></select>　共 158 条异常</span><nav><button type="button" disabled>上一页</button><button class="active" type="button">1</button><button type="button">2</button><button type="button">3</button><button type="button">…</button><button type="button">8</button><button type="button">下一页</button></nav></footer>
-      <footer v-else class="review-pagination"><span>共 {{ filteredReviewRows.length }} 条</span><nav><button type="button" disabled>上一页</button><button class="active" type="button">1</button><button type="button">下一页</button></nav></footer>
+      <footer v-else class="review-pagination"><span>共 {{ productionMode ? reviewTotal : filteredReviewRows.length }} 条</span><nav><button type="button" disabled>上一页</button><button class="active" type="button">1</button><button type="button">下一页</button></nav></footer>
     </section>
 
   </div>
@@ -176,5 +286,31 @@ watch(() => route.query.tab, (value) => {
 .ops-review-table-scroll table{min-width:1900px}.review-risk-explain{display:grid;flex:0 0 auto;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}.review-risk-explain>div{display:grid;gap:3px;padding:11px 14px;border:1px solid #b9d2f4;border-radius:7px;background:#f7fbff}.review-risk-explain strong{color:#344861;font-size:11px}.review-risk-explain span{color:#6d7c93;font-size:9px;line-height:16px}.review-confidence-cell{min-width:190px;white-space:normal}.review-confidence-cell>b{display:inline-block;margin-right:7px;font-size:13px}.review-confidence-cell>small{display:inline;color:#718098}.review-confidence-cell>span{display:block;margin-top:4px;color:#78869b;font-size:9px;line-height:15px}@media(max-width:900px){.review-risk-explain{grid-template-columns:1fr}}
 .alert-impact{min-width:260px;max-width:340px;white-space:normal}.alert-impact strong,.alert-impact small{display:block;line-height:18px}.alert-impact small{color:#718099}.review-risk-explain{grid-template-columns:repeat(2,minmax(0,1fr))}.review-risk-explain>div:first-child{border-color:#f5b8b3;background:#fff5f4}.review-risk-explain>div:first-child strong{color:#d92d20}.review-risk-explain>div:nth-child(2){border-color:#f3d08a;background:#fffaf0}.review-risk-explain>div:nth-child(2) strong{color:#b54708}.review-type{min-width:150px}.review-confidence-cell{min-width:130px}.review-confidence-cell>em{display:block;width:max-content;margin-top:5px;padding:2px 7px;border-radius:9px;background:#fff3d8;color:#b54708;font-size:9px;font-style:normal}
 .level-高风险{width:max-content;padding:2px 7px;border-radius:10px;background:#fee4e2;color:#d92d20}.level-中风险{width:max-content;padding:2px 7px;border-radius:10px;background:#fff3d8;color:#b54708}.level-低风险{width:max-content;padding:2px 7px;border-radius:10px;background:#eaf2ff;color:#175cd3}
-.ops-review-table-scroll table{min-width:1900px}
+.ops-review-table-scroll table{min-width:1280px}
+.review-id-cell{min-width:150px;white-space:nowrap}
+.review-id-cell .link{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.review-source-cell{min-width:160px}
+.review-source-cell strong{display:block;font-size:12px;font-weight:600}
+.review-source-cell small{margin-top:4px}
+.ops-metrics.is-review-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}
+.ops-filter.is-review{grid-template-columns:minmax(240px,1fr) 170px auto}
+.review-cat-bar{display:flex;flex-wrap:wrap;gap:8px;padding:12px 14px 0;background:#fff}
+.review-cat-bar button{height:30px;padding:0 12px;border:1px solid #d3deee;border-radius:999px;background:#fff;color:#52647f;font-size:12px;cursor:pointer}
+.review-cat-bar button.active{border-color:#165dff;background:#eef4ff;color:#165dff;font-weight:600}
+.review-cat-bar button.cat.is-extraction.active{border-color:#f04438;background:#fef3f2;color:#b42318}
+.review-cat-bar button.cat.is-schema.active{border-color:#6172f3;background:#edf0ff;color:#444ce7}
+.review-cat-bar button.cat.is-normalization.active{border-color:#12b76a;background:#ecfdf3;color:#067647}
+.review-cat-bar button.cat.is-align.active{border-color:#7a5af8;background:#f0ebff;color:#6938ef}
+.review-cat-bar button.cat.is-relation.active{border-color:#f79009;background:#fff3d8;color:#b54708}
+.review-type-cell>span.is-align{background:#f0ebff;color:#6938ef}
+.review-type-cell>span.is-relation{background:#fff3d8;color:#b54708}
+.review-subtype{display:block!important;margin-top:5px!important;color:#7b89a1;font-size:10px;white-space:nowrap}
+.review-question-cell{min-width:220px;max-width:320px;white-space:normal}
+.review-question-cell strong{display:block;font-size:12px;font-weight:600;line-height:18px}
+.review-question-cell small{margin-top:4px;color:#165dff}
+.scope-batch{color:#b42318!important}
+.scope-task{color:#175cd3!important}
+.review-status.is-已撤销{background:#f2f4f7;color:#475467}
+.empty-row__clear{margin-left:8px;padding:0;border:0;background:transparent;color:#165dff;font-size:12px;cursor:pointer;text-decoration:underline}
+.empty-row__clear:hover{color:#0e4ed8}
 </style>

@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useFormValidation, type Rules } from '../composables/use-form-validation'
+import FormField from './form-field.vue'
 
 export type ConstructionActionKey = 'entity' | 'relation' | 'property' | 'batch-audit' | 'rule-import'
 
@@ -71,15 +73,57 @@ const isAllAuditChecked = computed({
   },
 })
 
+const activeForm = computed<Record<string, unknown>>(() => {
+  switch (props.action) {
+    case 'entity': return entityForm.value
+    case 'relation': return relationForm.value
+    case 'property': return propertyForm.value
+    case 'rule-import': return ruleImportForm.value
+    default: return {}
+  }
+})
+
+const rules = computed<Rules>(() => {
+  switch (props.action) {
+    case 'entity':
+      return { name: { required: '请填写实体名称' } } as Rules
+    case 'relation':
+      return {
+        source: { required: '请填写源实体' },
+        target: { required: '请填写目标实体' },
+        confidence: {
+          required: '请填写置信度',
+          pattern: { regex: /^(0|1|0?\.\d+)$/, message: '置信度必须是 0-1 之间的数字' },
+        },
+      } as Rules
+    case 'property':
+      return {
+        object: { required: '请填写对象' },
+        name: { required: '请填写属性名' },
+        value: { required: '请填写属性值' },
+      } as Rules
+    case 'rule-import':
+      return { fileName: { required: '请选择规则文件' } } as Rules
+    default:
+      return {} as Rules
+  }
+})
+
+const { visibleError, validate, touch, clearErrors } = useFormValidation(activeForm, rules)
+
 watch(
   () => props.open,
   (isOpen) => {
-    if (!isOpen) isSubmitting.value = false
+    if (!isOpen) {
+      isSubmitting.value = false
+      clearErrors()
+    }
   },
 )
 
 async function handleSubmit() {
   if (!config.value) return
+  if (!validate()) return
   isSubmitting.value = true
   await new Promise((resolve) => window.setTimeout(resolve, 420))
   isSubmitting.value = false
@@ -89,6 +133,7 @@ async function handleSubmit() {
 function handleFileChange(event: Event) {
   const input = event.target as HTMLInputElement
   ruleImportForm.value.fileName = input.files?.[0]?.name ?? ''
+  touch('fileName')
 }
 </script>
 
@@ -104,69 +149,58 @@ function handleFileChange(event: Event) {
         <form class="construction-action-form" @submit.prevent="handleSubmit">
           <div class="construction-action-form__body">
             <template v-if="action === 'entity'">
-              <label>
-                <span>实体名称</span>
-                <input v-model="entityForm.name" required />
-              </label>
-              <label>
-                <span>实体类型</span>
+              <FormField label="实体名称" required :error="visibleError('name')">
+                <input v-model="entityForm.name" @blur="touch('name')" />
+              </FormField>
+              <FormField label="实体类型">
                 <select v-model="entityForm.type">
                   <option>科技专家</option>
                   <option>科技企业</option>
                   <option>机构团队</option>
                   <option>论文成果</option>
                 </select>
-              </label>
-              <label>
-                <span>别名</span>
+              </FormField>
+              <FormField label="别名">
                 <input v-model="entityForm.alias" placeholder="可选" />
-              </label>
-              <label>
-                <span>来源批次</span>
+              </FormField>
+              <FormField label="来源批次">
                 <select v-model="entityForm.batch">
                   <option>KG-INC-20260706-01</option>
                   <option>KG-INC-20260706-02</option>
                 </select>
-              </label>
+              </FormField>
             </template>
 
             <template v-else-if="action === 'relation'">
-              <label>
-                <span>源实体</span>
-                <input v-model="relationForm.source" required />
-              </label>
-              <label>
-                <span>目标实体</span>
-                <input v-model="relationForm.target" required />
-              </label>
-              <label>
-                <span>关系类型</span>
+              <FormField label="源实体" required :error="visibleError('source')">
+                <input v-model="relationForm.source" @blur="touch('source')" />
+              </FormField>
+              <FormField label="目标实体" required :error="visibleError('target')">
+                <input v-model="relationForm.target" @blur="touch('target')" />
+              </FormField>
+              <FormField label="关系类型">
                 <select v-model="relationForm.relation">
                   <option>论文合作</option>
                   <option>同事关系</option>
                   <option>校友关系</option>
                   <option>企业关联</option>
                 </select>
-              </label>
-              <label>
-                <span>置信度</span>
-                <input v-model="relationForm.confidence" />
-              </label>
+              </FormField>
+              <FormField label="置信度" required :error="visibleError('confidence')" hint="0-1 之间的数字，例如 0.90">
+                <input v-model="relationForm.confidence" @blur="touch('confidence')" />
+              </FormField>
             </template>
 
             <template v-else-if="action === 'property'">
-              <label>
-                <span>对象</span>
-                <input v-model="propertyForm.object" required />
-              </label>
-              <label>
-                <span>属性名</span>
-                <input v-model="propertyForm.name" required />
-              </label>
-              <label>
-                <span>属性值</span>
-                <input v-model="propertyForm.value" required />
-              </label>
+              <FormField label="对象" required :error="visibleError('object')">
+                <input v-model="propertyForm.object" @blur="touch('object')" />
+              </FormField>
+              <FormField label="属性名" required :error="visibleError('name')">
+                <input v-model="propertyForm.name" @blur="touch('name')" />
+              </FormField>
+              <FormField label="属性值" required :error="visibleError('value')">
+                <input v-model="propertyForm.value" @blur="touch('value')" />
+              </FormField>
             </template>
 
             <template v-else-if="action === 'batch-audit'">
@@ -191,25 +225,22 @@ function handleFileChange(event: Event) {
             </template>
 
             <template v-else>
-              <label>
-                <span>规则文件</span>
+              <FormField label="规则文件" required :error="visibleError('fileName')">
                 <input type="file" accept=".json,.yaml,.yml,.csv" @change="handleFileChange" />
-              </label>
-              <label>
-                <span>规则类型</span>
+              </FormField>
+              <FormField label="规则类型">
                 <select v-model="ruleImportForm.ruleType">
                   <option>实体消歧</option>
                   <option>关系抽取</option>
                   <option>属性映射</option>
                 </select>
-              </label>
-              <label>
-                <span>导入方式</span>
+              </FormField>
+              <FormField label="导入方式">
                 <select v-model="ruleImportForm.mode">
                   <option>增量导入</option>
                   <option>全量覆盖</option>
                 </select>
-              </label>
+              </FormField>
               <p v-if="ruleImportForm.fileName" class="construction-action-form__file">{{ ruleImportForm.fileName }}</p>
             </template>
           </div>

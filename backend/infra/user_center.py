@@ -42,7 +42,7 @@ class UserCenterClient:
         separator = "&" if "?" in self.settings.sso_login_url else "?"
         return f"{self.settings.sso_login_url}{separator}{query}"
 
-    async def exchange_code(self, code: str) -> dict[str, Any]:
+    async def exchange_code(self, code: str, *, state: str) -> dict[str, Any]:
         return await self._request(
             "POST",
             "/token",
@@ -50,6 +50,7 @@ class UserCenterClient:
                 "grant_type": "authorization_code",
                 "code": code,
                 "redirect_uri": self.settings.redirect_uri,
+                "state": state,
             },
         )
 

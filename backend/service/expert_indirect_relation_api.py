@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import os
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
@@ -70,8 +71,16 @@ class GraphQueryApiError(RuntimeError):
 
 
 class GraphQueryApiClient:
-    def __init__(self, base_url: str, *, timeout: float = 60.0) -> None:
-        self._client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout)
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        timeout: float = 60.0,
+        auth_headers: Mapping[str, str] | None = None,
+    ) -> None:
+        self._client = httpx.AsyncClient(
+            base_url=base_url.rstrip("/"), timeout=timeout, headers=auth_headers
+        )
 
     async def __aenter__(self) -> GraphQueryApiClient:
         return self
@@ -118,9 +127,10 @@ class ExpertIndirectRelationApiService(KGModuleScaffoldService):
         body: ExpertIndirectRelationRequest,
         *,
         api_base_url: str,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         core_id = _person_vid(body.core_node_id)
-        async with GraphQueryApiClient(api_base_url) as graph_api:
+        async with GraphQueryApiClient(api_base_url, auth_headers=auth_headers) as graph_api:
             core_node = await graph_api.get_node(core_id)
             subgraph = await graph_api.get_subgraph(core_id, depth=body.path_depth)
         result = _build_result(core_node, subgraph, body)

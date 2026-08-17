@@ -1,8 +1,9 @@
 import inspect
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from application.expert_paper_cooperation import ExpertPaperCooperationApplication
+from biz.dependencies.internal_api import get_internal_api_auth_headers
 from biz.schema.expert_paper_cooperation import (
     ExpertPaperCooperationDemoRequest,
     ExpertPaperCooperationStructuredResultOnlyResponse,
@@ -22,9 +23,13 @@ async def describe_expert_paper_cooperation() -> dict[str, object]:
 )
 async def analyze_expert_paper_cooperation_structured_result(
     body: ExpertPaperCooperationDemoRequest,
+    request: Request,
 ) -> ExpertPaperCooperationStructuredResultOnlyResponse:
     try:
-        result = application.build_structured_result_only(body)
+        result = application.build_structured_result_only(
+            body,
+            auth_headers=get_internal_api_auth_headers(request),
+        )
         if inspect.isawaitable(result):
             result = await result
         return ExpertPaperCooperationStructuredResultOnlyResponse(**result)

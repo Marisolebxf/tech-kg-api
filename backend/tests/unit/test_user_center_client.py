@@ -52,7 +52,7 @@ async def test_exchange_code_uses_basic_auth_and_form_body() -> None:
         )
 
     client = UserCenterClient(_settings(), transport=httpx.MockTransport(handler))
-    token = await client.exchange_code("authorization-code")
+    token = await client.exchange_code("authorization-code", state="csrf-state")
 
     form = parse_qs(captured["body"])
     assert captured["authorization"].startswith("Basic ")
@@ -60,6 +60,7 @@ async def test_exchange_code_uses_basic_auth_and_form_body() -> None:
         "grant_type": ["authorization_code"],
         "code": ["authorization-code"],
         "redirect_uri": ["https://example.test/api/v1/auth/callback"],
+        "state": ["csrf-state"],
     }
     assert token["access_token"] == "access-1"
 

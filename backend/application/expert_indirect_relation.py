@@ -1,4 +1,5 @@
 import os
+from collections.abc import Mapping
 from typing import Any
 
 from biz.schema.expert_indirect_relation import ExpertIndirectRelationRequest
@@ -19,8 +20,11 @@ class ExpertIndirectRelationApplication:
     async def build_structured_result_only(
         self,
         body: ExpertIndirectRelationRequest,
+        *,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         return await self._service.build_structured_result_only(
             body,
             api_base_url=self._api_base_url,
+            auth_headers=auth_headers,
         )

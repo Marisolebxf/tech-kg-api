@@ -19,7 +19,7 @@ class _FakeUserCenter:
     def build_login_url(self, state: str) -> str:
         return f"https://sso.test/uc/sso/login?state={state}"
 
-    async def exchange_code(self, code: str) -> dict[str, Any]:
+    async def exchange_code(self, code: str, *, state: str | None = None) -> dict[str, Any]:
         return {
             "access_token": f"access-{code}",
             "refresh_token": "refresh-token",

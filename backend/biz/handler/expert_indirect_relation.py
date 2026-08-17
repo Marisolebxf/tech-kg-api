@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from application.expert_indirect_relation import ExpertIndirectRelationApplication
+from biz.dependencies.internal_api import get_internal_api_auth_headers
 from biz.schema.expert_indirect_relation import (
     ExpertIndirectRelationRequest,
     ExpertIndirectRelationResponse,
@@ -21,9 +22,13 @@ async def describe_expert_indirect_relation() -> dict[str, object]:
 )
 async def analyze_expert_indirect_relation(
     body: ExpertIndirectRelationRequest,
+    request: Request,
 ) -> ExpertIndirectRelationResponse:
     try:
-        result = await application.build_structured_result_only(body)
+        result = await application.build_structured_result_only(
+            body,
+            auth_headers=get_internal_api_auth_headers(request),
+        )
         return ExpertIndirectRelationResponse(**result)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

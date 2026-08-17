@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
@@ -22,8 +23,16 @@ class GraphSearchApiError(RuntimeError):
 class GraphSearchApiClient:
     """论文合作业务使用的公开 FastAPI 查图 API 客户端。"""
 
-    def __init__(self, base_url: str, *, timeout: float = 60.0) -> None:
-        self._client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout)
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        timeout: float = 60.0,
+        auth_headers: Mapping[str, str] | None = None,
+    ) -> None:
+        self._client = httpx.AsyncClient(
+            base_url=base_url.rstrip("/"), timeout=timeout, headers=auth_headers
+        )
 
     async def __aenter__(self) -> GraphSearchApiClient:
         return self
@@ -95,8 +104,9 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
         body: ExpertPaperCooperationDemoRequest,
         *,
         api_base_url: str,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
-        async with GraphSearchApiClient(api_base_url) as graph_api:
+        async with GraphSearchApiClient(api_base_url, auth_headers=auth_headers) as graph_api:
             result = await _build_structured_result(graph_api, body)
         return {"structuredResult": result}
 

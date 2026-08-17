@@ -1,4 +1,5 @@
 import os
+from collections.abc import Mapping
 from typing import Any
 
 from biz.schema.expert_paper_cooperation import ExpertPaperCooperationDemoRequest
@@ -17,9 +18,13 @@ class ExpertPaperCooperationApplication:
         return self._service.describe()
 
     async def build_structured_result_only(
-        self, body: ExpertPaperCooperationDemoRequest
+        self,
+        body: ExpertPaperCooperationDemoRequest,
+        *,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         return await self._service.build_structured_result_only(
             body,
             api_base_url=self._api_base_url,
+            auth_headers=auth_headers,
         )

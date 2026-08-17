@@ -1,4 +1,15 @@
-export type GraphNodeType = 'main' | 'expert' | 'org' | 'company' | 'paper' | 'topic' | 'project' | 'event'
+export type GraphNodeType =
+  'main'
+  | 'expert'
+  | 'org'
+  | 'company'
+  | 'paper'
+  | 'topic'
+  | 'project'
+  | 'event'
+  | 'chain'
+  | 'field'
+  | 'source'
 
 export interface GraphNodeData {
   id: string
@@ -8,10 +19,22 @@ export interface GraphNodeData {
   y: number
   radius?: number
   entityType: string
-  confidence: number
+  confidence?: number
   relations: string
   evidence: string[]
   level?: number
+
+  /**
+   * 实体溯源字段，来自图节点 properties。
+   *
+   * 缺失时回退 nodeSourceMap 静态映射，
+   * 保证溯源展示不会出现空白。
+   */
+  sourceTable?: string
+  sourceRecordId?: string
+  sourceSystem?: string
+  ingestBatch?: string
+  ingestTime?: string
 }
 
 export interface GraphEdgeData {
@@ -20,6 +43,43 @@ export interface GraphEdgeData {
   to: string
   label: string
   category: string
+
+  /**
+   * 真实图谱查询结果计算出的关系置信度。
+   *
+   * 旧的静态演示数据和部分业务服务关系
+   * 不一定具有关系置信度，因此设置为可选。
+   */
+  confidence?: number
+
+  /**
+   * 关系置信度的规则评估依据。
+   */
+  confidenceReasons?: string[]
+
+  /**
+   * 关系溯源字段，来自图边 properties。
+   *
+   * 缺失时回退 edgeSourceMap 静态映射。
+   */
+  sourceTable?: string
+  sourceRecordId?: string
+  ingestBatch?: string
+  ingestTime?: string
+
+  /**
+   * 真实匹配证据与匹配方法（部分边类型具备）。
+   */
+  matchEvidence?: string
+  matchMethod?: string
+
+  /**
+   * 是否为前端推理生成的边（同事/校友）。
+   *
+   * 这类边没有对应的真实图边，
+   * 因此没有入图任务，构建任务 ID 显示为 "-"。
+   */
+  inferred?: boolean
 }
 
 export interface GraphPreset {
@@ -74,6 +134,9 @@ const nodeSourceMap: Record<GraphNodeType, { businessTable: string; technicalTab
   topic: { businessTable: '科技主题标签表', technicalTable: 'research_topic', keyField: 'topic_id', summary: '标准主题名称、关键词和所属技术领域' },
   project: { businessTable: '科研项目表', technicalTable: 'research_project', keyField: 'project_id', summary: '项目名称、承担单位、成员和执行时间' },
   event: { businessTable: '产业事件表', technicalTable: 'industry_event', keyField: 'event_id', summary: '事件名称、参与主体、时间和事件类型' },
+  chain: { businessTable: '以实体来源字段为准', technicalTable: '-', keyField: 'node_id', summary: '产业链或产业节点实体，实际来源以节点 source_table 属性为准' },
+  field: { businessTable: '以实体来源字段为准', technicalTable: '-', keyField: 'node_id', summary: '产品或关键词实体，实际来源以节点 source_table 属性为准' },
+  source: { businessTable: '以实体来源字段为准', technicalTable: '-', keyField: 'node_id', summary: '数据来源实体，实际来源以节点属性为准' },
 }
 
 const nodeSourceValue = (node: GraphNodeData) => node.id === 'core'
@@ -93,39 +156,101 @@ const edgeSourceMap: Record<string, { businessTable: string; technicalTable: str
 
 export function getNodeProvenance(node: GraphNodeData): GraphProvenance {
   const source = nodeSourceMap[node.nodeType]
+
+  // 真实溯源字段优先，缺失时回退静态映射。
+  const technicalTable =
+    node.sourceTable || source.technicalTable
+
+  const recordId =
+    node.sourceRecordId || `${node.id.toUpperCase()}-SRC`
+
+  const fieldIdentifier = node.sourceRecordId
+    ? `source_record_id = ${node.sourceRecordId}`
+    : nodeFieldIdentifier(node)
+
+  const ingestBatch =
+    node.ingestBatch || `PI-20260714-NODE-${node.id.toUpperCase()}`
+
+  const ingestTime =
+    node.ingestTime || '2026-07-13 02:12:36'
+
+  const sourceDatabase =
+    node.sourceSystem || '科技要素数据库'
+
   return {
-    sourceDatabase: '科技要素数据库',
+    sourceDatabase,
     evidences: [{
       title: '原始业务记录',
       businessTable: source.businessTable,
-      technicalTable: source.technicalTable,
-      recordId: `${node.id.toUpperCase()}-SRC`,
-      fieldIdentifier: nodeFieldIdentifier(node),
+      technicalTable,
+      recordId,
+      fieldIdentifier,
       summary: source.summary,
     }],
     task: {
       name: `${node.entityType}标准化与实体融合`,
-      instanceId: node.id === 'core' ? 'PI-20260714-0001' : node.id === 'org-1' ? 'PI-20260714-0002' : `PI-20260714-NODE-${node.id.toUpperCase()}`,
-      executedAt: '2026-07-13 02:12:36',
+      instanceId: ingestBatch,
+      executedAt: ingestTime,
       status: '成功',
       mode: '清洗规则 + 实体对齐',
-      batch: 'UPD-20260714',
+      batch: ingestBatch,
     },
     result: {
       ruleName: `${node.entityType}实体融合规则`,
       ruleVersion: 'ENTITY-MERGE-1.6',
       graphVersion: 'v1.8',
-      generatedAt: '2026-07-13 02:14:08',
+      generatedAt: ingestTime,
       status: '已入图',
     },
   }
 }
 
+/**
+ * 构造关系两端实体的来源信息。
+ *
+ * 两端实体都是真实图节点，
+ * 因此源数据表/字段标识 ID 优先取节点真实溯源字段。
+ */
+function endpointFromNode(
+  node: GraphNodeData,
+  role: '源实体' | '目标实体',
+) {
+  const source = nodeSourceMap[node.nodeType]
+  return {
+    role,
+    name: node.label,
+    entityType: node.entityType,
+    businessTable: source.businessTable,
+    technicalTable: node.sourceTable || source.technicalTable,
+    recordId: node.sourceRecordId || `${node.id.toUpperCase()}-SRC`,
+    fieldIdentifier: node.sourceRecordId
+      ? `source_record_id = ${node.sourceRecordId}`
+      : nodeFieldIdentifier(node),
+  }
+}
+
 export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?: GraphNodeData): GraphProvenance {
   const relationName = from && to ? `${from.label} → ${to.label}` : edge.id
-  const isInferred = edge.category === '间接关系'
+
+  // 前端推理生成的边（同事/校友），没有对应的真实图边。
+  const isFabricated = edge.inferred === true
+
+  // 间接关系是真实两跳边，仅分类重标签，仍保留真实入图任务。
+  const isPathInferred = edge.category === '间接关系'
+
   const source = edgeSourceMap[edge.category] ?? edgeSourceMap.直接关系
-  const evidences: GraphProvenanceEvidence[] = isInferred
+
+  // 边自身来源：真实字段优先，缺失回退静态映射。
+  const technicalTable =
+    edge.sourceTable || source.technicalTable
+
+  const recordId =
+    edge.sourceRecordId || `${edge.id.toUpperCase()}-SRC`
+
+  const evidenceSummary =
+    edge.matchEvidence || source.summary
+
+  const evidences: GraphProvenanceEvidence[] = isPathInferred
     ? [
         {
           title: `${from?.label ?? '源实体'}关联记录`,
@@ -155,44 +280,52 @@ export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?
     : [{
         title: '原始业务记录',
         businessTable: source.businessTable,
-        technicalTable: source.technicalTable,
-        recordId: `${edge.id.toUpperCase()}-SRC`,
+        technicalTable,
+        recordId,
         fieldIdentifier: `relation_id = ${edge.id}`,
-        summary: source.summary,
+        summary: evidenceSummary,
       }]
+
+  // 构建任务：推理边无入图任务，显示 "-"；其余取真实批次。
+  const taskInstanceId = isFabricated
+    ? '-'
+    : (edge.ingestBatch || `PI-20260714-EDGE-${edge.id.toUpperCase()}`)
+
+  const taskExecutedAt = isFabricated
+    ? '-'
+    : (edge.ingestTime || '2026-07-13 02:12:36')
+
+  const taskMode = isFabricated
+    ? '前端推理（无入图任务）'
+    : (isPathInferred
+      ? '两跳路径 + 共现规则'
+      : (edge.matchMethod || '业务规则识别'))
+
+  const taskStatus = isFabricated
+    ? '前端推理'
+    : '成功'
+
   return {
     sourceDatabase: '科技要素数据库',
     evidences,
     relationEndpoints: from && to ? [
-      {
-        role: '源实体', name: from.label, entityType: from.entityType,
-        businessTable: nodeSourceMap[from.nodeType].businessTable,
-        technicalTable: nodeSourceMap[from.nodeType].technicalTable,
-        recordId: `${from.id.toUpperCase()}-SRC`,
-        fieldIdentifier: nodeFieldIdentifier(from),
-      },
-      {
-        role: '目标实体', name: to.label, entityType: to.entityType,
-        businessTable: nodeSourceMap[to.nodeType].businessTable,
-        technicalTable: nodeSourceMap[to.nodeType].technicalTable,
-        recordId: `${to.id.toUpperCase()}-SRC`,
-        fieldIdentifier: nodeFieldIdentifier(to),
-      },
+      endpointFromNode(from, '源实体'),
+      endpointFromNode(to, '目标实体'),
     ] : undefined,
     task: {
-      name: isInferred ? '图谱关系推理' : `${edge.label}关系识别`,
-      instanceId: edge.id === 'e40' ? 'PI-20260714-0003' : `PI-20260714-EDGE-${edge.id.toUpperCase()}`,
-      executedAt: '2026-07-13 02:12:36',
-      status: '成功',
-      mode: isInferred ? '两跳路径 + 共现规则' : '业务规则识别',
-      batch: 'UPD-20260714',
+      name: isPathInferred ? '图谱关系推理' : `${edge.label}关系识别`,
+      instanceId: taskInstanceId,
+      executedAt: taskExecutedAt,
+      status: taskStatus,
+      mode: taskMode,
+      batch: taskInstanceId,
     },
     result: {
-      ruleName: isInferred ? '两跳路径与主题共现规则' : `${edge.label}关系映射规则`,
-      ruleVersion: isInferred ? 'REL-INFER-1.3' : 'REL-MAP-2.1',
+      ruleName: isPathInferred ? '两跳路径与主题共现规则' : `${edge.label}关系映射规则`,
+      ruleVersion: isPathInferred ? 'REL-INFER-1.3' : 'REL-MAP-2.1',
       graphVersion: 'v1.8',
-      generatedAt: '2026-07-13 02:14:08',
-      status: '已入图',
+      generatedAt: taskExecutedAt,
+      status: isFabricated ? '前端推理' : '已入图',
     },
   }
 }
@@ -725,15 +858,42 @@ export function getServiceGraphPreset(serviceKey: string): GraphPreset {
   return serviceGraphPresets[serviceKey] ?? defaultServiceGraph
 }
 
-export const relationCategoryMap: Record<string, string[]> = {
-  直接关系: ['直接关系', '论文合作', '同事', '校友', '企业关联'],
-  间接关系: ['间接关系', '产业事件'],
-  同事: ['同事'],
-  校友: ['校友'],
-  论文合作: ['论文合作'],
-  企业关联: ['企业关联', '企业角色'],
-  产业事件: ['产业事件'],
-}
+export const relationCategoryMap:
+  Record<string, string[]> = {
+    直接关系: [
+      '直接关系',
+      '论文合作',
+      '同事关系',
+      '校友关系',
+      '企业关联',
+    ],
+
+    间接关系: [
+      '间接关系',
+      '产业事件',
+    ],
+
+    同事关系: [
+      '同事关系',
+    ],
+
+    校友关系: [
+      '校友关系',
+    ],
+
+    论文合作: [
+      '论文合作',
+    ],
+
+    企业关联: [
+      '企业关联',
+      '企业角色',
+    ],
+
+    产业事件: [
+      '产业事件',
+    ],
+  }
 
 export function edgeMatchesFilter(category: string, filter: string): boolean {
   const allowed = relationCategoryMap[filter]

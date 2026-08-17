@@ -35,15 +35,29 @@ const containerRef = ref<HTMLElement | null>(null)
 
 const transform = computed(() => `translate(${panX.value} ${panY.value}) scale(${scale.value})`)
 
-const edgeToneMap: Record<string, string> = {
-  论文合作: 'is-primary',
-  同事: 'is-green',
-  校友: 'is-green',
-  企业关联: 'is-orange',
-  产业事件: 'is-purple',
-  直接关系: 'is-primary',
-  间接关系: 'is-purple',
-}
+const edgeToneMap:
+  Record<string, string> = {
+    论文合作:
+      'is-primary',
+
+    同事关系:
+      'is-green',
+
+    校友关系:
+      'is-green',
+
+    企业关联:
+      'is-orange',
+
+    产业事件:
+      'is-purple',
+
+    直接关系:
+      'is-primary',
+
+    间接关系:
+      'is-purple',
+  }
 
 function isEdgeActive(edge: GraphEdgeData) {
   if (!props.activeCategories?.length) return true
@@ -451,6 +465,18 @@ onUnmounted(() => {
 
 .platform-node.is-topic .node-shape {
   fill: #2f6bff;
+}
+
+.platform-node.is-chain .node-shape {
+  fill: #14b8a6;
+}
+
+.platform-node.is-field .node-shape {
+  fill: #2f6bff;
+}
+
+.platform-node.is-source .node-shape {
+  fill: #64748b;
 }
 
 .platform-node--center .node-shape {

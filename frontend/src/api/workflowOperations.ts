@@ -147,6 +147,30 @@ export const retryManualReview = (id: string, payload: Record<string, unknown> =
 export const modifyManualReviewResult = (id: string, result: Record<string, unknown>, note = '') => unwrap(http.put(`/v1/manual-reviews/${id}/result`, { result, note })) as Promise<ReviewRecord>
 export const revokeManualReview = (id: string, reason: string) => unwrap(http.post(`/v1/manual-reviews/${id}/revoke`, { reason })) as Promise<ReviewRecord>
 
+// ---- 生产级人工处理 API ----
+
+export type ProductionReviewStatus = 'OPEN' | 'CLAIMED' | 'IN_REVIEW' | 'PENDING_APPROVAL' | 'APPLYING' | 'RERUNNING' | 'VERIFYING' | 'RESOLVED' | 'REJECTED' | 'CANCELLED' | 'APPLY_FAILED' | 'RERUN_FAILED' | 'EXPIRED'
+export interface ProductionReviewCase {
+  id: string; sourceTaskId: string; batchId?: string; nodeId: string; objectId: string; objectType: string; objectName: string
+  errorType: string; category: string; templateId: string; domain: string; phase: string; riskLevel: 'P0'|'P1'|'P2'; scope: string
+  status: ProductionReviewStatus; assigneeId?: string; assigneeName?: string; version: number; slaClaimAt: string; slaResolveAt: string
+  diagnosis: string; sourceTable?: string; sourceRecordId?: string; createdAt: string; updatedAt: string
+  draft?: Record<string, unknown>; input?: Record<string, unknown>; candidate?: Record<string, unknown>; evidence?: Record<string, unknown>[]; executions?: Record<string, unknown>[]
+  pipelineStepId?: string; pipelineStepName?: string; exceptionCode?: string; isolationScope?: string
+  template?: { id:string; version:string; title:string; displaySchema:{ sections:Array<{type:string;source?:string;target?:string;field?:string;options?:string[]}> }; resultSchema:Record<string,unknown>; allowedActions:string[] }
+  data?: { input?:Record<string,unknown>; candidate?:Record<string,unknown>; evidence?:unknown[] }; consequence?: { writeTarget:string; rerunStepId:string; scope:string }
+}
+export const getProductionReviews = (params: Record<string, unknown> = {}) => unwrap(http.get('/v1/manual-reviews/production/queue', { params })) as Promise<{ items: ProductionReviewCase[]; total: number; page: number; pageSize: number }>
+export const getProductionReview = (id: string) => unwrap(http.get(`/v1/manual-reviews/production/${id}`)) as Promise<ProductionReviewCase>
+export const claimProductionReview = (id: string, version: number) => unwrap(http.post(`/v1/manual-reviews/production/${id}/claim`, { version })) as Promise<ProductionReviewCase>
+export const heartbeatProductionReview = (id: string, version: number) => unwrap(http.post(`/v1/manual-reviews/production/${id}/heartbeat`, { version })) as Promise<ProductionReviewCase>
+export const releaseProductionReview = (id: string, version: number) => unwrap(http.post(`/v1/manual-reviews/production/${id}/release`, { version })) as Promise<ProductionReviewCase>
+export const saveProductionReviewDraft = (id: string, version: number, payload: Record<string, unknown>) => unwrap(http.put(`/v1/manual-reviews/production/${id}/draft`, { version, payload })) as Promise<ProductionReviewCase>
+export const submitProductionReview = (id: string, data: { version:number; actionId:string; result:Record<string,unknown>; note?:string }) => unwrap(http.post(`/v1/manual-reviews/production/${id}/submit`, data)) as Promise<ProductionReviewCase>
+export const approveProductionReview = (id: string, version:number, note='') => unwrap(http.post(`/v1/manual-reviews/production/${id}/approve`, { version, note })) as Promise<ProductionReviewCase>
+export const rejectProductionReview = (id: string, version:number, note='') => unwrap(http.post(`/v1/manual-reviews/production/${id}/reject`, { version, note })) as Promise<ProductionReviewCase>
+export const retryProductionReview = (id: string, version:number) => unwrap(http.post(`/v1/manual-reviews/production/${id}/retry`, { version })) as Promise<ProductionReviewCase>
+
 // ---- 工作流定义、Python 脚本上传与执行（任务中心提交脚本用） ----
 
 export interface WorkflowDefinition {

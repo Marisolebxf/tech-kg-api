@@ -128,6 +128,47 @@ def to_int(value: Any) -> int:
         return 0
 
 
+# 实体（Project）置信度核心字段：标题为强字段，其余按完整度加权。
+# 与关系匹配置信度（confidence_from_method，写在边上）互补：这里度量
+# “这条项目源记录本身有多完整可信”，与匹配结果无关、可在灌点阶段一次算定。
+PROJECT_CONFIDENCE_FIELDS = (
+    "title",
+    "abstract",
+    "funded_amount",
+    "discipline",
+    "approval_year",
+    "fund_category",
+)
+
+
+def _has_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip() != ""
+    if isinstance(value, Decimal):
+        return float(value) != 0.0
+    if isinstance(value, (int, float)):
+        return float(value) != 0.0
+    return bool(value)
+
+
+def project_confidence(row: Any) -> float:
+    """实体置信度：源记录核心字段完整度（接受 ORM 行或图节点属性 dict）。
+
+    标题缺失直接封顶 0.6（强字段）；否则按填充比例，下限 0.3、上限 1.0。
+    """
+    if isinstance(row, dict):
+        values = {f: row.get(f) for f in PROJECT_CONFIDENCE_FIELDS}
+    else:
+        values = {f: getattr(row, f, None) for f in PROJECT_CONFIDENCE_FIELDS}
+    filled = sum(1 for v in values.values() if _has_value(v))
+    ratio = filled / len(PROJECT_CONFIDENCE_FIELDS)
+    if not _has_value(values["title"]):
+        ratio = min(ratio, 0.6)
+    return round(max(0.3, ratio), 4)
+
+
 def build_project_props(
     row: Any,
     *,
@@ -139,6 +180,7 @@ def build_project_props(
     """从 dwd_*_project ORM 行构建 Project 属性（不含产出计数）。"""
     return {
         "vid": project_vid(row.id),
+        "confidence": project_confidence(row),
         "project_number": row.project_number or "",
         "title": row.title or "",
         "project_source": row.project_source or "",
@@ -195,4 +237,74 @@ def edge_provenance(
         "source_record_id": source_record_id,
         "ingest_batch": ingest_batch,
         "ingest_time": ingest_time,
+    }
+
+
+# 逻辑/标书溯源表名（真实 MySQL 多为 dwd_org_base_info；图属性用此逻辑名）。
+ORGANIZATION_SOURCE_TABLE = "organization_base"
+
+EXACT_MATCH_METHODS = frozenset(
+    {
+        "name_exact",
+        "doi_exact",
+        "doi_registry_exact",
+        "patent_number_exact",
+        "patent_number_registry_exact",
+        "title_exact",
+        "title_year_exact",
+    }
+)
+
+
+def confidence_from_method(method: str, evidence: str = "") -> float:
+    """实体/关系匹配置信度：精确类 1.0；hybrid 取 evidence 中 score；否则 0.9。"""
+    if method in EXACT_MATCH_METHODS:
+        return 1.0
+    match = re.search(r"score=([0-9.]+)", evidence or "")
+    if match:
+        try:
+            return round(float(match.group(1)), 4)
+        except ValueError:
+            pass
+    return 0.9
+
+
+def organization_id_from_vid(vid: str) -> str:
+    """从 Organization VID 解析稳定 ID（org_{id} → id；否则原样返回）。"""
+    text = str(vid or "").strip()
+    if text.startswith("org_"):
+        return text[4:] or text
+    return text
+
+
+def resolve_organization_id(
+    vid: str,
+    *,
+    node_props: dict[str, Any] | None = None,
+    cache: dict[str, str] | None = None,
+) -> str:
+    """优先 cache / 节点 source_record_id|org_id|organization_id，再回退 VID 解析。"""
+    if cache and vid in cache and cache[vid]:
+        return cache[vid]
+    props = node_props or {}
+    for key in ("source_record_id", "org_id", "organization_id"):
+        value = props.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return organization_id_from_vid(vid)
+
+
+def match_audit_props(method: str, evidence: str = "") -> dict[str, Any]:
+    """边审计三件套：match_method / match_evidence / confidence。"""
+    return {
+        "match_method": method or "",
+        "match_evidence": evidence or "",
+        "confidence": confidence_from_method(method or "", evidence or ""),
+    }
+
+
+def funded_by_org_props(organization_id: str) -> dict[str, str]:
+    return {
+        "organization_id": organization_id,
+        "organization_source_table": ORGANIZATION_SOURCE_TABLE,
     }

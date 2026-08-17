@@ -18,8 +18,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import re
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -40,6 +38,7 @@ from script.load_project_graph import (
     get_dev_graph_client,
     preflight_graph,
 )
+from script.project_edge_schema import EDGE_ALIGNMENT_PROPS, ensure_alignment_edge_schema
 from script.project_entity_matcher import (
     MatchResult,
     ProjectEntityMatcher,
@@ -47,7 +46,14 @@ from script.project_entity_matcher import (
     normalize_patent_number,
     normalize_text,
 )
-from script.project_graph_utils import edge_provenance, parse_json_objects, parse_list, project_vid
+from script.project_graph_utils import (
+    confidence_from_method,
+    edge_provenance,
+    funded_by_org_props,
+    parse_json_objects,
+    parse_list,
+    project_vid,
+)
 from script.project_ingest_report import ProjectIngestReport
 from script.project_match_candidates import collect_match_candidates
 from service.organization_entity_alignment import (
@@ -72,65 +78,16 @@ logger = logging.getLogger("script.align_project_relations")
 DEFAULT_STATE_DIR = ".cache/organization_milvus"
 GRAPH_SPACE = "dev"
 
-# Properties required for alignment audit fields on existing edges.
-_EDGE_ALIGNMENT_PROPS: dict[str, dict[str, str]] = {
-    "FUNDED_BY": {
-        "match_method": "string",
-        "match_evidence": "string",
-        "confidence": "double",
-    },
-    "LEADS": {
-        "match_method": "string",
-        "match_evidence": "string",
-        "confidence": "double",
-    },
-    "HAS_PARTICIPANT": {
-        "match_method": "string",
-        "match_evidence": "string",
-        "confidence": "double",
-    },
-}
+# Re-export for callers/tests that imported from this module.
+__all__ = [
+    "run",
+    "align_project_relations",
+    "ensure_alignment_edge_schema",
+    "EDGE_ALIGNMENT_PROPS",
+]
 
-
-def ensure_alignment_edge_schema(graph: Any) -> None:
-    """ALTER EDGE ADD missing match_* columns on already-deployed spaces (patent-style)."""
-    for edge_type, wanted in _EDGE_ALIGNMENT_PROPS.items():
-        try:
-            described = graph.execute_read(f"USE {GRAPH_SPACE}; DESCRIBE EDGE {edge_type};")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("DESCRIBE EDGE %s failed: %s", edge_type, exc)
-            continue
-        existing = {
-            str(row.get("Field") or row.get("field") or "")
-            for row in (getattr(described, "records", None) or [])
-        }
-        missing = [(name, kind) for name, kind in wanted.items() if name not in existing]
-        if not missing:
-            continue
-        ddl = (
-            f"USE {GRAPH_SPACE}; ALTER EDGE {edge_type} ADD ("
-            + ", ".join(f"{name} {kind}" for name, kind in missing)
-            + ");"
-        )
-        logger.info("altering edge schema: %s", ddl)
-        graph.execute_write(ddl)
-        for attempt in range(15):
-            visible = {
-                str(row.get("Field") or row.get("field") or "")
-                for row in (
-                    getattr(
-                        graph.execute_read(f"USE {GRAPH_SPACE}; DESCRIBE EDGE {edge_type};"),
-                        "records",
-                        None,
-                    )
-                    or []
-                )
-            }
-            if {name for name, _ in missing} <= visible:
-                break
-            if attempt == 14:
-                raise RuntimeError(f"{edge_type} new properties not visible after ALTER")
-            time.sleep(1)
+# Backward-compatible alias used by older unit tests.
+_EDGE_ALIGNMENT_PROPS = EDGE_ALIGNMENT_PROPS
 
 
 def _configure_milvus_port_from_uri() -> None:
@@ -338,23 +295,20 @@ def _build_patent_number_registry(milvus: Any, collection: str) -> dict[str, str
 
 
 def _confidence_from_result(result: MatchResult) -> float:
-    if result.method in {
-        "name_exact",
-        "doi_exact",
-        "doi_registry_exact",
-        "patent_number_exact",
-        "patent_number_registry_exact",
-        "title_exact",
-        "title_year_exact",
-    }:
-        return 1.0
-    match = re.search(r"score=([0-9.]+)", result.evidence or "")
-    if match:
-        try:
-            return round(float(match.group(1)), 4)
-        except ValueError:
-            pass
-    return 0.9
+    return confidence_from_method(result.method or "", result.evidence or "")
+
+
+def _organization_id_for_match(matcher: ProjectEntityMatcher, vid: str, graph: Any) -> str:
+    """Resolve organization_id from matcher cache, else one get_node, else VID parse."""
+    if vid in matcher.organization_ids:
+        return matcher.organization_ids[vid]
+    try:
+        node = graph.get_node(vid) if graph is not None else None
+        props = getattr(node, "properties", None) or (node if isinstance(node, dict) else {}) or {}
+        matcher.remember_organization(vid, props if isinstance(props, dict) else {})
+    except Exception:  # noqa: BLE001
+        matcher.remember_organization(vid, {})
+    return matcher.organization_id(vid)
 
 
 def _normalize_output_item(item: dict[str, Any], target_type: str) -> dict[str, Any]:
@@ -517,6 +471,7 @@ def run(
                         "match_method": result.method or "name_exact",
                         "match_evidence": result.evidence,
                         "confidence": _confidence_from_result(result),
+                        **funded_by_org_props(_organization_id_for_match(matcher, target, graph)),
                     }
                     if not dry_run:
                         _merge_edge(graph, pvid, target, "FUNDED_BY", props)
@@ -644,7 +599,7 @@ def run(
                                 "output_identifier": identifier,
                                 "match_method": result.method,
                                 "match_evidence": result.evidence,
-                                "confidence": 1.0,
+                                "confidence": _confidence_from_result(result),
                                 "source_table": table,
                                 "source_record_id": relation_key,
                                 "ingest_batch": ingest_batch,
@@ -663,6 +618,10 @@ def run(
     finally:
         session.close()
         close_trs_graph_client()
+
+
+# Public alias used by workflow / Temporal activity.
+align_project_relations = run
 
 
 def _parse_args() -> argparse.Namespace:

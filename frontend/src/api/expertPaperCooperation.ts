@@ -37,7 +37,7 @@ export interface ExpertPaperCooperationRequest {
   endTime?: string
 }
 
-const ENDPOINT = '/v1/kg-construction/expert-paper-cooperation-relations/demo/structured-result'
+const ENDPOINT = '/v1/kg-construction/expert-paper-cooperation-relations/structured-result'
 
 export const analyzeExpertPaperCooperation = (
   payload: ExpertPaperCooperationRequest,

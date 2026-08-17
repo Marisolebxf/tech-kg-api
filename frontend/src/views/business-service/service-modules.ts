@@ -441,7 +441,7 @@ export const serviceModules: ServiceModule[] = [
     key: 'paper-cooperation',
     title: '科技专家论文合作关系',
     subtitle: '围绕论文作者、主题和被引数据分析合作网络。',
-    endpoint: '/api/v1/kg-construction/expert-paper-cooperation-relations/demo/structured-result',
+    endpoint: '/api/v1/kg-construction/expert-paper-cooperation-relations/structured-result',
     method: 'POST',
     moduleRequirement: '科技专家论文合作关系服务通过分析知识图谱中科技专家发表的学术论文数据，提取论文的作者列表、作者单位、合作发表时间、论文主题等信息，运用作者关联与合作频次算法，构建专家之间的论文合作关系。服务会统计专家之间的合作论文数量、合作发表的期刊或会议级别、论文被引情况，分析合作论文的研究方向与共同贡献，同时识别长期稳定的论文合作团队与核心合作人员，为研究学术合作网络与专家学术影响力提供依据。',
     requestFields: [

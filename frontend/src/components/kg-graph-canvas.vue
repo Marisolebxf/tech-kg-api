@@ -11,18 +11,23 @@ const props = withDefaults(
     selectedNodeId?: string | null
     selectedEdgeId?: string | null
     ariaLabel?: string
+    showEdgeLabels?: boolean
+    edgeLabels?: Record<string, string[]>
   }>(),
   {
     activeCategories: null,
     selectedNodeId: null,
     selectedEdgeId: null,
     ariaLabel: '知识图谱',
+    showEdgeLabels: false,
+    edgeLabels: () => ({}),
   },
 )
 
 const emit = defineEmits<{
   selectNode: [node: GraphNodeData]
   selectEdge: [edge: GraphEdgeData]
+  labelEdge: [edge: GraphEdgeData]
 }>()
 
 const viewBox = '0 0 760 430'
@@ -56,7 +61,6 @@ function edgeClass(edge: GraphEdgeData) {
   const classes = ['platform-network-line']
   if (!isEdgeActive(edge)) classes.push('is-dimmed')
   else classes.push(edgeToneMap[edge.category] ?? 'is-primary')
-  if (edge.category === '间接关系') classes.push('is-inferred')
   if (props.selectedEdgeId === edge.id) classes.push('is-selected')
   return classes.join(' ')
 }
@@ -116,6 +120,40 @@ function getLineCoords(edge: GraphEdgeData) {
     x2: to.x - unitX * targetOffset,
     y2: to.y - unitY * targetOffset,
   }
+}
+
+function getEdgeMidpoint(edge: GraphEdgeData) {
+  const coords = getLineCoords(edge)
+  if (!coords) return null
+  return { x: (coords.x1 + coords.x2) / 2, y: (coords.y1 + coords.y2) / 2 }
+}
+
+function isLabelableEdge(edge: GraphEdgeData) {
+  return Boolean(props.showEdgeLabels) && edge.category === '间接关系'
+}
+
+function edgeLabelText(edge: GraphEdgeData): string {
+  const labels = props.edgeLabels[edge.id] ?? []
+  if (labels.length === 0) return '点击标注'
+  if (labels.length === 1) {
+    const text = labels[0]
+    return text.length > 8 ? `${text.slice(0, 8)}…` : text
+  }
+  return `已标注 ${labels.length} 项`
+}
+
+const LABEL_RECT_HEIGHT = 22
+const LABEL_RECT_PADDING = 10
+const LABEL_FONT_SIZE = 12
+
+function edgeLabelRectWidth(edge: GraphEdgeData) {
+  const text = edgeLabelText(edge)
+  const charWidth = LABEL_FONT_SIZE
+  return text.length * charWidth + LABEL_RECT_PADDING * 2
+}
+
+function handleLabelClick(edge: GraphEdgeData) {
+  emit('labelEdge', edge)
 }
 
 function handleWheel(event: WheelEvent) {
@@ -220,6 +258,21 @@ onUnmounted(() => {
             :y2="getLineCoords(edge)!.y2"
             @click.stop="handleEdgeClick(edge)"
           />
+          <g
+            v-if="isLabelableEdge(edge) && getEdgeMidpoint(edge)"
+            class="edge-label-trigger"
+            :transform="`translate(${getEdgeMidpoint(edge)!.x} ${getEdgeMidpoint(edge)!.y})`"
+            @click.stop="handleLabelClick(edge)"
+          >
+            <rect
+              :x="-edgeLabelRectWidth(edge) / 2"
+              :y="-LABEL_RECT_HEIGHT / 2"
+              :width="edgeLabelRectWidth(edge)"
+              :height="LABEL_RECT_HEIGHT"
+              rx="11"
+            />
+            <text :font-size="LABEL_FONT_SIZE">{{ edgeLabelText(edge) }}</text>
+          </g>
         </template>
         <g
           v-for="node in nodes"
@@ -342,15 +395,29 @@ onUnmounted(() => {
   stroke: rgba(100, 116, 139, 0.52);
 }
 
-.platform-network-line.is-inferred {
-  stroke: #7a5af8;
-  stroke-width: 1.4;
-  stroke-dasharray: 5 4;
+.edge-label-trigger {
+  cursor: pointer;
 }
 
-.platform-network-line.is-inferred.is-selected {
-  stroke: #5925dc;
-  stroke-width: 2;
+.edge-label-trigger rect {
+  fill: #e8f3ff;
+  stroke: #165dff;
+  stroke-width: 1;
+  filter: drop-shadow(0 1px 3px rgba(22, 93, 255, 0.18));
+  transition: fill 0.15s ease, stroke 0.15s ease;
+}
+
+.edge-label-trigger:hover rect {
+  fill: #d6ebff;
+  stroke: #0e42d2;
+}
+
+.edge-label-trigger text {
+  fill: #165dff;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+  user-select: none;
 }
 
 .platform-network-hit-area {

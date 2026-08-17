@@ -281,9 +281,13 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   selectedGraphEdgeId.value = edge.id
   selectedGraphNodeId.value = null
   resultMode.value = 'relation'
-  if (isIndirect.value && edge.category === '间接关系') {
-    openLabelModal(edge.id)
-  }
+}
+
+function handleLabelEdge(edge: GraphEdgeData) {
+  selectedGraphEdgeId.value = edge.id
+  selectedGraphNodeId.value = null
+  resultMode.value = 'relation'
+  openLabelModal(edge.id)
 }
 
 function openLabelModal(edgeId: string) {
@@ -397,9 +401,12 @@ function removeLabel(edgeId: string, index: number) {
           :edges="displayedGraphEdges"
           :selected-node-id="selectedGraphNodeId"
           :selected-edge-id="selectedGraphEdgeId"
+          :show-edge-labels="isIndirect"
+          :edge-labels="edgeLabels"
           aria-label="测试结果图谱"
           @select-node="handleSelectGraphNode"
           @select-edge="handleSelectGraphEdge"
+          @label-edge="handleLabelEdge"
         />
       </div>
     </section>

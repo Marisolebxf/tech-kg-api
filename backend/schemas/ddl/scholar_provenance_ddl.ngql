@@ -1,0 +1,32 @@
+-- 学者域置信度与机构溯源字段迁移。
+-- 目标图空间固定为 dev；每条 ADD 仅在对应字段尚不存在时执行一次。
+-- NebulaGraph 不支持 ADD IF NOT EXISTS，重复执行已成功的语句会报字段已存在，
+-- 不影响其他尚未执行的语句，可从失败语句的下一条继续。
+USE dev;
+
+ALTER TAG `Person` ADD (`confidence` double NULL);
+ALTER TAG `Person` ADD (`match_method` string NULL);
+ALTER TAG `Person` ADD (`match_evidence` string NULL);
+ALTER TAG `Person` ADD (`organization_base` string NULL);
+ALTER TAG `Person` ADD (`organization_id` string NULL);
+
+ALTER EDGE `AFFILIATED_WITH` ADD (`confidence` double NULL);
+ALTER EDGE `AFFILIATED_WITH` ADD (`match_method` string NULL);
+ALTER EDGE `AFFILIATED_WITH` ADD (`match_evidence` string NULL);
+ALTER EDGE `AFFILIATED_WITH` ADD (`organization_base` string NULL);
+ALTER EDGE `AFFILIATED_WITH` ADD (`organization_id` string NULL);
+
+ALTER EDGE `COAUTHOR_WITH` ADD (`confidence` double NULL);
+ALTER EDGE `COAUTHOR_WITH` ADD (`match_method` string NULL);
+ALTER EDGE `COAUTHOR_WITH` ADD (`match_evidence` string NULL);
+
+ALTER EDGE `AUTHORED_BY` ADD (`confidence` double NULL);
+ALTER EDGE `AUTHORED_BY` ADD (`match_method` string NULL);
+ALTER EDGE `AUTHORED_BY` ADD (`match_evidence` string NULL);
+
+-- SAME_AS 同时承载机构对齐和学者消歧；机构字段仅在机构对齐边上有值。
+ALTER EDGE `SAME_AS` ADD (`confidence` double NULL);
+ALTER EDGE `SAME_AS` ADD (`match_method` string NULL);
+ALTER EDGE `SAME_AS` ADD (`match_evidence` string NULL);
+ALTER EDGE `SAME_AS` ADD (`organization_base` string NULL);
+ALTER EDGE `SAME_AS` ADD (`organization_id` string NULL);

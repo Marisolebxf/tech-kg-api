@@ -45,6 +45,7 @@ from typing import Any
 
 from infra.graph_db import get_trs_graph_client
 from infra.milvus import get_milvus_client
+from script.scholar_provenance import confidence_props, organization_provenance
 
 logger = logging.getLogger("script.align_scholar_affiliations")
 
@@ -95,6 +96,19 @@ def _extract_orphan_org_name(graph: Any, edge: dict) -> str | None:
         return None
     props = dict(getattr(node, "properties", None) or {})
     return (props.get("name_cn") or props.get("name_en") or "").strip() or None
+
+
+def _canonical_org_provenance(graph: Any, vid: str, org_id: Any) -> dict[str, str]:
+    """读取正式机构顶点的来源；读取失败时保留检索结果中的机构 ID。"""
+    try:
+        node = graph.get_node(vid)
+    except Exception:  # noqa: BLE001
+        node = None
+    props = dict(getattr(node, "properties", None) or {}) if node is not None else {}
+    return organization_provenance(
+        props.get("source_table"),
+        props.get("source_record_id") or props.get("org_id") or org_id,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +284,12 @@ def run(
             "source_record_id": orphan_vid,
             "ingest_batch": BATCH_ID,
             "ingest_time": now,
+            **_canonical_org_provenance(graph, canonical_vid, top.get("org_id")),
+            **confidence_props(
+                top["score"],
+                "milvus_hybrid",
+                f"机构名混合向量检索 top-1，相似度={top['score']:.4f}",
+            ),
         }
         if dry_run:
             if shown < preview:

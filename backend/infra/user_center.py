@@ -17,7 +17,7 @@ class UserCenterError(RuntimeError):
 
 
 class UserCenterClient:
-    """严格按照《统一用户中心开放授权接口文档 v2.1》调用。"""
+    """按《统一用户中心开放授权接口文档 v2.3.1》的 OAuth2 章节调用。"""
 
     def __init__(
         self,
@@ -30,27 +30,30 @@ class UserCenterClient:
 
     def build_login_url(self, state: str) -> str:
         self.settings.require_oauth_credentials()
-        query = urlencode(
-            {
-                "response_type": "code",
-                "client_id": self.settings.client_id,
-                "redirect_uri": self.settings.redirect_uri,
-                "scope": self.settings.scope,
-                "state": state,
-            }
-        )
+        parameters = {
+            "response_type": "code",
+            "client_id": self.settings.client_id,
+            "redirect_uri": self.settings.redirect_uri,
+            "state": state,
+        }
+        if self.settings.scope:
+            parameters["scope"] = self.settings.scope
+        query = urlencode(parameters)
         separator = "&" if "?" in self.settings.sso_login_url else "?"
         return f"{self.settings.sso_login_url}{separator}{query}"
 
-    async def exchange_code(self, code: str) -> dict[str, Any]:
+    async def exchange_code(self, code: str, *, state: str | None = None) -> dict[str, Any]:
+        data = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": self.settings.redirect_uri,
+        }
+        if state:
+            data["state"] = state
         return await self._request(
             "POST",
             "/token",
-            data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": self.settings.redirect_uri,
-            },
+            data=data,
         )
 
     async def refresh(self, refresh_token: str) -> dict[str, Any]:

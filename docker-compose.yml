@@ -78,7 +78,7 @@ services:
       USER_CENTER_CLIENT_ID: ${USER_CENTER_CLIENT_ID:-}
       USER_CENTER_CLIENT_SECRET: ${USER_CENTER_CLIENT_SECRET:-}
       USER_CENTER_REDIRECT_URI: ${USER_CENTER_REDIRECT_URI:-https://edu.itic-sci.com/bkg_zp/api/v1/auth/callback}
-      USER_CENTER_SCOPE: ${USER_CENTER_SCOPE:-user_info}
+      USER_CENTER_SCOPE: ${USER_CENTER_SCOPE:-}
       REDIS_URL: ${REDIS_URL:-redis://auth-redis:6379/0}
     extra_hosts:
       - "host.docker.internal:host-gateway"

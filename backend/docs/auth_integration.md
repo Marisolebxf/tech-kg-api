@@ -1,4 +1,4 @@
-# 统一用户中心 OAuth2 v2.1 接入
+# 统一用户中心 OAuth2 v2.3.1 接入
 
 本系统采用后端托管会话（BFF）模式接入统一用户中心。Vue 前端只拿到
 HttpOnly Session Cookie；`client_secret`、统一用户中心 `access_token` 和
@@ -69,9 +69,13 @@ USER_CENTER_REDIRECT_URI=https://edu.itic-sci.com/bkg_zp/api/v1/auth/callback
 USER_CENTER_SSO_LOGIN_URL=https://edu.itic-sci.com/uc/sso/login
 USER_CENTER_OAUTH_BASE_URL=https://edu.itic-sci.com/uc/admin-api/system/oauth2
 USER_CENTER_ACCOUNT_URL=https://edu.itic-sci.com/uc/admin/login?redirect=/index
+USER_CENTER_SCOPE=
 USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED=false
 USER_CENTER_PORTAL_TOKEN_COOKIE=access_token
 ```
+
+`USER_CENTER_SCOPE` 默认留空。只有统一用户中心已明确给当前应用分配了授权范围时才填写；
+否则新建应用会在授权页提示“授权范围过大”。
 
 如果网关保留 `/bkg_zp` 前缀，前端构建时设置：
 
@@ -104,4 +108,5 @@ AUTH_SESSION_BACKEND=memory
 - 操作记录按用户隔离保存在 Redis，默认保留 90 天、最多 200 条；仅记录操作类型、结果、IP、User-Agent 和时间，不记录密码、Token 或 Client Secret。
 - v2.1 权限菜单新增 `linkType`（0=内部链接、1=外部链接），后端会结构化返回菜单及角色—菜单映射；前端展示链接类型但不会把外部地址直接作为未校验的站内路由执行。
 - v2.1 仍未提供修改密码接口，因此账号资料和密码修改只跳转统一用户中心，本平台不代理或保存密码。
-- v2.1 新增的 `/open-api/system` 机构/用户查询、令牌交换和机构角色分配并非登录与 API 鉴权的必需链路，当前任务不调用这些高权限接口。
+- v2.3.1 的 `/open-api/system` 机构/用户查询、菜单权限资源、按 Token 获取用户信息、令牌交换和机构角色分配并非本平台标准 OAuth2 登录与 API 鉴权的必需链路，当前任务不调用这些高权限接口。
+- v2.3.1 仅调整了 `2.2 分页获取用户列表` 的筛选参数；本平台没有调用该接口，因此此次文档更新不影响现有 OAuth2 登录、Redis 会话或 FastAPI 鉴权实现。

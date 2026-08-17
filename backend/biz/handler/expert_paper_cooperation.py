@@ -16,7 +16,7 @@ async def describe_expert_paper_cooperation() -> dict[str, object]:
 
 
 @router.post(
-    "/demo/structured-result", response_model=ExpertPaperCooperationStructuredResultOnlyResponse
+    "/structured-result", response_model=ExpertPaperCooperationStructuredResultOnlyResponse
 )
 async def analyze_expert_paper_cooperation_structured_result(
     body: ExpertPaperCooperationDemoRequest,

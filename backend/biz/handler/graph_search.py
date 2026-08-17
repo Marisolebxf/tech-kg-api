@@ -240,6 +240,73 @@ async def get_subgraph(
         return ApiResponse(code=500, success=False, msg=str(exc))
 
 
+@router.get("/filtered-subgraph/{node_id}", response_model=ApiResponse)
+async def get_filtered_subgraph(
+    node_id: str,
+    edge_types: str = Query(..., description="逗号分隔的边类型，如 EXECUTIVE_OF,HAS_PARTICPTANT"),
+    depth: int = Query(2, ge=1, le=3, description="跳数 1-3"),
+    limit: int = Query(50, ge=1, le=200, description="每种边类型每跳最大边数"),
+    direction: Literal["out", "in", "both"] = Query("both", description="方向: out/in/both"),
+    space: str | None = Query(None, description="图空间"),
+) -> ApiResponse:
+    """查某节点的 N 跳子图，只遍历指定边类型（多边类型），避免捞无关边。
+
+    与 /subgraph 的区别：支持多边类型过滤（逗号分隔），每种边类型单独查，
+    不会因 limit 截断把需要的边挤掉（论文/合作者等不会占名额）。
+    """
+    try:
+        client = _get_client(space)
+        center = client.get_node(node_id)
+        if center is None:
+            return ApiResponse(code=404, success=False, msg=f"节点不存在: {node_id}")
+
+        et_set = [et.strip() for et in edge_types.split(",") if et.strip()]
+        if not et_set:
+            return ApiResponse(code=422, success=False, msg="edge_types 不能为空")
+
+        nodes: list[GraphNodeData] = [_node_to_data(center)]
+        edges: list[GraphEdgeData] = []
+        seen_edge_ids: set[str] = set()
+        seen_vids = {str(center.id)}
+        frontier = [node_id]
+
+        for _hop in range(depth):
+            next_frontier: list[str] = []
+            for vid in frontier:
+                # 每种边类型单独查，避免无关边占 limit 名额
+                for et in et_set:
+                    edge_list = client.get_node_edges(
+                        vid, direction=direction, edge_type=et, limit=limit
+                    )
+                    for e in edge_list:
+                        edge_data = _edge_to_data(e)
+                        edge_key = (
+                            edge_data.id
+                            or f"{edge_data.source}|{edge_data.type}|{edge_data.target}"
+                        )
+                        if edge_key not in seen_edge_ids:
+                            seen_edge_ids.add(edge_key)
+                            edges.append(edge_data)
+                        neighbor_id = str(e.target_id if str(e.source_id) == vid else e.source_id)
+                        if neighbor_id not in seen_vids:
+                            neighbor = client.get_node(neighbor_id)
+                            if neighbor:
+                                n_data = _node_to_data(neighbor)
+                                nodes.append(n_data)
+                                seen_vids.add(n_data.id)
+                                next_frontier.append(n_data.id)
+            frontier = next_frontier
+
+        if len(nodes) > limit * len(et_set):
+            nodes = nodes[: limit * len(et_set)]
+        if len(edges) > limit * len(et_set):
+            edges = edges[: limit * len(et_set)]
+
+        return ApiResponse(data=SubgraphData(nodes=nodes, edges=edges).model_dump())
+    except Exception as exc:
+        return ApiResponse(code=500, success=False, msg=str(exc))
+
+
 @router.get("/node/{node_id}/edges", response_model=ApiResponse)
 async def get_node_edges(
     node_id: str,

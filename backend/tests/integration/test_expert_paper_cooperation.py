@@ -2,7 +2,7 @@ import pytest
 
 from biz.handler import expert_paper_cooperation as handler
 
-ENDPOINT = "/api/v1/kg-construction/expert-paper-cooperation-relations/demo/structured-result"
+ENDPOINT = "/api/v1/kg-construction/expert-paper-cooperation-relations/structured-result"
 VALID_PAYLOAD = {
     "dataSource": "knowledge_graph",
     "expertAId": "4P566No1",

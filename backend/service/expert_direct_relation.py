@@ -1,11 +1,27 @@
+"""科技专家/人才直接关系——通过 FastAPI 图查询 API 实现（不直连 DAO/MySQL）。
+
+数据流：
+1. 定位起点专家：调用 ``GET /nodes/search?label=Person`` 按 scholar_id / 姓名过滤；
+   ``expertAId`` 支持传 scholar_id 或直接 VID (``person_{scholar_id}``)。
+2. 拉合作关系：调用 ``GET /node/{vid}/edges?edge_type=COAUTHOR_WITH`` 拿全部合作边。
+3. 拿对端专家：对每条边的对端 VID 调用 ``GET /nodes/{vid}`` 补齐属性。
+4. 机构过滤 & 排序：在服务层按 ``institution`` 关键字过滤、按合作论文数排序。
+5. 图数据/详情：按业务格式组装 items + graph。
+
+当图服务不可用（GraphAPIError）时，回退到内置 ``FALLBACK_ITEMS`` 保证接口可用。
+"""
+
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime
 from typing import Any
 
-from dao.scholar import ScholarDAO
+from infra.graph_api_client import GraphAPIError, graph_api
 from service.base_module import KGModuleScaffoldService
+
+logger = logging.getLogger(__name__)
 
 FALLBACK_ITEMS: list[dict[str, Any]] = [
     {
@@ -23,6 +39,8 @@ FALLBACK_ITEMS: list[dict[str, Any]] = [
         "expert_b_paper_nums": 86,
         "expert_b_citation_nums": 1930,
         "co_paper_count": 4,
+        "evidence_kind": "paper",
+        "evidence_count": 4,
         "relation_time": datetime(2026, 6, 29, 12, 0, 0),
     },
     {
@@ -40,20 +58,21 @@ FALLBACK_ITEMS: list[dict[str, Any]] = [
         "expert_b_paper_nums": 149,
         "expert_b_citation_nums": 5160,
         "co_paper_count": 2,
+        "evidence_kind": "paper",
+        "evidence_count": 2,
         "relation_time": datetime(2026, 6, 29, 12, 5, 0),
     },
 ]
 
 MAX_QUERY_LIMIT = 100
+_MAX_ANCHOR_CANDIDATES = 5
+_MAX_EDGES_PER_EXPERT = 100
 
 
 class ExpertDirectRelationService(KGModuleScaffoldService):
     module_code = "expert_direct_relation"
 
-    def __init__(self, scholar_dao: ScholarDAO | None = None) -> None:
-        self._scholar_dao = scholar_dao or ScholarDAO()
-
-    def query(
+    async def query(
         self,
         *,
         data_source: str = "all",
@@ -64,10 +83,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         end_time: str | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
-        normalized_source = "all"
         normalized_limit = max(1, min(int(limit or 10), MAX_QUERY_LIMIT))
         query_input = {
-            "dataSource": normalized_source,
+            "dataSource": "all",
             "expertAId": (expert_a_id or "").strip(),
             "expertBId": (expert_b_id or "").strip(),
             "institution": (institution or "").strip(),
@@ -76,57 +94,49 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             "limit": normalized_limit,
         }
 
-        source = {"requested": normalized_source, "actual": "fallback", "fallback": True}
+        source = {"requested": "all", "actual": "fallback", "fallback": True}
         rows: list[dict[str, Any]] = []
+        fallback_reason: str | None = None
 
-        if normalized_source != "fallback":
-            try:
-                rows.extend(
-                    self._scholar_dao.list_direct_coauthor_relations(
-                        expert_a_id=expert_a_id,
-                        expert_b_id=expert_b_id,
-                        institution=institution,
-                        start_time=start_time,
-                        end_time=end_time,
-                        limit=normalized_limit,
-                    )
-                )
-                rows.extend(
-                    self._scholar_dao.list_direct_patent_relations(
-                        expert_a_id=expert_a_id,
-                        expert_b_id=expert_b_id,
-                        institution=institution,
-                        start_time=start_time,
-                        end_time=end_time,
-                        limit=normalized_limit,
-                    )
-                )
-                rows.extend(
-                    self._scholar_dao.list_direct_project_relations(
-                        expert_a_id=expert_a_id,
-                        expert_b_id=expert_b_id,
-                        institution=institution,
-                        start_time=start_time,
-                        end_time=end_time,
-                        limit=normalized_limit,
-                    )
-                )
-                rows = self._orient_rows(
-                    rows=self._sort_rows(rows)[:normalized_limit],
-                    expert_a_id=expert_a_id,
-                    expert_b_id=expert_b_id,
-                )
-                source = {"requested": normalized_source, "actual": "mysql", "fallback": False}
-            except Exception:
-                rows = []
-
-        if not rows and source["actual"] != "mysql":
-            rows = self._orient_rows(
-                rows=FALLBACK_ITEMS[: max(1, min(normalized_limit, len(FALLBACK_ITEMS)))],
+        try:
+            rows = await self._query_via_graph_api(
                 expert_a_id=expert_a_id,
                 expert_b_id=expert_b_id,
+                institution=institution,
+                limit=normalized_limit,
             )
+            source = {"requested": "all", "actual": "graph-api", "fallback": False}
+        except GraphAPIError as exc:
+            logger.warning("graph API unavailable, falling back to seed data: %s", exc)
+            fallback_reason = "graph_api_error"
+            rows = []
+        except Exception:  # noqa: BLE001 - 图服务异常一律降级
+            logger.exception("unexpected error while querying graph API")
+            fallback_reason = "unexpected_error"
+            rows = []
 
+        if not rows:
+            # 区分"图服务报错"和"图里确实没有这两位专家的合作关系"，
+            # 否则线上只能靠翻日志才知道降级原因。
+            logger.info(
+                "expert direct relation falls back to seed data: reason=%s, a=%s, b=%s",
+                fallback_reason or "empty_result",
+                expert_a_id,
+                expert_b_id,
+            )
+            source = {
+                "requested": "all",
+                "actual": "fallback",
+                "fallback": True,
+                "reason": fallback_reason or "empty_result",
+            }
+            rows = FALLBACK_ITEMS[: max(1, min(normalized_limit, len(FALLBACK_ITEMS)))]
+
+        rows = self._orient_rows(
+            rows=rows,
+            expert_a_id=expert_a_id,
+            expert_b_id=expert_b_id,
+        )
         items = [self._build_item(row) for row in rows]
         graph = self._build_graph(items)
 
@@ -144,13 +154,193 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             },
         }
 
+    # ---------------- Graph API 调用 ----------------
+    async def _query_via_graph_api(
+        self,
+        *,
+        expert_a_id: str | None,
+        expert_b_id: str | None,
+        institution: str | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """通过图查询 API 拉合作关系。
+
+        Args:
+            expert_a_id: 起点专家的 VID / scholar_id / 姓名，可为空。
+            expert_b_id: 另一位专家的标识，可为空。
+            institution: 机构关键词，非空时只保留任一端命中该机构的关系。
+            limit: 最多返回多少条关系。
+
+        Returns:
+            关系行列表，每行包含双方属性与 ``co_paper_count`` 等字段；无命中时为空列表。
+        """
+        async with graph_api() as client:
+            anchors = await self._resolve_anchors(client, expert_a_id, expert_b_id)
+            rows: list[dict[str, Any]] = []
+            seen_keys: set[str] = set()
+            for anchor in anchors:
+                anchor_id = anchor["id"]
+                edges = await client.get_node_edges(
+                    anchor_id, edge_type="COAUTHOR_WITH", limit=_MAX_EDGES_PER_EXPERT
+                )
+                for edge in edges:
+                    peer_id = edge["target"] if edge["source"] == anchor_id else edge["source"]
+                    peer = await client.get_node(peer_id)
+                    if peer is None:
+                        continue
+                    row = self._build_row(anchor, peer, edge)
+                    if institution and not self._matches_institution(row, institution):
+                        continue
+                    key = row["relation_key"]
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    rows.append(row)
+                    if len(rows) >= limit:
+                        return rows
+            return rows
+
+    async def _resolve_anchors(
+        self,
+        client: Any,
+        expert_a_id: str | None,
+        expert_b_id: str | None,
+    ) -> list[dict[str, Any]]:
+        """定位起点专家节点。空条件时取任意若干位学者作为锚点。
+
+        Args:
+            client: 图查询 API 客户端。
+            expert_a_id: 起点专家标识，可为空。
+            expert_b_id: 另一位专家标识，可为空。
+
+        Returns:
+            锚点 Person 节点列表；两个标识都为空时返回库里前若干位学者（仅用于展示）。
+        """
+        candidates: list[dict[str, Any]] = []
+        for keyword in (expert_a_id, expert_b_id):
+            if not keyword:
+                continue
+            node = await self._find_person(client, keyword.strip())
+            if node is not None:
+                candidates.append(node)
+        if candidates:
+            return candidates
+        # 无条件时取库里前若干位学者作为锚点，仅用于展示
+        listing = await client.list_nodes(label="Person", limit=_MAX_ANCHOR_CANDIDATES)
+        return list(listing.get("items", []))
+
+    async def _find_person(self, client: Any, keyword: str) -> dict[str, Any] | None:
+        """按 VID / scholar_id / 姓名定位一个 Person 节点。
+
+        Args:
+            client: 图查询 API 客户端。
+            keyword: 完整 VID、scholar_id 或中英文姓名。
+
+        Returns:
+            能按 VID 寻址的 Person 节点；找不到时返回 ``None``。
+        """
+        # keyword 可能是完整 VID / scholar_id / 姓名
+        for candidate_vid in (keyword, f"person_{keyword}"):
+            node = await client.get_node(candidate_vid)
+            if node is not None:
+                return node
+        # 姓名精确匹配（中文/英文）。属性搜索返回的 id 不保证是业务 VID，
+        # 必须先换成可寻址节点，否则后续查边一定为空。
+        for name_field in ("name_zh", "name_en"):
+            result = await client.search_nodes(
+                label="Person", properties={name_field: keyword}, limit=_MAX_ANCHOR_CANDIDATES
+            )
+            items = result.get("items") if isinstance(result, dict) else []
+            for item in items or []:
+                resolved = await client.resolve_addressable_node(
+                    item, vid_candidates=self._person_vid_candidates(item)
+                )
+                if resolved is not None:
+                    return resolved
+        return None
+
+    @staticmethod
+    def _person_vid_candidates(node: dict[str, Any]) -> list[str]:
+        """按 ``person_{scholar_id}`` 命名约定重建候选 VID。"""
+        props = node.get("properties") or {}
+        candidates: list[str] = []
+        for key in ("source_record_id", "scholar_id"):
+            value = str(props.get(key) or "").strip()
+            if value:
+                candidates.append(f"person_{value}")
+        return candidates
+
+    def _build_row(
+        self,
+        anchor: dict[str, Any],
+        peer: dict[str, Any],
+        edge: dict[str, Any],
+    ) -> dict[str, Any]:
+        anchor_id = str(anchor.get("id") or "")
+        peer_id = str(peer.get("id") or "")
+        # 按字典序规范排序，避免同一对专家双向重复
+        left, right = (anchor, peer) if anchor_id <= peer_id else (peer, anchor)
+        left_id = str(left.get("id") or "")
+        right_id = str(right.get("id") or "")
+        edge_props = edge.get("properties") or {}
+        co_count = int(edge_props.get("co_paper_count") or edge_props.get("count") or 0)
+        return {
+            "relation_key": f"direct:{left_id}:{right_id}",
+            "expert_a_id": left_id,
+            "expert_a_name": self._person_name(left),
+            "expert_a_org": self._person_prop(left, "scholar_org"),
+            "expert_a_h_index": self._person_int(left, "h_index"),
+            "expert_a_paper_nums": self._person_int(left, "paper_nums"),
+            "expert_a_citation_nums": self._person_int(left, "citation_nums"),
+            "expert_b_id": right_id,
+            "expert_b_name": self._person_name(right),
+            "expert_b_org": self._person_prop(right, "scholar_org"),
+            "expert_b_h_index": self._person_int(right, "h_index"),
+            "expert_b_paper_nums": self._person_int(right, "paper_nums"),
+            "expert_b_citation_nums": self._person_int(right, "citation_nums"),
+            "co_paper_count": co_count,
+            "evidence_kind": "paper",
+            "evidence_count": co_count,
+            "relation_time": edge_props.get("relation_time"),
+        }
+
+    @staticmethod
+    def _person_name(node: dict[str, Any]) -> str:
+        props = node.get("properties") or {}
+        return str(props.get("name_zh") or props.get("name_en") or node.get("id") or "")
+
+    @staticmethod
+    def _person_prop(node: dict[str, Any], key: str) -> str:
+        props = node.get("properties") or {}
+        value = props.get(key)
+        return str(value) if value else ""
+
+    @staticmethod
+    def _person_int(node: dict[str, Any], key: str) -> int:
+        props = node.get("properties") or {}
+        try:
+            return int(props.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _matches_institution(row: dict[str, Any], keyword: str) -> bool:
+        keyword_lc = keyword.strip().lower()
+        if not keyword_lc:
+            return True
+        for field in ("expert_a_org", "expert_b_org"):
+            value = str(row.get(field) or "").lower()
+            if keyword_lc in value:
+                return True
+        return False
+
+    # ---------------- 展示层组装 ----------------
     def _build_item(self, row: dict[str, Any]) -> dict[str, Any]:
         expert_a_org = str(row.get("expert_a_org") or "")
         expert_b_org = str(row.get("expert_b_org") or "")
         institution = str(row.get("institution") or expert_a_org or expert_b_org or "合作关系")
         evidence_kind = str(row.get("evidence_kind") or "paper")
         evidence_count = int(row.get("evidence_count") or row.get("co_paper_count") or 0)
-        evidence_titles = row.get("evidence_titles") or []
 
         if evidence_kind == "patent":
             reason_tags = ["共专利"] if evidence_count else ["专利关联"]
@@ -166,7 +356,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         last_updated_at = (
             relation_time.strftime("%Y-%m-%d %H:%M:%S")
             if hasattr(relation_time, "strftime")
-            else None
+            else (str(relation_time) if relation_time else None)
         )
 
         expert_a = {
@@ -210,7 +400,6 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 ["共同机构/主关系", institution],
                 ["证据类型", self._evidence_label(evidence_kind)],
                 ["证据数量", evidence_count],
-                ["证据示例", "；".join(str(title) for title in evidence_titles[:3])],
                 ["判定依据", reason_tags],
                 ["关系摘要", " + ".join(reason_tags)],
             ],
@@ -280,16 +469,6 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             )
 
         return {"nodes": nodes, "edges": edges}
-
-    def _sort_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return sorted(
-            rows,
-            key=lambda row: (
-                int(row.get("evidence_count") or row.get("co_paper_count") or 0),
-                row.get("relation_time") or "",
-            ),
-            reverse=True,
-        )
 
     def _orient_rows(
         self,

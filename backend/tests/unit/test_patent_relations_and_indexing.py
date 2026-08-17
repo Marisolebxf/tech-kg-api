@@ -26,7 +26,7 @@ def test_patent_collection_declares_exactly_eight_indexes():
         "granted_number",
         "simple_family_number",
         "country_code",
-        "source_table",
+        "organization_base",
     }
 
 

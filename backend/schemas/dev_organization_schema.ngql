@@ -38,7 +38,10 @@ CREATE TAG IF NOT EXISTS `Organization`(
   `source_url` string NULL,
   `ingest_batch` string NULL,
   `ingest_time` string NULL,
-  `source_update_time` string NULL
+  `source_update_time` string NULL,
+  `confidence` double NULL,
+  `organization_base` string NULL,
+  `organization_id` string NULL
 );
 
 CREATE TAG IF NOT EXISTS `Person`(
@@ -57,7 +60,10 @@ CREATE TAG IF NOT EXISTS `Person`(
   `source_url` string NULL,
   `ingest_batch` string NULL,
   `ingest_time` string NULL,
-  `source_update_time` string NULL
+  `source_update_time` string NULL,
+  `confidence` double NULL,
+  `organization_base` string NULL,
+  `organization_id` string NULL
 );
 
 CREATE TAG IF NOT EXISTS `News`(

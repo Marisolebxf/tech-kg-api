@@ -6,7 +6,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from biz.router.register import register_routers
 from biz.schemas.common import ApiResponse
@@ -42,7 +44,21 @@ app = FastAPI(
     description="Backend service for the technology knowledge graph.",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url=None,
 )
+
+app.mount("/static/swagger", StaticFiles(directory="static/swagger"), name="swagger-static")
+
+
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui():
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} - Swagger UI",
+        swagger_js_url="/static/swagger/swagger-ui-bundle.js",
+        swagger_css_url="/static/swagger/swagger-ui.css",
+    )
+
 
 register_routers(app)
 

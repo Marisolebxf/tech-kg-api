@@ -1,16 +1,18 @@
 """图谱搜索 API：支撑前端图谱查询展示，返回 JSON 格式的点边数据。
 
 所有端点支持 ``space`` 参数指定图空间（如 dev/techkg），缺省用 .env 的 TRS_GRAPH_SPACE。
-handler 层只调 TRSGraphClient 方法，不直接写 nGQL。
+常规端点只调用 TRSGraphClient 的封装方法；受控路径查询把经过 Pydantic 白名单校验的
+逐跳约束编译为只读 nGQL，不接受调用方传入任意查询语句。
 """
 
 from __future__ import annotations
 
+import json
 import threading
 from typing import Any, Literal
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from biz.schemas.common import ApiResponse
 from infra.graph_db import TRSGraphClient, get_trs_graph_client
@@ -65,6 +67,51 @@ class PathData(BaseModel):
 class StatsData(BaseModel):
     nodes: dict[str, int]
     edges: dict[str, int]
+
+
+GraphDirection = Literal["out", "in"]
+FilterOperator = Literal["eq", "ne", "gt", "gte", "lt", "lte"]
+GRAPH_IDENTIFIER_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+
+
+class PathPropertyFilter(BaseModel):
+    """路径节点属性过滤；字段名和操作符均由服务端校验。"""
+
+    property: str = Field(..., pattern=GRAPH_IDENTIFIER_PATTERN)
+    operator: FilterOperator = "eq"
+    value: str | int | float | bool
+
+
+class TypedPathStep(BaseModel):
+    """一跳路径约束。direction 以当前节点为参照。"""
+
+    edgeType: str = Field(..., pattern=GRAPH_IDENTIFIER_PATTERN)
+    direction: GraphDirection
+    targetLabel: str = Field(..., pattern=GRAPH_IDENTIFIER_PATTERN)
+    targetFilters: list[PathPropertyFilter] = Field(default_factory=list, max_length=10)
+
+
+class TypedPathSearchRequest(BaseModel):
+    """受控的多跳路径查询请求，避免向调用方开放任意 nGQL。"""
+
+    sourceId: str = Field(..., min_length=1, max_length=256)
+    targetId: str | None = Field(default=None, min_length=1, max_length=256)
+    steps: list[TypedPathStep] = Field(..., min_length=1, max_length=4)
+    limit: int = Field(default=100, ge=1, le=200)
+    offset: int = Field(default=0, ge=0)
+    space: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=GRAPH_IDENTIFIER_PATTERN,
+    )
+
+
+class TypedPathListData(BaseModel):
+    items: list[PathData]
+    total: int
+    limit: int
+    offset: int
 
 
 # ---------- 辅助函数 ----------
@@ -127,6 +174,126 @@ def _edge_to_data(e: Any) -> GraphEdgeData:
     )
 
 
+def _ngql_literal(value: Any) -> str:
+    """将已通过 Pydantic 校验的标量安全转换为 nGQL 字面量。"""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    escaped = escaped.replace("\n", " ").replace("\r", " ")
+    return f'"{escaped}"'
+
+
+def _as_properties(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _build_typed_path_query(body: TypedPathSearchRequest, *, count_only: bool = False) -> str:
+    """把受控路径模型编译为只读 MATCH 查询。"""
+    pattern = "(n0)"
+    conditions = [f"id(n0) == {_ngql_literal(body.sourceId)}"]
+
+    for index, step in enumerate(body.steps):
+        edge = f"[e{index}:`{step.edgeType}`]"
+        target = f"(n{index + 1}:`{step.targetLabel}`)"
+        if step.direction == "out":
+            pattern += f"-{edge}->{target}"
+        else:
+            pattern += f"<-{edge}-{target}"
+
+        for item in step.targetFilters:
+            operator = {
+                "eq": "==",
+                "ne": "!=",
+                "gt": ">",
+                "gte": ">=",
+                "lt": "<",
+                "lte": "<=",
+            }[item.operator]
+            conditions.append(
+                f"n{index + 1}.`{step.targetLabel}`.`{item.property}` "
+                f"{operator} {_ngql_literal(item.value)}"
+            )
+
+    last_index = len(body.steps)
+    if body.targetId is not None:
+        conditions.append(f"id(n{last_index}) == {_ngql_literal(body.targetId)}")
+
+    where = " AND ".join(conditions)
+    if count_only:
+        return f"MATCH {pattern} WHERE {where} RETURN count(*) AS total"
+
+    projections: list[str] = []
+    for index in range(last_index + 1):
+        projections.extend(
+            [
+                f"id(n{index}) AS node_{index}_id",
+                f"properties(n{index}) AS node_{index}_properties",
+            ]
+        )
+    for index in range(last_index):
+        projections.extend(
+            [
+                f"properties(e{index}) AS edge_{index}_properties",
+                f"rank(e{index}) AS edge_{index}_rank",
+            ]
+        )
+    return (
+        f"MATCH {pattern} WHERE {where} RETURN {', '.join(projections)} "
+        f"SKIP {body.offset} LIMIT {body.limit}"
+    )
+
+
+def _typed_path_from_record(
+    body: TypedPathSearchRequest,
+    record: dict[str, Any],
+    source_labels: list[str],
+) -> PathData:
+    nodes: list[GraphNodeData] = []
+    edges: list[GraphEdgeData] = []
+
+    for index in range(len(body.steps) + 1):
+        raw_id = record.get(f"node_{index}_id", "")
+        node_id = str(raw_id).strip('"')
+        labels = source_labels if index == 0 else [body.steps[index - 1].targetLabel]
+        nodes.append(
+            GraphNodeData(
+                id=node_id,
+                labels=labels,
+                properties=_as_properties(record.get(f"node_{index}_properties")),
+            )
+        )
+
+    for index, step in enumerate(body.steps):
+        current_id = nodes[index].id
+        next_id = nodes[index + 1].id
+        if step.direction == "out":
+            source_id, target_id = current_id, next_id
+        else:
+            source_id, target_id = next_id, current_id
+        ranking = int(record.get(f"edge_{index}_rank") or 0)
+        edges.append(
+            GraphEdgeData(
+                id=f"{source_id}->{target_id}@{ranking}",
+                type=step.edgeType,
+                source=source_id,
+                target=target_id,
+                properties=_as_properties(record.get(f"edge_{index}_properties")),
+            )
+        )
+
+    return PathData(nodes=nodes, edges=edges, found=True)
+
+
 # ---------- API 端点 ----------
 
 
@@ -175,6 +342,35 @@ async def search_nodes(
         result = _get_client(space).find_nodes([label], properties or {}, limit=limit)
         items = [_node_to_data(n).model_dump() for n in result.items]
         return ApiResponse(data=NodeListData(items=items, total=len(items)).model_dump())
+    except Exception as exc:
+        return ApiResponse(code=500, success=False, msg=str(exc))
+
+
+@router.post("/paths/search", response_model=ApiResponse)
+async def search_typed_paths(body: TypedPathSearchRequest) -> ApiResponse:
+    """按逐跳边类型和方向查询全部匹配路径，支持中间节点属性过滤与分页。"""
+    try:
+        client = _get_client(body.space)
+        source = client.get_node(body.sourceId)
+        if source is None:
+            return ApiResponse(code=404, success=False, msg=f"节点不存在: {body.sourceId}")
+
+        query_result = client.execute_read(_build_typed_path_query(body))
+        count_result = client.execute_read(_build_typed_path_query(body, count_only=True))
+        total = 0
+        if count_result.records:
+            total = int(count_result.records[0].get("total") or 0)
+
+        items = [
+            _typed_path_from_record(body, record, source.labels) for record in query_result.records
+        ]
+        data = TypedPathListData(
+            items=items,
+            total=total,
+            limit=body.limit,
+            offset=body.offset,
+        )
+        return ApiResponse(data=data.model_dump())
     except Exception as exc:
         return ApiResponse(code=500, success=False, msg=str(exc))
 

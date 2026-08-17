@@ -67,6 +67,16 @@ def _safe_filename(filename: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", name) or "schema.py"
 
 
+def _workflow_definition_id(schema_key: str) -> str:
+    safe_key = re.sub(r"[^a-z0-9_-]", "-", schema_key.lower()).strip("-")
+    fallback = hashlib.sha256(schema_key.encode()).hexdigest()[:12]
+    candidate = f"schema-{safe_key or fallback}"
+    if len(candidate) <= 64:
+        return candidate
+    suffix = hashlib.sha256(candidate.encode()).hexdigest()[:8]
+    return f"{candidate[:55]}-{suffix}"
+
+
 class SchemaManagementService:
     def __init__(self, session: Session, storage: S3Storage | None = None) -> None:
         self._session = session
@@ -201,7 +211,7 @@ class SchemaManagementService:
         if not definition.is_system and definition.created_by != user_id:
             raise SchemaPermissionError("只能更换自己创建的 Schema 脚本")
 
-        self._validate_script(filename, script_data)
+        workflow_function = self._validate_script(filename, script_data)
         object_key = (
             f"schemas/{definition.kind}/{schema_id}/{uuid4().hex}-{_safe_filename(filename)}"
         )
@@ -214,6 +224,12 @@ class SchemaManagementService:
                 )
             except Exception as exc:
                 raise SchemaStorageError("上传 Schema Python 脚本失败") from exc
+            workflow_definition = self._register_workflow(
+                definition=definition,
+                filename=filename,
+                script_data=script_data,
+                function_name=workflow_function,
+            )
             self._dao.save_script(
                 definition,
                 script={
@@ -225,6 +241,10 @@ class SchemaManagementService:
                     "etag": stored.etag,
                     "sha256": hashlib.sha256(script_data).hexdigest(),
                     "uploaded_by": user_id,
+                    "workflow_definition_id": (
+                        workflow_definition["id"] if workflow_definition else None
+                    ),
+                    "workflow_function_name": workflow_function,
                 },
             )
             self._session.commit()
@@ -300,7 +320,7 @@ class SchemaManagementService:
         if self._dao.exists_by_key_or_name(payload["schema_key"], payload["name"]):
             raise SchemaConflictError("schemaKey 或 Schema 名称已存在")
 
-        self._validate_script(filename, script_data)
+        workflow_function = self._validate_script(filename, script_data)
         schema_id = str(uuid4())
         object_key = f"schemas/{kind}/{schema_id}/{uuid4().hex}-{_safe_filename(filename)}"
         sha256 = hashlib.sha256(script_data).hexdigest()
@@ -314,6 +334,19 @@ class SchemaManagementService:
                 )
             except Exception as exc:
                 raise SchemaStorageError("上传 Schema Python 脚本失败") from exc
+            definition_stub = GraphSchemaDefinition(
+                id=schema_id,
+                schema_key=payload["schema_key"],
+                kind=kind,
+                name=payload["name"],
+                label=payload["label"],
+            )
+            workflow_definition = self._register_workflow(
+                definition=definition_stub,
+                filename=filename,
+                script_data=script_data,
+                function_name=workflow_function,
+            )
             self._dao.create(
                 schema_id=schema_id,
                 kind=kind,
@@ -328,6 +361,10 @@ class SchemaManagementService:
                     "etag": stored.etag,
                     "sha256": sha256,
                     "uploaded_by": user_id,
+                    "workflow_definition_id": (
+                        workflow_definition["id"] if workflow_definition else None
+                    ),
+                    "workflow_function_name": workflow_function,
                 },
             )
             self._session.commit()
@@ -346,7 +383,7 @@ class SchemaManagementService:
         return self._serialize(created, user_id=user_id, detail=True)
 
     @staticmethod
-    def _validate_script(filename: str, data: bytes) -> None:
+    def _validate_script(filename: str, data: bytes) -> str | None:
         if not filename or Path(filename).suffix.lower() != ".py":
             raise SchemaScriptError("必须上传 .py 格式的 Python 脚本")
         if not data:
@@ -358,11 +395,44 @@ class SchemaManagementService:
         except UnicodeDecodeError as exc:
             raise SchemaScriptError("Python 脚本必须使用 UTF-8 编码") from exc
         try:
-            ast.parse(source, filename=Path(filename).name)
+            tree = ast.parse(source, filename=Path(filename).name)
         except SyntaxError as exc:
             raise SchemaScriptError(
                 f"Python 脚本语法错误（第 {exc.lineno or 0} 行）: {exc.msg}"
             ) from exc
+        return next(
+            (
+                node.name
+                for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "workflow"
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _register_workflow(
+        *,
+        definition: GraphSchemaDefinition,
+        filename: str,
+        script_data: bytes,
+        function_name: str | None,
+    ) -> dict[str, Any] | None:
+        if function_name is None:
+            return None
+        from service.workflow_operations import workflow_operations_service
+
+        try:
+            return workflow_operations_service.create_python_definition(
+                filename,
+                script_data,
+                function_name,
+                _workflow_definition_id(definition.schema_key),
+                f"{definition.label} Schema 抽取",
+                timeout_seconds=int(os.getenv("SCHEMA_WORKFLOW_TIMEOUT_SECONDS", "3600")),
+            )
+        except (UnicodeDecodeError, SyntaxError, ValueError, OSError) as exc:
+            raise SchemaScriptError(f"Schema 脚本工作流注册失败: {exc}") from exc
 
     def _require_schema(self, schema_id: str) -> GraphSchemaDefinition:
         definition = self._dao.get(schema_id)
@@ -436,6 +506,8 @@ class SchemaManagementService:
             "sha256": script.sha256,
             "uploadedBy": script.uploaded_by,
             "uploadedAt": _iso(script.uploaded_at),
+            "workflowDefinitionId": script.workflow_definition_id,
+            "workflowFunctionName": script.workflow_function_name,
             "downloadUrl": f"/api/v1/schema-management/schemas/{schema_id}/script",
         }
 

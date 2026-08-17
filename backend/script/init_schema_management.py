@@ -48,6 +48,8 @@ INCREMENTAL_COLUMNS = {
         "category": "VARCHAR(16) NOT NULL DEFAULT 'core'",
     },
     "kg_schema_script": {
+        "workflow_definition_id": "VARCHAR(64) NULL",
+        "workflow_function_name": "VARCHAR(128) NULL",
         "uploaded_by": "VARCHAR(128) NOT NULL DEFAULT ''",
     },
 }

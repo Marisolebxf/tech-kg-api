@@ -198,6 +198,7 @@ export interface WorkflowExecution {
   payload?: Record<string, unknown>
   dispatchMode?: string
   message?: string
+  output?: unknown
 }
 
 export const listDefinitions = () =>

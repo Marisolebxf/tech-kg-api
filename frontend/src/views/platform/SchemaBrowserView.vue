@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   createEntitySchema,
   createRelationSchema,
@@ -20,6 +21,7 @@ type Attribute = { entity: string; key: string; core: string; dynamic: string; s
 type PendingCreate = { tab: string; values: Record<string, string> }
 
 const currentUserId = window.localStorage.getItem('tech-kg-schema-user-id') || 'schema-admin'
+const router = useRouter()
 
 const activeTab = ref('标准实体')
 const keyword = ref('')
@@ -57,7 +59,7 @@ const overview = ref<SchemaOverview>({
 })
 const modalOpen = ref(false)
 const form = ref<Record<string, string>>({})
-const scriptByRow = ref<Record<string, { name: string }>>({})
+const scriptByRow = ref<Record<string, { name: string; workflowDefinitionId: string | null }>>({})
 const fileInput = ref<HTMLInputElement | null>(null)
 const pendingUploadRow = ref('')
 const pendingCreate = ref<PendingCreate | null>(null)
@@ -142,8 +144,26 @@ function applyDefinitions(definitions: SchemaDefinition[]) {
   scriptByRow.value = Object.fromEntries(
     definitions
       .filter((item) => item.script)
-      .map((item) => [item.name, { name: item.script!.filename }]),
+      .map((item) => [
+        item.name,
+        {
+          name: item.script!.filename,
+          workflowDefinitionId: item.script!.workflowDefinitionId,
+        },
+      ]),
   )
+}
+
+function executeSchemaWorkflow(schemaName: string) {
+  const definitionId = scriptByRow.value[schemaName]?.workflowDefinitionId
+  if (!definitionId) {
+    showToast('该脚本未定义 workflow(payload)，不能在工作流平台执行', 'warning')
+    return
+  }
+  void router.push({
+    name: 'tasks',
+    query: { module: '图谱构建', workflowDefinitionId: definitionId },
+  })
 }
 
 async function loadSchemas() {
@@ -311,7 +331,7 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
       <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeTab === '属性定义'">枚举字典作为属性约束统一维护</span></div><div class="schema-toolbar__actions"><button v-if="activeTab !== '属性定义'" class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :placeholder="`搜索${activeTab}`" /></label></div></div>
       <!-- <p v-if="schemaVersionMessage" class="schema-version-message">{{ schemaVersionMessage }}</p> -->
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]?.workflowDefinitionId" type="button" class="schema-action-link" @click="executeSchemaWorkflow(row.name)">执行工作流 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
       <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 

@@ -24,7 +24,10 @@ class WorkflowRepository:
     """使用 SQLite 保存控制面数据，避免页面状态随进程重启丢失。"""
 
     def __init__(self, database_path: str | None = None) -> None:
-        default_path = Path(os.getenv("TECH_KG_STATE_DIR", "/tmp")) / "tech-kg-workflows.db"
+        backend_dir = Path(__file__).resolve().parents[1]
+        default_path = (
+            Path(os.getenv("TECH_KG_STATE_DIR", str(backend_dir / "var"))) / "tech-kg-workflows.db"
+        )
         self.database_path = database_path or os.getenv("WORKFLOW_DATABASE_PATH", str(default_path))
         Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
@@ -73,6 +76,7 @@ class WorkflowRepository:
                 );
                 """
             )
+            self._remove_workflow_type_unique_constraint(connection)
             count = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
             if count == 0:
                 self._seed(connection)
@@ -105,6 +109,34 @@ class WorkflowRepository:
                    VALUES (?, ?, ?, 1, ?)""",
                 (definition_id, workflow_type, category, _json(payload)),
             )
+
+    @staticmethod
+    def _remove_workflow_type_unique_constraint(connection: sqlite3.Connection) -> None:
+        indexes = connection.execute("PRAGMA index_list(workflow_definitions)").fetchall()
+        has_legacy_unique = False
+        for index in indexes:
+            if not index[2]:
+                continue
+            columns = connection.execute(f"PRAGMA index_info({index[1]})").fetchall()
+            if [column[2] for column in columns] == ["workflow_type"]:
+                has_legacy_unique = True
+                break
+        if not has_legacy_unique:
+            return
+        connection.executescript(
+            """
+            ALTER TABLE workflow_definitions RENAME TO workflow_definitions_legacy;
+            CREATE TABLE workflow_definitions (
+                id TEXT PRIMARY KEY, workflow_type TEXT NOT NULL,
+                category TEXT NOT NULL, active INTEGER NOT NULL, payload TEXT NOT NULL
+            );
+            INSERT OR REPLACE INTO workflow_definitions
+                (id, workflow_type, category, active, payload)
+            SELECT id, workflow_type, category, active, payload
+            FROM workflow_definitions_legacy;
+            DROP TABLE workflow_definitions_legacy;
+            """
+        )
 
     def _seed(self, connection: sqlite3.Connection) -> None:
         batches = [

@@ -206,3 +206,53 @@ async def test_rejects_invalid_python_script(schema_api) -> None:
         )
         assert response.status_code == 400
         assert "语法错误" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_schema_workflow_script_is_registered_and_returned(
+    schema_api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict] = []
+
+    def register(filename, content, function_name, definition_id, name, timeout_seconds=None):
+        calls.append(
+            {
+                "filename": filename,
+                "content": content,
+                "function_name": function_name,
+                "definition_id": definition_id,
+                "name": name,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return {"id": definition_id}
+
+    monkeypatch.setattr(
+        "service.workflow_operations.workflow_operations_service.create_python_definition",
+        register,
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        listing = await client.get(
+            "/api/v1/schema-management/schemas",
+            params={"kind": "entity", "pageSize": 100, "includeDetails": True},
+        )
+        organization = next(
+            item for item in listing.json()["data"]["items"] if item["name"] == "Organization"
+        )
+        response = await client.put(
+            f"/api/v1/schema-management/schemas/{organization['id']}/script",
+            headers={"X-User-Id": "schema-admin"},
+            files={
+                "script": (
+                    "organization.py",
+                    b"def workflow(payload):\n    return payload\n",
+                    "text/x-python",
+                )
+            },
+        )
+
+    assert response.status_code == 200
+    script = response.json()["data"]["script"]
+    assert script["workflowDefinitionId"] == "schema-organization"
+    assert script["workflowFunctionName"] == "workflow"
+    assert calls[0]["timeout_seconds"] == 3600

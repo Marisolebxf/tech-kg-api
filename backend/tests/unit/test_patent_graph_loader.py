@@ -58,7 +58,7 @@ def test_patent_preserves_raw_identifiers_and_only_maps_source_properties():
     assert mapped["db_source"] == '"ods_patent"'
     assert mapped["confidence"] == "1.0"
     assert mapped["organization_base"] == '"dwd_patent"'
-    assert mapped["organization_id"] == '"patent_id"'
+    assert mapped["organization_id"] == '"CN1A"'
     assert mapped["title_original"] == '"原文标题"'
     assert mapped["publication_number"] == '"CN-1-A"'
     assert mapped["application_number"] == '"CN-APP-1"'
@@ -106,5 +106,9 @@ def test_entity_sql_is_external_and_complete():
     assert SQL_FILE.name == "patent_entity_extract.sql"
     assert SELECT_SQL == SQL_FILE.read_text(encoding="utf-8")
     assert "FROM dwd_patent p" in SELECT_SQL
-    assert SELECT_SQL.count("LEFT JOIN dwd_patent_") == 5
-    assert "LIMIT %s OFFSET %s" in SELECT_SQL
+    assert SELECT_SQL.count("FROM dwd_patent_") == 5
+    assert SELECT_SQL.count("GROUP BY patent_id") == 5
+    assert "p.id AS source_row_id" in SELECT_SQL
+    assert "WHERE p.id > %s" in SELECT_SQL
+    assert "LIMIT %s" in SELECT_SQL
+    assert "OFFSET" not in SELECT_SQL

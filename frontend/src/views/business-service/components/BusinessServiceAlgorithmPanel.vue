@@ -133,7 +133,8 @@ const expertDirectResponse = ref<ExpertDirectRelationQueryResponse | null>(null)
 const expertDirectError = ref<string | null>(null)
 const isLiveAlumni = computed(() => props.moduleInfo.key === 'expert-alumni')
 const isLiveCoop = computed(() => props.moduleInfo.key === 'two-point-achievement')
-const isLiveModule = computed(() => isLiveAlumni.value || isLiveCoop.value)
+const isLiveColleague = computed(() => props.moduleInfo.key === 'expert-colleague')
+const isLiveModule = computed(() => isLiveAlumni.value || isLiveCoop.value || isLiveColleague.value)
 const isPanorama = computed(() => props.moduleInfo.key === 'industry-chain-panorama')
 const isExpertDirect = computed(() => props.moduleInfo.key === 'expert-direct')
 
@@ -341,6 +342,60 @@ const liveModuleGraph = computed(() => {
     const data = liveCoopResult.value
     if (!data) return null
     return mapLiveGraph(data.graph?.nodes, data.graph?.edges)
+  }
+  if (isLiveColleague.value) {
+    const data = liveResponse.value?.data
+    const graph = data?.graph
+    if (!graph?.nodes?.length) return null
+    const otherNodes = graph.nodes.filter((node: any) => (
+      node.id !== data.expert?.id && node.id !== data.targetExpert?.id && node.type !== 'organization'
+    ))
+    return mapLiveGraph(
+      graph.nodes.map((node: any) => {
+        const extraIndex = Math.max(0, otherNodes.findIndex((item: any) => item.id === node.id))
+        const extraAngle = (Math.PI * 2 * extraIndex) / Math.max(1, otherNodes.length)
+        const position = node.id === data.expert?.id
+          ? { x: 220, y: 180 }
+          : node.id === data.targetExpert?.id
+            ? { x: 620, y: 180 }
+            : node.type === 'organization'
+              ? { x: 420, y: 360 }
+              : { x: 420 + Math.cos(extraAngle) * 260, y: 360 + Math.sin(extraAngle) * 160 }
+        return {
+          id: node.id,
+          label: node.label,
+          nodeType: node.type === 'organization' ? 'org' : node.type === 'expert' ? 'expert' : node.type,
+          x: position.x,
+          y: position.y,
+          entityType: node.type === 'expert' ? '科技专家' : node.type === 'organization' ? '共同机构' : '合作成果',
+          confidence: node.data?.confidence,
+          relations: node.data?.title || node.label,
+          evidence: node.data?.evidence || [],
+          sourceTable: node.data?.provenance?.sourceTable,
+          sourceRecordId: node.data?.provenance?.sourceValue,
+          sourceField: node.data?.provenance?.sourceField,
+          sourceValue: node.data?.provenance?.sourceValue,
+          sourceSystem: node.data?.details?.source_system,
+          ingestBatch: node.data?.provenance?.ingestBatch,
+          ingestTime: node.data?.provenance?.ingestTime,
+        }
+      }),
+      graph.edges.map((edge: any, index: number) => ({
+        id: edge.id || `colleague-edge-${index}`,
+        from: edge.source,
+        to: edge.target,
+        label: edge.label,
+        category: edge.label === '同事关系' ? '同事' : edge.label,
+        confidence: edge.data?.confidence,
+        inferred: edge.label === '同事关系',
+        matchEvidence: (edge.data?.evidence || []).join('；'),
+        matchMethod: edge.data?.ruleName,
+        sourceTable: edge.data?.source_table,
+        sourceRecordId: edge.data?.source_record_id,
+        ingestBatch: edge.data?.ingest_batch,
+        ingestTime: edge.data?.ingest_time,
+      })),
+    )
   }
   return null
 })
@@ -668,6 +723,24 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       return data.summaryRows.map((row) => ({ label: row.label, value: row.value }))
     }
   }
+  if (isLiveColleague.value) {
+    const data = liveResponse.value?.data
+    if (!data) return [{ label: '查询状态', value: '等待执行' }]
+    const summary = data.summary || {}
+    return [
+      { label: '专家 A', value: summary.coreExpert || '—' },
+      { label: '核心专家机构', value: summary.coreExpertOrganization || '—' },
+      { label: '专家 B', value: summary.primaryColleague || (data.targetExpert ? `${data.targetExpert.name}｜未命中同事关系` : '—') },
+      { label: '共同机构', value: summary.commonOrganization || '—' },
+      { label: '所属部门/团队', value: summary.departmentOrTeam || '—' },
+      { label: '关系生效时段', value: summary.effectivePeriod || '—' },
+      { label: '任职重叠时间', value: summary.overlapDuration || '—' },
+      { label: '共同工作内容', value: summary.workContent || '暂无共同成果证据' },
+      { label: '协作场景', value: summary.collaborationScenes || '—' },
+      { label: '同事期间成果', value: summary.periodAchievements || '0项' },
+      { label: '关系判定', value: data.total ? '存在同事关系' : '不存在同事关系' },
+    ]
+  }
   if (isLiveCoop.value) {
     const data = liveCoopResult.value
     if (!data) {
@@ -697,10 +770,11 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
   return null
 })
 
-const liveRules = computed(() => {
+const liveRules = computed<Array<Record<string, any>>>(() => {
   if (isLiveAlumni.value && liveAlumniResult.value?.rules?.length) return liveAlumniResult.value.rules
   if (isLiveCoop.value && liveCoopResult.value?.rules?.length) return liveCoopResult.value.rules
-  return props.moduleInfo.rules
+  if (isLiveColleague.value && liveResponse.value?.data?.rules?.length) return liveResponse.value.data.rules
+  return props.moduleInfo.rules as Array<Record<string, any>>
 })
 
 const liveEntities = computed(() => {
@@ -1049,6 +1123,10 @@ watch(
 
 async function loadModuleDescribe() {
   try {
+    if (isLiveColleague.value) {
+      liveDescribe.value = { endpoint: props.moduleInfo.endpoint, space: 'dev' }
+      return
+    }
     const meta = isLiveAlumni.value
       ? await describeExpertAlumniRelation() as unknown as Record<string, unknown>
       : await describeExpertCooperationAchievement() as unknown as Record<string, unknown>
@@ -1234,6 +1312,34 @@ async function handleRun() {
       paperResult.value = response.structuredResult
       liveResponse.value = { ...response }
       liveGraph.value = buildPaperCooperationGraph(response.structuredResult)
+    } else if (isLiveColleague.value) {
+      const expertAId = parameterValues.value.expert_a_id?.trim()
+      const expertBId = parameterValues.value.expert_b_id?.trim()
+      if (!expertAId || !expertBId) {
+        showToast('请填写专家 A 和专家 B', 'warning')
+        return
+      }
+      const body = {
+        expert_a_id: expertAId,
+        expert_b_id: expertBId,
+        start_time: optionalParam(parameterValues.value.start_time),
+        end_time: optionalParam(parameterValues.value.end_time),
+        limit: 1,
+        offset: 0,
+      }
+      const res = await invokeKgService(props.moduleInfo.endpoint, body, 60000) as Record<string, any>
+      liveResponse.value = res
+      liveApiPayload.value = { request: body, response: res }
+      if (res?.success === false || (res?.code !== undefined && res.code !== 200)) {
+        liveError.value = res?.msg || `业务码 ${res?.code}`
+        showToast(liveError.value || '查询失败', 'warning')
+        resultMode.value = 'api'
+      } else {
+        const total = Number(res?.data?.total || 0)
+        liveError.value = null
+        showToast(total ? '两位专家存在同事关系' : '两位专家不存在有效同事关系', total ? 'success' : 'info')
+        resultMode.value = 'summary'
+      }
     } else if (isLiveAlumni.value) {
       const expertId = parameterValues.value.expertId?.trim()
       if (!expertId) {
@@ -1440,6 +1546,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       <label v-for="field in moduleInfo.requestFields" :key="field.name">
         <span><i v-if="field.required === '是'">*</i>{{ field.name }}</span>
         <input
+          :type="field.type === 'month' ? 'month' : 'text'"
           :key="`${field.name}-${paramResetToken}`"
           :value="parameterValues[field.name] ?? ''"
           :placeholder="field.description"

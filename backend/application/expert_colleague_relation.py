@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import json
+from datetime import UTC, datetime
 from typing import Any
 
 from httpx import AsyncClient
 
+from infra.graph_db import TRSGraphClient
+from infra.graph_db.config import TRSGraphSettings
 from service.expert_colleague_relation import ExpertColleagueRelationService
 
 
@@ -22,15 +27,30 @@ class FastAPIGraphSearchGateway:
             data = await self._get(f"/api/v1/graph-search/nodes/{node_id}", {"space": space})
             if data:
                 return data
-        for property_name in ("name_zh", "name_cn", "name_en", "name", "source_record_id"):
+        matches: dict[str, dict[str, Any]] = {}
+        for property_name in (
+            "name_zh",
+            "name_cn",
+            "name_en",
+            "name",
+            "scholar_id",
+            "source_record_id",
+        ):
             data = await self._post(
                 "/api/v1/graph-search/nodes/search",
-                {"label": "Person", "limit": 5, "space": space},
+                {"label": "Person", "limit": 50, "space": space},
                 {property_name: keyword},
             )
             items = (data or {}).get("items", [])
-            if items:
-                return items[0]
+            for item in items:
+                value = str((item.get("properties") or {}).get(property_name) or "").strip()
+                if value.casefold() == keyword.strip().casefold():
+                    matches[str(item.get("id"))] = item
+        if len(matches) == 1:
+            return next(iter(matches.values()))
+        if len(matches) > 1:
+            candidates = "、".join(str(item.get("id")) for item in matches.values())
+            raise LookupError(f"专家标识存在多个精确匹配，请改用唯一 VID: {candidates}")
         return None
 
     async def subgraph(
@@ -54,8 +74,15 @@ class FastAPIGraphSearchGateway:
         nodes: dict[str, dict[str, Any]] = {}
         edges: dict[str, dict[str, Any]] = {}
         offset = 0
-        while True:
-            page_params = {**params, "depth": 1, "limit": page_size, "offset": offset}
+        while len(edges) < limit:
+            remaining = limit - len(edges)
+            current_page_size = min(page_size, remaining)
+            page_params = {
+                **params,
+                "depth": 1,
+                "limit": current_page_size,
+                "offset": offset,
+            }
             data = await self._get(f"/api/v1/graph-search/subgraph/{node_id}", page_params)
             page = data or {"nodes": [], "edges": []}
             before = len(edges)
@@ -67,9 +94,9 @@ class FastAPIGraphSearchGateway:
                 )
                 edges[key] = edge
             page_edges = page.get("edges", [])
-            if len(page_edges) < page_size or len(edges) == before:
+            if len(page_edges) < current_page_size or len(edges) == before:
                 break
-            offset += page_size
+            offset += current_page_size
         return {"nodes": list(nodes.values()), "edges": list(edges.values())}
 
     async def _get(self, path: str, params: dict[str, Any]) -> Any:
@@ -102,4 +129,78 @@ class ExpertColleagueRelationApplication:
         return self._service.describe()
 
     async def query(self, client: AsyncClient, **kwargs: Any) -> dict[str, Any]:
-        return await self._service.query(FastAPIGraphSearchGateway(client), **kwargs)
+        # 查询和写入都强制使用 dev，调用方不能切换业务图空间。
+        kwargs["space"] = "dev"
+        data = await self._service.query(FastAPIGraphSearchGateway(client), **kwargs)
+        data["persistence"] = await asyncio.to_thread(self._persist_relations, data)
+        return data
+
+    @staticmethod
+    def _persist_relations(data: dict[str, Any]) -> dict[str, Any]:
+        settings = TRSGraphSettings.from_env().model_copy(update={"space": "dev"})
+        graph = TRSGraphClient(settings)
+        graph.connect()
+        created = updated = 0
+        try:
+            graph.execute_write(
+                "CREATE EDGE IF NOT EXISTS COLLEAGUE("
+                "organization string, department string, effective_period string, "
+                "overlap_months int, confidence double, teams_json string, "
+                "work_content_json string, scenes_json string, "
+                "achievement_ids_json string, evidence_json string, source string, "
+                "updated_at string);"
+            )
+            expert_id = str(data["expert"]["id"])
+            try:
+                current_edges = graph.get_node_edges(
+                    expert_id, direction="both", edge_type="COLLEAGUE", limit=1000
+                )
+            except Exception:
+                current_edges = []
+            existing = {
+                str(edge.target_id if str(edge.source_id) == expert_id else edge.source_id): edge
+                for edge in current_edges
+            }
+            now = datetime.now(UTC).isoformat()
+            for relation in data.get("colleagues", []):
+                target_id = str(relation["colleague"]["id"])
+                properties = {
+                    "organization": relation.get("commonOrganization") or "",
+                    "department": relation.get("commonDepartment") or "",
+                    "effective_period": relation.get("effectivePeriod") or "",
+                    "overlap_months": int(relation.get("overlapMonths") or 0),
+                    "confidence": float(relation.get("confidence") or 0),
+                    "teams_json": json.dumps(
+                        relation.get("commonTeamOrProject") or [], ensure_ascii=False
+                    ),
+                    "work_content_json": json.dumps(
+                        relation.get("workContent") or [], ensure_ascii=False
+                    ),
+                    "scenes_json": json.dumps(
+                        relation.get("collaborationScenes") or [], ensure_ascii=False
+                    ),
+                    "achievement_ids_json": json.dumps(
+                        [item["id"] for item in relation.get("achievements", [])],
+                        ensure_ascii=False,
+                    ),
+                    "evidence_json": json.dumps(relation.get("evidence") or [], ensure_ascii=False),
+                    "source": "expert_colleague_relation_service",
+                    "updated_at": now,
+                }
+                edge = existing.get(target_id)
+                source_id, destination_id = sorted((expert_id, target_id))
+                if edge is None:
+                    graph.create_edge(source_id, destination_id, "COLLEAGUE", properties)
+                    created += 1
+                else:
+                    graph.update_edge(edge.id, properties, edge_type="COLLEAGUE")
+                    updated += 1
+        finally:
+            graph.close()
+        return {
+            "space": "dev",
+            "edgeType": "COLLEAGUE",
+            "created": created,
+            "updated": updated,
+            "total": created + updated,
+        }

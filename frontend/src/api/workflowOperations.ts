@@ -117,86 +117,51 @@ export const getSourceUpdates = (params: Record<string, unknown> = {}) => unwrap
 export const saveUpdatePolicy = (data: { enabled: boolean; frequency: string; executionTime: string; timezone: string; skipWhenNoChanges: boolean }) => unwrap(http.put('/v1/task-center/update-policy', data)) as Promise<{ policy: UpdatePolicy }>
 export const triggerGraphBuild = (data: Record<string, unknown> = {}) => unwrap(http.post('/v1/task-center/trigger', data)) as Promise<{ task: ProcessingInstance }>
 
-// ---- 人工处理 API（无后端或响应异常时回退到本地 mock 数据） ----
+// ---- 人工处理 API（原型直接返回本地 mock 数据，不调后端） ----
 
-const isReviewRecord = (value: unknown): value is ReviewRecord => Boolean(value) && typeof value === 'object'
-  && typeof (value as ReviewRecord).id === 'string'
-
-export const getManualReviews = async (params: Record<string, unknown> = {}): Promise<{ items: ReviewRecord[]; total: number; statusCounts: Record<string, number> }> => {
-  try {
-    const response = await unwrap(http.get('/v1/manual-reviews', { params, skipErrorToast: true })) as { items?: ReviewRecord[]; total?: number; statusCounts?: Record<string, number> }
-    if (!response || !Array.isArray(response.items)) {
-      throw new Error('人工处理接口返回数据格式异常')
-    }
-    return { items: response.items, total: response.total ?? response.items.length, statusCounts: response.statusCounts ?? {} }
-  } catch {
-    const items = reviewRecords.slice()
-    const statusCounts: Record<string, number> = { 待处理: 0, 已完成: 0, 已撤销: 0 }
-    items.forEach((row) => { statusCounts[row.status] = (statusCounts[row.status] || 0) + 1 })
-    return { items, total: items.length, statusCounts }
-  }
+export const getManualReviews = async (_params: Record<string, unknown> = {}): Promise<{ items: ReviewRecord[]; total: number; statusCounts: Record<string, number> }> => {
+  const items = reviewRecords.slice()
+  const statusCounts: Record<string, number> = { 待处理: 0, 已完成: 0, 已撤销: 0 }
+  items.forEach((row) => { statusCounts[row.status] = (statusCounts[row.status] || 0) + 1 })
+  return { items, total: items.length, statusCounts }
 }
 
 export const getManualReview = async (id: string): Promise<ReviewRecord> => {
-  try {
-    const response = await unwrap(http.get(`/v1/manual-reviews/${id}`, { skipErrorToast: true }))
-    if (!isReviewRecord(response)) {
-      throw new Error('人工处理详情接口返回数据格式异常')
-    }
-    return response
-  } catch {
-    const record = getReviewRecord(id)
-    if (!record) throw new Error('未找到处理实例')
-    return record
-  }
+  const record = getReviewRecord(id)
+  if (!record) throw new Error('未找到处理实例')
+  return record
 }
 
 export const submitManualReview = async (id: string, data: { actionId: string; note: string; result: Record<string, unknown>; handler?: string; rerun: boolean }): Promise<{ review: ReviewRecord }> => {
-  try {
-    return await unwrap(http.post(`/v1/manual-reviews/${id}/actions`, data, { skipErrorToast: true })) as { review: ReviewRecord }
-  } catch {
-    const record = getReviewRecord(id)
-    if (!record) throw new Error('未找到处理实例')
-    const updated: ReviewRecord = {
-      ...record,
-      status: data.actionId === 'skip-task' || data.actionId === 'discard-record' ? '已撤销' : '已完成',
-      decision: data.result.label as string || '修正后重跑并通过',
-      decisionNote: data.note || '人工处理完成，已从阻断节点重跑。',
-      completedAt: new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-'),
-    }
-    Object.assign(record, updated)
-    return { review: updated }
+  const record = getReviewRecord(id)
+  if (!record) throw new Error('未找到处理实例')
+  const updated: ReviewRecord = {
+    ...record,
+    status: data.actionId === 'skip-task' || data.actionId === 'discard-record' ? '已撤销' : '已完成',
+    decision: data.result.label as string || '修正后重跑并通过',
+    decisionNote: data.note || '人工处理完成，已从阻断节点重跑。',
+    completedAt: new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-'),
   }
+  Object.assign(record, updated)
+  return { review: updated }
 }
 
 export const retryManualReview = async (id: string, _payload: Record<string, unknown> = {}): Promise<{ id: string; status: string }> => {
-  try {
-    return await unwrap(http.post(`/v1/manual-reviews/${id}/retry`, { _payload }, { skipErrorToast: true })) as { id: string; status: string }
-  } catch {
-    return { id, status: '已重试' }
-  }
+  return { id, status: '已重试' }
 }
 
-export const modifyManualReviewResult = async (id: string, result: Record<string, unknown>, note = ''): Promise<ReviewRecord> => {
-  try {
-    return await unwrap(http.put(`/v1/manual-reviews/${id}/result`, { result, note }, { skipErrorToast: true })) as ReviewRecord
-  } catch {
-    const record = getReviewRecord(id)
-    if (!record) throw new Error('未找到处理实例')
-    return record
-  }
+export const modifyManualReviewResult = async (id: string, _result: Record<string, unknown>, _note = ''): Promise<ReviewRecord> => {
+  const record = getReviewRecord(id)
+  if (!record) throw new Error('未找到处理实例')
+  return record
 }
 
 export const revokeManualReview = async (id: string, reason: string): Promise<ReviewRecord> => {
-  try {
-    return await unwrap(http.post(`/v1/manual-reviews/${id}/revoke`, { reason }, { skipErrorToast: true })) as ReviewRecord
-  } catch {
-    const record = getReviewRecord(id)
-    if (!record) throw new Error('未找到处理实例')
-    const updated: ReviewRecord = { ...record, status: '已撤销', decision: '已撤销', decisionNote: reason, completedAt: new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-') }
-    Object.assign(record, updated)
-    return updated
-  }
+  const record = getReviewRecord(id)
+  if (!record) throw new Error('未找到处理实例')
+  const updated: ReviewRecord = { ...record, status: '已撤销', decision: '已撤销', decisionNote: reason, completedAt: new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-') }
+  Object.assign(record, updated)
+  return updated
 }
 
 // ---- 生产级人工处理 API（占位；后端未启用时不会被调用） ----

@@ -32,7 +32,7 @@ const canClaim = computed(() => productionMode && productionCase.value?.status =
 const template = computed(() => (record.value ? getReviewTemplate(record.value) : null))
 const impactScope = computed(() => (record.value ? getImpactScope(record.value) : '任务级'))
 const templateId = computed(() => template.value?.id ?? 'T_RUNTIME')
-const handleCategory = computed(() => (record.value ? getHandleCategory(record.value) : '质量校验'))
+const handleCategory = computed(() => (record.value ? getHandleCategory(record.value) : '规则与证据校验'))
 const consequence = computed(() => {
   if (productionMode && productionCase.value?.consequence) return { ...productionCase.value.consequence, rerunAnchor: productionCase.value.pipelineStepName || productionCase.value.consequence.rerunStepId, phase: record.value?.module || '图谱构建' }
   return record.value ? getReviewConsequence(record.value) : null

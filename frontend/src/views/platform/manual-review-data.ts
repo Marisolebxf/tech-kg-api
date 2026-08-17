@@ -170,6 +170,36 @@ export const reviewRecords: ReviewRecord[] = [
     sourceResult: '已合并至 Expert_88102', suggestion: '审核完成',
     sourceTable: '专家基本信息表', sourceRecordId: 'EXPERT-19882', decision: '修正后重跑并通过', decisionNote: '已核对机构别名与专利发明人信息，从实体对齐节点重跑并合并至 Expert_88102。', completedAt: '2026-07-13 19:16:00',
   },
+  {
+    id: 'PI-20260714-0014', batch: 'UPD-20260714', module: '数据处理', node: '数据接入', type: '数据源拉取超时', domain: '论文',
+    objectType: '论文源记录', objectId: 'source=dwd_zh_paper_detail', object: 'dwd_zh_paper_detail（论文成果表）', ruleId: 'SRC-PULL-TIMEOUT-001',
+    evidence: '从 ODPS 拉取增量数据时连续 3 次超过 30 分钟未响应', score: '', handler: '李质量', status: '待处理', updatedAt: '07-14 09:48',
+    sourceResult: '增量窗口 02:00—03:00 未完成拉取，已累计 25140 条待同步', suggestion: '切换至备用通道并补充限流配置后重跑',
+    sourceTable: '论文成果表', sourceRecordId: 'SRC-PULL-20260714-002',
+  },
+  {
+    id: 'PI-20260714-0015', batch: 'UPD-20260714', module: '数据处理', node: '数据接入', type: '源字段缺失', domain: '专家',
+    objectType: '专家源记录', objectId: 'source=dwd_scholar', object: 'dwd_scholar（专家基本信息表）', ruleId: 'SRC-FIELD-MISSING-007',
+    evidence: '增量数据中 expert_id、affiliation 字段为空，无法进入清洗流程', score: '', handler: '李质量', status: '已完成', updatedAt: '07-14 09:32',
+    sourceResult: '已退回上游数据源系统，补充字段后重新拉取', suggestion: '与数据源方约定字段完整性约束',
+    sourceTable: '专家基本信息表', sourceRecordId: 'SRC-FIELD-20260714-005',
+    decision: '退回上游并补全', decisionNote: '与数据源方确认 expert_id 与 affiliation 字段约束后重新拉取，从数据接入节点重跑通过。', completedAt: '2026-07-14 09:32:11',
+  },
+  {
+    id: 'PI-20260714-0016', batch: 'UPD-20260714', module: '图谱构建', node: '图谱入库', type: '入图唯一性冲突', domain: '人才',
+    objectType: '专家实体入图', objectId: 'expert_id=EXPERT_88102', object: '陈卓 / Chen Zhuo（专家实体）', ruleId: 'PERSIST-UNIQUE-002',
+    evidence: '图谱中已存在 expert_id=EXPERT_88102 节点，当前候选 vid 与存量节点不一致', score: '0.83', handler: '王审核', status: '待处理', updatedAt: '07-14 10:14',
+    sourceResult: '候选节点已暂存至隔离区，未写入生产图谱', suggestion: '确认是否合并到存量节点，或更换 vid 后重新入图',
+    sourceTable: '专家基本信息表', sourceRecordId: 'EXPERT-88102',
+  },
+  {
+    id: 'PI-20260714-0017', batch: 'UPD-20260714', module: '图谱构建', node: '图谱入库', type: '入图写入失败', domain: '论文',
+    objectType: '论文节点写入', objectId: 'paper_id=P202607130089', object: '《多源科技数据融合方法研究》', ruleId: 'PERSIST-WRITE-005',
+    evidence: '图谱服务写入接口返回 503，连续重试 3 次均失败', score: '', handler: '陈治理', status: '已完成', updatedAt: '07-14 10:05',
+    sourceResult: '已切换备用图谱写入通道并完成节点写入', suggestion: '完善写入接口熔断与重试策略',
+    sourceTable: '论文成果表', sourceRecordId: 'P202607130089',
+    decision: '切换通道后通过', decisionNote: '切换至备用图谱写入通道后完成节点写入与关系绑定，从图谱入库节点重跑通过。', completedAt: '2026-07-14 10:05:33',
+  },
 ]
 
 export const getReviewBatch = (batchId: string) => reviewBatches.find((item) => item.id === batchId)
@@ -415,7 +445,7 @@ export const PIPELINE_STEPS: PipelineStep[] = [
   { id: 'schema', name: 'Schema 映射', phase: '图谱构建' },
   { id: 'extract', name: '实体关系抽取', phase: '图谱构建' },
   { id: 'align', name: '实体对齐消歧', phase: '图谱构建' },
-  { id: 'validate', name: '质量校验', phase: '图谱构建' },
+  { id: 'validate', name: '规则与证据校验', phase: '图谱构建' },
   { id: 'persist', name: '图谱入库', phase: '图谱构建' },
 ]
 
@@ -427,10 +457,14 @@ export const getPipelineStep = (id: PipelineStepId): PipelineStep => pipelineSte
 
 /** 阻断节点由工单语义推导；MAP 按子形态落到 schema 或 normalize。 */
 export const resolvePipelineStep = (record: ReviewRecord): PipelineStep => {
-  const tid = getReviewTemplateId(record)
   const type = record.type
   const node = record.node || ''
 
+  // source / persist 没有专属模板，先按节点关键字命中，避免被模板分支吞掉
+  if (/接入|source/i.test(node) || /接入|source/i.test(type)) return getPipelineStep('source')
+  if (/入库|写入|persist/i.test(node) || /入库|写入/.test(type)) return getPipelineStep('persist')
+
+  const tid = getReviewTemplateId(record)
   if (tid === 'T_DQ_FILL' || tid === 'T_DQ_MERGE') return getPipelineStep('normalize')
   if (tid === 'T_EVIDENCE' || tid === 'T_ATTR') return getPipelineStep('validate')
   if (tid === 'T_RUNTIME') return getPipelineStep('extract')
@@ -442,9 +476,7 @@ export const resolvePipelineStep = (record: ReviewRecord): PipelineStep => {
     return getPipelineStep('normalize')
   }
 
-  if (/入库|写入|persist/i.test(node) || /入库|写入/.test(type)) return getPipelineStep('persist')
-  if (/接入|source/i.test(node)) return getPipelineStep('source')
-  if (/质量校验|关系证据|属性校验|证据校验/.test(node) || /关系证据|属性冲突|关系类型置信/.test(type)) {
+  if (/规则与证据校验|质量校验|关系证据|属性校验|证据校验/.test(node) || /关系证据|属性冲突|关系类型置信/.test(type)) {
     return getPipelineStep('validate')
   }
   if (/对齐|消歧|实体结果|align/i.test(node) || /对齐|消歧|实体重复|实体置信/.test(type)) {
@@ -462,37 +494,42 @@ export const resolvePipelineStep = (record: ReviewRecord): PipelineStep => {
   return getPipelineStep('validate')
 }
 
-/** 人工处理业务分类（短名；仅顶部 chips 筛选，列表展示阻断节点） */
+/** 人工处理业务分类（与七大数据流水线节点一一对应） */
 export type HandleCategory =
+  | '数据接入'
   | '清洗标准化'
   | 'Schema 映射'
-  | '抽取配置'
-  | '实体对齐'
-  | '质量校验'
+  | '实体关系抽取'
+  | '实体对齐消歧'
+  | '规则与证据校验'
+  | '图谱入库'
 
 export const HANDLE_CATEGORIES: HandleCategory[] = [
+  '数据接入',
   '清洗标准化',
   'Schema 映射',
-  '抽取配置',
-  '实体对齐',
-  '质量校验',
+  '实体关系抽取',
+  '实体对齐消歧',
+  '规则与证据校验',
+  '图谱入库',
 ]
 
 /** @deprecated 兼容旧调用；请用 getHandleCategory */
 export type ReviewCategory = HandleCategory
 
-const categoryByStep: Partial<Record<PipelineStepId, HandleCategory>> = {
+const categoryByStep: Record<PipelineStepId, HandleCategory> = {
+  source: '数据接入',
   normalize: '清洗标准化',
   schema: 'Schema 映射',
-  extract: '抽取配置',
-  align: '实体对齐',
-  validate: '质量校验',
+  extract: '实体关系抽取',
+  align: '实体对齐消歧',
+  validate: '规则与证据校验',
+  persist: '图谱入库',
 }
 
 export const getHandleCategory = (record: ReviewRecord): HandleCategory => {
   const step = resolvePipelineStep(record)
-  if (step.id === 'source' || step.id === 'persist') return '质量校验'
-  return categoryByStep[step.id] ?? '质量校验'
+  return categoryByStep[step.id]
 }
 
 export const getReviewCategory = (record: ReviewRecord): HandleCategory => getHandleCategory(record)

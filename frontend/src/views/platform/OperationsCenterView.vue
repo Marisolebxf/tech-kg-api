@@ -104,11 +104,13 @@ const batchBlockingCount = computed(() => (
 ))
 
 const getReviewCategoryClass = (category: string) => {
-  if (category === '抽取配置') return 'is-extraction'
-  if (category.includes('Schema')) return 'is-schema'
+  if (category === '数据接入') return 'is-source'
   if (category === '清洗标准化') return 'is-normalization'
-  if (category === '实体对齐') return 'is-align'
-  if (category === '质量校验') return 'is-relation'
+  if (category.includes('Schema')) return 'is-schema'
+  if (category === '实体关系抽取') return 'is-extraction'
+  if (category === '实体对齐消歧') return 'is-align'
+  if (category === '规则与证据校验') return 'is-relation'
+  if (category === '图谱入库') return 'is-persist'
   return ''
 }
 
@@ -297,13 +299,17 @@ onMounted(loadReviews)
 .review-cat-bar{display:flex;flex-wrap:wrap;gap:8px;padding:12px 14px 0;background:#fff}
 .review-cat-bar button{height:30px;padding:0 12px;border:1px solid #d3deee;border-radius:999px;background:#fff;color:#52647f;font-size:12px;cursor:pointer}
 .review-cat-bar button.active{border-color:#165dff;background:#eef4ff;color:#165dff;font-weight:600}
+.review-cat-bar button.cat.is-source.active{border-color:#0ba5ec;background:#e5f6ff;color:#026aa2}
 .review-cat-bar button.cat.is-extraction.active{border-color:#f04438;background:#fef3f2;color:#b42318}
 .review-cat-bar button.cat.is-schema.active{border-color:#6172f3;background:#edf0ff;color:#444ce7}
 .review-cat-bar button.cat.is-normalization.active{border-color:#12b76a;background:#ecfdf3;color:#067647}
 .review-cat-bar button.cat.is-align.active{border-color:#7a5af8;background:#f0ebff;color:#6938ef}
 .review-cat-bar button.cat.is-relation.active{border-color:#f79009;background:#fff3d8;color:#b54708}
+.review-cat-bar button.cat.is-persist.active{border-color:#15b79e;background:#e6fbf5;color:#0a8a72}
+.review-type-cell>span.is-source{background:#e5f6ff;color:#026aa2}
 .review-type-cell>span.is-align{background:#f0ebff;color:#6938ef}
 .review-type-cell>span.is-relation{background:#fff3d8;color:#b54708}
+.review-type-cell>span.is-persist{background:#e6fbf5;color:#0a8a72}
 .review-subtype{display:block!important;margin-top:5px!important;color:#7b89a1;font-size:10px;white-space:nowrap}
 .review-question-cell{min-width:220px;max-width:320px;white-space:normal}
 .review-question-cell strong{display:block;font-size:12px;font-weight:600;line-height:18px}

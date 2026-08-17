@@ -56,6 +56,7 @@ function edgeClass(edge: GraphEdgeData) {
   const classes = ['platform-network-line']
   if (!isEdgeActive(edge)) classes.push('is-dimmed')
   else classes.push(edgeToneMap[edge.category] ?? 'is-primary')
+  if (edge.category === '间接关系') classes.push('is-inferred')
   if (props.selectedEdgeId === edge.id) classes.push('is-selected')
   return classes.join(' ')
 }
@@ -339,6 +340,17 @@ onUnmounted(() => {
 .platform-network-line.is-orange,
 .platform-network-line.is-purple {
   stroke: rgba(100, 116, 139, 0.52);
+}
+
+.platform-network-line.is-inferred {
+  stroke: #7a5af8;
+  stroke-width: 1.4;
+  stroke-dasharray: 5 4;
+}
+
+.platform-network-line.is-inferred.is-selected {
+  stroke: #5925dc;
+  stroke-width: 2;
 }
 
 .platform-network-hit-area {

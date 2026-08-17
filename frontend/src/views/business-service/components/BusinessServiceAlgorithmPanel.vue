@@ -281,6 +281,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   selectedGraphEdgeId.value = edge.id
   selectedGraphNodeId.value = null
   resultMode.value = 'relation'
+  if (isIndirect.value && edge.category === '间接关系') {
+    openLabelModal(edge.id)
+  }
 }
 
 function openLabelModal(edgeId: string) {
@@ -432,26 +435,6 @@ function removeLabel(edgeId: string, index: number) {
             <dd>{{ value }}</dd>
           </div>
         </dl>
-        <section
-          v-if="isIndirect && resultMode === 'relation' && selectedEdge"
-          class="edge-annotation"
-        >
-          <header class="edge-annotation__head">
-            <span>间接关系标注</span>
-            <button type="button" class="edge-annotation__add" @click="openLabelModal(selectedEdge.id)">＋ 添加标注</button>
-          </header>
-          <div v-if="(edgeLabels[selectedEdge.id] ?? []).length" class="edge-labels">
-            <span
-              v-for="(tag, index) in edgeLabels[selectedEdge.id]"
-              :key="`${tag}-${index}`"
-              class="edge-label-badge"
-            >
-              {{ tag }}
-              <button type="button" @click="removeLabel(selectedEdge.id, index)">×</button>
-            </span>
-          </div>
-          <p v-else class="edge-labels__empty">暂无标注，点击"添加标注"为该间接关系打标签</p>
-        </section>
         <section v-else-if="resultMode === 'provenance' && selectedProvenance && selectedProvenanceTarget" class="result-provenance">
           <header><strong>当前追溯对象</strong><span>{{ selectedProvenanceTarget.kind }}</span></header>
           <div class="result-provenance__target">
@@ -514,6 +497,19 @@ function removeLabel(edgeId: string, index: number) {
           <button type="button" @click="labelModalOpen = false">×</button>
         </header>
         <div class="label-modal__body">
+          <div v-if="(edgeLabels[pendingEdgeId] ?? []).length" class="label-modal__existing">
+            <span class="label-modal__existing-title">已有标注</span>
+            <div class="label-modal__existing-list">
+              <span
+                v-for="(tag, index) in edgeLabels[pendingEdgeId]"
+                :key="`${tag}-${index}`"
+                class="edge-label-badge"
+              >
+                {{ tag }}
+                <button type="button" @click="removeLabel(pendingEdgeId, index)">×</button>
+              </span>
+            </div>
+          </div>
           <FormField label="标注内容" required :error="labelVisibleError('value')">
             <input
               v-model="labelInput"
@@ -1089,48 +1085,6 @@ function removeLabel(edgeId: string, index: number) {
   }
 }
 
-.edge-annotation {
-  margin-top: 12px;
-  padding: 12px 14px;
-  border: 1px solid #e5e6eb;
-  border-radius: 6px;
-  background: #f7faff;
-}
-
-.edge-annotation__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.edge-annotation__head span {
-  color: #1d2129;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.edge-annotation__add {
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid #165dff;
-  border-radius: 4px;
-  background: #fff;
-  color: #165dff;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.edge-annotation__add:hover {
-  background: #f2f8ff;
-}
-
-.edge-labels {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
 .edge-label-badge {
   display: inline-flex;
   align-items: center;
@@ -1159,13 +1113,6 @@ function removeLabel(edgeId: string, index: number) {
 
 .edge-label-badge button:hover {
   color: #f53f3f;
-}
-
-.edge-labels__empty {
-  margin: 0;
-  color: #86909c;
-  font-size: 12px;
-  line-height: 20px;
 }
 
 .label-modal {
@@ -1223,6 +1170,28 @@ function removeLabel(edgeId: string, index: number) {
 
 .label-modal__body {
   padding: 18px;
+}
+
+.label-modal__existing {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  background: #f7faff;
+}
+
+.label-modal__existing-title {
+  display: block;
+  margin-bottom: 8px;
+  color: #1d2129;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.label-modal__existing-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .label-modal__body label {

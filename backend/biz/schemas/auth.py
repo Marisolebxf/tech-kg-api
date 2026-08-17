@@ -97,6 +97,7 @@ class AuthProfile(CamelCaseModel):
     @classmethod
     def normalize_null_lists(cls, value: Any) -> Any:
         return [] if value is None else value
+
     menus: list[MenuSummary] = Field(default_factory=list)
     role_menus: list[RoleMenuSummary] = Field(default_factory=list)
     app_permissions: PermissionSetSummary = Field(default_factory=PermissionSetSummary)

@@ -216,6 +216,7 @@ def test_v21_menu_link_type_and_role_menu_mapping_are_exposed() -> None:
     assert profile.app_permissions.roles == []
     assert profile.org_permissions.roles == []
 
+
 def test_menu_summary_normalizes_nested_null_children() -> None:
     menu = MenuSummary.model_validate(
         {
@@ -226,6 +227,7 @@ def test_menu_summary_normalizes_nested_null_children() -> None:
     )
 
     assert menu.children[0].children == []
+
 
 def test_permission_models_normalize_null_lists() -> None:
     permission_set = PermissionSetSummary.model_validate(

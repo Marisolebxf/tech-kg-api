@@ -59,6 +59,7 @@ async def custom_swagger_ui():
         swagger_css_url="/static/swagger/swagger-ui.css",
     )
 
+
 register_routers(app)
 
 

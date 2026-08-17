@@ -23,6 +23,15 @@
 - **失败向上抛出**：单阶段异常先记阶段信息到 stderr 再 re-raise 原异常，子进程非零退出 → activity 抛 `RuntimeError(stderr)` → Temporal 识别 FAILED 并按平台策略重试；不吞异常返回 `ok=False`。
 - **无 stage 参数**：两个脚本各自单一职责；关系脚本一次执行原 loader 的全部 5 种边（`INVENTED_BY`/`APPLIED_BY`/`OWNED_BY`/`CITES`/`OUTPUT_OF`），不拆分、不过滤。
 
+### 生产抽取修复
+
+- 实体 SQL 先按 `patent_id` 聚合五张明细表，保证一条主专利只产生一行；分页改为 `p.id > last_source_id` 游标方式。
+- Patent、Keyword、PatentFamily 按批写入，批次过大失败时自动二分；`organization_id` 保存实际业务标识。
+- `apply`、`replace`、`use_vector` 只接受 JSON boolean；字符串 `"false"` 会返回参数错误，禁止误写图。
+- `replace=true` 必须同时设置 `apply=true`；向量阈值、分差和 top-k 在工作流层与 loader 层双重校验。
+- 申请人/权利人如果只命中 Person 候选，不会再送入 Organization Milvus 索引跨类型建边。
+- CITES、OUTPUT_OF 按 source/target 逻辑键去重；发明人复核记录包含专利 VID、序号和源记录定位信息。
+
 ## payload 契约
 
 ### `patent_entity_workflow.py`

@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+import pytest
+
 from script import load_patent_relations as loader
 
 
@@ -284,3 +286,65 @@ def test_person_review_is_not_promoted_by_organization_vector_index(tmp_path):
         loader.BM25SparseEncoder.load = original_load
     assert not edges
     assert remaining == [record]
+
+
+def test_deduplicate_edges_collapses_duplicate_citation_directions():
+    properties = (("confidence", 1.0), ("source_record_id", "source"))
+    rows = [
+        loader.EdgeRecord("CITES", "patent_a", "patent_b", 1, properties),
+        loader.EdgeRecord("CITES", "patent_a", "patent_b", 7, properties),
+        loader.EdgeRecord("INVENTED_BY", "patent_a", "person_a", 1, properties),
+        loader.EdgeRecord("INVENTED_BY", "patent_a", "person_a", 2, properties),
+    ]
+
+    deduplicated, removed = loader.deduplicate_edges(rows)
+
+    assert removed == 1
+    assert len(deduplicated) == 3
+    assert [item.rank for item in deduplicated if item.edge_type == "CITES"] == [0]
+
+
+def test_person_applicant_is_not_sent_to_organization_matcher(monkeypatch, tmp_path):
+    class Store:
+        def has_collection(self, entity_type):
+            return True
+
+        def collection_name(self, entity_type):
+            return f"org_domain_{entity_type.lower()}"
+
+    (tmp_path / "org_domain_organization.bm25.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(loader.BM25SparseEncoder, "load", lambda path: object())
+    monkeypatch.setattr(
+        loader,
+        "OrganizationHybridMatcher",
+        lambda *args, **kwargs: pytest.fail("个人候选不应进入机构匹配器"),
+    )
+    record = loader.ReviewRecord(
+        patent_id="CN4",
+        relation_type="APPLIED_BY",
+        source_name="张三",
+        reason="名称可能是个人",
+        confidence=0.6,
+        candidates=[{"vid": "person_1", "type": "Person"}],
+        evidence=[],
+        patent_vid="patent_4",
+        sequence=1,
+        role="applicant",
+    )
+
+    edges, remaining = loader.promote_vector_organization_matches(
+        [record], state_dir=tmp_path, store=Store()
+    )
+
+    assert not edges
+    assert remaining == [record]
+    assert "跨类型" in record.reason
+
+
+def test_load_validates_destructive_and_vector_options_before_connecting():
+    with pytest.raises(ValueError, match="replace=True"):
+        loader.load(apply=False, replace=True)
+    with pytest.raises(ValueError, match="vector_threshold"):
+        loader.load(apply=False, vector_threshold=1.1)
+    with pytest.raises(ValueError, match="vector_top_k"):
+        loader.load(apply=False, vector_top_k=1)

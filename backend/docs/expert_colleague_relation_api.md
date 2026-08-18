@@ -4,7 +4,7 @@
 
 本服务通过提取科技专家在不同时期的工作单位、所属部门、参与团队等机构信息，结合知识图谱中的机构架构与人员任职数据，运用任职时间匹配与团队归属算法，推理并构建专家之间的同事关系。服务会判断同事关系的生效时段、所属团队或项目组，标注同事关系期间的共同工作内容与协作场景，同时关联两者在同事期间产生的合作成果，帮助用户了解科技专家的职业社交圈与工作协作历史。
 
-服务自身不直连图数据库，而是通过内部 ASGI 调用公开的图谱查询 API（`/api/v1/graph-search/*`）读取图谱，业务层只依赖查图契约。
+服务通过内部 ASGI 调用公开图谱查询 API（`/api/v1/graph-search/*`）读取事实数据；推理成功后由应用层将 `COLLEAGUE` 边幂等写入固定的 `dev` 图空间。写入失败时接口失败，不会把未落库关系报告为成功。首次部署需执行 `schemas/dev_expert_colleague_schema.ngql`。
 
 ## 接口清单
 
@@ -48,12 +48,16 @@
 
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- | --- |
-| `expertId` | string | 是 | — | 专家 VID、`scholar_id` 或中文姓名；去首尾空格，不能为空 |
+| `expert_id` | string | 是 | — | 专家 VID、`scholar_id`、`source_record_id` 或精确姓名；兼容旧字段 `expertId` |
 | `organization` | string | 否 | null | 共同任职机构关键词，模糊匹配 |
 | `department` | string | 否 | null | 共同部门、实验室或团队关键词，模糊匹配 |
-| `overlapPeriod` | string | 否 | null | 要求覆盖的年月区间，如 `2018-01 至 2022-12` |
+| `overlap_period` | string | 否 | null | 任职重叠区间，如 `2018-01 至 2022-12`；兼容旧字段 `overlapPeriod` |
+| `team_or_project` | string | 否 | null | 共同团队或项目组筛选 |
+| `achievement_types` | string[] | 否 | null | Paper、Patent、Project、Report、Award |
+| `min_confidence` | float | 否 | 0 | 最低置信度，0–1 |
 | `limit` | int | 否 | 20 | 返回同事数量上限，取值范围 1–50 |
-| `space` | string | 否 | `dev` | 固定查询 `dev` 图空间 |
+| `offset` | int | 否 | 0 | 分页偏移量，必须大于等于 0 |
+| `space` | — | — | — | 不对普通调用方开放，查询和写入均由服务端固定为 `dev` |
 
 `expertId` 解析顺序（`FastAPIGraphSearchGateway.resolve_person`）：
 
@@ -65,12 +69,12 @@
 
 ```json
 {
-  "expertId": "person_10001",
+  "expert_id": "E10001",
   "organization": "中国科学院自动化研究所",
   "department": "智能系统实验室",
-  "overlapPeriod": "2018-01 至 2022-12",
+  "overlap_period": "2018-01 至 2022-12",
   "limit": 20,
-  "space": "dev"
+  "offset": 0
 }
 ```
 
@@ -85,8 +89,8 @@
 5. 任职时间匹配：按月计算专家、候选和请求区间的交集；没有时间交集则排除（只要存在至少 1 个月的有效交集即成立），任一任职时间缺失也不输出同事关系，只计入待复核数；
 6. 团队归属与成果关联：规范化比较双方部门，2 跳共享的团队/项目作为共同团队；共享成果只有在同事生效时段内才关联；
 7. `COAUTHOR_WITH` 作为论文协作场景证据，但没有带年份的真实共同成果节点时不虚构成果；
-8. 拼装每条同事关系（生效时段、团队、工作内容、协作场景、成果、置信度、证据、是否需复核）；
-9. 同一候选人在多个机构均为同事时，仅保留置信度最高的一条，按置信度与成果数排序后截断 `limit`。
+8. 聚合同一候选人的多机构、多时段共同任职历史，并生成可解释评分明细；
+9. 按置信度与成果数排序后，根据 `offset`、`limit` 分页。
 
 ### 2.3 响应
 
@@ -95,11 +99,15 @@
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `expert` | object | 中心专家信息 |
-| `colleagues` | array | 同事关系列表，按置信度与成果数降序，截断 `limit` |
-| `total` | int | 同事数量 |
+| `colleagues` | array | 当前页同事关系列表，按置信度与成果数降序 |
+| `total` | int | 满足条件的同事总数，不受分页影响 |
+| `returnedCount` | int | 当前页实际返回数量 |
+| `offset` | int | 当前分页偏移量 |
+| `limit` | int | 当前分页大小 |
 | `summary` | object | 汇总统计 |
 | `graph` | object | 可视化图谱（节点 + 边） |
 | `apiCalls` | array | 本次推理实际调用的查图 API 记录 |
+| `persistence` | object | `COLLEAGUE` 写入 dev 的新增、更新和总数 |
 
 `expert` / `colleague` 结构：
 
@@ -122,10 +130,12 @@
 | `effectivePeriod` | string | 同事关系生效时段，如 `2020-01 至 2022-12` |
 | `overlapMonths` | int | 重叠月数 |
 | `overlapYears` | float | 重叠年数，按月数换算 |
-| `workContent` | string[] | 共同工作内容（成果标题，最多 5 条；无成果时为 `共同机构业务协作`） |
+| `workContent` | string[] | 共同工作内容（成果标题，最多 5 条；无真实成果证据时为空数组，不生成推测文本） |
 | `collaborationScenes` | string[] | 协作场景，如 `同机构任职` / `同部门/团队协作` / `论文合作` / `项目组协作` |
 | `achievements` | object[] | 同事期间关联合作成果（最多 10 条） |
 | `confidence` | float | 置信度，范围 0–0.98 |
+| `scoreBreakdown` | object | 同机构、重叠时长、同部门、合著、团队和成果的评分明细 |
+| `employmentHistory` | object[] | 与该同事在不同机构、部门和时段的共同任职历史 |
 | `evidence` | string[] | 证据链说明 |
 | `reviewRequired` | bool | 已输出关系均具备时间证据，当前为 false；缺时间候选不输出 |
 

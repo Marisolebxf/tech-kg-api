@@ -97,3 +97,23 @@ def test_workflow_re_raises_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_workflow_rejects_non_dict_payload() -> None:
     with pytest.raises(ValueError, match="payload 必须是 dict"):
         workflow(["not", "a", "dict"])  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("key", ["apply", "replace", "use_vector"])
+def test_workflow_rejects_string_booleans(key: str) -> None:
+    with pytest.raises(ValueError, match="JSON boolean"):
+        workflow({key: "false"})
+
+
+def test_workflow_rejects_replace_without_apply() -> None:
+    with pytest.raises(ValueError, match="replace=true"):
+        workflow({"replace": True})
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{"vector_threshold": 1.1}, {"vector_margin": -0.1}, {"vector_top_k": 1}],
+)
+def test_workflow_rejects_invalid_vector_policy(payload: dict) -> None:
+    with pytest.raises(ValueError):
+        workflow(payload)

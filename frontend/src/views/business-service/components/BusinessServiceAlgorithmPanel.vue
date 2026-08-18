@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import {
   describeExpertAlumniRelation,
@@ -26,25 +26,12 @@ import {
   type DirectRelationGraphEdge,
 } from '../../../api/expertDirectRelation'
 import iconInfo from '../../../assets/icons/icon-info.svg'
-import {
-  analyzeExpertIndirectRelation,
-  type ExpertIndirectRelationResult,
-} from '../../../api/expertIndirectRelation'
-import {
-  analyzeExpertPaperCooperation,
-  type ExpertPaperCooperationResult,
-} from '../../../api/expertPaperCooperation'
 import KgGraphCanvas from '../../../components/kg-graph-canvas.vue'
 import { useToast } from '../../../composables/use-toast'
 import { getEdgeProvenance, getNodeProvenance, getServiceGraphPreset } from '../../../data/graph-presets'
 import type { GraphEdgeData, GraphNodeData, GraphNodeType, GraphPreset } from '../../../data/graph-presets'
 import { invokeKgService } from '../../../api/kgService'
 import type { ServiceModule, ServiceSummaryRow } from '../service-modules'
-import {
-  buildIndirectRelationGraph,
-  indirectSummaryRows,
-  parseRelationTypes,
-} from '../indirect-relation-view'
 
 type PanoramaLayerKey =
   | 'core_technology'
@@ -106,22 +93,11 @@ const resultMode = ref<'summary' | 'entity' | 'relation' | 'provenance' | 'rule'
 const running = ref(false)
 const lastTestTime = ref('—')
 const lastUpdateTime = ref<number | null>(null)
-const autoRefresh = ref(false)
-const refreshIntervalSeconds = 10
-let refreshTimer: number | null = null
-const panoramaLayer = ref(3)
-const panoramaRelation = ref('all')
 const parameterValues = ref<Record<string, string>>({})
 const liveResponse = ref<Record<string, any> | null>(null)
 const paramResetToken = ref(0)
 const selectedGraphNodeId = ref<string | null>(null)
 const selectedGraphEdgeId = ref<string | null>(null)
-const paperResult = ref<ExpertPaperCooperationResult | null>(null)
-const indirectResult = ref<ExpertIndirectRelationResult | null>(null)
-const liveGraph = ref<{ nodes: GraphNodeData[], edges: GraphEdgeData[] } | null>(null)
-const runError = ref('')
-const isPaperCooperation = computed(() => props.moduleInfo.key === 'paper-cooperation')
-const isIndirectRelation = computed(() => props.moduleInfo.key === 'node-indirect')
 const liveAlumniResult = ref<AlumniQueryResult | null>(null)
 const liveCoopResult = ref<CooperationQueryResult | null>(null)
 const liveApiPayload = ref<unknown>(null)
@@ -133,7 +109,8 @@ const expertDirectResponse = ref<ExpertDirectRelationQueryResponse | null>(null)
 const expertDirectError = ref<string | null>(null)
 const isLiveAlumni = computed(() => props.moduleInfo.key === 'expert-alumni')
 const isLiveCoop = computed(() => props.moduleInfo.key === 'two-point-achievement')
-const isLiveModule = computed(() => isLiveAlumni.value || isLiveCoop.value)
+const isLiveColleague = computed(() => props.moduleInfo.key === 'expert-colleague')
+const isLiveModule = computed(() => isLiveAlumni.value || isLiveCoop.value || isLiveColleague.value)
 const isPanorama = computed(() => props.moduleInfo.key === 'industry-chain-panorama')
 const isExpertDirect = computed(() => props.moduleInfo.key === 'expert-direct')
 
@@ -330,7 +307,7 @@ function buildLiveGraph(res: Record<string, any>, key: string): { nodes: GraphNo
   return { nodes, edges }
 }
 
-const responseGraph = computed(() => (liveResponse.value ? buildLiveGraph(liveResponse.value, props.moduleInfo.key) : null))
+const liveGraph = computed(() => (liveResponse.value ? buildLiveGraph(liveResponse.value, props.moduleInfo.key) : null))
 const liveModuleGraph = computed(() => {
   if (isLiveAlumni.value) {
     const data = liveAlumniResult.value
@@ -341,6 +318,60 @@ const liveModuleGraph = computed(() => {
     const data = liveCoopResult.value
     if (!data) return null
     return mapLiveGraph(data.graph?.nodes, data.graph?.edges)
+  }
+  if (isLiveColleague.value) {
+    const data = liveResponse.value?.data
+    const graph = data?.graph
+    if (!graph?.nodes?.length) return null
+    const otherNodes = graph.nodes.filter((node: any) => (
+      node.id !== data.expert?.id && node.id !== data.targetExpert?.id && node.type !== 'organization'
+    ))
+    return mapLiveGraph(
+      graph.nodes.map((node: any) => {
+        const extraIndex = Math.max(0, otherNodes.findIndex((item: any) => item.id === node.id))
+        const extraAngle = (Math.PI * 2 * extraIndex) / Math.max(1, otherNodes.length)
+        const position = node.id === data.expert?.id
+          ? { x: 220, y: 180 }
+          : node.id === data.targetExpert?.id
+            ? { x: 620, y: 180 }
+            : node.type === 'organization'
+              ? { x: 420, y: 360 }
+              : { x: 420 + Math.cos(extraAngle) * 260, y: 360 + Math.sin(extraAngle) * 160 }
+        return {
+          id: node.id,
+          label: node.label,
+          nodeType: node.type === 'organization' ? 'org' : node.type === 'expert' ? 'expert' : node.type,
+          x: position.x,
+          y: position.y,
+          entityType: node.type === 'expert' ? '科技专家' : node.type === 'organization' ? '共同机构' : '合作成果',
+          confidence: node.data?.confidence,
+          relations: node.data?.title || node.label,
+          evidence: node.data?.evidence || [],
+          sourceTable: node.data?.provenance?.sourceTable,
+          sourceRecordId: node.data?.provenance?.sourceValue,
+          sourceField: node.data?.provenance?.sourceField,
+          sourceValue: node.data?.provenance?.sourceValue,
+          sourceSystem: node.data?.details?.source_system,
+          ingestBatch: node.data?.provenance?.ingestBatch,
+          ingestTime: node.data?.provenance?.ingestTime,
+        }
+      }),
+      graph.edges.map((edge: any, index: number) => ({
+        id: edge.id || `colleague-edge-${index}`,
+        from: edge.source,
+        to: edge.target,
+        label: edge.label,
+        category: edge.label === '同事关系' ? '同事' : edge.label,
+        confidence: edge.data?.confidence,
+        inferred: edge.label === '同事关系',
+        matchEvidence: (edge.data?.evidence || []).join('；'),
+        matchMethod: edge.data?.ruleName,
+        sourceTable: edge.data?.source_table,
+        sourceRecordId: edge.data?.source_record_id,
+        ingestBatch: edge.data?.ingest_batch,
+        ingestTime: edge.data?.ingest_time,
+      })),
+    )
   }
   return null
 })
@@ -357,7 +388,6 @@ const graphPreset = computed<GraphPreset>(() => {
 const graphNodes = computed<GraphNodeData[]>(() => {
   if (isLiveModule.value) return liveModuleGraph.value?.nodes ?? []
   if (liveGraph.value) return liveGraph.value.nodes
-  if (responseGraph.value) return responseGraph.value.nodes
   return graphPreset.value.nodes
 })
 const graphEdges = computed<GraphEdgeData[]>(() => {
@@ -372,50 +402,12 @@ const graphEdges = computed<GraphEdgeData[]>(() => {
     nodes.some((node) => node.id === edge.to)
   ))
 })
-const panoramaLayerOptions = [
-  { value: 1, label: '一级 · 产业环节' },
-  { value: 2, label: '二级 · 企业/专家/技术' },
-  { value: 3, label: '三级 · 动态事件' },
-]
-const panoramaRelationOptions = [
-  { value: 'all', label: '全部关系' },
-  { value: 'chain', label: '产业链主干' },
-  { value: 'enterprise', label: '企业布局' },
-  { value: 'expert', label: '专家支撑' },
-  { value: 'technology', label: '技术支撑' },
-  { value: 'event', label: '事件影响' },
-]
-const displayedGraphNodes = computed(() => {
-  if (!isPanorama.value) return graphNodes.value
-  return graphNodes.value.filter((node) => (node.level ?? 1) <= panoramaLayer.value)
-})
+const displayedGraphNodes = computed(() => graphNodes.value)
 const displayedGraphEdges = computed(() => {
   const visibleNodeIds = new Set(displayedGraphNodes.value.map((node) => node.id))
-  const nodeById = new Map(graphNodes.value.map((node) => [node.id, node]))
-  const usingLive = isPanorama.value && panoramaResponse.value !== null
-  return graphEdges.value.filter((edge) => {
-    if (!visibleNodeIds.has(edge.from) || !visibleNodeIds.has(edge.to)) return false
-    if (!isPanorama.value || panoramaRelation.value === 'all') return true
-    if (usingLive) {
-      const fromNode = nodeById.get(edge.from)
-      const toNode = nodeById.get(edge.to)
-      if (!fromNode || !toNode) return false
-      const types = new Set([fromNode.nodeType, toNode.nodeType])
-      if (panoramaRelation.value === 'chain') return types.has('main')
-      if (panoramaRelation.value === 'enterprise') return types.has('company')
-      if (panoramaRelation.value === 'expert') return types.has('expert')
-      if (panoramaRelation.value === 'technology') return types.has('topic')
-      if (panoramaRelation.value === 'event') return types.has('event') || types.has('paper')
-      return true
-    }
-    if (panoramaRelation.value === 'chain') {
-      return ['上游环节', '中游环节', '下游环节', '资源供给', '能力输出'].includes(edge.label)
-    }
-    if (panoramaRelation.value === 'enterprise') return edge.label.includes('企业')
-    if (panoramaRelation.value === 'expert') return edge.label.includes('专家')
-    if (panoramaRelation.value === 'technology') return edge.label.includes('技术')
-    return edge.label.includes('事件')
-  })
+  return graphEdges.value.filter((edge) => (
+    visibleNodeIds.has(edge.from) && visibleNodeIds.has(edge.to)
+  ))
 })
 const graphLegendItems = computed(() => Array.from(
   new Map(displayedGraphNodes.value.map((node) => [node.nodeType, {
@@ -433,15 +425,18 @@ const selectedEdge = computed(() => (
     ? graphEdges.value.find((edge) => edge.id === selectedGraphEdgeId.value) ?? null
     : null
 ))
+// 未点选节点/关系时，实体/关系 tab 展示图里第一个对象，避免查询后 tab 空白。
+const activeEntityNode = computed(() => selectedNode.value ?? graphNodes.value[0] ?? null)
+const activeRelationEdge = computed(() => selectedEdge.value ?? graphEdges.value[0] ?? null)
 const selectedEdgeNodes = computed(() => {
-  const edge = selectedEdge.value
+  const edge = activeRelationEdge.value
   return {
     from: graphNodes.value.find((node) => node.id === edge?.from),
     to: graphNodes.value.find((node) => node.id === edge?.to),
   }
 })
 const relationDetailRows = computed(() => {
-  const edge = selectedEdge.value
+  const edge = activeRelationEdge.value
   const from = selectedEdgeNodes.value.from
   const to = selectedEdgeNodes.value.to
 
@@ -536,72 +531,14 @@ function formatTimestamp(date: Date) {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
-function levelSummary(result: ExpertPaperCooperationResult) {
-  const parts = [
-    ...Object.entries(result.journalLevelCount).map(([level, count]) => `期刊 ${level} ${count} 篇`),
-    ...Object.entries(result.conferenceLevelCount).map(([level, count]) => `会议 ${level} ${count} 篇`),
-  ]
-  return parts.join('、') || '暂无分级数据'
-}
-
-function buildPaperCooperationGraph(result: ExpertPaperCooperationResult) {
-  const expertA = result.authorList[0] || '专家 A'
-  const expertB = result.authorList[1] || '专家 B'
-  const topic = result.paperTopics[0] || '暂无主题'
-  const team = result.stableTeamMembers.slice(0, 3).join('、') || '暂无稳定团队'
-  const venue = levelSummary(result)
-  const unitCount = new Set(result.authorUnits.filter(Boolean)).size
-
-  const nodes: GraphNodeData[] = [
-    { id: 'core', label: expertA, nodeType: 'main', x: 215, y: 90, entityType: '科技专家', confidence: 0.95, relations: `合作论文 ${result.cooperationPaperCount}`, evidence: ['专家实体来自知识图谱。'] },
-    { id: 'expert-1', label: expertB, nodeType: 'expert', x: 545, y: 90, entityType: '合作专家', confidence: 0.94, relations: `合作论文 ${result.cooperationPaperCount}`, evidence: ['双方通过共同论文路径关联。'] },
-    { id: 'paper-1', label: `合作论文${result.cooperationPaperCount}篇`, nodeType: 'paper', x: 380, y: 205, entityType: '论文成果', confidence: 0.93, relations: `总被引 ${result.citation.total}`, evidence: ['双方共同出现在论文作者关系中。'] },
-    { id: 'org-1', label: '作者单位', nodeType: 'org', x: 125, y: 340, entityType: '科研机构', confidence: 0.91, relations: `单位 ${unitCount}`, evidence: result.authorUnits },
-    { id: 'topic-1', label: topic, nodeType: 'topic', x: 310, y: 355, entityType: '论文主题', confidence: 0.9, relations: `方向 ${result.paperTopics.length}`, evidence: result.paperTopics },
-    { id: 'venue-1', label: venue, nodeType: 'project', x: 485, y: 355, entityType: '期刊会议级别', confidence: 0.88, relations: `成果 ${result.cooperationPaperCount}`, evidence: [venue] },
-    { id: 'expert-2', label: team, nodeType: 'expert', x: 655, y: 340, entityType: '合作团队', confidence: 0.86, relations: `核心人员 ${result.coreCollaborators.length}`, evidence: result.coreCollaborators },
-  ]
-  const edges: GraphEdgeData[] = [
-    { id: 'pc1', from: 'core', to: 'expert-1', label: '论文合作', category: '论文合作' },
-    { id: 'pc2', from: 'core', to: 'paper-1', label: '共同作者', category: '论文合作' },
-    { id: 'pc3', from: 'expert-1', to: 'paper-1', label: '共同作者', category: '论文合作' },
-    { id: 'pc4', from: 'paper-1', to: 'org-1', label: '作者单位', category: '直接关系' },
-    { id: 'pc5', from: 'paper-1', to: 'topic-1', label: '研究主题', category: '间接关系' },
-    { id: 'pc6', from: 'paper-1', to: 'venue-1', label: '发表级别', category: '直接关系' },
-    { id: 'pc7', from: 'paper-1', to: 'expert-2', label: '团队识别', category: '论文合作' },
-  ]
-  return { nodes, edges }
-}
-
-function paperSummaryRows(result: ExpertPaperCooperationResult) {
-  const period = result.cooperationTimeRange.displayText || '暂无逐篇时间数据'
-  const topics = result.paperTopics.join('、') || '暂无主题数据'
-  const collaborators = result.coreCollaborators.join('、') || '暂无核心合作人员'
-  const contribution = result.sharedContribution.join('、') || '暂无共同贡献标签'
-  return [
-    ['核心专家', `${result.authorList[0] || '-'}｜${result.authorUnits[0] || '未知机构'}`] as const,
-    ['合作专家', `${result.authorList[1] || '-'}｜${result.authorUnits[1] || '未知机构'}`] as const,
-    ['作者单位', result.authorUnits.join('、') || '未知机构'] as const,
-    ['合作发表时间', period] as const,
-    ['论文主题', topics] as const,
-    ['合作论文数量', `${result.cooperationPaperCount} 篇`] as const,
-    ['期刊/会议级别', levelSummary(result)] as const,
-    ['论文被引情况', `总被引 ${result.citation.total} 次｜最高单篇 ${result.citation.max} 次`] as const,
-    ['研究方向', `${topics}（${result.paperTopics.length} 个方向）`] as const,
-    ['共同贡献', contribution] as const,
-    ['核心合作人员', collaborators] as const,
-    ['合作团队特征', result.stableTeamMembers.length ? '长期稳定合作团队' : '暂未识别稳定团队'] as const,
-  ]
-}
 
 const updateStatus = computed(() => {
   if (running.value) return '正在拉取最新批次数据…'
-  if (autoRefresh.value) return `自动更新中（每 ${refreshIntervalSeconds}s 刷新一次）`
-  if (lastUpdateTime.value === null) return '尚未更新，点击"刷新数据"或开启自动更新'
+  if (lastUpdateTime.value === null) return '尚未更新，点击"执行测试"查询最新数据'
   const elapsed = Math.floor((Date.now() - lastUpdateTime.value) / 1000)
   if (elapsed < 5) return `刚刚更新（${elapsed}s 前）`
   if (elapsed < 60) return `已更新（${elapsed}s 前）`
-  if (elapsed < 3600) return `已更新（${Math.floor(elapsed / 60)}min 前），建议刷新`
+  if (elapsed < 3600) return `已更新（${Math.floor(elapsed / 60)}min 前）`
   return `已更新（${Math.floor(elapsed / 3600)}h 前），数据可能过期`
 })
 
@@ -668,6 +605,24 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       return data.summaryRows.map((row) => ({ label: row.label, value: row.value }))
     }
   }
+  if (isLiveColleague.value) {
+    const data = liveResponse.value?.data
+    if (!data) return [{ label: '查询状态', value: '等待执行' }]
+    const summary = data.summary || {}
+    return [
+      { label: '专家 A', value: summary.coreExpert || '—' },
+      { label: '核心专家机构', value: summary.coreExpertOrganization || '—' },
+      { label: '专家 B', value: summary.primaryColleague || (data.targetExpert ? `${data.targetExpert.name}｜未命中同事关系` : '—') },
+      { label: '共同机构', value: summary.commonOrganization || '—' },
+      { label: '所属部门/团队', value: summary.departmentOrTeam || '—' },
+      { label: '关系生效时段', value: summary.effectivePeriod || '—' },
+      { label: '任职重叠时间', value: summary.overlapDuration || '—' },
+      { label: '共同工作内容', value: summary.workContent || '暂无共同成果证据' },
+      { label: '协作场景', value: summary.collaborationScenes || '—' },
+      { label: '同事期间成果', value: summary.periodAchievements || '0项' },
+      { label: '关系判定', value: data.total ? '存在同事关系' : '不存在同事关系' },
+    ]
+  }
   if (isLiveCoop.value) {
     const data = liveCoopResult.value
     if (!data) {
@@ -697,10 +652,11 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
   return null
 })
 
-const liveRules = computed(() => {
+const liveRules = computed<Array<Record<string, any>>>(() => {
   if (isLiveAlumni.value && liveAlumniResult.value?.rules?.length) return liveAlumniResult.value.rules
   if (isLiveCoop.value && liveCoopResult.value?.rules?.length) return liveCoopResult.value.rules
-  return props.moduleInfo.rules
+  if (isLiveColleague.value && liveResponse.value?.data?.rules?.length) return liveResponse.value.data.rules
+  return props.moduleInfo.rules as Array<Record<string, any>>
 })
 
 const liveEntities = computed(() => {
@@ -774,14 +730,13 @@ const liveRelationRows = computed(() => {
 const liveProvenance = computed(() => {
   if (isLiveAlumni.value) return liveAlumniResult.value?.provenance ?? null
   if (isLiveCoop.value) return liveCoopResult.value?.provenance ?? null
+  if (isPanorama.value) return panoramaResponse.value?.provenance ?? null
+  if (isExpertDirect.value) return expertDirectResponse.value?.provenance ?? null
   return null
 })
 
 const detailRows = computed(() => {
   if (isPanorama.value && panoramaResponse.value) {
-  if ((isPaperCooperation.value || isIndirectRelation.value) && runError.value) return [["执行状态", runError.value] as const]
-  if (isIndirectRelation.value && indirectResult.value) return indirectSummaryRows(indirectResult.value)
-  if (isPaperCooperation.value && paperResult.value) return paperSummaryRows(paperResult.value)
     return computePanoramaSummaryRows(panoramaResponse.value)
   }
   if (isExpertDirect.value && expertDirectResponse.value) {
@@ -1019,8 +974,6 @@ watch(
   () => props.moduleInfo.key,
   () => {
     resultMode.value = 'summary'
-    panoramaLayer.value = 3
-    panoramaRelation.value = 'all'
     selectedGraphNodeId.value = null
     selectedGraphEdgeId.value = null
     liveResponse.value = null
@@ -1034,12 +987,6 @@ watch(
     expertDirectResponse.value = null
     expertDirectError.value = null
     resetParameters()
-    paperResult.value = null
-    indirectResult.value = null
-    liveResponse.value = null
-    liveGraph.value = null
-    runError.value = ''
-    autoRefresh.value = false
     if (isLiveModule.value) {
       void loadModuleDescribe()
     }
@@ -1049,6 +996,10 @@ watch(
 
 async function loadModuleDescribe() {
   try {
+    if (isLiveColleague.value) {
+      liveDescribe.value = { endpoint: props.moduleInfo.endpoint, space: 'dev' }
+      return
+    }
     const meta = isLiveAlumni.value
       ? await describeExpertAlumniRelation() as unknown as Record<string, unknown>
       : await describeExpertCooperationAchievement() as unknown as Record<string, unknown>
@@ -1059,13 +1010,6 @@ async function loadModuleDescribe() {
     showToast(`模块描述接口异常：${message}`, 'warning')
   }
 }
-
-watch([panoramaLayer, panoramaRelation], () => {
-  if (!isPanorama.value) return
-  selectedGraphNodeId.value = null
-  selectedGraphEdgeId.value = null
-  resultMode.value = 'summary'
-})
 
 function formatValue(value: unknown) {
   if (Array.isArray(value)) return value.join('、')
@@ -1167,7 +1111,6 @@ function parseTimeRange(raw: string | undefined): { start?: string; end?: string
 async function handleRun() {
   if (running.value) return
   running.value = true
-  runError.value = ''
   liveError.value = null
 
   if (isPanorama.value) {
@@ -1213,28 +1156,7 @@ async function handleRun() {
   }
 
   try {
-    if (isIndirectRelation.value) {
-      const response = await analyzeExpertIndirectRelation({
-        core_node_id: (parameterValues.value.core_node_id || '').trim(),
-        relation_types: parseRelationTypes(parameterValues.value.relation_types || ''),
-        path_depth: Number(parameterValues.value.path_depth || 2),
-        min_strength: Number(parameterValues.value.min_strength || 0.65),
-      })
-      indirectResult.value = response.structuredResult
-      liveResponse.value = { ...response }
-      liveGraph.value = buildIndirectRelationGraph(response.structuredResult)
-    } else if (isPaperCooperation.value) {
-      const response = await analyzeExpertPaperCooperation({
-        dataSource: 'knowledge_graph',
-        expertAId: (parameterValues.value.expertAId || '').trim(),
-        expertBId: (parameterValues.value.expertBId || '').trim(),
-        startTime: (parameterValues.value.startTime || '').trim() || undefined,
-        endTime: (parameterValues.value.endTime || '').trim() || undefined,
-      })
-      paperResult.value = response.structuredResult
-      liveResponse.value = { ...response }
-      liveGraph.value = buildPaperCooperationGraph(response.structuredResult)
-    } else if (isLiveAlumni.value) {
+    if (isLiveAlumni.value) {
       const expertId = parameterValues.value.expertId?.trim()
       if (!expertId) {
         showToast('请填写 expertId', 'warning')
@@ -1263,6 +1185,34 @@ async function handleRun() {
         liveError.value = resp.msg || `业务码 ${resp.code}`
         showToast(liveError.value, 'warning')
         resultMode.value = 'api'
+    } else if (isLiveColleague.value) {
+      const expertAId = parameterValues.value.expert_a_id?.trim()
+      const expertBId = parameterValues.value.expert_b_id?.trim()
+      if (!expertAId || !expertBId) {
+        showToast('请填写专家 A 和专家 B', 'warning')
+        return
+      }
+      const body = {
+        expert_a_id: expertAId,
+        expert_b_id: expertBId,
+        start_time: optionalParam(parameterValues.value.start_time),
+        end_time: optionalParam(parameterValues.value.end_time),
+        limit: 1,
+        offset: 0,
+      }
+      const res = await invokeKgService(props.moduleInfo.endpoint, body, 60000) as Record<string, any>
+      liveResponse.value = res
+      liveApiPayload.value = { request: body, response: res }
+      if (res?.success === false || (res?.code !== undefined && res.code !== 200)) {
+        liveError.value = res?.msg || `业务码 ${res?.code}`
+        showToast(liveError.value || '查询失败', 'warning')
+        resultMode.value = 'api'
+      } else {
+        const total = Number(res?.data?.total || 0)
+        liveError.value = null
+        showToast(total ? '两位专家存在同事关系' : '两位专家不存在有效同事关系', total ? 'success' : 'info')
+        resultMode.value = 'summary'
+      }
       } else {
         liveAlumniResult.value = resp.data
         showToast(
@@ -1354,12 +1304,7 @@ async function handleRun() {
     const now = new Date()
     lastTestTime.value = formatTimestamp(now)
     lastUpdateTime.value = now.getTime()
-    selectedGraphNodeId.value = null
-    selectedGraphEdgeId.value = null
-    resultMode.value = 'summary'
   } catch (error) {
-    runError.value = error instanceof Error ? `执行失败：${error.message}` : '执行失败：接口调用异常'
-    resultMode.value = 'summary'
     const message = error instanceof Error ? error.message : '请求失败'
     liveError.value = message
     liveResponse.value = null
@@ -1371,41 +1316,6 @@ async function handleRun() {
   } finally {
     running.value = false
   }
-}
-
-function startAutoRefresh() {
-  if (refreshTimer !== null) return
-  refreshTimer = window.setInterval(() => {
-    void handleRun()
-  }, refreshIntervalSeconds * 1000)
-}
-
-function stopAutoRefresh() {
-  if (refreshTimer !== null) {
-    window.clearInterval(refreshTimer)
-    refreshTimer = null
-  }
-}
-
-watch(autoRefresh, (on) => {
-  if (on) {
-    void handleRun()
-    startAutoRefresh()
-  } else {
-    stopAutoRefresh()
-  }
-})
-
-onBeforeUnmount(() => {
-  stopAutoRefresh()
-})
-
-function resetPanoramaView() {
-  panoramaLayer.value = 3
-  panoramaRelation.value = 'all'
-  selectedGraphNodeId.value = null
-  selectedGraphEdgeId.value = null
-  resultMode.value = 'summary'
 }
 
 function handleParameterInput(fieldName: string, event: Event) {
@@ -1440,6 +1350,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       <label v-for="field in moduleInfo.requestFields" :key="field.name">
         <span><i v-if="field.required === '是'">*</i>{{ field.name }}</span>
         <input
+          :type="field.type === 'month' ? 'month' : 'text'"
           :key="`${field.name}-${paramResetToken}`"
           :value="parameterValues[field.name] ?? ''"
           :placeholder="field.description"
@@ -1461,29 +1372,6 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           <span>最近测试时间：</span>
           <strong>{{ lastTestTime }}</strong>
         </div>
-      </div>
-      <div v-if="isPanorama" class="graph-panel__filters" aria-label="产业链全景图显示控制">
-        <label>
-          <span>层级展开</span>
-          <select v-model.number="panoramaLayer">
-            <option v-for="item in panoramaLayerOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
-        </label>
-        <label>
-          <span>关系筛选</span>
-          <select v-model="panoramaRelation">
-            <option v-for="item in panoramaRelationOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
-        </label>
-        <button type="button" @click="resetPanoramaView">恢复全景</button>
-        <span class="graph-panel__filters-divider" aria-hidden="true"></span>
-        <button type="button" class="graph-panel__refresh" :disabled="running" @click="handleRun">
-          {{ running ? '刷新中…' : '↻ 刷新数据' }}
-        </button>
-        <label class="graph-panel__autorefresh">
-          <input type="checkbox" v-model="autoRefresh" />
-          <span>自动更新（{{ refreshIntervalSeconds }}s）</span>
-        </label>
       </div>
       <div class="graph-panel__legend" aria-label="图谱实体类型图例">
         <span v-for="item in graphLegendItems" :key="item.type" :class="`is-${item.type}`">
@@ -1529,16 +1417,16 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <dd>{{ value }}</dd>
           </div>
         </dl>
-        <dl v-else-if="resultMode === 'entity' && selectedNode" class="result-panel__table">
-          <div><dt>实体名称</dt><dd>{{ selectedNode.label }}</dd></div>
-          <div><dt>实体类型</dt><dd>{{ selectedNode.entityType }}</dd></div>
-          <div><dt>命中关系</dt><dd>{{ selectedNode.relations }}</dd></div>
+        <dl v-else-if="resultMode === 'entity' && activeEntityNode" class="result-panel__table">
+          <div><dt>实体名称</dt><dd>{{ activeEntityNode.label }}</dd></div>
+          <div><dt>实体类型</dt><dd>{{ activeEntityNode.entityType }}</dd></div>
+          <div><dt>命中关系</dt><dd>{{ activeEntityNode.relations }}</dd></div>
           <div>
             <dt>置信度</dt>
             <dd>
               {{
                 formatConfidence(
-                  selectedNode.confidence,
+                  activeEntityNode.confidence,
                 )
               }}
             </dd>
@@ -1550,7 +1438,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <dd>{{ value }}</dd>
           </div>
         </dl>
-        <dl v-else-if="resultMode === 'relation' && selectedEdge" class="result-panel__table">
+        <dl v-else-if="resultMode === 'relation' && activeRelationEdge" class="result-panel__table">
           <div v-for="([label, value], index) in relationDetailRows" :key="`${label}-${index}`">
             <dt>{{ label }}</dt>
             <dd>{{ value }}</dd>
@@ -1619,6 +1507,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <p v-if="!(liveResponse.data?.evidence || []).length" class="result-provenance__empty">暂无溯源证据数据</p>
           </div>
         </section>
+        <p v-else-if="resultMode === 'provenance'" class="result-provenance__empty">
+          暂无溯源数据，请先执行查询，或在图谱中选中一个实体/关系。
+        </p>
         <div v-else-if="resultMode === 'rule'" class="result-panel__rules">
           <article v-for="(rule, index) in liveRules" :key="rule.name">
             <header>

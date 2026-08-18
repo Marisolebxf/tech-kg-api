@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
+from application.expert_colleague_relation import (
+    ExpertColleagueRelationApplication,
+    FastAPIGraphSearchGateway,
+)
+from biz.schemas.expert_colleague_relation import ExpertColleagueRelationRequest
 from service.expert_colleague_relation import ExpertColleagueRelationService
 
 
@@ -175,6 +182,212 @@ async def test_summary_and_graph_cover_tender_details() -> None:
     assert {"expert", "organization", "paper"} <= node_types
     assert {item["label"] for item in result["graph"]["edges"]} >= {
         "同事关系",
-        "共同任职",
-        "合作成果",
+        "AFFILIATED_WITH",
+        "AUTHORED_BY",
     }
+    assert all(
+        not item["id"].startswith("colleague-co-paper:") for item in result["graph"]["nodes"]
+    )
+
+
+def test_request_validates_period_and_normalizes_filters() -> None:
+    request = ExpertColleagueRelationRequest(
+        expertId=" person_a ",
+        organization=" 自动化研究所 ",
+        overlapPeriod="2020-2022",
+        offset=10,
+    )
+
+    assert request.expertId == "person_a"
+    assert request.organization == "自动化研究所"
+    assert request.offset == 10
+    with pytest.raises(ValidationError):
+        ExpertColleagueRelationRequest(expertId="person_a", overlapPeriod="not-a-period")
+
+    request = ExpertColleagueRelationRequest(
+        expert_a_id="person_a",
+        expert_b_id="person_b",
+        start_time="2021-01",
+        end_time="2022-12",
+    )
+    assert request.startTime == "2021-01"
+    assert request.endTime == "2022-12"
+    with pytest.raises(ValidationError):
+        ExpertColleagueRelationRequest(expert_a_id="person_a", start_time="2022-01")
+    with pytest.raises(ValidationError):
+        ExpertColleagueRelationRequest(
+            expert_a_id="person_a",
+            start_time="2023-01",
+            end_time="2022-12",
+        )
+
+
+def test_merge_relations_keeps_multiple_employment_periods() -> None:
+    service = ExpertColleagueRelationService()
+    colleague = node("person_b", ["Person"], name_zh="李佳宁")
+    first = service._build_relation(
+        node=colleague,
+        organization="机构甲",
+        organization_entity={},
+        department="部门一",
+        overlap=(2020 * 12, 2021 * 12 + 11),
+        teams=[],
+        achievements=[],
+        co_papers=0,
+    )
+    second = service._build_relation(
+        node=colleague,
+        organization="机构乙",
+        organization_entity={},
+        department="部门二",
+        overlap=(2023 * 12, 2024 * 12 + 11),
+        teams=["联合实验室"],
+        achievements=[],
+        co_papers=2,
+    )
+
+    merged = service._merge_relations(first, second)
+
+    assert len(merged["employmentHistory"]) == 2
+    assert {item["organization"] for item in merged["employmentHistory"]} == {
+        "机构甲",
+        "机构乙",
+    }
+    assert "scoreBreakdown" in merged
+
+
+@pytest.mark.asyncio
+async def test_query_returns_pagination_metadata() -> None:
+    result = await ExpertColleagueRelationService().query(
+        FakeGraphSearchGateway(), expert_id="person_a", limit=1, offset=1
+    )
+
+    assert result["total"] == 1
+    assert result["returnedCount"] == 0
+    assert result["offset"] == 1
+    assert result["limit"] == 1
+
+
+class _Response:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    def json(self) -> dict[str, Any]:
+        return self._payload
+
+
+class _GatewayClient:
+    def __init__(self) -> None:
+        self.get_calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def get(self, path: str, params: dict[str, Any]) -> _Response:
+        self.get_calls.append((path, params))
+        if "/subgraph/" in path:
+            size = int(params["limit"])
+            edges = [
+                {"id": f"edge_{index}", "source": "person_a", "target": f"n{index}"}
+                for index in range(size)
+            ]
+            return _Response({"success": True, "code": 200, "data": {"nodes": [], "edges": edges}})
+        return _Response({"success": False, "code": 404, "msg": "not found"})
+
+    async def post(self, path: str, params: dict[str, Any], json: dict[str, Any]) -> _Response:
+        if "name_zh" in json:
+            items = [
+                {"id": "person_1", "properties": {"name_zh": "张三"}},
+                {"id": "person_2", "properties": {"name_zh": "张三"}},
+            ]
+        else:
+            items = []
+        return _Response(
+            {"success": True, "code": 200, "data": {"items": items, "total": len(items)}}
+        )
+
+
+@pytest.mark.asyncio
+async def test_gateway_rejects_ambiguous_person_name() -> None:
+    gateway = FastAPIGraphSearchGateway(_GatewayClient())  # type: ignore[arg-type]
+
+    with pytest.raises(LookupError, match="多个精确匹配"):
+        await gateway.resolve_person("张三", "dev")
+
+
+@pytest.mark.asyncio
+async def test_gateway_subgraph_respects_total_limit() -> None:
+    client = _GatewayClient()
+    gateway = FastAPIGraphSearchGateway(client)  # type: ignore[arg-type]
+
+    graph = await gateway.subgraph("person_a", depth=1, limit=3, space="dev")
+
+    assert len(graph["edges"]) == 3
+    subgraph_calls = [item for item in client.get_calls if "/subgraph/" in item[0]]
+    assert len(subgraph_calls) == 1
+
+
+def test_request_accepts_page_snake_case_fields() -> None:
+    request = ExpertColleagueRelationRequest.model_validate(
+        {
+            "expert_id": " E10001 ",
+            "overlap_period": "2018-2022",
+            "team_or_project": " 知识工程项目组 ",
+            "min_confidence": 0.6,
+        }
+    )
+
+    assert request.expertId == "E10001"
+    assert request.overlapPeriod == "2018-2022"
+    assert request.teamOrProject == "知识工程项目组"
+    assert request.minConfidence == 0.6
+
+
+@pytest.mark.asyncio
+async def test_query_filters_min_confidence_and_does_not_invent_work_content() -> None:
+    result = await ExpertColleagueRelationService().query(
+        FakeGraphSearchGateway(), expert_id="person_a", min_confidence=0.99
+    )
+    assert result["colleagues"] == []
+
+    result = await ExpertColleagueRelationService().query(
+        FakeGraphSearchGateway(), expert_id="person_a", achievement_types=["Patent"]
+    )
+    assert result["colleagues"][0]["achievements"] == []
+    assert result["colleagues"][0]["workContent"] == []
+
+
+def test_persist_relations_writes_canonical_colleague_edge_to_dev() -> None:
+    graph = MagicMock()
+    graph.get_node_edges.return_value = []
+    payload = {
+        "expert": {"id": "person_z"},
+        "colleagues": [
+            {
+                "colleague": {"id": "person_a"},
+                "commonOrganization": "自动化研究所",
+                "commonDepartment": "智能系统实验室",
+                "effectivePeriod": "2020-01 至 2022-12",
+                "overlapMonths": 36,
+                "confidence": 0.8,
+                "commonTeamOrProject": ["知识工程项目组"],
+                "workContent": [],
+                "collaborationScenes": ["同机构任职"],
+                "achievements": [],
+                "evidence": ["任职时间重叠"],
+            }
+        ],
+    }
+    with patch(
+        "application.expert_colleague_relation.TRSGraphClient", return_value=graph
+    ) as client:
+        result = ExpertColleagueRelationApplication._persist_relations(payload)
+
+    assert client.call_args.args[0].space == "dev"
+    graph.create_edge.assert_called_once()
+    assert graph.create_edge.call_args.args[:3] == ("person_a", "person_z", "COLLEAGUE")
+    assert result == {
+        "space": "dev",
+        "edgeType": "COLLEAGUE",
+        "created": 1,
+        "updated": 0,
+        "total": 1,
+    }
+    graph.close.assert_called_once()

@@ -1,5 +1,8 @@
 """论文/期刊/报告 图谱 Schema 初始化（在 TRSGraph dev 空间创建 Tag/Edge）。
 
+幂等：使用 CREATE SPACE/TAG/EDGE IF NOT EXISTS，**不会** DROP 空间，
+因此可在已有数据的空间上重复运行而不丢数据。
+
 用法：
     cd backend && PYTHONPATH=. .venv/bin/python script/init_paper_journal_schema.py
 """
@@ -38,27 +41,36 @@ TAG_DDL = [
     """CREATE TAG IF NOT EXISTS Keyword(
         keyword string
     )""",
+    # 溯源 + 置信度 mixin tag（挂到实体上，dev 已存在；这里供全新初始化）
+    """CREATE TAG IF NOT EXISTS organization_base(
+        organization_id string, confidence double,
+        source_system string, source_table string, source_record_id string, source_url string,
+        ingest_batch string, ingest_time string, source_update_time string, extra_json string
+    )""",
 ]
 
-# Edge DDL — 同上全部 string
+# Edge DDL — 同上全部 string；论文域边带 confidence（标书「关系置信度」）
 EDGE_DDL = [
     """CREATE EDGE IF NOT EXISTS AUTHORED_BY(
-        author_order string, is_corresponding string
+        author_order string, is_corresponding string, confidence double
     )""",
     """CREATE EDGE IF NOT EXISTS PUBLISHED_IN(
-        volume string, issue string, start_page string, end_page string, publication_year string
+        volume string, issue string, start_page string, end_page string, publication_year string,
+        confidence double
     )""",
     """CREATE EDGE IF NOT EXISTS CITES(
-        reference_identifier string
+        reference_identifier string, confidence double
     )""",
     """CREATE EDGE IF NOT EXISTS CITED_BY(
-        citation_identifier string
+        citation_identifier string, confidence double
     )""",
-    """CREATE EDGE IF NOT EXISTS RELATED_TO()""",
+    """CREATE EDGE IF NOT EXISTS RELATED_TO(confidence double)""",
     """CREATE EDGE IF NOT EXISTS AFFILIATED_WITH(
-        affiliation_name string, source string
+        affiliation_name string, source string,
+        work_experience_date string, work_experience_department_zh string,
+        work_experience_position_zh string
     )""",
-    """CREATE EDGE IF NOT EXISTS HAS_KEYWORD()""",
+    """CREATE EDGE IF NOT EXISTS HAS_KEYWORD(confidence double)""",
     """CREATE EDGE IF NOT EXISTS OUTPUT_OF()""",
 ]
 
@@ -86,10 +98,7 @@ def main() -> None:
     client.connect()
     print(f"=== 初始化 {SPACE} 空间 Schema ===")
 
-    # 1. 重建空间（先 DROP 再 CREATE，确保 schema 是全 string）
-    run(client, f"DROP SPACE IF EXISTS {SPACE};", f"DROP SPACE {SPACE}")
-    print("  等待 DROP 传播 (5s)...")
-    time.sleep(5)
+    # 1. 确保空间存在（幂等，不 DROP——避免清空已有数据）
     run(
         client,
         f"CREATE SPACE IF NOT EXISTS {SPACE}(vid_type=FIXED_STRING(256), partition_num=10, replica_factor=1);",

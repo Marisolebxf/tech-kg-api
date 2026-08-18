@@ -2,7 +2,7 @@ import pytest
 
 from biz.handler import expert_paper_cooperation as handler
 
-ENDPOINT = "/api/v1/kg-construction/expert-paper-cooperation-relations/demo/structured-result"
+ENDPOINT = "/api/v1/kg-construction/expert-paper-cooperation-relations/structured-result"
 VALID_PAYLOAD = {
     "dataSource": "knowledge_graph",
     "expertAId": "4P566No1",
@@ -43,7 +43,7 @@ async def test_expert_paper_cooperation_returns_structured_result(async_client, 
     monkeypatch.setattr(
         handler.application,
         "build_structured_result_only",
-        lambda body: _structured_result(),
+        lambda body, **_kwargs: _structured_result(),
     )
 
     response = await async_client.post(ENDPOINT, json=VALID_PAYLOAD)
@@ -102,7 +102,7 @@ async def test_expert_paper_cooperation_rejects_missing_required_field(async_cli
 
 @pytest.mark.asyncio
 async def test_expert_paper_cooperation_returns_404_for_unknown_expert(async_client, monkeypatch):
-    def raise_not_found(body):
+    def raise_not_found(body, **_kwargs):
         raise ValueError("gkx_local 中不存在输入的专家ID，请使用 dwd_scholar.scholar_id")
 
     monkeypatch.setattr(handler.application, "build_structured_result_only", raise_not_found)
@@ -118,7 +118,7 @@ async def test_expert_paper_cooperation_handles_empty_result(async_client, monke
     monkeypatch.setattr(
         handler.application,
         "build_structured_result_only",
-        lambda body: _structured_result(
+        lambda body, **_kwargs: _structured_result(
             paperTopics=[],
             cooperationPaperCount=0,
             journalLevelCount={},
@@ -143,7 +143,7 @@ async def test_expert_paper_cooperation_handles_empty_result(async_client, monke
 
 @pytest.mark.asyncio
 async def test_expert_paper_cooperation_returns_500_for_service_error(async_client, monkeypatch):
-    def raise_runtime_error(body):
+    def raise_runtime_error(body, **_kwargs):
         raise RuntimeError("database timeout")
 
     monkeypatch.setattr(handler.application, "build_structured_result_only", raise_runtime_error)

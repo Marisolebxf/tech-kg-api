@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+import pytest
+
 from script import load_patent_relations as loader
 
 
@@ -164,26 +166,6 @@ def test_execute_batched_automatically_splits_rejected_large_batches():
     assert max(graph.accepted_sizes) <= 2
 
 
-def test_candidate_search_index_finds_short_name_without_full_catalog_scan():
-    organizations = [
-        {
-            "vid": "org_pku",
-            "name_cn": "北京大学",
-            "name_en": "Peking University",
-            "name_alias": None,
-        },
-        {
-            "vid": "org_other",
-            "name_cn": "清华大学",
-            "name_en": "Tsinghua University",
-            "name_alias": None,
-        },
-    ]
-    index = loader.CandidateSearchIndex([], organizations)
-    candidates = index.shortlist("北大")
-    assert candidates[0]["vid"] == "org_pku"
-
-
 def test_review_record_does_not_create_a_stub_or_edge():
     record = loader.review(
         "CN1",
@@ -217,173 +199,152 @@ def test_ensure_schema_executes_relation_ddl_and_only_adds_missing(monkeypatch):
     assert all("DROP" not in item for item in graph.writes)
 
 
-class FakeLLM:
-    def synthesize(self, _prompt, max_tokens):
-        assert max_tokens > 0
-        return """{"results":[{"source_name":"SINOPEC","subject_type":"Organization","aliases":["中国石化"],"candidate_vids":["org_1","org_hallucinated"],"reason":"英文简称可能对应中国石化"}]}"""
+def test_milvus_unique_match_promotes_organization_edge(monkeypatch, tmp_path):
+    state = tmp_path / "org_domain_organization.bm25.json"
+    state.write_text("{}", encoding="utf-8")
 
+    class Store:
+        def has_collection(self, entity_type):
+            return entity_type == "Organization"
 
-class FakeAliasLLM:
-    def synthesize(self, _prompt, max_tokens):
-        assert max_tokens > 0
-        return """{"results":[{"source_name":"北大","subject_type":"Organization","same_legal_entity":true,"aliases":["北京大学"],"candidate_vids":[],"reason":"北大是北京大学简称"}]}"""
+        def collection_name(self, entity_type):
+            return f"org_domain_{entity_type.lower()}"
 
-
-def test_llm_cache_reuses_alias_and_does_not_initialize_model(monkeypatch, tmp_path):
-    reviews = [
-        loader.ReviewRecord(
-            patent_id="CN2",
-            relation_type="APPLIED_BY",
-            source_name="北大",
-            reason="名称未精确命中",
-            confidence=None,
-            candidates=[],
-            evidence=[],
-        )
-    ]
-    organizations = [
+    candidate = type(
+        "Candidate",
+        (),
         {
             "vid": "org_pku",
-            "name_cn": "北京大学",
-            "name_en": "Peking University",
-            "name_alias": None,
-            "source_table": "dwd_org_heis_info",
-        }
-    ]
-    cache_path = tmp_path / "llm-cache.jsonl"
-    loader.write_llm_cache(
-        cache_path,
-        {
-            loader.normalize_name("北大"): {
-                "subject_type": "Organization",
-                "same_legal_entity": True,
-                "aliases": ["北京大学"],
-                "candidate_vids": [],
-                "reason": "北大是北京大学简称",
-            }
+            "canonical_name": "北京大学",
+            "score": 0.93,
+            "retrieval_score": 0.9,
+            "evidence": ("name_high_similarity",),
         },
-    )
-    monkeypatch.setattr(
-        loader, "canonical_entities", lambda _graph, _connection: ([], organizations)
-    )
-    monkeypatch.setattr(
-        loader,
-        "get_llm_client",
-        lambda: (_ for _ in ()).throw(AssertionError("缓存命中时不应初始化大模型")),
-    )
-    processed = loader.enrich_reviews_with_llm(
-        reviews, object(), object(), batch_size=1, cache_path=cache_path
-    )
-    assert processed == 1
-    assert [item["vid"] for item in reviews[0].llm_alias_matched_entities] == ["org_pku"]
-
-
-def test_llm_enrichment_judges_type_alias_and_only_keeps_existing_candidates(monkeypatch):
-    reviews = [
-        loader.ReviewRecord(
-            patent_id="CN1",
-            relation_type="APPLIED_BY",
-            source_name="SINOPEC",
-            reason="名称未精确命中",
-            confidence=None,
-            candidates=[],
-            evidence=[],
-        )
-    ]
-    organizations = [
+    )()
+    decision = type(
+        "Decision",
+        (),
         {
-            "vid": "org_1",
-            "name_cn": "中国石油化工股份有限公司",
-            "name_en": "China Petroleum & Chemical Corporation",
-            "name_alias": "Sinopec Corp",
-        }
-    ]
-    monkeypatch.setattr(loader, "get_llm_client", lambda: FakeLLM())
-    monkeypatch.setattr(
-        loader, "canonical_entities", lambda _graph, _connection: ([], organizations)
-    )
-    processed = loader.enrich_reviews_with_llm(reviews, object(), object(), batch_size=1)
-    assert processed == 1
-    assert reviews[0].llm_subject_type == "Organization"
-    assert reviews[0].llm_aliases == ["中国石化"]
-    assert [item["vid"] for item in reviews[0].llm_candidate_entities] == ["org_1"]
-    assert "org_hallucinated" not in str(reviews[0].llm_candidate_entities)
-
-
-def test_llm_alias_is_used_to_find_existing_formal_organization(monkeypatch):
-    reviews = [
-        loader.ReviewRecord(
-            patent_id="CN2",
-            relation_type="APPLIED_BY",
-            source_name="北大",
-            reason="名称未精确命中",
-            confidence=None,
-            candidates=[],
-            evidence=[],
-        )
-    ]
-    organizations = [
-        {
-            "vid": "org_pku",
-            "name_cn": "北京大学",
-            "name_en": "Peking University",
-            "name_alias": None,
-            "source_table": "dwd_org_heis_info",
-        }
-    ]
-    monkeypatch.setattr(loader, "get_llm_client", lambda: FakeAliasLLM())
-    monkeypatch.setattr(
-        loader, "canonical_entities", lambda _graph, _connection: ([], organizations)
-    )
-    processed = loader.enrich_reviews_with_llm(reviews, object(), object(), batch_size=1)
-    assert processed == 1
-    assert [item["vid"] for item in reviews[0].llm_candidate_entities] == ["org_pku"]
-    assert reviews[0].confidence is None
-
-
-def test_unique_llm_alias_match_is_promoted_to_075_edge():
+            "status": "matched",
+            "selected_vid": "org_pku",
+            "score": 0.93,
+            "margin": 0.15,
+            "reason": "qualified",
+            "candidates": (candidate,),
+        },
+    )()
+    matcher = type("Matcher", (), {"align": lambda self, context: decision})()
+    monkeypatch.setattr(loader.BM25SparseEncoder, "load", lambda path: object())
+    monkeypatch.setattr(loader, "OrganizationHybridMatcher", lambda *args, **kwargs: matcher)
     record = loader.ReviewRecord(
         patent_id="CN2",
         relation_type="APPLIED_BY",
         source_name="北大",
-        reason="名称未精确命中",
+        reason="not exact",
         confidence=None,
         candidates=[],
         evidence=[],
-        llm_summary="北大是北京大学简称",
-        llm_subject_type="Organization",
-        llm_aliases=["北京大学"],
-        llm_alias_matched_entities=[{"vid": "org_pku", "type": "Organization"}],
-        llm_same_entity=True,
         patent_vid="patent_2",
         sequence=1,
         role="applicant",
         source_record_id="2:applicants:1",
     )
-    edges, remaining = loader.promote_llm_organization_matches([record])
+    edges, remaining = loader.promote_vector_organization_matches(
+        [record], state_dir=tmp_path, store=Store()
+    )
     assert not remaining
-    assert len(edges) == 1
-    assert edges[0].source_vid == "patent_2"
     assert edges[0].target_vid == "org_pku"
-    properties = dict(edges[0].properties)
-    assert properties["confidence"] == 0.75
-    assert properties["match_method"] == "llm_alias_unique"
+    assert dict(edges[0].properties)["match_method"] == "milvus_bm25_dense_hybrid"
+    assert dict(edges[0].properties)["confidence"] == 0.93
 
 
-def test_llm_alias_match_below_configured_threshold_stays_in_review():
+def test_person_review_is_not_promoted_by_organization_vector_index(tmp_path):
+    class Store:
+        def has_collection(self, entity_type):
+            return True
+
+        def collection_name(self, entity_type):
+            return f"org_domain_{entity_type.lower()}"
+
+    (tmp_path / "org_domain_organization.bm25.json").write_text("{}", encoding="utf-8")
     record = loader.ReviewRecord(
-        patent_id="CN2",
-        relation_type="APPLIED_BY",
-        source_name="北大",
-        reason="名称未精确命中",
+        patent_id="CN3",
+        relation_type="INVENTED_BY",
+        source_name="张三",
+        reason="same name",
         confidence=None,
         candidates=[],
         evidence=[],
-        llm_subject_type="Organization",
-        llm_alias_matched_entities=[{"vid": "org_pku", "type": "Organization"}],
-        llm_same_entity=True,
-        patent_vid="patent_2",
     )
-    edges, remaining = loader.promote_llm_organization_matches([record], threshold=0.80)
+    original_load = loader.BM25SparseEncoder.load
+    loader.BM25SparseEncoder.load = lambda path: object()
+    try:
+        edges, remaining = loader.promote_vector_organization_matches(
+            [record], state_dir=tmp_path, store=Store()
+        )
+    finally:
+        loader.BM25SparseEncoder.load = original_load
     assert not edges
     assert remaining == [record]
+
+
+def test_deduplicate_edges_collapses_duplicate_citation_directions():
+    properties = (("confidence", 1.0), ("source_record_id", "source"))
+    rows = [
+        loader.EdgeRecord("CITES", "patent_a", "patent_b", 1, properties),
+        loader.EdgeRecord("CITES", "patent_a", "patent_b", 7, properties),
+        loader.EdgeRecord("INVENTED_BY", "patent_a", "person_a", 1, properties),
+        loader.EdgeRecord("INVENTED_BY", "patent_a", "person_a", 2, properties),
+    ]
+
+    deduplicated, removed = loader.deduplicate_edges(rows)
+
+    assert removed == 1
+    assert len(deduplicated) == 3
+    assert [item.rank for item in deduplicated if item.edge_type == "CITES"] == [0]
+
+
+def test_person_applicant_is_not_sent_to_organization_matcher(monkeypatch, tmp_path):
+    class Store:
+        def has_collection(self, entity_type):
+            return True
+
+        def collection_name(self, entity_type):
+            return f"org_domain_{entity_type.lower()}"
+
+    (tmp_path / "org_domain_organization.bm25.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(loader.BM25SparseEncoder, "load", lambda path: object())
+    monkeypatch.setattr(
+        loader,
+        "OrganizationHybridMatcher",
+        lambda *args, **kwargs: pytest.fail("个人候选不应进入机构匹配器"),
+    )
+    record = loader.ReviewRecord(
+        patent_id="CN4",
+        relation_type="APPLIED_BY",
+        source_name="张三",
+        reason="名称可能是个人",
+        confidence=0.6,
+        candidates=[{"vid": "person_1", "type": "Person"}],
+        evidence=[],
+        patent_vid="patent_4",
+        sequence=1,
+        role="applicant",
+    )
+
+    edges, remaining = loader.promote_vector_organization_matches(
+        [record], state_dir=tmp_path, store=Store()
+    )
+
+    assert not edges
+    assert remaining == [record]
+    assert "跨类型" in record.reason
+
+
+def test_load_validates_destructive_and_vector_options_before_connecting():
+    with pytest.raises(ValueError, match="replace=True"):
+        loader.load(apply=False, replace=True)
+    with pytest.raises(ValueError, match="vector_threshold"):
+        loader.load(apply=False, vector_threshold=1.1)
+    with pytest.raises(ValueError, match="vector_top_k"):
+        loader.load(apply=False, vector_top_k=1)

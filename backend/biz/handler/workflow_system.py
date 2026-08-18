@@ -80,7 +80,7 @@ async def execute_definition(definition_id: str, request: WorkflowExecuteRequest
 
 @router.get("/executions/{execution_id}", response_model=ApiResponse)
 async def get_execution(execution_id: str) -> ApiResponse:
-    execution = service.repo.get_execution(execution_id)
+    execution = await service.get_execution(execution_id)
     if execution is None:
         raise HTTPException(status_code=404, detail="工作流执行记录不存在")
     return ApiResponse(data=execution)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -40,3 +41,9 @@ class SchemaManagementApplication:
 
     def get_script(self, schema_id: str):
         return self._service.get_script(schema_id)
+
+    def verify_and_save_script(self, **kwargs) -> Iterator[dict[str, Any]]:
+        return self._service.verify_and_save_script(**kwargs)
+
+    def get_script_content(self, schema_id: str) -> dict[str, Any]:
+        return self._service.get_script_content(schema_id)

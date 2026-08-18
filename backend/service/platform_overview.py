@@ -69,9 +69,7 @@ class TRSGraphStatsProvider:
                 edges=edges,
             )
         except Exception as exc:
-            logger.warning(
-                "SHOW STATS 失败，回退到逐 label/edge_type 计数（会慢）: %s", exc
-            )
+            logger.warning("SHOW STATS 失败，回退到逐 label/edge_type 计数（会慢）: %s", exc)
             labels = client.labels()
             edge_types = client.edge_types()
             return GraphStatsSnapshot(

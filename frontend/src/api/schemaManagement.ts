@@ -1,5 +1,7 @@
 import type { AxiosError } from 'axios'
 
+import { fetchEventSource } from '@microsoft/fetch-event-source'
+
 import { http } from './http'
 
 export interface ApiResponse<T> {
@@ -223,4 +225,108 @@ export function schemaErrorMessage(error: unknown): string {
     return detail.map((item) => item.msg).filter(Boolean).join('；')
   }
   return error instanceof Error ? error.message : 'Schema 服务请求失败'
+}
+
+export interface ScriptContent {
+  filename: string
+  content: string
+  contentType: string
+  sizeBytes: number
+  sha256: string
+  uploadedAt: string | null
+}
+
+export async function getScriptContent(
+  schemaId: string,
+  userId: string,
+): Promise<ScriptContent> {
+  return unwrap(
+    await asApiPromise<ScriptContent>(
+      http.get(`${PREFIX}/schemas/${schemaId}/script/content`, {
+        headers: headers(userId),
+      }),
+    ),
+  )
+}
+
+export interface VerifyScriptInfo {
+  scriptId: string | null
+  filename: string
+  sha256: string | null
+  sizeBytes: number
+  uploadedAt: string | null
+}
+
+export interface VerifyScriptHandlers {
+  onProgress?: (stage: string, message: string) => void
+  onSuccess?: (script: VerifyScriptInfo) => void
+  onError?: (message: string, issues: string[], stage: string) => void
+}
+
+/**
+ * 上传脚本 → LLM 安全校验 → 保存，以 SSE 流式回传进度。
+ * 走 fetchEventSource（支持 POST + 自定义头 + 流式），不能用 axios（其响应拦截器会解包且不支持流）。
+ */
+export async function verifyAndSaveScript(
+  schemaId: string,
+  file: File,
+  userId: string,
+  handlers: VerifyScriptHandlers,
+): Promise<void> {
+  const baseUrl = import.meta.env.VITE_API_BASE || '/api'
+  const url = `${baseUrl}${PREFIX}/schemas/${schemaId}/script/verify`
+  const body = new FormData()
+  body.append('script', file)
+  await fetchEventSource(url, {
+    method: 'POST',
+    headers: { 'X-User-Id': userId },
+    body,
+    openWhenHidden: true,
+    async onopen(response: Response): Promise<void> {
+      if (response.ok) return
+      let detail = `校验请求失败：${response.status}`
+      try {
+        const data = (await response.json()) as { detail?: unknown }
+        if (typeof data.detail === 'string') detail = data.detail
+        else if (Array.isArray(data.detail)) {
+          detail = data.detail
+            .map((item) => (item as { msg?: string }).msg)
+            .filter(Boolean)
+            .join('；')
+        }
+      } catch {
+        // ignore JSON parse error
+      }
+      throw new Error(detail)
+    },
+    onmessage(ev) {
+      if (!ev.data) return
+      let payload: {
+        type: string
+        stage?: string
+        message?: string
+        issues?: string[]
+        script?: VerifyScriptInfo
+      }
+      try {
+        payload = JSON.parse(ev.data)
+      } catch {
+        return
+      }
+      if (payload.type === 'progress') {
+        handlers.onProgress?.(payload.stage || '', payload.message || '')
+      } else if (payload.type === 'success') {
+        handlers.onSuccess?.(payload.script as VerifyScriptInfo)
+      } else if (payload.type === 'error') {
+        handlers.onError?.(
+          payload.message || '校验失败',
+          payload.issues || [],
+          payload.stage || '',
+        )
+      }
+    },
+    onerror(err) {
+      throw err
+    },
+  })
 }

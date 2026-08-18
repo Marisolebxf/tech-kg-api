@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Annotated, TypeVar
+import asyncio
+import json
+from typing import Annotated, Any, TypeVar
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
@@ -181,6 +183,109 @@ def replace_schema_script(
             script_data=_read_script(script),
         )
         return ApiResponse(data=data, msg="Schema 脚本上传成功")
+    except SchemaManagementError as exc:
+        _raise_domain_error(exc)
+
+
+def _format_sse(event: dict[str, Any]) -> bytes:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+
+
+_SENTINEL = object()
+
+
+@router.post("/schemas/{schema_id}/script/verify")
+async def verify_and_save_script(
+    schema_id: str,
+    session: Annotated[Session, Depends(get_session)],
+    user_id: Annotated[str, Header(alias="X-User-Id", min_length=1, max_length=128)],
+    script: Annotated[UploadFile, File(...)],
+) -> StreamingResponse:
+    """上传脚本 → LLM 安全校验 → 保存，以 SSE 流式回传进度。
+
+    流前失败（schema 不存在 / 无权限）→ HTTP 4xx；流中失败 → ``type=error`` 事件。
+    整个校验/保存流程在单一专用线程中驱动，使用独立 Session，避免跨线程会话。
+    """
+    app = _application(session)
+    script_data = await script.read(max_script_bytes() + 1)
+
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def run() -> None:
+        try:
+            for event in app.verify_and_save_script(
+                schema_id=schema_id,
+                user_id=user_id,
+                filename=script.filename or "",
+                content_type=script.content_type,
+                script_data=script_data,
+            ):
+                loop.call_soon_threadsafe(queue.put_nowait, event)
+        except Exception as exc:  # noqa: BLE001
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                {
+                    "type": "error",
+                    "code": "internal",
+                    "stage": "unknown",
+                    "message": f"内部错误: {exc}",
+                    "issues": [f"内部错误: {exc}"],
+                },
+            )
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+
+    worker = loop.run_in_executor(None, run)
+
+    first = await queue.get()
+    if first is _SENTINEL:
+        await worker
+        raise HTTPException(status_code=500, detail="校验未产生任何事件")
+    if (
+        isinstance(first, dict)
+        and first.get("type") == "error"
+        and first.get("code")
+        in (
+            "not_found",
+            "permission",
+        )
+    ):
+        await queue.get()  # drain SENTINEL
+        await worker
+        status_code = 404 if first["code"] == "not_found" else 403
+        raise HTTPException(status_code=status_code, detail=first["message"])
+
+    async def event_stream():
+        try:
+            yield _format_sse(first)
+            while True:
+                item = await queue.get()
+                if item is _SENTINEL:
+                    break
+                yield _format_sse(item)
+        finally:
+            await worker
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@router.get("/schemas/{schema_id}/script/content", response_model=ApiResponse)
+def get_schema_script_content(
+    schema_id: str,
+    session: Annotated[Session, Depends(get_session)],
+) -> ApiResponse:
+    try:
+        data = _application(session).get_script_content(schema_id)
+        return ApiResponse(data=data)
     except SchemaManagementError as exc:
         _raise_domain_error(exc)
 

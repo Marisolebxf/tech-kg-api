@@ -1,19 +1,25 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import hljs from 'highlight.js/lib/core'
+import python from 'highlight.js/lib/languages/python'
+import 'highlight.js/styles/github-dark.css'
 import {
   createEntitySchema,
   createRelationSchema,
+  getScriptContent,
   getSchemaOverview,
   listAllSchemas,
-  replaceSchemaScript,
   schemaErrorMessage,
+  verifyAndSaveScript,
   type EntitySchemaCreatePayload,
   type RelationSchemaCreatePayload,
   type SchemaDefinition,
   type SchemaOverview,
 } from '../../api/schemaManagement'
 import { useToast } from '../../composables/use-toast'
+
+hljs.registerLanguage('python', python)
 
 type Entity = { id: string; name: string; label: string; level: '核心实体' | '支撑实体'; key: string; source: string; description: string; schema: SchemaDefinition }
 type Relation = { id: string; name: string; label: string; source: string; target: string; basis: string; level?: '标准' | '扩展'; schema: SchemaDefinition }
@@ -61,8 +67,26 @@ const modalOpen = ref(false)
 const form = ref<Record<string, string>>({})
 const scriptByRow = ref<Record<string, { name: string; workflowDefinitionId: string | null }>>({})
 const fileInput = ref<HTMLInputElement | null>(null)
-const pendingUploadRow = ref('')
 const pendingCreate = ref<PendingCreate | null>(null)
+
+// 上传脚本弹窗（行级「上传脚本/更换脚本」）
+const uploadModalOpen = ref(false)
+const uploadTargetId = ref('')
+const uploadTargetName = ref('')
+const uploadState = ref<'idle' | 'working' | 'success' | 'error'>('idle')
+const uploadStage = ref('')
+const uploadMessage = ref('')
+const uploadIssues = ref<string[]>([])
+const uploadFileName = ref('')
+const uploadFileInput = ref<HTMLInputElement | null>(null)
+
+// 查看脚本弹窗
+const viewModalOpen = ref(false)
+const viewState = ref<'loading' | 'ready' | 'error'>('loading')
+const viewFilename = ref('')
+const viewContent = ref('')
+const viewError = ref('')
+const viewCodeRef = ref<HTMLElement | null>(null)
 
 const formSpec = computed(() => {
   switch (activeTab.value) {
@@ -228,15 +252,89 @@ function saveItem() {
     }
   }
   pendingCreate.value = { tab: activeTab.value, values: { ...form.value } }
-  pendingUploadRow.value = ''
   fileInput.value?.click()
   showToast('请选择该 Schema 对应的 Python 脚本', 'info')
 }
 
-function triggerFileUpload(schemaId: string) {
-  pendingCreate.value = null
-  pendingUploadRow.value = schemaId
-  fileInput.value?.click()
+function openUploadModal(rowId: string, rowName: string) {
+  uploadTargetId.value = rowId
+  uploadTargetName.value = rowName
+  uploadState.value = 'idle'
+  uploadStage.value = ''
+  uploadMessage.value = ''
+  uploadIssues.value = []
+  uploadFileName.value = ''
+  uploadModalOpen.value = true
+}
+
+function pickUploadFile() {
+  uploadFileInput.value?.click()
+}
+
+async function onUploadFileChosen(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  input.value = ''
+  uploadFileName.value = file.name
+  uploadState.value = 'working'
+  uploadStage.value = 'starting'
+  uploadMessage.value = '正在上传并校验...'
+  uploadIssues.value = []
+  let succeeded = false
+  try {
+    await verifyAndSaveScript(uploadTargetId.value, file, currentUserId, {
+      onProgress: (stage, message) => {
+        uploadStage.value = stage
+        uploadMessage.value = message
+      },
+      onSuccess: () => {
+        succeeded = true
+        uploadState.value = 'success'
+        uploadMessage.value = '脚本已通过安全校验并保存'
+      },
+      onError: (message, issues) => {
+        uploadState.value = 'error'
+        uploadMessage.value = message
+        uploadIssues.value = issues
+      },
+    })
+    if (succeeded) {
+      await loadSchemas()
+    }
+  } catch (error) {
+    uploadState.value = 'error'
+    uploadMessage.value = schemaErrorMessage(error)
+    uploadIssues.value = []
+  }
+}
+
+function closeUploadModal() {
+  uploadModalOpen.value = false
+}
+
+async function openViewModal(rowId: string, rowName: string) {
+  uploadModalOpen.value = false
+  viewModalOpen.value = true
+  viewState.value = 'loading'
+  viewFilename.value = rowName
+  viewContent.value = ''
+  viewError.value = ''
+  try {
+    const data = await getScriptContent(rowId, currentUserId)
+    viewFilename.value = data.filename
+    viewContent.value = data.content
+    viewState.value = 'ready'
+    await nextTick()
+    if (viewCodeRef.value) {
+      viewCodeRef.value.removeAttribute('data-highlighted')
+      viewCodeRef.value.className = 'language-python'
+      hljs.highlightElement(viewCodeRef.value)
+    }
+  } catch (error) {
+    viewState.value = 'error'
+    viewError.value = schemaErrorMessage(error)
+  }
 }
 
 async function createPendingSchema(file: File, pending: PendingCreate) {
@@ -288,16 +386,12 @@ async function handleFileSelect(event: Event) {
       await createPendingSchema(file, pendingCreate.value)
       modalOpen.value = false
       showToast('Schema 与 Python 脚本已新增', 'success')
-    } else if (pendingUploadRow.value) {
-      await replaceSchemaScript(pendingUploadRow.value, file, currentUserId)
-      showToast(`已上传 ${file.name}`, 'success')
     }
     await loadSchemas()
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
   } finally {
     input.value = ''
-    pendingUploadRow.value = ''
     pendingCreate.value = null
   }
 }
@@ -331,11 +425,11 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
       <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeTab === '属性定义'">枚举字典作为属性约束统一维护</span></div><div class="schema-toolbar__actions"><button v-if="activeTab !== '属性定义'" class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :placeholder="`搜索${activeTab}`" /></label></div></div>
       <!-- <p v-if="schemaVersionMessage" class="schema-version-message">{{ schemaVersionMessage }}</p> -->
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]?.workflowDefinitionId" type="button" class="schema-action-link" @click="executeSchemaWorkflow(row.name)">执行工作流 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button v-if="scriptByRow[row.name]?.workflowDefinitionId" type="button" class="schema-action-link" @click="executeSchemaWorkflow(row.name)">执行工作流 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '推理关系'" class="schema-table-wrap"><table><thead><tr><th>推理关系</th><th>Schema 名称</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredInference" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-else-if="activeTab === '推理关系'" class="schema-table-wrap"><table><thead><tr><th>推理关系</th><th>Schema 名称</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredInference" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
       <div v-else-if="activeTab === '属性定义'" class="schema-table-wrap"><table><thead><tr><th>实体</th><th>主键</th><th>核心属性</th><th>动态属性 / 补充</th><th>主要来源</th></tr></thead><tbody><tr v-for="row in filteredAttributes" :key="row.entity"><td><code>{{ row.entity }}</code></td><td><b>{{ row.key }}</b></td><td class="mono-list">{{ row.core }}</td><td>{{ row.dynamic }}</td><td>{{ row.source }}</td></tr></tbody></table></div>
 
@@ -365,6 +459,69 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
     </Teleport>
 
     <input ref="fileInput" type="file" accept=".py" hidden @change="handleFileSelect" />
+    <input ref="uploadFileInput" type="file" accept=".py" hidden @change="onUploadFileChosen" />
+
+    <Teleport to="body">
+      <div v-if="uploadModalOpen" class="schema-modal script-upload-modal">
+        <button class="schema-modal__mask" type="button" @click="closeUploadModal"></button>
+        <aside class="schema-modal__panel">
+          <header><h2>上传脚本 · {{ uploadTargetName }}</h2><button type="button" @click="closeUploadModal">×</button></header>
+          <div class="schema-modal__body">
+            <div v-if="uploadState === 'idle'" class="upload-idle">
+              <p>选择 .py 脚本文件，上传后将通过 LLM 进行安全校验，校验通过才会保存。</p>
+              <button type="button" class="primary" @click="pickUploadFile">选择 .py 文件</button>
+            </div>
+            <div v-else-if="uploadState === 'working'" class="upload-working">
+              <div class="spinner" aria-label="校验中"></div>
+              <div class="upload-working__text">
+                <strong>{{ uploadFileName }}</strong>
+                <span class="upload-stage">阶段：{{ uploadStage }}</span>
+                <span class="upload-message">{{ uploadMessage }}</span>
+              </div>
+            </div>
+            <div v-else-if="uploadState === 'success'" class="upload-result">
+              <div class="upload-result__icon ok">✓</div>
+              <strong>脚本已通过安全校验并保存</strong>
+              <span>{{ uploadFileName }}</span>
+            </div>
+            <div v-else class="upload-result">
+              <div class="upload-result__icon err">✕</div>
+              <strong>校验未通过</strong>
+              <p class="upload-result__msg">{{ uploadMessage }}</p>
+              <ul v-if="uploadIssues.length" class="upload-result__issues">
+                <li v-for="(issue, i) in uploadIssues" :key="i">{{ issue }}</li>
+              </ul>
+            </div>
+          </div>
+          <footer>
+            <template v-if="uploadState === 'working'">
+              <button type="button" disabled>校验中...</button>
+            </template>
+            <template v-else>
+              <button v-if="uploadState === 'error'" type="button" class="primary" @click="uploadState = 'idle'">重新选择</button>
+              <button type="button" @click="closeUploadModal">{{ uploadState === 'success' ? '关闭' : '取消' }}</button>
+            </template>
+          </footer>
+        </aside>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="viewModalOpen" class="schema-modal script-view-modal">
+        <button class="schema-modal__mask" type="button" @click="viewModalOpen = false"></button>
+        <aside class="schema-modal__panel script-view-panel">
+          <header><h2>查看脚本 · {{ viewFilename }}</h2><button type="button" @click="viewModalOpen = false">×</button></header>
+          <div class="schema-modal__body script-view-body">
+            <div v-if="viewState === 'loading'" class="view-loading">加载中...</div>
+            <div v-else-if="viewState === 'error'" class="view-error">{{ viewError }}</div>
+            <pre v-else class="script-pre"><code ref="viewCodeRef" class="language-python">{{ viewContent }}</code></pre>
+          </div>
+          <footer>
+            <button type="button" @click="viewModalOpen = false">关闭</button>
+          </footer>
+        </aside>
+      </div>
+    </Teleport>
   </main>
 </template>
 
@@ -447,4 +604,35 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .schema-modal__panel footer{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #e5e6eb}
 .schema-modal__panel footer button{height:32px;padding:0 14px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:13px;cursor:pointer}
 .schema-modal__panel footer .primary{background:#165dff;color:#fff;border-color:#165dff}
+.schema-modal__panel footer button:disabled{opacity:.6;cursor:not-allowed}
+
+/* 上传脚本弹窗 */
+.script-upload-modal .schema-modal__body{min-height:140px}
+.upload-idle{display:flex;flex-direction:column;gap:14px;align-items:center;padding:14px 0;text-align:center}
+.upload-idle p{margin:0;color:#4e5969;font-size:13px;line-height:20px}
+.upload-idle .primary{height:34px;padding:0 18px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:13px;cursor:pointer}
+.upload-working{display:flex;align-items:center;gap:16px;padding:10px 4px}
+.spinner{flex:0 0 auto;width:28px;height:28px;border:3px solid #e3ebf6;border-top-color:#165dff;border-radius:50%;animation:spin 0.9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.upload-working__text{display:flex;flex-direction:column;gap:4px;min-width:0}
+.upload-working__text strong{font-size:13px;color:#1d2129;word-break:break-all}
+.upload-stage{color:#165dff;font-size:11px}
+.upload-message{color:#74849b;font-size:11px}
+.upload-result{display:flex;flex-direction:column;gap:8px;align-items:center;padding:18px 0;text-align:center}
+.upload-result__icon{display:grid;place-items:center;width:42px;height:42px;border-radius:50%;font-size:22px;color:#fff}
+.upload-result__icon.ok{background:#15a05a}
+.upload-result__icon.err{background:#e54848}
+.upload-result strong{font-size:14px;color:#1d2129}
+.upload-result span{color:#74849b;font-size:12px}
+.upload-result__msg{margin:0;color:#e54848;font-size:12px;line-height:18px;max-width:420px;word-break:break-all}
+.upload-result__issues{margin:6px 0 0;padding:10px 14px;list-style:none;border-radius:6px;background:#fff3f3;color:#b42318;font-size:12px;line-height:20px;text-align:left;max-width:440px;max-height:200px;overflow:auto}
+.upload-result__issues li{padding:2px 0}
+
+/* 查看脚本弹窗 */
+.script-view-panel{width:min(820px,100%)}
+.script-view-body{max-height:72vh;padding:0}
+.script-pre{margin:0;max-height:72vh;overflow:auto;background:#0d1117;border-radius:0}
+.script-pre code{display:block;padding:16px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:20px;background:transparent;color:#c9d1d9;white-space:pre}
+.view-loading,.view-error{padding:30px;text-align:center;color:#74849b;font-size:13px}
+.view-error{color:#e54848}
 </style>

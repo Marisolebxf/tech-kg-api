@@ -7,6 +7,7 @@ import hashlib
 import logging
 import os
 import re
+from collections.abc import Iterator
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,9 @@ from sqlalchemy.orm import Session
 
 from dao.schema_management import SchemaManagementDAO
 from db_model.schema_management import GraphSchemaDefinition, GraphSchemaScript
+from infra.llm import LLMClient, get_llm_client
 from infra.s3 import S3Storage, get_schema_s3_storage
+from service.script_security import review_script_security
 
 logger = logging.getLogger(__name__)
 
@@ -205,13 +208,197 @@ class SchemaManagementService:
         user_id = user_id.strip()
         if not user_id or len(user_id) > 128:
             raise SchemaPermissionError("X-User-Id 不能为空且不能超过 128 个字符")
+        definition = self.assert_script_modifiable(schema_id, user_id)
+        workflow_function = self._validate_script(filename, script_data)
+        _, cleanup_succeeded = self._persist_script(
+            definition=definition,
+            filename=filename,
+            content_type=content_type,
+            script_data=script_data,
+            user_id=user_id,
+            workflow_function_name=workflow_function,
+        )
+        result = self._serialize(self._require_schema(schema_id), user_id=user_id, detail=True)
+        result["previousScriptCleanupSucceeded"] = cleanup_succeeded
+        return result
+
+    def assert_script_modifiable(self, schema_id: str, user_id: str) -> GraphSchemaDefinition:
+        """前置校验：schema 存在 + 用户有权限更换脚本。失败抛领域错误（→ HTTP 4xx）。"""
+        user_id = user_id.strip()
+        if not user_id or len(user_id) > 128:
+            raise SchemaPermissionError("X-User-Id 不能为空且不能超过 128 个字符")
         definition = self._require_schema(schema_id)
         if definition.is_system and user_id not in _schema_admin_user_ids():
             raise SchemaPermissionError("只有 Schema 管理员可以更换系统 Schema 脚本")
         if not definition.is_system and definition.created_by != user_id:
             raise SchemaPermissionError("只能更换自己创建的 Schema 脚本")
+        return definition
 
-        workflow_function = self._validate_script(filename, script_data)
+    def verify_and_save_script(
+        self,
+        *,
+        schema_id: str,
+        user_id: str,
+        filename: str,
+        content_type: str | None,
+        script_data: bytes,
+        llm_client: LLMClient | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """LLM 安全校验 + 保存脚本，按阶段 yield 事件供 SSE 推送。
+
+        为避免跨线程使用请求 Session，本生成器内部基于 ``self._session.bind`` 新建
+        独立 Session 供整个校验/保存流程使用；调用方应在单一专用线程中驱动本生成器。
+
+        前置失败（schema 不存在 / 无权限）yield 带 ``code`` 的 error 事件（供 handler
+        映射 4xx）；其余阶段失败 yield 普通 error 事件。不抛领域错误。
+        """
+        own_session = Session(self._session.bind)
+        inner = SchemaManagementService(own_session, storage=self._storage)
+        user_id = user_id.strip()
+        try:
+            try:
+                definition = inner._require_schema(schema_id)
+            except SchemaNotFoundError:
+                yield {
+                    "type": "error",
+                    "code": "not_found",
+                    "stage": "pre",
+                    "message": f"Schema 不存在: {schema_id}",
+                    "issues": [f"Schema 不存在: {schema_id}"],
+                }
+                return
+            if definition.is_system and user_id not in _schema_admin_user_ids():
+                yield {
+                    "type": "error",
+                    "code": "permission",
+                    "stage": "pre",
+                    "message": "只有 Schema 管理员可以更换系统 Schema 脚本",
+                    "issues": ["只有 Schema 管理员可以更换系统 Schema 脚本"],
+                }
+                return
+            if not definition.is_system and definition.created_by != user_id:
+                yield {
+                    "type": "error",
+                    "code": "permission",
+                    "stage": "pre",
+                    "message": "只能更换自己创建的 Schema 脚本",
+                    "issues": ["只能更换自己创建的 Schema 脚本"],
+                }
+                return
+
+            yield {"type": "progress", "stage": "syntax", "message": "语法检查中..."}
+
+            try:
+                workflow_function = inner._validate_script(filename, script_data)
+            except SchemaScriptError as exc:
+                yield {
+                    "type": "error",
+                    "stage": "syntax",
+                    "message": str(exc),
+                    "issues": [str(exc)],
+                }
+                return
+
+            try:
+                source = script_data.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                source = script_data.decode("utf-8", errors="replace")
+
+            yield {"type": "progress", "stage": "llm", "message": "LLM 安全校验中..."}
+
+            client = llm_client if llm_client is not None else get_llm_client()
+            if client is None:
+                yield {
+                    "type": "error",
+                    "stage": "llm",
+                    "message": "LLM 安全校验服务不可用，请联系管理员配置 LLM_API_KEY",
+                    "issues": ["LLM 安全校验服务不可用"],
+                }
+                return
+
+            verdict = review_script_security(client, filename, source)
+            if not verdict.safe:
+                yield {
+                    "type": "error",
+                    "stage": "llm",
+                    "message": verdict.summary or "脚本未通过 LLM 安全校验",
+                    "issues": verdict.issues or ["脚本未通过 LLM 安全校验"],
+                }
+                return
+
+            yield {"type": "progress", "stage": "saving", "message": "保存脚本中..."}
+
+            try:
+                refreshed, _ = inner._persist_script(
+                    definition=definition,
+                    filename=filename,
+                    content_type=content_type,
+                    script_data=script_data,
+                    user_id=user_id,
+                    workflow_function_name=workflow_function,
+                )
+            except SchemaManagementError as exc:
+                yield {
+                    "type": "error",
+                    "stage": "saving",
+                    "message": str(exc),
+                    "issues": [str(exc)],
+                }
+                return
+
+            script = refreshed.script
+            yield {
+                "type": "success",
+                "script": {
+                    "scriptId": script.id if script else None,
+                    "filename": script.original_filename if script else Path(filename).name,
+                    "sha256": script.sha256 if script else None,
+                    "sizeBytes": script.size_bytes if script else len(script_data),
+                    "uploadedAt": _iso(script.uploaded_at) if script else None,
+                },
+            }
+        finally:
+            own_session.close()
+
+    def get_script_content(self, schema_id: str) -> dict[str, Any]:
+        script, body = self.get_script(schema_id)
+        try:
+            data = body.read()
+        except Exception as exc:
+            raise SchemaStorageError("读取 Schema Python 脚本失败") from exc
+        finally:
+            try:
+                body.close()
+            except Exception:
+                logger.exception("关闭脚本流失败: %s", schema_id)
+        try:
+            content = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise SchemaScriptError("Python 脚本不是有效的 UTF-8 文本") from exc
+        return {
+            "filename": script.original_filename,
+            "content": content,
+            "contentType": script.content_type,
+            "sizeBytes": script.size_bytes,
+            "sha256": script.sha256,
+            "uploadedAt": _iso(script.uploaded_at),
+        }
+
+    def _persist_script(
+        self,
+        *,
+        definition: GraphSchemaDefinition,
+        filename: str,
+        content_type: str | None,
+        script_data: bytes,
+        user_id: str,
+        workflow_function_name: str | None,
+    ) -> tuple[GraphSchemaDefinition, bool]:
+        """上传 S3 + 注册工作流 + 写 DB + commit；失败回滚并清理 S3。
+
+        返回 (刷新后的 definition, 旧脚本清理是否成功)。
+        """
+        schema_id = definition.id
         object_key = (
             f"schemas/{definition.kind}/{schema_id}/{uuid4().hex}-{_safe_filename(filename)}"
         )
@@ -228,7 +415,7 @@ class SchemaManagementService:
                 definition=definition,
                 filename=filename,
                 script_data=script_data,
-                function_name=workflow_function,
+                function_name=workflow_function_name,
             )
             self._dao.save_script(
                 definition,
@@ -244,7 +431,7 @@ class SchemaManagementService:
                     "workflow_definition_id": (
                         workflow_definition["id"] if workflow_definition else None
                     ),
-                    "workflow_function_name": workflow_function,
+                    "workflow_function_name": workflow_function_name,
                 },
             )
             self._session.commit()
@@ -261,9 +448,8 @@ class SchemaManagementService:
             except Exception:
                 cleanup_succeeded = False
                 logger.exception("旧 Schema 脚本清理失败: %s", schema_id)
-        result = self._serialize(self._require_schema(schema_id), user_id=user_id, detail=True)
-        result["previousScriptCleanupSucceeded"] = cleanup_succeeded
-        return result
+        refreshed = self._require_schema(schema_id)
+        return refreshed, cleanup_succeeded
 
     def delete_schema(self, schema_id: str, user_id: str) -> dict[str, Any]:
         user_id = user_id.strip()

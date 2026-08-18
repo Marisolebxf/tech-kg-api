@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import threading
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -10,6 +13,28 @@ from httpx import AsyncClient
 from infra.graph_db import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
 from service.expert_colleague_relation import ExpertColleagueRelationService
+
+# 60s 进程内读结果缓存：service.query 的图查询读结果可复用；写图副作用 _persist_relations
+# 不缓存，每次照常执行（COLLEAGUE 边仍更新，persistence 计数每次现算）。
+_READ_CACHE_TTL = 60.0
+_read_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_read_cache_lock = threading.Lock()
+
+
+def clear_caches() -> None:
+    """清空进程内缓存（测试隔离用）。"""
+    _read_cache.clear()
+
+
+def _read_cache_key(kwargs: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for k in sorted(kwargs):
+        v = kwargs[k]
+        # 用 repr 而非 join，避免 ['paper','patent'] 与 ['paper,patent'] 生成相同 key。
+        if isinstance(v, (list, tuple, dict)):
+            v = repr(v)
+        parts.append(f"{k}={v}")
+    return "|".join(parts)
 
 
 class FastAPIGraphSearchGateway:
@@ -131,7 +156,20 @@ class ExpertColleagueRelationApplication:
     async def query(self, client: AsyncClient, **kwargs: Any) -> dict[str, Any]:
         # 查询和写入都强制使用 dev，调用方不能切换业务图空间。
         kwargs["space"] = "dev"
-        data = await self._service.query(FastAPIGraphSearchGateway(client), **kwargs)
+        cache_key = _read_cache_key(kwargs)
+        with _read_cache_lock:
+            entry = _read_cache.get(cache_key)
+        if entry and entry[0] > time.monotonic():
+            # 命中缓存：复用读结果（深拷贝，避免 _persist_relations 改到缓存对象）
+            data = copy.deepcopy(entry[1])
+        else:
+            data = await self._service.query(FastAPIGraphSearchGateway(client), **kwargs)
+            with _read_cache_lock:
+                _read_cache[cache_key] = (
+                    time.monotonic() + _READ_CACHE_TTL,
+                    copy.deepcopy(data),
+                )
+        # 写图副作用不缓存：每次照常执行 COLLEAGUE 边 upsert + 现算 persistence 计数。
         data["persistence"] = await asyncio.to_thread(self._persist_relations, data)
         return data
 

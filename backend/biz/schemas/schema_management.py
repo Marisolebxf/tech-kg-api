@@ -59,6 +59,7 @@ class SchemaCreateBase(CamelModel):
     mappings: list[str] = Field(default_factory=list, max_length=100)
     is_core: bool = False
     version: str = Field(default="v1.0", min_length=1, max_length=32)
+    llm_config_id: str | None = Field(default=None, max_length=64)
 
     @field_validator("schema_key")
     @classmethod

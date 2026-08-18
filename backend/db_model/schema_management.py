@@ -63,6 +63,9 @@ class GraphSchemaDefinition(Base):
     )
     source_expression: Mapped[str | None] = mapped_column(String(512), nullable=True)
     target_expression: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    llm_config_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="作业默认 LLM 配置 ID（软关联 platform_llm_config.id）"
+    )
     ddl_statement: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     ddl_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="pending", comment="pending/succeeded/failed/skipped"
@@ -162,6 +165,8 @@ class GraphSchemaScript(Base):
     uploaded_by: Mapped[str] = mapped_column(String(128), nullable=False)
     workflow_definition_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     workflow_function_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    safety_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    safety_issues: Mapped[str] = mapped_column(Text, nullable=False, default="")
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )

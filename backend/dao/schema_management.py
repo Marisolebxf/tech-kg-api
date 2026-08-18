@@ -137,6 +137,7 @@ class SchemaManagementDAO:
             target_schema_id=payload.get("target_schema_id"),
             source_expression=payload.get("source_expression"),
             target_expression=payload.get("target_expression"),
+            llm_config_id=payload.get("llm_config_id"),
         )
         definition.properties = [
             GraphSchemaProperty(

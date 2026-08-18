@@ -31,7 +31,7 @@ const pageTitle = computed(() => String(route.meta.title ?? '亿级知识图谱'
 const showPageContext = computed(() => !route.path.startsWith('/processing-instance/') && !route.path.startsWith('/manual-review/task/') && !route.path.startsWith('/task-detail/'))
 const activePrimaryNav = computed(() => {
   if (route.path.startsWith('/manual-review')) return 'manual-review'
-  if (route.path === '/tasks' || route.path.startsWith('/processing-instance/') || route.path.startsWith('/task-detail/')) return 'tasks'
+  if (route.path === '/tasks' || route.path === '/graph-build' || route.path.startsWith('/processing-instance/') || route.path.startsWith('/task-detail/')) return 'tasks'
   return ''
 })
 const routeError = ref('')
@@ -290,7 +290,7 @@ onBeforeUnmount(() => {
               <img class="app-nav__icon" :src="navSchema" alt="" aria-hidden="true" />
               <span v-if="!appStore.collapsed">Schema 管理</span>
             </RouterLink>
-            <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" :class="{ 'app-nav__item--active': activePrimaryNav === 'tasks' }" active-class="app-nav__item--active" to="/tasks" :title="appStore.collapsed ? '图谱构建' : undefined">
+            <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" :class="{ 'app-nav__item--active': activePrimaryNav === 'tasks' }" active-class="app-nav__item--active" to="/graph-build" :title="appStore.collapsed ? '图谱构建' : undefined">
               <img class="app-nav__icon" :src="navTasks" alt="" aria-hidden="true" />
               <span v-if="!appStore.collapsed">图谱构建</span>
             </RouterLink>

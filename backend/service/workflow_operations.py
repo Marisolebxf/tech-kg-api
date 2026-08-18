@@ -71,6 +71,10 @@ class WorkflowOperationsService:
             "pageSize": page_size,
         }
 
+    def list_executions(self, limit: int = 100) -> dict[str, Any]:
+        items = self.repo.list_executions(limit=limit)
+        return {"items": items, "total": len(items)}
+
     def get_task(self, task_id: str) -> dict[str, Any]:
         task = self.repo.get_task(task_id)
         if task is None:
@@ -186,7 +190,11 @@ class WorkflowOperationsService:
         return review
 
     async def execute_definition(
-        self, definition: dict[str, Any], payload: dict[str, Any], workflow_id: str | None = None
+        self,
+        definition: dict[str, Any],
+        payload: dict[str, Any],
+        workflow_id: str | None = None,
+        persist_task: bool = False,
     ) -> dict[str, Any]:
         try:
             dispatch = await temporal_runtime.start(definition, payload, workflow_id)
@@ -201,6 +209,39 @@ class WorkflowOperationsService:
             }
         execution = temporal_runtime.execution_record(definition["id"], dispatch, payload)
         self.repo.save_execution(execution)
+        if persist_task:
+            task_id = f"PI-{datetime.now().strftime('%Y%m%d')}-{uuid4().hex[:6].upper()}"
+            task = {
+                "id": task_id,
+                "batchId": f"UPD-{datetime.now().strftime('%Y%m%d')}",
+                "stage": "图谱构建",
+                "kind": "实体",
+                "objectId": execution["workflowId"],
+                "objectName": definition.get("name", definition["id"]),
+                "objectType": "工作流实例",
+                "action": "作业执行",
+                "sourceTable": "",
+                "sourceRecordId": payload.get("since") or "latest-cursor",
+                "rule": definition["id"],
+                "confidence": "",
+                "result": execution["message"],
+                "status": "已完成" if execution["status"] == "COMPLETED" else "处理中",
+                "taskStatus": "执行中",
+                "dataDomain": "综合数据域",
+                "processedAt": _now(),
+                "reviewType": None,
+                "currentStep": "数据接入",
+                "steps": WorkflowRepository._steps(None),
+                "workflowType": definition["workflowType"],
+                "workflowId": execution["workflowId"],
+                "runId": execution.get("runId"),
+                "input": payload,
+                "output": None,
+                "logs": [execution["message"]],
+            }
+            self.repo.save_task(task)
+            execution["taskId"] = task_id
+            self.repo.save_execution(execution)
         return execution
 
     async def get_execution(self, execution_id: str) -> dict[str, Any] | None:
@@ -213,7 +254,39 @@ class WorkflowOperationsService:
             temporal_runtime._client = None
             execution["message"] = f"状态刷新失败: {exc}"
         self.repo.save_execution(execution)
+        self._sync_task_from_execution(execution)
         return execution
+
+    def _sync_task_from_execution(self, execution: dict[str, Any]) -> None:
+        """execution 完成后，若脚本返回了 stages，回写关联 task 的 steps/output/status。
+
+        让 ProcessInstanceDetailView 能渲染脚本上报的真实阶段，而非模板化 fallback。
+        """
+        task_id = execution.get("taskId")
+        if not task_id:
+            return
+        output = execution.get("output")
+        if not isinstance(output, dict):
+            return
+        stages = output.get("stages")
+        if not isinstance(stages, list):
+            return
+        task = self.repo.get_task(task_id)
+        if task is None:
+            return
+        task["steps"] = stages
+        task["output"] = output
+        status = execution.get("status")
+        if status == "COMPLETED":
+            task["taskStatus"] = "执行完成"
+            task["status"] = "已完成"
+        elif status in {"FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}:
+            task["taskStatus"] = "执行出错"
+            task["status"] = "执行出错"
+        task["logs"] = (task.get("logs") or []) + [
+            f"阶段回写：{len(stages)} 个 stage，状态={status}"
+        ]
+        self.repo.save_task(task)
 
     async def trigger_graph_build(self, request: dict[str, Any]) -> dict[str, Any]:
         definition = self.repo.get_definition("graph-build")

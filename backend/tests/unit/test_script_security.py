@@ -17,7 +17,9 @@ class _FakeLLM:
 
 def test_review_safe() -> None:
     client = _FakeLLM('{"safe": true, "issues": [], "summary": "安全"}')
-    verdict = review_script_security(client, "transform.py", "def transform(row):\n    return row\n")
+    verdict = review_script_security(
+        client, "transform.py", "def transform(row):\n    return row\n"
+    )
     assert isinstance(verdict, ScriptSecurityVerdict)
     assert verdict.safe is True
     assert verdict.issues == []
@@ -37,7 +39,9 @@ def test_review_unsafe() -> None:
 
 def test_review_llm_none() -> None:
     client = _FakeLLM(None)
-    verdict = review_script_security(client, "transform.py", "def transform(row):\n    return row\n")
+    verdict = review_script_security(
+        client, "transform.py", "def transform(row):\n    return row\n"
+    )
     assert verdict.safe is False
     assert any("LLM 调用失败" in i for i in verdict.issues)
     assert verdict.summary == "LLM 调用失败"

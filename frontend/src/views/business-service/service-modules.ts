@@ -205,7 +205,7 @@ export const serviceModules: ServiceModule[] = [
     subtitle: '汇总两个专家之间的论文、项目、专利和奖项成果。',
     endpoint: '/api/v1/kg-construction/expert-cooperation-achievements/query',
     method: 'POST',
-    moduleRequirement: '针对两个专家节点，按图中成果边求交汇总共同论文/专利/项目，回填时间与奖项，并规则归因核心贡献与合作模式。仅查询返回，不写边。',
+    moduleRequirement: '科技两点合作成果服务针对两个科技专家或人才节点，通过整合知识图谱中与这两个节点相关的合作数据，运用成果关联与归因算法，提取并汇总两者的合作成果信息。服务会对合作成果进行分类统计，标注成果的发表或完成时间、所属领域、获得的奖项或评价，同时分析合作成果的核心贡献与合作模式，为评估两点之间的合作深度与合作价值提供数据支持。',
     requestFields: [
       { name: 'sourceExpertId', type: 'string', required: '是', description: '第一个专家 ID' },
       { name: 'targetExpertId', type: 'string', required: '是', description: '第二个专家 ID' },
@@ -349,7 +349,7 @@ export const serviceModules: ServiceModule[] = [
     subtitle: '基于教育经历匹配同校校友，归因同校/同学历/同期，并附互动摘要。',
     endpoint: '/api/v1/kg-construction/expert-alumni-relations/query',
     method: 'POST',
-    moduleRequirement: '科技专家校友关系服务基于 Person 教育背景字段匹配校友，仅查询返回、不写 ALUMNI 边。维度仅在数据可支撑时输出「同校」「同学历」「同期」，不编造同院系/同导师。填 targetExpertId 为双点判定；留空为列表扫描（最多约 500 人）。',
+    moduleRequirement: '科技专家校友关系服务基于科技专家的教育背景数据，结合知识图谱中的院校信息与校友网络数据，运用教育经历匹配算法，识别并构建专家之间的校友关系。服务会对校友关系进行细分，记录校友关系的关联维度，同时关联校友之间的后续学术交流、合作互动等信息，为挖掘科技专家的教育背景关联与校友资源网络提供支持。',
     requestFields: [
       { name: 'expertId', type: 'string', required: '是', description: '专家唯一标识' },
       { name: 'targetExpertId', type: 'string', required: '否', description: '目标专家 ID；有则双点判定，空则列表' },

@@ -67,15 +67,15 @@ const alertItems = ref<Array<{
 }>>([])
 const blockedAlertCount = computed(() => alertItems.value.filter((item) => item.blocked).length)
 const serviceNavItems = [
-  { to: '/expert-direct', label: '专家直接关系', fullLabel: '科技专家直接关系' },
-  { to: '/node-indirect', label: '单节点间接关系', fullLabel: '科技单节点间接关系' },
-  { to: '/two-point-achievement', label: '两点合作成果', fullLabel: '科技两点合作成果' },
-  { to: '/expert-colleague', label: '专家同事关系', fullLabel: '科技专家同事关系' },
-  { to: '/expert-alumni', label: '专家校友关系', fullLabel: '科技专家校友关系' },
-  { to: '/paper-cooperation', label: '论文合作关系', fullLabel: '专家论文合作关系' },
-  { to: '/enterprise-relation', label: '重点企业关系', fullLabel: '重点科技企业关系' },
-  { to: '/industry-chain-event', label: '产业链事件关系', fullLabel: '产业链点事件关系' },
-  { to: '/industry-chain-panorama', label: '产业链全景图', fullLabel: '科技产业链全景图' },
+  { to: '/expert-direct', label: '科技专家/人才直接关系', fullLabel: '科技专家/人才直接关系' },
+  { to: '/node-indirect', label: '科技单节点间接关系', fullLabel: '科技单节点间接关系' },
+  { to: '/two-point-achievement', label: '科技两点合作成果', fullLabel: '科技两点合作成果' },
+  { to: '/expert-colleague', label: '科技专家同事关系', fullLabel: '科技专家同事关系' },
+  { to: '/expert-alumni', label: '科技专家校友关系', fullLabel: '科技专家校友关系' },
+  { to: '/paper-cooperation', label: '科技专家论文合作关系', fullLabel: '科技专家论文合作关系' },
+  { to: '/enterprise-relation', label: '重点关注科技企业关系', fullLabel: '重点关注科技企业关系' },
+  { to: '/industry-chain-event', label: '科技产业链点TOP-N事件关系', fullLabel: '科技产业链点TOP-N事件关系' },
+  { to: '/industry-chain-panorama', label: '科技产业链全景图', fullLabel: '科技产业链全景图' },
 ]
 const showServiceNavItems = computed(() => (
   !appStore.collapsed && !serviceNavCollapsed.value

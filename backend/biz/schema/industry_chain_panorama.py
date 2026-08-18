@@ -48,6 +48,10 @@ class PanoramaKeyEntity(BaseModel):
     subtitle: str | None = None
     metric: str | None = None
     metricValue: float | int | None = None
+    sourceSystem: str | None = None
+    sourceRecordId: str | None = None
+    ingestBatch: str | None = None
+    ingestTime: str | None = None
 
 
 class PanoramaLayer(BaseModel):
@@ -89,4 +93,5 @@ class IndustryChainPanoramaQueryResponse(BaseModel):
     layers: list[PanoramaLayer]
     graph: dict[str, list[Any]]
     source: dict[str, Any]
+    provenance: dict[str, Any] | None = None
     apiResultExample: dict[str, Any]

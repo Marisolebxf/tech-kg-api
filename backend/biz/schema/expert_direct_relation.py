@@ -81,4 +81,5 @@ class ExpertDirectRelationQueryResponse(BaseModel):
     items: list[DirectRelationItem]
     graph: dict[str, list[Any]]
     source: dict[str, Any]
+    provenance: dict[str, Any] | None = None
     apiResultExample: dict[str, Any]

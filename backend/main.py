@@ -12,7 +12,6 @@ from biz.router.register import register_routers
 from biz.schemas.common import ApiResponse
 from infra.graph_db import close_techkg_client, close_trs_graph_client
 from infra.graph_db.exceptions import GraphRepoError
-from infra.redis import close_redis_client
 from service.operator_registry import REGISTRY
 
 logger = logging.getLogger(__name__)
@@ -32,7 +31,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         REGISTRY.stop_watcher()
-        await close_redis_client()
         close_techkg_client()
         close_trs_graph_client()
 

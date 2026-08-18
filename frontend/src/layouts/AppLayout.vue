@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onErrorCaptured, onMounted, ref, watch } from 'vue'
-import { RouterView, useRoute, useRouter } from 'vue-router'
+import { RouterView, useRoute } from 'vue-router'
 
 import iconMenuCollapse from '../assets/icons/icon-menu-collapse.svg'
 import iconSidebarArrow from '../assets/icons/icon-sidebar-arrow.svg'
@@ -14,19 +14,10 @@ import navTasks from '../assets/icons/nav-tasks.svg'
 import navTools from '../assets/icons/nav-tools.svg'
 import { getPlatformOverviewRisks } from '../api/platformOverview'
 import { useAppStore } from '../stores/app'
-import { useAuthStore } from '../stores/auth'
-import avatarBen from '../assets/images/avatar-ben.png'
 import logoKg from '../assets/images/logo-kg.png'
 
 const route = useRoute()
-const router = useRouter()
 const appStore = useAppStore()
-const authStore = useAuthStore()
-const currentUser = computed(() => authStore.profile?.user)
-const userAvatar = computed(() => currentUser.value?.avatar || avatarBen)
-const userDisplayName = computed(() => authStore.displayName)
-const userRoleName = computed(() => authStore.primaryRole)
-const userBadge = computed(() => authStore.profile?.roles[0]?.type === 2 ? '机构角色' : '应用角色')
 const pageTitle = computed(() => String(route.meta.title ?? '亿级知识图谱'))
 const showPageContext = computed(() => !route.path.startsWith('/processing-instance/') && !route.path.startsWith('/manual-review/task/') && !route.path.startsWith('/task-detail/'))
 const activePrimaryNav = computed(() => {
@@ -38,10 +29,7 @@ const routeError = ref('')
 const serviceNavCollapsed = ref(false)
 const alertDrawerOpen = ref(false)
 const alertPreviewOpen = ref(false)
-const userMenuOpen = ref(false)
-const userEntryRef = ref<HTMLElement | null>(null)
 const assistantEntryRef = ref<HTMLButtonElement | null>(null)
-const accountFeedback = ref('')
 const assistantOpen = ref(false)
 const assistantPosition = ref({ x: 0, y: 0 })
 const assistantViewport = ref({ width: 1440, height: 900 })
@@ -102,37 +90,10 @@ onErrorCaptured((error) => {
 
 function openAlertDrawer() {
   alertPreviewOpen.value = false
-  userMenuOpen.value = false
   assistantOpen.value = false
   alertDrawerOpen.value = true
 }
 
-function toggleUserMenu() {
-  alertPreviewOpen.value = false
-  userMenuOpen.value = !userMenuOpen.value
-}
-
-async function handleAccountAction(action: '个人中心' | '账号与安全' | '操作记录' | '退出登录') {
-  userMenuOpen.value = false
-  if (action === '个人中心') {
-    await router.push('/user-center')
-    return
-  }
-  if (action === '账号与安全') {
-    await router.push('/account-security')
-    return
-  }
-  if (action === '操作记录') {
-    await router.push('/operation-logs')
-    return
-  }
-  if (action === '退出登录') {
-    accountFeedback.value = '正在安全退出系统。'
-    await authStore.logout()
-    await router.replace('/login')
-    return
-  }
-}
 
 // 问答小助手（已隐藏）
 // function toggleAssistant() {
@@ -141,7 +102,6 @@ async function handleAccountAction(action: '个人中心' | '账号与安全' | 
 //     return
 //   }
 //   alertDrawerOpen.value = false
-//   userMenuOpen.value = false
 //   assistantOpen.value = !assistantOpen.value
 // }
 
@@ -211,9 +171,6 @@ async function loadAlertItems() {
   }
 }
 
-function handleDocumentPointerDown(event: PointerEvent) {
-  if (userMenuOpen.value && !userEntryRef.value?.contains(event.target as Node)) userMenuOpen.value = false
-}
 
 // 问答小助手（已隐藏）
 // function askAssistant() {
@@ -235,7 +192,6 @@ function handleDocumentPointerDown(event: PointerEvent) {
 watch(() => route.fullPath, () => {
   alertDrawerOpen.value = false
   alertPreviewOpen.value = false
-  userMenuOpen.value = false
 })
 
 onMounted(() => {
@@ -247,7 +203,6 @@ onMounted(() => {
   window.addEventListener('pageshow', handleViewportResize)
   window.visualViewport?.addEventListener('resize', handleViewportResize)
   document.addEventListener('visibilitychange', handleVisibilityChange)
-  document.addEventListener('pointerdown', handleDocumentPointerDown)
   window.requestAnimationFrame(handleViewportResize)
 })
 
@@ -257,7 +212,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('pageshow', handleViewportResize)
   window.visualViewport?.removeEventListener('resize', handleViewportResize)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
-  document.removeEventListener('pointerdown', handleDocumentPointerDown)
 })
 </script>
 
@@ -356,23 +310,6 @@ onBeforeUnmount(() => {
                 <aside v-if="alertPreviewOpen" class="alert-preview" aria-label="异常与人工处理概览">
                   <header><div><strong>异常与人工处理</strong><span>实时更新</span></div></header>
                   <section><article><strong>{{ alertItems.length }}</strong><span>待处理</span></article><article class="danger"><strong>{{ blockedAlertCount }}</strong><span>阻断流程</span></article></section>
-                </aside>
-              </div>
-              <div ref="userEntryRef" class="app-user-entry">
-                <button class="app-top-actions__user" type="button" :aria-label="`当前登录用户：${userRoleName}${userDisplayName}`" :aria-expanded="userMenuOpen" @click="toggleUserMenu">
-                  <img :src="userAvatar" alt="" aria-hidden="true" />
-                  <span><strong>{{ userDisplayName }}</strong><em>{{ userRoleName }}</em></span>
-                  <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4" /></svg>
-                </button>
-                <aside v-if="userMenuOpen" class="app-user-menu">
-                  <header><img :src="userAvatar" alt="" /><div><strong>{{ userDisplayName }}</strong><span>{{ userRoleName }}</span></div><b>{{ userBadge }}</b></header>
-                  <nav>
-                    <button :class="{ active: route.path === '/user-center' }" type="button" @click="handleAccountAction('个人中心')"><i>人</i><span>个人中心</span></button>
-                    <button :class="{ active: route.path === '/account-security' }" type="button" @click="handleAccountAction('账号与安全')"><i>安</i><span>账号与安全</span></button>
-                    <button :class="{ active: route.path === '/operation-logs' }" type="button" @click="handleAccountAction('操作记录')"><i>录</i><span>操作记录</span></button>
-                    <button class="danger" type="button" @click="handleAccountAction('退出登录')"><i>退</i><span>退出登录</span></button>
-                  </nav>
-                  <footer v-if="accountFeedback">{{ accountFeedback }}</footer>
                 </aside>
               </div>
             </div>
@@ -767,39 +704,6 @@ onBeforeUnmount(() => {
   margin-bottom: 8px;
 }
 
-.app-top-actions__user {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid rgba(191, 215, 250, .96);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, .84);
-  color: #344766;
-  font-size: 13px;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.app-top-actions__user>img { width:22px;height:22px;border-radius:50%;object-fit:cover; }
-.app-top-actions__user>span { display:grid;gap:0;line-height:1.15; }
-.app-top-actions__user strong { color:#344766;font-size:12px;font-weight:600; }
-.app-top-actions__user em { color:#7890b5;font-size:9px;font-style:normal; }
-.app-top-actions__user>i { color:#7890b5;font-size:10px;font-style:normal; }
-.app-top-actions__user>svg { width:14px;height:14px;fill:none;stroke:#7890b5;stroke-width:1.6;transition:transform .2s; }
-.app-top-actions__user[aria-expanded="true"] { border-color:#8fb7f2;background:#fff;box-shadow:0 5px 14px rgba(44,91,157,.1); }
-.app-top-actions__user[aria-expanded="true"]>svg { transform:rotate(180deg); }
-.app-user-entry { position:relative;z-index:38; }
-.app-user-menu { position:absolute;z-index:48;top:39px;right:0;width:250px;overflow:hidden;border:1px solid #c8daf4;border-radius:9px;background:#fff;box-shadow:0 18px 45px rgba(34,74,132,.2);color:#263853; }
-.app-user-menu::before { position:absolute;top:-6px;right:25px;width:11px;height:11px;border-top:1px solid #c8daf4;border-left:1px solid #c8daf4;background:#fff;content:"";transform:rotate(45deg); }
-.app-user-menu>header { position:relative;display:grid;grid-template-columns:36px minmax(0,1fr) auto;align-items:center;gap:10px;padding:14px;border-bottom:1px solid #e4ecf6;background:#fbfdff; }
-.app-user-menu>header img { width:34px;height:34px;border-radius:50%;object-fit:cover; }
-.app-user-menu>header div { display:grid;gap:3px; }.app-user-menu>header strong { font-size:13px; }.app-user-menu>header span { color:#75839a;font-size:10px; }.app-user-menu>header b { padding:2px 6px;border-radius:99px;background:#eaf2ff;color:#175cd3;font-size:9px;font-weight:500; }
-.app-user-menu>p { margin:0;padding:10px 14px;border-bottom:1px solid #e9eff7;color:#718098;font-size:10px;line-height:17px; }
-.app-user-menu nav { display:grid;padding:6px; }.app-user-menu nav button { display:flex;align-items:center;justify-content:flex-start;gap:10px;height:40px;padding:0 10px;border:0;border-radius:5px;background:#fff;color:#344766;text-align:left;cursor:pointer; }.app-user-menu nav button:hover { background:#f1f6fd;color:#165dff; }.app-user-menu nav button i { display:grid;place-items:center;width:22px;height:22px;border-radius:5px;background:#edf3fb;color:#526783;font-size:9px;font-style:normal; }.app-user-menu nav button span { font-size:11px; }.app-user-menu nav button.danger { margin-top:5px;border-top:1px solid #e8eef6;border-radius:0 0 5px 5px; }.app-user-menu nav button.danger span,.app-user-menu nav button.danger i { color:#b42318; }
-.app-user-menu nav button.active { background:#eaf2ff;color:#165dff; }.app-user-menu nav button.active i { background:#fff;color:#165dff; }
-.app-user-menu>footer { padding:9px 13px;border-top:1px solid #e4ecf6;background:#f7faff;color:#526783;font-size:9px;line-height:15px; }
 
 .app-top-actions__context { color: #65738a; font-size: 13px; }
 .app-top-actions__right { display: flex; align-items: center; gap: 10px; margin-left: auto; }
@@ -866,7 +770,6 @@ onBeforeUnmount(() => {
 .knowledge-assistant__messages { display:flex;min-height:0;gap:9px;padding:13px;overflow:auto;flex-direction:column; }.knowledge-assistant__messages article { align-self:flex-start;max-width:86%;padding:10px 11px;border:1px solid #d9e6f7;border-radius:3px 10px 10px;background:#fff;color:#344761; }.knowledge-assistant__messages article.is-user { align-self:flex-end;border-color:#165dff;border-radius:10px 3px 10px 10px;background:#165dff;color:#fff; }.knowledge-assistant__messages p { margin:0;font-size:11px;line-height:18px; }.knowledge-assistant__messages article>div { display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:8px;padding-top:7px;border-top:1px solid #e7eef8; }.knowledge-assistant__messages article>div span { width:100%;color:#8491a5;font-size:8px; }.knowledge-assistant__messages article>div b { padding:2px 6px;border-radius:99px;background:#eaf2ff;color:#175cd3;font-size:8px;font-weight:500; }
 .knowledge-assistant__full { padding:8px 13px;border-top:1px solid #e2eaf5;background:#fff;color:#165dff;font-size:9px;text-decoration:none; }
 .knowledge-assistant>form { display:grid;grid-template-columns:minmax(0,1fr) 54px;gap:8px;padding:10px;border-top:1px solid #dce8f8;background:#fff; }.knowledge-assistant textarea { box-sizing:border-box;height:54px;padding:8px 9px;border:1px solid #bdd0ea;border-radius:6px;color:#344761;font:10px/16px inherit;resize:none; }.knowledge-assistant form button { border:0;border-radius:6px;background:#165dff;color:#fff;font-size:10px;cursor:pointer; }.knowledge-assistant form button:disabled { background:#a9bee0;cursor:not-allowed; }
-@media(max-width:620px){.app-user-menu{right:-2px;width:270px}}
 
 .app-workspace {
   height: calc(100% - 42px);
@@ -915,7 +818,6 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 1050px) {
-  .app-top-actions__user span { display: none; }
   .alert-drawer { width: min(430px, 94vw); }
 }
 

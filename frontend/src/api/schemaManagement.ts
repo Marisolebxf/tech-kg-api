@@ -74,6 +74,10 @@ export interface SchemaDefinition {
   canDelete: boolean
   properties: SchemaProperty[]
   script: SchemaScript | null
+  ddlStatement: string | null
+  ddlStatus: 'pending' | 'succeeded' | 'failed' | 'skipped'
+  ddlError: string | null
+  ddlExecutedAt: string | null
 }
 
 export interface SchemaListData {
@@ -172,33 +176,27 @@ export async function listAllSchemas(userId: string): Promise<SchemaDefinition[]
 async function createSchema<T extends object>(
   path: string,
   payload: T,
-  script: File,
   userId: string,
 ): Promise<SchemaDefinition> {
-  const body = new FormData()
-  body.append('metadata', JSON.stringify(payload))
-  body.append('script', script)
   return unwrap(
     await asApiPromise<SchemaDefinition>(
-      http.post(`${PREFIX}${path}`, body, { headers: headers(userId) }),
+      http.post(`${PREFIX}${path}`, payload, { headers: headers(userId) }),
     ),
   )
 }
 
 export function createEntitySchema(
   payload: EntitySchemaCreatePayload,
-  script: File,
   userId: string,
 ) {
-  return createSchema('/schemas/entities', payload, script, userId)
+  return createSchema('/schemas/entities', payload, userId)
 }
 
 export function createRelationSchema(
   payload: RelationSchemaCreatePayload,
-  script: File,
   userId: string,
 ) {
-  return createSchema('/schemas/relations', payload, script, userId)
+  return createSchema('/schemas/relations', payload, userId)
 }
 
 export async function replaceSchemaScript(

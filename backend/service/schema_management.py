@@ -20,6 +20,7 @@ from dao.schema_management import SchemaManagementDAO
 from db_model.schema_management import GraphSchemaDefinition, GraphSchemaScript
 from infra.llm import LLMClient, get_llm_client
 from infra.s3 import S3Storage, get_schema_s3_storage
+from service.schema_ddl import run_schema_ddl
 from service.script_security import review_script_security
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,10 @@ class SchemaScriptError(SchemaManagementError):
 
 
 class SchemaStorageError(SchemaManagementError):
+    pass
+
+
+class SchemaDdlError(SchemaManagementError):
     pass
 
 
@@ -153,27 +158,14 @@ class SchemaManagementService:
         *,
         payload: dict[str, Any],
         user_id: str,
-        filename: str,
-        content_type: str | None,
-        script_data: bytes,
     ) -> dict[str, Any]:
-        return self._create(
-            kind="entity",
-            payload=payload,
-            user_id=user_id,
-            filename=filename,
-            content_type=content_type,
-            script_data=script_data,
-        )
+        return self._create(kind="entity", payload=payload, user_id=user_id)
 
     def create_relation(
         self,
         *,
         payload: dict[str, Any],
         user_id: str,
-        filename: str,
-        content_type: str | None,
-        script_data: bytes,
     ) -> dict[str, Any]:
         source_id = payload.get("source_schema_id")
         target_id = payload.get("target_schema_id")
@@ -187,14 +179,7 @@ class SchemaManagementService:
             raise SchemaConflictError("用户新建关系的起点和终点必须是已存在的实体 Schema")
         payload["source_expression"] = payload.get("source_expression") or source.name
         payload["target_expression"] = payload.get("target_expression") or target.name
-        return self._create(
-            kind="relation",
-            payload=payload,
-            user_id=user_id,
-            filename=filename,
-            content_type=content_type,
-            script_data=script_data,
-        )
+        return self._create(kind="relation", payload=payload, user_id=user_id)
 
     def replace_script(
         self,
@@ -496,9 +481,6 @@ class SchemaManagementService:
         kind: str,
         payload: dict[str, Any],
         user_id: str,
-        filename: str,
-        content_type: str | None,
-        script_data: bytes,
     ) -> dict[str, Any]:
         user_id = user_id.strip()
         if not user_id or len(user_id) > 128:
@@ -506,64 +488,37 @@ class SchemaManagementService:
         if self._dao.exists_by_key_or_name(payload["schema_key"], payload["name"]):
             raise SchemaConflictError("schemaKey 或 Schema 名称已存在")
 
-        workflow_function = self._validate_script(filename, script_data)
         schema_id = str(uuid4())
-        object_key = f"schemas/{kind}/{schema_id}/{uuid4().hex}-{_safe_filename(filename)}"
-        sha256 = hashlib.sha256(script_data).hexdigest()
-        stored = None
         try:
-            try:
-                stored = self._storage.put_bytes(
-                    object_key,
-                    script_data,
-                    content_type or "text/x-python",
-                )
-            except Exception as exc:
-                raise SchemaStorageError("上传 Schema Python 脚本失败") from exc
-            definition_stub = GraphSchemaDefinition(
-                id=schema_id,
-                schema_key=payload["schema_key"],
-                kind=kind,
-                name=payload["name"],
-                label=payload["label"],
-            )
-            workflow_definition = self._register_workflow(
-                definition=definition_stub,
-                filename=filename,
-                script_data=script_data,
-                function_name=workflow_function,
-            )
             self._dao.create(
                 schema_id=schema_id,
                 kind=kind,
                 payload=payload,
                 created_by=user_id,
-                script={
-                    "bucket": stored.bucket,
-                    "object_key": stored.object_key,
-                    "original_filename": Path(filename).name,
-                    "content_type": content_type or "text/x-python",
-                    "size_bytes": len(script_data),
-                    "etag": stored.etag,
-                    "sha256": sha256,
-                    "uploaded_by": user_id,
-                    "workflow_definition_id": (
-                        workflow_definition["id"] if workflow_definition else None
-                    ),
-                    "workflow_function_name": workflow_function,
-                },
+                script=None,
             )
             self._session.commit()
         except IntegrityError as exc:
             self._session.rollback()
-            if stored:
-                self._delete_uploaded_quietly(stored.bucket, stored.object_key)
             raise SchemaConflictError("schemaKey、Schema 名称或属性名已存在") from exc
         except Exception:
             self._session.rollback()
-            if stored:
-                self._delete_uploaded_quietly(stored.bucket, stored.object_key)
             raise
+
+        # 落库后执行图 DDL，结果回写。DDL 失败不回滚 catalog 行。
+        ddl_result = run_schema_ddl(kind, payload["name"], payload["properties"])
+        try:
+            definition = self._require_schema(schema_id)
+            definition.ddl_statement = ddl_result["statement"]
+            definition.ddl_status = ddl_result["status"]
+            definition.ddl_error = ddl_result["error"]
+            if ddl_result["executed_at"]:
+                definition.ddl_executed_at = datetime.fromisoformat(ddl_result["executed_at"])
+            self._session.commit()
+        except Exception as exc:
+            self._session.rollback()
+            logger.exception("回写 DDL 结果失败: %s", schema_id)
+            raise SchemaDdlError(f"DDL 结果回写失败: {exc}") from exc
 
         created = self._require_schema(schema_id)
         return self._serialize(created, user_id=user_id, detail=True)
@@ -655,6 +610,10 @@ class SchemaManagementService:
             "targetSchemaName": definition.target_expression
             or (definition.target_schema.name if definition.target_schema else None),
             "mappings": [item.source_name for item in definition.mappings],
+            "ddlStatement": definition.ddl_statement,
+            "ddlStatus": definition.ddl_status,
+            "ddlError": definition.ddl_error,
+            "ddlExecutedAt": _iso(definition.ddl_executed_at),
             "canDelete": bool(
                 user_id and not definition.is_system and definition.created_by == user_id
             ),

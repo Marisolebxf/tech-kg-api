@@ -2003,13 +2003,13 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .result-panel__tabs button {
-  height: 28px;
-  padding: 0 12px;
+  height: 26px;
+  padding: 0 6px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -2017,6 +2017,18 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   background: var(--surface);
   color: var(--primary);
   font-weight: 600;
+}
+
+.result-panel .kg-panel__header {
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-height: 44px;
+  padding: 6px 12px;
+}
+
+.result-panel .kg-panel__title {
+  font-size: 15px;
+  line-height: 22px;
 }
 
 .result-panel__table {

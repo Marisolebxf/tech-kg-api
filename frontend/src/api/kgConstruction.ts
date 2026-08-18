@@ -268,7 +268,7 @@ export function queryExpertAlumniRelations(
  * POST
  * /api/v1/kg-construction/
  * expert-paper-cooperation-relations/
- * demo/structured-result
+ * structured-result
  */
 export interface PaperCooperationQuery {
   dataSource: string
@@ -336,7 +336,7 @@ export function queryExpertPaperCooperation(
   >(
     `${PREFIX}`
     + '/expert-paper-cooperation-relations'
-    + '/demo/structured-result',
+    + '/structured-result',
     payload,
   )
 }

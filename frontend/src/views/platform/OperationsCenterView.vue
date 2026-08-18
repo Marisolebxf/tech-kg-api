@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
-import { getManualReviews, type ReviewRecord } from '../../api/workflowOperations'
+import { getManualReviews, getProductionReviews, type ProductionReviewCase, type ReviewRecord } from '../../api/workflowOperations'
 import {
   getHandleCategory,
   getImpactScope,
@@ -19,7 +19,10 @@ const status = ref('全部状态')
 const domain = ref('全部业务域')
 const reviewCategory = ref('全部处理分类')
 const batchFilter = ref(String(route.query.batch || '全部更新批次'))
-const reviewTab = ref(route.query.tab === 'history' ? '历史记录' : '待处理')
+const productionMode = import.meta.env.VITE_REVIEW_PRODUCTION_ENABLED === 'true'
+const productionTabs = { '我的待办':'mine', '待领取':'unclaimed', '待审批':'approval', '失败重跑':'failed', '历史记录':'history' } as const
+const reviewTab = ref(productionMode ? (route.query.tab === 'history' ? '历史记录' : '我的待办') : (route.query.tab === 'history' ? '历史记录' : '待处理'))
+const reviewTotal = ref(0)
 const severity = ref('全部风险')
 const actionFeedback = ref('')
 const alertCategory = ref('全部异常')
@@ -102,7 +105,7 @@ const filteredReviewRows = computed(() => {
       row.id, row.object, row.objectType, row.objectId, row.type, handleCategory,
       row.sourceTable, row.sourceRecordId, row.batch, row.handler, row.evidence,
     ].join(' ')
-    const inTab = reviewTab.value === '历史记录' ? row.status !== '待处理' : row.status === '待处理'
+    const inTab = productionMode ? true : (reviewTab.value === '历史记录' ? row.status !== '待处理' : row.status === '待处理')
     return inTab
       && (!keyword.value || text.includes(keyword.value))
       && (status.value === '全部状态' || row.status === status.value)
@@ -118,7 +121,7 @@ const filteredReviewRows = computed(() => {
   })
 })
 
-const selectReviewTab = (tab: '待处理' | '历史记录') => {
+const selectReviewTab = (tab: string) => {
   reviewTab.value = tab
   status.value = '全部状态'
 }
@@ -126,21 +129,30 @@ const selectReviewTab = (tab: '待处理' | '历史记录') => {
 watch(() => route.query.batch, (value) => { batchFilter.value = String(value || '全部更新批次') })
 watch(() => route.query.keyword, (value) => { keyword.value = String(value || '') })
 watch(() => route.query.tab, (value) => {
-  reviewTab.value = value === 'history' ? '历史记录' : '待处理'
+  reviewTab.value = value === 'history' ? '历史记录' : (productionMode ? '我的待办' : '待处理')
   status.value = '全部状态'
 })
 
 async function loadReviews() {
   if (props.mode !== 'review') return
   try {
-    const response = await getManualReviews({ pageSize: 200 })
-    reviewRecords.value = response.items
+    if (productionMode) {
+      const queue = productionTabs[reviewTab.value as keyof typeof productionTabs] || 'mine'
+      const response = await getProductionReviews({ queue, keyword: keyword.value || undefined, page: 1, pageSize: 50 })
+      reviewTotal.value = response.total
+      reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
+        id: row.id, batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待领取', status: row.status === 'RESOLVED' ? '已完成' : row.status === 'CANCELLED' ? '已撤销' : '待处理', updatedAt: row.updatedAt, sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
+      }))
+    } else {
+      const response = await getManualReviews({ pageSize: 200 })
+      reviewTotal.value = response.total
+      reviewRecords.value = response.items
+    }
     reviewLoadError.value = ''
-  } catch (error) {
-    reviewLoadError.value = error instanceof Error ? error.message : '人工处理队列加载失败'
-  }
+  } catch (error) { reviewLoadError.value = error instanceof Error ? error.message : '人工处理队列加载失败' }
 }
 
+watch(reviewTab, loadReviews)
 onMounted(loadReviews)
 </script>
 
@@ -168,7 +180,7 @@ onMounted(loadReviews)
 
     <section class="ops-panel">
       <div v-if="mode === 'alerts'" class="alert-tabs"><nav><button v-for="item in alertCategories" :key="item" type="button" :class="{ active:alertCategory===item }" @click="alertCategory=item">{{ item }}</button></nav><label><input v-model="blockingOnly" type="checkbox" />仅看已阻断</label></div>
-      <nav v-else class="review-tabs" aria-label="人工处理分类"><button type="button" :class="{ active: reviewTab === '待处理' }" @click="selectReviewTab('待处理')">待处理 <em>{{ pendingReviewCount }}</em></button><button type="button" :class="{ active: reviewTab === '历史记录' }" @click="selectReviewTab('历史记录')">历史记录 <em>{{ historyReviewCount }}</em></button></nav>
+      <nav v-else class="review-tabs" aria-label="人工处理分类"><template v-if="productionMode"><button v-for="(_, label) in productionTabs" :key="label" type="button" :class="{ active: reviewTab === label }" @click="selectReviewTab(label)">{{ label }}</button></template><template v-else><button type="button" :class="{ active: reviewTab === '待处理' }" @click="selectReviewTab('待处理')">待处理 <em>{{ pendingReviewCount }}</em></button><button type="button" :class="{ active: reviewTab === '历史记录' }" @click="selectReviewTab('历史记录')">历史记录 <em>{{ historyReviewCount }}</em></button></template></nav>
       <div v-if="mode === 'review'" class="review-cat-bar" aria-label="处理分类筛选">
         <button type="button" :class="{ active: reviewCategory === '全部处理分类' }" @click="reviewCategory = '全部处理分类'">全部</button>
         <button
@@ -242,7 +254,7 @@ onMounted(loadReviews)
       </table></div>
 
       <footer v-if="mode === 'alerts'" class="alert-pagination"><span>每页显示　<select><option>20</option><option>50</option><option>100</option></select>　共 158 条异常</span><nav><button type="button" disabled>上一页</button><button class="active" type="button">1</button><button type="button">2</button><button type="button">3</button><button type="button">…</button><button type="button">8</button><button type="button">下一页</button></nav></footer>
-      <footer v-else class="review-pagination"><span>共 {{ filteredReviewRows.length }} 条</span><nav><button type="button" disabled>上一页</button><button class="active" type="button">1</button><button type="button">下一页</button></nav></footer>
+      <footer v-else class="review-pagination"><span>共 {{ productionMode ? reviewTotal : filteredReviewRows.length }} 条</span><nav><button type="button" disabled>上一页</button><button class="active" type="button">1</button><button type="button">下一页</button></nav></footer>
     </section>
 
   </div>

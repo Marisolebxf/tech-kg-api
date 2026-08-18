@@ -7,7 +7,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@microsoft/fetch-event-source": "^2.0.1",
@@ -51,6 +53,7 @@
   "devDependencies": {
     "@commitlint/cli": "^21.0.1",
     "@commitlint/config-conventional": "^21.0.1",
+    "@playwright/test": "^1.62.1",
     "@types/crypto-js": "^4.2.2",
     "@types/dagre": "^0.7.54",
     "@types/file-saver": "^2.0.7",
@@ -62,12 +65,14 @@
     "@vitejs/plugin-vue": "^6.0.6",
     "@vue/eslint-config-prettier": "^10.2.0",
     "@vue/eslint-config-typescript": "^14.7.0",
+    "@vue/test-utils": "^2.4.6",
     "@vue/tsconfig": "^0.9.1",
     "cross-env": "^10.1.0",
     "eslint": "^9",
     "eslint-plugin-prettier": "^5.5.5",
     "eslint-plugin-vue": "^10.9.1",
     "husky": "^9",
+    "jsdom": "^25.0.1",
     "less": "^4.6.4",
     "lint-staged": "^17.0.5",
     "prettier": "^3",
@@ -80,6 +85,7 @@
     "vite-plugin-html": "^3.2.2",
     "vite-plugin-svg-icons": "^2.0.1",
     "vite-plugin-vue-devtools": "^8.1.2",
+    "vitest": "^4.1.10",
     "vue-tsc": "^3.2.8"
   }
 }

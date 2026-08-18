@@ -9,12 +9,14 @@ from typing import Any
 
 from infra.graph_db import TRSGraphClient, get_trs_graph_client
 from infra.graph_db.config import TRSGraphSettings
+from infra.graph_db.models import GraphNode
 from service.base_module import KGModuleScaffoldService
 
 PERSON_LABELS = ("Person", "Scholar")
 LIST_PAGE_SIZE = 50
-LIST_MAX_PAGES = 10
+LIST_MAX_PAGES = 250
 EDGE_LIMIT = 200
+EDUCATION_LOOKUP_LIMIT = 2000
 
 PAPER_EDGE_TYPES = frozenset({"AUTHORED_BY"})
 PATENT_EDGE_TYPES = frozenset({"INVENTED_BY"})
@@ -103,7 +105,17 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             if match is None:
                 continue
             shared_institutions, dimensions, match_summary = match
-            interactions = self._interactions(graph, expert_id, cand_id)
+            interactions = (
+                self._interactions(graph, expert_id, cand_id)
+                if mode == "pair"
+                else {
+                    "coauthorEdge": False,
+                    "paperCount": 0,
+                    "patentCount": 0,
+                    "projectCount": 0,
+                    "summary": "列表模式未展开互动明细",
+                }
+            )
             item = {
                 "alumniId": str(cand_id),
                 "name": self._display_name(cand_node),
@@ -165,8 +177,40 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         self, graph: TRSGraphClient, exclude_id: str
     ) -> tuple[list[tuple[str, Any]], bool]:
         candidates: list[tuple[str, Any]] = []
-        truncated = False
         seen: set[str] = set()
+        queries = (
+            'LOOKUP ON Person WHERE Person.education_background_institution_zh != "" '
+            f"YIELD id(vertex) AS vid, properties(vertex) AS props | LIMIT {EDUCATION_LOOKUP_LIMIT}",
+            'LOOKUP ON Person WHERE Person.education_background_institution_en != "" '
+            f"YIELD id(vertex) AS vid, properties(vertex) AS props | LIMIT {EDUCATION_LOOKUP_LIMIT}",
+        )
+        try:
+            hit_limit = False
+            for query in queries:
+                result = graph.execute_read(query)
+                records = getattr(result, "records", None)
+                if not isinstance(records, list):
+                    raise TypeError("graph lookup did not return records")
+                hit_limit = hit_limit or len(records) >= EDUCATION_LOOKUP_LIMIT
+                for record in records:
+                    nid = str(record.get("vid", "") or "")
+                    if not nid or nid == exclude_id or nid in seen:
+                        continue
+                    seen.add(nid)
+                    candidates.append(
+                        (
+                            nid,
+                            GraphNode(
+                                id=nid, labels=["Person"], properties=record.get("props") or {}
+                            ),
+                        )
+                    )
+            return candidates, hit_limit
+        except Exception:
+            # Compatibility fallback for graph services without education indexes.
+            pass
+
+        truncated = False
         for label in PERSON_LABELS:
             for page in range(LIST_MAX_PAGES):
                 try:
@@ -186,10 +230,12 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                     candidates.append((nid, node))
                 if len(items) < LIST_PAGE_SIZE:
                     break
+                total = int(getattr(page_result, "total", 0) or 0)
+                if total and (page + 1) * LIST_PAGE_SIZE >= total:
+                    break
                 if page == LIST_MAX_PAGES - 1:
                     truncated = True
             if candidates:
-                # Prefer first label that returns data (Person OR Scholar)
                 break
         return candidates, truncated
 

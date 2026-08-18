@@ -11,12 +11,14 @@ const props = withDefaults(
     selectedNodeId?: string | null
     selectedEdgeId?: string | null
     ariaLabel?: string
+    showEdgeLabelButton?: boolean
   }>(),
   {
     activeCategories: null,
     selectedNodeId: null,
     selectedEdgeId: null,
     ariaLabel: '知识图谱',
+    showEdgeLabelButton: false,
   },
 )
 
@@ -166,6 +168,7 @@ function handleWheel(event: WheelEvent) {
 function handlePointerDown(event: PointerEvent) {
   if ((event.target as Element).closest('.platform-node')) return
   if ((event.target as Element).closest('.platform-network-line, .platform-network-hit-area')) return
+  if ((event.target as Element).closest('.edge-label-button')) return
   isPanning.value = true
   panStart.value = {
     x: event.clientX,
@@ -194,6 +197,61 @@ function handleNodeClick(node: GraphNodeData) {
 function handleEdgeClick(edge: GraphEdgeData) {
   if (!isEdgeActive(edge)) return
   emit('selectEdge', edge)
+}
+
+/**
+ * 边上的"增加标签"按钮：每条边可挂一个用户自定义标签，
+ * 初始展示"增加标签"，点击后弹窗输入，确认后按钮展示新标签。
+ *
+ * 状态仅保留在前端，不持久化、不上行后端。
+ */
+const edgeLabels = ref(new Map<string, string>())
+const labelDialogState = ref<{ edgeId: string; input: string } | null>(null)
+
+function getEdgeLabel(edge: GraphEdgeData) {
+  return edgeLabels.value.get(edge.id) ?? ''
+}
+
+function edgeMidpoint(edge: GraphEdgeData) {
+  const coords = getLineCoords(edge)
+  if (!coords) return null
+  return { x: (coords.x1 + coords.x2) / 2, y: (coords.y1 + coords.y2) / 2 }
+}
+
+function edgeButtonText(edge: GraphEdgeData) {
+  return getEdgeLabel(edge) || '增加标签'
+}
+
+function edgeButtonWidth(edge: GraphEdgeData) {
+  const text = edgeButtonText(edge)
+  let w = 0
+  for (const ch of text) {
+    w += /[一-鿿]/.test(ch) ? 12 : 7
+  }
+  return Math.max(64, w + 18)
+}
+
+function openLabelDialog(edge: GraphEdgeData) {
+  labelDialogState.value = {
+    edgeId: edge.id,
+    input: getEdgeLabel(edge),
+  }
+}
+
+function confirmLabelDialog() {
+  const state = labelDialogState.value
+  if (!state) return
+  const trimmed = state.input.trim()
+  if (trimmed) {
+    edgeLabels.value.set(state.edgeId, trimmed)
+  } else {
+    edgeLabels.value.delete(state.edgeId)
+  }
+  labelDialogState.value = null
+}
+
+function cancelLabelDialog() {
+  labelDialogState.value = null
 }
 
 function resetView() {
@@ -259,6 +317,22 @@ onUnmounted(() => {
             :y2="getLineCoords(edge)!.y2"
             @click.stop="handleEdgeClick(edge)"
           />
+          <g
+            v-if="showEdgeLabelButton && edgeMidpoint(edge)"
+            :transform="`translate(${edgeMidpoint(edge)!.x} ${edgeMidpoint(edge)!.y})`"
+            class="edge-label-button"
+            :class="{ 'is-labeled': !!getEdgeLabel(edge) }"
+            @click.stop="openLabelDialog(edge)"
+          >
+            <rect
+              :x="-edgeButtonWidth(edge) / 2"
+              y="-11"
+              :width="edgeButtonWidth(edge)"
+              height="22"
+              rx="11"
+            />
+            <text>{{ edgeButtonText(edge) }}</text>
+          </g>
         </template>
         <g
           v-for="node in nodes"
@@ -292,6 +366,31 @@ onUnmounted(() => {
         </g>
       </g>
     </svg>
+    <div
+      v-if="labelDialogState"
+      class="edge-label-modal"
+      @click.self="cancelLabelDialog"
+    >
+      <section class="edge-label-modal__panel" role="dialog" aria-modal="true" aria-label="输入边标签">
+        <header class="edge-label-modal__header">
+          <h2>请输入标签</h2>
+          <button type="button" aria-label="关闭" @click="cancelLabelDialog">×</button>
+        </header>
+        <div class="edge-label-modal__body">
+          <input
+            v-model="labelDialogState.input"
+            type="text"
+            placeholder="请输入标签内容"
+            maxlength="20"
+            @keyup.enter="confirmLabelDialog"
+          />
+        </div>
+        <footer class="edge-label-modal__actions">
+          <button type="button" class="is-ghost" @click="cancelLabelDialog">取消</button>
+          <button type="button" class="is-primary" @click="confirmLabelDialog">增加标签</button>
+        </footer>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -487,5 +586,144 @@ onUnmounted(() => {
       0 4px 8px
       rgba(30, 143, 243, 0.22)
     );
+}
+
+.edge-label-button {
+  cursor: pointer;
+}
+
+.edge-label-button rect {
+  fill: rgba(248, 252, 255, 0.95);
+  stroke: rgba(22, 93, 255, 0.55);
+  stroke-width: 1;
+  filter: drop-shadow(0 1px 3px rgba(53, 77, 112, 0.16));
+  transition: fill 0.15s ease, stroke 0.15s ease;
+}
+
+.edge-label-button:hover rect {
+  fill: #165dff;
+  stroke: #165dff;
+}
+
+.edge-label-button text {
+  fill: #165dff;
+  font-size: 11px;
+  font-weight: 500;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  pointer-events: none;
+  user-select: none;
+}
+
+.edge-label-button:hover text {
+  fill: #fff;
+}
+
+.edge-label-button.is-labeled rect {
+  fill: rgba(22, 93, 255, 0.12);
+  stroke: #165dff;
+}
+
+.edge-label-button.is-labeled text {
+  fill: #10264c;
+  font-weight: 600;
+}
+
+.edge-label-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(16, 38, 76, 0.42);
+  backdrop-filter: blur(2px);
+}
+
+.edge-label-modal__panel {
+  width: min(360px, 100%);
+  border: 1px solid rgba(167, 201, 250, 0.96);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+}
+
+.edge-label-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(90deg, rgba(22, 93, 255, 0.08), transparent 48%);
+}
+
+.edge-label-modal__header h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.edge-label-modal__header button {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.edge-label-modal__body {
+  padding: 16px;
+}
+
+.edge-label-modal__body input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.edge-label-modal__body input:focus {
+  outline: none;
+  border-color: #165dff;
+}
+
+.edge-label-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.edge-label-modal__actions button {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.edge-label-modal__actions button.is-primary {
+  border-color: #165dff;
+  background: #165dff;
+  color: #fff;
+}
+
+.edge-label-modal__actions button.is-ghost {
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
 }
 </style>

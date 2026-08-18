@@ -112,7 +112,7 @@ class SchemaManagementDAO:
         kind: str,
         payload: dict,
         created_by: str,
-        script: dict,
+        script: dict | None = None,
     ) -> GraphSchemaDefinition:
         definition = GraphSchemaDefinition(
             id=schema_id,
@@ -153,7 +153,8 @@ class SchemaManagementDAO:
             GraphSchemaMapping(source_name=item, position=index)
             for index, item in enumerate(payload["mappings"])
         ]
-        definition.script = GraphSchemaScript(**script)
+        if script is not None:
+            definition.script = GraphSchemaScript(**script)
         self.session.add(definition)
         self.session.flush()
         return definition

@@ -1384,6 +1384,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :edges="displayedGraphEdges"
           :selected-node-id="selectedGraphNodeId"
           :selected-edge-id="selectedGraphEdgeId"
+          show-edge-label-button
           aria-label="测试结果图谱"
           @select-node="handleSelectGraphNode"
           @select-edge="handleSelectGraphEdge"

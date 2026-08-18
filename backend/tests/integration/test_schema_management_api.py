@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from io import BytesIO
 
 import pytest
@@ -59,8 +58,21 @@ def schema_api(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_schema_management_full_flow(schema_api) -> None:
+async def test_schema_management_full_flow(schema_api, monkeypatch: pytest.MonkeyPatch) -> None:
     _, storage = schema_api
+    ddl_calls: list[tuple[str, str, list[dict]]] = []
+
+    def fake_run_ddl(kind: str, name: str, properties: list[dict]) -> dict:
+        ddl_calls.append((kind, name, properties))
+        return {
+            "statement": f"CREATE {'TAG' if kind == 'entity' else 'EDGE'} IF NOT EXISTS {name}(...);",
+            "status": "succeeded",
+            "error": None,
+            "executed_at": "2026-08-18T12:00:00",
+        }
+
+    monkeypatch.setattr("service.schema_management.run_schema_ddl", fake_run_ddl)
+
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         overview = await client.get("/api/v1/schema-management/overview")
         assert overview.status_code == 200
@@ -98,7 +110,7 @@ async def test_schema_management_full_flow(schema_api) -> None:
         assert system_script.status_code == 200
         assert system_script.json()["data"]["script"]["filename"] == "expert.py"
 
-        entity_metadata = {
+        entity_payload = {
             "schemaKey": "technology",
             "name": "Technology",
             "label": "技术",
@@ -116,22 +128,17 @@ async def test_schema_management_full_flow(schema_api) -> None:
         created_entity = await client.post(
             "/api/v1/schema-management/schemas/entities",
             headers={"X-User-Id": "user-a"},
-            data={"metadata": json.dumps(entity_metadata)},
-            files={
-                "script": (
-                    "technology.py",
-                    b"def transform(row):\n    return row\n",
-                    "text/x-python",
-                )
-            },
+            json=entity_payload,
         )
         assert created_entity.status_code == 201
         entity = created_entity.json()["data"]
         assert entity["canDelete"] is True
-        assert entity["script"]["filename"] == "technology.py"
-        assert storage.objects
+        assert entity["script"] is None
+        assert entity["ddlStatus"] == "succeeded"
+        assert "CREATE TAG IF NOT EXISTS Technology" in entity["ddlStatement"]
+        assert storage.objects  # expert.py 仍在
 
-        relation_metadata = {
+        relation_payload = {
             "schemaKey": "uses-technology",
             "name": "USES_TECHNOLOGY",
             "label": "使用技术",
@@ -139,24 +146,19 @@ async def test_schema_management_full_flow(schema_api) -> None:
             "sourceSchemaId": expert["id"],
             "targetSchemaId": entity["id"],
             "properties": [
-                {"name": "source", "dataType": "Expert ID", "required": True},
-                {"name": "target", "dataType": "Technology ID", "required": True},
+                {"name": "source", "dataType": "string", "required": True},
+                {"name": "target", "dataType": "string", "required": True},
             ],
         }
         created_relation = await client.post(
             "/api/v1/schema-management/schemas/relations",
             headers={"X-User-Id": "user-a"},
-            data={"metadata": json.dumps(relation_metadata)},
-            files={
-                "script": ("relation.py", b"def transform(row):\n    return row\n", "text/x-python")
-            },
+            json=relation_payload,
         )
         assert created_relation.status_code == 201
         relation = created_relation.json()["data"]
-
-        download = await client.get(relation["script"]["downloadUrl"])
-        assert download.status_code == 200
-        assert download.content.startswith(b"def transform")
+        assert relation["ddlStatus"] == "succeeded"
+        assert "CREATE EDGE IF NOT EXISTS USES_TECHNOLOGY" in relation["ddlStatement"]
 
         forbidden_system = await client.delete(
             f"/api/v1/schema-management/schemas/{expert['id']}",
@@ -186,26 +188,10 @@ async def test_schema_management_full_flow(schema_api) -> None:
             headers={"X-User-Id": "user-a"},
         )
         assert deleted_entity.status_code == 200
-        assert len(storage.objects) == 1
+        assert len(storage.objects) == 1  # expert.py
 
-
-@pytest.mark.asyncio
-async def test_rejects_invalid_python_script(schema_api) -> None:
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        metadata = {
-            "schemaKey": "bad-script",
-            "name": "BadScript",
-            "label": "错误脚本",
-            "properties": [{"name": "id", "dataType": "string", "required": True}],
-        }
-        response = await client.post(
-            "/api/v1/schema-management/schemas/entities",
-            headers={"X-User-Id": "user-a"},
-            data={"metadata": json.dumps(metadata)},
-            files={"script": ("bad.py", b"def broken(:\n", "text/x-python")},
-        )
-        assert response.status_code == 400
-        assert "语法错误" in response.json()["detail"]
+    assert ddl_calls[0][0] == "entity"
+    assert ddl_calls[1][0] == "relation"
 
 
 @pytest.mark.asyncio

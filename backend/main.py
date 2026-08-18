@@ -31,6 +31,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
             inserted = initialize_schema_management()
             logger.info("Schema 管理初始化完成，新增系统 Schema: %s", inserted)
+        # 后台预热全库统计缓存：count 是全量扫描要几十秒，等首个用户请求
+        # 触发会把图服务压挂、拖慢同时进来的其它查询。
+        from biz.handler.graph_search import prewarm_stats
+
+        asyncio.get_running_loop().create_task(prewarm_stats())
         yield
     finally:
         REGISTRY.stop_watcher()

@@ -193,7 +193,7 @@ const modules: ServiceModule[] = [
     ],
     responseFields: commonResponseFields,
     requestExample: { expertAId: '4P566No1', expertBId: 'd492835p', startTime: '', endTime: '' },
-    responseExample: { structuredResult: { cooperationPaperCount: 14, citation: { total: 1260, max: 90 }, stableTeamMembers: [], paperTopics: ['人工智能', '先进计算'] } },
+    responseExample: { data: { structuredResult: { cooperationPaperCount: 14, citation: { total: 1260, max: 90 }, stableTeamMembers: [], paperTopics: ['人工智能', '先进计算'] } } },
     resultRows: [{ label: '合作论文', value: '14' }, { label: '总被引', value: '1260' }, { label: '研究方向', value: '5' }, { label: '核心人员', value: '7' }],
     evidence: ['提取作者列表、作者单位、发表时间和论文主题。', '统计期刊会议级别和被引情况。', '识别长期稳定合作团队和核心合作人员。'],
   },

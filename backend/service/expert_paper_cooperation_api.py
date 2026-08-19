@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
+import time
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 from typing import Any
@@ -15,6 +17,16 @@ from service.base_module import KGModuleScaffoldService
 MAX_SHARED_PAPERS = 1000
 GRAPH_PAGE_SIZE = 200
 GRAPH_SPACE = os.getenv("KG_GRAPH_SPACE", "dev")
+
+# 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 graph-search/trs-graph。
+_RESULT_CACHE_TTL = 60.0
+_result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_result_cache_lock = threading.Lock()
+
+
+def clear_caches() -> None:
+    """清空进程内缓存（测试隔离用）。"""
+    _result_cache.clear()
 
 
 class GraphSearchApiError(RuntimeError):
@@ -30,9 +42,16 @@ class GraphSearchApiClient:
         *,
         timeout: float = 60.0,
         auth_headers: Mapping[str, str] | None = None,
+        app: Any = None,
     ) -> None:
+        # 进程内 ASGI transport：替代真实 HTTP 回环 8200，消除 socket/accept 队列开销
+        # 与高并发自调用饱和。方法体、路径、错误语义（raise_for_status/ValueError→404/
+        # GraphSearchApiError/空值兜底）保持不变。app 由 handler 传 request.app，避免 import main。
         self._client = httpx.AsyncClient(
-            base_url=base_url.rstrip("/"), timeout=timeout, headers=auth_headers
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://testserver/api/v1",
+            timeout=timeout,
+            headers=auth_headers,
         )
 
     async def __aenter__(self) -> GraphSearchApiClient:
@@ -106,10 +125,25 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
         *,
         api_base_url: str,
         auth_headers: Mapping[str, str] | None = None,
+        app: Any = None,
     ) -> dict[str, Any]:
-        async with GraphSearchApiClient(api_base_url, auth_headers=auth_headers) as graph_api:
+        cache_key = (
+            f"{body.dataSource}|{body.expertAId}|{body.expertBId}|"
+            f"{body.startTime or ''}|{body.endTime or ''}"
+        )
+        with _result_cache_lock:
+            entry = _result_cache.get(cache_key)
+        if entry and entry[0] > time.monotonic():
+            return entry[1]
+
+        async with GraphSearchApiClient(
+            api_base_url, auth_headers=auth_headers, app=app
+        ) as graph_api:
             result = await _build_structured_result(graph_api, body)
-        return {"structuredResult": result}
+        payload = {"structuredResult": result}
+        with _result_cache_lock:
+            _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, payload)
+        return payload
 
 
 def _person_vid(expert_id: str) -> str:
@@ -435,12 +469,21 @@ async def _build_structured_result(
 ) -> dict[str, Any]:
     expert_a_vid = _person_vid(body.expertAId)
     expert_b_vid = _person_vid(body.expertBId)
-    expert_a, expert_b = await asyncio.gather(
+    # get_node×2 与 _fetch_shared_paths 互不依赖（paths 只用 body），并行拉取。
+    # return_exceptions + 节点不存在(ValueError→404)优先抛，保留原串行的错误码语义。
+    expert_a_r, expert_b_r, paths_r = await asyncio.gather(
         graph_api.get_node(expert_a_vid, space=GRAPH_SPACE),
         graph_api.get_node(expert_b_vid, space=GRAPH_SPACE),
+        _fetch_shared_paths(graph_api, body),
+        return_exceptions=True,
     )
-
-    paths = await _fetch_shared_paths(graph_api, body)
+    for r in (expert_a_r, expert_b_r):
+        if isinstance(r, ValueError):
+            raise r
+    for r in (expert_a_r, expert_b_r, paths_r):
+        if isinstance(r, Exception):
+            raise r
+    expert_a, expert_b, paths = expert_a_r, expert_b_r, paths_r
     papers = _dedupe_shared_papers(paths)
     fallback_paper_count = 0
     fallback_collaborators: list[tuple[str, int]] = []

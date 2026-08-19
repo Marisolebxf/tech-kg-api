@@ -509,10 +509,19 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         edges: list[dict[str, Any]] = []
         seen_nodes: set[str] = set()
         seen_edges: set[tuple[str, str, str]] = set()
-        for s in seeds:
-            try:
-                subgraph = await client.get_subgraph(s, depth=depth, limit=60)
-            except GraphAPIError:
+
+        # 多 seed 子图互相独立，并行拉取（套 semaphore 防压垮 trs-graph）；
+        # 单 seed 失败 except GraphAPIError → None 跳过，合并后统一去重，结果不变。
+        async def _fetch_one(seed_vid: str) -> dict[str, Any] | None:
+            async with _graph_api_semaphore:
+                try:
+                    return await client.get_subgraph(seed_vid, depth=depth, limit=60)
+                except GraphAPIError:
+                    return None
+
+        subgraphs = await asyncio.gather(*[_fetch_one(s) for s in seeds])
+        for subgraph in subgraphs:
+            if not subgraph:
                 continue
             for n in subgraph.get("nodes", []):
                 node = self._node_to_graph_node(n)

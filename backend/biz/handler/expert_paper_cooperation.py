@@ -29,6 +29,7 @@ async def analyze_expert_paper_cooperation_structured_result(
         result = application.build_structured_result_only(
             body,
             auth_headers=get_internal_api_auth_headers(request),
+            app=request.app,
         )
         if inspect.isawaitable(result):
             result = await result

@@ -9,7 +9,7 @@ industry}。围绕科技专家，通过查图 API 挖掘图谱中专家↔企业
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from biz.schemas.common import ApiResponse
 from biz.schemas.tech_enterprise_relation_business import (
@@ -40,9 +40,11 @@ async def describe_key_enterprise_relation() -> dict[str, object]:
 
 
 @router.post("/key-enterprise-relation", response_model=ApiResponse)
-async def run_key_enterprise_relation(req: KeyEnterpriseRelationRequest) -> ApiResponse:
+async def run_key_enterprise_relation(
+    req: KeyEnterpriseRelationRequest, request: Request
+) -> ApiResponse:
     try:
-        data = await service.run(req)
+        data = await service.run(req, app=request.app)
         return ApiResponse(data=data.model_dump())
     except Exception as exc:  # noqa: BLE001
         return ApiResponse(code=500, success=False, msg=f"重点关注科技企业关系业务执行失败: {exc}")

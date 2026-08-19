@@ -386,7 +386,11 @@ def _nodes_without_center(subgraph: dict[str, Any], center_id: str) -> list[dict
 
 def _paper_year(paper: dict[str, Any]) -> int:
     props = paper.get("properties") or {}
-    raw = props.get("year") or props.get("publication_year") or str(props.get("publish_date") or props.get("publication_date") or "")[:4]
+    raw = (
+        props.get("year")
+        or props.get("publication_year")
+        or str(props.get("publish_date") or props.get("publication_date") or "")[:4]
+    )
     try:
         return int(raw)
     except (TypeError, ValueError):
@@ -395,7 +399,9 @@ def _paper_year(paper: dict[str, Any]) -> int:
 
 def _venue_type(paper: dict[str, Any]) -> str:
     props = paper.get("properties") or {}
-    raw = str(props.get("venue_type") or props.get("publication_type") or props.get("document_type") or "").lower()
+    raw = str(
+        props.get("venue_type") or props.get("publication_type") or props.get("document_type") or ""
+    ).lower()
     conference_tokens = ("conference", "proceedings", "会议", "cvpr", "iccv", "eccv")
     return "conference" if any(token in raw for token in conference_tokens) else "journal"
 
@@ -442,7 +448,9 @@ def _paper_citations(paper: dict[str, Any]) -> int:
     citation_keys = set()
     for edge in (paper.get("cited") or {}).get("edges") or []:
         edge_props = edge.get("properties") or {}
-        citation_keys.add(edge_props.get("citation_identifier") or edge.get("target") or edge.get("id"))
+        citation_keys.add(
+            edge_props.get("citation_identifier") or edge.get("target") or edge.get("id")
+        )
     return len({key for key in citation_keys if key})
 
 

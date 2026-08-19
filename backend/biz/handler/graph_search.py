@@ -395,14 +395,18 @@ async def search_typed_paths(body: TypedPathSearchRequest) -> ApiResponse:
             """尝试通过 FETCH PROP 获取真实 VID，失败则原样返回。"""
             if not alias_id.startswith("person_"):
                 return alias_id
-            raw_id = alias_id[len("person_"):]
+            raw_id = alias_id[len("person_") :]
             return raw_id
 
-        resolved = body.model_copy(update={"sourceId": _resolve_real_vid(body.sourceId, source.labels)})
+        resolved = body.model_copy(
+            update={"sourceId": _resolve_real_vid(body.sourceId, source.labels)}
+        )
         if body.targetId is not None:
             target = client.get_node(body.targetId)
             if target is not None:
-                resolved = resolved.model_copy(update={"targetId": _resolve_real_vid(body.targetId, target.labels)})
+                resolved = resolved.model_copy(
+                    update={"targetId": _resolve_real_vid(body.targetId, target.labels)}
+                )
 
         query_result = client.execute_read(_build_typed_path_query(resolved))
         count_result = client.execute_read(_build_typed_path_query(resolved, count_only=True))
@@ -411,7 +415,8 @@ async def search_typed_paths(body: TypedPathSearchRequest) -> ApiResponse:
             total = int(count_result.records[0].get("total") or 0)
 
         items = [
-            _typed_path_from_record(resolved, record, source.labels) for record in query_result.records
+            _typed_path_from_record(resolved, record, source.labels)
+            for record in query_result.records
         ]
         data = TypedPathListData(
             items=items,

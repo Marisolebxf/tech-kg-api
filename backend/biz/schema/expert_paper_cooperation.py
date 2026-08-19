@@ -22,7 +22,8 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
     )
 
     dataSource: DataSource = Field(
-        ..., description="论文数据源：all、knowledge_graph、cnki、wanfang、web_of_science。"
+        default="knowledge_graph",
+        description="论文数据源：all、knowledge_graph、cnki、wanfang、web_of_science。默认 knowledge_graph。",
     )
     expertAId: str = Field(
         ...,

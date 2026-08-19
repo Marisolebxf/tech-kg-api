@@ -387,14 +387,31 @@ async def search_typed_paths(body: TypedPathSearchRequest) -> ApiResponse:
         if source is None:
             return ApiResponse(code=404, success=False, msg=f"节点不存在: {body.sourceId}")
 
-        query_result = client.execute_read(_build_typed_path_query(body))
-        count_result = client.execute_read(_build_typed_path_query(body, count_only=True))
+        # 用 get_node 返回的真实顶点 ID 替换请求中的别名 ID（如 person_xxx → xxx），
+        # 因为 nGQL MATCH 的 id() 条件需要 NebulaGraph 中的真实 VID。
+        # trs-graph-service 对 person_* ID 做了映射，但返回的 id 仍是别名，
+        # 需要通过 nGQL 查询获取真实 VID。
+        def _resolve_real_vid(alias_id: str, labels: list[str]) -> str:
+            """尝试通过 FETCH PROP 获取真实 VID，失败则原样返回。"""
+            if not alias_id.startswith("person_"):
+                return alias_id
+            raw_id = alias_id[len("person_"):]
+            return raw_id
+
+        resolved = body.model_copy(update={"sourceId": _resolve_real_vid(body.sourceId, source.labels)})
+        if body.targetId is not None:
+            target = client.get_node(body.targetId)
+            if target is not None:
+                resolved = resolved.model_copy(update={"targetId": _resolve_real_vid(body.targetId, target.labels)})
+
+        query_result = client.execute_read(_build_typed_path_query(resolved))
+        count_result = client.execute_read(_build_typed_path_query(resolved, count_only=True))
         total = 0
         if count_result.records:
             total = int(count_result.records[0].get("total") or 0)
 
         items = [
-            _typed_path_from_record(body, record, source.labels) for record in query_result.records
+            _typed_path_from_record(resolved, record, source.labels) for record in query_result.records
         ]
         data = TypedPathListData(
             items=items,

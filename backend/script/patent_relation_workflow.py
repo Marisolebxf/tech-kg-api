@@ -40,6 +40,20 @@ if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
 
+def _boolean(payload: dict, key: str, default: bool) -> bool:
+    value = payload.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} 必须是 JSON boolean，不能使用字符串或数字")
+    return value
+
+
+def _number(payload: dict, key: str, default: float) -> float:
+    value = payload.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{key} 必须是数字")
+    return float(value)
+
+
 def workflow(payload: dict) -> dict:
     """主分支工作流入口：抽取并写入专利相关事实关系。
 
@@ -57,14 +71,28 @@ def workflow(payload: dict) -> dict:
 
     review_output = payload.get("review_output")
     vector_state_dir = payload.get("vector_state_dir")
+    apply = _boolean(payload, "apply", False)
+    replace = _boolean(payload, "replace", False)
+    use_vector = _boolean(payload, "use_vector", True)
+    threshold = _number(payload, "vector_threshold", 0.88)
+    margin = _number(payload, "vector_margin", 0.08)
+    top_k_value = payload.get("vector_top_k", 20)
+    if isinstance(top_k_value, bool) or not isinstance(top_k_value, int):
+        raise ValueError("vector_top_k 必须是整数")
+    if replace and not apply:
+        raise ValueError("replace=true 必须同时设置 apply=true")
+    if not 0 <= threshold <= 1 or not 0 <= margin <= 1:
+        raise ValueError("vector_threshold 和 vector_margin 必须在 0 到 1 之间")
+    if top_k_value < 2:
+        raise ValueError("vector_top_k 必须大于等于 2")
     kwargs = {
-        "apply": bool(payload.get("apply", False)),
-        "replace": bool(payload.get("replace", False)),
+        "apply": apply,
+        "replace": replace,
         "review_output": Path(review_output) if review_output else None,
-        "use_vector": bool(payload.get("use_vector", True)),
-        "vector_threshold": float(payload.get("vector_threshold", 0.88)),
-        "vector_margin": float(payload.get("vector_margin", 0.08)),
-        "vector_top_k": int(payload.get("vector_top_k", 20)),
+        "use_vector": use_vector,
+        "vector_threshold": threshold,
+        "vector_margin": margin,
+        "vector_top_k": top_k_value,
         "vector_state_dir": Path(vector_state_dir) if vector_state_dir else None,
     }
 

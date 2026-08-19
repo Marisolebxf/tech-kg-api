@@ -43,6 +43,10 @@ INCREMENTAL_COLUMNS = {
         "display_order": "INT NOT NULL DEFAULT 10000",
         "source_expression": "VARCHAR(512) NULL",
         "target_expression": "VARCHAR(512) NULL",
+        "ddl_statement": "VARCHAR(2048) NULL",
+        "ddl_status": "VARCHAR(16) NOT NULL DEFAULT 'pending'",
+        "ddl_error": "VARCHAR(1024) NULL",
+        "ddl_executed_at": "DATETIME NULL",
     },
     "kg_schema_property": {
         "category": "VARCHAR(16) NOT NULL DEFAULT 'core'",

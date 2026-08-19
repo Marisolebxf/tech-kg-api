@@ -16,15 +16,19 @@
 - ``POST /graph-search/nodes/search`` — 按属性搜索（产业关键词）
 - ``GET /graph-search/subgraph/{vid}?depth=N`` — 以核心节点扩展子图
 
-图服务不可用时降级到内置样例数据保证接口可用。
+查询结果一律来自图库；关键词未命中或图服务异常时返回空结果并在 ``source.reason``
+标明原因，不返回内置示例数据。
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import Any
 
 from infra.graph_api_client import GraphAPIClient, GraphAPIError, graph_api
+from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
 
 logger = logging.getLogger(__name__)
@@ -32,6 +36,26 @@ logger = logging.getLogger(__name__)
 MAX_TOP_K = 20
 # 属性搜索只支持精确等值；未命中时退化为有界扫描 + 本地包含匹配的扫描上限。
 _KEYWORD_SCAN_LIMIT = 500
+# 关键词包含匹配的扫描总量上限（分页扫描，避免大标签只看前 500 个永远命不中）。
+_KEYWORD_SCAN_MAX = 3000
+# 子图合并时最多取多少个种子节点。
+_MAX_SUBGRAPH_SEEDS = 5
+# 图服务（trs-graph）承受不住太高并发，全标签扫描类请求并发过多会 500，
+# 用信号量把同时打到图服务的请求数压住。
+_GRAPH_API_CONCURRENCY = 6
+_graph_api_semaphore = asyncio.Semaphore(_GRAPH_API_CONCURRENCY)
+# 全景图结果缓存：图数据按批次入库、变更频率低，实时组装一次要数秒，
+# 同参数查询直接复用上次结果，过期后台刷新。
+_PANORAMA_CACHE_TTL_SECONDS = 600.0
+_panorama_cache: dict[tuple[str, str, int, int], tuple[float, dict[str, Any]]] = {}
+_panorama_rebuilding: set[tuple[str, str, int, int]] = set()
+
+_FALLBACK_REASON_TEXT = {
+    "empty_result": "图库中没有可用实体",
+    "keyword_no_match": "产业关键词未命中任何实体",
+    "graph_api_error": "图查询服务不可用",
+    "unexpected_error": "图查询过程异常",
+}
 
 _LAYER_DEFINITIONS: list[dict[str, Any]] = [
     {
@@ -78,48 +102,6 @@ _LAYER_DEFINITIONS: list[dict[str, Any]] = [
 ]
 
 
-_FALLBACK_LAYERS: list[dict[str, Any]] = [
-    {
-        "key": "core_technology",
-        "title": "核心技术",
-        "type": "technology",
-        "items": [
-            {"id": "tech_ai_llm", "label": "大规模语言模型"},
-            {"id": "tech_ai_perception", "label": "多模态感知"},
-            {"id": "tech_ai_agent", "label": "自主智能体"},
-        ],
-    },
-    {
-        "key": "leading_enterprise",
-        "title": "领军企业",
-        "type": "organization",
-        "items": [
-            {"id": "org_baidu", "label": "百度"},
-            {"id": "org_tsinghua", "label": "清华大学"},
-            {"id": "org_zte", "label": "中兴通讯"},
-        ],
-    },
-    {
-        "key": "leading_expert",
-        "title": "领军专家",
-        "type": "expert",
-        "items": [
-            {"id": "person_fallback_zhangmingyuan", "label": "张明远", "subtitle": "清华大学"},
-            {"id": "person_fallback_lijianing", "label": "李佳宁", "subtitle": "清华大学"},
-        ],
-    },
-    {
-        "key": "flagship_achievement",
-        "title": "代表成果",
-        "type": "achievement",
-        "items": [
-            {"id": "paper_fallback_llm_survey", "label": "大模型综述: 从预训练到智能体"},
-            {"id": "patent_fallback_agent_router", "label": "面向智能体协作的路由方法"},
-        ],
-    },
-]
-
-
 class IndustryChainPanoramaService(KGModuleScaffoldService):
     module_code = "industry_chain_panorama"
 
@@ -135,6 +117,16 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         anchor = (anchor_id or "").strip() or None
         top_k = max(1, min(int(top_k or 5), MAX_TOP_K))
         depth = max(1, min(int(depth or 2), 3))
+        cache_key = (industry_kw or "", anchor or "", depth, top_k)
+        cached = _panorama_cache.get(cache_key)
+        if cached and time.monotonic() - cached[0] < _PANORAMA_CACHE_TTL_SECONDS:
+            return cached[1]
+        if cached:
+            # 过期先返回旧结果，后台重建，不让用户等一次实时组装。
+            self._rebuild_in_background(
+                cache_key, industry=industry_kw, anchor_id=anchor, depth=depth, top_k=top_k
+            )
+            return cached[1]
         query_input = {
             "dataSource": "all",
             "industry": industry_kw or "",
@@ -152,7 +144,17 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
         try:
             async with graph_api() as client:
-                summary = await self._fetch_summary(client, industry_kw)
+                # 分层和子图才是这个模块的主体，全库规模统计只是页面上的一行文案，
+                # 统计慢或失败时不能把真实分层一起拖成样例数据。
+                try:
+                    # 全库统计是全量扫描，冷缓存时要二十秒以上；这里最多等 3 秒，
+                    # 等不到就用分层结果推算规模文案，绝不能把整个全景图请求拖到超时。
+                    summary = await asyncio.wait_for(
+                        self._fetch_summary(client, industry_kw), timeout=3.0
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning("panorama summary unavailable, keep real layers", exc_info=True)
+                    summary = {}
                 layers, seed_vids = await self._fetch_layers(client, industry_kw, top_k)
                 graph = await self._fetch_graph(client, seed_vids, anchor, depth)
         except GraphAPIError as exc:
@@ -164,46 +166,70 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
         has_real_layers = any(layer["items"] for layer in layers)
         if not has_real_layers:
-            # 关键词没命中任何实体时同样要走降级，否则前端只看到四个空分层
-            # 却被告知数据来自图查询。
+            # 关键词没命中时如实返回空分层并标明原因，不再塞内置示例数据，
+            # 避免用户把假数据当成真实查询结果。
             if fallback_reason is None:
                 fallback_reason = "keyword_no_match" if industry_kw else "empty_result"
-            layers = self._fallback_layers(top_k)
-        if not summary:
-            summary = self._fallback_summary(industry_kw, layers)
-        if not graph["nodes"] and not has_real_layers:
-            # 样例子图是按 layers 拼出来的，只有 layers 本身也是样例时才拼，
-            # 避免真实实体与编造出来的边混在一张图里。
-            graph = self._fallback_graph(layers)
-
-        if fallback_reason is None:
-            source = {"requested": "all", "actual": "graph-api", "fallback": False}
-        else:
             logger.info(
-                "industry chain panorama falls back to seed data: reason=%s, industry=%s",
+                "industry chain panorama empty result: reason=%s, industry=%s",
                 fallback_reason,
                 industry_kw,
             )
-            source = {
-                "requested": "all",
-                "actual": "fallback",
-                "fallback": True,
-                "reason": fallback_reason,
-            }
+        if not summary:
+            summary = self._fallback_summary(industry_kw, layers)
 
-        return {
+        source = {
+            "requested": "all",
+            "actual": "graph-api",
+            "fallback": False,
+        }
+        if fallback_reason is not None:
+            source["reason"] = fallback_reason
+
+        result = {
             "taskName": "科技产业链全景图",
             "input": query_input,
             "summary": summary,
             "layers": layers,
             "graph": graph,
             "source": source,
+            "provenance": self._build_provenance(summary, layers, graph, source),
             "apiResultExample": {
                 "url": "/api/v1/kg-construction/industry-chain-panorama/query",
                 "method": "POST",
                 "query": query_input,
             },
         }
+        if has_real_layers:
+            # 只缓存真实命中；空结果可能是图服务瞬时抖动，缓存住会让下一个
+            # 请求 10 分钟内都拿不到数据。
+            _panorama_cache[cache_key] = (time.monotonic(), result)
+        return result
+
+    def _rebuild_in_background(
+        self,
+        cache_key: tuple[str, str, int, int],
+        *,
+        industry: str | None,
+        anchor_id: str | None,
+        depth: int,
+        top_k: int,
+    ) -> None:
+        """缓存过期时后台重建，期间请求继续用旧结果。"""
+        if cache_key in _panorama_rebuilding:
+            return
+        _panorama_rebuilding.add(cache_key)
+        _panorama_cache.pop(cache_key, None)
+
+        async def _run() -> None:
+            try:
+                await self.query(industry=industry, anchor_id=anchor_id, depth=depth, top_k=top_k)
+            except Exception:  # noqa: BLE001 - 后台重建失败保留空位，下次请求再现场组装
+                logger.warning("panorama background rebuild failed", exc_info=True)
+            finally:
+                _panorama_rebuilding.discard(cache_key)
+
+        asyncio.get_running_loop().create_task(_run())
 
     # ---------------- 各分层数据 ----------------
     async def _fetch_summary(
@@ -250,8 +276,15 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         """
         layers: list[dict[str, Any]] = []
         seeds_by_key: dict[str, list[str]] = {}
-        for definition in _LAYER_DEFINITIONS:
-            nodes = await self._collect_layer_nodes(client, definition, industry, top_k)
+        # 四个分层互不依赖；属性搜索在图服务侧是全标签扫描，单个要 1~2 秒，
+        # 串行拉满 9 秒起，并发后整体耗时约等于最慢的那一层。
+        collected = await asyncio.gather(
+            *(
+                self._collect_layer_nodes(client, definition, industry, top_k)
+                for definition in _LAYER_DEFINITIONS
+            )
+        )
+        for definition, nodes in zip(_LAYER_DEFINITIONS, collected, strict=True):
             picked = nodes[:top_k]
             layers.append(
                 {
@@ -332,46 +365,90 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             命中的节点列表，均带 ``_addressable`` 标记。
         """
         found: list[dict[str, Any]] = []
-        for prop in definition["keyword_props"]:
-            try:
-                payload = await client.search_nodes(
-                    label=label, properties={prop: industry}, limit=top_k
-                )
-            except GraphAPIError:
-                continue
+        # 各候选属性的精确搜索并发执行（每个都是图服务侧的全标签扫描）。
+        search_results = await asyncio.gather(
+            *(
+                self._safe_search_nodes(client, label, prop, industry, top_k)
+                for prop in definition["keyword_props"]
+            )
+        )
+        for payload in search_results:
             found.extend(await self._mark_addressable(client, (payload or {}).get("items", [])))
             if len(found) >= top_k:
                 return found[:top_k]
         if found:
             return found
 
-        # 精确等值没命中，退化为有界扫描 + 本地包含匹配
+        # 精确等值没命中，退化为分页有界扫描 + 本地包含匹配。
+        # 大标签（如 Person 有几十万节点）只扫前 500 个基本永远命不中，
+        # 所以按页继续扫（页间并发拉取），直到命中或达到 _KEYWORD_SCAN_MAX。
         needle = industry.casefold()
-        scanned = await self._list_by_label(client, label, _KEYWORD_SCAN_LIMIT)
-        for node in scanned:
-            props = node.get("properties") or {}
-            for prop in definition["keyword_props"]:
-                value = str(props.get(prop) or "")
-                if value and needle in value.casefold():
-                    found.append(node)
-                    break
-            if len(found) >= top_k:
-                break
+        found: list[dict[str, Any]] = []
+        page_count = -(-_KEYWORD_SCAN_MAX // _KEYWORD_SCAN_LIMIT)
+        pages = await asyncio.gather(
+            *(
+                self._list_by_label_throttled(
+                    client, label, _KEYWORD_SCAN_LIMIT, i * _KEYWORD_SCAN_LIMIT
+                )
+                for i in range(page_count)
+            )
+        )
+        for page in pages:
+            for node in page:
+                props = node.get("properties") or {}
+                for prop in definition["keyword_props"]:
+                    value = str(props.get(prop) or "")
+                    if value and needle in value.casefold():
+                        found.append(node)
+                        break
+                if len(found) >= top_k:
+                    return found
         return found
+
+    @staticmethod
+    async def _safe_search_nodes(
+        client: GraphAPIClient,
+        label: str,
+        prop: str,
+        industry: str,
+        top_k: int,
+    ) -> dict[str, Any]:
+        """属性精确搜索，图服务报错时按未命中处理。"""
+        async with _graph_api_semaphore:
+            try:
+                return await client.search_nodes(
+                    label=label, properties={prop: industry}, limit=top_k
+                )
+            except GraphAPIError:
+                return {}
+
+    async def _list_by_label_throttled(
+        self,
+        client: GraphAPIClient,
+        label: str,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        """带并发限流的分页取节点。"""
+        async with _graph_api_semaphore:
+            return await self._list_by_label(client, label, limit, offset)
 
     async def _list_by_label(
         self,
         client: GraphAPIClient,
         label: str,
         limit: int,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
-        """按标签分页取节点。图服务报错时返回空列表。"""
-        try:
-            listing = await client.list_nodes(label=label, limit=limit)
-        except GraphAPIError:
-            return []
-        # 按标签分页返回的是真实 VID，可直接用于扩展子图
-        return [{**item, "_addressable": True} for item in (listing or {}).get("items", [])]
+        """按标签分页取节点。图服务偶发抖动时空页重试一次，仍失败按空处理。"""
+        for _attempt in range(2):
+            try:
+                listing = await client.list_nodes(label=label, limit=limit, offset=offset)
+                return [{**item, "_addressable": True} for item in (listing or {}).get("items", [])]
+            except GraphAPIError:
+                if _attempt == 1:
+                    return []
+                await asyncio.sleep(0.3)
 
     @staticmethod
     async def _mark_addressable(
@@ -423,14 +500,32 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         seed = anchor_id or (seed_vids[0] if seed_vids else None)
         if not seed:
             return {"nodes": [], "edges": []}
-        try:
-            subgraph = await client.get_subgraph(seed, depth=depth, limit=60)
-        except GraphAPIError:
-            return {"nodes": [], "edges": []}
-        return {
-            "nodes": [self._node_to_graph_node(n) for n in subgraph.get("nodes", [])],
-            "edges": [self._edge_to_graph_edge(e) for e in subgraph.get("edges", [])],
-        }
+        # 以锚点为中心；未指定锚点时对前几个种子各扩一跳子图再合并，
+        # 只用一个种子时图里往往只有两三个节点。
+        seeds = [seed] if anchor_id else [s for s in seed_vids if s != seed][:_MAX_SUBGRAPH_SEEDS]
+        if not seeds:
+            seeds = [seed]
+        nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, Any]] = []
+        seen_nodes: set[str] = set()
+        seen_edges: set[tuple[str, str, str]] = set()
+        for s in seeds:
+            try:
+                subgraph = await client.get_subgraph(s, depth=depth, limit=60)
+            except GraphAPIError:
+                continue
+            for n in subgraph.get("nodes", []):
+                node = self._node_to_graph_node(n)
+                if node["id"] and node["id"] not in seen_nodes:
+                    seen_nodes.add(node["id"])
+                    nodes.append(node)
+            for e in subgraph.get("edges", []):
+                edge = self._edge_to_graph_edge(e)
+                key = (edge["source"], edge["target"], edge["label"])
+                if key not in seen_edges:
+                    seen_edges.add(key)
+                    edges.append(edge)
+        return {"nodes": nodes, "edges": edges}
 
     # ---------------- 转换器 ----------------
     def _node_to_key_entity(
@@ -453,6 +548,109 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "subtitle": subtitle_prop,
             "metric": definition["metric_label"] if metric_value_num is not None else None,
             "metricValue": metric_value_num,
+            "sourceSystem": self._first_prop_value(props, ("source_system", "source")),
+            "sourceRecordId": self._first_prop_value(props, ("source_record_id",)),
+            "ingestBatch": self._first_prop_value(props, ("ingest_batch",)),
+            "ingestTime": self._first_prop_value(props, ("ingest_time",)),
+        }
+
+    def _build_provenance(
+        self,
+        summary: dict[str, Any],
+        layers: list[dict[str, Any]],
+        graph: dict[str, list[Any]],
+        source: dict[str, Any],
+    ) -> dict[str, Any]:
+        """组装实体/关系溯源信息，字段结构与校友关系模块保持一致。
+
+        Args:
+            summary: 全库规模统计，降级时为样例数据。
+            layers: 四个分层结果。
+            graph: 已组装的子图。
+            source: 数据来源标记，含 ``fallback`` 与降级 ``reason``。
+
+        Returns:
+            ``{sourceDatabase, summary, evidences[]}``；降级时如实说明数据来自内置样例。
+        """
+        fallback = bool(source.get("fallback"))
+        space = TRSGraphSettings.from_env().space or "dev"
+        source_database = f"trs-graph / space={space}"
+        if fallback or source.get("reason"):
+            reason = str(source.get("reason") or "unknown")
+            head = f"图库未命中（{_FALLBACK_REASON_TEXT.get(reason, reason)}），无可用实体。"
+        elif not any(layer.get("items") for layer in layers):
+            head = "图库未命中任何实体。"
+        else:
+            head = "分层实体与子图均来自图查询 API。"
+
+        nodes = graph.get("nodes") or []
+        edges = graph.get("edges") or []
+        provenance_summary = (
+            f"{head}全库规模 {summary.get('totalNodes') or 0} 节点 / "
+            f"{summary.get('totalEdges') or 0} 关系；本次子图 {len(nodes)} 节点 / {len(edges)} 关系。"
+        )
+
+        evidences: list[dict[str, Any]] = []
+        label_by_key = {
+            str(definition["key"]): "/".join(definition["labels"])
+            for definition in _LAYER_DEFINITIONS
+        }
+        for layer in layers:
+            items = layer.get("items") or []
+            if not items:
+                continue
+            for item in items[:5]:
+                if not item.get("sourceRecordId"):
+                    continue
+                evidences.append(
+                    {
+                        "title": f"{layer.get('title') or layer.get('key')} · {item.get('label')}",
+                        "businessTable": "科技要素数据库",
+                        "technicalTable": f"{item.get('sourceSystem') or '—'}.dwd_*",
+                        "recordId": str(item.get("sourceRecordId") or ""),
+                        "fieldIdentifier": str(item.get("id") or ""),
+                        "summary": (
+                            f"入库批次：{item.get('ingestBatch') or '—'}；"
+                            f"入库时间：{item.get('ingestTime') or '—'}"
+                        ),
+                    }
+                )
+            labels = [str(item.get("label") or item.get("id") or "") for item in items[:5]]
+            evidences.append(
+                {
+                    "title": f"分层 · {layer.get('title') or layer.get('key')}",
+                    "businessTable": "产业链全景图分层" if not fallback else "接口示例分层",
+                    "technicalTable": label_by_key.get(str(layer.get("key")), "—"),
+                    "recordId": str(items[0].get("id") or ""),
+                    "fieldIdentifier": str(items[0].get("metric") or "name_zh/title"),
+                    "summary": (
+                        f"命中 {layer.get('total') or len(items)} 个实体，"
+                        f"展示 {len(items)} 个：{'、'.join(labels) or '—'}"
+                    ),
+                }
+            )
+
+        edge_types: dict[str, int] = {}
+        for edge in edges:
+            key = str((edge or {}).get("label") or "UNKNOWN")
+            edge_types[key] = edge_types.get(key, 0) + 1
+        if edge_types:
+            top_types = sorted(edge_types.items(), key=lambda kv: kv[1], reverse=True)[:6]
+            evidences.append(
+                {
+                    "title": "子图关系构成",
+                    "businessTable": "产业链关联关系" if not fallback else "内置样例关系",
+                    "technicalTable": "graph-search/subgraph",
+                    "recordId": str((nodes[0] or {}).get("id") or "") if nodes else "",
+                    "fieldIdentifier": "edge.type",
+                    "summary": "；".join(f"{name} × {count}" for name, count in top_types),
+                }
+            )
+
+        return {
+            "sourceDatabase": source_database,
+            "summary": provenance_summary,
+            "evidences": evidences,
         }
 
     def _node_to_graph_node(self, node: dict[str, Any]) -> dict[str, Any]:
@@ -508,93 +706,19 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                 return str(value)
         return None
 
-    # ---------------- 降级样例 ----------------
-    def _fallback_layers(self, top_k: int) -> list[dict[str, Any]]:
-        layers = []
-        for definition, sample in zip(_LAYER_DEFINITIONS, _FALLBACK_LAYERS, strict=False):
-            items = sample.get("items", [])[:top_k]
-            layers.append(
-                {
-                    "key": definition["key"],
-                    "title": definition["title"],
-                    "total": len(items),
-                    "items": [
-                        {
-                            "id": item["id"],
-                            "label": item["label"],
-                            "type": definition["type"],
-                            "subtitle": item.get("subtitle"),
-                            "metric": None,
-                            "metricValue": None,
-                        }
-                        for item in items
-                    ],
-                }
-            )
-        return layers
-
+    # ---------------- 兜底文案 ----------------
     def _fallback_summary(
         self, industry: str | None, layers: list[dict[str, Any]]
     ) -> dict[str, Any]:
-        nodes_by_label = {"Person": 2, "Organization": 3, "Technology": 3, "Paper": 2}
-        edges_by_type = {"AFFILIATED_WITH": 4, "COAUTHOR_WITH": 3, "AUTHORED_BY": 4}
+        """全库统计拿不到时，用各分层命中数推算规模文案（不编造数字）。"""
+        nodes_by_label = {
+            str(layer.get("title") or layer.get("key")): int(layer.get("total") or 0)
+            for layer in layers
+        }
         return {
             "industry": industry,
             "totalNodes": sum(nodes_by_label.values()),
-            "totalEdges": sum(edges_by_type.values()),
+            "totalEdges": 0,
             "nodesByLabel": nodes_by_label,
-            "edgesByType": edges_by_type,
+            "edgesByType": {},
         }
-
-    def _fallback_graph(self, layers: list[dict[str, Any]]) -> dict[str, list[Any]]:
-        nodes: list[dict[str, Any]] = []
-        edges: list[dict[str, Any]] = []
-        seen_ids: set[str] = set()
-
-        # 以「领军专家」为中心，与其它三类连接
-        expert_layer = next((layer for layer in layers if layer["key"] == "leading_expert"), None)
-        center_id: str | None = None
-        if expert_layer and expert_layer["items"]:
-            center_id = expert_layer["items"][0]["id"]
-            center = expert_layer["items"][0]
-            nodes.append(
-                {
-                    "id": center["id"],
-                    "type": "expert",
-                    "label": center["label"],
-                    "subtitle": center.get("subtitle"),
-                    "data": {},
-                }
-            )
-            seen_ids.add(center["id"])
-
-        for layer in layers:
-            if not center_id:
-                break
-            for item in layer["items"]:
-                if item["id"] == center_id:
-                    continue
-                if item["id"] not in seen_ids:
-                    nodes.append(
-                        {
-                            "id": item["id"],
-                            "type": layer["key"],
-                            "label": item["label"],
-                            "subtitle": item.get("subtitle"),
-                            "data": {},
-                        }
-                    )
-                    seen_ids.add(item["id"])
-                edges.append(
-                    {
-                        "source": center_id,
-                        "target": item["id"],
-                        "label": {
-                            "core_technology": "研究方向",
-                            "leading_enterprise": "所属机构",
-                            "flagship_achievement": "代表成果",
-                        }.get(layer["key"], "关联"),
-                        "data": {},
-                    }
-                )
-        return {"nodes": nodes, "edges": edges}

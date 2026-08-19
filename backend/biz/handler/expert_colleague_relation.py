@@ -34,10 +34,19 @@ async def query_expert_colleague_relation(
             data = await application.query(
                 client,
                 expert_id=body.expertId,
+                target_expert_id=body.targetExpertId,
                 organization=body.organization,
                 department=body.department,
-                overlap_period=body.overlapPeriod,
+                overlap_period=(
+                    f"{body.startTime} 至 {body.endTime}"
+                    if body.startTime and body.endTime
+                    else body.overlapPeriod
+                ),
+                team_or_project=body.teamOrProject,
+                achievement_types=body.achievementTypes,
+                min_confidence=body.minConfidence,
                 limit=body.limit,
+                offset=body.offset,
                 space=body.space,
             )
         validated = ExpertColleagueRelationData.model_validate(data)

@@ -719,6 +719,10 @@ def build_relations(
                         ["姓名精确匹配", "申请/权利机构和项目证据未能唯一确认"]
                         if candidates
                         else ["无姓名精确候选"],
+                        patent_vid=patent_vid,
+                        sequence=sequence,
+                        role="inventor",
+                        source_record_id=f"{row['id']}:inventors:{sequence}",
                     )
                 )
                 stats["INVENTED_BY:review"] += 1
@@ -819,7 +823,19 @@ def promote_vector_organization_matches(
     store: OrganizationMilvusStore | None = None,
 ) -> tuple[list[EdgeRecord], list[ReviewRecord]]:
     """Promote only unique threshold-and-margin-qualified Milvus matches."""
-    if not any(item.relation_type in {"APPLIED_BY", "OWNED_BY"} for item in reviews):
+
+    def eligible(item: ReviewRecord) -> bool:
+        if item.relation_type not in {"APPLIED_BY", "OWNED_BY"}:
+            return False
+        candidate_types = {str(candidate.get("type")) for candidate in item.candidates}
+        if candidate_types and candidate_types <= {"Person"}:
+            item.reason = "申请人/权利人匹配到人才候选，禁止使用机构向量索引跨类型自动建边"
+            if "entity_type_guard=Person" not in item.evidence:
+                item.evidence.append("entity_type_guard=Person")
+            return False
+        return not candidate_types or not candidate_types <= {"Person"}
+
+    if not any(eligible(item) for item in reviews):
         return [], reviews
     vector_store = store or OrganizationMilvusStore()
     owns_store = store is None
@@ -847,7 +863,7 @@ def promote_vector_organization_matches(
         remaining: list[ReviewRecord] = []
         decision_cache: dict[str, Any] = {}
         for item in reviews:
-            if item.relation_type not in {"APPLIED_BY", "OWNED_BY"}:
+            if not eligible(item):
                 remaining.append(item)
                 continue
             cache_key = normalize_name(item.source_name)
@@ -907,6 +923,31 @@ def promote_vector_organization_matches(
             vector_store.close()
 
 
+def deduplicate_edges(rows: list[EdgeRecord]) -> tuple[list[EdgeRecord], int]:
+    """按逻辑关系去重；引用和项目产出不因来源数组序号重复建边。"""
+    selected: dict[tuple[str, str, str, int], EdgeRecord] = {}
+    for row in rows:
+        logical_rank = 0 if row.edge_type in {"CITES", "OUTPUT_OF"} else row.rank
+        key = (row.edge_type, row.source_vid, row.target_vid, logical_rank)
+        previous = selected.get(key)
+        if previous is None:
+            selected[key] = (
+                row
+                if logical_rank == row.rank
+                else EdgeRecord(
+                    row.edge_type, row.source_vid, row.target_vid, logical_rank, row.properties
+                )
+            )
+            continue
+        previous_confidence = float(dict(previous.properties).get("confidence") or 0)
+        current_confidence = float(dict(row.properties).get("confidence") or 0)
+        if current_confidence > previous_confidence:
+            selected[key] = EdgeRecord(
+                row.edge_type, row.source_vid, row.target_vid, logical_rank, row.properties
+            )
+    return list(selected.values()), len(rows) - len(selected)
+
+
 def write_reviews(path: Path, reviews: list[ReviewRecord]) -> None:
     path.write_text(
         "".join(json.dumps(asdict(item), ensure_ascii=False) + "\n" for item in reviews),
@@ -947,6 +988,14 @@ def load(
     vector_top_k: int = DEFAULT_VECTOR_TOP_K,
     vector_state_dir: Path | None = None,
 ) -> Counter[str]:
+    if replace and not apply:
+        raise ValueError("replace=True 必须同时设置 apply=True")
+    if not 0 <= vector_threshold <= 1:
+        raise ValueError("vector_threshold 必须在 0 到 1 之间")
+    if not 0 <= vector_margin <= 1:
+        raise ValueError("vector_margin 必须在 0 到 1 之间")
+    if vector_top_k < 2:
+        raise ValueError("vector_top_k 必须大于等于 2")
     os.environ["TRS_GRAPH_SPACE"] = "dev"
     graph = get_trs_graph_client()
     connection = mysql_connection()
@@ -962,6 +1011,8 @@ def load(
             )
             edges.extend(vector_edges)
             stats["milvus_hybrid_auto_edges"] = len(vector_edges)
+        edges, duplicate_count = deduplicate_edges(edges)
+        stats["duplicate_edges_removed"] = duplicate_count
         stats["review_records"] = len(reviews)
         if review_output:
             write_reviews(review_output, reviews)

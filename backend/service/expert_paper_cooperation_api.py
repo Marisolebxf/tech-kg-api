@@ -155,6 +155,11 @@ def _person_vid(expert_id: str) -> str:
     return expert_id if expert_id.startswith("person_") else f"person_{expert_id}"
 
 
+# techkg 空间用 AUTHORED/Scholar/Paper；dev 空间用 AUTHORED_BY/Person/Paper。
+_AUTHORED_EDGE = "AUTHORED" if GRAPH_SPACE == "techkg" else "AUTHORED_BY"
+_SCHOLAR_LABEL = "Scholar" if GRAPH_SPACE == "techkg" else "Person"
+
+
 def _display_name(node: dict[str, Any], fallback: str) -> str:
     props = node.get("properties") or {}
     return str(props.get("name_zh") or props.get("name_en") or fallback)
@@ -208,15 +213,15 @@ def _path_request(
         "targetId": _person_vid(body.expertBId),
         "steps": [
             {
-                "edgeType": "AUTHORED",
+                "edgeType": _AUTHORED_EDGE,
                 "direction": "out",
                 "targetLabel": "Paper",
                 "targetFilters": _year_filters(body),
             },
             {
-                "edgeType": "AUTHORED",
+                "edgeType": _AUTHORED_EDGE,
                 "direction": "in",
-                "targetLabel": "Scholar",
+                "targetLabel": _SCHOLAR_LABEL,
                 "targetFilters": [],
             },
         ],
@@ -255,7 +260,7 @@ def _coauthor_request(
             {
                 "edgeType": "COAUTHOR_WITH",
                 "direction": direction,
-                "targetLabel": "Person",
+                "targetLabel": _SCHOLAR_LABEL,
                 "targetFilters": [],
             }
             for direction in directions
@@ -366,7 +371,7 @@ async def _fetch_paper_context(
 
     # AUTHORED: Scholar→Paper，从 Paper 视角是入边；PUBLISHED_IN / HAS_TOPIC 为出边
     authored, published, keywords, cited = await asyncio.gather(
-        fetch("AUTHORED", "in"),
+        fetch(_AUTHORED_EDGE, "in"),
         fetch("PUBLISHED_IN", "out"),
         fetch("HAS_TOPIC", "out"),
         fetch("CITED_BY", "in"),
@@ -562,9 +567,11 @@ async def _build_structured_result(
     # 当 AUTHORED 子图没有找到足够的第三方合作者时，
     # 尝试从 PAPER_COOPERATED_WITH 边的 structured_result 属性获取预计算的合作者。
     # 这条边由 MySQL 数据构建，包含完整的作者信息，比图结构更可靠。
+    # 仅在已找到论文路径时执行；fallback 路径（无逐篇论文）不查子图，
+    # 此时 _fetch_coauthor_fallback 已提供合作者，避免无谓的子图查询。
     precomputed_collaborators: list[str] = []
     precomputed_stable: list[str] = []
-    if len(collaborator_counter) < 3:
+    if papers and len(collaborator_counter) < 3:
         try:
             coop_sub = await graph_api.get_subgraph(
                 expert_a_vid,

@@ -6,8 +6,10 @@ from service.expert_paper_cooperation_api import _build_structured_result
 
 class FakeGraphSearchApi:
     async def get_node(self, node_id: str, *, space: str):
+        # 同时接受带/不带 person_ 前缀的 ID，兼容 dev/techkg 两种图空间
+        normalized = node_id.removeprefix("person_")
         nodes = {
-            "person_A": {
+            "A": {
                 "id": "person_A",
                 "labels": ["Person"],
                 "properties": {
@@ -16,7 +18,7 @@ class FakeGraphSearchApi:
                     "research_fields": "医学影像;人工智能",
                 },
             },
-            "person_B": {
+            "B": {
                 "id": "person_B",
                 "labels": ["Person"],
                 "properties": {
@@ -26,11 +28,12 @@ class FakeGraphSearchApi:
                 },
             },
         }
-        return nodes[node_id]
+        return nodes[normalized]
 
     async def search_paths(self, body: dict):
         edge_type = body["steps"][0]["edgeType"]
-        if edge_type == "AUTHORED_BY":
+        # 无论文路径：AUTHORED（techkg）或 AUTHORED_BY（dev）均返回空
+        if edge_type in ("AUTHORED", "AUTHORED_BY"):
             return {"items": [], "total": 0}
         if len(body["steps"]) == 1:
             return {

@@ -103,7 +103,7 @@ async def test_expert_paper_cooperation_rejects_missing_required_field(async_cli
 @pytest.mark.asyncio
 async def test_expert_paper_cooperation_returns_404_for_unknown_expert(async_client, monkeypatch):
     def raise_not_found(body, **_kwargs):
-        raise ValueError("gkx_local 中不存在输入的专家ID，请使用 dwd_scholar.scholar_id")
+        raise ValueError("gkx_element 中不存在输入的专家ID，请使用 dwd_scholar.scholar_id")
 
     monkeypatch.setattr(handler.application, "build_structured_result_only", raise_not_found)
 

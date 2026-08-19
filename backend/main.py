@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from biz.router.register import register_routers
 from biz.schemas.common import ApiResponse
@@ -85,6 +86,28 @@ async def validation_error_handler(request, exc: RequestValidationError) -> JSON
         content=ApiResponse(
             code=422, success=False, msg="请求参数校验失败", data=errors
         ).model_dump(),
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request, exc: StarletteHTTPException) -> JSONResponse:
+    """统一 HTTPException 响应体。
+
+    仅将 405 Method Not Allowed 规范化为 ApiResponse 体（修复 FUNC-04713/04714：
+    原返回 FastAPI 默认 {"detail":"Method Not Allowed"}，与统一响应规范不一致）。
+    其余 HTTPException（404/400/422 等由各 handler 显式 raise）保持
+    {"detail": ...} 默认行为，避免影响 operator/schema_management 等依赖该结构的端点与测试。
+    """
+    if exc.status_code == 405:
+        return JSONResponse(
+            status_code=405,
+            content=ApiResponse(code=405, success=False, msg=exc.detail, data=None).model_dump(),
+            headers=exc.headers,
+        )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=exc.headers,
     )
 
 

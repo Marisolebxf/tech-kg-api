@@ -1217,9 +1217,8 @@ class DwdOrgStockBase(Base):
 
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
-    social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
-    )
+    # 注：dwd_org_stock_base 实表无 social_credit_code 列，曾误声明导致
+    # SELECT 报 Unknown column → 500；已移除，未找到企业时由 service 空值检查返回 404。
     stock_code = Column("stock_code", String(50), nullable=True, comment="股票代码")
     stock_noun = Column("stock_noun", String(50), nullable=True, comment="股票简称")
     stock_type = Column("stock_type", String(50), nullable=True, comment="上市板块")

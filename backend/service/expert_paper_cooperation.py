@@ -323,7 +323,7 @@ def _fetch_experts(expert_a_id: str, expert_b_id: str) -> tuple[dict[str, Any], 
     rows = _run_mysql_json_query(sql)
     by_id = {row["scholarId"]: row for row in rows}
     if expert_a_id not in by_id or expert_b_id not in by_id:
-        raise ValueError("gkx_local 中不存在输入的专家ID，请使用 dwd_scholar.scholar_id")
+        raise ValueError("gkx_element 中不存在输入的专家ID，请使用 dwd_scholar.scholar_id")
     return _build_expert_payload(by_id[expert_a_id]), _build_expert_payload(by_id[expert_b_id])
 
 

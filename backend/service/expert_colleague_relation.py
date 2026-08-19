@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -56,27 +57,53 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
         offset: int = 0,
         space: str | None = None,
     ) -> dict[str, Any]:
-        expert_node = await gateway.resolve_person(expert_id, space)
-        if expert_node is None:
-            raise LookupError(f"未找到专家: {expert_id}")
-
-        expert = self._expert(expert_node)
         target_node = None
         target_expert = None
         if target_expert_id:
-            target_node = await gateway.resolve_person(target_expert_id, space)
+            # A/B 两个 person 解析互相独立，并行拉取后再做存在性与同一人校验。
+            expert_node, target_node = await asyncio.gather(
+                gateway.resolve_person(expert_id, space),
+                gateway.resolve_person(target_expert_id, space),
+            )
+            if expert_node is None:
+                raise LookupError(f"未找到专家: {expert_id}")
             if target_node is None:
                 raise LookupError(f"未找到专家 B: {target_expert_id}")
             if str(target_node.get("id")) == str(expert_node.get("id")):
                 raise LookupError("专家 A 与专家 B 不能是同一人")
+            expert = self._expert(expert_node)
             target_expert = self._expert(target_node)
-        affiliation_graph = await gateway.subgraph(
-            expert_node["id"],
-            depth=1,
-            limit=100,
-            direction="out",
-            edge_type="AFFILIATED_WITH",
-            space=space,
+        else:
+            expert_node = await gateway.resolve_person(expert_id, space)
+            if expert_node is None:
+                raise LookupError(f"未找到专家: {expert_id}")
+            expert = self._expert(expert_node)
+        # 三个以 expert 为中心的子图（任职/合著/上下文）互不依赖，并行拉取；
+        # 各自后续处理（_affiliations/_coauthor_counts/_context_index）保持原位不变。
+        affiliation_graph, coauthor_graph, context_graph = await asyncio.gather(
+            gateway.subgraph(
+                expert_node["id"],
+                depth=1,
+                limit=100,
+                direction="out",
+                edge_type="AFFILIATED_WITH",
+                space=space,
+            ),
+            gateway.subgraph(
+                expert_node["id"],
+                depth=1,
+                limit=200,
+                direction="both",
+                edge_type="COAUTHOR_WITH",
+                space=space,
+            ),
+            gateway.subgraph(
+                expert_node["id"],
+                depth=1,
+                limit=200,
+                direction="both",
+                space=space,
+            ),
         )
         affiliations = self._affiliations(expert_node["id"], affiliation_graph)
         direct_affiliations = list(affiliations)
@@ -121,23 +148,8 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
         if not expert.get("organization") and affiliations:
             expert["organization"] = affiliations[0]["name"]
 
-        coauthor_graph = await gateway.subgraph(
-            expert_node["id"],
-            depth=1,
-            limit=200,
-            direction="both",
-            edge_type="COAUTHOR_WITH",
-            space=space,
-        )
         coauthor_counts = self._coauthor_counts(expert_node["id"], coauthor_graph)
         coauthor_edges = self._coauthor_edges(expert_node["id"], coauthor_graph)
-        context_graph = await gateway.subgraph(
-            expert_node["id"],
-            depth=1,
-            limit=200,
-            direction="both",
-            space=space,
-        )
         context = self._context_index(context_graph)
 
         requested_period = self._parse_period(overlap_period)

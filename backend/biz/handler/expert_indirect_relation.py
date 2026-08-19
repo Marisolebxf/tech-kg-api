@@ -28,6 +28,7 @@ async def analyze_expert_indirect_relation(
         result = await application.build_structured_result_only(
             body,
             auth_headers=get_internal_api_auth_headers(request),
+            app=request.app,
         )
         return ExpertIndirectRelationResponse(**result)
     except ValueError as exc:

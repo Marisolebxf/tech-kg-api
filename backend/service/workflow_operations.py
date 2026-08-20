@@ -191,6 +191,8 @@ class WorkflowOperationsService:
         try:
             dispatch = await temporal_runtime.start(definition, payload, workflow_id)
         except Exception as exc:
+            if "already started" in str(exc).lower():
+                raise ValueError(f"工作流已存在: {workflow_id}") from exc
             temporal_runtime._client = None
             dispatch = {
                 "workflowId": workflow_id or f"queued-{definition['id']}-{uuid4().hex[:12]}",

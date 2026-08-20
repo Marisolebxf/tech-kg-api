@@ -74,7 +74,12 @@ async def execute_definition(definition_id: str, request: WorkflowExecuteRequest
     definition = service.repo.get_definition(definition_id)
     if definition is None:
         raise HTTPException(status_code=404, detail="工作流定义不存在")
-    execution = await service.execute_definition(definition, request.payload, request.workflow_id)
+    try:
+        execution = await service.execute_definition(
+            definition, request.payload, request.workflow_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ApiResponse(data=execution, msg="工作流执行请求已受理")
 
 

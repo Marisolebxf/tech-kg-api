@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import unicodedata
@@ -93,7 +94,11 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             mode = "pair"
         else:
             mode = "list"
-            candidates, truncated = self._scan_person_candidates(graph, expert_id)
+            candidates, truncated = self._scan_person_candidates(
+                graph,
+                expert_id,
+                [str(item["institution"]) for item in source_edus if item.get("institution")],
+            )
 
         items: list[dict[str, Any]] = []
         dim_catalog: set[str] = set()
@@ -126,8 +131,16 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             }
             items.append(item)
             dim_catalog.update(dimensions)
-            if mode == "list" and len(items) >= limit:
-                break
+
+        if mode == "list":
+            items.sort(
+                key=lambda item: (
+                    -len(item["dimensions"]),
+                    self._norm_text(item["name"]),
+                    item["alumniId"],
+                )
+            )
+            items = items[:limit]
 
         space = (
             getattr(getattr(graph, "_settings", None), "space", None)
@@ -174,24 +187,25 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         return str(getattr(node, "id", "") or "")
 
     def _scan_person_candidates(
-        self, graph: TRSGraphClient, exclude_id: str
+        self, graph: TRSGraphClient, exclude_id: str, institutions: list[str]
     ) -> tuple[list[tuple[str, Any]], bool]:
         candidates: list[tuple[str, Any]] = []
         seen: set[str] = set()
-        queries = (
-            'LOOKUP ON Person WHERE Person.education_background_institution_zh != "" '
-            f"YIELD id(vertex) AS vid, properties(vertex) AS props | LIMIT {EDUCATION_LOOKUP_LIMIT}",
-            'LOOKUP ON Person WHERE Person.education_background_institution_en != "" '
-            f"YIELD id(vertex) AS vid, properties(vertex) AS props | LIMIT {EDUCATION_LOOKUP_LIMIT}",
-        )
+        queries = [
+            f"LOOKUP ON Person WHERE Person.{field} == {json.dumps(institution, ensure_ascii=False)} "
+            f"YIELD id(vertex) AS vid, properties(vertex) AS props | LIMIT {EDUCATION_LOOKUP_LIMIT}"
+            for institution in institutions
+            for field in (
+                "education_background_institution_zh",
+                "education_background_institution_en",
+            )
+        ]
         try:
-            hit_limit = False
             for query in queries:
                 result = graph.execute_read(query)
                 records = getattr(result, "records", None)
                 if not isinstance(records, list):
                     raise TypeError("graph lookup did not return records")
-                hit_limit = hit_limit or len(records) >= EDUCATION_LOOKUP_LIMIT
                 for record in records:
                     nid = str(record.get("vid", "") or "")
                     if not nid or nid == exclude_id or nid in seen:
@@ -205,7 +219,8 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                             ),
                         )
                     )
-            return candidates, hit_limit
+            if candidates:
+                return candidates, False
         except Exception:
             # Compatibility fallback for graph services without education indexes.
             pass

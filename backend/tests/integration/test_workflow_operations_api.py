@@ -146,3 +146,38 @@ async def test_custom_definition_and_python_upload_api(async_client, fake_tempor
     assert uploaded.status_code == 200
     assert uploaded.json()["data"]["workflowType"] == "kg.custom.python"
     assert Path(uploaded.json()["data"]["scriptPath"]).is_file()
+
+
+@pytest.mark.parametrize("limit", [0, -1, "abc"])
+async def test_execute_definition_rejects_invalid_limit(async_client, fake_temporal, limit):
+    response = await async_client.post(
+        "/api/v1/workflow-system/definitions/entity-project/execute",
+        json={"payload": {"dry_run": True, "limit": limit}},
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == 422
+
+
+@pytest.mark.parametrize("body", [None, {"payload": None}, {"payload": []}])
+async def test_execute_definition_uses_http_422_for_invalid_body(async_client, body):
+    response = await async_client.post(
+        "/api/v1/workflow-system/definitions/entity-project/execute",
+        json=body,
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == 422
+
+
+async def test_execute_definition_rejects_duplicate_workflow_id(
+    async_client, monkeypatch: pytest.MonkeyPatch
+):
+    async def duplicate(*args, **kwargs):
+        raise RuntimeError("Workflow execution already started")
+
+    monkeypatch.setattr(temporal_runtime, "start", duplicate)
+    response = await async_client.post(
+        "/api/v1/workflow-system/definitions/entity-project/execute",
+        json={"payload": {"dry_run": True, "limit": 1}, "workflowId": "duplicate-id"},
+    )
+    assert response.status_code == 409
+    assert "工作流已存在" in response.json()["detail"]

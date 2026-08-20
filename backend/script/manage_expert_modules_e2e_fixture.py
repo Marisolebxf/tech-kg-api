@@ -39,7 +39,8 @@ from infra.mysql import MySQLClient
 BATCH = "EXPERT_MODULES_E2E_V1"
 PREFIX = "expert_e2e_v1_"
 PAPER_ID_BASE = 9930000000000000
-EXPECTED_PERSONS = 80
+EXPECTED_PERSONS = 100
+EXPECTED_ACHIEVEMENTS = 100
 
 
 @dataclass(frozen=True)
@@ -129,11 +130,14 @@ NAMES = (
     "任子轩", "姜悦宁", "范嘉航", "方楚涵", "石俊熙", "姚诗雨", "谭皓轩", "廖心语",
     "邹景程", "熊若兰", "金宇泽", "陆清妍", "郝文轩", "孔令仪", "白子谦", "孟书宁",
     "秦嘉木", "邱婉仪", "侯景然", "龚静姝", "尹泽楷", "黎晓晴", "段承恩", "雷雨薇",
+    "温景澄", "乔语珊", "莫子昂", "顾清妍", "江睿航", "汤婉宁", "施承泽", "洪雅琪",
+    "邵俊驰", "万思涵", "陶景曜", "武清歌", "翟宇辰", "安若彤", "易明轩", "常舒宁",
+    "文嘉佑", "裴诗雅", "章皓然", "康雨晴",
 )
 
 
 def people() -> list[Person]:
-    """生成80人：主院校56人，另外两校14人，异常/边界教育字段10人。"""
+    """生成100人：保留原80人边界场景，并追加20位多院校专家。"""
     schools = (
         (56, "清华大学", "Tsinghua University"),
         (6, "华中科技大学", "Huazhong University of Science and Technology"),
@@ -166,12 +170,26 @@ def people() -> list[Person]:
     for school_zh, school_en, degree_zh, degree_en, date in special:
         rows.append(Person(number, NAMES[number - 1], school_zh, school_en, degree_zh, degree_en, date))
         number += 1
+    extra_schools = (
+        ("清华大学", "Tsinghua University"),
+        ("北京大学", "Peking University"),
+        ("浙江大学", "Zhejiang University"),
+        ("上海交通大学", "Shanghai Jiao Tong University"),
+    )
+    for extra_no in range(20):
+        school_zh, school_en = extra_schools[extra_no % len(extra_schools)]
+        degree_zh, degree_en = degrees[extra_no % len(degrees)]
+        rows.append(Person(
+            number, NAMES[number - 1], school_zh, school_en, degree_zh, degree_en,
+            dates[extra_no % len(dates)],
+        ))
+        number += 1
     assert len(rows) == EXPECTED_PERSONS
     return rows
 
 
 def papers() -> list[Paper]:
-    return [
+    rows = [
         Paper(1, "面向复杂网络的可信知识推理方法", "Trustworthy Knowledge Reasoning for Complex Networks", 2020, (1, 2), ("知识图谱", "可信推理")),
         Paper(2, "多源科技文献实体消歧研究", "Entity Disambiguation for Multi-source Scientific Literature", 2021, (1, 3), ("实体消歧",)),
         Paper(3, "大规模异构图表示学习框架", "Representation Learning for Large Heterogeneous Graphs", 2023, (1, 3), ("图表示学习",)),
@@ -185,24 +203,77 @@ def papers() -> list[Paper]:
         Paper(11, "面向材料设计的图神经网络", "Graph Neural Networks for Materials Design", 2024, (9, 10), ("材料计算",)),
         Paper(12, "科研数据质量评估指标体系", "Quality Metrics for Scientific Data", 2022, (1, 4), ("数据治理",), ("优秀论文奖",)),
     ]
+    topics = (
+        ("可信人工智能", "Trustworthy Artificial Intelligence"),
+        ("多模态知识计算", "Multimodal Knowledge Computing"),
+        ("科学智能", "AI for Science"),
+        ("智能制造", "Intelligent Manufacturing"),
+        ("先进材料计算", "Advanced Materials Computing"),
+        ("生物信息分析", "Bioinformatics Analysis"),
+        ("低碳能源优化", "Low-carbon Energy Optimization"),
+        ("时空数据挖掘", "Spatiotemporal Data Mining"),
+    )
+    methods = ("建模方法", "推理框架", "评测体系", "优化算法", "应用研究")
+    targets = ("复杂工业场景", "开放科学数据", "跨学科科研协作", "高端装备运维", "新材料研发", "精准健康管理", "新能源系统", "城市智能治理", "空天信息处理", "生态环境监测")
+    aspects = ("可信性分析", "协同优化", "知识增强", "可解释机制", "鲁棒学习", "动态演化", "工程验证")
+    for no in range(13, 81):
+        topic_zh, topic_en = topics[(no - 13) % len(topics)]
+        method = methods[(no - 13) % len(methods)]
+        target = targets[(no - 13) % len(targets)]
+        aspect = aspects[(no - 13) % len(aspects)]
+        first = 1 + ((no - 13) % 20)
+        second = 21 + ((no * 7) % 60)
+        year = 2017 + ((no - 13) % 10)
+        rows.append(Paper(
+            no,
+            f"面向{target}的{topic_zh}{method}与{aspect}研究",
+            f"{topic_en} for {target}: {aspect}",
+            year,
+            (first, second),
+            (topic_zh, method),
+            ("青年科技创新奖",) if no % 17 == 0 else (),
+        ))
+    return rows
 
 
 def projects() -> list[Project]:
-    return [
+    rows = [
         Project(1, "国家科技知识图谱关键技术研发", 2020, 1, (4,), ("知识图谱", "科技情报"), ("数字科技应用示范奖",)),
         Project(2, "高性能图数据库查询引擎研制", 2024, 1, (7,), ("图数据库", "高性能计算")),
         Project(3, "跨领域科研成果智能发现平台", 2023, 4, (1,), ("成果发现", "人工智能")),
         Project(4, "先进材料智能设计与验证平台", 2024, 9, (10,), ("先进材料", "智能设计")),
     ]
+    project_topics = ("可信人工智能", "科学数据治理", "智能制造", "低碳能源", "生物计算", "空天信息")
+    for no in range(5, 11):
+        host = 11 + no
+        participant = 31 + no
+        topic = project_topics[no - 5]
+        rows.append(Project(
+            no, f"{topic}关键技术研发与示范应用", 2017 + no,
+            host, (participant,), (topic, "联合攻关"),
+            ("产学研协同创新奖",) if no % 3 == 0 else (),
+        ))
+    return rows
 
 
 def patents() -> list[Patent]:
-    return [
+    rows = [
         Patent(1, "一种基于异构图的科技实体关联方法", "Method for Scientific Entity Linking Based on Heterogeneous Graphs", 2022, (1, 4), ("异构图", "实体关联")),
         Patent(2, "一种分布式图查询任务调度方法", "Distributed Graph Query Task Scheduling Method", 2024, (1, 6), ("分布式计算", "任务调度")),
         Patent(3, "一种科研文献语义去重方法及系统", "Semantic Deduplication Method and System for Scientific Literature", 2023, (1, 4), ("语义计算", "数据治理")),
         Patent(4, "一种材料性能预测模型训练方法", "Training Method for Material Property Prediction Models", 2024, (9, 10), ("材料性能", "机器学习")),
     ]
+    patent_topics = ("可信模型评估", "科技文本分类", "工业缺陷检测", "能源负荷预测", "蛋白质分析", "遥感影像识别")
+    for no in range(5, 11):
+        first = 21 + no
+        second = 51 + no
+        topic = patent_topics[no - 5]
+        rows.append(Patent(
+            no, f"一种基于知识增强的{topic}方法、装置及存储介质",
+            f"Knowledge-enhanced Method, Apparatus and Storage Medium for {topic}",
+            2016 + no, (first, second), (topic, "发明专利"),
+        ))
+    return rows
 
 
 COAUTHORS: tuple[tuple[int, int, int], ...] = (
@@ -239,6 +310,7 @@ def scenario_manifest() -> dict[str, list[str]]:
 
 def plan() -> dict[str, Any]:
     ps, pas, prs, pts = people(), papers(), projects(), patents()
+    assert len(pas) + len(prs) + len(pts) == EXPECTED_ACHIEVEMENTS
     return {
         "dryRun": True,
         "batch": BATCH,

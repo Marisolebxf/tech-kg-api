@@ -284,6 +284,11 @@ def load_affiliations(session, graph, *, dry_run: bool, preview: int = 5) -> dic
 
         props = {
             "affiliation_name": org_name,
+            # 同事关系按每条任职边的时间和部门判定，不从 Person
+            # 节点回退。这三项必须随 AFFILIATED_WITH 一起入图。
+            "work_experience_date": rec.get("work_experience_date") or "",
+            "work_experience_department_zh": rec.get("work_experience_department_zh") or "",
+            "work_experience_position_zh": rec.get("work_experience_position_zh") or "",
             "source": "scholar",
             "source_table": "dwd_scholar",
             "source_record_id": rec["scholar_id"],
@@ -442,6 +447,10 @@ def run(
 
     session = mysql.session()
     try:
+        # dry-run 不得修改图 Schema；正式同步则先幂等补齐旧 dev
+        # 空间的任职边字段，再写入关系数据。
+        if not dry_run:
+            ensure_schema(graph)
         aff_stats = load_affiliations(session, graph, dry_run=dry_run)
         logger.info("AFFILIATED_WITH: %s", aff_stats)
         co_stats = load_coauthors(session, graph, dry_run=dry_run)

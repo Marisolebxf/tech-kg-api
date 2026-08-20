@@ -103,6 +103,7 @@ const running = ref(false)
 const lastTestTime = ref('—')
 const lastUpdateTime = ref<number | null>(null)
 const parameterValues = ref<Record<string, string>>({})
+const parameterErrors = ref<Record<string, string>>({})
 const liveResponse = ref<Record<string, any> | null>(null)
 const paramResetToken = ref(0)
 const selectedGraphNodeId = ref<string | null>(null)
@@ -688,9 +689,29 @@ function buildLiveSummary(res: Record<string, any>, key: string): Record<string,
   return out
 }
 
+const colleagueSummaryDirectory = (): ServiceSummaryRow[] => [
+  { label: '专家 A', value: '—' },
+  { label: '核心专家机构', value: '—' },
+  { label: '专家 B', value: '—' },
+  { label: '共同机构', value: '—' },
+  { label: '所属部门/团队', value: '—' },
+  { label: '关系生效时段', value: '—' },
+  { label: '任职重叠时间', value: '—' },
+  { label: '共同工作内容', value: '—' },
+  { label: '协作场景', value: '—' },
+  { label: '同事期间成果', value: '—' },
+  { label: '关系判定', value: '—' },
+]
+
 const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
   if (!isLiveModule.value) return null
   if (liveError.value) {
+    if (isLiveColleague.value) {
+      return [
+        { label: '错误信息', value: liveError.value },
+        ...colleagueSummaryDirectory(),
+      ]
+    }
     return [
       { label: '调用状态', value: '失败' },
       { label: '错误信息', value: liveError.value },
@@ -714,7 +735,7 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
   }
   if (isLiveColleague.value) {
     const data = liveResponse.value?.data
-    if (!data) return [{ label: '查询状态', value: '等待执行' }]
+    if (!data) return colleagueSummaryDirectory()
     const summary = data.summary || {}
     return [
       { label: '专家 A', value: summary.coreExpert || '—' },
@@ -1157,6 +1178,7 @@ function normalizeMonthBoundary(value: string | undefined, boundary: 'start' | '
   return normalized + '-' + String(lastDay).padStart(2, '0')
 }
 function resetParameters({ notify = true }: { notify?: boolean } = {}) {
+  parameterErrors.value = {}
   parameterValues.value = Object.fromEntries(
     props.moduleInfo.requestFields.map((field) => [
       field.name,
@@ -1165,6 +1187,7 @@ function resetParameters({ notify = true }: { notify?: boolean } = {}) {
   )
   paramResetToken.value += 1
   if (isLiveModule.value) {
+    liveResponse.value = null
     liveAlumniResult.value = null
     liveCoopResult.value = null
     liveApiPayload.value = null
@@ -1387,13 +1410,37 @@ async function handleRun() {
         liveError.value = resp.msg || `业务码 ${resp.code}`
         showToast(liveError.value, 'warning')
         resultMode.value = 'api'
+      } else {
+        liveAlumniResult.value = resp.data
+        showToast(
+          resp.data.total > 0
+            ? `命中 ${resp.data.total} 名校友（${resp.data.mode}）`
+            : `调用成功，未命中校友（${resp.data.mode}）`,
+          resp.data.total > 0 ? 'success' : 'info',
+        )
+        resultMode.value = 'summary'
+        selectedGraphNodeId.value = null
+        selectedGraphEdgeId.value = null
+      }
     } else if (isLiveColleague.value) {
       const expertAId = parameterValues.value.expert_a_id?.trim()
       const expertBId = parameterValues.value.expert_b_id?.trim()
-      if (!expertAId || !expertBId) {
-        showToast('请填写专家 A 和专家 B', 'warning')
+      const missingExperts = [
+        !expertAId ? { field: 'expert_a_id', label: '专家 A' } : null,
+        !expertBId ? { field: 'expert_b_id', label: '专家 B' } : null,
+      ].filter((item): item is { field: string; label: string } => item !== null)
+      if (missingExperts.length) {
+        parameterErrors.value = Object.fromEntries(
+          missingExperts.map(({ field, label }) => [field, `请输入${label}`]),
+        )
+        liveResponse.value = null
+        liveApiPayload.value = null
+        liveError.value = null
+        resultMode.value = 'summary'
+        showToast('请完善必填项后再执行', 'warning')
         return
       }
+      parameterErrors.value = {}
       const body = {
         expert_a_id: expertAId,
         expert_b_id: expertBId,
@@ -1414,18 +1461,6 @@ async function handleRun() {
         liveError.value = null
         showToast(total ? '两位专家存在同事关系' : '两位专家不存在有效同事关系', total ? 'success' : 'info')
         resultMode.value = 'summary'
-      }
-      } else {
-        liveAlumniResult.value = resp.data
-        showToast(
-          resp.data.total > 0
-            ? `命中 ${resp.data.total} 名校友（${resp.data.mode}）`
-            : `调用成功，未命中校友（${resp.data.mode}）`,
-          resp.data.total > 0 ? 'success' : 'info',
-        )
-        resultMode.value = 'summary'
-        selectedGraphNodeId.value = null
-        selectedGraphEdgeId.value = null
       }
     } else if (isLiveCoop.value) {
       const sourceExpertId = parameterValues.value.sourceExpertId?.trim()
@@ -1554,9 +1589,15 @@ async function handleRun() {
 }
 
 function handleParameterInput(fieldName: string, event: Event) {
+  const value = (event.target as HTMLInputElement).value
   parameterValues.value = {
     ...parameterValues.value,
-    [fieldName]: (event.target as HTMLInputElement).value,
+    [fieldName]: value,
+  }
+  if (value.trim() && parameterErrors.value[fieldName]) {
+    const nextErrors = { ...parameterErrors.value }
+    delete nextErrors[fieldName]
+    parameterErrors.value = nextErrors
   }
 }
 
@@ -1587,10 +1628,16 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         <input
           :type="field.type === 'month' ? 'month' : 'text'"
           :key="`${field.name}-${paramResetToken}`"
+          :class="{ 'is-invalid': Boolean(parameterErrors[field.name]) }"
           :value="parameterValues[field.name] ?? ''"
           :placeholder="field.description"
+          :aria-invalid="Boolean(parameterErrors[field.name])"
+          :title="parameterErrors[field.name] || field.description"
           @input="handleParameterInput(field.name, $event)"
         />
+        <small v-if="parameterErrors[field.name]" class="service-console__field-error">
+          {{ parameterErrors[field.name] }}
+        </small>
       </label>
     </div>
     <div class="service-console__actions">
@@ -1777,7 +1824,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   align-items: end;
   gap: 14px;
   min-height: 92px;
-  padding: 14px 16px;
+  padding: 14px 16px 24px;
   overflow: visible;
 }
 
@@ -1813,6 +1860,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .service-console__params label {
+  position: relative;
   display: grid;
   gap: 6px;
   min-width: 0;
@@ -1840,6 +1888,26 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   background: #fff;
   color: var(--text-primary);
   font-size: 15px;
+}
+
+.service-console__params input.is-invalid {
+  border-color: #f53f3f;
+}
+
+.service-console__params input.is-invalid:focus {
+  border-color: #f53f3f;
+  outline: none;
+  box-shadow: 0 0 0 2px rgb(245 63 63 / 10%);
+}
+
+.service-console__field-error {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  color: #f53f3f;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
 }
 
 .field-info-icon {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import threading
 import time
@@ -146,7 +147,17 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
 
 
 def _person_vid(expert_id: str) -> str:
+    # techkg 空间 Scholar 节点 ID 不带 person_ 前缀（如 4P566No1），
+    # dev 空间则带 person_ 前缀；根据图空间自动选择。
+    space = os.getenv("KG_GRAPH_SPACE", "dev")
+    if space == "techkg":
+        return expert_id.removeprefix("person_")
     return expert_id if expert_id.startswith("person_") else f"person_{expert_id}"
+
+
+# techkg 空间用 AUTHORED/Scholar/Paper；dev 空间用 AUTHORED_BY/Person/Paper。
+_AUTHORED_EDGE = "AUTHORED" if GRAPH_SPACE == "techkg" else "AUTHORED_BY"
+_SCHOLAR_LABEL = "Scholar" if GRAPH_SPACE == "techkg" else "Person"
 
 
 def _display_name(node: dict[str, Any], fallback: str) -> str:
@@ -156,7 +167,12 @@ def _display_name(node: dict[str, Any], fallback: str) -> str:
 
 def _organization(node: dict[str, Any]) -> str:
     props = node.get("properties") or {}
-    return str(props.get("scholar_org") or "未知机构")
+    return str(
+        props.get("scholar_org_name_zh")
+        or props.get("scholar_org_name_en")
+        or props.get("scholar_org")
+        or "未知机构"
+    )
 
 
 def _split_fields(value: Any) -> list[str]:
@@ -197,15 +213,15 @@ def _path_request(
         "targetId": _person_vid(body.expertBId),
         "steps": [
             {
-                "edgeType": "AUTHORED_BY",
-                "direction": "in",
+                "edgeType": _AUTHORED_EDGE,
+                "direction": "out",
                 "targetLabel": "Paper",
                 "targetFilters": _year_filters(body),
             },
             {
-                "edgeType": "AUTHORED_BY",
-                "direction": "out",
-                "targetLabel": "Person",
+                "edgeType": _AUTHORED_EDGE,
+                "direction": "in",
+                "targetLabel": _SCHOLAR_LABEL,
                 "targetFilters": [],
             },
         ],
@@ -244,7 +260,7 @@ def _coauthor_request(
             {
                 "edgeType": "COAUTHOR_WITH",
                 "direction": direction,
-                "targetLabel": "Person",
+                "targetLabel": _SCHOLAR_LABEL,
                 "targetFilters": [],
             }
             for direction in directions
@@ -260,6 +276,18 @@ def _edge_cooperation_count(edge: dict[str, Any]) -> int:
         return int((edge.get("properties") or {}).get("co_paper_count") or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _edge_cooperation_count_from_subgraph(
+    subgraph: dict[str, Any], source_id: str, target_id: str
+) -> int:
+    """从子图边中查找 source↔target 的 PAPER_COOPERATED_WITH 边的合作论文数。"""
+    for edge in subgraph.get("edges") or []:
+        src = str(edge.get("source") or "")
+        tgt = str(edge.get("target") or "")
+        if {src, tgt} == {source_id, target_id}:
+            return _edge_cooperation_count(edge)
+    return 0
 
 
 async def _fetch_coauthor_fallback(
@@ -325,20 +353,28 @@ async def _fetch_paper_context(
     space: str,
     semaphore: asyncio.Semaphore,
 ) -> dict[str, Any]:
-    async def fetch(edge_type: str) -> dict[str, Any]:
-        async with semaphore:
-            return await graph_api.get_subgraph(
-                paper["id"],
-                edge_type=edge_type,
-                direction="out",
-                space=space,
-            )
+    _EMPTY_SUBGRAPH: dict[str, Any] = {"nodes": [], "edges": []}
 
+    async def fetch(edge_type: str, direction: str = "out") -> dict[str, Any]:
+        async with semaphore:
+            try:
+                return await graph_api.get_subgraph(
+                    paper["id"],
+                    edge_type=edge_type,
+                    direction=direction,
+                    space=space,
+                )
+            except (GraphSearchApiError, httpx.HTTPStatusError, ValueError):
+                # 边类型在图空间中不存在时 trs-graph-service 返回 400，
+                # 降级为空子图而非让整篇论文的上下文获取失败。
+                return _EMPTY_SUBGRAPH
+
+    # AUTHORED: Scholar→Paper，从 Paper 视角是入边；PUBLISHED_IN / HAS_TOPIC 为出边
     authored, published, keywords, cited = await asyncio.gather(
-        fetch("AUTHORED_BY"),
-        fetch("PUBLISHED_IN"),
-        fetch("HAS_KEYWORD"),
-        fetch("CITED_BY"),
+        fetch(_AUTHORED_EDGE, "in"),
+        fetch("PUBLISHED_IN", "out"),
+        fetch("HAS_TOPIC", "out"),
+        fetch("CITED_BY", "in"),
     )
     return {
         **paper,
@@ -355,7 +391,11 @@ def _nodes_without_center(subgraph: dict[str, Any], center_id: str) -> list[dict
 
 def _paper_year(paper: dict[str, Any]) -> int:
     props = paper.get("properties") or {}
-    raw = props.get("publication_year") or str(props.get("publication_date") or "")[:4]
+    raw = (
+        props.get("year")
+        or props.get("publication_year")
+        or str(props.get("publish_date") or props.get("publication_date") or "")[:4]
+    )
     try:
         return int(raw)
     except (TypeError, ValueError):
@@ -364,13 +404,18 @@ def _paper_year(paper: dict[str, Any]) -> int:
 
 def _venue_type(paper: dict[str, Any]) -> str:
     props = paper.get("properties") or {}
-    raw = str(props.get("publication_type") or props.get("document_type") or "").lower()
+    raw = str(
+        props.get("venue_type") or props.get("publication_type") or props.get("document_type") or ""
+    ).lower()
     conference_tokens = ("conference", "proceedings", "会议", "cvpr", "iccv", "eccv")
     return "conference" if any(token in raw for token in conference_tokens) else "journal"
 
 
 def _venue_level(node: dict[str, Any]) -> str:
     props = node.get("properties") or {}
+    # 优先使用 Paper 节点上的 venue_level 字段
+    if props.get("venue_level") and props["venue_level"] != "未分级":
+        return str(props["venue_level"])
     if props.get("jcr_zone"):
         return f"JCR-{props['jcr_zone']}"
     if props.get("scope_zone"):
@@ -385,6 +430,15 @@ def _venue_level(node: dict[str, Any]) -> str:
 
 
 def _paper_citations(paper: dict[str, Any]) -> int:
+    # 优先从 Paper 节点属性获取 citation_count
+    props = paper.get("properties") or {}
+    try:
+        cc = int(props.get("citation_count") or 0)
+        if cc > 0:
+            return cc
+    except (TypeError, ValueError):
+        pass
+    # 回退：从 AUTHORED 边的 citations 属性获取
     values: list[int] = []
     for edge in paper.get("pathEdges") or []:
         raw = (edge.get("properties") or {}).get("citations")
@@ -395,10 +449,13 @@ def _paper_citations(paper: dict[str, Any]) -> int:
     if values and max(values) > 0:
         return max(values)
 
+    # 最终回退：统计 CITED_BY 边数量
     citation_keys = set()
     for edge in (paper.get("cited") or {}).get("edges") or []:
-        props = edge.get("properties") or {}
-        citation_keys.add(props.get("citation_identifier") or edge.get("target") or edge.get("id"))
+        edge_props = edge.get("properties") or {}
+        citation_keys.add(
+            edge_props.get("citation_identifier") or edge.get("target") or edge.get("id")
+        )
     return len({key for key in citation_keys if key})
 
 
@@ -507,6 +564,42 @@ async def _build_structured_result(
             if year:
                 collaborator_years[name].add(year)
 
+    # 当 AUTHORED 子图没有找到足够的第三方合作者时，
+    # 尝试从 PAPER_COOPERATED_WITH 边的 structured_result 属性获取预计算的合作者。
+    # 这条边由 MySQL 数据构建，包含完整的作者信息，比图结构更可靠。
+    # 仅在已找到论文路径时执行；fallback 路径（无逐篇论文）不查子图，
+    # 此时 _fetch_coauthor_fallback 已提供合作者，避免无谓的子图查询。
+    precomputed_collaborators: list[str] = []
+    precomputed_stable: list[str] = []
+    if papers and len(collaborator_counter) < 3:
+        try:
+            coop_sub = await graph_api.get_subgraph(
+                expert_a_vid,
+                edge_type="PAPER_COOPERATED_WITH",
+                direction="both",
+                space=GRAPH_SPACE,
+            )
+            for edge in coop_sub.get("edges") or []:
+                src, tgt = str(edge.get("source") or ""), str(edge.get("target") or "")
+                if {src, tgt} != {expert_a_vid, expert_b_vid}:
+                    continue
+                sr_raw = (edge.get("properties") or {}).get("structured_result") or ""
+                if not sr_raw:
+                    continue
+                try:
+                    sr = json.loads(sr_raw) if isinstance(sr_raw, str) else sr_raw
+                except (TypeError, ValueError):
+                    continue
+                precomputed_collaborators = sr.get("coreCollaborators") or []
+                precomputed_stable = sr.get("stableTeamMembers") or []
+                break
+        except (GraphSearchApiError, httpx.HTTPStatusError, ValueError):
+            pass
+    # 合并预计算合作者到 collaborator_counter
+    for name in precomputed_collaborators:
+        if name not in excluded_names and name not in collaborator_counter:
+            collaborator_counter[name] = 1
+
     a_fields = _split_fields((expert_a.get("properties") or {}).get("research_fields"))
     b_fields = _split_fields((expert_b.get("properties") or {}).get("research_fields"))
     topics = [name for name, _ in topic_counter.most_common(8)]
@@ -526,6 +619,9 @@ async def _build_structured_result(
         for name in ranked_collaborators
         if collaborator_counter[name] >= 2 and len(collaborator_years[name]) >= 2
     ][:5]
+    # 当图结构数据不足导致 stable_members 为空时，回退到预计算结果
+    if not stable_members and precomputed_stable:
+        stable_members = precomputed_stable[:5]
 
     citation_total = sum(citation_counts)
     citation_max = max(citation_counts, default=0)
@@ -546,6 +642,39 @@ async def _build_structured_result(
 
     start_year = min(years) if years else 0
     end_year = max(years) if years else 0
+
+    # 当 Paper 节点缺失（fallback 路径）时，尝试从专家属性推断合作年份
+    if not years and fallback_paper_count:
+        for expert in (expert_a, expert_b):
+            props = expert.get("properties") or {}
+            # 尝试从教育/工作经历年份推断
+            for key in ("work_start_year", "education_background_date", "work_end_year"):
+                raw = str(props.get(key) or "")[:4]
+                try:
+                    y = int(raw)
+                    if 1970 <= y <= 2030:
+                        years.append(y)
+                except (TypeError, ValueError):
+                    continue
+        # 也从请求时间范围取
+        if body.startTime:
+            try:
+                y = int(body.startTime[:4])
+                if y and not start_year:
+                    years.append(y)
+            except (TypeError, ValueError):
+                pass
+        if body.endTime:
+            try:
+                y = int(body.endTime[:4])
+                if y and not end_year:
+                    years.append(y)
+            except (TypeError, ValueError):
+                pass
+        start_year = min(years) if years else 0
+        end_year = max(years) if years else 0
+        # 注意：fallback 路径无法获取合作论文的逐篇引用数，
+        # 专家的 citation_nums 是其所有论文引用# 引用总数，不是合作论文的，因此不使用。
     return {
         "authorList": [
             _display_name(expert_a, body.expertAId),

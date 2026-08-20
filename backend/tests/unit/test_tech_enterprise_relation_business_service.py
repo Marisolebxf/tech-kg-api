@@ -9,9 +9,17 @@ from __future__ import annotations
 import pytest
 
 from biz.schemas.tech_enterprise_relation_business import KeyEnterpriseRelationRequest
-from service.tech_enterprise_relation_business import KeyEnterpriseRelationService
+from service.tech_enterprise_relation_business import KeyEnterpriseRelationService, clear_caches
 
 EXPERT = "person_left_jing"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_caches():
+    """每条用例前后清空进程内 TTL 缓存，避免用例间串味。"""
+    clear_caches()
+    yield
+    clear_caches()
 
 
 def _subgraph() -> dict:
@@ -98,7 +106,7 @@ async def test_run_parses_governance_and_project_cooperation(monkeypatch):
     monkeypatch.setattr(
         _httpx(),
         "AsyncClient",
-        lambda: _FakeAsyncClient([("/graph-search/filtered-subgraph/", _subgraph())]),
+        lambda *a, **kw: _FakeAsyncClient([("/graph-search/filtered-subgraph/", _subgraph())]),
     )
 
     # 默认重点企业筛选：只保留苏州绿的（governance），北京大学（高校）被筛掉
@@ -221,7 +229,7 @@ async def test_primary_enterprise_risk_probe(monkeypatch):
         ("/graph-search/filtered-subgraph/", _subgraph()),
     ]
     svc = KeyEnterpriseRelationService(base_url="http://x")
-    monkeypatch.setattr(_httpx(), "AsyncClient", lambda: _FakeAsyncClient(routes))
+    monkeypatch.setattr(_httpx(), "AsyncClient", lambda *a, **kw: _FakeAsyncClient(routes))
 
     resp = await svc.run(KeyEnterpriseRelationRequest(expert_id=EXPERT))
     rel = resp.relations[0]
@@ -237,7 +245,7 @@ async def test_project_cooperation_period_and_university_filter(monkeypatch):
     monkeypatch.setattr(
         _httpx(),
         "AsyncClient",
-        lambda: _FakeAsyncClient([("/graph-search/filtered-subgraph/", _subgraph())]),
+        lambda *a, **kw: _FakeAsyncClient([("/graph-search/filtered-subgraph/", _subgraph())]),
     )
 
     # 关掉重点企业筛选：北京大学（项目合作）保留，且带合作时间

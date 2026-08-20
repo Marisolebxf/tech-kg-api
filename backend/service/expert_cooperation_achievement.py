@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import threading
+import time
 from typing import Any
 
 from infra.graph_db import TRSGraphClient, get_trs_graph_client
@@ -13,6 +15,17 @@ PAPER_EDGE_TYPES = frozenset({"AUTHORED_BY"})
 PATENT_EDGE_TYPES = frozenset({"INVENTED_BY"})
 PROJECT_EDGE_TYPES = frozenset({"LEADS", "HAS_PARTICIPANT"})
 EDGE_LIMIT = 500
+
+# 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 trs-graph。
+_RESULT_CACHE_TTL = 60.0
+_result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_result_cache_lock = threading.Lock()
+
+
+def clear_caches() -> None:
+    """清空进程内缓存（测试隔离用）。"""
+    _result_cache.clear()
+
 
 TITLE_KEYS = (
     "title",
@@ -83,6 +96,16 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         if source_expert_id == target_expert_id:
             raise ValueError("sourceExpertId 与 targetExpertId 不能相同")
 
+        cache_key = (
+            f"{source_expert_id}|{target_expert_id}|"
+            f"{tuple(achievement_types or [])}|{time_range_start or ''}|"
+            f"{time_range_end or ''}|{limit_per_type}"
+        )
+        with _result_cache_lock:
+            entry = _result_cache.get(cache_key)
+        if entry and entry[0] > time.monotonic():
+            return entry[1]
+
         graph = self._client()
         source = self._require_node(graph, source_expert_id, "专家")
         target = self._require_node(graph, target_expert_id, "专家")
@@ -152,6 +175,8 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 space=str(space),
             )
         )
+        with _result_cache_lock:
+            _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, payload)
         return payload
 
     @staticmethod

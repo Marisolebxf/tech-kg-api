@@ -9,9 +9,18 @@ from pydantic import ValidationError
 from application.expert_colleague_relation import (
     ExpertColleagueRelationApplication,
     FastAPIGraphSearchGateway,
+    clear_caches,
 )
 from biz.schemas.expert_colleague_relation import ExpertColleagueRelationRequest
 from service.expert_colleague_relation import ExpertColleagueRelationService
+
+
+@pytest.fixture(autouse=True)
+def _isolate_caches():
+    """每条用例前后清空进程内 TTL 缓存，避免用例间串味。"""
+    clear_caches()
+    yield
+    clear_caches()
 
 
 def node(node_id: str, labels: list[str], **properties: Any) -> dict[str, Any]:

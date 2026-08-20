@@ -26,12 +26,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await asyncio.to_thread(REGISTRY.initialize_store)
     REGISTRY.start_watcher()
     try:
-        # 确保 platform_llm_config 表存在（LLM 配置持久化，schema 作业默认 LLM 绑定依赖）
+        # 确保 platform_llm_config 表存在（LLM 配置持久化，schema 作业默认 LLM 绑定依赖）。
+        # MySQL 不可达时跳过建表：CI 无 MySQL 服务，运行期访问 LLM 配置接口会单独报错。
         from db_model.base import Base
         from db_model.llm_config import LlmConfig
         from infra.mysql import get_engine
 
-        Base.metadata.create_all(get_engine(), tables=[LlmConfig.__table__])
+        try:
+            Base.metadata.create_all(get_engine(), tables=[LlmConfig.__table__])
+        except Exception as exc:
+            logger.warning("跳过 platform_llm_config 建表：MySQL 不可达 %s", exc)
         if os.getenv("SCHEMA_AUTO_INIT", "false").lower() == "true":
             from script.init_schema_management import initialize_schema_management
 

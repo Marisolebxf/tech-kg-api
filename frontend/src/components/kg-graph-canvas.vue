@@ -322,12 +322,11 @@ onUnmounted(() => {
   display: block;
   cursor: grab;
   touch-action: none;
-  background:
-    linear-gradient(#e8f1ff 1px, transparent 1px),
-    linear-gradient(90deg, #e8f1ff 1px, transparent 1px),
-    radial-gradient(circle at 22% 18%, rgba(22, 93, 255, 0.08), transparent 34%),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(239, 247, 255, 0.94));
-  background-size: 28px 28px, 28px 28px, auto, auto;
+  background-color: #fff;
+  background-image:
+    linear-gradient(#f2f3f5 1px, transparent 1px),
+    linear-gradient(90deg, #f2f3f5 1px, transparent 1px);
+  background-size: 28px 28px;
 }
 
 .platform-svg:active {

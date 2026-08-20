@@ -1119,6 +1119,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .result-panel__tabs {
   display: inline-flex;
   gap: 0;
+  min-width: 0;
   padding: 2px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1127,13 +1128,19 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .result-panel__tabs button {
   height: 28px;
-  padding: 0 12px;
+  padding: 0 8px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
+  white-space: nowrap;
   cursor: pointer;
+}
+
+.result-panel :deep(.kg-panel__title) {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .result-panel__tabs button.is-active {
@@ -1422,10 +1429,39 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 @media (max-width: 1280px) {
-  .service-console,
-  .business-service__main,
+  .service-console {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .service-console__head {
+    grid-column: 1 / -1;
+  }
+
   .service-console__params {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .business-service__main {
+    grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr);
+  }
+
+  .graph-panel__filters {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 960px) {
+  .service-console,
+  .business-service__main {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .service-console__params {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .service-console__actions {
+    min-width: 0;
   }
 }
 </style>

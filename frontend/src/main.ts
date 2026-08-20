@@ -1,10 +1,13 @@
+import '@arco-design/web-vue/dist/arco.css'
 import './styles/tokens.css'
 import './styles/reset.css'
 import './styles/global.css'
 import './styles/readability.css'
+import './styles/gkx-theme.css'
 
 import { createPinia } from 'pinia'
 import { createApp } from 'vue'
+import ArcoVue from '@arco-design/web-vue'
 
 import App from './App.vue'
 import { router } from './router'
@@ -54,7 +57,7 @@ try {
     console.error(error)
     renderFatalError(error)
   }
-  app.use(createPinia()).use(router).mount('#app')
+  app.use(createPinia()).use(router).use(ArcoVue).mount('#app')
 } catch (error) {
   console.error(error)
   renderFatalError(error)

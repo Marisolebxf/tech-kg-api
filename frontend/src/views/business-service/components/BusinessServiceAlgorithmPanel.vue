@@ -1331,10 +1331,15 @@ async function handleRun() {
     try {
       const coreNodeId = parameterValues.value.core_node_id?.trim()
       if (!coreNodeId) {
-        showToast('请填写核心专家或人才节点 ID', 'warning')
+        parameterErrors.value = { core_node_id: '请输入核心专家或人才节点 ID' }
+        expertIndirectResponse.value = null
+        expertIndirectError.value = null
+        resultMode.value = 'summary'
+        showToast('请完善必填项后再执行', 'warning')
         return
       }
 
+      parameterErrors.value = {}
       const pathDepthRaw = parameterValues.value.path_depth?.trim() ?? ''
       const pathDepth = pathDepthRaw === '' ? 2 : Number(pathDepthRaw)
       if (!Number.isInteger(pathDepth) || pathDepth < 2 || pathDepth > 3) {
@@ -1615,7 +1620,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 </script>
 
 <template>
-  <section class="kg-panel service-console">
+  <section class="kg-panel service-console" :class="{ 'has-parameter-errors': Object.keys(parameterErrors).length > 0 }">
     <div class="service-console__head">
       <div>
         <h2>{{ moduleInfo.title }}</h2>
@@ -1827,6 +1832,8 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   padding: 14px 16px 24px;
   overflow: visible;
 }
+
+.service-console.has-parameter-errors { padding-bottom: 36px; }
 
 .service-console__head {
   display: grid;

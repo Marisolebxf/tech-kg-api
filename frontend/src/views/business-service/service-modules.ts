@@ -292,13 +292,14 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技专家同事关系服务通过提取科技专家在不同时期的工作单位、所属部门、参与团队等机构信息，结合知识图谱中的机构架构与人员任职数据，运用任职时间匹配与团队归属算法，推理并构建专家之间的同事关系。服务会判断同事关系的生效时段、所属团队或项目组，标注同事关系期间的共同工作内容与协作场景，同时关联两者在同事期间产生的合作成果，帮助用户了解科技专家的职业社交圈与工作协作历史。',
     requestFields: [
-      { name: 'expert_a_id', type: 'string', required: '是', description: '专家 A：VID、专家编号或精确姓名' },
-      { name: 'expert_b_id', type: 'string', required: '是', description: '专家 B：VID、专家编号或精确姓名' },
+      { name: 'expert_a_id', type: 'string', required: '是', description: '请输入专家 A' },
+      { name: 'expert_b_id', type: 'string', required: '是', description: '请输入专家 B' },
       { name: 'start_time', type: 'month', required: '否', description: '可选；留空则使用数据库任职开始时间' },
       { name: 'end_time', type: 'month', required: '否', description: '可选；留空则使用数据库任职结束时间' },
     ],
     responseFields: expertColleagueResponseFields,
-    requestExample: { expert_a_id: 'person_0209a7v6', expert_b_id: 'person_1S5195f4', start_time: '2021-01', end_time: '2026-08' },
+    // 测试数据不再作为表单默认值，避免用户误提交样例专家。
+    requestExample: { expert_a_id: '', expert_b_id: '', start_time: '', end_time: '' },
     responseExample: { code: 0, message: 'success', data: { colleagues: 18, teams: 4, overlap_years: 4, achievements: 6 } },
     resultRows: [
       { label: '同事关系', value: '18', tone: 'blue' },

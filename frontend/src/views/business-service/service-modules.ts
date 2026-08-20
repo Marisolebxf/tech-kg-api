@@ -214,8 +214,8 @@ export const serviceModules: ServiceModule[] = [
     ],
     responseFields: commonResponseFields,
     requestExample: {
-      sourceExpertId: 'person_00095d2b6e69e0d4a6365c7fac495d8b',
-      targetExpertId: 'person_5f9b3a46091dbcc38eeb58696187385c',
+      sourceExpertId: 'person_expert_e2e_v1_001',
+      targetExpertId: 'person_expert_e2e_v1_004',
       achievementTypes: '',
       timeRange: '',
     },
@@ -358,8 +358,8 @@ export const serviceModules: ServiceModule[] = [
     ],
     responseFields: commonResponseFields,
     requestExample: {
-      expertId: 'person_alumni_test_liu28',
-      targetExpertId: 'person_alumni_test_wang64',
+      expertId: 'person_expert_e2e_v1_001',
+      targetExpertId: 'person_expert_e2e_v1_002',
       school: '',
       educationStage: '',
     },

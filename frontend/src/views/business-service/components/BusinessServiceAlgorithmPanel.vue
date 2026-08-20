@@ -989,6 +989,7 @@ watch(
     resetParameters()
     if (isLiveModule.value) {
       void loadModuleDescribe()
+      void handleRun()
     }
   },
   { immediate: true },
@@ -1156,7 +1157,35 @@ async function handleRun() {
   }
 
   try {
-    if (isLiveAlumni.value) {
+    if (isLiveColleague.value) {
+      const expertAId = parameterValues.value.expert_a_id?.trim()
+      const expertBId = parameterValues.value.expert_b_id?.trim()
+      if (!expertAId || !expertBId) {
+        showToast('请填写专家 A 和专家 B', 'warning')
+        return
+      }
+      const body = {
+        expert_a_id: expertAId,
+        expert_b_id: expertBId,
+        start_time: optionalParam(parameterValues.value.start_time),
+        end_time: optionalParam(parameterValues.value.end_time),
+        limit: 1,
+        offset: 0,
+      }
+      const res = await invokeKgService(props.moduleInfo.endpoint, body, 60000) as Record<string, any>
+      liveResponse.value = res
+      liveApiPayload.value = { request: body, response: res }
+      if (res?.success === false || (res?.code !== undefined && res.code !== 200)) {
+        liveError.value = res?.msg || `业务码 ${res?.code}`
+        showToast(liveError.value || '查询失败', 'warning')
+        resultMode.value = 'api'
+      } else {
+        const total = Number(res?.data?.total || 0)
+        liveError.value = null
+        showToast(total ? '两位专家存在同事关系' : '两位专家不存在有效同事关系', total ? 'success' : 'info')
+        resultMode.value = 'summary'
+      }
+    } else if (isLiveAlumni.value) {
       const expertId = parameterValues.value.expertId?.trim()
       if (!expertId) {
         showToast('请填写 expertId', 'warning')
@@ -1185,34 +1214,6 @@ async function handleRun() {
         liveError.value = resp.msg || `业务码 ${resp.code}`
         showToast(liveError.value, 'warning')
         resultMode.value = 'api'
-    } else if (isLiveColleague.value) {
-      const expertAId = parameterValues.value.expert_a_id?.trim()
-      const expertBId = parameterValues.value.expert_b_id?.trim()
-      if (!expertAId || !expertBId) {
-        showToast('请填写专家 A 和专家 B', 'warning')
-        return
-      }
-      const body = {
-        expert_a_id: expertAId,
-        expert_b_id: expertBId,
-        start_time: optionalParam(parameterValues.value.start_time),
-        end_time: optionalParam(parameterValues.value.end_time),
-        limit: 1,
-        offset: 0,
-      }
-      const res = await invokeKgService(props.moduleInfo.endpoint, body, 60000) as Record<string, any>
-      liveResponse.value = res
-      liveApiPayload.value = { request: body, response: res }
-      if (res?.success === false || (res?.code !== undefined && res.code !== 200)) {
-        liveError.value = res?.msg || `业务码 ${res?.code}`
-        showToast(liveError.value || '查询失败', 'warning')
-        resultMode.value = 'api'
-      } else {
-        const total = Number(res?.data?.total || 0)
-        liveError.value = null
-        showToast(total ? '两位专家存在同事关系' : '两位专家不存在有效同事关系', total ? 'success' : 'info')
-        resultMode.value = 'summary'
-      }
       } else {
         liveAlumniResult.value = resp.data
         showToast(

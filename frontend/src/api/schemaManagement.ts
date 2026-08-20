@@ -74,6 +74,7 @@ export interface SchemaDefinition {
   canDelete: boolean
   properties: SchemaProperty[]
   script: SchemaScript | null
+  llmConfigId: string | null
   ddlStatement: string | null
   ddlStatus: 'pending' | 'succeeded' | 'failed' | 'skipped'
   ddlError: string | null
@@ -105,6 +106,7 @@ export interface EntitySchemaCreatePayload {
   mappings: string[]
   isCore?: boolean
   version?: string
+  llmConfigId?: string | null
 }
 
 export interface RelationSchemaCreatePayload {
@@ -120,6 +122,12 @@ export interface RelationSchemaCreatePayload {
   properties: SchemaPropertyInput[]
   mappings?: string[]
   version?: string
+  llmConfigId?: string | null
+}
+
+export interface SourceTable {
+  name: string
+  comment: string
 }
 
 const PREFIX = '/v1/schema-management'
@@ -142,6 +150,12 @@ function asApiPromise<T>(request: unknown): Promise<ApiResponse<T>> {
 export async function getSchemaOverview(): Promise<SchemaOverview> {
   return unwrap(
     await asApiPromise<SchemaOverview>(http.get(`${PREFIX}/overview`)),
+  )
+}
+
+export async function listSourceTables(): Promise<SourceTable[]> {
+  return unwrap(
+    await asApiPromise<SourceTable[]>(http.get(`${PREFIX}/source-tables`)),
   )
 }
 

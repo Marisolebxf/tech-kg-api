@@ -17,6 +17,8 @@ type Step = {
   duration: string
   description: string
   engine: string
+  input?: unknown
+  output?: unknown
 }
 
 const route = useRoute()
@@ -199,6 +201,17 @@ const selectStep = (id: string) => {
   void router.replace({ query: { ...route.query, step: id } })
 }
 
+function formatIo(value: unknown): string {
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+const hasRealIo = computed(() => !!(selectedStep.value?.input || selectedStep.value?.output))
+
 async function loadTaskDetail() {
   try {
     processingInstance.value = await getTask(taskId.value)
@@ -259,6 +272,7 @@ onMounted(loadTaskDetail)
         </div>
 
         <div v-else-if="activeTab === 'io'" class="io-content">
+          <section v-if="hasRealIo" class="real-io-card"><h3>阶段真实输入输出 <span>脚本上报</span></h3><div v-if="selectedStep.input" class="real-io-block"><strong>输入</strong><pre>{{ formatIo(selectedStep.input) }}</pre></div><div v-if="selectedStep.output" class="real-io-block"><strong>输出</strong><pre>{{ formatIo(selectedStep.output) }}</pre></div></section>
           <section><h3>输入数据</h3><template v-if="isAiStep"><div class="sample-text"><span>实际任务输入 · {{ processingInstance?.sourceTable }} / {{ processingInstance?.sourceRecordId }}</span><p>“{{ processingInstance?.objectName }}，来源记录包含主体、机构、成果与关系证据，要求按当前 Schema 抽取候选结果……”</p></div></template><template v-else><pre>{
   "task_id": "{{ taskId }}",
   "source_table": "{{ processingInstance?.sourceTable || batch.source }}",

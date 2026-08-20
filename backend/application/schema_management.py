@@ -18,6 +18,9 @@ class SchemaManagementApplication:
     def overview(self) -> dict[str, Any]:
         return self._service.overview()
 
+    def list_source_tables(self) -> list[dict[str, Any]]:
+        return self._service.list_source_tables()
+
     def list_schemas(self, **kwargs) -> dict[str, Any]:
         return self._service.list_schemas(**kwargs)
 

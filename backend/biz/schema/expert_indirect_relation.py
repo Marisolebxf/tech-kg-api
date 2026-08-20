@@ -9,7 +9,7 @@ class ExpertIndirectRelationRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "core_node_id": "4P566No1",
+                "core_node_id": "4G7t0B0t",
                 "relation_types": ["学术关联", "机构关联"],
                 "path_depth": 2,
                 "min_strength": 0.65,

@@ -25,6 +25,10 @@ import {
   type DirectRelationGraphNode,
   type DirectRelationGraphEdge,
 } from '../../../api/expertDirectRelation'
+import {
+  analyzeExpertIndirectRelation,
+  type ExpertIndirectRelationResponse,
+} from '../../../api/expertIndirectRelation'
 import iconInfo from '../../../assets/icons/icon-info.svg'
 import KgGraphCanvas from '../../../components/kg-graph-canvas.vue'
 import { useToast } from '../../../composables/use-toast'
@@ -32,6 +36,11 @@ import { getEdgeProvenance, getNodeProvenance, getServiceGraphPreset } from '../
 import type { GraphEdgeData, GraphNodeData, GraphNodeType, GraphPreset } from '../../../data/graph-presets'
 import { invokeKgService } from '../../../api/kgService'
 import type { ServiceModule, ServiceSummaryRow } from '../service-modules'
+import {
+  buildIndirectRelationGraph,
+  indirectSummaryRows,
+  parseRelationTypes,
+} from '../indirect-relation-view'
 
 type PanoramaLayerKey =
   | 'core_technology'
@@ -107,12 +116,16 @@ const panoramaResponse = ref<IndustryChainPanoramaQueryResponse | null>(null)
 const panoramaError = ref<string | null>(null)
 const expertDirectResponse = ref<ExpertDirectRelationQueryResponse | null>(null)
 const expertDirectError = ref<string | null>(null)
+const expertIndirectResponse = ref<ExpertIndirectRelationResponse | null>(null)
+const expertIndirectError = ref<string | null>(null)
 const isLiveAlumni = computed(() => props.moduleInfo.key === 'expert-alumni')
 const isLiveCoop = computed(() => props.moduleInfo.key === 'two-point-achievement')
 const isLiveColleague = computed(() => props.moduleInfo.key === 'expert-colleague')
 const isLiveModule = computed(() => isLiveAlumni.value || isLiveCoop.value || isLiveColleague.value)
 const isPanorama = computed(() => props.moduleInfo.key === 'industry-chain-panorama')
 const isExpertDirect = computed(() => props.moduleInfo.key === 'expert-direct')
+const isExpertIndirect = computed(() => props.moduleInfo.key === 'node-indirect')
+const isPaperCooperation = computed(() => props.moduleInfo.key === 'paper-cooperation')
 
 function formatConfidence(
   value: number | undefined,
@@ -307,8 +320,9 @@ function buildLiveGraph(res: Record<string, any>, key: string): { nodes: GraphNo
     const tr = sr.cooperationTimeRange || {}
     const paperCount = sr.cooperationPaperCount ?? 0
     const levelEntries = Object.entries({ ...(sr.journalLevelCount || {}), ...(sr.conferenceLevelCount || {}) })
+    const highLevel = levelEntries
       .filter(([k]) => k !== '未分级')
-    const highLevel = levelEntries.reduce((s, [, v]) => s + (v as number), 0)
+      .reduce((s, [, v]) => s + (v as number), 0)
     const unitCount = units.filter(Boolean).length || 2
     const overrides: Record<string, Partial<GraphNodeData>> = {
       core: {
@@ -336,7 +350,8 @@ function buildLiveGraph(res: Record<string, any>, key: string): { nodes: GraphNo
         evidence: [topics.join('、') || '暂无主题数据。'],
       },
       'venue-1': {
-        relations: `高水平论文 ${highLevel}`,
+        label: levelEntries.map(([k]) => k).join('/') || '期刊/会议',
+        relations: `发表成果 ${levelEntries.reduce((sum, [, v]) => sum + (v as number), 0)}`,
         evidence: [levelEntries.map(([k, v]) => `${k} ${v} 篇`).join('、') || '暂无分级数据。'],
       },
       'expert-2': {
@@ -448,6 +463,12 @@ const graphPreset = computed<GraphPreset>(() => {
   if (isExpertDirect.value && expertDirectResponse.value) {
     return derivedGraphFromExpertResponse(expertDirectResponse.value)
   }
+  if (isExpertIndirect.value) {
+    return expertIndirectResponse.value
+      ? buildIndirectRelationGraph(expertIndirectResponse.value.structuredResult)
+      : { nodes: [], edges: [] }
+  }
+  if (isPaperCooperation.value) return { nodes: [], edges: [] }
   return getServiceGraphPreset(props.moduleInfo.key)
 })
 const graphNodes = computed<GraphNodeData[]>(() => {
@@ -655,7 +676,7 @@ function buildLiveSummary(res: Record<string, any>, key: string): Record<string,
     out['合作论文数量'] = `${sr.cooperationPaperCount ?? 0} 篇`
     const jl = sr.journalLevelCount || {}
     const cl = sr.conferenceLevelCount || {}
-    const levelParts = Object.entries({ ...jl, ...cl }).filter(([k]) => k !== '未分级').map(([k, v]) => `${k} ${v} 篇`)
+    const levelParts = Object.entries({ ...jl, ...cl }).map(([k, v]) => `${k} ${v} 篇`)
     out['期刊/会议级别'] = levelParts.length ? levelParts.join('、') : '暂无分级数据'
     const cit = sr.citation || {}
     out['论文被引情况'] = cit.total > 0 ? `总被引 ${cit.total} 次｜最高 ${cit.max} 次` : '暂无数据'
@@ -828,6 +849,12 @@ const detailRows = computed(() => {
   if (isExpertDirect.value && expertDirectResponse.value) {
     return computeExpertDirectSummaryRows(expertDirectResponse.value)
   }
+  if (isExpertIndirect.value) {
+    return expertIndirectResponse.value
+      ? indirectSummaryRows(expertIndirectResponse.value.structuredResult)
+      : []
+  }
+  if (isPaperCooperation.value && !liveResponse.value) return []
   // enterprise-relation / industry-chain-event：用 buildLiveSummary 覆盖静态 summaryRows
   const live = liveResponse.value ? buildLiveSummary(liveResponse.value, props.moduleInfo.key) : {}
   // expert-alumni / two-point-achievement：用 liveSummaryRows 整套替换
@@ -852,6 +879,21 @@ const apiResultJson = computed(() => {
   }
   if (isExpertDirect.value && expertDirectError.value) {
     return JSON.stringify({ error: expertDirectError.value }, null, 2)
+  }
+  if (isExpertIndirect.value && expertIndirectResponse.value) {
+    return JSON.stringify(expertIndirectResponse.value, null, 2)
+  }
+  if (isExpertIndirect.value && expertIndirectError.value) {
+    return JSON.stringify({ error: expertIndirectError.value }, null, 2)
+  }
+  if (isExpertIndirect.value) {
+    return JSON.stringify({ message: running.value ? '查询中...' : '暂无查询结果' }, null, 2)
+  }
+  if (isPaperCooperation.value && liveError.value) {
+    return JSON.stringify({ error: liveError.value }, null, 2)
+  }
+  if (isPaperCooperation.value && !liveResponse.value) {
+    return JSON.stringify({ message: running.value ? '查询中...' : '暂无查询结果' }, null, 2)
   }
   if (liveResponse.value) {
     return JSON.stringify(
@@ -1072,7 +1114,9 @@ watch(
     panoramaError.value = null
     expertDirectResponse.value = null
     expertDirectError.value = null
-    resetParameters()
+    expertIndirectResponse.value = null
+    expertIndirectError.value = null
+    resetParameters({ notify: false })
     if (isLiveModule.value) {
       void loadModuleDescribe()
     }
@@ -1104,7 +1148,15 @@ function formatValue(value: unknown) {
   return String(value)
 }
 
-function resetParameters() {
+function normalizeMonthBoundary(value: string | undefined, boundary: 'start' | 'end') {
+  const normalized = optionalParam(value)
+  if (!normalized || !/^[0-9]{4}-[0-9]{2}$/.test(normalized)) return normalized
+  if (boundary === 'start') return normalized + '-01'
+  const parts = normalized.split('-')
+  const lastDay = new Date(Date.UTC(Number(parts[0]), Number(parts[1]), 0)).getUTCDate()
+  return normalized + '-' + String(lastDay).padStart(2, '0')
+}
+function resetParameters({ notify = true }: { notify?: boolean } = {}) {
   parameterValues.value = Object.fromEntries(
     props.moduleInfo.requestFields.map((field) => [
       field.name,
@@ -1124,7 +1176,18 @@ function resetParameters() {
     lastUpdateTime.value = null
     void loadModuleDescribe()
   }
-  showToast('已重置为默认参数', 'info')
+  if (isPaperCooperation.value) {
+    liveResponse.value = null
+    liveApiPayload.value = null
+    liveError.value = null
+    selectedGraphNodeId.value = null
+    selectedGraphEdgeId.value = null
+    resultMode.value = 'summary'
+    lastTestTime.value = '—'
+    lastUpdateTime.value = null
+  }
+  if (notify) showToast('已重置为默认参数', 'info')
+  if (isExpertIndirect.value || isPaperCooperation.value) void handleRun()
 }
 
 function buildPayload(): Record<string, unknown> {
@@ -1235,6 +1298,59 @@ async function handleRun() {
       const message = error instanceof Error ? error.message : String(error)
       expertDirectError.value = message
       expertDirectResponse.value = null
+    } finally {
+      running.value = false
+    }
+    return
+  }
+
+  if (isExpertIndirect.value) {
+    try {
+      const coreNodeId = parameterValues.value.core_node_id?.trim()
+      if (!coreNodeId) {
+        showToast('请填写核心专家或人才节点 ID', 'warning')
+        return
+      }
+
+      const pathDepthRaw = parameterValues.value.path_depth?.trim() ?? ''
+      const pathDepth = pathDepthRaw === '' ? 2 : Number(pathDepthRaw)
+      if (!Number.isInteger(pathDepth) || pathDepth < 2 || pathDepth > 3) {
+        showToast('path_depth 只能填写 2 或 3', 'warning')
+        return
+      }
+
+      const minStrengthRaw = parameterValues.value.min_strength?.trim() ?? ''
+      const minStrength = minStrengthRaw === '' ? 0.65 : Number(minStrengthRaw)
+      if (!Number.isFinite(minStrength) || minStrength < 0 || minStrength > 1) {
+        showToast('min_strength 必须在 0-1 范围内', 'warning')
+        return
+      }
+
+      const response = await analyzeExpertIndirectRelation({
+        core_node_id: coreNodeId,
+        relation_types: parseRelationTypes(parameterValues.value.relation_types ?? ''),
+        path_depth: pathDepth,
+        min_strength: minStrength,
+      })
+      expertIndirectResponse.value = response
+      expertIndirectError.value = null
+      selectedGraphNodeId.value = null
+      selectedGraphEdgeId.value = null
+      resultMode.value = 'summary'
+      const now = new Date()
+      lastTestTime.value = formatTimestamp(now)
+      lastUpdateTime.value = now.getTime()
+      const pathCount = response.structuredResult.pathCount
+      showToast(
+        pathCount > 0 ? '查询成功，共发现 ' + pathCount + ' 条路径' : '查询成功，暂无符合条件的路径',
+        pathCount > 0 ? 'success' : 'info',
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      expertIndirectError.value = message
+      expertIndirectResponse.value = null
+      resultMode.value = 'api'
+      showToast(message, 'warning')
     } finally {
       running.value = false
     }
@@ -1392,8 +1508,8 @@ async function handleRun() {
         return
       }
       const body: Record<string, any> = { expertAId, expertBId }
-      const startTime = optionalParam(parameterValues.value.startTime)
-      const endTime = optionalParam(parameterValues.value.endTime)
+      const startTime = normalizeMonthBoundary(parameterValues.value.startTime, 'start')
+      const endTime = normalizeMonthBoundary(parameterValues.value.endTime, 'end')
       if (startTime) body.startTime = startTime
       if (endTime) body.endTime = endTime
       const res = await invokeKgService(props.moduleInfo.endpoint, body, 60000) as Record<string, any>
@@ -1479,7 +1595,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
     </div>
     <div class="service-console__actions">
       <button class="kg-button" type="button" @click="handleRun">{{ running ? '测试中...' : '执行测试' }}</button>
-      <button class="kg-button kg-button--secondary" type="button" @click="resetParameters">重置参数</button>
+      <button class="kg-button kg-button--secondary" type="button" @click="resetParameters()">重置参数</button>
     </div>
   </section>
 

@@ -1,10 +1,15 @@
+import asyncio
+
 import pytest
 
 from biz.schema.expert_paper_cooperation import ExpertPaperCooperationDemoRequest
-from service.expert_paper_cooperation_api import _build_structured_result
+from service.expert_paper_cooperation_api import _build_structured_result, _fetch_paper_context
 
 
 class FakeGraphSearchApi:
+    def __init__(self):
+        self.path_requests = []
+
     async def get_node(self, node_id: str, *, space: str):
         # 同时接受带/不带 person_ 前缀的 ID，兼容 dev/techkg 两种图空间
         normalized = node_id.removeprefix("person_")
@@ -31,6 +36,7 @@ class FakeGraphSearchApi:
         return nodes[normalized]
 
     async def search_paths(self, body: dict):
+        self.path_requests.append(body)
         edge_type = body["steps"][0]["edgeType"]
         # 无论文路径：AUTHORED（techkg）或 AUTHORED_BY（dev）均返回空
         if edge_type in ("AUTHORED", "AUTHORED_BY"):
@@ -82,11 +88,17 @@ async def test_coauthor_edge_fallback_keeps_unproven_fields_empty():
         expertBId="B",
     )
 
-    result = await _build_structured_result(FakeGraphSearchApi(), body)
+    graph_api = FakeGraphSearchApi()
+    result = await _build_structured_result(graph_api, body)
 
     assert result["authorList"] == ["专家甲", "专家乙"]
     assert result["cooperationPaperCount"] == 35
     assert result["cooperationFrequency"] == 35
+    shared_path_request = graph_api.path_requests[0]
+    assert shared_path_request["sourceId"] == "person_A"
+    assert shared_path_request["targetId"] == "person_B"
+    assert shared_path_request["steps"][0]["direction"] == "in"
+    assert shared_path_request["steps"][1]["direction"] == "out"
     assert result["paperTopics"][0] == "医学影像"
     assert result["coreCollaborators"] == ["共同作者丙"]
     assert result["stableTeamMembers"] == []
@@ -94,3 +106,25 @@ async def test_coauthor_edge_fallback_keeps_unproven_fields_empty():
     assert result["journalLevelCount"] == {}
     assert result["conferenceLevelCount"] == {}
     assert result["citation"] == {"total": 0, "max": 0}
+
+
+@pytest.mark.asyncio
+async def test_paper_context_uses_dev_keyword_and_citation_edges():
+    class FakeContextGraphApi:
+        def __init__(self):
+            self.calls = []
+
+        async def get_subgraph(self, node_id, **kwargs):
+            self.calls.append((kwargs["edge_type"], kwargs["direction"]))
+            return {"nodes": [{"id": node_id}], "edges": []}
+
+    graph_api = FakeContextGraphApi()
+    await _fetch_paper_context(
+        graph_api,
+        {"id": "paper_1", "properties": {}},
+        space="dev",
+        semaphore=asyncio.Semaphore(1),
+    )
+
+    assert ("HAS_KEYWORD", "out") in graph_api.calls
+    assert ("CITED_BY", "out") in graph_api.calls

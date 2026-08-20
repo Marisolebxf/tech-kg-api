@@ -992,6 +992,15 @@ class WorkflowRepository:
             ).fetchone()
             return json.loads(row["payload"]) if row else None
 
+    def list_executions(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            return self._rows(
+                connection.execute(
+                    "SELECT payload FROM workflow_executions ORDER BY started_at DESC LIMIT ?",
+                    (limit,),
+                )
+            )
+
     def save_schedule(self, schedule: dict[str, Any]) -> None:
         with self._lock, self._connect() as connection:
             connection.execute(

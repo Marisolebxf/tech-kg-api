@@ -61,6 +61,11 @@ def get_schema_overview(session: Annotated[Session, Depends(get_session)]) -> Ap
     return ApiResponse(data=_application(session).overview())
 
 
+@router.get("/source-tables", response_model=ApiResponse)
+def list_source_tables(session: Annotated[Session, Depends(get_session)]) -> ApiResponse:
+    return ApiResponse(data=_application(session).list_source_tables())
+
+
 @router.get("/schemas", response_model=ApiResponse)
 def list_schemas(
     session: Annotated[Session, Depends(get_session)],

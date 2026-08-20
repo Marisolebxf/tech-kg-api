@@ -260,10 +260,11 @@ function derivedGraphFromResponse(resp: IndustryChainPanoramaQueryResponse): Gra
 
 function buildLiveGraph(res: Record<string, any>, key: string): { nodes: GraphNodeData[]; edges: GraphEdgeData[] } | null {
   const data = res?.data
-  if (!data) return null
+  // paper-cooperation 响应没有 .data 包装，直接是 { structuredResult: {...} }
+  if (!data && key !== 'paper-cooperation') return null
   const nodes: GraphNodeData[] = []
   const edges: GraphEdgeData[] = []
-  const ev = (data.evidence as string[]) || []
+  const ev = (data?.evidence as string[]) || []
   const addNode = (id: string, label: string, nodeType: GraphNodeData['nodeType'], entityType: string, relations = '', confidence = 1) => {
     if (!id || nodes.some((n) => n.id === id)) return
     nodes.push({ id, label: label || id, nodeType, x: 0, y: 0, entityType, confidence, relations, evidence: ev })
@@ -291,6 +292,70 @@ function buildLiveGraph(res: Record<string, any>, key: string): { nodes: GraphNo
     for (const rel of data.relations || []) {
       addNode(rel.expert_id, rel.expert_name, 'expert', '专家', '关联事件')
       addEdge(rel.event_id, rel.expert_id, '关联专家', 'expert')
+    }
+  } else if (key === 'paper-cooperation') {
+    // 保持 preset 图结构（节点位置/类型/边连接）不变，仅用 API 查询结果覆盖节点与边信息
+    const sr = res?.structuredResult || data?.structuredResult
+    if (!sr) return null
+    const preset = getServiceGraphPreset('paper-cooperation')
+    const authors = sr.authorList || []
+    const units = sr.authorUnits || []
+    const cit = sr.citation || {}
+    const topics = sr.paperTopics || []
+    const collabs = sr.coreCollaborators || []
+    const stable = sr.stableTeamMembers || []
+    const tr = sr.cooperationTimeRange || {}
+    const paperCount = sr.cooperationPaperCount ?? 0
+    const levelEntries = Object.entries({ ...(sr.journalLevelCount || {}), ...(sr.conferenceLevelCount || {}) })
+      .filter(([k]) => k !== '未分级')
+    const highLevel = levelEntries.reduce((s, [, v]) => s + (v as number), 0)
+    const unitCount = units.filter(Boolean).length || 2
+    const overrides: Record<string, Partial<GraphNodeData>> = {
+      core: {
+        label: authors[0] || '专家 A',
+        relations: `合作论文 ${paperCount}`,
+        evidence: [`专家 ${authors[0] || '-'}，单位 ${units[0] || '未知机构'}。`],
+      },
+      'expert-1': {
+        label: authors[1] || '专家 B',
+        relations: `合作论文 ${paperCount}`,
+        evidence: [`专家 ${authors[1] || '-'}，单位 ${units[1] || '未知机构'}。`],
+      },
+      'paper-1': {
+        label: `合作论文${paperCount}篇`,
+        relations: `总被引 ${cit.total ?? 0}`,
+        evidence: [`合作时间 ${tr.displayText || '暂无数据'}，最高被引 ${cit.max ?? 0} 次。`],
+      },
+      'org-1': {
+        relations: `单位 ${unitCount}`,
+        evidence: [units.filter(Boolean).join('；') || '暂无单位数据。'],
+      },
+      'topic-1': {
+        label: topics[0] || '论文主题',
+        relations: `方向 ${topics.length}`,
+        evidence: [topics.join('、') || '暂无主题数据。'],
+      },
+      'venue-1': {
+        relations: `高水平论文 ${highLevel}`,
+        evidence: [levelEntries.map(([k, v]) => `${k} ${v} 篇`).join('、') || '暂无分级数据。'],
+      },
+      'expert-2': {
+        relations: `核心人员 ${collabs.length}`,
+        evidence: [`核心合作人员：${collabs.join('、') || '暂无'}。稳定团队：${stable.join('、') || '暂无'}。`],
+      },
+    }
+    const edgeOverrides: Record<string, Partial<GraphEdgeData>> = {
+      pc1: { label: `论文合作 ${paperCount} 篇` },
+      pc2: { label: '共同作者' },
+      pc3: { label: '共同作者' },
+      pc4: { label: `作者单位 ${unitCount}` },
+      pc5: { label: `研究主题 ${topics.length}` },
+      pc6: { label: highLevel > 0 ? `高水平 ${highLevel} 篇` : '发表级别' },
+      pc7: { label: `团队 ${stable.length} 人` },
+    }
+    return {
+      nodes: preset.nodes.map((n) => ({ ...n, ...(overrides[n.id] || {}) })),
+      edges: preset.edges.map((e) => ({ ...e, ...(edgeOverrides[e.id] || {}) })),
     }
   } else {
     return null
@@ -544,7 +609,7 @@ const updateStatus = computed(() => {
 
 function buildLiveSummary(res: Record<string, any>, key: string): Record<string, string> {
   const d = res?.data
-  if (!d) return {}
+  if (!d && key !== 'paper-cooperation') return {}
   const out: Record<string, string> = {}
   if (key === 'enterprise-relation') {
     const r0 = d.relations?.[0] || {}
@@ -577,6 +642,27 @@ function buildLiveSummary(res: Record<string, any>, key: string): Record<string,
     out['节点影响'] = `TOP 事件类型 ${types.join('、') || '无'}，风险等级 ${d.risk_level || '-'}`
     out['发展趋势'] = `近期 TOP 事件 ${d.events ?? 0} 条${years.length ? `，集中在 ${years.join('、')}` : ''}`
     out['机遇挖掘'] = `涉及企业 ${d.enterprises ?? 0} 家，事件类型 ${types.join('、') || '无'}`
+  } else if (key === 'paper-cooperation') {
+    const sr = d?.structuredResult || res?.structuredResult || d || res
+    const tr = sr.cooperationTimeRange || {}
+    const authors = sr.authorList || []
+    const units = sr.authorUnits || []
+    out['核心专家'] = authors[0] ? `${authors[0]}｜${units[0] || ''}` : '-'
+    out['合作专家'] = authors[1] ? `${authors[1]}｜${units[1] || ''}` : '-'
+    out['作者单位'] = units.join('；') || '-'
+    out['合作发表时间'] = tr.displayText || '暂无数据'
+    out['论文主题'] = (sr.paperTopics || []).slice(0, 4).join('、') || '-'
+    out['合作论文数量'] = `${sr.cooperationPaperCount ?? 0} 篇`
+    const jl = sr.journalLevelCount || {}
+    const cl = sr.conferenceLevelCount || {}
+    const levelParts = Object.entries({ ...jl, ...cl }).filter(([k]) => k !== '未分级').map(([k, v]) => `${k} ${v} 篇`)
+    out['期刊/会议级别'] = levelParts.length ? levelParts.join('、') : '暂无分级数据'
+    const cit = sr.citation || {}
+    out['论文被引情况'] = cit.total > 0 ? `总被引 ${cit.total} 次｜最高 ${cit.max} 次` : '暂无数据'
+    out['研究方向'] = (sr.paperTopics || []).slice(0, 5).join('、') || '-'
+    out['共同贡献'] = (sr.sharedContribution || []).join('、') || '-'
+    out['核心合作人员'] = (sr.coreCollaborators || []).join('、') || '暂无数据'
+    out['合作团队特征'] = (sr.stableTeamMembers || []).length > 0 ? `长期稳定合作团队（${sr.stableTeamMembers.length} 人）` : '暂无数据'
   }
   return out
 }
@@ -1297,6 +1383,39 @@ async function handleRun() {
         selectedGraphNodeId.value = null
         selectedGraphEdgeId.value = null
         showToast('调用成功', 'success')
+      }
+    } else if (props.moduleInfo.key === 'paper-cooperation') {
+      const expertAId = parameterValues.value.expertAId?.trim()
+      const expertBId = parameterValues.value.expertBId?.trim()
+      if (!expertAId || !expertBId) {
+        showToast('请填写 expertAId 和 expertBId', 'warning')
+        return
+      }
+      const body: Record<string, any> = { expertAId, expertBId }
+      const startTime = optionalParam(parameterValues.value.startTime)
+      const endTime = optionalParam(parameterValues.value.endTime)
+      if (startTime) body.startTime = startTime
+      if (endTime) body.endTime = endTime
+      const res = await invokeKgService(props.moduleInfo.endpoint, body, 60000) as Record<string, any>
+      liveResponse.value = res
+      liveApiPayload.value = { describe: liveDescribe.value, request: body, response: res }
+      if (res?.success === false || (res?.code !== undefined && res.code !== 200)) {
+        liveError.value = (res?.msg as string) || `业务码 ${res?.code}`
+        showToast(liveError.value, 'warning')
+        resultMode.value = 'api'
+      } else {
+        const sr = res?.structuredResult || res?.data?.structuredResult
+        const count = sr?.cooperationPaperCount || 0
+        liveError.value = null
+        showToast(
+          count > 0
+            ? `合作论文 ${count} 篇，被引 ${sr?.citation?.total || 0} 次`
+            : '调用成功，未发现合作论文',
+          count > 0 ? 'success' : 'info',
+        )
+        resultMode.value = 'summary'
+        selectedGraphNodeId.value = null
+        selectedGraphEdgeId.value = null
       }
     } else {
       await new Promise((resolve) => window.setTimeout(resolve, 360))

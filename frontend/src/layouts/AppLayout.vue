@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import { IconHistory, IconPoweroff, IconSafe, IconUser } from '@arco-design/web-vue/es/icon'
 import { computed, onBeforeUnmount, onErrorCaptured, onMounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 
-import iconMenuCollapse from '../assets/icons/icon-menu-collapse.svg'
-import iconSidebarArrow from '../assets/icons/icon-sidebar-arrow.svg'
+import figmaMenuFold from '../assets/icons/figma-menu-fold.svg'
+import figmaMenuUnfold from '../assets/icons/figma-menu-unfold.svg'
+import figmaUserAvatar from '../assets/icons/figma-user-avatar.png'
+import iconMessage from '../assets/icons/icon-message.svg'
 import navOverview from '../assets/icons/nav-overview.svg'
 import navQuery from '../assets/icons/nav-query.svg'
 import navReview from '../assets/icons/nav-review.svg'
@@ -15,7 +18,6 @@ import navTools from '../assets/icons/nav-tools.svg'
 import { getPlatformOverviewRisks } from '../api/platformOverview'
 import { useAppStore } from '../stores/app'
 import { useAuthStore } from '../stores/auth'
-import avatarBen from '../assets/images/avatar-ben.png'
 import logoKg from '../assets/images/logo-kg.png'
 
 const route = useRoute()
@@ -23,12 +25,22 @@ const router = useRouter()
 const appStore = useAppStore()
 const authStore = useAuthStore()
 const currentUser = computed(() => authStore.profile?.user)
-const userAvatar = computed(() => currentUser.value?.avatar || avatarBen)
+const userAvatar = computed(() => currentUser.value?.avatar || figmaUserAvatar)
 const userDisplayName = computed(() => authStore.displayName)
 const userRoleName = computed(() => authStore.primaryRole)
 const userBadge = computed(() => authStore.profile?.roles[0]?.type === 2 ? '机构角色' : '应用角色')
 const pageTitle = computed(() => String(route.meta.title ?? '亿级知识图谱'))
-const showPageContext = computed(() => !route.path.startsWith('/processing-instance/') && !route.path.startsWith('/manual-review/task/') && !route.path.startsWith('/task-detail/'))
+const pageIcon = computed(() => {
+  if (route.path === '/overview') return navOverview
+  if (route.path === '/schema') return navSchema
+  if (route.path.startsWith('/manual-review')) return navReview
+  if (route.path === '/tasks' || route.path.startsWith('/processing-instance/') || route.path.startsWith('/task-detail/')) return navTasks
+  if (route.path === '/configurations') return navTools
+  if (route.path === '/graph-query') return navQuery
+  if (route.path === '/pipelines') return navTasks
+  if (route.path.startsWith('/user-') || route.path.startsWith('/account-') || route.path === '/operation-logs') return navTools
+  return navServices
+})
 const activePrimaryNav = computed(() => {
   if (route.path.startsWith('/manual-review')) return 'manual-review'
   if (route.path === '/tasks' || route.path.startsWith('/processing-instance/') || route.path.startsWith('/task-detail/')) return 'tasks'
@@ -67,19 +79,29 @@ const alertItems = ref<Array<{
 }>>([])
 const blockedAlertCount = computed(() => alertItems.value.filter((item) => item.blocked).length)
 const serviceNavItems = [
-  { to: '/expert-direct', label: '专家直接关系', fullLabel: '科技专家直接关系' },
-  { to: '/node-indirect', label: '单节点间接关系', fullLabel: '科技单节点间接关系' },
-  { to: '/two-point-achievement', label: '两点合作成果', fullLabel: '科技两点合作成果' },
-  { to: '/expert-colleague', label: '专家同事关系', fullLabel: '科技专家同事关系' },
-  { to: '/expert-alumni', label: '专家校友关系', fullLabel: '科技专家校友关系' },
-  { to: '/paper-cooperation', label: '论文合作关系', fullLabel: '专家论文合作关系' },
-  { to: '/enterprise-relation', label: '重点企业关系', fullLabel: '重点科技企业关系' },
-  { to: '/industry-chain-event', label: '产业链事件关系', fullLabel: '产业链点事件关系' },
-  { to: '/industry-chain-panorama', label: '产业链全景图', fullLabel: '科技产业链全景图' },
+  { to: '/expert-direct', label: '专家直接关系', fullLabel: '专家直接关系' },
+  { to: '/node-indirect', label: '单节点间接关系', fullLabel: '单节点间接关系' },
+  { to: '/two-point-achievement', label: '两点合作成果', fullLabel: '两点合作成果' },
+  { to: '/expert-colleague', label: '专家同事关系', fullLabel: '专家同事关系' },
+  { to: '/expert-alumni', label: '专家校友关系', fullLabel: '专家校友关系' },
+  { to: '/paper-cooperation', label: '论文合作关系', fullLabel: '论文合作关系' },
+  { to: '/enterprise-relation', label: '重点企业关系', fullLabel: '重点企业关系' },
+  { to: '/industry-chain-event', label: '产业链事件关系', fullLabel: '产业链事件关系' },
+  { to: '/industry-chain-panorama', label: '产业链全景图', fullLabel: '产业链全景图' },
 ]
 const showServiceNavItems = computed(() => (
   !appStore.collapsed && !serviceNavCollapsed.value
 ))
+const isBusinessServiceRoute = computed(() => serviceNavItems.some((item) => item.to === route.path))
+const currentServiceNavItem = computed(() => serviceNavItems.find((item) => item.to === route.path))
+const breadcrumbItems = computed(() => {
+  if (currentServiceNavItem.value) return ['业务服务', currentServiceNavItem.value.fullLabel]
+  return [pageTitle.value]
+})
+
+function navIconStyle(icon: string) {
+  return { '--nav-icon': `url("${icon}")` }
+}
 // 问答小助手（已隐藏）
 // const assistantEntryStyle = computed(() => ({ left: `${assistantPosition.value.x}px`, top: `${assistantPosition.value.y}px` }))
 // const assistantPanelStyle = computed(() => {
@@ -268,34 +290,26 @@ onBeforeUnmount(() => {
           <div class="app-brand">
             <img class="app-brand__logo" :src="logoKg" alt="知识图谱平台" />
             <div v-if="!appStore.collapsed" class="app-brand__name">知识图谱平台</div>
-            <button
-              class="app-brand__menu"
-              type="button"
-              :aria-label="appStore.collapsed ? '展开导航' : '收起导航'"
-              @click="appStore.toggleCollapsed()"
-            >
-              <img :src="iconMenuCollapse" alt="" aria-hidden="true" />
-            </button>
           </div>
 
           <nav class="app-nav" aria-label="平台功能导航">
             <div v-if="!appStore.collapsed" class="app-nav__group"><span>工作台</span></div>
             <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/overview" :title="appStore.collapsed ? '平台总览' : undefined">
-              <img class="app-nav__icon" :src="navOverview" alt="" aria-hidden="true" />
+              <span class="app-nav__icon" :style="navIconStyle(navOverview)" aria-hidden="true"></span>
               <span v-if="!appStore.collapsed">平台总览</span>
             </RouterLink>
 
             <div v-if="!appStore.collapsed" class="app-nav__group"><span>图谱建设与治理</span></div>
             <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/schema" :title="appStore.collapsed ? 'Schema 管理' : undefined">
-              <img class="app-nav__icon" :src="navSchema" alt="" aria-hidden="true" />
+              <span class="app-nav__icon" :style="navIconStyle(navSchema)" aria-hidden="true"></span>
               <span v-if="!appStore.collapsed">Schema 管理</span>
             </RouterLink>
             <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" :class="{ 'app-nav__item--active': activePrimaryNav === 'tasks' }" active-class="app-nav__item--active" to="/tasks" :title="appStore.collapsed ? '图谱构建' : undefined">
-              <img class="app-nav__icon" :src="navTasks" alt="" aria-hidden="true" />
+              <span class="app-nav__icon" :style="navIconStyle(navTasks)" aria-hidden="true"></span>
               <span v-if="!appStore.collapsed">图谱构建</span>
             </RouterLink>
             <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" :class="{ 'app-nav__item--active': activePrimaryNav === 'manual-review' }" active-class="app-nav__item--active" to="/manual-review" :title="appStore.collapsed ? '人工处理' : undefined">
-              <img class="app-nav__icon" :src="navReview" alt="" aria-hidden="true" />
+              <span class="app-nav__icon" :style="navIconStyle(navReview)" aria-hidden="true"></span>
               <span v-if="!appStore.collapsed">人工处理</span>
             </RouterLink>
             <!-- 抽取 Pipeline 入口暂时隐藏，需要时取消注释恢复
@@ -307,50 +321,71 @@ onBeforeUnmount(() => {
 
             <div v-if="!appStore.collapsed" class="app-nav__group"><span>平台管理</span></div>
             <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/configurations" :title="appStore.collapsed ? '配置管理' : undefined">
-              <img class="app-nav__icon" :src="navTools" alt="" aria-hidden="true" />
+              <span class="app-nav__icon" :style="navIconStyle(navTools)" aria-hidden="true"></span>
               <span v-if="!appStore.collapsed">配置管理</span>
             </RouterLink>
 
             <div v-if="!appStore.collapsed" class="app-nav__group"><span>查询与服务</span></div>
             <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/graph-query" :title="appStore.collapsed ? '图谱查询' : undefined">
-              <img class="app-nav__icon" :src="navQuery" alt="" aria-hidden="true" />
+              <span class="app-nav__icon" :style="navIconStyle(navQuery)" aria-hidden="true"></span>
               <span v-if="!appStore.collapsed">图谱查询</span>
             </RouterLink>
-            <button
-              class="app-nav__item app-nav__item--top app-nav__item--button"
-              :class="{ 'app-nav__item--open': !serviceNavCollapsed }"
-              type="button"
-              :title="appStore.collapsed ? '业务服务' : undefined"
-              :aria-expanded="!serviceNavCollapsed"
-              @click="serviceNavCollapsed = !serviceNavCollapsed"
-            >
-              <img class="app-nav__icon" :src="navServices" alt="" aria-hidden="true" />
-              <span v-if="!appStore.collapsed">业务服务</span>
-              <img v-if="!appStore.collapsed" class="app-nav__arrow" :src="iconSidebarArrow" alt="" aria-hidden="true" />
-            </button>
-            <RouterLink
-              v-for="(item, index) in serviceNavItems"
-              :key="item.to"
-              v-if="showServiceNavItems"
-              class="app-nav__item app-nav__item--sub"
-              active-class="app-nav__item--active"
-              :to="item.to"
-              :title="item.fullLabel"
-            >
-              <em>{{ String(index + 1).padStart(2, '0') }}</em>
-              <span>{{ item.label }}</span>
-            </RouterLink>
+            <div class="app-nav__service-group">
+              <button
+                class="app-nav__item app-nav__item--top app-nav__item--button"
+                :class="{
+                  'app-nav__item--open': !serviceNavCollapsed,
+                  'app-nav__item--context': isBusinessServiceRoute,
+                }"
+                type="button"
+                :title="appStore.collapsed ? '业务服务' : undefined"
+                :aria-expanded="appStore.collapsed ? undefined : !serviceNavCollapsed"
+                @click="serviceNavCollapsed = !serviceNavCollapsed"
+              >
+                <span class="app-nav__icon" :style="navIconStyle(navServices)" aria-hidden="true"></span>
+                <span v-if="!appStore.collapsed">业务服务</span>
+                <svg v-if="!appStore.collapsed" class="app-nav__arrow" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+              </button>
+              <template v-if="showServiceNavItems">
+                <RouterLink
+                  v-for="item in serviceNavItems"
+                  :key="item.to"
+                  class="app-nav__item app-nav__item--sub"
+                  active-class="app-nav__item--active"
+                  :to="item.to"
+                  :title="item.fullLabel"
+                >
+                  <span>{{ item.label }}</span>
+                </RouterLink>
+              </template>
+              <aside v-if="appStore.collapsed" class="app-nav__flyout" aria-label="业务服务子功能">
+                <strong>业务服务</strong>
+                <RouterLink
+                  v-for="item in serviceNavItems"
+                  :key="`flyout-${item.to}`"
+                  active-class="app-nav__flyout-item--active"
+                  :to="item.to"
+                >{{ item.fullLabel }}</RouterLink>
+              </aside>
+            </div>
           </nav>
 
         </aside>
 
         <main class="app-main" :class="{ 'is-overview-page': route.path === '/overview' }">
           <div class="app-top-actions">
-            <span v-if="showPageContext" class="app-top-actions__context">{{ pageTitle }}</span>
+            <button
+              class="app-shell__menu"
+              type="button"
+              :aria-label="appStore.collapsed ? '展开导航' : '收起导航'"
+              @click="appStore.toggleCollapsed()"
+            >
+              <img :src="appStore.collapsed ? figmaMenuUnfold : figmaMenuFold" alt="" aria-hidden="true" />
+            </button>
             <div class="app-top-actions__right">
               <div class="app-alert-entry" @mouseenter="alertPreviewOpen = !alertDrawerOpen" @mouseleave="alertPreviewOpen = false">
                 <button class="app-alert-bell" type="button" :aria-label="`${alertItems.length} 条异常与人工处理通知`" :aria-expanded="alertDrawerOpen" @click="openAlertDrawer">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg>
+                  <img :src="iconMessage" alt="" aria-hidden="true" />
                   <b>{{ alertItems.length }}</b>
                 </button>
                 <aside v-if="alertPreviewOpen" class="alert-preview" aria-label="异常与人工处理概览">
@@ -361,28 +396,38 @@ onBeforeUnmount(() => {
               <div ref="userEntryRef" class="app-user-entry">
                 <button class="app-top-actions__user" type="button" :aria-label="`当前登录用户：${userRoleName}${userDisplayName}`" :aria-expanded="userMenuOpen" @click="toggleUserMenu">
                   <img :src="userAvatar" alt="" aria-hidden="true" />
-                  <span><strong>{{ userDisplayName }}</strong><em>{{ userRoleName }}</em></span>
+                  <span><strong>{{ userDisplayName }}</strong></span>
                   <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4" /></svg>
                 </button>
                 <aside v-if="userMenuOpen" class="app-user-menu">
                   <header><img :src="userAvatar" alt="" /><div><strong>{{ userDisplayName }}</strong><span>{{ userRoleName }}</span></div><b>{{ userBadge }}</b></header>
                   <nav>
-                    <button :class="{ active: route.path === '/user-center' }" type="button" @click="handleAccountAction('个人中心')"><i>人</i><span>个人中心</span></button>
-                    <button :class="{ active: route.path === '/account-security' }" type="button" @click="handleAccountAction('账号与安全')"><i>安</i><span>账号与安全</span></button>
-                    <button :class="{ active: route.path === '/operation-logs' }" type="button" @click="handleAccountAction('操作记录')"><i>录</i><span>操作记录</span></button>
-                    <button class="danger" type="button" @click="handleAccountAction('退出登录')"><i>退</i><span>退出登录</span></button>
+                    <button :class="{ active: route.path === '/user-center' }" type="button" @click="handleAccountAction('个人中心')"><IconUser /><span>个人中心</span></button>
+                    <button :class="{ active: route.path === '/account-security' }" type="button" @click="handleAccountAction('账号与安全')"><IconSafe /><span>账号与安全</span></button>
+                    <button :class="{ active: route.path === '/operation-logs' }" type="button" @click="handleAccountAction('操作记录')"><IconHistory /><span>操作记录</span></button>
+                    <button class="danger" type="button" @click="handleAccountAction('退出登录')"><IconPoweroff /><span>退出登录</span></button>
                   </nav>
                   <footer v-if="accountFeedback">{{ accountFeedback }}</footer>
                 </aside>
               </div>
             </div>
           </div>
-          <section class="app-workspace" :aria-label="pageTitle">
-            <div v-if="routeError" class="route-error">
-              <strong>页面渲染异常</strong>
-              <span>{{ routeError }}</span>
+          <section class="app-stage">
+            <div class="app-breadcrumb" aria-label="当前位置">
+              <span class="app-breadcrumb__icon" :style="navIconStyle(pageIcon)" aria-hidden="true"></span>
+              <template v-for="(item, index) in breadcrumbItems" :key="`${item}-${index}`">
+                <span v-if="index > 0" class="app-breadcrumb__separator" aria-hidden="true">/</span>
+                <span v-if="index < breadcrumbItems.length - 1" class="app-breadcrumb__history">{{ item }}</span>
+                <strong v-else aria-current="page">{{ item }}</strong>
+              </template>
             </div>
-            <RouterView v-else />
+            <section class="app-workspace" :aria-label="pageTitle">
+              <div v-if="routeError" class="route-error">
+                <strong>页面渲染异常</strong>
+                <span>{{ routeError }}</span>
+              </div>
+              <RouterView v-else />
+            </section>
           </section>
         </main>
         <button v-if="alertDrawerOpen" class="alert-drawer-mask" type="button" aria-label="关闭告警抽屉" @click="alertDrawerOpen = false" />
@@ -429,8 +474,11 @@ onBeforeUnmount(() => {
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   width: 100%;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
   background: var(--gkx-bg-page);
   transition: grid-template-columns 0.2s ease;
 }
@@ -440,25 +488,23 @@ onBeforeUnmount(() => {
 }
 
 .app-sidebar {
+  z-index: 30;
   position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
   min-width: 0;
   padding: 0 16px 16px;
-  overflow: hidden;
+  overflow: visible;
   color: var(--text-primary);
   border-right: 0;
-  background: transparent;
+  background: var(--gkx-bg-page);
   box-shadow: none;
 }
 
 .app-sidebar::before {
-  position: absolute;
-  inset: 0;
-  background: rgba(255, 255, 255, 0.16);
-  pointer-events: none;
-  content: "";
+  display: none;
 }
 
 .app-sidebar > * {
@@ -476,8 +522,10 @@ onBeforeUnmount(() => {
 }
 
 .app-brand__logo {
+  box-sizing: border-box;
   width: 32px;
   height: 32px;
+  padding: 2px;
   object-fit: contain;
 }
 
@@ -490,48 +538,27 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.app-brand__menu {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  margin-left: auto;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  cursor: pointer;
-}
-
-.app-brand__menu img {
-  width: 18px;
-  height: 18px;
-  object-fit: contain;
-  opacity: 0.72;
-}
-
-.app-brand__menu:hover {
-  background: rgba(255, 255, 255, 0.72);
-}
-
 .app-shell.is-collapsed .app-brand {
   justify-content: center;
 }
 
-.app-shell.is-collapsed .app-brand__menu {
-  margin-left: 0;
-}
-
 .app-shell.is-collapsed .app-nav__item {
-  grid-template-columns: 22px;
+  grid-template-columns: 20px;
   justify-content: center;
+  width: 52px;
+  min-height: 40px;
+  margin-left: 0;
   padding-inline: 0;
+  transform: none;
 }
 
 .app-shell.is-collapsed .app-nav__item--active {
-  width: calc(100% - 12px);
-  margin-left: 6px;
+  width: 52px;
+  margin-left: 0;
+}
+
+.app-shell.is-collapsed .app-nav__item--open {
+  margin-top: 0;
 }
 
 .app-nav {
@@ -542,17 +569,29 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 4px;
   margin-top: 8px;
-  padding-bottom: 14px;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(84, 139, 220, .38) transparent;
+  padding: 0 4px 14px 0;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(84, 139, 220, .42) transparent;
 }
 
 .app-nav::-webkit-scrollbar {
-  display: none;
+  display: block;
+  width: 6px;
+}
+
+.app-nav::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-nav::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: rgba(84, 139, 220, .42);
+}
+
+.app-shell.is-collapsed .app-nav {
+  overflow: visible;
 }
 
 .app-nav::after {
@@ -560,6 +599,7 @@ onBeforeUnmount(() => {
 }
 
 .app-nav__item {
+  box-sizing: border-box;
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) 14px;
   align-items: center;
@@ -568,7 +608,7 @@ onBeforeUnmount(() => {
   padding: 0 12px;
   border: 1px solid transparent;
   border-radius: 4px;
-  color: var(--gkx-text-secondary);
+  color: #1d2129;
   font-size: 14px;
   line-height: 22px;
   white-space: nowrap;
@@ -604,14 +644,19 @@ onBeforeUnmount(() => {
   background: rgba(255, 255, 255, 0.56);
 }
 
+.app-nav__item:focus-visible,
+.app-shell__menu:focus-visible {
+  outline: none;
+}
+
 .app-nav__group {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   margin: 16px 8px 8px;
-  padding-top: 12px;
-  border-top: 1px solid rgba(111, 151, 207, 0.18);
+  padding-top: 0;
+  border-top: 0;
   color: var(--gkx-text-tertiary);
   font-size: 12px;
   line-height: 20px;
@@ -634,33 +679,42 @@ onBeforeUnmount(() => {
 }
 
 .app-nav__icon {
+  display: block;
   width: 20px;
   height: 20px;
   align-self: center;
   justify-self: center;
-  object-fit: contain;
-  opacity: 0.82;
+  background: currentColor;
+  color: #4e5969;
+  -webkit-mask-image: var(--nav-icon);
+  mask-image: var(--nav-icon);
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 16px 16px;
+  mask-size: 16px 16px;
 }
 
 .app-nav__arrow {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   justify-self: end;
-  object-fit: contain;
-  opacity: 0.52;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform: rotate(-90deg);
   transition: transform 0.16s ease;
 }
 
 .app-nav__item--leaf {
-  grid-template-columns: 22px minmax(0, 1fr);
-}
-
-.app-nav__item--open {
-  margin-top: 8px;
+  grid-template-columns: 20px minmax(0, 1fr);
 }
 
 .app-nav__item--open .app-nav__arrow {
-  transform: rotate(90deg);
+  transform: rotate(0);
 }
 
 .app-nav__item--active {
@@ -670,14 +724,28 @@ onBeforeUnmount(() => {
   width: 100%;
   margin-left: 0;
   color: var(--gkx-primary);
-  border-color: rgba(255, 255, 255, 0.92);
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow: none;
+  border-color: #fff;
+  background:
+    linear-gradient(106deg, rgba(255, 255, 255, 0) 39%, rgba(22, 93, 255, 0.2) 114%),
+    rgba(255, 255, 255, 0.48);
+  box-shadow: 0 1px 12px rgba(83, 98, 144, 0.08);
 }
 
 .app-nav__item--active .app-nav__icon,
 .app-nav__item--active .app-nav__arrow {
-  opacity: 1;
+  color: var(--gkx-primary);
+}
+
+.app-nav__item--context {
+  color: var(--gkx-primary);
+  font-weight: 500;
+}
+
+.app-nav__item--context .app-nav__icon,
+.app-nav__item--context .app-nav__arrow,
+.app-nav__item:hover .app-nav__icon,
+.app-nav__item:hover .app-nav__arrow {
+  color: var(--gkx-primary);
 }
 
 .app-nav__item--top.app-nav__item--active {
@@ -690,14 +758,19 @@ onBeforeUnmount(() => {
   grid-template-columns: 20px minmax(0, 1fr);
 }
 
+.app-shell.is-collapsed .app-nav__item.app-nav__item--active {
+  grid-template-columns: 20px;
+  justify-content: center;
+}
+
 .app-nav__item--sub {
   position: relative;
   z-index: 1;
-  grid-template-columns: 32px minmax(0, 1fr);
-  width: calc(100% - 20px);
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
   min-height: 36px;
-  margin: 2px 0 2px 20px;
-  padding: 0 12px;
+  margin: 2px 0;
+  padding: 0 12px 0 40px;
   border-color: transparent;
   background: transparent;
   color: var(--gkx-text-secondary);
@@ -705,18 +778,67 @@ onBeforeUnmount(() => {
   line-height: 22px;
 }
 
-.app-nav__item--sub em {
-  display: inline-flex;
+.app-nav__service-group {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-nav__flyout {
+  position: absolute;
+  z-index: 80;
+  top: 0;
+  left: calc(100% + 12px);
+  display: grid;
+  width: 190px;
+  padding: 8px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(29, 33, 41, .14);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-4px);
+  transition: opacity .16s ease, transform .16s ease;
+}
+
+.app-nav__service-group:hover .app-nav__flyout,
+.app-nav__service-group:focus-within .app-nav__flyout {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+
+.app-nav__flyout strong {
+  padding: 6px 8px;
+  color: #1d2129;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+}
+
+.app-nav__flyout a {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 22px;
-  border-radius: 999px;
-  background: rgba(22, 93, 255, 0.08);
-  color: #4c74b4;
-  font-size: 12px;
-  font-style: normal;
-  font-weight: 700;
+  min-height: 36px;
+  padding: 0 8px;
+  border-radius: 4px;
+  color: #4e5969;
+  font-size: 14px;
+  line-height: 22px;
+  text-decoration: none;
+}
+
+.app-nav__flyout a:hover,
+.app-nav__flyout .app-nav__flyout-item--active {
+  background: #e8f3ff;
+  color: #165dff;
+}
+
+.app-shell.is-collapsed .app-nav__item--context {
+  border-color: #fff;
+  background: rgba(255, 255, 255, .72);
 }
 
 .app-nav__item--sub span {
@@ -733,13 +855,9 @@ onBeforeUnmount(() => {
   box-shadow: none;
 }
 
-.app-nav__item--sub.app-nav__item--active em {
-  background: var(--primary);
-  color: #fff;
-}
-
 .app-main {
   min-width: 0;
+  min-height: 0;
   height: 100%;
   padding: 0 16px 16px 0;
   overflow: hidden;
@@ -752,31 +870,54 @@ onBeforeUnmount(() => {
   gap: 10px;
   height: var(--header-height);
   margin-bottom: 0;
-  padding: 0 0 0 16px;
+  padding: 0;
+}
+
+.app-shell__menu {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.app-shell__menu:hover {
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.app-shell__menu img {
+  display: block;
+  width: 24px;
+  height: 24px;
 }
 
 .app-top-actions__user {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid rgba(191, 215, 250, .96);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, .84);
+  gap: 6px;
+  height: 40px;
+  padding: 4px 8px 4px 4px;
+  border: 0;
+  border-radius: 30px;
+  background: rgba(255, 255, 255, .48);
   color: #344766;
   font-size: 13px;
   text-decoration: none;
   cursor: pointer;
 }
 
-.app-top-actions__user>img { width:22px;height:22px;border-radius:50%;object-fit:cover; }
+.app-top-actions__user>img { width:32px;height:32px;border-radius:50%;object-fit:cover; }
 .app-top-actions__user>span { display:grid;gap:0;line-height:1.15; }
 .app-top-actions__user strong { color:#344766;font-size:12px;font-weight:600; }
 .app-top-actions__user em { color:#7890b5;font-size:9px;font-style:normal; }
 .app-top-actions__user>i { color:#7890b5;font-size:10px;font-style:normal; }
 .app-top-actions__user>svg { width:14px;height:14px;fill:none;stroke:#7890b5;stroke-width:1.6;transition:transform .2s; }
-.app-top-actions__user[aria-expanded="true"] { border-color:#8fb7f2;background:#fff;box-shadow:0 5px 14px rgba(44,91,157,.1); }
+.app-top-actions__user:hover,.app-top-actions__user[aria-expanded="true"] { background:rgba(255,255,255,.72);box-shadow:0 5px 14px rgba(44,91,157,.08); }
 .app-top-actions__user[aria-expanded="true"]>svg { transform:rotate(180deg); }
 .app-user-entry { position:relative;z-index:38; }
 .app-user-menu { position:absolute;z-index:48;top:39px;right:0;width:250px;overflow:hidden;border:1px solid #c8daf4;border-radius:9px;background:#fff;box-shadow:0 18px 45px rgba(34,74,132,.2);color:#263853; }
@@ -785,17 +926,16 @@ onBeforeUnmount(() => {
 .app-user-menu>header img { width:34px;height:34px;border-radius:50%;object-fit:cover; }
 .app-user-menu>header div { display:grid;gap:3px; }.app-user-menu>header strong { font-size:13px; }.app-user-menu>header span { color:#75839a;font-size:10px; }.app-user-menu>header b { padding:2px 6px;border-radius:99px;background:#eaf2ff;color:#175cd3;font-size:9px;font-weight:500; }
 .app-user-menu>p { margin:0;padding:10px 14px;border-bottom:1px solid #e9eff7;color:#718098;font-size:10px;line-height:17px; }
-.app-user-menu nav { display:grid;padding:6px; }.app-user-menu nav button { display:flex;align-items:center;justify-content:flex-start;gap:10px;height:40px;padding:0 10px;border:0;border-radius:5px;background:#fff;color:#344766;text-align:left;cursor:pointer; }.app-user-menu nav button:hover { background:#f1f6fd;color:#165dff; }.app-user-menu nav button i { display:grid;place-items:center;width:22px;height:22px;border-radius:5px;background:#edf3fb;color:#526783;font-size:9px;font-style:normal; }.app-user-menu nav button span { font-size:11px; }.app-user-menu nav button.danger { margin-top:5px;border-top:1px solid #e8eef6;border-radius:0 0 5px 5px; }.app-user-menu nav button.danger span,.app-user-menu nav button.danger i { color:#b42318; }
-.app-user-menu nav button.active { background:#eaf2ff;color:#165dff; }.app-user-menu nav button.active i { background:#fff;color:#165dff; }
+.app-user-menu nav { display:grid;padding:6px; }.app-user-menu nav button { display:flex;align-items:center;justify-content:flex-start;gap:10px;height:40px;padding:0 10px;border:0;border-radius:5px;background:#fff;color:#344766;text-align:left;cursor:pointer; }.app-user-menu nav button:hover { background:#f1f6fd;color:#165dff; }.app-user-menu nav button>svg { width:16px;height:16px;color:#4e5969;stroke-width:1.2; }.app-user-menu nav button:hover>svg { color:#165dff; }.app-user-menu nav button span { font-size:11px; }.app-user-menu nav button.danger { margin-top:5px;border-top:1px solid #e8eef6;border-radius:0 0 5px 5px; }.app-user-menu nav button.danger span,.app-user-menu nav button.danger>svg { color:#b42318; }
+.app-user-menu nav button.active { background:#eaf2ff;color:#165dff; }.app-user-menu nav button.active>svg { color:#165dff; }
 .app-user-menu>footer { padding:9px 13px;border-top:1px solid #e4ecf6;background:#f7faff;color:#526783;font-size:9px;line-height:15px; }
 
-.app-top-actions__context { color: #65738a; font-size: 13px; }
 .app-top-actions__right { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .app-alert-entry { position: relative; z-index: 38; display: inline-flex; }
-.app-alert-bell { position: relative; display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid rgba(191,215,250,.96); border-radius: 7px; background: rgba(255,255,255,.9); color: #40516c; cursor: pointer; }
-.app-alert-bell:hover,.app-alert-bell[aria-expanded="true"] { border-color: #8fb7f2; background: #fff; color: #165dff; }
-.app-alert-bell svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.app-alert-bell b { position: absolute; top: -6px; right: -7px; display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border: 2px solid #eaf3ff; border-radius: 10px; background: #d92d20; color: #fff; font-size: 10px; line-height: 1; }
+.app-alert-bell { position: relative; display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #86909c; cursor: pointer; }
+.app-alert-bell:hover,.app-alert-bell[aria-expanded="true"] { background: rgba(255,255,255,.48); }
+.app-alert-bell>img { width: 16px; height: 16px; object-fit: contain; opacity: .72; }
+.app-alert-bell b { position: absolute; top: -3px; right: -4px; display: grid; place-items: center; min-width: 16px; height: 16px; padding: 0 3px; border: 2px solid #d8e7fc; border-radius: 9px; background: #d92d20; color: #fff; font-size: 9px; line-height: 1; }
 .alert-preview { position:absolute;z-index:45;top:38px;right:-8px;width:350px;overflow:hidden;border:1px solid #c8daf4;border-radius:9px;background:#fff;box-shadow:0 18px 45px rgba(34,74,132,.2);color:#263853; }
 .alert-preview::before { position:absolute;top:-6px;right:17px;width:11px;height:11px;border-top:1px solid #c8daf4;border-left:1px solid #c8daf4;background:#fff;content:"";transform:rotate(45deg); }
 .alert-preview>header { display:flex;align-items:center;justify-content:space-between;padding:13px 14px;border-bottom:1px solid #e1eaf6; }
@@ -856,15 +996,97 @@ onBeforeUnmount(() => {
 .knowledge-assistant>form { display:grid;grid-template-columns:minmax(0,1fr) 54px;gap:8px;padding:10px;border-top:1px solid #dce8f8;background:#fff; }.knowledge-assistant textarea { box-sizing:border-box;height:54px;padding:8px 9px;border:1px solid #bdd0ea;border-radius:6px;color:#344761;font:10px/16px inherit;resize:none; }.knowledge-assistant form button { border:0;border-radius:6px;background:#165dff;color:#fff;font-size:10px;cursor:pointer; }.knowledge-assistant form button:disabled { background:#a9bee0;cursor:not-allowed; }
 @media(max-width:620px){.app-user-menu{right:-2px;width:270px}}
 
-.app-workspace {
+.app-stage {
+  display: grid;
+  grid-template-rows: 22px minmax(0, 1fr);
+  gap: 16px;
   height: calc(100% - var(--header-height));
   padding: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.92);
-  border-radius: var(--radius-shell);
+  border: 1px solid #fff;
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.48);
   backdrop-filter: blur(8px);
   box-shadow: none;
   overflow: hidden;
+}
+
+.app-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 22px;
+  color: var(--gkx-text-secondary);
+}
+
+.app-breadcrumb__icon {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  background: #4e5969;
+  -webkit-mask-image: var(--nav-icon);
+  mask-image: var(--nav-icon);
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 16px 16px;
+  mask-size: 16px 16px;
+}
+
+.app-breadcrumb__separator {
+  flex: 0 0 12px;
+  color: #86909c;
+  font-size: 12px;
+  line-height: 12px;
+  text-align: center;
+}
+
+.app-breadcrumb__history {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: #86909c;
+  font-size: 12px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-breadcrumb strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #4e5969;
+  font-size: 12px;
+  line-height: 20px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-workspace {
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+  overflow: auto;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.8);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(84, 139, 220, .42) transparent;
+}
+
+.app-workspace::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.app-workspace::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-workspace::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: rgba(84, 139, 220, .42);
 }
 
 .route-error {
@@ -897,10 +1119,6 @@ onBeforeUnmount(() => {
     min-height: 40px;
   }
 
-  .app-nav__item--sub,
-  .app-nav__item--active {
-    width: 100%;
-  }
 }
 
 @media (max-width: 1050px) {
@@ -923,9 +1141,5 @@ onBeforeUnmount(() => {
     line-height: 22px;
   }
 
-  .app-nav__item--sub,
-  .app-nav__item--active {
-    width: 100%;
-  }
 }
 </style>

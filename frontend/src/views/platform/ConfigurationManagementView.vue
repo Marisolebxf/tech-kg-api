@@ -107,7 +107,7 @@ function toggleItem(item: ConfigItem) {
 <template>
   <div class="configuration-page">
     <header class="page-header">
-      <div><span>PLATFORM CONFIGURATION</span><h1>配置管理</h1><p>统一管理 Pipeline 运行依赖的数据源、模型服务、Schema、字典及调度策略。</p></div>
+      <div><span>PLATFORM CONFIGURATION</span><p>统一管理 Pipeline 运行依赖的数据源、模型服务、Schema、字典及调度策略。</p></div>
       <button class="primary" type="button" @click="openCreate">＋ 新建配置</button>
     </header>
 

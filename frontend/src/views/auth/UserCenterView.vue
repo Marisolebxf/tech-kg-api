@@ -31,7 +31,6 @@ async function refreshProfile() {
     <header class="user-center__hero">
       <div>
         <span>USER CENTER</span>
-        <h1>个人中心</h1>
         <p>这里展示统一用户中心同步的身份、角色、机构和 API 权限。</p>
       </div>
       <button type="button" :disabled="syncing" @click="refreshProfile">

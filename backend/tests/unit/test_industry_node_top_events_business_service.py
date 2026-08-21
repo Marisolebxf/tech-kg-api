@@ -1,13 +1,14 @@
 """科技产业链点 TOP-N 事件关系业务编排服务的单元测试。
 
-mock graph-search API（不碰 MySQL/图），验证链节点查询 → 企业关联 → 事件影响力排序 →
-风险等级 → 事件↔专家关联。
+mock graph 查询 helper（_subgraph_sync / _fetch_org_governance_sync），不碰 MySQL/图/HTTP，
+验证链节点查询 → 企业关联 → 事件影响力排序 → 风险等级 → 事件↔专家关联。
 """
 
 from __future__ import annotations
 
 import pytest
 
+import service.industry_node_top_events_business as mod
 from biz.schemas.industry_node_top_events_business import IndustryNodeTopEventsRequest
 from service.industry_node_top_events_business import IndustryNodeTopEventsService
 
@@ -16,136 +17,101 @@ ORG_A = "org_aaa"
 ORG_B = "org_bbb"
 
 
-class _FakeResponse:
-    def __init__(self, payload: dict) -> None:
-        self._payload = payload
-
-    def json(self) -> dict:
-        return self._payload
-
-
-class _FakeAsyncClient:
-    """按 url 子串路由到预设响应。"""
-
-    def __init__(self, routes: list[tuple[str, dict]]) -> None:
-        self._routes = routes
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return None
-
-    async def get(self, url: str, params: dict | None = None, timeout: float = 0) -> _FakeResponse:
-        for key, payload in self._routes:
-            if key in url:
-                return _FakeResponse(payload)
-        return _FakeResponse({"data": {"nodes": [], "edges": []}})
-
-
-def _httpx():
-    import service.industry_node_top_events_business as mod
-
-    return mod.httpx
-
-
-def _routes() -> list[tuple[str, dict]]:
+def _subgraphs() -> dict[str, dict]:
+    """vid -> 子图（与 graph-search /filtered-subgraph 的 data 结构一致）。"""
     # 1) 链节点子图：IndustryNode + IndustryChain + 2 个 org(BELONGS_TO_NODE)
     node_subgraph = {
-        "data": {
-            "nodes": [
-                {
-                    "id": NODE_VID,
-                    "labels": ["IndustryNode"],
-                    "properties": {"node_name": "测试节点", "node_imp_level": "1"},
-                },
-                {
-                    "id": "chain_IC",
-                    "labels": ["IndustryChain"],
-                    "properties": {"chain_name": "测试产业链"},
-                },
-                {"id": ORG_A, "labels": ["Organization"], "properties": {"name_cn": "甲公司"}},
-                {"id": ORG_B, "labels": ["Organization"], "properties": {"name_cn": "乙公司"}},
-            ],
-            "edges": [
-                {"type": "HAS_NODE", "source": "chain_IC", "target": NODE_VID, "properties": {}},
-                {
-                    "type": "BELONGS_TO_NODE",
-                    "source": ORG_A,
-                    "target": NODE_VID,
-                    "properties": {"chain_score": 90},
-                },
-                {
-                    "type": "BELONGS_TO_NODE",
-                    "source": ORG_B,
-                    "target": NODE_VID,
-                    "properties": {"chain_score": 60},
-                },
-            ],
-        }
+        "nodes": [
+            {
+                "id": NODE_VID,
+                "labels": ["IndustryNode"],
+                "properties": {"node_name": "测试节点", "node_imp_level": "1"},
+            },
+            {
+                "id": "chain_IC",
+                "labels": ["IndustryChain"],
+                "properties": {"chain_name": "测试产业链"},
+            },
+            {"id": ORG_A, "labels": ["Organization"], "properties": {"name_cn": "甲公司"}},
+            {"id": ORG_B, "labels": ["Organization"], "properties": {"name_cn": "乙公司"}},
+        ],
+        "edges": [
+            {"type": "HAS_NODE", "source": "chain_IC", "target": NODE_VID, "properties": {}},
+            {
+                "type": "BELONGS_TO_NODE",
+                "source": ORG_A,
+                "target": NODE_VID,
+                "properties": {"chain_score": 90},
+            },
+            {
+                "type": "BELONGS_TO_NODE",
+                "source": ORG_B,
+                "target": NODE_VID,
+                "properties": {"chain_score": 60},
+            },
+        ],
     }
     # 2) orgA 子图：1 破产事件(高风险) + 1 财务事件
     org_a_sub = {
-        "data": {
-            "nodes": [
-                {"id": ORG_A, "labels": ["Organization"], "properties": {"name_cn": "甲公司"}},
-                {
-                    "id": "ev_bk",
-                    "labels": ["Event"],
-                    "properties": {
-                        "event_type": "bankruptcy",
-                        "occur_date": "2025-03-01",
-                        "amount": "50000000",
-                        "title": "破产清算",
-                    },
+        "nodes": [
+            {"id": ORG_A, "labels": ["Organization"], "properties": {"name_cn": "甲公司"}},
+            {
+                "id": "ev_bk",
+                "labels": ["Event"],
+                "properties": {
+                    "event_type": "bankruptcy",
+                    "occur_date": "2025-03-01",
+                    "amount": "50000000",
+                    "title": "破产清算",
                 },
-            ],
-            "edges": [
-                {"type": "INVOLVED_IN", "source": ORG_A, "target": "ev_bk", "properties": {}}
-            ],
-        }
+            },
+        ],
+        "edges": [{"type": "INVOLVED_IN", "source": ORG_A, "target": "ev_bk", "properties": {}}],
     }
     # 3) orgB 子图：1 招聘事件(低风险)
     org_b_sub = {
-        "data": {
-            "nodes": [
-                {"id": ORG_B, "labels": ["Organization"], "properties": {"name_cn": "乙公司"}},
-                {
-                    "id": "ev_rc",
-                    "labels": ["Event"],
-                    "properties": {
-                        "event_type": "recruit",
-                        "occur_date": "2024-01-01",
-                        "amount": "0",
-                        "title": "招聘",
-                    },
+        "nodes": [
+            {"id": ORG_B, "labels": ["Organization"], "properties": {"name_cn": "乙公司"}},
+            {
+                "id": "ev_rc",
+                "labels": ["Event"],
+                "properties": {
+                    "event_type": "recruit",
+                    "occur_date": "2024-01-01",
+                    "amount": "0",
+                    "title": "招聘",
                 },
-            ],
-            "edges": [
-                {"type": "INVOLVED_IN", "source": ORG_B, "target": "ev_rc", "properties": {}}
-            ],
-        }
+            },
+        ],
+        "edges": [{"type": "INVOLVED_IN", "source": ORG_B, "target": "ev_rc", "properties": {}}],
     }
-    # 4) orgA 专家边
-    org_a_edges = {
-        "data": {
-            "edges": [{"source": "person_x", "target": ORG_A, "properties": {"position": "董事长"}}]
-        }
-    }
-    return [
-        (f"/graph-search/filtered-subgraph/{NODE_VID}", node_subgraph),
-        (f"/graph-search/filtered-subgraph/{ORG_A}", org_a_sub),
-        (f"/graph-search/filtered-subgraph/{ORG_B}", org_b_sub),
-        (f"/graph-search/node/{ORG_A}", org_a_edges),
-    ]
+    return {NODE_VID: node_subgraph, ORG_A: org_a_sub, ORG_B: org_b_sub}
+
+
+def _governance() -> dict[str, list]:
+    """org_id -> [(expert_id, position), ...]。"""
+    return {ORG_A: [("person_x", "董事长")], ORG_B: []}
 
 
 @pytest.mark.asyncio
-async def test_topn_via_graph_search_only(monkeypatch):
-    """纯 graph-search API（不碰 MySQL），验证 TOP-N 排序 + 风险 + 专家关联。"""
-    svc = IndustryNodeTopEventsService(base_url="http://x")
-    monkeypatch.setattr(_httpx(), "AsyncClient", lambda: _FakeAsyncClient(_routes()))
+async def test_topn_via_graph_helpers(monkeypatch):
+    """直调 infra graph client 的 helper 已 mock，验证 TOP-N 排序 + 风险 + 专家关联。"""
+    subs = _subgraphs()
+    govs = _governance()
+    monkeypatch.setattr(
+        mod,
+        "_subgraph_sync",
+        lambda client, vid, edge_types, limit: subs.get(vid, {"nodes": [], "edges": []}),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_fetch_org_governance_sync",
+        lambda client, org_id: govs.get(org_id, []),
+    )
+    monkeypatch.setattr(mod, "_get_dev_client", lambda: None)  # 不连真实图
+    monkeypatch.setattr(mod, "_result_cache", {})  # 清缓存，避免用例间串
 
+    svc = IndustryNodeTopEventsService(base_url="http://x")
     resp = await svc.run(
         IndustryNodeTopEventsRequest(chain_node_id="IC_test", top_n=3, max_orgs=10)
     )
@@ -169,6 +135,33 @@ async def test_topn_via_graph_search_only(monkeypatch):
     # 置信度：风险等级 高 → 0.9；bankruptcy 事件 → 0.9
     assert resp.confidence == 0.9
     assert resp.top_events[0].confidence == 0.9
+
+
+@pytest.mark.asyncio
+async def test_topn_result_cache_hit(monkeypatch):
+    """同参数二次请求命中 60s 缓存，_subgraph_sync 只被调用一次。"""
+    subs = _subgraphs()
+    govs = _governance()
+    call_count = {"n": 0}
+
+    def _counted_subgraph(client, vid, edge_types, limit):
+        call_count["n"] += 1
+        return subs.get(vid, {"nodes": [], "edges": []})
+
+    monkeypatch.setattr(mod, "_subgraph_sync", _counted_subgraph)
+    monkeypatch.setattr(
+        mod, "_fetch_org_governance_sync", lambda client, org_id: govs.get(org_id, [])
+    )
+    monkeypatch.setattr(mod, "_get_dev_client", lambda: None)
+    monkeypatch.setattr(mod, "_result_cache", {})
+
+    svc = IndustryNodeTopEventsService()
+    req = IndustryNodeTopEventsRequest(chain_node_id="IC_test", top_n=3, max_orgs=10)
+    r1 = await svc.run(req)
+    r2 = await svc.run(req)
+    assert r1.chain_node_name == r2.chain_node_name == "测试节点"
+    # 第二次命中缓存，_subgraph_sync 不再被调用（第一次会调 1 次链节点 + 2 次企业 = 3 次）
+    assert call_count["n"] == 3
 
 
 def test_derive_analysis_dimensions():

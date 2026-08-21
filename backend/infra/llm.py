@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 
 from openai import OpenAI
 
@@ -25,7 +24,21 @@ class LLMClient:
         model: str = DEFAULT_MODEL,
     ) -> None:
         self._model = model
+        self._base_url = base_url
+        self._api_key = api_key
         self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=DEFAULT_TIMEOUT)
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
+    @property
+    def api_key(self) -> str:
+        return self._api_key
 
     def synthesize(self, prompt: str, max_tokens: int = DEFAULT_MAX_TOKENS) -> str | None:
         try:
@@ -45,22 +58,32 @@ class LLMClient:
 _client: LLMClient | None = None
 
 
+def _resolve_settings() -> tuple[str, str, str] | None:
+    """通过 service.llm_config 解析当前 LLM 配置（DB 优先，env 回退）。失败返回 None。"""
+    try:
+        from service.llm_config import resolve_llm_settings
+
+        return resolve_llm_settings()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("读取 LLM 配置失败，LLM 功能降级: %s", exc)
+        return None
+
+
 def get_llm_client() -> LLMClient | None:
     """进程级单例。无 key 时返回 None（调用方走降级）。"""
     global _client
     if _client is not None:
         return _client
-    api_key = os.getenv("LLM_API_KEY") or os.getenv("ZHIPUAI_API_KEY")
-    if not api_key:
-        logger.info("LLM_API_KEY 未配置，LLM 功能降级")
+    settings = _resolve_settings()
+    if settings is None:
+        logger.info("未配置 LLM（DB 与 env 均无默认配置），LLM 功能降级")
         return None
-    model = os.getenv("LLM_MODEL", DEFAULT_MODEL)
-    base_url = os.getenv("LLM_BASE_URL", DEFAULT_BASE_URL)
+    api_key, base_url, model = settings
     _client = LLMClient(api_key=api_key, base_url=base_url, model=model)
     return _client
 
 
 def reset_llm_client() -> None:
-    """测试用：重置单例。"""
+    """重置单例。配置变更后由 service 层调用，下次 get_llm_client 重建。"""
     global _client
     _client = None

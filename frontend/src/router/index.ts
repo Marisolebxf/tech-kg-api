@@ -12,6 +12,7 @@ import ManualReviewWorkspaceView from '../views/platform/ManualReviewWorkspaceVi
 import ProcessInstanceDetailView from '../views/platform/ProcessInstanceDetailView.vue'
 import TaskCenterView from '../views/platform/TaskCenterView.vue'
 import SchemaBrowserView from '../views/platform/SchemaBrowserView.vue'
+import GraphBuildView from '../views/platform/GraphBuildView.vue'
 import ConfigurationManagementView from '../views/platform/ConfigurationManagementView.vue'
 import PipelineDesignerView from '../views/platform/PipelineDesignerView.vue'
 
@@ -66,6 +67,7 @@ export const router = createRouter({
     { path: '/pipelines', name: 'pipelines', component: PipelineDesignerView, meta: { title: '自定义抽取 Pipeline' } },
     { path: '/configurations', name: 'configurations', component: ConfigurationManagementView, meta: { title: '配置管理' } },
     { path: '/tasks', name: 'tasks', component: TaskCenterView, meta: { title: '图谱构建' } },
+    { path: '/graph-build', name: 'graph-build', component: GraphBuildView, meta: { title: '图谱构建' } },
     { path: '/manual-review', name: 'manual-review', component: OperationsCenterView, props: { mode: 'review' }, meta: { title: '人工处理平台' } },
     { path: '/manual-review/task/:instanceId', name: 'manual-review-detail', component: ManualReviewWorkspaceView, meta: { title: '人工处理详情' } },
     { path: '/user-center', name: 'user-center', component: UserCenterView, meta: { title: '个人中心' } },
@@ -88,12 +90,11 @@ export const router = createRouter({
   ],
 })
 
-const authEnabled = import.meta.env.VITE_AUTH_ENABLED !== 'false'
-
 router.beforeEach(async (to) => {
-  if (!authEnabled) {
-    return to.path === '/login' ? { path: '/overview' } : true
+  if (import.meta.env.VITE_AUTH_ENABLED === 'false') {
+    return to.name === 'login' ? { path: '/overview' } : true
   }
+
   if (to.meta.public) return true
 
   const authStore = useAuthStore()

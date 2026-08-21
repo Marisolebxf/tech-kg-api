@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import os
+import threading
+import time
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 from typing import Any
@@ -15,6 +18,17 @@ GRAPH_SPACE = os.getenv("KG_GRAPH_SPACE", "dev")
 MAX_GRAPH_ITEMS = 200
 MAX_CANDIDATE_PATHS = 1000
 MAX_RESULT_PATHS = 50
+
+# 60s 进程内结果缓存：读多写少，同参数请求复用，避免高并发打爆 graph-search/trs-graph。
+_RESULT_CACHE_TTL = 60.0
+_result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_result_cache_lock = threading.Lock()
+
+
+def clear_caches() -> None:
+    """清空进程内缓存（测试隔离用）。"""
+    _result_cache.clear()
+
 
 RELATION_GROUPS: tuple[tuple[str, set[str]], ...] = (
     (
@@ -77,9 +91,16 @@ class GraphQueryApiClient:
         *,
         timeout: float = 60.0,
         auth_headers: Mapping[str, str] | None = None,
+        app: Any = None,
     ) -> None:
+        # 进程内 ASGI transport：替代真实 HTTP 回环 8200，消除 socket/accept 队列开销
+        # 与高并发下的自调用饱和。方法体、路径、错误语义（raise_for_status/ValueError→404/
+        # GraphQueryApiError）保持不变。app 由 handler 传 request.app，避免在 service 里 import main。
         self._client = httpx.AsyncClient(
-            base_url=base_url.rstrip("/"), timeout=timeout, headers=auth_headers
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://testserver/api/v1",
+            timeout=timeout,
+            headers=auth_headers,
         )
 
     async def __aenter__(self) -> GraphQueryApiClient:
@@ -128,13 +149,37 @@ class ExpertIndirectRelationApiService(KGModuleScaffoldService):
         *,
         api_base_url: str,
         auth_headers: Mapping[str, str] | None = None,
+        app: Any = None,
     ) -> dict[str, Any]:
         core_id = _person_vid(body.core_node_id)
-        async with GraphQueryApiClient(api_base_url, auth_headers=auth_headers) as graph_api:
-            core_node = await graph_api.get_node(core_id)
-            subgraph = await graph_api.get_subgraph(core_id, depth=body.path_depth)
+        cache_key = f"{core_id}|{tuple(body.relation_types)}|{body.path_depth}|{body.min_strength}"
+        with _result_cache_lock:
+            entry = _result_cache.get(cache_key)
+        if entry and entry[0] > time.monotonic():
+            return entry[1]
+
+        async with GraphQueryApiClient(
+            api_base_url, auth_headers=auth_headers, app=app
+        ) as graph_api:
+            # get_node 与 get_subgraph 入参都是 core_id，互不依赖，并行拉取。
+            # return_exceptions + 节点不存在(ValueError→404)优先抛，保留原串行的错误码语义。
+            core_node_r, subgraph_r = await asyncio.gather(
+                graph_api.get_node(core_id),
+                graph_api.get_subgraph(core_id, depth=body.path_depth),
+                return_exceptions=True,
+            )
+        if isinstance(core_node_r, ValueError):
+            raise core_node_r
+        if isinstance(core_node_r, Exception):
+            raise core_node_r
+        if isinstance(subgraph_r, Exception):
+            raise subgraph_r
+        core_node, subgraph = core_node_r, subgraph_r
         result = _build_result(core_node, subgraph, body)
-        return {"structuredResult": result}
+        payload = {"structuredResult": result}
+        with _result_cache_lock:
+            _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, payload)
+        return payload
 
 
 def _person_vid(node_id: str) -> str:

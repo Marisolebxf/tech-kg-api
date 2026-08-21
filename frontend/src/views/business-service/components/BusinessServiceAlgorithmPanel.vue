@@ -1543,10 +1543,22 @@ async function handleRun() {
     } else if (props.moduleInfo.key === 'paper-cooperation') {
       const expertAId = parameterValues.value.expertAId?.trim()
       const expertBId = parameterValues.value.expertBId?.trim()
-      if (!expertAId || !expertBId) {
-        showToast('请填写 expertAId 和 expertBId', 'warning')
+      const missingExperts = [
+        !expertAId ? { field: 'expertAId', message: '请输入专家 A 唯一标识' } : null,
+        !expertBId ? { field: 'expertBId', message: '请输入专家 B 唯一标识' } : null,
+      ].filter((item): item is { field: string; message: string } => item !== null)
+      if (missingExperts.length) {
+        parameterErrors.value = Object.fromEntries(
+          missingExperts.map(({ field, message }) => [field, message]),
+        )
+        liveResponse.value = null
+        liveApiPayload.value = null
+        liveError.value = null
+        resultMode.value = 'summary'
+        showToast('请完善必填项后再执行', 'warning')
         return
       }
+      parameterErrors.value = {}
       const body: Record<string, any> = { expertAId, expertBId }
       const startTime = normalizeMonthBoundary(parameterValues.value.startTime, 'start')
       const endTime = normalizeMonthBoundary(parameterValues.value.endTime, 'end')

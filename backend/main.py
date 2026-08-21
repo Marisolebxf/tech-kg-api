@@ -106,7 +106,7 @@ async def validation_error_handler(request, exc: RequestValidationError) -> JSON
         for e in exc.errors()
     ]
     return JSONResponse(
-        status_code=200,
+        status_code=422,
         content=ApiResponse(
             code=422, success=False, msg="请求参数校验失败", data=errors
         ).model_dump(),

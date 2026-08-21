@@ -66,7 +66,7 @@ class WorkflowDefinitionRequest(BaseModel):
 
 
 class WorkflowExecuteRequest(BaseModel):
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict, strict=True)
     workflow_id: str | None = Field(default=None, alias="workflowId")
     llm_config_id: str | None = Field(default=None, alias="llmConfigId")
     since: str | None = None

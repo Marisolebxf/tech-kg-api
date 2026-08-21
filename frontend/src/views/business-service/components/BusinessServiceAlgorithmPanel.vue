@@ -114,6 +114,8 @@ const isLiveColleague = computed(() => props.moduleInfo.key === 'expert-colleagu
 const isLiveModule = computed(() => isLiveAlumni.value || isLiveCoop.value || isLiveColleague.value)
 const isPanorama = computed(() => props.moduleInfo.key === 'industry-chain-panorama')
 const isExpertDirect = computed(() => props.moduleInfo.key === 'expert-direct')
+const isEnterpriseRelation = computed(() => props.moduleInfo.key === 'enterprise-relation')
+const isIndustryChainEvent = computed(() => props.moduleInfo.key === 'industry-chain-event')
 
 function formatConfidence(
   value: number | undefined,
@@ -1208,6 +1210,17 @@ function optionalParam(value: string | undefined): string | undefined {
   return cleaned ? cleaned : undefined
 }
 
+/**
+ * 将两个 month 选择器值（YYYY-MM）合并为后端 time_range 期望的 "YYYY-YYYY" 年份区间。
+ * 后端用 partition("-") 取前后各 4 位作年份上下界，故只取年份；留空端表示不设该侧边界。
+ */
+function buildTimeRange(start?: string, end?: string): string {
+  const lo = (start ?? '').slice(0, 4)
+  const hi = (end ?? '').slice(0, 4)
+  if (!lo && !hi) return ''
+  return `${lo}-${hi}`
+}
+
 /** 解析「2020-2026」「2020~2026」「2020/2026」或单边「2020」为 API 起止时间。 */
 function parseTimeRange(raw: string | undefined): { start?: string; end?: string } {
   if (!raw) return {}
@@ -1399,25 +1412,74 @@ async function handleRun() {
         selectedGraphNodeId.value = null
         selectedGraphEdgeId.value = null
       }
-    } else if (props.moduleInfo.key === 'enterprise-relation' || props.moduleInfo.key === 'industry-chain-event') {
-      // 重点关注科技企业关系 / 产业链点 TOP-N 事件：走通用 kg-service 端点
+    } else if (isEnterpriseRelation.value) {
+      // 重点关注科技企业关系
+      const expertId = parameterValues.value.expert_id?.trim()
+      if (!expertId) {
+        parameterErrors.value = { expert_id: '请输入专家唯一标识' }
+        liveResponse.value = null
+        liveApiPayload.value = null
+        liveError.value = null
+        resultMode.value = 'summary'
+        showToast('请完善必填项后再执行', 'warning')
+        return
+      }
+      parameterErrors.value = {}
       const body = buildPayload()
       const res = await invokeKgService(props.moduleInfo.endpoint, body, 60000) as Record<string, any>
       liveResponse.value = res
-      liveApiPayload.value = {
-        describe: liveDescribe.value,
-        request: body,
-        response: res,
-      }
+      liveApiPayload.value = { describe: liveDescribe.value, request: body, response: res }
       if (res?.success === false || (res?.code !== undefined && res.code !== 200)) {
         liveError.value = (res?.msg as string) || `业务码 ${res?.code}`
         showToast(liveError.value, 'warning')
         resultMode.value = 'api'
       } else {
+        const count = Number(res?.data?.enterprises ?? 0)
+        liveError.value = null
+        showToast(count ? `命中 ${count} 家关联企业` : '调用成功，暂无关联企业', count ? 'success' : 'info')
         resultMode.value = 'summary'
         selectedGraphNodeId.value = null
         selectedGraphEdgeId.value = null
-        showToast('调用成功', 'success')
+      }
+    } else if (isIndustryChainEvent.value) {
+      // 产业链点 TOP-N 事件关系
+      const chainNodeId = parameterValues.value.chain_node_id?.trim()
+      if (!chainNodeId) {
+        parameterErrors.value = { chain_node_id: '请输入产业链节点标识' }
+        liveResponse.value = null
+        liveApiPayload.value = null
+        liveError.value = null
+        resultMode.value = 'summary'
+        showToast('请完善必填项后再执行', 'warning')
+        return
+      }
+      parameterErrors.value = {}
+      const topN = optionalParam(parameterValues.value.top_n)
+      const maxOrgs = optionalParam(parameterValues.value.max_orgs)
+      const eventType = optionalParam(parameterValues.value.event_type)
+      const timeRange = buildTimeRange(
+        optionalParam(parameterValues.value.time_range_start),
+        optionalParam(parameterValues.value.time_range_end),
+      )
+      const body: Record<string, any> = { chain_node_id: chainNodeId }
+      if (topN) body.top_n = Number(topN)
+      if (maxOrgs) body.max_orgs = Number(maxOrgs)
+      if (eventType) body.event_type = eventType
+      if (timeRange) body.time_range = timeRange
+      const res = await invokeKgService(props.moduleInfo.endpoint, body, 60000) as Record<string, any>
+      liveResponse.value = res
+      liveApiPayload.value = { describe: liveDescribe.value, request: body, response: res }
+      if (res?.success === false || (res?.code !== undefined && res.code !== 200)) {
+        liveError.value = (res?.msg as string) || `业务码 ${res?.code}`
+        showToast(liveError.value, 'warning')
+        resultMode.value = 'api'
+      } else {
+        const count = Number(res?.data?.events ?? 0)
+        liveError.value = null
+        showToast(count ? `返回 ${count} 条 TOP 事件` : '调用成功，暂无事件', count ? 'success' : 'info')
+        resultMode.value = 'summary'
+        selectedGraphNodeId.value = null
+        selectedGraphEdgeId.value = null
       }
     } else if (props.moduleInfo.key === 'paper-cooperation') {
       const expertAId = parameterValues.value.expertAId?.trim()
@@ -1506,10 +1568,27 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       </div>
       <img class="field-info-icon" :src="iconInfo" alt="" aria-hidden="true" />
     </div>
-    <div class="service-console__params">
+    <div
+      class="service-console__params"
+      :class="{ 'service-console__params--inline': isEnterpriseRelation || isIndustryChainEvent }"
+    >
       <label v-for="field in moduleInfo.requestFields" :key="field.name">
         <span><i v-if="field.required === '是'">*</i>{{ field.name }}</span>
+        <select
+          v-if="field.type === 'boolean'"
+          :key="`${field.name}-${paramResetToken}`"
+          :class="{ 'is-invalid': Boolean(parameterErrors[field.name]) }"
+          :value="parameterValues[field.name] ?? ''"
+          :aria-invalid="Boolean(parameterErrors[field.name])"
+          :title="parameterErrors[field.name] || field.description"
+          @input="handleParameterInput(field.name, $event)"
+        >
+          <option value="">{{ field.description }}</option>
+          <option value="是">是</option>
+          <option value="否">否</option>
+        </select>
         <input
+          v-else
           :type="field.type === 'month' ? 'month' : 'text'"
           :key="`${field.name}-${paramResetToken}`"
           :class="{ 'is-invalid': Boolean(parameterErrors[field.name]) }"
@@ -1782,6 +1861,27 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   border-color: #f53f3f;
   outline: none;
   box-shadow: 0 0 0 2px rgb(245 63 63 / 10%);
+}
+
+.service-console__params select {
+  width: 100%;
+  height: 36px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.service-console__params select.is-invalid {
+  border-color: #f53f3f;
+}
+
+/* 重点关注科技企业关系 / 产业链点 TOP-N：入参排成一行（5 或 6 个，桌面宽屏单行排满） */
+.service-console__params--inline {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
 }
 
 .service-console__field-error {

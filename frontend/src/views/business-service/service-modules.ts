@@ -505,11 +505,11 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '重点关注科技企业关系服务围绕科技专家或人才，通过挖掘知识图谱中与专家相关的企业关联数据，运用企业关联与角色定位算法，构建专家与重点关注科技企业之间的关系。服务会标注专家在企业中的角色、合作领域、合作时间与合作模式，同时关联企业的行业地位、技术方向与经营状况，帮助用户了解科技专家与产业界的合作关联及资源对接情况。',
     requestFields: [
-      { name: 'expert_id', type: 'string', required: '是', description: '专家唯一标识 VID' },
-      { name: 'enterprise_name', type: 'string', required: '否', description: '企业名称筛选（模糊）' },
-      { name: 'role_type', type: 'string', required: '否', description: '专家企业角色筛选' },
-      { name: 'industry', type: 'string', required: '否', description: '企业行业方向筛选' },
-      { name: 'key_tech_enterprise_only', type: 'boolean', required: '否', description: '只保留重点科技企业（已上市/公司类，排除高校/研究院/MOCK），默认 true' },
+      { name: 'expert_id', type: 'string', required: '是', description: '请输入专家唯一标识' },
+      { name: 'enterprise_name', type: 'string', required: '否', description: '请输入企业名称（模糊筛选，可留空）' },
+      { name: 'role_type', type: 'string', required: '否', description: '请输入角色筛选（如 总经理，可留空）' },
+      { name: 'industry', type: 'string', required: '否', description: '请输入行业方向筛选（可留空）' },
+      { name: 'key_tech_enterprise_only', type: 'boolean', required: '否', description: '只保留重点科技企业（默认是）' },
     ],
     responseFields: [
       { name: 'code', type: 'number', description: '服务状态码（200 成功）' },
@@ -533,7 +533,8 @@ export const serviceModules: ServiceModule[] = [
       { name: 'data.relations[].risk_summary', type: 'string', description: '首要企业风险事件摘要（best-effort 探测）' },
       { name: 'data.evidence', type: 'array', description: '证据链' },
     ],
-    requestExample: { expert_id: 'person_893b432670627d6337b9b7edaab0e917', enterprise_name: '', role_type: '', industry: '', key_tech_enterprise_only: true },
+    // 测试数据不再预填到表单，避免误提交样例；测试用例见 backend/docs/enterprise_relation_test_parameters.md
+    requestExample: { expert_id: '', enterprise_name: '', role_type: '', industry: '', key_tech_enterprise_only: '' },
     responseExample: { code: 0, message: 'success', data: { enterprises: 9, roles: 4, cooperation_fields: ['芯片设计', '智能制造'] } },
     resultRows: [
       { label: '关联企业', value: '9', tone: 'blue' },
@@ -597,11 +598,12 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技产业链点 TOP-N 事件关系服务针对科技产业链中的特定环节或节点，通过收集知识图谱中与该节点相关的事件数据，运用事件影响力评估算法，筛选出影响力排名前 N 的核心事件。服务会构建这些 TOP-N 事件与相关科技专家或人才的关联关系，分析事件对产业链节点的影响及后续发展趋势，为产业链节点的风险预警与机遇挖掘提供支持。',
     requestFields: [
-      { name: 'chain_node_id', type: 'string', required: '是', description: '产业链节点标识（如 IC0007007）' },
-      { name: 'top_n', type: 'number', required: '否', description: '返回事件数量，默认 10' },
-      { name: 'event_type', type: 'string', required: '否', description: '事件类型筛选（financing/bankruptcy/bid/news/…）' },
-      { name: 'time_range', type: 'string', required: '否', description: '事件时间范围筛选，如 2025-2026' },
-      { name: 'max_orgs', type: 'number', required: '否', description: '链节点下最多扫描企业数（按 chain_score 排序），默认 20' },
+      { name: 'chain_node_id', type: 'string', required: '是', description: '请输入产业链节点标识（如 IC0007007）' },
+      { name: 'top_n', type: 'number', required: '否', description: '返回事件数量，取值 1-50，默认 10' },
+      { name: 'event_type', type: 'string', required: '否', description: '事件类型筛选（financing/bankruptcy/bid/news/…，可留空）' },
+      { name: 'time_range_start', type: 'month', required: '否', description: '起始年月（留空不筛）' },
+      { name: 'time_range_end', type: 'month', required: '否', description: '结束年月（留空不筛）' },
+      { name: 'max_orgs', type: 'number', required: '否', description: '最多扫描企业数，取值 1-50，默认 20' },
     ],
     responseFields: [
       { name: 'code', type: 'number', description: '服务状态码（200 成功）' },
@@ -627,7 +629,8 @@ export const serviceModules: ServiceModule[] = [
       { name: 'data.opportunity', type: 'string', description: '机遇挖掘分析（标书维度）' },
       { name: 'data.evidence', type: 'array', description: '证据链' },
     ],
-    requestExample: { chain_node_id: 'IC0007007', top_n: 5, event_type: '', time_range: '', max_orgs: 50 },
+    // 测试数据不再预填到表单，避免误提交样例；测试用例见 backend/docs/industry_chain_topn_test_parameters.md
+    requestExample: { chain_node_id: '', top_n: '', event_type: '', time_range_start: '', time_range_end: '', max_orgs: '' },
     responseExample: { code: 0, message: 'success', data: { events: 10, experts: 18, enterprises: 24, risk_level: '中' } },
     resultRows: [
       { label: 'TOP事件', value: '10', tone: 'blue' },

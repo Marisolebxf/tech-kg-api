@@ -119,9 +119,10 @@ const EXPERT_DIRECT_RELATION_ENDPOINT = '/v1/kg-construction/expert-direct-relat
  */
 export function queryExpertDirectRelation(
   request: ExpertDirectRelationQueryRequest,
+  signal?: AbortSignal,
 ) {
   return http.post<
     ExpertDirectRelationQueryResponse,
     ExpertDirectRelationQueryResponse
-  >(EXPERT_DIRECT_RELATION_ENDPOINT, request)
+  >(EXPERT_DIRECT_RELATION_ENDPOINT, request, { signal })
 }

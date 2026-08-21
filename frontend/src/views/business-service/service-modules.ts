@@ -1,7 +1,13 @@
 export type ServiceField = {
   name: string
+  /** 表单展示名；缺省时用 name。用于消除接口字段名在界面上的歧义。 */
+  label?: string
   type: string
+  /** 表单控件类型；缺省时按 type 渲染。'month-calendar' = 日历式年月下拉。 */
+  ui?: 'month-calendar'
   required?: string
+  /** 输入框占位提示：用中文解释这个字段是什么，并给一个可直接使用的测试值。缺省时退回 description。 */
+  placeholder?: string
   description: string
   options?: readonly string[]
 }
@@ -38,6 +44,8 @@ export type ServiceModule = {
   requestFields: ServiceField[]
   responseFields: ServiceField[]
   requestExample: Record<string, string | number | boolean | string[]>
+  /** 为 false 时参数表单初始为空，requestExample 只作为接口文档示例，不回填表单。 */
+  prefillFormFromExample?: boolean
   responseExample: Record<string, unknown>
   resultRows: ServiceResultRow[]
   summaryRows: ServiceSummaryRow[]
@@ -74,13 +82,14 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技专家 / 人才直接关系服务通过收集科技专家或人才在各类场景中的直接交互数据，结合知识图谱中已有的实体属性与关系信息，运用语义匹配与关系验证算法，识别并构建专家或人才之间的直接关联。该服务会对直接关系的类型进行精准分类，同时记录关系发生的时间、场景及相关成果，形成结构化的直接关系数据，为后续的关系分析与网络构建提供基础。',
     requestFields: [
-      { name: 'expertAId', type: 'string', required: '否', description: '起点专家 scholar_id / VID / 姓名' },
-      { name: 'expertBId', type: 'string', required: '否', description: '另一位专家 scholar_id / VID / 姓名' },
-      { name: 'institution', type: 'string', required: '否', description: '机构关键词，任一端命中即保留' },
-      { name: 'startTime', type: 'string', required: '否', description: '关系起始时间（如 2020-01）' },
+      { name: 'expertAId', label: '专家A', type: 'string', required: '是', placeholder: '请输入专家A，如 person_4G7t0B0t', description: '起点专家 scholar_id / VID / 姓名，必填' },
+      { name: 'expertBId', label: '专家B', type: 'string', required: '否', placeholder: '选填，专家B，如 person_CE4825106', description: '另一位专家 scholar_id / VID / 姓名；留空则返回专家A的全部直接关系' },
+      { name: 'institution', label: '机构关键词', type: 'string', required: '否', placeholder: '选填，机构关键词，如 新加坡国立大学', description: '机构关键词，任一端命中即保留' },
+      { name: 'startTime', label: '关系建立起始时间', type: 'month', ui: 'month-calendar', required: '否', placeholder: '选填，选择年月，如 2020-01', description: '筛选条件：只保留关系建立时间不早于该年月的直接关系；留空表示不限时间' },
     ],
     responseFields: commonResponseFields,
     requestExample: { expertAId: '王祎', expertBId: '', institution: '', startTime: '' },
+    prefillFormFromExample: false,
     responseExample: { code: 0, message: 'success', data: { relation_type: '论文合作', relation_count: 12, scenario: '科研合作', confidence: 0.94 } },
     resultRows: [
       { label: '直接关系', value: '12', tone: 'blue' },

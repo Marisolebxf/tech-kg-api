@@ -164,6 +164,7 @@ const panoramaResponse = ref<IndustryChainPanoramaQueryResponse | null>(null)
 const panoramaError = ref<string | null>(null)
 const expertDirectResponse = ref<ExpertDirectRelationQueryResponse | null>(null)
 const expertDirectError = ref<string | null>(null)
+let expertDirectAbortController: AbortController | null = null
 const expertIndirectResponse = ref<ExpertIndirectRelationResponse | null>(null)
 const expertIndirectError = ref<string | null>(null)
 const isLiveAlumni = computed(() => props.moduleInfo.key === 'expert-alumni')
@@ -1646,11 +1647,16 @@ function normalizeMonthBoundary(
   return normalized + '-' + String(lastDay).padStart(2, '0')
 }
 function resetParameters({ notify = true }: { notify?: boolean } = {}) {
+  expertDirectAbortController?.abort()
+  expertDirectAbortController = null
+  running.value = false
   parameterErrors.value = {}
   parameterValues.value = Object.fromEntries(
     props.moduleInfo.requestFields.map((field) => [
       field.name,
-      formatValue(props.moduleInfo.requestExample[field.name]),
+      props.moduleInfo.prefillFormFromExample === false
+        ? ''
+        : formatValue(props.moduleInfo.requestExample[field.name]),
     ]),
   )
   paramResetToken.value += 1
@@ -1774,9 +1780,21 @@ async function handleRun() {
   }
 
   if (isExpertDirect.value) {
+    const expertAId = (parameterValues.value.expertAId ?? '').trim()
+    if (!expertAId) {
+      parameterErrors.value = { expertAId: '请输入专家A' }
+      running.value = false
+      showToast('请完善必填项后再执行', 'warning')
+      return
+    }
+    parameterErrors.value = {}
+    expertDirectAbortController?.abort()
+    const controller = new AbortController()
+    expertDirectAbortController = controller
     try {
       const request = buildExpertDirectRequest()
-      const response = await queryExpertDirectRelation(request)
+      const response = await queryExpertDirectRelation(request, controller.signal)
+      if (controller.signal.aborted) return
       expertDirectResponse.value = response
       expertDirectError.value = null
       selectedGraphNodeId.value = null
@@ -1785,11 +1803,15 @@ async function handleRun() {
       lastTestTime.value = formatTimestamp(now)
       lastUpdateTime.value = now.getTime()
     } catch (error) {
+      if (controller.signal.aborted) return
       const message = error instanceof Error ? error.message : String(error)
       expertDirectError.value = message
       expertDirectResponse.value = null
     } finally {
-      running.value = false
+      if (expertDirectAbortController === controller) {
+        running.value = false
+        expertDirectAbortController = null
+      }
     }
     return
   }
@@ -2202,7 +2224,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         :key="field.name"
         :class="{ 'has-error': Boolean(parameterErrors[field.name]) }"
       >
-        <span><i v-if="field.required === '是'">*</i>{{ field.name }}</span>
+        <span
+          ><i v-if="field.required === '是'">*</i
+          >{{ field.label ?? field.name }}</span
+        >
         <select
           v-if="field.type === 'select'"
           :key="`${field.name}-${paramResetToken}`"
@@ -2250,7 +2275,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           />
         </ElSelect>
         <ElConfigProvider
-          v-else-if="field.type === 'month' && isLiveCoop"
+          v-else-if="
+            field.type === 'month' && (isLiveCoop || field.ui === 'month-calendar')
+          "
           :locale="zhCn"
         >
           <ElDatePicker
@@ -2260,12 +2287,13 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             format="YYYY年MM月"
             value-format="YYYY-MM"
             :placeholder="
-              field.name === 'timeRangeStart'
+              field.placeholder ??
+              (field.name === 'timeRangeStart'
                 ? '选择开始年月，如 2020-01'
-                : '选择结束年月，如 2020-12'
+                : '选择结束年月，如 2020-12')
             "
             clearable
-            :aria-label="`${field.name}年月`"
+            :aria-label="`${field.label ?? field.name}年月`"
             @update:model-value="clearParameterError(field.name)"
           />
         </ElConfigProvider>
@@ -2274,7 +2302,8 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :type="field.type === 'month' ? 'month' : 'text'"
           :key="`${field.name}-${paramResetToken}`"
           :value="parameterValues[field.name] ?? ''"
-          :placeholder="field.description"
+          :placeholder="field.placeholder ?? field.description"
+          :title="field.description"
           :aria-invalid="Boolean(parameterErrors[field.name])"
           @input="handleParameterInput(field.name, $event)"
         />

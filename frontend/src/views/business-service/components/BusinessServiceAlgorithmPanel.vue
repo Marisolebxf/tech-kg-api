@@ -182,6 +182,9 @@ const isExpertDirect = computed(() => props.moduleInfo.key === 'expert-direct')
 const isEnterpriseRelation = computed(
   () => props.moduleInfo.key === 'enterprise-relation',
 )
+const isIndustryChainEvent = computed(
+  () => props.moduleInfo.key === 'industry-chain-event',
+)
 const isExpertIndirect = computed(
   () => props.moduleInfo.key === 'node-indirect',
 )
@@ -2164,7 +2167,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
     </div>
     <div
       class="service-console__params"
-      :class="{ 'service-console__params--inline': isEnterpriseRelation }"
+      :class="{
+        'service-console__params--inline':
+          isEnterpriseRelation || isIndustryChainEvent,
+      }"
     >
       <label
         v-for="field in moduleInfo.requestFields"

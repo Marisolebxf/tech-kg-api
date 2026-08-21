@@ -45,6 +45,11 @@ const liveDescribe = ref<Record<string, unknown> | null>(null)
 const isLiveAlumni = computed(() => props.moduleInfo.key === 'expert-alumni')
 const isLiveCoop = computed(() => props.moduleInfo.key === 'two-point-achievement')
 const isLiveModule = computed(() => isLiveAlumni.value || isLiveCoop.value)
+const hasLiveResult = computed(() => (
+  isLiveAlumni.value
+    ? liveAlumniResult.value !== null
+    : isLiveCoop.value && liveCoopResult.value !== null
+))
 
 function mapLiveGraph(nodes: Array<{
   id: string
@@ -101,12 +106,12 @@ const liveModuleGraph = computed(() => {
   return null
 })
 const graphNodes = computed(() => {
-  if (isLiveModule.value) return liveModuleGraph.value?.nodes ?? []
+  if (isLiveModule.value && hasLiveResult.value) return liveModuleGraph.value?.nodes ?? []
   return graphPreset.value.nodes
 })
 const graphEdges = computed(() => {
   const nodes = graphNodes.value
-  const edges = isLiveModule.value
+  const edges = isLiveModule.value && hasLiveResult.value
     ? (liveModuleGraph.value?.edges ?? [])
     : graphPreset.value.edges
   return edges.filter((edge) => (
@@ -239,34 +244,14 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
   }
   if (isLiveAlumni.value) {
     const data = liveAlumniResult.value
-    if (!data) {
-      return [
-        { label: '专家', value: '' },
-        { label: '模式', value: '' },
-        { label: '校友数', value: '' },
-        { label: '维度目录', value: '' },
-        { label: '截断', value: '' },
-        { label: '图空间', value: '' },
-      ]
-    }
+    if (!data) return null
     if (data.summaryRows?.length) {
       return data.summaryRows.map((row) => ({ label: row.label, value: row.value }))
     }
   }
   if (isLiveCoop.value) {
     const data = liveCoopResult.value
-    if (!data) {
-      return [
-        { label: '专家 A', value: '' },
-        { label: '专家 B', value: '' },
-        { label: '合作成果类型', value: '' },
-        { label: '成果总量', value: '' },
-        { label: '成果分布', value: '' },
-        { label: '核心贡献', value: '' },
-        { label: '合作模式', value: '' },
-        { label: '图空间', value: '' },
-      ]
-    }
+    if (!data) return null
     if (data.summaryRows?.length) {
       return data.summaryRows.map((row) => ({ label: row.label, value: row.value }))
     }
@@ -1027,7 +1012,12 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .graph-panel__filters button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
   color: var(--primary);
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -1119,6 +1109,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .result-panel__tabs {
   display: inline-flex;
   gap: 0;
+  min-width: 0;
   padding: 2px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1127,13 +1118,19 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .result-panel__tabs button {
   height: 28px;
-  padding: 0 12px;
+  padding: 0 8px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
+  white-space: nowrap;
   cursor: pointer;
+}
+
+.result-panel :deep(.kg-panel__title) {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .result-panel__tabs button.is-active {
@@ -1422,10 +1419,39 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 @media (max-width: 1280px) {
-  .service-console,
-  .business-service__main,
+  .service-console {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .service-console__head {
+    grid-column: 1 / -1;
+  }
+
   .service-console__params {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .business-service__main {
+    grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr);
+  }
+
+  .graph-panel__filters {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 960px) {
+  .service-console,
+  .business-service__main {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .service-console__params {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .service-console__actions {
+    min-width: 0;
   }
 }
 </style>

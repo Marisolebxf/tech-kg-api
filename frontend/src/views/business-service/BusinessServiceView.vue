@@ -53,9 +53,7 @@ watch(
     <BusinessServiceAlgorithmPanel
       v-if="activeView === 'test'"
       :module-info="moduleInfo"
-      :modules="serviceModules"
       :response-json="responseJson"
-      @select-module="selectedModuleKey = $event"
     />
     <BusinessServiceContractPanel
       v-else

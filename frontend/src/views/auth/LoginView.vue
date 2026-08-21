@@ -90,13 +90,14 @@ onMounted(async () => {
         <p v-if="feedback" class="login-card__error" role="alert">
           {{ feedback }}
         </p>
-        <button
-          type="button"
-          :disabled="submitting || authStore.loading"
+        <a-button
+          type="primary"
+          long
+          :loading="submitting || authStore.loading"
           @click="login"
         >
           {{ submitting ? "正在跳转…" : "使用统一用户中心登录" }}
-        </button>
+        </a-button>
         <small>登录即表示你已获得访问本系统的组织授权。</small>
       </div>
     </section>
@@ -108,8 +109,8 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: minmax(460px, 1.2fr) minmax(420px, 0.8fr);
   min-height: 100vh;
-  color: #172b4d;
-  background: #f4f8ff;
+  color: var(--gkx-text-primary);
+  background: var(--gkx-bg-page);
 }
 
 .login-intro {
@@ -120,35 +121,18 @@ onMounted(async () => {
   padding: 42px clamp(44px, 7vw, 110px);
   overflow: hidden;
   color: #fff;
-  background:
-    radial-gradient(
-      circle at 76% 24%,
-      rgba(73, 193, 255, 0.34),
-      transparent 24%
-    ),
-    radial-gradient(
-      circle at 16% 78%,
-      rgba(105, 94, 255, 0.3),
-      transparent 28%
-    ),
-    linear-gradient(145deg, #092a64 0%, #0d52b5 52%, #168ee0 100%);
+  background: var(--gkx-primary);
 }
 
 .login-intro::after {
   position: absolute;
   inset: 0;
-  opacity: 0.18;
+  opacity: 0.1;
   background-image:
     linear-gradient(rgba(255, 255, 255, 0.16) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.16) 1px, transparent 1px);
   background-size: 48px 48px;
   content: "";
-  mask-image: linear-gradient(
-    135deg,
-    transparent 8%,
-    #000 48%,
-    transparent 92%
-  );
 }
 
 .login-brand,
@@ -174,7 +158,7 @@ onMounted(async () => {
 }
 .login-kicker {
   margin: 0 0 18px;
-  color: #8ed6ff;
+  color: rgba(255, 255, 255, 0.72);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.18em;
@@ -206,9 +190,8 @@ onMounted(async () => {
   gap: 5px;
   padding: 17px;
   border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(10px);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.1);
 }
 .login-intro li strong {
   font-size: 23px;
@@ -230,10 +213,10 @@ onMounted(async () => {
 .login-card {
   width: min(390px, 100%);
   padding: 42px;
-  border: 1px solid #d8e6f7;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 26px 70px rgba(23, 72, 138, 0.13);
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: none;
 }
 .login-card__badge {
   display: inline-flex;
@@ -246,12 +229,12 @@ onMounted(async () => {
 }
 .login-card h2 {
   margin: 22px 0 9px;
-  color: #162b4d;
-  font-size: 30px;
+  color: var(--gkx-text-primary);
+  font-size: 28px;
 }
 .login-card > p {
   margin: 0;
-  color: #73839a;
+  color: var(--gkx-text-secondary);
   font-size: 13px;
   line-height: 1.8;
 }
@@ -262,9 +245,9 @@ onMounted(async () => {
   margin: 28px 0;
   padding: 14px;
   border: 1px solid #dce9fa;
-  border-radius: 10px;
-  background: #f7fbff;
-  color: #667993;
+  border-radius: 6px;
+  background: var(--gkx-bg-subtle);
+  color: var(--gkx-text-secondary);
   font-size: 11px;
   line-height: 1.65;
 }
@@ -287,27 +270,15 @@ onMounted(async () => {
 .login-card .login-card__error {
   margin: -12px 0 18px;
   padding: 10px 12px;
-  border-radius: 7px;
+  border-radius: 4px;
   background: #fff0ee;
   color: #b42318;
 }
-.login-card button {
+.login-card :deep(.arco-btn) {
   width: 100%;
-  height: 46px;
-  border: 0;
-  border-radius: 8px;
-  background: linear-gradient(90deg, #165dff, #168ee0);
-  color: #fff;
-  font: 600 14px inherit;
-  cursor: pointer;
-  box-shadow: 0 10px 24px rgba(22, 93, 255, 0.22);
-}
-.login-card button:hover {
-  filter: brightness(1.04);
-}
-.login-card button:disabled {
-  cursor: wait;
-  opacity: 0.65;
+  height: 40px;
+  margin-top: 0;
+  font-weight: 500;
 }
 .login-card small {
   display: block;

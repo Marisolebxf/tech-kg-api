@@ -15,7 +15,7 @@ from service.base_module import KGModuleScaffoldService
 
 PERSON_LABELS = ("Person", "Scholar")
 LIST_PAGE_SIZE = 50
-LIST_MAX_PAGES = 10
+LIST_MAX_PAGES = 250
 EDGE_LIMIT = 200
 
 # 进程内 TTL 缓存：读多写少的图查询，60s 内复用，避免高并发下打爆 trs-graph。

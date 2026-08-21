@@ -116,5 +116,6 @@ export function queryExpertCooperationAchievement(body: CooperationQueryRequest)
   return http.post<ApiResponse<CooperationQueryResult>>(
     '/v1/kg-construction/expert-cooperation-achievements/query',
     body,
+    { timeout: 10_000 },
   )
 }

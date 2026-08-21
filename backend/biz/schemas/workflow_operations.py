@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class UpdatePolicyRequest(BaseModel):
@@ -66,12 +66,22 @@ class WorkflowDefinitionRequest(BaseModel):
 
 
 class WorkflowExecuteRequest(BaseModel):
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict, strict=True)
     workflow_id: str | None = Field(default=None, alias="workflowId")
     llm_config_id: str | None = Field(default=None, alias="llmConfigId")
     since: str | None = None
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("payload")
+    @classmethod
+    def validate_limit(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if "limit" not in value:
+            return value
+        limit = value["limit"]
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit 必须为正整数")
+        return value
 
 
 class WorkflowScheduleRequest(BaseModel):

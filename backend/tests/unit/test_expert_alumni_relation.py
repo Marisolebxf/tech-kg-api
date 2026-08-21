@@ -130,6 +130,35 @@ def test_list_finds_alumni_and_truncation_meta():
     assert "同校" in resp["dimensionsCatalog"]
 
 
+def test_list_scans_beyond_original_500_candidate_limit():
+    source = _node("S1", {"education_background_institution_zh": "测试大学"})
+    pages = []
+    for page in range(11):
+        nodes = [
+            _node(f"P{page * 50 + i}", {"education_background_institution_zh": "其他大学"})
+            for i in range(50)
+        ]
+        pages.append(GraphPagedResult(items=nodes, total=551, limit=50, offset=page * 50))
+    pages.append(
+        GraphPagedResult(
+            items=[_node("TARGET", {"education_background_institution_zh": "测试大学"})],
+            total=551,
+            limit=50,
+            offset=550,
+        )
+    )
+    graph = MagicMock()
+    graph.get_node = MagicMock(return_value=source)
+    graph.get_nodes_by_label = MagicMock(side_effect=pages)
+    graph.get_node_edges = MagicMock(return_value=[])
+    graph._settings = SimpleNamespace(space="dev")
+    resp = _svc(graph).query(expert_id="S1", limit=20)
+    assert resp["total"] == 1
+    assert resp["items"][0]["alumniId"] == "TARGET"
+    assert graph.get_nodes_by_label.call_count == 12
+    assert resp["sourceMeta"]["truncated"] is False
+
+
 def test_no_education_returns_zero():
     a = _node("S1", {"name_zh": "甲"})
     b = _node("S2", {"name_zh": "乙", "education_background_institution_zh": "北大"})

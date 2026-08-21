@@ -1,4 +1,10 @@
 <script setup lang="ts">
+import ElConfigProvider from 'element-plus/es/components/config-provider/index'
+import ElDatePicker from 'element-plus/es/components/date-picker/index'
+import ElSelect, { ElOption } from 'element-plus/es/components/select/index'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
+import 'element-plus/es/components/date-picker/style/css'
+import 'element-plus/es/components/select/style/css'
 import { computed, ref, watch } from 'vue'
 
 import {
@@ -32,6 +38,7 @@ import { getEdgeProvenance, getNodeProvenance, getServiceGraphPreset } from '../
 import type { GraphEdgeData, GraphNodeData, GraphNodeType, GraphPreset } from '../../../data/graph-presets'
 import { invokeKgService } from '../../../api/kgService'
 import type { ServiceModule, ServiceSummaryRow } from '../service-modules'
+import { monthRangeToApiDates } from '../utils/month-range'
 
 type PanoramaLayerKey =
   | 'core_technology'
@@ -95,6 +102,26 @@ const lastTestTime = ref('—')
 const lastUpdateTime = ref<number | null>(null)
 const parameterValues = ref<Record<string, string>>({})
 const parameterErrors = ref<Record<string, string>>({})
+const hasParameterErrors = computed(() => Object.keys(parameterErrors.value).length > 0)
+const achievementTypeOptions = [
+  { label: '论文', value: 'paper' },
+  { label: '专利', value: 'patent' },
+  { label: '项目', value: 'project' },
+] as const
+const educationStageOptions = ['学士', '硕士', '博士'] as const
+const achievementTypeSelection = computed<Array<'paper' | 'patent' | 'project'>>({
+  get: () => (parameterValues.value.achievementTypes || '')
+    .split(',')
+    .filter((value): value is 'paper' | 'patent' | 'project' => (
+      value === 'paper' || value === 'patent' || value === 'project'
+    )),
+  set: (values) => {
+    parameterValues.value = {
+      ...parameterValues.value,
+      achievementTypes: values.join(','),
+    }
+  },
+})
 const liveResponse = ref<Record<string, any> | null>(null)
 const paramResetToken = ref(0)
 const selectedGraphNodeId = ref<string | null>(null)
@@ -261,11 +288,10 @@ function derivedGraphFromResponse(resp: IndustryChainPanoramaQueryResponse): Gra
 
 function buildLiveGraph(res: Record<string, any>, key: string): { nodes: GraphNodeData[]; edges: GraphEdgeData[] } | null {
   const data = res?.data
-  // paper-cooperation 响应没有 .data 包装，直接是 { structuredResult: {...} }
-  if (!data && key !== 'paper-cooperation') return null
+  if (!data) return null
   const nodes: GraphNodeData[] = []
   const edges: GraphEdgeData[] = []
-  const ev = (data?.evidence as string[]) || []
+  const ev = (data.evidence as string[]) || []
   const addNode = (id: string, label: string, nodeType: GraphNodeData['nodeType'], entityType: string, relations = '', confidence = 1) => {
     if (!id || nodes.some((n) => n.id === id)) return
     nodes.push({ id, label: label || id, nodeType, x: 0, y: 0, entityType, confidence, relations, evidence: ev })
@@ -293,70 +319,6 @@ function buildLiveGraph(res: Record<string, any>, key: string): { nodes: GraphNo
     for (const rel of data.relations || []) {
       addNode(rel.expert_id, rel.expert_name, 'expert', '专家', '关联事件')
       addEdge(rel.event_id, rel.expert_id, '关联专家', 'expert')
-    }
-  } else if (key === 'paper-cooperation') {
-    // 保持 preset 图结构（节点位置/类型/边连接）不变，仅用 API 查询结果覆盖节点与边信息
-    const sr = res?.structuredResult || data?.structuredResult
-    if (!sr) return null
-    const preset = getServiceGraphPreset('paper-cooperation')
-    const authors = sr.authorList || []
-    const units = sr.authorUnits || []
-    const cit = sr.citation || {}
-    const topics = sr.paperTopics || []
-    const collabs = sr.coreCollaborators || []
-    const stable = sr.stableTeamMembers || []
-    const tr = sr.cooperationTimeRange || {}
-    const paperCount = sr.cooperationPaperCount ?? 0
-    const levelEntries = Object.entries({ ...(sr.journalLevelCount || {}), ...(sr.conferenceLevelCount || {}) })
-      .filter(([k]) => k !== '未分级')
-    const highLevel = levelEntries.reduce((s, [, v]) => s + (v as number), 0)
-    const unitCount = units.filter(Boolean).length || 2
-    const overrides: Record<string, Partial<GraphNodeData>> = {
-      core: {
-        label: authors[0] || '专家 A',
-        relations: `合作论文 ${paperCount}`,
-        evidence: [`专家 ${authors[0] || '-'}，单位 ${units[0] || '未知机构'}。`],
-      },
-      'expert-1': {
-        label: authors[1] || '专家 B',
-        relations: `合作论文 ${paperCount}`,
-        evidence: [`专家 ${authors[1] || '-'}，单位 ${units[1] || '未知机构'}。`],
-      },
-      'paper-1': {
-        label: `合作论文${paperCount}篇`,
-        relations: `总被引 ${cit.total ?? 0}`,
-        evidence: [`合作时间 ${tr.displayText || '暂无数据'}，最高被引 ${cit.max ?? 0} 次。`],
-      },
-      'org-1': {
-        relations: `单位 ${unitCount}`,
-        evidence: [units.filter(Boolean).join('；') || '暂无单位数据。'],
-      },
-      'topic-1': {
-        label: topics[0] || '论文主题',
-        relations: `方向 ${topics.length}`,
-        evidence: [topics.join('、') || '暂无主题数据。'],
-      },
-      'venue-1': {
-        relations: `高水平论文 ${highLevel}`,
-        evidence: [levelEntries.map(([k, v]) => `${k} ${v} 篇`).join('、') || '暂无分级数据。'],
-      },
-      'expert-2': {
-        relations: `核心人员 ${collabs.length}`,
-        evidence: [`核心合作人员：${collabs.join('、') || '暂无'}。稳定团队：${stable.join('、') || '暂无'}。`],
-      },
-    }
-    const edgeOverrides: Record<string, Partial<GraphEdgeData>> = {
-      pc1: { label: `论文合作 ${paperCount} 篇` },
-      pc2: { label: '共同作者' },
-      pc3: { label: '共同作者' },
-      pc4: { label: `作者单位 ${unitCount}` },
-      pc5: { label: `研究主题 ${topics.length}` },
-      pc6: { label: highLevel > 0 ? `高水平 ${highLevel} 篇` : '发表级别' },
-      pc7: { label: `团队 ${stable.length} 人` },
-    }
-    return {
-      nodes: preset.nodes.map((n) => ({ ...n, ...(overrides[n.id] || {}) })),
-      edges: preset.edges.map((e) => ({ ...e, ...(edgeOverrides[e.id] || {}) })),
     }
   } else {
     return null
@@ -610,7 +572,7 @@ const updateStatus = computed(() => {
 
 function buildLiveSummary(res: Record<string, any>, key: string): Record<string, string> {
   const d = res?.data
-  if (!d && key !== 'paper-cooperation') return {}
+  if (!d) return {}
   const out: Record<string, string> = {}
   if (key === 'enterprise-relation') {
     const r0 = d.relations?.[0] || {}
@@ -643,54 +605,13 @@ function buildLiveSummary(res: Record<string, any>, key: string): Record<string,
     out['节点影响'] = `TOP 事件类型 ${types.join('、') || '无'}，风险等级 ${d.risk_level || '-'}`
     out['发展趋势'] = `近期 TOP 事件 ${d.events ?? 0} 条${years.length ? `，集中在 ${years.join('、')}` : ''}`
     out['机遇挖掘'] = `涉及企业 ${d.enterprises ?? 0} 家，事件类型 ${types.join('、') || '无'}`
-  } else if (key === 'paper-cooperation') {
-    const sr = d?.structuredResult || res?.structuredResult || d || res
-    const tr = sr.cooperationTimeRange || {}
-    const authors = sr.authorList || []
-    const units = sr.authorUnits || []
-    out['核心专家'] = authors[0] ? `${authors[0]}｜${units[0] || ''}` : '-'
-    out['合作专家'] = authors[1] ? `${authors[1]}｜${units[1] || ''}` : '-'
-    out['作者单位'] = units.join('；') || '-'
-    out['合作发表时间'] = tr.displayText || '暂无数据'
-    out['论文主题'] = (sr.paperTopics || []).slice(0, 4).join('、') || '-'
-    out['合作论文数量'] = `${sr.cooperationPaperCount ?? 0} 篇`
-    const jl = sr.journalLevelCount || {}
-    const cl = sr.conferenceLevelCount || {}
-    const levelParts = Object.entries({ ...jl, ...cl }).filter(([k]) => k !== '未分级').map(([k, v]) => `${k} ${v} 篇`)
-    out['期刊/会议级别'] = levelParts.length ? levelParts.join('、') : '暂无分级数据'
-    const cit = sr.citation || {}
-    out['论文被引情况'] = cit.total > 0 ? `总被引 ${cit.total} 次｜最高 ${cit.max} 次` : '暂无数据'
-    out['研究方向'] = (sr.paperTopics || []).slice(0, 5).join('、') || '-'
-    out['共同贡献'] = (sr.sharedContribution || []).join('、') || '-'
-    out['核心合作人员'] = (sr.coreCollaborators || []).join('、') || '暂无数据'
-    out['合作团队特征'] = (sr.stableTeamMembers || []).length > 0 ? `长期稳定合作团队（${sr.stableTeamMembers.length} 人）` : '暂无数据'
   }
   return out
 }
 
-const colleagueSummaryDirectory = (): ServiceSummaryRow[] => [
-  { label: '专家 A', value: '—' },
-  { label: '核心专家机构', value: '—' },
-  { label: '专家 B', value: '—' },
-  { label: '共同机构', value: '—' },
-  { label: '所属部门/团队', value: '—' },
-  { label: '关系生效时段', value: '—' },
-  { label: '任职重叠时间', value: '—' },
-  { label: '共同工作内容', value: '—' },
-  { label: '协作场景', value: '—' },
-  { label: '同事期间成果', value: '—' },
-  { label: '关系判定', value: '—' },
-]
-
 const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
   if (!isLiveModule.value) return null
   if (liveError.value) {
-    if (isLiveColleague.value) {
-      return [
-        { label: '错误信息', value: liveError.value },
-        ...colleagueSummaryDirectory(),
-      ]
-    }
     return [
       { label: '调用状态', value: '失败' },
       { label: '错误信息', value: liveError.value },
@@ -714,7 +635,7 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
   }
   if (isLiveColleague.value) {
     const data = liveResponse.value?.data
-    if (!data) return colleagueSummaryDirectory()
+    if (!data) return [{ label: '查询状态', value: '等待执行' }]
     const summary = data.summary || {}
     return [
       { label: '专家 A', value: summary.coreExpert || '—' },
@@ -1093,9 +1014,10 @@ watch(
     panoramaError.value = null
     expertDirectResponse.value = null
     expertDirectError.value = null
-    resetParameters()
+    resetParameters(false)
     if (isLiveModule.value) {
       void loadModuleDescribe()
+      void handleRun()
     }
   },
   { immediate: true },
@@ -1125,7 +1047,7 @@ function formatValue(value: unknown) {
   return String(value)
 }
 
-function resetParameters() {
+function resetParameters(announce = true) {
   parameterErrors.value = {}
   parameterValues.value = Object.fromEntries(
     props.moduleInfo.requestFields.map((field) => [
@@ -1135,7 +1057,6 @@ function resetParameters() {
   )
   paramResetToken.value += 1
   if (isLiveModule.value) {
-    liveResponse.value = null
     liveAlumniResult.value = null
     liveCoopResult.value = null
     liveApiPayload.value = null
@@ -1147,7 +1068,7 @@ function resetParameters() {
     lastUpdateTime.value = null
     void loadModuleDescribe()
   }
-  showToast('已重置为默认参数', 'info')
+  if (announce) showToast('已重置为默认参数', 'info')
 }
 
 function buildPayload(): Record<string, unknown> {
@@ -1208,15 +1129,6 @@ function optionalParam(value: string | undefined): string | undefined {
   return cleaned ? cleaned : undefined
 }
 
-/** 解析「2020-2026」「2020~2026」「2020/2026」或单边「2020」为 API 起止时间。 */
-function parseTimeRange(raw: string | undefined): { start?: string; end?: string } {
-  if (!raw) return {}
-  const parts = raw.split(/\s*[-~/～至到]\s*/).map((x) => x.trim()).filter(Boolean)
-  if (parts.length >= 2) return { start: parts[0], end: parts[1] }
-  if (parts.length === 1) return { start: parts[0] }
-  return {}
-}
-
 async function handleRun() {
   if (running.value) return
   running.value = true
@@ -1265,12 +1177,41 @@ async function handleRun() {
   }
 
   try {
-    if (isLiveAlumni.value) {
-      const expertId = parameterValues.value.expertId?.trim()
-      if (!expertId) {
-        showToast('请填写 expertId', 'warning')
+    if (isLiveColleague.value) {
+      const expertAId = parameterValues.value.expert_a_id?.trim()
+      const expertBId = parameterValues.value.expert_b_id?.trim()
+      if (!expertAId || !expertBId) {
+        showToast('请填写专家 A 和专家 B', 'warning')
         return
       }
+      const body = {
+        expert_a_id: expertAId,
+        expert_b_id: expertBId,
+        start_time: optionalParam(parameterValues.value.start_time),
+        end_time: optionalParam(parameterValues.value.end_time),
+        limit: 1,
+        offset: 0,
+      }
+      const res = await invokeKgService(props.moduleInfo.endpoint, body, 60000) as Record<string, any>
+      liveResponse.value = res
+      liveApiPayload.value = { request: body, response: res }
+      if (res?.success === false || (res?.code !== undefined && res.code !== 200)) {
+        liveError.value = res?.msg || `业务码 ${res?.code}`
+        showToast(liveError.value || '查询失败', 'warning')
+        resultMode.value = 'api'
+      } else {
+        const total = Number(res?.data?.total || 0)
+        liveError.value = null
+        showToast(total ? '两位专家存在同事关系' : '两位专家不存在有效同事关系', total ? 'success' : 'info')
+        resultMode.value = 'summary'
+      }
+    } else if (isLiveAlumni.value) {
+      const expertId = parameterValues.value.expertId?.trim()
+      if (!expertId) {
+        parameterErrors.value = { expertId: '请输入专家' }
+        return
+      }
+      parameterErrors.value = {}
       const body = {
         expertId,
         targetExpertId: optionalParam(parameterValues.value.targetExpertId),
@@ -1306,59 +1247,44 @@ async function handleRun() {
         selectedGraphNodeId.value = null
         selectedGraphEdgeId.value = null
       }
-    } else if (isLiveColleague.value) {
-      const expertAId = parameterValues.value.expert_a_id?.trim()
-      const expertBId = parameterValues.value.expert_b_id?.trim()
-      const missingExperts = [
-        !expertAId ? { field: 'expert_a_id', label: '专家 A' } : null,
-        !expertBId ? { field: 'expert_b_id', label: '专家 B' } : null,
-      ].filter((item): item is { field: string; label: string } => item !== null)
-      if (missingExperts.length) {
-        parameterErrors.value = Object.fromEntries(
-          missingExperts.map(({ field, label }) => [field, `请输入${label}`]),
-        )
-        liveResponse.value = null
-        liveApiPayload.value = null
-        liveError.value = null
-        resultMode.value = 'summary'
-        showToast('请完善必填项后再执行', 'warning')
-        return
-      }
-      parameterErrors.value = {}
-      const body = {
-        expert_a_id: expertAId,
-        expert_b_id: expertBId,
-        start_time: optionalParam(parameterValues.value.start_time),
-        end_time: optionalParam(parameterValues.value.end_time),
-        limit: 1,
-        offset: 0,
-      }
-      const res = await invokeKgService(props.moduleInfo.endpoint, body, 60000) as Record<string, any>
-      liveResponse.value = res
-      liveApiPayload.value = { request: body, response: res }
-      if (res?.success === false || (res?.code !== undefined && res.code !== 200)) {
-        liveError.value = res?.msg || `业务码 ${res?.code}`
-        showToast(liveError.value || '查询失败', 'warning')
-        resultMode.value = 'api'
-      } else {
-        const total = Number(res?.data?.total || 0)
-        liveError.value = null
-        showToast(total ? '两位专家存在同事关系' : '两位专家不存在有效同事关系', total ? 'success' : 'info')
-        resultMode.value = 'summary'
-      }
     } else if (isLiveCoop.value) {
       const sourceExpertId = parameterValues.value.sourceExpertId?.trim()
       const targetExpertId = parameterValues.value.targetExpertId?.trim()
       if (!sourceExpertId || !targetExpertId) {
-        showToast('请填写 sourceExpertId 与 targetExpertId', 'warning')
+        parameterErrors.value = {
+          ...(!sourceExpertId ? { sourceExpertId: '请输入第一个专家 ID' } : {}),
+          ...(!targetExpertId ? { targetExpertId: '请输入第二个专家 ID' } : {}),
+        }
         return
       }
+      parameterErrors.value = {}
       const typesRaw = optionalParam(parameterValues.value.achievementTypes)
       const achievementTypes = typesRaw
         ? typesRaw.split(/[,，/\s]+/).map((x) => x.trim()).filter(Boolean) as Array<'paper' | 'patent' | 'project'>
         : undefined
-      const { start: timeRangeStart, end: timeRangeEnd } = parseTimeRange(
-        optionalParam(parameterValues.value.timeRange),
+      const startMonth = optionalParam(parameterValues.value.timeRangeStart)
+      const endMonth = optionalParam(parameterValues.value.timeRangeEnd)
+      if ([startMonth, endMonth].some((value) => value && !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(value))) {
+        parameterErrors.value = {
+          ...(startMonth && !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(startMonth)
+            ? { timeRangeStart: '请选择完整的开始年月' }
+            : {}),
+          ...(endMonth && !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(endMonth)
+            ? { timeRangeEnd: '请选择完整的结束年月' }
+            : {}),
+        }
+        return
+      }
+      if (startMonth && endMonth && startMonth > endMonth) {
+        parameterErrors.value = {
+          timeRangeStart: '开始月份不能晚于结束月份',
+          timeRangeEnd: '结束月份不能早于开始月份',
+        }
+        return
+      }
+      const { start: timeRangeStart, end: timeRangeEnd } = monthRangeToApiDates(
+        startMonth,
+        endMonth,
       )
       const body = {
         sourceExpertId,
@@ -1419,39 +1345,6 @@ async function handleRun() {
         selectedGraphEdgeId.value = null
         showToast('调用成功', 'success')
       }
-    } else if (props.moduleInfo.key === 'paper-cooperation') {
-      const expertAId = parameterValues.value.expertAId?.trim()
-      const expertBId = parameterValues.value.expertBId?.trim()
-      if (!expertAId || !expertBId) {
-        showToast('请填写 expertAId 和 expertBId', 'warning')
-        return
-      }
-      const body: Record<string, any> = { expertAId, expertBId }
-      const startTime = optionalParam(parameterValues.value.startTime)
-      const endTime = optionalParam(parameterValues.value.endTime)
-      if (startTime) body.startTime = startTime
-      if (endTime) body.endTime = endTime
-      const res = await invokeKgService(props.moduleInfo.endpoint, body, 60000) as Record<string, any>
-      liveResponse.value = res
-      liveApiPayload.value = { describe: liveDescribe.value, request: body, response: res }
-      if (res?.success === false || (res?.code !== undefined && res.code !== 200)) {
-        liveError.value = (res?.msg as string) || `业务码 ${res?.code}`
-        showToast(liveError.value, 'warning')
-        resultMode.value = 'api'
-      } else {
-        const sr = res?.structuredResult || res?.data?.structuredResult
-        const count = sr?.cooperationPaperCount || 0
-        liveError.value = null
-        showToast(
-          count > 0
-            ? `合作论文 ${count} 篇，被引 ${sr?.citation?.total || 0} 次`
-            : '调用成功，未发现合作论文',
-          count > 0 ? 'success' : 'info',
-        )
-        resultMode.value = 'summary'
-        selectedGraphNodeId.value = null
-        selectedGraphEdgeId.value = null
-      }
     } else {
       await new Promise((resolve) => window.setTimeout(resolve, 360))
     }
@@ -1459,7 +1352,10 @@ async function handleRun() {
     lastTestTime.value = formatTimestamp(now)
     lastUpdateTime.value = now.getTime()
   } catch (error) {
-    const message = error instanceof Error ? error.message : '请求失败'
+    const rawMessage = error instanceof Error ? error.message : '请求失败'
+    const message = /timeout|timed out|ECONNABORTED/i.test(rawMessage)
+      ? '查询超时，请检查后端服务或缩小时间范围后重试'
+      : rawMessage
     liveError.value = message
     liveResponse.value = null
     liveAlumniResult.value = null
@@ -1473,16 +1369,21 @@ async function handleRun() {
 }
 
 function handleParameterInput(fieldName: string, event: Event) {
-  const value = (event.target as HTMLInputElement).value
   parameterValues.value = {
     ...parameterValues.value,
-    [fieldName]: value,
+    [fieldName]: (event.target as HTMLInputElement).value,
   }
-  if (value.trim() && parameterErrors.value[fieldName]) {
-    const nextErrors = { ...parameterErrors.value }
-    delete nextErrors[fieldName]
-    parameterErrors.value = nextErrors
-  }
+  clearParameterError(fieldName)
+}
+
+function clearParameterError(fieldName: string) {
+  const fieldsToClear = fieldName === 'timeRangeStart' || fieldName === 'timeRangeEnd'
+    ? ['timeRangeStart', 'timeRangeEnd']
+    : [fieldName]
+  if (!fieldsToClear.some((name) => parameterErrors.value[name])) return
+  const nextErrors = { ...parameterErrors.value }
+  fieldsToClear.forEach((name) => delete nextErrors[name])
+  parameterErrors.value = nextErrors
 }
 
 function handleSelectGraphNode(node: GraphNodeData) {
@@ -1499,7 +1400,14 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 </script>
 
 <template>
-  <section class="kg-panel service-console">
+  <section
+    class="kg-panel service-console"
+    :class="{
+      'service-console--cooperation': isLiveCoop,
+      'service-console--alumni': isLiveAlumni,
+      'service-console--has-errors': hasParameterErrors,
+    }"
+  >
     <div class="service-console__head">
       <div>
         <h2>{{ moduleInfo.title }}</h2>
@@ -1507,16 +1415,67 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       <img class="field-info-icon" :src="iconInfo" alt="" aria-hidden="true" />
     </div>
     <div class="service-console__params">
-      <label v-for="field in moduleInfo.requestFields" :key="field.name">
+      <label
+        v-for="field in moduleInfo.requestFields"
+        :key="field.name"
+        :class="{ 'has-error': Boolean(parameterErrors[field.name]) }"
+      >
         <span><i v-if="field.required === '是'">*</i>{{ field.name }}</span>
+        <ElSelect
+          v-if="field.name === 'achievementTypes' && isLiveCoop"
+          v-model="achievementTypeSelection"
+          class="cooperation-type-select"
+          multiple
+          collapse-tags
+          :max-collapse-tags="1"
+          clearable
+          placeholder="选择成果类型，如论文"
+          aria-label="成果类型"
+          @update:model-value="clearParameterError(field.name)"
+        >
+          <ElOption
+            v-for="option in achievementTypeOptions"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </ElSelect>
+        <ElSelect
+          v-else-if="field.name === 'educationStage' && isLiveAlumni"
+          v-model="parameterValues[field.name]"
+          class="alumni-stage-select"
+          clearable
+          placeholder="请选择教育阶段"
+          aria-label="教育阶段"
+          @update:model-value="clearParameterError(field.name)"
+        >
+          <ElOption
+            v-for="stage in educationStageOptions"
+            :key="stage"
+            :label="stage"
+            :value="stage"
+          />
+        </ElSelect>
+        <ElConfigProvider v-else-if="field.type === 'month' && isLiveCoop" :locale="zhCn">
+          <ElDatePicker
+            v-model="parameterValues[field.name]"
+            class="cooperation-month-picker"
+            type="month"
+            format="YYYY年MM月"
+            value-format="YYYY-MM"
+            :placeholder="field.name === 'timeRangeStart' ? '选择开始年月，如 2020-01' : '选择结束年月，如 2020-12'"
+            clearable
+            :aria-label="`${field.name}年月`"
+            @update:model-value="clearParameterError(field.name)"
+          />
+        </ElConfigProvider>
         <input
+          v-else
           :type="field.type === 'month' ? 'month' : 'text'"
           :key="`${field.name}-${paramResetToken}`"
-          :class="{ 'is-invalid': Boolean(parameterErrors[field.name]) }"
           :value="parameterValues[field.name] ?? ''"
           :placeholder="field.description"
           :aria-invalid="Boolean(parameterErrors[field.name])"
-          :title="parameterErrors[field.name] || field.description"
           @input="handleParameterInput(field.name, $event)"
         />
         <small v-if="parameterErrors[field.name]" class="service-console__field-error">
@@ -1525,8 +1484,8 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       </label>
     </div>
     <div class="service-console__actions">
-      <button class="kg-button" type="button" @click="handleRun">{{ running ? '测试中...' : '执行测试' }}</button>
-      <button class="kg-button kg-button--secondary" type="button" @click="resetParameters">重置参数</button>
+      <button class="kg-button" type="button" :disabled="running" @click="handleRun">{{ running ? '测试中...' : '执行测试' }}</button>
+      <button class="kg-button kg-button--secondary" type="button" @click="resetParameters()">重置参数</button>
     </div>
   </section>
 
@@ -1708,7 +1667,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   align-items: end;
   gap: 14px;
   min-height: 92px;
-  padding: 14px 16px 24px;
+  padding: 14px 16px;
   overflow: visible;
 }
 
@@ -1774,24 +1733,50 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   font-size: 15px;
 }
 
-.service-console__params input.is-invalid {
-  border-color: #f53f3f;
+.cooperation-month-picker {
+  width: 100% !important;
 }
 
-.service-console__params input.is-invalid:focus {
-  border-color: #f53f3f;
-  outline: none;
-  box-shadow: 0 0 0 2px rgb(245 63 63 / 10%);
+.cooperation-type-select {
+  width: 100%;
+}
+
+.alumni-stage-select {
+  width: 100%;
+}
+
+.cooperation-type-select:deep(.el-select__wrapper),
+.alumni-stage-select:deep(.el-select__wrapper) {
+  min-height: 36px;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1px var(--border-strong) inset;
+}
+
+.service-console__params label.has-error input {
+  border-color: var(--danger);
+}
+
+.service-console__params label.has-error .cooperation-type-select:deep(.el-select__wrapper),
+.service-console__params label.has-error .alumni-stage-select:deep(.el-select__wrapper),
+.service-console__params label.has-error .cooperation-month-picker:deep(.el-input__wrapper) {
+  box-shadow: 0 0 0 1px var(--danger) inset;
 }
 
 .service-console__field-error {
   position: absolute;
   top: calc(100% + 2px);
   left: 0;
-  color: #f53f3f;
+  color: var(--danger);
   font-size: 12px;
   font-weight: 400;
   line-height: 18px;
+  white-space: nowrap;
+}
+
+.cooperation-month-picker:deep(.el-input__wrapper) {
+  min-height: 36px;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1px var(--border-strong) inset;
 }
 
 .field-info-icon {
@@ -1805,6 +1790,65 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   justify-content: flex-end;
   gap: 8px;
   min-width: 236px;
+}
+
+.service-console--cooperation {
+  grid-template-columns: 210px minmax(750px, 1fr) 190px;
+  align-items: start;
+}
+
+.service-console--cooperation.service-console--has-errors {
+  padding-bottom: 32px;
+}
+
+.service-console--alumni.service-console--has-errors {
+  padding-bottom: 32px;
+}
+
+.service-console--alumni {
+  grid-template-columns: 240px minmax(720px, 1fr) 190px;
+  align-items: start;
+}
+
+.service-console--alumni .service-console__head {
+  grid-template-columns: auto 14px;
+  justify-content: center;
+  align-items: center;
+  margin-top: 31px;
+}
+
+.service-console--alumni .service-console__params {
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  align-items: start;
+}
+
+.service-console--alumni .service-console__actions {
+  justify-content: center;
+  min-width: 190px;
+  margin-top: 26px;
+}
+
+.service-console--cooperation .service-console__head {
+  grid-template-columns: auto 14px;
+  justify-content: center;
+  align-items: center;
+  margin-top: 31px;
+}
+
+.service-console--cooperation .service-console__params {
+  grid-template-columns:
+    minmax(132px, 1fr)
+    minmax(132px, 1fr)
+    150px
+    minmax(132px, 1fr)
+    minmax(132px, 1fr);
+  align-items: end;
+}
+
+.service-console--cooperation .service-console__actions {
+  justify-content: center;
+  min-width: 190px;
+  margin-top: 26px;
 }
 
 .business-service__main {
@@ -2287,6 +2331,30 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   .business-service__main,
   .service-console__params {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .service-console--cooperation {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .service-console--alumni {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .service-console--alumni .service-console__head,
+  .service-console--alumni .service-console__actions,
+  .service-console--cooperation .service-console__head,
+  .service-console--cooperation .service-console__actions {
+    justify-content: start;
+    margin-top: 0;
+  }
+
+  .service-console--alumni .service-console__params {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .service-console--cooperation .service-console__params {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+DATE_PATTERN = re.compile(r"^(?:\d{4}|\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))$")
 
 AchievementType = Literal["paper", "patent", "project"]
 MAX_LIMIT_PER_TYPE = 50
@@ -33,4 +36,14 @@ class CooperationAchievementQueryRequest(BaseModel):
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("专家 ID 不能为空")
+        return cleaned
+
+    @field_validator("timeRangeStart", "timeRangeEnd")
+    @classmethod
+    def validate_time_range(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not DATE_PATTERN.fullmatch(cleaned):
+            raise ValueError("日期格式必须为 YYYY 或 YYYY-MM-DD")
         return cleaned

@@ -61,6 +61,7 @@ async def get_login_url(
     application: AuthApplicationDependency,
     next_path: str = Query("/overview", alias="next"),
 ) -> LoginUrlResponse:
+    response.headers["Cache-Control"] = "no-store"
     if not application.settings.enabled:
         return LoginUrlResponse(
             data=LoginUrlData(

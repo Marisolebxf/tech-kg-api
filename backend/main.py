@@ -105,8 +105,12 @@ async def validation_error_handler(request, exc: RequestValidationError) -> JSON
         {"loc": list(e.get("loc", [])), "msg": e.get("msg", ""), "type": e.get("type", "")}
         for e in exc.errors()
     ]
+    path = request.url.path
+    uses_http_422 = path == "/api/v1/kg-construction/expert-cooperation-achievements/query" or (
+        path.startswith("/api/v1/workflow-system/definitions/") and path.endswith("/execute")
+    )
     return JSONResponse(
-        status_code=422,
+        status_code=422 if uses_http_422 else 200,
         content=ApiResponse(
             code=422, success=False, msg="请求参数校验失败", data=errors
         ).model_dump(),

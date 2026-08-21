@@ -1,4 +1,10 @@
 <script setup lang="ts">
+import ElConfigProvider from 'element-plus/es/components/config-provider/index'
+import ElDatePicker from 'element-plus/es/components/date-picker/index'
+import ElSelect, { ElOption } from 'element-plus/es/components/select/index'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
+import 'element-plus/es/components/date-picker/style/css'
+import 'element-plus/es/components/select/style/css'
 import { computed, ref, watch } from 'vue'
 
 import {
@@ -32,6 +38,7 @@ import { getEdgeProvenance, getNodeProvenance, getServiceGraphPreset } from '../
 import type { GraphEdgeData, GraphNodeData, GraphNodeType, GraphPreset } from '../../../data/graph-presets'
 import { invokeKgService } from '../../../api/kgService'
 import type { ServiceModule, ServiceSummaryRow } from '../service-modules'
+import { monthRangeToApiDates } from '../utils/month-range'
 
 type PanoramaLayerKey =
   | 'core_technology'
@@ -94,6 +101,27 @@ const running = ref(false)
 const lastTestTime = ref('—')
 const lastUpdateTime = ref<number | null>(null)
 const parameterValues = ref<Record<string, string>>({})
+const parameterErrors = ref<Record<string, string>>({})
+const hasParameterErrors = computed(() => Object.keys(parameterErrors.value).length > 0)
+const achievementTypeOptions = [
+  { label: '论文', value: 'paper' },
+  { label: '专利', value: 'patent' },
+  { label: '项目', value: 'project' },
+] as const
+const educationStageOptions = ['学士', '硕士', '博士'] as const
+const achievementTypeSelection = computed<Array<'paper' | 'patent' | 'project'>>({
+  get: () => (parameterValues.value.achievementTypes || '')
+    .split(',')
+    .filter((value): value is 'paper' | 'patent' | 'project' => (
+      value === 'paper' || value === 'patent' || value === 'project'
+    )),
+  set: (values) => {
+    parameterValues.value = {
+      ...parameterValues.value,
+      achievementTypes: values.join(','),
+    }
+  },
+})
 const liveResponse = ref<Record<string, any> | null>(null)
 const paramResetToken = ref(0)
 const selectedGraphNodeId = ref<string | null>(null)
@@ -986,7 +1014,7 @@ watch(
     panoramaError.value = null
     expertDirectResponse.value = null
     expertDirectError.value = null
-    resetParameters()
+    resetParameters(false)
     if (isLiveModule.value) {
       void loadModuleDescribe()
       void handleRun()
@@ -1019,7 +1047,8 @@ function formatValue(value: unknown) {
   return String(value)
 }
 
-function resetParameters() {
+function resetParameters(announce = true) {
+  parameterErrors.value = {}
   parameterValues.value = Object.fromEntries(
     props.moduleInfo.requestFields.map((field) => [
       field.name,
@@ -1039,7 +1068,7 @@ function resetParameters() {
     lastUpdateTime.value = null
     void loadModuleDescribe()
   }
-  showToast('已重置为默认参数', 'info')
+  if (announce) showToast('已重置为默认参数', 'info')
 }
 
 function buildPayload(): Record<string, unknown> {
@@ -1098,15 +1127,6 @@ function buildAlumniGraph(data: AlumniQueryResult | null): { nodes: GraphNodeDat
 function optionalParam(value: string | undefined): string | undefined {
   const cleaned = value?.trim()
   return cleaned ? cleaned : undefined
-}
-
-/** 解析「2020-2026」「2020~2026」「2020/2026」或单边「2020」为 API 起止时间。 */
-function parseTimeRange(raw: string | undefined): { start?: string; end?: string } {
-  if (!raw) return {}
-  const parts = raw.split(/\s*[-~/～至到]\s*/).map((x) => x.trim()).filter(Boolean)
-  if (parts.length >= 2) return { start: parts[0], end: parts[1] }
-  if (parts.length === 1) return { start: parts[0] }
-  return {}
 }
 
 async function handleRun() {
@@ -1188,9 +1208,10 @@ async function handleRun() {
     } else if (isLiveAlumni.value) {
       const expertId = parameterValues.value.expertId?.trim()
       if (!expertId) {
-        showToast('请填写 expertId', 'warning')
+        parameterErrors.value = { expertId: '请输入专家' }
         return
       }
+      parameterErrors.value = {}
       const body = {
         expertId,
         targetExpertId: optionalParam(parameterValues.value.targetExpertId),
@@ -1230,15 +1251,40 @@ async function handleRun() {
       const sourceExpertId = parameterValues.value.sourceExpertId?.trim()
       const targetExpertId = parameterValues.value.targetExpertId?.trim()
       if (!sourceExpertId || !targetExpertId) {
-        showToast('请填写 sourceExpertId 与 targetExpertId', 'warning')
+        parameterErrors.value = {
+          ...(!sourceExpertId ? { sourceExpertId: '请输入第一个专家 ID' } : {}),
+          ...(!targetExpertId ? { targetExpertId: '请输入第二个专家 ID' } : {}),
+        }
         return
       }
+      parameterErrors.value = {}
       const typesRaw = optionalParam(parameterValues.value.achievementTypes)
       const achievementTypes = typesRaw
         ? typesRaw.split(/[,，/\s]+/).map((x) => x.trim()).filter(Boolean) as Array<'paper' | 'patent' | 'project'>
         : undefined
-      const { start: timeRangeStart, end: timeRangeEnd } = parseTimeRange(
-        optionalParam(parameterValues.value.timeRange),
+      const startMonth = optionalParam(parameterValues.value.timeRangeStart)
+      const endMonth = optionalParam(parameterValues.value.timeRangeEnd)
+      if ([startMonth, endMonth].some((value) => value && !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(value))) {
+        parameterErrors.value = {
+          ...(startMonth && !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(startMonth)
+            ? { timeRangeStart: '请选择完整的开始年月' }
+            : {}),
+          ...(endMonth && !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(endMonth)
+            ? { timeRangeEnd: '请选择完整的结束年月' }
+            : {}),
+        }
+        return
+      }
+      if (startMonth && endMonth && startMonth > endMonth) {
+        parameterErrors.value = {
+          timeRangeStart: '开始月份不能晚于结束月份',
+          timeRangeEnd: '结束月份不能早于开始月份',
+        }
+        return
+      }
+      const { start: timeRangeStart, end: timeRangeEnd } = monthRangeToApiDates(
+        startMonth,
+        endMonth,
       )
       const body = {
         sourceExpertId,
@@ -1306,7 +1352,10 @@ async function handleRun() {
     lastTestTime.value = formatTimestamp(now)
     lastUpdateTime.value = now.getTime()
   } catch (error) {
-    const message = error instanceof Error ? error.message : '请求失败'
+    const rawMessage = error instanceof Error ? error.message : '请求失败'
+    const message = /timeout|timed out|ECONNABORTED/i.test(rawMessage)
+      ? '查询超时，请检查后端服务或缩小时间范围后重试'
+      : rawMessage
     liveError.value = message
     liveResponse.value = null
     liveAlumniResult.value = null
@@ -1324,6 +1373,17 @@ function handleParameterInput(fieldName: string, event: Event) {
     ...parameterValues.value,
     [fieldName]: (event.target as HTMLInputElement).value,
   }
+  clearParameterError(fieldName)
+}
+
+function clearParameterError(fieldName: string) {
+  const fieldsToClear = fieldName === 'timeRangeStart' || fieldName === 'timeRangeEnd'
+    ? ['timeRangeStart', 'timeRangeEnd']
+    : [fieldName]
+  if (!fieldsToClear.some((name) => parameterErrors.value[name])) return
+  const nextErrors = { ...parameterErrors.value }
+  fieldsToClear.forEach((name) => delete nextErrors[name])
+  parameterErrors.value = nextErrors
 }
 
 function handleSelectGraphNode(node: GraphNodeData) {
@@ -1340,7 +1400,14 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 </script>
 
 <template>
-  <section class="kg-panel service-console">
+  <section
+    class="kg-panel service-console"
+    :class="{
+      'service-console--cooperation': isLiveCoop,
+      'service-console--alumni': isLiveAlumni,
+      'service-console--has-errors': hasParameterErrors,
+    }"
+  >
     <div class="service-console__head">
       <div>
         <h2>{{ moduleInfo.title }}</h2>
@@ -1348,20 +1415,77 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       <img class="field-info-icon" :src="iconInfo" alt="" aria-hidden="true" />
     </div>
     <div class="service-console__params">
-      <label v-for="field in moduleInfo.requestFields" :key="field.name">
+      <label
+        v-for="field in moduleInfo.requestFields"
+        :key="field.name"
+        :class="{ 'has-error': Boolean(parameterErrors[field.name]) }"
+      >
         <span><i v-if="field.required === '是'">*</i>{{ field.name }}</span>
+        <ElSelect
+          v-if="field.name === 'achievementTypes' && isLiveCoop"
+          v-model="achievementTypeSelection"
+          class="cooperation-type-select"
+          multiple
+          collapse-tags
+          :max-collapse-tags="1"
+          clearable
+          placeholder="选择成果类型，如论文"
+          aria-label="成果类型"
+          @update:model-value="clearParameterError(field.name)"
+        >
+          <ElOption
+            v-for="option in achievementTypeOptions"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </ElSelect>
+        <ElSelect
+          v-else-if="field.name === 'educationStage' && isLiveAlumni"
+          v-model="parameterValues[field.name]"
+          class="alumni-stage-select"
+          clearable
+          placeholder="请选择教育阶段"
+          aria-label="教育阶段"
+          @update:model-value="clearParameterError(field.name)"
+        >
+          <ElOption
+            v-for="stage in educationStageOptions"
+            :key="stage"
+            :label="stage"
+            :value="stage"
+          />
+        </ElSelect>
+        <ElConfigProvider v-else-if="field.type === 'month' && isLiveCoop" :locale="zhCn">
+          <ElDatePicker
+            v-model="parameterValues[field.name]"
+            class="cooperation-month-picker"
+            type="month"
+            format="YYYY年MM月"
+            value-format="YYYY-MM"
+            :placeholder="field.name === 'timeRangeStart' ? '选择开始年月，如 2020-01' : '选择结束年月，如 2020-12'"
+            clearable
+            :aria-label="`${field.name}年月`"
+            @update:model-value="clearParameterError(field.name)"
+          />
+        </ElConfigProvider>
         <input
+          v-else
           :type="field.type === 'month' ? 'month' : 'text'"
           :key="`${field.name}-${paramResetToken}`"
           :value="parameterValues[field.name] ?? ''"
           :placeholder="field.description"
+          :aria-invalid="Boolean(parameterErrors[field.name])"
           @input="handleParameterInput(field.name, $event)"
         />
+        <small v-if="parameterErrors[field.name]" class="service-console__field-error">
+          {{ parameterErrors[field.name] }}
+        </small>
       </label>
     </div>
     <div class="service-console__actions">
-      <button class="kg-button" type="button" @click="handleRun">{{ running ? '测试中...' : '执行测试' }}</button>
-      <button class="kg-button kg-button--secondary" type="button" @click="resetParameters">重置参数</button>
+      <button class="kg-button" type="button" :disabled="running" @click="handleRun">{{ running ? '测试中...' : '执行测试' }}</button>
+      <button class="kg-button kg-button--secondary" type="button" @click="resetParameters()">重置参数</button>
     </div>
   </section>
 
@@ -1579,6 +1703,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .service-console__params label {
+  position: relative;
   display: grid;
   gap: 6px;
   min-width: 0;
@@ -1608,6 +1733,52 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   font-size: 15px;
 }
 
+.cooperation-month-picker {
+  width: 100% !important;
+}
+
+.cooperation-type-select {
+  width: 100%;
+}
+
+.alumni-stage-select {
+  width: 100%;
+}
+
+.cooperation-type-select:deep(.el-select__wrapper),
+.alumni-stage-select:deep(.el-select__wrapper) {
+  min-height: 36px;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1px var(--border-strong) inset;
+}
+
+.service-console__params label.has-error input {
+  border-color: var(--danger);
+}
+
+.service-console__params label.has-error .cooperation-type-select:deep(.el-select__wrapper),
+.service-console__params label.has-error .alumni-stage-select:deep(.el-select__wrapper),
+.service-console__params label.has-error .cooperation-month-picker:deep(.el-input__wrapper) {
+  box-shadow: 0 0 0 1px var(--danger) inset;
+}
+
+.service-console__field-error {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.cooperation-month-picker:deep(.el-input__wrapper) {
+  min-height: 36px;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1px var(--border-strong) inset;
+}
+
 .field-info-icon {
   width: 14px;
   height: 14px;
@@ -1619,6 +1790,65 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   justify-content: flex-end;
   gap: 8px;
   min-width: 236px;
+}
+
+.service-console--cooperation {
+  grid-template-columns: 210px minmax(750px, 1fr) 190px;
+  align-items: start;
+}
+
+.service-console--cooperation.service-console--has-errors {
+  padding-bottom: 32px;
+}
+
+.service-console--alumni.service-console--has-errors {
+  padding-bottom: 32px;
+}
+
+.service-console--alumni {
+  grid-template-columns: 240px minmax(720px, 1fr) 190px;
+  align-items: start;
+}
+
+.service-console--alumni .service-console__head {
+  grid-template-columns: auto 14px;
+  justify-content: center;
+  align-items: center;
+  margin-top: 31px;
+}
+
+.service-console--alumni .service-console__params {
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  align-items: start;
+}
+
+.service-console--alumni .service-console__actions {
+  justify-content: center;
+  min-width: 190px;
+  margin-top: 26px;
+}
+
+.service-console--cooperation .service-console__head {
+  grid-template-columns: auto 14px;
+  justify-content: center;
+  align-items: center;
+  margin-top: 31px;
+}
+
+.service-console--cooperation .service-console__params {
+  grid-template-columns:
+    minmax(132px, 1fr)
+    minmax(132px, 1fr)
+    150px
+    minmax(132px, 1fr)
+    minmax(132px, 1fr);
+  align-items: end;
+}
+
+.service-console--cooperation .service-console__actions {
+  justify-content: center;
+  min-width: 190px;
+  margin-top: 26px;
 }
 
 .business-service__main {
@@ -2101,6 +2331,30 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   .business-service__main,
   .service-console__params {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .service-console--cooperation {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .service-console--alumni {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .service-console--alumni .service-console__head,
+  .service-console--alumni .service-console__actions,
+  .service-console--cooperation .service-console__head,
+  .service-console--cooperation .service-console__actions {
+    justify-content: start;
+    margin-top: 0;
+  }
+
+  .service-console--alumni .service-console__params {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .service-console--cooperation .service-console__params {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

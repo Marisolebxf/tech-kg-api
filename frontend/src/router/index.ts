@@ -88,7 +88,12 @@ export const router = createRouter({
   ],
 })
 
+const authEnabled = import.meta.env.VITE_AUTH_ENABLED !== 'false'
+
 router.beforeEach(async (to) => {
+  if (!authEnabled) {
+    return to.path === '/login' ? { path: '/overview' } : true
+  }
   if (to.meta.public) return true
 
   const authStore = useAuthStore()

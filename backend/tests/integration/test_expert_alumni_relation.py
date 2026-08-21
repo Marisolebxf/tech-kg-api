@@ -64,10 +64,9 @@ async def test_query_alumni_relation_not_found(async_client, monkeypatch):
         "/api/v1/kg-construction/expert-alumni-relations/query",
         json={"expertId": "S404"},
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 404
     body = resp.json()
-    assert body["code"] == 404
-    assert body["success"] is False
+    assert "专家不存在" in body["detail"]
 
 
 @pytest.mark.asyncio

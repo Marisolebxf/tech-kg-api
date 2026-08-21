@@ -1,6 +1,6 @@
 """科技两点合作成果 路由。"""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from application.expert_cooperation_achievement import ExpertCooperationAchievementApplication
 from biz.schemas.common import ApiResponse
@@ -29,9 +29,9 @@ def _query(body: CooperationAchievementQueryRequest) -> ApiResponse:
         )
         return ApiResponse(data=result)
     except ValueError as exc:
-        return ApiResponse(code=400, success=False, msg=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except KeyError as exc:
-        return ApiResponse(code=404, success=False, msg=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("")

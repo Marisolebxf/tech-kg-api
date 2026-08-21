@@ -79,9 +79,12 @@ async def execute_definition(definition_id: str, request: WorkflowExecuteRequest
         payload["llm_config_id"] = request.llm_config_id
     if request.since is not None:
         payload["since"] = request.since
-    execution = await service.execute_definition(
-        definition, payload, request.workflow_id, persist_task=True
-    )
+    try:
+        execution = await service.execute_definition(
+            definition, payload, request.workflow_id, persist_task=True
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ApiResponse(data=execution, msg="工作流执行请求已受理")
 
 

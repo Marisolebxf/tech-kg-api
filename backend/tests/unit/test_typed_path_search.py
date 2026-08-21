@@ -55,6 +55,8 @@ def test_typed_path_query_contains_direction_type_and_filter() -> None:
 
 def test_typed_path_api_returns_all_path_parts(monkeypatch) -> None:
     class FakeGraphClient:
+        queries = []
+
         def get_node(self, node_id):
             return GraphNode(
                 id=node_id,
@@ -63,6 +65,7 @@ def test_typed_path_api_returns_all_path_parts(monkeypatch) -> None:
             )
 
         def execute_read(self, query):
+            self.queries.append(query)
             if "count(*) AS total" in query:
                 return SimpleNamespace(records=[{"total": 1}])
             return SimpleNamespace(
@@ -90,6 +93,8 @@ def test_typed_path_api_returns_all_path_parts(monkeypatch) -> None:
     body = response.json()
     assert body["success"] is True
     assert body["data"]["total"] == 1
+    assert any('id(n0) == "person_A"' in query for query in FakeGraphClient.queries)
+    assert any('id(n2) == "person_B"' in query for query in FakeGraphClient.queries)
     path = body["data"]["items"][0]
     assert [node["id"] for node in path["nodes"]] == [
         "person_A",

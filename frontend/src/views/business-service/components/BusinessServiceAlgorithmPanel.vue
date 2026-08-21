@@ -39,7 +39,6 @@ import type { ServiceModule, ServiceSummaryRow } from '../service-modules'
 import {
   buildIndirectRelationGraph,
   indirectSummaryRows,
-  parseRelationTypes,
 } from '../indirect-relation-view'
 
 type PanoramaLayerKey =
@@ -1356,7 +1355,7 @@ async function handleRun() {
 
       const response = await analyzeExpertIndirectRelation({
         core_node_id: coreNodeId,
-        relation_types: parseRelationTypes(parameterValues.value.relation_types ?? ''),
+        relation_types: [parameterValues.value.relation_types ?? '学术关联'],
         path_depth: pathDepth,
         min_strength: minStrength,
       })
@@ -1606,7 +1605,7 @@ async function handleRun() {
 }
 
 function handleParameterInput(fieldName: string, event: Event) {
-  const value = (event.target as HTMLInputElement).value
+  const value = (event.target as HTMLInputElement | HTMLSelectElement).value
   parameterValues.value = {
     ...parameterValues.value,
     [fieldName]: value,
@@ -1642,7 +1641,19 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
     <div class="service-console__params">
       <label v-for="field in moduleInfo.requestFields" :key="field.name">
         <span><i v-if="field.required === '是'">*</i>{{ field.name }}</span>
+        <select
+          v-if="field.type === 'select'"
+          :key="`${field.name}-${paramResetToken}`"
+          :value="parameterValues[field.name] ?? ''"
+          :title="field.description"
+          @change="handleParameterInput(field.name, $event)"
+        >
+          <option v-for="option in field.options" :key="option" :value="option">
+            {{ option }}
+          </option>
+        </select>
         <input
+          v-else
           :type="field.type === 'month' ? 'month' : 'text'"
           :key="`${field.name}-${paramResetToken}`"
           :class="{ 'is-invalid': Boolean(parameterErrors[field.name]) }"
@@ -1897,7 +1908,8 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   font-style: normal;
 }
 
-.service-console__params input {
+.service-console__params input,
+.service-console__params select {
   width: 100%;
   height: 36px;
   min-width: 0;
@@ -1907,6 +1919,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   background: #fff;
   color: var(--text-primary);
   font-size: 15px;
+}
+
+.service-console__params select {
+  cursor: pointer;
 }
 
 .service-console__params input.is-invalid {

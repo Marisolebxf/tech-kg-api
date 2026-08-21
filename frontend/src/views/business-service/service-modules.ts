@@ -3,6 +3,7 @@ export type ServiceField = {
   type: string
   required?: string
   description: string
+  options?: readonly string[]
 }
 
 export type ServiceResultRow = {
@@ -141,7 +142,13 @@ export const serviceModules: ServiceModule[] = [
     moduleRequirement: '科技单节点间接关系服务以单个科技专家或人才作为核心节点，通过挖掘知识图谱中与该节点存在间接关联的其他节点，运用路径分析与关系传递算法，推理出核心节点与间接节点之间的潜在关联。服务会梳理间接关系的传递路径，计算间接关系的关联强度，并对不同类型的间接关系进行标注，帮助用户全面了解单个科技专家或人才的间接社交网络与资源关联。',
     requestFields: [
       { name: 'core_node_id', type: 'string', required: '是', description: '核心专家或人才节点 ID' },
-      { name: 'relation_types', type: 'array', required: '否', description: '间接关系类型' },
+      {
+        name: 'relation_types',
+        type: 'select',
+        required: '是',
+        description: '间接关系类型（单选）',
+        options: ['学术关联', '机构关联', '项目关联'],
+      },
       { name: 'path_depth', type: 'number', required: '否', description: '路径分析深度（2-3 跳）' },
       { name: 'min_strength', type: 'number', required: '否', description: '最小关联强度阈值（0-1）' },
     ],

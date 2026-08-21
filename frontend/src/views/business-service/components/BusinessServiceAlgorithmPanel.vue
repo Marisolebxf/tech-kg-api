@@ -22,6 +22,7 @@ import {
   type IndustryChainPanoramaQueryRequest,
   type IndustryChainPanoramaQueryResponse,
   type PanoramaGraphEdge,
+  type PanoramaGraphNode,
   type PanoramaKeyEntity,
 } from '../../../api/industryChainPanorama'
 import {
@@ -288,6 +289,72 @@ function inferPanoramaEdgeCategory(label: string): string {
   return '直接关系'
 }
 
+/** 画布展开层最多渲染的子图节点数与每行节点数。 */
+const PANORAMA_EXPANDED_LIMIT = 24
+const PANORAMA_EXPANDED_PER_ROW = 12
+
+/** 后端子图节点标签（Neo4j label）映射到画布样式。 */
+function mapPanoramaGraphNodeType(type: string): {
+  nodeType: GraphNodeType
+  entityType: string
+} {
+  const t = (type || '').toLowerCase()
+  if (t.includes('person') || t.includes('scholar') || t.includes('expert')) {
+    return { nodeType: 'expert', entityType: '扩展专家' }
+  }
+  if (
+    t.includes('organization') ||
+    t.includes('company') ||
+    t.includes('institution')
+  ) {
+    return { nodeType: 'org', entityType: '扩展机构' }
+  }
+  if (
+    t.includes('paper') ||
+    t.includes('patent') ||
+    t.includes('publication')
+  ) {
+    return { nodeType: 'paper', entityType: '扩展成果' }
+  }
+  if (t.includes('event')) {
+    return { nodeType: 'event', entityType: '扩展事件' }
+  }
+  if (t.includes('product') || t.includes('project')) {
+    return { nodeType: 'project', entityType: '扩展产品' }
+  }
+  return { nodeType: 'topic', entityType: '扩展实体' }
+}
+
+/**
+ * 从子图节点中挑选进入画布展开层的节点。
+ *
+ * 排除已在分层里出现过的节点，并优先保留与分层节点直接相连的节点，避免画布出现孤立点。
+ */
+function pickPanoramaExpandedNodes(
+  resp: IndustryChainPanoramaQueryResponse,
+  layerIds: Set<string>,
+): PanoramaGraphNode[] {
+  const seen = new Set<string>(layerIds)
+  const candidates: PanoramaGraphNode[] = []
+  for (const node of resp.graph.nodes) {
+    if (!node.id || seen.has(node.id)) continue
+    seen.add(node.id)
+    candidates.push(node)
+  }
+  const layerAdjacency = new Map<string, number>()
+  for (const edge of resp.graph.edges) {
+    if (layerIds.has(edge.source)) {
+      layerAdjacency.set(edge.target, (layerAdjacency.get(edge.target) ?? 0) + 1)
+    }
+    if (layerIds.has(edge.target)) {
+      layerAdjacency.set(edge.source, (layerAdjacency.get(edge.source) ?? 0) + 1)
+    }
+  }
+  return candidates.sort(
+    (a, b) => (layerAdjacency.get(b.id) ?? 0) - (layerAdjacency.get(a.id) ?? 0),
+  )
+}
+
 function derivedGraphFromResponse(
   resp: IndustryChainPanoramaQueryResponse,
 ): GraphPreset {
@@ -299,16 +366,26 @@ function derivedGraphFromResponse(
     resp.summary.industry ||
     (resp.input?.industry as string | undefined) ||
     '产业全景'
+  const layerIds = new Set(
+    resp.layers.flatMap((layer) => layer.items.map((item) => item.id)).filter(Boolean),
+  )
+  const expandedCandidates = pickPanoramaExpandedNodes(resp, layerIds)
+  const expandedNodes = expandedCandidates.slice(0, PANORAMA_EXPANDED_LIMIT)
+  const hasExpanded = expandedNodes.length > 0
+  // 有子图扩展节点时压缩分层区域，为画布底部的展开层腾出空间。
+  const layerY = (y: number) => (hasExpanded ? Math.round(28 + (y - 50) * 0.72) : y)
   const center: GraphNodeData = {
     id: PANORAMA_CENTER_ID,
     label: industryLabel,
     nodeType: 'main',
     entityType: '产业链核心',
     x: 380,
-    y: 50,
+    y: hasExpanded ? 24 : 50,
     radius: 34,
     confidence: 1,
-    relations: `节点 ${resp.summary.totalNodes} · 边 ${resp.summary.totalEdges}`,
+    relations: hasExpanded
+      ? `子图 ${resp.graph.nodes.length} 节点 · ${resp.graph.edges.length} 边（展开层展示 ${expandedNodes.length}/${expandedCandidates.length}）`
+      : `节点 ${resp.summary.totalNodes} · 边 ${resp.summary.totalEdges}`,
     evidence: ['科技产业链全景图'],
     level: 0,
   }
@@ -334,7 +411,7 @@ function derivedGraphFromResponse(
         nodeType: visual.nodeType,
         entityType: visual.entityType,
         x,
-        y: visual.y,
+        y: layerY(visual.y),
         radius: 22,
         confidence:
           item.metricValue != null
@@ -355,6 +432,32 @@ function derivedGraphFromResponse(
       })
     })
   }
+
+  // 展开层：depth 控制的子图扩展节点，按行铺在画布底部。
+  expandedNodes.forEach((item, idx) => {
+    const row = Math.floor(idx / PANORAMA_EXPANDED_PER_ROW)
+    const col = idx % PANORAMA_EXPANDED_PER_ROW
+    const rowCount = Math.min(
+      PANORAMA_EXPANDED_PER_ROW,
+      expandedNodes.length - row * PANORAMA_EXPANDED_PER_ROW,
+    )
+    const visual = mapPanoramaGraphNodeType(item.type)
+    const node: GraphNodeData = {
+      id: item.id,
+      label: item.label || item.id.slice(0, 10),
+      nodeType: visual.nodeType,
+      entityType: visual.entityType,
+      x: rowCount === 1 ? 380 : 60 + ((700 - 60) * col) / (rowCount - 1),
+      y: 340 + row * 50,
+      radius: 13,
+      confidence: 0.6,
+      relations: item.subtitle || item.type || visual.entityType,
+      evidence: [`子图扩展 · depth=${resp.input?.depth ?? '—'}`],
+      level: 4 + row,
+    }
+    nodes.push(node)
+    idMap.set(node.id, node)
+  })
 
   const seenEdges = new Set(edges.map((e) => `${e.from}::${e.to}::${e.label}`))
   resp.graph.edges.forEach((edge: PanoramaGraphEdge, idx) => {
@@ -1270,7 +1373,7 @@ function computePanoramaSummaryRows(
     ['产业动态事件', layerLabel('flagship_achievement')],
     [
       '图谱规模',
-      `${resp.summary.totalNodes} 个节点｜${resp.summary.totalEdges} 条关系`,
+      `子图 ${resp.graph.nodes.length} 个节点｜${resp.graph.edges.length} 条关系（全库 ${resp.summary.totalNodes}｜${resp.summary.totalEdges}）`,
     ],
     ['更新状态', updateStatus.value],
   ])
@@ -1287,17 +1390,21 @@ function buildPanoramaRequest(): IndustryChainPanoramaQueryRequest {
     min: number,
     max: number,
     fallback: number,
+    label: string,
   ) => {
     const n = Number.parseInt(value, 10)
     if (Number.isNaN(n)) return fallback
+    if (n < min || n > max) {
+      showToast(`${label} 超出范围 [${min}, ${max}]，已自动调整为边界值`, 'warning')
+    }
     return Math.min(max, Math.max(min, n))
   }
   return {
     dataSource: 'all',
     industry: (raw.industry ?? '').trim() || undefined,
     anchorId: (raw.anchorId ?? '').trim() || undefined,
-    depth: clampInt(raw.depth ?? '', 1, 3, 2),
-    topK: clampInt(raw.topK ?? '', 1, 20, 5),
+    depth: clampInt(raw.depth ?? '', 1, 3, 2, '层级深度 depth'),
+    topK: clampInt(raw.topK ?? '', 1, 20, 5, 'topK'),
   }
 }
 

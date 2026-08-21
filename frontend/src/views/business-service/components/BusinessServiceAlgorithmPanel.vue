@@ -45,6 +45,11 @@ const liveDescribe = ref<Record<string, unknown> | null>(null)
 const isLiveAlumni = computed(() => props.moduleInfo.key === 'expert-alumni')
 const isLiveCoop = computed(() => props.moduleInfo.key === 'two-point-achievement')
 const isLiveModule = computed(() => isLiveAlumni.value || isLiveCoop.value)
+const hasLiveResult = computed(() => (
+  isLiveAlumni.value
+    ? liveAlumniResult.value !== null
+    : isLiveCoop.value && liveCoopResult.value !== null
+))
 
 function mapLiveGraph(nodes: Array<{
   id: string
@@ -101,12 +106,12 @@ const liveModuleGraph = computed(() => {
   return null
 })
 const graphNodes = computed(() => {
-  if (isLiveModule.value) return liveModuleGraph.value?.nodes ?? []
+  if (isLiveModule.value && hasLiveResult.value) return liveModuleGraph.value?.nodes ?? []
   return graphPreset.value.nodes
 })
 const graphEdges = computed(() => {
   const nodes = graphNodes.value
-  const edges = isLiveModule.value
+  const edges = isLiveModule.value && hasLiveResult.value
     ? (liveModuleGraph.value?.edges ?? [])
     : graphPreset.value.edges
   return edges.filter((edge) => (
@@ -239,34 +244,14 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
   }
   if (isLiveAlumni.value) {
     const data = liveAlumniResult.value
-    if (!data) {
-      return [
-        { label: '专家', value: '' },
-        { label: '模式', value: '' },
-        { label: '校友数', value: '' },
-        { label: '维度目录', value: '' },
-        { label: '截断', value: '' },
-        { label: '图空间', value: '' },
-      ]
-    }
+    if (!data) return null
     if (data.summaryRows?.length) {
       return data.summaryRows.map((row) => ({ label: row.label, value: row.value }))
     }
   }
   if (isLiveCoop.value) {
     const data = liveCoopResult.value
-    if (!data) {
-      return [
-        { label: '专家 A', value: '' },
-        { label: '专家 B', value: '' },
-        { label: '合作成果类型', value: '' },
-        { label: '成果总量', value: '' },
-        { label: '成果分布', value: '' },
-        { label: '核心贡献', value: '' },
-        { label: '合作模式', value: '' },
-        { label: '图空间', value: '' },
-      ]
-    }
+    if (!data) return null
     if (data.summaryRows?.length) {
       return data.summaryRows.map((row) => ({ label: row.label, value: row.value }))
     }
@@ -1027,7 +1012,12 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .graph-panel__filters button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
   color: var(--primary);
+  white-space: nowrap;
   cursor: pointer;
 }
 

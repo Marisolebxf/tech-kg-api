@@ -2606,8 +2606,8 @@ print(response.json())</pre>
 .platform-metric.is-orange strong { color: #ff7d00; }
 .platform-metric.is-red strong { color: #d92d20; }
 
-.platform-summary-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px; }
-.platform-summary-card { position:relative;min-width:0;overflow:hidden; }
+.platform-summary-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch;gap:14px; }
+.platform-summary-card { position:relative;display:grid;grid-template-rows:auto minmax(0,1fr);height:100%;min-width:0;overflow:hidden; }
 .platform-summary-card::after { position:absolute;right:-35px;bottom:-55px;width:130px;height:130px;border-radius:50%;background:rgba(22,93,255,.045);content:"";pointer-events:none; }
 .platform-summary-card>header { display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px;border-bottom:1px solid #dce8f8;background:rgba(255,255,255,.75); }
 .platform-summary-card>header>div { display:grid;gap:4px; }.platform-summary-card>header>div>strong { color:#263b5a;font-size:13px; }
@@ -2615,9 +2615,9 @@ print(response.json())</pre>
 .platform-summary-card>header span.warning { color:#b42318; }.platform-summary-card>header span.warning i { background:#d92d20;box-shadow:0 0 0 3px #fee4e2; }
 .platform-summary-card>header a,.platform-summary-card>header button { padding:0;border:0;background:transparent;color:#165dff;font-size:10px;text-decoration:none;white-space:nowrap;cursor:pointer; }
 .platform-summary-card__main { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-height:112px;background:#fff; }
-.platform-summary-card__main section { display:flex;justify-content:center;gap:5px;padding:20px 18px;border-right:1px solid #e3ebf6;flex-direction:column; }.platform-summary-card__main section:last-child { border-right:0; }
-.platform-summary-card__main strong { color:#165dff;font-size:34px;line-height:40px;letter-spacing:-.5px; }.platform-summary-card.is-relation .platform-summary-card__main strong { color:#7a5af8; }.platform-summary-card.is-property .platform-summary-card__main strong { color:#f79009; }.platform-summary-card .platform-summary-card__main .is-added strong { color:#079455; }
-.platform-summary-card__main span { color:#66758f;font-size:12px; }
+.platform-summary-card__main section { display:flex;justify-content:center;gap:5px;min-width:0;padding:20px 10px;border-right:1px solid #e3ebf6;flex-direction:column; }.platform-summary-card__main section:last-child { border-right:0; }
+.platform-summary-card__main strong { color:#165dff;font-size:clamp(24px,1.9vw,34px);line-height:40px;letter-spacing:-.75px;white-space:nowrap;font-variant-numeric:tabular-nums; }.platform-summary-card.is-relation .platform-summary-card__main strong { color:#7a5af8; }.platform-summary-card.is-property .platform-summary-card__main strong { color:#f79009; }.platform-summary-card .platform-summary-card__main .is-added strong { color:#079455; }
+.platform-summary-card__main span { color:#66758f;font-size:12px;white-space:nowrap; }
 .platform-summary-card__items { position:relative;z-index:1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:10px 8px;background:#f8fbff; }
 .platform-summary-card__items>a { display:grid;gap:3px;padding:2px 8px;border-right:1px solid #e1eaf5;color:inherit;text-decoration:none;transition:background-color .2s ease; }.platform-summary-card__items>a:last-child { border-right:0; }.platform-summary-card__items>a:hover { background:#eef5ff; }
 .platform-summary-card__items em { overflow:hidden;color:#8290a5;font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }.platform-summary-card__items strong { overflow:hidden;color:#344861;font-size:10px;text-overflow:ellipsis;white-space:nowrap; }
@@ -5184,7 +5184,7 @@ print(response.json())</pre>
 }
 
 @media (max-width: 1280px) {
-  .platform-summary-grid,.platform-overview-main { grid-template-columns:minmax(0,1fr); }
+  .platform-overview-main { grid-template-columns:minmax(0,1fr); }
   .platform-metrics { grid-template-columns:repeat(3,minmax(0,1fr)); }
   .platform-management-focus,.platform-monitor-grid { grid-template-columns:minmax(0,1fr); }
   .platform-operations-grid { grid-template-columns:minmax(0,1fr); }
@@ -5251,6 +5251,7 @@ print(response.json())</pre>
 }
 
 @media (max-width: 980px) {
+  .platform-summary-grid { grid-template-columns:minmax(0,1fr); }
   .platform-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .platform-change-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .platform-change-body { grid-template-columns:minmax(0,1fr); }

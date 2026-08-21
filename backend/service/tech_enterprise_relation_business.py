@@ -302,6 +302,9 @@ class KeyEnterpriseRelationService:
         node_labels: dict[str, set[str]] = {
             n.get("id"): set(n.get("labels") or []) for n in nodes if n.get("id")
         }
+        # 子图不含 seed → 专家节点不存在（filtered-subgraph 对存在节点即使无边也返回 seed）
+        if req.expert_id not in node_props:
+            raise KeyError(f"专家不存在: {req.expert_id}")
         expert_props = node_props.get(req.expert_id, {})
         resp.expert_name = (
             expert_props.get("name_cn")

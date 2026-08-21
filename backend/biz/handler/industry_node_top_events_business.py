@@ -42,5 +42,7 @@ async def run_industry_node_top_events(req: IndustryNodeTopEventsRequest) -> Api
     try:
         data = await service.run(req)
         return ApiResponse(data=data.model_dump())
+    except KeyError as exc:  # noqa: BLE001
+        return ApiResponse(code=404, success=False, msg=str(exc))
     except Exception as exc:  # noqa: BLE001
         return ApiResponse(code=500, success=False, msg=f"产业链点TOP-N事件业务执行失败: {exc}")

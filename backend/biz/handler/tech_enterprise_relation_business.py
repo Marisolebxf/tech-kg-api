@@ -46,5 +46,7 @@ async def run_key_enterprise_relation(
     try:
         data = await service.run(req, app=request.app)
         return ApiResponse(data=data.model_dump())
+    except KeyError as exc:  # noqa: BLE001
+        return ApiResponse(code=404, success=False, msg=str(exc))
     except Exception as exc:  # noqa: BLE001
         return ApiResponse(code=500, success=False, msg=f"重点关注科技企业关系业务执行失败: {exc}")

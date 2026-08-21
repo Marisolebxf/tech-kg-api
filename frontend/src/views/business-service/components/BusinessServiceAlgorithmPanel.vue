@@ -264,7 +264,8 @@ function derivedGraphFromResponse(resp: IndustryChainPanoramaQueryResponse): Gra
 function buildLiveGraph(res: Record<string, any>, key: string): { nodes: GraphNodeData[]; edges: GraphEdgeData[] } | null {
   const data = res?.data
   // paper-cooperation 响应没有 .data 包装，直接是 { structuredResult: {...} }
-  if (!data && key !== 'paper-cooperation') return null
+  // 其它模块：响应无 data（如 404/500 业务错误）时返回空图，让画板置空而非回退 mock
+  if (!data && key !== 'paper-cooperation') return { nodes: [], edges: [] }
   const nodes: GraphNodeData[] = []
   const edges: GraphEdgeData[] = []
   const ev = (data?.evidence as string[]) || []

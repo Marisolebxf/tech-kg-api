@@ -3,6 +3,7 @@ export type ServiceField = {
   type: string
   required?: string
   description: string
+  options?: readonly string[]
 }
 
 export type ServiceResultRow = {
@@ -141,12 +142,18 @@ export const serviceModules: ServiceModule[] = [
     moduleRequirement: '科技单节点间接关系服务以单个科技专家或人才作为核心节点，通过挖掘知识图谱中与该节点存在间接关联的其他节点，运用路径分析与关系传递算法，推理出核心节点与间接节点之间的潜在关联。服务会梳理间接关系的传递路径，计算间接关系的关联强度，并对不同类型的间接关系进行标注，帮助用户全面了解单个科技专家或人才的间接社交网络与资源关联。',
     requestFields: [
       { name: 'core_node_id', type: 'string', required: '是', description: '核心专家或人才节点 ID' },
-      { name: 'relation_types', type: 'array', required: '否', description: '间接关系类型' },
-      { name: 'path_depth', type: 'number', required: '否', description: '路径分析深度' },
-      { name: 'min_strength', type: 'number', required: '否', description: '最小关联强度阈值' },
+      {
+        name: 'relation_types',
+        type: 'select',
+        required: '是',
+        description: '间接关系类型（单选）',
+        options: ['学术关联', '机构关联', '项目关联'],
+      },
+      { name: 'path_depth', type: 'number', required: '否', description: '路径分析深度（2-3 跳）' },
+      { name: 'min_strength', type: 'number', required: '否', description: '最小关联强度阈值（0-1）' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { core_node_id: '4P566No1', relation_types: ['学术关联', '机构关联'], path_depth: 2, min_strength: 0.65 },
+    requestExample: { core_node_id: '4G7t0B0t', relation_types: ['学术关联'], path_depth: 2, min_strength: 0.65 },
     responseExample: { structuredResult: { indirectNodeCount: 0, pathCount: 0, relationTypeCount: {}, averageStrength: 0 } },
     resultRows: [
       { label: '间接节点', value: '36', tone: 'blue' },
@@ -439,11 +446,11 @@ export const serviceModules: ServiceModule[] = [
     requestFields: [
       { name: 'expertAId', type: 'string', required: '是', description: '专家 A 唯一标识' },
       { name: 'expertBId', type: 'string', required: '是', description: '专家 B 唯一标识' },
-      { name: 'startTime', type: 'string', required: '否', description: '开始日期 YYYY-MM-DD' },
-      { name: 'endTime', type: 'string', required: '否', description: '结束日期 YYYY-MM-DD' },
+      { name: 'startTime', type: 'month', required: '否', description: '开始月份 YYYY-MM' },
+      { name: 'endTime', type: 'month', required: '否', description: '结束月份 YYYY-MM' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { expertAId: '4P566No1', expertBId: 'd492835p', startTime: '', endTime: '' },
+    requestExample: { expertAId: 'person_121d48631f434f4d323ba521d33032ad', expertBId: 'person_42914016fe8d6e0e1d01dad5845c47e6', startTime: '2021-01', endTime: '2026-08' },
     responseExample: { structuredResult: { cooperationPaperCount: 0, citation: { total: 0, max: 0 }, stableTeamMembers: [], paperTopics: [] } },
     resultRows: [
       { label: '合作论文', value: '14', tone: 'blue' },

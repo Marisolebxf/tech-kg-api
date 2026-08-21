@@ -158,6 +158,10 @@ def _person_vid(expert_id: str) -> str:
 # techkg 空间用 AUTHORED/Scholar/Paper；dev 空间用 AUTHORED_BY/Person/Paper。
 _AUTHORED_EDGE = "AUTHORED" if GRAPH_SPACE == "techkg" else "AUTHORED_BY"
 _SCHOLAR_LABEL = "Scholar" if GRAPH_SPACE == "techkg" else "Person"
+# techkg: Scholar -[AUTHORED]-> Paper
+# dev:    Paper -[AUTHORED_BY]-> Person
+_PERSON_TO_PAPER_DIRECTION = "out" if GRAPH_SPACE == "techkg" else "in"
+_PAPER_TO_PERSON_DIRECTION = "in" if GRAPH_SPACE == "techkg" else "out"
 
 
 def _display_name(node: dict[str, Any], fallback: str) -> str:
@@ -214,13 +218,13 @@ def _path_request(
         "steps": [
             {
                 "edgeType": _AUTHORED_EDGE,
-                "direction": "out",
+                "direction": _PERSON_TO_PAPER_DIRECTION,
                 "targetLabel": "Paper",
                 "targetFilters": _year_filters(body),
             },
             {
                 "edgeType": _AUTHORED_EDGE,
-                "direction": "in",
+                "direction": _PAPER_TO_PERSON_DIRECTION,
                 "targetLabel": _SCHOLAR_LABEL,
                 "targetFilters": [],
             },
@@ -369,12 +373,12 @@ async def _fetch_paper_context(
                 # 降级为空子图而非让整篇论文的上下文获取失败。
                 return _EMPTY_SUBGRAPH
 
-    # AUTHORED: Scholar→Paper，从 Paper 视角是入边；PUBLISHED_IN / HAS_TOPIC 为出边
+    # techkg 的 AUTHORED 为 Scholar→Paper；dev 的 AUTHORED_BY 为 Paper→Person。
     authored, published, keywords, cited = await asyncio.gather(
-        fetch(_AUTHORED_EDGE, "in"),
+        fetch(_AUTHORED_EDGE, _PAPER_TO_PERSON_DIRECTION),
         fetch("PUBLISHED_IN", "out"),
-        fetch("HAS_TOPIC", "out"),
-        fetch("CITED_BY", "in"),
+        fetch("HAS_KEYWORD", "out"),
+        fetch("CITED_BY", "out"),
     )
     return {
         **paper,

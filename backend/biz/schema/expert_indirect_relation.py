@@ -1,15 +1,16 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 NODE_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
+IndirectRelationType = Literal["学术关联", "机构关联", "项目关联"]
 
 
 class ExpertIndirectRelationRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "core_node_id": "4P566No1",
+                "core_node_id": "4G7t0B0t",
                 "relation_types": ["学术关联", "机构关联"],
                 "path_depth": 2,
                 "min_strength": 0.65,
@@ -24,10 +25,11 @@ class ExpertIndirectRelationRequest(BaseModel):
         pattern=NODE_ID_PATTERN,
         description="核心专家或人才节点 ID。",
     )
-    relation_types: list[str] = Field(
-        default_factory=list,
-        max_length=6,
-        description="需要保留的间接关系类型；空列表表示全部类型。",
+    relation_types: list[IndirectRelationType] = Field(
+        ...,
+        min_length=1,
+        max_length=1,
+        description="需要保留的间接关系类型，必须且只能选择：学术关联、机构关联或项目关联中的一项。",
     )
     path_depth: int = Field(default=2, ge=2, le=3, description="路径分析深度，支持 2-3 跳。")
     min_strength: float = Field(

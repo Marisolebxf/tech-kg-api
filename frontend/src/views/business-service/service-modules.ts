@@ -1,7 +1,13 @@
 export type ServiceField = {
   name: string
+  /** 表单展示名；缺省时用 name。用于消除接口字段名在界面上的歧义。 */
+  label?: string
   type: string
+  /** 表单控件类型；缺省时按 type 渲染。'month-calendar' = 日历式年月下拉。 */
+  ui?: 'month-calendar'
   required?: string
+  /** 输入框占位提示：用中文解释这个字段是什么，并给一个可直接使用的测试值。缺省时退回 description。 */
+  placeholder?: string
   description: string
   options?: readonly string[]
 }
@@ -38,6 +44,8 @@ export type ServiceModule = {
   requestFields: ServiceField[]
   responseFields: ServiceField[]
   requestExample: Record<string, string | number | boolean | string[]>
+  /** 为 false 时参数表单初始为空，requestExample 只作为接口文档示例，不回填表单。 */
+  prefillFormFromExample?: boolean
   responseExample: Record<string, unknown>
   resultRows: ServiceResultRow[]
   summaryRows: ServiceSummaryRow[]
@@ -74,13 +82,14 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技专家 / 人才直接关系服务通过收集科技专家或人才在各类场景中的直接交互数据，结合知识图谱中已有的实体属性与关系信息，运用语义匹配与关系验证算法，识别并构建专家或人才之间的直接关联。该服务会对直接关系的类型进行精准分类，同时记录关系发生的时间、场景及相关成果，形成结构化的直接关系数据，为后续的关系分析与网络构建提供基础。',
     requestFields: [
-      { name: 'expertAId', type: 'string', required: '否', description: '起点专家 scholar_id / VID / 姓名' },
-      { name: 'expertBId', type: 'string', required: '否', description: '另一位专家 scholar_id / VID / 姓名' },
-      { name: 'institution', type: 'string', required: '否', description: '机构关键词，任一端命中即保留' },
-      { name: 'startTime', type: 'string', required: '否', description: '关系起始时间（如 2020-01）' },
+      { name: 'expertAId', label: '专家A', type: 'string', required: '是', placeholder: '请输入专家A，如 person_4G7t0B0t', description: '起点专家 scholar_id / VID / 姓名，必填' },
+      { name: 'expertBId', label: '专家B', type: 'string', required: '否', placeholder: '选填，专家B，如 person_CE4825106', description: '另一位专家 scholar_id / VID / 姓名；留空则返回专家A的全部直接关系' },
+      { name: 'institution', label: '机构关键词', type: 'string', required: '否', placeholder: '选填，机构关键词，如 新加坡国立大学', description: '机构关键词，任一端命中即保留' },
+      { name: 'startTime', label: '关系建立起始时间', type: 'month', ui: 'month-calendar', required: '否', placeholder: '选填，选择年月，如 2020-01', description: '筛选条件：只保留关系建立时间不早于该年月的直接关系；留空表示不限时间' },
     ],
     responseFields: commonResponseFields,
     requestExample: { expertAId: '王祎', expertBId: '', institution: '', startTime: '' },
+    prefillFormFromExample: false,
     responseExample: { code: 0, message: 'success', data: { relation_type: '论文合作', relation_count: 12, scenario: '科研合作', confidence: 0.94 } },
     resultRows: [
       { label: '直接关系', value: '12', tone: 'blue' },
@@ -514,11 +523,11 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '重点关注科技企业关系服务围绕科技专家或人才，通过挖掘知识图谱中与专家相关的企业关联数据，运用企业关联与角色定位算法，构建专家与重点关注科技企业之间的关系。服务会标注专家在企业中的角色、合作领域、合作时间与合作模式，同时关联企业的行业地位、技术方向与经营状况，帮助用户了解科技专家与产业界的合作关联及资源对接情况。',
     requestFields: [
-      { name: 'expert_id', type: 'string', required: '是', description: '专家唯一标识 VID' },
-      { name: 'enterprise_name', type: 'string', required: '否', description: '企业名称筛选（模糊）' },
-      { name: 'role_type', type: 'string', required: '否', description: '专家企业角色筛选' },
-      { name: 'industry', type: 'string', required: '否', description: '企业行业方向筛选' },
-      { name: 'key_tech_enterprise_only', type: 'boolean', required: '否', description: '只保留重点科技企业（已上市/公司类，排除高校/研究院/MOCK），默认 true' },
+      { name: 'expert_id', type: 'string', required: '是', description: '请输入专家唯一标识' },
+      { name: 'enterprise_name', type: 'string', required: '否', description: '请输入企业名称（模糊筛选，可留空）' },
+      { name: 'role_type', type: 'string', required: '否', description: '请输入角色筛选（如 总经理，可留空）' },
+      { name: 'industry', type: 'string', required: '否', description: '请输入行业方向筛选（可留空）' },
+      { name: 'key_tech_enterprise_only', type: 'select', required: '否', description: '只保留重点科技企业（默认是）', options: ['是', '否'] },
     ],
     responseFields: [
       { name: 'code', type: 'number', description: '服务状态码（200 成功）' },
@@ -542,7 +551,8 @@ export const serviceModules: ServiceModule[] = [
       { name: 'data.relations[].risk_summary', type: 'string', description: '首要企业风险事件摘要（best-effort 探测）' },
       { name: 'data.evidence', type: 'array', description: '证据链' },
     ],
-    requestExample: { expert_id: 'person_893b432670627d6337b9b7edaab0e917', enterprise_name: '', role_type: '', industry: '', key_tech_enterprise_only: true },
+    // 测试数据不再预填到表单，避免误提交样例；测试用例见 backend/docs/enterprise_relation_test_parameters.md
+    requestExample: { expert_id: '', enterprise_name: '', role_type: '', industry: '', key_tech_enterprise_only: '' },
     responseExample: { code: 0, message: 'success', data: { enterprises: 9, roles: 4, cooperation_fields: ['芯片设计', '智能制造'] } },
     resultRows: [
       { label: '关联企业', value: '9', tone: 'blue' },
@@ -606,11 +616,12 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技产业链点 TOP-N 事件关系服务针对科技产业链中的特定环节或节点，通过收集知识图谱中与该节点相关的事件数据，运用事件影响力评估算法，筛选出影响力排名前 N 的核心事件。服务会构建这些 TOP-N 事件与相关科技专家或人才的关联关系，分析事件对产业链节点的影响及后续发展趋势，为产业链节点的风险预警与机遇挖掘提供支持。',
     requestFields: [
-      { name: 'chain_node_id', type: 'string', required: '是', description: '产业链节点标识（如 IC0007007）' },
-      { name: 'top_n', type: 'number', required: '否', description: '返回事件数量，默认 10' },
-      { name: 'event_type', type: 'string', required: '否', description: '事件类型筛选（financing/bankruptcy/bid/news/…）' },
-      { name: 'time_range', type: 'string', required: '否', description: '事件时间范围筛选，如 2025-2026' },
-      { name: 'max_orgs', type: 'number', required: '否', description: '链节点下最多扫描企业数（按 chain_score 排序），默认 20' },
+      { name: 'chain_node_id', type: 'string', required: '是', description: '请输入产业链节点标识（如 IC0007007）' },
+      { name: 'top_n', type: 'number', required: '否', description: '返回事件数量，取值 1-50，默认 10' },
+      { name: 'event_type', type: 'string', required: '否', description: '事件类型筛选（financing/bankruptcy/bid/news/…，可留空）' },
+      { name: 'time_range_start', type: 'month', required: '否', description: '起始年月（留空不筛）' },
+      { name: 'time_range_end', type: 'month', required: '否', description: '结束年月（留空不筛）' },
+      { name: 'max_orgs', type: 'number', required: '否', description: '最多扫描企业数，取值 1-50，默认 20' },
     ],
     responseFields: [
       { name: 'code', type: 'number', description: '服务状态码（200 成功）' },
@@ -636,7 +647,8 @@ export const serviceModules: ServiceModule[] = [
       { name: 'data.opportunity', type: 'string', description: '机遇挖掘分析（标书维度）' },
       { name: 'data.evidence', type: 'array', description: '证据链' },
     ],
-    requestExample: { chain_node_id: 'IC0007007', top_n: 5, event_type: '', time_range: '', max_orgs: 50 },
+    // 测试数据不再预填到表单，避免误提交样例；测试用例见 backend/docs/industry_chain_topn_test_parameters.md
+    requestExample: { chain_node_id: '', top_n: '', event_type: '', time_range_start: '', time_range_end: '', max_orgs: '' },
     responseExample: { code: 0, message: 'success', data: { events: 10, experts: 18, enterprises: 24, risk_level: '中' } },
     resultRows: [
       { label: 'TOP事件', value: '10', tone: 'blue' },

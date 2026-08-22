@@ -186,7 +186,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         except Exception:
             node = None
         if node is None:
-            raise KeyError(f"{kind}不存在: {node_id}")
+            raise KeyError(f"未找到{kind}: {node_id}")
         return node
 
     @staticmethod

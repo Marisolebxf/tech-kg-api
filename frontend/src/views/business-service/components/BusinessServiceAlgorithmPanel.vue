@@ -22,6 +22,7 @@ import {
   type IndustryChainPanoramaQueryRequest,
   type IndustryChainPanoramaQueryResponse,
   type PanoramaGraphEdge,
+  type PanoramaGraphNode,
   type PanoramaKeyEntity,
 } from '../../../api/industryChainPanorama'
 import {
@@ -128,25 +129,76 @@ const hasParameterErrors = computed(
   () => Object.keys(parameterErrors.value).length > 0,
 )
 const achievementTypeOptions = [
+  { label: '全部', value: 'all' },
   { label: '论文', value: 'paper' },
   { label: '专利', value: 'patent' },
   { label: '项目', value: 'project' },
 ] as const
-const educationStageOptions = ['学士', '硕士', '博士'] as const
-const achievementTypeSelection = computed<
-  Array<'paper' | 'patent' | 'project'>
->({
-  get: () =>
-    (parameterValues.value.achievementTypes || '')
+type AchievementTypeOption = (typeof achievementTypeOptions)[number]['value']
+const allAchievementTypes = ['paper', 'patent', 'project'] as const
+const educationStageOptions = [
+  { label: '全部', value: 'all' },
+  { label: '学士', value: '学士' },
+  { label: '硕士', value: '硕士' },
+  { label: '博士', value: '博士' },
+] as const
+type EducationStageOption = (typeof educationStageOptions)[number]['value']
+const allEducationStages = ['学士', '硕士', '博士'] as const
+const educationStageSelection = computed<EducationStageOption[]>({
+  get: (): EducationStageOption[] => {
+    const selected = (parameterValues.value.educationStage || '')
+      .split(',')
+      .filter(
+        (value): value is '学士' | '硕士' | '博士' =>
+          value === '学士' || value === '硕士' || value === '博士',
+      )
+    return allEducationStages.every((value) => selected.includes(value))
+      ? ['all']
+      : selected
+  },
+  set: (values: EducationStageOption[]) => {
+    const current = (parameterValues.value.educationStage || '')
+      .split(',')
+      .filter(Boolean)
+    const currentlyAll = allEducationStages.every((value) =>
+      current.includes(value),
+    )
+    let selected: readonly string[] = values.filter((value) => value !== 'all')
+    if (values.includes('all') && !currentlyAll) {
+      selected = allEducationStages
+    }
+    parameterValues.value = {
+      ...parameterValues.value,
+      educationStage: selected.join(','),
+    }
+  },
+})
+const achievementTypeSelection = computed<AchievementTypeOption[]>({
+  get: (): AchievementTypeOption[] => {
+    const selected = (parameterValues.value.achievementTypes || '')
       .split(',')
       .filter(
         (value): value is 'paper' | 'patent' | 'project' =>
           value === 'paper' || value === 'patent' || value === 'project',
-      ),
-  set: (values) => {
+      )
+    return allAchievementTypes.every((value) => selected.includes(value))
+      ? ['all']
+      : selected
+  },
+  set: (values: AchievementTypeOption[]) => {
+    const current = (parameterValues.value.achievementTypes || '')
+      .split(',')
+      .filter(Boolean)
+    const currentlyAll = allAchievementTypes.every((value) =>
+      current.includes(value),
+    )
+    let selected: readonly string[] = values.filter((value) => value !== 'all')
+    if (values.includes('all') && !currentlyAll) {
+      selected = allAchievementTypes
+    }
     parameterValues.value = {
       ...parameterValues.value,
-      achievementTypes: values.join(','),
+      achievementTypes: selected.join(','),
     }
   },
 })
@@ -163,6 +215,7 @@ const panoramaResponse = ref<IndustryChainPanoramaQueryResponse | null>(null)
 const panoramaError = ref<string | null>(null)
 const expertDirectResponse = ref<ExpertDirectRelationQueryResponse | null>(null)
 const expertDirectError = ref<string | null>(null)
+let expertDirectAbortController: AbortController | null = null
 const expertIndirectResponse = ref<ExpertIndirectRelationResponse | null>(null)
 const expertIndirectError = ref<string | null>(null)
 const isLiveAlumni = computed(() => props.moduleInfo.key === 'expert-alumni')
@@ -179,6 +232,12 @@ const isPanorama = computed(
   () => props.moduleInfo.key === 'industry-chain-panorama',
 )
 const isExpertDirect = computed(() => props.moduleInfo.key === 'expert-direct')
+const isEnterpriseRelation = computed(
+  () => props.moduleInfo.key === 'enterprise-relation',
+)
+const isIndustryChainEvent = computed(
+  () => props.moduleInfo.key === 'industry-chain-event',
+)
 const isExpertIndirect = computed(
   () => props.moduleInfo.key === 'node-indirect',
 )
@@ -288,6 +347,72 @@ function inferPanoramaEdgeCategory(label: string): string {
   return '直接关系'
 }
 
+/** 画布展开层最多渲染的子图节点数与每行节点数。 */
+const PANORAMA_EXPANDED_LIMIT = 24
+const PANORAMA_EXPANDED_PER_ROW = 12
+
+/** 后端子图节点标签（Neo4j label）映射到画布样式。 */
+function mapPanoramaGraphNodeType(type: string): {
+  nodeType: GraphNodeType
+  entityType: string
+} {
+  const t = (type || '').toLowerCase()
+  if (t.includes('person') || t.includes('scholar') || t.includes('expert')) {
+    return { nodeType: 'expert', entityType: '扩展专家' }
+  }
+  if (
+    t.includes('organization') ||
+    t.includes('company') ||
+    t.includes('institution')
+  ) {
+    return { nodeType: 'org', entityType: '扩展机构' }
+  }
+  if (
+    t.includes('paper') ||
+    t.includes('patent') ||
+    t.includes('publication')
+  ) {
+    return { nodeType: 'paper', entityType: '扩展成果' }
+  }
+  if (t.includes('event')) {
+    return { nodeType: 'event', entityType: '扩展事件' }
+  }
+  if (t.includes('product') || t.includes('project')) {
+    return { nodeType: 'project', entityType: '扩展产品' }
+  }
+  return { nodeType: 'topic', entityType: '扩展实体' }
+}
+
+/**
+ * 从子图节点中挑选进入画布展开层的节点。
+ *
+ * 排除已在分层里出现过的节点，并优先保留与分层节点直接相连的节点，避免画布出现孤立点。
+ */
+function pickPanoramaExpandedNodes(
+  resp: IndustryChainPanoramaQueryResponse,
+  layerIds: Set<string>,
+): PanoramaGraphNode[] {
+  const seen = new Set<string>(layerIds)
+  const candidates: PanoramaGraphNode[] = []
+  for (const node of resp.graph.nodes) {
+    if (!node.id || seen.has(node.id)) continue
+    seen.add(node.id)
+    candidates.push(node)
+  }
+  const layerAdjacency = new Map<string, number>()
+  for (const edge of resp.graph.edges) {
+    if (layerIds.has(edge.source)) {
+      layerAdjacency.set(edge.target, (layerAdjacency.get(edge.target) ?? 0) + 1)
+    }
+    if (layerIds.has(edge.target)) {
+      layerAdjacency.set(edge.source, (layerAdjacency.get(edge.source) ?? 0) + 1)
+    }
+  }
+  return candidates.sort(
+    (a, b) => (layerAdjacency.get(b.id) ?? 0) - (layerAdjacency.get(a.id) ?? 0),
+  )
+}
+
 function derivedGraphFromResponse(
   resp: IndustryChainPanoramaQueryResponse,
 ): GraphPreset {
@@ -299,16 +424,26 @@ function derivedGraphFromResponse(
     resp.summary.industry ||
     (resp.input?.industry as string | undefined) ||
     '产业全景'
+  const layerIds = new Set(
+    resp.layers.flatMap((layer) => layer.items.map((item) => item.id)).filter(Boolean),
+  )
+  const expandedCandidates = pickPanoramaExpandedNodes(resp, layerIds)
+  const expandedNodes = expandedCandidates.slice(0, PANORAMA_EXPANDED_LIMIT)
+  const hasExpanded = expandedNodes.length > 0
+  // 有子图扩展节点时压缩分层区域，为画布底部的展开层腾出空间。
+  const layerY = (y: number) => (hasExpanded ? Math.round(28 + (y - 50) * 0.72) : y)
   const center: GraphNodeData = {
     id: PANORAMA_CENTER_ID,
     label: industryLabel,
     nodeType: 'main',
     entityType: '产业链核心',
     x: 380,
-    y: 50,
+    y: hasExpanded ? 24 : 50,
     radius: 34,
     confidence: 1,
-    relations: `节点 ${resp.summary.totalNodes} · 边 ${resp.summary.totalEdges}`,
+    relations: hasExpanded
+      ? `子图 ${resp.graph.nodes.length} 节点 · ${resp.graph.edges.length} 边（展开层展示 ${expandedNodes.length}/${expandedCandidates.length}）`
+      : `节点 ${resp.summary.totalNodes} · 边 ${resp.summary.totalEdges}`,
     evidence: ['科技产业链全景图'],
     level: 0,
   }
@@ -334,7 +469,7 @@ function derivedGraphFromResponse(
         nodeType: visual.nodeType,
         entityType: visual.entityType,
         x,
-        y: visual.y,
+        y: layerY(visual.y),
         radius: 22,
         confidence:
           item.metricValue != null
@@ -355,6 +490,32 @@ function derivedGraphFromResponse(
       })
     })
   }
+
+  // 展开层：depth 控制的子图扩展节点，按行铺在画布底部。
+  expandedNodes.forEach((item, idx) => {
+    const row = Math.floor(idx / PANORAMA_EXPANDED_PER_ROW)
+    const col = idx % PANORAMA_EXPANDED_PER_ROW
+    const rowCount = Math.min(
+      PANORAMA_EXPANDED_PER_ROW,
+      expandedNodes.length - row * PANORAMA_EXPANDED_PER_ROW,
+    )
+    const visual = mapPanoramaGraphNodeType(item.type)
+    const node: GraphNodeData = {
+      id: item.id,
+      label: item.label || item.id.slice(0, 10),
+      nodeType: visual.nodeType,
+      entityType: visual.entityType,
+      x: rowCount === 1 ? 380 : 60 + ((700 - 60) * col) / (rowCount - 1),
+      y: 340 + row * 50,
+      radius: 13,
+      confidence: 0.6,
+      relations: item.subtitle || item.type || visual.entityType,
+      evidence: [`子图扩展 · depth=${resp.input?.depth ?? '—'}`],
+      level: 4 + row,
+    }
+    nodes.push(node)
+    idMap.set(node.id, node)
+  })
 
   const seenEdges = new Set(edges.map((e) => `${e.from}::${e.to}::${e.label}`))
   resp.graph.edges.forEach((edge: PanoramaGraphEdge, idx) => {
@@ -378,8 +539,9 @@ function buildLiveGraph(
   res: Record<string, any>,
   key: string,
 ): { nodes: GraphNodeData[]; edges: GraphEdgeData[] } | null {
-  const data = res?.data ?? res
-  if (!data) return null
+  const data = key === 'paper-cooperation' ? (res?.data ?? res) : res?.data
+  // 响应无有效数据时返回空图，让画板置空而非回退 mock preset
+  if (!data) return { nodes: [], edges: [] }
   const nodes: GraphNodeData[] = []
   const edges: GraphEdgeData[] = []
   const ev = (data.evidence as string[]) || []
@@ -1189,6 +1351,17 @@ const apiResultJson = computed(() => {
       2,
     )
   }
+  if (isLiveCoop.value || isLiveAlumni.value) {
+    const resp = (liveApiPayload.value as { response?: unknown } | null)?.response
+    if (resp) {
+      return JSON.stringify(resp, null, 2)
+    }
+    return JSON.stringify(
+      { message: running.value ? '查询中...' : '暂无查询结果' },
+      null,
+      2,
+    )
+  }
   if (isPaperCooperation.value && liveError.value) {
     return JSON.stringify({ error: liveError.value }, null, 2)
   }
@@ -1270,7 +1443,7 @@ function computePanoramaSummaryRows(
     ['产业动态事件', layerLabel('flagship_achievement')],
     [
       '图谱规模',
-      `${resp.summary.totalNodes} 个节点｜${resp.summary.totalEdges} 条关系`,
+      `子图 ${resp.graph.nodes.length} 个节点｜${resp.graph.edges.length} 条关系（全库 ${resp.summary.totalNodes}｜${resp.summary.totalEdges}）`,
     ],
     ['更新状态', updateStatus.value],
   ])
@@ -1287,17 +1460,21 @@ function buildPanoramaRequest(): IndustryChainPanoramaQueryRequest {
     min: number,
     max: number,
     fallback: number,
+    label: string,
   ) => {
     const n = Number.parseInt(value, 10)
     if (Number.isNaN(n)) return fallback
+    if (n < min || n > max) {
+      showToast(`${label} 超出范围 [${min}, ${max}]，已自动调整为边界值`, 'warning')
+    }
     return Math.min(max, Math.max(min, n))
   }
   return {
     dataSource: 'all',
     industry: (raw.industry ?? '').trim() || undefined,
     anchorId: (raw.anchorId ?? '').trim() || undefined,
-    depth: clampInt(raw.depth ?? '', 1, 3, 2),
-    topK: clampInt(raw.topK ?? '', 1, 20, 5),
+    depth: clampInt(raw.depth ?? '', 1, 3, 2, '层级深度 depth'),
+    topK: clampInt(raw.topK ?? '', 1, 20, 5, 'topK'),
   }
 }
 
@@ -1539,11 +1716,16 @@ function normalizeMonthBoundary(
   return normalized + '-' + String(lastDay).padStart(2, '0')
 }
 function resetParameters({ notify = true }: { notify?: boolean } = {}) {
+  expertDirectAbortController?.abort()
+  expertDirectAbortController = null
+  running.value = false
   parameterErrors.value = {}
   parameterValues.value = Object.fromEntries(
     props.moduleInfo.requestFields.map((field) => [
       field.name,
-      formatValue(props.moduleInfo.requestExample[field.name]),
+      props.moduleInfo.prefillFormFromExample === false
+        ? ''
+        : formatValue(props.moduleInfo.requestExample[field.name]),
     ]),
   )
   paramResetToken.value += 1
@@ -1640,6 +1822,17 @@ function optionalParam(value: string | undefined): string | undefined {
   return cleaned ? cleaned : undefined
 }
 
+/**
+ * 将两个 month 选择器值（YYYY-MM）合并为后端 time_range 期望的 "YYYY-YYYY" 年份区间。
+ * 后端用 partition("-") 取前后各 4 位作年份上下界，故只取年份；留空端表示不设该侧边界。
+ */
+function buildTimeRange(start?: string, end?: string): string {
+  const lo = (start ?? '').slice(0, 4)
+  const hi = (end ?? '').slice(0, 4)
+  if (!lo && !hi) return ''
+  return `${lo}-${hi}`
+}
+
 async function handleRun() {
   if (running.value) return
   running.value = true
@@ -1667,9 +1860,21 @@ async function handleRun() {
   }
 
   if (isExpertDirect.value) {
+    const expertAId = (parameterValues.value.expertAId ?? '').trim()
+    if (!expertAId) {
+      parameterErrors.value = { expertAId: '请输入专家A' }
+      running.value = false
+      showToast('请完善必填项后再执行', 'warning')
+      return
+    }
+    parameterErrors.value = {}
+    expertDirectAbortController?.abort()
+    const controller = new AbortController()
+    expertDirectAbortController = controller
     try {
       const request = buildExpertDirectRequest()
-      const response = await queryExpertDirectRelation(request)
+      const response = await queryExpertDirectRelation(request, controller.signal)
+      if (controller.signal.aborted) return
       expertDirectResponse.value = response
       expertDirectError.value = null
       selectedGraphNodeId.value = null
@@ -1678,11 +1883,15 @@ async function handleRun() {
       lastTestTime.value = formatTimestamp(now)
       lastUpdateTime.value = now.getTime()
     } catch (error) {
+      if (controller.signal.aborted) return
       const message = error instanceof Error ? error.message : String(error)
       expertDirectError.value = message
       expertDirectResponse.value = null
     } finally {
-      running.value = false
+      if (expertDirectAbortController === controller) {
+        running.value = false
+        expertDirectAbortController = null
+      }
     }
     return
   }
@@ -1916,11 +2125,14 @@ async function handleRun() {
         selectedGraphNodeId.value = null
         selectedGraphEdgeId.value = null
       }
-    } else if (
-      props.moduleInfo.key === 'enterprise-relation' ||
-      props.moduleInfo.key === 'industry-chain-event'
-    ) {
-      // 重点关注科技企业关系 / 产业链点 TOP-N 事件：走通用 kg-service 端点
+    } else if (props.moduleInfo.key === 'enterprise-relation') {
+      // 重点关注科技企业关系
+      const expertId = parameterValues.value.expert_id?.trim()
+      if (!expertId) {
+        parameterErrors.value = { expert_id: '请输入专家唯一标识' }
+        return
+      }
+      parameterErrors.value = {}
       const body = buildPayload()
       const res = (await invokeKgService(
         props.moduleInfo.endpoint,
@@ -1941,10 +2153,65 @@ async function handleRun() {
         showToast(liveError.value, 'warning')
         resultMode.value = 'api'
       } else {
+        const count = Number(res?.data?.enterprises ?? 0)
+        liveError.value = null
+        showToast(
+          count ? `命中 ${count} 家关联企业` : '调用成功，暂无关联企业',
+          count ? 'success' : 'info',
+        )
         resultMode.value = 'summary'
         selectedGraphNodeId.value = null
         selectedGraphEdgeId.value = null
-        showToast('调用成功', 'success')
+      }
+    } else if (props.moduleInfo.key === 'industry-chain-event') {
+      // 产业链点 TOP-N 事件关系
+      const chainNodeId = parameterValues.value.chain_node_id?.trim()
+      if (!chainNodeId) {
+        parameterErrors.value = { chain_node_id: '请输入产业链节点标识' }
+        return
+      }
+      parameterErrors.value = {}
+      const topN = optionalParam(parameterValues.value.top_n)
+      const maxOrgs = optionalParam(parameterValues.value.max_orgs)
+      const eventType = optionalParam(parameterValues.value.event_type)
+      // 两个 month 选择器合并为后端 time_range 期望的 "YYYY-YYYY" 年份区间
+      const timeRange = buildTimeRange(
+        optionalParam(parameterValues.value.time_range_start),
+        optionalParam(parameterValues.value.time_range_end),
+      )
+      const body: Record<string, any> = { chain_node_id: chainNodeId }
+      if (topN) body.top_n = Number(topN)
+      if (maxOrgs) body.max_orgs = Number(maxOrgs)
+      if (eventType) body.event_type = eventType
+      if (timeRange) body.time_range = timeRange
+      const res = (await invokeKgService(
+        props.moduleInfo.endpoint,
+        body,
+        60000,
+      )) as Record<string, any>
+      liveResponse.value = res
+      liveApiPayload.value = {
+        describe: liveDescribe.value,
+        request: body,
+        response: res,
+      }
+      if (
+        res?.success === false ||
+        (res?.code !== undefined && res.code !== 200)
+      ) {
+        liveError.value = (res?.msg as string) || `业务码 ${res?.code}`
+        showToast(liveError.value, 'warning')
+        resultMode.value = 'api'
+      } else {
+        const count = Number(res?.data?.events ?? 0)
+        liveError.value = null
+        showToast(
+          count ? `返回 ${count} 条 TOP 事件` : '调用成功，暂无事件',
+          count ? 'success' : 'info',
+        )
+        resultMode.value = 'summary'
+        selectedGraphNodeId.value = null
+        selectedGraphEdgeId.value = null
       }
     } else if (props.moduleInfo.key === 'paper-cooperation') {
       const expertAId = parameterValues.value.expertAId?.trim()
@@ -2089,13 +2356,22 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       </div>
       <img class="field-info-icon" :src="iconInfo" alt="" aria-hidden="true" />
     </div>
-    <div class="service-console__params">
+    <div
+      class="service-console__params"
+      :class="{
+        'service-console__params--inline':
+          isEnterpriseRelation || isIndustryChainEvent,
+      }"
+    >
       <label
         v-for="field in moduleInfo.requestFields"
         :key="field.name"
         :class="{ 'has-error': Boolean(parameterErrors[field.name]) }"
       >
-        <span><i v-if="field.required === '是'">*</i>{{ field.name }}</span>
+        <span
+          ><i v-if="field.required === '是'">*</i
+          >{{ field.label ?? field.name }}</span
+        >
         <select
           v-if="field.type === 'select'"
           :key="`${field.name}-${paramResetToken}`"
@@ -2128,22 +2404,27 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         </ElSelect>
         <ElSelect
           v-else-if="field.name === 'educationStage' && isLiveAlumni"
-          v-model="parameterValues[field.name]"
+          v-model="educationStageSelection"
           class="alumni-stage-select"
+          multiple
+          collapse-tags
+          :max-collapse-tags="1"
           clearable
-          placeholder="请选择教育阶段"
+          placeholder="选择教育阶段"
           aria-label="教育阶段"
           @update:model-value="clearParameterError(field.name)"
         >
           <ElOption
             v-for="stage in educationStageOptions"
-            :key="stage"
-            :label="stage"
-            :value="stage"
+            :key="stage.label"
+            :label="stage.label"
+            :value="stage.value"
           />
         </ElSelect>
         <ElConfigProvider
-          v-else-if="field.type === 'month' && isLiveCoop"
+          v-else-if="
+            field.type === 'month' && (isLiveCoop || field.ui === 'month-calendar')
+          "
           :locale="zhCn"
         >
           <ElDatePicker
@@ -2153,12 +2434,13 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             format="YYYY年MM月"
             value-format="YYYY-MM"
             :placeholder="
-              field.name === 'timeRangeStart'
+              field.placeholder ??
+              (field.name === 'timeRangeStart'
                 ? '选择开始年月，如 2020-01'
-                : '选择结束年月，如 2020-12'
+                : '选择结束年月，如 2020-12')
             "
             clearable
-            :aria-label="`${field.name}年月`"
+            :aria-label="`${field.label ?? field.name}年月`"
             @update:model-value="clearParameterError(field.name)"
           />
         </ElConfigProvider>
@@ -2167,7 +2449,8 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :type="field.type === 'month' ? 'month' : 'text'"
           :key="`${field.name}-${paramResetToken}`"
           :value="parameterValues[field.name] ?? ''"
-          :placeholder="field.description"
+          :placeholder="field.placeholder ?? field.description"
+          :title="field.description"
           :aria-invalid="Boolean(parameterErrors[field.name])"
           @input="handleParameterInput(field.name, $event)"
         />
@@ -2642,6 +2925,11 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   min-width: 0;
 }
 
+/* 重点关注科技企业关系：5 个入参排成一行（桌面宽屏单行排满） */
+.service-console__params--inline {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+}
+
 .service-console__params label {
   position: relative;
   display: grid;
@@ -2680,6 +2968,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .cooperation-month-picker {
   width: 100% !important;
+  min-width: 0;
 }
 
 .cooperation-type-select {
@@ -2744,7 +3033,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .service-console--cooperation {
-  grid-template-columns: 210px minmax(750px, 1fr) 190px;
+  grid-template-columns: 210px minmax(0, 1fr) 190px;
   align-items: start;
 }
 
@@ -2788,11 +3077,11 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .service-console--cooperation .service-console__params {
   grid-template-columns:
-    minmax(132px, 1fr)
-    minmax(132px, 1fr)
-    150px
-    minmax(132px, 1fr)
-    minmax(132px, 1fr);
+    minmax(0, 1fr)
+    minmax(0, 1fr)
+    minmax(0, 150px)
+    minmax(0, 1fr)
+    minmax(0, 1fr);
   align-items: end;
 }
 
@@ -2800,6 +3089,8 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   justify-content: center;
   min-width: 190px;
   margin-top: 26px;
+  position: relative;
+  z-index: 2;
 }
 
 .business-service__main {

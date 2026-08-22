@@ -57,16 +57,19 @@ async def test_query_alumni_relation_success(async_client, monkeypatch):
 @pytest.mark.asyncio
 async def test_query_alumni_relation_not_found(async_client, monkeypatch):
     def _raise(**kwargs):
-        raise KeyError("专家不存在: S404")
+        raise KeyError("未找到专家: S404")
 
     monkeypatch.setattr(handler.application, "query", _raise)
     resp = await async_client.post(
         "/api/v1/kg-construction/expert-alumni-relations/query",
         json={"expertId": "S404"},
     )
-    assert resp.status_code == 404
+    assert resp.status_code == 200
     body = resp.json()
-    assert "专家不存在" in body["detail"]
+    assert body["code"] == 404
+    assert body["success"] is False
+    assert body["data"] is None
+    assert body["msg"] == "未找到专家: S404"
 
 
 @pytest.mark.asyncio

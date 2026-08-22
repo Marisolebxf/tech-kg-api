@@ -1439,7 +1439,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--dry-run", dest="dry_run", action="store_true")
     mode.add_argument("--write", dest="dry_run", action="store_false")
     parser.set_defaults(dry_run=True)
-    parser.add_argument("--space", choices=(DEFAULT_SPACE,), default=DEFAULT_SPACE)
+    parser.add_argument("--space", default=DEFAULT_SPACE)
     parser.add_argument("--ingest-batch")
     parser.add_argument(
         "--alignment-mode",

@@ -20,7 +20,7 @@ from typing import Any
 
 logger = logging.getLogger("script.organization_etl_common")
 
-DEFAULT_SPACE = "dev"
+DEFAULT_SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 SOURCE_SYSTEM = "gkx_element"
 MAX_TEXT_LENGTH = 20_000
 MAX_EXTRA_JSON_LENGTH = 64_000

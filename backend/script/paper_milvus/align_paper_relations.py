@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import time
 
 from infra.graph_db import TRSGraphClient
@@ -37,7 +38,7 @@ from script.paper_milvus.milvus import get_milvus_client
 
 logger = logging.getLogger("script.align_paper_relations")
 
-SPACE = "dev"
+SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 COLLECTION = "paper"
 STUB_PREFIXES = ["paper_ref", "paper_cit", "paper_rel"]
 INGEST_BATCH = "paper_milvus_align_0730"

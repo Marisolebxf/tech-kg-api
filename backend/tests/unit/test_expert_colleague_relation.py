@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from application.expert_colleague_relation import (
+    SPACE,
     ExpertColleagueRelationApplication,
     FastAPIGraphSearchGateway,
     clear_caches,
@@ -363,7 +364,7 @@ async def test_query_filters_min_confidence_and_does_not_invent_work_content() -
     assert result["colleagues"][0]["workContent"] == []
 
 
-def test_persist_relations_writes_canonical_colleague_edge_to_dev() -> None:
+def test_persist_relations_writes_canonical_colleague_edge_to_configured_space() -> None:
     graph = MagicMock()
     graph.get_node_edges.return_value = []
     payload = {
@@ -389,11 +390,11 @@ def test_persist_relations_writes_canonical_colleague_edge_to_dev() -> None:
     ) as client:
         result = ExpertColleagueRelationApplication._persist_relations(payload)
 
-    assert client.call_args.args[0].space == "dev"
+    assert client.call_args.args[0].space == SPACE
     graph.create_edge.assert_called_once()
     assert graph.create_edge.call_args.args[:3] == ("person_a", "person_z", "COLLEAGUE")
     assert result == {
-        "space": "dev",
+        "space": SPACE,
         "edgeType": "COLLEAGUE",
         "created": 1,
         "updated": 0,

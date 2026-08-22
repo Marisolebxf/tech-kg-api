@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from infra.gkx_element import gkx_element_read_session
 from infra.graph_db import TRSGraphClient, get_trs_graph_client
+from script.etl_watermark import Watermark
 from script.organization_etl_common import (
     DEFAULT_SPACE,
     DOMAIN_TABLE_SPECS,
@@ -740,12 +741,19 @@ def iter_source_rows(
     spec: DomainTableSpec,
     *,
     max_records: int | None,
+    since: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     columns = source_columns(session, spec.name)
     if not columns:
         raise RuntimeError(f"source table does not exist: {spec.name}")
     query = f"SELECT * FROM `{spec.name}`"
     params: dict[str, Any] = {}
+    # 增量:表有 updated_time/update_time 列时按水位过滤;无则退化全量(安全)
+    if since:
+        ts_col = next((c for c in ("updated_time", "update_time") if c in columns), None)
+        if ts_col:
+            query += f" WHERE `{ts_col}` > :since"
+            params["since"] = since
     query += " ORDER BY 1"
     if max_records is not None:
         query += " LIMIT :max_records"
@@ -1053,6 +1061,7 @@ def run_etl(
     ingest_batch: str | None = None,
     graph: TRSGraphClient | None = None,
     session: Session | None = None,
+    mode: str = "full",
 ) -> dict[str, EntityStats]:
     """Load only Organization and DataSource vertices; never create an edge."""
     if domestic_only and foreign_only:
@@ -1069,6 +1078,11 @@ def run_etl(
     ingest_time = now.isoformat(timespec="seconds")
     ingest_batch = ingest_batch or f"ORG_ENTITY_{now.strftime('%Y%m%dT%H%M%SZ')}"
     client = graph or (None if dry_run else get_trs_graph_client())
+    since: str | None = None
+    if mode == "incremental":
+        since = Watermark.for_domain("org_entity").read()
+        logger.info("incremental: org_entity watermark=%s", since)
+    max_ts = ""
     specs = ENTITY_TABLE_SPECS if table == "all" else (ENTITY_TABLE_BY_NAME[table],)
     if domestic_only:
         specs = tuple(spec for spec in specs if spec.scope == "domestic")
@@ -1103,8 +1117,12 @@ def run_etl(
                 session,
                 spec,
                 max_records=max_records,
+                since=since,
             ):
                 stats.queried += 1
+                _ts = row.get("updated_time") or row.get("update_time")
+                if _ts and str(_ts) > max_ts:
+                    max_ts = str(_ts)
                 if is_virtual_source_row(row):
                     stats.skipped += 1
                     logger.info("skip synthetic entity source row table=%s", spec.name)
@@ -1144,6 +1162,10 @@ def run_etl(
                     stats=stats,
                 )
             logger.info("completed entity table=%s stats=%s", spec.name, asdict(stats))
+        # 整批成功后前进水位(中途抛异常则不前进→下次重跑这批,rank@0 幂等)
+        if mode == "incremental" and not dry_run and max_ts:
+            Watermark.for_domain("org_entity").advance_if_higher(max_ts)
+            logger.info("org_entity watermark advanced to %s", max_ts)
         return results
     finally:
         if owns_session and session_cm is not None:
@@ -1156,7 +1178,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     schema_parser = subparsers.add_parser("init-schema")
-    schema_parser.add_argument("--space", choices=(DEFAULT_SPACE,), default=DEFAULT_SPACE)
+    schema_parser.add_argument("--space", default=DEFAULT_SPACE)
 
     load_parser = subparsers.add_parser("load")
     load_parser.add_argument(
@@ -1171,11 +1193,17 @@ def build_parser() -> argparse.ArgumentParser:
     load_parser.set_defaults(dry_run=True)
     load_parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     load_parser.add_argument("--max-records", type=int)
+    load_parser.add_argument(
+        "--mode",
+        choices=("full", "incremental"),
+        default="full",
+        help="full=全量;incremental=只灌 updated_time>水位 的行(读 script/.etl_watermark/org_entity.txt)",
+    )
     load_parser.add_argument("--ingest-batch")
     scope = load_parser.add_mutually_exclusive_group()
     scope.add_argument("--domestic-only", action="store_true")
     scope.add_argument("--foreign-only", action="store_true")
-    load_parser.add_argument("--space", choices=(DEFAULT_SPACE,), default=DEFAULT_SPACE)
+    load_parser.add_argument("--space", default=DEFAULT_SPACE)
     return parser
 
 
@@ -1203,6 +1231,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             domestic_only=args.domestic_only,
             foreign_only=args.foreign_only,
             ingest_batch=ingest_batch,
+            mode=args.mode,
         )
     summary = {table: asdict(stats) for table, stats in results.items()}
     logger.info("organization entity ETL summary=%s", summary)

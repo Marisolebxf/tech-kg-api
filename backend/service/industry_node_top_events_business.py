@@ -280,6 +280,9 @@ class IndustryNodeTopEventsService:
             resp.evidence.append(f"链节点查询失败: {exc}")
             return resp
         nodes_map = {n.get("id"): (n.get("properties") or {}) for n in (data.get("nodes") or [])}
+        # 子图不含 seed → 链节点不存在（_subgraph_sync 对存在节点必返回 center）
+        if node_vid not in nodes_map:
+            raise KeyError(f"产业链节点不存在: {req.chain_node_id}")
         node_props = nodes_map.get(node_vid, {})
         resp.chain_node_name = node_props.get("node_name")
         resp.node_imp_level = node_props.get("node_imp_level")

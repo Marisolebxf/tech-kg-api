@@ -13,6 +13,7 @@
     "test:compatibility": "playwright test --config=playwright.compatibility.config.ts"
   },
   "dependencies": {
+    "@arco-design/web-vue": "2.58.0",
     "@microsoft/fetch-event-source": "^2.0.1",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.218.0",

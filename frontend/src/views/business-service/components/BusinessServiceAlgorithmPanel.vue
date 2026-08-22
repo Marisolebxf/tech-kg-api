@@ -129,25 +129,76 @@ const hasParameterErrors = computed(
   () => Object.keys(parameterErrors.value).length > 0,
 )
 const achievementTypeOptions = [
+  { label: '全部', value: 'all' },
   { label: '论文', value: 'paper' },
   { label: '专利', value: 'patent' },
   { label: '项目', value: 'project' },
 ] as const
-const educationStageOptions = ['学士', '硕士', '博士'] as const
-const achievementTypeSelection = computed<
-  Array<'paper' | 'patent' | 'project'>
->({
-  get: () =>
-    (parameterValues.value.achievementTypes || '')
+type AchievementTypeOption = (typeof achievementTypeOptions)[number]['value']
+const allAchievementTypes = ['paper', 'patent', 'project'] as const
+const educationStageOptions = [
+  { label: '全部', value: 'all' },
+  { label: '学士', value: '学士' },
+  { label: '硕士', value: '硕士' },
+  { label: '博士', value: '博士' },
+] as const
+type EducationStageOption = (typeof educationStageOptions)[number]['value']
+const allEducationStages = ['学士', '硕士', '博士'] as const
+const educationStageSelection = computed<EducationStageOption[]>({
+  get: (): EducationStageOption[] => {
+    const selected = (parameterValues.value.educationStage || '')
+      .split(',')
+      .filter(
+        (value): value is '学士' | '硕士' | '博士' =>
+          value === '学士' || value === '硕士' || value === '博士',
+      )
+    return allEducationStages.every((value) => selected.includes(value))
+      ? ['all']
+      : selected
+  },
+  set: (values: EducationStageOption[]) => {
+    const current = (parameterValues.value.educationStage || '')
+      .split(',')
+      .filter(Boolean)
+    const currentlyAll = allEducationStages.every((value) =>
+      current.includes(value),
+    )
+    let selected: readonly string[] = values.filter((value) => value !== 'all')
+    if (values.includes('all') && !currentlyAll) {
+      selected = allEducationStages
+    }
+    parameterValues.value = {
+      ...parameterValues.value,
+      educationStage: selected.join(','),
+    }
+  },
+})
+const achievementTypeSelection = computed<AchievementTypeOption[]>({
+  get: (): AchievementTypeOption[] => {
+    const selected = (parameterValues.value.achievementTypes || '')
       .split(',')
       .filter(
         (value): value is 'paper' | 'patent' | 'project' =>
           value === 'paper' || value === 'patent' || value === 'project',
-      ),
-  set: (values) => {
+      )
+    return allAchievementTypes.every((value) => selected.includes(value))
+      ? ['all']
+      : selected
+  },
+  set: (values: AchievementTypeOption[]) => {
+    const current = (parameterValues.value.achievementTypes || '')
+      .split(',')
+      .filter(Boolean)
+    const currentlyAll = allAchievementTypes.every((value) =>
+      current.includes(value),
+    )
+    let selected: readonly string[] = values.filter((value) => value !== 'all')
+    if (values.includes('all') && !currentlyAll) {
+      selected = allAchievementTypes
+    }
     parameterValues.value = {
       ...parameterValues.value,
-      achievementTypes: values.join(','),
+      achievementTypes: selected.join(','),
     }
   },
 })
@@ -1300,6 +1351,17 @@ const apiResultJson = computed(() => {
       2,
     )
   }
+  if (isLiveCoop.value || isLiveAlumni.value) {
+    const resp = (liveApiPayload.value as { response?: unknown } | null)?.response
+    if (resp) {
+      return JSON.stringify(resp, null, 2)
+    }
+    return JSON.stringify(
+      { message: running.value ? '查询中...' : '暂无查询结果' },
+      null,
+      2,
+    )
+  }
   if (isPaperCooperation.value && liveError.value) {
     return JSON.stringify({ error: liveError.value }, null, 2)
   }
@@ -2342,18 +2404,21 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         </ElSelect>
         <ElSelect
           v-else-if="field.name === 'educationStage' && isLiveAlumni"
-          v-model="parameterValues[field.name]"
+          v-model="educationStageSelection"
           class="alumni-stage-select"
+          multiple
+          collapse-tags
+          :max-collapse-tags="1"
           clearable
-          placeholder="请选择教育阶段"
+          placeholder="选择教育阶段"
           aria-label="教育阶段"
           @update:model-value="clearParameterError(field.name)"
         >
           <ElOption
             v-for="stage in educationStageOptions"
-            :key="stage"
-            :label="stage"
-            :value="stage"
+            :key="stage.label"
+            :label="stage.label"
+            :value="stage.value"
           />
         </ElSelect>
         <ElConfigProvider
@@ -2903,6 +2968,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .cooperation-month-picker {
   width: 100% !important;
+  min-width: 0;
 }
 
 .cooperation-type-select {
@@ -2967,7 +3033,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .service-console--cooperation {
-  grid-template-columns: 210px minmax(750px, 1fr) 190px;
+  grid-template-columns: 210px minmax(0, 1fr) 190px;
   align-items: start;
 }
 
@@ -3011,11 +3077,11 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .service-console--cooperation .service-console__params {
   grid-template-columns:
-    minmax(132px, 1fr)
-    minmax(132px, 1fr)
-    150px
-    minmax(132px, 1fr)
-    minmax(132px, 1fr);
+    minmax(0, 1fr)
+    minmax(0, 1fr)
+    minmax(0, 150px)
+    minmax(0, 1fr)
+    minmax(0, 1fr);
   align-items: end;
 }
 
@@ -3023,6 +3089,8 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   justify-content: center;
   min-width: 190px;
   margin-top: 26px;
+  position: relative;
+  z-index: 2;
 }
 
 .business-service__main {

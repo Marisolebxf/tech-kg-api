@@ -36,6 +36,10 @@ import {
   analyzeExpertIndirectRelation,
   type ExpertIndirectRelationResponse,
 } from '../../../api/expertIndirectRelation'
+import {
+  queryExpertColleagueRelation,
+  type ExpertColleagueRelationResponse,
+} from '../../../api/expertColleagueRelation'
 import iconInfo from '../../../assets/icons/icon-info.svg'
 import KgGraphCanvas from '../../../components/kg-graph-canvas.vue'
 import { useToast } from '../../../composables/use-toast'
@@ -218,6 +222,7 @@ const expertDirectError = ref<string | null>(null)
 let expertDirectAbortController: AbortController | null = null
 const expertIndirectResponse = ref<ExpertIndirectRelationResponse | null>(null)
 const expertIndirectError = ref<string | null>(null)
+const expertColleagueResponse = ref<ExpertColleagueRelationResponse | null>(null)
 const isLiveAlumni = computed(() => props.moduleInfo.key === 'expert-alumni')
 const isLiveCoop = computed(
   () => props.moduleInfo.key === 'two-point-achievement',
@@ -762,9 +767,9 @@ const liveModuleGraph = computed(() => {
     return mapLiveGraph(data.graph?.nodes, data.graph?.edges)
   }
   if (isLiveColleague.value) {
-    const data = liveResponse.value?.data
+    const data = expertColleagueResponse.value?.data
     const graph = data?.graph
-    if (!graph?.nodes?.length) return null
+    if (!data || !graph?.nodes?.length) return null
     const otherNodes = graph.nodes.filter(
       (node: any) =>
         node.id !== data.expert?.id &&
@@ -1145,7 +1150,21 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
   }
   if (isLiveColleague.value) {
     const data = liveResponse.value?.data
-    if (!data) return [{ label: '查询状态', value: '等待执行' }]
+    if (!data) {
+      return [
+        { label: '专家 A', value: '—' },
+        { label: '核心专家机构', value: '—' },
+        { label: '专家 B', value: '—' },
+        { label: '共同机构', value: '—' },
+        { label: '所属部门/团队', value: '—' },
+        { label: '关系生效时段', value: '—' },
+        { label: '任职重叠时间', value: '—' },
+        { label: '共同工作内容', value: '—' },
+        { label: '协作场景', value: '—' },
+        { label: '同事期间成果', value: '—' },
+        { label: '关系判定', value: '—' },
+      ]
+    }
     const summary = data.summary || {}
     return [
       { label: '专家 A', value: summary.coreExpert || '—' },
@@ -1661,8 +1680,9 @@ watch(
     expertDirectError.value = null
     expertIndirectResponse.value = null
     expertIndirectError.value = null
+    expertColleagueResponse.value = null
     resetParameters({ notify: false })
-    if (isLiveModule.value) {
+    if (isLiveModule.value && !isLiveColleague.value) {
       void handleRun()
     }
   },
@@ -1731,6 +1751,7 @@ function resetParameters({ notify = true }: { notify?: boolean } = {}) {
   paramResetToken.value += 1
   if (isLiveModule.value) {
     liveResponse.value = null
+    expertColleagueResponse.value = null
     liveAlumniResult.value = null
     liveCoopResult.value = null
     liveApiPayload.value = null
@@ -1961,9 +1982,14 @@ async function handleRun() {
       const expertAId = parameterValues.value.expert_a_id?.trim()
       const expertBId = parameterValues.value.expert_b_id?.trim()
       if (!expertAId || !expertBId) {
-        showToast('请填写专家 A 和专家 B', 'warning')
+        parameterErrors.value = {
+          ...(!expertAId ? { expert_a_id: '请输入专家 A' } : {}),
+          ...(!expertBId ? { expert_b_id: '请输入专家 B' } : {}),
+        }
+        showToast('请完善必填项后再执行', 'warning')
         return
       }
+      parameterErrors.value = {}
       const body = {
         expert_a_id: expertAId,
         expert_b_id: expertBId,
@@ -1972,12 +1998,9 @@ async function handleRun() {
         limit: 1,
         offset: 0,
       }
-      const res = (await invokeKgService(
-        props.moduleInfo.endpoint,
-        body,
-        60000,
-      )) as Record<string, any>
-      liveResponse.value = res
+      const res = await queryExpertColleagueRelation(body)
+      expertColleagueResponse.value = res
+      liveResponse.value = res as unknown as Record<string, any>
       liveApiPayload.value = { request: body, response: res }
       if (
         res?.success === false ||
@@ -2503,6 +2526,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         <KgGraphCanvas
           :nodes="displayedGraphNodes"
           :edges="displayedGraphEdges"
+          :node-shape="isLiveColleague ? 'circle' : 'rect'"
           :selected-node-id="selectedGraphNodeId"
           :selected-edge-id="selectedGraphEdgeId"
           show-edge-label-button

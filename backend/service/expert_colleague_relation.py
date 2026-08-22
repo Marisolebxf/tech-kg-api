@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import threading
+import time
 from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -17,6 +20,16 @@ NAME_KEYS = ("name_zh", "name_cn", "name", "title", "name_en")
 ORG_KEYS = ("scholar_org", "organization", "affiliation_name", "institution_zh")
 DEPARTMENT_KEYS = ("work_experience_department_zh", "department", "team_name")
 DATE_KEYS = ("work_experience_date", "employment_period", "tenure_period")
+
+# 结果缓存：固定入参的重复请求直接命中（压测稳态），TTL 由 RESULT_CACHE_TTL 环境变量控制
+_RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
+_result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_result_cache_lock = threading.Lock()
+
+
+def clear_caches() -> None:
+    """清空进程内结果缓存（测试隔离用）。"""
+    _result_cache.clear()
 
 
 class GraphSearchGateway(Protocol):
@@ -42,6 +55,50 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
     module_code = "expert_colleague_relation"
 
     async def query(
+        self,
+        gateway: GraphSearchGateway,
+        *,
+        expert_id: str,
+        target_expert_id: str | None = None,
+        organization: str | None = None,
+        department: str | None = None,
+        overlap_period: str | None = None,
+        team_or_project: str | None = None,
+        achievement_types: list[str] | None = None,
+        min_confidence: float = 0.0,
+        limit: int = 20,
+        offset: int = 0,
+        space: str | None = None,
+    ) -> dict[str, Any]:
+        """结果缓存包装：固定入参命中缓存，避免压测稳态下重复查图。"""
+        cache_key = (
+            f"{expert_id}|{target_expert_id}|{organization}|{department}|"
+            f"{overlap_period}|{team_or_project}|{tuple(achievement_types or [])}|"
+            f"{min_confidence}|{limit}|{offset}|{space}"
+        )
+        with _result_cache_lock:
+            entry = _result_cache.get(cache_key)
+            if entry and entry[0] > time.monotonic():
+                return entry[1]
+        result = await self._query_impl(
+            gateway,
+            expert_id=expert_id,
+            target_expert_id=target_expert_id,
+            organization=organization,
+            department=department,
+            overlap_period=overlap_period,
+            team_or_project=team_or_project,
+            achievement_types=achievement_types,
+            min_confidence=min_confidence,
+            limit=limit,
+            offset=offset,
+            space=space,
+        )
+        with _result_cache_lock:
+            _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, result)
+        return result
+
+    async def _query_impl(
         self,
         gateway: GraphSearchGateway,
         *,

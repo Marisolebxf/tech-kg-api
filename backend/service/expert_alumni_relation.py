@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 import threading
 import time
@@ -19,7 +20,7 @@ LIST_MAX_PAGES = 250
 EDGE_LIMIT = 200
 
 # 进程内 TTL 缓存：读多写少的图查询，60s 内复用，避免高并发下打爆 trs-graph。
-_RESULT_CACHE_TTL = 60.0
+_RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
 _PERSON_SCAN_TTL = 60.0
 _person_scan_cache: dict[str, tuple[float, list[tuple[str, Any]], bool]] = {}
 _result_cache: dict[str, tuple[float, dict[str, Any]]] = {}

@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import logging
 import math
 import os
@@ -44,7 +43,7 @@ _dev_client: TRSGraphClient | None = None
 _dev_lock = threading.Lock()
 
 # 60s 结果缓存：读多写少，同 chain_node_id+参数 的请求复用结果，避免高并发打爆 trs-graph
-_RESULT_CACHE_TTL = 60.0
+_RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
 _result_cache: dict[str, tuple[float, IndustryNodeTopEventsResponse]] = {}
 _result_cache_lock = threading.Lock()
 
@@ -67,8 +66,9 @@ def _get_dev_client() -> TRSGraphClient:
 def _result_cache_get(key: str) -> IndustryNodeTopEventsResponse | None:
     entry = _result_cache.get(key)
     if entry and entry[0] > time.monotonic():
-        # deepcopy 隔离：调用方/model_dump 后续若改对象不会污染缓存（与同事关系缓存一致）。
-        return copy.deepcopy(entry[1])
+        # 调用方只做 model_dump（只读，不改对象），直接返回缓存对象，省 deepcopy
+        # 的 CPU/GIL 开销——500 并发下 deepcopy 是瓶颈（命中变 dict查找，微秒级）。
+        return entry[1]
     return None
 
 

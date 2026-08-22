@@ -1,4 +1,4 @@
-"""只把 dev 图中的 Patent 实体同步为 Milvus BM25、向量及混合索引。"""
+"""把配置图空间中的 Patent 实体同步为 Milvus BM25、向量及混合索引。"""
 
 from __future__ import annotations
 
@@ -205,7 +205,7 @@ def build_one(
     for row in graph_rows(graph, spec, page_size):
         bm25.observe(compose_search_text(row.get("properties") or {}, spec.sparse_fields))
     if not bm25.document_count:
-        raise RuntimeError("dev 图空间中没有 Patent 实体，拒绝创建空索引")
+        raise RuntimeError("配置的图空间中没有 Patent 实体，拒绝创建空索引")
     state_dir.mkdir(parents=True, exist_ok=True)
     persist_bm25_state(bm25, state_dir / "patent_bm25.json", resume=resume)
     dim, embed = dense_embedder()
@@ -272,7 +272,15 @@ def build_one(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="为 dev 中的 Patent 建立 Milvus 八类索引")
+    backend_root = Path(__file__).resolve().parents[1]
+    load_dotenv(backend_root / ".env")
+    graph_space = os.getenv("TRS_GRAPH_SPACE", "").strip()
+    if not graph_space:
+        raise RuntimeError("backend/.env 缺少 TRS_GRAPH_SPACE 配置")
+
+    parser = argparse.ArgumentParser(
+        description=f"为 {graph_space} 中的 Patent 建立 Milvus 八类索引"
+    )
     parser.add_argument("--page-size", type=int, default=1000)
     parser.add_argument("--collection", default="patent")
     parser.add_argument("--state-dir", type=Path, default=Path("var/patent_indexes"))
@@ -286,8 +294,6 @@ def main() -> None:
     args = parser.parse_args()
     if args.resume and args.rebuild:
         parser.error("--resume 与 --rebuild 不能同时使用")
-    load_dotenv()
-    os.environ["TRS_GRAPH_SPACE"] = "dev"
     from pymilvus import MilvusClient
 
     uri = (

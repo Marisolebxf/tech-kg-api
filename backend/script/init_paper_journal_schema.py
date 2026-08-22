@@ -15,7 +15,7 @@ import time
 from infra.graph_db import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
 
-SPACE = "dev"
+SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 
 # Tag DDL — 所有属性用 string，避免 nGQL INSERT 时 int/string 类型不匹配
 TAG_DDL = [

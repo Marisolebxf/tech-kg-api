@@ -36,7 +36,7 @@ from service.industry_node_top_events_business import RISK_EVENT_TYPES
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE = os.getenv("BUSINESS_API_BASE", "http://127.0.0.1:8000")
-SPACE = "dev"
+SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 
 # 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 graph-search/trs-graph。
 _RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))

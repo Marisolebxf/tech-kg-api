@@ -8,12 +8,17 @@
 
 from __future__ import annotations
 
+import os
+
 from infra.graph_db import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
 
+# 目标图空间,默认 techkg;设 TRS_GRAPH_SPACE=test 即建/用 test
+SPACE = os.getenv("TRS_GRAPH_SPACE", "techkg")
+
 # 在任意已存在空间上下文执行（CREATE SPACE 是全局操作）
 CREATE_SPACE_DDL: list[str] = [
-    "CREATE SPACE IF NOT EXISTS techkg(vid_type=FIXED_STRING(64), partition_num=10, replica_factor=1);",
+    f"CREATE SPACE IF NOT EXISTS {SPACE}(vid_type=FIXED_STRING(64), partition_num=10, replica_factor=1);",
 ]
 
 # 在 techkg 空间执行
@@ -42,9 +47,9 @@ def init_schema() -> None:
             bootstrap.execute_write(stmt)
     finally:
         bootstrap.close()
-    # 2) 切到 techkg 建 schema（独立 settings，避免共享引用被改）
+    # 2) 切到目标空间建 schema（独立 settings，避免共享引用被改）
     techkg_settings = TRSGraphSettings.from_env()
-    techkg_settings.space = "techkg"
+    techkg_settings.space = SPACE
     techkg = TRSGraphClient(techkg_settings)
     techkg.connect()
     try:

@@ -76,7 +76,7 @@ from service.project_milvus import (
 logger = logging.getLogger("script.align_project_relations")
 
 DEFAULT_STATE_DIR = ".cache/organization_milvus"
-GRAPH_SPACE = "dev"
+GRAPH_SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 
 # Re-export for callers/tests that imported from this module.
 __all__ = [

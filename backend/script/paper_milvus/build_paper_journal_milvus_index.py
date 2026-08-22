@@ -42,7 +42,7 @@ from script.paper_milvus.milvus import get_milvus_client
 
 logger = logging.getLogger("script.build_paper_journal_milvus_index")
 
-SPACE = "dev"
+SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 DENSE_DIM = 512  # m3e-small
 DENSE_MODEL_NAME = os.environ.get("PAPER_DENSE_MODEL", "moka-ai/m3e-small")
 

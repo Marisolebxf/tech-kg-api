@@ -1156,7 +1156,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     schema_parser = subparsers.add_parser("init-schema")
-    schema_parser.add_argument("--space", choices=(DEFAULT_SPACE,), default=DEFAULT_SPACE)
+    schema_parser.add_argument("--space", default=DEFAULT_SPACE)
 
     load_parser = subparsers.add_parser("load")
     load_parser.add_argument(
@@ -1175,7 +1175,7 @@ def build_parser() -> argparse.ArgumentParser:
     scope = load_parser.add_mutually_exclusive_group()
     scope.add_argument("--domestic-only", action="store_true")
     scope.add_argument("--foreign-only", action="store_true")
-    load_parser.add_argument("--space", choices=(DEFAULT_SPACE,), default=DEFAULT_SPACE)
+    load_parser.add_argument("--space", default=DEFAULT_SPACE)
     return parser
 
 

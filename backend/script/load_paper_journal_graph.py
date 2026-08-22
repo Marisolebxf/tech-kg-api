@@ -26,7 +26,7 @@ from infra.mysql import MySQLClient
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
-SPACE = "dev"
+SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 BATCH = 1  # trs-graph 不支持多值 INSERT，每次 1 条
 PAPER_LIMIT = ""  # 空=全量加载
 MAX_WORKERS = 10  # 并发线程数

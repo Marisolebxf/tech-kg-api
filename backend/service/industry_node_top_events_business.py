@@ -34,7 +34,7 @@ from infra.graph_db.config import TRSGraphSettings
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE = os.getenv("BUSINESS_API_BASE", "http://127.0.0.1:8000")
-SPACE = "dev"
+SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 
 GOVERNANCE_EDGES = {"EXECUTIVE_OF", "LEGAL_REP_OF", "ACTUAL_CONTROLLER_OF"}
 

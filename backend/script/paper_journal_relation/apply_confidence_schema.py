@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-SPACE = "dev"
+SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 # 需要补 confidence 的论文边（CITES/HAS_KEYWORD 已有，跳过）
 EDGES_NEED_CONFIDENCE = [
     "AUTHORED_BY",

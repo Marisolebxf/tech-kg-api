@@ -316,7 +316,9 @@ def test_entity_dry_run_never_writes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         entity,
         "iter_source_rows",
-        lambda session, spec, max_records, since=None: iter([{"org_id": "o1", "name_cn": "机构一"}]),
+        lambda session, spec, max_records, since=None: iter(
+            [{"org_id": "o1", "name_cn": "机构一"}]
+        ),
     )
     monkeypatch.setattr(
         entity,

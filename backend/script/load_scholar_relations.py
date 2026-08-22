@@ -86,6 +86,53 @@ def org_vid(scholar_org_id: str | None, org_name: str | None) -> str | None:
     return None
 
 
+def resolve_org_vid_by_name(
+    name_zh: str | None, name_en: str | None, index: dict[str, str]
+) -> str | None:
+    """``scholar_org_id`` 缺失时,用机构名(中→英,精确→小写)在 index 里查 org 真实 vid。
+
+    index 来自 :func:`build_org_name_vid_index`(图里已存在 Organization 的 name->vid)。
+    找不到返回 None——调用方应跳过,不建悬挂边(替代旧的 md5 桩 vid 回退)。
+    """
+    for name in (name_zh, name_en):
+        if not (name and name.strip()):
+            continue
+        key = name.strip()
+        if key in index:
+            return index[key]
+        key_l = key.lower()
+        if key_l in index:
+            return index[key_l]
+    return None
+
+
+def build_org_name_vid_index(graph) -> dict[str, str]:
+    """从图里已存在 Organization 节点建 name->vid 索引(只读)。
+
+    匹配 ``organization_entity_etl`` 已灌的真实 vid(org_{org_id}),替代失效的 md5 桩 vid,
+    避免 AFFILIATED_WITH 边指向不存在的 org。读失败/空 → 返回 {}(调用方跳过无 id 的)。
+    """
+    index: dict[str, str] = {}
+    try:
+        result = graph.execute_read(
+            "MATCH (v:Organization) RETURN id(v) AS vid, "
+            "v.Organization.name_cn AS name_cn, v.Organization.name_en AS name_en;"
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("build_org_name_vid_index: 读 Organization 失败,返回空索引")
+        return index
+    for rec in result.records if result else []:
+        vid = rec.get("vid")
+        if not vid:
+            continue
+        for k in ("name_cn", "name_en"):
+            name = rec.get(k)
+            if isinstance(name, str) and name.strip():
+                index[name.strip()] = str(vid)
+                index[name.strip().lower()] = str(vid)
+    return index
+
+
 # ---------------------------------------------------------------------------
 # Extraction helpers
 # ---------------------------------------------------------------------------
@@ -246,7 +293,9 @@ def ensure_schema(graph) -> None:
     logger.warning("AFFILIATED_WITH 新属性 %s 未在 15s 内生效", expected)
 
 
-def load_affiliations(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
+def load_affiliations(
+    session, graph, *, dry_run: bool, preview: int = 5, org_index: dict[str, str] | None = None
+) -> dict:
     """写入 AFFILIATED_WITH 边。
 
     置信度按机构标识来源分档：源表带 ``scholar_org_id`` 时为
@@ -262,23 +311,25 @@ def load_affiliations(session, graph, *, dry_run: bool, preview: int = 5) -> dic
     for rec in _iter_scholar_affiliations(session):
         src = person_vid(rec["scholar_id"])
         org_name = rec["org_zh"] or rec["org_en"] or ""
-        dst = org_vid(rec["scholar_org_id"], org_name)
-        if not dst:
-            skipped += 1
-            continue
-
         has_org_id = bool(rec["scholar_org_id"] and rec["scholar_org_id"].strip())
         if has_org_id:
+            # 源表带 scholar_org_id:直接用 org_{scholar_org_id}
+            dst = org_vid(rec["scholar_org_id"], org_name)
             conf = confidence_props(
                 CONFIDENCE_SOURCE_PRIMARY_KEY,
                 "source_org_id",
                 "dwd_scholar.scholar_org_id 直接指向机构，无需名称推断",
             )
         else:
+            # scholar_org_id 缺失:按机构名 join 图里已存在 Organization(替代 md5 桩 vid,避免悬挂边)
+            dst = resolve_org_vid_by_name(org_name, rec.get("org_en"), org_index or {})
+            if not dst:
+                skipped += 1
+                continue
             conf = confidence_props(
                 CONFIDENCE_PLACEHOLDER_ORG,
-                "org_name_md5_placeholder",
-                "源表无 scholar_org_id，机构顶点按机构名 md5 生成桩 VID，待正式 Organization 落地后对齐",
+                "org_name_match",
+                "源表无 scholar_org_id，按机构名匹配图中已存在 Organization",
             )
             placeholder += 1
 
@@ -451,7 +502,10 @@ def run(
         # 空间的任职边字段，再写入关系数据。
         if not dry_run:
             ensure_schema(graph)
-        aff_stats = load_affiliations(session, graph, dry_run=dry_run)
+        # org name->vid 索引:scholar_org_id 缺失时按机构名 join 图里已存在 Organization,
+        # 用其真实 vid(替代 md5 桩 vid),避免 AFFILIATED_WITH 边指向不存在的 org。
+        org_index = build_org_name_vid_index(graph)
+        aff_stats = load_affiliations(session, graph, dry_run=dry_run, org_index=org_index)
         logger.info("AFFILIATED_WITH: %s", aff_stats)
         co_stats = load_coauthors(session, graph, dry_run=dry_run)
         logger.info("COAUTHOR_WITH: %s", co_stats)

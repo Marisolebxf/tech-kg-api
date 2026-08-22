@@ -37,6 +37,7 @@ from db_model.scholar import (
 )
 from infra.graph_db import get_trs_graph_client
 from infra.mysql import MySQLClient
+from script.etl_watermark import Watermark
 from script.scholar_provenance import (
     CONFIDENCE_SOURCE_PRIMARY_KEY,
     confidence_props,
@@ -86,8 +87,55 @@ def _fetch_research_directions(session) -> dict[str, str]:
     return {sid: "；".join(fs) for sid, fs in merged.items()}
 
 
-def _iter_scholars(session, batch_size: int = 500) -> Iterable[dict]:
-    """分页读取 ``dwd_scholar``。
+def _scholar_sql(
+    org_id_col: str, since: str | None, scholar_id: str | None, limit: int | None
+) -> str:
+    """构造 dwd_scholar 查询 SQL。
+
+    - ``since``(增量水位)→ ``AND update_time > :since``
+    - ``scholar_id``(定向)→ ``AND scholar_id = :sid``
+    - ``limit``(总上限/采样)→ ``LIMIT :cap`` 单次查询;否则分页 ``LIMIT :limit OFFSET :offset``
+    """
+    where = "WHERE status = 1"
+    if since:
+        where += " AND update_time > :since"
+    if scholar_id:
+        where += " AND scholar_id = :sid"
+    tail = (
+        "ORDER BY scholar_id LIMIT :cap"
+        if limit is not None
+        else "ORDER BY scholar_id LIMIT :limit OFFSET :offset"
+    )
+    return f"""
+        SELECT scholar_id, name_en, name_zh, avatar,
+               {org_id_col},
+               scholar_org_name_zh, scholar_org_name_en,
+               bio, bio_zh,
+               work_experience_date,
+               work_experience_institution_en, work_experience_department_en,
+               work_experience_position_en,
+               work_experience_institution_zh, work_experience_department_zh,
+               work_experience_position_zh,
+               education_background_date,
+               education_background_institution_en, education_background_degree_en,
+               education_background_institution_zh, education_background_degree_zh,
+               paper_nums, citation_nums, h_index, status,
+               DATE_FORMAT(update_time, '%Y-%m-%d %H:%i:%s') AS update_time
+        FROM dwd_scholar
+        {where}
+        {tail}
+        """
+
+
+def _iter_scholars(
+    session,
+    batch_size: int = 500,
+    *,
+    since: str | None = None,
+    scholar_id: str | None = None,
+    limit: int | None = None,
+) -> Iterable[dict]:
+    """分页读取 ``dwd_scholar``(支持增量水位 ``since``、定向 ``scholar_id``、采样 ``limit``)。
 
     使用原生 SQL 是为了兼容 ``scholar_org_id`` 列在部分环境尚未部署的情况，
     与 ``load_scholar_relations.py`` 中的做法一致。
@@ -104,33 +152,26 @@ def _iter_scholars(session, batch_size: int = 500) -> Iterable[dict]:
         > 0
     )
     org_id_col = "scholar_org_id" if has_org_id else "NULL AS scholar_org_id"
+    sql = text(_scholar_sql(org_id_col, since, scholar_id, limit))
 
-    sql = text(
-        f"""
-        SELECT scholar_id, name_en, name_zh, avatar,
-               {org_id_col},
-               scholar_org_name_zh, scholar_org_name_en,
-               bio, bio_zh,
-               work_experience_date,
-               work_experience_institution_en, work_experience_department_en,
-               work_experience_position_en,
-               work_experience_institution_zh, work_experience_department_zh,
-               work_experience_position_zh,
-               education_background_date,
-               education_background_institution_en, education_background_degree_en,
-               education_background_institution_zh, education_background_degree_zh,
-               paper_nums, citation_nums, h_index, status,
-               DATE_FORMAT(update_time, '%Y-%m-%d %H:%i:%s') AS update_time
-        FROM dwd_scholar
-        WHERE status = 1
-        ORDER BY scholar_id
-        LIMIT :limit OFFSET :offset
-        """
-    )
+    def _params(extra: dict | None = None) -> dict:
+        p: dict = {}
+        if since:
+            p["since"] = since
+        if scholar_id:
+            p["sid"] = scholar_id
+        if extra:
+            p.update(extra)
+        return p
+
+    if limit is not None:
+        for r in session.execute(sql, _params({"cap": limit})).all():
+            yield dict(r._mapping)
+        return
 
     offset = 0
     while True:
-        rows = session.execute(sql, {"limit": batch_size, "offset": offset}).all()
+        rows = session.execute(sql, _params({"limit": batch_size, "offset": offset})).all()
         if not rows:
             break
         for r in rows:
@@ -258,8 +299,21 @@ def render_person_insert(vid: str, props: dict, field_types: dict[str, str]) -> 
     return f"INSERT VERTEX Person({fl}) VALUES {_esc(vid)}:({','.join(vals)});"
 
 
-def load_persons(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
-    """遍历 ``dwd_scholar`` 并写入 Person 顶点。"""
+def load_persons(
+    session,
+    graph,
+    *,
+    dry_run: bool,
+    preview: int = 5,
+    since: str | None = None,
+    scholar_id: str | None = None,
+    limit: int | None = None,
+) -> dict:
+    """遍历 ``dwd_scholar`` 并写入 Person 顶点。
+
+    ``since``/``scholar_id``/``limit`` 透传给 :func:`_iter_scholars`(增量/定向/采样)。
+    返回 ``written`` 与本批 ``max_update_time``(供增量前进水位)。
+    """
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
     talent_flags = _fetch_talent_flags(session)
@@ -272,10 +326,14 @@ def load_persons(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
     logger.info("Person tag fields: %d (%s)", len(person_field_types), list(person_field_types)[:6])
 
     ok = shown = 0
-    for row in _iter_scholars(session):
+    max_ts = ""
+    for row in _iter_scholars(session, since=since, scholar_id=scholar_id, limit=limit):
         sid = row["scholar_id"]
         vid = person_vid(sid)
         props = _build_person_props(row, talent_flags.get(sid, ""), directions.get(sid, ""), now)
+        ts = row.get("update_time") or ""
+        if ts and ts > max_ts:
+            max_ts = ts
         if dry_run:
             if shown < preview:
                 logger.info(
@@ -291,30 +349,52 @@ def load_persons(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
             # nGQL INSERT(替代 merge_node——后者在 trs-graph 上不可靠,见 CLAUDE.md)
             graph.execute_write(render_person_insert(vid, props, person_field_types))
         ok += 1
-    return {"written": ok}
+    return {"written": ok, "max_update_time": max_ts or None}
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def run(*, database: str = "gkx_element", dry_run: bool = False) -> dict:
+def run(
+    *,
+    database: str = "gkx_element",
+    dry_run: bool = False,
+    mode: str = "full",
+    scholar_id: str | None = None,
+    limit: int | None = None,
+) -> dict:
     mysql = MySQLClient(database=database)
     graph = get_trs_graph_client()
+    since: str | None = None
+    if mode == "incremental":
+        wm = Watermark.for_domain("scholar")
+        since = wm.read()
+        logger.info("incremental: scholar watermark=%s", since)
     logger.info(
-        "start batch=%s database=%s dry_run=%s graph_space=%s",
+        "start batch=%s database=%s mode=%s scholar_id=%s limit=%s dry_run=%s graph_space=%s",
         BATCH_ID,
         database,
+        mode,
+        scholar_id,
+        limit,
         dry_run,
         os.environ.get("TRS_GRAPH_SPACE", "dev"),
     )
 
     session = mysql.session()
+    stats: dict = {}
     try:
-        stats = load_persons(session, graph, dry_run=dry_run)
+        stats = load_persons(
+            session, graph, dry_run=dry_run, since=since, scholar_id=scholar_id, limit=limit
+        )
         logger.info("Person: %s", stats)
     finally:
         session.close()
 
+    # 整批成功后才前进水位(中途抛异常则不前进→下次重跑这批,rank@0 幂等无害)
+    if mode == "incremental" and not dry_run and stats.get("max_update_time"):
+        Watermark.for_domain("scholar").advance_if_higher(stats["max_update_time"])
+        logger.info("scholar watermark advanced to %s", stats["max_update_time"])
     return {"batch": BATCH_ID, "person": stats}
 
 
@@ -330,6 +410,14 @@ def _parse_args() -> argparse.Namespace:
         default=os.environ.get("MYSQL_DATABASE", "gkx_element"),
         help="MySQL database name (default: gkx_element).",
     )
+    ap.add_argument(
+        "--mode",
+        choices=("full", "incremental"),
+        default="full",
+        help="full=全量;incremental=只灌 update_time>水位 的行(读 script/.etl_watermark/scholar.txt)",
+    )
+    ap.add_argument("--scholar-id", help="只灌该 scholar(定向,如 855924f1)")
+    ap.add_argument("--limit", type=int, help="最多取 N 行(采样/测通)")
     return ap.parse_args()
 
 
@@ -338,5 +426,11 @@ if __name__ == "__main__":
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     args = _parse_args()
-    result = run(database=args.database, dry_run=args.dry_run)
+    result = run(
+        database=args.database,
+        dry_run=args.dry_run,
+        mode=args.mode,
+        scholar_id=args.scholar_id,
+        limit=args.limit,
+    )
     logger.info("done: %s", result)

@@ -35,7 +35,7 @@ def hybrid_search(
         "granted_number",
         "simple_family_number",
         "country_code",
-        "source_table",
+        "organization_base",
     ]
     rows = client.hybrid_search(
         collection, requests, RRFRanker(60), limit=limit, output_fields=output_fields

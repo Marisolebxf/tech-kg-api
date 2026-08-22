@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import difflib
 import json
 import logging
 import os
@@ -12,9 +11,7 @@ import time
 import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
-from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +19,13 @@ import pymysql
 from pymysql.cursors import DictCursor
 
 from infra.graph_db import get_trs_graph_client
-from infra.llm import get_llm_client
+from infra.milvus import OrganizationMilvusStore
+from service.organization_entity_alignment import (
+    BM25SparseEncoder,
+    HashingDenseEncoder,
+    OrganizationAlignmentContext,
+    OrganizationHybridMatcher,
+)
 
 logger = logging.getLogger(__name__)
 DDL_FILE = Path(__file__).resolve().parents[1] / "schemas" / "ddl" / "patent_relation_ddl.ngql"
@@ -31,7 +34,10 @@ IDENTIFIER_CLEAN_RE = re.compile(r"[^0-9a-z]+")
 CN_APPLICATION_RE = re.compile(r"^(?:cn|zl)?(\d{12})(?:[a-z]|\d)?$")
 PERSON_EDGE_TYPES = {"INVENTED_BY", "APPLIED_BY", "OWNED_BY"}
 ALL_EDGE_TYPES = ("INVENTED_BY", "APPLIED_BY", "OWNED_BY", "CITES", "OUTPUT_OF")
-LLM_CACHE_VERSION = "patent-org-alias-v1"
+DEFAULT_VECTOR_STATE_DIR = Path(".cache/organization_milvus")
+DEFAULT_VECTOR_THRESHOLD = 0.88
+DEFAULT_VECTOR_MARGIN = 0.08
+DEFAULT_VECTOR_TOP_K = 20
 
 # 只有机构数据域的正式来源可以作为专利关系目标。人才、项目等领域为了
 # 保存原始机构文本而临时创建的 Organization 不参与匹配。
@@ -121,12 +127,6 @@ class ReviewRecord:
     confidence: float | None
     candidates: list[dict[str, Any]]
     evidence: list[str]
-    llm_summary: str = ""
-    llm_subject_type: str = ""
-    llm_aliases: list[str] = dataclass_field(default_factory=list)
-    llm_candidate_entities: list[dict[str, Any]] = dataclass_field(default_factory=list)
-    llm_alias_matched_entities: list[dict[str, Any]] = dataclass_field(default_factory=list)
-    llm_same_entity: bool = False
     patent_vid: str = ""
     sequence: int = 0
     role: str = ""
@@ -350,12 +350,30 @@ def canonical_entities(
     graph_people = graph_catalog(
         graph,
         "Person",
-        ("name_zh", "name_en", "scholar_org", "source_table", "source_record_id"),
+        (
+            "name_zh",
+            "name_en",
+            "scholar_org",
+            "source_table",
+            "source_record_id",
+            "organization_base",
+            "organization_id",
+        ),
     )
     graph_orgs = graph_catalog(
         graph,
         "Organization",
-        ("name_cn", "name_en", "name_alias", "source_system", "source_table"),
+        (
+            "name_cn",
+            "name_en",
+            "name_alias",
+            "source_system",
+            "source_table",
+            "source_record_id",
+            "org_id",
+            "organization_base",
+            "organization_id",
+        ),
     )
     people = fetch_all(
         connection,
@@ -381,6 +399,8 @@ def canonical_entities(
             scholar_org=node.get("scholar_org"),
             source_table=node.get("source_table"),
             source_record_id=node.get("source_record_id"),
+            organization_base=node.get("organization_base"),
+            organization_id=node.get("organization_id"),
         )
         if person.get("name_zh") or person.get("name_en"):
             resolved_people.append(person)
@@ -395,6 +415,10 @@ def canonical_entities(
             "name_alias": node.get("name_alias"),
             "source_system": node.get("source_system"),
             "source_table": node.get("source_table"),
+            "source_record_id": node.get("source_record_id"),
+            "org_id": node.get("org_id"),
+            "organization_base": node.get("organization_base"),
+            "organization_id": node.get("organization_id"),
         }
         for node in graph_orgs
         if is_canonical_organization(node)
@@ -490,6 +514,8 @@ def candidate_view(row: dict[str, Any], entity_type: str) -> dict[str, Any]:
         "type": entity_type,
         "name": row.get("name_cn") or row.get("name_en"),
         "alias": row.get("name_alias"),
+        "organization_base": row.get("organization_base"),
+        "organization_id": row.get("organization_id"),
     }
 
 
@@ -693,6 +719,10 @@ def build_relations(
                         ["姓名精确匹配", "申请/权利机构和项目证据未能唯一确认"]
                         if candidates
                         else ["无姓名精确候选"],
+                        patent_vid=patent_vid,
+                        sequence=sequence,
+                        role="inventor",
+                        source_record_id=f"{row['id']}:inventors:{sequence}",
                     )
                 )
                 stats["INVENTED_BY:review"] += 1
@@ -719,7 +749,7 @@ def build_relations(
                             sequence,
                             role,
                             name,
-                            0.80,
+                            0.98,
                             subject_type,
                             "exact_unique_organization_name",
                             "机构名称或别名与dev已有Organization精确匹配且候选唯一",
@@ -728,7 +758,7 @@ def build_relations(
                         ),
                     )
                 )
-                stats[f"{edge_type}:0.80"] += 1
+                stats[f"{edge_type}:0.98"] += 1
 
     cited_rows = fetch_all(
         connection, "SELECT id,patent_id,patent_citations,cited_by FROM dwd_patent_cited"
@@ -783,296 +813,139 @@ def _json_object(text: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _name_grams(value: str) -> set[str]:
-    """字符与二元组索引兼顾中文简称、英文缩写和格式变化。"""
-    if not value:
-        return set()
-    grams = {f"u:{char}" for char in value}
-    grams.update(f"b:{value[index : index + 2]}" for index in range(len(value) - 1))
-    return grams
-
-
-class CandidateSearchIndex:
-    """预计算实体名称倒排索引，避免每个源名称遍历全部实体。"""
-
-    def __init__(self, people: list[dict[str, Any]], organizations: list[dict[str, Any]]) -> None:
-        self.entries: list[tuple[set[str], dict[str, Any]]] = []
-        self.postings: dict[str, list[int]] = defaultdict(list)
-        for entity_type, rows, fields in (
-            ("Organization", organizations, ("name_cn", "name_en", "name_alias")),
-            ("Person", people, ("name_zh", "name_en")),
-        ):
-            for row in rows:
-                variants = set()
-                for field in fields:
-                    variants.update(names_from(row.get(field)))
-                if not variants:
-                    continue
-                entry_id = len(self.entries)
-                self.entries.append((variants, candidate_view(row, entity_type)))
-                for gram in set().union(*(_name_grams(name) for name in variants)):
-                    self.postings[gram].append(entry_id)
-
-    def shortlist(self, name: str, limit: int = 8, prefilter: int = 50) -> list[dict[str, Any]]:
-        key = normalize_name(name)
-        overlap: Counter[int] = Counter()
-        for gram in _name_grams(key):
-            overlap.update(self.postings.get(gram, ()))
-        entry_ids = [entry_id for entry_id, _ in overlap.most_common(prefilter)]
-        ranked: list[tuple[float, dict[str, Any]]] = []
-        for entry_id in entry_ids:
-            variants, candidate = self.entries[entry_id]
-            score = max(difflib.SequenceMatcher(None, key, variant).ratio() for variant in variants)
-            if score > 0:
-                ranked.append((score, candidate))
-        ranked.sort(key=lambda item: item[0], reverse=True)
-        return [
-            dict(candidate, lexical_score=round(score, 4)) for score, candidate in ranked[:limit]
-        ]
-
-
-def enrich_reviews_with_llm(
+def promote_vector_organization_matches(
     reviews: list[ReviewRecord],
-    graph: Any,
-    connection: pymysql.Connection,
-    limit: int | None = None,
-    batch_size: int = 10,
-    workers: int = 4,
-    cache_path: Path | None = None,
-) -> int:
-    """规则未命中后补充别名并反查正式机构，是否写边由后续阈值决定。"""
-    people, organizations = canonical_entities(graph, connection)
-    organization_name_index = make_index(organizations, ("name_cn", "name_en", "name_alias"))
-    llm_reviews = [item for item in reviews if item.relation_type in {"APPLIED_BY", "OWNED_BY"}]
-    related: dict[str, set[str]] = defaultdict(set)
-    for item in llm_reviews:
-        related[item.patent_id].add(item.source_name)
-    unique: dict[str, list[ReviewRecord]] = defaultdict(list)
-    for item in llm_reviews:
-        unique[item.source_name].append(item)
-    names = list(unique)
-    if limit is not None:
-        names = names[:limit]
-    cache = read_llm_cache(cache_path)
-    cached_names = []
-    for name in names:
-        cached = cache.get(normalize_name(name))
-        if not cached:
-            continue
-        result = dict(cached, source_name=name)
-        _apply_llm_results([result], {name: {}}, unique, organization_name_index)
-        cached_names.append(name)
-    if cached_names:
-        logger.info("复用大模型名称缓存=%d", len(cached_names))
-    cached_name_set = set(cached_names)
-    names = [name for name in names if name not in cached_name_set]
-    if not names:
-        return len(cached_names)
-
-    llm = get_llm_client()
-    if llm is None:
-        logger.warning("未配置公共大模型能力，仅复用已有名称缓存")
-        return len(cached_names)
-
-    search_index = CandidateSearchIndex(people, organizations)
-    prepared: list[tuple[dict[str, dict[str, dict[str, Any]]], str]] = []
-    for start in range(0, len(names), batch_size):
-        batch_names = names[start : start + batch_size]
-        inputs = []
-        allowed: dict[str, dict[str, dict[str, Any]]] = {}
-        for name in batch_names:
-            sample = unique[name][0]
-            candidates = search_index.shortlist(name)
-            allowed[name] = {str(candidate["vid"]): candidate for candidate in candidates}
-            inputs.append(
-                {
-                    "source_name": name,
-                    "relation_type": sample.relation_type,
-                    "same_patent_names": sorted(related[sample.patent_id] - {name}),
-                    "existing_candidates": candidates,
-                }
-            )
-        prompt = (
-            "你是专利关系人工审核助手。判断每个源名称更可能是Person、Organization或Unknown；"
-            "如果可能是机构，补充其可能的正式中文名、正式英文名、简称或历史名称到aliases；"
-            "same_legal_entity仅当源名称与补充名称代表同一机构主体时返回true；"
-            "院系与高校、分支机构与总公司、子公司与母公司不属于同一机构主体，必须返回false；"
-            "candidate_vids只能从existing_candidates选择，但aliases可以用于程序再次检索已有正式机构。"
-            "禁止计算置信度，禁止决定最终实体。same_patent_names仅作申请人、权利人、发明人的上下文。"
-            '严格返回JSON对象：{"results":[{"source_name":"","subject_type":"Person|Organization|Unknown",'
-            '"same_legal_entity":false,"aliases":[],"candidate_vids":[],"reason":""}]}。输入：'
-            + json.dumps(inputs, ensure_ascii=False)
-        )
-        prepared.append((allowed, prompt))
-
-    processed = 0
-    completed = 0
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
-        futures = {
-            executor.submit(
-                llm.synthesize,
-                prompt,
-                max_tokens=min(4096, 600 + 300 * len(allowed)),
-            ): allowed
-            for allowed, prompt in prepared
-        }
-        for future in as_completed(futures):
-            allowed = futures[future]
-            try:
-                raw = future.result()
-            except Exception:
-                logger.exception("大模型批次调用异常，保留人工审核")
-                raw = ""
-            completed += 1
-            logger.info("大模型批次进度=%d/%d", completed, len(prepared))
-            payload = _json_object(raw or "")
-            results = payload.get("results", []) if payload else []
-            for result in results:
-                if not isinstance(result, dict) or result.get("source_name") not in allowed:
-                    continue
-                cache[normalize_name(result["source_name"])] = {
-                    "subject_type": result.get("subject_type") or "Unknown",
-                    "same_legal_entity": result.get("same_legal_entity") is True,
-                    "aliases": result.get("aliases") or [],
-                    "candidate_vids": [],
-                    "reason": result.get("reason") or "",
-                }
-            processed += _apply_llm_results(results, allowed, unique, organization_name_index)
-    write_llm_cache(cache_path, cache)
-    return processed + len(cached_names)
-
-
-def read_llm_cache(path: Path | None) -> dict[str, dict[str, Any]]:
-    if path is None or not path.exists():
-        return {}
-    result: dict[str, dict[str, Any]] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if (
-            isinstance(item, dict)
-            and item.get("version") == LLM_CACHE_VERSION
-            and item.get("key")
-            and isinstance(item.get("result"), dict)
-        ):
-            result[str(item["key"])] = item["result"]
-    return result
-
-
-def write_llm_cache(path: Path | None, cache: dict[str, dict[str, Any]]) -> None:
-    if path is None:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "".join(
-            json.dumps(
-                {"version": LLM_CACHE_VERSION, "key": key, "result": result},
-                ensure_ascii=False,
-            )
-            + "\n"
-            for key, result in sorted(cache.items())
-        ),
-        encoding="utf-8",
-    )
-
-
-def _apply_llm_results(
-    results: list[Any],
-    allowed: dict[str, dict[str, dict[str, Any]]],
-    reviews_by_name: dict[str, list[ReviewRecord]],
-    organization_name_index: dict[str, list[dict[str, Any]]],
-) -> int:
-    processed = 0
-    for result in results:
-        if not isinstance(result, dict) or result.get("source_name") not in allowed:
-            continue
-        name = str(result["source_name"])
-        subject_type = str(result.get("subject_type") or "Unknown")
-        if subject_type not in {"Person", "Organization", "Unknown"}:
-            subject_type = "Unknown"
-        aliases = [str(value).strip() for value in result.get("aliases", []) if str(value).strip()][
-            :8
-        ]
-        selected = [
-            allowed[name][str(vid)]
-            for vid in result.get("candidate_vids", [])
-            if str(vid) in allowed[name]
-        ]
-        alias_matched: list[dict[str, Any]] = []
-        if subject_type == "Organization":
-            for alias in aliases:
-                for candidate in organization_name_index.get(normalize_name(alias), []):
-                    view = candidate_view(candidate, "Organization")
-                    selected.append(view)
-                    alias_matched.append(view)
-        selected = list({str(candidate["vid"]): candidate for candidate in selected}.values())
-        alias_matched = list(
-            {str(candidate["vid"]): candidate for candidate in alias_matched}.values()
-        )
-        same_entity = result.get("same_legal_entity") is True
-        reason = str(result.get("reason") or "")
-        for item in reviews_by_name[name]:
-            item.llm_subject_type = subject_type
-            item.llm_aliases = aliases
-            item.llm_candidate_entities = selected
-            item.llm_alias_matched_entities = alias_matched
-            item.llm_same_entity = same_entity
-            item.llm_summary = reason
-        processed += 1
-    return processed
-
-
-def promote_llm_organization_matches(
-    reviews: list[ReviewRecord], threshold: float = 0.75
+    *,
+    threshold: float = DEFAULT_VECTOR_THRESHOLD,
+    margin: float = DEFAULT_VECTOR_MARGIN,
+    top_k: int = DEFAULT_VECTOR_TOP_K,
+    state_dir: Path | None = None,
+    store: OrganizationMilvusStore | None = None,
 ) -> tuple[list[EdgeRecord], list[ReviewRecord]]:
-    """把满足严格条件的大模型别名唯一匹配提升为0.75关系边。"""
-    confidence = 0.75
-    promoted: list[EdgeRecord] = []
-    remaining: list[ReviewRecord] = []
-    for item in reviews:
-        existing_org_candidates = [
-            candidate for candidate in item.candidates if candidate.get("type") == "Organization"
-        ]
-        candidates = item.llm_alias_matched_entities
-        eligible = (
-            item.relation_type in {"APPLIED_BY", "OWNED_BY"}
-            and item.llm_subject_type == "Organization"
-            and item.llm_same_entity
-            and len(candidates) == 1
-            and not existing_org_candidates
-            and bool(item.patent_vid)
-            and confidence >= threshold
-        )
-        if not eligible:
-            remaining.append(item)
-            continue
-        candidate = candidates[0]
-        evidence = (
-            f"大模型判断原名称与正式机构为同一主体；补充名称={item.llm_aliases}；"
-            f"在dev正式机构中唯一命中；理由={item.llm_summary}"
-        )
-        promoted.append(
-            EdgeRecord(
-                item.relation_type,
-                item.patent_vid,
-                str(candidate["vid"]),
-                item.sequence,
-                common_party_properties(
-                    item.sequence,
-                    item.role,
-                    item.source_name,
-                    confidence,
-                    "Organization",
-                    "llm_alias_unique",
-                    evidence,
-                    item.source_record_id,
-                    item.is_current,
-                ),
+    """Promote only unique threshold-and-margin-qualified Milvus matches."""
+
+    def eligible(item: ReviewRecord) -> bool:
+        if item.relation_type not in {"APPLIED_BY", "OWNED_BY"}:
+            return False
+        candidate_types = {str(candidate.get("type")) for candidate in item.candidates}
+        if candidate_types and candidate_types <= {"Person"}:
+            item.reason = "申请人/权利人匹配到人才候选，禁止使用机构向量索引跨类型自动建边"
+            if "entity_type_guard=Person" not in item.evidence:
+                item.evidence.append("entity_type_guard=Person")
+            return False
+        return not candidate_types or not candidate_types <= {"Person"}
+
+    if not any(eligible(item) for item in reviews):
+        return [], reviews
+    vector_store = store or OrganizationMilvusStore()
+    owns_store = store is None
+    try:
+        if not vector_store.has_collection("Organization"):
+            raise RuntimeError(
+                "Organization Milvus index is missing; run "
+                "python -m script.organization_milvus_index --entity Organization --write"
             )
+        resolved_state = Path(
+            state_dir or os.getenv("ORG_MILVUS_STATE_DIR") or DEFAULT_VECTOR_STATE_DIR
+        ).resolve()
+        model_path = resolved_state / f"{vector_store.collection_name('Organization')}.bm25.json"
+        if not model_path.exists():
+            raise RuntimeError(f"Organization BM25 state is missing: {model_path}")
+        matcher = OrganizationHybridMatcher(
+            vector_store,
+            BM25SparseEncoder.load(model_path),
+            HashingDenseEncoder(384),
+            threshold=threshold,
+            margin=margin,
+            top_k=top_k,
         )
-    return promoted, remaining
+        promoted: list[EdgeRecord] = []
+        remaining: list[ReviewRecord] = []
+        decision_cache: dict[str, Any] = {}
+        for item in reviews:
+            if not eligible(item):
+                remaining.append(item)
+                continue
+            cache_key = normalize_name(item.source_name)
+            decision = decision_cache.get(cache_key)
+            if decision is None:
+                decision = matcher.align(
+                    OrganizationAlignmentContext(
+                        name=item.source_name,
+                        source_table="dwd_patent",
+                        source_record_id=item.source_record_id,
+                    )
+                )
+                decision_cache[cache_key] = decision
+            item.candidates = [
+                {
+                    "vid": candidate.vid,
+                    "type": "Organization",
+                    "name": candidate.canonical_name,
+                    "vector_score": round(candidate.score, 4),
+                    "retrieval_score": round(candidate.retrieval_score, 4),
+                    "evidence": list(candidate.evidence),
+                }
+                for candidate in decision.candidates
+            ]
+            item.evidence.append(
+                f"milvus_status={decision.status};score={decision.score:.4f};"
+                f"margin={decision.margin:.4f};reason={decision.reason}"
+            )
+            if decision.status != "matched" or not decision.selected_vid:
+                item.reason = "Milvus candidate failed score, uniqueness, or margin policy"
+                item.confidence = decision.score or None
+                remaining.append(item)
+                continue
+            confidence = round(decision.score, 4)
+            promoted.append(
+                EdgeRecord(
+                    item.relation_type,
+                    item.patent_vid,
+                    decision.selected_vid,
+                    item.sequence,
+                    common_party_properties(
+                        item.sequence,
+                        item.role,
+                        item.source_name,
+                        confidence,
+                        "Organization",
+                        "milvus_bm25_dense_hybrid",
+                        f"score={decision.score:.4f};margin={decision.margin:.4f};{decision.reason}",
+                        item.source_record_id,
+                        item.is_current,
+                    ),
+                )
+            )
+        return promoted, remaining
+    finally:
+        if owns_store:
+            vector_store.close()
+
+
+def deduplicate_edges(rows: list[EdgeRecord]) -> tuple[list[EdgeRecord], int]:
+    """按逻辑关系去重；引用和项目产出不因来源数组序号重复建边。"""
+    selected: dict[tuple[str, str, str, int], EdgeRecord] = {}
+    for row in rows:
+        logical_rank = 0 if row.edge_type in {"CITES", "OUTPUT_OF"} else row.rank
+        key = (row.edge_type, row.source_vid, row.target_vid, logical_rank)
+        previous = selected.get(key)
+        if previous is None:
+            selected[key] = (
+                row
+                if logical_rank == row.rank
+                else EdgeRecord(
+                    row.edge_type, row.source_vid, row.target_vid, logical_rank, row.properties
+                )
+            )
+            continue
+        previous_confidence = float(dict(previous.properties).get("confidence") or 0)
+        current_confidence = float(dict(row.properties).get("confidence") or 0)
+        if current_confidence > previous_confidence:
+            selected[key] = EdgeRecord(
+                row.edge_type, row.source_vid, row.target_vid, logical_rank, row.properties
+            )
+    return list(selected.values()), len(rows) - len(selected)
 
 
 def write_reviews(path: Path, reviews: list[ReviewRecord]) -> None:
@@ -1109,31 +982,37 @@ def load(
     apply: bool,
     replace: bool = False,
     review_output: Path | None = None,
-    use_llm: bool = False,
-    llm_limit: int | None = None,
-    llm_batch_size: int = 10,
-    llm_auto_threshold: float = 0.75,
-    llm_workers: int = 4,
-    llm_cache: Path | None = None,
+    use_vector: bool = True,
+    vector_threshold: float = DEFAULT_VECTOR_THRESHOLD,
+    vector_margin: float = DEFAULT_VECTOR_MARGIN,
+    vector_top_k: int = DEFAULT_VECTOR_TOP_K,
+    vector_state_dir: Path | None = None,
 ) -> Counter[str]:
+    if replace and not apply:
+        raise ValueError("replace=True 必须同时设置 apply=True")
+    if not 0 <= vector_threshold <= 1:
+        raise ValueError("vector_threshold 必须在 0 到 1 之间")
+    if not 0 <= vector_margin <= 1:
+        raise ValueError("vector_margin 必须在 0 到 1 之间")
+    if vector_top_k < 2:
+        raise ValueError("vector_top_k 必须大于等于 2")
     os.environ["TRS_GRAPH_SPACE"] = "dev"
     graph = get_trs_graph_client()
     connection = mysql_connection()
     try:
         edges, reviews, stats = build_relations(graph, connection)
-        if use_llm and reviews:
-            stats["llm_reviewed_names"] = enrich_reviews_with_llm(
+        if use_vector and reviews:
+            vector_edges, reviews = promote_vector_organization_matches(
                 reviews,
-                graph,
-                connection,
-                llm_limit,
-                llm_batch_size,
-                llm_workers,
-                llm_cache,
+                threshold=vector_threshold,
+                margin=vector_margin,
+                top_k=vector_top_k,
+                state_dir=vector_state_dir,
             )
-            llm_edges, reviews = promote_llm_organization_matches(reviews, llm_auto_threshold)
-            edges.extend(llm_edges)
-            stats["llm_alias_auto_edges"] = len(llm_edges)
+            edges.extend(vector_edges)
+            stats["milvus_hybrid_auto_edges"] = len(vector_edges)
+        edges, duplicate_count = deduplicate_edges(edges)
+        stats["duplicate_edges_removed"] = duplicate_count
         stats["review_records"] = len(reviews)
         if review_output:
             write_reviews(review_output, reviews)
@@ -1160,45 +1039,46 @@ def main() -> None:
     parser.add_argument("--apply", action="store_true", help="实际写入dev；默认只分析")
     parser.add_argument("--replace", action="store_true", help="写入前替换本加载器管理的旧关系")
     parser.add_argument("--review-output", type=Path, help="可选：输出待人工审核JSONL")
+    parser.add_argument("--no-vector", action="store_true", help="仅用于诊断：跳过Milvus候选召回")
     parser.add_argument(
-        "--use-llm", action="store_true", help="用公共大模型辅助判断主体类型、别名和审核候选"
-    )
-    parser.add_argument("--llm-limit", type=int, help="可选：限制本次大模型分析的去重名称数量")
-    parser.add_argument(
-        "--llm-batch-size", type=int, default=10, help="每次大模型请求分析的名称数量"
-    )
-    parser.add_argument(
-        "--llm-auto-threshold",
+        "--vector-threshold",
         type=float,
-        default=0.75,
-        help="大模型别名唯一匹配自动建边阈值，默认0.75；设为更高值可只保留审核候选",
+        default=DEFAULT_VECTOR_THRESHOLD,
+        help="Milvus候选自动建边最低综合分，默认0.88",
     )
-    parser.add_argument("--llm-workers", type=int, default=4, help="大模型并发批次数，默认4")
     parser.add_argument(
-        "--llm-cache",
-        type=Path,
-        default=Path("/tmp/patent_relation_llm_cache.jsonl"),
-        help="大模型名称识别缓存，默认写入/tmp；生产环境可指定持久卷路径",
+        "--vector-margin",
+        type=float,
+        default=DEFAULT_VECTOR_MARGIN,
+        help="第一与第二候选最低分差，默认0.08",
     )
+    parser.add_argument(
+        "--vector-top-k",
+        type=int,
+        default=DEFAULT_VECTOR_TOP_K,
+        help="Milvus候选召回数量，默认20",
+    )
+    parser.add_argument("--vector-state-dir", type=Path, help="Organization BM25状态目录")
     args = parser.parse_args()
     if args.replace and not args.apply:
         parser.error("--replace必须与--apply一起使用")
-    if not 0 <= args.llm_auto_threshold <= 1:
-        parser.error("--llm-auto-threshold必须在0到1之间")
-    if args.llm_workers < 1:
-        parser.error("--llm-workers必须大于等于1")
+    if not 0 <= args.vector_threshold <= 1:
+        parser.error("--vector-threshold必须在0到1之间")
+    if not 0 <= args.vector_margin <= 1:
+        parser.error("--vector-margin必须在0到1之间")
+    if args.vector_top_k < 2:
+        parser.error("--vector-top-k必须大于等于2")
     logging.basicConfig(level=logging.INFO)
     for key, value in sorted(
         load(
             args.apply,
             args.replace,
             args.review_output,
-            args.use_llm,
-            args.llm_limit,
-            args.llm_batch_size,
-            args.llm_auto_threshold,
-            args.llm_workers,
-            args.llm_cache,
+            not args.no_vector,
+            args.vector_threshold,
+            args.vector_margin,
+            args.vector_top_k,
+            args.vector_state_dir,
         ).items()
     ):
         logger.info("%s=%d", key, value)

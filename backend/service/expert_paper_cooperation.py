@@ -362,7 +362,7 @@ def _fetch_shared_papers(body: ExpertPaperCooperationDemoRequest) -> list[dict[s
         'venue', COALESCE(NULLIF(p.publication_en_name, ''), ej.en_name, zj.en_name, zj.zh_name, '未知期刊/会议'),
         'venueType', COALESCE(ej.publication_type, zj.publication_type, ''),
         'jcrZone', ej.jcr_zone,
-        'scopeZone', zj.scope_zone,
+        'scopeZone', NULL,
         'subQuartile', zj.sub_quartile,
         'top', COALESCE(ej.top, 0),
         'isSci', COALESCE(ej.is_sci, zj.is_sci, 0),
@@ -378,8 +378,8 @@ def _fetch_shared_papers(body: ExpertPaperCooperationDemoRequest) -> list[dict[s
       ON r1.paper_id = r2.paper_id
      AND r2.scholar_id = {_sql_literal(body.expertBId)}
     JOIN dwd_scholar_papers p ON p.id = r1.paper_id
-    LEFT JOIN dwd_en_journal ej ON ej.id = r1.publication_id
-    LEFT JOIN dwd_zh_journal zj ON zj.id = r1.publication_id
+    LEFT JOIN dwd_en_journal ej ON ej.publication_id = r1.publication_id
+    LEFT JOIN dwd_zh_journal zj ON zj.publication_id = r1.publication_id
     WHERE r1.scholar_id = {_sql_literal(body.expertAId)}
       AND {filters_sql}
     ORDER BY r1.year ASC, GREATEST(COALESCE(r1.citations, 0), COALESCE(r2.citations, 0)) DESC, p.id
@@ -721,7 +721,7 @@ def _build_analyze_result(body: ExpertPaperCooperationDemoRequest) -> dict[str, 
             "impactSummary": f"评分{academic_impact_score}",
         },
         "apiResultExample": {
-            "endpoint": "/api/v1/kg-construction/expert-paper-cooperation-relations/demo/structured-result",
+            "endpoint": "/api/v1/kg-construction/expert-paper-cooperation-relations/structured-result",
             "method": "POST",
             "sourceMode": "mysql_demo_tables",
             "mysqlDatabase": _paper_coop_database(),

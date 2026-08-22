@@ -24,7 +24,10 @@ class WorkflowRepository:
     """使用 SQLite 保存控制面数据，避免页面状态随进程重启丢失。"""
 
     def __init__(self, database_path: str | None = None) -> None:
-        default_path = Path(os.getenv("TECH_KG_STATE_DIR", "/tmp")) / "tech-kg-workflows.db"
+        backend_dir = Path(__file__).resolve().parents[1]
+        default_path = (
+            Path(os.getenv("TECH_KG_STATE_DIR", str(backend_dir / "var"))) / "tech-kg-workflows.db"
+        )
         self.database_path = database_path or os.getenv("WORKFLOW_DATABASE_PATH", str(default_path))
         Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
@@ -73,9 +76,67 @@ class WorkflowRepository:
                 );
                 """
             )
+            self._remove_workflow_type_unique_constraint(connection)
             count = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
             if count == 0:
                 self._seed(connection)
+            self._ensure_builtin_definitions(connection)
+
+    def _ensure_builtin_definitions(self, connection: sqlite3.Connection) -> None:
+        """Idempotently insert built-in workflow definitions missing from older DBs."""
+        builtins = [
+            ("entity-project", "kg.entity.project", "entity", "国内外项目实体工作流"),
+        ]
+        for definition_id, workflow_type, category, name in builtins:
+            exists = connection.execute(
+                "SELECT 1 FROM workflow_definitions WHERE id = ?", (definition_id,)
+            ).fetchone()
+            if exists:
+                continue
+            payload = {
+                "id": definition_id,
+                "name": name,
+                "workflowType": workflow_type,
+                "category": category,
+                "taskQueue": os.getenv("TEMPORAL_TASK_QUEUE", "tech-kg-workflows"),
+                "active": True,
+                "sourceKind": "builtin",
+                "steps": ["读取增量", "标准化", "抽取/对齐", "质量校验", "图谱写入"],
+                "createdAt": _now(),
+            }
+            connection.execute(
+                """INSERT INTO workflow_definitions(id, workflow_type, category, active, payload)
+                   VALUES (?, ?, ?, 1, ?)""",
+                (definition_id, workflow_type, category, _json(payload)),
+            )
+
+    @staticmethod
+    def _remove_workflow_type_unique_constraint(connection: sqlite3.Connection) -> None:
+        indexes = connection.execute("PRAGMA index_list(workflow_definitions)").fetchall()
+        has_legacy_unique = False
+        for index in indexes:
+            if not index[2]:
+                continue
+            columns = connection.execute(f"PRAGMA index_info({index[1]})").fetchall()
+            if [column[2] for column in columns] == ["workflow_type"]:
+                has_legacy_unique = True
+                break
+        if not has_legacy_unique:
+            return
+        connection.executescript(
+            """
+            ALTER TABLE workflow_definitions RENAME TO workflow_definitions_legacy;
+            CREATE TABLE workflow_definitions (
+                id TEXT PRIMARY KEY, workflow_type TEXT NOT NULL,
+                category TEXT NOT NULL, active INTEGER NOT NULL, payload TEXT NOT NULL
+            );
+            INSERT OR REPLACE INTO workflow_definitions
+                (id, workflow_type, category, active, payload)
+            SELECT id, workflow_type, category, active, payload
+            FROM workflow_definitions_legacy;
+            DROP TABLE workflow_definitions_legacy;
+            """
+        )
 
     def _seed(self, connection: sqlite3.Connection) -> None:
         batches = [
@@ -237,6 +298,7 @@ class WorkflowRepository:
             ("entity-scholar", "kg.entity.scholar", "entity", "人才实体工作流"),
             ("entity-patent", "kg.entity.patent", "entity", "专利实体工作流"),
             ("entity-organization", "kg.entity.organization", "entity", "机构实体工作流"),
+            ("entity-project", "kg.entity.project", "entity", "国内外项目实体工作流"),
             ("relation-authorship", "kg.relation.authorship", "relation", "论文作者关系工作流"),
             ("relation-employment", "kg.relation.employment", "relation", "人才任职关系工作流"),
             ("relation-citation", "kg.relation.citation", "relation", "论文引用关系工作流"),
@@ -268,6 +330,7 @@ class WorkflowRepository:
             ("normalize", "清洗标准化", "数据处理", "执行字段、枚举和字典标准化"),
             ("schema", "Schema 映射", "图谱构建", "映射实体、关系与属性 Schema"),
             ("extract", "实体关系抽取", "图谱构建", "运行领域专属实体/关系工作流"),
+            ("align", "实体对齐消歧", "图谱构建", "候选实体与存量图谱召回、消歧与合并"),
             ("validate", "质量校验", "图谱构建", "执行置信度、证据与唯一性校验"),
             ("persist", "图谱入库", "图谱构建", "幂等写入实体、关系和属性"),
         ]
@@ -351,7 +414,7 @@ class WorkflowRepository:
                 "专家基本信息表",
                 "单任务执行失败",
                 "执行出错",
-                "extract",
+                "align",
                 "",
             ),
             (
@@ -564,18 +627,18 @@ class WorkflowRepository:
             ),
             (
                 "PI-20260714-0104",
-                "实体抽取超时",
+                "专家实体对齐歧义",
                 "人才",
-                "专家记录",
+                "专家实体",
                 "李晓峰 / Li Xiaofeng",
-                "ENTITY-RUNTIME-004",
-                "实体抽取服务超过 30 秒未返回结果",
-                "",
+                "ALIGN-AMBIGUITY-004",
+                "召回 3 个高相似存量专家，无法自动消歧合并",
+                "0.81",
                 "王审核",
-                "实体抽取",
+                "实体对齐消歧",
                 "专家基本信息表",
                 "EXPERT-20566",
-                "抽取流程异常",
+                "实体对齐异常",
             ),
             (
                 "PI-20260714-0003",
@@ -928,6 +991,15 @@ class WorkflowRepository:
                 "SELECT payload FROM workflow_executions WHERE id = ?", (execution_id,)
             ).fetchone()
             return json.loads(row["payload"]) if row else None
+
+    def list_executions(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            return self._rows(
+                connection.execute(
+                    "SELECT payload FROM workflow_executions ORDER BY started_at DESC LIMIT ?",
+                    (limit,),
+                )
+            )
 
     def save_schedule(self, schedule: dict[str, Any]) -> None:
         with self._lock, self._connect() as connection:

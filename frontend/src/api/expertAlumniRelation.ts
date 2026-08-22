@@ -123,5 +123,6 @@ export function queryExpertAlumniRelation(body: AlumniQueryRequest) {
   return http.post<ApiResponse<AlumniQueryResult>>(
     '/v1/kg-construction/expert-alumni-relations/query',
     body,
+    { timeout: 10_000 },
   )
 }

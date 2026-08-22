@@ -115,7 +115,7 @@ export async function getLoginUrl(next = "/overview"): Promise<LoginUrlData> {
   const response = await http.get<
     ApiResponse<LoginUrlData>,
     ApiResponse<LoginUrlData>
-  >("/v1/auth/login-url", { params: { next } });
+  >("/v1/auth/login-url", { params: { next, _t: Date.now() } });
   return unwrapApiResponse(response);
 }
 

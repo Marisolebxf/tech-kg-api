@@ -1,10 +1,5 @@
-import os
-
 import pytest
 from httpx import ASGITransport, AsyncClient
-
-os.environ.setdefault("AUTH_ENABLED", "false")
-os.environ.setdefault("AUTH_SESSION_BACKEND", "memory")
 
 
 @pytest.fixture

@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS `kg_schema_script` (
   `etag` VARCHAR(128) NULL,
   `sha256` VARCHAR(64) NOT NULL,
   `uploaded_by` VARCHAR(128) NOT NULL,
+  `workflow_definition_id` VARCHAR(64) NULL,
+  `workflow_function_name` VARCHAR(128) NULL,
   `uploaded_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_kg_schema_script_schema` (`schema_id`),

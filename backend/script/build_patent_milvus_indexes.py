@@ -52,7 +52,7 @@ SCALAR_INDEXES = (
     ("granted_number", "granted_number_inverted"),
     ("simple_family_number", "family_number_inverted"),
     ("country_code", "country_code_inverted"),
-    ("source_table", "source_table_inverted"),
+    ("organization_base", "organization_base_inverted"),
 )
 
 
@@ -160,7 +160,7 @@ def create_collection(
     ):
         schema.add_field(field, DataType.VARCHAR, max_length=128)
     schema.add_field("country_code", DataType.VARCHAR, max_length=32)
-    schema.add_field("source_table", DataType.VARCHAR, max_length=256)
+    schema.add_field("organization_base", DataType.VARCHAR, max_length=256)
     schema.add_field("semantic_text", DataType.VARCHAR, max_length=16384)
     schema.add_field("search_text", DataType.VARCHAR, max_length=16384)
     schema.add_field("dense_vector", DataType.FLOAT_VECTOR, dim=dim)
@@ -254,7 +254,7 @@ def build_one(
                 "granted_number": str(props.get("granted_number") or ""),
                 "simple_family_number": str(props.get("simple_family_number") or ""),
                 "country_code": str(props.get("country_code") or ""),
-                "source_table": str(props.get("source_table") or props.get("db_source") or ""),
+                "organization_base": str(props.get("organization_base") or ""),
                 "semantic_text": truncate_utf8(semantic_text, 16000),
                 "search_text": truncate_utf8(search_text, 16000),
                 "sparse_vector": bm25.encode(search_text),

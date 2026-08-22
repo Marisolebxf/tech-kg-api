@@ -92,6 +92,12 @@ class AuthProfile(CamelCaseModel):
     user: UserProfile
     roles: list[RoleSummary] = Field(default_factory=list)
     permissions: list[str] = Field(default_factory=list)
+
+    @field_validator("roles", "menus", "permissions", mode="before")
+    @classmethod
+    def normalize_null_lists(cls, value: Any) -> Any:
+        return [] if value is None else value
+
     menus: list[MenuSummary] = Field(default_factory=list)
     role_menus: list[RoleMenuSummary] = Field(default_factory=list)
     app_permissions: PermissionSetSummary = Field(default_factory=PermissionSetSummary)

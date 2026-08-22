@@ -12,19 +12,20 @@ import ManualReviewWorkspaceView from '../views/platform/ManualReviewWorkspaceVi
 import ProcessInstanceDetailView from '../views/platform/ProcessInstanceDetailView.vue'
 import TaskCenterView from '../views/platform/TaskCenterView.vue'
 import SchemaBrowserView from '../views/platform/SchemaBrowserView.vue'
+import GraphBuildView from '../views/platform/GraphBuildView.vue'
 import ConfigurationManagementView from '../views/platform/ConfigurationManagementView.vue'
 import PipelineDesignerView from '../views/platform/PipelineDesignerView.vue'
 
 const serviceRoutes = [
-  { path: '/expert-direct', name: 'expert-direct', title: '专家直接关系', serviceKey: 'expert-direct' },
-  { path: '/node-indirect', name: 'node-indirect', title: '单节点间接关系', serviceKey: 'node-indirect' },
-  { path: '/two-point-achievement', name: 'two-point-achievement', title: '两点合作成果', serviceKey: 'two-point-achievement' },
-  { path: '/expert-colleague', name: 'expert-colleague', title: '专家同事关系', serviceKey: 'expert-colleague' },
-  { path: '/expert-alumni', name: 'expert-alumni', title: '专家校友关系', serviceKey: 'expert-alumni' },
-  { path: '/paper-cooperation', name: 'paper-cooperation', title: '论文合作关系', serviceKey: 'paper-cooperation' },
-  { path: '/enterprise-relation', name: 'enterprise-relation', title: '重点企业关系', serviceKey: 'enterprise-relation' },
-  { path: '/industry-chain-event', name: 'industry-chain-event', title: '产业链事件关系', serviceKey: 'industry-chain-event' },
-  { path: '/industry-chain-panorama', name: 'industry-chain-panorama', title: '产业链全景图', serviceKey: 'industry-chain-panorama' },
+  { path: '/expert-direct', name: 'expert-direct', title: '科技专家/人才直接关系', serviceKey: 'expert-direct' },
+  { path: '/node-indirect', name: 'node-indirect', title: '科技单节点间接关系', serviceKey: 'node-indirect' },
+  { path: '/two-point-achievement', name: 'two-point-achievement', title: '科技两点合作成果', serviceKey: 'two-point-achievement' },
+  { path: '/expert-colleague', name: 'expert-colleague', title: '科技专家同事关系', serviceKey: 'expert-colleague' },
+  { path: '/expert-alumni', name: 'expert-alumni', title: '科技专家校友关系', serviceKey: 'expert-alumni' },
+  { path: '/paper-cooperation', name: 'paper-cooperation', title: '科技专家论文合作关系', serviceKey: 'paper-cooperation' },
+  { path: '/enterprise-relation', name: 'enterprise-relation', title: '重点关注科技企业关系', serviceKey: 'enterprise-relation' },
+  { path: '/industry-chain-event', name: 'industry-chain-event', title: '科技产业链点TOP-N事件关系', serviceKey: 'industry-chain-event' },
+  { path: '/industry-chain-panorama', name: 'industry-chain-panorama', title: '科技产业链全景图', serviceKey: 'industry-chain-panorama' },
 ] as const
 
 export const router = createRouter({
@@ -66,6 +67,7 @@ export const router = createRouter({
     { path: '/pipelines', name: 'pipelines', component: PipelineDesignerView, meta: { title: '自定义抽取 Pipeline' } },
     { path: '/configurations', name: 'configurations', component: ConfigurationManagementView, meta: { title: '配置管理' } },
     { path: '/tasks', name: 'tasks', component: TaskCenterView, meta: { title: '图谱构建' } },
+    { path: '/graph-build', name: 'graph-build', component: GraphBuildView, meta: { title: '图谱构建' } },
     { path: '/manual-review', name: 'manual-review', component: OperationsCenterView, props: { mode: 'review' }, meta: { title: '人工处理平台' } },
     { path: '/manual-review/task/:instanceId', name: 'manual-review-detail', component: ManualReviewWorkspaceView, meta: { title: '人工处理详情' } },
     { path: '/user-center', name: 'user-center', component: UserCenterView, meta: { title: '个人中心' } },
@@ -89,6 +91,10 @@ export const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
+  if (import.meta.env.VITE_AUTH_ENABLED === 'false') {
+    return to.name === 'login' ? { path: '/overview' } : true
+  }
+
   if (to.meta.public) return true
 
   const authStore = useAuthStore()

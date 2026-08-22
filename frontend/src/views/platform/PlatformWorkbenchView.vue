@@ -8,9 +8,10 @@ import {
 import { useRouter } from 'vue-router'
 import {
   getSubgraph,
-  listGraphNodes,
   listGraphSpaces,
   unwrapApiResponse,
+  getGraphNode,
+  searchGraphNodes,
   type ApiResponse,
   type GraphData,
   type GraphEdge,
@@ -36,6 +37,11 @@ import {
   type GraphNodeData,
   type GraphNodeType,
 } from '../../data/graph-presets'
+
+interface RelationGraphResult {
+  nodes: GraphNodeData[]
+  edges: GraphEdgeData[]
+}
 
 type PlatformTab = 'overview' | 'processing' | 'construction' | 'query' | 'service'
 type ServiceField = {
@@ -91,11 +97,11 @@ const modules: ServiceModule[] = [
     requestFields: [
       { name: 'core_node_id', type: 'string', required: true, description: '核心专家或人才节点 ID' },
       { name: 'relation_types', type: 'array', required: false, description: '间接关系类型' },
-      { name: 'path_depth', type: 'number', required: false, description: '路径分析深度' },
-      { name: 'min_strength', type: 'number', required: false, description: '最小关联强度阈值' },
+      { name: 'path_depth', type: 'number', required: false, description: '路径分析深度（2-3 跳）' },
+      { name: 'min_strength', type: 'number', required: false, description: '最小关联强度阈值（0-1）' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { core_node_id: 'E10001', relation_types: ['学术关联', '机构关联'], path_depth: 2, min_strength: 0.65 },
+    requestExample: { core_node_id: '4G7t0B0t', relation_types: ['学术关联'], path_depth: 2, min_strength: 0.65 },
     responseExample: { data: { indirect_nodes: 36, paths: 58, average_strength: 0.76 } },
     resultRows: [{ label: '间接节点', value: '36' }, { label: '路径数量', value: '58' }, { label: '关系类型', value: '4' }, { label: '平均强度', value: '0.76' }],
     evidence: ['路径：张明远 -> 李佳宁 -> 专家C。', '路径深度为 2，命中学术关联和机构关联。', '每条间接关系均返回传递路径和强度。'],
@@ -177,17 +183,17 @@ const modules: ServiceModule[] = [
   {
     key: 'paper-cooperation',
     title: '科技专家论文合作关系',
-    endpoint: '/api/v1/kg-service/paper-cooperation-relation',
+    endpoint: '/api/v1/kg-construction/expert-paper-cooperation-relations/structured-result',
     method: 'POST',
     requestFields: [
-      { name: 'expert_id', type: 'string', required: true, description: '专家唯一标识' },
-      { name: 'coauthor_id', type: 'string', required: false, description: '合作者唯一标识' },
-      { name: 'topic', type: 'string', required: false, description: '论文主题筛选' },
-      { name: 'venue_level', type: 'string', required: false, description: '期刊或会议级别' },
+      { name: 'expertAId', type: 'string', required: true, description: '专家 A 唯一标识' },
+      { name: 'expertBId', type: 'string', required: true, description: '专家 B 唯一标识' },
+      { name: 'startTime', type: 'month', required: false, description: '开始月份 YYYY-MM' },
+      { name: 'endTime', type: 'month', required: false, description: '结束月份 YYYY-MM' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { expert_id: 'E10001', coauthor_id: 'E10002', topic: '人工智能', venue_level: 'A类会议' },
-    responseExample: { data: { papers: 14, citations: 1260, stable_team: true, topics: ['人工智能', '先进计算'] } },
+    requestExample: { expertAId: 'person_121d48631f434f4d323ba521d33032ad', expertBId: 'person_42914016fe8d6e0e1d01dad5845c47e6', startTime: '2021-01', endTime: '2026-08' },
+    responseExample: { data: { structuredResult: { cooperationPaperCount: 14, citation: { total: 1260, max: 90 }, stableTeamMembers: [], paperTopics: ['人工智能', '先进计算'] } } },
     resultRows: [{ label: '合作论文', value: '14' }, { label: '总被引', value: '1260' }, { label: '研究方向', value: '5' }, { label: '核心人员', value: '7' }],
     evidence: ['提取作者列表、作者单位、发表时间和论文主题。', '统计期刊会议级别和被引情况。', '识别长期稳定合作团队和核心合作人员。'],
   },
@@ -255,10 +261,10 @@ const activeTab = ref<PlatformTab>(props.initialTab ?? 'overview')
 const activeServiceKey = ref(props.initialServiceKey ?? modules[0]?.key ?? '')
 const activeServiceMode = ref<'test' | 'api'>('test')
 const selectedQueryType = ref('全部图谱')
-const queryKeyword = ref('Scholar17')
+const queryKeyword = ref('paper_1002153099575427082')
 const queryRelationFilter = ref('全部关系')
-const queryEntityConfidence = ref('>= 0.75')
-const queryRelationConfidence = ref('>= 0.75')
+const queryEntityConfidence = ref('不限')
+const queryRelationConfidence = ref('不限')
 const queryApplied = ref(false)
 const processingDomainFilter = ref('全部业务域')
 const processingStatusFilter = ref('全部状态')
@@ -279,7 +285,7 @@ const queryDetailMode = ref<'summary' | 'entity' | 'relation' | 'provenance'>('s
  * 页面原来的“图谱范围”继续表示业务子图类型，
  * 不改变负责人要求保留的页面结构和样式。
  */
-const selectedGraphSpace = ref('techkg')
+const selectedGraphSpace = ref('dev')
 
 /**
  * 当前真实查询得到的图谱数据。
@@ -454,6 +460,7 @@ const buildPipelineSteps = [
   { id: 'read', name: '读取结构化数据', count: '12,604 条', status: '完成', desc: '从 kg_stage 标准表读取专家、论文、企业、项目等记录' },
   { id: 'schema', name: '字段映射入 Schema', count: '7 类实体', status: '完成', desc: '字段映射到统一实体、属性和关系类型' },
   { id: 'llm', name: '大模型抽取', count: '3,261 实体 / 8,942 关系', status: '阻断', desc: '展示模型版本、Prompt、输入输出、置信度和评估结果' },
+  { id: 'align', name: '实体对齐消歧', count: '42 个待确认', status: '待执行', desc: '候选实体与存量图谱召回、消歧与合并，低置信转入人工处理' },
   { id: 'validate', name: '规则验证与证据回链', count: '1,203 属性 / 326 异常', status: '待执行', desc: '用 Schema 约束、存量图谱和原始来源交叉验证抽取结果' },
   { id: 'persist', name: '结果入库与异常分流', count: '326 条待处理', status: '待执行', desc: '高置信度结果自动入库，低置信度与冲突对象转入独立人工处理平台' },
 ]
@@ -465,132 +472,212 @@ const taskRows = [
   { batch: 'KG-FULL-20260712-008', source: '科技专家人才库', domain: '人才域', stage: '图谱入库', status: '成功', progress: 100, entities: '18,420', relations: '62,117', properties: '6,410', autoStored: '86,947', conflicts: '0', quality: '0.94', next: '已完成入库，可进入查询服务' },
 ]
 
-const queryTypes = ['全部图谱', '专家人才子图', '科研成果子图', '机构企业子图', '产业链事件子图', '入库候选子图']
-const relationFilters = ['全部关系', '直接关系', '间接关系', '同事', '校友', '论文合作', '企业关联', '产业事件']
+const queryTypes = [
+  '全部图谱',
+  '专家人才图谱',
+  '机构企业图谱',
+  '科研成果图谱',
+  '产业链图谱',
+  '事件资讯图谱',
+]
+const relationFilters = ['全部关系', '直接关系', '间接关系', '同事关系', '校友关系', '论文合作', '企业关联', '产业事件']
 const confidenceOptions = ['不限', '>= 0.60', '>= 0.75', '>= 0.85', '>= 0.90']
 const queryScopeDescriptions: Record<string, string> = {
-  全部图谱: '按统一 Schema 汇总专家、机构、成果、项目、企业、事件和产业链节点。',
-  专家人才子图: '围绕 Expert / Person 节点展开教育、任职、成果、合作与社交关系。',
-  科研成果子图: '围绕 Paper / Patent / Project / Achievement 展示成果产出和引用链路。',
-  机构企业子图: '围绕 Organization / Product 展示任职、工商、产品、项目和专家关联。',
-  产业链事件子图: '围绕 IndustryChainNode / Event 展示产业环节、TOP-N 事件和影响关系。',
-  入库候选子图: '展示候选实体、候选关系、规则命中和异常隔离状态。',
+  全部图谱: '查询当前科技知识图谱中的专家人才、机构企业、科研成果、产业链、事件资讯等各类实体及其关联关系。',
+  专家人才图谱: '围绕 Person 实体查询专家人才及其论文、项目、专利、机构等关联信息。',
+  机构企业图谱: '围绕 Organization实体查询机构企业及其人员、投资、控制、成果等关联信息。',
+  科研成果图谱: '围绕 Paper、Patent、PatentFamily、Project、Report、Journal 等科研成果相关实体查询成果产出、发表、引用和关联关系。',
+  产业链图谱: '围绕 IndustryChain、IndustryNode、Product 实体查询产业链、产业节点、产品及上下游关联信息。',
+  事件资讯图谱: '围绕 Event、News 实体查询科技事件、新闻资讯及其关联实体和来源信息。',
 }
 
 /**
- * 页面图谱范围与当前 techkg 图空间真实节点标签的对应关系。
+ * 页面图谱范围与当前 dev 图空间真实节点标签的对应关系。
  *
- * 标签必须与 GET /graph-search/stats 返回结果一致，
- * 不要添加当前图空间中不存在的 Company、Enterprise、
- * Project、Patent 等标签。
+ * 节点标签以 GET /graph-search/stats 的真实返回结果为准。
+ * 图谱范围用于限制用户关键词查找中心实体时所搜索的节点类型。
+ * IntegrationTestPerson 当前无实际数据，不纳入正式查询范围。
  */
 const queryTypeNodeLabelsMap:
   Record<string, string[]> = {
     全部图谱: [
-      'Scholar',
+      'DataSource',
+      'Event',
+      'IndustryChain',
+      'IndustryNode',
+      'Journal',
+      'Keyword',
+      'News',
       'Organization',
       'Paper',
-      'Journal',
-      'Topic',
+      'Patent',
+      'PatentFamily',
+      'Person',
+      'Product',
+      'Project',
+      'Report',
     ],
 
-    专家人才子图: [
-      'Scholar',
+    专家人才图谱: [
+      'Person',
     ],
 
-    科研成果子图: [
-      'Paper',
-      'Journal',
-    ],
-
-    机构企业子图: [
+    机构企业图谱: [
       'Organization',
     ],
 
-    产业链事件子图: [
-      'Topic',
+    科研成果图谱: [
+      'Paper',
+      'Patent',
+      'PatentFamily',
+      'Project',
+      'Report',
+      'Journal',
     ],
 
-    入库候选子图: [
-      'IntegrationTestPerson',
+    产业链图谱: [
+      'IndustryChain',
+      'IndustryNode',
+      'Product',
+    ],
+
+    事件资讯图谱: [
+      'Event',
+      'News',
     ],
   }
 
 
 /**
- * 不同节点标签可尝试搜索的属性名称。
+ * 各实体类型用于“名称查询”的真实属性字段。
+ *
+ * 注意：
+ * 1. 图节点 VID 不在这里查询；
+ * 2. VID 由 getGraphNode() 直接精确查询；
+ * 3. 这里只配置 dev 大图谱中已经具有可用索引的名称字段。
  */
 const nodeSearchFieldMap:
   Record<string, string[]> = {
-    Scholar: [
+
+    // DataSource 当前没有正式“实体名称”字段
+    DataSource: [],
+
+    // 专家 / 人才
+    Person: [
       'name_zh',
       'name_en',
-      'scholar_id',
     ],
 
+    // 机构 / 企业
     Organization: [
       'name_cn',
-      'name_zh',
-      'name_en',
-      'org_id',
     ],
 
+    // 论文
     Paper: [
       'title_zh',
-      'title',
-      'title_en',
-      'paper_id',
-      'doi',
-      'venue',
     ],
 
+    // 专利
+    // 已实际验证 title_zh 可以查询
+    Patent: [
+      'title_zh',
+    ],
+
+    // 专利族
+    // 已实际验证 family_number 可以查询
+    PatentFamily: [
+      'family_number',
+    ],
+
+    // 项目
+    Project: [
+      'title',
+    ],
+
+    // 报告
+    Report: [
+      'title_cn',
+    ],
+
+    // 新闻
+    News: [
+      'title',
+    ],
+
+    // 事件
+    Event: [
+      'title',
+    ],
+
+    // 期刊
     Journal: [
-      'name',
-      'name_zh',
       'name_en',
-      'title',
-      'journal_id',
-      'venue_type',
     ],
 
-    Topic: [
-      'name',
-      'name_zh',
-      'name_en',
-      'topic_id',
+    // 产业链
+    IndustryChain: [
+      'chain_name',
     ],
 
-    IntegrationTestPerson: [
-      'name_zh',
+    // 产业链节点
+    IndustryNode: [
+      'node_name',
+    ],
+
+    // 产品
+    Product: [
       'name',
+    ],
+
+    // 关键词
+    Keyword: [
+      'keyword',
     ],
   }
 
 const entityLegendItems = [
-  { label: '专家/人才', schema: 'Expert', tone: 'expert' },
-  { label: '机构/企业', schema: 'Organization', tone: 'org' },
-  { label: '论文成果', schema: 'Paper', tone: 'paper' },
-  { label: '项目/专利', schema: 'Project / Patent', tone: 'project' },
-  { label: '政策/事件', schema: 'Policy / Event', tone: 'event' },
-  { label: '产业链节点', schema: 'IndustryChainNode', tone: 'chain' },
-  { label: '产品/技术领域', schema: 'Product / ResearchField', tone: 'field' },
+  {
+    label: '专家/人才',
+    schema: 'Person',
+    tone: 'expert',
+  },
+  {
+    label: '机构/企业',
+    schema: 'Organization / organization_base',
+    tone: 'org',
+  },
+  {
+    label: '论文/期刊/报告',
+    schema: 'Paper / Journal / Report',
+    tone: 'paper',
+  },
+  {
+    label: '项目/专利',
+    schema: 'Project / Patent / PatentFamily',
+    tone: 'project',
+  },
+  {
+    label: '事件/资讯',
+    schema: 'Event / News',
+    tone: 'event',
+  },
+  {
+    label: '产业链节点',
+    schema: 'IndustryChain / IndustryNode',
+    tone: 'chain',
+  },
+  {
+    label: '产品/关键词',
+    schema: 'Product / Keyword',
+    tone: 'field',
+  },
+  {
+    label: '数据来源',
+    schema: 'DataSource',
+    tone: 'source',
+  },
 ]
-
-const graphEntitySummary = computed(() => {
-  return Array.from(
-    new Set(
-      queryGraphNodes.value.map(
-        (node) => node.entityType,
-      ),
-    ),
-  ).join(' · ')
-})
-
-const queryGraphStats = computed(
-  () =>
-    `${queryGraphNodes.value.length} 个节点 / `
-    + `${queryGraphEdges.value.length} 条关系`,
-)
 
 const selectedQueryScopeDescription = computed(() => (
   queryScopeDescriptions[selectedQueryType.value] ?? queryScopeDescriptions.全部图谱
@@ -628,9 +715,307 @@ interface AppliedGraphQuery {
 const appliedGraphQuery =
   ref<AppliedGraphQuery | null>(null)
 
+/**
+ * 将：
+ *
+ * >= 0.60
+ * >= 0.75
+ * >= 0.85
+ * >= 0.90
+ *
+ * 转换为真正的数值阈值。
+ */
+/**
+ * 将置信度下拉框中的字符串转换为数值阈值。
+ *
+ * 例如：
+ *
+ * 不限       -> null
+ * >= 0.60   -> 0.60
+ * >= 0.75   -> 0.75
+ * >= 0.85   -> 0.85
+ * >= 0.90   -> 0.90
+ */
+function parseConfidenceThreshold(
+  value: string | undefined,
+): number | null {
+  if (
+    !value
+    || value === '不限'
+  ) {
+    return null
+  }
+
+  const match =
+    value.match(
+      /([0-9]+(?:\.[0-9]+)?)/,
+    )
+
+  if (!match) {
+    return null
+  }
+
+  const threshold =
+    Number(match[1])
+
+  if (
+    !Number.isFinite(
+      threshold,
+    )
+    || threshold < 0
+    || threshold > 1
+  ) {
+    return null
+  }
+
+  return threshold
+}
+
+
+/**
+ * 最近一次真正执行查询时使用的实体置信度阈值。
+ *
+ * 用户只修改下拉框，
+ * 但没有点击“查询图谱”时，
+ * 不立即改变上一轮查询结果。
+ */
+const appliedEntityConfidenceThreshold =
+  computed(() =>
+    parseConfidenceThreshold(
+      appliedGraphQuery.value
+        ?.entityConfidence,
+    ),
+  )
+
+
+/**
+ * 最近一次真正执行查询时使用的关系置信度阈值。
+ *
+ * 例如：
+ *
+ * 不限       -> null
+ * >= 0.75   -> 0.75
+ */
+const appliedRelationConfidenceThreshold =
+  computed(() =>
+    parseConfidenceThreshold(
+      appliedGraphQuery.value
+        ?.relationConfidence,
+    ),
+  )
+
+
+/**
+ * 第一步：
+ * 根据实体置信度过滤节点。
+ *
+ * 中心查询实体始终保留，
+ * 因为它是当前子图查询的锚点。
+ */
+const entityConfidenceFilteredNodes =
+  computed(() => {
+    const threshold =
+      appliedEntityConfidenceThreshold.value
+
+    /*
+     * 用户选择“不限”时，
+     * 所有实体均保留。
+     */
+    if (threshold === null) {
+      return queryGraphNodes.value
+    }
+
+    return queryGraphNodes.value.filter(
+      (node) => {
+        /*
+         * level === 0
+         * 表示当前查询中心节点。
+         *
+         * 中心节点无论自身置信度多少，
+         * 都保留在图中。
+         */
+        if (node.level === 0) {
+          return true
+        }
+
+        return (
+          typeof node.confidence === 'number'
+          && Number.isFinite(
+            node.confidence,
+          )
+          && node.confidence >= threshold
+        )
+      },
+    )
+  })
+
+
+/**
+ * 第二步：
+ * 根据关系置信度过滤关系。
+ *
+ * 一条关系必须同时满足：
+ *
+ * 1. 源实体通过实体置信度筛选；
+ * 2. 目标实体通过实体置信度筛选；
+ * 3. 关系自身通过关系置信度筛选。
+ */
+const relationConfidenceFilteredEdges =
+  computed(() => {
+    const threshold =
+      appliedRelationConfidenceThreshold.value
+
+    /*
+     * 当前通过实体置信度筛选的节点 ID。
+     */
+    const visibleNodeIds =
+      new Set(
+        entityConfidenceFilteredNodes.value.map(
+          (node) =>
+            node.id,
+        ),
+      )
+
+    return queryGraphEdges.value.filter(
+      (edge) => {
+        /*
+         * 如果关系任意一个端点已经因为
+         * 实体置信度不足而被过滤，
+         * 那么该关系也必须删除。
+         */
+        if (
+          !visibleNodeIds.has(
+            edge.from,
+          )
+          || !visibleNodeIds.has(
+            edge.to,
+          )
+        ) {
+          return false
+        }
+
+        /*
+         * 用户选择“不限”时，
+         * 只需要保证两个端点都存在即可。
+         */
+        if (threshold === null) {
+          return true
+        }
+
+        /*
+         * 真正进行关系置信度过滤。
+         */
+        return (
+          typeof edge.confidence
+            === 'number'
+          && Number.isFinite(
+            edge.confidence,
+          )
+          && edge.confidence
+            >= threshold
+        )
+      },
+    )
+  })
+
+
+/**
+ * 第三步：
+ * 根据最终保留下来的关系，
+ * 删除因为关系置信度筛选而产生的孤立节点。
+ *
+ * 查询中心节点始终保留。
+ */
+const queryVisibleNodes =
+  computed(() => {
+    const connectedNodeIds =
+      new Set<string>()
+
+    for (
+      const edge
+      of relationConfidenceFilteredEdges.value
+    ) {
+      connectedNodeIds.add(
+        edge.from,
+      )
+
+      connectedNodeIds.add(
+        edge.to,
+      )
+    }
+
+    return entityConfidenceFilteredNodes.value.filter(
+      (node) => {
+        /*
+         * 查询中心节点始终显示。
+         */
+        if (node.level === 0) {
+          return true
+        }
+
+        /*
+         * 普通节点必须至少还有一条
+         * 满足置信度条件的关系。
+         */
+        return connectedNodeIds.has(
+          node.id,
+        )
+      },
+    )
+  })
+
+
+/**
+ * 最终展示的关系。
+ */
+const queryVisibleEdges =
+  computed(() =>
+    relationConfidenceFilteredEdges.value,
+  )
+
+
+/**
+ * 当前筛选结果中实际包含的实体类型。
+ */
+const graphEntitySummary =
+  computed(() => {
+    return Array.from(
+      new Set(
+        queryVisibleNodes.value.map(
+          (node) =>
+            node.entityType,
+        ),
+      ),
+    ).join(' · ')
+  })
+
+
+/**
+ * 当前真正展示在图谱中的节点数和关系数。
+ *
+ * 注意：
+ * 这里统计的是过滤后的结果，
+ * 而不是后端最初返回的原始数量。
+ */
+const queryGraphStats =
+  computed(
+    () =>
+      `${queryVisibleNodes.value.length} 个节点 / `
+      + `${queryVisibleEdges.value.length} 条关系`,
+  )
+
 const queryActiveCategories = computed(() => {
-  if (!queryApplied.value || queryRelationFilter.value === '全部关系') return null
-  return relationCategoryMap[queryRelationFilter.value] ?? [queryRelationFilter.value]
+  /*
+   * 高亮以“已提交”的关系类型为准，而不是下拉框的实时值。
+   *
+   * 否则只切换下拉框、未点查询时，
+   * 图数据仍是上一次查询的结果，
+   * 但高亮已经按新关系类型把不匹配的边置灰，
+   * 造成“图没变、线变灰”的不一致。
+   */
+  const applied = appliedGraphQuery.value
+  if (!applied || applied.relationFilter === '全部关系') return null
+  return relationCategoryMap[applied.relationFilter] ?? [applied.relationFilter]
 })
 
 const selectedQueryNode = computed(() => {
@@ -680,51 +1065,119 @@ const selectedQueryEdgeNodes = computed(() => {
   }
 })
 
-const selectedQueryRelationConfidence = computed(() => {
-  const from = selectedQueryEdgeNodes.value.from
-  const to = selectedQueryEdgeNodes.value.to
-  const edge = selectedQueryEdge.value
-  if (!from || !to || !edge) return '0.00'
-  const categoryWeight: Record<string, number> = {
-    论文合作: 0.03,
-    同事: 0.01,
-    企业关联: -0.02,
-    产业事件: -0.04,
-    直接关系: 0.02,
-    间接关系: -0.05,
-  }
-  const baseConfidence = (from.confidence + to.confidence) / 2
-  const confidence = Math.min(0.99, Math.max(0.6, baseConfidence + (categoryWeight[edge.category] ?? 0)))
-  return confidence.toFixed(2)
-})
+const selectedQueryRelationConfidence =
+  computed(() => {
+    const edge =
+      selectedQueryEdge.value
 
-const selectedQueryEdgeRows = computed(() => {
-  const from = selectedQueryEdgeNodes.value.from
-  const to = selectedQueryEdgeNodes.value.to
-  const edge = selectedQueryEdge.value
-  if (!from || !to || !edge) return []
-  return [
-    ['源实体', `${from.label} / ${from.entityType}`] as const,
-    ['目标实体', `${to.label} / ${to.entityType}`] as const,
-    ['关系类型', edge.label] as const,
-    ['关系分类', edge.category] as const,
-    ['关系置信度', selectedQueryRelationConfidence.value] as const,
-    ['来源说明', from.evidence[0] ?? to.evidence[0] ?? '来自图谱关系来源聚合'] as const,
-  ]
-})
+    if (
+      !edge
+      || typeof edge.confidence
+        !== 'number'
+      || !Number.isFinite(
+        edge.confidence,
+      )
+    ) {
+      return '暂无'
+    }
 
-const selectedQueryNodeRows = computed(() => {
-  const node = selectedQueryNode.value
-  if (!node) return []
-  return [
-    ['实体名称', node.label] as const,
-    ['实体类型', node.entityType] as const,
-    ['关系数', node.relations] as const,
-    ['实体置信度', node.confidence.toFixed(2)] as const,
-    ['判断依据', '实体对齐、名称消歧、类型归一、多源交叉校验'] as const,
-    ['更新时间', '2026-07-13 10:30'] as const,
-  ]
-})
+    return edge.confidence.toFixed(
+      2,
+    )
+  })
+
+const selectedQueryEdgeRows =
+  computed(() => {
+    const from =
+      selectedQueryEdgeNodes.value.from
+
+    const to =
+      selectedQueryEdgeNodes.value.to
+
+    const edge =
+      selectedQueryEdge.value
+
+    if (
+      !from
+      || !to
+      || !edge
+    ) {
+      return []
+    }
+
+    return [
+      [
+        '源实体',
+        `${from.label} / ${from.entityType}`,
+      ] as const,
+
+      [
+        '目标实体',
+        `${to.label} / ${to.entityType}`,
+      ] as const,
+
+      [
+        '关系类型',
+        edge.label,
+      ] as const,
+
+      [
+        '关系分类',
+        edge.category,
+      ] as const,
+
+      [
+        '关系置信度',
+        formatConfidence(
+          edge.confidence,
+        ),
+      ] as const,
+
+      [
+        '来源说明',
+        '由关键词聚类得到',
+      ] as const,
+    ]
+  })
+
+const selectedQueryNodeRows =
+  computed(() => {
+    const node =
+      selectedQueryNode.value
+
+    if (!node) {
+      return []
+    }
+
+    return [
+      [
+        '实体名称',
+        node.label,
+      ] as const,
+
+      [
+        '实体类型',
+        node.entityType,
+      ] as const,
+
+      [
+        '关系数',
+        node.relations,
+      ] as const,
+
+      [
+        '实体置信度',
+        formatConfidence(
+          node.confidence,
+        ),
+      ] as const,
+
+      [
+        '判断依据',
+        '实体对齐、名称消歧、类型归一、多源交叉校验',
+      ] as const,
+    ]
+  })
 
 const selectedQueryProvenance = computed(() => {
   if (selectedQueryNode.value) return getNodeProvenance(selectedQueryNode.value)
@@ -746,7 +1199,7 @@ const selectedQueryProvenanceTarget = computed(() => {
       name: node.label,
       type: node.entityType,
       id: node.id,
-      confidence: node.confidence.toFixed(2),
+      confidence: formatConfidence(node.confidence),
     }
   }
   const edge = selectedQueryEdge.value
@@ -811,18 +1264,35 @@ function getApiNodeDisplayName(
     node.properties
 
   return String(
-    properties.name_zh
-      ?? properties.name_cn
+    // 人员、机构
+    properties.name_cn
+      ?? properties.name_zh
       ?? properties.name
+
+      // 论文、专利、项目、报告、新闻、事件
       ?? properties.title_zh
+      ?? properties.title_cn
+      ?? properties.title_original
       ?? properties.title
+
+      // 产业链
+      ?? properties.chain_name
+      ?? properties.node_name
+
+      // 关键词
+      ?? properties.keyword
+
+      // 英文名称
       ?? properties.name_en
-      ?? properties.org_name
-      ?? properties.scholar_id
+      ?? properties.name_abbr
+
+      // 业务 ID fallback
+      ?? properties.project_number
+      ?? properties.patent_id
+      ?? properties.family_number
       ?? properties.org_id
-      ?? properties.paper_id
-      ?? properties.journal_id
-      ?? properties.topic_id
+
+      // 最终才显示图节点 ID
       ?? node.id,
   )
 }
@@ -832,22 +1302,53 @@ function mapApiNodeType(
 ): GraphNodeType {
   const typeMap:
     Record<string, GraphNodeType> = {
-      Scholar: 'expert',
-      Expert: 'expert',
-      IntegrationTestPerson: 'expert',
 
+      // 专家人才
+      Person: 'expert',
+
+      // 机构企业
       Organization: 'org',
 
+      // 论文、期刊、报告
       Paper: 'paper',
       Journal: 'paper',
+      Report: 'paper',
 
-      Topic: 'topic',
+      // 项目、专利
+      Project: 'project',
+      Patent: 'project',
+      PatentFamily: 'project',
+
+      // 事件资讯
+      Event: 'event',
+      News: 'event',
+
+      // 产业链
+      IndustryChain: 'chain',
+      IndustryNode: 'chain',
+
+      // 产品、关键词
+      Product: 'field',
+      Keyword: 'field',
+
+      // 数据来源
+      DataSource: 'source',
     }
 
   /*
-   * 遍历全部标签，不能只判断 labels[0]。
+   * organization_base 是公共基础标签，
+   * 不作为节点业务类型判断依据。
    */
-  for (const label of node.labels) {
+  const semanticLabels =
+    node.labels.filter(
+      (label) =>
+        label !== 'organization_base',
+    )
+
+  for (
+    const label
+    of semanticLabels
+  ) {
     const nodeType =
       typeMap[label]
 
@@ -875,6 +1376,99 @@ function formatPropertyValue(
   } catch {
     return String(value)
   }
+}
+
+/**
+ * 实体置信度字段。
+ *
+ * 后续如果后端最终确认只有一个正式字段，
+ * 这里只保留正式字段即可。
+ */
+const ENTITY_CONFIDENCE_FIELDS = [
+  'confidence',
+] as const
+
+/**
+ * 关系置信度字段。
+ *
+ * 后续如果后端最终确认只有一个正式字段，
+ * 这里只保留正式字段即可。
+ */
+const RELATION_CONFIDENCE_FIELDS = [
+  'confidence',
+] as const
+
+/**
+ * 从后端/图谱返回属性中读取已有置信度。
+ *
+ * 前端只负责读取，不负责重新计算。
+ */
+function readConfidence(
+  properties: Record<string, unknown>,
+  fields: readonly string[],
+): number | undefined {
+  for (const field of fields) {
+    const rawValue = properties[field]
+
+    if (
+      rawValue === null
+      || rawValue === undefined
+      || rawValue === ''
+    ) {
+      continue
+    }
+
+    const value = Number(rawValue)
+
+    if (
+      Number.isFinite(value)
+      && value >= 0
+      && value <= 1
+    ) {
+      return value
+    }
+  }
+
+  return undefined
+}
+
+/**
+ * 从后端/图谱返回属性中读取字符串型溯源字段。
+ *
+ * 空字符串、null、undefined 一律视为缺失，返回 undefined，
+ * 由溯源函数回退到静态映射。
+ */
+function readStringProperty(
+  properties: Record<string, unknown>,
+  field: string,
+): string | undefined {
+  const value = properties[field]
+
+  if (
+    value === null
+    || value === undefined
+    || value === ''
+  ) {
+    return undefined
+  }
+
+  return String(value)
+}
+
+/**
+ * 页面展示置信度。
+ */
+function formatConfidence(
+  value: number | undefined,
+): string {
+  if (
+    typeof value !== 'number'
+    || !Number.isFinite(value)
+  ) {
+    return '暂无'
+  }
+
+  return value.toFixed(2)
 }
 
 function buildApiNodeEvidence(
@@ -1013,11 +1607,41 @@ function convertApiGraphNodes(
           data.edges,
         )
 
-      const propertyConfidence =
-        Number(
-          node.properties.confidence
-          ?? node.properties.score
-          ?? 1,
+      const confidence =
+        readConfidence(
+          node.properties,
+          ENTITY_CONFIDENCE_FIELDS,
+        )
+
+      // 实体溯源字段，透传给 getNodeProvenance。
+      const sourceTable =
+        readStringProperty(
+          node.properties,
+          'source_table',
+        )
+
+      const sourceRecordId =
+        readStringProperty(
+          node.properties,
+          'source_record_id',
+        )
+
+      const sourceSystem =
+        readStringProperty(
+          node.properties,
+          'source_system',
+        )
+
+      const ingestBatch =
+        readStringProperty(
+          node.properties,
+          'ingest_batch',
+        )
+
+      const ingestTime =
+        readStringProperty(
+          node.properties,
+          'ingest_time',
         )
 
       return {
@@ -1032,18 +1656,28 @@ function convertApiGraphNodes(
         x: position.x,
         y: position.y,
 
-        radius: isCenter ? 16 : 12,
+        radius:
+          isCenter ? 16 : 12,
 
         entityType:
-          node.labels.join('、')
+          node.labels
+            .filter(
+              (label) =>
+                label !== 'organization_base',
+            )
+            .join('、')
+          || node.labels.join('、')
           || 'Unknown',
 
-        confidence:
-          Number.isFinite(
-            propertyConfidence,
-          )
-            ? propertyConfidence
-            : 1,
+        // 只读取后端/图谱已有置信度
+        confidence,
+
+        // 实体溯源字段（缺失时由溯源函数回退静态映射）
+        sourceTable,
+        sourceRecordId,
+        sourceSystem,
+        ingestBatch,
+        ingestTime,
 
         relations:
           `${relationCount} 条关联关系`,
@@ -1051,7 +1685,8 @@ function convertApiGraphNodes(
         evidence:
           buildApiNodeEvidence(node),
 
-        level: isCenter ? 0 : 1,
+        level:
+          isCenter ? 0 : 1,
       }
     },
   )
@@ -1061,14 +1696,55 @@ function mapApiEdgeCategory(
   edge: GraphEdge,
 ): string {
   const categoryMap: Record<string, string> = {
-    PAPER_COOPERATED_WITH: '论文合作',
-    COOPERATED_WITH: '论文合作',
+    // 论文合作
+    PAPER_COOPERATED_WITH:
+      '论文合作',
 
-    EMPLOYED_BY: '企业关联',
+    COOPERATED_WITH:
+      '论文合作',
 
-    AUTHORED_BY: '直接关系',
-    PUBLISHED_IN: '直接关系',
-    HAS_TOPIC: '直接关系',
+    COAUTHOR_WITH:
+      '论文合作',
+
+    // 企业关联
+    EXECUTIVE_OF:
+      '企业关联',
+
+    LEGAL_REP_OF:
+      '企业关联',
+
+    SHAREHOLDER_OF:
+      '企业关联',
+
+    BENEFICIAL_OWNER_OF:
+      '企业关联',
+
+    ACTUAL_CONTROLLER_OF:
+      '企业关联',
+
+    INVESTS_IN:
+      '企业关联',
+
+    // 兼容已有映射
+    EMPLOYED_BY:
+      '企业关联',
+
+    // 产业事件
+    HAS_NEWS:
+      '产业事件',
+
+    INVOLVED_IN:
+      '产业事件',
+
+    // 其他直接关系
+    AUTHORED_BY:
+      '直接关系',
+
+    PUBLISHED_IN:
+      '直接关系',
+
+    HAS_TOPIC:
+      '直接关系',
   }
 
   return (
@@ -1077,18 +1753,113 @@ function mapApiEdgeCategory(
   )
 }
 
+/**
+ * dev 图空间中用于“产业事件”筛选的真实关系。
+ *
+ * HAS_NEWS:
+ * Organization -> News
+ *
+ * INVOLVED_IN:
+ * Organization -> Event
+ */
+const INDUSTRY_EVENT_EDGE_TYPES = [
+  'HAS_NEWS',
+  'INVOLVED_IN',
+] as const
+
+/**
+ * dev 图空间中用于“企业关联”筛选的真实边类型。
+ *
+ * 这里只做关系归类，不在前端推理新关系。
+ */
+const ENTERPRISE_RELATION_EDGE_TYPES = [
+  'EXECUTIVE_OF',
+  'LEGAL_REP_OF',
+  'SHAREHOLDER_OF',
+  'BENEFICIAL_OWNER_OF',
+  'ACTUAL_CONTROLLER_OF',
+  'INVESTS_IN',
+] as const
 
 function convertApiGraphEdges(
   edges: GraphEdge[],
 ): GraphEdgeData[] {
-  return edges.map((edge) => ({
-    id: edge.id,
-    from: edge.source,
-    to: edge.target,
-    label: edge.type,
-    category:
-      mapApiEdgeCategory(edge),
-  }))
+  return edges.map(
+    (edge) => {
+      const confidence =
+        readConfidence(
+          edge.properties,
+          RELATION_CONFIDENCE_FIELDS,
+        )
+
+      // 关系溯源字段，透传给 getEdgeProvenance。
+      const sourceTable =
+        readStringProperty(
+          edge.properties,
+          'source_table',
+        )
+
+      const sourceRecordId =
+        readStringProperty(
+          edge.properties,
+          'source_record_id',
+        )
+
+      const ingestBatch =
+        readStringProperty(
+          edge.properties,
+          'ingest_batch',
+        )
+
+      const ingestTime =
+        readStringProperty(
+          edge.properties,
+          'ingest_time',
+        )
+
+      const matchEvidence =
+        readStringProperty(
+          edge.properties,
+          'match_evidence',
+        )
+
+      const matchMethod =
+        readStringProperty(
+          edge.properties,
+          'match_method',
+        )
+
+      return {
+        id:
+          edge.id,
+
+        from:
+          edge.source,
+
+        to:
+          edge.target,
+
+        label:
+          edge.type,
+
+        category:
+          mapApiEdgeCategory(
+            edge,
+          ),
+
+        // 直接读取关系已有置信度
+        confidence,
+
+        // 关系溯源字段（缺失时由溯源函数回退静态映射）
+        sourceTable,
+        sourceRecordId,
+        ingestBatch,
+        ingestTime,
+        matchEvidence,
+        matchMethod,
+      }
+    },
+  )
 }
 
 /**
@@ -1235,59 +2006,6 @@ function normalizeReturnedSubgraph(
   }
 }
 
-function normalizeSearchValue(
-  value: unknown,
-): string {
-  return String(value ?? '')
-    .trim()
-    .toLowerCase()
-}
-
-/**
- * 获取一个节点可以参与搜索的全部值。
- *
- * 包括：
- * 1. 节点真实 ID，例如 journal:2000000；
- * 2. 当前标签配置的名称、标题和业务 ID；
- * 3. 节点 properties 中其他字符串或数字属性。
- */
-function getNodeSearchValues(
-  node: GraphNode,
-  label: string,
-): string[] {
-  const fields =
-    nodeSearchFieldMap[label]
-    ?? []
-
-  const configuredValues =
-    fields.map(
-      (field) =>
-        node.properties[field],
-    )
-
-  const scalarPropertyValues =
-    Object.values(
-      node.properties,
-    ).filter(
-      (value) =>
-        typeof value === 'string'
-        || typeof value === 'number',
-    )
-
-  return [
-    /*
-     * 这一项非常重要：
-     * 保证可以直接输入节点 ID 查询。
-     */
-    node.id,
-
-    ...configuredValues,
-    ...scalarPropertyValues,
-  ]
-    .map(normalizeSearchValue)
-    .filter(Boolean)
-}
-
 /**
  * 根据节点 ID 去除重复节点。
  */
@@ -1306,130 +2024,2234 @@ function deduplicateGraphNodes(
   )
 }
 
-async function findGraphCenterNode(
+function isNodeInQueryScope(
+  node: GraphNode,
+  labels: string[],
+): boolean {
+  return node.labels.some(
+    (label) =>
+      labels.includes(label),
+  )
+}
+
+
+async function findGraphNodeById(
   keyword: string,
   labels: string[],
 ): Promise<GraphNode | null> {
-  const expected =
-    normalizeSearchValue(keyword)
+  try {
+    const response =
+      await getGraphNode(
+        keyword,
+        selectedGraphSpace.value,
+      )
 
-  const fuzzyMatches:
+    const node =
+      unwrapHttpApiResponse(
+        response,
+      )
+
+    if (
+      !isNodeInQueryScope(
+        node,
+        labels,
+      )
+    ) {
+      throw new Error(
+        `节点 ${keyword} 存在，`
+        + `但不属于当前“${selectedQueryType.value}”范围`,
+      )
+    }
+
+    return node
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : ''
+
+    if (
+      message.includes(
+        '节点不存在',
+      )
+    ) {
+      return null
+    }
+
+    throw error
+  }
+}
+
+
+async function findGraphNodeByName(
+  keyword: string,
+  labels: string[],
+): Promise<GraphNode | null> {
+  const matches:
     GraphNode[] = []
 
-  let successfulLabelCount = 0
+  let successfulSearchCount = 0
   let lastError: unknown = null
 
+  /*
+   * 按当前图谱范围逐个业务实体类型查询。
+   */
   for (const label of labels) {
-    try {
-      const response =
-        await listGraphNodes({
-          label,
-          limit: 500,
-          offset: 0,
-          space:
-            selectedGraphSpace.value,
-        })
+    const searchFields =
+      nodeSearchFieldMap[label]
+      ?? []
 
-      const data =
-        unwrapHttpApiResponse(
-          response,
-        )
+    if (searchFields.length === 0) {
+      continue
+    }
 
-      successfulLabelCount += 1
-
-      /*
-       * 精确匹配：
-       * 支持节点 ID、名称、标题和业务 ID。
-       */
-      const exactNode =
-        data.items.find(
-          (node) =>
-            getNodeSearchValues(
-              node,
+    /*
+     * 同一个实体类型的字段具有优先级。
+     *
+     * 例如 Person：
+     * name_zh → name_en
+     *
+     * 第一个字段查到结果后，
+     * 不再继续请求这个实体类型的其他字段。
+     */
+    for (const field of searchFields) {
+      try {
+        const response =
+          await searchGraphNodes(
+            {
               label,
-            ).some(
-              (value) =>
-                value === expected,
-            ),
-        )
+              limit: 20,
+              space:
+                selectedGraphSpace.value,
+            },
+            {
+              [field]: keyword,
+            },
+          )
 
-      if (exactNode) {
-        console.debug(
-          '[graph-search] 找到精确匹配节点',
+        const data =
+          unwrapHttpApiResponse(
+            response,
+          )
+
+        successfulSearchCount += 1
+
+        const scopedMatches =
+          data.items.filter(
+            (node) =>
+              isNodeInQueryScope(
+                node,
+                labels,
+              ),
+          )
+
+        if (
+          scopedMatches.length > 0
+        ) {
+          matches.push(
+            ...scopedMatches,
+          )
+
+          /*
+           * 当前 label 已经找到结果，
+           * 不再尝试它的下一个名称字段。
+           */
+          break
+        }
+      } catch (error) {
+        lastError = error
+
+        console.warn(
+          '[graph-search] 名称属性搜索失败',
           {
             keyword,
             label,
-            nodeId: exactNode.id,
+            field,
+            error,
           },
         )
-
-        return exactNode
       }
-
-      /*
-       * 当前标签中未找到精确结果，
-       * 记录模糊匹配结果。
-       */
-      fuzzyMatches.push(
-        ...data.items.filter(
-          (node) =>
-            getNodeSearchValues(
-              node,
-              label,
-            ).some(
-              (value) =>
-                value.includes(
-                  expected,
-                ),
-            ),
-        ),
-      )
-    } catch (error) {
-      lastError = error
-
-      console.warn(
-        '[graph-search] 标签读取失败，继续搜索其他标签',
-        {
-          keyword,
-          label,
-          error,
-        },
-      )
     }
   }
 
+  /*
+   * 一个实体可能通过多个查询路径命中，
+   * 最终统一按照真实节点 ID 去重。
+   */
   const uniqueMatches =
     deduplicateGraphNodes(
-      fuzzyMatches,
+      matches,
     )
 
-  if (uniqueMatches.length === 1) {
-    return uniqueMatches[0] ?? null
+  if (
+    uniqueMatches.length === 1
+  ) {
+    return uniqueMatches[0]
+      ?? null
   }
 
-  if (uniqueMatches.length > 1) {
+  /*
+   * 名称不唯一时不要随便选第一个。
+   *
+   * 给用户真实节点 ID，
+   * 让用户进一步明确查询对象。
+   */
+  if (
+    uniqueMatches.length > 1
+  ) {
     const examples =
       uniqueMatches
         .slice(0, 5)
         .map(
-          getApiNodeDisplayName,
+          (node) =>
+            `${getApiNodeDisplayName(node)}（${node.id}）`,
         )
         .join('、')
 
     throw new Error(
-      `匹配到 ${uniqueMatches.length} 个实体，`
-      + `请输入更完整的名称。候选：${examples}`,
+      `匹配到 ${uniqueMatches.length} 个同名实体，`
+      + `请使用更明确的名称或节点ID。`
+      + `候选：${examples}`,
     )
   }
 
+  /*
+   * 所有名称查询接口都失败时，
+   * 返回真正的 API 异常。
+   */
   if (
-    successfulLabelCount === 0
+    successfulSearchCount === 0
     && lastError instanceof Error
   ) {
     throw lastError
   }
 
   return null
+}
+
+
+async function findGraphCenterNode(
+  keyword: string,
+  labels: string[],
+): Promise<GraphNode | null> {
+  const nodeById =
+    await findGraphNodeById(
+      keyword,
+      labels,
+    )
+
+  if (nodeById) {
+    return nodeById
+  }
+
+  return findGraphNodeByName(
+    keyword,
+    labels,
+  )
+}
+
+interface WorkPeriod {
+  start: number
+  end: number
+}
+
+/**
+ * 将专家任职时间转换成年份区间。
+ *
+ * 支持：
+ * 2015-Present
+ * 2017-2024
+ * 2015-至今
+ * 2019
+ */
+function parseWorkPeriod(
+  value: unknown,
+): WorkPeriod | null {
+  if (
+    value === null
+    || value === undefined
+    || value === ''
+  ) {
+    return null
+  }
+
+  const text =
+    String(value).trim()
+
+  const yearMatches =
+    text.match(
+      /(?:19|20)\d{2}/g,
+    )
+
+  if (
+    !yearMatches
+    || yearMatches.length === 0
+  ) {
+    return null
+  }
+
+  const start =
+    Number(yearMatches[0])
+
+  const isOpenEnded =
+    /present|current|now|至今|现在/i
+      .test(text)
+
+  let end: number
+
+  if (isOpenEnded) {
+    end =
+      Number.POSITIVE_INFINITY
+  } else if (
+    yearMatches.length >= 2
+  ) {
+    end =
+      Number(
+        yearMatches[1],
+      )
+  } else {
+    end = start
+  }
+
+  if (
+    !Number.isFinite(start)
+  ) {
+    return null
+  }
+
+  return {
+    start,
+    end,
+  }
+}
+
+
+/**
+ * 判断两个任职时间区间是否重叠。
+ */
+function workPeriodsOverlap(
+  left: WorkPeriod,
+  right: WorkPeriod,
+): boolean {
+  return (
+    left.start <= right.end
+    && right.start <= left.end
+  )
+}
+
+
+/**
+ * 判断图节点是否为专家/人才。
+ */
+function isPersonGraphNode(
+  node: GraphNode,
+): boolean {
+  return node.labels.includes(
+    'Person',
+  )
+}
+
+/**
+ * 全部关系。
+ *
+ * 保持当前已经验证通过的 graph-search
+ * 子图查询能力。
+ */
+async function queryAllRelationGraph(
+  centerNode: GraphNode,
+): Promise<RelationGraphResult> {
+  const subgraphResponse =
+    await getSubgraph(
+      centerNode.id,
+      {
+        depth: 2,
+        limit: 100,
+        direction: 'both',
+        space:
+          selectedGraphSpace.value,
+      },
+    )
+
+  const rawGraphData =
+    unwrapHttpApiResponse(
+      subgraphResponse,
+    )
+
+  const graphData =
+    normalizeReturnedSubgraph(
+      rawGraphData,
+      centerNode.id,
+    )
+
+  return {
+    nodes:
+      convertApiGraphNodes(
+        graphData,
+        centerNode.id,
+      ),
+
+    edges:
+      convertApiGraphEdges(
+        graphData.edges,
+      ),
+  }
+}
+
+/**
+ * 查询论文合作关系。
+ *
+ * 只读取 dev 图空间中已有的
+ * COAUTHOR_WITH 关系。
+ */
+async function queryPaperCooperationGraph(
+  centerNode: GraphNode,
+): Promise<RelationGraphResult> {
+  const response =
+    await getSubgraph(
+      centerNode.id,
+      {
+        depth: 1,
+
+        limit: 50,
+
+        edge_type:
+          'COAUTHOR_WITH',
+
+        direction:
+          'both',
+
+        space:
+          selectedGraphSpace.value,
+      },
+    )
+
+  const rawGraphData =
+    unwrapHttpApiResponse(
+      response,
+    )
+
+  const graphData =
+    normalizeReturnedSubgraph(
+      rawGraphData,
+      centerNode.id,
+    )
+
+  return {
+    nodes:
+      convertApiGraphNodes(
+        graphData,
+        centerNode.id,
+      ),
+
+    edges:
+      convertApiGraphEdges(
+        graphData.edges,
+      ),
+  }
+}
+
+/**
+ * 查询企业关联。
+ *
+ * dev 图空间没有统一的 ENTERPRISE_RELATION 边，
+ * 因此组合多个已经真实存在的企业关系类型。
+ *
+ * 前端只负责查询、合并和去重，
+ * 不推理、不生成新的企业关系。
+ */
+async function queryEnterpriseRelationGraph(
+  centerNode: GraphNode,
+): Promise<RelationGraphResult> {
+  /*
+   * 对每一种真实企业关系分别查询一跳子图。
+   *
+   * 使用 allSettled：
+   * 某一种关系暂时查询失败时，
+   * 不影响其他企业关系正常展示。
+   */
+  const results =
+    await Promise.allSettled(
+      ENTERPRISE_RELATION_EDGE_TYPES.map(
+        (edgeType) =>
+          getSubgraph(
+            centerNode.id,
+            {
+              depth: 1,
+
+              limit: 50,
+
+              edge_type:
+                edgeType,
+
+              direction:
+                'both',
+
+              space:
+                selectedGraphSpace.value,
+            },
+          ),
+      ),
+    )
+
+  /*
+   * 至少有一种请求成功即可继续。
+   */
+  const successfulResults =
+    results.filter(
+      (
+        result,
+      ): result is PromiseFulfilledResult<
+        Awaited<
+          ReturnType<
+            typeof getSubgraph
+          >
+        >
+      > =>
+        result.status
+        === 'fulfilled',
+    )
+
+  if (
+    successfulResults.length
+      === 0
+  ) {
+    throw new Error(
+      '企业关联查询失败，'
+      + '当前所有企业关系类型均未能返回结果',
+    )
+  }
+
+  /*
+   * 多个 edge_type 查询会重复返回中心节点，
+   * 因此使用 Map 按 ID 去重。
+   */
+  const nodeMap =
+    new Map<
+      string,
+      GraphNode
+    >()
+
+  const edgeMap =
+    new Map<
+      string,
+      GraphEdge
+    >()
+
+  /*
+   * 中心节点始终以 graph-search
+   * 已经解析出的真实节点为准。
+   */
+  nodeMap.set(
+    centerNode.id,
+    centerNode,
+  )
+
+  for (
+    const result
+    of successfulResults
+  ) {
+    const rawGraphData =
+      unwrapHttpApiResponse(
+        result.value,
+      )
+
+    const graphData =
+      normalizeReturnedSubgraph(
+        rawGraphData,
+        centerNode.id,
+      )
+
+    for (
+      const node
+      of graphData.nodes
+    ) {
+      nodeMap.set(
+        node.id,
+        node,
+      )
+    }
+
+    for (
+      const edge
+      of graphData.edges
+    ) {
+      edgeMap.set(
+        edge.id,
+        edge,
+      )
+    }
+  }
+
+  const mergedGraphData:
+    GraphData = {
+      nodes:
+        Array.from(
+          nodeMap.values(),
+        ),
+
+      edges:
+        Array.from(
+          edgeMap.values(),
+        ),
+    }
+
+  return {
+    nodes:
+      convertApiGraphNodes(
+        mergedGraphData,
+        centerNode.id,
+      ),
+
+    edges:
+      convertApiGraphEdges(
+        mergedGraphData.edges,
+      ),
+  }
+}
+
+/**
+ * 查询产业事件关系。
+ *
+ * 组合 dev 图空间中已经真实存在的：
+ * HAS_NEWS 和 INVOLVED_IN。
+ *
+ * 前端只负责查询、合并、去重，
+ * 不生成新的事件关系。
+ */
+async function queryIndustryEventGraph(
+  centerNode: GraphNode,
+): Promise<RelationGraphResult> {
+  const results =
+    await Promise.allSettled(
+      INDUSTRY_EVENT_EDGE_TYPES.map(
+        (edgeType) =>
+          getSubgraph(
+            centerNode.id,
+            {
+              depth: 1,
+
+              limit: 50,
+
+              edge_type:
+                edgeType,
+
+              direction:
+                'both',
+
+              space:
+                selectedGraphSpace.value,
+            },
+          ),
+      ),
+    )
+
+  const nodeMap =
+    new Map<
+      string,
+      GraphNode
+    >()
+
+  const edgeMap =
+    new Map<
+      string,
+      GraphEdge
+    >()
+
+  /*
+   * 始终保留当前 graph-search
+   * 已经确认的真实中心节点。
+   */
+  nodeMap.set(
+    centerNode.id,
+    centerNode,
+  )
+
+  let successfulRequestCount = 0
+
+  for (const result of results) {
+    if (
+      result.status
+      !== 'fulfilled'
+    ) {
+      continue
+    }
+
+    successfulRequestCount += 1
+
+    const rawGraphData =
+      unwrapHttpApiResponse(
+        result.value,
+      )
+
+    const graphData =
+      normalizeReturnedSubgraph(
+        rawGraphData,
+        centerNode.id,
+      )
+
+    for (
+      const node
+      of graphData.nodes
+    ) {
+      nodeMap.set(
+        node.id,
+        node,
+      )
+    }
+
+    for (
+      const edge
+      of graphData.edges
+    ) {
+      edgeMap.set(
+        edge.id,
+        edge,
+      )
+    }
+  }
+
+  if (
+    successfulRequestCount
+    === 0
+  ) {
+    throw new Error(
+      '产业事件查询失败，'
+      + 'HAS_NEWS 和 INVOLVED_IN '
+      + '均未能正常返回',
+    )
+  }
+
+  const mergedGraphData:
+    GraphData = {
+      nodes:
+        Array.from(
+          nodeMap.values(),
+        ),
+
+      edges:
+        Array.from(
+          edgeMap.values(),
+        ),
+    }
+
+  return {
+    nodes:
+      convertApiGraphNodes(
+        mergedGraphData,
+        centerNode.id,
+      ),
+
+    edges:
+      convertApiGraphEdges(
+        mergedGraphData.edges,
+      ),
+  }
+}
+
+/**
+ * 根据后端返回的真实图关系，
+ * 计算中心节点到其他节点的最短图距离。
+ *
+ * 当前用于间接关系，只计算到 2 跳。
+ */
+function calculateGraphDistances(
+  centerNodeId: string,
+  edges: GraphEdge[],
+): Map<string, number> {
+  const adjacency =
+    new Map<
+      string,
+      Set<string>
+    >()
+
+  const addNeighbour = (
+    from: string,
+    to: string,
+  ) => {
+    if (
+      !adjacency.has(from)
+    ) {
+      adjacency.set(
+        from,
+        new Set<string>(),
+      )
+    }
+
+    adjacency
+      .get(from)
+      ?.add(to)
+  }
+
+  /*
+   * direction=both，
+   * 因此这里按无向图判断可达距离。
+   */
+  for (const edge of edges) {
+    addNeighbour(
+      edge.source,
+      edge.target,
+    )
+
+    addNeighbour(
+      edge.target,
+      edge.source,
+    )
+  }
+
+  const distances =
+    new Map<string, number>()
+
+  distances.set(
+    centerNodeId,
+    0,
+  )
+
+  const queue: string[] = [
+    centerNodeId,
+  ]
+
+  while (queue.length > 0) {
+    const currentId =
+      queue.shift()
+
+    if (!currentId) {
+      continue
+    }
+
+    const currentDistance =
+      distances.get(
+        currentId,
+      )
+
+    if (
+      currentDistance === undefined
+      || currentDistance >= 2
+    ) {
+      continue
+    }
+
+    const neighbours =
+      adjacency.get(
+        currentId,
+      )
+
+    if (!neighbours) {
+      continue
+    }
+
+    for (
+      const neighbourId
+      of neighbours
+    ) {
+      if (
+        distances.has(
+          neighbourId,
+        )
+      ) {
+        continue
+      }
+
+      distances.set(
+        neighbourId,
+        currentDistance + 1,
+      )
+
+      queue.push(
+        neighbourId,
+      )
+    }
+  }
+
+  return distances
+}
+
+/**
+ * 查询同事关系。
+ *
+ * 组合 dev 图空间中真实存在的：
+ *
+ * Person
+ *   -> AFFILIATED_WITH
+ * Organization
+ *
+ * 并使用专家节点已有的
+ * work_experience_date
+ * 判断任职时间是否重叠。
+ *
+ * 前端只做已有事实组合展示，
+ * 不计算关系置信度。
+ */
+async function queryColleagueRelationGraph(
+  centerNode: GraphNode,
+): Promise<RelationGraphResult> {
+  /*
+   * 第一步：
+   * 查询中心专家关联的任职机构。
+   */
+  const centerResponse =
+    await getSubgraph(
+      centerNode.id,
+      {
+        depth: 1,
+
+        limit: 50,
+
+        edge_type:
+          'AFFILIATED_WITH',
+
+        direction:
+          'both',
+
+        space:
+          selectedGraphSpace.value,
+      },
+    )
+
+  const centerRawGraph =
+    unwrapHttpApiResponse(
+      centerResponse,
+    )
+
+  const centerGraph =
+    normalizeReturnedSubgraph(
+      centerRawGraph,
+      centerNode.id,
+    )
+
+  /*
+   * 找到中心专家直接关联的 Organization。
+   */
+  const organizationIds =
+    new Set<string>()
+
+  for (
+    const edge
+    of centerGraph.edges
+  ) {
+    if (
+      edge.type
+      !== 'AFFILIATED_WITH'
+    ) {
+      continue
+    }
+
+    const otherId =
+      edge.source
+        === centerNode.id
+        ? edge.target
+        : edge.target
+            === centerNode.id
+          ? edge.source
+          : null
+
+    if (!otherId) {
+      continue
+    }
+
+    const otherNode =
+      centerGraph.nodes.find(
+        (node) =>
+          node.id === otherId,
+      )
+
+    if (
+      otherNode?.labels.includes(
+        'Organization',
+      )
+    ) {
+      organizationIds.add(
+        otherId,
+      )
+    }
+  }
+
+  /*
+   * 没有任职机构时，
+   * 返回中心节点即可。
+   */
+  if (
+    organizationIds.size
+    === 0
+  ) {
+    return {
+      nodes:
+        convertApiGraphNodes(
+          {
+            nodes: [
+              centerNode,
+            ],
+            edges: [],
+          },
+          centerNode.id,
+        ),
+
+      edges: [],
+    }
+  }
+
+  /*
+   * 第二步：
+   * 分别查询这些机构关联的全部专家。
+   */
+  const organizationResults =
+    await Promise.allSettled(
+      Array.from(
+        organizationIds,
+      ).map(
+        (organizationId) =>
+          getSubgraph(
+            organizationId,
+            {
+              depth: 1,
+
+              limit: 200,
+
+              edge_type:
+                'AFFILIATED_WITH',
+
+              direction:
+                'both',
+
+              space:
+                selectedGraphSpace.value,
+            },
+          ),
+      ),
+    )
+
+  /*
+   * 汇总所有真实节点和真实
+   * AFFILIATED_WITH 边。
+   */
+  const rawNodeMap =
+    new Map<
+      string,
+      GraphNode
+    >()
+
+  const affiliationEdges:
+    GraphEdge[] = []
+
+  rawNodeMap.set(
+    centerNode.id,
+    centerNode,
+  )
+
+  for (
+    const node
+    of centerGraph.nodes
+  ) {
+    rawNodeMap.set(
+      node.id,
+      node,
+    )
+  }
+
+  affiliationEdges.push(
+    ...centerGraph.edges,
+  )
+
+  for (
+    const result
+    of organizationResults
+  ) {
+    if (
+      result.status
+      !== 'fulfilled'
+    ) {
+      continue
+    }
+
+    const rawGraphData =
+      unwrapHttpApiResponse(
+        result.value,
+      )
+
+    const graphData =
+      rawGraphData
+
+    for (
+      const node
+      of graphData.nodes
+    ) {
+      rawNodeMap.set(
+        node.id,
+        node,
+      )
+    }
+
+    affiliationEdges.push(
+      ...graphData.edges,
+    )
+  }
+
+  /*
+   * 中心专家真实任职时间。
+   */
+  const actualCenterNode =
+    rawNodeMap.get(
+      centerNode.id,
+    )
+    ?? centerNode
+
+  const centerWorkText =
+    actualCenterNode
+      .properties
+      .work_experience_date
+
+  const centerWorkPeriod =
+    parseWorkPeriod(
+      centerWorkText,
+    )
+
+  /*
+   * 模块要求涉及时间匹配。
+   * 如果中心专家没有可解析任职时间，
+   * 不凭空判断同事。
+   */
+  if (!centerWorkPeriod) {
+    throw new Error(
+      '当前专家缺少可解析的任职时间，'
+      + '暂无法判断同事关系',
+    )
+  }
+
+  /*
+   * candidateId -> 共同机构 ID 集合
+   */
+  const candidateOrganizations =
+    new Map<
+      string,
+      Set<string>
+    >()
+
+  /*
+   * 从真实 AFFILIATED_WITH 中寻找：
+   *
+   * 中心专家的机构
+   *     ↑
+   * 其他 Person
+   */
+  for (
+    const organizationId
+    of organizationIds
+  ) {
+    for (
+      const edge
+      of affiliationEdges
+    ) {
+      if (
+        edge.type
+        !== 'AFFILIATED_WITH'
+      ) {
+        continue
+      }
+
+      let personId:
+        string | null = null
+
+      if (
+        edge.source
+        === organizationId
+      ) {
+        personId =
+          edge.target
+      } else if (
+        edge.target
+        === organizationId
+      ) {
+        personId =
+          edge.source
+      }
+
+      if (
+        !personId
+        || personId
+          === centerNode.id
+      ) {
+        continue
+      }
+
+      const personNode =
+        rawNodeMap.get(
+          personId,
+        )
+
+      if (
+        !personNode
+        || !isPersonGraphNode(
+          personNode,
+        )
+      ) {
+        continue
+      }
+
+      /*
+       * 候选专家任职时间。
+       */
+      const candidateWorkPeriod =
+        parseWorkPeriod(
+          personNode
+            .properties
+            .work_experience_date,
+        )
+
+      /*
+       * 没有时间数据时不推断。
+       */
+      if (
+        !candidateWorkPeriod
+      ) {
+        continue
+      }
+
+      /*
+       * 必须存在任职时间重叠。
+       */
+      if (
+        !workPeriodsOverlap(
+          centerWorkPeriod,
+          candidateWorkPeriod,
+        )
+      ) {
+        continue
+      }
+
+      if (
+        !candidateOrganizations.has(
+          personId,
+        )
+      ) {
+        candidateOrganizations.set(
+          personId,
+          new Set<string>(),
+        )
+      }
+
+      candidateOrganizations
+        .get(personId)
+        ?.add(
+          organizationId,
+        )
+    }
+  }
+
+  /*
+   * 最终只展示中心专家和
+   * 满足条件的同事专家。
+   */
+  const personNodes:
+    GraphNode[] = [
+      actualCenterNode,
+    ]
+
+  for (
+    const candidateId
+    of candidateOrganizations.keys()
+  ) {
+    const node =
+      rawNodeMap.get(
+        candidateId,
+      )
+
+    if (node) {
+      personNodes.push(
+        node,
+      )
+    }
+  }
+
+  /*
+   * 先利用现有节点转换逻辑。
+   */
+  const graphNodes =
+    convertApiGraphNodes(
+      {
+        nodes:
+          personNodes,
+
+        edges: [],
+      },
+      centerNode.id,
+    )
+
+  /*
+   * 给同事节点补充判定依据。
+   */
+  const enrichedNodes =
+    graphNodes.map(
+      (node) => {
+        if (
+          node.id
+          === centerNode.id
+        ) {
+          return {
+            ...node,
+
+            relations:
+              `${candidateOrganizations.size} 条同事关系`,
+          }
+        }
+
+        const rawNode =
+          rawNodeMap.get(
+            node.id,
+          )
+
+        const orgIds =
+          candidateOrganizations.get(
+            node.id,
+          )
+          ?? new Set<string>()
+
+        const orgNames =
+          Array.from(
+            orgIds,
+          ).map(
+            (organizationId) => {
+              const organization =
+                rawNodeMap.get(
+                  organizationId,
+                )
+
+              return organization
+                ? getApiNodeDisplayName(
+                    organization,
+                  )
+                : organizationId
+            },
+          )
+
+        const candidateWorkText =
+          rawNode
+            ?.properties
+            .work_experience_date
+
+        return {
+          ...node,
+
+          relations:
+            '同事关系',
+
+          evidence: [
+            ...node.evidence,
+
+            `共同任职机构：${
+              orgNames.join('、')
+            }`,
+
+            `中心专家任职时间：${
+              String(
+                centerWorkText
+                ?? '暂无',
+              )
+            }`,
+
+            `该专家任职时间：${
+              String(
+                candidateWorkText
+                ?? '暂无',
+              )
+            }`,
+          ],
+        }
+      },
+    )
+
+  /*
+   * 页面层同事关系边。
+   *
+   * 不写 confidence，
+   * 因为后端目前没有返回
+   * 同事关系置信度。
+   */
+  const colleagueEdges:
+    GraphEdgeData[] =
+    Array.from(
+      candidateOrganizations.entries(),
+    ).map(
+      (
+        [
+          candidateId,
+          orgIds,
+        ],
+        index,
+      ) => {
+        const orgNames =
+          Array.from(
+            orgIds,
+          ).map(
+            (organizationId) => {
+              const organization =
+                rawNodeMap.get(
+                  organizationId,
+                )
+
+              return organization
+                ? getApiNodeDisplayName(
+                    organization,
+                  )
+                : organizationId
+            },
+          )
+
+        return {
+          id:
+            `colleague-${centerNode.id}-${candidateId}-${index}`,
+
+          from:
+            centerNode.id,
+
+          to:
+            candidateId,
+
+          label:
+            orgNames.length > 0
+              ? `同事关系 · ${orgNames.join('、')}`
+              : '同事关系',
+
+          category:
+            '同事关系',
+
+          // 前端推理生成，无对应真实图边，构建任务 ID 显示 "-"
+          inferred:
+            true,
+        }
+      },
+    )
+
+  return {
+    nodes:
+      enrichedNodes,
+
+    edges:
+      colleagueEdges,
+  }
+}
+
+/**
+ * 查询直接关系。
+ *
+ * 直接关系定义为：
+ * 当前中心节点在 dev 图空间中的一跳真实关系。
+ *
+ * 不调用业务 fallback 接口，
+ * 不在前端生成新的业务关系。
+ */
+async function queryDirectRelationGraph(
+  centerNode: GraphNode,
+): Promise<RelationGraphResult> {
+  const response =
+    await getSubgraph(
+      centerNode.id,
+      {
+        depth: 1,
+
+        limit: 100,
+
+        direction:
+          'both',
+
+        space:
+          selectedGraphSpace.value,
+      },
+    )
+
+  const rawGraphData =
+    unwrapHttpApiResponse(
+      response,
+    )
+
+  const graphData =
+    normalizeReturnedSubgraph(
+      rawGraphData,
+      centerNode.id,
+    )
+
+  /*
+   * 只保留真正与中心节点直接相连的边。
+   *
+   * 即使后端 depth=1 返回了邻居之间的额外边，
+   * 这里也不会把它们误认为中心节点的直接关系。
+   */
+  const directEdges =
+    graphData.edges.filter(
+      (edge) =>
+        edge.source === centerNode.id
+        || edge.target === centerNode.id,
+    )
+
+  /*
+   * 根据真实直接边确定需要展示的节点。
+   */
+  const directNodeIds =
+    new Set<string>([
+      centerNode.id,
+    ])
+
+  for (
+    const edge
+    of directEdges
+  ) {
+    directNodeIds.add(
+      edge.source,
+    )
+
+    directNodeIds.add(
+      edge.target,
+    )
+  }
+
+  const directNodes =
+    graphData.nodes.filter(
+      (node) =>
+        directNodeIds.has(
+          node.id,
+        ),
+    )
+
+  const directGraph:
+    GraphData = {
+      nodes:
+        directNodes,
+
+      edges:
+        directEdges,
+    }
+
+  /*
+   * 节点仍然使用 graph-search
+   * 返回的真实实体数据。
+   */
+  const convertedNodes =
+    convertApiGraphNodes(
+      directGraph,
+      centerNode.id,
+    ).map(
+      (node) => {
+        if (
+          node.id
+          === centerNode.id
+        ) {
+          return {
+            ...node,
+
+            level: 0,
+
+            relations:
+              `${directEdges.length} 条直接关系`,
+          }
+        }
+
+        return {
+          ...node,
+
+          level: 1,
+
+          relations:
+            '一跳直接关联节点',
+
+          evidence: [
+            ...node.evidence,
+            '图距离：距中心节点 1 跳',
+          ],
+        }
+      },
+    )
+
+  /*
+   * label 保留后端真实 edge.type，
+   * 例如：
+   *
+   * AUTHORED_BY
+   * AFFILIATED_WITH
+   * COAUTHOR_WITH
+   * HAS_NEWS
+   *
+   * category 统一设置为“直接关系”，
+   * 表示这些边都是中心节点的一跳关系。
+   */
+  const convertedEdges =
+    convertApiGraphEdges(
+      directEdges,
+    ).map(
+      (edge) => ({
+        ...edge,
+
+        category:
+          '直接关系',
+      }),
+    )
+
+  return {
+    nodes:
+      convertedNodes,
+
+    edges:
+      convertedEdges,
+  }
+}
+
+/**
+ * 查询校友关系。
+ *
+ * 基于 dev 图空间 Person 节点真实的教育背景字段：
+ * education_background_institution_en
+ *
+ * 具有相同教育机构的其他 Person
+ * 作为当前专家的校友候选人。
+ *
+ * 不计算关系置信度，
+ * 不伪造教育经历数据。
+ */
+async function queryAlumniRelationGraph(
+  centerNode: GraphNode,
+): Promise<RelationGraphResult> {
+  const centerProperties =
+    centerNode.properties
+
+  /*
+   * 目前 dev 已验证：
+   * education_background_institution_en
+   * 可以正常用于 nodes/search。
+   */
+  const schoolEn =
+    String(
+      centerProperties
+        .education_background_institution_en
+      ?? '',
+    ).trim()
+
+  if (!schoolEn) {
+    throw new Error(
+      '当前专家缺少英文教育机构信息，'
+      + '暂无法判断校友关系',
+    )
+  }
+
+  /*
+   * 在 dev 图空间中，
+   * 查询具有相同教育机构的 Person。
+   */
+  const response =
+    await searchGraphNodes(
+      {
+        label:
+          'Person',
+
+        limit:
+          100,
+
+        space:
+          selectedGraphSpace.value,
+      },
+      {
+        education_background_institution_en:
+          schoolEn,
+      },
+    )
+
+  const data =
+    unwrapHttpApiResponse(
+      response,
+    )
+
+  if (
+    !Array.isArray(
+      data.items,
+    )
+  ) {
+    throw new Error(
+      '校友关系查询返回结构异常',
+    )
+  }
+
+  /*
+   * 再次在前端做严格等值校验，
+   * 避免接口未来改成模糊查询后混入其他学校。
+   */
+  const normalizedSchool =
+    schoolEn.toLowerCase()
+
+  const alumniCandidates =
+    data.items.filter(
+      (node) => {
+        if (
+          node.id
+          === centerNode.id
+        ) {
+          return false
+        }
+
+        if (
+          !node.labels.includes(
+            'Person',
+          )
+        ) {
+          return false
+        }
+
+        const candidateSchool =
+          String(
+            node.properties
+              .education_background_institution_en
+            ?? '',
+          )
+            .trim()
+            .toLowerCase()
+
+        return (
+          candidateSchool
+          === normalizedSchool
+        )
+      },
+    )
+
+  /*
+   * 中心专家 + 所有同校专家。
+   */
+  const rawNodes:
+    GraphNode[] = [
+      centerNode,
+      ...alumniCandidates,
+    ]
+
+  const convertedNodes =
+    convertApiGraphNodes(
+      {
+        nodes:
+          rawNodes,
+
+        edges: [],
+      },
+      centerNode.id,
+    ).map(
+      (node) => {
+        /*
+         * 中心专家。
+         */
+        if (
+          node.id
+          === centerNode.id
+        ) {
+          return {
+            ...node,
+
+            level: 0,
+
+            relations:
+              `${alumniCandidates.length} 条校友关系`,
+
+            evidence: [
+              ...node.evidence,
+
+              `教育机构：${schoolEn}`,
+
+              `就读时间：${
+                String(
+                  centerProperties
+                    .education_background_date
+                  ?? '暂无',
+                )
+              }`,
+
+              `学历阶段：${
+                String(
+                  centerProperties
+                    .education_background_degree_en
+                  ?? centerProperties
+                    .education_background_degree_zh
+                  ?? '暂无',
+                )
+              }`,
+            ],
+          }
+        }
+
+        /*
+         * 校友候选专家。
+         */
+        const rawNode =
+          alumniCandidates.find(
+            (candidate) =>
+              candidate.id
+              === node.id,
+          )
+
+        const properties =
+          rawNode?.properties
+          ?? {}
+
+        return {
+          ...node,
+
+          level: 1,
+
+          relations:
+            '校友关系',
+
+          evidence: [
+            ...node.evidence,
+
+            `共同教育机构：${schoolEn}`,
+
+            `中心专家就读时间：${
+              String(
+                centerProperties
+                  .education_background_date
+                ?? '暂无',
+              )
+            }`,
+
+            `该专家就读时间：${
+              String(
+                properties
+                  .education_background_date
+                ?? '暂无',
+              )
+            }`,
+
+            `该专家学历阶段：${
+              String(
+                properties
+                  .education_background_degree_en
+                ?? properties
+                  .education_background_degree_zh
+                ?? '暂无',
+              )
+            }`,
+          ],
+        }
+      },
+    )
+
+  /*
+   * 这里的边是页面层的“校友关系”展示边。
+   *
+   * 判断依据来自后端真实教育背景字段。
+   * 后端目前没有提供校友关系 confidence，
+   * 因此这里不写 confidence。
+   */
+  const alumniEdges:
+    GraphEdgeData[] =
+    alumniCandidates.map(
+      (
+        alumni,
+        index,
+      ) => ({
+        id:
+          `alumni-${centerNode.id}-${alumni.id}-${index}`,
+
+        from:
+          centerNode.id,
+
+        to:
+          alumni.id,
+
+        label:
+          `校友关系 · ${schoolEn}`,
+
+        category:
+          '校友关系',
+
+        // 前端推理生成，无对应真实图边，构建任务 ID 显示 "-"
+        inferred:
+          true,
+      }),
+    )
+
+  return {
+    nodes:
+      convertedNodes,
+
+    edges:
+      alumniEdges,
+  }
+}
+
+/**
+ * 查询单节点间接关系。
+ *
+ * 使用 dev 图空间真实的两跳子图：
+ *
+ * 中心节点 A
+ *    ↓
+ * 中间节点 B
+ *    ↓
+ * 间接节点 C
+ *
+ * 只把距离中心节点恰好为 2 的节点
+ * 认定为“间接关联目标”。
+ *
+ * 不创建虚假的 A -> C 关系，
+ * 只展示后端真实存在的 A-B、B-C 路径。
+ */
+async function queryIndirectRelationGraph(
+  centerNode: GraphNode,
+): Promise<RelationGraphResult> {
+  const response =
+    await getSubgraph(
+      centerNode.id,
+      {
+        depth: 2,
+
+        limit: 100,
+
+        direction:
+          'both',
+
+        space:
+          selectedGraphSpace.value,
+      },
+    )
+
+  const rawGraphData =
+    unwrapHttpApiResponse(
+      response,
+    )
+
+  const graphData =
+    normalizeReturnedSubgraph(
+      rawGraphData,
+      centerNode.id,
+    )
+
+  /*
+   * 计算中心节点到所有返回节点的
+   * 最短图距离。
+   */
+  const distances =
+    calculateGraphDistances(
+      centerNode.id,
+      graphData.edges,
+    )
+
+  /*
+   * 只把恰好 2 跳的节点作为
+   * “间接关联目标”。
+   *
+   * 如果某个节点同时存在 1 跳关系，
+   * 即使另有一条两跳路径，
+   * 它仍属于直接关系，不算间接节点。
+   */
+  const indirectNodeIds =
+    new Set<string>()
+
+  for (
+    const [
+      nodeId,
+      distance,
+    ]
+    of distances
+  ) {
+    if (distance === 2) {
+      indirectNodeIds.add(
+        nodeId,
+      )
+    }
+  }
+
+  /*
+   * 找到真正参与
+   * “1跳 -> 2跳”
+   * 路径的中间节点。
+   */
+  const intermediateNodeIds =
+    new Set<string>()
+
+  for (
+    const edge
+    of graphData.edges
+  ) {
+    const sourceDistance =
+      distances.get(
+        edge.source,
+      )
+
+    const targetDistance =
+      distances.get(
+        edge.target,
+      )
+
+    if (
+      sourceDistance === 1
+      && targetDistance === 2
+      && indirectNodeIds.has(
+        edge.target,
+      )
+    ) {
+      intermediateNodeIds.add(
+        edge.source,
+      )
+    }
+
+    if (
+      sourceDistance === 2
+      && targetDistance === 1
+      && indirectNodeIds.has(
+        edge.source,
+      )
+    ) {
+      intermediateNodeIds.add(
+        edge.target,
+      )
+    }
+  }
+
+  /*
+   * 最终需要展示：
+   * 1. 中心节点
+   * 2. 路径中间节点
+   * 3. 二跳间接节点
+   */
+  const visibleNodeIds =
+    new Set<string>([
+      centerNode.id,
+      ...intermediateNodeIds,
+      ...indirectNodeIds,
+    ])
+
+  /*
+   * 只保留真正组成
+   * A -> B -> C
+   * 的后端真实边。
+   */
+  const pathEdges =
+    graphData.edges.filter(
+      (edge) => {
+        const sourceDistance =
+          distances.get(
+            edge.source,
+          )
+
+        const targetDistance =
+          distances.get(
+            edge.target,
+          )
+
+        /*
+         * A <-> B
+         */
+        const centerToIntermediate =
+          (
+            sourceDistance === 0
+            && targetDistance === 1
+            && intermediateNodeIds.has(
+              edge.target,
+            )
+          )
+          || (
+            sourceDistance === 1
+            && targetDistance === 0
+            && intermediateNodeIds.has(
+              edge.source,
+            )
+          )
+
+        /*
+         * B <-> C
+         */
+        const intermediateToIndirect =
+          (
+            sourceDistance === 1
+            && targetDistance === 2
+            && intermediateNodeIds.has(
+              edge.source,
+            )
+            && indirectNodeIds.has(
+              edge.target,
+            )
+          )
+          || (
+            sourceDistance === 2
+            && targetDistance === 1
+            && indirectNodeIds.has(
+              edge.source,
+            )
+            && intermediateNodeIds.has(
+              edge.target,
+            )
+          )
+
+        return (
+          centerToIntermediate
+          || intermediateToIndirect
+        )
+      },
+    )
+
+  const pathNodes =
+    graphData.nodes.filter(
+      (node) =>
+        visibleNodeIds.has(
+          node.id,
+        ),
+    )
+
+  const pathGraph:
+    GraphData = {
+      nodes:
+        pathNodes,
+
+      edges:
+        pathEdges,
+    }
+
+  /*
+   * 先复用现有节点转换，
+   * 保留后端实体属性和置信度。
+   */
+  const convertedNodes =
+    convertApiGraphNodes(
+      pathGraph,
+      centerNode.id,
+    )
+
+  /*
+   * 再按真实图距离补充
+   * “中心 / 中间 / 间接”层级。
+   */
+  const indirectNodes =
+    convertedNodes.map(
+      (node) => {
+        const distance =
+          distances.get(
+            node.id,
+          )
+
+        if (distance === 0) {
+          return {
+            ...node,
+
+            level: 0,
+
+            relations:
+              `${indirectNodeIds.size} 个间接关联节点`,
+          }
+        }
+
+        if (distance === 1) {
+          return {
+            ...node,
+
+            level: 1,
+
+            relations:
+              '间接关系传递路径中间节点',
+
+            evidence: [
+              ...node.evidence,
+              '图距离：距中心节点 1 跳',
+            ],
+          }
+        }
+
+        return {
+          ...node,
+
+          level: 2,
+
+          relations:
+            '二跳间接关联节点',
+
+          evidence: [
+            ...node.evidence,
+            '图距离：距中心节点 2 跳',
+          ],
+        }
+      },
+    )
+
+  /*
+   * 保留真实 edge.type 作为 label，
+   * 例如：
+   *
+   * AFFILIATED_WITH
+   * AUTHORED_BY
+   * COAUTHOR_WITH
+   *
+   * 只是把页面筛选分类统一设为：
+   * “间接关系”。
+   *
+   * 不生成 A -> C 假边。
+   */
+  const indirectEdges =
+    convertApiGraphEdges(
+      pathEdges,
+    ).map(
+      (edge) => ({
+        ...edge,
+
+        category:
+          '间接关系',
+      }),
+    )
+
+  return {
+    nodes:
+      indirectNodes,
+
+    edges:
+      indirectEdges,
+  }
+}
+
+/**
+ * 关系类型统一查询入口。
+ *
+ * handleQuery 只调用这个函数，
+ * 不直接判断具体业务接口。
+ */
+async function queryRelationByType(
+  centerNode: GraphNode,
+  relationType: string,
+): Promise<RelationGraphResult> {
+  switch (relationType) {
+    case '全部关系':
+      return queryAllRelationGraph(
+        centerNode,
+      )
+
+    case '直接关系':
+      return queryDirectRelationGraph(
+        centerNode,
+      )
+
+    case '间接关系':
+      return queryIndirectRelationGraph(
+        centerNode,
+      )
+
+    case '同事关系':
+      return queryColleagueRelationGraph(
+        centerNode,
+      )
+
+    case '校友关系':
+      return queryAlumniRelationGraph(
+        centerNode,
+      )
+
+    case '论文合作':
+      return queryPaperCooperationGraph(
+        centerNode,
+      )
+
+    case '企业关联':
+      return queryEnterpriseRelationGraph(
+        centerNode,
+      )
+
+    case '产业事件':
+      return queryIndustryEventGraph(
+        centerNode,
+      )
+
+    default:
+      throw new Error(
+        `暂不支持关系类型：${relationType}`,
+      )
+  }
 }
 
 async function initializeGraphSpace(): Promise<void> {
@@ -1443,21 +4265,21 @@ async function initializeGraphSpace(): Promise<void> {
       )
 
     if (
-      data.spaces.includes('techkg')
+      data.spaces.includes('dev')
     ) {
       selectedGraphSpace.value =
-        'techkg'
+        'dev'
 
       return
     }
 
     selectedGraphSpace.value =
       data.spaces[0]
-      ?? 'techkg'
+      ?? 'dev'
   } catch {
     // 加载失败时继续使用已验证过的默认图空间。
     selectedGraphSpace.value =
-      'techkg'
+      'dev'
   }
 }
 
@@ -1506,7 +4328,7 @@ async function handleQuery(): Promise<void> {
 
   if (!keyword) {
     showToast(
-      '请输入实体名称或关键词',
+      '请输入实体名称或ID',
       'info',
     )
 
@@ -1534,7 +4356,7 @@ async function handleQuery(): Promise<void> {
     const nodeLabels =
       queryTypeNodeLabelsMap[
         selectedQueryType.value
-      ] ?? ['Scholar']
+      ] ?? queryTypeNodeLabelsMap.全部图谱
 
     const centerNode =
       await findGraphCenterNode(
@@ -1548,43 +4370,17 @@ async function handleQuery(): Promise<void> {
       )
     }
 
-    const subgraphResponse =
-      await getSubgraph(
-        centerNode.id,
-        {
-          depth: 2,
-          limit: 50,
-          direction: 'both',
-          space:
-            selectedGraphSpace.value,
-        },
-      )
-
-    const rawGraphData =
-      unwrapHttpApiResponse(
-        subgraphResponse,
-      )
-
-    /*
-    * 删除因后端节点、边分别截断
-    * 而产生的孤立节点。
-    */
-    const graphData =
-      normalizeReturnedSubgraph(
-        rawGraphData,
-        centerNode.id,
+    const relationGraph =
+      await queryRelationByType(
+        centerNode,
+        queryRelationFilter.value,
       )
 
     queryGraphNodes.value =
-      convertApiGraphNodes(
-        graphData,
-        centerNode.id,
-      )
+      relationGraph.nodes
 
     queryGraphEdges.value =
-      convertApiGraphEdges(
-        graphData.edges,
-      )
+      relationGraph.edges
 
     isLiveGraphResult.value = true
     queryApplied.value = true
@@ -1618,9 +4414,9 @@ async function handleQuery(): Promise<void> {
       'summary'
 
     showToast(
-      `查询完成：${keyword}，返回 `
-      + `${queryGraphNodes.value.length} 个节点、`
-      + `${queryGraphEdges.value.length} 条关系`,
+      `查询完成：${keyword}，当前筛选后显示 `
+      + `${queryVisibleNodes.value.length} 个节点、`
+      + `${queryVisibleEdges.value.length} 条关系`,
       'info',
     )
   } catch (error) {
@@ -1685,12 +4481,32 @@ watch(activeServiceKey, () => {
   selectedGraphEdgeId.value = null
 })
 
+const pageMeta = computed(() => {
+  const map: Record<PlatformTab, { title: string }> = {
+    overview: { title: '亿级科技知识图谱平台' },
+    processing: { title: '数据处理与结构化输出' },
+    construction: { title: '图谱构建与治理' },
+    query: { title: '综合图谱查询' },
+    service: { title: activeService.value.title },
+  }
+  return map[activeTab.value]
+})
+
 </script>
 
 <template>
-  <div class="platform-page" :class="{ 'has-overview-actions': activeTab === 'overview' }">
+  <div class="platform-page">
     <header v-if="activeTab === 'overview'" class="platform-hero">
+      <div class="platform-hero__main">
+        <h1>{{ pageMeta.title }}</h1>
+      </div>
       <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><!-- <RouterLink to="/tasks?module=图谱版本">当前图谱 KG-2026.07.12.008</RouterLink> --><RouterLink to="/tasks">查看任务</RouterLink><RouterLink to="/manual-review">进入人工处理</RouterLink></div>
+    </header>
+
+    <header v-else class="platform-page-head">
+      <div>
+        <h1>{{ pageMeta.title }}</h1>
+      </div>
     </header>
 
     <main v-if="activeTab === 'overview'" class="platform-content platform-overview">
@@ -1935,8 +4751,13 @@ watch(activeServiceKey, () => {
         </div>
         <div class="platform-form-grid">
           <label class="platform-query-question">
-            <span>实体名称或关键词</span>
-            <input v-model="queryKeyword" type="search" placeholder="请输入实体名称或关键词，例如：Scholar17" />
+            <span>实体名称或ID</span>
+            <input
+              v-model="queryKeyword"
+              type="search"
+              placeholder="请输入实体名称或节点ID"
+              @keyup.enter="handleQuery"
+            />
           </label>
           <label>
             <span>图谱范围</span>
@@ -1982,8 +4803,8 @@ watch(activeServiceKey, () => {
           </span>
         </div>
         <KgGraphCanvas
-          :nodes="queryGraphNodes"
-          :edges="queryGraphEdges"
+          :nodes="queryVisibleNodes"
+          :edges="queryVisibleEdges"
           :active-categories="queryActiveCategories"
           :selected-node-id="selectedGraphNodeId"
           :selected-edge-id="selectedGraphEdgeId"
@@ -2029,7 +4850,7 @@ watch(activeServiceKey, () => {
             <strong>暂未查询到图谱数据</strong>
 
             <p>
-              输入实体名称或关键词后，
+              输入实体名称或ID后，
               点击“查询图谱”获取真实节点和关系。
             </p>
           </div>
@@ -2397,36 +5218,43 @@ print(response.json())</pre>
 <style scoped>
 .platform-page {
   display: grid;
-  grid-template-rows: minmax(0, 1fr);
-  gap: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 16px;
   height: 100%;
   min-width: 0;
   color: var(--text-primary);
   font-size: 16px;
 }
 
-.platform-page.has-overview-actions {
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 12px;
-}
-
-.platform-page.has-overview-actions .platform-hero {
+.platform-hero {
   position: relative;
   overflow: hidden;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 14px;
-  min-height: 36px !important;
-  padding: 0 !important;
-  border: 0 !important;
+  min-height: 62px;
+  padding: 11px 18px;
+  border: 1px solid rgba(132, 178, 246, 0.86);
   border-radius: 12px;
-  background: transparent !important;
-  box-shadow: none !important;
+  background:
+    linear-gradient(135deg, rgba(216, 235, 255, 0.98) 0%, rgba(237, 247, 255, 0.98) 48%, rgba(211, 242, 255, 0.94) 100%),
+    #e5f1ff;
+  box-shadow:
+    0 8px 22px rgba(48, 105, 194, 0.13),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96);
 }
 
 .platform-hero::before {
-  display: none;
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(22, 93, 255, 0.075) 1px, transparent 1px),
+    linear-gradient(rgba(22, 93, 255, 0.075) 1px, transparent 1px);
+  background-size: 34px 34px;
+  mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0.62), transparent 72%);
+  pointer-events: none;
+  content: "";
 }
 
 .platform-hero > * {
@@ -2579,18 +5407,18 @@ print(response.json())</pre>
 .platform-metric.is-orange strong { color: #ff7d00; }
 .platform-metric.is-red strong { color: #d92d20; }
 
-.platform-summary-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch;gap:14px; }
-.platform-summary-card { position:relative;display:grid;grid-template-rows:auto minmax(0,1fr);height:100%;min-width:0;overflow:hidden; }
+.platform-summary-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px; }
+.platform-summary-card { position:relative;min-width:0;overflow:hidden; }
 .platform-summary-card::after { position:absolute;right:-35px;bottom:-55px;width:130px;height:130px;border-radius:50%;background:rgba(22,93,255,.045);content:"";pointer-events:none; }
 .platform-summary-card>header { display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px;border-bottom:1px solid #dce8f8;background:rgba(255,255,255,.75); }
-.platform-summary-card>header>div { display:grid;gap:4px; }.platform-summary-card>header>div>strong { color:#1d2129;font-size:16px!important;line-height:24px; }
-.platform-summary-card>header span { display:flex;align-items:center;gap:5px;color:#4e5969;font-size:12px!important;line-height:18px; }.platform-summary-card>header span i { width:6px;height:6px;border-radius:50%;background:#86909c;box-shadow:0 0 0 3px #f2f3f5; }
-.platform-summary-card>header span.warning { color:#4e5969; }.platform-summary-card>header span.warning i { background:#86909c;box-shadow:0 0 0 3px #f2f3f5; }
-.platform-summary-card>header a,.platform-summary-card>header button { padding:0;border:0;background:transparent;color:#4e5969;font-size:12px!important;line-height:18px;text-decoration:none;white-space:nowrap;cursor:pointer; }
-.platform-summary-card__main { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-height:88px;background:#fff; }
-.platform-summary-card__main section { display:flex;justify-content:center;gap:4px;min-width:0;padding:16px 12px;border-right:1px solid #e5e6eb;flex-direction:column; }.platform-summary-card__main section:last-child { border-right:0; }
-.platform-summary-card__main strong { color:#1d2129!important;font-size:16px!important;line-height:24px;letter-spacing:0;white-space:nowrap;font-variant-numeric:tabular-nums; }.platform-summary-card.is-relation .platform-summary-card__main strong,.platform-summary-card.is-property .platform-summary-card__main strong,.platform-summary-card .platform-summary-card__main .is-added strong { color:#1d2129!important; }
-.platform-summary-card__main span { color:#4e5969;font-size:14px!important;line-height:22px;white-space:nowrap; }
+.platform-summary-card>header>div { display:grid;gap:4px; }.platform-summary-card>header>div>strong { color:#263b5a;font-size:13px; }
+.platform-summary-card>header span { display:flex;align-items:center;gap:5px;color:#067647;font-size:9px; }.platform-summary-card>header span i { width:6px;height:6px;border-radius:50%;background:#12b76a;box-shadow:0 0 0 3px #dcfae6; }
+.platform-summary-card>header span.warning { color:#b42318; }.platform-summary-card>header span.warning i { background:#d92d20;box-shadow:0 0 0 3px #fee4e2; }
+.platform-summary-card>header a,.platform-summary-card>header button { padding:0;border:0;background:transparent;color:#165dff;font-size:10px;text-decoration:none;white-space:nowrap;cursor:pointer; }
+.platform-summary-card__main { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-height:112px;background:#fff; }
+.platform-summary-card__main section { display:flex;justify-content:center;gap:5px;padding:20px 18px;border-right:1px solid #e3ebf6;flex-direction:column; }.platform-summary-card__main section:last-child { border-right:0; }
+.platform-summary-card__main strong { color:#165dff;font-size:34px;line-height:40px;letter-spacing:-.5px; }.platform-summary-card.is-relation .platform-summary-card__main strong { color:#7a5af8; }.platform-summary-card.is-property .platform-summary-card__main strong { color:#f79009; }.platform-summary-card .platform-summary-card__main .is-added strong { color:#079455; }
+.platform-summary-card__main span { color:#66758f;font-size:12px; }
 .platform-summary-card__items { position:relative;z-index:1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:10px 8px;background:#f8fbff; }
 .platform-summary-card__items>a { display:grid;gap:3px;padding:2px 8px;border-right:1px solid #e1eaf5;color:inherit;text-decoration:none;transition:background-color .2s ease; }.platform-summary-card__items>a:last-child { border-right:0; }.platform-summary-card__items>a:hover { background:#eef5ff; }
 .platform-summary-card__items em { overflow:hidden;color:#8290a5;font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }.platform-summary-card__items strong { overflow:hidden;color:#344861;font-size:10px;text-overflow:ellipsis;white-space:nowrap; }
@@ -2694,7 +5522,7 @@ print(response.json())</pre>
 .platform-donut.is-entity { background:conic-gradient(#2e90fa 0 34%,#7a5af8 34% 57%,#12b76a 57% 74%,#f79009 74% 85%,#98a2b3 85% 100%); }
 .platform-donut.is-relation { background:conic-gradient(#165dff 0 32%,#2e90fa 32% 52%,#06aed4 52% 70%,#7a5af8 70% 84%,#98a2b3 84% 100%); }
 .platform-donut>span { position:relative;z-index:1;display:grid;gap:2px;text-align:center; }
-.platform-donut>span strong { color:#1d2129;font-size:16px;line-height:24px; }
+.platform-donut>span strong { color:#10264c;font-size:19px; }
 .platform-donut>span em { color:#8290a7;font-size:10px;font-style:normal; }
 .platform-structure-legend article { display:grid;grid-template-columns:minmax(0,1fr) 160px;align-items:center;gap:14px;min-height:38px;border-bottom:1px solid #edf2f8; }
 .platform-structure-legend article:last-child { border-bottom:0; }
@@ -4317,6 +7145,7 @@ print(response.json())</pre>
 .platform-graph-legend__item.is-event i { background: #eb2aa3; }
 .platform-graph-legend__item.is-chain i { background: #14b8a6; }
 .platform-graph-legend__item.is-field i { background: #2f6bff; }
+.platform-graph-legend__item.is-source i { background: #64748b; }
 
 .platform-query > .platform-detail {
   grid-column: 2;
@@ -5157,7 +7986,7 @@ print(response.json())</pre>
 }
 
 @media (max-width: 1280px) {
-  .platform-overview-main { grid-template-columns:minmax(0,1fr); }
+  .platform-summary-grid,.platform-overview-main { grid-template-columns:minmax(0,1fr); }
   .platform-metrics { grid-template-columns:repeat(3,minmax(0,1fr)); }
   .platform-management-focus,.platform-monitor-grid { grid-template-columns:minmax(0,1fr); }
   .platform-operations-grid { grid-template-columns:minmax(0,1fr); }
@@ -5224,7 +8053,6 @@ print(response.json())</pre>
 }
 
 @media (max-width: 980px) {
-  .platform-summary-grid { grid-template-columns:minmax(0,1fr); }
   .platform-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .platform-change-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .platform-change-body { grid-template-columns:minmax(0,1fr); }

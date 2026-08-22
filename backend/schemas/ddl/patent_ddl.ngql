@@ -31,16 +31,25 @@ CREATE TAG IF NOT EXISTS Patent (
   simple_family_number string,
   db_source string,
   create_time datetime,
-  update_time datetime
+  update_time datetime,
+  confidence double,
+  organization_base string,
+  organization_id string
 );
 
 -- Keyword跨专利复用；当前只保存规范化后的关键词名称。
 CREATE TAG IF NOT EXISTS Keyword (
-  keyword string
+  keyword string,
+  confidence double,
+  organization_base string,
+  organization_id string
 );
 
 CREATE TAG IF NOT EXISTS PatentFamily (
-  family_number string
+  family_number string,
+  confidence double,
+  organization_base string,
+  organization_id string
 );
 
 -- 专利表可以直接确定的事实关系。

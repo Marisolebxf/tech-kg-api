@@ -19,14 +19,18 @@ from dao.project import ProjectDAO
 from infra.graph_db import TRSGraphClient, close_trs_graph_client, get_trs_graph_client
 from infra.graph_db.exceptions import GraphRequestError
 from infra.mysql import get_mysql_client
+from script.project_edge_schema import ensure_alignment_edge_schema, ensure_project_tag_confidence
 from script.project_entity_matcher import MatchResult, ProjectEntityMatcher, normalize_text
 from script.project_graph_utils import (
     build_output_count_props,
     build_project_props,
     edge_provenance,
+    funded_by_org_props,
     keyword_vid,
+    match_audit_props,
     parse_json_objects,
     parse_list,
+    project_confidence,
     project_vid,
 )
 from script.project_ingest_report import ProjectIngestReport
@@ -195,9 +199,10 @@ def stage_project_relations(
         institution = normalize_text(row.funded_institution).rstrip("；;")
         if institution:
             report.increment("organization_candidates")
+            org_result = matcher.organization.match(institution, method="name_exact")
             target = _matched_vid(
                 report,
-                matcher.organization.match(institution, method="name_exact"),
+                org_result,
                 "organization",
                 {"project_id": row.id, "field": "funded_institution", "value": institution},
             )
@@ -206,6 +211,8 @@ def stage_project_relations(
                     **provenance,
                     "funded_amount": float(row.funded_amount or 0),
                     "fund_category": row.fund_category or "",
+                    **match_audit_props(org_result.method, org_result.evidence),
+                    **funded_by_org_props(matcher.organization_id(target)),
                 }
                 if not dry_run:
                     _merge_edge(graph, pvid, target, "FUNDED_BY", props)
@@ -214,29 +221,39 @@ def stage_project_relations(
         host = normalize_text(row.project_host)
         if host:
             report.increment("person_candidates")
+            host_result = matcher.person.match(host, method="name_exact")
             target = _matched_vid(
                 report,
-                matcher.person.match(host, method="name_exact"),
+                host_result,
                 "person",
                 {"project_id": row.id, "field": "project_host", "value": host},
             )
             if target:
+                props = {
+                    **provenance,
+                    **match_audit_props(host_result.method, host_result.evidence),
+                }
                 if not dry_run:
-                    _merge_edge(graph, pvid, target, "LEADS", provenance)
+                    _merge_edge(graph, pvid, target, "LEADS", props)
                 report.increment("edges_LEADS")
 
         participants = {normalize_text(value) for value in parse_list(row.participants)}
         for participant in sorted(value for value in participants if value):
             report.increment("person_candidates")
+            part_result = matcher.person.match(participant, method="name_exact")
             target = _matched_vid(
                 report,
-                matcher.person.match(participant, method="name_exact"),
+                part_result,
                 "person",
                 {"project_id": row.id, "field": "participants", "value": participant},
             )
             if target:
+                props = {
+                    **provenance,
+                    **match_audit_props(part_result.method, part_result.evidence),
+                }
                 if not dry_run:
-                    _merge_edge(graph, pvid, target, "HAS_PARTICIPANT", provenance)
+                    _merge_edge(graph, pvid, target, "HAS_PARTICIPANT", props)
                 report.increment("edges_HAS_PARTICIPANT")
 
         for name in sorted(set(parse_list(row.participating_institution))):
@@ -361,9 +378,7 @@ def stage_outputs(
                             "output_type": output_type,
                             "output_title": title,
                             "output_identifier": identifier,
-                            "match_method": result.method,
-                            "match_evidence": result.evidence,
-                            "confidence": 1.0,
+                            **match_audit_props(result.method, result.evidence),
                             "source_table": table,
                             "source_record_id": relation_key,
                             "ingest_batch": ingest_batch,
@@ -411,6 +426,58 @@ def stage_rel_table_candidates(
                 )
 
 
+def backfill_project_confidence(
+    graph: TRSGraphClient,
+    *,
+    dry_run: bool = False,
+    page_size: int = 500,
+) -> dict[str, Any]:
+    """回填现有 Project 节点的实体置信度。
+
+    dev 上 Project 节点由历史批次写入、当时无 confidence 字段；merge_node 对
+    已存在节点不可靠（见 CLAUDE.md 图库 caveat），故这里用 update_node 按
+    节点已有属性重算 confidence 并写入。可幂等重跑。
+    """
+    scanned = 0
+    updated = 0
+    skipped = 0
+    offset = 0
+    while True:
+        page = graph.get_nodes_by_label("Project", limit=page_size, offset=offset)
+        items = list(getattr(page, "items", None) or [])
+        if not items:
+            break
+        for node in items:
+            scanned += 1
+            vid = getattr(node, "id", None) or (node.get("id") if isinstance(node, dict) else None)
+            props = getattr(node, "properties", None)
+            if not isinstance(props, dict) and isinstance(node, dict):
+                props = node.get("properties") or {}
+            if not vid or not isinstance(props, dict):
+                skipped += 1
+                continue
+            confidence = project_confidence(props)
+            if not dry_run:
+                try:
+                    graph.update_node(str(vid), {"confidence": confidence})
+                except GraphRequestError as exc:
+                    logger.warning("update_node failed vid=%s body=%s", vid, exc.body)
+                    skipped += 1
+                    continue
+            updated += 1
+        if len(items) < page_size:
+            break
+        offset += len(items)
+    report = {
+        "dry_run": dry_run,
+        "scanned": scanned,
+        "updated": updated,
+        "skipped": skipped,
+    }
+    logger.info("backfill_project_confidence summary: %s", report)
+    return report
+
+
 def load_project_graph(
     *,
     project_id: str | None = None,
@@ -442,6 +509,9 @@ def load_project_graph(
     session = mysql.session()
     try:
         preflight_graph(graph, relations=not nodes_only)
+        if not dry_run and not nodes_only:
+            ensure_alignment_edge_schema(graph)
+            ensure_project_tag_confidence(graph)
         dao = ProjectDAO(session)
         projects = _load_project_rows(dao, project_id=project_id, id_prefix=id_prefix, limit=limit)
         allowed_ids = {str(row.id) for row, _source, _table in projects}
@@ -507,6 +577,11 @@ def main() -> None:
     mode.add_argument("--relations-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--backfill-confidence",
+        action="store_true",
+        help="仅回填现有 Project 节点的 confidence（用 update_node），不灌新数据",
+    )
+    parser.add_argument(
         "--strict-existing-entities",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -514,6 +589,13 @@ def main() -> None:
     parser.add_argument("--report-dir", type=Path)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if args.backfill_confidence:
+        graph = get_dev_graph_client()
+        try:
+            print(backfill_project_confidence(graph, dry_run=args.dry_run))
+        finally:
+            close_trs_graph_client()
+        return
     print(
         load_project_graph(
             project_id=args.project_id,

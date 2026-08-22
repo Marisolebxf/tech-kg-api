@@ -53,6 +53,9 @@ PATENT_PROPERTIES = (
     "db_source",
     "create_time",
     "update_time",
+    "confidence",
+    "organization_base",
+    "organization_id",
 )
 
 # 2. MySQL数据读取
@@ -160,7 +163,7 @@ def ngql_int(value: Any) -> str:
 
 
 def patent_payload(row: dict[str, Any]) -> tuple[str, list[str]]:
-    """只映射MySQL中的29个Patent正式属性。"""
+    """映射29个业务属性，并附加3个置信度/溯源属性。"""
     patent_id = str(row.get("patent_id") or "").strip()
     if not patent_id:
         raise ValueError("patent_id 为空")
@@ -194,6 +197,9 @@ def patent_payload(row: dict[str, Any]) -> tuple[str, list[str]]:
         ngql_string(row.get("db_source")),
         ngql_datetime(row.get("create_time")),
         ngql_datetime(row.get("update_time")),
+        "1.0",
+        ngql_string("dwd_patent"),
+        ngql_string(patent_id),
     ]
     return f"patent_{patent_id}", values
 
@@ -221,9 +227,10 @@ def keyword_statements(
     edge_ngql = ""
     if vertices:
         values = ",".join(
-            f"{ngql_string(vid)}:({ngql_string(word)})" for vid, word in vertices.items()
+            f"{ngql_string(vid)}:({ngql_string(word)},1.0,{ngql_string('dwd_patent')},{ngql_string(word)})"
+            for vid, word in vertices.items()
         )
-        vertex_ngql = f"INSERT VERTEX Keyword(keyword) VALUES {values};"
+        vertex_ngql = f"INSERT VERTEX Keyword(keyword,confidence,organization_base,organization_id) VALUES {values};"
     if edges:
         values = ",".join(
             f"{ngql_string(src)}->{ngql_string(dst)}:(1.0,{ngql_string('dwd_patent')},{ngql_string(src.removeprefix('patent_'))})"
@@ -251,9 +258,10 @@ def family_statements(rows: list[dict[str, Any]]) -> tuple[str, str]:
     edge_ngql = ""
     if families:
         values = ",".join(
-            f"{ngql_string(vid)}:({ngql_string(number)})" for vid, number in families.items()
+            f"{ngql_string(vid)}:({ngql_string(number)},1.0,{ngql_string('dwd_patent_family')},{ngql_string(number)})"
+            for vid, number in families.items()
         )
-        vertex_ngql = f"INSERT VERTEX PatentFamily(family_number) VALUES {values};"
+        vertex_ngql = f"INSERT VERTEX PatentFamily(family_number,confidence,organization_base,organization_id) VALUES {values};"
     if edges:
         values = ",".join(
             f"{ngql_string(src)}->{ngql_string(dst)}:(1.0,{ngql_string('source_family_number')},{ngql_string('simple_family_number由源表直接给出')},{ngql_string('dwd_patent_family')},{ngql_string(source_id)})"
@@ -282,6 +290,32 @@ def ensure_schema(graph: Any) -> None:
                 if attempt == 14:
                     raise
                 time.sleep(1)
+    entity_fields = {"confidence", "organization_base", "organization_id"}
+    for tag in ("Patent", "Keyword", "PatentFamily"):
+        existing_fields = {
+            str(row["Field"]) for row in graph.execute_read(f"DESCRIBE TAG {tag}").records
+        }
+        missing_fields = entity_fields - existing_fields
+        if missing_fields:
+            definitions = {
+                "confidence": "double",
+                "organization_base": "string",
+                "organization_id": "string",
+            }
+            graph.execute_write(
+                f"ALTER TAG {tag} ADD ("
+                + ",".join(f"{field} {definitions[field]}" for field in sorted(missing_fields))
+                + ");"
+            )
+        for attempt in range(15):
+            visible = {
+                str(row["Field"]) for row in graph.execute_read(f"DESCRIBE TAG {tag}").records
+            }
+            if entity_fields <= visible:
+                break
+            if attempt == 14:
+                raise RuntimeError(f"{tag}实体置信度/溯源属性未在TRSGraph中生效")
+            time.sleep(1)
     existing = {
         str(row["Field"]) for row in graph.execute_read("DESCRIBE EDGE HAS_KEYWORD").records
     }
@@ -303,39 +337,54 @@ def ensure_schema(graph: Any) -> None:
         time.sleep(1)
 
 
+def write_entity_batch(graph: Any, rows: list[dict[str, Any]]) -> None:
+    """批量写实体和确定关系；单批被图服务拒绝时自动二分定位。"""
+    if not rows:
+        return
+    try:
+        graph.execute_write(patent_statement([patent_payload(row) for row in rows]))
+        keyword_vertex, keyword_edge = keyword_statements(rows)
+        if keyword_vertex:
+            graph.execute_write(keyword_vertex)
+        if keyword_edge:
+            graph.execute_write(keyword_edge)
+        family_vertex, family_edge = family_statements(rows)
+        if family_vertex:
+            graph.execute_write(family_vertex)
+        if family_edge:
+            graph.execute_write(family_edge)
+    except Exception:
+        if len(rows) == 1:
+            raise
+        middle = len(rows) // 2
+        write_entity_batch(graph, rows[:middle])
+        write_entity_batch(graph, rows[middle:])
+
+
 # 5. 主流程：读取MySQL并通过公共图客户端写入dev
 def load_patents(batch_size: int) -> tuple[int, int, int]:
+    if batch_size < 1:
+        raise ValueError("batch_size 必须大于等于 1")
     os.environ["TRS_GRAPH_SPACE"] = "dev"
     graph = get_trs_graph_client()  # 公共图数据库能力
     ensure_schema(graph)
     connection = mysql_connection()
     loaded = keyword_count = edge_count = 0
+    last_source_id = 0
     try:
         while True:
             with connection.cursor() as cursor:
-                # MySQL按批读取
-                cursor.execute(SELECT_SQL, (batch_size, loaded))
+                cursor.execute(SELECT_SQL, (last_source_id, batch_size))
                 rows = list(cursor.fetchall())
             if not rows:
                 break
-            for start in range(0, len(rows), 1):
-                group = rows[start : start + 1]
-                # 写入Patent
-                graph.execute_write(patent_statement([patent_payload(row) for row in group]))
-                vertex_ngql, edge_ngql = keyword_statements(group)
-                if vertex_ngql:
-                    graph.execute_write(vertex_ngql)  # 写入Keyword
-                if edge_ngql:
-                    graph.execute_write(edge_ngql)  # 写入HAS_KEYWORD
-                family_vertex_ngql, family_edge_ngql = family_statements(group)
-                if family_vertex_ngql:
-                    graph.execute_write(family_vertex_ngql)
-                if family_edge_ngql:
-                    graph.execute_write(family_edge_ngql)
-                references = sum(len(keyword_values(row.get("keywords"))) for row in group)
-                keyword_count += references
-                edge_count += references
-            loaded += len(rows)
+            unique_rows = list({str(row.get("patent_id") or ""): row for row in rows}.values())
+            write_entity_batch(graph, unique_rows)
+            references = sum(len(keyword_values(row.get("keywords"))) for row in unique_rows)
+            keyword_count += references
+            edge_count += references
+            last_source_id = max(int(row["source_row_id"]) for row in rows)
+            loaded += len(unique_rows)
             logger.info("装载进度 Patent=%d", loaded)
     finally:
         connection.close()

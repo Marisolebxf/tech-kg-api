@@ -13,8 +13,8 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
         json_schema_extra={
             "example": {
                 "dataSource": "knowledge_graph",
-                "expertAId": "4P566No1",
-                "expertBId": "d492835p",
+                "expertAId": "person_121d48631f434f4d323ba521d33032ad",
+                "expertBId": "person_42914016fe8d6e0e1d01dad5845c47e6",
                 "startTime": "2021-01-01",
                 "endTime": "2024-12-31",
             }
@@ -22,7 +22,8 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
     )
 
     dataSource: DataSource = Field(
-        ..., description="论文数据源：all、knowledge_graph、cnki、wanfang、web_of_science。"
+        default="knowledge_graph",
+        description="论文数据源：all、knowledge_graph、cnki、wanfang、web_of_science。默认 knowledge_graph。",
     )
     expertAId: str = Field(
         ...,

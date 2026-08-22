@@ -4,6 +4,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from biz.schemas.auth import MenuSummary, PermissionSetSummary, RoleMenuSummary
 from config.auth import AuthSettings
 from infra.redis import MemoryJsonStore
 from service.auth import AuthenticationError, AuthService
@@ -214,3 +215,32 @@ def test_v21_menu_link_type_and_role_menu_mapping_are_exposed() -> None:
     assert profile.role_menus[0].menus[0].link_type == 1
     assert profile.app_permissions.roles == []
     assert profile.org_permissions.roles == []
+
+
+def test_menu_summary_normalizes_nested_null_children() -> None:
+    menu = MenuSummary.model_validate(
+        {
+            "id": 1,
+            "name": "一级菜单",
+            "children": [{"id": 2, "name": "二级菜单", "children": None}],
+        }
+    )
+
+    assert menu.children[0].children == []
+
+
+def test_permission_models_normalize_null_lists() -> None:
+    permission_set = PermissionSetSummary.model_validate(
+        {"roles": None, "menus": None, "permissions": None}
+    )
+    role_menu = RoleMenuSummary.model_validate(
+        {
+            "role": {"id": 1, "name": "测试角色", "code": "tester"},
+            "menus": None,
+        }
+    )
+
+    assert permission_set.roles == []
+    assert permission_set.menus == []
+    assert permission_set.permissions == []
+    assert role_menu.menus == []

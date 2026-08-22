@@ -6,6 +6,8 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from service.schema_ddl import is_valid_data_type
+
 ENTITY_NAME_PATTERN = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 RELATION_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
@@ -37,6 +39,15 @@ class SchemaPropertyInput(CamelModel):
             raise ValueError("属性名只能包含字母、数字和下划线，且不能以数字开头")
         return value
 
+    @field_validator("data_type")
+    @classmethod
+    def validate_data_type(cls, value: str) -> str:
+        if not is_valid_data_type(value):
+            raise ValueError(
+                "data_type 必须是 string/int64/double/bool/date/datetime/geo 或 fixed_string(N)"
+            )
+        return value
+
 
 class SchemaCreateBase(CamelModel):
     schema_key: str = Field(min_length=1, max_length=64)
@@ -48,6 +59,7 @@ class SchemaCreateBase(CamelModel):
     mappings: list[str] = Field(default_factory=list, max_length=100)
     is_core: bool = False
     version: str = Field(default="v1.0", min_length=1, max_length=32)
+    llm_config_id: str | None = Field(default=None, max_length=64)
 
     @field_validator("schema_key")
     @classmethod

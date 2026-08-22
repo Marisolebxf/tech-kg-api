@@ -1,26 +1,48 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import hljs from 'highlight.js/lib/core'
+import python from 'highlight.js/lib/languages/python'
+import 'highlight.js/styles/github-dark.css'
 import {
   createEntitySchema,
   createRelationSchema,
+  getScriptContent,
   getSchemaOverview,
   listAllSchemas,
-  replaceSchemaScript,
+  listSourceTables,
   schemaErrorMessage,
+  verifyAndSaveScript,
   type EntitySchemaCreatePayload,
   type RelationSchemaCreatePayload,
   type SchemaDefinition,
   type SchemaOverview,
+  type SourceTable,
 } from '../../api/schemaManagement'
+import { listLlmConfigs, type LlmConfig } from '../../api/llmConfig'
 import { useToast } from '../../composables/use-toast'
-import GkxInput from '../../components/ui/GkxInput.vue'
+
+hljs.registerLanguage('python', python)
 
 type Entity = { id: string; name: string; label: string; level: '核心实体' | '支撑实体'; key: string; source: string; description: string; schema: SchemaDefinition }
 type Relation = { id: string; name: string; label: string; source: string; target: string; basis: string; level?: '标准' | '扩展'; schema: SchemaDefinition }
 type Attribute = { entity: string; key: string; core: string; dynamic: string; source: string }
-type PendingCreate = { tab: string; values: Record<string, string> }
+
+type PropertyDataType = 'string' | 'int64' | 'double' | 'bool' | 'date' | 'datetime' | 'geo' | 'fixed_string'
+type PropertyRow = { name: string; dataType: PropertyDataType; length: number; required: boolean }
+type CreateForm = {
+  name: string
+  label: string
+  description: string
+  sourceEntityId: string
+  targetEntityId: string
+  properties: PropertyRow[]
+  sourceTables: string[]
+  llmConfigId: string
+}
 
 const currentUserId = window.localStorage.getItem('tech-kg-schema-user-id') || 'schema-admin'
+const router = useRouter()
 
 const activeTab = ref('标准实体')
 const keyword = ref('')
@@ -57,37 +79,74 @@ const overview = ref<SchemaOverview>({
   sourceMappings: 0,
 })
 const modalOpen = ref(false)
-const form = ref<Record<string, string>>({})
-const scriptByRow = ref<Record<string, { name: string }>>({})
-const fileInput = ref<HTMLInputElement | null>(null)
-const pendingUploadRow = ref('')
-const pendingCreate = ref<PendingCreate | null>(null)
+const createForm = ref<CreateForm>(emptyCreateForm())
+const creating = ref(false)
+const confirming = ref(false)
+const sourceTables = ref<SourceTable[]>([])
+const llmConfigs = ref<LlmConfig[]>([])
+const scriptByRow = ref<Record<string, { name: string; workflowDefinitionId: string | null }>>({})
 
-const formSpec = computed(() => {
-  switch (activeTab.value) {
-    case '标准实体': return [
-      { key: 'name', label: '实体中文名', type: 'text', required: true },
-      { key: 'label', label: 'Schema 名称', type: 'text', required: true },
-      { key: 'key', label: '主键', type: 'text', required: true },
-      { key: 'source', label: '主要来源表组', type: 'text' },
-      { key: 'description', label: '建模说明', type: 'textarea' },
-    ]
-    case '事实关系': return [
-      { key: 'name', label: '关系中文名', type: 'text', required: true },
-      { key: 'label', label: '关系英文名', type: 'text', required: true },
-      { key: 'source', label: '起点', type: 'text', required: true },
-      { key: 'target', label: '终点', type: 'text', required: true },
-      { key: 'basis', label: '生成依据', type: 'text' },
-    ]
-    case '推理关系': return [
-      { key: 'name', label: '推理关系', type: 'text', required: true },
-      { key: 'label', label: 'Schema 名称', type: 'text', required: true },
-      { key: 'source', label: '起点', type: 'text', required: true },
-      { key: 'target', label: '终点', type: 'text', required: true },
-      { key: 'basis', label: '生成依据', type: 'text' },
-    ]
-    default: return []
+// 上传脚本弹窗（行级「上传脚本/更换脚本」）
+const uploadModalOpen = ref(false)
+const uploadTargetId = ref('')
+const uploadTargetName = ref('')
+const uploadState = ref<'idle' | 'working' | 'success' | 'error'>('idle')
+const uploadStage = ref('')
+const uploadMessage = ref('')
+const uploadIssues = ref<string[]>([])
+const uploadFileName = ref('')
+const uploadFileInput = ref<HTMLInputElement | null>(null)
+
+// 查看脚本弹窗
+const viewModalOpen = ref(false)
+const viewState = ref<'loading' | 'ready' | 'error'>('loading')
+const viewFilename = ref('')
+const viewContent = ref('')
+const viewError = ref('')
+const viewCodeRef = ref<HTMLElement | null>(null)
+
+const PROPERTY_TYPES: PropertyDataType[] = ['string', 'int64', 'double', 'bool', 'date', 'datetime', 'geo', 'fixed_string']
+
+function emptyCreateForm(): CreateForm {
+  return {
+    name: '',
+    label: '',
+    description: '',
+    sourceEntityId: '',
+    targetEntityId: '',
+    properties: [{ name: '', dataType: 'string', length: 64, required: true }],
+    sourceTables: [],
+    llmConfigId: '',
   }
+}
+
+function isRelationTab(): boolean {
+  return activeTab.value === '事实关系' || activeTab.value === '推理关系'
+}
+
+function addProperty() {
+  createForm.value.properties.push({ name: '', dataType: 'string', length: 64, required: false })
+}
+
+function removeProperty(index: number) {
+  createForm.value.properties.splice(index, 1)
+}
+
+function resolveDataType(row: PropertyRow): string {
+  return row.dataType === 'fixed_string' ? `fixed_string(${row.length || 64})` : row.dataType
+}
+
+const createDdlPreview = computed(() => {
+  const f = createForm.value
+  const keyword = isRelationTab() ? 'EDGE' : 'TAG'
+  const parts = f.properties
+    .filter((p) => p.name.trim())
+    .map((p) => {
+      let col = `${p.name} ${resolveDataType(p)}`
+      if (p.required) col += ' NOT NULL'
+      return col
+    })
+  return `CREATE ${keyword} IF NOT EXISTS ${f.name || '...'}(${parts.join(', ')});`
 })
 
 function mapEntity(schema: SchemaDefinition): Entity {
@@ -143,8 +202,23 @@ function applyDefinitions(definitions: SchemaDefinition[]) {
   scriptByRow.value = Object.fromEntries(
     definitions
       .filter((item) => item.script)
-      .map((item) => [item.name, { name: item.script!.filename }]),
+      .map((item) => [
+        item.name,
+        {
+          name: item.script!.filename,
+          workflowDefinitionId: item.script!.workflowDefinitionId,
+        },
+      ]),
   )
+}
+
+function executeSchemaWorkflow(schemaName: string) {
+  const definitionId = scriptByRow.value[schemaName]?.workflowDefinitionId
+  if (!definitionId) {
+    showToast('该脚本未定义 workflow(payload)，不能在工作流平台执行', 'warning')
+    return
+  }
+  void router.push({ name: 'graph-build' })
 }
 
 async function loadSchemas() {
@@ -156,10 +230,33 @@ async function loadSchemas() {
   applyDefinitions(definitions)
 }
 
+async function loadSourceTablesAndLlmConfigs() {
+  try {
+    const [tables, configs] = await Promise.all([
+      listSourceTables(),
+      listLlmConfigs(currentUserId),
+    ])
+    sourceTables.value = tables
+    llmConfigs.value = configs
+  } catch (error) {
+    showToast(schemaErrorMessage(error), 'warning')
+  }
+}
+
 function openCreate() {
-  form.value = {}
-  pendingCreate.value = null
+  createForm.value = emptyCreateForm()
+  confirming.value = false
   modalOpen.value = true
+}
+
+function toggleSourceTable(name: string) {
+  const list = createForm.value.sourceTables
+  const index = list.indexOf(name)
+  if (index >= 0) {
+    list.splice(index, 1)
+  } else {
+    list.push(name)
+  }
 }
 
 function schemaKey(name: string) {
@@ -169,123 +266,181 @@ function schemaKey(name: string) {
     .toLowerCase()
 }
 
-function mappings(value: string) {
-  return value.split('/').map((item) => item.trim()).filter(Boolean)
-}
-
-function identityProperties(value: string) {
-  const names = value
-    .split(/[\/+，,]/)
-    .map((item) => item.trim().replaceAll(' ', '_'))
-    .filter(Boolean)
-    .map((item, index) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(item) ? item : `field_${index + 1}`)
-  return [...new Set(names)].map((name) => ({
-    name,
-    dataType: 'string',
-    required: true,
-    rule: '唯一标识',
-    category: 'core' as const,
-  }))
-}
-
-function findEntity(value: string) {
-  const normalized = value.trim().toLowerCase()
-  return entities.value.find(
-    (item) => item.name.toLowerCase() === normalized || item.label.toLowerCase() === normalized,
-  )
-}
-
-function saveItem() {
-  for (const field of formSpec.value) {
-    if (field.required && !form.value[field.key]?.trim()) {
-      showToast(`请填写${field.label}`, 'warning')
-      return
-    }
+async function saveItem() {
+  const f = createForm.value
+  if (!f.name.trim()) {
+    showToast(isRelationTab() ? '请填写关系英文名（UPPER_SNAKE_CASE）' : '请填写实体名（PascalCase）', 'warning')
+    return
   }
-  if (activeTab.value !== '标准实体') {
-    if (!findEntity(form.value.source || '') || !findEntity(form.value.target || '')) {
-      showToast('关系起点和终点必须填写已存在实体的 Schema 名称', 'warning')
-      return
-    }
+  if (!f.label.trim()) {
+    showToast('请填写中文名', 'warning')
+    return
   }
-  pendingCreate.value = { tab: activeTab.value, values: { ...form.value } }
-  pendingUploadRow.value = ''
-  fileInput.value?.click()
-  showToast('请选择该 Schema 对应的 Python 脚本', 'info')
-}
-
-function triggerFileUpload(schemaId: string) {
-  pendingCreate.value = null
-  pendingUploadRow.value = schemaId
-  fileInput.value?.click()
-}
-
-async function createPendingSchema(file: File, pending: PendingCreate) {
-  const values = pending.values
-  if (pending.tab === '标准实体') {
-    const payload: EntitySchemaCreatePayload = {
-      schemaKey: schemaKey(values.label || ''),
-      name: values.label || '',
-      label: values.name || '',
-      description: values.description || '',
-      identityKey: values.key || '',
-      properties: identityProperties(values.key || ''),
-      mappings: mappings(values.source || ''),
-      isCore: false,
-    }
-    await createEntitySchema(payload, file, currentUserId)
+  const props = f.properties.filter((p) => p.name.trim())
+  if (props.length === 0) {
+    showToast('至少添加一个属性', 'warning')
+    return
+  }
+  const relation = isRelationTab()
+  if (relation && (!f.sourceEntityId || !f.targetEntityId)) {
+    showToast('请选择起点和终点实体', 'warning')
     return
   }
 
-  const source = findEntity(values.source || '')
-  const target = findEntity(values.target || '')
-  if (!source || !target) {
-    throw new Error('关系起点和终点必须填写已存在实体的 Schema 名称')
+  if (!confirming.value) {
+    confirming.value = true
+    return
   }
-  const payload: RelationSchemaCreatePayload = {
-    schemaKey: schemaKey(values.label || ''),
-    name: values.label || '',
-    label: values.name || '',
-    description: values.basis || '',
-    sourceSchemaId: source.id,
-    targetSchemaId: target.id,
-    sourceExpression: source.name,
-    targetExpression: target.name,
-    relationCategory: pending.tab === '事实关系' ? 'fact' : 'inferred',
-    properties: [
-      { name: 'source', dataType: `${source.name} ID`, required: true, category: 'core' },
-      { name: 'target', dataType: `${target.name} ID`, required: true, category: 'core' },
-    ],
-  }
-  await createRelationSchema(payload, file, currentUserId)
-}
 
-async function handleFileSelect(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
+  const properties = props.map((p) => ({
+    name: p.name.trim(),
+    dataType: resolveDataType(p),
+    required: p.required,
+    rule: '',
+    category: 'core' as const,
+  }))
+  const llmConfigId = f.llmConfigId || null
+
+  creating.value = true
   try {
-    if (pendingCreate.value) {
-      await createPendingSchema(file, pendingCreate.value)
-      modalOpen.value = false
-      showToast('Schema 与 Python 脚本已新增', 'success')
-    } else if (pendingUploadRow.value) {
-      await replaceSchemaScript(pendingUploadRow.value, file, currentUserId)
-      showToast(`已上传 ${file.name}`, 'success')
+    if (relation) {
+      const source = entities.value.find((e) => e.id === f.sourceEntityId)
+      const target = entities.value.find((e) => e.id === f.targetEntityId)
+      const payload: RelationSchemaCreatePayload = {
+        schemaKey: schemaKey(f.name),
+        name: f.name.trim(),
+        label: f.label.trim(),
+        description: f.description || '',
+        sourceSchemaId: f.sourceEntityId,
+        targetSchemaId: f.targetEntityId,
+        sourceExpression: source?.name || '',
+        targetExpression: target?.name || '',
+        relationCategory: activeTab.value === '事实关系' ? 'fact' : 'inferred',
+        properties,
+        mappings: f.sourceTables,
+        llmConfigId,
+      }
+      const result = await createRelationSchema(payload, currentUserId)
+      toastCreateResult(result)
+    } else {
+      const payload: EntitySchemaCreatePayload = {
+        schemaKey: schemaKey(f.name),
+        name: f.name.trim(),
+        label: f.label.trim(),
+        description: f.description || '',
+        identityKey: '',
+        properties,
+        mappings: f.sourceTables,
+        isCore: false,
+        llmConfigId,
+      }
+      const result = await createEntitySchema(payload, currentUserId)
+      toastCreateResult(result)
     }
+    modalOpen.value = false
     await loadSchemas()
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
   } finally {
-    input.value = ''
-    pendingUploadRow.value = ''
-    pendingCreate.value = null
+    creating.value = false
+  }
+}
+
+function toastCreateResult(result: SchemaDefinition) {
+  if (result.ddlStatus === 'succeeded') {
+    showToast(`已创建并执行图 DDL：${result.ddlStatement?.split('(')[0] || result.name}`, 'success')
+  } else if (result.ddlStatus === 'failed') {
+    showToast(`Schema 已保存，但图 DDL 执行失败：${result.ddlError || '未知错误'}`, 'warning')
+  } else {
+    showToast('Schema 已创建', 'success')
+  }
+}
+
+function openUploadModal(rowId: string, rowName: string) {
+  uploadTargetId.value = rowId
+  uploadTargetName.value = rowName
+  uploadState.value = 'idle'
+  uploadStage.value = ''
+  uploadMessage.value = ''
+  uploadIssues.value = []
+  uploadFileName.value = ''
+  uploadModalOpen.value = true
+}
+
+function pickUploadFile() {
+  uploadFileInput.value?.click()
+}
+
+async function onUploadFileChosen(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  input.value = ''
+  uploadFileName.value = file.name
+  uploadState.value = 'working'
+  uploadStage.value = 'starting'
+  uploadMessage.value = '正在上传并校验...'
+  uploadIssues.value = []
+  let succeeded = false
+  try {
+    await verifyAndSaveScript(uploadTargetId.value, file, currentUserId, {
+      onProgress: (stage, message) => {
+        uploadStage.value = stage
+        uploadMessage.value = message
+      },
+      onSuccess: () => {
+        succeeded = true
+        uploadState.value = 'success'
+        uploadMessage.value = '脚本已通过安全校验并保存'
+      },
+      onError: (message, issues) => {
+        uploadState.value = 'error'
+        uploadMessage.value = message
+        uploadIssues.value = issues
+      },
+    })
+    if (succeeded) {
+      await loadSchemas()
+    }
+  } catch (error) {
+    uploadState.value = 'error'
+    uploadMessage.value = schemaErrorMessage(error)
+    uploadIssues.value = []
+  }
+}
+
+function closeUploadModal() {
+  uploadModalOpen.value = false
+}
+
+async function openViewModal(rowId: string, rowName: string) {
+  uploadModalOpen.value = false
+  viewModalOpen.value = true
+  viewState.value = 'loading'
+  viewFilename.value = rowName
+  viewContent.value = ''
+  viewError.value = ''
+  try {
+    const data = await getScriptContent(rowId, currentUserId)
+    viewFilename.value = data.filename
+    viewContent.value = data.content
+    viewState.value = 'ready'
+    await nextTick()
+    if (viewCodeRef.value) {
+      viewCodeRef.value.removeAttribute('data-highlighted')
+      viewCodeRef.value.className = 'language-python'
+      hljs.highlightElement(viewCodeRef.value)
+    }
+  } catch (error) {
+    viewState.value = 'error'
+    viewError.value = schemaErrorMessage(error)
   }
 }
 
 onMounted(async () => {
   try {
     await loadSchemas()
+    await loadSourceTablesAndLlmConfigs()
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
   }
@@ -309,14 +464,14 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 
     <section class="schema-shell">
       <nav class="schema-tabs"><button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="activeTab=tab;keyword=''">{{ tab }}</button></nav>
-      <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeTab === '属性定义'">枚举字典作为属性约束统一维护</span></div><div class="schema-toolbar__actions"><button v-if="activeTab !== '属性定义'" class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><GkxInput v-model="keyword" allow-clear :placeholder="`搜索${activeTab}`" /></label></div></div>
+      <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeTab === '属性定义'">枚举字典作为属性约束统一维护</span></div><div class="schema-toolbar__actions"><button v-if="activeTab !== '属性定义'" class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :placeholder="`搜索${activeTab}`" /></label></div></div>
       <!-- <p v-if="schemaVersionMessage" class="schema-version-message">{{ schemaVersionMessage }}</p> -->
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button v-if="scriptByRow[row.name]?.workflowDefinitionId" type="button" class="schema-action-link" @click="executeSchemaWorkflow(row.name)">执行工作流 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '推理关系'" class="schema-table-wrap"><table><thead><tr><th>推理关系</th><th>Schema 名称</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredInference" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="triggerFileUpload(row.id)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-else-if="activeTab === '推理关系'" class="schema-table-wrap"><table><thead><tr><th>推理关系</th><th>Schema 名称</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredInference" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
       <div v-else-if="activeTab === '属性定义'" class="schema-table-wrap"><table><thead><tr><th>实体</th><th>主键</th><th>核心属性</th><th>动态属性 / 补充</th><th>主要来源</th></tr></thead><tbody><tr v-for="row in filteredAttributes" :key="row.entity"><td><code>{{ row.entity }}</code></td><td><b>{{ row.key }}</b></td><td class="mono-list">{{ row.core }}</td><td>{{ row.dynamic }}</td><td>{{ row.source }}</td></tr></tbody></table></div>
 
@@ -326,26 +481,158 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
     </section>
 
     <Teleport to="body">
-      <div v-if="modalOpen" class="schema-modal">
+      <div v-if="modalOpen" class="schema-modal schema-create-modal">
         <button class="schema-modal__mask" type="button" @click="modalOpen = false"></button>
-        <aside class="schema-modal__panel">
+        <aside class="schema-modal__panel schema-create-panel">
           <header><h2>新增{{ activeTab }}</h2><button type="button" @click="modalOpen = false">×</button></header>
-          <div class="schema-modal__body">
-            <label v-for="f in formSpec" :key="f.key">
-              <span>{{ f.label }}<em v-if="f.required">*</em></span>
-              <input v-if="f.type === 'text'" v-model="form[f.key]" />
-              <textarea v-else v-model="form[f.key]" rows="3"></textarea>
+          <div class="schema-modal__body schema-create-body">
+            <div class="create-row">
+              <label class="create-field">
+                <span>{{ isRelationTab() ? '关系英文名 *' : '实体名 *' }}</span>
+                <input v-model="createForm.name" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
+              </label>
+              <label class="create-field">
+                <span>中文名 *</span>
+                <input v-model="createForm.label" placeholder="如：技术" />
+              </label>
+            </div>
+
+            <div v-if="isRelationTab()" class="create-row">
+              <label class="create-field">
+                <span>起点实体 *</span>
+                <select v-model="createForm.sourceEntityId">
+                  <option value="">请选择</option>
+                  <option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</option>
+                </select>
+              </label>
+              <label class="create-field">
+                <span>终点实体 *</span>
+                <select v-model="createForm.targetEntityId">
+                  <option value="">请选择</option>
+                  <option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</option>
+                </select>
+              </label>
+            </div>
+
+            <label class="create-field create-field--full">
+              <span>建模说明</span>
+              <textarea v-model="createForm.description" rows="2"></textarea>
             </label>
+
+            <div class="create-field create-field--full">
+              <span>来源表（科技要素库，可多选）<small class="source-table-count">已选 {{ createForm.sourceTables.length }} / {{ sourceTables.length }} 张</small></span>
+              <div class="source-table-list">
+                <label v-for="t in sourceTables" :key="t.name" class="source-table-item">
+                  <input type="checkbox" :checked="createForm.sourceTables.includes(t.name)" @change="toggleSourceTable(t.name)" />
+                  <code>{{ t.name }}</code>
+                  <span v-if="t.comment" class="source-table-comment">{{ t.comment }}</span>
+                </label>
+                <span v-if="sourceTables.length === 0" class="source-table-empty">暂无可选表</span>
+              </div>
+            </div>
+
+            <label class="create-field create-field--full">
+              <span>默认 LLM 配置（作业启动时默认使用，可临时覆盖）</span>
+              <select v-model="createForm.llmConfigId">
+                <option value="">使用全局默认</option>
+                <option v-for="c in llmConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）{{ c.isDefault ? ' ★默认' : '' }}</option>
+              </select>
+            </label>
+
+            <div class="create-props">
+              <div class="create-props__head">
+                <span>属性列表 *</span>
+                <button type="button" class="create-props__add" @click="addProperty">＋ 添加属性</button>
+              </div>
+              <div v-for="(p, i) in createForm.properties" :key="i" class="create-prop-row">
+                <input v-model="p.name" placeholder="属性名" class="prop-name" />
+                <select v-model="p.dataType" class="prop-type">
+                  <option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</option>
+                </select>
+                <input v-if="p.dataType === 'fixed_string'" v-model.number="p.length" type="number" min="1" max="1024" class="prop-len" placeholder="N" />
+                <label class="prop-required"><input v-model="p.required" type="checkbox" />必填</label>
+                <button type="button" class="prop-remove" @click="removeProperty(i)" title="删除">×</button>
+              </div>
+            </div>
+
+            <div class="create-ddl">
+              <span class="create-ddl__label">nGQL 预览（创建时将执行）</span>
+              <pre class="create-ddl__pre">{{ createDdlPreview }}</pre>
+              <p v-if="confirming" class="create-ddl__confirm">请确认上述 DDL 将在图空间执行，点击「确认创建」提交。</p>
+            </div>
           </div>
           <footer>
             <button type="button" @click="modalOpen = false">取消</button>
-            <button type="button" class="primary" @click="saveItem">保存</button>
+            <button v-if="confirming" type="button" @click="confirming = false">返回修改</button>
+            <button type="button" class="primary" :disabled="creating" @click="saveItem">{{ creating ? '创建中...' : confirming ? '确认创建' : '预览并创建' }}</button>
           </footer>
         </aside>
       </div>
     </Teleport>
 
-    <input ref="fileInput" type="file" accept=".py" hidden @change="handleFileSelect" />
+    <input ref="uploadFileInput" type="file" accept=".py" hidden @change="onUploadFileChosen" />
+
+    <Teleport to="body">
+      <div v-if="uploadModalOpen" class="schema-modal script-upload-modal">
+        <button class="schema-modal__mask" type="button" @click="closeUploadModal"></button>
+        <aside class="schema-modal__panel">
+          <header><h2>上传脚本 · {{ uploadTargetName }}</h2><button type="button" @click="closeUploadModal">×</button></header>
+          <div class="schema-modal__body">
+            <div v-if="uploadState === 'idle'" class="upload-idle">
+              <p>选择 .py 脚本文件，上传后将通过 LLM 进行安全校验，校验通过才会保存。</p>
+              <button type="button" class="primary" @click="pickUploadFile">选择 .py 文件</button>
+            </div>
+            <div v-else-if="uploadState === 'working'" class="upload-working">
+              <div class="spinner" aria-label="校验中"></div>
+              <div class="upload-working__text">
+                <strong>{{ uploadFileName }}</strong>
+                <span class="upload-stage">阶段：{{ uploadStage }}</span>
+                <span class="upload-message">{{ uploadMessage }}</span>
+              </div>
+            </div>
+            <div v-else-if="uploadState === 'success'" class="upload-result">
+              <div class="upload-result__icon ok">✓</div>
+              <strong>脚本已通过安全校验并保存</strong>
+              <span>{{ uploadFileName }}</span>
+            </div>
+            <div v-else class="upload-result">
+              <div class="upload-result__icon err">✕</div>
+              <strong>校验未通过</strong>
+              <p class="upload-result__msg">{{ uploadMessage }}</p>
+              <ul v-if="uploadIssues.length" class="upload-result__issues">
+                <li v-for="(issue, i) in uploadIssues" :key="i">{{ issue }}</li>
+              </ul>
+            </div>
+          </div>
+          <footer>
+            <template v-if="uploadState === 'working'">
+              <button type="button" disabled>校验中...</button>
+            </template>
+            <template v-else>
+              <button v-if="uploadState === 'error'" type="button" class="primary" @click="uploadState = 'idle'">重新选择</button>
+              <button type="button" @click="closeUploadModal">{{ uploadState === 'success' ? '关闭' : '取消' }}</button>
+            </template>
+          </footer>
+        </aside>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="viewModalOpen" class="schema-modal script-view-modal">
+        <button class="schema-modal__mask" type="button" @click="viewModalOpen = false"></button>
+        <aside class="schema-modal__panel script-view-panel">
+          <header><h2>查看脚本 · {{ viewFilename }}</h2><button type="button" @click="viewModalOpen = false">×</button></header>
+          <div class="schema-modal__body script-view-body">
+            <div v-if="viewState === 'loading'" class="view-loading">加载中...</div>
+            <div v-else-if="viewState === 'error'" class="view-error">{{ viewError }}</div>
+            <pre v-else class="script-pre"><code ref="viewCodeRef" class="language-python">{{ viewContent }}</code></pre>
+          </div>
+          <footer>
+            <button type="button" @click="viewModalOpen = false">关闭</button>
+          </footer>
+        </aside>
+      </div>
+    </Teleport>
   </main>
 </template>
 
@@ -428,4 +715,69 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .schema-modal__panel footer{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #e5e6eb}
 .schema-modal__panel footer button{height:32px;padding:0 14px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:13px;cursor:pointer}
 .schema-modal__panel footer .primary{background:#165dff;color:#fff;border-color:#165dff}
+.schema-modal__panel footer button:disabled{opacity:.6;cursor:not-allowed}
+
+/* 上传脚本弹窗 */
+.script-upload-modal .schema-modal__body{min-height:140px}
+.upload-idle{display:flex;flex-direction:column;gap:14px;align-items:center;padding:14px 0;text-align:center}
+.upload-idle p{margin:0;color:#4e5969;font-size:13px;line-height:20px}
+.upload-idle .primary{height:34px;padding:0 18px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:13px;cursor:pointer}
+.upload-working{display:flex;align-items:center;gap:16px;padding:10px 4px}
+.spinner{flex:0 0 auto;width:28px;height:28px;border:3px solid #e3ebf6;border-top-color:#165dff;border-radius:50%;animation:spin 0.9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.upload-working__text{display:flex;flex-direction:column;gap:4px;min-width:0}
+.upload-working__text strong{font-size:13px;color:#1d2129;word-break:break-all}
+.upload-stage{color:#165dff;font-size:11px}
+.upload-message{color:#74849b;font-size:11px}
+.upload-result{display:flex;flex-direction:column;gap:8px;align-items:center;padding:18px 0;text-align:center}
+.upload-result__icon{display:grid;place-items:center;width:42px;height:42px;border-radius:50%;font-size:22px;color:#fff}
+.upload-result__icon.ok{background:#15a05a}
+.upload-result__icon.err{background:#e54848}
+.upload-result strong{font-size:14px;color:#1d2129}
+.upload-result span{color:#74849b;font-size:12px}
+.upload-result__msg{margin:0;color:#e54848;font-size:12px;line-height:18px;max-width:420px;word-break:break-all}
+.upload-result__issues{margin:6px 0 0;padding:10px 14px;list-style:none;border-radius:6px;background:#fff3f3;color:#b42318;font-size:12px;line-height:20px;text-align:left;max-width:440px;max-height:200px;overflow:auto}
+.upload-result__issues li{padding:2px 0}
+
+/* 查看脚本弹窗 */
+.script-view-panel{width:min(820px,100%)}
+.script-view-body{max-height:72vh;padding:0}
+.script-pre{margin:0;max-height:72vh;overflow:auto;background:#0d1117;border-radius:0}
+.script-pre code{display:block;padding:16px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:20px;background:transparent;color:#c9d1d9;white-space:pre}
+.view-loading,.view-error{padding:30px;text-align:center;color:#74849b;font-size:13px}
+.view-error{color:#e54848}
+
+/* 创建 Schema 弹窗 */
+.schema-create-panel{width:min(680px,100%)}
+.schema-create-body{max-height:72vh;gap:14px}
+.create-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.create-field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#4e5969}
+.create-field--full{grid-column:1/-1}
+.create-field input,.create-field textarea,.create-field select{height:32px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:13px;color:#1d2129;background:#fff}
+.create-field textarea{height:auto;padding:6px 8px;resize:vertical}
+.create-field select{appearance:auto}
+.create-props{display:flex;flex-direction:column;gap:8px}
+.create-props__head{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#4e5969}
+.create-props__add{height:26px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#165dff;font-size:12px;cursor:pointer}
+.create-props__add:hover{border-color:#165dff}
+.create-prop-row{display:grid;grid-template-columns:1.4fr 1.2fr 0.6fr auto auto;gap:8px;align-items:center}
+.prop-name,.prop-type,.prop-len{height:30px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:12px;color:#1d2129;background:#fff}
+.prop-type{appearance:auto}
+.prop-required{display:flex;align-items:center;gap:4px;font-size:11px;color:#4e5969;white-space:nowrap}
+.prop-required input{margin:0}
+.prop-remove{width:24px;height:24px;border:0;border-radius:4px;background:transparent;color:#e54848;font-size:16px;cursor:pointer}
+.prop-remove:hover{background:#fff3f3}
+.create-ddl{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.create-ddl__label{font-size:11px;color:#74849b}
+.create-ddl__pre{margin:0;padding:10px 12px;max-height:140px;overflow:auto;background:#0d1117;border-radius:6px;color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:18px;white-space:pre-wrap;word-break:break-all}
+.create-ddl__confirm{margin:6px 0 0;color:#b54708;font-size:11px;line-height:16px}
+.source-table-count{float:right;color:#165dff;font-size:10px;font-weight:400}
+.source-table-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:6px;max-height:280px;overflow:auto;padding:8px;border:1px solid #e3ebf6;border-radius:4px;background:#fafcff}
+.source-table-item{display:flex;align-items:center;gap:6px;min-width:0;padding:6px 8px;border:1px solid #e3ebf6;border-radius:5px;font-size:11px;color:#4e5969;background:#fff;cursor:pointer;transition:border-color .15s,box-shadow .15s}
+.source-table-item:hover{border-color:#165dff;box-shadow:0 2px 6px rgba(22,93,255,.12)}
+.source-table-item:has(input:checked){border-color:#165dff;background:#eef5ff}
+.source-table-item input{flex:0 0 auto;margin:0}
+.source-table-item code{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 5px;border-radius:3px;background:#edf4ff;color:#165dff;font-size:10px}
+.source-table-comment{flex:1;min-width:0;color:#8191aa;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.source-table-empty{grid-column:1/-1;padding:12px;text-align:center;color:#8191aa;font-size:11px}
 </style>

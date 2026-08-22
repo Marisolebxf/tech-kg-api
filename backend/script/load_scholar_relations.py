@@ -40,6 +40,7 @@ import argparse
 import hashlib
 import logging
 import os
+import time
 from collections.abc import Iterable
 from datetime import datetime
 
@@ -48,10 +49,20 @@ from sqlalchemy import select, text
 from db_model.scholar import DwdScholarCoauthor, DwdScholarPaperRelation
 from infra.graph_db import get_trs_graph_client
 from infra.mysql import MySQLClient
+from script.scholar_provenance import (
+    CONFIDENCE_CROSS_DOMAIN_ID,
+    CONFIDENCE_PLACEHOLDER_ORG,
+    CONFIDENCE_SOURCE_PRIMARY_KEY,
+    confidence_props,
+    organization_provenance,
+)
 
 logger = logging.getLogger("script.load_scholar_relations")
 
 BATCH_ID = f"BATCH_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_scholar_rel"
+
+# 学者的机构信息来自学者表本身；对齐到正式 Organization 之前机构溯源表就是 dwd_scholar。
+ORGANIZATION_BASE_TABLE = "dwd_scholar"
 
 
 # ---------------------------------------------------------------------------
@@ -78,30 +89,43 @@ def org_vid(scholar_org_id: str | None, org_name: str | None) -> str | None:
 # ---------------------------------------------------------------------------
 # Extraction helpers
 # ---------------------------------------------------------------------------
-def _iter_scholar_affiliations(session, batch_size: int = 500) -> Iterable[dict]:
-    """从 ``dwd_scholar`` 分页读取学者→机构映射所需字段。
-
-    直接用 SQL 而非 ORM，因为 ``scholar_org_id`` 是新增字段，在部分环境的
-    ``gkx_element`` 中可能尚未部署；使用 ``information_schema`` 探测后按需
-    选择 SELECT 列表。
-    """
-    has_org_id = (
+def _has_dwd_scholar_column(session, column_name: str) -> bool:
+    """``dwd_scholar`` 是否存在某列（部分环境未部署新增列时按需兜底）。"""
+    return (
         session.execute(
             text(
                 "SELECT COUNT(*) FROM information_schema.columns "
                 "WHERE table_schema = DATABASE() "
                 "AND table_name = 'dwd_scholar' "
-                "AND column_name = 'scholar_org_id'"
-            )
+                "AND column_name = :col"
+            ),
+            {"col": column_name},
         ).scalar_one()
         > 0
     )
 
-    org_id_col = "scholar_org_id" if has_org_id else "NULL AS scholar_org_id"
+
+def _iter_scholar_affiliations(session, batch_size: int = 500) -> Iterable[dict]:
+    """从 ``dwd_scholar`` 分页读取学者→机构映射所需字段。
+
+    直接用 SQL 而非 ORM，因为 ``scholar_org_id`` 等是新增字段，在部分环境的
+    ``gkx_element`` 中可能尚未部署；使用 ``information_schema`` 探测后按需
+    选择 SELECT 列表。任职时间/部门/职位随 AFFILIATED_WITH 边写入，供同事关系
+    模块按边时间做重叠判定。
+    """
+    optional_cols = {
+        "scholar_org_id": "scholar_org_id",
+        "work_experience_date": "work_experience_date",
+        "work_experience_department_zh": "work_experience_department_zh",
+        "work_experience_position_zh": "work_experience_position_zh",
+    }
+    col_select = [
+        col if _has_dwd_scholar_column(session, col) else f"NULL AS {col}" for col in optional_cols
+    ]
     sql = text(
         f"""
         SELECT scholar_id,
-               {org_id_col},
+               {", ".join(col_select)},
                scholar_org_name_zh,
                scholar_org_name_en
         FROM dwd_scholar
@@ -122,6 +146,9 @@ def _iter_scholar_affiliations(session, batch_size: int = 500) -> Iterable[dict]
                 "scholar_org_id": r.scholar_org_id,
                 "org_zh": r.scholar_org_name_zh,
                 "org_en": r.scholar_org_name_en,
+                "work_experience_date": r.work_experience_date or "",
+                "work_experience_department_zh": r.work_experience_department_zh or "",
+                "work_experience_position_zh": r.work_experience_position_zh or "",
             }
         offset += len(rows)
         if len(rows) < batch_size:
@@ -187,10 +214,50 @@ def _iter_paper_relations(session, batch_size: int = 2000) -> Iterable[dict]:
 # ---------------------------------------------------------------------------
 # Writers
 # ---------------------------------------------------------------------------
+def ensure_schema(graph) -> None:
+    """幂等补齐 AFFILIATED_WITH 边的任职时间/部门/职位属性（旧空间用 ALTER ADD）。"""
+    wanted = [
+        ("work_experience_date", "string"),
+        ("work_experience_department_zh", "string"),
+        ("work_experience_position_zh", "string"),
+    ]
+    try:
+        existing = {
+            str(row["Field"]) for row in graph.execute_read("DESCRIBE EDGE AFFILIATED_WITH").records
+        }
+    except Exception:
+        logger.warning("DESCRIBE EDGE AFFILIATED_WITH 失败，跳过 ALTER，依赖建库 DDL")
+        return
+    missing = [(field, kind) for field, kind in wanted if field not in existing]
+    if not missing:
+        return
+    graph.execute_write(
+        f"ALTER EDGE AFFILIATED_WITH ADD ({', '.join(f'{f} {k}' for f, k in missing)});"
+    )
+    # NebulaGraph schema 变更有传播延迟，轮询直到生效。
+    expected = {f for f, _ in missing}
+    for _ in range(15):
+        visible = {
+            str(row["Field"]) for row in graph.execute_read("DESCRIBE EDGE AFFILIATED_WITH").records
+        }
+        if expected <= visible:
+            return
+        time.sleep(1)
+    logger.warning("AFFILIATED_WITH 新属性 %s 未在 15s 内生效", expected)
+
+
 def load_affiliations(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
-    """写入 AFFILIATED_WITH 边。返回统计信息。"""
+    """写入 AFFILIATED_WITH 边。
+
+    置信度按机构标识来源分档：源表带 ``scholar_org_id`` 时为
+    :data:`~script.scholar_provenance.CONFIDENCE_SOURCE_PRIMARY_KEY`；只能按机构名
+    md5 生成桩机构时降为 :data:`~script.scholar_provenance.CONFIDENCE_PLACEHOLDER_ORG`。
+
+    Returns:
+        统计字典，含写入条数、无机构跳过条数、桩机构条数。
+    """
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    ok = skipped = shown = 0
+    ok = skipped = shown = placeholder = 0
 
     for rec in _iter_scholar_affiliations(session):
         src = person_vid(rec["scholar_id"])
@@ -200,17 +267,48 @@ def load_affiliations(session, graph, *, dry_run: bool, preview: int = 5) -> dic
             skipped += 1
             continue
 
+        has_org_id = bool(rec["scholar_org_id"] and rec["scholar_org_id"].strip())
+        if has_org_id:
+            conf = confidence_props(
+                CONFIDENCE_SOURCE_PRIMARY_KEY,
+                "source_org_id",
+                "dwd_scholar.scholar_org_id 直接指向机构，无需名称推断",
+            )
+        else:
+            conf = confidence_props(
+                CONFIDENCE_PLACEHOLDER_ORG,
+                "org_name_md5_placeholder",
+                "源表无 scholar_org_id，机构顶点按机构名 md5 生成桩 VID，待正式 Organization 落地后对齐",
+            )
+            placeholder += 1
+
         props = {
             "affiliation_name": org_name,
+            # 同事关系按每条任职边的时间和部门判定，不从 Person
+            # 节点回退。这三项必须随 AFFILIATED_WITH 一起入图。
+            "work_experience_date": rec.get("work_experience_date") or "",
+            "work_experience_department_zh": rec.get("work_experience_department_zh") or "",
+            "work_experience_position_zh": rec.get("work_experience_position_zh") or "",
             "source": "scholar",
             "source_table": "dwd_scholar",
             "source_record_id": rec["scholar_id"],
             "ingest_batch": BATCH_ID,
             "ingest_time": now,
+            **organization_provenance(
+                ORGANIZATION_BASE_TABLE if has_org_id else None,
+                rec["scholar_org_id"] if has_org_id else None,
+            ),
+            **conf,
         }
         if dry_run:
             if shown < preview:
-                logger.info("[dry-run] %s -[AFFILIATED_WITH]-> %s  %s", src, dst, org_name)
+                logger.info(
+                    "[dry-run] %s -[AFFILIATED_WITH]-> %s  %s  confidence=%s",
+                    src,
+                    dst,
+                    org_name,
+                    props["confidence"],
+                )
                 shown += 1
         else:
             graph.merge_edge(
@@ -222,7 +320,7 @@ def load_affiliations(session, graph, *, dry_run: bool, preview: int = 5) -> dic
             )
         ok += 1
 
-    return {"written": ok, "skipped_no_org": skipped}
+    return {"written": ok, "skipped_no_org": skipped, "placeholder_org": placeholder}
 
 
 def load_coauthors(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
@@ -240,6 +338,11 @@ def load_coauthors(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
             "source_record_id": rid,
             "ingest_batch": BATCH_ID,
             "ingest_time": now,
+            **confidence_props(
+                CONFIDENCE_SOURCE_PRIMARY_KEY,
+                "source_primary_key",
+                "dwd_scholar_coauthor 双方 scholar_id 均为源表主键，无需推断",
+            ),
         }
         if dry_run:
             if shown < preview:
@@ -296,6 +399,11 @@ def load_authored_by_fallback(session, graph, *, dry_run: bool, preview: int = 5
             "source_record_id": rid,
             "ingest_batch": BATCH_ID,
             "ingest_time": now,
+            **confidence_props(
+                CONFIDENCE_CROSS_DOMAIN_ID,
+                "cross_domain_id_match",
+                "paper_id 与 scholar_id 分别命中已存在的 Paper、Person 顶点",
+            ),
         }
         if dry_run:
             if shown < preview:
@@ -339,6 +447,10 @@ def run(
 
     session = mysql.session()
     try:
+        # dry-run 不得修改图 Schema；正式同步则先幂等补齐旧 dev
+        # 空间的任职边字段，再写入关系数据。
+        if not dry_run:
+            ensure_schema(graph)
         aff_stats = load_affiliations(session, graph, dry_run=dry_run)
         logger.info("AFFILIATED_WITH: %s", aff_stats)
         co_stats = load_coauthors(session, graph, dry_run=dry_run)

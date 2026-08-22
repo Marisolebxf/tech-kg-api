@@ -281,7 +281,7 @@ const relationDetailRows = computed(() => {
     ['目标实体', `${to.label} / ${to.entityType}`] as const,
     ['关系类型', edge.label] as const,
     ['关系分类', edge.category] as const,
-    ['置信度', `${(edge.confidence ?? Math.min(from.confidence, to.confidence)).toFixed(2)}`] as const,
+    ['置信度', `${(edge.confidence ?? Math.min(from.confidence ?? 0, to.confidence ?? 0)).toFixed(2)}`] as const,
     ['命中规则', props.moduleInfo.rules[0]?.name ?? '已命中关系识别规则'] as const,
   ]
 })
@@ -300,7 +300,7 @@ const selectedProvenanceTarget = computed(() => {
       name: node.label,
       type: node.entityType,
       id: node.id,
-      confidence: node.confidence.toFixed(2),
+      confidence: (node.confidence ?? 0).toFixed(2),
     }
   }
   const edge = selectedEdge.value
@@ -312,7 +312,7 @@ const selectedProvenanceTarget = computed(() => {
     name: `${from.label} → ${to.label}`,
     type: edge.label,
     id: edge.id,
-    confidence: (edge.confidence ?? Math.min(from.confidence, to.confidence)).toFixed(2),
+    confidence: (edge.confidence ?? Math.min(from.confidence ?? 0, to.confidence ?? 0)).toFixed(2),
   }
 })
 function formatTimestamp(date: Date) {
@@ -400,7 +400,7 @@ const liveEntityRows = computed(() => {
       ['实体名称', selected.label],
       ['实体类型', selected.entityType],
       ['命中关系', selected.relations],
-      ['置信度', selected.confidence.toFixed(2)],
+      ['置信度', (selected.confidence ?? 0).toFixed(2)],
     ]
     if (selected.evidence?.length) {
       rows.push(['证据', selected.evidence.join('；')])
@@ -1097,7 +1097,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           <div><dt>实体名称</dt><dd>{{ selectedNode.label }}</dd></div>
           <div><dt>实体类型</dt><dd>{{ selectedNode.entityType }}</dd></div>
           <div><dt>命中关系</dt><dd>{{ selectedNode.relations }}</dd></div>
-          <div><dt>置信度</dt><dd>{{ selectedNode.confidence.toFixed(2) }}</dd></div>
+          <div><dt>置信度</dt><dd>{{ (selectedNode.confidence ?? 0).toFixed(2) }}</dd></div>
         </dl>
         <dl v-else-if="resultMode === 'relation' && liveRelationRows" class="result-panel__table">
           <div v-for="([label, value], index) in liveRelationRows" :key="`rel-${label}-${index}`">

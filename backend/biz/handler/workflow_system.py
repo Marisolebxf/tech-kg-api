@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from application.workflow_operations import workflow_operations_application
 from biz.schemas.common import ApiResponse
@@ -74,13 +74,30 @@ async def execute_definition(definition_id: str, request: WorkflowExecuteRequest
     definition = service.repo.get_definition(definition_id)
     if definition is None:
         raise HTTPException(status_code=404, detail="工作流定义不存在")
-    execution = await service.execute_definition(definition, request.payload, request.workflow_id)
+    payload = dict(request.payload)
+    if request.llm_config_id is not None:
+        payload["llm_config_id"] = request.llm_config_id
+    if request.since is not None:
+        payload["since"] = request.since
+    try:
+        execution = await service.execute_definition(
+            definition, payload, request.workflow_id, persist_task=True
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ApiResponse(data=execution, msg="工作流执行请求已受理")
+
+
+@router.get("/executions", response_model=ApiResponse)
+async def list_executions(
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> ApiResponse:
+    return ApiResponse(data=service.list_executions(limit=limit))
 
 
 @router.get("/executions/{execution_id}", response_model=ApiResponse)
 async def get_execution(execution_id: str) -> ApiResponse:
-    execution = service.repo.get_execution(execution_id)
+    execution = await service.get_execution(execution_id)
     if execution is None:
         raise HTTPException(status_code=404, detail="工作流执行记录不存在")
     return ApiResponse(data=execution)

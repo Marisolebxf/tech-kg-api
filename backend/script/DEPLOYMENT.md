@@ -91,13 +91,23 @@ curl -X POST http://127.0.0.1:8000/api/v1/kg-service/industry-node-top-events \
 
 ## 6. 增量（周期）
 
-支持 `update_time`/`updated_time` 列的域（scholar/org/paper/patent/产业链；project 无 → 退化全量）：
+已接 `--mode incremental`（读 `script/.etl_watermark/<域>.txt` 水位,只灌 `update_time/updated_time > 水位` 的行,整批成功后才前进水位,原子写,丢失/损坏→退化全量）:
 
 ```bash
-.venv/bin/python -m script.load_scholar_entities --mode incremental          # 读 .etl_watermark/scholar.txt 水位,只灌 update_time>水位 的行
+.venv/bin/python -m script.load_scholar_entities --mode incremental          # 水位域:scholar(dwd_scholar.update_time)
+.venv/bin/python -m script.organization_entity_etl load --full --write --mode incremental   # 水位域:org_entity(各表 updated_time;无该列的退化全量)
 ```
 
-- 水位文件 `backend/script/.etl_watermark/<域>.txt`：整批成功后才前进、原子写；丢失/损坏→退化全量（只慢不丢）。
+未接 `--mode`(数据较静态或抽取逻辑为多 spec 专有,暂走全量,重跑幂等):
+- `organization_relation_etl`(治理/风险/资讯边——多 spec 专有抽取,接水位需改各 spec SQL,后续)
+- `load_industry_chain_graph`(产业链节点,数据静态;无 argparse,暂全量)
+- `load_project_graph`(仍 merge_node+dev-gate,见 §6 排错)
+
+cron 示例:`0 3 * * * cd backend && TRS_GRAPH_SPACE=<space> PYTHONPATH=. .venv/bin/python -m script.load_scholar_entities --mode incremental`
+
+- 水位文件 `backend/script/.etl_watermark/<域>.txt`：整批成功后才前进、原子写；丢失/损坏→退化全量（只慢不丢）。水位别删；删了即退化全量。
+
+> Person 数说明:`dwd_scholar` 仅 ~2163 条 status=1 学者(非 3.3 万);学者 ETL 全量写入这 2163;图中 Person 总数 = 学者 + 机构域法人/股东/控制人等。dev Person 多是因源库或机构域行更多,非学者 ETL 漏写。
 - cron 示例：`0 3 * * * cd backend && TRS_GRAPH_SPACE=<space> PYTHONPATH=. .venv/bin/python -m script.load_scholar_entities --mode incremental`
 - **水位别删**；删了即退化全量。
 

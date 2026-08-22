@@ -10,3 +10,4 @@ var/
 .cache/organization_milvus/
 .milvus_artifacts/
 output/organization_alignment_*.jsonl
+script/.etl_watermark/

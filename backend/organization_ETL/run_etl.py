@@ -112,7 +112,11 @@ def _preflight(scope: str, env_path: Path) -> tuple[int, dict[str, Any]]:
     expected_tables = sorted({spec.name for spec in selected})
     try:
         with gkx_element_read_session() as session:
-            meta = session.execute(text("SELECT DATABASE() AS db, VERSION() AS version")).mappings().one()
+            meta = (
+                session.execute(text("SELECT DATABASE() AS db, VERSION() AS version"))
+                .mappings()
+                .one()
+            )
             rows = session.execute(
                 text(
                     "SELECT TABLE_NAME, COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
@@ -121,7 +125,9 @@ def _preflight(scope: str, env_path: Path) -> tuple[int, dict[str, Any]]:
             ).mappings()
             columns_by_table: dict[str, set[str]] = {}
             for row in rows:
-                columns_by_table.setdefault(str(row["TABLE_NAME"]), set()).add(str(row["COLUMN_NAME"]))
+                columns_by_table.setdefault(str(row["TABLE_NAME"]), set()).add(
+                    str(row["COLUMN_NAME"])
+                )
             missing_tables = sorted(set(expected_tables) - set(columns_by_table))
             selected_relations = [
                 spec for spec in RELATION_SPECS if scope == "all" or spec.scope == scope
@@ -225,7 +231,11 @@ def _init_schema(confirmed: bool) -> tuple[int, dict[str, Any]]:
     with exclusive_etl_lock("organization_entity_schema", "schema"):
         graph = get_trs_graph_client()
         initialize_schema(graph)
-    return 0, {"ok": True, "space": os.environ["TRS_GRAPH_SPACE"], "message": "机构图 Schema 已初始化/补齐"}
+    return 0, {
+        "ok": True,
+        "space": os.environ["TRS_GRAPH_SPACE"],
+        "message": "机构图 Schema 已初始化/补齐",
+    }
 
 
 def _verify() -> tuple[int, dict[str, Any]]:

@@ -42,7 +42,7 @@ onMounted(loadSecurity)
 <template>
   <div class="security-page">
     <header class="security-hero">
-      <div><span>ACCOUNT SECURITY</span><h1>账号与安全</h1><p>查看账号绑定和登录保护；密码与基础资料由统一用户中心集中管理。</p></div>
+      <div><span>ACCOUNT SECURITY</span><p>查看账号绑定和登录保护；密码与基础资料由统一用户中心集中管理。</p></div>
       <b v-if="security">{{ security.accountStatus === '正常' ? '安全状态正常' : '账号状态异常' }}</b>
     </header>
 

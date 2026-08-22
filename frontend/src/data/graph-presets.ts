@@ -12,6 +12,7 @@ export interface GraphNodeData {
   relations: string
   evidence: string[]
   level?: number
+  properties?: Record<string, unknown>
 }
 
 export interface GraphEdgeData {
@@ -20,6 +21,8 @@ export interface GraphEdgeData {
   to: string
   label: string
   category: string
+  confidence?: number
+  properties?: Record<string, unknown>
 }
 
 export interface GraphPreset {

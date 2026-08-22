@@ -1685,32 +1685,12 @@ watch(activeServiceKey, () => {
   selectedGraphEdgeId.value = null
 })
 
-const pageMeta = computed(() => {
-  const map: Record<PlatformTab, { title: string }> = {
-    overview: { title: '亿级科技知识图谱平台' },
-    processing: { title: '数据处理与结构化输出' },
-    construction: { title: '图谱构建与治理' },
-    query: { title: '综合图谱查询' },
-    service: { title: activeService.value.title },
-  }
-  return map[activeTab.value]
-})
-
 </script>
 
 <template>
-  <div class="platform-page">
+  <div class="platform-page" :class="{ 'has-overview-actions': activeTab === 'overview' }">
     <header v-if="activeTab === 'overview'" class="platform-hero">
-      <div class="platform-hero__main">
-        <h1>{{ pageMeta.title }}</h1>
-      </div>
       <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><!-- <RouterLink to="/tasks?module=图谱版本">当前图谱 KG-2026.07.12.008</RouterLink> --><RouterLink to="/tasks">查看任务</RouterLink><RouterLink to="/manual-review">进入人工处理</RouterLink></div>
-    </header>
-
-    <header v-else class="platform-page-head">
-      <div>
-        <h1>{{ pageMeta.title }}</h1>
-      </div>
     </header>
 
     <main v-if="activeTab === 'overview'" class="platform-content platform-overview">
@@ -2417,43 +2397,36 @@ print(response.json())</pre>
 <style scoped>
 .platform-page {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 16px;
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
   height: 100%;
   min-width: 0;
   color: var(--text-primary);
   font-size: 16px;
 }
 
-.platform-hero {
+.platform-page.has-overview-actions {
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+
+.platform-page.has-overview-actions .platform-hero {
   position: relative;
   overflow: hidden;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: flex-end;
   gap: 14px;
-  min-height: 62px;
-  padding: 11px 18px;
-  border: 1px solid rgba(132, 178, 246, 0.86);
+  min-height: 36px !important;
+  padding: 0 !important;
+  border: 0 !important;
   border-radius: 12px;
-  background:
-    linear-gradient(135deg, rgba(216, 235, 255, 0.98) 0%, rgba(237, 247, 255, 0.98) 48%, rgba(211, 242, 255, 0.94) 100%),
-    #e5f1ff;
-  box-shadow:
-    0 8px 22px rgba(48, 105, 194, 0.13),
-    inset 0 1px 0 rgba(255, 255, 255, 0.96);
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .platform-hero::before {
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(90deg, rgba(22, 93, 255, 0.075) 1px, transparent 1px),
-    linear-gradient(rgba(22, 93, 255, 0.075) 1px, transparent 1px);
-  background-size: 34px 34px;
-  mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0.62), transparent 72%);
-  pointer-events: none;
-  content: "";
+  display: none;
 }
 
 .platform-hero > * {
@@ -2610,14 +2583,14 @@ print(response.json())</pre>
 .platform-summary-card { position:relative;display:grid;grid-template-rows:auto minmax(0,1fr);height:100%;min-width:0;overflow:hidden; }
 .platform-summary-card::after { position:absolute;right:-35px;bottom:-55px;width:130px;height:130px;border-radius:50%;background:rgba(22,93,255,.045);content:"";pointer-events:none; }
 .platform-summary-card>header { display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px;border-bottom:1px solid #dce8f8;background:rgba(255,255,255,.75); }
-.platform-summary-card>header>div { display:grid;gap:4px; }.platform-summary-card>header>div>strong { color:#263b5a;font-size:13px; }
-.platform-summary-card>header span { display:flex;align-items:center;gap:5px;color:#067647;font-size:9px; }.platform-summary-card>header span i { width:6px;height:6px;border-radius:50%;background:#12b76a;box-shadow:0 0 0 3px #dcfae6; }
-.platform-summary-card>header span.warning { color:#b42318; }.platform-summary-card>header span.warning i { background:#d92d20;box-shadow:0 0 0 3px #fee4e2; }
-.platform-summary-card>header a,.platform-summary-card>header button { padding:0;border:0;background:transparent;color:#165dff;font-size:10px;text-decoration:none;white-space:nowrap;cursor:pointer; }
-.platform-summary-card__main { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-height:112px;background:#fff; }
-.platform-summary-card__main section { display:flex;justify-content:center;gap:5px;min-width:0;padding:20px 10px;border-right:1px solid #e3ebf6;flex-direction:column; }.platform-summary-card__main section:last-child { border-right:0; }
-.platform-summary-card__main strong { color:#165dff;font-size:clamp(24px,1.9vw,34px);line-height:40px;letter-spacing:-.75px;white-space:nowrap;font-variant-numeric:tabular-nums; }.platform-summary-card.is-relation .platform-summary-card__main strong { color:#7a5af8; }.platform-summary-card.is-property .platform-summary-card__main strong { color:#f79009; }.platform-summary-card .platform-summary-card__main .is-added strong { color:#079455; }
-.platform-summary-card__main span { color:#66758f;font-size:12px;white-space:nowrap; }
+.platform-summary-card>header>div { display:grid;gap:4px; }.platform-summary-card>header>div>strong { color:#1d2129;font-size:16px!important;line-height:24px; }
+.platform-summary-card>header span { display:flex;align-items:center;gap:5px;color:#4e5969;font-size:12px!important;line-height:18px; }.platform-summary-card>header span i { width:6px;height:6px;border-radius:50%;background:#86909c;box-shadow:0 0 0 3px #f2f3f5; }
+.platform-summary-card>header span.warning { color:#4e5969; }.platform-summary-card>header span.warning i { background:#86909c;box-shadow:0 0 0 3px #f2f3f5; }
+.platform-summary-card>header a,.platform-summary-card>header button { padding:0;border:0;background:transparent;color:#4e5969;font-size:12px!important;line-height:18px;text-decoration:none;white-space:nowrap;cursor:pointer; }
+.platform-summary-card__main { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-height:88px;background:#fff; }
+.platform-summary-card__main section { display:flex;justify-content:center;gap:4px;min-width:0;padding:16px 12px;border-right:1px solid #e5e6eb;flex-direction:column; }.platform-summary-card__main section:last-child { border-right:0; }
+.platform-summary-card__main strong { color:#1d2129!important;font-size:16px!important;line-height:24px;letter-spacing:0;white-space:nowrap;font-variant-numeric:tabular-nums; }.platform-summary-card.is-relation .platform-summary-card__main strong,.platform-summary-card.is-property .platform-summary-card__main strong,.platform-summary-card .platform-summary-card__main .is-added strong { color:#1d2129!important; }
+.platform-summary-card__main span { color:#4e5969;font-size:14px!important;line-height:22px;white-space:nowrap; }
 .platform-summary-card__items { position:relative;z-index:1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:10px 8px;background:#f8fbff; }
 .platform-summary-card__items>a { display:grid;gap:3px;padding:2px 8px;border-right:1px solid #e1eaf5;color:inherit;text-decoration:none;transition:background-color .2s ease; }.platform-summary-card__items>a:last-child { border-right:0; }.platform-summary-card__items>a:hover { background:#eef5ff; }
 .platform-summary-card__items em { overflow:hidden;color:#8290a5;font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }.platform-summary-card__items strong { overflow:hidden;color:#344861;font-size:10px;text-overflow:ellipsis;white-space:nowrap; }
@@ -2721,7 +2694,7 @@ print(response.json())</pre>
 .platform-donut.is-entity { background:conic-gradient(#2e90fa 0 34%,#7a5af8 34% 57%,#12b76a 57% 74%,#f79009 74% 85%,#98a2b3 85% 100%); }
 .platform-donut.is-relation { background:conic-gradient(#165dff 0 32%,#2e90fa 32% 52%,#06aed4 52% 70%,#7a5af8 70% 84%,#98a2b3 84% 100%); }
 .platform-donut>span { position:relative;z-index:1;display:grid;gap:2px;text-align:center; }
-.platform-donut>span strong { color:#10264c;font-size:19px; }
+.platform-donut>span strong { color:#1d2129;font-size:16px;line-height:24px; }
 .platform-donut>span em { color:#8290a7;font-size:10px;font-style:normal; }
 .platform-structure-legend article { display:grid;grid-template-columns:minmax(0,1fr) 160px;align-items:center;gap:14px;min-height:38px;border-bottom:1px solid #edf2f8; }
 .platform-structure-legend article:last-child { border-bottom:0; }

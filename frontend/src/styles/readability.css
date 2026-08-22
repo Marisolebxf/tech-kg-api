@@ -197,44 +197,43 @@
   font-size: 12px !important;
 }
 
-/* The overview grows with its content and the complete main column scrolls.
-   This avoids the previous nested fixed-height containers clipping the asset
-   charts below the first screen. */
+/* Keep the overview inside the third-layer workspace. The overview content
+   scrolls within that surface instead of expanding through the outer shell. */
 .app-main.is-overview-page {
-  overflow-y: auto !important;
+  overflow: hidden !important;
+}
+
+.app-main.is-overview-page .app-workspace {
+  height: 100% !important;
+  min-height: 0;
+  overflow: hidden !important;
+}
+
+.app-main.is-overview-page .platform-page {
+  height: 100% !important;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr) !important;
+}
+
+.app-main.is-overview-page .platform-content {
+  min-height: 0 !important;
+  overflow: auto !important;
+  padding-right: 4px;
+  padding-bottom: 16px;
   scrollbar-color: #91acd2 transparent !important;
   scrollbar-width: thin !important;
 }
 
-.app-main.is-overview-page::-webkit-scrollbar {
+.app-main.is-overview-page .platform-content::-webkit-scrollbar {
   display: block;
-  width: 9px;
+  width: 8px;
 }
 
-.app-main.is-overview-page::-webkit-scrollbar-thumb {
+.app-main.is-overview-page .platform-content::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 999px;
   background: #91acd2 !important;
   background-clip: padding-box !important;
-}
-
-.app-main.is-overview-page .app-workspace {
-  height: auto !important;
-  min-height: calc(100% - 42px);
-  overflow: visible !important;
-}
-
-.app-main.is-overview-page .platform-page {
-  height: auto !important;
-  min-height: 100%;
-  grid-template-rows: auto auto !important;
-}
-
-.app-main.is-overview-page .platform-content {
-  min-height: auto !important;
-  overflow: visible !important;
-  padding-right: 0;
-  padding-bottom: 24px;
 }
 
 /* Other modules keep their dedicated inner scrolling behavior. */
@@ -295,6 +294,43 @@
 
 .platform-summary-card__main span {
   font-size: 14px !important;
+}
+
+/* Platform overview uses the GKX three-level typography system:
+   section title 16px, body 14px, supporting metadata 12px. */
+.platform-overview .kg-panel__title,
+.platform-overview .platform-structure-chart > header strong {
+  font-size: 16px !important;
+  line-height: 24px !important;
+}
+
+.platform-overview :is(
+  .platform-change-feed > a > div strong,
+  .platform-change-feed > a > div p,
+  .platform-risk-list article strong,
+  .platform-risk-list article p,
+  .platform-risk-list article a,
+  .platform-structure-legend article,
+  .platform-structure-legend article > span,
+  .platform-structure-legend article > strong
+) {
+  font-size: 14px !important;
+  line-height: 22px !important;
+}
+
+.platform-overview :is(
+  .kg-panel__header > span,
+  .kg-panel__header > a,
+  .kg-panel__header > div > span,
+  .platform-change-feed time,
+  .platform-change-feed > a > span,
+  .platform-change-feed > a > div em,
+  .platform-change-feed > a > b,
+  .platform-structure-legend article em,
+  .platform-donut em
+) {
+  font-size: 12px !important;
+  line-height: 18px !important;
 }
 
 .platform-summary-card__items {

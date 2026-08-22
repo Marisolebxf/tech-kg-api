@@ -70,7 +70,8 @@ watch(
   display: flex;
   flex-direction: column;
   height: 100%;
-  gap: 10px;
+  min-height: 640px;
+  gap: 16px;
   min-width: 0;
   color: var(--text-primary);
 }
@@ -79,8 +80,8 @@ watch(
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 40px;
-  padding: 0 14px;
+  min-height: 29px;
+  padding: 0;
 }
 
 </style>

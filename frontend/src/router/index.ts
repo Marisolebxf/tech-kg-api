@@ -16,15 +16,15 @@ import ConfigurationManagementView from '../views/platform/ConfigurationManageme
 import PipelineDesignerView from '../views/platform/PipelineDesignerView.vue'
 
 const serviceRoutes = [
-  { path: '/expert-direct', name: 'expert-direct', title: '科技专家/人才直接关系', serviceKey: 'expert-direct' },
-  { path: '/node-indirect', name: 'node-indirect', title: '科技单节点间接关系', serviceKey: 'node-indirect' },
-  { path: '/two-point-achievement', name: 'two-point-achievement', title: '科技两点合作成果', serviceKey: 'two-point-achievement' },
-  { path: '/expert-colleague', name: 'expert-colleague', title: '科技专家同事关系', serviceKey: 'expert-colleague' },
-  { path: '/expert-alumni', name: 'expert-alumni', title: '科技专家校友关系', serviceKey: 'expert-alumni' },
-  { path: '/paper-cooperation', name: 'paper-cooperation', title: '科技专家论文合作关系', serviceKey: 'paper-cooperation' },
-  { path: '/enterprise-relation', name: 'enterprise-relation', title: '重点关注科技企业关系', serviceKey: 'enterprise-relation' },
-  { path: '/industry-chain-event', name: 'industry-chain-event', title: '科技产业链点TOP-N事件关系', serviceKey: 'industry-chain-event' },
-  { path: '/industry-chain-panorama', name: 'industry-chain-panorama', title: '科技产业链全景图', serviceKey: 'industry-chain-panorama' },
+  { path: '/expert-direct', name: 'expert-direct', title: '专家直接关系', serviceKey: 'expert-direct' },
+  { path: '/node-indirect', name: 'node-indirect', title: '单节点间接关系', serviceKey: 'node-indirect' },
+  { path: '/two-point-achievement', name: 'two-point-achievement', title: '两点合作成果', serviceKey: 'two-point-achievement' },
+  { path: '/expert-colleague', name: 'expert-colleague', title: '专家同事关系', serviceKey: 'expert-colleague' },
+  { path: '/expert-alumni', name: 'expert-alumni', title: '专家校友关系', serviceKey: 'expert-alumni' },
+  { path: '/paper-cooperation', name: 'paper-cooperation', title: '论文合作关系', serviceKey: 'paper-cooperation' },
+  { path: '/enterprise-relation', name: 'enterprise-relation', title: '重点企业关系', serviceKey: 'enterprise-relation' },
+  { path: '/industry-chain-event', name: 'industry-chain-event', title: '产业链事件关系', serviceKey: 'industry-chain-event' },
+  { path: '/industry-chain-panorama', name: 'industry-chain-panorama', title: '产业链全景图', serviceKey: 'industry-chain-panorama' },
 ] as const
 
 export const router = createRouter({

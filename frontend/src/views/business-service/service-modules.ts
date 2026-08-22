@@ -3,6 +3,8 @@ export type ServiceField = {
   type: string
   required?: string
   description: string
+  control?: 'text' | 'number' | 'date' | 'select' | 'multi-select' | 'boolean'
+  optionSource?: 'scholars' | 'enterprises' | 'relationTypes' | 'roles' | 'dimensions' | 'techFields' | 'achievementTypes' | 'dataSources' | 'educationStages' | 'layerDepths' | 'panoramaRelations' | 'boolean'
 }
 
 export type ServiceResultRow = {
@@ -55,19 +57,19 @@ const commonResponseFields: ServiceField[] = [
 export const serviceModules: ServiceModule[] = [
   {
     key: 'expert-direct',
-    title: '科技专家/人才直接关系',
+    title: '专家直接关系',
     subtitle: '识别专家之间的直接关联类型、时间、场景和成果。',
-    endpoint: '/api/v1/kg-service/expert-direct-relation',
+    endpoint: '/api/v1/kg-construction/expert-direct-relations/query',
     method: 'POST',
     moduleRequirement: '科技专家 / 人才直接关系服务通过收集科技专家或人才在各类场景中的直接交互数据，结合知识图谱中已有的实体属性与关系信息，运用语义匹配与关系验证算法，识别并构建专家或人才之间的直接关联。该服务会对直接关系的类型进行精准分类，同时记录关系发生的时间、场景及相关成果，形成结构化的直接关系数据，为后续的关系分析与网络构建提供基础。',
     requestFields: [
-      { name: 'source_expert_id', type: 'string', required: '是', description: '第一个专家唯一标识' },
-      { name: 'target_expert_id', type: 'string', required: '否', description: '第二个专家唯一标识' },
-      { name: 'relation_scene', type: 'string', required: '否', description: '交互场景筛选条件' },
-      { name: 'start_time', type: 'string', required: '否', description: '关系起始时间' },
+      { name: 'expertAId', type: 'string', required: '是', description: '请选择专家 A', control: 'select', optionSource: 'scholars' },
+      { name: 'expertBId', type: 'string', required: '否', description: '请选择专家 B', control: 'select', optionSource: 'scholars' },
+      { name: 'institution', type: 'string', required: '否', description: '机构关键词' },
+      { name: 'startTime', type: 'string', required: '否', description: '开始日期 YYYY-MM-DD', control: 'date' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { source_expert_id: 'E10001', target_expert_id: 'E10002', relation_scene: '科研合作', start_time: '2020-01' },
+    requestExample: { expertAId: '王祎', expertBId: '', institution: '', startTime: '' },
     responseExample: { code: 0, message: 'success', data: { relation_type: '论文合作', relation_count: 12, scenario: '科研合作', confidence: 0.94 } },
     resultRows: [
       { label: '直接关系', value: '12', tone: 'blue' },
@@ -122,16 +124,16 @@ export const serviceModules: ServiceModule[] = [
   },
   {
     key: 'node-indirect',
-    title: '科技单节点间接关系',
+    title: '单节点间接关系',
     subtitle: '从直接关系和多跳路径中推理潜在关联。',
-    endpoint: '/api/v1/kg-service/node-indirect-relation',
+    endpoint: '/api/v1/kg-construction/expert-indirect-relations/query',
     method: 'POST',
     moduleRequirement: '科技单节点间接关系服务以单个科技专家或人才作为核心节点，通过挖掘知识图谱中与该节点存在间接关联的其他节点，运用路径分析与关系传递算法，推理出核心节点与间接节点之间的潜在关联。服务会梳理间接关系的传递路径，计算间接关系的关联强度，并对不同类型的间接关系进行标注，帮助用户全面了解单个科技专家或人才的间接社交网络与资源关联。',
     requestFields: [
-      { name: 'core_node_id', type: 'string', required: '是', description: '核心专家或人才节点 ID' },
-      { name: 'relation_types', type: 'array', required: '否', description: '间接关系类型' },
-      { name: 'path_depth', type: 'number', required: '否', description: '路径分析深度' },
-      { name: 'min_strength', type: 'number', required: '否', description: '最小关联强度阈值' },
+      { name: 'core_node_id', type: 'string', required: '是', description: '请选择核心专家或人才', control: 'select', optionSource: 'scholars' },
+      { name: 'relation_types', type: 'array', required: '否', description: '请选择间接关系类型', control: 'multi-select', optionSource: 'relationTypes' },
+      { name: 'path_depth', type: 'number', required: '否', description: '路径分析深度', control: 'number' },
+      { name: 'min_strength', type: 'number', required: '否', description: '最小关联强度阈值', control: 'number' },
     ],
     responseFields: commonResponseFields,
     requestExample: { core_node_id: 'E10001', relation_types: ['学术关联', '机构关联'], path_depth: 2, min_strength: 0.65 },
@@ -189,15 +191,15 @@ export const serviceModules: ServiceModule[] = [
   },
   {
     key: 'two-point-achievement',
-    title: '科技两点合作成果',
+    title: '两点合作成果',
     subtitle: '汇总两个专家之间的论文、项目、专利和奖项成果。',
     endpoint: '/api/v1/kg-construction/expert-cooperation-achievements/query',
     method: 'POST',
     moduleRequirement: '针对两个专家节点，按图中成果边求交汇总共同论文/专利/项目，回填时间与奖项，并规则归因核心贡献与合作模式。仅查询返回，不写边。',
     requestFields: [
-      { name: 'sourceExpertId', type: 'string', required: '是', description: '第一个专家 ID' },
-      { name: 'targetExpertId', type: 'string', required: '是', description: '第二个专家 ID' },
-      { name: 'achievementTypes', type: 'string', required: '否', description: '成果类型，逗号分隔：paper,patent,project' },
+      { name: 'sourceExpertId', type: 'string', required: '是', description: '请选择第一个专家', control: 'select', optionSource: 'scholars' },
+      { name: 'targetExpertId', type: 'string', required: '是', description: '请选择第二个专家', control: 'select', optionSource: 'scholars' },
+      { name: 'achievementTypes', type: 'string', required: '否', description: '请选择成果类型', control: 'multi-select', optionSource: 'achievementTypes' },
       { name: 'timeRange', type: 'string', required: '否', description: '成果时间范围，如 2020-2026' },
     ],
     responseFields: commonResponseFields,
@@ -277,13 +279,13 @@ export const serviceModules: ServiceModule[] = [
   },
   {
     key: 'expert-colleague',
-    title: '科技专家同事关系',
+    title: '专家同事关系',
     subtitle: '根据工作经历、机构架构和任职时间推理同事关系。',
-    endpoint: '/api/v1/kg-service/expert-colleague-relation',
+    endpoint: '/api/v1/kg-construction/expert-colleague-relations/query',
     method: 'POST',
     moduleRequirement: '科技专家同事关系服务通过提取科技专家在不同时期的工作单位、所属部门、参与团队等机构信息，结合知识图谱中的机构架构与人员任职数据，运用任职时间匹配与团队归属算法，推理并构建专家之间的同事关系。服务会判断同事关系的生效时段、所属团队或项目组，标注同事关系期间的共同工作内容与协作场景，同时关联两者在同事期间产生的合作成果，帮助用户了解科技专家的职业社交圈与工作协作历史。',
     requestFields: [
-      { name: 'expert_id', type: 'string', required: '是', description: '专家唯一标识' },
+      { name: 'expert_id', type: 'string', required: '是', description: '请选择专家', control: 'select', optionSource: 'scholars' },
       { name: 'organization', type: 'string', required: '否', description: '任职机构筛选' },
       { name: 'department', type: 'string', required: '否', description: '部门或团队筛选' },
       { name: 'overlap_period', type: 'string', required: '否', description: '任职重叠时间' },
@@ -346,16 +348,16 @@ export const serviceModules: ServiceModule[] = [
   },
   {
     key: 'expert-alumni',
-    title: '科技专家校友关系',
+    title: '专家校友关系',
     subtitle: '基于教育经历匹配同校校友，归因同校/同学历/同期，并附互动摘要。',
     endpoint: '/api/v1/kg-construction/expert-alumni-relations/query',
     method: 'POST',
     moduleRequirement: '科技专家校友关系服务基于 Person 教育背景字段匹配校友，仅查询返回、不写 ALUMNI 边。维度仅在数据可支撑时输出「同校」「同学历」「同期」，不编造同院系/同导师。填 targetExpertId 为双点判定；留空为列表扫描（最多约 500 人）。',
     requestFields: [
-      { name: 'expertId', type: 'string', required: '是', description: '专家唯一标识' },
-      { name: 'targetExpertId', type: 'string', required: '否', description: '目标专家 ID；有则双点判定，空则列表' },
+      { name: 'expertId', type: 'string', required: '是', description: '请选择源专家', control: 'select', optionSource: 'scholars' },
+      { name: 'targetExpertId', type: 'string', required: '否', description: '请选择目标专家；留空时返回校友列表', control: 'select', optionSource: 'scholars' },
       { name: 'school', type: 'string', required: '否', description: '院校筛选条件' },
-      { name: 'educationStage', type: 'string', required: '否', description: '教育阶段筛选' },
+      { name: 'educationStage', type: 'string', required: '否', description: '请选择教育阶段', control: 'select', optionSource: 'educationStages' },
     ],
     responseFields: commonResponseFields,
     requestExample: {
@@ -434,19 +436,19 @@ export const serviceModules: ServiceModule[] = [
   },
   {
     key: 'paper-cooperation',
-    title: '科技专家论文合作关系',
+    title: '论文合作关系',
     subtitle: '围绕论文作者、主题和被引数据分析合作网络。',
-    endpoint: '/api/v1/kg-service/paper-cooperation-relation',
+    endpoint: '/api/v1/kg-construction/expert-paper-cooperation-relations/query',
     method: 'POST',
     moduleRequirement: '科技专家论文合作关系服务通过分析知识图谱中科技专家发表的学术论文数据，提取论文的作者列表、作者单位、合作发表时间、论文主题等信息，运用作者关联与合作频次算法，构建专家之间的论文合作关系。服务会统计专家之间的合作论文数量、合作发表的期刊或会议级别、论文被引情况，分析合作论文的研究方向与共同贡献，同时识别长期稳定的论文合作团队与核心合作人员，为研究学术合作网络与专家学术影响力提供依据。',
     requestFields: [
-      { name: 'expert_id', type: 'string', required: '是', description: '专家唯一标识' },
-      { name: 'coauthor_id', type: 'string', required: '否', description: '合作者唯一标识' },
-      { name: 'topic', type: 'string', required: '否', description: '论文主题筛选' },
-      { name: 'venue_level', type: 'string', required: '否', description: '期刊或会议级别' },
+      { name: 'dataSource', type: 'string', required: '是', description: '请选择论文数据源', control: 'select', optionSource: 'dataSources' },
+      { name: 'expertAId', type: 'string', required: '是', description: '请选择专家 A', control: 'select', optionSource: 'scholars' },
+      { name: 'expertBId', type: 'string', required: '是', description: '请选择专家 B', control: 'select', optionSource: 'scholars' },
+      { name: 'timeRange', type: 'string', required: '否', description: '时间范围，如 2021-01-01 至 2024-12-31' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { expert_id: 'E10001', coauthor_id: 'E10002', topic: '人工智能', venue_level: 'A类会议' },
+    requestExample: { dataSource: 'knowledge_graph', expertAId: '4P566No1', expertBId: 'd492835p', timeRange: '2021-01-01 至 2024-12-31' },
     responseExample: { code: 0, message: 'success', data: { papers: 14, citations: 1260, stable_team: true, topics: ['人工智能', '先进计算'] } },
     resultRows: [
       { label: '合作论文', value: '14', tone: 'blue' },
@@ -504,19 +506,19 @@ export const serviceModules: ServiceModule[] = [
   },
   {
     key: 'enterprise-relation',
-    title: '重点关注科技企业关系',
+    title: '重点企业关系',
     subtitle: '连接专家、企业角色、合作领域与经营状态。',
-    endpoint: '/api/v1/kg-service/key-enterprise-relation',
+    endpoint: '/api/v1/kg-construction/expert-enterprise-mining/mine',
     method: 'POST',
     moduleRequirement: '重点关注科技企业关系服务围绕科技专家或人才，通过挖掘知识图谱中与专家相关的企业关联数据，运用企业关联与角色定位算法，构建专家与重点关注科技企业之间的关系。服务会标注专家在企业中的角色、合作领域、合作时间与合作模式，同时关联企业的行业地位、技术方向与经营状况，帮助用户了解科技专家与产业界的合作关联及资源对接情况。',
     requestFields: [
-      { name: 'expert_id', type: 'string', required: '是', description: '专家唯一标识' },
-      { name: 'enterprise_name', type: 'string', required: '否', description: '企业名称筛选' },
-      { name: 'role_type', type: 'string', required: '否', description: '专家企业角色' },
-      { name: 'industry', type: 'string', required: '否', description: '企业行业方向' },
+      { name: 'scholarId', type: 'string', required: '是', description: '请选择专家', control: 'select', optionSource: 'scholars' },
+      { name: 'topN', type: 'number', required: '否', description: '返回企业数量（1—10）', control: 'number' },
+      { name: 'analysisDimensions', type: 'array', required: '否', description: '请选择分析维度', control: 'multi-select', optionSource: 'dimensions' },
+      { name: 'regenerate', type: 'boolean', required: '否', description: '是否重新运行企业挖掘', control: 'boolean', optionSource: 'boolean' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { expert_id: 'E10001', enterprise_name: '华南智能芯片', role_type: '顾问/股东/合作方', industry: '集成电路' },
+    requestExample: { scholarId: '', topN: 5, analysisDimensions: ['industry_status', 'core_tech', 'financial'], regenerate: false },
     responseExample: { code: 0, message: 'success', data: { enterprises: 9, roles: 4, cooperation_fields: ['芯片设计', '智能制造'] } },
     resultRows: [
       { label: '关联企业', value: '9', tone: 'blue' },
@@ -574,14 +576,14 @@ export const serviceModules: ServiceModule[] = [
   },
   {
     key: 'industry-chain-event',
-    title: '科技产业链点TOP-N事件关系',
+    title: '产业链事件关系',
     subtitle: '围绕产业节点筛选事件并关联专家、企业和影响。',
-    endpoint: '/api/v1/kg-service/industry-node-top-events',
+    endpoint: '/api/v1/kg-construction/industry-chain-topn-event-relations/query',
     method: 'POST',
     moduleRequirement: '科技产业链点 TOP-N 事件关系服务针对科技产业链中的特定环节或节点，通过收集知识图谱中与该节点相关的事件数据，运用事件影响力评估算法，筛选出影响力排名前 N 的核心事件。服务会构建这些 TOP-N 事件与相关科技专家或人才的关联关系，分析事件对产业链节点的影响及后续发展趋势，为产业链节点的风险预警与机遇挖掘提供支持。',
     requestFields: [
       { name: 'chain_node_id', type: 'string', required: '是', description: '产业链节点标识' },
-      { name: 'top_n', type: 'number', required: '否', description: '返回事件数量' },
+      { name: 'top_n', type: 'number', required: '否', description: '返回事件数量', control: 'number' },
       { name: 'event_type', type: 'string', required: '否', description: '事件类型筛选' },
       { name: 'time_range', type: 'string', required: '否', description: '事件时间范围' },
     ],
@@ -644,16 +646,16 @@ export const serviceModules: ServiceModule[] = [
   },
   {
     key: 'industry-chain-panorama',
-    title: '科技产业链全景图',
+    title: '产业链全景图',
     subtitle: '整合产业节点、关键技术、企业和事件形成链路全景。',
-    endpoint: '/api/v1/kg-service/industry-chain-panorama',
+    endpoint: '/api/v1/kg-construction/industry-chain-panorama/query',
     method: 'POST',
     moduleRequirement: '科技产业链全景图服务通过整合知识图谱中科技产业链各环节的实体、关系、事件等数据，运用产业链架构建模与可视化算法，构建覆盖全产业链的结构化全景图。服务会清晰展示产业链各环节的核心节点、关联关系与数据流向，标注各环节的关键技术、重点企业与核心专家，同时支持根据用户需求进行层级展开、关系筛选与动态更新，为用户全面掌握科技产业链的整体结构、运行态势与发展机遇提供直观的可视化工具。',
     requestFields: [
       { name: 'chain_id', type: 'string', required: '是', description: '产业链标识' },
-      { name: 'layer_depth', type: 'number', required: '否', description: '层级展开深度' },
-      { name: 'relation_filter', type: 'array', required: '否', description: '关系筛选条件' },
-      { name: 'include_events', type: 'boolean', required: '否', description: '是否包含事件' },
+      { name: 'layer_depth', type: 'number', required: '否', description: '请选择层级展开深度', control: 'select', optionSource: 'layerDepths' },
+      { name: 'relation_filter', type: 'array', required: '否', description: '请选择关系筛选条件', control: 'multi-select', optionSource: 'panoramaRelations' },
+      { name: 'include_events', type: 'boolean', required: '否', description: '是否包含事件', control: 'boolean', optionSource: 'boolean' },
     ],
     responseFields: commonResponseFields,
     requestExample: { chain_id: 'AI-COMPUTING', layer_depth: 3, relation_filter: ['技术', '企业', '专家'], include_events: true },
@@ -677,7 +679,6 @@ export const serviceModules: ServiceModule[] = [
       { label: '核心专家', value: '张明远、李佳宁、陈思远等' },
       { label: '产业动态事件', value: '智算中心扩容、国产算力适配、多模态模型升级' },
       { label: '图谱规模', value: '186 个节点｜420 条关系' },
-      { label: '更新状态', value: '尚未更新，点击"刷新数据"或开启自动更新' },
     ],
     evidence: ['整合产业链实体、关系、事件数据。', '展示核心节点、关联关系和数据流向。', '支持层级展开、关系筛选和动态更新。'],
     rules: [

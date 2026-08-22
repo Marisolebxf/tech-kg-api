@@ -19,6 +19,7 @@ import argparse
 import json
 import logging
 import os
+import time
 from collections import defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
@@ -30,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from infra.gkx_element import gkx_element_read_session
 from infra.graph_db import TRSGraphClient, get_trs_graph_client
+from infra.graph_db.exceptions import GraphRequestError
 from script.organization_etl_common import (
     DEFAULT_SPACE,
     DOMAIN_TABLE_SPECS,
@@ -763,7 +765,15 @@ def split_schema_statements(source: str) -> list[str]:
 
 
 def schema_fields(graph: TRSGraphClient, kind: str, name: str) -> set[str]:
-    result = graph.execute_read(f"DESCRIBE {kind} {ngql_identifier(name)};")
+    """Describe a schema item, tolerating bounded metadata propagation delay."""
+    for attempt in range(5):
+        try:
+            result = graph.execute_read(f"DESCRIBE {kind} {ngql_identifier(name)};")
+            break
+        except GraphRequestError:
+            if attempt == 4:
+                raise
+            time.sleep(0.5 * (attempt + 1))
     fields: set[str] = set()
     for record in result.records:
         for key in ("Field", "field", "Property", "property"):
@@ -820,9 +830,10 @@ def initialize_schema(graph: TRSGraphClient | None = None) -> None:
         "News",
         "Event",
         "Product",
+        "Project",
         "DataSource",
     }
-    owned_edges = {spec.edge_type for spec in RELATION_SPECS}
+    owned_edges = {spec.edge_type for spec in RELATION_SPECS} | {"PARTICIPATES_IN", "FUNDED_BY"}
     schema_prefixes = tuple(
         [f"CREATE TAG IF NOT EXISTS `{name}`" for name in owned_tags]
         + [f"CREATE EDGE IF NOT EXISTS `{name}`" for name in owned_edges]

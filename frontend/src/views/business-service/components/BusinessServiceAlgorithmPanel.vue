@@ -378,7 +378,7 @@ function buildLiveGraph(
   res: Record<string, any>,
   key: string,
 ): { nodes: GraphNodeData[]; edges: GraphEdgeData[] } | null {
-  const data = res?.data
+  const data = res?.data ?? res
   if (!data) return null
   const nodes: GraphNodeData[] = []
   const edges: GraphEdgeData[] = []
@@ -852,7 +852,7 @@ function buildLiveSummary(
   res: Record<string, any>,
   key: string,
 ): Record<string, string> {
-  const d = res?.data
+  const d = res?.data ?? res
   if (!d) return {}
   const out: Record<string, string> = {}
   if (key === 'enterprise-relation') {

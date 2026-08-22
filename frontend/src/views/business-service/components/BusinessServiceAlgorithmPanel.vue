@@ -539,8 +539,8 @@ function buildLiveGraph(
   res: Record<string, any>,
   key: string,
 ): { nodes: GraphNodeData[]; edges: GraphEdgeData[] } | null {
-  const data = res?.data
-  // 响应无 data（404/500 业务错误）时返回空图，让画板置空而非回退 mock preset
+  const data = key === 'paper-cooperation' ? (res?.data ?? res) : res?.data
+  // 响应无有效数据时返回空图，让画板置空而非回退 mock preset
   if (!data) return { nodes: [], edges: [] }
   const nodes: GraphNodeData[] = []
   const edges: GraphEdgeData[] = []
@@ -1014,7 +1014,7 @@ function buildLiveSummary(
   res: Record<string, any>,
   key: string,
 ): Record<string, string> {
-  const d = res?.data
+  const d = res?.data ?? res
   if (!d) return {}
   const out: Record<string, string> = {}
   if (key === 'enterprise-relation') {

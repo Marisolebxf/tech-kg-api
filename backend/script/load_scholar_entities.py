@@ -27,6 +27,7 @@ import logging
 import os
 from collections.abc import Iterable
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import select, text
 
@@ -198,6 +199,65 @@ def _build_person_props(
     }
 
 
+# ---------------------------------------------------------------------------
+# nGQL INSERT 渲染(替代 merge_node——后者在 trs-graph 上不可靠)
+# ---------------------------------------------------------------------------
+def _esc(v: Any, numeric: bool = False) -> str:
+    if v is None or (isinstance(v, str) and v == ""):
+        return "NULL"
+    if numeric:
+        try:
+            f = float(v)
+            return str(int(f)) if f.is_integer() else repr(f)
+        except (TypeError, ValueError):
+            return "0"
+    s = str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ").replace("\r", " ")
+    return f'"{s}"'
+
+
+def describe_tag_field_types(graph, tag: str) -> dict[str, str]:
+    """DESCRIBE TAG → {field: type};失败/空返回 {}(调用方据此跳过或写空顶点)。"""
+    try:
+        result = graph.execute_read(f"DESCRIBE TAG {tag};")
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict[str, str] = {}
+    for rec in result.records if result else []:
+        field = None
+        typ = "string"
+        for k in ("Field", "field", "Property", "property"):
+            v = rec.get(k)
+            if v:
+                field = str(v)
+                break
+        for k in ("Type", "type"):
+            v = rec.get(k)
+            if v:
+                typ = str(v)
+                break
+        if field:
+            out[field] = typ
+    return out
+
+
+def render_person_insert(vid: str, props: dict, field_types: dict[str, str]) -> str:
+    """渲染 nGQL ``INSERT VERTEX Person(...)``。
+
+    自适应:只写 tag 实有且 props 也有的字段(按 tag 字段顺序);数字类型(int/double/float)
+    不加引号,其余转义加引号。field_types 来自 :func:`describe_tag_field_types`。
+    无匹配字段时写空属性顶点(保证 vid 存在,rank@0 幂等)。
+    """
+    fields = [f for f in field_types if f in props]
+    if not fields:
+        return f'INSERT VERTEX Person() VALUES "{vid}":();'
+    vals = []
+    for f in fields:
+        numeric = any(t in (field_types.get(f) or "") for t in ("int", "double", "float"))
+        vals.append(_esc(props.get(f), numeric=numeric))
+    fl = ",".join(fields)
+    return f"INSERT VERTEX Person({fl}) VALUES {_esc(vid)}:({','.join(vals)});"
+
+
 def load_persons(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
     """遍历 ``dwd_scholar`` 并写入 Person 顶点。"""
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
@@ -206,6 +266,10 @@ def load_persons(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
     logger.info("preloaded %d talent_flag rows", len(talent_flags))
     directions = _fetch_research_directions(session)
     logger.info("preloaded %d research_direction rows", len(directions))
+
+    # 自适应 Person tag 字段(DESCRIBE 一次);nGQL INSERT 只写 tag 实有字段,数字不加引号。
+    person_field_types = describe_tag_field_types(graph, "Person") if not dry_run else {}
+    logger.info("Person tag fields: %d (%s)", len(person_field_types), list(person_field_types)[:6])
 
     ok = shown = 0
     for row in _iter_scholars(session):
@@ -224,12 +288,8 @@ def load_persons(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
                 )
                 shown += 1
         else:
-            # 显式传入 vid，避免 `_ensure_vid` 把 source_record_id 当成 VID。
-            graph.merge_node(
-                ["Person"],
-                {"vid": vid, "source_record_id": sid},
-                props,
-            )
+            # nGQL INSERT(替代 merge_node——后者在 trs-graph 上不可靠,见 CLAUDE.md)
+            graph.execute_write(render_person_insert(vid, props, person_field_types))
         ok += 1
     return {"written": ok}
 

@@ -7464,64 +7464,6 @@ print(response.json())</pre>
   line-height: 18px;
 }
 
-.platform-node circle {
-  fill: #21c1c3;
-  stroke: #fff;
-  stroke-width: 1.8;
-  filter: drop-shadow(0 3px 6px rgba(53, 77, 112, 0.12));
-}
-
-.platform-node--main circle {
-  fill: #1e8ff3;
-  stroke: #fff;
-}
-
-.platform-node.is-expert circle { fill: #20bfc2; }
-.platform-node.is-org circle { fill: #48c914; }
-.platform-node.is-company circle { fill: #ffad17; }
-.platform-node.is-paper circle { fill: #762bd7; }
-.platform-node.is-topic circle { fill: #1f8ff1; }
-.platform-node.is-project circle { fill: #eb2aa3; }
-.platform-node.is-event circle { fill: var(--graph-gold, #f59e0b); }
-
-.platform-node text {
-  fill: #4f5d70;
-  font-size: 12px;
-  font-weight: 500;
-  text-anchor: middle;
-  dominant-baseline: hanging;
-  transform: translateY(18px);
-  paint-order: stroke;
-  stroke: rgba(255, 255, 255, 0.9);
-  stroke-width: 3px;
-  stroke-linejoin: round;
-}
-
-.platform-node--main text {
-  fill: #fff;
-  font-size: 15px;
-  font-weight: 600;
-  dominant-baseline: middle;
-  transform: none;
-  stroke: transparent;
-}
-
-.platform-network-lines line,
-.platform-network-line {
-  stroke: #b8c1ce;
-  stroke-width: 1.4;
-  marker-end: url(#platform-arrow);
-}
-
-.platform-network-lines--service line {
-  marker-end: url(#service-arrow);
-}
-
-.platform-network-line.is-primary { stroke: #4080ff; stroke-width: 1.8; }
-.platform-network-line.is-green { stroke: #00b42a; stroke-width: 1.8; }
-.platform-network-line.is-orange { stroke: #ff7d00; stroke-width: 1.8; }
-.platform-network-line.is-purple { stroke: #722ed1; stroke-width: 1.8; }
-
 .platform-detail__body {
   display: grid;
   gap: 14px;

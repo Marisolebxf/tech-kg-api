@@ -2526,7 +2526,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         <KgGraphCanvas
           :nodes="displayedGraphNodes"
           :edges="displayedGraphEdges"
-          :node-shape="isLiveColleague ? 'circle' : 'rect'"
+          node-shape="circle"
           :selected-node-id="selectedGraphNodeId"
           :selected-edge-id="selectedGraphEdgeId"
           show-edge-label-button

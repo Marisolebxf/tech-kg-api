@@ -1,7 +1,13 @@
 export type ServiceField = {
   name: string
+  /** 表单展示名；缺省时用 name。用于消除接口字段名在界面上的歧义。 */
+  label?: string
   type: string
+  /** 表单控件类型；缺省时按 type 渲染。'month-calendar' = 日历式年月下拉。 */
+  ui?: 'month-calendar'
   required?: string
+  /** 输入框占位提示：用中文解释这个字段是什么，并给一个可直接使用的测试值。缺省时退回 description。 */
+  placeholder?: string
   description: string
 }
 
@@ -37,6 +43,8 @@ export type ServiceModule = {
   requestFields: ServiceField[]
   responseFields: ServiceField[]
   requestExample: Record<string, string | number | boolean | string[]>
+  /** 为 false 时参数表单初始为空，requestExample 只作为接口文档示例，不回填表单。 */
+  prefillFormFromExample?: boolean
   responseExample: Record<string, unknown>
   resultRows: ServiceResultRow[]
   summaryRows: ServiceSummaryRow[]
@@ -52,6 +60,18 @@ const commonResponseFields: ServiceField[] = [
   { name: 'evidence', type: 'array', description: '支撑本次结果的数据来源和证据' },
 ]
 
+const expertColleagueResponseFields: ServiceField[] = [
+  { name: 'code', type: 'number', description: '服务状态码，成功时为 200/0' },
+  { name: 'success', type: 'boolean', description: '服务是否成功' },
+  { name: 'msg', type: 'string', description: '服务返回信息' },
+  { name: 'data.expert', type: 'object', description: '核心专家实体详情，含 confidence、details、provenance' },
+  { name: 'data.colleagues', type: 'array', description: '同事关系列表，含生效时段、团队、共同工作内容、成果、confidence、evidence' },
+  { name: 'data.graph.nodes', type: 'array', description: '图谱展示节点，node.data 为真实实体详情和溯源字段' },
+  { name: 'data.graph.edges', type: 'array', description: '图谱展示关系边，edge.data 含关系 confidence、evidence、ruleName' },
+  { name: 'data.rules', type: 'array', description: '本接口实际使用的任职时间、团队归属、成果关联规则' },
+  { name: 'data.apiCalls', type: 'array', description: '后端组合调用查图 API 的路径、参数和结果摘要' },
+]
+
 export const serviceModules: ServiceModule[] = [
   {
     key: 'expert-direct',
@@ -61,13 +81,14 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技专家 / 人才直接关系服务通过收集科技专家或人才在各类场景中的直接交互数据，结合知识图谱中已有的实体属性与关系信息，运用语义匹配与关系验证算法，识别并构建专家或人才之间的直接关联。该服务会对直接关系的类型进行精准分类，同时记录关系发生的时间、场景及相关成果，形成结构化的直接关系数据，为后续的关系分析与网络构建提供基础。',
     requestFields: [
-      { name: 'expertAId', type: 'string', required: '否', description: '起点专家 scholar_id / VID / 姓名' },
-      { name: 'expertBId', type: 'string', required: '否', description: '另一位专家 scholar_id / VID / 姓名' },
-      { name: 'institution', type: 'string', required: '否', description: '机构关键词，任一端命中即保留' },
-      { name: 'startTime', type: 'string', required: '否', description: '关系起始时间（如 2020-01）' },
+      { name: 'expertAId', label: '专家A', type: 'string', required: '是', placeholder: '请输入专家A，如 person_4G7t0B0t', description: '起点专家 scholar_id / VID / 姓名，必填' },
+      { name: 'expertBId', label: '专家B', type: 'string', required: '否', placeholder: '选填，专家B，如 person_CE4825106', description: '另一位专家 scholar_id / VID / 姓名；留空则返回专家A的全部直接关系' },
+      { name: 'institution', label: '机构关键词', type: 'string', required: '否', placeholder: '选填，机构关键词，如 新加坡国立大学', description: '机构关键词，任一端命中即保留' },
+      { name: 'startTime', label: '关系建立起始时间', type: 'month', ui: 'month-calendar', required: '否', placeholder: '选填，选择年月，如 2020-01', description: '筛选条件：只保留关系建立时间不早于该年月的直接关系；留空表示不限时间' },
     ],
     responseFields: commonResponseFields,
     requestExample: { expertAId: '王祎', expertBId: '', institution: '', startTime: '' },
+    prefillFormFromExample: false,
     responseExample: { code: 0, message: 'success', data: { relation_type: '论文合作', relation_count: 12, scenario: '科研合作', confidence: 0.94 } },
     resultRows: [
       { label: '直接关系', value: '12', tone: 'blue' },
@@ -124,7 +145,7 @@ export const serviceModules: ServiceModule[] = [
     key: 'node-indirect',
     title: '科技单节点间接关系',
     subtitle: '从直接关系和多跳路径中推理潜在关联。',
-    endpoint: '/api/v1/kg-service/node-indirect-relation',
+    endpoint: '/api/v1/kg-construction/expert-indirect-relations/demo/structured-result',
     method: 'POST',
     moduleRequirement: '科技单节点间接关系服务以单个科技专家或人才作为核心节点，通过挖掘知识图谱中与该节点存在间接关联的其他节点，运用路径分析与关系传递算法，推理出核心节点与间接节点之间的潜在关联。服务会梳理间接关系的传递路径，计算间接关系的关联强度，并对不同类型的间接关系进行标注，帮助用户全面了解单个科技专家或人才的间接社交网络与资源关联。',
     requestFields: [
@@ -134,8 +155,8 @@ export const serviceModules: ServiceModule[] = [
       { name: 'min_strength', type: 'number', required: '否', description: '最小关联强度阈值' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { core_node_id: 'E10001', relation_types: ['学术关联', '机构关联'], path_depth: 2, min_strength: 0.65 },
-    responseExample: { code: 0, message: 'success', data: { indirect_nodes: 36, paths: 58, average_strength: 0.76 } },
+    requestExample: { core_node_id: '4P566No1', relation_types: ['学术关联', '机构关联'], path_depth: 2, min_strength: 0.65 },
+    responseExample: { structuredResult: { indirectNodeCount: 0, pathCount: 0, relationTypeCount: {}, averageStrength: 0 } },
     resultRows: [
       { label: '间接节点', value: '36', tone: 'blue' },
       { label: '路径数量', value: '58', tone: 'green' },
@@ -280,13 +301,13 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技专家同事关系服务通过提取科技专家在不同时期的工作单位、所属部门、参与团队等机构信息，结合知识图谱中的机构架构与人员任职数据，运用任职时间匹配与团队归属算法，推理并构建专家之间的同事关系。服务会判断同事关系的生效时段、所属团队或项目组，标注同事关系期间的共同工作内容与协作场景，同时关联两者在同事期间产生的合作成果，帮助用户了解科技专家的职业社交圈与工作协作历史。',
     requestFields: [
-      { name: 'expert_id', type: 'string', required: '是', description: '专家唯一标识' },
-      { name: 'organization', type: 'string', required: '否', description: '任职机构筛选' },
-      { name: 'department', type: 'string', required: '否', description: '部门或团队筛选' },
-      { name: 'overlap_period', type: 'string', required: '否', description: '任职重叠时间' },
+      { name: 'expert_a_id', type: 'string', required: '是', description: '专家 A：VID、专家编号或精确姓名' },
+      { name: 'expert_b_id', type: 'string', required: '是', description: '专家 B：VID、专家编号或精确姓名' },
+      { name: 'start_time', type: 'month', required: '否', description: '可选；留空则使用数据库任职开始时间' },
+      { name: 'end_time', type: 'month', required: '否', description: '可选；留空则使用数据库任职结束时间' },
     ],
-    responseFields: commonResponseFields,
-    requestExample: { expert_id: 'E10001', organization: '中国科学院自动化研究所', department: '智能系统实验室', overlap_period: '2018-2022' },
+    responseFields: expertColleagueResponseFields,
+    requestExample: { expert_a_id: 'person_0209a7v6', expert_b_id: 'person_1S5195f4', start_time: '2021-01', end_time: '2026-08' },
     responseExample: { code: 0, message: 'success', data: { colleagues: 18, teams: 4, overlap_years: 4, achievements: 6 } },
     resultRows: [
       { label: '同事关系', value: '18', tone: 'blue' },
@@ -310,31 +331,21 @@ export const serviceModules: ServiceModule[] = [
     evidence: ['任职时间存在重叠，机构层级匹配到同一实验室。', '标注共同工作内容和协作场景。', '关联同事期间产生的合作成果。'],
     rules: [
       {
-        name: '任职时间匹配规则',
+        name: '同事关系判定规则',
         type: '关系匹配规则',
-        target: '专家任职经历、机构任职时间字段',
-        trigger: '专家存在工作单位或团队任职记录',
-        logic: '比较两个专家在机构、部门、实验室或项目组中的任职起止时间，判断是否存在有效重叠区间。',
-        output: '同事关系、生效时段、重叠年限',
-        threshold: '任职时间重叠 >= 3 个月',
+        target: '两位专家及其 AFFILIATED_WITH 任职边',
+        trigger: '两位专家均可唯一定位',
+        logic: '匹配共同机构或一跳机构层级，比较部门/团队，并计算 work_experience_date 交集；填写时间筛选时再与 start_time/end_time 求交集。',
+        output: '同事关系、生效时段、重叠月份、重叠年限、关系置信度',
+        threshold: '任职时间存在至少 1 个月交集',
         audit: '任职时间缺失或来源冲突时转入人工处理平台',
-      },
-      {
-        name: '团队归属规则',
-        type: '实体匹配规则',
-        target: '机构、部门、实验室、项目组实体',
-        trigger: '任职时间重叠且机构层级可匹配',
-        logic: '对工作单位、部门、实验室、项目组进行层级归一和消歧，判断专家是否归属同一团队或上下级团队。',
-        output: '共同团队、机构层级、协作场景',
-        threshold: '机构归一匹配置信度 >= 0.82',
-        audit: '机构别名冲突或层级不明时进入人工确认',
       },
       {
         name: '同事成果关联规则',
         type: '关系增强规则',
         target: '同事期间论文、项目、成果记录',
         trigger: '同事关系确认后',
-        logic: '回溯同事生效时段内的共同论文、项目和团队成果，将成果作为同事关系的上下文补充。',
+        logic: '查找两位专家共同连接的真实 Paper、Patent、Project、Report、Award 节点，只保留成果年份落入同事生效区间的节点；聚合数量不创建成果实体。',
         output: '期间成果、共同工作内容、协作说明',
         threshold: '成果时间落入同事区间',
         audit: '成果时间或归属冲突时进入人工复核',
@@ -428,18 +439,18 @@ export const serviceModules: ServiceModule[] = [
     key: 'paper-cooperation',
     title: '科技专家论文合作关系',
     subtitle: '围绕论文作者、主题和被引数据分析合作网络。',
-    endpoint: '/api/v1/kg-service/paper-cooperation-relation',
+    endpoint: '/api/v1/kg-construction/expert-paper-cooperation-relations/structured-result',
     method: 'POST',
     moduleRequirement: '科技专家论文合作关系服务通过分析知识图谱中科技专家发表的学术论文数据，提取论文的作者列表、作者单位、合作发表时间、论文主题等信息，运用作者关联与合作频次算法，构建专家之间的论文合作关系。服务会统计专家之间的合作论文数量、合作发表的期刊或会议级别、论文被引情况，分析合作论文的研究方向与共同贡献，同时识别长期稳定的论文合作团队与核心合作人员，为研究学术合作网络与专家学术影响力提供依据。',
     requestFields: [
-      { name: 'expert_id', type: 'string', required: '是', description: '专家唯一标识' },
-      { name: 'coauthor_id', type: 'string', required: '否', description: '合作者唯一标识' },
-      { name: 'topic', type: 'string', required: '否', description: '论文主题筛选' },
-      { name: 'venue_level', type: 'string', required: '否', description: '期刊或会议级别' },
+      { name: 'expertAId', type: 'string', required: '是', description: '专家 A 唯一标识' },
+      { name: 'expertBId', type: 'string', required: '是', description: '专家 B 唯一标识' },
+      { name: 'startTime', type: 'string', required: '否', description: '开始日期 YYYY-MM-DD' },
+      { name: 'endTime', type: 'string', required: '否', description: '结束日期 YYYY-MM-DD' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { expert_id: 'E10001', coauthor_id: 'E10002', topic: '人工智能', venue_level: 'A类会议' },
-    responseExample: { code: 0, message: 'success', data: { papers: 14, citations: 1260, stable_team: true, topics: ['人工智能', '先进计算'] } },
+    requestExample: { expertAId: '4P566No1', expertBId: 'd492835p', startTime: '', endTime: '' },
+    responseExample: { structuredResult: { cooperationPaperCount: 0, citation: { total: 0, max: 0 }, stableTeamMembers: [], paperTopics: [] } },
     resultRows: [
       { label: '合作论文', value: '14', tone: 'blue' },
       { label: '总被引', value: '1260', tone: 'green' },

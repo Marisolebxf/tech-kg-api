@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import {
   describeExpertAlumniRelation,
@@ -16,6 +16,7 @@ import {
   type IndustryChainPanoramaQueryRequest,
   type IndustryChainPanoramaQueryResponse,
   type PanoramaGraphEdge,
+  type PanoramaGraphNode,
   type PanoramaKeyEntity,
 } from '../../../api/industryChainPanorama'
 import {
@@ -27,6 +28,7 @@ import {
 } from '../../../api/expertDirectRelation'
 import iconInfo from '../../../assets/icons/icon-info.svg'
 import KgGraphCanvas from '../../../components/kg-graph-canvas.vue'
+import MonthCalendarField from './MonthCalendarField.vue'
 import { useToast } from '../../../composables/use-toast'
 import { getEdgeProvenance, getNodeProvenance, getServiceGraphPreset } from '../../../data/graph-presets'
 import type { GraphEdgeData, GraphNodeData, GraphNodeType, GraphPreset } from '../../../data/graph-presets'
@@ -93,12 +95,9 @@ const resultMode = ref<'summary' | 'entity' | 'relation' | 'provenance' | 'rule'
 const running = ref(false)
 const lastTestTime = ref('—')
 const lastUpdateTime = ref<number | null>(null)
-const autoRefresh = ref(false)
-const refreshIntervalSeconds = 10
-let refreshTimer: number | null = null
-const panoramaLayer = ref(3)
-const panoramaRelation = ref('all')
 const parameterValues = ref<Record<string, string>>({})
+/** 必填项校验结果：字段名 -> 错误提示；有值时输入框下方显示红色提示。 */
+const fieldErrors = ref<Record<string, string>>({})
 const liveResponse = ref<Record<string, any> | null>(null)
 const paramResetToken = ref(0)
 const selectedGraphNodeId = ref<string | null>(null)
@@ -112,9 +111,11 @@ const panoramaResponse = ref<IndustryChainPanoramaQueryResponse | null>(null)
 const panoramaError = ref<string | null>(null)
 const expertDirectResponse = ref<ExpertDirectRelationQueryResponse | null>(null)
 const expertDirectError = ref<string | null>(null)
+let expertDirectAbortController: AbortController | null = null
 const isLiveAlumni = computed(() => props.moduleInfo.key === 'expert-alumni')
 const isLiveCoop = computed(() => props.moduleInfo.key === 'two-point-achievement')
-const isLiveModule = computed(() => isLiveAlumni.value || isLiveCoop.value)
+const isLiveColleague = computed(() => props.moduleInfo.key === 'expert-colleague')
+const isLiveModule = computed(() => isLiveAlumni.value || isLiveCoop.value || isLiveColleague.value)
 const isPanorama = computed(() => props.moduleInfo.key === 'industry-chain-panorama')
 const isExpertDirect = computed(() => props.moduleInfo.key === 'expert-direct')
 
@@ -184,25 +185,93 @@ function inferPanoramaEdgeCategory(label: string): string {
   return '直接关系'
 }
 
+/** 画布展开层最多渲染的子图节点数与每行节点数。 */
+const PANORAMA_EXPANDED_LIMIT = 24
+const PANORAMA_EXPANDED_PER_ROW = 12
+
+/** 后端子图节点标签（Neo4j label）映射到画布样式。 */
+function mapPanoramaGraphNodeType(type: string): { nodeType: GraphNodeType; entityType: string } {
+  const t = (type || '').toLowerCase()
+  if (t.includes('person') || t.includes('scholar') || t.includes('expert')) {
+    return { nodeType: 'expert', entityType: '扩展专家' }
+  }
+  if (t.includes('organization') || t.includes('company') || t.includes('institution')) {
+    return { nodeType: 'org', entityType: '扩展机构' }
+  }
+  if (t.includes('paper') || t.includes('patent') || t.includes('publication')) {
+    return { nodeType: 'paper', entityType: '扩展成果' }
+  }
+  if (t.includes('event')) {
+    return { nodeType: 'event', entityType: '扩展事件' }
+  }
+  if (t.includes('product') || t.includes('project')) {
+    return { nodeType: 'project', entityType: '扩展产品' }
+  }
+  return { nodeType: 'topic', entityType: '扩展实体' }
+}
+
+/**
+ * 从子图节点中挑选进入画布展开层的节点。
+ *
+ * 排除已在分层里出现过的节点，并优先保留与分层节点直接相连的节点，避免画布出现孤立点。
+ */
+function pickPanoramaExpandedNodes(
+  resp: IndustryChainPanoramaQueryResponse,
+  layerIds: Set<string>,
+): PanoramaGraphNode[] {
+  const seen = new Set<string>(layerIds)
+  const candidates: PanoramaGraphNode[] = []
+  for (const node of resp.graph.nodes) {
+    if (!node.id || seen.has(node.id)) continue
+    seen.add(node.id)
+    candidates.push(node)
+  }
+  const layerAdjacency = new Map<string, number>()
+  for (const edge of resp.graph.edges) {
+    if (layerIds.has(edge.source)) {
+      layerAdjacency.set(edge.target, (layerAdjacency.get(edge.target) ?? 0) + 1)
+    }
+    if (layerIds.has(edge.target)) {
+      layerAdjacency.set(edge.source, (layerAdjacency.get(edge.source) ?? 0) + 1)
+    }
+  }
+  return candidates.sort(
+    (a, b) => (layerAdjacency.get(b.id) ?? 0) - (layerAdjacency.get(a.id) ?? 0),
+  )
+}
+
+
 function derivedGraphFromResponse(resp: IndustryChainPanoramaQueryResponse): GraphPreset {
   const nodes: GraphNodeData[] = []
   const edges: GraphEdgeData[] = []
   const idMap = new Map<string, GraphNodeData>()
 
   const industryLabel = resp.summary.industry || (resp.input?.industry as string | undefined) || '产业全景'
+  const layerIds = new Set(
+    resp.layers.flatMap((layer) => layer.items.map((item) => item.id)).filter(Boolean),
+  )
+  const expandedCandidates = pickPanoramaExpandedNodes(resp, layerIds)
+  const expandedNodes = expandedCandidates.slice(0, PANORAMA_EXPANDED_LIMIT)
+  const hasExpanded = expandedNodes.length > 0
+  // 有子图扩展节点时压缩分层区域，为画布底部的展开层腾出空间。
+  const layerY = (y: number) => (hasExpanded ? Math.round(28 + (y - 50) * 0.72) : y)
+
   const center: GraphNodeData = {
     id: PANORAMA_CENTER_ID,
     label: industryLabel,
     nodeType: 'main',
     entityType: '产业链核心',
     x: 380,
-    y: 50,
+    y: hasExpanded ? 24 : 50,
     radius: 34,
     confidence: 1,
-    relations: `节点 ${resp.summary.totalNodes} · 边 ${resp.summary.totalEdges}`,
+    relations: hasExpanded
+      ? `子图 ${resp.graph.nodes.length} 节点 · ${resp.graph.edges.length} 边（展开层展示 ${expandedNodes.length}/${expandedCandidates.length}）`
+      : `节点 ${resp.summary.totalNodes} · 边 ${resp.summary.totalEdges}`,
     evidence: ['科技产业链全景图'],
     level: 0,
   }
+
   nodes.push(center)
   idMap.set(center.id, center)
 
@@ -225,9 +294,10 @@ function derivedGraphFromResponse(resp: IndustryChainPanoramaQueryResponse): Gra
         nodeType: visual.nodeType,
         entityType: visual.entityType,
         x,
-        y: visual.y,
+        y: layerY(visual.y),
         radius: 22,
         confidence: item.metricValue != null ? Math.min(1, Math.max(0.4, Number(item.metricValue) / 100)) : 0.75,
+
         relations: item.subtitle || item.metric || visual.entityType,
         evidence: [layer.title],
         level: visual.level,
@@ -244,10 +314,37 @@ function derivedGraphFromResponse(resp: IndustryChainPanoramaQueryResponse): Gra
     })
   }
 
+  // 展开层：depth 控制的子图扩展节点，按行铺在画布底部。
+  expandedNodes.forEach((item, idx) => {
+    const row = Math.floor(idx / PANORAMA_EXPANDED_PER_ROW)
+    const col = idx % PANORAMA_EXPANDED_PER_ROW
+    const rowCount = Math.min(
+      PANORAMA_EXPANDED_PER_ROW,
+      expandedNodes.length - row * PANORAMA_EXPANDED_PER_ROW,
+    )
+    const visual = mapPanoramaGraphNodeType(item.type)
+    const node: GraphNodeData = {
+      id: item.id,
+      label: item.label || item.id.slice(0, 10),
+      nodeType: visual.nodeType,
+      entityType: visual.entityType,
+      x: rowCount === 1 ? 380 : 60 + ((700 - 60) * col) / (rowCount - 1),
+      y: 340 + row * 50,
+      radius: 13,
+      confidence: 0.6,
+      relations: item.subtitle || item.type || visual.entityType,
+      evidence: [`子图扩展 · depth=${resp.input?.depth ?? '—'}`],
+      level: 4 + row,
+    }
+    nodes.push(node)
+    idMap.set(node.id, node)
+  })
+
   const seenEdges = new Set(edges.map((e) => `${e.from}::${e.to}::${e.label}`))
   resp.graph.edges.forEach((edge: PanoramaGraphEdge, idx) => {
     if (!idMap.has(edge.source) || !idMap.has(edge.target)) return
     const key = `${edge.source}::${edge.target}::${edge.label}`
+
     if (seenEdges.has(key)) return
     seenEdges.add(key)
     edges.push({
@@ -323,6 +420,60 @@ const liveModuleGraph = computed(() => {
     if (!data) return null
     return mapLiveGraph(data.graph?.nodes, data.graph?.edges)
   }
+  if (isLiveColleague.value) {
+    const data = liveResponse.value?.data
+    const graph = data?.graph
+    if (!graph?.nodes?.length) return null
+    const otherNodes = graph.nodes.filter((node: any) => (
+      node.id !== data.expert?.id && node.id !== data.targetExpert?.id && node.type !== 'organization'
+    ))
+    return mapLiveGraph(
+      graph.nodes.map((node: any) => {
+        const extraIndex = Math.max(0, otherNodes.findIndex((item: any) => item.id === node.id))
+        const extraAngle = (Math.PI * 2 * extraIndex) / Math.max(1, otherNodes.length)
+        const position = node.id === data.expert?.id
+          ? { x: 220, y: 180 }
+          : node.id === data.targetExpert?.id
+            ? { x: 620, y: 180 }
+            : node.type === 'organization'
+              ? { x: 420, y: 360 }
+              : { x: 420 + Math.cos(extraAngle) * 260, y: 360 + Math.sin(extraAngle) * 160 }
+        return {
+          id: node.id,
+          label: node.label,
+          nodeType: node.type === 'organization' ? 'org' : node.type === 'expert' ? 'expert' : node.type,
+          x: position.x,
+          y: position.y,
+          entityType: node.type === 'expert' ? '科技专家' : node.type === 'organization' ? '共同机构' : '合作成果',
+          confidence: node.data?.confidence,
+          relations: node.data?.title || node.label,
+          evidence: node.data?.evidence || [],
+          sourceTable: node.data?.provenance?.sourceTable,
+          sourceRecordId: node.data?.provenance?.sourceValue,
+          sourceField: node.data?.provenance?.sourceField,
+          sourceValue: node.data?.provenance?.sourceValue,
+          sourceSystem: node.data?.details?.source_system,
+          ingestBatch: node.data?.provenance?.ingestBatch,
+          ingestTime: node.data?.provenance?.ingestTime,
+        }
+      }),
+      graph.edges.map((edge: any, index: number) => ({
+        id: edge.id || `colleague-edge-${index}`,
+        from: edge.source,
+        to: edge.target,
+        label: edge.label,
+        category: edge.label === '同事关系' ? '同事' : edge.label,
+        confidence: edge.data?.confidence,
+        inferred: edge.label === '同事关系',
+        matchEvidence: (edge.data?.evidence || []).join('；'),
+        matchMethod: edge.data?.ruleName,
+        sourceTable: edge.data?.source_table,
+        sourceRecordId: edge.data?.source_record_id,
+        ingestBatch: edge.data?.ingest_batch,
+        ingestTime: edge.data?.ingest_time,
+      })),
+    )
+  }
   return null
 })
 
@@ -352,50 +503,12 @@ const graphEdges = computed<GraphEdgeData[]>(() => {
     nodes.some((node) => node.id === edge.to)
   ))
 })
-const panoramaLayerOptions = [
-  { value: 1, label: '一级 · 产业环节' },
-  { value: 2, label: '二级 · 企业/专家/技术' },
-  { value: 3, label: '三级 · 动态事件' },
-]
-const panoramaRelationOptions = [
-  { value: 'all', label: '全部关系' },
-  { value: 'chain', label: '产业链主干' },
-  { value: 'enterprise', label: '企业布局' },
-  { value: 'expert', label: '专家支撑' },
-  { value: 'technology', label: '技术支撑' },
-  { value: 'event', label: '事件影响' },
-]
-const displayedGraphNodes = computed(() => {
-  if (!isPanorama.value) return graphNodes.value
-  return graphNodes.value.filter((node) => (node.level ?? 1) <= panoramaLayer.value)
-})
+const displayedGraphNodes = computed(() => graphNodes.value)
 const displayedGraphEdges = computed(() => {
   const visibleNodeIds = new Set(displayedGraphNodes.value.map((node) => node.id))
-  const nodeById = new Map(graphNodes.value.map((node) => [node.id, node]))
-  const usingLive = isPanorama.value && panoramaResponse.value !== null
-  return graphEdges.value.filter((edge) => {
-    if (!visibleNodeIds.has(edge.from) || !visibleNodeIds.has(edge.to)) return false
-    if (!isPanorama.value || panoramaRelation.value === 'all') return true
-    if (usingLive) {
-      const fromNode = nodeById.get(edge.from)
-      const toNode = nodeById.get(edge.to)
-      if (!fromNode || !toNode) return false
-      const types = new Set([fromNode.nodeType, toNode.nodeType])
-      if (panoramaRelation.value === 'chain') return types.has('main')
-      if (panoramaRelation.value === 'enterprise') return types.has('company')
-      if (panoramaRelation.value === 'expert') return types.has('expert')
-      if (panoramaRelation.value === 'technology') return types.has('topic')
-      if (panoramaRelation.value === 'event') return types.has('event') || types.has('paper')
-      return true
-    }
-    if (panoramaRelation.value === 'chain') {
-      return ['上游环节', '中游环节', '下游环节', '资源供给', '能力输出'].includes(edge.label)
-    }
-    if (panoramaRelation.value === 'enterprise') return edge.label.includes('企业')
-    if (panoramaRelation.value === 'expert') return edge.label.includes('专家')
-    if (panoramaRelation.value === 'technology') return edge.label.includes('技术')
-    return edge.label.includes('事件')
-  })
+  return graphEdges.value.filter((edge) => (
+    visibleNodeIds.has(edge.from) && visibleNodeIds.has(edge.to)
+  ))
 })
 const graphLegendItems = computed(() => Array.from(
   new Map(displayedGraphNodes.value.map((node) => [node.nodeType, {
@@ -413,15 +526,18 @@ const selectedEdge = computed(() => (
     ? graphEdges.value.find((edge) => edge.id === selectedGraphEdgeId.value) ?? null
     : null
 ))
+// 未点选节点/关系时，实体/关系 tab 展示图里第一个对象，避免查询后 tab 空白。
+const activeEntityNode = computed(() => selectedNode.value ?? graphNodes.value[0] ?? null)
+const activeRelationEdge = computed(() => selectedEdge.value ?? graphEdges.value[0] ?? null)
 const selectedEdgeNodes = computed(() => {
-  const edge = selectedEdge.value
+  const edge = activeRelationEdge.value
   return {
     from: graphNodes.value.find((node) => node.id === edge?.from),
     to: graphNodes.value.find((node) => node.id === edge?.to),
   }
 })
 const relationDetailRows = computed(() => {
-  const edge = selectedEdge.value
+  const edge = activeRelationEdge.value
   const from = selectedEdgeNodes.value.from
   const to = selectedEdgeNodes.value.to
 
@@ -519,12 +635,11 @@ function formatTimestamp(date: Date) {
 
 const updateStatus = computed(() => {
   if (running.value) return '正在拉取最新批次数据…'
-  if (autoRefresh.value) return `自动更新中（每 ${refreshIntervalSeconds}s 刷新一次）`
-  if (lastUpdateTime.value === null) return '尚未更新，点击"刷新数据"或开启自动更新'
+  if (lastUpdateTime.value === null) return '尚未更新，点击"执行测试"查询最新数据'
   const elapsed = Math.floor((Date.now() - lastUpdateTime.value) / 1000)
   if (elapsed < 5) return `刚刚更新（${elapsed}s 前）`
   if (elapsed < 60) return `已更新（${elapsed}s 前）`
-  if (elapsed < 3600) return `已更新（${Math.floor(elapsed / 60)}min 前），建议刷新`
+  if (elapsed < 3600) return `已更新（${Math.floor(elapsed / 60)}min 前）`
   return `已更新（${Math.floor(elapsed / 3600)}h 前），数据可能过期`
 })
 
@@ -591,6 +706,24 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       return data.summaryRows.map((row) => ({ label: row.label, value: row.value }))
     }
   }
+  if (isLiveColleague.value) {
+    const data = liveResponse.value?.data
+    if (!data) return [{ label: '查询状态', value: '等待执行' }]
+    const summary = data.summary || {}
+    return [
+      { label: '专家 A', value: summary.coreExpert || '—' },
+      { label: '核心专家机构', value: summary.coreExpertOrganization || '—' },
+      { label: '专家 B', value: summary.primaryColleague || (data.targetExpert ? `${data.targetExpert.name}｜未命中同事关系` : '—') },
+      { label: '共同机构', value: summary.commonOrganization || '—' },
+      { label: '所属部门/团队', value: summary.departmentOrTeam || '—' },
+      { label: '关系生效时段', value: summary.effectivePeriod || '—' },
+      { label: '任职重叠时间', value: summary.overlapDuration || '—' },
+      { label: '共同工作内容', value: summary.workContent || '暂无共同成果证据' },
+      { label: '协作场景', value: summary.collaborationScenes || '—' },
+      { label: '同事期间成果', value: summary.periodAchievements || '0项' },
+      { label: '关系判定', value: data.total ? '存在同事关系' : '不存在同事关系' },
+    ]
+  }
   if (isLiveCoop.value) {
     const data = liveCoopResult.value
     if (!data) {
@@ -620,10 +753,11 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
   return null
 })
 
-const liveRules = computed(() => {
+const liveRules = computed<Array<Record<string, any>>>(() => {
   if (isLiveAlumni.value && liveAlumniResult.value?.rules?.length) return liveAlumniResult.value.rules
   if (isLiveCoop.value && liveCoopResult.value?.rules?.length) return liveCoopResult.value.rules
-  return props.moduleInfo.rules
+  if (isLiveColleague.value && liveResponse.value?.data?.rules?.length) return liveResponse.value.data.rules
+  return props.moduleInfo.rules as Array<Record<string, any>>
 })
 
 const liveEntities = computed(() => {
@@ -697,6 +831,8 @@ const liveRelationRows = computed(() => {
 const liveProvenance = computed(() => {
   if (isLiveAlumni.value) return liveAlumniResult.value?.provenance ?? null
   if (isLiveCoop.value) return liveCoopResult.value?.provenance ?? null
+  if (isPanorama.value) return panoramaResponse.value?.provenance ?? null
+  if (isExpertDirect.value) return expertDirectResponse.value?.provenance ?? null
   return null
 })
 
@@ -779,7 +915,8 @@ function computePanoramaSummaryRows(resp: IndustryChainPanoramaQueryResponse): R
     ['重点企业', layerLabel('leading_enterprise')],
     ['核心专家', layerLabel('leading_expert')],
     ['产业动态事件', layerLabel('flagship_achievement')],
-    ['图谱规模', `${resp.summary.totalNodes} 个节点｜${resp.summary.totalEdges} 条关系`],
+    ['图谱规模', `子图 ${resp.graph.nodes.length} 个节点｜${resp.graph.edges.length} 条关系（全库 ${resp.summary.totalNodes}｜${resp.summary.totalEdges}）`],
+
     ['更新状态', updateStatus.value],
   ])
   return props.moduleInfo.summaryRows.map((row) => {
@@ -790,17 +927,26 @@ function computePanoramaSummaryRows(resp: IndustryChainPanoramaQueryResponse): R
 
 function buildPanoramaRequest(): IndustryChainPanoramaQueryRequest {
   const raw = parameterValues.value
-  const clampInt = (value: string, min: number, max: number, fallback: number) => {
+  const clampInt = (
+    value: string,
+    min: number,
+    max: number,
+    fallback: number,
+    label: string,
+  ) => {
     const n = Number.parseInt(value, 10)
     if (Number.isNaN(n)) return fallback
+    if (n < min || n > max) {
+      showToast(`${label} 超出范围 [${min}, ${max}]，已自动调整为边界值`, 'warning')
+    }
     return Math.min(max, Math.max(min, n))
   }
   return {
     dataSource: 'all',
     industry: (raw.industry ?? '').trim() || undefined,
     anchorId: (raw.anchorId ?? '').trim() || undefined,
-    depth: clampInt(raw.depth ?? '', 1, 3, 2),
-    topK: clampInt(raw.topK ?? '', 1, 20, 5),
+    depth: clampInt(raw.depth ?? '', 1, 3, 2, '层级深度 depth'),
+    topK: clampInt(raw.topK ?? '', 1, 20, 5, 'topK'),
   }
 }
 
@@ -939,8 +1085,6 @@ watch(
   () => props.moduleInfo.key,
   () => {
     resultMode.value = 'summary'
-    panoramaLayer.value = 3
-    panoramaRelation.value = 'all'
     selectedGraphNodeId.value = null
     selectedGraphEdgeId.value = null
     liveResponse.value = null
@@ -954,7 +1098,6 @@ watch(
     expertDirectResponse.value = null
     expertDirectError.value = null
     resetParameters()
-    autoRefresh.value = false
     if (isLiveModule.value) {
       void loadModuleDescribe()
     }
@@ -964,6 +1107,10 @@ watch(
 
 async function loadModuleDescribe() {
   try {
+    if (isLiveColleague.value) {
+      liveDescribe.value = { endpoint: props.moduleInfo.endpoint, space: 'dev' }
+      return
+    }
     const meta = isLiveAlumni.value
       ? await describeExpertAlumniRelation() as unknown as Record<string, unknown>
       : await describeExpertCooperationAchievement() as unknown as Record<string, unknown>
@@ -975,13 +1122,6 @@ async function loadModuleDescribe() {
   }
 }
 
-watch([panoramaLayer, panoramaRelation], () => {
-  if (!isPanorama.value) return
-  selectedGraphNodeId.value = null
-  selectedGraphEdgeId.value = null
-  resultMode.value = 'summary'
-})
-
 function formatValue(value: unknown) {
   if (Array.isArray(value)) return value.join('、')
   if (typeof value === 'boolean') return value ? '是' : '否'
@@ -989,11 +1129,34 @@ function formatValue(value: unknown) {
   return String(value)
 }
 
+/**
+ * 校验当前模块声明为必填（required === '是'）的参数。
+ *
+ * Returns:
+ *     全部必填项都已填写时返回 true；否则把提示写入 fieldErrors 并返回 false。
+ */
+function validateParameters(): boolean {
+  const errors: Record<string, string> = {}
+  for (const field of props.moduleInfo.requestFields) {
+    if (field.required !== '是') continue
+    if ((parameterValues.value[field.name] ?? '').trim()) continue
+    errors[field.name] = `请输入${field.label ?? field.name}`
+  }
+  fieldErrors.value = errors
+  return Object.keys(errors).length === 0
+}
+
 function resetParameters() {
+  expertDirectAbortController?.abort()
+  expertDirectAbortController = null
+  running.value = false
+  fieldErrors.value = {}
   parameterValues.value = Object.fromEntries(
     props.moduleInfo.requestFields.map((field) => [
       field.name,
-      formatValue(props.moduleInfo.requestExample[field.name]),
+      props.moduleInfo.prefillFormFromExample === false
+        ? ''
+        : formatValue(props.moduleInfo.requestExample[field.name]),
     ]),
   )
   paramResetToken.value += 1
@@ -1081,6 +1244,7 @@ function parseTimeRange(raw: string | undefined): { start?: string; end?: string
 
 async function handleRun() {
   if (running.value) return
+  if (!validateParameters()) return
   running.value = true
   liveError.value = null
 
@@ -1106,9 +1270,13 @@ async function handleRun() {
   }
 
   if (isExpertDirect.value) {
+    expertDirectAbortController?.abort()
+    const controller = new AbortController()
+    expertDirectAbortController = controller
     try {
       const request = buildExpertDirectRequest()
-      const response = await queryExpertDirectRelation(request)
+      const response = await queryExpertDirectRelation(request, controller.signal)
+      if (controller.signal.aborted) return
       expertDirectResponse.value = response
       expertDirectError.value = null
       selectedGraphNodeId.value = null
@@ -1117,11 +1285,15 @@ async function handleRun() {
       lastTestTime.value = formatTimestamp(now)
       lastUpdateTime.value = now.getTime()
     } catch (error) {
+      if (controller.signal.aborted) return
       const message = error instanceof Error ? error.message : String(error)
       expertDirectError.value = message
       expertDirectResponse.value = null
     } finally {
-      running.value = false
+      if (expertDirectAbortController === controller) {
+        running.value = false
+        expertDirectAbortController = null
+      }
     }
     return
   }
@@ -1167,6 +1339,37 @@ async function handleRun() {
         resultMode.value = 'summary'
         selectedGraphNodeId.value = null
         selectedGraphEdgeId.value = null
+      }
+    } else if (isLiveColleague.value) {
+      const expertAId = parameterValues.value.expert_a_id?.trim()
+      if (!expertAId) {
+        showToast('请填写专家 A', 'warning')
+        return
+      }
+      const expertBId = parameterValues.value.expert_b_id?.trim()
+      // B 留空时走列表模式：返回该专家的同机构同事网络
+      const body: Record<string, unknown> = {
+        expert_a_id: expertAId,
+        start_time: optionalParam(parameterValues.value.start_time),
+        end_time: optionalParam(parameterValues.value.end_time),
+        limit: 20,
+        offset: 0,
+      }
+      if (expertBId) body.expert_b_id = expertBId
+      const res = await invokeKgService(props.moduleInfo.endpoint, body, 60000) as Record<string, any>
+      liveResponse.value = res
+      liveApiPayload.value = { describe: liveDescribe.value, request: body, response: res }
+      if (res?.success === false || (res?.code !== undefined && res.code !== 200)) {
+        liveError.value = res?.msg || `业务码 ${res?.code}`
+        showToast(liveError.value || '查询失败', 'warning')
+        resultMode.value = 'api'
+      } else {
+        const total = Number(res?.data?.total || 0)
+        liveError.value = null
+        showToast(expertBId
+          ? (total ? '两位专家存在同事关系' : '两位专家不存在有效同事关系')
+          : `命中 ${total} 名同事`, expertBId ? (total ? 'success' : 'info') : (total ? 'success' : 'info'))
+        resultMode.value = 'summary'
       }
     } else if (isLiveCoop.value) {
       const sourceExpertId = parameterValues.value.sourceExpertId?.trim()
@@ -1221,6 +1424,54 @@ async function handleRun() {
         selectedGraphNodeId.value = null
         selectedGraphEdgeId.value = null
       }
+    } else if (props.moduleInfo.key === 'node-indirect') {
+      // 科技单节点间接关系：走 kg-construction 演示端点
+      const coreNodeId = parameterValues.value.core_node_id?.trim()
+      if (!coreNodeId) {
+        showToast('请填写 core_node_id', 'warning')
+        return
+      }
+      const body = buildPayload()
+      const res = await invokeKgService(props.moduleInfo.endpoint, body, 60000) as Record<string, any>
+      liveResponse.value = res
+      liveApiPayload.value = { describe: liveDescribe.value, request: body, response: res }
+      if (res?.success === false || (res?.code !== undefined && res.code !== 200)) {
+        liveError.value = (res?.msg as string) || `业务码 ${res?.code}`
+        showToast(liveError.value || '查询失败', 'warning')
+        resultMode.value = 'api'
+      } else {
+        liveError.value = null
+        resultMode.value = 'summary'
+        selectedGraphNodeId.value = null
+        selectedGraphEdgeId.value = null
+        showToast('调用成功', 'success')
+      }
+    } else if (props.moduleInfo.key === 'paper-cooperation') {
+      // 科技专家论文合作关系：走 kg-construction 结构化结果端点
+      const expertAId = parameterValues.value.expertAId?.trim()
+      const expertBId = parameterValues.value.expertBId?.trim()
+      if (!expertAId || !expertBId) {
+        showToast('请填写 expertAId 与 expertBId', 'warning')
+        return
+      }
+      const body = {
+        ...buildPayload(),
+        dataSource: 'knowledge_graph',
+      }
+      const res = await invokeKgService(props.moduleInfo.endpoint, body, 60000) as Record<string, any>
+      liveResponse.value = res
+      liveApiPayload.value = { describe: liveDescribe.value, request: body, response: res }
+      if (res?.success === false || (res?.code !== undefined && res.code !== 200)) {
+        liveError.value = (res?.msg as string) || `业务码 ${res?.code}`
+        showToast(liveError.value || '查询失败', 'warning')
+        resultMode.value = 'api'
+      } else {
+        liveError.value = null
+        resultMode.value = 'summary'
+        selectedGraphNodeId.value = null
+        selectedGraphEdgeId.value = null
+        showToast('调用成功', 'success')
+      }
     } else if (props.moduleInfo.key === 'enterprise-relation' || props.moduleInfo.key === 'industry-chain-event') {
       // 重点关注科技企业关系 / 产业链点 TOP-N 事件：走通用 kg-service 端点
       const body = buildPayload()
@@ -1261,46 +1512,20 @@ async function handleRun() {
   }
 }
 
-function startAutoRefresh() {
-  if (refreshTimer !== null) return
-  refreshTimer = window.setInterval(() => {
-    handleRun()
-  }, refreshIntervalSeconds * 1000)
-}
-
-function stopAutoRefresh() {
-  if (refreshTimer !== null) {
-    window.clearInterval(refreshTimer)
-    refreshTimer = null
+function setParameterValue(fieldName: string, value: string) {
+  if (fieldErrors.value[fieldName]) {
+    const rest = { ...fieldErrors.value }
+    delete rest[fieldName]
+    fieldErrors.value = rest
   }
-}
-
-watch(autoRefresh, (on) => {
-  if (on) {
-    handleRun()
-    startAutoRefresh()
-  } else {
-    stopAutoRefresh()
+  parameterValues.value = {
+    ...parameterValues.value,
+    [fieldName]: value,
   }
-})
-
-onBeforeUnmount(() => {
-  stopAutoRefresh()
-})
-
-function resetPanoramaView() {
-  panoramaLayer.value = 3
-  panoramaRelation.value = 'all'
-  selectedGraphNodeId.value = null
-  selectedGraphEdgeId.value = null
-  resultMode.value = 'summary'
 }
 
 function handleParameterInput(fieldName: string, event: Event) {
-  parameterValues.value = {
-    ...parameterValues.value,
-    [fieldName]: (event.target as HTMLInputElement).value,
-  }
+  setParameterValue(fieldName, (event.target as HTMLInputElement).value)
 }
 
 function handleSelectGraphNode(node: GraphNodeData) {
@@ -1326,13 +1551,32 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
     </div>
     <div class="service-console__params">
       <label v-for="field in moduleInfo.requestFields" :key="field.name">
-        <span><i v-if="field.required === '是'">*</i>{{ field.name }}</span>
-        <input
+        <span><i v-if="field.required === '是'">*</i>{{ field.label ?? field.name }}</span>
+        <MonthCalendarField
+          v-if="field.ui === 'month-calendar'"
           :key="`${field.name}-${paramResetToken}`"
+          :model-value="parameterValues[field.name] ?? ''"
+          :placeholder="field.placeholder ?? field.description"
+          :invalid="!!fieldErrors[field.name]"
+          :title="field.description"
+          :described-by="fieldErrors[field.name] ? `field-error-${field.name}` : undefined"
+          @update:model-value="setParameterValue(field.name, $event)"
+        />
+        <input
+          v-else
+          :type="field.type === 'month' ? 'month' : 'text'"
+          :key="`${field.name}-${paramResetToken}`"
+          :class="{ 'is-invalid': !!fieldErrors[field.name] }"
           :value="parameterValues[field.name] ?? ''"
-          :placeholder="field.description"
+          :placeholder="field.placeholder ?? field.description"
+          :title="field.description"
+          :aria-invalid="fieldErrors[field.name] ? 'true' : undefined"
+          :aria-describedby="fieldErrors[field.name] ? `field-error-${field.name}` : undefined"
           @input="handleParameterInput(field.name, $event)"
         />
+        <small v-if="fieldErrors[field.name]" :id="`field-error-${field.name}`" class="field-error" role="alert">
+          {{ fieldErrors[field.name] }}
+        </small>
       </label>
     </div>
     <div class="service-console__actions">
@@ -1349,29 +1593,6 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           <span>最近测试时间：</span>
           <strong>{{ lastTestTime }}</strong>
         </div>
-      </div>
-      <div v-if="isPanorama" class="graph-panel__filters" aria-label="产业链全景图显示控制">
-        <label>
-          <span>层级展开</span>
-          <select v-model.number="panoramaLayer">
-            <option v-for="item in panoramaLayerOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
-        </label>
-        <label>
-          <span>关系筛选</span>
-          <select v-model="panoramaRelation">
-            <option v-for="item in panoramaRelationOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
-        </label>
-        <button type="button" @click="resetPanoramaView">恢复全景</button>
-        <span class="graph-panel__filters-divider" aria-hidden="true"></span>
-        <button type="button" class="graph-panel__refresh" :disabled="running" @click="handleRun">
-          {{ running ? '刷新中…' : '↻ 刷新数据' }}
-        </button>
-        <label class="graph-panel__autorefresh">
-          <input type="checkbox" v-model="autoRefresh" />
-          <span>自动更新（{{ refreshIntervalSeconds }}s）</span>
-        </label>
       </div>
       <div class="graph-panel__legend" aria-label="图谱实体类型图例">
         <span v-for="item in graphLegendItems" :key="item.type" :class="`is-${item.type}`">
@@ -1416,16 +1637,16 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <dd>{{ value }}</dd>
           </div>
         </dl>
-        <dl v-else-if="resultMode === 'entity' && selectedNode" class="result-panel__table">
-          <div><dt>实体名称</dt><dd>{{ selectedNode.label }}</dd></div>
-          <div><dt>实体类型</dt><dd>{{ selectedNode.entityType }}</dd></div>
-          <div><dt>命中关系</dt><dd>{{ selectedNode.relations }}</dd></div>
+        <dl v-else-if="resultMode === 'entity' && activeEntityNode" class="result-panel__table">
+          <div><dt>实体名称</dt><dd>{{ activeEntityNode.label }}</dd></div>
+          <div><dt>实体类型</dt><dd>{{ activeEntityNode.entityType }}</dd></div>
+          <div><dt>命中关系</dt><dd>{{ activeEntityNode.relations }}</dd></div>
           <div>
             <dt>置信度</dt>
             <dd>
               {{
                 formatConfidence(
-                  selectedNode.confidence,
+                  activeEntityNode.confidence,
                 )
               }}
             </dd>
@@ -1437,7 +1658,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <dd>{{ value }}</dd>
           </div>
         </dl>
-        <dl v-else-if="resultMode === 'relation' && selectedEdge" class="result-panel__table">
+        <dl v-else-if="resultMode === 'relation' && activeRelationEdge" class="result-panel__table">
           <div v-for="([label, value], index) in relationDetailRows" :key="`${label}-${index}`">
             <dt>{{ label }}</dt>
             <dd>{{ value }}</dd>
@@ -1506,6 +1727,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <p v-if="!(liveResponse.data?.evidence || []).length" class="result-provenance__empty">暂无溯源证据数据</p>
           </div>
         </section>
+        <p v-else-if="resultMode === 'provenance'" class="result-provenance__empty">
+          暂无溯源数据，请先执行查询，或在图谱中选中一个实体/关系。
+        </p>
         <div v-else-if="resultMode === 'rule'" class="result-panel__rules">
           <article v-for="(rule, index) in liveRules" :key="rule.name">
             <header>
@@ -1533,6 +1757,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 <style scoped>
 .service-console {
+  position: relative;
+  /* 让年月日历弹层能盖在下方结果面板之上（.kg-panel 的 backdrop-filter 会生成层叠上下文） */
+  z-index: 5;
   display: grid;
   grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.8fr) auto;
   align-items: end;
@@ -1601,6 +1828,19 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   background: #fff;
   color: var(--text-primary);
   font-size: 15px;
+}
+
+.service-console__params input.is-invalid {
+  border-color: var(--danger);
+}
+
+/* 错误提示独占一行，位于输入框下方，不会压到方框边线 */
+.service-console__params .field-error {
+  display: block;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 16px;
+  word-break: break-all;
 }
 
 .field-info-icon {
@@ -1784,13 +2024,13 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .result-panel__tabs button {
-  height: 28px;
-  padding: 0 12px;
+  height: 26px;
+  padding: 0 6px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -1798,6 +2038,18 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   background: var(--surface);
   color: var(--primary);
   font-weight: 600;
+}
+
+.result-panel .kg-panel__header {
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-height: 44px;
+  padding: 6px 12px;
+}
+
+.result-panel .kg-panel__title {
+  font-size: 15px;
+  line-height: 22px;
 }
 
 .result-panel__table {

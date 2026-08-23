@@ -9,6 +9,7 @@
  * 因此本文件仅使用 /v1/kg-construction/... 路径。
  */
 
+import type { AlumniProvenance } from './expertAlumniRelation'
 import { http } from './http'
 
 
@@ -105,6 +106,7 @@ export interface ExpertDirectRelationQueryResponse {
     edges: DirectRelationGraphEdge[]
   }
   source: DirectRelationSource
+  provenance?: AlumniProvenance
   apiResultExample: Record<string, unknown>
 }
 
@@ -117,9 +119,10 @@ const EXPERT_DIRECT_RELATION_ENDPOINT = '/v1/kg-construction/expert-direct-relat
  */
 export function queryExpertDirectRelation(
   request: ExpertDirectRelationQueryRequest,
+  signal?: AbortSignal,
 ) {
   return http.post<
     ExpertDirectRelationQueryResponse,
     ExpertDirectRelationQueryResponse
-  >(EXPERT_DIRECT_RELATION_ENDPOINT, request)
+  >(EXPERT_DIRECT_RELATION_ENDPOINT, request, { signal })
 }

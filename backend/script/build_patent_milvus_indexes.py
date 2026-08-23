@@ -281,9 +281,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=f"为 {graph_space} 中的 Patent 建立 Milvus 八类索引"
     )
-    parser.add_argument("--page-size", type=int, default=1000)
-    parser.add_argument("--collection", default="patent")
-    parser.add_argument("--state-dir", type=Path, default=Path("var/patent_indexes"))
     parser.add_argument(
         "--rebuild", action="store_true", help="允许删除并重建已存在的 Patent Collection"
     )
@@ -292,6 +289,9 @@ def main() -> None:
         "--max-rows", type=int, default=None, help="仅用于小批验证；默认索引全部Patent"
     )
     args = parser.parse_args()
+    collection_name = os.getenv("PATENT_MILVUS_COLLECTION", "patent")
+    state_dir = Path(os.getenv("PATENT_INDEX_STATE_DIR", "var/patent_indexes"))
+    page_size = int(os.getenv("PATENT_INDEX_PAGE_SIZE", "1000"))
     if args.resume and args.rebuild:
         parser.error("--resume 与 --rebuild 不能同时使用")
     from pymilvus import MilvusClient
@@ -306,16 +306,16 @@ def main() -> None:
         graph,
         client,
         PATENT_SPEC,
-        args.page_size,
-        args.collection,
-        args.state_dir,
+        page_size,
+        collection_name,
+        state_dir,
         rebuild=args.rebuild,
         resume=args.resume,
         max_rows=args.max_rows,
     )
     print(
         json.dumps(
-            {"collection": args.collection, "Patent": count, "indexes": 8}, ensure_ascii=False
+            {"collection": collection_name, "Patent": count, "indexes": 8}, ensure_ascii=False
         )
     )
 

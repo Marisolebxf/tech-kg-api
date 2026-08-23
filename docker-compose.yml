@@ -29,6 +29,12 @@ services:
       PAPER_COOP_MYSQL_PASSWORD: ${PAPER_COOP_MYSQL_PASSWORD:-${MYSQL_PASSWORD:-123456789}}
       MILVUS_HOST: ${MILVUS_HOST:-milvus}
       MILVUS_PORT: ${MILVUS_PORT:-19530}
+      MILVUS_URI: ${MILVUS_URI:-}
+      MILVUS_TOKEN: ${MILVUS_TOKEN:-}
+      PATENT_MILVUS_COLLECTION: ${PATENT_MILVUS_COLLECTION:-patent}
+      PATENT_INDEX_STATE_DIR: ${PATENT_INDEX_STATE_DIR:-/app/var/patent_indexes}
+      PATENT_INDEX_PAGE_SIZE: ${PATENT_INDEX_PAGE_SIZE:-1000}
+      PATENT_BM25_DIM: ${PATENT_BM25_DIM:-262144}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-glm-4.7-flash}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
@@ -184,12 +190,28 @@ services:
         PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     container_name: tech-kg-temporal-worker
     command: [".venv/bin/python", "-m", "script.run_temporal_worker"]
+    env_file:
+      - ./backend/.env
     environment:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
       TEMPORAL_TASK_QUEUE: tech-kg-workflows
       WORKFLOW_DATABASE_PATH: /var/lib/tech-kg/workflows.db
       WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
+      TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://trs-graph-service:8090}
+      TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-dev}
+      TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
+      TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
+      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-gkx_element}
+      MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      MILVUS_URI: ${MILVUS_URI:-}
+      MILVUS_TOKEN: ${MILVUS_TOKEN:-}
+      ORG_MILVUS_STATE_DIR: ${ORG_MILVUS_STATE_DIR:-/var/lib/tech-kg/organization_milvus}
     volumes:
       - workflow-state:/var/lib/tech-kg
     depends_on:

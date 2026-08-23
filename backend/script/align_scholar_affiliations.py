@@ -52,6 +52,7 @@ logger = logging.getLogger("script.align_scholar_affiliations")
 BATCH_ID = f"BATCH_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_scholar_align"
 ORG_COLLECTION = os.environ.get("SCHOLAR_ORG_COLLECTION", "organization")
 DENSE_MODEL_NAME = os.environ.get("SCHOLAR_DENSE_MODEL", "moka-ai/m3e-small")
+DENSE_DIM = 512  # m3e-small；须与机构 Milvus 集合的 dense_vec 维度一致
 DEFAULT_TOP_K = int(os.environ.get("SCHOLAR_ALIGN_TOPK", "5"))
 DEFAULT_MIN_SCORE = float(os.environ.get("SCHOLAR_ALIGN_MIN_SCORE", "0.65"))
 
@@ -208,6 +209,16 @@ def run(
             ORG_COLLECTION,
         )
         return {"aligned": 0, "reason": "organization_collection_missing"}
+
+    desc = milvus.describe_collection(ORG_COLLECTION)
+    actual_dim = None
+    for field in desc.get("fields", []):
+        if field.get("name") == "dense_vec":
+            actual_dim = int(field.get("params", {}).get("dim", 0))
+            break
+    assert actual_dim == DENSE_DIM, (
+        f"dimension mismatch (expected={DENSE_DIM}, got={actual_dim})"
+    )
 
     try:
         milvus.load_collection(ORG_COLLECTION)

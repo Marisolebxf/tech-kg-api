@@ -198,8 +198,9 @@ def _build_person_props(
     }
 
 
-def load_persons(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
+def load_persons(session, graph, *, dry_run: bool, preview: int = 5, limit: int | None = None) -> dict:
     """遍历 ``dwd_scholar`` 并写入 Person 顶点。"""
+
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
     talent_flags = _fetch_talent_flags(session)
@@ -231,13 +232,15 @@ def load_persons(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
                 props,
             )
         ok += 1
+        if limit is not None and ok >= limit:
+            break
     return {"written": ok}
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def run(*, database: str = "gkx_element", dry_run: bool = False) -> dict:
+def run(*, database: str = "gkx_element", dry_run: bool = False, limit: int | None = None) -> dict:
     mysql = MySQLClient(database=database)
     graph = get_trs_graph_client()
     logger.info(
@@ -250,7 +253,7 @@ def run(*, database: str = "gkx_element", dry_run: bool = False) -> dict:
 
     session = mysql.session()
     try:
-        stats = load_persons(session, graph, dry_run=dry_run)
+        stats = load_persons(session, graph, dry_run=dry_run, limit=limit)
         logger.info("Person: %s", stats)
     finally:
         session.close()
@@ -270,6 +273,12 @@ def _parse_args() -> argparse.Namespace:
         default=os.environ.get("MYSQL_DATABASE", "gkx_element"),
         help="MySQL database name (default: gkx_element).",
     )
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="only load the first N scholars (for small-scale testing).",
+    )
     return ap.parse_args()
 
 
@@ -278,5 +287,5 @@ if __name__ == "__main__":
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     args = _parse_args()
-    result = run(database=args.database, dry_run=args.dry_run)
+    result = run(database=args.database, dry_run=args.dry_run, limit=args.limit)
     logger.info("done: %s", result)

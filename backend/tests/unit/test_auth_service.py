@@ -1,12 +1,16 @@
+from contextlib import contextmanager
 from dataclasses import replace
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
+from application.auth import AuthApplication
 from biz.schemas.auth import MenuSummary, PermissionSetSummary, RoleMenuSummary
 from config.auth import AuthSettings
 from infra.redis import MemoryJsonStore
+from service import platform_access
 from service.auth import AuthenticationError, AuthService
 
 
@@ -81,6 +85,11 @@ class FakeUserCenter:
         return access_token in {"access-token", "refreshed-token"}
 
 
+class BrokenJsonStore(MemoryJsonStore):
+    async def set_json(self, key: str, value: dict[str, Any], ttl_seconds: int) -> None:
+        raise OSError("store unavailable")
+
+
 def _service() -> tuple[AuthService, FakeUserCenter]:
     settings = replace(
         AuthSettings.from_env(),
@@ -121,6 +130,49 @@ async def test_unsafe_next_url_is_replaced() -> None:
     _, next_path = await service.complete_login("valid-code", state)
 
     assert next_path == "/overview"
+
+
+async def test_login_store_failure_is_reported_as_service_unavailable() -> None:
+    settings = replace(
+        AuthSettings.from_env(),
+        enabled=True,
+        client_id="techkg",
+        client_secret="secret",
+    )
+    service = AuthService(settings, BrokenJsonStore(), FakeUserCenter(settings))
+
+    with pytest.raises(AuthenticationError) as exc_info:
+        await service.create_login_url("/overview")
+
+    assert exc_info.value.status_code == 503
+    assert "登录会话服务暂时不可用" in str(exc_info.value)
+
+
+def test_dev_fallback_grants_only_first_user_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @contextmanager
+    def unavailable_session_scope():
+        raise SQLAlchemyError("mysql unavailable")
+        yield
+
+    monkeypatch.setattr(platform_access, "session_scope", unavailable_session_scope)
+    settings = replace(
+        AuthSettings.from_env(),
+        enabled=True,
+        dev_first_user_admin=True,
+    )
+    application = AuthApplication(
+        settings=settings,
+        store=MemoryJsonStore(),
+        user_center=FakeUserCenter(settings),
+    )
+    first_context = application.dev_context()
+    second_context = application.dev_context()
+    second_context.permission_info["userInfo"]["id"] = "second-user"
+
+    assert application.profile(first_context).is_admin is True
+    assert application.profile(second_context).is_admin is False
 
 
 async def test_bearer_validation_is_cached_without_storing_plain_token_in_key() -> None:

@@ -105,6 +105,11 @@ class AuthProfile(CamelCaseModel):
     organizations: list[dict[str, Any]] = Field(default_factory=list)
     expires_at: int | None = None
     auth_enabled: bool = True
+    platform_roles: list[str] = Field(default_factory=lambda: ["platform_user"])
+    platform_permissions: list[str] = Field(
+        default_factory=lambda: ["analysis:read", "correction:submit"]
+    )
+    is_admin: bool = False
 
 
 class LogoutData(CamelCaseModel):

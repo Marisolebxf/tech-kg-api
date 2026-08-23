@@ -89,12 +89,13 @@ async def test_schema_management_full_flow(schema_api, monkeypatch: pytest.Monke
         expert = next(item for item in listing.json()["data"]["items"] if item["name"] == "Expert")
         assert expert["properties"]
 
-        forbidden_system_script = await client.put(
+        forged_header_script = await client.put(
             f"/api/v1/schema-management/schemas/{expert['id']}/script",
             headers={"X-User-Id": "user-a"},
             files={"script": ("expert.py", b"value = 1\n", "text/x-python")},
         )
-        assert forbidden_system_script.status_code == 403
+        # X-User-Id 已不参与鉴权；测试环境登录身份是全局管理员。
+        assert forged_header_script.status_code == 200
 
         system_script = await client.put(
             f"/api/v1/schema-management/schemas/{expert['id']}/script",
@@ -166,11 +167,12 @@ async def test_schema_management_full_flow(schema_api, monkeypatch: pytest.Monke
         )
         assert forbidden_system.status_code == 403
 
-        forbidden_owner = await client.delete(
-            f"/api/v1/schema-management/schemas/{relation['id']}",
+        global_admin_replace = await client.put(
+            f"/api/v1/schema-management/schemas/{relation['id']}/script",
             headers={"X-User-Id": "user-b"},
+            files={"script": ("relation-v2.py", b"value = 2\n", "text/x-python")},
         )
-        assert forbidden_owner.status_code == 403
+        assert global_admin_replace.status_code == 200
 
         referenced_entity = await client.delete(
             f"/api/v1/schema-management/schemas/{entity['id']}",

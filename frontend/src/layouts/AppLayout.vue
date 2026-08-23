@@ -15,7 +15,6 @@ import navServices from '../assets/icons/nav-services.svg'
 import navTasks from '../assets/icons/nav-tasks.svg'
 // import navFlow from '../assets/icons/nav-flow.svg'
 import navTools from '../assets/icons/nav-tools.svg'
-import { getPlatformOverviewRisks } from '../api/platformOverview'
 import { useAppStore } from '../stores/app'
 import { useAuthStore } from '../stores/auth'
 import logoKg from '../assets/images/logo-kg.png'
@@ -28,23 +27,19 @@ const currentUser = computed(() => authStore.profile?.user)
 const userAvatar = computed(() => currentUser.value?.avatar || figmaUserAvatar)
 const userDisplayName = computed(() => authStore.displayName)
 const userRoleName = computed(() => authStore.primaryRole)
-const userBadge = computed(() => authStore.profile?.roles[0]?.type === 2 ? '机构角色' : '应用角色')
+const userBadge = computed(() => authStore.isAdmin ? '全局管理' : '业务用户')
+const isAdminArea = computed(() => route.path.startsWith('/admin'))
 const pageTitle = computed(() => String(route.meta.title ?? '亿级知识图谱'))
 const pageIcon = computed(() => {
   if (route.path === '/overview') return navOverview
-  if (route.path === '/schema') return navSchema
-  if (route.path.startsWith('/manual-review')) return navReview
-  if (route.path === '/tasks' || route.path.startsWith('/processing-instance/') || route.path.startsWith('/task-detail/')) return navTasks
-  if (route.path === '/configurations') return navTools
+  if (route.path.includes('/schema')) return navSchema
+  if (route.path.includes('/reviews') || route.path.includes('/corrections')) return navReview
+  if (route.path.includes('/tasks') || route.path.includes('/processing-instance/') || route.path.includes('/task-detail/')) return navTasks
+  if (route.path.includes('/members')) return navTools
   if (route.path === '/graph-query') return navQuery
   if (route.path === '/pipelines') return navTasks
   if (route.path.startsWith('/user-') || route.path.startsWith('/account-') || route.path === '/operation-logs') return navTools
   return navServices
-})
-const activePrimaryNav = computed(() => {
-  if (route.path.startsWith('/manual-review')) return 'manual-review'
-  if (route.path === '/tasks' || route.path.startsWith('/processing-instance/') || route.path.startsWith('/task-detail/')) return 'tasks'
-  return ''
 })
 const routeError = ref('')
 const serviceNavCollapsed = ref(false)
@@ -77,7 +72,6 @@ const alertItems = ref<Array<{
   detailTo: string
   reviewTo: string
 }>>([])
-const blockedAlertCount = computed(() => alertItems.value.filter((item) => item.blocked).length)
 const serviceNavItems = [
   { to: '/expert-direct', label: '专家直接关系', fullLabel: '专家直接关系' },
   { to: '/node-indirect', label: '单节点间接关系', fullLabel: '单节点间接关系' },
@@ -132,6 +126,10 @@ function openAlertDrawer() {
 function toggleUserMenu() {
   alertPreviewOpen.value = false
   userMenuOpen.value = !userMenuOpen.value
+}
+
+async function switchPortal() {
+  await router.push(isAdminArea.value ? '/overview' : '/admin/reviews')
 }
 
 async function handleAccountAction(action: '个人中心' | '账号与安全' | '操作记录' | '退出登录') {
@@ -213,26 +211,6 @@ function handleVisibilityChange() {
   if (document.visibilityState === 'visible') handleViewportResize()
 }
 
-async function loadAlertItems() {
-  try {
-    const risks = await getPlatformOverviewRisks()
-    alertItems.value = risks.map((risk, index) => ({
-      id: `platform-risk-${index + 1}`,
-      blocked: risk.title.includes('阻断'),
-      module: '平台总览',
-      title: risk.title,
-      meta: risk.detail,
-      time: '待处理',
-      status: '待人工处理',
-      hasReviewDetail: true,
-      detailTo: risk.detailTo,
-      reviewTo: risk.reviewTo,
-    }))
-  } catch {
-    alertItems.value = []
-  }
-}
-
 function handleDocumentPointerDown(event: PointerEvent) {
   if (userMenuOpen.value && !userEntryRef.value?.contains(event.target as Node)) userMenuOpen.value = false
 }
@@ -261,7 +239,6 @@ watch(() => route.fullPath, () => {
 })
 
 onMounted(() => {
-  void loadAlertItems()
   assistantViewport.value = { width: window.innerWidth, height: window.innerHeight }
   placeAssistantAtDefault()
   window.addEventListener('resize', handleViewportResize)
@@ -293,36 +270,27 @@ onBeforeUnmount(() => {
           </div>
 
           <nav class="app-nav" aria-label="平台功能导航">
+            <template v-if="isAdminArea">
+              <div v-if="!appStore.collapsed" class="app-nav__group"><span>工作台</span></div>
+              <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/admin/corrections" :title="appStore.collapsed ? '修正记录' : undefined">
+                <span class="app-nav__icon" :style="navIconStyle(navReview)" aria-hidden="true"></span><span v-if="!appStore.collapsed">修正记录</span>
+              </RouterLink>
+              <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/admin/reviews" :title="appStore.collapsed ? '审核与同步' : undefined">
+                <span class="app-nav__icon" :style="navIconStyle(navTasks)" aria-hidden="true"></span><span v-if="!appStore.collapsed">审核与同步</span>
+              </RouterLink>
+              <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/admin/members" :title="appStore.collapsed ? '成员管理' : undefined">
+                <span class="app-nav__icon" :style="navIconStyle(navTools)" aria-hidden="true"></span><span v-if="!appStore.collapsed">成员管理</span>
+              </RouterLink>
+            </template>
+            <template v-else>
             <div v-if="!appStore.collapsed" class="app-nav__group"><span>工作台</span></div>
             <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/overview" :title="appStore.collapsed ? '平台总览' : undefined">
               <span class="app-nav__icon" :style="navIconStyle(navOverview)" aria-hidden="true"></span>
               <span v-if="!appStore.collapsed">平台总览</span>
             </RouterLink>
-
-            <div v-if="!appStore.collapsed" class="app-nav__group"><span>图谱建设与治理</span></div>
-            <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/schema" :title="appStore.collapsed ? 'Schema 管理' : undefined">
-              <span class="app-nav__icon" :style="navIconStyle(navSchema)" aria-hidden="true"></span>
-              <span v-if="!appStore.collapsed">Schema 管理</span>
-            </RouterLink>
-            <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" :class="{ 'app-nav__item--active': activePrimaryNav === 'tasks' }" active-class="app-nav__item--active" to="/tasks" :title="appStore.collapsed ? '图谱构建' : undefined">
-              <span class="app-nav__icon" :style="navIconStyle(navTasks)" aria-hidden="true"></span>
-              <span v-if="!appStore.collapsed">图谱构建</span>
-            </RouterLink>
-            <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" :class="{ 'app-nav__item--active': activePrimaryNav === 'manual-review' }" active-class="app-nav__item--active" to="/manual-review" :title="appStore.collapsed ? '人工处理' : undefined">
+            <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/corrections" :title="appStore.collapsed ? '我的修正' : undefined">
               <span class="app-nav__icon" :style="navIconStyle(navReview)" aria-hidden="true"></span>
-              <span v-if="!appStore.collapsed">人工处理</span>
-            </RouterLink>
-            <!-- 抽取 Pipeline 入口暂时隐藏，需要时取消注释恢复
-            <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/pipelines" :title="appStore.collapsed ? '抽取 Pipeline' : undefined">
-              <img class="app-nav__icon" :src="navFlow" alt="" aria-hidden="true" />
-              <span v-if="!appStore.collapsed">抽取 Pipeline</span>
-            </RouterLink>
-            -->
-
-            <div v-if="!appStore.collapsed" class="app-nav__group"><span>平台管理</span></div>
-            <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/configurations" :title="appStore.collapsed ? '配置管理' : undefined">
-              <span class="app-nav__icon" :style="navIconStyle(navTools)" aria-hidden="true"></span>
-              <span v-if="!appStore.collapsed">配置管理</span>
+              <span v-if="!appStore.collapsed">我的修正</span>
             </RouterLink>
 
             <div v-if="!appStore.collapsed" class="app-nav__group"><span>查询与服务</span></div>
@@ -368,6 +336,7 @@ onBeforeUnmount(() => {
                 >{{ item.fullLabel }}</RouterLink>
               </aside>
             </div>
+            </template>
           </nav>
 
         </aside>
@@ -383,14 +352,15 @@ onBeforeUnmount(() => {
               <img :src="appStore.collapsed ? figmaMenuUnfold : figmaMenuFold" alt="" aria-hidden="true" />
             </button>
             <div class="app-top-actions__right">
+              <button v-if="authStore.isAdmin" class="app-portal-switch" type="button" @click="switchPortal">{{ isAdminArea ? '返回用户端' : '进入管理端' }}</button>
               <div class="app-alert-entry" @mouseenter="alertPreviewOpen = !alertDrawerOpen" @mouseleave="alertPreviewOpen = false">
-                <button class="app-alert-bell" type="button" :aria-label="`${alertItems.length} 条异常与人工处理通知`" :aria-expanded="alertDrawerOpen" @click="openAlertDrawer">
+                <button class="app-alert-bell" type="button" :aria-label="`${alertItems.length} 条消息通知`" :aria-expanded="alertDrawerOpen" @click="openAlertDrawer">
                   <img :src="iconMessage" alt="" aria-hidden="true" />
-                  <b>{{ alertItems.length }}</b>
+                  <b v-if="alertItems.length">{{ alertItems.length }}</b>
                 </button>
-                <aside v-if="alertPreviewOpen" class="alert-preview" aria-label="异常与人工处理概览">
-                  <header><div><strong>异常与人工处理</strong><span>实时更新</span></div></header>
-                  <section><article><strong>{{ alertItems.length }}</strong><span>待处理</span></article><article class="danger"><strong>{{ blockedAlertCount }}</strong><span>阻断流程</span></article></section>
+                <aside v-if="alertPreviewOpen" class="alert-preview" aria-label="消息通知概览">
+                  <header><div><strong>消息通知</strong></div></header>
+                  <div class="notification-empty">{{ alertItems.length ? `${alertItems.length} 条新消息` : '暂无消息' }}</div>
                 </aside>
               </div>
               <div ref="userEntryRef" class="app-user-entry">
@@ -430,16 +400,16 @@ onBeforeUnmount(() => {
             </section>
           </section>
         </main>
-        <button v-if="alertDrawerOpen" class="alert-drawer-mask" type="button" aria-label="关闭告警抽屉" @click="alertDrawerOpen = false" />
-        <aside v-if="alertDrawerOpen" class="alert-drawer" aria-label="异常与人工处理通知">
-          <header><div><h2>异常与人工处理</h2><p>{{ alertItems.length }} 条待处理，与人工审核队列同步</p></div><button type="button" aria-label="关闭" @click="alertDrawerOpen = false">×</button></header>
+        <button v-if="alertDrawerOpen" class="alert-drawer-mask" type="button" aria-label="关闭消息通知" @click="alertDrawerOpen = false" />
+        <aside v-if="alertDrawerOpen" class="alert-drawer" aria-label="消息通知">
+          <header><div><h2>消息通知</h2><p>{{ alertItems.length ? `${alertItems.length} 条新消息` : '暂无新消息' }}</p></div><button type="button" aria-label="关闭" @click="alertDrawerOpen = false">×</button></header>
           <div class="alert-drawer__list">
+            <p v-if="!alertItems.length" class="notification-empty">暂无消息</p>
             <article v-for="item in alertItems" :key="item.id" class="alert-item">
               <i></i>
-              <div><span>{{ item.module }}<em>{{ item.time }}</em></span><strong>{{ item.title }}</strong><p>{{ item.meta }}</p><small>待人工处理</small><nav><template v-if="item.hasReviewDetail"><RouterLink :to="item.detailTo">查看详情</RouterLink><RouterLink class="primary" :to="item.reviewTo">人工处理</RouterLink></template><button v-else type="button" disabled>查看详情</button></nav></div>
+              <div><span>{{ item.module }}<em>{{ item.time }}</em></span><strong>{{ item.title }}</strong><p>{{ item.meta }}</p><small>{{ item.status }}</small><nav><template v-if="item.hasReviewDetail"><RouterLink :to="item.detailTo">查看详情</RouterLink><RouterLink class="primary" :to="item.reviewTo">处理</RouterLink></template><button v-else type="button" disabled>查看详情</button></nav></div>
             </article>
           </div>
-          <footer><RouterLink to="/tasks">查看全部任务</RouterLink><RouterLink class="footer-primary" to="/manual-review">查看处理队列 →</RouterLink></footer>
         </aside>
         <!-- 问答小助手（已隐藏）
         <aside v-if="assistantOpen" class="knowledge-assistant" :style="assistantPanelStyle" aria-label="知识图谱助手">
@@ -931,6 +901,8 @@ onBeforeUnmount(() => {
 .app-user-menu>footer { padding:9px 13px;border-top:1px solid #e4ecf6;background:#f7faff;color:#526783;font-size:9px;line-height:15px; }
 
 .app-top-actions__right { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.app-portal-switch { height: 32px; padding: 0 13px; border: 0; border-radius: 4px; background: transparent; color: #165dff; font-size: 12px; cursor: pointer; }
+.app-portal-switch:hover { background: rgba(255,255,255,.56); }
 .app-alert-entry { position: relative; z-index: 38; display: inline-flex; }
 .app-alert-bell { position: relative; display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #86909c; cursor: pointer; }
 .app-alert-bell:hover,.app-alert-bell[aria-expanded="true"] { background: rgba(255,255,255,.48); }
@@ -987,6 +959,46 @@ onBeforeUnmount(() => {
 .alert-drawer>footer { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; min-height: 58px; padding: 11px 18px; border-top: 1px solid #dce8f8; background: #fff; box-shadow: 0 -8px 18px rgba(42,77,128,.06); }
 .alert-drawer>footer a { color: #165dff; font-size: 12px; text-decoration: none; }
 .alert-drawer>footer .footer-primary { height: 32px; padding: 0 12px; border-radius: 5px; background: #165dff; color: #fff; line-height: 32px; }
+.alert-preview,
+.alert-preview *,
+.alert-drawer,
+.alert-drawer * {
+  color: #1d2129;
+}
+.alert-preview .notification-empty,
+.alert-drawer .notification-empty {
+  margin: 0;
+  padding: 24px 16px;
+  color: #1d2129;
+  font-size: 12px;
+  text-align: center;
+}
+.alert-drawer {
+  grid-template-rows: auto minmax(0, 1fr);
+  background: #fff;
+}
+.alert-drawer header p,
+.alert-drawer h2,
+.alert-item>div>span,
+.alert-item p,
+.alert-item small,
+.alert-item nav a,
+.alert-drawer>footer a {
+  color: #1d2129;
+}
+.alert-item>i,
+.alert-item>i.is-blocked {
+  background: #1d2129;
+  box-shadow: none;
+}
+.alert-item small,
+.alert-item small.is-blocked,
+.alert-item small.is-processing {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #1d2129;
+}
 .knowledge-assistant-entry { position:fixed;z-index:52;display:flex;align-items:center;gap:7px;height:42px;padding:0 14px 0 10px;border:1px solid #8fb7f2;border-radius:22px;background:#165dff;color:#fff;box-shadow:0 10px 28px rgba(22,93,255,.28);cursor:grab;touch-action:none;user-select:none; }
 .knowledge-assistant-entry:hover,.knowledge-assistant-entry.active { background:#0f4fd9;transform:translateY(-1px); }.knowledge-assistant-entry svg { width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round; }.knowledge-assistant-entry span { font-size:11px;font-weight:600; }
 .knowledge-assistant-entry.dragging { cursor:grabbing;transform:none;transition:none; }.knowledge-assistant { position:fixed;z-index:51;display:grid;grid-template-rows:auto minmax(0,1fr) auto auto;overflow:hidden;border:1px solid #b9d2f5;border-radius:12px;background:#f7faff;box-shadow:0 24px 64px rgba(31,69,125,.28); }

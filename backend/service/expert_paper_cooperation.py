@@ -60,6 +60,10 @@ SHARED_CONTRIBUTION_THEME_MAP = {
 class ExpertPaperCooperationService(KGModuleScaffoldService):
     module_code = "expert_paper_cooperation"
 
+    def analyze(self, body: ExpertPaperCooperationDemoRequest) -> dict[str, Any]:
+        """返回既有论文合作算法的完整结果，供业务测试页使用。"""
+        return _build_analyze_result(body)
+
     def build_structured_result_only(
         self, body: ExpertPaperCooperationDemoRequest
     ) -> dict[str, Any]:

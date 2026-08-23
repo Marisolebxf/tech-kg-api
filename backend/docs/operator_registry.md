@@ -81,7 +81,7 @@ curl -X POST http://localhost:8000/api/v1/operators/user.add_score/invoke \
 - `OPERATOR_S3_ACCESS_KEY_ID` / `OPERATOR_S3_SECRET_ACCESS_KEY`：S3 凭据。
 - `OPERATOR_S3_REGION`：签名 region，RustFS 默认使用 `us-east-1`。
 - `OPERATOR_WORKER_BASE_URIS`：逗号分隔的 worker 基础地址。
-- `OPERATOR_RELOAD_TOKEN`：设置后，内部重载端点必须携带同值的
+- `OPERATOR_RELOAD_TOKEN`：必须设置；内部重载端点必须携带同值的
   `X-Operator-Reload-Token` 请求头。
 
 根 Compose 同时保留 Milvus 配套的 MinIO，并额外启动 `operator-rustfs`：

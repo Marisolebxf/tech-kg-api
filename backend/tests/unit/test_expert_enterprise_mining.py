@@ -166,6 +166,31 @@ def test_mine_regenerate_false_returns_existing_and_skips_pipeline():
     svc._analyze_svc.analyze.assert_not_called()
 
 
+def test_query_existing_is_read_only_and_filters_disabled_relations():
+    graph = MagicMock()
+    active = _edge("id1", relation_type="tech_cooperation")
+    disabled = _edge("id2")
+    disabled.properties["manual_disabled"] = True
+    graph.get_node_edges.return_value = [active, disabled]
+    scholar_node = MagicMock()
+    scholar_node.properties = {
+        "name_zh": "吴边",
+        "scholar_org_name_zh": "中国科学院微生物研究所",
+    }
+    graph.get_node.side_effect = [scholar_node, _org_node("id1", "某生物科技有限公司")]
+    svc = ExpertEnterpriseMiningService(gkx_session=MagicMock(), graph=graph, llm=MagicMock())
+    svc._extract_fn = MagicMock()
+    svc._build_svc = MagicMock()
+
+    result = svc.query_existing({"scholarId": "007Rb117", "topN": 5})
+
+    assert result["cached"] is True
+    assert result["totalMined"] == 1
+    assert result["minedRelations"][0]["enterpriseId"] == "id1"
+    svc._extract_fn.assert_not_called()
+    svc._build_svc.build.assert_not_called()
+
+
 def test_mine_regenerate_true_ignores_existing_and_runs_full_pipeline():
     """regenerate=True 时即使图库已有关系也强制重跑完整流程。"""
     scholar = _scholar()

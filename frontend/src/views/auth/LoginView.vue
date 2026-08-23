@@ -8,45 +8,53 @@ import { useAuthStore } from "../../stores/auth";
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
-const submitting = ref(false);
-const feedback = ref(
-  typeof route.query.error === "string" ? route.query.error : "",
-);
+const submitting = ref<"business" | "admin" | "">("");
+function normalizeLoginFeedback(value: unknown): string {
+  if (typeof value !== "string") return "";
+  if (/request failed|network error|status code 5\d\d|failed to fetch/i.test(value)) {
+    return "登录服务暂时不可用，请确认后端服务已启动后重试";
+  }
+  return value;
+}
 
-const redirectPath = computed(() => {
-  const value =
-    typeof route.query.redirect === "string"
-      ? route.query.redirect
-      : "/overview";
-  return value.startsWith("/") && !value.startsWith("//") ? value : "/overview";
-});
+const feedback = ref(normalizeLoginFeedback(route.query.error));
+
+const redirectPath = computed(() => typeof route.query.redirect === "string" && route.query.redirect.startsWith("/") && !route.query.redirect.startsWith("//") ? route.query.redirect : "");
 
 function errorMessage(error: unknown): string {
   if (typeof error === "object" && error !== null && "response" in error) {
-    const detail = (error as { response?: { data?: { detail?: string } } })
-      .response?.data?.detail;
-    if (detail) return detail;
+    const response = (error as {
+      response?: { status?: number; data?: { detail?: string; msg?: string } };
+    }).response;
+    const message = response?.data?.detail || response?.data?.msg;
+    if (message) return message;
+    if (response?.status && response.status >= 500) {
+      return "登录服务暂时不可用，请确认后端服务已启动后重试";
+    }
   }
-  return error instanceof Error
-    ? error.message
-    : "登录服务暂时不可用，请稍后重试";
+  return "登录服务暂时不可用，请确认网络和后端服务后重试";
 }
 
-async function login() {
-  submitting.value = true;
+async function login(portal: "business" | "admin") {
+  submitting.value = portal;
   feedback.value = "";
+  const defaultTarget = portal === "admin" ? "/admin/reviews" : "/overview";
+  const target = redirectPath.value && (portal === "admin") === redirectPath.value.startsWith("/admin") ? redirectPath.value : defaultTarget;
   try {
-    await authStore.startLogin(redirectPath.value);
+    if (authStore.isAuthenticated) {
+      await router.replace(target);
+      return;
+    }
+    await authStore.startLogin(target);
   } catch (error) {
     feedback.value = errorMessage(error);
-    submitting.value = false;
+    submitting.value = "";
   }
 }
 
 onMounted(async () => {
   try {
-    const profile = await authStore.loadCurrentUser(true);
-    if (profile) await router.replace(redirectPath.value);
+    await authStore.loadCurrentUser(true);
   } catch (error) {
     feedback.value = errorMessage(error);
   }
@@ -90,14 +98,14 @@ onMounted(async () => {
         <p v-if="feedback" class="login-card__error" role="alert">
           {{ feedback }}
         </p>
-        <a-button
-          type="primary"
-          long
-          :loading="submitting || authStore.loading"
-          @click="login"
-        >
-          {{ submitting ? "正在跳转…" : "使用统一用户中心登录" }}
-        </a-button>
+        <div class="login-portals">
+          <button type="button" :disabled="Boolean(submitting) || authStore.loading" @click="login('business')">
+            <strong>用户端</strong><b>{{ submitting === 'business' ? '跳转中…' : '进入 →' }}</b>
+          </button>
+          <button class="admin" type="button" :disabled="Boolean(submitting) || authStore.loading" @click="login('admin')">
+            <strong>管理端</strong><b>{{ submitting === 'admin' ? '跳转中…' : '进入 →' }}</b>
+          </button>
+        </div>
         <small>登录即表示你已获得访问本系统的组织授权。</small>
       </div>
     </section>
@@ -274,12 +282,7 @@ onMounted(async () => {
   background: #fff0ee;
   color: #b42318;
 }
-.login-card :deep(.arco-btn) {
-  width: 100%;
-  height: 40px;
-  margin-top: 0;
-  font-weight: 500;
-}
+.login-portals{display:grid;gap:10px}.login-portals button{display:flex;align-items:center;justify-content:space-between;width:100%;height:58px;padding:0 18px;border:1px solid #dce8f8;border-radius:6px;background:#fff;color:var(--gkx-text-primary);text-align:left;cursor:pointer}.login-portals button:hover{border-color:var(--gkx-primary);background:#f7faff}.login-portals button:disabled{opacity:.6;cursor:not-allowed}.login-portals strong{font-size:15px}.login-portals b{color:var(--gkx-primary);font-size:11px;white-space:nowrap}
 .login-card small {
   display: block;
   margin-top: 17px;

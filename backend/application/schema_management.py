@@ -24,11 +24,11 @@ class SchemaManagementApplication:
     def list_schemas(self, **kwargs) -> dict[str, Any]:
         return self._service.list_schemas(**kwargs)
 
-    def get_schema(self, schema_id: str, user_id: str | None) -> dict[str, Any]:
-        return self._service.get_schema(schema_id, user_id)
+    def get_schema(self, schema_id: str, user_id: str | None, **kwargs) -> dict[str, Any]:
+        return self._service.get_schema(schema_id, user_id, **kwargs)
 
-    def topology(self, user_id: str | None) -> dict[str, Any]:
-        return self._service.topology(user_id)
+    def topology(self, user_id: str | None, **kwargs) -> dict[str, Any]:
+        return self._service.topology(user_id, **kwargs)
 
     def create_entity(self, **kwargs) -> dict[str, Any]:
         return self._service.create_entity(**kwargs)
@@ -36,8 +36,8 @@ class SchemaManagementApplication:
     def create_relation(self, **kwargs) -> dict[str, Any]:
         return self._service.create_relation(**kwargs)
 
-    def delete_schema(self, schema_id: str, user_id: str) -> dict[str, Any]:
-        return self._service.delete_schema(schema_id, user_id)
+    def delete_schema(self, schema_id: str, user_id: str, **kwargs) -> dict[str, Any]:
+        return self._service.delete_schema(schema_id, user_id, **kwargs)
 
     def replace_script(self, **kwargs) -> dict[str, Any]:
         return self._service.replace_script(**kwargs)

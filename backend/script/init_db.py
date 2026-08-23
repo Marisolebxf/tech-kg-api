@@ -37,6 +37,7 @@ DOMAIN_ORDER = [
     "report",
     "schema_management",
     "llm_config",
+    "platform_governance",
 ]
 
 DDL_DIR = Path(__file__).resolve().parent.parent / "schemas" / "ddl"
@@ -57,6 +58,11 @@ def get_connection() -> pymysql.Connection:
 
 def execute_sql_file(cursor: pymysql.cursors.Cursor, path: Path) -> None:
     sql = path.read_text(encoding="utf-8")
+    if path.parent.name == "platform_governance":
+        for statement in (item.strip() for item in sql.split(";")):
+            if statement:
+                cursor.execute(statement)
+        return
     cursor.execute(sql.rstrip().rstrip(";"))
 
 

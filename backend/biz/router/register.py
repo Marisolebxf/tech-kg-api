@@ -1,8 +1,10 @@
 from fastapi import Depends, FastAPI
 
-from biz.dependencies.auth import require_authenticated_user
+from biz.dependencies.auth import require_authenticated_user, require_platform_admin
+from biz.handler.admin_member import router as admin_member_router
 from biz.handler.auth import router as auth_router
 from biz.handler.common_capability import router as common_capability_router
+from biz.handler.correction import router as correction_router
 from biz.handler.enterprise_background_analysis import (
     router as enterprise_background_analysis_router,
 )
@@ -45,32 +47,7 @@ from biz.handler.workflow_system import router as workflow_system_router
 
 
 def register_routers(app: FastAPI) -> None:
-    app.include_router(common_capability_router, prefix="/api/v1")
-    app.include_router(kg_construction_router, prefix="/api/v1")
-    app.include_router(options_router, prefix="/api/v1")
-    app.include_router(platform_overview_router, prefix="/api/v1")
-    app.include_router(expert_direct_relation_router, prefix="/api/v1")
-    app.include_router(expert_indirect_relation_router, prefix="/api/v1")
-    app.include_router(expert_cooperation_achievement_router, prefix="/api/v1")
-    app.include_router(expert_colleague_relation_router, prefix="/api/v1")
-    app.include_router(expert_colleague_service_router, prefix="/api/v1")
-    app.include_router(expert_alumni_relation_router, prefix="/api/v1")
-    app.include_router(expert_paper_cooperation_router, prefix="/api/v1")
-    app.include_router(expert_enterprise_relation_router, prefix="/api/v1")
-    app.include_router(relation_detail_annotation_router, prefix="/api/v1")
-    app.include_router(enterprise_background_analysis_router, prefix="/api/v1")
-    app.include_router(expert_enterprise_mining_router, prefix="/api/v1")
-    app.include_router(industry_chain_topn_event_router, prefix="/api/v1")
-    app.include_router(industry_chain_panorama_router, prefix="/api/v1")
-    app.include_router(graph_search_router, prefix="/api/v1")
-    app.include_router(task_center_router, prefix="/api/v1")
-    app.include_router(manual_review_router, prefix="/api/v1")
-    app.include_router(workflow_system_router, prefix="/api/v1")
-    app.include_router(schema_management_router, prefix="/api/v1")
-    app.include_router(llm_config_router, prefix="/api/v1")
-    app.include_router(operator_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
-    app.include_router(manual_review_internal_router, prefix="/api/v1")
 
     protected_dependencies = [Depends(require_authenticated_user)]
     protected_routers = (
@@ -93,14 +70,10 @@ def register_routers(app: FastAPI) -> None:
         industry_chain_topn_event_router,
         industry_chain_panorama_router,
         graph_search_router,
-        task_center_router,
-        manual_review_router,
-        workflow_system_router,
-        schema_management_router,
-        llm_config_router,
+        correction_router,
+        expert_colleague_service_router,
         tech_enterprise_relation_business_router,
         industry_node_top_events_business_router,
-        operator_router,
     )
     for router in protected_routers:
         app.include_router(
@@ -108,4 +81,17 @@ def register_routers(app: FastAPI) -> None:
             prefix="/api/v1",
             dependencies=protected_dependencies,
         )
+    admin_dependencies = [Depends(require_authenticated_user), Depends(require_platform_admin)]
+    admin_routers = (
+        task_center_router,
+        manual_review_router,
+        workflow_system_router,
+        schema_management_router,
+        llm_config_router,
+        operator_router,
+        admin_member_router,
+    )
+    for router in admin_routers:
+        app.include_router(router, prefix="/api/v1", dependencies=admin_dependencies)
+    app.include_router(manual_review_internal_router, prefix="/api/v1")
     app.include_router(operator_internal_router)

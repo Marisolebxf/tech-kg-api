@@ -276,9 +276,14 @@
 }
 
 .platform-hero__actions a {
-  height: 36px !important;
-  padding-inline: 14px !important;
-  line-height: 34px !important;
+  height: auto !important;
+  min-height: 0 !important;
+  padding: 2px 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: #165dff !important;
+  line-height: 22px !important;
 }
 
 .platform-summary-card > header > div > strong {
@@ -407,8 +412,18 @@
 
 .platform-risk-list article p,
 .platform-risk-list article a {
-  font-size: 13px !important;
-  line-height: 20px !important;
+  font-size: 14px !important;
+  line-height: 22px !important;
+}
+
+.platform-risk-list article a {
+  height: auto !important;
+  min-height: 0 !important;
+  padding: 2px 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: #165dff !important;
 }
 
 .platform-structure-chart > header strong {

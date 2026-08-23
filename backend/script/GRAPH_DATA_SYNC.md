@@ -115,7 +115,7 @@ cron 示例:`0 3 * * * cd backend && TRS_GRAPH_SPACE=<space> PYTHONPATH=. .venv/
 - **CREATE SPACE 后 DDL 500/400**：传播延迟，等 10-20s 重试。
 - **`merge_node` 在 trs-graph 上不可靠（400）**：`load_scholar_entities` 已改 nGQL `INSERT`（自适应 tag 字段：DESCRIBE 取实有字段，只写交集，数字不加引号）。`load_project_graph`/`load_graph` 仍用 merge_node 且 `load_project_graph` 有 dev-gate（`TRS_GRAPH_SPACE != dev` 即抛错），尚未改写——按需用 `load_scholar_entities`(Person) + `organization_entity_etl`(Org) + `organization_relation_etl`(EMPLOYED_BY) 替代。
 - **`graph-search/filtered-subgraph` 400 `/traversal/{vid}/edges`**：请求的 edge_type 在目标空间不存在。重点科技企业页请求 `EXECUTIVE_OF/LEGAL_REP_OF/.../HAS_PARTICIPANT/LEADS/PARTICIPATES_IN/FUNDED_BY` 等——确保 `init_project_schema` 跑过（项目边存在），缺哪个 `CREATE EDGE IF NOT EXISTS X(...)` 补哪个。
-- **`dwd_scholar` 无 `scholar_org_id` 列**：`load_scholar_relations` 的 `AFFILIATED_WITH` 走机构名 md5 桩兜底 `org_{md5(name)[:16]}`，边照样建（`merge_edge` 到虚拟 dst 成功、顶点虚拟无属性，coverage 优先）；dev 源表有该列时直指真实 `org_{org_id}`。真实机构对齐交给 `align_scholar_affiliations`（机构域 Milvus 混合检索写 `SAME_AS`，不改原边）。**禁止把这里改成 name-join 跳过**——会让 AFFILIATED_WITH 覆盖率从 ~全量跌到个位数（见 commit ed1ffdb 回归）；已有单元测试 `test_affiliation_uses_md5_stub_when_no_org_id` 锁定桩兜底行为，CI 拦截。
+- **`dwd_scholar` 无 `scholar_org_id` 列**：`load_scholar_relations` 的 `AFFILIATED_WITH` 走 **name-join**（学者表 `scholar_org_name_zh` 匹配图里已存在 Organization 的 `name_cn`，指向真实 `org_{org_id}`，**不建桩顶点，实体唯一**）；命中 Organization name_cn（test 9081 org 命中 2162/2163），未命中跳过。dev 有 `scholar_org_id` 时直指真实 `org_{org_id}`（`has_org_id` 分支不变）。**禁止改回 md5 桩兜底**——会建重复桩顶点（`org_{md5(name)}` 与真实 `org_{org_id}` 不唯一）；已有单元测试锁定 name-join 行为，CI 拦截。
 - **COAUTHOR_WITH 合作边覆盖率低（已知局限,非 bug）**：`dwd_scholar_coauthor` 的 co_scholar_id 多为外部学者（`dwd_scholar` 无记录,无源数据灌 Person）,这些合作边 `merge_edge` 写了但 dst Person 顶点不存在 → 遍历查不到（同 AFFILIATED_WITH 模式）。库内学者间合作（两端 Person 都在）正常入库（test 实测 1528 条）。专家直接关系/同事/校友/论文合作模块读此边,查外部学者合作会空属数据局限,非脚本问题；若需合作网络完整,可建 id-only 桩 Person 或改 `load_coauthors` 只写两端存在。
 - **`Person` tag 字段不全**（org_entity 写 Person 报 400 `Duplicate column`/缺 name_cn 等）：`dev_organization_schema.ngql` 曾有 `confidence`/`organization_id` 重复列（已修）；CREATE IF NOT EXISTS 对已存在 tag 为 no-op，故最全的 CREATE 必须在空空间先跑（见 §2 顺序）。缺字段可 `ALTER TAG Person ADD (...)` 补。
 - **key-enterprise 返回 `专家不存在`**：① `BUSINESS_API_BASE` 没指向后端自身端口（自调用 graph-search 失败）；② 上面 §的 edge_type 缺失导致 filtered-subgraph 400 取不到 seed；③ 结果缓存了旧的 404（`RESULT_CACHE_TTL`），重启后端清缓存。
@@ -127,7 +127,7 @@ cron 示例:`0 3 * * * cd backend && TRS_GRAPH_SPACE=<space> PYTHONPATH=. .venv/
 
 - test 空间从 0 搭建，schema 齐全（Organization 39 字段含 stock_code/external_id；Person 45 字段；IndustryNode/IndustryChain/Event/News；治理+风险+产业链边；项目边补建）。
 - demo 用例入库：`person_855924f1`（郭佳佳）+ AFFILIATED_WITH→`org_000213e718b09bd45e71789553cc53d7`（新智认知,stock 603869.SH)；`node_IC0007007`（集成电路设计）+ 82 企业 BELONGS_TO_NODE + 13463 INVOLVED_IN 事件。
-- AFFILIATED_WITH 任职边覆盖率:回退 md5 桩兜底(`org_{md5(name)[:16]}`)+ 建 md5 桩 Organization 顶点(trs-graph 对指向"不存在顶点"的边做遍历过滤,桩顶点必须先建,否则边虽存但 `get_node_edges`/`get_edges_by_type` 遍历查不到)。test 实测 2163 学者→2164 条 AFFILIATED_WITH(795 个不同机构 md5 桩顶点),边可遍历、机构名正确;dev 有 scholar_org_id 走真实 org(organization_entity_etl 已建顶点)不触发建桩,不影响 BWNNN602 的 `rebuild_scholar_graph` 流程。
+- AFFILIATED_WITH 任职边覆盖率:**name-join 真实 org**（学者表 `scholar_org_name_zh` 匹配 Organization `name_cn`，指向真实 `org_{org_id}`，不建桩，实体唯一）。test Organization 9081 命中 2162/2163；inc_test organization 没灌国内 org（只国外 8180）命中 319。dev 有 `scholar_org_id` 走真实 org（不变）。`ensure_schema` 补 AFFILIATED_WITH 的 source_table/source_record_id/ingest_batch/ingest_time 字段（merge_edge 要）。
 - 后端 `TRS_GRAPH_SPACE=test` 后，两页面返回与 dev 一致：重点科技企业=郭佳佳→新智认知 governance 任职 2019-01~2024-12；topn=集成电路设计 10 事件 82 企业 风险中。
 - dev 基线比对不变（写保护 OK）。Milvus builder 对 test 可跑、产出 collection。
 
@@ -141,7 +141,7 @@ from infra.graph_db import get_trs_graph_client
 g=get_trs_graph_client(); g.connect()
 n=g.get_edges_by_type('AFFILIATED_WITH', limit=1).total
 print('AFFILIATED_WITH:', n)
-assert n > 100, '任职边过少,疑似 name-join 跳过回归——见 load_scholar_relations 桩兜底'
+assert n > 100, '任职边过少,疑似 name-join 未命中真实 org——见 load_scholar_relations name-join'
 g.close()"
 ```
 

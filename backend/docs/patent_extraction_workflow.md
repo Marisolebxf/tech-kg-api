@@ -6,7 +6,9 @@
 
 本次把两个 loader 封装为工作流可调用的薄包装脚本，分别对应"专利实体脚本上传"和"专利关系脚本上传"两个入口。
 
-## 改动文件（仅新增，未改任何现有代码）
+两个入口保持独立；loader、工作流和向量索引的基础设施目标均由环境变量配置，工作流 payload 不再承担图空间或数据库连接切换。
+
+## 工作流接入文件
 
 | 文件 | 说明 |
 |---|---|
@@ -18,6 +20,7 @@
 ## 设计要点
 
 - **统一入口 `workflow(payload)`**：函数名对齐工作流接口默认 `function_name`。
+- **环境配置唯一来源**：图数据库统一读取 `TRS_GRAPH_BASE_URL`、`TRS_GRAPH_SPACE`、`TRS_GRAPH_API_KEY`、`TRS_GRAPH_TIMEOUT`；Milvus统一读取 `MILVUS_URI` 或 `MILVUS_HOST`/`MILVUS_PORT` 及 `MILVUS_TOKEN`。
 - **sys.path 自举**：`execute_python_script` 给子进程的 `PYTHONPATH` 只含脚本所在目录（`WORKFLOW_SCRIPT_DIR`，通常 /tmp），不含 backend 根。包装脚本通过 `_backend_root()` 定位 backend 根（优先 `TECH_KG_BACKEND_ROOT` env → 沿 `__file__` 父目录 → `Path.cwd()` 兜底），insert 到 `sys.path[0]`，才能 `from script.load_patent_graph import load_patents`。实测 worker 从 backend/ 启动时 `Path.cwd()` 兜底生效。
 - **纯委托**：只做参数适配 + 结果 JSON 化（元组→命名 dict，`Counter`→`dict`），不复制/不修改抽取与建图逻辑。
 - **失败向上抛出**：单阶段异常先记阶段信息到 stderr 再 re-raise 原异常，子进程非零退出 → activity 抛 `RuntimeError(stderr)` → Temporal 识别 FAILED 并按平台策略重试；不吞异常返回 `ok=False`。
@@ -47,6 +50,8 @@
  "vector_state_dir": null, "review_output": null}
 ```
 默认值与 `load` 签名一致。返回 `{"ok": true, "stats": {<Counter>}}`。
+
+以上两个 payload 均不接受图空间、图库地址或 Milvus 地址；部署时通过环境变量配置。专利向量索引另外读取 `PATENT_MILVUS_COLLECTION`、`PATENT_INDEX_STATE_DIR`、`PATENT_INDEX_PAGE_SIZE` 和 `PATENT_BM25_DIM`。
 
 ## 联调验证（主分支现有工作流接口，未改公共平台）
 

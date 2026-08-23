@@ -47,7 +47,6 @@ async def query_expert_colleague_relation(
                 min_confidence=body.minConfidence,
                 limit=body.limit,
                 offset=body.offset,
-                space=body.space,
             )
         validated = ExpertColleagueRelationData.model_validate(data)
         return ApiResponse(data=validated.model_dump())

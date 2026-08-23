@@ -154,8 +154,9 @@ class ExpertColleagueRelationApplication:
         return self._service.describe()
 
     async def query(self, client: AsyncClient, **kwargs: Any) -> dict[str, Any]:
-        # 查询和写入都强制使用 dev，调用方不能切换业务图空间。
-        kwargs["space"] = "dev"
+        # 图空间只由服务端 TRS_GRAPH_SPACE 环境变量决定，不接受请求覆盖。
+        space = TRSGraphSettings.from_env().space
+        kwargs["space"] = space
         cache_key = _read_cache_key(kwargs)
         with _read_cache_lock:
             entry = _read_cache.get(cache_key)
@@ -175,7 +176,7 @@ class ExpertColleagueRelationApplication:
 
     @staticmethod
     def _persist_relations(data: dict[str, Any]) -> dict[str, Any]:
-        settings = TRSGraphSettings.from_env().model_copy(update={"space": "dev"})
+        settings = TRSGraphSettings.from_env()
         graph = TRSGraphClient(settings)
         graph.connect()
         created = updated = 0
@@ -236,7 +237,7 @@ class ExpertColleagueRelationApplication:
         finally:
             graph.close()
         return {
-            "space": "dev",
+            "space": settings.space,
             "edgeType": "COLLEAGUE",
             "created": created,
             "updated": updated,

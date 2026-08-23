@@ -17,7 +17,7 @@ from typing import Any
 import pymysql
 from pymysql.cursors import DictCursor
 
-# 流程：MySQL读取 → 字段映射 → 生成nGQL → 公共图客户端写入dev。
+# 流程：MySQL读取 → 字段映射 → 生成nGQL → 公共图客户端写入配置的图空间。
 from infra.graph_db import get_trs_graph_client
 
 logger = logging.getLogger(__name__)
@@ -361,11 +361,10 @@ def write_entity_batch(graph: Any, rows: list[dict[str, Any]]) -> None:
         write_entity_batch(graph, rows[middle:])
 
 
-# 5. 主流程：读取MySQL并通过公共图客户端写入dev
+# 5. 主流程：读取MySQL并通过公共图客户端写入配置的图空间
 def load_patents(batch_size: int) -> tuple[int, int, int]:
     if batch_size < 1:
         raise ValueError("batch_size 必须大于等于 1")
-    os.environ["TRS_GRAPH_SPACE"] = "dev"
     graph = get_trs_graph_client()  # 公共图数据库能力
     ensure_schema(graph)
     connection = mysql_connection()
@@ -392,7 +391,7 @@ def load_patents(batch_size: int) -> tuple[int, int, int]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="从 MySQL 装载专利图数据到 dev")
+    parser = argparse.ArgumentParser(description="从 MySQL 装载专利图数据到配置的图空间")
     parser.add_argument("--batch-size", type=int, default=50)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)

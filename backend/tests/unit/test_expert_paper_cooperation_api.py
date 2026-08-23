@@ -84,6 +84,12 @@ class FakeGraphSearchApi:
         raise AssertionError("无逐篇论文路径时不应查询论文子图")
 
 
+def test_request_schema_does_not_expose_data_source():
+    schema = ExpertPaperCooperationDemoRequest.model_json_schema()
+
+    assert "dataSource" not in schema["properties"]
+
+
 def test_year_filters_use_string_publication_year():
     body = ExpertPaperCooperationDemoRequest(
         expertAId="A",
@@ -101,7 +107,6 @@ def test_year_filters_use_string_publication_year():
 @pytest.mark.asyncio
 async def test_coauthor_edge_fallback_keeps_unproven_fields_empty():
     body = ExpertPaperCooperationDemoRequest(
-        dataSource="knowledge_graph",
         expertAId="A",
         expertBId="B",
     )

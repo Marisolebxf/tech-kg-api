@@ -1,9 +1,7 @@
 from datetime import date
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-DataSource = Literal["all", "knowledge_graph", "cnki", "wanfang", "web_of_science"]
 EXPERT_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
 DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 
@@ -12,7 +10,6 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "dataSource": "knowledge_graph",
                 "expertAId": "person_121d48631f434f4d323ba521d33032ad",
                 "expertBId": "person_42914016fe8d6e0e1d01dad5845c47e6",
                 "startTime": "2021-01-01",
@@ -21,10 +18,6 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
         }
     )
 
-    dataSource: DataSource = Field(
-        default="knowledge_graph",
-        description="论文数据源：all、knowledge_graph、cnki、wanfang、web_of_science。默认 knowledge_graph。",
-    )
     expertAId: str = Field(
         ...,
         min_length=1,

@@ -4,7 +4,6 @@ from biz.handler import expert_paper_cooperation as handler
 
 ENDPOINT = "/api/v1/kg-construction/expert-paper-cooperation-relations/structured-result"
 VALID_PAYLOAD = {
-    "dataSource": "knowledge_graph",
     "expertAId": "4P566No1",
     "expertBId": "d492835p",
     "startTime": "2021-01-01",
@@ -65,7 +64,6 @@ async def test_expert_paper_cooperation_returns_structured_result(async_client, 
         ({"startTime": "2024/01/01"}, "String should match pattern"),
         ({"startTime": "2024-99-99"}, "时间格式错误"),
         ({"startTime": "2025-01-01", "endTime": "2024-12-31"}, "startTime 不能晚于 endTime"),
-        ({"dataSource": "unknown"}, "Input should be"),
     ],
 )
 @pytest.mark.asyncio

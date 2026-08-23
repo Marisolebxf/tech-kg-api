@@ -30,7 +30,6 @@ export interface ExpertPaperCooperationResponse {
 }
 
 export interface ExpertPaperCooperationRequest {
-  dataSource: 'knowledge_graph'
   expertAId: string
   expertBId: string
   startTime?: string

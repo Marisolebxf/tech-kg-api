@@ -198,7 +198,9 @@ def _build_person_props(
     }
 
 
-def load_persons(session, graph, *, dry_run: bool, preview: int = 5, limit: int | None = None) -> dict:
+def load_persons(
+    session, graph, *, dry_run: bool, preview: int = 5, limit: int | None = None
+) -> dict:
     """遍历 ``dwd_scholar`` 并写入 Person 顶点。"""
 
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")

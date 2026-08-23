@@ -201,7 +201,9 @@ def _sync_object(
         (f, t, existing[f]) for f, t in props if f in existing and existing[f] != t.lower()
     ]
     for field, wanted, actual in conflicts:
-        print(f"WARN {kind} {name}.{field}: 期望 {wanted}，实际 {actual}；类型不能 ALTER，需人工处理")
+        print(
+            f"WARN {kind} {name}.{field}: 期望 {wanted}，实际 {actual}；类型不能 ALTER，需人工处理"
+        )
 
     if not missing:
         print(f"{kind} {name} 已对齐（{len(existing)} props）")
@@ -276,7 +278,9 @@ def init_scholar_schema(
         client.close()
 
     if not dry_run:
-        print("提示：若该空间已有 Person 数据，需再执行 `REBUILD TAG INDEX person_tag_idx;` 索引才生效")
+        print(
+            "提示：若该空间已有 Person 数据，需再执行 `REBUILD TAG INDEX person_tag_idx;` 索引才生效"
+        )
 
 
 def _parse_args() -> argparse.Namespace:

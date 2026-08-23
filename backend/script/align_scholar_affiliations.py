@@ -216,9 +216,7 @@ def run(
         if field.get("name") == "dense_vec":
             actual_dim = int(field.get("params", {}).get("dim", 0))
             break
-    assert actual_dim == DENSE_DIM, (
-        f"dimension mismatch (expected={DENSE_DIM}, got={actual_dim})"
-    )
+    assert actual_dim == DENSE_DIM, f"dimension mismatch (expected={DENSE_DIM}, got={actual_dim})"
 
     try:
         milvus.load_collection(ORG_COLLECTION)

@@ -83,7 +83,9 @@ def main() -> int:
         action="store_true",
         help="目标空间不存在时先创建（传给 init_scholar_schema）",
     )
-    parser.add_argument("--graph-space", default=None, help="覆盖 TRS_GRAPH_SPACE（默认取环境变量）")
+    parser.add_argument(
+        "--graph-space", default=None, help="覆盖 TRS_GRAPH_SPACE（默认取环境变量）"
+    )
     parser.add_argument(
         "--limit",
         type=int,
@@ -92,7 +94,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
 
     selected = [s.strip() for s in args.stages.split(",") if s.strip()]
     known = {name for name, _ in STAGES}
@@ -108,12 +112,16 @@ def main() -> int:
     collection = env.get("SCHOLAR_MILVUS_COLLECTION", "scholar_person")
     logger.info(
         "目标图空间: %s | 向量集合: %s | MySQL 库: %s | dry_run=%s",
-        space, collection, env.get("MYSQL_DATABASE", "(未设置)"), args.dry_run,
+        space,
+        collection,
+        env.get("MYSQL_DATABASE", "(未设置)"),
+        args.dry_run,
     )
     if "milvus" in selected and "SCHOLAR_MILVUS_COLLECTION" not in env:
         logger.warning(
             "未设置 SCHOLAR_MILVUS_COLLECTION，将使用默认集合 %r——如该集合为共享/生产集合，"
-            "实验时请显式指定（例如 scholar_person_test）", collection,
+            "实验时请显式指定（例如 scholar_person_test）",
+            collection,
         )
 
     for name, module in STAGES:

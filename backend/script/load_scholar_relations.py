@@ -269,7 +269,9 @@ def ensure_schema(graph) -> None:
             logger.warning("%s 新属性 %s 未在 15s 内生效", edge_type, expected)
 
 
-def load_affiliations(session, graph, *, dry_run: bool, preview: int = 5, limit: int | None = None) -> dict:
+def load_affiliations(
+    session, graph, *, dry_run: bool, preview: int = 5, limit: int | None = None
+) -> dict:
     """写入 AFFILIATED_WITH 边。
 
     置信度按机构标识来源分档：源表带 ``scholar_org_id`` 时为
@@ -351,7 +353,9 @@ def load_affiliations(session, graph, *, dry_run: bool, preview: int = 5, limit:
     return {"written": ok, "skipped_no_org": skipped, "placeholder_org": placeholder}
 
 
-def load_coauthors(session, graph, *, dry_run: bool, preview: int = 5, limit: int | None = None) -> dict:
+def load_coauthors(
+    session, graph, *, dry_run: bool, preview: int = 5, limit: int | None = None
+) -> dict:
     """写入 COAUTHOR_WITH 边。返回统计信息。"""
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     ok = shown = 0

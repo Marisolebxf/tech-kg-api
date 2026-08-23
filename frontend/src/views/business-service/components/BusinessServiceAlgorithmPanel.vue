@@ -3253,25 +3253,20 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: #1e8ff3;
+  background: #168cff;
 }
 
-.graph-panel__legend .is-org i,
-.graph-panel__legend .is-company i {
-  background: #48c914;
-}
-.graph-panel__legend .is-paper i {
-  background: #762bd7;
-}
-.graph-panel__legend .is-project i {
-  background: #ffad17;
-}
-.graph-panel__legend .is-event i {
-  background: #eb2aa3;
-}
-.graph-panel__legend .is-topic i {
-  background: #2f6bff;
-}
+.graph-panel__legend .is-main i { background: #f43f5e; }
+.graph-panel__legend .is-expert i { background: #168cff; }
+.graph-panel__legend .is-org i { background: #0ea5a4; }
+.graph-panel__legend .is-company i { background: #36c414; }
+.graph-panel__legend .is-paper i { background: #f5b700; }
+.graph-panel__legend .is-project i { background: #ff9f0a; }
+.graph-panel__legend .is-event i { background: #d97706; }
+.graph-panel__legend .is-topic i { background: #722ed1; }
+.graph-panel__legend .is-chain i { background: #4f46e5; }
+.graph-panel__legend .is-field i { background: #a855f7; }
+.graph-panel__legend .is-source i { background: #eb2f96; }
 
 .graph-panel__canvas {
   flex: 1;

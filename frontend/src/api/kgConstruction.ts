@@ -271,7 +271,6 @@ export function queryExpertAlumniRelations(
  * structured-result
  */
 export interface PaperCooperationQuery {
-  dataSource: string
   endTime: string
   expertAId: string
   expertBId: string

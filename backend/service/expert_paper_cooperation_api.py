@@ -127,10 +127,7 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
         auth_headers: Mapping[str, str] | None = None,
         app: Any = None,
     ) -> dict[str, Any]:
-        cache_key = (
-            f"{body.dataSource}|{body.expertAId}|{body.expertBId}|"
-            f"{body.startTime or ''}|{body.endTime or ''}"
-        )
+        cache_key = f"{body.expertAId}|{body.expertBId}|{body.startTime or ''}|{body.endTime or ''}"
         with _result_cache_lock:
             entry = _result_cache.get(cache_key)
         if entry and entry[0] > time.monotonic():

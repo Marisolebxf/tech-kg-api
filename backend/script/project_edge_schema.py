@@ -38,6 +38,12 @@ EDGE_ALIGNMENT_PROPS: dict[str, dict[str, str]] = {
         "match_evidence": "string",
         "confidence": "double",
     },
+    # HAS_KEYWORD may already be owned by the patent domain with a narrower
+    # schema. Project ingestion also records batch provenance on this edge.
+    "HAS_KEYWORD": {
+        "ingest_batch": "string",
+        "ingest_time": "string",
+    },
 }
 
 

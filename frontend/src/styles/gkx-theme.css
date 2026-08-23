@@ -1,0 +1,316 @@
+:root {
+  --color-primary-6: 22, 93, 255;
+  --color-primary-5: 64, 128, 255;
+  --color-primary-7: 14, 66, 210;
+  --color-primary-4: 106, 161, 255;
+  --color-primary-3: 148, 191, 255;
+  --color-bg-1: 255, 255, 255;
+  --color-bg-2: 247, 248, 250;
+  --color-fill-1: 247, 248, 250;
+  --color-fill-2: 242, 243, 245;
+  --color-text-1: 29, 33, 41;
+  --color-text-2: 78, 89, 105;
+  --color-text-3: 134, 144, 156;
+  --color-text-4: 201, 205, 212;
+  --color-border-1: 242, 243, 245;
+  --color-border-2: 229, 230, 235;
+  --color-border-3: 201, 205, 212;
+  --color-border-4: 134, 144, 156;
+  --border-radius-small: 4px;
+  --border-radius-medium: 6px;
+  --font-size-body-3: 14px;
+}
+
+body {
+  color: var(--gkx-text-primary);
+  background: var(--gkx-bg-page);
+  font-family: var(--font-family);
+}
+
+:where(.arco-btn, .arco-input-wrapper, .arco-select-view, .arco-picker, .arco-input-number) {
+  min-height: var(--gkx-control-height);
+  border-radius: var(--gkx-control-radius);
+  font-size: 14px;
+}
+
+.arco-btn {
+  padding-inline: 16px;
+  box-shadow: none;
+}
+
+.arco-btn-primary:not(.arco-btn-disabled) {
+  background: var(--gkx-primary);
+}
+
+.arco-btn-primary:not(.arco-btn-disabled):hover {
+  background: var(--gkx-primary-hover);
+}
+
+.arco-btn-primary:not(.arco-btn-disabled):active {
+  background: var(--gkx-primary-active);
+}
+
+.arco-btn-primary.arco-btn-disabled {
+  background: var(--primary-disabled);
+  color: #fff;
+}
+
+:where(.arco-input-wrapper, .arco-select-view, .arco-picker, .arco-input-number) {
+  border-color: var(--gkx-border);
+  background: var(--gkx-bg-surface);
+  box-shadow: none;
+}
+
+.arco-input-wrapper .arco-input,
+.arco-textarea-wrapper .arco-textarea {
+  padding-inline: 12px;
+  color: var(--gkx-text-primary);
+}
+
+:where(.arco-input-wrapper, .arco-select-view, .arco-picker, .arco-input-number):hover {
+  border-color: var(--gkx-primary-hover);
+}
+
+:where(.arco-input-wrapper-focus, .arco-select-view-focus, .arco-picker-focused, .arco-input-number-focus) {
+  border-color: var(--gkx-primary) !important;
+  box-shadow: var(--gkx-focus-ring) !important;
+}
+
+.arco-card {
+  border-color: var(--gkx-border);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+}
+
+.arco-table-th {
+  height: var(--gkx-table-row-height);
+  padding-inline: 16px;
+  background: var(--gkx-bg-subtle);
+  color: var(--gkx-text-primary);
+  font-weight: 500;
+}
+
+.arco-table-td {
+  height: var(--gkx-table-row-height);
+  padding-inline: 16px;
+}
+
+.arco-modal {
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 32px rgba(29, 33, 41, 0.16);
+}
+
+.arco-modal-header {
+  height: 56px;
+  padding-inline: 24px;
+  border-bottom: 1px solid var(--gkx-border);
+}
+
+.arco-modal-body {
+  padding: 24px;
+}
+
+.arco-modal-footer {
+  min-height: 64px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--gkx-border);
+}
+
+.arco-tabs-nav-tab {
+  color: var(--gkx-text-secondary);
+}
+
+.arco-tabs-tab-active,
+.arco-link {
+  color: var(--gkx-primary);
+}
+
+:where(button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--gkx-primary);
+  outline-offset: 2px;
+}
+
+:where(input:not([type='checkbox']):not([type='radio']), select) {
+  min-height: var(--gkx-control-height);
+  border: 1px solid var(--gkx-border);
+  border-radius: var(--gkx-control-radius);
+  background: var(--gkx-bg-surface);
+  color: var(--gkx-text-primary);
+  font: inherit;
+}
+
+:where(input:not([type='checkbox']):not([type='radio'])) {
+  padding-inline: 12px;
+}
+
+:where(input:not([type='checkbox']):not([type='radio']), select, textarea):hover {
+  border-color: var(--gkx-primary-hover);
+}
+
+:where(input:not([type='checkbox']):not([type='radio']), select, textarea):focus {
+  border-color: var(--gkx-primary);
+  outline: none;
+  box-shadow: var(--gkx-focus-ring);
+}
+
+:where(button, input, select, textarea):disabled {
+  color: var(--text-quaternary);
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* Existing graph modules keep their behavior while sharing the GKX visual contract. */
+.app-workspace :is(
+  .platform-hero,
+  .platform-metric,
+  .platform-stage-group,
+  .platform-processing,
+  .platform-processing-overview article,
+  .summary-grid article,
+  .task-summary article,
+  .schema-stats article,
+  .schema-summary article,
+  .current-version,
+  .version-principle,
+  .auto-update-monitor
+) {
+  border-color: var(--gkx-border) !important;
+  border-radius: 6px !important;
+  background: var(--gkx-bg-surface) !important;
+  box-shadow: none !important;
+}
+
+.app-workspace .platform-hero::before,
+.app-workspace .platform-metric::after,
+.app-workspace .platform-summary-card::after,
+.app-workspace .platform-processing-overview article::after {
+  display: none !important;
+}
+
+.app-workspace .schema-summary article::after {
+  display: none !important;
+}
+
+.app-workspace :is(
+  .kg-panel,
+  .platform-summary-card,
+  .config-workbench,
+  .task-panel,
+  .schema-catalog,
+  .schema-main,
+  .schema-detail,
+  .schema-shell,
+  .answer-card,
+  .evidence-graph,
+  .source-list,
+  .trace-column,
+  .version-list,
+  .api-workbench > aside,
+  .api-workbench > main
+) {
+  border-color: var(--gkx-border) !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+}
+
+.app-workspace :is(
+  .kg-panel__header,
+  .task-filter,
+  .schema-catalog > header,
+  .schema-main > header,
+  .schema-detail > header,
+  .evidence-graph > header,
+  .source-list > header,
+  .trace-column > header,
+  .version-list > header,
+  .config-list > header
+) {
+  border-color: var(--gkx-border) !important;
+  background: var(--gkx-bg-subtle) !important;
+}
+
+.app-workspace .schema-toolbar label {
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.app-workspace .schema-toolbar label > span:not(.arco-input-wrapper) {
+  display: none;
+}
+
+.app-workspace table th,
+.app-workspace table td {
+  height: var(--gkx-table-row-height) !important;
+  padding-block: 0 !important;
+  padding-inline: 16px !important;
+  border-color: var(--gkx-border) !important;
+  font-size: 12px;
+}
+
+.app-workspace table th {
+  background: var(--gkx-bg-subtle) !important;
+  color: var(--gkx-text-secondary) !important;
+  font-weight: 500 !important;
+}
+
+.app-workspace button:not(.kg-graph-canvas *) {
+  min-height: var(--gkx-control-height);
+  border-radius: var(--gkx-control-radius) !important;
+  box-shadow: none !important;
+}
+
+.app-workspace :is(input:not([type='checkbox']):not([type='radio']), select) {
+  height: var(--gkx-control-height) !important;
+  padding-inline: 12px !important;
+  border-color: var(--gkx-border) !important;
+  border-radius: var(--gkx-control-radius) !important;
+  background: var(--gkx-bg-surface) !important;
+  font-size: 14px;
+}
+
+:is(
+  .create-dialog,
+  .task-update-dialog,
+  .schedule-dialog,
+  .construction-action-modal,
+  .kg-detail-modal
+) {
+  border-radius: 8px !important;
+  background: var(--gkx-bg-surface) !important;
+  box-shadow: 0 12px 32px rgba(29, 33, 41, 0.16) !important;
+}
+
+:is(.create-dialog, .task-update-dialog, .schedule-dialog) > header {
+  min-height: 56px;
+  padding: 16px 24px !important;
+  border-color: var(--gkx-border) !important;
+  background: var(--gkx-bg-surface) !important;
+}
+
+:is(.create-dialog, .task-update-dialog, .schedule-dialog) > footer {
+  min-height: 64px;
+  padding: 16px 24px !important;
+  border-color: var(--gkx-border) !important;
+  background: var(--gkx-bg-surface) !important;
+}
+
+@media (max-width: 960px) {
+  .app-workspace {
+    padding: 12px;
+  }
+
+  .app-workspace :is(.summary-grid, .task-summary, .schema-stats, .platform-metrics) {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}

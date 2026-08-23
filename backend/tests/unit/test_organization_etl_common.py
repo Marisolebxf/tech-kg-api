@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+import script.organization_etl_common as common
+import script.organization_relation_etl as relation
+
+
+def test_relation_pipeline_uses_the_shared_spec_object() -> None:
+    assert relation.RELATION_SPECS is common.RELATION_SPECS
+    assert relation.RELATION_KEYS is common.RELATION_KEYS
+
+
+def test_all_39_workbook_tables_have_a_lossless_payload_destination() -> None:
+    assert len(common.DOMAIN_TABLE_SPECS) == 39
+    relation_specs_by_table = {
+        spec.source_table: spec
+        for spec in common.RELATION_SPECS
+        if "extra_json" in spec.edge_properties
+    }
+    for table in common.DOMAIN_TABLE_SPECS:
+        entity_keeps_raw_payload = table.entity_tag is not None
+        relation_keeps_raw_payload = table.name in relation_specs_by_table
+        assert entity_keeps_raw_payload or relation_keeps_raw_payload, table.name
+
+
+def test_one_canonical_schema_covers_all_relation_specs() -> None:
+    schema = common.SCHEMA_PATH.read_text(encoding="utf-8")
+    assert "CREATE TAG IF NOT EXISTS `Organization`" in schema
+    assert "CREATE TAG IF NOT EXISTS `DataSource`" in schema
+    for spec in common.RELATION_SPECS:
+        assert f"CREATE EDGE IF NOT EXISTS `{spec.edge_type}`" in schema
+        for property_name in spec.edge_properties:
+            assert f"`{property_name}`" in schema
+    for deprecated_name in (
+        "dev_organization_graph.ngql",
+        "dev_organization_relations.ngql",
+    ):
+        deprecated = common.SCHEMA_PATH.with_name(deprecated_name).read_text(encoding="utf-8")
+        assert "CREATE TAG" not in deprecated
+        assert "CREATE EDGE" not in deprecated
+
+
+def test_source_record_id_and_rank_are_canonical_and_deterministic() -> None:
+    row = {"org_id": "a", "inv_org_id": "b", "amount": 10}
+    record_id = common.stable_record_id(
+        "dwd_org_invest_info",
+        row,
+        ("org_id", "inv_org_id"),
+    )
+    assert record_id == "a|b"
+    rank = common.edge_rank("INVESTS_IN", "org_a", "org_b", record_id)
+    assert rank == common.edge_rank("INVESTS_IN", "org_a", "org_b", record_id)
+    assert 0 <= rank < 2**63
+
+
+def test_entity_and_relation_processes_share_one_exclusive_lock(tmp_path: Path) -> None:
+    lock_path = tmp_path / "organization.lock"
+    with common.exclusive_etl_lock("entity", "entity_batch", lock_path=lock_path):
+        with pytest.raises(RuntimeError, match="another organization ETL"):
+            with common.exclusive_etl_lock(
+                "relation",
+                "relation_batch",
+                lock_path=lock_path,
+            ):
+                pass
+
+
+def test_organization_confidence_and_provenance_are_deterministic() -> None:
+    row = {
+        "org_id": "org-1",
+        "name_cn": "机构一",
+        "external_id": "credit-1",
+        "province": "北京",
+    }
+    assert common.organization_id_from_row(row) == "org-1"
+    assert common.entity_confidence(row, source_table="dwd_org_base_info") == 1.0
+    relation_score = common.relation_confidence(
+        {"org_id": "org-1", "inv_org_id": "org-2", "amount": 1},
+        source_table="dwd_org_invest_info",
+    )
+    assert relation_score == 0.95
+
+
+def test_schema_declares_exact_organization_provenance_contract() -> None:
+    schema = common.SCHEMA_PATH.read_text(encoding="utf-8")
+    assert "CREATE TAG IF NOT EXISTS `organization_base`" in schema
+    assert "`organization_id` string NULL" in schema
+    assert "`confidence` double NULL" in schema

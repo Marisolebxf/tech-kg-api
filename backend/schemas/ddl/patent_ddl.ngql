@@ -1,0 +1,73 @@
+-- 专利图Schema（第一阶段）。
+-- 在目标图空间（当前为dev）中执行一次；本文件不创建、切换或清空图空间。
+-- Schema准备完成后，再运行 script/load_patent_graph.py 装载数据。
+
+CREATE TAG IF NOT EXISTS Patent (
+  patent_id string,
+  publication_number string,
+  application_number string,
+  application_kind string,
+  country_code string,
+  country string,
+  publication_date int64,
+  application_date int64,
+  granted_number string,
+  grant_date string,
+  status string,
+  anticipated_expiration int64,
+  title_original string,
+  title_en string,
+  title_zh string,
+  abstract_zh string,
+  language string,
+  main_ipcr string,
+  further_ipcr string,
+  main_cpc string,
+  further_cpc string,
+  keywords string,
+  citation_nums int64,
+  cited_by_nums int64,
+  patent_value int64,
+  simple_family_number string,
+  db_source string,
+  create_time datetime,
+  update_time datetime,
+  confidence double,
+  organization_base string,
+  organization_id string
+);
+
+-- Keyword跨专利复用；当前只保存规范化后的关键词名称。
+CREATE TAG IF NOT EXISTS Keyword (
+  keyword string,
+  confidence double,
+  organization_base string,
+  organization_id string
+);
+
+CREATE TAG IF NOT EXISTS PatentFamily (
+  family_number string,
+  confidence double,
+  organization_base string,
+  organization_id string
+);
+
+-- 专利表可以直接确定的事实关系。
+CREATE EDGE IF NOT EXISTS HAS_KEYWORD (
+  confidence double,
+  source_table string,
+  source_record_id string
+);
+
+CREATE EDGE IF NOT EXISTS MEMBER_OF_FAMILY (
+  confidence double,
+  match_method string,
+  match_evidence string,
+  source_table string,
+  source_record_id string
+);
+
+-- 空Tag索引用于按Tag全量枚举和统计；单点查询优先使用VID。
+CREATE TAG INDEX IF NOT EXISTS idx_patent_scan ON Patent();
+CREATE TAG INDEX IF NOT EXISTS idx_keyword_scan ON Keyword();
+CREATE TAG INDEX IF NOT EXISTS idx_patent_family_scan ON PatentFamily();

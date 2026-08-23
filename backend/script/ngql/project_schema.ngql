@@ -18,6 +18,7 @@ CREATE TAG IF NOT EXISTS Project(
   final_report_abstract string,
   project_page_url string,
   source string,
+  confidence double,
   total_outputs int64,
   journal_articles_count int64,
   conference_papers_count int64,
@@ -38,7 +39,8 @@ CREATE TAG IF NOT EXISTS Project(
   source_update_time string
 );
 
--- Stub / minimal peer tags (source=project_stub for stubs)
+-- Peer tags (Organization/Person/Paper/...) are owned by other domains on space=dev.
+-- Project ETL never creates stub peers; unmatched endpoints are skipped and reported.
 CREATE TAG IF NOT EXISTS Person(
   name_zh string,
   name_en string,
@@ -118,6 +120,11 @@ CREATE TAG IF NOT EXISTS DataSource(
 CREATE EDGE IF NOT EXISTS FUNDED_BY(
   funded_amount double,
   fund_category string,
+  match_method string,
+  match_evidence string,
+  confidence double,
+  organization_id string,
+  organization_source_table string,
   source_table string,
   source_record_id string,
   ingest_batch string,
@@ -125,6 +132,9 @@ CREATE EDGE IF NOT EXISTS FUNDED_BY(
 );
 
 CREATE EDGE IF NOT EXISTS LEADS(
+  match_method string,
+  match_evidence string,
+  confidence double,
   source_table string,
   source_record_id string,
   ingest_batch string,
@@ -132,6 +142,9 @@ CREATE EDGE IF NOT EXISTS LEADS(
 );
 
 CREATE EDGE IF NOT EXISTS HAS_PARTICIPANT(
+  match_method string,
+  match_evidence string,
+  confidence double,
   source_table string,
   source_record_id string,
   ingest_batch string,
@@ -146,6 +159,19 @@ CREATE EDGE IF NOT EXISTS PARTICIPATES_IN(
 );
 
 CREATE EDGE IF NOT EXISTS HAS_KEYWORD(
+  source_table string,
+  source_record_id string,
+  ingest_batch string,
+  ingest_time string
+);
+
+CREATE EDGE IF NOT EXISTS HAS_OUTPUT(
+  output_type string,
+  output_title string,
+  output_identifier string,
+  match_method string,
+  match_evidence string,
+  confidence double,
   source_table string,
   source_record_id string,
   ingest_batch string,
@@ -169,6 +195,7 @@ CREATE TAG INDEX IF NOT EXISTS project_number_idx ON Project(project_number(64))
 CREATE TAG INDEX IF NOT EXISTS project_title_idx ON Project(title(128));
 
 -- 说明：space=dev 上 Person/Organization/Paper/DataSource 可能已由同事创建为更宽 schema。
--- ETL（load_project_graph.py）会适配已有字段（如 Person.name_cn、Paper.title_zh），
--- 桩桩用 org_kind/person_kind=`project_stub`，避免写入不存在的 `source` 列。
--- 若需补列，请逐列 ALTER TAG ADD，勿批量 ADD 已存在列。
+-- ETL（load_project_graph.py）会适配已有字段（如 Person.name_cn、Paper.title_zh）。
+-- 运行时 ensure_alignment_edge_schema 幂等补齐 confidence / organization_id 等边属性；
+-- ensure_project_tag_confidence 幂等补齐 Project.confidence 实体置信度字段。
+-- 若需补列，请逐列 ALTER TAG/EDGE ADD，勿批量 ADD 已存在列。

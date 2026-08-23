@@ -11,7 +11,7 @@ server:
 mysql:
   host: ${MYSQL_HOST:127.0.0.1}
   port: ${MYSQL_PORT:3306}
-  database: ${MYSQL_DATABASE:gkx_local}
+  database: ${MYSQL_DATABASE:gkx_element}
   username: ${MYSQL_USERNAME:root}
   password: ${MYSQL_PASSWORD:123456789}
   pool_size: 10
@@ -48,7 +48,7 @@ graph_db:
   port: ${TRSGRAPH_PORT:9669}
   username: ${TRSGRAPH_USERNAME:root}
   password: ${TRSGRAPH_PASSWORD:trsadmin}
-  space: ${TRSGRAPH_SPACE:techkg}
+  space: ${TRS_GRAPH_SPACE:dev}
   max_connection_pool_size: ${GRAPH_DB_MAX_CONNECTION_POOL_SIZE:50}
   connection_timeout: ${GRAPH_DB_CONNECTION_TIMEOUT:30}
 

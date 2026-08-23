@@ -44,7 +44,7 @@ class PatentDAO:
 
     @staticmethod
     def _cpc_codes(patent: DwdPatent) -> list[str]:
-        raw = patent.classification_cpc
+        raw = {"main": patent.main_classification_cpc, "further": patent.further_classification_cpc}
         if not raw:
             return []
         if isinstance(raw, str):

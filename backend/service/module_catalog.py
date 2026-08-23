@@ -15,7 +15,7 @@ KG_CONSTRUCTION_MODULES: tuple[dict[str, object], ...] = (
         "code": "expert_cooperation_achievement",
         "name": "科技两点合作成果",
         "description": "针对两个专家或人才节点，汇总合作成果、成果分类、时间、领域和贡献模式。",
-        "status": "scaffold",
+        "status": "ready",
     },
     {
         "code": "expert_colleague_relation",
@@ -27,7 +27,7 @@ KG_CONSTRUCTION_MODULES: tuple[dict[str, object], ...] = (
         "code": "expert_alumni_relation",
         "name": "科技专家校友关系",
         "description": "基于教育经历和院校信息，识别专家之间的校友关系及关联维度。",
-        "status": "scaffold",
+        "status": "ready",
     },
     {
         "code": "expert_paper_cooperation",
@@ -51,6 +51,12 @@ KG_CONSTRUCTION_MODULES: tuple[dict[str, object], ...] = (
         "code": "enterprise_background_analysis",
         "name": "企业背景关联分析",
         "description": "基于企业ID，从行业地位、核心技术、经营财务、专利分类等维度开展背景关联分析，支撑产业链研究。",
+        "status": "scaffold",
+    },
+    {
+        "code": "expert_enterprise_mining",
+        "name": "专家企业关系挖掘",
+        "description": "输入学者ID，从其传记文本自动抽取关联企业、实体消歧后调用构建/标注/分析接口完成专家-企业关系挖掘。",
         "status": "scaffold",
     },
     {

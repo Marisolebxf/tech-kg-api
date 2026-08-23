@@ -44,7 +44,11 @@ def relation_label(codes: list[str]) -> str:
 
 
 def role_info(role_type: str) -> tuple[str, str]:
-    """roleType → (中文标签, 等级)。非法抛 InvalidRoleTypeError。"""
-    if role_type not in ROLE_CATALOG:
-        raise InvalidRoleTypeError(f"非法角色类型: {role_type}")
-    return ROLE_CATALOG[role_type]
+    """roleType → (中文标签, 等级)。
+
+    码表内角色返回对应(标签, 等级)；不在码表内的（如挖掘抽取的真实职位
+    博士/研究员/副教授/高级工程师等）原样保留角色名、等级置空，不再抛错。
+    """
+    if role_type in ROLE_CATALOG:
+        return ROLE_CATALOG[role_type]
+    return role_type, ""

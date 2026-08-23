@@ -1,6 +1,6 @@
-import os
 from typing import Any
 
+from infra.llm import get_llm_client
 from service.common.entity_alignment import align_knowledge_graphs
 from service.common.entity_disambiguation import disambiguate_entity
 from service.common.entity_extraction import FOCUS_TYPES, extract
@@ -40,21 +40,23 @@ class CommonCapabilityApplication:
         return disambiguate_entity(text, mention, kb, top_k=top_k)
 
     def extract_relations(self, text: str, method: str = "rule") -> dict[str, Any]:
+        client = get_llm_client()
         return extract_relations(
             text=text,
             method=method,
-            llm_api_key=os.getenv("LLM_API_KEY") or None,
-            llm_base_url=os.getenv("LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
-            llm_model=os.getenv("LLM_MODEL", "glm-4-flash"),
+            llm_api_key=client.api_key if client else None,
+            llm_base_url=client.base_url if client else None,
+            llm_model=client.model if client else "glm-4-flash",
         )
 
     def batch_extract_relations(self, texts: list[str], method: str = "rule") -> dict[str, Any]:
+        client = get_llm_client()
         return batch_extract_relations(
             texts=texts,
             method=method,
-            llm_api_key=os.getenv("LLM_API_KEY") or None,
-            llm_base_url=os.getenv("LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
-            llm_model=os.getenv("LLM_MODEL", "glm-4-flash"),
+            llm_api_key=client.api_key if client else None,
+            llm_base_url=client.base_url if client else None,
+            llm_model=client.model if client else "glm-4-flash",
         )
 
     def relation_examples(self) -> list[dict[str, str]]:

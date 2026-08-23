@@ -4,7 +4,7 @@ from service.module_catalog import get_kg_construction_module, list_kg_construct
 def test_list_kg_construction_modules() -> None:
     modules = list_kg_construction_modules()
 
-    assert len(modules) == 11
+    assert len(modules) == 12
     assert {module["code"] for module in modules} == {
         "expert_direct_relation",
         "expert_indirect_relation",
@@ -15,6 +15,7 @@ def test_list_kg_construction_modules() -> None:
         "expert_enterprise_relation",
         "relation_detail_annotation",
         "enterprise_background_analysis",
+        "expert_enterprise_mining",
         "industry_chain_topn_event",
         "industry_chain_panorama",
     }

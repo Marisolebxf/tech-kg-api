@@ -43,7 +43,7 @@ def test_get_options_tolerates_data_source_failure(monkeypatch):
         mod, "get_techkg_client", lambda: (_ for _ in ()).throw(RuntimeError("no graph"))
     )
     monkeypatch.setattr(
-        mod, "get_mysql_client", lambda: (_ for _ in ()).throw(RuntimeError("no mysql"))
+        mod, "get_gkx_session", lambda: (_ for _ in ()).throw(RuntimeError("no gkx"))
     )
     opts = mod.get_options()
     assert opts["scholars"] == []

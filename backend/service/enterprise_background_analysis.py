@@ -6,10 +6,12 @@ import json
 import logging
 from typing import Any
 
+from sqlalchemy.orm import Session
+
 from dao.organization import OrganizationDAO
 from dao.patent import PatentDAO
+from infra.gkx import get_gkx_session
 from infra.llm import get_llm_client
-from infra.mysql import get_mysql_client
 from service.base_module import KGModuleScaffoldService
 
 logger = logging.getLogger(__name__)
@@ -27,12 +29,14 @@ def _num(v: Any) -> float | None:
 class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
     module_code = "enterprise_background_analysis"
 
-    def analyze(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def analyze(self, payload: dict[str, Any], session: Session | None = None) -> dict[str, Any]:
         enterprise_id = payload.get("enterpriseId", "")
         dimensions = payload.get("analysisDimensions", []) or []
         patent_cpc = payload.get("patentCPC", []) or []
 
-        session = get_mysql_client().session()
+        own_session = session is None
+        if own_session:
+            session = get_gkx_session()
         try:
             org_dao = OrganizationDAO(session)
             pat_dao = PatentDAO(session)
@@ -42,18 +46,30 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
             name = org.name_cn
 
             facts: dict[str, dict[str, Any]] = {}
+            # 各维度独立容错：gkx 表结构与模型可能存在列漂移，单维度查询失败时降级为
+            # available=False，不应导致整个 analyze 抛系统异常（标书：无数据返回空结果）。
+            dim_calls: dict[str, Any] = {}
             if "industry_status" in dimensions:
-                facts["industry_status"] = self._industry_status(org, org_dao, enterprise_id)
+                dim_calls["industry_status"] = lambda: self._industry_status(
+                    org, org_dao, enterprise_id
+                )
             if "core_tech" in dimensions:
-                facts["core_tech"] = self._core_tech(
+                dim_calls["core_tech"] = lambda: self._core_tech(
                     org_dao, pat_dao, enterprise_id, name, patent_cpc
                 )
             if "financial" in dimensions:
-                facts["financial"] = self._financial(org_dao, enterprise_id)
+                dim_calls["financial"] = lambda: self._financial(org_dao, enterprise_id)
+            for dim, fn in dim_calls.items():
+                try:
+                    facts[dim] = fn()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("analyze dimension %s failed: %s", dim, exc)
+                    facts[dim] = {"available": False, "summary": "暂无数据"}
 
             patent_dist = self._patent_distribution(pat_dao, name)
         finally:
-            session.close()
+            if own_session:
+                session.close()
 
         llm = get_llm_client()
         conclusions: dict[str, str] = self._synthesize_dimensions(llm, facts) if llm else {}
@@ -81,7 +97,7 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
         if org is None:
             return {"available": False, "summary": "暂无数据"}
         facts = {
-            "orgType": org.org_type,
+            "orgType": getattr(org, "org_type", None),
             "listingStatus": org.listing_status,
             "registeredCapital": _num(org.registered_capital_value),
             "province": org.province,
@@ -105,7 +121,11 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
         cpc_prefixes: list[str],
     ) -> dict[str, Any]:
         prod = org_dao.get_products(org_id)
-        patents = pat_dao.list_by_assignee(name_cn, cpc_prefixes)
+        try:
+            patents = pat_dao.list_by_assignee(name_cn, cpc_prefixes)
+        except Exception as exc:  # noqa: BLE001  gkx 无 dwd_patent 表等
+            logger.warning("patent list failed: %s", exc)
+            patents = []
         if prod is None and not patents:
             return {"available": False, "summary": "暂无数据"}
         facts = {

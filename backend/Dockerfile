@@ -4,14 +4,19 @@ FROM python:3.11.13-slim
 # 设置工作目录
 WORKDIR /app
 
-# 安装 uv（默认 PyPI；如需国内镜像可改 -i https://pypi.tuna.tsinghua.edu.cn/simple）
-RUN pip install uv
+# Docker 构建默认使用阿里云 PyPI 镜像，可通过 build arg 覆盖。
+ARG PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ENV PIP_INDEX_URL=${PYPI_INDEX_URL} \
+    UV_DEFAULT_INDEX=${PYPI_INDEX_URL}
+
+# pip 安装 uv 和 uv 同步项目依赖均使用上述镜像。
+RUN pip install --no-cache-dir uv
 
 # 复制依赖文件
 COPY pyproject.toml uv.lock ./
 
 # 安装依赖
-RUN uv sync --frozen --no-dev 
+RUN uv sync --frozen --no-dev
 
 # 复制项目代码
 COPY . .

@@ -9,8 +9,12 @@ from sqlalchemy.orm import Session
 
 from dao.base import BaseDAO
 from db_model.base import Base
-from db_model.domestic_project import DwdZhProject, DwdZhProjectOutput
-from db_model.foreign_project import DwdEnProject, DwdEnProjectOutput
+from db_model.project import (
+    DwdEnProject,
+    DwdEnProjectOutput,
+    DwdZhProject,
+    DwdZhProjectOutput,
+)
 
 ModelT = TypeVar("ModelT", bound=Base)
 

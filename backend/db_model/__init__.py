@@ -48,10 +48,6 @@ from db_model.domestic_organization import (
     DwdOrgTbJudicialSale,
     DwdOrgTbJudicialSaleInfoCompany,
 )
-from db_model.domestic_project import (
-    DwdZhProject,
-    DwdZhProjectOutput,
-)
 from db_model.foreign_organization import (
     DwdForgAggIdentifier,
     DwdForgBaseInfo,
@@ -72,10 +68,6 @@ from db_model.foreign_paper import (
     DwdEnPaperInfo,
     OdsEnJournal,
 )
-from db_model.foreign_project import (
-    DwdEnProject,
-    DwdEnProjectOutput,
-)
 from db_model.industry_chain import (
     DwdIndustryChainInfo,
     DwdIndustryChainNewsInfo,
@@ -88,6 +80,13 @@ from db_model.paper_common import (
     DwdAuthorInfo,
 )
 from db_model.patent import (
+    DwdPatent,
+    DwdPatentAbstract,
+    DwdPatentCited,
+    DwdPatentFamily,
+    DwdPatentLegal,
+    DwdPatentTitle,
+    DwdPatentTransfer,
     OdsPatent,
     OdsPatentBiblio,
     OdsPatentCited,
@@ -104,9 +103,21 @@ from db_model.policy import (
     OdsZhPolicy6,
     OdsZhPolicyTuoersi,
 )
+from db_model.project import (
+    DwdEnProject,
+    DwdEnProjectOutput,
+    DwdZhProject,
+    DwdZhProjectOutput,
+)
 from db_model.report import (
     OdsEnReport,
     OdsZhReport,
+)
+from db_model.schema_management import (
+    GraphSchemaDefinition,
+    GraphSchemaMapping,
+    GraphSchemaProperty,
+    GraphSchemaScript,
 )
 from db_model.scholar import (
     DwdScholar,
@@ -137,6 +148,13 @@ __all__ = [
     "OdsEnJournal",
     "DwdAuthorAffiliation",
     "DwdAuthorInfo",
+    "DwdPatent",
+    "DwdPatentAbstract",
+    "DwdPatentCited",
+    "DwdPatentFamily",
+    "DwdPatentLegal",
+    "DwdPatentTitle",
+    "DwdPatentTransfer",
     "OdsPatent",
     "OdsPatentBiblio",
     "OdsPatentCited",
@@ -212,4 +230,8 @@ __all__ = [
     "OdsZhPolicyTuoersi",
     "OdsEnReport",
     "OdsZhReport",
+    "GraphSchemaDefinition",
+    "GraphSchemaProperty",
+    "GraphSchemaMapping",
+    "GraphSchemaScript",
 ]

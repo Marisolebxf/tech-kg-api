@@ -1,0 +1,17 @@
+-- 科技专家同事关系推理结果，仅写入 dev 图空间。
+USE `dev`;
+CREATE EDGE IF NOT EXISTS `COLLEAGUE`(
+  `organization` string,
+  `department` string,
+  `effective_period` string,
+  `overlap_months` int,
+  `confidence` double,
+  `teams_json` string,
+  `work_content_json` string,
+  `scenes_json` string,
+  `achievement_ids_json` string,
+  `evidence_json` string,
+  `source` string,
+  `updated_at` string
+);
+CREATE EDGE INDEX IF NOT EXISTS `colleague_confidence_idx` ON `COLLEAGUE`(`confidence`);

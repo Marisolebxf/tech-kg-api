@@ -35,8 +35,12 @@ Thumbs.db
 .coverage
 htmlcov/
 server.log
+backend/output/organization_graph/
 
 # 本地专用，不提交
 docs/superpowers/
 backend/app/
 /app/
+
+# 算子运行时缓存（提交 backend/operators/scholar/ 作为源码，此目录由 FastAPI 上传时生成）
+backend/operators/user/

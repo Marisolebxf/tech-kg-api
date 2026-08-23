@@ -1,8 +1,9 @@
 """角色与合作详情标注 路由。"""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from application.relation_detail_annotation import RelationDetailAnnotationApplication
+from biz.dependencies.auth import require_platform_admin
 from biz.schemas.common import ApiResponse
 from biz.schemas.relation_detail_annotation import RelationDetailAnnotationRequest
 
@@ -15,7 +16,11 @@ async def describe_relation_detail_annotation() -> dict[str, object]:
     return application.describe()
 
 
-@router.post("/annotate", response_model=ApiResponse)
+@router.post(
+    "/annotate",
+    response_model=ApiResponse,
+    dependencies=[Depends(require_platform_admin)],
+)
 async def annotate_relation_detail(req: RelationDetailAnnotationRequest) -> ApiResponse:
     try:
         result = application.annotate(req.model_dump())

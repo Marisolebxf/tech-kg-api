@@ -645,15 +645,18 @@ class DwdOrgRecruitInfo(Base):
 
 
 class DwdOrgRegInfo(Base):
-    """前海数据机构基本信息"""
+    """前海数据机构基本信息（物理表 dwd_org_base_info）"""
 
-    __tablename__ = "dwd_org_reg_info"
+    __tablename__ = "dwd_org_base_info"
     __table_args__ = {"comment": "前海数据机构基本信息"}
 
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "external_id",
+        String(50),
+        nullable=True,
+        comment="统一社会信用代码(dwd_org_base_info.external_id)",
     )
     province = Column("province", String(50), nullable=True, comment="所在省份")
     city = Column("city", String(50), nullable=True, comment="所在城市")
@@ -673,7 +676,10 @@ class DwdOrgRegInfo(Base):
         "registered_capital_value", Float(), nullable=True, comment="注册资本金"
     )
     capital_currency_code = Column(
-        "capital_currency_code", String(50), nullable=True, comment="资本货币代码"
+        "capital_currency",
+        String(50),
+        nullable=True,
+        comment="资本货币代码(dwd_org_base_info.capital_currency)",
     )
     data_source = Column("data_source", String(50), nullable=True, comment="数据来源")
     created_time = Column("created_time", String(50), nullable=True, comment="创建时间")

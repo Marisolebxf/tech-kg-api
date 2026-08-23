@@ -21,6 +21,9 @@
 - **MySQL 8.0**（业务数据）
 - （可选）智谱 GLM API Key——仅「企业背景关联分析」用，未配置时自动降级
 
+根 Compose 另外启动一个独立 RustFS，用 S3 兼容协议持久化用户上传的 Python 算子源码。
+它与 Milvus 配套的 MinIO 相互独立，MinIO 不做替换。
+
 ## 快速开始
 
 ### 方式一：Docker（推荐）
@@ -33,6 +36,81 @@ docker compose up --build
 ```
 
 `docker-compose.yml` 通过 `host.docker.internal` 连接宿主机上的 trs-graph-service / MySQL；如端口 8001/8088 被占用，改 compose 里的 host 端口即可（不要停其它服务让端口）。
+
+### Milvus standalone
+
+Milvus 已合并到根目录 `docker-compose.yml`，与前后端使用同一份 Compose。为避免与服务器已有的 `tech-kg-engine` Milvus 冲突，本项目使用独立容器、命名卷和端口：Milvus `19531`、健康检查 `9093`、MinIO API `9010`、MinIO Console `9011`。
+
+```bash
+# 只启动本项目的 Milvus、etcd 和 MinIO
+docker compose up -d milvus-etcd milvus-minio milvus
+
+# 查看状态和日志
+docker compose ps milvus-etcd milvus-minio milvus
+docker compose logs -f milvus
+
+# 健康检查
+curl -f http://127.0.0.1:9093/healthz
+```
+
+数据保存在 Docker 命名卷 `tech-kg-api_milvus-etcd-data`、`tech-kg-api_milvus-minio-data` 和 `tech-kg-api_milvus-data` 中。停止容器可执行 `docker compose stop milvus milvus-minio milvus-etcd`；不要使用 `down -v`，否则会删除数据卷。
+
+#### 连接 Milvus
+
+当前服务器部署信息：
+
+| 场景 | URI |
+|------|-----|
+| 服务器本机 | `http://127.0.0.1:19531` |
+| 同一 Docker Compose 网络中的容器 | `http://milvus:19530` |
+| 其他机器远程连接 | `http://211.81.248.211:19531` |
+
+Milvus 版本为 `2.4.17`，默认数据库为 `default`，当前未启用用户名和密码认证。Python 客户端示例：
+
+```bash
+pip install "pymilvus>=2.4,<2.5"
+```
+
+```python
+from pymilvus import MilvusClient
+
+# 在服务器本机运行
+client = MilvusClient(uri="http://127.0.0.1:19531")
+
+# 若代码运行在本项目 Docker Compose 的其他容器中，改用：
+# client = MilvusClient(uri="http://milvus:19530")
+
+# 从其他机器连接当前服务器，改用：
+# client = MilvusClient(uri="http://211.81.248.211:19531")
+
+print(client.list_collections())
+```
+
+远程使用者需要服务器 IP `211.81.248.211`、Milvus 端口 `19531`，并确保其网络可访问该 TCP 端口。MinIO 的 `9010/9011` 端口不需要提供给普通 Milvus 客户端。
+
+当前实例未启用认证，不应将 `19531` 无限制暴露到公网。建议通过防火墙限制来源 IP，或使用 SSH 隧道：
+
+```bash
+ssh -L 19531:127.0.0.1:19531 <user>@211.81.248.211
+```
+
+建立隧道后，客户端连接 `http://127.0.0.1:19531`。
+
+### M3E-small在线向量服务
+
+根目录Compose包含CPU版 `moka-ai/m3e-small` 服务。首次启动会下载模型到持久卷，之后从本地缓存加载：
+
+```bash
+docker compose up -d --build m3e-embedding
+curl http://127.0.0.1:8011/health
+curl -X POST http://127.0.0.1:8011/v1/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"moka-ai/m3e-small","input":["中文专利","English patent"],"dimensions":512}'
+```
+
+服务只绑定服务器回环地址 `127.0.0.1:8011`；Compose内的API通过
+`http://m3e-embedding:8010/v1` 调用。模型输出512维归一化向量，模型缓存保存在
+`m3e-model-cache` Docker卷中。
 
 ### 方式二：本地开发
 
@@ -276,12 +354,11 @@ tech-kg-api/                       # monorepo 根
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
 | `TRS_GRAPH_BASE_URL` | `http://localhost:8090` | trs-graph-service 地址 |
-| `TRS_GRAPH_SPACE` | `entity_binding_demo` | 图空间（`get_techkg_client` 固定 `techkg`，忽略此项） |
+| `TRS_GRAPH_SPACE` | `dev` | 图空间（所有运行时图客户端均读取此项） |
 | `TRS_GRAPH_API_KEY` | — | `X-API-Key` 认证（必填） |
 | `TRS_GRAPH_TIMEOUT` | `30` | 请求超时（秒） |
 | `MYSQL_HOST` / `MYSQL_PORT` | `127.0.0.1` / `3306` | MySQL 连接 |
-| `MYSQL_DATABASE` / `MYSQL_USERNAME` / `MYSQL_PASSWORD` | `techkg` / `root` / — | MySQL 库/账密 |
+| `MYSQL_DATABASE` / `MYSQL_USERNAME` / `MYSQL_PASSWORD` | `gkx_element` / `root` / — | MySQL 库/账密 |
 | `LLM_API_KEY` | — | 智谱 GLM key；未配置时 #3 自动降级 |
 | `LLM_MODEL` | `glm-4.7-flash` | LLM 模型（推理模型，读 `message.content`） |
 | `LLM_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | LLM 接口地址 |
-

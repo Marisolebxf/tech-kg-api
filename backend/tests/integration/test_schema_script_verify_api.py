@@ -180,12 +180,17 @@ async def test_verify_syntax_error(schema_api, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_verify_permission_denied_returns_403(schema_api, monkeypatch) -> None:
+async def test_verify_ignores_forged_user_header_for_authenticated_admin(
+    schema_api, monkeypatch
+) -> None:
     _set_llm(monkeypatch, '{"safe": true, "issues": [], "summary": "ok"}')
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         expert = await _list_expert(client)
         response = await _verify(client, expert["id"], "user-a", "expert.py", BENIGN_SCRIPT)
-        assert response.status_code == 403
+        assert response.status_code == 200
+        events = _parse_sse(response.text)
+
+    assert events[-1]["type"] == "success"
 
 
 @pytest.mark.asyncio

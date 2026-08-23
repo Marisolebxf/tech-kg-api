@@ -51,9 +51,13 @@ class AuthSettings:
     dev_user_id: str
     dev_username: str
     dev_nickname: str
+    initial_admin_user_ids: tuple[str, ...]
+    bootstrap_first_admin: bool
+    dev_first_user_admin: bool
 
     @classmethod
     def from_env(cls) -> AuthSettings:
+        app_env = os.getenv("APP_ENV", "prod").strip().lower()
         redis_url = os.getenv("REDIS_URL")
         if not redis_url:
             host = os.getenv("REDIS_HOST", "127.0.0.1")
@@ -115,6 +119,19 @@ class AuthSettings:
             dev_user_id=os.getenv("AUTH_DEV_USER_ID", "local-dev"),
             dev_username=os.getenv("AUTH_DEV_USERNAME", "local-dev"),
             dev_nickname=os.getenv("AUTH_DEV_NICKNAME", "本地开发用户"),
+            initial_admin_user_ids=tuple(
+                item.strip()
+                for item in os.getenv("PLATFORM_INITIAL_ADMIN_USER_IDS", "").split(",")
+                if item.strip()
+            ),
+            bootstrap_first_admin=_env_bool(
+                "PLATFORM_BOOTSTRAP_FIRST_ADMIN",
+                _env_bool("PLATFORM_BOOTSTRAP_EXISTING_USERS_ADMIN", False),
+            ),
+            dev_first_user_admin=(
+                app_env in {"dev", "development", "local", "test"}
+                and _env_bool("PLATFORM_DEV_FIRST_USER_ADMIN", False)
+            ),
         )
 
     def require_oauth_credentials(self) -> None:

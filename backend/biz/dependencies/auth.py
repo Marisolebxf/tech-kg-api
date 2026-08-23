@@ -9,6 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from application.auth import AuthApplication, get_auth_application
 from service.auth import AuthContext, AuthenticationError
+from service.platform_access import PlatformActor
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -72,6 +73,30 @@ async def require_authenticated_user(
 
 
 CurrentUser = Annotated[AuthContext, Depends(require_authenticated_user)]
+
+
+async def require_platform_actor(
+    context: CurrentUser,
+    application: AuthApplicationDependency,
+) -> PlatformActor:
+    return application.platform_actor(context)
+
+
+CurrentActor = Annotated[PlatformActor, Depends(require_platform_actor)]
+
+
+async def require_platform_admin(
+    actor: CurrentActor,
+) -> PlatformActor:
+    if not actor.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="仅全局管理员可以执行该操作",
+        )
+    return actor
+
+
+CurrentAdmin = Annotated[PlatformActor, Depends(require_platform_admin)]
 
 
 def require_permission(permission: str):

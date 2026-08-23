@@ -7,6 +7,7 @@ from config.auth import AuthSettings
 from infra.redis import AsyncJsonStore, get_json_store
 from infra.user_center import UserCenterClient
 from service.auth import AuthContext, AuthService
+from service.platform_access import PlatformActor, actor_from_profile
 
 
 class AuthApplication:
@@ -20,6 +21,7 @@ class AuthApplication:
         self.store = store or get_json_store(self.settings)
         self.user_center = user_center or UserCenterClient(self.settings)
         self.service = AuthService(self.settings, self.store, self.user_center)
+        self._dev_admin_user_id: str | None = None
 
     async def create_login_url(self, next_path: str) -> tuple[str, int, str]:
         return await self.service.create_login_url(next_path)
@@ -54,7 +56,27 @@ class AuthApplication:
         return self.service.account_security(context)
 
     def profile(self, context: AuthContext) -> AuthProfile:
-        return self.service.profile(context)
+        profile = self.service.profile(context)
+        actor = self._platform_actor_for_profile(profile)
+        profile.platform_roles = actor.roles
+        profile.platform_permissions = actor.permissions
+        profile.is_admin = actor.is_admin
+        return profile
+
+    def platform_actor(self, context: AuthContext) -> PlatformActor:
+        return self._platform_actor_for_profile(self.service.profile(context))
+
+    def _platform_actor_for_profile(self, profile: AuthProfile) -> PlatformActor:
+        user_id = str(profile.user.id)
+        if self.settings.dev_first_user_admin and self._dev_admin_user_id is None:
+            self._dev_admin_user_id = user_id
+        return actor_from_profile(
+            profile,
+            initial_admin_ids=self.settings.initial_admin_user_ids,
+            auth_enabled=self.settings.enabled,
+            bootstrap_first_admin=self.settings.bootstrap_first_admin,
+            force_admin=(self.settings.dev_first_user_admin and self._dev_admin_user_id == user_id),
+        )
 
     def dev_context(self) -> AuthContext:
         return self.service.dev_context()

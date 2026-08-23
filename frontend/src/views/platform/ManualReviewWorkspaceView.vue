@@ -390,7 +390,7 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
       record.value = mapProductionRecord(productionCase.value)
       window.clearInterval(heartbeatTimer)
     } else {
-      const response = await submitManualReview(record.value.id, { actionId: action.id, note: note.value, result, handler: record.value.handler, rerun: Boolean(rerun) })
+      const response = await submitManualReview(record.value.id, { actionId: action.id, note: note.value, result, rerun: Boolean(rerun) })
       record.value = response.review as ReviewRecord
     }
     const messages = [

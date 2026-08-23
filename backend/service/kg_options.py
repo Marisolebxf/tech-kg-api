@@ -74,6 +74,8 @@ def _edges() -> list[dict[str, str]]:
     try:
         res = get_techkg_client().get_edges_by_type("EMPLOYED_BY", limit=100)
         for e in res.items[:50]:
+            if e.properties.get("manual_disabled") is True:
+                continue
             out.append(
                 {
                     "relationId": str(e.id),

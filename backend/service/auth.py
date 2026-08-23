@@ -85,7 +85,7 @@ class AuthService:
             url = self.user_center.build_login_url(state)
         except ValueError as exc:
             raise AuthenticationError(str(exc), status_code=503) from exc
-        await self.store.set_json(
+        await self._store_set_json(
             f"{self.STATE_KEY_PREFIX}{state}",
             {"next": next_path},
             self.settings.state_ttl_seconds,
@@ -93,7 +93,7 @@ class AuthService:
         return url, self.settings.state_ttl_seconds, state
 
     async def complete_login(self, code: str, state: str) -> tuple[AuthContext, str]:
-        state_data = await self.store.pop_json(f"{self.STATE_KEY_PREFIX}{state}")
+        state_data = await self._store_pop_json(f"{self.STATE_KEY_PREFIX}{state}")
         if state_data is None:
             raise AuthenticationError("登录状态已过期或无效，请重新登录", status_code=400)
         try:
@@ -108,7 +108,7 @@ class AuthService:
         return context, str(state_data.get("next") or "/overview")
 
     async def get_session(self, session_id: str) -> AuthContext:
-        record = await self.store.get_json(f"{self.SESSION_KEY_PREFIX}{session_id}")
+        record = await self._store_get_json(f"{self.SESSION_KEY_PREFIX}{session_id}")
         if record is None:
             raise AuthenticationError("登录已过期，请重新登录")
         context = AuthContext.from_record(record, session_id=session_id)
@@ -123,7 +123,7 @@ class AuthService:
         context: AuthContext | None = None,
     ) -> AuthContext:
         if context is None:
-            record = await self.store.get_json(f"{self.SESSION_KEY_PREFIX}{session_id}")
+            record = await self._store_get_json(f"{self.SESSION_KEY_PREFIX}{session_id}")
             if record is None:
                 raise AuthenticationError("登录已过期，请重新登录")
             current = AuthContext.from_record(record, session_id=session_id)
@@ -160,7 +160,7 @@ class AuthService:
     async def resolve_bearer(self, access_token: str) -> AuthContext:
         digest = hashlib.sha256(access_token.encode("utf-8")).hexdigest()
         key = f"{self.BEARER_KEY_PREFIX}{digest}"
-        cached = await self.store.get_json(key)
+        cached = await self._store_get_json(key)
         if cached is not None:
             return AuthContext.from_record(cached, session_id="")
 
@@ -180,7 +180,7 @@ class AuthService:
         ttl = self.settings.bearer_cache_ttl_seconds
         if expires_at is not None:
             ttl = max(1, min(ttl, expires_at - int(time.time())))
-        await self.store.set_json(key, context.to_record(), ttl)
+        await self._store_set_json(key, context.to_record(), ttl)
         return context
 
     async def create_session_from_access_token(self, access_token: str) -> AuthContext:
@@ -265,7 +265,7 @@ class AuthService:
         result: str | None = None,
         keyword: str | None = None,
     ) -> OperationLogPage:
-        payload = await self.store.get_json(self._audit_key(context)) or {}
+        payload = await self._store_get_json(self._audit_key(context)) or {}
         items = [
             OperationLogItem.model_validate(item)
             for item in payload.get("items", [])
@@ -326,7 +326,10 @@ class AuthService:
         )
 
     async def delete_session(self, session_id: str) -> None:
-        await self.store.delete(f"{self.SESSION_KEY_PREFIX}{session_id}")
+        try:
+            await self.store.delete(f"{self.SESSION_KEY_PREFIX}{session_id}")
+        except Exception as exc:
+            self._raise_store_unavailable(exc)
 
     def _audit_key(self, context: AuthContext) -> str:
         user_id = str(self.profile(context).user.id)
@@ -451,8 +454,39 @@ class AuthService:
     async def _save_session(self, context: AuthContext) -> None:
         if not context.session_id:
             raise ValueError("session_id 不能为空")
-        await self.store.set_json(
+        await self._store_set_json(
             f"{self.SESSION_KEY_PREFIX}{context.session_id}",
             context.to_record(),
             self.settings.session_ttl_seconds,
         )
+
+    async def _store_get_json(self, key: str) -> dict[str, Any] | None:
+        try:
+            return await self.store.get_json(key)
+        except Exception as exc:
+            self._raise_store_unavailable(exc)
+
+    async def _store_set_json(
+        self,
+        key: str,
+        value: dict[str, Any],
+        ttl_seconds: int,
+    ) -> None:
+        try:
+            await self.store.set_json(key, value, ttl_seconds)
+        except Exception as exc:
+            self._raise_store_unavailable(exc)
+
+    async def _store_pop_json(self, key: str) -> dict[str, Any] | None:
+        try:
+            return await self.store.pop_json(key)
+        except Exception as exc:
+            self._raise_store_unavailable(exc)
+
+    @staticmethod
+    def _raise_store_unavailable(exc: Exception) -> None:
+        logger.error("登录会话存储不可用", exc_info=exc)
+        raise AuthenticationError(
+            "登录会话服务暂时不可用，请稍后重试（本地开发请确认 Redis 已启动，或使用 memory 会话）",
+            status_code=503,
+        ) from exc

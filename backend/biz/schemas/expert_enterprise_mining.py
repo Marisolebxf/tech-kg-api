@@ -12,3 +12,8 @@ class ExpertEnterpriseMiningRequest(BaseModel):
         default_factory=lambda: ["industry_status", "core_tech", "financial"]
     )
     regenerate: bool = False
+
+
+class ExpertEnterpriseQueryRequest(BaseModel):
+    scholarId: str = Field(min_length=1)
+    topN: int = Field(default=5, ge=1, le=10)

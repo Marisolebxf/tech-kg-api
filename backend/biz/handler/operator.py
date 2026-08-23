@@ -115,9 +115,9 @@ async def reload_operators(
     reload_token: Annotated[str | None, Header(alias="X-Operator-Reload-Token")] = None,
 ) -> dict[str, object]:
     expected_token = os.getenv("OPERATOR_RELOAD_TOKEN")
-    if expected_token and not (
-        reload_token and secrets.compare_digest(reload_token, expected_token)
-    ):
+    if not expected_token:
+        raise HTTPException(status_code=503, detail="算子重载令牌尚未配置")
+    if not (reload_token and secrets.compare_digest(reload_token, expected_token)):
         raise HTTPException(status_code=401, detail="重载令牌无效")
     try:
         loaded = (

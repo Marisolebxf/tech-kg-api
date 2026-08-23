@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -14,10 +14,27 @@ from biz.router.register import register_routers
 from biz.schemas.common import ApiResponse
 from infra.graph_db import close_techkg_client, close_trs_graph_client
 from infra.graph_db.exceptions import GraphRepoError
+from infra.mysql import session_scope
 from infra.redis import close_redis_client
+from service.correction import process_due_sync_tasks
 from service.operator_registry import REGISTRY
 
 logger = logging.getLogger(__name__)
+
+
+def _dispatch_corrections_once() -> int:
+    with session_scope() as session:
+        return process_due_sync_tasks(session)
+
+
+async def _run_correction_dispatcher() -> None:
+    interval = max(5, int(os.getenv("CORRECTION_SYNC_INTERVAL_SECONDS", "30")))
+    while True:
+        try:
+            await asyncio.to_thread(_dispatch_corrections_once)
+        except Exception:
+            logger.exception("人工修正同步轮询失败，将在下一周期重试")
+        await asyncio.sleep(interval)
 
 
 @asynccontextmanager
@@ -25,6 +42,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """初始化 Schema 和算子服务，并在退出时释放基础设施资源。"""
     await asyncio.to_thread(REGISTRY.initialize_store)
     REGISTRY.start_watcher()
+    correction_dispatcher = None
+    if os.getenv("CORRECTION_SYNC_WORKER_ENABLED", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        correction_dispatcher = asyncio.create_task(_run_correction_dispatcher())
     try:
         # 确保 platform_llm_config 表存在（LLM 配置持久化，schema 作业默认 LLM 绑定依赖）。
         # MySQL 不可达时跳过建表：CI 无 MySQL 服务，运行期访问 LLM 配置接口会单独报错。
@@ -59,8 +84,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from biz.handler.graph_search import prewarm_stats
 
         asyncio.get_running_loop().create_task(prewarm_stats())
+        # 后台预热九大业务模块结果缓存（PREWARM_BUSINESS=true 时生效），
+        # 使每个 worker 在压测稳态下命中缓存，避免冷启动击穿 trs-graph。
+        from biz.prewarm_business import prewarm_business
+
+        asyncio.get_running_loop().create_task(prewarm_business(app))
         yield
     finally:
+        if correction_dispatcher is not None:
+            correction_dispatcher.cancel()
+            with suppress(asyncio.CancelledError):
+                await correction_dispatcher
         REGISTRY.stop_watcher()
         if "worker_task" in locals():
             worker_task.cancel()

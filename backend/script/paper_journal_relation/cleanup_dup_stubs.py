@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-SPACE = "dev"
+SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 # 42 字符重复桩前缀（前缀 10 + md5 32 = 42）
 DUP_PREFIXES = ["paper_ref_", "paper_cit_", "paper_rel_"]
 DUP_VID_LEN = 42

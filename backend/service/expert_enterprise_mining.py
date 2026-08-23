@@ -100,6 +100,30 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
         return self._llm
 
     # ----- 主流程 -----
+    def query_existing(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """只读返回图库中已构建关系，不运行抽取、消歧或任何写图步骤。"""
+        scholar_id = str(payload.get("scholarId") or "").strip()
+        top_n = min(max(int(payload.get("topN") or 5), 1), 10)
+        graph = self._graph_client()
+        scholar_node = graph.get_node(scholar_id)
+        if scholar_node is None or scholar_node.properties.get("manual_disabled") is True:
+            raise KeyError(f"学者不存在: {scholar_id}")
+        relations = self._collect_existing_relations(graph, scholar_id)[:top_n]
+        properties = scholar_node.properties or {}
+        return {
+            "status": "success",
+            "scholarId": scholar_id,
+            "scholarName": properties.get("name_zh", "") or "",
+            "scholarOrg": properties.get("scholar_org_name_zh", "") or "",
+            "profile": {},
+            "degraded": False,
+            "cached": True,
+            "reminder": "仅展示管理员已构建的关系" if not relations else "",
+            "minedRelations": relations,
+            "skipped": [],
+            "totalMined": len(relations),
+        }
+
     def mine(self, payload: dict[str, Any]) -> dict[str, Any]:
         scholar_id = payload.get("scholarId", "")
         regenerate = bool(payload.get("regenerate", False))
@@ -303,9 +327,11 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
             return []
         relations: list[dict[str, Any]] = []
         for e in edges:
+            if e.properties.get("manual_disabled") is True:
+                continue
             try:
                 org = graph.get_node(e.target_id)
-                if org is None:
+                if org is None or org.properties.get("manual_disabled") is True:
                     continue
                 op = org.properties or {}
                 ep = e.properties or {}

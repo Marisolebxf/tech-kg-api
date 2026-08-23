@@ -29,7 +29,11 @@ export const useAuthStore = defineStore("auth", {
       state.profile?.user.nickname ||
       state.profile?.user.username ||
       "未登录用户",
-    primaryRole: (state) => state.profile?.roles[0]?.name || "普通用户",
+    primaryRole: (state) =>
+      state.profile?.isAdmin
+        ? "全局管理员"
+        : state.profile?.roles[0]?.name || "普通用户",
+    isAdmin: (state) => Boolean(state.profile?.isAdmin),
   },
   actions: {
     async loadCurrentUser(force = false): Promise<AuthProfile | null> {

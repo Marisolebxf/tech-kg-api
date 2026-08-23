@@ -16,10 +16,10 @@ from service.base_module import KGModuleScaffoldService
 
 MAX_SHARED_PAPERS = 1000
 GRAPH_PAGE_SIZE = 200
-GRAPH_SPACE = os.getenv("KG_GRAPH_SPACE", "dev")
+GRAPH_SPACE = os.getenv("KG_GRAPH_SPACE") or os.getenv("TRS_GRAPH_SPACE") or "dev"
 
 # 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 graph-search/trs-graph。
-_RESULT_CACHE_TTL = 60.0
+_RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
 _result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _result_cache_lock = threading.Lock()
 
@@ -149,7 +149,7 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
 def _person_vid(expert_id: str) -> str:
     # techkg 空间 Scholar 节点 ID 不带 person_ 前缀（如 4P566No1），
     # dev 空间则带 person_ 前缀；根据图空间自动选择。
-    space = os.getenv("KG_GRAPH_SPACE", "dev")
+    space = os.getenv("KG_GRAPH_SPACE") or os.getenv("TRS_GRAPH_SPACE") or "dev"
     if space == "techkg":
         return expert_id.removeprefix("person_")
     return expert_id if expert_id.startswith("person_") else f"person_{expert_id}"
@@ -191,17 +191,17 @@ def _year_filters(body: ExpertPaperCooperationDemoRequest) -> list[dict[str, Any
     if body.startTime:
         filters.append(
             {
-                "property": "publication_year",
+                "property": "year",
                 "operator": "gte",
-                "value": body.startTime[:4],
+                "value": int(body.startTime[:4]),
             }
         )
     if body.endTime:
         filters.append(
             {
-                "property": "publication_year",
+                "property": "year",
                 "operator": "lte",
-                "value": body.endTime[:4],
+                "value": int(body.endTime[:4]),
             }
         )
     return filters

@@ -46,7 +46,7 @@ from service.project_milvus import (
 
 logger = logging.getLogger("script.build_project_milvus_index")
 
-GRAPH_SPACE = "dev"
+GRAPH_SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 ARTIFACT_DIR = Path(os.environ.get("PROJECT_MILVUS_ARTIFACT_DIR", ".milvus_artifacts/project"))
 
 

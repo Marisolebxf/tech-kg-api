@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -17,7 +18,7 @@ PROJECT_EDGE_TYPES = frozenset({"LEADS", "HAS_PARTICIPANT"})
 EDGE_LIMIT = 500
 
 # 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 trs-graph。
-_RESULT_CACHE_TTL = 60.0
+_RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
 _result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _result_cache_lock = threading.Lock()
 

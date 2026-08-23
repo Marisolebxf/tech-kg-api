@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -363,7 +363,8 @@ async def test_query_filters_min_confidence_and_does_not_invent_work_content() -
     assert result["colleagues"][0]["workContent"] == []
 
 
-def test_persist_relations_writes_canonical_colleague_edge_to_dev() -> None:
+def test_persist_relations_reads_space_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "techkg_prod")
     graph = MagicMock()
     graph.get_node_edges.return_value = []
     payload = {
@@ -389,14 +390,36 @@ def test_persist_relations_writes_canonical_colleague_edge_to_dev() -> None:
     ) as client:
         result = ExpertColleagueRelationApplication._persist_relations(payload)
 
-    assert client.call_args.args[0].space == "dev"
+    assert client.call_args.args[0].space == "techkg_prod"
     graph.create_edge.assert_called_once()
     assert graph.create_edge.call_args.args[:3] == ("person_a", "person_z", "COLLEAGUE")
     assert result == {
-        "space": "dev",
+        "space": "techkg_prod",
         "edgeType": "COLLEAGUE",
         "created": 1,
         "updated": 0,
         "total": 1,
     }
     graph.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_application_uses_environment_space_for_query_and_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "tenant_graph")
+    application = ExpertColleagueRelationApplication()
+    data = {"expert": {"id": "person_z"}, "colleagues": []}
+    application._service.query = AsyncMock(return_value=data)
+
+    with patch.object(
+        application,
+        "_persist_relations",
+        return_value={"space": "tenant_graph", "total": 0},
+    ) as persist:
+        result = await application.query(MagicMock(), expert_id="person_z")
+
+    assert application._service.query.await_args.kwargs["space"] == "tenant_graph"
+    assert persist.call_args.args[0]["expert"]["id"] == "person_z"
+    assert len(persist.call_args.args) == 1
+    assert result["persistence"]["space"] == "tenant_graph"

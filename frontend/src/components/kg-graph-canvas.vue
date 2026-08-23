@@ -12,12 +12,14 @@ const props = withDefaults(
     selectedNodeId?: string | null
     selectedEdgeId?: string | null
     ariaLabel?: string
+    nodeShape?: 'rect' | 'circle'
   }>(),
   {
     activeCategories: null,
     selectedNodeId: null,
     selectedEdgeId: null,
     ariaLabel: '知识图谱',
+    nodeShape: 'circle',
   },
 )
 
@@ -71,6 +73,7 @@ function nodeClass(
     'platform-node',
     `is-${node.nodeType}`,
   ]
+  if (props.nodeShape === 'circle') classes.push('is-solid-circle')
 
   /*
    * 中心节点只负责加粗、加大，
@@ -102,6 +105,11 @@ function nodeHeight(node: GraphNodeData) {
 }
 
 function nodeBoundaryOffset(node: GraphNodeData, dx: number, dy: number, gap = 0) {
+  if (props.nodeShape === 'circle') {
+    const length = Math.hypot(dx, dy) || 1
+    const radius = (node.level === 0 ? 30 : 23) + gap
+    return { x: (dx / length) * radius, y: (dy / length) * radius }
+  }
   const halfWidth = nodeWidth(node) / 2 + gap
   const halfHeight = nodeHeight(node) / 2 + gap
   const factor = 1 / Math.max(Math.abs(dx) / halfWidth, Math.abs(dy) / halfHeight, 0.0001)
@@ -236,7 +244,7 @@ onUnmounted(() => {
             :y1="getLineCoords(edge)!.y1"
             :x2="getLineCoords(edge)!.x2"
             :y2="getLineCoords(edge)!.y2"
-            marker-end="url(#kg-graph-arrow)"
+            :marker-end="nodeShape === 'circle' ? undefined : 'url(#kg-graph-arrow)'"
             @click.stop="handleEdgeClick(edge)"
           />
           <line
@@ -264,7 +272,13 @@ onUnmounted(() => {
           @click.stop="handleNodeClick(node)"
         >
           <title>{{ node.label }}｜{{ node.entityType }}｜{{ node.relations }}</title>
+          <circle
+            v-if="nodeShape === 'circle'"
+            class="node-shape"
+            :r="node.level === 0 ? 30 : 23"
+          />
           <rect
+            v-else
             class="node-shape"
             :x="-nodeWidth(node) / 2"
             :y="-nodeHeight(node) / 2"
@@ -272,8 +286,15 @@ onUnmounted(() => {
             :height="nodeHeight(node)"
             rx="4"
           />
-          <text class="platform-node__title" y="-5">{{ node.label }}</text>
-          <text class="platform-node__meta" y="13">{{ node.entityType }}</text>
+          <text
+            class="platform-node__title"
+            :y="nodeShape === 'circle' ? (node.level === 0 ? 44 : 37) : -5"
+          >{{ node.label }}</text>
+          <text
+            v-if="nodeShape !== 'circle'"
+            class="platform-node__meta"
+            y="13"
+          >{{ node.entityType }}</text>
         </g>
       </g>
     </svg>
@@ -586,6 +607,36 @@ onUnmounted(() => {
 
 .platform-node--center .platform-node__title {
   fill: #7a35b8;
+}
+
+.platform-node.is-solid-circle .node-shape {
+  stroke: #fff;
+  stroke-width: 2;
+  filter: drop-shadow(0 2px 4px rgba(29, 33, 41, 0.16));
+}
+
+.platform-node.is-solid-circle.is-main .node-shape { fill: #f43f5e; }
+.platform-node.is-solid-circle.is-expert .node-shape { fill: #168cff; }
+.platform-node.is-solid-circle.is-org .node-shape { fill: #0ea5a4; }
+.platform-node.is-solid-circle.is-company .node-shape { fill: #36c414; }
+.platform-node.is-solid-circle.is-paper .node-shape { fill: #f5b700; }
+.platform-node.is-solid-circle.is-project .node-shape { fill: #ff9f0a; }
+.platform-node.is-solid-circle.is-event .node-shape { fill: #d97706; }
+.platform-node.is-solid-circle.is-topic .node-shape { fill: #722ed1; }
+.platform-node.is-solid-circle.is-chain .node-shape { fill: #4f46e5; }
+.platform-node.is-solid-circle.is-field .node-shape { fill: #a855f7; }
+.platform-node.is-solid-circle.is-source .node-shape { fill: #eb2f96; }
+
+.platform-node.is-solid-circle .platform-node__title {
+  fill: #5f6b7a;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.platform-node.is-solid-circle.platform-node--center .platform-node__title {
+  fill: #1d2129;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 </style>

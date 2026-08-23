@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Any
 
 logger = logging.getLogger("script.project_edge_schema")
 
-GRAPH_SPACE = "dev"
+GRAPH_SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 
 # Project 实体置信度字段（与 PROJECT_CONFIDENCE_FIELDS 对应的图属性）。
 PROJECT_TAG_ALIGNMENT_PROPS: dict[str, str] = {"confidence": "double"}

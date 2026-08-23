@@ -142,7 +142,7 @@ export const triggerGraphBuild = (data: Record<string, unknown> = {}) => unwrap(
 
 export const getManualReviews = (params: Record<string, unknown> = {}) => unwrap(http.get('/v1/manual-reviews', { params })) as Promise<{ items: ReviewRecord[]; total: number; statusCounts: Record<string, number> }>
 export const getManualReview = (id: string) => unwrap(http.get(`/v1/manual-reviews/${id}`)) as Promise<ReviewRecord>
-export const submitManualReview = (id: string, data: { actionId: string; note: string; result: Record<string, unknown>; handler?: string; rerun: boolean }) => unwrap(http.post(`/v1/manual-reviews/${id}/actions`, data)) as Promise<{ review: ReviewRecord }>
+export const submitManualReview = (id: string, data: { actionId: string; note: string; result: Record<string, unknown>; rerun: boolean }) => unwrap(http.post(`/v1/manual-reviews/${id}/actions`, data)) as Promise<{ review: ReviewRecord }>
 export const retryManualReview = (id: string, payload: Record<string, unknown> = {}) => unwrap(http.post(`/v1/manual-reviews/${id}/retry`, { payload })) as Promise<{ id: string; status: string }>
 export const modifyManualReviewResult = (id: string, result: Record<string, unknown>, note = '') => unwrap(http.put(`/v1/manual-reviews/${id}/result`, { result, note })) as Promise<ReviewRecord>
 export const revokeManualReview = (id: string, reason: string) => unwrap(http.post(`/v1/manual-reviews/${id}/revoke`, { reason })) as Promise<ReviewRecord>

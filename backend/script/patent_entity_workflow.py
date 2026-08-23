@@ -42,12 +42,13 @@ def workflow(payload: dict) -> dict:
 
     payload:
       batch_size (int, 默认 50) —— MySQL 分页大小，透传给 ``load_patents``。
+
+    图数据库连接和图空间只读取 ``TRS_GRAPH_*`` 环境变量，不接受 payload 覆盖。
     """
     if not isinstance(payload, dict):
         raise ValueError(f"payload 必须是 dict，收到: {type(payload).__name__}")
 
     batch_size = int(payload.get("batch_size", 50))
-
     try:
         from script.load_patent_graph import load_patents
 

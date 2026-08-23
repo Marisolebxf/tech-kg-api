@@ -8,23 +8,34 @@
 
 from __future__ import annotations
 
+import os
+
 from infra.graph_db import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
 
+# 目标图空间,默认 techkg;设 TRS_GRAPH_SPACE=test 即建/用 test
+SPACE = os.getenv("TRS_GRAPH_SPACE", "techkg")
+
 # 在任意已存在空间上下文执行（CREATE SPACE 是全局操作）
 CREATE_SPACE_DDL: list[str] = [
-    "CREATE SPACE IF NOT EXISTS techkg(vid_type=FIXED_STRING(64), partition_num=10, replica_factor=1);",
+    f"CREATE SPACE IF NOT EXISTS {SPACE}(vid_type=FIXED_STRING(64), partition_num=10, replica_factor=1);",
 ]
 
 # 在 techkg 空间执行
 SCHEMA_DDL: list[str] = [
     "CREATE TAG IF NOT EXISTS Scholar(scholar_id string, name_zh string, name_en string, "
     "scholar_org_name_zh string, scholar_org_name_en string, h_index int64, "
-    "citation_nums int64, paper_nums int64);",
+    "citation_nums int64, paper_nums int64, manual_disabled bool, correction_id string, "
+    "corrected_at string);",
     "CREATE TAG IF NOT EXISTS Organization(org_id string, name_cn string, province string, "
-    "city string, org_type string, listing_status string, incorporation_year int64);",
+    "city string, org_type string, listing_status string, incorporation_year int64, "
+    "manual_disabled bool, correction_id string, corrected_at string);",
     "CREATE EDGE IF NOT EXISTS EMPLOYED_BY(relation_type string, role string, "
-    "start_date string, end_date string, source string);",
+    "start_date string, end_date string, source string, manual_disabled bool, "
+    "correction_id string, corrected_at string);",
+    "ALTER TAG Scholar ADD (manual_disabled bool, correction_id string, corrected_at string);",
+    "ALTER TAG Organization ADD (manual_disabled bool, correction_id string, corrected_at string);",
+    "ALTER EDGE EMPLOYED_BY ADD (manual_disabled bool, correction_id string, corrected_at string);",
     "ALTER EDGE EMPLOYED_BY ADD (tech_field string);",
     "CREATE TAG INDEX IF NOT EXISTS scholar_id_idx ON Scholar(scholar_id(64));",
     "CREATE TAG INDEX IF NOT EXISTS org_name_idx ON Organization(name_cn(128));",
@@ -42,9 +53,9 @@ def init_schema() -> None:
             bootstrap.execute_write(stmt)
     finally:
         bootstrap.close()
-    # 2) 切到 techkg 建 schema（独立 settings，避免共享引用被改）
+    # 2) 切到目标空间建 schema（独立 settings，避免共享引用被改）
     techkg_settings = TRSGraphSettings.from_env()
-    techkg_settings.space = "techkg"
+    techkg_settings.space = SPACE
     techkg = TRSGraphClient(techkg_settings)
     techkg.connect()
     try:

@@ -39,7 +39,7 @@ from infra.milvus import get_milvus_client
 
 logger = logging.getLogger("script.build_scholar_milvus_index")
 
-COLLECTION_NAME = "scholar_person"
+COLLECTION_NAME = os.environ.get("SCHOLAR_MILVUS_COLLECTION", "scholar_person")
 DENSE_DIM = 512  # m3e-small
 DENSE_MODEL_NAME = os.environ.get("SCHOLAR_DENSE_MODEL", "moka-ai/m3e-small")
 BIO_MAX_CHARS = 500
@@ -213,14 +213,15 @@ def _sparse_row_to_dict(sparse_vec, index: int) -> dict[int, float]:
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
-def run(*, dry_run: bool, drop_existing: bool, preview: int = 5) -> dict:
+def run(*, dry_run: bool, drop_existing: bool, preview: int = 5, limit: int | None = None) -> dict:
     graph = get_trs_graph_client()
     logger.info(
-        "start collection=%s dry_run=%s drop_existing=%s dense_model=%s",
+        "start collection=%s dry_run=%s drop_existing=%s dense_model=%s limit=%s",
         COLLECTION_NAME,
         dry_run,
         drop_existing,
         DENSE_MODEL_NAME,
+        limit,
     )
 
     # 1) 拉学者顶点 + 拼文本
@@ -232,6 +233,8 @@ def run(*, dry_run: bool, drop_existing: bool, preview: int = 5) -> dict:
             continue
         records.append(rec)
         texts.append(text)
+        if limit is not None and len(records) >= limit:
+            break
     logger.info("collected %d Person vertices", len(records))
     if not records:
         return {"collection": COLLECTION_NAME, "written": 0, "reason": "no persons"}
@@ -304,6 +307,12 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="drop the collection before re-creating it (default: upsert onto existing collection).",
     )
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="only index the first N scholar vertices (for small-scale testing).",
+    )
     return ap.parse_args()
 
 
@@ -312,5 +321,5 @@ if __name__ == "__main__":
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     args = _parse_args()
-    result = run(dry_run=args.dry_run, drop_existing=args.drop_existing)
+    result = run(dry_run=args.dry_run, drop_existing=args.drop_existing, limit=args.limit)
     logger.info("result: %s", result)

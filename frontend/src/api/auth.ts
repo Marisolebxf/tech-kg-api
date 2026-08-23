@@ -62,6 +62,9 @@ export interface AuthProfile {
   organizations: Array<Record<string, unknown>>;
   expiresAt: number | null;
   authEnabled: boolean;
+  platformRoles: string[];
+  platformPermissions: string[];
+  isAdmin: boolean;
 }
 
 export interface AccountSecurityInfo {

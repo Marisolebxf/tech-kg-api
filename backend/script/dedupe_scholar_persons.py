@@ -54,6 +54,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+from pymilvus.exceptions import MilvusException
 from rapidfuzz import fuzz
 
 from infra.graph_db import get_trs_graph_client
@@ -63,7 +64,7 @@ from script.scholar_provenance import confidence_props
 logger = logging.getLogger("script.dedupe_scholar_persons")
 
 BATCH_ID = f"BATCH_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_scholar_dedupe"
-COLLECTION_NAME = "scholar_person"
+COLLECTION_NAME = os.environ.get("SCHOLAR_MILVUS_COLLECTION", "scholar_person")
 DENSE_MODEL_NAME = os.environ.get("SCHOLAR_DENSE_MODEL", "moka-ai/m3e-small")
 BIO_MAX_CHARS = 500
 
@@ -264,11 +265,9 @@ def run(
     milvus = get_milvus_client()
 
     if not milvus.has_collection(COLLECTION_NAME):
-        logger.error(
-            "Milvus collection %r not found — run build_scholar_milvus_index.py first",
-            COLLECTION_NAME,
+        raise MilvusException(
+            f"collection {COLLECTION_NAME!r} not found — run build_scholar_milvus_index.py first"
         )
-        return {"error": "collection_missing"}
 
     try:
         milvus.load_collection(COLLECTION_NAME)

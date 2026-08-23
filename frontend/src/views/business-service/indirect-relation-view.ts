@@ -26,11 +26,12 @@ const graphNodeType = (node: IndirectNode, isCore = false): GraphNodeType => {
   const label = node.labels[0]
   if (label === 'Person') return 'expert'
   if (label === 'Organization') return 'org'
-  if (label === 'Project') return 'project'
-  if (label === 'Paper' || label === 'Patent' || label === 'Report') return 'paper'
-  if (label === 'Keyword') return 'topic'
+  if (label === 'Project' || label === 'Patent' || label === 'PatentFamily') return 'project'
+  if (label === 'Paper' || label === 'Journal' || label === 'Report') return 'paper'
+  if (label === 'Product' || label === 'Keyword') return 'field'
   if (label === 'Event' || label === 'News') return 'event'
-  if (label === 'Product') return 'company'
+  if (label === 'IndustryChain' || label === 'IndustryNode') return 'chain'
+  if (label === 'DataSource') return 'source'
   return 'topic'
 }
 

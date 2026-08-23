@@ -22,6 +22,7 @@ class _FakeGraph:
                 "confidence",
             },
             "HAS_OUTPUT": {"source_table", "source_record_id"},
+            "HAS_KEYWORD": {"confidence", "source_table", "source_record_id"},
         }
         self._tag_fields: dict[str, set[str]] = {"Project": set()}
 
@@ -50,6 +51,8 @@ class _FakeGraph:
             self._fields["LEADS"].update({"match_method", "match_evidence", "confidence"})
         if "ALTER EDGE HAS_OUTPUT" in query:
             self._fields["HAS_OUTPUT"].update({"match_method", "match_evidence", "confidence"})
+        if "ALTER EDGE HAS_KEYWORD" in query:
+            self._fields["HAS_KEYWORD"].update({"ingest_batch", "ingest_time"})
         if "ALTER TAG Project" in query and "confidence" in query:
             self._tag_fields["Project"].add("confidence")
 
@@ -61,6 +64,7 @@ def test_ensure_alignment_edge_schema_alters_missing_only() -> None:
     assert any("organization_id" in q for q in graph.writes)
     assert any("ALTER EDGE LEADS ADD" in q for q in graph.writes)
     assert any("ALTER EDGE HAS_OUTPUT ADD" in q for q in graph.writes)
+    assert any("ALTER EDGE HAS_KEYWORD ADD" in q for q in graph.writes)
     assert not any("ALTER EDGE HAS_PARTICIPANT" in q for q in graph.writes)
 
 

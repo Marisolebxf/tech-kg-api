@@ -52,9 +52,9 @@ export PYTHONPATH=. TRS_GRAPH_SPACE=<space> ORGANIZATION_ETL_LOCK_FILE=/tmp/org_
 .venv/bin/python -m script.organization_relation_etl --write                  # 治理/风险/资讯边(注意:无 load 子命令,直接 --write)
 .venv/bin/python -m script.load_scholar_entities                              # 学者 Person(nGQL INSERT,自适应 tag 字段)
 .venv/bin/python -m script.load_scholar_relations                             # AFFILIATED_WITH + COAUTHOR_WITH
+.venv/bin/python -m script.load_paper_journal_graph      # 论文/期刊/作者Person/AUTHORED_BY/PUBLISHED_IN/CITES/CITED_BY/报告(默认灌全;专家论文合作/单节点学术关联需灌)
 .venv/bin/python -m script.industry_chain_etl.load_industry_graph             # 产业链节点 + BELONGS_TO_NODE(只连已存在 org) + News
 # 可选域(本套件已支持,按需):
-.venv/bin/python -m script.load_paper_journal_graph      # 论文/期刊/作者Person/AUTHORED_BY/PUBLISHED_IN/CITES
 .venv/bin/python -m script.load_patent_graph             # 专利 + APPLIED_BY/INVENTED_BY
 # load_project_graph 仍用 merge_node 且 dev-gated,尚未改写(见 §6),按需另行处理
 ```

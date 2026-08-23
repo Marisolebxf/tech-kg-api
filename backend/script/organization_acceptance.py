@@ -181,7 +181,7 @@ def write_acceptance_report(
     edge_org = _coverage(after.get("edges", {}), "organizationIdCount")
     report = {
         "domain": "domestic_and_foreign_organization",
-        "space": "dev",
+        "space": os.getenv("TRS_GRAPH_SPACE", "dev"),
         "batch": batch,
         "generatedAt": datetime.now(UTC).isoformat(timespec="seconds"),
         "before": before,
@@ -199,7 +199,7 @@ def write_acceptance_report(
     lines = [
         "# 国内外机构图谱批次验收报告",
         "",
-        "- 图空间：dev",
+        "- 图空间：{}".format(os.getenv("TRS_GRAPH_SPACE", "dev")),
         f"- 批次：{batch}",
         f"- 实体 confidence 覆盖：{entity_conf[0]}/{entity_conf[1]} ({entity_conf[2]:.2%})",
         f"- 实体 organization_id 覆盖：{entity_org[0]}/{entity_org[1]} ({entity_org[2]:.2%})",

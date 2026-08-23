@@ -3,7 +3,11 @@ import asyncio
 import pytest
 
 from biz.schema.expert_paper_cooperation import ExpertPaperCooperationDemoRequest
-from service.expert_paper_cooperation_api import _build_structured_result, _fetch_paper_context
+from service.expert_paper_cooperation_api import (
+    _build_structured_result,
+    _fetch_paper_context,
+    _year_filters,
+)
 
 
 class FakeGraphSearchApi:
@@ -78,6 +82,20 @@ class FakeGraphSearchApi:
 
     async def get_subgraph(self, *args, **kwargs):
         raise AssertionError("无逐篇论文路径时不应查询论文子图")
+
+
+def test_year_filters_use_string_publication_year():
+    body = ExpertPaperCooperationDemoRequest(
+        expertAId="A",
+        expertBId="B",
+        startTime="2021-01-01",
+        endTime="2026-08-31",
+    )
+
+    assert _year_filters(body) == [
+        {"property": "publication_year", "operator": "gte", "value": "2021"},
+        {"property": "publication_year", "operator": "lte", "value": "2026"},
+    ]
 
 
 @pytest.mark.asyncio

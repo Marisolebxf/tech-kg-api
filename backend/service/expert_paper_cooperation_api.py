@@ -187,21 +187,22 @@ def _split_fields(value: Any) -> list[str]:
 
 
 def _year_filters(body: ExpertPaperCooperationDemoRequest) -> list[dict[str, Any]]:
+    """Build filters matching the graph string ``publication_year`` property."""
     filters: list[dict[str, Any]] = []
     if body.startTime:
         filters.append(
             {
-                "property": "year",
+                "property": "publication_year",
                 "operator": "gte",
-                "value": int(body.startTime[:4]),
+                "value": body.startTime[:4],
             }
         )
     if body.endTime:
         filters.append(
             {
-                "property": "year",
+                "property": "publication_year",
                 "operator": "lte",
-                "value": int(body.endTime[:4]),
+                "value": body.endTime[:4],
             }
         )
     return filters

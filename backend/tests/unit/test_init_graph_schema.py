@@ -7,7 +7,7 @@ from script import init_graph_schema
 
 def test_ddl_contains_tags_and_edge():
     joined = "\n".join(init_graph_schema.CREATE_SPACE_DDL + init_graph_schema.SCHEMA_DDL)
-    assert "CREATE SPACE IF NOT EXISTS techkg" in joined
+    assert f"CREATE SPACE IF NOT EXISTS {init_graph_schema.SPACE}" in joined
     assert "CREATE TAG IF NOT EXISTS Scholar(" in joined
     assert "CREATE TAG IF NOT EXISTS Organization(" in joined
     assert "CREATE EDGE IF NOT EXISTS EMPLOYED_BY(" in joined

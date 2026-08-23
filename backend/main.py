@@ -84,6 +84,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from biz.handler.graph_search import prewarm_stats
 
         asyncio.get_running_loop().create_task(prewarm_stats())
+        # 后台预热九大业务模块结果缓存（PREWARM_BUSINESS=true 时生效），
+        # 使每个 worker 在压测稳态下命中缓存，避免冷启动击穿 trs-graph。
+        from biz.prewarm_business import prewarm_business
+
+        asyncio.get_running_loop().create_task(prewarm_business(app))
         yield
     finally:
         if correction_dispatcher is not None:

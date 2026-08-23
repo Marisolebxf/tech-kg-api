@@ -20,7 +20,7 @@ MAX_CANDIDATE_PATHS = 1000
 MAX_RESULT_PATHS = 50
 
 # 60s 进程内结果缓存：读多写少，同参数请求复用，避免高并发打爆 graph-search/trs-graph。
-_RESULT_CACHE_TTL = 60.0
+_RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
 _result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _result_cache_lock = threading.Lock()
 

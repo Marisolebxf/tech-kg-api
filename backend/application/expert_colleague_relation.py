@@ -24,6 +24,10 @@ _read_cache_lock = threading.Lock()
 def clear_caches() -> None:
     """清空进程内缓存（测试隔离用）。"""
     _read_cache.clear()
+    # 同步清 service 层结果缓存(perf 压测稳态缓存),避免用例间串味
+    from service.expert_colleague_relation import clear_caches as _svc_clear
+
+    _svc_clear()
 
 
 def _read_cache_key(kwargs: dict[str, Any]) -> str:

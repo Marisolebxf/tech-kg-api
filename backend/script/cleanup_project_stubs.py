@@ -21,7 +21,7 @@ from infra.graph_db import TRSGraphClient, close_trs_graph_client, get_trs_graph
 
 logger = logging.getLogger("script.cleanup_project_stubs")
 
-GRAPH_SPACE = "dev"
+GRAPH_SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 STUB_MARKER = "project_stub"
 PEER_LABELS = ("Person", "Organization", "Paper", "Patent", "Report", "Keyword")
 PROJECT_EDGE_TYPES = (

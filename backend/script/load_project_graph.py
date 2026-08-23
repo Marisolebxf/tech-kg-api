@@ -38,7 +38,7 @@ from script.project_match_candidates import collect_match_candidates
 
 __all__ = ["parse_list", "project_vid", "load_project_graph"]
 logger = logging.getLogger("script.load_project_graph")
-GRAPH_SPACE = "dev"
+GRAPH_SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 OUTPUT_FIELDS = (
     ("output_journal_articles", "journal_article", "paper"),
     ("output_conference_papers", "conference_paper", "paper"),

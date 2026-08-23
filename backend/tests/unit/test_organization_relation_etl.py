@@ -159,7 +159,7 @@ def patch_investment_source(monkeypatch: pytest.MonkeyPatch, rows: list[dict]) -
     monkeypatch.setattr(
         mod,
         "iter_source_rows",
-        lambda session, spec, max_records: iter(rows),
+        lambda session, spec, max_records, since=None: iter(rows),
     )
 
 

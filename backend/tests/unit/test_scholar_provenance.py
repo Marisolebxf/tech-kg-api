@@ -78,7 +78,10 @@ def test_affiliation_confidence_distinguishes_source_id_and_placeholder(
     monkeypatch.setattr(load_scholar_relations, "_iter_scholar_affiliations", lambda _: rows)
     graph = _GraphStub()
 
-    stats = load_scholar_relations.load_affiliations(None, graph, dry_run=False)
+    # org_index: 机构二 在图里已存在 → s2 走名字 join(替代旧 md5 桩 vid)
+    stats = load_scholar_relations.load_affiliations(
+        None, graph, dry_run=False, org_index={"机构二": "org_er"}
+    )
 
     assert stats == {"written": 2, "skipped_no_org": 0, "placeholder_org": 1}
     exact_props = graph.edges[0][4]
@@ -88,6 +91,8 @@ def test_affiliation_confidence_distinguishes_source_id_and_placeholder(
     assert exact_props["work_experience_date"] == "2018-01 至 2023-12"
     assert exact_props["work_experience_department_zh"] == "人工智能研究所"
     assert exact_props["work_experience_position_zh"] == "研究员"
+    # s2 无 scholar_org_id,按名 join 到 org_er(真实 vid,非 md5 桩)
+    assert graph.edges[1][1] == "org_er"
     placeholder_props = graph.edges[1][4]
     assert placeholder_props["confidence"] == CONFIDENCE_PLACEHOLDER_ORG
     assert placeholder_props["organization_base"] == ""

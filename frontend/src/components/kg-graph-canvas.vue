@@ -136,15 +136,6 @@ function getLineCoords(edge: GraphEdgeData) {
   }
 }
 
-function getEdgeLabelCoords(edge: GraphEdgeData) {
-  const coords = getLineCoords(edge)
-  if (!coords) return null
-  return {
-    x: (coords.x1 + coords.x2) / 2,
-    y: (coords.y1 + coords.y2) / 2 - 5,
-  }
-}
-
 function handleWheel(event: WheelEvent) {
   event.preventDefault()
   const delta = event.deltaY > 0 ? -0.08 : 0.08
@@ -219,11 +210,6 @@ onUnmounted(() => {
       @pointerup="handlePointerUp"
       @pointerleave="handlePointerUp"
     >
-      <defs>
-        <marker id="kg-graph-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 8 4 L 0 8 z" />
-        </marker>
-      </defs>
       <g :transform="transform">
         <g class="platform-network-lines">
           <line
@@ -244,7 +230,6 @@ onUnmounted(() => {
             :y1="getLineCoords(edge)!.y1"
             :x2="getLineCoords(edge)!.x2"
             :y2="getLineCoords(edge)!.y2"
-            :marker-end="nodeShape === 'circle' ? undefined : 'url(#kg-graph-arrow)'"
             @click.stop="handleEdgeClick(edge)"
           />
           <line
@@ -256,13 +241,6 @@ onUnmounted(() => {
             :y2="getLineCoords(edge)!.y2"
             @click.stop="handleEdgeClick(edge)"
           />
-          <text
-            v-if="getEdgeLabelCoords(edge)"
-            class="platform-network-label"
-            :class="{ 'is-selected': selectedEdgeId === edge.id, 'is-dimmed': !isEdgeActive(edge) }"
-            :x="getEdgeLabelCoords(edge)!.x"
-            :y="getEdgeLabelCoords(edge)!.y"
-          >{{ edge.label }}</text>
         </template>
         <g
           v-for="node in nodes"
@@ -458,10 +436,6 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
-.platform-svg marker path {
-  fill: #a9b4c5;
-}
-
 .platform-network-line.is-dimmed {
   opacity: 0.18;
   cursor: default;
@@ -478,27 +452,6 @@ onUnmounted(() => {
 .platform-network-line.is-orange,
 .platform-network-line.is-purple {
   stroke: #a9b4c5;
-}
-
-.platform-network-label {
-  fill: #6b778c;
-  font-size: 9px;
-  font-weight: 400;
-  text-anchor: middle;
-  paint-order: stroke;
-  stroke: rgba(255, 255, 255, 0.96);
-  stroke-width: 4px;
-  stroke-linejoin: round;
-  pointer-events: none;
-}
-
-.platform-network-label.is-selected {
-  fill: #165dff;
-  font-weight: 600;
-}
-
-.platform-network-label.is-dimmed {
-  opacity: 0.18;
 }
 
 .platform-network-hit-area {

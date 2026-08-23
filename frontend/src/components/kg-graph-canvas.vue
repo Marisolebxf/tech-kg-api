@@ -19,7 +19,7 @@ const props = withDefaults(
     selectedNodeId: null,
     selectedEdgeId: null,
     ariaLabel: '知识图谱',
-    nodeShape: 'rect',
+    nodeShape: 'circle',
   },
 )
 
@@ -615,14 +615,17 @@ onUnmounted(() => {
   filter: drop-shadow(0 2px 4px rgba(29, 33, 41, 0.16));
 }
 
-.platform-node.is-solid-circle.is-main .node-shape,
-.platform-node.is-solid-circle.is-expert .node-shape { fill: #2489e8; }
-.platform-node.is-solid-circle.is-org .node-shape,
-.platform-node.is-solid-circle.is-company .node-shape { fill: #38c908; }
-.platform-node.is-solid-circle.is-paper .node-shape,
-.platform-node.is-solid-circle.is-topic .node-shape { fill: #7426d8; }
-.platform-node.is-solid-circle.is-project .node-shape { fill: #ffa916; }
-.platform-node.is-solid-circle.is-event .node-shape { fill: #ef2194; }
+.platform-node.is-solid-circle.is-main .node-shape { fill: #f43f5e; }
+.platform-node.is-solid-circle.is-expert .node-shape { fill: #168cff; }
+.platform-node.is-solid-circle.is-org .node-shape { fill: #0ea5a4; }
+.platform-node.is-solid-circle.is-company .node-shape { fill: #36c414; }
+.platform-node.is-solid-circle.is-paper .node-shape { fill: #f5b700; }
+.platform-node.is-solid-circle.is-project .node-shape { fill: #ff9f0a; }
+.platform-node.is-solid-circle.is-event .node-shape { fill: #d97706; }
+.platform-node.is-solid-circle.is-topic .node-shape { fill: #722ed1; }
+.platform-node.is-solid-circle.is-chain .node-shape { fill: #4f46e5; }
+.platform-node.is-solid-circle.is-field .node-shape { fill: #a855f7; }
+.platform-node.is-solid-circle.is-source .node-shape { fill: #eb2f96; }
 
 .platform-node.is-solid-circle .platform-node__title {
   fill: #5f6b7a;

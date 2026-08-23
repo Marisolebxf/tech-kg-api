@@ -7,6 +7,7 @@ import UserCenterView from '../views/auth/UserCenterView.vue'
 import AccountSecurityView from '../views/auth/AccountSecurityView.vue'
 import OperationLogsView from '../views/auth/OperationLogsView.vue'
 import PlatformWorkbenchView from '../views/platform/PlatformWorkbenchView.vue'
+import GraphBuildView from '../views/platform/GraphBuildView.vue'
 import OperationsCenterView from '../views/platform/OperationsCenterView.vue'
 import ManualReviewWorkspaceView from '../views/platform/ManualReviewWorkspaceView.vue'
 import ProcessInstanceDetailView from '../views/platform/ProcessInstanceDetailView.vue'
@@ -67,6 +68,12 @@ export const router = createRouter({
       props: { initialTab: 'query' },
       meta: { title: '图谱查询' },
     },
+    {
+      path: '/graph-build',
+      name: 'graph-build',
+      component: GraphBuildView,
+      meta: { title: '图谱构建' },
+    },
     { path: '/corrections', name: 'my-corrections', component: CorrectionCenterView, meta: { title: '我的修正' } },
     { path: '/admin', redirect: '/admin/reviews' },
     { path: '/admin/corrections', name: 'admin-corrections', component: CorrectionCenterView, props: { scope: 'admin' }, meta: { title: '修正记录', admin: true } },
@@ -80,7 +87,6 @@ export const router = createRouter({
     { path: '/admin/configurations', redirect: '/admin/corrections' },
     { path: '/schema', redirect: '/admin/corrections' },
     { path: '/tasks', redirect: '/admin/corrections' },
-    { path: '/graph-build', redirect: '/admin/corrections' },
     { path: '/manual-review', redirect: '/admin/reviews' },
     { path: '/manual-review/task/:instanceId', redirect: to => `/admin/legacy-review/task/${String(to.params.instanceId)}` },
     { path: '/pipelines', redirect: '/admin/corrections' },

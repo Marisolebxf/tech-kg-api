@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { IconHistory, IconPoweroff, IconSafe, IconUser } from '@arco-design/web-vue/es/icon'
-import { computed, onBeforeUnmount, onErrorCaptured, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onErrorCaptured, onMounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 
 import figmaMenuFold from '../assets/icons/figma-menu-fold.svg'
@@ -13,7 +13,7 @@ import navReview from '../assets/icons/nav-review.svg'
 import navSchema from '../assets/icons/nav-schema.svg'
 import navServices from '../assets/icons/nav-services.svg'
 import navTasks from '../assets/icons/nav-tasks.svg'
-// import navFlow from '../assets/icons/nav-flow.svg'
+import navFlow from '../assets/icons/nav-flow.svg'
 import navTools from '../assets/icons/nav-tools.svg'
 import { useAppStore } from '../stores/app'
 import { useAuthStore } from '../stores/auth'
@@ -37,6 +37,7 @@ const pageIcon = computed(() => {
   if (route.path.includes('/tasks') || route.path.includes('/processing-instance/') || route.path.includes('/task-detail/')) return navTasks
   if (route.path.includes('/members')) return navTools
   if (route.path === '/graph-query') return navQuery
+  if (route.path === '/graph-build') return navFlow
   if (route.path === '/pipelines') return navTasks
   if (route.path.startsWith('/user-') || route.path.startsWith('/account-') || route.path === '/operation-logs') return navTools
   return navServices
@@ -73,15 +74,15 @@ const alertItems = ref<Array<{
   reviewTo: string
 }>>([])
 const serviceNavItems = [
-  { to: '/expert-direct', label: '专家直接关系', fullLabel: '专家直接关系' },
-  { to: '/node-indirect', label: '单节点间接关系', fullLabel: '单节点间接关系' },
-  { to: '/two-point-achievement', label: '两点合作成果', fullLabel: '两点合作成果' },
-  { to: '/expert-colleague', label: '专家同事关系', fullLabel: '专家同事关系' },
-  { to: '/expert-alumni', label: '专家校友关系', fullLabel: '专家校友关系' },
-  { to: '/paper-cooperation', label: '论文合作关系', fullLabel: '论文合作关系' },
-  { to: '/enterprise-relation', label: '重点企业关系', fullLabel: '重点企业关系' },
-  { to: '/industry-chain-event', label: '产业链事件关系', fullLabel: '产业链事件关系' },
-  { to: '/industry-chain-panorama', label: '产业链全景图', fullLabel: '产业链全景图' },
+  { to: '/expert-direct', label: '科技专家/人才直接关系', fullLabel: '科技专家/人才直接关系' },
+  { to: '/node-indirect', label: '科技单节点间接关系', fullLabel: '科技单节点间接关系' },
+  { to: '/two-point-achievement', label: '科技两点合作成果', fullLabel: '科技两点合作成果' },
+  { to: '/expert-colleague', label: '科技专家同事关系', fullLabel: '科技专家同事关系' },
+  { to: '/expert-alumni', label: '科技专家校友关系', fullLabel: '科技专家校友关系' },
+  { to: '/paper-cooperation', label: '科技专家论文合作关系', fullLabel: '科技专家论文合作关系' },
+  { to: '/enterprise-relation', label: '重点关注科技企业关系', fullLabel: '重点关注科技企业关系' },
+  { to: '/industry-chain-event', label: '科技产业链点TOP-N事件关系', fullLabel: '科技产业链点TOP-N事件关系' },
+  { to: '/industry-chain-panorama', label: '科技产业链全景图', fullLabel: '科技产业链全景图' },
 ]
 const showServiceNavItems = computed(() => (
   !appStore.collapsed && !serviceNavCollapsed.value
@@ -96,6 +97,28 @@ const breadcrumbItems = computed(() => {
 function navIconStyle(icon: string) {
   return { '--nav-icon': `url("${icon}")` }
 }
+
+function refreshSubNavOverflow() {
+  const wraps = document.querySelectorAll<HTMLElement>('.app-nav__sub-wrap')
+  wraps.forEach((wrap) => {
+    const label = wrap.querySelector<HTMLElement>('.app-nav__sub-label')
+    if (!label) return
+    const overflow = label.scrollWidth - wrap.clientWidth
+    if (overflow > 1) {
+      wrap.classList.add('is-overflowing')
+      wrap.style.setProperty('--sub-scroll-distance', `-${overflow}px`)
+    } else {
+      wrap.classList.remove('is-overflowing')
+      wrap.style.removeProperty('--sub-scroll-distance')
+    }
+  })
+}
+
+watch([() => appStore.collapsed, serviceNavCollapsed, () => route.path], () => {
+  if (showServiceNavItems.value) {
+    void nextTick(refreshSubNavOverflow)
+  }
+})
 // 问答小助手（已隐藏）
 // const assistantEntryStyle = computed(() => ({ left: `${assistantPosition.value.x}px`, top: `${assistantPosition.value.y}px` }))
 // const assistantPanelStyle = computed(() => {
@@ -248,6 +271,7 @@ onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
   document.addEventListener('pointerdown', handleDocumentPointerDown)
   window.requestAnimationFrame(handleViewportResize)
+  void nextTick(refreshSubNavOverflow)
 })
 
 onBeforeUnmount(() => {
@@ -298,6 +322,10 @@ onBeforeUnmount(() => {
               <span class="app-nav__icon" :style="navIconStyle(navQuery)" aria-hidden="true"></span>
               <span v-if="!appStore.collapsed">图谱查询</span>
             </RouterLink>
+            <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/graph-build" :title="appStore.collapsed ? '图谱构建' : undefined">
+              <span class="app-nav__icon" :style="navIconStyle(navFlow)" aria-hidden="true"></span>
+              <span v-if="!appStore.collapsed">图谱构建</span>
+            </RouterLink>
             <div class="app-nav__service-group">
               <button
                 class="app-nav__item app-nav__item--top app-nav__item--button"
@@ -323,7 +351,7 @@ onBeforeUnmount(() => {
                   :to="item.to"
                   :title="item.fullLabel"
                 >
-                  <span>{{ item.label }}</span>
+                  <span class="app-nav__sub-wrap"><span class="app-nav__sub-label">{{ item.label }}</span></span>
                 </RouterLink>
               </template>
               <aside v-if="appStore.collapsed" class="app-nav__flyout" aria-label="业务服务子功能">
@@ -746,6 +774,39 @@ onBeforeUnmount(() => {
   color: var(--gkx-text-secondary);
   font-size: 14px;
   line-height: 22px;
+}
+
+.app-nav__sub-wrap {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.app-nav__sub-label {
+  display: inline-block;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.app-nav__sub-wrap.is-overflowing:hover .app-nav__sub-label {
+  animation: app-nav-sub-scroll 5s ease-in-out infinite alternate;
+}
+
+.app-nav__sub-wrap.is-overflowing .app-nav__sub-label {
+  cursor: pointer;
+}
+
+@keyframes app-nav-sub-scroll {
+  0% { transform: translateX(0); }
+  10% { transform: translateX(0); }
+  90% { transform: translateX(var(--sub-scroll-distance, 0)); }
+  100% { transform: translateX(var(--sub-scroll-distance, 0)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-nav__sub-wrap.is-overflowing:hover .app-nav__sub-label {
+    animation: none;
+  }
 }
 
 .app-nav__service-group {

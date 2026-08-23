@@ -5,7 +5,6 @@
 """
 
 import json
-import os
 import re
 
 from dotenv import load_dotenv
@@ -16,26 +15,34 @@ except ImportError:  # pragma: no cover - SDK may be absent or incompatible
     ZhipuAiClient = None
 
 load_dotenv()
-# API Key 从环境变量读取，不硬编码
-API_KEY = os.getenv("ZHIPUAI_API_KEY", "")
-MODEL = os.getenv("MODEL", "glm-5.1")
 
 _client = None
+_model = None
 
 
 def get_client():
-    """Create the LLM client lazily so import/startup never depends on network config."""
-    global _client
+    """Create the LLM client lazily so import/startup never depends on network config.
+
+    配置来源由 service.llm_config.resolve_llm_settings 决定（DB 优先，env 回退）。
+    """
+    global _client, _model
     if _client is not None:
-        return _client
-    if not ZhipuAiClient or not API_KEY:
-        return None
+        return _client, _model
+    from service.llm_config import resolve_llm_settings
+
+    settings = resolve_llm_settings()
+    if settings is None:
+        return None, None
+    api_key, _base_url, model = settings
+    if not ZhipuAiClient or not api_key:
+        return None, None
     try:
-        _client = ZhipuAiClient(api_key=API_KEY)
+        _client = ZhipuAiClient(api_key=api_key)
+        _model = model
     except Exception as e:
         print(f"[extraction] 客户端初始化失败: {e}")
-        return None
-    return _client
+        return None, None
+    return _client, _model
 
 
 # 实体类型定义
@@ -90,13 +97,13 @@ def extract(text: str, source_type: str = "general") -> list:
     """
     if not text or not text.strip():
         return []
-    client = get_client()
+    client, model = get_client()
     if client is None:
         return []
 
     try:
         resp = client.chat.completions.create(
-            model=MODEL,
+            model=model,
             messages=[
                 {"role": "system", "content": "你是实体识别专家，只输出JSON，不输出任何解释。"},
                 {"role": "user", "content": build_prompt(text, source_type)},

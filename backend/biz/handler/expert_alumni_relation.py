@@ -16,7 +16,9 @@ async def _describe() -> dict[str, object]:
     return application.describe()
 
 
-async def _query(body: AlumniRelationQueryRequest) -> ApiResponse:
+def _query(body: AlumniRelationQueryRequest) -> ApiResponse:
+    # service.query 是同步实现（直连 infra graph client）；用 def 让 FastAPI 放进线程池，
+    # 每个 worker 可并发处理 ~40 个请求，而不是 async 阻塞事件循环只跑 1 个。
     try:
         result = application.query(
             expert_id=body.expertId,
@@ -27,9 +29,19 @@ async def _query(body: AlumniRelationQueryRequest) -> ApiResponse:
         )
         return ApiResponse(data=result)
     except ValueError as exc:
-        return ApiResponse(code=400, success=False, msg=str(exc))
+        return ApiResponse(
+            code=400,
+            success=False,
+            data=None,
+            msg=str(exc.args[0]) if exc.args else str(exc),
+        )
     except KeyError as exc:
-        return ApiResponse(code=404, success=False, msg=str(exc))
+        return ApiResponse(
+            code=404,
+            success=False,
+            data=None,
+            msg=str(exc.args[0]) if exc.args else str(exc),
+        )
 
 
 @router.get("")
@@ -38,8 +50,8 @@ async def describe_expert_alumni_relation() -> dict[str, object]:
 
 
 @router.post("/query", response_model=ApiResponse)
-async def query_expert_alumni_relation(body: AlumniRelationQueryRequest) -> ApiResponse:
-    return await _query(body)
+def query_expert_alumni_relation(body: AlumniRelationQueryRequest) -> ApiResponse:
+    return _query(body)
 
 
 @legacy_router.get("")
@@ -48,5 +60,5 @@ async def legacy_describe_expert_alumni_relation() -> dict[str, object]:
 
 
 @legacy_router.post("", response_model=ApiResponse)
-async def legacy_query_expert_alumni_relation(body: AlumniRelationQueryRequest) -> ApiResponse:
-    return await _query(body)
+def legacy_query_expert_alumni_relation(body: AlumniRelationQueryRequest) -> ApiResponse:
+    return _query(body)

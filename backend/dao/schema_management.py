@@ -112,7 +112,7 @@ class SchemaManagementDAO:
         kind: str,
         payload: dict,
         created_by: str,
-        script: dict,
+        script: dict | None = None,
     ) -> GraphSchemaDefinition:
         definition = GraphSchemaDefinition(
             id=schema_id,
@@ -137,6 +137,7 @@ class SchemaManagementDAO:
             target_schema_id=payload.get("target_schema_id"),
             source_expression=payload.get("source_expression"),
             target_expression=payload.get("target_expression"),
+            llm_config_id=payload.get("llm_config_id"),
         )
         definition.properties = [
             GraphSchemaProperty(
@@ -153,7 +154,8 @@ class SchemaManagementDAO:
             GraphSchemaMapping(source_name=item, position=index)
             for index, item in enumerate(payload["mappings"])
         ]
-        definition.script = GraphSchemaScript(**script)
+        if script is not None:
+            definition.script = GraphSchemaScript(**script)
         self.session.add(definition)
         self.session.flush()
         return definition

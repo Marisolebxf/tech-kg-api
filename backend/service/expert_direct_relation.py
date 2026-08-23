@@ -15,11 +15,24 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from typing import Any
 
 from infra.graph_api_client import GraphAPIError, graph_api
 from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
+
+# 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 graph-search/trs-graph。
+_RESULT_CACHE_TTL = 60.0
+_result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_result_cache_lock = threading.Lock()
+
+
+def clear_caches() -> None:
+    """清空进程内缓存（测试隔离用）。"""
+    _result_cache.clear()
+
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +62,16 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         limit: int = 10,
     ) -> dict[str, Any]:
         normalized_limit = max(1, min(int(limit or 10), MAX_QUERY_LIMIT))
+        cache_key = (
+            f"all|{(expert_a_id or '').strip()}|{(expert_b_id or '').strip()}|"
+            f"{(institution or '').strip()}|{(start_time or '').strip()}|"
+            f"{(end_time or '').strip()}|{normalized_limit}"
+        )
+        with _result_cache_lock:
+            entry = _result_cache.get(cache_key)
+        if entry and entry[0] > time.monotonic():
+            return entry[1]
+
         query_input = {
             "dataSource": "all",
             "expertAId": (expert_a_id or "").strip(),
@@ -104,7 +127,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         items = [self._build_item(row) for row in rows]
         graph = self._build_graph(items)
 
-        return {
+        payload = {
             "taskName": "科技专家直接关系查询",
             "input": query_input,
             "total": len(items),
@@ -118,6 +141,11 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 "query": query_input,
             },
         }
+        # 仅缓存图服务正常（无 fallback_reason）的结果，避免把瞬时故障缓存住。
+        if fallback_reason is None:
+            with _result_cache_lock:
+                _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, payload)
+        return payload
 
     # ---------------- Graph API 调用 ----------------
     async def _query_via_graph_api(
@@ -429,9 +457,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 _src: dict[str, str] | None = None,
             ) -> dict[str, Any]:
                 src = _src if _src is not None else {}
-                name = str(
-                    _row.get(f"expert_{side}_name") or _row.get(f"expert_{side}_id") or "—"
-                )
+                name = str(_row.get(f"expert_{side}_name") or _row.get(f"expert_{side}_id") or "—")
                 system = str(src.get("source_system") or "")
                 record_id = str(
                     src.get("source_record_id")

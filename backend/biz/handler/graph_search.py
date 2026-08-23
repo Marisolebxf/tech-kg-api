@@ -387,14 +387,19 @@ async def search_typed_paths(body: TypedPathSearchRequest) -> ApiResponse:
         if source is None:
             return ApiResponse(code=404, success=False, msg=f"节点不存在: {body.sourceId}")
 
-        query_result = client.execute_read(_build_typed_path_query(body))
-        count_result = client.execute_read(_build_typed_path_query(body, count_only=True))
+        # get_node 已验证该 VID 可用。dev 空间的真实 Person VID 保留 person_* 前缀；
+        # techkg 请求本身传入无前缀 Scholar VID，因此两种空间都直接保留请求 ID。
+        resolved = body
+
+        query_result = client.execute_read(_build_typed_path_query(resolved))
+        count_result = client.execute_read(_build_typed_path_query(resolved, count_only=True))
         total = 0
         if count_result.records:
             total = int(count_result.records[0].get("total") or 0)
 
         items = [
-            _typed_path_from_record(body, record, source.labels) for record in query_result.records
+            _typed_path_from_record(resolved, record, source.labels)
+            for record in query_result.records
         ]
         data = TypedPathListData(
             items=items,
@@ -467,9 +472,7 @@ def _collect_subgraph(
             for e in edge_list:
                 edge_data = _edge_to_data(e)
 
-                edge_key = (
-                    edge_data.id or f"{edge_data.source}|{edge_data.type}|{edge_data.target}"
-                )
+                edge_key = edge_data.id or f"{edge_data.source}|{edge_data.type}|{edge_data.target}"
 
                 if edge_key not in seen_edge_ids:
                     seen_edge_ids.add(edge_key)

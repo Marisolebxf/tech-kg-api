@@ -51,11 +51,14 @@ def patent_row():
 def test_patent_preserves_raw_identifiers_and_only_maps_source_properties():
     vid, values = patent_payload(patent_row())
     mapped = dict(zip(PATENT_PROPERTIES, values, strict=True))
-    assert len(PATENT_PROPERTIES) == 29
+    assert len(PATENT_PROPERTIES) == 32
     assert vid == "patent_CN1A"
     assert mapped["publication_date"] == "20210101"
     assert mapped["anticipated_expiration"] == "20400101"
     assert mapped["db_source"] == '"ods_patent"'
+    assert mapped["confidence"] == "1.0"
+    assert mapped["organization_base"] == '"dwd_patent"'
+    assert mapped["organization_id"] == '"CN1A"'
     assert mapped["title_original"] == '"原文标题"'
     assert mapped["publication_number"] == '"CN-1-A"'
     assert mapped["application_number"] == '"CN-APP-1"'
@@ -68,7 +71,9 @@ def test_keyword_vertices_are_normalized_deduplicated_and_linked():
     assert keyword_values(row["keywords"]) == ["知识图谱", "AI"]
     vertex_ngql, edge_ngql = keyword_statements([row], "BATCH", datetime(2026, 7, 23, 10, 0))
     assert vertex_ngql.count("keyword_") == 2
-    assert "INSERT VERTEX Keyword(keyword)" in vertex_ngql
+    assert (
+        "INSERT VERTEX Keyword(keyword,confidence,organization_base,organization_id)" in vertex_ngql
+    )
     assert "INSERT EDGE HAS_KEYWORD(confidence,source_table,source_record_id)" in edge_ngql
     assert edge_ngql.count("patent_CN1A") == 2
 
@@ -101,5 +106,9 @@ def test_entity_sql_is_external_and_complete():
     assert SQL_FILE.name == "patent_entity_extract.sql"
     assert SELECT_SQL == SQL_FILE.read_text(encoding="utf-8")
     assert "FROM dwd_patent p" in SELECT_SQL
-    assert SELECT_SQL.count("LEFT JOIN dwd_patent_") == 5
-    assert "LIMIT %s OFFSET %s" in SELECT_SQL
+    assert SELECT_SQL.count("FROM dwd_patent_") == 5
+    assert SELECT_SQL.count("GROUP BY patent_id") == 5
+    assert "p.id AS source_row_id" in SELECT_SQL
+    assert "WHERE p.id > %s" in SELECT_SQL
+    assert "LIMIT %s" in SELECT_SQL
+    assert "OFFSET" not in SELECT_SQL

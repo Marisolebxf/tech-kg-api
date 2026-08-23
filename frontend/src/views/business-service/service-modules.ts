@@ -9,6 +9,7 @@ export type ServiceField = {
   /** 输入框占位提示：用中文解释这个字段是什么，并给一个可直接使用的测试值。缺省时退回 description。 */
   placeholder?: string
   description: string
+  options?: readonly string[]
 }
 
 export type ServiceResultRow = {
@@ -93,7 +94,7 @@ export const serviceModules: ServiceModule[] = [
     resultRows: [
       { label: '直接关系', value: '12', tone: 'blue' },
       { label: '关系类型', value: '4', tone: 'green' },
-      { label: '关联成果', value: '18', tone: 'orange' },
+      { label: '相关成果', value: '18', tone: 'orange' },
       { label: '最高置信度', value: '0.94', tone: 'purple' },
     ],
     summaryRows: [
@@ -150,18 +151,24 @@ export const serviceModules: ServiceModule[] = [
     moduleRequirement: '科技单节点间接关系服务以单个科技专家或人才作为核心节点，通过挖掘知识图谱中与该节点存在间接关联的其他节点，运用路径分析与关系传递算法，推理出核心节点与间接节点之间的潜在关联。服务会梳理间接关系的传递路径，计算间接关系的关联强度，并对不同类型的间接关系进行标注，帮助用户全面了解单个科技专家或人才的间接社交网络与资源关联。',
     requestFields: [
       { name: 'core_node_id', type: 'string', required: '是', description: '核心专家或人才节点 ID' },
-      { name: 'relation_types', type: 'array', required: '否', description: '间接关系类型' },
-      { name: 'path_depth', type: 'number', required: '否', description: '路径分析深度' },
-      { name: 'min_strength', type: 'number', required: '否', description: '最小关联强度阈值' },
+      {
+        name: 'relation_types',
+        type: 'select',
+        required: '是',
+        description: '间接关系类型（单选）',
+        options: ['学术关联', '机构关联', '项目关联'],
+      },
+      { name: 'path_depth', type: 'number', required: '否', description: '路径分析深度（2-3 跳）' },
+      { name: 'min_strength', type: 'number', required: '否', description: '最小关联强度阈值（0-1）' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { core_node_id: '4P566No1', relation_types: ['学术关联', '机构关联'], path_depth: 2, min_strength: 0.65 },
+    requestExample: { core_node_id: '4G7t0B0t', relation_types: ['学术关联'], path_depth: 2, min_strength: 0.65 },
     responseExample: { structuredResult: { indirectNodeCount: 0, pathCount: 0, relationTypeCount: {}, averageStrength: 0 } },
     resultRows: [
       { label: '间接节点', value: '36', tone: 'blue' },
       { label: '路径数量', value: '58', tone: 'green' },
       { label: '关系类型', value: '4', tone: 'orange' },
-      { label: '平均强度', value: '0.76', tone: 'purple' },
+      { label: '关联强度', value: '0.76', tone: 'purple' },
     ],
     summaryRows: [
       { label: '核心节点', value: '张明远｜科技专家' },
@@ -214,19 +221,21 @@ export const serviceModules: ServiceModule[] = [
     subtitle: '汇总两个专家之间的论文、项目、专利和奖项成果。',
     endpoint: '/api/v1/kg-construction/expert-cooperation-achievements/query',
     method: 'POST',
-    moduleRequirement: '针对两个专家节点，按图中成果边求交汇总共同论文/专利/项目，回填时间与奖项，并规则归因核心贡献与合作模式。仅查询返回，不写边。',
+    moduleRequirement: '科技两点合作成果服务针对两个科技专家或人才节点，通过整合知识图谱中与这两个节点相关的合作数据，运用成果关联与归因算法，提取并汇总两者的合作成果信息。服务会对合作成果进行分类统计，标注成果的发表或完成时间、所属领域、获得的奖项或评价，同时分析合作成果的核心贡献与合作模式，为评估两点之间的合作深度与合作价值提供数据支持。',
     requestFields: [
-      { name: 'sourceExpertId', type: 'string', required: '是', description: '第一个专家 ID' },
-      { name: 'targetExpertId', type: 'string', required: '是', description: '第二个专家 ID' },
+      { name: 'sourceExpertId', type: 'string', required: '是', description: '请输入第一个专家，如 person_expert_e2e_v1_001' },
+      { name: 'targetExpertId', type: 'string', required: '是', description: '请输入第二个专家，如 person_expert_e2e_v1_002' },
       { name: 'achievementTypes', type: 'string', required: '否', description: '成果类型，逗号分隔：paper,patent,project' },
-      { name: 'timeRange', type: 'string', required: '否', description: '成果时间范围，如 2020-2026' },
+      { name: 'timeRangeStart', type: 'month', required: '否', description: '成果开始月份' },
+      { name: 'timeRangeEnd', type: 'month', required: '否', description: '成果结束月份' },
     ],
     responseFields: commonResponseFields,
     requestExample: {
-      sourceExpertId: 'person_00095d2b6e69e0d4a6365c7fac495d8b',
-      targetExpertId: 'person_5f9b3a46091dbcc38eeb58696187385c',
-      achievementTypes: '',
-      timeRange: '',
+      sourceExpertId: 'person_expert_e2e_v1_001',
+      targetExpertId: 'person_expert_e2e_v1_002',
+      achievementTypes: 'paper',
+      timeRangeStart: '2020-01',
+      timeRangeEnd: '2020-12',
     },
     responseExample: {
       code: 200,
@@ -301,17 +310,18 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技专家同事关系服务通过提取科技专家在不同时期的工作单位、所属部门、参与团队等机构信息，结合知识图谱中的机构架构与人员任职数据，运用任职时间匹配与团队归属算法，推理并构建专家之间的同事关系。服务会判断同事关系的生效时段、所属团队或项目组，标注同事关系期间的共同工作内容与协作场景，同时关联两者在同事期间产生的合作成果，帮助用户了解科技专家的职业社交圈与工作协作历史。',
     requestFields: [
-      { name: 'expert_a_id', type: 'string', required: '是', description: '专家 A：VID、专家编号或精确姓名' },
-      { name: 'expert_b_id', type: 'string', required: '是', description: '专家 B：VID、专家编号或精确姓名' },
+      { name: 'expert_a_id', type: 'string', required: '是', description: '请输入专家 A' },
+      { name: 'expert_b_id', type: 'string', required: '是', description: '请输入专家 B' },
       { name: 'start_time', type: 'month', required: '否', description: '可选；留空则使用数据库任职开始时间' },
       { name: 'end_time', type: 'month', required: '否', description: '可选；留空则使用数据库任职结束时间' },
     ],
     responseFields: expertColleagueResponseFields,
-    requestExample: { expert_a_id: 'person_0209a7v6', expert_b_id: 'person_1S5195f4', start_time: '2021-01', end_time: '2026-08' },
+    // 测试数据不再作为表单默认值，避免用户误提交样例专家。
+    requestExample: { expert_a_id: '', expert_b_id: '', start_time: '', end_time: '' },
     responseExample: { code: 0, message: 'success', data: { colleagues: 18, teams: 4, overlap_years: 4, achievements: 6 } },
     resultRows: [
       { label: '同事关系', value: '18', tone: 'blue' },
-      { label: '共同团队', value: '4', tone: 'green' },
+      { label: '所属团队', value: '4', tone: 'green' },
       { label: '重叠年限', value: '4', tone: 'orange' },
       { label: '期间成果', value: '6', tone: 'purple' },
     ],
@@ -358,19 +368,19 @@ export const serviceModules: ServiceModule[] = [
     subtitle: '基于教育经历匹配同校校友，归因同校/同学历/同期，并附互动摘要。',
     endpoint: '/api/v1/kg-construction/expert-alumni-relations/query',
     method: 'POST',
-    moduleRequirement: '科技专家校友关系服务基于 Person 教育背景字段匹配校友，仅查询返回、不写 ALUMNI 边。维度仅在数据可支撑时输出「同校」「同学历」「同期」，不编造同院系/同导师。填 targetExpertId 为双点判定；留空为列表扫描（最多约 500 人）。',
+    moduleRequirement: '科技专家校友关系服务基于科技专家的教育背景数据，结合知识图谱中的院校信息与校友网络数据，运用教育经历匹配算法，识别并构建专家之间的校友关系。服务会对校友关系进行细分，记录校友关系的关联维度，同时关联校友之间的后续学术交流、合作互动等信息，为挖掘科技专家的教育背景关联与校友资源网络提供支持。',
     requestFields: [
-      { name: 'expertId', type: 'string', required: '是', description: '专家唯一标识' },
-      { name: 'targetExpertId', type: 'string', required: '否', description: '目标专家 ID；有则双点判定，空则列表' },
-      { name: 'school', type: 'string', required: '否', description: '院校筛选条件' },
-      { name: 'educationStage', type: 'string', required: '否', description: '教育阶段筛选' },
+      { name: 'expertId', type: 'string', required: '是', description: '请输入专家，如 person_expert_e2e_v1_001' },
+      { name: 'targetExpertId', type: 'string', required: '否', description: '请输入目标专家，如 person_expert_e2e_v1_004' },
+      { name: 'school', type: 'string', required: '否', description: '请输入院校，如清华大学' },
+      { name: 'educationStage', type: 'string', required: '否', description: '请输入教育阶段，如博士' },
     ],
     responseFields: commonResponseFields,
     requestExample: {
-      expertId: 'person_alumni_test_liu28',
-      targetExpertId: 'person_alumni_test_wang64',
-      school: '',
-      educationStage: '',
+      expertId: 'person_expert_e2e_v1_001',
+      targetExpertId: 'person_expert_e2e_v1_004',
+      school: '清华大学',
+      educationStage: '博士',
     },
     responseExample: {
       code: 200,
@@ -386,14 +396,14 @@ export const serviceModules: ServiceModule[] = [
     resultRows: [
       { label: '校友数量', value: '', tone: 'blue' },
       { label: '查询模式', value: '', tone: 'green' },
-      { label: '关系维度', value: '', tone: 'orange' },
+      { label: '关联维度', value: '', tone: 'orange' },
       { label: '截断标记', value: '', tone: 'purple' },
     ],
     summaryRows: [
       { label: '专家', value: '' },
       { label: '模式', value: '' },
       { label: '校友数', value: '' },
-      { label: '维度目录', value: '' },
+      { label: '关联维度', value: '' },
       { label: '截断', value: '' },
       { label: '图空间', value: '' },
     ],
@@ -445,17 +455,17 @@ export const serviceModules: ServiceModule[] = [
     requestFields: [
       { name: 'expertAId', type: 'string', required: '是', description: '专家 A 唯一标识' },
       { name: 'expertBId', type: 'string', required: '是', description: '专家 B 唯一标识' },
-      { name: 'startTime', type: 'string', required: '否', description: '开始日期 YYYY-MM-DD' },
-      { name: 'endTime', type: 'string', required: '否', description: '结束日期 YYYY-MM-DD' },
+      { name: 'startTime', type: 'month', required: '否', description: '开始月份 YYYY-MM' },
+      { name: 'endTime', type: 'month', required: '否', description: '结束月份 YYYY-MM' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { expertAId: '4P566No1', expertBId: 'd492835p', startTime: '', endTime: '' },
+    requestExample: { expertAId: 'person_121d48631f434f4d323ba521d33032ad', expertBId: 'person_42914016fe8d6e0e1d01dad5845c47e6', startTime: '2021-01', endTime: '2026-08' },
     responseExample: { structuredResult: { cooperationPaperCount: 0, citation: { total: 0, max: 0 }, stableTeamMembers: [], paperTopics: [] } },
     resultRows: [
       { label: '合作论文', value: '14', tone: 'blue' },
-      { label: '总被引', value: '1260', tone: 'green' },
+      { label: '论文被引', value: '1260', tone: 'green' },
       { label: '研究方向', value: '5', tone: 'orange' },
-      { label: '核心人员', value: '7', tone: 'purple' },
+      { label: '核心合作人员', value: '7', tone: 'purple' },
     ],
     summaryRows: [
       { label: '核心专家', value: '张明远｜清华大学' },
@@ -508,16 +518,16 @@ export const serviceModules: ServiceModule[] = [
   {
     key: 'enterprise-relation',
     title: '重点关注科技企业关系',
-    subtitle: '连接专家、企业角色、合作领域与经营状态。',
+    subtitle: '连接专家、企业角色、合作领域与经营状况。',
     endpoint: '/api/v1/kg-service/key-enterprise-relation',
     method: 'POST',
     moduleRequirement: '重点关注科技企业关系服务围绕科技专家或人才，通过挖掘知识图谱中与专家相关的企业关联数据，运用企业关联与角色定位算法，构建专家与重点关注科技企业之间的关系。服务会标注专家在企业中的角色、合作领域、合作时间与合作模式，同时关联企业的行业地位、技术方向与经营状况，帮助用户了解科技专家与产业界的合作关联及资源对接情况。',
     requestFields: [
-      { name: 'expert_id', type: 'string', required: '是', description: '专家唯一标识 VID' },
-      { name: 'enterprise_name', type: 'string', required: '否', description: '企业名称筛选（模糊）' },
-      { name: 'role_type', type: 'string', required: '否', description: '专家企业角色筛选' },
-      { name: 'industry', type: 'string', required: '否', description: '企业行业方向筛选' },
-      { name: 'key_tech_enterprise_only', type: 'boolean', required: '否', description: '只保留重点科技企业（已上市/公司类，排除高校/研究院/MOCK），默认 true' },
+      { name: 'expert_id', type: 'string', required: '是', description: '请输入专家唯一标识' },
+      { name: 'enterprise_name', type: 'string', required: '否', description: '请输入企业名称（模糊筛选，可留空）' },
+      { name: 'role_type', type: 'string', required: '否', description: '请输入角色筛选（如 总经理，可留空）' },
+      { name: 'industry', type: 'string', required: '否', description: '请输入行业方向筛选（可留空）' },
+      { name: 'key_tech_enterprise_only', type: 'select', required: '否', description: '只保留重点科技企业（默认是）', options: ['是', '否'] },
     ],
     responseFields: [
       { name: 'code', type: 'number', description: '服务状态码（200 成功）' },
@@ -541,7 +551,8 @@ export const serviceModules: ServiceModule[] = [
       { name: 'data.relations[].risk_summary', type: 'string', description: '首要企业风险事件摘要（best-effort 探测）' },
       { name: 'data.evidence', type: 'array', description: '证据链' },
     ],
-    requestExample: { expert_id: 'person_893b432670627d6337b9b7edaab0e917', enterprise_name: '', role_type: '', industry: '', key_tech_enterprise_only: true },
+    // 测试数据不再预填到表单，避免误提交样例；测试用例见 backend/docs/enterprise_relation_test_parameters.md
+    requestExample: { expert_id: '', enterprise_name: '', role_type: '', industry: '', key_tech_enterprise_only: '' },
     responseExample: { code: 0, message: 'success', data: { enterprises: 9, roles: 4, cooperation_fields: ['芯片设计', '智能制造'] } },
     resultRows: [
       { label: '关联企业', value: '9', tone: 'blue' },
@@ -605,11 +616,12 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技产业链点 TOP-N 事件关系服务针对科技产业链中的特定环节或节点，通过收集知识图谱中与该节点相关的事件数据，运用事件影响力评估算法，筛选出影响力排名前 N 的核心事件。服务会构建这些 TOP-N 事件与相关科技专家或人才的关联关系，分析事件对产业链节点的影响及后续发展趋势，为产业链节点的风险预警与机遇挖掘提供支持。',
     requestFields: [
-      { name: 'chain_node_id', type: 'string', required: '是', description: '产业链节点标识（如 IC0007007）' },
-      { name: 'top_n', type: 'number', required: '否', description: '返回事件数量，默认 10' },
-      { name: 'event_type', type: 'string', required: '否', description: '事件类型筛选（financing/bankruptcy/bid/news/…）' },
-      { name: 'time_range', type: 'string', required: '否', description: '事件时间范围筛选，如 2025-2026' },
-      { name: 'max_orgs', type: 'number', required: '否', description: '链节点下最多扫描企业数（按 chain_score 排序），默认 20' },
+      { name: 'chain_node_id', type: 'string', required: '是', description: '请输入产业链节点标识（如 IC0007007）' },
+      { name: 'top_n', type: 'number', required: '否', description: '返回事件数量，取值 1-50，默认 10' },
+      { name: 'event_type', type: 'string', required: '否', description: '事件类型筛选（financing/bankruptcy/bid/news/…，可留空）' },
+      { name: 'time_range_start', type: 'month', required: '否', description: '起始年月（留空不筛）' },
+      { name: 'time_range_end', type: 'month', required: '否', description: '结束年月（留空不筛）' },
+      { name: 'max_orgs', type: 'number', required: '否', description: '最多扫描企业数，取值 1-50，默认 20' },
     ],
     responseFields: [
       { name: 'code', type: 'number', description: '服务状态码（200 成功）' },
@@ -635,7 +647,8 @@ export const serviceModules: ServiceModule[] = [
       { name: 'data.opportunity', type: 'string', description: '机遇挖掘分析（标书维度）' },
       { name: 'data.evidence', type: 'array', description: '证据链' },
     ],
-    requestExample: { chain_node_id: 'IC0007007', top_n: 5, event_type: '', time_range: '', max_orgs: 50 },
+    // 测试数据不再预填到表单，避免误提交样例；测试用例见 backend/docs/industry_chain_topn_test_parameters.md
+    requestExample: { chain_node_id: '', top_n: '', event_type: '', time_range_start: '', time_range_end: '', max_orgs: '' },
     responseExample: { code: 0, message: 'success', data: { events: 10, experts: 18, enterprises: 24, risk_level: '中' } },
     resultRows: [
       { label: 'TOP事件', value: '10', tone: 'blue' },
@@ -647,7 +660,7 @@ export const serviceModules: ServiceModule[] = [
       { label: '产业链', value: '集成电路产业链' },
       { label: '产业链节点', value: '芯片设计' },
       { label: '筛选范围', value: 'TOP 10｜投融资、政策、技术突破、风险事件' },
-      { label: '重点事件', value: '高性能半导体材料制备关键技术专利授权' },
+      { label: '核心事件', value: '高性能半导体材料制备关键技术专利授权' },
       { label: '事件类型/时间', value: '技术突破｜2026-06' },
       { label: '影响力排名', value: '第 1 名｜影响力评分 92.6' },
       { label: '关联专家', value: '陈建国、李佳宁等 18 人' },
@@ -660,7 +673,7 @@ export const serviceModules: ServiceModule[] = [
     evidence: ['按影响力评估筛选产业链节点 TOP-N 事件。', '构建事件与专家、企业、人才的关联关系。', '分析产业链影响和后续发展趋势。'],
     rules: [
       {
-        name: '事件影响力排序规则',
+        name: '事件影响力评估规则',
         type: '事件评估规则',
         target: '产业链节点、事件实体、热度和风险指标',
         trigger: '输入产业链节点和 TOP-N 参数',
@@ -740,7 +753,7 @@ export const serviceModules: ServiceModule[] = [
     },
     resultRows: [
       { label: '产业节点', value: '186', tone: 'blue' },
-      { label: '链路关系', value: '420', tone: 'green' },
+      { label: '关联关系', value: '420', tone: 'green' },
       { label: '关键技术', value: '22', tone: 'orange' },
       { label: '重点企业', value: '48', tone: 'purple' },
     ],
@@ -757,7 +770,7 @@ export const serviceModules: ServiceModule[] = [
       { label: '核心专家', value: '张明远、李佳宁、陈思远等' },
       { label: '产业动态事件', value: '智算中心扩容、国产算力适配、多模态模型升级' },
       { label: '图谱规模', value: '186 个节点｜420 条关系' },
-      { label: '更新状态', value: '尚未更新，点击"刷新数据"或开启自动更新' },
+      { label: '动态更新', value: '尚未更新，点击"刷新数据"或开启自动更新' },
     ],
     evidence: ['整合产业链实体、关系、事件数据。', '展示核心节点、关联关系和数据流向。', '支持层级展开、关系筛选和动态更新。'],
     rules: [

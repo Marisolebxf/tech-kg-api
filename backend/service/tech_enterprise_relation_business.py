@@ -19,6 +19,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+import time
+from typing import Any
 
 import httpx
 
@@ -34,6 +37,17 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BASE = os.getenv("BUSINESS_API_BASE", "http://127.0.0.1:8000")
 SPACE = "dev"
+
+# 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 graph-search/trs-graph。
+_RESULT_CACHE_TTL = 60.0
+_result_cache: dict[str, tuple[float, KeyEnterpriseRelationResponse]] = {}
+_result_cache_lock = threading.Lock()
+
+
+def clear_caches() -> None:
+    """清空进程内缓存（测试隔离用）。"""
+    _result_cache.clear()
+
 
 # governance 直连边 → 合作模式
 GOVERNANCE_MODE = {
@@ -235,9 +249,22 @@ class KeyEnterpriseRelationService:
         r = await client.get(f"{self.base}{path}", params=params, timeout=self.timeout)
         return r.json()
 
-    async def run(self, req: KeyEnterpriseRelationRequest) -> KeyEnterpriseRelationResponse:
+    async def run(
+        self, req: KeyEnterpriseRelationRequest, *, app: Any = None
+    ) -> KeyEnterpriseRelationResponse:
+        cache_key = (
+            f"{req.expert_id}|{req.enterprise_name}|{req.role_type}|"
+            f"{req.industry}|{req.key_tech_enterprise_only}"
+        )
+        with _result_cache_lock:
+            entry = _result_cache.get(cache_key)
+        if entry and entry[0] > time.monotonic():
+            return entry[1]
+
         resp = KeyEnterpriseRelationResponse(expert_id=req.expert_id)
-        async with httpx.AsyncClient() as client:
+        # ASGI 进程内 transport：替代真实 HTTP 回环 8200，消除 socket/accept 队列开销
+        # 与高并发自调用饱和。app 由 handler 传 request.app，避免在 service 里 import main。
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app)) as client:
             # 1) filtered-subgraph(depth=2) 只拿业务需要的 12 种边，不捞论文/合作者/引用
             edge_types = ",".join(
                 [
@@ -275,6 +302,9 @@ class KeyEnterpriseRelationService:
         node_labels: dict[str, set[str]] = {
             n.get("id"): set(n.get("labels") or []) for n in nodes if n.get("id")
         }
+        # 子图不含 seed → 专家节点不存在（filtered-subgraph 对存在节点即使无边也返回 seed）
+        if req.expert_id not in node_props:
+            raise KeyError(f"专家不存在: {req.expert_id}")
         expert_props = node_props.get(req.expert_id, {})
         resp.expert_name = (
             expert_props.get("name_cn")
@@ -391,7 +421,7 @@ class KeyEnterpriseRelationService:
         # 首要企业 best-effort 风险事件探测（标书「经营状况」之风险提示维度）
         # 只查 relations[0]，避免 N×调用；失败降级为空串，不阻断主流程。
         if relations:
-            await self._probe_primary_risk(relations[0])
+            await self._probe_primary_risk(relations[0], app=app)
         resp.relations = relations
         resp.enterprises = len({r.enterprise_id for r in relations})
         resp.roles = len({r.role_label for r in relations if r.role_label})
@@ -402,14 +432,18 @@ class KeyEnterpriseRelationService:
             "合作时间来源：项目 research_period / 专利 application_date / 学者 work_experience_date",
             "角色定位来源：EXECUTIVE_OF.position 等边属性 + 边类型映射",
         ]
+        with _result_cache_lock:
+            _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, resp)
         return resp
 
-    async def _probe_primary_risk(self, primary: EnterpriseRelationItem) -> None:
+    async def _probe_primary_risk(
+        self, primary: EnterpriseRelationItem, *, app: Any = None
+    ) -> None:
         """对首要关联企业查 INVOLVED_IN 风险事件，回填 risk_summary（best-effort）。"""
         org_id = primary.enterprise_id
         if not org_id:
             return
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app)) as client:
             try:
                 rj = await self._get(
                     client,

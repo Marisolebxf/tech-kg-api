@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import threading
 import time
 from dataclasses import dataclass
@@ -101,6 +102,16 @@ class MilvusSettings:
     @classmethod
     def from_env(cls) -> MilvusSettings:
         host, port = _host_port_from_env()
+        if host == "milvus":
+            try:
+                socket.getaddrinfo(host, port)
+            except socket.gaierror:
+                # 在宿主机上跑脚本时 "milvus" 不可解析：docker-compose 把容器
+                # milvus:19530 映射到宿主机 19531，故 host 改 127.0.0.1 的同时
+                # 需把端口从容器内的 19530 改成宿主机映射的 19531，否则连不上。
+                host = "127.0.0.1"
+                if port == 19530:
+                    port = 19531
         return cls(
             host=host,
             port=port,

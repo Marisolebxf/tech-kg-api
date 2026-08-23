@@ -6,7 +6,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from service.expert_cooperation_achievement import ExpertCooperationAchievementService
+from service.expert_cooperation_achievement import ExpertCooperationAchievementService, clear_caches
+
+
+@pytest.fixture(autouse=True)
+def _isolate_caches():
+    """每条用例前后清空进程内 TTL 缓存，避免用例间串味。"""
+    clear_caches()
+    yield
+    clear_caches()
 
 
 def _node(nid: str, props: dict | None = None, labels: list[str] | None = None):
@@ -98,7 +106,7 @@ def test_query_same_id_raises():
 def test_query_missing_expert_raises():
     graph = MagicMock()
     graph.get_node = MagicMock(return_value=None)
-    with pytest.raises(KeyError, match="不存在"):
+    with pytest.raises(KeyError, match="未找到专家"):
         _svc(graph).query(source_expert_id="NO", target_expert_id="S2")
 
 

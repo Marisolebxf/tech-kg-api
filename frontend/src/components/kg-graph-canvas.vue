@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { IconFullscreen, IconMinus, IconPlus } from '@arco-design/web-vue/es/icon'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 import type { GraphEdgeData, GraphNodeData } from '../data/graph-presets'
@@ -26,6 +27,9 @@ const emit = defineEmits<{
 }>()
 
 const viewBox = '0 0 760 430'
+const minScale = 0.6
+const maxScale = 2.2
+const scaleStep = 0.1
 const scale = ref(1)
 const panX = ref(0)
 const panY = ref(0)
@@ -35,29 +39,15 @@ const containerRef = ref<HTMLElement | null>(null)
 
 const transform = computed(() => `translate(${panX.value} ${panY.value}) scale(${scale.value})`)
 
-const edgeToneMap:
-  Record<string, string> = {
-    论文合作:
-      'is-primary',
-
-    同事关系:
-      'is-green',
-
-    校友关系:
-      'is-green',
-
-    企业关联:
-      'is-orange',
-
-    产业事件:
-      'is-purple',
-
-    直接关系:
-      'is-primary',
-
-    间接关系:
-      'is-purple',
-  }
+const edgeToneMap: Record<string, string> = {
+  论文合作: 'is-primary',
+  同事: 'is-green',
+  校友: 'is-green',
+  企业关联: 'is-orange',
+  产业事件: 'is-purple',
+  直接关系: 'is-primary',
+  间接关系: 'is-purple',
+}
 
 function isEdgeActive(edge: GraphEdgeData) {
   if (!props.activeCategories?.length) return true
@@ -102,36 +92,20 @@ function nodeClass(
   return classes.join(' ')
 }
 
-function nodeRadius(
-  node: GraphNodeData,
-) {
-  if (node.level === 0) {
-    return node.radius ?? 16
-  }
-
-  return Math.min(
-    node.radius ?? 12,
-    13,
-  )
+function nodeWidth(node: GraphNodeData) {
+  const preferred = Math.max(104, node.label.length * 11 + 28)
+  return Math.min(node.level === 0 ? 164 : 144, preferred)
 }
 
-function nodeShape(_node: GraphNodeData) {
-  return 'circle'
+function nodeHeight(node: GraphNodeData) {
+  return node.level === 0 ? 54 : 46
 }
 
-function polygonPoints(node: GraphNodeData) {
-  const radius = nodeRadius(node)
-  if (nodeShape(node) === 'diamond') {
-    return `0,${-radius} ${radius},0 0,${radius} ${-radius},0`
-  }
-  return [
-    `${-radius * 0.86},${-radius * 0.5}`,
-    `0,${-radius}`,
-    `${radius * 0.86},${-radius * 0.5}`,
-    `${radius * 0.86},${radius * 0.5}`,
-    `0,${radius}`,
-    `${-radius * 0.86},${radius * 0.5}`,
-  ].join(' ')
+function nodeBoundaryOffset(node: GraphNodeData, dx: number, dy: number, gap = 0) {
+  const halfWidth = nodeWidth(node) / 2 + gap
+  const halfHeight = nodeHeight(node) / 2 + gap
+  const factor = 1 / Math.max(Math.abs(dx) / halfWidth, Math.abs(dy) / halfHeight, 0.0001)
+  return { x: dx * factor, y: dy * factor }
 }
 
 function getNodeById(id: string) {
@@ -144,23 +118,37 @@ function getLineCoords(edge: GraphEdgeData) {
   if (!from || !to) return null
   const dx = to.x - from.x
   const dy = to.y - from.y
-  const distance = Math.hypot(dx, dy) || 1
-  const unitX = dx / distance
-  const unitY = dy / distance
-  const sourceOffset = nodeRadius(from) + 3
-  const targetOffset = nodeRadius(to) + 7
+  const sourceOffset = nodeBoundaryOffset(from, dx, dy, 2)
+  const targetOffset = nodeBoundaryOffset(to, -dx, -dy, 7)
   return {
-    x1: from.x + unitX * sourceOffset,
-    y1: from.y + unitY * sourceOffset,
-    x2: to.x - unitX * targetOffset,
-    y2: to.y - unitY * targetOffset,
+    x1: from.x + sourceOffset.x,
+    y1: from.y + sourceOffset.y,
+    x2: to.x + targetOffset.x,
+    y2: to.y + targetOffset.y,
+  }
+}
+
+function getEdgeLabelCoords(edge: GraphEdgeData) {
+  const coords = getLineCoords(edge)
+  if (!coords) return null
+  return {
+    x: (coords.x1 + coords.x2) / 2,
+    y: (coords.y1 + coords.y2) / 2 - 5,
   }
 }
 
 function handleWheel(event: WheelEvent) {
   event.preventDefault()
   const delta = event.deltaY > 0 ? -0.08 : 0.08
-  scale.value = Math.min(2.2, Math.max(0.6, scale.value + delta))
+  scale.value = Math.min(maxScale, Math.max(minScale, scale.value + delta))
+}
+
+function zoomIn() {
+  scale.value = Math.min(maxScale, Number((scale.value + scaleStep).toFixed(2)))
+}
+
+function zoomOut() {
+  scale.value = Math.max(minScale, Number((scale.value - scaleStep).toFixed(2)))
 }
 
 function handlePointerDown(event: PointerEvent) {
@@ -213,11 +201,6 @@ onUnmounted(() => {
 
 <template>
   <div ref="containerRef" class="kg-graph-viewport">
-    <div class="kg-graph-toolbar">
-      <button type="button" @click="scale = Math.min(2.2, scale + 0.15)">放大</button>
-      <button type="button" @click="scale = Math.max(0.6, scale - 0.15)">缩小</button>
-      <button type="button" @click="resetView">重置</button>
-    </div>
     <svg
       class="kg-graph-canvas platform-svg"
       :viewBox="viewBox"
@@ -228,6 +211,11 @@ onUnmounted(() => {
       @pointerup="handlePointerUp"
       @pointerleave="handlePointerUp"
     >
+      <defs>
+        <marker id="kg-graph-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 8 4 L 0 8 z" />
+        </marker>
+      </defs>
       <g :transform="transform">
         <g class="platform-network-lines">
           <line
@@ -248,6 +236,7 @@ onUnmounted(() => {
             :y1="getLineCoords(edge)!.y1"
             :x2="getLineCoords(edge)!.x2"
             :y2="getLineCoords(edge)!.y2"
+            marker-end="url(#kg-graph-arrow)"
             @click.stop="handleEdgeClick(edge)"
           />
           <line
@@ -259,6 +248,13 @@ onUnmounted(() => {
             :y2="getLineCoords(edge)!.y2"
             @click.stop="handleEdgeClick(edge)"
           />
+          <text
+            v-if="getEdgeLabelCoords(edge)"
+            class="platform-network-label"
+            :class="{ 'is-selected': selectedEdgeId === edge.id, 'is-dimmed': !isEdgeActive(edge) }"
+            :x="getEdgeLabelCoords(edge)!.x"
+            :y="getEdgeLabelCoords(edge)!.y"
+          >{{ edge.label }}</text>
         </template>
         <g
           v-for="node in nodes"
@@ -268,80 +264,158 @@ onUnmounted(() => {
           @click.stop="handleNodeClick(node)"
         >
           <title>{{ node.label }}｜{{ node.entityType }}｜{{ node.relations }}</title>
-          <circle v-if="nodeShape(node) === 'circle'" class="node-shape" :r="nodeRadius(node)" />
           <rect
-            v-else-if="nodeShape(node) === 'rect'"
             class="node-shape"
-            :x="-nodeRadius(node)"
-            :y="-nodeRadius(node)"
-            :width="nodeRadius(node) * 2"
-            :height="nodeRadius(node) * 2"
-            rx="8"
+            :x="-nodeWidth(node) / 2"
+            :y="-nodeHeight(node) / 2"
+            :width="nodeWidth(node)"
+            :height="nodeHeight(node)"
+            rx="4"
           />
-          <rect
-            v-else-if="nodeShape(node) === 'pill'"
-            class="node-shape"
-            :x="-nodeRadius(node) * 1.15"
-            :y="-nodeRadius(node) * 0.72"
-            :width="nodeRadius(node) * 2.3"
-            :height="nodeRadius(node) * 1.44"
-            rx="12"
-          />
-          <polygon v-else class="node-shape" :points="polygonPoints(node)" />
-          <text>{{ node.label }}</text>
+          <text class="platform-node__title" y="-5">{{ node.label }}</text>
+          <text class="platform-node__meta" y="13">{{ node.entityType }}</text>
         </g>
       </g>
     </svg>
+    <div class="kg-graph-map-controls" aria-label="图谱视图控制">
+      <a-tooltip content="缩小" position="top">
+        <button
+          class="kg-graph-map-controls__button"
+          type="button"
+          aria-label="缩小图谱"
+          :disabled="scale <= minScale"
+          @click="zoomOut"
+        >
+          <IconMinus />
+        </button>
+      </a-tooltip>
+      <a-slider
+        v-model="scale"
+        class="kg-graph-map-controls__slider"
+        :min="minScale"
+        :max="maxScale"
+        :step="0.05"
+        :show-tooltip="false"
+        aria-label="图谱缩放比例"
+      />
+      <a-tooltip content="放大" position="top">
+        <button
+          class="kg-graph-map-controls__button"
+          type="button"
+          aria-label="放大图谱"
+          :disabled="scale >= maxScale"
+          @click="zoomIn"
+        >
+          <IconPlus />
+        </button>
+      </a-tooltip>
+      <span class="kg-graph-map-controls__divider" aria-hidden="true"></span>
+      <a-tooltip content="恢复初始视图" position="top">
+        <button
+          class="kg-graph-map-controls__button"
+          type="button"
+          aria-label="恢复图谱初始视图"
+          @click="resetView"
+        >
+          <IconFullscreen />
+        </button>
+      </a-tooltip>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .kg-graph-viewport {
-  display: flex;
-  flex-direction: column;
-  height: calc(100% - 45px);
+  position: relative;
+  height: 100%;
   min-height: 340px;
+  overflow: hidden;
 }
 
-.kg-graph-toolbar {
+.kg-graph-map-controls {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid rgba(191, 215, 250, 0.96);
-  background: rgba(248, 252, 255, 0.92);
+  gap: 6px;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  min-height: 40px;
+  padding: 6px 8px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 4px 16px rgba(29, 33, 41, 0.12);
+  backdrop-filter: blur(6px);
 }
 
-.kg-graph-toolbar button {
+.kg-graph-map-controls__divider {
+  flex: none;
+  width: 1px;
+  height: 20px;
+  margin: 0 2px;
+  background: #e5e6eb;
+}
+
+.kg-graph-map-controls__button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
   height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--primary);
-  font-size: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #4e5969;
+  font-size: 16px;
   cursor: pointer;
+  transition: color 0.16s ease, background-color 0.16s ease;
 }
 
-.kg-graph-toolbar span {
-  margin-left: auto;
-  color: var(--text-tertiary);
-  font-size: 12px;
+.kg-graph-map-controls__button:hover:not(:disabled) {
+  background: #f2f3f5;
+  color: #165dff;
+}
+
+.kg-graph-map-controls__button:focus-visible {
+  outline: 2px solid rgba(22, 93, 255, 0.28);
+  outline-offset: 1px;
+}
+
+.kg-graph-map-controls__button:disabled {
+  color: #c9cdd4;
+  cursor: not-allowed;
+}
+
+.kg-graph-map-controls__slider {
+  width: 104px;
+  margin: 0 2px;
+}
+
+.kg-graph-map-controls__slider :deep(.arco-slider-bar) {
+  background: #165dff;
+}
+
+.kg-graph-map-controls__slider :deep(.arco-slider-btn) {
+  top: 50%;
+  transform: translate(-50%, -50%);
 }
 
 .platform-svg {
-  flex: 1;
+  height: 100%;
   width: 100%;
   min-height: 0;
   display: block;
   cursor: grab;
   touch-action: none;
-  background:
-    linear-gradient(#e8f1ff 1px, transparent 1px),
-    linear-gradient(90deg, #e8f1ff 1px, transparent 1px),
-    radial-gradient(circle at 22% 18%, rgba(22, 93, 255, 0.08), transparent 34%),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(239, 247, 255, 0.94));
-  background-size: 28px 28px, 28px 28px, auto, auto;
+  background-color: #fff;
+  background-image: radial-gradient(circle, #e5e6eb 0.7px, transparent 0.8px);
+  background-size: 16px 16px;
 }
 
 .platform-svg:active {
@@ -358,9 +432,13 @@ onUnmounted(() => {
 }
 
 .platform-network-line {
-  stroke: rgba(100, 116, 139, 0.52);
-  stroke-width: 1.1;
+  stroke: #a9b4c5;
+  stroke-width: 1.15;
   cursor: pointer;
+}
+
+.platform-svg marker path {
+  fill: #a9b4c5;
 }
 
 .platform-network-line.is-dimmed {
@@ -378,7 +456,28 @@ onUnmounted(() => {
 .platform-network-line.is-green,
 .platform-network-line.is-orange,
 .platform-network-line.is-purple {
-  stroke: rgba(100, 116, 139, 0.52);
+  stroke: #a9b4c5;
+}
+
+.platform-network-label {
+  fill: #6b778c;
+  font-size: 9px;
+  font-weight: 400;
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, 0.96);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.platform-network-label.is-selected {
+  fill: #165dff;
+  font-weight: 600;
+}
+
+.platform-network-label.is-dimmed {
+  opacity: 0.18;
 }
 
 .platform-network-hit-area {
@@ -393,99 +492,100 @@ onUnmounted(() => {
 }
 
 .platform-node .node-shape {
-  fill: var(--node-expert, #1e8ff3);
-  stroke: #fff;
-  stroke-width: 1.2;
-  filter: drop-shadow(0 2px 5px rgba(53, 77, 112, 0.16));
+  fill: #eef5ff;
+  stroke: #8fb9ef;
+  stroke-width: 1;
+  filter: drop-shadow(0 2px 4px rgba(29, 33, 41, 0.08));
   transition: stroke-width 0.15s ease, filter 0.15s ease, transform 0.15s ease;
 }
 
 .platform-node--main .node-shape,
 .platform-node.is-main .node-shape,
-.platform-node.is-expert .node-shape { fill: #1e8ff3; }
+.platform-node.is-expert .node-shape {
+  fill: #eef5ff;
+  stroke: #8fb9ef;
+}
 .platform-node.is-org .node-shape,
-.platform-node.is-company .node-shape { fill: #48c914; }
-.platform-node.is-paper .node-shape { fill: #762bd7; }
-.platform-node.is-project .node-shape { fill: #ffad17; }
-.platform-node.is-event .node-shape { fill: #eb2aa3; }
-.platform-node.is-topic .node-shape { fill: #2f6bff; }
+.platform-node.is-company .node-shape {
+  fill: #effaf1;
+  stroke: #8fd49b;
+}
+.platform-node.is-paper .node-shape {
+  fill: #f7f1ff;
+  stroke: #c5a2ec;
+}
+.platform-node.is-project .node-shape {
+  fill: #fff7e8;
+  stroke: #e8c27a;
+}
+.platform-node.is-event .node-shape {
+  fill: #fff0f6;
+  stroke: #e9a4c0;
+}
+.platform-node.is-topic .node-shape {
+  fill: #f1f3ff;
+  stroke: #9ca8ed;
+}
 
 .platform-node.is-selected .node-shape {
-  stroke: #10264c;
-  stroke-width: 2.2;
-  filter: drop-shadow(0 0 8px rgba(22, 93, 255, 0.28));
+  stroke: #165dff;
+  stroke-width: 1.8;
+  filter: drop-shadow(0 0 7px rgba(22, 93, 255, 0.2));
 }
 
 .platform-node text {
-  fill: #42526b;
-  font-size: 10px;
-  font-weight: 500;
   text-anchor: middle;
-  dominant-baseline: hanging;
+  dominant-baseline: middle;
   pointer-events: none;
-  paint-order: stroke;
-  stroke: rgba(255, 255, 255, 0.92);
-  stroke-width: 3px;
-  stroke-linejoin: round;
 }
 
-.platform-node--main text,
-.platform-node.is-main text {
-  fill: #10264c;
+.platform-node__title {
+  fill: #1d2129;
   font-size: 11px;
   font-weight: 600;
-  transform: translateY(18px);
-  stroke: rgba(255, 255, 255, 0.94);
 }
 
-.platform-node:not(.platform-node--main):not(.is-main) text {
-  transform: translateY(16px);
+.platform-node__meta {
+  fill: #86909c;
+  font-size: 9px;
+  font-weight: 400;
 }
 
-.platform-node.is-expert .node-shape {
-  fill: #1e8ff3;
+.platform-node.is-expert .platform-node__title,
+.platform-node.is-main .platform-node__title {
+  fill: #2458a6;
 }
 
-.platform-node.is-org .node-shape,
-.platform-node.is-company .node-shape {
-  fill: #48c914;
+.platform-node.is-org .platform-node__title,
+.platform-node.is-company .platform-node__title {
+  fill: #218a39;
 }
 
-.platform-node.is-paper .node-shape {
-  fill: #762bd7;
+.platform-node.is-paper .platform-node__title {
+  fill: #7a35b8;
 }
 
-.platform-node.is-project .node-shape {
-  fill: #ffad17;
+.platform-node.is-project .platform-node__title {
+  fill: #b56b00;
 }
 
-.platform-node.is-event .node-shape {
-  fill: #eb2aa3;
+.platform-node.is-event .platform-node__title {
+  fill: #b93d72;
 }
 
-.platform-node.is-topic .node-shape {
-  fill: #2f6bff;
-}
-
-.platform-node.is-chain .node-shape {
-  fill: #14b8a6;
-}
-
-.platform-node.is-field .node-shape {
-  fill: #2f6bff;
-}
-
-.platform-node.is-source .node-shape {
-  fill: #64748b;
+.platform-node.is-topic .platform-node__title {
+  fill: #4a5cc4;
 }
 
 .platform-node--center .node-shape {
-  stroke: #0b5fc6;
-  stroke-width: 2.6;
-  filter:
-    drop-shadow(
-      0 4px 8px
-      rgba(30, 143, 243, 0.22)
-    );
+  fill: #f7f1ff;
+  stroke: #b68adf;
+  stroke-width: 1.5;
+  filter: drop-shadow(0 3px 7px rgba(122, 53, 184, 0.14));
 }
+
+.platform-node--center .platform-node__title {
+  fill: #7a35b8;
+}
+
 </style>

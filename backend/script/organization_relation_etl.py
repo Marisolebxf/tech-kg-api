@@ -45,15 +45,18 @@ from script.organization_etl_common import (
     edge_rank,
     event_vid,
     exclusive_etl_lock,
+    is_virtual_source_row,
     news_vid,
     ngql_identifier,
     ngql_literal,
     normalize_json,
+    organization_id_from_row,
     organization_vid,
     parse_json_list,
     person_vid,
     product_vid,
     project_vid,
+    relation_confidence,
     stable_rank,
     stable_record_id,
     to_bool,
@@ -264,6 +267,8 @@ def _edge_props(
     business: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     props: dict[str, Any] = {
+        "organization_id": organization_id_from_row(row),
+        "confidence": relation_confidence(row, source_table=spec.source_table),
         "source_table": spec.source_table,
         "source_record_id": record_id,
         "ingest_batch": ingest_batch,
@@ -1016,7 +1021,7 @@ def render_edge_insert(spec: RelationSpec, candidates: Sequence[EdgeCandidate]) 
         values = ",".join(
             ngql_literal(
                 item.properties.get(name),
-                numeric=name in spec.numeric_properties,
+                numeric=name in spec.numeric_properties or name == "confidence",
             )
             for name in spec.edge_properties
         )
@@ -1341,6 +1346,10 @@ def run_etl(
                 max_records=max_records,
             ):
                 stats.queried += 1
+                if is_virtual_source_row(row):
+                    stats.skipped += 1
+                    logger.info("skip synthetic relation source row table=%s", spec.source_table)
+                    continue
                 try:
                     extracted = extract_candidates(
                         spec,

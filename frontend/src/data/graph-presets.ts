@@ -32,6 +32,8 @@ export interface GraphNodeData {
    */
   sourceTable?: string
   sourceRecordId?: string
+  sourceField?: string
+  sourceValue?: string
   sourceSystem?: string
   ingestBatch?: string
   ingestTime?: string
@@ -80,6 +82,14 @@ export interface GraphEdgeData {
    * 因此没有入图任务，构建任务 ID 显示为 "-"。
    */
   inferred?: boolean
+}
+
+export interface LiveEntityProvenance {
+  sourceTable?: string
+  sourceField?: string
+  sourceValue?: string
+  ingestBatch?: string
+  ingestTime?: string
 }
 
 export interface GraphPreset {
@@ -164,7 +174,9 @@ export function getNodeProvenance(node: GraphNodeData): GraphProvenance {
   const recordId =
     node.sourceRecordId || `${node.id.toUpperCase()}-SRC`
 
-  const fieldIdentifier = node.sourceRecordId
+  const fieldIdentifier = node.sourceField && node.sourceValue
+    ? `${node.sourceField} = ${node.sourceValue}`
+    : node.sourceRecordId
     ? `source_record_id = ${node.sourceRecordId}`
     : nodeFieldIdentifier(node)
 
@@ -223,7 +235,9 @@ function endpointFromNode(
     businessTable: source.businessTable,
     technicalTable: node.sourceTable || source.technicalTable,
     recordId: node.sourceRecordId || `${node.id.toUpperCase()}-SRC`,
-    fieldIdentifier: node.sourceRecordId
+    fieldIdentifier: node.sourceField && node.sourceValue
+      ? `${node.sourceField} = ${node.sourceValue}`
+      : node.sourceRecordId
       ? `source_record_id = ${node.sourceRecordId}`
       : nodeFieldIdentifier(node),
   }
@@ -250,6 +264,9 @@ export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?
   const evidenceSummary =
     edge.matchEvidence || source.summary
 
+  const inferredEndpoints = from && to
+    ? [endpointFromNode(from, '源实体'), endpointFromNode(to, '目标实体')]
+    : []
   const evidences: GraphProvenanceEvidence[] = isPathInferred
     ? [
         {
@@ -277,7 +294,16 @@ export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?
           summary: `${relationName}通过共同论文、项目或主题节点形成两跳路径`,
         },
       ]
-    : [{
+    : isFabricated && inferredEndpoints.length
+      ? inferredEndpoints.map((endpoint) => ({
+          title: `${endpoint.role}任职数据`,
+          businessTable: endpoint.businessTable,
+          technicalTable: endpoint.technicalTable,
+          recordId: endpoint.recordId,
+          fieldIdentifier: endpoint.fieldIdentifier,
+          summary: `${endpoint.name}的真实图谱实体及任职来源，用于推理同事关系`,
+        }))
+      : [{
         title: '原始业务记录',
         businessTable: source.businessTable,
         technicalTable,
@@ -286,23 +312,23 @@ export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?
         summary: evidenceSummary,
       }]
 
-  // 构建任务：推理边无入图任务，显示 "-"；其余取真实批次。
+  // 同事边由服务端规则推理后写入图谱，来源证据是两端真实实体及任职数据。
   const taskInstanceId = isFabricated
-    ? '-'
+    ? 'expert_colleague_relation_service'
     : (edge.ingestBatch || `PI-20260714-EDGE-${edge.id.toUpperCase()}`)
 
   const taskExecutedAt = isFabricated
-    ? '-'
+    ? (edge.ingestTime || '-')
     : (edge.ingestTime || '2026-07-13 02:12:36')
 
   const taskMode = isFabricated
-    ? '前端推理（无入图任务）'
+    ? '任职时间交集 + 机构/部门匹配'
     : (isPathInferred
       ? '两跳路径 + 共现规则'
       : (edge.matchMethod || '业务规则识别'))
 
   const taskStatus = isFabricated
-    ? '前端推理'
+    ? '规则推理'
     : '成功'
 
   return {
@@ -325,7 +351,7 @@ export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?
       ruleVersion: isPathInferred ? 'REL-INFER-1.3' : 'REL-MAP-2.1',
       graphVersion: 'v1.8',
       generatedAt: taskExecutedAt,
-      status: isFabricated ? '前端推理' : '已入图',
+      status: isFabricated ? '已推理并写入 COLLEAGUE' : '已入图',
     },
   }
 }

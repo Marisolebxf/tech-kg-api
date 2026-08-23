@@ -43,7 +43,7 @@ async def test_query_cooperation_achievement_success(async_client, monkeypatch):
 @pytest.mark.asyncio
 async def test_query_cooperation_achievement_not_found(async_client, monkeypatch):
     def _raise(**kwargs):
-        raise KeyError("专家不存在: S404")
+        raise KeyError("未找到专家: S404")
 
     monkeypatch.setattr(handler.application, "query", _raise)
     resp = await async_client.post(
@@ -54,3 +54,20 @@ async def test_query_cooperation_achievement_not_found(async_client, monkeypatch
     body = resp.json()
     assert body["code"] == 404
     assert body["success"] is False
+    assert body["data"] is None
+    assert body["msg"] == "未找到专家: S404"
+
+
+@pytest.mark.asyncio
+async def test_query_cooperation_achievement_rejects_invalid_dates(async_client):
+    resp = await async_client.post(
+        "/api/v1/kg-construction/expert-cooperation-achievements/query",
+        json={
+            "sourceExpertId": "S1",
+            "targetExpertId": "S2",
+            "timeRangeStart": "not-a-date",
+            "timeRangeEnd": "also-invalid",
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 422

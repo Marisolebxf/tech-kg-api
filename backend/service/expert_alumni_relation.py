@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 import re
+import threading
+import time
 import unicodedata
 from typing import Any
 
@@ -13,8 +15,33 @@ from service.base_module import KGModuleScaffoldService
 
 PERSON_LABELS = ("Person", "Scholar")
 LIST_PAGE_SIZE = 50
-LIST_MAX_PAGES = 10
+LIST_MAX_PAGES = 250
 EDGE_LIMIT = 200
+
+# 进程内 TTL 缓存：读多写少的图查询，60s 内复用，避免高并发下打爆 trs-graph。
+_RESULT_CACHE_TTL = 60.0
+_PERSON_SCAN_TTL = 60.0
+_person_scan_cache: dict[str, tuple[float, list[tuple[str, Any]], bool]] = {}
+_result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_cache_lock = threading.Lock()
+
+
+def _cache_get(cache: dict[str, tuple[float, Any]], key: str) -> Any:
+    entry = cache.get(key)
+    if entry and entry[0] > time.monotonic():
+        return entry[1]
+    return None
+
+
+def _cache_set(cache: dict[str, tuple[float, Any]], key: str, value: Any, ttl: float) -> None:
+    cache[key] = (time.monotonic() + ttl, value)
+
+
+def clear_caches() -> None:
+    """清空进程内缓存（测试隔离用）。"""
+    _result_cache.clear()
+    _person_scan_cache.clear()
+
 
 PAPER_EDGE_TYPES = frozenset({"AUTHORED_BY"})
 PATENT_EDGE_TYPES = frozenset({"INVENTED_BY"})
@@ -80,6 +107,13 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         if target_expert_id and target_expert_id == expert_id:
             raise ValueError("expertId 与 targetExpertId 不能相同")
 
+        cache_key = (
+            f"{expert_id}|{target_expert_id or ''}|{school or ''}|{education_stage or ''}|{limit}"
+        )
+        cached = _cache_get(_result_cache, cache_key)
+        if cached is not None:
+            return cached
+
         graph = self._client()
         source = self._require_node(graph, expert_id, "专家")
         source_edus = self._parse_educations(getattr(source, "properties", None) or {})
@@ -93,6 +127,13 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             mode = "list"
             candidates, truncated = self._scan_person_candidates(graph, expert_id)
 
+        # 源专家的边对所有候选都相同，提前取一次复用，避免每个候选重复调 get_node_edges(expert_id)。
+        expert_edges: list[Any] = []
+        try:
+            expert_edges = graph.get_node_edges(expert_id, direction="both", limit=EDGE_LIMIT)
+        except Exception:
+            expert_edges = []
+
         items: list[dict[str, Any]] = []
         dim_catalog: set[str] = set()
 
@@ -103,7 +144,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             if match is None:
                 continue
             shared_institutions, dimensions, match_summary = match
-            interactions = self._interactions(graph, expert_id, cand_id)
+            interactions = self._interactions(graph, expert_id, cand_id, expert_edges)
             item = {
                 "alumniId": str(cand_id),
                 "name": self._display_name(cand_node),
@@ -140,6 +181,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             "sourceMeta": source_meta,
         }
         payload.update(self._frontend_view(payload))
+        _cache_set(_result_cache, cache_key, payload, _RESULT_CACHE_TTL)
         return payload
 
     @staticmethod
@@ -149,7 +191,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         except Exception:
             node = None
         if node is None:
-            raise KeyError(f"{kind}不存在: {node_id}")
+            raise KeyError(f"未找到{kind}: {node_id}")
         return node
 
     @staticmethod
@@ -164,7 +206,38 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
     def _scan_person_candidates(
         self, graph: TRSGraphClient, exclude_id: str
     ) -> tuple[list[tuple[str, Any]], bool]:
-        candidates: list[tuple[str, Any]] = []
+        space = (
+            getattr(getattr(graph, "_settings", None), "space", None)
+            or TRSGraphSettings.from_env().space
+        )
+        # 双重检查锁：锁内只查/写缓存字典，慢扫描（最多 20 次 HTTP）放锁外，
+        # 避免冷缓存时所有校友请求串行卡在这把锁上。
+        with _cache_lock:
+            cached = _person_scan_cache.get(space)
+        if cached and cached[0] > time.monotonic():
+            all_nodes, truncated = cached[1], cached[2]
+        else:
+            all_nodes, truncated = self._load_person_scan(graph, space)
+            with _cache_lock:
+                # 再查一次：扫描期间别的线程可能已填入
+                cached = _person_scan_cache.get(space)
+                if cached and cached[0] > time.monotonic():
+                    all_nodes, truncated = cached[1], cached[2]
+                else:
+                    _person_scan_cache[space] = (
+                        time.monotonic() + _PERSON_SCAN_TTL,
+                        all_nodes,
+                        truncated,
+                    )
+        # 排除当前专家本身
+        candidates = [(nid, node) for nid, node in all_nodes if nid != exclude_id]
+        return candidates, truncated
+
+    def _load_person_scan(
+        self, graph: TRSGraphClient, space: str
+    ) -> tuple[list[tuple[str, Any]], bool]:
+        """全量扫描 Person/Scholar 节点（按 label 分页），结果供 60s 内复用。"""
+        all_nodes: list[tuple[str, Any]] = []
         truncated = False
         seen: set[str] = set()
         for label in PERSON_LABELS:
@@ -180,18 +253,18 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                     break
                 for node in items:
                     nid = str(getattr(node, "id", "") or "")
-                    if not nid or nid == exclude_id or nid in seen:
+                    if not nid or nid in seen:
                         continue
                     seen.add(nid)
-                    candidates.append((nid, node))
+                    all_nodes.append((nid, node))
                 if len(items) < LIST_PAGE_SIZE:
                     break
                 if page == LIST_MAX_PAGES - 1:
                     truncated = True
-            if candidates:
+            if all_nodes:
                 # Prefer first label that returns data (Person OR Scholar)
                 break
-        return candidates, truncated
+        return all_nodes, truncated
 
     def _parse_educations(self, props: dict[str, Any]) -> list[dict[str, str | None]]:
         inst_zh = self._as_str(props.get("education_background_institution_zh"))
@@ -257,7 +330,11 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             return None
 
         school_norm = self._norm_text(school) if school else ""
-        stage_norm = self._norm_text(education_stage) if education_stage else ""
+        stage_norms = {
+            self._norm_text(value)
+            for value in re.split(r"[,，/、;；|\s]+", education_stage or "")
+            if self._norm_text(value)
+        }
 
         shared_institutions: list[str] = []
         match_summary: list[dict[str, str | None]] = []
@@ -287,7 +364,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 c_deg_raw = c.get("degree") or ""
                 s_deg = self._norm_text(s_deg_raw)
                 c_deg = self._norm_text(c_deg_raw)
-                if stage_norm and stage_norm not in s_deg and stage_norm not in c_deg:
+                if stage_norms and not any(
+                    stage in s_deg or stage in c_deg for stage in stage_norms
+                ):
                     continue
 
                 if display and display not in shared_institutions:
@@ -333,12 +412,22 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             return set()
         return {int(y) for y in re.findall(r"(?:19|20)\d{2}", str(value))}
 
-    def _interactions(self, graph: TRSGraphClient, a_id: str, b_id: str) -> dict[str, Any]:
+    def _interactions(
+        self,
+        graph: TRSGraphClient,
+        a_id: str,
+        b_id: str,
+        a_edges: list[Any] | None = None,
+    ) -> dict[str, Any]:
         coauthor = False
-        try:
-            edges = graph.get_node_edges(a_id, direction="both", limit=EDGE_LIMIT)
-        except Exception:
-            edges = []
+        # a_edges（源专家的边）由 query 主流程提前取一次复用，避免每个候选重复调用。
+        if a_edges is None:
+            try:
+                edges = graph.get_node_edges(a_id, direction="both", limit=EDGE_LIMIT)
+            except Exception:
+                edges = []
+        else:
+            edges = a_edges
 
         paper_ids: set[str] = set()
         patent_ids: set[str] = set()

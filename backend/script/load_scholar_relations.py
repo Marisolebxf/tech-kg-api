@@ -307,6 +307,8 @@ def load_affiliations(session, graph, *, dry_run: bool, preview: int = 5, limit:
 
         props = {
             "affiliation_name": org_name,
+            # 同事关系按每条任职边的时间和部门判定，不从 Person
+            # 节点回退。这三项必须随 AFFILIATED_WITH 一起入图。
             "work_experience_date": rec.get("work_experience_date") or "",
             "work_experience_department_zh": rec.get("work_experience_department_zh") or "",
             "work_experience_position_zh": rec.get("work_experience_position_zh") or "",
@@ -476,8 +478,9 @@ def run(
 
     session = mysql.session()
     try:
+        # dry-run 不得修改图 Schema；正式同步则先幂等补齐旧 dev
+        # 空间的任职边字段，再写入关系数据。
         if not dry_run:
-            # 真实写入前确保边 schema 已含任职时间/部门/职位，否则 merge_edge 会 400。
             ensure_schema(graph)
         aff_stats = load_affiliations(session, graph, dry_run=dry_run, limit=limit)
         logger.info("AFFILIATED_WITH: %s", aff_stats)

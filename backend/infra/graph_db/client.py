@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from collections.abc import Sequence
 from typing import Any
@@ -388,8 +389,11 @@ class TRSGraphClient:
         direction: str = "both",
         edge_type: str | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[GraphEdge]:
         params: dict[str, Any] = {"direction": direction, "limit": limit}
+        if offset:
+            params["offset"] = offset
         if edge_type:
             params["edgeType"] = edge_type
         resp = self._request("GET", f"/api/v1/traversal/{node_id}/edges", params=params)
@@ -449,29 +453,60 @@ class TRSGraphClient:
     # Query execution (nGQL)
     # ==================================================================
 
+    def _scoped_query(self, query: str) -> str:
+        if query.lstrip().upper().startswith("USE "):
+            return query
+        space = self._settings.space
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", space):
+            raise GraphRequestError(
+                "Invalid graph space name",
+                status_code=400,
+                body=space,
+            )
+        return f"USE {space}; {query}"
+
+    @staticmethod
+    def _query_result(data: dict[str, Any], path: str, *, expected_space: str) -> GraphQueryResult:
+        summary = data.get("summary")
+        if isinstance(summary, dict) and summary.get("errorCode") not in (None, 0, "0"):
+            comment = summary.get("comment") or summary
+            raise GraphRequestError(
+                f"TRS Graph query failed on {path}: {comment}",
+                status_code=200,
+                body=json.dumps(data, ensure_ascii=False),
+            )
+        actual_space = summary.get("spaceName") if isinstance(summary, dict) else None
+        if actual_space and actual_space != expected_space:
+            raise GraphRequestError(
+                f"TRS Graph space mismatch on {path}: expected {expected_space}, got {actual_space}",
+                status_code=409,
+                body=json.dumps(data, ensure_ascii=False),
+            )
+        return GraphQueryResult(records=data.get("records", []), summary=summary)
+
     def execute_query(self, query: str, params: dict[str, Any] | None = None) -> GraphQueryResult:
-        body: dict[str, Any] = {"query": query}
+        body: dict[str, Any] = {"query": self._scoped_query(query)}
         if params:
             body["params"] = params
         resp = self._request("POST", "/api/v1/query", json=body)
         data = resp.json()
-        return GraphQueryResult(records=data.get("records", []), summary=data.get("summary"))
+        return self._query_result(data, "/api/v1/query", expected_space=self._settings.space)
 
     def execute_read(self, query: str, params: dict[str, Any] | None = None) -> GraphQueryResult:
-        body: dict[str, Any] = {"query": query}
+        body: dict[str, Any] = {"query": self._scoped_query(query)}
         if params:
             body["params"] = params
         resp = self._request("POST", "/api/v1/query/read", json=body)
         data = resp.json()
-        return GraphQueryResult(records=data.get("records", []), summary=data.get("summary"))
+        return self._query_result(data, "/api/v1/query/read", expected_space=self._settings.space)
 
     def execute_write(self, query: str, params: dict[str, Any] | None = None) -> GraphQueryResult:
-        body: dict[str, Any] = {"query": query}
+        body: dict[str, Any] = {"query": self._scoped_query(query)}
         if params:
             body["params"] = params
         resp = self._request("POST", "/api/v1/query/write", json=body)
         data = resp.json()
-        return GraphQueryResult(records=data.get("records", []), summary=data.get("summary"))
+        return self._query_result(data, "/api/v1/query/write", expected_space=self._settings.space)
 
     # ==================================================================
     # Batch operations

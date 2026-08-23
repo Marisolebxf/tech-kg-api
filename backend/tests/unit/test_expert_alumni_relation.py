@@ -7,7 +7,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from infra.graph_db.models import GraphPagedResult
-from service.expert_alumni_relation import ExpertAlumniRelationService
+from service.expert_alumni_relation import ExpertAlumniRelationService, clear_caches
+
+
+@pytest.fixture(autouse=True)
+def _isolate_caches():
+    """每条用例前后清空进程内 TTL 缓存，避免用例间串味。"""
+    clear_caches()
+    yield
+    clear_caches()
 
 
 def _node(nid: str, props: dict | None = None):
@@ -92,6 +100,37 @@ def test_pair_not_alumni():
     assert resp["items"] == []
 
 
+def test_pair_education_stage_accepts_multiple_values():
+    a = _node(
+        "S1",
+        {
+            "name_zh": "甲",
+            "education_background_institution_zh": "北京大学",
+            "education_background_degree_zh": "博士",
+        },
+    )
+    b = _node(
+        "S2",
+        {
+            "name_zh": "乙",
+            "education_background_institution_zh": "北京大学",
+            "education_background_degree_zh": "硕士",
+        },
+    )
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: {"S1": a, "S2": b}.get(str(nid)))
+    graph.get_node_edges = MagicMock(return_value=[])
+    graph._settings = SimpleNamespace(space="dev")
+
+    resp = _svc(graph).query(
+        expert_id="S1",
+        target_expert_id="S2",
+        education_stage="学士,硕士",
+    )
+
+    assert resp["total"] == 1
+
+
 def test_list_finds_alumni_and_truncation_meta():
     source = _node(
         "S1",
@@ -122,6 +161,35 @@ def test_list_finds_alumni_and_truncation_meta():
     assert "同校" in resp["dimensionsCatalog"]
 
 
+def test_list_scans_beyond_original_500_candidate_limit():
+    source = _node("S1", {"education_background_institution_zh": "测试大学"})
+    pages = []
+    for page in range(11):
+        nodes = [
+            _node(f"P{page * 50 + i}", {"education_background_institution_zh": "其他大学"})
+            for i in range(50)
+        ]
+        pages.append(GraphPagedResult(items=nodes, total=551, limit=50, offset=page * 50))
+    pages.append(
+        GraphPagedResult(
+            items=[_node("TARGET", {"education_background_institution_zh": "测试大学"})],
+            total=551,
+            limit=50,
+            offset=550,
+        )
+    )
+    graph = MagicMock()
+    graph.get_node = MagicMock(return_value=source)
+    graph.get_nodes_by_label = MagicMock(side_effect=pages)
+    graph.get_node_edges = MagicMock(return_value=[])
+    graph._settings = SimpleNamespace(space="dev")
+    resp = _svc(graph).query(expert_id="S1", limit=20)
+    assert resp["total"] == 1
+    assert resp["items"][0]["alumniId"] == "TARGET"
+    assert graph.get_nodes_by_label.call_count == 12
+    assert resp["sourceMeta"]["truncated"] is False
+
+
 def test_no_education_returns_zero():
     a = _node("S1", {"name_zh": "甲"})
     b = _node("S2", {"name_zh": "乙", "education_background_institution_zh": "北大"})
@@ -137,7 +205,7 @@ def test_no_education_returns_zero():
 def test_missing_expert_raises():
     graph = MagicMock()
     graph.get_node = MagicMock(return_value=None)
-    with pytest.raises(KeyError, match="不存在"):
+    with pytest.raises(KeyError, match="未找到专家"):
         _svc(graph).query(expert_id="NO")
 
 

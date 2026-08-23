@@ -1,5 +1,8 @@
 """论文/期刊/报告 图谱 Schema 初始化（在 TRSGraph dev 空间创建 Tag/Edge）。
 
+幂等：使用 CREATE SPACE/TAG/EDGE IF NOT EXISTS，**不会** DROP 空间，
+因此可在已有数据的空间上重复运行而不丢数据。
+
 用法：
     cd backend && PYTHONPATH=. .venv/bin/python script/init_paper_journal_schema.py
 """
@@ -63,7 +66,9 @@ EDGE_DDL = [
     )""",
     """CREATE EDGE IF NOT EXISTS RELATED_TO(confidence double)""",
     """CREATE EDGE IF NOT EXISTS AFFILIATED_WITH(
-        affiliation_name string, source string
+        affiliation_name string, source string,
+        work_experience_date string, work_experience_department_zh string,
+        work_experience_position_zh string
     )""",
     """CREATE EDGE IF NOT EXISTS HAS_KEYWORD(confidence double)""",
     """CREATE EDGE IF NOT EXISTS OUTPUT_OF()""",
@@ -93,10 +98,7 @@ def main() -> None:
     client.connect()
     print(f"=== 初始化 {SPACE} 空间 Schema ===")
 
-    # 1. 重建空间（先 DROP 再 CREATE，确保 schema 是全 string）
-    run(client, f"DROP SPACE IF EXISTS {SPACE};", f"DROP SPACE {SPACE}")
-    print("  等待 DROP 传播 (5s)...")
-    time.sleep(5)
+    # 1. 确保空间存在（幂等，不 DROP——避免清空已有数据）
     run(
         client,
         f"CREATE SPACE IF NOT EXISTS {SPACE}(vid_type=FIXED_STRING(256), partition_num=10, replica_factor=1);",

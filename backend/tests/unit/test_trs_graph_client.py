@@ -728,7 +728,7 @@ class TestQuery:
                 return httpx.Response(200, json={"status": "UP"})
             assert request.url.path == "/api/v1/query"
             assert json.loads(request.content) == {
-                "query": "MATCH (n) RETURN n",
+                "query": "USE test; MATCH (n) RETURN n",
                 "params": {"k": 1},
             }
             return httpx.Response(
@@ -739,6 +739,23 @@ class TestQuery:
         r = repo.execute_query("MATCH (n) RETURN n", {"k": 1})
         assert r.records == [{"n": {"id": "1"}}]
         assert r.summary == {"count": 1}
+        repo.close()
+
+    def test_rejects_response_from_wrong_space(self):
+        def handler(request):
+            if request.url.path == "/health":
+                return httpx.Response(200, json={"status": "UP"})
+            return httpx.Response(
+                200,
+                json={
+                    "records": [],
+                    "summary": {"spaceName": "techkg", "errorCode": 0},
+                },
+            )
+
+        repo = _make_repo(handler)
+        with pytest.raises(GraphRequestError, match="space mismatch"):
+            repo.execute_read("SHOW TAGS")
         repo.close()
 
     def test_execute_read(self):

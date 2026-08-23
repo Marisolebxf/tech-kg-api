@@ -54,7 +54,7 @@ onMounted(() => loadLogs())
 <template>
   <div class="logs-page">
     <header class="logs-hero">
-      <div><span>OPERATION AUDIT</span><h1>操作记录</h1><p>查看当前账号在本平台的登录、会话刷新和安全操作。</p></div>
+      <div><span>OPERATION AUDIT</span><p>查看当前账号在本平台的登录、会话刷新和安全操作。</p></div>
       <b :class="{ demo: logs.dataMode === 'mock' }">{{ logs.dataMode === 'mock' ? '演示记录' : 'Redis 审计记录' }}</b>
     </header>
 

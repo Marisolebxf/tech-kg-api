@@ -1,25 +1,27 @@
 """科技产业链点 TOP-N 事件关系业务编排服务。
 
-严格按 0803 任务要求：只调用 FastAPI graph-search 查图 API（HTTP），不直连图、不直连 MySQL。
-产业链节点（IndustryNode）、企业-节点关联（BELONGS_TO_NODE）、事件（INVOLVED_IN）、
-专家（EXECUTIVE_OF 等）全部从 dev 图空间经 graph-search API 查。
+查图方式：直接调用 infra graph client（dev 空间），不再 HTTP 回调本服务 graph-search 接口。
+原 HTTP 自调用在 500 并发下会与处理请求的 worker 互锁导致全超时；直调 infra 消除互锁根因，
+并配合 asyncio.gather 并行化多企业查询、60s 结果缓存，显著降低单次延迟与高并发负载。
 
 流程：
-  1. GET /graph-search/subgraph/{node_vid}?depth=1  取链节点信息 + 关联企业（BELONGS_TO_NODE）+ 产业链（HAS_NODE）
-  2. GET /graph-search/filtered-subgraph/{org_id}?edge_types=INVOLVED_IN,HAS_NEWS  每个企业的事件 + 资讯
-     News 节点统一记为 event_type=news 参与排序（补"发展趋势"维度）
+  1. 链节点 subgraph（BELONGS_TO_NODE + HAS_NODE）取链节点信息 + 关联企业 + 产业链
+  2. 每个企业的 subgraph（INVOLVED_IN + HAS_NEWS）取事件 + 资讯，并行
   3. 事件影响力排序（event_type 权重 × 金额 × 时间新鲜度 × chain_score）→ TOP-N
-  4. GET /graph-search/node/{org_id}/edges?edge_type=EXECUTIVE_OF  TOP 事件企业的专家
+  4. TOP 事件企业的 governance 边（EXECUTIVE_OF 等）查专家，并行
   5. 风险等级 + event→org→expert 关联
 """
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import logging
 import math
 import os
-
-import httpx
+import threading
+import time
+from typing import Any
 
 from biz.schemas.industry_node_top_events_business import (
     EventExpertRelation,
@@ -27,6 +29,8 @@ from biz.schemas.industry_node_top_events_business import (
     IndustryNodeTopEventsResponse,
     TopEventItem,
 )
+from infra.graph_db import TRSGraphClient
+from infra.graph_db.config import TRSGraphSettings
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +38,143 @@ DEFAULT_BASE = os.getenv("BUSINESS_API_BASE", "http://127.0.0.1:8000")
 SPACE = "dev"
 
 GOVERNANCE_EDGES = {"EXECUTIVE_OF", "LEGAL_REP_OF", "ACTUAL_CONTROLLER_OF"}
+
+# 进程内 dev 空间 graph client（缓存，避免每次请求重建连接）
+_dev_client: TRSGraphClient | None = None
+_dev_lock = threading.Lock()
+
+# 60s 结果缓存：读多写少，同 chain_node_id+参数 的请求复用结果，避免高并发打爆 trs-graph
+_RESULT_CACHE_TTL = 60.0
+_result_cache: dict[str, tuple[float, IndustryNodeTopEventsResponse]] = {}
+_result_cache_lock = threading.Lock()
+
+
+def _get_dev_client() -> TRSGraphClient:
+    """获取 dev 空间的 trs-graph 客户端（进程内单例，懒加载）。"""
+    global _dev_client
+    if _dev_client is not None:
+        return _dev_client
+    with _dev_lock:
+        if _dev_client is None:
+            settings = TRSGraphSettings.from_env()
+            settings.space = SPACE
+            client = TRSGraphClient(settings)
+            client.connect()
+            _dev_client = client
+        return _dev_client
+
+
+def _result_cache_get(key: str) -> IndustryNodeTopEventsResponse | None:
+    entry = _result_cache.get(key)
+    if entry and entry[0] > time.monotonic():
+        # deepcopy 隔离：调用方/model_dump 后续若改对象不会污染缓存（与同事关系缓存一致）。
+        return copy.deepcopy(entry[1])
+    return None
+
+
+def _result_cache_set(key: str, value: IndustryNodeTopEventsResponse) -> None:
+    _result_cache[key] = (time.monotonic() + _RESULT_CACHE_TTL, value)
+
+
+def _subgraph_sync(
+    client: TRSGraphClient, vid: str, edge_types: list[str], limit: int
+) -> dict[str, Any]:
+    """同步取单跳子图：中心节点 + 指定边类型的边 + 邻居节点属性。
+
+    返回结构与 graph-search /filtered-subgraph 的 data 一致，供 run() 原有解析逻辑复用：
+    {"nodes": [{"id","properties"}], "edges": [{"source","target","type","properties"}]}
+    """
+    center = client.get_node(vid)
+    if center is None:
+        return {"nodes": [], "edges": []}
+    nodes: list[dict[str, Any]] = [{"id": str(center.id), "properties": center.properties or {}}]
+    edges: list[dict[str, Any]] = []
+    seen_vids = {str(center.id)}
+    for et in edge_types:
+        try:
+            edge_list = client.get_node_edges(vid, direction="both", edge_type=et, limit=limit)
+        except Exception:
+            continue
+        for e in edge_list:
+            edges.append(
+                {
+                    "source": str(e.source_id),
+                    "target": str(e.target_id),
+                    "type": str(e.type),
+                    "properties": e.properties or {},
+                }
+            )
+            neighbor = str(e.target_id if str(e.source_id) == vid else e.source_id)
+            if neighbor and neighbor not in seen_vids:
+                try:
+                    n = client.get_node(neighbor)
+                except Exception:
+                    n = None
+                if n is not None:
+                    nodes.append({"id": str(n.id), "properties": n.properties or {}})
+                    seen_vids.add(str(n.id))
+    # 对齐 graph-search /filtered-subgraph 的截断（limit × 边类型数），避免事件密集企业取过多邻居。
+    cap = limit * len(edge_types)
+    if len(nodes) > cap:
+        nodes = nodes[:cap]
+    if len(edges) > cap:
+        edges = edges[:cap]
+    return {"nodes": nodes, "edges": edges}
+
+
+def _fetch_org_events_sync(
+    client: TRSGraphClient, org_vid: str, chain_score: float
+) -> list[dict[str, Any]]:
+    """同步取单个企业的事件 + 资讯，返回事件 dict 列表（含 org_id/org_name/chain_score）。"""
+    sg = _subgraph_sync(client, org_vid, ["INVOLVED_IN", "HAS_NEWS"], 50)
+    onodes = {n.get("id"): (n.get("properties") or {}) for n in sg["nodes"]}
+    org_name = onodes.get(org_vid, {}).get("name_cn")
+    events: list[dict[str, Any]] = []
+    for e in sg["edges"]:
+        etype = e.get("type")
+        if etype not in ("INVOLVED_IN", "HAS_NEWS"):
+            continue
+        eid = e.get("target") if e.get("source") == org_vid else e.get("source")
+        ep = onodes.get(eid, {})
+        if etype == "HAS_NEWS":
+            ev_type = "news"
+            occur = str(ep.get("release_date") or "") or None
+            amount = None
+        else:
+            ev_type = ep.get("event_type")
+            occur = str(ep.get("occur_date") or "") or None
+            amount = str(ep.get("amount") or "") or None
+        events.append(
+            {
+                "event_id": eid,
+                "event_type": ev_type,
+                "occur_date": occur,
+                "amount": amount,
+                "title": ep.get("title"),
+                "org_id": org_vid,
+                "org_name": org_name,
+                "chain_score": chain_score,
+            }
+        )
+    return events
+
+
+def _fetch_org_governance_sync(client: TRSGraphClient, org_id: str) -> list[tuple[str, str | None]]:
+    """同步取单个企业的 governance 边关联专家，返回 [(expert_id, position), ...]。"""
+    seen_pids: set[str] = set()
+    experts: list[tuple[str, str | None]] = []
+    for et in GOVERNANCE_EDGES:
+        try:
+            edge_list = client.get_node_edges(org_id, direction="in", edge_type=et, limit=20)
+        except Exception:
+            continue
+        for e in edge_list:
+            pid = str(e.source_id if str(e.target_id) == org_id else e.target_id)
+            if pid and pid != org_id and pid not in seen_pids:
+                seen_pids.add(pid)
+                experts.append((pid, (e.properties or {}).get("position")))
+    return experts
+
 
 EVENT_WEIGHT = {
     "bankruptcy": 3.0,
@@ -109,14 +250,18 @@ def _impact_score(event_type, amount, occur_date, chain_score):
 
 class IndustryNodeTopEventsService:
     def __init__(self, base_url=None, timeout=60.0):
+        # 保留参数以兼容旧调用/测试；查图已改为直调 infra graph client，不再走 HTTP。
         self.base = (base_url or DEFAULT_BASE).rstrip("/") + "/api/v1"
         self.timeout = timeout
 
-    async def _get(self, client, path, params):
-        r = await client.get(f"{self.base}{path}", params=params, timeout=self.timeout)
-        return r.json()
-
     async def run(self, req: IndustryNodeTopEventsRequest) -> IndustryNodeTopEventsResponse:
+        cache_key = (
+            f"{req.chain_node_id}|{req.top_n}|{req.event_type}|{req.time_range}|{req.max_orgs}"
+        )
+        cached = _result_cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         resp = IndustryNodeTopEventsResponse(chain_node_id=req.chain_node_id)
         node_vid = (
             req.chain_node_id
@@ -124,105 +269,64 @@ class IndustryNodeTopEventsService:
             else f"node_{req.chain_node_id}"
         )
 
-        async with httpx.AsyncClient() as client:
-            # 1) filtered-subgraph(depth=1) 只拿 BELONGS_TO_NODE + HAS_NODE，不捞事件/新闻
-            try:
-                sg = await self._get(
-                    client,
-                    f"/graph-search/filtered-subgraph/{node_vid}",
-                    {
-                        "space": SPACE,
-                        "edge_types": "BELONGS_TO_NODE,HAS_NODE",
-                        "depth": 1,
-                        "limit": 200,
-                    },
-                )
-            except Exception as exc:
-                resp.evidence.append(f"链节点查询失败: {exc}")
-                return resp
-            data = sg.get("data") or {}
-            nodes_map = {
-                n.get("id"): (n.get("properties") or {}) for n in (data.get("nodes") or [])
-            }
-            node_props = nodes_map.get(node_vid, {})
-            resp.chain_node_name = node_props.get("node_name")
-            resp.node_imp_level = node_props.get("node_imp_level")
+        client = _get_dev_client()
 
-            orgs = []  # [(org_vid, chain_score)]
-            for e in data.get("edges") or []:
-                et = e.get("type", "")
-                s, t = e.get("source", ""), e.get("target", "")
-                if et == "BELONGS_TO_NODE" and t == node_vid:
-                    cs = (e.get("properties") or {}).get("chain_score", 0)
-                    try:
-                        cs = float(cs)
-                    except (TypeError, ValueError):
-                        cs = 0.0
-                    orgs.append((s, cs))
-                elif et == "HAS_NODE" and s != node_vid:
-                    # chain → node，s 是 chain vid
-                    resp.chain_name = nodes_map.get(s, {}).get("chain_name") or resp.chain_name
-                elif et == "HAS_NODE" and t != node_vid:
-                    resp.chain_name = nodes_map.get(t, {}).get("chain_name") or resp.chain_name
+        # 1) 链节点子图：BELONGS_TO_NODE + HAS_NODE（depth=1）
+        try:
+            data = await asyncio.to_thread(
+                _subgraph_sync, client, node_vid, ["BELONGS_TO_NODE", "HAS_NODE"], 200
+            )
+        except Exception as exc:
+            resp.evidence.append(f"链节点查询失败: {exc}")
+            return resp
+        nodes_map = {n.get("id"): (n.get("properties") or {}) for n in (data.get("nodes") or [])}
+        # 子图不含 seed → 链节点不存在（_subgraph_sync 对存在节点必返回 center）
+        if node_vid not in nodes_map:
+            raise KeyError(f"产业链节点不存在: {req.chain_node_id}")
+        node_props = nodes_map.get(node_vid, {})
+        resp.chain_node_name = node_props.get("node_name")
+        resp.node_imp_level = node_props.get("node_imp_level")
 
-            resp.enterprises = len(orgs)
-            # 按 chain_score 排序，只取 top max_orgs 家企业查事件（避免过多调用）
-            orgs.sort(key=lambda x: x[1], reverse=True)
-            orgs = orgs[: req.max_orgs]
-            if not orgs:
-                resp.evidence.append(f"链节点 {req.chain_node_id} 无关联企业")
-                return resp
-
-            # 2) filtered-subgraph(depth=1) 每个企业拿 INVOLVED_IN 事件 + HAS_NEWS 资讯
-            #    News 节点统一记为 event_type=news，参与影响力排序（资讯权重低，补"发展趋势"维度）
-            events = []
-            for org_vid, chain_score in orgs:
+        orgs = []  # [(org_vid, chain_score)]
+        for e in data.get("edges") or []:
+            et = e.get("type", "")
+            s, t = e.get("source", ""), e.get("target", "")
+            if et == "BELONGS_TO_NODE" and t == node_vid:
+                cs = (e.get("properties") or {}).get("chain_score", 0)
                 try:
-                    osg = await self._get(
-                        client,
-                        f"/graph-search/filtered-subgraph/{org_vid}",
-                        {
-                            "space": SPACE,
-                            "edge_types": "INVOLVED_IN,HAS_NEWS",
-                            "depth": 1,
-                            "limit": 50,
-                        },
-                    )
-                except Exception as exc:
-                    logger.warning("subgraph %s 失败: %s", org_vid, exc)
-                    continue
-                odata = osg.get("data") or {}
-                onodes = {
-                    n.get("id"): (n.get("properties") or {}) for n in (odata.get("nodes") or [])
-                }
-                org_name = onodes.get(org_vid, {}).get("name_cn")
-                for e in odata.get("edges") or []:
-                    etype = e.get("type")
-                    if etype not in ("INVOLVED_IN", "HAS_NEWS"):
-                        continue
-                    eid = e.get("target") if e.get("source") == org_vid else e.get("source")
-                    ep = onodes.get(eid, {})
-                    if etype == "HAS_NEWS":
-                        # News 节点：title/release_date，无 event_type/amount
-                        ev_type = "news"
-                        occur = str(ep.get("release_date") or "") or None
-                        amount = None
-                    else:
-                        ev_type = ep.get("event_type")
-                        occur = str(ep.get("occur_date") or "") or None
-                        amount = str(ep.get("amount") or "") or None
-                    events.append(
-                        {
-                            "event_id": eid,
-                            "event_type": ev_type,
-                            "occur_date": occur,
-                            "amount": amount,
-                            "title": ep.get("title"),
-                            "org_id": org_vid,
-                            "org_name": org_name,
-                            "chain_score": chain_score,
-                        }
-                    )
+                    cs = float(cs)
+                except (TypeError, ValueError):
+                    cs = 0.0
+                orgs.append((s, cs))
+            elif et == "HAS_NODE" and s != node_vid:
+                # chain → node，s 是 chain vid
+                resp.chain_name = nodes_map.get(s, {}).get("chain_name") or resp.chain_name
+            elif et == "HAS_NODE" and t != node_vid:
+                resp.chain_name = nodes_map.get(t, {}).get("chain_name") or resp.chain_name
+
+        resp.enterprises = len(orgs)
+        # 按 chain_score 排序，只取 top max_orgs 家企业查事件（避免过多调用）
+        orgs.sort(key=lambda x: x[1], reverse=True)
+        orgs = orgs[: req.max_orgs]
+        if not orgs:
+            resp.evidence.append(f"链节点 {req.chain_node_id} 无关联企业")
+            return resp
+
+        # 2) 每个企业并行取 INVOLVED_IN 事件 + HAS_NEWS 资讯
+        #    News 节点统一记为 event_type=news，参与影响力排序（资讯权重低，补"发展趋势"维度）
+        org_event_lists = await asyncio.gather(
+            *[
+                asyncio.to_thread(_fetch_org_events_sync, client, org_vid, chain_score)
+                for org_vid, chain_score in orgs
+            ],
+            return_exceptions=True,
+        )
+        events: list[dict[str, Any]] = []
+        for org_vid, result in zip(orgs, org_event_lists, strict=False):
+            if isinstance(result, Exception):
+                logger.warning("subgraph %s 失败: %s", org_vid[0], result)
+                continue
+            events.extend(result)
 
         # 筛选
         def _keep(ev):
@@ -288,32 +392,24 @@ class IndustryNodeTopEventsService:
             resp.risk_level = "低"
         resp.confidence = RISK_LEVEL_CONFIDENCE.get(resp.risk_level, 0.6)
 
-        # 3) TOP 事件企业查专家（governance 边）
+        # 3) TOP 事件企业并行查专家（governance 边）
         top_org_ids = {ev.get("org_id") for ev in top if ev.get("org_id")}
-        experts_by_org = {}
-        async with httpx.AsyncClient() as client:
-            for org_id in top_org_ids:
-                seen_pids = set()
-                for et in GOVERNANCE_EDGES:
-                    try:
-                        ej = await self._get(
-                            client,
-                            f"/graph-search/node/{org_id}/edges",
-                            {"space": SPACE, "edge_type": et, "direction": "in", "limit": 20},
-                        )
-                    except Exception:
-                        continue
-                    for e in (ej.get("data") or {}).get("edges", []):
-                        pid = e.get("source") or e.get("target")
-                        if pid and pid != org_id and pid not in seen_pids:
-                            seen_pids.add(pid)
-                            experts_by_org.setdefault(org_id, []).append(
-                                (pid, None, (e.get("properties") or {}).get("position"))
-                            )
+        gov_results = await asyncio.gather(
+            *[
+                asyncio.to_thread(_fetch_org_governance_sync, client, org_id)
+                for org_id in top_org_ids
+            ],
+            return_exceptions=True,
+        )
+        experts_by_org: dict[str, list[tuple[str, str | None]]] = {}
+        for org_id, result in zip(top_org_ids, gov_results, strict=False):
+            if isinstance(result, Exception):
+                continue
+            experts_by_org[org_id] = result
 
         all_expert_ids = set()
         for ev in top:
-            for pid, _, role in experts_by_org.get(ev.get("org_id", ""), []):
+            for pid, role in experts_by_org.get(ev.get("org_id", ""), []):
                 all_expert_ids.add(pid)
                 resp.relations.append(
                     EventExpertRelation(
@@ -339,6 +435,7 @@ class IndustryNodeTopEventsService:
             f"发展趋势：{resp.trend}",
             f"机遇挖掘：{resp.opportunity}",
         ]
+        _result_cache_set(cache_key, resp)
         return resp
 
     @staticmethod

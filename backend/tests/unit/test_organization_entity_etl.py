@@ -76,6 +76,43 @@ def test_entity_scope_is_restricted_to_node_producing_tables_in_39_table_whiteli
     assert len(entity.TABLE_CN_NAMES) == 39
 
 
+def test_run_etl_can_select_domestic_or_foreign_source_tables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(entity, "iter_source_rows", lambda *args, **kwargs: iter(()))
+    domestic = entity.run_etl(
+        full=True,
+        domestic_only=True,
+        dry_run=True,
+        session=CaptureSession(),
+    )
+    foreign = entity.run_etl(
+        full=True,
+        foreign_only=True,
+        dry_run=True,
+        session=CaptureSession(),
+    )
+    assert set(domestic) == {
+        "DataSource",
+        *(spec.name for spec in entity.ENTITY_TABLE_SPECS if spec.scope == "domestic"),
+    }
+    assert set(foreign) == {
+        "DataSource",
+        *(spec.name for spec in entity.ENTITY_TABLE_SPECS if spec.scope == "foreign"),
+    }
+
+
+def test_entity_scope_flags_are_mutually_exclusive() -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        entity.run_etl(
+            full=True,
+            domestic_only=True,
+            foreign_only=True,
+            dry_run=True,
+            session=CaptureSession(),
+        )
+
+
 def test_missing_stable_id_is_rejected_without_name_hash_fallback() -> None:
     spec = entity.ENTITY_TABLE_BY_NAME["dwd_org_base_info"]
     with pytest.raises(entity.RelationDataError, match="stable organization id"):
@@ -95,6 +132,8 @@ def test_entity_vid_and_source_record_id_are_stable() -> None:
     assert first.vid == second.vid == "org_o1"
     assert first.properties["source_record_id"] == second.properties["source_record_id"] == "o1"
     assert first.properties["registered_capital"] == 100.5
+    assert first.properties["organization_id"] == "o1"
+    assert 0.0 <= first.properties["confidence"] <= 1.0
 
 
 def test_person_event_project_and_product_vertices_keep_full_raw_payload() -> None:
@@ -126,7 +165,13 @@ def test_person_event_project_and_product_vertices_keep_full_raw_payload() -> No
         "batch",
         "2026-07-27T00:00:00+00:00",
     )
-    assert {record.tag for record in product_records} == {"Organization", "Product"}
+    assert {record.tag for record in product_records} == {
+        "Organization",
+        "organization_base",
+        "Product",
+    }
+    provenance = next(record for record in product_records if record.tag == "organization_base")
+    assert provenance.properties["organization_id"] == "o1"
 
 
 def test_bid_target_items_with_same_notice_keep_distinct_payloads() -> None:
@@ -217,7 +262,8 @@ def test_write_merges_payload_without_overwriting_existing_canonical_value() -> 
     assert stats.written == 1
     assert len(graph.writes) == 2
     update = next(query for query in graph.writes if '"org_o1"' in query)
-    assert "`name_cn`" not in update.split("VALUES", 1)[0]
+    assert "`name_cn`" in update.split("VALUES", 1)[0]
+    assert "已有机构" in update
     assert "source_records" in update
     assert any('"org_o2"' in query for query in graph.writes)
 
@@ -284,7 +330,7 @@ def test_entity_dry_run_never_writes(monkeypatch: pytest.MonkeyPatch) -> None:
         ingest_batch="batch",
         session=object(),
     )
-    assert results["dwd_org_base_info"].valid == 1
+    assert results["dwd_org_base_info"].valid == 2
     assert results["dwd_org_base_info"].written == 0
     assert all(
         "INSERT EDGE" not in example for item in results.values() for example in item.examples

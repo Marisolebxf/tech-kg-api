@@ -9,6 +9,7 @@ from biz.handler.enterprise_background_analysis import (
 from biz.handler.expert_alumni_relation import legacy_router as expert_alumni_relation_legacy_router
 from biz.handler.expert_alumni_relation import router as expert_alumni_relation_router
 from biz.handler.expert_colleague_relation import router as expert_colleague_relation_router
+from biz.handler.expert_colleague_relation import service_router as expert_colleague_service_router
 from biz.handler.expert_cooperation_achievement import (
     legacy_router as expert_cooperation_achievement_legacy_router,
 )
@@ -27,6 +28,7 @@ from biz.handler.industry_node_top_events_business import (
     router as industry_node_top_events_business_router,
 )
 from biz.handler.kg_construction import router as kg_construction_router
+from biz.handler.llm_config import router as llm_config_router
 from biz.handler.manual_review import router as manual_review_router
 from biz.handler.manual_review_internal import router as manual_review_internal_router
 from biz.handler.operator import internal_router as operator_internal_router
@@ -43,6 +45,30 @@ from biz.handler.workflow_system import router as workflow_system_router
 
 
 def register_routers(app: FastAPI) -> None:
+    app.include_router(common_capability_router, prefix="/api/v1")
+    app.include_router(kg_construction_router, prefix="/api/v1")
+    app.include_router(options_router, prefix="/api/v1")
+    app.include_router(platform_overview_router, prefix="/api/v1")
+    app.include_router(expert_direct_relation_router, prefix="/api/v1")
+    app.include_router(expert_indirect_relation_router, prefix="/api/v1")
+    app.include_router(expert_cooperation_achievement_router, prefix="/api/v1")
+    app.include_router(expert_colleague_relation_router, prefix="/api/v1")
+    app.include_router(expert_colleague_service_router, prefix="/api/v1")
+    app.include_router(expert_alumni_relation_router, prefix="/api/v1")
+    app.include_router(expert_paper_cooperation_router, prefix="/api/v1")
+    app.include_router(expert_enterprise_relation_router, prefix="/api/v1")
+    app.include_router(relation_detail_annotation_router, prefix="/api/v1")
+    app.include_router(enterprise_background_analysis_router, prefix="/api/v1")
+    app.include_router(expert_enterprise_mining_router, prefix="/api/v1")
+    app.include_router(industry_chain_topn_event_router, prefix="/api/v1")
+    app.include_router(industry_chain_panorama_router, prefix="/api/v1")
+    app.include_router(graph_search_router, prefix="/api/v1")
+    app.include_router(task_center_router, prefix="/api/v1")
+    app.include_router(manual_review_router, prefix="/api/v1")
+    app.include_router(workflow_system_router, prefix="/api/v1")
+    app.include_router(schema_management_router, prefix="/api/v1")
+    app.include_router(llm_config_router, prefix="/api/v1")
+    app.include_router(operator_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(manual_review_internal_router, prefix="/api/v1")
 
@@ -71,6 +97,7 @@ def register_routers(app: FastAPI) -> None:
         manual_review_router,
         workflow_system_router,
         schema_management_router,
+        llm_config_router,
         tech_enterprise_relation_business_router,
         industry_node_top_events_business_router,
         operator_router,

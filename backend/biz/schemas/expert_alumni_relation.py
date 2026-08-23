@@ -11,7 +11,9 @@ class AlumniRelationQueryRequest(BaseModel):
     expertId: str = Field(..., min_length=1, description="源专家图节点 ID")
     targetExpertId: str | None = Field(default=None, description="目标专家 ID，有则双点判定")
     school: str | None = Field(default=None, description="院校关键词过滤")
-    educationStage: str | None = Field(default=None, description="教育阶段/学历过滤")
+    educationStage: str | None = Field(
+        default=None, description="教育阶段/学历过滤，多选时用逗号分隔"
+    )
     limit: int = Field(default=20, ge=1, description=f"返回校友数上限，最大 {MAX_ALUMNI_LIMIT}")
 
     @field_validator("limit")

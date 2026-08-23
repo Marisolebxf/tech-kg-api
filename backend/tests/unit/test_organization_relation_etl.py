@@ -241,8 +241,8 @@ def test_render_edge_keeps_schema_property_order() -> None:
     query = render_edge_insert(investment_spec(), [investment_candidate()])
     assert query.startswith(
         "INSERT EDGE `INVESTS_IN` "
-        "(`investment_amount`,`investment_ratio`,`extra_json`,`source_table`,"
-        "`source_record_id`,`ingest_batch`,`ingest_time`) VALUES "
+        "(`investment_amount`,`investment_ratio`,`extra_json`,`organization_id`,"
+        "`confidence`,`source_table`,`source_record_id`,`ingest_batch`,`ingest_time`) VALUES "
     )
     assert '"org_a"->"org_b"@' in query
 

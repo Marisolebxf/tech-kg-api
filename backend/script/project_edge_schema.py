@@ -79,6 +79,9 @@ def ensure_alignment_edge_schema(graph: Any, *, space: str = GRAPH_SPACE) -> Non
             if attempt == 14:
                 raise RuntimeError(f"{edge_type} new properties not visible after ALTER")
             time.sleep(1)
+    # DESCRIBE 可见后，/api/v1/nodes/merge 与 INSERT VERTEX 仍需数秒才接受新列，
+    # 否则报 "Unknown column ... in schema"。多等 5s 覆盖该传播延迟。
+    time.sleep(5)
 
 
 def ensure_project_tag_confidence(graph: Any, *, space: str = GRAPH_SPACE) -> None:
@@ -121,3 +124,6 @@ def ensure_project_tag_confidence(graph: Any, *, space: str = GRAPH_SPACE) -> No
         if attempt == 14:
             raise RuntimeError("Project tag new properties not visible after ALTER")
         time.sleep(1)
+    # DESCRIBE 可见后，/api/v1/nodes/merge 与 INSERT VERTEX 仍需数秒才接受新列，
+    # 否则报 "Unknown column ... in schema"。多等 5s 覆盖该传播延迟。
+    time.sleep(5)

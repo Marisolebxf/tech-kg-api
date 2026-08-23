@@ -198,6 +198,29 @@ export interface WorkflowExecution {
   payload?: Record<string, unknown>
   dispatchMode?: string
   message?: string
+  output?: unknown
+  steps?: ProcessStep[]
+  taskId?: string
+}
+
+export interface WorkflowSchedule {
+  id: string
+  definitionId: string
+  cron: string
+  timezone: string
+  active: boolean
+  payload?: Record<string, unknown>
+  dispatchStatus?: string
+  message?: string
+  [key: string]: unknown
+}
+
+export interface ScheduleCreateInput {
+  id: string
+  cron: string
+  timezone?: string
+  active?: boolean
+  payload?: Record<string, unknown>
 }
 
 export const listDefinitions = () =>
@@ -225,3 +248,23 @@ export const executeDefinition = (id: string, payload: Record<string, unknown> =
 
 export const getExecution = (executionId: string) =>
   unwrap(http.get(`/v1/workflow-system/executions/${executionId}`)) as Promise<WorkflowExecution>
+
+export const listExecutions = (limit = 100) =>
+  unwrap(http.get('/v1/workflow-system/executions', { params: { limit } })) as Promise<{ items: WorkflowExecution[]; total: number }>
+
+// ---- 工作流调度（定期执行） ----
+
+export const listSchedules = () =>
+  unwrap(http.get('/v1/workflow-system/schedules')) as Promise<{ items: WorkflowSchedule[]; total: number }>
+
+export const createSchedule = (definitionId: string, schedule: ScheduleCreateInput) =>
+  unwrap(http.post(`/v1/workflow-system/definitions/${definitionId}/schedules`, schedule)) as Promise<WorkflowSchedule>
+
+export const updateScheduleState = (scheduleId: string, active: boolean) =>
+  unwrap(http.put(`/v1/workflow-system/schedules/${scheduleId}/state`, { active })) as Promise<WorkflowSchedule>
+
+export const triggerSchedule = (scheduleId: string) =>
+  unwrap(http.post(`/v1/workflow-system/schedules/${scheduleId}/trigger`)) as Promise<{ id: string; dispatchStatus: string }>
+
+export const deleteSchedule = (scheduleId: string) =>
+  unwrap(http.delete(`/v1/workflow-system/schedules/${scheduleId}`)) as Promise<{ id: string }>

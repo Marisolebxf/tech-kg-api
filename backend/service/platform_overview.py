@@ -37,14 +37,47 @@ class GraphStatsProvider(Protocol):
 class TRSGraphStatsProvider:
     def get_stats(self) -> GraphStatsSnapshot:
         client = get_trs_graph_client()
-        labels = client.labels()
-        edge_types = client.edge_types()
-        return GraphStatsSnapshot(
-            total_nodes=client.node_count(),
-            total_edges=client.edge_count(),
-            nodes={label: client.node_count(label) for label in labels},
-            edges={edge_type: client.edge_count(edge_type) for edge_type in edge_types},
-        )
+        # 优先用 SHOW STATS：单条 nGQL 一次性返回所有 Tag/Edge 计数与总数（NebulaGraph 预计算，
+        # 毫秒级）。比逐 label 调 node_count / 逐 edge_type 调 edge_count（N 次串行 HTTP，
+        # 实测 ~57s）快 4 个数量级。SHOW STATS 需要 SUBMIT JOB STATS 已跑过；若返回空或抛错，
+        # 回退到逐个计数。
+        try:
+            result = client.execute_query("SHOW STATS")
+            nodes: dict[str, int] = {}
+            edges: dict[str, int] = {}
+            total_nodes = 0
+            total_edges = 0
+            for rec in result.records:
+                rtype = rec.get("Type")
+                name = rec.get("Name")
+                count = int(rec.get("Count", 0) or 0)
+                if rtype == "Tag" and name:
+                    nodes[name] = count
+                elif rtype == "Edge" and name:
+                    edges[name] = count
+                elif rtype == "Space":
+                    if name == "vertices":
+                        total_nodes = count
+                    elif name == "edges":
+                        total_edges = count
+            if not nodes and not edges:
+                raise RuntimeError("SHOW STATS returned no rows")
+            return GraphStatsSnapshot(
+                total_nodes=total_nodes or sum(nodes.values()),
+                total_edges=total_edges or sum(edges.values()),
+                nodes=nodes,
+                edges=edges,
+            )
+        except Exception as exc:
+            logger.warning("SHOW STATS 失败，回退到逐 label/edge_type 计数（会慢）: %s", exc)
+            labels = client.labels()
+            edge_types = client.edge_types()
+            return GraphStatsSnapshot(
+                total_nodes=client.node_count(),
+                total_edges=client.edge_count(),
+                nodes={label: client.node_count(label) for label in labels},
+                edges={edge_type: client.edge_count(edge_type) for edge_type in edge_types},
+            )
 
 
 def _format_count(value: int) -> str:

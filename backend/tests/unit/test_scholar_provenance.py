@@ -64,6 +64,9 @@ def test_affiliation_confidence_distinguishes_source_id_and_placeholder(
             "scholar_org_id": "o1",
             "org_zh": "机构一",
             "org_en": "",
+            "work_experience_date": "2018-01 至 2023-12",
+            "work_experience_department_zh": "人工智能研究所",
+            "work_experience_position_zh": "研究员",
         },
         {
             "scholar_id": "s2",
@@ -82,6 +85,9 @@ def test_affiliation_confidence_distinguishes_source_id_and_placeholder(
     assert exact_props["confidence"] == 1.0
     assert exact_props["organization_base"] == "dwd_scholar"
     assert exact_props["organization_id"] == "o1"
+    assert exact_props["work_experience_date"] == "2018-01 至 2023-12"
+    assert exact_props["work_experience_department_zh"] == "人工智能研究所"
+    assert exact_props["work_experience_position_zh"] == "研究员"
     placeholder_props = graph.edges[1][4]
     assert placeholder_props["confidence"] == CONFIDENCE_PLACEHOLDER_ORG
     assert placeholder_props["organization_base"] == ""

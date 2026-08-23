@@ -25,11 +25,17 @@ CREATE_SPACE_DDL: list[str] = [
 SCHEMA_DDL: list[str] = [
     "CREATE TAG IF NOT EXISTS Scholar(scholar_id string, name_zh string, name_en string, "
     "scholar_org_name_zh string, scholar_org_name_en string, h_index int64, "
-    "citation_nums int64, paper_nums int64);",
+    "citation_nums int64, paper_nums int64, manual_disabled bool, correction_id string, "
+    "corrected_at string);",
     "CREATE TAG IF NOT EXISTS Organization(org_id string, name_cn string, province string, "
-    "city string, org_type string, listing_status string, incorporation_year int64);",
+    "city string, org_type string, listing_status string, incorporation_year int64, "
+    "manual_disabled bool, correction_id string, corrected_at string);",
     "CREATE EDGE IF NOT EXISTS EMPLOYED_BY(relation_type string, role string, "
-    "start_date string, end_date string, source string);",
+    "start_date string, end_date string, source string, manual_disabled bool, "
+    "correction_id string, corrected_at string);",
+    "ALTER TAG Scholar ADD (manual_disabled bool, correction_id string, corrected_at string);",
+    "ALTER TAG Organization ADD (manual_disabled bool, correction_id string, corrected_at string);",
+    "ALTER EDGE EMPLOYED_BY ADD (manual_disabled bool, correction_id string, corrected_at string);",
     "ALTER EDGE EMPLOYED_BY ADD (tech_field string);",
     "CREATE TAG INDEX IF NOT EXISTS scholar_id_idx ON Scholar(scholar_id(64));",
     "CREATE TAG INDEX IF NOT EXISTS org_name_idx ON Organization(name_cn(128));",

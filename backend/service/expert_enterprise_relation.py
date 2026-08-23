@@ -51,7 +51,12 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
             )
         except Exception:
             return []
-        return [e for e in edges if str(e.target_id) == str(enterprise_id)]
+        return [
+            e
+            for e in edges
+            if str(e.target_id) == str(enterprise_id)
+            and e.properties.get("manual_disabled") is not True
+        ]
 
     def _provision_scholar(self, graph: TRSGraphClient, scholar_id: str) -> Any:
         """图库无该学者时，从 gkx_local.dwd_scholar 查真实信息并创建图库节点。"""
@@ -182,8 +187,10 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
             return []
         by_ent: dict[str, dict[str, Any]] = {}
         for e in edges:
+            if e.properties.get("manual_disabled") is True:
+                continue
             org = graph.get_node(e.target_id)
-            if org is None:
+            if org is None or org.properties.get("manual_disabled") is True:
                 continue
             op = org.properties
             eid = str(op.get("org_id", e.target_id))

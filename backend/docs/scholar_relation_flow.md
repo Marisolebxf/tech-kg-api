@@ -428,3 +428,63 @@ uv run python -m script.dedupe_scholar_persons --write
 | `SCHOLAR_ORG_COLLECTION` | 机构集合名，默认 `organization` |
 | `SCHOLAR_ALIGN_TOPK` / `SCHOLAR_ALIGN_MIN_SCORE` | 跨域对齐 top-k 与阈值 |
 | `SCHOLAR_DEDUPE_TOPK` / `SCHOLAR_DEDUPE_HIGH` / `SCHOLAR_DEDUPE_MID` | 同域消歧 top-k 与两档阈值 |
+
+---
+
+## 8. 图谱数据重建（学者域 Runbook）
+
+改完学者域业务后，按本节顺序重跑即可把图与向量索引恢复到与 MySQL 源表一致的状态。
+
+**一键执行**：`rebuild_scholar_graph.py` 把 ①~⑤ 全部编排成一条命令，空间/集合/数据库全部读环境变量，无硬编码，任一步失败即中止：
+
+```bash
+TRS_GRAPH_SPACE=<图空间> SCHOLAR_MILVUS_COLLECTION=<向量集合> MYSQL_DATABASE=gkx_element \
+PYTHONPATH=. ./.venv/bin/python -m script.rebuild_scholar_graph
+# 常用：--dry-run / --stages schema,entities,relations / --limit 50（小规模试跑）
+```
+
+不使用一键脚本时，按下面的手工顺序执行。
+
+### 8.1 脚本与依赖顺序
+
+```
+① load_scholar_entities  →  ② load_scholar_relations  →  ③ build_scholar_milvus_index
+                                                              ├─→ ④ align_scholar_affiliations
+                                                              └─→ ⑤ dedupe_scholar_persons
+```
+
+- ① 抽 `Person` 顶点（VID `person_{scholar_id}`），源表 `dwd_scholar` + `dwd_scholar_talent_flag` + `dwd_scholar_research_direction`。
+- ② 抽 `AFFILIATED_WITH` / `COAUTHOR_WITH`（可选 `AUTHORED_BY`）。**软依赖 ①**：边是直接 `merge_edge`，不校验端点，跳过 ① 会产生悬挂边。
+- ③ 读图中 `source_table == "dwd_scholar"` 的 `Person`，建/更新 Milvus 集合 `scholar_person`（稠密 512d HNSW-COSINE + BM25 稀疏）。集合由脚本自动建，无需单独 DDL。
+- ④ 把 `AFFILIATED_WITH` 的桩机构（`^org_[a-f0-9]{16}$`）对齐到真实 `Organization`，写 `SAME_AS`。**依赖机构域的 `organization` 集合**；集合不存在时只告警跳过，不报错。
+- ⑤ 同域同名消歧，写 `Person↔Person SAME_AS`。**硬依赖 ③**：`scholar_person` 不存在会直接抛 `MilvusException`。
+- ④ 与 ⑤ 互不依赖，可任意顺序或并行。
+
+三个脚本都是幂等的（`merge_node` / `merge_edge` + `identityProps`），重复执行不会产生重复数据，可以安全重跑。
+
+### 8.2 完整命令
+
+命令与阈值见 §7「命令速查」，直接照抄即可。约定：**每步先 `--dry-run` 看统计，再正式执行**。
+
+补充说明：
+
+- ⑤ `dedupe_scholar_persons` 默认就是 dry-run，只有加 `--write` 才落图。
+- ③ 的 `--drop-existing` 会**删掉整个 `scholar_person` 集合**再重建，只在 schema 变更时使用。
+- ② 的 `--include-authored-by-fallback` 是可选的跨域兜底，会校验两端顶点是否存在。
+- ③⑤ 在本进程内跑 `SentenceTransformerEmbeddingFunction` 做向量化，**不走** `m3e-embedding` 容器（那个服务和 `PATENT_EMBEDDING_*` 只属于专利域）。首次执行会下载模型。
+
+### 8.3 首次/新环境的一次性前置
+
+按顺序确认，已具备的可跳过：
+
+1. **MySQL 源表**：`backend/schemas/ddl/2026.7.18要素库更新/人才要素库.sql` 需手动执行。`init_db.py` 找的是不存在的 `schemas/ddl/scholar/` 目录，会打印 `SKIP: scholar/ not found`，**不会**帮你建学者表。
+2. **图空间 schema**：`uv run python -m script.init_scholar_schema`（幂等：DESCRIBE 对比后 CREATE/ALTER，空间取 `TRS_GRAPH_SPACE`；`--create-space` 可先建空间）。旧的 `init_project_schema` 硬编码 `dev`，仅建窄版 Person，不推荐。
+3. **provenance 字段**：`backend/schemas/ddl/scholar_provenance_ddl.ngql` 没有 runner，可在 nebula-console 手动执行；`load_scholar_relations.py` 的 `ensure_schema()` 也会做幂等 `ALTER EDGE ADD`，正常流程无需手动。
+4. **环境变量**：见 §7「环境变量」。真实来源是 `.env` / 进程环境变量，`config/*.yml` 是遗留文件、并不会被加载。
+
+### 8.4 不要用的同名脚本
+
+- `script/load_graph.py` —— 早期版本，`merge_node` 行为不可靠。
+- `script/init_graph_schema.py` —— 老 `techkg` 空间 + `Scholar`/`EMPLOYED_BY` 命名，和现在的 `dev` + `Person` 无关。
+- `script/organization_*` —— 机构域，不由学者域负责。
+- `script/register_scholar_operators.py` —— 只是把 5 个脚本注册成 operator，**不提供编排**，不能替代本节顺序。

@@ -262,39 +262,68 @@ def _iter_paper_relations(session, batch_size: int = 2000) -> Iterable[dict]:
 # Writers
 # ---------------------------------------------------------------------------
 def ensure_schema(graph) -> None:
-    """幂等补齐 AFFILIATED_WITH 边的任职时间/部门/职位属性（旧空间用 ALTER ADD）。"""
-    wanted = [
-        ("work_experience_date", "string"),
-        ("work_experience_department_zh", "string"),
-        ("work_experience_position_zh", "string"),
+    """幂等补齐边 schema 缺失属性（旧空间用 ALTER ADD）。
+
+    trs-graph 的 merge 接口不接收 schema 之外的属性，置信度/溯源字段缺一个整条
+    边就 400，所以这里把两类边需要写的属性全部对齐。
+    """
+    common = [
+        ("confidence", "double"),
+        ("match_evidence", "string"),
+        ("match_method", "string"),
     ]
-    try:
-        existing = {
-            str(row["Field"]) for row in graph.execute_read("DESCRIBE EDGE AFFILIATED_WITH").records
-        }
-    except Exception:
-        logger.warning("DESCRIBE EDGE AFFILIATED_WITH 失败，跳过 ALTER，依赖建库 DDL")
-        return
-    missing = [(field, kind) for field, kind in wanted if field not in existing]
-    if not missing:
-        return
-    graph.execute_write(
-        f"ALTER EDGE AFFILIATED_WITH ADD ({', '.join(f'{f} {k}' for f, k in missing)});"
-    )
-    # NebulaGraph schema 变更有传播延迟，轮询直到生效。
-    expected = {f for f, _ in missing}
-    for _ in range(15):
-        visible = {
-            str(row["Field"]) for row in graph.execute_read("DESCRIBE EDGE AFFILIATED_WITH").records
-        }
-        if expected <= visible:
-            return
-        time.sleep(1)
-    logger.warning("AFFILIATED_WITH 新属性 %s 未在 15s 内生效", expected)
+    wanted_by_edge = {
+        "AFFILIATED_WITH": common
+        + [
+            ("work_experience_date", "string"),
+            ("work_experience_department_zh", "string"),
+            ("work_experience_position_zh", "string"),
+            ("organization_base", "string"),
+            ("organization_id", "string"),
+        ],
+        "COAUTHOR_WITH": common,
+    }
+    for edge_type, wanted in wanted_by_edge.items():
+        try:
+            existing = {
+                str(row["Field"])
+                for row in graph.execute_read(f"DESCRIBE EDGE {edge_type}").records
+            }
+        except Exception:
+            logger.warning("DESCRIBE EDGE %s 失败，跳过 ALTER，依赖建库 DDL", edge_type)
+            continue
+        missing = [(field, kind) for field, kind in wanted if field not in existing]
+        if not missing:
+            continue
+        try:
+            graph.execute_write(
+                f"ALTER EDGE {edge_type} ADD ({', '.join(f'{f} {k}' for f, k in missing)});"
+            )
+        except Exception:
+            # 属性可能已被其它进程补上（重复 ALTER 会 400），以最终可见为准。
+            pass
+        # NebulaGraph schema 变更有传播延迟，轮询直到生效。
+        expected = {f for f, _ in missing}
+        for _ in range(15):
+            visible = {
+                str(row["Field"])
+                for row in graph.execute_read(f"DESCRIBE EDGE {edge_type}").records
+            }
+            if expected <= visible:
+                break
+            time.sleep(1)
+        else:
+            logger.warning("%s 新属性 %s 未在 15s 内生效", edge_type, expected)
 
 
 def load_affiliations(
-    session, graph, *, dry_run: bool, preview: int = 5, org_index: dict[str, str] | None = None
+    session,
+    graph,
+    *,
+    dry_run: bool,
+    preview: int = 5,
+    org_index: dict[str, str] | None = None,
+    limit: int | None = None,
 ) -> dict:
     """写入 AFFILIATED_WITH 边。
 
@@ -354,10 +383,13 @@ def load_affiliations(
         if dry_run:
             if shown < preview:
                 logger.info(
-                    "[dry-run] %s -[AFFILIATED_WITH]-> %s  %s  confidence=%s",
+                    "[dry-run] %s -[AFFILIATED_WITH]-> %s  %s  任职=%s 部门=%s 职位=%s  confidence=%s",
                     src,
                     dst,
                     org_name,
+                    props["work_experience_date"] or "—",
+                    props["work_experience_department_zh"] or "—",
+                    props["work_experience_position_zh"] or "—",
                     props["confidence"],
                 )
                 shown += 1
@@ -370,11 +402,15 @@ def load_affiliations(
                 props,
             )
         ok += 1
+        if limit is not None and ok >= limit:
+            break
 
     return {"written": ok, "skipped_no_org": skipped, "placeholder_org": placeholder}
 
 
-def load_coauthors(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
+def load_coauthors(
+    session, graph, *, dry_run: bool, preview: int = 5, limit: int | None = None
+) -> dict:
     """写入 COAUTHOR_WITH 边。返回统计信息。"""
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     ok = shown = 0
@@ -407,6 +443,8 @@ def load_coauthors(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
         else:
             graph.merge_edge(src, dst, "COAUTHOR_WITH", {"source_record_id": rid}, props)
         ok += 1
+        if limit is not None and ok >= limit:
+            break
 
     return {"written": ok}
 
@@ -484,6 +522,7 @@ def run(
     database: str = "gkx_element",
     dry_run: bool = False,
     include_authored_by_fallback: bool = False,
+    limit: int | None = None,
 ) -> dict:
     mysql = MySQLClient(database=database)
     graph = get_trs_graph_client()
@@ -505,9 +544,11 @@ def run(
         # org name->vid 索引:scholar_org_id 缺失时按机构名 join 图里已存在 Organization,
         # 用其真实 vid(替代 md5 桩 vid),避免 AFFILIATED_WITH 边指向不存在的 org。
         org_index = build_org_name_vid_index(graph)
-        aff_stats = load_affiliations(session, graph, dry_run=dry_run, org_index=org_index)
+        aff_stats = load_affiliations(
+            session, graph, dry_run=dry_run, org_index=org_index, limit=limit
+        )
         logger.info("AFFILIATED_WITH: %s", aff_stats)
-        co_stats = load_coauthors(session, graph, dry_run=dry_run)
+        co_stats = load_coauthors(session, graph, dry_run=dry_run, limit=limit)
         logger.info("COAUTHOR_WITH: %s", co_stats)
 
         result: dict = {
@@ -548,6 +589,12 @@ def _parse_args() -> argparse.Namespace:
             "outgoing edges."
         ),
     )
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="only load the first N affiliation/coauthor rows (for small-scale testing).",
+    )
     return ap.parse_args()
 
 
@@ -560,5 +607,6 @@ if __name__ == "__main__":
         database=args.database,
         dry_run=args.dry_run,
         include_authored_by_fallback=args.include_authored_by_fallback,
+        limit=args.limit,
     )
     logger.info("done: %s", result)

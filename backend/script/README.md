@@ -9,6 +9,13 @@
 | `init_db.py` | 执行 `schemas/ddl/` 下全部 DDL | 默认连接开发业务库 `127.0.0.1:3306/gkx_element` |
 | `sync_schema_from_mysql.py` | 从源 MySQL 同步 DDL、字段规范和 ORM | 优先读取 `SOURCE_MYSQL_*`，只读 `information_schema` 和 `SHOW CREATE TABLE` |
 | `paper_journal_relation/` | 论文/期刊实体关系抽取 ETL | 从 `gkx_element` 论文关系表抽取「从论文出发」的有向边（Paper→Paper: RELATED_TO/CITES/CITED_BY；Paper→Keyword: HAS_KEYWORD；Paper→Report: REFERENCED_BY）写入 TRSGraph `dev` 空间，使用 `infra.graph_db.TRSGraphClient`，详见子目录 README |
+| `load_scholar_entities.py` | 装载学者域 `Person` 顶点 | 源表 `dwd_scholar`；重建顺序与前置条件见 `docs/scholar_relation_flow.md` §8 |
+| `load_scholar_relations.py` | 装载学者域出向边 | `AFFILIATED_WITH` / `COAUTHOR_WITH`（可选 `AUTHORED_BY`）；见 `docs/scholar_relation_flow.md` §8 |
+| `build_scholar_milvus_index.py` | 建 Milvus `scholar_person` 集合 | 稠密 + BM25 混合索引；`--drop-existing` 会删集合重建 |
+| `align_scholar_affiliations.py` | 桩机构对齐真实 `Organization` | 依赖上一步与机构域 `organization` 集合，缺失时告警跳过 |
+| `dedupe_scholar_persons.py` | 学者同域消歧 | 依赖 `scholar_person`；默认 dry-run，需 `--write` 才落图 |
+| `init_scholar_schema.py` | 学者域 schema 幂等对齐 | 空间取 `TRS_GRAPH_SPACE`；DESCRIBE 对比后 CREATE/ALTER，重跑安全 |
+| `rebuild_scholar_graph.py` | 学者域一键重建 | 编排 schema→entities→relations→milvus→align→dedupe，全 env 驱动，支持 `--dry-run/--stages/--limit` |
 | `organization_entity_etl.py` | 装载机构领域实体 | 只新增 `Organization`、`DataSource` 顶点；已有 VID 跳过，不覆盖、不写边 |
 | `organization_relation_etl.py` | 装载机构领域关系 | 唯一关系写入入口；只连接已有端点，相同类型/端点/rank 的边跳过 |
 | `organization_etl_common.py` | 机构 ETL 公共规则 | 统一关系规格、清洗、VID、`source_record_id`、rank、nGQL 与互斥锁 |

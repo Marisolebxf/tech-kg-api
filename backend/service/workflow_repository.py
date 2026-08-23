@@ -6,7 +6,8 @@ import json
 import os
 import sqlite3
 import threading
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -33,10 +34,18 @@ class WorkflowRepository:
         self._lock = threading.RLock()
         self._initialize()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.database_path, timeout=30)
         connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def _initialize(self) -> None:
         with self._lock, self._connect() as connection:
@@ -78,7 +87,13 @@ class WorkflowRepository:
             )
             self._remove_workflow_type_unique_constraint(connection)
             count = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-            if count == 0:
+            demo_enabled = os.getenv("WORKFLOW_DEMO_DATA_ENABLED", "false").lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            if count == 0 and demo_enabled:
                 self._seed(connection)
             self._ensure_builtin_definitions(connection)
 
@@ -318,7 +333,7 @@ class WorkflowRepository:
                 "createdAt": _now(),
             }
             connection.execute(
-                """INSERT INTO workflow_definitions(id, workflow_type, category, active, payload)
+                """INSERT OR IGNORE INTO workflow_definitions(id, workflow_type, category, active, payload)
                    VALUES (?, ?, ?, 1, ?)""",
                 (definition_id, workflow_type, category, _json(payload)),
             )

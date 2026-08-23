@@ -996,7 +996,6 @@ def load(
         raise ValueError("vector_margin 必须在 0 到 1 之间")
     if vector_top_k < 2:
         raise ValueError("vector_top_k 必须大于等于 2")
-    os.environ["TRS_GRAPH_SPACE"] = "dev"
     graph = get_trs_graph_client()
     connection = mysql_connection()
     try:
@@ -1036,7 +1035,7 @@ def load(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="抽取并装载专利领域出发的有向关系")
-    parser.add_argument("--apply", action="store_true", help="实际写入dev；默认只分析")
+    parser.add_argument("--apply", action="store_true", help="实际写入配置的图空间；默认只分析")
     parser.add_argument("--replace", action="store_true", help="写入前替换本加载器管理的旧关系")
     parser.add_argument("--review-output", type=Path, help="可选：输出待人工审核JSONL")
     parser.add_argument("--no-vector", action="store_true", help="仅用于诊断：跳过Milvus候选召回")

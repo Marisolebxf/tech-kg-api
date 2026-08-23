@@ -130,34 +130,67 @@ class SchemaManagementService:
         page_size: int,
         user_id: str | None,
         include_details: bool = False,
+        is_platform_admin: bool = False,
     ) -> dict[str, Any]:
         user_id = user_id.strip() if user_id else None
         items, total = self._dao.list(kind=kind, keyword=keyword, page=page, page_size=page_size)
         return {
             "items": [
-                self._serialize(item, user_id=user_id, detail=include_details) for item in items
+                self._serialize(
+                    item,
+                    user_id=user_id,
+                    detail=include_details,
+                    is_platform_admin=is_platform_admin,
+                )
+                for item in items
             ],
             "total": total,
             "page": page,
             "pageSize": page_size,
         }
 
-    def get_schema(self, schema_id: str, user_id: str | None) -> dict[str, Any]:
+    def get_schema(
+        self,
+        schema_id: str,
+        user_id: str | None,
+        *,
+        is_platform_admin: bool = False,
+    ) -> dict[str, Any]:
         user_id = user_id.strip() if user_id else None
         definition = self._require_schema(schema_id)
-        return self._serialize(definition, user_id=user_id, detail=True)
+        return self._serialize(
+            definition,
+            user_id=user_id,
+            detail=True,
+            is_platform_admin=is_platform_admin,
+        )
 
-    def topology(self, user_id: str | None) -> dict[str, Any]:
+    def topology(
+        self,
+        user_id: str | None,
+        *,
+        is_platform_admin: bool = False,
+    ) -> dict[str, Any]:
         user_id = user_id.strip() if user_id else None
         definitions = self._dao.list_all()
         nodes = [
-            self._serialize(item, user_id=user_id, detail=False)
+            self._serialize(
+                item,
+                user_id=user_id,
+                detail=False,
+                is_platform_admin=is_platform_admin,
+            )
             for item in definitions
             if item.kind == "entity"
         ]
         edges = [
             {
-                **self._serialize(item, user_id=user_id, detail=False),
+                **self._serialize(
+                    item,
+                    user_id=user_id,
+                    detail=False,
+                    is_platform_admin=is_platform_admin,
+                ),
                 "sourceSchemaId": item.source_schema_id,
                 "targetSchemaId": item.target_schema_id,
             }
@@ -202,11 +235,16 @@ class SchemaManagementService:
         filename: str,
         content_type: str | None,
         script_data: bytes,
+        is_platform_admin: bool = False,
     ) -> dict[str, Any]:
         user_id = user_id.strip()
         if not user_id or len(user_id) > 128:
-            raise SchemaPermissionError("X-User-Id 不能为空且不能超过 128 个字符")
-        definition = self.assert_script_modifiable(schema_id, user_id)
+            raise SchemaPermissionError("登录用户 ID 不能为空且不能超过 128 个字符")
+        definition = self.assert_script_modifiable(
+            schema_id,
+            user_id,
+            is_platform_admin=is_platform_admin,
+        )
         workflow_function = self._validate_script(filename, script_data)
         _, cleanup_succeeded = self._persist_script(
             definition=definition,
@@ -216,19 +254,34 @@ class SchemaManagementService:
             user_id=user_id,
             workflow_function_name=workflow_function,
         )
-        result = self._serialize(self._require_schema(schema_id), user_id=user_id, detail=True)
+        result = self._serialize(
+            self._require_schema(schema_id),
+            user_id=user_id,
+            detail=True,
+            is_platform_admin=is_platform_admin,
+        )
         result["previousScriptCleanupSucceeded"] = cleanup_succeeded
         return result
 
-    def assert_script_modifiable(self, schema_id: str, user_id: str) -> GraphSchemaDefinition:
+    def assert_script_modifiable(
+        self,
+        schema_id: str,
+        user_id: str,
+        *,
+        is_platform_admin: bool = False,
+    ) -> GraphSchemaDefinition:
         """前置校验：schema 存在 + 用户有权限更换脚本。失败抛领域错误（→ HTTP 4xx）。"""
         user_id = user_id.strip()
         if not user_id or len(user_id) > 128:
-            raise SchemaPermissionError("X-User-Id 不能为空且不能超过 128 个字符")
+            raise SchemaPermissionError("登录用户 ID 不能为空且不能超过 128 个字符")
         definition = self._require_schema(schema_id)
-        if definition.is_system and user_id not in _schema_admin_user_ids():
+        if (
+            definition.is_system
+            and not is_platform_admin
+            and user_id not in _schema_admin_user_ids()
+        ):
             raise SchemaPermissionError("只有 Schema 管理员可以更换系统 Schema 脚本")
-        if not definition.is_system and definition.created_by != user_id:
+        if not definition.is_system and not is_platform_admin and definition.created_by != user_id:
             raise SchemaPermissionError("只能更换自己创建的 Schema 脚本")
         return definition
 
@@ -241,6 +294,7 @@ class SchemaManagementService:
         content_type: str | None,
         script_data: bytes,
         llm_client: LLMClient | None = None,
+        is_platform_admin: bool = False,
     ) -> Iterator[dict[str, Any]]:
         """LLM 安全校验 + 保存脚本，按阶段 yield 事件供 SSE 推送。
 
@@ -265,7 +319,11 @@ class SchemaManagementService:
                     "issues": [f"Schema 不存在: {schema_id}"],
                 }
                 return
-            if definition.is_system and user_id not in _schema_admin_user_ids():
+            if (
+                definition.is_system
+                and not is_platform_admin
+                and user_id not in _schema_admin_user_ids()
+            ):
                 yield {
                     "type": "error",
                     "code": "permission",
@@ -274,7 +332,11 @@ class SchemaManagementService:
                     "issues": ["只有 Schema 管理员可以更换系统 Schema 脚本"],
                 }
                 return
-            if not definition.is_system and definition.created_by != user_id:
+            if (
+                not definition.is_system
+                and not is_platform_admin
+                and definition.created_by != user_id
+            ):
                 yield {
                     "type": "error",
                     "code": "permission",
@@ -449,14 +511,20 @@ class SchemaManagementService:
         refreshed = self._require_schema(schema_id)
         return refreshed, cleanup_succeeded
 
-    def delete_schema(self, schema_id: str, user_id: str) -> dict[str, Any]:
+    def delete_schema(
+        self,
+        schema_id: str,
+        user_id: str,
+        *,
+        is_platform_admin: bool = False,
+    ) -> dict[str, Any]:
         user_id = user_id.strip()
         if not user_id:
-            raise SchemaPermissionError("X-User-Id 不能为空")
+            raise SchemaPermissionError("登录用户 ID 不能为空")
         definition = self._require_schema(schema_id)
         if definition.is_system:
             raise SchemaPermissionError("系统原有 Schema 不允许删除")
-        if definition.created_by != user_id:
+        if not is_platform_admin and definition.created_by != user_id:
             raise SchemaPermissionError("只能删除自己创建的 Schema")
         if definition.kind == "entity":
             references = self._dao.referenced_relation_names(schema_id)
@@ -595,7 +663,12 @@ class SchemaManagementService:
         return definition
 
     def _serialize(
-        self, definition: GraphSchemaDefinition, *, user_id: str | None, detail: bool
+        self,
+        definition: GraphSchemaDefinition,
+        *,
+        user_id: str | None,
+        detail: bool,
+        is_platform_admin: bool = False,
     ) -> dict[str, Any]:
         result: dict[str, Any] = {
             "id": definition.id,
@@ -629,7 +702,9 @@ class SchemaManagementService:
             "ddlError": definition.ddl_error,
             "ddlExecutedAt": _iso(definition.ddl_executed_at),
             "canDelete": bool(
-                user_id and not definition.is_system and definition.created_by == user_id
+                user_id
+                and not definition.is_system
+                and (is_platform_admin or definition.created_by == user_id)
             ),
         }
         if detail:

@@ -7,12 +7,13 @@ import json
 from typing import Annotated, Any
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
 from application.schema_management import SchemaManagementApplication
+from biz.dependencies.auth import CurrentAdmin
 from biz.schemas.common import ApiResponse
 from biz.schemas.schema_management import EntitySchemaCreate, RelationSchemaCreate
 from infra.mysql import get_session
@@ -68,55 +69,67 @@ def list_source_tables(session: Annotated[Session, Depends(get_session)]) -> Api
 
 @router.get("/schemas", response_model=ApiResponse)
 def list_schemas(
+    admin: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
     kind: Annotated[str | None, Query(pattern="^(entity|relation)$")] = None,
     keyword: Annotated[str | None, Query(max_length=128)] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
     include_details: Annotated[bool, Query(alias="includeDetails")] = False,
-    user_id: Annotated[str | None, Header(alias="X-User-Id", max_length=128)] = None,
 ) -> ApiResponse:
     data = _application(session).list_schemas(
         kind=kind,
         keyword=keyword.strip() if keyword else None,
         page=page,
         page_size=page_size,
-        user_id=user_id,
+        user_id=admin.user_id,
         include_details=include_details,
+        is_platform_admin=admin.is_admin,
     )
     return ApiResponse(data=data)
 
 
 @router.get("/schemas/topology", response_model=ApiResponse)
 def get_schema_topology(
+    admin: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
-    user_id: Annotated[str | None, Header(alias="X-User-Id", max_length=128)] = None,
 ) -> ApiResponse:
-    return ApiResponse(data=_application(session).topology(user_id))
+    return ApiResponse(
+        data=_application(session).topology(
+            admin.user_id,
+            is_platform_admin=admin.is_admin,
+        )
+    )
 
 
 @router.get("/schemas/{schema_id}", response_model=ApiResponse)
 def get_schema_detail(
     schema_id: str,
+    admin: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
-    user_id: Annotated[str | None, Header(alias="X-User-Id", max_length=128)] = None,
 ) -> ApiResponse:
     try:
-        return ApiResponse(data=_application(session).get_schema(schema_id, user_id))
+        return ApiResponse(
+            data=_application(session).get_schema(
+                schema_id,
+                admin.user_id,
+                is_platform_admin=admin.is_admin,
+            )
+        )
     except SchemaManagementError as exc:
         _raise_domain_error(exc)
 
 
 @router.post("/schemas/entities", response_model=ApiResponse, status_code=201)
 def create_entity_schema(
+    admin: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
-    user_id: Annotated[str, Header(alias="X-User-Id", min_length=1, max_length=128)],
     payload: EntitySchemaCreate,
 ) -> ApiResponse:
     try:
         data = _application(session).create_entity(
             payload=payload.model_dump(),
-            user_id=user_id,
+            user_id=admin.user_id,
         )
         return ApiResponse(data=data, msg="实体 Schema 创建成功")
     except SchemaManagementError as exc:
@@ -125,14 +138,14 @@ def create_entity_schema(
 
 @router.post("/schemas/relations", response_model=ApiResponse, status_code=201)
 def create_relation_schema(
+    admin: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
-    user_id: Annotated[str, Header(alias="X-User-Id", min_length=1, max_length=128)],
     payload: RelationSchemaCreate,
 ) -> ApiResponse:
     try:
         data = _application(session).create_relation(
             payload=payload.model_dump(),
-            user_id=user_id,
+            user_id=admin.user_id,
         )
         return ApiResponse(data=data, msg="关系 Schema 创建成功")
     except SchemaManagementError as exc:
@@ -142,11 +155,15 @@ def create_relation_schema(
 @router.delete("/schemas/{schema_id}", response_model=ApiResponse)
 def delete_schema(
     schema_id: str,
+    admin: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
-    user_id: Annotated[str, Header(alias="X-User-Id", min_length=1, max_length=128)],
 ) -> ApiResponse:
     try:
-        data = _application(session).delete_schema(schema_id, user_id)
+        data = _application(session).delete_schema(
+            schema_id,
+            admin.user_id,
+            is_platform_admin=admin.is_admin,
+        )
         return ApiResponse(data=data, msg="Schema 删除成功")
     except SchemaManagementError as exc:
         _raise_domain_error(exc)
@@ -155,14 +172,15 @@ def delete_schema(
 @router.put("/schemas/{schema_id}/script", response_model=ApiResponse)
 def replace_schema_script(
     schema_id: str,
+    admin: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
-    user_id: Annotated[str, Header(alias="X-User-Id", min_length=1, max_length=128)],
     script: Annotated[UploadFile, File(...)],
 ) -> ApiResponse:
     try:
         data = _application(session).replace_script(
             schema_id=schema_id,
-            user_id=user_id,
+            user_id=admin.user_id,
+            is_platform_admin=admin.is_admin,
             filename=script.filename or "",
             content_type=script.content_type,
             script_data=_read_script(script),
@@ -182,8 +200,8 @@ _SENTINEL = object()
 @router.post("/schemas/{schema_id}/script/verify")
 async def verify_and_save_script(
     schema_id: str,
+    admin: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
-    user_id: Annotated[str, Header(alias="X-User-Id", min_length=1, max_length=128)],
     script: Annotated[UploadFile, File(...)],
 ) -> StreamingResponse:
     """上传脚本 → LLM 安全校验 → 保存，以 SSE 流式回传进度。
@@ -201,7 +219,8 @@ async def verify_and_save_script(
         try:
             for event in app.verify_and_save_script(
                 schema_id=schema_id,
-                user_id=user_id,
+                user_id=admin.user_id,
+                is_platform_admin=admin.is_admin,
                 filename=script.filename or "",
                 content_type=script.content_type,
                 script_data=script_data,

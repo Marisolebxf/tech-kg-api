@@ -100,6 +100,37 @@ def test_pair_not_alumni():
     assert resp["items"] == []
 
 
+def test_pair_education_stage_accepts_multiple_values():
+    a = _node(
+        "S1",
+        {
+            "name_zh": "甲",
+            "education_background_institution_zh": "北京大学",
+            "education_background_degree_zh": "博士",
+        },
+    )
+    b = _node(
+        "S2",
+        {
+            "name_zh": "乙",
+            "education_background_institution_zh": "北京大学",
+            "education_background_degree_zh": "硕士",
+        },
+    )
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: {"S1": a, "S2": b}.get(str(nid)))
+    graph.get_node_edges = MagicMock(return_value=[])
+    graph._settings = SimpleNamespace(space="dev")
+
+    resp = _svc(graph).query(
+        expert_id="S1",
+        target_expert_id="S2",
+        education_stage="学士,硕士",
+    )
+
+    assert resp["total"] == 1
+
+
 def test_list_finds_alumni_and_truncation_meta():
     source = _node(
         "S1",
@@ -174,7 +205,7 @@ def test_no_education_returns_zero():
 def test_missing_expert_raises():
     graph = MagicMock()
     graph.get_node = MagicMock(return_value=None)
-    with pytest.raises(KeyError, match="不存在"):
+    with pytest.raises(KeyError, match="未找到专家"):
         _svc(graph).query(expert_id="NO")
 
 

@@ -192,7 +192,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         except Exception:
             node = None
         if node is None:
-            raise KeyError(f"{kind}不存在: {node_id}")
+            raise KeyError(f"未找到{kind}: {node_id}")
         return node
 
     @staticmethod
@@ -331,7 +331,11 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             return None
 
         school_norm = self._norm_text(school) if school else ""
-        stage_norm = self._norm_text(education_stage) if education_stage else ""
+        stage_norms = {
+            self._norm_text(value)
+            for value in re.split(r"[,，/、;；|\s]+", education_stage or "")
+            if self._norm_text(value)
+        }
 
         shared_institutions: list[str] = []
         match_summary: list[dict[str, str | None]] = []
@@ -361,7 +365,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 c_deg_raw = c.get("degree") or ""
                 s_deg = self._norm_text(s_deg_raw)
                 c_deg = self._norm_text(c_deg_raw)
-                if stage_norm and stage_norm not in s_deg and stage_norm not in c_deg:
+                if stage_norms and not any(
+                    stage in s_deg or stage in c_deg for stage in stage_norms
+                ):
                     continue
 
                 if display and display not in shared_institutions:

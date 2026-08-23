@@ -36,6 +36,10 @@ import {
   analyzeExpertIndirectRelation,
   type ExpertIndirectRelationResponse,
 } from '../../../api/expertIndirectRelation'
+import {
+  queryExpertColleagueRelation,
+  type ExpertColleagueRelationResponse,
+} from '../../../api/expertColleagueRelation'
 import iconInfo from '../../../assets/icons/icon-info.svg'
 import KgGraphCanvas from '../../../components/kg-graph-canvas.vue'
 import { useToast } from '../../../composables/use-toast'
@@ -129,25 +133,76 @@ const hasParameterErrors = computed(
   () => Object.keys(parameterErrors.value).length > 0,
 )
 const achievementTypeOptions = [
+  { label: '全部', value: 'all' },
   { label: '论文', value: 'paper' },
   { label: '专利', value: 'patent' },
   { label: '项目', value: 'project' },
 ] as const
-const educationStageOptions = ['学士', '硕士', '博士'] as const
-const achievementTypeSelection = computed<
-  Array<'paper' | 'patent' | 'project'>
->({
-  get: () =>
-    (parameterValues.value.achievementTypes || '')
+type AchievementTypeOption = (typeof achievementTypeOptions)[number]['value']
+const allAchievementTypes = ['paper', 'patent', 'project'] as const
+const educationStageOptions = [
+  { label: '全部', value: 'all' },
+  { label: '学士', value: '学士' },
+  { label: '硕士', value: '硕士' },
+  { label: '博士', value: '博士' },
+] as const
+type EducationStageOption = (typeof educationStageOptions)[number]['value']
+const allEducationStages = ['学士', '硕士', '博士'] as const
+const educationStageSelection = computed<EducationStageOption[]>({
+  get: (): EducationStageOption[] => {
+    const selected = (parameterValues.value.educationStage || '')
+      .split(',')
+      .filter(
+        (value): value is '学士' | '硕士' | '博士' =>
+          value === '学士' || value === '硕士' || value === '博士',
+      )
+    return allEducationStages.every((value) => selected.includes(value))
+      ? ['all']
+      : selected
+  },
+  set: (values: EducationStageOption[]) => {
+    const current = (parameterValues.value.educationStage || '')
+      .split(',')
+      .filter(Boolean)
+    const currentlyAll = allEducationStages.every((value) =>
+      current.includes(value),
+    )
+    let selected: readonly string[] = values.filter((value) => value !== 'all')
+    if (values.includes('all') && !currentlyAll) {
+      selected = allEducationStages
+    }
+    parameterValues.value = {
+      ...parameterValues.value,
+      educationStage: selected.join(','),
+    }
+  },
+})
+const achievementTypeSelection = computed<AchievementTypeOption[]>({
+  get: (): AchievementTypeOption[] => {
+    const selected = (parameterValues.value.achievementTypes || '')
       .split(',')
       .filter(
         (value): value is 'paper' | 'patent' | 'project' =>
           value === 'paper' || value === 'patent' || value === 'project',
-      ),
-  set: (values) => {
+      )
+    return allAchievementTypes.every((value) => selected.includes(value))
+      ? ['all']
+      : selected
+  },
+  set: (values: AchievementTypeOption[]) => {
+    const current = (parameterValues.value.achievementTypes || '')
+      .split(',')
+      .filter(Boolean)
+    const currentlyAll = allAchievementTypes.every((value) =>
+      current.includes(value),
+    )
+    let selected: readonly string[] = values.filter((value) => value !== 'all')
+    if (values.includes('all') && !currentlyAll) {
+      selected = allAchievementTypes
+    }
     parameterValues.value = {
       ...parameterValues.value,
-      achievementTypes: values.join(','),
+      achievementTypes: selected.join(','),
     }
   },
 })
@@ -167,6 +222,7 @@ const expertDirectError = ref<string | null>(null)
 let expertDirectAbortController: AbortController | null = null
 const expertIndirectResponse = ref<ExpertIndirectRelationResponse | null>(null)
 const expertIndirectError = ref<string | null>(null)
+const expertColleagueResponse = ref<ExpertColleagueRelationResponse | null>(null)
 const isLiveAlumni = computed(() => props.moduleInfo.key === 'expert-alumni')
 const isLiveCoop = computed(
   () => props.moduleInfo.key === 'two-point-achievement',
@@ -488,8 +544,8 @@ function buildLiveGraph(
   res: Record<string, any>,
   key: string,
 ): { nodes: GraphNodeData[]; edges: GraphEdgeData[] } | null {
-  const data = res?.data
-  // 响应无 data（404/500 业务错误）时返回空图，让画板置空而非回退 mock preset
+  const data = key === 'paper-cooperation' ? (res?.data ?? res) : res?.data
+  // 响应无有效数据时返回空图，让画板置空而非回退 mock preset
   if (!data) return { nodes: [], edges: [] }
   const nodes: GraphNodeData[] = []
   const edges: GraphEdgeData[] = []
@@ -711,9 +767,9 @@ const liveModuleGraph = computed(() => {
     return mapLiveGraph(data.graph?.nodes, data.graph?.edges)
   }
   if (isLiveColleague.value) {
-    const data = liveResponse.value?.data
+    const data = expertColleagueResponse.value?.data
     const graph = data?.graph
-    if (!graph?.nodes?.length) return null
+    if (!data || !graph?.nodes?.length) return null
     const otherNodes = graph.nodes.filter(
       (node: any) =>
         node.id !== data.expert?.id &&
@@ -963,7 +1019,7 @@ function buildLiveSummary(
   res: Record<string, any>,
   key: string,
 ): Record<string, string> {
-  const d = res?.data
+  const d = res?.data ?? res
   if (!d) return {}
   const out: Record<string, string> = {}
   if (key === 'enterprise-relation') {
@@ -1094,7 +1150,21 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
   }
   if (isLiveColleague.value) {
     const data = liveResponse.value?.data
-    if (!data) return [{ label: '查询状态', value: '等待执行' }]
+    if (!data) {
+      return [
+        { label: '专家 A', value: '—' },
+        { label: '核心专家机构', value: '—' },
+        { label: '专家 B', value: '—' },
+        { label: '共同机构', value: '—' },
+        { label: '所属部门/团队', value: '—' },
+        { label: '关系生效时段', value: '—' },
+        { label: '任职重叠时间', value: '—' },
+        { label: '共同工作内容', value: '—' },
+        { label: '协作场景', value: '—' },
+        { label: '同事期间成果', value: '—' },
+        { label: '关系判定', value: '—' },
+      ]
+    }
     const summary = data.summary || {}
     return [
       { label: '专家 A', value: summary.coreExpert || '—' },
@@ -1294,6 +1364,17 @@ const apiResultJson = computed(() => {
     return JSON.stringify({ error: expertIndirectError.value }, null, 2)
   }
   if (isExpertIndirect.value) {
+    return JSON.stringify(
+      { message: running.value ? '查询中...' : '暂无查询结果' },
+      null,
+      2,
+    )
+  }
+  if (isLiveCoop.value || isLiveAlumni.value) {
+    const resp = (liveApiPayload.value as { response?: unknown } | null)?.response
+    if (resp) {
+      return JSON.stringify(resp, null, 2)
+    }
     return JSON.stringify(
       { message: running.value ? '查询中...' : '暂无查询结果' },
       null,
@@ -1599,8 +1680,9 @@ watch(
     expertDirectError.value = null
     expertIndirectResponse.value = null
     expertIndirectError.value = null
+    expertColleagueResponse.value = null
     resetParameters({ notify: false })
-    if (isLiveModule.value) {
+    if (isLiveModule.value && !isLiveColleague.value) {
       void handleRun()
     }
   },
@@ -1669,6 +1751,7 @@ function resetParameters({ notify = true }: { notify?: boolean } = {}) {
   paramResetToken.value += 1
   if (isLiveModule.value) {
     liveResponse.value = null
+    expertColleagueResponse.value = null
     liveAlumniResult.value = null
     liveCoopResult.value = null
     liveApiPayload.value = null
@@ -1899,9 +1982,14 @@ async function handleRun() {
       const expertAId = parameterValues.value.expert_a_id?.trim()
       const expertBId = parameterValues.value.expert_b_id?.trim()
       if (!expertAId || !expertBId) {
-        showToast('请填写专家 A 和专家 B', 'warning')
+        parameterErrors.value = {
+          ...(!expertAId ? { expert_a_id: '请输入专家 A' } : {}),
+          ...(!expertBId ? { expert_b_id: '请输入专家 B' } : {}),
+        }
+        showToast('请完善必填项后再执行', 'warning')
         return
       }
+      parameterErrors.value = {}
       const body = {
         expert_a_id: expertAId,
         expert_b_id: expertBId,
@@ -1910,12 +1998,9 @@ async function handleRun() {
         limit: 1,
         offset: 0,
       }
-      const res = (await invokeKgService(
-        props.moduleInfo.endpoint,
-        body,
-        60000,
-      )) as Record<string, any>
-      liveResponse.value = res
+      const res = await queryExpertColleagueRelation(body)
+      expertColleagueResponse.value = res
+      liveResponse.value = res as unknown as Record<string, any>
       liveApiPayload.value = { request: body, response: res }
       if (
         res?.success === false ||
@@ -2342,18 +2427,21 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         </ElSelect>
         <ElSelect
           v-else-if="field.name === 'educationStage' && isLiveAlumni"
-          v-model="parameterValues[field.name]"
+          v-model="educationStageSelection"
           class="alumni-stage-select"
+          multiple
+          collapse-tags
+          :max-collapse-tags="1"
           clearable
-          placeholder="请选择教育阶段"
+          placeholder="选择教育阶段"
           aria-label="教育阶段"
           @update:model-value="clearParameterError(field.name)"
         >
           <ElOption
             v-for="stage in educationStageOptions"
-            :key="stage"
-            :label="stage"
-            :value="stage"
+            :key="stage.label"
+            :label="stage.label"
+            :value="stage.value"
           />
         </ElSelect>
         <ElConfigProvider
@@ -2438,6 +2526,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         <KgGraphCanvas
           :nodes="displayedGraphNodes"
           :edges="displayedGraphEdges"
+          :node-shape="isLiveColleague ? 'circle' : 'rect'"
           :selected-node-id="selectedGraphNodeId"
           :selected-edge-id="selectedGraphEdgeId"
           show-edge-label-button
@@ -2903,6 +2992,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .cooperation-month-picker {
   width: 100% !important;
+  min-width: 0;
 }
 
 .cooperation-type-select {
@@ -2967,7 +3057,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .service-console--cooperation {
-  grid-template-columns: 210px minmax(750px, 1fr) 190px;
+  grid-template-columns: 210px minmax(0, 1fr) 190px;
   align-items: start;
 }
 
@@ -3011,11 +3101,11 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .service-console--cooperation .service-console__params {
   grid-template-columns:
-    minmax(132px, 1fr)
-    minmax(132px, 1fr)
-    150px
-    minmax(132px, 1fr)
-    minmax(132px, 1fr);
+    minmax(0, 1fr)
+    minmax(0, 1fr)
+    minmax(0, 150px)
+    minmax(0, 1fr)
+    minmax(0, 1fr);
   align-items: end;
 }
 
@@ -3023,6 +3113,8 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   justify-content: center;
   min-width: 190px;
   margin-top: 26px;
+  position: relative;
+  z-index: 2;
 }
 
 .business-service__main {

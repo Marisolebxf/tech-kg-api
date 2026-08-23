@@ -18,9 +18,11 @@ import {
   type WorkflowExecution,
   type WorkflowDefinition,
 } from '../../api/workflowOperations'
+import { useAuthStore } from '../../stores/auth'
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 const initialModule = ['数据处理', '图谱构建'].includes(String(route.query.module)) ? String(route.query.module) : '数据处理'
 const moduleFilter = ref(initialModule)
 const statusFilter = ref(String(route.query.status || '全部执行状态'))
@@ -33,7 +35,7 @@ const scheduleFrequency = ref('每天')
 const scheduleTime = ref('02:00')
 const updateNotice = ref('')
 const loading = ref(false)
-const canManageUpdates = true
+const canManageUpdates = computed(() => authStore.isAdmin)
 const selectedChange = ref<SourceUpdate | null>(null)
 const changeRows = ref<SourceUpdate[]>([])
 const processingInstances = ref<ProcessingInstance[]>([])

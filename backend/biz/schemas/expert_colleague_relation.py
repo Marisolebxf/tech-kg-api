@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -67,7 +67,6 @@ class ExpertColleagueRelationRequest(BaseModel):
     )
     limit: int = Field(default=20, ge=1, le=50)
     offset: int = Field(default=0, ge=0, description="分页偏移量。")
-    space: Literal["dev"] = Field(default="dev", exclude=True, description="服务端固定 dev。")
 
     @field_validator("expertId", "targetExpertId")
     @classmethod

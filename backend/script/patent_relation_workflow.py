@@ -58,13 +58,16 @@ def workflow(payload: dict) -> dict:
     """主分支工作流入口：抽取并写入专利相关事实关系。
 
     payload（默认值与 ``load`` 签名一致）:
-      apply (bool, 默认 False) —— False 只分析不写图；True 实际写入 dev。
+      apply (bool, 默认 False) —— False 只分析不写图；True 写入 TRS_GRAPH_SPACE。
       replace (bool, 默认 False) —— True 先删除既有受管边再重写（需 apply=True）。
       use_vector (bool, 默认 True) —— 精确规则未命中时使用Milvus混合召回。
       vector_threshold (float, 默认 0.88)
       vector_margin (float, 默认 0.08)
       vector_top_k (int, 默认 20)
       vector_state_dir (str|None, 默认 None) —— Organization BM25状态目录。
+
+    图数据库连接和图空间只读取 ``TRS_GRAPH_*`` 环境变量；Milvus连接只读取
+    ``MILVUS_*`` 环境变量，均不接受 payload 覆盖。
     """
     if not isinstance(payload, dict):
         raise ValueError(f"payload 必须是 dict，收到: {type(payload).__name__}")
@@ -95,7 +98,6 @@ def workflow(payload: dict) -> dict:
         "vector_top_k": top_k_value,
         "vector_state_dir": Path(vector_state_dir) if vector_state_dir else None,
     }
-
     try:
         from script.load_patent_relations import load
 

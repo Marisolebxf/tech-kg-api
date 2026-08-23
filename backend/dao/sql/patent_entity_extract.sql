@@ -44,6 +44,7 @@ LEFT JOIN (
   FROM dwd_patent_family
   GROUP BY patent_id
 ) f ON f.patent_id = p.patent_id
-WHERE p.id > %s
-ORDER BY p.id
+WHERE p.id REGEXP '^[0-9]+$'
+  AND CAST(p.id AS UNSIGNED) > %s
+ORDER BY CAST(p.id AS UNSIGNED)
 LIMIT %s

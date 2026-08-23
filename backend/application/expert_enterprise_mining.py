@@ -16,3 +16,6 @@ class ExpertEnterpriseMiningApplication:
 
     def mine(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._service.mine(payload)
+
+    def query_existing(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._service.query_existing(payload)

@@ -57,7 +57,7 @@
 | `min_confidence` | float | 否 | 0 | 最低置信度，0–1 |
 | `limit` | int | 否 | 20 | 返回同事数量上限，取值范围 1–50 |
 | `offset` | int | 否 | 0 | 分页偏移量，必须大于等于 0 |
-| `space` | — | — | — | 不对普通调用方开放，查询和写入均由服务端固定为 `dev` |
+| 图空间 | — | — | — | 不接受请求参数；查询和写入统一读取服务端 `TRS_GRAPH_SPACE` 环境变量 |
 
 `expertId` 解析顺序（`FastAPIGraphSearchGateway.resolve_person`）：
 

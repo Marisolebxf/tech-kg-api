@@ -109,6 +109,8 @@ def test_entity_sql_is_external_and_complete():
     assert SELECT_SQL.count("FROM dwd_patent_") == 5
     assert SELECT_SQL.count("GROUP BY patent_id") == 5
     assert "p.id AS source_row_id" in SELECT_SQL
-    assert "WHERE p.id > %s" in SELECT_SQL
+    assert "WHERE p.id REGEXP '^[0-9]+$'" in SELECT_SQL
+    assert "CAST(p.id AS UNSIGNED) > %s" in SELECT_SQL
+    assert "ORDER BY CAST(p.id AS UNSIGNED)" in SELECT_SQL
     assert "LIMIT %s" in SELECT_SQL
     assert "OFFSET" not in SELECT_SQL

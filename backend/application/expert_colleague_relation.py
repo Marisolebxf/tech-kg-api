@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-import os
 import threading
 import time
 from datetime import UTC, datetime
@@ -15,9 +14,6 @@ from infra.graph_db import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
 from service.expert_colleague_relation import ExpertColleagueRelationService
 
-# 业务图空间,默认 dev;设 TRS_GRAPH_SPACE=test 即切到 test(同事关系查询/写入均用此空间)
-SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
-
 # 60s 进程内读结果缓存：service.query 的图查询读结果可复用；写图副作用 _persist_relations
 # 不缓存，每次照常执行（COLLEAGUE 边仍更新，persistence 计数每次现算）。
 _READ_CACHE_TTL = 60.0
@@ -28,7 +24,7 @@ _read_cache_lock = threading.Lock()
 def clear_caches() -> None:
     """清空进程内缓存（测试隔离用）。"""
     _read_cache.clear()
-    # 同步清 service 层结果缓存（压测稳态缓存），避免用例间串味
+    # 同步清 service 层结果缓存(perf 压测稳态缓存),避免用例间串味
     from service.expert_colleague_relation import clear_caches as _svc_clear
 
     _svc_clear()
@@ -162,8 +158,9 @@ class ExpertColleagueRelationApplication:
         return self._service.describe()
 
     async def query(self, client: AsyncClient, **kwargs: Any) -> dict[str, Any]:
-        # 查询和写入都强制使用 SPACE(读 TRS_GRAPH_SPACE),调用方不能切换业务图空间。
-        kwargs["space"] = SPACE
+        # 图空间只由服务端 TRS_GRAPH_SPACE 环境变量决定，不接受请求覆盖。
+        space = TRSGraphSettings.from_env().space
+        kwargs["space"] = space
         cache_key = _read_cache_key(kwargs)
         with _read_cache_lock:
             entry = _read_cache.get(cache_key)
@@ -183,7 +180,7 @@ class ExpertColleagueRelationApplication:
 
     @staticmethod
     def _persist_relations(data: dict[str, Any]) -> dict[str, Any]:
-        settings = TRSGraphSettings.from_env().model_copy(update={"space": SPACE})
+        settings = TRSGraphSettings.from_env()
         graph = TRSGraphClient(settings)
         graph.connect()
         created = updated = 0
@@ -244,7 +241,7 @@ class ExpertColleagueRelationApplication:
         finally:
             graph.close()
         return {
-            "space": SPACE,
+            "space": settings.space,
             "edgeType": "COLLEAGUE",
             "created": created,
             "updated": updated,

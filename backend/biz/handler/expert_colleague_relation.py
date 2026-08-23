@@ -34,7 +34,7 @@ def _cache_key(body: ExpertColleagueRelationRequest) -> str:
     return (
         f"{body.expertId}|{body.targetExpertId}|{body.organization}|{body.department}|"
         f"{overlap}|{body.teamOrProject}|{tuple(body.achievementTypes or [])}|"
-        f"{body.minConfidence}|{body.limit}|{body.offset}|{body.space}"
+        f"{body.minConfidence}|{body.limit}|{body.offset}"
     )
 
 
@@ -75,7 +75,6 @@ async def query_expert_colleague_relation(
                 min_confidence=body.minConfidence,
                 limit=body.limit,
                 offset=body.offset,
-                space=body.space,
             )
         validated = ExpertColleagueRelationData.model_validate(data)
         resp = ApiResponse(data=validated.model_dump())

@@ -73,8 +73,8 @@ def workflow(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("stage must be all, entity or relation")
     if scope not in {"all", "domestic", "foreign"}:
         raise ValueError("scope must be all, domestic or foreign")
-    if space != "dev":
-        raise ValueError("organization workflow currently supports only the dev graph space")
+    if space not in {"dev", "test"} and not space.startswith("org_etl_test_"):
+        raise ValueError("organization workflow supports dev, test or org_etl_test_ spaces only")
     os.environ["TRS_GRAPH_SPACE"] = space
 
     from infra.graph_db.client import TRSGraphClient

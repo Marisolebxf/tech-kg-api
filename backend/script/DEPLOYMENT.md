@@ -108,8 +108,6 @@ cron 示例:`0 3 * * * cd backend && TRS_GRAPH_SPACE=<space> PYTHONPATH=. .venv/
 - 水位文件 `backend/script/.etl_watermark/<域>.txt`：整批成功后才前进、原子写；丢失/损坏→退化全量（只慢不丢）。水位别删；删了即退化全量。
 
 > Person 数说明:`dwd_scholar` 仅 ~2163 条 status=1 学者(非 3.3 万);学者 ETL 全量写入这 2163;图中 Person 总数 = 学者 + 机构域法人/股东/控制人等。dev Person 多是因源库或机构域行更多,非学者 ETL 漏写。
-- cron 示例：`0 3 * * * cd backend && TRS_GRAPH_SPACE=<space> PYTHONPATH=. .venv/bin/python -m script.load_scholar_entities --mode incremental`
-- **水位别删**；删了即退化全量。
 
 ## 7. 排错
 

@@ -96,12 +96,12 @@ curl -X POST http://127.0.0.1:8000/api/v1/kg-service/industry-node-top-events \
 ```bash
 .venv/bin/python -m script.load_scholar_entities --mode incremental          # 水位域:scholar(dwd_scholar.update_time)
 .venv/bin/python -m script.organization_entity_etl load --full --write --mode incremental   # 水位域:org_entity(各表 updated_time;无该列的退化全量)
+.venv/bin/python -m script.organization_relation_etl --write --mode incremental            # 水位域:org_relation(治理/风险/资讯边,各 spec 源表 updated_time)
 ```
 
-未接 `--mode`(数据较静态或抽取逻辑为多 spec 专有,暂走全量,重跑幂等):
-- `organization_relation_etl`(治理/风险/资讯边——多 spec 专有抽取,接水位需改各 spec SQL,后续)
+未接 `--mode`(数据较静态或无 argparse,暂走全量,重跑幂等):
 - `load_industry_chain_graph`(产业链节点,数据静态;无 argparse,暂全量)
-- `load_project_graph`(仍 merge_node+dev-gate,见 §6 排错)
+- `load_project_graph`(仍 merge_node+dev-gate,见 §7 排错)
 
 cron 示例:`0 3 * * * cd backend && TRS_GRAPH_SPACE=<space> PYTHONPATH=. .venv/bin/python -m script.load_scholar_entities --mode incremental`
 

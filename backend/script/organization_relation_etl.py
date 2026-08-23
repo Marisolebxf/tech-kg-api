@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from infra.gkx_element import gkx_element_read_session
 from infra.graph_db import TRSGraphClient, get_trs_graph_client
 from infra.milvus import OrganizationMilvusStore
+from script.etl_watermark import Watermark
 from script.organization_etl_common import (
     DEFAULT_SPACE,
     DOMAIN_TABLE_BY_NAME,
@@ -978,9 +979,20 @@ def iter_source_rows(
     spec: RelationSpec,
     *,
     max_records: int | None,
+    since: str | None = None,
 ) -> Iterator[dict[str, Any]]:
-    sql = f"SELECT * FROM `{spec.source_table}` ORDER BY 1"
+    # 增量:表有 updated_time/update_time 列时按水位过滤;无则退化全量(安全)
+    ts_col = None
+    if since:
+        cols = source_columns(session, spec.source_table)
+        ts_col = next((c for c in ("updated_time", "update_time") if c in cols), None)
+    if ts_col:
+        sql = f"SELECT * FROM `{spec.source_table}` WHERE `{ts_col}` > :since ORDER BY 1"
+    else:
+        sql = f"SELECT * FROM `{spec.source_table}` ORDER BY 1"
     params: dict[str, Any] = {}
+    if ts_col:
+        params["since"] = since
     if max_records is not None:
         sql += " LIMIT :limit"
         params["limit"] = max_records
@@ -1270,6 +1282,7 @@ def run_etl(
     resolver: Any | None = None,
     graph: TRSGraphClient | None = None,
     session: Session | None = None,
+    mode: str = "full",
 ) -> dict[str, RelationStats]:
     """Run selected relation extractors and return per-table statistics."""
     if domestic_only and foreign_only:
@@ -1326,6 +1339,11 @@ def run_etl(
         labels = set(graph.labels())
         edge_types = set(graph.edge_types())
         results: dict[str, RelationStats] = {}
+        since: str | None = None
+        if mode == "incremental":
+            since = Watermark.for_domain("org_relation").read()
+            logger.info("incremental: org_relation watermark=%s", since)
+        max_ts = ""
 
         for spec in specs:
             stats = RelationStats()
@@ -1344,8 +1362,12 @@ def run_etl(
                 session,
                 spec,
                 max_records=max_records,
+                since=since,
             ):
                 stats.queried += 1
+                _ts = row.get("updated_time") or row.get("update_time")
+                if _ts and str(_ts) > max_ts:
+                    max_ts = str(_ts)
                 if is_virtual_source_row(row):
                     stats.skipped += 1
                     logger.info("skip synthetic relation source row table=%s", spec.source_table)
@@ -1412,6 +1434,10 @@ def run_etl(
                 spec.source_table,
                 compact_json(asdict(stats)),
             )
+        # 整批成功后前进水位(失败抛异常→finally 跑但不 return→不前进→重跑幂等)
+        if mode == "incremental" and not dry_run and max_ts:
+            Watermark.for_domain("org_relation").advance_if_higher(max_ts)
+            logger.info("org_relation watermark advanced to %s", max_ts)
         return results
     finally:
         if milvus_store is not None:
@@ -1440,6 +1466,12 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--write", dest="dry_run", action="store_false")
     parser.set_defaults(dry_run=True)
     parser.add_argument("--space", default=DEFAULT_SPACE)
+    parser.add_argument(
+        "--mode",
+        choices=("full", "incremental"),
+        default="full",
+        help="full=全量;incremental=只灌 updated_time>水位 的行(读 script/.etl_watermark/org_relation.txt)",
+    )
     parser.add_argument("--ingest-batch")
     parser.add_argument(
         "--alignment-mode",
@@ -1492,6 +1524,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             alignment_top_k=args.alignment_top_k,
             alignment_dense_dimension=args.alignment_dense_dimension,
             alignment_audit_path=alignment_audit,
+            mode=args.mode,
         )
     summary = {table: asdict(stats) for table, stats in results.items()}
     logger.info("organization relation ETL summary=%s", compact_json(summary))

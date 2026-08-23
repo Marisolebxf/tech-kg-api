@@ -333,7 +333,7 @@ class WorkflowRepository:
                 "createdAt": _now(),
             }
             connection.execute(
-                """INSERT INTO workflow_definitions(id, workflow_type, category, active, payload)
+                """INSERT OR IGNORE INTO workflow_definitions(id, workflow_type, category, active, payload)
                    VALUES (?, ?, ?, 1, ?)""",
                 (definition_id, workflow_type, category, _json(payload)),
             )

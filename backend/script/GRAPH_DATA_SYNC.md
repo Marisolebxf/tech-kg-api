@@ -97,6 +97,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/kg-service/industry-node-top-events \
 .venv/bin/python -m script.load_scholar_entities --mode incremental          # 水位域:scholar(dwd_scholar.update_time)
 .venv/bin/python -m script.organization_entity_etl load --full --write --mode incremental   # 水位域:org_entity(各表 updated_time;无该列的退化全量)
 .venv/bin/python -m script.organization_relation_etl --write --mode incremental            # 水位域:org_relation(治理/风险/资讯边,各 spec 源表 updated_time)
+.venv/bin/python -m script.load_paper_journal_graph --mode incremental      # 水位域:paper_journal(zh/en_paper/author 的 updated_time;journal/refs/cites/reports 增量时全量)
 ```
 
 未接 `--mode`(数据较静态或无 argparse,暂走全量,重跑幂等):

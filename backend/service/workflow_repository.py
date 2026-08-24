@@ -1,16 +1,36 @@
-"""任务中心、人工审核与工作流定义的轻量持久化仓库。"""
+"""任务中心、人工审核与工作流定义的控制面仓库（temporal-mysql 的 techkg_control 库）。
+
+原 SQLite 实现已迁至 SQLAlchemy ORM + MySQL（详见 service/workflow_models.py、
+infra/workflow_mysql.py）。保留全部 public 方法签名；seed/`_steps` 等静态
+数据方法原样保留，仅把 `_seed` 的 INSERT 语句换成 session.add。
+
+ORM 模型不带 workflow_type UNIQUE 约束（kg.custom.python 多定义共享同一
+workflow_type，原 SQLite 实现的 _remove_workflow_type_unique_constraint 即为
+移除此约束，新 schema 直接不建）。
+"""
 
 from __future__ import annotations
 
 import json
 import os
-import sqlite3
-import threading
-from collections.abc import Iterable, Iterator
-from contextlib import contextmanager
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
+
+from sqlalchemy import Engine, select
+from sqlalchemy.orm import Session
+
+from infra.workflow_mysql import workflow_mysql_client, workflow_session_scope
+from service.workflow_models import (
+    Base,
+    WorkflowBatch,
+    WorkflowDefinition,
+    WorkflowExecution,
+    WorkflowReview,
+    WorkflowSchedule,
+    WorkflowSetting,
+    WorkflowSourceUpdate,
+    WorkflowTask,
+)
 
 
 def _now() -> str:
@@ -22,138 +42,70 @@ def _json(value: Any) -> str:
 
 
 class WorkflowRepository:
-    """使用 SQLite 保存控制面数据，避免页面状态随进程重启丢失。"""
+    """使用 SQLAlchemy ORM + MySQL 保存控制面数据，避免页面状态随进程重启丢失。"""
 
-    def __init__(self, database_path: str | None = None) -> None:
-        backend_dir = Path(__file__).resolve().parents[1]
-        default_path = (
-            Path(os.getenv("TECH_KG_STATE_DIR", str(backend_dir / "var"))) / "tech-kg-workflows.db"
-        )
-        self.database_path = database_path or os.getenv("WORKFLOW_DATABASE_PATH", str(default_path))
-        Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.RLock()
+    def __init__(self, engine: Engine | None = None) -> None:
+        # engine 仅用于测试注入；默认用全局 workflow_mysql_client.engine
+        self._explicit_engine = engine
         self._initialize()
 
-    @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.database_path, timeout=30)
-        connection.row_factory = sqlite3.Row
-        try:
-            yield connection
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+    @property
+    def _engine(self) -> Engine:
+        if self._explicit_engine is not None:
+            return self._explicit_engine
+        return workflow_mysql_client.engine
 
     def _initialize(self) -> None:
-        with self._lock, self._connect() as connection:
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS batches (
-                    id TEXT PRIMARY KEY, update_date TEXT NOT NULL, payload TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, stage TEXT NOT NULL,
-                    task_status TEXT NOT NULL, domain TEXT NOT NULL, kind TEXT NOT NULL,
-                    processed_at TEXT NOT NULL, payload TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS reviews (
-                    id TEXT PRIMARY KEY, task_id TEXT NOT NULL, batch_id TEXT NOT NULL,
-                    status TEXT NOT NULL, domain TEXT NOT NULL, category TEXT NOT NULL,
-                    updated_at TEXT NOT NULL, payload TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS source_updates (
-                    seq INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT NOT NULL,
-                    detected_at TEXT NOT NULL, payload TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS settings (
-                    key TEXT PRIMARY KEY, payload TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS workflow_definitions (
-                    id TEXT PRIMARY KEY, workflow_type TEXT NOT NULL UNIQUE,
-                    category TEXT NOT NULL, active INTEGER NOT NULL, payload TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS workflow_executions (
-                    id TEXT PRIMARY KEY, definition_id TEXT NOT NULL, workflow_id TEXT NOT NULL,
-                    run_id TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, payload TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS workflow_schedules (
-                    id TEXT PRIMARY KEY, definition_id TEXT NOT NULL, active INTEGER NOT NULL,
-                    payload TEXT NOT NULL
-                );
-                """
-            )
-            self._remove_workflow_type_unique_constraint(connection)
-            count = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-            demo_enabled = os.getenv("WORKFLOW_DEMO_DATA_ENABLED", "false").lower() in {
-                "1",
-                "true",
-                "yes",
-                "on",
-            }
-            if count == 0 and demo_enabled:
-                self._seed(connection)
-            self._ensure_builtin_definitions(connection)
+        # CREATE DATABASE IF NOT EXISTS 在 workflow_mysql_client.engine 首次访问时已做；
+        # 这里只建表 + seed（可选）+ 注册 builtin 工作流定义。
+        Base.metadata.create_all(self._engine)
+        demo_enabled = os.getenv("WORKFLOW_DEMO_DATA_ENABLED", "false").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if demo_enabled:
+            with workflow_session_scope() as session:
+                any_task = session.scalar(select(WorkflowTask.id).limit(1))
+                if any_task is None:
+                    self._seed(session)
+        self._ensure_builtin_definitions()
 
-    def _ensure_builtin_definitions(self, connection: sqlite3.Connection) -> None:
+    def _ensure_builtin_definitions(self) -> None:
         """Idempotently insert built-in workflow definitions missing from older DBs."""
         builtins = [
             ("entity-project", "kg.entity.project", "entity", "国内外项目实体工作流"),
         ]
-        for definition_id, workflow_type, category, name in builtins:
-            exists = connection.execute(
-                "SELECT 1 FROM workflow_definitions WHERE id = ?", (definition_id,)
-            ).fetchone()
-            if exists:
-                continue
-            payload = {
-                "id": definition_id,
-                "name": name,
-                "workflowType": workflow_type,
-                "category": category,
-                "taskQueue": os.getenv("TEMPORAL_TASK_QUEUE", "tech-kg-workflows"),
-                "active": True,
-                "sourceKind": "builtin",
-                "steps": ["读取增量", "标准化", "抽取/对齐", "质量校验", "图谱写入"],
-                "createdAt": _now(),
-            }
-            connection.execute(
-                """INSERT INTO workflow_definitions(id, workflow_type, category, active, payload)
-                   VALUES (?, ?, ?, 1, ?)""",
-                (definition_id, workflow_type, category, _json(payload)),
-            )
+        with workflow_session_scope() as session:
+            for definition_id, workflow_type, category, name in builtins:
+                exists = session.scalar(
+                    select(WorkflowDefinition).where(WorkflowDefinition.id == definition_id)
+                )
+                if exists:
+                    continue
+                payload = {
+                    "id": definition_id,
+                    "name": name,
+                    "workflowType": workflow_type,
+                    "category": category,
+                    "taskQueue": os.getenv("TEMPORAL_TASK_QUEUE", "tech-kg-workflows"),
+                    "active": True,
+                    "sourceKind": "builtin",
+                    "steps": ["读取增量", "标准化", "抽取/对齐", "质量校验", "图谱写入"],
+                    "createdAt": _now(),
+                }
+                session.add(
+                    WorkflowDefinition(
+                        id=definition_id,
+                        workflow_type=workflow_type,
+                        category=category,
+                        active=1,
+                        payload=_json(payload),
+                    )
+                )
 
-    @staticmethod
-    def _remove_workflow_type_unique_constraint(connection: sqlite3.Connection) -> None:
-        indexes = connection.execute("PRAGMA index_list(workflow_definitions)").fetchall()
-        has_legacy_unique = False
-        for index in indexes:
-            if not index[2]:
-                continue
-            columns = connection.execute(f"PRAGMA index_info({index[1]})").fetchall()
-            if [column[2] for column in columns] == ["workflow_type"]:
-                has_legacy_unique = True
-                break
-        if not has_legacy_unique:
-            return
-        connection.executescript(
-            """
-            ALTER TABLE workflow_definitions RENAME TO workflow_definitions_legacy;
-            CREATE TABLE workflow_definitions (
-                id TEXT PRIMARY KEY, workflow_type TEXT NOT NULL,
-                category TEXT NOT NULL, active INTEGER NOT NULL, payload TEXT NOT NULL
-            );
-            INSERT OR REPLACE INTO workflow_definitions
-                (id, workflow_type, category, active, payload)
-            SELECT id, workflow_type, category, active, payload
-            FROM workflow_definitions_legacy;
-            DROP TABLE workflow_definitions_legacy;
-            """
-        )
-
-    def _seed(self, connection: sqlite3.Connection) -> None:
+    def _seed(self, session: Session) -> None:
         batches = [
             {
                 "id": "UPD-20260714",
@@ -191,43 +143,40 @@ class WorkflowRepository:
             },
         ]
         for batch in batches:
-            connection.execute(
-                "INSERT INTO batches(id, update_date, payload) VALUES (?, ?, ?)",
-                (batch["id"], batch["updateDate"], _json(batch)),
+            session.add(
+                WorkflowBatch(
+                    id=batch["id"],
+                    update_date=batch["updateDate"],
+                    payload=_json(batch),
+                )
             )
 
-        tasks = self._seed_tasks()
-        for task in tasks:
-            connection.execute(
-                """INSERT INTO tasks(id, batch_id, stage, task_status, domain, kind,
-                   processed_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    task["id"],
-                    task["batchId"],
-                    task["stage"],
-                    task["taskStatus"],
-                    task["dataDomain"],
-                    task["kind"],
-                    task["processedAt"],
-                    _json(task),
-                ),
+        for task in self._seed_tasks():
+            session.add(
+                WorkflowTask(
+                    id=task["id"],
+                    batch_id=task["batchId"],
+                    stage=task["stage"],
+                    task_status=task["taskStatus"],
+                    domain=task["dataDomain"],
+                    kind=task["kind"],
+                    processed_at=task["processedAt"],
+                    payload=_json(task),
+                )
             )
 
-        reviews = self._seed_reviews()
-        for review in reviews:
-            connection.execute(
-                """INSERT INTO reviews(id, task_id, batch_id, status, domain, category,
-                   updated_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    review["id"],
-                    review["id"],
-                    review["batch"],
-                    review["status"],
-                    review["domain"],
-                    review["category"],
-                    review["updatedAt"],
-                    _json(review),
-                ),
+        for review in self._seed_reviews():
+            session.add(
+                WorkflowReview(
+                    id=review["id"],
+                    task_id=review["id"],
+                    batch_id=review["batch"],
+                    status=review["status"],
+                    domain=review["domain"],
+                    category=review["category"],
+                    updated_at=review["updatedAt"],
+                    payload=_json(review),
+                )
             )
 
         updates = [
@@ -289,9 +238,12 @@ class WorkflowRepository:
             },
         ]
         for item in updates:
-            connection.execute(
-                "INSERT INTO source_updates(domain, detected_at, payload) VALUES (?, ?, ?)",
-                (item["domain"], item["detectedAt"], _json(item)),
+            session.add(
+                WorkflowSourceUpdate(
+                    domain=item["domain"],
+                    detected_at=item["detectedAt"],
+                    payload=_json(item),
+                )
             )
 
         policy = {
@@ -304,9 +256,7 @@ class WorkflowRepository:
             "nextRunAt": "2026-07-15 02:00:00",
             "skipWhenNoChanges": True,
         }
-        connection.execute(
-            "INSERT INTO settings(key, payload) VALUES ('update_policy', ?)", (_json(policy),)
-        )
+        session.add(WorkflowSetting(key="update_policy", payload=_json(policy)))
 
         definitions = [
             ("entity-paper", "kg.entity.paper", "entity", "论文实体工作流"),
@@ -321,6 +271,11 @@ class WorkflowRepository:
             ("graph-build", "kg.graph.build", "graph", "图谱构建总工作流"),
         ]
         for definition_id, workflow_type, category, name in definitions:
+            exists = session.scalar(
+                select(WorkflowDefinition).where(WorkflowDefinition.id == definition_id)
+            )
+            if exists:
+                continue
             payload = {
                 "id": definition_id,
                 "name": name,
@@ -332,10 +287,14 @@ class WorkflowRepository:
                 "steps": ["读取增量", "标准化", "抽取/对齐", "质量校验", "图谱写入"],
                 "createdAt": _now(),
             }
-            connection.execute(
-                """INSERT OR IGNORE INTO workflow_definitions(id, workflow_type, category, active, payload)
-                   VALUES (?, ?, ?, 1, ?)""",
-                (definition_id, workflow_type, category, _json(payload)),
+            session.add(
+                WorkflowDefinition(
+                    id=definition_id,
+                    workflow_type=workflow_type,
+                    category=category,
+                    active=1,
+                    payload=_json(payload),
+                )
             )
 
     @staticmethod
@@ -798,256 +757,214 @@ class WorkflowRepository:
             )
         return result
 
-    @staticmethod
-    def _rows(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
-        return [json.loads(row["payload"]) for row in rows]
-
     def list_batches(self) -> list[dict[str, Any]]:
-        with self._connect() as connection:
-            return self._rows(
-                connection.execute("SELECT payload FROM batches ORDER BY update_date DESC")
-            )
+        with workflow_session_scope() as session:
+            rows = session.scalars(
+                select(WorkflowBatch).order_by(WorkflowBatch.update_date.desc())
+            ).all()
+            return [json.loads(row.payload) for row in rows]
 
     def get_batch(self, batch_id: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT payload FROM batches WHERE id = ?", (batch_id,)
-            ).fetchone()
-            return json.loads(row["payload"]) if row else None
+        with workflow_session_scope() as session:
+            row = session.scalar(select(WorkflowBatch).where(WorkflowBatch.id == batch_id))
+            return json.loads(row.payload) if row else None
 
     def list_tasks(self, filters: dict[str, Any]) -> list[dict[str, Any]]:
-        clauses, params = [], []
-        mapping = {
-            "stage": "stage",
-            "task_status": "task_status",
-            "domain": "domain",
-            "kind": "kind",
-            "batch_id": "batch_id",
-        }
-        for key, column in mapping.items():
-            value = filters.get(key)
-            if value:
-                clauses.append(f"{column} = ?")
-                params.append(value)
-        if filters.get("start_time"):
-            clauses.append("processed_at >= ?")
-            params.append(filters["start_time"])
-        if filters.get("end_time"):
-            clauses.append("processed_at <= ?")
-            params.append(filters["end_time"])
-        sql = "SELECT payload FROM tasks"
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY processed_at DESC"
-        with self._connect() as connection:
-            items = self._rows(connection.execute(sql, params))
+        with workflow_session_scope() as session:
+            stmt = select(WorkflowTask).order_by(WorkflowTask.processed_at.desc())
+            mapping = {
+                "stage": WorkflowTask.stage,
+                "task_status": WorkflowTask.task_status,
+                "domain": WorkflowTask.domain,
+                "kind": WorkflowTask.kind,
+                "batch_id": WorkflowTask.batch_id,
+            }
+            for key, column in mapping.items():
+                value = filters.get(key)
+                if value:
+                    stmt = stmt.where(column == value)
+            if filters.get("start_time"):
+                stmt = stmt.where(WorkflowTask.processed_at >= filters["start_time"])
+            if filters.get("end_time"):
+                stmt = stmt.where(WorkflowTask.processed_at <= filters["end_time"])
+            rows = session.scalars(stmt).all()
+            items = [json.loads(row.payload) for row in rows]
         keyword = filters.get("keyword")
         if keyword:
             items = [item for item in items if keyword.lower() in _json(item).lower()]
         return items
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT payload FROM tasks WHERE id = ?", (task_id,)
-            ).fetchone()
-            return json.loads(row["payload"]) if row else None
+        with workflow_session_scope() as session:
+            row = session.scalar(select(WorkflowTask).where(WorkflowTask.id == task_id))
+            return json.loads(row.payload) if row else None
 
     def save_task(self, task: dict[str, Any]) -> None:
-        with self._lock, self._connect() as connection:
-            connection.execute(
-                """INSERT OR REPLACE INTO tasks(id, batch_id, stage, task_status, domain, kind,
-                   processed_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    task["id"],
-                    task["batchId"],
-                    task["stage"],
-                    task["taskStatus"],
-                    task["dataDomain"],
-                    task["kind"],
-                    task["processedAt"],
-                    _json(task),
-                ),
+        with workflow_session_scope() as session:
+            session.merge(
+                WorkflowTask(
+                    id=task["id"],
+                    batch_id=task["batchId"],
+                    stage=task["stage"],
+                    task_status=task["taskStatus"],
+                    domain=task["dataDomain"],
+                    kind=task["kind"],
+                    processed_at=task["processedAt"],
+                    payload=_json(task),
+                )
             )
 
     def list_reviews(self, filters: dict[str, Any]) -> list[dict[str, Any]]:
-        clauses, params = [], []
-        mapping = {
-            "status": "status",
-            "domain": "domain",
-            "category": "category",
-            "batch_id": "batch_id",
-        }
-        for key, column in mapping.items():
-            value = filters.get(key)
-            if value:
-                clauses.append(f"{column} = ?")
-                params.append(value)
-        if filters.get("start_time"):
-            clauses.append("updated_at >= ?")
-            params.append(filters["start_time"])
-        if filters.get("end_time"):
-            clauses.append("updated_at <= ?")
-            params.append(filters["end_time"])
-        sql = "SELECT payload FROM reviews"
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY updated_at DESC"
-        with self._connect() as connection:
-            items = self._rows(connection.execute(sql, params))
+        with workflow_session_scope() as session:
+            stmt = select(WorkflowReview).order_by(WorkflowReview.updated_at.desc())
+            mapping = {
+                "status": WorkflowReview.status,
+                "domain": WorkflowReview.domain,
+                "category": WorkflowReview.category,
+                "batch_id": WorkflowReview.batch_id,
+            }
+            for key, column in mapping.items():
+                value = filters.get(key)
+                if value:
+                    stmt = stmt.where(column == value)
+            if filters.get("start_time"):
+                stmt = stmt.where(WorkflowReview.updated_at >= filters["start_time"])
+            if filters.get("end_time"):
+                stmt = stmt.where(WorkflowReview.updated_at <= filters["end_time"])
+            rows = session.scalars(stmt).all()
+            items = [json.loads(row.payload) for row in rows]
         keyword = filters.get("keyword")
         if keyword:
             items = [item for item in items if keyword.lower() in _json(item).lower()]
         return items
 
     def get_review(self, review_id: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT payload FROM reviews WHERE id = ?", (review_id,)
-            ).fetchone()
-            return json.loads(row["payload"]) if row else None
+        with workflow_session_scope() as session:
+            row = session.scalar(select(WorkflowReview).where(WorkflowReview.id == review_id))
+            return json.loads(row.payload) if row else None
 
     def save_review(self, review: dict[str, Any]) -> None:
-        with self._lock, self._connect() as connection:
-            connection.execute(
-                """INSERT OR REPLACE INTO reviews(id, task_id, batch_id, status, domain, category,
-                   updated_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    review["id"],
-                    review["id"],
-                    review["batch"],
-                    review["status"],
-                    review["domain"],
-                    review["category"],
-                    review["updatedAt"],
-                    _json(review),
-                ),
+        with workflow_session_scope() as session:
+            session.merge(
+                WorkflowReview(
+                    id=review["id"],
+                    task_id=review["id"],
+                    batch_id=review["batch"],
+                    status=review["status"],
+                    domain=review["domain"],
+                    category=review["category"],
+                    updated_at=review["updatedAt"],
+                    payload=_json(review),
+                )
             )
 
     def list_source_updates(
         self, domain: str | None, since: str | None, until: str | None
     ) -> list[dict[str, Any]]:
-        clauses, params = [], []
-        if domain:
-            clauses.append("domain = ?")
-            params.append(domain)
-        if since:
-            clauses.append("detected_at >= ?")
-            params.append(since)
-        if until:
-            clauses.append("detected_at <= ?")
-            params.append(until)
-        sql = "SELECT payload FROM source_updates"
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY detected_at DESC"
-        with self._connect() as connection:
-            return self._rows(connection.execute(sql, params))
+        with workflow_session_scope() as session:
+            stmt = select(WorkflowSourceUpdate).order_by(WorkflowSourceUpdate.detected_at.desc())
+            if domain:
+                stmt = stmt.where(WorkflowSourceUpdate.domain == domain)
+            if since:
+                stmt = stmt.where(WorkflowSourceUpdate.detected_at >= since)
+            if until:
+                stmt = stmt.where(WorkflowSourceUpdate.detected_at <= until)
+            rows = session.scalars(stmt).all()
+            return [json.loads(row.payload) for row in rows]
 
     def get_setting(self, key: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT payload FROM settings WHERE key = ?", (key,)
-            ).fetchone()
-            return json.loads(row["payload"]) if row else None
+        with workflow_session_scope() as session:
+            row = session.scalar(select(WorkflowSetting).where(WorkflowSetting.key == key))
+            return json.loads(row.payload) if row else None
 
     def save_setting(self, key: str, payload: dict[str, Any]) -> None:
-        with self._lock, self._connect() as connection:
-            connection.execute(
-                "INSERT OR REPLACE INTO settings(key, payload) VALUES (?, ?)", (key, _json(payload))
-            )
+        with workflow_session_scope() as session:
+            session.merge(WorkflowSetting(key=key, payload=_json(payload)))
 
     def list_definitions(self) -> list[dict[str, Any]]:
-        with self._connect() as connection:
-            return self._rows(
-                connection.execute("SELECT payload FROM workflow_definitions ORDER BY category, id")
-            )
+        with workflow_session_scope() as session:
+            rows = session.scalars(
+                select(WorkflowDefinition).order_by(
+                    WorkflowDefinition.category, WorkflowDefinition.id
+                )
+            ).all()
+            return [json.loads(row.payload) for row in rows]
 
     def get_definition(self, definition_id: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT payload FROM workflow_definitions WHERE id = ?", (definition_id,)
-            ).fetchone()
-            return json.loads(row["payload"]) if row else None
+        with workflow_session_scope() as session:
+            row = session.scalar(
+                select(WorkflowDefinition).where(WorkflowDefinition.id == definition_id)
+            )
+            return json.loads(row.payload) if row else None
 
     def save_definition(self, definition: dict[str, Any]) -> None:
-        with self._lock, self._connect() as connection:
-            connection.execute(
-                """INSERT OR REPLACE INTO workflow_definitions(id, workflow_type, category, active, payload)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (
-                    definition["id"],
-                    definition["workflowType"],
-                    definition["category"],
-                    int(definition.get("active", True)),
-                    _json(definition),
-                ),
-            )
-
-    def save_execution(self, execution: dict[str, Any]) -> None:
-        with self._lock, self._connect() as connection:
-            connection.execute(
-                """INSERT OR REPLACE INTO workflow_executions(id, definition_id, workflow_id,
-                   run_id, status, started_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    execution["id"],
-                    execution["definitionId"],
-                    execution["workflowId"],
-                    execution.get("runId"),
-                    execution["status"],
-                    execution["startedAt"],
-                    _json(execution),
-                ),
-            )
-
-    def get_execution(self, execution_id: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT payload FROM workflow_executions WHERE id = ?", (execution_id,)
-            ).fetchone()
-            return json.loads(row["payload"]) if row else None
-
-    def list_executions(self, limit: int = 100) -> list[dict[str, Any]]:
-        with self._connect() as connection:
-            return self._rows(
-                connection.execute(
-                    "SELECT payload FROM workflow_executions ORDER BY started_at DESC LIMIT ?",
-                    (limit,),
+        with workflow_session_scope() as session:
+            session.merge(
+                WorkflowDefinition(
+                    id=definition["id"],
+                    workflow_type=definition["workflowType"],
+                    category=definition["category"],
+                    active=int(definition.get("active", True)),
+                    payload=_json(definition),
                 )
             )
 
+    def save_execution(self, execution: dict[str, Any]) -> None:
+        with workflow_session_scope() as session:
+            session.merge(
+                WorkflowExecution(
+                    id=execution["id"],
+                    definition_id=execution["definitionId"],
+                    workflow_id=execution["workflowId"],
+                    run_id=execution.get("runId"),
+                    status=execution["status"],
+                    started_at=execution["startedAt"],
+                    payload=_json(execution),
+                )
+            )
+
+    def get_execution(self, execution_id: str) -> dict[str, Any] | None:
+        with workflow_session_scope() as session:
+            row = session.scalar(
+                select(WorkflowExecution).where(WorkflowExecution.id == execution_id)
+            )
+            return json.loads(row.payload) if row else None
+
+    def list_executions(self, limit: int = 100) -> list[dict[str, Any]]:
+        with workflow_session_scope() as session:
+            rows = session.scalars(
+                select(WorkflowExecution).order_by(WorkflowExecution.started_at.desc()).limit(limit)
+            ).all()
+            return [json.loads(row.payload) for row in rows]
+
     def save_schedule(self, schedule: dict[str, Any]) -> None:
-        with self._lock, self._connect() as connection:
-            connection.execute(
-                """INSERT OR REPLACE INTO workflow_schedules(id, definition_id, active, payload)
-                   VALUES (?, ?, ?, ?)""",
-                (
-                    schedule["id"],
-                    schedule["definitionId"],
-                    int(schedule.get("active", True)),
-                    _json(schedule),
-                ),
+        with workflow_session_scope() as session:
+            session.merge(
+                WorkflowSchedule(
+                    id=schedule["id"],
+                    definition_id=schedule["definitionId"],
+                    active=int(schedule.get("active", True)),
+                    payload=_json(schedule),
+                )
             )
 
     def list_schedules(self) -> list[dict[str, Any]]:
-        with self._connect() as connection:
-            return self._rows(
-                connection.execute("SELECT payload FROM workflow_schedules ORDER BY id")
-            )
+        with workflow_session_scope() as session:
+            rows = session.scalars(select(WorkflowSchedule).order_by(WorkflowSchedule.id)).all()
+            return [json.loads(row.payload) for row in rows]
 
     def get_schedule(self, schedule_id: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT payload FROM workflow_schedules WHERE id = ?", (schedule_id,)
-            ).fetchone()
-            return json.loads(row["payload"]) if row else None
+        with workflow_session_scope() as session:
+            row = session.scalar(select(WorkflowSchedule).where(WorkflowSchedule.id == schedule_id))
+            return json.loads(row.payload) if row else None
 
     def delete_schedule(self, schedule_id: str) -> bool:
-        with self._lock, self._connect() as connection:
-            cursor = connection.execute(
-                "DELETE FROM workflow_schedules WHERE id = ?", (schedule_id,)
-            )
-            return cursor.rowcount > 0
+        with workflow_session_scope() as session:
+            row = session.scalar(select(WorkflowSchedule).where(WorkflowSchedule.id == schedule_id))
+            if row is None:
+                return False
+            session.delete(row)
+            return True
 
     def source_health(self) -> list[dict[str, Any]]:
         now = datetime.now(UTC).astimezone()
@@ -1085,9 +1002,11 @@ class WorkflowRepository:
         ]
 
     def reset_for_tests(self) -> None:
-        with self._lock:
-            Path(self.database_path).unlink(missing_ok=True)
-            self._initialize()
+        # 原 SQLite 实现是删 db 文件 + 重建；MySQL 下用 DROP+CREATE 全部表
+        # （比 TRUNCATE 干净，避免自增列残留 + 兼容 schema 变更）
+        Base.metadata.drop_all(self._engine)
+        Base.metadata.create_all(self._engine)
+        self._initialize()
 
 
 repository = WorkflowRepository()

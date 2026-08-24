@@ -68,6 +68,24 @@ def configure_logging(level: str) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
+def common_args_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """从 workflow payload dict 提取通用 ETL 参数（CLI argparse 的 dict 化镜像）。
+
+    供 dual-mode 脚本的 ``workflow(payload)`` 入口复用——payload key 用 snake_case，
+    跟 argparse 转换后的 ``vars(args)`` 同形态，便于 ``build_sources(payload)`` 这类
+    脚本专属函数在 CLI 和 workflow 两条路径下共享。
+    """
+    return {
+        "log_level": payload.get("log_level", "INFO"),
+        "database": payload.get("database", DEFAULT_DB),
+        "batch_size": int(payload.get("batch_size") or DEFAULT_BATCH_SIZE),
+        "limit": payload.get("limit"),
+        "since": payload.get("since"),
+        "dry_run": bool(payload.get("dry_run", False)),
+        "ingest_batch": payload.get("ingest_batch"),
+    }
+
+
 def build_parser(description: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--log-level", default="INFO")
@@ -794,8 +812,17 @@ def existing_vertex_properties(
 
 
 def _drop_null_props(properties: Mapping[str, Any]) -> dict[str, Any]:
-    """None 值属性不上报：等价于旧 nGQL 写 NULL/省略该属性。"""
-    return {name: value for name, value in properties.items() if value is not None}
+    """None 值属性不上报；其余值字符串化以匹配 trs-graph REST 的 string-typed 列。
+
+    NebulaGraph 对 string 列做严格类型校验——传 float/int 会被 400
+    `Storage Error: data type does not meet the requirements`。旧 nGQL INSERT
+    VERTEX 用字符串字面量本就隐式转字符串，REST 路径需要显式 stringify。
+    """
+    return {
+        name: value if isinstance(value, str) else str(value)
+        for name, value in properties.items()
+        if value is not None
+    }
 
 
 def write_records(records: list[EntityRecord], *, dry_run: bool) -> dict[str, int]:

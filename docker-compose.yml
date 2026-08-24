@@ -41,7 +41,12 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
       TEMPORAL_TASK_QUEUE: tech-kg-workflows
-      WORKFLOW_DATABASE_PATH: /var/lib/tech-kg/workflows.db
+      # 控制面 MySQL（temporal-mysql 的 techkg_control 库，跟 Temporal 共用实例但独立库）
+      WORKFLOW_MYSQL_HOST: temporal-mysql
+      WORKFLOW_MYSQL_PORT: "3306"
+      WORKFLOW_MYSQL_DATABASE: techkg_control
+      WORKFLOW_MYSQL_USERNAME: root
+      WORKFLOW_MYSQL_PASSWORD: temporal
       WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
       WORKFLOW_DEMO_DATA_ENABLED: ${WORKFLOW_DEMO_DATA_ENABLED:-false}
       PLATFORM_INITIAL_ADMIN_USER_IDS: ${PLATFORM_INITIAL_ADMIN_USER_IDS:-}
@@ -148,16 +153,20 @@ services:
       start_period: 180s
     restart: unless-stopped
 
-  temporal-postgresql:
-    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/postgres:16-alpine
-    container_name: tech-kg-temporal-postgresql
+  temporal-mysql:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/mysql:8.4
+    container_name: tech-kg-temporal-mysql
     environment:
-      POSTGRES_USER: temporal
-      POSTGRES_PASSWORD: temporal
+      MYSQL_ROOT_PASSWORD: temporal
     volumes:
-      - temporal-postgresql-data:/var/lib/postgresql/data
+      - temporal-mysql-data:/var/lib/mysql
     networks:
       - app
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-ptemporal"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     restart: unless-stopped
 
   temporal:
@@ -166,13 +175,16 @@ services:
     ports:
       - "7233:7233"
     environment:
-      DB: postgres12
-      DB_PORT: 5432
-      POSTGRES_USER: temporal
-      POSTGRES_PWD: temporal
-      POSTGRES_SEEDS: temporal-postgresql
+      DB: mysql8
+      DB_PORT: 3306
+      # 官方 mysql:8.4 镜像的 MYSQL_USER 不是 superuser，auto-setup 无法 CREATE DATABASE；
+      # 改用 root 连（MYSQL_ROOT_PASSWORD=temporal 在 temporal-mysql 里已设）。
+      MYSQL_USER: root
+      MYSQL_PWD: temporal
+      MYSQL_SEEDS: temporal-mysql
     depends_on:
-      - temporal-postgresql
+      temporal-mysql:
+        condition: service_healthy
     networks:
       - app
     restart: unless-stopped
@@ -203,7 +215,11 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
       TEMPORAL_TASK_QUEUE: tech-kg-workflows
-      WORKFLOW_DATABASE_PATH: /var/lib/tech-kg/workflows.db
+      WORKFLOW_MYSQL_HOST: temporal-mysql
+      WORKFLOW_MYSQL_PORT: "3306"
+      WORKFLOW_MYSQL_DATABASE: techkg_control
+      WORKFLOW_MYSQL_USERNAME: root
+      WORKFLOW_MYSQL_PASSWORD: temporal
       WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
       TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://trs-graph-service:8090}
       TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-dev}
@@ -375,7 +391,7 @@ volumes:
   milvus-etcd-data:
   milvus-minio-data:
   milvus-data:
-  temporal-postgresql-data:
+  temporal-mysql-data:
   workflow-state:
   m3e-model-cache:
   patent-index-state:

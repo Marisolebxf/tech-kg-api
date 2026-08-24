@@ -59,6 +59,56 @@ def max_script_bytes() -> int:
     return int(os.getenv("SCHEMA_SCRIPT_MAX_BYTES", str(10 * 1024 * 1024)))
 
 
+def _allow_system_delete() -> bool:
+    """测试/开发模式下允许删除系统 Schema（生产应保持 false）。
+
+    默认 false——保护系统 catalog 不被误删。dev2 compose 会显式设
+    SCHEMA_ALLOW_SYSTEM_DELETE=true。
+    """
+    return os.getenv("SCHEMA_ALLOW_SYSTEM_DELETE", "false").lower() in {"1", "true", "yes", "on"}
+
+
+# 新 ETL 脚本（entity_extractors_one_entity / relation_extractors_one_relation）
+# 统一写的溯源属性。前端/API 创建 schema 时自动附加，避免 merge_node 写图时
+# `Unknown column X in schema`。用户已显式声明的同名属性保留用户口径。
+_ENTITY_PROVENANCE_PROPERTIES: list[dict[str, str]] = [
+    {"name": "vid", "data_type": "string", "category": "provenance"},
+    {"name": "source_system", "data_type": "string", "category": "provenance"},
+    {"name": "source_table", "data_type": "string", "category": "provenance"},
+    {"name": "source_record_id", "data_type": "string", "category": "provenance"},
+    {"name": "source_url", "data_type": "string", "category": "provenance"},
+    {"name": "ingest_batch", "data_type": "string", "category": "provenance"},
+    {"name": "ingest_time", "data_type": "string", "category": "provenance"},
+    {"name": "source_update_time", "data_type": "string", "category": "provenance"},
+    {"name": "confidence", "data_type": "string", "category": "provenance"},
+    {"name": "match_method", "data_type": "string", "category": "provenance"},
+    {"name": "match_evidence", "data_type": "string", "category": "provenance"},
+]
+_RELATION_PROVENANCE_PROPERTIES: list[dict[str, str]] = [
+    {"name": "source_table", "data_type": "string", "category": "provenance"},
+    {"name": "source_record_id", "data_type": "string", "category": "provenance"},
+    {"name": "ingest_batch", "data_type": "string", "category": "provenance"},
+    {"name": "ingest_time", "data_type": "string", "category": "provenance"},
+    {"name": "confidence", "data_type": "string", "category": "provenance"},
+    {"name": "match_method", "data_type": "string", "category": "provenance"},
+    {"name": "match_evidence", "data_type": "string", "category": "provenance"},
+]
+
+
+def _inject_provenance_properties(kind: str, payload: dict[str, Any]) -> None:
+    """把溯源属性注入 payload['properties']（已声明的保留）。"""
+    if os.getenv("SCHEMA_AUTO_PROVENANCE", "true").lower() not in {"1", "true", "yes", "on"}:
+        return
+    provenance = (
+        _ENTITY_PROVENANCE_PROPERTIES if kind == "entity" else _RELATION_PROVENANCE_PROPERTIES
+    )
+    properties = payload.setdefault("properties", [])
+    declared = {p["name"] for p in properties if isinstance(p, dict) and "name" in p}
+    for prop in provenance:
+        if prop["name"] not in declared:
+            properties.append({**prop, "required": False, "rule": ""})
+
+
 def _schema_admin_user_ids() -> set[str]:
     return {
         item.strip()
@@ -522,8 +572,10 @@ class SchemaManagementService:
         if not user_id:
             raise SchemaPermissionError("登录用户 ID 不能为空")
         definition = self._require_schema(schema_id)
-        if definition.is_system:
-            raise SchemaPermissionError("系统原有 Schema 不允许删除")
+        if definition.is_system and not _allow_system_delete():
+            raise SchemaPermissionError(
+                "系统原有 Schema 不允许删除（测试模式可设 SCHEMA_ALLOW_SYSTEM_DELETE=true 开启）"
+            )
         if not is_platform_admin and definition.created_by != user_id:
             raise SchemaPermissionError("只能删除自己创建的 Schema")
         if definition.kind == "entity":
@@ -563,6 +615,12 @@ class SchemaManagementService:
         payload: dict[str, Any],
         user_id: str,
     ) -> dict[str, Any]:
+        # 自动注入溯源属性：新 ETL 脚本（entity_extractors_one_entity / relation_extractors_one_relation）
+        # 统一写 source_system/source_table/source_record_id/source_url/ingest_batch/ingest_time/
+        # source_update_time/confidence/match_method/match_evidence + vid 等 11 个溯源属性。
+        # 若用户创建 schema 时不显式声明这些列，merge_node 写图时会 400 Unknown column。
+        # 这里在 DDL 前自动补齐（已声明的属性保留用户口径）。
+        _inject_provenance_properties(kind, payload)
         user_id = user_id.strip()
         if not user_id or len(user_id) > 128:
             raise SchemaPermissionError("X-User-Id 不能为空且不能超过 128 个字符")

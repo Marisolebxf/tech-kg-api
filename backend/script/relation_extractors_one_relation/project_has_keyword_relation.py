@@ -12,6 +12,12 @@ source_record_id（= 项目 ID）幂等。
   与专利/论文域不一致。
 - 本脚本不再创建 Keyword 顶点（keyword_entity.py 已承接）；Keyword 端点不验存，
   以兼容实体侧解析口径差异产生的悬空目标（旧脚本在写边时顺手建点）。
+
+Dual-mode 入口：
+- CLI: ``python -m script.relation_extractors_one_relation.project_has_keyword_relation --dry-run --limit 1``
+- Temporal workflow: 脚本顶层 ``workflow(payload)`` 函数，由
+  ``service/temporal_workflows.py:execute_python_script`` Activity 子进程加载并调用。
+  payload key 用 snake_case（跟 argparse 转换后的 vars(args) 同形态）。
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from script.project_ingest_report import ProjectIngestReport
 from script.relation_extractors_one_relation.common import (
     EdgeRecord,
     build_parser,
+    common_args_from_payload,
     configure_logging,
     edge_provenance,
     ensure_edge_schema,
@@ -75,25 +82,51 @@ def make_project_has_keyword_mapper(
     return project_has_keyword
 
 
+def build_sources(
+    tables: tuple[str, ...],
+    report: ProjectIngestReport,
+) -> list[tuple[str, str, Callable[[str, dict[str, Any], str], list[EdgeRecord]]]]:
+    """构造 sources；report 由 main/workflow 共享同一实例（汇总到 report.write）。"""
+    return [
+        (table, PROJECT_SQL.format(table=table), make_project_has_keyword_mapper(report))
+        for table in tables
+    ]
+
+
+def _resolve_tables(payload: dict[str, Any]) -> tuple[str, ...]:
+    table_choice = payload.get("table", "all")
+    return TABLES if table_choice == "all" else (str(table_choice),)
+
+
+def _resolve_report_dir(payload: dict[str, Any], batch: str) -> Path:
+    return Path(payload.get("report_dir") or f"/tmp/project-ingest-reports/{batch}")
+
+
+def _ensure_schema(dry_run: bool) -> None:
+    if dry_run:
+        return
+    graph = graph_client()
+    try:
+        ensure_edge_schema(graph, "HAS_KEYWORD", EDGE_SCHEMA)
+    finally:
+        graph.close()
+
+
 def main() -> None:
     parser = build_parser(__doc__ or "")
     parser.add_argument("--table", choices=("all", *TABLES), default="all")
     parser.add_argument("--report-dir", type=Path)
     args = parser.parse_args()
     configure_logging(args.log_level)
-    tables = TABLES if args.table == "all" else (args.table,)
+    tables = _resolve_tables(vars(args))
     batch = args.ingest_batch or f"RELATION_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-    if not args.dry_run:
-        graph = graph_client()
-        try:
-            ensure_edge_schema(graph, "HAS_KEYWORD", EDGE_SCHEMA)
-        finally:
-            graph.close()
+    _ensure_schema(args.dry_run)
     report = ProjectIngestReport(
-        args.report_dir or Path("/tmp/project-ingest-reports") / batch,
+        _resolve_report_dir(vars(args), batch),
         ingest_batch=batch,
         dry_run=args.dry_run,
     )
+    sources = build_sources(tables, report)
     summary = run_relation_extractor(
         database=args.database,
         batch_size=args.batch_size,
@@ -101,14 +134,38 @@ def main() -> None:
         dry_run=args.dry_run,
         ingest_batch=batch,
         since=args.since,
-        sources=[
-            (table, PROJECT_SQL.format(table=table), make_project_has_keyword_mapper(report))
-            for table in tables
-        ],
+        sources=sources,
     )
     summary["report_dir"] = str(report.report_dir)
     summary["report"] = report.write()
     print_json(summary)
+
+
+def workflow(payload: dict[str, Any]) -> dict[str, Any]:
+    """Temporal workflow 入口；payload 同 main() 的 vars(args) 形态。"""
+    common = common_args_from_payload(payload)
+    configure_logging(common["log_level"])
+    tables = _resolve_tables(payload)
+    batch = common["ingest_batch"] or f"RELATION_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+    _ensure_schema(common["dry_run"])
+    report = ProjectIngestReport(
+        _resolve_report_dir(payload, batch),
+        ingest_batch=batch,
+        dry_run=common["dry_run"],
+    )
+    sources = build_sources(tables, report)
+    summary = run_relation_extractor(
+        database=common["database"],
+        batch_size=common["batch_size"],
+        limit=common["limit"],
+        dry_run=common["dry_run"],
+        ingest_batch=batch,
+        since=common["since"],
+        sources=sources,
+    )
+    summary["report_dir"] = str(report.report_dir)
+    summary["report"] = report.write()
+    return summary
 
 
 if __name__ == "__main__":

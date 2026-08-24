@@ -16,15 +16,23 @@
   对齐步骤，不在本脚本迁移。
 
 Organization/Patent 端点直接取图内真实 vid，不做端点验存。
+
+Dual-mode 入口：
+- CLI: ``python -m script.relation_extractors_one_relation.applied_by_relation --dry-run --limit 1``
+- Temporal workflow: 脚本顶层 ``workflow(payload)`` 函数，由
+  ``service/temporal_workflows.py:execute_python_script`` Activity 子进程加载并调用。
+  payload key 用 snake_case（跟 argparse 转换后的 vars(args) 同形态）。
 """
 
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 from script.relation_extractors_one_relation.common import (
     EdgeRecord,
     apply_since,
     build_parser,
+    common_args_from_payload,
     configure_logging,
     ensure_edge_schema,
     graph_client,
@@ -49,6 +57,8 @@ from script.relation_extractors_one_relation.patent_matching import (
 SOURCE_SQL = (
     "SELECT id, patent_id, inventors, applicants, assignees FROM dwd_patent ORDER BY patent_id"
 )
+
+DEFAULT_REVIEW_OUTPUT = "output/patent_applied_by_reviews.jsonl"
 
 
 def applied_by_mapper(
@@ -144,22 +154,21 @@ def applied_by_mapper(
     return mapper
 
 
-def main() -> None:
-    parser = build_parser(__doc__ or "")
-    parser.add_argument(
-        "--review-output",
-        type=Path,
-        default=Path("output/patent_applied_by_reviews.jsonl"),
-        help="待人工审核 JSONL 输出路径（dry-run 也照常输出）",
-    )
-    args = parser.parse_args()
-    configure_logging(args.log_level)
-    engine = mysql_engine(args.database)
+def _resolve_review_output(payload: dict[str, Any]) -> Path:
+    raw = payload.get("review_output")
+    return Path(raw) if raw else Path(DEFAULT_REVIEW_OUTPUT)
+
+
+def _load_indexes(
+    database: str, dry_run: bool
+) -> tuple[dict[str, str], dict[str, list[dict]], dict[str, list[dict]]]:
+    """连图连库构建 vid_by_id + person/org 索引；dry_run 时也连图（旧口径如此）。"""
+    engine = mysql_engine(database)
     graph = graph_client()
     try:
         vid_by_id, _ = patent_indexes(graph, engine)
         people, organizations = canonical_entities(graph, engine)
-        if not args.dry_run:
+        if not dry_run:
             ensure_edge_schema(graph, "APPLIED_BY", EDGE_PROPERTY_SCHEMAS["APPLIED_BY"])
             ensure_edge_schema(graph, "OWNED_BY", EDGE_PROPERTY_SCHEMAS["OWNED_BY"])
     finally:
@@ -167,6 +176,20 @@ def main() -> None:
     engine.dispose()
     person_index = make_index(people, ("name_zh", "name_en"))
     org_index = make_index(organizations, ("name_cn", "name_en", "name_alias"))
+    return vid_by_id, person_index, org_index
+
+
+def main() -> None:
+    parser = build_parser(__doc__ or "")
+    parser.add_argument(
+        "--review-output",
+        type=Path,
+        default=Path(DEFAULT_REVIEW_OUTPUT),
+        help="待人工审核 JSONL 输出路径（dry-run 也照常输出）",
+    )
+    args = parser.parse_args()
+    configure_logging(args.log_level)
+    vid_by_id, person_index, org_index = _load_indexes(args.database, args.dry_run)
     reviews: list[ReviewRecord] = []
     stats: Counter = Counter()
     summary = run_relation_extractor(
@@ -191,6 +214,37 @@ def main() -> None:
     write_reviews(args.review_output, reviews)
     summary["review_output"] = str(args.review_output)
     print_json(summary)
+
+
+def workflow(payload: dict[str, Any]) -> dict[str, Any]:
+    """Temporal workflow 入口；payload 同 main() 的 vars(args) 形态。"""
+    common = common_args_from_payload(payload)
+    configure_logging(common["log_level"])
+    vid_by_id, person_index, org_index = _load_indexes(common["database"], common["dry_run"])
+    reviews: list[ReviewRecord] = []
+    stats: Counter = Counter()
+    review_output = _resolve_review_output(payload)
+    summary = run_relation_extractor(
+        database=common["database"],
+        batch_size=common["batch_size"],
+        limit=common["limit"],
+        dry_run=common["dry_run"],
+        ingest_batch=common["ingest_batch"],
+        sources=[
+            (
+                "dwd_patent",
+                # 旧表无 updated_time，增量水位走 update_time 列。
+                apply_since(SOURCE_SQL, common["since"], col="update_time"),
+                applied_by_mapper(vid_by_id, org_index, person_index, reviews, stats),
+            )
+        ],
+        extra_params={"since": common["since"]} if common["since"] else None,
+    )
+    stats["review_records"] = len(reviews)
+    summary["sources"]["dwd_patent"].update(stats)
+    write_reviews(review_output, reviews)
+    summary["review_output"] = str(review_output)
+    return summary
 
 
 if __name__ == "__main__":

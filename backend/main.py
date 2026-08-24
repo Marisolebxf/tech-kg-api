@@ -16,6 +16,7 @@ from infra.graph_db import close_techkg_client, close_trs_graph_client
 from infra.graph_db.exceptions import GraphRepoError
 from infra.mysql import session_scope
 from infra.redis import close_redis_client
+from infra.workflow_mysql import close_workflow_engine
 from service.correction import process_due_sync_tasks
 from service.operator_registry import REGISTRY
 
@@ -96,6 +97,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await close_redis_client()
         close_techkg_client()
         close_trs_graph_client()
+        close_workflow_engine()
 
 
 app = FastAPI(

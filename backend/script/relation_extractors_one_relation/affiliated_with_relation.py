@@ -4,15 +4,23 @@
 ``scholar_org_id`` 直连（confidence=1.0），否则机构名 md5 16 位桩 VID
 （confidence=0.6，桩顶点可不存在，后续由 SAME_AS 对齐认领）；
 REST merge_edge 按 source_record_id 幂等。
+
+Dual-mode 入口：
+- CLI: ``python -m script.relation_extractors_one_relation.affiliated_with_relation --dry-run --limit 1``
+- Temporal workflow: 脚本顶层 ``workflow(payload)`` 函数，由
+  ``service/temporal_workflows.py:execute_python_script`` Activity 子进程加载并调用。
+  payload key 用 snake_case（跟 argparse 转换后的 vars(args) 同形态）。
 """
 
 import hashlib
+from typing import Any
 
 from sqlalchemy import text
 
 from script.relation_extractors_one_relation.common import (
     EdgeRecord,
     build_parser,
+    common_args_from_payload,
     configure_logging,
     ensure_edge_schema,
     graph_client,
@@ -125,6 +133,21 @@ def _build_sql(engine) -> str:
     return f"SELECT {select} FROM dwd_scholar WHERE status = 1 ORDER BY scholar_id"
 
 
+def build_sources(database: str) -> list[tuple[str, str, Any]]:
+    """构造 sources；需先连 MySQL 动态探测列后构造 SQL（旧 _build_sql 口径）。
+
+    传入 database 是为了 workflow 与 main 都能从 ``mysql_engine(database)`` 拿 engine
+    并在用完后 dispose（与原 main 行为一致）。CLI vars(args) 与 workflow payload
+    形态都带 ``database`` 字段，故可作为统一入口。
+    """
+    engine = mysql_engine(database)
+    try:
+        sql = _build_sql(engine)
+    finally:
+        engine.dispose()
+    return [("dwd_scholar", sql, affiliated_with)]
+
+
 def main() -> None:
     parser = build_parser(__doc__ or "")
     args = parser.parse_args()
@@ -135,9 +158,7 @@ def main() -> None:
             ensure_edge_schema(graph, "AFFILIATED_WITH", EDGE_SCHEMA)
         finally:
             graph.close()
-    engine = mysql_engine(args.database)
-    sql = _build_sql(engine)
-    engine.dispose()
+    sources = build_sources(args.database)
     print_json(
         run_relation_extractor(
             database=args.database,
@@ -146,8 +167,30 @@ def main() -> None:
             dry_run=args.dry_run,
             ingest_batch=args.ingest_batch,
             since=args.since,
-            sources=[("dwd_scholar", sql, affiliated_with)],
+            sources=sources,
         )
+    )
+
+
+def workflow(payload: dict[str, Any]) -> dict[str, Any]:
+    """Temporal workflow 入口；payload 同 main() 的 vars(args) 形态。"""
+    common = common_args_from_payload(payload)
+    configure_logging(common["log_level"])
+    if not common["dry_run"]:
+        graph = graph_client()
+        try:
+            ensure_edge_schema(graph, "AFFILIATED_WITH", EDGE_SCHEMA)
+        finally:
+            graph.close()
+    sources = build_sources(common["database"])
+    return run_relation_extractor(
+        database=common["database"],
+        batch_size=common["batch_size"],
+        limit=common["limit"],
+        dry_run=common["dry_run"],
+        ingest_batch=common["ingest_batch"],
+        since=common["since"],
+        sources=sources,
     )
 
 

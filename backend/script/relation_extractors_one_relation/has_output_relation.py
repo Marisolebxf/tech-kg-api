@@ -8,6 +8,12 @@
 source_record_id = ``{project_id}|{output_type}|{target_vid}``，REST merge_edge 按
 其幂等。不做 update_node 产出计数回填（project_entity.py 实体侧职责）；
 跨域 OUTPUT_OF（dwd_rel_project_paper/patent）只写报告分类，不建边。
+
+Dual-mode 入口：
+- CLI: ``python -m script.relation_extractors_one_relation.has_output_relation --dry-run --limit 1``
+- Temporal workflow: 脚本顶层 ``workflow(payload)`` 函数，由
+  ``service/temporal_workflows.py:execute_python_script`` Activity 子进程加载并调用。
+  payload key 用 snake_case（跟 argparse 转换后的 vars(args) 同形态）。
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from script.relation_extractors_one_relation.common import (
     EdgeRecord,
     apply_since,
     build_parser,
+    common_args_from_payload,
     configure_logging,
     ensure_edge_schema,
     graph_client,
@@ -80,7 +87,7 @@ EDGE_SCHEMA = {
 def output_sql(table: str) -> str:
     """产出表 JOIN 项目 ID 全集（等价旧 allowed_ids = zh∪en 项目 ID）。"""
     project_ids = " UNION ALL ".join(f"SELECT id FROM {name}" for name in PROJECT_TABLES)
-    return f"SELECT o.* FROM {table} o JOIN ({project_ids}) p ON p.id = o.id ORDER BY o.id"
+    return f"SELECT o.* FROM {table} o JOIN ({project_ids}) p ON p.id = o.id"
 
 
 def _add(target: set[str], value: Any) -> None:
@@ -269,43 +276,87 @@ def make_has_output_mapper(
     return has_output
 
 
+def _resolve_tables(payload: dict[str, Any]) -> tuple[str, ...]:
+    table_choice = payload.get("table", "all")
+    return TABLES if table_choice == "all" else (str(table_choice),)
+
+
+def _resolve_report_dir(payload: dict[str, Any], batch: str) -> Path:
+    return Path(payload.get("report_dir") or f"/tmp/project-ingest-reports/{batch}")
+
+
+def _collect_candidates(
+    database: str,
+    tables: tuple[str, ...],
+    batch_size: int,
+    limit: int | None,
+    since: str | None,
+) -> dict[str, set[str]]:
+    """连 MySQL 收集 paper/patent/report 候选。"""
+    engine = mysql_engine(database)
+    try:
+        return collect_output_candidates(
+            engine,
+            tables,
+            batch_size=batch_size,
+            limit=limit,
+            since=since,
+        )
+    finally:
+        engine.dispose()
+
+
+def _load_matcher(candidates: dict[str, set[str]], dry_run: bool) -> ProjectEntityMatcher:
+    graph = graph_client()
+    try:
+        matcher = ProjectEntityMatcher.from_graph(graph, candidates)
+        if not dry_run:
+            ensure_edge_schema(graph, "HAS_OUTPUT", EDGE_SCHEMA)
+    finally:
+        graph.close()
+    return matcher
+
+
+def _build_sources(
+    tables: tuple[str, ...],
+    since: str | None,
+    matcher: ProjectEntityMatcher,
+    report: ProjectIngestReport,
+) -> list[tuple[str, str, Callable[[str, dict[str, Any], str], list[EdgeRecord]]]]:
+    sources = []
+    for table in tables:
+        sql = output_sql(table)
+        if since:
+            sql = apply_since(sql, since, col="o.updated_time")
+        sources.append((table, sql, make_has_output_mapper(matcher, report)))
+    return sources
+
+
+def _report_cross_domain(database: str, report: ProjectIngestReport) -> None:
+    """跨域 OUTPUT_OF 报告（旧 main 末尾那段，独立连 MySQL）。"""
+    engine = mysql_engine(database)
+    try:
+        report_output_of_candidates(engine, report, allowed_ids=collect_all_project_ids(engine))
+    finally:
+        engine.dispose()
+
+
 def main() -> None:
     parser = build_parser(__doc__ or "")
     parser.add_argument("--table", choices=("all", *TABLES), default="all")
     parser.add_argument("--report-dir", type=Path)
     args = parser.parse_args()
     configure_logging(args.log_level)
-    tables = TABLES if args.table == "all" else (args.table,)
+    tables = _resolve_tables(vars(args))
     batch = args.ingest_batch or f"RELATION_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-    engine = mysql_engine(args.database)
-    try:
-        candidates = collect_output_candidates(
-            engine,
-            tables,
-            batch_size=args.batch_size,
-            limit=args.limit,
-            since=args.since,
-        )
-    finally:
-        engine.dispose()
-    graph = graph_client()
-    try:
-        matcher = ProjectEntityMatcher.from_graph(graph, candidates)
-        if not args.dry_run:
-            ensure_edge_schema(graph, "HAS_OUTPUT", EDGE_SCHEMA)
-    finally:
-        graph.close()
+    candidates = _collect_candidates(args.database, tables, args.batch_size, args.limit, args.since)
+    matcher = _load_matcher(candidates, args.dry_run)
     report = ProjectIngestReport(
-        args.report_dir or Path("/tmp/project-ingest-reports") / batch,
+        _resolve_report_dir(vars(args), batch),
         ingest_batch=batch,
         dry_run=args.dry_run,
     )
-    sources = []
-    for table in tables:
-        sql = output_sql(table)
-        if args.since:
-            sql = apply_since(sql, args.since, col="o.updated_time")
-        sources.append((table, sql, make_has_output_mapper(matcher, report)))
+    sources = _build_sources(tables, args.since, matcher, report)
     summary = run_relation_extractor(
         database=args.database,
         batch_size=args.batch_size,
@@ -316,14 +367,41 @@ def main() -> None:
         sources=sources,
         extra_params={"since": args.since} if args.since else None,
     )
-    engine = mysql_engine(args.database)
-    try:
-        report_output_of_candidates(engine, report, allowed_ids=collect_all_project_ids(engine))
-    finally:
-        engine.dispose()
+    _report_cross_domain(args.database, report)
     summary["report_dir"] = str(report.report_dir)
     summary["report"] = report.write()
     print_json(summary)
+
+
+def workflow(payload: dict[str, Any]) -> dict[str, Any]:
+    """Temporal workflow 入口；payload 同 main() 的 vars(args) 形态。"""
+    common = common_args_from_payload(payload)
+    configure_logging(common["log_level"])
+    tables = _resolve_tables(payload)
+    batch = common["ingest_batch"] or f"RELATION_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+    candidates = _collect_candidates(
+        common["database"], tables, common["batch_size"], common["limit"], common["since"]
+    )
+    matcher = _load_matcher(candidates, common["dry_run"])
+    report = ProjectIngestReport(
+        _resolve_report_dir(payload, batch),
+        ingest_batch=batch,
+        dry_run=common["dry_run"],
+    )
+    sources = _build_sources(tables, common["since"], matcher, report)
+    summary = run_relation_extractor(
+        database=common["database"],
+        batch_size=common["batch_size"],
+        limit=common["limit"],
+        dry_run=common["dry_run"],
+        ingest_batch=batch,
+        sources=sources,
+        extra_params={"since": common["since"]} if common["since"] else None,
+    )
+    _report_cross_domain(common["database"], report)
+    summary["report_dir"] = str(report.report_dir)
+    summary["report"] = report.write()
+    return summary
 
 
 if __name__ == "__main__":

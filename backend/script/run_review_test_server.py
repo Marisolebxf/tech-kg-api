@@ -23,11 +23,8 @@ os.environ.setdefault("GRAPH_BUILD_SERVICE_TOKEN", "test-service-token")
 os.environ.setdefault("REVIEW_PRODUCTION_ENABLED", "true")
 os.environ.setdefault("REVIEW_SNAPSHOT_MAX_BYTES", "2097152")
 os.environ.setdefault("REVIEW_RESUME_MAX_ATTEMPTS", "5")
-# workflow sqlite 落到临时文件，避免多人共用 /tmp 只读库
-os.environ.setdefault(
-    "WORKFLOW_DATABASE_PATH",
-    str(Path(tempfile.gettempdir()) / f"tech-kg-workflows-review-server-{os.getpid()}.db"),
-)
+# workflow 控制面已迁到 MySQL（temporal-mysql 的 techkg_control 库）；
+# 测试时如无 MySQL，需显式设 WORKFLOW_MYSQL_* 指向可用实例，否则 repository 初始化会失败。
 # 算子目录指到临时空目录，避免 watcher/初始化触碰真实算子
 _op_dir = Path(tempfile.gettempdir()) / f"tech-kg-operators-{os.getpid()}"
 _op_dir.mkdir(exist_ok=True)

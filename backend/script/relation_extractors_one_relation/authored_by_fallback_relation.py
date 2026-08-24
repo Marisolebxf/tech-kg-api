@@ -4,11 +4,18 @@
 dwd_scholar_paper_relation（status=1），两端顶点在图中均已存在才写边
 （写层端点验存），confidence=0.9（cross_domain_id_match）。
 paper 端 VID 用原始 paper_id（与 Paper 实体 VID 一致，不去 ``__数字`` 后缀）。
+
+Dual-mode 入口：
+- CLI: ``python -m script.relation_extractors_one_relation.authored_by_fallback_relation --dry-run --limit 1``
+- Temporal workflow: 脚本顶层 ``workflow(payload)`` 函数，由
+  ``service/temporal_workflows.py:execute_python_script`` Activity 子进程加载并调用。
+  payload key 用 snake_case（跟 argparse 转换后的 vars(args) 同形态）。
 """
 
 from script.relation_extractors_one_relation.common import (
     EdgeRecord,
     build_parser,
+    common_args_from_payload,
     configure_logging,
     now_utc,
     print_json,
@@ -50,10 +57,16 @@ def authored_by_fallback(table: str, row: dict, batch: str) -> list[EdgeRecord]:
     ]
 
 
+def build_sources() -> list[tuple[str, str, object]]:
+    """构造 sources；单源固定，无需 payload 参数。"""
+    return [("dwd_scholar_paper_relation", SQL, authored_by_fallback)]
+
+
 def main() -> None:
     parser = build_parser(__doc__ or "")
     args = parser.parse_args()
     configure_logging(args.log_level)
+    sources = build_sources()
     print_json(
         run_relation_extractor(
             database=args.database,
@@ -62,8 +75,24 @@ def main() -> None:
             dry_run=args.dry_run,
             ingest_batch=args.ingest_batch,
             since=args.since,
-            sources=[("dwd_scholar_paper_relation", SQL, authored_by_fallback)],
+            sources=sources,
         )
+    )
+
+
+def workflow(payload: dict) -> dict:
+    """Temporal workflow 入口；payload 同 main() 的 vars(args) 形态。"""
+    common = common_args_from_payload(payload)
+    configure_logging(common["log_level"])
+    sources = build_sources()
+    return run_relation_extractor(
+        database=common["database"],
+        batch_size=common["batch_size"],
+        limit=common["limit"],
+        dry_run=common["dry_run"],
+        ingest_batch=common["ingest_batch"],
+        since=common["since"],
+        sources=sources,
     )
 
 

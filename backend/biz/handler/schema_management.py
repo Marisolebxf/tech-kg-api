@@ -16,7 +16,7 @@ from application.schema_management import SchemaManagementApplication
 from biz.dependencies.auth import CurrentAdmin
 from biz.schemas.common import ApiResponse
 from biz.schemas.schema_management import EntitySchemaCreate, RelationSchemaCreate
-from infra.mysql import get_session
+from infra.workflow_mysql import get_workflow_session
 from service.schema_management import (
     SchemaConflictError,
     SchemaDdlError,
@@ -58,19 +58,19 @@ def _raise_domain_error(exc: SchemaManagementError) -> None:
 
 
 @router.get("/overview", response_model=ApiResponse)
-def get_schema_overview(session: Annotated[Session, Depends(get_session)]) -> ApiResponse:
+def get_schema_overview(session: Annotated[Session, Depends(get_workflow_session)]) -> ApiResponse:
     return ApiResponse(data=_application(session).overview())
 
 
 @router.get("/source-tables", response_model=ApiResponse)
-def list_source_tables(session: Annotated[Session, Depends(get_session)]) -> ApiResponse:
+def list_source_tables(session: Annotated[Session, Depends(get_workflow_session)]) -> ApiResponse:
     return ApiResponse(data=_application(session).list_source_tables())
 
 
 @router.get("/schemas", response_model=ApiResponse)
 def list_schemas(
     admin: CurrentAdmin,
-    session: Annotated[Session, Depends(get_session)],
+    session: Annotated[Session, Depends(get_workflow_session)],
     kind: Annotated[str | None, Query(pattern="^(entity|relation)$")] = None,
     keyword: Annotated[str | None, Query(max_length=128)] = None,
     page: Annotated[int, Query(ge=1)] = 1,
@@ -92,7 +92,7 @@ def list_schemas(
 @router.get("/schemas/topology", response_model=ApiResponse)
 def get_schema_topology(
     admin: CurrentAdmin,
-    session: Annotated[Session, Depends(get_session)],
+    session: Annotated[Session, Depends(get_workflow_session)],
 ) -> ApiResponse:
     return ApiResponse(
         data=_application(session).topology(
@@ -106,7 +106,7 @@ def get_schema_topology(
 def get_schema_detail(
     schema_id: str,
     admin: CurrentAdmin,
-    session: Annotated[Session, Depends(get_session)],
+    session: Annotated[Session, Depends(get_workflow_session)],
 ) -> ApiResponse:
     try:
         return ApiResponse(
@@ -123,7 +123,7 @@ def get_schema_detail(
 @router.post("/schemas/entities", response_model=ApiResponse, status_code=201)
 def create_entity_schema(
     admin: CurrentAdmin,
-    session: Annotated[Session, Depends(get_session)],
+    session: Annotated[Session, Depends(get_workflow_session)],
     payload: EntitySchemaCreate,
 ) -> ApiResponse:
     try:
@@ -139,7 +139,7 @@ def create_entity_schema(
 @router.post("/schemas/relations", response_model=ApiResponse, status_code=201)
 def create_relation_schema(
     admin: CurrentAdmin,
-    session: Annotated[Session, Depends(get_session)],
+    session: Annotated[Session, Depends(get_workflow_session)],
     payload: RelationSchemaCreate,
 ) -> ApiResponse:
     try:
@@ -156,7 +156,7 @@ def create_relation_schema(
 def delete_schema(
     schema_id: str,
     admin: CurrentAdmin,
-    session: Annotated[Session, Depends(get_session)],
+    session: Annotated[Session, Depends(get_workflow_session)],
 ) -> ApiResponse:
     try:
         data = _application(session).delete_schema(
@@ -173,7 +173,7 @@ def delete_schema(
 def replace_schema_script(
     schema_id: str,
     admin: CurrentAdmin,
-    session: Annotated[Session, Depends(get_session)],
+    session: Annotated[Session, Depends(get_workflow_session)],
     script: Annotated[UploadFile, File(...)],
 ) -> ApiResponse:
     try:
@@ -201,7 +201,7 @@ _SENTINEL = object()
 async def verify_and_save_script(
     schema_id: str,
     admin: CurrentAdmin,
-    session: Annotated[Session, Depends(get_session)],
+    session: Annotated[Session, Depends(get_workflow_session)],
     script: Annotated[UploadFile, File(...)],
 ) -> StreamingResponse:
     """上传脚本 → LLM 安全校验 → 保存，以 SSE 流式回传进度。
@@ -285,7 +285,7 @@ async def verify_and_save_script(
 @router.get("/schemas/{schema_id}/script/content", response_model=ApiResponse)
 def get_schema_script_content(
     schema_id: str,
-    session: Annotated[Session, Depends(get_session)],
+    session: Annotated[Session, Depends(get_workflow_session)],
 ) -> ApiResponse:
     try:
         data = _application(session).get_script_content(schema_id)
@@ -297,7 +297,7 @@ def get_schema_script_content(
 @router.get("/schemas/{schema_id}/script")
 def download_schema_script(
     schema_id: str,
-    session: Annotated[Session, Depends(get_session)],
+    session: Annotated[Session, Depends(get_workflow_session)],
 ) -> StreamingResponse:
     try:
         script, body = _application(session).get_script(schema_id)

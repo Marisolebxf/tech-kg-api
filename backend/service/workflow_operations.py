@@ -248,46 +248,64 @@ class WorkflowOperationsService:
 
     async def get_execution(self, execution_id: str) -> dict[str, Any] | None:
         execution = self.repo.get_execution(execution_id)
-        if execution is None or execution.get("status") not in {"RUNNING"}:
-            return execution
-        try:
-            execution = await temporal_runtime.refresh_execution(execution)
-        except Exception as exc:
-            temporal_runtime._client = None
-            execution["message"] = f"状态刷新失败: {exc}"
-        self.repo.save_execution(execution)
+        if execution is None:
+            return None
+        # 只在 RUNNING 时向 Temporal 主动 refresh（终态执行不会再变，省 RPC）；
+        # 但 _sync_task_from_execution 始终触发，覆盖历史 COMPLETED 但 task 未同步的 case
+        if execution.get("status") == "RUNNING":
+            try:
+                execution = await temporal_runtime.refresh_execution(execution)
+            except Exception as exc:
+                temporal_runtime._client = None
+                execution["message"] = f"状态刷新失败: {exc}"
+            self.repo.save_execution(execution)
         self._sync_task_from_execution(execution)
         return execution
 
     def _sync_task_from_execution(self, execution: dict[str, Any]) -> None:
-        """execution 完成后，若脚本返回了 stages，回写关联 task 的 steps/output/status。
+        """execution 终态时把状态回写到关联 task；若脚本返回了 stages 列表，额外回写 steps/output。
 
-        让 ProcessInstanceDetailView 能渲染脚本上报的真实阶段，而非模板化 fallback。
+        状态同步不依赖 stages 存在，否则像 kg.custom.python 这种不返回 stages 的工作流
+        会让 task 永远停在「执行中」。
         """
         task_id = execution.get("taskId")
         if not task_id:
             return
-        output = execution.get("output")
-        if not isinstance(output, dict):
-            return
-        stages = output.get("stages")
-        if not isinstance(stages, list):
+        status = execution.get("status")
+        if status == "COMPLETED":
+            new_task_status = "执行完成"
+            new_status = "已完成"
+        elif status in {"FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}:
+            new_task_status = "执行出错"
+            new_status = "执行出错"
+        else:
+            # 非终态（RUNNING 等）：不更新 task 状态，避免覆盖正在执行的标记
             return
         task = self.repo.get_task(task_id)
         if task is None:
             return
-        task["steps"] = stages
-        task["output"] = output
-        status = execution.get("status")
-        if status == "COMPLETED":
-            task["taskStatus"] = "执行完成"
-            task["status"] = "已完成"
-        elif status in {"FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}:
-            task["taskStatus"] = "执行出错"
-            task["status"] = "执行出错"
-        task["logs"] = (task.get("logs") or []) + [
+        already_in_sync = task.get("taskStatus") == new_task_status
+        output = execution.get("output")
+        stages = output.get("stages") if isinstance(output, dict) else None
+        if isinstance(stages, list):
+            task["steps"] = stages
+            task["output"] = output
+        elif isinstance(output, dict):
+            # output 是 dict 但没有 stages（如 kg.custom.python 的 {status, result, ...}），
+            # 仍把 output 写到 task 上便于详情页查看
+            task["output"] = output
+        if already_in_sync and task.get("status") == new_status:
+            # 状态已一致，避免重复 log 累积
+            self.repo.save_task(task)
+            return
+        task["taskStatus"] = new_task_status
+        task["status"] = new_status
+        log_msg = (
             f"阶段回写：{len(stages)} 个 stage，状态={status}"
-        ]
+            if isinstance(stages, list)
+            else f"执行状态同步：{status}（output 无 stages 列表，仅回写状态）"
+        )
+        task["logs"] = (task.get("logs") or []) + [log_msg]
         self.repo.save_task(task)
 
     async def trigger_graph_build(self, request: dict[str, Any]) -> dict[str, Any]:

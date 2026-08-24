@@ -13,20 +13,20 @@ from uuid import NAMESPACE_URL, uuid5
 from sqlalchemy import Engine, inspect, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
-from db_model.base import Base
 from db_model.schema_management import (
     GraphSchemaDefinition,
     GraphSchemaMapping,
     GraphSchemaProperty,
     GraphSchemaScript,
 )
-from infra.mysql import get_engine
+from infra.workflow_mysql import get_workflow_engine
 from service.schema_catalog_seed import (
     ATTRIBUTE_SPECS,
     ENTITY_SPECS,
     FACT_RELATION_SPECS,
     INFERRED_RELATION_SPECS,
 )
+from service.workflow_models import Base
 
 MANAGED_TABLES = [
     GraphSchemaDefinition.__table__,
@@ -254,7 +254,7 @@ def _upsert_relations(
 
 
 def initialize_schema_management(engine: Engine | None = None) -> int:
-    engine = engine or get_engine()
+    engine = engine or get_workflow_engine()
     Base.metadata.create_all(engine, tables=MANAGED_TABLES)
     _ensure_incremental_columns(engine)
 

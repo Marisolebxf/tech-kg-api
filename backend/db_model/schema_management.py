@@ -19,7 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from db_model.base import Base
+from service.workflow_models import Base
 
 
 def _uuid() -> str:

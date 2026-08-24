@@ -7,6 +7,12 @@
   paper_id 去掉 ``__数字`` 后缀后与 author_id 均非空才建点，同 author 首次出现胜出）。
 - ``--source organization-role``：旧 ``organization_entity_etl.py``（高管/股东/受益人/
   实控人各表 + 机构表的法定代表人，person_vid 旧公式）。
+
+Dual-mode 入口：
+- CLI: ``python -m script.entity_extractors_one_entity.person_entity --dry-run --limit 1``
+- Temporal workflow: 脚本顶层 ``workflow(payload)`` 函数，由
+  ``service/temporal_workflows.py:execute_python_script`` Activity 子进程加载并调用。
+  payload key 用 snake_case（跟 argparse 转换后的 vars(args) 同形态）。
 """
 
 from __future__ import annotations
@@ -18,6 +24,7 @@ from typing import Any
 from script.entity_extractors_one_entity.common import (
     EntityRecord,
     build_parser,
+    common_args_from_payload,
     configure_logging,
     extra_json,
     paper_text,
@@ -37,8 +44,8 @@ _SUFFIX_RE = re.compile(r"__\d+$")
 SCHOLAR_SQL = """
 SELECT s.*,
        (SELECT tf.academician FROM dwd_scholar_talent_flag tf
-          WHERE tf.scholar_id = s.scholar_id ORDER BY tf.id DESC LIMIT 1) AS academician,
-       (SELECT GROUP_CONCAT(rd.fields ORDER BY rd.id SEPARATOR '；')
+          WHERE tf.scholar_id = s.scholar_id ORDER BY tf.update_time DESC LIMIT 1) AS academician,
+       (SELECT GROUP_CONCAT(rd.fields ORDER BY rd.create_time SEPARATOR '；')
           FROM dwd_scholar_research_direction rd WHERE rd.scholar_id = s.scholar_id)
          AS research_fields
 FROM dwd_scholar s
@@ -115,6 +122,43 @@ def paper_author_person(table: str, row: Mapping[str, Any], batch: str) -> list[
     return [EntityRecord("Person", vid, props)]
 
 
+def build_sources(
+    payload: Mapping[str, Any],
+) -> tuple[list[tuple[str, str, Any]], str | None]:
+    """从 payload dict 构造 (sources, dedupe)；CLI vars(args) 与 workflow payload 同形态。"""
+    source = payload.get("source", "scholar")
+    if source == "scholar":
+        return [("dwd_scholar", SCHOLAR_SQL, scholar_person)], None
+    if source == "paper-author":
+        # 旧口径：同一 author_id 首次出现的姓名胜出。
+        return (
+            [
+                (
+                    "dwd_zh_author",
+                    "SELECT * FROM dwd_zh_author ORDER BY author_id",
+                    paper_author_person,
+                ),
+                (
+                    "dwd_en_author",
+                    "SELECT * FROM dwd_en_author ORDER BY author_id",
+                    paper_author_person,
+                ),
+            ],
+            "first",
+        )
+    return (
+        [
+            (table, f"SELECT * FROM {table} ORDER BY 1", organization_role_person)
+            for table in PERSON_TABLES
+        ]
+        + [
+            (table, f"SELECT * FROM {table} ORDER BY 1", legal_representative_person)
+            for table in ORGANIZATION_TABLES
+        ],
+        None,
+    )
+
+
 def main() -> None:
     parser = build_parser(__doc__ or "")
     parser.add_argument(
@@ -124,32 +168,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     configure_logging(args.log_level)
-    dedupe = None
-    if args.source == "scholar":
-        sources = [("dwd_scholar", SCHOLAR_SQL, scholar_person)]
-    elif args.source == "paper-author":
-        # 旧口径：同一 author_id 首次出现的姓名胜出。
-        dedupe = "first"
-        sources = [
-            (
-                "dwd_zh_author",
-                "SELECT * FROM dwd_zh_author ORDER BY author_id",
-                paper_author_person,
-            ),
-            (
-                "dwd_en_author",
-                "SELECT * FROM dwd_en_author ORDER BY author_id",
-                paper_author_person,
-            ),
-        ]
-    else:
-        sources = [
-            (table, f"SELECT * FROM {table} ORDER BY 1", organization_role_person)
-            for table in PERSON_TABLES
-        ] + [
-            (table, f"SELECT * FROM {table} ORDER BY 1", legal_representative_person)
-            for table in ORGANIZATION_TABLES
-        ]
+    sources, dedupe = build_sources(vars(args))
     print_json(
         run_entity_extractor(
             database=args.database,
@@ -161,6 +180,23 @@ def main() -> None:
             dedupe=dedupe,
             sources=sources,
         )
+    )
+
+
+def workflow(payload: dict[str, Any]) -> dict[str, Any]:
+    """Temporal workflow 入口；payload 同 main() 的 vars(args) 形态。"""
+    common = common_args_from_payload(payload)
+    configure_logging(common["log_level"])
+    sources, dedupe = build_sources(payload)
+    return run_entity_extractor(
+        database=common["database"],
+        batch_size=common["batch_size"],
+        limit=common["limit"],
+        dry_run=common["dry_run"],
+        ingest_batch=common["ingest_batch"],
+        since=common["since"],
+        dedupe=dedupe,
+        sources=sources,
     )
 
 

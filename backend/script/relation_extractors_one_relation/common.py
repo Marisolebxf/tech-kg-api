@@ -63,6 +63,24 @@ def configure_logging(level: str) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
+def common_args_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """从 workflow payload dict 提取通用 ETL 参数（CLI argparse 的 dict 化镜像）。
+
+    供 dual-mode 关系脚本的 ``workflow(payload)`` 入口复用——payload key 用 snake_case，
+    跟 argparse 转换后的 ``vars(args)`` 同形态，便于 ``build_sources(payload)`` 这类
+    脚本专属函数在 CLI 和 workflow 两条路径下共享。
+    """
+    return {
+        "log_level": payload.get("log_level", "INFO"),
+        "database": payload.get("database", DEFAULT_DB),
+        "batch_size": int(payload.get("batch_size") or DEFAULT_BATCH_SIZE),
+        "limit": payload.get("limit"),
+        "since": payload.get("since"),
+        "dry_run": bool(payload.get("dry_run", False)),
+        "ingest_batch": payload.get("ingest_batch"),
+    }
+
+
 def build_parser(description: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--log-level", default="INFO")

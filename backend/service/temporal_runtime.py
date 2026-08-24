@@ -14,6 +14,7 @@ from temporalio.client import (
     ScheduleSpec,
     ScheduleState,
 )
+from temporalio.service import RPCError
 from temporalio.worker import Worker
 
 from service.temporal_workflows import ACTIVITIES, WORKFLOW_CLASSES
@@ -77,7 +78,22 @@ class TemporalRuntime:
             return execution
         client = await self.client()
         handle = client.get_workflow_handle(execution["workflowId"], run_id=execution.get("runId"))
-        description = await handle.describe()
+        try:
+            description = await handle.describe()
+        except RPCError as exc:
+            # workflow 在当前 Temporal 上不存在（服务迁移/重置/重部署后丢失）。
+            # 标记为 TERMINATED 让控制面把它当终态处理，避免 SQLite 卡在 RUNNING。
+            if exc.status.value == 5:  # grpc.StatusCode.NOT_FOUND
+                return {
+                    **execution,
+                    "status": "TERMINATED",
+                    "completedAt": datetime.now(UTC).astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+                    "message": (
+                        f"工作流在 Temporal 已不存在（{exc}）。"
+                        "常见原因：Temporal 服务迁移/重置、或工作流在另一实例上运行。"
+                    ),
+                }
+            raise
         status = description.status.name
         refreshed = {**execution, "status": status}
         if status == "RUNNING":

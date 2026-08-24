@@ -1,9 +1,5 @@
 <script setup lang="ts">
-import ElConfigProvider from 'element-plus/es/components/config-provider/index'
-import ElDatePicker from 'element-plus/es/components/date-picker/index'
 import ElSelect, { ElOption } from 'element-plus/es/components/select/index'
-import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import 'element-plus/es/components/date-picker/style/css'
 import 'element-plus/es/components/select/style/css'
 import { computed, ref, watch } from 'vue'
 
@@ -40,7 +36,6 @@ import {
   queryExpertColleagueRelation,
   type ExpertColleagueRelationResponse,
 } from '../../../api/expertColleagueRelation'
-import iconInfo from '../../../assets/icons/icon-info.svg'
 import KgGraphCanvas from '../../../components/kg-graph-canvas.vue'
 import { useToast } from '../../../composables/use-toast'
 import {
@@ -862,6 +857,7 @@ const graphPreset = computed<GraphPreset>(() => {
   return getServiceGraphPreset(props.moduleInfo.key)
 })
 const graphNodes = computed<GraphNodeData[]>(() => {
+  if (lastTestTime.value === '—') return []
   if (isLiveModule.value) return liveModuleGraph.value?.nodes ?? []
   if (liveGraph.value) return liveGraph.value.nodes
   return graphPreset.value.nodes
@@ -1318,6 +1314,9 @@ const liveProvenance = computed(() => {
 })
 
 const detailRows = computed(() => {
+  if (lastTestTime.value === '—') {
+    return props.moduleInfo.summaryRows.map((row) => [row.label, ''] as const)
+  }
   if (isPanorama.value && panoramaResponse.value) {
     return computePanoramaSummaryRows(panoramaResponse.value)
   }
@@ -1682,9 +1681,6 @@ watch(
     expertIndirectError.value = null
     expertColleagueResponse.value = null
     resetParameters({ notify: false })
-    if (isLiveModule.value && !isLiveColleague.value) {
-      void handleRun()
-    }
   },
   { immediate: true },
 )
@@ -1715,13 +1711,6 @@ async function loadModuleDescribe() {
   }
 }
 
-function formatValue(value: unknown) {
-  if (Array.isArray(value)) return value.join('、')
-  if (typeof value === 'boolean') return value ? '是' : '否'
-  if (value === undefined || value === null) return ''
-  return String(value)
-}
-
 function normalizeMonthBoundary(
   value: string | undefined,
   boundary: 'start' | 'end',
@@ -1743,38 +1732,32 @@ function resetParameters({ notify = true }: { notify?: boolean } = {}) {
   parameterValues.value = Object.fromEntries(
     props.moduleInfo.requestFields.map((field) => [
       field.name,
-      props.moduleInfo.prefillFormFromExample === false
-        ? ''
-        : formatValue(props.moduleInfo.requestExample[field.name]),
+      '',
     ]),
   )
   paramResetToken.value += 1
-  if (isLiveModule.value) {
-    liveResponse.value = null
-    expertColleagueResponse.value = null
-    liveAlumniResult.value = null
-    liveCoopResult.value = null
-    liveApiPayload.value = null
-    liveError.value = null
-    selectedGraphNodeId.value = null
-    selectedGraphEdgeId.value = null
-    resultMode.value = 'summary'
-    lastTestTime.value = '—'
-    lastUpdateTime.value = null
-    void loadModuleDescribe()
-  }
-  if (isPaperCooperation.value) {
-    liveResponse.value = null
-    liveApiPayload.value = null
-    liveError.value = null
-    selectedGraphNodeId.value = null
-    selectedGraphEdgeId.value = null
-    resultMode.value = 'summary'
-    lastTestTime.value = '—'
-    lastUpdateTime.value = null
-  }
-  if (notify) showToast('已重置为默认参数', 'info')
-  if (isExpertIndirect.value || isPaperCooperation.value) void handleRun()
+
+  // 九大模块共用同一套空状态：重置后不保留任何上次查询时间或结果。
+  resultMode.value = 'summary'
+  lastTestTime.value = '—'
+  lastUpdateTime.value = null
+  selectedGraphNodeId.value = null
+  selectedGraphEdgeId.value = null
+  liveResponse.value = null
+  expertColleagueResponse.value = null
+  liveAlumniResult.value = null
+  liveCoopResult.value = null
+  liveApiPayload.value = null
+  liveError.value = null
+  panoramaResponse.value = null
+  panoramaError.value = null
+  expertDirectResponse.value = null
+  expertDirectError.value = null
+  expertIndirectResponse.value = null
+  expertIndirectError.value = null
+
+  if (isLiveModule.value) void loadModuleDescribe()
+  if (notify) showToast('已清空参数', 'info')
 }
 
 function buildPayload(): Record<string, unknown> {
@@ -2377,7 +2360,6 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       <div>
         <h2>{{ moduleInfo.title }}</h2>
       </div>
-      <img class="field-info-icon" :src="iconInfo" alt="" aria-hidden="true" />
     </div>
     <div
       class="service-console__params"
@@ -2393,15 +2375,17 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       >
         <span
           ><i v-if="field.required === '是'">*</i
-          >{{ field.label ?? field.name }}</span
+          >{{ field.name }}</span
         >
         <select
           v-if="field.type === 'select'"
           :key="`${field.name}-${paramResetToken}`"
           :value="parameterValues[field.name] ?? ''"
+          :class="{ 'is-empty-control': !parameterValues[field.name] }"
           :title="field.description"
           @change="handleParameterInput(field.name, $event)"
         >
+          <option value="" disabled>请选择</option>
           <option v-for="option in field.options" :key="option" :value="option">
             {{ option }}
           </option>
@@ -2444,32 +2428,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             :value="stage.value"
           />
         </ElSelect>
-        <ElConfigProvider
-          v-else-if="
-            field.type === 'month' && (isLiveCoop || field.ui === 'month-calendar')
-          "
-          :locale="zhCn"
-        >
-          <ElDatePicker
-            v-model="parameterValues[field.name]"
-            class="cooperation-month-picker"
-            type="month"
-            format="YYYY年MM月"
-            value-format="YYYY-MM"
-            :placeholder="
-              field.placeholder ??
-              (field.name === 'timeRangeStart'
-                ? '选择开始年月，如 2020-01'
-                : '选择结束年月，如 2020-12')
-            "
-            clearable
-            :aria-label="`${field.label ?? field.name}年月`"
-            @update:model-value="clearParameterError(field.name)"
-          />
-        </ElConfigProvider>
         <input
           v-else
           :type="field.type === 'month' ? 'month' : 'text'"
+          :class="{ 'is-empty-month': field.type === 'month' && !parameterValues[field.name] }"
           :key="`${field.name}-${paramResetToken}`"
           :value="parameterValues[field.name] ?? ''"
           :placeholder="field.placeholder ?? field.description"
@@ -2986,13 +2948,31 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   font-size: 15px;
 }
 
-.service-console__params select {
-  cursor: pointer;
+.service-console__params input::placeholder {
+  color: var(--text-tertiary);
+  opacity: 1;
 }
 
-.cooperation-month-picker {
-  width: 100% !important;
-  min-width: 0;
+.service-console__params input.is-empty-month::-webkit-datetime-edit {
+  color: var(--text-tertiary);
+}
+
+.service-console__params input[type='month']::-webkit-calendar-picker-indicator {
+  opacity: 0.42;
+}
+
+.service-console__params select.is-empty-control {
+  color: var(--text-tertiary);
+}
+
+.service-console__params select {
+  padding-right: 32px;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='m4 6 4 4 4-4' fill='none' stroke='%2386909c' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 16px;
+  cursor: pointer;
 }
 
 .cooperation-type-select {
@@ -3010,6 +2990,18 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   box-shadow: 0 0 0 1px var(--border-strong) inset;
 }
 
+.cooperation-type-select:deep(.el-select__placeholder),
+.cooperation-type-select:deep(.el-select__caret),
+.alumni-stage-select:deep(.el-select__placeholder),
+.alumni-stage-select:deep(.el-select__caret) {
+  color: var(--text-tertiary);
+}
+
+.cooperation-type-select:deep(.el-select__selected-item),
+.alumni-stage-select:deep(.el-select__selected-item) {
+  color: var(--text-primary);
+}
+
 .service-console__params label.has-error input {
   border-color: var(--danger);
 }
@@ -3019,10 +3011,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   .cooperation-type-select:deep(.el-select__wrapper),
 .service-console__params
   label.has-error
-  .alumni-stage-select:deep(.el-select__wrapper),
-.service-console__params
-  label.has-error
-  .cooperation-month-picker:deep(.el-input__wrapper) {
+  .alumni-stage-select:deep(.el-select__wrapper) {
   box-shadow: 0 0 0 1px var(--danger) inset;
 }
 
@@ -3035,17 +3024,6 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   font-weight: 400;
   line-height: 18px;
   white-space: nowrap;
-}
-
-.cooperation-month-picker:deep(.el-input__wrapper) {
-  min-height: 36px;
-  border-radius: var(--radius-sm);
-  box-shadow: 0 0 0 1px var(--border-strong) inset;
-}
-
-.field-info-icon {
-  width: 14px;
-  height: 14px;
 }
 
 .service-console__actions {

@@ -32,9 +32,10 @@ def workflow(payload: dict[str, Any]) -> dict[str, Any]:
         stream=sys.stderr,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    from infra.graph_db import TRSGraphClient, TRSGraphSettings
     from script.align_project_relations import align_project_relations
     from script.cleanup_project_stubs import cleanup_project_stubs
-    from script.load_project_graph import get_dev_graph_client, load_project_graph
+    from script.load_project_graph import load_project_graph
     from script.project_edge_schema import (
         ensure_alignment_edge_schema,
         ensure_project_tag_confidence,
@@ -53,30 +54,66 @@ def workflow(payload: dict[str, Any]) -> dict[str, Any]:
     logger.info("project_ingest start payload=%s", payload)
     stages: dict[str, Any] = {}
 
-    if not skip_schema and not dry_run:
-        graph = get_dev_graph_client()
-        try:
-            ensure_alignment_edge_schema(graph)
-            ensure_project_tag_confidence(graph)
-            stages["schema"] = {"status": "ok"}
-        finally:
-            from infra.graph_db import close_trs_graph_client
+    # Temporal worker 与 FastAPI 同进程运行时，不能使用并关闭进程级图单例，
+    # 否则会把在线请求正在使用的 client 一并断开。
+    graph = TRSGraphClient(TRSGraphSettings.from_env())
+    graph.connect()
 
-            close_trs_graph_client()
+    try:
+        return _run_stages(
+            payload=payload,
+            graph=graph,
+            stages=stages,
+            limit_int=limit_int,
+            dry_run=dry_run,
+            skip_align=skip_align,
+            skip_cleanup=skip_cleanup,
+            skip_schema=skip_schema,
+            nodes_only=nodes_only,
+            relations_only=relations_only,
+            backfill_confidence=backfill_confidence,
+            ensure_alignment_edge_schema=ensure_alignment_edge_schema,
+            ensure_project_tag_confidence=ensure_project_tag_confidence,
+            load_project_graph=load_project_graph,
+            align_project_relations=align_project_relations,
+            cleanup_project_stubs=cleanup_project_stubs,
+        )
+    finally:
+        graph.close()
+
+
+def _run_stages(
+    *,
+    payload: dict[str, Any],
+    graph: Any,
+    stages: dict[str, Any],
+    limit_int: int,
+    dry_run: bool,
+    skip_align: bool,
+    skip_cleanup: bool,
+    skip_schema: bool,
+    nodes_only: bool,
+    relations_only: bool,
+    backfill_confidence: bool,
+    ensure_alignment_edge_schema: Any,
+    ensure_project_tag_confidence: Any,
+    load_project_graph: Any,
+    align_project_relations: Any,
+    cleanup_project_stubs: Any,
+) -> dict[str, Any]:
+
+    if not skip_schema and not dry_run:
+        ensure_alignment_edge_schema(graph)
+        ensure_project_tag_confidence(graph)
+        stages["schema"] = {"status": "ok"}
     else:
         stages["schema"] = {"status": "skipped"}
 
     if backfill_confidence:
         # 仅回填现有 Project 节点 confidence，跳过灌点/对齐/清理（可幂等重跑）
-        from script.load_project_graph import backfill_project_confidence, get_dev_graph_client
+        from script.load_project_graph import backfill_project_confidence
 
-        graph = get_dev_graph_client()
-        try:
-            stages["backfill_confidence"] = backfill_project_confidence(graph, dry_run=dry_run)
-        finally:
-            from infra.graph_db import close_trs_graph_client
-
-            close_trs_graph_client()
+        stages["backfill_confidence"] = backfill_project_confidence(graph, dry_run=dry_run)
         stages.setdefault("load", {"status": "skipped"})
         stages.setdefault("align", {"status": "skipped"})
         stages.setdefault("cleanup", {"status": "skipped"})
@@ -92,6 +129,7 @@ def workflow(payload: dict[str, Any]) -> dict[str, Any]:
         nodes_only=nodes_only,
         relations_only=relations_only,
         dry_run=dry_run,
+        graph=graph,
     )
     stages["load"] = load_report
 
@@ -104,12 +142,13 @@ def workflow(payload: dict[str, Any]) -> dict[str, Any]:
             limit=limit_int,
             ingest_batch=payload.get("ingest_batch"),
             dry_run=dry_run,
+            graph=graph,
         )
 
     if skip_cleanup:
         stages["cleanup"] = {"status": "skipped"}
     else:
-        stages["cleanup"] = cleanup_project_stubs(dry_run=dry_run)
+        stages["cleanup"] = cleanup_project_stubs(dry_run=dry_run, graph=graph)
 
     result = {"status": "completed", "stages": stages}
     logger.info("project_ingest done keys=%s", list(stages))

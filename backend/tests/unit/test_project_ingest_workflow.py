@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from script.workflows.project_ingest_workflow import workflow
 
@@ -39,7 +39,7 @@ def test_workflow_runs_pipeline_stages():
     assert mock_load.call_args.kwargs["dry_run"] is True
     assert mock_load.call_args.kwargs["id_prefix"] == "P"
     mock_align.assert_called_once()
-    mock_cleanup.assert_called_once_with(dry_run=True)
+    mock_cleanup.assert_called_once_with(dry_run=True, graph=ANY)
 
 
 def test_workflow_defaults_limit_when_missing():

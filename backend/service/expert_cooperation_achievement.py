@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Any
 
-from infra.graph_db import TRSGraphClient, get_trs_graph_client
+from infra.graph_db import GraphNotFoundError, TRSGraphClient, get_trs_graph_client
 from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
 
@@ -77,12 +77,11 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
 
     def __init__(self) -> None:
         super().__init__()
-        self._graph: TRSGraphClient | None = None
 
     def _client(self) -> TRSGraphClient:
-        if self._graph is None:
-            self._graph = get_trs_graph_client()
-        return self._graph
+        # 不在 service 中二次缓存进程级单例。ETL/worker 可能通过
+        # close_trs_graph_client() 释放并重建它，持有旧引用会永久停留在未连接状态。
+        return get_trs_graph_client()
 
     def query(
         self,
@@ -184,7 +183,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
     def _require_node(graph: TRSGraphClient, node_id: str, kind: str) -> Any:
         try:
             node = graph.get_node(node_id)
-        except Exception:
+        except GraphNotFoundError:
             node = None
         if node is None:
             raise KeyError(f"未找到{kind}: {node_id}")
@@ -205,7 +204,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         result: dict[str, set[str]] = {"paper": set(), "patent": set(), "project": set()}
         try:
             edges = graph.get_node_edges(person_id, direction="both", limit=EDGE_LIMIT)
-        except Exception:
+        except GraphNotFoundError:
             return result
 
         for edge in edges or []:
@@ -235,7 +234,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
     def _build_item(self, graph: TRSGraphClient, ach_type: str, vid: str) -> dict[str, Any]:
         try:
             node = graph.get_node(vid)
-        except Exception:
+        except GraphNotFoundError:
             node = None
         props = (getattr(node, "properties", None) or {}) if node else {}
         awards = self._extract_awards(props)

@@ -33,9 +33,9 @@ const pageTitle = computed(() => String(route.meta.title ?? '亿级知识图谱'
 const pageIcon = computed(() => {
   if (route.path === '/overview') return navOverview
   if (route.path.includes('/schema')) return navSchema
-  if (route.path.includes('/reviews') || route.path.includes('/corrections')) return navReview
-  if (route.path.includes('/tasks') || route.path.includes('/processing-instance/') || route.path.includes('/task-detail/')) return navTasks
-  if (route.path.includes('/members')) return navTools
+  if (route.path.includes('/reviews') || route.path.includes('/corrections') || route.path.includes('/manual-review')) return navReview
+  if (route.path.includes('/tasks') || route.path.includes('/graph-build') || route.path.includes('/processing-instance/') || route.path.includes('/task-detail/')) return navTasks
+  if (route.path.includes('/members') || route.path.includes('/configurations')) return navTools
   if (route.path === '/graph-query') return navQuery
   if (route.path === '/pipelines') return navTasks
   if (route.path.startsWith('/user-') || route.path.startsWith('/account-') || route.path === '/operation-logs') return navTools
@@ -291,6 +291,32 @@ onBeforeUnmount(() => {
             <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/corrections" :title="appStore.collapsed ? '我的修正' : undefined">
               <span class="app-nav__icon" :style="navIconStyle(navReview)" aria-hidden="true"></span>
               <span v-if="!appStore.collapsed">我的修正</span>
+            </RouterLink>
+
+            <div v-if="!appStore.collapsed" class="app-nav__group"><span>图谱建设与治理</span></div>
+            <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/schema" :title="appStore.collapsed ? 'Schema 管理' : undefined">
+              <span class="app-nav__icon" :style="navIconStyle(navSchema)" aria-hidden="true"></span>
+              <span v-if="!appStore.collapsed">Schema 管理</span>
+            </RouterLink>
+            <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/graph-build" :title="appStore.collapsed ? '图谱构建' : undefined">
+              <span class="app-nav__icon" :style="navIconStyle(navTasks)" aria-hidden="true"></span>
+              <span v-if="!appStore.collapsed">图谱构建</span>
+            </RouterLink>
+            <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/manual-review" :title="appStore.collapsed ? '人工审核' : undefined">
+              <span class="app-nav__icon" :style="navIconStyle(navReview)" aria-hidden="true"></span>
+              <span v-if="!appStore.collapsed">人工审核</span>
+            </RouterLink>
+            <!-- 抽取 Pipeline 入口暂时隐藏，需要时取消注释恢复
+            <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/pipelines" :title="appStore.collapsed ? '抽取 Pipeline' : undefined">
+              <img class="app-nav__icon" :src="navFlow" alt="" aria-hidden="true" />
+              <span v-if="!appStore.collapsed">抽取 Pipeline</span>
+            </RouterLink>
+            -->
+
+            <div v-if="!appStore.collapsed" class="app-nav__group"><span>平台管理</span></div>
+            <RouterLink class="app-nav__item app-nav__item--top app-nav__item--leaf" active-class="app-nav__item--active" to="/configurations" :title="appStore.collapsed ? '配置管理' : undefined">
+              <span class="app-nav__icon" :style="navIconStyle(navTools)" aria-hidden="true"></span>
+              <span v-if="!appStore.collapsed">配置管理</span>
             </RouterLink>
 
             <div v-if="!appStore.collapsed" class="app-nav__group"><span>查询与服务</span></div>

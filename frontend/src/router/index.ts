@@ -10,6 +10,11 @@ import PlatformWorkbenchView from '../views/platform/PlatformWorkbenchView.vue'
 import OperationsCenterView from '../views/platform/OperationsCenterView.vue'
 import ManualReviewWorkspaceView from '../views/platform/ManualReviewWorkspaceView.vue'
 import ProcessInstanceDetailView from '../views/platform/ProcessInstanceDetailView.vue'
+import SchemaBrowserView from '../views/platform/SchemaBrowserView.vue'
+import TaskCenterView from '../views/platform/TaskCenterView.vue'
+import GraphBuildView from '../views/platform/GraphBuildView.vue'
+import ConfigurationManagementView from '../views/platform/ConfigurationManagementView.vue'
+import PipelineDesignerView from '../views/platform/PipelineDesignerView.vue'
 import AccessDeniedView from '../views/auth/AccessDeniedView.vue'
 import CorrectionCenterView from '../views/admin/CorrectionCenterView.vue'
 import MemberManagementView from '../views/admin/MemberManagementView.vue'
@@ -54,11 +59,11 @@ export const router = createRouter({
     },
     {
       path: '/data-processing',
-      redirect: '/admin/corrections',
+      redirect: { path: '/tasks', query: { module: '数据处理' } },
     },
     {
       path: '/graph-construction',
-      redirect: '/admin/corrections',
+      redirect: { path: '/tasks', query: { module: '图谱构建' } },
     },
     {
       path: '/graph-query',
@@ -78,21 +83,21 @@ export const router = createRouter({
     { path: '/admin/legacy-review/task/:instanceId', name: 'admin-legacy-review-detail', component: ManualReviewWorkspaceView, meta: { title: '流程异常详情', admin: true } },
     { path: '/admin/pipelines', redirect: '/admin/corrections' },
     { path: '/admin/configurations', redirect: '/admin/corrections' },
-    { path: '/schema', redirect: '/admin/corrections' },
-    { path: '/tasks', redirect: '/admin/corrections' },
-    { path: '/graph-build', redirect: '/admin/corrections' },
-    { path: '/manual-review', redirect: '/admin/reviews' },
-    { path: '/manual-review/task/:instanceId', redirect: to => `/admin/legacy-review/task/${String(to.params.instanceId)}` },
-    { path: '/pipelines', redirect: '/admin/corrections' },
-    { path: '/configurations', redirect: '/admin/corrections' },
+    { path: '/schema', name: 'schema', component: SchemaBrowserView, meta: { title: '图谱 Schema' } },
+    { path: '/tasks', name: 'tasks', component: TaskCenterView, meta: { title: '任务中心' } },
+    { path: '/graph-build', name: 'graph-build', component: GraphBuildView, meta: { title: '图谱构建' } },
+    { path: '/manual-review', name: 'manual-review', component: OperationsCenterView, props: { mode: 'review' }, meta: { title: '人工审核' } },
+    { path: '/manual-review/task/:instanceId', name: 'manual-review-detail', component: ManualReviewWorkspaceView, meta: { title: '人工审核详情' } },
+    { path: '/pipelines', name: 'pipelines', component: PipelineDesignerView, meta: { title: '抽取 Pipeline' } },
+    { path: '/configurations', name: 'configurations', component: ConfigurationManagementView, meta: { title: '配置管理' } },
     { path: '/user-center', name: 'user-center', component: UserCenterView, meta: { title: '个人中心' } },
     { path: '/account-security', name: 'account-security', component: AccountSecurityView, meta: { title: '账号与安全' } },
     { path: '/operation-logs', name: 'operation-logs', component: OperationLogsView, meta: { title: '操作记录' } },
     { path: '/user-permissions', redirect: '/user-center' },
     { path: '/admin/task-detail/:area/:taskId', name: 'admin-task-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
     { path: '/admin/processing-instance/:instanceId', name: 'admin-processing-instance-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
-    { path: '/task-detail/:area/:taskId', redirect: to => `/admin/task-detail/${String(to.params.area)}/${String(to.params.taskId)}` },
-    { path: '/processing-instance/:instanceId', redirect: to => `/admin/processing-instance/${String(to.params.instanceId)}` },
+    { path: '/task-detail/:area/:taskId', name: 'task-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情' } },
+    { path: '/processing-instance/:instanceId', name: 'processing-instance-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情' } },
     // { path: '/graph-versions', redirect: { path: '/tasks', query: { module: '图谱版本' } } },
     {
       path: '/business-service',

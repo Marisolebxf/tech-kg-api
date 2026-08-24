@@ -23,6 +23,7 @@ import iconMessage from "../assets/icons/icon-message.svg";
 import navOverview from "../assets/icons/nav-overview.svg";
 import navQuery from "../assets/icons/nav-query.svg";
 import navReview from "../assets/icons/nav-review.svg";
+import navSchema from "../assets/icons/nav-schema.svg";
 import navServices from "../assets/icons/nav-services.svg";
 import navTasks from "../assets/icons/nav-tasks.svg";
 import navFlow from "../assets/icons/nav-flow.svg";
@@ -42,6 +43,29 @@ const userRoleName = computed(() => authStore.primaryRole);
 const userBadge = computed(() => (authStore.isAdmin ? "全局管理" : "业务用户"));
 const isAdminArea = computed(() => route.path.startsWith("/admin"));
 const pageTitle = computed(() => String(route.meta.title ?? "亿级知识图谱"));
+const pageIcon = computed(() => {
+  if (route.path === "/overview") return navOverview;
+  if (route.path.includes("/schema")) return navSchema;
+  if (route.path.includes("/reviews") || route.path.includes("/corrections"))
+    return navReview;
+  if (
+    route.path.includes("/tasks") ||
+    route.path.includes("/processing-instance/") ||
+    route.path.includes("/task-detail/")
+  )
+    return navTasks;
+  if (route.path.includes("/members")) return navTools;
+  if (route.path === "/graph-query") return navQuery;
+  if (route.path === "/graph-build") return navFlow;
+  if (route.path === "/pipelines") return navTasks;
+  if (
+    route.path.startsWith("/user-") ||
+    route.path.startsWith("/account-") ||
+    route.path === "/operation-logs"
+  )
+    return navTools;
+  return navServices;
+});
 const routeError = ref("");
 const serviceNavCollapsed = ref(false);
 const alertDrawerOpen = ref(false);
@@ -657,6 +681,11 @@ onBeforeUnmount(() => {
         </div>
         <section class="app-stage">
           <div class="app-breadcrumb" aria-label="当前位置">
+            <span
+              class="app-breadcrumb__icon"
+              :style="navIconStyle(pageIcon)"
+              aria-hidden="true"
+            ></span>
             <template
               v-for="(item, index) in breadcrumbItems"
               :key="`${item.label}-${index}`"
@@ -1087,10 +1116,7 @@ onBeforeUnmount(() => {
 }
 
 .app-nav__sub-label {
-  display: inline-flex;
-  align-items: center;
-  height: 100%;
-  line-height: 22px;
+  display: inline-block;
   white-space: nowrap;
   will-change: transform;
 }
@@ -2082,6 +2108,21 @@ onBeforeUnmount(() => {
   min-width: 0;
   height: 22px;
   color: var(--gkx-text-secondary);
+}
+
+.app-breadcrumb__icon {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  background: #4e5969;
+  -webkit-mask-image: var(--nav-icon);
+  mask-image: var(--nav-icon);
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 16px 16px;
+  mask-size: 16px 16px;
 }
 
 .app-breadcrumb__separator {

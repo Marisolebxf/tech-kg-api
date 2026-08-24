@@ -475,13 +475,9 @@ defineEmits<{
   left: auto !important;
 }
 
-/* 与请求参数标题采用同一结构，不再通过整体位移补偿公共伪元素。 */
+/* 抵消标题伪元素 left:-10px，使蓝线与下方代码框左边框处于同一竖线。 */
 :global(.app-workspace) .developer-view__code-wrap .kg-panel__title {
-  margin-left: 0 !important;
-  padding-left: 11px !important;
-}
-
-:global(.app-workspace) .developer-view__code-wrap .kg-panel__title::before {
-  left: 0 !important;
+  margin-left: 10px !important;
+  padding-left: 0 !important;
 }
 </style>

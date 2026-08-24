@@ -88,7 +88,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'startTime', label: '关系建立起始时间', type: 'month', ui: 'month-calendar', required: '否', placeholder: '选填，选择年月，如 2020-01', description: '筛选条件：只保留关系建立时间不早于该年月的直接关系；留空表示不限时间' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { expertAId: '王祎', expertBId: '', institution: '', startTime: '' },
+    requestExample: { dataSource: 'all', expertAId: '007Rb117', expertBId: '00867K10', institution: '', startTime: '', endTime: '', limit: 3 },
     prefillFormFromExample: false,
     responseExample: { code: 0, message: 'success', data: { relation_type: '论文合作', relation_count: 12, scenario: '科研合作', confidence: 0.94 } },
     resultRows: [
@@ -162,7 +162,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'min_strength', type: 'number', required: '否', description: '最小关联强度阈值（0-1）' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { core_node_id: '4G7t0B0t', relation_types: ['学术关联'], path_depth: 2, min_strength: 0.65 },
+    requestExample: { core_node_id: '4G7t0B0t', min_strength: 0.65, path_depth: 2, relation_types: '学术关联' },
     responseExample: { structuredResult: { indirectNodeCount: 0, pathCount: 0, relationTypeCount: {}, averageStrength: 0 } },
     resultRows: [
       { label: '间接节点', value: '36', tone: 'blue' },
@@ -232,10 +232,9 @@ export const serviceModules: ServiceModule[] = [
     responseFields: commonResponseFields,
     requestExample: {
       sourceExpertId: 'person_expert_e2e_v1_001',
-      targetExpertId: 'person_expert_e2e_v1_002',
-      achievementTypes: 'paper',
-      timeRangeStart: '2020-01',
-      timeRangeEnd: '2020-12',
+      targetExpertId: 'person_expert_e2e_v1_004',
+      achievementTypes: ['paper', 'patent', 'project'],
+      limitPerType: 20,
     },
     responseExample: {
       code: 200,
@@ -317,7 +316,7 @@ export const serviceModules: ServiceModule[] = [
     ],
     responseFields: expertColleagueResponseFields,
     // 测试数据不再作为表单默认值，避免用户误提交样例专家。
-    requestExample: { expert_a_id: '', expert_b_id: '', start_time: '', end_time: '' },
+    requestExample: { expert_a_id: 'person_0512632S', expert_b_id: 'person_2406B66w', start_time: '2020-01', end_time: '2024-12' },
     responseExample: { code: 0, message: 'success', data: { colleagues: 18, teams: 4, overlap_years: 4, achievements: 6 } },
     resultRows: [
       { label: '同事关系', value: '18', tone: 'blue' },
@@ -381,6 +380,7 @@ export const serviceModules: ServiceModule[] = [
       targetExpertId: 'person_expert_e2e_v1_004',
       school: '清华大学',
       educationStage: '博士',
+      limit: 20,
     },
     responseExample: {
       code: 200,
@@ -459,7 +459,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'endTime', type: 'month', required: '否', description: '结束月份 YYYY-MM' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { expertAId: 'person_121d48631f434f4d323ba521d33032ad', expertBId: 'person_42914016fe8d6e0e1d01dad5845c47e6', startTime: '2021-01', endTime: '2026-08' },
+    requestExample: { expertAId: 'person_121d48631f434f4d323ba521d33032ad', expertBId: 'person_42914016fe8d6e0e1d01dad5845c47e6', startTime: '2021-01-01', endTime: '2026-08-31' },
     responseExample: { structuredResult: { cooperationPaperCount: 0, citation: { total: 0, max: 0 }, stableTeamMembers: [], paperTopics: [] } },
     resultRows: [
       { label: '合作论文', value: '14', tone: 'blue' },
@@ -552,7 +552,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'data.evidence', type: 'array', description: '证据链' },
     ],
     // 测试数据不再预填到表单，避免误提交样例；测试用例见 backend/docs/enterprise_relation_test_parameters.md
-    requestExample: { expert_id: '', enterprise_name: '', role_type: '', industry: '', key_tech_enterprise_only: '' },
+    requestExample: { expert_id: 'person_8A636L1c' },
     responseExample: { code: 0, message: 'success', data: { enterprises: 9, roles: 4, cooperation_fields: ['芯片设计', '智能制造'] } },
     resultRows: [
       { label: '关联企业', value: '9', tone: 'blue' },
@@ -648,7 +648,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'data.evidence', type: 'array', description: '证据链' },
     ],
     // 测试数据不再预填到表单，避免误提交样例；测试用例见 backend/docs/industry_chain_topn_test_parameters.md
-    requestExample: { chain_node_id: '', top_n: '', event_type: '', time_range_start: '', time_range_end: '', max_orgs: '' },
+    requestExample: { chain_node_id: 'IC0007007', top_n: 10 },
     responseExample: { code: 0, message: 'success', data: { events: 10, experts: 18, enterprises: 24, risk_level: '中' } },
     resultRows: [
       { label: 'TOP事件', value: '10', tone: 'blue' },
@@ -726,7 +726,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'source', type: 'object', description: '数据来源，标记是否降级到样例数据' },
       { name: 'apiResultExample', type: 'object', description: '接口调用示例' },
     ],
-    requestExample: { industry: '人工智能', anchorId: '', depth: 2, topK: 5 },
+    requestExample: { dataSource: 'all', industry: '人工智能', anchorId: '', depth: 2, topK: 3 },
     responseExample: {
       taskName: '科技产业链全景图',
       input: { dataSource: 'all', industry: '人工智能', anchorId: '', depth: 2, topK: 5 },
@@ -807,6 +807,7 @@ export const serviceModules: ServiceModule[] = [
     ],
   },
 ]
+
 
 export function getServiceModule(key: string): ServiceModule {
   return serviceModules.find((item) => item.key === key) ?? serviceModules[0]

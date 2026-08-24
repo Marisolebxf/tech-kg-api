@@ -1247,9 +1247,7 @@ const liveRules = computed<Array<Record<string, any>>>(() => {
     return liveCoopResult.value.rules;
   if (isLiveColleague.value && liveResponse.value?.data?.rules?.length)
     return liveResponse.value.data.rules;
-  const responseRules = liveResponse.value?.data?.rules ?? liveResponse.value?.rules;
-  if (Array.isArray(responseRules) && responseRules.length) return responseRules;
-  return actualServiceRules[props.moduleInfo.key] ?? [];
+  return props.moduleInfo.rules as Array<Record<string, any>>;
 });
 
 const liveEntities = computed(() => {
@@ -2944,11 +2942,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .service-console__head h2 {
   margin: 0;
-  color: #1d2129;
-  font-family: var(--font-family);
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 600;
+  color: #10264c;
+  font-size: 18px;
+  line-height: 26px;
+  font-weight: 700;
 }
 
 .service-console__head p {
@@ -3507,11 +3504,8 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .result-panel .kg-panel__title {
-  color: #1d2129;
-  font-family: var(--font-family);
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 600;
+  font-size: 15px;
+  line-height: 22px;
 }
 
 .result-panel__table {
@@ -3881,11 +3875,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .graph-panel .kg-panel__title,
 .result-panel .kg-panel__title {
   padding-left: 11px;
-  color: #1d2129;
-  font-family: var(--font-family);
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 600;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
 }
 
 .graph-panel .kg-panel__title::before,

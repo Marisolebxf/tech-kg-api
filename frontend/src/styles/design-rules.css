@@ -1145,3 +1145,13 @@ body {
 .app-workspace .business-service .result-panel__table dd {
   min-width: 0;
 }
+
+
+/* Element Plus multi-select placeholders match the shared input placeholder tone. */
+.app-workspace .business-service :is(
+  .cooperation-type-select,
+  .alumni-stage-select
+) .el-select__selected-item.el-select__placeholder {
+  color: #bfbfbf !important;
+  font-weight: 400 !important;
+}

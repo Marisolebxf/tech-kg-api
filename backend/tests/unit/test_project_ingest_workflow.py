@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, MagicMock, patch
+
+import pytest
 
 from script.workflows.project_ingest_workflow import workflow
+
+
+@pytest.fixture(autouse=True)
+def _isolate_workflow_graph_client():
+    """工作流使用独立 client；单测不得连接真实 trs-graph 服务。"""
+    graph = MagicMock(name="workflow_graph")
+    with patch("infra.graph_db.TRSGraphClient", return_value=graph):
+        yield graph
 
 
 def test_workflow_runs_pipeline_stages():

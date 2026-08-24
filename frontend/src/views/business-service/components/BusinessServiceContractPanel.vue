@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import type { ServiceModule } from '../service-modules'
-import iconSelectArrow from '../../../assets/icons/icon-select-arrow.svg'
+import type { ServiceModule } from "../service-modules";
+import iconSelectArrow from "../../../assets/icons/icon-select-arrow.svg";
 
 defineProps<{
-  moduleInfo: ServiceModule
-  modules: ServiceModule[]
-  curlSample: string
-}>()
+  moduleInfo: ServiceModule;
+  modules: ServiceModule[];
+  curlSample: string;
+}>();
 
 defineEmits<{
-  selectModule: [key: string]
-}>()
+  selectModule: [key: string];
+}>();
 </script>
 
 <template>
@@ -18,10 +18,23 @@ defineEmits<{
     <div class="developer-view__meta">
       <label>
         <span>子功能名称：</span>
-        <select class="select-with-icon" :value="moduleInfo.key" @change="$emit('selectModule', ($event.target as HTMLSelectElement).value)">
-          <option v-for="item in modules" :key="item.key" :value="item.key">{{ item.title }}查询接口</option>
+        <select
+          class="select-with-icon"
+          :value="moduleInfo.key"
+          @change="
+            $emit('selectModule', ($event.target as HTMLSelectElement).value)
+          "
+        >
+          <option v-for="item in modules" :key="item.key" :value="item.key">
+            {{ item.title }}查询接口
+          </option>
         </select>
-        <img class="select-icon" :src="iconSelectArrow" alt="" aria-hidden="true" />
+        <img
+          class="select-icon"
+          :src="iconSelectArrow"
+          alt=""
+          aria-hidden="true"
+        />
       </label>
       <label>
         <span>接口路径：</span>
@@ -31,41 +44,60 @@ defineEmits<{
     </div>
     <div class="developer-view__cards">
       <section class="kg-panel">
-      <div class="kg-panel__header"><h2 class="kg-panel__title">请求参数</h2></div>
-      <table class="prototype-table">
-        <thead>
-          <tr><th>参数名</th><th>类型</th><th>必填</th><th>说明</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="field in moduleInfo.requestFields" :key="field.name">
-            <td>{{ field.name }}</td>
-            <td>{{ field.type }}</td>
-            <td>{{ field.required ?? '否' }}</td>
-            <td>{{ field.description }}</td>
-          </tr>
-        </tbody>
-      </table>
+        <div class="kg-panel__header">
+          <h2 class="kg-panel__title">请求参数</h2>
+        </div>
+        <div class="developer-view__table-scroll">
+          <table class="prototype-table">
+            <thead>
+              <tr>
+                <th>参数名</th>
+                <th>类型</th>
+                <th>必填</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="field in moduleInfo.requestFields" :key="field.name">
+                <td>{{ field.name }}</td>
+                <td>{{ field.type }}</td>
+                <td>{{ field.required ?? "否" }}</td>
+                <td>{{ field.description }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section class="kg-panel">
-      <div class="kg-panel__header"><h2 class="kg-panel__title">返回字段</h2></div>
-      <table class="prototype-table">
-        <thead>
-          <tr><th>字段名</th><th>类型</th><th>说明</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="field in moduleInfo.responseFields" :key="field.name">
-            <td>{{ field.name }}</td>
-            <td>{{ field.type }}</td>
-            <td>{{ field.description }}</td>
-          </tr>
-        </tbody>
-      </table>
+        <div class="kg-panel__header">
+          <h2 class="kg-panel__title">返回字段</h2>
+        </div>
+        <div class="developer-view__table-scroll">
+          <table class="prototype-table">
+            <thead>
+              <tr>
+                <th>字段名</th>
+                <th>类型</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="field in moduleInfo.responseFields" :key="field.name">
+                <td>{{ field.name }}</td>
+                <td>{{ field.type }}</td>
+                <td>{{ field.description }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
     </div>
 
     <section class="kg-panel developer-code">
-      <div class="kg-panel__header"><h2 class="kg-panel__title">代码示例</h2></div>
+      <div class="kg-panel__header">
+        <h2 class="kg-panel__title">代码示例</h2>
+      </div>
       <pre>{{ curlSample }}</pre>
     </section>
   </section>
@@ -137,7 +169,30 @@ defineEmits<{
   overflow: hidden;
 }
 
-.developer-view__cards .kg-panel,
+.developer-view__cards .kg-panel {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.developer-view__cards .kg-panel__header {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 48px;
+}
+
+.developer-view__table-scroll {
+  position: absolute;
+  top: 48px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  overflow: auto;
+}
+
 .developer-code {
   min-height: 0;
   overflow: auto;
@@ -159,6 +214,12 @@ defineEmits<{
   line-height: 20px;
   vertical-align: top;
   overflow-wrap: anywhere;
+}
+
+.prototype-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .prototype-table th {
@@ -194,6 +255,10 @@ defineEmits<{
   .developer-view {
     grid-template-rows: auto auto minmax(260px, 1fr);
     overflow: auto;
+  }
+
+  .developer-view__cards .kg-panel {
+    height: min(440px, 58vh);
   }
 }
 </style>

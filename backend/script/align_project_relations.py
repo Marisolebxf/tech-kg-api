@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 from dao.project import ProjectDAO
-from infra.graph_db import close_trs_graph_client
+from infra.graph_db import TRSGraphClient, close_trs_graph_client
 from infra.milvus import MilvusSettings, OrganizationMilvusStore, get_milvus_client
 from infra.mysql import get_mysql_client
 from script.load_project_graph import (
@@ -385,6 +385,7 @@ def run(
     limit: int | None = None,
     report_dir: Path | None = None,
     ingest_batch: str | None = None,
+    graph: TRSGraphClient | None = None,
 ) -> dict[str, Any]:
     _configure_milvus_port_from_uri()
     ingest_batch = ingest_batch or datetime.now().strftime(
@@ -397,7 +398,8 @@ def run(
         dry_run=dry_run,
     )
 
-    graph = get_dev_graph_client()
+    owns_graph = graph is None
+    graph = graph or get_dev_graph_client()
     preflight_graph(graph, relations=True)
     if not dry_run:
         ensure_alignment_edge_schema(graph)
@@ -617,7 +619,8 @@ def run(
         return summary
     finally:
         session.close()
-        close_trs_graph_client()
+        if owns_graph:
+            close_trs_graph_client()
 
 
 # Public alias used by workflow / Temporal activity.

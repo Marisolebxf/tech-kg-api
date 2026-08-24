@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from infra.graph_db import GraphConnectionError
 from service.expert_cooperation_achievement import ExpertCooperationAchievementService, clear_caches
 
 
@@ -33,7 +34,7 @@ def _edge(etype: str, source: str, target: str):
 
 def _svc(graph) -> ExpertCooperationAchievementService:
     svc = ExpertCooperationAchievementService()
-    svc._graph = graph  # noqa: SLF001
+    svc._client = MagicMock(return_value=graph)  # type: ignore[method-assign]
     return svc
 
 
@@ -108,6 +109,27 @@ def test_query_missing_expert_raises():
     graph.get_node = MagicMock(return_value=None)
     with pytest.raises(KeyError, match="未找到专家"):
         _svc(graph).query(source_expert_id="NO", target_expert_id="S2")
+
+
+def test_query_propagates_graph_connection_error():
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=GraphConnectionError("not connected"))
+
+    with pytest.raises(GraphConnectionError, match="not connected"):
+        _svc(graph).query(source_expert_id="S1", target_expert_id="S2")
+
+
+def test_service_does_not_cache_replaced_process_client():
+    first = MagicMock()
+    second = MagicMock()
+    service = ExpertCooperationAchievementService()
+
+    with patch(
+        "service.expert_cooperation_achievement.get_trs_graph_client",
+        side_effect=[first, second],
+    ):
+        assert service._client() is first  # noqa: SLF001
+        assert service._client() is second  # noqa: SLF001
 
 
 def test_query_empty_shared_achievements():

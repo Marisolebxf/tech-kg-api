@@ -482,14 +482,18 @@ def paper_record(table: str, row: Mapping[str, Any], batch: str) -> list[EntityR
 
 
 def journal_record(table: str, row: Mapping[str, Any], batch: str) -> list[EntityRecord]:
-    jid = row.get("journal_id")
+    jid = row.get("publication_id") or row.get("journal_id")
     if not jid:
-        # 旧口径：journal_id 为空/0 跳过。
+        # 旧口径：journal_id/publication_id 为空/0 跳过。
         return []
     vid = f"journal_{jid}"
     props = {
-        "name_en": paper_text(row.get("journal_en_name") or row.get("name_en")),
-        "name_zh": paper_text(row.get("journal_zh_name") or row.get("name_zh")),
+        "name_en": paper_text(
+            row.get("journal_en_name") or row.get("name_en") or row.get("en_name")
+        ),
+        "name_zh": paper_text(
+            row.get("journal_zh_name") or row.get("name_zh") or row.get("zh_name")
+        ),
         "issn": paper_text(row.get("issn")),
         "country": paper_text(row.get("country")),
         "extra_json": extra_json(row),

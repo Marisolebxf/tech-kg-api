@@ -165,8 +165,7 @@ def test_list_finds_alumni_and_truncation_meta():
 def test_list_scans_beyond_original_500_candidate_limit():
     source = _node("S1", {"education_background_institution_zh": "测试大学"})
     first_page = [
-        _node(f"P{i}", {"education_background_institution_zh": "其他大学"})
-        for i in range(500)
+        _node(f"P{i}", {"education_background_institution_zh": "其他大学"}) for i in range(500)
     ]
     pages = [
         GraphPagedResult(items=first_page, total=551, limit=500, offset=0),

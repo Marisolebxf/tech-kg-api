@@ -270,7 +270,7 @@ onMounted(() => { void load() })
       <template v-else><article><span>记录总数</span><strong>{{ total }}</strong></article><article><span>待审核</span><strong>{{ counts.PENDING_REVIEW || 0 }}</strong></article><article><span>同步失败</span><strong>{{ counts.SYNC_FAILED || 0 }}</strong></article><article><span>已完成</span><strong>{{ counts.COMPLETED || 0 }}</strong></article></template>
     </section>
     <section class="table-panel">
-      <div class="table-scroll"><table><colgroup><col class="col-content"><col class="col-target"><col class="col-operation"><col class="col-applicant"><col class="col-status"><col class="col-sync"><col class="col-time"><col class="col-actions"></colgroup><thead><tr><th>修正内容</th><th>对象</th><th>申请人对图谱的操作</th><th>申请人</th><th>状态</th><th>同步状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody>
+      <div class="table-scroll"><table><colgroup><col class="col-content"><col class="col-target"><col class="col-operation"><col class="col-applicant"><col class="col-status"><col class="col-sync"><col class="col-time"><col class="col-actions"></colgroup><thead><tr><th>修正内容</th><th>对象</th><th>申请人对图谱的操作</th><th>申请人</th><th>状态</th><th>同步状态</th><th>更新时间</th><th><span class="action-column-label">操作</span></th></tr></thead><tbody>
         <tr v-for="row in rows" :key="row.id"><td><span class="record-title">{{ row.title }}</span></td><td class="target-cell">{{ targetLabels[row.targetType] }}</td><td class="operation-cell">{{ operationLabels[row.operation] }}</td><td>{{ row.submitterName }}</td><td class="status-cell"><span class="status" :class="`is-${row.status.toLowerCase()}`">{{ statusLabels[row.status] || row.status }}</span></td><td class="sync-cell"><span class="status" :class="`is-${row.status.toLowerCase()}`">{{ syncStatusLabel(row) }}</span></td><td class="time-cell">{{ row.updatedAt?.replace('T', ' ').slice(0, 16) }}</td><td class="action-cell"><div v-if="isAdmin" class="actions"><template v-if="isReviewPage"><button title="查看申请说明、修正前后数据和操作轨迹" @click="showDetail(row)">详情</button><button :disabled="!canReview(row)" title="审核通过后进入自动同步流程" @click="openReview(row, 'approve')">通过</button><button :disabled="!canReview(row)" title="驳回后不再同步本次修正" @click="openReview(row, 'reject')">驳回</button><button :disabled="!canRetry(row)" title="仅同步失败记录可以重新同步" @click="retry(row)">重试</button></template><template v-else><button title="查看申请说明、修正前后数据和操作轨迹" @click="showDetail(row)">详情</button><button :disabled="!canEdit(row)" title="仅待审核申请可以修改" @click="openEdit(row)">修改</button></template></div><div v-else class="actions user-actions"><button title="查看申请说明、修正前后数据和操作轨迹" @click="showDetail(row)">详情</button><button :disabled="!canEdit(row)" title="仅待审核申请可以修改" @click="openEdit(row)">修改</button></div></td></tr>
         <tr v-if="!rows.length"><td colspan="8" class="empty">{{ loading ? '正在加载…' : '暂无修正记录' }}</td></tr>
       </tbody></table></div>
@@ -366,7 +366,12 @@ onMounted(() => { void load() })
   white-space: nowrap;
 }
 .action-cell {
-  overflow: hidden;
+  overflow: visible;
+}
+.action-column-label,
+.action-cell > .actions {
+  display: inline-flex;
+  transform: translateX(80px);
 }
 .actions {
   min-width: 0;

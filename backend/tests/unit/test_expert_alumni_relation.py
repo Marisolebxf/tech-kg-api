@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from infra.graph_db import GraphConnectionError
 from infra.graph_db.models import GraphPagedResult
 from service.expert_alumni_relation import ExpertAlumniRelationService, clear_caches
 
@@ -34,7 +35,7 @@ def _edge(etype: str, source: str, target: str):
 
 def _svc(graph) -> ExpertAlumniRelationService:
     svc = ExpertAlumniRelationService()
-    svc._graph = graph  # noqa: SLF001
+    svc._client = MagicMock(return_value=graph)  # type: ignore[method-assign]
     return svc
 
 
@@ -163,21 +164,25 @@ def test_list_finds_alumni_and_truncation_meta():
 
 def test_list_scans_beyond_original_500_candidate_limit():
     source = _node("S1", {"education_background_institution_zh": "测试大学"})
-    pages = []
-    for page in range(11):
-        nodes = [
-            _node(f"P{page * 50 + i}", {"education_background_institution_zh": "其他大学"})
-            for i in range(50)
-        ]
-        pages.append(GraphPagedResult(items=nodes, total=551, limit=50, offset=page * 50))
-    pages.append(
+    first_page = [
+        _node(f"P{i}", {"education_background_institution_zh": "其他大学"})
+        for i in range(500)
+    ]
+    pages = [
+        GraphPagedResult(items=first_page, total=551, limit=500, offset=0),
         GraphPagedResult(
-            items=[_node("TARGET", {"education_background_institution_zh": "测试大学"})],
+            items=[
+                *[
+                    _node(f"P{i}", {"education_background_institution_zh": "其他大学"})
+                    for i in range(500, 550)
+                ],
+                _node("TARGET", {"education_background_institution_zh": "测试大学"}),
+            ],
             total=551,
-            limit=50,
-            offset=550,
-        )
-    )
+            limit=500,
+            offset=500,
+        ),
+    ]
     graph = MagicMock()
     graph.get_node = MagicMock(return_value=source)
     graph.get_nodes_by_label = MagicMock(side_effect=pages)
@@ -186,7 +191,7 @@ def test_list_scans_beyond_original_500_candidate_limit():
     resp = _svc(graph).query(expert_id="S1", limit=20)
     assert resp["total"] == 1
     assert resp["items"][0]["alumniId"] == "TARGET"
-    assert graph.get_nodes_by_label.call_count == 12
+    assert graph.get_nodes_by_label.call_count == 2
     assert resp["sourceMeta"]["truncated"] is False
 
 
@@ -207,6 +212,30 @@ def test_missing_expert_raises():
     graph.get_node = MagicMock(return_value=None)
     with pytest.raises(KeyError, match="未找到专家"):
         _svc(graph).query(expert_id="NO")
+
+
+def test_list_propagates_graph_connection_error():
+    source = _node("S1", {"education_background_institution_zh": "测试大学"})
+    graph = MagicMock()
+    graph.get_node.return_value = source
+    graph.get_nodes_by_label.side_effect = GraphConnectionError("not connected")
+    graph._settings = SimpleNamespace(space="dev")
+
+    with pytest.raises(GraphConnectionError, match="not connected"):
+        _svc(graph).query(expert_id="S1")
+
+
+def test_service_does_not_cache_replaced_process_client():
+    first = MagicMock()
+    second = MagicMock()
+    service = ExpertAlumniRelationService()
+
+    with patch(
+        "service.expert_alumni_relation.get_trs_graph_client",
+        side_effect=[first, second],
+    ):
+        assert service._client() is first  # noqa: SLF001
+        assert service._client() is second  # noqa: SLF001
 
 
 def test_same_id_raises():

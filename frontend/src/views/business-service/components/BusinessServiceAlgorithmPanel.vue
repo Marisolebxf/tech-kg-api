@@ -1375,6 +1375,9 @@ const apiResultJson = computed(() => {
     if (resp) {
       return JSON.stringify(resp, null, 2)
     }
+    if (liveApiPayload.value) {
+      return JSON.stringify(liveApiPayload.value, null, 2)
+    }
     return JSON.stringify(
       { message: running.value ? '查询中...' : '暂无查询结果' },
       null,

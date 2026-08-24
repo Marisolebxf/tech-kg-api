@@ -2434,6 +2434,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           v-else-if="field.name === 'achievementTypes' && isLiveCoop"
           v-model="achievementTypeSelection"
           class="cooperation-type-select"
+          :data-empty="achievementTypeSelection.length === 0"
           multiple
           collapse-tags
           :max-collapse-tags="1"
@@ -2453,6 +2454,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           v-else-if="field.name === 'educationStage' && isLiveAlumni"
           v-model="educationStageSelection"
           class="alumni-stage-select"
+          :data-empty="educationStageSelection.length === 0"
           multiple
           collapse-tags
           :max-collapse-tags="1"
@@ -3152,10 +3154,14 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .cooperation-type-select {
+  --el-input-text-color: #bfbfbf;
+  --el-text-color-placeholder: #bfbfbf;
   width: 100%;
 }
 
 .alumni-stage-select {
+  --el-input-text-color: #bfbfbf;
+  --el-text-color-placeholder: #bfbfbf;
   width: 100%;
 }
 
@@ -3186,6 +3192,18 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   font-weight: 400;
 }
 
+.cooperation-type-select:deep(.el-select__placeholder.is-transparent),
+.alumni-stage-select:deep(.el-select__placeholder.is-transparent) {
+  color: #bfbfbf !important;
+}
+
+.cooperation-type-select[data-empty="true"]:deep(.el-select__selection),
+.cooperation-type-select[data-empty="true"]:deep(.el-select__selection *),
+.alumni-stage-select[data-empty="true"]:deep(.el-select__selection),
+.alumni-stage-select[data-empty="true"]:deep(.el-select__selection *) {
+  color: #bfbfbf !important;
+}
+
 .cooperation-type-select:deep(.el-select__caret),
 .alumni-stage-select:deep(.el-select__caret) {
   color: #8c8c8c !important;
@@ -3197,6 +3215,12 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   align-items: center;
   color: #1f1f1f;
   line-height: 22px;
+}
+
+.cooperation-type-select:deep(.el-select__selected-item.el-select__placeholder),
+.alumni-stage-select:deep(.el-select__selected-item.el-select__placeholder) {
+  color: #bfbfbf !important;
+  font-weight: 400;
 }
 
 .service-console__params

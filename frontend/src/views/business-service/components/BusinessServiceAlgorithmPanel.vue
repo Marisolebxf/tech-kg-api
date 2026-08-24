@@ -2991,10 +2991,14 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .cooperation-type-select:deep(.el-select__placeholder),
+.alumni-stage-select:deep(.el-select__placeholder) {
+  color: var(--text-tertiary) !important;
+  font-weight: 400;
+}
+
 .cooperation-type-select:deep(.el-select__caret),
-.alumni-stage-select:deep(.el-select__placeholder),
 .alumni-stage-select:deep(.el-select__caret) {
-  color: var(--text-tertiary);
+  color: var(--text-tertiary) !important;
 }
 
 .cooperation-type-select:deep(.el-select__selected-item),

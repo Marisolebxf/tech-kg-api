@@ -288,6 +288,19 @@ export interface PaperCooperationCitation {
   max: number
 }
 
+export interface PaperCooperationProvenance {
+  sourceDatabase: string
+  summary: string
+  evidences: Array<{
+    title: string
+    businessTable: string
+    technicalTable: string
+    recordId: string
+    fieldIdentifier: string
+    summary: string
+  }>
+}
+
 export interface PaperCooperationStructuredResult {
   authorList: string[]
   authorUnits: string[]
@@ -322,6 +335,7 @@ export interface PaperCooperationStructuredResult {
 export interface PaperCooperationResponse {
   structuredResult:
     PaperCooperationStructuredResult
+  provenance: PaperCooperationProvenance
 }
 
 /**

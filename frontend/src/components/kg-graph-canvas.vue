@@ -202,9 +202,10 @@ function zoomOut() {
 }
 
 /** 滑块直接设值时，同样以画布中心为锚点，保持居中缩放。 */
-function setScale(v: number | undefined) {
-  if (v == null) return
-  zoomAt(Number(v), CX, CY)
+function setScale(v: number | [number, number]) {
+  const next = Array.isArray(v) ? v[0] : v
+  if (next == null) return
+  zoomAt(Number(next), CX, CY)
 }
 
 function handlePointerDown(event: PointerEvent) {

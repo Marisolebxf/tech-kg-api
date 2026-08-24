@@ -1328,6 +1328,12 @@ const liveProvenance = computed(() => {
   if (isPanorama.value) return panoramaResponse.value?.provenance ?? null;
   if (isExpertDirect.value)
     return expertDirectResponse.value?.provenance ?? null;
+  if (isExpertIndirect.value)
+    return expertIndirectResponse.value?.provenance ?? null;
+  if (isPaperCooperation.value)
+    return (
+      liveResponse.value?.provenance ?? liveResponse.value?.data?.provenance ?? null
+    );
   return null;
 });
 

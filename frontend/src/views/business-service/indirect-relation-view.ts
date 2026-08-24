@@ -35,6 +35,23 @@ const graphNodeType = (node: IndirectNode, isCore = false): GraphNodeType => {
   return 'topic'
 }
 
+const propertyString = (
+  properties: Record<string, unknown>,
+  key: string,
+) => {
+  const value = properties[key]
+  return value === null || value === undefined ? undefined : String(value)
+}
+
+const propertyNumber = (
+  properties: Record<string, unknown>,
+  key: string,
+) => {
+  const value = Number(properties[key])
+  return Number.isFinite(value) ? value : undefined
+}
+
+
 export const parseRelationTypes = (value: string) => value
   .split(/[、,，;；]/)
   .map((item) => item.trim())
@@ -79,12 +96,21 @@ export function buildIndirectRelationGraph(result: ExpertIndirectRelationResult)
       confidence: nodeStrengths.get(node.id) ?? 0.8,
       relations: level === 0 ? `间接节点 ${result.indirectNodeCount}` : `${level} 跳关联`,
       evidence: nodeEvidences.get(node.id) ?? ['节点来自知识图谱多跳子图。'],
+      sourceTable: propertyString(node.properties, 'source_table'),
+      sourceRecordId: propertyString(node.properties, 'source_record_id'),
+      sourceField: propertyString(node.properties, 'source_record_id')
+        ? 'source_record_id'
+        : undefined,
+      sourceValue: propertyString(node.properties, 'source_record_id'),
+      sourceSystem: propertyString(node.properties, 'source_system'),
+      ingestBatch: propertyString(node.properties, 'ingest_batch'),
+      ingestTime: propertyString(node.properties, 'ingest_time'),
     }
   })
 
   const edgeMap = new Map<string, GraphEdgeData>()
   selectedPaths.forEach((path) => {
-    path.edges.forEach((edge, index) => {
+    path.edges.forEach((edge) => {
       const key = `${edge.type}:${[edge.source, edge.target].sort().join(':')}`
       if (edgeMap.has(key)) return
       edgeMap.set(key, {
@@ -92,7 +118,14 @@ export function buildIndirectRelationGraph(result: ExpertIndirectRelationResult)
         from: edge.source,
         to: edge.target,
         label: edgeLabels[edge.type] ?? edge.type,
-        category: index === 0 ? '直接关系' : '间接关系',
+        category: path.relationType,
+        confidence: propertyNumber(edge.properties, 'confidence'),
+        matchEvidence: propertyString(edge.properties, 'match_evidence'),
+        matchMethod: propertyString(edge.properties, 'match_method'),
+        sourceTable: propertyString(edge.properties, 'source_table'),
+        sourceRecordId: propertyString(edge.properties, 'source_record_id'),
+        ingestBatch: propertyString(edge.properties, 'ingest_batch'),
+        ingestTime: propertyString(edge.properties, 'ingest_time'),
       })
     })
   })

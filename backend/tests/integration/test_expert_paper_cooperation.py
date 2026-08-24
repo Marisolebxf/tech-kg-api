@@ -31,7 +31,21 @@ def _structured_result(**overrides):
             "stableTeamMembers": ["Yaozong Gao"],
             "coreCollaborators": ["Yaozong Gao", "Yiqiang Zhan"],
             "sharedContribution": ["联合论文产出"],
-        }
+        },
+        "provenance": {
+            "sourceDatabase": "trs-graph / space=dev",
+            "summary": "两位专家命中 6 篇合作论文。",
+            "evidences": [
+                {
+                    "title": "实体 · 沈定刚",
+                    "businessTable": "科技专家",
+                    "technicalTable": "gkx_element.dwd_scholar",
+                    "recordId": "4P566No1",
+                    "fieldIdentifier": "source_record_id",
+                    "summary": "真实图节点来源。",
+                }
+            ],
+        },
     }
     result["structuredResult"].update(overrides)
     return result
@@ -51,6 +65,7 @@ async def test_expert_paper_cooperation_returns_structured_result(async_client, 
     data = response.json()
     assert data["structuredResult"]["authorList"] == ["沈定刚", "廖术"]
     assert data["structuredResult"]["cooperationPaperCount"] == 6
+    assert data["provenance"]["evidences"][0]["recordId"] == "4P566No1"
 
 
 @pytest.mark.parametrize(

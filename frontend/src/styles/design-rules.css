@@ -1,0 +1,1157 @@
+/* GKX production UI contract. Loaded last to reconcile legacy page styles. */
+:root {
+  --control-height: 32px;
+  --gkx-brand: #165dff;
+  --gkx-brand-hover: #4080ff;
+  --gkx-brand-active: #0e42d2;
+  --gkx-brand-light: #e8f3ff;
+  --gkx-bg-module: #f7f8fa;
+  --gkx-bg-subtle: #f2f3f5;
+  --gkx-cover-blue: #0a3888;
+  --font-family:
+    "PingFang SC", "PingFang HK", "Microsoft YaHei", "Helvetica Neue", Arial,
+    sans-serif;
+}
+
+body {
+  color: var(--gkx-text-primary);
+  font-family: var(--font-family);
+  font-size: 14px;
+  line-height: 22px;
+  letter-spacing: 0;
+}
+
+.app-workspace .kg-panel {
+  border: 1px solid var(--gkx-border) !important;
+  border-radius: 6px !important;
+  background: var(--gkx-bg-surface) !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+
+.app-workspace .kg-panel__header {
+  min-height: 40px;
+  padding-inline: 16px;
+  border-color: var(--gkx-border) !important;
+  background: var(--gkx-bg-module) !important;
+}
+
+.app-workspace .kg-panel__title {
+  color: #1d2129 !important;
+  font-family: var(--font-family) !important;
+  font-size: 16px !important;
+  line-height: 24px !important;
+  font-weight: 600 !important;
+}
+
+.app-workspace .kg-panel__title::before {
+  top: 5px;
+  width: 3px;
+  height: 14px;
+  background: var(--gkx-brand);
+}
+
+.app-workspace .kg-panel__body {
+  padding: 16px;
+}
+
+.app-workspace
+  :is(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+    select,
+    .arco-input-wrapper,
+    .arco-select-view,
+    .arco-picker,
+    .arco-input-number,
+    .el-select__wrapper
+  ) {
+  box-sizing: border-box;
+  min-height: 32px !important;
+  border-radius: 4px !important;
+  background-color: #fff !important;
+  font-size: 14px !important;
+  line-height: 22px;
+}
+
+.app-workspace
+  :is(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+    select
+  ) {
+  height: 32px !important;
+  padding-inline: 12px !important;
+  border-color: var(--gkx-border) !important;
+}
+
+.app-workspace :is(input, textarea)::placeholder,
+.app-workspace :is(.arco-input, .arco-picker-input input)::placeholder {
+  color: var(--gkx-text-tertiary) !important;
+  opacity: 1;
+}
+
+.app-workspace
+  :is(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+    select,
+    textarea,
+    .arco-input-wrapper,
+    .arco-select-view,
+    .arco-picker,
+    .arco-input-number,
+    .el-select__wrapper
+  ):hover {
+  border-color: var(--gkx-brand-hover) !important;
+}
+
+.app-workspace :is(input, select, textarea):focus,
+.app-workspace
+  :is(
+    .arco-input-wrapper-focus,
+    .arco-select-view-focus,
+    .arco-picker-focused,
+    .arco-input-number-focus,
+    .el-select__wrapper.is-focused
+  ) {
+  border-color: var(--gkx-brand) !important;
+  outline: none !important;
+  box-shadow: var(--gkx-focus-ring) !important;
+}
+
+.app-workspace :is(button, input, select, textarea):disabled {
+  color: var(--text-quaternary) !important;
+  cursor: not-allowed !important;
+  opacity: 1;
+}
+
+.app-workspace :is(.kg-button, .arco-btn, button:not(.kg-graph-canvas *)) {
+  min-height: 32px;
+  border-radius: 4px !important;
+  font-size: 14px;
+  line-height: 22px;
+  box-shadow: none !important;
+}
+
+.app-workspace .kg-button {
+  height: 32px;
+  padding-inline: 16px;
+}
+.app-workspace .kg-button:not(.kg-button--secondary):not(.kg-button--text) {
+  border-color: var(--gkx-brand);
+  background: var(--gkx-brand);
+}
+.app-workspace
+  .kg-button:not(.kg-button--secondary):not(.kg-button--text):hover {
+  border-color: var(--gkx-brand-hover);
+  background: var(--gkx-brand-hover);
+}
+.app-workspace
+  .kg-button:not(.kg-button--secondary):not(.kg-button--text):active {
+  border-color: var(--gkx-brand-active);
+  background: var(--gkx-brand-active);
+}
+.app-workspace .kg-button--secondary {
+  border-color: var(--gkx-border);
+  background: #fff;
+  color: var(--gkx-brand);
+}
+
+.app-workspace .kg-tabs {
+  gap: 0;
+}
+.app-workspace .kg-tabs__item {
+  box-sizing: border-box;
+  height: 36px;
+  min-height: 36px;
+  padding-inline: 16px;
+  color: var(--gkx-text-secondary);
+  font-size: 14px;
+  line-height: 22px;
+}
+.app-workspace .kg-tabs__item.is-active {
+  color: var(--gkx-brand);
+  font-weight: 500;
+}
+
+.app-workspace table {
+  border-collapse: collapse;
+}
+.app-workspace table :is(th, td) {
+  box-sizing: border-box;
+  height: 40px !important;
+  padding: 0 16px !important;
+  border-color: var(--gkx-border) !important;
+  font-size: 14px !important;
+  line-height: 22px !important;
+  vertical-align: middle !important;
+}
+.app-workspace table th {
+  background: var(--gkx-bg-module) !important;
+  color: var(--gkx-text-primary) !important;
+  font-weight: 500 !important;
+  white-space: nowrap;
+}
+
+.app-sidebar .app-nav__item,
+.app-sidebar .app-nav__item--sub {
+  font-size: 14px !important;
+  line-height: 22px;
+}
+.app-nav__item--active {
+  font-weight: 500;
+}
+
+.app-nav__item--sub {
+  align-items: center;
+}
+
+.app-nav__item--sub .app-nav__sub-wrap,
+.app-nav__item--sub .app-nav__sub-label {
+  line-height: 22px;
+}
+
+/* Developer contract: 16px module inset, 16px card gap and neutral tables. */
+.developer-view__cards {
+  gap: 16px !important;
+  padding: 16px;
+  border-radius: 6px;
+  background: #fff;
+  scrollbar-gutter: auto;
+}
+
+.developer-view__cards > .kg-panel {
+  border: 0 !important;
+  border-radius: 6px !important;
+  background: #fff !important;
+  scrollbar-gutter: auto;
+}
+
+.developer-view__cards .kg-panel__header {
+  right: 16px !important;
+  left: 16px !important;
+  height: 48px;
+  min-height: 48px;
+  padding: 0 !important;
+  border-bottom: 0 !important;
+  background: #fff !important;
+}
+
+.developer-view__cards .kg-panel__title {
+  padding-left: 12px;
+  font-size: 16px !important;
+  line-height: 24px !important;
+  font-weight: 600;
+}
+
+.developer-view__cards .kg-panel__title::before {
+  top: 5px;
+  left: 0;
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+}
+
+.developer-view__table-scroll {
+  top: 48px !important;
+  right: 16px !important;
+  bottom: 16px !important;
+  left: 16px !important;
+  border: 1px solid var(--gkx-border);
+  border-radius: 4px;
+  background: #fff;
+  scrollbar-gutter: auto;
+}
+
+.developer-view__table-scroll .prototype-table th {
+  font-size: 14px !important;
+  line-height: 22px !important;
+  font-weight: 500 !important;
+}
+
+.developer-view__table-scroll .prototype-table td {
+  font-size: 14px !important;
+  line-height: 22px !important;
+  font-weight: 400;
+}
+
+/* Month picker owns a single input shell; its inner field stays transparent. */
+.app-workspace .service-console__month-picker.arco-picker {
+  height: 32px !important;
+  padding: 0 12px !important;
+  border: 1px solid var(--gkx-border) !important;
+  border-radius: 4px !important;
+  background: #fff !important;
+}
+
+.app-workspace .service-console__month-picker.arco-picker-focused,
+.app-workspace .service-console__month-picker.arco-picker-focused:hover,
+.app-workspace .service-console__month-picker.arco-picker:focus-within {
+  border-color: var(--gkx-brand) !important;
+  box-shadow: none !important;
+}
+
+.app-workspace .service-console__month-picker .arco-picker-input input:focus,
+.app-workspace
+  .service-console__month-picker
+  .arco-picker-input
+  input:focus-visible {
+  outline: 0 !important;
+}
+
+.app-workspace .service-console__month-picker .arco-picker-input {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  outline: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.app-workspace .service-console__month-picker .arco-picker-input input.arco-picker-start-time {
+  min-height: 0 !important;
+  height: 30px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  line-height: 30px !important;
+}
+
+.service-console__month-picker .arco-picker-suffix,
+.service-console__month-picker .arco-picker-clear-icon {
+  color: var(--gkx-text-tertiary) !important;
+}
+
+/* Month view switches years, represented by clear previous/next chevrons. */
+.arco-panel-month
+  .arco-picker-header-icon:not(.arco-picker-header-icon-hidden)
+  .arco-icon {
+  display: none;
+}
+
+.arco-panel-month .arco-picker-header-icon:first-child::before,
+.arco-panel-month .arco-picker-header-icon:last-child::before {
+  color: var(--gkx-text-secondary);
+  font-size: 22px;
+  line-height: 20px;
+}
+
+.arco-panel-month .arco-picker-header-icon:first-child::before {
+  content: "‹";
+}
+.arco-panel-month .arco-picker-header-icon:last-child::before {
+  content: "›";
+}
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--gkx-brand);
+  outline-offset: 2px;
+}
+
+@media (max-width: 768px) {
+  .app-workspace :is(.service-console__params, .developer-view__meta) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+/* Figma alignment: general business-service shell and primary navigation. */
+.app-workspace .business-service {
+  gap: 16px;
+}
+
+.app-workspace .business-service__toolbar {
+  min-height: 36px;
+}
+
+.app-workspace .business-service__toolbar .kg-tabs {
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.app-workspace .business-service__toolbar .kg-tabs__item {
+  position: relative;
+  width: auto;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #4e5969;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.app-workspace .business-service__toolbar .kg-tabs__item.is-active {
+  color: #165dff;
+  font-weight: 500;
+}
+
+.app-workspace .business-service__toolbar .kg-tabs__item.is-active::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: #165dff;
+  content: "";
+}
+
+/* Figma algorithm parameter area. Graph canvas and summary cards are deliberately excluded. */
+.app-workspace .service-console {
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  grid-template-areas:
+    "service-title service-actions"
+    "service-fields service-fields";
+  align-items: center !important;
+  gap: 16px !important;
+  min-height: 0;
+  padding: 0 0 16px !important;
+  border: 0 !important;
+  border-bottom: 1px dashed #c9cdd4 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+.app-workspace .service-console__head {
+  grid-area: service-title;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-workspace .service-console__head h2 {
+  position: relative;
+  margin: 0;
+  padding-left: 11px;
+  color: #1d2129;
+  font-family: var(--font-family);
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+}
+
+.app-workspace .service-console__head h2::before {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: #165dff;
+  content: "";
+}
+
+.app-workspace .service-console__head p {
+  margin: 0;
+  color: #86909c;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.app-workspace .service-console__params,
+.app-workspace .service-console--alumni .service-console__params,
+.app-workspace .service-console--cooperation .service-console__params {
+  grid-area: service-fields;
+  gap: 16px !important;
+  align-items: start;
+}
+
+.app-workspace .service-console__params label {
+  gap: 8px;
+}
+
+.app-workspace .service-console__params span {
+  color: #1d2129;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 400;
+}
+
+.app-workspace .service-console__actions,
+.app-workspace .service-console--alumni .service-console__actions,
+.app-workspace .service-console--cooperation .service-console__actions {
+  grid-area: service-actions;
+  align-self: center;
+  min-width: 0;
+  margin: 0 !important;
+  gap: 16px;
+}
+
+.app-workspace .service-console__actions .kg-button {
+  width: auto;
+  min-width: 0;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 0 !important;
+  background: transparent !important;
+  color: #165dff;
+  line-height: 22px;
+}
+
+.app-workspace .service-console__actions .kg-button--secondary {
+  color: #86909c;
+}
+
+.app-workspace .service-console--alumni .service-console__head,
+.app-workspace .service-console--cooperation .service-console__head {
+  justify-content: flex-start;
+  margin: 0;
+}
+
+/* Figma developer interface 04: gray module bed, white cards, compact tables. */
+.app-workspace .developer-view {
+  grid-template-rows: 40px minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 16px;
+  padding: 0;
+}
+
+.app-workspace .developer-view__meta {
+  grid-template-columns: minmax(360px, 460px) minmax(360px, 1fr) max-content;
+  gap: 36px;
+  min-height: 40px;
+  color: #4e5969;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.developer-view__cards {
+  gap: 16px !important;
+  padding: 16px;
+  border-radius: 6px;
+  background: #f7f8fa;
+}
+
+.developer-view__cards .kg-panel__title {
+  padding-left: 11px;
+  color: #1d2129 !important;
+  font-family: var(--font-family) !important;
+  font-size: 16px !important;
+  line-height: 24px !important;
+  font-weight: 600 !important;
+}
+
+.developer-view__cards .kg-panel__title::before {
+  top: 4px;
+}
+
+.developer-view__table-scroll .prototype-table :is(th, td) {
+  height: 40px !important;
+  padding: 0 12px !important;
+  font-size: 12px !important;
+  line-height: 20px !important;
+  vertical-align: middle !important;
+}
+
+.developer-view__table-scroll .prototype-table th {
+  background: #f2f3f5 !important;
+  color: #4e5969 !important;
+  font-weight: 500 !important;
+}
+
+.developer-view__table-scroll .prototype-table td {
+  background: #fff;
+  color: #4e5969;
+  font-weight: 400;
+}
+
+.app-workspace .developer-code .kg-panel__header {
+  min-height: 40px;
+  background: #fff !important;
+}
+
+.app-workspace .developer-code .kg-panel__title {
+  color: #1d2129 !important;
+  font-family: var(--font-family) !important;
+  font-size: 16px !important;
+  line-height: 24px !important;
+  font-weight: 600 !important;
+}
+
+.app-workspace .developer-code pre {
+  color: #4e5969;
+  background: #fff;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+/* Preserve the Figma two-row parameter layout for every business module. */
+.app-workspace .service-console--alumni,
+.app-workspace .service-console--cooperation,
+.app-workspace .service-console--industry-event {
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  grid-template-areas:
+    "service-title service-actions"
+    "service-fields service-fields";
+  align-items: center !important;
+}
+
+.app-workspace .service-console--alumni .service-console__params {
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+}
+
+.app-workspace .service-console--alumni .service-console__actions,
+.app-workspace .service-console--cooperation .service-console__actions {
+  padding-bottom: 0;
+}
+
+/* Neutralize legacy per-module positioning without changing fields or request data. */
+.app-workspace .service-console--alumni .service-console__head,
+.app-workspace .service-console--cooperation .service-console__head {
+  display: flex !important;
+  grid-template-columns: none !important;
+  align-self: center !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  margin: 0 !important;
+}
+
+.app-workspace .service-console--alumni .service-console__params,
+.app-workspace .service-console--cooperation .service-console__params {
+  grid-area: service-fields !important;
+  align-self: start !important;
+  align-items: start !important;
+  gap: 16px !important;
+}
+
+.app-workspace .service-console--alumni .service-console__params {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+}
+
+.app-workspace .service-console--cooperation .service-console__params {
+  grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+}
+
+.app-workspace .service-console--alumni .service-console__actions,
+.app-workspace .service-console--cooperation .service-console__actions {
+  grid-area: service-actions !important;
+  align-self: center !important;
+  justify-content: flex-end !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+@media (max-width: 1280px) {
+  .app-workspace .service-console--alumni .service-console__params,
+  .app-workspace .service-console--cooperation .service-console__params {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .app-workspace .service-console--alumni,
+  .app-workspace .service-console--cooperation {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-areas:
+      "service-title"
+      "service-actions"
+      "service-fields";
+  }
+
+  .app-workspace .service-console--alumni .service-console__actions,
+  .app-workspace .service-console--cooperation .service-console__actions {
+    justify-content: flex-start !important;
+  }
+
+  .app-workspace .service-console--alumni .service-console__params,
+  .app-workspace .service-console--cooperation .service-console__params {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+/* Final spacing pass from DESIGN_RULES + Figma: every inner safe area is 16px. */
+.app-workspace .result-panel__table {
+  box-sizing: border-box;
+  width: auto;
+  margin: 16px !important;
+  border-radius: 4px;
+  background: #f7f8fa;
+}
+
+.app-workspace .result-panel__table div {
+  grid-template-columns: 96px minmax(0, 1fr);
+  min-height: 40px;
+}
+
+.app-workspace .result-panel__table :is(dt, dd) {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0 16px;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.app-workspace .result-panel__table dt {
+  justify-content: flex-end;
+  color: #4e5969;
+  font-weight: 400;
+}
+
+.app-workspace .result-panel__table dd {
+  color: #1d2129;
+  background: #fff;
+}
+
+.app-workspace .developer-view__cards {
+  gap: 16px !important;
+  padding: 16px !important;
+  background: #f7f8fa !important;
+}
+
+.app-workspace .developer-view__cards > .kg-panel {
+  background: #fff !important;
+}
+
+.app-workspace .developer-view__cards .kg-panel__header {
+  right: 16px !important;
+  left: 16px !important;
+  background: #fff !important;
+}
+
+.app-workspace .developer-view__table-scroll {
+  right: 16px !important;
+  bottom: 16px !important;
+  left: 16px !important;
+  background: #fff !important;
+}
+
+.app-workspace .developer-view__table-scroll .prototype-table :is(th, td) {
+  height: 40px !important;
+  padding: 0 16px !important;
+  font-size: 14px !important;
+  line-height: 22px !important;
+  vertical-align: middle !important;
+}
+
+.app-workspace .developer-view__table-scroll .prototype-table th {
+  background: #f7f8fa !important;
+  color: #1d2129 !important;
+  font-weight: 500 !important;
+}
+
+.app-workspace .developer-view__table-scroll .prototype-table td {
+  background: #fff !important;
+  color: #4e5969 !important;
+  font-weight: 400 !important;
+}
+
+.app-workspace .developer-view__code-wrap {
+  box-sizing: border-box;
+  padding: 16px;
+  border-radius: 6px;
+  background: #f7f8fa;
+}
+
+.app-workspace .developer-view__code-wrap > .developer-code {
+  border: 0 !important;
+  border-radius: 6px !important;
+  background: #fff !important;
+}
+
+.app-workspace .developer-view__code-wrap .developer-code pre {
+  padding: 16px !important;
+}
+
+/* Developer contract tables expand with content; never reserve an inner scrollbar lane. */
+.app-workspace .developer-view__table-scroll {
+  width: auto !important;
+  height: 268px !important;
+  max-height: 268px !important;
+  padding-right: 0 !important;
+  overflow: auto !important;
+  scrollbar-width: none !important;
+  scrollbar-color: transparent transparent !important;
+  scrollbar-gutter: auto !important;
+}
+
+.app-workspace .developer-view__table-scroll *,
+.app-workspace .developer-view__table-scroll .prototype-table {
+  scrollbar-gutter: auto !important;
+}
+
+.app-workspace .developer-view__table-scroll .prototype-table {
+  box-sizing: border-box;
+  width: 100% !important;
+}
+
+.app-workspace .developer-view__table-scroll::-webkit-scrollbar,
+.app-workspace
+  .developer-view__table-scroll.kg-is-scrolling::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Developer contract uses full-size white cards without gray backing plates. */
+.app-workspace .developer-view__cards,
+.app-workspace .developer-view__code-wrap {
+  padding: 0 !important;
+  background: transparent !important;
+}
+
+.app-workspace .developer-view__cards > .kg-panel,
+.app-workspace .developer-view__code-wrap .developer-code {
+  box-sizing: border-box;
+  width: 100% !important;
+  overflow: hidden !important;
+  border-radius: 8px !important;
+  background: #fff !important;
+}
+
+.app-workspace .developer-code pre {
+  box-sizing: border-box;
+  width: auto !important;
+  margin: 0 16px 16px !important;
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
+  background: #fff !important;
+}
+
+.app-workspace .developer-view__code-wrap,
+.app-workspace .developer-view__code-wrap .developer-code {
+  box-sizing: border-box;
+  width: 100% !important;
+  scrollbar-gutter: auto !important;
+}
+
+
+/* Scoped GKX compliance: navigation directories and the nine business-service modules. */
+.app-sidebar :is(.app-nav, .app-nav__item, .app-nav__group, .app-nav__flyout),
+.app-workspace .business-service {
+  font-family: var(--font-family);
+  letter-spacing: 0;
+}
+
+/* Directory and business-service navigation. */
+.app-sidebar .app-nav {
+  gap: 4px;
+  margin-top: 8px;
+  padding: 0 0 16px;
+}
+
+.app-sidebar .app-nav__group {
+  gap: 8px;
+  margin: 16px 8px 8px;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.app-sidebar .app-nav__group:first-child {
+  margin-top: 4px;
+}
+
+.app-sidebar .app-nav__group em {
+  font-size: 12px !important;
+  line-height: 20px;
+}
+
+.app-sidebar .app-nav__item,
+.app-sidebar .app-nav__item--sub,
+.app-sidebar .app-nav__flyout a,
+.app-sidebar .app-nav__flyout strong {
+  min-height: 40px;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.app-sidebar .app-nav__item {
+  gap: 8px;
+  padding-inline: 16px;
+  border-radius: 4px;
+}
+
+.app-sidebar .app-nav__item--sub {
+  height: 40px;
+  margin: 0;
+  padding: 0 16px 0 40px;
+}
+
+.app-sidebar .app-nav__service-group {
+  gap: 4px;
+}
+
+.app-sidebar .app-nav__flyout {
+  left: calc(100% + 16px);
+  width: 192px;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.app-sidebar .app-nav__flyout strong,
+.app-sidebar .app-nav__flyout a {
+  padding-inline: 16px;
+}
+
+/* Shared shell for all nine business-service modules. */
+.app-workspace:has(> .business-service) {
+  box-sizing: border-box;
+  padding: 16px !important;
+}
+
+.app-workspace .business-service {
+  gap: 16px;
+  color: #1d2129;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.app-workspace .business-service__toolbar {
+  min-height: 36px;
+}
+
+.app-workspace .business-service .service-console {
+  gap: 16px;
+  padding: 16px;
+}
+
+.app-workspace .business-service .service-console__head {
+  gap: 8px;
+}
+
+.app-workspace .business-service .service-console__params {
+  gap: 16px;
+}
+
+.app-workspace .business-service .service-console__params label {
+  gap: 8px;
+}
+
+.app-workspace .business-service :is(input, select, textarea, button) {
+  font-family: var(--font-family);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.app-workspace .business-service :is(
+  .service-console__params > label > input,
+  .service-console__params > label > select,
+  .service-console__month-picker.arco-picker,
+  .cooperation-type-select .el-select__wrapper,
+  .alumni-stage-select .el-select__wrapper
+) {
+  min-height: 32px !important;
+  border-radius: 4px !important;
+}
+
+.app-workspace .business-service .service-console__actions {
+  gap: 16px;
+}
+
+.app-workspace .business-service .kg-button {
+  height: 32px;
+  padding-inline: 16px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.app-workspace .business-service .business-service__main {
+  gap: 16px;
+}
+
+.app-workspace .business-service :is(.graph-panel__filters, .graph-panel__legend) {
+  gap: 8px 16px;
+  padding: 8px 16px;
+}
+
+.app-workspace .business-service .graph-panel__filters :is(select, button) {
+  height: 32px;
+  padding-inline: 16px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.app-workspace .business-service .graph-panel__autorefresh {
+  gap: 8px;
+}
+
+.app-workspace .business-service .result-panel__tabs {
+  height: 36px;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.app-workspace .business-service .result-panel__tabs button {
+  height: 28px;
+  padding-inline: 16px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.app-workspace .business-service .result-panel__table div {
+  min-height: 40px;
+}
+
+.app-workspace .business-service .result-panel__table :is(dt, dd),
+.app-workspace .business-service .prototype-table :is(th, td) {
+  padding-inline: 16px !important;
+  color: #1d2129;
+  font-size: 14px !important;
+  line-height: 22px !important;
+}
+
+.app-workspace .business-service :is(
+  .result-provenance,
+  .result-panel__rules,
+  .result-provenance__evidence-list
+) {
+  gap: 16px;
+}
+
+.app-workspace .business-service :is(.result-provenance, .result-panel__rules) {
+  margin: 16px;
+  padding: 16px;
+  border-radius: 6px;
+}
+
+.app-workspace .business-service :is(
+  .result-provenance__target,
+  .result-provenance__evidence-list article,
+  .result-panel__rules article
+) {
+  gap: 8px;
+  padding: 16px;
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.app-workspace .business-service :is(
+  .result-provenance h3,
+  .result-provenance__target strong,
+  .result-provenance__target span,
+  .result-provenance__source dt,
+  .result-provenance__source dd,
+  .result-provenance__database,
+  .result-provenance__evidence-list article header strong,
+  .result-provenance__evidence-list article p b,
+  .result-provenance__evidence-list article > span,
+  .result-provenance__task-meta span,
+  .result-provenance__task-meta a
+) {
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.app-workspace .business-service .result-provenance h3 {
+  margin: 0;
+}
+
+.app-workspace .business-service .result-panel__rules {
+  margin: 0;
+}
+
+.app-workspace .business-service .result-panel__rules strong {
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.app-workspace .business-service .result-panel__rules dl {
+  gap: 8px;
+}
+
+.app-workspace .business-service .developer-view {
+  gap: 16px;
+  padding: 0;
+}
+
+.app-workspace .business-service .developer-view__meta {
+  gap: 24px;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.app-workspace .business-service .developer-view__meta label {
+  gap: 8px;
+}
+
+.app-workspace .business-service .developer-view__meta :is(input, select) {
+  height: 32px;
+  padding-inline: 12px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.app-workspace .business-service .developer-view__cards {
+  gap: 16px !important;
+}
+
+.app-workspace .business-service .developer-view__cards > .kg-panel,
+.app-workspace .business-service .developer-view__code-wrap .developer-code {
+  border-radius: 6px !important;
+  box-shadow: none !important;
+}
+
+.app-workspace .business-service .developer-code pre {
+  padding: 16px !important;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+/* Align the Code Example marker with the code-frame left border. */
+.app-workspace .business-service .developer-view__code-wrap .developer-code > .kg-panel__header {
+  padding-inline: 0 !important;
+}
+
+.app-workspace .business-service .developer-view__code-wrap .kg-panel__title {
+  box-sizing: border-box;
+  margin-left: 16px !important;
+  padding-left: 11px !important;
+}
+
+.app-workspace .business-service .developer-view__code-wrap .kg-panel__title::before {
+  left: 0 !important;
+
+}
+
+
+/* Keep result-detail tables closed and all row labels on one line. */
+.app-workspace .business-service .result-panel__table {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: calc(100% - 32px);
+  margin: 16px;
+  overflow-x: auto;
+  overflow-y: visible;
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
+}
+
+.app-workspace .business-service .result-panel__table div {
+  grid-template-columns: 136px minmax(0, 1fr);
+  min-height: 40px;
+}
+
+.app-workspace .business-service .result-panel__table div:last-child {
+  border-bottom: 0;
+}
+
+.app-workspace .business-service .result-panel__table dt {
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.app-workspace .business-service .result-panel__table dd {
+  min-width: 0;
+}
+
+
+/* Element Plus multi-select placeholders match the shared input placeholder tone. */
+.app-workspace .business-service :is(
+  .cooperation-type-select,
+  .alumni-stage-select
+) .el-select__selected-item.el-select__placeholder {
+  color: #bfbfbf !important;
+  font-weight: 400 !important;
+}

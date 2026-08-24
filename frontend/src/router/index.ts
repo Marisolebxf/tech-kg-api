@@ -102,7 +102,7 @@ export const router = createRouter({
     // { path: '/graph-versions', redirect: { path: '/tasks', query: { module: '图谱版本' } } },
     {
       path: '/business-service',
-      redirect: '/expert-direct',
+      redirect: { path: '/expert-direct', query: { breadcrumb: 'business-service' } },
     },
     ...serviceRoutes.map((route) => ({
       path: route.path,

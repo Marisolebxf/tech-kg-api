@@ -2840,16 +2840,33 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
               <p>
                 <b>{{ ev.summary }}</b>
               </p>
-              <span>业务表：{{ ev.businessTable }}</span>
-              <span
-                >技术表：<code>{{ ev.technicalTable }}</code></span
-              >
-              <span
-                >记录 ID：<code>{{ ev.recordId }}</code></span
-              >
-              <span
-                >字段：<code>{{ ev.fieldIdentifier }}</code></span
-              >
+              <template v-if="isLiveCoop || isLiveAlumni">
+                <span
+                  >源数据表：<code>{{ ev.technicalTable || "—" }}</code></span
+                >
+                <span
+                  >英文字段名：<code>{{
+                    ev.sourceField || ev.fieldIdentifier || "—"
+                  }}</code></span
+                >
+                <span
+                  >图空间 VID：<code>{{
+                    ev.graphVid || ev.recordId || "—"
+                  }}</code></span
+                >
+              </template>
+              <template v-else>
+                <span>业务表：{{ ev.businessTable }}</span>
+                <span
+                  >技术表：<code>{{ ev.technicalTable }}</code></span
+                >
+                <span
+                  >记录 ID：<code>{{ ev.recordId }}</code></span
+                >
+                <span
+                  >字段：<code>{{ ev.fieldIdentifier }}</code></span
+                >
+              </template>
             </article>
           </div>
         </section>

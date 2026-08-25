@@ -80,6 +80,8 @@ export interface AlumniProvenanceEvidence {
   technicalTable: string
   recordId: string
   fieldIdentifier: string
+  sourceField?: string
+  graphVid?: string
   summary: string
 }
 

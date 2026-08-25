@@ -195,9 +195,7 @@ def test_builds_provenance_from_real_graph_metadata():
 
     assert provenance["sourceDatabase"].startswith("trs-graph / space=")
     assert provenance["summary"].startswith("命中 1 条间接路径")
-    core_evidence = next(
-        item for item in provenance["evidences"] if item["graphVid"] == "person_A"
-    )
+    core_evidence = next(item for item in provenance["evidences"] if item["graphVid"] == "person_A")
     assert core_evidence == {
         "title": "实体 · 专家甲",
         "sourceTable": "dwd_scholar",

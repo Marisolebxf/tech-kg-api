@@ -20,8 +20,8 @@ const domain = ref('全部业务域')
 const reviewCategory = ref('全部处理分类')
 const batchFilter = ref(String(route.query.batch || '全部更新批次'))
 const productionMode = import.meta.env.VITE_REVIEW_PRODUCTION_ENABLED === 'true'
-const productionTabs = { '我的待办':'mine', '待领取':'unclaimed', '待审批':'approval', '失败重跑':'failed', '历史记录':'history' } as const
-const reviewTab = ref(productionMode ? (route.query.tab === 'history' ? '历史记录' : '我的待办') : (route.query.tab === 'history' ? '历史记录' : '待处理'))
+const productionTabs = { '全部':'', '我的待办':'mine', '待领取':'unclaimed', '待审批':'approval', '失败重跑':'failed', '历史记录':'history' } as const
+const reviewTab = ref(productionMode ? (route.query.tab === 'history' ? '历史记录' : '全部') : (route.query.tab === 'history' ? '历史记录' : '待处理'))
 const reviewTotal = ref(0)
 const severity = ref('全部风险')
 const actionFeedback = ref('')
@@ -129,7 +129,7 @@ const selectReviewTab = (tab: string) => {
 watch(() => route.query.batch, (value) => { batchFilter.value = String(value || '全部更新批次') })
 watch(() => route.query.keyword, (value) => { keyword.value = String(value || '') })
 watch(() => route.query.tab, (value) => {
-  reviewTab.value = value === 'history' ? '历史记录' : (productionMode ? '我的待办' : '待处理')
+  reviewTab.value = value === 'history' ? '历史记录' : (productionMode ? '全部' : '待处理')
   status.value = '全部状态'
 })
 
@@ -137,8 +137,8 @@ async function loadReviews() {
   if (props.mode !== 'review') return
   try {
     if (productionMode) {
-      const queue = productionTabs[reviewTab.value as keyof typeof productionTabs] || 'mine'
-      const response = await getProductionReviews({ queue, keyword: keyword.value || undefined, page: 1, pageSize: 50 })
+      const queue = productionTabs[reviewTab.value as keyof typeof productionTabs] ?? ''
+      const response = await getProductionReviews({ queue: queue || undefined, keyword: keyword.value || undefined, page: 1, pageSize: 50 })
       reviewTotal.value = response.total
       reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
         id: row.id, batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待领取', status: row.status === 'RESOLVED' ? '已完成' : row.status === 'CANCELLED' ? '已撤销' : '待处理', updatedAt: row.updatedAt, sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,

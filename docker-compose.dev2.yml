@@ -64,6 +64,9 @@ services:
       WORKFLOW_MYSQL_PASSWORD: temporal
       WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
       WORKFLOW_DEMO_DATA_ENABLED: ${WORKFLOW_DEMO_DATA_ENABLED:-false}
+      # 开发期关闭网关签名校验，未传 X-User-Id 时返回 dev-anonymous 身份。
+      # 生产保持 REVIEW_IDENTITY_REQUIRE_SIGNATURE=true 且配 REVIEW_IDENTITY_HMAC_SECRET。
+      REVIEW_IDENTITY_REQUIRE_SIGNATURE: "false"
       PLATFORM_INITIAL_ADMIN_USER_IDS: ${PLATFORM_INITIAL_ADMIN_USER_IDS:-}
       PLATFORM_BOOTSTRAP_FIRST_ADMIN: ${PLATFORM_BOOTSTRAP_FIRST_ADMIN:-true}
       CORRECTION_SYNC_WORKER_ENABLED: ${CORRECTION_SYNC_WORKER_ENABLED:-true}
@@ -176,6 +179,7 @@ services:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
         VITE_BASE: ${VITE_BASE:-./}
         VITE_API_BASE: ${VITE_API_BASE:-/api}
+        VITE_REVIEW_PRODUCTION_ENABLED: "true"
     image: tech-kg-api-dev2-web:latest
     container_name: tech-kg-web-dev2
     ports:

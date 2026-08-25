@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+from uuid import uuid4
 
 from fastapi import HTTPException, Request
 
@@ -28,10 +29,21 @@ async def get_review_identity(request: Request) -> ReviewIdentity:
     organization = value("REVIEW_HEADER_ORGANIZATION", "X-User-Organization")
     request_id = value("REVIEW_HEADER_REQUEST_ID", "X-Request-Id")
     signature = value("REVIEW_HEADER_SIGNATURE", "X-Identity-Signature")
+    require_signature = os.getenv("REVIEW_IDENTITY_REQUIRE_SIGNATURE", "true").lower() == "true"
+    # 开发期 fallback：禁用签名校验且未传 X-User-Id 时返回 dev identity，
+    # 让前端无需网关头即可调审核 API。生产保持 require_signature=true。
+    if not user_id and not require_signature:
+        return ReviewIdentity(
+            user_id="dev-anonymous",
+            user_name="Dev Anonymous",
+            roles=frozenset({"review_admin", "reviewer"}),
+            domains=frozenset({"*"}),
+            organization="dev",
+            request_id=request_id or f"dev-{uuid4().hex[:8]}",
+        )
     if not user_id:
         raise HTTPException(status_code=401, detail="缺少网关用户身份")
     secret = os.getenv("REVIEW_IDENTITY_HMAC_SECRET", "")
-    require_signature = os.getenv("REVIEW_IDENTITY_REQUIRE_SIGNATURE", "true").lower() == "true"
     payload = "\n".join((user_id, user_name, roles, domains, organization, request_id))
     if require_signature:
         if not secret:

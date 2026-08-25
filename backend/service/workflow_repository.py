@@ -299,6 +299,11 @@ class WorkflowRepository:
 
     @staticmethod
     def _steps(blocking: str | None = None) -> list[dict[str, Any]]:
+        # 兜底模板:任务刚创建(还未执行)时填的静态 7 步,字段都是编造的演示值
+        # (count="1 个处理对象"、duration="6秒" 等)。
+        # 终态后 _sync_task_from_execution 会用 normalize_stages(output)
+        # 拿真实 worker stages 覆盖 task["steps"]。
+        # TODO: 移除——等 seed 数据 / 新建任务流程能产出真实步骤模板后删掉。
         raw = [
             ("source", "数据接入", "数据处理", "读取业务域增量数据"),
             ("normalize", "清洗标准化", "数据处理", "执行字段、枚举和字典标准化"),

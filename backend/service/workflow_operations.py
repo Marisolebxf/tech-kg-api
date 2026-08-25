@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from service.stage_normalizer import normalize_stages
 from service.temporal_runtime import temporal_runtime
 from service.workflow_repository import WorkflowRepository, repository
 
@@ -263,10 +264,11 @@ class WorkflowOperationsService:
         return execution
 
     def _sync_task_from_execution(self, execution: dict[str, Any]) -> None:
-        """execution 终态时把状态回写到关联 task；若脚本返回了 stages 列表，额外回写 steps/output。
+        """execution 终态时把状态回写到关联 task；若脚本返回了 stages，额外回写 steps/output。
 
         状态同步不依赖 stages 存在，否则像 kg.custom.python 这种不返回 stages 的工作流
-        会让 task 永远停在「执行中」。
+        会让 task 永远停在「执行中」。stages 既可能是 list(旧形式)也可能是 dict
+        (worker 实际形状),用 normalize_stages 统一归一化。
         """
         task_id = execution.get("taskId")
         if not task_id:
@@ -286,13 +288,13 @@ class WorkflowOperationsService:
             return
         already_in_sync = task.get("taskStatus") == new_task_status
         output = execution.get("output")
-        stages = output.get("stages") if isinstance(output, dict) else None
-        if isinstance(stages, list):
-            task["steps"] = stages
-            task["output"] = output
-        elif isinstance(output, dict):
-            # output 是 dict 但没有 stages（如 kg.custom.python 的 {status, result, ...}），
-            # 仍把 output 写到 task 上便于详情页查看
+        normalized_steps = normalize_stages(output)
+        if normalized_steps:
+            # 用真实 worker stages 覆盖任务创建时塞的静态模板 _steps()
+            task["steps"] = normalized_steps
+        if isinstance(output, dict):
+            # output 是 dict 时一律写到 task 上便于详情页查看
+            # (kg.custom.python 的 {status, result, ...} 也走这里)
             task["output"] = output
         if already_in_sync and task.get("status") == new_status:
             # 状态已一致，避免重复 log 累积
@@ -300,11 +302,12 @@ class WorkflowOperationsService:
             return
         task["taskStatus"] = new_task_status
         task["status"] = new_status
-        log_msg = (
-            f"阶段回写：{len(stages)} 个 stage，状态={status}"
-            if isinstance(stages, list)
-            else f"执行状态同步：{status}（output 无 stages 列表，仅回写状态）"
-        )
+        if normalized_steps:
+            log_msg = f"阶段回写：{len(normalized_steps)} 个 stage，状态={status}"
+        elif isinstance(output, dict) and "stages" in output:
+            log_msg = f"执行状态同步：{status}（output.stages 类型不支持归一化）"
+        else:
+            log_msg = f"执行状态同步：{status}（output 无 stages，仅回写状态）"
         task["logs"] = (task.get("logs") or []) + [log_msg]
         self.repo.save_task(task)
 

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -462,6 +463,185 @@ class ManualReviewService:
             )
             s.commit()
             return self.detail(s, c)
+
+    def create_direct_case(
+        self,
+        *,
+        task_id: str,
+        execution_id: str | None,
+        step_id: str,
+        kind: str,
+        candidate: dict[str, Any],
+        object_id: str | None = None,
+        object_name: str | None = None,
+        node_label: str | None = None,
+        edge_type: str | None = None,
+        from_id: str | None = None,
+        to_id: str | None = None,
+        reason: str = "",
+        confidence: float | None = None,
+        evidence: list[Any] | None = None,
+        workflow_id: str | None = None,
+        workflow_run_id: str | None = None,
+        domain: str = "graph",
+        service_actor: str = "kg.custom.steps",
+    ) -> dict[str, Any]:
+        """kg.custom.steps pendingReview 项入队。
+
+        直接 OPEN 状态，不走 4-eyes claim/submit 流程；template_id=T_DIRECT。
+        candidate_snapshot 里附加 kind/nodeLabel/edgeType/fromId/toId 元字段，
+        direct_decide 读这些字段决定怎么写图。
+        """
+        t = now()
+        obj_id = (
+            object_id
+            or candidate.get("id")
+            or candidate.get("scholar_id")
+            or f"{step_id}-{uuid4().hex[:8]}"
+        )
+        obj_name = object_name or candidate.get("name_zh") or candidate.get("name") or obj_id
+        snapshot = {
+            **candidate,
+            "_kind": kind,
+            "_nodeLabel": node_label,
+            "_edgeType": edge_type,
+            "_fromId": from_id,
+            "_toId": to_id,
+            "_confidence": confidence,
+        }
+        dedupe_key = sha([task_id, step_id, obj_id, sha(snapshot)])
+        risk = "中" if (confidence is None or confidence >= 0.7) else "高"
+        c = ReviewCase(
+            id=f"MR-{t:%Y%m%d}-{uuid4().hex[:12].upper()}",
+            dedupe_key=dedupe_key,
+            event_id=f"kg-step-{uuid4().hex}",
+            source_task_id=task_id,
+            batch_id=None,
+            node_id=step_id,
+            pipeline_step_id=step_id,
+            object_id=obj_id,
+            object_type=kind,
+            object_name=obj_name,
+            error_type=reason or "需要人工审核",
+            error_fingerprint=sha([reason, snapshot]),
+            category=TEMPLATES["T_DIRECT"]["title"],
+            template_id="T_DIRECT",
+            template_version="1.0",
+            domain=domain,
+            phase="图谱构建",
+            risk_level=risk,
+            scope="OBJECT",
+            status="OPEN",
+            version=1,
+            sla_claim_at=t + timedelta(hours=1),
+            sla_resolve_at=t + timedelta(hours=24),
+            workflow_type="kg.custom.steps",
+            workflow_id=workflow_id,
+            workflow_run_id=workflow_run_id,
+            task_queue="tech-kg-workflows",
+            resume_token=f"kg-step:{task_id}:{step_id}",
+            exception_code="KG_STEP_PENDING_REVIEW",
+            isolation_scope="OBJECT",
+            template_payload_version="1.0",
+            input_snapshot=dump(
+                {"evidence": evidence or [], "executionId": execution_id, "confidence": confidence}
+            ),
+            candidate_snapshot=dump(snapshot),
+            diagnosis=reason or "需要人工审核",
+            created_at=t,
+            updated_at=t,
+        )
+        actor = ReviewIdentity(
+            service_actor,
+            service_actor,
+            frozenset({"review_admin"}),
+            frozenset({"*"}),
+            "service",
+            c.event_id,
+        )
+        with self.sf() as s:
+            existing = s.scalar(select(ReviewCase).where(ReviewCase.dedupe_key == dedupe_key))
+            if existing:
+                return self._ingress_response(existing, True)
+            try:
+                s.add(c)
+                self.audit(
+                    s,
+                    c,
+                    actor,
+                    "CASE_CREATED",
+                    None,
+                    "OPEN",
+                    {"stepId": step_id, "kind": kind, "reason": reason},
+                )
+                s.commit()
+            except IntegrityError:
+                s.rollback()
+                existing = s.scalar(select(ReviewCase).where(ReviewCase.dedupe_key == dedupe_key))
+                if not existing:
+                    raise
+                return self._ingress_response(existing, True)
+        return self._ingress_response(c, False)
+
+    def direct_decide(
+        self, case_id: str, version: int, accepted: bool, note: str, identity: Any
+    ) -> dict[str, Any]:
+        """kg.custom.steps T_DIRECT 案例两步决策：accept 直接写图，reject 丢弃。
+
+        不调 enqueue_correction、不重启 workflow、不要求 submit 阶段。
+        """
+        require_role(identity, "reviewer")
+        with self.sf() as s:
+            c = self.need(s, case_id)
+            require_domain_access(identity, c.domain)
+            if c.template_id != "T_DIRECT":
+                raise ReviewValidationError("仅 T_DIRECT 案例支持 direct_decide")
+            if c.version != version or c.status != "OPEN":
+                raise ReviewConflictError("状态或版本冲突")
+            old = c.status
+            if accepted:
+                self._write_candidate_to_graph(c)
+                c.status = "RESOLVED"
+            else:
+                c.status = "REJECTED"
+            c.completed_at = now()
+            c.version += 1
+            c.updated_at = now()
+            self.audit(
+                s,
+                c,
+                identity,
+                "DIRECT_ACCEPTED" if accepted else "DIRECT_REJECTED",
+                old,
+                c.status,
+                {"note": note},
+            )
+            s.commit()
+            return self.detail(s, c)
+
+    def _write_candidate_to_graph(self, c: ReviewCase) -> None:
+        """accept 时把 candidate_snapshot 灌图。entity→merge_node，relation→create_edge。"""
+        from infra.graph_db import get_trs_graph_client
+
+        snapshot = load(c.candidate_snapshot)
+        kind = snapshot.get("_kind") or c.object_type
+        # 去掉元字段，剩下的是 candidate 本体
+        candidate = {k: v for k, v in snapshot.items() if not k.startswith("_")}
+        graph = get_trs_graph_client()
+        if kind == "entity":
+            node_label = snapshot.get("_nodeLabel")
+            if not node_label:
+                raise ReviewValidationError("entity 候选缺 nodeLabel")
+            graph.merge_node([node_label], {"id": c.object_id}, candidate)
+        elif kind == "relation":
+            edge_type = snapshot.get("_edgeType")
+            from_id = snapshot.get("_fromId")
+            to_id = snapshot.get("_toId")
+            if not (edge_type and from_id and to_id):
+                raise ReviewValidationError("relation 候选缺 edgeType/fromId/toId")
+            graph.create_edge(from_id, to_id, edge_type, candidate)
+        else:
+            raise ReviewValidationError(f"未知 kind: {kind}")
 
     def enqueue_correction(self, s, c, d, result):
         payload = {"decisionId": d.id, "result": result}

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import ManualReviewDynamicForm from '../../components/manual-review/ManualReviewDynamicForm.vue'
-import { claimProductionReview, getManualReview, getProductionReview, heartbeatProductionReview, retryManualReview, submitManualReview, submitProductionReview, revokeManualReview, type ProductionReviewCase } from '../../api/workflowOperations'
+import { claimProductionReview, directDecideProductionReview, getManualReview, getProductionReview, heartbeatProductionReview, retryManualReview, submitManualReview, submitProductionReview, revokeManualReview, type ProductionReviewCase } from '../../api/workflowOperations'
 
 import {
   getHandleCategory,
@@ -23,8 +23,12 @@ const record = ref<ReviewRecord | undefined>()
 let heartbeatTimer: number | undefined
 const isSupported = computed(() => Boolean(record.value))
 const isHistory = computed(() => record.value?.status === '已完成' || record.value?.status === '已撤销')
-const isEditable = computed(() => productionMode ? ['CLAIMED','IN_REVIEW'].includes(productionCase.value?.status || '') : record.value?.status === '待处理')
-const canClaim = computed(() => productionMode && productionCase.value?.status === 'OPEN')
+const isDirectCase = computed(() => productionCase.value?.template?.id === 'T_DIRECT' || productionCase.value?.workflowType === 'kg.custom.steps')
+const isEditable = computed(() => {
+  if (isDirectCase.value) return productionCase.value?.status === 'OPEN'
+  return productionMode ? ['CLAIMED','IN_REVIEW'].includes(productionCase.value?.status || '') : record.value?.status === '待处理'
+})
+const canClaim = computed(() => productionMode && productionCase.value?.status === 'OPEN' && !isDirectCase.value)
 
 const template = computed(() => (record.value ? getReviewTemplate(record.value) : null))
 const impactScope = computed(() => (record.value ? getImpactScope(record.value) : '任务级'))
@@ -53,6 +57,7 @@ const actionMeta: Record<string, { label: string; kind: string; rerun?: boolean 
   'keep-isolated': { label: '保持隔离', kind: 'secondary' }, 'isolate-dup': { label: '保持重复记录隔离', kind: 'secondary' },
   'discard-record': { label: '丢弃记录', kind: 'danger' }, 'rollback-dict': { label: '回滚字典', kind: 'danger', rerun: true },
   'force-pass': { label: '强制通过', kind: 'danger', rerun: true }, 'skip-task': { label: '跳过任务', kind: 'danger' }, 'escalate': { label: '升级治理员', kind: 'secondary' },
+  'accept': { label: '通过（写图）', kind: 'primary' }, 'reject': { label: '驳回（丢弃）', kind: 'danger' },
 }
 const productionActions = computed(() => (productionCase.value?.template?.allowedActions || []).map((id) => ({ id, ...(actionMeta[id] || { label: id, kind: 'secondary' }) })))
 const preferredProductionAction = computed(() => {
@@ -324,6 +329,22 @@ const applySuggestedTitle = () => {
 
 const handleAction = async (action: ReviewAction | { id: string; label: string; kind: string; rerun?: boolean }) => {
   if (!record.value || !isEditable.value) return
+  // kg.custom.steps T_DIRECT 案例：accept 直接写图，reject 丢弃，不走 claim/submit/approve 4-eyes 流程
+  if (isDirectCase.value && productionCase.value && (action.id === 'accept' || action.id === 'reject')) {
+    try {
+      productionCase.value = await directDecideProductionReview(
+        productionCase.value.id,
+        productionCase.value.version,
+        action.id === 'accept',
+        note.value,
+      )
+      record.value = mapProductionRecord(productionCase.value)
+      feedback.value = action.id === 'accept' ? '已通过，候选已写入图' : '已驳回，候选丢弃'
+    } catch (error) {
+      feedback.value = error instanceof Error ? error.message : '决策失败'
+    }
+    return
+  }
   if (!productionMode && action.id === 'retry-task') {
     try {
       await retryManualReview(record.value.id, { runtimeConfig: runtimeConfig.value })

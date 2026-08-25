@@ -221,7 +221,71 @@ print(json.dumps(result, ensure_ascii=False))
     if process.returncode != 0:
         raise RuntimeError(stderr.decode(errors="replace")[-4000:])
     output = json.loads(stdout.decode() or "null")
+    # post-process pendingReview: 入 ReviewCase 队列，pipeline 不暂停
+    pending = output.pop("pendingReview", []) if isinstance(output, dict) else []
+    if pending:
+        _enqueue_pending_review(request, pending, attempt)
     return {"step": request["stepId"], "status": "COMPLETED", "output": output, "attempt": attempt}
+
+
+def _enqueue_pending_review(request: dict[str, Any], pending: list[Any], attempt: int) -> None:
+    """把 step 返回的 pendingReview 项写入 ReviewCase 队列（T_DIRECT 模板）。
+
+    入队失败不阻塞 pipeline——记 warning，继续；dedupe_key 保证幂等。
+    """
+    import logging
+
+    info = activity.info()
+    workflow_id = info.workflow_id
+    workflow_run_id = info.workflow_run_id
+    try:
+        from service.workflow_repository import repository
+
+        execution = repository.get_execution_by_workflow(workflow_id) or {}
+    except Exception as exc:
+        logging.getLogger("workflow.kg.custom.steps").warning(
+            "lookup execution for workflow %s failed: %s", workflow_id, exc
+        )
+        execution = {}
+    task_id = execution.get("taskId") or f"PI-kgstep-{workflow_id[:12]}"
+    execution_id = execution.get("id")
+    try:
+        from service.manual_review_production import manual_review_service
+
+        for item in pending:
+            if not isinstance(item, dict):
+                continue
+            try:
+                manual_review_service.create_direct_case(
+                    task_id=task_id,
+                    execution_id=execution_id,
+                    step_id=request["stepId"],
+                    kind=item.get("kind", "entity"),
+                    candidate=item.get("candidate", {}),
+                    object_id=item.get("objectId"),
+                    object_name=item.get("objectName"),
+                    node_label=item.get("nodeLabel"),
+                    edge_type=item.get("edgeType"),
+                    from_id=item.get("fromId"),
+                    to_id=item.get("toId"),
+                    reason=item.get("reason", ""),
+                    confidence=item.get("confidence"),
+                    evidence=item.get("evidence", []),
+                    workflow_id=workflow_id,
+                    workflow_run_id=workflow_run_id,
+                    domain=item.get("domain", "graph"),
+                )
+            except Exception as exc:
+                logging.getLogger("workflow.kg.custom.steps").warning(
+                    "create_direct_case failed step=%s obj=%s reason=%s",
+                    request["stepId"],
+                    item.get("objectId"),
+                    exc,
+                )
+    except Exception as exc:
+        logging.getLogger("workflow.kg.custom.steps").warning(
+            "enqueue pending review unavailable (service load failed): %s", exc
+        )
 
 
 async def _run_domain_pipeline(request: dict[str, Any], kind: str, domain: str) -> dict[str, Any]:
@@ -393,15 +457,18 @@ class PythonScriptWorkflow:
 
 @workflow.defn(name="kg.custom.steps")
 class StepPipelineWorkflow:
-    """多步实体构建流水线：每步一个 Activity，带独立 retry/timeout；signal 触发审核，reset 触发重试。
+    """多步实体构建流水线：每步一个 Activity，带独立 retry/timeout。
 
-    状态全部放 workflow state：UI 用 get_steps query 读，已完成步不重跑靠 event history replay。
+    审核是 post-hoc：step 返回的 pendingReview 字段被 activity 抽出写入 ReviewCase
+    队列（T_DIRECT 模板），pipeline 不暂停、跑到底。审核者异步处理队列，
+    accept 时直接写图，reject 时丢弃——与 workflow 完全解耦。
+    失败重试用 ResetWorkflowExecution 回放，已完成步靠 event history replay 不重跑。
+    状态放 workflow state：UI 用 get_steps query 读。
     """
 
     def __init__(self) -> None:
         self._steps: dict[str, dict[str, Any]] = {}
         self._current_step: str | None = None
-        self._review_signal: dict[str, Any] | None = None
 
     @workflow.run
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -441,26 +508,7 @@ class StepPipelineWorkflow:
                 # FAILED 状态写入 self._steps 让 query 在 reset 之前仍可读到失败原因。
                 self._steps[step["id"]] = {"status": "FAILED", "error": str(exc)}
                 raise
-            if step.get("requireReview"):
-                self._steps[step["id"]]["status"] = "PENDING_REVIEW"
-                await workflow.wait_condition(lambda: self._review_signal is not None)
-                review = self._review_signal
-                self._review_signal = None
-                if review.get("decision") == "reject":
-                    self._steps[step["id"]]["status"] = "REJECTED"
-                    return {
-                        "status": "rejected",
-                        "step": step["id"],
-                        "steps": self._steps,
-                    }
-                if review.get("modifiedResult"):
-                    prev_outputs[step["id"]] = review["modifiedResult"]
-                self._steps[step["id"]]["status"] = "REVIEWED"
         return {"status": "completed", "steps": self._steps}
-
-    @workflow.signal
-    def submit_review(self, review: dict[str, Any]) -> None:
-        self._review_signal = review
 
     @workflow.query
     def get_steps(self) -> dict[str, Any]:

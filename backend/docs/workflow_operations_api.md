@@ -50,12 +50,14 @@
 
 ### `kg.custom.steps` 多步骤流水线
 
-多步骤实体构建工作流。每步是一个 Temporal Activity（独立 retry policy + timeout），状态由 workflow state 持有，UI 通过 `@workflow.query get_steps` 实时读取。失败后用 `ResetWorkflowExecution` 回放，已完成步不重跑（event history replay）；人工审核用 `@workflow.signal submit_review` 暂停-恢复。
+多步骤实体构建工作流。每步是一个 Temporal Activity（独立 retry policy + timeout），状态由 workflow state 持有，UI 通过 `@workflow.query get_steps` 实时读取。失败后用 `ResetWorkflowExecution` 回放，已完成步不重跑（event history replay）。
+
+**人工审核是 post-hoc 队列模型**（不暂停 workflow）：step 函数返回值里的 `pendingReview` 字段被 activity 自动 pop 出来，逐条写入 `ReviewCase` 表（`template_id=T_DIRECT`），pipeline 继续跑下游。审核者异步处理队列，`accept` 时直接写图（`graph.merge_node`/`create_edge`），`reject` 时丢弃——与 workflow 完全解耦，不重启任何 workflow。
 
 - `POST /workflow-system/definitions/steps`：上传 step pipeline 定义。Form 字段：`file`（Python 脚本，含多个 step 函数）、`steps`（JSON 编码的 manifest 列表）、可选 `definition_id`/`name`。AST 校验所有 `functionName` 都在脚本里、`id` 唯一。返回 `workflowType: "kg.custom.steps"` 的定义。
 - `POST /workflow-system/definitions/{id}/execute`：触发执行（同 `kg.custom.python`）。payload 透传给每个 step 函数。
 - `POST /task-center/tasks/{taskId}/retry`：失败重试。body `{reason?}`。调 Temporal `ResetWorkflowExecution`，回放到最近一个 workflow task，新 `run_id` 回写 `workflow_executions`/`tasks`。
-- `POST /task-center/tasks/{taskId}/review`：人工审核。body `{decision: "approve"|"reject", modifiedResult?, note?, reviewer?}`。向 workflow 发 `submit_review` signal，恢复暂停在 `PENDING_REVIEW` 的 step。`modifiedResult` 覆盖下游 `prevOutputs[stepId]`。
+- `POST /manual-reviews/production/{caseId}/direct-decide`：T_DIRECT 案例两步决策。body `{version, accepted: bool, note?}`。`accepted=true` 时后端调 `graph.merge_node`/`create_edge` 直接写图，case 置 `RESOLVED`；`accepted=false` 时丢弃，case 置 `REJECTED`。不重启 workflow。
 
 #### Step 函数契约
 
@@ -63,7 +65,26 @@
 def step_xxx(payload: dict, ctx: dict) -> dict: ...
 ```
 
-`ctx` 含 `stepId`/`attempt`/`prevOutputs`/`executionId`/`taskId`/`definitionId`。返回 JSON-able dict。`prevOutputs` 是上游 step 的输出，按 step_id 索引。
+`ctx` 含 `stepId`/`attempt`/`prevOutputs`/`executionId`/`taskId`/`definitionId`。返回 JSON-able dict。`prevOutputs` 是上游 step 的输出（已 pop 掉 `pendingReview`），按 step_id 索引。
+
+#### `pendingReview` 字段契约
+
+step 返回值里若有 `pendingReview` 字段（list[dict]），activity 自动 pop 并逐条入 `ReviewCase` 队列。下游 step 拿到的 `prevOutputs[stepId]` 不含 `pendingReview`。每条 item 字段：
+
+```json
+{
+  "kind": "entity",
+  "nodeLabel": "Scholar",
+  "objectId": "S12345",
+  "objectName": "张三",
+  "candidate": {"scholar_id": "S12345", "name_zh": "张三", "org": "中科院"},
+  "reason": "置信度 0.78 < 0.85",
+  "confidence": 0.78,
+  "evidence": [{"table": "dwd_scholar", "record_id": "...", "field": "name_zh", "raw": "张三"}]
+}
+```
+
+关系候选用 `kind: "relation"` + `edgeType`/`fromId`/`toId` 替代 `nodeLabel`。`candidate` 必须带齐灌图所需全部字段——审核 `accept` 时后端直接用它调 `graph.merge_node`/`create_edge`。
 
 #### Manifest 字段
 
@@ -71,8 +92,7 @@ def step_xxx(payload: dict, ctx: dict) -> dict: ...
 {
   "id": "extract", "name": "实体抽取", "functionName": "step_extract",
   "timeoutSeconds": 1200,
-  "retryPolicy": {"maximumAttempts": 3, "initialIntervalSeconds": 5, "maximumIntervalSeconds": 100, "nonRetryableErrorTypes": ["ValueError"]},
-  "requireReview": true
+  "retryPolicy": {"maximumAttempts": 3, "initialIntervalSeconds": 5, "maximumIntervalSeconds": 100, "nonRetryableErrorTypes": ["ValueError"]}
 }
 ```
 
@@ -80,13 +100,12 @@ def step_xxx(payload: dict, ctx: dict) -> dict: ...
 - `functionName`：脚本里的函数名
 - `timeoutSeconds`：默认 600
 - `retryPolicy.maximumAttempts`：默认 1（不重试）；stateful 步骤如 `persist` 应保持 1 避免重复写入
-- `requireReview`：默认 `false`；为 `true` 时该步完成后 workflow 暂停等待 `submit_review` signal
 
 #### 示例
 
-参考 `backend/script/workflows/sample_step_pipeline.py`：4 步流水线 `load → extract → align → persist`，每步读 `ctx.prevOutputs`，`payload.fail_at` 可触发指定 step 失败用于验证 reset 重试。
+参考 `backend/script/workflows/sample_step_pipeline.py`：4 步流水线 `load → extract → align → persist`，`step_extract` 对 `item == 2` 演示低置信度候选抛到 `pendingReview` 队列；`payload.fail_at` 可触发指定 step 失败用于验证 reset 重试。
 
-完整设计文档：[`backend/docs/multi_step_workflow_plan.md`](multi_step_workflow_plan.md)。
+完整设计文档：[`backend/docs/multi_step_workflow_plan.md`](multi_step_workflow_plan.md)（原始设计）和 [`backend/docs/multi_step_workflow_review_redesign.md`](multi_step_workflow_review_redesign.md)（审核机制重设计：post-hoc 队列取代 in-flight pause）。
 
 ## 启动
 

@@ -99,6 +99,12 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         "adapter": "runtime",
         "components": [{"type": "runtime-config", "source": "data.candidate.runtime"}],
     },
+    "T_DIRECT": {
+        "title": "kg.custom.steps 候选审核",
+        "actions": {"accept", "reject"},
+        "adapter": "direct",
+        "components": [{"type": "candidate-detail", "source": "data.candidate"}],
+    },
 }
 RESULT_SCHEMAS: dict[str, dict[str, Any]] = {
     "T_MAP": {
@@ -127,6 +133,10 @@ RESULT_SCHEMAS: dict[str, dict[str, Any]] = {
     "T_RUNTIME": {
         "type": "object",
         "properties": {"runtimeConfig": {"type": ["object", "string"]}},
+    },
+    "T_DIRECT": {
+        "type": "object",
+        "properties": {"accepted": {"type": "boolean"}, "note": {"type": "string"}},
     },
 }
 
@@ -253,6 +263,7 @@ def write_target(template_id: str) -> str:
         "T_EVIDENCE": "候选关系 correction 层",
         "T_ATTR": "属性融合 correction 层",
         "T_RUNTIME": "任务配置 correction 层",
+        "T_DIRECT": "图数据库直写（accept 时 merge_node/create_edge）",
     }[canonical_template(template_id)]
 
 

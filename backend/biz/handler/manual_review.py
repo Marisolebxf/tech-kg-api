@@ -13,6 +13,7 @@ from biz.schemas.manual_review_production import (
     ApprovalRequest,
     CancelRequest,
     CreateCaseRequest,
+    DirectDecideRequest,
     DraftRequest,
     EvidenceCompleteRequest,
     EvidenceUploadRequest,
@@ -249,6 +250,19 @@ async def reject_case(case_id: str, body: ApprovalRequest, identity: ReviewIdent
     try:
         return ApiResponse(
             data=production_service.approve(case_id, body.version, False, body.note, identity)
+        )
+    except Exception as exc:
+        _raise_production_error(exc)
+
+
+@router.post("/production/{case_id}/direct-decide", response_model=ApiResponse)
+async def direct_decide_case(case_id: str, body: DirectDecideRequest, identity: ReviewIdentityDep):
+    """kg.custom.steps T_DIRECT 案例两步决策：accept 直接写图，reject 丢弃。"""
+    try:
+        return ApiResponse(
+            data=production_service.direct_decide(
+                case_id, body.version, body.accepted, body.note, identity
+            )
         )
     except Exception as exc:
         _raise_production_error(exc)

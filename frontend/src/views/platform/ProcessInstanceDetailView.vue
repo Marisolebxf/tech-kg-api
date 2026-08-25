@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getTask, retryTask, submitTaskReview, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch } from '../../api/workflowOperations'
+import { getTask, retryTask, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch } from '../../api/workflowOperations'
 
 type StepStatus = '成功' | '运行中' | '需人工处理' | '待执行'
 type RiskLevel = '低风险' | '中风险' | '高风险'
@@ -97,7 +97,7 @@ function initialStepId() {
   if (isPipelineTask.value) {
     const state = processingInstance.value?.pipeline
     if (state?.current) return state.current
-    const pending = pipelineSteps.value.find((s) => s.info.status === 'PENDING_REVIEW' || s.info.status === 'FAILED')
+    const pending = pipelineSteps.value.find((s) => s.info.status === 'FAILED')
     if (pending) return pending.id
     return pipelineSteps.value[0]?.id ?? 'source'
   }
@@ -116,9 +116,6 @@ function mapPipelineStatus(s: PipelineStepInfo['status']): StepStatus {
   switch (s) {
     case 'COMPLETED': return '成功'
     case 'RUNNING': return '运行中'
-    case 'PENDING_REVIEW': return '需人工处理'
-    case 'REVIEWED': return '成功'
-    case 'REJECTED': return '需人工处理'
     case 'FAILED': return '需人工处理'
     default: return '待执行'
   }
@@ -132,7 +129,7 @@ function buildPipelineSteps(): Step[] {
     phase: '图谱构建' as const,
     name: id,
     status: mapPipelineStatus(info.status),
-    risk: (info.status === 'FAILED' || info.status === 'PENDING_REVIEW' || info.status === 'REJECTED' ? '高风险' : '低风险') as RiskLevel,
+    risk: (info.status === 'FAILED' ? '高风险' : '低风险') as RiskLevel,
     count: info.attempt ? `attempt=${info.attempt}` : '-',
     abnormal: info.error ? '1' : '0',
     duration: '-',
@@ -252,33 +249,9 @@ const pipelineSteps = computed(() => {
     isCurrent: state.current === id,
   }))
 })
-const pendingReviewStep = computed(() => pipelineSteps.value.find((s) => s.info.status === 'PENDING_REVIEW'))
 const isPipelineFailed = computed(() => processingInstance.value?.taskStatus === '执行出错' && pipelineSteps.value.some((s) => s.info.status === 'FAILED'))
-const reviewReviewer = ref('')
-const reviewNote = ref('')
-const reviewModifiedJson = ref('')
-const reviewSubmitting = ref(false)
 const retrySubmitting = ref(false)
 const pipelineMessage = ref('')
-
-async function handlePipelineReview(decision: 'approve' | 'reject') {
-  if (!pendingReviewStep.value) return
-  let modifiedResult: Record<string, unknown> | undefined
-  if (decision === 'approve' && reviewModifiedJson.value.trim()) {
-    try { modifiedResult = JSON.parse(reviewModifiedJson.value) as Record<string, unknown> }
-    catch { pipelineMessage.value = 'modifiedResult 不是合法 JSON'; return }
-  }
-  reviewSubmitting.value = true
-  try {
-    await submitTaskReview(taskId.value, { decision, modifiedResult, note: reviewNote.value, reviewer: reviewReviewer.value || undefined })
-    pipelineMessage.value = `${decision === 'approve' ? '通过' : '驳回'} 已发送，workflow 将继续`
-    await loadTaskDetail()
-  } catch (e) {
-    pipelineMessage.value = `审核失败：${(e as Error).message}`
-  } finally {
-    reviewSubmitting.value = false
-  }
-}
 
 async function handlePipelineRetry() {
   retrySubmitting.value = true
@@ -361,17 +334,7 @@ onMounted(loadTaskDetail)
           <section v-if="isAiStep" class="ai-card"><header><div><b>AI</b><span><strong>大模型运行透明度</strong><em>展示版本、阈值、分流与质量，不展示模型内部思维过程</em></span></div><i>需关注</i></header><dl><div v-for="row in modelMetrics" :key="row[0]"><dt>{{ row[0] }}</dt><dd>{{ row[1] }}</dd></div></dl></section>
           <section v-if="isAiStep" class="prompt-card"><h3>实际提示词模板 <span>kg-extract-v2.6.1</span></h3><pre>{{ llmPrompt }}</pre></section>
           <section v-if="isQualityStep" class="quality-strategy"><h3>质量检验项与判定策略</h3><table><thead><tr><th>检验项</th><th>方法</th><th>具体判定策略</th><th>结果</th></tr></thead><tbody><tr v-for="item in qualityChecks" :key="item.name"><td>{{ item.name }}</td><td><span :class="{ ai: item.method.includes('大模型') }">{{ item.method }}</span></td><td>{{ item.strategy }}</td><td>{{ item.result }}</td></tr></tbody></table><div class="quality-ai-note"><b>AI</b><span><strong>语义合理性检验使用大模型辅助</strong><em>模型 Qwen3-32B-Instruct · Prompt quality-semantic-v1.3 · AI 只告警，不直接删改数据</em></span></div><pre>{{ qualityPrompt }}</pre></section>
-          <section v-if="isPipelineTask && pendingReviewStep" class="result-card alert pipeline-review-card">
-            <h3>人工审核 · step "{{ pendingReviewStep.id }}" 暂停中</h3>
-            <p><strong>当前状态：</strong>workflow 已暂停在 PENDING_REVIEW，等待 submit_review signal 恢复。</p>
-            <p><strong>step 输出：</strong></p>
-            <pre class="review-output">{{ formatIo(pendingReviewStep.info.output) }}</pre>
-            <label>审核人<input v-model="reviewReviewer" placeholder="留空则匿名" /></label>
-            <label>附注<input v-model="reviewNote" placeholder="可选" /></label>
-            <label>修正结果 JSON（仅 approve 时可填，覆盖下游 prevOutputs[stepId]）<textarea v-model="reviewModifiedJson" rows="3" placeholder='{"key": "value"}' /></label>
-            <div class="review-actions"><button type="button" class="primary" :disabled="reviewSubmitting" @click="handlePipelineReview('approve')">通过</button><button type="button" class="danger" :disabled="reviewSubmitting" @click="handlePipelineReview('reject')">驳回</button></div>
-          </section>
-          <section v-else-if="needsReview" class="result-card alert"><h3>执行结果与业务验收</h3><template v-if="isExecutionInterrupted"><p><strong>执行结果：</strong>任务未运行完成，尚未产生可验收结果。</p><p><strong>置信度：</strong>无，因为没有模型结果。</p></template><template v-else><p><strong>执行结果：</strong>程序已正常运行完成并生成输出。</p><p><strong>验收结果：</strong>{{ processingInstance?.result }}，当前不能视为正确结果。</p></template><p><strong>后续处理：</strong>{{ blockingStrategy }}。</p></section>
+          <section v-if="needsReview" class="result-card alert"><h3>执行结果与业务验收</h3><template v-if="isExecutionInterrupted"><p><strong>执行结果：</strong>任务未运行完成，尚未产生可验收结果。</p><p><strong>置信度：</strong>无，因为没有模型结果。</p></template><template v-else><p><strong>执行结果：</strong>程序已正常运行完成并生成输出。</p><p><strong>验收结果：</strong>{{ processingInstance?.result }}，当前不能视为正确结果。</p></template><p><strong>后续处理：</strong>{{ blockingStrategy }}。</p></section>
           <section v-else class="result-card success"><h3>执行结果与业务验收</h3><p><strong>执行成功：</strong>程序正常结束。 <strong>结果已通过：</strong>{{ processingInstance?.result || '输出通过当前质量规则' }}。两项状态分别记录，不相互替代。</p></section>
         </div>
 
@@ -422,16 +385,4 @@ onMounted(loadTaskDetail)
 .pipeline-message{margin:0 0 10px;padding:8px 12px;border:1px solid #b2ccff;border-radius:6px;background:#f0f5ff;color:#344f7a;font-size:11px}
 .step-head-retry{height:34px;padding:0 14px;border:1px solid #d92d20;border-radius:6px;background:#d92d20;color:#fff;cursor:pointer;font-size:11px}
 .step-head-retry:disabled{opacity:.6;cursor:not-allowed}
-.pipeline-review-card{display:grid;gap:8px}
-.pipeline-review-card h3{margin:0;color:#b54708;font-size:12px}
-.pipeline-review-card p{margin:0;color:#596981;font-size:10px;line-height:18px}
-.pipeline-review-card pre.review-output{margin:0;padding:8px;background:#17233b;color:#d9e7ff;font:10px/16px Consolas,monospace;white-space:pre-wrap;max-height:200px;overflow:auto}
-.pipeline-review-card label{display:grid;gap:4px;font-size:10px;color:#718099}
-.pipeline-review-card input,.pipeline-review-card textarea{padding:6px 8px;border:1px solid #dce8f8;border-radius:5px;font:11px/16px Consolas,monospace}
-.pipeline-review-card textarea{resize:vertical}
-.review-actions{display:flex;gap:8px;margin-top:6px}
-.review-actions button{height:32px;padding:0 14px;border-radius:6px;cursor:pointer;font-size:11px}
-.review-actions .primary{border:1px solid #12b76a;background:#12b76a;color:#fff}
-.review-actions .danger{border:1px solid #d92d20;background:#d92d20;color:#fff}
-.review-actions button:disabled{opacity:.6;cursor:not-allowed}
 </style>

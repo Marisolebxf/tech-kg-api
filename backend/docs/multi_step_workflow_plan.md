@@ -1,5 +1,9 @@
 # 多步骤实体构建工作流设计（kg.custom.steps）
 
+> **审核机制已重设计**：原 plan 里的 in-flight pause（`requireReview` + `submit_review` signal + `wait_condition`）是反模式——一个小问题会卡住整批数据处理。已改成 post-hoc 队列：pipeline 跑完，`pendingReview` 字段被 activity 自动入 `ReviewCase` 队列，审核者 `accept` 直接写图 / `reject` 丢弃，不重启 workflow。
+> 详见 [`multi_step_workflow_review_redesign.md`](multi_step_workflow_review_redesign.md)。
+> 本文档以下章节关于 `requireReview` / signal / `POST /tasks/{id}/review` 的部分已被取代；workflow + activity + reset 重试部分仍有效。
+
 ## 背景与现状
 
 当前 Temporal 集成（`service/temporal_workflows.py`、`service/workflow_operations.py`）有三类 workflow：

@@ -117,18 +117,6 @@ class StepManifest(BaseModel):
     function_name: str = Field(alias="functionName", pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")
     timeout_seconds: int = Field(default=600, ge=1, alias="timeoutSeconds")
     retry_policy: RetryPolicyConfig = Field(default_factory=RetryPolicyConfig, alias="retryPolicy")
-    require_review: bool = Field(default=False, alias="requireReview")
-
-    model_config = {"populate_by_name": True}
-
-
-class TaskReviewRequest(BaseModel):
-    """人工审核：approve/reject，可附 modifiedResult 覆盖下游输入。"""
-
-    decision: Literal["approve", "reject"]
-    modified_result: dict[str, Any] | None = Field(default=None, alias="modifiedResult")
-    note: str = ""
-    reviewer: str | None = None
 
     model_config = {"populate_by_name": True}
 

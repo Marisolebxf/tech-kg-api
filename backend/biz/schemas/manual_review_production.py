@@ -26,6 +26,13 @@ class ApprovalRequest(VersionRequest):
     note: str = ""
 
 
+class DirectDecideRequest(VersionRequest):
+    """kg.custom.steps T_DIRECT 案例直接决策：accept 写图，reject 丢弃。"""
+
+    accepted: bool
+    note: str = ""
+
+
 class CancelRequest(VersionRequest):
     reason: str = Field(min_length=1)
 

@@ -320,51 +320,6 @@ class WorkflowOperationsService:
         self.repo.save_task(task)
         return {"taskId": task_id, "workflowId": workflow_id, "newRunId": new_run_id}
 
-    async def submit_review(
-        self,
-        task_id: str,
-        decision: str,
-        modified_result: dict[str, Any] | None = None,
-        note: str = "",
-        reviewer: str | None = None,
-    ) -> dict[str, Any]:
-        """人工审核：向 kg.custom.steps workflow 发 submit_review signal。
-
-        workflow 暂停在 PENDING_REVIEW step 时，本方法恢复它：approve 则继续
-        （modifiedResult 可覆盖下游输入），reject 则终止。
-        鉴权在 backend handler 层做——workflow 信任 signal 来源。
-        """
-        task = self.repo.get_task(task_id)
-        if task is None:
-            raise KeyError(task_id)
-        workflow_type = task.get("workflowType")
-        if workflow_type != "kg.custom.steps":
-            raise ValueError(f"任务 {task_id} workflowType={workflow_type}，不支持 signal 审核")
-        workflow_id = task.get("workflowId")
-        if not workflow_id:
-            raise ValueError(f"任务 {task_id} 无 workflowId")
-        try:
-            client = await temporal_runtime.client()
-            handle = client.get_workflow_handle(workflow_id)
-            await handle.signal(
-                "submit_review",
-                {
-                    "decision": decision,
-                    "modifiedResult": modified_result,
-                    "note": note,
-                    "reviewer": reviewer,
-                },
-            )
-        except Exception as exc:
-            temporal_runtime._client = None
-            raise RuntimeError(f"signal 提交失败: {exc}") from exc
-        task["logs"] = (task.get("logs") or []) + [
-            f"人工审核：decision={decision} reviewer={reviewer or 'anonymous'}"
-            f" note={note or '(无)'}"
-        ]
-        self.repo.save_task(task)
-        return {"taskId": task_id, "decision": decision, "reviewer": reviewer}
-
     def _sync_task_from_execution(self, execution: dict[str, Any]) -> None:
         """execution 终态时把状态回写到关联 task；若脚本返回了 stages，额外回写 steps/output。
 

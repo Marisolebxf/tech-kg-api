@@ -53,13 +53,13 @@ There is one module per KG-construction feature (`expert_direct_relation`, `expe
 The graph is NebulaGraph, accessed over HTTP via the **trs-graph-service** (a Java Spring Boot REST API, default `http://localhost:8090`). Auth is `X-API-Key` header; graph space is `X-Graph-Space` header. `infra/graph_db/client.TRSGraphClient` is the ORM-style client.
 
 - **Two thread-safe lazy singletons** in `infra/graph_db/__init__.py`: `get_trs_graph_client()` (space from `TRS_GRAPH_SPACE` env) and `get_techkg_client()` (space fixed to `techkg`). Both connect on first use; `main.py` lifespan calls `close_*_client()` on shutdown.
-- **Node CRUD on the live trs-graph-service is broken; edge CRUD works.** `create_node`/`merge_node`/`find_nodes` are unreliable (`find_nodes` returns a UUID id, not the real vid). The live feature services therefore use the **edge + node-read** REST methods: `create_edge` (upserts at rank `@0`), `update_edge`, `get_edge`, `get_node`, `get_node_edges`, `get_nodes_by_label`, `get_edges_by_type`. For DDL (CREATE/ALTER TAG/EDGE/SPACE) use nGQL via `execute_query` / `execute_write` / `execute_read`. `merge_node` is only used by the `load_graph.py` ETL, which is affected by this bug.
+- **Node + edge CRUD all work via REST.** `create_node`/`merge_node`/`update_node`/`delete_node`/`get_node`/`get_nodes_by_label`/`find_nodes` for nodes, `create_edge`/`update_edge`/`get_edge`/`get_node_edges`/`get_edges_by_type` for edges. `find_nodes` returns the real vid (not a UUID). Verified 2026-08-25 against `dev2` space: create/get/update/delete/merge/find on Paper tag all succeeded. **Properties sent in `merge_node`/`create_node` must match the target tag's schema** — sending unknown columns returns `400 SemanticError: Unknown column 'X' in schema`. Use `DESCRIBE TAG <label>` (via `execute_query`) to list valid properties before writing. For DDL (CREATE/ALTER TAG/EDGE/SPACE) use nGQL via `execute_query` / `execute_write` / `execute_read`.
 - Config via `TRS_GRAPH_*` env vars (`BASE_URL`, `SPACE`, `API_KEY`, `TIMEOUT`); see `infra/graph_db/config.py`.
 
 ### Graph schema & ETL scripts (`backend/script/`)
 
 - `init_graph_schema.py` — `CREATE SPACE techkg` + Scholar/Organization/`EMPLOYED_BY` DDL via nGQL. CREATE SPACE has a propagation delay; transient 500s on the DDL that follows usually resolve on retry.
-- `load_graph.py` — MySQL → techkg ETL (idempotent merge of nodes/edges). Uses `merge_node`, which is unreliable on the live trs-graph-service — see the graph-DB caveat above.
+- `load_graph.py` — MySQL → techkg ETL (idempotent merge of nodes/edges). Uses `merge_node`.
 - `init_db.py` — MySQL schema init.
 
 ### 重点关注科技企业关系子系统 (reference subsystem — 3 modules)

@@ -75,7 +75,7 @@ export interface PipelineStepState {
 }
 
 export interface PipelineStepInfo {
-  status: 'COMPLETED' | 'RUNNING' | 'PENDING_REVIEW' | 'REVIEWED' | 'REJECTED' | 'FAILED'
+  status: 'COMPLETED' | 'RUNNING' | 'FAILED'
   output?: Record<string, unknown>
   error?: string
   attempt?: number
@@ -163,9 +163,6 @@ export const retryManualReview = (id: string, payload: Record<string, unknown> =
 
 /** 失败任务重试：调 Temporal ResetWorkflowExecution，回放到失败 step 之前。 */
 export const retryTask = (taskId: string, reason = 'manual retry') => unwrap(http.post(`/v1/task-center/tasks/${taskId}/retry`, { reason })) as Promise<{ taskId: string; workflowId: string; newRunId: string }>
-
-/** 人工审核：向 kg.custom.steps workflow 发 submit_review signal。 */
-export const submitTaskReview = (taskId: string, data: { decision: 'approve' | 'reject'; modifiedResult?: Record<string, unknown>; note?: string; reviewer?: string }) => unwrap(http.post(`/v1/task-center/tasks/${taskId}/review`, data)) as Promise<{ taskId: string; decision: string; reviewer: string | null }>
 export const modifyManualReviewResult = (id: string, result: Record<string, unknown>, note = '') => unwrap(http.put(`/v1/manual-reviews/${id}/result`, { result, note })) as Promise<ReviewRecord>
 export const revokeManualReview = (id: string, reason: string) => unwrap(http.post(`/v1/manual-reviews/${id}/revoke`, { reason })) as Promise<ReviewRecord>
 
@@ -178,7 +175,7 @@ export interface ProductionReviewCase {
   status: ProductionReviewStatus; assigneeId?: string; assigneeName?: string; version: number; slaClaimAt: string; slaResolveAt: string
   diagnosis: string; sourceTable?: string; sourceRecordId?: string; createdAt: string; updatedAt: string
   draft?: Record<string, unknown>; input?: Record<string, unknown>; candidate?: Record<string, unknown>; evidence?: Record<string, unknown>[]; executions?: Record<string, unknown>[]
-  pipelineStepId?: string; pipelineStepName?: string; exceptionCode?: string; isolationScope?: string
+  pipelineStepId?: string; pipelineStepName?: string; exceptionCode?: string; isolationScope?: string; workflowType?: string
   template?: { id:string; version:string; title:string; displaySchema:{ sections:Array<{type:string;source?:string;target?:string;field?:string;options?:string[]}> }; resultSchema:Record<string,unknown>; allowedActions:string[] }
   data?: { input?:Record<string,unknown>; candidate?:Record<string,unknown>; evidence?:unknown[] }; consequence?: { writeTarget:string; rerunStepId:string; scope:string }
 }
@@ -192,6 +189,9 @@ export const submitProductionReview = (id: string, data: { version:number; actio
 export const approveProductionReview = (id: string, version:number, note='') => unwrap(http.post(`/v1/manual-reviews/production/${id}/approve`, { version, note })) as Promise<ProductionReviewCase>
 export const rejectProductionReview = (id: string, version:number, note='') => unwrap(http.post(`/v1/manual-reviews/production/${id}/reject`, { version, note })) as Promise<ProductionReviewCase>
 export const retryProductionReview = (id: string, version:number) => unwrap(http.post(`/v1/manual-reviews/production/${id}/retry`, { version })) as Promise<ProductionReviewCase>
+
+/** kg.custom.steps T_DIRECT 案例直接决策：accept 写图，reject 丢弃。不走 4-eyes claim/submit 流程。 */
+export const directDecideProductionReview = (id: string, version: number, accepted: boolean, note = '') => unwrap(http.post(`/v1/manual-reviews/production/${id}/direct-decide`, { version, accepted, note })) as Promise<ProductionReviewCase>
 
 // ---- 工作流定义、Python 脚本上传与执行（任务中心提交脚本用） ----
 

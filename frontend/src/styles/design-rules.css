@@ -943,6 +943,10 @@ body {
   gap: 16px;
 }
 
+.app-workspace .business-service .service-console__actions .kg-button {
+  padding-inline: 0;
+}
+
 .app-workspace .business-service .kg-button {
   height: 32px;
   padding-inline: 16px;

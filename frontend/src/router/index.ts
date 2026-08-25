@@ -98,7 +98,7 @@ export const router = createRouter({
     { path: '/admin/task-detail/:area/:taskId', name: 'admin-task-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
     { path: '/admin/processing-instance/:instanceId', name: 'admin-processing-instance-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
     { path: '/task-detail/:area/:taskId', redirect: to => `/admin/task-detail/${String(to.params.area)}/${String(to.params.taskId)}` },
-    { path: '/processing-instance/:instanceId', redirect: to => `/admin/processing-instance/${String(to.params.instanceId)}` },
+    { path: '/processing-instance/:instanceId', name: 'processing-instance-detail', redirect: to => `/admin/processing-instance/${String(to.params.instanceId)}` },
     // { path: '/graph-versions', redirect: { path: '/tasks', query: { module: '图谱版本' } } },
     {
       path: '/business-service',

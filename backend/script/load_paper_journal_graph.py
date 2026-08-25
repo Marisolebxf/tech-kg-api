@@ -12,6 +12,7 @@ VID 格式（按 ontology.md）：
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import time
@@ -26,7 +27,7 @@ from infra.mysql import MySQLClient
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
-SPACE = "dev"
+SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 BATCH = 1  # trs-graph 不支持多值 INSERT，每次 1 条
 PAPER_LIMIT = ""  # 空=全量加载
 MAX_WORKERS = 10  # 并发线程数
@@ -112,15 +113,21 @@ def batch_insert_edge(
 # ---------- ETL 各步骤 ----------
 
 
-def load_zh_papers(client: TRSGraphClient, session) -> int:
+def load_zh_papers(
+    client: TRSGraphClient, session, since: str | None = None
+) -> tuple[int, str | None]:
+    where = "WHERE updated_time > :since" if since else ""
+    params: dict = {"since": since} if since else {}
     rows = session.execute(
         text(
             "SELECT id, doi, en_name, zh_name, cover_year_start, cover_date_start, "
             "language_classify, paper_type, publication_type, volume, issue, first_page, last_page, "
-            "open_access, paper_url, data_source, created_time, updated_time FROM dwd_zh_paper"
-        )
+            f"open_access, paper_url, data_source, created_time, updated_time FROM dwd_zh_paper {where}"
+        ),
+        params,
     ).all()
     vertices = []
+    max_ts = ""
     for r in rows:
         vid = f"paper_{r[0]}"
         vals = (
@@ -142,6 +149,9 @@ def load_zh_papers(client: TRSGraphClient, session) -> int:
             str(r[16]) if r[16] else None,
             str(r[17]) if r[17] else None,
         )
+        ts = str(r[17]) if r[17] else ""
+        if ts and ts > max_ts:
+            max_ts = ts
         vertices.append((vid, vals))
     ok = batch_insert_vertex(
         client,
@@ -168,19 +178,25 @@ def load_zh_papers(client: TRSGraphClient, session) -> int:
         vertices,
         "zh_paper",
     )
-    logger.info(f"  中文论文 Paper: {ok}/{len(vertices)}")
-    return ok
+    logger.info(f"  中文论文 Paper: {ok}/{len(vertices)}" + (f"(since {since})" if since else ""))
+    return ok, (max_ts or None)
 
 
-def load_en_papers(client: TRSGraphClient, session) -> int:
+def load_en_papers(
+    client: TRSGraphClient, session, since: str | None = None
+) -> tuple[int, str | None]:
+    where = "WHERE updated_time > :since" if since else ""
+    params: dict = {"since": since} if since else {}
     rows = session.execute(
         text(
             "SELECT id, doi, en_name, zh_name, cover_year_start, cover_date_start, "
             "language, paper_type, publication_type, volume, issue, first_page, last_page, "
-            "open_access, paper_url, data_source, created_time, updated_time FROM dwd_en_paper"
-        )
+            f"open_access, paper_url, data_source, created_time, updated_time FROM dwd_en_paper {where}"
+        ),
+        params,
     ).all()
     vertices = []
+    max_ts = ""
     for r in rows:
         vid = f"paper_{r[0]}"
         vals = (
@@ -202,6 +218,9 @@ def load_en_papers(client: TRSGraphClient, session) -> int:
             str(r[16]) if r[16] else None,
             str(r[17]) if r[17] else None,
         )
+        ts = str(r[17]) if r[17] else ""
+        if ts and ts > max_ts:
+            max_ts = ts
         vertices.append((vid, vals))
     ok = batch_insert_vertex(
         client,
@@ -228,21 +247,27 @@ def load_en_papers(client: TRSGraphClient, session) -> int:
         vertices,
         "en_paper",
     )
-    logger.info(f"  英文论文 Paper: {ok}/{len(vertices)}")
-    return ok
+    logger.info(f"  英文论文 Paper: {ok}/{len(vertices)}" + (f"(since {since})" if since else ""))
+    return ok, (max_ts or None)
 
 
-def load_authors(client: TRSGraphClient, session) -> int:
+def load_authors(
+    client: TRSGraphClient, session, since: str | None = None
+) -> tuple[int, str | None]:
     """加载中文+英文论文作者 → Person 节点 + AUTHORED_BY 边。"""
     person_seen = set()
     persons = []
     edges = []
+    max_ts = ""
     for tbl, src_label in [("dwd_zh_author", "zh_paper"), ("dwd_en_author", "en_paper")]:
+        where = "WHERE updated_time > :since" if since else ""
+        params: dict = {"since": since} if since else {}
         rows = session.execute(
             text(
                 f"SELECT paper_id, author_sequence, author_id, en_name, zh_name, email, correspond, "
-                f"affiliation FROM {tbl}"
-            )
+                f"affiliation, updated_time FROM {tbl} {where}"
+            ),
+            params,
         ).all()
         for r in rows:
             paper_vid = f"paper_{r[0]}"
@@ -264,14 +289,20 @@ def load_authors(client: TRSGraphClient, session) -> int:
                         pass
                 persons.append((person_vid, (r[3], r[4], email_val, src_label)))
             edges.append((paper_vid, person_vid, r[1] or 0, r[6] or 0))
+            ts = str(r[8]) if r[8] else ""
+            if ts and ts > max_ts:
+                max_ts = ts
     ok_p = batch_insert_vertex(
         client, "Person", ["name_en", "name_zh", "email", "source"], persons, "author"
     )
     ok_e = batch_insert_edge(
         client, "AUTHORED_BY", ["author_order", "is_corresponding"], edges, "authored_by"
     )
-    logger.info(f"  作者 Person: {ok_p}/{len(persons)}, AUTHORED_BY: {ok_e}/{len(edges)}")
-    return ok_p
+    logger.info(
+        f"  作者 Person: {ok_p}/{len(persons)}, AUTHORED_BY: {ok_e}/{len(edges)}"
+        + (f"(since {since})" if since else "")
+    )
+    return ok_p, (max_ts or None)
 
 
 def load_journals(client: TRSGraphClient, session) -> int:
@@ -508,32 +539,66 @@ def load_reports(client: TRSGraphClient, session) -> int:
 # ---------- 主流程 ----------
 
 
+def _parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description="论文/期刊/报告 ETL: gkx_element → TRSGraph")
+    ap.add_argument(
+        "--mode",
+        choices=("full", "incremental"),
+        default="full",
+        help="full=全量;incremental=只灌 update_time>水位 的行(读 script/.etl_watermark/paper_journal.txt)",
+    )
+    return ap.parse_args()
+
+
 def main() -> None:
-    logger.info("=== 论文/期刊/报告 ETL: gkx_element → TRSGraph(dev) ===\n")
+    args = _parse_args()
+    logger.info(
+        "=== 论文/期刊/报告 ETL: gkx_element → TRSGraph(%s, mode=%s) ===\n",
+        os.getenv("TRS_GRAPH_SPACE", "dev"),
+        args.mode,
+    )
     mysql = get_mysql_client()
     graph = get_graph_client()
     graph.connect()
     session = mysql.session()
+    since: str | None = None
+    if args.mode == "incremental":
+        from script.etl_watermark import Watermark
+
+        since = Watermark.for_domain("paper_journal").read()
+        logger.info("incremental: paper_journal watermark=%s", since)
+    max_ts = ""
     try:
         t0 = time.time()
-        logger.info("1. 加载论文 Paper 节点（全量）")
-        load_zh_papers(graph, session)
-        load_en_papers(graph, session)
-        # 以下步骤首次已全量加载，跳过避免重复（如需重跑取消注释）
-        # logger.info("\n2. 加载作者 Person 节点 + AUTHORED_BY 边")
-        # load_authors(graph, session)
-        # logger.info("\n3. 加载期刊 Journal 节点 + PUBLISHED_IN 边")
-        # load_journals(graph, session)
-        # logger.info("\n4. 加载参考文献 CITES 边")
-        # load_references(graph, session)
-        # logger.info("\n5. 加载引用 CITED_BY 边")
-        # load_citations(graph, session)
-        # logger.info("\n6. 加载报告 Report 节点")
-        # load_reports(graph, session)
+        logger.info("1. 加载论文 Paper 节点")
+        _, ts = load_zh_papers(graph, session, since)
+        if ts and ts > max_ts:
+            max_ts = ts
+        _, ts = load_en_papers(graph, session, since)
+        if ts and ts > max_ts:
+            max_ts = ts
+        # author 增量(专家论文合作需);journal/refs/cites/reports 增量时全量(幂等)
+        logger.info("\n2. 加载作者 Person 节点 + AUTHORED_BY 边")
+        _, ts = load_authors(graph, session, since)
+        if ts and ts > max_ts:
+            max_ts = ts
+        logger.info("\n3. 加载期刊 Journal 节点 + PUBLISHED_IN 边")
+        load_journals(graph, session)
+        logger.info("\n4. 加载参考文献 CITES 边")
+        load_references(graph, session)
+        logger.info("\n5. 加载引用 CITED_BY 边")
+        load_citations(graph, session)
+        logger.info("\n6. 加载报告 Report 节点")
+        load_reports(graph, session)
         logger.info(f"\n=== ETL 完成，耗时 {time.time() - t0:.1f}s ===")
     finally:
         session.close()
         mysql.dispose()
+    if args.mode == "incremental" and max_ts:
+        from script.etl_watermark import Watermark
+
+        Watermark.for_domain("paper_journal").advance_if_higher(max_ts)
+        logger.info("paper_journal watermark advanced to %s", max_ts)
 
 
 if __name__ == "__main__":

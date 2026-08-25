@@ -1,4 +1,5 @@
 import { http } from './http'
+import type { AlumniProvenance } from './expertAlumniRelation'
 
 export interface IndirectNode {
   id: string
@@ -44,6 +45,7 @@ export interface ExpertIndirectRelationResult {
 
 export interface ExpertIndirectRelationResponse {
   structuredResult: ExpertIndirectRelationResult
+  provenance: AlumniProvenance
 }
 
 export interface ExpertIndirectRelationRequest {

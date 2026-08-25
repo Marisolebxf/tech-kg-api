@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Any
 
 logger = logging.getLogger("script.project_edge_schema")
 
-GRAPH_SPACE = "dev"
+GRAPH_SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 
 # Project 实体置信度字段（与 PROJECT_CONFIDENCE_FIELDS 对应的图属性）。
 PROJECT_TAG_ALIGNMENT_PROPS: dict[str, str] = {"confidence": "double"}
@@ -36,6 +37,12 @@ EDGE_ALIGNMENT_PROPS: dict[str, dict[str, str]] = {
         "match_method": "string",
         "match_evidence": "string",
         "confidence": "double",
+    },
+    # HAS_KEYWORD may already be owned by the patent domain with a narrower
+    # schema. Project ingestion also records batch provenance on this edge.
+    "HAS_KEYWORD": {
+        "ingest_batch": "string",
+        "ingest_time": "string",
     },
 }
 

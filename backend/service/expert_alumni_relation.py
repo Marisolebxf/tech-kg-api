@@ -3,23 +3,26 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 import threading
 import time
 import unicodedata
 from typing import Any
 
-from infra.graph_db import TRSGraphClient, get_trs_graph_client
+from infra.graph_db import GraphNotFoundError, TRSGraphClient, get_trs_graph_client
 from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
 
 PERSON_LABELS = ("Person", "Scholar")
-LIST_PAGE_SIZE = 50
-LIST_MAX_PAGES = 250
+# 单专家 list 模式需要扫描候选专家。使用较大的分页，避免 1.25 万节点产生
+# 250 次串行 HTTP 请求并触发前端超时。
+LIST_PAGE_SIZE = 500
+LIST_MAX_PAGES = 25
 EDGE_LIMIT = 200
 
 # 进程内 TTL 缓存：读多写少的图查询，60s 内复用，避免高并发下打爆 trs-graph。
-_RESULT_CACHE_TTL = 60.0
+_RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
 _PERSON_SCAN_TTL = 60.0
 _person_scan_cache: dict[str, tuple[float, list[tuple[str, Any]], bool]] = {}
 _result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -88,12 +91,10 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
 
     def __init__(self) -> None:
         super().__init__()
-        self._graph: TRSGraphClient | None = None
 
     def _client(self) -> TRSGraphClient:
-        if self._graph is None:
-            self._graph = get_trs_graph_client()
-        return self._graph
+        # 单例可能被进程内任务释放并重建，不持有过期引用。
+        return get_trs_graph_client()
 
     def query(
         self,
@@ -131,7 +132,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         expert_edges: list[Any] = []
         try:
             expert_edges = graph.get_node_edges(expert_id, direction="both", limit=EDGE_LIMIT)
-        except Exception:
+        except GraphNotFoundError:
             expert_edges = []
 
         items: list[dict[str, Any]] = []
@@ -188,7 +189,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
     def _require_node(graph: TRSGraphClient, node_id: str, kind: str) -> Any:
         try:
             node = graph.get_node(node_id)
-        except Exception:
+        except GraphNotFoundError:
             node = None
         if node is None:
             raise KeyError(f"未找到{kind}: {node_id}")
@@ -246,7 +247,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                     page_result = graph.get_nodes_by_label(
                         label, limit=LIST_PAGE_SIZE, offset=page * LIST_PAGE_SIZE
                     )
-                except Exception:
+                except GraphNotFoundError:
                     break
                 items = getattr(page_result, "items", None) or []
                 if not items:
@@ -424,7 +425,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         if a_edges is None:
             try:
                 edges = graph.get_node_edges(a_id, direction="both", limit=EDGE_LIMIT)
-            except Exception:
+            except GraphNotFoundError:
                 edges = []
         else:
             edges = a_edges
@@ -452,7 +453,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
 
         try:
             b_edges = graph.get_node_edges(b_id, direction="both", limit=EDGE_LIMIT)
-        except Exception:
+        except GraphNotFoundError:
             b_edges = []
         b_papers: set[str] = set()
         b_patents: set[str] = set()

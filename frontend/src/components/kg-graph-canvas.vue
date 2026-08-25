@@ -2,6 +2,7 @@
 import { IconFullscreen, IconMinus, IconPlus } from '@arco-design/web-vue/es/icon'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 
+import { useForceLayout } from '../composables/use-force-layout'
 import type { GraphEdgeData, GraphNodeData } from '../data/graph-presets'
 
 const props = withDefaults(
@@ -19,7 +20,7 @@ const props = withDefaults(
     selectedNodeId: null,
     selectedEdgeId: null,
     ariaLabel: '知识图谱',
-    nodeShape: 'rect',
+    nodeShape: 'circle',
   },
 )
 
@@ -28,18 +29,39 @@ const emit = defineEmits<{
   selectEdge: [edge: GraphEdgeData]
 }>()
 
-const viewBox = '0 0 760 430'
+/** 画布坐标空间尺寸（viewBox）。放大坐标空间给节点更多活动场地，
+ *  1.0 倍下整图仍可见，节点不会被推到边界墙上堆成长方形。 */
+const CANVAS_W = 960
+const CANVAS_H = 540
+const CX = CANVAS_W / 2
+const CY = CANVAS_H / 2
+const viewBox = `0 0 ${CANVAS_W} ${CANVAS_H}`
 const minScale = 0.6
 const maxScale = 2.2
 const scaleStep = 0.1
-const scale = ref(1)
-const panX = ref(0)
-const panY = ref(0)
+/** 初始（及复位）缩放：1.0 倍，整图可见并居中。 */
+const DEFAULT_SCALE = 1
+
+/** 给定缩放比例，返回让画布内容居中所需的平移量（缩放以左上原点为基准）。 */
+function centeredPan(s: number) {
+  return { x: CX * (1 - s), y: CY * (1 - s) }
+}
+
+const scale = ref(DEFAULT_SCALE)
+const initPan = centeredPan(DEFAULT_SCALE)
+const panX = ref(initPan.x)
+const panY = ref(initPan.y)
 const isPanning = ref(false)
 const panStart = ref({ x: 0, y: 0, panX: 0, panY: 0 })
 const containerRef = ref<HTMLElement | null>(null)
 
 const transform = computed(() => `translate(${panX.value} ${panY.value}) scale(${scale.value})`)
+
+const { laidOutNodes } = useForceLayout(
+  () => props.nodes,
+  () => props.edges,
+  () => ({ nodeShape: props.nodeShape }),
+)
 
 const edgeToneMap: Record<string, string> = {
   论文合作: 'is-primary',
@@ -104,10 +126,21 @@ function nodeHeight(node: GraphNodeData) {
   return node.level === 0 ? 54 : 46
 }
 
+/** 圆形节点半径，渲染与连线偏移共用，避免节点/连线半径不一致。 */
+function nodeRadius(node: GraphNodeData) {
+  return node.level === 0 ? 20 : 15
+}
+
+/** 标签过长时截断，防止长文本撑爆画布。 */
+function displayLabel(node: GraphNodeData) {
+  const max = 6
+  return node.label.length > max ? `${node.label.slice(0, max)}…` : node.label
+}
+
 function nodeBoundaryOffset(node: GraphNodeData, dx: number, dy: number, gap = 0) {
   if (props.nodeShape === 'circle') {
     const length = Math.hypot(dx, dy) || 1
-    const radius = (node.level === 0 ? 30 : 23) + gap
+    const radius = nodeRadius(node) + gap
     return { x: (dx / length) * radius, y: (dy / length) * radius }
   }
   const halfWidth = nodeWidth(node) / 2 + gap
@@ -117,7 +150,7 @@ function nodeBoundaryOffset(node: GraphNodeData, dx: number, dy: number, gap = 0
 }
 
 function getNodeById(id: string) {
-  return props.nodes.find((node) => node.id === id)
+  return laidOutNodes.value.find((node) => node.id === id)
 }
 
 function getLineCoords(edge: GraphEdgeData) {
@@ -126,8 +159,10 @@ function getLineCoords(edge: GraphEdgeData) {
   if (!from || !to) return null
   const dx = to.x - from.x
   const dy = to.y - from.y
-  const sourceOffset = nodeBoundaryOffset(from, dx, dy, 2)
-  const targetOffset = nodeBoundaryOffset(to, -dx, -dy, 7)
+  // gap=0：线端点正好落在节点边界；节点绘制在线之上，
+  // 任何亚像素溢出被节点覆盖，视觉上线与节点严丝合缝无间隙。
+  const sourceOffset = nodeBoundaryOffset(from, dx, dy, 0)
+  const targetOffset = nodeBoundaryOffset(to, -dx, -dy, 0)
   return {
     x1: from.x + sourceOffset.x,
     y1: from.y + sourceOffset.y,
@@ -136,32 +171,47 @@ function getLineCoords(edge: GraphEdgeData) {
   }
 }
 
-function getEdgeLabelCoords(edge: GraphEdgeData) {
-  const coords = getLineCoords(edge)
-  if (!coords) return null
-  return {
-    x: (coords.x1 + coords.x2) / 2,
-    y: (coords.y1 + coords.y2) / 2 - 5,
-  }
+/**
+ * 以 (ax, ay)（viewBox 坐标）为锚点缩放到 newScale，
+ * 保持锚点下的内容不动，避免放大时内容被推出视口外看不见。
+ */
+function zoomAt(newScale: number, ax: number, ay: number) {
+  const s = scale.value
+  if (s === newScale) return
+  panX.value = panX.value + (ax - panX.value) * (1 - newScale / s)
+  panY.value = panY.value + (ay - panY.value) * (1 - newScale / s)
+  scale.value = newScale
 }
 
 function handleWheel(event: WheelEvent) {
   event.preventDefault()
   const delta = event.deltaY > 0 ? -0.08 : 0.08
-  scale.value = Math.min(maxScale, Math.max(minScale, scale.value + delta))
+  const newScale = Math.min(maxScale, Math.max(minScale, scale.value + delta))
+  const rect = containerRef.value?.getBoundingClientRect()
+  const ax = rect ? ((event.clientX - rect.left) / rect.width) * CANVAS_W : CX
+  const ay = rect ? ((event.clientY - rect.top) / rect.height) * CANVAS_H : CY
+  zoomAt(newScale, ax, ay)
 }
 
 function zoomIn() {
-  scale.value = Math.min(maxScale, Number((scale.value + scaleStep).toFixed(2)))
+  zoomAt(Math.min(maxScale, Number((scale.value + scaleStep).toFixed(2))), CX, CY)
 }
 
 function zoomOut() {
-  scale.value = Math.max(minScale, Number((scale.value - scaleStep).toFixed(2)))
+  zoomAt(Math.max(minScale, Number((scale.value - scaleStep).toFixed(2))), CX, CY)
+}
+
+/** 滑块直接设值时，同样以画布中心为锚点，保持居中缩放。 */
+function setScale(v: number | [number, number]) {
+  const next = Array.isArray(v) ? v[0] : v
+  if (next == null) return
+  zoomAt(Number(next), CX, CY)
 }
 
 function handlePointerDown(event: PointerEvent) {
   if ((event.target as Element).closest('.platform-node')) return
   if ((event.target as Element).closest('.platform-network-line, .platform-network-hit-area')) return
+  if ((event.target as Element).closest('.kg-graph-map-controls')) return
   isPanning.value = true
   panStart.value = {
     x: event.clientX,
@@ -193,9 +243,10 @@ function handleEdgeClick(edge: GraphEdgeData) {
 }
 
 function resetView() {
-  scale.value = 1
-  panX.value = 0
-  panY.value = 0
+  scale.value = DEFAULT_SCALE
+  const p = centeredPan(DEFAULT_SCALE)
+  panX.value = p.x
+  panY.value = p.y
 }
 
 onMounted(() => {
@@ -208,22 +259,20 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div ref="containerRef" class="kg-graph-viewport">
+  <div
+    ref="containerRef"
+    class="kg-graph-viewport"
+    @pointerdown="handlePointerDown"
+    @pointermove="handlePointerMove"
+    @pointerup="handlePointerUp"
+    @pointerleave="handlePointerUp"
+  >
     <svg
       class="kg-graph-canvas platform-svg"
       :viewBox="viewBox"
       role="img"
       :aria-label="ariaLabel"
-      @pointerdown="handlePointerDown"
-      @pointermove="handlePointerMove"
-      @pointerup="handlePointerUp"
-      @pointerleave="handlePointerUp"
     >
-      <defs>
-        <marker id="kg-graph-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 8 4 L 0 8 z" />
-        </marker>
-      </defs>
       <g :transform="transform">
         <g class="platform-network-lines">
           <line
@@ -244,7 +293,6 @@ onUnmounted(() => {
             :y1="getLineCoords(edge)!.y1"
             :x2="getLineCoords(edge)!.x2"
             :y2="getLineCoords(edge)!.y2"
-            :marker-end="nodeShape === 'circle' ? undefined : 'url(#kg-graph-arrow)'"
             @click.stop="handleEdgeClick(edge)"
           />
           <line
@@ -256,16 +304,9 @@ onUnmounted(() => {
             :y2="getLineCoords(edge)!.y2"
             @click.stop="handleEdgeClick(edge)"
           />
-          <text
-            v-if="getEdgeLabelCoords(edge)"
-            class="platform-network-label"
-            :class="{ 'is-selected': selectedEdgeId === edge.id, 'is-dimmed': !isEdgeActive(edge) }"
-            :x="getEdgeLabelCoords(edge)!.x"
-            :y="getEdgeLabelCoords(edge)!.y"
-          >{{ edge.label }}</text>
         </template>
         <g
-          v-for="node in nodes"
+          v-for="node in laidOutNodes"
           :key="node.id"
           :class="nodeClass(node)"
           :transform="`translate(${node.x} ${node.y})`"
@@ -275,7 +316,7 @@ onUnmounted(() => {
           <circle
             v-if="nodeShape === 'circle'"
             class="node-shape"
-            :r="node.level === 0 ? 30 : 23"
+            :r="nodeRadius(node)"
           />
           <rect
             v-else
@@ -288,8 +329,8 @@ onUnmounted(() => {
           />
           <text
             class="platform-node__title"
-            :y="nodeShape === 'circle' ? (node.level === 0 ? 44 : 37) : -5"
-          >{{ node.label }}</text>
+            :y="nodeShape === 'circle' ? (nodeRadius(node) + 11) : -5"
+          >{{ displayLabel(node) }}</text>
           <text
             v-if="nodeShape !== 'circle'"
             class="platform-node__meta"
@@ -311,13 +352,14 @@ onUnmounted(() => {
         </button>
       </a-tooltip>
       <a-slider
-        v-model="scale"
+        :model-value="scale"
         class="kg-graph-map-controls__slider"
         :min="minScale"
         :max="maxScale"
         :step="0.05"
         :show-tooltip="false"
         aria-label="图谱缩放比例"
+        @update:model-value="setScale"
       />
       <a-tooltip content="放大" position="top">
         <button
@@ -351,6 +393,12 @@ onUnmounted(() => {
   height: 100%;
   min-height: 340px;
   overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+}
+
+.kg-graph-viewport:active {
+  cursor: grabbing;
 }
 
 .kg-graph-map-controls {
@@ -458,10 +506,6 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
-.platform-svg marker path {
-  fill: #a9b4c5;
-}
-
 .platform-network-line.is-dimmed {
   opacity: 0.18;
   cursor: default;
@@ -480,30 +524,9 @@ onUnmounted(() => {
   stroke: #a9b4c5;
 }
 
-.platform-network-label {
-  fill: #6b778c;
-  font-size: 9px;
-  font-weight: 400;
-  text-anchor: middle;
-  paint-order: stroke;
-  stroke: rgba(255, 255, 255, 0.96);
-  stroke-width: 4px;
-  stroke-linejoin: round;
-  pointer-events: none;
-}
-
-.platform-network-label.is-selected {
-  fill: #165dff;
-  font-weight: 600;
-}
-
-.platform-network-label.is-dimmed {
-  opacity: 0.18;
-}
-
 .platform-network-hit-area {
   stroke: transparent;
-  stroke-width: 18;
+  stroke-width: 14;
   cursor: pointer;
   pointer-events: stroke;
 }
@@ -562,7 +585,7 @@ onUnmounted(() => {
 
 .platform-node__title {
   fill: #1d2129;
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 600;
 }
 
@@ -615,24 +638,27 @@ onUnmounted(() => {
   filter: drop-shadow(0 2px 4px rgba(29, 33, 41, 0.16));
 }
 
-.platform-node.is-solid-circle.is-main .node-shape,
-.platform-node.is-solid-circle.is-expert .node-shape { fill: #2489e8; }
-.platform-node.is-solid-circle.is-org .node-shape,
-.platform-node.is-solid-circle.is-company .node-shape { fill: #38c908; }
-.platform-node.is-solid-circle.is-paper .node-shape,
-.platform-node.is-solid-circle.is-topic .node-shape { fill: #7426d8; }
-.platform-node.is-solid-circle.is-project .node-shape { fill: #ffa916; }
-.platform-node.is-solid-circle.is-event .node-shape { fill: #ef2194; }
+.platform-node.is-solid-circle.is-main .node-shape { fill: #f43f5e; }
+.platform-node.is-solid-circle.is-expert .node-shape { fill: #168cff; }
+.platform-node.is-solid-circle.is-org .node-shape { fill: #0ea5a4; }
+.platform-node.is-solid-circle.is-company .node-shape { fill: #36c414; }
+.platform-node.is-solid-circle.is-paper .node-shape { fill: #f5b700; }
+.platform-node.is-solid-circle.is-project .node-shape { fill: #ff9f0a; }
+.platform-node.is-solid-circle.is-event .node-shape { fill: #d97706; }
+.platform-node.is-solid-circle.is-topic .node-shape { fill: #722ed1; }
+.platform-node.is-solid-circle.is-chain .node-shape { fill: #4f46e5; }
+.platform-node.is-solid-circle.is-field .node-shape { fill: #a855f7; }
+.platform-node.is-solid-circle.is-source .node-shape { fill: #eb2f96; }
 
 .platform-node.is-solid-circle .platform-node__title {
   fill: #5f6b7a;
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 500;
 }
 
 .platform-node.is-solid-circle.platform-node--center .platform-node__title {
   fill: #1d2129;
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 700;
 }
 

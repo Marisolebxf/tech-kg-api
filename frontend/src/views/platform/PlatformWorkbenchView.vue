@@ -1308,6 +1308,7 @@ function mapApiNodeType(
 
       // 机构企业
       Organization: 'org',
+      Enterprise: 'company',
 
       // 论文、期刊、报告
       Paper: 'paper',
@@ -1572,6 +1573,75 @@ function countApiNodeRelations(
   ).length
 }
 
+/**
+ * 按实体类型聚类分扇区布局：同类型节点放在同一扇区里，
+ * 度数大的节点更靠近中心，超出单层容量时分层向外辐射。
+ * 比纯同心圆布局更利于看出"哪类实体聚在一起"。
+ */
+function layoutApiGraphByType(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  centerNodeId: string,
+): Map<string, { x: number; y: number }> {
+  const positions = new Map<string, { x: number; y: number }>()
+  const centerX = 380
+  const centerY = 215
+
+  positions.set(centerNodeId, { x: centerX, y: centerY })
+
+  const groups = new Map<GraphNodeType, GraphNode[]>()
+  for (const node of nodes) {
+    if (node.id === centerNodeId) continue
+    const t = mapApiNodeType(node)
+    if (!groups.has(t)) groups.set(t, [])
+    groups.get(t)!.push(node)
+  }
+
+  const sortedGroups = [...groups.entries()].sort(
+    (a, b) => b[1].length - a[1].length,
+  )
+  const groupCount = sortedGroups.length
+  if (groupCount === 0) return positions
+
+  const sectorAngle = (Math.PI * 2) / groupCount
+  const ringCapacity = 8
+  const baseRadius = 95
+  const ringStep = 55
+
+  sortedGroups.forEach(([, groupNodes], groupIdx) => {
+    const startAngle = groupIdx * sectorAngle - Math.PI / 2
+    const sortedNodes = [...groupNodes].sort(
+      (a, b) =>
+        countApiNodeRelations(b.id, edges) -
+        countApiNodeRelations(a.id, edges),
+    )
+
+    sortedNodes.forEach((node, i) => {
+      const ringIdx = Math.floor(i / ringCapacity)
+      const indexInRing = i % ringCapacity
+      const countInRing = Math.min(
+        ringCapacity,
+        sortedNodes.length - ringIdx * ringCapacity,
+      )
+      const sectorStart = startAngle + 0.08 * sectorAngle
+      const sectorEnd = startAngle + 0.92 * sectorAngle
+      const angle =
+        countInRing <= 1
+          ? (sectorStart + sectorEnd) / 2
+          : sectorStart +
+            ((indexInRing + 0.5) / countInRing) *
+              (sectorEnd - sectorStart)
+      const radius = baseRadius + ringIdx * ringStep
+      positions.set(node.id, {
+        x: centerX + Math.cos(angle) * radius,
+        y: centerY + Math.sin(angle) * radius,
+      })
+    })
+  })
+
+  return positions
+}
+
 function convertApiGraphNodes(
   data: GraphData,
   centerNodeId: string,
@@ -1590,12 +1660,20 @@ function convertApiGraphNodes(
     return 0
   })
 
+  const layoutPositions =
+    layoutApiGraphByType(
+      data.nodes,
+      data.edges,
+      centerNodeId,
+    )
+
   return sortedNodes.map(
     (node, index) => {
       const isCenter =
         node.id === centerNodeId
 
       const position =
+        layoutPositions.get(node.id) ??
         calculateApiNodePosition(
           index,
           sortedNodes.length,
@@ -7138,14 +7216,14 @@ print(response.json())</pre>
   box-shadow: 0 1px 4px rgba(53, 77, 112, 0.16);
 }
 
-.platform-graph-legend__item.is-expert i { background: #1e8ff3; }
-.platform-graph-legend__item.is-org i { background: #48c914; }
-.platform-graph-legend__item.is-paper i { background: #762bd7; }
-.platform-graph-legend__item.is-project i { background: #ffad17; }
-.platform-graph-legend__item.is-event i { background: #eb2aa3; }
-.platform-graph-legend__item.is-chain i { background: #14b8a6; }
-.platform-graph-legend__item.is-field i { background: #2f6bff; }
-.platform-graph-legend__item.is-source i { background: #64748b; }
+.platform-graph-legend__item.is-expert i { background: #168cff; }
+.platform-graph-legend__item.is-org i { background: #0ea5a4; }
+.platform-graph-legend__item.is-paper i { background: #f5b700; }
+.platform-graph-legend__item.is-project i { background: #ff9f0a; }
+.platform-graph-legend__item.is-event i { background: #d97706; }
+.platform-graph-legend__item.is-chain i { background: #4f46e5; }
+.platform-graph-legend__item.is-field i { background: #a855f7; }
+.platform-graph-legend__item.is-source i { background: #eb2f96; }
 
 .platform-query > .platform-detail {
   grid-column: 2;
@@ -7385,64 +7463,6 @@ print(response.json())</pre>
   font-style: normal;
   line-height: 18px;
 }
-
-.platform-node circle {
-  fill: #21c1c3;
-  stroke: #fff;
-  stroke-width: 1.8;
-  filter: drop-shadow(0 3px 6px rgba(53, 77, 112, 0.12));
-}
-
-.platform-node--main circle {
-  fill: #1e8ff3;
-  stroke: #fff;
-}
-
-.platform-node.is-expert circle { fill: #20bfc2; }
-.platform-node.is-org circle { fill: #48c914; }
-.platform-node.is-company circle { fill: #ffad17; }
-.platform-node.is-paper circle { fill: #762bd7; }
-.platform-node.is-topic circle { fill: #1f8ff1; }
-.platform-node.is-project circle { fill: #eb2aa3; }
-.platform-node.is-event circle { fill: var(--graph-gold, #f59e0b); }
-
-.platform-node text {
-  fill: #4f5d70;
-  font-size: 12px;
-  font-weight: 500;
-  text-anchor: middle;
-  dominant-baseline: hanging;
-  transform: translateY(18px);
-  paint-order: stroke;
-  stroke: rgba(255, 255, 255, 0.9);
-  stroke-width: 3px;
-  stroke-linejoin: round;
-}
-
-.platform-node--main text {
-  fill: #fff;
-  font-size: 15px;
-  font-weight: 600;
-  dominant-baseline: middle;
-  transform: none;
-  stroke: transparent;
-}
-
-.platform-network-lines line,
-.platform-network-line {
-  stroke: #b8c1ce;
-  stroke-width: 1.4;
-  marker-end: url(#platform-arrow);
-}
-
-.platform-network-lines--service line {
-  marker-end: url(#service-arrow);
-}
-
-.platform-network-line.is-primary { stroke: #4080ff; stroke-width: 1.8; }
-.platform-network-line.is-green { stroke: #00b42a; stroke-width: 1.8; }
-.platform-network-line.is-orange { stroke: #ff7d00; stroke-width: 1.8; }
-.platform-network-line.is-purple { stroke: #722ed1; stroke-width: 1.8; }
 
 .platform-detail__body {
   display: grid;

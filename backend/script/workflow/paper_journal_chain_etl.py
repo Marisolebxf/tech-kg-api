@@ -49,7 +49,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-SPACE = "dev"
+SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 BATCH = 500
 INGEST_BATCH = "workflow_etl"
 INGEST_TIME = "2026-08-11T00:00:00Z"

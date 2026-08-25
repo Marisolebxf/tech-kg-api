@@ -271,7 +271,6 @@ export function queryExpertAlumniRelations(
  * structured-result
  */
 export interface PaperCooperationQuery {
-  dataSource: string
   endTime: string
   expertAId: string
   expertBId: string
@@ -287,6 +286,19 @@ export interface PaperCooperationTimeRange {
 export interface PaperCooperationCitation {
   total: number
   max: number
+}
+
+export interface PaperCooperationProvenance {
+  sourceDatabase: string
+  summary: string
+  evidences: Array<{
+    title: string
+    businessTable: string
+    technicalTable: string
+    recordId: string
+    fieldIdentifier: string
+    summary: string
+  }>
 }
 
 export interface PaperCooperationStructuredResult {
@@ -323,6 +335,7 @@ export interface PaperCooperationStructuredResult {
 export interface PaperCooperationResponse {
   structuredResult:
     PaperCooperationStructuredResult
+  provenance: PaperCooperationProvenance
 }
 
 /**

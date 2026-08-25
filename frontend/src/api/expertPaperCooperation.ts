@@ -25,12 +25,27 @@ export interface ExpertPaperCooperationResult {
   sharedContribution: string[]
 }
 
+export interface PaperCooperationProvenanceEvidence {
+  title: string
+  businessTable: string
+  technicalTable: string
+  recordId: string
+  fieldIdentifier: string
+  summary: string
+}
+
+export interface PaperCooperationProvenance {
+  sourceDatabase: string
+  summary: string
+  evidences: PaperCooperationProvenanceEvidence[]
+}
+
 export interface ExpertPaperCooperationResponse {
   structuredResult: ExpertPaperCooperationResult
+  provenance: PaperCooperationProvenance
 }
 
 export interface ExpertPaperCooperationRequest {
-  dataSource: 'knowledge_graph'
   expertAId: string
   expertBId: string
   startTime?: string

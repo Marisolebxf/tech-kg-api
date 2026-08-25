@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-SPACE = "dev"
+SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 MATCH_BATCH = 5000
 WRITE_BATCH = 200  # 每个 execute_write 拼 200 条 UPDATE EDGE
 

@@ -61,7 +61,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-SPACE = "dev"
+SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 _SUFFIX_RE = re.compile(r"__\d+$")
 INGEST_BATCH = "paper_relation_0725"
 INGEST_TIME = "2026-07-26"

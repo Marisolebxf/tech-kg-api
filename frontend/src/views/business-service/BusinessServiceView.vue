@@ -1,30 +1,48 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
-import BusinessServiceAlgorithmPanel from './components/BusinessServiceAlgorithmPanel.vue'
-import BusinessServiceContractPanel from './components/BusinessServiceContractPanel.vue'
-import { getServiceModule, serviceModules } from './service-modules'
+import BusinessServiceAlgorithmPanel from "./components/BusinessServiceAlgorithmPanel.vue";
+import BusinessServiceContractPanel from "./components/BusinessServiceContractPanel.vue";
+import { getServiceModule, serviceModules } from "./service-modules";
 
-const route = useRoute()
-const activeView = ref<'test' | 'developer'>('test')
-const selectedModuleKey = ref(String(route.name ?? 'expert-direct'))
+const route = useRoute();
+const router = useRouter();
+const activeView = ref<"test" | "developer">("test");
+const selectedModuleKey = ref(String(route.name ?? "expert-direct"));
 
-const moduleInfo = computed(() => getServiceModule(selectedModuleKey.value || String(route.name ?? 'expert-direct')))
-const requestJson = computed(() => JSON.stringify(moduleInfo.value.requestExample, null, 2))
-const responseJson = computed(() => JSON.stringify(moduleInfo.value.responseExample, null, 2))
+onMounted(() => {
+  const navigation = performance.getEntriesByType("navigation")[0] as
+    | PerformanceNavigationTiming
+    | undefined;
+  if (navigation?.type === "reload" && route.name !== "expert-direct") {
+    void router.replace({ name: "expert-direct" });
+  }
+});
+
+const moduleInfo = computed(() =>
+  getServiceModule(
+    selectedModuleKey.value || String(route.name ?? "expert-direct"),
+  ),
+);
+const requestJson = computed(() =>
+  JSON.stringify(moduleInfo.value.requestExample, null, 2),
+);
+const responseJson = computed(() =>
+  JSON.stringify(moduleInfo.value.responseExample, null, 2),
+);
 const curlSample = computed(
   () => `curl -X ${moduleInfo.value.method} "${moduleInfo.value.endpoint}" \\
   -H "Content-Type: application/json" \\
   -d '${requestJson.value.replaceAll("'", "\\'")}'`,
-)
+);
 
 watch(
   () => route.name,
   (name) => {
-    selectedModuleKey.value = String(name ?? 'expert-direct')
+    selectedModuleKey.value = String(name ?? "expert-direct");
   },
-)
+);
 </script>
 
 <template>
@@ -83,5 +101,4 @@ watch(
   min-height: 29px;
   padding: 0;
 }
-
 </style>

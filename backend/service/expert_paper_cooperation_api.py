@@ -16,10 +16,10 @@ from service.base_module import KGModuleScaffoldService
 
 MAX_SHARED_PAPERS = 1000
 GRAPH_PAGE_SIZE = 200
-GRAPH_SPACE = os.getenv("KG_GRAPH_SPACE", "dev")
+GRAPH_SPACE = os.getenv("KG_GRAPH_SPACE") or os.getenv("TRS_GRAPH_SPACE") or "dev"
 
 # 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 graph-search/trs-graph。
-_RESULT_CACHE_TTL = 60.0
+_RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
 _result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _result_cache_lock = threading.Lock()
 
@@ -127,10 +127,7 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
         auth_headers: Mapping[str, str] | None = None,
         app: Any = None,
     ) -> dict[str, Any]:
-        cache_key = (
-            f"{body.dataSource}|{body.expertAId}|{body.expertBId}|"
-            f"{body.startTime or ''}|{body.endTime or ''}"
-        )
+        cache_key = f"{body.expertAId}|{body.expertBId}|{body.startTime or ''}|{body.endTime or ''}"
         with _result_cache_lock:
             entry = _result_cache.get(cache_key)
         if entry and entry[0] > time.monotonic():
@@ -140,7 +137,11 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
             api_base_url, auth_headers=auth_headers, app=app
         ) as graph_api:
             result = await _build_structured_result(graph_api, body)
-        payload = {"structuredResult": result}
+        provenance = result.pop("_provenance")
+        payload = {
+            "structuredResult": result,
+            "provenance": provenance,
+        }
         with _result_cache_lock:
             _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, payload)
         return payload
@@ -149,7 +150,7 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
 def _person_vid(expert_id: str) -> str:
     # techkg 空间 Scholar 节点 ID 不带 person_ 前缀（如 4P566No1），
     # dev 空间则带 person_ 前缀；根据图空间自动选择。
-    space = os.getenv("KG_GRAPH_SPACE", "dev")
+    space = os.getenv("KG_GRAPH_SPACE") or os.getenv("TRS_GRAPH_SPACE") or "dev"
     if space == "techkg":
         return expert_id.removeprefix("person_")
     return expert_id if expert_id.startswith("person_") else f"person_{expert_id}"
@@ -187,6 +188,7 @@ def _split_fields(value: Any) -> list[str]:
 
 
 def _year_filters(body: ExpertPaperCooperationDemoRequest) -> list[dict[str, Any]]:
+    """Build filters matching the graph string ``publication_year`` property."""
     filters: list[dict[str, Any]] = []
     if body.startTime:
         filters.append(
@@ -297,13 +299,14 @@ def _edge_cooperation_count_from_subgraph(
 async def _fetch_coauthor_fallback(
     graph_api: GraphSearchApiClient,
     body: ExpertPaperCooperationDemoRequest,
-) -> tuple[int, list[tuple[str, int]]]:
+) -> tuple[int, list[tuple[str, int]], list[dict[str, Any]]]:
     """从已有合作边补足总量和共同合作者，不推断逐篇明细字段。"""
     direct, common = await asyncio.gather(
         graph_api.search_paths(_coauthor_request(body, directions=["out"])),
         graph_api.search_paths(_coauthor_request(body, directions=["out", "out"])),
     )
 
+    direct_edges = [edge for path in direct.get("items") or [] for edge in path.get("edges") or []]
     direct_count = max(
         (
             _edge_cooperation_count(path["edges"][0])
@@ -324,7 +327,7 @@ async def _fetch_coauthor_fallback(
         collaborators[name] = max(collaborators.get(name, 0), strength)
 
     ranked = sorted(collaborators.items(), key=lambda item: (-item[1], item[0]))
-    return direct_count, ranked[:5]
+    return direct_count, ranked[:5], direct_edges
 
 
 def _dedupe_shared_papers(paths: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -473,6 +476,136 @@ def _topic_name(node: dict[str, Any]) -> str:
     return str(props.get("keyword") or props.get("name") or "").strip()
 
 
+def _source_metadata(properties: dict[str, Any]) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    for key in (
+        "source_system",
+        "source_table",
+        "source_record_id",
+        "ingest_batch",
+        "ingest_time",
+        "match_method",
+        "match_evidence",
+    ):
+        value = str(properties.get(key) or "").strip()
+        if value:
+            metadata[key] = value
+    return metadata
+
+
+def _technical_table(metadata: dict[str, str], fallback: str) -> str:
+    source_system = metadata.get("source_system", "")
+    source_table = metadata.get("source_table", "")
+    if source_system and source_table:
+        return f"{source_system}.{source_table}"
+    return source_table or fallback
+
+
+def _build_provenance(
+    expert_a: dict[str, Any],
+    expert_b: dict[str, Any],
+    papers: list[dict[str, Any]],
+    fallback_edges: list[dict[str, Any]],
+    paper_count: int,
+) -> dict[str, Any]:
+    """使用专家、论文和作者/合作边上的真实入库元数据生成证据链。"""
+    evidences: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def append_node(
+        node: dict[str, Any],
+        *,
+        entity_type: str,
+        fallback_label: str,
+    ) -> None:
+        properties = node.get("properties") or {}
+        metadata = _source_metadata(properties)
+        node_id = str(node.get("id") or "")
+        record_id = metadata.get("source_record_id") or node_id
+        key = ("node", node_id, record_id)
+        if key in seen:
+            return
+        seen.add(key)
+        name = str(
+            properties.get("name_zh")
+            or properties.get("name_en")
+            or properties.get("title_zh")
+            or properties.get("title_en")
+            or properties.get("title")
+            or node_id
+        )
+        details = [
+            f"图标签：{fallback_label}",
+            f"入库批次：{metadata.get('ingest_batch') or '—'}",
+            f"入库时间：{metadata.get('ingest_time') or '—'}",
+        ]
+        if fallback_label == "Paper":
+            details.append(
+                f"发表年份：{properties.get('publication_year') or properties.get('year') or '—'}"
+            )
+        evidences.append(
+            {
+                "title": f"实体 · {name}",
+                "businessTable": entity_type,
+                "technicalTable": _technical_table(metadata, fallback_label),
+                "recordId": record_id,
+                "fieldIdentifier": (
+                    "source_record_id" if metadata.get("source_record_id") else "graph_vid"
+                ),
+                "summary": "；".join(details),
+            }
+        )
+
+    def append_edge(edge: dict[str, Any]) -> None:
+        properties = edge.get("properties") or {}
+        metadata = _source_metadata(properties)
+        edge_type = str(edge.get("type") or _AUTHORED_EDGE)
+        source = str(edge.get("source") or "")
+        target = str(edge.get("target") or "")
+        edge_id = str(edge.get("id") or f"{source}->{target}:{edge_type}")
+        record_id = metadata.get("source_record_id") or edge_id
+        key = ("edge", edge_id, record_id)
+        if key in seen:
+            return
+        seen.add(key)
+        details = [
+            f"路径段：{source or '—'} → {target or '—'}",
+            f"入库批次：{metadata.get('ingest_batch') or '—'}",
+            f"入库时间：{metadata.get('ingest_time') or '—'}",
+        ]
+        if metadata.get("match_method"):
+            details.append(f"匹配方法：{metadata['match_method']}")
+        if metadata.get("match_evidence"):
+            details.append(f"匹配证据：{metadata['match_evidence']}")
+        evidences.append(
+            {
+                "title": f"关系 · {edge_type}",
+                "businessTable": "论文作者/专家合作关系",
+                "technicalTable": _technical_table(metadata, edge_type),
+                "recordId": record_id,
+                "fieldIdentifier": (
+                    "source_record_id" if metadata.get("source_record_id") else "graph_edge_id"
+                ),
+                "summary": "；".join(details),
+            }
+        )
+
+    append_node(expert_a, entity_type="科技专家", fallback_label=_SCHOLAR_LABEL)
+    append_node(expert_b, entity_type="科技专家", fallback_label=_SCHOLAR_LABEL)
+    for paper in papers[:8]:
+        append_node(paper, entity_type="论文成果", fallback_label="Paper")
+        for edge in paper.get("pathEdges") or []:
+            append_edge(edge)
+    for edge in fallback_edges[:8]:
+        append_edge(edge)
+
+    return {
+        "sourceDatabase": f"trs-graph / space={GRAPH_SPACE}",
+        "summary": f"两位专家命中 {paper_count} 篇合作论文；证据来自专家、论文及作者/合作关系图属性。",
+        "evidences": evidences,
+    }
+
+
 def _impact_score(paper_count: int, citation_total: int, high_level_count: int) -> float:
     if paper_count == 0:
         return 0.0
@@ -504,10 +637,13 @@ async def _build_structured_result(
     papers = _dedupe_shared_papers(paths)
     fallback_paper_count = 0
     fallback_collaborators: list[tuple[str, int]] = []
+    fallback_edges: list[dict[str, Any]] = []
     if not papers and not body.startTime and not body.endTime:
-        fallback_paper_count, fallback_collaborators = await _fetch_coauthor_fallback(
-            graph_api, body
-        )
+        (
+            fallback_paper_count,
+            fallback_collaborators,
+            fallback_edges,
+        ) = await _fetch_coauthor_fallback(graph_api, body)
     semaphore = asyncio.Semaphore(8)
     contexts = await asyncio.gather(
         *[
@@ -700,4 +836,11 @@ async def _build_structured_result(
         "stableTeamMembers": stable_members,
         "coreCollaborators": ranked_collaborators[:5],
         "sharedContribution": shared_contribution,
+        "_provenance": _build_provenance(
+            expert_a,
+            expert_b,
+            contexts,
+            fallback_edges,
+            paper_count,
+        ),
     }

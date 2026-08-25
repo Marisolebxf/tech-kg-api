@@ -11,7 +11,7 @@ class ExpertIndirectRelationRequest(BaseModel):
         json_schema_extra={
             "example": {
                 "core_node_id": "4G7t0B0t",
-                "relation_types": ["学术关联", "机构关联"],
+                "relation_types": "学术关联",
                 "path_depth": 2,
                 "min_strength": 0.65,
             }
@@ -101,5 +101,21 @@ class StructuredIndirectRelationResult(BaseModel):
     paths: list[IndirectRelationPath]
 
 
+class IndirectProvenanceEvidence(BaseModel):
+    title: str
+    businessTable: str
+    technicalTable: str
+    recordId: str
+    fieldIdentifier: str
+    summary: str
+
+
+class IndirectProvenance(BaseModel):
+    sourceDatabase: str
+    summary: str
+    evidences: list[IndirectProvenanceEvidence] = Field(default_factory=list)
+
+
 class ExpertIndirectRelationResponse(BaseModel):
     structuredResult: StructuredIndirectRelationResult
+    provenance: IndirectProvenance

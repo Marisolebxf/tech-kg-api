@@ -1,6 +1,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 
 import { useAuthStore } from '../stores/auth'
+import { isPortalEmbeddedMode } from '../portal/iframeBridge'
 import BusinessServiceView from '../views/business-service/BusinessServiceView.vue'
 import LoginView from '../views/auth/LoginView.vue'
 import UserCenterView from '../views/auth/UserCenterView.vue'
@@ -113,6 +114,22 @@ export const router = createRouter({
   ],
 })
 
+function loginRedirect(fullPath: string, error?: string) {
+  if (isPortalEmbeddedMode()) {
+    return {
+      path: '/login',
+      query: { embedded: '1', portalState: 'session-expired' },
+    }
+  }
+  return {
+    path: '/login',
+    query: {
+      redirect: fullPath,
+      ...(error ? { error } : {}),
+    },
+  }
+}
+
 router.beforeEach(async (to) => {
   if (import.meta.env.VITE_AUTH_ENABLED === 'false') {
     return to.name === 'login' ? { path: '/overview' } : true
@@ -124,7 +141,7 @@ router.beforeEach(async (to) => {
   try {
     const profile = await authStore.loadCurrentUser()
     if (!profile) {
-      return { path: '/login', query: { redirect: to.fullPath } }
+      return loginRedirect(to.fullPath)
     }
     const requiredPermission = typeof to.meta.permission === 'string' ? to.meta.permission : ''
     if (to.meta.admin === true && !profile.isAdmin) {
@@ -139,9 +156,6 @@ router.beforeEach(async (to) => {
     }
     return true
   } catch {
-    return {
-      path: '/login',
-      query: { redirect: to.fullPath, error: '登录服务暂时不可用，请稍后重试' },
-    }
+    return loginRedirect(to.fullPath, '登录服务暂时不可用，请稍后重试')
   }
 })

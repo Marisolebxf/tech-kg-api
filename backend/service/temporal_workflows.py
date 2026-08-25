@@ -14,16 +14,21 @@ from dotenv import load_dotenv
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
+ACTIVITY_RETRY_POLICY = RetryPolicy(
+    initial_interval=timedelta(seconds=2),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(seconds=30),
+    maximum_attempts=5,
+)
+
 
 @activity.defn
 async def execute_kg_step(request: dict[str, Any]) -> dict[str, Any]:
-    """领域步骤执行入口；project 域真实调用 ETL，其它域保持轻量完成桩。"""
+    """Return lightweight bookkeeping results for built-in domain pipeline steps."""
     domain = request.get("domain")
     step = request["step"]
     kind = request.get("kind")
     payload = request.get("payload", {}) or {}
-    if domain == "project":
-        return await asyncio.to_thread(_run_project_step, step, payload)
     await asyncio.sleep(float(request.get("delaySeconds", 0)))
     return {
         "step": step,
@@ -32,37 +37,6 @@ async def execute_kg_step(request: dict[str, Any]) -> dict[str, Any]:
         "status": "completed",
         "input": payload,
         "output": payload,
-    }
-
-
-def _run_project_step(step: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Map Temporal pipeline steps onto project ETL stages.
-
-    真实写入集中在 ``persist``（完整流水线），避免 align/persist 重复跑。
-    """
-    from script.workflows.project_ingest_workflow import workflow as project_pipeline
-
-    limit = payload.get("limit")
-    limit_int = int(limit) if limit is not None else 50
-    dry_run = bool(payload.get("dry_run", False))
-    common = {
-        "project_id": payload.get("project_id"),
-        "id_prefix": payload.get("id_prefix"),
-        "limit": limit_int,
-        "ingest_batch": payload.get("ingest_batch"),
-        "dry_run": dry_run,
-    }
-
-    if step == "persist":
-        output = project_pipeline(payload)
-        return {"step": step, "domain": "project", "status": "completed", "output": output}
-
-    # 前置步骤仅记账；ETL 在 persist 一次跑完（schema→load→align→cleanup）
-    return {
-        "step": step,
-        "domain": "project",
-        "status": "deferred_to_persist",
-        "output": common,
     }
 
 
@@ -301,6 +275,7 @@ async def _run_domain_pipeline(request: dict[str, Any], kind: str, domain: str) 
                     "payload": request,
                 },
                 start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=ACTIVITY_RETRY_POLICY,
             )
         )
     return {"kind": kind, "domain": domain, "status": "completed", "steps": results}
@@ -412,6 +387,7 @@ class ConfigurableWorkflow:
             load_workflow_definition,
             request["definitionId"],
             start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=ACTIVITY_RETRY_POLICY,
         )
         results = []
         for step in definition.get("steps", []):
@@ -426,6 +402,7 @@ class ConfigurableWorkflow:
                         "payload": request.get("payload", {}),
                     },
                     start_to_close_timeout=timedelta(minutes=10),
+                    retry_policy=ACTIVITY_RETRY_POLICY,
                 )
             )
         return {"definitionId": definition["id"], "status": "completed", "steps": results}
@@ -441,6 +418,7 @@ class PythonScriptWorkflow:
             load_workflow_definition,
             request["definitionId"],
             start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=ACTIVITY_RETRY_POLICY,
         )
         timeout_seconds = max(int(definition.get("timeoutSeconds", 60)), 1)
         return await workflow.execute_activity(
@@ -452,6 +430,7 @@ class PythonScriptWorkflow:
                 "timeoutSeconds": timeout_seconds,
             },
             start_to_close_timeout=timedelta(seconds=timeout_seconds + 30),
+            retry_policy=ACTIVITY_RETRY_POLICY,
         )
 
 

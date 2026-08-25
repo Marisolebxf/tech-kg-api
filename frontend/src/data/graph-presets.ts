@@ -103,6 +103,8 @@ export interface GraphProvenanceEvidence {
   technicalTable: string
   recordId: string
   fieldIdentifier: string
+  sourceField?: string
+  graphVid?: string
   summary: string
 }
 
@@ -117,6 +119,8 @@ export interface GraphProvenance {
     technicalTable: string
     recordId: string
     fieldIdentifier: string
+    sourceField: string
+    graphVid: string
   }>
   task: {
     name: string
@@ -197,6 +201,8 @@ export function getNodeProvenance(node: GraphNodeData): GraphProvenance {
       technicalTable,
       recordId,
       fieldIdentifier,
+      sourceField: node.sourceField || source.keyField,
+      graphVid: node.id,
       summary: source.summary,
     }],
     task: {
@@ -240,6 +246,8 @@ function endpointFromNode(
       : node.sourceRecordId
       ? `source_record_id = ${node.sourceRecordId}`
       : nodeFieldIdentifier(node),
+    sourceField: node.sourceField || source.keyField,
+    graphVid: node.id,
   }
 }
 
@@ -275,6 +283,8 @@ export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?
           technicalTable: 'entity_topic_relation',
           recordId: `${(from?.id ?? edge.from).toUpperCase()}-TOPIC`,
           fieldIdentifier: `entity_id = ${(from?.id ?? edge.from).toUpperCase()}`,
+          sourceField: 'entity_id',
+          graphVid: from?.id ?? edge.from,
           summary: `记录${from?.label ?? '源实体'}关联的论文、项目或主题标签`,
         },
         {
@@ -283,6 +293,8 @@ export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?
           technicalTable: 'entity_topic_relation',
           recordId: `${(to?.id ?? edge.to).toUpperCase()}-TOPIC`,
           fieldIdentifier: `entity_id = ${(to?.id ?? edge.to).toUpperCase()}`,
+          sourceField: 'entity_id',
+          graphVid: to?.id ?? edge.to,
           summary: `记录${to?.label ?? '目标实体'}关联的论文、项目或主题标签`,
         },
         {
@@ -291,6 +303,8 @@ export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?
           technicalTable: 'entity_relation',
           recordId: `${edge.id.toUpperCase()}-PATH`,
           fieldIdentifier: `relation_id = ${edge.id}`,
+          sourceField: 'relation_id',
+          graphVid: edge.id,
           summary: `${relationName}通过共同论文、项目或主题节点形成两跳路径`,
         },
       ]
@@ -301,6 +315,8 @@ export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?
           technicalTable: endpoint.technicalTable,
           recordId: endpoint.recordId,
           fieldIdentifier: endpoint.fieldIdentifier,
+          sourceField: endpoint.sourceField,
+          graphVid: endpoint.graphVid,
           summary: `${endpoint.name}的真实图谱实体及任职来源，用于推理同事关系`,
         }))
       : [{
@@ -309,6 +325,8 @@ export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?
         technicalTable,
         recordId,
         fieldIdentifier: `relation_id = ${edge.id}`,
+        sourceField: 'relation_id',
+        graphVid: edge.id,
         summary: evidenceSummary,
       }]
 

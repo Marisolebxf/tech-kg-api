@@ -1052,6 +1052,8 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 4px;
+  width: fit-content;
+  max-width: 100%;
   min-width: 0;
   height: 22px;
   color: var(--gkx-text-secondary);
@@ -1073,7 +1075,7 @@ onBeforeUnmount(() => {
 }
 
 .app-breadcrumb__separator {
-  flex: 0 0 12px;
+  flex: 0 0 auto;
   color: #86909c;
   font-size: 12px;
   line-height: 12px;
@@ -1081,24 +1083,19 @@ onBeforeUnmount(() => {
 }
 
 .app-breadcrumb__history {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
+  flex: 0 0 auto;
   color: #86909c;
   font-size: 12px;
   line-height: 20px;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .app-breadcrumb strong {
-  min-width: 0;
-  overflow: hidden;
+  flex: 0 0 auto;
   color: #4e5969;
   font-size: 12px;
   line-height: 20px;
   font-weight: 500;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

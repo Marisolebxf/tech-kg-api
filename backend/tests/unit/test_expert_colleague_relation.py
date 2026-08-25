@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -201,7 +202,7 @@ async def test_summary_and_graph_cover_tender_details() -> None:
 
 def test_request_validates_period_and_normalizes_filters() -> None:
     request = ExpertColleagueRelationRequest(
-        expertId=" person_a ",
+        expertId="person_a",
         organization=" 自动化研究所 ",
         overlapPeriod="2020-2022",
         offset=10,
@@ -231,8 +232,42 @@ def test_request_validates_period_and_normalizes_filters() -> None:
         )
 
 
+@pytest.mark.parametrize("field", ["expert_a_id", "expert_b_id"])
+def test_request_rejects_overlong_and_abnormal_expert_ids(field: str) -> None:
+    payload = {"expert_a_id": "person_a", "expert_b_id": "person_b"}
+    payload[field] = "XXADASDDDDDDDDDDDDDDDAXZSSSSSSSSSZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZX"
+    with pytest.raises(ValidationError, match="64"):
+        ExpertColleagueRelationRequest.model_validate(payload)
+
+    payload[field] = "person_a!@#￥%&"
+    with pytest.raises(ValidationError, match="异常字符"):
+        ExpertColleagueRelationRequest.model_validate(payload)
+
+
+    payload[field] = "person a"
+    with pytest.raises(ValidationError, match="空格"):
+        ExpertColleagueRelationRequest.model_validate(payload)
+
+
+def test_request_rejects_future_month_range() -> None:
+    today = date.today()
+    future_month = "{}-{:02d}".format(
+        today.year + (1 if today.month == 12 else 0),
+        1 if today.month == 12 else today.month + 1,
+    )
+    with pytest.raises(ValidationError, match="当前月份"):
+        ExpertColleagueRelationRequest.model_validate(
+            {
+                "expert_a_id": "person_a",
+                "expert_b_id": "person_b",
+                "start_time": future_month,
+                "end_time": future_month,
+            }
+        )
+
 def test_merge_relations_keeps_multiple_employment_periods() -> None:
     service = ExpertColleagueRelationService()
+
     colleague = node("person_b", ["Person"], name_zh="李佳宁")
     first = service._build_relation(
         node=colleague,
@@ -336,7 +371,7 @@ async def test_gateway_subgraph_respects_total_limit() -> None:
 def test_request_accepts_page_snake_case_fields() -> None:
     request = ExpertColleagueRelationRequest.model_validate(
         {
-            "expert_id": " E10001 ",
+            "expert_id": "E10001",
             "overlap_period": "2018-2022",
             "team_or_project": " 知识工程项目组 ",
             "min_confidence": 0.6,

@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from biz.schema.expert_indirect_relation import ExpertIndirectRelationRequest
-from service.expert_indirect_relation_api import _build_provenance, _build_result
+from service.expert_indirect_relation_api import _build_provenance, _build_result, _build_rules
 
 
 def _core_node():
@@ -115,6 +115,39 @@ def test_relation_type_filter_and_string_normalization():
     assert result["paths"][0]["targetNode"]["name"] == "专家丙"
 
 
+def test_core_node_id_rejects_more_than_64_characters():
+    body = ExpertIndirectRelationRequest(
+        core_node_id="A" * 64,
+        relation_types=["学术关联"],
+    )
+    assert len(body.core_node_id) == 64
+
+    with pytest.raises(ValidationError, match="核心节点 ID 长度不能超过 64 个字符"):
+        ExpertIndirectRelationRequest(
+            core_node_id="A" * 65,
+            relation_types=["学术关联"],
+        )
+
+
+def test_rules_describe_the_actual_indirect_path_algorithm():
+    body = ExpertIndirectRelationRequest(
+        core_node_id="A",
+        relation_types=["学术关联"],
+        path_depth=2,
+        min_strength=0.65,
+    )
+    rules = _build_rules(_build_result(_core_node(), _subgraph(), body))
+
+    assert [rule["name"] for rule in rules] == [
+        "间接路径发现规则",
+        "间接关系分类规则",
+        "路径强度计算与排序规则",
+    ]
+    assert "0.92" in rules[2]["logic"]
+    assert "本次 0.65" in rules[2]["threshold"]
+    assert all("人工复核" not in rule["audit"] for rule in rules)
+
+
 def test_project_relation_type_returns_only_project_paths():
     body = ExpertIndirectRelationRequest(
         core_node_id="A",
@@ -162,12 +195,16 @@ def test_builds_provenance_from_real_graph_metadata():
 
     assert provenance["sourceDatabase"].startswith("trs-graph / space=")
     assert provenance["summary"].startswith("命中 1 条间接路径")
-    core_evidence = next(item for item in provenance["evidences"] if item["recordId"] == "A")
-    assert core_evidence["technicalTable"] == "gkx_element.dwd_scholar"
-    assert "BATCH_PERSON" in core_evidence["summary"]
-    edge_evidence = next(item for item in provenance["evidences"] if item["recordId"] == "A_B")
-    assert edge_evidence["technicalTable"] == "dwd_scholar_coauthor"
-    assert "BATCH_EDGE" in edge_evidence["summary"]
+    core_evidence = next(
+        item for item in provenance["evidences"] if item["graphVid"] == "person_A"
+    )
+    assert core_evidence == {
+        "title": "实体 · 专家甲",
+        "sourceTable": "dwd_scholar",
+        "sourceField": "scholar_id",
+        "graphVid": "person_A",
+    }
+    assert all(not item["title"].startswith("关系 ·") for item in provenance["evidences"])
 
 
 def test_relation_type_is_single_choice_from_supported_catalog():

@@ -81,6 +81,9 @@ export interface AlumniProvenanceEvidence {
   recordId: string
   fieldIdentifier: string
   summary: string
+  sourceTable?: string
+  sourceField?: string
+  graphVid?: string
 }
 
 export interface AlumniProvenance {

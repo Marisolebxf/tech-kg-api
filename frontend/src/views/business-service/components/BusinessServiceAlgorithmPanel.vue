@@ -59,7 +59,7 @@ import {
   buildIndirectRelationGraph,
   indirectSummaryRows,
 } from "../indirect-relation-view";
-import { monthRangeToApiDates } from "../utils/month-range";
+import { isFutureMonth, monthRangeToApiDates } from "../utils/month-range";
 
 type PanoramaLayerKey =
   | "core_technology"
@@ -133,12 +133,21 @@ const hasParameterErrors = computed(
 );
 const currentMonth = dayjs().format("YYYY-MM");
 const disableFutureMonth = (value: Date) => dayjs(value).isAfter(dayjs(), "month");
-const colleagueExpertIdPattern = /^[\w\u4e00-\u9fff·.\-]+$/u;
+const expertIdPattern = /^[\w\u4e00-\u9fff·.\-]+$/u;
+const schoolPattern = /^[\w\u4e00-\u9fff·（）()《》.\-\s]+$/u;
 
-function colleagueExpertIdError(value: string): string | null {
+function expertIdError(value: string): string | null {
   if (value.length > 64) return "输入长度不能超过 64 个字符";
-  if (value && !colleagueExpertIdPattern.test(value)) {
+  if (value && !expertIdPattern.test(value)) {
     return "不能包含空格或 !@#￥%& 等异常字符";
+  }
+  return null;
+}
+
+function schoolError(value: string): string | null {
+  if (value.length > 100) return "输入长度不能超过 100 个字符";
+  if (value.trim() && !schoolPattern.test(value.trim())) {
+    return "不能包含 !@#￥%& 等异常字符";
   }
   return null;
 }
@@ -2032,7 +2041,7 @@ async function handleRun() {
         ["expert_a_id", expertAIdRaw],
         ["expert_b_id", expertBIdRaw],
       ] as const) {
-        const error = colleagueExpertIdError(value);
+        const error = expertIdError(value);
         if (error) idErrors[field] = error;
       }
       const startTime = optionalParam(parameterValues.value.start_time);
@@ -2086,16 +2095,33 @@ async function handleRun() {
         resultMode.value = "summary";
       }
     } else if (isLiveAlumni.value) {
-      const expertId = parameterValues.value.expertId?.trim();
+      const expertIdRaw = parameterValues.value.expertId ?? "";
+      const targetExpertIdRaw = parameterValues.value.targetExpertId ?? "";
+      const schoolRaw = parameterValues.value.school ?? "";
+      const expertId = expertIdRaw.trim();
       if (!expertId) {
         parameterErrors.value = { expertId: "请输入专家" };
+        return;
+      }
+      const alumniErrors: Record<string, string> = {};
+      const sourceError = expertIdError(expertIdRaw);
+      const targetError = targetExpertIdRaw
+        ? expertIdError(targetExpertIdRaw)
+        : null;
+      const institutionError = schoolError(schoolRaw);
+      if (sourceError) alumniErrors.expertId = sourceError;
+      if (targetError) alumniErrors.targetExpertId = targetError;
+      if (institutionError) alumniErrors.school = institutionError;
+      if (Object.keys(alumniErrors).length) {
+        parameterErrors.value = alumniErrors;
+        showToast("请修正参数后再执行", "warning");
         return;
       }
       parameterErrors.value = {};
       const body = {
         expertId,
-        targetExpertId: optionalParam(parameterValues.value.targetExpertId),
-        school: optionalParam(parameterValues.value.school),
+        targetExpertId: optionalParam(targetExpertIdRaw),
+        school: optionalParam(schoolRaw),
         educationStage: optionalParam(parameterValues.value.educationStage),
         limit: 20,
       };
@@ -2128,13 +2154,25 @@ async function handleRun() {
         selectedGraphEdgeId.value = null;
       }
     } else if (isLiveCoop.value) {
-      const sourceExpertId = parameterValues.value.sourceExpertId?.trim();
-      const targetExpertId = parameterValues.value.targetExpertId?.trim();
+      const sourceExpertIdRaw = parameterValues.value.sourceExpertId ?? "";
+      const targetExpertIdRaw = parameterValues.value.targetExpertId ?? "";
+      const sourceExpertId = sourceExpertIdRaw.trim();
+      const targetExpertId = targetExpertIdRaw.trim();
       if (!sourceExpertId || !targetExpertId) {
         parameterErrors.value = {
           ...(!sourceExpertId ? { sourceExpertId: "请输入第一个专家 ID" } : {}),
           ...(!targetExpertId ? { targetExpertId: "请输入第二个专家 ID" } : {}),
         };
+        return;
+      }
+      const coopErrors: Record<string, string> = {};
+      const sourceError = expertIdError(sourceExpertIdRaw);
+      const targetError = expertIdError(targetExpertIdRaw);
+      if (sourceError) coopErrors.sourceExpertId = sourceError;
+      if (targetError) coopErrors.targetExpertId = targetError;
+      if (Object.keys(coopErrors).length) {
+        parameterErrors.value = coopErrors;
+        showToast("请修正参数后再执行", "warning");
         return;
       }
       parameterErrors.value = {};
@@ -2167,6 +2205,18 @@ async function handleRun() {
           timeRangeStart: "开始月份不能晚于结束月份",
           timeRangeEnd: "结束月份不能早于开始月份",
         };
+        return;
+      }
+      if (isFutureMonth(startMonth) || isFutureMonth(endMonth)) {
+        parameterErrors.value = {
+          ...(isFutureMonth(startMonth)
+            ? { timeRangeStart: "输入时间不能超过当前时间" }
+            : {}),
+          ...(isFutureMonth(endMonth)
+            ? { timeRangeEnd: "输入时间不能超过当前时间" }
+            : {}),
+        };
+        showToast("输入时间不能超过当前时间", "warning");
         return;
       }
       const { start: timeRangeStart, end: timeRangeEnd } = monthRangeToApiDates(
@@ -2407,9 +2457,32 @@ function handleParameterInput(fieldName: string, event: Event) {
     isLiveColleague.value &&
     (fieldName === "expert_a_id" || fieldName === "expert_b_id")
   ) {
-    const error = colleagueExpertIdError(value);
+    const error = expertIdError(value);
     if (error) {
       parameterErrors.value = { ...parameterErrors.value, [fieldName]: error };
+    } else {
+      clearParameterError(fieldName);
+    }
+    return;
+  }
+  if (
+    (isLiveCoop.value &&
+      (fieldName === "sourceExpertId" || fieldName === "targetExpertId")) ||
+    (isLiveAlumni.value &&
+      (fieldName === "expertId" || fieldName === "targetExpertId"))
+  ) {
+    const error = expertIdError(value);
+    if (error) {
+      parameterErrors.value = { ...parameterErrors.value, [fieldName]: error };
+    } else {
+      clearParameterError(fieldName);
+    }
+    return;
+  }
+  if (isLiveAlumni.value && fieldName === "school") {
+    const error = schoolError(value);
+    if (error) {
+      parameterErrors.value = { ...parameterErrors.value, school: error };
     } else {
       clearParameterError(fieldName);
     }
@@ -2545,7 +2618,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :locale="zhCN"
           :title="field.description"
           :aria-label="field.name"
-          :disabled-date="isLiveColleague ? disableFutureMonth : undefined"
+          :disabled-date="isLiveColleague || isLiveCoop ? disableFutureMonth : undefined"
           :error="Boolean(parameterErrors[field.name])"
           @update:model-value="handleMonthParameterInput(field.name, $event)"
         />

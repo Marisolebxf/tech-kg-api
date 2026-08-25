@@ -63,6 +63,22 @@ export interface ProcessingInstance {
   output?: Record<string, unknown>
   logs?: string[]
   batch?: UpdateBatch
+  /** kg.custom.steps 工作流专用：实时 step 状态（@workflow.query get_steps）。 */
+  pipeline?: PipelineStepState
+}
+
+export interface PipelineStepState {
+  /** 当前正在执行/暂停的 step id。 */
+  current: string | null
+  /** step_id → 该 step 的运行状态。 */
+  steps: Record<string, PipelineStepInfo>
+}
+
+export interface PipelineStepInfo {
+  status: 'COMPLETED' | 'RUNNING' | 'PENDING_REVIEW' | 'REVIEWED' | 'REJECTED' | 'FAILED'
+  output?: Record<string, unknown>
+  error?: string
+  attempt?: number
 }
 
 export interface SourceUpdate {
@@ -144,6 +160,12 @@ export const getManualReviews = (params: Record<string, unknown> = {}) => unwrap
 export const getManualReview = (id: string) => unwrap(http.get(`/v1/manual-reviews/${id}`)) as Promise<ReviewRecord>
 export const submitManualReview = (id: string, data: { actionId: string; note: string; result: Record<string, unknown>; rerun: boolean }) => unwrap(http.post(`/v1/manual-reviews/${id}/actions`, data)) as Promise<{ review: ReviewRecord }>
 export const retryManualReview = (id: string, payload: Record<string, unknown> = {}) => unwrap(http.post(`/v1/manual-reviews/${id}/retry`, { payload })) as Promise<{ id: string; status: string }>
+
+/** 失败任务重试：调 Temporal ResetWorkflowExecution，回放到失败 step 之前。 */
+export const retryTask = (taskId: string, reason = 'manual retry') => unwrap(http.post(`/v1/task-center/tasks/${taskId}/retry`, { reason })) as Promise<{ taskId: string; workflowId: string; newRunId: string }>
+
+/** 人工审核：向 kg.custom.steps workflow 发 submit_review signal。 */
+export const submitTaskReview = (taskId: string, data: { decision: 'approve' | 'reject'; modifiedResult?: Record<string, unknown>; note?: string; reviewer?: string }) => unwrap(http.post(`/v1/task-center/tasks/${taskId}/review`, data)) as Promise<{ taskId: string; decision: string; reviewer: string | null }>
 export const modifyManualReviewResult = (id: string, result: Record<string, unknown>, note = '') => unwrap(http.put(`/v1/manual-reviews/${id}/result`, { result, note })) as Promise<ReviewRecord>
 export const revokeManualReview = (id: string, reason: string) => unwrap(http.post(`/v1/manual-reviews/${id}/revoke`, { reason })) as Promise<ReviewRecord>
 

@@ -42,11 +42,51 @@
 - 实体：`kg.entity.paper`、`kg.entity.scholar`、`kg.entity.patent`、`kg.entity.organization`、`kg.entity.project`
 - 关系：`kg.relation.authorship`、`kg.relation.employment`、`kg.relation.citation`、`kg.relation.cooperation`
 - 总流程：`kg.graph.build`
-- 自定义：`kg.custom.configurable`、`kg.custom.python`
+- 自定义：`kg.custom.configurable`、`kg.custom.python`、`kg.custom.steps`
 
 `kg.entity.project` 在 Activity 中真实执行国内外项目 ETL：`ensure_schema` → `load_project_graph` → `align_project_relations` → `cleanup_project_stubs`（可通过 payload 的 `limit`/`dry_run`/`skip_*` 控制）。其它实体域步骤目前仍为轻量完成桩。
 
 `kg.graph.build` 会为请求中的每一种实体和关系启动独立子工作流。上传的 Python 函数由 `kg.custom.python` 包装，并在 Activity 隔离子进程执行，避免破坏 Temporal Workflow 的确定性重放。
+
+### `kg.custom.steps` 多步骤流水线
+
+多步骤实体构建工作流。每步是一个 Temporal Activity（独立 retry policy + timeout），状态由 workflow state 持有，UI 通过 `@workflow.query get_steps` 实时读取。失败后用 `ResetWorkflowExecution` 回放，已完成步不重跑（event history replay）；人工审核用 `@workflow.signal submit_review` 暂停-恢复。
+
+- `POST /workflow-system/definitions/steps`：上传 step pipeline 定义。Form 字段：`file`（Python 脚本，含多个 step 函数）、`steps`（JSON 编码的 manifest 列表）、可选 `definition_id`/`name`。AST 校验所有 `functionName` 都在脚本里、`id` 唯一。返回 `workflowType: "kg.custom.steps"` 的定义。
+- `POST /workflow-system/definitions/{id}/execute`：触发执行（同 `kg.custom.python`）。payload 透传给每个 step 函数。
+- `POST /task-center/tasks/{taskId}/retry`：失败重试。body `{reason?}`。调 Temporal `ResetWorkflowExecution`，回放到最近一个 workflow task，新 `run_id` 回写 `workflow_executions`/`tasks`。
+- `POST /task-center/tasks/{taskId}/review`：人工审核。body `{decision: "approve"|"reject", modifiedResult?, note?, reviewer?}`。向 workflow 发 `submit_review` signal，恢复暂停在 `PENDING_REVIEW` 的 step。`modifiedResult` 覆盖下游 `prevOutputs[stepId]`。
+
+#### Step 函数契约
+
+```python
+def step_xxx(payload: dict, ctx: dict) -> dict: ...
+```
+
+`ctx` 含 `stepId`/`attempt`/`prevOutputs`/`executionId`/`taskId`/`definitionId`。返回 JSON-able dict。`prevOutputs` 是上游 step 的输出，按 step_id 索引。
+
+#### Manifest 字段
+
+```json
+{
+  "id": "extract", "name": "实体抽取", "functionName": "step_extract",
+  "timeoutSeconds": 1200,
+  "retryPolicy": {"maximumAttempts": 3, "initialIntervalSeconds": 5, "maximumIntervalSeconds": 100, "nonRetryableErrorTypes": ["ValueError"]},
+  "requireReview": true
+}
+```
+
+- `id`：step 唯一标识，`^[a-z0-9][a-z0-9_-]{0,63}$`
+- `functionName`：脚本里的函数名
+- `timeoutSeconds`：默认 600
+- `retryPolicy.maximumAttempts`：默认 1（不重试）；stateful 步骤如 `persist` 应保持 1 避免重复写入
+- `requireReview`：默认 `false`；为 `true` 时该步完成后 workflow 暂停等待 `submit_review` signal
+
+#### 示例
+
+参考 `backend/script/workflows/sample_step_pipeline.py`：4 步流水线 `load → extract → align → persist`，每步读 `ctx.prevOutputs`，`payload.fail_at` 可触发指定 step 失败用于验证 reset 重试。
+
+完整设计文档：[`backend/docs/multi_step_workflow_plan.md`](multi_step_workflow_plan.md)。
 
 ## 启动
 

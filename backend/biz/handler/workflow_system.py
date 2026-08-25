@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from pydantic import TypeAdapter, ValidationError
 
 from application.workflow_operations import workflow_operations_application
 from biz.schemas.common import ApiResponse
 from biz.schemas.workflow_operations import (
     ScheduleStateRequest,
+    StepManifest,
     WorkflowDefinitionRequest,
     WorkflowExecuteRequest,
     WorkflowScheduleRequest,
@@ -57,6 +60,36 @@ async def upload_python_definition(
             timeout_seconds=timeout_seconds,
         )
         return ApiResponse(data=definition, msg="Python 工作流脚本已上传并完成校验")
+    except (UnicodeDecodeError, SyntaxError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/definitions/steps", response_model=ApiResponse)
+async def upload_step_pipeline_definition(
+    file: Annotated[UploadFile, File()],
+    steps_json: Annotated[str, Form(alias="steps")],
+    definition_id: Annotated[str | None, Form()] = None,
+    name: Annotated[str | None, Form()] = None,
+) -> ApiResponse:
+    """上传 kg.custom.steps 流水线脚本 + step manifest。
+
+    steps 为 JSON 编码的 StepManifest 列表（Form 字符串），file 为 Python 脚本。
+    """
+    try:
+        steps_raw = json.loads(steps_json)
+        steps = TypeAdapter(list[StepManifest]).validate_python(steps_raw)
+    except (json.JSONDecodeError, ValidationError) as exc:
+        raise HTTPException(status_code=400, detail=f"steps manifest 无效: {exc}") from exc
+    try:
+        content = await file.read()
+        definition = service.create_step_pipeline_definition(
+            file.filename or "pipeline.py",
+            content,
+            [s.model_dump(by_alias=True) for s in steps],
+            definition_id,
+            name,
+        )
+        return ApiResponse(data=definition, msg="Step pipeline 定义已上传并完成校验")
     except (UnicodeDecodeError, SyntaxError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

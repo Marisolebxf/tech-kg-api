@@ -935,6 +935,14 @@ class WorkflowRepository:
             )
             return json.loads(row.payload) if row else None
 
+    def get_execution_by_workflow(self, workflow_id: str) -> dict[str, Any] | None:
+        """按 workflowId 查 execution 行；retry reset 后用来回写新 runId。"""
+        with workflow_session_scope() as session:
+            row = session.scalar(
+                select(WorkflowExecution).where(WorkflowExecution.workflow_id == workflow_id)
+            )
+            return json.loads(row.payload) if row else None
+
     def list_executions(self, limit: int = 100) -> list[dict[str, Any]]:
         with workflow_session_scope() as session:
             rows = session.scalars(

@@ -6,7 +6,12 @@ from fastapi import APIRouter, HTTPException, Query
 
 from application.workflow_operations import workflow_operations_application
 from biz.schemas.common import ApiResponse
-from biz.schemas.workflow_operations import TriggerGraphBuildRequest, UpdatePolicyRequest
+from biz.schemas.workflow_operations import (
+    TaskRetryRequest,
+    TaskReviewRequest,
+    TriggerGraphBuildRequest,
+    UpdatePolicyRequest,
+)
 
 router = APIRouter(prefix="/task-center", tags=["task-center"])
 service = workflow_operations_application.service
@@ -55,9 +60,45 @@ async def list_tasks(
 @router.get("/tasks/{task_id}", response_model=ApiResponse)
 async def get_task(task_id: str) -> ApiResponse:
     try:
-        return ApiResponse(data=service.get_task(task_id))
+        task = service.get_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="任务不存在") from exc
+    # kg.custom.steps：用 Temporal workflow 实时 state 填 pipeline 字段
+    # task["steps"] 保留静态 _steps() 兼容老视图；新视图读 task["pipeline"]
+    step_state = await service.query_step_state(task)
+    if step_state is not None:
+        task["pipeline"] = step_state
+    return ApiResponse(data=task)
+
+
+@router.post("/tasks/{task_id}/retry", response_model=ApiResponse)
+async def retry_task(task_id: str, request: TaskRetryRequest) -> ApiResponse:
+    """失败任务重试：调 Temporal ResetWorkflowExecution，回放到失败 step 之前。"""
+    try:
+        result = await service.retry_task(task_id, reason=request.reason)
+        return ApiResponse(data=result, msg="任务重试已下发，workflow 正在回放")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="任务不存在") from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/tasks/{task_id}/review", response_model=ApiResponse)
+async def submit_review(task_id: str, request: TaskReviewRequest) -> ApiResponse:
+    """人工审核：向 kg.custom.steps workflow 发 submit_review signal 恢复暂停的 step。"""
+    try:
+        result = await service.submit_review(
+            task_id,
+            decision=request.decision,
+            modified_result=request.modified_result,
+            note=request.note,
+            reviewer=request.reviewer,
+        )
+        return ApiResponse(data=result, msg="审核 signal 已发送，workflow 将继续")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="任务不存在") from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/data-sources/health", response_model=ApiResponse)

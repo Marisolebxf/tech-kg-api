@@ -12,6 +12,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from temporalio import activity, workflow
+from temporalio.common import RetryPolicy
 
 
 @activity.defn
@@ -134,6 +135,93 @@ print(json.dumps(result, ensure_ascii=False))
     if process.returncode != 0:
         raise RuntimeError(stderr.decode(errors="replace")[-4000:])
     return json.loads(stdout.decode() or "null")
+
+
+def _retry_policy(config: dict[str, Any]) -> RetryPolicy:
+    """把 manifest 的 retryPolicy 配置翻译成 Temporal RetryPolicy。
+
+    maximumAttempts 默认 1（不重试）——stateful 步骤如 persist 由 manifest 显式声明。
+    """
+    return RetryPolicy(
+        maximum_attempts=max(int(config.get("maximumAttempts", 1)), 1),
+        initial_interval=timedelta(seconds=int(config.get("initialIntervalSeconds", 1))),
+        maximum_interval=timedelta(seconds=int(config.get("maximumIntervalSeconds", 100))),
+        non_retryable_error_types=config.get("nonRetryableErrorTypes") or None,
+    )
+
+
+@activity.defn
+async def execute_pipeline_step(request: dict[str, Any]) -> dict[str, Any]:
+    """运行 manifest 中某个 step 的用户函数 fn(payload, ctx)。
+
+    与 execute_python_script 的区别：runner 读 {"payload":..., "ctx":...} 一份 JSON，
+    调用 fn(payload, ctx) 双参签名；ctx 含 prevOutputs/stepId/attempt/executionId 等。
+    状态不写 DB——workflow state 是真相，UI 走 @workflow.query。
+    """
+    script_path = Path(request["scriptPath"])
+    if not script_path.is_file():
+        raise ValueError(f"脚本不存在: {script_path}")
+    function_name = request["functionName"]
+    attempt = activity.info().attempt
+    ctx = {
+        "stepId": request["stepId"],
+        "attempt": attempt,
+        "prevOutputs": request.get("prevOutputs", {}),
+        "executionId": request.get("executionId"),
+        "taskId": request.get("taskId"),
+        "definitionId": request.get("definitionId"),
+    }
+    runner = """
+import asyncio
+import importlib.util
+import inspect
+import json
+import sys
+
+path, function_name = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("uploaded_step_module", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+function = getattr(module, function_name)
+data = json.loads(sys.stdin.read() or "{}")
+payload = data.get("payload", {})
+ctx = data.get("ctx", {})
+result = function(payload, ctx)
+if inspect.isawaitable(result):
+    result = asyncio.run(result)
+print(json.dumps(result, ensure_ascii=False))
+"""
+    backend_dir = Path(__file__).resolve().parents[1]
+    load_dotenv(backend_dir / ".env")
+    pythonpath = os.pathsep.join(filter(None, [str(backend_dir), str(script_path.parent)]))
+    sub_env = {**os.environ, "PYTHONPATH": pythonpath}
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        runner,
+        str(script_path),
+        function_name,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=sub_env,
+    )
+    stdin_data = json.dumps(
+        {"payload": request.get("payload", {}), "ctx": ctx}, ensure_ascii=False
+    ).encode()
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(stdin_data),
+            timeout=float(request.get("timeoutSeconds", 600)),
+        )
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        raise RuntimeError(f"step {request['stepId']} 执行超时") from None
+    if process.returncode != 0:
+        raise RuntimeError(stderr.decode(errors="replace")[-4000:])
+    output = json.loads(stdout.decode() or "null")
+    return {"step": request["stepId"], "status": "COMPLETED", "output": output, "attempt": attempt}
 
 
 async def _run_domain_pipeline(request: dict[str, Any], kind: str, domain: str) -> dict[str, Any]:
@@ -303,6 +391,82 @@ class PythonScriptWorkflow:
         )
 
 
+@workflow.defn(name="kg.custom.steps")
+class StepPipelineWorkflow:
+    """多步实体构建流水线：每步一个 Activity，带独立 retry/timeout；signal 触发审核，reset 触发重试。
+
+    状态全部放 workflow state：UI 用 get_steps query 读，已完成步不重跑靠 event history replay。
+    """
+
+    def __init__(self) -> None:
+        self._steps: dict[str, dict[str, Any]] = {}
+        self._current_step: str | None = None
+        self._review_signal: dict[str, Any] | None = None
+
+    @workflow.run
+    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
+        definition = await workflow.execute_activity(
+            load_workflow_definition,
+            request["definitionId"],
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+        prev_outputs: dict[str, Any] = {}
+        for step in definition.get("steps", []):
+            self._current_step = step["id"]
+            try:
+                result = await workflow.execute_activity(
+                    execute_pipeline_step,
+                    {
+                        "taskId": request.get("taskId"),
+                        "executionId": request.get("executionId"),
+                        "definitionId": request["definitionId"],
+                        "stepId": step["id"],
+                        "functionName": step["functionName"],
+                        "scriptPath": definition["scriptPath"],
+                        "payload": request.get("payload", {}),
+                        "prevOutputs": prev_outputs,
+                        "timeoutSeconds": step.get("timeoutSeconds", 600),
+                    },
+                    start_to_close_timeout=timedelta(seconds=step.get("timeoutSeconds", 600) + 30),
+                    retry_policy=_retry_policy(step.get("retryPolicy", {})),
+                )
+                self._steps[step["id"]] = {
+                    "status": "COMPLETED",
+                    "output": result["output"],
+                    "attempt": result["attempt"],
+                }
+                prev_outputs[step["id"]] = result["output"]
+            except Exception as exc:
+                # Activity 重试耗尽后 workflow 失败；用户走 reset 回放重试。
+                # FAILED 状态写入 self._steps 让 query 在 reset 之前仍可读到失败原因。
+                self._steps[step["id"]] = {"status": "FAILED", "error": str(exc)}
+                raise
+            if step.get("requireReview"):
+                self._steps[step["id"]]["status"] = "PENDING_REVIEW"
+                await workflow.wait_condition(lambda: self._review_signal is not None)
+                review = self._review_signal
+                self._review_signal = None
+                if review.get("decision") == "reject":
+                    self._steps[step["id"]]["status"] = "REJECTED"
+                    return {
+                        "status": "rejected",
+                        "step": step["id"],
+                        "steps": self._steps,
+                    }
+                if review.get("modifiedResult"):
+                    prev_outputs[step["id"]] = review["modifiedResult"]
+                self._steps[step["id"]]["status"] = "REVIEWED"
+        return {"status": "completed", "steps": self._steps}
+
+    @workflow.signal
+    def submit_review(self, review: dict[str, Any]) -> None:
+        self._review_signal = review
+
+    @workflow.query
+    def get_steps(self) -> dict[str, Any]:
+        return {"current": self._current_step, "steps": self._steps}
+
+
 WORKFLOW_CLASSES = [
     PaperEntityWorkflow,
     ScholarEntityWorkflow,
@@ -316,6 +480,12 @@ WORKFLOW_CLASSES = [
     GraphBuildWorkflow,
     ConfigurableWorkflow,
     PythonScriptWorkflow,
+    StepPipelineWorkflow,
 ]
 
-ACTIVITIES = [execute_kg_step, load_workflow_definition, execute_python_script]
+ACTIVITIES = [
+    execute_kg_step,
+    load_workflow_definition,
+    execute_python_script,
+    execute_pipeline_step,
+]

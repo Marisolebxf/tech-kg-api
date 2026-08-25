@@ -110,6 +110,40 @@ class TemporalRuntime:
                 refreshed["message"] = str(exc)
         return refreshed
 
+    async def reset_workflow(self, workflow_id: str, run_id: str | None, reason: str) -> str:
+        """Reset workflow 到最近一个 WORKFLOW_TASK_COMPLETED；返回新 run_id。
+
+        用于失败重试：workflow 失败后 reset 到最近 WORKFLOW_TASK_COMPLETED 事件，
+        event history replay 保证已完成 step 不重跑，从失败 step 重新执行。
+        workflow_task_finish_event_id 必须显式指定（留 0 会被服务端拒绝）。
+        """
+        from temporalio.api.enums.v1 import EventType
+        from temporalio.api.workflowservice.v1 import ResetWorkflowExecutionRequest
+
+        client = await self.client()
+        handle = client.get_workflow_handle(workflow_id, run_id=run_id)
+        history = await handle.fetch_history()
+        last_task_event_id = 0
+        for event in history.events:
+            et_name = EventType.Name(event.event_type)
+            if et_name == "EVENT_TYPE_WORKFLOW_TASK_COMPLETED":
+                last_task_event_id = event.event_id
+        if last_task_event_id == 0:
+            raise RuntimeError(
+                f"无法找到 reset 点：workflow {workflow_id} event history 中无 WORKFLOW_TASK_COMPLETED"
+            )
+        req = ResetWorkflowExecutionRequest(
+            namespace=self.namespace,
+            reason=reason,
+            request_id=uuid4().hex,
+        )
+        req.workflow_execution.workflow_id = workflow_id
+        if run_id:
+            req.workflow_execution.run_id = run_id
+        req.workflow_task_finish_event_id = last_task_event_id
+        response = await client.workflow_service.reset_workflow_execution(req)
+        return response.run_id
+
     async def create_schedule(
         self, definition: dict[str, Any], schedule: dict[str, Any]
     ) -> dict[str, Any]:

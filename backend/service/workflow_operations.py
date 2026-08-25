@@ -84,6 +84,26 @@ class WorkflowOperationsService:
         task["review"] = self.repo.get_review(task_id)
         return task
 
+    async def query_step_state(self, task: dict[str, Any]) -> dict[str, Any] | None:
+        """kg.custom.steps 任务查 Temporal workflow 实时 state（@workflow.query get_steps）。
+
+        非 steps 任务、workflowId 缺失、或 Temporal 查询失败均返回 None，
+        让调用方回退到静态 _steps()。
+        """
+        if task.get("workflowType") != "kg.custom.steps":
+            return None
+        workflow_id = task.get("workflowId")
+        if not workflow_id:
+            return None
+        try:
+            client = await temporal_runtime.client()
+            handle = client.get_workflow_handle(workflow_id)
+            return await handle.query("get_steps")
+        except Exception as exc:
+            temporal_runtime._client = None
+            task["logs"] = (task.get("logs") or []) + [f"step state 查询失败: {exc}"]
+            return None
+
     def list_reviews(self, **filters: Any) -> dict[str, Any]:
         items = self.repo.list_reviews(filters)
         batches = {item["id"]: item for item in self.repo.list_batches()}
@@ -262,6 +282,88 @@ class WorkflowOperationsService:
             self.repo.save_execution(execution)
         self._sync_task_from_execution(execution)
         return execution
+
+    async def retry_task(self, task_id: str, reason: str = "manual retry") -> dict[str, Any]:
+        """失败任务重试：调 Temporal ResetWorkflowExecution；新 run_id 回写 execution + task。
+
+        reset 到最近一个 workflow task，event history replay 保证已完成 step 不重跑，
+        从失败 step 重新执行。task 必须 workflowType=kg.custom.steps 才有意义
+        （其它 workflow 也可以 reset，但语义是"重放整个 workflow"）。
+        """
+        task = self.repo.get_task(task_id)
+        if task is None:
+            raise KeyError(task_id)
+        workflow_id = task.get("workflowId")
+        if not workflow_id:
+            raise ValueError(f"任务 {task_id} 无 workflowId，无法 reset")
+        run_id = task.get("runId")
+        try:
+            new_run_id = await temporal_runtime.reset_workflow(workflow_id, run_id, reason)
+        except Exception as exc:
+            temporal_runtime._client = None
+            raise RuntimeError(f"Temporal reset 失败: {exc}") from exc
+        # 回写 execution 行：新 run_id，状态置 RUNNING，等下次 refresh 同步
+        execution = self.repo.get_execution_by_workflow(workflow_id)
+        if execution:
+            execution["runId"] = new_run_id
+            execution["status"] = "RUNNING"
+            execution["completedAt"] = None
+            execution["message"] = f"任务重试：reset 到新 run_id={new_run_id}"
+            self.repo.save_execution(execution)
+        # 回写 task 状态：置执行中，新 run_id
+        task["runId"] = new_run_id
+        task["taskStatus"] = "执行中"
+        task["status"] = "处理中"
+        task["logs"] = (task.get("logs") or []) + [
+            f"任务重试：reset 到新 run_id={new_run_id}，原因：{reason}"
+        ]
+        self.repo.save_task(task)
+        return {"taskId": task_id, "workflowId": workflow_id, "newRunId": new_run_id}
+
+    async def submit_review(
+        self,
+        task_id: str,
+        decision: str,
+        modified_result: dict[str, Any] | None = None,
+        note: str = "",
+        reviewer: str | None = None,
+    ) -> dict[str, Any]:
+        """人工审核：向 kg.custom.steps workflow 发 submit_review signal。
+
+        workflow 暂停在 PENDING_REVIEW step 时，本方法恢复它：approve 则继续
+        （modifiedResult 可覆盖下游输入），reject 则终止。
+        鉴权在 backend handler 层做——workflow 信任 signal 来源。
+        """
+        task = self.repo.get_task(task_id)
+        if task is None:
+            raise KeyError(task_id)
+        workflow_type = task.get("workflowType")
+        if workflow_type != "kg.custom.steps":
+            raise ValueError(f"任务 {task_id} workflowType={workflow_type}，不支持 signal 审核")
+        workflow_id = task.get("workflowId")
+        if not workflow_id:
+            raise ValueError(f"任务 {task_id} 无 workflowId")
+        try:
+            client = await temporal_runtime.client()
+            handle = client.get_workflow_handle(workflow_id)
+            await handle.signal(
+                "submit_review",
+                {
+                    "decision": decision,
+                    "modifiedResult": modified_result,
+                    "note": note,
+                    "reviewer": reviewer,
+                },
+            )
+        except Exception as exc:
+            temporal_runtime._client = None
+            raise RuntimeError(f"signal 提交失败: {exc}") from exc
+        task["logs"] = (task.get("logs") or []) + [
+            f"人工审核：decision={decision} reviewer={reviewer or 'anonymous'}"
+            f" note={note or '(无)'}"
+        ]
+        self.repo.save_task(task)
+        return {"taskId": task_id, "decision": decision, "reviewer": reviewer}
 
     def _sync_task_from_execution(self, execution: dict[str, Any]) -> None:
         """execution 终态时把状态回写到关联 task；若脚本返回了 stages，额外回写 steps/output。
@@ -462,6 +564,63 @@ class WorkflowOperationsService:
             "scriptPath": str(script_path),
             "timeoutSeconds": timeout,
             "steps": [f"python:{function_name}"],
+            "createdAt": _now(),
+        }
+        self.repo.save_definition(definition)
+        return definition
+
+    def create_step_pipeline_definition(
+        self,
+        filename: str,
+        content: bytes,
+        steps: list[dict[str, Any]],
+        definition_id: str | None,
+        name: str | None,
+    ) -> dict[str, Any]:
+        """上传 kg.custom.steps 流水线脚本 + step manifest。
+
+        AST 校验每个 step.functionName 都在脚本里；step id 必须唯一。
+        """
+        if len(content) > 1024 * 1024:
+            raise ValueError("Python 脚本不能超过 1 MiB")
+        if not steps:
+            raise ValueError("steps manifest 至少 1 步")
+        source = content.decode("utf-8")
+        tree = ast.parse(source, filename=filename)
+        functions = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        missing = [s["functionName"] for s in steps if s.get("functionName") not in functions]
+        if missing:
+            raise ValueError(f"脚本缺少以下 step 函数: {missing}")
+        step_ids = [s["id"] for s in steps]
+        if len(set(step_ids)) != len(step_ids):
+            raise ValueError("steps 中 id 不能重复")
+        safe_id = definition_id or re.sub(r"[^a-z0-9_-]", "-", Path(filename).stem.lower()).strip(
+            "-"
+        )
+        safe_id = safe_id or f"steps-{uuid4().hex[:8]}"
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,63}", safe_id):
+            raise ValueError("definition_id 只能包含小写字母、数字、下划线和连字符")
+        backend_dir = Path(__file__).resolve().parents[1]
+        directory = Path(
+            os.getenv("WORKFLOW_SCRIPT_DIR", str(backend_dir / "var" / "workflow-scripts"))
+        )
+        directory.mkdir(parents=True, exist_ok=True)
+        script_path = directory / f"{safe_id}.py"
+        script_path.write_bytes(content)
+        definition = {
+            "id": safe_id,
+            "name": name or Path(filename).stem,
+            "workflowType": "kg.custom.steps",
+            "category": "custom",
+            "taskQueue": temporal_runtime.task_queue,
+            "active": True,
+            "sourceKind": "python",
+            "scriptPath": str(script_path),
+            "steps": steps,
             "createdAt": _now(),
         }
         self.repo.save_definition(definition)

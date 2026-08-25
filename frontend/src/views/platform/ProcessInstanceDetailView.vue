@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getTask, type ProcessingInstance, type UpdateBatch } from '../../api/workflowOperations'
+import { getTask, retryTask, submitTaskReview, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch } from '../../api/workflowOperations'
 
 type StepStatus = '成功' | '运行中' | '需人工处理' | '待执行'
 type RiskLevel = '低风险' | '中风险' | '高风险'
@@ -30,6 +30,7 @@ const batch = computed(() => processingInstance.value?.batch ?? fallbackBatch)
 const isConstructionTask = computed(() => processingInstance.value?.stage === '图谱构建' || String(route.params.area) === 'construction')
 const needsTaskReview = computed(() => ['执行出错', '等待人工审核'].includes(processingInstance.value?.taskStatus ?? ''))
 const activeTab = ref<DetailTab>('overview')
+const isPipelineTask = computed(() => processingInstance.value?.workflowType === 'kg.custom.steps')
 
 const baseSteps: Omit<Step, 'status' | 'count' | 'abnormal' | 'duration'>[] = [
   { id: 'source', phase: '数据处理', name: '数据接入', risk: '低风险', description: '读取科技要素库增量数据并校验连接。', engine: 'Data Connector 3.1' },
@@ -46,6 +47,9 @@ const baseSteps: Omit<Step, 'status' | 'count' | 'abnormal' | 'duration'>[] = [
 ]
 
 const steps = computed<Step[]>(() => {
+  if (isPipelineTask.value) {
+    return buildPipelineSteps()
+  }
   if (processingInstance.value?.steps?.length) {
     return processingInstance.value.steps.map((step) => ({
       ...step,
@@ -90,6 +94,13 @@ const steps = computed<Step[]>(() => {
 })
 
 function initialStepId() {
+  if (isPipelineTask.value) {
+    const state = processingInstance.value?.pipeline
+    if (state?.current) return state.current
+    const pending = pipelineSteps.value.find((s) => s.info.status === 'PENDING_REVIEW' || s.info.status === 'FAILED')
+    if (pending) return pending.id
+    return pipelineSteps.value[0]?.id ?? 'source'
+  }
   if (processingInstance.value?.reviewType === 'Schema 批量映射失败') return 'schema'
   if (processingInstance.value?.reviewType === '公共字典配置异常') return 'normalize'
   if (processingInstance.value?.reviewType === '模型批量输出异常') return 'llm'
@@ -99,6 +110,36 @@ function initialStepId() {
   if (['关系证据不足', '属性冲突', '低置信度'].includes(processingInstance.value?.reviewType ?? '')) return 'validate'
   if (processingInstance.value) return 'llm'
   return steps.value.find((step) => step.status === '需人工处理')?.id ?? 'source'
+}
+
+function mapPipelineStatus(s: PipelineStepInfo['status']): StepStatus {
+  switch (s) {
+    case 'COMPLETED': return '成功'
+    case 'RUNNING': return '运行中'
+    case 'PENDING_REVIEW': return '需人工处理'
+    case 'REVIEWED': return '成功'
+    case 'REJECTED': return '需人工处理'
+    case 'FAILED': return '需人工处理'
+    default: return '待执行'
+  }
+}
+
+function buildPipelineSteps(): Step[] {
+  const state = processingInstance.value?.pipeline
+  if (!state?.steps) return [] as Step[]
+  return Object.entries(state.steps).map(([id, info]) => ({
+    id,
+    phase: '图谱构建' as const,
+    name: id,
+    status: mapPipelineStatus(info.status),
+    risk: (info.status === 'FAILED' || info.status === 'PENDING_REVIEW' || info.status === 'REJECTED' ? '高风险' : '低风险') as RiskLevel,
+    count: info.attempt ? `attempt=${info.attempt}` : '-',
+    abnormal: info.error ? '1' : '0',
+    duration: '-',
+    description: info.error || `kg.custom.steps · ${info.status}`,
+    engine: 'kg.custom.steps',
+    output: info.output,
+  }))
 }
 
 const selectedStepId = ref(String(route.query.step || initialStepId()))
@@ -201,6 +242,57 @@ const selectStep = (id: string) => {
   void router.replace({ query: { ...route.query, step: id } })
 }
 
+// === kg.custom.steps 流水线状态 ===
+const pipelineSteps = computed(() => {
+  const state = processingInstance.value?.pipeline
+  if (!state?.steps) return [] as { id: string; info: PipelineStepInfo; isCurrent: boolean }[]
+  return Object.entries(state.steps).map(([id, info]) => ({
+    id,
+    info,
+    isCurrent: state.current === id,
+  }))
+})
+const pendingReviewStep = computed(() => pipelineSteps.value.find((s) => s.info.status === 'PENDING_REVIEW'))
+const isPipelineFailed = computed(() => processingInstance.value?.taskStatus === '执行出错' && pipelineSteps.value.some((s) => s.info.status === 'FAILED'))
+const reviewReviewer = ref('')
+const reviewNote = ref('')
+const reviewModifiedJson = ref('')
+const reviewSubmitting = ref(false)
+const retrySubmitting = ref(false)
+const pipelineMessage = ref('')
+
+async function handlePipelineReview(decision: 'approve' | 'reject') {
+  if (!pendingReviewStep.value) return
+  let modifiedResult: Record<string, unknown> | undefined
+  if (decision === 'approve' && reviewModifiedJson.value.trim()) {
+    try { modifiedResult = JSON.parse(reviewModifiedJson.value) as Record<string, unknown> }
+    catch { pipelineMessage.value = 'modifiedResult 不是合法 JSON'; return }
+  }
+  reviewSubmitting.value = true
+  try {
+    await submitTaskReview(taskId.value, { decision, modifiedResult, note: reviewNote.value, reviewer: reviewReviewer.value || undefined })
+    pipelineMessage.value = `${decision === 'approve' ? '通过' : '驳回'} 已发送，workflow 将继续`
+    await loadTaskDetail()
+  } catch (e) {
+    pipelineMessage.value = `审核失败：${(e as Error).message}`
+  } finally {
+    reviewSubmitting.value = false
+  }
+}
+
+async function handlePipelineRetry() {
+  retrySubmitting.value = true
+  try {
+    const result = await retryTask(taskId.value)
+    pipelineMessage.value = `重试已下发，新 run_id=${result.newRunId}`
+    await loadTaskDetail()
+  } catch (e) {
+    pipelineMessage.value = `重试失败：${(e as Error).message}`
+  } finally {
+    retrySubmitting.value = false
+  }
+}
+
 function formatIo(value: unknown): string {
   if (typeof value === 'string') return value
   try {
@@ -245,6 +337,8 @@ onMounted(loadTaskDetail)
       <article><span>任务 ID</span><strong class="version">{{ taskId }}</strong><em>{{ batch.id }}</em></article>
     </section>
 
+    <p v-if="pipelineMessage" class="pipeline-message">{{ pipelineMessage }}</p>
+
     <section class="detail-workspace">
       <aside class="process-sidebar">
         <header><div><h2>{{ visiblePhase }}流程</h2></div><span>{{ visibleSteps.filter(step => step.status === '成功').length }}/{{ visibleSteps.length }}</span></header>
@@ -259,7 +353,7 @@ onMounted(loadTaskDetail)
       </aside>
 
       <main class="step-detail">
-        <header class="step-head"><div><span>{{ selectedStep.phase }} · {{ attentionLabel }}</span><h2>{{ selectedStep.name }} <b v-if="isAiStep">AI 重点关注节点</b><b v-else-if="isQualityStep">含 AI 辅助检验</b></h2><p>{{ selectedStep.description }}</p></div><RouterLink v-if="needsReview" :to="`/manual-review/task/${taskId}`">进入人工处理 →</RouterLink></header>
+        <header class="step-head"><div><span>{{ selectedStep.phase }} · {{ attentionLabel }}</span><h2>{{ selectedStep.name }} <b v-if="isAiStep">AI 重点关注节点</b><b v-else-if="isQualityStep">含 AI 辅助检验</b></h2><p>{{ selectedStep.description }}</p></div><button v-if="isPipelineTask && isPipelineFailed" type="button" class="step-head-retry" :disabled="retrySubmitting" @click="handlePipelineRetry">{{ retrySubmitting ? '提交中…' : '重试（reset 回放）' }}</button><RouterLink v-else-if="!isPipelineTask && needsReview" :to="`/manual-review/task/${taskId}`">进入人工处理 →</RouterLink></header>
         <nav class="detail-tabs"><button v-for="tab in ([['overview','概况与结果'],['io','输入输出'],['logs','异常与日志'],['lineage','数据溯源']] as const)" :key="tab[0]" type="button" :class="{ active: activeTab === tab[0] }" @click="activeTab = tab[0]">{{ tab[1] }}</button></nav>
 
         <div v-if="activeTab === 'overview'" class="overview-content">
@@ -267,7 +361,17 @@ onMounted(loadTaskDetail)
           <section v-if="isAiStep" class="ai-card"><header><div><b>AI</b><span><strong>大模型运行透明度</strong><em>展示版本、阈值、分流与质量，不展示模型内部思维过程</em></span></div><i>需关注</i></header><dl><div v-for="row in modelMetrics" :key="row[0]"><dt>{{ row[0] }}</dt><dd>{{ row[1] }}</dd></div></dl></section>
           <section v-if="isAiStep" class="prompt-card"><h3>实际提示词模板 <span>kg-extract-v2.6.1</span></h3><pre>{{ llmPrompt }}</pre></section>
           <section v-if="isQualityStep" class="quality-strategy"><h3>质量检验项与判定策略</h3><table><thead><tr><th>检验项</th><th>方法</th><th>具体判定策略</th><th>结果</th></tr></thead><tbody><tr v-for="item in qualityChecks" :key="item.name"><td>{{ item.name }}</td><td><span :class="{ ai: item.method.includes('大模型') }">{{ item.method }}</span></td><td>{{ item.strategy }}</td><td>{{ item.result }}</td></tr></tbody></table><div class="quality-ai-note"><b>AI</b><span><strong>语义合理性检验使用大模型辅助</strong><em>模型 Qwen3-32B-Instruct · Prompt quality-semantic-v1.3 · AI 只告警，不直接删改数据</em></span></div><pre>{{ qualityPrompt }}</pre></section>
-          <section v-if="needsReview" class="result-card alert"><h3>执行结果与业务验收</h3><template v-if="isExecutionInterrupted"><p><strong>执行结果：</strong>任务未运行完成，尚未产生可验收结果。</p><p><strong>置信度：</strong>无，因为没有模型结果。</p></template><template v-else><p><strong>执行结果：</strong>程序已正常运行完成并生成输出。</p><p><strong>验收结果：</strong>{{ processingInstance?.result }}，当前不能视为正确结果。</p></template><p><strong>后续处理：</strong>{{ blockingStrategy }}。</p></section>
+          <section v-if="isPipelineTask && pendingReviewStep" class="result-card alert pipeline-review-card">
+            <h3>人工审核 · step "{{ pendingReviewStep.id }}" 暂停中</h3>
+            <p><strong>当前状态：</strong>workflow 已暂停在 PENDING_REVIEW，等待 submit_review signal 恢复。</p>
+            <p><strong>step 输出：</strong></p>
+            <pre class="review-output">{{ formatIo(pendingReviewStep.info.output) }}</pre>
+            <label>审核人<input v-model="reviewReviewer" placeholder="留空则匿名" /></label>
+            <label>附注<input v-model="reviewNote" placeholder="可选" /></label>
+            <label>修正结果 JSON（仅 approve 时可填，覆盖下游 prevOutputs[stepId]）<textarea v-model="reviewModifiedJson" rows="3" placeholder='{"key": "value"}' /></label>
+            <div class="review-actions"><button type="button" class="primary" :disabled="reviewSubmitting" @click="handlePipelineReview('approve')">通过</button><button type="button" class="danger" :disabled="reviewSubmitting" @click="handlePipelineReview('reject')">驳回</button></div>
+          </section>
+          <section v-else-if="needsReview" class="result-card alert"><h3>执行结果与业务验收</h3><template v-if="isExecutionInterrupted"><p><strong>执行结果：</strong>任务未运行完成，尚未产生可验收结果。</p><p><strong>置信度：</strong>无，因为没有模型结果。</p></template><template v-else><p><strong>执行结果：</strong>程序已正常运行完成并生成输出。</p><p><strong>验收结果：</strong>{{ processingInstance?.result }}，当前不能视为正确结果。</p></template><p><strong>后续处理：</strong>{{ blockingStrategy }}。</p></section>
           <section v-else class="result-card success"><h3>执行结果与业务验收</h3><p><strong>执行成功：</strong>程序正常结束。 <strong>结果已通过：</strong>{{ processingInstance?.result || '输出通过当前质量规则' }}。两项状态分别记录，不相互替代。</p></section>
         </div>
 
@@ -311,4 +415,23 @@ onMounted(loadTaskDetail)
 .process-step.has-review:not(.is-需人工处理){border-color:#f4d39b;background:#fffbf2}.process-step.has-review:not(.is-需人工处理)>small{color:#b54708}
 .success-text{color:#067647}.prompt-card,.quality-strategy{grid-column:1/-1;overflow:hidden}.prompt-card h3,.quality-strategy h3{display:flex;align-items:center;justify-content:space-between}.prompt-card h3 span{padding:2px 6px;border-radius:4px;background:#eee8ff;color:#6941c6;font-size:8px;font-weight:500}.prompt-card pre,.quality-strategy>pre{margin:0;padding:13px 15px;background:#201a32;color:#eee9ff;font:10px/18px Consolas,monospace;white-space:pre-wrap}.quality-strategy table{width:100%;border-collapse:collapse;font-size:9px}.quality-strategy th,.quality-strategy td{padding:9px 11px;border-bottom:1px solid #e5ecf5;text-align:left;vertical-align:top}.quality-strategy th{background:#f5f8fc;color:#66758f}.quality-strategy td span.ai{display:inline-flex;padding:2px 5px;border-radius:4px;background:#eee8ff;color:#6941c6}.quality-ai-note{display:flex;align-items:center;gap:9px;margin:10px;padding:10px;border:1px solid #d9ccfa;border-radius:6px;background:#fbfaff}.quality-ai-note>b{display:grid;place-items:center;width:26px;height:26px;border-radius:5px;background:#7f56d9;color:#fff;font-size:9px}.quality-ai-note span{display:grid;gap:2px}.quality-ai-note strong{font-size:10px}.quality-ai-note em{color:#766b91;font-size:8px;font-style:normal}.issue-list strong.safe{color:#067647}.lineage span small{display:block;margin-top:4px;color:#7d899b;font-size:8px}
 .lineage-compare>header{display:flex;align-items:center;justify-content:space-between;padding:11px 13px;border-bottom:1px solid #e4ecf6;background:#fbfdff}.lineage-compare>header h3{padding:0;border:0}.lineage-compare>header p{margin:3px 0 0;color:#7a879a;font-size:9px}.lineage-compare>header>span{padding:3px 7px;border-radius:999px;background:#eaf2ff;color:#165dff;font-size:9px}.lineage-compare code{padding:2px 5px;border-radius:4px;background:#f1f5fa;color:#344f73;font:9px Consolas,monospace}.lineage-compare .raw-value{max-width:360px;color:#354760;line-height:17px;white-space:normal}
+
+.pipeline-panel{margin-bottom:12px;padding:14px 16px;border:1px solid #c9dcf7;border-radius:9px;background:#fff}
+.pipeline-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.pipeline-head h2{margin:0;font-size:15px}
+.pipeline-message{margin:0 0 10px;padding:8px 12px;border:1px solid #b2ccff;border-radius:6px;background:#f0f5ff;color:#344f7a;font-size:11px}
+.step-head-retry{height:34px;padding:0 14px;border:1px solid #d92d20;border-radius:6px;background:#d92d20;color:#fff;cursor:pointer;font-size:11px}
+.step-head-retry:disabled{opacity:.6;cursor:not-allowed}
+.pipeline-review-card{display:grid;gap:8px}
+.pipeline-review-card h3{margin:0;color:#b54708;font-size:12px}
+.pipeline-review-card p{margin:0;color:#596981;font-size:10px;line-height:18px}
+.pipeline-review-card pre.review-output{margin:0;padding:8px;background:#17233b;color:#d9e7ff;font:10px/16px Consolas,monospace;white-space:pre-wrap;max-height:200px;overflow:auto}
+.pipeline-review-card label{display:grid;gap:4px;font-size:10px;color:#718099}
+.pipeline-review-card input,.pipeline-review-card textarea{padding:6px 8px;border:1px solid #dce8f8;border-radius:5px;font:11px/16px Consolas,monospace}
+.pipeline-review-card textarea{resize:vertical}
+.review-actions{display:flex;gap:8px;margin-top:6px}
+.review-actions button{height:32px;padding:0 14px;border-radius:6px;cursor:pointer;font-size:11px}
+.review-actions .primary{border:1px solid #12b76a;background:#12b76a;color:#fff}
+.review-actions .danger{border:1px solid #d92d20;background:#d92d20;color:#fff}
+.review-actions button:disabled{opacity:.6;cursor:not-allowed}
 </style>

@@ -26,7 +26,8 @@ def build_sources(payload: dict[str, Any]) -> list[tuple[str, str, Any]]:
     table_choice = payload.get("table", "all")
     tables = TABLES if table_choice == "all" else (table_choice,)
     return [
-        (table, f"SELECT * FROM {table} ORDER BY publication_id", journal_record) for table in tables
+        (table, f"SELECT * FROM {table} ORDER BY publication_id", journal_record)
+        for table in tables
     ]
 
 

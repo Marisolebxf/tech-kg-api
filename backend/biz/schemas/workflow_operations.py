@@ -94,3 +94,46 @@ class WorkflowScheduleRequest(BaseModel):
 
 class ScheduleStateRequest(BaseModel):
     active: bool
+
+
+class RetryPolicyConfig(BaseModel):
+    """Per-step Temporal RetryPolicy；缺省 maximumAttempts=1 不重试。"""
+
+    maximum_attempts: int = Field(default=1, ge=1, alias="maximumAttempts")
+    initial_interval_seconds: int = Field(default=1, ge=1, alias="initialIntervalSeconds")
+    maximum_interval_seconds: int = Field(default=100, ge=1, alias="maximumIntervalSeconds")
+    non_retryable_error_types: list[str] | None = Field(
+        default=None, alias="nonRetryableErrorTypes"
+    )
+
+    model_config = {"populate_by_name": True}
+
+
+class StepManifest(BaseModel):
+    """kg.custom.steps 流水线中单个 step 的声明。"""
+
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    name: str = Field(min_length=1, max_length=100)
+    function_name: str = Field(alias="functionName", pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+    timeout_seconds: int = Field(default=600, ge=1, alias="timeoutSeconds")
+    retry_policy: RetryPolicyConfig = Field(default_factory=RetryPolicyConfig, alias="retryPolicy")
+    require_review: bool = Field(default=False, alias="requireReview")
+
+    model_config = {"populate_by_name": True}
+
+
+class TaskReviewRequest(BaseModel):
+    """人工审核：approve/reject，可附 modifiedResult 覆盖下游输入。"""
+
+    decision: Literal["approve", "reject"]
+    modified_result: dict[str, Any] | None = Field(default=None, alias="modifiedResult")
+    note: str = ""
+    reviewer: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class TaskRetryRequest(BaseModel):
+    """失败任务重试：调 Temporal ResetWorkflowExecution。"""
+
+    reason: str = "manual retry"

@@ -243,7 +243,6 @@ def test_request_rejects_overlong_and_abnormal_expert_ids(field: str) -> None:
     with pytest.raises(ValidationError, match="异常字符"):
         ExpertColleagueRelationRequest.model_validate(payload)
 
-
     payload[field] = "person a"
     with pytest.raises(ValidationError, match="空格"):
         ExpertColleagueRelationRequest.model_validate(payload)
@@ -251,10 +250,7 @@ def test_request_rejects_overlong_and_abnormal_expert_ids(field: str) -> None:
 
 def test_request_rejects_future_month_range() -> None:
     today = date.today()
-    future_month = "{}-{:02d}".format(
-        today.year + (1 if today.month == 12 else 0),
-        1 if today.month == 12 else today.month + 1,
-    )
+    future_month = f"{today.year + (1 if today.month == 12 else 0)}-{1 if today.month == 12 else today.month + 1:02d}"
     with pytest.raises(ValidationError, match="当前月份"):
         ExpertColleagueRelationRequest.model_validate(
             {
@@ -264,6 +260,7 @@ def test_request_rejects_future_month_range() -> None:
                 "end_time": future_month,
             }
         )
+
 
 def test_merge_relations_keeps_multiple_employment_periods() -> None:
     service = ExpertColleagueRelationService()

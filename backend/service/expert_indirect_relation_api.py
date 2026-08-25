@@ -176,7 +176,10 @@ class ExpertIndirectRelationApiService(KGModuleScaffoldService):
             raise subgraph_r
         core_node, subgraph = core_node_r, subgraph_r
         result = _build_result(core_node, subgraph, body)
-        payload = {"structuredResult": result}
+        payload = {
+            "structuredResult": result,
+            "provenance": _build_provenance(result),
+        }
         with _result_cache_lock:
             _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, payload)
         return payload
@@ -293,6 +296,111 @@ def _edge_brief(edge: dict[str, Any]) -> dict[str, Any]:
         "source": str(edge.get("source") or ""),
         "target": str(edge.get("target") or ""),
         "properties": edge.get("properties") or {},
+    }
+
+
+def _source_metadata(properties: dict[str, Any]) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    for key in (
+        "source_system",
+        "source_table",
+        "source_record_id",
+        "ingest_batch",
+        "ingest_time",
+        "match_method",
+        "match_evidence",
+    ):
+        value = str(properties.get(key) or "").strip()
+        if value:
+            metadata[key] = value
+    return metadata
+
+
+def _technical_table(metadata: dict[str, str], fallback: str) -> str:
+    source_system = metadata.get("source_system", "")
+    source_table = metadata.get("source_table", "")
+    if source_system and source_table:
+        return f"{source_system}.{source_table}"
+    return source_table or fallback
+
+
+def _build_provenance(result: dict[str, Any]) -> dict[str, Any]:
+    """基于图节点和图边携带的真实入库元数据构造溯源证据。"""
+    evidences: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def append_node(node: dict[str, Any]) -> None:
+        properties = node.get("properties") or {}
+        metadata = _source_metadata(properties)
+        node_id = str(node.get("id") or "")
+        record_id = metadata.get("source_record_id") or node_id
+        key = ("node", node_id, record_id)
+        if key in seen:
+            return
+        seen.add(key)
+        label = str((node.get("labels") or ["Entity"])[0])
+        batch = metadata.get("ingest_batch") or "—"
+        ingest_time = metadata.get("ingest_time") or "—"
+        evidences.append(
+            {
+                "title": f"实体 · {node.get('name') or node_id}",
+                "businessTable": str(node.get("entityType") or "图谱实体"),
+                "technicalTable": _technical_table(metadata, label),
+                "recordId": record_id,
+                "fieldIdentifier": (
+                    "source_record_id" if metadata.get("source_record_id") else "graph_vid"
+                ),
+                "summary": f"图标签：{label}；入库批次：{batch}；入库时间：{ingest_time}",
+            }
+        )
+
+    def append_edge(edge: dict[str, Any]) -> None:
+        properties = edge.get("properties") or {}
+        metadata = _source_metadata(properties)
+        edge_id = str(edge.get("id") or "")
+        record_id = metadata.get("source_record_id") or edge_id
+        edge_type = str(edge.get("type") or "Relation")
+        key = ("edge", edge_id, record_id)
+        if key in seen:
+            return
+        seen.add(key)
+        details = [
+            f"路径段：{edge.get('source') or '—'} → {edge.get('target') or '—'}",
+            f"入库批次：{metadata.get('ingest_batch') or '—'}",
+            f"入库时间：{metadata.get('ingest_time') or '—'}",
+        ]
+        if metadata.get("match_method"):
+            details.append(f"匹配方法：{metadata['match_method']}")
+        if metadata.get("match_evidence"):
+            details.append(f"匹配证据：{metadata['match_evidence']}")
+        evidences.append(
+            {
+                "title": f"关系 · {edge_type}",
+                "businessTable": "图谱关系",
+                "technicalTable": _technical_table(metadata, edge_type),
+                "recordId": record_id,
+                "fieldIdentifier": (
+                    "source_record_id" if metadata.get("source_record_id") else "graph_edge_id"
+                ),
+                "summary": "；".join(details),
+            }
+        )
+
+    append_node(result["coreNode"])
+    for path in result.get("paths", [])[:8]:
+        for node in path.get("nodes", []):
+            append_node(node)
+        for edge in path.get("edges", []):
+            append_edge(edge)
+
+    relation_types = "、".join(result.get("relationTypeCount", {}).keys()) or "无"
+    return {
+        "sourceDatabase": f"trs-graph / space={GRAPH_SPACE}",
+        "summary": (
+            f"命中 {result.get('pathCount', 0)} 条间接路径；"
+            f"路径深度={result.get('pathDepth', 0)}；关系类型={relation_types}。"
+        ),
+        "evidences": evidences,
     }
 
 

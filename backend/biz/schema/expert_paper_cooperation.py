@@ -115,5 +115,21 @@ class StructuredPaperCooperationResult(BaseModel):
     sharedContribution: list[str] = Field(default_factory=list, description="合作贡献标签。")
 
 
+class PaperCooperationProvenanceEvidence(BaseModel):
+    title: str
+    businessTable: str
+    technicalTable: str
+    recordId: str
+    fieldIdentifier: str
+    summary: str
+
+
+class PaperCooperationProvenance(BaseModel):
+    sourceDatabase: str
+    summary: str
+    evidences: list[PaperCooperationProvenanceEvidence] = Field(default_factory=list)
+
+
 class ExpertPaperCooperationStructuredResultOnlyResponse(BaseModel):
     structuredResult: StructuredPaperCooperationResult
+    provenance: PaperCooperationProvenance

@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from biz.schema.expert_indirect_relation import ExpertIndirectRelationRequest
-from service.expert_indirect_relation_api import _build_result
+from service.expert_indirect_relation_api import _build_provenance, _build_result
 
 
 def _core_node():
@@ -128,6 +128,46 @@ def test_project_relation_type_returns_only_project_paths():
     assert result["pathCount"] == 1
     assert result["relationTypeCount"] == {"项目关联": 1}
     assert result["paths"][0]["targetNode"]["name"] == "机构一"
+
+
+def test_builds_provenance_from_real_graph_metadata():
+    core_node = _core_node()
+    core_node["properties"].update(
+        {
+            "source_system": "gkx_element",
+            "source_table": "dwd_scholar",
+            "source_record_id": "A",
+            "ingest_batch": "BATCH_PERSON",
+            "ingest_time": "2026-08-23 09:21:28",
+        }
+    )
+    subgraph = _subgraph()
+    subgraph["nodes"][0] = core_node
+    subgraph["edges"][0]["properties"].update(
+        {
+            "source_table": "dwd_scholar_coauthor",
+            "source_record_id": "A_B",
+            "ingest_batch": "BATCH_EDGE",
+            "ingest_time": "2026-08-23 16:20:30",
+        }
+    )
+    body = ExpertIndirectRelationRequest(
+        core_node_id="A",
+        relation_types=["学术关联"],
+        path_depth=2,
+        min_strength=0.65,
+    )
+
+    provenance = _build_provenance(_build_result(core_node, subgraph, body))
+
+    assert provenance["sourceDatabase"].startswith("trs-graph / space=")
+    assert provenance["summary"].startswith("命中 1 条间接路径")
+    core_evidence = next(item for item in provenance["evidences"] if item["recordId"] == "A")
+    assert core_evidence["technicalTable"] == "gkx_element.dwd_scholar"
+    assert "BATCH_PERSON" in core_evidence["summary"]
+    edge_evidence = next(item for item in provenance["evidences"] if item["recordId"] == "A_B")
+    assert edge_evidence["technicalTable"] == "dwd_scholar_coauthor"
+    assert "BATCH_EDGE" in edge_evidence["summary"]
 
 
 def test_relation_type_is_single_choice_from_supported_catalog():

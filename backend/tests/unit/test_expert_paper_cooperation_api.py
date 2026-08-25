@@ -25,6 +25,11 @@ class FakeGraphSearchApi:
                     "name_zh": "专家甲",
                     "scholar_org": "甲单位",
                     "research_fields": "医学影像;人工智能",
+                    "source_system": "gkx_element",
+                    "source_table": "dwd_scholar",
+                    "source_record_id": "A",
+                    "ingest_batch": "BATCH_PERSON",
+                    "ingest_time": "2026-08-23 09:21:28",
                 },
             },
             "B": {
@@ -52,8 +57,17 @@ class FakeGraphSearchApi:
                         "nodes": [{"id": "person_A"}, {"id": "person_B"}],
                         "edges": [
                             {
+                                "id": "person_A->person_B@0",
                                 "type": "COAUTHOR_WITH",
-                                "properties": {"co_paper_count": 35},
+                                "source": "person_A",
+                                "target": "person_B",
+                                "properties": {
+                                    "co_paper_count": 35,
+                                    "source_table": "dwd_scholar_coauthor",
+                                    "source_record_id": "A_B",
+                                    "ingest_batch": "BATCH_EDGE",
+                                    "ingest_time": "2026-08-23 16:20:30",
+                                },
                             }
                         ],
                     }
@@ -129,6 +143,14 @@ async def test_coauthor_edge_fallback_keeps_unproven_fields_empty():
     assert result["journalLevelCount"] == {}
     assert result["conferenceLevelCount"] == {}
     assert result["citation"] == {"total": 0, "max": 0}
+    provenance = result["_provenance"]
+    assert provenance["sourceDatabase"].startswith("trs-graph / space=")
+    expert_evidence = next(item for item in provenance["evidences"] if item["recordId"] == "A")
+    assert expert_evidence["technicalTable"] == "gkx_element.dwd_scholar"
+    assert "BATCH_PERSON" in expert_evidence["summary"]
+    relation_evidence = next(item for item in provenance["evidences"] if item["recordId"] == "A_B")
+    assert relation_evidence["technicalTable"] == "dwd_scholar_coauthor"
+    assert "BATCH_EDGE" in relation_evidence["summary"]
 
 
 @pytest.mark.asyncio

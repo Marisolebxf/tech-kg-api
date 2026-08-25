@@ -203,6 +203,7 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
       TEMPORAL_TASK_QUEUE: tech-kg-workflows
+      TEMPORAL_MAX_CONCURRENT_ACTIVITIES: ${TEMPORAL_MAX_CONCURRENT_ACTIVITIES:-4}
       WORKFLOW_DATABASE_PATH: /var/lib/tech-kg/workflows.db
       WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
       TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://trs-graph-service:8090}

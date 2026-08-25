@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -26,12 +27,14 @@ class ExpertColleagueRelationRequest(BaseModel):
 
     expertId: str = Field(
         min_length=1,
+        max_length=64,
         validation_alias=AliasChoices("expertId", "expert_id", "expert_a_id"),
         description="专家 A 的 VID、scholar_id、source_record_id 或精确姓名。",
     )
     targetExpertId: str | None = Field(
         default=None,
         min_length=1,
+        max_length=64,
         validation_alias=AliasChoices("targetExpertId", "target_expert_id", "expert_b_id"),
         description="专家 B 的 VID、scholar_id、source_record_id 或精确姓名。",
     )
@@ -68,14 +71,20 @@ class ExpertColleagueRelationRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=50)
     offset: int = Field(default=0, ge=0, description="分页偏移量。")
 
-    @field_validator("expertId", "targetExpertId")
+    @field_validator("expertId", "targetExpertId", mode="before")
     @classmethod
     def normalize_expert_id(cls, value: str | None) -> str | None:
         if value is None:
             return None
+        if re.search(r"\s", value):
+            raise ValueError("专家标识不能包含空格或 !@#￥%& 等异常字符")
         value = value.strip()
         if not value:
             raise ValueError("expertId cannot be empty")
+        if len(value) > 64:
+            raise ValueError("专家标识长度不能超过 64 个字符")
+        if not re.fullmatch(r"[\w\u4e00-\u9fff·.\-]+", value):
+            raise ValueError("专家标识不能包含空格或 !@#￥%& 等异常字符")
         return value
 
     @field_validator("organization", "department", "teamOrProject")
@@ -116,6 +125,11 @@ class ExpertColleagueRelationRequest(BaseModel):
             raise ValueError("start_time 不能晚于 end_time")
         if self.overlapPeriod and self.startTime:
             raise ValueError("请使用 start_time/end_time，不要同时传 overlap_period")
+        current_month = date.today().strftime("%Y-%m")
+        if self.startTime and self.startTime > current_month:
+            raise ValueError("start_time 不能晚于当前月份")
+        if self.endTime and self.endTime > current_month:
+            raise ValueError("end_time 不能晚于当前月份")
         return self
 
 

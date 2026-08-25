@@ -24,6 +24,9 @@ class TemporalRuntime:
         self.address = os.getenv("TEMPORAL_ADDRESS", "localhost:7233")
         self.namespace = os.getenv("TEMPORAL_NAMESPACE", "default")
         self.task_queue = os.getenv("TEMPORAL_TASK_QUEUE", "tech-kg-workflows")
+        self.max_concurrent_activities = max(
+            1, int(os.getenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", "4"))
+        )
         self._client: Client | None = None
 
     async def client(self) -> Client:
@@ -144,6 +147,7 @@ class TemporalRuntime:
             task_queue=self.task_queue,
             workflows=WORKFLOW_CLASSES,
             activities=ACTIVITIES,
+            max_concurrent_activities=self.max_concurrent_activities,
         )
         await worker.run()
 

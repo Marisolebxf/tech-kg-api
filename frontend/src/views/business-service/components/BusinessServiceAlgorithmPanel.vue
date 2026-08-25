@@ -3,6 +3,7 @@ import ElSelect, { ElOption } from "element-plus/es/components/select/index";
 import "element-plus/es/components/select/style/css";
 import { MonthPicker as AMonthPicker } from "@arco-design/web-vue";
 import zhCN from "@arco-design/web-vue/es/locale/lang/zh-cn";
+import dayjs from "dayjs";
 import { computed, ref, watch } from "vue";
 
 import {
@@ -130,6 +131,18 @@ const parameterErrors = ref<Record<string, string>>({});
 const hasParameterErrors = computed(
   () => Object.keys(parameterErrors.value).length > 0,
 );
+const currentMonth = dayjs().format("YYYY-MM");
+const disableFutureMonth = (value: Date) => dayjs(value).isAfter(dayjs(), "month");
+const colleagueExpertIdPattern = /^[\w\u4e00-\u9fff·.\-]+$/u;
+
+function colleagueExpertIdError(value: string): string | null {
+  if (value.length > 64) return "输入长度不能超过 64 个字符";
+  if (value && !colleagueExpertIdPattern.test(value)) {
+    return "不能包含空格或 !@#￥%& 等异常字符";
+  }
+  return null;
+}
+
 const achievementTypeOptions = [
   { label: "全部", value: "all" },
   { label: "论文", value: "paper" },
@@ -977,10 +990,11 @@ const selectedProvenance = computed(() => {
       selectedEdgeNodes.value.to,
     );
   }
-  return null;
+  const defaultNode = graphNodes.value[0];
+  return defaultNode ? getNodeProvenance(defaultNode) : null;
 });
 const selectedProvenanceTarget = computed(() => {
-  const node = selectedNode.value;
+  const node = selectedNode.value ?? (!selectedEdge.value ? graphNodes.value[0] : null);
   if (node) {
     return {
       kind: "实体",
@@ -2001,8 +2015,10 @@ async function handleRun() {
 
   try {
     if (isLiveColleague.value) {
-      const expertAId = parameterValues.value.expert_a_id?.trim();
-      const expertBId = parameterValues.value.expert_b_id?.trim();
+      const expertAIdRaw = parameterValues.value.expert_a_id ?? "";
+      const expertBIdRaw = parameterValues.value.expert_b_id ?? "";
+      const expertAId = expertAIdRaw.trim();
+      const expertBId = expertBIdRaw.trim();
       if (!expertAId || !expertBId) {
         parameterErrors.value = {
           ...(!expertAId ? { expert_a_id: "请输入专家 A" } : {}),
@@ -2011,12 +2027,41 @@ async function handleRun() {
         showToast("请完善必填项后再执行", "warning");
         return;
       }
+      const idErrors: Record<string, string> = {};
+      for (const [field, value] of [
+        ["expert_a_id", expertAIdRaw],
+        ["expert_b_id", expertBIdRaw],
+      ] as const) {
+        const error = colleagueExpertIdError(value);
+        if (error) idErrors[field] = error;
+      }
+      const startTime = optionalParam(parameterValues.value.start_time);
+      const endTime = optionalParam(parameterValues.value.end_time);
+      if (Boolean(startTime) !== Boolean(endTime)) {
+        if (!startTime) idErrors.start_time = "开始时间和结束时间必须同时填写";
+        if (!endTime) idErrors.end_time = "开始时间和结束时间必须同时填写";
+      }
+      if (startTime && endTime && startTime > endTime) {
+        idErrors.start_time = "开始时间不能晚于结束时间";
+        idErrors.end_time = "结束时间不能早于开始时间";
+      }
+      if (startTime && startTime > currentMonth) {
+        idErrors.start_time = "开始时间不能晚于当前月份";
+      }
+      if (endTime && endTime > currentMonth) {
+        idErrors.end_time = "结束时间不能晚于当前月份";
+      }
+      if (Object.keys(idErrors).length) {
+        parameterErrors.value = idErrors;
+        showToast("请修正参数后再执行", "warning");
+        return;
+      }
       parameterErrors.value = {};
       const body = {
         expert_a_id: expertAId,
         expert_b_id: expertBId,
-        start_time: optionalParam(parameterValues.value.start_time),
-        end_time: optionalParam(parameterValues.value.end_time),
+        start_time: startTime,
+        end_time: endTime,
         limit: 1,
         offset: 0,
       };
@@ -2358,9 +2403,21 @@ function handleParameterInput(fieldName: string, event: Event) {
     ...parameterValues.value,
     [fieldName]: value,
   };
+  if (
+    isLiveColleague.value &&
+    (fieldName === "expert_a_id" || fieldName === "expert_b_id")
+  ) {
+    const error = colleagueExpertIdError(value);
+    if (error) {
+      parameterErrors.value = { ...parameterErrors.value, [fieldName]: error };
+    } else {
+      clearParameterError(fieldName);
+    }
+    return;
+  }
+
   clearParameterError(fieldName);
 }
-
 function handleMonthParameterInput(fieldName: string, value: string | null) {
   parameterValues.value = {
     ...parameterValues.value,
@@ -2370,10 +2427,10 @@ function handleMonthParameterInput(fieldName: string, value: string | null) {
 }
 
 function clearParameterError(fieldName: string) {
-  const fieldsToClear =
-    fieldName === "timeRangeStart" || fieldName === "timeRangeEnd"
-      ? ["timeRangeStart", "timeRangeEnd"]
-      : [fieldName];
+  const pairedTimeFields = ["timeRangeStart", "timeRangeEnd", "start_time", "end_time"];
+  const fieldsToClear = pairedTimeFields.includes(fieldName)
+    ? pairedTimeFields
+    : [fieldName];
   if (!fieldsToClear.some((name) => parameterErrors.value[name])) return;
   const nextErrors = { ...parameterErrors.value };
   fieldsToClear.forEach((name) => delete nextErrors[name]);
@@ -2488,6 +2545,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :locale="zhCN"
           :title="field.description"
           :aria-label="field.name"
+          :disabled-date="isLiveColleague ? disableFutureMonth : undefined"
           :error="Boolean(parameterErrors[field.name])"
           @update:model-value="handleMonthParameterInput(field.name, $event)"
         />
@@ -2499,6 +2557,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :placeholder="field.placeholder ?? field.description"
           :title="field.description"
           :aria-invalid="Boolean(parameterErrors[field.name])"
+          :maxlength="isLiveColleague && (field.name === 'expert_a_id' || field.name === 'expert_b_id') ? undefined : field.maxLength"
           @input="handleParameterInput(field.name, $event)"
         />
         <small
@@ -2753,11 +2812,17 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
                 </dd>
               </div>
               <div>
-                <dt>字段标识 ID</dt>
+                <dt>英文字段名</dt>
                 <dd>
                   <code>{{
-                    selectedProvenance.evidences[0]?.fieldIdentifier
+                    selectedProvenance.evidences[0]?.sourceField || "—"
                   }}</code>
+                </dd>
+              </div>
+              <div>
+                <dt>图空间 VID</dt>
+                <dd>
+                  <code>{{ selectedProvenance.evidences[0]?.graphVid || selectedProvenanceTarget.id }}</code>
                 </dd>
               </div>
               <div>
@@ -2812,9 +2877,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
                   >源数据表：<code>{{ endpoint.technicalTable }}</code></span
                 >
                 <span
-                  >字段标识 ID：<code>{{
-                    endpoint.fieldIdentifier
-                  }}</code></span
+                  >英文字段名：<code>{{ endpoint.sourceField || "—" }}</code></span
+                >
+                <span
+                  >图空间 VID：<code>{{ endpoint.graphVid }}</code></span
                 >
               </article>
             </div>
@@ -3253,7 +3319,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 16px;
   min-width: 236px;
 }
 

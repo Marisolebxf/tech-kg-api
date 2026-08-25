@@ -1,9 +1,21 @@
+from __future__ import annotations
+
+import re
+from datetime import date
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 DataSource = Literal["all"]
 MAX_QUERY_LIMIT = 100
+MAX_TEXT_LENGTH = 64
+
+# 专家标识：字母数字下划线、中文、间隔号、点、连字符；不允许空格与 !@#￥%& 等符号
+EXPERT_ID_PATTERN = re.compile(r"[\w\u4e00-\u9fff·.\-]+")
+# 机构关键词：在专家标识基础上额外允许空格、括号、顿号和斜杠
+INSTITUTION_PATTERN = re.compile(r"[\w\u4e00-\u9fff·.\-()（）、，,/\s]+")
+# 时间：YYYY-MM 或 YYYY-MM-DD
+TIME_PATTERN = re.compile(r"(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?")
 
 
 class ExpertDirectRelationQueryRequest(BaseModel):
@@ -22,17 +34,84 @@ class ExpertDirectRelationQueryRequest(BaseModel):
     )
 
     dataSource: DataSource = Field(default="all", description="数据来源，固定为 all。")
-    expertAId: str | None = Field(default=None, description="专家A scholar_id 或姓名关键词。")
-    expertBId: str | None = Field(default=None, description="专家B scholar_id 或姓名关键词。")
-    institution: str | None = Field(default=None, description="机构关键词。")
-    startTime: str | None = Field(default=None, description="开始日期 YYYY-MM-DD。")
-    endTime: str | None = Field(default=None, description="结束日期 YYYY-MM-DD。")
+    expertAId: str | None = Field(
+        default=None,
+        description=f"专家A scholar_id 或姓名关键词，最多 {MAX_TEXT_LENGTH} 个字符。",
+    )
+    expertBId: str | None = Field(
+        default=None,
+        description=f"专家B scholar_id 或姓名关键词，最多 {MAX_TEXT_LENGTH} 个字符。",
+    )
+    institution: str | None = Field(
+        default=None, description=f"机构关键词，最多 {MAX_TEXT_LENGTH} 个字符。"
+    )
+    startTime: str | None = Field(default=None, description="开始日期 YYYY-MM 或 YYYY-MM-DD。")
+    endTime: str | None = Field(default=None, description="结束日期 YYYY-MM 或 YYYY-MM-DD。")
     limit: int = Field(default=10, ge=1, description=f"返回结果数，最大 {MAX_QUERY_LIMIT}。")
 
     @field_validator("limit")
     @classmethod
     def clamp_limit(cls, value: int) -> int:
         return min(value, MAX_QUERY_LIMIT)
+
+    @field_validator("expertAId", "expertBId", mode="before")
+    @classmethod
+    def normalize_expert_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("专家标识必须是字符串")
+        value = value.strip()
+        if not value:
+            return None
+        if len(value) > MAX_TEXT_LENGTH:
+            raise ValueError(f"专家标识长度不能超过 {MAX_TEXT_LENGTH} 个字符")
+        if re.search(r"\s", value):
+            raise ValueError("专家标识不能包含空格或 !@#￥%& 等异常字符")
+        if not EXPERT_ID_PATTERN.fullmatch(value):
+            raise ValueError("专家标识不能包含空格或 !@#￥%& 等异常字符")
+        return value
+
+    @field_validator("institution", mode="before")
+    @classmethod
+    def normalize_institution(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("机构关键词必须是字符串")
+        value = value.strip()
+        if not value:
+            return None
+        if len(value) > MAX_TEXT_LENGTH:
+            raise ValueError(f"机构关键词长度不能超过 {MAX_TEXT_LENGTH} 个字符")
+        if not INSTITUTION_PATTERN.fullmatch(value):
+            raise ValueError("机构关键词不能包含 !@#￥%& 等异常字符")
+        return value
+
+    @field_validator("startTime", "endTime", mode="before")
+    @classmethod
+    def normalize_time(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("时间必须是字符串")
+        value = value.strip()
+        if not value:
+            return None
+        if not TIME_PATTERN.fullmatch(value):
+            raise ValueError("时间必须使用 YYYY-MM 或 YYYY-MM-DD 格式")
+        return value
+
+    @model_validator(mode="after")
+    def validate_time_range(self) -> ExpertDirectRelationQueryRequest:
+        today = date.today().isoformat()
+        if self.startTime and self.startTime > today[: len(self.startTime)]:
+            raise ValueError("开始时间不能晚于当前时间")
+        if self.endTime and self.endTime > today[: len(self.endTime)]:
+            raise ValueError("结束时间不能晚于当前时间")
+        if self.startTime and self.endTime and self.startTime[:7] > self.endTime[:7]:
+            raise ValueError("开始时间不能晚于结束时间")
+        return self
 
 
 class DirectRelationExpert(BaseModel):

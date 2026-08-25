@@ -25,7 +25,17 @@ def _isolate_caches():
 def _subgraph() -> dict:
     """构造一个 2 跳子图 mock：专家 --EXECUTIVE_BY--> 上市企业；专家 --HAS_PARTICIPANT--> 项目 --PARTICIPATES_IN--> 高校。"""
     nodes = [
-        {"id": EXPERT, "labels": ["Person"], "properties": {"name_cn": "左晶"}},
+        {
+            "id": EXPERT,
+            "labels": ["Person"],
+            "properties": {
+                "name_cn": "左晶",
+                "source_table": "dwd_scholar",
+                "source_record_id": "left_jing",
+                "ingest_batch": "BATCH_20260823_092128_scholar_entities",
+                "ingest_time": "2026-08-23 09:21:28",
+            },
+        },
         {
             "id": "org_lvdie",
             "labels": ["Organization"],
@@ -34,6 +44,10 @@ def _subgraph() -> dict:
                 "listing_status": "已上市",
                 "stock_type": "中国_沪市A股_科创板",
                 "stock_code": "688017.SH",
+                "source_table": "dwd_org_stock_base",
+                "organization_id": "lvdie_org_id",
+                "ingest_batch": "ORG_DEV_FINAL_20260811",
+                "ingest_time": "2026-08-11T04:02:01+00:00",
             },
         },
         {
@@ -126,6 +140,33 @@ async def test_run_parses_governance_and_project_cooperation(monkeypatch):
     # 置信度：governance → 0.9；响应综合 = max(relations) = 0.9
     assert rel.confidence == 0.9
     assert resp.confidence == 0.9
+
+
+@pytest.mark.asyncio
+async def test_run_populates_entity_provenance(monkeypatch):
+    """溯源栏：响应 provenance 映射携带专家与企业的真实源数据表/英文字段名（同同事关系口径）。"""
+    svc = KeyEnterpriseRelationService(base_url="http://x")
+    monkeypatch.setattr(
+        _httpx(),
+        "AsyncClient",
+        lambda *a, **kw: _FakeAsyncClient([("/graph-search/filtered-subgraph/", _subgraph())]),
+    )
+    resp = await svc.run(KeyEnterpriseRelationRequest(expert_id=EXPERT))
+
+    # 专家节点：Person + source_record_id + dwd_scholar → 字段名 scholar_id
+    expert_prov = resp.entity_provenance[EXPERT]
+    assert expert_prov.sourceTable == "dwd_scholar"
+    assert expert_prov.sourceField == "scholar_id"
+    assert expert_prov.sourceValue == "left_jing"
+    assert expert_prov.ingestBatch == "BATCH_20260823_092128_scholar_entities"
+    assert expert_prov.ingestTime == "2026-08-23 09:21:28"
+
+    # 企业节点：Organization + organization_id → 字段名 organization_id
+    org_prov = resp.entity_provenance["org_lvdie"]
+    assert org_prov.sourceTable == "dwd_org_stock_base"
+    assert org_prov.sourceField == "organization_id"
+    assert org_prov.sourceValue == "lvdie_org_id"
+    assert org_prov.ingestBatch == "ORG_DEV_FINAL_20260811"
 
 
 def test_key_tech_enterprise_only_coerces_string_bool():

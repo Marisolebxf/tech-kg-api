@@ -1516,6 +1516,11 @@ function isPanoramaEmpty(resp: IndustryChainPanoramaQueryResponse): boolean {
   );
 }
 
+/** 直接关系与产业链全景图的溯源统一展示「源数据表 / 英文字段名 / 图空间 VID」。 */
+const isUnifiedProvenance = computed(
+  () => isExpertDirect.value || isPanorama.value,
+);
+
 /** 查询已执行但没有命中任何数据时给出的提示，null 表示不展示提示。 */
 const emptyResultHint = computed<string | null>(() => {
   if (lastTestTime.value === "—" || running.value) return null;
@@ -2879,16 +2884,29 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
               <p>
                 <b>{{ ev.summary }}</b>
               </p>
-              <span>业务表：{{ ev.businessTable }}</span>
-              <span
-                >技术表：<code>{{ ev.technicalTable }}</code></span
-              >
-              <span
-                >记录 ID：<code>{{ ev.recordId }}</code></span
-              >
-              <span
-                >字段：<code>{{ ev.fieldIdentifier }}</code></span
-              >
+              <template v-if="isUnifiedProvenance">
+                <span
+                  >源数据表：<code>{{ ev.sourceTable || "—" }}</code></span
+                >
+                <span
+                  >英文字段名：<code>{{ ev.sourceField || "—" }}</code></span
+                >
+                <span
+                  >图空间 VID：<code>{{ ev.graphVid || "—" }}</code></span
+                >
+              </template>
+              <template v-else>
+                <span>业务表：{{ ev.businessTable }}</span>
+                <span
+                  >技术表：<code>{{ ev.technicalTable }}</code></span
+                >
+                <span
+                  >记录 ID：<code>{{ ev.recordId }}</code></span
+                >
+                <span
+                  >字段：<code>{{ ev.fieldIdentifier }}</code></span
+                >
+              </template>
             </article>
           </div>
         </section>

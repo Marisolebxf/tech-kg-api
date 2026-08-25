@@ -96,6 +96,8 @@ class PanoramaKeyEntity(BaseModel):
     metric: str | None = None
     metricValue: float | int | None = None
     sourceSystem: str | None = None
+    sourceTable: str | None = None
+    sourceField: str | None = None
     sourceRecordId: str | None = None
     ingestBatch: str | None = None
     ingestTime: str | None = None

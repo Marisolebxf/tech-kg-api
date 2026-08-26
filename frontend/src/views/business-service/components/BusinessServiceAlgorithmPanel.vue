@@ -133,23 +133,84 @@ const hasParameterErrors = computed(
 );
 const currentMonth = dayjs().format("YYYY-MM");
 const disableFutureMonth = (value: Date) => dayjs(value).isAfter(dayjs(), "month");
-const expertIdPattern = /^[\w\u4e00-\u9fff·.\-]+$/u;
+const MAX_PARAMETER_LENGTH = 64;
+const MAX_SCHOOL_LENGTH = 100;
+/** 标识类字段（专家 ID、节点 VID）：不允许空格与 !@#￥%& 等异常符号。 */
+const identifierPattern = /^[\w\u4e00-\u9fff·.\-]+$/u;
+/** 关键词类字段（机构、产业）：额外允许空格、括号、顿号和斜杠。 */
+const keywordPattern = /^[\w\u4e00-\u9fff·.\-()（）、，,/\s]+$/u;
+/** 院校名称：允许空格与中英文括号、《》。 */
 const schoolPattern = /^[\w\u4e00-\u9fff·（）()《》.\-\s]+$/u;
 
-function expertIdError(value: string): string | null {
-  if (value.length > 64) return "输入长度不能超过 64 个字符";
-  if (value && !expertIdPattern.test(value)) {
+function identifierError(value: string): string | null {
+  if (value.length > MAX_PARAMETER_LENGTH)
+    return `输入长度不能超过 ${MAX_PARAMETER_LENGTH} 个字符`;
+  if (value && !identifierPattern.test(value)) {
     return "不能包含空格或 !@#￥%& 等异常字符";
   }
   return null;
 }
 
+function keywordError(value: string): string | null {
+  if (value.length > MAX_PARAMETER_LENGTH)
+    return `输入长度不能超过 ${MAX_PARAMETER_LENGTH} 个字符`;
+  if (value && !keywordPattern.test(value)) {
+    return "不能包含 !@#￥%& 等异常字符";
+  }
+  return null;
+}
+
 function schoolError(value: string): string | null {
-  if (value.length > 100) return "输入长度不能超过 100 个字符";
+  if (value.length > MAX_SCHOOL_LENGTH)
+    return `输入长度不能超过 ${MAX_SCHOOL_LENGTH} 个字符`;
   if (value.trim() && !schoolPattern.test(value.trim())) {
     return "不能包含 !@#￥%& 等异常字符";
   }
   return null;
+}
+
+/** 按模块和字段名返回校验错误，与后端 pydantic 校验规则保持一致。 */
+function parameterFieldError(fieldName: string, value: string): string | null {
+  if (
+    isLiveColleague.value &&
+    (fieldName === "expert_a_id" || fieldName === "expert_b_id")
+  ) {
+    return identifierError(value);
+  }
+  if (
+    isLiveCoop.value &&
+    (fieldName === "sourceExpertId" || fieldName === "targetExpertId")
+  ) {
+    return identifierError(value);
+  }
+  if (isLiveAlumni.value) {
+    if (fieldName === "expertId" || fieldName === "targetExpertId")
+      return identifierError(value);
+    if (fieldName === "school") return schoolError(value);
+  }
+  if (isExpertDirect.value) {
+    if (fieldName === "expertAId" || fieldName === "expertBId")
+      return identifierError(value);
+    if (fieldName === "institution") return keywordError(value);
+  }
+  if (isPanorama.value) {
+    if (fieldName === "anchorId") return identifierError(value);
+    if (fieldName === "industry") return keywordError(value);
+  }
+  return null;
+}
+
+/** 校验当前模块全部文本入参，返回 字段名 → 错误信息。 */
+function collectParameterErrors(fieldNames: string[]): Record<string, string> {
+  const errors: Record<string, string> = {};
+  fieldNames.forEach((name) => {
+    const error = parameterFieldError(
+      name,
+      parameterValues.value[name]?.trim() ?? "",
+    );
+    if (error) errors[name] = error;
+  });
+  return errors;
 }
 
 const achievementTypeOptions = [
@@ -1363,8 +1424,7 @@ const liveProvenance = computed(() => {
 const detailRows = computed(() => {
   if (lastTestTime.value === "—") {
     return props.moduleInfo.summaryRows.map((row) => [row.label, ""] as const);
-  }
-  if (isPanorama.value && panoramaResponse.value) {
+  }  if (isPanorama.value && panoramaResponse.value) {
     return computePanoramaSummaryRows(panoramaResponse.value);
   }
   if (isExpertDirect.value && expertDirectResponse.value) {
@@ -1472,9 +1532,47 @@ const apiResultJson = computed(() => {
   );
 });
 
+function isPanoramaEmpty(resp: IndustryChainPanoramaQueryResponse): boolean {
+  return (
+    !resp.graph?.nodes?.length &&
+    (resp.layers ?? []).every((layer) => !layer.total && !layer.items.length)
+  );
+}
+
+/** 统一展示「源数据表 / 英文字段名 / 图空间 VID」。 */
+const isUnifiedProvenance = computed(
+  () =>
+    isExpertDirect.value ||
+    isPanorama.value ||
+    isLiveCoop.value ||
+    isLiveAlumni.value,
+);
+
+/** 查询已执行但没有命中任何数据时给出的提示，null 表示不展示提示。 */
+const emptyResultHint = computed<string | null>(() => {
+  if (lastTestTime.value === "—" || running.value) return null;
+  if (isExpertDirect.value) {
+    if (expertDirectError.value || !expertDirectResponse.value) return null;
+    if (expertDirectResponse.value.items?.length) return null;
+    return "未查询到符合条件的直接关系，请调整专家A/专家B、机构关键词或起始时间后重试。";
+  }
+  if (isPanorama.value) {
+    if (panoramaError.value || !panoramaResponse.value) return null;
+    if (!isPanoramaEmpty(panoramaResponse.value)) return null;
+    return "未查询到符合条件的产业链全景图数据，请调整产业关键词或核心节点 VID 后重试。";
+  }
+  return null;
+});
+
 function computePanoramaSummaryRows(
   resp: IndustryChainPanoramaQueryResponse,
 ): ReadonlyArray<readonly [string, string]> {
+  if (isPanoramaEmpty(resp)) {
+    // 查不到数据时不回落到静态示例值，避免把示例误当成真实结果
+    return props.moduleInfo.summaryRows.map(
+      (row) => [row.label, "—"] as const,
+    );
+  }
   const layerLabel = (key: PanoramaLayerKey) => {
     const layer = resp.layers.find((l) => l.key === key);
     if (!layer) return "—";
@@ -1681,7 +1779,14 @@ function computeExpertDirectSummaryRows(
 ): ReadonlyArray<readonly [string, string]> {
   const item = resp.items?.[0];
   const overrides = new Map<string, string>();
-  if (item) {
+  if (!item) {
+    // 查不到数据时不回落到静态示例值，避免把示例误当成真实结果
+    return props.moduleInfo.summaryRows.map(
+      (row) =>
+        [row.label, row.label === "关系数量" ? `${resp.total ?? 0} 条` : "—"] as const,
+    );
+  }
+  {
     const expertALabel = [
       item.expertA.name,
       item.expertA.title,
@@ -1714,8 +1819,6 @@ function computeExpertDirectSummaryRows(
       "关系置信度",
       ((item.relationStrength ?? 0) / 100).toFixed(2),
     );
-  } else {
-    overrides.set("关系数量", `${resp.total ?? 0} 条`);
   }
   return props.moduleInfo.summaryRows.map((row) => {
     const overrideValue = overrides.get(row.label);
@@ -1902,6 +2005,14 @@ async function handleRun() {
   liveError.value = null;
 
   if (isPanorama.value) {
+    const panoramaErrors = collectParameterErrors(["industry", "anchorId"]);
+    if (Object.keys(panoramaErrors).length) {
+      parameterErrors.value = panoramaErrors;
+      running.value = false;
+      showToast("请修正参数后再执行", "warning");
+      return;
+    }
+    parameterErrors.value = {};
     try {
       const request = buildPanoramaRequest();
       const response = await queryIndustryChainPanorama(request);
@@ -1912,6 +2023,9 @@ async function handleRun() {
       const now = new Date();
       lastTestTime.value = formatTimestamp(now);
       lastUpdateTime.value = now.getTime();
+      if (isPanoramaEmpty(response)) {
+        showToast("未查询到符合条件的产业链全景图数据", "warning");
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       panoramaError.value = message;
@@ -1928,6 +2042,21 @@ async function handleRun() {
       parameterErrors.value = { expertAId: "请输入专家A" };
       running.value = false;
       showToast("请完善必填项后再执行", "warning");
+      return;
+    }
+    const directErrors = collectParameterErrors([
+      "expertAId",
+      "expertBId",
+      "institution",
+    ]);
+    const startTime = optionalParam(parameterValues.value.startTime);
+    if (startTime && startTime > currentMonth) {
+      directErrors.startTime = "开始时间不能晚于当前月份";
+    }
+    if (Object.keys(directErrors).length) {
+      parameterErrors.value = directErrors;
+      running.value = false;
+      showToast("请修正参数后再执行", "warning");
       return;
     }
     parameterErrors.value = {};
@@ -1948,6 +2077,9 @@ async function handleRun() {
       const now = new Date();
       lastTestTime.value = formatTimestamp(now);
       lastUpdateTime.value = now.getTime();
+      if (!response.items?.length) {
+        showToast("未查询到符合条件的直接关系", "warning");
+      }
     } catch (error) {
       if (controller.signal.aborted) return;
       const message = error instanceof Error ? error.message : String(error);
@@ -2041,7 +2173,7 @@ async function handleRun() {
         ["expert_a_id", expertAIdRaw],
         ["expert_b_id", expertBIdRaw],
       ] as const) {
-        const error = expertIdError(value);
+        const error = identifierError(value);
         if (error) idErrors[field] = error;
       }
       const startTime = optionalParam(parameterValues.value.start_time);
@@ -2104,9 +2236,9 @@ async function handleRun() {
         return;
       }
       const alumniErrors: Record<string, string> = {};
-      const sourceError = expertIdError(expertIdRaw);
+      const sourceError = identifierError(expertIdRaw);
       const targetError = targetExpertIdRaw
-        ? expertIdError(targetExpertIdRaw)
+        ? identifierError(targetExpertIdRaw)
         : null;
       const institutionError = schoolError(schoolRaw);
       if (sourceError) alumniErrors.expertId = sourceError;
@@ -2166,8 +2298,8 @@ async function handleRun() {
         return;
       }
       const coopErrors: Record<string, string> = {};
-      const sourceError = expertIdError(sourceExpertIdRaw);
-      const targetError = expertIdError(targetExpertIdRaw);
+      const sourceError = identifierError(sourceExpertIdRaw);
+      const targetError = identifierError(targetExpertIdRaw);
       if (sourceError) coopErrors.sourceExpertId = sourceError;
       if (targetError) coopErrors.targetExpertId = targetError;
       if (Object.keys(coopErrors).length) {
@@ -2453,39 +2585,9 @@ function handleParameterInput(fieldName: string, event: Event) {
     ...parameterValues.value,
     [fieldName]: value,
   };
-  if (
-    isLiveColleague.value &&
-    (fieldName === "expert_a_id" || fieldName === "expert_b_id")
-  ) {
-    const error = expertIdError(value);
-    if (error) {
-      parameterErrors.value = { ...parameterErrors.value, [fieldName]: error };
-    } else {
-      clearParameterError(fieldName);
-    }
-    return;
-  }
-  if (
-    (isLiveCoop.value &&
-      (fieldName === "sourceExpertId" || fieldName === "targetExpertId")) ||
-    (isLiveAlumni.value &&
-      (fieldName === "expertId" || fieldName === "targetExpertId"))
-  ) {
-    const error = expertIdError(value);
-    if (error) {
-      parameterErrors.value = { ...parameterErrors.value, [fieldName]: error };
-    } else {
-      clearParameterError(fieldName);
-    }
-    return;
-  }
-  if (isLiveAlumni.value && fieldName === "school") {
-    const error = schoolError(value);
-    if (error) {
-      parameterErrors.value = { ...parameterErrors.value, school: error };
-    } else {
-      clearParameterError(fieldName);
-    }
+  const error = parameterFieldError(fieldName, value);
+  if (error) {
+    parameterErrors.value = { ...parameterErrors.value, [fieldName]: error };
     return;
   }
 
@@ -2618,7 +2720,11 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :locale="zhCN"
           :title="field.description"
           :aria-label="field.name"
-          :disabled-date="isLiveColleague || isLiveCoop ? disableFutureMonth : undefined"
+          :disabled-date="
+            isLiveColleague || isExpertDirect || isLiveCoop
+              ? disableFutureMonth
+              : undefined
+          "
           :error="Boolean(parameterErrors[field.name])"
           @update:model-value="handleMonthParameterInput(field.name, $event)"
         />
@@ -2678,6 +2784,14 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           <i />{{ item.label }}
         </span>
       </div>
+      <p
+        v-if="emptyResultHint"
+        class="graph-panel__empty"
+        role="status"
+        aria-live="polite"
+      >
+        {{ emptyResultHint }}
+      </p>
       <div class="graph-panel__canvas">
         <KgGraphCanvas
           :nodes="displayedGraphNodes"
@@ -2840,9 +2954,11 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
               <p>
                 <b>{{ ev.summary }}</b>
               </p>
-              <template v-if="isLiveCoop || isLiveAlumni">
+              <template v-if="isUnifiedProvenance">
                 <span
-                  >源数据表：<code>{{ ev.technicalTable || "—" }}</code></span
+                  >源数据表：<code>{{
+                    ev.sourceTable || ev.technicalTable || "—"
+                  }}</code></span
                 >
                 <span
                   >英文字段名：<code>{{
@@ -3645,6 +3761,18 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 .graph-panel__legend .is-source i {
   background: #eb2f96;
+}
+
+.graph-panel__empty {
+  flex: 0 0 auto;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid #ffd591;
+  border-radius: 4px;
+  background: #fffbe6;
+  color: #874d00;
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .graph-panel__canvas {

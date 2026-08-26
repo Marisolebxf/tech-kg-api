@@ -177,7 +177,7 @@ services:
       context: ./frontend
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
-        VITE_BASE: ${VITE_BASE:-./}
+        VITE_BASE: ${VITE_BASE:-/}
         VITE_API_BASE: ${VITE_API_BASE:-/api}
         VITE_REVIEW_PRODUCTION_ENABLED: "true"
     image: tech-kg-api-dev2-web:latest

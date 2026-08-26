@@ -1,3 +1,23 @@
+html.portal-embedded,
+html.portal-embedded body,
+html.portal-embedded #app {
+  width: 100%;
+  min-height: 100%;
+}
+
+html.portal-embedded body,
+html.portal-embedded #app {
+  overflow: auto;
+}
+
+html.portal-embedded body {
+  min-width: 0;
+}
+
+html.portal-embedded .kg-page {
+  min-height: 100%;
+}
+
 .kg-page {
   min-height: 100vh;
   background: var(--page-bg);

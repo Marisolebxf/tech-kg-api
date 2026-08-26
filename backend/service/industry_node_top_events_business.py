@@ -28,6 +28,7 @@ from biz.schemas.industry_node_top_events_business import (
     IndustryNodeTopEventsResponse,
     TopEventItem,
 )
+from biz.schemas.tech_enterprise_relation_business import EntityProvenance
 from infra.graph_db import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
 
@@ -154,6 +155,12 @@ def _fetch_org_events_sync(
                 "org_id": org_vid,
                 "org_name": org_name,
                 "chain_score": chain_score,
+                # 事件节点溯源字段（供前端溯源栏展示真实源数据表/英文字段名）
+                "source_table": ep.get("source_table") or ep.get("organization_base"),
+                "source_record_id": ep.get("source_record_id"),
+                "organization_id": ep.get("organization_id"),
+                "ingest_batch": ep.get("ingest_batch"),
+                "ingest_time": ep.get("ingest_time"),
             }
         )
     return events
@@ -246,6 +253,30 @@ def _impact_score(event_type, amount, occur_date, chain_score):
         except ValueError:
             recency = 0.5
     return weight * (1 + amount_factor) * recency * (1 + chain_score / 100.0)
+
+
+def _entity_provenance(properties: dict[str, Any], labels: set[str]) -> EntityProvenance:
+    """从图节点 properties 抽取实体溯源，与同事关系/企业关系同口径。
+
+    Person → source_record_id（dwd_scholar 时字段名 scholar_id）；
+    Organization → organization_id；其余 → source_record_id。
+    source_table 取 organization_base 或 source_table 属性。
+    """
+    source_table = properties.get("organization_base") or properties.get("source_table")
+    if "Person" in labels and properties.get("source_record_id") not in (None, ""):
+        source_field = "scholar_id" if source_table == "dwd_scholar" else "source_record_id"
+        source_value = properties.get("source_record_id")
+    elif properties.get("organization_id") not in (None, ""):
+        source_field, source_value = "organization_id", properties.get("organization_id")
+    else:
+        source_field, source_value = "source_record_id", properties.get("source_record_id")
+    return EntityProvenance(
+        sourceTable=str(source_table or "-"),
+        sourceField=str(source_field or "-"),
+        sourceValue=str(source_value or "-"),
+        ingestBatch=str(properties.get("ingest_batch") or "-"),
+        ingestTime=str(properties.get("ingest_time") or "-"),
+    )
 
 
 class IndustryNodeTopEventsService:
@@ -423,6 +454,17 @@ class IndustryNodeTopEventsService:
                     )
                 )
         resp.experts = len(all_expert_ids)
+        # 实体溯源：链节点 + 关联企业 + TOP 事件（专家走 governance 边无节点属性，前端回退静态映射）
+        # 链节点 key 用 req.chain_node_id（前端画板主节点 id），属性仍按 node_vid 取
+        resp.entity_provenance = {
+            req.chain_node_id: _entity_provenance(nodes_map.get(node_vid, {}), {"IndustryNode"})
+        }
+        for org_vid, _cs in orgs:
+            resp.entity_provenance[org_vid] = _entity_provenance(
+                nodes_map.get(org_vid, {}), {"Organization"}
+            )
+        for ev in top:
+            resp.entity_provenance[ev["event_id"]] = _entity_provenance(ev, {"Event"})
         # 标书分析维度：节点影响 / 发展趋势 / 机遇挖掘（从 TOP 事件池规则派生，纯内存无新图调用）
         resp.node_impact, resp.trend, resp.opportunity = self._derive_analysis(
             top, top_org_ids, resp.risk_level

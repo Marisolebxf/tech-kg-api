@@ -38,8 +38,8 @@ class S3Storage:
         self.endpoint_url = endpoint_url or os.getenv(
             "SCHEMA_S3_ENDPOINT_URL", "http://127.0.0.1:9020"
         )
-        self.access_key = access_key or os.getenv("SCHEMA_S3_ACCESS_KEY", "minioadmin")
-        self.secret_key = secret_key or os.getenv("SCHEMA_S3_SECRET_KEY", "minioadmin")
+        self.access_key = access_key or os.getenv("SCHEMA_S3_ACCESS_KEY", "rustfsadmin")
+        self.secret_key = secret_key or os.getenv("SCHEMA_S3_SECRET_KEY", "rustfsadmin")
         self.region = region or os.getenv("SCHEMA_S3_REGION", "us-east-1")
         self.bucket = bucket or os.getenv("SCHEMA_S3_BUCKET", "tech-kg-schema-scripts")
         self.secure = (

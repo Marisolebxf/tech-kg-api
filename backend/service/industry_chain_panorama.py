@@ -558,6 +558,8 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "metric": definition["metric_label"] if metric_value_num is not None else None,
             "metricValue": metric_value_num,
             "sourceSystem": self._first_prop_value(props, ("source_system", "source")),
+            "sourceTable": self._first_prop_value(props, ("source_table",)),
+            "sourceField": self._first_prop_key(props, definition["name_props"]),
             "sourceRecordId": self._first_prop_value(props, ("source_record_id",)),
             "ingestBatch": self._first_prop_value(props, ("ingest_batch",)),
             "ingestTime": self._first_prop_value(props, ("ingest_time",)),
@@ -618,6 +620,10 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                         "technicalTable": f"{item.get('sourceSystem') or '—'}.dwd_*",
                         "recordId": str(item.get("sourceRecordId") or ""),
                         "fieldIdentifier": str(item.get("id") or ""),
+                        # 溯源三要素：MySQL 源表名 / MySQL 英文字段名 / 图空间 VID
+                        "sourceTable": str(item.get("sourceTable") or "—"),
+                        "sourceField": str(item.get("sourceField") or "—"),
+                        "graphVid": str(item.get("id") or ""),
                         "summary": (
                             f"入库批次：{item.get('ingestBatch') or '—'}；"
                             f"入库时间：{item.get('ingestTime') or '—'}"
@@ -632,6 +638,9 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                     "technicalTable": label_by_key.get(str(layer.get("key")), "—"),
                     "recordId": str(items[0].get("id") or ""),
                     "fieldIdentifier": str(items[0].get("metric") or "name_zh/title"),
+                    "sourceTable": str(items[0].get("sourceTable") or "—"),
+                    "sourceField": str(items[0].get("sourceField") or "—"),
+                    "graphVid": str(items[0].get("id") or ""),
                     "summary": (
                         f"命中 {layer.get('total') or len(items)} 个实体，"
                         f"展示 {len(items)} 个：{'、'.join(labels) or '—'}"
@@ -652,6 +661,9 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                     "technicalTable": "graph-search/subgraph",
                     "recordId": str((nodes[0] or {}).get("id") or "") if nodes else "",
                     "fieldIdentifier": "edge.type",
+                    "sourceTable": "graph-search/subgraph",
+                    "sourceField": "edge.type",
+                    "graphVid": str((nodes[0] or {}).get("id") or "") if nodes else "—",
                     "summary": "；".join(f"{name} × {count}" for name, count in top_types),
                 }
             )
@@ -713,6 +725,14 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             value = props.get(key)
             if value:
                 return str(value)
+        return None
+
+    @staticmethod
+    def _first_prop_key(props: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+        """返回第一个有非空值的候选属性名，用于溯源展示「英文字段名」。"""
+        for key in keys:
+            if props.get(key):
+                return key
         return None
 
     # ---------------- 兜底文案 ----------------

@@ -41,6 +41,12 @@ MAX_QUERY_LIMIT = 100
 _MAX_ANCHOR_CANDIDATES = 5
 _MAX_EDGES_PER_EXPERT = 100
 
+# 溯源展示的 MySQL 源表名与英文字段名（图空间 VID 逐条取自节点/边）
+_SCHOLAR_SOURCE_TABLE = "dwd_scholar"
+_SCHOLAR_SOURCE_FIELD = "scholar_id"
+_COAUTHOR_SOURCE_TABLE = "dwd_scholar_coauthor"
+_COAUTHOR_SOURCE_FIELD = "co_paper_count"
+
 _FALLBACK_REASON_TEXT = {
     "empty_result": "图库中查不到该专家的合作关系",
     "graph_api_error": "图查询服务不可用",
@@ -309,6 +315,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         source: dict[str, str] = {}
         for key in (
             "source_system",
+            "source_table",
             "source_record_id",
             "scholar_id",
             "ingest_batch",
@@ -472,6 +479,10 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                     "technicalTable": f"{system}.dwd_scholar" if system else "Person",
                     "recordId": record_id,
                     "fieldIdentifier": "scholar_id / name_zh",
+                    # 溯源三要素：MySQL 源表名 / MySQL 英文字段名 / 图空间 VID
+                    "sourceTable": src.get("source_table") or _SCHOLAR_SOURCE_TABLE,
+                    "sourceField": _SCHOLAR_SOURCE_FIELD,
+                    "graphVid": str(_row.get(f"expert_{side}_id") or ""),
                     "summary": (
                         f"机构：{_row.get(f'expert_{side}_org') or '—'}；"
                         f"入库批次：{src.get('ingest_batch') or '—'}；"
@@ -492,6 +503,11 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         "technicalTable": "Person -[COAUTHOR_WITH]- Person",
                         "recordId": f"{row.get('expert_a_id') or '—'} / {row.get('expert_b_id') or '—'}",
                         "fieldIdentifier": "co_paper_count / relation_time",
+                        "sourceTable": _COAUTHOR_SOURCE_TABLE,
+                        "sourceField": _COAUTHOR_SOURCE_FIELD,
+                        "graphVid": (
+                            f"{row.get('expert_a_id') or '—'} -> {row.get('expert_b_id') or '—'}"
+                        ),
                         "summary": (
                             f"共同论文 {row.get('co_paper_count') or 0} 篇；"
                             f"最近合作时间：{row.get('relation_time') or '—'}"
@@ -509,6 +525,11 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         "technicalTable": "Person -[COAUTHOR_WITH]- Person",
                         "recordId": f"{row.get('expert_a_id') or '—'} / {row.get('expert_b_id') or '—'}",
                         "fieldIdentifier": "co_paper_count / relation_time",
+                        "sourceTable": _COAUTHOR_SOURCE_TABLE,
+                        "sourceField": _COAUTHOR_SOURCE_FIELD,
+                        "graphVid": (
+                            f"{row.get('expert_a_id') or '—'} -> {row.get('expert_b_id') or '—'}"
+                        ),
                         "summary": (
                             f"共同论文 {row.get('co_paper_count') or 0} 篇；"
                             "图库中无该关系的入库元数据"

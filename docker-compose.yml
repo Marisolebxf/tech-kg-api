@@ -56,9 +56,10 @@ services:
       CORRECTION_SYNC_MAX_ATTEMPTS: ${CORRECTION_SYNC_MAX_ATTEMPTS:-8}
       CORRECTION_SYNC_MODE: ${CORRECTION_SYNC_MODE:-projection}
       SCHEMA_AUTO_INIT: ${SCHEMA_AUTO_INIT:-true}
-      SCHEMA_S3_ENDPOINT_URL: ${SCHEMA_S3_ENDPOINT_URL:-http://schema-minio:9000}
-      SCHEMA_S3_ACCESS_KEY: ${SCHEMA_S3_ACCESS_KEY:-minioadmin}
-      SCHEMA_S3_SECRET_KEY: ${SCHEMA_S3_SECRET_KEY:-minioadmin}
+      # schema 脚本 / operator 包 / milvus 内部存储共用 operator-rustfs 一个 S3。
+      SCHEMA_S3_ENDPOINT_URL: ${SCHEMA_S3_ENDPOINT_URL:-http://operator-rustfs:9000}
+      SCHEMA_S3_ACCESS_KEY: ${SCHEMA_S3_ACCESS_KEY:-rustfsadmin}
+      SCHEMA_S3_SECRET_KEY: ${SCHEMA_S3_SECRET_KEY:-rustfsadmin}
       SCHEMA_S3_BUCKET: ${SCHEMA_S3_BUCKET:-tech-kg-schema-scripts}
       SCHEMA_S3_REGION: ${SCHEMA_S3_REGION:-us-east-1}
       SCHEMA_S3_SECURE: ${SCHEMA_S3_SECURE:-false}
@@ -106,8 +107,6 @@ services:
       - patent-index-state:/app/var/patent_indexes
       - workflow-state:/var/lib/tech-kg
     depends_on:
-      schema-minio:
-        condition: service_healthy
       operator-rustfs:
         condition: service_healthy
       m3e-embedding:
@@ -130,7 +129,15 @@ services:
       args:
         PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     container_name: tech-kg-api-m3e-embedding
-    command: [".venv/bin/uvicorn", "script.m3e_embedding_service:app", "--host", "0.0.0.0", "--port", "8010"]
+    command:
+      [
+        ".venv/bin/uvicorn",
+        "script.m3e_embedding_service:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8010",
+      ]
     ports:
       - "127.0.0.1:8011:8010"
     environment:
@@ -146,7 +153,13 @@ services:
     networks:
       - app
     healthcheck:
-      test: ["CMD", ".venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5)"]
+      test:
+        [
+          "CMD",
+          ".venv/bin/python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5)",
+        ]
       interval: 15s
       timeout: 10s
       retries: 20
@@ -163,7 +176,17 @@ services:
     networks:
       - app
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-ptemporal"]
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "127.0.0.1",
+          "-u",
+          "root",
+          "-ptemporal",
+        ]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -240,6 +263,7 @@ services:
       - workflow-state:/var/lib/tech-kg
     depends_on:
       - temporal
+
   auth-redis:
     image: redis:7.4-alpine
     container_name: tech-kg-auth-redis
@@ -253,27 +277,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    restart: unless-stopped
-
-  schema-minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
-    container_name: tech-kg-schema-minio
-    environment:
-      MINIO_ROOT_USER: ${SCHEMA_S3_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${SCHEMA_S3_SECRET_KEY:-minioadmin}
-    ports:
-      - "9030:9000"
-      - "9031:9001"
-    volumes:
-      - schema-minio-data:/data
-    command: server /data --console-address ":9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    networks:
-      - app
     restart: unless-stopped
 
   web:
@@ -347,27 +350,6 @@ services:
       - app
     restart: unless-stopped
 
-  milvus-minio:
-    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
-    container_name: tech-kg-api-milvus-minio
-    environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
-    ports:
-      - "9011:9001"
-      - "9010:9000"
-    volumes:
-      - milvus-minio-data:/minio_data
-    command: minio server /minio_data --console-address ":9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    networks:
-      - app
-    restart: unless-stopped
-
   milvus:
     image: milvusdb/milvus:v2.4.17
     container_name: tech-kg-api-milvus
@@ -377,20 +359,24 @@ services:
       - "9093:9091"
     environment:
       ETCD_ENDPOINTS: milvus-etcd:2379
-      MINIO_ADDRESS: milvus-minio:9000
+      # Milvus 的对象存储也走 operator-rustfs（S3 兼容），bucket 用默认的 a-bucket，
+      # 启动时自动创建；凭证复用 OPERATOR_S3_*。
+      MINIO_ADDRESS: operator-rustfs:9000
+      MINIO_ACCESS_KEY_ID: ${OPERATOR_S3_ACCESS_KEY_ID:-rustfsadmin}
+      MINIO_SECRET_ACCESS_KEY: ${OPERATOR_S3_SECRET_ACCESS_KEY:-rustfsadmin}
     volumes:
       - milvus-data:/var/lib/milvus
     depends_on:
-      - milvus-etcd
-      - milvus-minio
+      milvus-etcd:
+        condition: service_started
+      operator-rustfs:
+        condition: service_healthy
     networks:
       - app
     restart: unless-stopped
 
 volumes:
-  schema-minio-data:
   milvus-etcd-data:
-  milvus-minio-data:
   milvus-data:
   temporal-mysql-data:
   workflow-state:

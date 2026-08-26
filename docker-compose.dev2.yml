@@ -1,5 +1,5 @@
 # Dev2 测试栈：仅起 api / web / temporal-worker，复用生产已运行的共享服务
-# (mysql / trs-graph-service / milvus / redis / temporal / schema-minio / operator-rustfs / m3e-embedding)。
+# (mysql / trs-graph-service / milvus / redis / temporal / operator-rustfs / m3e-embedding)。
 #
 # 与 docker-compose.yml 的差异：
 # - 服务名 -dev2 后缀（避免与生产 `api`/`web`/`temporal-worker` 在 tech-kg-api_app
@@ -75,9 +75,10 @@ services:
       CORRECTION_SYNC_MODE: ${CORRECTION_SYNC_MODE:-projection}
       SCHEMA_AUTO_INIT: ${SCHEMA_AUTO_INIT:-false}
       SCHEMA_ALLOW_SYSTEM_DELETE: ${SCHEMA_ALLOW_SYSTEM_DELETE:-true}
-      SCHEMA_S3_ENDPOINT_URL: ${SCHEMA_S3_ENDPOINT_URL:-http://schema-minio:9000}
-      SCHEMA_S3_ACCESS_KEY: ${SCHEMA_S3_ACCESS_KEY:-minioadmin}
-      SCHEMA_S3_SECRET_KEY: ${SCHEMA_S3_SECRET_KEY:-minioadmin}
+      # 与主 compose 一致：schema 脚本走共享的 operator-rustfs
+      SCHEMA_S3_ENDPOINT_URL: ${SCHEMA_S3_ENDPOINT_URL:-http://operator-rustfs:9000}
+      SCHEMA_S3_ACCESS_KEY: ${SCHEMA_S3_ACCESS_KEY:-rustfsadmin}
+      SCHEMA_S3_SECRET_KEY: ${SCHEMA_S3_SECRET_KEY:-rustfsadmin}
       SCHEMA_S3_BUCKET: ${SCHEMA_S3_BUCKET:-tech-kg-schema-scripts}
       SCHEMA_S3_REGION: ${SCHEMA_S3_REGION:-us-east-1}
       SCHEMA_S3_SECURE: ${SCHEMA_S3_SECURE:-false}

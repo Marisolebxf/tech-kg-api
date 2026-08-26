@@ -123,6 +123,22 @@ const { showToast } = useToast();
 const resultMode = ref<
   "summary" | "entity" | "relation" | "provenance" | "rule" | "api"
 >("summary");
+const resultModeOrder = ["summary", "entity", "relation", "provenance", "rule", "api"] as const;
+
+function handleResultTabKeydown(event: KeyboardEvent) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const current = resultModeOrder.indexOf(resultMode.value);
+  const next = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? resultModeOrder.length - 1
+      : (current + (event.key === "ArrowRight" ? 1 : -1) + resultModeOrder.length) % resultModeOrder.length;
+  resultMode.value = resultModeOrder[next];
+  requestAnimationFrame(() => {
+    document.getElementById(`result-mode-tab-`)?.focus();
+  });
+}
 const running = ref(false);
 const lastTestTime = ref("—");
 const lastUpdateTime = ref<number | null>(null);
@@ -130,6 +146,11 @@ const parameterValues = ref<Record<string, string>>({});
 const parameterErrors = ref<Record<string, string>>({});
 const hasParameterErrors = computed(
   () => Object.keys(parameterErrors.value).length > 0,
+);
+const queryFeedbackTitle = computed(() =>
+  liveError.value && /(?:未找到|不存在|无匹配)/u.test(liveError.value)
+    ? "未查询到结果"
+    : "查询失败",
 );
 const currentMonth = dayjs().format("YYYY-MM");
 const disableFutureMonth = (value: Date) => dayjs(value).isAfter(dayjs(), "month");
@@ -2207,23 +2228,37 @@ async function handleRun() {
         offset: 0,
       };
       const res = await queryExpertColleagueRelation(body);
-      expertColleagueResponse.value = res;
-      liveResponse.value = res as unknown as Record<string, any>;
-      liveApiPayload.value = { request: body, response: res };
       if (
         res?.success === false ||
         (res?.code !== undefined && res.code !== 200)
       ) {
+        const isExpertNotFound =
+          res?.code === 404 && /未找到专家/u.test(res?.msg || "");
+        if (isExpertNotFound) {
+          liveError.value = null;
+          showToast(res?.msg || "未查询到相关同事关系数据", "warning");
+          resultMode.value = "summary";
+          return;
+        }
+        expertColleagueResponse.value = res;
+        liveResponse.value = res as unknown as Record<string, any>;
+        liveApiPayload.value = { request: body, response: res };
         liveError.value = res?.msg || `业务码 ${res?.code}`;
         showToast(liveError.value || "查询失败", "warning");
-        resultMode.value = "api";
+        resultMode.value = "summary";
       } else {
         const total = Number(res?.data?.total || 0);
+        if (!total) {
+          liveError.value = null;
+          showToast("未查询到相关同事关系数据", "info");
+          resultMode.value = "summary";
+          return;
+        }
+        expertColleagueResponse.value = res;
+        liveResponse.value = res as unknown as Record<string, any>;
+        liveApiPayload.value = { request: body, response: res };
         liveError.value = null;
-        showToast(
-          total ? "两位专家存在同事关系" : "两位专家不存在有效同事关系",
-          total ? "success" : "info",
-        );
+        showToast("两位专家存在同事关系", "success");
         resultMode.value = "summary";
       }
     } else if (isLiveAlumni.value) {
@@ -2793,6 +2828,11 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         {{ emptyResultHint }}
       </p>
       <div class="graph-panel__canvas">
+        <div v-if="liveError" class="graph-panel__feedback" role="alert">
+          <strong>{{ queryFeedbackTitle }}</strong>
+          <span>{{ liveError }}</span>
+          <small>请检查专家 ID 后重新执行测试</small>
+        </div>
         <KgGraphCanvas
           :nodes="displayedGraphNodes"
           :edges="displayedGraphEdges"
@@ -2808,49 +2848,79 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
     </section>
 
     <aside class="business-service__side">
-      <section class="kg-panel result-panel">
+      <section class="kg-panel result-panel" id="result-mode-panel">
         <div class="kg-panel__header">
           <h2 class="kg-panel__title">结果详情</h2>
-          <div class="result-panel__tabs">
+          <div class="result-panel__tabs" role="tablist" aria-label="结果详情视图">
             <button
               :class="{ 'is-active': resultMode === 'summary' }"
+              :id="`result-mode-tab-summary`"
+              role="tab"
+              :aria-selected="resultMode === 'summary'"
+              :tabindex="resultMode === 'summary' ? 0 : -1"
               type="button"
               @click="resultMode = 'summary'"
+              @keydown="handleResultTabKeydown"
             >
               摘要
             </button>
             <button
               :class="{ 'is-active': resultMode === 'entity' }"
+              :id="`result-mode-tab-entity`"
+              role="tab"
+              :aria-selected="resultMode === 'entity'"
+              :tabindex="resultMode === 'entity' ? 0 : -1"
               type="button"
               @click="resultMode = 'entity'"
+              @keydown="handleResultTabKeydown"
             >
               实体
             </button>
             <button
               :class="{ 'is-active': resultMode === 'relation' }"
+              :id="`result-mode-tab-relation`"
+              role="tab"
+              :aria-selected="resultMode === 'relation'"
+              :tabindex="resultMode === 'relation' ? 0 : -1"
               type="button"
               @click="resultMode = 'relation'"
+              @keydown="handleResultTabKeydown"
             >
               关系
             </button>
             <button
               :class="{ 'is-active': resultMode === 'provenance' }"
+              :id="`result-mode-tab-provenance`"
+              role="tab"
+              :aria-selected="resultMode === 'provenance'"
+              :tabindex="resultMode === 'provenance' ? 0 : -1"
               type="button"
               @click="resultMode = 'provenance'"
+              @keydown="handleResultTabKeydown"
             >
               溯源
             </button>
             <button
               :class="{ 'is-active': resultMode === 'rule' }"
+              :id="`result-mode-tab-rule`"
+              role="tab"
+              :aria-selected="resultMode === 'rule'"
+              :tabindex="resultMode === 'rule' ? 0 : -1"
               type="button"
               @click="resultMode = 'rule'"
+              @keydown="handleResultTabKeydown"
             >
               规则
             </button>
             <button
               :class="{ 'is-active': resultMode === 'api' }"
+              :id="`result-mode-tab-api`"
+              role="tab"
+              :aria-selected="resultMode === 'api'"
+              :tabindex="resultMode === 'api' ? 0 : -1"
               type="button"
               @click="resultMode = 'api'"
+              @keydown="handleResultTabKeydown"
             >
               API
             </button>
@@ -3204,9 +3274,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   display: grid;
   grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.8fr) auto;
   align-items: end;
-  gap: 14px;
+  gap: 16px;
   min-height: 92px;
-  padding: 14px 16px;
+  padding: 16px;
   overflow: visible;
 }
 
@@ -3218,7 +3288,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 16px;
   align-items: start;
-  gap: 10px;
+  gap: 16px;
   min-width: 0;
 }
 
@@ -3242,7 +3312,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .service-console__params {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  gap: 16px;
   min-width: 0;
 }
 
@@ -3262,7 +3332,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .service-console__params label {
   position: relative;
   display: grid;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -3630,15 +3700,15 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .graph-panel__filters {
   display: flex;
   align-items: end;
-  gap: 12px;
-  padding: 8px 12px;
+  gap: 16px;
+  padding: 16px;
   border-bottom: 1px solid var(--border);
   background: #f7faff;
 }
 
 .graph-panel__filters label {
   display: grid;
-  gap: 4px;
+  gap: 8px;
   min-width: 180px;
 }
 
@@ -3776,10 +3846,44 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .graph-panel__canvas {
+  position: relative;
   flex: 1;
   height: auto;
   min-height: 0;
   overflow: hidden;
+}
+
+.graph-panel__feedback {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  background: #fff;
+  color: #4e5969;
+  text-align: center;
+}
+
+.graph-panel__feedback strong {
+  color: #1d2129;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+}
+
+.graph-panel__feedback span {
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.graph-panel__feedback small {
+  color: #86909c;
+  font-size: 12px;
+  line-height: 20px;
 }
 
 :deep(.kg-graph-viewport) {
@@ -3836,6 +3940,8 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .result-panel__table div {
+  position: relative;
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: 190px minmax(0, 1fr);
   min-height: 44px;
@@ -3844,6 +3950,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .result-panel__table dt,
 .result-panel__table dd {
+  box-sizing: border-box;
+  min-width: 0;
+  background: #fff;
   margin: 0;
   padding: 10px 14px;
   font-size: 15px;
@@ -3864,9 +3973,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .result-provenance {
   display: grid;
-  gap: 12px;
-  margin: 12px 14px 14px;
-  padding: 12px;
+  gap: 16px;
+  margin: 16px;
+  padding: 16px;
   border: 1px solid #cfe0ff;
   border-radius: 8px;
   background: linear-gradient(180deg, #f7faff 0%, #fff 100%);
@@ -3895,7 +4004,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .result-provenance__target {
   display: grid;
   gap: 4px;
-  padding: 11px 12px;
+  padding: 16px;
   border-radius: 7px;
   background: #eaf2ff;
 }
@@ -3913,7 +4022,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .result-provenance h3 {
-  margin: 2px 0 -5px;
+  margin: 0;
   color: #536987;
   font-size: 12px;
   line-height: 18px;
@@ -3935,7 +4044,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .result-provenance .result-provenance__source dt,
 .result-provenance .result-provenance__source dd {
-  padding: 6px 8px;
+  padding: 8px 16px;
   font-size: 12px;
   line-height: 20px;
 }
@@ -3948,7 +4057,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .result-provenance__database {
   margin: 0;
-  padding: 7px 9px;
+  padding: 8px 16px;
   border-radius: 6px;
   background: #f3f7fd;
   color: var(--text-secondary);
@@ -3964,7 +4073,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .result-provenance__evidence-list article {
   display: grid;
   gap: 6px;
-  padding: 9px 10px;
+  padding: 16px;
   border: 1px solid #e1eaf8;
   border-radius: 7px;
   background: #fff;
@@ -4024,7 +4133,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   flex: 1;
   min-height: 0;
   margin: 0;
-  padding: 14px 16px;
+  padding: 16px;
   overflow: auto;
   color: #2f3442;
   background: #f7f9fc;
@@ -4038,16 +4147,16 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   flex: 1;
   min-height: 0;
   display: grid;
-  gap: 10px;
+  gap: 16px;
   align-content: start;
-  padding: 14px;
+  padding: 16px;
   overflow: auto;
 }
 
 .result-panel__rules article {
   display: grid;
-  gap: 10px;
-  padding: 12px;
+  gap: 16px;
+  padding: 16px;
   border: 1px solid #e2ebf8;
   border-radius: 8px;
   background: #fbfdff;
@@ -4291,7 +4400,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .result-panel__table {
-  display: block;
+  --result-label-column-width: 132px;
+  display: flex;
+  flex-direction: column;
   margin: 16px 0 0;
   padding: 0;
   border: 1px solid #e5e6eb;
@@ -4300,8 +4411,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .result-panel__table div {
+  position: relative;
   display: grid;
-  grid-template-columns: 116px minmax(0, 1fr);
+  grid-template-columns: var(--result-label-column-width) minmax(0, 1fr);
   gap: 0;
   min-height: 44px;
   border-bottom: 1px solid #e5e6eb;
@@ -4320,12 +4432,55 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .result-panel__table dt {
   border-right: 1px solid #e5e6eb;
+  background: #f2f3f5;
   color: #86909c;
   font-weight: 500;
   text-align: left;
 }
 
 .result-panel__table dd {
+  background: #fff;
   color: #1d2129;
+}
+
+/* 移除预览与结果详情的外层衬板；保留内部白色画布与详情表格。 */
+.business-service__main > .kg-panel,
+.business-service__side > .kg-panel,
+.graph-panel > .kg-panel__header,
+.result-panel > .kg-panel__header,
+.graph-panel__legend {
+  background: transparent !important;
+}
+
+/* 结果详情切换：选中标签填满整个模块，不显示内嵌白框。 */
+.result-panel__tabs {
+  height: 40px !important;
+  padding: 4px !important;
+  border-radius: 4px !important;
+}
+
+.result-panel__tabs button {
+  box-sizing: border-box;
+  height: 32px !important;
+  padding: 5px 16px !important;
+  border-radius: 4px !important;
+}
+
+.result-panel__tabs button.is-active {
+  margin: 0 !important;
+}
+
+.result-panel__tabs button.is-active + button {
+  border-left-color: transparent;
+}
+
+.result-panel__tabs button:hover:not(.is-active) {
+  background: #fff;
+  color: #165dff;
+}
+
+.result-panel__tabs button:focus-visible {
+  outline: 2px solid rgba(22, 93, 255, 0.28);
+  outline-offset: 1px;
 }
 </style>

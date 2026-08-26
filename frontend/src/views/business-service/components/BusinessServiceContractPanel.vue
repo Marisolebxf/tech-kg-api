@@ -497,4 +497,127 @@ defineEmits<{
 :global(.app-workspace .business-service .developer-view .developer-view__code-wrap > .developer-code > .kg-panel__header) {
   background: transparent !important;
 }
+
+@media (max-width: 767px) {
+  .developer-view {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    padding: 0;
+    gap: 16px;
+    overflow: visible;
+    flex-direction: column;
+  }
+
+  .developer-view__meta {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    gap: 12px;
+  }
+
+  .developer-view__meta label {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .developer-view__meta label > span {
+    line-height: 20px;
+    white-space: nowrap;
+  }
+
+  .select-icon {
+    top: auto;
+    bottom: 9px;
+    transform: none;
+  }
+
+  .developer-view__meta > span {
+    line-height: 20px;
+  }
+
+  .developer-view__cards {
+    display: flex;
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    gap: 16px !important;
+    overflow: visible;
+    flex-direction: column;
+  }
+
+  .developer-view__cards .kg-panel {
+    width: 100%;
+    height: auto;
+    min-height: 300px;
+    overflow: hidden;
+  }
+
+  .developer-view__cards .developer-view__table-scroll {
+    width: 100%;
+    height: auto !important;
+    max-height: none !important;
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+
+  .prototype-table {
+    width: 620px;
+    min-width: 620px;
+    table-layout: fixed;
+  }
+
+  .prototype-table--request .col-name {
+    width: 150px;
+  }
+
+  .prototype-table--request .col-type {
+    width: 90px;
+  }
+
+  .prototype-table--request .col-required {
+    width: 70px;
+  }
+
+  .prototype-table--request .col-description {
+    width: 310px;
+  }
+
+  .prototype-table--response .col-name {
+    width: 180px;
+  }
+
+  .prototype-table--response .col-type {
+    width: 110px;
+  }
+
+  .prototype-table--response .col-description {
+    width: 330px;
+  }
+
+  .prototype-table th,
+  .prototype-table td {
+    height: auto;
+    min-height: 40px;
+    padding: 10px 12px;
+    line-height: 20px;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .prototype-table th,
+  .prototype-table td:first-child,
+  .prototype-table td:nth-child(2) {
+    white-space: nowrap;
+  }
+
+  .developer-view__code-wrap,
+  .developer-view__code-wrap .developer-code {
+    width: 100%;
+    height: auto !important;
+    min-height: 260px;
+  }
+}
 </style>

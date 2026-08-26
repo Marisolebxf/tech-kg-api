@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from typing import Any
 
 from openai import OpenAI
 
@@ -53,6 +55,69 @@ class LLMClient:
         except Exception as exc:  # noqa: BLE001
             logger.warning("LLM synthesize failed, degrading: %s", exc)
             return None
+
+    def synthesize_json(
+        self,
+        prompt: str,
+        *,
+        schema: dict[str, Any],
+        schema_name: str = "response",
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> str | None:
+        """优先 Structured Output / JSON Schema，失败再降级 json_object、纯 prompt。"""
+        system = (
+            "只返回符合给定 JSON Schema 的单个 JSON 对象。"
+            "不要 Markdown，不要代码块，不要解释文字。\n"
+            f"JSON Schema:\n{json.dumps(schema, ensure_ascii=False)}"
+        )
+        structured_messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ]
+        attempts: list[tuple[str, dict[str, Any]]] = [
+            (
+                "json_schema",
+                {
+                    "messages": structured_messages,
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": schema_name,
+                            "strict": True,
+                            "schema": schema,
+                        },
+                    },
+                },
+            ),
+            (
+                "json_object",
+                {
+                    "messages": structured_messages,
+                    "response_format": {"type": "json_object"},
+                },
+            ),
+            (
+                "prompt_only",
+                {"messages": [{"role": "user", "content": prompt}]},
+            ),
+        ]
+        for mode, kwargs in attempts:
+            try:
+                resp = self._client.chat.completions.create(
+                    model=self._model,
+                    max_tokens=max_tokens,
+                    extra_body={"thinking": {"type": "disabled"}},
+                    **kwargs,
+                )
+                content = resp.choices[0].message.content or None
+                if not content:
+                    continue
+                if mode != "json_schema":
+                    logger.info("LLM synthesize_json 回退到 %s", mode)
+                return content
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("LLM synthesize_json %s 失败，尝试降级: %s", mode, exc)
+        return None
 
 
 _client: LLMClient | None = None

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import re
 import threading
@@ -10,7 +12,10 @@ from typing import Any
 
 from infra.graph_db import GraphNotFoundError, TRSGraphClient, get_trs_graph_client
 from infra.graph_db.config import TRSGraphSettings
+from infra.llm import get_llm_client
 from service.base_module import KGModuleScaffoldService
+
+logger = logging.getLogger(__name__)
 
 PAPER_EDGE_TYPES = frozenset({"AUTHORED_BY"})
 PATENT_EDGE_TYPES = frozenset({"INVENTED_BY"})
@@ -21,6 +26,42 @@ EDGE_LIMIT = 500
 _RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
 _result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _result_cache_lock = threading.Lock()
+
+_DOMAIN_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "fields": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 5,
+                    },
+                },
+                "required": ["id", "fields"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["items"],
+    "additionalProperties": False,
+}
+
+_DOMAIN_LLM_PROMPT = """你是科技成果领域标注助手。根据下列共同成果的类型与标题，为每条成果推断所属技术领域。
+
+约束：
+1. items 必须覆盖输入中的每一个 id，顺序可不同。
+2. fields 为 1~5 个简短中文领域词，不要空字符串。
+3. 若无法判断，fields 返回 []。
+4. 可参考 hints，但最终以你的判断为准。
+
+输入：
+{payload}
+"""
 
 
 def clear_caches() -> None:
@@ -130,6 +171,8 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 if not self._in_time_range(item.get("time"), time_range_start, time_range_end):
                     continue
                 items.append(item)
+
+        self._enrich_fields_with_llm(items)
 
         award_count = sum(len(i.get("awards") or []) for i in items)
         papers = sum(1 for i in items if i["type"] == "paper")
@@ -253,6 +296,97 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             "provenance": self._entity_provenance(props, vid),
         }
 
+    def _enrich_fields_with_llm(self, items: list[dict[str, Any]]) -> None:
+        """用大模型生成所属领域；要求严格 JSON。失败则保留图内 fields。"""
+        if not items:
+            return
+        llm = get_llm_client()
+        if llm is None:
+            logger.info("所属领域：未配置 LLM，保留图内 fields")
+            return
+
+        payload = [
+            {
+                "id": str(item.get("id") or ""),
+                "type": str(item.get("type") or ""),
+                "title": str(item.get("title") or ""),
+                "hints": list(item.get("fields") or []),
+            }
+            for item in items
+        ]
+        prompt = _DOMAIN_LLM_PROMPT.format(
+            payload=json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        )
+        raw = llm.synthesize_json(
+            prompt,
+            schema=_DOMAIN_JSON_SCHEMA,
+            schema_name="cooperation_achievement_domains",
+            max_tokens=1024,
+        )
+        parsed = self._parse_domain_llm_json(raw)
+        if parsed is None:
+            logger.warning("所属领域：LLM 未返回严格 JSON，保留图内 fields")
+            return
+
+        by_id = {
+            str(row.get("id") or ""): self._normalize_llm_fields(row.get("fields"))
+            for row in parsed
+            if isinstance(row, dict) and row.get("id")
+        }
+        for item in items:
+            vid = str(item.get("id") or "")
+            if vid in by_id:
+                item["fields"] = by_id[vid]
+
+    @staticmethod
+    def _normalize_llm_fields(value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            out.append(text)
+            if len(out) >= 5:
+                break
+        return out
+
+    @staticmethod
+    def _parse_domain_llm_json(text: str | None) -> list[dict[str, Any]] | None:
+        """解析所属领域 LLM 响应：必须是含 items 数组的严格 JSON 对象。"""
+        if not text or not str(text).strip():
+            return None
+        cleaned = str(text).strip()
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+        cleaned = cleaned.strip()
+
+        def _as_items(data: Any) -> list[dict[str, Any]] | None:
+            if not isinstance(data, dict):
+                return None
+            items = data.get("items")
+            if not isinstance(items, list):
+                return None
+            return [row for row in items if isinstance(row, dict)]
+
+        try:
+            return _as_items(json.loads(cleaned))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+
+        # 兼容模型偶发多输出的尾部字符（如多余 }），用 raw_decode 取首个完整对象
+        start = cleaned.find("{")
+        if start == -1:
+            return None
+        try:
+            data, _ = json.JSONDecoder().raw_decode(cleaned[start:])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        return _as_items(data)
+
     @staticmethod
     def _entity_provenance(props: dict[str, Any], vid: str) -> dict[str, str]:
         """Return only provenance values physically stored on the graph node."""
@@ -279,20 +413,39 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             return str(val)
         return None
 
-    @staticmethod
-    def _pick_fields(props: dict[str, Any]) -> list[str]:
+    @classmethod
+    def _coerce_field_values(cls, val: Any) -> list[str]:
+        """把图属性里的领域/关键词规范成可读字符串列表（兼容 JSON 数组字符串）。"""
+        if val is None or val == "":
+            return []
+        if isinstance(val, list):
+            out: list[str] = []
+            for item in val:
+                out.extend(cls._coerce_field_values(item))
+            return out
+        if isinstance(val, dict):
+            for key in ("name", "label", "value", "keyword", "field"):
+                if val.get(key):
+                    return cls._coerce_field_values(val.get(key))
+            return []
+        text = str(val).strip()
+        if not text:
+            return []
+        if text.startswith("[") or text.startswith("{"):
+            try:
+                parsed = json.loads(text)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = None
+            if parsed is not None:
+                return cls._coerce_field_values(parsed)
+        parts = re.split(r"[,，;/、|]+", text)
+        return [part.strip().strip("\"'") for part in parts if part.strip().strip("\"'")]
+
+    @classmethod
+    def _pick_fields(cls, props: dict[str, Any]) -> list[str]:
         fields: list[str] = []
         for key in FIELD_KEYS:
-            val = props.get(key)
-            if val is None or val == "":
-                continue
-            if isinstance(val, list):
-                fields.extend(str(x) for x in val if x)
-            elif isinstance(val, str):
-                parts = re.split(r"[,，;/、|]+", val)
-                fields.extend(p.strip() for p in parts if p.strip())
-            else:
-                fields.append(str(val))
+            fields.extend(cls._coerce_field_values(props.get(key)))
         # dedupe preserve order
         seen: set[str] = set()
         out: list[str] = []
@@ -417,6 +570,75 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             return "单类型合作（项目）"
         return "多类型合作"
 
+    @staticmethod
+    def _format_award_names(awards: list[Any]) -> str:
+        parts: list[str] = []
+        for award in awards:
+            if isinstance(award, dict):
+                name = str(award.get("name") or "").strip()
+                if not name:
+                    continue
+                level = str(award.get("level") or "").strip()
+                parts.append(f"{name}（{level}）" if level else name)
+            else:
+                text = str(award).strip()
+                if text:
+                    parts.append(text)
+        return "、".join(parts)
+
+    @classmethod
+    def _format_award_or_evaluation(cls, item: dict[str, Any]) -> str:
+        awards_text = cls._format_award_names(item.get("awards") or [])
+        evaluation = str(item.get("evaluation") or "").strip()
+        if awards_text and evaluation:
+            return f"奖项 {awards_text}；评价 {evaluation}"
+        if awards_text:
+            return f"奖项 {awards_text}"
+        if evaluation:
+            return f"评价 {evaluation}"
+        return "—"
+
+    @staticmethod
+    def _normalize_time_label(value: str | None) -> str:
+        """尽量把图内原始时间规整为可读形式；无法识别则原样返回。"""
+        text = str(value or "").strip()
+        if not text:
+            return "—"
+        digits = re.sub(r"\D", "", text)
+        if len(digits) == 8:
+            return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+        if len(digits) == 6:
+            return f"{digits[:4]}-{digits[4:6]}"
+        if len(digits) == 4:
+            return digits
+        return text
+
+    @classmethod
+    def _item_summary_rows(cls, items: list[dict[str, Any]]) -> list[dict[str, str]]:
+        """摘要：成果N=名称，下行完成时间/所属领域/奖项/评价。"""
+        rows: list[dict[str, str]] = []
+        for index, item in enumerate(items, start=1):
+            title = str(item.get("title") or item.get("id") or "—")
+            time_text = cls._normalize_time_label(item.get("time"))
+            raw_fields = item.get("fields") or []
+            if isinstance(raw_fields, str):
+                field_list = cls._coerce_field_values(raw_fields)
+            else:
+                field_list = [str(f) for f in raw_fields if f]
+                if len(field_list) == 1 and field_list[0].startswith("["):
+                    field_list = cls._coerce_field_values(field_list[0])
+            fields = "、".join(field_list) or "—"
+            award_or_eval = cls._format_award_or_evaluation(item)
+            rows.extend(
+                [
+                    {"label": f"成果{index}", "value": title},
+                    {"label": "完成时间", "value": time_text},
+                    {"label": "所属领域", "value": fields},
+                    {"label": "奖项/评价", "value": award_or_eval},
+                ]
+            )
+        return rows
+
     def _frontend_view(
         self,
         *,
@@ -458,13 +680,16 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             {"label": "合作模式", "value": mode},
             {"label": "图空间", "value": space},
         ]
-        if items:
-            first = items[0]
+        item_rows = self._item_summary_rows(items)
+        if item_rows:
+            # 插在「成果分布」之后，保证摘要直接可见时间/领域/奖项或评价。
+            summary_rows[5:5] = item_rows
+        else:
             summary_rows.insert(
                 5,
                 {
-                    "label": "代表成果",
-                    "value": f"{first.get('title') or first.get('id')}（{first.get('time') or '时间未知'}）",
+                    "label": "合作成果标注",
+                    "value": "暂无共同成果，无法标注发表/完成时间、所属领域、奖项或评价",
                 },
             )
 
@@ -477,7 +702,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
 
         evidence = [
             "按论文、专利、项目邻居求交汇总共同成果。",
-            "回填成果标题、时间、领域与奖项字段（有则输出）。",
+            "所属领域优先 Structured Output/JSON Schema 生成（失败时回退图内关键词）。",
             f"规则归因：核心贡献={core}；合作模式={mode}。",
         ]
 

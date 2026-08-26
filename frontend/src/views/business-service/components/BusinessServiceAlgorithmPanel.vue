@@ -398,37 +398,15 @@ const liveError = ref<string | null>(null);
 const liveDescribe = ref<Record<string, unknown> | null>(null);
 const panoramaResponse = ref<IndustryChainPanoramaQueryResponse | null>(null);
 const panoramaError = ref<string | null>(null);
-/** 关系筛选可选项：优先用上次子图里真实出现的边类型，其次用全库统计里非零的类型。 */
-const PANORAMA_FALLBACK_RELATION_TYPES = [
-  "COAUTHOR_WITH",
-  "AFFILIATED_WITH",
-  "AUTHORED_BY",
-  "BELONGS_TO_NODE",
-  "EXECUTIVE_OF",
-  "INVOLVED_IN",
-  "HAS_PARTICIPANT",
-  "INVESTS_IN",
-];
-const panoramaRelationTypeOptions = computed<string[]>(() => {
-  const resp = panoramaResponse.value;
-  const fromGraph = new Map<string, number>();
-  (resp?.graph?.edges ?? []).forEach((edge) => {
-    const label = edge.label || "";
-    if (label) fromGraph.set(label, (fromGraph.get(label) ?? 0) + 1);
-  });
-  if (fromGraph.size) {
-    return [...fromGraph.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([label]) => label);
-  }
-  const byType = resp?.summary?.edgesByType ?? {};
-  const fromSummary = Object.entries(byType)
-    .filter(([, count]) => Number(count) > 0)
-    .sort((a, b) => Number(b[1]) - Number(a[1]))
-    .slice(0, 20)
-    .map(([label]) => label);
-  return fromSummary.length ? fromSummary : PANORAMA_FALLBACK_RELATION_TYPES;
-});
+/**
+ * 关系筛选可选项：只保留全景图里最有业务含义的三类边，用中文展示。
+ * 值仍是图里的边类型，直接传给后端 relationTypes。
+ */
+const PANORAMA_RELATION_TYPES = [
+  { value: "BELONGS_TO_NODE", label: "产业链归属" },
+  { value: "COAUTHOR_WITH", label: "论文合作" },
+  { value: "AFFILIATED_WITH", label: "机构任职" },
+] as const;
 /** 关系筛选选中值，底层仍存成逗号拼接的字符串，与其他参数保持一致。 */
 const panoramaRelationSelection = computed<string[]>({
   get: (): string[] =>
@@ -3067,10 +3045,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           @update:model-value="clearParameterError(field.name)"
         >
           <ElOption
-            v-for="option in panoramaRelationTypeOptions"
-            :key="option"
-            :label="option"
-            :value="option"
+            v-for="option in PANORAMA_RELATION_TYPES"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
           />
         </ElSelect>
         <ElSelect

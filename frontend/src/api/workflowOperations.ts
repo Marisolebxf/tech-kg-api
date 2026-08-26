@@ -175,7 +175,7 @@ export interface ProductionReviewCase {
   status: ProductionReviewStatus; assigneeId?: string; assigneeName?: string; version: number; slaClaimAt: string; slaResolveAt: string
   diagnosis: string; sourceTable?: string; sourceRecordId?: string; createdAt: string; updatedAt: string
   draft?: Record<string, unknown>; input?: Record<string, unknown>; candidate?: Record<string, unknown>; evidence?: Record<string, unknown>[]; executions?: Record<string, unknown>[]
-  pipelineStepId?: string; pipelineStepName?: string; exceptionCode?: string; isolationScope?: string; workflowType?: string
+  pipelineStepId?: string; pipelineStepName?: string; exceptionCode?: string; isolationScope?: string; workflowType?: string; workflowId?: string; workflowRunId?: string
   template?: { id:string; version:string; title:string; displaySchema:{ sections:Array<{type:string;source?:string;target?:string;field?:string;options?:string[]}> }; resultSchema:Record<string,unknown>; allowedActions:string[] }
   data?: { input?:Record<string,unknown>; candidate?:Record<string,unknown>; evidence?:unknown[] }; consequence?: { writeTarget:string; rerunStepId:string; scope:string }
 }

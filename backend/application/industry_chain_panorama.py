@@ -15,6 +15,7 @@ class IndustryChainPanoramaApplication:
         anchor_id: str | None = None,
         depth: int = 2,
         top_k: int = 5,
+        relation_types: list[str] | None = None,
         refresh: bool = False,
     ) -> dict[str, object]:
         return await self._service.query(
@@ -22,5 +23,6 @@ class IndustryChainPanoramaApplication:
             anchor_id=anchor_id,
             depth=depth,
             top_k=top_k,
+            relation_types=relation_types,
             refresh=refresh,
         )

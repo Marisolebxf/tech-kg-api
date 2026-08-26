@@ -398,6 +398,48 @@ const liveError = ref<string | null>(null);
 const liveDescribe = ref<Record<string, unknown> | null>(null);
 const panoramaResponse = ref<IndustryChainPanoramaQueryResponse | null>(null);
 const panoramaError = ref<string | null>(null);
+/** 关系筛选可选项：优先用上次子图里真实出现的边类型，其次用全库统计里非零的类型。 */
+const PANORAMA_FALLBACK_RELATION_TYPES = [
+  "COAUTHOR_WITH",
+  "AFFILIATED_WITH",
+  "AUTHORED_BY",
+  "BELONGS_TO_NODE",
+  "EXECUTIVE_OF",
+  "INVOLVED_IN",
+  "HAS_PARTICIPANT",
+  "INVESTS_IN",
+];
+const panoramaRelationTypeOptions = computed<string[]>(() => {
+  const resp = panoramaResponse.value;
+  const fromGraph = new Map<string, number>();
+  (resp?.graph?.edges ?? []).forEach((edge) => {
+    const label = edge.label || "";
+    if (label) fromGraph.set(label, (fromGraph.get(label) ?? 0) + 1);
+  });
+  if (fromGraph.size) {
+    return [...fromGraph.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([label]) => label);
+  }
+  const byType = resp?.summary?.edgesByType ?? {};
+  const fromSummary = Object.entries(byType)
+    .filter(([, count]) => Number(count) > 0)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .slice(0, 20)
+    .map(([label]) => label);
+  return fromSummary.length ? fromSummary : PANORAMA_FALLBACK_RELATION_TYPES;
+});
+/** 关系筛选选中值，底层仍存成逗号拼接的字符串，与其他参数保持一致。 */
+const panoramaRelationSelection = computed<string[]>({
+  get: (): string[] =>
+    (parameterValues.value.relationTypes || "").split(",").filter(Boolean),
+  set: (values: string[]) => {
+    parameterValues.value = {
+      ...parameterValues.value,
+      relationTypes: values.join(","),
+    };
+  },
+});
 const expertDirectResponse = ref<ExpertDirectRelationQueryResponse | null>(
   null,
 );
@@ -1834,12 +1876,17 @@ function buildPanoramaRequest(
     return Math.min(max, Math.max(min, n));
   };
   const forceRefresh = options.refresh === true;
+  const relationTypes = (raw.relationTypes ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
   return {
     dataSource: "all",
     industry: (raw.industry ?? "").trim() || undefined,
     anchorId: (raw.anchorId ?? "").trim() || undefined,
     depth: clampInt(raw.depth ?? "", 1, 3, 2, "展开层级"),
     topK: clampInt(raw.topK ?? "", 1, 20, 5, "topK"),
+    relationTypes: relationTypes.length ? relationTypes : undefined,
     refresh: forceRefresh || undefined,
   };
 }
@@ -3005,6 +3052,27 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             {{ option }}
           </option>
         </select>
+        <ElSelect
+          v-else-if="field.type === 'multi-select'"
+          v-model="panoramaRelationSelection"
+          class="cooperation-type-select"
+          :data-empty="panoramaRelationSelection.length === 0"
+          multiple
+          collapse-tags
+          :max-collapse-tags="1"
+          clearable
+          placeholder="留空为全部关系"
+          :aria-label="field.label ?? field.name"
+          :title="field.description"
+          @update:model-value="clearParameterError(field.name)"
+        >
+          <ElOption
+            v-for="option in panoramaRelationTypeOptions"
+            :key="option"
+            :label="option"
+            :value="option"
+          />
+        </ElSelect>
         <ElSelect
           v-else-if="field.name === 'achievementTypes' && isLiveCoop"
           v-model="achievementTypeSelection"

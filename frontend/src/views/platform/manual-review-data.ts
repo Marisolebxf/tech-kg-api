@@ -323,6 +323,8 @@ const templateCatalog: Record<ReviewTemplateId, ReviewTemplateMeta> = {
 
 const modeByRulePrefix = (ruleId: string): ReviewTemplateId | null => {
   const id = ruleId.toUpperCase()
+  // T_DIRECT 是字面值匹配（kg.custom.steps 后端直接把 templateId 当 ruleId 写进 record）
+  if (id === 'T_DIRECT') return 'T_DIRECT'
   if (/^(NORM-DICT|DICT-CONFIG|DQ-ENUM|SCHEMA-MAP|SCHEMA-TYPE)/.test(id)) return 'T_MAP'
   if (/^(NORM-REQ|DQ-REQUIRED)/.test(id)) return 'T_DQ_FILL'
   if (/^(NORM-UNIQ|DQ-UNIQUE)/.test(id)) return 'T_DQ_MERGE'

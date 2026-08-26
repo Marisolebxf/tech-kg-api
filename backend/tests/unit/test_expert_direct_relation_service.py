@@ -11,9 +11,7 @@ def test_time_filter_uses_relation_time_for_items_total_and_graph_source() -> No
         {"relation_time": None, "relation_key": "unknown"},
     ]
 
-    result = ExpertDirectRelationService._filter_rows_by_time(
-        rows, "2020-01", "2022-12"
-    )
+    result = ExpertDirectRelationService._filter_rows_by_time(rows, "2020-01", "2022-12")
 
     assert [row["relation_key"] for row in result] == ["matched"]
 

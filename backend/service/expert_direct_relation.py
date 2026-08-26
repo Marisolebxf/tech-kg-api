@@ -383,13 +383,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             return f"{year}-{int(month):02d}-{int(day or 1):02d}"
 
         lower = f"{start[:7]}-01" if start else ""
-        upper = (
-            f"{end[:7]}-31"
-            if end and len(end) == 7
-            else end[:10]
-            if end
-            else ""
-        )
+        upper = f"{end[:7]}-31" if end and len(end) == 7 else end[:10] if end else ""
         filtered: list[dict[str, Any]] = []
         for row in rows:
             relation_date = normalized_relation_date(row)

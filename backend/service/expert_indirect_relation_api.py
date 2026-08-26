@@ -432,9 +432,7 @@ def _enumerate_paths(
     )[:MAX_RESULT_PATHS]
     # directNodes 是最终命中路径中的第一跳节点，与 paths 使用同一过滤结果。
     matched_direct_ids = {
-        str(path["nodes"][1]["id"])
-        for path in paths
-        if len(path.get("nodes") or []) > 1
+        str(path["nodes"][1]["id"]) for path in paths if len(path.get("nodes") or []) > 1
     }
     return matched_direct_ids, paths
 

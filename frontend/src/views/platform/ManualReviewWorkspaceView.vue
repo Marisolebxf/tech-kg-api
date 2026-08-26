@@ -500,7 +500,7 @@ const secondaryActions = computed(() => {
     </header>
 
     <section class="rw-sec rw-sec--evidence" aria-label="证据">
-      <header class="rw-sec__head"><b>1</b><div><h2>证据</h2><p>对象信息、系统结论与证据摘要 · 本屏信息应足够做出决定</p></div></header>
+      <header class="rw-sec__head"><div><h2>案件信息与证据</h2><p>对象信息、系统结论与证据摘要 · 本屏信息应足够做出决定</p></div></header>
       <div class="rw-diag">
         <div>
           <strong>{{ record.object }}</strong>
@@ -524,7 +524,6 @@ const secondaryActions = computed(() => {
 
     <main class="rw-body">
       <header class="rw-zone-head">
-        <b class="rw-step-no">2</b>
         <div>
           <h2>裁决 · {{ template?.title }}</h2>
           <p>{{ template?.question }} · {{ record.suggestion }}</p>
@@ -827,8 +826,8 @@ const secondaryActions = computed(() => {
       <p v-if="feedback" class="rw-feedback">{{ feedback }}</p>
     </main>
 
-    <section class="rw-sec rw-sec--consequence" aria-label="后果">
-      <header class="rw-sec__head"><b>3</b><div><h2>后果</h2><p>确认前请核对：回写哪里、从哪重跑、影响范围</p></div></header>
+    <section v-if="!isDirectCase" class="rw-sec rw-sec--consequence" aria-label="后果">
+      <header class="rw-sec__head"><div><h2>决策影响</h2><p>确认前请核对：回写哪里、从哪重跑、影响范围</p></div></header>
       <div class="tri-grid">
         <div><span>回写目标</span><strong>{{ consequence?.writeTarget }}</strong></div>
         <div><span>重跑锚点</span><strong>{{ consequence?.rerunAnchor }}</strong><em v-if="pipelineStep">· {{ pipelineStep.id }}</em></div>
@@ -871,6 +870,7 @@ const secondaryActions = computed(() => {
   height: 100%;
   min-height: 0;
   flex-direction: column;
+  overflow: auto;
   color: #17233b;
 }
 
@@ -987,9 +987,9 @@ const secondaryActions = computed(() => {
 }
 
 .rw-body {
-  flex: 1;
+  flex: 0 0 auto;
   min-height: 0;
-  overflow: auto;
+  overflow: visible;
   padding: 14px 16px 18px;
   border: 1px solid #bdd7ff;
   border-radius: 9px;

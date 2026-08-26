@@ -2,7 +2,7 @@ import { http } from './http'
 import { unwrapApiResponse, type ApiResponse } from './graphSearch'
 
 export type TaskStatus = '执行中' | '执行出错' | '等待人工审核' | '执行完成'
-export type ReviewStatus = '待处理' | '已完成' | '已撤销'
+export type ReviewStatus = '待处理' | '已完成' | '已撤销' | '已驳回'
 
 export interface UpdateBatch {
   id: string
@@ -177,7 +177,14 @@ export interface ProductionReviewCase {
   draft?: Record<string, unknown>; input?: Record<string, unknown>; candidate?: Record<string, unknown>; evidence?: Record<string, unknown>[]; executions?: Record<string, unknown>[]
   pipelineStepId?: string; pipelineStepName?: string; exceptionCode?: string; isolationScope?: string; workflowType?: string; workflowId?: string; workflowRunId?: string
   template?: { id:string; version:string; title:string; displaySchema:{ sections:Array<{type:string;source?:string;target?:string;field?:string;options?:string[]}> }; resultSchema:Record<string,unknown>; allowedActions:string[] }
-  data?: { input?:Record<string,unknown>; candidate?:Record<string,unknown>; evidence?:unknown[] }; consequence?: { writeTarget:string; rerunStepId:string; scope:string }
+  data?: {
+    input?: Record<string, unknown>
+    candidate?: Record<string, unknown>
+    evidence?: unknown[]
+    source_record?: Record<string, unknown> | null
+    llm_input?: { system: string; user: string } | null
+    llm_output?: string | null
+  }; consequence?: { writeTarget:string; rerunStepId:string; scope:string }
 }
 export const getProductionReviews = (params: Record<string, unknown> = {}) => unwrap(http.get('/v1/manual-reviews/production/queue', { params })) as Promise<{ items: ProductionReviewCase[]; total: number; page: number; pageSize: number }>
 export const getProductionReview = (id: string) => unwrap(http.get(`/v1/manual-reviews/production/${id}`)) as Promise<ProductionReviewCase>

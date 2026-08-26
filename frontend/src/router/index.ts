@@ -1,4 +1,4 @@
-import { createRouter, createWebHashHistory } from 'vue-router'
+import { createRouter, createWebHistory } from 'vue-router'
 
 import { useAuthStore } from '../stores/auth'
 import BusinessServiceView from '../views/business-service/BusinessServiceView.vue'
@@ -9,6 +9,7 @@ import OperationLogsView from '../views/auth/OperationLogsView.vue'
 import PlatformWorkbenchView from '../views/platform/PlatformWorkbenchView.vue'
 import OperationsCenterView from '../views/platform/OperationsCenterView.vue'
 import ManualReviewWorkspaceView from '../views/platform/ManualReviewWorkspaceView.vue'
+import TDirectDemoView from '../views/platform/TDirectDemoView.vue'
 import ProcessInstanceDetailView from '../views/platform/ProcessInstanceDetailView.vue'
 import SchemaBrowserView from '../views/platform/SchemaBrowserView.vue'
 import TaskCenterView from '../views/platform/TaskCenterView.vue'
@@ -32,7 +33,7 @@ const serviceRoutes = [
 ] as const
 
 export const router = createRouter({
-  history: createWebHashHistory(import.meta.env.BASE_URL),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
       path: '/login',
@@ -88,6 +89,7 @@ export const router = createRouter({
     { path: '/graph-build', name: 'graph-build', component: GraphBuildView, meta: { title: '图谱构建' } },
     { path: '/manual-review', name: 'manual-review', component: OperationsCenterView, props: { mode: 'review' }, meta: { title: '人工审核' } },
     { path: '/manual-review/task/:instanceId', name: 'manual-review-detail', component: ManualReviewWorkspaceView, meta: { title: '人工审核详情' } },
+    { path: '/demo/t-direct', name: 'demo-t-direct', component: TDirectDemoView, meta: { title: 'T_DIRECT Demo', public: true } },
     { path: '/pipelines', name: 'pipelines', component: PipelineDesignerView, meta: { title: '抽取 Pipeline' } },
     { path: '/configurations', name: 'configurations', component: ConfigurationManagementView, meta: { title: '配置管理' } },
     { path: '/user-center', name: 'user-center', component: UserCenterView, meta: { title: '个人中心' } },

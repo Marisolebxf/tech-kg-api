@@ -11,6 +11,7 @@ import {
   getReviewTemplate,
   getSedimentHint,
   isMapTypeFix,
+  labelZh,
   resolvePipelineStep,
   type ReviewAction,
   type ReviewRecord,
@@ -22,7 +23,7 @@ const productionCase = ref<ProductionReviewCase>()
 const record = ref<ReviewRecord | undefined>()
 let heartbeatTimer: number | undefined
 const isSupported = computed(() => Boolean(record.value))
-const isHistory = computed(() => record.value?.status === '已完成' || record.value?.status === '已撤销')
+const isHistory = computed(() => record.value?.status === '已完成' || record.value?.status === '已撤销' || record.value?.status === '已驳回')
 const isDirectCase = computed(() => productionCase.value?.template?.id === 'T_DIRECT' || productionCase.value?.workflowType === 'kg.custom.steps')
 // T_DIRECT 候选解析：candidate_snapshot 含 _kind/_nodeLabel/_edgeType/_fromId/_toId + 候选本体字段
 const directCandidate = computed<Record<string, unknown>>(() => (productionCase.value?.candidate as Record<string, unknown>) || {})
@@ -34,20 +35,41 @@ const directToId = computed<string>(() => String(directCandidate.value._toId || 
 const directCandidateFields = computed<Array<[string, unknown]>>(() =>
   Object.entries(directCandidate.value).filter(([k]) => !k.startsWith('_'))
 )
-const directEvidence = computed<Array<Record<string, unknown>>>(() => {
-  const evidence = (productionCase.value?.input as Record<string, unknown>)?.evidence
-  return Array.isArray(evidence) ? (evidence as Array<Record<string, unknown>>) : []
-})
 const directConfidence = computed<number | null>(() => {
   const c = (productionCase.value?.input as Record<string, unknown>)?.confidence
   return typeof c === 'number' ? c : null
 })
-const directConfidenceClass = computed(() => {
-  const c = directConfidence.value
-  if (c === null) return 'unknown'
-  if (c < 0.7) return 'low'
-  if (c < 0.85) return 'mid'
-  return 'high'
+// ① 原始记录：source_record（源表完整行）+ sourceTable / sourceRecordId
+const directSourceRecord = computed<Record<string, unknown> | null>(() =>
+  (productionCase.value?.data as { source_record?: Record<string, unknown> | null } | undefined)?.source_record ?? null,
+)
+const directSourceTable = computed<string>(() => productionCase.value?.sourceTable || '')
+const directSourceRecordId = computed<string>(() => productionCase.value?.sourceRecordId || '')
+const directSourceRecordFields = computed<Array<[string, unknown]>>(() =>
+  directSourceRecord.value ? Object.entries(directSourceRecord.value) : [],
+)
+// ② 抽取推理过程：llm_input (system + user) + llm_output (raw JSON string)
+const directLlmInput = computed<{ system: string; user: string } | null>(() =>
+  (productionCase.value?.data as { llm_input?: { system: string; user: string } | null } | undefined)?.llm_input ?? null,
+)
+const directLlmOutput = computed<string | null>(() =>
+  (productionCase.value?.data as { llm_output?: string | null } | undefined)?.llm_output ?? null,
+)
+// 溯源 ID（executionId 来自 input.executionId；workflowId / sourceTaskId 直接在 case 上）
+const directExecutionId = computed<string>(() =>
+  String((productionCase.value?.input as Record<string, unknown> | undefined)?.executionId || ''),
+)
+// 标题带具体类型：论文实体入库审核 / 引用关系入库审核
+const directTitle = computed(() => {
+  if (!isDirectCase.value) {
+    return isHistory.value ? '处理记录' : '人工处理详情'
+  }
+  if (directKind.value === 'relation') {
+    const subject = `${labelZh(directEdgeType.value)}关系`
+    return isHistory.value ? `${subject}审核结果` : `${subject}入库审核`
+  }
+  const subject = `${labelZh(directNodeLabel.value)}实体`
+  return isHistory.value ? `${subject}审核结果` : `${subject}入库审核`
 })
 const isEditable = computed(() => {
   if (isDirectCase.value) return productionCase.value?.status === 'OPEN'
@@ -188,7 +210,7 @@ const initWorkspace = (item?: ReviewRecord) => {
 }
 
 const mapProductionRecord = (item: ProductionReviewCase): ReviewRecord => ({
-  id:item.id, batch:item.batchId || '-', module:item.phase, node:item.nodeId, type:item.errorType, domain:item.domain, objectType:item.objectType, objectId:item.objectId, object:item.objectName, ruleId:item.templateId, evidence:`${item.evidence?.length || 0} 项真实证据`, score:item.riskLevel, handler:item.assigneeName || '待领取', status:item.status === 'RESOLVED' ? '已完成' : item.status === 'CANCELLED' ? '已撤销' : '待处理', updatedAt:item.updatedAt, sourceResult:item.diagnosis, suggestion:item.scope, sourceTable:item.sourceTable || '-', sourceRecordId:item.sourceRecordId || '-',
+  id:item.id, batch:item.batchId || '-', module:item.phase, node:item.nodeId, type:item.errorType, domain:item.domain, objectType:item.objectType, objectId:item.objectId, object:item.objectName, ruleId:item.templateId, evidence:`${item.evidence?.length || 0} 项真实证据`, score:item.riskLevel, handler:item.assigneeName || '待领取', status:item.status === 'RESOLVED' ? '已完成' : item.status === 'REJECTED' ? '已驳回' : item.status === 'CANCELLED' ? '已撤销' : '待处理', updatedAt:item.updatedAt, sourceResult:item.diagnosis, suggestion:item.scope, sourceTable:item.sourceTable || '-', sourceRecordId:item.sourceRecordId || '-',
 })
 
 const startHeartbeat = () => {
@@ -485,21 +507,21 @@ const secondaryActions = computed(() => {
     <header class="rw-head">
       <div class="rw-head__main">
         <RouterLink :to="backPath">← 返回处理队列</RouterLink>
-        <h1>{{ isHistory ? '处理记录' : '人工处理详情' }}</h1>
+        <h1>{{ directTitle }}</h1>
         <p>
           <code>{{ record.id }}</code>
-          <span>{{ record.handler }}</span>
-          <em>{{ pipelineStep?.name || record.node }} · {{ record.type }} · {{ record.ruleId }}</em>
+          <span v-if="!isDirectCase">{{ record.handler }}</span>
+          <em v-if="!isDirectCase">{{ pipelineStep?.name || record.node }} · {{ record.type }} · {{ record.ruleId }}</em>
         </p>
       </div>
-      <div class="rw-head__badges">
+      <div v-if="!isDirectCase" class="rw-head__badges">
         <span class="cat-pill">{{ handleCategory }}</span>
         <span :class="['scope', impactScope === '批次级' ? 'is-batch' : 'is-task']">{{ impactScope }}{{ impactScope === '批次级' ? ' · 已阻断' : '' }}</span>
         <span :class="['status', `is-${record.status}`]">{{ record.status }}</span>
       </div>
     </header>
 
-    <section class="rw-sec rw-sec--evidence" aria-label="证据">
+    <section v-if="!isDirectCase" class="rw-sec rw-sec--evidence" aria-label="证据">
       <header class="rw-sec__head"><div><h2>案件信息与证据</h2><p>对象信息、系统结论与证据摘要 · 本屏信息应足够做出决定</p></div></header>
       <div class="rw-diag">
         <div>
@@ -523,90 +545,113 @@ const secondaryActions = computed(() => {
     </section>
 
     <main class="rw-body">
-      <header class="rw-zone-head">
+      <header v-if="!isDirectCase" class="rw-zone-head">
         <div>
           <h2>裁决 · {{ template?.title }}</h2>
           <p>{{ template?.question }} · {{ record.suggestion }}</p>
         </div>
       </header>
 
-      <ManualReviewDynamicForm v-if="productionMode && productionCase?.template" :sections="productionCase.template.displaySchema.sections" :data="productionCase.data || {}" @change="dynamicResult = $event" />
+      <ManualReviewDynamicForm v-if="productionMode && productionCase?.template && !isDirectCase" :sections="productionCase.template.displaySchema.sections" :data="productionCase.data || {}" @change="dynamicResult = $event" />
       <template v-else>
-      <!-- T_DIRECT：kg.custom.steps 候选入库决策（accept 写图 / reject 丢弃） -->
+      <!-- T_DIRECT：kg.custom.steps 候选入库决策 5 段式布局 -->
       <section v-if="templateId === 'T_DIRECT'" class="zone zone-direct">
-        <!-- ① 决策对象：要对哪个实体/关系做决策 -->
-        <header class="direct-target">
-          <span class="direct-target-tag">决策对象</span>
-          <template v-if="directKind === 'entity'">
-            <strong class="direct-target-nodelabel">{{ directNodeLabel || '(未指定标签)' }}</strong>
-            <code class="direct-target-id">{{ productionCase?.objectId || '—' }}</code>
-            <em class="direct-target-name">{{ productionCase?.objectName || '' }}</em>
-          </template>
-          <template v-else-if="directKind === 'relation'">
-            <code>{{ directFromId || '—' }}</code>
-            <em class="direct-target-edge">-[{{ directEdgeType || '?' }}]-&gt;</em>
-            <code>{{ directToId || '—' }}</code>
-          </template>
-          <template v-else>
-            <em>未知候选类型 · {{ directKind || 'no kind' }}</em>
-          </template>
-        </header>
-
-        <!-- ② 推理过程：这个候选是怎么来的 -->
-        <section class="direct-lineage">
-          <h3>推理过程 · 候选怎么来的</h3>
-          <dl class="direct-lineage-grid">
-            <div><dt>来源 workflow</dt><dd><code>{{ productionCase?.workflowId || '—' }}</code></dd></div>
-            <div><dt>产生 step</dt><dd>{{ productionCase?.pipelineStepId || '—' }}<em class="direct-lineage-via">（kg.custom.steps 流水线）</em></dd></div>
-            <div><dt>任务 ID</dt><dd><code>{{ productionCase?.sourceTaskId || '—' }}</code></dd></div>
-            <div><dt>执行 ID</dt><dd><code>{{ (productionCase?.input as Record<string, unknown>)?.executionId || '—' }}</code></dd></div>
-            <div><dt>置信度</dt>
-              <dd>
-                <span :class="['direct-confidence-bar', directConfidenceClass]">
-                  {{ directConfidence !== null ? directConfidence.toFixed(2) : '—' }}
-                </span>
-                <em class="direct-lineage-hint">阈值 0.85 · 低于阈值触发人工审核</em>
-              </dd>
-            </div>
-            <div class="direct-lineage-reason"><dt>触发理由</dt><dd>{{ productionCase?.diagnosis || '—' }}</dd></div>
-          </dl>
+        <!-- ① 候选：要审核的实体/关系（最显眼，一上来就让人知道审什么） -->
+        <section class="direct-candidate">
+          <h3>① 候选</h3>
+          <header class="direct-target">
+            <span class="direct-target-tag">{{ directKind === 'relation' ? '审核关系' : '审核实体' }}</span>
+            <template v-if="directKind === 'entity'">
+              <strong class="direct-target-nodelabel">{{ labelZh(directNodeLabel) || '(未指定标签)' }}</strong>
+              <code class="direct-target-id">{{ productionCase?.objectId || '—' }}</code>
+              <em class="direct-target-name">{{ productionCase?.objectName || '' }}</em>
+            </template>
+            <template v-else-if="directKind === 'relation'">
+              <code>{{ directFromId || '—' }}</code>
+              <em class="direct-target-edge">-[{{ directEdgeType || '?' }}]-&gt;</em>
+              <code>{{ directToId || '—' }}</code>
+            </template>
+            <template v-else>
+              <em>未知候选类型 · {{ directKind || 'no kind' }}</em>
+            </template>
+          </header>
+          <table v-if="directCandidateFields.length" class="direct-fields">
+            <tbody>
+              <tr v-for="[key, val] in directCandidateFields" :key="String(key)">
+                <th>{{ key }}</th>
+                <td>{{ typeof val === 'object' ? JSON.stringify(val) : String(val) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else class="direct-empty">暂无候选字段</p>
         </section>
 
-        <!-- ③ 辅助信息：来源证据 + 候选属性 -->
-        <section class="direct-context">
-          <h3>辅助信息</h3>
-          <div v-if="directEvidence.length" class="direct-context-block">
-            <h4>来源证据 · {{ directEvidence.length }} 项</h4>
-            <table class="direct-evidence-table">
-              <thead><tr><th>来源表</th><th>记录 ID</th><th>字段</th><th>原始值</th></tr></thead>
+        <!-- ② 为什么需要你确认：confidence 追溯 -->
+        <section class="direct-why">
+          <h3>② 为什么需要你确认</h3>
+          <p v-if="directConfidence !== null">
+            LLM 输出的 <code class="direct-confidence-inline">confidence = {{ directConfidence.toFixed(2) }}</code>，
+            系统阈值 <strong>0.85</strong>。
+            <strong>{{ directConfidence.toFixed(2) }} &lt; 0.85</strong>
+            → 未达自动入库线 → 候选被隔离在写图前。通过则写入图，驳回则丢弃。
+          </p>
+          <p v-else>
+            系统未给出置信度，候选被隔离在写图前，等待人工决策。
+          </p>
+          <details class="direct-trace">
+            <summary>溯源信息（点击 ID 跳转任务详情）</summary>
+            <dl>
+              <div><dt>workflow</dt><dd><RouterLink :to="`/processing-instance/${productionCase?.workflowId || ''}`" class="direct-trace-link"><code>{{ productionCase?.workflowId || '—' }}</code></RouterLink></dd></div>
+              <div><dt>workflow 类型</dt><dd>{{ productionCase?.workflowType || '—' }}</dd></div>
+              <div><dt>执行 ID</dt><dd><RouterLink :to="`/processing-instance/${directExecutionId || ''}`" class="direct-trace-link"><code>{{ directExecutionId || '—' }}</code></RouterLink></dd></div>
+              <div><dt>来源任务</dt><dd><RouterLink :to="`/processing-instance/${productionCase?.sourceTaskId || ''}`" class="direct-trace-link"><code>{{ productionCase?.sourceTaskId || '—' }}</code></RouterLink></dd></div>
+              <div><dt>产生 step</dt><dd>{{ productionCase?.pipelineStepId || '—' }}</dd></div>
+            </dl>
+          </details>
+        </section>
+
+        <!-- ③ 原始记录：源表完整行（折叠） -->
+        <details class="direct-section-details">
+          <summary>
+            ③ 原始记录
+            <span v-if="directSourceTable" class="direct-section-meta">· 来源表 <code>{{ directSourceTable }}</code> / 记录 <code>{{ directSourceRecordId }}</code></span>
+            <span v-else class="direct-section-meta">· 暂无</span>
+          </summary>
+          <div class="direct-section-body">
+            <table v-if="directSourceRecordFields.length" class="direct-fields">
               <tbody>
-                <tr v-for="(ev, i) in directEvidence" :key="i">
-                  <td><code>{{ ev.table || '—' }}</code></td>
-                  <td>{{ ev.record_id || ev.recordId || '—' }}</td>
-                  <td>{{ ev.field || '—' }}</td>
-                  <td>{{ ev.raw || '—' }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div v-if="directCandidateFields.length" class="direct-context-block">
-            <h4>候选属性 · {{ directCandidateFields.length }} 个字段</h4>
-            <table class="direct-props-table">
-              <thead><tr><th>字段</th><th>值</th></tr></thead>
-              <tbody>
-                <tr v-for="[key, val] in directCandidateFields" :key="String(key)">
+                <tr v-for="[key, val] in directSourceRecordFields" :key="String(key)">
                   <th>{{ key }}</th>
                   <td>{{ typeof val === 'object' ? JSON.stringify(val) : String(val) }}</td>
                 </tr>
               </tbody>
             </table>
+            <p v-else class="direct-empty">暂无原始记录（旧 case 未存源行）</p>
           </div>
-          <p v-if="!directEvidence.length && !directCandidateFields.length" class="direct-context-empty">无来源证据和候选属性</p>
+        </details>
+
+        <!-- ④ 抽取推理过程：LLM 输入 + 输出（折叠） -->
+        <section class="direct-extraction">
+          <h3>④ 抽取推理过程</h3>
+          <details v-if="directLlmInput" class="direct-llm-io">
+            <summary>LLM 输入（system prompt + user message）</summary>
+            <div class="direct-llm-section">
+              <h4>system prompt</h4>
+              <pre>{{ directLlmInput.system }}</pre>
+              <h4>user message</h4>
+              <pre>{{ directLlmInput.user }}</pre>
+            </div>
+          </details>
+          <details v-if="directLlmOutput" class="direct-llm-io">
+            <summary>LLM 输出（JSON）</summary>
+            <pre>{{ directLlmOutput }}</pre>
+          </details>
+          <p v-if="!directLlmInput && !directLlmOutput" class="direct-empty">暂无 LLM 记录（旧 case 未存 prompt/响应）</p>
         </section>
 
-        <!-- ④ 决策：通过入库 / 驳回丢弃 -->
+        <!-- ⑤ 决策：通过入库 / 驳回丢弃 -->
         <section class="direct-decision">
-          <h3>决策</h3>
+          <h3>⑤ 决策</h3>
           <label v-if="isEditable" class="direct-note">
             <span>备注（可选）</span>
             <input v-model="note" placeholder="审核备注..." />
@@ -614,14 +659,14 @@ const secondaryActions = computed(() => {
           <div v-if="isEditable" class="direct-actions">
             <button class="direct-accept" :disabled="submitting" @click="handleAction({ id: 'accept', label: '通过·入库', kind: 'primary' })">
               <strong>通过·入库</strong>
-              <em>{{ directKind === 'relation' ? `create_edge(${directFromId || '?'} → ${directToId || '?'}, ${directEdgeType || '?'})` : `merge_node(["${directNodeLabel || '?'}"], {id:"${productionCase?.objectId || '?'}"})` }}</em>
+              <em>{{ directKind === 'relation' ? `创建${labelZh(directEdgeType) || '?'}边` : `创建${labelZh(directNodeLabel) || '?'}节点` }}</em>
             </button>
             <button class="direct-reject" :disabled="submitting" @click="handleAction({ id: 'reject', label: '驳回·丢弃', kind: 'danger' })">
               <strong>驳回·丢弃</strong>
-              <em>candidate 丢弃，无 graph 副作用，不重启 workflow</em>
+              <em>候选丢弃，不写图</em>
             </button>
           </div>
-          <p v-else class="direct-done">已决策 · 状态 {{ productionCase?.status }}</p>
+          <p v-else class="direct-done">已决策 · 状态 {{ record.status }}</p>
         </section>
       </section>
 
@@ -862,7 +907,7 @@ const secondaryActions = computed(() => {
       </label>
     </section>
 
-    <footer class="rw-foot">
+    <footer v-if="!isDirectCase" class="rw-foot">
       <span>{{ footerHint }}</span>
       <button v-if="canClaim" class="primary" type="button" @click="claimCase">领取任务</button>
       <div v-if="isEditable" class="rw-foot__actions">
@@ -1161,6 +1206,11 @@ const secondaryActions = computed(() => {
 .status.is-已撤销 {
   background: #f2f4f7;
   color: #475467;
+}
+
+.status.is-已驳回 {
+  background: #f2f4f7;
+  color: #b42318;
 }
 
 @media (max-width: 960px) {
@@ -1749,58 +1799,71 @@ const secondaryActions = computed(() => {
   }
 }
 
-/* === T_DIRECT 四段式入库决策区 === */
-.zone-direct{display:grid;gap:18px;padding:18px;border:1px solid #f4d39b;border-radius:9px;background:#fffbf2}
-/* ① 决策对象 */
-.direct-target{display:flex;align-items:center;gap:14px;padding:14px 16px;border:1px solid #f4d39b;border-radius:8px;background:#fff5e6;flex-wrap:wrap}
-.direct-target-tag{padding:4px 10px;border-radius:4px;background:#b54708;color:#fff;font-size:11px;font-weight:600;letter-spacing:.5px}
-.direct-target-nodelabel{font-size:20px;color:#17233b;font-weight:700}
-.direct-target-id{padding:4px 10px;border-radius:4px;background:#f1f5fa;color:#344f73;font:12px Consolas,monospace}
-.direct-target-name{color:#718099;font-style:normal;font-size:13px;margin-left:auto}
-.direct-target-edge{color:#7f56d9;font-style:normal;font-size:13px;font-weight:600;padding:3px 8px;border-radius:4px;background:#eee8ff}
-/* ② 推理过程 */
-.direct-lineage{padding:14px 16px;border:1px solid #dce8f8;border-radius:8px;background:#fff}
-.direct-lineage h3{margin:0 0 12px;font-size:13px;color:#475569;font-weight:600}
-.direct-lineage-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px 24px;margin:0}
-.direct-lineage-grid>div{display:grid;gap:3px}
-.direct-lineage-grid>div.direct-lineage-reason{grid-column:1/-1}
-.direct-lineage dt{color:#718099;font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:.5px}
-.direct-lineage dd{margin:0;color:#17233b;font-size:12px;line-height:18px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.direct-lineage dd code{padding:2px 6px;border-radius:3px;background:#f1f5fa;color:#344f73;font:11px Consolas,monospace}
-.direct-lineage-via{color:#9aa5b5;font-size:10px;font-style:normal;margin-left:6px}
-.direct-lineage-hint{color:#9aa5b5;font-size:10px;font-style:normal}
-.direct-lineage-reason dd{color:#77504c;font-weight:500}
-/* 置信度色块 */
-.direct-confidence-bar{padding:3px 10px;border-radius:999px;font-size:13px;font-weight:700}
-.direct-confidence-bar.low{background:#fde4e0;color:#b42318}
-.direct-confidence-bar.mid{background:#fff0d5;color:#b54708}
-.direct-confidence-bar.high{background:#d1fadf;color:#067647}
-.direct-confidence-bar.unknown{background:#e4ecf6;color:#6b7890}
-/* ③ 辅助信息 */
-.direct-context{padding:14px 16px;border:1px solid #dce8f8;border-radius:8px;background:#fff}
-.direct-context h3{margin:0 0 10px;font-size:13px;color:#475569;font-weight:600}
-.direct-context-block{margin-bottom:14px}
-.direct-context-block:last-child{margin-bottom:0}
-.direct-context-block h4{margin:0 0 8px;font-size:11px;color:#66758f;font-weight:600}
-.direct-evidence-table,.direct-props-table{width:100%;border-collapse:collapse;font-size:11px;border:1px solid #eef2f7;border-radius:5px;overflow:hidden}
-.direct-evidence-table th,.direct-evidence-table td,.direct-props-table th,.direct-props-table td{padding:7px 9px;border-bottom:1px solid #eef2f7;text-align:left;vertical-align:top}
-.direct-evidence-table th,.direct-props-table th{color:#66758f;background:#f8fafc;font-weight:500;font-size:10px;text-transform:uppercase;letter-spacing:.3px}
-.direct-evidence-table td code,.direct-props-table td{color:#17233b}
-.direct-evidence-table td code{padding:2px 5px;border-radius:3px;background:#f1f5fa;color:#344f73;font:10px Consolas,monospace}
-.direct-props-table th{width:160px;color:#66758f;background:#f8fafc;font-weight:500}
-.direct-props-table td{color:#17233b;word-break:break-all}
-.direct-context-empty{margin:0;padding:14px;text-align:center;color:#9aa5b5;font-size:11px}
-/* ④ 决策 */
-.direct-decision{padding:14px 16px;border:2px solid #f4d39b;border-radius:8px;background:#fff5e6}
-.direct-decision h3{margin:0 0 12px;font-size:14px;color:#b54708;font-weight:700}
-.direct-note{display:grid;gap:6px;margin-bottom:12px;font-size:11px;color:#718099;font-weight:500}
-.direct-note input{padding:8px 10px;border:1px solid #dce8f8;border-radius:5px;font:13px/18px inherit;color:#17233b}
+/* === T_DIRECT 五段式入库决策区（扁平布局，匹配 demo） === */
+.zone-direct{display:grid;gap:24px;padding:0;border:0;background:transparent}
+.zone-direct h3{margin:0 0 10px;padding-left:10px;border-left:3px solid #165dff;font-size:13px;font-weight:600;color:#344054}
+/* 共享字段表（① 原始记录 + ③ 候选）+ 占位 */
+.direct-fields{width:100%;border-collapse:collapse;border:1px solid #eef2f7;border-radius:6px;overflow:hidden;font-size:12px}
+.direct-fields th,.direct-fields td{padding:8px 12px;border-bottom:1px solid #eef2f7;text-align:left;vertical-align:top}
+.direct-fields tr:last-child th,.direct-fields tr:last-child td{border-bottom:0}
+.direct-fields th{width:180px;background:#f8fafc;color:#66758f;font-weight:500;font-size:11px}
+.direct-fields td{color:#17233b;word-break:break-word}
+.direct-empty{margin:0;padding:14px;text-align:center;color:#9aa5b5;font-size:11px}
+/* ① 原始记录（折叠块） */
+.direct-section-details{padding-left:10px;border-left:3px solid #165dff}
+.direct-section-details summary{cursor:pointer;font-size:13px;font-weight:600;color:#344054;list-style:none;margin:0;padding:0}
+.direct-section-details summary::-webkit-details-marker{display:none}
+.direct-section-details summary::before{content:"▶ ";font-size:10px;color:#9aa5b5;font-weight:400}
+.direct-section-details[open] summary::before{content:"▼ "}
+.direct-section-meta{font-weight:400;color:#667085;font-size:11px;margin-left:6px}
+.direct-section-meta code{padding:2px 6px;border-radius:3px;background:#f1f5fa;color:#344f73;font:11px Consolas,monospace}
+.direct-section-body{margin-top:10px}
+/* ② 抽取推理过程（LLM I/O 折叠块） */
+.direct-llm-io{margin-top:10px;border:1px solid #eef2f7;border-radius:6px;background:#f8fafc}
+.direct-llm-io:first-child{margin-top:0}
+.direct-llm-io summary{padding:10px 14px;cursor:pointer;color:#667085;font-size:12px;list-style:none}
+.direct-llm-io summary::-webkit-details-marker{display:none}
+.direct-llm-io summary::before{content:"▶ ";font-size:10px;color:#9aa5b5}
+.direct-llm-io[open] summary::before{content:"▼ "}
+.direct-llm-io pre{margin:0;padding:12px 14px;border-top:1px solid #eef2f7;background:#fbfcfe;color:#344054;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.5;overflow-x:auto;white-space:pre-wrap}
+.direct-llm-section h4{margin:12px 14px 6px;color:#66758f;font-size:10px;text-transform:uppercase;letter-spacing:.5px;font-weight:600}
+.direct-llm-section h4:first-child{margin-top:0}
+.direct-llm-section pre{margin:0 0 12px}
+.direct-llm-section pre:last-child{margin-bottom:0}
+/* ③ 候选（header 扁平 inline，无 box） */
+.direct-target{display:flex;align-items:baseline;gap:12px;margin-bottom:10px;flex-wrap:wrap;padding:0;border:0;background:transparent}
+.direct-target-tag{padding:6px 14px;border-radius:4px;background:#b54708;color:#fff;font-size:13px;font-weight:600;letter-spacing:.5px}
+.direct-target-nodelabel{font-size:18px;color:#17233b;font-weight:700}
+.direct-target-id{padding:2px 8px;border-radius:4px;background:#f1f5fa;color:#344f73;font:12px Consolas,monospace}
+.direct-target-name{color:#718099;font-style:normal;font-size:13px}
+.direct-target-edge{color:#7f56d9;font-style:normal;font-size:12px;font-weight:600;padding:3px 8px;border-radius:4px;background:#eee8ff}
+/* ④ 为什么需要你确认 */
+.direct-why p{margin:0 0 10px;color:#475569;line-height:1.7}
+.direct-why strong{color:#b54708;font-weight:600}
+.direct-confidence-inline{padding:2px 6px;border-radius:3px;background:#fff0d5;color:#b54708;font:12px Consolas,monospace;font-weight:600}
+.direct-trace{margin-top:12px;padding:10px 14px;border:1px solid #eef2f7;border-radius:6px;background:#f8fafc}
+.direct-trace summary{cursor:pointer;color:#667085;font-size:12px;list-style:none}
+.direct-trace summary::-webkit-details-marker{display:none}
+.direct-trace summary::before{content:"▶ ";font-size:10px;color:#9aa5b5}
+.direct-trace[open] summary::before{content:"▼ "}
+.direct-trace dl{margin:10px 0 0;display:grid;grid-template-columns:120px 1fr;gap:6px 14px}
+.direct-trace dt{color:#718099;font-size:11px}
+.direct-trace dd{margin:0;color:#344054;font-size:12px}
+.direct-trace dd code{padding:2px 6px;border-radius:3px;background:#eef4ff;color:#175cd3;font:11px Consolas,monospace}
+.direct-trace-link{text-decoration:none}
+.direct-trace-link code{cursor:pointer;transition:background .15s,color .15s}
+.direct-trace-link:hover code{background:#165dff;color:#fff}
+/* ⑤ 决策（浅色 accent，唯一带 box 的段） */
+.direct-decision{padding:18px 20px;border:1px solid #f4d39b;border-radius:9px;background:#fffbf2}
+.direct-decision h3{border-left-color:#b54708;color:#b54708}
+.direct-note{display:grid;gap:6px;margin-bottom:14px;font-size:11px;color:#718099;font-weight:500}
+.direct-note input{padding:8px 10px;border:1px solid #dce8f8;border-radius:5px;font:13px/1.5 inherit;color:#17233b}
 .direct-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.direct-accept,.direct-reject{display:grid;gap:4px;padding:14px;border-radius:8px;cursor:pointer;font-size:14px;transition:opacity .15s,transform .1s}
+.direct-accept,.direct-reject{display:grid;gap:4px;padding:14px;border-radius:8px;cursor:pointer;font-size:14px;transition:opacity .15s}
 .direct-accept{border:2px solid #12b76a;background:#12b76a;color:#fff}
 .direct-reject{border:2px solid #d92d20;background:#d92d20;color:#fff}
 .direct-accept strong,.direct-reject strong{font-size:15px;font-weight:700}
-.direct-accept em,.direct-reject em{color:rgba(255,255,255,.85);font-style:normal;font-size:10px;font-family:Consolas,monospace;line-height:14px}
+.direct-accept em,.direct-reject em{color:rgba(255,255,255,.85);font-style:normal;font-size:11px}
 .direct-accept:disabled,.direct-reject:disabled{opacity:.5;cursor:not-allowed}
 .direct-accept:hover:not(:disabled),.direct-reject:hover:not(:disabled){opacity:.92}
 .direct-done{margin:0;padding:14px;text-align:center;color:#475569;font-size:13px;background:#fff;border-radius:6px;border:1px solid #e4ecf6}

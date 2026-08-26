@@ -392,6 +392,11 @@ def _enqueue_pending_review(request: dict[str, Any], pending: list[Any], attempt
                     workflow_id=workflow_id,
                     workflow_run_id=workflow_run_id,
                     domain=item.get("domain", "graph"),
+                    source_record=item.get("sourceRecord"),
+                    source_table=item.get("sourceTable"),
+                    source_record_id=item.get("sourceRecordId"),
+                    llm_input=item.get("llmInput"),
+                    llm_output=item.get("llmOutput"),
                 )
             except Exception as exc:
                 logging.getLogger("workflow.kg.custom.steps").warning(

@@ -142,7 +142,7 @@ async function loadReviews() {
       const response = await getProductionReviews({ queue: queue || undefined, category: 'A', keyword: keyword.value || undefined, page: 1, pageSize: 50 })
       reviewTotal.value = response.total
       reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
-        id: row.id, batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待领取', status: row.status === 'RESOLVED' ? '已完成' : row.status === 'CANCELLED' ? '已撤销' : '待处理', updatedAt: row.updatedAt, sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
+        id: row.id, batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待领取', status: row.status === 'RESOLVED' ? '已完成' : row.status === 'REJECTED' ? '已驳回' : row.status === 'CANCELLED' ? '已撤销' : '待处理', updatedAt: row.updatedAt, sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
       }))
     } else {
       const response = await getManualReviews({ pageSize: 200 })
@@ -175,7 +175,7 @@ onMounted(loadReviews)
       <section class="ops-metrics is-review-metrics">
         <article><span>待处理</span><strong>{{ pendingReviewCount }}</strong><em>需人工裁决</em></article>
         <article><span>批次级阻断</span><strong>{{ batchBlockingCount }}</strong><em>优先处理</em></article>
-        <article><span>历史记录</span><strong>{{ historyReviewCount }}</strong><em>已完成 / 已撤销</em></article>
+        <article><span>历史记录</span><strong>{{ historyReviewCount }}</strong><em>已完成 / 已驳回 / 已撤销</em></article>
       </section>
     </template>
 
@@ -298,4 +298,5 @@ onMounted(loadReviews)
 .scope-batch{color:#b42318!important}
 .scope-task{color:#175cd3!important}
 .review-status.is-已撤销{background:#f2f4f7;color:#475467}
+.review-status.is-已驳回{background:#f2f4f7;color:#b42318}
 </style>

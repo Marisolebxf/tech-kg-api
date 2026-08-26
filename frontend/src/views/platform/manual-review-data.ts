@@ -1,4 +1,4 @@
-export type ReviewStatus = '待处理' | '已完成' | '已撤销'
+export type ReviewStatus = '待处理' | '已完成' | '已撤销' | '已驳回'
 export type ReviewPriority = 'P0' | 'P1' | 'P2'
 
 export type ReviewBatch = {
@@ -588,3 +588,30 @@ export const getSedimentHint = (record: ReviewRecord): string => {
 export const getImpactScope = (record: ReviewRecord): '批次级' | '任务级' => (
   getReviewPriority(record).level === 'P0' ? '批次级' : '任务级'
 )
+
+/** 图标签/边类型 → 中文名（标题/标签展示用；未命中回退英文原值） */
+const LABEL_ZH: Record<string, string> = {
+  // 实体标签
+  Paper: '论文', Scholar: '学者', Expert: '专家', Person: '人才',
+  Organization: '机构', Patent: '专利', PatentFamily: '专利家族',
+  Project: '项目', Product: '产品', Journal: '期刊', Keyword: '关键词',
+  Event: '事件', News: '新闻', Report: '报告', Datasource: '数据源',
+  IndustryNode: '产业链节点', IndustryChain: '产业链',
+  // 关系边类型
+  CITES: '引用', EMPLOYED_BY: '任职', COOPERATE_WITH: '合作',
+  AUTHORED_BY: '著作', INVENTED_BY: '发明', PUBLISHED_IN: '发表',
+  FUNDED_BY: '资助', INVESTS_IN: '投资', ACQUIRES: '收购',
+  SUBSIDIARY_OF: '隶属', AFFILIATED_WITH: '关联',
+  ACTUAL_CONTROLLER_OF: '实际控制', BENEFICIAL_OWNER_OF: '受益所有',
+  LEGAL_REP_OF: '法代', EXECUTIVE_OF: '任职', LEADS: '领导',
+  MEMBER_OF_FAMILY: '家族成员', CHILD_OF: '子女', INVOLVED_IN: '参与',
+  PRODUCES: '生产', HAS_OUTPUT: '产出', HAS_PARTICIPANT: '参与者',
+  HAS_NEWS: '新闻', HAS_NODE: '节点', BELONGS_TO_NODE: '归属节点',
+  COVERS_CHAIN: '覆盖链条', DOWNSTREAM_OF: '下游',
+  REFERENCED_BY: '被引用', APPLIED_BY: '申请', SHAREHOLDER_OF: '持股',
+}
+
+export const labelZh = (key: string | undefined | null): string => {
+  if (!key) return ''
+  return LABEL_ZH[key] ?? key
+}

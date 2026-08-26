@@ -496,6 +496,11 @@ class ManualReviewService:
         workflow_run_id: str | None = None,
         domain: str = "graph",
         service_actor: str = "kg.custom.steps",
+        source_record: dict[str, Any] | None = None,
+        source_table: str | None = None,
+        source_record_id: str | None = None,
+        llm_input: dict[str, Any] | None = None,
+        llm_output: str | None = None,
     ) -> dict[str, Any]:
         """kg.custom.steps pendingReview 项入队。
 
@@ -555,8 +560,17 @@ class ManualReviewService:
             isolation_scope="OBJECT",
             template_payload_version="1.0",
             input_snapshot=dump(
-                {"evidence": evidence or [], "executionId": execution_id, "confidence": confidence}
+                {
+                    "evidence": evidence or [],
+                    "executionId": execution_id,
+                    "confidence": confidence,
+                    "source_record": source_record,
+                    "llm_input": llm_input,
+                    "llm_output": llm_output,
+                }
             ),
+            source_table=source_table,
+            source_record_id=source_record_id,
             candidate_snapshot=dump(snapshot),
             diagnosis=reason or "需要人工审核",
             created_at=t,
@@ -631,28 +645,85 @@ class ManualReviewService:
             return self.detail(s, c)
 
     def _write_candidate_to_graph(self, c: ReviewCase) -> None:
-        """accept 时把 candidate_snapshot 灌图。entity→merge_node，relation→create_edge。"""
+        """accept 时把 candidate_snapshot 灌图。entity→merge_node，relation→create_edge。
+
+        字段先 ``_coerce_to_schema`` 对齐 tag/edge schema（多余字段塞 extra_json），
+        避免 NebulaGraph ``Unknown column`` 400。
+        """
         from infra.graph_db import get_trs_graph_client
 
         snapshot = load(c.candidate_snapshot)
         kind = snapshot.get("_kind") or c.object_type
-        # 去掉元字段，剩下的是 candidate 本体
         candidate = {k: v for k, v in snapshot.items() if not k.startswith("_")}
         graph = get_trs_graph_client()
         if kind == "entity":
             node_label = snapshot.get("_nodeLabel")
             if not node_label:
                 raise ReviewValidationError("entity 候选缺 nodeLabel")
-            graph.merge_node([node_label], {"id": c.object_id}, candidate)
+            candidate = self._coerce_to_schema(graph, node_label, candidate)
+            graph.merge_node([node_label], {"vid": c.object_id}, candidate)
         elif kind == "relation":
             edge_type = snapshot.get("_edgeType")
             from_id = snapshot.get("_fromId")
             to_id = snapshot.get("_toId")
             if not (edge_type and from_id and to_id):
                 raise ReviewValidationError("relation 候选缺 edgeType/fromId/toId")
+            candidate = self._coerce_to_schema(graph, edge_type, candidate, is_edge=True)
             graph.create_edge(from_id, to_id, edge_type, candidate)
         else:
             raise ReviewValidationError(f"未知 kind: {kind}")
+
+    def _coerce_to_schema(
+        self,
+        graph: Any,
+        label: str,
+        candidate: dict[str, Any],
+        *,
+        is_edge: bool = False,
+    ) -> dict[str, Any]:
+        """把 candidate 字段对齐到 tag/edge schema。
+
+        - schema 里有的字段：保留，值转 string（NebulaGraph tag 属性多为 string）
+        - schema 里有 ``extra_json``：多余字段塞进 extra_json（JSON 串），不丢数据
+        - schema 里没有 extra_json：丢弃多余字段（记 warning）
+        - schema 查询失败：原样发（让 trs-graph 报 400 暴露问题）
+        """
+        import json
+        import logging
+
+        log = logging.getLogger("service.manual_review")
+        try:
+            desc = graph.execute_query(
+                f"DESCRIBE EDGE `{label}`" if is_edge else f"DESCRIBE TAG `{label}`"
+            )
+            records = desc.records if hasattr(desc, "records") else (
+                desc.get("records", []) if isinstance(desc, dict) else []
+            )
+            schema_fields = {r.get("Field") for r in records if isinstance(r, dict) and r.get("Field")}
+        except Exception as exc:  # noqa: BLE001
+            log.warning("DESCRIBE %s %s 失败，原样灌图: %s", "EDGE" if is_edge else "TAG", label, exc)
+            return {k: v if isinstance(v, str) else str(v) for k, v in candidate.items()}
+
+        if not schema_fields:
+            return {k: v if isinstance(v, str) else str(v) for k, v in candidate.items()}
+
+        mapped: dict[str, Any] = {}
+        extras: dict[str, Any] = {}
+        for k, v in candidate.items():
+            if k in schema_fields:
+                mapped[k] = v if isinstance(v, str) else str(v)
+            else:
+                extras[k] = v
+
+        if extras:
+            if "extra_json" in schema_fields:
+                mapped["extra_json"] = json.dumps(extras, ensure_ascii=False)
+            else:
+                log.warning(
+                    "candidate 有 %d 个字段不在 %s %s schema 里且无 extra_json 兜底，丢弃: %s",
+                    len(extras), "edge" if is_edge else "tag", label, list(extras),
+                )
+        return mapped
 
     def enqueue_correction(self, s, c, d, result):
         payload = {"decisionId": d.id, "result": result}
@@ -1242,6 +1313,7 @@ class ManualReviewService:
         d = self.case_dict(c)
         dr = s.get(ReviewDraft, c.id)
         reported = (load(c.candidate_snapshot) or {}).pop("reportedEvidence", [])
+        input_data = load(c.input_snapshot) or {}
         files = [
             {
                 "id": x.id,
@@ -1280,11 +1352,14 @@ class ManualReviewService:
                 "draft": load(dr.payload) if dr else {},
                 "template": template_contract(c.template_id),
                 "data": {
-                    "input": load(c.input_snapshot),
+                    "input": input_data,
                     "candidate": load(c.candidate_snapshot),
                     "evidence": reported + files,
+                    "source_record": input_data.get("source_record"),
+                    "llm_input": input_data.get("llm_input"),
+                    "llm_output": input_data.get("llm_output"),
                 },
-                "input": load(c.input_snapshot),
+                "input": input_data,
                 "candidate": load(c.candidate_snapshot),
                 "evidence": reported + files,
                 "consequence": {

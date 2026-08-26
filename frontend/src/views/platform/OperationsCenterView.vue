@@ -138,7 +138,8 @@ async function loadReviews() {
   try {
     if (productionMode) {
       const queue = productionTabs[reviewTab.value as keyof typeof productionTabs] ?? ''
-      const response = await getProductionReviews({ queue: queue || undefined, keyword: keyword.value || undefined, page: 1, pageSize: 50 })
+      // 默认只显示 A 类（入库决策：T_DIRECT/T_LINK/T_EVIDENCE）；B 类数据修正在 TODO，先不混入
+      const response = await getProductionReviews({ queue: queue || undefined, category: 'A', keyword: keyword.value || undefined, page: 1, pageSize: 50 })
       reviewTotal.value = response.total
       reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
         id: row.id, batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待领取', status: row.status === 'RESOLVED' ? '已完成' : row.status === 'CANCELLED' ? '已撤销' : '待处理', updatedAt: row.updatedAt, sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,

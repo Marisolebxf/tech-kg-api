@@ -24,6 +24,31 @@ let heartbeatTimer: number | undefined
 const isSupported = computed(() => Boolean(record.value))
 const isHistory = computed(() => record.value?.status === '已完成' || record.value?.status === '已撤销')
 const isDirectCase = computed(() => productionCase.value?.template?.id === 'T_DIRECT' || productionCase.value?.workflowType === 'kg.custom.steps')
+// T_DIRECT 候选解析：candidate_snapshot 含 _kind/_nodeLabel/_edgeType/_fromId/_toId + 候选本体字段
+const directCandidate = computed<Record<string, unknown>>(() => (productionCase.value?.candidate as Record<string, unknown>) || {})
+const directKind = computed<string>(() => String(directCandidate.value._kind || productionCase.value?.objectType || ''))
+const directNodeLabel = computed<string>(() => String(directCandidate.value._nodeLabel || ''))
+const directEdgeType = computed<string>(() => String(directCandidate.value._edgeType || ''))
+const directFromId = computed<string>(() => String(directCandidate.value._fromId || ''))
+const directToId = computed<string>(() => String(directCandidate.value._toId || ''))
+const directCandidateFields = computed<Array<[string, unknown]>>(() =>
+  Object.entries(directCandidate.value).filter(([k]) => !k.startsWith('_'))
+)
+const directEvidence = computed<Array<Record<string, unknown>>>(() => {
+  const evidence = (productionCase.value?.input as Record<string, unknown>)?.evidence
+  return Array.isArray(evidence) ? (evidence as Array<Record<string, unknown>>) : []
+})
+const directConfidence = computed<number | null>(() => {
+  const c = (productionCase.value?.input as Record<string, unknown>)?.confidence
+  return typeof c === 'number' ? c : null
+})
+const directConfidenceClass = computed(() => {
+  const c = directConfidence.value
+  if (c === null) return 'unknown'
+  if (c < 0.7) return 'low'
+  if (c < 0.85) return 'mid'
+  return 'high'
+})
 const isEditable = computed(() => {
   if (isDirectCase.value) return productionCase.value?.status === 'OPEN'
   return productionMode ? ['CLAIMED','IN_REVIEW'].includes(productionCase.value?.status || '') : record.value?.status === '待处理'
@@ -44,6 +69,7 @@ const sedimentRule = ref(false)
 
 const note = ref(record.value?.decisionNote ?? '')
 const feedback = ref('')
+const submitting = ref(false)
 const dynamicResult = ref<Record<string, unknown>>({})
 const safeComponentTypes = new Set(['mapping-table','field-editor','record-merge','entity-comparison','evidence-list','attribute-comparison','runtime-config','raw-json-readonly'])
 const hasUnknownComponent = computed(() => productionMode && Boolean(productionCase.value?.template?.displaySchema.sections.some((section) => !safeComponentTypes.has(section.type))))
@@ -331,6 +357,7 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
   if (!record.value || !isEditable.value) return
   // kg.custom.steps T_DIRECT 案例：accept 直接写图，reject 丢弃，不走 claim/submit/approve 4-eyes 流程
   if (isDirectCase.value && productionCase.value && (action.id === 'accept' || action.id === 'reject')) {
+    submitting.value = true
     try {
       productionCase.value = await directDecideProductionReview(
         productionCase.value.id,
@@ -342,6 +369,8 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
       feedback.value = action.id === 'accept' ? '已通过，候选已写入图' : '已驳回，候选丢弃'
     } catch (error) {
       feedback.value = error instanceof Error ? error.message : '决策失败'
+    } finally {
+      submitting.value = false
     }
     return
   }
@@ -504,8 +533,79 @@ const secondaryActions = computed(() => {
 
       <ManualReviewDynamicForm v-if="productionMode && productionCase?.template" :sections="productionCase.template.displaySchema.sections" :data="productionCase.data || {}" @change="dynamicResult = $event" />
       <template v-else>
+      <!-- T_DIRECT：kg.custom.steps 候选入库决策（accept 写图 / reject 丢弃） -->
+      <section v-if="templateId === 'T_DIRECT'" class="zone zone-direct">
+        <header class="zone-direct-head">
+          <div>
+            <h2>入库决策 · kg.custom.steps 候选</h2>
+            <p>快速判断该候选能否进图 · <strong>通过</strong> 直接写图（merge_node/create_edge）· <strong>驳回</strong> 丢弃，不重启 workflow</p>
+          </div>
+          <span :class="['direct-confidence', directConfidenceClass]">
+            置信度 <b>{{ directConfidence !== null ? directConfidence.toFixed(2) : '—' }}</b>
+          </span>
+        </header>
+
+        <div class="direct-candidate">
+          <template v-if="directKind === 'entity'">
+            <span class="direct-kind">实体</span>
+            <strong class="direct-nodelabel">{{ directNodeLabel || '(未指定标签)' }}</strong>
+            <code>{{ productionCase?.objectId || '—' }}</code>
+          </template>
+          <template v-else-if="directKind === 'relation'">
+            <span class="direct-kind">关系</span>
+            <code>{{ directFromId || '—' }}</code>
+            <em>-[{{ directEdgeType || '?' }}]-&gt;</em>
+            <code>{{ directToId || '—' }}</code>
+          </template>
+          <template v-else>
+            <span class="direct-kind">未知</span>
+            <em>{{ directKind || 'no kind' }}</em>
+          </template>
+        </div>
+
+        <table v-if="directCandidateFields.length" class="direct-props">
+          <caption>候选属性</caption>
+          <tbody>
+            <tr v-for="[key, val] in directCandidateFields" :key="String(key)">
+              <th>{{ key }}</th>
+              <td>{{ typeof val === 'object' ? JSON.stringify(val) : String(val) }}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p v-if="productionCase?.diagnosis" class="direct-reason">
+          <strong>理由：</strong>{{ productionCase.diagnosis }}
+        </p>
+
+        <section v-if="directEvidence.length" class="direct-evidence">
+          <h3>来源证据 · {{ directEvidence.length }} 项</h3>
+          <table>
+            <thead><tr><th>来源表</th><th>记录 ID</th><th>字段</th><th>原始值</th></tr></thead>
+            <tbody>
+              <tr v-for="(ev, i) in directEvidence" :key="i">
+                <td><code>{{ ev.table || '—' }}</code></td>
+                <td>{{ ev.record_id || ev.recordId || '—' }}</td>
+                <td>{{ ev.field || '—' }}</td>
+                <td>{{ ev.raw || '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <label v-if="isEditable" class="direct-note">
+          <span>备注（可选）</span>
+          <input v-model="note" placeholder="审核备注..." />
+        </label>
+
+        <div v-if="isEditable" class="direct-actions">
+          <button class="direct-accept" :disabled="submitting" @click="handleAction({ id: 'accept', label: '通过·入库', kind: 'primary' })">通过·入库</button>
+          <button class="direct-reject" :disabled="submitting" @click="handleAction({ id: 'reject', label: '驳回·丢弃', kind: 'danger' })">驳回·丢弃</button>
+        </div>
+        <p v-else class="direct-done">已决策 · 状态 {{ productionCase?.status }}</p>
+      </section>
+
       <!-- T_MAP：选值映射（字段/字典/实体类型） -->
-      <section v-if="templateId === 'T_MAP'" class="zone zone-map">
+      <section v-else-if="templateId === 'T_MAP'" class="zone zone-map">
         <template v-if="record && isMapTypeFix(record)">
           <p class="zone-banner">系统实体类型判断与源记录特征不一致，请选择正确类型后从 Schema 映射节点重跑。</p>
           <div class="entity-compare">
@@ -1626,4 +1726,46 @@ const secondaryActions = computed(() => {
     flex-direction: column;
   }
 }
+
+/* === T_DIRECT 入库决策区 === */
+.zone-direct{display:grid;gap:14px;padding:14px 16px;border:1px solid #f4d39b;border-radius:9px;background:#fffbf2}
+.zone-direct-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
+.zone-direct-head h2{margin:0;font-size:16px;color:#b54708}
+.zone-direct-head p{margin:5px 0 0;color:#77504c;font-size:11px;line-height:18px}
+.zone-direct-head p strong{color:#b54708}
+.direct-confidence{padding:6px 12px;border-radius:999px;background:#fff;color:#718099;font-size:11px}
+.direct-confidence b{font-size:14px;margin-left:4px}
+.direct-confidence.low{background:#fde4e0;color:#b42318}
+.direct-confidence.low b{color:#b42318}
+.direct-confidence.mid{background:#fff0d5;color:#b54708}
+.direct-confidence.mid b{color:#b54708}
+.direct-confidence.high{background:#d1fadf;color:#067647}
+.direct-confidence.high b{color:#067647}
+.direct-confidence.unknown{background:#e4ecf6;color:#6b7890}
+.direct-candidate{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid #dce8f8;border-radius:7px;background:#fff}
+.direct-kind{padding:3px 9px;border-radius:4px;background:#7f56d9;color:#fff;font-size:10px;font-weight:600}
+.direct-nodelabel{font-size:15px;color:#17233b}
+.direct-candidate code{padding:3px 7px;border-radius:4px;background:#f1f5fa;color:#344f73;font:11px Consolas,monospace}
+.direct-candidate em{color:#718099;font-style:normal;font-size:12px}
+.direct-props{width:100%;border-collapse:collapse;font-size:12px;background:#fff;border:1px solid #e4ecf6;border-radius:6px;overflow:hidden}
+.direct-props caption{padding:8px 10px;background:#f5f8fc;color:#66758f;font-size:11px;text-align:left;font-weight:600}
+.direct-props th,.direct-props td{padding:8px 10px;border-bottom:1px solid #eef2f7;text-align:left;vertical-align:top}
+.direct-props th{width:160px;color:#66758f;font-weight:500;background:#fbfdff}
+.direct-props td{color:#17233b;word-break:break-all}
+.direct-reason{margin:0;padding:10px 12px;border-radius:6px;background:#fff5e6;color:#77504c;font-size:12px;line-height:18px}
+.direct-reason strong{color:#b54708;margin-right:4px}
+.direct-evidence{padding:10px;border:1px solid #dce8f8;border-radius:7px;background:#fff}
+.direct-evidence h3{margin:0 0 8px;font-size:11px;color:#66758f;font-weight:600}
+.direct-evidence table{width:100%;border-collapse:collapse;font-size:11px}
+.direct-evidence th,.direct-evidence td{padding:6px 8px;border-bottom:1px solid #eef2f7;text-align:left}
+.direct-evidence th{color:#66758f;background:#fbfdff;font-weight:500}
+.direct-evidence td code{padding:2px 5px;border-radius:3px;background:#f1f5fa;color:#344f73;font:10px Consolas,monospace}
+.direct-note{display:grid;gap:5px;font-size:11px;color:#718099}
+.direct-note input{padding:7px 10px;border:1px solid #dce8f8;border-radius:5px;font:12px/16px inherit;color:#17233b}
+.direct-actions{display:flex;gap:10px;margin-top:4px}
+.direct-accept,.direct-reject{flex:1;height:40px;border-radius:7px;cursor:pointer;font-size:13px;font-weight:600;transition:opacity .15s}
+.direct-accept{border:1px solid #12b76a;background:#12b76a;color:#fff}
+.direct-reject{border:1px solid #d92d20;background:#d92d20;color:#fff}
+.direct-accept:disabled,.direct-reject:disabled{opacity:.55;cursor:not-allowed}
+.direct-done{margin:0;padding:10px;text-align:center;color:#66758f;font-size:12px;background:#f5f8fc;border-radius:6px}
 </style>

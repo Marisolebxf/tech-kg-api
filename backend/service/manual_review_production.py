@@ -276,6 +276,17 @@ class ManualReviewService:
         }
         if f.get("queue") in queues:
             q.append(queues[f["queue"]])
+        # category 过滤：A=入库决策（T_DIRECT/T_LINK/T_EVIDENCE）；B=数据修正（T_MAP/T_DQ_FILL/T_DQ_MERGE/T_ATTR）；
+        # 不传=所有 template；T_RUNTIME 始终不进审核队列（属于代码问题，自动重试/告警另行处理）
+        categories = {
+            "A": ("T_DIRECT", "T_LINK", "T_EVIDENCE"),
+            "B": ("T_MAP", "T_DQ_FILL", "T_DQ_MERGE", "T_ATTR"),
+        }
+        if f.get("category") in categories:
+            q.append(ReviewCase.template_id.in_(categories[f["category"]]))
+        else:
+            # 默认排除 T_RUNTIME（即使没传 category，T_RUNTIME 也不应在审核队列显示）
+            q.append(ReviewCase.template_id != "T_RUNTIME")
         if a.domains and "*" not in a.domains and not a.has_any("review_admin", "auditor"):
             q.append(ReviewCase.domain.in_(a.domains))
         if f.get("keyword"):

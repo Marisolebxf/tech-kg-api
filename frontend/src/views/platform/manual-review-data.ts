@@ -214,6 +214,7 @@ export type ReviewTemplateId =
   | 'T_DQ_FILL'
   | 'T_DQ_MERGE'
   | 'T_RUNTIME'
+  | 'T_DIRECT'
 
 /** @deprecated 兼容旧引用 */
 export type ReviewModeId = ReviewTemplateId
@@ -307,6 +308,15 @@ const templateCatalog: Record<ReviewTemplateId, ReviewTemplateMeta> = {
       { id: 'retry-task', label: '重试本任务', kind: 'secondary', rerun: true, actionKind: 'apply_and_rerun' },
       { id: 'skip-task', label: '撤销本任务', kind: 'secondary', actionKind: 'discard' },
       { id: 'escalate', label: '暂停并升级治理员', kind: 'danger', actionKind: 'escalate' },
+    ],
+  },
+  T_DIRECT: {
+    id: 'T_DIRECT',
+    title: '入库决策',
+    question: '该候选实体/关系能否进图？通过直接写图，驳回丢弃。',
+    actions: [
+      { id: 'accept', label: '通过·入库', kind: 'primary', actionKind: 'apply_and_rerun' },
+      { id: 'reject', label: '驳回·丢弃', kind: 'danger', actionKind: 'discard' },
     ],
   },
 }

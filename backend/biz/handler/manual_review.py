@@ -159,6 +159,11 @@ async def production_queue(
     domain: str | None = None,
     template_id: str | None = Query(None, alias="templateId"),
     assignee_id: str | None = Query(None, alias="assigneeId"),
+    category: str | None = Query(
+        None,
+        description="A=入库决策 (T_DIRECT/T_LINK/T_EVIDENCE)；B=数据修正 (T_MAP/T_DQ_FILL/T_DQ_MERGE/T_ATTR)；"
+        "不传=所有；T_RUNTIME 不在审核队列，请求时即被过滤",
+    ),
     keyword: str | None = None,
     page: int = 1,
     page_size: int = Query(50, alias="pageSize"),

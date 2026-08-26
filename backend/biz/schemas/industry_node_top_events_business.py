@@ -54,6 +54,31 @@ class IndustryNodeTopEventsRequest(BaseModel):
             raise ValueError("输入不能包含空格或 !@#￥%& 等异常字符")
         return value
 
+    @field_validator("top_n", mode="before")
+    @classmethod
+    def _validate_top_n(cls, value: object) -> int:
+        """top_n：必须是 1-50 的整数，留空取默认 10。
+
+        覆盖 0826 任务用例：top_n 输入非数字 → 提示「必须是数字」；
+        top_n 不在范围 → 提示「取值范围为 1-50」。前端 top_n 为文本框（可输入任意字符），
+        故此处兼容字符串/浮点/布尔等脏输入，统一给出中文提示，再交由 Field 的 ge/le 兜底。
+        """
+        if value is None or (isinstance(value, str) and value.strip() == ""):
+            return 10
+        if isinstance(value, bool):  # bool 是 int 子类，但语义上不是数字输入
+            raise ValueError("top_n 必须是数字")
+        if isinstance(value, int):
+            n: int = value
+        elif isinstance(value, float) and value.is_integer():
+            n = int(value)
+        elif isinstance(value, str) and re.fullmatch(r"\d+", value.strip()):
+            n = int(value.strip())
+        else:
+            raise ValueError("top_n 必须是数字")
+        if n < 1 or n > 50:
+            raise ValueError("top_n 取值范围为 1-50")
+        return n
+
     @model_validator(mode="after")
     def validate_time_range(self) -> IndustryNodeTopEventsRequest:
         """time_range 形如 "2025-2026"（年份区间，可单端开放如 "2025-"）。

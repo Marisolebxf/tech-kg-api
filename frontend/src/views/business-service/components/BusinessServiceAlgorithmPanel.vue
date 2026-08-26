@@ -207,6 +207,16 @@ function keywordError(value: string): string | null {
   return null;
 }
 
+/** top_n：必须是 1-50 的整数，留空合法（后端取默认 10）。与后端 _validate_top_n 同口径。 */
+function topNError(value: string): string | null {
+  const s = (value ?? "").trim();
+  if (s === "") return null; // 留空 → 后端取默认 10
+  if (!/^\d+$/.test(s)) return "top_n 必须是数字";
+  const n = Number(s);
+  if (n < 1 || n > 50) return "top_n 取值范围为 1-50";
+  return null;
+}
+
 function paperCooperationTimeErrors(
   startValue: string | undefined,
   endValue: string | undefined,
@@ -273,13 +283,20 @@ function parameterFieldError(fieldName: string, value: string): string | null {
     if (fieldName === "anchorId") return identifierError(value);
     if (fieldName === "industry") return keywordError(value);
   }
-  if (isLiveEnterpriseRelation.value && fieldName === "expert_id")
-    return identifierError(value);
-  if (
-    isLiveIndustryEvent.value &&
-    (fieldName === "chain_node_id" || fieldName === "event_type")
-  )
-    return identifierError(value);
+  if (isLiveEnterpriseRelation.value) {
+    if (fieldName === "expert_id") return identifierError(value);
+    if (
+      fieldName === "enterprise_name" ||
+      fieldName === "role_type" ||
+      fieldName === "industry"
+    )
+      return keywordError(value);
+  }
+  if (isLiveIndustryEvent.value) {
+    if (fieldName === "chain_node_id" || fieldName === "event_type")
+      return identifierError(value);
+    if (fieldName === "top_n") return topNError(value);
+  }
   return null;
 }
 
@@ -407,12 +424,14 @@ const isLiveEnterpriseRelation = computed(
 const isLiveModule = computed(
   () => isLiveAlumni.value || isLiveCoop.value || isLiveColleague.value,
 );
-/** 当前业务模块需要做「超长 / 异常字符」实时校验的标识类字段名。 */
+/** 当前业务模块需要做实时校验、且不交由浏览器 maxlength 截断的字段名
+ * （超长输入交给 JS 校验器拦截，以便给出「超出字段长度」提示而非静默截断）。 */
 const liveIdFieldNames = computed<readonly string[]>(() => {
   if (isExpertIndirect.value) return ["core_node_id"];
   if (isPaperCooperation.value) return ["expertAId", "expertBId"];
   if (isLiveColleague.value) return ["expert_a_id", "expert_b_id"];
-  if (isLiveEnterpriseRelation.value) return ["expert_id"];
+  if (isLiveEnterpriseRelation.value)
+    return ["expert_id", "enterprise_name", "role_type", "industry"];
   if (isLiveIndustryEvent.value) return ["chain_node_id", "event_type"];
   return [];
 });
@@ -2588,6 +2607,17 @@ async function handleRun() {
         showToast("请修正参数后再执行", "warning");
         return;
       }
+      // 企业名称/角色/行业筛选：超长 / 异常字符（0826 任务用例）
+      const filterErrors = collectParameterErrors([
+        "enterprise_name",
+        "role_type",
+        "industry",
+      ]);
+      if (Object.keys(filterErrors).length) {
+        parameterErrors.value = filterErrors;
+        showToast("请修正参数后再执行", "warning");
+        return;
+      }
       parameterErrors.value = {};
       const body = buildPayload();
       const res = (await invokeKgService(
@@ -2637,6 +2667,9 @@ async function handleRun() {
         parameterValues.value.event_type ?? "",
       );
       if (eventTypeErr) errors.event_type = eventTypeErr;
+      // top_n：非数字 / 不在 1-50 范围（0826 任务用例）
+      const topNErr = topNError(parameterValues.value.top_n ?? "");
+      if (topNErr) errors.top_n = topNErr;
       const startTime = optionalParam(parameterValues.value.time_range_start);
       const endTime = optionalParam(parameterValues.value.time_range_end);
       if (Boolean(startTime) !== Boolean(endTime)) {

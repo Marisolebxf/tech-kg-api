@@ -90,3 +90,52 @@ def test_request_accepts_valid_inputs() -> None:
     # 含中文/连字符的合法标识
     req = IndustryNodeTopEventsRequest.model_validate({"chain_node_id": "节点-IC0007"})
     assert req.chain_node_id == "节点-IC0007"
+
+
+def test_request_rejects_non_numeric_top_n() -> None:
+    """top_n 输入非数字 → 提示必须是数字（0826 任务用例）。"""
+    with pytest.raises(ValidationError, match="必须是数字"):
+        IndustryNodeTopEventsRequest.model_validate({"chain_node_id": "IC0007007", "top_n": "abc"})
+    # 中文字符、小数、布尔均视为非数字
+    with pytest.raises(ValidationError, match="必须是数字"):
+        IndustryNodeTopEventsRequest.model_validate({"chain_node_id": "IC0007007", "top_n": "十"})
+    with pytest.raises(ValidationError, match="必须是数字"):
+        IndustryNodeTopEventsRequest.model_validate({"chain_node_id": "IC0007007", "top_n": "1.5"})
+    with pytest.raises(ValidationError, match="必须是数字"):
+        IndustryNodeTopEventsRequest.model_validate({"chain_node_id": "IC0007007", "top_n": True})
+
+
+def test_request_rejects_top_n_out_of_range() -> None:
+    """top_n 不在 1-50 范围 → 提示取值范围（0826 任务用例）。"""
+    for bad in (0, -1, 51, 999):
+        with pytest.raises(ValidationError, match="取值范围"):
+            IndustryNodeTopEventsRequest.model_validate(
+                {"chain_node_id": "IC0007007", "top_n": bad}
+            )
+    # 字符串数字同样受范围约束
+    with pytest.raises(ValidationError, match="取值范围"):
+        IndustryNodeTopEventsRequest.model_validate({"chain_node_id": "IC0007007", "top_n": "999"})
+
+
+def test_request_accepts_valid_top_n() -> None:
+    """合法 top_n（int / 数字字符串 / 留空默认 10）应通过。"""
+    req = IndustryNodeTopEventsRequest.model_validate({"chain_node_id": "IC0007007", "top_n": 10})
+    assert req.top_n == 10
+    # 字符串数字也兼容
+    req = IndustryNodeTopEventsRequest.model_validate({"chain_node_id": "IC0007007", "top_n": "25"})
+    assert req.top_n == 25
+    # 边界值 1 与 50 合法
+    assert (
+        IndustryNodeTopEventsRequest.model_validate(
+            {"chain_node_id": "IC0007007", "top_n": 1}
+        ).top_n
+        == 1
+    )
+    assert (
+        IndustryNodeTopEventsRequest.model_validate(
+            {"chain_node_id": "IC0007007", "top_n": 50}
+        ).top_n
+        == 50
+    )
+    # 留空取默认 10
+    assert IndustryNodeTopEventsRequest.model_validate({"chain_node_id": "IC0007007"}).top_n == 10

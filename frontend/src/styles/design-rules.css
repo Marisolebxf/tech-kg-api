@@ -939,6 +939,147 @@ body {
   border-radius: 4px !important;
 }
 
+/* Phone layout: composed workbenches become a readable vertical document. */
+@media (max-width: 767px) {
+  .app-workspace:has(.business-service) {
+    overflow-x: hidden;
+  }
+
+  .app-workspace .business-service {
+    width: 100%;
+    min-width: 0;
+    height: auto !important;
+    min-height: 100%;
+    overflow: visible !important;
+  }
+
+  .app-workspace .business-service .service-console {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 14px;
+    min-height: 0;
+    padding: 12px;
+  }
+
+  .app-workspace .business-service .service-console__head,
+  .app-workspace .business-service .service-console__params,
+  .app-workspace .business-service .service-console__params--inline,
+  .app-workspace .business-service .service-console__params--industry-event {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .app-workspace .business-service .service-console__head,
+  .app-workspace .business-service .service-console__actions {
+    justify-content: stretch !important;
+    min-width: 0;
+    margin-top: 0 !important;
+  }
+
+  .app-workspace .business-service .service-console__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .app-workspace .business-service .service-console__actions button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .app-workspace .business-service .business-service__main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 20px;
+    height: auto;
+    overflow: visible;
+  }
+
+  .app-workspace .business-service :is(
+    .business-service__side,
+    .graph-panel,
+    .result-panel
+  ) {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .app-workspace .business-service .graph-panel__canvas {
+    flex: none;
+    width: 100%;
+    height: 360px;
+    min-height: 360px;
+  }
+
+  .app-workspace .business-service :is(
+    .graph-panel > .kg-panel__header,
+    .result-panel > .kg-panel__header
+  ) {
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .app-workspace .business-service .graph-panel__time {
+    flex-wrap: wrap;
+  }
+
+  .app-workspace .business-service .graph-panel__legend {
+    height: auto;
+    padding-block: 8px;
+  }
+
+  .app-workspace .business-service .result-panel__tabs {
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .app-workspace .business-service .result-panel__tabs button {
+    flex: 0 0 auto;
+  }
+
+  .app-workspace .business-service .result-panel__table {
+    width: 100%;
+    margin-top: 12px !important;
+  }
+
+  .app-workspace .business-service .result-panel__table div {
+    grid-template-columns: 104px minmax(0, 1fr);
+    min-height: 44px;
+  }
+
+  .app-workspace .business-service .result-panel__table::after {
+    display: none;
+  }
+
+  .app-workspace .business-service .result-panel__table dt,
+  .app-workspace .business-service .result-panel__table dd {
+    padding: 10px;
+    overflow-wrap: anywhere;
+  }
+
+  .app-workspace :is(.kg-panel__header, .page-header, .page-heading) {
+    flex-wrap: wrap;
+  }
+
+  .app-workspace :is(.summary-grid, .summary-row, .schema-summary, .task-summary) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .app-workspace :is(.table-wrap, .table-scroll, .member-panel > div) {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .arco-modal {
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px);
+  }
+
+  .arco-modal-body {
+    padding: 16px;
+  }
+}
+
 .app-workspace .business-service .service-console__actions {
   gap: 16px;
 }
@@ -1279,4 +1420,99 @@ body {
 ) .el-select__selected-item.el-select__placeholder {
   color: #bfbfbf !important;
   font-weight: 400 !important;
+}
+
+/* Final phone overrides live last so legacy desktop contracts cannot win. */
+@media (max-width: 767px) {
+  .app-workspace .business-service .developer-view {
+    display: flex !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    gap: 16px !important;
+    overflow: visible !important;
+    flex-direction: column;
+  }
+
+  .app-workspace .business-service .developer-view__meta {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100%;
+    height: auto;
+    gap: 12px;
+  }
+
+  .app-workspace .business-service .developer-view__meta label {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 6px;
+  }
+
+  .app-workspace .business-service .developer-view__meta label > span {
+    white-space: nowrap;
+  }
+
+  .app-workspace .business-service .developer-view__cards {
+    display: flex !important;
+    width: 100%;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    flex-direction: column;
+  }
+
+  .app-workspace .business-service .developer-view__cards > .kg-panel {
+    width: 100%;
+    height: auto !important;
+    min-height: 300px !important;
+  }
+
+  .app-workspace .business-service .developer-view__table-scroll {
+    width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow-x: auto !important;
+    overflow-y: visible !important;
+  }
+
+  .app-workspace .business-service .prototype-table {
+    width: 620px !important;
+    min-width: 620px !important;
+  }
+
+  .app-workspace .business-service .prototype-table :is(th, td) {
+    height: auto !important;
+    padding: 10px 12px !important;
+    overflow-wrap: normal !important;
+    word-break: normal !important;
+  }
+
+  .app-workspace .business-service .prototype-table :is(
+    th,
+    td:first-child,
+    td:nth-child(2)
+  ) {
+    white-space: nowrap !important;
+  }
+
+  .app-workspace .business-service .business-service__main {
+    grid-template-columns: minmax(0, 1fr) !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .app-workspace .business-service :is(
+    .business-service__side,
+    .graph-panel,
+    .result-panel
+  ) {
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .app-workspace .business-service .graph-panel__canvas {
+    height: 360px !important;
+    min-height: 360px !important;
+    flex: none !important;
+  }
 }

@@ -977,13 +977,13 @@ body {
 }
 
 .app-workspace .business-service .result-panel__tabs {
-  height: 36px;
+  height: 40px;
   padding: 4px;
   border-radius: 4px;
 }
 
 .app-workspace .business-service .result-panel__tabs button {
-  height: 28px;
+  height: 32px;
   padding-inline: 16px;
   border-radius: 4px;
   font-size: 14px;
@@ -1107,7 +1107,7 @@ body {
 
 .app-workspace .business-service .developer-view__code-wrap .kg-panel__title {
   box-sizing: border-box;
-  margin-left: 16px !important;
+  margin-left: 0 !important;
   padding-left: 11px !important;
 }
 
@@ -1117,21 +1117,142 @@ body {
 }
 
 
-/* Keep result-detail tables closed and all row labels on one line. */
-.app-workspace .business-service .result-panel__table {
-  flex: 0 0 auto;
+.app-workspace .business-service .service-console__actions .kg-button {
   box-sizing: border-box;
-  width: calc(100% - 32px);
-  margin: 16px;
+  min-width: 64px;
+  height: 32px !important;
+  min-height: 32px !important;
+  padding-inline: 16px !important;
+  border: 1px solid transparent !important;
+  border-radius: 4px;
+  background: #165dff !important;
+  color: #fff;
+}
+
+.app-workspace .business-service .service-console__actions .kg-button:hover {
+  background: #4080ff !important;
+}
+
+.app-workspace .business-service .service-console__actions .kg-button:focus-visible {
+  outline: 2px solid rgba(22, 93, 255, 0.28);
+  outline-offset: 2px;
+}
+
+.app-workspace .business-service .service-console__actions .kg-button--secondary {
+  border-color: #e5e6eb !important;
+  background: #fff !important;
+  color: #4e5969;
+}
+
+.app-workspace .business-service .service-console__actions .kg-button--secondary:hover {
+  border-color: #165dff !important;
+  background: #e8f3ff !important;
+  color: #165dff;
+}
+
+.app-workspace .business-service .prototype-table tbody tr:hover td {
+  background: #f7f8fa;
+}
+
+/* Developer interface uses the same 16px visible-frame rhythm as algorithm testing. */
+.app-workspace .business-service .developer-view__cards > .kg-panel,
+.app-workspace .business-service .developer-view__code-wrap > .developer-code {
+  display: flex;
+  flex-direction: column;
+}
+
+.app-workspace .business-service .developer-view__table-scroll {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  max-height: none;
+  margin: 0 !important;
+}
+
+.app-workspace .business-service .developer-view__code-wrap .developer-code pre {
+  flex: 1 1 auto;
+  width: 100% !important;
+  min-height: 0;
+  margin: 0 !important;
+}
+
+.app-workspace .business-service .developer-view {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: 40px minmax(0, 1fr) minmax(0, 1fr) !important;
+  gap: 16px !important;
+  padding: 0 !important;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.app-workspace .business-service .developer-view__cards {
+  width: 100%;
+  height: auto !important;
+  min-height: 0 !important;
+  gap: 16px !important;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.app-workspace .business-service .developer-view__cards > .kg-panel,
+.app-workspace .business-service .developer-view__code-wrap,
+.app-workspace .business-service .developer-view__code-wrap > .developer-code {
+  min-height: 0;
+  height: 100%;
+  scrollbar-gutter: auto;
+}
+
+/* Keep result-detail tables closed and all row labels on one line. */
+.app-workspace:has(.business-service),
+.app-workspace .business-service,
+.app-workspace .business-service .business-service__main,
+.app-workspace .business-service .business-service__side,
+.app-workspace .business-service :is(.graph-panel, .result-panel) {
+  scrollbar-gutter: auto;
+}
+
+.app-workspace .business-service .business-service__side,
+.app-workspace .business-service .result-panel {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+.app-workspace .business-service .result-panel__table {
+  flex: 1 1 auto;
+  min-height: 0;
+  box-sizing: border-box;
+  align-self: stretch;
+  width: auto;
+  margin: 16px 0 0 !important;
   overflow-x: auto;
   overflow-y: visible;
   border: 1px solid #e5e6eb;
   border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  background: transparent;
 }
 
 .app-workspace .business-service .result-panel__table div {
   grid-template-columns: 136px minmax(0, 1fr);
+  flex: 0 0 40px;
   min-height: 40px;
+}
+
+.app-workspace .business-service .result-panel__table::after {
+  content: "";
+  flex: 1 1 auto;
+  min-height: 0;
+  border-top: 1px solid #e5e6eb;
+  background:
+    linear-gradient(to right, transparent 135px, #e5e6eb 135px, #e5e6eb 136px, transparent 136px),
+    repeating-linear-gradient(to bottom, transparent 0, transparent 39px, #e5e6eb 39px, #e5e6eb 40px),
+    linear-gradient(to right, #f2f3f5 0, #f2f3f5 136px, #fff 136px, #fff 100%);
+  pointer-events: none;
 }
 
 .app-workspace .business-service .result-panel__table div:last-child {

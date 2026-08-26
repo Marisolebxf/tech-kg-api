@@ -178,6 +178,19 @@ async def test_any_positive_month_overlap_is_included() -> None:
 
 
 @pytest.mark.asyncio
+async def test_query_reports_all_missing_experts() -> None:
+    gateway = FakeGraphSearchGateway()
+    gateway.resolve_person = AsyncMock(return_value=None)
+
+    with pytest.raises(LookupError, match="未找到专家: 2、3"):
+        await ExpertColleagueRelationService().query(
+            gateway,
+            expert_id="2",
+            target_expert_id="3",
+        )
+
+
+@pytest.mark.asyncio
 async def test_summary_and_graph_cover_tender_details() -> None:
     gateway = FakeGraphSearchGateway()
     result = await ExpertColleagueRelationService().query(gateway, expert_id="person_a")

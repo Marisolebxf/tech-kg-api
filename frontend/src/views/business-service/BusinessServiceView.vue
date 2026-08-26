@@ -10,6 +10,22 @@ const route = useRoute();
 const router = useRouter();
 const activeView = ref<"test" | "developer">("test");
 const selectedModuleKey = ref(String(route.name ?? "expert-direct"));
+const viewOrder = ["test", "developer"] as const;
+
+function handleViewTabKeydown(event: KeyboardEvent) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const current = viewOrder.indexOf(activeView.value);
+  const next = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? viewOrder.length - 1
+      : (current + (event.key === "ArrowRight" ? 1 : -1) + viewOrder.length) % viewOrder.length;
+  activeView.value = viewOrder[next];
+  requestAnimationFrame(() => {
+    document.getElementById(`business-view-tab-`)?.focus();
+  });
+}
 
 onMounted(() => {
   const navigation = performance.getEntriesByType("navigation")[0] as
@@ -52,16 +68,28 @@ watch(
         <button
           class="kg-tabs__item"
           :class="{ 'is-active': activeView === 'test' }"
+          :id="`business-view-tab-test`"
+          role="tab"
+          :aria-selected="activeView === 'test'"
+          :aria-controls="`business-view-panel-test`"
+          :tabindex="activeView === 'test' ? 0 : -1"
           type="button"
           @click="activeView = 'test'"
+          @keydown="handleViewTabKeydown"
         >
           算法测试
         </button>
         <button
           class="kg-tabs__item"
           :class="{ 'is-active': activeView === 'developer' }"
+          :id="`business-view-tab-developer`"
+          role="tab"
+          :aria-selected="activeView === 'developer'"
+          :aria-controls="`business-view-panel-developer`"
+          :tabindex="activeView === 'developer' ? 0 : -1"
           type="button"
           @click="activeView = 'developer'"
+          @keydown="handleViewTabKeydown"
         >
           开发者接口
         </button>
@@ -70,11 +98,17 @@ watch(
 
     <BusinessServiceAlgorithmPanel
       v-if="activeView === 'test'"
+      id="business-view-panel-test"
+      role="tabpanel"
+      aria-labelledby="business-view-tab-test"
       :module-info="moduleInfo"
       :response-json="responseJson"
     />
     <BusinessServiceContractPanel
       v-else
+      id="business-view-panel-developer"
+      role="tabpanel"
+      aria-labelledby="business-view-tab-developer"
       :module-info="moduleInfo"
       :modules="serviceModules"
       :curl-sample="curlSample"

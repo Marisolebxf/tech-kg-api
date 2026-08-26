@@ -153,6 +153,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 "dimensions": dimensions,
                 "educations": match_summary,
                 "interactions": interactions,
+                "provenance": self._person_provenance(cand_props, str(cand_id)),
             }
             items.append(item)
             dim_catalog.update(dimensions)
@@ -167,6 +168,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             "id": expert_id,
             "name": self._display_name(source),
             "educations": source_edus,
+            "provenance": self._person_provenance(
+                getattr(source, "properties", None) or {}, expert_id
+            ),
         }
         source_meta = {
             "space": space,
@@ -203,6 +207,15 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             if val:
                 return str(val)
         return str(getattr(node, "id", "") or "")
+
+    @staticmethod
+    def _person_provenance(props: dict[str, Any], vid: str) -> dict[str, str]:
+        """Return only provenance values physically stored on the graph node."""
+        return {
+            "sourceTable": str(props.get("source_table") or "-"),
+            "sourceField": str(props.get("source_field") or "-"),
+            "graphVid": vid,
+        }
 
     def _scan_person_candidates(
         self, graph: TRSGraphClient, exclude_id: str
@@ -581,18 +594,24 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 {
                     "title": "源专家教育属性",
                     "businessTable": "专家教育经历",
-                    "technicalTable": "Person.education_background_*",
+                    "technicalTable": (expert.get("provenance") or {}).get("sourceTable") or "-",
                     "recordId": str(expert.get("id") or ""),
                     "fieldIdentifier": "education_background_institution_zh/_en",
+                    "sourceField": (expert.get("provenance") or {}).get("sourceField") or "-",
+                    "graphVid": (expert.get("provenance") or {}).get("graphVid")
+                    or str(expert.get("id") or ""),
                     "summary": (f"解析教育经历 {len(expert.get('educations') or [])} 条"),
                 },
                 *[
                     {
                         "title": f"校友匹配 · {item.get('name') or item.get('alumniId')}",
                         "businessTable": "校友关系查询结果",
-                        "technicalTable": "expert_alumni_relation.query",
+                        "technicalTable": (item.get("provenance") or {}).get("sourceTable") or "-",
                         "recordId": str(item.get("alumniId") or ""),
                         "fieldIdentifier": "/".join(item.get("dimensions") or ["同校"]),
+                        "sourceField": (item.get("provenance") or {}).get("sourceField") or "-",
+                        "graphVid": (item.get("provenance") or {}).get("graphVid")
+                        or str(item.get("alumniId") or ""),
                         "summary": (
                             f"共享院校："
                             f"{'、'.join(item.get('sharedInstitutions') or []) or '—'}；"

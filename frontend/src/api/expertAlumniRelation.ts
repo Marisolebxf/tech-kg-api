@@ -80,10 +80,13 @@ export interface AlumniProvenanceEvidence {
   technicalTable: string
   recordId: string
   fieldIdentifier: string
-  summary: string
+  /** MySQL 源表名，溯源统一展示为「源数据表」。 */
   sourceTable?: string
+  /** MySQL 英文字段名，溯源统一展示为「英文字段名」。 */
   sourceField?: string
+  /** 图空间 VID，溯源统一展示为「图空间 VID」。 */
   graphVid?: string
+  summary: string
 }
 
 export interface AlumniProvenance {

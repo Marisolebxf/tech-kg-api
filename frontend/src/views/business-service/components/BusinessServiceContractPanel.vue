@@ -120,8 +120,8 @@ defineEmits<{
 .developer-view {
   display: grid;
   grid-template-rows: 40px minmax(0, 1.35fr) minmax(0, 1fr);
-  gap: 12px;
-  padding: 0 14px 14px;
+  gap: 16px;
+  padding: 0 16px 16px;
   min-height: 0;
   flex: 1;
   overflow: hidden;
@@ -131,7 +131,7 @@ defineEmits<{
   display: grid;
   grid-template-columns: minmax(360px, 460px) minmax(360px, 1fr) max-content;
   align-items: center;
-  gap: 36px;
+  gap: 16px;
   min-height: 40px;
   color: var(--text-secondary);
   font-size: 14px;
@@ -188,7 +188,7 @@ defineEmits<{
 .developer-view__cards {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 16px;
   min-height: 0;
   overflow: hidden;
 }
@@ -270,7 +270,7 @@ defineEmits<{
 
 .prototype-table th,
 .prototype-table td {
-  padding: 13px 14px;
+  padding: 9px 16px;
   border-bottom: 1px solid var(--border);
   color: var(--text-secondary);
   text-align: left;
@@ -299,7 +299,7 @@ defineEmits<{
 
 .developer-code pre {
   margin: 0;
-  padding: 14px 16px;
+  padding: 16px;
   color: #2f3442;
   background: #f7f9fc;
   font-family: Consolas, Monaco, monospace;
@@ -410,7 +410,7 @@ defineEmits<{
 .prototype-table th,
 .prototype-table td {
   height: 40px;
-  padding: 0 12px;
+  padding: 0 16px;
   font-size: 12px;
   line-height: 20px;
   vertical-align: middle;
@@ -422,7 +422,7 @@ defineEmits<{
 }
 .developer-code pre {
   min-height: 190px;
-  padding: 16px 32px;
+  padding: 16px;
   color: #4e5969;
   background: #fff;
   font-size: 12px;
@@ -460,19 +460,24 @@ defineEmits<{
   height: 48px;
   min-height: 48px !important;
   margin: 0;
-  padding: 0 16px !important;
+  padding: 0 !important;
 }
 
 .developer-view__table-scroll,
 .developer-view__code-wrap .developer-code pre {
   box-sizing: border-box;
-  width: calc(100% - 32px) !important;
-  margin: 0 16px 16px !important;
+  width: 100% !important;
+  margin: 0 !important;
 }
 
 .developer-view__table-scroll {
   right: auto !important;
   left: auto !important;
+}
+
+.developer-view__cards .developer-view__table-scroll {
+  height: calc(100% - 48px) !important;
+  max-height: none !important;
 }
 
 /* 与请求参数标题采用同一结构，不再通过整体位移补偿公共伪元素。 */
@@ -483,5 +488,13 @@ defineEmits<{
 
 :global(.app-workspace) .developer-view__code-wrap .kg-panel__title::before {
   left: 0 !important;
+}
+
+/* 移除三个合同卡片的衬底；仅保留内部白色表格与代码框。 */
+:global(.app-workspace .business-service .developer-view .developer-view__cards > .kg-panel),
+:global(.app-workspace .business-service .developer-view .developer-view__cards > .kg-panel > .kg-panel__header),
+:global(.app-workspace .business-service .developer-view .developer-view__code-wrap > .developer-code),
+:global(.app-workspace .business-service .developer-view .developer-view__code-wrap > .developer-code > .kg-panel__header) {
+  background: transparent !important;
 }
 </style>

@@ -1531,8 +1531,23 @@ const emptyResultHint = computed<string | null>(() => {
   }
   if (isPanorama.value) {
     if (panoramaError.value || !panoramaResponse.value) return null;
-    if (!isPanoramaEmpty(panoramaResponse.value)) return null;
-    return "未查询到符合条件的产业链全景图数据，请调整产业关键词或核心节点 VID 后重试。";
+    const resp = panoramaResponse.value;
+    const reason = resp.source?.reason;
+    if (isPanoramaEmpty(resp)) {
+      // 关键词没命中是数据本身没有，重复刷新不会有变化，直接告诉用户换词
+      if (reason === "keyword_no_match") {
+        return "产业关键词未命中任何实体，刷新不会改变结果，请更换产业关键词（如 人工智能 / 集成电路 / 区块链）后重新执行。";
+      }
+      if (reason === "graph_api_error" || reason === "unexpected_error") {
+        return "图查询服务暂时不可用，可点击「刷新图谱」重试。";
+      }
+      return "未查询到符合条件的产业链全景图数据，请调整产业关键词或核心节点 VID 后重试。";
+    }
+    // 分层有数据但子图为空：多数是核心节点 VID 不存在或不可寻址
+    if (!resp.graph?.nodes?.length) {
+      return "分层结果已命中，但核心节点未能展开子图：请检查核心节点 VID 是否存在，或清空该项后重新执行。";
+    }
+    return null;
   }
   return null;
 });
@@ -2001,7 +2016,14 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       lastTestTime.value = formatTimestamp(now);
       lastUpdateTime.value = now.getTime();
       if (isPanoramaEmpty(response)) {
-        showToast("未查询到符合条件的产业链全景图数据", "warning");
+        showToast(
+          response.source?.reason === "keyword_no_match"
+            ? "产业关键词未命中，请更换关键词"
+            : "未查询到符合条件的产业链全景图数据",
+          "warning",
+        );
+      } else if (runOptions.refresh) {
+        showToast("图谱已刷新", "success");
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

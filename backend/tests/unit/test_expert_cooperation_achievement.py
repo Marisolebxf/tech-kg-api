@@ -272,9 +272,7 @@ def test_enrich_fields_with_strict_llm_json(monkeypatch):
     graph._settings = SimpleNamespace(space="dev")
 
     llm = MagicMock()
-    llm.synthesize_json.return_value = (
-        '{"items":[{"id":"P1","fields":["异构图","实体关联"]}]}'
-    )
+    llm.synthesize_json.return_value = '{"items":[{"id":"P1","fields":["异构图","实体关联"]}]}'
     monkeypatch.setattr(
         "service.expert_cooperation_achievement.get_llm_client",
         lambda: llm,
@@ -331,6 +329,4 @@ def test_parse_domain_llm_json_rejects_non_object():
 def test_parse_domain_llm_json_tolerates_trailing_junk():
     svc = ExpertCooperationAchievementService()
     raw = '{"items":[{"id":"P1","fields":["风电","数据定价"]}]} }'
-    assert svc._parse_domain_llm_json(raw) == [
-        {"id": "P1", "fields": ["风电", "数据定价"]}
-    ]
+    assert svc._parse_domain_llm_json(raw) == [{"id": "P1", "fields": ["风电", "数据定价"]}]

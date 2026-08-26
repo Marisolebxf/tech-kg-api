@@ -37,16 +37,14 @@ const appStore = useAppStore();
 const authStore = useAuthStore();
 const currentUser = computed(() => authStore.profile?.user);
 const userAvatar = computed(() => currentUser.value?.avatar || figmaUserAvatar);
-const userDisplayName = computed(() => authStore.displayName);
 const userRoleName = computed(() =>
-  authStore.isAuthenticated ? authStore.primaryRole : "访客",
+  authStore.isAdmin ? "管理员" : "普通用户",
 );
-const userBadge = computed(() =>
-  !authStore.isAuthenticated
-    ? "未登录"
-    : authStore.isAdmin
-      ? "全局管理"
-      : "业务用户",
+const userDisplayName = computed(() =>
+  currentUser.value?.nickname || currentUser.value?.username || userRoleName.value,
+);
+const userRoleDescription = computed(() =>
+  authStore.isAdmin ? "系统管理与审核权限" : "知识图谱业务服务",
 );
 const isAdminArea = computed(() => route.path.startsWith("/admin"));
 const pageTitle = computed(() => String(route.meta.title ?? "亿级知识图谱"));
@@ -220,17 +218,6 @@ function toggleUserMenu() {
   const willOpen = !userMenuOpen.value;
   if (willOpen) accountFeedback.value = "";
   userMenuOpen.value = willOpen;
-}
-
-async function handleLogin() {
-  userMenuOpen.value = false;
-  accountFeedback.value = "";
-  await authStore.startLogin(route.fullPath);
-}
-
-async function switchPortal() {
-  userMenuOpen.value = false;
-  await router.push(isAdminArea.value ? "/overview" : "/admin/reviews");
 }
 
 async function handleAccountAction(
@@ -656,9 +643,7 @@ onBeforeUnmount(() => {
                 @click="toggleUserMenu"
               >
                 <img :src="userAvatar" alt="" aria-hidden="true" />
-                <span
-                  ><strong>{{ userDisplayName }}</strong></span
-                >
+                <span><strong>{{ userRoleName }}</strong></span>
                 <svg viewBox="0 0 20 20" aria-hidden="true">
                   <path d="m6 8 4 4 4-4" />
                 </svg>
@@ -668,18 +653,17 @@ onBeforeUnmount(() => {
                   <img :src="userAvatar" alt="" />
                   <div>
                     <strong>{{ userDisplayName }}</strong
-                    ><span>{{ userRoleName }}</span>
+                    ><span>{{ userRoleDescription }}</span>
                   </div>
-                  <b>{{ userBadge }}</b>
+                  <b :class="{ 'is-admin': authStore.isAdmin }">{{ userRoleName }}</b>
                 </header>
                 <nav>
-                  <template v-if="authStore.isAuthenticated">
                   <button
                     :class="{ active: route.path === '/user-center' }"
                     type="button"
                     @click="handleAccountAction('个人中心')"
                   >
-                    <IconUser /><span>个人中心</span>
+                    <IconUser /><span>账号信息</span>
                   </button>
                   <button
                     :class="{ active: route.path === '/account-security' }"
@@ -696,34 +680,11 @@ onBeforeUnmount(() => {
                     <IconHistory /><span>操作记录</span>
                   </button>
                   <button
-                    v-if="authStore.isAdmin"
-                    class="portal"
-                    type="button"
-                    @click="switchPortal"
-                  >
-                    <svg viewBox="0 0 20 20" aria-hidden="true">
-                      <path d="M8 4H4v12h4M12 6l4 4-4 4M16 10H7" />
-                    </svg>
-                    <span>{{ isAdminArea ? "返回用户端" : "进入管理端" }}</span>
-                  </button>
-                  <button
                     class="danger"
                     type="button"
                     @click="handleAccountAction('退出登录')"
                   >
                     <IconPoweroff /><span>退出登录</span>
-                  </button>
-                  </template>
-                  <button
-                    v-else
-                    class="login"
-                    type="button"
-                    @click="handleLogin"
-                  >
-                    <svg viewBox="0 0 20 20" aria-hidden="true">
-                      <path d="M8 4H4v12h4M12 6l4 4-4 4M16 10H7" />
-                    </svg>
-                    <span>立即登录</span>
                   </button>
                 </nav>
                 <footer v-if="accountFeedback">{{ accountFeedback }}</footer>
@@ -1447,6 +1408,10 @@ onBeforeUnmount(() => {
   font-size: 9px;
   font-weight: 500;
 }
+.app-user-menu > header b.is-admin {
+  background: #fbe2bd;
+  color: #8a5317;
+}
 .app-user-menu > p {
   margin: 0;
   padding: 10px 14px;
@@ -1505,36 +1470,7 @@ onBeforeUnmount(() => {
 .app-user-menu nav button.active > svg {
   color: #165dff;
 }
-.app-user-menu nav button.portal {
-  margin-top: 5px;
-  border-top: 1px solid #e8eef6;
-  border-radius: 0;
-  color: #165dff;
-}
-.app-user-menu nav button.portal > svg {
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.5;
-}
-.app-user-menu nav button.login {
-  background: #eaf2ff;
-  color: #165dff;
-  font-weight: 600;
-}
-.app-user-menu nav button.login > svg {
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.5;
-}
 
-.app-user-menu nav button.portal + button.danger {
-  margin-top: 0;
-  border-top: 0;
-}
 .app-user-menu > footer {
   padding: 9px 13px;
   border-top: 1px solid #e4ecf6;

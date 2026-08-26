@@ -47,6 +47,9 @@ class IndustryChainPanoramaQueryRequest(BaseModel):
     topK: int = Field(
         default=5, ge=1, description=f"每类实体返回数上限 (最大 {MAX_KEY_ENTITIES})。"
     )
+    refresh: bool = Field(
+        default=False, description="true 时忽略服务端缓存，强制重新组装分层与子图。"
+    )
 
     @field_validator("topK")
     @classmethod

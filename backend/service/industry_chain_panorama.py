@@ -112,14 +112,36 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         anchor_id: str | None = None,
         depth: int = 2,
         top_k: int = 5,
+        refresh: bool = False,
     ) -> dict[str, Any]:
         industry_kw = (industry or "").strip() or None
         anchor = (anchor_id or "").strip() or None
         top_k = max(1, min(int(top_k or 5), MAX_TOP_K))
         depth = max(1, min(int(depth or 2), 3))
         cache_key = (industry_kw or "", anchor or "", depth, top_k)
-        cached = _panorama_cache.get(cache_key)
+        if refresh:
+            # 页面「刷新图谱」：丢掉缓存直接实时重组，保证拿到最新入图数据。
+            _panorama_cache.pop(cache_key, None)
+        cached = None if refresh else _panorama_cache.get(cache_key)
         if cached and time.monotonic() - cached[0] < _PANORAMA_CACHE_TTL_SECONDS:
+            return cached[1]
+        if cached:
+            # 过期先返回旧结果，后台重建，不让用户等一次实时组装。
+            self._rebuild_in_background(
+                cache_key, industry=industry_kw, anchor_id=anchor, depth=depth, top_k=top_k
+            )
+            return cached[1]
+        if cached:
+            # 过期先返回旧结果，后台重建，不让用户等一次实时组装。
+            self._rebuild_in_background(
+                cache_key, industry=industry_kw, anchor_id=anchor, depth=depth, top_k=top_k
+            )
+            return cached[1]
+        if cached:
+            # 过期先返回旧结果，后台重建，不让用户等一次实时组装。
+            self._rebuild_in_background(
+                cache_key, industry=industry_kw, anchor_id=anchor, depth=depth, top_k=top_k
+            )
             return cached[1]
         if cached:
             # 过期先返回旧结果，后台重建，不让用户等一次实时组装。

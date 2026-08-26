@@ -1598,7 +1598,9 @@ function computePanoramaSummaryRows(
   });
 }
 
-function buildPanoramaRequest(): IndustryChainPanoramaQueryRequest {
+function buildPanoramaRequest(
+  options: { refresh?: boolean } = {},
+): IndustryChainPanoramaQueryRequest {
   const raw = parameterValues.value;
   const clampInt = (
     value: string,
@@ -1617,12 +1619,14 @@ function buildPanoramaRequest(): IndustryChainPanoramaQueryRequest {
     }
     return Math.min(max, Math.max(min, n));
   };
+  const forceRefresh = options.refresh === true;
   return {
     dataSource: "all",
     industry: (raw.industry ?? "").trim() || undefined,
     anchorId: (raw.anchorId ?? "").trim() || undefined,
-    depth: clampInt(raw.depth ?? "", 1, 3, 2, "层级深度 depth"),
+    depth: clampInt(raw.depth ?? "", 1, 3, 2, "展开层级"),
     topK: clampInt(raw.topK ?? "", 1, 20, 5, "topK"),
+    refresh: forceRefresh || undefined,
   };
 }
 
@@ -1972,7 +1976,7 @@ function buildTimeRange(start?: string, end?: string): string {
   return `${lo}-${hi}`;
 }
 
-async function handleRun() {
+async function handleRun(runOptions: { refresh?: boolean } = {}) {
   if (running.value) return;
   running.value = true;
   liveError.value = null;
@@ -1987,7 +1991,7 @@ async function handleRun() {
     }
     parameterErrors.value = {};
     try {
-      const request = buildPanoramaRequest();
+      const request = buildPanoramaRequest({ refresh: runOptions.refresh });
       const response = await queryIndustryChainPanorama(request);
       panoramaResponse.value = response;
       panoramaError.value = null;
@@ -2544,6 +2548,11 @@ function clearParameterError(fieldName: string) {
   parameterErrors.value = nextErrors;
 }
 
+/** 全景图「刷新图谱」：忽略服务端缓存重新组装分层与子图。 */
+async function handleRefreshPanorama() {
+  await handleRun({ refresh: true });
+}
+
 function handleSelectGraphNode(node: GraphNodeData) {
   selectedGraphNodeId.value = node.id;
   selectedGraphEdgeId.value = null;
@@ -2682,7 +2691,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         class="kg-button"
         type="button"
         :disabled="running"
-        @click="handleRun"
+        @click="handleRun()"
       >
         {{ running ? "测试中..." : "执行测试" }}
       </button>
@@ -2701,6 +2710,16 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       <div class="kg-panel__header">
         <h2 class="kg-panel__title">测试结果预览</h2>
         <div class="graph-panel__time">
+          <button
+            v-if="isPanorama"
+            class="kg-button kg-button--secondary graph-panel__refresh"
+            type="button"
+            :disabled="running"
+            title="忽略服务端缓存，重新拉取分层与子图"
+            @click="handleRefreshPanorama"
+          >
+            {{ running ? "刷新中…" : "刷新图谱" }}
+          </button>
           <span>最近测试时间：</span>
           <strong>{{ lastTestTime }}</strong>
         </div>
@@ -3685,6 +3704,13 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 .graph-panel__legend .is-source i {
   background: #eb2f96;
+}
+
+.graph-panel__refresh {
+  margin-right: 12px;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 20px;
 }
 
 .graph-panel__empty {

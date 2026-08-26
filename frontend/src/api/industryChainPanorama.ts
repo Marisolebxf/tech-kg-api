@@ -22,6 +22,8 @@ export interface IndustryChainPanoramaQueryRequest {
   anchorId?: string | null
   depth?: number
   topK?: number
+  /** true 时忽略服务端缓存，强制重新组装分层与子图（页面「刷新图谱」用）。 */
+  refresh?: boolean
 }
 
 

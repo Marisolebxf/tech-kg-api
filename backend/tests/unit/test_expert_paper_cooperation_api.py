@@ -4,6 +4,7 @@ import pytest
 
 from biz.schema.expert_paper_cooperation import ExpertPaperCooperationDemoRequest
 from service.expert_paper_cooperation_api import (
+    _build_rules,
     _build_structured_result,
     _fetch_paper_context,
     _year_filters,
@@ -118,6 +119,26 @@ def test_year_filters_use_string_publication_year():
     ]
 
 
+def test_rules_describe_the_actual_paper_cooperation_algorithm():
+    rules = _build_rules(
+        {
+            "cooperationPaperCount": 6,
+            "stableTeamMembers": ["共同作者丙"],
+            "academicImpactScore": 57.8,
+        }
+    )
+
+    assert [rule["name"] for rule in rules] == [
+        "共同署名论文查询规则",
+        "论文指标与合作成员统计规则",
+        "学术影响力与共同贡献计算规则",
+    ]
+    assert "仅取" in rules[0]["logic"] and "年份" in rules[0]["logic"]
+    assert "未配置 status=1" in rules[0]["threshold"]
+    assert "至少覆盖 2 个不同发表年份" in rules[1]["threshold"]
+    assert "论文数×6.5" in rules[2]["logic"]
+
+
 @pytest.mark.asyncio
 async def test_coauthor_edge_fallback_keeps_unproven_fields_empty():
     body = ExpertPaperCooperationDemoRequest(
@@ -145,12 +166,16 @@ async def test_coauthor_edge_fallback_keeps_unproven_fields_empty():
     assert result["citation"] == {"total": 0, "max": 0}
     provenance = result["_provenance"]
     assert provenance["sourceDatabase"].startswith("trs-graph / space=")
-    expert_evidence = next(item for item in provenance["evidences"] if item["recordId"] == "A")
-    assert expert_evidence["technicalTable"] == "gkx_element.dwd_scholar"
-    assert "BATCH_PERSON" in expert_evidence["summary"]
-    relation_evidence = next(item for item in provenance["evidences"] if item["recordId"] == "A_B")
-    assert relation_evidence["technicalTable"] == "dwd_scholar_coauthor"
-    assert "BATCH_EDGE" in relation_evidence["summary"]
+    expert_evidence = next(
+        item for item in provenance["evidences"] if item["graphVid"] == "person_A"
+    )
+    assert expert_evidence == {
+        "title": "实体 · 专家甲",
+        "sourceTable": "dwd_scholar",
+        "sourceField": "scholar_id",
+        "graphVid": "person_A",
+    }
+    assert all(not item["title"].startswith("关系 ·") for item in provenance["evidences"])
 
 
 @pytest.mark.asyncio

@@ -179,6 +179,7 @@ class ExpertIndirectRelationApiService(KGModuleScaffoldService):
         payload = {
             "structuredResult": result,
             "provenance": _build_provenance(result),
+            "rules": _build_rules(result),
         }
         with _result_cache_lock:
             _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, payload)
@@ -299,90 +300,42 @@ def _edge_brief(edge: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _source_metadata(properties: dict[str, Any]) -> dict[str, str]:
-    metadata: dict[str, str] = {}
-    for key in (
-        "source_system",
-        "source_table",
-        "source_record_id",
-        "ingest_batch",
-        "ingest_time",
-        "match_method",
-        "match_evidence",
-    ):
-        value = str(properties.get(key) or "").strip()
-        if value:
-            metadata[key] = value
-    return metadata
+def _node_source(node: dict[str, Any]) -> tuple[str, str]:
+    """按科技专家同事关系的口径返回 MySQL 源表和英文字段名。"""
+    properties = node.get("properties") or {}
+    source_table = properties.get("organization_base") or properties.get("source_table")
+    labels = {str(label) for label in node.get("labels") or []}
+    source_record_id = properties.get("source_record_id")
+    organization_id = properties.get("organization_id")
 
-
-def _technical_table(metadata: dict[str, str], fallback: str) -> str:
-    source_system = metadata.get("source_system", "")
-    source_table = metadata.get("source_table", "")
-    if source_system and source_table:
-        return f"{source_system}.{source_table}"
-    return source_table or fallback
+    if labels & {"Person", "Scholar", "Expert"} and source_record_id not in (None, ""):
+        source_field = "scholar_id" if source_table == "dwd_scholar" else "source_record_id"
+    elif organization_id == "scholar_id" and source_record_id not in (None, ""):
+        source_field = "scholar_id"
+    elif organization_id not in (None, ""):
+        source_field = "organization_id"
+    else:
+        source_field = "source_record_id"
+    return str(source_table or "-"), source_field
 
 
 def _build_provenance(result: dict[str, Any]) -> dict[str, Any]:
-    """基于图节点和图边携带的真实入库元数据构造溯源证据。"""
+    """按实体的 MySQL 源表、源字段和图空间 VID 构造溯源证据。"""
     evidences: list[dict[str, str]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[str] = set()
 
     def append_node(node: dict[str, Any]) -> None:
-        properties = node.get("properties") or {}
-        metadata = _source_metadata(properties)
         node_id = str(node.get("id") or "")
-        record_id = metadata.get("source_record_id") or node_id
-        key = ("node", node_id, record_id)
-        if key in seen:
+        if not node_id or node_id in seen:
             return
-        seen.add(key)
-        label = str((node.get("labels") or ["Entity"])[0])
-        batch = metadata.get("ingest_batch") or "—"
-        ingest_time = metadata.get("ingest_time") or "—"
+        seen.add(node_id)
+        source_table, source_field = _node_source(node)
         evidences.append(
             {
                 "title": f"实体 · {node.get('name') or node_id}",
-                "businessTable": str(node.get("entityType") or "图谱实体"),
-                "technicalTable": _technical_table(metadata, label),
-                "recordId": record_id,
-                "fieldIdentifier": (
-                    "source_record_id" if metadata.get("source_record_id") else "graph_vid"
-                ),
-                "summary": f"图标签：{label}；入库批次：{batch}；入库时间：{ingest_time}",
-            }
-        )
-
-    def append_edge(edge: dict[str, Any]) -> None:
-        properties = edge.get("properties") or {}
-        metadata = _source_metadata(properties)
-        edge_id = str(edge.get("id") or "")
-        record_id = metadata.get("source_record_id") or edge_id
-        edge_type = str(edge.get("type") or "Relation")
-        key = ("edge", edge_id, record_id)
-        if key in seen:
-            return
-        seen.add(key)
-        details = [
-            f"路径段：{edge.get('source') or '—'} → {edge.get('target') or '—'}",
-            f"入库批次：{metadata.get('ingest_batch') or '—'}",
-            f"入库时间：{metadata.get('ingest_time') or '—'}",
-        ]
-        if metadata.get("match_method"):
-            details.append(f"匹配方法：{metadata['match_method']}")
-        if metadata.get("match_evidence"):
-            details.append(f"匹配证据：{metadata['match_evidence']}")
-        evidences.append(
-            {
-                "title": f"关系 · {edge_type}",
-                "businessTable": "图谱关系",
-                "technicalTable": _technical_table(metadata, edge_type),
-                "recordId": record_id,
-                "fieldIdentifier": (
-                    "source_record_id" if metadata.get("source_record_id") else "graph_edge_id"
-                ),
-                "summary": "；".join(details),
+                "sourceTable": source_table,
+                "sourceField": source_field,
+                "graphVid": node_id,
             }
         )
 
@@ -390,8 +343,6 @@ def _build_provenance(result: dict[str, Any]) -> dict[str, Any]:
     for path in result.get("paths", [])[:8]:
         for node in path.get("nodes", []):
             append_node(node)
-        for edge in path.get("edges", []):
-            append_edge(edge)
 
     relation_types = "、".join(result.get("relationTypeCount", {}).keys()) or "无"
     return {
@@ -530,3 +481,46 @@ def _build_result(
         "indirectNodes": indirect_nodes,
         "paths": paths,
     }
+
+
+def _build_rules(result: dict[str, Any]) -> list[dict[str, Any]]:
+    path_count = int(result.get("pathCount") or 0)
+    path_depth = int(result.get("pathDepth") or 0)
+    min_strength = float(result.get("minStrength") or 0)
+    relation_types = "、".join(result.get("relationTypeCount", {}).keys()) or "无命中类型"
+    audit = "代码未配置人工审核流；查询异常或未命中时按接口实际状态返回，不补造关系。"
+    return [
+        {
+            "name": "间接路径发现规则",
+            "type": "路径查询规则",
+            "target": "核心 Person 节点及深度范围内的真实节点和关系边",
+            "trigger": f"核心节点可定位，path_depth={path_depth}",
+            "logic": "读取核心节点双向子图；同类型、同端点的边仅保留强度较高者；枚举不重复节点的简单路径，仅保留不少于 2 跳且终点不是核心节点直接邻居的路径。",
+            "output": "直接节点、间接节点、完整路径节点和关系边",
+            "threshold": "path_depth 仅允许 2 或 3；子图最多 200 项、候选路径最多 1000 条、最终最多 50 条",
+            "audit": audit,
+            "appliedCount": path_count,
+        },
+        {
+            "name": "间接关系分类规则",
+            "type": "关系类型映射规则",
+            "target": "候选路径中的真实关系边类型",
+            "trigger": "简单路径达到 2 跳或 3 跳",
+            "logic": "按项目、专利、产业、机构、学术关系边集合依次归类；再按请求选择的学术关联、机构关联或项目关联过滤。",
+            "output": f"路径关系类型及分类计数；本次命中：{relation_types}",
+            "threshold": "relation_types 必须且只能选择学术关联、机构关联、项目关联中的一项",
+            "audit": audit,
+            "appliedCount": path_count,
+        },
+        {
+            "name": "路径强度计算与排序规则",
+            "type": "评分过滤规则",
+            "target": "候选路径及其关系边",
+            "trigger": "路径完成关系分类后",
+            "logic": "边强度优先读取 confidence、score、relation_strength；百分制值除以 100。缺失时按合作次数对数归一化，再缺失时使用边类型默认权重。路径强度取边强度几何平均并乘以 0.92 的长度衰减。",
+            "output": "路径强度、平均强度、最大强度及降序结果",
+            "threshold": f"路径强度 >= min_strength（本次 {min_strength:g}）；同一目标和边类型序列仅保留最强路径",
+            "audit": audit,
+            "appliedCount": path_count,
+        },
+    ]

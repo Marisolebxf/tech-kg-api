@@ -51,6 +51,25 @@ const propertyNumber = (
   return Number.isFinite(value) ? value : undefined
 }
 
+const nodeSourceTable = (node: IndirectNode) =>
+  propertyString(node.properties, 'organization_base') ||
+  propertyString(node.properties, 'source_table')
+
+const nodeSourceField = (node: IndirectNode) => {
+  const sourceTable = nodeSourceTable(node)
+  const sourceRecordId = propertyString(node.properties, 'source_record_id')
+  const organizationId = propertyString(node.properties, 'organization_id')
+  const isPerson = node.labels.some((label) =>
+    ['Person', 'Scholar', 'Expert'].includes(label),
+  )
+  if (isPerson && sourceRecordId) {
+    return sourceTable === 'dwd_scholar' ? 'scholar_id' : 'source_record_id'
+  }
+  if (organizationId === 'scholar_id' && sourceRecordId) return 'scholar_id'
+  if (organizationId) return 'organization_id'
+  return 'source_record_id'
+}
+
 
 export const parseRelationTypes = (value: string) => value
   .split(/[、,，;；]/)
@@ -96,11 +115,9 @@ export function buildIndirectRelationGraph(result: ExpertIndirectRelationResult)
       confidence: nodeStrengths.get(node.id) ?? 0.8,
       relations: level === 0 ? `间接节点 ${result.indirectNodeCount}` : `${level} 跳关联`,
       evidence: nodeEvidences.get(node.id) ?? ['节点来自知识图谱多跳子图。'],
-      sourceTable: propertyString(node.properties, 'source_table'),
+      sourceTable: nodeSourceTable(node),
       sourceRecordId: propertyString(node.properties, 'source_record_id'),
-      sourceField: propertyString(node.properties, 'source_record_id')
-        ? 'source_record_id'
-        : undefined,
+      sourceField: nodeSourceField(node),
       sourceValue: propertyString(node.properties, 'source_record_id'),
       sourceSystem: propertyString(node.properties, 'source_system'),
       ingestBatch: propertyString(node.properties, 'ingest_batch'),

@@ -172,6 +172,20 @@ function identifierError(value: string): string | null {
   return null;
 }
 
+function indirectCoreNodeIdError(value: string): string | null {
+  return value.length > 64 ? "输入长度不能超过 64 个字符" : null;
+}
+
+const paperCooperationExpertIdPattern = /^[A-Za-z0-9_-]+$/;
+
+function paperCooperationExpertIdError(value: string): string | null {
+  if (value.length > 64) return "输入长度不能超过 64 个字符";
+  if (value && !paperCooperationExpertIdPattern.test(value)) {
+    return "输入字符存在异常字符，仅支持字母、数字、下划线和中划线";
+  }
+  return null;
+}
+
 function keywordError(value: string): string | null {
   if (value.length > MAX_PARAMETER_LENGTH)
     return `输入长度不能超过 ${MAX_PARAMETER_LENGTH} 个字符`;
@@ -179,6 +193,26 @@ function keywordError(value: string): string | null {
     return "不能包含 !@#￥%& 等异常字符";
   }
   return null;
+}
+
+function paperCooperationTimeErrors(
+  startValue: string | undefined,
+  endValue: string | undefined,
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  const startMonth = optionalParam(startValue);
+  const endMonth = optionalParam(endValue);
+  if (startMonth && endMonth && startMonth > endMonth) {
+    errors.startTime = "开始时间不能晚于结束时间";
+    errors.endTime = "结束时间不能早于开始时间";
+  }
+  if (startMonth && startMonth > currentMonth) {
+    errors.startTime = "开始时间超出当前时间";
+  }
+  if (endMonth && endMonth > currentMonth) {
+    errors.endTime = "结束时间超出当前时间";
+  }
+  return errors;
 }
 
 function schoolError(value: string): string | null {
@@ -192,6 +226,15 @@ function schoolError(value: string): string | null {
 
 /** 按模块和字段名返回校验错误，与后端 pydantic 校验规则保持一致。 */
 function parameterFieldError(fieldName: string, value: string): string | null {
+  if (isExpertIndirect.value && fieldName === "core_node_id") {
+    return indirectCoreNodeIdError(value);
+  }
+  if (
+    isPaperCooperation.value &&
+    (fieldName === "expertAId" || fieldName === "expertBId")
+  ) {
+    return paperCooperationExpertIdError(value);
+  }
   if (
     isLiveColleague.value &&
     (fieldName === "expert_a_id" || fieldName === "expert_b_id")
@@ -354,6 +397,8 @@ const isLiveModule = computed(
 );
 /** 当前业务模块需要做「超长 / 异常字符」实时校验的标识类字段名。 */
 const liveIdFieldNames = computed<readonly string[]>(() => {
+  if (isExpertIndirect.value) return ["core_node_id"];
+  if (isPaperCooperation.value) return ["expertAId", "expertBId"];
   if (isLiveColleague.value) return ["expert_a_id", "expert_b_id"];
   if (isLiveEnterpriseRelation.value) return ["expert_id"];
   if (isLiveIndustryEvent.value) return ["chain_node_id", "event_type"];
@@ -1395,6 +1440,8 @@ const liveRules = computed<Array<Record<string, any>>>(() => {
     return liveCoopResult.value.rules;
   if (isLiveColleague.value && liveResponse.value?.data?.rules?.length)
     return liveResponse.value.data.rules;
+  if (isExpertIndirect.value && expertIndirectResponse.value?.rules?.length)
+    return expertIndirectResponse.value.rules;
   const responseRules = liveResponse.value?.data?.rules ?? liveResponse.value?.rules;
   if (Array.isArray(responseRules) && responseRules.length) return responseRules;
   return actualServiceRules[props.moduleInfo.key] ?? [];
@@ -1484,6 +1531,10 @@ const liveProvenance = computed(() => {
     );
   return null;
 });
+
+const usesThreeFieldProvenance = computed(
+  () => isExpertIndirect.value || isPaperCooperation.value,
+);
 
 const detailRows = computed(() => {
   if (lastTestTime.value === "—") {
@@ -2167,13 +2218,23 @@ async function handleRun() {
 
   if (isExpertIndirect.value) {
     try {
-      const coreNodeId = parameterValues.value.core_node_id?.trim();
+      const coreNodeIdRaw = parameterValues.value.core_node_id ?? "";
+      const coreNodeId = coreNodeIdRaw.trim();
       if (!coreNodeId) {
         parameterErrors.value = { core_node_id: "请输入核心专家或人才节点 ID" };
         expertIndirectResponse.value = null;
         expertIndirectError.value = null;
         resultMode.value = "summary";
         showToast("请完善必填项后再执行", "warning");
+        return;
+      }
+
+      const coreNodeIdError = indirectCoreNodeIdError(coreNodeIdRaw);
+      if (coreNodeIdError) {
+        parameterErrors.value = { core_node_id: coreNodeIdError };
+        expertIndirectResponse.value = null;
+        expertIndirectError.value = null;
+        showToast("请修正参数后再执行", "warning");
         return;
       }
 
@@ -2607,8 +2668,10 @@ async function handleRun() {
         selectedGraphEdgeId.value = graphEdges.value[0]?.id ?? null;
       }
     } else if (props.moduleInfo.key === "paper-cooperation") {
-      const expertAId = parameterValues.value.expertAId?.trim();
-      const expertBId = parameterValues.value.expertBId?.trim();
+      const expertAIdRaw = parameterValues.value.expertAId ?? "";
+      const expertBIdRaw = parameterValues.value.expertBId ?? "";
+      const expertAId = expertAIdRaw.trim();
+      const expertBId = expertBIdRaw.trim();
       const missingExperts = [
         !expertAId
           ? { field: "expertAId", message: "请输入专家 A 唯一标识" }
@@ -2630,16 +2693,37 @@ async function handleRun() {
         showToast("请完善必填项后再执行", "warning");
         return;
       }
+      const expertIdErrors: Record<string, string> = {};
+      for (const [field, value] of [
+        ["expertAId", expertAIdRaw],
+        ["expertBId", expertBIdRaw],
+      ] as const) {
+        const error = paperCooperationExpertIdError(value);
+        if (error) expertIdErrors[field] = error;
+      }
+      if (Object.keys(expertIdErrors).length) {
+        parameterErrors.value = expertIdErrors;
+        liveResponse.value = null;
+        liveApiPayload.value = null;
+        liveError.value = null;
+        showToast("请修正参数后再执行", "warning");
+        return;
+      }
+      const startMonth = optionalParam(parameterValues.value.startTime);
+      const endMonth = optionalParam(parameterValues.value.endTime);
+      const timeErrors = paperCooperationTimeErrors(startMonth, endMonth);
+      if (Object.keys(timeErrors).length) {
+        parameterErrors.value = timeErrors;
+        liveResponse.value = null;
+        liveApiPayload.value = null;
+        liveError.value = null;
+        showToast("请修正参数后再执行", "warning");
+        return;
+      }
       parameterErrors.value = {};
       const body: Record<string, any> = { expertAId, expertBId };
-      const startTime = normalizeMonthBoundary(
-        parameterValues.value.startTime,
-        "start",
-      );
-      const endTime = normalizeMonthBoundary(
-        parameterValues.value.endTime,
-        "end",
-      );
+      const startTime = normalizeMonthBoundary(startMonth, "start");
+      const endTime = normalizeMonthBoundary(endMonth, "end");
       if (startTime) body.startTime = startTime;
       if (endTime) body.endTime = endTime;
       const res = (await invokeKgService(
@@ -2715,10 +2799,25 @@ function handleParameterInput(fieldName: string, event: Event) {
   clearParameterError(fieldName);
 }
 function handleMonthParameterInput(fieldName: string, value: string | null) {
-  parameterValues.value = {
+  const nextValues = {
     ...parameterValues.value,
     [fieldName]: value ?? "",
   };
+  parameterValues.value = nextValues;
+  if (
+    isPaperCooperation.value &&
+    (fieldName === "startTime" || fieldName === "endTime")
+  ) {
+    const nextErrors = { ...parameterErrors.value };
+    delete nextErrors.startTime;
+    delete nextErrors.endTime;
+    Object.assign(
+      nextErrors,
+      paperCooperationTimeErrors(nextValues.startTime, nextValues.endTime),
+    );
+    parameterErrors.value = nextErrors;
+    return;
+  }
   clearParameterError(fieldName);
 }
 
@@ -2728,6 +2827,8 @@ function clearParameterError(fieldName: string) {
     "timeRangeEnd",
     "start_time",
     "end_time",
+    "startTime",
+    "endTime",
     "time_range_start",
     "time_range_end",
   ];
@@ -2849,7 +2950,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :title="field.description"
           :aria-label="field.name"
           :disabled-date="
-            isLiveColleague || isExpertDirect || isLiveCoop
+            isLiveColleague ||
+            isExpertDirect ||
+            isLiveCoop ||
+            isPaperCooperation
               ? disableFutureMonth
               : undefined
           "
@@ -2879,7 +2983,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       <button
         class="kg-button"
         type="button"
-        :disabled="running"
+        :disabled="running || (isPaperCooperation && hasParameterErrors)"
         @click="handleRun"
       >
         {{ running ? "测试中..." : "执行测试" }}
@@ -3088,6 +3192,38 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           </div>
         </dl>
         <section
+          v-else-if="
+            resultMode === 'provenance' &&
+            liveProvenance &&
+            usesThreeFieldProvenance
+          "
+          class="result-provenance"
+        >
+          <header>
+            <strong>数据溯源</strong><span>实体来源</span>
+          </header>
+          <h3>实体溯源</h3>
+          <div class="result-provenance__evidence-list">
+            <article
+              v-for="(ev, index) in liveProvenance.evidences"
+              :key="`${ev.graphVid || index}-${index}`"
+            >
+              <header>
+                <strong>{{ ev.title }}</strong>
+              </header>
+              <span
+                >源数据表：<code>{{ ev.sourceTable || "-" }}</code></span
+              >
+              <span
+                >英文字段名：<code>{{ ev.sourceField || "-" }}</code></span
+              >
+              <span
+                >图空间 VID：<code>{{ ev.graphVid || "-" }}</code></span
+              >
+            </article>
+          </div>
+        </section>
+        <section
           v-else-if="resultMode === 'provenance' && liveProvenance"
           class="result-provenance"
         >
@@ -3194,14 +3330,17 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
                   <code>{{ selectedProvenance.evidences[0]?.graphVid || selectedProvenanceTarget.id }}</code>
                 </dd>
               </div>
-              <div>
+              <div v-if="!isExpertIndirect && !isPaperCooperation">
                 <dt>构建任务 ID</dt>
                 <dd>
                   <code>{{ selectedProvenance.task.instanceId }}</code>
                 </dd>
               </div>
             </dl>
-            <div class="result-provenance__task-meta">
+            <div
+              v-if="!isExpertIndirect && !isPaperCooperation"
+              class="result-provenance__task-meta"
+            >
               <RouterLink
                 :to="{
                   name: 'processing-instance-detail',
@@ -3253,7 +3392,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
                 >
               </article>
             </div>
-            <dl class="result-provenance__source">
+            <dl
+              v-if="!isExpertIndirect && !isPaperCooperation"
+              class="result-provenance__source"
+            >
               <div>
                 <dt>构建任务 ID</dt>
                 <dd>
@@ -3261,7 +3403,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
                 </dd>
               </div>
             </dl>
-            <div class="result-provenance__task-meta">
+            <div
+              v-if="!isExpertIndirect && !isPaperCooperation"
+              class="result-provenance__task-meta"
+            >
               <RouterLink
                 :to="{
                   name: 'processing-instance-detail',

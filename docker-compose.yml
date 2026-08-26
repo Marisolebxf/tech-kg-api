@@ -7,7 +7,6 @@ services:
     container_name: tech-kg-api
     ports:
       - "8001:8000"
-      - "8000:8000"
     env_file:
       - ./backend/.env
     environment:

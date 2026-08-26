@@ -89,7 +89,7 @@ def test_builds_only_indirect_paths_and_deduplicates_reverse_edges():
     result = _build_result(_core_node(), _subgraph(), body)
 
     assert result["coreNode"]["name"] == "专家甲"
-    assert result["directNodeCount"] == 2
+    assert result["directNodeCount"] == 1
     assert result["indirectNodeCount"] == 1
     assert result["pathCount"] == 1
     assert result["relationTypeCount"] == {"学术关联": 1}
@@ -161,6 +161,23 @@ def test_project_relation_type_returns_only_project_paths():
     assert result["pathCount"] == 1
     assert result["relationTypeCount"] == {"项目关联": 1}
     assert result["paths"][0]["targetNode"]["name"] == "机构一"
+
+
+def test_direct_nodes_are_empty_when_no_filtered_path_matches():
+    body = ExpertIndirectRelationRequest(
+        core_node_id="A",
+        relation_types=["项目关联"],
+        path_depth=2,
+        min_strength=1.0,
+    )
+
+    result = _build_result(_core_node(), _subgraph(), body)
+
+    assert result["pathCount"] == 0
+    assert result["directNodeCount"] == 0
+    assert result["directNodes"] == []
+    assert result["indirectNodeCount"] == 0
+    assert result["indirectNodes"] == []
 
 
 def test_builds_provenance_from_real_graph_metadata():

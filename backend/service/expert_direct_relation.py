@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any
@@ -127,7 +128,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             }
 
         rows = self._orient_rows(
-            rows=rows,
+            rows=self._filter_rows_by_time(rows, start_time, end_time),
             expert_a_id=expert_a_id,
             expert_b_id=expert_b_id,
         )
@@ -355,6 +356,51 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             if keyword_lc in value:
                 return True
         return False
+
+    @staticmethod
+    def _filter_rows_by_time(
+        rows: list[dict[str, Any]],
+        start_time: str | None,
+        end_time: str | None,
+    ) -> list[dict[str, Any]]:
+        """按关系边真实 relation_time 过滤；无法验证时间的边不进入限时结果。"""
+        start = (start_time or "").strip()
+        end = (end_time or "").strip()
+        if not start and not end:
+            return rows
+
+        def normalized_relation_date(row: dict[str, Any]) -> str | None:
+            value = row.get("relation_time")
+            if hasattr(value, "strftime"):
+                return value.strftime("%Y-%m-%d")
+            match = re.search(
+                r"((?:19|20)\d{2})[-/.年](0?[1-9]|1[0-2])(?:[-/.月](0?[1-9]|[12]\d|3[01]))?",
+                str(value or ""),
+            )
+            if not match:
+                return None
+            year, month, day = match.groups()
+            return f"{year}-{int(month):02d}-{int(day or 1):02d}"
+
+        lower = f"{start[:7]}-01" if start else ""
+        upper = (
+            f"{end[:7]}-31"
+            if end and len(end) == 7
+            else end[:10]
+            if end
+            else ""
+        )
+        filtered: list[dict[str, Any]] = []
+        for row in rows:
+            relation_date = normalized_relation_date(row)
+            if relation_date is None:
+                continue
+            if lower and relation_date < lower:
+                continue
+            if upper and relation_date > upper:
+                continue
+            filtered.append(row)
+        return filtered
 
     # ---------------- 展示层组装 ----------------
     def _build_item(self, row: dict[str, Any]) -> dict[str, Any]:

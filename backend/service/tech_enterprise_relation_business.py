@@ -89,6 +89,7 @@ _ROLE_LEVEL_RULES = [
         (
             "董事长",
             "副董事长",
+            "董事",
             "chairman",
             "ceo",
             "总裁",

@@ -384,14 +384,16 @@ def _enumerate_paths(
         adjacency[source].append((target, edge))
         adjacency[target].append((source, edge))
 
-    direct_ids = {neighbor for neighbor, _ in adjacency.get(core_id, [])}
+    # 全量一跳邻居只用于判断路径终点是否属于“间接节点”。它不能直接作为
+    # 响应 directNodes，否则关系类型/强度过滤未命中时仍会带出无关邻居。
+    all_direct_ids = {neighbor for neighbor, _ in adjacency.get(core_id, [])}
     candidates: list[dict[str, Any]] = []
     stack: list[tuple[str, list[str], list[dict[str, Any]]]] = [(core_id, [core_id], [])]
 
     while stack and len(candidates) < MAX_CANDIDATE_PATHS:
         current, node_ids, path_edges = stack.pop()
         depth = len(path_edges)
-        if depth >= 2 and current not in direct_ids:
+        if depth >= 2 and current not in all_direct_ids:
             relation_type = _relation_type(path_edges)
             strength = _path_strength(path_edges)
             if strength >= min_strength and _matches_requested_types(
@@ -428,7 +430,13 @@ def _enumerate_paths(
         deduped.values(),
         key=lambda item: (-item["strength"], item["depth"], item["pathText"]),
     )[:MAX_RESULT_PATHS]
-    return direct_ids, paths
+    # directNodes 是最终命中路径中的第一跳节点，与 paths 使用同一过滤结果。
+    matched_direct_ids = {
+        str(path["nodes"][1]["id"])
+        for path in paths
+        if len(path.get("nodes") or []) > 1
+    }
+    return matched_direct_ids, paths
 
 
 def _build_result(

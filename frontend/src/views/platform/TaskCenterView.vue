@@ -19,6 +19,11 @@ import {
   type WorkflowDefinition,
 } from '../../api/workflowOperations'
 import { useAuthStore } from '../../stores/auth'
+import { currentUserId, listLlmConfigs, type LlmConfig } from '../../api/llmConfig'
+import { listMysqlDatabases, listMysqlDatasources, type MysqlDatasource } from '../../api/mysqlDatasource'
+import { listMilvusDatabases, listMilvusConfigs, type MilvusConfig } from '../../api/milvusConfig'
+import { listEmbeddingConfigs, type EmbeddingConfig } from '../../api/embeddingConfig'
+import { listGraphSpaces } from '../../api/graphSpace'
 
 const route = useRoute()
 const router = useRouter()
@@ -140,6 +145,22 @@ const scriptBusy = ref(false)
 const scriptNotice = ref('')
 let scriptTimer: ReturnType<typeof setInterval> | null = null
 
+// 触发时为脚本选择运行资源（可选；未选走默认/env，对应 ctx 属性为 None）
+const scriptMysqlDsId = ref('')
+const scriptMysqlDb = ref('')
+const scriptGraphSpace = ref('')
+const scriptMilvusCfgId = ref('')
+const scriptMilvusDb = ref('')
+const scriptLlmId = ref('')
+const scriptEmbId = ref('')
+const mysqlDsOptions = ref<MysqlDatasource[]>([])
+const mysqlDbOptions = ref<string[]>([])
+const milvusCfgOptions = ref<MilvusConfig[]>([])
+const milvusDbOptions = ref<string[]>([])
+const graphSpaceOptions = ref<string[]>([])
+const llmOptions = ref<LlmConfig[]>([])
+const embOptions = ref<EmbeddingConfig[]>([])
+
 async function loadScriptDefinitions() {
   const response = await listDefinitions()
   scriptDefinitions.value = response.items.filter((item) => item.sourceKind === 'python')
@@ -153,12 +174,53 @@ function selectRegisteredDefinition() {
   scriptNotice.value = `已选择 ${definition.name}，可直接执行，无需重复上传。`
 }
 
+async function loadSelectorOptions() {
+  try {
+    const [mysql, milvus, emb, llm, spaces] = await Promise.all([
+      listMysqlDatasources(),
+      listMilvusConfigs(),
+      listEmbeddingConfigs(),
+      listLlmConfigs(currentUserId()),
+      listGraphSpaces(),
+    ])
+    mysqlDsOptions.value = mysql
+    milvusCfgOptions.value = milvus
+    embOptions.value = emb
+    llmOptions.value = llm
+    graphSpaceOptions.value = spaces
+  } catch (error) {
+    scriptNotice.value = error instanceof Error ? error.message : '运行资源选项加载失败'
+  }
+}
+
+async function onMysqlDsChange() {
+  scriptMysqlDb.value = ''
+  mysqlDbOptions.value = []
+  if (!scriptMysqlDsId.value) return
+  try {
+    mysqlDbOptions.value = await listMysqlDatabases(scriptMysqlDsId.value)
+  } catch (error) {
+    scriptNotice.value = error instanceof Error ? error.message : 'MySQL 库列表加载失败'
+  }
+}
+
+async function onMilvusCfgChange() {
+  scriptMilvusDb.value = ''
+  milvusDbOptions.value = []
+  if (!scriptMilvusCfgId.value) return
+  try {
+    milvusDbOptions.value = await listMilvusDatabases(scriptMilvusCfgId.value)
+  } catch (error) {
+    scriptNotice.value = error instanceof Error ? error.message : 'Milvus 库列表加载失败'
+  }
+}
+
 async function openScriptDialog() {
   scriptDialogOpen.value = true
   scriptNotice.value = ''
   scriptExecution.value = null
   try {
-    await loadScriptDefinitions()
+    await Promise.all([loadScriptDefinitions(), loadSelectorOptions()])
     selectRegisteredDefinition()
   } catch (error) {
     scriptNotice.value = error instanceof Error ? error.message : '工作流定义加载失败'
@@ -205,7 +267,15 @@ async function executeScript() {
   scriptBusy.value = true
   scriptNotice.value = '执行下发中…'
   try {
-    const execution = await executeDefinition(scriptDefinitionId.value, payload)
+    const execution = await executeDefinition(scriptDefinitionId.value, payload, {
+      mysqlDatasourceId: scriptMysqlDsId.value || undefined,
+      mysqlDatabase: scriptMysqlDb.value || undefined,
+      graphSpace: scriptGraphSpace.value || undefined,
+      milvusConfigId: scriptMilvusCfgId.value || undefined,
+      milvusDatabase: scriptMilvusDb.value || undefined,
+      llmConfigId: scriptLlmId.value || undefined,
+      embeddingConfigId: scriptEmbId.value || undefined,
+    })
     scriptExecution.value = execution
     scriptNotice.value = `已下发，executionId=${execution.id}，状态=${execution.status}。轮询中…`
     startPolling(execution.id)
@@ -314,6 +384,19 @@ onMounted(async () => {
         <label class="script-file"><span>脚本文件 (.py)</span><input type="file" accept=".py" @change="onScriptFile" /><small>{{ scriptFile?.name || '未选择' }}</small></label>
         <label><span>函数名</span><input v-model="scriptFunction" placeholder="workflow" /></label>
         <label><span>超时(秒)</span><input v-model.number="scriptTimeout" type="number" min="1" /></label>
+        <section class="script-selectors">
+          <strong>运行资源选择</strong>
+          <p>可选。未选则走默认/env，脚本 ctx 对应属性为 None。</p>
+          <div class="selector-grid">
+            <label><span>MySQL 数据源</span><select v-model="scriptMysqlDsId" @change="onMysqlDsChange"><option value="">默认 / env</option><option v-for="ds in mysqlDsOptions" :key="ds.id" :value="ds.id">{{ ds.name }}</option></select></label>
+            <label><span>MySQL 库</span><select v-model="scriptMysqlDb" :disabled="!scriptMysqlDsId"><option value="">数据源默认库</option><option v-for="db in mysqlDbOptions" :key="db" :value="db">{{ db }}</option></select></label>
+            <label><span>图空间</span><select v-model="scriptGraphSpace"><option value="">默认 / env</option><option v-for="sp in graphSpaceOptions" :key="sp" :value="sp">{{ sp }}</option></select></label>
+            <label><span>Milvus 配置</span><select v-model="scriptMilvusCfgId" @change="onMilvusCfgChange"><option value="">默认 / env</option><option v-for="cfg in milvusCfgOptions" :key="cfg.id" :value="cfg.id">{{ cfg.name }}</option></select></label>
+            <label><span>Milvus 库</span><select v-model="scriptMilvusDb" :disabled="!scriptMilvusCfgId"><option value="">配置默认库</option><option v-for="db in milvusDbOptions" :key="db" :value="db">{{ db }}</option></select></label>
+            <label><span>LLM 模型</span><select v-model="scriptLlmId"><option value="">默认 / env</option><option v-for="llm in llmOptions" :key="llm.id" :value="llm.id">{{ llm.name }} · {{ llm.model }}</option></select></label>
+            <label><span>embedding 模型</span><select v-model="scriptEmbId"><option value="">默认 / env</option><option v-for="emb in embOptions" :key="emb.id" :value="emb.id">{{ emb.name }} · {{ emb.model }}</option></select></label>
+          </div>
+        </section>
         <label class="script-payload"><span>payload (JSON)</span><textarea v-model="scriptPayload" rows="3" /></label>
         <section><strong>说明</strong><p>Schema 管理上传且定义了 <code>workflow(payload)</code> 的脚本会自动出现在“已注册工作流”中，可直接执行；也可在此上传新脚本。</p></section>
       </div>
@@ -346,4 +429,5 @@ onMounted(async () => {
 .stage-state.is-已阻断{background:#fee4e2;color:#b42318}
 .execution-success,.execution-interrupted{display:inline-flex;padding:2px 7px;border-radius:999px;font-size:10px}.execution-success{background:#dcfae6;color:#067647}.execution-interrupted{background:#fee4e2;color:#b42318}.task-table td{vertical-align:middle}
 .script-dialog{width:min(640px,calc(100vw - 40px))}.script-form{display:grid;gap:12px;padding:17px}.script-form label{display:grid;gap:5px}.script-form label span{color:#60708a;font-size:10px}.script-form input,.script-form textarea,.script-form select{width:100%;padding:7px 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font-size:11px;font-family:inherit}.script-form textarea{resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.script-form .script-file small{color:#8290a7;font-size:9px}.script-form section{padding:11px;border:1px solid #d6e3f4;border-radius:6px;background:#fff}.script-form section strong{font-size:11px}.script-form section p{margin:5px 0 0;color:#687892;font-size:10px;line-height:17px}.script-form section code{padding:1px 5px;border-radius:4px;background:#eef5ff;color:#175cd3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.script-notice{margin:0;padding:11px 17px;border-top:1px solid #dce8f8;background:#eef5ff;color:#315b95;font-size:10px;line-height:16px}.script-execution{margin:0;padding:13px 17px;max-height:220px;overflow:auto;background:#0f1b2e;color:#cfe2ff;font-size:10px;line-height:15px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.script-selectors{margin-top:4px;border:1px solid #d6e3f4;border-radius:6px;background:#fff;padding:11px}.script-selectors strong{font-size:11px}.script-selectors p{margin:4px 0 8px;color:#687892;font-size:10px;line-height:14px}.selector-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.selector-grid label{display:grid;gap:5px}.selector-grid select{width:100%;height:30px;padding:0 8px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font-size:10px}
 </style>

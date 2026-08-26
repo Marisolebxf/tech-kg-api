@@ -265,8 +265,25 @@ export const uploadPythonDefinition = (
   return unwrap(http.post('/v1/workflow-system/definitions/python', form)) as Promise<WorkflowDefinition>
 }
 
-export const executeDefinition = (id: string, payload: Record<string, unknown> = {}, workflowId?: string) =>
-  unwrap(http.post(`/v1/workflow-system/definitions/${id}/execute`, { payload, workflow_id: workflowId })) as Promise<WorkflowExecution>
+export interface ExecuteDefinitionSelectors {
+  workflowId?: string
+  llmConfigId?: string
+  embeddingConfigId?: string
+  mysqlDatasourceId?: string
+  mysqlDatabase?: string
+  graphSpace?: string
+  milvusConfigId?: string
+  milvusDatabase?: string
+}
+
+export const executeDefinition = (
+  id: string,
+  payload: Record<string, unknown> = {},
+  selectors: ExecuteDefinitionSelectors = {},
+) =>
+  unwrap(
+    http.post(`/v1/workflow-system/definitions/${id}/execute`, { payload, ...selectors }),
+  ) as Promise<WorkflowExecution>
 
 export const getExecution = (executionId: string) =>
   unwrap(http.get(`/v1/workflow-system/executions/${executionId}`)) as Promise<WorkflowExecution>

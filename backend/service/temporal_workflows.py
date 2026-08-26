@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 from datetime import timedelta
@@ -14,12 +15,132 @@ from dotenv import load_dotenv
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
+logger = logging.getLogger(__name__)
+
 ACTIVITY_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=2),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=30),
     maximum_attempts=5,
 )
+
+
+def _resolve_resources(
+    payload: dict[str, Any], definition_id: str | None, step_id: str
+) -> dict[str, Any]:
+    """在 activity 内把触发时选择的 config_id 解析成连接参数 dict（非活对象）。
+
+    密钥只在 worker 进程内、只进 ``KG_SCRIPT_CTX`` env，与 ``.env`` 同信任边界；
+    不进 workflow payload（避免在 Temporal UI/搜索历史泄露）。任一资源解析失败
+    独立降级为缺该 key（SDK 对应属性返回 None）。
+    """
+    resources: dict[str, Any] = {}
+
+    mysql_id = payload.get("mysql_datasource_id")
+    if mysql_id:
+        try:
+            from service.mysql_datasource import get_mysql_settings_by_id
+
+            params = get_mysql_settings_by_id(mysql_id)
+            if params:
+                if payload.get("mysql_database"):
+                    params = {**params, "database": payload["mysql_database"]}
+                resources["mysql"] = params
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("解析 MySQL 数据源 %s 失败: %s", mysql_id, exc)
+
+    milvus_id = payload.get("milvus_config_id")
+    if milvus_id:
+        try:
+            from service.milvus_config import get_milvus_settings_by_id
+
+            params = get_milvus_settings_by_id(milvus_id)
+            if params:
+                if payload.get("milvus_database"):
+                    params = {**params, "db_name": payload["milvus_database"]}
+                resources["milvus"] = params
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("解析 Milvus 配置 %s 失败: %s", milvus_id, exc)
+
+    graph_space = payload.get("graph_space")
+    if graph_space:
+        try:
+            from infra.graph_db.config import TRSGraphSettings
+
+            s = TRSGraphSettings.from_env()
+            resources["graph"] = {
+                "base_url": s.base_url,
+                "space": graph_space,
+                "api_key": s.api_key,
+                "timeout": s.timeout,
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("解析图空间 %s 失败: %s", graph_space, exc)
+
+    llm_id = payload.get("llm_config_id")
+    if llm_id:
+        try:
+            from service.llm_config import get_llm_settings_by_id
+
+            params = get_llm_settings_by_id(llm_id)
+            if params:
+                resources["llm"] = params
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("解析 LLM 配置 %s 失败: %s", llm_id, exc)
+
+    emb_id = payload.get("embedding_config_id")
+    if emb_id:
+        try:
+            from service.embedding_config import get_embedding_settings_by_id
+
+            params = get_embedding_settings_by_id(emb_id)
+            if params:
+                resources["embedding"] = params
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("解析 embedding 配置 %s 失败: %s", emb_id, exc)
+
+    try:
+        from service.script_watermark import read_watermark
+
+        wm = read_watermark(definition_id, step_id)
+        if wm:
+            resources["watermark"] = wm.get("watermark")
+            resources["checkpoint"] = wm.get("checkpoint")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("读水位 %s/%s 失败: %s", definition_id, step_id, exc)
+
+    return resources
+
+
+def _write_watermark(definition_id: str | None, step_id: str, output: Any) -> None:
+    """step 成功后写水位。脚本可在返回 dict 里带 ``_watermark``(ISO str)/``_checkpoint`` 覆盖默认 now()。
+
+    失败不阻塞 pipeline——记 warning 继续。
+    """
+    from datetime import datetime
+
+    from service.script_watermark import write_watermark
+
+    watermark_override = None
+    checkpoint = None
+    if isinstance(output, dict):
+        watermark_override = output.get("_watermark")
+        checkpoint = output.get("_checkpoint")
+    ts = None
+    if watermark_override:
+        try:
+            ts = datetime.fromisoformat(watermark_override)
+        except (ValueError, TypeError):
+            ts = None
+    write_watermark(definition_id, step_id, watermark=ts, checkpoint=checkpoint)
+
+
+def _strip_watermark_meta(output: Any) -> Any:
+    """从脚本返回里剥离 ``_watermark``/``_checkpoint`` 元字段，避免污染 step 输出展示。"""
+    if isinstance(output, dict):
+        output.pop("_watermark", None)
+        output.pop("_checkpoint", None)
+    return output
 
 
 @activity.defn
@@ -76,14 +197,24 @@ if inspect.isawaitable(result):
     result = asyncio.run(result)
 print(json.dumps(result, ensure_ascii=False))
 """
-    # 上传脚本需要 backend 模块（infra/dao/script）与凭据（MySQL/TRSGraph）。
-    # worker 进程不 import infra，故这里显式加载 backend/.env，并把 backend 目录加入 PYTHONPATH。
-    # 平台已声明上传脚本具备服务器进程权限（见 docs/workflow_operations_api.md），透传 env 不降低安全面。
-    # BACKEND_DIR 在 activity 内计算（workflow sandbox 禁止模块顶层 Path.resolve）。
+    # 上传脚本需要 backend 模块（infra/dao/sdk）与凭据（MySQL/TRSGraph）。
+    # worker 进程不 import infra，故这里显式加载 backend/.env，并把 backend + backend/sdk
+    # 目录加入 PYTHONPATH。KG_SCRIPT_CTX 注入已解析的连接参数 + 水位，单参脚本用
+    # `from kg_sdk import current_context` 取 Context。密钥经 env 传递的安全面与
+    # MYSQL_PASSWORD 等 sub_env={**os.environ} 一致（见 docs/workflow_operations_api.md）。
     backend_dir = Path(__file__).resolve().parents[1]
     load_dotenv(backend_dir / ".env")
-    pythonpath = os.pathsep.join(filter(None, [str(backend_dir), str(script_path.parent)]))
-    sub_env = {**os.environ, "PYTHONPATH": pythonpath}
+    payload = request.get("payload", {})
+    resolved = _resolve_resources(payload, request.get("definitionId"), "_default")
+    sdk_dir = backend_dir / "sdk"
+    pythonpath = os.pathsep.join(
+        filter(None, [str(backend_dir), str(sdk_dir), str(script_path.parent)])
+    )
+    sub_env = {
+        **os.environ,
+        "PYTHONPATH": pythonpath,
+        "KG_SCRIPT_CTX": json.dumps(resolved, ensure_ascii=False),
+    }
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         "-c",
@@ -97,9 +228,7 @@ print(json.dumps(result, ensure_ascii=False))
     )
     try:
         stdout, stderr = await asyncio.wait_for(
-            process.communicate(
-                json.dumps(request.get("payload", {}), ensure_ascii=False).encode()
-            ),
+            process.communicate(json.dumps(payload, ensure_ascii=False).encode()),
             timeout=float(request.get("timeoutSeconds", 60)),
         )
     except TimeoutError:
@@ -108,7 +237,9 @@ print(json.dumps(result, ensure_ascii=False))
         raise RuntimeError("上传脚本执行超时") from None
     if process.returncode != 0:
         raise RuntimeError(stderr.decode(errors="replace")[-4000:])
-    return json.loads(stdout.decode() or "null")
+    output = json.loads(stdout.decode() or "null")
+    _write_watermark(request.get("definitionId"), "_default", output)
+    return _strip_watermark_meta(output)
 
 
 def _retry_policy(config: dict[str, Any]) -> RetryPolicy:
@@ -145,12 +276,18 @@ async def execute_pipeline_step(request: dict[str, Any]) -> dict[str, Any]:
         "taskId": request.get("taskId"),
         "definitionId": request.get("definitionId"),
     }
+    payload = request.get("payload", {})
+    # 在 worker 内解析 config_id → 连接参数 + 读水位，合并进 ctx（两参脚本直接用 ctx.mysql 等）。
+    resolved = _resolve_resources(payload, request.get("definitionId"), request["stepId"])
+    ctx.update(resolved)
     runner = """
 import asyncio
 import importlib.util
 import inspect
 import json
 import sys
+
+from kg_sdk import Context
 
 path, function_name = sys.argv[1], sys.argv[2]
 spec = importlib.util.spec_from_file_location("uploaded_step_module", path)
@@ -159,7 +296,7 @@ spec.loader.exec_module(module)
 function = getattr(module, function_name)
 data = json.loads(sys.stdin.read() or "{}")
 payload = data.get("payload", {})
-ctx = data.get("ctx", {})
+ctx = Context(data.get("ctx", {}))
 result = function(payload, ctx)
 if inspect.isawaitable(result):
     result = asyncio.run(result)
@@ -167,8 +304,15 @@ print(json.dumps(result, ensure_ascii=False))
 """
     backend_dir = Path(__file__).resolve().parents[1]
     load_dotenv(backend_dir / ".env")
-    pythonpath = os.pathsep.join(filter(None, [str(backend_dir), str(script_path.parent)]))
-    sub_env = {**os.environ, "PYTHONPATH": pythonpath}
+    sdk_dir = backend_dir / "sdk"
+    pythonpath = os.pathsep.join(
+        filter(None, [str(backend_dir), str(sdk_dir), str(script_path.parent)])
+    )
+    sub_env = {
+        **os.environ,
+        "PYTHONPATH": pythonpath,
+        "KG_SCRIPT_CTX": json.dumps(ctx, ensure_ascii=False),
+    }
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         "-c",
@@ -180,9 +324,7 @@ print(json.dumps(result, ensure_ascii=False))
         stderr=asyncio.subprocess.PIPE,
         env=sub_env,
     )
-    stdin_data = json.dumps(
-        {"payload": request.get("payload", {}), "ctx": ctx}, ensure_ascii=False
-    ).encode()
+    stdin_data = json.dumps({"payload": payload, "ctx": ctx}, ensure_ascii=False).encode()
     try:
         stdout, stderr = await asyncio.wait_for(
             process.communicate(stdin_data),
@@ -195,6 +337,8 @@ print(json.dumps(result, ensure_ascii=False))
     if process.returncode != 0:
         raise RuntimeError(stderr.decode(errors="replace")[-4000:])
     output = json.loads(stdout.decode() or "null")
+    _write_watermark(request.get("definitionId"), request["stepId"], output)
+    output = _strip_watermark_meta(output)
     # post-process pendingReview: 入 ReviewCase 队列，pipeline 不暂停
     pending = output.pop("pendingReview", []) if isinstance(output, dict) else []
     if pending:
@@ -427,6 +571,7 @@ class PythonScriptWorkflow:
                 "scriptPath": definition["scriptPath"],
                 "functionName": definition.get("functionName", "workflow"),
                 "payload": request.get("payload", {}),
+                "definitionId": request.get("definitionId"),
                 "timeoutSeconds": timeout_seconds,
             },
             start_to_close_timeout=timedelta(seconds=timeout_seconds + 30),

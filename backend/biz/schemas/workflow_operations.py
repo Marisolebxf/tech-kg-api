@@ -69,6 +69,12 @@ class WorkflowExecuteRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict, strict=True)
     workflow_id: str | None = Field(default=None, alias="workflowId")
     llm_config_id: str | None = Field(default=None, alias="llmConfigId")
+    embedding_config_id: str | None = Field(default=None, alias="embeddingConfigId")
+    mysql_datasource_id: str | None = Field(default=None, alias="mysqlDatasourceId")
+    mysql_database: str | None = Field(default=None, alias="mysqlDatabase")
+    milvus_config_id: str | None = Field(default=None, alias="milvusConfigId")
+    milvus_database: str | None = Field(default=None, alias="milvusDatabase")
+    graph_space: str | None = Field(default=None, alias="graphSpace")
     since: str | None = None
 
     model_config = {"populate_by_name": True}

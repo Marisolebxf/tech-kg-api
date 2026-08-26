@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from openai import OpenAI
 
@@ -53,6 +54,51 @@ class LLMClient:
         except Exception as exc:  # noqa: BLE001
             logger.warning("LLM synthesize failed, degrading: %s", exc)
             return None
+
+
+class EmbeddingClient:
+    """OpenAI 兼容 embedding 客户端。embed/embed_one 失败降级返回 None。"""
+
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str = DEFAULT_BASE_URL,
+        model: str = "embedding-3",
+        dimensions: int | None = None,
+    ) -> None:
+        self._model = model
+        self._base_url = base_url
+        self._api_key = api_key
+        self._dimensions = dimensions
+        self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=DEFAULT_TIMEOUT)
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
+    def embed(self, texts: list[str]) -> list[list[float]] | None:
+        """批量 embedding。返回与输入等长的向量列表；失败返回 None。"""
+        if not texts:
+            return []
+        try:
+            kwargs: dict[str, Any] = {"model": self._model, "input": texts}
+            if self._dimensions:
+                kwargs["dimensions"] = self._dimensions
+            resp = self._client.embeddings.create(**kwargs)
+            return [d.embedding for d in resp.data]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("embedding embed failed, degrading: %s", exc)
+            return None
+
+    def embed_one(self, text: str) -> list[float] | None:
+        result = self.embed([text])
+        if result is None:
+            return None
+        return result[0] if result else []
 
 
 _client: LLMClient | None = None

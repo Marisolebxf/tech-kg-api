@@ -1,0 +1,16 @@
+CREATE TABLE IF NOT EXISTS `platform_embedding_config` (
+  `id` VARCHAR(64) NOT NULL,
+  `name` VARCHAR(128) NOT NULL,
+  `description` VARCHAR(500) NOT NULL DEFAULT '',
+  `base_url` VARCHAR(256) NOT NULL,
+  `api_key` VARCHAR(256) NOT NULL DEFAULT '',
+  `model` VARCHAR(128) NOT NULL,
+  `dimensions` INT NULL,
+  `owner` VARCHAR(128) NOT NULL DEFAULT '',
+  `is_default` TINYINT(1) NOT NULL DEFAULT 0,
+  `status` VARCHAR(32) NOT NULL DEFAULT '正常',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `ix_embedding_config_default_status` (`is_default`, `status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='平台 embedding 模型配置'

@@ -5,6 +5,7 @@ from biz.handler.admin_member import router as admin_member_router
 from biz.handler.auth import router as auth_router
 from biz.handler.common_capability import router as common_capability_router
 from biz.handler.correction import router as correction_router
+from biz.handler.embedding_config import router as embedding_config_router
 from biz.handler.enterprise_background_analysis import (
     router as enterprise_background_analysis_router,
 )
@@ -24,6 +25,7 @@ from biz.handler.expert_enterprise_relation import router as expert_enterprise_r
 from biz.handler.expert_indirect_relation import router as expert_indirect_relation_router
 from biz.handler.expert_paper_cooperation import router as expert_paper_cooperation_router
 from biz.handler.graph_search import router as graph_search_router
+from biz.handler.graph_space import router as graph_space_router
 from biz.handler.industry_chain_panorama import router as industry_chain_panorama_router
 from biz.handler.industry_chain_topn_event import router as industry_chain_topn_event_router
 from biz.handler.industry_node_top_events_business import (
@@ -33,6 +35,8 @@ from biz.handler.kg_construction import router as kg_construction_router
 from biz.handler.llm_config import router as llm_config_router
 from biz.handler.manual_review import router as manual_review_router
 from biz.handler.manual_review_internal import router as manual_review_internal_router
+from biz.handler.milvus_config import router as milvus_config_router
+from biz.handler.mysql_datasource import router as mysql_datasource_router
 from biz.handler.operator import internal_router as operator_internal_router
 from biz.handler.operator import router as operator_router
 from biz.handler.options import router as options_router
@@ -88,6 +92,10 @@ def register_routers(app: FastAPI) -> None:
         workflow_system_router,
         schema_management_router,
         llm_config_router,
+        mysql_datasource_router,
+        milvus_config_router,
+        embedding_config_router,
+        graph_space_router,
         operator_router,
         admin_member_router,
     )

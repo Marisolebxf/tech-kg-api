@@ -37,6 +37,7 @@ DOMAIN_ORDER = [
     "report",
     "schema_management",
     "llm_config",
+    "platform_datasource",
     "platform_governance",
 ]
 

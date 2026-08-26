@@ -6,6 +6,7 @@ import logging
 import time
 import uuid
 from datetime import datetime
+from typing import Any
 
 from openai import OpenAI
 from sqlalchemy.orm import Session
@@ -193,5 +194,24 @@ def get_llm_client_by_id(config_id: str) -> LLMClient | None:
         if row is None or not row.api_key:
             return None
         return LLMClient(api_key=row.api_key, base_url=row.base_url, model=row.model)
+    finally:
+        session.close()
+
+
+def get_llm_settings_by_id(config_id: str | None) -> dict[str, Any] | None:
+    """供 activity 解析：按 id 查 LlmConfig 返回参数 dict（api_key/base_url/model）。
+
+    配置不存在或缺 api_key 返回 None（SDK ctx.llm 为 None，回退全局默认）。
+    """
+    if not config_id:
+        return None
+    from infra.mysql import create_session
+
+    session = create_session()
+    try:
+        row = LlmConfigDAO(session).get(config_id)
+        if row is None or not row.api_key:
+            return None
+        return {"api_key": row.api_key, "base_url": row.base_url, "model": row.model}
     finally:
         session.close()

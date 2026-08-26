@@ -110,6 +110,18 @@ async def execute_definition(definition_id: str, request: WorkflowExecuteRequest
     payload = dict(request.payload)
     if request.llm_config_id is not None:
         payload["llm_config_id"] = request.llm_config_id
+    if request.embedding_config_id is not None:
+        payload["embedding_config_id"] = request.embedding_config_id
+    if request.mysql_datasource_id is not None:
+        payload["mysql_datasource_id"] = request.mysql_datasource_id
+    if request.mysql_database is not None:
+        payload["mysql_database"] = request.mysql_database
+    if request.milvus_config_id is not None:
+        payload["milvus_config_id"] = request.milvus_config_id
+    if request.milvus_database is not None:
+        payload["milvus_database"] = request.milvus_database
+    if request.graph_space is not None:
+        payload["graph_space"] = request.graph_space
     if request.since is not None:
         payload["since"] = request.since
     try:

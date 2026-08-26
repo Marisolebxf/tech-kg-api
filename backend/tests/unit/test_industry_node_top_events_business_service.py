@@ -138,6 +138,29 @@ async def test_topn_via_graph_helpers(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_enterprises_and_provenance_only_cover_topn_result(monkeypatch):
+    subs = _subgraphs()
+    monkeypatch.setattr(
+        mod,
+        "_subgraph_sync",
+        lambda client, vid, edge_types, limit: subs.get(vid, {"nodes": [], "edges": []}),
+    )
+    monkeypatch.setattr(mod, "_fetch_org_governance_sync", lambda client, org_id: [])
+    monkeypatch.setattr(mod, "_get_dev_client", lambda: None)
+    monkeypatch.setattr(mod, "_result_cache", {})
+
+    resp = await IndustryNodeTopEventsService().run(
+        IndustryNodeTopEventsRequest(chain_node_id="IC_test", top_n=1, max_orgs=10)
+    )
+
+    assert resp.events == 1
+    assert resp.enterprises == 1
+    assert {item.org_id for item in resp.top_events} == {ORG_A}
+    assert ORG_A in resp.entity_provenance
+    assert ORG_B not in resp.entity_provenance
+
+
+@pytest.mark.asyncio
 async def test_topn_result_cache_hit(monkeypatch):
     """同参数二次请求命中 60s 缓存，_subgraph_sync 只被调用一次。"""
     subs = _subgraphs()

@@ -123,17 +123,28 @@ const { showToast } = useToast();
 const resultMode = ref<
   "summary" | "entity" | "relation" | "provenance" | "rule" | "api"
 >("summary");
-const resultModeOrder = ["summary", "entity", "relation", "provenance", "rule", "api"] as const;
+const resultModeOrder = [
+  "summary",
+  "entity",
+  "relation",
+  "provenance",
+  "rule",
+  "api",
+] as const;
 
 function handleResultTabKeydown(event: KeyboardEvent) {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
   event.preventDefault();
   const current = resultModeOrder.indexOf(resultMode.value);
-  const next = event.key === "Home"
-    ? 0
-    : event.key === "End"
-      ? resultModeOrder.length - 1
-      : (current + (event.key === "ArrowRight" ? 1 : -1) + resultModeOrder.length) % resultModeOrder.length;
+  const next =
+    event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? resultModeOrder.length - 1
+        : (current +
+            (event.key === "ArrowRight" ? 1 : -1) +
+            resultModeOrder.length) %
+          resultModeOrder.length;
   resultMode.value = resultModeOrder[next];
   requestAnimationFrame(() => {
     document.getElementById(`result-mode-tab-`)?.focus();
@@ -153,7 +164,8 @@ const queryFeedbackTitle = computed(() =>
     : "查询失败",
 );
 const currentMonth = dayjs().format("YYYY-MM");
-const disableFutureMonth = (value: Date) => dayjs(value).isAfter(dayjs(), "month");
+const disableFutureMonth = (value: Date) =>
+  dayjs(value).isAfter(dayjs(), "month");
 const MAX_PARAMETER_LENGTH = 64;
 const MAX_SCHOOL_LENGTH = 100;
 /** 标识类字段（专家 ID、节点 VID）：不允许空格与 !@#￥%& 等异常符号。 */
@@ -1173,7 +1185,8 @@ const selectedProvenance = computed(() => {
   return defaultNode ? getNodeProvenance(defaultNode) : null;
 });
 const selectedProvenanceTarget = computed(() => {
-  const node = selectedNode.value ?? (!selectedEdge.value ? graphNodes.value[0] : null);
+  const node =
+    selectedNode.value ?? (!selectedEdge.value ? graphNodes.value[0] : null);
   if (node) {
     return {
       kind: "实体",
@@ -1442,25 +1455,14 @@ const liveRules = computed<Array<Record<string, any>>>(() => {
     return liveResponse.value.data.rules;
   if (isExpertIndirect.value && expertIndirectResponse.value?.rules?.length)
     return expertIndirectResponse.value.rules;
-  const responseRules = liveResponse.value?.data?.rules ?? liveResponse.value?.rules;
-  if (Array.isArray(responseRules) && responseRules.length) return responseRules;
+  const responseRules =
+    liveResponse.value?.data?.rules ?? liveResponse.value?.rules;
+  if (Array.isArray(responseRules) && responseRules.length)
+    return responseRules;
   return actualServiceRules[props.moduleInfo.key] ?? [];
 });
 
-const liveEntities = computed(() => {
-  if (isLiveAlumni.value) return liveAlumniResult.value?.entities;
-  if (isLiveCoop.value) return liveCoopResult.value?.entities;
-  return undefined;
-});
-
-const liveRelationsList = computed(() => {
-  if (isLiveAlumni.value) return liveAlumniResult.value?.relations;
-  if (isLiveCoop.value) return liveCoopResult.value?.relations;
-  return undefined;
-});
-
 const liveEntityRows = computed(() => {
-  if (!isLiveModule.value) return null;
   const selected = selectedNode.value;
   if (selected) {
     const rows: Array<readonly [string, string]> = [
@@ -1474,46 +1476,32 @@ const liveEntityRows = computed(() => {
     }
     return rows;
   }
-  const entities = liveEntities.value;
-  if (!entities?.length) return [] as Array<readonly [string, string]>;
+  const entities = graphNodes.value;
+  if (!entities.length) return [] as Array<readonly [string, string]>;
   return entities.flatMap((entity, index) => [
     [`实体 ${index + 1}`, `${entity.label}（${entity.id}）`] as const,
     ["类型", entity.entityType] as const,
-    ["关系", entity.relations] as const,
+    ["关系", entity.relations || "—"] as const,
+    ["置信度", formatConfidence(entity.confidence)] as const,
   ]);
 });
 
 const liveRelationRows = computed(() => {
-  if (!isLiveModule.value) return null;
   if (selectedEdge.value) return relationDetailRows.value;
-  const relations = liveRelationsList.value;
-  if (!relations?.length) return [] as Array<readonly [string, string]>;
-  return relations.flatMap((rel, index) => {
-    const rows: Array<readonly [string, string]> = [
+  if (!graphEdges.value.length) return [] as Array<readonly [string, string]>;
+  const nodesById = new Map(graphNodes.value.map((node) => [node.id, node]));
+  return graphEdges.value.flatMap((relation, index) => {
+    const from = nodesById.get(relation.from);
+    const to = nodesById.get(relation.to);
+    return [
       [
         `关系 ${index + 1}`,
-        `${rel.fromName || rel.from} → ${rel.toName || rel.to}`,
-      ],
-      ["类型", rel.label],
+        `${from?.label || relation.from} → ${to?.label || relation.to}`,
+      ] as const,
+      ["类型", relation.label || "—"] as const,
+      ["分类", relation.category || "—"] as const,
+      ["置信度", formatConfidence(relation.confidence)] as const,
     ];
-    if ("dimensions" in rel && Array.isArray(rel.dimensions)) {
-      rows.push(["维度", rel.dimensions.join("、") || "—"]);
-    }
-    if ("sharedInstitutions" in rel && Array.isArray(rel.sharedInstitutions)) {
-      rows.push(["院校", rel.sharedInstitutions.join("、") || "—"]);
-    }
-    if ("summary" in rel && typeof rel.summary === "string") {
-      rows.push(["摘要", rel.summary || "—"]);
-    }
-    if (
-      "interactions" in rel &&
-      rel.interactions &&
-      typeof rel.interactions === "object"
-    ) {
-      const summary = (rel.interactions as { summary?: string }).summary;
-      rows.push(["互动", summary || "—"]);
-    }
-    return rows;
   });
 });
 
@@ -1527,7 +1515,9 @@ const liveProvenance = computed(() => {
     return expertIndirectResponse.value?.provenance ?? null;
   if (isPaperCooperation.value)
     return (
-      liveResponse.value?.provenance ?? liveResponse.value?.data?.provenance ?? null
+      liveResponse.value?.provenance ??
+      liveResponse.value?.data?.provenance ??
+      null
     );
   return null;
 });
@@ -1539,7 +1529,8 @@ const usesThreeFieldProvenance = computed(
 const detailRows = computed(() => {
   if (lastTestTime.value === "—") {
     return props.moduleInfo.summaryRows.map((row) => [row.label, ""] as const);
-  }  if (isPanorama.value && panoramaResponse.value) {
+  }
+  if (isPanorama.value && panoramaResponse.value) {
     return computePanoramaSummaryRows(panoramaResponse.value);
   }
   if (isExpertDirect.value && expertDirectResponse.value) {
@@ -1575,21 +1566,49 @@ const detailRows = computed(() => {
   });
 });
 
+/** 递归还原图属性里的 JSON 文本，避免 API 页展示双重序列化转义符。 */
+function decodeNestedJson(value: unknown, depth = 0): unknown {
+  if (depth > 6) return value;
+  if (Array.isArray(value))
+    return value.map((item) => decodeNestedJson(item, depth + 1));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        decodeNestedJson(item, depth + 1),
+      ]),
+    );
+  }
+  if (typeof value !== "string") return value;
+  const text = value.trim();
+  if (!text || !["{", "[", '"'].includes(text[0])) return value;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed === value ? value : decodeNestedJson(parsed, depth + 1);
+  } catch {
+    return value;
+  }
+}
+
+function prettyResult(value: unknown): string {
+  return JSON.stringify(decodeNestedJson(value), null, 2);
+}
+
 const apiResultJson = computed(() => {
   if (isPanorama.value && panoramaResponse.value) {
-    return JSON.stringify(panoramaResponse.value, null, 2);
+    return prettyResult(panoramaResponse.value);
   }
   if (isPanorama.value && panoramaError.value) {
     return JSON.stringify({ error: panoramaError.value }, null, 2);
   }
   if (isExpertDirect.value && expertDirectResponse.value) {
-    return JSON.stringify(expertDirectResponse.value, null, 2);
+    return prettyResult(expertDirectResponse.value);
   }
   if (isExpertDirect.value && expertDirectError.value) {
     return JSON.stringify({ error: expertDirectError.value }, null, 2);
   }
   if (isExpertIndirect.value && expertIndirectResponse.value) {
-    return JSON.stringify(expertIndirectResponse.value, null, 2);
+    return prettyResult(expertIndirectResponse.value);
   }
   if (isExpertIndirect.value && expertIndirectError.value) {
     return JSON.stringify({ error: expertIndirectError.value }, null, 2);
@@ -1605,10 +1624,10 @@ const apiResultJson = computed(() => {
     const resp = (liveApiPayload.value as { response?: unknown } | null)
       ?.response;
     if (resp) {
-      return JSON.stringify(resp, null, 2);
+      return prettyResult(resp);
     }
     if (liveApiPayload.value) {
-      return JSON.stringify(liveApiPayload.value, null, 2);
+      return prettyResult(liveApiPayload.value);
     }
     return JSON.stringify(
       { message: running.value ? "查询中..." : "暂无查询结果" },
@@ -1683,6 +1702,16 @@ const emptyResultHint = computed<string | null>(() => {
     if (!isPanoramaEmpty(panoramaResponse.value)) return null;
     return "未查询到符合条件的产业链全景图数据，请调整产业关键词或核心节点 VID 后重试。";
   }
+  if (isExpertIndirect.value) {
+    if (expertIndirectError.value || !expertIndirectResponse.value) return null;
+    const result = expertIndirectResponse.value.structuredResult;
+    if (result.pathCount > 0) return null;
+    const relationType = parameterValues.value.relation_types || "学术关联";
+    return `核心节点“${result.coreNode.name}”查询成功，但在 ${result.pathDepth} 跳、${relationType}、最小强度 ${result.minStrength} 的条件下未命中间接路径；画布仅显示核心节点。`;
+  }
+  if (graphNodes.value.length === 0) {
+    return "本次查询未返回可展示的实体与关系，请调整查询参数后重试。";
+  }
   return null;
 });
 
@@ -1691,9 +1720,7 @@ function computePanoramaSummaryRows(
 ): ReadonlyArray<readonly [string, string]> {
   if (isPanoramaEmpty(resp)) {
     // 查不到数据时不回落到静态示例值，避免把示例误当成真实结果
-    return props.moduleInfo.summaryRows.map(
-      (row) => [row.label, "—"] as const,
-    );
+    return props.moduleInfo.summaryRows.map((row) => [row.label, "—"] as const);
   }
   const layerLabel = (key: PanoramaLayerKey) => {
     const layer = resp.layers.find((l) => l.key === key);
@@ -1905,7 +1932,10 @@ function computeExpertDirectSummaryRows(
     // 查不到数据时不回落到静态示例值，避免把示例误当成真实结果
     return props.moduleInfo.summaryRows.map(
       (row) =>
-        [row.label, row.label === "关系数量" ? `${resp.total ?? 0} 条` : "—"] as const,
+        [
+          row.label,
+          row.label === "关系数量" ? `${resp.total ?? 0} 条` : "—",
+        ] as const,
     );
   }
   {
@@ -2550,7 +2580,9 @@ async function handleRun() {
         parameterErrors.value = { expert_id: "请输入专家唯一标识" };
         return;
       }
-      const expertIdErr = identifierError(parameterValues.value.expert_id ?? "");
+      const expertIdErr = identifierError(
+        parameterValues.value.expert_id ?? "",
+      );
       if (expertIdErr) {
         parameterErrors.value = { expert_id: expertIdErr };
         showToast("请修正参数后再执行", "warning");
@@ -2597,14 +2629,19 @@ async function handleRun() {
         return;
       }
       const errors: Record<string, string> = {};
-      const chainIdErr = identifierError(parameterValues.value.chain_node_id ?? "");
+      const chainIdErr = identifierError(
+        parameterValues.value.chain_node_id ?? "",
+      );
       if (chainIdErr) errors.chain_node_id = chainIdErr;
-      const eventTypeErr = identifierError(parameterValues.value.event_type ?? "");
+      const eventTypeErr = identifierError(
+        parameterValues.value.event_type ?? "",
+      );
       if (eventTypeErr) errors.event_type = eventTypeErr;
       const startTime = optionalParam(parameterValues.value.time_range_start);
       const endTime = optionalParam(parameterValues.value.time_range_end);
       if (Boolean(startTime) !== Boolean(endTime)) {
-        if (!startTime) errors.time_range_start = "开始时间和结束时间必须同时填写";
+        if (!startTime)
+          errors.time_range_start = "开始时间和结束时间必须同时填写";
         if (!endTime) errors.time_range_end = "开始时间和结束时间必须同时填写";
       }
       if (startTime && endTime && startTime > endTime) {
@@ -2883,7 +2920,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         :key="field.name"
         :class="{ 'has-error': Boolean(parameterErrors[field.name]) }"
       >
-        <span><i v-if="field.required === '是'">*</i>{{ field.label ?? field.name }}</span>
+        <span
+          ><i v-if="field.required === '是'">*</i
+          >{{ field.label ?? field.name }}</span
+        >
         <select
           v-if="field.type === 'select'"
           :key="`${field.name}-${paramResetToken}`"
@@ -2968,7 +3008,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :placeholder="field.placeholder ?? field.description"
           :title="field.description"
           :aria-invalid="Boolean(parameterErrors[field.name])"
-          :maxlength="liveIdFieldNames.includes(field.name) ? undefined : field.maxLength"
+          :maxlength="
+            liveIdFieldNames.includes(field.name) ? undefined : field.maxLength
+          "
           @input="handleParameterInput(field.name, $event)"
         />
         <small
@@ -3048,7 +3090,11 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       <section class="kg-panel result-panel" id="result-mode-panel">
         <div class="kg-panel__header">
           <h2 class="kg-panel__title">结果详情</h2>
-          <div class="result-panel__tabs" role="tablist" aria-label="结果详情视图">
+          <div
+            class="result-panel__tabs"
+            role="tablist"
+            aria-label="结果详情视图"
+          >
             <button
               :class="{ 'is-active': resultMode === 'summary' }"
               :id="`result-mode-tab-summary`"
@@ -3199,9 +3245,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           "
           class="result-provenance"
         >
-          <header>
-            <strong>数据溯源</strong><span>实体来源</span>
-          </header>
+          <header><strong>数据溯源</strong><span>实体来源</span></header>
           <h3>实体溯源</h3>
           <div class="result-provenance__evidence-list">
             <article
@@ -3327,7 +3371,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
               <div>
                 <dt>图空间 VID</dt>
                 <dd>
-                  <code>{{ selectedProvenance.evidences[0]?.graphVid || selectedProvenanceTarget.id }}</code>
+                  <code>{{
+                    selectedProvenance.evidences[0]?.graphVid ||
+                    selectedProvenanceTarget.id
+                  }}</code>
                 </dd>
               </div>
               <div v-if="!isExpertIndirect && !isPaperCooperation">
@@ -3385,7 +3432,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
                   >源数据表：<code>{{ endpoint.technicalTable }}</code></span
                 >
                 <span
-                  >英文字段名：<code>{{ endpoint.sourceField || "—" }}</code></span
+                  >英文字段名：<code>{{
+                    endpoint.sourceField || "—"
+                  }}</code></span
                 >
                 <span
                   >图空间 VID：<code>{{ endpoint.graphVid }}</code></span
@@ -3668,9 +3717,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1) !important;
 }
 
-:global(
-  .service-console__month-picker .arco-picker-input input
-) {
+:global(.service-console__month-picker .arco-picker-input input) {
   box-sizing: border-box !important;
   width: 100% !important;
   height: auto !important;

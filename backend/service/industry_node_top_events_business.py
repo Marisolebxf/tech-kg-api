@@ -335,7 +335,6 @@ class IndustryNodeTopEventsService:
             elif et == "HAS_NODE" and t != node_vid:
                 resp.chain_name = nodes_map.get(t, {}).get("chain_name") or resp.chain_name
 
-        resp.enterprises = len(orgs)
         # 按 chain_score 排序，只取 top max_orgs 家企业查事件（避免过多调用）
         orgs.sort(key=lambda x: x[1], reverse=True)
         orgs = orgs[: req.max_orgs]
@@ -425,6 +424,9 @@ class IndustryNodeTopEventsService:
 
         # 3) TOP 事件企业并行查专家（governance 边）
         top_org_ids = {ev.get("org_id") for ev in top if ev.get("org_id")}
+        # enterprises 与 top_events/relations 使用同一个 TOP-N 结果集合，不能返回
+        # 链节点下未命中事件或未进入 TOP-N 的全量企业数。
+        resp.enterprises = len(top_org_ids)
         gov_results = await asyncio.gather(
             *[
                 asyncio.to_thread(_fetch_org_governance_sync, client, org_id)
@@ -459,7 +461,7 @@ class IndustryNodeTopEventsService:
         resp.entity_provenance = {
             req.chain_node_id: _entity_provenance(nodes_map.get(node_vid, {}), {"IndustryNode"})
         }
-        for org_vid, _cs in orgs:
+        for org_vid in top_org_ids:
             resp.entity_provenance[org_vid] = _entity_provenance(
                 nodes_map.get(org_vid, {}), {"Organization"}
             )

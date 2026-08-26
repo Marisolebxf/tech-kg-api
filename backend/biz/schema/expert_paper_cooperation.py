@@ -1,4 +1,6 @@
+import re
 from datetime import date
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -44,7 +46,12 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
     def normalize_expert_id(cls, value: str) -> str:
         if value is None:
             return value
-        return str(value).strip()
+        value = str(value).strip()
+        if len(value) > 64:
+            raise ValueError("专家标识长度不能超过 64 个字符")
+        if value and not re.fullmatch(EXPERT_ID_PATTERN, value):
+            raise ValueError("专家标识输入字符存在异常字符，仅支持字母、数字、下划线和中划线")
+        return value
 
     @field_validator("startTime", "endTime", mode="before")
     @classmethod
@@ -69,6 +76,11 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
     def validate_experts(self):
         if self.expertAId == self.expertBId:
             raise ValueError("expertAId 和 expertBId 不能相同")
+        current_month = date.today().strftime("%Y-%m")
+        if self.startTime and self.startTime[:7] > current_month:
+            raise ValueError("startTime 超出当前时间")
+        if self.endTime and self.endTime[:7] > current_month:
+            raise ValueError("endTime 超出当前时间")
         if self.startTime and self.endTime:
             start_date = date.fromisoformat(self.startTime)
             end_date = date.fromisoformat(self.endTime)
@@ -117,11 +129,9 @@ class StructuredPaperCooperationResult(BaseModel):
 
 class PaperCooperationProvenanceEvidence(BaseModel):
     title: str
-    businessTable: str
-    technicalTable: str
-    recordId: str
-    fieldIdentifier: str
-    summary: str
+    sourceTable: str
+    sourceField: str
+    graphVid: str
 
 
 class PaperCooperationProvenance(BaseModel):
@@ -133,3 +143,4 @@ class PaperCooperationProvenance(BaseModel):
 class ExpertPaperCooperationStructuredResultOnlyResponse(BaseModel):
     structuredResult: StructuredPaperCooperationResult
     provenance: PaperCooperationProvenance
+    rules: list[dict[str, Any]] = Field(default_factory=list)

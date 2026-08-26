@@ -1,3 +1,5 @@
+from datetime import date
+
 import pytest
 
 from biz.handler import expert_paper_cooperation as handler
@@ -9,6 +11,7 @@ VALID_PAYLOAD = {
     "startTime": "2021-01-01",
     "endTime": "2024-12-31",
 }
+FUTURE_YEAR = date.today().year + 1
 
 
 def _structured_result(**overrides):
@@ -38,11 +41,9 @@ def _structured_result(**overrides):
             "evidences": [
                 {
                     "title": "实体 · 沈定刚",
-                    "businessTable": "科技专家",
-                    "technicalTable": "gkx_element.dwd_scholar",
-                    "recordId": "4P566No1",
-                    "fieldIdentifier": "source_record_id",
-                    "summary": "真实图节点来源。",
+                    "sourceTable": "dwd_scholar",
+                    "sourceField": "scholar_id",
+                    "graphVid": "person_4P566No1",
                 }
             ],
         },
@@ -65,7 +66,12 @@ async def test_expert_paper_cooperation_returns_structured_result(async_client, 
     data = response.json()
     assert data["structuredResult"]["authorList"] == ["沈定刚", "廖术"]
     assert data["structuredResult"]["cooperationPaperCount"] == 6
-    assert data["provenance"]["evidences"][0]["recordId"] == "4P566No1"
+    assert data["provenance"]["evidences"][0] == {
+        "title": "实体 · 沈定刚",
+        "sourceTable": "dwd_scholar",
+        "sourceField": "scholar_id",
+        "graphVid": "person_4P566No1",
+    }
 
 
 @pytest.mark.parametrize(
@@ -73,11 +79,13 @@ async def test_expert_paper_cooperation_returns_structured_result(async_client, 
     [
         ({"expertAId": ""}, "String should have at least 1 character"),
         ({"expertAId": "   "}, "String should have at least 1 character"),
-        ({"expertAId": "BAD ID!"}, "String should match pattern"),
-        ({"expertAId": "A" * 65}, "String should have at most 64 characters"),
+        ({"expertBId": "BAD ID!"}, "专家标识输入字符存在异常字符"),
+        ({"expertAId": "A" * 65}, "专家标识长度不能超过 64 个字符"),
         ({"expertBId": "4P566No1"}, "expertAId 和 expertBId 不能相同"),
         ({"startTime": "2024/01/01"}, "String should match pattern"),
         ({"startTime": "2024-99-99"}, "时间格式错误"),
+        ({"startTime": f"{FUTURE_YEAR}-01-01"}, "startTime 超出当前时间"),
+        ({"endTime": f"{FUTURE_YEAR}-01-31"}, "endTime 超出当前时间"),
         ({"startTime": "2025-01-01", "endTime": "2024-12-31"}, "startTime 不能晚于 endTime"),
     ],
 )

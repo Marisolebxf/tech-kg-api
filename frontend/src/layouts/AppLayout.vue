@@ -51,6 +51,9 @@ const userEntryRef = ref<HTMLElement | null>(null);
 const assistantEntryRef = ref<HTMLButtonElement | null>(null);
 const accountFeedback = ref("");
 const assistantOpen = ref(false);
+const isMobile = ref(false);
+const mobileNavOpen = ref(false);
+const sidebarCollapsed = computed(() => appStore.collapsed && !isMobile.value);
 const assistantPosition = ref({ x: 0, y: 0 });
 const assistantViewport = ref({ width: 1440, height: 900 });
 // 问答小助手（已隐藏）
@@ -123,7 +126,7 @@ const serviceNavItems = [
   },
 ];
 const showServiceNavItems = computed(
-  () => !appStore.collapsed && !serviceNavCollapsed.value,
+  () => !sidebarCollapsed.value && !serviceNavCollapsed.value,
 );
 const isBusinessServiceRoute = computed(() =>
   serviceNavItems.some((item) => item.to === route.path),
@@ -289,6 +292,9 @@ function placeAssistantAtDefault() {
 }
 
 function handleViewportResize() {
+  const mobile = window.matchMedia("(max-width: 767px)").matches;
+  if (!mobile) mobileNavOpen.value = false;
+  isMobile.value = mobile;
   assistantViewport.value = {
     width: window.innerWidth,
     height: window.innerHeight,
@@ -303,6 +309,18 @@ function handleVisibilityChange() {
 function handleDocumentPointerDown(event: PointerEvent) {
   if (userMenuOpen.value && !userEntryRef.value?.contains(event.target as Node))
     userMenuOpen.value = false;
+}
+
+function toggleNavigation() {
+  if (isMobile.value) {
+    mobileNavOpen.value = !mobileNavOpen.value;
+    return;
+  }
+  appStore.toggleCollapsed();
+}
+
+function closeMobileNavigation() {
+  mobileNavOpen.value = false;
 }
 
 // 问答小助手（已隐藏）
@@ -328,10 +346,12 @@ watch(
     alertDrawerOpen.value = false;
     alertPreviewOpen.value = false;
     userMenuOpen.value = false;
+    mobileNavOpen.value = false;
   },
 );
 
 onMounted(() => {
+  isMobile.value = window.matchMedia("(max-width: 767px)").matches;
   assistantViewport.value = {
     width: window.innerWidth,
     height: window.innerHeight,
@@ -359,119 +379,132 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app-viewport">
-    <div class="app-shell" :class="{ 'is-collapsed': appStore.collapsed }">
-      <aside class="app-sidebar">
+    <div
+      class="app-shell"
+      :class="{
+        'is-collapsed': appStore.collapsed && !isMobile,
+        'is-mobile-nav-open': mobileNavOpen,
+      }"
+    >
+      <button
+        v-if="mobileNavOpen"
+        class="app-sidebar-mask"
+        type="button"
+        aria-label="关闭导航"
+        @click="closeMobileNavigation"
+      />
+      <aside class="app-sidebar" :aria-hidden="isMobile && !mobileNavOpen">
         <div class="app-brand">
           <img class="app-brand__logo" :src="logoKg" alt="知识图谱平台" />
-          <div v-if="!appStore.collapsed" class="app-brand__name">
+          <div v-if="!sidebarCollapsed" class="app-brand__name">
             知识图谱平台
           </div>
         </div>
 
         <nav class="app-nav" aria-label="平台功能导航">
           <template v-if="isAdminArea">
-            <div v-if="!appStore.collapsed" class="app-nav__group">
+            <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>工作台</span>
             </div>
             <RouterLink
               class="app-nav__item app-nav__item--top app-nav__item--leaf"
               active-class="app-nav__item--active"
               to="/admin/corrections"
-              :title="appStore.collapsed ? '修正记录' : undefined"
+              :title="sidebarCollapsed ? '修正记录' : undefined"
             >
               <span
                 class="app-nav__icon"
                 :style="navIconStyle(navReview)"
                 aria-hidden="true"
               ></span
-              ><span v-if="!appStore.collapsed">修正记录</span>
+              ><span v-if="!sidebarCollapsed">修正记录</span>
             </RouterLink>
             <RouterLink
               class="app-nav__item app-nav__item--top app-nav__item--leaf"
               active-class="app-nav__item--active"
               to="/admin/reviews"
-              :title="appStore.collapsed ? '审核与同步' : undefined"
+              :title="sidebarCollapsed ? '审核与同步' : undefined"
             >
               <span
                 class="app-nav__icon"
                 :style="navIconStyle(navTasks)"
                 aria-hidden="true"
               ></span
-              ><span v-if="!appStore.collapsed">审核与同步</span>
+              ><span v-if="!sidebarCollapsed">审核与同步</span>
             </RouterLink>
             <RouterLink
               class="app-nav__item app-nav__item--top app-nav__item--leaf"
               active-class="app-nav__item--active"
               to="/admin/members"
-              :title="appStore.collapsed ? '成员管理' : undefined"
+              :title="sidebarCollapsed ? '成员管理' : undefined"
             >
               <span
                 class="app-nav__icon"
                 :style="navIconStyle(navTools)"
                 aria-hidden="true"
               ></span
-              ><span v-if="!appStore.collapsed">成员管理</span>
+              ><span v-if="!sidebarCollapsed">成员管理</span>
             </RouterLink>
           </template>
           <template v-else>
-            <div v-if="!appStore.collapsed" class="app-nav__group">
+            <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>工作台</span>
             </div>
             <RouterLink
               class="app-nav__item app-nav__item--top app-nav__item--leaf"
               active-class="app-nav__item--active"
               to="/overview"
-              :title="appStore.collapsed ? '平台总览' : undefined"
+              :title="sidebarCollapsed ? '平台总览' : undefined"
             >
               <span
                 class="app-nav__icon"
                 :style="navIconStyle(navOverview)"
                 aria-hidden="true"
               ></span>
-              <span v-if="!appStore.collapsed">平台总览</span>
+              <span v-if="!sidebarCollapsed">平台总览</span>
             </RouterLink>
             <RouterLink
               class="app-nav__item app-nav__item--top app-nav__item--leaf"
               active-class="app-nav__item--active"
               to="/corrections"
-              :title="appStore.collapsed ? '我的修正' : undefined"
+              :title="sidebarCollapsed ? '我的修正' : undefined"
             >
               <span
                 class="app-nav__icon"
                 :style="navIconStyle(navReview)"
                 aria-hidden="true"
               ></span>
-              <span v-if="!appStore.collapsed">我的修正</span>
+              <span v-if="!sidebarCollapsed">我的修正</span>
             </RouterLink>
 
-            <div v-if="!appStore.collapsed" class="app-nav__group">
+            <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>查询与服务</span>
             </div>
             <RouterLink
               class="app-nav__item app-nav__item--top app-nav__item--leaf"
               active-class="app-nav__item--active"
               to="/graph-query"
-              :title="appStore.collapsed ? '图谱查询' : undefined"
+              :title="sidebarCollapsed ? '图谱查询' : undefined"
             >
               <span
                 class="app-nav__icon"
                 :style="navIconStyle(navQuery)"
                 aria-hidden="true"
               ></span>
-              <span v-if="!appStore.collapsed">图谱查询</span>
+              <span v-if="!sidebarCollapsed">图谱查询</span>
             </RouterLink>
             <RouterLink
               class="app-nav__item app-nav__item--top app-nav__item--leaf"
               active-class="app-nav__item--active"
               to="/graph-build"
-              :title="appStore.collapsed ? '图谱构建' : undefined"
+              :title="sidebarCollapsed ? '图谱构建' : undefined"
             >
               <span
                 class="app-nav__icon"
                 :style="navIconStyle(navFlow)"
                 aria-hidden="true"
               ></span>
-              <span v-if="!appStore.collapsed">图谱构建</span>
+              <span v-if="!sidebarCollapsed">图谱构建</span>
             </RouterLink>
             <div class="app-nav__service-group">
               <button
@@ -481,9 +514,9 @@ onBeforeUnmount(() => {
                   'app-nav__item--context': isBusinessServiceRoute,
                 }"
                 type="button"
-                :title="appStore.collapsed ? '业务服务' : undefined"
+                :title="sidebarCollapsed ? '业务服务' : undefined"
                 :aria-expanded="
-                  appStore.collapsed ? undefined : !serviceNavCollapsed
+                  sidebarCollapsed ? undefined : !serviceNavCollapsed
                 "
                 @click="serviceNavCollapsed = !serviceNavCollapsed"
               >
@@ -492,9 +525,9 @@ onBeforeUnmount(() => {
                   :style="navIconStyle(navServices)"
                   aria-hidden="true"
                 ></span>
-                <span v-if="!appStore.collapsed">业务服务</span>
+                <span v-if="!sidebarCollapsed">业务服务</span>
                 <svg
-                  v-if="!appStore.collapsed"
+                  v-if="!sidebarCollapsed"
                   class="app-nav__arrow"
                   viewBox="0 0 16 16"
                   aria-hidden="true"
@@ -519,7 +552,7 @@ onBeforeUnmount(() => {
                 </RouterLink>
               </template>
               <aside
-                v-if="appStore.collapsed"
+                v-if="sidebarCollapsed"
                 class="app-nav__flyout"
                 aria-label="业务服务子功能"
               >
@@ -545,14 +578,16 @@ onBeforeUnmount(() => {
           <button
             class="app-shell__menu"
             type="button"
-            :aria-label="appStore.collapsed ? '展开导航' : '收起导航'"
-            @click="appStore.toggleCollapsed()"
+            :aria-label="isMobile ? (mobileNavOpen ? '关闭导航' : '打开导航') : appStore.collapsed ? '展开导航' : '收起导航'"
+            :aria-expanded="isMobile ? mobileNavOpen : undefined"
+            @click="toggleNavigation"
           >
             <img
               :src="appStore.collapsed ? figmaMenuUnfold : figmaMenuFold"
               alt=""
               aria-hidden="true"
             />
+            <span v-if="isMobile">目录</span>
           </button>
           <div class="app-top-actions__right">
             <button
@@ -2195,6 +2230,104 @@ onBeforeUnmount(() => {
     min-height: 40px;
     font-size: 14px;
     line-height: 22px;
+  }
+}
+
+@media (max-width: 767px) {
+  .app-shell,
+  .app-shell.is-collapsed {
+    display: block;
+  }
+
+  .app-sidebar {
+    position: fixed;
+    z-index: 101;
+    inset: 0 auto 0 0;
+    width: min(82vw, 300px);
+    padding: 0 12px 16px;
+    background: #edf5ff;
+    box-shadow: 12px 0 32px rgba(29, 33, 41, 0.18);
+    visibility: hidden;
+    transform: translateX(-105%);
+    transition: transform 0.2s ease, visibility 0.2s;
+  }
+
+  .is-mobile-nav-open .app-sidebar {
+    visibility: visible;
+    transform: translateX(0);
+  }
+
+  .app-sidebar-mask {
+    position: fixed;
+    z-index: 100;
+    inset: 0;
+    padding: 0;
+    border: 0;
+    background: rgba(15, 23, 42, 0.42);
+  }
+
+  .app-main {
+    width: 100%;
+    padding: 0;
+  }
+
+  .app-top-actions {
+    height: 52px;
+    padding: 0 12px;
+  }
+
+  .app-shell__menu {
+    display: inline-flex;
+    flex: 0 0 auto;
+    width: auto;
+    height: 36px;
+    padding: 0 10px 0 6px;
+    gap: 4px;
+    border: 1px solid rgba(22, 93, 255, 0.18);
+    background: rgba(255, 255, 255, 0.72);
+    color: #344766;
+    font-size: 14px;
+  }
+
+  .app-shell__menu img {
+    width: 22px;
+    height: 22px;
+  }
+
+  .app-top-actions__right {
+    gap: 4px;
+  }
+
+  .app-portal-switch {
+    max-width: 96px;
+    padding-inline: 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .app-stage {
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 8px;
+    height: calc(100% - 52px);
+    padding: 8px;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .app-breadcrumb {
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .app-workspace {
+    padding: 10px;
+    border-radius: 6px;
+  }
+
+  .alert-drawer {
+    width: 100vw;
   }
 }
 </style>

@@ -122,10 +122,16 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
                 gateway.resolve_person(expert_id, space),
                 gateway.resolve_person(target_expert_id, space),
             )
-            if expert_node is None:
-                raise LookupError(f"未找到专家: {expert_id}")
-            if target_node is None:
-                raise LookupError(f"未找到专家 B: {target_expert_id}")
+            missing_expert_ids = [
+                candidate_id
+                for candidate_id, candidate_node in (
+                    (expert_id, expert_node),
+                    (target_expert_id, target_node),
+                )
+                if candidate_node is None
+            ]
+            if missing_expert_ids:
+                raise LookupError(f"未找到专家: {'、'.join(missing_expert_ids)}")
             if str(target_node.get("id")) == str(expert_node.get("id")):
                 raise LookupError("专家 A 与专家 B 不能是同一人")
             expert = self._expert(expert_node)

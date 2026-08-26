@@ -1,3 +1,5 @@
+import { actualServiceRules } from './actual-service-rules'
+
 export type ServiceField = {
   name: string
   /** 表单展示名；缺省时用 name。用于消除接口字段名在界面上的歧义。 */
@@ -151,7 +153,7 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技单节点间接关系服务以单个科技专家或人才作为核心节点，通过挖掘知识图谱中与该节点存在间接关联的其他节点，运用路径分析与关系传递算法，推理出核心节点与间接节点之间的潜在关联。服务会梳理间接关系的传递路径，计算间接关系的关联强度，并对不同类型的间接关系进行标注，帮助用户全面了解单个科技专家或人才的间接社交网络与资源关联。',
     requestFields: [
-      { name: 'core_node_id', type: 'string', required: '是', description: '核心专家或人才节点 ID' },
+      { name: 'core_node_id', type: 'string', required: '是', maxLength: 64, description: '核心专家或人才节点 ID，最多 64 个字符' },
       {
         name: 'relation_types',
         type: 'select',
@@ -183,38 +185,7 @@ export const serviceModules: ServiceModule[] = [
       { label: '关联强度', value: '最高 0.89｜平均 0.76｜阈值 0.65' },
     ],
     evidence: ['路径：张明远 -> 李佳宁 -> 专家C。', '路径深度为 2，命中学术关联和机构关联。', '每条间接关系均返回传递路径和强度。'],
-    rules: [
-      {
-        name: '路径分析规则',
-        type: '关系推理规则',
-        target: '专家、机构、企业、论文、项目节点',
-        trigger: '输入核心节点 ID 且 path_depth >= 2',
-        logic: '从核心节点出发按配置深度遍历邻接节点，过滤低置信度关系边，保留符合关系类型配置的可达路径。',
-        output: '间接节点、传递路径、路径数量',
-        threshold: '路径边置信度 >= 0.65',
-        audit: '路径断裂、重复路径或低置信度路径转入人工处理平台',
-      },
-      {
-        name: '关系传递规则',
-        type: '关系推理规则',
-        target: '多跳路径中的实体与关系边',
-        trigger: '路径分析命中两跳及以上关联路径',
-        logic: '根据路径中的关系类型组合判断是否构成潜在间接关系，并标注学术关联、机构关联、产业关联等类别。',
-        output: '间接关系类型、传递链路、关系说明',
-        threshold: '关系传递强度 >= 0.7',
-        audit: '关系类型组合不明确时进入人工确认',
-      },
-      {
-        name: '关联强度计算规则',
-        type: '评分规则',
-        target: '间接关系路径和节点置信度',
-        trigger: '间接关系路径生成后',
-        logic: '综合路径长度、关系类型权重、节点置信度和关系边置信度计算关联强度，路径越短权重越高。',
-        output: '关联强度、排序分值、推荐优先级',
-        threshold: 'min_strength >= 0.65',
-        audit: '强度低于阈值但命中重要关系类型时进入人工复核',
-      },
-    ],
+    rules: actualServiceRules['node-indirect'],
   },
   {
     key: 'two-point-achievement',
@@ -260,13 +231,18 @@ export const serviceModules: ServiceModule[] = [
       { label: '合作成果类型', value: '' },
       { label: '成果总量', value: '' },
       { label: '成果分布', value: '' },
+      { label: '成果1', value: '论文/专利/项目名称' },
+      { label: '完成时间', value: '' },
+      { label: '所属领域', value: '' },
+      { label: '奖项/评价', value: '' },
       { label: '核心贡献', value: '' },
       { label: '合作模式', value: '' },
       { label: '图空间', value: '' },
     ],
     evidence: [
       '按论文、专利、项目邻居求交汇总共同成果。',
-      '回填成果标题、时间、领域与奖项字段（有则输出）。',
+      '摘要按成果序号展示名称，并标注完成时间、所属领域、奖项/评价。',
+      '所属领域优先 Structured Output/JSON Schema 生成。',
       '规则归因核心贡献与合作模式。',
     ],
     rules: [
@@ -454,8 +430,8 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技专家论文合作关系服务通过分析知识图谱中科技专家发表的学术论文数据，提取论文的作者列表、作者单位、合作发表时间、论文主题等信息，运用作者关联与合作频次算法，构建专家之间的论文合作关系。服务会统计专家之间的合作论文数量、合作发表的期刊或会议级别、论文被引情况，分析合作论文的研究方向与共同贡献，同时识别长期稳定的论文合作团队与核心合作人员，为研究学术合作网络与专家学术影响力提供依据。',
     requestFields: [
-      { name: 'expertAId', type: 'string', required: '是', description: '专家 A 唯一标识' },
-      { name: 'expertBId', type: 'string', required: '是', description: '专家 B 唯一标识' },
+      { name: 'expertAId', type: 'string', required: '是', maxLength: 64, description: '专家 A 唯一标识，最多 64 个字符' },
+      { name: 'expertBId', type: 'string', required: '是', maxLength: 64, description: '专家 B 唯一标识，最多 64 个字符' },
       { name: 'startTime', type: 'month', required: '否', description: '开始月份 YYYY-MM' },
       { name: 'endTime', type: 'month', required: '否', description: '结束月份 YYYY-MM' },
     ],
@@ -483,38 +459,7 @@ export const serviceModules: ServiceModule[] = [
       { label: '合作团队特征', value: '长期稳定合作团队' },
     ],
     evidence: ['提取作者列表、作者单位、发表时间和论文主题。', '统计期刊会议级别和被引情况。', '识别长期稳定合作团队和核心合作人员。'],
-    rules: [
-      {
-        name: '作者列表匹配规则',
-        type: '关系抽取规则',
-        target: '论文实体、作者列表、专家实体',
-        trigger: '论文作者列表中出现两个及以上专家实体',
-        logic: '解析论文作者列表并匹配专家实体 ID，识别共现专家对，生成论文合作候选关系。',
-        output: '论文合作关系、合作论文 ID、作者顺序',
-        threshold: '作者实体匹配置信度 >= 0.85',
-        audit: '专家同名或作者单位缺失时转入人工处理平台',
-      },
-      {
-        name: '作者单位校验规则',
-        type: '关系验证规则',
-        target: '作者单位、发表时间、论文主题字段',
-        trigger: '论文合作候选关系生成后',
-        logic: '校验作者单位、发表时间、论文主题和专家研究方向是否一致，降低同名作者误匹配风险。',
-        output: '验证后的论文合作关系和置信度',
-        threshold: '关系验证置信度 >= 0.82',
-        audit: '单位冲突、主题不一致或时间异常时进入人工复核',
-      },
-      {
-        name: '合作频次统计规则',
-        type: '统计规则',
-        target: '合作论文、期刊会议、被引数据',
-        trigger: '论文合作关系验证通过后',
-        logic: '统计合作论文数量、期刊会议级别、论文被引情况和研究方向，识别长期稳定合作团队。',
-        output: '合作论文数、总被引、研究方向、核心人员',
-        threshold: '合作论文数 >= 2 或高影响论文命中',
-        audit: '高影响结果来源不完整时进入人工确认',
-      },
-    ],
+    rules: actualServiceRules['paper-cooperation'],
   },
   {
     key: 'enterprise-relation',
@@ -524,10 +469,10 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '重点关注科技企业关系服务围绕科技专家或人才，通过挖掘知识图谱中与专家相关的企业关联数据，运用企业关联与角色定位算法，构建专家与重点关注科技企业之间的关系。服务会标注专家在企业中的角色、合作领域、合作时间与合作模式，同时关联企业的行业地位、技术方向与经营状况，帮助用户了解科技专家与产业界的合作关联及资源对接情况。',
     requestFields: [
-      { name: 'expert_id', type: 'string', required: '是', description: '请输入专家唯一标识' },
-      { name: 'enterprise_name', type: 'string', required: '否', description: '请输入企业名称（模糊筛选，可留空）' },
-      { name: 'role_type', type: 'string', required: '否', description: '请输入角色筛选（如 总经理，可留空）' },
-      { name: 'industry', type: 'string', required: '否', description: '请输入行业方向筛选（可留空）' },
+      { name: 'expert_id', type: 'string', required: '是', maxLength: 64, description: '请输入专家唯一标识，最多 64 个字符' },
+      { name: 'enterprise_name', type: 'string', required: '否', maxLength: 64, description: '请输入企业名称（模糊筛选，可留空，最多 64 个字符，不能包含 !@#￥%& 等异常字符）' },
+      { name: 'role_type', type: 'string', required: '否', maxLength: 64, description: '请输入角色筛选（如 总经理，可留空，最多 64 个字符）' },
+      { name: 'industry', type: 'string', required: '否', maxLength: 64, description: '请输入行业方向筛选（可留空，最多 64 个字符，不能包含 !@#￥%& 等异常字符）' },
       { name: 'key_tech_enterprise_only', type: 'select', required: '否', description: '只保留重点科技企业（默认是）', options: ['是', '否'] },
     ],
     responseFields: [
@@ -617,9 +562,9 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技产业链点 TOP-N 事件关系服务针对科技产业链中的特定环节或节点，通过收集知识图谱中与该节点相关的事件数据，运用事件影响力评估算法，筛选出影响力排名前 N 的核心事件。服务会构建这些 TOP-N 事件与相关科技专家或人才的关联关系，分析事件对产业链节点的影响及后续发展趋势，为产业链节点的风险预警与机遇挖掘提供支持。',
     requestFields: [
-      { name: 'chain_node_id', type: 'string', required: '是', description: '请输入产业链节点标识（如 IC0007007）' },
-      { name: 'top_n', type: 'number', required: '否', description: '返回事件数量，取值 1-50，默认 10' },
-      { name: 'event_type', type: 'string', required: '否', description: '事件类型筛选（financing/bankruptcy/bid/news/…，可留空）' },
+      { name: 'chain_node_id', type: 'string', required: '是', maxLength: 64, description: '请输入产业链节点标识（如 IC0007007），最多 64 个字符' },
+      { name: 'top_n', type: 'number', required: '否', description: '返回事件数量，请输入 1-50 的整数，默认 10' },
+      { name: 'event_type', type: 'string', required: '否', maxLength: 64, description: '事件类型筛选（financing/bankruptcy/bid/news/…，可留空，最多 64 个字符）' },
       { name: 'time_range_start', type: 'month', required: '否', description: '起始年月（留空不筛）' },
       { name: 'time_range_end', type: 'month', required: '否', description: '结束年月（留空不筛）' },
       { name: 'max_orgs', type: 'number', required: '否', description: '最多扫描企业数，取值 1-50，默认 20' },

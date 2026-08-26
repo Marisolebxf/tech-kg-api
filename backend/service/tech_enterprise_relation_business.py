@@ -28,6 +28,7 @@ import httpx
 from biz.schemas.tech_enterprise_relation_business import (
     BusinessPeriod,
     EnterpriseRelationItem,
+    EntityProvenance,
     KeyEnterpriseRelationRequest,
     KeyEnterpriseRelationResponse,
 )
@@ -88,6 +89,7 @@ _ROLE_LEVEL_RULES = [
         (
             "董事长",
             "副董事长",
+            "董事",
             "chairman",
             "ceo",
             "总裁",
@@ -423,6 +425,17 @@ class KeyEnterpriseRelationService:
         if relations:
             await self._probe_primary_risk(relations[0], app=app)
         resp.relations = relations
+        # 实体溯源：专家 + 各关联企业，供前端溯源栏展示真实源数据表/英文字段名/图空间 VID
+        resp.entity_provenance = {
+            req.expert_id: self._entity_provenance(
+                expert_props, node_labels.get(req.expert_id, set())
+            )
+        }
+        for rel in relations:
+            resp.entity_provenance[rel.enterprise_id] = self._entity_provenance(
+                node_props.get(rel.enterprise_id, {}),
+                node_labels.get(rel.enterprise_id, set()),
+            )
         resp.enterprises = len({r.enterprise_id for r in relations})
         resp.roles = len({r.role_label for r in relations if r.role_label})
         resp.cooperation_fields = sorted({r.tech_field for r in relations if r.tech_field})
@@ -435,6 +448,30 @@ class KeyEnterpriseRelationService:
         with _result_cache_lock:
             _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, resp)
         return resp
+
+    @staticmethod
+    def _entity_provenance(properties: dict[str, Any], labels: set[str]) -> EntityProvenance:
+        """从图节点 properties 抽取实体溯源，与同事关系 _entity_data 同口径。
+
+        Person 节点取 source_record_id（dwd_scholar 时字段名为 scholar_id）；
+        Organization 节点取 organization_id；均缺失时回退 source_record_id。
+        source_table 取 organization_base 或 source_table 属性。
+        """
+        source_table = properties.get("organization_base") or properties.get("source_table")
+        if "Person" in labels and properties.get("source_record_id") not in (None, ""):
+            source_field = "scholar_id" if source_table == "dwd_scholar" else "source_record_id"
+            source_value = properties.get("source_record_id")
+        elif properties.get("organization_id") not in (None, ""):
+            source_field, source_value = "organization_id", properties.get("organization_id")
+        else:
+            source_field, source_value = "source_record_id", properties.get("source_record_id")
+        return EntityProvenance(
+            sourceTable=str(source_table or "-"),
+            sourceField=str(source_field or "-"),
+            sourceValue=str(source_value or "-"),
+            ingestBatch=str(properties.get("ingest_batch") or "-"),
+            ingestTime=str(properties.get("ingest_time") or "-"),
+        )
 
     async def _probe_primary_risk(
         self, primary: EnterpriseRelationItem, *, app: Any = None

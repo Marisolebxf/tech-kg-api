@@ -7,7 +7,6 @@ services:
     container_name: tech-kg-api
     ports:
       - "8001:8000"
-      - "8000:8000"
     env_file:
       - ./backend/.env
     environment:
@@ -76,7 +75,8 @@ services:
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
       AUTH_SESSION_BACKEND: redis
       AUTH_SESSION_COOKIE: ${AUTH_SESSION_COOKIE:-techkg_session}
-      USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED: ${USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED:-false}
+      # 统一门户部署默认复用主域 access_token；无该 Cookie 时仍回退标准 OAuth2 登录。
+      USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED: ${USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED:-true}
       USER_CENTER_PORTAL_TOKEN_COOKIE: ${USER_CENTER_PORTAL_TOKEN_COOKIE:-access_token}
       AUTH_SESSION_TTL_SECONDS: ${AUTH_SESSION_TTL_SECONDS:-604800}
       AUTH_STATE_TTL_SECONDS: ${AUTH_STATE_TTL_SECONDS:-300}

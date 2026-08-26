@@ -27,11 +27,9 @@ export interface ExpertPaperCooperationResult {
 
 export interface PaperCooperationProvenanceEvidence {
   title: string
-  businessTable: string
-  technicalTable: string
-  recordId: string
-  fieldIdentifier: string
-  summary: string
+  sourceTable: string
+  sourceField: string
+  graphVid: string
 }
 
 export interface PaperCooperationProvenance {
@@ -43,6 +41,7 @@ export interface PaperCooperationProvenance {
 export interface ExpertPaperCooperationResponse {
   structuredResult: ExpertPaperCooperationResult
   provenance: PaperCooperationProvenance
+  rules: Array<Record<string, any>>
 }
 
 export interface ExpertPaperCooperationRequest {
@@ -57,4 +56,3 @@ const ENDPOINT = '/v1/kg-construction/expert-paper-cooperation-relations/structu
 export const analyzeExpertPaperCooperation = (
   payload: ExpertPaperCooperationRequest,
 ) => http.post<ExpertPaperCooperationResponse>(ENDPOINT, payload) as unknown as Promise<ExpertPaperCooperationResponse>
-

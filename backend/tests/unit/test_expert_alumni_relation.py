@@ -47,6 +47,8 @@ def test_pair_same_school_and_degree():
             "education_background_institution_zh": "北京大学",
             "education_background_degree_zh": "博士",
             "education_background_date": "2008-2013",
+            "source_table": "dwd_scholar_test",
+            "source_field": "education_source_id",
         },
     )
     b = _node(
@@ -83,6 +85,14 @@ def test_pair_same_school_and_degree():
     assert resp["entities"][0]["id"] == "S1"
     assert resp["relations"][0]["to"] == "S2"
     assert resp["provenance"]["evidences"]
+    source_evidence = resp["provenance"]["evidences"][0]
+    assert source_evidence["technicalTable"] == "dwd_scholar_test"
+    assert source_evidence["sourceField"] == "education_source_id"
+    assert source_evidence["graphVid"] == "S1"
+    alumni_evidence = resp["provenance"]["evidences"][1]
+    assert alumni_evidence["technicalTable"] == "-"
+    assert alumni_evidence["sourceField"] == "-"
+    assert alumni_evidence["graphVid"] == "S2"
     assert resp["rules"][0]["name"] == "教育经历匹配规则"
     assert "同校" in resp["dimensionsCatalog"]
 

@@ -70,7 +70,7 @@ USER_CENTER_SSO_LOGIN_URL=https://edu.itic-sci.com/uc/sso/login
 USER_CENTER_OAUTH_BASE_URL=https://edu.itic-sci.com/uc/admin-api/system/oauth2
 USER_CENTER_ACCOUNT_URL=https://edu.itic-sci.com/uc/admin/login?redirect=/index
 USER_CENTER_SCOPE=
-USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED=false
+USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED=true
 USER_CENTER_PORTAL_TOKEN_COOKIE=access_token
 ```
 

@@ -465,9 +465,9 @@ export const serviceModules: ServiceModule[] = [
     moduleRequirement: '重点关注科技企业关系服务围绕科技专家或人才，通过挖掘知识图谱中与专家相关的企业关联数据，运用企业关联与角色定位算法，构建专家与重点关注科技企业之间的关系。服务会标注专家在企业中的角色、合作领域、合作时间与合作模式，同时关联企业的行业地位、技术方向与经营状况，帮助用户了解科技专家与产业界的合作关联及资源对接情况。',
     requestFields: [
       { name: 'expert_id', type: 'string', required: '是', maxLength: 64, description: '请输入专家唯一标识，最多 64 个字符' },
-      { name: 'enterprise_name', type: 'string', required: '否', description: '请输入企业名称（模糊筛选，可留空）' },
-      { name: 'role_type', type: 'string', required: '否', description: '请输入角色筛选（如 总经理，可留空）' },
-      { name: 'industry', type: 'string', required: '否', description: '请输入行业方向筛选（可留空）' },
+      { name: 'enterprise_name', type: 'string', required: '否', maxLength: 64, description: '请输入企业名称（模糊筛选，可留空，最多 64 个字符，不能包含 !@#￥%& 等异常字符）' },
+      { name: 'role_type', type: 'string', required: '否', maxLength: 64, description: '请输入角色筛选（如 总经理，可留空，最多 64 个字符）' },
+      { name: 'industry', type: 'string', required: '否', maxLength: 64, description: '请输入行业方向筛选（可留空，最多 64 个字符，不能包含 !@#￥%& 等异常字符）' },
       { name: 'key_tech_enterprise_only', type: 'select', required: '否', description: '只保留重点科技企业（默认是）', options: ['是', '否'] },
     ],
     responseFields: [
@@ -558,7 +558,7 @@ export const serviceModules: ServiceModule[] = [
     moduleRequirement: '科技产业链点 TOP-N 事件关系服务针对科技产业链中的特定环节或节点，通过收集知识图谱中与该节点相关的事件数据，运用事件影响力评估算法，筛选出影响力排名前 N 的核心事件。服务会构建这些 TOP-N 事件与相关科技专家或人才的关联关系，分析事件对产业链节点的影响及后续发展趋势，为产业链节点的风险预警与机遇挖掘提供支持。',
     requestFields: [
       { name: 'chain_node_id', type: 'string', required: '是', maxLength: 64, description: '请输入产业链节点标识（如 IC0007007），最多 64 个字符' },
-      { name: 'top_n', type: 'number', required: '否', description: '返回事件数量，取值 1-50，默认 10' },
+      { name: 'top_n', type: 'number', required: '否', description: '返回事件数量，请输入 1-50 的整数，默认 10' },
       { name: 'event_type', type: 'string', required: '否', maxLength: 64, description: '事件类型筛选（financing/bankruptcy/bid/news/…，可留空，最多 64 个字符）' },
       { name: 'time_range_start', type: 'month', required: '否', description: '起始年月（留空不筛）' },
       { name: 'time_range_end', type: 'month', required: '否', description: '结束年月（留空不筛）' },

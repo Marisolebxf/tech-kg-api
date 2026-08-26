@@ -59,7 +59,7 @@ import {
   buildIndirectRelationGraph,
   indirectSummaryRows,
 } from "../indirect-relation-view";
-import { monthRangeToApiDates } from "../utils/month-range";
+import { isFutureMonth, monthRangeToApiDates } from "../utils/month-range";
 
 type PanoramaLayerKey =
   | "core_technology"
@@ -134,10 +134,13 @@ const hasParameterErrors = computed(
 const currentMonth = dayjs().format("YYYY-MM");
 const disableFutureMonth = (value: Date) => dayjs(value).isAfter(dayjs(), "month");
 const MAX_PARAMETER_LENGTH = 64;
+const MAX_SCHOOL_LENGTH = 100;
 /** 标识类字段（专家 ID、节点 VID）：不允许空格与 !@#￥%& 等异常符号。 */
 const identifierPattern = /^[\w\u4e00-\u9fff·.\-]+$/u;
 /** 关键词类字段（机构、产业）：额外允许空格、括号、顿号和斜杠。 */
 const keywordPattern = /^[\w\u4e00-\u9fff·.\-()（）、，,/\s]+$/u;
+/** 院校名称：允许空格与中英文括号、《》。 */
+const schoolPattern = /^[\w\u4e00-\u9fff·（）()《》.\-\s]+$/u;
 
 function identifierError(value: string): string | null {
   if (value.length > MAX_PARAMETER_LENGTH)
@@ -157,6 +160,15 @@ function keywordError(value: string): string | null {
   return null;
 }
 
+function schoolError(value: string): string | null {
+  if (value.length > MAX_SCHOOL_LENGTH)
+    return `输入长度不能超过 ${MAX_SCHOOL_LENGTH} 个字符`;
+  if (value.trim() && !schoolPattern.test(value.trim())) {
+    return "不能包含 !@#￥%& 等异常字符";
+  }
+  return null;
+}
+
 /** 按模块和字段名返回校验错误，与后端 pydantic 校验规则保持一致。 */
 function parameterFieldError(fieldName: string, value: string): string | null {
   if (
@@ -164,6 +176,17 @@ function parameterFieldError(fieldName: string, value: string): string | null {
     (fieldName === "expert_a_id" || fieldName === "expert_b_id")
   ) {
     return identifierError(value);
+  }
+  if (
+    isLiveCoop.value &&
+    (fieldName === "sourceExpertId" || fieldName === "targetExpertId")
+  ) {
+    return identifierError(value);
+  }
+  if (isLiveAlumni.value) {
+    if (fieldName === "expertId" || fieldName === "targetExpertId")
+      return identifierError(value);
+    if (fieldName === "school") return schoolError(value);
   }
   if (isExpertDirect.value) {
     if (fieldName === "expertAId" || fieldName === "expertBId")
@@ -1516,9 +1539,13 @@ function isPanoramaEmpty(resp: IndustryChainPanoramaQueryResponse): boolean {
   );
 }
 
-/** 直接关系与产业链全景图的溯源统一展示「源数据表 / 英文字段名 / 图空间 VID」。 */
+/** 统一展示「源数据表 / 英文字段名 / 图空间 VID」。 */
 const isUnifiedProvenance = computed(
-  () => isExpertDirect.value || isPanorama.value,
+  () =>
+    isExpertDirect.value ||
+    isPanorama.value ||
+    isLiveCoop.value ||
+    isLiveAlumni.value,
 );
 
 /** 查询已执行但没有命中任何数据时给出的提示，null 表示不展示提示。 */
@@ -2200,16 +2227,33 @@ async function handleRun() {
         resultMode.value = "summary";
       }
     } else if (isLiveAlumni.value) {
-      const expertId = parameterValues.value.expertId?.trim();
+      const expertIdRaw = parameterValues.value.expertId ?? "";
+      const targetExpertIdRaw = parameterValues.value.targetExpertId ?? "";
+      const schoolRaw = parameterValues.value.school ?? "";
+      const expertId = expertIdRaw.trim();
       if (!expertId) {
         parameterErrors.value = { expertId: "请输入专家" };
+        return;
+      }
+      const alumniErrors: Record<string, string> = {};
+      const sourceError = identifierError(expertIdRaw);
+      const targetError = targetExpertIdRaw
+        ? identifierError(targetExpertIdRaw)
+        : null;
+      const institutionError = schoolError(schoolRaw);
+      if (sourceError) alumniErrors.expertId = sourceError;
+      if (targetError) alumniErrors.targetExpertId = targetError;
+      if (institutionError) alumniErrors.school = institutionError;
+      if (Object.keys(alumniErrors).length) {
+        parameterErrors.value = alumniErrors;
+        showToast("请修正参数后再执行", "warning");
         return;
       }
       parameterErrors.value = {};
       const body = {
         expertId,
-        targetExpertId: optionalParam(parameterValues.value.targetExpertId),
-        school: optionalParam(parameterValues.value.school),
+        targetExpertId: optionalParam(targetExpertIdRaw),
+        school: optionalParam(schoolRaw),
         educationStage: optionalParam(parameterValues.value.educationStage),
         limit: 20,
       };
@@ -2242,13 +2286,25 @@ async function handleRun() {
         selectedGraphEdgeId.value = null;
       }
     } else if (isLiveCoop.value) {
-      const sourceExpertId = parameterValues.value.sourceExpertId?.trim();
-      const targetExpertId = parameterValues.value.targetExpertId?.trim();
+      const sourceExpertIdRaw = parameterValues.value.sourceExpertId ?? "";
+      const targetExpertIdRaw = parameterValues.value.targetExpertId ?? "";
+      const sourceExpertId = sourceExpertIdRaw.trim();
+      const targetExpertId = targetExpertIdRaw.trim();
       if (!sourceExpertId || !targetExpertId) {
         parameterErrors.value = {
           ...(!sourceExpertId ? { sourceExpertId: "请输入第一个专家 ID" } : {}),
           ...(!targetExpertId ? { targetExpertId: "请输入第二个专家 ID" } : {}),
         };
+        return;
+      }
+      const coopErrors: Record<string, string> = {};
+      const sourceError = identifierError(sourceExpertIdRaw);
+      const targetError = identifierError(targetExpertIdRaw);
+      if (sourceError) coopErrors.sourceExpertId = sourceError;
+      if (targetError) coopErrors.targetExpertId = targetError;
+      if (Object.keys(coopErrors).length) {
+        parameterErrors.value = coopErrors;
+        showToast("请修正参数后再执行", "warning");
         return;
       }
       parameterErrors.value = {};
@@ -2281,6 +2337,18 @@ async function handleRun() {
           timeRangeStart: "开始月份不能晚于结束月份",
           timeRangeEnd: "结束月份不能早于开始月份",
         };
+        return;
+      }
+      if (isFutureMonth(startMonth) || isFutureMonth(endMonth)) {
+        parameterErrors.value = {
+          ...(isFutureMonth(startMonth)
+            ? { timeRangeStart: "输入时间不能超过当前时间" }
+            : {}),
+          ...(isFutureMonth(endMonth)
+            ? { timeRangeEnd: "输入时间不能超过当前时间" }
+            : {}),
+        };
+        showToast("输入时间不能超过当前时间", "warning");
         return;
       }
       const { start: timeRangeStart, end: timeRangeEnd } = monthRangeToApiDates(
@@ -2653,7 +2721,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :title="field.description"
           :aria-label="field.name"
           :disabled-date="
-            isLiveColleague || isExpertDirect ? disableFutureMonth : undefined
+            isLiveColleague || isExpertDirect || isLiveCoop
+              ? disableFutureMonth
+              : undefined
           "
           :error="Boolean(parameterErrors[field.name])"
           @update:model-value="handleMonthParameterInput(field.name, $event)"
@@ -2886,13 +2956,19 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
               </p>
               <template v-if="isUnifiedProvenance">
                 <span
-                  >源数据表：<code>{{ ev.sourceTable || "—" }}</code></span
+                  >源数据表：<code>{{
+                    ev.sourceTable || ev.technicalTable || "—"
+                  }}</code></span
                 >
                 <span
-                  >英文字段名：<code>{{ ev.sourceField || "—" }}</code></span
+                  >英文字段名：<code>{{
+                    ev.sourceField || ev.fieldIdentifier || "—"
+                  }}</code></span
                 >
                 <span
-                  >图空间 VID：<code>{{ ev.graphVid || "—" }}</code></span
+                  >图空间 VID：<code>{{
+                    ev.graphVid || ev.recordId || "—"
+                  }}</code></span
                 >
               </template>
               <template v-else>

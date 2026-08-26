@@ -144,6 +144,8 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         )
         source_name = self._display_name(source)
         target_name = self._display_name(target)
+        source_props = getattr(source, "properties", None) or {}
+        target_props = getattr(target, "properties", None) or {}
 
         payload: dict[str, Any] = {
             "source": {"id": source_expert_id, "name": source_name},
@@ -163,8 +165,10 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             self._frontend_view(
                 source_id=source_expert_id,
                 source_name=source_name,
+                source_provenance=self._entity_provenance(source_props, source_expert_id),
                 target_id=target_expert_id,
                 target_name=target_name,
+                target_provenance=self._entity_provenance(target_props, target_expert_id),
                 papers=papers,
                 patents=patents,
                 projects=projects,
@@ -246,6 +250,16 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             "fields": self._pick_fields(props),
             "awards": awards,
             "evaluation": self._pick_evaluation(props),
+            "provenance": self._entity_provenance(props, vid),
+        }
+
+    @staticmethod
+    def _entity_provenance(props: dict[str, Any], vid: str) -> dict[str, str]:
+        """Return only provenance values physically stored on the graph node."""
+        return {
+            "sourceTable": str(props.get("source_table") or "-"),
+            "sourceField": str(props.get("source_field") or "-"),
+            "graphVid": vid,
         }
 
     @staticmethod
@@ -408,8 +422,10 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         *,
         source_id: str,
         source_name: str,
+        source_provenance: dict[str, str],
         target_id: str,
         target_name: str,
+        target_provenance: dict[str, str],
         papers: int,
         patents: int,
         projects: int,
@@ -592,26 +608,33 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 {
                     "title": "专家 A",
                     "businessTable": "科技专家",
-                    "technicalTable": "Person",
+                    "technicalTable": source_provenance["sourceTable"],
                     "recordId": source_id,
-                    "fieldIdentifier": "sourceExpertId",
+                    "fieldIdentifier": source_provenance["sourceField"],
+                    "sourceField": source_provenance["sourceField"],
+                    "graphVid": source_provenance["graphVid"],
                     "summary": source_name,
                 },
                 {
                     "title": "专家 B",
                     "businessTable": "科技专家",
-                    "technicalTable": "Person",
+                    "technicalTable": target_provenance["sourceTable"],
                     "recordId": target_id,
-                    "fieldIdentifier": "targetExpertId",
+                    "fieldIdentifier": target_provenance["sourceField"],
+                    "sourceField": target_provenance["sourceField"],
+                    "graphVid": target_provenance["graphVid"],
                     "summary": target_name,
                 },
                 *[
                     {
                         "title": f"{it.get('type')} · {it.get('title') or it.get('id')}",
                         "businessTable": "合作成果",
-                        "technicalTable": "expert_cooperation_achievement.query",
+                        "technicalTable": (it.get("provenance") or {}).get("sourceTable") or "-",
                         "recordId": str(it.get("id") or ""),
-                        "fieldIdentifier": str(it.get("type") or ""),
+                        "fieldIdentifier": (it.get("provenance") or {}).get("sourceField") or "-",
+                        "sourceField": (it.get("provenance") or {}).get("sourceField") or "-",
+                        "graphVid": (it.get("provenance") or {}).get("graphVid")
+                        or str(it.get("id") or ""),
                         "summary": f"时间 {it.get('time') or '—'}；奖项 {len(it.get('awards') or [])}",
                     }
                     for it in items[:8]

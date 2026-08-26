@@ -39,7 +39,17 @@ def _svc(graph) -> ExpertCooperationAchievementService:
 
 
 def test_query_shared_papers_and_patent_with_awards():
-    p1 = _node("P1", {"title": "论文A", "year": "2020", "keywords": "图谱,AI", "award": "优秀论文"})
+    p1 = _node(
+        "P1",
+        {
+            "title": "论文A",
+            "year": "2020",
+            "keywords": "图谱,AI",
+            "award": "优秀论文",
+            "source_table": "dwd_paper_test",
+            "source_field": "paper_source_id",
+        },
+    )
     p2 = _node("P2", {"title": "论文B", "year": "2021"})
     pt1 = _node(
         "PT1",
@@ -50,7 +60,14 @@ def test_query_shared_papers_and_patent_with_awards():
         },
     )
     nodes = {
-        "S1": _node("S1", {"name_zh": "甲"}),
+        "S1": _node(
+            "S1",
+            {
+                "name_zh": "甲",
+                "source_table": "dwd_scholar_test",
+                "source_field": "scholar_source_id",
+            },
+        ),
         "S2": _node("S2", {"name_zh": "乙"}),
         "P1": p1,
         "P2": p2,
@@ -96,6 +113,19 @@ def test_query_shared_papers_and_patent_with_awards():
     assert resp["graph"]["nodes"]
     assert resp["rules"]
     assert resp["provenance"]["evidences"]
+    source_evidence = resp["provenance"]["evidences"][0]
+    assert source_evidence["technicalTable"] == "dwd_scholar_test"
+    assert source_evidence["sourceField"] == "scholar_source_id"
+    assert source_evidence["graphVid"] == "S1"
+    paper_evidence = next(
+        evidence for evidence in resp["provenance"]["evidences"] if evidence["graphVid"] == "P1"
+    )
+    assert paper_evidence["technicalTable"] == "dwd_paper_test"
+    assert paper_evidence["sourceField"] == "paper_source_id"
+
+    target_evidence = resp["provenance"]["evidences"][1]
+    assert target_evidence["technicalTable"] == "-"
+    assert target_evidence["sourceField"] == "-"
 
 
 def test_query_same_id_raises():

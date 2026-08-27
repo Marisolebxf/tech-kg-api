@@ -1811,12 +1811,15 @@ function buildExpertDirectRequest(): ExpertDirectRelationQueryRequest {
     const value = (v ?? "").trim();
     return value || undefined;
   };
+  const limitRaw = (raw.limit ?? "").trim();
   return {
     dataSource: "all",
     expertAId: trimOrUndefined(raw.expertAId),
     expertBId: trimOrUndefined(raw.expertBId),
     institution: trimOrUndefined(raw.institution),
     startTime: trimOrUndefined(raw.startTime),
+    endTime: trimOrUndefined(raw.endTime),
+    limit: limitRaw ? Number(limitRaw) : undefined,
   };
 }
 
@@ -2050,7 +2053,10 @@ function resetParameters({ notify = true }: { notify?: boolean } = {}) {
   running.value = false;
   parameterErrors.value = {};
   parameterValues.value = Object.fromEntries(
-    props.moduleInfo.requestFields.map((field) => [field.name, ""]),
+    props.moduleInfo.requestFields.map((field) => [
+      field.name,
+      field.defaultValue ?? "",
+    ]),
   );
   paramResetToken.value += 1;
 
@@ -2965,7 +2971,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       class="service-console__params"
       :class="{
         'service-console__params--inline':
-          isEnterpriseRelation || isIndustryChainEvent,
+          isEnterpriseRelation ||
+          isIndustryChainEvent ||
+          isExpertDirect ||
+          isPanorama,
         'service-console__params--industry-event': isIndustryChainEvent,
       }"
     >
@@ -3127,7 +3136,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   </section>
 
   <div class="business-service__main">
-    <section class="kg-panel graph-panel">
+    <section class="kg-panel graph-panel" :class="{ 'graph-panel--panorama': isPanorama }">
       <div class="kg-panel__header">
         <h2 class="kg-panel__title">测试结果预览</h2>
         <div class="graph-panel__time">
@@ -4732,6 +4741,11 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .graph-panel > .kg-panel__header {
   flex: 0 0 22px;
+}
+
+/* 全景图 header 有「刷新图谱」按钮，按内容自适应高度，避免按钮顶部被 overflow:hidden 裁切 */
+.graph-panel--panorama > .kg-panel__header {
+  flex: 0 0 auto;
 }
 
 .graph-panel .kg-panel__title,

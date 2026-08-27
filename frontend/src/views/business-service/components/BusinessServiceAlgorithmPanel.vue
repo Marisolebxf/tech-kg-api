@@ -4,7 +4,7 @@ import "element-plus/es/components/select/style/css";
 import { MonthPicker as AMonthPicker } from "@arco-design/web-vue";
 import zhCN from "@arco-design/web-vue/es/locale/lang/zh-cn";
 import dayjs from "dayjs";
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 
 import {
   describeExpertAlumniRelation,
@@ -153,6 +153,43 @@ function handleResultTabKeydown(event: KeyboardEvent) {
 const running = ref(false);
 const lastTestTime = ref("—");
 const lastUpdateTime = ref<number | null>(null);
+
+/** 全景图自动更新：勾选后每 60s 自动忽略缓存刷新一次。 */
+const panoramaAutoRefresh = ref(false);
+const PANORAMA_AUTO_REFRESH_INTERVAL = 60_000;
+let panoramaAutoRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+function startPanoramaAutoRefresh() {
+  if (panoramaAutoRefreshTimer) return;
+  panoramaAutoRefreshTimer = setInterval(() => {
+    if (!running.value && panoramaResponse.value) {
+      void handleRefreshPanorama();
+    }
+  }, PANORAMA_AUTO_REFRESH_INTERVAL);
+}
+
+function stopPanoramaAutoRefresh() {
+  if (panoramaAutoRefreshTimer) {
+    clearInterval(panoramaAutoRefreshTimer);
+    panoramaAutoRefreshTimer = null;
+  }
+}
+
+watch(panoramaAutoRefresh, (enabled) => {
+  if (enabled) startPanoramaAutoRefresh();
+  else stopPanoramaAutoRefresh();
+});
+
+watch(
+  () => props.moduleInfo.key,
+  (key) => {
+    if (key !== "industry-chain-panorama") {
+      panoramaAutoRefresh.value = false;
+    }
+  },
+);
+
+onBeforeUnmount(stopPanoramaAutoRefresh);
 const parameterValues = ref<Record<string, string>>({});
 const parameterErrors = ref<Record<string, string>>({});
 const hasParameterErrors = computed(
@@ -459,12 +496,6 @@ const isPanorama = computed(
   () => props.moduleInfo.key === "industry-chain-panorama",
 );
 const isExpertDirect = computed(() => props.moduleInfo.key === "expert-direct");
-const isEnterpriseRelation = computed(
-  () => props.moduleInfo.key === "enterprise-relation",
-);
-const isIndustryChainEvent = computed(
-  () => props.moduleInfo.key === "industry-chain-event",
-);
 const isExpertIndirect = computed(
   () => props.moduleInfo.key === "node-indirect",
 );
@@ -1263,13 +1294,16 @@ function formatTimestamp(date: Date) {
 
 const updateStatus = computed(() => {
   if (running.value) return "正在拉取最新批次数据…";
+  const auto = panoramaAutoRefresh.value
+    ? "｜自动更新已开启（每 60s 刷新）"
+    : "";
   if (lastUpdateTime.value === null)
-    return '尚未更新，点击"执行测试"查询最新数据';
+    return `尚未更新，点击"刷新图谱"或开启自动更新${auto}`;
   const elapsed = Math.floor((Date.now() - lastUpdateTime.value) / 1000);
-  if (elapsed < 5) return `刚刚更新（${elapsed}s 前）`;
-  if (elapsed < 60) return `已更新（${elapsed}s 前）`;
-  if (elapsed < 3600) return `已更新（${Math.floor(elapsed / 60)}min 前）`;
-  return `已更新（${Math.floor(elapsed / 3600)}h 前），数据可能过期`;
+  if (elapsed < 5) return `刚刚更新（${elapsed}s 前）${auto}`;
+  if (elapsed < 60) return `已更新（${elapsed}s 前）${auto}`;
+  if (elapsed < 3600) return `已更新（${Math.floor(elapsed / 60)}min 前）${auto}`;
+  return `已更新（${Math.floor(elapsed / 3600)}h 前），数据可能过期${auto}`;
 });
 
 function buildLiveSummary(
@@ -1475,15 +1509,46 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       }));
     }
     const s = data.summary;
+    const firstItem = data.items?.[0];
+    const typeLabels: Record<string, string> = {
+      paper: "论文",
+      patent: "专利",
+      project: "项目",
+    };
+    const presentTypes = Array.from(
+      new Set((data.items || []).map((i) => typeLabels[i.type] || i.type)),
+    );
+    const total = (data.items || []).length;
+    const firstTitle = firstItem?.title || "—";
+    const firstTime = firstItem?.time || "—";
+    const firstFields = firstItem?.fields?.length
+      ? firstItem.fields.join("、")
+      : "—";
+    const firstAwards = firstItem?.awards?.length
+      ? `${firstItem.awards.length} 项`
+      : firstItem?.evaluation || "—";
     return [
       { label: "专家 A", value: `${data.source.name}（${data.source.id}）` },
       { label: "专家 B", value: `${data.target.name}（${data.target.id}）` },
       {
-        label: "成果分布",
-        value: `论文 ${s.papers}、专利 ${s.patents}、项目 ${s.projects}`,
+        label: "合作成果类型",
+        value: presentTypes.length ? presentTypes.join("、") : "—",
       },
-      { label: "核心贡献", value: data.coreContribution },
-      { label: "合作模式", value: data.cooperationMode },
+      { label: "成果总量", value: `${total} 项` },
+      {
+        label: "成果分布",
+        value: `论文 ${s.papers}、专利 ${s.patents}、项目 ${s.projects}、获奖 ${s.awards}`,
+      },
+      { label: "成果1", value: firstTitle },
+      { label: "完成时间", value: firstTime },
+      { label: "所属领域", value: firstFields },
+      { label: "奖项/评价", value: firstAwards },
+      { label: "核心贡献", value: data.coreContribution || "—" },
+      { label: "合作模式", value: data.cooperationMode || "—" },
+      {
+        label: "图空间",
+        value: data.sourceMeta?.space || "—",
+      },
     ];
   }
   return null;
@@ -1587,7 +1652,7 @@ const detailRows = computed(() => {
     }
   }
   return rows.map((row) => {
-    if (row.label === "更新状态" && isPanorama.value) {
+    if (row.label === "动态更新" && isPanorama.value) {
       return [row.label, updateStatus.value] as const;
     }
     return [
@@ -1760,7 +1825,7 @@ function computePanoramaSummaryRows(
       "图谱规模",
       `子图 ${resp.graph.nodes.length} 个节点｜${resp.graph.edges.length} 条关系（全库 ${resp.summary.totalNodes}｜${resp.summary.totalEdges}）`,
     ],
-    ["更新状态", updateStatus.value],
+    ["动态更新", updateStatus.value],
   ]);
   return props.moduleInfo.summaryRows.map((row) => {
     const overrideValue = overrides.get(row.label);
@@ -2393,7 +2458,6 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         start_time: startTime,
         end_time: endTime,
         limit: 1,
-        offset: 0,
       };
       const res = await queryExpertColleagueRelation(body);
       if (
@@ -2454,12 +2518,15 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         return;
       }
       parameterErrors.value = {};
+      const limitRaw = Number(parameterValues.value.limit);
+      const limit =
+        limitRaw && limitRaw >= 1 && limitRaw <= 50 ? Math.floor(limitRaw) : 20;
       const body = {
         expertId,
         targetExpertId: optionalParam(targetExpertIdRaw),
         school: optionalParam(schoolRaw),
         educationStage: optionalParam(parameterValues.value.educationStage),
-        limit: 20,
+        limit,
       };
       const resp = (await queryExpertAlumniRelation(body)) as unknown as {
         code: number;
@@ -2562,13 +2629,17 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         startMonth,
         endMonth,
       );
+      const limitPerTypeRaw = optionalParam(parameterValues.value.limitPerType);
+      const limitPerType = limitPerTypeRaw
+        ? Math.min(50, Math.max(1, Number(limitPerTypeRaw) || 20))
+        : 20;
       const body = {
         sourceExpertId,
         targetExpertId,
         achievementTypes,
         timeRangeStart,
         timeRangeEnd,
-        limitPerType: 20,
+        limitPerType,
       };
       const resp = (await queryExpertCooperationAchievement(
         body,
@@ -2955,9 +3026,6 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   <section
     class="kg-panel service-console"
     :class="{
-      'service-console--cooperation': isLiveCoop,
-      'service-console--alumni': isLiveAlumni,
-      'service-console--industry-event': isIndustryChainEvent,
       'service-console--has-errors': hasParameterErrors,
       'has-parameter-errors': hasParameterErrors,
     }"
@@ -2967,17 +3035,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         <h2>{{ moduleInfo.title }}</h2>
       </div>
     </div>
-    <div
-      class="service-console__params"
-      :class="{
-        'service-console__params--inline':
-          isEnterpriseRelation ||
-          isIndustryChainEvent ||
-          isExpertDirect ||
-          isPanorama,
-        'service-console__params--industry-event': isIndustryChainEvent,
-      }"
-    >
+    <div class="service-console__params service-console__params--inline">
       <label
         v-for="field in moduleInfo.requestFields"
         :key="field.name"
@@ -3150,6 +3208,18 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           >
             {{ running ? "刷新中…" : "刷新图谱" }}
           </button>
+          <label
+            v-if="isPanorama"
+            class="graph-panel__autorefresh"
+            title="勾选后每 60 秒自动忽略缓存刷新一次"
+          >
+            <input
+              v-model="panoramaAutoRefresh"
+              type="checkbox"
+              :disabled="running"
+            />
+            <span>自动更新</span>
+          </label>
           <span>最近测试时间：</span>
           <strong>{{ lastTestTime }}</strong>
         </div>
@@ -3168,6 +3238,13 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           <strong>{{ queryFeedbackTitle }}</strong>
           <span>{{ liveError }}</span>
           <small>请检查专家 ID 后重新执行测试</small>
+        </div>
+        <div
+          v-else-if="!displayedGraphNodes.length && lastTestTime === '—'"
+          class="graph-panel__empty"
+          role="status"
+        >
+          <span>暂无图谱数据，请填写参数并点击「执行测试」后查看结果</span>
         </div>
         <KgGraphCanvas
           :nodes="displayedGraphNodes"
@@ -3272,7 +3349,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             :key="`${label}-${index}`"
           >
             <dt>{{ label }}</dt>
-            <dd>{{ value }}</dd>
+            <dd>{{ value || '—' }}</dd>
           </div>
         </dl>
         <dl
@@ -4137,6 +4214,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .graph-panel__time {
   display: flex;
+  align-items: center;
   gap: var(--space-12);
   color: var(--text-tertiary);
 }
@@ -4196,6 +4274,18 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .graph-panel__refresh {
   font-weight: 600;
+}
+
+.graph-panel__empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: var(--text-secondary);
+  font-size: 14px;
+  z-index: 1;
 }
 
 .graph-panel__autorefresh {

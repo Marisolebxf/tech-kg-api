@@ -37,14 +37,17 @@ const appStore = useAppStore();
 const authStore = useAuthStore();
 const currentUser = computed(() => authStore.profile?.user);
 const userAvatar = computed(() => currentUser.value?.avatar || figmaUserAvatar);
+const isAdminUser = computed(() =>
+  import.meta.env.VITE_AUTH_ENABLED === "false" || authStore.isAdmin,
+);
 const userRoleName = computed(() =>
-  authStore.isAdmin ? "管理员" : "普通用户",
+  isAdminUser.value ? "管理员" : "普通用户",
 );
 const userDisplayName = computed(() =>
   currentUser.value?.nickname || currentUser.value?.username || userRoleName.value,
 );
 const userRoleDescription = computed(() =>
-  authStore.isAdmin ? "系统管理与审核权限" : "知识图谱业务服务",
+  isAdminUser.value ? "系统管理与审核权限" : "知识图谱业务服务",
 );
 const isAdminArea = computed(() => route.path.startsWith("/admin"));
 const pageTitle = computed(() => String(route.meta.title ?? "亿级知识图谱"));
@@ -218,6 +221,11 @@ function toggleUserMenu() {
   const willOpen = !userMenuOpen.value;
   if (willOpen) accountFeedback.value = "";
   userMenuOpen.value = willOpen;
+}
+
+async function switchPortal() {
+  userMenuOpen.value = false;
+  await router.push(isAdminArea.value ? "/overview" : "/admin/reviews");
 }
 
 async function handleAccountAction(
@@ -655,9 +663,20 @@ onBeforeUnmount(() => {
                     <strong>{{ userDisplayName }}</strong
                     ><span>{{ userRoleDescription }}</span>
                   </div>
-                  <b :class="{ 'is-admin': authStore.isAdmin }">{{ userRoleName }}</b>
+                  <b :class="{ 'is-admin': isAdminUser }">{{ userRoleName }}</b>
                 </header>
                 <nav>
+                  <button
+                    v-if="isAdminUser"
+                    class="portal-switch"
+                    type="button"
+                    @click="switchPortal"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M4 7h12m0 0-3-3m3 3-3 3M20 17H8m0 0 3 3m-3-3 3-3" />
+                    </svg>
+                    <span>{{ isAdminArea ? "返回用户端" : "进入管理端" }}</span>
+                  </button>
                   <button
                     :class="{ active: route.path === '/user-center' }"
                     type="button"
@@ -1453,6 +1472,18 @@ onBeforeUnmount(() => {
 }
 .app-user-menu nav button span {
   font-size: 11px;
+}
+.app-user-menu nav button.portal-switch {
+  margin-bottom: 5px;
+  border-bottom: 1px solid #e8eef6;
+  border-radius: 5px 5px 0 0;
+  color: #165dff;
+}
+.app-user-menu nav button.portal-switch > svg {
+  color: #165dff;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .app-user-menu nav button.danger {
   margin-top: 5px;

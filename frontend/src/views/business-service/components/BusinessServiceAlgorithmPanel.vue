@@ -496,12 +496,6 @@ const isPanorama = computed(
   () => props.moduleInfo.key === "industry-chain-panorama",
 );
 const isExpertDirect = computed(() => props.moduleInfo.key === "expert-direct");
-const isEnterpriseRelation = computed(
-  () => props.moduleInfo.key === "enterprise-relation",
-);
-const isIndustryChainEvent = computed(
-  () => props.moduleInfo.key === "industry-chain-event",
-);
 const isExpertIndirect = computed(
   () => props.moduleInfo.key === "node-indirect",
 );
@@ -2464,7 +2458,6 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         start_time: startTime,
         end_time: endTime,
         limit: 1,
-        offset: 0,
       };
       const res = await queryExpertColleagueRelation(body);
       if (
@@ -2525,12 +2518,15 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         return;
       }
       parameterErrors.value = {};
+      const limitRaw = Number(parameterValues.value.limit);
+      const limit =
+        limitRaw && limitRaw >= 1 && limitRaw <= 50 ? Math.floor(limitRaw) : 20;
       const body = {
         expertId,
         targetExpertId: optionalParam(targetExpertIdRaw),
         school: optionalParam(schoolRaw),
         educationStage: optionalParam(parameterValues.value.educationStage),
-        limit: 20,
+        limit,
       };
       const resp = (await queryExpertAlumniRelation(body)) as unknown as {
         code: number;
@@ -3030,9 +3026,6 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   <section
     class="kg-panel service-console"
     :class="{
-      'service-console--cooperation': isLiveCoop,
-      'service-console--alumni': isLiveAlumni,
-      'service-console--industry-event': isIndustryChainEvent,
       'service-console--has-errors': hasParameterErrors,
       'has-parameter-errors': hasParameterErrors,
     }"
@@ -3042,17 +3035,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         <h2>{{ moduleInfo.title }}</h2>
       </div>
     </div>
-    <div
-      class="service-console__params"
-      :class="{
-        'service-console__params--inline':
-          isEnterpriseRelation ||
-          isIndustryChainEvent ||
-          isExpertDirect ||
-          isPanorama,
-        'service-console__params--industry-event': isIndustryChainEvent,
-      }"
-    >
+    <div class="service-console__params service-console__params--inline">
       <label
         v-for="field in moduleInfo.requestFields"
         :key="field.name"
@@ -4231,6 +4214,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .graph-panel__time {
   display: flex;
+  align-items: center;
   gap: var(--space-12);
   color: var(--text-tertiary);
 }

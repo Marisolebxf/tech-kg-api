@@ -1503,18 +1503,6 @@ body {
   min-height: 40px;
 }
 
-.app-workspace .business-service .result-panel__table::after {
-  content: "";
-  flex: 1 1 auto;
-  min-height: 0;
-  border-top: 1px solid #e5e6eb;
-  background:
-    linear-gradient(to right, transparent 135px, #e5e6eb 135px, #e5e6eb 136px, transparent 136px),
-    repeating-linear-gradient(to bottom, transparent 0, transparent 39px, #e5e6eb 39px, #e5e6eb 40px),
-    linear-gradient(to right, #f2f3f5 0, #f2f3f5 136px, #fff 136px, #fff 100%);
-  pointer-events: none;
-}
-
 .app-workspace .business-service .result-panel__table div:last-child {
   border-bottom: 0;
 }

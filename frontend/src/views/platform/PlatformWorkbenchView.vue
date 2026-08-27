@@ -261,7 +261,7 @@ const activeTab = ref<PlatformTab>(props.initialTab ?? 'overview')
 const activeServiceKey = ref(props.initialServiceKey ?? modules[0]?.key ?? '')
 const activeServiceMode = ref<'test' | 'api'>('test')
 const selectedQueryType = ref('全部图谱')
-const queryKeyword = ref('paper_1002153099575427082')
+const queryKeyword = ref('')
 const queryRelationFilter = ref('全部关系')
 const queryEntityConfidence = ref('不限')
 const queryRelationConfidence = ref('不限')
@@ -4828,7 +4828,7 @@ const pageMeta = computed(() => {
           </button>
         </div>
         <div class="platform-form-grid">
-          <label class="platform-query-question">
+          <label>
             <span>实体名称或ID</span>
             <input
               v-model="queryKeyword"
@@ -4881,6 +4881,7 @@ const pageMeta = computed(() => {
           </span>
         </div>
         <KgGraphCanvas
+          v-if="queryApplied"
           :nodes="queryVisibleNodes"
           :edges="queryVisibleEdges"
           :active-categories="queryActiveCategories"
@@ -4890,6 +4891,9 @@ const pageMeta = computed(() => {
           @select-node="openNodeDetail"
           @select-edge="openEdgeDetail"
         />
+        <div v-else class="platform-query-graph__empty">
+          暂无图谱数据，请填写参数并点击「查询图谱」后查看结果
+        </div>
       </section>
 
       <aside class="kg-panel platform-detail">
@@ -6123,7 +6127,7 @@ print(response.json())</pre>
 
 .platform-form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 10px;
   padding: 12px 14px;
 }
@@ -6154,7 +6158,6 @@ print(response.json())</pre>
 }
 
 .platform-form-grid textarea { height:58px;padding:8px 10px;line-height:20px;resize:vertical; }
-.platform-query-question { grid-column:1/-1; }
 
 .platform-timeline {
   display: grid;
@@ -7183,6 +7186,18 @@ print(response.json())</pre>
 
 .platform-query-graph :deep(.kg-graph-viewport) {
   height: calc(100% - 100px);
+}
+
+.platform-query-graph__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 360px;
+  padding: 24px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 22px;
 }
 
 .platform-graph-legend {

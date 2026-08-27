@@ -1470,18 +1470,6 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
 });
 
 const liveRules = computed<Array<Record<string, any>>>(() => {
-  if (isLiveAlumni.value && liveAlumniResult.value?.rules?.length)
-    return liveAlumniResult.value.rules;
-  if (isLiveCoop.value && liveCoopResult.value?.rules?.length)
-    return liveCoopResult.value.rules;
-  if (isLiveColleague.value && liveResponse.value?.data?.rules?.length)
-    return liveResponse.value.data.rules;
-  if (isExpertIndirect.value && expertIndirectResponse.value?.rules?.length)
-    return expertIndirectResponse.value.rules;
-  const responseRules =
-    liveResponse.value?.data?.rules ?? liveResponse.value?.rules;
-  if (Array.isArray(responseRules) && responseRules.length)
-    return responseRules;
   return actualServiceRules[props.moduleInfo.key] ?? [];
 });
 
@@ -1675,22 +1663,11 @@ const apiResultJson = computed(() => {
       2,
     );
   }
-  if (isLiveModule.value) {
-    return JSON.stringify(
-      liveApiPayload.value ?? {
-        describe: liveDescribe.value,
-        ...JSON.parse(props.responseJson),
-        request_params: parameterValues.value,
-      },
-      null,
-      2,
-    );
+  if (liveApiPayload.value) {
+    return prettyResult(liveApiPayload.value);
   }
   return JSON.stringify(
-    {
-      ...JSON.parse(props.responseJson),
-      request_params: parameterValues.value,
-    },
+    { message: running.value ? "查询中..." : "暂无查询结果" },
     null,
     2,
   );
@@ -1713,31 +1690,6 @@ const isUnifiedProvenance = computed(
 );
 
 /** 查询已执行但没有命中任何数据时给出的提示，null 表示不展示提示。 */
-const emptyResultHint = computed<string | null>(() => {
-  if (lastTestTime.value === "—" || running.value) return null;
-  if (isExpertDirect.value) {
-    if (expertDirectError.value || !expertDirectResponse.value) return null;
-    if (expertDirectResponse.value.items?.length) return null;
-    return "未查询到符合条件的直接关系，请调整专家A/专家B、机构关键词或起始时间后重试。";
-  }
-  if (isPanorama.value) {
-    if (panoramaError.value || !panoramaResponse.value) return null;
-    if (!isPanoramaEmpty(panoramaResponse.value)) return null;
-    return "未查询到符合条件的产业链全景图数据，请调整产业关键词或核心节点 VID 后重试。";
-  }
-  if (isExpertIndirect.value) {
-    if (expertIndirectError.value || !expertIndirectResponse.value) return null;
-    const result = expertIndirectResponse.value.structuredResult;
-    if (result.pathCount > 0) return null;
-    const relationType = parameterValues.value.relation_types || "学术关联";
-    return `核心节点“${result.coreNode.name}”查询成功，但在 ${result.pathDepth} 跳、${relationType}、最小强度 ${result.minStrength} 的条件下未命中间接路径；画布仅显示核心节点。`;
-  }
-  if (graphNodes.value.length === 0) {
-    return "本次查询未返回可展示的实体与关系，请调整查询参数后重试。";
-  }
-  return null;
-});
-
 function computePanoramaSummaryRows(
   resp: IndustryChainPanoramaQueryResponse,
 ): ReadonlyArray<readonly [string, string]> {
@@ -2199,12 +2151,13 @@ async function handleRun() {
       lastTestTime.value = formatTimestamp(now);
       lastUpdateTime.value = now.getTime();
       if (isPanoramaEmpty(response)) {
-        showToast("未查询到符合条件的产业链全景图数据", "warning");
+        showToast("未查询到符合条件的产业链全景图数据", "info");
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       panoramaError.value = message;
       panoramaResponse.value = null;
+      showToast(message, "warning");
     } finally {
       running.value = false;
     }
@@ -2253,13 +2206,14 @@ async function handleRun() {
       lastTestTime.value = formatTimestamp(now);
       lastUpdateTime.value = now.getTime();
       if (!response.items?.length) {
-        showToast("未查询到符合条件的直接关系", "warning");
+        showToast("未查询到符合条件的直接关系", "info");
       }
     } catch (error) {
       if (controller.signal.aborted) return;
       const message = error instanceof Error ? error.message : String(error);
       expertDirectError.value = message;
       expertDirectResponse.value = null;
+      showToast(message, "warning");
     } finally {
       if (expertDirectAbortController === controller) {
         running.value = false;
@@ -2273,8 +2227,15 @@ async function handleRun() {
     try {
       const coreNodeIdRaw = parameterValues.value.core_node_id ?? "";
       const coreNodeId = coreNodeIdRaw.trim();
-      if (!coreNodeId) {
-        parameterErrors.value = { core_node_id: "请输入核心专家或人才节点 ID" };
+      const relationType = (parameterValues.value.relation_types ?? "").trim();
+      const missingRequiredFields: Record<string, string> = {
+        ...(!coreNodeId
+          ? { core_node_id: "请输入核心专家或人才节点 ID" }
+          : {}),
+        ...(!relationType ? { relation_types: "请选择间接关系类型" } : {}),
+      };
+      if (Object.keys(missingRequiredFields).length) {
+        parameterErrors.value = missingRequiredFields;
         expertIndirectResponse.value = null;
         expertIndirectError.value = null;
         resultMode.value = "summary";
@@ -2295,20 +2256,22 @@ async function handleRun() {
       const pathDepthRaw = parameterValues.value.path_depth?.trim() ?? "";
       const pathDepth = pathDepthRaw === "" ? 2 : Number(pathDepthRaw);
       if (!Number.isInteger(pathDepth) || pathDepth < 2 || pathDepth > 3) {
-        showToast("path_depth 只能填写 2 或 3", "warning");
+        parameterErrors.value = { path_depth: "路径分析深度只能填写 2 或 3" };
+        showToast("请修正参数后再执行", "warning");
         return;
       }
 
       const minStrengthRaw = parameterValues.value.min_strength?.trim() ?? "";
       const minStrength = minStrengthRaw === "" ? 0.65 : Number(minStrengthRaw);
       if (!Number.isFinite(minStrength) || minStrength < 0 || minStrength > 1) {
-        showToast("min_strength 必须在 0-1 范围内", "warning");
+        parameterErrors.value = { min_strength: "最小关联强度必须在 0-1 范围内" };
+        showToast("请修正参数后再执行", "warning");
         return;
       }
 
       const response = await analyzeExpertIndirectRelation({
         core_node_id: coreNodeId,
-        relation_types: [parameterValues.value.relation_types ?? "学术关联"],
+        relation_types: [relationType],
         path_depth: pathDepth,
         min_strength: minStrength,
       });
@@ -2431,7 +2394,8 @@ async function handleRun() {
       const schoolRaw = parameterValues.value.school ?? "";
       const expertId = expertIdRaw.trim();
       if (!expertId) {
-        parameterErrors.value = { expertId: "请输入专家" };
+        parameterErrors.value = { expertId: "请输入专家唯一标识" };
+        showToast("请完善必填项后再执行", "warning");
         return;
       }
       const alumniErrors: Record<string, string> = {};
@@ -2494,6 +2458,7 @@ async function handleRun() {
           ...(!sourceExpertId ? { sourceExpertId: "请输入第一个专家 ID" } : {}),
           ...(!targetExpertId ? { targetExpertId: "请输入第二个专家 ID" } : {}),
         };
+        showToast("请完善必填项后再执行", "warning");
         return;
       }
       const coopErrors: Record<string, string> = {};
@@ -2529,6 +2494,7 @@ async function handleRun() {
             ? { timeRangeEnd: "请选择完整的结束年月" }
             : {}),
         };
+        showToast("请修正参数后再执行", "warning");
         return;
       }
       if (startMonth && endMonth && startMonth > endMonth) {
@@ -2536,6 +2502,7 @@ async function handleRun() {
           timeRangeStart: "开始月份不能晚于结束月份",
           timeRangeEnd: "结束月份不能早于开始月份",
         };
+        showToast("请修正参数后再执行", "warning");
         return;
       }
       if (isFutureMonth(startMonth) || isFutureMonth(endMonth)) {
@@ -2601,6 +2568,7 @@ async function handleRun() {
       const expertId = parameterValues.value.expert_id?.trim();
       if (!expertId) {
         parameterErrors.value = { expert_id: "请输入专家唯一标识" };
+        showToast("请完善必填项后再执行", "warning");
         return;
       }
       const expertIdErr = identifierError(
@@ -2660,6 +2628,7 @@ async function handleRun() {
       const chainNodeId = parameterValues.value.chain_node_id?.trim();
       if (!chainNodeId) {
         parameterErrors.value = { chain_node_id: "请输入产业链节点标识" };
+        showToast("请完善必填项后再执行", "warning");
         return;
       }
       const errors: Record<string, string> = {};
@@ -2872,6 +2841,14 @@ function handleParameterInput(fieldName: string, event: Event) {
 
   clearParameterError(fieldName);
 }
+function clearOptionalParameter(fieldName: string) {
+  parameterValues.value = {
+    ...parameterValues.value,
+    [fieldName]: "",
+  };
+  clearParameterError(fieldName);
+}
+
 function handleMonthParameterInput(fieldName: string, value: string | null) {
   const nextValues = {
     ...parameterValues.value,
@@ -2969,7 +2946,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :title="field.description"
           @change="handleParameterInput(field.name, $event)"
         >
-          <option value="" disabled>请选择</option>
+          <option value="" :disabled="field.required === '是'">请选择</option>
           <option v-for="option in field.options" :key="option" :value="option">
             {{ option }}
           </option>
@@ -3037,8 +3014,8 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :error="Boolean(parameterErrors[field.name])"
           @update:model-value="handleMonthParameterInput(field.name, $event)"
         />
-        <input
-          v-else
+        <div v-else class="service-console__input-wrap">
+          <input
           type="text"
           :key="`${field.name}-${paramResetToken}`"
           :value="parameterValues[field.name] ?? ''"
@@ -3050,6 +3027,17 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           "
           @input="handleParameterInput(field.name, $event)"
         />
+          <button
+            v-if="field.required !== '是' && parameterValues[field.name]"
+            class="service-console__input-clear"
+            type="button"
+            :aria-label="`清空${field.label ?? field.name}`"
+            :title="`清空${field.label ?? field.name}`"
+            @click="clearOptionalParameter(field.name)"
+          >
+            ×
+          </button>
+        </div>
         <small
           v-if="parameterErrors[field.name]"
           class="service-console__field-error"
@@ -3095,14 +3083,6 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           <i />{{ item.label }}
         </span>
       </div>
-      <p
-        v-if="emptyResultHint"
-        class="graph-panel__empty"
-        role="status"
-        aria-live="polite"
-      >
-        {{ emptyResultHint }}
-      </p>
       <div class="graph-panel__canvas">
         <div v-if="liveError" class="graph-panel__feedback" role="alert">
           <strong>{{ queryFeedbackTitle }}</strong>
@@ -3190,7 +3170,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
               @click="resultMode = 'rule'"
               @keydown="handleResultTabKeydown"
             >
-              规则
+              算法
             </button>
             <button
               :class="{ 'is-active': resultMode === 'api' }"
@@ -3546,9 +3526,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           暂无溯源数据，请先执行查询，或在图谱中选中一个实体/关系。
         </p>
         <div v-else-if="resultMode === 'rule'" class="result-panel__rules">
-          <article v-for="(rule, index) in liveRules" :key="rule.name">
+          <article v-for="rule in liveRules" :key="rule.name">
             <header>
-              <strong>规则 {{ index + 1 }}：{{ rule.name }}</strong>
+              <strong>{{ rule.name }}</strong>
               <span>{{ rule.type }}</span>
             </header>
             <dl>
@@ -3670,6 +3650,72 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   margin-right: 4px;
   color: var(--danger);
   font-style: normal;
+}
+
+.service-console__input-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.service-console__input-wrap > input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  min-width: 0;
+  padding: 0 32px 0 11px;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  outline: 0;
+  background: #fff;
+  color: #1f1f1f;
+  font-size: 14px;
+  line-height: 30px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.service-console__input-wrap > input:hover {
+  border-color: #4096ff;
+}
+
+.service-console__input-wrap > input:focus {
+  border-color: #1677ff;
+  box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1);
+}
+
+.service-console__input-wrap > input::placeholder {
+  color: #bfbfbf;
+  opacity: 1;
+}
+
+.service-console__input-clear {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 7px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #8c8c8c;
+  font-size: 17px;
+  line-height: 18px;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.service-console__input-clear:hover,
+.service-console__input-clear:focus-visible {
+  background: #f0f0f0;
+  color: #434343;
+  outline: none;
+}
+
+.service-console__params label.has-error .service-console__input-wrap > input {
+  border-color: var(--danger);
 }
 
 .service-console__params > label > input,
@@ -4153,18 +4199,6 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 .graph-panel__legend .is-source i {
   background: #eb2f96;
-}
-
-.graph-panel__empty {
-  flex: 0 0 auto;
-  margin: 0 0 8px;
-  padding: 8px 12px;
-  border: 1px solid #ffd591;
-  border-radius: 4px;
-  background: #fffbe6;
-  color: #874d00;
-  font-size: 13px;
-  line-height: 20px;
 }
 
 .graph-panel__canvas {

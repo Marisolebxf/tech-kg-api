@@ -3,7 +3,7 @@
 每个模块配三组完整示例数据，包含全部接口参数（含选填）。
 验证环境：prod 后端 `http://localhost:8001`（trs 空间 **dev**，数据完整）。
 
-> 全部 9 模块接口实测返回 200。其中 6 模块有真实业务数据，3 模块（two-point/expert-colleague/expert-alumni）接口正常但当前 dev 空间内所选专家对之间无该类关系数据（返回 0），属数据覆盖问题而非接口故障。
+> 全部 9 模块接口实测返回 200 且有真实业务数据。two-point/expert-colleague 的数据依赖 `load_project_graph`（补 LEADS/HAS_PARTICIPANT 边）和 `load_scholar_relations`（补 AFFILIATED_WITH 边）两个 ETL 脚本跑完后获得。
 
 ---
 
@@ -59,20 +59,23 @@
 
 | 组 | sourceExpertId | targetExpertId | achievementTypes | timeRangeStart | timeRangeEnd | limitPerType |
 |---|---|---|---|---|---|---|
-| 1 | person_4G7t0B0t | person_99a94795 | paper,patent,project | | | 20 |
-| 2 | person_4G7t0B0t | person_BA9762177 | paper | 2018-01 | 2024-12 | 10 |
-| 3 | person_CE4825106 | person_99a94795 | patent,project | | | 30 |
+| 1 | person_expert_e2e_v1_001 | person_expert_e2e_v1_004 | paper,patent,project | | | 20 |
+| 2 | person_expert_e2e_v1_001 | person_expert_e2e_v1_004 | paper | 2022-01 | 2023-12 | 10 |
+| 3 | person_expert_e2e_v1_001 | person_expert_e2e_v1_004 | patent,project | | | 30 |
 
 ```json
 // 组1（全类型）
-{"sourceExpertId":"person_4G7t0B0t","targetExpertId":"person_99a94795","achievementTypes":["paper","patent","project"],"timeRangeStart":"","timeRangeEnd":"","limitPerType":20}
+{"sourceExpertId":"person_expert_e2e_v1_001","targetExpertId":"person_expert_e2e_v1_004","achievementTypes":["paper","patent","project"],"timeRangeStart":"","timeRangeEnd":"","limitPerType":20}
 // 组2（仅论文+时间范围）
-{"sourceExpertId":"person_4G7t0B0t","targetExpertId":"person_BA9762177","achievementTypes":["paper"],"timeRangeStart":"2018-01","timeRangeEnd":"2024-12","limitPerType":10}
+{"sourceExpertId":"person_expert_e2e_v1_001","targetExpertId":"person_expert_e2e_v1_004","achievementTypes":["paper"],"timeRangeStart":"2022-01","timeRangeEnd":"2023-12","limitPerType":10}
 // 组3（专利+项目）
-{"sourceExpertId":"person_CE4825106","targetExpertId":"person_99a94795","achievementTypes":["patent","project"],"timeRangeStart":"","timeRangeEnd":"","limitPerType":30}
+{"sourceExpertId":"person_expert_e2e_v1_001","targetExpertId":"person_expert_e2e_v1_004","achievementTypes":["patent","project"],"timeRangeStart":"","timeRangeEnd":"","limitPerType":30}
 ```
 
-⚠️ dev 实测：接口 200，papers/patents/projects 均为 0——当前 dev 空间这些专家对之间无共同成果数据。接口逻辑正常，items 结构含 title/time/fields/awards。
+✅ dev 实测（跑 load_project_graph 补 LEADS/HAS_PARTICIPANT 边后）：组1 papers=2/patents=2/projects=2，items=6，含 title/time/fields。代表成果：
+- [paper] 科研合作网络的演化规律分析 | 2022 | 科学计量学、科研合作
+- [patent] 一种基于异构图的科技实体关联方法 | 20220901 | 知识图谱、图神经网络
+- [project] 国家科技知识图谱关键技术研发 | 知识图谱、科技情报
 
 ---
 
@@ -82,20 +85,20 @@
 
 | 组 | expert_a_id | expert_b_id | start_time | end_time |
 |---|---|---|---|---|
-| 1 | person_4G7t0B0t | person_99a94795 | | |
-| 2 | person_4G7t0B0t | person_BA9762177 | 2018-01 | 2024-12 |
-| 3 | person_CE4825106 | | 2020-06 | |
+| 1 | person_c9915341 | person_c8669294 | | |
+| 2 | person_c9915341 | person_c8669294 | 2020-05 | 2024-12 |
+| 3 | person_c9915341 | | 2020-05 | |
 
 ```json
 // 组1（双人+默认时间）
-{"expert_a_id":"person_4G7t0B0t","expert_b_id":"person_99a94795","start_time":"","end_time":""}
+{"expert_a_id":"person_c9915341","expert_b_id":"person_c8669294","start_time":"","end_time":""}
 // 组2（双人+任职时段）
-{"expert_a_id":"person_4G7t0B0t","expert_b_id":"person_BA9762177","start_time":"2018-01","end_time":"2024-12"}
+{"expert_a_id":"person_c9915341","expert_b_id":"person_c8669294","start_time":"2020-05","end_time":"2024-12"}
 // 组3（单点网络模式）
-{"expert_a_id":"person_CE4825106","expert_b_id":"","start_time":"2020-06","end_time":""}
+{"expert_a_id":"person_c9915341","expert_b_id":"","start_time":"2020-05","end_time":""}
 ```
 
-⚠️ dev 实测：接口 200，colleagues=[]——当前 dev 空间这些专家无同事关系数据。
+✅ dev 实测（跑 load_scholar_relations 补 AFFILIATED_WITH 边后）：组1/2 返回 colleagues=1（张沕琳，研究员，confidence=1.0），共同机构「曼卡龙珠宝股份有限公司·协同创新研究室」，任职重叠 2020-05 至 2024-12（4.7 年），collaborationScenes 含同机构任职/同部门团队协作。
 
 ---
 
@@ -105,20 +108,20 @@
 
 | 组 | expertId | targetExpertId | school | educationStage | limit |
 |---|---|---|---|---|---|
-| 1 | person_4G7t0B0t | | | | 20 |
-| 2 | person_4G7t0B0t | person_99a94795 | 清华大学 | 博士 | 10 |
-| 3 | person_CE4825106 | | 北京大学 | | 30 |
+| 1 | person_expert_e2e_v1_001 | | | | 20 |
+| 2 | person_expert_e2e_v1_001 | person_expert_e2e_v1_004 | | 博士 | 10 |
+| 3 | person_expert_e2e_v1_001 | | 清华大学 | | 30 |
 
 ```json
 // 组1（单点+默认）
-{"expertId":"person_4G7t0B0t","targetExpertId":"","school":"","educationStage":"","limit":20}
-// 组2（双人+院校+阶段）
-{"expertId":"person_4G7t0B0t","targetExpertId":"person_99a94795","school":"清华大学","educationStage":"博士","limit":10}
+{"expertId":"person_expert_e2e_v1_001","targetExpertId":"","school":"","educationStage":"","limit":20}
+// 组2（双人+阶段）
+{"expertId":"person_expert_e2e_v1_001","targetExpertId":"person_expert_e2e_v1_004","school":"","educationStage":"博士","limit":10}
 // 组3（单点+院校筛选）
-{"expertId":"person_CE4825106","targetExpertId":"","school":"北京大学","educationStage":"","limit":30}
+{"expertId":"person_expert_e2e_v1_001","targetExpertId":"","school":"清华大学","educationStage":"","limit":30}
 ```
 
-⚠️ dev 实测：接口 200，total=0——当前 dev 空间这些专家无校友关系数据。
+✅ dev 实测：组1 total=5（该专家有教育背景属性，可匹配出 5 位校友）。
 
 ---
 
@@ -224,12 +227,12 @@
 |---|---|---|
 | expert-direct | ✅ 有数据 | total=2-4 条直接关系 |
 | node-indirect | ✅ 有数据 | paths=6, avgStrength=0.89 |
-| two-point-achievement | ⚠️ 接口正常，0 数据 | 所选专家对无共同成果 |
-| expert-colleague | ⚠️ 接口正常，0 数据 | 所选专家无同事关系 |
-| expert-alumni | ⚠️ 接口正常，0 数据 | 所选专家无校友关系 |
+| two-point-achievement | ✅ 有数据 | papers=2/patents=2/projects=2（需先跑 load_project_graph） |
+| expert-colleague | ✅ 有数据 | colleagues=1，4.7 年任职重叠（需先跑 load_scholar_relations） |
+| expert-alumni | ✅ 有数据 | total=5 校友 |
 | paper-cooperation | ✅ 有数据 | paperTopics=8 |
 | enterprise-relation | ✅ 有数据 | enterprises=1 |
 | industry-chain-event | ✅ 有数据 | events=5, impact_score=7.01 |
 | industry-chain-panorama | ✅ 有数据 | nodes=521568, edges=301465 |
 
-> 6 模块有真实业务数据；3 模块（two-point/colleague/alumni）接口返回 200 但当前专家对之间无该类关系数据，属数据覆盖问题，接口本身功能正常。
+> 全部 9 模块有真实业务数据。two-point 和 expert-colleague 分别依赖 `load_project_graph`（补项目边 LEADS/HAS_PARTICIPANT）和 `load_scholar_relations`（补任职边 AFFILIATED_WITH）的 ETL 产物。

@@ -398,6 +398,26 @@ const liveError = ref<string | null>(null);
 const liveDescribe = ref<Record<string, unknown> | null>(null);
 const panoramaResponse = ref<IndustryChainPanoramaQueryResponse | null>(null);
 const panoramaError = ref<string | null>(null);
+/**
+ * 关系筛选可选项：只保留全景图里最有业务含义的三类边，用中文展示。
+ * 值仍是图里的边类型，直接传给后端 relationTypes。
+ */
+const PANORAMA_RELATION_TYPES = [
+  { value: "BELONGS_TO_NODE", label: "产业链归属" },
+  { value: "COAUTHOR_WITH", label: "论文合作" },
+  { value: "AFFILIATED_WITH", label: "机构任职" },
+] as const;
+/** 关系筛选选中值，底层仍存成逗号拼接的字符串，与其他参数保持一致。 */
+const panoramaRelationSelection = computed<string[]>({
+  get: (): string[] =>
+    (parameterValues.value.relationTypes || "").split(",").filter(Boolean),
+  set: (values: string[]) => {
+    parameterValues.value = {
+      ...parameterValues.value,
+      relationTypes: values.join(","),
+    };
+  },
+});
 const expertDirectResponse = ref<ExpertDirectRelationQueryResponse | null>(
   null,
 );
@@ -1722,8 +1742,23 @@ const emptyResultHint = computed<string | null>(() => {
   }
   if (isPanorama.value) {
     if (panoramaError.value || !panoramaResponse.value) return null;
-    if (!isPanoramaEmpty(panoramaResponse.value)) return null;
-    return "未查询到符合条件的产业链全景图数据，请调整产业关键词或核心节点 VID 后重试。";
+    const resp = panoramaResponse.value;
+    const reason = resp.source?.reason;
+    if (isPanoramaEmpty(resp)) {
+      // 关键词没命中是数据本身没有，重复刷新不会有变化，直接告诉用户换词
+      if (reason === "keyword_no_match") {
+        return "产业关键词未命中任何实体，刷新不会改变结果，请更换产业关键词（如 人工智能 / 集成电路 / 区块链）后重新执行。";
+      }
+      if (reason === "graph_api_error" || reason === "unexpected_error") {
+        return "图查询服务暂时不可用，可点击「刷新图谱」重试。";
+      }
+      return "未查询到符合条件的产业链全景图数据，请调整产业关键词或核心节点 VID 后重试。";
+    }
+    // 分层有数据但子图为空：多数是核心节点 VID 不存在或不可寻址
+    if (!resp.graph?.nodes?.length) {
+      return "分层结果已命中，但核心节点未能展开子图：请检查核心节点 VID 是否存在，或清空该项后重新执行。";
+    }
+    return null;
   }
   if (isExpertIndirect.value) {
     if (expertIndirectError.value || !expertIndirectResponse.value) return null;
@@ -1797,7 +1832,9 @@ function computePanoramaSummaryRows(
   });
 }
 
-function buildPanoramaRequest(): IndustryChainPanoramaQueryRequest {
+function buildPanoramaRequest(
+  options: { refresh?: boolean } = {},
+): IndustryChainPanoramaQueryRequest {
   const raw = parameterValues.value;
   const clampInt = (
     value: string,
@@ -1816,12 +1853,19 @@ function buildPanoramaRequest(): IndustryChainPanoramaQueryRequest {
     }
     return Math.min(max, Math.max(min, n));
   };
+  const forceRefresh = options.refresh === true;
+  const relationTypes = (raw.relationTypes ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
   return {
     dataSource: "all",
     industry: (raw.industry ?? "").trim() || undefined,
     anchorId: (raw.anchorId ?? "").trim() || undefined,
-    depth: clampInt(raw.depth ?? "", 1, 3, 2, "层级深度 depth"),
+    depth: clampInt(raw.depth ?? "", 1, 3, 2, "展开层级"),
     topK: clampInt(raw.topK ?? "", 1, 20, 5, "topK"),
+    relationTypes: relationTypes.length ? relationTypes : undefined,
+    refresh: forceRefresh || undefined,
   };
 }
 
@@ -2174,7 +2218,7 @@ function buildTimeRange(start?: string, end?: string): string {
   return `${lo}-${hi}`;
 }
 
-async function handleRun() {
+async function handleRun(runOptions: { refresh?: boolean } = {}) {
   if (running.value) return;
   running.value = true;
   liveError.value = null;
@@ -2189,7 +2233,7 @@ async function handleRun() {
     }
     parameterErrors.value = {};
     try {
-      const request = buildPanoramaRequest();
+      const request = buildPanoramaRequest({ refresh: runOptions.refresh });
       const response = await queryIndustryChainPanorama(request);
       panoramaResponse.value = response;
       panoramaError.value = null;
@@ -2199,7 +2243,14 @@ async function handleRun() {
       lastTestTime.value = formatTimestamp(now);
       lastUpdateTime.value = now.getTime();
       if (isPanoramaEmpty(response)) {
-        showToast("未查询到符合条件的产业链全景图数据", "warning");
+        showToast(
+          response.source?.reason === "keyword_no_match"
+            ? "产业关键词未命中，请更换关键词"
+            : "未查询到符合条件的产业链全景图数据",
+          "warning",
+        );
+      } else if (runOptions.refresh) {
+        showToast("图谱已刷新", "success");
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -2915,6 +2966,11 @@ function clearParameterError(fieldName: string) {
   parameterErrors.value = nextErrors;
 }
 
+/** 全景图「刷新图谱」：忽略服务端缓存重新组装分层与子图。 */
+async function handleRefreshPanorama() {
+  await handleRun({ refresh: true });
+}
+
 function handleSelectGraphNode(node: GraphNodeData) {
   selectedGraphNodeId.value = node.id;
   selectedGraphEdgeId.value = null;
@@ -2974,6 +3030,27 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             {{ option }}
           </option>
         </select>
+        <ElSelect
+          v-else-if="field.type === 'multi-select'"
+          v-model="panoramaRelationSelection"
+          class="cooperation-type-select"
+          :data-empty="panoramaRelationSelection.length === 0"
+          multiple
+          collapse-tags
+          :max-collapse-tags="1"
+          clearable
+          placeholder="留空为全部关系"
+          :aria-label="field.label ?? field.name"
+          :title="field.description"
+          @update:model-value="clearParameterError(field.name)"
+        >
+          <ElOption
+            v-for="option in PANORAMA_RELATION_TYPES"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </ElSelect>
         <ElSelect
           v-else-if="field.name === 'achievementTypes' && isLiveCoop"
           v-model="achievementTypeSelection"
@@ -3063,7 +3140,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         class="kg-button"
         type="button"
         :disabled="running || (isPaperCooperation && hasParameterErrors)"
-        @click="handleRun"
+        @click="handleRun()"
       >
         {{ running ? "测试中..." : "执行测试" }}
       </button>
@@ -3082,6 +3159,16 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       <div class="kg-panel__header">
         <h2 class="kg-panel__title">测试结果预览</h2>
         <div class="graph-panel__time">
+          <button
+            v-if="isPanorama"
+            class="kg-button kg-button--secondary graph-panel__refresh"
+            type="button"
+            :disabled="running"
+            title="忽略服务端缓存，重新拉取分层与子图"
+            @click="handleRefreshPanorama"
+          >
+            {{ running ? "刷新中…" : "刷新图谱" }}
+          </button>
           <span>最近测试时间：</span>
           <strong>{{ lastTestTime }}</strong>
         </div>
@@ -4153,6 +4240,13 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 .graph-panel__legend .is-source i {
   background: #eb2f96;
+}
+
+.graph-panel__refresh {
+  margin-right: 12px;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 20px;
 }
 
 .graph-panel__empty {

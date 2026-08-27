@@ -13,6 +13,8 @@ export type ServiceField = {
   description: string
   options?: readonly string[]
   maxLength?: number
+  /** 表单初始值；缺省时为空字符串。用于固定值（dataSource="all"）或带默认值的字段（limit=10）。 */
+  defaultValue?: string
 }
 
 export type ServiceResultRow = {
@@ -85,10 +87,13 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技专家 / 人才直接关系服务通过收集科技专家或人才在各类场景中的直接交互数据，结合知识图谱中已有的实体属性与关系信息，运用语义匹配与关系验证算法，识别并构建专家或人才之间的直接关联。该服务会对直接关系的类型进行精准分类，同时记录关系发生的时间、场景及相关成果，形成结构化的直接关系数据，为后续的关系分析与网络构建提供基础。',
     requestFields: [
-      { name: 'expertAId', label: '专家A', type: 'string', required: '是', placeholder: '请输入专家A，如 person_4G7t0B0t', description: '起点专家 scholar_id / VID / 姓名，必填，最多 64 个字符，不能包含空格或 !@#￥%& 等异常字符' },
-      { name: 'expertBId', label: '专家B', type: 'string', required: '否', placeholder: '选填，专家B，如 person_CE4825106', description: '另一位专家 scholar_id / VID / 姓名，最多 64 个字符；留空则返回专家A的全部直接关系' },
-      { name: 'institution', label: '机构关键词', type: 'string', required: '否', placeholder: '选填，机构关键词，如 新加坡国立大学', description: '机构关键词，任一端命中即保留，最多 64 个字符，不能包含 !@#￥%& 等异常字符' },
-      { name: 'startTime', label: '关系建立起始时间', type: 'month', ui: 'month-calendar', required: '否', placeholder: '选填，选择年月，如 2020-01', description: '筛选条件：只保留关系建立时间不早于该年月的直接关系，不能晚于当前月份；留空表示不限时间' },
+      { name: 'dataSource', type: 'select', options: ['all'], defaultValue: 'all', required: '否', description: '数据来源，固定为 all' },
+      { name: 'expertAId', type: 'string', required: '是', placeholder: '请输入专家A，如 person_4G7t0B0t', description: '起点专家 scholar_id / VID / 姓名，必填，最多 64 个字符，不能包含空格或 !@#￥%& 等异常字符' },
+      { name: 'expertBId', type: 'string', required: '否', placeholder: '选填，专家B，如 person_CE4825106', description: '另一位专家 scholar_id / VID / 姓名，最多 64 个字符；留空则返回专家A的全部直接关系' },
+      { name: 'institution', type: 'string', required: '否', placeholder: '选填，机构关键词，如 新加坡国立大学', description: '机构关键词，任一端命中即保留，最多 64 个字符，不能包含 !@#￥%& 等异常字符' },
+      { name: 'startTime', type: 'month', ui: 'month-calendar', required: '否', placeholder: '选填，选择年月，如 2020-01', description: '筛选条件：只保留关系建立时间不早于该年月的直接关系，不能晚于当前月份；留空表示不限时间' },
+      { name: 'endTime', type: 'month', ui: 'month-calendar', required: '否', placeholder: '选填，选择年月，如 2020-12', description: '筛选条件：只保留关系建立时间不晚于该年月的直接关系，不能晚于当前月份；留空表示不限时间' },
+      { name: 'limit', type: 'number', defaultValue: '10', required: '否', placeholder: '选填，1-100，默认 10', description: '返回结果数，1-100，默认 10；超出 100 会被后端 clamp 到 100' },
     ],
     responseFields: commonResponseFields,
     requestExample: { dataSource: 'all', expertAId: '007Rb117', expertBId: '00867K10', institution: '', startTime: '', endTime: '', limit: 3 },
@@ -484,8 +489,8 @@ export const serviceModules: ServiceModule[] = [
     requestFields: [
       { name: 'industry', type: 'string', required: '否', description: '产业关键词，如 人工智能 / 集成电路，最多 64 个字符，不能包含 !@#￥%& 等异常字符' },
       { name: 'anchorId', type: 'string', required: '否', description: '核心节点 VID，用于生成扩展子图，最多 64 个字符，不能包含空格或 !@#￥%& 等异常字符' },
-      { name: 'depth', label: '展开层级', type: 'select', options: ['1', '2', '3'], required: '否', description: '从核心节点向外展开的层级（跳数），可选 1-3；层级越大子图越完整但越慢' },
-      { name: 'relationTypes', label: '关系筛选', type: 'multi-select', required: '否', description: '只保留选中的关系类型：产业链归属 / 论文合作 / 机构任职，留空表示不筛选' },
+      { name: 'depth', type: 'select', options: ['1', '2', '3'], required: '否', description: '从核心节点向外展开的层级（跳数），可选 1-3；层级越大子图越完整但越慢' },
+      { name: 'relationTypes', type: 'multi-select', required: '否', description: '只保留选中的关系类型：产业链归属 / 论文合作 / 机构任职，留空表示不筛选' },
       { name: 'topK', type: 'number', required: '否', description: '每类关键实体返回数上限（最大 20）' },
     ],
     responseFields: [

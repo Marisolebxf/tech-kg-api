@@ -3,7 +3,7 @@ import { Message } from '@arco-design/web-vue'
 import { computed, onMounted, ref, watch } from 'vue'
 
 import {
-  createCorrection, getCorrection, listCorrections, retryCorrection,
+  cancelCorrection, createCorrection, getCorrection, listCorrections, retryCorrection,
   reviewCorrection, updateCorrection, type CorrectionOperation, type CorrectionRecord,
   type CorrectionTargetType,
 } from '../../api/corrections'
@@ -66,6 +66,7 @@ function syncStatusLabel(row: CorrectionRecord) {
   return '未开始'
 }
 function canEdit(row: CorrectionRecord) { return row.status === 'PENDING_REVIEW' }
+function canCancel(row: CorrectionRecord) { return row.status === 'PENDING_REVIEW' }
 function canReview(row: CorrectionRecord) { return isReviewPage.value && row.status === 'PENDING_REVIEW' }
 function canRetry(row: CorrectionRecord) { return isReviewPage.value && row.status === 'SYNC_FAILED' }
 
@@ -207,6 +208,36 @@ async function showDetail(row: CorrectionRecord) {
   if (dataMode.value === 'example') { selected.value = row; detailVisible.value = true; return }
   try { selected.value = await getCorrection(row.id); detailVisible.value = true } catch (error) { Message.error(errorMessage(error)) }
 }
+async function cancel(row: CorrectionRecord) {
+  if (!window.confirm(`确认撤销“${row.title}”？撤销后保留操作记录，且不能继续修改。`)) return
+  try {
+    if (dataMode.value === 'example') {
+      const target = exampleRows.value.find((item) => item.id === row.id)
+      if (target) {
+        const now = new Date().toISOString()
+        target.status = 'CANCELLED'
+        target.updatedAt = now
+        target.history = [
+          ...(target.history || []),
+          {
+            id: `example-history-${Date.now()}`,
+            action: 'CANCEL',
+            actorId: String(authStore.profile?.user.id || 'current-user'),
+            actorName: authStore.displayName,
+            note: '撤销人工修正申请',
+            createdAt: now,
+          },
+        ]
+      }
+      applyExampleData()
+      Message.success('示例修正申请已撤销')
+      return
+    }
+    await cancelCorrection(row.id)
+    Message.success('人工修正申请已撤销')
+    await load()
+  } catch (error) { Message.error(errorMessage(error)) }
+}
 function openReview(row: CorrectionRecord, value: 'approve' | 'reject') { reviewing.value = row; decision.value = value; decisionNote.value = ''; reviewVisible.value = true }
 async function submitReview() {
   if (!reviewing.value) return
@@ -271,7 +302,7 @@ onMounted(() => { void load() })
     </section>
     <section class="table-panel">
       <div class="table-scroll"><table><colgroup><col class="col-content"><col class="col-target"><col class="col-operation"><col class="col-applicant"><col class="col-status"><col class="col-sync"><col class="col-time"><col class="col-actions"></colgroup><thead><tr><th>修正内容</th><th>对象</th><th>申请人对图谱的操作</th><th>申请人</th><th>状态</th><th>同步状态</th><th>更新时间</th><th><span class="action-column-label">操作</span></th></tr></thead><tbody>
-        <tr v-for="row in rows" :key="row.id"><td><span class="record-title">{{ row.title }}</span></td><td class="target-cell">{{ targetLabels[row.targetType] }}</td><td class="operation-cell">{{ operationLabels[row.operation] }}</td><td>{{ row.submitterName }}</td><td class="status-cell"><span class="status" :class="`is-${row.status.toLowerCase()}`">{{ statusLabels[row.status] || row.status }}</span></td><td class="sync-cell"><span class="status" :class="`is-${row.status.toLowerCase()}`">{{ syncStatusLabel(row) }}</span></td><td class="time-cell">{{ row.updatedAt?.replace('T', ' ').slice(0, 16) }}</td><td class="action-cell"><div v-if="isAdmin" class="actions"><template v-if="isReviewPage"><button title="查看申请说明、修正前后数据和操作轨迹" @click="showDetail(row)">详情</button><button :disabled="!canReview(row)" title="审核通过后进入自动同步流程" @click="openReview(row, 'approve')">通过</button><button :disabled="!canReview(row)" title="驳回后不再同步本次修正" @click="openReview(row, 'reject')">驳回</button><button :disabled="!canRetry(row)" title="仅同步失败记录可以重新同步" @click="retry(row)">重试</button></template><template v-else><button title="查看申请说明、修正前后数据和操作轨迹" @click="showDetail(row)">详情</button><button :disabled="!canEdit(row)" title="仅待审核申请可以修改" @click="openEdit(row)">修改</button></template></div><div v-else class="actions user-actions"><button title="查看申请说明、修正前后数据和操作轨迹" @click="showDetail(row)">详情</button><button :disabled="!canEdit(row)" title="仅待审核申请可以修改" @click="openEdit(row)">修改</button></div></td></tr>
+        <tr v-for="row in rows" :key="row.id"><td><span class="record-title">{{ row.title }}</span></td><td class="target-cell">{{ targetLabels[row.targetType] }}</td><td class="operation-cell">{{ operationLabels[row.operation] }}</td><td>{{ row.submitterName }}</td><td class="status-cell"><span class="status" :class="`is-${row.status.toLowerCase()}`">{{ statusLabels[row.status] || row.status }}</span></td><td class="sync-cell"><span class="status" :class="`is-${row.status.toLowerCase()}`">{{ syncStatusLabel(row) }}</span></td><td class="time-cell">{{ row.updatedAt?.replace('T', ' ').slice(0, 16) }}</td><td class="action-cell"><div v-if="isAdmin" class="actions"><template v-if="isReviewPage"><button title="查看申请说明、修正前后数据和操作轨迹" @click="showDetail(row)">详情</button><button :disabled="!canReview(row)" title="审核通过后进入自动同步流程" @click="openReview(row, 'approve')">通过</button><button :disabled="!canReview(row)" title="驳回后不再同步本次修正" @click="openReview(row, 'reject')">驳回</button><button :disabled="!canRetry(row)" title="仅同步失败记录可以重新同步" @click="retry(row)">重试</button></template><template v-else><button title="查看申请说明、修正前后数据和操作轨迹" @click="showDetail(row)">详情</button><button :disabled="!canEdit(row)" title="仅待审核申请可以修改" @click="openEdit(row)">修改</button><button :disabled="!canCancel(row)" title="撤销后保留操作记录且不能继续修改" @click="cancel(row)">撤销</button></template></div><div v-else class="actions user-actions"><button title="查看申请说明、修正前后数据和操作轨迹" @click="showDetail(row)">详情</button><button :disabled="!canEdit(row)" title="仅待审核申请可以修改" @click="openEdit(row)">修改</button><button :disabled="!canCancel(row)" title="撤销后保留操作记录且不能继续修改" @click="cancel(row)">撤销</button></div></td></tr>
         <tr v-if="!rows.length"><td colspan="8" class="empty">{{ loading ? '正在加载…' : '暂无修正记录' }}</td></tr>
       </tbody></table></div>
       <footer v-if="dataMode === 'live' && total > pageSize" class="table-pagination"><a-pagination :current="page" :page-size="pageSize" :total="total" @change="changePage" /></footer>
@@ -296,7 +327,7 @@ onMounted(() => { void load() })
     <a-modal v-model:visible="detailVisible" :footer="false" :width="720" title="修正记录详情">
       <div class="correction-dialog-shell">
         <div class="correction-dialog-body">
-          <div v-if="selected" class="detail-content"><h3>{{ selected.title }}</h3><p class="flow-note">{{ detailFlowNote }}</p><dl><dt>对象</dt><dd>{{ targetLabels[selected.targetType] }} / {{ selected.targetId }}</dd><dt>操作类型</dt><dd>{{ operationLabels[selected.operation] }}<span v-if="selected.operation === 'delete'">（软删除）</span></dd><dt>当前状态</dt><dd>{{ statusLabels[selected.status] || selected.status }}</dd><dt>修正说明</dt><dd>{{ selected.reason }}</dd><dt>修正前</dt><dd><pre>{{ pretty(selected.beforeData) }}</pre></dd><dt>修正后</dt><dd><pre>{{ pretty(selected.afterData) }}</pre></dd><dt>同步状态</dt><dd>{{ syncStatusLabel(selected) }}</dd><template v-if="selected.sync?.lastError"><dt>同步说明</dt><dd>{{ selected.sync.lastError }}</dd></template></dl><button v-if="selected.status === 'SYNC_FAILED' && isReviewPage" class="detail-retry" type="button" @click="retry(selected)">重新同步</button><h4>操作说明</h4><ul class="operation-help"><template v-if="isReviewPage"><li><strong>详情</strong>查看完整申请和处理轨迹</li><li><strong>通过</strong>批准申请并进入自动同步</li><li><strong>驳回</strong>拒绝申请且不执行同步</li><li><strong>重试</strong>重新处理同步失败记录</li></template><template v-else-if="isAdmin"><li><strong>详情</strong>查看完整申请和处理轨迹</li><li><strong>修改</strong>修改尚未审核的申请</li></template><template v-else><li><strong>详情</strong>查看完整申请和处理轨迹</li><li><strong>修改</strong>修改尚未审核的申请</li></template></ul><h4>操作轨迹</h4><ol><li v-for="item in selected.history" :key="item.id"><strong>{{ item.actorName }}</strong><span>{{ item.action }} · {{ item.createdAt?.replace('T', ' ').slice(0, 19) }}</span><p>{{ item.note }}</p></li></ol></div>
+          <div v-if="selected" class="detail-content"><h3>{{ selected.title }}</h3><p class="flow-note">{{ detailFlowNote }}</p><dl><dt>对象</dt><dd>{{ targetLabels[selected.targetType] }} / {{ selected.targetId }}</dd><dt>操作类型</dt><dd>{{ operationLabels[selected.operation] }}<span v-if="selected.operation === 'delete'">（软删除）</span></dd><dt>当前状态</dt><dd>{{ statusLabels[selected.status] || selected.status }}</dd><dt>修正说明</dt><dd>{{ selected.reason }}</dd><dt>修正前</dt><dd><pre>{{ pretty(selected.beforeData) }}</pre></dd><dt>修正后</dt><dd><pre>{{ pretty(selected.afterData) }}</pre></dd><dt>同步状态</dt><dd>{{ syncStatusLabel(selected) }}</dd><template v-if="selected.sync?.lastError"><dt>同步说明</dt><dd>{{ selected.sync.lastError }}</dd></template></dl><button v-if="selected.status === 'SYNC_FAILED' && isReviewPage" class="detail-retry" type="button" @click="retry(selected)">重新同步</button><h4>操作说明</h4><ul class="operation-help"><template v-if="isReviewPage"><li><strong>详情</strong>查看完整申请和处理轨迹</li><li><strong>通过</strong>批准申请并进入自动同步</li><li><strong>驳回</strong>拒绝申请且不执行同步</li><li><strong>重试</strong>重新处理同步失败记录</li></template><template v-else><li><strong>详情</strong>查看完整申请和处理轨迹</li><li><strong>修改</strong>修改尚未审核的申请</li><li><strong>撤销</strong>撤销待审核申请并保留记录</li></template></ul><h4>操作轨迹</h4><ol><li v-for="item in selected.history" :key="item.id"><strong>{{ item.actorName }}</strong><span>{{ item.action }} · {{ item.createdAt?.replace('T', ' ').slice(0, 19) }}</span><p>{{ item.note }}</p></li></ol></div>
         </div>
       </div>
     </a-modal>

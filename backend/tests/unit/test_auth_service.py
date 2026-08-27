@@ -90,6 +90,18 @@ class BrokenJsonStore(MemoryJsonStore):
         raise OSError("store unavailable")
 
 
+class ManualClockStore(MemoryJsonStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.now = 0.0
+
+    def _now(self) -> float:
+        return self.now
+
+    def advance(self, seconds: int) -> None:
+        self.now += seconds
+
+
 def _service() -> tuple[AuthService, FakeUserCenter]:
     settings = replace(
         AuthSettings.from_env(),
@@ -198,6 +210,31 @@ async def test_refresh_and_logout_rotate_then_remove_session() -> None:
     assert refreshed.access_token == "refreshed-token"
     assert revoked is True
     assert user_center.logout_count == 1
+    with pytest.raises(AuthenticationError, match="登录已过期"):
+        await service.get_session(context.session_id or "")
+
+
+async def test_session_uses_thirty_minute_sliding_idle_timeout() -> None:
+    settings = replace(
+        AuthSettings.from_env(),
+        enabled=True,
+        client_id="techkg",
+        client_secret="secret",
+        session_backend="memory",
+        session_ttl_seconds=30 * 60,
+    )
+    store = ManualClockStore()
+    service = AuthService(settings, store, FakeUserCenter(settings))
+    login_url, _, _ = await service.create_login_url("/overview")
+    state = parse_qs(urlparse(login_url).query)["state"][0]
+    context, _ = await service.complete_login("valid-code", state)
+
+    store.advance(30 * 60 - 1)
+    await service.get_session(context.session_id or "")
+    store.advance(30 * 60 - 1)
+    await service.get_session(context.session_id or "")
+    store.advance(30 * 60 + 1)
+
     with pytest.raises(AuthenticationError, match="登录已过期"):
         await service.get_session(context.session_id or "")
 

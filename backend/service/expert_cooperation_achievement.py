@@ -708,7 +708,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
 
         rules = [
             {
-                "name": "成果关联规则",
+                "name": "成果关联与归因算法",
                 "type": "成果抽取规则",
                 "target": "AUTHORED_BY / INVENTED_BY / LEADS / HAS_PARTICIPANT",
                 "trigger": "输入两个专家节点",
@@ -871,7 +871,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             "summaryRows": summary_rows,
             "resultRows": result_rows,
             "evidence": evidence,
-            "rules": rules,
+            "rules": rules[:1],
             "entities": entities,
             "relations": relations,
             "graph": {"nodes": nodes, "edges": edges},

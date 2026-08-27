@@ -6,10 +6,12 @@ WORKDIR /app
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG VITE_BASE=./
 ARG VITE_API_BASE=/api
+ARG VITE_AUTH_ENABLED=false
 ENV npm_config_registry=${NPM_REGISTRY} \
     COREPACK_NPM_REGISTRY=${NPM_REGISTRY} \
     VITE_BASE=${VITE_BASE} \
-    VITE_API_BASE=${VITE_API_BASE}
+    VITE_API_BASE=${VITE_API_BASE} \
+    VITE_AUTH_ENABLED=${VITE_AUTH_ENABLED}
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 

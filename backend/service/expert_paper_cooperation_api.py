@@ -141,7 +141,7 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
         payload = {
             "structuredResult": result,
             "provenance": provenance,
-            "rules": _build_rules(result),
+            "rules": _build_rules(result)[:1],
         }
         with _result_cache_lock:
             _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, payload)
@@ -557,7 +557,7 @@ def _build_rules(result: dict[str, Any]) -> list[dict[str, Any]]:
     audit = "代码未配置人工审核流；查询异常或未命中时按接口实际状态返回，缺失字段不补造。"
     return [
         {
-            "name": "共同署名论文查询规则",
+            "name": "作者关联与合作频次算法",
             "type": "图路径查询规则",
             "target": "两位专家、AUTHORED/AUTHORED_BY 作者边和 Paper 节点",
             "trigger": "expertAId 与 expertBId 均可定位且不是同一专家",

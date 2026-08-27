@@ -351,7 +351,7 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             "limit": limit,
             "summary": self._summary(expert, colleagues, len(skipped_missing_period)),
             "graph": self._build_graph(expert, colleagues),
-            "rules": self._rules(colleagues),
+            "rules": self._rules(colleagues)[:1],
             "apiCalls": list(gateway.api_calls),
         }
 
@@ -495,17 +495,33 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
 
     def _rules(self, colleagues: list[dict[str, Any]]) -> list[dict[str, Any]]:
         achievement_hits = sum(1 for item in colleagues if item.get("achievements"))
+        team_hits = sum(
+            1
+            for item in colleagues
+            if item.get("commonDepartment") or item.get("commonTeamOrProject")
+        )
         return [
             {
-                "name": "同事关系判定规则",
+                "name": "任职时间匹配与团队归属算法",
                 "type": "关系匹配规则",
                 "target": "两位专家及其 AFFILIATED_WITH 任职边",
                 "trigger": "两位专家均可唯一定位",
-                "logic": "匹配共同机构或一跳机构层级，比较部门/团队，并计算 work_experience_date 交集；填写时间筛选时再与 start_time/end_time 求交集。",
-                "output": "同事关系、生效时段、重叠月份、重叠年限、关系置信度",
+                "logic": "将 work_experience_date/employment_period/tenure_period 解析为月份序号区间（年×12+月），求专家任职期、候选人任职期与请求时间三者交集；含“至今/present/current/now”时终点取当前年月，单点日期覆盖到该年12月，起止颠倒自动交换。",
+                "output": "同事关系生效时段、重叠月份、重叠年限",
                 "threshold": "任职时间存在至少 1 个月交集",
-                "audit": "任一任职边缺少时间或来源冲突时不生成同事关系，计入待复核",
+                "audit": "任一任职边缺少时间字段时不生成同事关系，计入待复核",
                 "appliedCount": len(colleagues),
+            },
+            {
+                "name": "团队归属规则",
+                "type": "关系匹配规则",
+                "target": "AFFILIATED_WITH 任职边、机构层级边、部门/团队字段与节点",
+                "trigger": "任职时间交集成立后",
+                "logic": "匹配共同任职机构或一跳机构层级（SUBSIDIARY_OF/PARENT_OF/PART_OF/BELONGS_TO），归一化比较部门/团队字段（work_experience_department_zh/department/team_name），并匹配 Team/Laboratory/Department/Project 共同节点，标注所属团队/项目组；同机构、同部门、共享团队分别计入置信度加权（0.42/0.12/0.05）。",
+                "output": "共同机构、所属部门/团队、协作场景",
+                "threshold": "共同机构为同事必要前提；部门/团队匹配用于置信度加权，非强制",
+                "audit": "任职来源冲突时不生成同事关系，计入待复核",
+                "appliedCount": team_hits,
             },
             {
                 "name": "同事成果关联规则",

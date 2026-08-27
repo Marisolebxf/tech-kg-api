@@ -2633,13 +2633,17 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         startMonth,
         endMonth,
       );
+      const limitPerTypeRaw = optionalParam(parameterValues.value.limitPerType);
+      const limitPerType = limitPerTypeRaw
+        ? Math.min(50, Math.max(1, Number(limitPerTypeRaw) || 20))
+        : 20;
       const body = {
         sourceExpertId,
         targetExpertId,
         achievementTypes,
         timeRangeStart,
         timeRangeEnd,
-        limitPerType: 20,
+        limitPerType,
       };
       const resp = (await queryExpertCooperationAchievement(
         body,

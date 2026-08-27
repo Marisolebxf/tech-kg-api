@@ -171,9 +171,10 @@ export const serviceModules: ServiceModule[] = [
     requestFields: [
       { name: 'sourceExpertId', type: 'string', required: '是', description: '请输入第一个专家，如 person_expert_e2e_v1_001' },
       { name: 'targetExpertId', type: 'string', required: '是', description: '请输入第二个专家，如 person_expert_e2e_v1_002' },
-      { name: 'achievementTypes', type: 'string', required: '否', description: '成果类型，逗号分隔：paper,patent,project' },
-      { name: 'timeRangeStart', type: 'month', required: '否', description: '成果开始月份' },
-      { name: 'timeRangeEnd', type: 'month', required: '否', description: '成果结束月份' },
+      { name: 'achievementTypes', type: 'multi-select', required: '否', description: '成果类型多选：paper（论文）/ patent（专利）/ project（项目），留空返回全部' },
+      { name: 'timeRangeStart', type: 'month', required: '否', description: '成果开始月份 YYYY-MM，留空不限' },
+      { name: 'timeRangeEnd', type: 'month', required: '否', description: '成果结束月份 YYYY-MM，留空不限' },
+      { name: 'limitPerType', type: 'number', defaultValue: '20', required: '否', placeholder: '选填，1-50，默认 20', description: '每类成果返回数上限，1-50，默认 20' },
     ],
     responseFields: commonResponseFields,
     requestExample: {
@@ -272,6 +273,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'targetExpertId', type: 'string', required: '否', description: '请输入目标专家，如 person_expert_e2e_v1_004' },
       { name: 'school', type: 'string', required: '否', description: '请输入院校，如清华大学' },
       { name: 'educationStage', type: 'string', required: '否', description: '请输入教育阶段，如博士' },
+      { name: 'limit', type: 'number', defaultValue: '20', required: '否', placeholder: '选填，1-50，默认 20', description: '返回校友关系数上限，1-50，默认 20' },
     ],
     responseFields: commonResponseFields,
     requestExample: {
@@ -323,8 +325,8 @@ export const serviceModules: ServiceModule[] = [
     requestFields: [
       { name: 'expertAId', type: 'string', required: '是', maxLength: 64, description: '专家 A 唯一标识，最多 64 个字符' },
       { name: 'expertBId', type: 'string', required: '是', maxLength: 64, description: '专家 B 唯一标识，最多 64 个字符' },
-      { name: 'startTime', type: 'month', required: '否', description: '开始月份 YYYY-MM' },
-      { name: 'endTime', type: 'month', required: '否', description: '结束月份 YYYY-MM' },
+      { name: 'startTime', type: 'date', required: '否', placeholder: '选填，格式 YYYY-MM-DD，如 2021-01-01', description: '统计开始时间，格式 YYYY-MM-DD，不能晚于当前日期' },
+      { name: 'endTime', type: 'date', required: '否', placeholder: '选填，格式 YYYY-MM-DD，如 2026-08-31', description: '统计结束时间，格式 YYYY-MM-DD，不能晚于当前日期' },
     ],
     responseFields: commonResponseFields,
     requestExample: { expertAId: 'person_121d48631f434f4d323ba521d33032ad', expertBId: 'person_42914016fe8d6e0e1d01dad5845c47e6', startTime: '2021-01-01', endTime: '2026-08-31' },
@@ -489,10 +491,12 @@ export const serviceModules: ServiceModule[] = [
     requestFields: [
       { name: 'industry', type: 'string', required: '否', description: '产业关键词，如 人工智能 / 集成电路，最多 64 个字符，不能包含 !@#￥%& 等异常字符' },
       { name: 'anchorId', type: 'string', required: '否', description: '核心节点 VID，用于生成扩展子图，最多 64 个字符，不能包含空格或 !@#￥%& 等异常字符' },
-      { name: 'depth', type: 'select', options: ['1', '2', '3'], required: '否', description: '从核心节点向外展开的层级（跳数），可选 1-3；层级越大子图越完整但越慢' },
+      { name: 'depth', type: 'select', options: ['1', '2', '3'], defaultValue: '2', required: '否', description: '从核心节点向外展开的层级（跳数），可选 1-3，默认 2；层级越大子图越完整但越慢' },
       { name: 'relationTypes', type: 'multi-select', required: '否', description: '只保留选中的关系类型：产业链归属 / 论文合作 / 机构任职，留空表示不筛选' },
-      { name: 'topK', type: 'number', required: '否', description: '每类关键实体返回数上限（最大 20）' },
+      { name: 'topK', type: 'number', defaultValue: '5', required: '否', placeholder: '选填，1-20，默认 5', description: '每类关键实体返回数上限，1-20，默认 5' },
     ],
+    // 后端还接受 dataSource（固定 "all"，前端自动填充）和 refresh（bool，由「刷新图谱」按钮触发），
+    // 二者均非用户输入项，故不在 requestFields 表单中展示。
     responseFields: [
       { name: 'taskName', type: 'string', description: '服务名称' },
       { name: 'input', type: 'object', description: '回填的查询入参' },

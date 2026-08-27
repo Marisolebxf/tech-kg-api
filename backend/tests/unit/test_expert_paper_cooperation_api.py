@@ -129,7 +129,7 @@ def test_rules_describe_the_actual_paper_cooperation_algorithm():
     )
 
     assert [rule["name"] for rule in rules] == [
-        "共同署名论文查询规则",
+        "作者关联与合作频次算法",
         "论文指标与合作成员统计规则",
         "学术影响力与共同贡献计算规则",
     ]

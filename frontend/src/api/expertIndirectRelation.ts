@@ -48,6 +48,7 @@ export interface IndirectRelationPath {
 export interface ExpertIndirectRelationResult {
   coreNode: IndirectNode
   pathDepth: number
+  defaultPathDepth: number
   minStrength: number
   directNodeCount: number
   indirectNodeCount: number

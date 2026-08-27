@@ -54,7 +54,7 @@ COAUTHOR_EDGE = "COAUTHOR_WITH"
 # 与前端结果详情「规则」Tab 字段对齐（name/type/target/trigger/logic/output/threshold/audit）
 ALUMNI_RULES: list[dict[str, str]] = [
     {
-        "name": "教育经历匹配规则",
+        "name": "教育经历匹配算法",
         "type": "关系匹配规则",
         "target": "education_background_institution_*/degree_*/date",
         "trigger": "专家存在教育院校属性",
@@ -627,7 +627,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             "summaryRows": summary_rows,
             "resultRows": result_rows,
             "evidence": evidence,
-            "rules": ALUMNI_RULES,
+            "rules": ALUMNI_RULES[:1],
             "entities": entities,
             "relations": relations,
             "graph": graph,

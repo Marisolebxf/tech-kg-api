@@ -179,7 +179,7 @@ class ExpertIndirectRelationApiService(KGModuleScaffoldService):
         payload = {
             "structuredResult": result,
             "provenance": _build_provenance(result),
-            "rules": _build_rules(result),
+            "rules": _build_rules(result)[:1],
         }
         with _result_cache_lock:
             _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, payload)
@@ -476,6 +476,7 @@ def _build_result(
     return {
         "coreNode": _node_brief(core_node),
         "pathDepth": body.path_depth,
+        "defaultPathDepth": 2,
         "minStrength": body.min_strength,
         "directNodeCount": len(direct_ids),
         "indirectNodeCount": len(indirect_nodes),
@@ -497,7 +498,7 @@ def _build_rules(result: dict[str, Any]) -> list[dict[str, Any]]:
     audit = "代码未配置人工审核流；查询异常或未命中时按接口实际状态返回，不补造关系。"
     return [
         {
-            "name": "间接路径发现规则",
+            "name": "路径分析与关系传递算法",
             "type": "路径查询规则",
             "target": "核心 Person 节点及深度范围内的真实节点和关系边",
             "trigger": f"核心节点可定位，path_depth={path_depth}",

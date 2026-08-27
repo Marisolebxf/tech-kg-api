@@ -92,6 +92,10 @@ class IndirectRelationPath(BaseModel):
 class StructuredIndirectRelationResult(BaseModel):
     coreNode: IndirectNode
     pathDepth: int
+    defaultPathDepth: int = Field(
+        default=2,
+        description="系统默认路径深度；请求未填写 path_depth 时采用 2 跳。",
+    )
     minStrength: float
     directNodeCount: int
     indirectNodeCount: int

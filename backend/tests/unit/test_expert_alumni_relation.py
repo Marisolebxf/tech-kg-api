@@ -93,7 +93,7 @@ def test_pair_same_school_and_degree():
     assert alumni_evidence["technicalTable"] == "-"
     assert alumni_evidence["sourceField"] == "-"
     assert alumni_evidence["graphVid"] == "S2"
-    assert resp["rules"][0]["name"] == "教育经历匹配规则"
+    assert resp["rules"][0]["name"] == "教育经历匹配算法"
     assert "同校" in resp["dimensionsCatalog"]
 
 

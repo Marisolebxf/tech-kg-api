@@ -37,9 +37,15 @@ const appStore = useAppStore();
 const authStore = useAuthStore();
 const currentUser = computed(() => authStore.profile?.user);
 const userAvatar = computed(() => currentUser.value?.avatar || figmaUserAvatar);
-const userDisplayName = computed(() => authStore.displayName);
-const userRoleName = computed(() => authStore.primaryRole);
-const userBadge = computed(() => (authStore.isAdmin ? "全局管理" : "业务用户"));
+const userRoleName = computed(() =>
+  authStore.isAdmin ? "管理员" : "普通用户",
+);
+const userDisplayName = computed(() =>
+  currentUser.value?.nickname || currentUser.value?.username || userRoleName.value,
+);
+const userRoleDescription = computed(() =>
+  authStore.isAdmin ? "系统管理与审核权限" : "知识图谱业务服务",
+);
 const isAdminArea = computed(() => route.path.startsWith("/admin"));
 const pageTitle = computed(() => String(route.meta.title ?? "亿级知识图谱"));
 const routeError = ref("");
@@ -56,6 +62,7 @@ const mobileNavOpen = ref(false);
 const sidebarCollapsed = computed(() => appStore.collapsed && !isMobile.value);
 const assistantPosition = ref({ x: 0, y: 0 });
 const assistantViewport = ref({ width: 1440, height: 900 });
+const businessServiceTitle = "科技专家/人才知识推理构建服务";
 // 问答小助手（已隐藏）
 // const assistantDragging = ref(false)
 // const assistantDragMoved = ref(false)
@@ -138,12 +145,12 @@ const breadcrumbItems = computed(() => {
   if (route.query.breadcrumb === "business-service")
     return [
       { label: "页面总览", to: "/overview" },
-      { label: "业务服务" },
+      { label: businessServiceTitle },
     ];
   if (currentServiceNavItem.value)
     return [
       { label: "页面总览", to: "/overview" },
-      { label: "业务服务", to: "/business-service" },
+      { label: businessServiceTitle, to: "/business-service" },
       { label: currentServiceNavItem.value.fullLabel },
     ];
   return [{ label: pageTitle.value }];
@@ -154,17 +161,22 @@ function navIconStyle(icon: string) {
 }
 
 function refreshSubNavOverflow() {
-  const wraps = document.querySelectorAll<HTMLElement>(".app-nav__sub-wrap");
+  const wraps = document.querySelectorAll<HTMLElement>(".app-nav__marquee");
   wraps.forEach((wrap) => {
-    const label = wrap.querySelector<HTMLElement>(".app-nav__sub-label");
+    const label = wrap.querySelector<HTMLElement>(".app-nav__marquee-label");
     if (!label) return;
-    const overflow = label.scrollWidth - wrap.clientWidth;
+    const overflow = Math.ceil(label.scrollWidth - wrap.clientWidth);
     if (overflow > 1) {
+      const pixelsPerSecond = 24;
+      const movingPart = 0.8;
+      const duration = overflow / (pixelsPerSecond * movingPart);
       wrap.classList.add("is-overflowing");
-      wrap.style.setProperty("--sub-scroll-distance", `-${overflow}px`);
+      wrap.style.setProperty("--sub-scroll-distance", `-${overflow + 1}px`);
+      wrap.style.setProperty("--marquee-duration", `${duration.toFixed(2)}s`);
     } else {
       wrap.classList.remove("is-overflowing");
       wrap.style.removeProperty("--sub-scroll-distance");
+      wrap.style.removeProperty("--marquee-duration");
     }
   });
 }
@@ -203,11 +215,9 @@ function openAlertDrawer() {
 
 function toggleUserMenu() {
   alertPreviewOpen.value = false;
-  userMenuOpen.value = !userMenuOpen.value;
-}
-
-async function switchPortal() {
-  await router.push(isAdminArea.value ? "/overview" : "/admin/reviews");
+  const willOpen = !userMenuOpen.value;
+  if (willOpen) accountFeedback.value = "";
+  userMenuOpen.value = willOpen;
 }
 
 async function handleAccountAction(
@@ -300,6 +310,7 @@ function handleViewportResize() {
     height: window.innerHeight,
   };
   assistantPosition.value = clampAssistantPosition(assistantPosition.value);
+  void nextTick(refreshSubNavOverflow);
 }
 
 function handleVisibilityChange() {
@@ -365,6 +376,7 @@ onMounted(() => {
   document.addEventListener("pointerdown", handleDocumentPointerDown);
   window.requestAnimationFrame(handleViewportResize);
   void nextTick(refreshSubNavOverflow);
+  void document.fonts.ready.then(refreshSubNavOverflow);
 });
 
 onBeforeUnmount(() => {
@@ -514,7 +526,7 @@ onBeforeUnmount(() => {
                   'app-nav__item--context': isBusinessServiceRoute,
                 }"
                 type="button"
-                :title="sidebarCollapsed ? '业务服务' : undefined"
+                :title="sidebarCollapsed ? businessServiceTitle : undefined"
                 :aria-expanded="
                   sidebarCollapsed ? undefined : !serviceNavCollapsed
                 "
@@ -525,7 +537,7 @@ onBeforeUnmount(() => {
                   :style="navIconStyle(navServices)"
                   aria-hidden="true"
                 ></span>
-                <span v-if="!sidebarCollapsed">业务服务</span>
+                <span v-if="!sidebarCollapsed" class="app-nav__service-title app-nav__marquee"><span class="app-nav__service-title-label app-nav__marquee-label">{{ businessServiceTitle }}</span></span>
                 <svg
                   v-if="!sidebarCollapsed"
                   class="app-nav__arrow"
@@ -544,8 +556,8 @@ onBeforeUnmount(() => {
                   :to="item.to"
                   :title="item.fullLabel"
                 >
-                  <span class="app-nav__sub-wrap"
-                    ><span class="app-nav__sub-label">{{
+                  <span class="app-nav__sub-wrap app-nav__marquee"
+                    ><span class="app-nav__sub-label app-nav__marquee-label">{{
                       item.label
                     }}</span></span
                   >
@@ -554,9 +566,9 @@ onBeforeUnmount(() => {
               <aside
                 v-if="sidebarCollapsed"
                 class="app-nav__flyout"
-                aria-label="业务服务子功能"
+                :aria-label="`${businessServiceTitle}子功能`"
               >
-                <strong>业务服务</strong>
+                <strong>{{ businessServiceTitle }}</strong>
                 <RouterLink
                   v-for="item in serviceNavItems"
                   :key="`flyout-${item.to}`"
@@ -590,14 +602,6 @@ onBeforeUnmount(() => {
             <span v-if="isMobile">目录</span>
           </button>
           <div class="app-top-actions__right">
-            <button
-              v-if="authStore.isAdmin"
-              class="app-portal-switch"
-              type="button"
-              @click="switchPortal"
-            >
-              {{ isAdminArea ? "返回用户端" : "进入管理端" }}
-            </button>
             <div
               class="app-alert-entry"
               @mouseenter="alertPreviewOpen = !alertDrawerOpen"
@@ -639,9 +643,7 @@ onBeforeUnmount(() => {
                 @click="toggleUserMenu"
               >
                 <img :src="userAvatar" alt="" aria-hidden="true" />
-                <span
-                  ><strong>{{ userDisplayName }}</strong></span
-                >
+                <span><strong>{{ userRoleName }}</strong></span>
                 <svg viewBox="0 0 20 20" aria-hidden="true">
                   <path d="m6 8 4 4 4-4" />
                 </svg>
@@ -651,9 +653,9 @@ onBeforeUnmount(() => {
                   <img :src="userAvatar" alt="" />
                   <div>
                     <strong>{{ userDisplayName }}</strong
-                    ><span>{{ userRoleName }}</span>
+                    ><span>{{ userRoleDescription }}</span>
                   </div>
-                  <b>{{ userBadge }}</b>
+                  <b :class="{ 'is-admin': authStore.isAdmin }">{{ userRoleName }}</b>
                 </header>
                 <nav>
                   <button
@@ -661,7 +663,7 @@ onBeforeUnmount(() => {
                     type="button"
                     @click="handleAccountAction('个人中心')"
                   >
-                    <IconUser /><span>个人中心</span>
+                    <IconUser /><span>账号信息</span>
                   </button>
                   <button
                     :class="{ active: route.path === '/account-security' }"
@@ -798,6 +800,7 @@ onBeforeUnmount(() => {
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
+  scrollbar-gutter: auto;
   background: var(--gkx-bg-page);
 }
 
@@ -809,6 +812,7 @@ onBeforeUnmount(() => {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  scrollbar-gutter: auto;
   background: var(--gkx-bg-page);
   transition: grid-template-columns 0.2s ease;
 }
@@ -828,7 +832,6 @@ onBeforeUnmount(() => {
   padding: 0 16px 16px;
   overflow: visible;
   color: var(--text-primary);
-  border-right: 0;
   background: var(--gkx-bg-page);
   box-shadow: none;
 }
@@ -902,13 +905,11 @@ onBeforeUnmount(() => {
   padding: 0 4px 14px 0;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(84, 139, 220, 0.42) transparent;
+  scrollbar-width: none;
 }
 
 .app-nav::-webkit-scrollbar {
-  display: block;
-  width: 6px;
+  display: none;
 }
 
 .app-nav::-webkit-scrollbar-track {
@@ -1123,6 +1124,7 @@ onBeforeUnmount(() => {
 
 .app-nav__sub-label {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   height: 100%;
   line-height: 22px;
@@ -1130,31 +1132,36 @@ onBeforeUnmount(() => {
   will-change: transform;
 }
 
-.app-nav__sub-wrap.is-overflowing:hover .app-nav__sub-label {
-  animation: app-nav-sub-scroll 5s ease-in-out infinite alternate;
+.app-nav__service-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
-.app-nav__sub-wrap.is-overflowing .app-nav__sub-label {
-  cursor: pointer;
+.app-nav__service-title-label {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 100%;
+  white-space: nowrap;
+  will-change: transform;
 }
 
-@keyframes app-nav-sub-scroll {
-  0% {
-    transform: translateX(0);
-  }
-  10% {
-    transform: translateX(0);
-  }
-  90% {
-    transform: translateX(var(--sub-scroll-distance, 0));
-  }
-  100% {
-    transform: translateX(var(--sub-scroll-distance, 0));
-  }
+.app-nav__marquee.is-overflowing:hover .app-nav__marquee-label,
+.app-nav__item:focus-visible .app-nav__marquee.is-overflowing .app-nav__marquee-label {
+  animation: app-nav-marquee var(--marquee-duration, 5s) linear infinite alternate;
+}
+
+@keyframes app-nav-marquee {
+  0%, 10% { transform: translateX(0); }
+  90%, 100% { transform: translateX(var(--sub-scroll-distance, 0)); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .app-nav__sub-wrap.is-overflowing:hover .app-nav__sub-label {
+  .app-nav__marquee.is-overflowing:hover .app-nav__marquee-label,
+  .app-nav__item:focus-visible .app-nav__marquee.is-overflowing .app-nav__marquee-label {
     animation: none;
   }
 }
@@ -1242,8 +1249,9 @@ onBeforeUnmount(() => {
   min-width: 0;
   min-height: 0;
   height: 100%;
-  padding: 0 16px 16px 0;
+  padding: 0 0 var(--space-16) 0;
   overflow: hidden;
+  scrollbar-gutter: auto;
 }
 
 .app-top-actions {
@@ -1400,6 +1408,10 @@ onBeforeUnmount(() => {
   font-size: 9px;
   font-weight: 500;
 }
+.app-user-menu > header b.is-admin {
+  background: #fbe2bd;
+  color: #8a5317;
+}
 .app-user-menu > p {
   margin: 0;
   padding: 10px 14px;
@@ -1458,6 +1470,7 @@ onBeforeUnmount(() => {
 .app-user-menu nav button.active > svg {
   color: #165dff;
 }
+
 .app-user-menu > footer {
   padding: 9px 13px;
   border-top: 1px solid #e4ecf6;
@@ -1472,19 +1485,6 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 10px;
   margin-left: auto;
-}
-.app-portal-switch {
-  height: 32px;
-  padding: 0 13px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: #165dff;
-  font-size: 12px;
-  cursor: pointer;
-}
-.app-portal-switch:hover {
-  background: rgba(255, 255, 255, 0.56);
 }
 .app-alert-entry {
   position: relative;
@@ -2097,17 +2097,31 @@ onBeforeUnmount(() => {
 }
 
 .app-stage {
+  position: relative;
   display: grid;
+  margin-right: var(--space-16);
   grid-template-rows: 22px minmax(0, 1fr);
   gap: 16px;
   height: calc(100% - var(--header-height));
-  padding: 16px;
+  padding: 16px 15px 16px 16px;
   border: 1px solid #fff;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.48);
   backdrop-filter: blur(8px);
   box-shadow: none;
   overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+
+.app-stage::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border: 1px solid #fff;
+  border-radius: inherit;
+  pointer-events: none;
 }
 
 .app-breadcrumb {
@@ -2159,23 +2173,14 @@ onBeforeUnmount(() => {
   overflow: auto;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.8);
-  scrollbar-width: thin;
-  scrollbar-color: rgba(84, 139, 220, 0.42) transparent;
+  scrollbar-width: none;
 }
 
 .app-workspace::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  display: none;
 }
 
-.app-workspace::-webkit-scrollbar-track {
-  background: transparent;
-}
 
-.app-workspace::-webkit-scrollbar-thumb {
-  border-radius: 3px;
-  background: rgba(84, 139, 220, 0.42);
-}
 
 .route-error {
   display: grid;
@@ -2298,16 +2303,10 @@ onBeforeUnmount(() => {
     gap: 4px;
   }
 
-  .app-portal-switch {
-    max-width: 96px;
-    padding-inline: 8px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
 
   .app-stage {
     grid-template-rows: auto minmax(0, 1fr);
+    margin-right: 0;
     gap: 8px;
     height: calc(100% - 52px);
     padding: 8px;

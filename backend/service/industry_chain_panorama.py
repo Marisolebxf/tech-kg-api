@@ -34,6 +34,7 @@ from service.base_module import KGModuleScaffoldService
 logger = logging.getLogger(__name__)
 
 MAX_TOP_K = 20
+MAX_RELATION_TYPES = 20
 # 属性搜索只支持精确等值；未命中时退化为有界扫描 + 本地包含匹配的扫描上限。
 _KEYWORD_SCAN_LIMIT = 500
 # 关键词包含匹配的扫描总量上限（分页扫描，避免大标签只看前 500 个永远命不中）。
@@ -47,8 +48,9 @@ _graph_api_semaphore = asyncio.Semaphore(_GRAPH_API_CONCURRENCY)
 # 全景图结果缓存：图数据按批次入库、变更频率低，实时组装一次要数秒，
 # 同参数查询直接复用上次结果，过期后台刷新。
 _PANORAMA_CACHE_TTL_SECONDS = 600.0
-_panorama_cache: dict[tuple[str, str, int, int], tuple[float, dict[str, Any]]] = {}
-_panorama_rebuilding: set[tuple[str, str, int, int]] = set()
+# 缓存键：产业关键词 / 锚点 VID / 展开层级 / topK / 关系筛选（逗号拼接的边类型）
+_panorama_cache: dict[tuple[str, str, int, int, str], tuple[float, dict[str, Any]]] = {}
+_panorama_rebuilding: set[tuple[str, str, int, int, str]] = set()
 
 _FALLBACK_REASON_TEXT = {
     "empty_result": "图库中没有可用实体",
@@ -112,19 +114,30 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         anchor_id: str | None = None,
         depth: int = 2,
         top_k: int = 5,
+        relation_types: list[str] | None = None,
+        refresh: bool = False,
     ) -> dict[str, Any]:
         industry_kw = (industry or "").strip() or None
         anchor = (anchor_id or "").strip() or None
         top_k = max(1, min(int(top_k or 5), MAX_TOP_K))
         depth = max(1, min(int(depth or 2), 3))
-        cache_key = (industry_kw or "", anchor or "", depth, top_k)
-        cached = _panorama_cache.get(cache_key)
+        rel_types = self._normalize_relation_types(relation_types)
+        cache_key = (industry_kw or "", anchor or "", depth, top_k, ",".join(rel_types))
+        if refresh:
+            # 页面「刷新图谱」：丢掉缓存直接实时重组，保证拿到最新入图数据。
+            _panorama_cache.pop(cache_key, None)
+        cached = None if refresh else _panorama_cache.get(cache_key)
         if cached and time.monotonic() - cached[0] < _PANORAMA_CACHE_TTL_SECONDS:
             return cached[1]
         if cached:
             # 过期先返回旧结果，后台重建，不让用户等一次实时组装。
             self._rebuild_in_background(
-                cache_key, industry=industry_kw, anchor_id=anchor, depth=depth, top_k=top_k
+                cache_key,
+                industry=industry_kw,
+                anchor_id=anchor,
+                depth=depth,
+                top_k=top_k,
+                relation_types=rel_types,
             )
             return cached[1]
         query_input = {
@@ -133,6 +146,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "anchorId": anchor or "",
             "depth": depth,
             "topK": top_k,
+            "relationTypes": rel_types,
         }
 
         source: dict[str, Any] = {"requested": "all", "actual": "fallback", "fallback": True}
@@ -157,6 +171,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                     summary = {}
                 layers, seed_vids = await self._fetch_layers(client, industry_kw, top_k)
                 graph = await self._fetch_graph(client, seed_vids, anchor, depth)
+                graph = self._filter_graph_by_relation_types(graph, rel_types)
         except GraphAPIError as exc:
             logger.warning("graph API unavailable for panorama, falling back: %s", exc)
             fallback_reason = "graph_api_error"
@@ -206,14 +221,62 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             _panorama_cache[cache_key] = (time.monotonic(), result)
         return result
 
+    @staticmethod
+    def _normalize_relation_types(relation_types: list[str] | None) -> list[str]:
+        """规整关系筛选入参：去空、大写、去重，最多保留 20 项。
+
+        Args:
+            relation_types: 调用方传入的边类型，如 ``["COAUTHOR_WITH"]``。
+
+        Returns:
+            规整后的边类型列表；不筛选时为空列表。
+        """
+        if not relation_types:
+            return []
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for item in relation_types:
+            value = str(item or "").strip().upper()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            normalized.append(value)
+            if len(normalized) >= MAX_RELATION_TYPES:
+                break
+        return normalized
+
+    @staticmethod
+    def _filter_graph_by_relation_types(
+        graph: dict[str, list[Any]], relation_types: list[str]
+    ) -> dict[str, list[Any]]:
+        """按边类型筛选子图，并丢掉筛选后不再有连边的节点。
+
+        Args:
+            graph: ``_fetch_graph`` 产出的子图。
+            relation_types: 规整后的边类型；为空表示不筛选。
+
+        Returns:
+            筛选后的子图；不筛选时原样返回。
+        """
+        if not relation_types:
+            return graph
+        wanted = set(relation_types)
+        edges = [e for e in (graph.get("edges") or []) if str(e.get("label") or "") in wanted]
+        kept_ids = {str(e.get("source") or "") for e in edges} | {
+            str(e.get("target") or "") for e in edges
+        }
+        nodes = [n for n in (graph.get("nodes") or []) if str(n.get("id") or "") in kept_ids]
+        return {"nodes": nodes, "edges": edges}
+
     def _rebuild_in_background(
         self,
-        cache_key: tuple[str, str, int, int],
+        cache_key: tuple[str, str, int, int, str],
         *,
         industry: str | None,
         anchor_id: str | None,
         depth: int,
         top_k: int,
+        relation_types: list[str] | None = None,
     ) -> None:
         """缓存过期时后台重建，期间请求继续用旧结果。"""
         if cache_key in _panorama_rebuilding:
@@ -223,7 +286,13 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
         async def _run() -> None:
             try:
-                await self.query(industry=industry, anchor_id=anchor_id, depth=depth, top_k=top_k)
+                await self.query(
+                    industry=industry,
+                    anchor_id=anchor_id,
+                    depth=depth,
+                    top_k=top_k,
+                    relation_types=relation_types,
+                )
             except Exception:  # noqa: BLE001 - 后台重建失败保留空位，下次请求再现场组装
                 logger.warning("panorama background rebuild failed", exc_info=True)
             finally:

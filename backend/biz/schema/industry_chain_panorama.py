@@ -6,11 +6,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 DataSource = Literal["all"]
 MAX_KEY_ENTITIES = 20
 MAX_TEXT_LENGTH = 64
+MAX_RELATION_TYPES = 20
 
 # 产业关键词：字母数字下划线、中文、间隔号、点、连字符、括号、顿号、斜杠和空格
 INDUSTRY_PATTERN = re.compile(r"[\w\u4e00-\u9fff·.\-()（）、，,/\s]+")
 # 核心节点 VID：不允许空格与 !@#￥%& 等符号
 ANCHOR_ID_PATTERN = re.compile(r"[\w\u4e00-\u9fff·.\-]+")
+# 关系类型（Nebula 边类型）：大写字母、数字和下划线
+RELATION_TYPE_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 
 
 class IndustryChainPanoramaQueryRequest(BaseModel):
@@ -20,6 +23,7 @@ class IndustryChainPanoramaQueryRequest(BaseModel):
     - ``anchorId``：可选，指定核心节点 VID（如 ``person_xxx``、``paper_xxx``）从此扩展子图。
     - ``depth``：从核心节点向外扩展的跳数（1-3）。
     - ``topK``：每类关键实体（专家/机构/论文）返回条数。
+    - ``relationTypes``：关系筛选，只保留这些边类型的子图关系；空则不筛选。
     """
 
     model_config = ConfigDict(
@@ -30,6 +34,7 @@ class IndustryChainPanoramaQueryRequest(BaseModel):
                 "anchorId": "",
                 "depth": 2,
                 "topK": 5,
+                "relationTypes": ["COAUTHOR_WITH", "AFFILIATED_WITH"],
             }
         }
     )
@@ -47,11 +52,49 @@ class IndustryChainPanoramaQueryRequest(BaseModel):
     topK: int = Field(
         default=5, ge=1, description=f"每类实体返回数上限 (最大 {MAX_KEY_ENTITIES})。"
     )
+    relationTypes: list[str] | None = Field(
+        default=None,
+        description=(
+            "关系筛选：只保留这些边类型（如 COAUTHOR_WITH / AFFILIATED_WITH），"
+            f"最多 {MAX_RELATION_TYPES} 项；留空表示不筛选。"
+        ),
+    )
+    refresh: bool = Field(
+        default=False, description="true 时忽略服务端缓存，强制重新组装分层与子图。"
+    )
 
     @field_validator("topK")
     @classmethod
     def clamp_top_k(cls, value: int) -> int:
         return min(value, MAX_KEY_ENTITIES)
+
+    @field_validator("relationTypes", mode="before")
+    @classmethod
+    def normalize_relation_types(cls, value: Any) -> list[str] | None:
+        if value is None or value == "":
+            return None
+        # 兼容前端用逗号拼接传参
+        items = value.split(",") if isinstance(value, str) else value
+        if not isinstance(items, list):
+            raise ValueError("关系筛选必须是边类型数组")
+        normalized: list[str] = []
+        for item in items:
+            if not isinstance(item, str):
+                raise ValueError("关系筛选必须是边类型数组")
+            name = item.strip().upper()
+            if not name:
+                continue
+            if len(name) > MAX_TEXT_LENGTH:
+                raise ValueError(f"关系类型长度不能超过 {MAX_TEXT_LENGTH} 个字符")
+            if not RELATION_TYPE_PATTERN.fullmatch(name):
+                raise ValueError("关系类型只能包含字母、数字和下划线")
+            if name not in normalized:
+                normalized.append(name)
+        if not normalized:
+            return None
+        if len(normalized) > MAX_RELATION_TYPES:
+            raise ValueError(f"关系筛选最多选择 {MAX_RELATION_TYPES} 项")
+        return normalized
 
     @field_validator("industry", mode="before")
     @classmethod

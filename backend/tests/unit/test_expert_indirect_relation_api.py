@@ -139,7 +139,7 @@ def test_rules_describe_the_actual_indirect_path_algorithm():
     rules = _build_rules(_build_result(_core_node(), _subgraph(), body))
 
     assert [rule["name"] for rule in rules] == [
-        "间接路径发现规则",
+        "路径分析与关系传递算法",
         "间接关系分类规则",
         "路径强度计算与排序规则",
     ]

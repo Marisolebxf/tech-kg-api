@@ -484,7 +484,8 @@ export const serviceModules: ServiceModule[] = [
     requestFields: [
       { name: 'industry', type: 'string', required: '否', description: '产业关键词，如 人工智能 / 集成电路，最多 64 个字符，不能包含 !@#￥%& 等异常字符' },
       { name: 'anchorId', type: 'string', required: '否', description: '核心节点 VID，用于生成扩展子图，最多 64 个字符，不能包含空格或 !@#￥%& 等异常字符' },
-      { name: 'depth', type: 'number', required: '否', description: '子图扩展跳数，1-3' },
+      { name: 'depth', label: '展开层级', type: 'select', options: ['1', '2', '3'], required: '否', description: '从核心节点向外展开的层级（跳数），可选 1-3；层级越大子图越完整但越慢' },
+      { name: 'relationTypes', label: '关系筛选', type: 'multi-select', required: '否', description: '只保留选中的关系类型：产业链归属 / 论文合作 / 机构任职，留空表示不筛选' },
       { name: 'topK', type: 'number', required: '否', description: '每类关键实体返回数上限（最大 20）' },
     ],
     responseFields: [

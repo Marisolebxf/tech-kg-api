@@ -593,10 +593,10 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 return False
             return True
 
-        # 仅能解析出年份（或完全无法解析）时：无法解析则保留；仅年份则按年比较
+        # 仅年份：按年比较；完全无法解析：有时间筛选时一律排除
         year = self._parse_year(item_time)
         if year is None:
-            return True
+            return False
         start_y = self._parse_year(start)
         end_y = self._parse_year(end)
         if start_y is not None and year < start_y:
@@ -796,7 +796,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "logic": "按类型计数；回填 title/time/fields/awards；生成 coreContribution 与 cooperationMode。",
                 "output": "coreContribution、cooperationMode",
                 "threshold": "有效成果字段尽量回填，缺失不强行编造",
-                "audit": "时间无法解析时，时间过滤放行该条目",
+                "audit": "有时间筛选时，完成时间缺失或无法解析的条目一律排除",
             },
             {
                 "name": "合作模式判定规则",

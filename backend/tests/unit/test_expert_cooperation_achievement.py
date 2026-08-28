@@ -168,9 +168,13 @@ def test_in_time_range_respects_month_and_day_bounds():
     # 仅年份的成果：仍按年比较（与旧行为一致）
     assert svc._in_time_range("2022", None, "2022-08") is True
     assert svc._in_time_range("2023", None, "2022-08") is False
-    # 无法解析：保留
-    assert svc._in_time_range(None, None, "2022-08") is True
-    assert svc._in_time_range("unknown", None, "2022-08") is True
+    # 有时间筛选时：无法解析/缺失完成时间一律排除
+    assert svc._in_time_range(None, None, "2022-08") is False
+    assert svc._in_time_range("unknown", None, "2022-08") is False
+    assert svc._in_time_range(None, "2022-01", None) is False
+    # 未设置时间筛选：缺失时间仍保留
+    assert svc._in_time_range(None, None, None) is True
+    assert svc._in_time_range("unknown", None, None) is True
 
 
 def test_query_filters_items_after_time_range_end(monkeypatch):
@@ -205,6 +209,44 @@ def test_query_filters_items_after_time_range_end(monkeypatch):
     assert "八月论文" in titles
     assert "一种基于异构图的科技实体关联方法" not in titles
     assert resp["summary"]["papers"] == 1
+
+
+def test_query_excludes_items_without_time_when_range_set(monkeypatch):
+    monkeypatch.setattr(
+        "service.expert_cooperation_achievement.get_llm_client",
+        lambda: None,
+    )
+    nodes = {
+        "S1": _node("S1", {"name_zh": "甲"}),
+        "S2": _node("S2", {"name_zh": "乙"}),
+        "P1": _node("P1", {"title": "有时间专利", "publication_date": "20230901"}),
+        "PJ1": _node("PJ1", {"title": "无时间项目"}),
+    }
+    edges = {
+        "S1": [
+            _edge("INVENTED_BY", "P1", "S1"),
+            _edge("LEADS", "PJ1", "S1"),
+        ],
+        "S2": [
+            _edge("INVENTED_BY", "P1", "S2"),
+            _edge("HAS_PARTICIPANT", "PJ1", "S2"),
+        ],
+    }
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
+    graph.get_node_edges = MagicMock(side_effect=lambda nid, **kw: edges.get(str(nid), []))
+    graph._settings = SimpleNamespace(space="dev")
+
+    resp = _svc(graph).query(
+        source_expert_id="S1",
+        target_expert_id="S2",
+        time_range_start="2023-02-01",
+    )
+    titles = [i["title"] for i in resp["items"]]
+    assert "有时间专利" in titles
+    assert "无时间项目" not in titles
+    assert resp["summary"]["patents"] == 1
+    assert resp["summary"]["projects"] == 0
 
 
 def test_query_same_id_raises():

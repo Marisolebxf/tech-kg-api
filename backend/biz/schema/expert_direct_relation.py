@@ -34,13 +34,16 @@ class ExpertDirectRelationQueryRequest(BaseModel):
     )
 
     dataSource: DataSource = Field(default="all", description="数据来源，固定为 all。")
-    expertAId: str | None = Field(
-        default=None,
-        description=f"专家A scholar_id 或姓名关键词，最多 {MAX_TEXT_LENGTH} 个字符。",
+    expertAId: str = Field(
+        ...,
+        description=f"专家A scholar_id 或姓名关键词，必填，最多 {MAX_TEXT_LENGTH} 个字符。",
     )
     expertBId: str | None = Field(
         default=None,
-        description=f"专家B scholar_id 或姓名关键词，最多 {MAX_TEXT_LENGTH} 个字符。",
+        description=(
+            f"专家B scholar_id 或姓名关键词，可选；为空时仅返回专家A节点，"
+            f"最多 {MAX_TEXT_LENGTH} 个字符。"
+        ),
     )
     institution: str | None = Field(
         default=None, description=f"机构关键词，最多 {MAX_TEXT_LENGTH} 个字符。"
@@ -54,16 +57,31 @@ class ExpertDirectRelationQueryRequest(BaseModel):
     def clamp_limit(cls, value: int) -> int:
         return min(value, MAX_QUERY_LIMIT)
 
-    @field_validator("expertAId", "expertBId", mode="before")
+    @field_validator("expertAId", mode="before")
     @classmethod
-    def normalize_expert_id(cls, value: str | None) -> str | None:
+    def normalize_expert_a_id(cls, value: Any) -> str:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            raise ValueError("专家A标识不能为空")
+        return cls._normalize_expert_id_value(value)
+
+    @field_validator("expertBId", mode="before")
+    @classmethod
+    def normalize_expert_b_id(cls, value: Any) -> str | None:
         if value is None:
             return None
         if not isinstance(value, str):
             raise ValueError("专家标识必须是字符串")
+        if not value.strip():
+            return None
+        return cls._normalize_expert_id_value(value)
+
+    @staticmethod
+    def _normalize_expert_id_value(value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("专家标识必须是字符串")
         value = value.strip()
         if not value:
-            return None
+            raise ValueError("专家标识不能为空")
         if len(value) > MAX_TEXT_LENGTH:
             raise ValueError(f"专家标识长度不能超过 {MAX_TEXT_LENGTH} 个字符")
         if re.search(r"\s", value):

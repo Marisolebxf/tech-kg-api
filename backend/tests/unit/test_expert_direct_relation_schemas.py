@@ -51,35 +51,43 @@ def test_request_rejects_overlong_and_abnormal_expert_ids(field: str) -> None:
 
 def test_request_rejects_overlong_and_abnormal_institution() -> None:
     with pytest.raises(ValidationError, match="64"):
-        ExpertDirectRelationQueryRequest.model_validate({"institution": OVERLONG})
+        ExpertDirectRelationQueryRequest.model_validate(
+            {"expertAId": "王祎", "institution": OVERLONG}
+        )
 
     with pytest.raises(ValidationError, match="异常字符"):
-        ExpertDirectRelationQueryRequest.model_validate({"institution": "清华大学!@#￥%&"})
+        ExpertDirectRelationQueryRequest.model_validate(
+            {"expertAId": "王祎", "institution": "清华大学!@#￥%&"}
+        )
 
     # 机构名允许空格和括号
     request = ExpertDirectRelationQueryRequest.model_validate(
-        {"institution": "National University of Singapore（NUS）"}
+        {"expertAId": "王祎", "institution": "National University of Singapore（NUS）"}
     )
     assert request.institution == "National University of Singapore（NUS）"
 
 
 def test_request_rejects_future_and_reversed_time_range() -> None:
     with pytest.raises(ValidationError, match="不能晚于当前时间"):
-        ExpertDirectRelationQueryRequest.model_validate({"startTime": _future_month()})
+        ExpertDirectRelationQueryRequest.model_validate(
+            {"expertAId": "王祎", "startTime": _future_month()}
+        )
 
     with pytest.raises(ValidationError, match="不能晚于当前时间"):
-        ExpertDirectRelationQueryRequest.model_validate({"endTime": "2027-01"})
+        ExpertDirectRelationQueryRequest.model_validate({"expertAId": "王祎", "endTime": "2027-01"})
 
     with pytest.raises(ValidationError, match="不能晚于结束时间"):
         ExpertDirectRelationQueryRequest.model_validate(
-            {"startTime": "2023-01", "endTime": "2022-12"}
+            {"expertAId": "王祎", "startTime": "2023-01", "endTime": "2022-12"}
         )
 
     with pytest.raises(ValidationError, match="YYYY-MM"):
-        ExpertDirectRelationQueryRequest.model_validate({"startTime": "2023/01"})
+        ExpertDirectRelationQueryRequest.model_validate(
+            {"expertAId": "王祎", "startTime": "2023/01"}
+        )
 
     request = ExpertDirectRelationQueryRequest.model_validate(
-        {"startTime": "2020-01", "endTime": "2021-06-30"}
+        {"expertAId": "王祎", "startTime": "2020-01", "endTime": "2021-06-30"}
     )
     assert request.startTime == "2020-01"
     assert request.endTime == "2021-06-30"

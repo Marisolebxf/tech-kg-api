@@ -1,12 +1,13 @@
 """科技专家/人才直接关系——通过 FastAPI 图查询 API 实现（不直连 DAO/MySQL）。
 
 数据流：
-1. 定位起点专家：调用 ``GET /nodes/search?label=Person`` 按 scholar_id / 姓名过滤；
-   ``expertAId`` 支持传 scholar_id 或直接 VID (``person_{scholar_id}``)。
-2. 拉合作关系：调用 ``GET /node/{vid}/edges?edge_type=COAUTHOR_WITH`` 拿全部合作边。
-3. 拿对端专家：对每条边的对端 VID 调用 ``GET /nodes/{vid}`` 补齐属性。
-4. 机构过滤 & 排序：在服务层按 ``institution`` 关键字过滤、按合作论文数排序。
-5. 图数据/详情：按业务格式组装 items + graph。
+1. ``expertAId`` 必填。按 VID / scholar_id / 姓名定位专家A；查不到 → 空结果。
+2. 若 ``expertBId`` 为空：不查询专家B、不拉合作关系，仅返回专家A的节点
+   （``items`` 为空，``graph`` 仅含 A 节点，``source.reason="anchor_a_only"``）。
+3. 若 ``expertBId`` 非空：定位专家B；查不到 → 空结果。在 A、B 之间找一条
+   ``COAUTHOR_WITH`` 边；找不到 → 空结果。找到则据此组装唯一一条关系。
+4. 机构过滤 & 时间过滤：在服务层按 ``institution`` 关键字、``relation_time`` 过滤该条关系。
+5. 图数据/详情：按业务格式组装 items + graph + provenance。
 
 查询结果一律来自图库；未命中或图服务异常时返回空结果并在 ``source.reason`` 标明原因，
 不返回内置示例数据。
@@ -52,6 +53,11 @@ _FALLBACK_REASON_TEXT = {
     "empty_result": "图库中查不到该专家的合作关系",
     "graph_api_error": "图查询服务不可用",
     "unexpected_error": "图查询过程异常",
+    "anchor_a_not_found": "图库中查不到专家A",
+    "anchor_b_not_found": "图库中查不到专家B",
+    "no_relation_between_a_b": "两位专家之间在图库中不存在直接合作关系",
+    "institution_filtered": "该关系不匹配所给机构关键词",
+    "anchor_a_only": "已定位到专家A，未指定专家B，仅返回专家A节点",
 }
 
 
@@ -70,10 +76,11 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         limit: int = 10,
     ) -> dict[str, Any]:
         normalized_limit = max(1, min(int(limit or 10), MAX_QUERY_LIMIT))
+        a_keyword = (expert_a_id or "").strip()
+        b_keyword = (expert_b_id or "").strip()
         cache_key = (
-            f"all|{(expert_a_id or '').strip()}|{(expert_b_id or '').strip()}|"
-            f"{(institution or '').strip()}|{(start_time or '').strip()}|"
-            f"{(end_time or '').strip()}|{normalized_limit}"
+            f"all|{a_keyword}|{b_keyword}|{(institution or '').strip()}|"
+            f"{(start_time or '').strip()}|{(end_time or '').strip()}|{normalized_limit}"
         )
         with _result_cache_lock:
             entry = _result_cache.get(cache_key)
@@ -82,58 +89,107 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
 
         query_input = {
             "dataSource": "all",
-            "expertAId": (expert_a_id or "").strip(),
-            "expertBId": (expert_b_id or "").strip(),
+            "expertAId": a_keyword,
+            "expertBId": b_keyword,
             "institution": (institution or "").strip(),
             "startTime": (start_time or "").strip(),
             "endTime": (end_time or "").strip(),
             "limit": normalized_limit,
         }
 
-        source = {"requested": "all", "actual": "fallback", "fallback": True}
+        source: dict[str, Any] = {"requested": "all", "actual": "graph-api", "fallback": False}
         rows: list[dict[str, Any]] = []
+        anchor_only_node: dict[str, Any] | None = None
         fallback_reason: str | None = None
 
         try:
-            rows = await self._query_via_graph_api(
-                expert_a_id=expert_a_id,
-                expert_b_id=expert_b_id,
-                institution=institution,
-                limit=normalized_limit,
-            )
-            source = {"requested": "all", "actual": "graph-api", "fallback": False}
+            async with graph_api() as client:
+                node_a = await self._find_person(client, a_keyword)
+                if node_a is None:
+                    fallback_reason = "anchor_a_not_found"
+                elif not b_keyword:
+                    # 仅指定专家A：不查询专家B、不拉合作关系，只返回专家A的节点。
+                    anchor_only_node = node_a
+                    source = {
+                        "requested": "all",
+                        "actual": "graph-api",
+                        "fallback": False,
+                        "reason": "anchor_a_only",
+                    }
+                else:
+                    node_b = await self._find_person(client, b_keyword)
+                    if node_b is None:
+                        fallback_reason = "anchor_b_not_found"
+                    else:
+                        edge = await self._find_coauthor_edge(client, node_a, node_b)
+                        if edge is None:
+                            fallback_reason = "no_relation_between_a_b"
+                        else:
+                            row = self._build_row(node_a, node_b, edge)
+                            if institution and not self._matches_institution(row, institution):
+                                fallback_reason = "institution_filtered"
+                            else:
+                                rows = [row]
         except GraphAPIError as exc:
-            logger.warning("graph API unavailable, falling back to seed data: %s", exc)
+            logger.warning("graph API unavailable: %s", exc)
             fallback_reason = "graph_api_error"
-            rows = []
         except Exception:  # noqa: BLE001 - 图服务异常一律降级
             logger.exception("unexpected error while querying graph API")
             fallback_reason = "unexpected_error"
-            rows = []
 
-        if not rows:
-            # 图服务报错和"图里确实没有"都如实返回空结果，不再塞内置示例数据，
-            # 避免用户把假数据当成真实查询结果。
-            logger.info(
-                "expert direct relation empty result: reason=%s, a=%s, b=%s",
-                fallback_reason or "empty_result",
-                expert_a_id,
-                expert_b_id,
-            )
+        if fallback_reason is not None:
             source = {
                 "requested": "all",
                 "actual": "graph-api",
                 "fallback": False,
-                "reason": fallback_reason or "empty_result",
+                "reason": fallback_reason,
             }
+
+        if anchor_only_node is not None:
+            # A-only 分支：items 为空、graph 仅含 A 节点；属于正常分支，可以缓存。
+            payload = {
+                "taskName": "科技专家直接关系查询",
+                "input": query_input,
+                "total": 0,
+                "items": [],
+                "graph": self._build_anchor_only_graph(anchor_only_node),
+                "source": source,
+                "provenance": self._build_anchor_only_provenance(anchor_only_node),
+                "apiResultExample": {
+                    "url": "/api/v1/kg-construction/expert-direct-relations/query",
+                    "method": "POST",
+                    "query": query_input,
+                },
+            }
+            with _result_cache_lock:
+                _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, payload)
+            return payload
 
         rows = self._orient_rows(
             rows=self._filter_rows_by_time(rows, start_time, end_time),
-            expert_a_id=expert_a_id,
-            expert_b_id=expert_b_id,
+            expert_a_id=a_keyword,
+            expert_b_id=b_keyword,
         )
         items = [self._build_item(row) for row in rows]
         graph = self._build_graph(items)
+
+        if not items and fallback_reason is None:
+            # 图服务正常但未命中（理论上 A+B 命中边走不到这里，留作兜底语义）。
+            fallback_reason = "empty_result"
+            source = {
+                "requested": "all",
+                "actual": "graph-api",
+                "fallback": False,
+                "reason": fallback_reason,
+            }
+
+        logger.info(
+            "expert direct relation result: reason=%s, a=%s, b=%s, items=%d",
+            fallback_reason or "ok",
+            a_keyword,
+            b_keyword,
+            len(items),
+        )
 
         payload = {
             "taskName": "科技专家直接关系查询",
@@ -156,81 +212,23 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         return payload
 
     # ---------------- Graph API 调用 ----------------
-    async def _query_via_graph_api(
-        self,
-        *,
-        expert_a_id: str | None,
-        expert_b_id: str | None,
-        institution: str | None,
-        limit: int,
-    ) -> list[dict[str, Any]]:
-        """通过图查询 API 拉合作关系。
-
-        Args:
-            expert_a_id: 起点专家的 VID / scholar_id / 姓名，可为空。
-            expert_b_id: 另一位专家的标识，可为空。
-            institution: 机构关键词，非空时只保留任一端命中该机构的关系。
-            limit: 最多返回多少条关系。
-
-        Returns:
-            关系行列表，每行包含双方属性与 ``co_paper_count`` 等字段；无命中时为空列表。
-        """
-        async with graph_api() as client:
-            anchors = await self._resolve_anchors(client, expert_a_id, expert_b_id)
-            rows: list[dict[str, Any]] = []
-            seen_keys: set[str] = set()
-            for anchor in anchors:
-                anchor_id = anchor["id"]
-                edges = await client.get_node_edges(
-                    anchor_id, edge_type="COAUTHOR_WITH", limit=_MAX_EDGES_PER_EXPERT
-                )
-                for edge in edges:
-                    peer_id = edge["target"] if edge["source"] == anchor_id else edge["source"]
-                    peer = await client.get_node(peer_id)
-                    if peer is None:
-                        continue
-                    row = self._build_row(anchor, peer, edge)
-                    if institution and not self._matches_institution(row, institution):
-                        continue
-                    key = row["relation_key"]
-                    if key in seen_keys:
-                        continue
-                    seen_keys.add(key)
-                    rows.append(row)
-                    if len(rows) >= limit:
-                        return rows
-            return rows
-
-    async def _resolve_anchors(
+    async def _find_coauthor_edge(
         self,
         client: Any,
-        expert_a_id: str | None,
-        expert_b_id: str | None,
-    ) -> list[dict[str, Any]]:
-        """定位起点专家节点。空条件时取任意若干位学者作为锚点。
-
-        Args:
-            client: 图查询 API 客户端。
-            expert_a_id: 起点专家标识，可为空。
-            expert_b_id: 另一位专家标识，可为空。
-
-        Returns:
-            锚点 Person 节点列表；两个标识都为空时返回库里前若干位学者（仅用于展示）；
-            指定了标识但图里查不到时返回空列表。
-        """
-        keywords = [kw.strip() for kw in (expert_a_id, expert_b_id) if kw and kw.strip()]
-        if keywords:
-            # 指定了专家却查不到时必须返回空，否则会把库里任意几位学者当成查询结果返回，
-            # 用户看到的是一堆和输入无关的专家。
-            candidates: list[dict[str, Any]] = []
-            for keyword in keywords:
-                node = await self._find_person(client, keyword)
-                if node is not None:
-                    candidates.append(node)
-            return candidates
-        # 无条件时取库里前若干位学者作为锚点，仅用于展示
-        listing = await client.list_nodes(label="Person", limit=_MAX_ANCHOR_CANDIDATES)
-        return list(listing.get("items", []))
+        node_a: dict[str, Any],
+        node_b: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """在 node_a 与 node_b 之间定位一条 COAUTHOR_WITH 边；不存在时返回 None。"""
+        a_id = str(node_a.get("id") or "")
+        b_id = str(node_b.get("id") or "")
+        edges = await client.get_node_edges(
+            a_id, edge_type="COAUTHOR_WITH", limit=_MAX_EDGES_PER_EXPERT
+        )
+        for edge in edges:
+            peer_id = str(edge.get("target") if edge.get("source") == a_id else edge.get("source"))
+            if peer_id == b_id:
+                return edge
+        return None
 
     async def _find_person(self, client: Any, keyword: str) -> dict[str, Any] | None:
         """按 VID / scholar_id / 姓名定位一个 Person 节点。
@@ -581,6 +579,47 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             "sourceDatabase": source_database,
             "summary": summary_text,
             "evidences": evidences,
+        }
+
+    def _build_anchor_only_graph(self, anchor: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+        """仅专家A分支的图：只有一个 expert 节点，无边。"""
+        node = {
+            "id": str(anchor.get("id") or ""),
+            "type": "expert",
+            "label": self._person_name(anchor),
+            "subtitle": self._person_prop(anchor, "scholar_org"),
+            "data": {"role": "A"},
+        }
+        return {"nodes": [node], "edges": []}
+
+    def _build_anchor_only_provenance(self, anchor: dict[str, Any]) -> dict[str, Any]:
+        """仅专家A分支的溯源：只含专家A的实体入库元数据。"""
+        space = TRSGraphSettings.from_env().space or "dev"
+        src = self._person_source(anchor)
+        name = self._person_name(anchor) or str(anchor.get("id") or "—")
+        system = str(src.get("source_system") or "")
+        record_id = str(
+            src.get("source_record_id") or src.get("scholar_id") or anchor.get("id") or ""
+        )
+        evidence = {
+            "title": f"专家实体 · {name}",
+            "businessTable": "科技专家画像",
+            "technicalTable": f"{system}.dwd_scholar" if system else "Person",
+            "recordId": record_id,
+            "fieldIdentifier": "scholar_id / name_zh",
+            "sourceTable": src.get("source_table") or _SCHOLAR_SOURCE_TABLE,
+            "sourceField": _SCHOLAR_SOURCE_FIELD,
+            "graphVid": str(anchor.get("id") or ""),
+            "summary": (
+                f"机构：{self._person_prop(anchor, 'scholar_org') or '—'}；"
+                f"入库批次：{src.get('ingest_batch') or '—'}；"
+                f"入库时间：{src.get('ingest_time') or '—'}"
+            ),
+        }
+        return {
+            "sourceDatabase": f"trs-graph / space={space}",
+            "summary": f"已定位到专家 {name}，未指定专家B，仅返回专家A节点。",
+            "evidences": [evidence],
         }
 
     def _build_graph(self, items: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:

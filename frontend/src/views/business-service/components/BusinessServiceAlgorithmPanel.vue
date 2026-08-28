@@ -1879,7 +1879,7 @@ function buildExpertDirectRequest(): ExpertDirectRelationQueryRequest {
   const limitRaw = (raw.limit ?? "").trim();
   return {
     dataSource: "all",
-    expertAId: trimOrUndefined(raw.expertAId),
+    expertAId: (raw.expertAId ?? "").trim(),
     expertBId: trimOrUndefined(raw.expertBId),
     institution: trimOrUndefined(raw.institution),
     startTime: trimOrUndefined(raw.startTime),

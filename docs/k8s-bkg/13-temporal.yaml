@@ -1,0 +1,196 @@
+# temporal-mysql + temporal + temporal-ui：工作流引擎。
+# temporal-mysql 同时承载 Temporal 自身库与业务控制面库 techkg_control（见 06 数据初始化）。
+apiVersion: v1
+kind: Secret
+metadata:
+  name: temporal-mysql-secret
+  namespace: bkg
+type: Opaque
+stringData:
+  root_password: "temporal"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: temporal-mysql
+  namespace: bkg
+spec:
+  serviceName: temporal-mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: temporal-mysql
+  template:
+    metadata:
+      labels:
+        app: temporal-mysql
+    spec:
+      containers:
+        - name: mysql
+          image: 10.50.62.9:30303/library/mysql:8.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3306
+              name: server
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: temporal-mysql-secret
+                  key: root_password
+          resources:
+            requests:
+              cpu: 200m
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 4Gi
+          readinessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-ptemporal"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 20
+          volumeMounts:
+            - name: temporal-mysql-data
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: temporal-mysql-data
+          persistentVolumeClaim:
+            claimName: temporal-mysql-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal-mysql
+  namespace: bkg
+  labels:
+    app: temporal-mysql
+spec:
+  selector:
+    app: temporal-mysql
+  ports:
+    - name: server
+      port: 3306
+      targetPort: 3306
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal
+  namespace: bkg
+  labels:
+    app: temporal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: temporal
+  template:
+    metadata:
+      labels:
+        app: temporal
+    spec:
+      containers:
+        - name: temporal
+          image: 10.50.62.9:30303/library/temporal-auto-setup:1.29.2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 7233
+              name: frontend
+          env:
+            - name: DB
+              value: "mysql8"
+            - name: DB_PORT
+              value: "3306"
+            # 官方 mysql:8.4 镜像的 MYSQL_USER 不是 superuser，auto-setup 无法 CREATE DATABASE，
+            # 因此用 root 连（密码在 temporal-mysql-secret 中，与 WORKFLOW_MYSQL_PASSWORD 对应）
+            - name: MYSQL_USER
+              value: "root"
+            - name: MYSQL_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: temporal-mysql-secret
+                  key: root_password
+            - name: MYSQL_SEEDS
+              value: "temporal-mysql"
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          readinessProbe:
+            tcpSocket:
+              port: 7233
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal
+  namespace: bkg
+  labels:
+    app: temporal
+spec:
+  selector:
+    app: temporal
+  ports:
+    - name: frontend
+      port: 7233
+      targetPort: 7233
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-ui
+  namespace: bkg
+  labels:
+    app: temporal-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: temporal-ui
+  template:
+    metadata:
+      labels:
+        app: temporal-ui
+    spec:
+      containers:
+        - name: temporal-ui
+          image: 10.50.62.9:30303/library/temporal-ui:2.39.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: TEMPORAL_ADDRESS
+              value: "temporal:7233"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal-ui
+  namespace: bkg
+  labels:
+    app: temporal-ui
+spec:
+  type: NodePort
+  selector:
+    app: temporal-ui
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30833

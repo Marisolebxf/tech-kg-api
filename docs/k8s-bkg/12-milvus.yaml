@@ -1,0 +1,149 @@
+# milvus-etcd + milvus：专利/机构向量检索。
+# milvus 的对象存储走 operator-rustfs（MINIO_ADDRESS），无需单独 minio。
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: milvus-etcd
+  namespace: bkg
+spec:
+  serviceName: milvus-etcd
+  replicas: 1
+  selector:
+    matchLabels:
+      app: milvus-etcd
+  template:
+    metadata:
+      labels:
+        app: milvus-etcd
+    spec:
+      containers:
+        - name: etcd
+          image: 10.50.62.9:30303/library/etcd:3.5.5
+          imagePullPolicy: IfNotPresent
+          command:
+            - etcd
+            - -advertise-client-urls=http://milvus-etcd:2379
+            - -listen-client-urls=http://0.0.0.0:2379
+            - --data-dir
+            - /etcd
+          env:
+            - name: ETCD_AUTO_COMPACTION_MODE
+              value: revision
+            - name: ETCD_AUTO_COMPACTION_RETENTION
+              value: "1000"
+            - name: ETCD_QUOTA_BACKEND_BYTES
+              value: "4294967296"
+            - name: ETCD_SNAPSHOT_COUNT
+              value: "50000"
+          ports:
+            - containerPort: 2379
+              name: client
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          volumeMounts:
+            - name: etcd-data
+              mountPath: /etcd
+      volumes:
+        - name: etcd-data
+          persistentVolumeClaim:
+            claimName: milvus-etcd-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: milvus-etcd
+  namespace: bkg
+  labels:
+    app: milvus-etcd
+spec:
+  selector:
+    app: milvus-etcd
+  ports:
+    - name: client
+      port: 2379
+      targetPort: 2379
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: milvus
+  namespace: bkg
+spec:
+  serviceName: milvus
+  replicas: 1
+  selector:
+    matchLabels:
+      app: milvus
+  template:
+    metadata:
+      labels:
+        app: milvus
+    spec:
+      containers:
+        - name: milvus
+          image: 10.50.62.9:30303/library/milvus:v2.4.17
+          imagePullPolicy: IfNotPresent
+          args: ["milvus", "run", "standalone"]
+          ports:
+            - containerPort: 19530
+              name: grpc
+            - containerPort: 9091
+              name: metrics
+          env:
+            - name: ETCD_ENDPOINTS
+              value: "milvus-etcd:2379"
+            - name: MINIO_ADDRESS
+              value: "operator-rustfs:9000"
+            - name: MINIO_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: rustfs-secrets
+                  key: RUSTFS_ACCESS_KEY
+            - name: MINIO_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rustfs-secrets
+                  key: RUSTFS_SECRET_KEY
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 8Gi
+          readinessProbe:
+            tcpSocket:
+              port: 19530
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 20
+          volumeMounts:
+            - name: milvus-data
+              mountPath: /var/lib/milvus
+      volumes:
+        - name: milvus-data
+          persistentVolumeClaim:
+            claimName: milvus-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: milvus
+  namespace: bkg
+  labels:
+    app: milvus
+spec:
+  selector:
+    app: milvus
+  ports:
+    - name: grpc
+      port: 19530
+      targetPort: 19530
+    - name: metrics
+      port: 9091
+      targetPort: 9091

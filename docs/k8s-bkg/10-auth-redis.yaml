@@ -1,0 +1,59 @@
+# auth-redis：认证会话存储（无密码，仅集群内访问）
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: auth-redis
+  namespace: bkg
+spec:
+  serviceName: auth-redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth-redis
+  template:
+    metadata:
+      labels:
+        app: auth-redis
+    spec:
+      containers:
+        - name: auth-redis
+          image: 10.50.62.9:30303/library/redis:7.4-alpine
+          imagePullPolicy: IfNotPresent
+          args: ["redis-server", "--appendonly", "yes"]
+          ports:
+            - containerPort: 6379
+              name: server
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: auth-redis-data
+              mountPath: /data
+      volumes:
+        - name: auth-redis-data
+          persistentVolumeClaim:
+            claimName: auth-redis-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-redis
+  namespace: bkg
+  labels:
+    app: auth-redis
+spec:
+  selector:
+    app: auth-redis
+  ports:
+    - name: server
+      port: 6379
+      targetPort: 6379

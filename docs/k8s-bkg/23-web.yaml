@@ -1,0 +1,57 @@
+# web：前端静态资源 + /api/ 反代（独立前端镜像）。
+# 镜像内 nginx 反代 http://api:8000，与 api Service 同命名空间直连。
+# 注意：前端构建时 VITE_BASE / VITE_API_BASE 需与外部代理路径一致（见文档第八节）。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: bkg
+  labels:
+    app: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: 10.50.62.9:30303/bkg/baked-web:v0.0.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: bkg
+  labels:
+    app: web
+spec:
+  type: NodePort
+  selector:
+    app: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      nodePort: 30880

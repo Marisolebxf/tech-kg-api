@@ -1,0 +1,91 @@
+# m3e-embedding：专利向量化推理服务（后端镜像 baked 换启动命令）。
+# 首次启动需从 HuggingFace 下载 moka-ai/m3e-small 模型，start_period 给足时间；
+# 若集群无法直连 HF，可在 env 增加 HF_ENDPOINT 指向镜像站。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: m3e-embedding
+  namespace: bkg
+  labels:
+    app: m3e-embedding
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: m3e-embedding
+  template:
+    metadata:
+      labels:
+        app: m3e-embedding
+    spec:
+      containers:
+        - name: m3e-embedding
+          image: 10.50.62.9:30303/bkg/baked:v0.0.1
+          imagePullPolicy: IfNotPresent
+          command:
+            [
+              ".venv/bin/uvicorn",
+              "script.m3e_embedding_service:app",
+              "--host",
+              "0.0.0.0",
+              "--port",
+              "8010",
+            ]
+          env:
+            - name: M3E_MODEL_NAME
+              value: "moka-ai/m3e-small"
+            - name: M3E_EMBEDDING_DIM
+              value: "512"
+            - name: M3E_DEVICE
+              value: "cpu"
+            - name: M3E_BATCH_SIZE
+              value: "8"
+            - name: M3E_MAX_BATCH_SIZE
+              value: "64"
+            - name: M3E_MAX_CONCURRENCY
+              value: "1"
+            - name: HF_HOME
+              value: /models/huggingface
+          ports:
+            - containerPort: 8010
+              name: http
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8010
+            periodSeconds: 15
+            failureThreshold: 60 # 最长 15 分钟，覆盖首次下载模型
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8010
+            periodSeconds: 15
+          volumeMounts:
+            - name: m3e-model-cache
+              mountPath: /models/huggingface
+      volumes:
+        - name: m3e-model-cache
+          persistentVolumeClaim:
+            claimName: m3e-model-cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: m3e-embedding
+  namespace: bkg
+  labels:
+    app: m3e-embedding
+spec:
+  selector:
+    app: m3e-embedding
+  ports:
+    - name: http
+      port: 8010
+      targetPort: 8010

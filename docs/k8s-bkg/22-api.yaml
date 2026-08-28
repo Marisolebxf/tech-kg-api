@@ -1,0 +1,84 @@
+# api：FastAPI 主服务（后端镜像 baked 默认启动命令，无需覆盖 command）。
+# Service 必须命名为 api —— 前端镜像内 nginx.conf 固定反代 http://api:8000。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: bkg
+  labels:
+    app: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          image: 10.50.62.9:30303/bkg/baked:v0.0.1
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: tech-kg-config
+            - secretRef:
+                name: tech-kg-secrets
+          ports:
+            - containerPort: 8000
+              name: http
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 12
+          volumeMounts:
+            - name: operator-data
+              mountPath: /app/operators/user
+            - name: patent-index-state
+              mountPath: /app/var/patent_indexes
+            - name: workflow-state
+              mountPath: /var/lib/tech-kg
+      volumes:
+        - name: operator-data
+          persistentVolumeClaim:
+            claimName: operator-data
+        - name: patent-index-state
+          persistentVolumeClaim:
+            claimName: patent-index-state
+        - name: workflow-state
+          persistentVolumeClaim:
+            claimName: workflow-state
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: bkg
+  labels:
+    app: api
+spec:
+  selector:
+    app: api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000

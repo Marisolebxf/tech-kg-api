@@ -1,0 +1,100 @@
+# tech-kg 业务非敏感配置（api / temporal-worker 共用，envFrom 注入）。
+# ★ 部署前必须确认两类外部依赖的地址：
+#   1. MYSQL_HOST / PAPER_COOP_MYSQL_* —— 主库（gkx_element）与论文合作库（gkx_local）
+#   2. TRS_GRAPH_BASE_URL —— trs-graph-service（NebulaGraph 网关）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tech-kg-config
+  namespace: bkg
+data:
+  # ---- 图谱服务（外部依赖，按实际环境修改）----
+  TRS_GRAPH_BASE_URL: "http://trs-graph-service:8090"
+  TRS_GRAPH_SPACE: "dev"
+  TRS_GRAPH_TIMEOUT: "30"
+
+  # ---- 主 MySQL（外部依赖，按实际环境修改）----
+  MYSQL_HOST: "mysql"
+  MYSQL_PORT: "3306"
+  MYSQL_DATABASE: "gkx_element"
+  MYSQL_USERNAME: "root"
+  # 论文合作库可独立部署；未单独配置时沿用主 MySQL 连接参数
+  PAPER_COOP_MYSQL_HOST: "mysql"
+  PAPER_COOP_MYSQL_PORT: "3306"
+  PAPER_COOP_MYSQL_DATABASE: "gkx_local"
+  PAPER_COOP_MYSQL_USERNAME: "root"
+
+  # ---- Milvus 向量库 ----
+  MILVUS_HOST: "milvus"
+  MILVUS_PORT: "19530"
+  PATENT_MILVUS_COLLECTION: "patent"
+  PATENT_INDEX_STATE_DIR: "/app/var/patent_indexes"
+  PATENT_INDEX_PAGE_SIZE: "1000"
+  PATENT_BM25_DIM: "262144"
+  ORG_MILVUS_STATE_DIR: "/var/lib/tech-kg/organization_milvus"
+
+  # ---- LLM（未配置 LLM_API_KEY 时相关功能自动降级）----
+  LLM_MODEL: "glm-4.7-flash"
+  LLM_BASE_URL: "https://open.bigmodel.cn/api/paas/v4"
+
+  # ---- Temporal 工作流 ----
+  TEMPORAL_ADDRESS: "temporal:7233"
+  TEMPORAL_NAMESPACE: "default"
+  TEMPORAL_TASK_QUEUE: "tech-kg-workflows"
+  TEMPORAL_MAX_CONCURRENT_ACTIVITIES: "4"
+  # 控制面 MySQL（temporal-mysql 的 techkg_control 库，跟 Temporal 共用实例但独立库）
+  WORKFLOW_MYSQL_HOST: "temporal-mysql"
+  WORKFLOW_MYSQL_PORT: "3306"
+  WORKFLOW_MYSQL_DATABASE: "techkg_control"
+  WORKFLOW_MYSQL_USERNAME: "root"
+  WORKFLOW_SCRIPT_DIR: "/var/lib/tech-kg/scripts"
+  WORKFLOW_DEMO_DATA_ENABLED: "false"
+
+  # ---- S3（operator-rustfs，schema 脚本 / operator 包 / milvus 内部存储共用）----
+  SCHEMA_S3_ENDPOINT_URL: "http://operator-rustfs:9000"
+  SCHEMA_S3_BUCKET: "tech-kg-schema-scripts"
+  SCHEMA_S3_REGION: "us-east-1"
+  SCHEMA_S3_SECURE: "false"
+  SCHEMA_SCRIPT_MAX_BYTES: "10485760"
+  SCHEMA_ADMIN_USER_IDS: "schema-admin"
+  OPERATOR_DIR: "/app/operators/user"
+  OPERATOR_S3_ENDPOINT_URL: "http://operator-rustfs:9000"
+  OPERATOR_S3_BUCKET: "tech-kg-operators"
+  OPERATOR_S3_PREFIX: "operators"
+  OPERATOR_S3_REGION: "us-east-1"
+
+  # ---- 专利 embedding（m3e-embedding 服务）----
+  PATENT_EMBEDDING_PROVIDER: "openai"
+  PATENT_EMBEDDING_BASE_URL: "http://m3e-embedding:8010/v1"
+  PATENT_EMBEDDING_MODEL: "moka-ai/m3e-small"
+  PATENT_EMBEDDING_DIM: "512"
+
+  # ---- 认证 / 用户中心 SSO ----
+  AUTH_ENABLED: "true"
+  AUTH_SESSION_BACKEND: "redis"
+  AUTH_SESSION_COOKIE: "techkg_session"
+  AUTH_SESSION_TTL_SECONDS: "604800"
+  AUTH_STATE_TTL_SECONDS: "300"
+  AUTH_AUDIT_TTL_SECONDS: "7776000"
+  AUTH_AUDIT_MAX_ITEMS: "200"
+  AUTH_COOKIE_SECURE: "true"
+  AUTH_COOKIE_SAMESITE: "lax"
+  AUTH_COOKIE_PATH: "/bkg_zp"
+  AUTH_FRONTEND_URL: "https://edu.itic-sci.com/bkg_zp"
+  USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED: "false"
+  USER_CENTER_PORTAL_TOKEN_COOKIE: "access_token"
+  USER_CENTER_SSO_LOGIN_URL: "https://edu.itic-sci.com/uc/sso/login"
+  USER_CENTER_OAUTH_BASE_URL: "https://edu.itic-sci.com/uc/admin-api/system/oauth2"
+  USER_CENTER_ACCOUNT_URL: "https://edu.itic-sci.com/uc/admin/login?redirect=/index"
+  USER_CENTER_REDIRECT_URI: "https://edu.itic-sci.com/bkg_zp/api/v1/auth/callback"
+
+  # ---- Redis 会话 ----
+  REDIS_URL: "redis://auth-redis:6379/0"
+
+  # ---- 其他 ----
+  SCHEMA_AUTO_INIT: "true"
+  PLATFORM_BOOTSTRAP_FIRST_ADMIN: "true"
+  CORRECTION_SYNC_WORKER_ENABLED: "true"
+  CORRECTION_SYNC_INTERVAL_SECONDS: "30"
+  CORRECTION_SYNC_MAX_ATTEMPTS: "8"
+  CORRECTION_SYNC_MODE: "projection"

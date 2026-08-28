@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>抽取主流程与双入口 — tech-kg 抽取脚本 SDK 文档</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html">抽取脚本 SDK
+    <small>tech-kg-api · 实体/关系抽取工具集</small>
+  </a>
+  <nav>
+    <div class="group">开始</div>
+    <a href="index.html">概述与快速上手</a>
+    <a href="context.html">运行上下文 Context</a>
+    <div class="group">数据读取</div>
+    <a href="reading.html">MySQL 分页与增量</a>
+    <a href="values.html">值语义与类型转换</a>
+    <div class="group">标识与溯源</div>
+    <a href="identity.html">VID、稳定键与幂等</a>
+    <a href="provenance.html">溯源与置信度</a>
+    <div class="group">写入图谱</div>
+    <a href="entities.html">实体抽取与写入</a>
+    <a href="relations.html">关系抽取与写入</a>
+    <div class="group">编排</div>
+    <a class="active" href="runners.html">抽取主流程与双入口</a>
+    <a href="examples.html">完整脚本剖析</a>
+    <div class="group">参考</div>
+    <a href="reference.html">API 速查表</a>
+  </nav>
+</aside>
+<main class="content">
+
+<h1>抽取主流程与双入口</h1>
+<p class="subtitle">run_entity_extractor / run_relation_extractor —— 你只写 SQL 和 mapper，循环、容错、统计全部内置。</p>
+
+<div class="toc">
+  <div class="title">本页内容</div>
+  <ul>
+    <li><a href="#runner">主流程函数</a></li>
+    <li><a href="#sources">sources 声明</a></li>
+    <li><a href="#stats">summary 统计口径</a></li>
+    <li><a href="#dual">双入口模式：CLI + Temporal</a></li>
+    <li><a href="#preload">预加载编排（matcher 类脚本）</a></li>
+    <li><a href="#cli">CLI 参数参考</a></li>
+  </ul>
+</div>
+
+<h2 id="runner">主流程函数</h2>
+
+<div class="sig"><span class="f">run_entity_extractor</span>(*,
+    <span class="param">database</span>, <span class="param">batch_size</span>, <span class="param">limit</span>, <span class="param">dry_run</span>, <span class="param">ingest_batch</span>,
+    <span class="param">sources</span>: list[tuple[table, sql, mapper]],
+    <span class="param">since</span>=<span class="k">None</span>, <span class="param">global_limit</span>=<span class="k">False</span>, <span class="param">dedupe</span>=<span class="k">None</span>,
+    <span class="param">cursor_column</span>=<span class="k">None</span>, <span class="param">extra_params</span>=<span class="k">None</span>) -&gt; dict</div>
+
+<div class="sig"><span class="f">run_relation_extractor</span>(*,
+    <span class="param">database</span>, <span class="param">batch_size</span>, <span class="param">limit</span>, <span class="param">dry_run</span>, <span class="param">ingest_batch</span>,
+    <span class="param">sources</span>, <span class="param">since</span>=<span class="k">None</span>, <span class="param">dedupe</span>=<span class="k">None</span>,
+    <span class="param">cursor_column</span>=<span class="k">None</span>, <span class="param">extra_params</span>=<span class="k">None</span>) -&gt; dict</div>
+
+<p>内置的完整循环（两个函数结构对称）：</p>
+
+<pre><code><span class="k">for</span> table, sql, mapper <span class="k">in</span> sources:            <span class="c"># ① 逐源</span>
+    sql = apply_since(sql, since)                <span class="c"># ② 增量注入</span>
+    <span class="k">for</span> row <span class="k">in</span> iter_rows(engine, sql, ...):     <span class="c"># ③ 分页</span>
+        <span class="k">try</span>:
+            mapped = mapper(table, row, batch_id) <span class="c"># ④ 行级容错</span>
+        <span class="k">except</span> Exception:
+            stats[<span class="s">"invalid"</span>] += 1; log.warning(exc_info=<span class="k">True</span>)
+            <span class="k">continue</span>
+        ...dedupe / 攒批...                       <span class="c"># ⑤ batch_size 攒批写入</span>
+<span class="c"># ⑥ engine.dispose()（finally）；返回 summary dict</span></code></pre>
+
+<table>
+  <thead><tr><th>参数</th><th>语义</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>since</code></td>
+      <td>对每个源 SQL 注入 <code>updated_time &gt; :since</code>（自动处理 ORDER BY 位置），绑定值自动传</td>
+    </tr>
+    <tr>
+      <td><code>limit</code></td>
+      <td>单源行数上限（关系版）；实体版默认也是单源，见 <code>global_limit</code></td>
+    </tr>
+    <tr>
+      <td><code>global_limit</code></td>
+      <td>（仅实体）True 时 limit 跨所有源全局生效（旧项目脚本口径：先跑满一个源再跑下一个）</td>
+    </tr>
+    <tr>
+      <td><code>dedupe="first"</code></td>
+      <td>实体：同一 VID 首条胜出（旧产业链 setdefault 口径，如 paper-author 的同名作者）；关系：同一 <code>(type, src, dst)</code> 首条胜出</td>
+    </tr>
+    <tr>
+      <td><code>cursor_column</code></td>
+      <td>keyset 游标分页列（旧专利脚本口径，如 <code>"id"</code>）</td>
+    </tr>
+    <tr>
+      <td><code>extra_params</code></td>
+      <td>附加 SQL 绑定参数（如 <code>:table_suffix</code>），随 <code>:since</code> 一起传给 <code>iter_rows</code></td>
+    </tr>
+    <tr>
+      <td><code>ingest_batch</code></td>
+      <td>缺省自动生成 <code>ENTITY_/RELATION_ + UTC 时间戳</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="sources">sources 声明</h2>
+<p>sources 是 <code>(表名, SQL, mapper)</code> 三元组列表。表名会同时用作溯源的 <code>source_table</code> 与
+summary 的 key —— 用真实表名，不要用别名：</p>
+
+<pre><code>sources = [
+    (<span class="s">"dwd_zh_author"</span>, <span class="s">"SELECT * FROM dwd_zh_author ORDER BY paper_id, author_id"</span>, authored_by),
+    (<span class="s">"dwd_en_author"</span>, <span class="s">"SELECT * FROM dwd_en_author ORDER BY paper_id, author_id"</span>, authored_by),
+]</code></pre>
+
+<p>机构域多表共享一个 mapper 时可表驱动生成（表目录在 <code>org_catalog.py</code>）：</p>
+
+<pre><code>sources = [(t, <span class="s">f"SELECT * FROM {t} ORDER BY 1"</span>, mapper) <span class="k">for</span> t <span class="k">in</span> PERSON_TABLES]</code></pre>
+
+<h2 id="stats">summary 统计口径</h2>
+
+<pre><code>{
+  <span class="s">"ingest_batch"</span>: <span class="s">"RELATION_20260828T093000Z"</span>,
+  <span class="s">"sources"</span>: {
+    <span class="s">"dwd_zh_author"</span>: {
+      <span class="s">"scanned"</span>: 12000,        <span class="c"># 读到的源行数</span>
+      <span class="s">"valid"</span>: 11800,          <span class="c"># mapper 产出的记录数（含缺主键跳过）</span>
+      <span class="s">"written"</span>: 11500,        <span class="c"># 实际写图（rank 通道含 merge 更新）</span>
+      <span class="s">"updated"</span>: 0,            <span class="c"># 实体 merge 保护命中的更新数（关系版无此键）</span>
+      <span class="s">"invalid"</span>: 12,           <span class="c"># mapper 抛异常的行数</span>
+      <span class="s">"missing_source"</span>: 280,   <span class="c"># 关系版：端点验存起点缺失</span>
+      <span class="s">"missing_target"</span>: 8      <span class="c"># 关系版：端点验存终点缺失</span>
+    },
+    ...
+  }
+}</code></pre>
+
+<div class="admonition note">
+  <span class="title">invalid 与 missing 的区别</span>
+  <p><code>invalid</code> = mapper 抛异常（代码 bug 或极端脏数据，看 warning 日志定位）；
+  <code>missing_*</code> = 记录合法但端点不在图里（多半是实体脚本没先跑，属于编排问题）。
+  两者都不中断运行 —— 任务结束看 summary 决定是否补跑。</p>
+</div>
+
+<h2 id="dual">双入口模式：CLI + Temporal</h2>
+<p>每个脚本同时是（1）可独立调试的 CLI（2）被 Temporal activity 子进程加载的 workflow 函数。
+约定用 <code>build_sources(payload)</code> 把「参数 → sources」的决策收成一份，两个入口共享：</p>
+
+<pre><code><span class="k">def</span> <span class="f">build_sources</span>(payload: dict):
+    <span class="c"># payload 既来自 vars(args)（CLI），也来自 Temporal 注入 —— 同形态</span>
+    table_choice = payload.get(<span class="s">"table"</span>, <span class="s">"all"</span>)
+    tables = TABLES <span class="k">if</span> table_choice == <span class="s">"all"</span> <span class="k">else</span> (table_choice,)
+    <span class="k">return</span> [(t, <span class="s">f"SELECT * FROM {t} ORDER BY id"</span>, my_mapper) <span class="k">for</span> t <span class="k">in</span> tables]
+
+<span class="k">def</span> <span class="f">main</span>() -&gt; <span class="k">None</span>:                       <span class="c"># CLI 入口</span>
+    parser = build_parser(__doc__ <span class="k">or</span> <span class="s">""</span>)   <span class="c"># 通用 7 参数 + 脚本专属参数</span>
+    parser.add_argument(<span class="s">"--table"</span>, choices=(<span class="s">"all"</span>, *TABLES), default=<span class="s">"all"</span>)
+    args = parser.parse_args()
+    configure_logging(args.log_level)
+    sources = build_sources(vars(args))          <span class="c"># vars(args) 就是 payload</span>
+    print_json(run_relation_extractor(..., sources=sources))
+
+<span class="k">def</span> <span class="f">workflow</span>(payload: dict) -&gt; dict:       <span class="c"># Temporal 入口</span>
+    common = common_args_from_payload(payload)   <span class="c"># argparse 的 dict 化镜像</span>
+    configure_logging(common[<span class="s">"log_level"</span>])
+    sources = build_sources(payload)
+    <span class="k">return</span> run_relation_extractor(..., sources=sources)</code></pre>
+
+<p>payload 的约定：<strong>key 用 snake_case，与 argparse 转换后的 <code>vars(args)</code> 同形态</strong>
+（<code>--dry-run</code> → <code>dry_run</code>）。这样 <code>build_sources</code> 一份代码两条路径复用。</p>
+
+<div class="admonition warning">
+  <span class="title">镜像漂移是当前最大的坑</span>
+  <p><code>build_parser</code> 与 <code>common_args_from_payload</code> 是手工互为镜像 —— 新增通用参数要同步改
+  两个包的两个函数，漏改不会报错，只是 workflow 路径下参数静默失效。规划中的
+  <code>run_dual_mode()</code> 框架会用一份参数声明生成两条路径（见 <a href="index.html#roadmap">路线图</a>）。</p>
+</div>
+
+<h2 id="preload">预加载编排（matcher 类脚本）</h2>
+<p>匹配型关系脚本（FUNDED_BY / HAS_OUTPUT / LEADS / HAS_PARTICIPANT）在主流程前有一段
+固定编排：收候选 → 加载 matcher → 补 schema → 建报告：</p>
+
+<pre><code><span class="k">def</span> <span class="f">_prepare</span>(database, tables, batch_size, limit, since, dry_run, batch):
+    <span class="c"># ① 连 MySQL 收集候选键（try/finally dispose）</span>
+    engine = mysql_engine(database)
+    <span class="k">try</span>:
+        candidates = collect_organization_candidates(
+            engine, tables, batch_size=batch_size, limit=limit, since=since)
+    <span class="k">finally</span>:
+        engine.dispose()
+
+    <span class="c"># ② 连图加载 matcher；顺带幂等补边 schema（try/finally close）</span>
+    graph = graph_client()
+    <span class="k">try</span>:
+        matcher = ProjectEntityMatcher.from_graph(
+            graph, {**EMPTY_CANDIDATES, <span class="s">"organization"</span>: candidates})
+        <span class="k">if not</span> dry_run:
+            ensure_edge_schema(graph, <span class="s">"FUNDED_BY"</span>, EDGE_SCHEMA)
+    <span class="k">finally</span>:
+        graph.close()
+
+    <span class="c"># ③ 复核报告：ambiguous / not_found 进目录供人工复核</span>
+    <span class="k">return</span> matcher, ProjectIngestReport(report_dir, ingest_batch=batch,
+                                       dry_run=dry_run)
+
+<span class="c"># ④ 主流程结束后：summary 附上报告路径与计数</span>
+summary[<span class="s">"report_dir"</span>] = str(report.report_dir)
+summary[<span class="s">"report"</span>] = report.write()</code></pre>
+
+<ul>
+  <li>注意 matcher 的连接是<strong>预加载阶段独立建/关</strong>的 —— 主流程写图时另建连接，两条 try/finally 各管各的。</li>
+  <li><code>dry_run</code> 下 matcher 照常加载（只读不写），但跳过 <code>ensure_edge_schema</code>。</li>
+  <li>报告中 <code>matched / ambiguous / not_found / cross_domain</code> 是匹配质量的核心观测指标。</li>
+</ul>
+
+<h2 id="cli">CLI 参数参考</h2>
+<p><code>build_parser(description)</code> 提供全部内置脚本的通用 7 参数：</p>
+
+<table>
+  <thead><tr><th>参数</th><th>默认</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>--log-level</code></td><td><code>INFO</code></td><td>日志级别（httpx 自动压到 WARNING）</td></tr>
+    <tr><td><code>--database</code></td><td><code>gkx_element</code></td><td>MySQL 库名</td></tr>
+    <tr><td><code>--batch-size</code></td><td><code>500</code></td><td>分页页大小 = 写图攒批阈值</td></tr>
+    <tr><td><code>--limit</code></td><td>无</td><td>行数上限（试跑）</td></tr>
+    <tr><td><code>--since</code></td><td>无</td><td>增量水位：只抽 <code>updated_time &gt; since</code> 的行</td></tr>
+    <tr><td><code>--dry-run</code></td><td>关</td><td>只读源与映射，不写图</td></tr>
+    <tr><td><code>--ingest-batch</code></td><td>自动</td><td>显式批次号（幂等重跑/对账）</td></tr>
+  </tbody>
+</table>
+
+<p>脚本专属参数（<code>--source</code>、<code>--table</code>、<code>--report-dir</code> 等）在通用参数之后追加，
+对应 payload key 直接用参数名（<code>--report-dir</code> → <code>payload["report_dir"]</code>）。</p>
+
+<div class="pager">
+  <a href="relations.html">← 上一页：关系抽取与写入</a>
+  <a href="examples.html">下一页：完整脚本剖析 →</a>
+</div>
+
+<footer>tech-kg-api · 抽取脚本 SDK 文档 · 生成于 2026-08</footer>
+</main>
+</div>
+</body>
+</html>

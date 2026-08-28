@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>关系抽取与写入 — tech-kg 抽取脚本 SDK 文档</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html">抽取脚本 SDK
+    <small>tech-kg-api · 实体/关系抽取工具集</small>
+  </a>
+  <nav>
+    <div class="group">开始</div>
+    <a href="index.html">概述与快速上手</a>
+    <a href="context.html">运行上下文 Context</a>
+    <div class="group">数据读取</div>
+    <a href="reading.html">MySQL 分页与增量</a>
+    <a href="values.html">值语义与类型转换</a>
+    <div class="group">标识与溯源</div>
+    <a href="identity.html">VID、稳定键与幂等</a>
+    <a href="provenance.html">溯源与置信度</a>
+    <div class="group">写入图谱</div>
+    <a href="entities.html">实体抽取与写入</a>
+    <a class="active" href="relations.html">关系抽取与写入</a>
+    <div class="group">编排</div>
+    <a href="runners.html">抽取主流程与双入口</a>
+    <a href="examples.html">完整脚本剖析</a>
+    <div class="group">参考</div>
+    <a href="reference.html">API 速查表</a>
+  </nav>
+</aside>
+<main class="content">
+
+<h1>关系抽取与写入</h1>
+<p class="subtitle">EdgeRecord → 两条写入通道（确定性 rank / REST merge）· 端点验存 · schema 幂等补齐。</p>
+
+<div class="toc">
+  <div class="title">本页内容</div>
+  <ul>
+    <li><a href="#record">EdgeRecord</a></li>
+    <li><a href="#channels">两条写入通道怎么选</a></li>
+    <li><a href="#validate">端点验存与悬空端点</a></li>
+    <li><a href="#schema">ensure_edge_schema：属性幂等补齐</a></li>
+    <li><a href="#write">write_edges 行为与统计</a></li>
+    <li><a href="#example">mapper 实战示例</a></li>
+  </ul>
+</div>
+
+<h2 id="record">EdgeRecord</h2>
+
+<div class="sig"><span class="f">@dataclass</span>(frozen=<span class="k">True</span>)
+<span class="k">class</span> <span class="f">EdgeRecord</span>:
+    <span class="param">edge_type</span>: str                  <span class="c"># 如 "AUTHORED_BY"</span>
+    <span class="param">source_vid</span>: str                 <span class="c"># 起点 VID（实体侧公式）</span>
+    <span class="param">target_vid</span>: str                 <span class="c"># 终点 VID</span>
+    <span class="param">properties</span>: dict[str, Any]
+    <span class="param">rank</span>: int | <span class="k">None</span> = <span class="k">None</span>            <span class="c"># 非 None → rank 通道</span>
+    <span class="param">identity</span>: dict | <span class="k">None</span> = <span class="k">None</span>         <span class="c"># merge 通道 identityProps</span>
+    <span class="param">source_tag</span> / <span class="param">target_tag</span>: str | <span class="k">None</span> = <span class="k">None</span>   <span class="c"># 端点验存 tag</span>
+    <span class="param">validate_endpoints</span>: bool = <span class="k">True</span></div>
+
+<p>两条铁律：</p>
+<ol>
+  <li><strong>关系脚本一律不建顶点</strong>。实体先行（先跑对应实体脚本），端点缺失的边跳过并计数 ——
+  这是把「点不存在」从数据问题变成可观测统计的设计。</li>
+  <li><strong>端点 VID 必须用实体侧同一套公式</strong>（import 自 <code>common</code> / <code>resolvers</code>，见
+  <a href="identity.html#resolvers">端点解析</a>）。</li>
+</ol>
+
+<h2 id="channels">两条写入通道怎么选</h2>
+
+<table>
+  <thead>
+    <tr><th></th><th>确定性 rank 通道</th><th>REST merge 通道</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>触发条件</td><td><code>rank</code> 非 None（通常 <code>rank=edge_rank(...)</code>；固定 rank 0 表示「同端点唯一边」）</td><td><code>rank is None</code>（默认）</td></tr>
+    <tr><td>幂等身份</td><td><code>(edge_type, src, dst, rank)</code>，rank 由 sha256 确定性公式生成</td><td><code>identityProps</code>（默认 <code>source_record_id</code>）</td></tr>
+    <tr><td>底层语句</td><td>渲染多值 nGQL <code>INSERT EDGE T (props) VALUES "a"->"b"@rank:(...), ...;</code> 批量执行</td><td>逐条 <code>graph.merge_edge(src, dst, type, identity, props)</code></td></tr>
+    <tr><td>历史来源</td><td>机构域 / 专利域旧口径</td><td>学者 / 项目域旧口径</td></tr>
+    <tr><td>适合</td><td>同一对端点可有多条不同源边（股东、投资、高管任职）</td><td>按源记录唯一确定的边（论文-作者、项目-资助机构）</td></tr>
+  </tbody>
+</table>
+
+<pre><code><span class="c"># rank 通道：同端点多条边，每条对应一个源记录</span>
+EdgeRecord(<span class="s">"SHAREHOLDER_OF"</span>, person_vid, org_vid, props,
+           rank=edge_rank(<span class="s">"SHAREHOLDER_OF"</span>, person_vid, org_vid, rec_id))
+
+<span class="c"># rank=0：同端点逻辑上唯一（覆盖更新）</span>
+EdgeRecord(<span class="s">"AUTHORED_BY"</span>, paper_vid, person_vid, props, rank=0)
+
+<span class="c"># merge 通道：按 source_record_id upsert</span>
+EdgeRecord(<span class="s">"FUNDED_BY"</span>, project_vid, org_vid, props,
+           source_tag=<span class="s">"Project"</span>, target_tag=<span class="s">"Organization"</span>)</code></pre>
+
+<div class="admonition note">
+  <span class="title">批量 INSERT 的属性签名约束</span>
+  <p>rank 通道按 <code>(edge_type, 属性名元组)</code> 分组渲染多值 INSERT —— 同一批的记录必须
+  <strong>属性键完全一致</strong>（顺序也一致，dict 插入序）。mapper 返回的属性集固定时天然满足；
+  动态拼属性键的 mapper 会被 <code>render_edge_insert</code> 拒绝。merge 通道没有此约束。</p>
+</div>
+
+<h2 id="validate">端点验存与悬空端点</h2>
+<p>给 <code>EdgeRecord</code> 标上 <code>source_tag</code> / <code>target_tag</code> 后，写入前会按 tag 分组
+批量验存（<code>existing_vids</code>：一条 MATCH 查回已存在的 vid 集合），端点不在图中的边跳过并计数：</p>
+
+<pre><code>write_edges([...]) <span class="c"># →</span>
+{<span class="s">"scanned"</span>: 300, <span class="s">"written"</span>: 287,
+ <span class="s">"missing_source"</span>: 9, <span class="s">"missing_target"</span>: 4, <span class="s">"dry_run"</span>: 0}</code></pre>
+
+<p>旧口径里存在<strong>合法的悬空端点</strong>——端点是「桩点」（由别的域负责建、或永远不建）：
+
+AFFILIATED_WITH 的机构名桩、论文 DOI 桩。这类边把 <code>validate_endpoints=False</code>：</p>
+
+<pre><code>EdgeRecord(<span class="s">"PUBLISHED_IN"</span>, paper_vid,
+           paper_stub_vid(<span class="s">"journal"</span>, issn),  <span class="c"># DOI/ISSN 桩，不验存</span>
+           props, validate_endpoints=<span class="k">False</span>)</code></pre>
+
+<h2 id="schema">ensure_edge_schema：属性幂等补齐</h2>
+
+<div class="sig"><span class="f">ensure_edge_schema</span>(graph, edge_type, properties: Mapping[str, str],
+                  *, wait_seconds: float = 2.0) -&gt; list[str]</div>
+
+<p>merge 接口对 schema 外属性返回 400（同 Tag 一样 <code>Unknown column</code>）。这个工具在写边前
+<code>DESCRIBE EDGE</code> 一次，缺的属性幂等 <code>ALTER EDGE ADD</code>（等 2 秒传播），返回本次补的列名。
+<code>properties</code> 是「属性名 → nGQL 类型」表：</p>
+
+<pre><code><span class="k">from</span> script.relation_extractors_one_relation.common <span class="k">import</span> (
+    ensure_edge_schema, graph_client,
+)
+
+EDGE_SCHEMA = {
+    <span class="s">"source_table"</span>: <span class="s">"string"</span>, <span class="s">"source_record_id"</span>: <span class="s">"string"</span>,
+    <span class="s">"ingest_batch"</span>: <span class="s">"string"</span>, <span class="s">"ingest_time"</span>: <span class="s">"string"</span>,
+    <span class="s">"funded_amount"</span>: <span class="s">"double"</span>, <span class="s">"confidence"</span>: <span class="s">"double"</span>,
+    <span class="s">"match_method"</span>: <span class="s">"string"</span>, <span class="s">"match_evidence"</span>: <span class="s">"string"</span>,
+}
+
+graph = graph_client()
+<span class="k">try</span>:
+    <span class="k">if not</span> dry_run:
+        ensure_edge_schema(graph, <span class="s">"FUNDED_BY"</span>, EDGE_SCHEMA)
+<span class="k">finally</span>:
+    graph.close()</code></pre>
+
+<ul>
+  <li><code>DESCRIBE EDGE</code> 失败（边类型不存在/权限）时告警并跳过，不中断。</li>
+  <li>Edge 类型本身不存在时需要先 <code>CREATE EDGE</code>（各 <code>init_*_schema.py</code> 的职责），
+  本函数只补属性列。</li>
+</ul>
+
+<h2 id="write">write_edges 行为与统计</h2>
+
+<div class="sig"><span class="f">write_edges</span>(records: list[EdgeRecord], *, dry_run: bool) -&gt; dict[str, int]</div>
+
+<ol>
+  <li><code>dry_run</code> → 只统计。</li>
+  <li>端点验存：按 tag 批量查已有 vid；缺失端点的边计 <code>missing_source</code>/<code>missing_target</code> 并剔除。</li>
+  <li>rank 通道记录按 <code>(edge_type, 属性签名)</code> 分组，每组渲染一条多值 INSERT EDGE。</li>
+  <li>merge 通道逐条 <code>merge_edge</code>，identity 缺省取 <code>properties["source_record_id"]</code>
+  ——所以 merge 通道的 properties <strong>必须含</strong> <code>source_record_id</code>（<code>edge_provenance()</code> 自带）。</li>
+</ol>
+
+<h2 id="example">mapper 实战示例</h2>
+
+<pre><code><span class="k">from</span> script.relation_extractors_one_relation.common <span class="k">import</span> (
+    EdgeRecord, edge_provenance, edge_rank,
+)
+<span class="k">from</span> script.relation_extractors_one_relation.resolvers <span class="k">import</span> paper_source_id
+
+<span class="c"># 论文域 AUTHORED_BY：rank=0（同端点唯一），端点不验存（Person 先行写入）</span>
+<span class="k">def</span> <span class="f">authored_by</span>(table, row, batch):
+    pid = paper_source_id(row.get(<span class="s">"paper_id"</span>))   <span class="c"># 去 __数字 后缀</span>
+    aid = str(row.get(<span class="s">"author_id"</span>)) <span class="k">if</span> row.get(<span class="s">"author_id"</span>) <span class="k">else</span> <span class="s">""</span>
+    <span class="k">if not</span> pid <span class="k">or not</span> aid:
+        <span class="k">return</span> []
+    <span class="k">return</span> [EdgeRecord(
+        <span class="s">"AUTHORED_BY"</span>, <span class="s">f"paper_{pid}"</span>, <span class="s">f"person_{aid}"</span>,
+        {<span class="s">"author_order"</span>: str(row.get(<span class="s">"author_sequence"</span>) <span class="k">or</span> <span class="s">""</span>),
+         <span class="s">"is_corresponding"</span>: str(row.get(<span class="s">"correspond"</span>) <span class="k">or</span> <span class="s">""</span>),
+         <span class="s">"confidence"</span>: 1.0},
+        rank=0)]</code></pre>
+
+<pre><code><span class="c"># 机构域 SHAREHOLDER_OF：确定性 rank + 端点验存</span>
+<span class="k">def</span> <span class="f">shareholder_of</span>(table, row, batch):
+    src = person_vid_for_row(row, <span class="s">"shareholder"</span>, <span class="s">"name"</span>)
+    dst = organization_vid_from_row(row, resolver, ...)
+    rec_id = stable_record_id(table, row, (<span class="s">"org_id"</span>, <span class="s">"shareholder_name"</span>))
+    <span class="k">return</span> [EdgeRecord(
+        <span class="s">"SHAREHOLDER_OF"</span>, src, dst,
+        {**edge_provenance(source_table=table, source_record_id=rec_id,
+                           ingest_batch=batch),
+         <span class="s">"confidence"</span>: relation_confidence(row, source_table=table)},
+        rank=edge_rank(<span class="s">"SHAREHOLDER_OF"</span>, src, dst, rec_id),
+        source_tag=<span class="s">"Person"</span>, target_tag=<span class="s">"Organization"</span>)]</code></pre>
+
+<div class="pager">
+  <a href="entities.html">← 上一页：实体抽取与写入</a>
+  <a href="runners.html">下一页：抽取主流程与双入口 →</a>
+</div>
+
+<footer>tech-kg-api · 抽取脚本 SDK 文档 · 生成于 2026-08</footer>
+</main>
+</div>
+</body>
+</html>

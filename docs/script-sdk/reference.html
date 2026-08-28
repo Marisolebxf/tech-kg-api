@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API 速查表 — tech-kg 抽取脚本 SDK 文档</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html">抽取脚本 SDK
+    <small>tech-kg-api · 实体/关系抽取工具集</small>
+  </a>
+  <nav>
+    <div class="group">开始</div>
+    <a href="index.html">概述与快速上手</a>
+    <a href="context.html">运行上下文 Context</a>
+    <div class="group">数据读取</div>
+    <a href="reading.html">MySQL 分页与增量</a>
+    <a href="values.html">值语义与类型转换</a>
+    <div class="group">标识与溯源</div>
+    <a href="identity.html">VID、稳定键与幂等</a>
+    <a href="provenance.html">溯源与置信度</a>
+    <div class="group">写入图谱</div>
+    <a href="entities.html">实体抽取与写入</a>
+    <a href="relations.html">关系抽取与写入</a>
+    <div class="group">编排</div>
+    <a href="runners.html">抽取主流程与双入口</a>
+    <a href="examples.html">完整脚本剖析</a>
+    <div class="group">参考</div>
+    <a class="active" href="reference.html">API 速查表</a>
+  </nav>
+</aside>
+<main class="content">
+
+<h1>API 速查表</h1>
+<p class="subtitle">全部公开 API 按模块分组。缩写：E = <code>entity_extractors_one_entity</code>，R = <code>relation_extractors_one_relation</code>。</p>
+
+<h2>kg_sdk（运行时）</h2>
+<p>模块：<code>backend/sdk/kg_sdk.py</code></p>
+<table>
+  <thead><tr><th>API</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>Context(raw)</code></td><td>运行上下文；五客户端懒构造、None 降级</td></tr>
+    <tr><td><code>ctx.mysql / graph / milvus / llm / embedding</code></td><td>懒构造客户端属性，未配置返回 None</td></tr>
+    <tr><td><code>ctx.config</code></td><td><code>ScriptConfig(watermark, checkpoint)</code>（只读）</td></tr>
+    <tr><td><code>ctx.step_id / attempt / prev_outputs / execution_id / task_id / definition_id</code></td><td>调度元信息</td></tr>
+    <tr><td><code>ctx.to_dict()</code></td><td>原始注入 dict（调试）</td></tr>
+    <tr><td><code>current_context()</code></td><td>单参脚本入口：读 <code>KG_SCRIPT_CTX</code> 构造 Context，未配置返回 None</td></tr>
+    <tr><td><code>reset_current_context()</code></td><td>测试用：清缓存</td></tr>
+  </tbody>
+</table>
+
+<h2>运行时与环境（E.common / R.common 各一份，语义相同）</h2>
+<table>
+  <thead><tr><th>API</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>configure_logging(level)</code></td><td>basicConfig + httpx 压 WARNING</td></tr>
+    <tr><td><code>mysql_engine(database="gkx_element")</code></td><td>env 驱动 Engine（pool_pre_ping）；ctx 场景改用 <code>ctx.mysql.engine</code></td></tr>
+    <tr><td><code>graph_client()</code></td><td>env 驱动 TRSGraphClient（自动 connect）；ctx 场景用 <code>ctx.graph</code></td></tr>
+    <tr><td><code>build_parser(description)</code></td><td>通用 7 参数 argparse（log-level/database/batch-size/limit/since/dry-run/ingest-batch）</td></tr>
+    <tr><td><code>common_args_from_payload(payload)</code></td><td>workflow payload → 同形态参数 dict（build_parser 的镜像）</td></tr>
+    <tr><td><code>print_json(payload)</code></td><td>ensure_ascii=False 缩进输出</td></tr>
+    <tr><td><code>now_utc()</code></td><td>UTC ISO 秒级时间戳（仅 R.common）</td></tr>
+  </tbody>
+</table>
+
+<h2>读取与增量（E.common / R.common 各一份）</h2>
+<table>
+  <thead><tr><th>API</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>iter_rows(engine, sql, *, batch_size, limit, cursor_column, params)</code></td><td>分页迭代器：默认 LIMIT/OFFSET，指定 cursor_column 走 keyset（SQL 需含 <code>:cursor</code> + 唯一排序）</td></tr>
+    <tr><td><code>apply_since(sql, since, col="updated_time")</code></td><td>增量条件注入（兼容 WHERE / 无 WHERE / ORDER BY 末位三种形态）</td></tr>
+  </tbody>
+</table>
+
+<h2>值语义（E.common）</h2>
+<table>
+  <thead><tr><th>API</th><th>口径</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>text_or_empty(v)</code></td><td>原文</td><td><code>str(v) if v else ""</code>，保留原文</td></tr>
+    <tr><td><code>str_or_empty(v)</code></td><td>专利</td><td>仅 None → ""</td></tr>
+    <tr><td><code>paper_text(v)</code></td><td>论文</td><td>text_or_empty + 换行转空格</td></tr>
+    <tr><td><code>date_text(v)</code> / <code>datetime_text(v)</code></td><td>项目/专利</td><td>日期 → ISO 文本 / T 分隔文本</td></tr>
+    <tr><td><code>text_or_none(v, max_length=20000)</code></td><td>机构</td><td>strip + 截断，空白 → None</td></tr>
+    <tr><td><code>clean_text(v)</code></td><td>内部键</td><td>strip + 折叠空白（VID/键专用）</td></tr>
+    <tr><td><code>to_float_or_none(v)</code> / <code>to_int_or_none(v)</code></td><td>机构</td><td>脏值防御转换，非法 → None</td></tr>
+    <tr><td><code>to_float_or_zero(v)</code> / <code>to_int_or_zero(v)</code></td><td>项目</td><td>非法 → 0</td></tr>
+    <tr><td><code>parse_json(v)</code></td><td>专利</td><td>字符串尝试 json.loads，失败原样</td></tr>
+    <tr><td><code>json_snapshot(v)</code> / <code>original_text(v)</code> / <code>normalized_language(v)</code></td><td>专利</td><td>JSON 字段快照 / 元素 text 连接 / 数组逗号串</td></tr>
+    <tr><td><code>compact_json(v)</code> / <code>bounded_json(v, max_length=64000)</code></td><td>机构</td><td>紧凑序列化 / 超长降级审计摘要</td></tr>
+    <tr><td><code>json_safe(v)</code> / <code>normalize_json(v)</code></td><td>通用</td><td>递归可序列化 / 标量归一</td></tr>
+    <tr><td><code>extra_json(row)</code></td><td>通用</td><td>整行源数据快照</td></tr>
+    <tr><td><code>first_value(row, *names)</code> / <code>first(row, *fields)</code></td><td>机构/新</td><td>字段候选链取首个非空</td></tr>
+    <tr><td><code>is_virtual_source_row(row)</code></td><td>机构</td><td>mock/stub/virtual/placeholder/test 合成行识别</td></tr>
+  </tbody>
+</table>
+
+<h2>VID 与稳定键（E.common；公式含义见 <a href="identity.html">标识页</a>）</h2>
+<table>
+  <thead><tr><th>API</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>bounded_vid(value, max_bytes=64)</code></td><td>64 字节安全阀：超限截断 + md5 后缀</td></tr>
+    <tr><td><code>md5_hex(v)</code> / <code>normalize_key(v)</code> / <code>md5_vid(prefix, v, short=True)</code></td><td>哈希基础件</td></tr>
+    <tr><td><code>organization_vid(org_id)</code> / <code>project_vid(id)</code> / <code>news_vid(id)</code></td><td>主键直拼族</td></tr>
+    <tr><td><code>event_vid(table, record_id)</code> / <code>datasource_vid(table)</code></td><td>表名入键族</td></tr>
+    <tr><td><code>person_vid(kind, *identity)</code> / <code>product_vid(name)</code></td><td>复合身份哈希族</td></tr>
+    <tr><td><code>stable_record_id(table, row, preferred_fields)</code></td><td>复合键优先、整行 JSON md5 兜底</td></tr>
+    <tr><td><code>source_record_id(row, *fields)</code></td><td>候选链版稳定键（sha256 前 24 位兜底）</td></tr>
+    <tr><td><code>edge_rank(type, src, dst, rec_id)</code> / <code>stable_rank(v)</code>（R.common）</td><td>边的确定性 rank</td></tr>
+  </tbody>
+</table>
+
+<h2>端点解析（R.resolvers）</h2>
+<table>
+  <thead><tr><th>API</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>keyword_vid(keyword)</code></td><td>三域统一 keyword VID</td></tr>
+    <tr><td><code>paper_source_id(raw)</code></td><td>论文 ID 去 <code>__数字</code> 后缀</td></tr>
+    <tr><td><code>paper_stub_vid(prefix, key)</code></td><td>md5 桩 VID（悬空端点用）</td></tr>
+    <tr><td><code>ExactOrganizationResolver.load(engine)</code> / <code>.resolve_exact(name)</code></td><td>机构名精确唯一解析（7 表名→id 索引）</td></tr>
+    <tr><td><code>resolved_organization_vid(raw, resolver, fallback_name=)</code></td><td>名解析优先，否则视值为 ID</td></tr>
+    <tr><td><code>organization_vid_from_row(row, resolver, id_fields=, name_fields=)</code></td><td>ID 候选链 + 名解析</td></tr>
+    <tr><td><code>person_vid_for_row(row, kind, name_field)</code></td><td>实体侧 Person 公式的 row 版</td></tr>
+    <tr><td><code>parse_entity_list(v)</code></td><td>容错解析实体列表字段</td></tr>
+  </tbody>
+</table>
+
+<h2>溯源与置信度（E.common / R.common）</h2>
+<table>
+  <thead><tr><th>API</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>provenance(*, table, record_id, ingest_batch, source_url=, source_update_time=, confidence=1.0, source_system=)</code></td><td>实体通用溯源（match_method 固定 source_primary_key）</td></tr>
+    <tr><td><code>org_provenance(*, table, record_id, row, ingest_batch)</code></td><td>机构域溯源（动态置信度 + URL/时间候选链）</td></tr>
+    <tr><td><code>edge_provenance(*, source_table, source_record_id, ingest_batch)</code></td><td>边最小溯源四件套（R.common）</td></tr>
+    <tr><td><code>entity_confidence(row, source_table=)</code></td><td>机构域实体四段打分</td></tr>
+    <tr><td><code>relation_confidence(row, source_table=)</code></td><td>机构域关系打分</td></tr>
+    <tr><td><code>organization_id_from_row(row)</code> / <code>ORGANIZATION_ID_FIELDS</code></td><td>机构 ID 七字段候选链</td></tr>
+  </tbody>
+</table>
+
+<h2>实体写入（E.common）</h2>
+<table>
+  <thead><tr><th>API</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>EntityRecord(tag, vid, properties, merge_protect=False, identity=None)</code></td><td>实体记录</td></tr>
+    <tr><td><code>write_records(records, *, dry_run)</code></td><td>批量 merge_node（merge_protect 分组读已有节点）</td></tr>
+    <tr><td><code>merge_existing_properties(existing, incoming)</code></td><td>机构域合并保护（只填空 / confidence 只升 / extra_json 累积）</td></tr>
+    <tr><td><code>existing_vertex_properties(graph, tag, vids)</code></td><td>批量读已有节点属性</td></tr>
+    <tr><td><code>run_entity_extractor(*, database, batch_size, limit, dry_run, ingest_batch, sources, since=, global_limit=, dedupe=, cursor_column=, extra_params=)</code></td><td>实体抽取主流程</td></tr>
+  </tbody>
+</table>
+
+<h2>关系写入（R.common）</h2>
+<table>
+  <thead><tr><th>API</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>EdgeRecord(edge_type, source_vid, target_vid, properties, rank=None, identity=None, source_tag=None, target_tag=None, validate_endpoints=True)</code></td><td>边记录（rank 非 None → rank 通道）</td></tr>
+    <tr><td><code>write_edges(records, *, dry_run)</code></td><td>验存 + rank/merge 双通道写入</td></tr>
+    <tr><td><code>render_edge_insert(records)</code></td><td>渲染多值 INSERT EDGE（同批属性签名必须一致）</td></tr>
+    <tr><td><code>ensure_edge_schema(graph, edge_type, properties, wait_seconds=2.0)</code></td><td>DESCRIBE + 幂等 ALTER EDGE ADD</td></tr>
+    <tr><td><code>existing_vids(graph, tag, vids)</code></td><td>批量端点验存</td></tr>
+    <tr><td><code>run_relation_extractor(*, database, batch_size, limit, dry_run, ingest_batch, sources, since=, dedupe=, cursor_column=, extra_params=)</code></td><td>关系抽取主流程</td></tr>
+  </tbody>
+</table>
+
+<h2>周边模块（机构域 / 项目匹配）</h2>
+<table>
+  <thead><tr><th>模块</th><th>提供</th></tr></thead>
+  <tbody>
+    <tr><td><code>E.org_catalog</code></td><td><code>ORG_TABLE_SPECS</code> 机构域源表目录（表名 / 中文名 / 实体类型 / kind / 复合稳定键字段），派生 <code>ORGANIZATION_TABLES</code> / <code>PERSON_TABLES</code> 等分组</td></tr>
+    <tr><td><code>E.mappers</code></td><td>机构域各实体类型的字段映射函数（Organization/Person/Event/News/Product 属性构造）</td></tr>
+    <tr><td><code>script.project_entity_matcher</code></td><td><code>ProjectEntityMatcher.from_graph(graph, candidates)</code>：按候选键从图建精确索引（<code>.organization / .person / .paper_doi / .paper_title / .patent_number / .report_title</code> 等 <code>ExactIndex.match(value, method=)</code> → matched/ambiguous/not_found + vid/evidence），以及链式便捷方法 <code>match_paper / match_patent / match_report / match_person</code>（doi 精确→title|year→title）</td></tr>
+    <tr><td><code>script.project_graph_utils</code></td><td>项目域边属性构造件：<code>funded_by_org_props</code>、<code>match_audit_props</code>、<code>parse_list</code>、<code>to_float</code> 等</td></tr>
+    <tr><td><code>script.project_ingest_report</code></td><td><code>ProjectIngestReport(dir, ingest_batch, dry_run)</code>：matched/ambiguous/not_found/cross_domain 计数与复核目录，<code>.increment/.add/.write()</code></td></tr>
+    <tr><td><code>script.etl_watermark</code></td><td>水位独立 CLI（读写增量游标）</td></tr>
+    <tr><td><code>script.init_*_schema.py</code></td><td>各域 graph schema DDL（CREATE SPACE/TAG/EDGE）</td></tr>
+  </tbody>
+</table>
+
+<h2>常见错误对照</h2>
+<table>
+  <thead><tr><th>报错</th><th>原因 → 解法</th></tr></thead>
+  <tbody>
+    <tr><td><code>400 SemanticError: Unknown column 'X' in schema</code></td><td>属性名不在 Tag/Edge schema → 核对 DDL；边可在写前 <code>ensure_edge_schema</code> 补列</td></tr>
+    <tr><td><code>400 Storage Error: data type does not meet the requirements</code></td><td>给 string 列传了 int/float → 写入层已统一 stringify；自查是否绕过了 <code>write_records</code></td></tr>
+    <tr><td>边大量 <code>missing_source / missing_target</code></td><td>实体脚本没先跑，或端点 VID 公式与实体侧不一致 → 先跑实体脚本；端点公式一律 import</td></tr>
+    <tr><td>重跑后点/边翻倍</td><td>VID/rank/identity 不确定 → 检查是否用了自增序号/时间戳/未归一化文本参与身份</td></tr>
+    <tr><td><code>cannot render an empty edge insert</code> / 属性签名不一致</td><td>rank 通道同批属性键不一致 → mapper 属性集固定，动态键改走 merge 通道</td></tr>
+    <tr><td>merge 通道边 upsert 不去重</td><td>缺 <code>source_record_id</code> 属性 → <code>edge_provenance()</code> 自带；自定义 identity 显式传</td></tr>
+    <tr><td>workflow 路径参数不生效</td><td><code>build_parser</code> 与 <code>common_args_from_payload</code> 镜像漂移 → 对照两个函数确认 key 一致</td></tr>
+  </tbody>
+</table>
+
+<div class="pager">
+  <a href="examples.html">← 上一页：完整脚本剖析</a>
+  <span></span>
+</div>
+
+<footer>tech-kg-api · 抽取脚本 SDK 文档 · 生成于 2026-08</footer>
+</main>
+</div>
+</body>
+</html>

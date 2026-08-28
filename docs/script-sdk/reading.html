@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MySQL 分页与增量 — tech-kg 抽取脚本 SDK 文档</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html">抽取脚本 SDK
+    <small>tech-kg-api · 实体/关系抽取工具集</small>
+  </a>
+  <nav>
+    <div class="group">开始</div>
+    <a href="index.html">概述与快速上手</a>
+    <a href="context.html">运行上下文 Context</a>
+    <div class="group">数据读取</div>
+    <a class="active" href="reading.html">MySQL 分页与增量</a>
+    <a href="values.html">值语义与类型转换</a>
+    <div class="group">标识与溯源</div>
+    <a href="identity.html">VID、稳定键与幂等</a>
+    <a href="provenance.html">溯源与置信度</a>
+    <div class="group">写入图谱</div>
+    <a href="entities.html">实体抽取与写入</a>
+    <a href="relations.html">关系抽取与写入</a>
+    <div class="group">编排</div>
+    <a href="runners.html">抽取主流程与双入口</a>
+    <a href="examples.html">完整脚本剖析</a>
+    <div class="group">参考</div>
+    <a href="reference.html">API 速查表</a>
+  </nav>
+</aside>
+<main class="content">
+
+<h1>MySQL 分页与增量</h1>
+<p class="subtitle"><code>iter_rows()</code> · <code>apply_since()</code> —— 大表安全读取与增量水位注入。</p>
+
+<div class="toc">
+  <div class="title">本页内容</div>
+  <ul>
+    <li><a href="#engine">获取引擎</a></li>
+    <li><a href="#iter">iter_rows：分页迭代器</a></li>
+    <li><a href="#keyset">keyset 游标模式</a></li>
+    <li><a href="#since">apply_since：增量条件注入</a></li>
+    <li><a href="#watermark">与水位（watermark）配合</a></li>
+  </ul>
+</div>
+
+<h2 id="engine">获取引擎</h2>
+
+<div class="sig"><span class="f">mysql_engine</span>(database: str = <span class="s">"gkx_element"</span>) -&gt; sqlalchemy.engine.Engine</div>
+
+<p>内置脚本路径：读 <code>MYSQL_USERNAME / MYSQL_PASSWORD / MYSQL_HOST / MYSQL_PORT</code> 环境变量，
+pymysql + <code>pool_pre_ping</code>（连接失效自动重连）。</p>
+
+<pre><code><span class="k">from</span> script.entity_extractors_one_entity.common <span class="k">import</span> mysql_engine
+
+engine = mysql_engine(<span class="s">"gkx_element"</span>)
+<span class="k">try</span>:
+    ...
+<span class="k">finally</span>:
+    engine.dispose()        <span class="c"># 主流程函数已内置 try/finally dispose，手写循环时才需要</span></code></pre>
+
+<div class="admonition note">
+  <span class="title">用户上传脚本</span>
+  <p>走 Context 时不要用 <code>mysql_engine()</code>，改用 <code>ctx.mysql.engine</code>（连接参数由 activity 注入），
+  <code>iter_rows()</code> 本身接受任意 Engine —— <code>iter_rows(ctx.mysql.engine, ...)</code> 直接可用。</p>
+</div>
+
+<h2 id="iter">iter_rows：分页迭代器</h2>
+
+<div class="sig"><span class="f">iter_rows</span>(engine, sql, *, batch_size: int,
+        <span class="param">limit</span>: int | <span class="k">None</span> = <span class="k">None</span>,
+        <span class="param">cursor_column</span>: str | <span class="k">None</span> = <span class="k">None</span>,
+        <span class="param">params</span>: dict | <span class="k">None</span> = <span class="k">None</span>) -&gt; Iterable[dict[str, Any]]</div>
+
+<p>分页读取，逐行 <code>yield dict(row)</code>。默认 <strong>LIMIT/OFFSET 模式</strong>：框架自动在 SQL 后拼
+<code>LIMIT :limit OFFSET :offset</code>，每页一个独立连接（避免长事务）。指定 <code>cursor_column</code> 时切换到
+<strong>keyset 游标模式</strong>（见下节）。</p>
+
+<ul>
+  <li><code>batch_size</code>：每页行数（CLI 默认 500）。</li>
+  <li><code>limit</code>：总行数上限（调试 / 试跑用），框架按剩余量裁剪最后一页。</li>
+  <li><code>params</code>：<code>:name</code> 绑定参数字典，与 SQLAlchemy <code>text()</code> 同约定。</li>
+</ul>
+
+<pre><code><span class="k">from</span> script.entity_extractors_one_entity.common <span class="k">import</span> iter_rows
+
+SQL = <span class="s">"SELECT * FROM dwd_scholar WHERE status = :status ORDER BY scholar_id"</span>
+
+<span class="k">for</span> row <span class="k">in</span> iter_rows(engine, SQL, batch_size=500,
+                      limit=1000, params={<span class="s">"status"</span>: 1}):
+    process(row)</code></pre>
+
+<div class="admonition note">
+  <span class="title">SQL 要有确定性排序</span>
+  <p>OFFSET 模式下不带 <code>ORDER BY</code> 的分页不保证无重复/无遗漏（InnoDB 并发写入时页会漂移）。
+  约定：源 SQL 一律显式 <code>ORDER BY</code> 主键或唯一列。</p>
+</div>
+
+<h2 id="keyset">keyset 游标模式</h2>
+<p>大表深分页时 OFFSET 会越来越慢。指定 <code>cursor_column</code> 走 keyset：要求 SQL 里带
+<code>:cursor</code> 绑定参数并按该列<strong>唯一排序</strong>，框架以每页末行的列值作为下一页游标：</p>
+
+<pre><code><span class="c"># 专利域脚本口径：数字字符串主键走 CAST 游标</span>
+SQL = <span class="s">"""
+SELECT p.* FROM dwd_patent p
+WHERE CAST(p.id AS UNSIGNED) &gt; :cursor
+ORDER BY CAST(p.id AS UNSIGNED)
+"""</span>
+
+<span class="k">for</span> row <span class="k">in</span> iter_rows(engine, SQL, batch_size=500,
+                      cursor_column=<span class="s">"id"</span>, limit=<span class="k">None</span>):
+    process(row)</code></pre>
+
+<table>
+  <thead><tr><th>模式</th><th>触发条件</th><th>SQL 要求</th><th>适用</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>LIMIT/OFFSET</td>
+      <td><code>cursor_column=None</code>（默认）</td>
+      <td>隐式追加分页子句，无需占位符；建议 <code>ORDER BY</code></td>
+      <td>中小表、调试</td>
+    </tr>
+    <tr>
+      <td>keyset 游标</td>
+      <td>传入 <code>cursor_column</code></td>
+      <td>SQL 含 <code>:cursor</code> 绑定 + 按该列唯一排序</td>
+      <td>大表、深分页（专利域）</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="since">apply_since：增量条件注入</h2>
+
+<div class="sig"><span class="f">apply_since</span>(sql: str, since: str | <span class="k">None</span>, col: str = <span class="s">"updated_time"</span>) -&gt; str</div>
+
+<p>把 <code>col &gt; :since</code> 注入源 SQL，<strong>自动处理三种形态</strong>：</p>
+
+<pre><code>apply_since(<span class="s">"SELECT * FROM t"</span>, <span class="s">"2026-08-01"</span>)
+<span class="c"># SELECT * FROM t WHERE updated_time &gt; :since</span>
+
+apply_since(<span class="s">"SELECT * FROM t WHERE status = 1"</span>, <span class="s">"2026-08-01"</span>)
+<span class="c"># ... WHERE status = 1 AND updated_time &gt; :since</span>
+
+apply_since(<span class="s">"SELECT * FROM t WHERE status = 1 ORDER BY id"</span>, <span class="s">"2026-08-01"</span>)
+<span class="c"># ... WHERE status = 1 AND updated_time &gt; :since ORDER BY id   ← ORDER BY 保持末位</span></code></pre>
+
+<p>配合 <code>iter_rows</code> 时记得把绑定值传进 params：</p>
+
+<pre><code>sql = apply_since(SQL, since)
+rows = iter_rows(engine, sql, batch_size=500,
+                 params={<span class="s">"since"</span>: since} <span class="k">if</span> since <span class="k">else</span> <span class="k">None</span>)</code></pre>
+
+<div class="admonition note">
+  <span class="title">主流程已代劳</span>
+  <p><code>run_entity_extractor / run_relation_extractor</code> 收到 <code>since</code> 参数后会对每个源自动
+  <code>apply_since</code> 并注入 <code>:since</code> 绑定 —— 只有自己手写读取循环（收集候选键等场景）才需要直接用这两个函数。</p>
+</div>
+
+<h2 id="watermark">与水位（watermark）配合</h2>
+<p>推荐的增量抽取闭环：</p>
+
+<pre><code><span class="k">def</span> <span class="f">workflow</span>(payload: dict) -&gt; dict:
+    <span class="c"># ① 优先级：显式 payload &gt; 上次成功运行的水位</span>
+    ctx = current_context()
+    since = payload.get(<span class="s">"since"</span>)
+    <span class="k">if</span> ctx <span class="k">and</span> ctx.config.watermark:
+        since = since <span class="k">or</span> ctx.config.watermark
+
+    <span class="c"># ② 增量跑（框架注入 since 条件与绑定）</span>
+    summary = run_entity_extractor(..., since=since, sources=sources)
+
+    <span class="c"># ③ 报告本次最大更新时间，供框架写回水位</span>
+    summary[<span class="s">"watermark"</span>] = max_source_update_time(summary)
+    <span class="k">return</span> summary</code></pre>
+
+<ul>
+  <li>水位格式为 ISO 时间戳字符串，由 activity 在 step 成功后统一写回（<code>_write_watermark</code>）。</li>
+  <li><code>--since</code> 增量模式在旧脚本支持的域（Paper/Journal/Report/News/机构域）均可用；
+  首次运行传 <code>since=None</code> 即全量。</li>
+</ul>
+
+<div class="pager">
+  <a href="context.html">← 上一页：运行上下文 Context</a>
+  <a href="values.html">下一页：值语义与类型转换 →</a>
+</div>
+
+<footer>tech-kg-api · 抽取脚本 SDK 文档 · 生成于 2026-08</footer>
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VID、稳定键与幂等 — tech-kg 抽取脚本 SDK 文档</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html">抽取脚本 SDK
+    <small>tech-kg-api · 实体/关系抽取工具集</small>
+  </a>
+  <nav>
+    <div class="group">开始</div>
+    <a href="index.html">概述与快速上手</a>
+    <a href="context.html">运行上下文 Context</a>
+    <div class="group">数据读取</div>
+    <a href="reading.html">MySQL 分页与增量</a>
+    <a href="values.html">值语义与类型转换</a>
+    <div class="group">标识与溯源</div>
+    <a class="active" href="identity.html">VID、稳定键与幂等</a>
+    <a href="provenance.html">溯源与置信度</a>
+    <div class="group">写入图谱</div>
+    <a href="entities.html">实体抽取与写入</a>
+    <a href="relations.html">关系抽取与写入</a>
+    <div class="group">编排</div>
+    <a href="runners.html">抽取主流程与双入口</a>
+    <a href="examples.html">完整脚本剖析</a>
+    <div class="group">参考</div>
+    <a href="reference.html">API 速查表</a>
+  </nav>
+</aside>
+<main class="content">
+
+<h1>VID、稳定键与幂等</h1>
+<p class="subtitle">确定性标识是整个抽取体系的根基：同一条源数据，任何时候重跑都得到同一个点/同一个身份。</p>
+
+<div class="toc">
+  <div class="title">本页内容</div>
+  <ul>
+    <li><a href="#why">为什么标识必须确定性</a></li>
+    <li><a href="#vid">顶点 VID 公式</a></li>
+    <li><a href="#bounded">bounded_vid：64 字节安全阀</a></li>
+    <li><a href="#stable">行级稳定键</a></li>
+    <li><a href="#edge-rank">边 rank：边的确定性身份</a></li>
+    <li><a href="#resolvers">端点解析（关系脚本专用）</a></li>
+    <li><a href="#rules">VID 公式使用规则</a></li>
+  </ul>
+</div>
+
+<h2 id="why">为什么标识必须确定性</h2>
+<p>所有写入都走 upsert：<code>merge_node(labels, identity, props)</code>、带 rank 的
+<code>INSERT EDGE</code>、<code>merge_edge(src, dst, type, identityProps, props)</code>。upsert 的匹配键来自
+VID/rank —— 如果两次运行对同一行源数据算出不同的 ID，就会产生重复点/边，而不是覆盖更新。因此：</p>
+
+<pre><code>❌ vid = f<span class="s">"person_{uuid4()}"</span>          <span class="c"># 每次都新点，重跑即翻倍</span>
+❌ vid = f<span class="s">"person_{row_index}"</span>      <span class="c"># 顺序变了 ID 就漂</span>
+✅ vid = f<span class="s">"person_{scholar_id}"</span>     <span class="c"># 源主键 → 稳定</span>
+✅ vid = person_vid(kind, org, name, birth, country)   <span class="c"># 复合身份哈希 → 稳定</span></code></pre>
+
+<h2 id="vid">顶点 VID 公式</h2>
+<p>工具集内置各实体族的 VID 公式（<code>entity_extractors_one_entity/common.py</code>）：</p>
+
+<table>
+  <thead><tr><th>函数</th><th>公式</th><th>用于</th></tr></thead>
+  <tbody>
+    <tr><td><code>organization_vid(org_id)</code></td><td><code>org_{org_id}</code></td><td>Organization 点，边端点</td></tr>
+    <tr><td><code>project_vid(project_id)</code></td><td><code>project_{project_id}</code></td><td>Project</td></tr>
+    <tr><td><code>news_vid(record_id)</code></td><td><code>news_{record_id}</code></td><td>News</td></tr>
+    <tr><td><code>event_vid(table, record_id)</code></td><td><code>event_{table}_{record_id}</code></td><td>Event（表名入键，不同表的同名事件不撞）</td></tr>
+    <tr><td><code>datasource_vid(table)</code></td><td><code>ds_{table}</code></td><td>DataSource 点</td></tr>
+    <tr><td><code>person_vid(kind, *identity)</code></td><td><code>person_{md5(kind|org|name|birth|country)}</code></td><td>机构角色 Person（无源主键，复合身份哈希）</td></tr>
+    <tr><td><code>product_vid(name)</code></td><td><code>product_{md5(NFKC+casefold(name))}</code>（完整 32 位）</td><td>Product（无主键，按名哈希）</td></tr>
+    <tr><td><code>md5_vid(prefix, value, short=True)</code></td><td><code>{prefix}_{md5(normalize_key(value))[:16]}</code></td><td>自定义族：归一化 + md5 短哈希</td></tr>
+  </tbody>
+</table>
+
+<p>有源主键的实体直接拼前缀；无主键的（机构角色自然人、产品）用<strong>复合身份哈希</strong>。
+<code>person_vid</code> 的各分量先做 NFKC + casefold 再 <code>|</code> 连接：</p>
+
+<pre><code><span class="k">from</span> script.entity_extractors_one_entity.common <span class="k">import</span> person_vid
+
+vid = person_vid(<span class="s">"shareholder"</span>, org_id, name, birth_date, country)
+<span class="c"># 'person_a3f1…'  md5("shareholder|org123|张三|1970-01-01|CN") 截断包装</span></code></pre>
+
+<p>论文/学者域是直接拼接（<code>person_{scholar_id}</code>、<code>paper_{paper_id}</code>）——两个域的 Person 点
+靠 <code>--source</code> 通道区分，互不冲突。</p>
+
+<h2 id="bounded">bounded_vid：64 字节安全阀</h2>
+<p>NebulaGraph 固定长度字符串类型的 VID 上限 64 字节。所有 VID 公式最后都过一道
+<code>bounded_vid</code>：超限则按字节截断并附加全文 md5 后缀，保证<strong>截断后仍然唯一且确定</strong>：</p>
+
+<div class="sig"><span class="f">bounded_vid</span>(value: str, max_bytes: int = 64) -&gt; str</div>
+
+<pre><code>bounded_vid(<span class="s">"org_常规ID"</span>)          <span class="c"># ≤64 字节：原样返回</span>
+bounded_vid(<span class="s">"event_t_超长复合键…"</span>)   <span class="c"># 超限：截断 + "_a1b2c3…"（md5 后缀）</span></code></pre>
+
+<div class="admonition warning">
+  <span class="title">自定义 VID 必须包 bounded_vid</span>
+  <p>如果你的源主键可能超长（复合键、URL、UUID 拼接），自定义公式务必套一层
+  <code>bounded_vid(...)</code> —— 直接拼接超 64 字节会让 trs-graph 写入报错。</p>
+</div>
+
+<h2 id="stable">行级稳定键</h2>
+<p>当一行数据没有可靠主键时，用稳定键作 <code>source_record_id</code>（溯源 + upsert identity）：</p>
+
+<div class="sig"><span class="f">stable_record_id</span>(table, row, preferred_fields=()) -&gt; str
+<span class="c"># 复合键字段全非空 → "a|b|c"；否则整行排序 JSON 的 md5 兜底</span></div>
+
+<div class="sig"><span class="f">source_record_id</span>(row, *fields) -&gt; str
+<span class="c"># 候选链版：任一字段非空取候选链拼接；全空 → 整行 sha256 前 24 位</span></div>
+
+<pre><code><span class="c"># 机构域：年报事件的复合稳定键（org_id + year），缺字段时整行哈希兜底</span>
+rec_id = stable_record_id(table, row, (<span class="s">"org_id"</span>, <span class="s">"year"</span>))</code></pre>
+
+<p>归一化基础件：<code>md5_hex(value)</code>、<code>normalize_key(value)</code>（NFKC + 空白折叠 + casefold）、
+<code>clean_text(value)</code>。<strong>凡参与哈希的文本一律先归一</strong>，否则全角/半角、大小写差异会造出两个"不同"实体。</p>
+
+<h2 id="edge-rank">边 rank：边的确定性身份</h2>
+<p>Nebula 边的多重性靠 rank 区分。同一对端点之间同源的边用确定性 rank 保证重跑覆盖：</p>
+
+<div class="sig"><span class="f">stable_rank</span>(value: str) -&gt; int      <span class="c"># sha256 前 8 字节大端 → 63 位正整数</span></div>
+<div class="sig"><span class="f">edge_rank</span>(edge_type, source_vid, target_vid, source_record_id) -&gt; int</div>
+
+<pre><code>rank = edge_rank(<span class="s">"INVESTS_IN"</span>, src_vid, dst_vid, rec_id)
+<span class="c"># 同一源记录重跑 → 同一 (type, src, dst, rank) → 属性覆盖更新</span></code></pre>
+
+<p>另一个通道是 REST merge 模式，身份走 <code>identityProps</code>（默认 <code>source_record_id</code>）。
+两通道的选择见 <a href="relations.html">关系抽取与写入</a>。</p>
+
+<h2 id="resolvers">端点解析（关系脚本专用）</h2>
+<p>关系脚本经常拿不到端点的主键，只有名字/标题。<code>relation_extractors_one_relation/resolvers.py</code>
+提供与实体侧<strong>同一套 VID 公式</strong>的端点解析器 —— 这一点是硬约束：边端点算出的 VID 必须与实体脚本写点时的公式一致，否则验存永远 miss。</p>
+
+<table>
+  <thead><tr><th>函数/类</th><th>作用</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>keyword_vid(keyword)</code></td>
+      <td>三域统一公式：NFKC + 空白折叠 + casefold 后完整 md5（修复了旧脚本论文/项目/专利三处不一致）</td>
+    </tr>
+    <tr>
+      <td><code>paper_source_id(raw)</code></td>
+      <td>论文 ID 去掉 <code>__数字</code> 后缀（作者表里 paper_id 带 <code>__序号</code>，主表不带）</td>
+    </tr>
+    <tr>
+      <td><code>paper_stub_vid(prefix, key)</code></td>
+      <td>论文域 md5 桩：<code>{prefix}_{md5(key)[:16]}</code>（DOI 桩等允许悬空的端点）</td>
+    </tr>
+    <tr>
+      <td><code>ExactOrganizationResolver</code></td>
+      <td>机构名 → org_id：加载 7 张机构表的全部名称列，<strong>仅精确匹配且唯一</strong>时解析成功；<code>.load(engine)</code> 构造，<code>resolve_exact(name)</code> 查询</td>
+    </tr>
+    <tr>
+      <td><code>resolved_organization_vid(...)</code></td>
+      <td>先试精确名解析，失败视值为机构 ID，两者皆无则抛 ValueError</td>
+    </tr>
+    <tr>
+      <td><code>organization_vid_from_row(row, resolver, id_fields=, name_fields=)</code></td>
+      <td>ID 候选链优先，缺 ID 走精确名解析</td>
+    </tr>
+    <tr>
+      <td><code>person_vid_for_row(row, kind, name_field)</code></td>
+      <td>实体侧统一 Person 公式的 row 版：kind | first(org_id, external_id) | name | birth | country</td>
+    </tr>
+    <tr>
+      <td><code>parse_entity_list(value)</code></td>
+      <td>容错解析机构列表字段：接受 JSON 数组/对象或单个精确文本名</td>
+    </tr>
+  </tbody>
+</table>
+
+<pre><code><span class="k">from</span> script.relation_extractors_one_relation.resolvers <span class="k">import</span> (
+    ExactOrganizationResolver, organization_vid_from_row,
+)
+
+resolver = ExactOrganizationResolver.load(engine)   <span class="c"># 一次性加载 7 表名→id 映射</span>
+vid = organization_vid_from_row(
+    row, resolver,
+    id_fields=(<span class="s">"org_id"</span>, <span class="s">"company_id"</span>),
+    name_fields=(<span class="s">"name_cn"</span>, <span class="s">"name_en"</span>),
+)</code></pre>
+
+<h2 id="rules">VID 公式使用规则</h2>
+<ol>
+  <li><strong>边端点永远 import 实体侧公式</strong>（<code>entity_extractors_one_entity.common</code> 或
+  <code>resolvers</code>），绝不自己另写一份 —— 复制粘贴一份"看起来一样"的公式是端点验存 miss 的头号原因。</li>
+  <li>参与哈希的文本先 <code>normalize_key</code> / NFKC + casefold。</li>
+  <li>可能超长的 VID 套 <code>bounded_vid</code>。</li>
+  <li>没有主键的实体用复合身份哈希（<code>person_vid</code> 模式）或行级稳定键，不要用自增序号。</li>
+</ol>
+
+<div class="pager">
+  <a href="values.html">← 上一页：值语义与类型转换</a>
+  <a href="provenance.html">下一页：溯源与置信度 →</a>
+</div>
+
+<footer>tech-kg-api · 抽取脚本 SDK 文档 · 生成于 2026-08</footer>
+</main>
+</div>
+</body>
+</html>

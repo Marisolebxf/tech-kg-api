@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>值语义与类型转换 — tech-kg 抽取脚本 SDK 文档</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html">抽取脚本 SDK
+    <small>tech-kg-api · 实体/关系抽取工具集</small>
+  </a>
+  <nav>
+    <div class="group">开始</div>
+    <a href="index.html">概述与快速上手</a>
+    <a href="context.html">运行上下文 Context</a>
+    <div class="group">数据读取</div>
+    <a href="reading.html">MySQL 分页与增量</a>
+    <a class="active" href="values.html">值语义与类型转换</a>
+    <div class="group">标识与溯源</div>
+    <a href="identity.html">VID、稳定键与幂等</a>
+    <a href="provenance.html">溯源与置信度</a>
+    <div class="group">写入图谱</div>
+    <a href="entities.html">实体抽取与写入</a>
+    <a href="relations.html">关系抽取与写入</a>
+    <div class="group">编排</div>
+    <a href="runners.html">抽取主流程与双入口</a>
+    <a href="examples.html">完整脚本剖析</a>
+    <div class="group">参考</div>
+    <a href="reference.html">API 速查表</a>
+  </nav>
+</aside>
+<main class="content">
+
+<h1>值语义与类型转换</h1>
+<p class="subtitle">脏数据防御层：文本、数值、JSON、日期 —— 两套历史口径显式共存，不做隐式统一。</p>
+
+<div class="toc">
+  <div class="title">本页内容</div>
+  <ul>
+    <li><a href="#why">为什么有两套口径</a></li>
+    <li><a href="#text">文本语义</a></li>
+    <li><a href="#number">数值语义</a></li>
+    <li><a href="#json">JSON 处理</a></li>
+    <li><a href="#field">字段候选链</a></li>
+    <li><a href="#choose">新脚本怎么选口径</a></li>
+  </ul>
+</div>
+
+<h2 id="why">为什么有两套口径</h2>
+<p>历史脚本对「空值」有两种约定，数据已在图里，改口径会造成脏数据，因此工具集<strong>两套都保留、命名区分</strong>：</p>
+
+<table>
+  <thead>
+    <tr><th>口径</th><th>空值行为</th><th>使用域</th><th>代表函数</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>机构域口径</strong></td>
+      <td>空白 → <code>None</code>（写图时省略该属性）</td>
+      <td>Organization / Event / News / Product / 机构角色 Person</td>
+      <td><code>text_or_none</code></td>
+    </tr>
+    <tr>
+      <td><strong>原文口径</strong></td>
+      <td><code>value or ""</code>，保留原文（含内部空白）</td>
+      <td>学者 / 论文 / 项目 / 专利</td>
+      <td><code>text_or_empty</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="admonition warning">
+  <span class="title">不要混用</span>
+  <p>同一实体的属性族必须使用同一套口径，否则 merge upsert 时会把另一套口径写的值当成「空」覆盖或跳过。
+  新脚本按上表对号入座；拿不准时看同域既有脚本的 mapper。</p>
+</div>
+
+<h2 id="text">文本语义</h2>
+
+<h3>机构域（空白 → NULL + 截断）</h3>
+
+<div class="sig"><span class="f">text_or_none</span>(value, *, max_length: int = 20000) -&gt; str | <span class="k">None</span></div>
+<ul>
+  <li>strip 后空白返回 <code>None</code>；超 20000 字符截断（告警日志）。</li>
+  <li>bytes 按 utf-8 replace 解码；datetime/date 转 ISO 文本。</li>
+</ul>
+
+<div class="sig"><span class="f">clean_text</span>(value) -&gt; str</div>
+<p>strip + 折叠所有空白为单空格，空白返回空串。<strong>仅用于内部键 / VID 计算</strong>，不作展示属性。</p>
+
+<h3>原文域（value or ""）</h3>
+
+<div class="sig"><span class="f">text_or_empty</span>(value) -&gt; str        <span class="c"># str(value) if value else ""，保留原文</span></div>
+<div class="sig"><span class="f">str_or_empty</span>(value) -&gt; str        <span class="c"># 专利域：仅 None 转 ""，0/False 保留</span></div>
+<div class="sig"><span class="f">paper_text</span>(value) -&gt; str           <span class="c"># 论文域：text_or_empty + 换行替换为空格</span></div>
+<div class="sig"><span class="f">date_text</span>(value) -&gt; str            <span class="c"># 项目域：datetime→"%Y-%m-%d %H:%M:%S"，date→ISO</span></div>
+<div class="sig"><span class="f">datetime_text</span>(value) -&gt; str | <span class="k">None</span>  <span class="c"># 专利域：None→None，其余转 "T" 分隔文本</span></div>
+
+<pre><code>text_or_empty(<span class="s">"  张三  "</span>)   <span class="c"># '  张三  '   —— 原样保留</span>
+text_or_none(<span class="s">"  张三  "</span>)    <span class="c"># '张三'       —— strip</span>
+text_or_none(<span class="s">"   "</span>)          <span class="c"># None         —— 空白视为缺失</span>
+text_or_empty(<span class="s">"   "</span>)         <span class="c"># '   '        —— 原样保留</span></code></pre>
+
+<h2 id="number">数值语义</h2>
+
+<div class="sig"><span class="f">to_float_or_none</span>(value) -&gt; float | <span class="k">None</span>   <span class="c"># 机构域：非法值 → None</span></div>
+<div class="sig"><span class="f">to_int_or_none</span>(value) -&gt; int | <span class="k">None</span></div>
+<div class="sig"><span class="f">to_float_or_zero</span>(value) -&gt; float               <span class="c"># 项目域：非法值 → 0.0</span></div>
+<div class="sig"><span class="f">to_int_or_zero</span>(value) -&gt; int</div>
+
+<p><code>to_float_or_none</code> 是防御最强的转换，专门对付真实脏数据：</p>
+
+<pre><code>to_float_or_none(<span class="s">"1,200.5万"</span>)   <span class="c"># None（清洗后无法解析则放弃，不猜）</span>
+to_float_or_none(<span class="s">"1,200.5"</span>)     <span class="c"># 1200.5（去千分位逗号）</span>
+to_float_or_none(<span class="s">"-"</span>)             <span class="c"># None（'-', 'n/a', 'n.a.', 'null', 'none' 视为缺失）</span>
+to_float_or_none(float(<span class="s">"nan"</span>))    <span class="c"># None（NaN/Inf 一律 None）</span>
+to_float_or_none(<span class="k">True</span>)            <span class="c"># None（bool 不当数字）</span></code></pre>
+
+<h2 id="json">JSON 处理</h2>
+
+<h3>解析源字段（专利域：MySQL 里存 JSON 字符串）</h3>
+
+<div class="sig"><span class="f">parse_json</span>(value) -&gt; Any          <span class="c"># 字符串尝试 json.loads，失败原样返回</span></div>
+<div class="sig"><span class="f">json_snapshot</span>(value) -&gt; str       <span class="c"># 紧凑快照，None → ""</span></div>
+<div class="sig"><span class="f">original_text</span>(value) -&gt; str       <span class="c"># JSON 数组各元素 text/content 换行连接</span></div>
+<div class="sig"><span class="f">normalized_language</span>(value) -&gt; str <span class="c"># JSON 数组 join 成逗号串</span></div>
+
+<pre><code>original_text(<span class="s">'[{"text": "摘要一"}, {"text": "摘要二"}]'</span>)
+<span class="c"># '摘要一\n摘要二'</span>
+
+normalized_language(<span class="s">'["zh", "en"]'</span>)     <span class="c"># 'zh,en'</span></code></pre>
+
+<h3>序列化输出（写进图属性的 JSON）</h3>
+
+<div class="sig"><span class="f">extra_json</span>(row) -&gt; str             <span class="c"># 整行源数据快照（json_safe + sort_keys）</span></div>
+<div class="sig"><span class="f">compact_json</span>(value) -&gt; str          <span class="c"># 紧凑、排序、datetime/Decimal 安全</span></div>
+<div class="sig"><span class="f">bounded_json</span>(value, *, max_length=64000) -&gt; str</div>
+<div class="sig"><span class="f">json_safe</span>(value) -&gt; Any             <span class="c"># 递归转 JSON 可序列化结构</span></div>
+<div class="sig"><span class="f">normalize_json</span>(value) -&gt; Any        <span class="c"># 标量级：datetime→ISO、Decimal→float、NaN→None</span></div>
+
+<p><code>bounded_json</code> 是机构域的安全阀：超 64000 字符的 <code>extra_json</code> 不硬截断，
+降级为审计摘要（<code>truncated / sha256 / original_length / preview</code>），既不炸 Nebula 属性上限又可追溯原文：</p>
+
+<pre><code>bounded_json(huge_payload)
+<span class="c"># '{"original_length":180000,"preview":"...","sha256":"ab12…",</span>
+<span class="c">#   "truncated":true}'</span></code></pre>
+
+<h2 id="field">字段候选链</h2>
+<p>同一语义在不同源表里字段名不同（机构 ID 有 7 种写法、姓名有中英文两列），用候选链取第一个非空：</p>
+
+<div class="sig"><span class="f">first_value</span>(row, *names) -&gt; Any   <span class="c"># 机构域：按 text_or_none 判空</span></div>
+<div class="sig"><span class="f">first</span>(row, *fields) -&gt; Any           <span class="c"># 新架构：按 clean_text 判空</span></div>
+
+<pre><code><span class="k">from</span> script.entity_extractors_one_entity.common <span class="k">import</span> first_value
+
+org_id = first_value(row, <span class="s">"organization_id"</span>, <span class="s">"org_id"</span>,
+                          <span class="s">"company_id"</span>, <span class="s">"entity_eid"</span>)</code></pre>
+
+<p>机构 ID 的标准候选链已固化为 <code>ORGANIZATION_ID_FIELDS</code> + <code>organization_id_from_row(row)</code>。</p>
+
+<h2 id="choose">新脚本怎么选口径</h2>
+<table>
+  <thead><tr><th>你的实体/关系属于…</th><th>文本</th><th>数值</th><th>extra_json</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>机构域（Organization / Event / News / Product / 机构角色 Person）</td>
+      <td><code>text_or_none</code></td>
+      <td><code>to_float_or_none</code></td>
+      <td><code>bounded_json</code>（merge 保护下多源累积）</td>
+    </tr>
+    <tr>
+      <td>学者 / 论文 / 项目</td>
+      <td><code>text_or_empty</code> / <code>paper_text</code></td>
+      <td><code>to_float_or_zero</code></td>
+      <td><code>extra_json</code>（整行快照）</td>
+    </tr>
+    <tr>
+      <td>专利</td>
+      <td><code>str_or_empty</code> / <code>original_text</code> / <code>json_snapshot</code></td>
+      <td>同上</td>
+      <td><code>extra_json</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="admonition note">
+  <span class="title">虚拟源行过滤</span>
+  <p>机构域写点前会过一道 <code>is_virtual_source_row(row)</code>：<code>data_source</code>/<code>source_system</code>
+  字段标注了 <code>mock/stub/virtual/placeholder/test</code>（含前后缀组合）的合成行不建点。
+  <code>run_entity_extractor</code> 不自动调它 —— 需要时在 mapper 里显式调用并返回 <code>[]</code>。</p>
+</div>
+
+<div class="pager">
+  <a href="reading.html">← 上一页：MySQL 分页与增量</a>
+  <a href="identity.html">下一页：VID、稳定键与幂等 →</a>
+</div>
+
+<footer>tech-kg-api · 抽取脚本 SDK 文档 · 生成于 2026-08</footer>
+</main>
+</div>
+</body>
+</html>

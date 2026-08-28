@@ -1,0 +1,271 @@
+/* tech-kg 脚本 SDK 文档 —— readthedocs/furo 风格静态站点 */
+:root {
+  --bg: #ffffff;
+  --sidebar-bg: #f6f8fa;
+  --sidebar-border: #e4e8ec;
+  --text: #1f2328;
+  --text-muted: #59636e;
+  --link: #0b62c4;
+  --link-hover: #084b96;
+  --code-bg: #f6f8fa;
+  --code-border: #e4e8ec;
+  --inline-code-bg: #eef1f4;
+  --accent: #0b62c4;
+  --table-header-bg: #f0f3f6;
+  --note-bg: #eef6ff;
+  --note-border: #b6d7f5;
+  --warn-bg: #fff8e6;
+  --warn-border: #f0d47a;
+  --radius: 6px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+/* ------------------------------------------------------------------ 布局 */
+.layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 270px;
+  flex-shrink: 0;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+  padding: 24px 18px 48px;
+  overflow-y: auto;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  padding: 40px 56px 96px;
+  max-width: 980px;
+}
+
+/* ------------------------------------------------------------------ 侧栏 */
+.sidebar .brand {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+  text-decoration: none;
+  display: block;
+  margin-bottom: 4px;
+}
+.sidebar .brand small {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.sidebar nav { margin-top: 22px; }
+
+.sidebar nav .group {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 22px 0 6px;
+}
+
+.sidebar nav a {
+  display: block;
+  padding: 5px 10px;
+  border-radius: var(--radius);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 14px;
+}
+.sidebar nav a:hover {
+  background: #e9eef3;
+  color: var(--link);
+}
+.sidebar nav a.active {
+  background: #dbe9f9;
+  color: var(--link);
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ 正文 */
+h1 {
+  font-size: 30px;
+  font-weight: 700;
+  margin: 0 0 8px;
+  line-height: 1.3;
+}
+h1 + .subtitle {
+  color: var(--text-muted);
+  font-size: 15px;
+  margin: 0 0 28px;
+}
+h2 {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 44px 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--sidebar-border);
+}
+h3 {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 30px 0 10px;
+}
+h4 {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 22px 0 8px;
+}
+p { margin: 12px 0; }
+
+a { color: var(--link); text-decoration: none; }
+a:hover { color: var(--link-hover); text-decoration: underline; }
+
+ul, ol { padding-left: 26px; margin: 10px 0; }
+li { margin: 4px 0; }
+
+/* ------------------------------------------------------------------ 代码 */
+code {
+  font-family: "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
+  font-size: 0.88em;
+  background: var(--inline-code-bg);
+  border-radius: 4px;
+  padding: 1.5px 5px;
+}
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  overflow-x: auto;
+  margin: 14px 0;
+  line-height: 1.55;
+}
+pre code {
+  background: none;
+  padding: 0;
+  font-size: 13px;
+  color: #24292f;
+}
+
+/* 轻量手工高亮 */
+pre .c { color: #6a737d; font-style: italic; }       /* 注释 */
+pre .k { color: #cf222e; }                            /* 关键字 */
+pre .s { color: #0a6e3a; }                            /* 字符串 */
+pre .f { color: #8250df; }                            /* 函数/类名 */
+pre .n { color: #953800; }                            /* 数字/常量 */
+
+/* ------------------------------------------------------------------ 表格 */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0;
+  font-size: 14px;
+}
+th, td {
+  border: 1px solid var(--code-border);
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  background: var(--table-header-bg);
+  font-weight: 600;
+}
+tbody tr:nth-child(even) { background: #fafbfc; }
+td code { white-space: nowrap; }
+
+/* ------------------------------------------------------------------ 提示框 */
+.admonition {
+  border-radius: var(--radius);
+  padding: 12px 18px;
+  margin: 16px 0;
+  font-size: 14.5px;
+}
+.admonition .title {
+  font-weight: 700;
+  display: block;
+  margin-bottom: 4px;
+}
+.admonition.note {
+  background: var(--note-bg);
+  border: 1px solid var(--note-border);
+}
+.admonition.warning {
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+}
+.admonition.deprecated {
+  background: #fdf0f0;
+  border: 1px solid #efc3c3;
+}
+
+/* ------------------------------------------------------------------ 其他 */
+.toc {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius);
+  padding: 12px 22px;
+  margin: 20px 0;
+  font-size: 14px;
+}
+.toc .title { font-weight: 700; margin-bottom: 6px; }
+
+.sig {
+  font-family: "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  margin: 14px 0;
+  overflow-x: auto;
+  white-space: pre;
+}
+.sig .f { color: #8250df; font-weight: 600; }
+.sig .param { color: #953800; }
+
+.pager {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 56px;
+  padding-top: 18px;
+  border-top: 1px solid var(--sidebar-border);
+  font-size: 14px;
+}
+
+footer {
+  margin-top: 48px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .layout { flex-direction: column; }
+  .sidebar {
+    width: 100%;
+    height: auto;
+    position: static;
+    border-right: none;
+    border-bottom: 1px solid var(--sidebar-border);
+  }
+  .content { padding: 28px 20px 64px; }
+}

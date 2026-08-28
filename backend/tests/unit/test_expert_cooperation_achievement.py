@@ -153,6 +153,60 @@ def test_query_shared_papers_and_patent_with_awards():
     assert target_evidence["sourceField"] == "-"
 
 
+def test_in_time_range_respects_month_and_day_bounds():
+    svc = ExpertCooperationAchievementService()
+    # 结束月 2022-08（前端会传 2022-08-31）：9 月成果应被滤掉
+    assert svc._in_time_range("2022-09-01", None, "2022-08") is False
+    assert svc._in_time_range("2022-09-01", None, "2022-08-31") is False
+    assert svc._in_time_range("20220901", None, "2022-08") is False
+    # 同月内应保留
+    assert svc._in_time_range("2022-08-15", None, "2022-08") is True
+    assert svc._in_time_range("2022-08-31", None, "2022-08-31") is True
+    # 开始月 2022-09：8 月成果应被滤掉
+    assert svc._in_time_range("2022-08-01", "2022-09", None) is False
+    assert svc._in_time_range("2022-09-01", "2022-09", None) is True
+    # 仅年份的成果：仍按年比较（与旧行为一致）
+    assert svc._in_time_range("2022", None, "2022-08") is True
+    assert svc._in_time_range("2023", None, "2022-08") is False
+    # 无法解析：保留
+    assert svc._in_time_range(None, None, "2022-08") is True
+    assert svc._in_time_range("unknown", None, "2022-08") is True
+
+
+def test_query_filters_items_after_time_range_end(monkeypatch):
+    monkeypatch.setattr(
+        "service.expert_cooperation_achievement.get_llm_client",
+        lambda: None,
+    )
+    nodes = {
+        "S1": _node("S1", {"name_zh": "甲"}),
+        "S2": _node("S2", {"name_zh": "乙"}),
+        "P1": _node("P1", {"title": "八月论文", "year": "2022-08-01"}),
+        "P2": _node(
+            "P2",
+            {"title": "一种基于异构图的科技实体关联方法", "publication_date": "20220901"},
+        ),
+    }
+    edges = {
+        "S1": [_edge("AUTHORED_BY", "P1", "S1"), _edge("AUTHORED_BY", "P2", "S1")],
+        "S2": [_edge("AUTHORED_BY", "P1", "S2"), _edge("AUTHORED_BY", "P2", "S2")],
+    }
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
+    graph.get_node_edges = MagicMock(side_effect=lambda nid, **kw: edges.get(str(nid), []))
+    graph._settings = SimpleNamespace(space="dev")
+
+    resp = _svc(graph).query(
+        source_expert_id="S1",
+        target_expert_id="S2",
+        time_range_end="2022-08-31",
+    )
+    titles = [i["title"] for i in resp["items"]]
+    assert "八月论文" in titles
+    assert "一种基于异构图的科技实体关联方法" not in titles
+    assert resp["summary"]["papers"] == 1
+
+
 def test_query_same_id_raises():
     graph = MagicMock()
     with pytest.raises(ValueError, match="不能相同"):

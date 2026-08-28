@@ -8,6 +8,7 @@ import os
 import re
 import threading
 import time
+from datetime import date, datetime
 from typing import Any
 
 from infra.graph_db import GraphNotFoundError, TRSGraphClient, get_trs_graph_client
@@ -514,6 +515,65 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             return None
         return int(m.group(0))
 
+    @staticmethod
+    def _bound_date(value: str | None, *, end: bool) -> date | None:
+        """把 YYYY / YYYY-MM / YYYY-MM-DD 扩成区间端点日期。"""
+        if not value:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        digits = re.sub(r"\D", "", text)
+        try:
+            if len(digits) == 4:
+                year = int(digits)
+                return date(year, 12, 31) if end else date(year, 1, 1)
+            if len(digits) == 6:
+                year, month = int(digits[:4]), int(digits[4:6])
+                if not 1 <= month <= 12:
+                    return None
+                if not end:
+                    return date(year, month, 1)
+                next_month = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
+                return date.fromordinal(next_month.toordinal() - 1)
+            if len(digits) >= 8:
+                return date(int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
+        except ValueError:
+            return None
+        # 兼容已是 ISO 文本但夹杂其它分隔符的情况
+        try:
+            if len(text) == 10 and text[4] == "-" and text[7] == "-":
+                return datetime.strptime(text, "%Y-%m-%d").date()
+            if len(text) == 7 and text[4] == "-":
+                year, month = map(int, text.split("-"))
+                if not end:
+                    return date(year, month, 1)
+                next_month = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
+                return date.fromordinal(next_month.toordinal() - 1)
+        except ValueError:
+            return None
+        return None
+
+    @classmethod
+    def _parse_item_date(cls, value: str | None) -> date | None:
+        """成果完成时间解析为具体日期；仅有年份时返回 None（走年粒度回退）。"""
+        if not value:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        digits = re.sub(r"\D", "", text)
+        try:
+            if len(digits) >= 8:
+                return date(int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
+            if len(digits) == 6:
+                year, month = int(digits[:4]), int(digits[4:6])
+                if 1 <= month <= 12:
+                    return date(year, month, 1)
+        except ValueError:
+            return None
+        return None
+
     def _in_time_range(
         self,
         item_time: str | None,
@@ -522,9 +582,20 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
     ) -> bool:
         if not start and not end:
             return True
+
+        item_date = self._parse_item_date(item_time)
+        if item_date is not None:
+            start_d = self._bound_date(start, end=False)
+            end_d = self._bound_date(end, end=True)
+            if start_d is not None and item_date < start_d:
+                return False
+            if end_d is not None and item_date > end_d:
+                return False
+            return True
+
+        # 仅能解析出年份（或完全无法解析）时：无法解析则保留；仅年份则按年比较
         year = self._parse_year(item_time)
         if year is None:
-            # 无法解析时间的条目在时间过滤时直接保留
             return True
         start_y = self._parse_year(start)
         end_y = self._parse_year(end)

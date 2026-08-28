@@ -18,7 +18,7 @@ import { http } from './http'
  */
 export interface ExpertDirectRelationQueryRequest {
   dataSource?: 'all'
-  expertAId?: string | null
+  expertAId: string
   expertBId?: string | null
   institution?: string | null
   startTime?: string | null

@@ -38,8 +38,8 @@ async def query_expert_direct_relation(
 
 @router.get("/query", response_model=ExpertDirectRelationQueryResponse)
 async def query_expert_direct_relation_get(
+    expertAId: Annotated[str, Query()],
     dataSource: Annotated[DataSource, Query()] = "all",
-    expertAId: Annotated[str | None, Query()] = None,
     expertBId: Annotated[str | None, Query()] = None,
     institution: Annotated[str | None, Query()] = None,
     startTime: Annotated[str | None, Query()] = None,

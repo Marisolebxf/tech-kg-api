@@ -99,6 +99,18 @@ export function isPortalMessage(value: unknown): value is PortalMessage {
 }
 
 function browserEnvironment(): PortalBridgeEnvironment {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    const eventTarget = new EventTarget()
+    const parentWindow: MessagePoster = { postMessage: () => undefined }
+    return {
+      eventTarget,
+      parentWindow,
+      parentSource: parentWindow as MessageEventSource,
+      currentOrigin: 'http://localhost',
+      referrer: '',
+      inIframe: false,
+    }
+  }
   return {
     eventTarget: window,
     parentWindow: window.parent,
@@ -210,6 +222,7 @@ function isTruthyFlag(value: unknown): boolean {
 }
 
 function locationEmbeddedFlag(): boolean {
+  if (typeof window === 'undefined') return false
   const searchFlag = new URLSearchParams(window.location.search).get('embedded')
   const hashQuery = window.location.hash.includes('?')
     ? window.location.hash.slice(window.location.hash.indexOf('?') + 1)

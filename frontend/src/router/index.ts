@@ -141,7 +141,7 @@ router.beforeEach(async (to) => {
   try {
     const profile = await authStore.loadCurrentUser()
     if (!profile) {
-      return loginRedirect(to.fullPath)
+      return loginRedirect(to.fullPath, '登录状态已失效或已超时，请重新登录')
     }
     const requiredPermission = typeof to.meta.permission === 'string' ? to.meta.permission : ''
     if (to.meta.admin === true && !profile.isAdmin) {

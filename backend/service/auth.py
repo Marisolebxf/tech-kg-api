@@ -113,7 +113,9 @@ class AuthService:
             raise AuthenticationError("登录已过期，请重新登录")
         context = AuthContext.from_record(record, session_id=session_id)
         if context.expires_at is not None and context.expires_at <= int(time.time()) + 30:
-            context = await self.refresh_session(session_id, context=context)
+            return await self.refresh_session(session_id, context=context)
+        # 续期本地会话 TTL，使配置值表达“连续无操作时长”，而不是固定登录时长。
+        await self._save_session(context)
         return context
 
     async def refresh_session(

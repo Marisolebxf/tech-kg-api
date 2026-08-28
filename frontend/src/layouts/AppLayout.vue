@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import {
   IconHistory,
-  IconPoweroff,
-  IconSafe,
-  IconUser,
+  IconSwap,
 } from "@arco-design/web-vue/es/icon";
 import {
   computed,
@@ -18,7 +16,12 @@ import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 
 import figmaMenuFold from "../assets/icons/figma-menu-fold.svg";
 import figmaMenuUnfold from "../assets/icons/figma-menu-unfold.svg";
-import figmaUserAvatar from "../assets/icons/figma-user-avatar.png";
+import accountAvatar from "../assets/icons/account-menu/avatar-default.svg";
+import accountCaret from "../assets/icons/account-menu/caret-down.svg";
+import accountIcon from "../assets/icons/account-menu/icon-account.svg";
+import accountLockIcon from "../assets/icons/account-menu/icon-lock.svg";
+import accountLogoutIcon from "../assets/icons/account-menu/icon-logout.svg";
+import accountMemberStar from "../assets/icons/account-menu/icon-member-star.svg";
 import iconMessage from "../assets/icons/icon-message.svg";
 import navOverview from "../assets/icons/nav-overview.svg";
 import navQuery from "../assets/icons/nav-query.svg";
@@ -36,7 +39,7 @@ const router = useRouter();
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const currentUser = computed(() => authStore.profile?.user);
-const userAvatar = computed(() => currentUser.value?.avatar || figmaUserAvatar);
+const userAvatar = computed(() => currentUser.value?.avatar || accountAvatar);
 const isAdminUser = computed(() =>
   import.meta.env.VITE_AUTH_ENABLED === "false" || authStore.isAdmin,
 );
@@ -650,20 +653,42 @@ onBeforeUnmount(() => {
                 :aria-expanded="userMenuOpen"
                 @click="toggleUserMenu"
               >
-                <img :src="userAvatar" alt="" aria-hidden="true" />
+                <img
+                  class="app-user-avatar"
+                  :src="userAvatar"
+                  alt=""
+                  aria-hidden="true"
+                />
                 <span><strong>{{ userRoleName }}</strong></span>
-                <svg viewBox="0 0 20 20" aria-hidden="true">
-                  <path d="m6 8 4 4 4-4" />
-                </svg>
+                <img
+                  class="app-user-caret"
+                  :src="accountCaret"
+                  alt=""
+                  aria-hidden="true"
+                />
               </button>
-              <aside v-if="userMenuOpen" class="app-user-menu">
+              <aside
+                v-if="userMenuOpen"
+                class="app-user-menu"
+                aria-label="账号菜单"
+              >
                 <header>
-                  <img :src="userAvatar" alt="" />
-                  <div>
-                    <strong>{{ userDisplayName }}</strong
-                    ><span>{{ userRoleDescription }}</span>
+                  <div class="app-user-menu__identity">
+                    <div class="app-user-menu__title">
+                      <strong>{{ userDisplayName }}</strong>
+                      <b :class="{ 'is-admin': isAdminUser }">
+                        <img
+                          :src="accountMemberStar"
+                          alt=""
+                          aria-hidden="true"
+                        />
+                        <span>{{ userRoleName }}</span>
+                      </b>
+                    </div>
+                    <span class="app-user-menu__description">{{
+                      userRoleDescription
+                    }}</span>
                   </div>
-                  <b :class="{ 'is-admin': isAdminUser }">{{ userRoleName }}</b>
                 </header>
                 <nav>
                   <button
@@ -672,9 +697,7 @@ onBeforeUnmount(() => {
                     type="button"
                     @click="switchPortal"
                   >
-                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                      <path d="M4 7h12m0 0-3-3m3 3-3 3M20 17H8m0 0 3 3m-3-3 3-3" />
-                    </svg>
+                    <IconSwap class="app-user-menu__icon" />
                     <span>{{ isAdminArea ? "返回用户端" : "进入管理端" }}</span>
                   </button>
                   <button
@@ -682,28 +705,46 @@ onBeforeUnmount(() => {
                     type="button"
                     @click="handleAccountAction('个人中心')"
                   >
-                    <IconUser /><span>账号信息</span>
+                    <img
+                      class="app-user-menu__icon"
+                      :src="accountIcon"
+                      alt=""
+                      aria-hidden="true"
+                    />
+                    <span>账号信息</span>
                   </button>
                   <button
                     :class="{ active: route.path === '/account-security' }"
                     type="button"
                     @click="handleAccountAction('账号与安全')"
                   >
-                    <IconSafe /><span>账号与安全</span>
+                    <img
+                      class="app-user-menu__icon"
+                      :src="accountLockIcon"
+                      alt=""
+                      aria-hidden="true"
+                    />
+                    <span>账号与安全</span>
                   </button>
                   <button
                     :class="{ active: route.path === '/operation-logs' }"
                     type="button"
                     @click="handleAccountAction('操作记录')"
                   >
-                    <IconHistory /><span>操作记录</span>
+                    <IconHistory class="app-user-menu__icon" />
+                    <span>操作记录</span>
                   </button>
                   <button
-                    class="danger"
                     type="button"
                     @click="handleAccountAction('退出登录')"
                   >
-                    <IconPoweroff /><span>退出登录</span>
+                    <img
+                      class="app-user-menu__icon"
+                      :src="accountLogoutIcon"
+                      alt=""
+                      aria-hidden="true"
+                    />
+                    <span>退出登录</span>
                   </button>
                 </nav>
                 <footer v-if="accountFeedback">{{ accountFeedback }}</footer>
@@ -1315,53 +1356,42 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: 30px;
   background: rgba(255, 255, 255, 0.48);
-  color: #344766;
-  font-size: 13px;
+  color: #1d2129;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
   text-decoration: none;
   cursor: pointer;
 }
 
-.app-top-actions__user > img {
+.app-top-actions__user > .app-user-avatar {
+  display: block;
+  flex: 0 0 32px;
   width: 32px;
   height: 32px;
   border-radius: 50%;
   object-fit: cover;
 }
 .app-top-actions__user > span {
-  display: grid;
-  gap: 0;
-  line-height: 1.15;
+  display: inline-flex;
+  align-items: center;
+  line-height: 22px;
 }
 .app-top-actions__user strong {
-  color: #344766;
-  font-size: 12px;
-  font-weight: 600;
+  color: #1d2129;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
 }
-.app-top-actions__user em {
-  color: #7890b5;
-  font-size: 9px;
-  font-style: normal;
+.app-top-actions__user > .app-user-caret {
+  display: block;
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  margin-left: 2px;
+  object-fit: contain;
 }
-.app-top-actions__user > i {
-  color: #7890b5;
-  font-size: 10px;
-  font-style: normal;
-}
-.app-top-actions__user > svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: #7890b5;
-  stroke-width: 1.6;
-  transition: transform 0.2s;
-}
-.app-top-actions__user:hover,
-.app-top-actions__user[aria-expanded="true"] {
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: 0 5px 14px rgba(44, 91, 157, 0.08);
-}
-.app-top-actions__user[aria-expanded="true"] > svg {
-  transform: rotate(180deg);
+.app-top-actions__user[aria-expanded="true"]:focus-visible {
+  outline: none;
 }
 .app-user-entry {
   position: relative;
@@ -1370,145 +1400,122 @@ onBeforeUnmount(() => {
 .app-user-menu {
   position: absolute;
   z-index: 48;
-  top: 39px;
+  top: 45px;
   right: 0;
-  width: 250px;
+  width: 200px;
   overflow: hidden;
-  border: 1px solid #c8daf4;
-  border-radius: 9px;
+  border: 0;
+  border-radius: 4px;
   background: #fff;
-  box-shadow: 0 18px 45px rgba(34, 74, 132, 0.2);
-  color: #263853;
-}
-.app-user-menu::before {
-  position: absolute;
-  top: -6px;
-  right: 25px;
-  width: 11px;
-  height: 11px;
-  border-top: 1px solid #c8daf4;
-  border-left: 1px solid #c8daf4;
-  background: #fff;
-  content: "";
-  transform: rotate(45deg);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+  color: #1d2129;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 .app-user-menu > header {
-  position: relative;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid #e5e6eb;
+  background: #fff;
+}
+.app-user-menu__identity {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 4px;
+  min-width: 0;
+}
+.app-user-menu__title {
+  display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px;
-  border-bottom: 1px solid #e4ecf6;
-  background: #fbfdff;
+  gap: 6px;
+  min-width: 0;
 }
-.app-user-menu > header img {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  object-fit: cover;
-}
-.app-user-menu > header div {
-  display: grid;
-  gap: 3px;
-}
-.app-user-menu > header strong {
-  font-size: 13px;
-}
-.app-user-menu > header span {
-  color: #75839a;
-  font-size: 10px;
-}
-.app-user-menu > header b {
-  padding: 2px 6px;
-  border-radius: 99px;
-  background: #eaf2ff;
-  color: #175cd3;
-  font-size: 9px;
+.app-user-menu__title > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #1d2129;
+  font-size: 14px;
   font-weight: 500;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.app-user-menu > header b.is-admin {
-  background: #fbe2bd;
-  color: #8a5317;
+.app-user-menu__title > b {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  height: 20px;
+  padding: 0 7px 0 4px;
+  border-radius: 14px;
+  background: linear-gradient(90deg, #ebbd8c 0%, #f7d9b5 100%);
+  color: #7d5121;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
 }
-.app-user-menu > p {
-  margin: 0;
-  padding: 10px 14px;
-  border-bottom: 1px solid #e9eff7;
-  color: #718098;
-  font-size: 10px;
-  line-height: 17px;
+.app-user-menu__title > b img {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+.app-user-menu__description {
+  overflow: hidden;
+  color: #86909c;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .app-user-menu nav {
   display: grid;
-  padding: 6px;
+  gap: 4px;
+  padding: 8px 16px 16px;
 }
 .app-user-menu nav button {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 10px;
-  height: 40px;
-  padding: 0 10px;
+  gap: 8px;
+  width: 168px;
+  height: 32px;
+  padding: 0 20px 0 8px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: #fff;
-  color: #344766;
+  color: #1d2129;
+  font-family: inherit;
   text-align: left;
   cursor: pointer;
 }
 .app-user-menu nav button:hover {
-  background: #f1f6fd;
-  color: #165dff;
+  background: #f2f3f5;
 }
-.app-user-menu nav button > svg {
+.app-user-menu nav button > .app-user-menu__icon {
+  display: block;
+  flex: 0 0 16px;
   width: 16px;
   height: 16px;
   color: #4e5969;
-  stroke-width: 1.2;
-}
-.app-user-menu nav button:hover > svg {
-  color: #165dff;
+  object-fit: contain;
 }
 .app-user-menu nav button span {
-  font-size: 11px;
-}
-.app-user-menu nav button.portal-switch {
-  margin-bottom: 5px;
-  border-bottom: 1px solid #e8eef6;
-  border-radius: 5px 5px 0 0;
-  color: #165dff;
-}
-.app-user-menu nav button.portal-switch > svg {
-  color: #165dff;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.app-user-menu nav button.danger {
-  margin-top: 5px;
-  border-top: 1px solid #e8eef6;
-  border-radius: 0 0 5px 5px;
-}
-.app-user-menu nav button.danger span,
-.app-user-menu nav button.danger > svg {
-  color: #b42318;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .app-user-menu nav button.active {
-  background: #eaf2ff;
-  color: #165dff;
-}
-.app-user-menu nav button.active > svg {
-  color: #165dff;
+  background: #e8f3ff;
 }
 
 .app-user-menu > footer {
-  padding: 9px 13px;
-  border-top: 1px solid #e4ecf6;
-  background: #f7faff;
-  color: #526783;
-  font-size: 9px;
-  line-height: 15px;
+  padding: 8px 16px 12px;
+  border-top: 1px solid #e5e6eb;
+  background: #fff;
+  color: #86909c;
+  font-size: 12px;
+  line-height: 20px;
 }
 
 .app-top-actions__right {
@@ -1516,6 +1523,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 10px;
   margin-left: auto;
+  margin-right: 16px;
 }
 .app-alert-entry {
   position: relative;
@@ -2123,7 +2131,7 @@ onBeforeUnmount(() => {
 @media (max-width: 620px) {
   .app-user-menu {
     right: -2px;
-    width: 270px;
+    width: min(200px, calc(100vw - 16px));
   }
 }
 
@@ -2332,6 +2340,7 @@ onBeforeUnmount(() => {
 
   .app-top-actions__right {
     gap: 4px;
+    margin-right: 0;
   }
 
 

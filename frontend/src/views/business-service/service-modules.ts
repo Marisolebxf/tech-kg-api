@@ -171,7 +171,7 @@ export const serviceModules: ServiceModule[] = [
     requestFields: [
       { name: 'sourceExpertId', type: 'string', required: '是', description: '请输入第一个专家，如 person_expert_e2e_v1_001' },
       { name: 'targetExpertId', type: 'string', required: '是', description: '请输入第二个专家，如 person_expert_e2e_v1_002' },
-      { name: 'achievementTypes', type: 'multi-select', required: '否', description: '成果类型多选：paper（论文）/ patent（专利）/ project（项目），留空返回全部' },
+      { name: 'achievementTypes', type: 'multi-select', required: '否', description: '成果类型多选：全部 / 论文 / 专利 / 项目，留空返回全部' },
       { name: 'timeRangeStart', type: 'month', required: '否', description: '成果开始月份 YYYY-MM，留空不限' },
       { name: 'timeRangeEnd', type: 'month', required: '否', description: '成果结束月份 YYYY-MM，留空不限' },
       { name: 'limitPerType', type: 'number', defaultValue: '20', required: '否', placeholder: '选填，1-50，默认 20', description: '每类成果返回数上限，1-50，默认 20' },

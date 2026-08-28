@@ -353,6 +353,10 @@ def test_does_not_treat_project_level_as_award():
 
 
 def test_enrich_fields_with_strict_llm_json(monkeypatch):
+    monkeypatch.setattr(
+        "service.expert_cooperation_achievement._DOMAIN_LLM_SYNC",
+        True,
+    )
     nodes = {
         "S1": _node("S1", {"name_zh": "甲"}),
         "S2": _node("S2", {"name_zh": "乙"}),
@@ -382,12 +386,100 @@ def test_enrich_fields_with_strict_llm_json(monkeypatch):
     kwargs = llm.synthesize_json.call_args.kwargs
     assert kwargs["schema_name"] == "cooperation_achievement_domains"
     assert kwargs["schema"]["required"] == ["items"]
+    assert kwargs["modes"] == ("json_object", "prompt_only")
     prompt = llm.synthesize_json.call_args.args[0]
     assert "P1" in prompt
     assert "技术领域" in prompt
 
 
+def test_enrich_fields_async_keeps_graph_fields_on_first_response(monkeypatch):
+    """默认异步：首响不阻塞 LLM，保留图内关键词。"""
+    monkeypatch.setattr(
+        "service.expert_cooperation_achievement._DOMAIN_LLM_SYNC",
+        False,
+    )
+    nodes = {
+        "S1": _node("S1", {"name_zh": "甲"}),
+        "S2": _node("S2", {"name_zh": "乙"}),
+        "P1": _node("P1", {"title": "异构图对齐方法", "year": "2022", "keywords": "旧关键词"}),
+    }
+    edges = {
+        "S1": [_edge("AUTHORED_BY", "P1", "S1")],
+        "S2": [_edge("AUTHORED_BY", "P1", "S2")],
+    }
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
+    graph.get_node_edges = MagicMock(side_effect=lambda nid, **kw: edges.get(str(nid), []))
+    graph._settings = SimpleNamespace(space="dev")
+
+    llm = MagicMock()
+    llm.synthesize_json.return_value = '{"items":[{"id":"P1","fields":["异构图","实体关联"]}]}'
+    monkeypatch.setattr(
+        "service.expert_cooperation_achievement.get_llm_client",
+        lambda: llm,
+    )
+    scheduled: list[list[dict]] = []
+
+    def _fake_schedule(self, snapshots):
+        scheduled.append(snapshots)
+
+    monkeypatch.setattr(
+        ExpertCooperationAchievementService,
+        "_schedule_domain_llm",
+        _fake_schedule,
+    )
+
+    resp = _svc(graph).query(source_expert_id="S1", target_expert_id="S2")
+    assert "旧关键词" in resp["items"][0]["fields"]
+    assert llm.synthesize_json.call_count == 0
+    assert len(scheduled) == 1
+    assert scheduled[0][0]["id"] == "P1"
+
+
+def test_enrich_fields_uses_domain_cache_without_second_llm(monkeypatch):
+    monkeypatch.setattr(
+        "service.expert_cooperation_achievement._DOMAIN_LLM_SYNC",
+        True,
+    )
+    nodes = {
+        "S1": _node("S1", {"name_zh": "甲"}),
+        "S2": _node("S2", {"name_zh": "乙"}),
+        "S3": _node("S3", {"name_zh": "丙"}),
+        "P1": _node("P1", {"title": "异构图对齐方法", "year": "2022", "keywords": "旧关键词"}),
+    }
+    edges = {
+        "S1": [_edge("AUTHORED_BY", "P1", "S1")],
+        "S2": [_edge("AUTHORED_BY", "P1", "S2")],
+        "S3": [_edge("AUTHORED_BY", "P1", "S3")],
+    }
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
+    graph.get_node_edges = MagicMock(side_effect=lambda nid, **kw: edges.get(str(nid), []))
+    graph._settings = SimpleNamespace(space="dev")
+
+    llm = MagicMock()
+    llm.synthesize_json.return_value = '{"items":[{"id":"P1","fields":["异构图","实体关联"]}]}'
+    monkeypatch.setattr(
+        "service.expert_cooperation_achievement.get_llm_client",
+        lambda: llm,
+    )
+
+    svc = _svc(graph)
+    first = svc.query(source_expert_id="S1", target_expert_id="S2")
+    assert first["items"][0]["fields"] == ["异构图", "实体关联"]
+    assert llm.synthesize_json.call_count == 1
+
+    # 另一对专家共享同一成果：应命中领域缓存，不再打 LLM
+    second = svc.query(source_expert_id="S1", target_expert_id="S3")
+    assert second["items"][0]["fields"] == ["异构图", "实体关联"]
+    assert llm.synthesize_json.call_count == 1
+
+
 def test_enrich_fields_keeps_graph_when_llm_json_invalid(monkeypatch):
+    monkeypatch.setattr(
+        "service.expert_cooperation_achievement._DOMAIN_LLM_SYNC",
+        True,
+    )
     nodes = {
         "S1": _node("S1", {"name_zh": "甲"}),
         "S2": _node("S2", {"name_zh": "乙"}),

@@ -118,6 +118,7 @@ export function queryExpertCooperationAchievement(body: CooperationQueryRequest)
   return http.post<ApiResponse<CooperationQueryResult>>(
     '/v1/kg-construction/expert-cooperation-achievements/query',
     body,
-    { timeout: 10_000 },
+    // 与校友/同事一致；所属领域 LLM 已默认异步，图结果应远快于 60s
+    { timeout: 60_000 },
   )
 }

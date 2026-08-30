@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>运行上下文 Context — tech-kg 抽取脚本 SDK 文档</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html">抽取脚本 SDK
+    <small>tech-kg-api · 实体/关系抽取工具集</small>
+  </a>
+  <nav>
+    <div class="group">开始</div>
+    <a href="index.html">概述与快速上手</a>
+    <a class="active" href="context.html">运行上下文 Context</a>
+    <div class="group">数据读取</div>
+    <a href="reading.html">MySQL 分页与增量</a>
+    <a href="values.html">值语义与类型转换</a>
+    <div class="group">标识与溯源</div>
+    <a href="identity.html">VID、稳定键与幂等</a>
+    <a href="provenance.html">溯源与置信度</a>
+    <div class="group">写入图谱</div>
+    <a href="entities.html">实体抽取与写入</a>
+    <a href="relations.html">关系抽取与写入</a>
+    <div class="group">编排</div>
+    <a href="runners.html">抽取主流程与双入口</a>
+    <a href="examples.html">完整脚本剖析</a>
+    <div class="group">参考</div>
+    <a href="reference.html">API 速查表</a>
+  </nav>
+</aside>
+<main class="content">
+
+<h1>运行上下文 Context</h1>
+<p class="subtitle">模块：<code>backend/sdk/kg_sdk.py</code> —— 五类客户端的懒构造、降级约定与跨运行水位。</p>
+
+<div class="toc">
+  <div class="title">本页内容</div>
+  <ul>
+    <li><a href="#two-entries">两种脚本入口</a></li>
+    <li><a href="#clients">五类客户端与降级约定</a></li>
+    <li><a href="#config">水位与检查点：ScriptConfig</a></li>
+    <li><a href="#meta">运行元信息</a></li>
+    <li><a href="#env">注入机制：KG_SCRIPT_CTX</a></li>
+  </ul>
+</div>
+
+<p>被 Temporal activity 以子进程方式加载的脚本，不自己读配置文件、不自己建连接 ——
+一切连接参数由 activity 在子进程外解析好后序列化注入。<code>kg_sdk.Context</code> 就是这层注入的载体：</p>
+
+<pre><code><span class="c"># activity 子进程内的注入链路</span>
+activity（解析数据源选择器 → 连接参数 dict）
+  └─ env <span class="s">KG_SCRIPT_CTX = {"mysql": {...}, "graph": {...}, "watermark": ...}</span>
+      └─ 脚本进程 Context(raw) → ctx.mysql / ctx.graph / ctx.llm ...（懒构造）</code></pre>
+
+<h2 id="two-entries">两种脚本入口</h2>
+
+<h3>两参形式：<code>step_fn(payload, ctx)</code></h3>
+<p>activity 已经替你包装好 Context，直接用第二个参数：</p>
+
+<pre><code><span class="k">def</span> <span class="f">my_step</span>(payload: dict, ctx: <span class="s">"Context"</span>) -&gt; dict:
+    <span class="k">if</span> ctx.mysql <span class="k">is</span> None:                 <span class="c"># 未选择 MySQL 数据源 → 降级</span>
+        <span class="k">return</span> {<span class="s">"status"</span>: <span class="s">"skipped"</span>}
+    ...</code></pre>
+
+<h3>单参形式：<code>workflow(payload)</code></h3>
+<p>与内置抽取脚本的 Temporal 入口同形态。Context 从环境变量自行构造：</p>
+
+<pre><code><span class="k">from</span> kg_sdk <span class="k">import</span> current_context
+
+<span class="k">def</span> <span class="f">workflow</span>(payload: dict) -&gt; dict:
+    ctx = current_context()          <span class="c"># 未配置（本地 dev / legacy）时返回 None</span>
+    <span class="k">if</span> ctx <span class="k">is</span> None:
+        ...                           <span class="c"># 自行降级：读环境变量直连，或直接报错</span></code></pre>
+
+<div class="admonition note">
+  <span class="title">约定</span>
+  <p><code>current_context()</code> 在一次进程内是缓存的（<code>reset_current_context()</code> 供测试重置）。
+  JSON 解析失败时静默返回 <code>None</code> 而不是抛错 —— 脚本必须对 <code>None</code> 做降级判断。</p>
+</div>
+
+<h2 id="clients">五类客户端与降级约定</h2>
+<p>五个属性全部懒构造：第一次访问才建连接。某个选择器没配置时对应属性返回 <code>None</code>
+（与 <code>infra.llm.get_llm_client</code> 的降级约定一致），脚本统一用 <code>if ctx.xxx:</code> 判空：</p>
+
+<table>
+  <thead>
+    <tr><th>属性</th><th>类型</th><th>说明</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>ctx.mysql</code></td>
+      <td><code>infra.mysql.MySQLClient</code> | None</td>
+      <td>SQLAlchemy 引擎封装；参数键：<code>host / port / database / username / password</code></td>
+    </tr>
+    <tr>
+      <td><code>ctx.graph</code></td>
+      <td><code>infra.graph_db.TRSGraphClient</code> | None</td>
+      <td>构造后自动 <code>connect()</code>；参数键：<code>base_url / space / api_key / timeout</code></td>
+    </tr>
+    <tr>
+      <td><code>ctx.milvus</code></td>
+      <td><code>pymilvus.MilvusClient</code> | None</td>
+      <td>参数键：<code>uri / db_name / token / timeout</code>；<code>token</code> 缺省不发</td>
+    </tr>
+    <tr>
+      <td><code>ctx.llm</code></td>
+      <td><code>infra.llm.LLMClient</code> | None</td>
+      <td>无 <code>api_key</code> 即 None；参数键：<code>api_key / base_url / model</code></td>
+    </tr>
+    <tr>
+      <td><code>ctx.embedding</code></td>
+      <td><code>infra.llm.EmbeddingClient</code> | None</td>
+      <td>同上，多一个 <code>dimensions</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<pre><code><span class="k">def</span> <span class="f">workflow</span>(payload: dict) -&gt; dict:
+    ctx = current_context()
+
+    rows = [...]                       <span class="c"># ① 读 MySQL</span>
+    <span class="k">if</span> ctx <span class="k">and</span> ctx.mysql:
+        <span class="k">from</span> sqlalchemy <span class="k">import</span> text
+        <span class="k">with</span> ctx.mysql.engine.connect() <span class="k">as</span> conn:
+            rows = [dict(r) <span class="k">for</span> r <span class="k">in</span>
+                    conn.execute(text(<span class="s">"SELECT ..."</span>)).mappings()]
+
+    summary = <span class="s">""</span>                        <span class="c"># ② LLM 合成，失败降级</span>
+    <span class="k">if</span> ctx <span class="k">and</span> ctx.llm:
+        summary = ctx.llm.synthesize(...) <span class="k">or</span> <span class="s">""</span>
+
+    <span class="k">return</span> {<span class="s">"rows"</span>: len(rows), <span class="s">"summary"</span>: summary}</code></pre>
+
+<h2 id="config">水位与检查点：ScriptConfig</h2>
+<p>跨运行增量状态由 activity 在 step 成功后写回，脚本通过只读的 <code>ctx.config</code> 读取：</p>
+
+<div class="sig"><span class="f">@dataclass</span>(frozen=<span class="k">True</span>)
+<span class="k">class</span> <span class="f">ScriptConfig</span>:
+    <span class="param">watermark</span>: str | <span class="k">None</span> = <span class="k">None</span>      <span class="c"># ISO 时间戳水位</span>
+    <span class="param">checkpoint</span>: dict | <span class="k">None</span> = <span class="k">None</span>    <span class="c"># 任意 JSON 检查点（如已处理到的偏移）</span></div>
+
+<pre><code><span class="k">def</span> <span class="f">workflow</span>(payload: dict) -&gt; dict:
+    ctx = current_context()
+    since = payload.get(<span class="s">"since"</span>)
+    <span class="k">if</span> ctx <span class="k">and</span> ctx.config.watermark:
+        since = since <span class="k">or</span> ctx.config.watermark   <span class="c"># 显式 payload 优先，其次上次水位</span>
+
+    <span class="k">from</span> script.entity_extractors_one_entity.common <span class="k">import</span> apply_since, iter_rows
+    sql = apply_since(<span class="s">"SELECT * FROM t ORDER BY id"</span>, since)
+    ...</code></pre>
+
+<p>水位读写与 <code>etl_watermark.py</code>（独立 CLI）共享同一套约定；框架侧的自动写回发生在
+Temporal activity 的输出后处理阶段（<code>_write_watermark</code>），脚本本身只负责<strong>消费</strong>水位并在输出里
+<strong>报告</strong>本次处理到的最大更新时间（供框架写回）。</p>
+
+<h2 id="meta">运行元信息</h2>
+<p>Context 同时暴露本次执行的调度元信息，可用于日志打标或幂等键：</p>
+
+<table>
+  <thead><tr><th>属性</th><th>类型</th><th>含义</th></tr></thead>
+  <tbody>
+    <tr><td><code>ctx.step_id</code></td><td>str | None</td><td>当前 step 标识</td></tr>
+    <tr><td><code>ctx.attempt</code></td><td>int | None</td><td>重试次数（第几次尝试）</td></tr>
+    <tr><td><code>ctx.prev_outputs</code></td><td>dict</td><td>上游 step 的输出（管道串联用）</td></tr>
+    <tr><td><code>ctx.execution_id</code></td><td>str | None</td><td>流程实例 ID</td></tr>
+    <tr><td><code>ctx.task_id</code></td><td>str | None</td><td>任务 ID</td></tr>
+    <tr><td><code>ctx.definition_id</code></td><td>str | None</td><td>流程定义 ID</td></tr>
+    <tr><td><code>ctx.to_dict()</code></td><td>dict</td><td>原始注入 dict（调试用）</td></tr>
+  </tbody>
+</table>
+
+<h2 id="env">注入机制：KG_SCRIPT_CTX</h2>
+<ul>
+  <li>activity 把「已解析的连接参数」（<strong>不是</strong>活对象）JSON 序列化进 <code>KG_SCRIPT_CTX</code> 环境变量；
+  两参 step 脚本同时合并进 <code>ctx</code> dict。</li>
+  <li>本地调试可以自己伪造：</li>
+</ul>
+
+<pre><code><span class="c"># 本地手工构造 Context 跑用户脚本（不依赖 Temporal）</span>
+KG_SCRIPT_CTX=<span class="s">'{"mysql": {"host": "127.0.0.1", "port": 3306,
+  "database": "gkx_element", "username": "root", "password": "..."},
+  "graph": {"base_url": "http://localhost:8090", "space": "dev",
+  "api_key": "..."}}'</span> \
+  uv run python user_script.py</code></pre>
+
+<div class="admonition warning">
+  <span class="title">安全边界</span>
+  <p>脚本进程持有明文密码与完整环境变量，这是<strong>观测，不是管控</strong> —— 脚本可以绕开
+  <code>ctx.mysql</code> 直连任意地址。表级 ACL 需要网络层方案（子进程只允许访问代理端口），另行立项。
+  平台侧「脚本实际访问了哪些表」的观测方案见 <code>docs/脚本数据访问溯源设计方案.md</code>。</p>
+</div>
+
+<div class="pager">
+  <a href="index.html">← 上一页：概述与快速上手</a>
+  <a href="reading.html">下一页：MySQL 分页与增量 →</a>
+</div>
+
+<footer>tech-kg-api · 抽取脚本 SDK 文档 · 生成于 2026-08</footer>
+</main>
+</div>
+</body>
+</html>

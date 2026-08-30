@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>溯源与置信度 — tech-kg 抽取脚本 SDK 文档</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html">抽取脚本 SDK
+    <small>tech-kg-api · 实体/关系抽取工具集</small>
+  </a>
+  <nav>
+    <div class="group">开始</div>
+    <a href="index.html">概述与快速上手</a>
+    <a href="context.html">运行上下文 Context</a>
+    <div class="group">数据读取</div>
+    <a href="reading.html">MySQL 分页与增量</a>
+    <a href="values.html">值语义与类型转换</a>
+    <div class="group">标识与溯源</div>
+    <a href="identity.html">VID、稳定键与幂等</a>
+    <a class="active" href="provenance.html">溯源与置信度</a>
+    <div class="group">写入图谱</div>
+    <a href="entities.html">实体抽取与写入</a>
+    <a href="relations.html">关系抽取与写入</a>
+    <div class="group">编排</div>
+    <a href="runners.html">抽取主流程与双入口</a>
+    <a href="examples.html">完整脚本剖析</a>
+    <div class="group">参考</div>
+    <a href="reference.html">API 速查表</a>
+  </nav>
+</aside>
+<main class="content">
+
+<h1>溯源与置信度</h1>
+<p class="subtitle">每个点、每条边自带「从哪来、什么时候进的、可信到什么程度」—— 落图即审计。</p>
+
+<div class="toc">
+  <div class="title">本页内容</div>
+  <ul>
+    <li><a href="#props">溯源属性一览</a></li>
+    <li><a href="#builders">三个溯源构造器</a></li>
+    <li><a href="#confidence">置信度打分</a></li>
+    <li><a href="#batch">ingest_batch 与重跑定位</a></li>
+  </ul>
+</div>
+
+<h2 id="props">溯源属性一览</h2>
+<p>溯源属性与业务属性平级，直接作为点/边属性落图（新架构不使用 <code>organization_base</code> mixin tag）：</p>
+
+<table>
+  <thead><tr><th>属性</th><th>含义</th><th>示例</th></tr></thead>
+  <tbody>
+    <tr><td><code>source_system</code></td><td>源系统标识</td><td><code>gkx_element</code></td></tr>
+    <tr><td><code>source_table</code></td><td>源 MySQL 表</td><td><code>dwd_org_base_info</code></td></tr>
+    <tr><td><code>source_record_id</code></td><td>源记录主键/稳定键</td><td><code>org123</code> / <code>proj1|paper|paper_9f2a…</code></td></tr>
+    <tr><td><code>source_url</code></td><td>源记录原始链接</td><td>新闻/资讯表的 <code>source_url</code> 候选链</td></tr>
+    <tr><td><code>ingest_batch</code></td><td>写入批次号</td><td><code>ENTITY_20260828T093000Z</code></td></tr>
+    <tr><td><code>ingest_time</code></td><td>本批写入时间（UTC）</td><td><code>2026-08-28T09:30:01+00:00</code></td></tr>
+    <tr><td><code>source_update_time</code></td><td>源行更新时间</td><td>增量水位的对账依据</td></tr>
+    <tr><td><code>confidence</code></td><td>置信度 [0, 1]</td><td>见下文打分</td></tr>
+    <tr><td><code>match_method</code></td><td>端点匹配方式</td><td><code>source_primary_key</code> / <code>name_exact</code></td></tr>
+    <tr><td><code>match_evidence</code></td><td>匹配证据（人话）</td><td><code>dwd_org_base_info.org123 主键/稳定键直接抽取</code></td></tr>
+  </tbody>
+</table>
+
+<h2 id="builders">三个溯源构造器</h2>
+
+<h3><code>provenance()</code> —— 实体通用（论文/学者/项目/专利域）</h3>
+
+<div class="sig"><span class="f">provenance</span>(*, table, record_id, ingest_batch,
+        <span class="param">source_url</span>=<span class="k">None</span>, <span class="param">source_update_time</span>=<span class="k">None</span>,
+        <span class="param">confidence</span>=1.0, <span class="param">source_system</span>=<span class="s">"gkx_element"</span>) -&gt; dict</div>
+
+<pre><code>props = {
+    <span class="s">"name"</span>: ...,
+    <span class="s">"extra_json"</span>: extra_json(row),
+    **provenance(table=table, record_id=sid, ingest_batch=batch,
+                 source_update_time=row.get(<span class="s">"update_time"</span>)),
+}
+<span class="c"># match_method 固定 source_primary_key、confidence 默认 1.0（主键直抽）</span></code></pre>
+
+<h3><code>org_provenance()</code> —— 机构域（动态置信度）</h3>
+
+<div class="sig"><span class="f">org_provenance</span>(*, table, record_id, row, ingest_batch) -&gt; dict</div>
+
+<p>从行内自动取：机构 ID 候选链、<code>entity_confidence</code> 动态打分、URL 四级候选链
+（<code>source_url → original_link → original_textlink → web_link</code>）、更新时间候选链
+（<code>updated_time → update_time</code>）。</p>
+
+<h3><code>edge_provenance()</code> —— 边（最小集）</h3>
+
+<div class="sig"><span class="f">edge_provenance</span>(*, source_table, source_record_id, ingest_batch) -&gt; dict</div>
+
+<p>只带四个字段：<code>source_table / source_record_id / ingest_batch / ingest_time</code>。
+边还需要 <code>confidence</code> / <code>match_method</code> / <code>match_evidence</code> 时自行并入
+（匹配类边从 matcher 的 <code>match_audit_props(method, evidence)</code> 取）。</p>
+
+<pre><code><span class="k">from</span> script.relation_extractors_one_relation.common <span class="k">import</span> edge_provenance
+
+props = {
+    **edge_provenance(source_table=table,
+                      source_record_id=<span class="s">f"{project_id}|{output_type}|{target_vid}"</span>,
+                      ingest_batch=batch),
+    <span class="s">"match_method"</span>: result.method,
+    <span class="s">"match_evidence"</span>: result.evidence,
+    <span class="s">"confidence"</span>: 0.8,
+}</code></pre>
+
+<h2 id="confidence">置信度打分</h2>
+
+<h3><code>entity_confidence(row, source_table=...)</code> —— 机构域实体</h3>
+<p>四段累加，最后 clamp 到 [0, 1] 保留 4 位小数：</p>
+
+<table>
+  <thead><tr><th>条件</th><th>分值</th></tr></thead>
+  <tbody>
+    <tr><td>基线（<code>dwd_</code> 前缀 DWD 溯源表 / 其他表）</td><td>+0.40 / +0.30</td></tr>
+    <tr><td>有机构 ID（7 字段候选链任一）</td><td>+0.20</td></tr>
+    <tr><td>有外部标识（<code>external_id</code> / <code>credit_no</code>）</td><td>+0.10</td></tr>
+    <tr><td>有展示身份（<code>name_cn</code>/<code>company_name</code>/<code>news_title</code> 等 12 个候选）</td><td>+0.20</td></tr>
+    <tr><td>有地域/时间属性（<code>country</code>/<code>province</code>/<code>updated_time</code> 等）</td><td>+0.10</td></tr>
+  </tbody>
+</table>
+<p>典型结果：DWD 表带全量字段 = 1.0；只有名字的资讯行 ≈ 0.7；裸行 0.4。</p>
+
+<h3><code>relation_confidence(row, source_table=...)</code> —— 机构域关系</h3>
+<p>源可靠性基线（DWD 0.55 / 其他 0.45）+ 显式端点 ID 数（≥1 +0.25，≥2 +0.10）+ 行内非空值数（≥3 +0.05）+ 外部标识（+0.05）。</p>
+
+<h3>置信度的方向性约定</h3>
+<ul>
+  <li>机构域 merge 保护下 <strong>confidence 只升不降</strong>（见 <a href="entities.html">实体写入</a>）。</li>
+  <li>匹配类边（名称匹配、标题匹配）的 confidence 反映匹配置信度，不是源数据质量；
+  主键直抽固定 1.0。</li>
+</ul>
+
+<h2 id="batch">ingest_batch 与重跑定位</h2>
+<p>批次号是「这次运行写了哪些数据」的定位锚：</p>
+
+<pre><code><span class="c"># 缺省自动生成：ENTITY_/RELATION_ + UTC 时间戳</span>
+{<span class="s">"ingest_batch"</span>: <span class="s">"ENTITY_20260828T093000Z"</span>, <span class="s">"sources"</span>: {...}}
+
+<span class="c"># 显式指定（幂等重跑/对账场景：同一逻辑批次共用一个号）</span>
+$ uv run python -m script...person_entity --ingest-batch BACKFILL_2026Q3
+
+<span class="c"># 图上按批回查</span>
+MATCH (v) WHERE v.entity_extractors.ingest_batch == <span class="s">"BACKFILL_2026Q3"</span> RETURN count(v)</code></pre>
+
+<div class="admonition note">
+  <span class="title">输出即报告</span>
+  <p>主流程函数返回的 summary（<code>scanned / valid / written / updated / invalid</code>）
+  本身就是结构化运行报告，CLI 路径直接 <code>print_json</code>、workflow 路径原样返回给
+  Temporal —— 两条入口的观测口径一致。</p>
+</div>
+
+<div class="pager">
+  <a href="identity.html">← 上一页：VID、稳定键与幂等</a>
+  <a href="entities.html">下一页：实体抽取与写入 →</a>
+</div>
+
+<footer>tech-kg-api · 抽取脚本 SDK 文档 · 生成于 2026-08</footer>
+</main>
+</div>
+</body>
+</html>

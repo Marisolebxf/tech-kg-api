@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>完整脚本剖析 — tech-kg 抽取脚本 SDK 文档</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html">抽取脚本 SDK
+    <small>tech-kg-api · 实体/关系抽取工具集</small>
+  </a>
+  <nav>
+    <div class="group">开始</div>
+    <a href="index.html">概述与快速上手</a>
+    <a href="context.html">运行上下文 Context</a>
+    <div class="group">数据读取</div>
+    <a href="reading.html">MySQL 分页与增量</a>
+    <a href="values.html">值语义与类型转换</a>
+    <div class="group">标识与溯源</div>
+    <a href="identity.html">VID、稳定键与幂等</a>
+    <a href="provenance.html">溯源与置信度</a>
+    <div class="group">写入图谱</div>
+    <a href="entities.html">实体抽取与写入</a>
+    <a href="relations.html">关系抽取与写入</a>
+    <div class="group">编排</div>
+    <a href="runners.html">抽取主流程与双入口</a>
+    <a class="active" href="examples.html">完整脚本剖析</a>
+    <div class="group">参考</div>
+    <a href="reference.html">API 速查表</a>
+  </nav>
+</aside>
+<main class="content">
+
+<h1>完整脚本剖析</h1>
+<p class="subtitle">三个真实脚本，从简到繁：多源实体 → rank 边 → 匹配型关系。</p>
+
+<div class="toc">
+  <div class="title">本页内容</div>
+  <ul>
+    <li><a href="#person">例一：person_entity —— 多源实体脚本</a></li>
+    <li><a href="#authored">例二：authored_by_relation —— rank 边脚本</a></li>
+    <li><a href="#funded">例三：funded_by_relation —— 匹配型关系脚本</a></li>
+    <li><a href="#checklist">新脚本自查清单</a></li>
+  </ul>
+</div>
+
+<h2 id="person">例一：person_entity —— 多源实体脚本</h2>
+<p><code>backend/script/entity_extractors_one_entity/person_entity.py</code>（204 行）。
+一个实体（Person）三个来源通道，<code>--source</code> 切换：</p>
+
+<table>
+  <thead><tr><th>通道</th><th>源表</th><th>要点</th></tr></thead>
+  <tbody>
+    <tr><td><code>scholar</code></td><td><code>dwd_scholar</code></td><td>原文口径；子查询带出学术头衔/研究方向；identity 带 <code>source_record_id</code></td></tr>
+    <tr><td><code>paper-author</code></td><td><code>dwd_zh_author</code> + <code>dwd_en_author</code></td><td>paper_id 去 <code>__数字</code> 后缀判空；<code>dedupe="first"</code> 同 author 首次出现的姓名胜出</td></tr>
+    <tr><td><code>organization-role</code></td><td>机构域 7+ 张表（<code>org_catalog</code>）</td><td>表驱动 sources；<code>person_vid</code> 复合身份哈希；merge 保护</td></tr>
+  </tbody>
+</table>
+
+<pre><code><span class="c"># ① mapper：一个来源的映射逻辑</span>
+<span class="k">def</span> <span class="f">paper_author_person</span>(table, row, batch) -&gt; list[EntityRecord]:
+    aid = row.get(<span class="s">"author_id"</span>)
+    paper_id = row.get(<span class="s">"paper_id"</span>)
+    <span class="c"># 旧口径：paper_id 去掉 __数字 后缀后与 author_id 均非空才建点</span>
+    <span class="k">if not</span> aid <span class="k">or not</span> _SUFFIX_RE.sub(<span class="s">""</span>, str(paper_id <span class="k">or</span> <span class="s">""</span>)):
+        <span class="k">return</span> []
+    vid = <span class="s">f"person_{aid}"</span>
+    <span class="k">return</span> [EntityRecord(<span class="s">"Person"</span>, vid, {
+        <span class="s">"name_zh"</span>: paper_text(row.get(<span class="s">"zh_name"</span>)),
+        <span class="s">"name_en"</span>: paper_text(row.get(<span class="s">"en_name"</span>)),
+        <span class="s">"extra_json"</span>: extra_json(row),
+        **provenance(table=table, record_id=vid, ingest_batch=batch),
+    })]
+
+<span class="c"># ② build_sources：把「参数 → sources + dedupe」的决策收成一份</span>
+<span class="k">def</span> <span class="f">build_sources</span>(payload):
+    source = payload.get(<span class="s">"source"</span>, <span class="s">"scholar"</span>)
+    <span class="k">if</span> source == <span class="s">"paper-author"</span>:
+        <span class="k">return</span> [
+            (<span class="s">"dwd_zh_author"</span>, <span class="s">"SELECT * FROM dwd_zh_author ORDER BY author_id"</span>,
+             paper_author_person),
+            (<span class="s">"dwd_en_author"</span>, <span class="s">"SELECT * FROM dwd_en_author ORDER BY author_id"</span>,
+             paper_author_person),
+        ], <span class="s">"first"</span>          <span class="c"># ← dedupe 也由 build_sources 决定</span>
+    ...
+
+<span class="c"># ③ 双入口共享 build_sources（CLI 用 vars(args)，workflow 用 payload）</span></code></pre>
+
+<pre><code>$ cd backend
+$ uv run python -m script.entity_extractors_one_entity.person_entity \
+      --source paper-author --dry-run --limit 100</code></pre>
+
+<h2 id="authored">例二：authored_by_relation —— rank 边脚本</h2>
+<p><code>backend/script/relation_extractors_one_relation/authored_by_relation.py</code>（99 行，
+去掉文档字符串和双入口样板后核心只有 ~30 行）。整个脚本展示 rank 边的最小形态：</p>
+
+<pre><code>TABLES = (<span class="s">"dwd_zh_author"</span>, <span class="s">"dwd_en_author"</span>)
+
+<span class="k">def</span> <span class="f">authored_by</span>(table: str, row: dict, batch: str) -&gt; list[EdgeRecord]:
+    pid = paper_source_id(row.get(<span class="s">"paper_id"</span>))   <span class="c"># resolvers：去 __数字 后缀</span>
+    aid = str(row.get(<span class="s">"author_id"</span>)) <span class="k">if</span> row.get(<span class="s">"author_id"</span>) <span class="k">else</span> <span class="s">""</span>
+    <span class="k">if not</span> pid <span class="k">or not</span> aid:
+        <span class="k">return</span> []
+    <span class="k">return</span> [EdgeRecord(
+        <span class="s">"AUTHORED_BY"</span>,
+        <span class="s">f"paper_{pid}"</span>,      <span class="c"># 端点公式 = 实体侧公式（直接 import）</span>
+        <span class="s">f"person_{aid}"</span>,
+        {<span class="s">"author_order"</span>: ..., <span class="s">"is_corresponding"</span>: ..., <span class="s">"confidence"</span>: 1.0},
+        rank=0,               <span class="c"># 同端点唯一边：重跑覆盖更新</span>
+    )]
+
+<span class="k">def</span> <span class="f">build_sources</span>(payload):
+    table_choice = payload.get(<span class="s">"table"</span>, <span class="s">"all"</span>)
+    tables = TABLES <span class="k">if</span> table_choice == <span class="s">"all"</span> <span class="k">else</span> (table_choice,)
+    <span class="k">return</span> [(t, <span class="s">f"SELECT * FROM {t} ORDER BY paper_id, author_id"</span>,
+                 authored_by) <span class="k">for</span> t <span class="k">in</span> tables]</code></pre>
+
+<p>注意它<strong>不</strong>做的事：不建 Person/Paper 点（<code>person_entity --source paper-author</code> 和
+<code>paper_entity</code> 先行）、不 <code>ensure_edge_schema</code>（AUTHORED_BY 的 schema 由
+<code>init_paper_journal_schema.py</code> 建好）、端点不验存（旧口径信任上游已写点）。</p>
+
+<h2 id="funded">例三：funded_by_relation —— 匹配型关系脚本</h2>
+<p><code>backend/script/relation_extractors_one_relation/funded_by_relation.py</code>（277 行）。
+展示最复杂的形态：名称匹配 + 复核报告 + schema 补齐 + 跨域候选记录：</p>
+
+<pre><code><span class="c"># 预加载编排（详见 runners 页「预加载编排」节）</span>
+candidates = _collect_candidates(...)          <span class="c"># ① MySQL：收集 funded_institution 候选名</span>
+matcher = _load_matcher(candidates, dry_run)   <span class="c"># ② 图：名称索引 + ensure_edge_schema</span>
+report = ProjectIngestReport(report_dir, ...)  <span class="c"># ③ 复核报告</span>
+
+<span class="c"># mapper 工厂：把 matcher/report 闭包进 mapper</span>
+<span class="k">def</span> <span class="f">make_funded_by_mapper</span>(matcher, report):
+    <span class="k">def</span> <span class="f">funded_by</span>(table, row, batch):
+        project_id = str(row.get(<span class="s">"id"</span>) <span class="s">or ""</span>)
+        <span class="k">if not</span> project_id:
+            <span class="k">return</span> []
+        institution = normalize_text(row.get(<span class="s">"funded_institution"</span>)).rstrip(<span class="s">"；;"</span>)
+        records = []
+        <span class="k">if</span> institution:
+            report.increment(<span class="s">"organization_candidates"</span>)
+            org_result = matcher.organization.match(institution, method=<span class="s">"name_exact"</span>)
+
+            <span class="c"># matched → 建边；ambiguous/not_found → 复核目录</span>
+            target = _matched_vid(report, org_result, <span class="s">"organization"</span>,
+                                  {<span class="s">"project_id"</span>: project_id,
+                                   <span class="s">"field"</span>: <span class="s">"funded_institution"</span>,
+                                   <span class="s">"value"</span>: institution})
+            <span class="k">if</span> target:
+                report.increment(<span class="s">"edges_FUNDED_BY"</span>)
+                records.append(EdgeRecord(
+                    <span class="s">"FUNDED_BY"</span>, <span class="s">f"project_{project_id}"</span>, target,
+                    {**edge_provenance(source_table=table,
+                                       source_record_id=project_id,  <span class="c"># merge 幂等键</span>
+                                       ingest_batch=batch),
+                     <span class="s">"funded_amount"</span>: to_float(row.get(<span class="s">"funded_amount"</span>)),
+                     **match_audit_props(org_result.method, org_result.evidence),
+                     **funded_by_org_props(matcher.organization_id(target))},
+                    source_tag=<span class="s">"Project"</span>, target_tag=<span class="s">"Organization"</span>,
+                ))
+
+        <span class="c"># 跨域候选只记报告不建边（PARTICIPATES_IN 归机构域脚本）</span>
+        <span class="k">for</span> name <span class="k">in</span> sorted(set(parse_list(row.get(<span class="s">"participating_institution"</span>)))):
+            report.add(<span class="s">"cross_domain"</span>, {...})
+        <span class="k">return</span> records
+    <span class="k">return</span> funded_by</code></pre>
+
+<pre><code>$ uv run python -m script.relation_extractors_one_relation.funded_by_relation \
+      --table zh --limit 200 --report-dir /tmp/funded-report
+
+<span class="c"># summary 里除 sources 统计外，还带报告信息：</span>
+<span class="c"># "report_dir": "/tmp/funded-report"</span>
+<span class="c"># "report": {"organization_matched": 180, "organization_ambiguous": 12,</span>
+<span class="c">#           "organization_not_found": 8, "cross_domain": 45, ...}</span></code></pre>
+
+<h2 id="checklist">新脚本自查清单</h2>
+<p>写一个新抽取脚本，过一遍这张清单：</p>
+
+<ol>
+  <li><strong>口径</strong>：实体属于哪个域 → 文本/数值/extra_json 用哪套语义（<a href="values.html#choose">对照表</a>）。</li>
+  <li><strong>VID</strong>：有主键 → 前缀拼接；无主键 → 复合身份哈希 / 行稳定键；可能超长 → <code>bounded_vid</code>。</li>
+  <li><strong>溯源</strong>：provenance / org_provenance / edge_provenance 选一个；<code>source_record_id</code> 必须稳定。</li>
+  <li><strong>schema</strong>：目标 Tag / Edge 已存在？属性名与 schema 完全一致？边属性要补列就 <code>ensure_edge_schema</code>。</li>
+  <li><strong>写通道</strong>：边选 rank 还是 merge（<a href="relations.html#channels">对照表</a>）；机构域实体置 <code>merge_protect=True</code>。</li>
+  <li><strong>端点</strong>：边端点公式 import 自实体侧；是否验存；悬空桩端点 <code>validate_endpoints=False</code>。</li>
+  <li><strong>过滤</strong>：缺主键行返回 <code>[]</code>；机构域记得 <code>is_virtual_source_row</code>。</li>
+  <li><strong>排序</strong>：源 SQL 带确定性 <code>ORDER BY</code>；大表考虑 <code>cursor_column</code>。</li>
+  <li><strong>双入口</strong>：<code>build_sources(payload)</code> 一份；<code>main()</code> 用 <code>vars(args)</code>；payload key 全 snake_case。</li>
+  <li><strong>验证</strong>：<code>--dry-run --limit 10</code> 先跑一遍看 summary；再 <code>--limit 1000</code> 小批量真写，图上抽查点/边属性。</li>
+</ol>
+
+<div class="pager">
+  <a href="runners.html">← 上一页：抽取主流程与双入口</a>
+  <a href="reference.html">下一页：API 速查表 →</a>
+</div>
+
+<footer>tech-kg-api · 抽取脚本 SDK 文档 · 生成于 2026-08</footer>
+</main>
+</div>
+</body>
+</html>

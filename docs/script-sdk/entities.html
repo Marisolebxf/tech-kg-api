@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>实体抽取与写入 — tech-kg 抽取脚本 SDK 文档</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html">抽取脚本 SDK
+    <small>tech-kg-api · 实体/关系抽取工具集</small>
+  </a>
+  <nav>
+    <div class="group">开始</div>
+    <a href="index.html">概述与快速上手</a>
+    <a href="context.html">运行上下文 Context</a>
+    <div class="group">数据读取</div>
+    <a href="reading.html">MySQL 分页与增量</a>
+    <a href="values.html">值语义与类型转换</a>
+    <div class="group">标识与溯源</div>
+    <a href="identity.html">VID、稳定键与幂等</a>
+    <a href="provenance.html">溯源与置信度</a>
+    <div class="group">写入图谱</div>
+    <a class="active" href="entities.html">实体抽取与写入</a>
+    <a href="relations.html">关系抽取与写入</a>
+    <div class="group">编排</div>
+    <a href="runners.html">抽取主流程与双入口</a>
+    <a href="examples.html">完整脚本剖析</a>
+    <div class="group">参考</div>
+    <a href="reference.html">API 速查表</a>
+  </nav>
+</aside>
+<main class="content">
+
+<h1>实体抽取与写入</h1>
+<p class="subtitle">EntityRecord → merge_node upsert，机构域额外享受「已有节点属性合并保护」。</p>
+
+<div class="toc">
+  <div class="title">本页内容</div>
+  <ul>
+    <li><a href="#record">EntityRecord</a></li>
+    <li><a href="#write">write_records 的写入路径</a></li>
+    <li><a href="#merge-protect">机构域 merge 保护</a></li>
+    <li><a href="#stringify">None 属性与值字符串化</a></li>
+    <li><a href="#example">mapper 实战示例</a></li>
+  </ul>
+</div>
+
+<h2 id="record">EntityRecord</h2>
+
+<div class="sig"><span class="f">@dataclass</span>(frozen=<span class="k">True</span>)
+<span class="k">class</span> <span class="f">EntityRecord</span>:
+    <span class="param">tag</span>: str                      <span class="c"># graph Tag，如 "Person"</span>
+    <span class="param">vid</span>: str                      <span class="c"># 确定性 VID（见 identity 页）</span>
+    <span class="param">properties</span>: dict[str, Any]    <span class="c"># 含溯源 + extra_json</span>
+    <span class="param">merge_protect</span>: bool = <span class="k">False</span>     <span class="c"># 机构域置 True</span>
+    <span class="param">identity</span>: dict | <span class="k">None</span> = <span class="k">None</span>       <span class="c"># merge_node 匹配键，缺省 {"vid": vid}</span></div>
+
+<ul>
+  <li><strong>tag</strong>：目标 Tag 名。写入前 Tag 必须已存在（用 nGQL <code>CREATE TAG</code> /
+  <code>init_*.py</code> schema 脚本建好）；属性名必须<strong>完全匹配 Tag schema</strong> ——
+  传 schema 外的列会收到 <code>400 SemanticError: Unknown column</code>。</li>
+  <li><strong>identity</strong>：除了 vid 还想参与 upsert 匹配时传，如学者 Person 用
+  <code>{"vid": vid, "source_record_id": sid}</code>（旧口径）。</li>
+  <li><strong>merge_protect</strong>：机构域实体（Organization/Event/News/Product/机构角色 Person）
+  置 True，写入前先读已有节点做合并保护（见下）。</li>
+</ul>
+
+<h2 id="write">write_records 的写入路径</h2>
+
+<div class="sig"><span class="f">write_records</span>(records: list[EntityRecord], *, dry_run: bool) -&gt; dict[str, int]</div>
+
+<pre><code><span class="c"># 逐条 merge_node upsert（新架构统一通道）</span>
+graph.merge_node([record.tag], identity, props)
+
+<span class="c"># dry_run 不建连接不写图，只统计</span>
+{<span class="s">"scanned"</span>: 500, <span class="s">"written"</span>: 498, <span class="s">"updated"</span>: 2, <span class="s">"dry_run"</span>: 0}</code></pre>
+
+<ul>
+  <li>写图前先按 <code>merge_protect</code> 分 Tag <strong>批量读回已有节点属性</strong>（一条
+  <code>MATCH (v:Tag) WHERE id(v) IN [...] RETURN id(v), properties(v)</code>）。</li>
+  <li>批量写发生在主流程攒够 <code>batch_size</code> 条时，连接在每批内建、批末关闭。</li>
+  <li>典型调用方是 <code>run_entity_extractor</code>，手写循环时才直接调 <code>write_records</code>。</li>
+</ul>
+
+<h2 id="merge-protect">机构域 merge 保护</h2>
+<p>机构域一份数据可能来自多张表（基本信息、上市公司信息、港股信息…），直接 upsert 会用稀疏行
+把已有完整属性冲掉。<code>merge_protect=True</code> 的记录走 <code>merge_existing_properties(existing, incoming)</code>：</p>
+
+<table>
+  <thead><tr><th>规则</th><th>行为</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>标准属性</td>
+      <td><strong>只填空，不覆盖</strong>：已有非空值保留；仅当已有值为 None/空白时才接受新值</td>
+    </tr>
+    <tr>
+      <td><code>confidence</code></td>
+      <td><strong>只升不降</strong>：新值 > 已有值才更新</td>
+    </tr>
+    <tr>
+      <td><code>extra_json</code></td>
+      <td><strong>多源累积</strong>：已有 <code>source_records</code> 按 <code>"table:record_id"</code> 键合并新源行，整包过 <code>bounded_json</code></td>
+    </tr>
+    <tr>
+      <td>无变化</td>
+      <td>不发起写入（<code>changes</code> 为空直接跳过，避免无效写放大）</td>
+    </tr>
+    <tr>
+      <td>更新时</td>
+      <td>携带<strong>全部已有非空属性 + 增量变更</strong>一起写，防稀疏行冲掉 canonical 字段</td>
+    </tr>
+  </tbody>
+</table>
+
+<pre><code><span class="c"># 已有：{"name_cn": "华为", "confidence": 0.9}</span>
+<span class="c"># 新行：{"name_cn": None, "confidence": 0.7, "extra_json": "{...}"}</span>
+
+merge_existing_properties(existing, incoming)
+<span class="c"># → {}                        # name 不回退、confidence 不降、extra_json 内容相同 → 整体跳过</span></code></pre>
+
+<div class="admonition note">
+  <span class="title">旧 truncated 摘要的演进处理</span>
+  <p>合并时如果已有 <code>extra_json</code> 是 <code>bounded_json</code> 降级出的审计摘要
+  （无 <code>truncated</code> 标记的 legacy 载荷除外），摘要会被完整源行取代 —— 摘要只是属性上限不够时的
+  临时形态，不是终态。</p>
+</div>
+
+<h2 id="stringify">None 属性与值字符串化</h2>
+<p>写入前所有记录过一道 <code>_drop_null_props</code>：</p>
+
+<ul>
+  <li><code>None</code> 值属性<strong>直接丢弃</strong>（机构域「空白→NULL→省略属性」口径的落图形态；
+  Nebula 不写该列即视为 NULL）。</li>
+  <li>非字符串值<strong>显式 <code>str()</code></strong>。原因：trs-graph REST 对 string 列做严格类型校验，
+  传 int/float 会 <code>400 Storage Error: data type does not meet the requirements</code>。
+  旧 nGQL INSERT 用字符串字面量本就隐式转字符串，REST 路径必须显式。</li>
+</ul>
+
+<div class="admonition warning">
+  <span class="title">mapper 里不要预判类型</span>
+  <p>数值属性按源口径给 float/int 即可（<code>to_float_or_zero</code> 等），字符串化由写入层统一做 ——
+  mapper 自己 <code>str()</code> 一遍会跟「机构域 confidence 数值比较」等保护逻辑打架。</p>
+</div>
+
+<h2 id="example">mapper 实战示例</h2>
+<p>签名约定：<code>mapper(table: str, row: Mapping, batch: str) -> list[EntityRecord]</code>。
+返回 <code>[]</code> 表示这一行不产出（缺主键、虚拟源行、过滤规则命中）。</p>
+
+<pre><code><span class="k">from</span> script.entity_extractors_one_entity.common <span class="k">import</span> (
+    EntityRecord, extra_json, org_provenance,
+    stable_record_id, text_or_none,
+)
+<span class="k">from</span> script.entity_extractors_one_entity.mappers <span class="k">import</span> organization_props
+
+<span class="c"># 机构域：动态置信度 + 复合稳定键 + merge 保护</span>
+<span class="k">def</span> <span class="f">organization_node</span>(table, row, batch):
+    org_id = organization_id_from_row(row)
+    <span class="k">if</span> org_id <span class="k">is</span> None:
+        <span class="k">return</span> []
+    vid = organization_vid(org_id)
+    props = {
+        **organization_props(row),                       <span class="c"># 业务字段（mappers.py）</span>
+        **org_provenance(table=table, row=row,           <span class="c"># 动态置信度溯源</span>
+                         record_id=stable_record_id(
+                             table, row, (<span class="s">"org_id"</span>, <span class="s">"year"</span>)),
+                         ingest_batch=batch),
+    }
+    <span class="k">return</span> [EntityRecord(<span class="s">"Organization"</span>, vid, props,
+                             merge_protect=<span class="k">True</span>)]</code></pre>
+
+<pre><code><span class="c"># 论文域：原文口径 + 固定置信度 1.0 + identity 带源主键</span>
+<span class="k">def</span> <span class="f">scholar_person</span>(table, row, batch):
+    sid = row.get(<span class="s">"scholar_id"</span>)
+    <span class="k">if not</span> sid:
+        <span class="k">return</span> []
+    vid = <span class="s">f"person_{sid}"</span>
+    props = {<span class="s">"name_zh"</span>: text_or_empty(row.get(<span class="s">"name_zh"</span>)),
+             <span class="s">"extra_json"</span>: extra_json(row),
+             **provenance(table=table, record_id=str(sid).strip(),
+                          ingest_batch=batch,
+                          source_update_time=row.get(<span class="s">"update_time"</span>))}
+    <span class="k">return</span> [EntityRecord(<span class="s">"Person"</span>, vid, props,
+                             identity={<span class="s">"vid"</span>: vid, <span class="s">"source_record_id"</span>: str(sid)})]</code></pre>
+
+<div class="pager">
+  <a href="provenance.html">← 上一页：溯源与置信度</a>
+  <a href="relations.html">下一页：关系抽取与写入 →</a>
+</div>
+
+<footer>tech-kg-api · 抽取脚本 SDK 文档 · 生成于 2026-08</footer>
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>概述与快速上手 — tech-kg 抽取脚本 SDK 文档</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html">抽取脚本 SDK
+    <small>tech-kg-api · 实体/关系抽取工具集</small>
+  </a>
+  <nav>
+    <div class="group">开始</div>
+    <a class="active" href="index.html">概述与快速上手</a>
+    <a href="context.html">运行上下文 Context</a>
+    <div class="group">数据读取</div>
+    <a href="reading.html">MySQL 分页与增量</a>
+    <a href="values.html">值语义与类型转换</a>
+    <div class="group">标识与溯源</div>
+    <a href="identity.html">VID、稳定键与幂等</a>
+    <a href="provenance.html">溯源与置信度</a>
+    <div class="group">写入图谱</div>
+    <a href="entities.html">实体抽取与写入</a>
+    <a href="relations.html">关系抽取与写入</a>
+    <div class="group">编排</div>
+    <a href="runners.html">抽取主流程与双入口</a>
+    <a href="examples.html">完整脚本剖析</a>
+    <div class="group">参考</div>
+    <a href="reference.html">API 速查表</a>
+  </nav>
+</aside>
+<main class="content">
+
+<h1>抽取脚本 SDK</h1>
+<p class="subtitle">编写「实体抽取」与「关系抽取」脚本的标准工具集 —— 分页、增量、幂等、溯源、容错，全部开箱即用。</p>
+
+<div class="toc">
+  <div class="title">本页内容</div>
+  <ul>
+    <li><a href="#why">为什么需要这套工具</a></li>
+    <li><a href="#map">能力地图：三个层次</a></li>
+    <li><a href="#quickstart">快速上手：最小的实体抽取脚本</a></li>
+    <li><a href="#quickstart-rel">最小的关系抽取脚本</a></li>
+    <li><a href="#principles">设计原则</a></li>
+    <li><a href="#layout">代码在哪里</a></li>
+  </ul>
+</div>
+
+<h2 id="why">为什么需要这套工具</h2>
+<p>写一个「从 MySQL 抽数据、写入 NebulaGraph」的脚本，听起来只是拼 SQL + 调接口。但生产级抽取脚本要面对的问题远不止这些：</p>
+
+<table>
+  <thead>
+    <tr><th>问题</th><th>SDK 提供的答案</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>表有几百万行，一把梭 <code>SELECT</code> 会把内存打爆</td>
+      <td><code>iter_rows()</code> 分页迭代（OFFSET / keyset 游标双模式）</td>
+    </tr>
+    <tr>
+      <td>每次全量重跑太浪费</td>
+      <td><code>apply_since()</code> 增量条件注入 + <code>watermark</code> 水位</td>
+    </tr>
+    <tr>
+      <td>重跑一次就多一批重复点/边</td>
+      <td>确定性 VID / 稳定键 / 边 rank，<strong>同一源记录重跑得到同一身份</strong>，覆盖更新而非重复插入</td>
+    </tr>
+    <tr>
+      <td>源数据脏：空串、<code>"-"</code>、<code>"1,200万"</code>、超长文本、NaN</td>
+      <td>值语义转换族（<code>text_or_none</code>、<code>to_float_or_none</code>、截断与降级）</td>
+    </tr>
+    <tr>
+      <td>一条坏行让整个任务失败</td>
+      <td>行级容错：mapper 异常计 <code>invalid</code> 并继续，最后汇总统计</td>
+    </tr>
+    <tr>
+      <td>数据从哪来的说不清</td>
+      <td><code>provenance()</code> 溯源属性（源表 / 源记录 / 批次 / 置信度）随点边一起落图</td>
+    </tr>
+    <tr>
+      <td>边写了，端点却不存在（悬空边）</td>
+      <td><code>existing_vids()</code> 批量端点验存，缺失跳过并计数</td>
+    </tr>
+    <tr>
+      <td>同一个脚本要在命令行调试、也要被 Temporal 调度</td>
+      <td>双入口约定：CLI（argparse）与 <code>workflow(payload)</code> 共享同一份 <code>build_sources()</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="map">能力地图：三个层次</h2>
+<p>整个工具集自下而上分三层：</p>
+
+<pre><code><span class="c">┌─────────────────────────────────────────────────────────────────┐</span>
+<span class="c">│  编排层   run_entity_extractor / run_relation_extractor        │</span>
+<span class="c">│          逐源 → 分页 → 行级容错 → 批量写图 → 统计汇总            │</span>
+<span class="c">├─────────────────────────────────────────────────────────────────┤</span>
+<span class="c">│  写入层   EntityRecord / EdgeRecord                             │</span>
+<span class="c">│          merge 保护 · 端点验存 · ensure_edge_schema · 双写通道   │</span>
+<span class="c">├─────────────────────────────────────────────────────────────────┤</span>
+<span class="c">│  原语层   iter_rows · apply_since · 值语义 · VID · 溯源 · 置信度 │</span>
+<span class="c">├─────────────────────────────────────────────────────────────────┤</span>
+<span class="c">│  运行时   kg_sdk.Context（mysql / graph / milvus / llm / embed） │</span>
+<span class="c">└─────────────────────────────────────────────────────────────────┘</span></code></pre>
+
+<ul>
+  <li><strong>运行时</strong>：<a href="context.html">Context</a> 提供五类客户端的懒构造与降级约定 —— 被 Temporal activity 子进程加载的脚本通过它拿连接。</li>
+  <li><strong>原语层</strong>：纯函数工具，与写入无关，单独可用。<a href="reading.html">读取</a> · <a href="values.html">值语义</a> · <a href="identity.html">标识</a> · <a href="provenance.html">溯源</a>。</li>
+  <li><strong>写入与编排层</strong>：记录类型 + 主流程函数。新脚本通常只需要写 <strong>SQL + mapper 函数</strong>，其余全部交给框架。<a href="entities.html">实体</a> · <a href="relations.html">关系</a> · <a href="runners.html">主流程</a>。</li>
+</ul>
+
+<h2 id="quickstart">快速上手：最小的实体抽取脚本</h2>
+<p>一个实体脚本 = <strong>源 SQL + mapper 函数 + 双入口</strong>。mapper 收到一行源数据，返回 0..n 条 <code>EntityRecord</code>：</p>
+
+<pre><code><span class="s">"""One-entity extractor: Demo（示例）."""</span>
+
+<span class="k">from</span> typing <span class="k">import</span> Any
+<span class="k">from</span> script.entity_extractors_one_entity.common <span class="k">import</span> (
+    EntityRecord, build_parser, common_args_from_payload,
+    configure_logging, extra_json, print_json,
+    provenance, run_entity_extractor, text_or_empty,
+)
+
+SQL = <span class="s">"SELECT * FROM dwd_demo_table ORDER BY id"</span>
+
+<span class="k">def</span> <span class="f">demo_entity</span>(table: str, row: dict[str, Any], batch: str) -&gt; list[EntityRecord]:
+    demo_id = row.get(<span class="s">"id"</span>)
+    <span class="k">if not</span> demo_id:
+        <span class="k">return</span> []                       <span class="c"># 缺主键：跳过这一行</span>
+    vid = <span class="s">f"demo_{demo_id}"</span>
+    props = {
+        <span class="s">"name"</span>: text_or_empty(row.get(<span class="s">"name"</span>)),
+        <span class="s">"extra_json"</span>: extra_json(row),   <span class="c"># 整行源数据快照</span>
+        **provenance(table=table, record_id=str(demo_id), ingest_batch=batch),
+    }
+    <span class="k">return</span> [EntityRecord(<span class="s">"Demo"</span>, vid, props)]
+
+<span class="k">def</span> <span class="f">build_sources</span>(payload: dict[str, Any]):
+    <span class="k">return</span> [(<span class="s">"dwd_demo_table"</span>, SQL, demo_entity)], None
+
+<span class="k">def</span> <span class="f">main</span>() -&gt; None:
+    parser = build_parser(__doc__ <span class="k">or</span> <span class="s">""</span>)
+    args = parser.parse_args()
+    configure_logging(args.log_level)
+    sources, dedupe = build_sources(vars(args))
+    print_json(run_entity_extractor(
+        database=args.database, batch_size=args.batch_size,
+        limit=args.limit, dry_run=args.dry_run,
+        ingest_batch=args.ingest_batch, since=args.since,
+        dedupe=dedupe, sources=sources,
+    ))
+
+<span class="k">def</span> <span class="f">workflow</span>(payload: dict[str, Any]) -&gt; dict[str, Any]:
+    <span class="c"># Temporal 入口；payload 与 vars(args) 同形态</span>
+    common = common_args_from_payload(payload)
+    configure_logging(common[<span class="s">"log_level"</span>])
+    sources, dedupe = build_sources(payload)
+    <span class="k">return</span> run_entity_extractor(
+        database=common[<span class="s">"database"</span>], batch_size=common[<span class="s">"batch_size"</span>],
+        limit=common[<span class="s">"limit"</span>], dry_run=common[<span class="s">"dry_run"</span>],
+        ingest_batch=common[<span class="s">"ingest_batch"</span>], since=common[<span class="s">"since"</span>],
+        dedupe=dedupe, sources=sources,
+    )
+
+<span class="k">if</span> __name__ == <span class="s">"__main__"</span>:
+    main()</code></pre>
+
+<p>跑起来：</p>
+
+<pre><code><span class="c"># 先空跑验证映射（不写图）</span>
+$ cd backend
+$ uv run python -m script.entity_extractors_one_entity.demo_entity --dry-run --limit 10
+
+<span class="c"># 真跑</span>
+$ uv run python -m script.entity_extractors_one_entity.demo_entity --limit 500
+
+<span class="c"># 增量：只抽 updated_time 更新的行</span>
+$ uv run python -m script.entity_extractors_one_entity.demo_entity --since 2026-08-01T00:00:00</code></pre>
+
+<h2 id="quickstart-rel">最小的关系抽取脚本</h2>
+<p>关系脚本结构完全相同，mapper 返回 <code>EdgeRecord</code>。注意两条铁律：<strong>关系脚本一律不建顶点</strong>（端点缺失跳过并计数），边的两端 VID 必须用与实体脚本<strong>同一套公式</strong>（见 <a href="identity.html">标识</a>）：</p>
+
+<pre><code><span class="k">from</span> script.relation_extractors_one_relation.common <span class="k">import</span> (
+    EdgeRecord, edge_provenance, run_relation_extractor,
+)
+
+<span class="k">def</span> <span class="f">demo_owns</span>(table: str, row: dict, batch: str) -&gt; list[EdgeRecord]:
+    src, dst = row.get(<span class="s">"owner_id"</span>), row.get(<span class="s">"thing_id"</span>)
+    <span class="k">if not</span> src <span class="k">or not</span> dst:
+        <span class="k">return</span> []
+    <span class="k">return</span> [EdgeRecord(
+        <span class="s">"OWNS"</span>,
+        <span class="s">f"demo_{src}"</span>,            <span class="c"># 必须与实体侧 VID 公式一致</span>
+        <span class="s">f"thing_{dst}"</span>,
+        {**edge_provenance(source_table=table,
+                           source_record_id=<span class="s">f"{src}|{dst}"</span>,
+                           ingest_batch=batch)},
+        source_tag=<span class="s">"Demo"</span>, target_tag=<span class="s">"Thing"</span>,  <span class="c"># 端点验存</span>
+    )]</code></pre>
+
+<div class="admonition note">
+  <span class="title">完整可运行示例</span>
+  真实脚本的完整剖析（含 <code>--source</code> 多源选择、rank 模式、matcher 预加载）
+  见 <a href="examples.html">完整脚本剖析</a>。
+</div>
+
+<h2 id="principles">设计原则</h2>
+<ul>
+  <li><strong>一实体一脚本 / 一关系一脚本</strong>：每个 graph Tag（或边类型）一个入口脚本，脚本是可独立运行的单元，不是配置文件。</li>
+  <li><strong>幂等可重跑</strong>：写入一律走 upsert 语义（<code>merge_node</code> / 带确定性 rank 的 <code>INSERT EDGE</code> / <code>merge_edge</code>），同一批数据跑 N 遍结果一致。</li>
+  <li><strong>行级容错</strong>：单行映射失败只计 <code>invalid</code>，不中断整批；每行 mapper 异常都带 <code>exc_info</code> 落日志。</li>
+  <li><strong>口径显式化</strong>：历史脚本存在两套值语义（机构域「空白→NULL」与论文/专利域「<code>value or ""</code>」），工具集把两套口径都保留并命名清楚，不做隐式统一。</li>
+  <li><strong>溯源内置</strong>：每个点/边自带 <code>source_table</code> / <code>source_record_id</code> / <code>ingest_batch</code> / <code>ingest_time</code> / <code>confidence</code>。</li>
+  <li><strong>全量行快照</strong>：映射不到一等属性的字段进 <code>extra_json</code>，源数据零丢弃。</li>
+</ul>
+
+<h2 id="layout">代码在哪里</h2>
+<table>
+  <thead>
+    <tr><th>模块</th><th>内容</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>backend/sdk/kg_sdk.py</code></td><td>运行时 Context：五类客户端、watermark、双入口约定</td></tr>
+    <tr><td><code>backend/script/entity_extractors_one_entity/common.py</code></td><td>实体侧工具集（运行时 + 原语 + 实体写入 + 主流程）</td></tr>
+    <tr><td><code>backend/script/relation_extractors_one_relation/common.py</code></td><td>关系侧工具集（边写入双通道 + 主流程）</td></tr>
+    <tr><td><code>backend/script/relation_extractors_one_relation/resolvers.py</code></td><td>端点解析：机构名精确匹配、keyword/paper VID、实体列表解析</td></tr>
+    <tr><td><code>backend/script/entity_extractors_one_entity/org_catalog.py</code></td><td>机构域源表目录（表名 / 实体类型 / 复合稳定键）</td></tr>
+    <tr><td><code>backend/script/entity_extractors_one_entity/mappers.py</code></td><td>机构域各实体类型的字段映射函数库</td></tr>
+  </tbody>
+</table>
+
+<div class="admonition warning">
+  <span class="title">连接方式的差异（重要）</span>
+  <p><code>script/*_one_*/common.py</code> 里的 <code>mysql_engine()</code> / <code>graph_client()</code> 读
+  <code>MYSQL_*</code> / <code>TRS_GRAPH_*</code> 环境变量，适合本机 CLI 与既有调度；
+  而 <code>kg_sdk.Context</code> 由 Temporal activity 注入连接参数（<code>ctx.mysql</code> / <code>ctx.graph</code>）。
+  用户上传脚本应优先走 Context；原语层函数（分页 / 值语义 / VID / 溯源）不依赖连接来源，两边通用 ——
+  写入层需要把 engine/client 作为参数传入而不是自己构造。详见 <a href="context.html">运行上下文</a>。</p>
+</div>
+
+<h2 id="roadmap">路线图（规划中，未实施）</h2>
+<ul>
+  <li><strong>ctx 注入版 ETL utils</strong>（<code>sdk/etl_utils.py</code>）：把原语层 + 写入层以 <code>ctx.mysql</code> / <code>ctx.graph</code> 为依赖注入的形式暴露给用户上传脚本。</li>
+  <li><strong>双入口骨架框架</strong>（<code>run_dual_mode()</code>）：用一份参数声明同时生成 argparse 与 payload 提取，替代手工镜像的 <code>main()</code>/<code>workflow()</code>。</li>
+  <li><strong>共享底层模块</strong>（<code>script/etl_kit.py</code>）：消除实体包 / 关系包 <code>common.py</code> 之间逐字复制的运行时原语。</li>
+  <li><strong>观测式访问溯源</strong>：SDK 客户端挂钩记录脚本实际访问的表 / tag / collection，随 step 结果回传（见 <code>docs/脚本数据访问溯源设计方案.md</code>，已评审）。</li>
+</ul>
+
+<div class="pager">
+  <span></span>
+  <a href="context.html">下一页：运行上下文 Context →</a>
+</div>
+
+<footer>tech-kg-api · 抽取脚本 SDK 文档 · 生成于 2026-08</footer>
+</main>
+</div>
+</body>
+</html>

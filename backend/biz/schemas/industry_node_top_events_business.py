@@ -17,6 +17,17 @@ from biz.schemas.tech_enterprise_relation_business import EntityProvenance
 # 标识类字段允许的字符：字母数字下划线、中文、间隔号、点、连字符。
 _ID_LIKE_PATTERN = re.compile(r"[\w一-鿿·.\-]+")
 
+# 月级 time_range 端点格式：YYYY-MM（如 2025-01）。用于 industry-chain-event 算法测试页
+# 两个 month 选择器合并出的 "YYYY-MM~YYYY-MM" 月份区间（保留月份，后端按 occur_date[:7] 筛）。
+_YYYY_MM_PATTERN = re.compile(r"\d{4}-\d{2}")
+
+
+def _is_yyyymm(s: str) -> bool:
+    """是否为合法 YYYY-MM（含月份 1-12 校验）。"""
+    if not s or not _YYYY_MM_PATTERN.fullmatch(s) or len(s) != 7:
+        return False
+    return 1 <= int(s[5:7]) <= 12
+
 
 class IndustryNodeTopEventsRequest(BaseModel):
     chain_node_id: str = Field(
@@ -81,12 +92,31 @@ class IndustryNodeTopEventsRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_time_range(self) -> IndustryNodeTopEventsRequest:
-        """time_range 形如 "2025-2026"（年份区间，可单端开放如 "2025-"）。
+        """time_range 支持两种粒度：
 
-        校验：起始不晚于结束；起止均不晚于当前时间（测试用例：填 2027-01 应提示超出当前时间）。
-        前端两个 month 选择器经 buildTimeRange 取年份合并为该字符串，故按年份粒度比较。
+        - 月级 "YYYY-MM~YYYY-MM"（industry-chain-event 算法测试页两个 month 选择器合并，
+          保留月份；可单端开放如 "2025-01~" / "~2025-06"）；按月比较，不晚于当前月。
+        - 年级 "YYYY-YYYY"（兼容旧格式与 graph-query 页；可单端开放如 "2025-"）；
+          按年比较，不晚于当前年。
+
+        校验：起始不晚于结束；起止均不晚于当前时间（测试用例：填未来应提示超出当前时间）。
+        用 ~ 分隔月级区间，避免与 YYYY-MM 自带的 - 冲突。
         """
         if not self.time_range:
+            return self
+        if "~" in self.time_range:
+            lo, _, hi = self.time_range.partition("~")
+            current_month = date.today().strftime("%Y-%m")
+            if lo and not _is_yyyymm(lo):
+                raise ValueError("time_range_start 格式应为 YYYY-MM，如 2025-01") from None
+            if hi and not _is_yyyymm(hi):
+                raise ValueError("time_range_end 格式应为 YYYY-MM，如 2025-06") from None
+            if lo and hi and lo > hi:
+                raise ValueError("time_range_start 不能晚于 time_range_end")
+            if lo and lo > current_month:
+                raise ValueError("time_range_start 不能晚于当前时间")
+            if hi and hi > current_month:
+                raise ValueError("time_range_end 不能晚于当前时间")
             return self
         lo, _, hi = self.time_range.partition("-")
         current_year = date.today().strftime("%Y")

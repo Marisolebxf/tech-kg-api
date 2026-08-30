@@ -2153,7 +2153,12 @@ function buildPayload(): Record<string, unknown> {
   for (const field of props.moduleInfo.requestFields) {
     const v = parameterValues.value[field.name];
     if (v === undefined || v === "") continue;
-    payload[field.name] = field.type === "number" ? Number(v) : v;
+    payload[field.name] =
+      field.type === "boolean"
+        ? v === "true"
+        : field.type === "number"
+          ? Number(v)
+          : v;
   }
   return payload;
 }
@@ -2215,14 +2220,15 @@ function optionalParam(value: string | undefined): string | undefined {
 }
 
 /**
- * 将两个 month 选择器值（YYYY-MM）合并为后端 time_range 期望的 "YYYY-YYYY" 年份区间。
- * 后端用 partition("-") 取前后各 4 位作年份上下界，故只取年份；留空端表示不设该侧边界。
+ * 将两个 month 选择器值（YYYY-MM）合并为后端 time_range 的 "YYYY-MM~YYYY-MM" 月份区间。
+ * 保留月份粒度：后端按 occur_date[:7] 月级筛选（含 ~ 走月级，否则按年）。
+ * 用 ~ 分隔避免与 YYYY-MM 自带的 - 冲突；留空端表示不设该侧边界。
  */
 function buildTimeRange(start?: string, end?: string): string {
-  const lo = (start ?? "").slice(0, 4);
-  const hi = (end ?? "").slice(0, 4);
+  const lo = (start ?? "").trim();
+  const hi = (end ?? "").trim();
   if (!lo && !hi) return "";
-  return `${lo}-${hi}`;
+  return `${lo}~${hi}`;
 }
 
 async function handleRun(runOptions: { refresh?: boolean } = {}) {
@@ -2781,7 +2787,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       const topN = optionalParam(parameterValues.value.top_n);
       const maxOrgs = optionalParam(parameterValues.value.max_orgs);
       const eventType = optionalParam(parameterValues.value.event_type);
-      // 两个 month 选择器合并为后端 time_range 期望的 "YYYY-YYYY" 年份区间
+      // 两个 month 选择器合并为后端 time_range 的 "YYYY-MM~YYYY-MM" 月份区间（保留月份）
       const timeRange = buildTimeRange(
         optionalParam(parameterValues.value.time_range_start),
         optionalParam(parameterValues.value.time_range_end),
@@ -3046,7 +3052,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           >{{ field.label ?? field.name }}</span
         >
         <select
-          v-if="field.type === 'select'"
+          v-if="field.type === 'select' || field.type === 'boolean'"
           :key="`${field.name}-${paramResetToken}`"
           :value="parameterValues[field.name] ?? ''"
           :class="{ 'is-empty-control': !parameterValues[field.name] }"

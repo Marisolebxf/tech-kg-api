@@ -365,7 +365,10 @@ class KeyEnterpriseRelationService:
         # 2) governance 直连边（expert→Organization）
         for et, other, props in adj.get(req.expert_id, []):
             if et in GOVERNANCE_MODE and "Organization" in node_labels.get(other, set()):
-                role = props.get("position") or ""
+                # EXECUTIVE_OF 等边用 position 字段；AFFILIATED_WITH 边的职位在
+                # work_experience_position_zh（无 position 字段），两者都兜底，避免
+                # role 退化成通用 '任职'（反馈：角色关系任职不属实角色）。
+                role = props.get("position") or props.get("work_experience_position_zh") or ""
                 period = BusinessPeriod()
                 if et == "AFFILIATED_WITH":
                     period = _parse_period(expert_props.get("work_experience_date"))

@@ -73,19 +73,21 @@ class KeyEnterpriseRelationRequest(BaseModel):
     @field_validator("key_tech_enterprise_only", mode="before")
     @classmethod
     def _coerce_bool(cls, v: object) -> object:
-        """前端参数框可能以字符串形式传布尔（'是'/'否'/'true'/'false'），这里宽容转 bool。
+        """只接受布尔 true/false（字符串 'true'/'false' 大小写不敏感）。
 
-        面板 buildPayload 只对 number 做 Number() 转换、boolean 原样透传字符串，
-        故后端需自行兼容；待前端面板（梦蕊任务三）按 field.type 正确转换后此校验仍兼容。
+        不再兼容 '是'/'否'/'1'/'0'/'yes'/'no' 等旧值——前端面板按 field.type=boolean
+        转真布尔提交，其余脏输入一律拒绝并提示用 true/false。
         """
         if isinstance(v, bool):
             return v
         if v is None:
             return True
         s = str(v).strip().lower()
-        if s in ("false", "0", "no", "否", "n", "f", "off"):
+        if s == "true":
+            return True
+        if s == "false":
             return False
-        return True  # "是"/"true"/"1"/"yes"/""/其它 → 默认 True
+        raise ValueError("key_tech_enterprise_only 只接受 true/false")
 
     @field_validator("enterprise_name", "role_type", "industry", mode="before")
     @classmethod

@@ -25,9 +25,13 @@ ID 形态对齐真实库（学者 8 位、论文整数、项目 UUID、专利 CN
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import sys
+import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +52,57 @@ EXPECTED_ACHIEVEMENTS = 100
 # 旧版 ID（expert_e2e_v1_* / 9930…），apply/cleanup 时一并清除以免残留。
 LEGACY_PREFIX = "expert_e2e_v1_"
 LEGACY_PAPER_ID_BASE = 9930000000000000
+
+# 校友邻域：Person -[STUDIED_AT]-> Organization；org vid 由院校名确定性生成。
+_CANONICAL_SCHOOLS: dict[str, tuple[str, str]] = {
+    "清华大学": ("清华大学", "Tsinghua University"),
+    "华中科技大学": ("华中科技大学", "Huazhong University of Science and Technology"),
+    "北京大学": ("北京大学", "Peking University"),
+    "复旦大学": ("复旦大学", "Fudan University"),
+    "燕山大学": ("燕山大学", "Yanshan University"),
+    "浙江大学": ("浙江大学", "Zhejiang University"),
+    "上海交通大学": ("上海交通大学", "Shanghai Jiao Tong University"),
+}
+
+
+def _normalize_school_key(name: str) -> str:
+    text = unicodedata.normalize("NFKC", name or "")
+    return re.sub(r"\s+", "", text.strip())
+
+
+def school_org_vid(school_zh: str | None, school_en: str | None = None) -> str | None:
+    raw = (school_zh or school_en or "").strip()
+    if not raw:
+        return None
+    key = _normalize_school_key(raw)
+    # 研究生院 / 带空格变体归并到主校名
+    for canon in _CANONICAL_SCHOOLS:
+        if _normalize_school_key(canon) in key or key in _normalize_school_key(canon):
+            digest = hashlib.md5(canon.encode("utf-8")).hexdigest()[:12]
+            return f"org_fx_{digest}"
+    digest = hashlib.md5(key.encode("utf-8")).hexdigest()[:12]
+    return f"org_fx_{digest}"
+
+
+def school_org_names(school_zh: str | None, school_en: str | None) -> tuple[str, str]:
+    raw_zh = (school_zh or "").strip()
+    raw_en = (school_en or "").strip()
+    key = _normalize_school_key(raw_zh or raw_en)
+    for canon_zh, (zh, en) in _CANONICAL_SCHOOLS.items():
+        if _normalize_school_key(canon_zh) in key or key in _normalize_school_key(canon_zh):
+            return zh, en
+    return raw_zh or raw_en, raw_en or raw_zh
+
+
+def fixture_org_vids() -> list[str]:
+    vids: list[str] = []
+    seen: set[str] = set()
+    for p in people():
+        vid = school_org_vid(p.school_zh, p.school_en)
+        if vid and vid not in seen:
+            seen.add(vid)
+            vids.append(vid)
+    return vids
 
 
 @dataclass(frozen=True)
@@ -130,7 +185,8 @@ class Patent:
 
     @property
     def title_row_id(self) -> str:
-        return f"9f9a0003-0000-4000-a000-{self.no:012d}"
+        # dwd_patent_title.id 为 varchar(20)
+        return f"fxptt{self.no:04d}"
 
     @property
     def vid(self) -> str:
@@ -168,6 +224,7 @@ def fixture_vids() -> list[str]:
         *(p.vid for p in papers()),
         *(p.vid for p in projects()),
         *(p.vid for p in patents()),
+        *fixture_org_vids(),
     ]
 
 
@@ -1105,6 +1162,11 @@ def sync_graph_from_mysql() -> dict[str, int]:
                 f"paper:{row['paper_id']}:author:{row['scholar_id']}",
             )
         for query in (
+            "CREATE EDGE IF NOT EXISTS STUDIED_AT("
+            "degree_zh string, degree_en string, education_date string, "
+            "institution_zh string, institution_en string, confidence double, "
+            "match_method string, match_evidence string, source_system string, "
+            "source_table string, source_record_id string, ingest_batch string, ingest_time string)",
             "ALTER TAG Project ADD (output_awards string)",
             "CREATE TAG INDEX IF NOT EXISTS person_edu_inst_zh_idx ON Person(education_background_institution_zh(256))",
             "CREATE TAG INDEX IF NOT EXISTS person_edu_inst_en_idx ON Person(education_background_institution_en(256))",
@@ -1113,8 +1175,60 @@ def sync_graph_from_mysql() -> dict[str, int]:
         ):
             try:
                 graph.execute_write(query)
+                if query.startswith("CREATE EDGE"):
+                    time.sleep(3)
             except Exception as exc:  # noqa: BLE001
                 print(f"skip ddl: {query[:80]} | {exc}")
+
+        # 院校 Organization + STUDIED_AT（校友邻域）
+        org_props: dict[str, tuple[str, str]] = {}
+        for p in people():
+            ovid = school_org_vid(p.school_zh, p.school_en)
+            if not ovid:
+                continue
+            if ovid not in org_props:
+                org_props[ovid] = school_org_names(p.school_zh, p.school_en)
+        for ovid, (name_zh, name_en) in org_props.items():
+            graph.merge_node(
+                ["Organization"],
+                {"vid": ovid},
+                {
+                    "name_cn": name_zh,
+                    "name_en": name_en,
+                    "source_system": "gkx_element",
+                    "source_table": "dwd_scholar",
+                    "ingest_batch": BATCH,
+                    "ingest_time": now,
+                },
+            )
+        for row in scholar_rows:
+            sid = row["scholar_id"]
+            inst_zh = row["education_background_institution_zh"] or ""
+            inst_en = row["education_background_institution_en"] or ""
+            ovid = school_org_vid(inst_zh, inst_en)
+            if not ovid:
+                continue
+            merge_edge(
+                f"person_{sid}",
+                ovid,
+                "STUDIED_AT",
+                f"studied:{sid}:{ovid}",
+                {
+                    "degree_zh": row["education_background_degree_zh"] or "",
+                    "degree_en": row["education_background_degree_en"] or "",
+                    "education_date": row["education_background_date"] or "",
+                    "institution_zh": inst_zh,
+                    "institution_en": inst_en,
+                    "confidence": 1.0,
+                    "match_method": "fixture",
+                    "match_evidence": "e2e fixture school org",
+                    "source_system": "gkx_element",
+                    "source_table": "dwd_scholar",
+                    "source_record_id": f"{sid}|studied|{ovid}",
+                    "ingest_batch": BATCH,
+                    "ingest_time": now,
+                },
+            )
 
         for row in project_rows:
             pvid = f"project_{row['id']}"
@@ -1263,6 +1377,22 @@ def verify() -> dict[str, Any]:
                 "education_background_institution_zh", ""
             ) != (p.school_zh or ""):
                 field_mismatches.append(p.scholar_id)
+        # 抽样：源专家应有 STUDIED_AT 出边（校友邻域）
+        sample = people()[0]
+        sample_org = school_org_vid(sample.school_zh, sample.school_en)
+        studied_ok = False
+        if sample_org:
+            try:
+                out_edges = graph.get_node_edges(
+                    sample.vid, direction="out", edge_type="STUDIED_AT", limit=20
+                )
+            except Exception:  # noqa: BLE001
+                out_edges = []
+            studied_ok = any(
+                str(getattr(e, "target_id", "") or "") == sample_org
+                or str(getattr(e, "source_id", "") or "") == sample.vid
+                for e in (out_edges or [])
+            )
     finally:
         close_trs_graph_client()
     ok = (
@@ -1270,6 +1400,7 @@ def verify() -> dict[str, Any]:
         and graph_nodes == mysql_counts
         and encoding_errors == 0
         and not field_mismatches
+        and studied_ok
     )
     return {
         "ok": ok,
@@ -1278,6 +1409,7 @@ def verify() -> dict[str, Any]:
         "graph": graph_nodes,
         "encodingErrors": encoding_errors,
         "fieldMismatches": field_mismatches,
+        "studiedAtSampleOk": studied_ok,
         "sampleIds": plan()["sampleIds"],
         "scenarioManifest": scenario_manifest(),
     }

@@ -1,8 +1,9 @@
 """学者领域关系抽取：写入 TRSGraph dev 图空间。
 
 范围（学者领域出向边）：
-  - AFFILIATED_WITH  : Person → Organization   （来源：``dwd_scholar``）
+  - AFFILIATED_WITH  : Person → Organization   （来源：``dwd_scholar`` 任职机构）
   - COAUTHOR_WITH    : Person → Person         （来源：``dwd_scholar_coauthor``）
+  - STUDIED_AT       : Person → Organization   （来源：``dwd_scholar`` 教育院校；校友邻域）
 
 跨域兜底（可选，默认关闭；起点属于论文领域）：
   - AUTHORED_BY      : Paper → Person          （来源：``dwd_scholar_paper_relation``）
@@ -25,9 +26,13 @@
     # 干跑：只统计 & 打印前若干条待写入的边，不实际写入
     MYSQL_DATABASE=gkx_element uv run python -m script.load_scholar_relations --dry-run
 
-    # 实际写入 dev 图空间（默认边集：AFFILIATED_WITH + COAUTHOR_WITH）
+    # 实际写入（默认边集：AFFILIATED_WITH + COAUTHOR_WITH + STUDIED_AT）
     TRS_GRAPH_SPACE=dev MYSQL_DATABASE=gkx_element \
         uv run python -m script.load_scholar_relations
+
+    # 跳过校友就读边
+    TRS_GRAPH_SPACE=dev MYSQL_DATABASE=gkx_element \
+        uv run python -m script.load_scholar_relations --skip-studied-at
 
     # 追加跨域兜底：只写两端都已存在的 AUTHORED_BY 边
     TRS_GRAPH_SPACE=dev MYSQL_DATABASE=gkx_element \
@@ -262,39 +267,169 @@ def _iter_paper_relations(session, batch_size: int = 2000) -> Iterable[dict]:
 # Writers
 # ---------------------------------------------------------------------------
 def ensure_schema(graph) -> None:
-    """幂等补齐 AFFILIATED_WITH 边的任职时间/部门/职位属性（旧空间用 ALTER ADD）。"""
-    wanted = [
-        ("work_experience_date", "string"),
-        ("work_experience_department_zh", "string"),
-        ("work_experience_position_zh", "string"),
-        ("source_table", "string"),
-        ("source_record_id", "string"),
-        ("ingest_batch", "string"),
-        ("ingest_time", "string"),
+    """幂等补齐任职边与就读边属性（旧空间用 ALTER ADD）。"""
+    edge_wanted: dict[str, list[tuple[str, str]]] = {
+        "AFFILIATED_WITH": [
+            ("work_experience_date", "string"),
+            ("work_experience_department_zh", "string"),
+            ("work_experience_position_zh", "string"),
+            ("source_table", "string"),
+            ("source_record_id", "string"),
+            ("ingest_batch", "string"),
+            ("ingest_time", "string"),
+        ],
+        "STUDIED_AT": [
+            ("degree_zh", "string"),
+            ("degree_en", "string"),
+            ("education_date", "string"),
+            ("institution_zh", "string"),
+            ("institution_en", "string"),
+            ("confidence", "double"),
+            ("match_method", "string"),
+            ("match_evidence", "string"),
+            ("source_system", "string"),
+            ("source_table", "string"),
+            ("source_record_id", "string"),
+            ("ingest_batch", "string"),
+            ("ingest_time", "string"),
+        ],
+    }
+    for edge_type, wanted in edge_wanted.items():
+        try:
+            existing = {
+                str(row["Field"])
+                for row in graph.execute_read(f"DESCRIBE EDGE {edge_type}").records
+            }
+        except Exception:
+            if edge_type == "STUDIED_AT":
+                cols = ", ".join(f"{f} {k}" for f, k in wanted)
+                try:
+                    graph.execute_write(f"CREATE EDGE IF NOT EXISTS STUDIED_AT({cols});")
+                    time.sleep(2)
+                    existing = {
+                        str(row["Field"])
+                        for row in graph.execute_read("DESCRIBE EDGE STUDIED_AT").records
+                    }
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("CREATE EDGE STUDIED_AT 失败，跳过: %s", exc)
+                    continue
+            else:
+                logger.warning("DESCRIBE EDGE %s 失败，跳过 ALTER，依赖建库 DDL", edge_type)
+                continue
+        missing = [(field, kind) for field, kind in wanted if field not in existing]
+        if not missing:
+            continue
+        graph.execute_write(
+            f"ALTER EDGE {edge_type} ADD ({', '.join(f'{f} {k}' for f, k in missing)});"
+        )
+        expected = {f for f, _ in missing}
+        for _ in range(15):
+            visible = {
+                str(row["Field"])
+                for row in graph.execute_read(f"DESCRIBE EDGE {edge_type}").records
+            }
+            if expected <= visible:
+                break
+            time.sleep(1)
+        else:
+            logger.warning("%s 新属性 %s 未在 15s 内生效", edge_type, expected)
+
+
+def _iter_scholar_educations(session, batch_size: int = 500) -> Iterable[dict]:
+    """从 ``dwd_scholar`` 读取教育院校字段，供 STUDIED_AT 入图。"""
+    edu_cols = [
+        "education_background_institution_zh",
+        "education_background_institution_en",
+        "education_background_degree_zh",
+        "education_background_degree_en",
+        "education_background_date",
     ]
-    try:
-        existing = {
-            str(row["Field"]) for row in graph.execute_read("DESCRIBE EDGE AFFILIATED_WITH").records
-        }
-    except Exception:
-        logger.warning("DESCRIBE EDGE AFFILIATED_WITH 失败，跳过 ALTER，依赖建库 DDL")
-        return
-    missing = [(field, kind) for field, kind in wanted if field not in existing]
-    if not missing:
-        return
-    graph.execute_write(
-        f"ALTER EDGE AFFILIATED_WITH ADD ({', '.join(f'{f} {k}' for f, k in missing)});"
+    col_select = [
+        col if _has_dwd_scholar_column(session, col) else f"NULL AS {col}" for col in edu_cols
+    ]
+    sql = text(
+        f"""
+        SELECT scholar_id, {", ".join(col_select)}
+        FROM dwd_scholar
+        WHERE status = 1
+        ORDER BY scholar_id
+        LIMIT :limit OFFSET :offset
+        """
     )
-    # NebulaGraph schema 变更有传播延迟，轮询直到生效。
-    expected = {f for f, _ in missing}
-    for _ in range(15):
-        visible = {
-            str(row["Field"]) for row in graph.execute_read("DESCRIBE EDGE AFFILIATED_WITH").records
+    offset = 0
+    while True:
+        rows = session.execute(sql, {"limit": batch_size, "offset": offset}).all()
+        if not rows:
+            break
+        for r in rows:
+            yield {
+                "scholar_id": r.scholar_id,
+                "institution_zh": (r.education_background_institution_zh or "").strip(),
+                "institution_en": (r.education_background_institution_en or "").strip(),
+                "degree_zh": (r.education_background_degree_zh or "").strip(),
+                "degree_en": (r.education_background_degree_en or "").strip(),
+                "education_date": (r.education_background_date or "").strip(),
+            }
+        offset += len(rows)
+        if len(rows) < batch_size:
+            break
+
+
+def load_studied_at(
+    session, graph, *, dry_run: bool, preview: int = 5, org_index: dict[str, str] | None = None
+) -> dict:
+    """写入 STUDIED_AT 边（Person → Organization），供校友关系邻域查询。
+
+    仅当教育院校名能匹配图中已存在 Organization 时写入；匹配不到则跳过，不建桩 org。
+    """
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    ok = skipped = shown = 0
+    index = org_index or {}
+
+    for rec in _iter_scholar_educations(session):
+        inst_zh = rec["institution_zh"]
+        inst_en = rec["institution_en"]
+        if not inst_zh and not inst_en:
+            skipped += 1
+            continue
+        dst = resolve_org_vid_by_name(inst_zh or None, inst_en or None, index)
+        if not dst:
+            skipped += 1
+            continue
+        src = person_vid(rec["scholar_id"])
+        rid = f"{rec['scholar_id']}|studied|{dst}"
+        props = {
+            "degree_zh": rec["degree_zh"],
+            "degree_en": rec["degree_en"],
+            "education_date": rec["education_date"],
+            "institution_zh": inst_zh,
+            "institution_en": inst_en,
+            "source_system": "gkx_element",
+            "source_table": "dwd_scholar",
+            "source_record_id": rid,
+            "ingest_batch": BATCH_ID,
+            "ingest_time": now,
+            **confidence_props(
+                CONFIDENCE_PLACEHOLDER_ORG,
+                "edu_org_name_match",
+                "education_background_institution_* 按名称匹配图中 Organization",
+            ),
         }
-        if expected <= visible:
-            return
-        time.sleep(1)
-    logger.warning("AFFILIATED_WITH 新属性 %s 未在 15s 内生效", expected)
+        if dry_run:
+            if shown < preview:
+                logger.info(
+                    "[dry-run] %s -[STUDIED_AT]-> %s  %s / %s",
+                    src,
+                    dst,
+                    inst_zh or "-",
+                    inst_en or "-",
+                )
+                shown += 1
+        else:
+            graph.merge_edge(src, dst, "STUDIED_AT", {"source_record_id": rid}, props)
+        ok += 1
+
+    return {"written": ok, "skipped_no_org_or_edu": skipped}
 
 
 def load_affiliations(
@@ -488,26 +623,26 @@ def run(
     database: str = "gkx_element",
     dry_run: bool = False,
     include_authored_by_fallback: bool = False,
+    skip_studied_at: bool = False,
 ) -> dict:
     mysql = MySQLClient(database=database)
     graph = get_trs_graph_client()
     logger.info(
-        "start batch=%s database=%s dry_run=%s graph_space=%s authored_by_fallback=%s",
+        "start batch=%s database=%s dry_run=%s graph_space=%s authored_by_fallback=%s skip_studied_at=%s",
         BATCH_ID,
         database,
         dry_run,
         os.environ.get("TRS_GRAPH_SPACE", "dev"),
         include_authored_by_fallback,
+        skip_studied_at,
     )
 
     session = mysql.session()
     try:
-        # dry-run 不得修改图 Schema；正式同步则先幂等补齐旧 dev
-        # 空间的任职边字段，再写入关系数据。
+        # dry-run 不得修改图 Schema；正式同步则先幂等补齐旧空间边字段，再写入关系数据。
         if not dry_run:
             ensure_schema(graph)
-        # org name->vid 索引:scholar_org_id 缺失时按机构名 join 图里已存在 Organization,
-        # 用其真实 vid(替代 md5 桩 vid),避免 AFFILIATED_WITH 边指向不存在的 org。
+        # org name->vid 索引:scholar_org_id 缺失 / 教育院校匹配时按机构名 join 图里已存在 Organization。
         org_index = build_org_name_vid_index(graph)
         aff_stats = load_affiliations(session, graph, dry_run=dry_run, org_index=org_index)
         logger.info("AFFILIATED_WITH: %s", aff_stats)
@@ -519,6 +654,11 @@ def run(
             "affiliated_with": aff_stats,
             "coauthor_with": co_stats,
         }
+
+        if not skip_studied_at:
+            studied_stats = load_studied_at(session, graph, dry_run=dry_run, org_index=org_index)
+            logger.info("STUDIED_AT: %s", studied_stats)
+            result["studied_at"] = studied_stats
 
         if include_authored_by_fallback:
             ab_stats = load_authored_by_fallback(session, graph, dry_run=dry_run)
@@ -543,6 +683,11 @@ def _parse_args() -> argparse.Namespace:
         help="MySQL database name (default: gkx_element).",
     )
     ap.add_argument(
+        "--skip-studied-at",
+        action="store_true",
+        help="Skip STUDIED_AT (Person→Organization education) edges.",
+    )
+    ap.add_argument(
         "--include-authored-by-fallback",
         action="store_true",
         help=(
@@ -564,5 +709,6 @@ if __name__ == "__main__":
         database=args.database,
         dry_run=args.dry_run,
         include_authored_by_fallback=args.include_authored_by_fallback,
+        skip_studied_at=args.skip_studied_at,
     )
     logger.info("done: %s", result)

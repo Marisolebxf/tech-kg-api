@@ -8,6 +8,7 @@
   - Tag  ``Person``          ← ``load_scholar_entities.py``
   - Edge ``AFFILIATED_WITH`` ← ``load_scholar_relations.py``
   - Edge ``COAUTHOR_WITH``   ← ``load_scholar_relations.py``
+  - Edge ``STUDIED_AT``      ← ``load_scholar_relations.py``（校友邻域）
   - Edge ``SAME_AS``         ← ``align_scholar_affiliations.py`` / ``dedupe_scholar_persons.py``
 
 属性集必须是并集：trs-graph 的 merge 接口不接收 schema 之外的属性，缺一个字段
@@ -118,6 +119,18 @@ COAUTHOR_WITH_PROPS: list[tuple[str, str]] = [
     *_PROVENANCE,
 ]
 
+# load_scholar_relations.py: load_studied_at() — Person → Organization
+STUDIED_AT_PROPS: list[tuple[str, str]] = [
+    ("degree_zh", "string"),
+    ("degree_en", "string"),
+    ("education_date", "string"),
+    ("institution_zh", "string"),
+    ("institution_en", "string"),
+    ("source_system", "string"),
+    *_CONFIDENCE,
+    *_PROVENANCE,
+]
+
 # align_scholar_affiliations.py + dedupe_scholar_persons.py
 SAME_AS_PROPS: list[tuple[str, str]] = [
     ("match_score", "double"),
@@ -137,14 +150,18 @@ TAGS: dict[str, list[tuple[str, str]]] = {"Person": PERSON_PROPS}
 EDGES: dict[str, list[tuple[str, str]]] = {
     "AFFILIATED_WITH": AFFILIATED_WITH_PROPS,
     "COAUTHOR_WITH": COAUTHOR_WITH_PROPS,
+    "STUDIED_AT": STUDIED_AT_PROPS,
     "SAME_AS": SAME_AS_PROPS,
 }
 
 # 无属性 tag 索引：`MATCH (n:Person)` / `LOOKUP ON Person` 没有索引会退化成全空间
 # ScanVertices（dev 上 count 一次要几百秒）。已有数据的空间建完索引还需
 # `REBUILD TAG INDEX person_tag_idx;` 才能生效。
+# 院校属性索引：校友 LOOKUP 兜底（ETL 未写 STUDIED_AT 时按院校缩小候选）。
 INDEX_DDL: list[str] = [
     "CREATE TAG INDEX IF NOT EXISTS person_tag_idx ON Person();",
+    "CREATE TAG INDEX IF NOT EXISTS person_edu_inst_zh_idx ON Person(education_background_institution_zh(256));",
+    "CREATE TAG INDEX IF NOT EXISTS person_edu_inst_en_idx ON Person(education_background_institution_en(256));",
 ]
 
 SCHEMA_PROPAGATION_WAIT = 15

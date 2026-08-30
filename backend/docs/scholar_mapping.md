@@ -2,7 +2,7 @@
 
 > 领域负责人：**伟宁（Scholar）**
 > 图空间：`dev`
-> 覆盖范围：**Person 顶点** + **从 Person 出发的两条边**（`AFFILIATED_WITH`、`COAUTHOR_WITH`）
+> 覆盖范围：**Person 顶点** + **从 Person 出发的边**（`AFFILIATED_WITH`、`COAUTHOR_WITH`、`STUDIED_AT`）
 > 图客户端：`infra.graph_db.get_trs_graph_client`（不直接依赖 nebula3 SDK）
 
 ---
@@ -28,8 +28,9 @@ TRSGraph 边是有向的，按领域分配我只做 **从 Person 出发的边**�
 
 | 边类型 | 方向 | 来源 | 是否本轮 |
 |--------|------|------|--------|
-| `AFFILIATED_WITH` | Person → Organization | `dwd_scholar` | ✅ |
+| `AFFILIATED_WITH` | Person → Organization | `dwd_scholar` 任职机构 | ✅ |
 | `COAUTHOR_WITH`   | Person → Person       | `dwd_scholar_coauthor` | ✅ |
+| `STUDIED_AT`      | Person → Organization | `dwd_scholar` 教育院校 | ✅ |
 | `AUTHORED_BY`     | Paper → Person        | `dwd_scholar_paper_relation` | ⚠️ 跨域兜底（可选，见 §5.1） |
 | `LEADS`           | Project → Person      | 项目库 | ❌（属于项目领域，学者侧无源数据）|
 | `INVENTED_BY`     | Patent → Person       | 专利库 | ❌（属于专利领域，学者侧无源数据）|
@@ -44,7 +45,7 @@ Organization、Paper、Project、Patent 顶点由对应领域负责创建；本�
 | 步骤 | 脚本 | 产物 |
 |------|------|------|
 | 实体 | `backend/script/load_scholar_entities.py` | Person 顶点 |
-| 关系 | `backend/script/load_scholar_relations.py` | `AFFILIATED_WITH` + `COAUTHOR_WITH` 边 |
+| 关系 | `backend/script/load_scholar_relations.py` | `AFFILIATED_WITH` + `COAUTHOR_WITH` + `STUDIED_AT` 边 |
 
 两个脚本都通过 `infra.graph_db.get_trs_graph_client()` 获取图客户端，
 用 `merge_node` / `merge_edge` 幂等写入。
@@ -146,6 +147,26 @@ Organization、Paper、Project、Patent 顶点由对应领域负责创建；本�
 
 `scholar_org_id` 与 `scholar_org_name_*` 全部为空的记录，无法定位机构 VID，
 计入 `skipped_no_org` 但不阻塞流程。
+
+---
+
+## 3b. 关系：`dwd_scholar` 教育院校 → `STUDIED_AT`
+
+**方向**：`Person → Organization`（供科技专家校友关系邻域查询，对齐同事关系的机构走边模式）
+
+**identityProps**：`{"source_record_id": "{scholar_id}|studied|{org_vid}"}`
+
+### 源字段 → 边属性
+
+| 源字段 | 边属性 |
+|--------|--------|
+| `education_background_institution_zh/en` | `institution_zh` / `institution_en` |
+| `education_background_degree_zh/en` | `degree_zh` / `degree_en` |
+| `education_background_date` | `education_date` |
+
+终点 Organization 必须已在图中存在，按中英文名精确归一匹配（与 `AFFILIATED_WITH` 无 `scholar_org_id` 时相同）；匹配不到则跳过，不建桩机构。
+
+CLI：`load_scholar_relations` 默认写入；`--skip-studied-at` 可关闭。
 
 ---
 

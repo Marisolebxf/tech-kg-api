@@ -25,6 +25,7 @@ from service.workflow_models import (
     WorkflowBatch,
     WorkflowDefinition,
     WorkflowExecution,
+    WorkflowJob,
     WorkflowReview,
     WorkflowSchedule,
     WorkflowSetting,
@@ -59,6 +60,7 @@ class WorkflowRepository:
         # CREATE DATABASE IF NOT EXISTS 在 workflow_mysql_client.engine 首次访问时已做；
         # 这里只建表 + seed（可选）+ 注册 builtin 工作流定义。
         Base.metadata.create_all(self._engine)
+        self._migrate_job_columns()
         demo_enabled = os.getenv("WORKFLOW_DEMO_DATA_ENABLED", "false").lower() in {
             "1",
             "true",
@@ -71,6 +73,25 @@ class WorkflowRepository:
                 if any_task is None:
                     self._seed(session)
         self._ensure_builtin_definitions()
+
+    def _migrate_job_columns(self) -> None:
+        """无迁移框架：对已有 workflow_executions 表幂等补 job_id 列（仅 MySQL 方言）。"""
+        from sqlalchemy import inspect, text
+
+        inspector = inspect(self._engine)
+        if "workflow_executions" not in inspector.get_table_names():
+            return
+        columns = {column["name"] for column in inspector.get_columns("workflow_executions")}
+        if "job_id" in columns:
+            return
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE workflow_executions "
+                    "ADD COLUMN job_id VARCHAR(255) NULL, "
+                    "ADD INDEX ix_workflow_executions_job_id (job_id)"
+                )
+            )
 
     def _ensure_builtin_definitions(self) -> None:
         """Idempotently insert built-in workflow definitions missing from older DBs."""
@@ -925,6 +946,7 @@ class WorkflowRepository:
                     run_id=execution.get("runId"),
                     status=execution["status"],
                     started_at=execution["startedAt"],
+                    job_id=execution.get("jobId"),
                     payload=_json(execution),
                 )
             )
@@ -957,17 +979,70 @@ class WorkflowRepository:
         limit: int = 100,
         definition_id: str | None = None,
         schedule_id: str | None = None,
+        job_id: str | None = None,
     ) -> list[dict[str, Any]]:
         with workflow_session_scope() as session:
             stmt = select(WorkflowExecution).order_by(WorkflowExecution.started_at.desc())
             if definition_id:
                 stmt = stmt.where(WorkflowExecution.definition_id == definition_id)
+            if job_id:
+                stmt = stmt.where(WorkflowExecution.job_id == job_id)
             rows = session.scalars(stmt.limit(limit if not schedule_id else 500)).all()
             items = [json.loads(row.payload) for row in rows]
             if schedule_id:
                 # scheduleId 存在 payload JSON 里，取较多行后内存过滤
                 items = [item for item in items if item.get("scheduleId") == schedule_id]
             return items[:limit]
+
+    def save_job(self, job: dict[str, Any]) -> None:
+        with workflow_session_scope() as session:
+            session.merge(
+                WorkflowJob(
+                    id=job["id"],
+                    name=job["name"],
+                    task_type=job["taskType"],
+                    definition_id=job["definitionId"],
+                    owner=job.get("owner", ""),
+                    status=job.get("status", "启用"),
+                    schedule_kind=(job.get("schedule") or {}).get("kind", "once"),
+                    cron=(job.get("schedule") or {}).get("cron"),
+                    created_at=job["createdAt"],
+                    payload=_json(job),
+                )
+            )
+
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
+        with workflow_session_scope() as session:
+            row = session.scalar(select(WorkflowJob).where(WorkflowJob.id == job_id))
+            return json.loads(row.payload) if row else None
+
+    def list_jobs(
+        self,
+        name: str | None = None,
+        status: str | None = None,
+        task_type: str | None = None,
+        owner: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with workflow_session_scope() as session:
+            stmt = select(WorkflowJob).order_by(WorkflowJob.created_at.desc())
+            if name:
+                stmt = stmt.where(WorkflowJob.name.like(f"%{name}%"))
+            if status:
+                stmt = stmt.where(WorkflowJob.status == status)
+            if task_type:
+                stmt = stmt.where(WorkflowJob.task_type == task_type)
+            if owner:
+                stmt = stmt.where(WorkflowJob.owner == owner)
+            rows = session.scalars(stmt).all()
+            return [json.loads(row.payload) for row in rows]
+
+    def delete_job(self, job_id: str) -> bool:
+        with workflow_session_scope() as session:
+            row = session.scalar(select(WorkflowJob).where(WorkflowJob.id == job_id))
+            if row is None:
+                return False
+            session.delete(row)
+            return True
 
     def save_schedule(self, schedule: dict[str, Any]) -> None:
         with workflow_session_scope() as session:
@@ -1036,6 +1111,12 @@ class WorkflowRepository:
     def reset_for_tests(self) -> None:
         # 原 SQLite 实现是删 db 文件 + 重建；MySQL 下用 DROP+CREATE 全部表
         # （比 TRUNCATE 干净，避免自增列残留 + 兼容 schema 变更）
+        url = self._engine.url
+        if url.get_backend_name() != "sqlite" and os.getenv("WORKFLOW_RESET_ALLOW_REAL") != "1":
+            raise RuntimeError(
+                "reset_for_tests 会 DROP 共享库的全部控制面表（含 schema 目录），"
+                "只允许临时 SQLite 引擎；确需重置真实库请设 WORKFLOW_RESET_ALLOW_REAL=1"
+            )
         Base.metadata.drop_all(self._engine)
         Base.metadata.create_all(self._engine)
         self._initialize()

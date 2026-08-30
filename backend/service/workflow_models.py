@@ -90,6 +90,7 @@ class WorkflowExecution(Base):
     run_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     started_at: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    job_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     payload: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
 
 
@@ -98,7 +99,27 @@ class WorkflowSchedule(Base):
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
     definition_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    active: Mapped[str] = mapped_column(Integer, nullable=False, default=1)
+    payload: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
+
+
+class WorkflowJob(Base):
+    """任务中心里的"已创建任务"（一次性 / 周期性）。
+
+    payload 为全量 JSON 记录（camelCase），列字段仅用于过滤。
+    """
+
+    __tablename__ = "workflow_jobs"
+
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    task_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    definition_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    owner: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    schedule_kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    cron: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     payload: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
 
 
@@ -107,6 +128,7 @@ __all__ = [
     "WorkflowBatch",
     "WorkflowDefinition",
     "WorkflowExecution",
+    "WorkflowJob",
     "WorkflowReview",
     "WorkflowSchedule",
     "WorkflowSetting",

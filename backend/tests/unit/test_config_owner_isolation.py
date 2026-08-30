@@ -192,3 +192,29 @@ async def test_mysql_databases_requires_owner(session_factory) -> None:
     async with _client(_make_app(session_factory, _actor(USER_A))) as client:
         resp = await client.get("/api/v1/mysql-datasources/MYSQL-B/databases")
         assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_set_default_scoped_to_owner(session_factory) -> None:
+    """A、B 各设默认互不影响：is_default 按 owner 隔离，不再全局唯一。"""
+    _seed_llm(session_factory, "LLM-A1", USER_A)
+    _seed_llm(session_factory, "LLM-A2", USER_A)
+    _seed_llm(session_factory, "LLM-B1", USER_B)
+
+    async with _client(_make_app(session_factory, _actor(USER_A))) as client:
+        assert (
+            await client.post("/api/v1/llm-config/llm-configs/LLM-A1/set-default")
+        ).status_code == 200
+
+    async with _client(_make_app(session_factory, _actor(USER_B))) as client:
+        assert (
+            await client.post("/api/v1/llm-config/llm-configs/LLM-B1/set-default")
+        ).status_code == 200
+        resp = await client.get("/api/v1/llm-config/llm-configs")
+        defaults = {item["id"] for item in resp.json()["data"] if item["is_default"]}
+        assert defaults == {"LLM-B1"}
+
+    s = session_factory()
+    rows = {r.id: r.is_default for r in s.query(LlmConfig).all()}
+    s.close()
+    assert rows == {"LLM-A1": True, "LLM-A2": False, "LLM-B1": True}

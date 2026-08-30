@@ -33,18 +33,14 @@ class MysqlDatasourceDAO(BaseDAO[MysqlDatasource]):
             if should_close:
                 session.close()
 
-    def clear_other_defaults(self, exclude_id: str) -> int:
-        """把除 exclude_id 外的所有 is_default=True 记录置 False。"""
+    def clear_other_defaults(self, exclude_id: str, owner: str | None = None) -> int:
+        """把除 exclude_id 外的 is_default=True 记录置 False。传 owner 时仅影响该用户。"""
         session, should_close = self._get_session()
         try:
-            stmt = (
-                update(MysqlDatasource)
-                .where(
-                    MysqlDatasource.is_default.is_(True),
-                    MysqlDatasource.id != exclude_id,
-                )
-                .values(is_default=False)
-            )
+            conditions = [MysqlDatasource.is_default.is_(True), MysqlDatasource.id != exclude_id]
+            if owner is not None:
+                conditions.append(MysqlDatasource.owner == owner)
+            stmt = update(MysqlDatasource).where(*conditions).values(is_default=False)
             result = session.execute(stmt)
             session.commit()
             return result.rowcount or 0

@@ -103,8 +103,12 @@ async def test_all_seven_nodes_enter_queue_and_duplicate_is_idempotent(
             "/api/v1/manual-reviews/production/queue", params={"queue": "unclaimed"}
         )
     ).json()["data"]
-    assert queue["total"] == 7 and {item["pipelineStepId"] for item in queue["items"]} == {
-        x[0] for x in pairs
+    # 7 个案例全部落库；T_RUNTIME 属代码问题，按现行口径不进审核队列
+    assert queue["total"] == 4 and {item["pipelineStepId"] for item in queue["items"]} == {
+        "normalize",
+        "schema",
+        "align",
+        "validate",
     }
     body = payload("align", "T_LINK")
     duplicate = await async_client.post(

@@ -2,18 +2,21 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
+  deleteJob,
   getTaskOverview,
-  listExecutions,
-  type AccessReport,
-  type WorkflowExecution,
+  listDefinitions,
+  listJobs,
+  triggerJob,
+  updateJobState,
+  type WorkflowDefinition,
+  type WorkflowJob,
 } from '../../api/workflowOperations'
-import { accessChips, mergeAccessReports } from '../../utils/accessReport'
-import {
-  listAllSchemas,
-  schemaErrorMessage,
-  type SchemaDefinition,
-} from '../../api/schemaManagement'
+import { schemaErrorMessage } from '../../api/schemaManagement'
 import { listLlmConfigs, type LlmConfig } from '../../api/llmConfig'
+import { listEmbeddingConfigs, type EmbeddingConfig } from '../../api/embeddingConfig'
+import { listMilvusConfigs, type MilvusConfig } from '../../api/milvusConfig'
+import { listMysqlDatasources, type MysqlDatasource } from '../../api/mysqlDatasource'
+import { listGraphSpaces } from '../../api/graphSpace'
 import { currentUserId as getCurrentUserId } from '../../api/currentUser'
 import JobLaunchDialog from '../../components/JobLaunchDialog.vue'
 import { useToast } from '../../composables/use-toast'
@@ -22,50 +25,44 @@ const { showToast } = useToast()
 const router = useRouter()
 const currentUserId = getCurrentUserId()
 
-
-const schemas = ref<SchemaDefinition[]>([])
+const jobs = ref<WorkflowJob[]>([])
+const definitions = ref<WorkflowDefinition[]>([])
 const llmConfigs = ref<LlmConfig[]>([])
-const executions = ref<WorkflowExecution[]>([])
+const embeddingConfigs = ref<EmbeddingConfig[]>([])
+const milvusConfigs = ref<MilvusConfig[]>([])
+const mysqlDatasources = ref<MysqlDatasource[]>([])
+const graphSpaces = ref<string[]>([])
 const summary = ref<{ label: string; value: string; hint: string }[]>([])
 const loading = ref(false)
-const launchOpen = ref(false)
-const selectedExecution = ref<WorkflowExecution | null>(null)
+const createOpen = ref(false)
+const triggeringJobId = ref('')
 
-const jobSchemas = computed(() => schemas.value.filter((s) => s.script?.workflowDefinitionId))
+const filterName = ref('')
+const filterStatus = ref('')
+const filterTaskType = ref('')
 
-/** execution 级聚合：单脚本直接读 output.access；多步 pipeline 合并各 step 的 access。 */
-const executionAccess = computed<AccessReport | undefined>(() => {
-  const output = selectedExecution.value?.output
-  if (!output || typeof output !== 'object') return undefined
-  const record = output as Record<string, unknown>
-  if (record.access && typeof record.access === 'object') {
-    return record.access as AccessReport
-  }
-  const steps = record.steps
-  if (steps && typeof steps === 'object') {
-    return mergeAccessReports(
-      Object.values(steps as Record<string, { access?: AccessReport }>).map(
-        (step) => step?.access,
-      ),
-    )
-  }
-  return undefined
+const TASK_TYPE_LABELS: Record<string, string> = {
+  single: '单脚本抽取',
+  chain: '多脚本串行',
+  upload: '上传脚本',
+}
+
+const filteredJobs = computed(() => {
+  const name = filterName.value.trim().toLowerCase()
+  return jobs.value.filter((job) => {
+    if (name && !job.name.toLowerCase().includes(name)) return false
+    if (filterStatus.value && job.status !== filterStatus.value) return false
+    if (filterTaskType.value && job.taskType !== filterTaskType.value) return false
+    return true
+  })
 })
-const executionAccessChips = computed(() => accessChips(executionAccess.value))
 
 async function loadData() {
   loading.value = true
   try {
-    const [schemaList, configs, overview, execList] = await Promise.all([
-      listAllSchemas(currentUserId),
-      listLlmConfigs(currentUserId),
-      getTaskOverview(),
-      listExecutions(200),
-    ])
-    schemas.value = schemaList
-    llmConfigs.value = configs
+    const [jobList, overview] = await Promise.all([listJobs(), getTaskOverview()])
+    jobs.value = jobList.items
     summary.value = overview.summary
-    executions.value = execList.items
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
   } finally {
@@ -73,21 +70,82 @@ async function loadData() {
   }
 }
 
-function selectExecution(execution: WorkflowExecution) {
-  selectedExecution.value = execution
-}
-
-function onLaunched() {
-  showToast('作业已下发，可在列表查看执行状态', 'success')
-  void loadData()
-}
-
-function openFlowDetail(taskId: string | undefined) {
-  if (!taskId) {
-    showToast('该记录无关联任务详情（旧记录）', 'warning')
-    return
+async function loadDialogResources() {
+  try {
+    const [defs, llm, embedding, milvus, mysql, spaces] = await Promise.all([
+      listDefinitions(),
+      listLlmConfigs(currentUserId),
+      listEmbeddingConfigs(currentUserId),
+      listMilvusConfigs(currentUserId),
+      listMysqlDatasources(currentUserId),
+      listGraphSpaces(currentUserId),
+    ])
+    definitions.value = defs.items
+    llmConfigs.value = llm
+    embeddingConfigs.value = embedding
+    milvusConfigs.value = milvus
+    mysqlDatasources.value = mysql
+    graphSpaces.value = spaces
+  } catch (error) {
+    showToast(schemaErrorMessage(error), 'warning')
   }
-  void router.push({ name: 'processing-instance-detail', params: { instanceId: taskId } })
+}
+
+function openCreate() {
+  void loadDialogResources()
+  createOpen.value = true
+}
+
+function jobScriptLabel(job: WorkflowJob): string {
+  if (job.taskType === 'chain') {
+    const first = job.definitionIds[0] || job.definitionId
+    return job.definitionIds.length > 1 ? `${first} +${job.definitionIds.length - 1}` : first
+  }
+  return job.definitionName || job.definitionId
+}
+
+function jobRunning(job: WorkflowJob): boolean {
+  return job.lastExecutionStatus === 'RUNNING'
+}
+
+async function onTrigger(job: WorkflowJob) {
+  if (jobRunning(job) || triggeringJobId.value) return
+  triggeringJobId.value = job.id
+  try {
+    await triggerJob(job.id)
+    showToast(`任务「${job.name}」已触发`, 'success')
+    await loadData()
+  } catch (error) {
+    showToast(schemaErrorMessage(error), 'warning')
+  } finally {
+    triggeringJobId.value = ''
+  }
+}
+
+async function onToggleState(job: WorkflowJob) {
+  const active = job.status !== '启用'
+  try {
+    await updateJobState(job.id, active)
+    showToast(active ? '已恢复' : '已暂停', 'success')
+    await loadData()
+  } catch (error) {
+    showToast(schemaErrorMessage(error), 'warning')
+  }
+}
+
+async function onDelete(job: WorkflowJob) {
+  if (!window.confirm(`确认删除任务「${job.name}」？执行历史将保留。`)) return
+  try {
+    await deleteJob(job.id)
+    showToast('任务已删除', 'success')
+    await loadData()
+  } catch (error) {
+    showToast(schemaErrorMessage(error), 'warning')
+  }
+}
+
+function openJobDetail(job: WorkflowJob) {
+  void router.push({ name: 'job-detail', params: { jobId: job.id } })
 }
 
 function executionStatusClass(status: string): string {
@@ -105,12 +163,12 @@ onMounted(loadData)
   <main class="graph-build-page">
     <header class="gb-header">
       <div>
-        <h1>图谱构建 · 作业运行监控</h1>
-        <p>选择作业 → 配置运行时参数（大模型 / 执行模式 / 增量游标）→ 执行一次或定期调度</p>
+        <h1>任务中心</h1>
+        <p>创建一次性 / 周期性任务 → 触发执行 → 查看执行历史与每步输入输出</p>
       </div>
       <div class="gb-actions">
         <button type="button" :disabled="loading" @click="loadData">{{ loading ? '刷新中…' : '刷新' }}</button>
-        <button type="button" class="primary" @click="launchOpen = true">启动作业</button>
+        <button type="button" class="primary" @click="openCreate">新建任务</button>
       </div>
     </header>
 
@@ -122,77 +180,63 @@ onMounted(loadData)
       </article>
     </section>
 
-    <section class="gb-body">
-      <div class="gb-task-panel">
-        <header><strong>作业执行记录（{{ executions.length }}）</strong></header>
-        <div class="gb-task-table">
-          <table>
-            <thead>
-              <tr><th>执行 ID</th><th>工作流定义</th><th>状态</th><th>下发模式</th><th>启动时间</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="e in executions" :key="e.id" :class="{ active: selectedExecution?.id === e.id }" @click="selectExecution(e)">
-                <td><code>{{ e.id }}</code></td>
-                <td><code>{{ e.definitionId }}</code></td>
-                <td><span :class="executionStatusClass(e.status)">{{ e.status }}</span></td>
-                <td>{{ e.dispatchMode || '—' }}</td>
-                <td>{{ e.startedAt }}</td>
-              </tr>
-              <tr v-if="!executions.length"><td colspan="5" class="empty">暂无执行记录，点击「启动作业」下发一次</td></tr>
-            </tbody>
-          </table>
+    <section class="gb-jobs-panel">
+      <header>
+        <strong>任务列表（{{ filteredJobs.length }}）</strong>
+        <div class="gb-filters">
+          <input v-model="filterName" placeholder="按名称搜索" />
+          <a-select v-model="filterStatus" placeholder="状态" allow-clear style="width: 110px">
+            <a-option value="启用">启用</a-option>
+            <a-option value="暂停">暂停</a-option>
+          </a-select>
+          <a-select v-model="filterTaskType" placeholder="类型" allow-clear style="width: 130px">
+            <a-option value="single">单脚本抽取</a-option>
+            <a-option value="chain">多脚本串行</a-option>
+            <a-option value="upload">上传脚本</a-option>
+          </a-select>
         </div>
+      </header>
+      <div class="gb-task-table">
+        <table>
+          <thead>
+            <tr><th>任务名</th><th>类型</th><th>脚本</th><th>图空间</th><th>调度</th><th>状态</th><th>最近执行</th><th>操作</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="job in filteredJobs" :key="job.id">
+              <td><b>{{ job.name }}</b></td>
+              <td>{{ TASK_TYPE_LABELS[job.taskType] || job.taskType }}</td>
+              <td><code>{{ jobScriptLabel(job) }}</code></td>
+              <td>{{ job.graphSpace || '默认' }}</td>
+              <td>{{ job.schedule.kind === 'cron' ? `cron ${job.schedule.cron}` : '单次' }}</td>
+              <td><span :class="job.status === '启用' ? 'ok' : 'warn'">{{ job.status }}</span></td>
+              <td>
+                <span v-if="job.lastExecutionStatus" :class="executionStatusClass(job.lastExecutionStatus)">{{ job.lastExecutionStatus }}</span>
+                <span v-else class="muted">未执行</span>
+                <small v-if="job.lastRunAt" class="gb-last-run">{{ job.lastRunAt }}</small>
+              </td>
+              <td class="gb-job-actions">
+                <button type="button" class="primary" :disabled="jobRunning(job) || triggeringJobId === job.id" @click="onTrigger(job)">执行</button>
+                <button v-if="job.schedule.kind === 'cron'" type="button" @click="onToggleState(job)">{{ job.status === '启用' ? '暂停' : '恢复' }}</button>
+                <button type="button" @click="openJobDetail(job)">查看详情</button>
+                <button type="button" class="danger" @click="onDelete(job)">删除</button>
+              </td>
+            </tr>
+            <tr v-if="!filteredJobs.length"><td colspan="8" class="empty">暂无任务，点击「新建任务」创建</td></tr>
+          </tbody>
+        </table>
       </div>
-
-      <aside class="gb-detail-panel">
-        <header><strong>执行详情</strong></header>
-        <div v-if="!selectedExecution" class="empty">选择左侧记录查看详情</div>
-        <div v-else class="gb-detail-body">
-          <div class="gb-detail-meta">
-            <div><span>执行 ID</span><code>{{ selectedExecution.id }}</code></div>
-            <div><span>工作流定义</span><code>{{ selectedExecution.definitionId }}</code></div>
-            <div><span>状态</span><strong :class="executionStatusClass(selectedExecution.status)">{{ selectedExecution.status }}</strong></div>
-            <div><span>启动时间</span><code>{{ selectedExecution.startedAt }}</code></div>
-            <div v-if="selectedExecution.runId"><span>Run ID</span><code>{{ selectedExecution.runId }}</code></div>
-            <div v-if="selectedExecution.completedAt"><span>完成时间</span><code>{{ selectedExecution.completedAt }}</code></div>
-          </div>
-          <div v-if="selectedExecution.message" class="gb-message">
-            <strong>消息</strong>
-            <p>{{ selectedExecution.message }}</p>
-          </div>
-          <div v-if="selectedExecution.payload && Object.keys(selectedExecution.payload).length" class="gb-logs">
-            <strong>入参 payload</strong>
-            <pre>{{ JSON.stringify(selectedExecution.payload, null, 2) }}</pre>
-          </div>
-          <div v-if="selectedExecution.output" class="gb-logs">
-            <strong>输出</strong>
-            <pre>{{ typeof selectedExecution.output === 'string' ? selectedExecution.output : JSON.stringify(selectedExecution.output, null, 2) }}</pre>
-          </div>
-          <div v-if="executionAccessChips.length" class="gb-access">
-            <strong>实际访问资源 <span>观测式溯源</span></strong>
-            <div class="access-chips">
-              <span v-for="chip in executionAccessChips" :key="`${chip.group}:${chip.name}`" class="access-chip">
-                <em>{{ chip.group }}</em>
-                <code>{{ chip.name }}</code>
-                <b v-if="chip.read" class="op-read">R</b>
-                <b v-if="chip.write" class="op-write">W</b>
-                <small>{{ chip.detail }}</small>
-              </span>
-            </div>
-          </div>
-          <div class="gb-detail-actions">
-            <button type="button" class="primary" @click="openFlowDetail(selectedExecution.taskId)">查看流程详情 →</button>
-          </div>
-        </div>
-      </aside>
     </section>
 
     <JobLaunchDialog
-      :open="launchOpen"
-      :schemas="jobSchemas"
+      :open="createOpen"
+      :definitions="definitions"
       :llm-configs="llmConfigs"
-      @close="launchOpen = false"
-      @launched="onLaunched"
+      :embedding-configs="embeddingConfigs"
+      :milvus-configs="milvusConfigs"
+      :mysql-datasources="mysqlDatasources"
+      :graph-spaces="graphSpaces"
+      @close="createOpen = false"
+      @created="loadData"
     />
   </main>
 </template>
@@ -203,79 +247,35 @@ onMounted(loadData)
 .gb-header h1{margin:0;font-size:18px;color:#1d2129}
 .gb-header p{margin:4px 0 0;color:#66758f;font-size:12px}
 .gb-actions{display:flex;gap:8px}
-.gb-actions button{height:34px;padding:0 14px;border:1px solid #c9cdd4;border-radius:6px;background:#fff;color:#4e5969;font-size:13px;cursor:pointer}
+.gb-actions button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;cursor:pointer}
 .gb-actions .primary{border-color:#165dff;background:#165dff;color:#fff}
-.gb-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
-.gb-summary article{display:grid;gap:3px;padding:12px 14px;border:1px solid #bfd6fa;border-radius:8px;background:linear-gradient(145deg,#fff,#f2f8ff)}
-.gb-summary span{color:#687996;font-size:11px}
-.gb-summary strong{font-size:22px}
-.gb-summary em{color:#8191aa;font-size:10px;font-style:normal}
-.gb-body{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:12px}
-.gb-task-panel,.gb-detail-panel{display:flex;min-height:0;overflow:hidden;border:1px solid #bcd4f7;border-radius:9px;background:#fff;box-shadow:0 10px 24px rgba(48,105,194,.08);flex-direction:column}
-.gb-task-panel>header,.gb-detail-panel>header{flex:0 0 auto;padding:11px 14px;border-bottom:1px solid #e3ebf6;background:#f8fbff;font-size:13px;color:#243b5d}
+.gb-summary{display:flex;gap:16px;margin-bottom:16px}
+.gb-summary article{flex:1;display:grid;gap:4px;padding:8px 16px;border:1px solid #e5e6eb;border-radius:4px;background:#fff}
+.gb-summary span,.gb-summary em{font-size:12px;line-height:20px;color:#687996;font-style:normal}
+.gb-summary strong{font-size:20px;line-height:28px;font-weight:600}
+.gb-jobs-panel{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #bcd4f7;border-radius:9px;background:#fff;box-shadow:0 10px 24px rgba(48,105,194,.08);flex-direction:column}
+.gb-jobs-panel>header{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:14px;min-height:40px;box-sizing:border-box;padding:8px 16px;border-bottom:1px solid #e3ebf6;background:#f7f8fa;font-size:14px;line-height:22px;font-weight:600;color:#1d2129}
+.gb-filters{display:flex;align-items:center;gap:8px;font-weight:400}
+.gb-filters input{height:30px;width:200px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;font-size:12px}
 .gb-task-table{flex:1;min-height:0;overflow:auto}
-.gb-task-table table{width:100%;border-collapse:collapse;font-size:12px}
-.gb-task-table th{position:sticky;z-index:2;top:0;padding:10px 12px;background:#eef5ff;color:#5a6c88;text-align:left;white-space:nowrap}
-.gb-task-table td{padding:10px 12px;border-bottom:1px solid #e5edf8;color:#344763;vertical-align:middle}
-.gb-task-table tbody tr{cursor:pointer}
+.gb-task-table table{width:100%;border-collapse:collapse;font-size:13px;line-height:22px}
+.gb-task-table th{position:sticky;z-index:2;top:0;padding:0 16px;height:40px;background:#f7f8fa;color:#1d2129;font-weight:500;text-align:left;white-space:nowrap}
+.gb-task-table td{height:40px;padding:0 16px;border-bottom:1px solid #e5edf8;color:#344763;vertical-align:middle}
 .gb-task-table tbody tr:hover td{background:#f4f8ff}
-.gb-task-table tbody tr.active td{background:#eaf2ff}
-.gb-task-table code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:11px}
+.gb-task-table code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px}
+.gb-task-table b{font-weight:600;color:#1d2129}
+.gb-last-run{display:block;color:#8191aa;font-size:11px;line-height:16px}
+.gb-job-actions{display:flex;gap:6px;white-space:nowrap}
+.gb-job-actions button{height:26px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:12px;cursor:pointer}
+.gb-job-actions button.primary{border-color:#165dff;background:#165dff;color:#fff}
+.gb-job-actions button.danger{border-color:#f6b9b4;color:#b42318}
+.gb-job-actions button:disabled{opacity:.45;cursor:not-allowed}
 .empty{padding:40px 14px;text-align:center;color:#8290a7;font-size:12px}
-.gb-detail-body{flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:14px}
-.gb-detail-meta{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.gb-detail-meta>div{display:flex;flex-direction:column;gap:3px;padding:9px 11px;border:1px solid #e3ebf6;border-radius:6px;background:#fafcff}
-.gb-detail-meta span{color:#687996;font-size:10px}
-.gb-detail-meta code,.gb-detail-meta strong{font-size:12px;color:#1d2129}
-.gb-detail-meta code{padding:1px 5px;border-radius:3px;background:#edf4ff;color:#165dff;font-size:11px}
-.gb-steps{display:flex;flex-direction:column;gap:4px}
-.gb-steps-head{font-size:12px;color:#4e5969;font-weight:600;margin-bottom:4px}
-.gb-step{display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid #e3ebf6;border-radius:5px;background:#fff}
-.gb-step-index{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#eaf2ff;color:#165dff;font-size:10px;font-weight:600}
-.gb-step-name{flex:1;font-size:12px;color:#344763}
-.gb-step-status{padding:2px 7px;border-radius:999px;font-size:10px}
-.gb-step-status.ok{background:#dcfae6;color:#067647}
-.gb-step-status.run{background:#eaf2ff;color:#175cd3}
-.gb-step-status.warn{background:#fff3d8;color:#b54708}
-.gb-step-status.pending{background:#f0f2f5;color:#5e6b7e}
-.gb-step-duration{color:#8191aa;font-size:10px}
-.gb-logs{display:flex;flex-direction:column;gap:5px}
-.gb-logs strong{font-size:12px;color:#4e5969}
-.gb-logs pre{margin:0;max-height:200px;overflow:auto;padding:10px;background:#0d1117;border-radius:6px;color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:17px;white-space:pre-wrap}
-.gb-access{display:flex;flex-direction:column;gap:7px}
-.gb-access strong{display:flex;align-items:center;gap:7px;font-size:12px;color:#4e5969}
-.gb-access strong span{padding:2px 6px;border-radius:4px;background:#e5f6ee;color:#067647;font-size:9px;font-weight:500}
-.access-chips{display:flex;flex-wrap:wrap;gap:7px}
-.access-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border:1px solid #cfe0d8;border-radius:6px;background:#fff;font-size:11px;color:#344763}
-.access-chip em{color:#067647;font-size:10px;font-style:normal;white-space:nowrap}
-.access-chip code{padding:1px 5px;border-radius:3px;background:#edf4ff;color:#165dff;font-size:10px}
-.access-chip b{display:grid;place-items:center;min-width:16px;height:16px;border-radius:4px;color:#fff;font-size:10px;font-style:normal}
-.access-chip b.op-read{background:#175cd3}
-.access-chip b.op-write{background:#f79009}
-.access-chip small{color:#8191aa;font-size:10px;white-space:nowrap}
-.gb-detail-actions{display:flex;justify-content:flex-end}
-.gb-detail-actions button{height:32px;padding:0 14px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:12px;cursor:pointer}
-.muted{color:#8191aa;font-size:11px}
-span.ok{display:inline-flex;padding:2px 8px;border-radius:999px;background:#dcfae6;color:#067647;font-size:11px}
-span.err{display:inline-flex;padding:2px 8px;border-radius:999px;background:#fee4e2;color:#b42318;font-size:11px}
-span.warn{display:inline-flex;padding:2px 8px;border-radius:999px;background:#fff3d8;color:#b54708;font-size:11px}
-span.run{display:inline-flex;padding:2px 8px;border-radius:999px;background:#eaf2ff;color:#175cd3;font-size:11px}
-@media(max-width:1200px){.gb-summary{grid-template-columns:repeat(2,1fr)}.gb-body{grid-template-columns:1fr}}
-</style>
-<style scoped>
-/* DESIGN_RULES: graph construction page contract. */
-.graph-build-page{padding:0;color:#1d2129}.gb-header{align-items:center;margin-bottom:16px}.gb-header h1,.gb-header p{display:none}
-.gb-actions{margin-left:auto;gap:16px}.gb-actions button,.gb-detail-actions button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
-.gb-summary{display:flex;gap:16px;margin-bottom:16px}.gb-summary article{flex:1;gap:4px;padding:8px 16px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;box-shadow:none}
-.gb-summary span,.gb-summary em{font-size:12px;line-height:20px}.gb-summary strong{font-size:20px;line-height:28px;font-weight:600}
-.gb-body{grid-template-columns:minmax(560px,1fr) 360px;gap:16px}.gb-task-panel,.gb-detail-panel{border-color:#e5e6eb;border-radius:6px;box-shadow:none}
-.gb-task-panel>header,.gb-detail-panel>header{min-height:40px;box-sizing:border-box;padding:8px 16px;background:#f7f8fa;color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
-.gb-task-table table{font-size:14px;line-height:22px}.gb-task-table th,.gb-task-table td{height:40px;padding:0 16px}.gb-task-table th{background:#f7f8fa;color:#1d2129;font-weight:500}.gb-task-table code{font-size:12px;line-height:20px}
-.gb-detail-body{gap:16px;padding:16px}.gb-detail-meta{gap:16px}.gb-detail-meta>div{gap:4px;padding:8px 16px;border-color:#e5e6eb;border-radius:4px;background:#f7f8fa}
-.gb-detail-meta span,.gb-step-duration,.muted{font-size:12px;line-height:20px}.gb-detail-meta code,.gb-detail-meta strong,.gb-step-name,.gb-steps-head,.gb-logs strong{font-size:14px;line-height:22px}
-.gb-steps{gap:8px}.gb-step{gap:8px;padding:8px 16px;border-color:#e5e6eb;border-radius:4px}
-.gb-step-status,span.ok,span.err,span.warn,span.run{display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}
-.gb-step-status::before,span.ok::before,span.err::before,span.warn::before,span.run::before{display:block;flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
-.gb-logs{gap:8px}.gb-logs pre{padding:16px;border-radius:4px;font-size:12px;line-height:20px}
-@media(max-width:1100px){.gb-body{grid-template-columns:1fr}.gb-detail-panel{min-height:320px}}
+.muted{color:#8191aa;font-size:12px}
+span.ok,span.err,span.warn,span.run{display:inline-flex;align-items:center;gap:6px;font-size:14px;line-height:22px;border-radius:0;background:transparent;padding:0}
+span.ok::before,span.err::before,span.warn::before,span.run::before{display:block;flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
+span.ok{color:#067647}
+span.err{color:#b42318}
+span.warn{color:#b54708}
+span.run{color:#175cd3}
 </style>

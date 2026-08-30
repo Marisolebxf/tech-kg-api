@@ -8,10 +8,13 @@ from typing import Annotated
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import TypeAdapter, ValidationError
 
+from application.workflow_jobs import workflow_job_application
 from application.workflow_operations import workflow_operations_application
 from biz.dependencies.auth import CurrentActor
 from biz.schemas.common import ApiResponse
 from biz.schemas.workflow_operations import (
+    JobCreateRequest,
+    JobUpdateRequest,
     ScheduleStateRequest,
     StepManifest,
     WorkflowChainRequest,
@@ -21,9 +24,11 @@ from biz.schemas.workflow_operations import (
 )
 from service.platform_access import PlatformActor
 from service.temporal_runtime import temporal_runtime
+from service.workflow_jobs import WorkflowJobError
 
 router = APIRouter(prefix="/workflow-system", tags=["workflow-system"])
 service = workflow_operations_application.service
+job_service = workflow_job_application.service
 
 
 @router.get("/health", response_model=ApiResponse)
@@ -121,8 +126,12 @@ async def get_definition(definition_id: str) -> ApiResponse:
     return ApiResponse(data=definition)
 
 
-def _validate_execute_resources(actor: PlatformActor, request: WorkflowExecuteRequest) -> None:
-    """非管理员触发时校验：所选配置的 owner 必须是自己，图空间必须已绑定。"""
+def _validate_resource_selectors(actor: PlatformActor, selectors: dict) -> None:
+    """非管理员触发时校验：所选配置的 owner 必须是自己，图空间必须已绑定。
+
+    selectors 为 snake_case 键的字典（llm_config_id / embedding_config_id /
+    mysql_datasource_id / milvus_config_id / graph_space 等）。
+    """
     if actor.is_admin:
         return
     from dao.embedding_config import EmbeddingConfigDAO
@@ -135,10 +144,10 @@ def _validate_execute_resources(actor: PlatformActor, request: WorkflowExecuteRe
     session = create_session()
     try:
         checks = (
-            (LlmConfigDAO(session), request.llm_config_id),
-            (EmbeddingConfigDAO(session), request.embedding_config_id),
-            (MysqlDatasourceDAO(session), request.mysql_datasource_id),
-            (MilvusConfigDAO(session), request.milvus_config_id),
+            (LlmConfigDAO(session), selectors.get("llm_config_id")),
+            (EmbeddingConfigDAO(session), selectors.get("embedding_config_id")),
+            (MysqlDatasourceDAO(session), selectors.get("mysql_datasource_id")),
+            (MilvusConfigDAO(session), selectors.get("milvus_config_id")),
         )
         for dao, config_id in checks:
             if not config_id:
@@ -148,40 +157,46 @@ def _validate_execute_resources(actor: PlatformActor, request: WorkflowExecuteRe
                 raise HTTPException(
                     status_code=403, detail=f"无权使用配置 {config_id}（仅能选择自己的配置）"
                 )
-        if request.graph_space:
-            if not GraphSpaceService(session).is_bound(actor.user_id, request.graph_space):
+        graph_space = selectors.get("graph_space")
+        if graph_space:
+            if not GraphSpaceService(session).is_bound(actor.user_id, graph_space):
                 raise HTTPException(
-                    status_code=403, detail=f"图空间 {request.graph_space} 未绑定到当前用户"
+                    status_code=403, detail=f"图空间 {graph_space} 未绑定到当前用户"
                 )
     finally:
         session.close()
+
+
+_SELECTOR_KEYS = (
+    "llm_config_id",
+    "embedding_config_id",
+    "mysql_datasource_id",
+    "mysql_database",
+    "milvus_config_id",
+    "milvus_database",
+    "graph_space",
+    "since",
+)
+
+
+def _merge_selectors_into_payload(payload: dict, source: WorkflowExecuteRequest) -> dict:
+    """把 execute/schedule/job 请求上的资源选择器合并进 workflow payload。"""
+    for key in _SELECTOR_KEYS:
+        value = getattr(source, key, None)
+        if value is not None:
+            payload[key] = value
+    return payload
 
 
 @router.post("/definitions/{definition_id}/execute", response_model=ApiResponse)
 async def execute_definition(
     definition_id: str, request: WorkflowExecuteRequest, actor: CurrentActor
 ) -> ApiResponse:
-    _validate_execute_resources(actor, request)
+    _validate_resource_selectors(actor, request.model_dump())
     definition = service.repo.get_definition(definition_id)
     if definition is None:
         raise HTTPException(status_code=404, detail="工作流定义不存在")
-    payload = dict(request.payload)
-    if request.llm_config_id is not None:
-        payload["llm_config_id"] = request.llm_config_id
-    if request.embedding_config_id is not None:
-        payload["embedding_config_id"] = request.embedding_config_id
-    if request.mysql_datasource_id is not None:
-        payload["mysql_datasource_id"] = request.mysql_datasource_id
-    if request.mysql_database is not None:
-        payload["mysql_database"] = request.mysql_database
-    if request.milvus_config_id is not None:
-        payload["milvus_config_id"] = request.milvus_config_id
-    if request.milvus_database is not None:
-        payload["milvus_database"] = request.milvus_database
-    if request.graph_space is not None:
-        payload["graph_space"] = request.graph_space
-    if request.since is not None:
-        payload["since"] = request.since
+    payload = _merge_selectors_into_payload(dict(request.payload), request)
     try:
         execution = await service.execute_definition(
             definition, payload, request.workflow_id, persist_task=True
@@ -219,11 +234,16 @@ async def list_schedules() -> ApiResponse:
 
 
 @router.post("/definitions/{definition_id}/schedules", response_model=ApiResponse)
-async def create_schedule(definition_id: str, request: WorkflowScheduleRequest) -> ApiResponse:
+async def create_schedule(
+    definition_id: str, request: WorkflowScheduleRequest, actor: CurrentActor
+) -> ApiResponse:
+    _validate_resource_selectors(actor, request.model_dump())
     definition = service.repo.get_definition(definition_id)
     if definition is None:
         raise HTTPException(status_code=404, detail="工作流定义不存在")
     schedule = {**request.model_dump(), "definitionId": definition_id}
+    payload = _merge_selectors_into_payload(dict(request.payload), request)
+    schedule["payload"] = payload
     try:
         schedule = await temporal_runtime.create_schedule(definition, schedule)
     except Exception as exc:
@@ -275,3 +295,87 @@ async def delete_schedule(schedule_id: str) -> ApiResponse:
         temporal_runtime._client = None
     service.repo.delete_schedule(schedule_id)
     return ApiResponse(data={"id": schedule_id}, msg="Schedule 已删除")
+
+
+# ---------- 任务中心 Job API ----------
+
+
+def _job_error(exc: WorkflowJobError) -> HTTPException:
+    from service.workflow_jobs import WorkflowJobPermissionError
+
+    if isinstance(exc, WorkflowJobPermissionError):
+        return HTTPException(status_code=403, detail=str(exc))
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/jobs", response_model=ApiResponse)
+async def list_jobs(
+    actor: CurrentActor,
+    name: Annotated[str | None, Query(max_length=128)] = None,
+    status: str | None = Query(None, pattern="^(启用|暂停)$"),
+    task_type: Annotated[str | None, Query(alias="taskType")] = None,
+) -> ApiResponse:
+    items = job_service.list_jobs(actor, name=name, status=status, task_type=task_type)
+    return ApiResponse(data={"items": items, "total": len(items)})
+
+
+@router.post("/jobs", response_model=ApiResponse)
+async def create_job(request: JobCreateRequest, actor: CurrentActor) -> ApiResponse:
+    _validate_resource_selectors(actor, request.model_dump())
+    try:
+        job = await job_service.create_job(actor, request.model_dump(by_alias=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except WorkflowJobError as exc:
+        raise _job_error(exc) from exc
+    return ApiResponse(data=job, msg="任务已创建")
+
+
+@router.get("/jobs/{job_id}", response_model=ApiResponse)
+async def get_job(job_id: str, actor: CurrentActor) -> ApiResponse:
+    try:
+        detail = await job_service.get_job_detail(actor, job_id)
+    except WorkflowJobError as exc:
+        raise _job_error(exc) from exc
+    return ApiResponse(data=detail)
+
+
+@router.post("/jobs/{job_id}/trigger", response_model=ApiResponse)
+async def trigger_job(job_id: str, actor: CurrentActor) -> ApiResponse:
+    try:
+        execution = await job_service.trigger_job(actor, job_id)
+    except WorkflowJobError as exc:
+        raise _job_error(exc) from exc
+    return ApiResponse(data=execution, msg="任务已触发")
+
+
+@router.put("/jobs/{job_id}/state", response_model=ApiResponse)
+async def update_job_state(
+    job_id: str, request: ScheduleStateRequest, actor: CurrentActor
+) -> ApiResponse:
+    try:
+        job = await job_service.set_job_state(actor, job_id, request.active)
+    except WorkflowJobError as exc:
+        raise _job_error(exc) from exc
+    return ApiResponse(data=job)
+
+
+@router.put("/jobs/{job_id}", response_model=ApiResponse)
+async def update_job(job_id: str, request: JobUpdateRequest, actor: CurrentActor) -> ApiResponse:
+    _validate_resource_selectors(actor, request.model_dump())
+    try:
+        job = await job_service.update_job(actor, job_id, request.model_dump(by_alias=True))
+    except WorkflowJobError as exc:
+        raise _job_error(exc) from exc
+    return ApiResponse(data=job, msg="任务已更新")
+
+
+@router.delete("/jobs/{job_id}", response_model=ApiResponse)
+async def delete_job(job_id: str, actor: CurrentActor) -> ApiResponse:
+    try:
+        ok = await job_service.delete_job(actor, job_id)
+    except WorkflowJobError as exc:
+        raise _job_error(exc) from exc
+    if not ok:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return ApiResponse(data={"id": job_id}, msg="任务已删除")

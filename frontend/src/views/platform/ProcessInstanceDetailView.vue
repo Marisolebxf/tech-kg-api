@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getExecution, getTask, listExecutions, retryTask, type AccessReport, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch, type WorkflowExecution } from '../../api/workflowOperations'
+import { getExecution, getJob, getTask, listExecutions, retryTask, triggerJob, type AccessReport, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch, type WorkflowExecution, type WorkflowJob } from '../../api/workflowOperations'
 import { accessChips } from '../../utils/accessReport'
 
 type StepStatus = '成功' | '运行中' | '需人工处理' | '待执行'
@@ -25,6 +25,14 @@ type Step = {
 
 const route = useRoute()
 const router = useRouter()
+const jobId = computed(() => String(route.params.jobId || ''))
+const job = ref<WorkflowJob | null>(null)
+const jobTriggering = ref(false)
+const TASK_TYPE_LABELS: Record<string, string> = {
+  single: '单脚本抽取',
+  chain: '多脚本串行',
+  upload: '上传脚本',
+}
 const taskId = computed(() => String(route.params.taskId || route.params.instanceId || 'UPD-20260714'))
 const processingInstance = ref<ProcessingInstance>()
 const fallbackBatch: UpdateBatch = { id: '-', name: '任务详情', updateDate: '-', dataWindow: '-', source: '-', trigger: '-', input: 0, entities: 0, relations: 0, completed: 0, abnormal: 0, progress: 0, status: '处理中', startedAt: '-', completedAt: '-' }
@@ -51,6 +59,25 @@ const baseSteps: Omit<Step, 'status' | 'count' | 'abnormal' | 'duration'>[] = [
 const steps = computed<Step[]>(() => {
   if (isPipelineTask.value) {
     return buildPipelineSteps()
+  }
+  if (processingInstance.value?.workflowType === 'kg.custom.python') {
+    // 单脚本任务：整个脚本就是一个 activity step，直接展示任务级输入输出
+    const instance = processingInstance.value
+    const failed = instance.taskStatus === '执行出错'
+    return [{
+      id: 'script',
+      phase: '图谱构建',
+      name: instance.objectName || '脚本执行',
+      status: instance.taskStatus === '执行中' ? '运行中' : failed ? '需人工处理' : '成功',
+      risk: (failed ? '高风险' : '低风险') as RiskLevel,
+      count: '-',
+      abnormal: failed ? '1' : '0',
+      duration: '-',
+      description: '脚本 workflow(payload) 整体执行',
+      engine: 'Temporal Script Worker',
+      input: instance.input,
+      output: instance.output,
+    }]
   }
   if (processingInstance.value?.steps?.length) {
     return processingInstance.value.steps.map((step) => ({
@@ -302,7 +329,12 @@ const selectedExecution = ref<WorkflowExecution | null>(null)
 
 async function loadExecutions() {
   try {
-    if (scheduleId.value) {
+    if (jobId.value) {
+      // job 详情：由 getJob 直接带回执行历史
+      const detail = await getJob(jobId.value)
+      job.value = detail.job
+      executions.value = detail.executions
+    } else if (scheduleId.value) {
       executions.value = (await listExecutions(200, { scheduleId: scheduleId.value })).items
     } else if (processingInstance.value?.rule) {
       executions.value = (await listExecutions(200, { definitionId: String(processingInstance.value.rule) })).items
@@ -321,10 +353,13 @@ async function selectExecution(executionId: string) {
   selectedExecutionId.value = executionId
   try {
     selectedExecution.value = await getExecution(executionId)
-    // 周期任务视图（SCH-xxx 无对应任务行）：用选中 execution 的任务填充下部详情
-    if (scheduleId.value && selectedExecution.value?.taskId) {
+    // job / 周期任务视图：用选中 execution 的任务填充下部详情
+    if ((jobId.value || scheduleId.value) && selectedExecution.value?.taskId) {
       try {
         processingInstance.value = await getTask(selectedExecution.value.taskId)
+        if (!route.query.step) {
+          selectedStepId.value = steps.value[0]?.id ?? 'source'
+        }
       } catch {
         // 保留当前任务详情
       }
@@ -335,6 +370,20 @@ async function selectExecution(executionId: string) {
   }
 }
 
+async function triggerJobRun() {
+  if (!job.value || jobTriggering.value) return
+  jobTriggering.value = true
+  try {
+    await triggerJob(job.value.id)
+    pipelineMessage.value = '任务已触发，稍后刷新查看新执行记录'
+    await loadExecutions()
+  } catch (error) {
+    pipelineMessage.value = `触发失败：${(error as Error).message}`
+  } finally {
+    jobTriggering.value = false
+  }
+}
+
 watch(() => route.query.step, (step) => {
   if (step && steps.value.some((item) => item.id === String(step))) selectedStepId.value = String(step)
 })
@@ -342,6 +391,10 @@ watch(taskId, () => {
   void loadTaskDetail()
 })
 onMounted(async () => {
+  if (jobId.value) {
+    await loadExecutions()
+    return
+  }
   if (scheduleId.value) {
     // 周期任务详情：先取执行记录，再由最新执行记录补任务详情
     await loadExecutions()
@@ -356,8 +409,28 @@ onMounted(async () => {
 <template>
   <div class="task-detail-page">
     <header class="detail-head">
-      <div><RouterLink to="/graph-build">← 返回图谱构建</RouterLink><h1>{{ processingInstance?.objectName || `${visiblePhase}任务详情` }}</h1><p>{{ processingInstance?.action || batch.trigger }} · {{ processingInstance?.sourceTable || batch.source }}</p></div>
+      <div><RouterLink to="/graph-build">← 返回图谱构建</RouterLink><h1>{{ job?.name || processingInstance?.objectName || `${visiblePhase}任务详情` }}</h1><p>{{ processingInstance?.action || batch.trigger }} · {{ processingInstance?.sourceTable || batch.source }}</p></div>
+      <div v-if="job" class="detail-actions">
+        <button type="button" class="primary" :disabled="jobTriggering" @click="triggerJobRun">{{ jobTriggering ? '触发中…' : '执行任务' }}</button>
+      </div>
     </header>
+
+    <section v-if="job" class="job-config-panel">
+      <div class="job-config-grid">
+        <div><span>任务类型</span><strong>{{ TASK_TYPE_LABELS[job.taskType] || job.taskType }}</strong></div>
+        <div><span>调度方式</span><strong>{{ job.schedule.kind === 'cron' ? `周期 ${job.schedule.cron}` : '一次性' }}</strong></div>
+        <div><span>图空间</span><strong>{{ job.graphSpace || '默认' }}</strong></div>
+        <div><span>数据源</span><strong>{{ job.mysqlDatasourceId || '默认' }}{{ job.mysqlDatabase ? ` / ${job.mysqlDatabase}` : '' }}</strong></div>
+        <div><span>大模型</span><strong>{{ job.llmConfigId || '默认' }}</strong></div>
+        <div><span>Embedding</span><strong>{{ job.embeddingConfigId || '默认' }}</strong></div>
+        <div><span>Milvus</span><strong>{{ job.milvusConfigId || '默认' }}{{ job.milvusDatabase ? ` / ${job.milvusDatabase}` : '' }}</strong></div>
+        <div><span>状态</span><strong>{{ job.status }}</strong></div>
+      </div>
+      <div v-if="job.taskType === 'chain'" class="job-chain-scripts">
+        <span>脚本执行顺序</span>
+        <ol><li v-for="id in job.definitionIds" :key="id"><code>{{ id }}</code></li></ol>
+      </div>
+    </section>
 
     <section class="summary-grid">
       <article><span>执行状态</span><strong :class="isExecutionInterrupted ? 'danger' : 'success-text'">{{ taskStatus }}</strong><em>{{ isExecutionInterrupted ? '任务未完成' : '程序无异常退出' }}</em></article>
@@ -369,7 +442,7 @@ onMounted(async () => {
     <p v-if="pipelineMessage" class="pipeline-message">{{ pipelineMessage }}</p>
 
     <section class="execution-record-panel">
-      <header><div><h2>执行记录</h2><p>{{ scheduleId ? `周期任务 ${scheduleId} 的每次触发` : '同一脚本的历次执行（含周期触发与手动触发）' }}</p></div><span>{{ executions.length }} 条</span></header>
+      <header><div><h2>执行记录</h2><p>{{ jobId ? `任务 ${job?.name} 的历次执行` : scheduleId ? `周期任务 ${scheduleId} 的每次触发` : '同一脚本的历次执行（含周期触发与手动触发）' }}</p></div><span>{{ executions.length }} 条</span></header>
       <div class="execution-table-wrap">
         <table>
           <thead><tr><th>执行 ID</th><th>开始时间</th><th>状态</th><th>runId</th><th>备注</th></tr></thead>
@@ -504,4 +577,17 @@ onMounted(async () => {
 .execution-failed-tag{background:#fee4e2;color:#b42318}
 .execution-running-tag{background:#eaf2ff;color:#175cd3}
 .execution-empty{height:60px;color:#8290a7;text-align:center}
+
+/* job 配置摘要 */
+.job-config-panel{overflow:hidden;margin-bottom:12px;border:1px solid #c9dcf7;border-radius:9px;background:#fff}
+.job-config-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0}
+.job-config-grid>div{display:grid;gap:4px;padding:11px 15px;border-right:1px solid #e8eef7;border-bottom:1px solid #e8eef7}
+.job-config-grid span{color:#6b7890;font-size:10px}
+.job-config-grid strong{overflow:hidden;color:#1d2129;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.job-chain-scripts{display:flex;align-items:center;gap:12px;padding:10px 15px}
+.job-chain-scripts>span{color:#6b7890;font-size:10px;white-space:nowrap}
+.job-chain-scripts ol{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0;padding:0;list-style:none}
+.job-chain-scripts li{display:flex;align-items:center;gap:4px}
+.job-chain-scripts li:not(:last-child)::after{color:#98a2b3;content:"→"}
+.job-chain-scripts code{padding:2px 6px;border-radius:4px;background:#f1f5fa;color:#175cd3;font-size:10px}
 </style>

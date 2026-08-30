@@ -6,6 +6,7 @@ import 'highlight.js/styles/github-dark.css'
 import {
   createEntitySchema,
   createRelationSchema,
+  deleteSchema,
   getScriptContent,
   getSchemaOverview,
   getSchemaTopology,
@@ -171,6 +172,37 @@ const uploadMessage = ref('')
 const uploadIssues = ref<string[]>([])
 const uploadFileName = ref('')
 const uploadFileInput = ref<HTMLInputElement | null>(null)
+
+// 删除确认弹窗
+const deleteModalOpen = ref(false)
+const deleteTarget = ref<SchemaDefinition | null>(null)
+const deleting = ref(false)
+
+function openDeleteModal(schema: SchemaDefinition) {
+  if (!schema.canDelete) {
+    showToast(schema.isSystem ? '系统内置 Schema 不可删除' : '被关系引用的实体 Schema 不可删除', 'warning')
+    return
+  }
+  deleteTarget.value = schema
+  deleteModalOpen.value = true
+}
+
+async function confirmDelete() {
+  const target = deleteTarget.value
+  if (!target || deleting.value) return
+  deleting.value = true
+  try {
+    await deleteSchema(target.id, currentUserId)
+    showToast(`已删除 ${target.label || target.name}`, 'success')
+    deleteModalOpen.value = false
+    deleteTarget.value = null
+    await Promise.all([loadSchemas(), loadTopology()])
+  } catch (error) {
+    showToast(schemaErrorMessage(error), 'warning')
+  } finally {
+    deleting.value = false
+  }
+}
 
 // 查看脚本弹窗
 const viewModalOpen = ref(false)
@@ -531,11 +563,11 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
       <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeTab === '属性定义'">枚举字典作为属性约束统一维护</span></div><div class="schema-toolbar__actions"><button v-if="activeTab !== '属性定义'" class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :placeholder="`搜索${activeTab}`" /></label></div></div>
       <!-- <p v-if="schemaVersionMessage" class="schema-version-message">{{ schemaVersionMessage }}</p> -->
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : (row.schema.isSystem ? '系统内置，不可删除' : '被关系引用，不可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '推理关系'" class="schema-table-wrap"><table><thead><tr><th>推理关系</th><th>Schema 名称</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredInference" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-else-if="activeTab === '推理关系'" class="schema-table-wrap"><table><thead><tr><th>推理关系</th><th>Schema 名称</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredInference" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
       <div v-else-if="activeTab === '属性定义'" class="schema-table-wrap"><table><thead><tr><th>实体</th><th>主键</th><th>核心属性</th><th>动态属性 / 补充</th><th>主要来源</th></tr></thead><tbody><tr v-for="row in filteredAttributes" :key="row.entity"><td><code>{{ row.entity }}</code></td><td><b>{{ row.key }}</b></td><td class="mono-list">{{ row.core }}</td><td>{{ row.dynamic }}</td><td>{{ row.source }}</td></tr></tbody></table></div>
 
@@ -624,9 +656,24 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
       </div>
     </Teleport>
 
-    <input ref="uploadFileInput" type="file" accept=".py" hidden @change="onUploadFileChosen" />
-
     <Teleport to="body">
+      <div v-if="deleteModalOpen" class="schema-modal schema-delete-modal">
+        <button class="schema-modal__mask" type="button" @click="deleteModalOpen = false"></button>
+        <aside class="schema-modal__panel schema-delete-panel">
+          <header><h2>删除 Schema</h2><button type="button" @click="deleteModalOpen = false">×</button></header>
+          <div class="schema-modal__body">
+            <p class="schema-delete-text">确认删除 <b>{{ deleteTarget?.label || deleteTarget?.name }}</b>（<code>{{ deleteTarget?.name }}</code>）？</p>
+            <p class="schema-delete-note">将删除目录记录与关联脚本；如 DDL 已执行，图库中的 TAG/EDGE 不会被 DROP。</p>
+          </div>
+          <footer>
+            <button type="button" @click="deleteModalOpen = false">取消</button>
+            <button type="button" class="danger" :disabled="deleting" @click="confirmDelete">{{ deleting ? '删除中...' : '确认删除' }}</button>
+          </footer>
+        </aside>
+      </div>
+    </Teleport>
+
+    <input ref="uploadFileInput" type="file" accept=".py" hidden @change="onUploadFileChosen" />    <Teleport to="body">
       <div v-if="uploadModalOpen" class="schema-modal script-upload-modal">
         <button class="schema-modal__mask" type="button" @click="closeUploadModal"></button>
         <aside class="schema-modal__panel">
@@ -754,6 +801,9 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .schema-actions__inner{display:flex;gap:8px;align-items:center}
 .schema-action-link{border:0;background:transparent;color:#165dff;font-size:11px;line-height:17px;padding:0;cursor:pointer}
 .schema-action-link:hover{text-decoration:underline}
+.schema-action-link:disabled{color:#a9b4c6;cursor:not-allowed;text-decoration:none}
+.schema-action-link--danger{color:#e5484d;padding-left:10px}
+.schema-action-link--danger:hover:not(:disabled){color:#b42318}
 .script-badge{max-width:120px;padding:0 8px;height:22px;border:1px solid #d8e6fa;border-radius:11px;background:#f7faff;color:#4e5969;font-size:11px;line-height:22px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .schema-modal{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;padding:24px}
 .schema-modal__mask{position:fixed;inset:0;border:0;background:rgba(16,38,76,0.42);backdrop-filter:blur(2px);cursor:pointer}
@@ -769,7 +819,13 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .schema-modal__panel footer{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #e5e6eb}
 .schema-modal__panel footer button{height:32px;padding:0 14px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:13px;cursor:pointer}
 .schema-modal__panel footer .primary{background:#165dff;color:#fff;border-color:#165dff}
+.schema-modal__panel footer button.danger{background:#e5484d;color:#fff;border-color:#e5484d}
 .schema-modal__panel footer button:disabled{opacity:.6;cursor:not-allowed}
+
+/* 删除确认弹窗 */
+.schema-delete-panel{max-width:420px}
+.schema-delete-text{margin:0;font-size:13px;line-height:22px;color:#1d2129}
+.schema-delete-note{margin:0;font-size:11px;line-height:18px;color:#86909c}
 
 /* 上传脚本弹窗 */
 .script-upload-modal .schema-modal__body{min-height:140px}

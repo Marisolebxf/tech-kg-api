@@ -4,20 +4,26 @@ from pathlib import Path
 
 import pytest
 
+from infra.workflow_mysql import WorkflowMySQLClient
 from service.temporal_runtime import temporal_runtime
 from service.workflow_repository import repository
+
+TEST_CONTROL_DB = "techkg_control_test"
 
 
 @pytest.fixture(autouse=True)
 def reset_workflow_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("WORKFLOW_SCRIPT_DIR", str(tmp_path / "scripts"))
-    # 把 SQLite 状态库指到 tmp_path，避免共享机器上 /tmp/tech-kg-workflows.db 串到别的用户。
-    saved_path = repository.database_path
-    repository.database_path = str(tmp_path / "tech-kg-workflows.db")
+    # 控制面读写都经 infra.workflow_mysql 全局 client；指到独立测试库，
+    # 绝不能 reset 真实 techkg_control（会连带 DROP schema 目录表）
+    test_client = WorkflowMySQLClient(database=TEST_CONTROL_DB)
+    monkeypatch.setattr("infra.workflow_mysql.workflow_mysql_client", test_client)
+    monkeypatch.setattr("service.workflow_repository.workflow_mysql_client", test_client)
+    monkeypatch.setenv("WORKFLOW_RESET_ALLOW_REAL", "1")  # 测试库允许 DROP 重建
     repository.reset_for_tests()
     yield
     repository.reset_for_tests()
-    repository.database_path = saved_path
+    test_client.dispose()
 
 
 @pytest.fixture

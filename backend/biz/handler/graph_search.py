@@ -13,7 +13,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from biz.dependencies.auth import CurrentActor
@@ -149,6 +149,24 @@ def _get_client(space: str | None = None) -> TRSGraphClient:
     if not space:
         return get_trs_graph_client()
     return get_space_client(space)
+
+
+def _ensure_space_access(actor: Any, space: str | None) -> None:
+    """非管理员访问指定图空间时校验绑定关系；space=None（默认空间）与管理员放行。
+
+    在端点 try 块之前调用，HTTPException 不会被 except Exception 吞成 500。
+    """
+    if not space or actor.is_admin:
+        return
+    from service.graph_space import GraphSpaceService
+
+    session = create_session()
+    try:
+        bound = GraphSpaceService(session).is_bound(actor.user_id, space)
+    finally:
+        session.close()
+    if not bound:
+        raise HTTPException(status_code=403, detail=f"无权访问图空间 {space}，请先在配置页绑定")
 
 
 def _node_to_data(n: Any) -> GraphNodeData:
@@ -310,10 +328,12 @@ def _typed_path_from_record(
 
 @router.get("/nodes/{node_id}", response_model=ApiResponse)
 async def get_node(
+    actor: CurrentActor,
     node_id: str,
     space: str | None = Query(None, description="图空间，如 dev/techkg，缺省用默认空间"),
 ) -> ApiResponse:
     """按 VID 查单个节点详情。"""
+    _ensure_space_access(actor, space)
     try:
         node = await asyncio.to_thread(_get_client(space).get_node, node_id)
         if node is None:
@@ -325,12 +345,14 @@ async def get_node(
 
 @router.get("/nodes", response_model=ApiResponse)
 async def list_nodes(
+    actor: CurrentActor,
     label: str = Query(..., description="节点标签，如 Paper/Person/Journal/Report"),
     limit: int = Query(20, ge=1, le=500),
     offset: int = Query(0, ge=0),
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:
     """按标签分页查询节点列表（total 为库里真实总数）。"""
+    _ensure_space_access(actor, space)
     try:
         client = _get_client(space)
         # TRSGraphClient 底层是同步 httpx.Client，直接在 async handler 里调会把
@@ -347,12 +369,14 @@ async def list_nodes(
 
 @router.post("/nodes/search", response_model=ApiResponse)
 async def search_nodes(
+    actor: CurrentActor,
     label: str = Query(..., description="节点标签"),
     properties: dict[str, Any] | None = None,
     limit: int = Query(20, ge=1, le=500),
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:
     """按属性搜索节点（如 {"doi": "10.xxx"} 查论文）。"""
+    _ensure_space_access(actor, space)
     try:
         result = await asyncio.to_thread(
             _get_client(space).find_nodes, [label], properties or {}, limit=limit
@@ -364,8 +388,9 @@ async def search_nodes(
 
 
 @router.post("/paths/search", response_model=ApiResponse)
-async def search_typed_paths(body: TypedPathSearchRequest) -> ApiResponse:
+async def search_typed_paths(body: TypedPathSearchRequest, actor: CurrentActor) -> ApiResponse:
     """按逐跳边类型和方向查询全部匹配路径，支持中间节点属性过滤与分页。"""
+    _ensure_space_access(actor, body.space)
     try:
         client = _get_client(body.space)
         source = client.get_node(body.sourceId)
@@ -399,6 +424,7 @@ async def search_typed_paths(body: TypedPathSearchRequest) -> ApiResponse:
 
 @router.get("/subgraph/{node_id}", response_model=ApiResponse)
 async def get_subgraph(
+    actor: CurrentActor,
     node_id: str,
     depth: int = Query(1, ge=1, le=3, description="跳数 1-3"),
     limit: int = Query(50, ge=1, le=200, description="每页最大边数"),
@@ -408,6 +434,7 @@ async def get_subgraph(
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:
     """查某节点的 N 跳子图（点 + 边），前端直接渲染图谱。"""
+    _ensure_space_access(actor, space)
     try:
         subgraph = await asyncio.to_thread(
             _collect_subgraph,
@@ -481,6 +508,7 @@ def _collect_subgraph(
 
 @router.get("/filtered-subgraph/{node_id}", response_model=ApiResponse)
 async def get_filtered_subgraph(
+    actor: CurrentActor,
     node_id: str,
     edge_types: str = Query(..., description="逗号分隔的边类型，如 EXECUTIVE_OF,HAS_PARTICPTANT"),
     depth: int = Query(2, ge=1, le=3, description="跳数 1-3"),
@@ -493,6 +521,7 @@ async def get_filtered_subgraph(
     与 /subgraph 的区别：支持多边类型过滤（逗号分隔），每种边类型单独查，
     不会因 limit 截断把需要的边挤掉（论文/合作者等不会占名额）。
     """
+    _ensure_space_access(actor, space)
     try:
         client = _get_client(space)
         center = client.get_node(node_id)
@@ -553,6 +582,7 @@ async def get_filtered_subgraph(
 
 @router.get("/node/{node_id}/edges", response_model=ApiResponse)
 async def get_node_edges(
+    actor: CurrentActor,
     node_id: str,
     direction: Literal["out", "in", "both"] = Query("both", description="out/in/both"),
     edge_type: str | None = Query(None, description="边类型过滤"),
@@ -560,6 +590,7 @@ async def get_node_edges(
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:
     """查某节点的所有边（不含邻居节点属性，轻量）。"""
+    _ensure_space_access(actor, space)
     try:
         edge_list = await asyncio.to_thread(
             _get_client(space).get_node_edges,
@@ -576,6 +607,7 @@ async def get_node_edges(
 
 @router.get("/node/{node_id}/neighbours", response_model=ApiResponse)
 async def get_neighbours(
+    actor: CurrentActor,
     node_id: str,
     direction: Literal["out", "in", "both"] = Query("both", description="out/in/both"),
     edge_type: str | None = Query(None, description="边类型过滤"),
@@ -583,6 +615,7 @@ async def get_neighbours(
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:
     """查某节点的邻居节点（含属性）。"""
+    _ensure_space_access(actor, space)
     try:
         neighbours = _get_client(space).get_neighbours(
             node_id, direction=direction, edge_type=edge_type, limit=limit
@@ -595,12 +628,14 @@ async def get_neighbours(
 
 @router.get("/shortest-path", response_model=ApiResponse)
 async def shortest_path(
+    actor: CurrentActor,
     source: str = Query(..., description="起始节点 VID"),
     target: str = Query(..., description="目标节点 VID"),
     max_depth: int = Query(10, ge=1, le=20, description="最大搜索深度"),
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:
     """查两个节点之间的最短路径。"""
+    _ensure_space_access(actor, space)
     try:
         path = _get_client(space).shortest_path(source, target, max_depth=max_depth)
         if path is None:
@@ -634,6 +669,7 @@ async def list_spaces(actor: CurrentActor) -> ApiResponse:
 
 @router.get("/stats", response_model=ApiResponse)
 async def get_stats(
+    actor: CurrentActor,
     space: str | None = Query(None, description="图空间"),
     refresh: bool = Query(False, description="强制重新统计，忽略缓存"),
 ) -> ApiResponse:
@@ -641,6 +677,7 @@ async def get_stats(
 
     结果按空间缓存 5 分钟：底层 count 是全量扫描，实时统计一次要几十秒。
     """
+    _ensure_space_access(actor, space)
     try:
         data = await _load_stats(space, refresh=refresh)
         return ApiResponse(data=data)

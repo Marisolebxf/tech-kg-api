@@ -11,8 +11,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from infra.mysql import get_session
 from infra.s3 import StoredObject
+from infra.workflow_mysql import get_workflow_session
 from main import app
 from script.init_schema_management import initialize_schema_management
 
@@ -61,10 +61,10 @@ def schema_api(monkeypatch):
         with Session(engine) as session:
             yield session
 
-    app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[get_workflow_session] = override_session
     monkeypatch.setattr("service.schema_management.get_schema_s3_storage", lambda: storage)
     yield engine, storage
-    app.dependency_overrides.pop(get_session, None)
+    app.dependency_overrides.pop(get_workflow_session, None)
     engine.dispose()
 
 

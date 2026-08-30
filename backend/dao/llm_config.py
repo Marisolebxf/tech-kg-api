@@ -30,15 +30,14 @@ class LlmConfigDAO(BaseDAO[LlmConfig]):
             if should_close:
                 session.close()
 
-    def clear_other_defaults(self, exclude_id: str) -> int:
-        """把除 exclude_id 外的所有 is_default=True 记录置 False。返回受影响行数。"""
+    def clear_other_defaults(self, exclude_id: str, owner: str | None = None) -> int:
+        """把除 exclude_id 外的 is_default=True 记录置 False。传 owner 时仅影响该用户。"""
         session, should_close = self._get_session()
         try:
-            stmt = (
-                update(LlmConfig)
-                .where(LlmConfig.is_default.is_(True), LlmConfig.id != exclude_id)
-                .values(is_default=False)
-            )
+            conditions = [LlmConfig.is_default.is_(True), LlmConfig.id != exclude_id]
+            if owner is not None:
+                conditions.append(LlmConfig.owner == owner)
+            stmt = update(LlmConfig).where(*conditions).values(is_default=False)
             result = session.execute(stmt)
             session.commit()
             return result.rowcount or 0

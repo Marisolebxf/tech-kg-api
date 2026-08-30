@@ -332,6 +332,7 @@ async def register_scheduled_execution(request: dict[str, Any]) -> dict[str, Any
         request["definitionId"], dispatch, request.get("payload", {})
     )
     execution["scheduleId"] = request["scheduleId"]
+    execution["jobId"] = (request.get("payload") or {}).get("jobId")
     repository.save_execution(execution)
     task = WorkflowOperationsService.create_task_for_execution(
         definition, execution, request.get("payload", {})
@@ -339,7 +340,27 @@ async def register_scheduled_execution(request: dict[str, Any]) -> dict[str, Any
     repository.save_task(task)
     execution["taskId"] = task["id"]
     repository.save_execution(execution)
+    _stamp_job_latest(execution)
     return {"ok": True, "executionId": execution["id"], "taskId": task["id"]}
+
+
+def _stamp_job_latest(execution: dict[str, Any]) -> None:
+    """best-effort 回写 job 的最近执行信息；job 缺失不影响运行。"""
+    job_id = execution.get("jobId")
+    if not job_id:
+        return
+    try:
+        from service.workflow_repository import repository as _repo
+
+        job = _repo.get_job(job_id)
+        if job is None:
+            return
+        job["lastRunAt"] = execution.get("startedAt")
+        job["lastExecutionId"] = execution["id"]
+        job["lastExecutionStatus"] = execution.get("status")
+        _repo.save_job(job)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _retry_policy(config: dict[str, Any]) -> RetryPolicy:

@@ -1,75 +1,127 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import {
-  createSchedule,
-  executeDefinition,
+  createJob,
+  uploadPythonDefinition,
+  type WorkflowDefinition,
 } from '../api/workflowOperations'
-import type { SchemaDefinition } from '../api/schemaManagement'
 import type { LlmConfig } from '../api/llmConfig'
+import type { EmbeddingConfig } from '../api/embeddingConfig'
+import type { MilvusConfig } from '../api/milvusConfig'
+import type { MysqlDatasource } from '../api/mysqlDatasource'
 import { useToast } from '../composables/use-toast'
 
 const props = defineProps<{
   open: boolean
-  schemas: SchemaDefinition[]
+  definitions: WorkflowDefinition[]
   llmConfigs: LlmConfig[]
+  embeddingConfigs: EmbeddingConfig[]
+  milvusConfigs: MilvusConfig[]
+  mysqlDatasources: MysqlDatasource[]
+  graphSpaces: string[]
 }>()
 
 const emit = defineEmits<{
   close: []
-  launched: [payload: { mode: 'once' | 'recurring'; workflowDefinitionId: string }]
+  created: [jobId: string]
 }>()
 
 const { showToast } = useToast()
 
-const selectedSchemaId = ref('')
+function filterScript(value: string, option: { label?: string; value?: unknown }) {
+  const text = `${option.label ?? ''}${String(option.value ?? '')}`.toLowerCase()
+  return text.includes(value.toLowerCase())
+}
+
+type TaskType = 'single' | 'chain' | 'upload'
+const taskType = ref<TaskType>('single')
+const name = ref('')
+const singleDefinitionId = ref('')
+const chainPick = ref('')
+const chainSteps = ref<Array<{ id: string; name: string }>>([])
+const uploadFile = ref<File | null>(null)
+const runNow = ref(true)
+
+const graphSpace = ref('')
 const llmConfigId = ref('')
+const embeddingConfigId = ref('')
+const mysqlDatasourceId = ref('')
+const mysqlDatabase = ref('')
+const milvusConfigId = ref('')
+const milvusDatabase = ref('')
+const since = ref('')
+
 const executeMode = ref<'once' | 'recurring'>('once')
 const frequency = ref('每天')
 const executionTime = ref('02:00')
-const since = ref('')
-const domains = ref('')
-const submitting = ref(false)
-const notice = ref('')
-const launchFormRef = ref()
-const launchFormModel = computed(() => ({
-  selectedSchemaId: selectedSchemaId.value,
-  llmConfigId: llmConfigId.value,
-  executeMode: executeMode.value,
-  frequency: frequency.value,
-  executionTime: executionTime.value,
-  since: since.value,
-  domains: domains.value,
-}))
-const launchFormRules = {
-  selectedSchemaId: [{ required: true, message: '请选择作业' }],
-  executeMode: [{ required: true, message: '请选择执行模式' }],
-  frequency: [{ required: true, message: '请选择执行频率' }],
-  executionTime: [{ required: true, message: '请选择执行时间' }],
-}
 
-const selectedSchema = computed(() =>
-  props.schemas.find((s) => s.id === selectedSchemaId.value),
+const submitting = ref(false)
+const uploadFileInput = ref<HTMLInputElement | null>(null)
+
+/** 可选为任务脚本的 python 定义（entity/relation/custom 类抽取脚本） */
+const scriptDefinitions = computed(() =>
+  props.definitions.filter((d) => d.sourceKind === 'python'),
 )
 
+const canSubmit = computed(() => {
+  if (!name.value.trim()) return false
+  if (taskType.value === 'single') return Boolean(singleDefinitionId.value)
+  if (taskType.value === 'chain') return chainSteps.value.length >= 2
+  return Boolean(uploadFile.value)
+})
+
 function reset() {
-  selectedSchemaId.value = ''
+  taskType.value = 'single'
+  name.value = ''
+  singleDefinitionId.value = ''
+  chainPick.value = ''
+  chainSteps.value = []
+  uploadFile.value = null
+  runNow.value = true
+  graphSpace.value = ''
   llmConfigId.value = ''
+  embeddingConfigId.value = ''
+  mysqlDatasourceId.value = ''
+  mysqlDatabase.value = ''
+  milvusConfigId.value = ''
+  milvusDatabase.value = ''
+  since.value = ''
   executeMode.value = 'once'
   frequency.value = '每天'
   executionTime.value = '02:00'
-  since.value = ''
-  domains.value = ''
-  notice.value = ''
 }
 
 watch(() => props.open, (open) => {
   if (open) reset()
 })
 
-watch(selectedSchemaId, (id) => {
-  const schema = props.schemas.find((s) => s.id === id)
-  llmConfigId.value = schema?.llmConfigId || ''
-})
+function addChainStep(value: string | number | boolean | Record<string, any> | undefined) {
+  const id = String(value ?? '')
+  if (!id) return
+  if (chainSteps.value.some((s) => s.id === id)) {
+    showToast('该脚本已在队列中', 'warning')
+    return
+  }
+  const definition = scriptDefinitions.value.find((d) => d.id === id)
+  chainSteps.value.push({ id, name: definition?.name || id })
+  chainPick.value = ''
+}
+
+function removeChainStep(index: number) {
+  chainSteps.value.splice(index, 1)
+}
+
+function moveChainStep(index: number, delta: -1 | 1) {
+  const target = index + delta
+  if (target < 0 || target >= chainSteps.value.length) return
+  const steps = chainSteps.value
+  ;[steps[index], steps[target]] = [steps[target], steps[index]]
+}
+
+function onUploadFileChosen(event: Event) {
+  const input = event.target as HTMLInputElement
+  uploadFile.value = input.files?.[0] || null
+}
 
 function buildCron(): string {
   const [h, m] = executionTime.value.split(':')
@@ -84,45 +136,50 @@ function buildCron(): string {
 }
 
 async function submit() {
-  const validationErrors = await launchFormRef.value?.validate()
-  if (validationErrors) return
-  const schema = selectedSchema.value
-  if (!schema) {
-    showToast('请选择作业', 'warning')
-    return
-  }
-  const definitionId = schema.script?.workflowDefinitionId
-  if (!definitionId) {
-    showToast('该作业未上传脚本或未注册工作流', 'warning')
-    return
-  }
-  const payload: Record<string, unknown> = {}
-  if (llmConfigId.value) payload.llmConfigId = llmConfigId.value
-  if (since.value.trim()) payload.since = since.value.trim()
-  const domainList = domains.value.split(/[,，\s]+/).filter(Boolean)
-  if (domainList.length) payload.domains = domainList
-
+  if (!canSubmit.value || submitting.value) return
   submitting.value = true
-  notice.value = executeMode.value === 'once' ? '正在下发执行…' : '正在创建调度…'
   try {
-    if (executeMode.value === 'once') {
-      const execution = await executeDefinition(definitionId, payload)
-      notice.value = `已下发，执行 ID：${execution.id}，状态：${execution.status}`
-      emit('launched', { mode: 'once', workflowDefinitionId: definitionId })
+    let definitionId: string | undefined
+    let definitionIds: string[] | undefined
+    if (taskType.value === 'single') {
+      definitionId = singleDefinitionId.value
+    } else if (taskType.value === 'chain') {
+      definitionIds = chainSteps.value.map((s) => s.id)
     } else {
-      const scheduleId = `job-${Date.now()}`
-      const schedule = await createSchedule(definitionId, {
-        id: scheduleId,
-        cron: buildCron(),
-        timezone: 'Asia/Shanghai',
-        active: true,
-        payload,
+      if (!uploadFile.value) {
+        showToast('请选择脚本文件', 'warning')
+        return
+      }
+      const definition = await uploadPythonDefinition(uploadFile.value, 'workflow', {
+        name: name.value.trim(),
+        timeoutSeconds: 3600,
       })
-      notice.value = `已创建调度：${schedule.id}（cron ${schedule.cron}）`
-      emit('launched', { mode: 'recurring', workflowDefinitionId: definitionId })
+      definitionId = definition.id
     }
+
+    const job = await createJob({
+      name: name.value.trim(),
+      taskType: taskType.value,
+      definitionId,
+      definitionIds,
+      schedule: executeMode.value === 'recurring'
+        ? { kind: 'cron', cron: buildCron(), timezone: 'Asia/Shanghai' }
+        : { kind: 'once' },
+      runNow: executeMode.value === 'once' && runNow.value,
+      graphSpace: graphSpace.value || undefined,
+      llmConfigId: llmConfigId.value || undefined,
+      embeddingConfigId: embeddingConfigId.value || undefined,
+      mysqlDatasourceId: mysqlDatasourceId.value || undefined,
+      mysqlDatabase: mysqlDatabase.value || undefined,
+      milvusConfigId: milvusConfigId.value || undefined,
+      milvusDatabase: milvusDatabase.value || undefined,
+      since: since.value.trim() || undefined,
+    })
+    showToast(`任务「${job.name}」已创建${runNow.value && executeMode.value === 'once' ? '并触发执行' : ''}`, 'success')
+    emit('created', job.id)
+    emit('close')
   } catch (error) {
-    notice.value = error instanceof Error ? error.message : '下发失败'
+    showToast(error instanceof Error ? error.message : '创建任务失败', 'warning')
   } finally {
     submitting.value = false
   }
@@ -134,56 +191,141 @@ async function submit() {
     <button v-if="open" class="job-launch-mask" type="button" aria-label="关闭" @click="emit('close')" />
     <aside v-if="open" class="job-launch-dialog">
       <header>
-        <div><span>作业运行</span><h2>启动作业</h2></div>
+        <h2>新建任务</h2>
         <button type="button" @click="emit('close')">×</button>
       </header>
-      <a-form ref="launchFormRef" :model="launchFormModel" :rules="launchFormRules" class="job-launch-body" layout="vertical">
-        <a-form-item class="job-field" field="selectedSchemaId" label="作业（Schema）" required>
-          <a-select v-model="selectedSchemaId" placeholder="请选择" allow-clear>
-            <a-option v-for="s in schemas" :key="s.id" :value="s.id">{{ s.label }}（{{ s.name }}）</a-option>
-          </a-select>
-          <template #extra>
-            <small v-if="!schemas.length" class="muted">暂无已注册工作流的作业（请在 Schema 管理上传脚本）</small>
-          </template>
-        </a-form-item>
-
-        <a-form-item class="job-field" field="llmConfigId" label="大模型配置">
-          <a-select v-model="llmConfigId" placeholder="使用全局默认" allow-clear>
-            <a-option v-for="c in llmConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）{{ c.isDefault ? ' ★' : '' }}</a-option>
-          </a-select>
-          <template #extra>
-            <small>默认带出 Schema 绑定配置，可临时覆盖</small>
-          </template>
-        </a-form-item>
-
-        <a-form-item class="job-field" field="executeMode" label="执行模式" required>
-          <a-radio-group v-model="executeMode" class="job-radio-group">
-            <a-radio value="once">执行一次</a-radio>
-            <a-radio value="recurring">定期执行</a-radio>
-          </a-radio-group>
-        </a-form-item>
-
-        <div v-if="executeMode === 'recurring'" class="job-row">
-          <a-form-item class="job-field" field="frequency" label="频率" required>
-            <a-select v-model="frequency" :options="['每天', '每12小时', '每6小时', '每周']" />
-          </a-form-item>
-          <a-form-item class="job-field" field="executionTime" label="执行时间" required>
-            <input v-model="executionTime" type="time" />
-          </a-form-item>
+      <div class="job-launch-body">
+        <div class="job-row">
+          <label class="job-field">
+            <span>任务名称</span>
+            <input v-model="name" placeholder="如：论文-专家抽取" />
+          </label>
+          <label class="job-field">
+            <span>任务类型</span>
+            <a-radio-group v-model="taskType">
+              <a-radio value="single">单脚本抽取</a-radio>
+              <a-radio value="chain">多脚本串行</a-radio>
+              <a-radio value="upload">上传脚本</a-radio>
+            </a-radio-group>
+          </label>
         </div>
 
-        <a-form-item class="job-field" field="since" label="增量游标 since（可空，空 = 全量）">
-          <input v-model="since" placeholder="如 2026-08-01 00:00:00" />
-        </a-form-item>
+        <label v-if="taskType === 'single'" class="job-field">
+          <span>抽取脚本（可搜索）</span>
+          <a-select v-model="singleDefinitionId" placeholder="搜索并选择脚本" allow-search allow-clear :filter-option="filterScript">
+            <a-option v-for="d in scriptDefinitions" :key="d.id" :value="d.id">{{ d.name }}（{{ d.id }}）</a-option>
+          </a-select>
+        </label>
 
-        <a-form-item class="job-field" field="domains" label="业务域范围（可空，逗号分隔）">
-          <input v-model="domains" placeholder="如 论文域,人才域" />
-        </a-form-item>
-      </a-form>
-      <p v-if="notice" class="job-launch-notice">{{ notice }}</p>
+        <div v-else-if="taskType === 'chain'" class="job-field">
+          <span>抽取脚本队列（按顺序串行执行）</span>
+          <a-select :model-value="chainPick" placeholder="搜索并添加脚本" allow-search allow-clear :filter-option="filterScript" @change="addChainStep">
+            <a-option v-for="d in scriptDefinitions" :key="d.id" :value="d.id">{{ d.name }}（{{ d.id }}）</a-option>
+          </a-select>
+          <ol v-if="chainSteps.length" class="chain-steps">
+            <li v-for="(step, i) in chainSteps" :key="step.id">
+              <em>{{ i + 1 }}</em>
+              <code>{{ step.name }}</code>
+              <button type="button" title="上移" :disabled="i === 0" @click="moveChainStep(i, -1)">↑</button>
+              <button type="button" title="下移" :disabled="i === chainSteps.length - 1" @click="moveChainStep(i, 1)">↓</button>
+              <button type="button" title="移除" class="danger" @click="removeChainStep(i)">×</button>
+            </li>
+          </ol>
+          <small v-if="chainSteps.length === 1" class="muted-warn">多脚本串行任务至少选择 2 个脚本</small>
+        </div>
+
+        <div v-else class="job-field">
+          <span>脚本文件（需包含 workflow(payload) 函数）</span>
+          <div class="upload-row">
+            <button type="button" @click="uploadFileInput?.click()">{{ uploadFile ? '重新选择' : '选择 .py 文件' }}</button>
+            <code v-if="uploadFile">{{ uploadFile.name }}</code>
+          </div>
+          <input ref="uploadFileInput" type="file" accept=".py" hidden @change="onUploadFileChosen" />
+        </div>
+
+        <fieldset class="job-section">
+          <legend>运行资源配置</legend>
+          <div class="job-row">
+            <label class="job-field">
+              <span>图空间</span>
+              <a-select v-model="graphSpace" placeholder="默认空间" allow-clear>
+                <a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option>
+              </a-select>
+            </label>
+            <label class="job-field">
+              <span>大模型配置</span>
+              <a-select v-model="llmConfigId" placeholder="使用默认" allow-clear>
+                <a-option v-for="c in llmConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）</a-option>
+              </a-select>
+            </label>
+          </div>
+          <div class="job-row">
+            <label class="job-field">
+              <span>MySQL 数据源</span>
+              <a-select v-model="mysqlDatasourceId" placeholder="使用默认" allow-clear>
+                <a-option v-for="d in mysqlDatasources" :key="d.id" :value="d.id">{{ d.name }}</a-option>
+              </a-select>
+            </label>
+            <label class="job-field">
+              <span>数据库</span>
+              <input v-model="mysqlDatabase" placeholder="如 gkx_element（默认取数据源配置）" />
+            </label>
+          </div>
+          <div class="job-row">
+            <label class="job-field">
+              <span>Embedding 配置</span>
+              <a-select v-model="embeddingConfigId" placeholder="使用默认" allow-clear>
+                <a-option v-for="c in embeddingConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）</a-option>
+              </a-select>
+            </label>
+            <label class="job-field">
+              <span>Milvus 配置</span>
+              <a-select v-model="milvusConfigId" placeholder="使用默认" allow-clear>
+                <a-option v-for="c in milvusConfigs" :key="c.id" :value="c.id">{{ c.name }}</a-option>
+              </a-select>
+            </label>
+          </div>
+          <div class="job-row">
+            <label class="job-field">
+              <span>Milvus 数据库</span>
+              <input v-model="milvusDatabase" placeholder="默认 default" />
+            </label>
+            <label class="job-field">
+              <span>增量游标 since（可空）</span>
+              <input v-model="since" placeholder="如 2026-08-01 00:00:00" />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="job-section">
+          <legend>调度方式</legend>
+          <div class="job-row">
+            <label class="job-field">
+              <span>执行模式</span>
+              <a-radio-group v-model="executeMode">
+                <a-radio value="once">一次性</a-radio>
+                <a-radio value="recurring">周期性</a-radio>
+              </a-radio-group>
+            </label>
+            <template v-if="executeMode === 'recurring'">
+              <label class="job-field">
+                <span>频率</span>
+                <a-select v-model="frequency" :options="['每天', '每12小时', '每6小时', '每周']" />
+              </label>
+              <label class="job-field">
+                <span>执行时间</span>
+                <input v-model="executionTime" type="time" />
+              </label>
+            </template>
+            <label v-else class="job-field checkbox-field">
+              <a-checkbox v-model="runNow">创建后立即执行</a-checkbox>
+            </label>
+          </div>
+        </fieldset>
+      </div>
       <footer>
-        <button type="button" @click="emit('close')">关闭</button>
-        <button type="button" class="primary" :disabled="submitting || !selectedSchemaId" @click="submit">{{ submitting ? '下发中…' : '启动' }}</button>
+        <button type="button" @click="emit('close')">取消</button>
+        <button type="button" class="primary" :disabled="!canSubmit || submitting" @click="submit">{{ submitting ? '创建中…' : '创建任务' }}</button>
       </footer>
     </aside>
   </Teleport>
@@ -191,27 +333,32 @@ async function submit() {
 
 <style scoped>
 .job-launch-mask{position:fixed;inset:0;z-index:49;border:0;background:rgba(16,38,76,0.42);backdrop-filter:blur(2px);cursor:pointer}
-.job-launch-dialog{position:fixed;z-index:50;top:50%;left:50%;width:min(560px,calc(100vw - 40px));max-height:88vh;display:flex;flex-direction:column;overflow:hidden;border-radius:10px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3);transform:translate(-50%,-50%)}
-.job-launch-dialog>header{display:flex;align-items:flex-start;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #e3ebf6;background:linear-gradient(90deg,#eef5ff,#fff)}
-.job-launch-dialog header span{color:#165dff;font-size:10px}
-.job-launch-dialog h2{margin:4px 0 0;font-size:17px;color:#1d2129}
-.job-launch-dialog header button{width:28px;height:28px;border:0;border-radius:5px;background:#f0f4fa;color:#4e5969;font-size:18px;cursor:pointer}
-.job-launch-body{flex:1;min-height:0;overflow:auto;padding:16px 18px;display:flex;flex-direction:column;gap:12px}
+.job-launch-dialog{position:fixed;z-index:50;top:50%;left:50%;width:min(720px,calc(100vw - 48px));max-height:calc(100vh - 48px);display:flex;flex-direction:column;overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3);transform:translate(-50%,-50%)}
+.job-launch-dialog>header{display:flex;box-sizing:border-box;flex:0 0 56px;height:56px;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:1px solid #e3ebf6;background:linear-gradient(90deg,#eef5ff,#fff)}
+.job-launch-dialog h2{margin:0;font-size:16px;line-height:24px;color:#1d2129}
+.job-launch-dialog header button{width:32px;height:32px;border:0;border-radius:4px;background:#f0f4fa;color:#4e5969;font-size:18px;cursor:pointer}
+.job-launch-body{flex:1;min-height:0;box-sizing:border-box;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:14px}
+.job-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.job-row:has(> :nth-child(3)){grid-template-columns:1fr 1fr 1fr}
 .job-field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#4e5969}
-.job-field>span{color:#5d6e87;font-size:11px}
-.job-field input,.job-field select{height:32px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:13px;color:#1d2129;background:#fff}
-.job-field :deep(.arco-form-item-extra){margin-top:4px}.job-field small{color:#8191aa;font-size:12px;line-height:20px}
-.job-field small.muted{color:#b54708}
-.job-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.job-radio-group{display:flex;gap:16px;padding:6px 0}
-.job-radio-group label{display:flex;align-items:center;gap:5px;font-size:13px;color:#344763;cursor:pointer}
-.job-radio-group input{margin:0}
-.job-launch-notice{margin:0;padding:10px 18px;border-top:1px solid #e3ebf6;background:#eef5ff;color:#315b95;font-size:11px;line-height:16px}
-.job-launch-dialog>footer{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #e3ebf6;background:#fff}
-.job-launch-dialog footer button{height:33px;padding:0 16px;border:1px solid #c9cdd4;border-radius:5px;background:#fff;color:#4e5969;font-size:13px;cursor:pointer}
+.job-field>span{color:#5d6e87;font-size:12px;line-height:20px}
+.job-field input{height:32px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:13px;color:#1d2129;background:#fff}
+.job-field.checkbox-field{justify-content:flex-end}
+.job-section{display:flex;flex-direction:column;gap:12px;margin:0;padding:14px 16px 4px;border:1px solid #e5e6eb;border-radius:6px}
+.job-section legend{padding:0 6px;color:#165dff;font-size:12px}
+.job-launch-dialog>footer{display:flex;box-sizing:border-box;flex:0 0 64px;height:64px;align-items:center;justify-content:flex-end;gap:16px;padding:16px 24px;border-top:1px solid #e3ebf6;background:#fff}
+.job-launch-dialog footer button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;cursor:pointer}
 .job-launch-dialog footer .primary{border-color:#165dff;background:#165dff;color:#fff}
-.job-launch-dialog footer button:disabled{opacity:.6;cursor:not-allowed}
-.job-launch-dialog{width:min(640px,calc(100vw - 48px));max-height:calc(100vh - 48px);border-radius:8px}.job-launch-dialog>header{box-sizing:border-box;flex:0 0 56px;height:56px;align-items:center;padding:0 24px}.job-launch-dialog header button{width:32px;height:32px;border-radius:4px}.job-launch-body{box-sizing:border-box;overflow-x:hidden;overflow-y:auto;padding:24px;gap:16px}.job-launch-dialog>footer{box-sizing:border-box;flex:0 0 64px;height:64px;align-items:center;gap:16px;padding:16px 24px}.job-launch-dialog footer button{height:32px;border-radius:4px}
-.job-launch-body>.job-field,.job-row>.job-field{margin-bottom:0;gap:0}.job-row{gap:16px}.job-radio-group{min-height:32px;padding:0}.job-radio-group label{gap:8px}
-.job-launch-dialog>header>div{display:flex;height:24px;align-items:center}.job-launch-dialog>header span{display:none}.job-launch-dialog h2{margin:0;font-size:16px;line-height:24px}
+.job-launch-dialog footer button:disabled{opacity:.5;cursor:not-allowed}
+.chain-steps{display:flex;flex-direction:column;gap:6px;margin:6px 0 0;padding:0;list-style:none}
+.chain-steps li{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid #d5e4f7;border-radius:5px;background:#f8fbff}
+.chain-steps em{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#e9f2ff;color:#165dff;font-size:11px;font-style:normal;font-weight:600}
+.chain-steps code{flex:1;padding:1px 5px;border-radius:3px;background:#edf4ff;color:#165dff;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chain-steps button{width:24px;height:24px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:12px;cursor:pointer}
+.chain-steps button:disabled{opacity:.35;cursor:not-allowed}
+.chain-steps button.danger{border-color:#f6b9b4;color:#b42318}
+.upload-row{display:flex;align-items:center;gap:10px}
+.upload-row button{height:32px;padding:0 14px;border:1px solid #165dff;border-radius:4px;background:#fff;color:#165dff;font-size:13px;cursor:pointer}
+.upload-row code{color:#165dff;font-size:12px}
+.muted-warn{color:#b54708;font-size:12px}
 </style>

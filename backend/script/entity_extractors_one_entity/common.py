@@ -98,7 +98,28 @@ def build_parser(description: str) -> argparse.ArgumentParser:
     return parser
 
 
+def _sdk_context():
+    """任务运行时注入的 kg_sdk 上下文；CLI 独立运行 / 未注入时返回 None。"""
+    try:
+        from kg_sdk import current_context
+
+        return current_context()
+    except ImportError:
+        return None
+
+
 def mysql_engine(database: str = DEFAULT_DB) -> Engine:
+    # 任务下发时选择的数据源优先；无上下文（CLI / 本地）回退 MYSQL_* env
+    context = _sdk_context()
+    params = context.to_dict().get("mysql") if context is not None else None
+    if params:
+        database = params.get("database") or database
+        url = (
+            f"mysql+pymysql://{params.get('username', 'root')}:{params.get('password', '')}"
+            f"@{params.get('host', '127.0.0.1')}:{params.get('port', 3306)}"
+            f"/{database}?charset=utf8mb4"
+        )
+        return create_engine(url, pool_pre_ping=True)
     user = os.getenv("MYSQL_USERNAME", "root")
     password = os.getenv("MYSQL_PASSWORD", "")
     host = os.getenv("MYSQL_HOST", "127.0.0.1")
@@ -108,6 +129,12 @@ def mysql_engine(database: str = DEFAULT_DB) -> Engine:
 
 
 def graph_client() -> TRSGraphClient:
+    # 任务下发时选择的图空间优先（附带观测式溯源）；无上下文回退 TRS_GRAPH_* env
+    context = _sdk_context()
+    if context is not None:
+        client = context.graph
+        if client is not None:
+            return client
     settings = TRSGraphSettings.from_env()
     graph = TRSGraphClient(settings)
     graph.connect()

@@ -29,14 +29,14 @@ class MilvusConfigDAO(BaseDAO[MilvusConfig]):
             if should_close:
                 session.close()
 
-    def clear_other_defaults(self, exclude_id: str) -> int:
+    def clear_other_defaults(self, exclude_id: str, owner: str | None = None) -> int:
+        """把除 exclude_id 外的 is_default=True 记录置 False。传 owner 时仅影响该用户。"""
         session, should_close = self._get_session()
         try:
-            stmt = (
-                update(MilvusConfig)
-                .where(MilvusConfig.is_default.is_(True), MilvusConfig.id != exclude_id)
-                .values(is_default=False)
-            )
+            conditions = [MilvusConfig.is_default.is_(True), MilvusConfig.id != exclude_id]
+            if owner is not None:
+                conditions.append(MilvusConfig.owner == owner)
+            stmt = update(MilvusConfig).where(*conditions).values(is_default=False)
             result = session.execute(stmt)
             session.commit()
             return result.rowcount or 0

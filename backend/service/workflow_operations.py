@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from service.stage_normalizer import normalize_stages
+from service.stage_normalizer import normalize_stages, pipeline_steps
 from service.temporal_runtime import temporal_runtime
 from service.workflow_repository import WorkflowRepository, repository
 
@@ -248,6 +248,7 @@ class WorkflowOperationsService:
             "workflowId": execution["workflowId"],
             "runId": execution.get("runId"),
             "scheduleId": execution.get("scheduleId"),
+            "jobId": execution.get("jobId"),
             "input": payload,
             "output": None,
             "logs": [execution["message"]],
@@ -274,6 +275,8 @@ class WorkflowOperationsService:
                 "message": f"Temporal 暂不可用，已保存待下发记录: {exc}",
             }
         execution = temporal_runtime.execution_record(definition["id"], dispatch, payload)
+        if payload.get("jobId"):
+            execution["jobId"] = payload["jobId"]
         self.repo.save_execution(execution)
         if persist_task:
             task = self.create_task_for_execution(definition, execution, payload)
@@ -295,8 +298,43 @@ class WorkflowOperationsService:
                 temporal_runtime._client = None
                 execution["message"] = f"状态刷新失败: {exc}"
             self.repo.save_execution(execution)
+        await self._capture_failed_pipeline_steps(execution)
         self._sync_task_from_execution(execution)
         return execution
+
+    async def _capture_failed_pipeline_steps(self, execution: dict[str, Any]) -> None:
+        """steps/chain 执行失败后 output 里没有 steps（异常即返回）；补查 get_steps 并落库。
+
+        worker 挂掉/历史保留期过后查询会失败——吞掉异常保持旧行为。
+        """
+        if execution.get("status") not in {"FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}:
+            return
+        output = execution.get("output")
+        if isinstance(output, dict) and output.get("steps"):
+            return
+        definition = self.repo.get_definition(execution.get("definitionId") or "")
+        if definition is None or definition.get("workflowType") not in {
+            "kg.custom.steps",
+            "kg.custom.chain",
+        }:
+            return
+        workflow_id = execution.get("workflowId")
+        if not workflow_id:
+            return
+        try:
+            client = await temporal_runtime.client()
+            handle = client.get_workflow_handle(workflow_id)
+            state = await handle.query("get_steps")
+        except Exception as exc:  # noqa: BLE001
+            temporal_runtime._client = None
+            execution["message"] = f"step 状态补查失败: {exc}"
+            return
+        steps = (state or {}).get("steps") or {}
+        if not steps:
+            return
+        execution["stepsState"] = state
+        execution["output"] = {**(output if isinstance(output, dict) else {}), "steps": steps}
+        self.repo.save_execution(execution)
 
     async def retry_task(self, task_id: str, reason: str = "manual retry") -> dict[str, Any]:
         """失败任务重试：调 Temporal ResetWorkflowExecution；新 run_id 回写 execution + task。
@@ -361,7 +399,12 @@ class WorkflowOperationsService:
         already_in_sync = task.get("taskStatus") == new_task_status
         output = execution.get("output")
         normalized_steps = normalize_stages(output)
-        if normalized_steps:
+        # steps/chain 工作流：output.steps 保留每步真实 input/output JSON，
+        # 优先于 normalize_stages（后者会丢弃每步输入输出）
+        real_steps = pipeline_steps(output)
+        if real_steps:
+            task["steps"] = real_steps
+        elif normalized_steps:
             # 用真实 worker stages 覆盖任务创建时塞的静态模板 _steps()
             task["steps"] = normalized_steps
         if isinstance(output, dict):
@@ -374,7 +417,9 @@ class WorkflowOperationsService:
             return
         task["taskStatus"] = new_task_status
         task["status"] = new_status
-        if normalized_steps:
+        if real_steps:
+            log_msg = f"阶段回写：{len(real_steps)} 个 step（含输入输出），状态={status}"
+        elif normalized_steps:
             log_msg = f"阶段回写：{len(normalized_steps)} 个 stage，状态={status}"
         elif isinstance(output, dict) and "stages" in output:
             log_msg = f"执行状态同步：{status}（output.stages 类型不支持归一化）"

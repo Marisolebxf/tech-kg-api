@@ -6,6 +6,7 @@ import pytest
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+from infra.workflow_mysql import WorkflowMySQLClient
 from service.temporal_workflows import ACTIVITIES, WORKFLOW_CLASSES
 from service.workflow_operations import workflow_operations_service
 from service.workflow_repository import repository
@@ -15,11 +16,11 @@ from service.workflow_repository import repository
 async def test_worker_runs_entity_relation_and_uploaded_python_workflows(tmp_path, monkeypatch):
     """启动 Temporal 测试服务与真实 Worker，覆盖内置工作流和上传脚本工作流。"""
     monkeypatch.setenv("WORKFLOW_SCRIPT_DIR", str(tmp_path / "scripts"))
-    monkeypatch.setattr(
-        repository,
-        "database_path",
-        str(tmp_path / "tech-kg-workflows.db"),
-    )
+    # 控制面读写都经 infra.workflow_mysql 全局 client；指到独立测试库
+    test_client = WorkflowMySQLClient(database="techkg_control_test")
+    monkeypatch.setattr("infra.workflow_mysql.workflow_mysql_client", test_client)
+    monkeypatch.setattr("service.workflow_repository.workflow_mysql_client", test_client)
+    monkeypatch.setenv("WORKFLOW_RESET_ALLOW_REAL", "1")
     repository.reset_for_tests()
     python_definition = workflow_operations_service.create_python_definition(
         "triple.py",

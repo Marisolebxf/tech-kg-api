@@ -213,6 +213,23 @@ export function createRelationSchema(
   return createSchema('/schemas/relations', payload, userId)
 }
 
+export interface SchemaDeleteResult {
+  id: string
+  deleted: boolean
+  scriptCleanupSucceeded?: boolean
+}
+
+export async function deleteSchema(
+  schemaId: string,
+  userId: string,
+): Promise<SchemaDeleteResult> {
+  return unwrap(
+    await asApiPromise<SchemaDeleteResult>(
+      http.delete(`${PREFIX}/schemas/${schemaId}`, { headers: headers(userId) }),
+    ),
+  )
+}
+
 export async function replaceSchemaScript(
   schemaId: string,
   script: File,

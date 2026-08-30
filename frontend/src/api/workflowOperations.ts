@@ -255,6 +255,8 @@ export interface WorkflowExecution {
   steps?: ProcessStep[]
   taskId?: string
   scheduleId?: string
+  jobId?: string
+  stepsState?: Record<string, unknown>
 }
 
 export interface WorkflowSchedule {
@@ -331,7 +333,7 @@ export const getExecution = (executionId: string) =>
 
 export const listExecutions = (
   limit = 100,
-  filters: { definitionId?: string; scheduleId?: string } = {},
+  filters: { definitionId?: string; scheduleId?: string; jobId?: string } = {},
 ) =>
   unwrap(http.get('/v1/workflow-system/executions', { params: { limit, ...filters } })) as Promise<{ items: WorkflowExecution[]; total: number }>
 
@@ -351,3 +353,80 @@ export const triggerSchedule = (scheduleId: string) =>
 
 export const deleteSchedule = (scheduleId: string) =>
   unwrap(http.delete(`/v1/workflow-system/schedules/${scheduleId}`)) as Promise<{ id: string }>
+
+// ---- 任务中心 Job ----
+
+export interface JobScheduleSpec {
+  kind: 'once' | 'cron'
+  cron?: string
+  timezone?: string
+}
+
+export interface WorkflowJob {
+  id: string
+  name: string
+  taskType: 'single' | 'chain' | 'upload'
+  definitionIds: string[]
+  definitionId: string
+  definitionName?: string
+  schedule: JobScheduleSpec
+  owner: string
+  status: string
+  scheduleId?: string
+  lastRunAt?: string | null
+  lastExecutionId?: string | null
+  lastExecutionStatus?: string | null
+  createdAt: string
+  updatedAt?: string
+  dispatchStatus?: string
+  message?: string
+  llmConfigId?: string
+  embeddingConfigId?: string
+  mysqlDatasourceId?: string
+  mysqlDatabase?: string
+  milvusConfigId?: string
+  milvusDatabase?: string
+  graphSpace?: string
+  since?: string
+  [key: string]: unknown
+}
+
+export interface JobCreateInput {
+  name: string
+  taskType: 'single' | 'chain' | 'upload'
+  definitionId?: string
+  definitionIds?: string[]
+  schedule?: JobScheduleSpec
+  runNow?: boolean
+  llmConfigId?: string
+  embeddingConfigId?: string
+  mysqlDatasourceId?: string
+  mysqlDatabase?: string
+  milvusConfigId?: string
+  milvusDatabase?: string
+  graphSpace?: string
+  since?: string
+}
+
+export const listJobs = (
+  filters: { name?: string; status?: string; taskType?: string } = {},
+) =>
+  unwrap(http.get('/v1/workflow-system/jobs', { params: filters })) as Promise<{ items: WorkflowJob[]; total: number }>
+
+export const createJob = (input: JobCreateInput) =>
+  unwrap(http.post('/v1/workflow-system/jobs', input)) as Promise<WorkflowJob>
+
+export const getJob = (jobId: string) =>
+  unwrap(http.get(`/v1/workflow-system/jobs/${jobId}`)) as Promise<{ job: WorkflowJob; executions: WorkflowExecution[] }>
+
+export const triggerJob = (jobId: string) =>
+  unwrap(http.post(`/v1/workflow-system/jobs/${jobId}/trigger`)) as Promise<WorkflowExecution>
+
+export const updateJobState = (jobId: string, active: boolean) =>
+  unwrap(http.put(`/v1/workflow-system/jobs/${jobId}/state`, { active })) as Promise<WorkflowJob>
+
+export const updateJob = (jobId: string, input: Partial<JobCreateInput>) =>
+  unwrap(http.put(`/v1/workflow-system/jobs/${jobId}`, input)) as Promise<WorkflowJob>
+
+export const deleteJob = (jobId: string) =>
+  unwrap(http.delete(`/v1/workflow-system/jobs/${jobId}`)) as Promise<{ id: string }>

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from service.stage_normalizer import normalize_stages
+from service.stage_normalizer import normalize_stages, pipeline_steps
 
 
 def test_none_output_returns_empty() -> None:
@@ -99,3 +99,45 @@ def test_stages_wrong_type_returns_empty() -> None:
     """stages 既不是 list 也不是 dict(如 worker 写成字符串)时返回空。"""
     assert normalize_stages({"stages": "schema,load,align"}) == []
     assert normalize_stages({"stages": 42}) == []
+
+
+# ---------- pipeline_steps：steps/chain 每步真实输入输出 ----------
+
+
+def test_pipeline_steps_preserves_input_output() -> None:
+    """chain/steps 工作流的 output.steps：每步 input/output/access 原样保留。"""
+    output = {
+        "status": "completed",
+        "steps": {
+            "entity-paper": {
+                "status": "COMPLETED",
+                "name": "论文实体抽取",
+                "input": {"since": "2026-01-01"},
+                "output": {"inserted": 10},
+                "access": [{"resource": "mysql"}],
+            },
+            "relation-authored": {
+                "status": "FAILED",
+                "name": "撰写关系抽取",
+                "input": {"_prevOutputs": {"entity-paper": {"inserted": 10}}},
+                "error": "boom",
+            },
+        },
+    }
+    steps = pipeline_steps(output)
+    assert [s["id"] for s in steps] == ["entity-paper", "relation-authored"]
+    first, second = steps
+    assert first["status"] == "成功"
+    assert first["input"] == {"since": "2026-01-01"}
+    assert first["output"] == {"inserted": 10}
+    assert first["access"] == [{"resource": "mysql"}]
+    assert second["status"] == "需人工处理"
+    assert second["output"] is None
+    assert second["error"] == "boom"
+
+
+def test_pipeline_steps_empty_for_non_pipeline_output() -> None:
+    assert pipeline_steps(None) == []
+    assert pipeline_steps({"status": "completed", "result": {...}}) == []
+    assert pipeline_steps({"steps": {}}) == []
+    assert pipeline_steps({"steps": "bad"}) == []

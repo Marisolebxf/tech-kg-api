@@ -79,7 +79,7 @@ class MysqlDatasourceService:
             updated_at=now,
         )
         if row.is_default:
-            self._dao.clear_other_defaults(row.id)
+            self._dao.clear_other_defaults(row.id, owner=row.owner)
         return _to_out(row)
 
     def update_config(self, config_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -110,7 +110,7 @@ class MysqlDatasourceService:
             updates["password"] = new_pwd
         updated = self._dao.update(config_id, **updates)
         if updated and updated.is_default:
-            self._dao.clear_other_defaults(updated.id)
+            self._dao.clear_other_defaults(updated.id, owner=updated.owner)
         return _to_out(updated) if updated else None
 
     def delete_config(self, config_id: str) -> bool:
@@ -125,7 +125,7 @@ class MysqlDatasourceService:
         row = self._dao.get(config_id)
         if row is None:
             return None
-        self._dao.clear_other_defaults(config_id)
+        self._dao.clear_other_defaults(config_id, owner=row.owner)
         updated = self._dao.update(config_id, is_default=True, updated_at=datetime.utcnow())
         return _to_out(updated) if updated else None
 

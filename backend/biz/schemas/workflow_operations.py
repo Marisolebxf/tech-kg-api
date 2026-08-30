@@ -96,6 +96,16 @@ class WorkflowScheduleRequest(BaseModel):
     timezone: str = "Asia/Shanghai"
     active: bool = True
     payload: dict[str, Any] = Field(default_factory=dict)
+    llm_config_id: str | None = Field(default=None, alias="llmConfigId")
+    embedding_config_id: str | None = Field(default=None, alias="embeddingConfigId")
+    mysql_datasource_id: str | None = Field(default=None, alias="mysqlDatasourceId")
+    mysql_database: str | None = Field(default=None, alias="mysqlDatabase")
+    milvus_config_id: str | None = Field(default=None, alias="milvusConfigId")
+    milvus_database: str | None = Field(default=None, alias="milvusDatabase")
+    graph_space: str | None = Field(default=None, alias="graphSpace")
+    since: str | None = None
+
+    model_config = {"populate_by_name": True}
 
 
 class ScheduleStateRequest(BaseModel):
@@ -139,5 +149,52 @@ class WorkflowChainRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     definition_ids: list[str] = Field(min_length=1, max_length=20, alias="definitionIds")
     definition_id: str | None = Field(default=None, alias="definitionId")
+
+    model_config = {"populate_by_name": True}
+
+
+class JobScheduleSpec(BaseModel):
+    """任务调度方式：一次性 / cron 周期。"""
+
+    kind: Literal["once", "cron"] = "once"
+    cron: str | None = Field(default=None, min_length=5, max_length=100)
+    timezone: str = "Asia/Shanghai"
+
+
+class JobCreateRequest(BaseModel):
+    """任务中心新建任务：single 单脚本 / chain 多脚本串行 / upload 上传脚本。"""
+
+    name: str = Field(min_length=1, max_length=128)
+    task_type: Literal["single", "chain", "upload"] = Field(default="single", alias="taskType")
+    definition_id: str | None = Field(default=None, alias="definitionId")
+    definition_ids: list[str] | None = Field(default=None, max_length=20, alias="definitionIds")
+    schedule: JobScheduleSpec = Field(default_factory=JobScheduleSpec)
+    run_now: bool = Field(default=False, alias="runNow")
+    llm_config_id: str | None = Field(default=None, alias="llmConfigId")
+    embedding_config_id: str | None = Field(default=None, alias="embeddingConfigId")
+    mysql_datasource_id: str | None = Field(default=None, alias="mysqlDatasourceId")
+    mysql_database: str | None = Field(default=None, alias="mysqlDatabase")
+    milvus_config_id: str | None = Field(default=None, alias="milvusConfigId")
+    milvus_database: str | None = Field(default=None, alias="milvusDatabase")
+    graph_space: str | None = Field(default=None, alias="graphSpace")
+    since: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class JobUpdateRequest(BaseModel):
+    """编辑任务：名称 / 脚本顺序 / 资源选择器 / cron。"""
+
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    definition_ids: list[str] | None = Field(default=None, max_length=20, alias="definitionIds")
+    schedule: JobScheduleSpec | None = None
+    llm_config_id: str | None = Field(default=None, alias="llmConfigId")
+    embedding_config_id: str | None = Field(default=None, alias="embeddingConfigId")
+    mysql_datasource_id: str | None = Field(default=None, alias="mysqlDatasourceId")
+    mysql_database: str | None = Field(default=None, alias="mysqlDatabase")
+    milvus_config_id: str | None = Field(default=None, alias="milvusConfigId")
+    milvus_database: str | None = Field(default=None, alias="milvusDatabase")
+    graph_space: str | None = Field(default=None, alias="graphSpace")
+    since: str | None = None
 
     model_config = {"populate_by_name": True}

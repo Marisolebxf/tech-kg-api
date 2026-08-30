@@ -79,3 +79,46 @@ def normalize_stages(output: dict[str, Any] | None) -> list[dict[str, Any]]:
             _step_from_dict(key, value) for key, value in stages.items() if isinstance(value, dict)
         ]
     return []
+
+
+_STEP_STATUS_LABELS = {
+    "COMPLETED": "成功",
+    "FAILED": "需人工处理",
+}
+
+
+def pipeline_steps(output: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """把 steps/chain 工作流的 ``output.steps`` 映射为保留输入输出的步骤列表。
+
+    与 ``normalize_stages`` 不同：每个步骤原样保留 input/output/error/access JSON
+    （任务详情页展示每个 activity step 的真实输入输出）。
+    返回 ``[]`` 表示 output 里没有 steps（如 kg.custom.python 单脚本）。
+    """
+    if not isinstance(output, dict):
+        return []
+    steps = output.get("steps")
+    if not isinstance(steps, dict) or not steps:
+        return []
+    result = []
+    for step_id, state in steps.items():
+        if not isinstance(state, dict):
+            continue
+        raw_status = str(state.get("status", "-"))
+        result.append(
+            {
+                "id": step_id,
+                "name": state.get("name") or step_id,
+                "phase": "图谱构建",
+                "description": "脚本 activity step",
+                "status": _STEP_STATUS_LABELS.get(raw_status, "运行中"),
+                "rawStatus": raw_status,
+                "count": state.get("attempt", "-"),
+                "abnormal": "-",
+                "duration": "-",
+                "input": state.get("input"),
+                "output": state.get("output"),
+                "error": state.get("error"),
+                "access": state.get("access"),
+            }
+        )
+    return result

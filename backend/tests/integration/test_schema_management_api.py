@@ -8,8 +8,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from infra.mysql import get_session
 from infra.s3 import StoredObject
+from infra.workflow_mysql import get_workflow_session
 from main import app
 from script.init_schema_management import initialize_schema_management
 
@@ -50,10 +50,13 @@ def schema_api(monkeypatch):
         with Session(engine) as session:
             yield session
 
-    app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[get_workflow_session] = override_session
     monkeypatch.setattr("service.schema_management.get_schema_s3_storage", lambda: storage)
+    # 系统保护与 provenance 注入取默认行为，避免容器 env 影响断言
+    monkeypatch.delenv("SCHEMA_ALLOW_SYSTEM_DELETE", raising=False)
+    monkeypatch.setenv("SCHEMA_AUTO_PROVENANCE", "false")
     yield engine, storage
-    app.dependency_overrides.pop(get_session, None)
+    app.dependency_overrides.pop(get_workflow_session, None)
     engine.dispose()
 
 
@@ -202,7 +205,9 @@ async def test_schema_workflow_script_is_registered_and_returned(
 ) -> None:
     calls: list[dict] = []
 
-    def register(filename, content, function_name, definition_id, name, timeout_seconds=None):
+    def register(
+        filename, content, function_name, definition_id, name, timeout_seconds=None, category=None
+    ):
         calls.append(
             {
                 "filename": filename,
@@ -211,6 +216,7 @@ async def test_schema_workflow_script_is_registered_and_returned(
                 "definition_id": definition_id,
                 "name": name,
                 "timeout_seconds": timeout_seconds,
+                "category": category,
             }
         )
         return {"id": definition_id}

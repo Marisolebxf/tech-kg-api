@@ -288,6 +288,7 @@ def test_client_supplied_rerun_step_id_is_rejected_for_every_template(tid):
         "T_EVIDENCE": {"evidence": [{"id": "1"}, {"id": "2"}]},
         "T_ATTR": {"attrVerdict": "v"},
         "T_RUNTIME": {"runtimeConfig": {}},
+        "T_DIRECT": {"accepted": True},
     }[tid]
     minimal["rerunStepId"] = "persist"
     with pytest.raises(ReviewValidationError):

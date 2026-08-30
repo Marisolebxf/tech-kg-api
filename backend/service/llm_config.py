@@ -81,7 +81,7 @@ class LlmConfigService:
             updated_at=now,
         )
         if row.is_default:
-            self._dao.clear_other_defaults(row.id)
+            self._dao.clear_other_defaults(row.id, owner=row.owner)
         reset_llm_client()
         return _to_out(row)
 
@@ -99,7 +99,7 @@ class LlmConfigService:
             updates["api_key"] = new_key
         updated = self._dao.update(config_id, **updates)
         if updated and updated.is_default:
-            self._dao.clear_other_defaults(updated.id)
+            self._dao.clear_other_defaults(updated.id, owner=updated.owner)
         reset_llm_client()
         return _to_out(updated) if updated else None
 
@@ -118,7 +118,7 @@ class LlmConfigService:
         row = self._dao.get(config_id)
         if row is None:
             return None
-        self._dao.clear_other_defaults(config_id)
+        self._dao.clear_other_defaults(config_id, owner=row.owner)
         updated = self._dao.update(config_id, is_default=True, updated_at=datetime.utcnow())
         reset_llm_client()
         return _to_out(updated) if updated else None

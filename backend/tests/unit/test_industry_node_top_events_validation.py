@@ -186,4 +186,3 @@ def test_request_accepts_and_rejects_month_time_range() -> None:
         IndustryNodeTopEventsRequest.model_validate(
             {"chain_node_id": "IC0007007", "time_range": f"{future}~{future}"}
         )
-

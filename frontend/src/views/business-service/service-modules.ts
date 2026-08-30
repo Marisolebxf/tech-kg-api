@@ -219,7 +219,7 @@ export const serviceModules: ServiceModule[] = [
     evidence: [
       '按论文、专利、项目邻居求交汇总共同成果。',
       '摘要按成果序号展示名称，并标注完成时间、所属领域、奖项/评价。',
-      '所属领域优先 Structured Output/JSON Schema 生成。',
+      '所属领域取自成果 HAS_KEYWORD 关键词（专利可回退节点 keywords）。',
       '规则归因核心贡献与合作模式。',
     ],
     rules: actualServiceRules['two-point-achievement'],

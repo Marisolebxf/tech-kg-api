@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import re
 import threading
@@ -13,81 +12,24 @@ from typing import Any
 
 from infra.graph_db import GraphNotFoundError, TRSGraphClient, get_trs_graph_client
 from infra.graph_db.config import TRSGraphSettings
-from infra.llm import get_llm_client
 from service.base_module import KGModuleScaffoldService
-
-logger = logging.getLogger(__name__)
 
 PAPER_EDGE_TYPES = frozenset({"AUTHORED_BY"})
 PATENT_EDGE_TYPES = frozenset({"INVENTED_BY"})
 PROJECT_EDGE_TYPES = frozenset({"LEADS", "HAS_PARTICIPANT"})
+KEYWORD_EDGE_TYPE = "HAS_KEYWORD"
 EDGE_LIMIT = 500
+KEYWORD_EDGE_LIMIT = 50
 
 # 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 trs-graph。
 _RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
 _result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _result_cache_lock = threading.Lock()
 
-# 所属领域 LLM：按成果 id+title 缓存，跨专家对复用；限制单次送入条数与超时。
-# 默认异步：请求路径不阻塞等模型（保证 <1s）；COOP_DOMAIN_LLM_SYNC=1 可恢复同步标注。
-_DOMAIN_CACHE_TTL = float(os.getenv("COOP_DOMAIN_CACHE_TTL", "3600"))
-_DOMAIN_LLM_MAX_ITEMS = max(1, int(os.getenv("COOP_DOMAIN_LLM_MAX_ITEMS", "20")))
-_DOMAIN_LLM_TIMEOUT = float(os.getenv("COOP_DOMAIN_LLM_TIMEOUT", "20"))
-_DOMAIN_LLM_SYNC = os.getenv("COOP_DOMAIN_LLM_SYNC", "0").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-_domain_cache: dict[str, tuple[float, list[str]]] = {}
-_domain_cache_lock = threading.Lock()
-_domain_inflight: set[str] = set()
-_domain_inflight_lock = threading.Lock()
-
-_DOMAIN_JSON_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "items": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string"},
-                    "fields": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "maxItems": 5,
-                    },
-                },
-                "required": ["id", "fields"],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": ["items"],
-    "additionalProperties": False,
-}
-
-_DOMAIN_LLM_PROMPT = """你是科技成果领域标注助手。根据下列共同成果的类型与标题，为每条成果推断所属技术领域。
-
-约束：
-1. items 必须覆盖输入中的每一个 id，顺序可不同。
-2. fields 为 1~5 个简短中文领域词，不要空字符串。
-3. 若无法判断，fields 返回 []。
-4. 可参考 hints，但最终以你的判断为准。
-
-输入：
-{payload}
-"""
-
 
 def clear_caches() -> None:
     """清空进程内缓存（测试隔离用）。"""
     _result_cache.clear()
-    with _domain_cache_lock:
-        _domain_cache.clear()
-    with _domain_inflight_lock:
-        _domain_inflight.clear()
 
 
 TITLE_KEYS = (
@@ -192,8 +134,6 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 if not self._in_time_range(item.get("time"), time_range_start, time_range_end):
                     continue
                 items.append(item)
-
-        self._enrich_fields_with_llm(items)
 
         award_count = sum(len(i.get("awards") or []) for i in items)
         papers = sum(1 for i in items if i["type"] == "paper")
@@ -311,187 +251,62 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             "id": vid,
             "title": self._pick_title(props, vid),
             "time": self._pick_time(props),
-            "fields": self._pick_fields(props),
+            "fields": self._resolve_keyword_fields(graph, vid, props),
             "awards": awards,
             "evaluation": self._pick_evaluation(props),
             "provenance": self._entity_provenance(props, vid),
         }
 
-    @staticmethod
-    def _domain_cache_key(item: dict[str, Any]) -> str:
-        return f"{item.get('id') or ''}|{item.get('title') or ''}"
+    def _resolve_keyword_fields(
+        self, graph: TRSGraphClient, vid: str, props: dict[str, Any]
+    ) -> list[str]:
+        """所属领域：优先 HAS_KEYWORD→Keyword；否则回退成果节点 keywords 等属性（专利双写）。"""
+        from_edges = self._fields_from_has_keyword(graph, vid)
+        if from_edges:
+            return from_edges
+        return self._pick_fields(props)
 
-    def _enrich_fields_with_llm(self, items: list[dict[str, Any]]) -> None:
-        """所属领域：优先用缓存；未命中则默认异步调 LLM 写缓存，请求立即回图内 fields。
-
-        同步模式（COOP_DOMAIN_LLM_SYNC=1）会阻塞等待模型，仅用于调试/兼容旧行为。
-        """
-        if not items:
-            return
-
-        now = time.monotonic()
-        pending: list[dict[str, Any]] = []
-        with _domain_cache_lock:
-            for item in items:
-                key = self._domain_cache_key(item)
-                entry = _domain_cache.get(key)
-                if entry and entry[0] > now:
-                    item["fields"] = list(entry[1])
-                else:
-                    pending.append(item)
-
-        if not pending:
-            logger.info("所属领域：全部命中缓存，跳过 LLM")
-            return
-
-        if _DOMAIN_LLM_SYNC:
-            self._label_domains_with_llm(pending)
-            return
-
-        # 异步：本次响应用图内 fields，后台写入领域缓存供后续请求
-        snapshots = [
-            {
-                "id": str(item.get("id") or ""),
-                "type": str(item.get("type") or ""),
-                "title": str(item.get("title") or ""),
-                "fields": list(item.get("fields") or []),
-            }
-            for item in pending[:_DOMAIN_LLM_MAX_ITEMS]
-        ]
-        self._schedule_domain_llm(snapshots)
-
-    def _schedule_domain_llm(self, snapshots: list[dict[str, Any]]) -> None:
-        if not snapshots:
-            return
-        keys = [self._domain_cache_key(row) for row in snapshots]
-        with _domain_inflight_lock:
-            todo_keys = [k for k in keys if k not in _domain_inflight]
-            if not todo_keys:
-                logger.info("所属领域：已有后台任务在标注，跳过重复调度")
-                return
-            _domain_inflight.update(todo_keys)
-        todo = [row for row, key in zip(snapshots, keys, strict=True) if key in todo_keys]
-
-        def _worker() -> None:
-            try:
-                self._label_domains_with_llm(todo)
-            finally:
-                with _domain_inflight_lock:
-                    _domain_inflight.difference_update(todo_keys)
-
-        threading.Thread(
-            target=_worker,
-            name="coop-domain-llm",
-            daemon=True,
-        ).start()
-        logger.info("所属领域：已后台调度 LLM 标注 %s 条", len(todo))
-
-    def _label_domains_with_llm(self, items: list[dict[str, Any]]) -> None:
-        """对给定成果调用 LLM 写回 fields，并写入领域缓存。"""
-        if not items:
-            return
-        llm = get_llm_client()
-        if llm is None:
-            logger.info("所属领域：未配置 LLM，保留图内 fields")
-            return
-
-        to_label = items[:_DOMAIN_LLM_MAX_ITEMS]
-        payload = [
-            {
-                "id": str(item.get("id") or ""),
-                "type": str(item.get("type") or ""),
-                "title": str(item.get("title") or ""),
-                "hints": list(item.get("fields") or []),
-            }
-            for item in to_label
-        ]
-        prompt = _DOMAIN_LLM_PROMPT.format(
-            payload=json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        )
-        max_tokens = min(1024, 128 + 48 * len(to_label))
-        t0 = time.monotonic()
-        raw = llm.synthesize_json(
-            prompt,
-            schema=_DOMAIN_JSON_SCHEMA,
-            schema_name="cooperation_achievement_domains",
-            max_tokens=max_tokens,
-            modes=("json_object", "prompt_only"),
-            timeout=_DOMAIN_LLM_TIMEOUT,
-        )
-        logger.info(
-            "所属领域：LLM 标注 %s 条，耗时 %.2fs sync=%s",
-            len(to_label),
-            time.monotonic() - t0,
-            _DOMAIN_LLM_SYNC,
-        )
-        parsed = self._parse_domain_llm_json(raw)
-        if parsed is None:
-            logger.warning("所属领域：LLM 未返回严格 JSON，保留图内 fields")
-            return
-
-        by_id = {
-            str(row.get("id") or ""): self._normalize_llm_fields(row.get("fields"))
-            for row in parsed
-            if isinstance(row, dict) and row.get("id")
-        }
-        expire = time.monotonic() + _DOMAIN_CACHE_TTL
-        with _domain_cache_lock:
-            for item in to_label:
-                vid = str(item.get("id") or "")
-                if vid not in by_id:
-                    continue
-                fields = by_id[vid]
-                item["fields"] = fields
-                _domain_cache[self._domain_cache_key(item)] = (expire, list(fields))
-
-    @staticmethod
-    def _normalize_llm_fields(value: Any) -> list[str]:
-        if not isinstance(value, list):
+    def _fields_from_has_keyword(self, graph: TRSGraphClient, vid: str) -> list[str]:
+        try:
+            edges = graph.get_node_edges(
+                vid,
+                direction="out",
+                edge_type=KEYWORD_EDGE_TYPE,
+                limit=KEYWORD_EDGE_LIMIT,
+            )
+        except GraphNotFoundError:
             return []
-        out: list[str] = []
+
         seen: set[str] = set()
-        for item in value:
-            text = str(item or "").strip()
-            if not text or text in seen:
+        out: list[str] = []
+        for edge in edges or []:
+            if str(getattr(edge, "type", "") or "") != KEYWORD_EDGE_TYPE:
                 continue
-            seen.add(text)
-            out.append(text)
-            if len(out) >= 5:
-                break
+            kid = self._neighbor_id(edge, vid)
+            if not kid:
+                continue
+            try:
+                knode = graph.get_node(kid)
+            except GraphNotFoundError:
+                knode = None
+            kprops = (getattr(knode, "properties", None) or {}) if knode else {}
+            label = (
+                self._as_keyword_label(kprops.get("keyword"))
+                or self._as_keyword_label(kprops.get("name_zh"))
+                or self._as_keyword_label(kprops.get("name"))
+            )
+            if not label or label in seen:
+                continue
+            seen.add(label)
+            out.append(label)
         return out
 
     @staticmethod
-    def _parse_domain_llm_json(text: str | None) -> list[dict[str, Any]] | None:
-        """解析所属领域 LLM 响应：必须是含 items 数组的严格 JSON 对象。"""
-        if not text or not str(text).strip():
+    def _as_keyword_label(value: Any) -> str | None:
+        if value is None:
             return None
-        cleaned = str(text).strip()
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-        cleaned = cleaned.strip()
-
-        def _as_items(data: Any) -> list[dict[str, Any]] | None:
-            if not isinstance(data, dict):
-                return None
-            items = data.get("items")
-            if not isinstance(items, list):
-                return None
-            return [row for row in items if isinstance(row, dict)]
-
-        try:
-            return _as_items(json.loads(cleaned))
-        except (TypeError, ValueError, json.JSONDecodeError):
-            pass
-
-        # 兼容模型偶发多输出的尾部字符（如多余 }），用 raw_decode 取首个完整对象
-        start = cleaned.find("{")
-        if start == -1:
-            return None
-        try:
-            data, _ = json.JSONDecoder().raw_decode(cleaned[start:])
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return None
-        return _as_items(data)
+        text = str(value).strip()
+        return text or None
 
     @staticmethod
     def _entity_provenance(props: dict[str, Any], vid: str) -> dict[str, str]:
@@ -530,7 +345,17 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 out.extend(cls._coerce_field_values(item))
             return out
         if isinstance(val, dict):
-            for key in ("name", "label", "value", "keyword", "field"):
+            for key in (
+                "zhName",
+                "name_zh",
+                "name",
+                "label",
+                "value",
+                "keyword",
+                "field",
+                "enName",
+                "name_en",
+            ):
                 if val.get(key):
                     return cls._coerce_field_values(val.get(key))
             return []
@@ -878,7 +703,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
 
         evidence = [
             "按论文、专利、项目邻居求交汇总共同成果。",
-            "所属领域默认异步 LLM 标注（不阻塞接口；命中缓存或失败时用图内关键词）。",
+            "所属领域取自成果 HAS_KEYWORD→Keyword（专利无边时回退节点 keywords 属性）。",
             f"规则归因：核心贡献={core}；合作模式={mode}。",
         ]
 

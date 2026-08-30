@@ -18,15 +18,6 @@ def _isolate_caches():
     clear_caches()
 
 
-@pytest.fixture(autouse=True)
-def _disable_llm_by_default(monkeypatch):
-    """默认不打真实 LLM，避免单测依赖外网/密钥。"""
-    monkeypatch.setattr(
-        "service.expert_cooperation_achievement.get_llm_client",
-        lambda: None,
-    )
-
-
 def _node(nid: str, props: dict | None = None, labels: list[str] | None = None):
     return SimpleNamespace(id=nid, properties=props or {}, labels=labels or ["Person"])
 
@@ -177,11 +168,7 @@ def test_in_time_range_respects_month_and_day_bounds():
     assert svc._in_time_range("unknown", None, None) is True
 
 
-def test_query_filters_items_after_time_range_end(monkeypatch):
-    monkeypatch.setattr(
-        "service.expert_cooperation_achievement.get_llm_client",
-        lambda: None,
-    )
+def test_query_filters_items_after_time_range_end():
     nodes = {
         "S1": _node("S1", {"name_zh": "甲"}),
         "S2": _node("S2", {"name_zh": "乙"}),
@@ -211,11 +198,7 @@ def test_query_filters_items_after_time_range_end(monkeypatch):
     assert resp["summary"]["papers"] == 1
 
 
-def test_query_excludes_items_without_time_when_range_set(monkeypatch):
-    monkeypatch.setattr(
-        "service.expert_cooperation_achievement.get_llm_client",
-        lambda: None,
-    )
+def test_query_excludes_items_without_time_when_range_set():
     nodes = {
         "S1": _node("S1", {"name_zh": "甲"}),
         "S2": _node("S2", {"name_zh": "乙"}),
@@ -352,169 +335,58 @@ def test_does_not_treat_project_level_as_award():
     assert resp["items"][0]["awards"] == []
 
 
-def test_enrich_fields_with_strict_llm_json(monkeypatch):
-    monkeypatch.setattr(
-        "service.expert_cooperation_achievement._DOMAIN_LLM_SYNC",
-        True,
-    )
+def test_fields_from_has_keyword_edges():
+    """所属领域优先走 HAS_KEYWORD→Keyword.keyword。"""
     nodes = {
         "S1": _node("S1", {"name_zh": "甲"}),
         "S2": _node("S2", {"name_zh": "乙"}),
-        "P1": _node("P1", {"title": "异构图对齐方法", "year": "2022", "keywords": "旧关键词"}),
+        "P1": _node("P1", {"title": "异构图对齐方法", "year": "2022"}),
+        "K1": _node("K1", {"keyword": "异构图"}, labels=["Keyword"]),
+        "K2": _node("K2", {"keyword": "实体关联"}, labels=["Keyword"]),
     }
     edges = {
         "S1": [_edge("AUTHORED_BY", "P1", "S1")],
         "S2": [_edge("AUTHORED_BY", "P1", "S2")],
+        "P1": [
+            _edge("HAS_KEYWORD", "P1", "K1"),
+            _edge("HAS_KEYWORD", "P1", "K2"),
+        ],
     }
     graph = MagicMock()
     graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
     graph.get_node_edges = MagicMock(side_effect=lambda nid, **kw: edges.get(str(nid), []))
     graph._settings = SimpleNamespace(space="dev")
-
-    llm = MagicMock()
-    llm.synthesize_json.return_value = '{"items":[{"id":"P1","fields":["异构图","实体关联"]}]}'
-    monkeypatch.setattr(
-        "service.expert_cooperation_achievement.get_llm_client",
-        lambda: llm,
-    )
 
     resp = _svc(graph).query(source_expert_id="S1", target_expert_id="S2")
     assert resp["items"][0]["fields"] == ["异构图", "实体关联"]
     domain_row = next(row for row in resp["summaryRows"] if row["label"] == "所属领域")
     assert domain_row["value"] == "异构图、实体关联"
-    llm.synthesize_json.assert_called_once()
-    kwargs = llm.synthesize_json.call_args.kwargs
-    assert kwargs["schema_name"] == "cooperation_achievement_domains"
-    assert kwargs["schema"]["required"] == ["items"]
-    assert kwargs["modes"] == ("json_object", "prompt_only")
-    prompt = llm.synthesize_json.call_args.args[0]
-    assert "P1" in prompt
-    assert "技术领域" in prompt
 
 
-def test_enrich_fields_async_keeps_graph_fields_on_first_response(monkeypatch):
-    """默认异步：首响不阻塞 LLM，保留图内关键词。"""
-    monkeypatch.setattr(
-        "service.expert_cooperation_achievement._DOMAIN_LLM_SYNC",
-        False,
-    )
+def test_fields_fallback_to_node_keywords_when_no_has_keyword():
+    """无 HAS_KEYWORD 时回退成果节点 keywords 属性（专利双写场景）。"""
     nodes = {
         "S1": _node("S1", {"name_zh": "甲"}),
         "S2": _node("S2", {"name_zh": "乙"}),
-        "P1": _node("P1", {"title": "异构图对齐方法", "year": "2022", "keywords": "旧关键词"}),
+        "PT1": _node(
+            "PT1",
+            {
+                "title_zh": "一种图谱方法",
+                "year": "2022",
+                "keywords": [{"zhName": "知识图谱", "enName": "KG"}, {"zhName": "推理"}],
+            },
+        ),
     }
     edges = {
-        "S1": [_edge("AUTHORED_BY", "P1", "S1")],
-        "S2": [_edge("AUTHORED_BY", "P1", "S2")],
+        "S1": [_edge("INVENTED_BY", "PT1", "S1")],
+        "S2": [_edge("INVENTED_BY", "PT1", "S2")],
     }
     graph = MagicMock()
     graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
     graph.get_node_edges = MagicMock(side_effect=lambda nid, **kw: edges.get(str(nid), []))
     graph._settings = SimpleNamespace(space="dev")
-
-    llm = MagicMock()
-    llm.synthesize_json.return_value = '{"items":[{"id":"P1","fields":["异构图","实体关联"]}]}'
-    monkeypatch.setattr(
-        "service.expert_cooperation_achievement.get_llm_client",
-        lambda: llm,
-    )
-    scheduled: list[list[dict]] = []
-
-    def _fake_schedule(self, snapshots):
-        scheduled.append(snapshots)
-
-    monkeypatch.setattr(
-        ExpertCooperationAchievementService,
-        "_schedule_domain_llm",
-        _fake_schedule,
-    )
 
     resp = _svc(graph).query(source_expert_id="S1", target_expert_id="S2")
-    assert "旧关键词" in resp["items"][0]["fields"]
-    assert llm.synthesize_json.call_count == 0
-    assert len(scheduled) == 1
-    assert scheduled[0][0]["id"] == "P1"
-
-
-def test_enrich_fields_uses_domain_cache_without_second_llm(monkeypatch):
-    monkeypatch.setattr(
-        "service.expert_cooperation_achievement._DOMAIN_LLM_SYNC",
-        True,
-    )
-    nodes = {
-        "S1": _node("S1", {"name_zh": "甲"}),
-        "S2": _node("S2", {"name_zh": "乙"}),
-        "S3": _node("S3", {"name_zh": "丙"}),
-        "P1": _node("P1", {"title": "异构图对齐方法", "year": "2022", "keywords": "旧关键词"}),
-    }
-    edges = {
-        "S1": [_edge("AUTHORED_BY", "P1", "S1")],
-        "S2": [_edge("AUTHORED_BY", "P1", "S2")],
-        "S3": [_edge("AUTHORED_BY", "P1", "S3")],
-    }
-    graph = MagicMock()
-    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
-    graph.get_node_edges = MagicMock(side_effect=lambda nid, **kw: edges.get(str(nid), []))
-    graph._settings = SimpleNamespace(space="dev")
-
-    llm = MagicMock()
-    llm.synthesize_json.return_value = '{"items":[{"id":"P1","fields":["异构图","实体关联"]}]}'
-    monkeypatch.setattr(
-        "service.expert_cooperation_achievement.get_llm_client",
-        lambda: llm,
-    )
-
-    svc = _svc(graph)
-    first = svc.query(source_expert_id="S1", target_expert_id="S2")
-    assert first["items"][0]["fields"] == ["异构图", "实体关联"]
-    assert llm.synthesize_json.call_count == 1
-
-    # 另一对专家共享同一成果：应命中领域缓存，不再打 LLM
-    second = svc.query(source_expert_id="S1", target_expert_id="S3")
-    assert second["items"][0]["fields"] == ["异构图", "实体关联"]
-    assert llm.synthesize_json.call_count == 1
-
-
-def test_enrich_fields_keeps_graph_when_llm_json_invalid(monkeypatch):
-    monkeypatch.setattr(
-        "service.expert_cooperation_achievement._DOMAIN_LLM_SYNC",
-        True,
-    )
-    nodes = {
-        "S1": _node("S1", {"name_zh": "甲"}),
-        "S2": _node("S2", {"name_zh": "乙"}),
-        "P1": _node("P1", {"title": "论文A", "year": "2020", "keywords": "图谱,AI"}),
-    }
-    edges = {
-        "S1": [_edge("AUTHORED_BY", "P1", "S1")],
-        "S2": [_edge("AUTHORED_BY", "P1", "S2")],
-    }
-    graph = MagicMock()
-    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
-    graph.get_node_edges = MagicMock(side_effect=lambda nid, **kw: edges.get(str(nid), []))
-    graph._settings = SimpleNamespace(space="dev")
-
-    llm = MagicMock()
-    llm.synthesize_json.return_value = "所属领域是人工智能"  # 非严格 JSON
-    monkeypatch.setattr(
-        "service.expert_cooperation_achievement.get_llm_client",
-        lambda: llm,
-    )
-
-    resp = _svc(graph).query(source_expert_id="S1", target_expert_id="S2")
-    assert "图谱" in resp["items"][0]["fields"]
-    assert "AI" in resp["items"][0]["fields"]
-
-
-def test_parse_domain_llm_json_rejects_non_object():
-    svc = ExpertCooperationAchievementService()
-    assert svc._parse_domain_llm_json('[{"id":"P1","fields":["AI"]}]') is None
-    assert svc._parse_domain_llm_json('{"items":[{"id":"P1","fields":["AI"]}]}') == [
-        {"id": "P1", "fields": ["AI"]}
-    ]
-
-
-def test_parse_domain_llm_json_tolerates_trailing_junk():
-    svc = ExpertCooperationAchievementService()
-    raw = '{"items":[{"id":"P1","fields":["风电","数据定价"]}]} }'
-    assert svc._parse_domain_llm_json(raw) == [{"id": "P1", "fields": ["风电", "数据定价"]}]
+    assert resp["items"][0]["type"] == "patent"
+    assert "知识图谱" in resp["items"][0]["fields"]
+    assert "推理" in resp["items"][0]["fields"]

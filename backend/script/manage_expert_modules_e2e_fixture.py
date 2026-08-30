@@ -8,6 +8,9 @@
 ``--confirm-cleanup EXPERT_MODULES_E2E_V1``。脚本仅允许
 ``MYSQL_DATABASE=gkx_element`` 且 ``TRS_GRAPH_SPACE`` 为 ``dev`` 或 ``test``。
 
+ID 形态对齐真实库（学者 8 位、论文整数、项目 UUID、专利 CN…B），但使用预留号段；
+清理不依赖名称前缀，按本脚本定义的白名单删除（并兼容清理旧版 ``expert_e2e_v1_`` 数据）。
+
 用法（本文件仅提供脚本，不会自动执行）：
 
     uv run python script/manage_expert_modules_e2e_fixture.py
@@ -38,10 +41,13 @@ from infra.graph_db import close_trs_graph_client, get_trs_graph_client
 from infra.mysql import MySQLClient
 
 BATCH = "EXPERT_MODULES_E2E_V1"
-PREFIX = "expert_e2e_v1_"
-PAPER_ID_BASE = 9930000000000000
+# 预留号段：形态像真，与现网抽样不冲突；清理靠白名单 + BATCH 确认。
+PAPER_ID_BASE = 889900000  # paper ids: 889900001 .. 889900080
 EXPECTED_PERSONS = 100
 EXPECTED_ACHIEVEMENTS = 100
+# 旧版 ID（expert_e2e_v1_* / 9930…），apply/cleanup 时一并清除以免残留。
+LEGACY_PREFIX = "expert_e2e_v1_"
+LEGACY_PAPER_ID_BASE = 9930000000000000
 
 
 @dataclass(frozen=True)
@@ -56,7 +62,8 @@ class Person:
 
     @property
     def scholar_id(self) -> str:
-        return f"{PREFIX}{self.no:03d}"
+        # 对齐 dwd_scholar.scholar_id：8 位字母数字，如 007Rb117 → 9F9A0001
+        return f"9F9A{self.no:04d}"
 
     @property
     def vid(self) -> str:
@@ -95,7 +102,8 @@ class Project:
 
     @property
     def mysql_id(self) -> str:
-        return f"{PREFIX}project_{self.no:03d}"
+        # 对齐 dwd_zh_project.id：UUID
+        return f"9f9a0001-0000-4000-a000-{self.no:012d}"
 
     @property
     def vid(self) -> str:
@@ -113,11 +121,64 @@ class Patent:
 
     @property
     def patent_id(self) -> str:
-        return f"{PREFIX}patent_{self.no:03d}"
+        # 对齐 dwd_patent.patent_id：CN + 数字 + 后缀字母，如 CN103073024B
+        return f"CN8899{self.no:06d}B"
+
+    @property
+    def row_id(self) -> str:
+        return f"9f9a0002-0000-4000-a000-{self.no:012d}"
+
+    @property
+    def title_row_id(self) -> str:
+        return f"9f9a0003-0000-4000-a000-{self.no:012d}"
 
     @property
     def vid(self) -> str:
         return f"patent_{self.patent_id}"
+
+
+def _sql_in(column: str, values: list[Any], prefix: str) -> tuple[str, dict[str, Any]]:
+    """构造 ``col IN (:p0, :p1, ...)`` 与参数字典；values 为空时返回恒假条件。"""
+    if not values:
+        return "1=0", {}
+    params = {f"{prefix}{i}": v for i, v in enumerate(values)}
+    placeholders = ", ".join(f":{prefix}{i}" for i in range(len(values)))
+    return f"{column} IN ({placeholders})", params
+
+
+def fixture_scholar_ids() -> list[str]:
+    return [p.scholar_id for p in people()]
+
+
+def fixture_paper_ids() -> list[int]:
+    return [p.mysql_id for p in papers()]
+
+
+def fixture_project_ids() -> list[str]:
+    return [p.mysql_id for p in projects()]
+
+
+def fixture_patent_ids() -> list[str]:
+    return [p.patent_id for p in patents()]
+
+
+def fixture_vids() -> list[str]:
+    return [
+        *(p.vid for p in people()),
+        *(p.vid for p in papers()),
+        *(p.vid for p in projects()),
+        *(p.vid for p in patents()),
+    ]
+
+
+def legacy_fixture_vids() -> list[str]:
+    """旧版 expert_e2e_v1_* / 9930… 图节点，迁移时一并 detach 删除。"""
+    return [
+        *(f"person_{LEGACY_PREFIX}{i:03d}" for i in range(1, EXPECTED_PERSONS + 1)),
+        *(f"paper_{LEGACY_PAPER_ID_BASE + p.no}" for p in papers()),
+        *(f"project_{LEGACY_PREFIX}project_{p.no:03d}" for p in projects()),
+        *(f"patent_{LEGACY_PREFIX}patent_{p.no:03d}" for p in patents()),
+    ]
 
 
 NAMES = (
@@ -628,37 +689,79 @@ def plan() -> dict[str, Any]:
             "projectPersonEdges": sum(1 + len(x.participants) for x in prs),
             "inventedByEdges": sum(len(x.inventors) for x in pts),
         },
+        "sampleIds": {
+            "person1": ps[0].vid,
+            "person4": ps[3].vid,
+            "paper1": pas[0].vid,
+            "project1": prs[0].vid,
+            "patent1": pts[0].vid,
+            "scholarId1": ps[0].scholar_id,
+        },
         "scenarios": scenario_manifest(),
     }
 
 
 def _delete_mysql(con) -> None:
-    params = {
-        "prefix": PREFIX + "%",
-        "batch": BATCH,
-        "paper_low": PAPER_ID_BASE + 1,
-        "paper_high": PAPER_ID_BASE + 99,
+    """按白名单删除本批次；并兼容清理旧版 PREFIX / 9930… 残留。"""
+    scholar_ids = fixture_scholar_ids()
+    paper_ids = fixture_paper_ids()
+    project_ids = fixture_project_ids()
+    patent_ids = fixture_patent_ids()
+    sid_in, sid_params = _sql_in("scholar_id", scholar_ids, "s")
+    cosid_in, cosid_params = _sql_in("co_scholar_id", scholar_ids, "c")
+    paper_in, paper_params = _sql_in("paper_id", paper_ids, "p")
+    paper_id_in, paper_id_params = _sql_in("id", paper_ids, "pi")
+    proj_in, proj_params = _sql_in("id", project_ids, "pj")
+    patent_in, patent_params = _sql_in("patent_id", patent_ids, "pt")
+    scholar_row_in, scholar_row_params = _sql_in("scholar_id", scholar_ids, "sr")
+
+    legacy = {
+        "legacy_prefix": LEGACY_PREFIX + "%",
+        "legacy_paper_low": LEGACY_PAPER_ID_BASE + 1,
+        "legacy_paper_high": LEGACY_PAPER_ID_BASE + 99,
     }
+
     con.execute(
         text(
-            "DELETE FROM dwd_scholar_coauthor WHERE scholar_id LIKE :prefix OR co_scholar_id LIKE :prefix"
+            f"DELETE FROM dwd_scholar_coauthor WHERE ({sid_in}) OR ({cosid_in}) "
+            "OR scholar_id LIKE :legacy_prefix OR co_scholar_id LIKE :legacy_prefix"
         ),
-        params,
+        {**sid_params, **cosid_params, **legacy},
     )
     con.execute(
         text(
-            "DELETE FROM dwd_scholar_paper_relation WHERE scholar_id LIKE :prefix OR paper_id BETWEEN :paper_low AND :paper_high"
+            f"DELETE FROM dwd_scholar_paper_relation WHERE ({sid_in}) OR ({paper_in}) "
+            "OR scholar_id LIKE :legacy_prefix OR paper_id BETWEEN :legacy_paper_low AND :legacy_paper_high"
         ),
-        params,
+        {**sid_params, **paper_params, **legacy},
     )
     con.execute(
-        text("DELETE FROM dwd_scholar_papers WHERE id BETWEEN :paper_low AND :paper_high"), params
+        text(
+            f"DELETE FROM dwd_scholar_papers WHERE ({paper_id_in}) "
+            "OR id BETWEEN :legacy_paper_low AND :legacy_paper_high"
+        ),
+        {**paper_id_params, **legacy},
     )
-    con.execute(text("DELETE FROM dwd_zh_project_output WHERE id LIKE :prefix"), params)
-    con.execute(text("DELETE FROM dwd_zh_project WHERE id LIKE :prefix"), params)
-    con.execute(text("DELETE FROM dwd_patent_title WHERE patent_id LIKE :prefix"), params)
-    con.execute(text("DELETE FROM dwd_patent WHERE patent_id LIKE :prefix"), params)
-    con.execute(text("DELETE FROM dwd_scholar WHERE scholar_id LIKE :prefix"), params)
+    con.execute(
+        text(f"DELETE FROM dwd_zh_project_output WHERE ({proj_in}) OR id LIKE :legacy_prefix"),
+        {**proj_params, **legacy},
+    )
+    con.execute(
+        text(f"DELETE FROM dwd_zh_project WHERE ({proj_in}) OR id LIKE :legacy_prefix"),
+        {**proj_params, **legacy},
+    )
+    con.execute(
+        text(f"DELETE FROM dwd_patent_title WHERE ({patent_in}) OR patent_id LIKE :legacy_prefix"),
+        {**patent_params, **legacy},
+    )
+    con.execute(
+        text(f"DELETE FROM dwd_patent WHERE ({patent_in}) OR patent_id LIKE :legacy_prefix"),
+        {**patent_params, **legacy},
+    )
+    con.execute(
+        text(f"DELETE FROM dwd_scholar WHERE ({scholar_row_in}) OR scholar_id LIKE :legacy_prefix"),
+        {**scholar_row_params, **legacy},
+    )
 
 
 def write_mysql() -> dict[str, int]:
@@ -679,7 +782,7 @@ def write_mysql() -> dict[str, int]:
                 [
                     {
                         "sid": p.scholar_id,
-                        "name_en": f"E2E Scholar {p.no:03d}",
+                        "name_en": f"Scholar {p.scholar_id}",
                         "name_zh": p.name,
                         "bio": f"synthetic fixture; batch={BATCH}",
                         "bio_zh": f"虚构端到端测试数据；批次={BATCH}",
@@ -703,7 +806,7 @@ def write_mysql() -> dict[str, int]:
                     {
                         "source": people()[a - 1].scholar_id,
                         "target": people()[b - 1].scholar_id,
-                        "name_en": f"E2E Scholar {b:03d}",
+                        "name_en": f"Scholar {people()[b - 1].scholar_id}",
                         "name_zh": people()[b - 1].name,
                         "count": count,
                         "now": now,
@@ -727,8 +830,8 @@ def write_mysql() -> dict[str, int]:
                         "url": f"https://example.invalid/{BATCH}/paper/{p.no}",
                         "published": datetime(p.year, 6, 1) if p.year else None,
                         "abstract_zh": f"研究领域：{'、'.join(p.fields)}；测试奖项：{'、'.join(p.awards) or '无'}",
-                        "abstract_en": "Synthetic E2E fixture record.",
-                        "doi": f"10.9999/{PREFIX}paper.{p.no}",
+                        "abstract_en": "Synthetic fixture record.",
+                        "doi": f"10.1000/fxkg.{p.mysql_id}",
                         "now": now,
                     }
                     for p in papers()
@@ -761,7 +864,7 @@ def write_mysql() -> dict[str, int]:
                 [
                     {
                         "id": p.mysql_id,
-                        "number": f"E2E-PROJECT-{p.no:03d}",
+                        "number": f"NSFC-8899-{p.no:04d}",
                         "title": p.title,
                         "batch": BATCH,
                         "approval_year": p.year,
@@ -802,9 +905,9 @@ def write_mysql() -> dict[str, int]:
                  :first_inventor,:keywords,'G06F16/36',:batch,:now,:now)"""),
                 [
                     {
-                        "row_id": f"e2e-patent-{p.no:03d}",
+                        "row_id": p.row_id,
                         "patent_id": p.patent_id,
-                        "publication_number": f"CN{p.year}E2E{p.no:03d}A",
+                        "publication_number": f"CN{p.year}8899{p.no:04d}A",
                         "publication_reference": json.dumps(
                             {"year": p.year, "date": f"{p.year}-09-01"}, ensure_ascii=False
                         ),
@@ -832,7 +935,7 @@ def write_mysql() -> dict[str, int]:
                 VALUES (:row_id,:patent_id,:titles,:title_en,:title_zh,:batch,:now,:now)"""),
                 [
                     {
-                        "row_id": f"e2e-title-{p.no:03d}",
+                        "row_id": p.title_row_id,
                         "patent_id": p.patent_id,
                         "titles": json.dumps({"zh": p.title, "en": p.title_en}, ensure_ascii=False),
                         "title_en": p.title_en,
@@ -850,21 +953,31 @@ def write_mysql() -> dict[str, int]:
 
 def sync_graph_from_mysql() -> dict[str, int]:
     """只从刚写入 MySQL 的隔离记录回读，再幂等同步到当前 TRS_GRAPH_SPACE；不使用内存定义直接写图。"""
+    scholar_ids = fixture_scholar_ids()
+    paper_ids = fixture_paper_ids()
+    project_ids = fixture_project_ids()
+    patent_ids = fixture_patent_ids()
+    sid_in, sid_params = _sql_in("scholar_id", scholar_ids, "s")
+    paper_id_in, paper_id_params = _sql_in("id", paper_ids, "pi")
+    paper_in, paper_params = _sql_in("paper_id", paper_ids, "p")
+    proj_in, proj_params = _sql_in("id", project_ids, "pj")
+    patent_in, patent_params = _sql_in("p.patent_id", patent_ids, "pt")
+
     client = MySQLClient(database="gkx_element")
     try:
         with client.engine.connect() as con:
             scholar_rows = (
                 con.execute(
-                    text("SELECT * FROM dwd_scholar WHERE scholar_id LIKE :p ORDER BY scholar_id"),
-                    {"p": PREFIX + "%"},
+                    text(f"SELECT * FROM dwd_scholar WHERE {sid_in} ORDER BY scholar_id"),
+                    sid_params,
                 )
                 .mappings()
                 .all()
             )
             paper_rows = (
                 con.execute(
-                    text("SELECT * FROM dwd_scholar_papers WHERE id BETWEEN :a AND :b ORDER BY id"),
-                    {"a": PAPER_ID_BASE + 1, "b": PAPER_ID_BASE + 99},
+                    text(f"SELECT * FROM dwd_scholar_papers WHERE {paper_id_in} ORDER BY id"),
+                    paper_id_params,
                 )
                 .mappings()
                 .all()
@@ -872,25 +985,25 @@ def sync_graph_from_mysql() -> dict[str, int]:
             paper_rel_rows = (
                 con.execute(
                     text(
-                        "SELECT paper_id,scholar_id FROM dwd_scholar_paper_relation WHERE paper_id BETWEEN :a AND :b"
+                        f"SELECT paper_id,scholar_id FROM dwd_scholar_paper_relation WHERE {paper_in}"
                     ),
-                    {"a": PAPER_ID_BASE + 1, "b": PAPER_ID_BASE + 99},
+                    paper_params,
                 )
                 .mappings()
                 .all()
             )
             project_rows = (
                 con.execute(
-                    text("SELECT * FROM dwd_zh_project WHERE id LIKE :p ORDER BY id"),
-                    {"p": PREFIX + "project_%"},
+                    text(f"SELECT * FROM dwd_zh_project WHERE {proj_in} ORDER BY id"),
+                    proj_params,
                 )
                 .mappings()
                 .all()
             )
             project_output_rows = (
                 con.execute(
-                    text("SELECT id,output_awards FROM dwd_zh_project_output WHERE id LIKE :p"),
-                    {"p": PREFIX + "project_%"},
+                    text(f"SELECT id,output_awards FROM dwd_zh_project_output WHERE {proj_in}"),
+                    proj_params,
                 )
                 .mappings()
                 .all()
@@ -898,9 +1011,11 @@ def sync_graph_from_mysql() -> dict[str, int]:
             patent_rows = (
                 con.execute(
                     text(
-                        "SELECT p.*,t.title_zh,t.title_localized FROM dwd_patent p LEFT JOIN dwd_patent_title t ON t.patent_id=p.patent_id WHERE p.patent_id LIKE :p ORDER BY p.patent_id"
+                        "SELECT p.*,t.title_zh,t.title_localized FROM dwd_patent p "
+                        f"LEFT JOIN dwd_patent_title t ON t.patent_id=p.patent_id WHERE {patent_in} "
+                        "ORDER BY p.patent_id"
                     ),
-                    {"p": PREFIX + "patent_%"},
+                    patent_params,
                 )
                 .mappings()
                 .all()
@@ -908,9 +1023,10 @@ def sync_graph_from_mysql() -> dict[str, int]:
             coauthor_rows = (
                 con.execute(
                     text(
-                        "SELECT scholar_id,co_scholar_id,co_paper_count FROM dwd_scholar_coauthor WHERE scholar_id LIKE :p"
+                        "SELECT scholar_id,co_scholar_id,co_paper_count FROM dwd_scholar_coauthor "
+                        f"WHERE {sid_in}"
                     ),
-                    {"p": PREFIX + "%"},
+                    sid_params,
                 )
                 .mappings()
                 .all()
@@ -922,12 +1038,7 @@ def sync_graph_from_mysql() -> dict[str, int]:
     now = datetime.now().strftime("%F %T")
     output_awards = {r["id"]: r["output_awards"] for r in project_output_rows}
 
-    for fixture_vid in [
-        *(p.vid for p in people()),
-        *(p.vid for p in papers()),
-        *(p.vid for p in projects()),
-        *(p.vid for p in patents()),
-    ]:
+    for fixture_vid in [*legacy_fixture_vids(), *fixture_vids()]:
         graph.delete_node(fixture_vid, detach=True)
 
     def merge_edge(
@@ -1087,31 +1198,36 @@ def sync_graph_from_mysql() -> dict[str, int]:
 def verify() -> dict[str, Any]:
     """核对 MySQL、图谱、编码、字段一致性和关键业务场景；不写数据。"""
     expected = plan()["counts"]
+    sid_in, sid_params = _sql_in("scholar_id", fixture_scholar_ids(), "s")
+    paper_id_in, paper_id_params = _sql_in("id", fixture_paper_ids(), "pi")
+    proj_in, proj_params = _sql_in("id", fixture_project_ids(), "pj")
+    patent_in, patent_params = _sql_in("patent_id", fixture_patent_ids(), "pt")
     client = MySQLClient(database="gkx_element")
     with client.engine.connect() as con:
         mysql_counts = {
             "persons": con.execute(
-                text("SELECT COUNT(*) FROM dwd_scholar WHERE scholar_id LIKE :p"),
-                {"p": PREFIX + "%"},
+                text(f"SELECT COUNT(*) FROM dwd_scholar WHERE {sid_in}"),
+                sid_params,
             ).scalar_one(),
             "papers": con.execute(
-                text("SELECT COUNT(*) FROM dwd_scholar_papers WHERE id BETWEEN :a AND :b"),
-                {"a": PAPER_ID_BASE + 1, "b": PAPER_ID_BASE + 99},
+                text(f"SELECT COUNT(*) FROM dwd_scholar_papers WHERE {paper_id_in}"),
+                paper_id_params,
             ).scalar_one(),
             "projects": con.execute(
-                text("SELECT COUNT(*) FROM dwd_zh_project WHERE id LIKE :p"),
-                {"p": PREFIX + "project_%"},
+                text(f"SELECT COUNT(*) FROM dwd_zh_project WHERE {proj_in}"),
+                proj_params,
             ).scalar_one(),
             "patents": con.execute(
-                text("SELECT COUNT(*) FROM dwd_patent WHERE patent_id LIKE :p"),
-                {"p": PREFIX + "patent_%"},
+                text(f"SELECT COUNT(*) FROM dwd_patent WHERE {patent_in}"),
+                patent_params,
             ).scalar_one(),
         }
         encoding_errors = con.execute(
             text(
-                "SELECT COUNT(*) FROM dwd_scholar WHERE scholar_id LIKE :p AND (name_zh LIKE '%æ%' OR name_zh LIKE '%�%' OR education_background_institution_zh LIKE '%æ%')"
+                f"SELECT COUNT(*) FROM dwd_scholar WHERE {sid_in} AND "
+                "(name_zh LIKE '%æ%' OR name_zh LIKE '%�%' OR education_background_institution_zh LIKE '%æ%')"
             ),
-            {"p": PREFIX + "%"},
+            sid_params,
         ).scalar_one()
     client.dispose()
     graph = get_trs_graph_client()
@@ -1145,6 +1261,7 @@ def verify() -> dict[str, Any]:
         "graph": graph_nodes,
         "encodingErrors": encoding_errors,
         "fieldMismatches": field_mismatches,
+        "sampleIds": plan()["sampleIds"],
         "scenarioManifest": scenario_manifest(),
     }
 
@@ -1153,12 +1270,7 @@ def cleanup() -> dict[str, Any]:
     """仅删除本批次节点和 MySQL 记录；detach 会一并删除本批次关联边。"""
     graph = get_trs_graph_client()
     try:
-        for vid in [
-            *(p.vid for p in people()),
-            *(p.vid for p in papers()),
-            *(p.vid for p in projects()),
-            *(p.vid for p in patents()),
-        ]:
+        for vid in [*legacy_fixture_vids(), *fixture_vids()]:
             graph.delete_node(vid, detach=True)
     finally:
         close_trs_graph_client()
@@ -1168,7 +1280,7 @@ def cleanup() -> dict[str, Any]:
             _delete_mysql(con)
     finally:
         client.dispose()
-    return {"cleaned": BATCH}
+    return {"cleaned": BATCH, "sampleIdsRemoved": plan()["sampleIds"]}
 
 
 def main() -> None:

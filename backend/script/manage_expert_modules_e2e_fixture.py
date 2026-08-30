@@ -1,17 +1,18 @@
-"""两个专家模块的端到端测试数据闭环（MySQL gkx_element -> TRSGraph dev）。
+"""两个专家模块的端到端测试数据闭环（MySQL gkx_element -> TRSGraph）。
 
 覆盖模块：
 1. 科技专家两点合作成果
 2. 科技专家校友关系
 
 安全约束：默认只输出计划；只有 ``--apply`` 才写库；``--cleanup`` 必须同时提供
-``--confirm-cleanup EXPERT_MODULES_E2E_V1``。脚本拒绝连接非 gkx_element/dev 环境。
+``--confirm-cleanup EXPERT_MODULES_E2E_V1``。脚本仅允许
+``MYSQL_DATABASE=gkx_element`` 且 ``TRS_GRAPH_SPACE`` 为 ``dev`` 或 ``test``。
 
 用法（本文件仅提供脚本，不会自动执行）：
 
     uv run python script/manage_expert_modules_e2e_fixture.py
-    uv run python script/manage_expert_modules_e2e_fixture.py --apply
-    uv run python script/manage_expert_modules_e2e_fixture.py --verify
+    TRS_GRAPH_SPACE=test uv run python script/manage_expert_modules_e2e_fixture.py --apply
+    TRS_GRAPH_SPACE=test uv run python script/manage_expert_modules_e2e_fixture.py --verify
     uv run python script/manage_expert_modules_e2e_fixture.py \
       --cleanup --confirm-cleanup EXPERT_MODULES_E2E_V1
 
@@ -557,11 +558,17 @@ COAUTHORS: tuple[tuple[int, int, int], ...] = (
 )
 
 
+ALLOWED_GRAPH_SPACES = frozenset({"dev", "test"})
+
+
 def guard_targets() -> None:
     database = os.getenv("MYSQL_DATABASE", "gkx_element")
     space = os.getenv("TRS_GRAPH_SPACE", "dev")
-    if database != "gkx_element" or space != "dev":
-        raise SystemExit(f"拒绝非测试目标：MYSQL_DATABASE={database!r}, TRS_GRAPH_SPACE={space!r}")
+    if database != "gkx_element" or space not in ALLOWED_GRAPH_SPACES:
+        raise SystemExit(
+            f"拒绝非测试目标：MYSQL_DATABASE={database!r}, TRS_GRAPH_SPACE={space!r}；"
+            f"仅允许 gkx_element + {sorted(ALLOWED_GRAPH_SPACES)}"
+        )
 
 
 def scenario_manifest() -> dict[str, list[str]]:
@@ -607,7 +614,10 @@ def plan() -> dict[str, Any]:
     return {
         "dryRun": True,
         "batch": BATCH,
-        "targets": {"mysql": "gkx_element", "graphSpace": "dev"},
+        "targets": {
+            "mysql": "gkx_element",
+            "graphSpace": os.getenv("TRS_GRAPH_SPACE", "dev"),
+        },
         "counts": {
             "persons": len(ps),
             "papers": len(pas),
@@ -839,7 +849,7 @@ def write_mysql() -> dict[str, int]:
 
 
 def sync_graph_from_mysql() -> dict[str, int]:
-    """只从刚写入 MySQL 的隔离记录回读，再幂等同步到 dev；不使用内存定义直接写图。"""
+    """只从刚写入 MySQL 的隔离记录回读，再幂等同步到当前 TRS_GRAPH_SPACE；不使用内存定义直接写图。"""
     client = MySQLClient(database="gkx_element")
     try:
         with client.engine.connect() as con:
@@ -1064,7 +1074,11 @@ def sync_graph_from_mysql() -> dict[str, int]:
             "REBUILD TAG INDEX person_edu_inst_zh_idx",
             "REBUILD TAG INDEX person_edu_inst_en_idx",
         ):
-            graph.execute_write(query)
+            try:
+                graph.execute_write(query)
+            except Exception as exc:  # noqa: BLE001
+                # 索引长度/重建失败不影响 fixture 主体数据可用性
+                print(f"skip index ddl: {query[:80]} | {exc}")
     finally:
         close_trs_graph_client()
     return plan()["counts"]
@@ -1159,13 +1173,17 @@ def cleanup() -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="两个专家模块的 MySQL -> dev 图空间端到端测试数据闭环"
+        description="两个专家模块的 MySQL -> TRSGraph(dev|test) 端到端测试数据闭环"
     )
     action = parser.add_mutually_exclusive_group()
     action.add_argument(
-        "--apply", action="store_true", help="幂等重建 MySQL 数据并从 MySQL 回读同步到 dev"
+        "--apply",
+        action="store_true",
+        help="幂等重建 MySQL 数据并从 MySQL 回读同步到当前 TRS_GRAPH_SPACE（dev|test）",
     )
-    action.add_argument("--verify", action="store_true", help="只读校验 MySQL 与 dev 图空间")
+    action.add_argument(
+        "--verify", action="store_true", help="只读校验 MySQL 与当前 TRS_GRAPH_SPACE"
+    )
     action.add_argument("--cleanup", action="store_true", help="清理且仅清理本批次")
     parser.add_argument("--confirm-cleanup", help=f"清理确认值必须精确等于 {BATCH}")
     args = parser.parse_args()

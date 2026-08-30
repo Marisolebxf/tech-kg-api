@@ -60,6 +60,7 @@ import {
   indirectSummaryRows,
 } from "../indirect-relation-view";
 import { isFutureMonth, monthRangeToApiDates } from "../utils/month-range";
+import { buildRequestPayload } from "../utils/request-payload";
 
 type PanoramaLayerKey =
   | "core_technology"
@@ -2149,13 +2150,10 @@ function resetParameters({ notify = true }: { notify?: boolean } = {}) {
 }
 
 function buildPayload(): Record<string, unknown> {
-  const payload: Record<string, unknown> = {};
-  for (const field of props.moduleInfo.requestFields) {
-    const v = parameterValues.value[field.name];
-    if (v === undefined || v === "") continue;
-    payload[field.name] = field.type === "number" ? Number(v) : v;
-  }
-  return payload;
+  return buildRequestPayload(
+    props.moduleInfo.requestFields,
+    parameterValues.value,
+  );
 }
 
 function buildAlumniGraph(

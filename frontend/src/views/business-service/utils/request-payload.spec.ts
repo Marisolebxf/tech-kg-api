@@ -7,6 +7,7 @@ const fields: ServiceField[] = [
   { name: 'achievementTypes', type: 'multi-select', description: '' },
   { name: 'educationStage', type: 'string', description: '' },
   { name: 'limitPerType', type: 'number', description: '' },
+  { name: 'includeIndirect', type: 'boolean', description: '' },
   { name: 'timeRangeStart', type: 'month', description: '' },
 ]
 
@@ -17,12 +18,14 @@ describe('buildRequestPayload', () => {
         achievementTypes: 'paper, patent,project',
         educationStage: '本科,硕士',
         limitPerType: '20',
+        includeIndirect: 'true',
         timeRangeStart: '',
       }),
     ).toEqual({
       achievementTypes: ['paper', 'patent', 'project'],
       educationStage: '本科,硕士',
       limitPerType: 20,
+      includeIndirect: true,
     })
   })
 
@@ -32,6 +35,7 @@ describe('buildRequestPayload', () => {
         achievementTypes: '',
         educationStage: '',
         limitPerType: '',
+        includeIndirect: '',
         timeRangeStart: '',
       }),
     ).toEqual({})
@@ -43,8 +47,12 @@ describe('buildRequestPayload', () => {
         achievementTypes: 'paper, ,project,',
         educationStage: '',
         limitPerType: '',
+        includeIndirect: 'false',
         timeRangeStart: '',
       }),
-    ).toEqual({ achievementTypes: ['paper', 'project'] })
+    ).toEqual({
+      achievementTypes: ['paper', 'project'],
+      includeIndirect: false,
+    })
   })
 })

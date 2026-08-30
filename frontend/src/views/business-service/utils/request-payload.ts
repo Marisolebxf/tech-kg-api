@@ -19,7 +19,12 @@ export function buildRequestPayload(
       continue
     }
 
-    payload[field.name] = field.type === 'number' ? Number(value) : value
+    payload[field.name] =
+      field.type === 'boolean'
+        ? value === 'true'
+        : field.type === 'number'
+          ? Number(value)
+          : value
   }
 
   return payload

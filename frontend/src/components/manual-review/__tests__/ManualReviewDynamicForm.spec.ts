@@ -2,20 +2,6 @@ import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import ManualReviewDynamicForm from '../ManualReviewDynamicForm.vue'
 
-Object.defineProperty(window, 'matchMedia', {
-  writable: true,
-  value: (query: string) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: () => undefined,
-    removeListener: () => undefined,
-    addEventListener: () => undefined,
-    removeEventListener: () => undefined,
-    dispatchEvent: () => false,
-  }),
-})
-
 type Section = { type: string; source?: string; target?: string }
 
 const mountForm = (sections: Section[], data: Record<string, unknown> = {}) =>
@@ -44,7 +30,10 @@ describe('七种 displaySchema 渲染', () => {
       candidate: { existingCandidates: [{ id: 'E-1', score: 0.94 }] },
     })
     expect(w.text()).toContain('候选与存量实体')
-    expect(w.find('.arco-select').exists()).toBe(true)
+    expect(w.find('select').exists()).toBe(true)
+    // 裁决选项含 merge/create/retype
+    const options = w.find('select').findAll('option').map((o) => o.attributes('value'))
+    expect(options).toEqual(expect.arrayContaining(['merge', 'create', 'retype']))
   })
   it('evidence-list 渲染关系证据勾选项', () => {
     const w = mountForm([{ type: 'evidence-list' }], { evidence: [{ id: 'ev-1' }, { id: 'ev-2' }] })
@@ -82,7 +71,7 @@ describe('真实数据字段缺失时安全降级', () => {
   it('entity-comparison 在 existingCandidates 缺失时不崩溃', () => {
     const w = mountForm([{ type: 'entity-comparison' }], { candidate: {} })
     expect(w.text()).toContain('候选与存量实体')
-    expect(w.find('.arco-select').exists()).toBe(true)
+    expect(w.find('select').exists()).toBe(true)
   })
   it('record-merge 在 records 缺失时不崩溃', () => {
     const w = mountForm([{ type: 'record-merge' }], {})

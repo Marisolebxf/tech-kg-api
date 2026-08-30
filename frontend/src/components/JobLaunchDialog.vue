@@ -30,22 +30,6 @@ const since = ref('')
 const domains = ref('')
 const submitting = ref(false)
 const notice = ref('')
-const launchFormRef = ref()
-const launchFormModel = computed(() => ({
-  selectedSchemaId: selectedSchemaId.value,
-  llmConfigId: llmConfigId.value,
-  executeMode: executeMode.value,
-  frequency: frequency.value,
-  executionTime: executionTime.value,
-  since: since.value,
-  domains: domains.value,
-}))
-const launchFormRules = {
-  selectedSchemaId: [{ required: true, message: '请选择作业' }],
-  executeMode: [{ required: true, message: '请选择执行模式' }],
-  frequency: [{ required: true, message: '请选择执行频率' }],
-  executionTime: [{ required: true, message: '请选择执行时间' }],
-}
 
 const selectedSchema = computed(() =>
   props.schemas.find((s) => s.id === selectedSchemaId.value),
@@ -84,8 +68,6 @@ function buildCron(): string {
 }
 
 async function submit() {
-  const validationErrors = await launchFormRef.value?.validate()
-  if (validationErrors) return
   const schema = selectedSchema.value
   if (!schema) {
     showToast('请选择作业', 'warning')
@@ -137,50 +119,60 @@ async function submit() {
         <div><span>作业运行</span><h2>启动作业</h2></div>
         <button type="button" @click="emit('close')">×</button>
       </header>
-      <a-form ref="launchFormRef" :model="launchFormModel" :rules="launchFormRules" class="job-launch-body" layout="vertical">
-        <a-form-item class="job-field" field="selectedSchemaId" label="作业（Schema）" required>
-          <a-select v-model="selectedSchemaId" placeholder="请选择" allow-clear>
-            <a-option v-for="s in schemas" :key="s.id" :value="s.id">{{ s.label }}（{{ s.name }}）</a-option>
-          </a-select>
-          <template #extra>
-            <small v-if="selectedSchema">来源表：{{ selectedSchema.mappings.join('、') || '未绑定' }}</small>
-            <small v-else-if="!schemas.length" class="muted">暂无已注册工作流的作业（请在 Schema 管理上传脚本）</small>
-          </template>
-        </a-form-item>
+      <div class="job-launch-body">
+        <label class="job-field">
+          <span>作业（Schema）*</span>
+          <select v-model="selectedSchemaId">
+            <option value="">请选择</option>
+            <option v-for="s in schemas" :key="s.id" :value="s.id">{{ s.label }}（{{ s.name }}）</option>
+          </select>
+          <small v-if="selectedSchema">来源表：{{ selectedSchema.mappings.join('、') || '未绑定' }}</small>
+          <small v-else-if="!schemas.length" class="muted">暂无已注册工作流的作业（请在 Schema 管理上传脚本）</small>
+        </label>
 
-        <a-form-item class="job-field" field="llmConfigId" label="大模型配置">
-          <a-select v-model="llmConfigId" placeholder="使用全局默认" allow-clear>
-            <a-option v-for="c in llmConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）{{ c.isDefault ? ' ★' : '' }}</a-option>
-          </a-select>
-          <template #extra>
-            <small>默认带出 Schema 绑定配置，可临时覆盖</small>
-          </template>
-        </a-form-item>
+        <label class="job-field">
+          <span>大模型配置</span>
+          <select v-model="llmConfigId">
+            <option value="">使用全局默认</option>
+            <option v-for="c in llmConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）{{ c.isDefault ? ' ★' : '' }}</option>
+          </select>
+          <small>默认带出 Schema 绑定配置，可临时覆盖</small>
+        </label>
 
-        <a-form-item class="job-field" field="executeMode" label="执行模式" required>
-          <a-radio-group v-model="executeMode" class="job-radio-group">
-            <a-radio value="once">执行一次</a-radio>
-            <a-radio value="recurring">定期执行</a-radio>
-          </a-radio-group>
-        </a-form-item>
-
-        <div v-if="executeMode === 'recurring'" class="job-row">
-          <a-form-item class="job-field" field="frequency" label="频率" required>
-            <a-select v-model="frequency" :options="['每天', '每12小时', '每6小时', '每周']" />
-          </a-form-item>
-          <a-form-item class="job-field" field="executionTime" label="执行时间" required>
-            <input v-model="executionTime" type="time" />
-          </a-form-item>
+        <div class="job-field">
+          <span>执行模式</span>
+          <div class="job-radio-group">
+            <label><input v-model="executeMode" type="radio" value="once" /> 执行一次</label>
+            <label><input v-model="executeMode" type="radio" value="recurring" /> 定期执行</label>
+          </div>
         </div>
 
-        <a-form-item class="job-field" field="since" label="增量游标 since（可空，空 = 全量）">
-          <input v-model="since" placeholder="如 2026-08-01 00:00:00" />
-        </a-form-item>
+        <div v-if="executeMode === 'recurring'" class="job-row">
+          <label class="job-field">
+            <span>频率</span>
+            <select v-model="frequency">
+              <option>每天</option>
+              <option>每12小时</option>
+              <option>每6小时</option>
+              <option>每周</option>
+            </select>
+          </label>
+          <label class="job-field">
+            <span>执行时间</span>
+            <input v-model="executionTime" type="time" />
+          </label>
+        </div>
 
-        <a-form-item class="job-field" field="domains" label="业务域范围（可空，逗号分隔）">
+        <label class="job-field">
+          <span>增量游标 since（可空，空 = 全量）</span>
+          <input v-model="since" placeholder="如 2026-08-01 00:00:00" />
+        </label>
+
+        <label class="job-field">
+          <span>业务域范围（可空，逗号分隔）</span>
           <input v-model="domains" placeholder="如 论文域,人才域" />
-        </a-form-item>
-      </a-form>
+        </label>
+      </div>
       <p v-if="notice" class="job-launch-notice">{{ notice }}</p>
       <footer>
         <button type="button" @click="emit('close')">关闭</button>
@@ -201,7 +193,7 @@ async function submit() {
 .job-field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#4e5969}
 .job-field>span{color:#5d6e87;font-size:11px}
 .job-field input,.job-field select{height:32px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:13px;color:#1d2129;background:#fff}
-.job-field :deep(.arco-form-item-extra){margin-top:4px}.job-field small{color:#8191aa;font-size:12px;line-height:20px}
+.job-field small{color:#8191aa;font-size:10px;line-height:14px}
 .job-field small.muted{color:#b54708}
 .job-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .job-radio-group{display:flex;gap:16px;padding:6px 0}
@@ -212,7 +204,4 @@ async function submit() {
 .job-launch-dialog footer button{height:33px;padding:0 16px;border:1px solid #c9cdd4;border-radius:5px;background:#fff;color:#4e5969;font-size:13px;cursor:pointer}
 .job-launch-dialog footer .primary{border-color:#165dff;background:#165dff;color:#fff}
 .job-launch-dialog footer button:disabled{opacity:.6;cursor:not-allowed}
-.job-launch-dialog{width:min(640px,calc(100vw - 48px));max-height:calc(100vh - 48px);border-radius:8px}.job-launch-dialog>header{box-sizing:border-box;flex:0 0 56px;height:56px;align-items:center;padding:0 24px}.job-launch-dialog header button{width:32px;height:32px;border-radius:4px}.job-launch-body{box-sizing:border-box;overflow-x:hidden;overflow-y:auto;padding:24px;gap:16px}.job-launch-dialog>footer{box-sizing:border-box;flex:0 0 64px;height:64px;align-items:center;gap:16px;padding:16px 24px}.job-launch-dialog footer button{height:32px;border-radius:4px}
-.job-launch-body>.job-field,.job-row>.job-field{margin-bottom:0;gap:0}.job-row{gap:16px}.job-radio-group{min-height:32px;padding:0}.job-radio-group label{gap:8px}
-.job-launch-dialog>header>div{display:flex;height:24px;align-items:center}.job-launch-dialog>header span{display:none}.job-launch-dialog h2{margin:0;font-size:16px;line-height:24px}
 </style>

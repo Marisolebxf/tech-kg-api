@@ -180,7 +180,7 @@ onMounted(loadReviews)
     </template>
 
     <section class="ops-panel">
-      <div v-if="mode === 'alerts'" class="alert-tabs"><nav><button v-for="item in alertCategories" :key="item" type="button" :class="{ active:alertCategory===item }" @click="alertCategory=item">{{ item }}</button></nav><a-checkbox v-model="blockingOnly">仅看已阻断</a-checkbox></div>
+      <div v-if="mode === 'alerts'" class="alert-tabs"><nav><button v-for="item in alertCategories" :key="item" type="button" :class="{ active:alertCategory===item }" @click="alertCategory=item">{{ item }}</button></nav><label><input v-model="blockingOnly" type="checkbox" />仅看已阻断</label></div>
       <nav v-else class="review-tabs" aria-label="人工处理分类"><template v-if="productionMode"><button v-for="(_, label) in productionTabs" :key="label" type="button" :class="{ active: reviewTab === label }" @click="selectReviewTab(label)">{{ label }}</button></template><template v-else><button type="button" :class="{ active: reviewTab === '待处理' }" @click="selectReviewTab('待处理')">待处理 <em>{{ pendingReviewCount }}</em></button><button type="button" :class="{ active: reviewTab === '历史记录' }" @click="selectReviewTab('历史记录')">历史记录 <em>{{ historyReviewCount }}</em></button></template></nav>
       <div v-if="mode === 'review'" class="review-cat-bar" aria-label="处理分类筛选">
         <button type="button" :class="{ active: reviewCategory === '全部处理分类' }" @click="reviewCategory = '全部处理分类'">全部</button>
@@ -192,14 +192,14 @@ onMounted(loadReviews)
           @click="reviewCategory = item"
         >{{ item }}</button>
       </div>
-      <a-form :model="{ keyword, severity, batchFilter, domain, status }" :class="['ops-filter', { 'is-review': mode === 'review' }]" layout="vertical">
-        <a-form-item field="keyword"><input v-model="keyword" :placeholder="mode === 'review' ? '搜索处理实例 ID、对象或来源记录' : '搜索批次、对象、异常原因'" /></a-form-item>
-        <a-form-item v-if="mode === 'alerts'" field="severity"><a-select v-model="severity" :options="['全部风险', '高风险', '中风险', '低风险']" /></a-form-item>
-        <a-form-item v-else field="batchFilter"><a-select v-model="batchFilter"><a-option value="全部更新批次">全部更新批次</a-option><a-option v-for="item in [...new Set(reviewRows.map(row => row.batch))]" :key="item" :value="item">{{ item }}</a-option></a-select></a-form-item>
-        <a-form-item v-if="mode === 'alerts'" field="domain"><a-select v-model="domain" :options="['全部业务域', '人才域', '论文域', '企业域']" /></a-form-item>
-        <a-form-item v-if="mode === 'alerts'" field="status"><a-select v-model="status" :options="['全部状态', '待处理', '处理中', '已关闭']" /></a-form-item>
-        <a-form-item><button type="button" @click="resetFilters">清空筛选</button></a-form-item>
-      </a-form>
+      <div :class="['ops-filter', { 'is-review': mode === 'review' }]">
+        <input v-model="keyword" :placeholder="mode === 'review' ? '搜索处理实例 ID、对象或来源记录' : '搜索批次、对象、异常原因'" />
+        <select v-if="mode === 'alerts'" v-model="severity"><option>全部风险</option><option>高风险</option><option>中风险</option><option>低风险</option></select>
+        <select v-else v-model="batchFilter"><option>全部更新批次</option><option v-for="item in [...new Set(reviewRows.map(row => row.batch))]" :key="item">{{ item }}</option></select>
+        <select v-if="mode === 'alerts'" v-model="domain"><option>全部业务域</option><option>人才域</option><option>论文域</option><option>企业域</option></select>
+        <select v-if="mode === 'alerts'" v-model="status"><option>全部状态</option><option>待处理</option><option>处理中</option><option>已关闭</option></select>
+        <button type="button" @click="resetFilters">清空筛选</button>
+      </div>
 
       <div v-if="mode === 'alerts'" class="ops-table-scroll"><table>
         <thead><tr><th>异常编号 / 风险</th><th>异常类型</th><th>模块 / 节点</th><th>业务域</th><th>任务批次</th><th>异常说明</th><th>影响范围 / 阻断策略</th><th>责任人</th><th>发生时间</th><th>状态</th><th>操作</th></tr></thead>
@@ -254,7 +254,7 @@ onMounted(loadReviews)
         </tbody>
       </table></div>
 
-      <footer v-if="mode === 'alerts'" class="alert-pagination"><span>每页显示　<a-select :default-value="20" :options="[20, 50, 100]" />　共 158 条异常</span><nav><button type="button" disabled>上一页</button><button class="active" type="button">1</button><button type="button">2</button><button type="button">3</button><button type="button">…</button><button type="button">8</button><button type="button">下一页</button></nav></footer>
+      <footer v-if="mode === 'alerts'" class="alert-pagination"><span>每页显示　<select><option>20</option><option>50</option><option>100</option></select>　共 158 条异常</span><nav><button type="button" disabled>上一页</button><button class="active" type="button">1</button><button type="button">2</button><button type="button">3</button><button type="button">…</button><button type="button">8</button><button type="button">下一页</button></nav></footer>
       <footer v-else class="review-pagination"><span>共 {{ productionMode ? reviewTotal : filteredReviewRows.length }} 条</span><nav><button type="button" disabled>上一页</button><button class="active" type="button">1</button><button type="button">下一页</button></nav></footer>
     </section>
 
@@ -299,33 +299,4 @@ onMounted(loadReviews)
 .scope-task{color:#175cd3!important}
 .review-status.is-已撤销{background:#f2f4f7;color:#475467}
 .review-status.is-已驳回{background:#f2f4f7;color:#b42318}
-</style>
-<style scoped>
-/* DESIGN_RULES: manual review list contract. */
-.ops-page{padding:0;color:#1d2129}.ops-head{margin-bottom:16px}.ops-head h1,.ops-head p{display:none}
-.ops-metrics{display:flex;gap:16px;margin-bottom:16px;border:0}.ops-metrics article{flex:1;gap:4px;padding:8px 16px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;box-shadow:none}
-.ops-metrics span,.ops-metrics em{font-size:12px;line-height:20px}.ops-metrics strong{font-size:20px;line-height:28px;font-weight:600}
-.ops-panel{border-color:#e5e6eb;border-radius:6px;background:#fff;box-shadow:none}
-.review-tabs{gap:0;padding:0 16px}.review-tabs button{height:36px;gap:8px;padding:0 16px;font-size:14px;line-height:22px}.review-tabs button.active{font-weight:500}.review-tabs em{padding:0;border-radius:0;background:transparent;font-size:12px;line-height:20px}
-.review-cat-bar{gap:8px;padding:16px 16px 0}.review-cat-bar button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
-.ops-filter,.ops-filter.is-review{box-sizing:border-box;width:100%;grid-template-columns:minmax(280px,1fr) minmax(180px,240px) auto;column-gap:16px!important;row-gap:16px!important;padding:16px!important;background:#fff}
-.ops-filter input,.ops-filter select,.ops-filter button{height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px}.ops-filter button{padding:0 16px}
-.ops-review-table-scroll table{min-width:1280px;font-size:14px;line-height:22px}.ops-review-table-scroll th,.ops-review-table-scroll td{height:40px;padding:0 16px}.ops-review-table-scroll th{background:#f7f8fa;color:#1d2129;font-weight:500}
-.ops-review-table-scroll td small,.review-source-cell strong,.review-question-cell strong,.review-confidence-cell>b{font-size:12px;line-height:20px}
-.review-status{display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.review-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
-.review-status.is-待处理,.review-status.is-已完成,.review-status.is-已撤销,.review-status.is-已驳回{background:transparent}
-.review-risk-explain{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:16px}.review-risk-explain>div{gap:4px;padding:8px 16px;border-radius:6px;background:#f7f8fa}.review-risk-explain strong{font-size:14px;line-height:22px}.review-risk-explain span,.review-confidence-cell>span{font-size:12px;line-height:20px}
-.review-pagination{height:56px;box-sizing:border-box;padding:12px 16px;font-size:12px;line-height:20px}.review-pagination nav{gap:8px}.review-pagination button{height:32px;padding:0 12px;font-size:14px}
-.review-drawer{width:min(640px,calc(100vw - 48px));background:#fff}.review-drawer>header{height:56px;box-sizing:border-box;padding:8px 24px}.review-body{padding:24px}.review-body section,.review-compare article{padding:16px;border-radius:6px}.review-compare{gap:16px;margin:16px 0}
-.review-drawer>footer{height:64px;box-sizing:border-box;gap:16px;padding:0 24px}.review-drawer>footer button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
-.ops-filter :deep(.arco-form-item){box-sizing:border-box;width:100%;min-width:0;margin:0!important}
-.ops-filter :deep(.arco-form-item-layout-inline){margin-right:0!important}
-.ops-filter :deep(.arco-form-item-wrapper-col),.ops-filter :deep(.arco-form-item-content-wrapper),.ops-filter :deep(.arco-form-item-content){box-sizing:border-box;width:100%;min-width:0}
-/* Prevent page-level native input rules from styling Arco Select's internal input. */
-.ops-filter :deep(.arco-select){width:100%;min-width:0}
-.ops-filter :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff}
-.ops-filter :deep(.arco-select-view-input){height:100%!important;min-height:0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important}
-.ops-filter :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;pointer-events:none!important}
-.ops-filter :deep(.arco-select-view-value){min-width:0;line-height:30px}
-@media(max-width:900px){.ops-filter,.ops-filter.is-review{grid-template-columns:1fr}.review-risk-explain{grid-template-columns:1fr}.ops-metrics{display:grid;grid-template-columns:repeat(2,1fr)}}
 </style>

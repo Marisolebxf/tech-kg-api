@@ -80,23 +80,6 @@ const overview = ref<SchemaOverview>({
 })
 const modalOpen = ref(false)
 const createForm = ref<CreateForm>(emptyCreateForm())
-const createFormRef = ref()
-const createFormRules = {
-  name: [{ required: true, message: '请输入名称' }],
-  label: [{ required: true, message: '请输入中文名' }],
-  sourceEntityId: [{
-    validator: (value: string, callback: (error?: string) => void) =>
-      callback(!isRelationTab() || value ? undefined : '请选择起点实体'),
-  }],
-  targetEntityId: [{
-    validator: (value: string, callback: (error?: string) => void) =>
-      callback(!isRelationTab() || value ? undefined : '请选择终点实体'),
-  }],
-  properties: [{
-    validator: (value: PropertyRow[], callback: (error?: string) => void) =>
-      callback(value.some((property) => property.name.trim()) ? undefined : '请至少填写一个属性名称'),
-  }],
-}
 const creating = ref(false)
 const confirming = ref(false)
 const sourceTables = ref<SourceTable[]>([])
@@ -266,6 +249,15 @@ function openCreate() {
   modalOpen.value = true
 }
 
+function toggleSourceTable(name: string) {
+  const list = createForm.value.sourceTables
+  const index = list.indexOf(name)
+  if (index >= 0) {
+    list.splice(index, 1)
+  } else {
+    list.push(name)
+  }
+}
 
 function schemaKey(name: string) {
   return name
@@ -275,8 +267,6 @@ function schemaKey(name: string) {
 }
 
 async function saveItem() {
-  const validationErrors = await createFormRef.value?.validate()
-  if (validationErrors) return
   const f = createForm.value
   if (!f.name.trim()) {
     showToast(isRelationTab() ? '请填写关系英文名（UPPER_SNAKE_CASE）' : '请填写实体名（PascalCase）', 'warning')
@@ -495,91 +485,82 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
         <button class="schema-modal__mask" type="button" @click="modalOpen = false"></button>
         <aside class="schema-modal__panel schema-create-panel">
           <header><h2>新增{{ activeTab }}</h2><button type="button" @click="modalOpen = false">×</button></header>
-          <a-form ref="createFormRef" :model="createForm" :rules="createFormRules" class="schema-modal__body schema-create-body" layout="vertical">
+          <div class="schema-modal__body schema-create-body">
             <div class="create-row">
-              <a-form-item class="create-field" field="name" :label="isRelationTab() ? '关系英文名' : '实体名'" required>
+              <label class="create-field">
+                <span>{{ isRelationTab() ? '关系英文名 *' : '实体名 *' }}</span>
                 <input v-model="createForm.name" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
-              </a-form-item>
-              <a-form-item class="create-field" field="label" label="中文名" required>
+              </label>
+              <label class="create-field">
+                <span>中文名 *</span>
                 <input v-model="createForm.label" placeholder="如：技术" />
-              </a-form-item>
+              </label>
             </div>
 
             <div v-if="isRelationTab()" class="create-row">
-              <a-form-item class="create-field" field="sourceEntityId" label="起点实体" required>
-                <a-select v-model="createForm.sourceEntityId" placeholder="请选择">
-                  <a-option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
-                </a-select>
-              </a-form-item>
-              <a-form-item class="create-field" field="targetEntityId" label="终点实体" required>
-                <a-select v-model="createForm.targetEntityId" placeholder="请选择">
-                  <a-option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
-                </a-select>
-              </a-form-item>
+              <label class="create-field">
+                <span>起点实体 *</span>
+                <select v-model="createForm.sourceEntityId">
+                  <option value="">请选择</option>
+                  <option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</option>
+                </select>
+              </label>
+              <label class="create-field">
+                <span>终点实体 *</span>
+                <select v-model="createForm.targetEntityId">
+                  <option value="">请选择</option>
+                  <option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</option>
+                </select>
+              </label>
             </div>
 
-            <a-form-item class="create-field create-field--full" field="description" label="建模说明">
-              <a-textarea v-model="createForm.description" :auto-size="{ minRows: 2, maxRows: 4 }" />
-            </a-form-item>
+            <label class="create-field create-field--full">
+              <span>建模说明</span>
+              <textarea v-model="createForm.description" rows="2"></textarea>
+            </label>
 
-            <a-form-item class="create-field create-field--full" field="sourceTables">
-              <template #label>来源表（科技要素库，可多选）<small class="source-table-count">已选 {{ createForm.sourceTables.length }} / {{ sourceTables.length }} 张</small></template>
-              <a-select
-                v-model="createForm.sourceTables"
-                class="schema-source-table-select"
-                placeholder="请选择来源表"
-                popup-container=".schema-create-modal"
-                multiple
-                allow-clear
-                allow-search
-                :max-tag-count="2"
-                :disabled="sourceTables.length === 0"
-              >
-                <a-option v-for="t in sourceTables" :key="t.name" :value="t.name">
-                  {{ t.name }}<template v-if="t.comment">（{{ t.comment }}）</template>
-                </a-option>
-              </a-select>
-            </a-form-item>
-
-            <a-form-item class="create-field create-field--full" field="llmConfigId" label="默认 LLM 配置（作业启动时默认使用，可临时覆盖）">
-              <a-select v-model="createForm.llmConfigId" class="schema-llm-select" placeholder="使用全局默认" popup-container=".schema-create-modal" allow-clear>
-                <a-option v-for="c in llmConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）{{ c.isDefault ? ' ★默认' : '' }}</a-option>
-              </a-select>
-            </a-form-item>
-
-            <a-form-item class="create-props" field="properties" required label-component="div">
-              <template #label>
-                <div class="create-props__head">
-                  <span>属性列表</span>
-                  <button type="button" class="create-props__add" @click.stop="addProperty">＋ 添加属性</button>
-                </div>
-              </template>
-              <div class="create-prop-list">
-                <div
-                v-for="(p, i) in createForm.properties"
-                :key="i"
-                class="create-prop-row"
-                :class="{ 'create-prop-row--has-length': p.dataType === 'fixed_string' }"
-              >
-                <a-form-item class="prop-name-field" :field="`properties.${i}.name`" :rules="[{ required: true, message: '请输入属性名称' }]" hide-label>
-                  <input v-model="p.name" placeholder="属性名" class="prop-name" />
-                </a-form-item>
-                <a-select v-model="p.dataType" class="prop-type" popup-container=".schema-create-modal" :scrollbar="false">
-                  <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
-                </a-select>
-                <input v-if="p.dataType === 'fixed_string'" v-model.number="p.length" type="number" min="1" max="1024" class="prop-len" placeholder="N" />
-                <a-checkbox v-model="p.required" class="prop-required">必填</a-checkbox>
-                <button type="button" class="prop-remove" @click="removeProperty(i)" title="删除">×</button>
-                </div>
+            <div class="create-field create-field--full">
+              <span>来源表（科技要素库，可多选）<small class="source-table-count">已选 {{ createForm.sourceTables.length }} / {{ sourceTables.length }} 张</small></span>
+              <div class="source-table-list">
+                <label v-for="t in sourceTables" :key="t.name" class="source-table-item">
+                  <input type="checkbox" :checked="createForm.sourceTables.includes(t.name)" @change="toggleSourceTable(t.name)" />
+                  <code>{{ t.name }}</code>
+                  <span v-if="t.comment" class="source-table-comment">{{ t.comment }}</span>
+                </label>
+                <span v-if="sourceTables.length === 0" class="source-table-empty">暂无可选表</span>
               </div>
-            </a-form-item>
+            </div>
+
+            <label class="create-field create-field--full">
+              <span>默认 LLM 配置（作业启动时默认使用，可临时覆盖）</span>
+              <select v-model="createForm.llmConfigId">
+                <option value="">使用全局默认</option>
+                <option v-for="c in llmConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）{{ c.isDefault ? ' ★默认' : '' }}</option>
+              </select>
+            </label>
+
+            <div class="create-props">
+              <div class="create-props__head">
+                <span>属性列表 *</span>
+                <button type="button" class="create-props__add" @click="addProperty">＋ 添加属性</button>
+              </div>
+              <div v-for="(p, i) in createForm.properties" :key="i" class="create-prop-row">
+                <input v-model="p.name" placeholder="属性名" class="prop-name" />
+                <select v-model="p.dataType" class="prop-type">
+                  <option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</option>
+                </select>
+                <input v-if="p.dataType === 'fixed_string'" v-model.number="p.length" type="number" min="1" max="1024" class="prop-len" placeholder="N" />
+                <label class="prop-required"><input v-model="p.required" type="checkbox" />必填</label>
+                <button type="button" class="prop-remove" @click="removeProperty(i)" title="删除">×</button>
+              </div>
+            </div>
 
             <div class="create-ddl">
               <span class="create-ddl__label">nGQL 预览（创建时将执行）</span>
               <pre class="create-ddl__pre">{{ createDdlPreview }}</pre>
               <p v-if="confirming" class="create-ddl__confirm">请确认上述 DDL 将在图空间执行，点击「确认创建」提交。</p>
             </div>
-          </a-form>
+          </div>
           <footer>
             <button type="button" @click="modalOpen = false">取消</button>
             <button v-if="confirming" type="button" @click="confirming = false">返回修改</button>
@@ -799,58 +780,4 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .source-table-item code{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 5px;border-radius:3px;background:#edf4ff;color:#165dff;font-size:10px}
 .source-table-comment{flex:1;min-width:0;color:#8191aa;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .source-table-empty{grid-column:1/-1;padding:12px;text-align:center;color:#8191aa;font-size:11px}
-.schema-create-body>.create-field,.schema-create-body>.create-props,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{gap:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
-</style>
-<style scoped>
-/* DESIGN_RULES: Schema management page contract. */
-.schema-page{padding:0;color:#1d2129}
-.schema-summary{display:flex;gap:16px;margin-bottom:16px;border:0}
-.schema-summary article{flex:1;min-height:64px;gap:4px;padding:8px 16px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;box-shadow:none}
-.schema-summary article::after{display:none}
-.schema-summary span,.schema-summary em{font-size:12px;line-height:20px}.schema-summary strong{font-size:20px;line-height:28px;font-weight:600}
-.schema-shell{border-color:#e5e6eb;border-radius:6px;box-shadow:none}
-.schema-tabs{min-height:36px;padding:0 16px}.schema-tabs button{height:36px;padding:0 16px;font-size:14px;line-height:22px;font-weight:400}.schema-tabs button.active{font-weight:500}
-.schema-toolbar{min-height:48px;gap:16px;padding:8px 16px;background:#fff}.schema-toolbar>div,.schema-toolbar__actions{gap:16px}
-.schema-toolbar strong{font-size:16px;line-height:24px;font-weight:600}.schema-toolbar>div span{font-size:12px;line-height:20px}
-.schema-toolbar label{gap:8px;width:280px;height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px}.schema-toolbar input{height:30px;padding:0!important;font-size:14px;line-height:22px}
-.schema-toolbar .primary{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
-.schema-table-wrap table,.trace-layout table{font-size:14px;line-height:22px}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{height:40px;padding:0 16px;line-height:22px;vertical-align:middle}
-.schema-table-wrap th{background:#f7f8fa;color:#1d2129;font-weight:500}.schema-action-link{font-size:14px;line-height:22px}
-.core,.support,.evidence,.auto,.review{gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}
-.core::before,.support::before,.evidence::before,.auto::before,.review::before{display:block;flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
-.script-badge{height:22px;border-radius:4px;font-size:12px;line-height:20px}
-.trace-layout{gap:16px;padding:16px;background:#f7f8fa}.trace-card,.trace-layout section{border-color:#e5e6eb;border-radius:6px;box-shadow:none}
-.trace-card>header{min-height:56px;padding:8px 16px;background:#f7f8fa}.trace-card h2{font-size:16px;line-height:24px;font-weight:600}.trace-card p,.trace-card dd,.trace-layout>aside span{font-size:12px;line-height:20px}
-.schema-modal__panel{width:min(560px,100%)}.schema-create-panel{display:grid;box-sizing:border-box;width:min(640px,calc(100vw - 48px));height:auto;max-height:calc(100vh - 48px);overflow:hidden;grid-template-rows:56px minmax(0,1fr) 64px}.schema-modal__panel header{height:56px;box-sizing:border-box;padding:0 24px}.schema-modal__panel header h2{font-size:16px;line-height:24px}.schema-modal__panel header button{width:32px;height:32px}
-.schema-modal__body{gap:16px;padding:24px}.schema-create-body{min-height:0;max-height:none;overflow-x:hidden;overflow-y:auto}.schema-modal__body label,.create-field{gap:8px;font-size:14px;line-height:22px}.create-row{gap:16px}
-.create-field input,.create-field textarea,.create-field select{height:32px;padding:0 12px;font-size:14px;line-height:22px;appearance:none}
-.create-props{gap:16px}.create-props :deep(.arco-form-item-label-col),.create-props :deep(.arco-form-item-label){box-sizing:border-box;width:100%}.create-props :deep(.arco-form-item-label){display:flex;align-items:center}.create-prop-list{display:grid;width:100%;gap:16px}.create-props :deep(.arco-form-item-content-flex){width:100%}.create-props__head{display:flex;width:100%;align-items:center;justify-content:space-between;font-size:14px;line-height:22px}.create-props__add{height:28px;font-size:14px}.create-prop-row{gap:8px}
-.prop-name,.prop-type,.prop-len{height:32px;font-size:14px;appearance:none}.prop-required{font-size:14px;line-height:22px}
-.create-prop-row{grid-template-columns:minmax(0,1.4fr) minmax(120px,1.2fr) auto 24px;align-items:center;column-gap:16px;row-gap:8px}
-.create-prop-row--has-length{grid-template-columns:minmax(0,1.4fr) minmax(120px,1.2fr) 72px auto 24px}
-.prop-name-field{grid-column:1;min-width:0;margin:0!important;align-self:center}
-.prop-name-field :deep(.arco-form-item-wrapper-col),.prop-name-field :deep(.arco-form-item-content-wrapper),.prop-name-field :deep(.arco-form-item-content){box-sizing:border-box;width:100%;min-width:0}
-.prop-name{box-sizing:border-box;width:100%;height:32px}
-.prop-type{grid-column:2;box-sizing:border-box;width:100%;min-width:0;height:32px;padding:0!important;border:0!important;background:transparent}
-.prop-type :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:14px;line-height:22px}
-.prop-type :deep(.arco-select-view-input){height:100%!important;min-height:0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important}
-.prop-type :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;outline:0!important;opacity:0!important;box-shadow:none!important;pointer-events:none!important}
-.prop-len{grid-column:3;box-sizing:border-box;width:72px;height:32px}
-.prop-required{display:inline-flex!important;grid-column:3;flex-direction:row!important;align-items:center!important;justify-self:start;height:32px;margin:0!important;gap:8px!important;align-self:center;white-space:nowrap}
-.create-prop-row--has-length .prop-required{grid-column:4}
-.prop-remove{grid-column:4;justify-self:end;align-self:center}
-.create-prop-row--has-length .prop-remove{grid-column:5}
-.schema-modal__panel footer{height:64px;box-sizing:border-box;gap:16px;padding:0 24px}.schema-create-panel footer{align-items:center;padding:16px 24px}.schema-modal__panel footer button{height:32px;padding:0 16px;font-size:14px;line-height:22px}
-:is(.schema-llm-select,.schema-source-table-select){box-sizing:border-box;width:100%;min-width:0}
-:is(.schema-llm-select,.schema-source-table-select) :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:14px;line-height:22px}
-:is(.schema-llm-select,.schema-source-table-select) :deep(.arco-select-view-input){height:100%!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important}
-:is(.schema-llm-select,.schema-source-table-select) :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;outline:0!important;opacity:0!important;pointer-events:none!important}
-:is(.schema-llm-select,.schema-source-table-select) :deep(.arco-select-view-value){min-width:0;overflow:hidden;line-height:30px;text-overflow:ellipsis;white-space:nowrap}
-:is(.schema-llm-select,.schema-source-table-select) :deep(.arco-select-view-focus){border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
-.source-table-list{gap:8px;padding:8px}.source-table-item{gap:8px;padding:8px;border-radius:4px;font-size:14px;line-height:22px;box-shadow:none}.source-table-count{margin-left:8px;color:#86909c;font-size:12px;line-height:20px;font-weight:400}
-.schema-toolbar__actions>label{position:relative;display:block;box-sizing:border-box;width:280px;height:32px;padding:0;border:0;background:transparent}
-.schema-toolbar__actions>label>span{position:absolute;z-index:1;top:50%;left:12px;line-height:1;pointer-events:none;transform:translateY(-50%)}
-.schema-toolbar__actions>label>input{box-sizing:border-box;width:100%;height:32px;min-width:0;padding:0 12px 0 34px!important;border:1px solid #e5e6eb!important;border-radius:4px;background:#fff;font-size:14px;line-height:22px;box-shadow:none!important;outline:0}
-@media(max-width:900px){.schema-summary{display:grid;grid-template-columns:repeat(2,1fr)}.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
-.schema-create-body>.create-field,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{margin-bottom:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
 </style>

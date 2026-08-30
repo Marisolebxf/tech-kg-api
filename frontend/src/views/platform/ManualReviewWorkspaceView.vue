@@ -158,30 +158,6 @@ const mergeMaster = ref(0)
 const mergeFields = ref({ authors: true, affiliation: true, source_channel: false })
 
 const runtimeConfig = ref('kg-extract-v2.6.1')
-const manualReviewFormRef = ref()
-const manualReviewFormModel = computed(() => ({
-  entityVerdict: entityVerdict.value,
-  entityTypeFix: entityTypeFix.value,
-  relationVerdict: relationVerdict.value,
-  attrVerdict: attrVerdict.value,
-  fillTitleZh: fillTitleZh.value,
-  mergeMaster: mergeMaster.value,
-  mergeFields: mergeFields.value,
-  runtimeConfig: runtimeConfig.value,
-  evidenceItems: evidenceItems.value,
-  note: note.value,
-}))
-const manualReviewFormRules = {
-  entityVerdict: [{ required: true, message: '请选择实体裁决结果' }],
-  relationVerdict: [{ required: true, message: '请选择关系裁决结果' }],
-  attrVerdict: [{ required: true, message: '请选择属性裁决结果' }],
-  fillTitleZh: [{
-    validator: (value: string, callback: (error?: string) => void) =>
-      callback(templateId.value !== 'T_DQ_FILL' || value.trim() ? undefined : '请输入论文中文标题'),
-  }],
-  mergeMaster: [{ required: true, message: '请选择主记录' }],
-  runtimeConfig: [{ required: true, message: '请选择重跑 Prompt' }],
-}
 
 const initWorkspace = (item?: ReviewRecord) => {
   if (!item) return
@@ -400,12 +376,7 @@ const applySuggestedTitle = () => {
 }
 
 const handleAction = async (action: ReviewAction | { id: string; label: string; kind: string; rerun?: boolean }) => {
-  const reviewRecord = record.value
-  if (!reviewRecord || !isEditable.value) return
-  if (action.kind === 'primary') {
-    const validationErrors = await manualReviewFormRef.value?.validate()
-    if (validationErrors) return
-  }
+  if (!record.value || !isEditable.value) return
   // kg.custom.steps T_DIRECT 案例：accept 直接写图，reject 丢弃，不走 claim/submit/approve 4-eyes 流程
   if (isDirectCase.value && productionCase.value && (action.id === 'accept' || action.id === 'reject')) {
     submitting.value = true
@@ -427,7 +398,7 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
   }
   if (!productionMode && action.id === 'retry-task') {
     try {
-      await retryManualReview(reviewRecord.id, { runtimeConfig: runtimeConfig.value })
+      await retryManualReview(record.value.id, { runtimeConfig: runtimeConfig.value })
       feedback.value = '已重新下发当前任务，人工处理项保持待处理，可在任务中心查看执行进度。'
     } catch (error) {
       feedback.value = error instanceof Error ? error.message : '任务重试失败'
@@ -436,7 +407,7 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
   }
   if (!productionMode && action.id === 'skip-task') {
     try {
-      record.value = await revokeManualReview(reviewRecord.id, note.value || '人工确认撤销当前任务') as ReviewRecord
+      record.value = await revokeManualReview(record.value.id, note.value || '人工确认撤销当前任务') as ReviewRecord
       feedback.value = '任务已撤销，不再进入下游流程。'
     } catch (error) {
       feedback.value = error instanceof Error ? error.message : '任务撤销失败'
@@ -444,7 +415,7 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
     return
   }
   let label = action.label
-  if (action.id === 'entity-confirm' || action.id === 'confirm-type' || ((templateId.value === 'T_LINK' || (templateId.value === 'T_MAP' && isMapTypeFix(reviewRecord))) && action.kind === 'primary')) {
+  if (action.id === 'entity-confirm' || action.id === 'confirm-type' || ((templateId.value === 'T_LINK' || (templateId.value === 'T_MAP' && record.value && isMapTypeFix(record.value))) && action.kind === 'primary')) {
     label = primaryActionLabel.value
     if (entityVerdict.value === 'reject') {
       label = '驳回候选'
@@ -487,11 +458,11 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
   }
   try {
     if (productionMode && productionCase.value) {
-      productionCase.value = await submitProductionReview(reviewRecord.id, { version: productionCase.value.version, actionId: action.id, note: note.value, result })
+      productionCase.value = await submitProductionReview(record.value.id, { version: productionCase.value.version, actionId: action.id, note: note.value, result })
       record.value = mapProductionRecord(productionCase.value)
       window.clearInterval(heartbeatTimer)
     } else {
-      const response = await submitManualReview(reviewRecord.id, { actionId: action.id, note: note.value, result, rerun: Boolean(rerun) })
+      const response = await submitManualReview(record.value.id, { actionId: action.id, note: note.value, result, rerun: Boolean(rerun) })
       record.value = response.review as ReviewRecord
     }
     const messages = [
@@ -574,7 +545,6 @@ const secondaryActions = computed(() => {
     </section>
 
     <main class="rw-body">
-      <a-form ref="manualReviewFormRef" :model="manualReviewFormModel" :rules="manualReviewFormRules" class="manual-review-form" layout="vertical">
       <header v-if="!isDirectCase" class="rw-zone-head">
         <div>
           <h2>裁决 · {{ template?.title }}</h2>
@@ -720,14 +690,15 @@ const secondaryActions = computed(() => {
               <p>机构：{{ stockCard?.org }}</p>
             </article>
           </div>
-          <a-form-item field="entityVerdict" hide-label>
-          <a-radio-group v-model="entityVerdict" class="verdict" aria-label="类型裁决">
-            <a-radio value="retype" :disabled="!isEditable">修正类型为</a-radio>
-            <a-select v-model="entityTypeFix" :disabled="!isEditable">
-              <a-option v-for="t in entityTypes" :key="t.value" :value="t.value">{{ t.label }}</a-option>
-            </a-select>
-          </a-radio-group>
-          </a-form-item>
+          <div class="verdict" role="radiogroup" aria-label="类型裁决">
+            <label :class="{ active: entityVerdict === 'retype' }">
+              <input v-model="entityVerdict" type="radio" value="retype" :disabled="!isEditable" />
+              修正类型为
+              <select v-model="entityTypeFix" :disabled="!isEditable">
+                <option v-for="t in entityTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
+              </select>
+            </label>
+          </div>
         </template>
         <template v-else>
           <p class="zone-banner">{{ impactScope === '批次级' ? '本映射影响公共流程，当前节点及下游已阻断。' : '修正后仅重跑本对象相关任务。' }}</p>
@@ -735,17 +706,19 @@ const secondaryActions = computed(() => {
           <div v-for="row in mappingRows" :key="row.source" class="map-row">
             <code>{{ row.source }}</code>
             <span>{{ row.sample }}</span>
-            <a-select v-model="row.target" :disabled="!isEditable">
-              <a-option v-for="opt in row.options" :key="opt.value" :value="opt.value">{{ opt.label }}</a-option>
-            </a-select>
+            <select v-model="row.target" :disabled="!isEditable">
+              <option v-for="opt in row.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
           </div>
-          <a-checkbox v-if="record.type.includes('标准化失败')" v-model="keepRawEnum" class="check-line" :disabled="!isEditable">保留原始值用于追溯</a-checkbox>
+          <label v-if="record.type.includes('标准化失败')" class="check-line">
+            <input v-model="keepRawEnum" type="checkbox" :disabled="!isEditable" /> 保留原始值用于追溯
+          </label>
           <label v-if="record.type === '专利状态标准化失败'" class="inline-select">
             <span>字典版本</span>
-            <a-select v-model="dictVersion" :disabled="!isEditable">
-              <a-option value="v1.2">回滚到 dict-patent-v1.2</a-option>
-              <a-option value="v1.3-fix">在 v1.3 新增枚举条目</a-option>
-            </a-select>
+            <select v-model="dictVersion" :disabled="!isEditable">
+              <option value="v1.2">回滚到 dict-patent-v1.2</option>
+              <option value="v1.3-fix">在 v1.3 新增枚举条目</option>
+            </select>
           </label>
         </template>
       </section>
@@ -770,13 +743,11 @@ const secondaryActions = computed(() => {
             <p v-if="stockCard?.id !== '—'">ID：{{ stockCard?.id }}</p>
           </article>
         </div>
-        <a-form-item field="entityVerdict" hide-label>
-        <a-radio-group v-model="entityVerdict" class="verdict" aria-label="实体对齐裁决">
-          <a-radio value="merge" :disabled="!isEditable">合并到右侧存量实体</a-radio>
-          <a-radio value="create" :disabled="!isEditable">保留为新建实体</a-radio>
-          <a-radio value="reject" :disabled="!isEditable">不是同一实体，驳回候选</a-radio>
-        </a-radio-group>
-        </a-form-item>
+        <div class="verdict" role="radiogroup" aria-label="实体对齐裁决">
+          <label :class="{ active: entityVerdict === 'merge' }"><input v-model="entityVerdict" type="radio" value="merge" :disabled="!isEditable" /> 合并到右侧存量实体</label>
+          <label :class="{ active: entityVerdict === 'create' }"><input v-model="entityVerdict" type="radio" value="create" :disabled="!isEditable" /> 保留为新建实体</label>
+          <label :class="{ active: entityVerdict === 'reject' }"><input v-model="entityVerdict" type="radio" value="reject" :disabled="!isEditable" /> 不是同一实体，驳回候选</label>
+        </div>
       </section>
 
       <!-- T_EVIDENCE -->
@@ -793,29 +764,26 @@ const secondaryActions = computed(() => {
           <p>抽取结果：{{ relationRuleSummary }}规则 {{ record.ruleId }} 要求至少 2 个可信证据。</p>
         </div>
         <h3 class="zone-subtitle">关系证据</h3>
-        <a-form-item field="evidenceItems" hide-label>
         <div class="evidence-list">
-          <a-checkbox v-for="item in evidenceItems" :key="item.id" v-model="item.checked" class="evidence-item" :disabled="!isEditable || item.recordId === '—'">
+          <label v-for="item in evidenceItems" :key="item.id" class="evidence-item">
+            <input v-model="item.checked" type="checkbox" :disabled="!isEditable || item.recordId === '—'" />
             <div>
               <strong>{{ item.label }} <em>{{ item.trust }}</em></strong>
               <p>{{ item.excerpt }}</p>
               <span>{{ item.table }} / {{ item.recordId }}</span>
             </div>
-          </a-checkbox>
+          </label>
         </div>
-        </a-form-item>
         <label v-if="isEditable" class="wide-field">
           <span>补充证据（链接或记录 ID）</span>
           <input v-model="extraEvidence" placeholder="例如：COOP-89321-B 或公告 URL" />
         </label>
         <h3 class="zone-subtitle">处理结论</h3>
-        <a-form-item field="relationVerdict" hide-label>
-        <a-radio-group v-model="relationVerdict" class="verdict relation-verdict">
-          <a-radio value="approve" :disabled="!isEditable"><span><strong>确认关系入图</strong><small>证据充分，允许该关系进入图谱</small></span></a-radio>
-          <a-radio value="hold" :disabled="!isEditable"><span><strong>保持隔离</strong><small>暂不入图，等待补充第二独立来源</small></span></a-radio>
-          <a-radio value="reject" :disabled="!isEditable"><span><strong>驳回关系</strong><small>认定当前证据不支持该关系，退回抽取节点</small></span></a-radio>
-        </a-radio-group>
-        </a-form-item>
+        <div class="verdict relation-verdict">
+          <label :class="{ active: relationVerdict === 'approve' }"><input v-model="relationVerdict" type="radio" value="approve" :disabled="!isEditable" /><span><strong>确认关系入图</strong><small>证据充分，允许该关系进入图谱</small></span></label>
+          <label :class="{ active: relationVerdict === 'hold' }"><input v-model="relationVerdict" type="radio" value="hold" :disabled="!isEditable" /><span><strong>保持隔离</strong><small>暂不入图，等待补充第二独立来源</small></span></label>
+          <label :class="{ active: relationVerdict === 'reject' }"><input v-model="relationVerdict" type="radio" value="reject" :disabled="!isEditable" /><span><strong>驳回关系</strong><small>认定当前证据不支持该关系，退回抽取节点</small></span></label>
+        </div>
       </section>
 
       <!-- T_ATTR -->
@@ -833,18 +801,16 @@ const secondaryActions = computed(() => {
             <em>更新 {{ attrSides.B.updated }}</em>
           </article>
         </div>
-        <a-form-item field="attrVerdict" hide-label>
-        <a-radio-group v-model="attrVerdict" class="verdict">
-          <a-radio value="A" :disabled="!isEditable">采用来源 A</a-radio>
-          <a-radio value="B" :disabled="!isEditable">采用来源 B</a-radio>
-          <a-radio value="manual" :disabled="!isEditable">
-            手工改写
+        <div class="verdict">
+          <label :class="{ active: attrVerdict === 'A' }"><input v-model="attrVerdict" type="radio" value="A" :disabled="!isEditable" /> 采用来源 A</label>
+          <label :class="{ active: attrVerdict === 'B' }"><input v-model="attrVerdict" type="radio" value="B" :disabled="!isEditable" /> 采用来源 B</label>
+          <label :class="{ active: attrVerdict === 'manual' }">
+            <input v-model="attrVerdict" type="radio" value="manual" :disabled="!isEditable" /> 手工改写
             <input v-model="attrManualOrg" class="mini" placeholder="机构" :disabled="!isEditable || attrVerdict !== 'manual'" />
             <input v-model="attrManualRange" class="mini" placeholder="起止时间" :disabled="!isEditable || attrVerdict !== 'manual'" />
-          </a-radio>
-          <a-radio value="split" :disabled="!isEditable">时间切分（两段都保留）</a-radio>
-        </a-radio-group>
-        </a-form-item>
+          </label>
+          <label :class="{ active: attrVerdict === 'split' }"><input v-model="attrVerdict" type="radio" value="split" :disabled="!isEditable" /> 时间切分（两段都保留）</label>
+        </div>
       </section>
 
       <!-- T_DQ_FILL -->
@@ -872,8 +838,8 @@ const secondaryActions = computed(() => {
         </div>
         <div class="fill-form">
           <h3 class="zone-subtitle">补录结果</h3>
-          <a-form-item class="wide-field" field="fillTitleZh" label="title_zh" required><input v-model="fillTitleZh" :disabled="!isEditable" placeholder="论文中文标题" /></a-form-item>
-          <a-form-item class="wide-field" field="fillTitleEn" label="title_en"><input v-model="fillTitleEn" :disabled="!isEditable" placeholder="论文英文标题（可选）" /></a-form-item>
+          <label class="wide-field"><span>title_zh <b>必填</b></span><input v-model="fillTitleZh" :disabled="!isEditable" placeholder="论文中文标题" /></label>
+          <label class="wide-field"><span>title_en</span><input v-model="fillTitleEn" :disabled="!isEditable" placeholder="论文英文标题（可选）" /></label>
           <p class="fill-rerun-note">保存后将从「清洗标准化」节点重跑当前记录，不影响同批次其他数据。</p>
         </div>
       </section>
@@ -881,19 +847,18 @@ const secondaryActions = computed(() => {
       <!-- T_DQ_MERGE -->
       <section v-else-if="templateId === 'T_DQ_MERGE'" class="zone zone-merge">
         <p class="zone-banner">同一 paper_id 命中 {{ dupRecords.length }} 条源记录</p>
-        <a-form-item field="mergeMaster" hide-label>
-        <a-radio-group v-model="mergeMaster" class="verdict">
-          <a-radio v-for="(row, index) in dupRecords" :key="row.id" :value="index" :disabled="!isEditable" :class="{ active: mergeMaster === index }">
+        <div class="verdict">
+          <label v-for="(row, index) in dupRecords" :key="row.id" :class="{ active: mergeMaster === index }">
+            <input v-model="mergeMaster" type="radio" :value="index" :disabled="!isEditable" />
             主记录 {{ row.id }} · {{ row.hint }}
             <small>{{ row.detail }}</small>
-          </a-radio>
-        </a-radio-group>
-        </a-form-item>
+          </label>
+        </div>
         <div class="merge-fields">
           <span>从非主记录并入字段</span>
-          <a-checkbox v-model="mergeFields.authors" :disabled="!isEditable">authors</a-checkbox>
-          <a-checkbox v-model="mergeFields.affiliation" :disabled="!isEditable">affiliation</a-checkbox>
-          <a-checkbox v-model="mergeFields.source_channel" :disabled="!isEditable">source_channel</a-checkbox>
+          <label><input v-model="mergeFields.authors" type="checkbox" :disabled="!isEditable" /> authors</label>
+          <label><input v-model="mergeFields.affiliation" type="checkbox" :disabled="!isEditable" /> affiliation</label>
+          <label><input v-model="mergeFields.source_channel" type="checkbox" :disabled="!isEditable" /> source_channel</label>
         </div>
       </section>
 
@@ -908,13 +873,14 @@ const secondaryActions = computed(() => {
         <div class="runtime-links">
           <RouterLink :to="`/processing-instance/${record.id}`">打开任务详情日志 →</RouterLink>
         </div>
-        <a-form-item v-if="isEditable && impactScope === '批次级'" class="inline-select" field="runtimeConfig" label="重跑使用 Prompt">
-          <a-select v-model="runtimeConfig">
-            <a-option value="kg-extract-v2.6.1">kg-extract-v2.6.1（当前）</a-option>
-            <a-option value="kg-extract-v2.5.0">kg-extract-v2.5.0（回退）</a-option>
-            <a-option value="kg-extract-v2.6.2-rc">kg-extract-v2.6.2-rc（试验）</a-option>
-          </a-select>
-        </a-form-item>
+        <label v-if="isEditable && impactScope === '批次级'" class="inline-select">
+          <span>重跑使用 Prompt</span>
+          <select v-model="runtimeConfig">
+            <option value="kg-extract-v2.6.1">kg-extract-v2.6.1（当前）</option>
+            <option value="kg-extract-v2.5.0">kg-extract-v2.5.0（回退）</option>
+            <option value="kg-extract-v2.6.2-rc">kg-extract-v2.6.2-rc（试验）</option>
+          </select>
+        </label>
       </section>
       </template>
 
@@ -924,7 +890,6 @@ const secondaryActions = computed(() => {
         <em>{{ record.completedAt }}</em>
       </div>
 
-      </a-form>
       <p v-if="feedback" class="rw-feedback">{{ feedback }}</p>
     </main>
 
@@ -936,9 +901,10 @@ const secondaryActions = computed(() => {
         <div><span>影响范围</span><strong>{{ impactScope }}{{ impactScope === '批次级' ? ' · 恢复公共流程' : ' · 仅本对象' }}</strong></div>
       </div>
       <p v-if="pipelineStep" class="pipeline-hint">流水线：{{ pipelineStep.phase }} · 节点 <code>{{ pipelineStep.id }}</code>（{{ pipelineStep.name }}）· 原始节点「{{ record.node }}」</p>
-      <a-checkbox v-if="isEditable && sedimentHint" v-model="sedimentRule" class="sediment-line">
+      <label v-if="isEditable && sedimentHint" class="sediment-line">
+        <input v-model="sedimentRule" type="checkbox" />
         <span>{{ sedimentHint }}</span>
-      </a-checkbox>
+      </label>
     </section>
 
     <footer v-if="!isDirectCase" class="rw-foot">
@@ -1901,17 +1867,4 @@ const secondaryActions = computed(() => {
 .direct-accept:disabled,.direct-reject:disabled{opacity:.5;cursor:not-allowed}
 .direct-accept:hover:not(:disabled),.direct-reject:hover:not(:disabled){opacity:.92}
 .direct-done{margin:0;padding:14px;text-align:center;color:#475569;font-size:13px;background:#fff;border-radius:6px;border:1px solid #e4ecf6}
-</style>
-<style scoped>
-/* DESIGN_RULES: manual review detail contract. */
-.rw{overflow:hidden;color:#1d2129}.rw-head{align-items:center;gap:16px;margin-bottom:16px}.rw-head h1{margin:4px 0;font-size:20px;line-height:28px;font-weight:600}.rw-head p,.rw-head a{font-size:12px;line-height:20px}
-.scope,.status{display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.scope::before,.status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}.scope.is-batch,.scope.is-task,.status.is-待处理,.status.is-已完成,.status.is-已撤销,.status.is-已驳回{background:transparent}
-.rw-diag{gap:8px 16px;margin-bottom:16px;padding:16px;border-color:#e5e6eb;border-radius:6px;background:#f7f8fa}.rw-diag strong{font-size:14px;line-height:22px}.rw-diag span,.rw-diag em{font-size:12px;line-height:20px}
-.rw-body{flex:1;overflow:auto;padding:16px;border-color:#e5e6eb;border-radius:6px}
-.rw-zone-head{gap:8px;margin-bottom:16px}.rw-zone-head h2,.rw-sec__head h2{font-size:16px;line-height:24px;font-weight:600}.rw-zone-head p,.rw-sec__head p{font-size:12px;line-height:20px}
-.rw-sec{margin-bottom:16px;padding:16px;border:0;border-radius:6px;background:#f7f8fa}.rw-sec__head{gap:8px;margin-bottom:16px}
-.cat-pill{padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.tri-grid{gap:16px}.tri-grid>div{gap:4px;padding:8px 16px;border-color:#e5e6eb;border-radius:4px}.tri-grid span,.tri-grid em{font-size:12px;line-height:20px}.tri-grid strong{font-size:14px;line-height:22px}
-.rw :is(button,input,select,textarea){font-size:14px;line-height:22px}.rw :is(button,input,select){min-height:32px;border-radius:4px}.rw textarea{border-radius:4px}
-.direct-actions{gap:16px}.direct-accept,.direct-reject{min-height:32px;padding:8px 16px;border-radius:4px;font-size:14px}.direct-accept strong,.direct-reject strong{font-size:14px;line-height:22px}.direct-accept em,.direct-reject em{font-size:12px;line-height:20px}
-@media(max-width:960px){.rw{overflow:auto}.rw-body{overflow:visible}.tri-grid{grid-template-columns:1fr}}
 </style>

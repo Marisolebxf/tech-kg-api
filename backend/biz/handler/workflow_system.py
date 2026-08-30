@@ -9,14 +9,17 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import TypeAdapter, ValidationError
 
 from application.workflow_operations import workflow_operations_application
+from biz.dependencies.auth import CurrentActor
 from biz.schemas.common import ApiResponse
 from biz.schemas.workflow_operations import (
     ScheduleStateRequest,
     StepManifest,
+    WorkflowChainRequest,
     WorkflowDefinitionRequest,
     WorkflowExecuteRequest,
     WorkflowScheduleRequest,
 )
+from service.platform_access import PlatformActor
 from service.temporal_runtime import temporal_runtime
 
 router = APIRouter(prefix="/workflow-system", tags=["workflow-system"])
@@ -29,8 +32,10 @@ async def workflow_health() -> ApiResponse:
 
 
 @router.get("/definitions", response_model=ApiResponse)
-async def list_definitions() -> ApiResponse:
-    items = service.repo.list_definitions()
+async def list_definitions(
+    category: str | None = Query(default=None, pattern="^(entity|relation|graph|custom)$"),
+) -> ApiResponse:
+    items = service.repo.list_definitions(category=category)
     return ApiResponse(data={"items": items, "total": len(items)})
 
 
@@ -48,6 +53,7 @@ async def upload_python_definition(
     definition_id: Annotated[str | None, Form()] = None,
     name: Annotated[str | None, Form()] = None,
     timeout_seconds: Annotated[int | None, Form(alias="timeoutSeconds")] = None,
+    category: Annotated[str, Form(pattern="^(entity|relation|graph|custom)$")] = "custom",
 ) -> ApiResponse:
     try:
         content = await file.read()
@@ -58,9 +64,22 @@ async def upload_python_definition(
             definition_id,
             name,
             timeout_seconds=timeout_seconds,
+            category=category,
         )
         return ApiResponse(data=definition, msg="Python 工作流脚本已上传并完成校验")
     except (UnicodeDecodeError, SyntaxError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/definitions/chains", response_model=ApiResponse)
+async def create_chain_definition(request: WorkflowChainRequest) -> ApiResponse:
+    """把多个已注册 python 定义按顺序串成 kg.custom.chain 串行链。"""
+    try:
+        definition = service.create_chain_definition(
+            request.name, request.definition_ids, request.definition_id
+        )
+        return ApiResponse(data=definition, msg="脚本串行链已创建")
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -102,8 +121,47 @@ async def get_definition(definition_id: str) -> ApiResponse:
     return ApiResponse(data=definition)
 
 
+def _validate_execute_resources(actor: PlatformActor, request: WorkflowExecuteRequest) -> None:
+    """非管理员触发时校验：所选配置的 owner 必须是自己，图空间必须已绑定。"""
+    if actor.is_admin:
+        return
+    from dao.embedding_config import EmbeddingConfigDAO
+    from dao.llm_config import LlmConfigDAO
+    from dao.milvus_config import MilvusConfigDAO
+    from dao.mysql_datasource import MysqlDatasourceDAO
+    from infra.mysql import create_session
+    from service.graph_space import GraphSpaceService
+
+    session = create_session()
+    try:
+        checks = (
+            (LlmConfigDAO(session), request.llm_config_id),
+            (EmbeddingConfigDAO(session), request.embedding_config_id),
+            (MysqlDatasourceDAO(session), request.mysql_datasource_id),
+            (MilvusConfigDAO(session), request.milvus_config_id),
+        )
+        for dao, config_id in checks:
+            if not config_id:
+                continue
+            row = dao.get(config_id)
+            if row is None or (getattr(row, "owner", "") or "") != actor.user_id:
+                raise HTTPException(
+                    status_code=403, detail=f"无权使用配置 {config_id}（仅能选择自己的配置）"
+                )
+        if request.graph_space:
+            if not GraphSpaceService(session).is_bound(actor.user_id, request.graph_space):
+                raise HTTPException(
+                    status_code=403, detail=f"图空间 {request.graph_space} 未绑定到当前用户"
+                )
+    finally:
+        session.close()
+
+
 @router.post("/definitions/{definition_id}/execute", response_model=ApiResponse)
-async def execute_definition(definition_id: str, request: WorkflowExecuteRequest) -> ApiResponse:
+async def execute_definition(
+    definition_id: str, request: WorkflowExecuteRequest, actor: CurrentActor
+) -> ApiResponse:
+    _validate_execute_resources(actor, request)
     definition = service.repo.get_definition(definition_id)
     if definition is None:
         raise HTTPException(status_code=404, detail="工作流定义不存在")
@@ -136,8 +194,14 @@ async def execute_definition(definition_id: str, request: WorkflowExecuteRequest
 @router.get("/executions", response_model=ApiResponse)
 async def list_executions(
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    definition_id: Annotated[str | None, Query(alias="definitionId")] = None,
+    schedule_id: Annotated[str | None, Query(alias="scheduleId")] = None,
 ) -> ApiResponse:
-    return ApiResponse(data=service.list_executions(limit=limit))
+    return ApiResponse(
+        data=service.list_executions(
+            limit=limit, definition_id=definition_id, schedule_id=schedule_id
+        )
+    )
 
 
 @router.get("/executions/{execution_id}", response_model=ApiResponse)

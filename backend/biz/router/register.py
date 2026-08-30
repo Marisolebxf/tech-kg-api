@@ -24,6 +24,7 @@ from biz.handler.expert_enterprise_mining import router as expert_enterprise_min
 from biz.handler.expert_enterprise_relation import router as expert_enterprise_relation_router
 from biz.handler.expert_indirect_relation import router as expert_indirect_relation_router
 from biz.handler.expert_paper_cooperation import router as expert_paper_cooperation_router
+from biz.handler.graph_console import router as graph_console_router
 from biz.handler.graph_search import router as graph_search_router
 from biz.handler.graph_space import router as graph_space_router
 from biz.handler.industry_chain_panorama import router as industry_chain_panorama_router
@@ -74,10 +75,19 @@ def register_routers(app: FastAPI) -> None:
         industry_chain_topn_event_router,
         industry_chain_panorama_router,
         graph_search_router,
+        graph_console_router,
         correction_router,
         expert_colleague_service_router,
         tech_enterprise_relation_business_router,
         industry_node_top_events_business_router,
+        task_center_router,
+        workflow_system_router,
+        schema_management_router,
+        llm_config_router,
+        mysql_datasource_router,
+        milvus_config_router,
+        embedding_config_router,
+        graph_space_router,
     )
     for router in protected_routers:
         app.include_router(
@@ -87,15 +97,7 @@ def register_routers(app: FastAPI) -> None:
         )
     admin_dependencies = [Depends(require_authenticated_user), Depends(require_platform_admin)]
     admin_routers = (
-        task_center_router,
         manual_review_router,
-        workflow_system_router,
-        schema_management_router,
-        llm_config_router,
-        mysql_datasource_router,
-        milvus_config_router,
-        embedding_config_router,
-        graph_space_router,
         operator_router,
         admin_member_router,
     )

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
@@ -17,16 +16,13 @@ from typing import Any, Literal
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
+from biz.dependencies.auth import CurrentActor
 from biz.schemas.common import ApiResponse
-from infra.graph_db import TRSGraphClient, get_trs_graph_client
-from infra.graph_db.config import TRSGraphSettings
+from infra.graph_db import TRSGraphClient, get_space_client, get_trs_graph_client
 from infra.graph_db.exceptions import GraphRequestError
+from infra.mysql import create_session
 
 router = APIRouter(prefix="/graph-search", tags=["graph-search"])
-
-# 按空间缓存客户端（避免每次请求重建连接）
-_space_clients: dict[str, TRSGraphClient] = {}
-_space_lock = threading.Lock()
 
 # Nebula 的 count 是全量扫描，单个边类型就要 2~4 秒，全库统计一遍近 50 秒，
 # 因此按空间缓存整份统计结果，并把扫描并行化。
@@ -148,23 +144,11 @@ def _get_client(space: str | None = None) -> TRSGraphClient:
     """获取指定空间的 trs-graph 客户端。
 
     space=None 时用 get_trs_graph_client() 单例（.env 的 TRS_GRAPH_SPACE）。
-    指定 space 时按空间名缓存客户端。
+    指定 space 时用 infra.graph_db.get_space_client（按空间名缓存）。
     """
     if not space:
         return get_trs_graph_client()
-
-    if space in _space_clients:
-        return _space_clients[space]
-
-    with _space_lock:
-        if space in _space_clients:
-            return _space_clients[space]
-        settings = TRSGraphSettings.from_env()
-        settings.space = space
-        client = TRSGraphClient(settings)
-        client.connect()
-        _space_clients[space] = client
-        return client
+    return get_space_client(space)
 
 
 def _node_to_data(n: Any) -> GraphNodeData:
@@ -629,13 +613,23 @@ async def shortest_path(
 
 
 @router.get("/spaces", response_model=ApiResponse)
-async def list_spaces() -> ApiResponse:
-    """列出所有可用的图空间。"""
+async def list_spaces(actor: CurrentActor) -> ApiResponse:
+    """列出当前用户可用的图空间（管理员 SHOW SPACES 全量，普通用户仅自己绑定的）。"""
     try:
-        names = _get_client(None).list_spaces()
-        return ApiResponse(data={"spaces": names})
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+        from service.graph_space import GraphSpaceService
+
+        session = create_session()
+        try:
+            items = GraphSpaceService(session).list_spaces_for_actor(actor)
+        finally:
+            session.close()
+        return ApiResponse(data={"spaces": [item["name"] for item in items]})
+    except Exception as exc:  # noqa: BLE001
+        # 绑定关系查不到（如 MySQL 不可用）时回退 SHOW SPACES，保持旧行为
+        try:
+            return ApiResponse(data={"spaces": _get_client(None).list_spaces()})
+        except Exception:  # noqa: BLE001
+            return ApiResponse(code=500, success=False, msg=str(exc))
 
 
 @router.get("/stats", response_model=ApiResponse)

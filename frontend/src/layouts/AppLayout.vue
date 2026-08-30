@@ -24,11 +24,12 @@ import accountLogoutIcon from "../assets/icons/account-menu/icon-logout.svg";
 import accountMemberStar from "../assets/icons/account-menu/icon-member-star.svg";
 import iconMessage from "../assets/icons/icon-message.svg";
 import navOverview from "../assets/icons/nav-overview.svg";
+import navGraph from "../assets/icons/nav-graph.svg";
+import navSchema from "../assets/icons/nav-schema.svg";
 import navQuery from "../assets/icons/nav-query.svg";
 import navReview from "../assets/icons/nav-review.svg";
 import navServices from "../assets/icons/nav-services.svg";
 import navTasks from "../assets/icons/nav-tasks.svg";
-import navFlow from "../assets/icons/nav-flow.svg";
 import navTools from "../assets/icons/nav-tools.svg";
 import { useAppStore } from "../stores/app";
 import { useAuthStore } from "../stores/auth";
@@ -501,6 +502,66 @@ onBeforeUnmount(() => {
             </RouterLink>
 
             <div v-if="!sidebarCollapsed" class="app-nav__group">
+              <span>图谱建设与治理</span>
+            </div>
+            <RouterLink
+              class="app-nav__item app-nav__item--top app-nav__item--leaf"
+              active-class="app-nav__item--active"
+              to="/schema"
+              :title="sidebarCollapsed ? 'Schema 管理' : undefined"
+            >
+              <span
+                class="app-nav__icon"
+                :style="navIconStyle(navSchema)"
+                aria-hidden="true"
+              ></span>
+              <span v-if="!sidebarCollapsed">Schema 管理</span>
+            </RouterLink>
+            <RouterLink
+              class="app-nav__item app-nav__item--top app-nav__item--leaf"
+              active-class="app-nav__item--active"
+              to="/graph-build"
+              :title="sidebarCollapsed ? '图谱构建' : undefined"
+            >
+              <span
+                class="app-nav__icon"
+                :style="navIconStyle(navGraph)"
+                aria-hidden="true"
+              ></span>
+              <span v-if="!sidebarCollapsed">图谱构建</span>
+            </RouterLink>
+            <RouterLink
+              class="app-nav__item app-nav__item--top app-nav__item--leaf"
+              active-class="app-nav__item--active"
+              to="/manual-review"
+              :title="sidebarCollapsed ? '人工审核' : undefined"
+            >
+              <span
+                class="app-nav__icon"
+                :style="navIconStyle(navReview)"
+                aria-hidden="true"
+              ></span>
+              <span v-if="!sidebarCollapsed">人工审核</span>
+            </RouterLink>
+
+            <div v-if="!sidebarCollapsed" class="app-nav__group">
+              <span>平台管理</span>
+            </div>
+            <RouterLink
+              class="app-nav__item app-nav__item--top app-nav__item--leaf"
+              active-class="app-nav__item--active"
+              to="/configurations"
+              :title="sidebarCollapsed ? '配置管理' : undefined"
+            >
+              <span
+                class="app-nav__icon"
+                :style="navIconStyle(navTools)"
+                aria-hidden="true"
+              ></span>
+              <span v-if="!sidebarCollapsed">配置管理</span>
+            </RouterLink>
+
+            <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>查询与服务</span>
             </div>
             <RouterLink
@@ -515,19 +576,6 @@ onBeforeUnmount(() => {
                 aria-hidden="true"
               ></span>
               <span v-if="!sidebarCollapsed">图谱查询</span>
-            </RouterLink>
-            <RouterLink
-              class="app-nav__item app-nav__item--top app-nav__item--leaf"
-              active-class="app-nav__item--active"
-              to="/graph-build"
-              :title="sidebarCollapsed ? '图谱构建' : undefined"
-            >
-              <span
-                class="app-nav__icon"
-                :style="navIconStyle(navFlow)"
-                aria-hidden="true"
-              ></span>
-              <span v-if="!sidebarCollapsed">图谱构建</span>
             </RouterLink>
             <div class="app-nav__service-group">
               <button

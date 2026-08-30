@@ -62,7 +62,7 @@ class TemporalRuntime:
         workflow_id = workflow_id or f"{definition['id']}-{uuid4().hex}"
         client = await self.client()
         workflow_payload = payload
-        if definition.get("sourceKind") in {"python", "declarative"}:
+        if definition.get("sourceKind") in {"python", "declarative", "steps", "chain"}:
             workflow_payload = {"definitionId": definition["id"], "payload": payload}
         handle = await client.start_workflow(
             definition["workflowType"],
@@ -157,7 +157,12 @@ class TemporalRuntime:
         except Exception:
             pass
         workflow_payload = schedule.get("payload", {})
-        if definition.get("sourceKind") in {"python", "declarative"}:
+        if definition.get("sourceKind") in {"python", "declarative", "steps", "chain"}:
+            # 标记周期来源：workflow 启动时据此落 workflow_executions + tasks 记录
+            workflow_payload = {
+                **workflow_payload,
+                "_scheduleId": schedule_id,
+            }
             workflow_payload = {"definitionId": definition["id"], "payload": workflow_payload}
         await client.create_schedule(
             schedule_id,

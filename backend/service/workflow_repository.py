@@ -886,13 +886,14 @@ class WorkflowRepository:
         with workflow_session_scope() as session:
             session.merge(WorkflowSetting(key=key, payload=_json(payload)))
 
-    def list_definitions(self) -> list[dict[str, Any]]:
+    def list_definitions(self, category: str | None = None) -> list[dict[str, Any]]:
         with workflow_session_scope() as session:
-            rows = session.scalars(
-                select(WorkflowDefinition).order_by(
-                    WorkflowDefinition.category, WorkflowDefinition.id
-                )
-            ).all()
+            stmt = select(WorkflowDefinition).order_by(
+                WorkflowDefinition.category, WorkflowDefinition.id
+            )
+            if category:
+                stmt = stmt.where(WorkflowDefinition.category == category)
+            rows = session.scalars(stmt).all()
             return [json.loads(row.payload) for row in rows]
 
     def get_definition(self, definition_id: str) -> dict[str, Any] | None:
@@ -943,12 +944,30 @@ class WorkflowRepository:
             )
             return json.loads(row.payload) if row else None
 
-    def list_executions(self, limit: int = 100) -> list[dict[str, Any]]:
+    def get_execution_by_run(self, run_id: str) -> dict[str, Any] | None:
+        """按 runId 查 execution 行（周期任务落库幂等判断）。"""
         with workflow_session_scope() as session:
-            rows = session.scalars(
-                select(WorkflowExecution).order_by(WorkflowExecution.started_at.desc()).limit(limit)
-            ).all()
-            return [json.loads(row.payload) for row in rows]
+            row = session.scalar(
+                select(WorkflowExecution).where(WorkflowExecution.run_id == run_id)
+            )
+            return json.loads(row.payload) if row else None
+
+    def list_executions(
+        self,
+        limit: int = 100,
+        definition_id: str | None = None,
+        schedule_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with workflow_session_scope() as session:
+            stmt = select(WorkflowExecution).order_by(WorkflowExecution.started_at.desc())
+            if definition_id:
+                stmt = stmt.where(WorkflowExecution.definition_id == definition_id)
+            rows = session.scalars(stmt.limit(limit if not schedule_id else 500)).all()
+            items = [json.loads(row.payload) for row in rows]
+            if schedule_id:
+                # scheduleId 存在 payload JSON 里，取较多行后内存过滤
+                items = [item for item in items if item.get("scheduleId") == schedule_id]
+            return items[:limit]
 
     def save_schedule(self, schedule: dict[str, Any]) -> None:
         with workflow_session_scope() as session:

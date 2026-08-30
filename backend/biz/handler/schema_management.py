@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
 from application.schema_management import SchemaManagementApplication
-from biz.dependencies.auth import CurrentAdmin
+from biz.dependencies.auth import CurrentActor
 from biz.schemas.common import ApiResponse
 from biz.schemas.schema_management import EntitySchemaCreate, RelationSchemaCreate
 from infra.workflow_mysql import get_workflow_session
@@ -64,7 +64,7 @@ def get_schema_overview(session: Annotated[Session, Depends(get_workflow_session
 
 @router.get("/schemas", response_model=ApiResponse)
 def list_schemas(
-    admin: CurrentAdmin,
+    actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
     kind: Annotated[str | None, Query(pattern="^(entity|relation)$")] = None,
     keyword: Annotated[str | None, Query(max_length=128)] = None,
@@ -77,22 +77,22 @@ def list_schemas(
         keyword=keyword.strip() if keyword else None,
         page=page,
         page_size=page_size,
-        user_id=admin.user_id,
+        user_id=actor.user_id,
         include_details=include_details,
-        is_platform_admin=admin.is_admin,
+        is_platform_admin=actor.is_admin,
     )
     return ApiResponse(data=data)
 
 
 @router.get("/schemas/topology", response_model=ApiResponse)
 def get_schema_topology(
-    admin: CurrentAdmin,
+    actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
 ) -> ApiResponse:
     return ApiResponse(
         data=_application(session).topology(
-            admin.user_id,
-            is_platform_admin=admin.is_admin,
+            actor.user_id,
+            is_platform_admin=actor.is_admin,
         )
     )
 
@@ -100,15 +100,15 @@ def get_schema_topology(
 @router.get("/schemas/{schema_id}", response_model=ApiResponse)
 def get_schema_detail(
     schema_id: str,
-    admin: CurrentAdmin,
+    actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
 ) -> ApiResponse:
     try:
         return ApiResponse(
             data=_application(session).get_schema(
                 schema_id,
-                admin.user_id,
-                is_platform_admin=admin.is_admin,
+                actor.user_id,
+                is_platform_admin=actor.is_admin,
             )
         )
     except SchemaManagementError as exc:
@@ -117,14 +117,14 @@ def get_schema_detail(
 
 @router.post("/schemas/entities", response_model=ApiResponse, status_code=201)
 def create_entity_schema(
-    admin: CurrentAdmin,
+    actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
     payload: EntitySchemaCreate,
 ) -> ApiResponse:
     try:
         data = _application(session).create_entity(
             payload=payload.model_dump(),
-            user_id=admin.user_id,
+            user_id=actor.user_id,
         )
         return ApiResponse(data=data, msg="实体 Schema 创建成功")
     except SchemaManagementError as exc:
@@ -133,14 +133,14 @@ def create_entity_schema(
 
 @router.post("/schemas/relations", response_model=ApiResponse, status_code=201)
 def create_relation_schema(
-    admin: CurrentAdmin,
+    actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
     payload: RelationSchemaCreate,
 ) -> ApiResponse:
     try:
         data = _application(session).create_relation(
             payload=payload.model_dump(),
-            user_id=admin.user_id,
+            user_id=actor.user_id,
         )
         return ApiResponse(data=data, msg="关系 Schema 创建成功")
     except SchemaManagementError as exc:
@@ -150,14 +150,14 @@ def create_relation_schema(
 @router.delete("/schemas/{schema_id}", response_model=ApiResponse)
 def delete_schema(
     schema_id: str,
-    admin: CurrentAdmin,
+    actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
 ) -> ApiResponse:
     try:
         data = _application(session).delete_schema(
             schema_id,
-            admin.user_id,
-            is_platform_admin=admin.is_admin,
+            actor.user_id,
+            is_platform_admin=actor.is_admin,
         )
         return ApiResponse(data=data, msg="Schema 删除成功")
     except SchemaManagementError as exc:
@@ -167,15 +167,15 @@ def delete_schema(
 @router.put("/schemas/{schema_id}/script", response_model=ApiResponse)
 def replace_schema_script(
     schema_id: str,
-    admin: CurrentAdmin,
+    actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
     script: Annotated[UploadFile, File(...)],
 ) -> ApiResponse:
     try:
         data = _application(session).replace_script(
             schema_id=schema_id,
-            user_id=admin.user_id,
-            is_platform_admin=admin.is_admin,
+            user_id=actor.user_id,
+            is_platform_admin=actor.is_admin,
             filename=script.filename or "",
             content_type=script.content_type,
             script_data=_read_script(script),
@@ -195,7 +195,7 @@ _SENTINEL = object()
 @router.post("/schemas/{schema_id}/script/verify")
 async def verify_and_save_script(
     schema_id: str,
-    admin: CurrentAdmin,
+    actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
     script: Annotated[UploadFile, File(...)],
 ) -> StreamingResponse:
@@ -214,8 +214,8 @@ async def verify_and_save_script(
         try:
             for event in app.verify_and_save_script(
                 schema_id=schema_id,
-                user_id=admin.user_id,
-                is_platform_admin=admin.is_admin,
+                user_id=actor.user_id,
+                is_platform_admin=actor.is_admin,
                 filename=script.filename or "",
                 content_type=script.content_type,
                 script_data=script_data,

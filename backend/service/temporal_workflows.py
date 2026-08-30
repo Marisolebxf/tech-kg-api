@@ -304,6 +304,44 @@ print(json.dumps({"result": result, "_access": access_report()}, ensure_ascii=Fa
         _cleanup_sidecar(sidecar_path)
 
 
+@activity.defn
+async def register_scheduled_execution(request: dict[str, Any]) -> dict[str, Any]:
+    """周期 Schedule 触发的运行落 workflow_executions + tasks（幂等：runId 已存在则跳过）。
+
+    Schedule 直发 workflow 不经过 API，历史只在 Temporal；此 activity 让每次触发
+    都在 MySQL 留 execution/task 行，任务详情页由此列出周期执行记录。
+    """
+    from service.temporal_runtime import temporal_runtime
+    from service.workflow_operations import WorkflowOperationsService
+    from service.workflow_repository import repository
+
+    definition = repository.get_definition(request["definitionId"])
+    if definition is None:
+        return {"ok": False, "reason": "definition-missing"}
+    run_id = request.get("runId")
+    if run_id and repository.get_execution_by_run(run_id) is not None:
+        return {"ok": True, "deduped": True}
+    dispatch = {
+        "workflowId": request["workflowId"],
+        "runId": run_id,
+        "status": "RUNNING",
+        "dispatchMode": "TEMPORAL_SCHEDULE",
+        "message": "周期任务自动触发",
+    }
+    execution = temporal_runtime.execution_record(
+        request["definitionId"], dispatch, request.get("payload", {})
+    )
+    execution["scheduleId"] = request["scheduleId"]
+    repository.save_execution(execution)
+    task = WorkflowOperationsService.create_task_for_execution(
+        definition, execution, request.get("payload", {})
+    )
+    repository.save_task(task)
+    execution["taskId"] = task["id"]
+    repository.save_execution(execution)
+    return {"ok": True, "executionId": execution["id"], "taskId": task["id"]}
+
+
 def _retry_policy(config: dict[str, Any]) -> RetryPolicy:
     """把 manifest 的 retryPolicy 配置翻译成 Temporal RetryPolicy。
 
@@ -617,10 +655,31 @@ class GraphBuildWorkflow:
         return {"status": "completed", "children": results}
 
 
+async def _register_scheduled_run(request: dict[str, Any]) -> None:
+    """payload 带 _scheduleId 时（周期 Schedule 触发），先落 execution/task 行。"""
+    schedule_id = (request.get("payload") or {}).get("_scheduleId")
+    if not schedule_id:
+        return
+    info = workflow.info()
+    await workflow.execute_activity(
+        register_scheduled_execution,
+        {
+            "definitionId": request["definitionId"],
+            "scheduleId": schedule_id,
+            "workflowId": info.workflow_id,
+            "runId": info.run_id,
+            "payload": request.get("payload", {}),
+        },
+        start_to_close_timeout=timedelta(seconds=30),
+        retry_policy=ACTIVITY_RETRY_POLICY,
+    )
+
+
 @workflow.defn(name="kg.custom.configurable")
 class ConfigurableWorkflow:
     @workflow.run
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
+        await _register_scheduled_run(request)
         definition = await workflow.execute_activity(
             load_workflow_definition,
             request["definitionId"],
@@ -652,6 +711,7 @@ class PythonScriptWorkflow:
 
     @workflow.run
     async def run(self, request: dict[str, Any]) -> Any:
+        await _register_scheduled_run(request)
         definition = await workflow.execute_activity(
             load_workflow_definition,
             request["definitionId"],
@@ -690,6 +750,7 @@ class StepPipelineWorkflow:
 
     @workflow.run
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
+        await _register_scheduled_run(request)
         definition = await workflow.execute_activity(
             load_workflow_definition,
             request["definitionId"],
@@ -698,6 +759,7 @@ class StepPipelineWorkflow:
         prev_outputs: dict[str, Any] = {}
         for step in definition.get("steps", []):
             self._current_step = step["id"]
+            step_payload = dict(request.get("payload", {}) or {})
             try:
                 result = await workflow.execute_activity(
                     execute_pipeline_step,
@@ -708,7 +770,7 @@ class StepPipelineWorkflow:
                         "stepId": step["id"],
                         "functionName": step["functionName"],
                         "scriptPath": definition["scriptPath"],
-                        "payload": request.get("payload", {}),
+                        "payload": step_payload,
                         "prevOutputs": prev_outputs,
                         "timeoutSeconds": step.get("timeoutSeconds", 600),
                     },
@@ -717,6 +779,7 @@ class StepPipelineWorkflow:
                 )
                 self._steps[step["id"]] = {
                     "status": "COMPLETED",
+                    "input": step_payload,
                     "output": result["output"],
                     "attempt": result["attempt"],
                     "access": result.get("access"),
@@ -725,7 +788,81 @@ class StepPipelineWorkflow:
             except Exception as exc:
                 # Activity 重试耗尽后 workflow 失败；用户走 reset 回放重试。
                 # FAILED 状态写入 self._steps 让 query 在 reset 之前仍可读到失败原因。
-                self._steps[step["id"]] = {"status": "FAILED", "error": str(exc)}
+                self._steps[step["id"]] = {
+                    "status": "FAILED",
+                    "input": step_payload,
+                    "error": str(exc),
+                }
+                raise
+        return {"status": "completed", "steps": self._steps}
+
+    @workflow.query
+    def get_steps(self) -> dict[str, Any]:
+        return {"current": self._current_step, "steps": self._steps}
+
+
+@workflow.defn(name="kg.custom.chain")
+class ChainWorkflow:
+    """多脚本串行链：按 definition.steps 顺序逐个执行已注册的 python 定义。
+
+    与 kg.custom.steps 的区别：steps 要求单文件内多函数；chain 的每一步是一个
+    独立上传的 python 定义（如单实体/单关系抽取脚本），上一步输出经
+    payload["_prevOutputs"] 传给下一步（脚本可忽略）。状态走 get_steps query。
+    """
+
+    def __init__(self) -> None:
+        self._steps: dict[str, dict[str, Any]] = {}
+        self._current_step: str | None = None
+
+    @workflow.run
+    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
+        await _register_scheduled_run(request)
+        chain = await workflow.execute_activity(
+            load_workflow_definition,
+            request["definitionId"],
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+        prev_outputs: dict[str, Any] = {}
+        for step in chain.get("steps", []):
+            step_id = step["definitionId"]
+            self._current_step = step_id
+            step_definition = await workflow.execute_activity(
+                load_workflow_definition,
+                step_id,
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            step_payload = {
+                **(request.get("payload", {}) or {}),
+                "_prevOutputs": prev_outputs,
+            }
+            timeout_seconds = max(int(step_definition.get("timeoutSeconds", 60)), 1)
+            try:
+                output = await workflow.execute_activity(
+                    execute_python_script,
+                    {
+                        "scriptPath": step_definition["scriptPath"],
+                        "functionName": step_definition.get("functionName", "workflow"),
+                        "payload": step_payload,
+                        "definitionId": step_id,
+                        "timeoutSeconds": timeout_seconds,
+                    },
+                    start_to_close_timeout=timedelta(seconds=timeout_seconds + 30),
+                    retry_policy=_retry_policy(step.get("retryPolicy", {})),
+                )
+                self._steps[step_id] = {
+                    "status": "COMPLETED",
+                    "name": step.get("name") or step_id,
+                    "input": step_payload,
+                    "output": output,
+                }
+                prev_outputs[step_id] = output
+            except Exception as exc:
+                self._steps[step_id] = {
+                    "status": "FAILED",
+                    "name": step.get("name") or step_id,
+                    "input": step_payload,
+                    "error": str(exc),
+                }
                 raise
         return {"status": "completed", "steps": self._steps}
 
@@ -748,6 +885,7 @@ WORKFLOW_CLASSES = [
     ConfigurableWorkflow,
     PythonScriptWorkflow,
     StepPipelineWorkflow,
+    ChainWorkflow,
 ]
 
 ACTIVITIES = [
@@ -755,4 +893,5 @@ ACTIVITIES = [
     load_workflow_definition,
     execute_python_script,
     execute_pipeline_step,
+    register_scheduled_execution,
 ]

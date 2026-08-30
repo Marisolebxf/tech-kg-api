@@ -130,6 +130,4 @@ export async function testLlmConfig(
   )
 }
 
-export function currentUserId(): string {
-  return localStorage.getItem('tech-kg-schema-user-id') || 'platform-admin'
-}
+export { currentUserId } from './currentUser'

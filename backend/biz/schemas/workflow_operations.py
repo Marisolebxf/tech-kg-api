@@ -131,3 +131,13 @@ class TaskRetryRequest(BaseModel):
     """失败任务重试：调 Temporal ResetWorkflowExecution。"""
 
     reason: str = "manual retry"
+
+
+class WorkflowChainRequest(BaseModel):
+    """多脚本串行链：按顺序串行执行多个已注册 python 定义。"""
+
+    name: str = Field(min_length=1, max_length=100)
+    definition_ids: list[str] = Field(min_length=1, max_length=20, alias="definitionIds")
+    definition_id: str | None = Field(default=None, alias="definitionId")
+
+    model_config = {"populate_by_name": True}

@@ -13,8 +13,8 @@ class LlmConfigApplication:
     def __init__(self, session: Session) -> None:
         self._service = LlmConfigService(session)
 
-    def list_configs(self) -> list[dict]:
-        return self._service.list_configs()
+    def list_configs(self, owner: str | None = None) -> list[dict]:
+        return self._service.list_configs(owner=owner)
 
     def get_config(self, config_id: str) -> dict | None:
         return self._service.get_config(config_id)

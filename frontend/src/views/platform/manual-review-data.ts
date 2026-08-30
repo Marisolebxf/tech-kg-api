@@ -53,12 +53,12 @@ export const reviewBatches: ReviewBatch[] = [
   {
     id: 'UPD-20260714', module: '数据更新', node: '实体与关系异常处理', domain: '论文 / 人才 / 企业',
     total: 711, pending: 711, completed: 0, handler: '王审核 / 李质量', status: '待处理', severity: '高风险', severityReason: '公共流程异常已阻断，待修正后恢复', updatedAt: '07-14 10:42',
-    reason: '实体冲突、关系证据不足和数据质量异常', taskPath: '/tasks?module=图谱构建&batch=UPD-20260714', dataWindow: '2026-07-13 02:00—2026-07-14 02:00',
+    reason: '实体冲突、关系证据不足和数据质量异常', taskPath: '/graph-build?module=图谱构建&batch=UPD-20260714', dataWindow: '2026-07-13 02:00—2026-07-14 02:00',
   },
   {
     id: 'UPD-20260713', module: '数据更新', node: '实体与关系异常处理', domain: '专利 / 人才',
     total: 42, pending: 0, completed: 42, handler: '陈治理', status: '已完成', severity: '中风险', severityReason: '候选对象已隔离，其他任务继续执行', updatedAt: '07-12 19:16',
-    reason: '候选实体置信度低于自动入库阈值，已完成人工确认', taskPath: '/tasks?module=图谱构建&batch=UPD-20260713', dataWindow: '2026-07-12 02:00—2026-07-13 02:00',
+    reason: '候选实体置信度低于自动入库阈值，已完成人工确认', taskPath: '/graph-build?module=图谱构建&batch=UPD-20260713', dataWindow: '2026-07-12 02:00—2026-07-13 02:00',
   },
 ]
 

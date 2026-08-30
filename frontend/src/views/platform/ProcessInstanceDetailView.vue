@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getTask, retryTask, type AccessReport, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch } from '../../api/workflowOperations'
+import { getExecution, getTask, listExecutions, retryTask, type AccessReport, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch, type WorkflowExecution } from '../../api/workflowOperations'
 import { accessChips } from '../../utils/accessReport'
 
 type StepStatus = '成功' | '运行中' | '需人工处理' | '待执行'
@@ -32,7 +32,7 @@ const batch = computed(() => processingInstance.value?.batch ?? fallbackBatch)
 const isConstructionTask = computed(() => processingInstance.value?.stage === '图谱构建' || String(route.params.area) === 'construction')
 const needsTaskReview = computed(() => ['执行出错', '等待人工审核'].includes(processingInstance.value?.taskStatus ?? ''))
 const activeTab = ref<DetailTab>('overview')
-const isPipelineTask = computed(() => processingInstance.value?.workflowType === 'kg.custom.steps')
+const isPipelineTask = computed(() => ['kg.custom.steps', 'kg.custom.chain'].includes(processingInstance.value?.workflowType ?? ''))
 
 const baseSteps: Omit<Step, 'status' | 'count' | 'abnormal' | 'duration'>[] = [
   { id: 'source', phase: '数据处理', name: '数据接入', risk: '低风险', description: '读取科技要素库增量数据并校验连接。', engine: 'Data Connector 3.1' },
@@ -126,17 +126,19 @@ function mapPipelineStatus(s: PipelineStepInfo['status']): StepStatus {
 function buildPipelineSteps(): Step[] {
   const state = processingInstance.value?.pipeline
   if (!state?.steps) return [] as Step[]
+  const engine = processingInstance.value?.workflowType ?? 'kg.custom.steps'
   return Object.entries(state.steps).map(([id, info]) => ({
     id,
     phase: '图谱构建' as const,
-    name: id,
+    name: info.name || id,
     status: mapPipelineStatus(info.status),
     risk: (info.status === 'FAILED' ? '高风险' : '低风险') as RiskLevel,
     count: info.attempt ? `attempt=${info.attempt}` : '-',
     abnormal: info.error ? '1' : '0',
     duration: '-',
-    description: info.error || `kg.custom.steps · ${info.status}`,
-    engine: 'kg.custom.steps',
+    description: info.error || `${engine} · ${info.status}`,
+    engine,
+    input: info.input,
     output: info.output,
     access: info.access,
   }))
@@ -292,19 +294,69 @@ async function loadTaskDetail() {
   }
 }
 
+// === 执行记录（周期任务多次触发 / 一次性任务重试历史） ===
+const scheduleId = computed(() => String(route.query.scheduleId || ''))
+const executions = ref<WorkflowExecution[]>([])
+const selectedExecutionId = ref('')
+const selectedExecution = ref<WorkflowExecution | null>(null)
+
+async function loadExecutions() {
+  try {
+    if (scheduleId.value) {
+      executions.value = (await listExecutions(200, { scheduleId: scheduleId.value })).items
+    } else if (processingInstance.value?.rule) {
+      executions.value = (await listExecutions(200, { definitionId: String(processingInstance.value.rule) })).items
+    } else {
+      executions.value = []
+    }
+  } catch {
+    executions.value = []
+  }
+  if (executions.value.length) {
+    await selectExecution(executions.value[0].id)
+  }
+}
+
+async function selectExecution(executionId: string) {
+  selectedExecutionId.value = executionId
+  try {
+    selectedExecution.value = await getExecution(executionId)
+    // 周期任务视图（SCH-xxx 无对应任务行）：用选中 execution 的任务填充下部详情
+    if (scheduleId.value && selectedExecution.value?.taskId) {
+      try {
+        processingInstance.value = await getTask(selectedExecution.value.taskId)
+      } catch {
+        // 保留当前任务详情
+      }
+    }
+  } catch (error) {
+    selectedExecution.value = null
+    pipelineMessage.value = `执行记录加载失败：${(error as Error).message}`
+  }
+}
+
 watch(() => route.query.step, (step) => {
   if (step && steps.value.some((item) => item.id === String(step))) selectedStepId.value = String(step)
 })
 watch(taskId, () => {
   void loadTaskDetail()
 })
-onMounted(loadTaskDetail)
+onMounted(async () => {
+  if (scheduleId.value) {
+    // 周期任务详情：先取执行记录，再由最新执行记录补任务详情
+    await loadExecutions()
+    if (!processingInstance.value) await loadTaskDetail()
+    return
+  }
+  await loadTaskDetail()
+  await loadExecutions()
+})
 </script>
 
 <template>
   <div class="task-detail-page">
     <header class="detail-head">
-      <div><RouterLink :to="`/tasks?module=${encodeURIComponent(visiblePhase)}&batch=${batch.id}`">← 返回{{ visiblePhase }}任务</RouterLink><h1>{{ processingInstance?.objectName || `${visiblePhase}任务详情` }}</h1><p>{{ processingInstance?.action || batch.trigger }} · {{ processingInstance?.sourceTable || batch.source }}</p></div>
+      <div><RouterLink to="/graph-build">← 返回图谱构建</RouterLink><h1>{{ processingInstance?.objectName || `${visiblePhase}任务详情` }}</h1><p>{{ processingInstance?.action || batch.trigger }} · {{ processingInstance?.sourceTable || batch.source }}</p></div>
     </header>
 
     <section class="summary-grid">
@@ -315,6 +367,25 @@ onMounted(loadTaskDetail)
     </section>
 
     <p v-if="pipelineMessage" class="pipeline-message">{{ pipelineMessage }}</p>
+
+    <section class="execution-record-panel">
+      <header><div><h2>执行记录</h2><p>{{ scheduleId ? `周期任务 ${scheduleId} 的每次触发` : '同一脚本的历次执行（含周期触发与手动触发）' }}</p></div><span>{{ executions.length }} 条</span></header>
+      <div class="execution-table-wrap">
+        <table>
+          <thead><tr><th>执行 ID</th><th>开始时间</th><th>状态</th><th>runId</th><th>备注</th></tr></thead>
+          <tbody>
+            <tr v-for="record in executions" :key="record.id" :class="{ active: record.id === selectedExecutionId }" @click="selectExecution(record.id)">
+              <td><code>{{ record.id }}</code></td>
+              <td>{{ record.startedAt }}</td>
+              <td><span :class="record.status === 'COMPLETED' ? 'execution-success-tag' : record.status === 'FAILED' ? 'execution-failed-tag' : 'execution-running-tag'">{{ record.status }}</span></td>
+              <td><code class="run-id">{{ record.runId || '-' }}</code></td>
+              <td class="execution-message">{{ record.message || (record.scheduleId ? '周期任务自动触发' : '-') }}</td>
+            </tr>
+            <tr v-if="!executions.length"><td colspan="5" class="execution-empty">暂无执行记录</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
     <section class="detail-workspace">
       <aside class="process-sidebar">
@@ -413,4 +484,24 @@ onMounted(loadTaskDetail)
 .pipeline-message{margin:0 0 10px;padding:8px 12px;border:1px solid #b2ccff;border-radius:6px;background:#f0f5ff;color:#344f7a;font-size:11px}
 .step-head-retry{height:34px;padding:0 14px;border:1px solid #d92d20;border-radius:6px;background:#d92d20;color:#fff;cursor:pointer;font-size:11px}
 .step-head-retry:disabled{opacity:.6;cursor:not-allowed}
+/* 执行记录面板 */
+.execution-record-panel{overflow:hidden;margin-bottom:12px;border:1px solid #c9dcf7;border-radius:9px;background:#fff}
+.execution-record-panel>header{display:flex;align-items:center;justify-content:space-between;padding:11px 15px;border-bottom:1px solid #dce8f8;background:#fbfdff}
+.execution-record-panel h2{margin:0;font-size:14px}
+.execution-record-panel header p{margin:3px 0 0;color:#7b899e;font-size:10px}
+.execution-record-panel header>span{padding:3px 8px;border-radius:999px;background:#eaf2ff;color:#165dff;font-size:10px}
+.execution-table-wrap{max-height:200px;overflow:auto}
+.execution-table-wrap table{width:100%;border-collapse:collapse;font-size:11px}
+.execution-table-wrap th,.execution-table-wrap td{padding:9px 13px;border-bottom:1px solid #e8eef7;text-align:left;white-space:nowrap}
+.execution-table-wrap th{position:sticky;top:0;background:#f4f8fd;color:#5a6c88;font-weight:500}
+.execution-table-wrap tbody tr{cursor:pointer}
+.execution-table-wrap tbody tr:hover td,.execution-table-wrap tbody tr.active td{background:#f2f8ff}
+.execution-table-wrap code{color:#175cd3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px}
+.execution-table-wrap .run-id{color:#8290a7}
+.execution-message{max-width:320px;overflow:hidden;color:#687892;font-size:10px;text-overflow:ellipsis}
+.execution-success-tag,.execution-failed-tag,.execution-running-tag{display:inline-flex;padding:2px 7px;border-radius:999px;font-size:10px}
+.execution-success-tag{background:#dcfae6;color:#067647}
+.execution-failed-tag{background:#fee4e2;color:#b42318}
+.execution-running-tag{background:#eaf2ff;color:#175cd3}
+.execution-empty{height:60px;color:#8290a7;text-align:center}
 </style>

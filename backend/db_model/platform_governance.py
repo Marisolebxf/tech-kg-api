@@ -62,6 +62,24 @@ class PlatformUserRole(Base):
     )
 
 
+class UserGraphSpace(Base):
+    """用户与图空间的绑定关系。图空间本体在 NebulaGraph（trs-graph）侧管理，
+    本表只记录"我的图空间"；解除绑定仅删除本表行，绝不 DROP 空间。"""
+
+    __tablename__ = "kg_user_graph_space"
+    __table_args__ = (
+        UniqueConstraint("user_id", "space_name", name="uk_kg_user_graph_space"),
+        Index("idx_kg_user_graph_space_user", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    space_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+
 class ManualCorrection(Base):
     __tablename__ = "kg_manual_correction"
     __table_args__ = (

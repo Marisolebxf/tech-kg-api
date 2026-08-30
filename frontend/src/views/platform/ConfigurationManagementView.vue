@@ -37,6 +37,14 @@ import {
   updateEmbeddingConfig,
   type EmbeddingConfig,
 } from '../../api/embeddingConfig'
+import {
+  bindGraphSpace,
+  createGraphSpace,
+  listGraphSpaceItems,
+  unbindGraphSpace,
+  type GraphSpaceItem,
+} from '../../api/graphSpace'
+import { currentUserIsAdmin } from '../../api/currentUser'
 import { useToast } from '../../composables/use-toast'
 
 type ConfigKind = 'llm' | 'embedding' | 'mysql' | 'milvus'
@@ -84,7 +92,15 @@ const categories = [
   { key: '模型服务', label: '模型服务', icon: 'AI', hint: 'LLM 配置，接通后端' },
   { key: '抽取与向量模型', label: '抽取与向量模型', icon: 'EM', hint: 'embedding 模型配置' },
   { key: '数据源', label: '数据源', icon: 'DB', hint: 'MySQL / Milvus 配置' },
+  { key: '图空间', label: '图空间', icon: 'GS', hint: '我的图空间绑定' },
 ]
+
+const isAdmin = ref(false)
+const graphSpaces = ref<GraphSpaceItem[]>([])
+const spaceDialogOpen = ref(false)
+const newSpaceName = ref('')
+const bindTarget = ref('')
+const spaceWorking = ref(false)
 
 const items = ref<ConfigItem[]>([])
 const activeCategory = ref('模型服务')
@@ -128,6 +144,10 @@ const configFormRules = {
 const detailFormRules = configFormRules
 
 const isDataSourceCategory = computed(() => activeCategory.value === '数据源')
+const isGraphSpaceCategory = computed(() => activeCategory.value === '图空间')
+
+const mySpaces = computed(() => graphSpaces.value.filter((item) => item.mine))
+const bindableSpaces = computed(() => graphSpaces.value.filter((item) => !item.mine))
 
 const formKind = computed<ConfigKind | null>(() => {
   switch (activeCategory.value) {
@@ -151,14 +171,21 @@ const visibleItems = computed(() => items.value.filter((item) => {
   return matchCategory && matchKeyword && matchStatus
 }))
 
-const summary = computed(() => ({
-  total: items.value.filter((i) => i.category === activeCategory.value).length,
-  healthy: items.value.filter((i) => i.category === activeCategory.value && i.status === '正常').length,
-  warning: items.value.filter((i) => i.category === activeCategory.value && i.status === '异常').length,
-}))
+const summary = computed(() => {
+  if (isGraphSpaceCategory.value) {
+    return { total: mySpaces.value.length, healthy: mySpaces.value.length, warning: 0 }
+  }
+  return {
+    total: items.value.filter((i) => i.category === activeCategory.value).length,
+    healthy: items.value.filter((i) => i.category === activeCategory.value && i.status === '正常').length,
+    warning: items.value.filter((i) => i.category === activeCategory.value && i.status === '异常').length,
+  }
+})
 
 const activeDefaultConfig = computed(() =>
-  items.value.find((item) => item.category === activeCategory.value && item.isDefault),
+  isGraphSpaceCategory.value
+    ? undefined
+    : items.value.find((item) => item.category === activeCategory.value && item.isDefault),
 )
 
 function defaultIcon(kind: ConfigKind) {
@@ -166,6 +193,9 @@ function defaultIcon(kind: ConfigKind) {
 }
 
 function categoryCount(key: string) {
+  if (key === '图空间') {
+    return graphSpaces.value.filter((item) => item.mine).length
+  }
   return items.value.filter((i) => i.category === key).length
 }
 
@@ -205,6 +235,10 @@ function toConfigItem(kind: ConfigKind, cfg: LlmConfig | MysqlDatasource | Milvu
 }
 
 async function loadByCategory(key: string) {
+  if (key === '图空间') {
+    await loadGraphSpaces()
+    return
+  }
   const others = items.value.filter((i) => i.category !== key)
   let loaded: ConfigItem[] = []
   try {
@@ -220,6 +254,58 @@ async function loadByCategory(key: string) {
     showToast(`加载配置失败：${(err as Error).message}`, 'warning')
   }
   items.value = [...loaded, ...others]
+}
+
+async function loadGraphSpaces() {
+  try {
+    graphSpaces.value = await listGraphSpaceItems()
+  } catch (err) {
+    showToast(`加载图空间失败：${(err as Error).message}`, 'warning')
+  }
+}
+
+async function createSpace() {
+  const name = newSpaceName.value.trim()
+  if (!name) return
+  spaceWorking.value = true
+  try {
+    await createGraphSpace(name)
+    showToast(`图空间“${name}”已创建并绑定。空间建好后有秒级传播延迟，随后即可在任务触发时选择。`, 'success')
+    spaceDialogOpen.value = false
+    newSpaceName.value = ''
+    await loadGraphSpaces()
+  } catch (err) {
+    showToast(`创建失败：${(err as Error).message}`, 'warning')
+  } finally {
+    spaceWorking.value = false
+  }
+}
+
+async function bindSpace() {
+  const name = bindTarget.value
+  if (!name) return
+  spaceWorking.value = true
+  try {
+    await bindGraphSpace(name)
+    showToast(`图空间“${name}”已绑定。`)
+    bindTarget.value = ''
+    await loadGraphSpaces()
+  } catch (err) {
+    showToast(`绑定失败：${(err as Error).message}`, 'warning')
+  } finally {
+    spaceWorking.value = false
+  }
+}
+
+async function unbindSpace(name: string) {
+  if (!window.confirm(`确认解除与图空间“${name}”的绑定？仅解除绑定，不会删除图空间数据。`)) return
+  try {
+    await unbindGraphSpace(name)
+    showToast(`已解除与“${name}”的绑定（图空间数据保留）。`)
+    await loadGraphSpaces()
+  } catch (err) {
+    showToast(`解除绑定失败：${(err as Error).message}`, 'warning')
+  }
 }
 
 async function switchCategory(key: string) {
@@ -242,6 +328,11 @@ function emptyForm(kind: ConfigKind): ConfigForm {
 }
 
 function openCreate() {
+  if (isGraphSpaceCategory.value) {
+    newSpaceName.value = ''
+    spaceDialogOpen.value = true
+    return
+  }
   if (isDataSourceCategory.value) {
     formSubKind.value = 'mysql'
   }
@@ -445,6 +536,7 @@ async function removeConfig(item: ConfigItem) {
 }
 
 onMounted(() => {
+  isAdmin.value = currentUserIsAdmin()
   loadByCategory('模型服务')
 })
 </script>
@@ -452,8 +544,8 @@ onMounted(() => {
 <template>
   <div class="configuration-page">
     <header class="page-header">
-      <div><span>PLATFORM CONFIGURATION</span><h1>配置管理</h1><p>统一管理 Pipeline 运行依赖的模型服务、向量模型与数据源。配置项真正驱动抽取脚本的 context 注入。</p></div>
-      <button class="primary" type="button" @click="openCreate">＋ 新建配置</button>
+      <div><span>PLATFORM CONFIGURATION</span><h1>配置管理</h1><p>统一管理 Pipeline 运行依赖的模型服务、向量模型、数据源与图空间。配置项真正驱动抽取脚本的 context 注入。</p></div>
+      <button class="primary" type="button" @click="openCreate">＋ {{ isGraphSpaceCategory ? '新建图空间' : '新建配置' }}</button>
     </header>
 
     <section class="summary-grid">
@@ -473,8 +565,22 @@ onMounted(() => {
       </aside>
 
       <main class="config-list">
-        <header><div><h2>{{ categories.find(item => item.key === activeCategory)?.label }}</h2><span>{{ visibleItems.length }} 项配置</span></div><nav><input v-model="keyword" placeholder="搜索名称、标识或地址" /><a-select v-model="statusFilter"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select></nav></header>
-        <div class="table-wrap">
+        <header><div><h2>{{ categories.find(item => item.key === activeCategory)?.label }}</h2><span>{{ isGraphSpaceCategory ? `${mySpaces.length} 个已绑定空间` : `${visibleItems.length} 项配置` }}</span></div><nav v-if="!isGraphSpaceCategory"><input v-model="keyword" placeholder="搜索名称、标识或地址" /><a-select v-model="statusFilter"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select></nav><nav v-else-if="isAdmin && bindableSpaces.length" class="bind-nav"><a-select v-model="bindTarget" placeholder="绑定已有图空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button class="primary" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button></nav></header>
+        <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
+          <table>
+            <thead><tr><th>图空间</th><th>绑定状态</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr v-for="space in mySpaces" :key="space.name">
+                <td><div class="config-name"><i>GS</i><span><strong>{{ space.name }}</strong><small>NebulaGraph 图空间</small></span></div></td>
+                <td><span class="status is-正常"><i />已绑定</span></td>
+                <td><button class="link" type="button" @click="unbindSpace(space.name)">解除绑定</button></td>
+              </tr>
+              <tr v-if="!mySpaces.length"><td class="empty" colspan="3">还没有绑定的图空间，点击右上角“新建图空间”创建一个</td></tr>
+            </tbody>
+          </table>
+          <p class="space-hint">新建图空间会真实执行 CREATE SPACE（创建后有秒级传播延迟）；解除绑定只取消关联，不会删除图空间数据。</p>
+        </div>
+        <div v-else class="table-wrap">
           <table>
             <thead><tr><th>配置名称</th><th>类型 / 地址</th><th>状态</th><th>引用情况</th><th>负责人 / 更新时间</th><th>操作</th></tr></thead>
             <tbody>
@@ -534,6 +640,17 @@ onMounted(() => {
     </aside>
 
     <Teleport to="body">
+      <button v-if="spaceDialogOpen" class="mask create-dialog-mask" type="button" aria-label="关闭新建图空间弹窗" @click="spaceDialogOpen=false" />
+      <aside v-if="spaceDialogOpen" class="create-dialog space-dialog">
+        <header><div><h2>新建图空间</h2></div><button type="button" @click="spaceDialogOpen=false">×</button></header>
+        <a-form class="dialog-form" layout="vertical" :model="{}">
+          <a-form-item class="wide" label="图空间名称" required>
+            <input v-model="newSpaceName" placeholder="仅字母、数字、下划线，以字母或下划线开头" />
+          </a-form-item>
+          <p class="space-dialog-hint">将真实执行 CREATE SPACE 并自动绑定到你的账号；空间创建后有秒级传播延迟。</p>
+        </a-form>
+        <footer><button type="button" @click="spaceDialogOpen=false">取消</button><button class="primary" type="button" :disabled="!newSpaceName.trim() || spaceWorking" @click="createSpace">{{ spaceWorking ? '创建中…' : '创建' }}</button></footer>
+      </aside>
       <button v-if="dialogOpen" class="mask create-dialog-mask" type="button" aria-label="关闭新建配置弹窗" @click="dialogOpen=false" />
       <aside v-if="dialogOpen" class="create-dialog">
       <header><div><span>NEW CONFIGURATION</span><h2>新建{{ categories.find(item => item.key === activeCategory)?.label }}</h2></div><button type="button" @click="dialogOpen=false">×</button></header>
@@ -615,4 +732,8 @@ onMounted(() => {
 .create-dialog>header{align-items:center;padding:0 24px}.create-dialog>header>div{display:flex;height:24px;align-items:center}.create-dialog>header span{display:none}.create-dialog h2{margin:0;font-size:16px;line-height:24px}
 .create-dialog>footer{align-items:center;padding:16px 24px}
 .create-dialog-mask{z-index:49;background:rgba(16,38,76,.42);backdrop-filter:blur(2px);cursor:pointer}.create-dialog{z-index:50}
+/* 图空间分类 */
+.bind-nav{display:flex;gap:8px;align-items:center}.bind-nav :deep(.arco-select){width:200px;min-width:200px}.bind-nav button{height:32px;padding:0 16px;border:1px solid #bdd0ea;border-radius:4px;font-size:14px;cursor:pointer}
+.space-hint{margin:12px 16px;color:#86909c;font-size:12px;line-height:20px}
+.space-dialog-hint{grid-column:1/-1;margin:0;color:#86909c;font-size:12px;line-height:20px}
 </style>

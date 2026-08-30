@@ -697,6 +697,7 @@ class SchemaManagementService:
                 _workflow_definition_id(definition.schema_key),
                 f"{definition.label} Schema 抽取",
                 timeout_seconds=int(os.getenv("SCHEMA_WORKFLOW_TIMEOUT_SECONDS", "3600")),
+                category="relation" if definition.kind == "relation" else "entity",
             )
         except (UnicodeDecodeError, SyntaxError, ValueError, OSError) as exc:
             raise SchemaScriptError(f"Schema 脚本工作流注册失败: {exc}") from exc

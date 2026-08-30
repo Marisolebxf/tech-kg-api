@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from biz.router.register import register_routers
 from biz.schemas.common import ApiResponse
-from infra.graph_db import close_techkg_client, close_trs_graph_client
+from infra.graph_db import close_space_clients, close_techkg_client, close_trs_graph_client
 from infra.graph_db.exceptions import GraphRepoError
 from infra.mysql import session_scope
 from infra.redis import close_redis_client
@@ -59,6 +59,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from db_model.llm_config import LlmConfig
         from db_model.milvus_config import MilvusConfig
         from db_model.mysql_datasource import MysqlDatasource
+        from db_model.platform_governance import UserGraphSpace
         from db_model.script_watermark import ScriptWatermark
         from infra.mysql import get_engine
 
@@ -71,6 +72,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     MilvusConfig.__table__,
                     EmbeddingConfig.__table__,
                     ScriptWatermark.__table__,
+                    UserGraphSpace.__table__,
                 ],
             )
         except Exception as exc:
@@ -100,6 +102,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await close_redis_client()
         close_techkg_client()
         close_trs_graph_client()
+        close_space_clients()
         close_workflow_engine()
 
 

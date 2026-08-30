@@ -148,6 +148,17 @@ export async function getSchemaOverview(): Promise<SchemaOverview> {
   )
 }
 
+export interface SchemaTopology {
+  nodes: SchemaDefinition[]
+  edges: Array<SchemaDefinition & { sourceSchemaId: string | null; targetSchemaId: string | null }>
+}
+
+export async function getSchemaTopology(): Promise<SchemaTopology> {
+  return unwrap(
+    await asApiPromise<SchemaTopology>(http.get(`${PREFIX}/schemas/topology`)),
+  )
+}
+
 export async function listAllSchemas(userId: string): Promise<SchemaDefinition[]> {
   const first = unwrap(
     await asApiPromise<SchemaListData>(

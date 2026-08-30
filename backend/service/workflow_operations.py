@@ -72,8 +72,15 @@ class WorkflowOperationsService:
             "pageSize": page_size,
         }
 
-    def list_executions(self, limit: int = 100) -> dict[str, Any]:
-        items = self.repo.list_executions(limit=limit)
+    def list_executions(
+        self,
+        limit: int = 100,
+        definition_id: str | None = None,
+        schedule_id: str | None = None,
+    ) -> dict[str, Any]:
+        items = self.repo.list_executions(
+            limit=limit, definition_id=definition_id, schedule_id=schedule_id
+        )
         return {"items": items, "total": len(items)}
 
     def get_task(self, task_id: str) -> dict[str, Any]:
@@ -90,7 +97,7 @@ class WorkflowOperationsService:
         非 steps 任务、workflowId 缺失、或 Temporal 查询失败均返回 None，
         让调用方回退到静态 _steps()。
         """
-        if task.get("workflowType") != "kg.custom.steps":
+        if task.get("workflowType") not in {"kg.custom.steps", "kg.custom.chain"}:
             return None
         workflow_id = task.get("workflowId")
         if not workflow_id:
@@ -210,6 +217,42 @@ class WorkflowOperationsService:
         self.repo.save_review(review)
         return review
 
+    @staticmethod
+    def create_task_for_execution(
+        definition: dict[str, Any], execution: dict[str, Any], payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """由 execution 构造任务中心任务行（execute_definition 与周期任务 activity 共用）。"""
+        task_id = f"PI-{datetime.now().strftime('%Y%m%d')}-{uuid4().hex[:6].upper()}"
+        return {
+            "id": task_id,
+            "batchId": f"UPD-{datetime.now().strftime('%Y%m%d')}",
+            "stage": "图谱构建",
+            "kind": "实体",
+            "objectId": execution["workflowId"],
+            "objectName": definition.get("name", definition["id"]),
+            "objectType": "工作流实例",
+            "action": "作业执行",
+            "sourceTable": "",
+            "sourceRecordId": payload.get("since") or "latest-cursor",
+            "rule": definition["id"],
+            "confidence": "",
+            "result": execution["message"],
+            "status": "已完成" if execution["status"] == "COMPLETED" else "处理中",
+            "taskStatus": "执行中",
+            "dataDomain": "综合数据域",
+            "processedAt": _now(),
+            "reviewType": None,
+            "currentStep": "数据接入",
+            "steps": WorkflowRepository._steps(None),
+            "workflowType": definition["workflowType"],
+            "workflowId": execution["workflowId"],
+            "runId": execution.get("runId"),
+            "scheduleId": execution.get("scheduleId"),
+            "input": payload,
+            "output": None,
+            "logs": [execution["message"]],
+        }
+
     async def execute_definition(
         self,
         definition: dict[str, Any],
@@ -233,37 +276,9 @@ class WorkflowOperationsService:
         execution = temporal_runtime.execution_record(definition["id"], dispatch, payload)
         self.repo.save_execution(execution)
         if persist_task:
-            task_id = f"PI-{datetime.now().strftime('%Y%m%d')}-{uuid4().hex[:6].upper()}"
-            task = {
-                "id": task_id,
-                "batchId": f"UPD-{datetime.now().strftime('%Y%m%d')}",
-                "stage": "图谱构建",
-                "kind": "实体",
-                "objectId": execution["workflowId"],
-                "objectName": definition.get("name", definition["id"]),
-                "objectType": "工作流实例",
-                "action": "作业执行",
-                "sourceTable": "",
-                "sourceRecordId": payload.get("since") or "latest-cursor",
-                "rule": definition["id"],
-                "confidence": "",
-                "result": execution["message"],
-                "status": "已完成" if execution["status"] == "COMPLETED" else "处理中",
-                "taskStatus": "执行中",
-                "dataDomain": "综合数据域",
-                "processedAt": _now(),
-                "reviewType": None,
-                "currentStep": "数据接入",
-                "steps": WorkflowRepository._steps(None),
-                "workflowType": definition["workflowType"],
-                "workflowId": execution["workflowId"],
-                "runId": execution.get("runId"),
-                "input": payload,
-                "output": None,
-                "logs": [execution["message"]],
-            }
+            task = self.create_task_for_execution(definition, execution, payload)
             self.repo.save_task(task)
-            execution["taskId"] = task_id
+            execution["taskId"] = task["id"]
             self.repo.save_execution(execution)
         return execution
 
@@ -481,7 +496,10 @@ class WorkflowOperationsService:
         definition_id: str | None,
         name: str | None,
         timeout_seconds: int | None = None,
+        category: str = "custom",
     ) -> dict[str, Any]:
+        if category not in {"entity", "relation", "graph", "custom"}:
+            raise ValueError("category 仅支持 entity / relation / graph / custom")
         if len(content) > 1024 * 1024:
             raise ValueError("Python 脚本不能超过 1 MiB")
         source = content.decode("utf-8")
@@ -511,7 +529,7 @@ class WorkflowOperationsService:
             "id": safe_id,
             "name": name or Path(filename).stem,
             "workflowType": "kg.custom.python",
-            "category": "custom",
+            "category": category,
             "taskQueue": temporal_runtime.task_queue,
             "active": True,
             "sourceKind": "python",
@@ -519,6 +537,43 @@ class WorkflowOperationsService:
             "scriptPath": str(script_path),
             "timeoutSeconds": timeout,
             "steps": [f"python:{function_name}"],
+            "createdAt": _now(),
+        }
+        self.repo.save_definition(definition)
+        return definition
+
+    def create_chain_definition(
+        self, name: str, definition_ids: list[str], definition_id: str | None = None
+    ) -> dict[str, Any]:
+        """把多个已注册 python 定义串成 kg.custom.chain 串行链。"""
+        if not definition_ids:
+            raise ValueError("至少选择一个脚本")
+        steps = []
+        for def_id in definition_ids:
+            item = self.repo.get_definition(def_id)
+            if item is None:
+                raise ValueError(f"工作流定义不存在: {def_id}")
+            if item.get("sourceKind") != "python":
+                raise ValueError(f"链中每步必须是上传的 python 脚本定义: {def_id}")
+            steps.append(
+                {
+                    "definitionId": item["id"],
+                    "name": item.get("name", item["id"]),
+                    "timeoutSeconds": item.get("timeoutSeconds", 60),
+                }
+            )
+        safe_id = definition_id or f"chain-{uuid4().hex[:8]}"
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,63}", safe_id):
+            raise ValueError("definition_id 只能包含小写字母、数字、下划线和连字符")
+        definition = {
+            "id": safe_id,
+            "name": name or "脚本串行链",
+            "workflowType": "kg.custom.chain",
+            "category": "custom",
+            "taskQueue": temporal_runtime.task_queue,
+            "active": True,
+            "sourceKind": "chain",
+            "steps": steps,
             "createdAt": _now(),
         }
         self.repo.save_definition(definition)

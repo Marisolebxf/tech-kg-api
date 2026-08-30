@@ -37,6 +37,8 @@ __all__ = [
     "close_trs_graph_client",
     "get_techkg_client",
     "close_techkg_client",
+    "get_space_client",
+    "close_space_clients",
     "GraphNode",
     "GraphEdge",
     "GraphPath",
@@ -102,3 +104,30 @@ def close_techkg_client() -> None:
         if _techkg_client is not None:
             _techkg_client.close()
             _techkg_client = None
+
+
+_space_clients: dict[str, TRSGraphClient] = {}
+_space_clients_lock = threading.Lock()
+
+
+def get_space_client(space: str) -> TRSGraphClient:
+    """获取指向指定图空间的客户端（按空间名缓存，连接参数仍取自 env）。"""
+    if space in _space_clients:
+        return _space_clients[space]
+    with _space_clients_lock:
+        if space in _space_clients:
+            return _space_clients[space]
+        settings = TRSGraphSettings.from_env()
+        settings.space = space
+        client = TRSGraphClient(settings)
+        client.connect()
+        _space_clients[space] = client
+        return client
+
+
+def close_space_clients() -> None:
+    """关闭并清空所有按空间缓存的客户端（应用停机时调用）。"""
+    with _space_clients_lock:
+        for client in _space_clients.values():
+            client.close()
+        _space_clients.clear()

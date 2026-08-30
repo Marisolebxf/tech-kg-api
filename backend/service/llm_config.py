@@ -54,8 +54,10 @@ class LlmConfigService:
         self._session = session
         self._dao = LlmConfigDAO(session)
 
-    def list_configs(self) -> list[dict]:
+    def list_configs(self, owner: str | None = None) -> list[dict]:
         rows = self._dao.list(order_by=LlmConfig.updated_at.desc(), limit=1000)
+        if owner is not None:
+            rows = [r for r in rows if r.owner == owner]
         return [_to_out(r) for r in rows]
 
     def get_config(self, config_id: str) -> dict | None:

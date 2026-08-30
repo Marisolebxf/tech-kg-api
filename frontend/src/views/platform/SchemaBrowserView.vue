@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import hljs from 'highlight.js/lib/core'
 import python from 'highlight.js/lib/languages/python'
 import 'highlight.js/styles/github-dark.css'
@@ -9,6 +8,7 @@ import {
   createRelationSchema,
   getScriptContent,
   getSchemaOverview,
+  getSchemaTopology,
   listAllSchemas,
   schemaErrorMessage,
   verifyAndSaveScript,
@@ -18,6 +18,9 @@ import {
   type SchemaOverview,
 } from '../../api/schemaManagement'
 import { listLlmConfigs, type LlmConfig } from '../../api/llmConfig'
+import { currentUserId as getCurrentUserId } from '../../api/currentUser'
+import KgGraphCanvas from '../../components/kg-graph-canvas.vue'
+import type { GraphEdgeData, GraphNodeData } from '../../data/graph-presets'
 import { useToast } from '../../composables/use-toast'
 
 hljs.registerLanguage('python', python)
@@ -38,8 +41,7 @@ type CreateForm = {
   llmConfigId: string
 }
 
-const currentUserId = window.localStorage.getItem('tech-kg-schema-user-id') || 'schema-admin'
-const router = useRouter()
+const currentUserId = getCurrentUserId()
 
 const activeTab = ref('标准实体')
 const keyword = ref('')
@@ -98,6 +100,66 @@ const creating = ref(false)
 const confirming = ref(false)
 const llmConfigs = ref<LlmConfig[]>([])
 const scriptByRow = ref<Record<string, { name: string; workflowDefinitionId: string | null }>>({})
+
+// Schema 拓扑总览（实体 -关系-> 实体 元图谱）
+const topologyNodes = ref<GraphNodeData[]>([])
+const topologyEdges = ref<GraphEdgeData[]>([])
+
+const ENTITY_TYPE_NODE_TYPES: Array<[RegExp, GraphNodeData['nodeType']]> = [
+  [/专家|学者|人才/, 'expert'],
+  [/论文|文献/, 'paper'],
+  [/机构|高校|大学|院所/, 'org'],
+  [/企业|公司/, 'company'],
+  [/专利/, 'source'],
+  [/项目|课题/, 'project'],
+  [/事件|资讯/, 'event'],
+  [/产业链|行业/, 'chain'],
+]
+
+function topologyNodeType(name: string): GraphNodeData['nodeType'] {
+  for (const [pattern, type] of ENTITY_TYPE_NODE_TYPES) {
+    if (pattern.test(name)) return type
+  }
+  return 'topic'
+}
+
+function applyTopology(data: {
+  nodes: SchemaDefinition[]
+  edges: Array<SchemaDefinition & { sourceSchemaId: string | null; targetSchemaId: string | null }>
+}) {
+  const nodeIdSet = new Set(data.nodes.map((node) => node.id))
+  const angleStep = (Math.PI * 2) / Math.max(data.nodes.length, 1)
+  topologyNodes.value = data.nodes.map((node, index) => ({
+    id: node.id,
+    label: node.label || node.name,
+    nodeType: topologyNodeType(`${node.label}${node.name}`),
+    x: 480 + Math.cos(angleStep * index) * 140,
+    y: 270 + Math.sin(angleStep * index) * 100,
+    radius: node.isCore ? 14 : 10,
+    entityType: node.name,
+    relations: node.kindLabel,
+    evidence: node.description ? [node.description] : [],
+  }))
+  // 过滤端点缺失的孤儿关系（起点/终点实体 schema 已被删除）
+  topologyEdges.value = data.edges
+    .filter((edge) => edge.sourceSchemaId && edge.targetSchemaId
+      && nodeIdSet.has(edge.sourceSchemaId) && nodeIdSet.has(edge.targetSchemaId))
+    .map((edge) => ({
+      id: edge.id,
+      from: edge.sourceSchemaId as string,
+      to: edge.targetSchemaId as string,
+      label: edge.label || edge.name,
+      category: edge.relationCategory === 'inferred' ? '间接关系' : '直接关系',
+    }))
+}
+
+async function loadTopology() {
+  try {
+    applyTopology(await getSchemaTopology())
+  } catch (error) {
+    showToast(schemaErrorMessage(error), 'warning')
+  }
+}
 
 // 上传脚本弹窗（行级「上传脚本/更换脚本」）
 const uploadModalOpen = ref(false)
@@ -222,15 +284,6 @@ function applyDefinitions(definitions: SchemaDefinition[]) {
         },
       ]),
   )
-}
-
-function executeSchemaWorkflow(schemaName: string) {
-  const definitionId = scriptByRow.value[schemaName]?.workflowDefinitionId
-  if (!definitionId) {
-    showToast('该脚本未定义 workflow(payload)，不能在工作流平台执行', 'warning')
-    return
-  }
-  void router.push({ name: 'graph-build' })
 }
 
 async function loadSchemas() {
@@ -438,6 +491,7 @@ onMounted(async () => {
   try {
     await loadSchemas()
     await loadLlmConfigs()
+    await loadTopology()
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
   }
@@ -459,12 +513,25 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
       <!-- <article><span>当前 Schema 版本</span><strong>v1.8</strong><em>已发布 · 2026-07-12</em></article> -->
     </section>
 
+    <section class="schema-shell schema-topology-shell" aria-label="Schema 拓扑总览">
+      <div class="schema-toolbar"><div><strong>Schema 拓扑总览</strong><span>实体与关系的元图谱（{{ topologyNodes.length }} 实体 · {{ topologyEdges.length }} 关系）</span></div></div>
+      <div class="schema-topology-canvas">
+        <KgGraphCanvas
+          v-if="topologyNodes.length"
+          :nodes="topologyNodes"
+          :edges="topologyEdges"
+          aria-label="Schema 实体关系拓扑"
+        />
+        <div v-else class="schema-topology-canvas__empty">暂无实体 Schema，新增后此处将展示实体 -关系-> 实体元图谱</div>
+      </div>
+    </section>
+
     <section class="schema-shell">
       <nav class="schema-tabs"><button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="activeTab=tab;keyword=''">{{ tab }}</button></nav>
       <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeTab === '属性定义'">枚举字典作为属性约束统一维护</span></div><div class="schema-toolbar__actions"><button v-if="activeTab !== '属性定义'" class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :placeholder="`搜索${activeTab}`" /></label></div></div>
       <!-- <p v-if="schemaVersionMessage" class="schema-version-message">{{ schemaVersionMessage }}</p> -->
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button v-if="scriptByRow[row.name]?.workflowDefinitionId" type="button" class="schema-action-link" @click="executeSchemaWorkflow(row.name)">执行工作流 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
       <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
@@ -811,4 +878,8 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .schema-toolbar__actions>label>input{box-sizing:border-box;width:100%;height:32px;min-width:0;padding:0 12px 0 34px!important;border:1px solid #e5e6eb!important;border-radius:4px;background:#fff;font-size:14px;line-height:22px;box-shadow:none!important;outline:0}
 @media(max-width:900px){.schema-summary{display:grid;grid-template-columns:repeat(2,1fr)}.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
 .schema-create-body>.create-field,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{margin-bottom:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
+/* Schema 拓扑总览 */
+.schema-topology-shell{margin-bottom:16px;padding-bottom:0}
+.schema-topology-canvas{height:260px;overflow:hidden;border-top:1px solid #e5e6eb;background:radial-gradient(circle at 50% 40%,#f7faff 0,#fff 70%)}
+.schema-topology-canvas__empty{display:grid;place-items:center;height:100%;color:#86909c;font-size:12px}
 </style>

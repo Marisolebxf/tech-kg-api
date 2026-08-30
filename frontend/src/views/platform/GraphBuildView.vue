@@ -14,12 +14,14 @@ import {
   type SchemaDefinition,
 } from '../../api/schemaManagement'
 import { listLlmConfigs, type LlmConfig } from '../../api/llmConfig'
+import { currentUserId as getCurrentUserId } from '../../api/currentUser'
 import JobLaunchDialog from '../../components/JobLaunchDialog.vue'
 import { useToast } from '../../composables/use-toast'
 
 const { showToast } = useToast()
 const router = useRouter()
-const currentUserId = localStorage.getItem('tech-kg-schema-user-id') || 'platform-admin'
+const currentUserId = getCurrentUserId()
+
 
 const schemas = ref<SchemaDefinition[]>([])
 const llmConfigs = ref<LlmConfig[]>([])

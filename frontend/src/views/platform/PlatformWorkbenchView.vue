@@ -17,6 +17,8 @@ import {
   type GraphEdge,
   type GraphNode,
 } from '../../api/graphSearch'
+import { runNgql, type GraphConsoleResult } from '../../api/graphConsole'
+import { getErrorMessage } from '../../api/http'
 import {
   getPlatformOverview,
   type AssetChangeRow,
@@ -301,6 +303,16 @@ const defaultGraphSpace =
   || 'test'
 
 const selectedGraphSpace = ref(defaultGraphSpace)
+
+/** 查询页图空间选项（后端按用户隔离：普通用户仅返回绑定空间）。 */
+const graphSpaceOptions = ref<string[]>([])
+
+/** 查询模式：参数查询 | nGQL 直查。 */
+const queryMode = ref<'params' | 'ngql'>('params')
+const ngqlStatement = ref('')
+const ngqlSpace = ref(defaultGraphSpace)
+const ngqlLoading = ref(false)
+const ngqlResult = ref<GraphConsoleResult | null>(null)
 
 /**
  * 当前真实查询得到的图谱数据。
@@ -4347,6 +4359,44 @@ async function queryRelationByType(
   }
 }
 
+function formatNgqlCell(value: unknown): string {
+  if (value === null || value === undefined) return 'NULL'
+  if (typeof value === 'object') return JSON.stringify(value, null, 2)
+  return String(value)
+}
+
+async function handleNgqlQuery(): Promise<void> {
+  const statement =
+    ngqlStatement.value.trim()
+
+  if (!statement) {
+    showToast(
+      '请输入 nGQL 语句',
+      'info',
+    )
+
+    return
+  }
+
+  ngqlLoading.value = true
+  ngqlResult.value = null
+
+  try {
+    ngqlResult.value =
+      await runNgql(
+        ngqlSpace.value,
+        statement,
+      )
+  } catch (error) {
+    showToast(
+      getErrorMessage(error, 'nGQL 执行失败'),
+      'warning',
+    )
+  } finally {
+    ngqlLoading.value = false
+  }
+}
+
 async function initializeGraphSpace(): Promise<void> {
   try {
     const response =
@@ -4357,20 +4407,26 @@ async function initializeGraphSpace(): Promise<void> {
         response,
       )
 
+    graphSpaceOptions.value = data.spaces
+
     if (
       data.spaces.includes(defaultGraphSpace)
     ) {
       selectedGraphSpace.value =
         defaultGraphSpace
+      ngqlSpace.value =
+        defaultGraphSpace
 
       return
     }
 
-    selectedGraphSpace.value =
+    const fallback =
       data.spaces.includes('dev')
         ? 'dev'
         : data.spaces[0]
           ?? defaultGraphSpace
+    selectedGraphSpace.value = fallback
+    ngqlSpace.value = fallback
   } catch {
     // 空间列表加载失败时继续使用构建环境指定的默认图空间。
     selectedGraphSpace.value =
@@ -4593,7 +4649,7 @@ const pageMeta = computed(() => {
       <div class="platform-hero__main">
         <h1>{{ pageMeta.title }}</h1>
       </div>
-      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><!-- <RouterLink to="/tasks?module=图谱版本">当前图谱 KG-2026.07.12.008</RouterLink> --><RouterLink to="/tasks">查看任务</RouterLink><RouterLink to="/manual-review">进入人工处理</RouterLink></div>
+      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><!-- <RouterLink to="/graph-build?module=图谱版本">当前图谱 KG-2026.07.12.008</RouterLink> --><RouterLink to="/graph-build">查看任务</RouterLink><RouterLink to="/manual-review">进入人工处理</RouterLink></div>
     </header>
 
     <header v-else class="platform-page-head">
@@ -4612,7 +4668,7 @@ const pageMeta = computed(() => {
 
       <section class="platform-overview-main">
         <div class="kg-panel platform-latest-changes">
-          <div class="kg-panel__header"><div><h2 class="kg-panel__title">今日新增与变化</h2></div><RouterLink to="/tasks">查看全部任务 →</RouterLink></div>
+          <div class="kg-panel__header"><div><h2 class="kg-panel__title">今日新增与变化</h2></div><RouterLink to="/graph-build">查看全部任务 →</RouterLink></div>
           <div class="platform-change-feed"><RouterLink v-for="item in latestChanges" :key="`${item.time}-${item.title}`" :to="item.to"><time>{{ item.time }}</time><span :class="`is-${item.type}`">{{ item.type }}</span><div><strong>{{ item.title }}</strong><p>{{ item.detail }}</p><em>{{ item.domain }} · {{ item.impact }}</em></div><b>查看详情 →</b></RouterLink></div>
         </div>
 
@@ -4720,7 +4776,7 @@ const pageMeta = computed(() => {
           <strong>发现 385 条数据质量异常</strong>
           <p>必填缺失 18 条 · 唯一性冲突 326 条 · 枚举异常 41 条</p>
         </div>
-        <div class="platform-review-notice__actions"><RouterLink to="/tasks?module=图谱构建&amp;batch=UPD-20260714">查看处理实例</RouterLink><RouterLink to="/manual-review?batch=UPD-20260714">进入人工处理 →</RouterLink></div>
+        <div class="platform-review-notice__actions"><RouterLink to="/graph-build?module=图谱构建&amp;batch=UPD-20260714">查看处理实例</RouterLink><RouterLink to="/manual-review?batch=UPD-20260714">进入人工处理 →</RouterLink></div>
       </section>
 
       <section class="kg-panel platform-task-list">
@@ -4730,7 +4786,7 @@ const pageMeta = computed(() => {
             <select v-model="processingDomainFilter"><option v-for="item in processingDomainOptions" :key="item">{{ item }}</option></select>
             <select v-model="processingStatusFilter"><option v-for="item in processingStatusOptions" :key="item">{{ item }}</option></select>
             <span>{{ filteredProcessingTaskRows.length }} 个任务</span>
-            <RouterLink to="/tasks?module=数据处理">全部任务 →</RouterLink>
+            <RouterLink to="/graph-build?module=数据处理">全部任务 →</RouterLink>
           </div>
         </div>
         <table class="platform-table platform-progress-table">
@@ -4784,7 +4840,7 @@ const pageMeta = computed(() => {
       <section class="kg-panel platform-build-progress platform-build-progress--list">
         <div class="kg-panel__header">
           <h2 class="kg-panel__title">最近图谱构建任务</h2>
-          <div class="platform-task-filters"><RouterLink to="/tasks?module=图谱构建">全部任务 →</RouterLink></div>
+          <div class="platform-task-filters"><RouterLink to="/graph-build?module=图谱构建">全部任务 →</RouterLink></div>
         </div>
         <table class="platform-table platform-progress-table">
           <thead>
@@ -4817,7 +4873,7 @@ const pageMeta = computed(() => {
           <strong>326 个候选对象需要人工确认</strong>
           <p>实体冲突 86 个 · 低置信度关系 198 条 · 属性异常 42 项</p>
         </div>
-        <div class="platform-review-notice__actions"><RouterLink to="/tasks?module=图谱构建&amp;batch=UPD-20260714">查看处理实例</RouterLink><RouterLink to="/manual-review?batch=UPD-20260714">进入人工处理 →</RouterLink></div>
+        <div class="platform-review-notice__actions"><RouterLink to="/graph-build?module=图谱构建&amp;batch=UPD-20260714">查看处理实例</RouterLink><RouterLink to="/manual-review?batch=UPD-20260714">进入人工处理 →</RouterLink></div>
       </section>
 
     </main>
@@ -4826,7 +4882,24 @@ const pageMeta = computed(() => {
       <section class="kg-panel platform-query-form">
         <div class="kg-panel__header">
           <h2 class="kg-panel__title">图谱查询条件</h2>
+          <div class="platform-query-mode-toggle" role="tablist" aria-label="查询模式切换">
+            <button
+              type="button"
+              :class="['platform-query-mode-toggle__item', { 'is-active': queryMode === 'params' }]"
+              @click="queryMode = 'params'"
+            >
+              参数模式
+            </button>
+            <button
+              type="button"
+              :class="['platform-query-mode-toggle__item', { 'is-active': queryMode === 'ngql' }]"
+              @click="queryMode = 'ngql'"
+            >
+              nGQL 模式
+            </button>
+          </div>
           <button
+            v-if="queryMode === 'params'"
             class="kg-button"
             type="button"
             :disabled="
@@ -4841,8 +4914,17 @@ const pageMeta = computed(() => {
                 : '查询图谱'
             }}
           </button>
+          <button
+            v-else
+            class="kg-button"
+            type="button"
+            :disabled="ngqlLoading || !ngqlStatement.trim()"
+            @click="handleNgqlQuery"
+          >
+            {{ ngqlLoading ? '执行中…' : '执行 nGQL' }}
+          </button>
         </div>
-        <a-form ref="queryFormRef" :rules="queryFormRules" :model="queryFormModel" class="platform-form-grid" layout="vertical">
+        <a-form v-if="queryMode === 'params'" ref="queryFormRef" :rules="queryFormRules" :model="queryFormModel" class="platform-form-grid" layout="vertical">
           <a-form-item class="platform-query-question" field="queryKeyword" label="实体名称或ID" required>
             <input
               v-model="queryKeyword"
@@ -4871,7 +4953,54 @@ const pageMeta = computed(() => {
               <a-option v-for="item in confidenceOptions" :key="`relation-${item}`" :value="item">{{ item }}</a-option>
             </a-select>
           </a-form-item>
+          <a-form-item class="platform-form-field" field="selectedGraphSpace" label="图空间">
+            <a-select v-model="selectedGraphSpace">
+              <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
+            </a-select>
+          </a-form-item>
         </a-form>
+        <div v-else class="platform-ngql-input">
+          <div class="platform-ngql-input__bar">
+            <label>图空间</label>
+            <a-select v-model="ngqlSpace" class="platform-ngql-input__space">
+              <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
+            </a-select>
+            <span class="platform-ngql-input__hint">只读语句所有用户可执行；写语句仅平台管理员；DDL 禁止执行</span>
+          </div>
+          <textarea
+            v-model="ngqlStatement"
+            class="platform-ngql-input__textarea"
+            rows="5"
+            spellcheck="false"
+            placeholder="MATCH (v:专家) RETURN v LIMIT 10"
+            @keydown.ctrl.enter="handleNgqlQuery"
+            @keydown.meta.enter="handleNgqlQuery"
+          />
+        </div>
+      </section>
+
+      <section v-if="queryMode === 'ngql' && ngqlResult" class="kg-panel platform-ngql-result">
+        <div class="kg-panel__header">
+          <h2 class="kg-panel__title">nGQL 执行结果</h2>
+          <span>{{ ngqlResult.records.length }} 行记录</span>
+        </div>
+        <div class="platform-ngql-result__table-wrap">
+          <table v-if="ngqlResult.records.length">
+            <thead>
+              <tr>
+                <th v-for="column in ngqlResult.columns" :key="column">{{ column }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(record, index) in ngqlResult.records" :key="index">
+                <td v-for="column in ngqlResult.columns" :key="column">
+                  <pre>{{ formatNgqlCell(record[column]) }}</pre>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="platform-ngql-result__empty">语句执行成功，无返回记录</div>
+        </div>
       </section>
 
       <section class="kg-panel platform-query-graph">
@@ -5301,7 +5430,7 @@ print(response.json())</pre>
       <header><div><span>今日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" @click="selectedAssetChange = null">×</button></header>
       <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
       <div class="asset-change-table"><table><thead><tr><th>数据类型</th><th>具体对象</th><th>变更内容</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-for="row in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><strong>{{ row.object }}</strong></td><td>{{ row.change }}</td><td><code>{{ row.source }}</code></td><td>{{ row.time }}</td></tr></tbody></table></div>
-      <footer><span>{{ assetChangeRows[selectedAssetChange].length }} 条变化</span><RouterLink to="/tasks">查看对应更新任务 →</RouterLink></footer>
+      <footer><span>{{ assetChangeRows[selectedAssetChange].length }} 条变化</span><RouterLink to="/graph-build">查看对应更新任务 →</RouterLink></footer>
     </aside>
 
   </div>
@@ -8259,4 +8388,23 @@ print(response.json())</pre>
 .platform-query .platform-form-field :deep(.arco-select-view:hover){border-color:#c9cdd4!important}
 .platform-query .platform-form-field :deep(.arco-select-view-focus){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 @media(max-width:768px){.platform-query .platform-form-grid{grid-template-columns:1fr}}
+/* nGQL 查询模式 */
+.platform-query-mode-toggle{display:inline-flex;gap:0;margin-right:auto;margin-left:16px;border:1px solid #e5e6eb;border-radius:4px;overflow:hidden}
+.platform-query-mode-toggle__item{padding:4px 14px;border:0;background:#fff;color:#4e5969;font-size:13px;line-height:20px;cursor:pointer}
+.platform-query-mode-toggle__item+.platform-query-mode-toggle__item{border-left:1px solid #e5e6eb}
+.platform-query-mode-toggle__item.is-active{background:#165dff;color:#fff}
+.platform-ngql-input{display:grid;gap:8px;padding:0 16px 16px}
+.platform-ngql-input__bar{display:flex;align-items:center;gap:8px;font-size:13px;color:#4e5969}
+.platform-ngql-input__bar>label{flex:0 0 auto}
+.platform-ngql-input__space{width:200px}
+.platform-ngql-input__hint{margin-left:auto;color:#86909c;font-size:12px}
+.platform-ngql-input__textarea{box-sizing:border-box;width:100%;padding:10px 12px;border:1px solid #e5e6eb;border-radius:4px;background:#0d1117;color:#e6edf3;font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical;outline:0}
+.platform-ngql-input__textarea:focus{border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
+.platform-ngql-result{overflow:hidden}
+.platform-ngql-result__table-wrap{max-height:320px;overflow:auto}
+.platform-ngql-result table{width:100%;border-collapse:collapse;font-size:13px}
+.platform-ngql-result th{position:sticky;top:0;background:#f7f8fa;color:#1d2129;font-weight:500;text-align:left;white-space:nowrap}
+.platform-ngql-result th,.platform-ngql-result td{padding:8px 14px;border-bottom:1px solid #e5e6eb;vertical-align:top}
+.platform-ngql-result td pre{max-width:420px;margin:0;overflow:auto;color:#1d2129;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.platform-ngql-result__empty{padding:24px;color:#86909c;font-size:13px;text-align:center}
 </style>

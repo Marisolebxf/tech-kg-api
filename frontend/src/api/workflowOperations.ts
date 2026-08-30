@@ -76,9 +76,12 @@ export interface PipelineStepState {
 
 export interface PipelineStepInfo {
   status: 'COMPLETED' | 'RUNNING' | 'FAILED'
+  /** 该 step 的输入 payload（kg.custom.steps / kg.custom.chain 的 get_steps 返回）。 */
+  input?: Record<string, unknown>
   output?: Record<string, unknown>
   error?: string
   attempt?: number
+  name?: string
   /** 脚本运行期实际访问的资源（观测式溯源；旧执行记录无此字段）。 */
   access?: AccessReport
 }
@@ -251,6 +254,7 @@ export interface WorkflowExecution {
   output?: unknown
   steps?: ProcessStep[]
   taskId?: string
+  scheduleId?: string
 }
 
 export interface WorkflowSchedule {
@@ -273,8 +277,8 @@ export interface ScheduleCreateInput {
   payload?: Record<string, unknown>
 }
 
-export const listDefinitions = () =>
-  unwrap(http.get('/v1/workflow-system/definitions')) as Promise<{ items: WorkflowDefinition[]; total: number }>
+export const listDefinitions = (category?: string) =>
+  unwrap(http.get('/v1/workflow-system/definitions', { params: category ? { category } : {} })) as Promise<{ items: WorkflowDefinition[]; total: number }>
 
 export const getDefinition = (id: string) =>
   unwrap(http.get(`/v1/workflow-system/definitions/${id}`)) as Promise<WorkflowDefinition>
@@ -282,7 +286,7 @@ export const getDefinition = (id: string) =>
 export const uploadPythonDefinition = (
   file: File,
   functionName = 'workflow',
-  options: { definitionId?: string; name?: string; timeoutSeconds?: number } = {},
+  options: { definitionId?: string; name?: string; timeoutSeconds?: number; category?: string } = {},
 ) => {
   const form = new FormData()
   form.append('file', file)
@@ -290,8 +294,17 @@ export const uploadPythonDefinition = (
   if (options.definitionId) form.append('definition_id', options.definitionId)
   if (options.name) form.append('name', options.name)
   if (options.timeoutSeconds) form.append('timeoutSeconds', String(options.timeoutSeconds))
+  if (options.category) form.append('category', options.category)
   return unwrap(http.post('/v1/workflow-system/definitions/python', form)) as Promise<WorkflowDefinition>
 }
+
+/** 把多个已注册 python 定义串成 kg.custom.chain 串行链。 */
+export const createChainDefinition = (
+  name: string,
+  definitionIds: string[],
+  definitionId?: string,
+) =>
+  unwrap(http.post('/v1/workflow-system/definitions/chains', { name, definitionIds, definitionId })) as Promise<WorkflowDefinition>
 
 export interface ExecuteDefinitionSelectors {
   workflowId?: string
@@ -316,8 +329,11 @@ export const executeDefinition = (
 export const getExecution = (executionId: string) =>
   unwrap(http.get(`/v1/workflow-system/executions/${executionId}`)) as Promise<WorkflowExecution>
 
-export const listExecutions = (limit = 100) =>
-  unwrap(http.get('/v1/workflow-system/executions', { params: { limit } })) as Promise<{ items: WorkflowExecution[]; total: number }>
+export const listExecutions = (
+  limit = 100,
+  filters: { definitionId?: string; scheduleId?: string } = {},
+) =>
+  unwrap(http.get('/v1/workflow-system/executions', { params: { limit, ...filters } })) as Promise<{ items: WorkflowExecution[]; total: number }>
 
 // ---- 工作流调度（定期执行） ----
 

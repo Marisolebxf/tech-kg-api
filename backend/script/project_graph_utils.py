@@ -209,6 +209,24 @@ def build_project_props(
     }
 
 
+def to_output_awards_json(raw: Any) -> str:
+    """把 dwd_*_project_output.output_awards 规范成图属性 string（JSON 数组）。"""
+    if raw is None:
+        return "[]"
+    if isinstance(raw, (list, dict)):
+        return json.dumps(raw, ensure_ascii=False)
+    text = str(raw).strip()
+    if not text:
+        return "[]"
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return json.dumps([text], ensure_ascii=False)
+    if isinstance(parsed, (list, dict)):
+        return json.dumps(parsed, ensure_ascii=False)
+    return "[]"
+
+
 def build_output_count_props(row: Any) -> dict[str, Any]:
     return {
         "total_outputs": to_int(row.total_outputs),
@@ -220,6 +238,7 @@ def build_output_count_props(row: Any) -> dict[str, Any]:
         "clinical_trials_count": to_int(getattr(row, "clinical_trials_count", None)),
         "products_count": to_int(getattr(row, "products_count", None)),
         "awards_count": to_int(row.awards_count),
+        "output_awards": to_output_awards_json(getattr(row, "output_awards", None)),
         "reports_count": to_int(row.reports_count),
         "other_outputs_count": to_int(row.other_outputs_count),
     }

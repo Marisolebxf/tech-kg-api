@@ -53,8 +53,11 @@ class _FakeGraph:
             self._fields["HAS_OUTPUT"].update({"match_method", "match_evidence", "confidence"})
         if "ALTER EDGE HAS_KEYWORD" in query:
             self._fields["HAS_KEYWORD"].update({"ingest_batch", "ingest_time"})
-        if "ALTER TAG Project" in query and "confidence" in query:
-            self._tag_fields["Project"].add("confidence")
+        if "ALTER TAG Project" in query:
+            if "confidence" in query:
+                self._tag_fields["Project"].add("confidence")
+            if "output_awards" in query:
+                self._tag_fields["Project"].add("output_awards")
 
 
 def test_ensure_alignment_edge_schema_alters_missing_only() -> None:
@@ -72,6 +75,7 @@ def test_ensure_project_tag_confidence_alters_missing_only() -> None:
     graph = _FakeGraph()
     ensure_project_tag_confidence(graph)
     assert any("ALTER TAG Project ADD" in q and "confidence" in q for q in graph.writes)
+    assert any("output_awards" in q for q in graph.writes)
     # 已补列后再次调用应幂等无写
     graph.writes.clear()
     ensure_project_tag_confidence(graph)

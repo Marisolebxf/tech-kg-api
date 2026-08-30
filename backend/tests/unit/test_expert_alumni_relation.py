@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from infra.graph_db import GraphConnectionError
-from infra.graph_db.models import GraphPagedResult
 from service.expert_alumni_relation import ExpertAlumniRelationService, clear_caches
 
 
@@ -19,17 +19,17 @@ def _isolate_caches():
     clear_caches()
 
 
-def _node(nid: str, props: dict | None = None):
-    return SimpleNamespace(id=nid, properties=props or {}, labels=["Person"])
+def _node(nid: str, props: dict | None = None, labels: list[str] | None = None):
+    return SimpleNamespace(id=nid, properties=props or {}, labels=labels or ["Person"])
 
 
-def _edge(etype: str, source: str, target: str):
+def _edge(etype: str, source: str, target: str, props: dict | None = None):
     return SimpleNamespace(
         id=f"{source}->{target}@0",
         type=etype,
         source_id=source,
         target_id=target,
-        properties={},
+        properties=props or {},
     )
 
 
@@ -37,6 +37,57 @@ def _svc(graph) -> ExpertAlumniRelationService:
     svc = ExpertAlumniRelationService()
     svc._client = MagicMock(return_value=graph)  # type: ignore[method-assign]
     return svc
+
+
+def _graph_with_studied_at(
+    source: Any,
+    alumni: list[Any],
+    *,
+    org_vid: str = "org_pku",
+    institution: str = "北京大学",
+) -> MagicMock:
+    """源专家 --STUDIED_AT--> org <--STUDIED_AT-- 校友。"""
+    nodes = {
+        str(source.id): source,
+        org_vid: _node(org_vid, {"name_cn": institution}, ["Organization"]),
+    }
+    for a in alumni:
+        nodes[str(a.id)] = a
+
+    def edges(nid, **kwargs):
+        et = kwargs.get("edge_type")
+        direction = kwargs.get("direction", "both")
+        nid = str(nid)
+        if nid == str(source.id) and direction == "out" and et == "STUDIED_AT":
+            return [
+                _edge(
+                    "STUDIED_AT",
+                    str(source.id),
+                    org_vid,
+                    {"institution_zh": institution},
+                )
+            ]
+        if nid == org_vid and direction == "in" and et == "STUDIED_AT":
+            return [
+                _edge("STUDIED_AT", str(source.id), org_vid, {"institution_zh": institution}),
+                *[
+                    _edge("STUDIED_AT", str(a.id), org_vid, {"institution_zh": institution})
+                    for a in alumni
+                ],
+            ]
+        if direction == "both" and et is None:
+            return []
+        return []
+
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
+    graph.get_node_edges = MagicMock(side_effect=edges)
+    graph.get_nodes_by_label = MagicMock(
+        side_effect=AssertionError("list 模式不得调用 get_nodes_by_label")
+    )
+    graph.execute_read = MagicMock(return_value=SimpleNamespace(records=[]))
+    graph._settings = SimpleNamespace(space="dev")
+    return graph
 
 
 def test_pair_same_school_and_degree():
@@ -142,7 +193,7 @@ def test_pair_education_stage_accepts_multiple_values():
     assert resp["total"] == 1
 
 
-def test_list_finds_alumni_and_truncation_meta():
+def test_list_via_studied_at_neighborhood():
     source = _node(
         "S1",
         {"name_zh": "甲", "education_background_institution_zh": "复旦大学"},
@@ -155,14 +206,9 @@ def test_list_finds_alumni_and_truncation_meta():
         "S3",
         {"name_zh": "丙", "education_background_institution_zh": "浙大"},
     )
-    nodes = {"S1": source, "S2": alum, "S3": other}
-    graph = MagicMock()
-    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
-    graph.get_nodes_by_label = MagicMock(
-        return_value=GraphPagedResult(items=[alum, other], total=2, limit=50, offset=0)
+    graph = _graph_with_studied_at(
+        source, [alum, other], org_vid="org_fudan", institution="复旦大学"
     )
-    graph.get_node_edges = MagicMock(return_value=[])
-    graph._settings = SimpleNamespace(space="dev")
 
     resp = _svc(graph).query(expert_id="S1", limit=10)
 
@@ -170,38 +216,15 @@ def test_list_finds_alumni_and_truncation_meta():
     assert resp["total"] == 1
     assert resp["items"][0]["alumniId"] == "S2"
     assert "同校" in resp["dimensionsCatalog"]
+    graph.get_nodes_by_label.assert_not_called()
 
 
-def test_list_scans_beyond_original_500_candidate_limit():
+def test_list_does_not_call_get_nodes_by_label():
     source = _node("S1", {"education_background_institution_zh": "测试大学"})
-    first_page = [
-        _node(f"P{i}", {"education_background_institution_zh": "其他大学"}) for i in range(500)
-    ]
-    pages = [
-        GraphPagedResult(items=first_page, total=551, limit=500, offset=0),
-        GraphPagedResult(
-            items=[
-                *[
-                    _node(f"P{i}", {"education_background_institution_zh": "其他大学"})
-                    for i in range(500, 550)
-                ],
-                _node("TARGET", {"education_background_institution_zh": "测试大学"}),
-            ],
-            total=551,
-            limit=500,
-            offset=500,
-        ),
-    ]
-    graph = MagicMock()
-    graph.get_node = MagicMock(return_value=source)
-    graph.get_nodes_by_label = MagicMock(side_effect=pages)
-    graph.get_node_edges = MagicMock(return_value=[])
-    graph._settings = SimpleNamespace(space="dev")
-    resp = _svc(graph).query(expert_id="S1", limit=20)
-    assert resp["total"] == 1
-    assert resp["items"][0]["alumniId"] == "TARGET"
-    assert graph.get_nodes_by_label.call_count == 2
-    assert resp["sourceMeta"]["truncated"] is False
+    target = _node("TARGET", {"education_background_institution_zh": "测试大学"})
+    graph = _graph_with_studied_at(source, [target], org_vid="org_test", institution="测试大学")
+    _svc(graph).query(expert_id="S1", limit=20)
+    assert graph.get_nodes_by_label.call_count == 0
 
 
 def test_no_education_returns_zero():
@@ -210,6 +233,7 @@ def test_no_education_returns_zero():
     graph = MagicMock()
     graph.get_node = MagicMock(side_effect=lambda nid: a if nid == "S1" else b)
     graph.get_node_edges = MagicMock(return_value=[])
+    graph.execute_read = MagicMock(return_value=SimpleNamespace(records=[]))
     graph._settings = SimpleNamespace(space="dev")
 
     resp = _svc(graph).query(expert_id="S1", target_expert_id="S2")
@@ -227,7 +251,7 @@ def test_list_propagates_graph_connection_error():
     source = _node("S1", {"education_background_institution_zh": "测试大学"})
     graph = MagicMock()
     graph.get_node.return_value = source
-    graph.get_nodes_by_label.side_effect = GraphConnectionError("not connected")
+    graph.get_node_edges.side_effect = GraphConnectionError("not connected")
     graph._settings = SimpleNamespace(space="dev")
 
     with pytest.raises(GraphConnectionError, match="not connected"):

@@ -1,5 +1,22 @@
 import { http } from './http'
-import type { AlumniProvenance } from './expertAlumniRelation'
+
+export interface IndirectProvenanceEvidence {
+  title: string
+  sourceTable: string
+  sourceField: string
+  graphVid: string
+  businessTable?: string
+  technicalTable?: string
+  recordId?: string
+  fieldIdentifier?: string
+  summary?: string
+}
+
+export interface IndirectProvenance {
+  sourceDatabase: string
+  summary: string
+  evidences: IndirectProvenanceEvidence[]
+}
 
 export interface IndirectNode {
   id: string
@@ -31,6 +48,7 @@ export interface IndirectRelationPath {
 export interface ExpertIndirectRelationResult {
   coreNode: IndirectNode
   pathDepth: number
+  defaultPathDepth: number
   minStrength: number
   directNodeCount: number
   indirectNodeCount: number
@@ -45,7 +63,8 @@ export interface ExpertIndirectRelationResult {
 
 export interface ExpertIndirectRelationResponse {
   structuredResult: ExpertIndirectRelationResult
-  provenance: AlumniProvenance
+  provenance: IndirectProvenance
+  rules: Array<Record<string, any>>
 }
 
 export interface ExpertIndirectRelationRequest {

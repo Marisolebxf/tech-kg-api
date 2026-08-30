@@ -1,4 +1,4 @@
-"""科技专家校友关系：基于 Person 教育属性匹配，仅查询返回，不写 ALUMNI 边。"""
+"""科技专家校友关系：基于 Person 教育属性 / STUDIED_AT 邻域匹配，仅查询返回，不写 ALUMNI 边。"""
 
 from __future__ import annotations
 
@@ -14,17 +14,14 @@ from infra.graph_db import GraphNotFoundError, TRSGraphClient, get_trs_graph_cli
 from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
 
-PERSON_LABELS = ("Person", "Scholar")
-# 单专家 list 模式需要扫描候选专家。使用较大的分页，避免 1.25 万节点产生
-# 250 次串行 HTTP 请求并触发前端超时。
-LIST_PAGE_SIZE = 500
-LIST_MAX_PAGES = 25
-EDGE_LIMIT = 200
+STUDIED_AT_EDGE = "STUDIED_AT"
+EDGE_LIMIT = 500
+LOOKUP_CANDIDATE_LIMIT = 200
 
 # 进程内 TTL 缓存：读多写少的图查询，60s 内复用，避免高并发下打爆 trs-graph。
 _RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
-_PERSON_SCAN_TTL = 60.0
-_person_scan_cache: dict[str, tuple[float, list[tuple[str, Any]], bool]] = {}
+_ORG_INDEX_TTL = 60.0
+_org_name_index_cache: dict[str, tuple[float, dict[str, str]]] = {}
 _result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _cache_lock = threading.Lock()
 
@@ -43,7 +40,7 @@ def _cache_set(cache: dict[str, tuple[float, Any]], key: str, value: Any, ttl: f
 def clear_caches() -> None:
     """清空进程内缓存（测试隔离用）。"""
     _result_cache.clear()
-    _person_scan_cache.clear()
+    _org_name_index_cache.clear()
 
 
 PAPER_EDGE_TYPES = frozenset({"AUTHORED_BY"})
@@ -54,14 +51,14 @@ COAUTHOR_EDGE = "COAUTHOR_WITH"
 # 与前端结果详情「规则」Tab 字段对齐（name/type/target/trigger/logic/output/threshold/audit）
 ALUMNI_RULES: list[dict[str, str]] = [
     {
-        "name": "教育经历匹配规则",
+        "name": "教育经历匹配算法",
         "type": "关系匹配规则",
-        "target": "education_background_institution_*/degree_*/date",
-        "trigger": "专家存在教育院校属性",
-        "logic": "解析结构化教育字段（必要时切分 blob），院校归一后比较；命中同校才认校友。",
+        "target": "STUDIED_AT / education_background_institution_*/degree_*/date",
+        "trigger": "专家存在就读边或教育院校属性",
+        "logic": "沿 STUDIED_AT 院校邻域取候选（无边时 LOOKUP 院校属性兜底）；院校归一后比较；命中同校才认校友。",
         "output": "校友候选、共享院校、维度列表",
         "threshold": "至少命中「同校」",
-        "audit": "无教育数据时 total=0，不编造维度",
+        "audit": "无教育数据时 total=0，不编造维度；禁止全量 Person 扫描",
     },
     {
         "name": "校友维度细分规则",
@@ -126,7 +123,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             mode = "pair"
         else:
             mode = "list"
-            candidates, truncated = self._scan_person_candidates(graph, expert_id)
+            candidates, truncated = self._neighborhood_alumni_candidates(
+                graph, expert_id, source, school
+            )
 
         # 源专家的边对所有候选都相同，提前取一次复用，避免每个候选重复调 get_node_edges(expert_id)。
         expert_edges: list[Any] = []
@@ -153,6 +152,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 "dimensions": dimensions,
                 "educations": match_summary,
                 "interactions": interactions,
+                "provenance": self._person_provenance(cand_props, str(cand_id)),
             }
             items.append(item)
             dim_catalog.update(dimensions)
@@ -167,6 +167,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             "id": expert_id,
             "name": self._display_name(source),
             "educations": source_edus,
+            "provenance": self._person_provenance(
+                getattr(source, "properties", None) or {}, expert_id
+            ),
         }
         source_meta = {
             "space": space,
@@ -204,68 +207,242 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 return str(val)
         return str(getattr(node, "id", "") or "")
 
-    def _scan_person_candidates(
-        self, graph: TRSGraphClient, exclude_id: str
+    @staticmethod
+    def _person_provenance(props: dict[str, Any], vid: str) -> dict[str, str]:
+        """Return only provenance values physically stored on the graph node."""
+        return {
+            "sourceTable": str(props.get("source_table") or "-"),
+            "sourceField": str(props.get("source_field") or "-"),
+            "graphVid": vid,
+        }
+
+    def _neighborhood_alumni_candidates(
+        self,
+        graph: TRSGraphClient,
+        source_id: str,
+        source_node: Any,
+        school: str | None,
     ) -> tuple[list[tuple[str, Any]], bool]:
+        """经 STUDIED_AT 院校邻域取候选；无边时按源专家院校 LOOKUP，禁止 Person 全扫。"""
+        org_vids = self._resolve_school_org_vids(graph, source_id, source_node, school)
+        truncated = False
+        seen: set[str] = set()
+        candidates: list[tuple[str, Any]] = []
+
+        for org_vid in org_vids:
+            try:
+                edges = graph.get_node_edges(
+                    org_vid,
+                    direction="in",
+                    edge_type=STUDIED_AT_EDGE,
+                    limit=EDGE_LIMIT,
+                )
+            except GraphNotFoundError:
+                edges = []
+            if len(edges or []) >= EDGE_LIMIT:
+                truncated = True
+            for edge in edges or []:
+                if str(getattr(edge, "type", "") or "") != STUDIED_AT_EDGE:
+                    continue
+                person_id = self._neighbor_id(edge, org_vid)
+                if not person_id or person_id == source_id or person_id in seen:
+                    continue
+                try:
+                    node = graph.get_node(person_id)
+                except GraphNotFoundError:
+                    node = None
+                if node is None:
+                    continue
+                seen.add(person_id)
+                candidates.append((person_id, node))
+
+        if candidates:
+            return candidates, truncated
+
+        # org 邻域无命中：按源专家院校字符串 LOOKUP Person（院校 tag index）
+        institutions = self._source_institution_names(source_node, school)
+        for name in institutions:
+            looked_up, hit_cap = self._lookup_persons_by_institution(graph, name)
+            if hit_cap:
+                truncated = True
+            for nid, node in looked_up:
+                if nid == source_id or nid in seen:
+                    continue
+                seen.add(nid)
+                candidates.append((nid, node))
+        return candidates, truncated
+
+    def _resolve_school_org_vids(
+        self,
+        graph: TRSGraphClient,
+        source_id: str,
+        source_node: Any,
+        school: str | None,
+    ) -> list[str]:
+        """源专家 STUDIED_AT 出边院校；无边时用教育属性匹配 Organization 名索引。"""
+        org_vids: list[str] = []
+        seen: set[str] = set()
+        try:
+            out_edges = graph.get_node_edges(
+                source_id,
+                direction="out",
+                edge_type=STUDIED_AT_EDGE,
+                limit=EDGE_LIMIT,
+            )
+        except GraphNotFoundError:
+            out_edges = []
+        school_norm = self._norm_text(school) if school else ""
+        for edge in out_edges or []:
+            if str(getattr(edge, "type", "") or "") != STUDIED_AT_EDGE:
+                continue
+            org_vid = self._neighbor_id(edge, source_id)
+            if not org_vid or org_vid in seen:
+                continue
+            props = getattr(edge, "properties", None) or {}
+            if school_norm:
+                inst = " ".join(
+                    filter(
+                        None,
+                        [
+                            self._as_str(props.get("institution_zh")),
+                            self._as_str(props.get("institution_en")),
+                        ],
+                    )
+                )
+                if not inst:
+                    # 边无院校文案时读 org 节点名
+                    try:
+                        org_node = graph.get_node(org_vid)
+                    except GraphNotFoundError:
+                        org_node = None
+                    op = getattr(org_node, "properties", None) or {}
+                    inst = " ".join(
+                        filter(
+                            None,
+                            [
+                                self._as_str(op.get("name_cn")),
+                                self._as_str(op.get("name_zh")),
+                                self._as_str(op.get("name_en")),
+                                self._as_str(op.get("name")),
+                            ],
+                        )
+                    )
+                inst_key = self._norm_text(inst)
+                if school_norm not in inst_key and inst_key not in school_norm:
+                    continue
+            seen.add(org_vid)
+            org_vids.append(org_vid)
+
+        if org_vids:
+            return org_vids
+
+        # 无 STUDIED_AT：教育属性 → Organization 名索引
+        index = self._org_name_index(graph)
+        for name in self._source_institution_names(source_node, school):
+            vid = index.get(name) or index.get(name.lower())
+            if vid and vid not in seen:
+                seen.add(vid)
+                org_vids.append(vid)
+        return org_vids
+
+    def _source_institution_names(self, source_node: Any, school: str | None) -> list[str]:
+        names: list[str] = []
+        seen: set[str] = set()
+        if school and school.strip():
+            key = school.strip()
+            names.append(key)
+            seen.add(self._norm_text(key))
+        for edu in self._parse_educations(getattr(source_node, "properties", None) or {}):
+            inst = (edu.get("institution") or "").strip()
+            if not inst:
+                continue
+            key = self._norm_text(inst)
+            if key in seen:
+                continue
+            seen.add(key)
+            names.append(inst)
+        return names
+
+    def _org_name_index(self, graph: TRSGraphClient) -> dict[str, str]:
         space = (
             getattr(getattr(graph, "_settings", None), "space", None)
             or TRSGraphSettings.from_env().space
         )
-        # 双重检查锁：锁内只查/写缓存字典，慢扫描（最多 20 次 HTTP）放锁外，
-        # 避免冷缓存时所有校友请求串行卡在这把锁上。
         with _cache_lock:
-            cached = _person_scan_cache.get(space)
+            cached = _org_name_index_cache.get(space)
         if cached and cached[0] > time.monotonic():
-            all_nodes, truncated = cached[1], cached[2]
-        else:
-            all_nodes, truncated = self._load_person_scan(graph, space)
-            with _cache_lock:
-                # 再查一次：扫描期间别的线程可能已填入
-                cached = _person_scan_cache.get(space)
-                if cached and cached[0] > time.monotonic():
-                    all_nodes, truncated = cached[1], cached[2]
-                else:
-                    _person_scan_cache[space] = (
-                        time.monotonic() + _PERSON_SCAN_TTL,
-                        all_nodes,
-                        truncated,
-                    )
-        # 排除当前专家本身
-        candidates = [(nid, node) for nid, node in all_nodes if nid != exclude_id]
-        return candidates, truncated
+            return cached[1]
+        index: dict[str, str] = {}
+        try:
+            result = graph.execute_read(
+                "MATCH (v:Organization) RETURN id(v) AS vid, "
+                "v.Organization.name_cn AS name_cn, v.Organization.name_en AS name_en;"
+            )
+        except Exception:  # noqa: BLE001
+            result = None
+        for rec in getattr(result, "records", None) or []:
+            vid = rec.get("vid")
+            if not vid:
+                continue
+            for k in ("name_cn", "name_en"):
+                name = rec.get(k)
+                if isinstance(name, str) and name.strip():
+                    index[name.strip()] = str(vid)
+                    index[name.strip().lower()] = str(vid)
+        with _cache_lock:
+            _org_name_index_cache[space] = (time.monotonic() + _ORG_INDEX_TTL, index)
+        return index
 
-    def _load_person_scan(
-        self, graph: TRSGraphClient, space: str
+    def _lookup_persons_by_institution(
+        self, graph: TRSGraphClient, institution: str
     ) -> tuple[list[tuple[str, Any]], bool]:
-        """全量扫描 Person/Scholar 节点（按 label 分页），结果供 60s 内复用。"""
-        all_nodes: list[tuple[str, Any]] = []
-        truncated = False
+        """院校 tag index LOOKUP；返回 (candidates, hit_limit)。"""
+        lit = self._ngql_string(institution)
+        queries = [
+            (
+                "LOOKUP ON Person WHERE Person.education_background_institution_zh == "
+                f"{lit} YIELD id(vertex) AS vid | LIMIT {LOOKUP_CANDIDATE_LIMIT}"
+            ),
+            (
+                "LOOKUP ON Person WHERE Person.education_background_institution_en == "
+                f"{lit} YIELD id(vertex) AS vid | LIMIT {LOOKUP_CANDIDATE_LIMIT}"
+            ),
+        ]
+        out: list[tuple[str, Any]] = []
         seen: set[str] = set()
-        for label in PERSON_LABELS:
-            for page in range(LIST_MAX_PAGES):
+        hit_cap = False
+        for query in queries:
+            try:
+                result = graph.execute_read(query)
+            except Exception:  # noqa: BLE001 — 索引未建或 LOOKUP 不可用
+                continue
+            rows = getattr(result, "records", None) or []
+            if len(rows) >= LOOKUP_CANDIDATE_LIMIT:
+                hit_cap = True
+            for rec in rows:
+                vid = str(rec.get("vid") or "")
+                if not vid or vid in seen:
+                    continue
                 try:
-                    page_result = graph.get_nodes_by_label(
-                        label, limit=LIST_PAGE_SIZE, offset=page * LIST_PAGE_SIZE
-                    )
+                    node = graph.get_node(vid)
                 except GraphNotFoundError:
-                    break
-                items = getattr(page_result, "items", None) or []
-                if not items:
-                    break
-                for node in items:
-                    nid = str(getattr(node, "id", "") or "")
-                    if not nid or nid in seen:
-                        continue
-                    seen.add(nid)
-                    all_nodes.append((nid, node))
-                if len(items) < LIST_PAGE_SIZE:
-                    break
-                if page == LIST_MAX_PAGES - 1:
-                    truncated = True
-            if all_nodes:
-                # Prefer first label that returns data (Person OR Scholar)
-                break
-        return all_nodes, truncated
+                    node = None
+                if node is None:
+                    continue
+                seen.add(vid)
+                out.append((vid, node))
+        return out, hit_cap
+
+    @staticmethod
+    def _ngql_string(value: str) -> str:
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    def _scan_person_candidates(self, *args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("Person 全量扫描已移除；请使用 STUDIED_AT 邻域路径")
+
+    def _load_person_scan(self, *args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("Person 全量扫描已移除；请使用 STUDIED_AT 邻域路径")
 
     def _parse_educations(self, props: dict[str, Any]) -> list[dict[str, str | None]]:
         inst_zh = self._as_str(props.get("education_background_institution_zh"))
@@ -581,18 +758,24 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 {
                     "title": "源专家教育属性",
                     "businessTable": "专家教育经历",
-                    "technicalTable": "Person.education_background_*",
+                    "technicalTable": (expert.get("provenance") or {}).get("sourceTable") or "-",
                     "recordId": str(expert.get("id") or ""),
                     "fieldIdentifier": "education_background_institution_zh/_en",
+                    "sourceField": (expert.get("provenance") or {}).get("sourceField") or "-",
+                    "graphVid": (expert.get("provenance") or {}).get("graphVid")
+                    or str(expert.get("id") or ""),
                     "summary": (f"解析教育经历 {len(expert.get('educations') or [])} 条"),
                 },
                 *[
                     {
                         "title": f"校友匹配 · {item.get('name') or item.get('alumniId')}",
                         "businessTable": "校友关系查询结果",
-                        "technicalTable": "expert_alumni_relation.query",
+                        "technicalTable": (item.get("provenance") or {}).get("sourceTable") or "-",
                         "recordId": str(item.get("alumniId") or ""),
                         "fieldIdentifier": "/".join(item.get("dimensions") or ["同校"]),
+                        "sourceField": (item.get("provenance") or {}).get("sourceField") or "-",
+                        "graphVid": (item.get("provenance") or {}).get("graphVid")
+                        or str(item.get("alumniId") or ""),
                         "summary": (
                             f"共享院校："
                             f"{'、'.join(item.get('sharedInstitutions') or []) or '—'}；"
@@ -608,7 +791,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             "summaryRows": summary_rows,
             "resultRows": result_rows,
             "evidence": evidence,
-            "rules": ALUMNI_RULES,
+            "rules": ALUMNI_RULES[:1],
             "entities": entities,
             "relations": relations,
             "graph": graph,

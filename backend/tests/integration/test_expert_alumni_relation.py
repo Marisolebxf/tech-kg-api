@@ -73,6 +73,45 @@ async def test_query_alumni_relation_not_found(async_client, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["expertId", "targetExpertId"])
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("X" * 65, "64"),
+        ("person_1!@#￥%&", "异常字符"),
+        ("person 1", "空格"),
+    ],
+)
+async def test_query_alumni_relation_rejects_invalid_expert_ids(
+    async_client, field, value, message
+):
+    payload = {"expertId": "S1", "targetExpertId": "S2", field: value}
+    resp = await async_client.post(
+        "/api/v1/kg-construction/expert-alumni-relations/query", json=payload
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] == 422
+    assert any(message in error["msg"] for error in body["data"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [("学" * 101, "100"), ("清华大学!@#￥%&", "异常字符")],
+)
+async def test_query_alumni_relation_rejects_invalid_school(async_client, value, message):
+    resp = await async_client.post(
+        "/api/v1/kg-construction/expert-alumni-relations/query",
+        json={"expertId": "S1", "school": value},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] == 422
+    assert any(message in error["msg"] for error in body["data"])
+
+
+@pytest.mark.asyncio
 async def test_legacy_alumni_routes(async_client, monkeypatch):
     resp = await async_client.get("/api/v1/kg-service/expert-alumni-relation")
     assert resp.status_code == 200

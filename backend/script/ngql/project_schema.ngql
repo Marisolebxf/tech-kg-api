@@ -28,6 +28,7 @@ CREATE TAG IF NOT EXISTS Project(
   clinical_trials_count int64,
   products_count int64,
   awards_count int64,
+  output_awards string,
   reports_count int64,
   other_outputs_count int64,
   source_system string,

@@ -7,6 +7,7 @@ project_cooperation 关系、角色定位、合作时间解析、重点企业筛
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from biz.schemas.tech_enterprise_relation_business import KeyEnterpriseRelationRequest
 from service.tech_enterprise_relation_business import KeyEnterpriseRelationService, clear_caches
@@ -25,7 +26,17 @@ def _isolate_caches():
 def _subgraph() -> dict:
     """构造一个 2 跳子图 mock：专家 --EXECUTIVE_BY--> 上市企业；专家 --HAS_PARTICIPANT--> 项目 --PARTICIPATES_IN--> 高校。"""
     nodes = [
-        {"id": EXPERT, "labels": ["Person"], "properties": {"name_cn": "左晶"}},
+        {
+            "id": EXPERT,
+            "labels": ["Person"],
+            "properties": {
+                "name_cn": "左晶",
+                "source_table": "dwd_scholar",
+                "source_record_id": "left_jing",
+                "ingest_batch": "BATCH_20260823_092128_scholar_entities",
+                "ingest_time": "2026-08-23 09:21:28",
+            },
+        },
         {
             "id": "org_lvdie",
             "labels": ["Organization"],
@@ -34,6 +45,10 @@ def _subgraph() -> dict:
                 "listing_status": "已上市",
                 "stock_type": "中国_沪市A股_科创板",
                 "stock_code": "688017.SH",
+                "source_table": "dwd_org_stock_base",
+                "organization_id": "lvdie_org_id",
+                "ingest_batch": "ORG_DEV_FINAL_20260811",
+                "ingest_time": "2026-08-11T04:02:01+00:00",
             },
         },
         {
@@ -128,15 +143,109 @@ async def test_run_parses_governance_and_project_cooperation(monkeypatch):
     assert resp.confidence == 0.9
 
 
-def test_key_tech_enterprise_only_coerces_string_bool():
-    """前端参数框可能传 '是'/'否'/'true'/'false' 字符串，schema 应宽容转 bool。"""
+@pytest.mark.asyncio
+async def test_run_populates_entity_provenance(monkeypatch):
+    """溯源栏：响应 provenance 映射携带专家与企业的真实源数据表/英文字段名（同同事关系口径）。"""
+    svc = KeyEnterpriseRelationService(base_url="http://x")
+    monkeypatch.setattr(
+        _httpx(),
+        "AsyncClient",
+        lambda *a, **kw: _FakeAsyncClient([("/graph-search/filtered-subgraph/", _subgraph())]),
+    )
+    resp = await svc.run(KeyEnterpriseRelationRequest(expert_id=EXPERT))
+
+    # 专家节点：Person + source_record_id + dwd_scholar → 字段名 scholar_id
+    expert_prov = resp.entity_provenance[EXPERT]
+    assert expert_prov.sourceTable == "dwd_scholar"
+    assert expert_prov.sourceField == "scholar_id"
+    assert expert_prov.sourceValue == "left_jing"
+    assert expert_prov.ingestBatch == "BATCH_20260823_092128_scholar_entities"
+    assert expert_prov.ingestTime == "2026-08-23 09:21:28"
+
+    # 企业节点：Organization + organization_id → 字段名 organization_id
+    org_prov = resp.entity_provenance["org_lvdie"]
+    assert org_prov.sourceTable == "dwd_org_stock_base"
+    assert org_prov.sourceField == "organization_id"
+    assert org_prov.sourceValue == "lvdie_org_id"
+    assert org_prov.ingestBatch == "ORG_DEV_FINAL_20260811"
+
+
+@pytest.mark.asyncio
+async def test_run_affiliated_with_extracts_real_position(monkeypatch):
+    """AFFILIATED_WITH 边的职位存在 work_experience_position_zh（不是 position 字段）。
+
+    应取真实职位（如 技术总监）而非退化成通用 '任职'；任职时段取自 Person.work_experience_date。
+    复现反馈「角色关系任职不属实角色」：role 误用 position 字段导致 role_label 退化为 任职。
+    """
+    nodes = [
+        {
+            "id": EXPERT,
+            "labels": ["Person"],
+            "properties": {
+                "name_cn": "左晶",
+                "work_experience_date": "2018-01 至 2024-12",
+                "source_table": "dwd_scholar",
+                "source_record_id": "left_jing",
+            },
+        },
+        {
+            "id": "org_acme",
+            "labels": ["Organization"],
+            "properties": {
+                "name_cn": "深圳某某科技股份有限公司",
+                "stock_code": "000001.SZ",
+                "listing_status": "已上市",
+                "source_table": "dwd_org_stock_base",
+                "organization_id": "acme",
+            },
+        },
+    ]
+    edges = [
+        {
+            "id": "e1",
+            "type": "AFFILIATED_WITH",
+            "source": EXPERT,
+            "target": "org_acme",
+            "properties": {
+                "work_experience_position_zh": "技术总监",
+                "affiliation_name": "深圳某某科技股份有限公司",
+            },
+        }
+    ]
+    svc = KeyEnterpriseRelationService(base_url="http://x")
+    monkeypatch.setattr(
+        _httpx(),
+        "AsyncClient",
+        lambda *a, **kw: _FakeAsyncClient(
+            [("/graph-search/filtered-subgraph/", {"data": {"nodes": nodes, "edges": edges}})]
+        ),
+    )
+    resp = await svc.run(KeyEnterpriseRelationRequest(expert_id=EXPERT))
+    assert len(resp.relations) == 1
+    rel = resp.relations[0]
+    assert rel.cooperation_mode == "任职"  # AFFILIATED_WITH 的 governance 模式
+    assert rel.role_label == "技术总监"  # 真实职位，非退化的 '任职'
+    assert rel.role_level == "L2"
+    assert str(rel.period.start) == "2018-01"
+    assert str(rel.period.end) == "2024-12"
+
+
+def test_key_tech_enterprise_only_accepts_true_false_only():
+    """key_tech_enterprise_only 只接受布尔 true/false；'是'/'否'/'1'/'0'/'yes' 等一律拒绝。"""
     from biz.schemas.tech_enterprise_relation_business import KeyEnterpriseRelationRequest
 
+    # 真布尔 + 字符串 'true'/'false'（大小写不敏感）通过
     assert (
         KeyEnterpriseRelationRequest(
-            expert_id="x", key_tech_enterprise_only="是"
+            expert_id="x", key_tech_enterprise_only=True
         ).key_tech_enterprise_only
         is True
+    )
+    assert (
+        KeyEnterpriseRelationRequest(
+            expert_id="x", key_tech_enterprise_only=False
+        ).key_tech_enterprise_only
+        is False
     )
     assert (
         KeyEnterpriseRelationRequest(
@@ -146,29 +255,17 @@ def test_key_tech_enterprise_only_coerces_string_bool():
     )
     assert (
         KeyEnterpriseRelationRequest(
-            expert_id="x", key_tech_enterprise_only="1"
-        ).key_tech_enterprise_only
-        is True
-    )
-    assert KeyEnterpriseRelationRequest(expert_id="x").key_tech_enterprise_only is True  # 默认
-    assert (
-        KeyEnterpriseRelationRequest(
-            expert_id="x", key_tech_enterprise_only="否"
+            expert_id="x", key_tech_enterprise_only="False"
         ).key_tech_enterprise_only
         is False
     )
-    assert (
-        KeyEnterpriseRelationRequest(
-            expert_id="x", key_tech_enterprise_only="false"
-        ).key_tech_enterprise_only
-        is False
-    )
-    assert (
-        KeyEnterpriseRelationRequest(
-            expert_id="x", key_tech_enterprise_only="0"
-        ).key_tech_enterprise_only
-        is False
-    )
+    # 缺省 True
+    assert KeyEnterpriseRelationRequest(expert_id="x").key_tech_enterprise_only is True
+
+    # 旧值 '是'/'否'/'1'/'0'/'yes' 均拒绝
+    for bad in ("是", "否", "1", "0", "yes", "no"):
+        with pytest.raises(ValidationError, match="true/false"):
+            KeyEnterpriseRelationRequest(expert_id="x", key_tech_enterprise_only=bad)
 
 
 def test_enterprise_background_extracts_from_extra_json():

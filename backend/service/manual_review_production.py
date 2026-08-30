@@ -696,12 +696,18 @@ class ManualReviewService:
             desc = graph.execute_query(
                 f"DESCRIBE EDGE `{label}`" if is_edge else f"DESCRIBE TAG `{label}`"
             )
-            records = desc.records if hasattr(desc, "records") else (
-                desc.get("records", []) if isinstance(desc, dict) else []
+            records = (
+                desc.records
+                if hasattr(desc, "records")
+                else (desc.get("records", []) if isinstance(desc, dict) else [])
             )
-            schema_fields = {r.get("Field") for r in records if isinstance(r, dict) and r.get("Field")}
+            schema_fields = {
+                r.get("Field") for r in records if isinstance(r, dict) and r.get("Field")
+            }
         except Exception as exc:  # noqa: BLE001
-            log.warning("DESCRIBE %s %s 失败，原样灌图: %s", "EDGE" if is_edge else "TAG", label, exc)
+            log.warning(
+                "DESCRIBE %s %s 失败，原样灌图: %s", "EDGE" if is_edge else "TAG", label, exc
+            )
             return {k: v if isinstance(v, str) else str(v) for k, v in candidate.items()}
 
         if not schema_fields:
@@ -721,7 +727,10 @@ class ManualReviewService:
             else:
                 log.warning(
                     "candidate 有 %d 个字段不在 %s %s schema 里且无 extra_json 兜底，丢弃: %s",
-                    len(extras), "edge" if is_edge else "tag", label, list(extras),
+                    len(extras),
+                    "edge" if is_edge else "tag",
+                    label,
+                    list(extras),
                 )
         return mapped
 

@@ -1,5 +1,7 @@
 import axios from 'axios'
 
+import { PortalAction, portalBridge } from '../portal/iframeBridge'
+
 const RAW_REQUEST_ERROR = /request failed|network error|status code 5\d\d|failed to fetch|load failed/i
 
 function responseDetail(data: unknown): string {
@@ -39,6 +41,20 @@ export const http = axios.create({
 http.interceptors.response.use(
   (response) => response.data,
   (error: unknown) => {
+    if (portalBridge.isInIframe && typeof error === 'object' && error !== null && 'response' in error) {
+      const response = (error as { response?: { status?: number; data?: unknown } }).response
+      const detail = responseDetail(response?.data)
+      if (response?.status === 401) {
+        portalBridge.send(PortalAction.SESSION_EXPIRED, {
+          message: detail || '登录状态已失效',
+        })
+      } else if (response?.status === 403) {
+        portalBridge.send(PortalAction.NO_PERMISSION, {
+          message: detail || '当前用户无权限访问该页面或接口',
+        })
+      }
+    }
+
     if (error instanceof Error) error.message = getErrorMessage(error, '请求失败')
     return Promise.reject(error)
   },

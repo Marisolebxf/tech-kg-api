@@ -4,7 +4,7 @@ import "element-plus/es/components/select/style/css";
 import { MonthPicker as AMonthPicker } from "@arco-design/web-vue";
 import zhCN from "@arco-design/web-vue/es/locale/lang/zh-cn";
 import dayjs from "dayjs";
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 
 import {
   describeExpertAlumniRelation,
@@ -59,7 +59,7 @@ import {
   buildIndirectRelationGraph,
   indirectSummaryRows,
 } from "../indirect-relation-view";
-import { monthRangeToApiDates } from "../utils/month-range";
+import { isFutureMonth, monthRangeToApiDates } from "../utils/month-range";
 
 type PanoramaLayerKey =
   | "core_technology"
@@ -123,24 +123,231 @@ const { showToast } = useToast();
 const resultMode = ref<
   "summary" | "entity" | "relation" | "provenance" | "rule" | "api"
 >("summary");
+const resultModeOrder = [
+  "summary",
+  "entity",
+  "relation",
+  "provenance",
+  "rule",
+  "api",
+] as const;
+
+function handleResultTabKeydown(event: KeyboardEvent) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const current = resultModeOrder.indexOf(resultMode.value);
+  const next =
+    event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? resultModeOrder.length - 1
+        : (current +
+            (event.key === "ArrowRight" ? 1 : -1) +
+            resultModeOrder.length) %
+          resultModeOrder.length;
+  resultMode.value = resultModeOrder[next];
+  requestAnimationFrame(() => {
+    document.getElementById(`result-mode-tab-`)?.focus();
+  });
+}
 const running = ref(false);
 const lastTestTime = ref("—");
 const lastUpdateTime = ref<number | null>(null);
+
+/** 全景图自动更新：勾选后每 60s 自动忽略缓存刷新一次。 */
+const panoramaAutoRefresh = ref(false);
+const PANORAMA_AUTO_REFRESH_INTERVAL = 60_000;
+let panoramaAutoRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+function startPanoramaAutoRefresh() {
+  if (panoramaAutoRefreshTimer) return;
+  panoramaAutoRefreshTimer = setInterval(() => {
+    if (!running.value && panoramaResponse.value) {
+      void handleRefreshPanorama();
+    }
+  }, PANORAMA_AUTO_REFRESH_INTERVAL);
+}
+
+function stopPanoramaAutoRefresh() {
+  if (panoramaAutoRefreshTimer) {
+    clearInterval(panoramaAutoRefreshTimer);
+    panoramaAutoRefreshTimer = null;
+  }
+}
+
+watch(panoramaAutoRefresh, (enabled) => {
+  if (enabled) startPanoramaAutoRefresh();
+  else stopPanoramaAutoRefresh();
+});
+
+watch(
+  () => props.moduleInfo.key,
+  (key) => {
+    if (key !== "industry-chain-panorama") {
+      panoramaAutoRefresh.value = false;
+    }
+  },
+);
+
+onBeforeUnmount(stopPanoramaAutoRefresh);
 const parameterValues = ref<Record<string, string>>({});
 const parameterErrors = ref<Record<string, string>>({});
 const hasParameterErrors = computed(
   () => Object.keys(parameterErrors.value).length > 0,
 );
+const queryFeedbackTitle = computed(() =>
+  liveError.value && /(?:未找到|不存在|无匹配)/u.test(liveError.value)
+    ? "未查询到结果"
+    : "查询失败",
+);
 const currentMonth = dayjs().format("YYYY-MM");
-const disableFutureMonth = (value: Date) => dayjs(value).isAfter(dayjs(), "month");
-const colleagueExpertIdPattern = /^[\w\u4e00-\u9fff·.\-]+$/u;
+const disableFutureMonth = (value: Date) =>
+  dayjs(value).isAfter(dayjs(), "month");
+const MAX_PARAMETER_LENGTH = 64;
+const MAX_SCHOOL_LENGTH = 100;
+/** 标识类字段（专家 ID、节点 VID）：不允许空格与 !@#￥%& 等异常符号。 */
+const identifierPattern = /^[\w\u4e00-\u9fff·.\-]+$/u;
+/** 关键词类字段（机构、产业）：额外允许空格、括号、顿号和斜杠。 */
+const keywordPattern = /^[\w\u4e00-\u9fff·.\-()（）、，,/\s]+$/u;
+/** 院校名称：允许空格与中英文括号、《》。 */
+const schoolPattern = /^[\w\u4e00-\u9fff·（）()《》.\-\s]+$/u;
 
-function colleagueExpertIdError(value: string): string | null {
-  if (value.length > 64) return "输入长度不能超过 64 个字符";
-  if (value && !colleagueExpertIdPattern.test(value)) {
+function identifierError(value: string): string | null {
+  if (value.length > MAX_PARAMETER_LENGTH)
+    return `输入长度不能超过 ${MAX_PARAMETER_LENGTH} 个字符`;
+  if (value && !identifierPattern.test(value)) {
     return "不能包含空格或 !@#￥%& 等异常字符";
   }
   return null;
+}
+
+function indirectCoreNodeIdError(value: string): string | null {
+  return value.length > 64 ? "输入长度不能超过 64 个字符" : null;
+}
+
+const paperCooperationExpertIdPattern = /^[A-Za-z0-9_-]+$/;
+
+function paperCooperationExpertIdError(value: string): string | null {
+  if (value.length > 64) return "输入长度不能超过 64 个字符";
+  if (value && !paperCooperationExpertIdPattern.test(value)) {
+    return "输入字符存在异常字符，仅支持字母、数字、下划线和中划线";
+  }
+  return null;
+}
+
+function keywordError(value: string): string | null {
+  if (value.length > MAX_PARAMETER_LENGTH)
+    return `输入长度不能超过 ${MAX_PARAMETER_LENGTH} 个字符`;
+  if (value && !keywordPattern.test(value)) {
+    return "不能包含 !@#￥%& 等异常字符";
+  }
+  return null;
+}
+
+/** top_n：必须是 1-50 的整数，留空合法（后端取默认 10）。与后端 _validate_top_n 同口径。 */
+function topNError(value: string): string | null {
+  const s = (value ?? "").trim();
+  if (s === "") return null; // 留空 → 后端取默认 10
+  if (!/^\d+$/.test(s)) return "top_n 必须是数字";
+  const n = Number(s);
+  if (n < 1 || n > 50) return "top_n 取值范围为 1-50";
+  return null;
+}
+
+function paperCooperationTimeErrors(
+  startValue: string | undefined,
+  endValue: string | undefined,
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  const startMonth = optionalParam(startValue);
+  const endMonth = optionalParam(endValue);
+  if (startMonth && endMonth && startMonth > endMonth) {
+    errors.startTime = "开始时间不能晚于结束时间";
+    errors.endTime = "结束时间不能早于开始时间";
+  }
+  if (startMonth && startMonth > currentMonth) {
+    errors.startTime = "开始时间超出当前时间";
+  }
+  if (endMonth && endMonth > currentMonth) {
+    errors.endTime = "结束时间超出当前时间";
+  }
+  return errors;
+}
+
+function schoolError(value: string): string | null {
+  if (value.length > MAX_SCHOOL_LENGTH)
+    return `输入长度不能超过 ${MAX_SCHOOL_LENGTH} 个字符`;
+  if (value.trim() && !schoolPattern.test(value.trim())) {
+    return "不能包含 !@#￥%& 等异常字符";
+  }
+  return null;
+}
+
+/** 按模块和字段名返回校验错误，与后端 pydantic 校验规则保持一致。 */
+function parameterFieldError(fieldName: string, value: string): string | null {
+  if (isExpertIndirect.value && fieldName === "core_node_id") {
+    return indirectCoreNodeIdError(value);
+  }
+  if (
+    isPaperCooperation.value &&
+    (fieldName === "expertAId" || fieldName === "expertBId")
+  ) {
+    return paperCooperationExpertIdError(value);
+  }
+  if (
+    isLiveColleague.value &&
+    (fieldName === "expert_a_id" || fieldName === "expert_b_id")
+  ) {
+    return identifierError(value);
+  }
+  if (
+    isLiveCoop.value &&
+    (fieldName === "sourceExpertId" || fieldName === "targetExpertId")
+  ) {
+    return identifierError(value);
+  }
+  if (isLiveAlumni.value) {
+    if (fieldName === "expertId" || fieldName === "targetExpertId")
+      return identifierError(value);
+    if (fieldName === "school") return schoolError(value);
+  }
+  if (isExpertDirect.value) {
+    if (fieldName === "expertAId" || fieldName === "expertBId")
+      return identifierError(value);
+    if (fieldName === "institution") return keywordError(value);
+  }
+  if (isPanorama.value) {
+    if (fieldName === "anchorId") return identifierError(value);
+    if (fieldName === "industry") return keywordError(value);
+  }
+  if (isLiveEnterpriseRelation.value) {
+    if (fieldName === "expert_id") return identifierError(value);
+    if (
+      fieldName === "enterprise_name" ||
+      fieldName === "role_type" ||
+      fieldName === "industry"
+    )
+      return keywordError(value);
+  }
+  if (isLiveIndustryEvent.value) {
+    if (fieldName === "chain_node_id" || fieldName === "event_type")
+      return identifierError(value);
+    if (fieldName === "top_n") return topNError(value);
+  }
+  return null;
+}
+
+/** 校验当前模块全部文本入参，返回 字段名 → 错误信息。 */
+function collectParameterErrors(fieldNames: string[]): Record<string, string> {
+  const errors: Record<string, string> = {};
+  fieldNames.forEach((name) => {
+    const error = parameterFieldError(
+      name,
+      parameterValues.value[name]?.trim() ?? "",
+    );
+    if (error) errors[name] = error;
+  });
+  return errors;
 }
 
 const achievementTypeOptions = [
@@ -228,6 +435,26 @@ const liveError = ref<string | null>(null);
 const liveDescribe = ref<Record<string, unknown> | null>(null);
 const panoramaResponse = ref<IndustryChainPanoramaQueryResponse | null>(null);
 const panoramaError = ref<string | null>(null);
+/**
+ * 关系筛选可选项：只保留全景图里最有业务含义的三类边，用中文展示。
+ * 值仍是图里的边类型，直接传给后端 relationTypes。
+ */
+const PANORAMA_RELATION_TYPES = [
+  { value: "BELONGS_TO_NODE", label: "产业链归属" },
+  { value: "COAUTHOR_WITH", label: "论文合作" },
+  { value: "AFFILIATED_WITH", label: "机构任职" },
+] as const;
+/** 关系筛选选中值，底层仍存成逗号拼接的字符串，与其他参数保持一致。 */
+const panoramaRelationSelection = computed<string[]>({
+  get: (): string[] =>
+    (parameterValues.value.relationTypes || "").split(",").filter(Boolean),
+  set: (values: string[]) => {
+    parameterValues.value = {
+      ...parameterValues.value,
+      relationTypes: values.join(","),
+    };
+  },
+});
 const expertDirectResponse = ref<ExpertDirectRelationQueryResponse | null>(
   null,
 );
@@ -245,19 +472,30 @@ const isLiveCoop = computed(
 const isLiveColleague = computed(
   () => props.moduleInfo.key === "expert-colleague",
 );
+const isLiveIndustryEvent = computed(
+  () => props.moduleInfo.key === "industry-chain-event",
+);
+const isLiveEnterpriseRelation = computed(
+  () => props.moduleInfo.key === "enterprise-relation",
+);
 const isLiveModule = computed(
   () => isLiveAlumni.value || isLiveCoop.value || isLiveColleague.value,
 );
+/** 当前业务模块需要做实时校验、且不交由浏览器 maxlength 截断的字段名
+ * （超长输入交给 JS 校验器拦截，以便给出「超出字段长度」提示而非静默截断）。 */
+const liveIdFieldNames = computed<readonly string[]>(() => {
+  if (isExpertIndirect.value) return ["core_node_id"];
+  if (isPaperCooperation.value) return ["expertAId", "expertBId"];
+  if (isLiveColleague.value) return ["expert_a_id", "expert_b_id"];
+  if (isLiveEnterpriseRelation.value)
+    return ["expert_id", "enterprise_name", "role_type", "industry"];
+  if (isLiveIndustryEvent.value) return ["chain_node_id", "event_type"];
+  return [];
+});
 const isPanorama = computed(
   () => props.moduleInfo.key === "industry-chain-panorama",
 );
 const isExpertDirect = computed(() => props.moduleInfo.key === "expert-direct");
-const isEnterpriseRelation = computed(
-  () => props.moduleInfo.key === "enterprise-relation",
-);
-const isIndustryChainEvent = computed(
-  () => props.moduleInfo.key === "industry-chain-event",
-);
 const isExpertIndirect = computed(
   () => props.moduleInfo.key === "node-indirect",
 );
@@ -581,6 +819,13 @@ function buildLiveGraph(
     entityType: string,
     relations = "",
     confidence = 1,
+    provenance?: {
+      sourceTable?: string;
+      sourceField?: string;
+      sourceValue?: string;
+      ingestBatch?: string;
+      ingestTime?: string;
+    },
   ) => {
     if (!id || nodes.some((n) => n.id === id)) return;
     nodes.push({
@@ -593,6 +838,13 @@ function buildLiveGraph(
       confidence,
       relations,
       evidence: ev,
+      ...(provenance && {
+        sourceTable: provenance.sourceTable,
+        sourceField: provenance.sourceField,
+        sourceValue: provenance.sourceValue,
+        ingestBatch: provenance.ingestBatch,
+        ingestTime: provenance.ingestTime,
+      }),
     });
   };
   const addEdge = (
@@ -617,6 +869,8 @@ function buildLiveGraph(
       "expert",
       "科技专家",
       `${data.relations?.length ?? 0} 条企业关联`,
+      1,
+      data.entity_provenance?.[data.expert_id],
     );
     for (const r of data.relations || []) {
       addNode(
@@ -625,6 +879,8 @@ function buildLiveGraph(
         "company",
         "企业",
         `${r.cooperation_mode || ""}｜${r.role_label || ""}`,
+        1,
+        data.entity_provenance?.[r.enterprise_id],
       );
       addEdge(
         data.expert_id,
@@ -640,6 +896,8 @@ function buildLiveGraph(
       "main",
       "产业链节点",
       `${data.enterprises ?? 0} 家企业｜TOP ${data.events ?? 0} 事件`,
+      1,
+      data.entity_provenance?.[data.chain_node_id],
     );
     const orgEventCount: Record<string, number> = {};
     for (const ev0 of data.top_events || [])
@@ -651,6 +909,8 @@ function buildLiveGraph(
         "company",
         "企业",
         `TOP 事件 ${orgEventCount[ev0.org_id] || 0} 件`,
+        1,
+        data.entity_provenance?.[ev0.org_id],
       );
       addEdge(data.chain_node_id, ev0.org_id, "关联企业", "chain");
       addNode(
@@ -660,6 +920,7 @@ function buildLiveGraph(
         ev0.event_type || "事件",
         `${ev0.event_type || ""}｜${(ev0.occur_date || "").slice(0, 10)}｜评分 ${ev0.impact_score}`,
         Math.min(1, (ev0.impact_score || 0) / 10),
+        data.entity_provenance?.[ev0.event_id],
       );
       addEdge(ev0.org_id, ev0.event_id, ev0.event_type || "事件", "event");
     }
@@ -994,7 +1255,8 @@ const selectedProvenance = computed(() => {
   return defaultNode ? getNodeProvenance(defaultNode) : null;
 });
 const selectedProvenanceTarget = computed(() => {
-  const node = selectedNode.value ?? (!selectedEdge.value ? graphNodes.value[0] : null);
+  const node =
+    selectedNode.value ?? (!selectedEdge.value ? graphNodes.value[0] : null);
   if (node) {
     return {
       kind: "实体",
@@ -1032,13 +1294,16 @@ function formatTimestamp(date: Date) {
 
 const updateStatus = computed(() => {
   if (running.value) return "正在拉取最新批次数据…";
+  const auto = panoramaAutoRefresh.value
+    ? "｜自动更新已开启（每 60s 刷新）"
+    : "";
   if (lastUpdateTime.value === null)
-    return '尚未更新，点击"执行测试"查询最新数据';
+    return `尚未更新，点击"刷新图谱"或开启自动更新${auto}`;
   const elapsed = Math.floor((Date.now() - lastUpdateTime.value) / 1000);
-  if (elapsed < 5) return `刚刚更新（${elapsed}s 前）`;
-  if (elapsed < 60) return `已更新（${elapsed}s 前）`;
-  if (elapsed < 3600) return `已更新（${Math.floor(elapsed / 60)}min 前）`;
-  return `已更新（${Math.floor(elapsed / 3600)}h 前），数据可能过期`;
+  if (elapsed < 5) return `刚刚更新（${elapsed}s 前）${auto}`;
+  if (elapsed < 60) return `已更新（${elapsed}s 前）${auto}`;
+  if (elapsed < 3600) return `已更新（${Math.floor(elapsed / 60)}min 前）${auto}`;
+  return `已更新（${Math.floor(elapsed / 3600)}h 前），数据可能过期${auto}`;
 });
 
 function buildLiveSummary(
@@ -1228,6 +1493,10 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
         { label: "合作成果类型", value: "" },
         { label: "成果总量", value: "" },
         { label: "成果分布", value: "" },
+        { label: "成果1", value: "" },
+        { label: "完成时间", value: "" },
+        { label: "所属领域", value: "" },
+        { label: "奖项/评价", value: "" },
         { label: "核心贡献", value: "" },
         { label: "合作模式", value: "" },
         { label: "图空间", value: "" },
@@ -1240,46 +1509,56 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       }));
     }
     const s = data.summary;
+    const firstItem = data.items?.[0];
+    const typeLabels: Record<string, string> = {
+      paper: "论文",
+      patent: "专利",
+      project: "项目",
+    };
+    const presentTypes = Array.from(
+      new Set((data.items || []).map((i) => typeLabels[i.type] || i.type)),
+    );
+    const total = (data.items || []).length;
+    const firstTitle = firstItem?.title || "—";
+    const firstTime = firstItem?.time || "—";
+    const firstFields = firstItem?.fields?.length
+      ? firstItem.fields.join("、")
+      : "—";
+    const firstAwards = firstItem?.awards?.length
+      ? `${firstItem.awards.length} 项`
+      : firstItem?.evaluation || "—";
     return [
       { label: "专家 A", value: `${data.source.name}（${data.source.id}）` },
       { label: "专家 B", value: `${data.target.name}（${data.target.id}）` },
       {
-        label: "成果分布",
-        value: `论文 ${s.papers}、专利 ${s.patents}、项目 ${s.projects}`,
+        label: "合作成果类型",
+        value: presentTypes.length ? presentTypes.join("、") : "—",
       },
-      { label: "核心贡献", value: data.coreContribution },
-      { label: "合作模式", value: data.cooperationMode },
+      { label: "成果总量", value: `${total} 项` },
+      {
+        label: "成果分布",
+        value: `论文 ${s.papers}、专利 ${s.patents}、项目 ${s.projects}、获奖 ${s.awards}`,
+      },
+      { label: "成果1", value: firstTitle },
+      { label: "完成时间", value: firstTime },
+      { label: "所属领域", value: firstFields },
+      { label: "奖项/评价", value: firstAwards },
+      { label: "核心贡献", value: data.coreContribution || "—" },
+      { label: "合作模式", value: data.cooperationMode || "—" },
+      {
+        label: "图空间",
+        value: data.sourceMeta?.space || "—",
+      },
     ];
   }
   return null;
 });
 
 const liveRules = computed<Array<Record<string, any>>>(() => {
-  if (isLiveAlumni.value && liveAlumniResult.value?.rules?.length)
-    return liveAlumniResult.value.rules;
-  if (isLiveCoop.value && liveCoopResult.value?.rules?.length)
-    return liveCoopResult.value.rules;
-  if (isLiveColleague.value && liveResponse.value?.data?.rules?.length)
-    return liveResponse.value.data.rules;
-  const responseRules = liveResponse.value?.data?.rules ?? liveResponse.value?.rules;
-  if (Array.isArray(responseRules) && responseRules.length) return responseRules;
   return actualServiceRules[props.moduleInfo.key] ?? [];
 });
 
-const liveEntities = computed(() => {
-  if (isLiveAlumni.value) return liveAlumniResult.value?.entities;
-  if (isLiveCoop.value) return liveCoopResult.value?.entities;
-  return undefined;
-});
-
-const liveRelationsList = computed(() => {
-  if (isLiveAlumni.value) return liveAlumniResult.value?.relations;
-  if (isLiveCoop.value) return liveCoopResult.value?.relations;
-  return undefined;
-});
-
 const liveEntityRows = computed(() => {
-  if (!isLiveModule.value) return null;
   const selected = selectedNode.value;
   if (selected) {
     const rows: Array<readonly [string, string]> = [
@@ -1293,46 +1572,32 @@ const liveEntityRows = computed(() => {
     }
     return rows;
   }
-  const entities = liveEntities.value;
-  if (!entities?.length) return [] as Array<readonly [string, string]>;
+  const entities = graphNodes.value;
+  if (!entities.length) return [] as Array<readonly [string, string]>;
   return entities.flatMap((entity, index) => [
     [`实体 ${index + 1}`, `${entity.label}（${entity.id}）`] as const,
     ["类型", entity.entityType] as const,
-    ["关系", entity.relations] as const,
+    ["关系", entity.relations || "—"] as const,
+    ["置信度", formatConfidence(entity.confidence)] as const,
   ]);
 });
 
 const liveRelationRows = computed(() => {
-  if (!isLiveModule.value) return null;
   if (selectedEdge.value) return relationDetailRows.value;
-  const relations = liveRelationsList.value;
-  if (!relations?.length) return [] as Array<readonly [string, string]>;
-  return relations.flatMap((rel, index) => {
-    const rows: Array<readonly [string, string]> = [
+  if (!graphEdges.value.length) return [] as Array<readonly [string, string]>;
+  const nodesById = new Map(graphNodes.value.map((node) => [node.id, node]));
+  return graphEdges.value.flatMap((relation, index) => {
+    const from = nodesById.get(relation.from);
+    const to = nodesById.get(relation.to);
+    return [
       [
         `关系 ${index + 1}`,
-        `${rel.fromName || rel.from} → ${rel.toName || rel.to}`,
-      ],
-      ["类型", rel.label],
+        `${from?.label || relation.from} → ${to?.label || relation.to}`,
+      ] as const,
+      ["类型", relation.label || "—"] as const,
+      ["分类", relation.category || "—"] as const,
+      ["置信度", formatConfidence(relation.confidence)] as const,
     ];
-    if ("dimensions" in rel && Array.isArray(rel.dimensions)) {
-      rows.push(["维度", rel.dimensions.join("、") || "—"]);
-    }
-    if ("sharedInstitutions" in rel && Array.isArray(rel.sharedInstitutions)) {
-      rows.push(["院校", rel.sharedInstitutions.join("、") || "—"]);
-    }
-    if ("summary" in rel && typeof rel.summary === "string") {
-      rows.push(["摘要", rel.summary || "—"]);
-    }
-    if (
-      "interactions" in rel &&
-      rel.interactions &&
-      typeof rel.interactions === "object"
-    ) {
-      const summary = (rel.interactions as { summary?: string }).summary;
-      rows.push(["互动", summary || "—"]);
-    }
-    return rows;
   });
 });
 
@@ -1346,10 +1611,16 @@ const liveProvenance = computed(() => {
     return expertIndirectResponse.value?.provenance ?? null;
   if (isPaperCooperation.value)
     return (
-      liveResponse.value?.provenance ?? liveResponse.value?.data?.provenance ?? null
+      liveResponse.value?.provenance ??
+      liveResponse.value?.data?.provenance ??
+      null
     );
   return null;
 });
+
+const usesThreeFieldProvenance = computed(
+  () => isExpertIndirect.value || isPaperCooperation.value,
+);
 
 const detailRows = computed(() => {
   if (lastTestTime.value === "—") {
@@ -1373,8 +1644,15 @@ const detailRows = computed(() => {
     : {};
   // expert-alumni / two-point-achievement：用 liveSummaryRows 整套替换
   const rows = liveSummaryRows.value ?? props.moduleInfo.summaryRows;
+  // 产业链点 TOP-N：查不到事件时摘要全部留空（不显示 - / 0 / 静态 demo 值）
+  if (isLiveIndustryEvent.value) {
+    const d = liveResponse.value?.data ?? {};
+    if (!(d.top_events?.length || d.events)) {
+      return rows.map((row) => [row.label, ""] as const);
+    }
+  }
   return rows.map((row) => {
-    if (row.label === "更新状态" && isPanorama.value) {
+    if (row.label === "动态更新" && isPanorama.value) {
       return [row.label, updateStatus.value] as const;
     }
     return [
@@ -1384,21 +1662,49 @@ const detailRows = computed(() => {
   });
 });
 
+/** 递归还原图属性里的 JSON 文本，避免 API 页展示双重序列化转义符。 */
+function decodeNestedJson(value: unknown, depth = 0): unknown {
+  if (depth > 6) return value;
+  if (Array.isArray(value))
+    return value.map((item) => decodeNestedJson(item, depth + 1));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        decodeNestedJson(item, depth + 1),
+      ]),
+    );
+  }
+  if (typeof value !== "string") return value;
+  const text = value.trim();
+  if (!text || !["{", "[", '"'].includes(text[0])) return value;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed === value ? value : decodeNestedJson(parsed, depth + 1);
+  } catch {
+    return value;
+  }
+}
+
+function prettyResult(value: unknown): string {
+  return JSON.stringify(decodeNestedJson(value), null, 2);
+}
+
 const apiResultJson = computed(() => {
   if (isPanorama.value && panoramaResponse.value) {
-    return JSON.stringify(panoramaResponse.value, null, 2);
+    return prettyResult(panoramaResponse.value);
   }
   if (isPanorama.value && panoramaError.value) {
     return JSON.stringify({ error: panoramaError.value }, null, 2);
   }
   if (isExpertDirect.value && expertDirectResponse.value) {
-    return JSON.stringify(expertDirectResponse.value, null, 2);
+    return prettyResult(expertDirectResponse.value);
   }
   if (isExpertDirect.value && expertDirectError.value) {
     return JSON.stringify({ error: expertDirectError.value }, null, 2);
   }
   if (isExpertIndirect.value && expertIndirectResponse.value) {
-    return JSON.stringify(expertIndirectResponse.value, null, 2);
+    return prettyResult(expertIndirectResponse.value);
   }
   if (isExpertIndirect.value && expertIndirectError.value) {
     return JSON.stringify({ error: expertIndirectError.value }, null, 2);
@@ -1414,10 +1720,10 @@ const apiResultJson = computed(() => {
     const resp = (liveApiPayload.value as { response?: unknown } | null)
       ?.response;
     if (resp) {
-      return JSON.stringify(resp, null, 2);
+      return prettyResult(resp);
     }
     if (liveApiPayload.value) {
-      return JSON.stringify(liveApiPayload.value, null, 2);
+      return prettyResult(liveApiPayload.value);
     }
     return JSON.stringify(
       { message: running.value ? "查询中..." : "暂无查询结果" },
@@ -1442,30 +1748,39 @@ const apiResultJson = computed(() => {
       2,
     );
   }
-  if (isLiveModule.value) {
-    return JSON.stringify(
-      liveApiPayload.value ?? {
-        describe: liveDescribe.value,
-        ...JSON.parse(props.responseJson),
-        request_params: parameterValues.value,
-      },
-      null,
-      2,
-    );
+  if (liveApiPayload.value) {
+    return prettyResult(liveApiPayload.value);
   }
   return JSON.stringify(
-    {
-      ...JSON.parse(props.responseJson),
-      request_params: parameterValues.value,
-    },
+    { message: running.value ? "查询中..." : "暂无查询结果" },
     null,
     2,
   );
 });
 
+function isPanoramaEmpty(resp: IndustryChainPanoramaQueryResponse): boolean {
+  return (
+    !resp.graph?.nodes?.length &&
+    (resp.layers ?? []).every((layer) => !layer.total && !layer.items.length)
+  );
+}
+
+/** 统一展示「源数据表 / 英文字段名 / 图空间 VID」。 */
+const isUnifiedProvenance = computed(
+  () =>
+    isExpertDirect.value ||
+    isPanorama.value ||
+    isLiveCoop.value ||
+    isLiveAlumni.value,
+);
+
 function computePanoramaSummaryRows(
   resp: IndustryChainPanoramaQueryResponse,
 ): ReadonlyArray<readonly [string, string]> {
+  if (isPanoramaEmpty(resp)) {
+    // 查不到数据时不回落到静态示例值，避免把示例误当成真实结果
+    return props.moduleInfo.summaryRows.map((row) => [row.label, "—"] as const);
+  }
   const layerLabel = (key: PanoramaLayerKey) => {
     const layer = resp.layers.find((l) => l.key === key);
     if (!layer) return "—";
@@ -1510,7 +1825,7 @@ function computePanoramaSummaryRows(
       "图谱规模",
       `子图 ${resp.graph.nodes.length} 个节点｜${resp.graph.edges.length} 条关系（全库 ${resp.summary.totalNodes}｜${resp.summary.totalEdges}）`,
     ],
-    ["更新状态", updateStatus.value],
+    ["动态更新", updateStatus.value],
   ]);
   return props.moduleInfo.summaryRows.map((row) => {
     const overrideValue = overrides.get(row.label);
@@ -1518,7 +1833,9 @@ function computePanoramaSummaryRows(
   });
 }
 
-function buildPanoramaRequest(): IndustryChainPanoramaQueryRequest {
+function buildPanoramaRequest(
+  options: { refresh?: boolean } = {},
+): IndustryChainPanoramaQueryRequest {
   const raw = parameterValues.value;
   const clampInt = (
     value: string,
@@ -1537,12 +1854,19 @@ function buildPanoramaRequest(): IndustryChainPanoramaQueryRequest {
     }
     return Math.min(max, Math.max(min, n));
   };
+  const forceRefresh = options.refresh === true;
+  const relationTypes = (raw.relationTypes ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
   return {
     dataSource: "all",
     industry: (raw.industry ?? "").trim() || undefined,
     anchorId: (raw.anchorId ?? "").trim() || undefined,
-    depth: clampInt(raw.depth ?? "", 1, 3, 2, "层级深度 depth"),
+    depth: clampInt(raw.depth ?? "", 1, 3, 2, "展开层级"),
     topK: clampInt(raw.topK ?? "", 1, 20, 5, "topK"),
+    relationTypes: relationTypes.length ? relationTypes : undefined,
+    refresh: forceRefresh || undefined,
   };
 }
 
@@ -1552,12 +1876,15 @@ function buildExpertDirectRequest(): ExpertDirectRelationQueryRequest {
     const value = (v ?? "").trim();
     return value || undefined;
   };
+  const limitRaw = (raw.limit ?? "").trim();
   return {
     dataSource: "all",
-    expertAId: trimOrUndefined(raw.expertAId),
+    expertAId: (raw.expertAId ?? "").trim(),
     expertBId: trimOrUndefined(raw.expertBId),
     institution: trimOrUndefined(raw.institution),
     startTime: trimOrUndefined(raw.startTime),
+    endTime: trimOrUndefined(raw.endTime),
+    limit: limitRaw ? Number(limitRaw) : undefined,
   };
 }
 
@@ -1672,7 +1999,17 @@ function computeExpertDirectSummaryRows(
 ): ReadonlyArray<readonly [string, string]> {
   const item = resp.items?.[0];
   const overrides = new Map<string, string>();
-  if (item) {
+  if (!item) {
+    // 查不到数据时不回落到静态示例值，避免把示例误当成真实结果
+    return props.moduleInfo.summaryRows.map(
+      (row) =>
+        [
+          row.label,
+          row.label === "关系数量" ? `${resp.total ?? 0} 条` : "—",
+        ] as const,
+    );
+  }
+  {
     const expertALabel = [
       item.expertA.name,
       item.expertA.title,
@@ -1705,8 +2042,6 @@ function computeExpertDirectSummaryRows(
       "关系置信度",
       ((item.relationStrength ?? 0) / 100).toFixed(2),
     );
-  } else {
-    overrides.set("关系数量", `${resp.total ?? 0} 条`);
   }
   return props.moduleInfo.summaryRows.map((row) => {
     const overrideValue = overrides.get(row.label);
@@ -1783,7 +2118,10 @@ function resetParameters({ notify = true }: { notify?: boolean } = {}) {
   running.value = false;
   parameterErrors.value = {};
   parameterValues.value = Object.fromEntries(
-    props.moduleInfo.requestFields.map((field) => [field.name, ""]),
+    props.moduleInfo.requestFields.map((field) => [
+      field.name,
+      field.defaultValue ?? "",
+    ]),
   );
   paramResetToken.value += 1;
 
@@ -1815,7 +2153,12 @@ function buildPayload(): Record<string, unknown> {
   for (const field of props.moduleInfo.requestFields) {
     const v = parameterValues.value[field.name];
     if (v === undefined || v === "") continue;
-    payload[field.name] = field.type === "number" ? Number(v) : v;
+    payload[field.name] =
+      field.type === "boolean"
+        ? v === "true"
+        : field.type === "number"
+          ? Number(v)
+          : v;
   }
   return payload;
 }
@@ -1877,24 +2220,33 @@ function optionalParam(value: string | undefined): string | undefined {
 }
 
 /**
- * 将两个 month 选择器值（YYYY-MM）合并为后端 time_range 期望的 "YYYY-YYYY" 年份区间。
- * 后端用 partition("-") 取前后各 4 位作年份上下界，故只取年份；留空端表示不设该侧边界。
+ * 将两个 month 选择器值（YYYY-MM）合并为后端 time_range 的 "YYYY-MM~YYYY-MM" 月份区间。
+ * 保留月份粒度：后端按 occur_date[:7] 月级筛选（含 ~ 走月级，否则按年）。
+ * 用 ~ 分隔避免与 YYYY-MM 自带的 - 冲突；留空端表示不设该侧边界。
  */
 function buildTimeRange(start?: string, end?: string): string {
-  const lo = (start ?? "").slice(0, 4);
-  const hi = (end ?? "").slice(0, 4);
+  const lo = (start ?? "").trim();
+  const hi = (end ?? "").trim();
   if (!lo && !hi) return "";
-  return `${lo}-${hi}`;
+  return `${lo}~${hi}`;
 }
 
-async function handleRun() {
+async function handleRun(runOptions: { refresh?: boolean } = {}) {
   if (running.value) return;
   running.value = true;
   liveError.value = null;
 
   if (isPanorama.value) {
+    const panoramaErrors = collectParameterErrors(["industry", "anchorId"]);
+    if (Object.keys(panoramaErrors).length) {
+      parameterErrors.value = panoramaErrors;
+      running.value = false;
+      showToast("请修正参数后再执行", "warning");
+      return;
+    }
+    parameterErrors.value = {};
     try {
-      const request = buildPanoramaRequest();
+      const request = buildPanoramaRequest({ refresh: runOptions.refresh });
       const response = await queryIndustryChainPanorama(request);
       panoramaResponse.value = response;
       panoramaError.value = null;
@@ -1903,10 +2255,21 @@ async function handleRun() {
       const now = new Date();
       lastTestTime.value = formatTimestamp(now);
       lastUpdateTime.value = now.getTime();
+      if (isPanoramaEmpty(response)) {
+        showToast(
+          response.source?.reason === "keyword_no_match"
+            ? "产业关键词未命中，请更换关键词"
+            : "未查询到符合条件的产业链全景图数据",
+          "info",
+        );
+      } else if (runOptions.refresh) {
+        showToast("图谱已刷新", "success");
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       panoramaError.value = message;
       panoramaResponse.value = null;
+      showToast(message, "warning");
     } finally {
       running.value = false;
     }
@@ -1919,6 +2282,21 @@ async function handleRun() {
       parameterErrors.value = { expertAId: "请输入专家A" };
       running.value = false;
       showToast("请完善必填项后再执行", "warning");
+      return;
+    }
+    const directErrors = collectParameterErrors([
+      "expertAId",
+      "expertBId",
+      "institution",
+    ]);
+    const startTime = optionalParam(parameterValues.value.startTime);
+    if (startTime && startTime > currentMonth) {
+      directErrors.startTime = "开始时间不能晚于当前月份";
+    }
+    if (Object.keys(directErrors).length) {
+      parameterErrors.value = directErrors;
+      running.value = false;
+      showToast("请修正参数后再执行", "warning");
       return;
     }
     parameterErrors.value = {};
@@ -1939,11 +2317,15 @@ async function handleRun() {
       const now = new Date();
       lastTestTime.value = formatTimestamp(now);
       lastUpdateTime.value = now.getTime();
+      if (!response.items?.length) {
+        showToast("未查询到符合条件的直接关系", "info");
+      }
     } catch (error) {
       if (controller.signal.aborted) return;
       const message = error instanceof Error ? error.message : String(error);
       expertDirectError.value = message;
       expertDirectResponse.value = null;
+      showToast(message, "warning");
     } finally {
       if (expertDirectAbortController === controller) {
         running.value = false;
@@ -1955,9 +2337,17 @@ async function handleRun() {
 
   if (isExpertIndirect.value) {
     try {
-      const coreNodeId = parameterValues.value.core_node_id?.trim();
-      if (!coreNodeId) {
-        parameterErrors.value = { core_node_id: "请输入核心专家或人才节点 ID" };
+      const coreNodeIdRaw = parameterValues.value.core_node_id ?? "";
+      const coreNodeId = coreNodeIdRaw.trim();
+      const relationType = (parameterValues.value.relation_types ?? "").trim();
+      const missingRequiredFields: Record<string, string> = {
+        ...(!coreNodeId
+          ? { core_node_id: "请输入核心专家或人才节点 ID" }
+          : {}),
+        ...(!relationType ? { relation_types: "请选择间接关系类型" } : {}),
+      };
+      if (Object.keys(missingRequiredFields).length) {
+        parameterErrors.value = missingRequiredFields;
         expertIndirectResponse.value = null;
         expertIndirectError.value = null;
         resultMode.value = "summary";
@@ -1965,24 +2355,35 @@ async function handleRun() {
         return;
       }
 
+      const coreNodeIdError = indirectCoreNodeIdError(coreNodeIdRaw);
+      if (coreNodeIdError) {
+        parameterErrors.value = { core_node_id: coreNodeIdError };
+        expertIndirectResponse.value = null;
+        expertIndirectError.value = null;
+        showToast("请修正参数后再执行", "warning");
+        return;
+      }
+
       parameterErrors.value = {};
       const pathDepthRaw = parameterValues.value.path_depth?.trim() ?? "";
       const pathDepth = pathDepthRaw === "" ? 2 : Number(pathDepthRaw);
       if (!Number.isInteger(pathDepth) || pathDepth < 2 || pathDepth > 3) {
-        showToast("path_depth 只能填写 2 或 3", "warning");
+        parameterErrors.value = { path_depth: "路径分析深度只能填写 2 或 3" };
+        showToast("请修正参数后再执行", "warning");
         return;
       }
 
       const minStrengthRaw = parameterValues.value.min_strength?.trim() ?? "";
       const minStrength = minStrengthRaw === "" ? 0.65 : Number(minStrengthRaw);
       if (!Number.isFinite(minStrength) || minStrength < 0 || minStrength > 1) {
-        showToast("min_strength 必须在 0-1 范围内", "warning");
+        parameterErrors.value = { min_strength: "最小关联强度必须在 0-1 范围内" };
+        showToast("请修正参数后再执行", "warning");
         return;
       }
 
       const response = await analyzeExpertIndirectRelation({
         core_node_id: coreNodeId,
-        relation_types: [parameterValues.value.relation_types ?? "学术关联"],
+        relation_types: [relationType],
         path_depth: pathDepth,
         min_strength: minStrength,
       });
@@ -2032,7 +2433,7 @@ async function handleRun() {
         ["expert_a_id", expertAIdRaw],
         ["expert_b_id", expertBIdRaw],
       ] as const) {
-        const error = colleagueExpertIdError(value);
+        const error = identifierError(value);
         if (error) idErrors[field] = error;
       }
       const startTime = optionalParam(parameterValues.value.start_time);
@@ -2063,41 +2464,75 @@ async function handleRun() {
         start_time: startTime,
         end_time: endTime,
         limit: 1,
-        offset: 0,
       };
       const res = await queryExpertColleagueRelation(body);
-      expertColleagueResponse.value = res;
-      liveResponse.value = res as unknown as Record<string, any>;
-      liveApiPayload.value = { request: body, response: res };
       if (
         res?.success === false ||
         (res?.code !== undefined && res.code !== 200)
       ) {
+        const isExpertNotFound =
+          res?.code === 404 && /未找到专家/u.test(res?.msg || "");
+        if (isExpertNotFound) {
+          liveError.value = null;
+          showToast(res?.msg || "未查询到相关同事关系数据", "warning");
+          resultMode.value = "summary";
+          return;
+        }
+        expertColleagueResponse.value = res;
+        liveResponse.value = res as unknown as Record<string, any>;
+        liveApiPayload.value = { request: body, response: res };
         liveError.value = res?.msg || `业务码 ${res?.code}`;
         showToast(liveError.value || "查询失败", "warning");
-        resultMode.value = "api";
+        resultMode.value = "summary";
       } else {
         const total = Number(res?.data?.total || 0);
+        if (!total) {
+          liveError.value = null;
+          showToast("未查询到相关同事关系数据", "info");
+          resultMode.value = "summary";
+          return;
+        }
+        expertColleagueResponse.value = res;
+        liveResponse.value = res as unknown as Record<string, any>;
+        liveApiPayload.value = { request: body, response: res };
         liveError.value = null;
-        showToast(
-          total ? "两位专家存在同事关系" : "两位专家不存在有效同事关系",
-          total ? "success" : "info",
-        );
+        showToast("两位专家存在同事关系", "success");
         resultMode.value = "summary";
       }
     } else if (isLiveAlumni.value) {
-      const expertId = parameterValues.value.expertId?.trim();
+      const expertIdRaw = parameterValues.value.expertId ?? "";
+      const targetExpertIdRaw = parameterValues.value.targetExpertId ?? "";
+      const schoolRaw = parameterValues.value.school ?? "";
+      const expertId = expertIdRaw.trim();
       if (!expertId) {
-        parameterErrors.value = { expertId: "请输入专家" };
+        parameterErrors.value = { expertId: "请输入专家唯一标识" };
+        showToast("请完善必填项后再执行", "warning");
+        return;
+      }
+      const alumniErrors: Record<string, string> = {};
+      const sourceError = identifierError(expertIdRaw);
+      const targetError = targetExpertIdRaw
+        ? identifierError(targetExpertIdRaw)
+        : null;
+      const institutionError = schoolError(schoolRaw);
+      if (sourceError) alumniErrors.expertId = sourceError;
+      if (targetError) alumniErrors.targetExpertId = targetError;
+      if (institutionError) alumniErrors.school = institutionError;
+      if (Object.keys(alumniErrors).length) {
+        parameterErrors.value = alumniErrors;
+        showToast("请修正参数后再执行", "warning");
         return;
       }
       parameterErrors.value = {};
+      const limitRaw = Number(parameterValues.value.limit);
+      const limit =
+        limitRaw && limitRaw >= 1 && limitRaw <= 50 ? Math.floor(limitRaw) : 20;
       const body = {
         expertId,
-        targetExpertId: optionalParam(parameterValues.value.targetExpertId),
-        school: optionalParam(parameterValues.value.school),
+        targetExpertId: optionalParam(targetExpertIdRaw),
+        school: optionalParam(schoolRaw),
         educationStage: optionalParam(parameterValues.value.educationStage),
-        limit: 20,
+        limit,
       };
       const resp = (await queryExpertAlumniRelation(body)) as unknown as {
         code: number;
@@ -2128,13 +2563,26 @@ async function handleRun() {
         selectedGraphEdgeId.value = null;
       }
     } else if (isLiveCoop.value) {
-      const sourceExpertId = parameterValues.value.sourceExpertId?.trim();
-      const targetExpertId = parameterValues.value.targetExpertId?.trim();
+      const sourceExpertIdRaw = parameterValues.value.sourceExpertId ?? "";
+      const targetExpertIdRaw = parameterValues.value.targetExpertId ?? "";
+      const sourceExpertId = sourceExpertIdRaw.trim();
+      const targetExpertId = targetExpertIdRaw.trim();
       if (!sourceExpertId || !targetExpertId) {
         parameterErrors.value = {
           ...(!sourceExpertId ? { sourceExpertId: "请输入第一个专家 ID" } : {}),
           ...(!targetExpertId ? { targetExpertId: "请输入第二个专家 ID" } : {}),
         };
+        showToast("请完善必填项后再执行", "warning");
+        return;
+      }
+      const coopErrors: Record<string, string> = {};
+      const sourceError = identifierError(sourceExpertIdRaw);
+      const targetError = identifierError(targetExpertIdRaw);
+      if (sourceError) coopErrors.sourceExpertId = sourceError;
+      if (targetError) coopErrors.targetExpertId = targetError;
+      if (Object.keys(coopErrors).length) {
+        parameterErrors.value = coopErrors;
+        showToast("请修正参数后再执行", "warning");
         return;
       }
       parameterErrors.value = {};
@@ -2160,6 +2608,7 @@ async function handleRun() {
             ? { timeRangeEnd: "请选择完整的结束年月" }
             : {}),
         };
+        showToast("请修正参数后再执行", "warning");
         return;
       }
       if (startMonth && endMonth && startMonth > endMonth) {
@@ -2167,19 +2616,36 @@ async function handleRun() {
           timeRangeStart: "开始月份不能晚于结束月份",
           timeRangeEnd: "结束月份不能早于开始月份",
         };
+        showToast("请修正参数后再执行", "warning");
+        return;
+      }
+      if (isFutureMonth(startMonth) || isFutureMonth(endMonth)) {
+        parameterErrors.value = {
+          ...(isFutureMonth(startMonth)
+            ? { timeRangeStart: "输入时间不能超过当前时间" }
+            : {}),
+          ...(isFutureMonth(endMonth)
+            ? { timeRangeEnd: "输入时间不能超过当前时间" }
+            : {}),
+        };
+        showToast("输入时间不能超过当前时间", "warning");
         return;
       }
       const { start: timeRangeStart, end: timeRangeEnd } = monthRangeToApiDates(
         startMonth,
         endMonth,
       );
+      const limitPerTypeRaw = optionalParam(parameterValues.value.limitPerType);
+      const limitPerType = limitPerTypeRaw
+        ? Math.min(50, Math.max(1, Number(limitPerTypeRaw) || 20))
+        : 20;
       const body = {
         sourceExpertId,
         targetExpertId,
         achievementTypes,
         timeRangeStart,
         timeRangeEnd,
-        limitPerType: 20,
+        limitPerType,
       };
       const resp = (await queryExpertCooperationAchievement(
         body,
@@ -2220,6 +2686,26 @@ async function handleRun() {
       const expertId = parameterValues.value.expert_id?.trim();
       if (!expertId) {
         parameterErrors.value = { expert_id: "请输入专家唯一标识" };
+        showToast("请完善必填项后再执行", "warning");
+        return;
+      }
+      const expertIdErr = identifierError(
+        parameterValues.value.expert_id ?? "",
+      );
+      if (expertIdErr) {
+        parameterErrors.value = { expert_id: expertIdErr };
+        showToast("请修正参数后再执行", "warning");
+        return;
+      }
+      // 企业名称/角色/行业筛选：超长 / 异常字符（0826 任务用例）
+      const filterErrors = collectParameterErrors([
+        "enterprise_name",
+        "role_type",
+        "industry",
+      ]);
+      if (Object.keys(filterErrors).length) {
+        parameterErrors.value = filterErrors;
+        showToast("请修正参数后再执行", "warning");
         return;
       }
       parameterErrors.value = {};
@@ -2250,21 +2736,58 @@ async function handleRun() {
           count ? "success" : "info",
         );
         resultMode.value = "summary";
+        // 默认选中首条边：溯源 tab 直接出「关系溯源/两端实体来源」冒号排版（与同事关系溯源同款）；
+        // 点节点则切到单实体 dt/dd 排版，点其它边可切换。
         selectedGraphNodeId.value = null;
-        selectedGraphEdgeId.value = null;
+        selectedGraphEdgeId.value = graphEdges.value[0]?.id ?? null;
       }
     } else if (props.moduleInfo.key === "industry-chain-event") {
       // 产业链点 TOP-N 事件关系
       const chainNodeId = parameterValues.value.chain_node_id?.trim();
       if (!chainNodeId) {
         parameterErrors.value = { chain_node_id: "请输入产业链节点标识" };
+        showToast("请完善必填项后再执行", "warning");
+        return;
+      }
+      const errors: Record<string, string> = {};
+      const chainIdErr = identifierError(
+        parameterValues.value.chain_node_id ?? "",
+      );
+      if (chainIdErr) errors.chain_node_id = chainIdErr;
+      const eventTypeErr = identifierError(
+        parameterValues.value.event_type ?? "",
+      );
+      if (eventTypeErr) errors.event_type = eventTypeErr;
+      // top_n：非数字 / 不在 1-50 范围（0826 任务用例）
+      const topNErr = topNError(parameterValues.value.top_n ?? "");
+      if (topNErr) errors.top_n = topNErr;
+      const startTime = optionalParam(parameterValues.value.time_range_start);
+      const endTime = optionalParam(parameterValues.value.time_range_end);
+      if (Boolean(startTime) !== Boolean(endTime)) {
+        if (!startTime)
+          errors.time_range_start = "开始时间和结束时间必须同时填写";
+        if (!endTime) errors.time_range_end = "开始时间和结束时间必须同时填写";
+      }
+      if (startTime && endTime && startTime > endTime) {
+        errors.time_range_start = "开始时间不能晚于结束时间";
+        errors.time_range_end = "结束时间不能早于开始时间";
+      }
+      if (startTime && startTime > currentMonth) {
+        errors.time_range_start = "开始时间不能晚于当前时间";
+      }
+      if (endTime && endTime > currentMonth) {
+        errors.time_range_end = "结束时间不能晚于当前时间";
+      }
+      if (Object.keys(errors).length) {
+        parameterErrors.value = errors;
+        showToast("请修正参数后再执行", "warning");
         return;
       }
       parameterErrors.value = {};
       const topN = optionalParam(parameterValues.value.top_n);
       const maxOrgs = optionalParam(parameterValues.value.max_orgs);
       const eventType = optionalParam(parameterValues.value.event_type);
-      // 两个 month 选择器合并为后端 time_range 期望的 "YYYY-YYYY" 年份区间
+      // 两个 month 选择器合并为后端 time_range 的 "YYYY-MM~YYYY-MM" 月份区间（保留月份）
       const timeRange = buildTimeRange(
         optionalParam(parameterValues.value.time_range_start),
         optionalParam(parameterValues.value.time_range_end),
@@ -2300,12 +2823,16 @@ async function handleRun() {
           count ? "success" : "info",
         );
         resultMode.value = "summary";
+        // 默认选中首条边：溯源 tab 直接出「关系溯源/两端实体来源」冒号排版（与同事/企业关系同款）；
+        // 无事件时无边，溯源回退到链节点单实体 dt/dd。
         selectedGraphNodeId.value = null;
-        selectedGraphEdgeId.value = null;
+        selectedGraphEdgeId.value = graphEdges.value[0]?.id ?? null;
       }
     } else if (props.moduleInfo.key === "paper-cooperation") {
-      const expertAId = parameterValues.value.expertAId?.trim();
-      const expertBId = parameterValues.value.expertBId?.trim();
+      const expertAIdRaw = parameterValues.value.expertAId ?? "";
+      const expertBIdRaw = parameterValues.value.expertBId ?? "";
+      const expertAId = expertAIdRaw.trim();
+      const expertBId = expertBIdRaw.trim();
       const missingExperts = [
         !expertAId
           ? { field: "expertAId", message: "请输入专家 A 唯一标识" }
@@ -2327,16 +2854,37 @@ async function handleRun() {
         showToast("请完善必填项后再执行", "warning");
         return;
       }
+      const expertIdErrors: Record<string, string> = {};
+      for (const [field, value] of [
+        ["expertAId", expertAIdRaw],
+        ["expertBId", expertBIdRaw],
+      ] as const) {
+        const error = paperCooperationExpertIdError(value);
+        if (error) expertIdErrors[field] = error;
+      }
+      if (Object.keys(expertIdErrors).length) {
+        parameterErrors.value = expertIdErrors;
+        liveResponse.value = null;
+        liveApiPayload.value = null;
+        liveError.value = null;
+        showToast("请修正参数后再执行", "warning");
+        return;
+      }
+      const startMonth = optionalParam(parameterValues.value.startTime);
+      const endMonth = optionalParam(parameterValues.value.endTime);
+      const timeErrors = paperCooperationTimeErrors(startMonth, endMonth);
+      if (Object.keys(timeErrors).length) {
+        parameterErrors.value = timeErrors;
+        liveResponse.value = null;
+        liveApiPayload.value = null;
+        liveError.value = null;
+        showToast("请修正参数后再执行", "warning");
+        return;
+      }
       parameterErrors.value = {};
       const body: Record<string, any> = { expertAId, expertBId };
-      const startTime = normalizeMonthBoundary(
-        parameterValues.value.startTime,
-        "start",
-      );
-      const endTime = normalizeMonthBoundary(
-        parameterValues.value.endTime,
-        "end",
-      );
+      const startTime = normalizeMonthBoundary(startMonth, "start");
+      const endTime = normalizeMonthBoundary(endMonth, "end");
       if (startTime) body.startTime = startTime;
       if (endTime) body.endTime = endTime;
       const res = (await invokeKgService(
@@ -2403,31 +2951,56 @@ function handleParameterInput(fieldName: string, event: Event) {
     ...parameterValues.value,
     [fieldName]: value,
   };
-  if (
-    isLiveColleague.value &&
-    (fieldName === "expert_a_id" || fieldName === "expert_b_id")
-  ) {
-    const error = colleagueExpertIdError(value);
-    if (error) {
-      parameterErrors.value = { ...parameterErrors.value, [fieldName]: error };
-    } else {
-      clearParameterError(fieldName);
-    }
+  const error = parameterFieldError(fieldName, value);
+  if (error) {
+    parameterErrors.value = { ...parameterErrors.value, [fieldName]: error };
     return;
   }
 
   clearParameterError(fieldName);
 }
-function handleMonthParameterInput(fieldName: string, value: string | null) {
+function clearOptionalParameter(fieldName: string) {
   parameterValues.value = {
     ...parameterValues.value,
-    [fieldName]: value ?? "",
+    [fieldName]: "",
   };
   clearParameterError(fieldName);
 }
 
+function handleMonthParameterInput(fieldName: string, value: string | null) {
+  const nextValues = {
+    ...parameterValues.value,
+    [fieldName]: value ?? "",
+  };
+  parameterValues.value = nextValues;
+  if (
+    isPaperCooperation.value &&
+    (fieldName === "startTime" || fieldName === "endTime")
+  ) {
+    const nextErrors = { ...parameterErrors.value };
+    delete nextErrors.startTime;
+    delete nextErrors.endTime;
+    Object.assign(
+      nextErrors,
+      paperCooperationTimeErrors(nextValues.startTime, nextValues.endTime),
+    );
+    parameterErrors.value = nextErrors;
+    return;
+  }
+  clearParameterError(fieldName);
+}
+
 function clearParameterError(fieldName: string) {
-  const pairedTimeFields = ["timeRangeStart", "timeRangeEnd", "start_time", "end_time"];
+  const pairedTimeFields = [
+    "timeRangeStart",
+    "timeRangeEnd",
+    "start_time",
+    "end_time",
+    "startTime",
+    "endTime",
+    "time_range_start",
+    "time_range_end",
+  ];
   const fieldsToClear = pairedTimeFields.includes(fieldName)
     ? pairedTimeFields
     : [fieldName];
@@ -2435,6 +3008,11 @@ function clearParameterError(fieldName: string) {
   const nextErrors = { ...parameterErrors.value };
   fieldsToClear.forEach((name) => delete nextErrors[name]);
   parameterErrors.value = nextErrors;
+}
+
+/** 全景图「刷新图谱」：忽略服务端缓存重新组装分层与子图。 */
+async function handleRefreshPanorama() {
+  await handleRun({ refresh: true });
 }
 
 function handleSelectGraphNode(node: GraphNodeData) {
@@ -2454,9 +3032,6 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   <section
     class="kg-panel service-console"
     :class="{
-      'service-console--cooperation': isLiveCoop,
-      'service-console--alumni': isLiveAlumni,
-      'service-console--industry-event': isIndustryChainEvent,
       'service-console--has-errors': hasParameterErrors,
       'has-parameter-errors': hasParameterErrors,
     }"
@@ -2466,35 +3041,31 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         <h2>{{ moduleInfo.title }}</h2>
       </div>
     </div>
-    <div
-      class="service-console__params"
-      :class="{
-        'service-console__params--inline':
-          isEnterpriseRelation || isIndustryChainEvent,
-        'service-console__params--industry-event': isIndustryChainEvent,
-      }"
-    >
+    <div class="service-console__params service-console__params--inline">
       <label
         v-for="field in moduleInfo.requestFields"
         :key="field.name"
         :class="{ 'has-error': Boolean(parameterErrors[field.name]) }"
       >
-        <span><i v-if="field.required === '是'">*</i>{{ field.label ?? field.name }}</span>
+        <span
+          ><i v-if="field.required === '是'">*</i
+          >{{ field.label ?? field.name }}</span
+        >
         <select
-          v-if="field.type === 'select'"
+          v-if="field.type === 'select' || field.type === 'boolean'"
           :key="`${field.name}-${paramResetToken}`"
           :value="parameterValues[field.name] ?? ''"
           :class="{ 'is-empty-control': !parameterValues[field.name] }"
           :title="field.description"
           @change="handleParameterInput(field.name, $event)"
         >
-          <option value="" disabled>请选择</option>
+          <option value="" :disabled="field.required === '是'">请选择</option>
           <option v-for="option in field.options" :key="option" :value="option">
             {{ option }}
           </option>
         </select>
         <ElSelect
-          v-else-if="field.name === 'achievementTypes' && isLiveCoop"
+          v-else-if="field.name === 'achievementTypes'"
           v-model="achievementTypeSelection"
           class="cooperation-type-select"
           :data-empty="achievementTypeSelection.length === 0"
@@ -2502,12 +3073,34 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           collapse-tags
           :max-collapse-tags="1"
           clearable
-          placeholder="选择成果类型，如论文"
+          placeholder="留空为全部类型"
           aria-label="成果类型"
+          :title="field.description"
           @update:model-value="clearParameterError(field.name)"
         >
           <ElOption
             v-for="option in achievementTypeOptions"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </ElSelect>
+        <ElSelect
+          v-else-if="field.name === 'relationTypes'"
+          v-model="panoramaRelationSelection"
+          class="cooperation-type-select"
+          :data-empty="panoramaRelationSelection.length === 0"
+          multiple
+          collapse-tags
+          :max-collapse-tags="1"
+          clearable
+          placeholder="留空为全部关系"
+          :aria-label="field.label ?? field.name"
+          :title="field.description"
+          @update:model-value="clearParameterError(field.name)"
+        >
+          <ElOption
+            v-for="option in PANORAMA_RELATION_TYPES"
             :key="option.value"
             :label="option.label"
             :value="option.value"
@@ -2545,21 +3138,41 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :locale="zhCN"
           :title="field.description"
           :aria-label="field.name"
-          :disabled-date="isLiveColleague ? disableFutureMonth : undefined"
+          :disabled-date="
+            isLiveColleague ||
+            isExpertDirect ||
+            isLiveCoop ||
+            isPaperCooperation
+              ? disableFutureMonth
+              : undefined
+          "
           :error="Boolean(parameterErrors[field.name])"
           @update:model-value="handleMonthParameterInput(field.name, $event)"
         />
-        <input
-          v-else
+        <div v-else class="service-console__input-wrap">
+          <input
           type="text"
           :key="`${field.name}-${paramResetToken}`"
           :value="parameterValues[field.name] ?? ''"
           :placeholder="field.placeholder ?? field.description"
           :title="field.description"
           :aria-invalid="Boolean(parameterErrors[field.name])"
-          :maxlength="isLiveColleague && (field.name === 'expert_a_id' || field.name === 'expert_b_id') ? undefined : field.maxLength"
+          :maxlength="
+            liveIdFieldNames.includes(field.name) ? undefined : field.maxLength
+          "
           @input="handleParameterInput(field.name, $event)"
         />
+          <button
+            v-if="field.required !== '是' && parameterValues[field.name]"
+            class="service-console__input-clear"
+            type="button"
+            :aria-label="`清空${field.label ?? field.name}`"
+            :title="`清空${field.label ?? field.name}`"
+            @click="clearOptionalParameter(field.name)"
+          >
+            ×
+          </button>
+        </div>
         <small
           v-if="parameterErrors[field.name]"
           class="service-console__field-error"
@@ -2572,8 +3185,8 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
       <button
         class="kg-button"
         type="button"
-        :disabled="running"
-        @click="handleRun"
+        :disabled="running || (isPaperCooperation && hasParameterErrors)"
+        @click="handleRun()"
       >
         {{ running ? "测试中..." : "执行测试" }}
       </button>
@@ -2588,10 +3201,32 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   </section>
 
   <div class="business-service__main">
-    <section class="kg-panel graph-panel">
+    <section class="kg-panel graph-panel" :class="{ 'graph-panel--panorama': isPanorama }">
       <div class="kg-panel__header">
         <h2 class="kg-panel__title">测试结果预览</h2>
         <div class="graph-panel__time">
+          <button
+            v-if="isPanorama"
+            class="kg-button kg-button--secondary graph-panel__refresh"
+            type="button"
+            :disabled="running"
+            title="忽略服务端缓存，重新拉取分层与子图"
+            @click="handleRefreshPanorama"
+          >
+            {{ running ? "刷新中…" : "刷新图谱" }}
+          </button>
+          <label
+            v-if="isPanorama"
+            class="graph-panel__autorefresh"
+            title="勾选后每 60 秒自动忽略缓存刷新一次"
+          >
+            <input
+              v-model="panoramaAutoRefresh"
+              type="checkbox"
+              :disabled="running"
+            />
+            <span>自动更新</span>
+          </label>
           <span>最近测试时间：</span>
           <strong>{{ lastTestTime }}</strong>
         </div>
@@ -2606,6 +3241,18 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         </span>
       </div>
       <div class="graph-panel__canvas">
+        <div v-if="liveError" class="graph-panel__feedback" role="alert">
+          <strong>{{ queryFeedbackTitle }}</strong>
+          <span>{{ liveError }}</span>
+          <small>请检查专家 ID 后重新执行测试</small>
+        </div>
+        <div
+          v-else-if="!displayedGraphNodes.length && lastTestTime === '—'"
+          class="graph-panel__empty"
+          role="status"
+        >
+          <span>暂无图谱数据，请填写参数并点击「执行测试」后查看结果</span>
+        </div>
         <KgGraphCanvas
           :nodes="displayedGraphNodes"
           :edges="displayedGraphEdges"
@@ -2621,49 +3268,83 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
     </section>
 
     <aside class="business-service__side">
-      <section class="kg-panel result-panel">
+      <section class="kg-panel result-panel" id="result-mode-panel">
         <div class="kg-panel__header">
           <h2 class="kg-panel__title">结果详情</h2>
-          <div class="result-panel__tabs">
+          <div
+            class="result-panel__tabs"
+            role="tablist"
+            aria-label="结果详情视图"
+          >
             <button
               :class="{ 'is-active': resultMode === 'summary' }"
+              :id="`result-mode-tab-summary`"
+              role="tab"
+              :aria-selected="resultMode === 'summary'"
+              :tabindex="resultMode === 'summary' ? 0 : -1"
               type="button"
               @click="resultMode = 'summary'"
+              @keydown="handleResultTabKeydown"
             >
               摘要
             </button>
             <button
               :class="{ 'is-active': resultMode === 'entity' }"
+              :id="`result-mode-tab-entity`"
+              role="tab"
+              :aria-selected="resultMode === 'entity'"
+              :tabindex="resultMode === 'entity' ? 0 : -1"
               type="button"
               @click="resultMode = 'entity'"
+              @keydown="handleResultTabKeydown"
             >
               实体
             </button>
             <button
               :class="{ 'is-active': resultMode === 'relation' }"
+              :id="`result-mode-tab-relation`"
+              role="tab"
+              :aria-selected="resultMode === 'relation'"
+              :tabindex="resultMode === 'relation' ? 0 : -1"
               type="button"
               @click="resultMode = 'relation'"
+              @keydown="handleResultTabKeydown"
             >
               关系
             </button>
             <button
               :class="{ 'is-active': resultMode === 'provenance' }"
+              :id="`result-mode-tab-provenance`"
+              role="tab"
+              :aria-selected="resultMode === 'provenance'"
+              :tabindex="resultMode === 'provenance' ? 0 : -1"
               type="button"
               @click="resultMode = 'provenance'"
+              @keydown="handleResultTabKeydown"
             >
               溯源
             </button>
             <button
               :class="{ 'is-active': resultMode === 'rule' }"
+              :id="`result-mode-tab-rule`"
+              role="tab"
+              :aria-selected="resultMode === 'rule'"
+              :tabindex="resultMode === 'rule' ? 0 : -1"
               type="button"
               @click="resultMode = 'rule'"
+              @keydown="handleResultTabKeydown"
             >
-              规则
+              算法
             </button>
             <button
               :class="{ 'is-active': resultMode === 'api' }"
+              :id="`result-mode-tab-api`"
+              role="tab"
+              :aria-selected="resultMode === 'api'"
+              :tabindex="resultMode === 'api' ? 0 : -1"
               type="button"
               @click="resultMode = 'api'"
+              @keydown="handleResultTabKeydown"
             >
               API
             </button>
@@ -2675,7 +3356,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             :key="`${label}-${index}`"
           >
             <dt>{{ label }}</dt>
-            <dd>{{ value }}</dd>
+            <dd>{{ value || '—' }}</dd>
           </div>
         </dl>
         <dl
@@ -2738,6 +3419,36 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           </div>
         </dl>
         <section
+          v-else-if="
+            resultMode === 'provenance' &&
+            liveProvenance &&
+            usesThreeFieldProvenance
+          "
+          class="result-provenance"
+        >
+          <header><strong>数据溯源</strong><span>实体来源</span></header>
+          <h3>实体溯源</h3>
+          <div class="result-provenance__evidence-list">
+            <article
+              v-for="(ev, index) in liveProvenance.evidences"
+              :key="`${ev.graphVid || index}-${index}`"
+            >
+              <header>
+                <strong>{{ ev.title }}</strong>
+              </header>
+              <span
+                >源数据表：<code>{{ ev.sourceTable || "-" }}</code></span
+              >
+              <span
+                >英文字段名：<code>{{ ev.sourceField || "-" }}</code></span
+              >
+              <span
+                >图空间 VID：<code>{{ ev.graphVid || "-" }}</code></span
+              >
+            </article>
+          </div>
+        </section>
+        <section
           v-else-if="resultMode === 'provenance' && liveProvenance"
           class="result-provenance"
         >
@@ -2767,16 +3478,35 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
               <p>
                 <b>{{ ev.summary }}</b>
               </p>
-              <span>业务表：{{ ev.businessTable }}</span>
-              <span
-                >技术表：<code>{{ ev.technicalTable }}</code></span
-              >
-              <span
-                >记录 ID：<code>{{ ev.recordId }}</code></span
-              >
-              <span
-                >字段：<code>{{ ev.fieldIdentifier }}</code></span
-              >
+              <template v-if="isUnifiedProvenance">
+                <span
+                  >源数据表：<code>{{
+                    ev.sourceTable || ev.technicalTable || "—"
+                  }}</code></span
+                >
+                <span
+                  >英文字段名：<code>{{
+                    ev.sourceField || ev.fieldIdentifier || "—"
+                  }}</code></span
+                >
+                <span
+                  >图空间 VID：<code>{{
+                    ev.graphVid || ev.recordId || "—"
+                  }}</code></span
+                >
+              </template>
+              <template v-else>
+                <span>业务表：{{ ev.businessTable }}</span>
+                <span
+                  >技术表：<code>{{ ev.technicalTable }}</code></span
+                >
+                <span
+                  >记录 ID：<code>{{ ev.recordId }}</code></span
+                >
+                <span
+                  >字段：<code>{{ ev.fieldIdentifier }}</code></span
+                >
+              </template>
             </article>
           </div>
         </section>
@@ -2796,7 +3526,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <strong>{{ selectedProvenanceTarget.name }}</strong>
             <span>{{ selectedProvenanceTarget.kind }}</span>
           </div>
-          <template v-if="selectedNode">
+          <template v-if="!selectedEdge">
             <h3>实体溯源</h3>
             <dl class="result-provenance__source">
               <div>
@@ -2822,17 +3552,23 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
               <div>
                 <dt>图空间 VID</dt>
                 <dd>
-                  <code>{{ selectedProvenance.evidences[0]?.graphVid || selectedProvenanceTarget.id }}</code>
+                  <code>{{
+                    selectedProvenance.evidences[0]?.graphVid ||
+                    selectedProvenanceTarget.id
+                  }}</code>
                 </dd>
               </div>
-              <div>
+              <div v-if="!isExpertIndirect && !isPaperCooperation">
                 <dt>构建任务 ID</dt>
                 <dd>
                   <code>{{ selectedProvenance.task.instanceId }}</code>
                 </dd>
               </div>
             </dl>
-            <div class="result-provenance__task-meta">
+            <div
+              v-if="!isExpertIndirect && !isPaperCooperation"
+              class="result-provenance__task-meta"
+            >
               <RouterLink
                 :to="{
                   name: 'processing-instance-detail',
@@ -2877,14 +3613,19 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
                   >源数据表：<code>{{ endpoint.technicalTable }}</code></span
                 >
                 <span
-                  >英文字段名：<code>{{ endpoint.sourceField || "—" }}</code></span
+                  >英文字段名：<code>{{
+                    endpoint.sourceField || "—"
+                  }}</code></span
                 >
                 <span
                   >图空间 VID：<code>{{ endpoint.graphVid }}</code></span
                 >
               </article>
             </div>
-            <dl class="result-provenance__source">
+            <dl
+              v-if="!isExpertIndirect && !isPaperCooperation"
+              class="result-provenance__source"
+            >
               <div>
                 <dt>构建任务 ID</dt>
                 <dd>
@@ -2892,7 +3633,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
                 </dd>
               </div>
             </dl>
-            <div class="result-provenance__task-meta">
+            <div
+              v-if="!isExpertIndirect && !isPaperCooperation"
+              class="result-provenance__task-meta"
+            >
               <RouterLink
                 :to="{
                   name: 'processing-instance-detail',
@@ -2946,9 +3690,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           暂无溯源数据，请先执行查询，或在图谱中选中一个实体/关系。
         </p>
         <div v-else-if="resultMode === 'rule'" class="result-panel__rules">
-          <article v-for="(rule, index) in liveRules" :key="rule.name">
+          <article v-for="rule in liveRules" :key="rule.name">
             <header>
-              <strong>规则 {{ index + 1 }}：{{ rule.name }}</strong>
+              <strong>{{ rule.name }}</strong>
               <span>{{ rule.type }}</span>
             </header>
             <dl>
@@ -2998,9 +3742,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   display: grid;
   grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.8fr) auto;
   align-items: end;
-  gap: 14px;
+  gap: 16px;
   min-height: 92px;
-  padding: 14px 16px;
+  padding: 16px;
   overflow: visible;
 }
 
@@ -3012,7 +3756,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 16px;
   align-items: start;
-  gap: 10px;
+  gap: 16px;
   min-width: 0;
 }
 
@@ -3036,7 +3780,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .service-console__params {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  gap: 16px;
   min-width: 0;
 }
 
@@ -3056,7 +3800,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .service-console__params label {
   position: relative;
   display: grid;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -3070,6 +3814,72 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   margin-right: 4px;
   color: var(--danger);
   font-style: normal;
+}
+
+.service-console__input-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.service-console__input-wrap > input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  min-width: 0;
+  padding: 0 32px 0 11px;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  outline: 0;
+  background: #fff;
+  color: #1f1f1f;
+  font-size: 14px;
+  line-height: 30px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.service-console__input-wrap > input:hover {
+  border-color: #4096ff;
+}
+
+.service-console__input-wrap > input:focus {
+  border-color: #1677ff;
+  box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1);
+}
+
+.service-console__input-wrap > input::placeholder {
+  color: #bfbfbf;
+  opacity: 1;
+}
+
+.service-console__input-clear {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 7px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #8c8c8c;
+  font-size: 17px;
+  line-height: 18px;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.service-console__input-clear:hover,
+.service-console__input-clear:focus-visible {
+  background: #f0f0f0;
+  color: #434343;
+  outline: none;
+}
+
+.service-console__params label.has-error .service-console__input-wrap > input {
+  border-color: var(--danger);
 }
 
 .service-console__params > label > input,
@@ -3154,9 +3964,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1) !important;
 }
 
-:global(
-  .service-console__month-picker .arco-picker-input input
-) {
+:global(.service-console__month-picker .arco-picker-input input) {
   box-sizing: border-box !important;
   width: 100% !important;
   height: auto !important;
@@ -3413,6 +4221,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .graph-panel__time {
   display: flex;
+  align-items: center;
   gap: var(--space-12);
   color: var(--text-tertiary);
 }
@@ -3424,15 +4233,15 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .graph-panel__filters {
   display: flex;
   align-items: end;
-  gap: 12px;
-  padding: 8px 12px;
+  gap: 16px;
+  padding: 16px;
   border-bottom: 1px solid var(--border);
   background: #f7faff;
 }
 
 .graph-panel__filters label {
   display: grid;
-  gap: 4px;
+  gap: 8px;
   min-width: 180px;
 }
 
@@ -3472,6 +4281,18 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .graph-panel__refresh {
   font-weight: 600;
+}
+
+.graph-panel__empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: var(--text-secondary);
+  font-size: 14px;
+  z-index: 1;
 }
 
 .graph-panel__autorefresh {
@@ -3557,11 +4378,51 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   background: #eb2f96;
 }
 
+.graph-panel__refresh {
+  margin-right: 12px;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 20px;
+}
 .graph-panel__canvas {
+  position: relative;
   flex: 1;
   height: auto;
   min-height: 0;
   overflow: hidden;
+}
+
+.graph-panel__feedback {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  background: #fff;
+  color: #4e5969;
+  text-align: center;
+}
+
+.graph-panel__feedback strong {
+  color: #1d2129;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+}
+
+.graph-panel__feedback span {
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.graph-panel__feedback small {
+  color: #86909c;
+  font-size: 12px;
+  line-height: 20px;
 }
 
 :deep(.kg-graph-viewport) {
@@ -3618,6 +4479,8 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .result-panel__table div {
+  position: relative;
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: 190px minmax(0, 1fr);
   min-height: 44px;
@@ -3626,6 +4489,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .result-panel__table dt,
 .result-panel__table dd {
+  box-sizing: border-box;
+  min-width: 0;
+  background: #fff;
   margin: 0;
   padding: 10px 14px;
   font-size: 15px;
@@ -3646,9 +4512,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .result-provenance {
   display: grid;
-  gap: 12px;
-  margin: 12px 14px 14px;
-  padding: 12px;
+  gap: 16px;
+  margin: 16px;
+  padding: 16px;
   border: 1px solid #cfe0ff;
   border-radius: 8px;
   background: linear-gradient(180deg, #f7faff 0%, #fff 100%);
@@ -3677,7 +4543,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .result-provenance__target {
   display: grid;
   gap: 4px;
-  padding: 11px 12px;
+  padding: 16px;
   border-radius: 7px;
   background: #eaf2ff;
 }
@@ -3695,7 +4561,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .result-provenance h3 {
-  margin: 2px 0 -5px;
+  margin: 0;
   color: #536987;
   font-size: 12px;
   line-height: 18px;
@@ -3717,7 +4583,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .result-provenance .result-provenance__source dt,
 .result-provenance .result-provenance__source dd {
-  padding: 6px 8px;
+  padding: 8px 16px;
   font-size: 12px;
   line-height: 20px;
 }
@@ -3730,7 +4596,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .result-provenance__database {
   margin: 0;
-  padding: 7px 9px;
+  padding: 8px 16px;
   border-radius: 6px;
   background: #f3f7fd;
   color: var(--text-secondary);
@@ -3746,7 +4612,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .result-provenance__evidence-list article {
   display: grid;
   gap: 6px;
-  padding: 9px 10px;
+  padding: 16px;
   border: 1px solid #e1eaf8;
   border-radius: 7px;
   background: #fff;
@@ -3806,7 +4672,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   flex: 1;
   min-height: 0;
   margin: 0;
-  padding: 14px 16px;
+  padding: 16px;
   overflow: auto;
   color: #2f3442;
   background: #f7f9fc;
@@ -3820,16 +4686,16 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   flex: 1;
   min-height: 0;
   display: grid;
-  gap: 10px;
+  gap: 16px;
   align-content: start;
-  padding: 14px;
+  padding: 16px;
   overflow: auto;
 }
 
 .result-panel__rules article {
   display: grid;
-  gap: 10px;
-  padding: 12px;
+  gap: 16px;
+  padding: 16px;
   border: 1px solid #e2ebf8;
   border-radius: 8px;
   background: #fbfdff;
@@ -3974,6 +4840,11 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   flex: 0 0 22px;
 }
 
+/* 全景图 header 有「刷新图谱」按钮，按内容自适应高度，避免按钮顶部被 overflow:hidden 裁切 */
+.graph-panel--panorama > .kg-panel__header {
+  flex: 0 0 auto;
+}
+
 .graph-panel .kg-panel__title,
 .result-panel .kg-panel__title {
   padding-left: 11px;
@@ -4073,7 +4944,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .result-panel__table {
-  display: block;
+  --result-label-column-width: 132px;
+  display: flex;
+  flex-direction: column;
   margin: 16px 0 0;
   padding: 0;
   border: 1px solid #e5e6eb;
@@ -4082,8 +4955,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 }
 
 .result-panel__table div {
+  position: relative;
   display: grid;
-  grid-template-columns: 116px minmax(0, 1fr);
+  grid-template-columns: var(--result-label-column-width) minmax(0, 1fr);
   gap: 0;
   min-height: 44px;
   border-bottom: 1px solid #e5e6eb;
@@ -4102,12 +4976,55 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 
 .result-panel__table dt {
   border-right: 1px solid #e5e6eb;
+  background: #f2f3f5;
   color: #86909c;
   font-weight: 500;
   text-align: left;
 }
 
 .result-panel__table dd {
+  background: #fff;
   color: #1d2129;
+}
+
+/* 移除预览与结果详情的外层衬板；保留内部白色画布与详情表格。 */
+.business-service__main > .kg-panel,
+.business-service__side > .kg-panel,
+.graph-panel > .kg-panel__header,
+.result-panel > .kg-panel__header,
+.graph-panel__legend {
+  background: transparent !important;
+}
+
+/* 结果详情切换：选中标签填满整个模块，不显示内嵌白框。 */
+.result-panel__tabs {
+  height: 40px !important;
+  padding: 4px !important;
+  border-radius: 4px !important;
+}
+
+.result-panel__tabs button {
+  box-sizing: border-box;
+  height: 32px !important;
+  padding: 5px 16px !important;
+  border-radius: 4px !important;
+}
+
+.result-panel__tabs button.is-active {
+  margin: 0 !important;
+}
+
+.result-panel__tabs button.is-active + button {
+  border-left-color: transparent;
+}
+
+.result-panel__tabs button:hover:not(.is-active) {
+  background: #fff;
+  color: #165dff;
+}
+
+.result-panel__tabs button:focus-visible {
+  outline: 2px solid rgba(22, 93, 255, 0.28);
+  outline-offset: 1px;
 }
 </style>

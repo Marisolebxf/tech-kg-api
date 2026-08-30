@@ -141,6 +141,7 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
         payload = {
             "structuredResult": result,
             "provenance": provenance,
+            "rules": _build_rules(result)[:1],
         }
         with _result_cache_lock:
             _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, payload)
@@ -476,56 +477,41 @@ def _topic_name(node: dict[str, Any]) -> str:
     return str(props.get("keyword") or props.get("name") or "").strip()
 
 
-def _source_metadata(properties: dict[str, Any]) -> dict[str, str]:
-    metadata: dict[str, str] = {}
-    for key in (
-        "source_system",
-        "source_table",
-        "source_record_id",
-        "ingest_batch",
-        "ingest_time",
-        "match_method",
-        "match_evidence",
-    ):
-        value = str(properties.get(key) or "").strip()
-        if value:
-            metadata[key] = value
-    return metadata
+def _node_source(node: dict[str, Any]) -> tuple[str, str]:
+    """按科技专家同事关系的口径返回 MySQL 源表和英文字段名。"""
+    properties = node.get("properties") or {}
+    source_table = properties.get("organization_base") or properties.get("source_table")
+    labels = {str(label) for label in node.get("labels") or []}
+    source_record_id = properties.get("source_record_id")
+    organization_id = properties.get("organization_id")
 
-
-def _technical_table(metadata: dict[str, str], fallback: str) -> str:
-    source_system = metadata.get("source_system", "")
-    source_table = metadata.get("source_table", "")
-    if source_system and source_table:
-        return f"{source_system}.{source_table}"
-    return source_table or fallback
+    if labels & {"Person", "Scholar", "Expert"} and source_record_id not in (None, ""):
+        source_field = "scholar_id" if source_table == "dwd_scholar" else "source_record_id"
+    elif organization_id == "scholar_id" and source_record_id not in (None, ""):
+        source_field = "scholar_id"
+    elif organization_id not in (None, ""):
+        source_field = "organization_id"
+    else:
+        source_field = "source_record_id"
+    return str(source_table or "-"), source_field
 
 
 def _build_provenance(
     expert_a: dict[str, Any],
     expert_b: dict[str, Any],
     papers: list[dict[str, Any]],
-    fallback_edges: list[dict[str, Any]],
     paper_count: int,
 ) -> dict[str, Any]:
-    """使用专家、论文和作者/合作边上的真实入库元数据生成证据链。"""
+    """按实体的 MySQL 源表、源字段和图空间 VID 生成证据链。"""
     evidences: list[dict[str, str]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[str] = set()
 
-    def append_node(
-        node: dict[str, Any],
-        *,
-        entity_type: str,
-        fallback_label: str,
-    ) -> None:
+    def append_node(node: dict[str, Any]) -> None:
         properties = node.get("properties") or {}
-        metadata = _source_metadata(properties)
         node_id = str(node.get("id") or "")
-        record_id = metadata.get("source_record_id") or node_id
-        key = ("node", node_id, record_id)
-        if key in seen:
+        if not node_id or node_id in seen:
             return
-        seen.add(key)
+        seen.add(node_id)
         name = str(
             properties.get("name_zh")
             or properties.get("name_en")
@@ -534,74 +520,25 @@ def _build_provenance(
             or properties.get("title")
             or node_id
         )
-        details = [
-            f"图标签：{fallback_label}",
-            f"入库批次：{metadata.get('ingest_batch') or '—'}",
-            f"入库时间：{metadata.get('ingest_time') or '—'}",
-        ]
-        if fallback_label == "Paper":
-            details.append(
-                f"发表年份：{properties.get('publication_year') or properties.get('year') or '—'}"
-            )
+        source_table, source_field = _node_source(node)
         evidences.append(
             {
                 "title": f"实体 · {name}",
-                "businessTable": entity_type,
-                "technicalTable": _technical_table(metadata, fallback_label),
-                "recordId": record_id,
-                "fieldIdentifier": (
-                    "source_record_id" if metadata.get("source_record_id") else "graph_vid"
-                ),
-                "summary": "；".join(details),
+                "sourceTable": source_table,
+                "sourceField": source_field,
+                "graphVid": node_id,
             }
         )
 
-    def append_edge(edge: dict[str, Any]) -> None:
-        properties = edge.get("properties") or {}
-        metadata = _source_metadata(properties)
-        edge_type = str(edge.get("type") or _AUTHORED_EDGE)
-        source = str(edge.get("source") or "")
-        target = str(edge.get("target") or "")
-        edge_id = str(edge.get("id") or f"{source}->{target}:{edge_type}")
-        record_id = metadata.get("source_record_id") or edge_id
-        key = ("edge", edge_id, record_id)
-        if key in seen:
-            return
-        seen.add(key)
-        details = [
-            f"路径段：{source or '—'} → {target or '—'}",
-            f"入库批次：{metadata.get('ingest_batch') or '—'}",
-            f"入库时间：{metadata.get('ingest_time') or '—'}",
-        ]
-        if metadata.get("match_method"):
-            details.append(f"匹配方法：{metadata['match_method']}")
-        if metadata.get("match_evidence"):
-            details.append(f"匹配证据：{metadata['match_evidence']}")
-        evidences.append(
-            {
-                "title": f"关系 · {edge_type}",
-                "businessTable": "论文作者/专家合作关系",
-                "technicalTable": _technical_table(metadata, edge_type),
-                "recordId": record_id,
-                "fieldIdentifier": (
-                    "source_record_id" if metadata.get("source_record_id") else "graph_edge_id"
-                ),
-                "summary": "；".join(details),
-            }
-        )
-
-    append_node(expert_a, entity_type="科技专家", fallback_label=_SCHOLAR_LABEL)
-    append_node(expert_b, entity_type="科技专家", fallback_label=_SCHOLAR_LABEL)
+    append_node(expert_a)
+    append_node(expert_b)
     for paper in papers[:8]:
-        append_node(paper, entity_type="论文成果", fallback_label="Paper")
-        for edge in paper.get("pathEdges") or []:
-            append_edge(edge)
-    for edge in fallback_edges[:8]:
-        append_edge(edge)
+        append_node(paper)
 
+    evidence_scope = "专家及合作论文实体" if papers else "专家实体"
     return {
         "sourceDatabase": f"trs-graph / space={GRAPH_SPACE}",
-        "summary": f"两位专家命中 {paper_count} 篇合作论文；证据来自专家、论文及作者/合作关系图属性。",
+        "summary": f"两位专家命中 {paper_count} 篇合作论文；证据来自{evidence_scope}图属性。",
         "evidences": evidences,
     }
 
@@ -611,6 +548,48 @@ def _impact_score(paper_count: int, citation_total: int, high_level_count: int) 
         return 0.0
     raw = paper_count * 6.5 + citation_total / max(18, paper_count * 3) + high_level_count * 4
     return min(99.5, round(raw, 1))
+
+
+def _build_rules(result: dict[str, Any]) -> list[dict[str, Any]]:
+    paper_count = int(result.get("cooperationPaperCount") or 0)
+    stable_count = len(result.get("stableTeamMembers") or [])
+    impact_score = float(result.get("academicImpactScore") or 0)
+    audit = "代码未配置人工审核流；查询异常或未命中时按接口实际状态返回，缺失字段不补造。"
+    return [
+        {
+            "name": "作者关联与合作频次算法",
+            "type": "图路径查询规则",
+            "target": "两位专家、AUTHORED/AUTHORED_BY 作者边和 Paper 节点",
+            "trigger": "expertAId 与 expertBId 均可定位且不是同一专家",
+            "logic": "查询专家 A→论文→专家 B 的真实作者路径，按论文 ID 去重；时间条件仅取 startTime/endTime 的年份过滤 publication_year。无时间条件且未命中逐篇论文时，回退读取 COAUTHOR_WITH 合作边统计。",
+            "output": "合作论文数量、作者列表、作者单位和合作年份范围",
+            "threshold": "逐篇论文最多 1000 篇；代码未配置 status=1、作者匹配置信度或关系验证置信度过滤",
+            "audit": audit,
+            "appliedCount": paper_count,
+        },
+        {
+            "name": "论文指标与合作成员统计规则",
+            "type": "事实聚合规则",
+            "target": "共同论文及其 PUBLISHED_IN、HAS_KEYWORD、CITED_BY、作者关系",
+            "trigger": "命中共同论文路径",
+            "logic": "主题按关键词出现次数取前 8；期刊/会议按论文类型和场馆分级属性统计；被引数依次读取论文 citation_count、作者边 citations、CITED_BY 边数量；共同作者按共同论文次数排序取前 5。",
+            "output": "论文主题、期刊/会议级别、总被引、最高单篇被引和核心合作人员",
+            "threshold": "稳定团队成员须共同论文数 >= 2 且至少覆盖 2 个不同发表年份",
+            "audit": audit,
+            "appliedCount": stable_count,
+        },
+        {
+            "name": "学术影响力与共同贡献计算规则",
+            "type": "评分标注规则",
+            "target": "合作论文数、合作论文被引数和已分级论文数",
+            "trigger": "论文指标统计完成后",
+            "logic": "学术影响力=min(99.5, 论文数×6.5 + 总被引/max(18, 论文数×3) + 已分级论文数×4)。根据是否有论文、被引、跨机构和主题生成共同贡献标签。",
+            "output": "academicImpactScore、cooperationFrequency 和 sharedContribution",
+            "threshold": "无合作论文时影响力为 0；代码未配置平均场馆得分 70 或高影响论文淘汰阈值",
+            "audit": audit,
+            "appliedCount": 1 if impact_score > 0 else 0,
+        },
+    ]
 
 
 async def _build_structured_result(
@@ -637,12 +616,11 @@ async def _build_structured_result(
     papers = _dedupe_shared_papers(paths)
     fallback_paper_count = 0
     fallback_collaborators: list[tuple[str, int]] = []
-    fallback_edges: list[dict[str, Any]] = []
     if not papers and not body.startTime and not body.endTime:
         (
             fallback_paper_count,
             fallback_collaborators,
-            fallback_edges,
+            _,
         ) = await _fetch_coauthor_fallback(graph_api, body)
     semaphore = asyncio.Semaphore(8)
     contexts = await asyncio.gather(
@@ -840,7 +818,6 @@ async def _build_structured_result(
             expert_a,
             expert_b,
             contexts,
-            fallback_edges,
             paper_count,
         ),
     }

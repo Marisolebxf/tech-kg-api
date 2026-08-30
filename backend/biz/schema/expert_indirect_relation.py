@@ -21,7 +21,7 @@ class ExpertIndirectRelationRequest(BaseModel):
     core_node_id: str = Field(
         ...,
         min_length=1,
-        max_length=128,
+        max_length=64,
         pattern=NODE_ID_PATTERN,
         description="核心专家或人才节点 ID。",
     )
@@ -44,7 +44,10 @@ class ExpertIndirectRelationRequest(BaseModel):
     def normalize_core_node_id(cls, value: str) -> str:
         if value is None:
             return value
-        return str(value).strip()
+        value = str(value).strip()
+        if len(value) > 64:
+            raise ValueError("核心节点 ID 长度不能超过 64 个字符")
+        return value
 
     @field_validator("relation_types", mode="before")
     @classmethod
@@ -89,6 +92,10 @@ class IndirectRelationPath(BaseModel):
 class StructuredIndirectRelationResult(BaseModel):
     coreNode: IndirectNode
     pathDepth: int
+    defaultPathDepth: int = Field(
+        default=2,
+        description="系统默认路径深度；请求未填写 path_depth 时采用 2 跳。",
+    )
     minStrength: float
     directNodeCount: int
     indirectNodeCount: int
@@ -103,11 +110,9 @@ class StructuredIndirectRelationResult(BaseModel):
 
 class IndirectProvenanceEvidence(BaseModel):
     title: str
-    businessTable: str
-    technicalTable: str
-    recordId: str
-    fieldIdentifier: str
-    summary: str
+    sourceTable: str
+    sourceField: str
+    graphVid: str
 
 
 class IndirectProvenance(BaseModel):
@@ -119,3 +124,4 @@ class IndirectProvenance(BaseModel):
 class ExpertIndirectRelationResponse(BaseModel):
     structuredResult: StructuredIndirectRelationResult
     provenance: IndirectProvenance
+    rules: list[dict[str, Any]] = Field(default_factory=list)

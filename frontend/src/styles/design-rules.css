@@ -939,6 +939,266 @@ body {
   border-radius: 4px !important;
 }
 
+/* Phone layout: composed workbenches become a readable vertical document. */
+@media (max-width: 767px) {
+  .app-workspace:has(.business-service) {
+    overflow-x: hidden;
+  }
+
+  .app-workspace .business-service {
+    width: 100%;
+    min-width: 0;
+    height: auto !important;
+    min-height: 100%;
+    overflow: visible !important;
+  }
+
+  .app-workspace .business-service .service-console {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 14px;
+    min-height: 0;
+    padding: 12px;
+  }
+
+  .app-workspace .business-service .service-console__head,
+  .app-workspace .business-service .service-console__params,
+  .app-workspace .business-service .service-console__params--inline,
+  .app-workspace .business-service .service-console__params--industry-event {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .app-workspace .business-service .service-console__head,
+  .app-workspace .business-service .service-console__actions {
+    justify-content: stretch !important;
+    min-width: 0;
+    margin-top: 0 !important;
+  }
+
+  .app-workspace .business-service .service-console__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .app-workspace .business-service .service-console__actions button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .app-workspace .business-service .business-service__main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 20px;
+    height: auto;
+    overflow: visible;
+  }
+
+  .app-workspace .business-service :is(
+    .business-service__side,
+    .graph-panel,
+    .result-panel
+  ) {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .app-workspace .business-service .graph-panel__canvas {
+    flex: none;
+    width: 100%;
+    height: 360px;
+    min-height: 360px;
+  }
+
+  .app-workspace .business-service :is(
+    .graph-panel > .kg-panel__header,
+    .result-panel > .kg-panel__header
+  ) {
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .app-workspace .business-service .graph-panel__time {
+    flex-wrap: wrap;
+  }
+
+  .app-workspace .business-service .graph-panel__legend {
+    height: auto;
+    padding-block: 8px;
+  }
+
+  .app-workspace .business-service .result-panel__tabs {
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .app-workspace .business-service .result-panel__tabs button {
+    flex: 0 0 auto;
+  }
+
+  .app-workspace .business-service .result-panel__table {
+    width: 100%;
+    margin-top: 12px !important;
+  }
+
+  .app-workspace .business-service .result-panel__table div {
+    grid-template-columns: 104px minmax(0, 1fr);
+    min-height: 44px;
+  }
+
+  .app-workspace .business-service .result-panel__table::after {
+    display: none;
+  }
+
+  .app-workspace .business-service .result-panel__table dt,
+  .app-workspace .business-service .result-panel__table dd {
+    padding: 10px;
+    overflow-wrap: anywhere;
+  }
+
+  .app-workspace :is(.kg-panel__header, .page-header, .page-heading) {
+    flex-wrap: wrap;
+  }
+
+  .app-workspace :is(.summary-grid, .summary-row, .schema-summary, .task-summary) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .app-workspace :is(.table-wrap, .table-scroll, .member-panel > div) {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .arco-modal {
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px);
+  }
+
+  .arco-modal-body {
+    padding: 16px;
+  }
+}
+
+/*
+ * Split-screen/tablet layout: the algorithm panels stack below 1280px, so the
+ * workspace (rather than fixed-height child panels) must own vertical scrolling.
+ */
+@media (min-width: 768px) and (max-width: 1280px) {
+  .app-workspace:has(> .business-service) {
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .app-workspace > .business-service {
+    height: auto !important;
+    min-height: 100%;
+    overflow: visible !important;
+  }
+
+  .app-workspace .business-service .business-service__main {
+    flex: none;
+    grid-template-columns: minmax(0, 1fr) !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  .app-workspace .business-service :is(
+    .business-service__side,
+    .graph-panel,
+    .result-panel
+  ) {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  .app-workspace .business-service .graph-panel__canvas {
+    flex: none !important;
+    height: clamp(360px, 48vh, 560px) !important;
+    min-height: 360px !important;
+  }
+
+  .app-workspace .business-service .result-panel__table {
+    flex: none;
+    min-height: 240px;
+  }
+
+  .app-workspace .business-service .developer-view {
+    display: grid !important;
+    grid-template-rows: auto auto auto !important;
+    height: auto !important;
+    min-height: 0 !important;
+    gap: 20px !important;
+    overflow: visible !important;
+  }
+
+  .app-workspace .business-service .developer-view__meta {
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100%;
+    height: auto !important;
+    min-height: 0 !important;
+    gap: 12px;
+  }
+
+  .app-workspace .business-service .developer-view__meta label {
+    grid-template-columns: 108px minmax(0, 1fr) !important;
+    min-height: 32px;
+  }
+
+  .app-workspace .business-service .developer-view__cards {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  .app-workspace .business-service .developer-view__cards > .kg-panel {
+    height: auto !important;
+    min-height: 332px !important;
+  }
+
+  .app-workspace .business-service .prototype-table--request .col-name {
+    width: 28%;
+  }
+
+  .app-workspace .business-service .prototype-table--request .col-type {
+    width: 14%;
+  }
+
+  .app-workspace .business-service .prototype-table--request .col-required {
+    width: 10%;
+  }
+
+  .app-workspace .business-service .prototype-table--request .col-description {
+    width: 48%;
+  }
+
+  .app-workspace .business-service .prototype-table--response .col-name {
+    width: 32%;
+  }
+
+  .app-workspace .business-service .prototype-table--response .col-type {
+    width: 18%;
+  }
+
+  .app-workspace .business-service .prototype-table--response .col-description {
+    width: 50%;
+  }
+
+  .app-workspace .business-service .prototype-table :is(
+    th,
+    td:first-child,
+    td:nth-child(2)
+  ) {
+    overflow-wrap: normal !important;
+    word-break: normal !important;
+    white-space: nowrap !important;
+  }
+}
+
 .app-workspace .business-service .service-console__actions {
   gap: 16px;
 }
@@ -977,13 +1237,13 @@ body {
 }
 
 .app-workspace .business-service .result-panel__tabs {
-  height: 36px;
+  height: 40px;
   padding: 4px;
   border-radius: 4px;
 }
 
 .app-workspace .business-service .result-panel__tabs button {
-  height: 28px;
+  height: 32px;
   padding-inline: 16px;
   border-radius: 4px;
   font-size: 14px;
@@ -1107,7 +1367,7 @@ body {
 
 .app-workspace .business-service .developer-view__code-wrap .kg-panel__title {
   box-sizing: border-box;
-  margin-left: 16px !important;
+  margin-left: 0 !important;
   padding-left: 11px !important;
 }
 
@@ -1117,20 +1377,129 @@ body {
 }
 
 
-/* Keep result-detail tables closed and all row labels on one line. */
-.app-workspace .business-service .result-panel__table {
-  flex: 0 0 auto;
+.app-workspace .business-service .service-console__actions .kg-button {
   box-sizing: border-box;
-  width: calc(100% - 32px);
-  margin: 16px;
+  min-width: 64px;
+  height: 32px !important;
+  min-height: 32px !important;
+  padding-inline: 16px !important;
+  border: 1px solid transparent !important;
+  border-radius: 4px;
+  background: #165dff !important;
+  color: #fff;
+}
+
+.app-workspace .business-service .service-console__actions .kg-button:hover {
+  background: #4080ff !important;
+}
+
+.app-workspace .business-service .service-console__actions .kg-button:focus-visible {
+  outline: 2px solid rgba(22, 93, 255, 0.28);
+  outline-offset: 2px;
+}
+
+.app-workspace .business-service .service-console__actions .kg-button--secondary {
+  border-color: #e5e6eb !important;
+  background: #fff !important;
+  color: #4e5969;
+}
+
+.app-workspace .business-service .service-console__actions .kg-button--secondary:hover {
+  border-color: #165dff !important;
+  background: #e8f3ff !important;
+  color: #165dff;
+}
+
+.app-workspace .business-service .prototype-table tbody tr:hover td {
+  background: #f7f8fa;
+}
+
+/* Developer interface uses the same 16px visible-frame rhythm as algorithm testing. */
+.app-workspace .business-service .developer-view__cards > .kg-panel,
+.app-workspace .business-service .developer-view__code-wrap > .developer-code {
+  display: flex;
+  flex-direction: column;
+}
+
+.app-workspace .business-service .developer-view__table-scroll {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  max-height: none;
+  margin: 0 !important;
+}
+
+.app-workspace .business-service .developer-view__code-wrap .developer-code pre {
+  flex: 1 1 auto;
+  width: 100% !important;
+  min-height: 0;
+  margin: 0 !important;
+}
+
+.app-workspace .business-service .developer-view {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: 40px minmax(0, 1fr) minmax(0, 1fr) !important;
+  gap: 16px !important;
+  padding: 0 !important;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.app-workspace .business-service .developer-view__cards {
+  width: 100%;
+  height: auto !important;
+  min-height: 0 !important;
+  gap: 16px !important;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.app-workspace .business-service .developer-view__cards > .kg-panel,
+.app-workspace .business-service .developer-view__code-wrap,
+.app-workspace .business-service .developer-view__code-wrap > .developer-code {
+  min-height: 0;
+  height: 100%;
+  scrollbar-gutter: auto;
+}
+
+/* Keep result-detail tables closed and all row labels on one line. */
+.app-workspace:has(.business-service),
+.app-workspace .business-service,
+.app-workspace .business-service .business-service__main,
+.app-workspace .business-service .business-service__side,
+.app-workspace .business-service :is(.graph-panel, .result-panel) {
+  scrollbar-gutter: auto;
+}
+
+.app-workspace .business-service .business-service__side,
+.app-workspace .business-service .result-panel {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+.app-workspace .business-service .result-panel__table {
+  flex: 1 1 auto;
+  min-height: 0;
+  box-sizing: border-box;
+  align-self: stretch;
+  width: auto;
+  margin: 16px 0 0 !important;
   overflow-x: auto;
   overflow-y: visible;
   border: 1px solid #e5e6eb;
   border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  background: transparent;
 }
 
 .app-workspace .business-service .result-panel__table div {
   grid-template-columns: 136px minmax(0, 1fr);
+  flex: 0 0 40px;
   min-height: 40px;
 }
 
@@ -1158,4 +1527,279 @@ body {
 ) .el-select__selected-item.el-select__placeholder {
   color: #bfbfbf !important;
   font-weight: 400 !important;
+}
+
+/* Final phone overrides live last so legacy desktop contracts cannot win. */
+@media (max-width: 767px) {
+  .app-workspace .business-service .developer-view {
+    display: flex !important;
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    gap: 16px !important;
+    overflow: visible !important;
+    flex-direction: column;
+  }
+
+  .app-workspace .business-service .developer-view__meta {
+    display: grid !important;
+    flex: 0 0 auto !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100%;
+    height: auto;
+    gap: 12px;
+  }
+
+  .app-workspace .business-service .developer-view__meta label {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 6px;
+  }
+
+  .app-workspace .business-service .developer-view__meta label > span {
+    white-space: nowrap;
+  }
+
+  .app-workspace .business-service .developer-view__cards {
+    display: flex !important;
+    flex: 0 0 auto !important;
+    width: 100%;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    flex-direction: column;
+  }
+
+  .app-workspace .business-service .developer-view__cards > .kg-panel {
+    width: 100%;
+    height: auto !important;
+    min-height: 300px !important;
+  }
+
+  .app-workspace .business-service .developer-view__table-scroll {
+    width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow-x: auto !important;
+    overflow-y: visible !important;
+  }
+
+  .app-workspace .business-service .prototype-table {
+    width: 620px !important;
+    min-width: 620px !important;
+  }
+
+  .app-workspace .business-service .prototype-table :is(th, td) {
+    height: auto !important;
+    padding: 10px 12px !important;
+    overflow-wrap: normal !important;
+    word-break: normal !important;
+  }
+
+  .app-workspace .business-service .prototype-table :is(
+    th,
+    td:first-child,
+    td:nth-child(2)
+  ) {
+    white-space: nowrap !important;
+  }
+
+  .app-workspace .business-service .business-service__main {
+    grid-template-columns: minmax(0, 1fr) !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .app-workspace .business-service :is(
+    .business-service__side,
+    .graph-panel,
+    .result-panel
+  ) {
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .app-workspace .business-service .graph-panel__canvas {
+    height: 360px !important;
+    min-height: 360px !important;
+    flex: none !important;
+  }
+}
+
+/*
+ * Responsive behavior follows the actual workspace width, not the browser
+ * viewport. This keeps split-screen and browser-zoom behavior identical.
+ */
+.app-workspace {
+  container-type: inline-size;
+  container-name: business-workspace;
+}
+
+@media (min-width: 768px) {
+@container business-workspace (min-width: 400px) and (max-width: 1100px) {
+  .app-workspace .business-service {
+    height: 100% !important;
+    min-height: 0 !important;
+    padding-right: 4px;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+    scroll-behavior: smooth;
+    scrollbar-gutter: stable;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .app-workspace .business-service .service-console {
+    display: grid !important;
+    flex: 0 0 auto !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto !important;
+    align-items: start !important;
+    width: 100%;
+    height: auto !important;
+    min-height: 0 !important;
+    gap: 16px !important;
+    overflow: visible !important;
+  }
+
+  .app-workspace .business-service .service-console__head {
+    width: 100%;
+    margin: 0 !important;
+  }
+
+  .app-workspace .business-service .service-console__params,
+  .app-workspace .business-service .service-console__params--inline,
+  .app-workspace .business-service .service-console__params--industry-event,
+  .app-workspace .business-service .service-console--alumni .service-console__params,
+  .app-workspace .business-service .service-console--cooperation .service-console__params {
+    grid-template-columns: repeat(
+      auto-fit,
+      minmax(min(100%, 300px), 1fr)
+    ) !important;
+    width: 100%;
+  }
+
+  .app-workspace .business-service .service-console__actions,
+  .app-workspace .business-service .service-console--alumni .service-console__actions,
+  .app-workspace .business-service .service-console--cooperation .service-console__actions {
+    position: static !important;
+    justify-content: flex-end !important;
+    width: 100%;
+    min-width: 0 !important;
+    margin: 0 !important;
+  }
+
+  .app-workspace .business-service .developer-view {
+    display: flex !important;
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    gap: 20px !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    flex-direction: column !important;
+  }
+
+  .app-workspace .business-service .developer-view__meta {
+    display: grid !important;
+    flex: 0 0 auto !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    gap: 12px !important;
+  }
+
+  .app-workspace .business-service .developer-view__meta label {
+    display: grid !important;
+    grid-template-columns: 108px minmax(0, 1fr) !important;
+    min-height: 32px;
+    gap: 8px;
+  }
+
+  .app-workspace .business-service .developer-view__cards {
+    display: flex !important;
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: auto !important;
+    gap: 20px !important;
+    overflow: visible !important;
+    flex-direction: column !important;
+  }
+
+  .app-workspace .business-service .developer-view__cards > .kg-panel {
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 332px !important;
+    overflow: visible !important;
+  }
+
+  .app-workspace .business-service .developer-view__table-scroll {
+    height: auto !important;
+    min-height: 284px !important;
+    max-height: none !important;
+    overflow-x: auto !important;
+    overflow-y: visible !important;
+  }
+
+  .app-workspace .business-service .developer-view__code-wrap,
+  .app-workspace .business-service .developer-view__code-wrap > .developer-code {
+    flex: 0 0 auto !important;
+    height: auto !important;
+    min-height: 260px !important;
+  }
+
+  .app-workspace .business-service .prototype-table--request .col-name {
+    width: 28% !important;
+  }
+
+  .app-workspace .business-service .prototype-table--request .col-type {
+    width: 14% !important;
+  }
+
+  .app-workspace .business-service .prototype-table--request .col-required {
+    width: 10% !important;
+  }
+
+  .app-workspace .business-service .prototype-table--request .col-description {
+    width: 48% !important;
+  }
+
+  .app-workspace .business-service .prototype-table :is(
+    th,
+    td:first-child,
+    td:nth-child(2)
+  ) {
+    overflow-wrap: normal !important;
+    word-break: normal !important;
+    white-space: nowrap !important;
+  }
+
+  .app-workspace .business-service .business-service__main {
+    flex: none !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  .app-workspace .business-service :is(
+    .business-service__side,
+    .graph-panel,
+    .result-panel
+  ) {
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .app-workspace .business-service .graph-panel__canvas {
+    flex: none !important;
+    height: clamp(360px, 48vh, 560px) !important;
+    min-height: 360px !important;
+  }
+}
 }

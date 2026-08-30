@@ -80,10 +80,14 @@ def _read_source_record(mysql: Any, item_id: int) -> dict[str, Any] | None:
         from sqlalchemy import text
 
         with mysql.session_scope() as session:
-            row = session.execute(
-                text("SELECT * FROM dwd_sample_source WHERE id = :id"),
-                {"id": item_id},
-            ).mappings().first()
+            row = (
+                session.execute(
+                    text("SELECT * FROM dwd_sample_source WHERE id = :id"),
+                    {"id": item_id},
+                )
+                .mappings()
+                .first()
+            )
             if row is None:
                 logger.warning("dwd_sample_source id=%s not found", item_id)
                 return None

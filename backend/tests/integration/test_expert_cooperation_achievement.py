@@ -71,3 +71,50 @@ async def test_query_cooperation_achievement_rejects_invalid_dates(async_client)
     )
     assert resp.status_code == 422
     assert resp.json()["code"] == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["sourceExpertId", "targetExpertId"])
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("X" * 65, "64"),
+        ("person_1!@#￥%&", "异常字符"),
+        ("person 1", "空格"),
+    ],
+)
+async def test_query_cooperation_achievement_rejects_invalid_expert_ids(
+    async_client, field, value, message
+):
+    payload = {"sourceExpertId": "S1", "targetExpertId": "S2", field: value}
+    resp = await async_client.post(
+        "/api/v1/kg-construction/expert-cooperation-achievements/query", json=payload
+    )
+    assert resp.status_code == 422
+    assert any(message in error["msg"] for error in resp.json()["data"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["timeRangeStart", "timeRangeEnd"])
+async def test_query_cooperation_achievement_rejects_future_month(async_client, field):
+    payload = {"sourceExpertId": "S1", "targetExpertId": "S2", field: "2999-01"}
+    resp = await async_client.post(
+        "/api/v1/kg-construction/expert-cooperation-achievements/query", json=payload
+    )
+    assert resp.status_code == 422
+    assert any("输入时间不能超过当前时间" in error["msg"] for error in resp.json()["data"])
+
+
+@pytest.mark.asyncio
+async def test_query_cooperation_achievement_rejects_reversed_range(async_client):
+    resp = await async_client.post(
+        "/api/v1/kg-construction/expert-cooperation-achievements/query",
+        json={
+            "sourceExpertId": "S1",
+            "targetExpertId": "S2",
+            "timeRangeStart": "2025-02",
+            "timeRangeEnd": "2025-01",
+        },
+    )
+    assert resp.status_code == 422
+    assert any("开始时间不能晚于结束时间" in error["msg"] for error in resp.json()["data"])

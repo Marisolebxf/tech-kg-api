@@ -106,7 +106,9 @@ class AuthSettings:
                 "USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED",
                 False,
             ),
-            session_ttl_seconds=_env_int("AUTH_SESSION_TTL_SECONDS", 7 * 24 * 3600),
+            # 本地会话采用 30 分钟空闲超时；每次已认证请求会续期，
+            # 连续无操作超过该时长后必须重新登录。
+            session_ttl_seconds=_env_int("AUTH_SESSION_TTL_SECONDS", 30 * 60),
             state_ttl_seconds=_env_int("AUTH_STATE_TTL_SECONDS", 300),
             bearer_cache_ttl_seconds=_env_int("AUTH_BEARER_CACHE_TTL_SECONDS", 60),
             audit_ttl_seconds=_env_int("AUTH_AUDIT_TTL_SECONDS", 90 * 24 * 3600),

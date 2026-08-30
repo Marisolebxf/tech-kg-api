@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 from openai import OpenAI
@@ -13,6 +15,7 @@ DEFAULT_MODEL = "glm-4.7-flash"
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 DEFAULT_MAX_TOKENS = 2048
 DEFAULT_TIMEOUT = 40
+JSON_MODES = ("json_schema", "json_object", "prompt_only")
 
 
 class LLMClient:
@@ -54,6 +57,71 @@ class LLMClient:
         except Exception as exc:  # noqa: BLE001
             logger.warning("LLM synthesize failed, degrading: %s", exc)
             return None
+
+    def synthesize_json(
+        self,
+        prompt: str,
+        *,
+        schema: dict[str, Any],
+        schema_name: str = "response",
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        modes: Sequence[str] | None = None,
+        timeout: float | None = None,
+    ) -> str | None:
+        """按 modes 顺序尝试；默认 json_schema → json_object → prompt_only。"""
+        system = (
+            "只返回符合给定 JSON Schema 的单个 JSON 对象。"
+            "不要 Markdown，不要代码块，不要解释文字。\n"
+            f"JSON Schema:\n{json.dumps(schema, ensure_ascii=False)}"
+        )
+        structured_messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ]
+        mode_kwargs: dict[str, dict[str, Any]] = {
+            "json_schema": {
+                "messages": structured_messages,
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema_name,
+                        "strict": True,
+                        "schema": schema,
+                    },
+                },
+            },
+            "json_object": {
+                "messages": structured_messages,
+                "response_format": {"type": "json_object"},
+            },
+            "prompt_only": {"messages": [{"role": "user", "content": prompt}]},
+        }
+        ordered = list(modes) if modes else list(JSON_MODES)
+        attempts = [(m, mode_kwargs[m]) for m in ordered if m in mode_kwargs]
+        if not attempts:
+            attempts = [(m, mode_kwargs[m]) for m in JSON_MODES]
+
+        first_mode = attempts[0][0]
+        for mode, kwargs in attempts:
+            try:
+                create_kwargs: dict[str, Any] = {
+                    "model": self._model,
+                    "max_tokens": max_tokens,
+                    "extra_body": {"thinking": {"type": "disabled"}},
+                    **kwargs,
+                }
+                if timeout is not None:
+                    create_kwargs["timeout"] = timeout
+                resp = self._client.chat.completions.create(**create_kwargs)
+                content = resp.choices[0].message.content or None
+                if not content:
+                    continue
+                if mode != first_mode:
+                    logger.info("LLM synthesize_json 回退到 %s", mode)
+                return content
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("LLM synthesize_json %s 失败，尝试降级: %s", mode, exc)
+        return None
 
 
 class EmbeddingClient:

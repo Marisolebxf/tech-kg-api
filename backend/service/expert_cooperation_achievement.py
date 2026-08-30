@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
 import time
+from datetime import date, datetime
 from typing import Any
 
 from infra.graph_db import GraphNotFoundError, TRSGraphClient, get_trs_graph_client
@@ -15,7 +17,9 @@ from service.base_module import KGModuleScaffoldService
 PAPER_EDGE_TYPES = frozenset({"AUTHORED_BY"})
 PATENT_EDGE_TYPES = frozenset({"INVENTED_BY"})
 PROJECT_EDGE_TYPES = frozenset({"LEADS", "HAS_PARTICIPANT"})
+KEYWORD_EDGE_TYPE = "HAS_KEYWORD"
 EDGE_LIMIT = 500
+KEYWORD_EDGE_LIMIT = 50
 
 # 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 trs-graph。
 _RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
@@ -144,6 +148,8 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         )
         source_name = self._display_name(source)
         target_name = self._display_name(target)
+        source_props = getattr(source, "properties", None) or {}
+        target_props = getattr(target, "properties", None) or {}
 
         payload: dict[str, Any] = {
             "source": {"id": source_expert_id, "name": source_name},
@@ -163,8 +169,10 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             self._frontend_view(
                 source_id=source_expert_id,
                 source_name=source_name,
+                source_provenance=self._entity_provenance(source_props, source_expert_id),
                 target_id=target_expert_id,
                 target_name=target_name,
+                target_provenance=self._entity_provenance(target_props, target_expert_id),
                 papers=papers,
                 patents=patents,
                 projects=projects,
@@ -243,9 +251,70 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             "id": vid,
             "title": self._pick_title(props, vid),
             "time": self._pick_time(props),
-            "fields": self._pick_fields(props),
+            "fields": self._resolve_keyword_fields(graph, vid, props),
             "awards": awards,
             "evaluation": self._pick_evaluation(props),
+            "provenance": self._entity_provenance(props, vid),
+        }
+
+    def _resolve_keyword_fields(
+        self, graph: TRSGraphClient, vid: str, props: dict[str, Any]
+    ) -> list[str]:
+        """所属领域：优先 HAS_KEYWORD→Keyword；否则回退成果节点 keywords 等属性（专利双写）。"""
+        from_edges = self._fields_from_has_keyword(graph, vid)
+        if from_edges:
+            return from_edges
+        return self._pick_fields(props)
+
+    def _fields_from_has_keyword(self, graph: TRSGraphClient, vid: str) -> list[str]:
+        try:
+            edges = graph.get_node_edges(
+                vid,
+                direction="out",
+                edge_type=KEYWORD_EDGE_TYPE,
+                limit=KEYWORD_EDGE_LIMIT,
+            )
+        except GraphNotFoundError:
+            return []
+
+        seen: set[str] = set()
+        out: list[str] = []
+        for edge in edges or []:
+            if str(getattr(edge, "type", "") or "") != KEYWORD_EDGE_TYPE:
+                continue
+            kid = self._neighbor_id(edge, vid)
+            if not kid:
+                continue
+            try:
+                knode = graph.get_node(kid)
+            except GraphNotFoundError:
+                knode = None
+            kprops = (getattr(knode, "properties", None) or {}) if knode else {}
+            label = (
+                self._as_keyword_label(kprops.get("keyword"))
+                or self._as_keyword_label(kprops.get("name_zh"))
+                or self._as_keyword_label(kprops.get("name"))
+            )
+            if not label or label in seen:
+                continue
+            seen.add(label)
+            out.append(label)
+        return out
+
+    @staticmethod
+    def _as_keyword_label(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @staticmethod
+    def _entity_provenance(props: dict[str, Any], vid: str) -> dict[str, str]:
+        """Return only provenance values physically stored on the graph node."""
+        return {
+            "sourceTable": str(props.get("source_table") or "-"),
+            "sourceField": str(props.get("source_field") or "-"),
+            "graphVid": vid,
         }
 
     @staticmethod
@@ -265,20 +334,49 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             return str(val)
         return None
 
-    @staticmethod
-    def _pick_fields(props: dict[str, Any]) -> list[str]:
+    @classmethod
+    def _coerce_field_values(cls, val: Any) -> list[str]:
+        """把图属性里的领域/关键词规范成可读字符串列表（兼容 JSON 数组字符串）。"""
+        if val is None or val == "":
+            return []
+        if isinstance(val, list):
+            out: list[str] = []
+            for item in val:
+                out.extend(cls._coerce_field_values(item))
+            return out
+        if isinstance(val, dict):
+            for key in (
+                "zhName",
+                "name_zh",
+                "name",
+                "label",
+                "value",
+                "keyword",
+                "field",
+                "enName",
+                "name_en",
+            ):
+                if val.get(key):
+                    return cls._coerce_field_values(val.get(key))
+            return []
+        text = str(val).strip()
+        if not text:
+            return []
+        if text.startswith("[") or text.startswith("{"):
+            try:
+                parsed = json.loads(text)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = None
+            if parsed is not None:
+                return cls._coerce_field_values(parsed)
+        parts = re.split(r"[,，;/、|]+", text)
+        return [part.strip().strip("\"'") for part in parts if part.strip().strip("\"'")]
+
+    @classmethod
+    def _pick_fields(cls, props: dict[str, Any]) -> list[str]:
         fields: list[str] = []
         for key in FIELD_KEYS:
-            val = props.get(key)
-            if val is None or val == "":
-                continue
-            if isinstance(val, list):
-                fields.extend(str(x) for x in val if x)
-            elif isinstance(val, str):
-                parts = re.split(r"[,，;/、|]+", val)
-                fields.extend(p.strip() for p in parts if p.strip())
-            else:
-                fields.append(str(val))
+            fields.extend(cls._coerce_field_values(props.get(key)))
         # dedupe preserve order
         seen: set[str] = set()
         out: list[str] = []
@@ -325,6 +423,8 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             if not name:
                 return []
             year = val.get("year")
+            if year is None and val.get("award_date"):
+                year = self._parse_year(str(val.get("award_date")))
             return [
                 {
                     "name": str(name),
@@ -335,7 +435,12 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         text = str(val).strip()
         if not text:
             return []
-        # simple single award string
+        # 图上 Project.output_awards 存的是 JSON 字符串（来自 dwd_*_project_output）
+        if text[0] in "[{":
+            try:
+                return self._parse_award_value(json.loads(text))
+            except json.JSONDecodeError:
+                pass
         return [{"name": text, "level": "", "year": None}]
 
     @staticmethod
@@ -347,6 +452,65 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             return None
         return int(m.group(0))
 
+    @staticmethod
+    def _bound_date(value: str | None, *, end: bool) -> date | None:
+        """把 YYYY / YYYY-MM / YYYY-MM-DD 扩成区间端点日期。"""
+        if not value:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        digits = re.sub(r"\D", "", text)
+        try:
+            if len(digits) == 4:
+                year = int(digits)
+                return date(year, 12, 31) if end else date(year, 1, 1)
+            if len(digits) == 6:
+                year, month = int(digits[:4]), int(digits[4:6])
+                if not 1 <= month <= 12:
+                    return None
+                if not end:
+                    return date(year, month, 1)
+                next_month = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
+                return date.fromordinal(next_month.toordinal() - 1)
+            if len(digits) >= 8:
+                return date(int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
+        except ValueError:
+            return None
+        # 兼容已是 ISO 文本但夹杂其它分隔符的情况
+        try:
+            if len(text) == 10 and text[4] == "-" and text[7] == "-":
+                return datetime.strptime(text, "%Y-%m-%d").date()
+            if len(text) == 7 and text[4] == "-":
+                year, month = map(int, text.split("-"))
+                if not end:
+                    return date(year, month, 1)
+                next_month = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
+                return date.fromordinal(next_month.toordinal() - 1)
+        except ValueError:
+            return None
+        return None
+
+    @classmethod
+    def _parse_item_date(cls, value: str | None) -> date | None:
+        """成果完成时间解析为具体日期；仅有年份时返回 None（走年粒度回退）。"""
+        if not value:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        digits = re.sub(r"\D", "", text)
+        try:
+            if len(digits) >= 8:
+                return date(int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
+            if len(digits) == 6:
+                year, month = int(digits[:4]), int(digits[4:6])
+                if 1 <= month <= 12:
+                    return date(year, month, 1)
+        except ValueError:
+            return None
+        return None
+
     def _in_time_range(
         self,
         item_time: str | None,
@@ -355,10 +519,21 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
     ) -> bool:
         if not start and not end:
             return True
+
+        item_date = self._parse_item_date(item_time)
+        if item_date is not None:
+            start_d = self._bound_date(start, end=False)
+            end_d = self._bound_date(end, end=True)
+            if start_d is not None and item_date < start_d:
+                return False
+            if end_d is not None and item_date > end_d:
+                return False
+            return True
+
+        # 仅年份：按年比较；完全无法解析：有时间筛选时一律排除
         year = self._parse_year(item_time)
         if year is None:
-            # 无法解析时间的条目在时间过滤时直接保留
-            return True
+            return False
         start_y = self._parse_year(start)
         end_y = self._parse_year(end)
         if start_y is not None and year < start_y:
@@ -403,13 +578,84 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             return "单类型合作（项目）"
         return "多类型合作"
 
+    @staticmethod
+    def _format_award_names(awards: list[Any]) -> str:
+        parts: list[str] = []
+        for award in awards:
+            if isinstance(award, dict):
+                name = str(award.get("name") or "").strip()
+                if not name:
+                    continue
+                level = str(award.get("level") or "").strip()
+                parts.append(f"{name}（{level}）" if level else name)
+            else:
+                text = str(award).strip()
+                if text:
+                    parts.append(text)
+        return "、".join(parts)
+
+    @classmethod
+    def _format_award_or_evaluation(cls, item: dict[str, Any]) -> str:
+        awards_text = cls._format_award_names(item.get("awards") or [])
+        evaluation = str(item.get("evaluation") or "").strip()
+        if awards_text and evaluation:
+            return f"奖项 {awards_text}；评价 {evaluation}"
+        if awards_text:
+            return f"奖项 {awards_text}"
+        if evaluation:
+            return f"评价 {evaluation}"
+        return "—"
+
+    @staticmethod
+    def _normalize_time_label(value: str | None) -> str:
+        """尽量把图内原始时间规整为可读形式；无法识别则原样返回。"""
+        text = str(value or "").strip()
+        if not text:
+            return "—"
+        digits = re.sub(r"\D", "", text)
+        if len(digits) == 8:
+            return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+        if len(digits) == 6:
+            return f"{digits[:4]}-{digits[4:6]}"
+        if len(digits) == 4:
+            return digits
+        return text
+
+    @classmethod
+    def _item_summary_rows(cls, items: list[dict[str, Any]]) -> list[dict[str, str]]:
+        """摘要：成果N=名称，下行完成时间/所属领域/奖项/评价。"""
+        rows: list[dict[str, str]] = []
+        for index, item in enumerate(items, start=1):
+            title = str(item.get("title") or item.get("id") or "—")
+            time_text = cls._normalize_time_label(item.get("time"))
+            raw_fields = item.get("fields") or []
+            if isinstance(raw_fields, str):
+                field_list = cls._coerce_field_values(raw_fields)
+            else:
+                field_list = [str(f) for f in raw_fields if f]
+                if len(field_list) == 1 and field_list[0].startswith("["):
+                    field_list = cls._coerce_field_values(field_list[0])
+            fields = "、".join(field_list) or "—"
+            award_or_eval = cls._format_award_or_evaluation(item)
+            rows.extend(
+                [
+                    {"label": f"成果{index}", "value": title},
+                    {"label": "完成时间", "value": time_text},
+                    {"label": "所属领域", "value": fields},
+                    {"label": "奖项/评价", "value": award_or_eval},
+                ]
+            )
+        return rows
+
     def _frontend_view(
         self,
         *,
         source_id: str,
         source_name: str,
+        source_provenance: dict[str, str],
         target_id: str,
         target_name: str,
+        target_provenance: dict[str, str],
         papers: int,
         patents: int,
         projects: int,
@@ -442,13 +688,16 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             {"label": "合作模式", "value": mode},
             {"label": "图空间", "value": space},
         ]
-        if items:
-            first = items[0]
+        item_rows = self._item_summary_rows(items)
+        if item_rows:
+            # 插在「成果分布」之后，保证摘要直接可见时间/领域/奖项或评价。
+            summary_rows[5:5] = item_rows
+        else:
             summary_rows.insert(
                 5,
                 {
-                    "label": "代表成果",
-                    "value": f"{first.get('title') or first.get('id')}（{first.get('time') or '时间未知'}）",
+                    "label": "合作成果标注",
+                    "value": "暂无共同成果，无法标注发表/完成时间、所属领域、奖项或评价",
                 },
             )
 
@@ -461,13 +710,13 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
 
         evidence = [
             "按论文、专利、项目邻居求交汇总共同成果。",
-            "回填成果标题、时间、领域与奖项字段（有则输出）。",
+            "所属领域取自成果 HAS_KEYWORD→Keyword（专利无边时回退节点 keywords 属性）。",
             f"规则归因：核心贡献={core}；合作模式={mode}。",
         ]
 
         rules = [
             {
-                "name": "成果关联规则",
+                "name": "成果关联与归因算法",
                 "type": "成果抽取规则",
                 "target": "AUTHORED_BY / INVENTED_BY / LEADS / HAS_PARTICIPANT",
                 "trigger": "输入两个专家节点",
@@ -484,7 +733,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "logic": "按类型计数；回填 title/time/fields/awards；生成 coreContribution 与 cooperationMode。",
                 "output": "coreContribution、cooperationMode",
                 "threshold": "有效成果字段尽量回填，缺失不强行编造",
-                "audit": "时间无法解析时，时间过滤放行该条目",
+                "audit": "有时间筛选时，完成时间缺失或无法解析的条目一律排除",
             },
             {
                 "name": "合作模式判定规则",
@@ -592,26 +841,33 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 {
                     "title": "专家 A",
                     "businessTable": "科技专家",
-                    "technicalTable": "Person",
+                    "technicalTable": source_provenance["sourceTable"],
                     "recordId": source_id,
-                    "fieldIdentifier": "sourceExpertId",
+                    "fieldIdentifier": source_provenance["sourceField"],
+                    "sourceField": source_provenance["sourceField"],
+                    "graphVid": source_provenance["graphVid"],
                     "summary": source_name,
                 },
                 {
                     "title": "专家 B",
                     "businessTable": "科技专家",
-                    "technicalTable": "Person",
+                    "technicalTable": target_provenance["sourceTable"],
                     "recordId": target_id,
-                    "fieldIdentifier": "targetExpertId",
+                    "fieldIdentifier": target_provenance["sourceField"],
+                    "sourceField": target_provenance["sourceField"],
+                    "graphVid": target_provenance["graphVid"],
                     "summary": target_name,
                 },
                 *[
                     {
                         "title": f"{it.get('type')} · {it.get('title') or it.get('id')}",
                         "businessTable": "合作成果",
-                        "technicalTable": "expert_cooperation_achievement.query",
+                        "technicalTable": (it.get("provenance") or {}).get("sourceTable") or "-",
                         "recordId": str(it.get("id") or ""),
-                        "fieldIdentifier": str(it.get("type") or ""),
+                        "fieldIdentifier": (it.get("provenance") or {}).get("sourceField") or "-",
+                        "sourceField": (it.get("provenance") or {}).get("sourceField") or "-",
+                        "graphVid": (it.get("provenance") or {}).get("graphVid")
+                        or str(it.get("id") or ""),
                         "summary": f"时间 {it.get('time') or '—'}；奖项 {len(it.get('awards') or [])}",
                     }
                     for it in items[:8]
@@ -623,7 +879,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             "summaryRows": summary_rows,
             "resultRows": result_rows,
             "evidence": evidence,
-            "rules": rules,
+            "rules": rules[:1],
             "entities": entities,
             "relations": relations,
             "graph": {"nodes": nodes, "edges": edges},

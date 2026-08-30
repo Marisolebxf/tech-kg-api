@@ -1,6 +1,8 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Query
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 
 from application.expert_direct_relation import ExpertDirectRelationApplication
 from biz.schema.expert_direct_relation import (
@@ -36,20 +38,33 @@ async def query_expert_direct_relation(
 
 @router.get("/query", response_model=ExpertDirectRelationQueryResponse)
 async def query_expert_direct_relation_get(
+    expertAId: Annotated[str, Query()],
     dataSource: Annotated[DataSource, Query()] = "all",
-    expertAId: Annotated[str | None, Query()] = None,
     expertBId: Annotated[str | None, Query()] = None,
     institution: Annotated[str | None, Query()] = None,
     startTime: Annotated[str | None, Query()] = None,
     endTime: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1)] = 10,
 ) -> dict[str, object]:
+    # GET 与 POST 共用同一套入参校验，避免绕过长度/异常字符/未来时间限制
+    try:
+        body = ExpertDirectRelationQueryRequest(
+            dataSource=dataSource,
+            expertAId=expertAId,
+            expertBId=expertBId,
+            institution=institution,
+            startTime=startTime,
+            endTime=endTime,
+            limit=limit,
+        )
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
     return await application.query(
-        data_source=dataSource,
-        expert_a_id=expertAId,
-        expert_b_id=expertBId,
-        institution=institution,
-        start_time=startTime,
-        end_time=endTime,
-        limit=min(limit, MAX_QUERY_LIMIT),
+        data_source=body.dataSource,
+        expert_a_id=body.expertAId,
+        expert_b_id=body.expertBId,
+        institution=body.institution,
+        start_time=body.startTime,
+        end_time=body.endTime,
+        limit=min(body.limit, MAX_QUERY_LIMIT),
     )

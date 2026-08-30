@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from biz.schemas.common import ApiResponse
 from infra.graph_db import TRSGraphClient, get_trs_graph_client
 from infra.graph_db.config import TRSGraphSettings
+from infra.graph_db.exceptions import GraphRequestError
 
 router = APIRouter(prefix="/graph-search", tags=["graph-search"])
 
@@ -529,9 +530,14 @@ async def get_filtered_subgraph(
             for vid in frontier:
                 # 每种边类型单独查，避免无关边占 limit 名额
                 for et in et_set:
-                    edge_list = client.get_node_edges(
-                        vid, direction=direction, edge_type=et, limit=limit
-                    )
+                    try:
+                        edge_list = client.get_node_edges(
+                            vid, direction=direction, edge_type=et, limit=limit
+                        )
+                    except GraphRequestError:
+                        # 该边类型在当前图空间不存在（trs traversal 400）等查询失败，
+                        # 跳过该边类型不阻断整个子图——避免因部分边类型缺失而 500 丢失 seed。
+                        continue
                     for e in edge_list:
                         edge_data = _edge_to_data(e)
                         edge_key = (

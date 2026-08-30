@@ -368,7 +368,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'enterprise_name', type: 'string', required: '否', maxLength: 64, description: '请输入企业名称（模糊筛选，可留空，最多 64 个字符，不能包含 !@#￥%& 等异常字符）' },
       { name: 'role_type', type: 'string', required: '否', maxLength: 64, description: '请输入角色筛选（如 总经理，可留空，最多 64 个字符）' },
       { name: 'industry', type: 'string', required: '否', maxLength: 64, description: '请输入行业方向筛选（可留空，最多 64 个字符，不能包含 !@#￥%& 等异常字符）' },
-      { name: 'key_tech_enterprise_only', type: 'select', required: '否', description: '只保留重点科技企业（默认是）；提交 是/否，后端按布尔处理', options: ['是', '否'] },
+      { name: 'key_tech_enterprise_only', type: 'boolean', defaultValue: 'true', required: '否', description: '只保留重点科技企业（默认 true）；提交布尔 true/false', options: ['true', 'false'] },
     ],
     responseFields: [
       { name: 'code', type: 'number', description: '服务状态码（200 成功）' },
@@ -429,8 +429,8 @@ export const serviceModules: ServiceModule[] = [
       { name: 'chain_node_id', type: 'string', required: '是', maxLength: 64, description: '请输入产业链节点标识（如 IC0007007），最多 64 个字符' },
       { name: 'top_n', type: 'number', required: '否', description: '返回事件数量，请输入 1-50 的整数，默认 10' },
       { name: 'event_type', type: 'string', required: '否', maxLength: 64, description: '事件类型筛选（financing/bankruptcy/bid/news/…，可留空，最多 64 个字符）' },
-      { name: 'time_range_start', type: 'month', required: '否', description: '起始年月（留空不筛）；与 time_range_end 合并为接口参数 time_range，格式 YYYY-YYYY（取年份）' },
-      { name: 'time_range_end', type: 'month', required: '否', description: '结束年月（留空不筛）；与 time_range_start 合并为接口参数 time_range，格式 YYYY-YYYY（取年份）' },
+      { name: 'time_range_start', type: 'month', required: '否', description: '起始年月（留空不筛）；与 time_range_end 合并为接口参数 time_range，格式 YYYY-MM~YYYY-MM（保留月份，后端按月筛）' },
+      { name: 'time_range_end', type: 'month', required: '否', description: '结束年月（留空不筛）；与 time_range_start 合并为接口参数 time_range，格式 YYYY-MM~YYYY-MM（保留月份，后端按月筛）' },
       { name: 'max_orgs', type: 'number', required: '否', description: '最多扫描企业数，取值 1-50，默认 20' },
     ],
     responseFields: [

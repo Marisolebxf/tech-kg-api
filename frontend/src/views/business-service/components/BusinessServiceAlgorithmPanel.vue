@@ -3059,7 +3059,28 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           </option>
         </select>
         <ElSelect
-          v-else-if="field.type === 'multi-select'"
+          v-else-if="field.name === 'achievementTypes'"
+          v-model="achievementTypeSelection"
+          class="cooperation-type-select"
+          :data-empty="achievementTypeSelection.length === 0"
+          multiple
+          collapse-tags
+          :max-collapse-tags="1"
+          clearable
+          placeholder="留空为全部类型"
+          aria-label="成果类型"
+          :title="field.description"
+          @update:model-value="clearParameterError(field.name)"
+        >
+          <ElOption
+            v-for="option in achievementTypeOptions"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </ElSelect>
+        <ElSelect
+          v-else-if="field.name === 'relationTypes'"
           v-model="panoramaRelationSelection"
           class="cooperation-type-select"
           :data-empty="panoramaRelationSelection.length === 0"
@@ -3074,26 +3095,6 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
         >
           <ElOption
             v-for="option in PANORAMA_RELATION_TYPES"
-            :key="option.value"
-            :label="option.label"
-            :value="option.value"
-          />
-        </ElSelect>
-        <ElSelect
-          v-else-if="field.name === 'achievementTypes' && isLiveCoop"
-          v-model="achievementTypeSelection"
-          class="cooperation-type-select"
-          :data-empty="achievementTypeSelection.length === 0"
-          multiple
-          collapse-tags
-          :max-collapse-tags="1"
-          clearable
-          placeholder="选择成果类型，如论文"
-          aria-label="成果类型"
-          @update:model-value="clearParameterError(field.name)"
-        >
-          <ElOption
-            v-for="option in achievementTypeOptions"
             :key="option.value"
             :label="option.label"
             :value="option.value"

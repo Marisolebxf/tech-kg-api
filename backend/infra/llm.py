@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 from openai import OpenAI
@@ -14,6 +15,7 @@ DEFAULT_MODEL = "glm-4.7-flash"
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 DEFAULT_MAX_TOKENS = 2048
 DEFAULT_TIMEOUT = 40
+JSON_MODES = ("json_schema", "json_object", "prompt_only")
 
 
 class LLMClient:
@@ -63,8 +65,10 @@ class LLMClient:
         schema: dict[str, Any],
         schema_name: str = "response",
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        modes: Sequence[str] | None = None,
+        timeout: float | None = None,
     ) -> str | None:
-        """优先 Structured Output / JSON Schema，失败再降级 json_object、纯 prompt。"""
+        """按 modes 顺序尝试；默认 json_schema → json_object → prompt_only。"""
         system = (
             "只返回符合给定 JSON Schema 的单个 JSON 对象。"
             "不要 Markdown，不要代码块，不要解释文字。\n"
@@ -74,45 +78,45 @@ class LLMClient:
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ]
-        attempts: list[tuple[str, dict[str, Any]]] = [
-            (
-                "json_schema",
-                {
-                    "messages": structured_messages,
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": schema_name,
-                            "strict": True,
-                            "schema": schema,
-                        },
+        mode_kwargs: dict[str, dict[str, Any]] = {
+            "json_schema": {
+                "messages": structured_messages,
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema_name,
+                        "strict": True,
+                        "schema": schema,
                     },
                 },
-            ),
-            (
-                "json_object",
-                {
-                    "messages": structured_messages,
-                    "response_format": {"type": "json_object"},
-                },
-            ),
-            (
-                "prompt_only",
-                {"messages": [{"role": "user", "content": prompt}]},
-            ),
-        ]
+            },
+            "json_object": {
+                "messages": structured_messages,
+                "response_format": {"type": "json_object"},
+            },
+            "prompt_only": {"messages": [{"role": "user", "content": prompt}]},
+        }
+        ordered = list(modes) if modes else list(JSON_MODES)
+        attempts = [(m, mode_kwargs[m]) for m in ordered if m in mode_kwargs]
+        if not attempts:
+            attempts = [(m, mode_kwargs[m]) for m in JSON_MODES]
+
+        first_mode = attempts[0][0]
         for mode, kwargs in attempts:
             try:
-                resp = self._client.chat.completions.create(
-                    model=self._model,
-                    max_tokens=max_tokens,
-                    extra_body={"thinking": {"type": "disabled"}},
+                create_kwargs: dict[str, Any] = {
+                    "model": self._model,
+                    "max_tokens": max_tokens,
+                    "extra_body": {"thinking": {"type": "disabled"}},
                     **kwargs,
-                )
+                }
+                if timeout is not None:
+                    create_kwargs["timeout"] = timeout
+                resp = self._client.chat.completions.create(**create_kwargs)
                 content = resp.choices[0].message.content or None
                 if not content:
                     continue
-                if mode != "json_schema":
+                if mode != first_mode:
                     logger.info("LLM synthesize_json 回退到 %s", mode)
                 return content
             except Exception as exc:  # noqa: BLE001

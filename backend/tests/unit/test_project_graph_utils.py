@@ -154,12 +154,23 @@ def test_build_output_count_props():
         patents_count=1,
         clinical_trials_count=None,
         products_count=0,
-        awards_count=0,
+        awards_count=2,
+        output_awards='[{"year": 2020, "title": "示范奖"}]',
         reports_count=1,
         other_outputs_count=0,
     )
     p = build_output_count_props(row)
     assert p["total_outputs"] == 5 and p["patents_count"] == 1 and p["clinical_trials_count"] == 0
+    assert p["awards_count"] == 2
+    assert '"示范奖"' in p["output_awards"]
+
+
+def test_to_output_awards_json_normalizes():
+    from script.project_graph_utils import to_output_awards_json
+
+    assert to_output_awards_json(None) == "[]"
+    assert to_output_awards_json([{"title": "A"}]) == '[{"title": "A"}]'
+    assert '"A"' in to_output_awards_json('[{"title":"A"}]')
 
 
 def test_confidence_from_method_rules():

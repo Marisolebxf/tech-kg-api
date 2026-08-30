@@ -891,7 +891,10 @@ def write_mysql() -> dict[str, int]:
                         "id": p.mysql_id,
                         "total": len(p.awards),
                         "award_count": len(p.awards),
-                        "awards": json.dumps(list(p.awards), ensure_ascii=False),
+                        "awards": json.dumps(
+                            [{"year": p.year, "title": name} for name in p.awards],
+                            ensure_ascii=False,
+                        ),
                         "now": now,
                     }
                     for p in projects()
@@ -1101,8 +1104,34 @@ def sync_graph_from_mysql() -> dict[str, int]:
                 "AUTHORED_BY",
                 f"paper:{row['paper_id']}:author:{row['scholar_id']}",
             )
+        for query in (
+            "ALTER TAG Project ADD (output_awards string)",
+            "CREATE TAG INDEX IF NOT EXISTS person_edu_inst_zh_idx ON Person(education_background_institution_zh(256))",
+            "CREATE TAG INDEX IF NOT EXISTS person_edu_inst_en_idx ON Person(education_background_institution_en(256))",
+            "REBUILD TAG INDEX person_edu_inst_zh_idx",
+            "REBUILD TAG INDEX person_edu_inst_en_idx",
+        ):
+            try:
+                graph.execute_write(query)
+            except Exception as exc:  # noqa: BLE001
+                print(f"skip ddl: {query[:80]} | {exc}")
+
         for row in project_rows:
             pvid = f"project_{row['id']}"
+            raw_awards = output_awards.get(row["id"])
+            if isinstance(raw_awards, (list, dict)):
+                awards_json = json.dumps(raw_awards, ensure_ascii=False)
+            else:
+                awards_json = str(raw_awards or "[]").strip() or "[]"
+            try:
+                parsed_awards = json.loads(awards_json)
+                awards_n = (
+                    len(parsed_awards)
+                    if isinstance(parsed_awards, list)
+                    else (1 if parsed_awards else 0)
+                )
+            except json.JSONDecodeError:
+                awards_n = 0 if awards_json in ("", "[]") else 1
             graph.merge_node(
                 ["Project"],
                 {"vid": pvid},
@@ -1110,9 +1139,8 @@ def sync_graph_from_mysql() -> dict[str, int]:
                     "title": row["title"],
                     "approval_year": str(row["approval_year"] or ""),
                     "abstract": row["abstract"] or "",
-                    "awards_count": 1
-                    if output_awards.get(row["id"]) not in (None, "", "[]")
-                    else 0,
+                    "awards_count": awards_n,
+                    "output_awards": awards_json,
                     "source_system": "gkx_element",
                     "source_table": "dwd_zh_project",
                     "source_record_id": row["id"],
@@ -1179,17 +1207,6 @@ def sync_graph_from_mysql() -> dict[str, int]:
                 f"coauthor:{row['scholar_id']}:{row['co_scholar_id']}",
                 {"co_paper_count": int(row["co_paper_count"] or 0)},
             )
-        for query in (
-            "CREATE TAG INDEX IF NOT EXISTS person_edu_inst_zh_idx ON Person(education_background_institution_zh(256))",
-            "CREATE TAG INDEX IF NOT EXISTS person_edu_inst_en_idx ON Person(education_background_institution_en(256))",
-            "REBUILD TAG INDEX person_edu_inst_zh_idx",
-            "REBUILD TAG INDEX person_edu_inst_en_idx",
-        ):
-            try:
-                graph.execute_write(query)
-            except Exception as exc:  # noqa: BLE001
-                # 索引长度/重建失败不影响 fixture 主体数据可用性
-                print(f"skip index ddl: {query[:80]} | {exc}")
     finally:
         close_trs_graph_client()
     return plan()["counts"]

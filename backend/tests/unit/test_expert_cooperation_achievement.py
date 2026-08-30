@@ -1,6 +1,7 @@
 # backend/tests/unit/test_expert_cooperation_achievement.py
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -333,6 +334,45 @@ def test_does_not_treat_project_level_as_award():
     assert resp["summary"]["projects"] == 1
     assert resp["summary"]["awards"] == 0
     assert resp["items"][0]["awards"] == []
+
+
+def test_project_awards_from_output_awards_prop():
+    """项目奖项/评价读 Project.output_awards（对应 dwd_zh_project_output.output_awards）。"""
+    awards_json = json.dumps(
+        [{"year": 2020, "title": "数字科技应用示范奖", "authors": ["甲", "乙"]}],
+        ensure_ascii=False,
+    )
+    nodes = {
+        "S1": _node("S1", {"name_zh": "甲"}),
+        "S2": _node("S2", {"name_zh": "乙"}),
+        "PR1": _node(
+            "PR1",
+            {
+                "title": "知识图谱关键项目",
+                "approval_year": "2024",
+                "output_awards": awards_json,
+                "awards_count": 1,
+            },
+        ),
+    }
+    edges = {
+        "S1": [_edge("LEADS", "PR1", "S1")],
+        "S2": [_edge("HAS_PARTICIPANT", "PR1", "S2")],
+    }
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
+    graph.get_node_edges = MagicMock(side_effect=lambda nid, **kw: edges.get(str(nid), []))
+    graph._settings = SimpleNamespace(space="dev")
+
+    resp = _svc(graph).query(source_expert_id="S1", target_expert_id="S2")
+    assert resp["summary"]["projects"] == 1
+    assert resp["summary"]["awards"] == 1
+    item = resp["items"][0]
+    assert item["type"] == "project"
+    assert item["awards"][0]["name"] == "数字科技应用示范奖"
+    assert item["awards"][0]["year"] == 2020
+    award_row = next(r for r in resp["summaryRows"] if r["label"] == "奖项/评价")
+    assert "数字科技应用示范奖" in award_row["value"]
 
 
 def test_fields_from_has_keyword_edges():

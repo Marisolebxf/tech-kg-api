@@ -423,6 +423,8 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             if not name:
                 return []
             year = val.get("year")
+            if year is None and val.get("award_date"):
+                year = self._parse_year(str(val.get("award_date")))
             return [
                 {
                     "name": str(name),
@@ -433,7 +435,12 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         text = str(val).strip()
         if not text:
             return []
-        # simple single award string
+        # 图上 Project.output_awards 存的是 JSON 字符串（来自 dwd_*_project_output）
+        if text[0] in "[{":
+            try:
+                return self._parse_award_value(json.loads(text))
+            except json.JSONDecodeError:
+                pass
         return [{"name": text, "level": "", "year": None}]
 
     @staticmethod

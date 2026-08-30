@@ -12,7 +12,11 @@ logger = logging.getLogger("script.project_edge_schema")
 GRAPH_SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 
 # Project 实体置信度字段（与 PROJECT_CONFIDENCE_FIELDS 对应的图属性）。
-PROJECT_TAG_ALIGNMENT_PROPS: dict[str, str] = {"confidence": "double"}
+# output_awards：dwd_*_project_output.output_awards 的 JSON 字符串，供合作成果「奖项/评价」读取。
+PROJECT_TAG_ALIGNMENT_PROPS: dict[str, str] = {
+    "confidence": "double",
+    "output_awards": "string",
+}
 
 # Properties required for match audit + org provenance on existing edges.
 EDGE_ALIGNMENT_PROPS: dict[str, dict[str, str]] = {

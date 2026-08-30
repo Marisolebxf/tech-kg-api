@@ -265,6 +265,17 @@ const queryKeyword = ref('paper_1002153099575427082')
 const queryRelationFilter = ref('全部关系')
 const queryEntityConfidence = ref('不限')
 const queryRelationConfidence = ref('不限')
+const queryFormRef = ref()
+const queryFormModel = computed(() => ({
+  queryKeyword: queryKeyword.value,
+  selectedQueryType: selectedQueryType.value,
+  queryRelationFilter: queryRelationFilter.value,
+  queryEntityConfidence: queryEntityConfidence.value,
+  queryRelationConfidence: queryRelationConfidence.value,
+}))
+const queryFormRules = {
+  queryKeyword: [{ required: true, message: '请输入实体名称或ID' }],
+}
 const queryApplied = ref(false)
 const processingDomainFilter = ref('全部业务域')
 const processingStatusFilter = ref('全部状态')
@@ -285,7 +296,11 @@ const queryDetailMode = ref<'summary' | 'entity' | 'relation' | 'provenance'>('s
  * 页面原来的“图谱范围”继续表示业务子图类型，
  * 不改变负责人要求保留的页面结构和样式。
  */
-const selectedGraphSpace = ref('dev')
+const defaultGraphSpace =
+  import.meta.env.VITE_GRAPH_SPACE?.trim()
+  || 'test'
+
+const selectedGraphSpace = ref(defaultGraphSpace)
 
 /**
  * 当前真实查询得到的图谱数据。
@@ -4343,21 +4358,23 @@ async function initializeGraphSpace(): Promise<void> {
       )
 
     if (
-      data.spaces.includes('dev')
+      data.spaces.includes(defaultGraphSpace)
     ) {
       selectedGraphSpace.value =
-        'dev'
+        defaultGraphSpace
 
       return
     }
 
     selectedGraphSpace.value =
-      data.spaces[0]
-      ?? 'dev'
+      data.spaces.includes('dev')
+        ? 'dev'
+        : data.spaces[0]
+          ?? defaultGraphSpace
   } catch {
-    // 加载失败时继续使用已验证过的默认图空间。
+    // 空间列表加载失败时继续使用构建环境指定的默认图空间。
     selectedGraphSpace.value =
-      'dev'
+      defaultGraphSpace
   }
 }
 
@@ -4388,19 +4405,17 @@ async function loadPlatformOverview(): Promise<void> {
 onMounted(async () => {
   /*
    * 首页数据和图空间互不依赖，可以并行加载。
-   * 默认图查询必须等图空间确定后再执行。
+   * 图谱查询仅在用户点击「查询图谱」按钮或回车时执行，不在挂载时自动触发。
    */
   await Promise.all([
     loadPlatformOverview(),
     initializeGraphSpace(),
   ])
-
-  if (queryKeyword.value.trim()) {
-    await handleQuery()
-  }
 })
 
 async function handleQuery(): Promise<void> {
+  const validationErrors = await queryFormRef.value?.validate()
+  if (validationErrors) return
   const keyword =
     queryKeyword.value.trim()
 
@@ -4827,41 +4842,36 @@ const pageMeta = computed(() => {
             }}
           </button>
         </div>
-        <div class="platform-form-grid">
-          <label class="platform-query-question">
-            <span>实体名称或ID</span>
+        <a-form ref="queryFormRef" :rules="queryFormRules" :model="queryFormModel" class="platform-form-grid" layout="vertical">
+          <a-form-item class="platform-query-question" field="queryKeyword" label="实体名称或ID" required>
             <input
               v-model="queryKeyword"
               type="search"
               placeholder="请输入实体名称或节点ID"
               @keyup.enter="handleQuery"
             />
-          </label>
-          <label>
-            <span>图谱范围</span>
-            <select v-model="selectedQueryType">
-              <option v-for="item in queryTypes" :key="item">{{ item }}</option>
-            </select>
-          </label>
-          <label>
-            <span>关系类型</span>
-            <select v-model="queryRelationFilter">
-              <option v-for="item in relationFilters" :key="item">{{ item }}</option>
-            </select>
-          </label>
-          <label>
-            <span>实体置信度</span>
-            <select v-model="queryEntityConfidence">
-              <option v-for="item in confidenceOptions" :key="`entity-${item}`">{{ item }}</option>
-            </select>
-          </label>
-          <label>
-            <span>关系置信度</span>
-            <select v-model="queryRelationConfidence">
-              <option v-for="item in confidenceOptions" :key="`relation-${item}`">{{ item }}</option>
-            </select>
-          </label>
-        </div>
+          </a-form-item>
+          <a-form-item class="platform-form-field" field="selectedQueryType" label="图谱范围">
+            <a-select v-model="selectedQueryType">
+              <a-option v-for="item in queryTypes" :key="item" :value="item">{{ item }}</a-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item class="platform-form-field" field="queryRelationFilter" label="关系类型">
+            <a-select v-model="queryRelationFilter">
+              <a-option v-for="item in relationFilters" :key="item" :value="item">{{ item }}</a-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item class="platform-form-field" field="queryEntityConfidence" label="实体置信度">
+            <a-select v-model="queryEntityConfidence">
+              <a-option v-for="item in confidenceOptions" :key="`entity-${item}`" :value="item">{{ item }}</a-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item class="platform-form-field" field="queryRelationConfidence" label="关系置信度">
+            <a-select v-model="queryRelationConfidence">
+              <a-option v-for="item in confidenceOptions" :key="`relation-${item}`" :value="item">{{ item }}</a-option>
+            </a-select>
+          </a-form-item>
+        </a-form>
       </section>
 
       <section class="kg-panel platform-query-graph">
@@ -8199,4 +8209,39 @@ print(response.json())</pre>
 .asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#165dff;font-family:inherit}
 .asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#165dff;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
 @media(max-width:760px){.asset-change-drawer{width:94vw}.asset-change-table table{min-width:700px}}
+</style>
+<style scoped>
+/* DESIGN_RULES: graph query branch only. */
+.platform-query{grid-template-columns:minmax(0,1fr) 340px;grid-template-rows:auto minmax(460px,1fr);gap:16px}
+.platform-query>.kg-panel{border-color:#e5e6eb!important;border-radius:6px!important;background:#fff!important;box-shadow:none!important}
+.platform-query .kg-panel__header{min-height:40px;padding:8px 16px;border-color:#e5e6eb;background:#f7f8fa}
+.platform-query .kg-panel__title{font-size:16px;line-height:24px;font-weight:600}
+.platform-query-form{overflow:hidden;border:1px solid #e5e6eb!important;border-radius:6px!important}.platform-query-form .kg-panel__header{box-sizing:border-box;height:40px;min-height:40px;padding:0 16px}
+.platform-query .platform-form-grid{grid-template-columns:repeat(4,minmax(0,1fr));column-gap:16px;row-gap:16px;padding:16px}
+.platform-query .platform-form-grid :deep(.arco-form-item){width:100%;min-width:0;margin-bottom:0}
+.platform-query .platform-form-field :deep(.arco-form-item-wrapper-col),.platform-query .platform-form-field :deep(.arco-form-item-content-wrapper),.platform-query .platform-form-field :deep(.arco-form-item-content){box-sizing:border-box;width:100%;min-width:0;max-width:100%;flex:1 1 0%}
+.platform-query .platform-form-field :deep(.arco-form-item-content-flex){display:flex;width:100%;min-width:0;max-width:100%;flex:1 1 0%}
+.platform-query .platform-form-grid label{display:grid;min-width:0;gap:8px}
+.platform-query .platform-form-field{display:flex;box-sizing:border-box;width:100%;min-width:0;margin:0!important;gap:0;flex-direction:column;justify-self:stretch}
+.platform-query .platform-form-grid :deep(.arco-form-item-label-col){margin-bottom:8px;padding:0;line-height:22px}
+.platform-query .platform-form-grid>label>span:first-child,.platform-query .platform-form-label{color:var(--text-secondary);font-size:14px;line-height:22px}
+.platform-query .platform-form-grid>label>input{height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px}
+.platform-query .platform-form-field :deep(.arco-select){display:block;box-sizing:border-box;width:100%!important;min-width:0;max-width:100%;flex:1 1 0%}
+.platform-query .platform-form-field :deep(.arco-select-view){display:flex!important;box-sizing:border-box;width:100%!important;min-width:0;max-width:100%;height:32px!important}
+.platform-query .platform-form-field :deep(.arco-select-view-input){box-sizing:border-box;height:100%!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background-color:transparent!important;box-shadow:none!important}
+.platform-query .platform-form-field :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;outline:0!important;opacity:0!important;pointer-events:none!important}
+.platform-query .platform-form-field :deep(.arco-select-view-value){width:0!important;min-width:0;overflow:hidden;line-height:30px;text-overflow:ellipsis;white-space:nowrap;flex:1 1 0%!important}
+.platform-query .kg-button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
+.platform-query-graph{min-height:480px}.platform-query>.platform-detail{width:auto;min-width:0}
+.platform-query .platform-graph-legend{gap:8px 16px;min-height:40px;padding:8px 16px;border-color:#e5e6eb;background:#fff}.platform-query .platform-graph-legend__item{gap:8px;font-size:14px;line-height:22px}.platform-query .platform-graph-legend__item i{box-shadow:none}
+.platform-query .platform-detail__tabs{gap:0;padding:4px;border-radius:4px;background:#f2f3f5}.platform-query .platform-detail__tabs button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}.platform-query .platform-detail__tabs button.is-active{background:#fff;color:#165dff;font-weight:500}
+.platform-query .platform-detail__body{padding:16px}.platform-query .platform-detail dt{font-size:12px;line-height:20px}.platform-query .platform-detail dd{font-size:14px;line-height:22px}
+.platform-query .platform-status{display:inline-flex;align-items:center;gap:6px;min-height:22px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.platform-query .platform-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
+.platform-query .platform-table th,.platform-query .platform-table td{height:40px;padding:0 16px;font-size:14px;line-height:22px}.platform-query .platform-table th{background:#f7f8fa;font-weight:500}
+.platform-query-empty{gap:8px;padding:24px 16px}.platform-query-empty strong{font-size:16px;line-height:24px;font-weight:600}.platform-query-empty p{font-size:14px;line-height:22px}
+@media(max-width:1100px){.platform-query{grid-template-columns:minmax(0,1fr)}.platform-query>.platform-detail{grid-column:1;grid-row:3;max-height:420px}.platform-query .platform-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.platform-query .platform-form-field :deep(.arco-select-view){box-sizing:border-box;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important}
+.platform-query .platform-form-field :deep(.arco-select-view:hover){border-color:#c9cdd4!important}
+.platform-query .platform-form-field :deep(.arco-select-view-focus){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+@media(max-width:768px){.platform-query .platform-form-grid{grid-template-columns:1fr}}
 </style>

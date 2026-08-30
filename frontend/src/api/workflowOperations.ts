@@ -79,6 +79,27 @@ export interface PipelineStepInfo {
   output?: Record<string, unknown>
   error?: string
   attempt?: number
+  /** 脚本运行期实际访问的资源（观测式溯源；旧执行记录无此字段）。 */
+  access?: AccessReport
+}
+
+/** 脚本数据访问溯源报告（后端 sdk/access.py 渲染）。各桶 key 以 `_` 开头的是元信息（_unparsed/_ngql）。 */
+export interface AccessEntry {
+  ops?: string[]
+  count?: number
+  statements?: number
+  calls?: number
+  failures?: number
+  queries?: string[]
+  last?: string
+}
+
+export interface AccessReport {
+  mysql?: Record<string, Record<string, AccessEntry>>
+  graph?: Record<string, Record<string, AccessEntry>>
+  milvus?: Record<string, AccessEntry>
+  llm?: Record<string, AccessEntry>
+  embedding?: Record<string, AccessEntry>
 }
 
 export interface SourceUpdate {

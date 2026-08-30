@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import sys
+import tempfile
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -143,6 +144,43 @@ def _strip_watermark_meta(output: Any) -> Any:
     return output
 
 
+def _merge_access(stdout_access: Any, sidecar_path: str | None) -> Any:
+    """sidecar 重放报告与 stdout 回传报告合并（sidecar 为准）。
+
+    fire-and-forget：任何异常仅告警并降级返回 stdout 报告，绝不阻塞 step。
+    """
+    try:
+        from sdk.access import merge_access_reports, report_from_sidecar
+
+        return merge_access_reports(report_from_sidecar(sidecar_path), stdout_access)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("合并 access 溯源报告失败: %s", exc)
+        return stdout_access
+
+
+def _log_failed_access(context: str, sidecar_path: str | None) -> None:
+    """失败/超时路径留账：把 sidecar 里的 access 报告打进日志（fire-and-forget）。"""
+    try:
+        from sdk.access import report_from_sidecar
+
+        report = report_from_sidecar(sidecar_path)
+        if report:
+            logger.warning(
+                "%s；access 溯源留账: %s", context, json.dumps(report, ensure_ascii=False)
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("读取 access sidecar 失败: %s", exc)
+
+
+def _cleanup_sidecar(sidecar_path: str | None) -> None:
+    if not sidecar_path:
+        return
+    try:
+        os.unlink(sidecar_path)
+    except OSError:
+        pass
+
+
 @activity.defn
 async def execute_kg_step(request: dict[str, Any]) -> dict[str, Any]:
     """Return lightweight bookkeeping results for built-in domain pipeline steps."""
@@ -186,16 +224,23 @@ import inspect
 import json
 import sys
 
+from kg_sdk import access_report, flush_access_sidecar
+
 path, function_name = sys.argv[1], sys.argv[2]
 spec = importlib.util.spec_from_file_location("uploaded_workflow", path)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 function = getattr(module, function_name)
 payload = json.loads(sys.stdin.read() or "{}")
-result = function(payload)
-if inspect.isawaitable(result):
-    result = asyncio.run(result)
-print(json.dumps(result, ensure_ascii=False))
+try:
+    result = function(payload)
+    if inspect.isawaitable(result):
+        result = asyncio.run(result)
+except BaseException:
+    flush_access_sidecar()
+    raise
+flush_access_sidecar()
+print(json.dumps({"result": result, "_access": access_report()}, ensure_ascii=False))
 """
     # 上传脚本需要 backend 模块（infra/dao/sdk）与凭据（MySQL/TRSGraph）。
     # worker 进程不 import infra，故这里显式加载 backend/.env，并把 backend + backend/sdk
@@ -210,10 +255,14 @@ print(json.dumps(result, ensure_ascii=False))
     pythonpath = os.pathsep.join(
         filter(None, [str(backend_dir), str(sdk_dir), str(script_path.parent)])
     )
+    sidecar = tempfile.NamedTemporaryFile(prefix="kg_access_", suffix=".jsonl", delete=False)
+    sidecar_path = sidecar.name
+    sidecar.close()
     sub_env = {
         **os.environ,
         "PYTHONPATH": pythonpath,
         "KG_SCRIPT_CTX": json.dumps(resolved, ensure_ascii=False),
+        "KG_ACCESS_LOG": sidecar_path,
     }
     process = await asyncio.create_subprocess_exec(
         sys.executable,
@@ -227,19 +276,32 @@ print(json.dumps(result, ensure_ascii=False))
         env=sub_env,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(json.dumps(payload, ensure_ascii=False).encode()),
-            timeout=float(request.get("timeoutSeconds", 60)),
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(json.dumps(payload, ensure_ascii=False).encode()),
+                timeout=float(request.get("timeoutSeconds", 60)),
+            )
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            _log_failed_access("上传脚本执行超时", sidecar_path)
+            raise RuntimeError("上传脚本执行超时") from None
+        if process.returncode != 0:
+            _log_failed_access(f"上传脚本退出码 {process.returncode}", sidecar_path)
+            raise RuntimeError(stderr.decode(errors="replace")[-4000:])
+        wrapped = json.loads(stdout.decode() or "null")
+        output = (
+            wrapped.get("result") if isinstance(wrapped, dict) and "result" in wrapped else wrapped
         )
-    except TimeoutError:
-        process.kill()
-        await process.wait()
-        raise RuntimeError("上传脚本执行超时") from None
-    if process.returncode != 0:
-        raise RuntimeError(stderr.decode(errors="replace")[-4000:])
-    output = json.loads(stdout.decode() or "null")
-    _write_watermark(request.get("definitionId"), "_default", output)
-    return _strip_watermark_meta(output)
+        stdout_access = wrapped.pop("_access", None) if isinstance(wrapped, dict) else None
+        access = _merge_access(stdout_access, sidecar_path)
+        _write_watermark(request.get("definitionId"), "_default", output)
+        output = _strip_watermark_meta(output)
+        if access is not None and isinstance(output, dict):
+            output = {**output, "access": access}
+        return output
+    finally:
+        _cleanup_sidecar(sidecar_path)
 
 
 def _retry_policy(config: dict[str, Any]) -> RetryPolicy:
@@ -287,7 +349,7 @@ import inspect
 import json
 import sys
 
-from kg_sdk import Context
+from kg_sdk import Context, access_report, flush_access_sidecar
 
 path, function_name = sys.argv[1], sys.argv[2]
 spec = importlib.util.spec_from_file_location("uploaded_step_module", path)
@@ -297,10 +359,15 @@ function = getattr(module, function_name)
 data = json.loads(sys.stdin.read() or "{}")
 payload = data.get("payload", {})
 ctx = Context(data.get("ctx", {}))
-result = function(payload, ctx)
-if inspect.isawaitable(result):
-    result = asyncio.run(result)
-print(json.dumps(result, ensure_ascii=False))
+try:
+    result = function(payload, ctx)
+    if inspect.isawaitable(result):
+        result = asyncio.run(result)
+except BaseException:
+    flush_access_sidecar()
+    raise
+flush_access_sidecar()
+print(json.dumps({"result": result, "_access": access_report()}, ensure_ascii=False))
 """
     backend_dir = Path(__file__).resolve().parents[1]
     load_dotenv(backend_dir / ".env")
@@ -308,10 +375,14 @@ print(json.dumps(result, ensure_ascii=False))
     pythonpath = os.pathsep.join(
         filter(None, [str(backend_dir), str(sdk_dir), str(script_path.parent)])
     )
+    sidecar = tempfile.NamedTemporaryFile(prefix="kg_access_", suffix=".jsonl", delete=False)
+    sidecar_path = sidecar.name
+    sidecar.close()
     sub_env = {
         **os.environ,
         "PYTHONPATH": pythonpath,
         "KG_SCRIPT_CTX": json.dumps(ctx, ensure_ascii=False),
+        "KG_ACCESS_LOG": sidecar_path,
     }
     process = await asyncio.create_subprocess_exec(
         sys.executable,
@@ -326,24 +397,42 @@ print(json.dumps(result, ensure_ascii=False))
     )
     stdin_data = json.dumps({"payload": payload, "ctx": ctx}, ensure_ascii=False).encode()
     try:
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(stdin_data),
-            timeout=float(request.get("timeoutSeconds", 600)),
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(stdin_data),
+                timeout=float(request.get("timeoutSeconds", 600)),
+            )
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            _log_failed_access(f"step {request['stepId']} 执行超时", sidecar_path)
+            raise RuntimeError(f"step {request['stepId']} 执行超时") from None
+        if process.returncode != 0:
+            _log_failed_access(
+                f"step {request['stepId']} 退出码 {process.returncode}", sidecar_path
+            )
+            raise RuntimeError(stderr.decode(errors="replace")[-4000:])
+        wrapped = json.loads(stdout.decode() or "null")
+        output = (
+            wrapped.get("result") if isinstance(wrapped, dict) and "result" in wrapped else wrapped
         )
-    except TimeoutError:
-        process.kill()
-        await process.wait()
-        raise RuntimeError(f"step {request['stepId']} 执行超时") from None
-    if process.returncode != 0:
-        raise RuntimeError(stderr.decode(errors="replace")[-4000:])
-    output = json.loads(stdout.decode() or "null")
-    _write_watermark(request.get("definitionId"), request["stepId"], output)
-    output = _strip_watermark_meta(output)
-    # post-process pendingReview: 入 ReviewCase 队列，pipeline 不暂停
-    pending = output.pop("pendingReview", []) if isinstance(output, dict) else []
-    if pending:
-        _enqueue_pending_review(request, pending, attempt)
-    return {"step": request["stepId"], "status": "COMPLETED", "output": output, "attempt": attempt}
+        stdout_access = wrapped.pop("_access", None) if isinstance(wrapped, dict) else None
+        access = _merge_access(stdout_access, sidecar_path)
+        _write_watermark(request.get("definitionId"), request["stepId"], output)
+        output = _strip_watermark_meta(output)
+        # post-process pendingReview: 入 ReviewCase 队列，pipeline 不暂停
+        pending = output.pop("pendingReview", []) if isinstance(output, dict) else []
+        if pending:
+            _enqueue_pending_review(request, pending, attempt)
+        return {
+            "step": request["stepId"],
+            "status": "COMPLETED",
+            "output": output,
+            "attempt": attempt,
+            "access": access,
+        }
+    finally:
+        _cleanup_sidecar(sidecar_path)
 
 
 def _enqueue_pending_review(request: dict[str, Any], pending: list[Any], attempt: int) -> None:
@@ -630,6 +719,7 @@ class StepPipelineWorkflow:
                     "status": "COMPLETED",
                     "output": result["output"],
                     "attempt": result["attempt"],
+                    "access": result.get("access"),
                 }
                 prev_outputs[step["id"]] = result["output"]
             except Exception as exc:

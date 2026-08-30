@@ -10,14 +10,12 @@ import {
   getScriptContent,
   getSchemaOverview,
   listAllSchemas,
-  listSourceTables,
   schemaErrorMessage,
   verifyAndSaveScript,
   type EntitySchemaCreatePayload,
   type RelationSchemaCreatePayload,
   type SchemaDefinition,
   type SchemaOverview,
-  type SourceTable,
 } from '../../api/schemaManagement'
 import { listLlmConfigs, type LlmConfig } from '../../api/llmConfig'
 import { useToast } from '../../composables/use-toast'
@@ -37,7 +35,6 @@ type CreateForm = {
   sourceEntityId: string
   targetEntityId: string
   properties: PropertyRow[]
-  sourceTables: string[]
   llmConfigId: string
 }
 
@@ -82,7 +79,6 @@ const modalOpen = ref(false)
 const createForm = ref<CreateForm>(emptyCreateForm())
 const creating = ref(false)
 const confirming = ref(false)
-const sourceTables = ref<SourceTable[]>([])
 const llmConfigs = ref<LlmConfig[]>([])
 const scriptByRow = ref<Record<string, { name: string; workflowDefinitionId: string | null }>>({})
 
@@ -115,7 +111,6 @@ function emptyCreateForm(): CreateForm {
     sourceEntityId: '',
     targetEntityId: '',
     properties: [{ name: '', dataType: 'string', length: 64, required: true }],
-    sourceTables: [],
     llmConfigId: '',
   }
 }
@@ -230,14 +225,9 @@ async function loadSchemas() {
   applyDefinitions(definitions)
 }
 
-async function loadSourceTablesAndLlmConfigs() {
+async function loadLlmConfigs() {
   try {
-    const [tables, configs] = await Promise.all([
-      listSourceTables(),
-      listLlmConfigs(currentUserId),
-    ])
-    sourceTables.value = tables
-    llmConfigs.value = configs
+    llmConfigs.value = await listLlmConfigs(currentUserId)
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
   }
@@ -247,16 +237,6 @@ function openCreate() {
   createForm.value = emptyCreateForm()
   confirming.value = false
   modalOpen.value = true
-}
-
-function toggleSourceTable(name: string) {
-  const list = createForm.value.sourceTables
-  const index = list.indexOf(name)
-  if (index >= 0) {
-    list.splice(index, 1)
-  } else {
-    list.push(name)
-  }
 }
 
 function schemaKey(name: string) {
@@ -317,7 +297,6 @@ async function saveItem() {
         targetExpression: target?.name || '',
         relationCategory: activeTab.value === '事实关系' ? 'fact' : 'inferred',
         properties,
-        mappings: f.sourceTables,
         llmConfigId,
       }
       const result = await createRelationSchema(payload, currentUserId)
@@ -330,7 +309,6 @@ async function saveItem() {
         description: f.description || '',
         identityKey: '',
         properties,
-        mappings: f.sourceTables,
         isCore: false,
         llmConfigId,
       }
@@ -440,7 +418,7 @@ async function openViewModal(rowId: string, rowName: string) {
 onMounted(async () => {
   try {
     await loadSchemas()
-    await loadSourceTablesAndLlmConfigs()
+    await loadLlmConfigs()
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
   }
@@ -518,18 +496,6 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
               <span>建模说明</span>
               <textarea v-model="createForm.description" rows="2"></textarea>
             </label>
-
-            <div class="create-field create-field--full">
-              <span>来源表（科技要素库，可多选）<small class="source-table-count">已选 {{ createForm.sourceTables.length }} / {{ sourceTables.length }} 张</small></span>
-              <div class="source-table-list">
-                <label v-for="t in sourceTables" :key="t.name" class="source-table-item">
-                  <input type="checkbox" :checked="createForm.sourceTables.includes(t.name)" @change="toggleSourceTable(t.name)" />
-                  <code>{{ t.name }}</code>
-                  <span v-if="t.comment" class="source-table-comment">{{ t.comment }}</span>
-                </label>
-                <span v-if="sourceTables.length === 0" class="source-table-empty">暂无可选表</span>
-              </div>
-            </div>
 
             <label class="create-field create-field--full">
               <span>默认 LLM 配置（作业启动时默认使用，可临时覆盖）</span>
@@ -771,13 +737,4 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .create-ddl__label{font-size:11px;color:#74849b}
 .create-ddl__pre{margin:0;padding:10px 12px;max-height:140px;overflow:auto;background:#0d1117;border-radius:6px;color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:18px;white-space:pre-wrap;word-break:break-all}
 .create-ddl__confirm{margin:6px 0 0;color:#b54708;font-size:11px;line-height:16px}
-.source-table-count{float:right;color:#165dff;font-size:10px;font-weight:400}
-.source-table-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:6px;max-height:280px;overflow:auto;padding:8px;border:1px solid #e3ebf6;border-radius:4px;background:#fafcff}
-.source-table-item{display:flex;align-items:center;gap:6px;min-width:0;padding:6px 8px;border:1px solid #e3ebf6;border-radius:5px;font-size:11px;color:#4e5969;background:#fff;cursor:pointer;transition:border-color .15s,box-shadow .15s}
-.source-table-item:hover{border-color:#165dff;box-shadow:0 2px 6px rgba(22,93,255,.12)}
-.source-table-item:has(input:checked){border-color:#165dff;background:#eef5ff}
-.source-table-item input{flex:0 0 auto;margin:0}
-.source-table-item code{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 5px;border-radius:3px;background:#edf4ff;color:#165dff;font-size:10px}
-.source-table-comment{flex:1;min-width:0;color:#8191aa;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.source-table-empty{grid-column:1/-1;padding:12px;text-align:center;color:#8191aa;font-size:11px}
 </style>

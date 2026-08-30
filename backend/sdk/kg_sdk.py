@@ -19,6 +19,11 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+try:  # sdk.access：子进程按顶层模块导入（PYTHONPATH 含 backend/sdk），worker/测试按包导入
+    from . import access as _access
+except ImportError:  # pragma: no cover - 取决于导入方式
+    import access as _access
+
 _UNSET = object()
 
 
@@ -77,13 +82,15 @@ class Context:
             else:
                 from infra.mysql import MySQLClient
 
-                self._mysql = MySQLClient(
+                client = MySQLClient(
                     host=params.get("host"),
                     port=int(params.get("port", 3306)),
                     database=params.get("database") or None,
                     username=params.get("username"),
                     password=params.get("password", ""),
                 )
+                # 观测式溯源：before_cursor_execute 钩子记录脚本实际访问的表
+                self._mysql = _access.observe_mysql_client(client, params.get("database"))
         return self._mysql
 
     @property
@@ -105,6 +112,7 @@ class Context:
                 )
                 self._graph = TRSGraphClient(settings)
                 self._graph.connect()
+                self._graph = _access.ObservedGraphClient(self._graph)
         return self._graph
 
     @property
@@ -124,7 +132,7 @@ class Context:
                 }
                 if params.get("token"):
                     kwargs["token"] = params["token"]
-                self._milvus = MilvusClient(**kwargs)
+                self._milvus = _access.ObservedMilvusClient(MilvusClient(**kwargs))
         return self._milvus
 
     @property
@@ -142,6 +150,7 @@ class Context:
                     base_url=params.get("base_url"),
                     model=params.get("model"),
                 )
+                self._llm = _access.ObservedLLMClient(self._llm)
         return self._llm
 
     @property
@@ -160,6 +169,7 @@ class Context:
                     model=params.get("model"),
                     dimensions=params.get("dimensions"),
                 )
+                self._embedding = _access.ObservedEmbeddingClient(self._embedding)
         return self._embedding
 
     def to_dict(self) -> dict[str, Any]:
@@ -193,3 +203,8 @@ def reset_current_context() -> None:
     """测试用：清缓存。"""
     global _current
     _current = _UNSET
+
+
+# 溯源采集（runner 子进程用：`from kg_sdk import access_report, flush_access_sidecar`）
+access_report = _access.access_report
+flush_access_sidecar = _access.flush_access_sidecar

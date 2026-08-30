@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -158,18 +157,6 @@ class SchemaManagementService:
             "constraintRules": stats["constraint_count"],
             "sourceMappings": stats["mapping_count"],
         }
-
-    def list_source_tables(self) -> list[dict[str, Any]]:
-        """列出科技要素库（当前连接库）的全部基础表，供 Schema 创建时勾选来源表。"""
-        rows = self._session.execute(
-            text(
-                "SELECT TABLE_NAME AS name, TABLE_COMMENT AS comment "
-                "FROM information_schema.tables "
-                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' "
-                "ORDER BY TABLE_NAME"
-            )
-        ).all()
-        return [{"name": row.name, "comment": row.comment or ""} for row in rows]
 
     def list_schemas(
         self,

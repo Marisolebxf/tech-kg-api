@@ -4,8 +4,10 @@ import { useRouter } from 'vue-router'
 import {
   getTaskOverview,
   listExecutions,
+  type AccessReport,
   type WorkflowExecution,
 } from '../../api/workflowOperations'
+import { accessChips, mergeAccessReports } from '../../utils/accessReport'
 import {
   listAllSchemas,
   schemaErrorMessage,
@@ -28,6 +30,26 @@ const launchOpen = ref(false)
 const selectedExecution = ref<WorkflowExecution | null>(null)
 
 const jobSchemas = computed(() => schemas.value.filter((s) => s.script?.workflowDefinitionId))
+
+/** execution 级聚合：单脚本直接读 output.access；多步 pipeline 合并各 step 的 access。 */
+const executionAccess = computed<AccessReport | undefined>(() => {
+  const output = selectedExecution.value?.output
+  if (!output || typeof output !== 'object') return undefined
+  const record = output as Record<string, unknown>
+  if (record.access && typeof record.access === 'object') {
+    return record.access as AccessReport
+  }
+  const steps = record.steps
+  if (steps && typeof steps === 'object') {
+    return mergeAccessReports(
+      Object.values(steps as Record<string, { access?: AccessReport }>).map(
+        (step) => step?.access,
+      ),
+    )
+  }
+  return undefined
+})
+const executionAccessChips = computed(() => accessChips(executionAccess.value))
 
 async function loadData() {
   loading.value = true
@@ -144,6 +166,18 @@ onMounted(loadData)
             <strong>输出</strong>
             <pre>{{ typeof selectedExecution.output === 'string' ? selectedExecution.output : JSON.stringify(selectedExecution.output, null, 2) }}</pre>
           </div>
+          <div v-if="executionAccessChips.length" class="gb-access">
+            <strong>实际访问资源 <span>观测式溯源</span></strong>
+            <div class="access-chips">
+              <span v-for="chip in executionAccessChips" :key="`${chip.group}:${chip.name}`" class="access-chip">
+                <em>{{ chip.group }}</em>
+                <code>{{ chip.name }}</code>
+                <b v-if="chip.read" class="op-read">R</b>
+                <b v-if="chip.write" class="op-write">W</b>
+                <small>{{ chip.detail }}</small>
+              </span>
+            </div>
+          </div>
           <div class="gb-detail-actions">
             <button type="button" class="primary" @click="openFlowDetail(selectedExecution.taskId)">查看流程详情 →</button>
           </div>
@@ -206,6 +240,17 @@ onMounted(loadData)
 .gb-logs{display:flex;flex-direction:column;gap:5px}
 .gb-logs strong{font-size:12px;color:#4e5969}
 .gb-logs pre{margin:0;max-height:200px;overflow:auto;padding:10px;background:#0d1117;border-radius:6px;color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:17px;white-space:pre-wrap}
+.gb-access{display:flex;flex-direction:column;gap:7px}
+.gb-access strong{display:flex;align-items:center;gap:7px;font-size:12px;color:#4e5969}
+.gb-access strong span{padding:2px 6px;border-radius:4px;background:#e5f6ee;color:#067647;font-size:9px;font-weight:500}
+.access-chips{display:flex;flex-wrap:wrap;gap:7px}
+.access-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border:1px solid #cfe0d8;border-radius:6px;background:#fff;font-size:11px;color:#344763}
+.access-chip em{color:#067647;font-size:10px;font-style:normal;white-space:nowrap}
+.access-chip code{padding:1px 5px;border-radius:3px;background:#edf4ff;color:#165dff;font-size:10px}
+.access-chip b{display:grid;place-items:center;min-width:16px;height:16px;border-radius:4px;color:#fff;font-size:10px;font-style:normal}
+.access-chip b.op-read{background:#175cd3}
+.access-chip b.op-write{background:#f79009}
+.access-chip small{color:#8191aa;font-size:10px;white-space:nowrap}
 .gb-detail-actions{display:flex;justify-content:flex-end}
 .gb-detail-actions button{height:32px;padding:0 14px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:12px;cursor:pointer}
 .muted{color:#8191aa;font-size:11px}

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getTask, retryTask, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch } from '../../api/workflowOperations'
+import { getTask, retryTask, type AccessReport, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch } from '../../api/workflowOperations'
+import { accessChips } from '../../utils/accessReport'
 
 type StepStatus = '成功' | '运行中' | '需人工处理' | '待执行'
 type RiskLevel = '低风险' | '中风险' | '高风险'
@@ -19,6 +20,7 @@ type Step = {
   engine: string
   input?: unknown
   output?: unknown
+  access?: AccessReport
 }
 
 const route = useRoute()
@@ -136,6 +138,7 @@ function buildPipelineSteps(): Step[] {
     description: info.error || `kg.custom.steps · ${info.status}`,
     engine: 'kg.custom.steps',
     output: info.output,
+    access: info.access,
   }))
 }
 
@@ -276,6 +279,7 @@ function formatIo(value: unknown): string {
 }
 
 const hasRealIo = computed(() => !!(selectedStep.value?.input || selectedStep.value?.output))
+const stepAccessChips = computed(() => accessChips(selectedStep.value?.access))
 
 async function loadTaskDetail() {
   try {
@@ -339,6 +343,18 @@ onMounted(loadTaskDetail)
         </div>
 
         <div v-else-if="activeTab === 'io'" class="io-content">
+          <section v-if="stepAccessChips.length" class="access-card">
+            <h3>实际访问资源 <span>观测式溯源</span></h3>
+            <div class="access-chips">
+              <span v-for="chip in stepAccessChips" :key="`${chip.group}:${chip.name}`" class="access-chip">
+                <em>{{ chip.group }}</em>
+                <code>{{ chip.name }}</code>
+                <b v-if="chip.read" class="op-read">R</b>
+                <b v-if="chip.write" class="op-write">W</b>
+                <small>{{ chip.detail }}</small>
+              </span>
+            </div>
+          </section>
           <section v-if="hasRealIo" class="real-io-card"><h3>阶段真实输入输出 <span>脚本上报</span></h3><div v-if="selectedStep.input" class="real-io-block"><strong>输入</strong><pre>{{ formatIo(selectedStep.input) }}</pre></div><div v-if="selectedStep.output" class="real-io-block"><strong>输出</strong><pre>{{ formatIo(selectedStep.output) }}</pre></div></section>
           <section><h3>输入数据</h3><template v-if="isAiStep"><div class="sample-text"><span>实际任务输入 · {{ processingInstance?.sourceTable }} / {{ processingInstance?.sourceRecordId }}</span><p>“{{ processingInstance?.objectName }}，来源记录包含主体、机构、成果与关系证据，要求按当前 Schema 抽取候选结果……”</p></div></template><template v-else><pre>{
   "task_id": "{{ taskId }}",
@@ -378,6 +394,18 @@ onMounted(loadTaskDetail)
 .process-step.has-review:not(.is-需人工处理){border-color:#f4d39b;background:#fffbf2}.process-step.has-review:not(.is-需人工处理)>small{color:#b54708}
 .success-text{color:#067647}.prompt-card,.quality-strategy{grid-column:1/-1;overflow:hidden}.prompt-card h3,.quality-strategy h3{display:flex;align-items:center;justify-content:space-between}.prompt-card h3 span{padding:2px 6px;border-radius:4px;background:#eee8ff;color:#6941c6;font-size:8px;font-weight:500}.prompt-card pre,.quality-strategy>pre{margin:0;padding:13px 15px;background:#201a32;color:#eee9ff;font:10px/18px Consolas,monospace;white-space:pre-wrap}.quality-strategy table{width:100%;border-collapse:collapse;font-size:9px}.quality-strategy th,.quality-strategy td{padding:9px 11px;border-bottom:1px solid #e5ecf5;text-align:left;vertical-align:top}.quality-strategy th{background:#f5f8fc;color:#66758f}.quality-strategy td span.ai{display:inline-flex;padding:2px 5px;border-radius:4px;background:#eee8ff;color:#6941c6}.quality-ai-note{display:flex;align-items:center;gap:9px;margin:10px;padding:10px;border:1px solid #d9ccfa;border-radius:6px;background:#fbfaff}.quality-ai-note>b{display:grid;place-items:center;width:26px;height:26px;border-radius:5px;background:#7f56d9;color:#fff;font-size:9px}.quality-ai-note span{display:grid;gap:2px}.quality-ai-note strong{font-size:10px}.quality-ai-note em{color:#766b91;font-size:8px;font-style:normal}.issue-list strong.safe{color:#067647}.lineage span small{display:block;margin-top:4px;color:#7d899b;font-size:8px}
 .lineage-compare>header{display:flex;align-items:center;justify-content:space-between;padding:11px 13px;border-bottom:1px solid #e4ecf6;background:#fbfdff}.lineage-compare>header h3{padding:0;border:0}.lineage-compare>header p{margin:3px 0 0;color:#7a879a;font-size:9px}.lineage-compare>header>span{padding:3px 7px;border-radius:999px;background:#eaf2ff;color:#165dff;font-size:9px}.lineage-compare code{padding:2px 5px;border-radius:4px;background:#f1f5fa;color:#344f73;font:9px Consolas,monospace}.lineage-compare .raw-value{max-width:360px;color:#354760;line-height:17px;white-space:normal}
+
+.access-card{grid-column:1/-1;overflow:hidden;border:1px solid #cfe0d8;border-radius:7px;background:#f7fdf9}
+.access-card h3{display:flex;align-items:center;justify-content:space-between}
+.access-card h3 span{padding:2px 6px;border-radius:4px;background:#e5f6ee;color:#067647;font-size:8px;font-weight:500}
+.access-chips{display:flex;flex-wrap:wrap;gap:7px;padding:13px}
+.access-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border:1px solid #cfe0d8;border-radius:6px;background:#fff;font-size:10px;color:#344763}
+.access-chip em{color:#067647;font-size:9px;font-style:normal;white-space:nowrap}
+.access-chip code{padding:1px 5px;border-radius:3px;background:#edf4ff;color:#165dff;font-size:10px}
+.access-chip b{display:grid;place-items:center;min-width:15px;height:15px;border-radius:4px;color:#fff;font-size:9px;font-style:normal}
+.access-chip b.op-read{background:#175cd3}
+.access-chip b.op-write{background:#f79009}
+.access-chip small{color:#8191aa;font-size:9px;white-space:nowrap}
 
 .pipeline-panel{margin-bottom:12px;padding:14px 16px;border:1px solid #c9dcf7;border-radius:9px;background:#fff}
 .pipeline-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}

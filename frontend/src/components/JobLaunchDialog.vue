@@ -126,8 +126,7 @@ async function submit() {
             <option value="">请选择</option>
             <option v-for="s in schemas" :key="s.id" :value="s.id">{{ s.label }}（{{ s.name }}）</option>
           </select>
-          <small v-if="selectedSchema">来源表：{{ selectedSchema.mappings.join('、') || '未绑定' }}</small>
-          <small v-else-if="!schemas.length" class="muted">暂无已注册工作流的作业（请在 Schema 管理上传脚本）</small>
+          <small v-if="!schemas.length" class="muted">暂无已注册工作流的作业（请在 Schema 管理上传脚本）</small>
         </label>
 
         <label class="job-field">

@@ -286,6 +286,7 @@ services:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
         VITE_BASE: ${VITE_BASE:-./}
         VITE_API_BASE: ${VITE_API_BASE:-/api}
+        VITE_GRAPH_SPACE: ${VITE_GRAPH_SPACE:-test}
     container_name: tech-kg-web
     ports:
       - "8088:80"

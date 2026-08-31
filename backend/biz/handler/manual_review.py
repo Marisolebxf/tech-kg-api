@@ -155,6 +155,15 @@ async def production_queue(
     identity: ReviewIdentityDep,
     queue: str | None = None,
     status: str | None = None,
+    status_group: str | None = Query(
+        None,
+        alias="statusGroup",
+        description="状态分组：pending=待处理（非终态）；processed=已处理（RESOLVED/REJECTED/CANCELLED/EXPIRED）",
+    ),
+    kind: str | None = Query(
+        None,
+        description="对象种类：entity=只看实体；relation=只看关系；不传=都看",
+    ),
     risk: str | None = None,
     domain: str | None = None,
     template_id: str | None = Query(None, alias="templateId"),

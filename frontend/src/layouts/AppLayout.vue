@@ -23,6 +23,7 @@ import accountLockIcon from "../assets/icons/account-menu/icon-lock.svg";
 import accountLogoutIcon from "../assets/icons/account-menu/icon-logout.svg";
 import accountMemberStar from "../assets/icons/account-menu/icon-member-star.svg";
 import iconMessage from "../assets/icons/icon-message.svg";
+import iconBook from "../assets/icons/icon-book.svg";
 import navOverview from "../assets/icons/nav-overview.svg";
 import navGraph from "../assets/icons/nav-graph.svg";
 import navSchema from "../assets/icons/nav-schema.svg";
@@ -37,6 +38,8 @@ import logoKg from "../assets/images/logo-kg.png";
 
 const route = useRoute();
 const router = useRouter();
+// BASE_URL 为 './' 或 '/xxx/'（都以 / 结尾）；扁平单段路由下相对解析恒指向站点根下的 docs/
+const docsHref = `${import.meta.env.BASE_URL}docs/`;
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const currentUser = computed(() => authStore.profile?.user);
@@ -648,6 +651,16 @@ onBeforeUnmount(() => {
             <span v-if="isMobile">目录</span>
           </button>
           <div class="app-top-actions__right">
+            <a
+              class="app-docs-link"
+              :href="docsHref"
+              target="_blank"
+              rel="noopener"
+              aria-label="打开文档中心（新标签页）"
+              title="文档中心"
+            >
+              <img :src="iconBook" alt="" aria-hidden="true" />
+            </a>
             <div
               class="app-alert-entry"
               @mouseenter="alertPreviewOpen = !alertDrawerOpen"
@@ -1564,6 +1577,24 @@ onBeforeUnmount(() => {
   position: relative;
   z-index: 38;
   display: inline-flex;
+}
+.app-docs-link {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  color: #86909c;
+  cursor: pointer;
+}
+.app-docs-link:hover {
+  background: rgba(255, 255, 255, 0.48);
+}
+.app-docs-link > img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  opacity: 0.72;
 }
 .app-alert-bell {
   position: relative;

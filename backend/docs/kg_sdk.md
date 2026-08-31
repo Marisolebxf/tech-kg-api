@@ -1,5 +1,6 @@
 # 抽取脚本 SDK（`kg_sdk`）
 
+> 本文档的在线版本在平台文档中心（部署后访问 `/docs/sdk/`，VitePress，源 `frontend/docsite/sdk/`）。
 > 面向在平台上编写"实体/关系抽取脚本"的开发者。脚本运行时由平台注入一个 `Context` 对象，
 > 里面提供已配置好的 MySQL / trs-graph / Milvus / LLM / embedding 客户端，以及一个带
 > `watermark`（上次成功运行时间）的 `config`，支撑增量抽取。

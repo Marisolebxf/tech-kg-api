@@ -27,17 +27,19 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      # === 与 docker-compose.yml api.environment 完全一致，仅 TRS_GRAPH_SPACE 锁死 dev2 ===
-      TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://trs-graph-service:8090}
+      # === 与 docker-compose.yml api.environment 基本一致；差异：TRS_GRAPH_SPACE 锁死 dev2，
+      # 且 MySQL/trs-graph 默认走 host.docker.internal（dev2 不在生产 engine/trs-graph 网络上，
+      # 容器名 mysql/trs-graph-service 在本栈解析不到；宿主机已发布 3306/8090 端口）===
+      TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
       TRS_GRAPH_SPACE: dev2
       TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
       TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
-      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_HOST: ${MYSQL_HOST:-host.docker.internal}
       MYSQL_PORT: ${MYSQL_PORT:-3306}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-gkx_element}
       MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
-      PAPER_COOP_MYSQL_HOST: ${PAPER_COOP_MYSQL_HOST:-${MYSQL_HOST:-mysql}}
+      PAPER_COOP_MYSQL_HOST: ${PAPER_COOP_MYSQL_HOST:-${MYSQL_HOST:-host.docker.internal}}
       PAPER_COOP_MYSQL_PORT: ${PAPER_COOP_MYSQL_PORT:-${MYSQL_PORT:-3306}}
       PAPER_COOP_MYSQL_DATABASE: ${PAPER_COOP_MYSQL_DATABASE:-gkx_local}
       PAPER_COOP_MYSQL_USERNAME: ${PAPER_COOP_MYSQL_USERNAME:-${MYSQL_USERNAME:-root}}
@@ -109,14 +111,14 @@ services:
       AUTH_AUDIT_MAX_ITEMS: ${AUTH_AUDIT_MAX_ITEMS:-200}
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-true}
       AUTH_COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-lax}
-      AUTH_COOKIE_PATH: ${AUTH_COOKIE_PATH:-/bkg_zp}
-      AUTH_FRONTEND_URL: ${AUTH_FRONTEND_URL:-https://edu.itic-sci.com/bkg_zp}
+      AUTH_COOKIE_PATH: ${AUTH_COOKIE_PATH:-/bkg_zpt}
+      AUTH_FRONTEND_URL: ${AUTH_FRONTEND_URL:-https://edu.itic-sci.com/bkg_zpt}
       USER_CENTER_SSO_LOGIN_URL: ${USER_CENTER_SSO_LOGIN_URL:-https://edu.itic-sci.com/uc/sso/login}
       USER_CENTER_OAUTH_BASE_URL: ${USER_CENTER_OAUTH_BASE_URL:-https://edu.itic-sci.com/uc/admin-api/system/oauth2}
       USER_CENTER_ACCOUNT_URL: ${USER_CENTER_ACCOUNT_URL:-https://edu.itic-sci.com/uc/admin/login?redirect=/index}
       USER_CENTER_CLIENT_ID: ${USER_CENTER_CLIENT_ID:-}
       USER_CENTER_CLIENT_SECRET: ${USER_CENTER_CLIENT_SECRET:-}
-      USER_CENTER_REDIRECT_URI: ${USER_CENTER_REDIRECT_URI:-https://edu.itic-sci.com/bkg_zp/api/v1/auth/callback}
+      USER_CENTER_REDIRECT_URI: ${USER_CENTER_REDIRECT_URI:-https://edu.itic-sci.com/bkg_zpt/api/v1/auth/callback}
       USER_CENTER_SCOPE: ${USER_CENTER_SCOPE:-}
       REDIS_URL: ${REDIS_URL:-redis://auth-redis:6379/0}
     extra_hosts:
@@ -180,6 +182,12 @@ services:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
         VITE_BASE: ${VITE_BASE:-/}
         VITE_API_BASE: ${VITE_API_BASE:-/api}
+        VITE_GRAPH_SPACE: ${VITE_GRAPH_SPACE:-test}
+        VITE_AUTH_ENABLED: ${VITE_AUTH_ENABLED:-false}
+        VITE_PORTAL_EMBEDDED_DEFAULT: ${VITE_PORTAL_EMBEDDED_DEFAULT:-false}
+        VITE_PORTAL_ALLOWED_ORIGINS: ${VITE_PORTAL_ALLOWED_ORIGINS:-https://edu.itic-sci.com}
+        VITE_PORTAL_TARGET_ORIGIN: ${VITE_PORTAL_TARGET_ORIGIN:-https://edu.itic-sci.com}
+        VITE_PORTAL_SOURCE: ${VITE_PORTAL_SOURCE:-tech-kg-api}
     image: tech-kg-api-dev2-web:latest
     container_name: tech-kg-web-dev2
     ports:

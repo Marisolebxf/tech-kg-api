@@ -37,6 +37,57 @@ docker compose up --build
 
 `docker-compose.yml` 通过 `host.docker.internal` 连接宿主机上的 trs-graph-service / MySQL；如端口 8001/8088 被占用，改 compose 里的 host 端口即可（不要停其它服务让端口）。
 
+### dev2 公网部署（`https://edu.itic-sci.com/bkg_zpt`）
+
+dev2 栈（`docker-compose.dev2.yml`，api 宿主端口 **8002** / web 宿主端口 **8089**）由外部门户网关以 `/bkg_zpt` 前缀代理到 web-dev2（网关会剥掉前缀）；web 容器内 nginx 再把 `/api/` 反代到 api-dev2。默认图空间为 **dev2**（api 的 `TRS_GRAPH_SPACE` 在 compose 里锁死；前端经 `VITE_GRAPH_SPACE=dev2` 构建注入）。
+
+**开发/部署容器时一律关闭用户系统（免登录模式）**：根 `.env` 保持 `AUTH_ENABLED=false`（后端：所有请求走开发上下文、平台管理员直接放行，与生产 8001 行为一致）+ `VITE_AUTH_ENABLED=false`（前端：不跳登录页），用户端与管理端免登录直进。两端开关必须一致，否则所有接口 401。将来要开启登录：两个开关同改 `true` 重建，并需在统一用户中心为 OAuth client 增加 `https://edu.itic-sci.com/bkg_zpt/api/v1/auth/callback` 回调白名单（管理端完整 OAuth 流程才通；门户 iframe 的 cookie 交换路径不受白名单影响）。
+
+**所有部署参数都来自仓库根目录 `.env`**（gitignored，本地文件，**不要删除**；`docker-compose.dev2.yml` 的 `${VAR:-默认值}` 只做根 `.env`/shell 替换，不读 `backend/.env`）。需要的键：
+
+```bash
+# —— 后端（api-dev2）——
+USER_CENTER_CLIENT_ID=...            # 统一用户中心 OAuth2 client（从生产容器/运维获取）
+USER_CENTER_CLIENT_SECRET=...
+USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED=true
+AUTH_ENABLED=false                   # 当前为免登录模式（与生产 8001 一致）；开启登录时改 true 并同步 VITE_AUTH_ENABLED
+PLATFORM_INITIAL_ADMIN_USER_IDS=240  # AUTH_ENABLED=true 时直接授予平台管理员的用户中心 user id
+MYSQL_USERNAME=...                   # 业务 MySQL（host.docker.internal:3306，宿主机端口）
+MYSQL_PASSWORD=...
+PAPER_COOP_MYSQL_PASSWORD=...
+LLM_API_KEY=...                      # 不配则 LLM 相关功能静默降级
+
+# —— 前端（web-dev2 构建期注入）——
+VITE_BASE=/bkg_zpt/                  # 部署前缀；路由 base 与文档站 /bkg_zpt/docs/ 都由它推导
+VITE_API_BASE=/bkg_zpt/api
+VITE_AUTH_ENABLED=false              # 必须与后端 AUTH_ENABLED 一致；true 而后端未配用户中心时所有接口 401
+VITE_GRAPH_SPACE=dev2
+```
+
+**重新构建 / 启动**（根 `.env` 齐全时不需要任何 shell 变量）：
+
+```bash
+# 前端（改动 src/、docsite/ 后）
+docker compose -f docker-compose.dev2.yml up -d --build web-dev2
+
+# 后端（改动 backend/ 后）
+docker compose -f docker-compose.dev2.yml up -d --build api-dev2
+
+# 全栈
+docker compose -f docker-compose.dev2.yml up -d --build
+```
+
+验证：
+
+```bash
+curl -s "https://edu.itic-sci.com/bkg_zpt/api/v1/auth/login-url?next=/overview" | head -c 200
+# → 应返回 {"code":200,...,"url":"https://edu.itic-sci.com/uc/sso/login?..."}（而非"客户端未配置"）
+curl -f -o /dev/null -w "%{http_code}\n" https://edu.itic-sci.com/bkg_zpt/docs/   # 文档站 → 200
+docker exec tech-kg-api-dev2 printenv TRS_GRAPH_SPACE                             # → dev2
+```
+
+注意：MySQL / trs-graph 走 `host.docker.internal`（宿主机 3306/8090 端口，compose 默认值已如此）；dev2 容器不在生产的 engine/trs-graph 网络里，容器名 `mysql`/`trs-graph-service` 解析不到。
+
 ### Milvus standalone
 
 Milvus 已合并到根目录 `docker-compose.yml`，与前后端使用同一份 Compose。为避免与服务器已有的 `tech-kg-engine` Milvus 冲突，本项目使用独立容器、命名卷和端口：Milvus `19531`、健康检查 `9093`、MinIO API `9010`、MinIO Console `9011`。

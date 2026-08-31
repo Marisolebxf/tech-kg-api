@@ -10,7 +10,10 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:compatibility": "playwright test --config=playwright.compatibility.config.ts"
+    "test:compatibility": "playwright test --config=playwright.compatibility.config.ts",
+    "docs:dev": "vitepress dev docsite",
+    "docs:build": "vitepress build docsite",
+    "docs:preview": "vitepress preview docsite"
   },
   "dependencies": {
     "@arco-design/web-vue": "2.58.0",
@@ -89,6 +92,7 @@
     "vite-plugin-svg-icons": "^2.0.1",
     "vite-plugin-vue-devtools": "^8.1.2",
     "vitest": "^4.1.10",
+    "vitepress": "^1.6.3",
     "vue-tsc": "^3.2.8"
   }
 }

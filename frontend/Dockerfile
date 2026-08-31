@@ -32,6 +32,8 @@ RUN pnpm install --frozen-lockfile
 
 COPY . .
 RUN pnpm build
+# 文档站（VitePress）产物写入 dist/docs/，随主应用产物一同拷入 nginx 镜像。
+RUN pnpm docs:build
 
 FROM nginx:1.27-alpine
 

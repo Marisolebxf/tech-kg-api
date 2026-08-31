@@ -267,6 +267,22 @@ class ManualReviewService:
         ):
             if f.get(k):
                 q.append(col == f[k])
+        # 状态分组：pending=待处理（非终态）；processed=已处理（终态）
+        status_groups = {
+            "pending": ReviewCase.status.notin_(TERMINAL_STATUSES),
+            "processed": ReviewCase.status.in_(TERMINAL_STATUSES),
+        }
+        if f.get("status_group") in status_groups:
+            q.append(status_groups[f["status_group"]])
+        # 对象种类：T_DIRECT 案例 object_type 即 kind（entity/relation）；
+        # 其他模板按模板语义兜底（T_LINK=实体对齐、T_EVIDENCE=关系证据）
+        if f.get("kind") in ("entity", "relation"):
+            q.append(
+                or_(
+                    ReviewCase.object_type == f["kind"],
+                    ReviewCase.template_id == ("T_LINK" if f["kind"] == "entity" else "T_EVIDENCE"),
+                )
+            )
         queues = {
             "mine": ReviewCase.assignee_id == a.user_id,
             "unclaimed": ReviewCase.status == "OPEN",

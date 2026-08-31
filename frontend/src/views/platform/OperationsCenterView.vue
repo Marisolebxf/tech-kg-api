@@ -5,7 +5,6 @@ import { useRoute } from 'vue-router'
 import { getProductionReviews, type ProductionReviewCase, type ReviewRecord } from '../../api/workflowOperations'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import {
-  getHandleCategory,
   getImpactScope,
   resolvePipelineStep,
 } from './manual-review-data'
@@ -17,10 +16,9 @@ const route = useRoute()
 const keyword = ref(clampSearchKeyword(String(route.query.keyword || '')))
 const status = ref('全部状态')
 const domain = ref('全部业务域')
-const reviewCategory = ref('全部处理分类')
-const batchFilter = ref(String(route.query.batch || '全部更新批次'))
-const productionTabs = { '全部':'', '我的待办':'mine', '待领取':'unclaimed', '待审批':'approval', '失败重跑':'failed', '历史记录':'history' } as const
-const reviewTab = ref(route.query.tab === 'history' ? '历史记录' : '全部')
+/** 人工审核筛选：状态分组（待处理/已处理）与对象种类（实体/关系/都看）。 */
+const reviewStatusFilter = ref<'全部' | '待处理' | '已处理'>('全部')
+const reviewKindFilter = ref<'全部' | '实体' | '关系'>('全部')
 const reviewTotal = ref(0)
 const severity = ref('全部风险')
 const actionFeedback = ref('')
@@ -62,8 +60,8 @@ const resetFilters = () => {
   keyword.value = ''
   status.value = '全部状态'
   domain.value = '全部业务域'
-  reviewCategory.value = '全部处理分类'
-  batchFilter.value = '全部更新批次'
+  reviewStatusFilter.value = '全部'
+  reviewKindFilter.value = '全部'
   severity.value = '全部风险'
   alertCategory.value = '全部异常'
   blockingOnly.value = false
@@ -82,45 +80,32 @@ const filteredAlertRows = computed(() => alertRows.filter((row) => {
 
 const reviewRows = computed(() => reviewRecords.value)
 
-const pendingReviewCount = computed(() => reviewRows.value.filter((row) => row.status === '待处理').length)
-const historyReviewCount = computed(() => reviewRows.value.filter((row) => row.status !== '待处理').length)
+/** 分页状态：服务端分页，翻页/改页大小都会重新拉取当前筛选下的数据。 */
+const reviewPage = ref(1)
+const reviewPageSize = ref(10)
+const reviewPageSizeOptions = [10, 20, 50]
+const reviewTotalPages = computed(() => Math.max(1, Math.ceil(reviewTotal.value / reviewPageSize.value)))
 
-// 队列固定加载 A 类（T_DIRECT/T_LINK/T_EVIDENCE），仅这两个分类会出现数据
-const reviewCategoryOptions = ['实体对齐', '质量校验'] as const
-
-const reviewCategoryClass: Record<string, string> = { 实体对齐: 'is-align', 质量校验: 'is-relation' }
-
-const filteredReviewRows = computed(() => reviewRows.value.filter((row) => {
-  const handleCategory = getHandleCategory(row)
-  const text = [
-    row.id, row.object, row.objectType, row.objectId, row.type, handleCategory,
-    row.sourceTable, row.sourceRecordId, row.batch, row.handler, row.evidence,
-  ].join(' ')
-  return (!keyword.value || text.includes(keyword.value))
-    && (status.value === '全部状态' || row.status === status.value)
-    && (reviewCategory.value === '全部处理分类' || handleCategory === reviewCategory.value)
-    && (batchFilter.value === '全部更新批次' || row.batch === batchFilter.value)
-}))
-
-const selectReviewTab = (tab: string) => {
-  reviewTab.value = tab
-  status.value = '全部状态'
-}
-
-watch(() => route.query.batch, (value) => { batchFilter.value = String(value || '全部更新批次') })
 watch(() => route.query.keyword, (value) => { keyword.value = clampSearchKeyword(String(value || '')) })
-watch(() => route.query.tab, (value) => {
-  reviewTab.value = value === 'history' ? '历史记录' : '全部'
-  status.value = '全部状态'
-})
 
 async function loadReviews() {
   if (props.mode !== 'review') return
   try {
-    const queue = productionTabs[reviewTab.value as keyof typeof productionTabs] ?? ''
     // 默认只显示 A 类（入库决策：T_DIRECT/T_LINK/T_EVIDENCE）；B 类数据修正在 TODO，先不混入
-    const response = await getProductionReviews({ queue: queue || undefined, category: 'A', keyword: keyword.value || undefined, page: 1, pageSize: 50 })
+    const response = await getProductionReviews({
+      category: 'A',
+      keyword: keyword.value || undefined,
+      statusGroup: reviewStatusFilter.value === '全部' ? undefined : reviewStatusFilter.value === '待处理' ? 'pending' : 'processed',
+      kind: reviewKindFilter.value === '全部' ? undefined : reviewKindFilter.value === '实体' ? 'entity' : 'relation',
+      page: reviewPage.value,
+      pageSize: reviewPageSize.value,
+    })
     reviewTotal.value = response.total
+    // 筛选后总页数变小时收敛当前页（如翻到第 3 页后把筛选改成只有 1 页数据）
+    if (reviewPage.value > Math.max(1, Math.ceil(response.total / reviewPageSize.value))) {
+      reviewPage.value = Math.max(1, Math.ceil(response.total / reviewPageSize.value))
+      return loadReviews()
+    }
     reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
       id: row.id, batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待领取', status: row.status === 'RESOLVED' ? '已完成' : row.status === 'REJECTED' ? '已驳回' : row.status === 'CANCELLED' ? '已撤销' : '待处理', updatedAt: row.updatedAt, sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
     }))
@@ -128,7 +113,36 @@ async function loadReviews() {
   } catch (error) { reviewLoadError.value = error instanceof Error ? error.message : '人工处理队列加载失败' }
 }
 
-watch(reviewTab, loadReviews)
+function changeReviewPage(page: number) {
+  if (page === reviewPage.value) return
+  reviewPage.value = page
+  void loadReviews()
+}
+
+function changeReviewPageSize(size: unknown) {
+  const value = Number(size)
+  if (!Number.isFinite(value) || value <= 0 || value === reviewPageSize.value) return
+  reviewPageSize.value = value
+  reviewPage.value = 1
+  void loadReviews()
+}
+
+/** 筛选条件变化：回到第 1 页重新加载。 */
+watch([reviewStatusFilter, reviewKindFilter], () => {
+  reviewPage.value = 1
+  void loadReviews()
+})
+
+/** 关键字输入防抖后走服务端检索（与分页/筛选同口径，避免页内客户端过滤与总数不一致）。 */
+let reviewKeywordTimer: number | undefined
+watch(keyword, () => {
+  if (props.mode !== 'review') return
+  window.clearTimeout(reviewKeywordTimer)
+  reviewKeywordTimer = window.setTimeout(() => {
+    reviewPage.value = 1
+    void loadReviews()
+  }, 300)
+})
 onMounted(loadReviews)
 </script>
 
@@ -146,32 +160,20 @@ onMounted(loadReviews)
 
       <p v-if="actionFeedback" class="ops-feedback">{{ actionFeedback }}</p>
     </template>
-    <template v-else>
-      <section class="ops-metrics is-review-metrics">
-        <article><span>待处理</span><strong>{{ pendingReviewCount }}</strong><em>需人工裁决</em></article>
-        <article><span>历史记录</span><strong>{{ historyReviewCount }}</strong><em>已完成 / 已驳回 / 已撤销</em></article>
-      </section>
-    </template>
 
     <section class="ops-panel">
       <div v-if="mode === 'alerts'" class="alert-tabs"><nav><button v-for="item in alertCategories" :key="item" type="button" :class="{ active:alertCategory===item }" @click="alertCategory=item">{{ item }}</button></nav><a-checkbox v-model="blockingOnly">仅看已阻断</a-checkbox></div>
-      <nav v-else class="review-tabs" aria-label="人工处理分类"><button v-for="(_, label) in productionTabs" :key="label" type="button" :class="{ active: reviewTab === label }" @click="selectReviewTab(label)">{{ label }}</button></nav>
-      <div v-if="mode === 'review'" class="review-cat-bar" aria-label="处理分类筛选">
-        <button type="button" :class="{ active: reviewCategory === '全部处理分类' }" @click="reviewCategory = '全部处理分类'">全部</button>
-        <button
-          v-for="item in reviewCategoryOptions"
-          :key="item"
-          type="button"
-          :class="['cat', reviewCategoryClass[item], { active: reviewCategory === item }]"
-          @click="reviewCategory = item"
-        >{{ item }}</button>
-      </div>
-      <a-form :model="{ keyword, severity, batchFilter, domain, status }" :class="['ops-filter', { 'is-review': mode === 'review' }]" layout="vertical">
+      <a-form :model="{ keyword, severity, domain, status, reviewStatusFilter, reviewKindFilter }" :class="['ops-filter', { 'is-review': mode === 'review' }]" layout="vertical">
         <a-form-item field="keyword"><input v-model="keyword" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" :placeholder="mode === 'review' ? '搜索处理实例 ID、对象或来源记录' : '搜索批次、对象、异常原因'" /></a-form-item>
-        <a-form-item v-if="mode === 'alerts'" field="severity"><a-select v-model="severity" :options="['全部风险', '高风险', '中风险', '低风险']" /></a-form-item>
-        <a-form-item v-else field="batchFilter"><a-select v-model="batchFilter"><a-option value="全部更新批次">全部更新批次</a-option><a-option v-for="item in [...new Set(reviewRows.map(row => row.batch))]" :key="item" :value="item">{{ item }}</a-option></a-select></a-form-item>
-        <a-form-item v-if="mode === 'alerts'" field="domain"><a-select v-model="domain" :options="['全部业务域', '人才域', '论文域', '企业域']" /></a-form-item>
-        <a-form-item v-if="mode === 'alerts'" field="status"><a-select v-model="status" :options="['全部状态', '待处理', '处理中', '已关闭']" /></a-form-item>
+        <template v-if="mode === 'alerts'">
+          <a-form-item field="severity"><a-select v-model="severity" :options="['全部风险', '高风险', '中风险', '低风险']" /></a-form-item>
+          <a-form-item field="domain"><a-select v-model="domain" :options="['全部业务域', '人才域', '论文域', '企业域']" /></a-form-item>
+          <a-form-item field="status"><a-select v-model="status" :options="['全部状态', '待处理', '处理中', '已关闭']" /></a-form-item>
+        </template>
+        <template v-else>
+          <a-form-item field="reviewStatus"><a-select v-model="reviewStatusFilter" :options="['全部', '待处理', '已处理']" /></a-form-item>
+          <a-form-item field="reviewKind"><a-select v-model="reviewKindFilter" :options="['全部', '实体', '关系']" /></a-form-item>
+        </template>
         <a-form-item><button type="button" @click="resetFilters">清空筛选</button></a-form-item>
       </a-form>
 
@@ -190,12 +192,12 @@ onMounted(loadReviews)
             <th>更新批次</th>
             <th>处理人</th>
             <th>状态</th>
-            <th>{{ reviewTab === '历史记录' ? '完成时间' : '提交时间' }}</th>
+            <th>更新时间</th>
             <th>操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in filteredReviewRows" :key="row.id">
+          <tr v-for="row in reviewRows" :key="row.id">
             <td class="review-id-cell">
               <RouterLink class="link" :to="`/manual-review/task/${row.id}`">{{ row.id }}</RouterLink>
             </td>
@@ -222,14 +224,26 @@ onMounted(loadReviews)
               </RouterLink>
             </td>
           </tr>
-          <tr v-if="!filteredReviewRows.length">
-            <td class="review-empty" colspan="9">{{ reviewLoadError || `暂无符合条件的${reviewTab}` }}</td>
+          <tr v-if="!reviewRows.length">
+            <td class="review-empty" colspan="9">{{ reviewLoadError || (reviewStatusFilter === '全部' && reviewKindFilter === '全部' && !keyword ? '暂无人工处理记录' : '暂无符合条件的记录') }}</td>
           </tr>
         </tbody>
       </table></div>
 
       <footer v-if="mode === 'alerts'" class="alert-pagination"><span>每页显示　<a-select :default-value="20" :options="[20, 50, 100]" />　共 158 条异常</span><nav><button type="button" disabled>上一页</button><button class="active" type="button">1</button><button type="button">2</button><button type="button">3</button><button type="button">…</button><button type="button">8</button><button type="button">下一页</button></nav></footer>
-      <footer v-else class="review-pagination"><span>共 {{ reviewTotal }} 条</span><nav><button type="button" disabled>上一页</button><button class="active" type="button">1</button><button type="button">下一页</button></nav></footer>
+      <footer v-else class="review-pagination">
+        <span>共 {{ reviewTotal }} 条 · 第 {{ reviewPage }} / {{ reviewTotalPages }} 页</span>
+        <span class="review-page-size">每页
+          <a-select :model-value="reviewPageSize" :options="reviewPageSizeOptions" @change="changeReviewPageSize" />
+        </span>
+        <a-pagination
+          :current="reviewPage"
+          :page-size="reviewPageSize"
+          :total="reviewTotal"
+          :show-jumper="reviewTotalPages > 7"
+          @change="changeReviewPage"
+        />
+      </footer>
     </section>
 
   </div>
@@ -242,7 +256,7 @@ onMounted(loadReviews)
 .link-disabled{color:#98a2b3;font-size:12px;cursor:default}
 .review-severity{min-width:230px;max-width:300px;white-space:normal}.review-severity small{margin:0 0 6px}.review-severity span{display:block;color:#65738b;font-size:11px;line-height:17px}
 .review-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.24)}.review-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;width:620px;height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}.review-drawer>header{display:flex;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.review-drawer header span{color:#165dff;font-size:11px}.review-drawer h2{margin:6px 0 3px;font-size:19px}.review-drawer header p{margin:0;color:#70809a;font-size:12px}.review-drawer header>button{width:30px;height:30px;border:0;border-radius:5px;background:#f0f4fa;font-size:20px;cursor:pointer}.review-body{overflow:auto;padding:16px}.review-body section,.review-compare article{padding:14px;border:1px solid #dce8f8;border-radius:7px;background:#fff}.review-body h3{margin:0 0 8px;font-size:14px}.review-body p,.review-body li{color:#61708a;font-size:12px;line-height:20px}.review-compare{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}.review-compare span{display:block;margin-bottom:9px;color:#70809a;font-size:11px}.review-compare strong{font-size:13px}.review-compare em{color:#d92d20;font-size:11px;font-style:normal}.review-compare input,.review-compare textarea{width:100%;padding:8px;border:1px solid #bdd0ea;border-radius:5px;font:inherit}.review-compare textarea{min-height:90px;margin-top:8px;resize:vertical}.review-success{padding:10px 12px;border:1px solid #a6f4c5;border-radius:6px;background:#ecfdf3!important;color:#067647!important}.review-drawer>footer{display:flex;justify-content:flex-end;gap:8px;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.review-drawer>footer button{height:34px;padding:0 13px;border:1px solid #bdd0ea;border-radius:6px;background:#fff;color:#40516d;cursor:pointer}.review-drawer>footer .primary{border-color:#165dff;background:#165dff;color:#fff}@media(max-width:720px){.review-drawer{width:94vw}.review-compare{grid-template-columns:1fr}}
-.ops-page{display:flex;box-sizing:border-box;min-height:0;overflow:hidden;padding-bottom:2px;flex-direction:column}.ops-head,.ops-metrics,.ops-feedback,.review-context{flex:0 0 auto}.ops-panel{display:flex;flex:1;min-height:0;flex-direction:column}.alert-tabs,.ops-filter,.alert-pagination,.review-tabs,.review-pagination{flex:0 0 auto}.ops-table-scroll,.ops-review-table-scroll{flex:1;min-height:0;max-height:none;overflow:auto}.ops-filter.is-review{grid-template-columns:minmax(280px,1fr) 170px 220px auto}.ops-review-table-scroll table{min-width:1900px}.review-tabs{display:flex;gap:4px;padding:0 14px;border-bottom:1px solid #dce9ff;background:#fff}.review-tabs button{display:flex;align-items:center;gap:7px;padding:13px 15px 11px;border:0;border-bottom:2px solid transparent;background:transparent;color:#60708a;cursor:pointer}.review-tabs button.active{border-color:#165dff;color:#165dff;font-weight:600}.review-tabs em{padding:1px 7px;border-radius:99px;background:#edf3fc;color:#71809a;font-size:10px;font-style:normal}.review-tabs button.active em{background:#e6efff;color:#165dff}.review-pagination{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;border-top:1px solid #e4ecf6;background:#fff;color:#71809a;font-size:11px}.review-pagination nav{display:flex;gap:5px}.review-pagination button{height:28px;padding:0 10px;border:1px solid #d3deee;border-radius:4px;background:#fff;color:#52647f}.review-pagination button.active{border-color:#165dff;color:#165dff}.review-pagination button:disabled{opacity:.45}.review-empty{height:100px!important;color:#8290a7;text-align:center!important}.ops-review-table-scroll td code{color:#175cd3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.ops-page{display:flex;box-sizing:border-box;min-height:0;overflow:hidden;padding-bottom:2px;flex-direction:column}.ops-head,.ops-metrics,.ops-feedback,.review-context{flex:0 0 auto}.ops-panel{display:flex;flex:1;min-height:0;flex-direction:column}.alert-tabs,.ops-filter,.alert-pagination,.review-pagination{flex:0 0 auto}.ops-table-scroll,.ops-review-table-scroll{flex:1;min-height:0;max-height:none;overflow:auto}.ops-filter.is-review{grid-template-columns:minmax(280px,1fr) 170px 170px auto}.ops-review-table-scroll table{min-width:1900px}.review-pagination{display:flex;align-items:center;gap:14px;padding:11px 14px;border-top:1px solid #e4ecf6;background:#fff;color:#71809a;font-size:11px}.review-pagination>span{white-space:nowrap}.review-pagination .review-page-size{display:flex;align-items:center;gap:6px;margin-left:auto;white-space:nowrap}.review-pagination :deep(.arco-select){width:76px}.review-pagination :deep(.arco-select-view){box-sizing:border-box;width:76px;height:28px;border:1px solid #d3deee;border-radius:4px;background:#fff}.review-empty{height:100px!important;color:#8290a7;text-align:center!important}.ops-review-table-scroll td code{color:#175cd3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .review-type-cell{min-width:170px}.review-type-cell>span{display:inline-flex;padding:3px 9px;border-radius:99px;background:#eaf2ff;color:#175cd3;font-size:11px}.review-type-cell>span.is-low-confidence{background:#fff3d8;color:#b54708}.review-type-cell>span.is-extraction{background:#fef3f2;color:#b42318}.review-type-cell>span.is-schema{background:#edf0ff;color:#444ce7}.review-type-cell>span.is-normalization{background:#ecfdf3;color:#067647}.review-type-cell>span.is-other{background:#f2f4f7;color:#475467}
 .ops-review-table-scroll table{min-width:1900px}.review-risk-explain{display:grid;flex:0 0 auto;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}.review-risk-explain>div{display:grid;gap:3px;padding:11px 14px;border:1px solid #b9d2f4;border-radius:7px;background:#f7fbff}.review-risk-explain strong{color:#344861;font-size:11px}.review-risk-explain span{color:#6d7c93;font-size:9px;line-height:16px}.review-confidence-cell{min-width:190px;white-space:normal}.review-confidence-cell>b{display:inline-block;margin-right:7px;font-size:13px}.review-confidence-cell>small{display:inline;color:#718098}.review-confidence-cell>span{display:block;margin-top:4px;color:#78869b;font-size:9px;line-height:15px}@media(max-width:900px){.review-risk-explain{grid-template-columns:1fr}}
 .alert-impact{min-width:260px;max-width:340px;white-space:normal}.alert-impact strong,.alert-impact small{display:block;line-height:18px}.alert-impact small{color:#718099}.review-risk-explain{grid-template-columns:repeat(2,minmax(0,1fr))}.review-risk-explain>div:first-child{border-color:#f5b8b3;background:#fff5f4}.review-risk-explain>div:first-child strong{color:#d92d20}.review-risk-explain>div:nth-child(2){border-color:#f3d08a;background:#fffaf0}.review-risk-explain>div:nth-child(2) strong{color:#b54708}.review-type{min-width:150px}.review-confidence-cell{min-width:130px}.review-confidence-cell>em{display:block;width:max-content;margin-top:5px;padding:2px 7px;border-radius:9px;background:#fff3d8;color:#b54708;font-size:9px;font-style:normal}
@@ -253,13 +267,7 @@ onMounted(loadReviews)
 .review-source-cell{min-width:160px}
 .review-source-cell strong{display:block;font-size:12px;font-weight:600}
 .review-source-cell small{margin-top:4px}
-.ops-metrics.is-review-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
-.ops-filter.is-review{grid-template-columns:minmax(240px,1fr) 170px auto}
-.review-cat-bar{display:flex;flex-wrap:wrap;gap:8px;padding:12px 14px 0;background:#fff}
-.review-cat-bar button{height:30px;padding:0 12px;border:1px solid #d3deee;border-radius:999px;background:#fff;color:#52647f;font-size:12px;cursor:pointer}
-.review-cat-bar button.active{border-color:#165dff;background:#eef4ff;color:#165dff;font-weight:600}
-.review-cat-bar button.cat.is-align.active{border-color:#7a5af8;background:#f0ebff;color:#6938ef}
-.review-cat-bar button.cat.is-relation.active{border-color:#f79009;background:#fff3d8;color:#b54708}
+.ops-filter.is-review{grid-template-columns:minmax(240px,1fr) 160px 160px auto}
 .review-type-cell>span.is-align{background:#f0ebff;color:#6938ef}
 .review-type-cell>span.is-relation{background:#fff3d8;color:#b54708}
 .review-subtype{display:block!important;margin-top:5px!important;color:#7b89a1;font-size:10px;white-space:nowrap}
@@ -277,16 +285,14 @@ onMounted(loadReviews)
 .ops-metrics{display:flex;gap:16px;margin-bottom:16px;border:0}.ops-metrics article{flex:1;gap:4px;padding:8px 16px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;box-shadow:none}
 .ops-metrics span,.ops-metrics em{font-size:12px;line-height:20px}.ops-metrics strong{font-size:20px;line-height:28px;font-weight:600}
 .ops-panel{border-color:#e5e6eb;border-radius:6px;background:#fff;box-shadow:none}
-.review-tabs{gap:0;padding:0 16px}.review-tabs button{height:36px;gap:8px;padding:0 16px;font-size:14px;line-height:22px}.review-tabs button.active{font-weight:500}.review-tabs em{padding:0;border-radius:0;background:transparent;font-size:12px;line-height:20px}
-.review-cat-bar{gap:8px;padding:16px 16px 0}.review-cat-bar button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
-.ops-filter,.ops-filter.is-review{box-sizing:border-box;width:100%;grid-template-columns:minmax(280px,1fr) minmax(180px,240px) auto;column-gap:16px!important;row-gap:16px!important;padding:16px!important;background:#fff}
+.ops-filter,.ops-filter.is-review{box-sizing:border-box;width:100%;grid-template-columns:minmax(280px,1fr) minmax(160px,200px) minmax(160px,200px) auto;column-gap:16px!important;row-gap:16px!important;padding:16px!important;background:#fff}
 .ops-filter input,.ops-filter select,.ops-filter button{height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px}.ops-filter button{padding:0 16px}
 .ops-review-table-scroll table{min-width:1280px;font-size:14px;line-height:22px}.ops-review-table-scroll th,.ops-review-table-scroll td{height:40px;padding:0 16px}.ops-review-table-scroll th{background:#f7f8fa;color:#1d2129;font-weight:500}
 .ops-review-table-scroll td small,.review-source-cell strong,.review-question-cell strong,.review-confidence-cell>b{font-size:12px;line-height:20px}
 .review-status{display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.review-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .review-status.is-待处理,.review-status.is-已完成,.review-status.is-已撤销,.review-status.is-已驳回{background:transparent}
 .review-risk-explain{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:16px}.review-risk-explain>div{gap:4px;padding:8px 16px;border-radius:6px;background:#f7f8fa}.review-risk-explain strong{font-size:14px;line-height:22px}.review-risk-explain span,.review-confidence-cell>span{font-size:12px;line-height:20px}
-.review-pagination{height:56px;box-sizing:border-box;padding:12px 16px;font-size:12px;line-height:20px}.review-pagination nav{gap:8px}.review-pagination button{height:32px;padding:0 12px;font-size:14px}
+.review-pagination{height:56px;box-sizing:border-box;padding:12px 16px;font-size:12px;line-height:20px}.review-pagination :deep(.arco-pagination-item){min-width:28px;height:28px;border-radius:4px;font-size:12px;line-height:20px}.review-pagination :deep(.arco-pagination-item-active){background:#165dff;color:#fff}
 .review-drawer{width:min(640px,calc(100vw - 48px));background:#fff}.review-drawer>header{height:56px;box-sizing:border-box;padding:8px 24px}.review-body{padding:24px}.review-body section,.review-compare article{padding:16px;border-radius:6px}.review-compare{gap:16px;margin:16px 0}
 .review-drawer>footer{height:64px;box-sizing:border-box;gap:16px;padding:0 24px}.review-drawer>footer button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
 .ops-filter :deep(.arco-form-item){box-sizing:border-box;width:100%;min-width:0;margin:0!important}

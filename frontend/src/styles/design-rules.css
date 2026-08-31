@@ -55,10 +55,14 @@ body {
   padding: 16px;
 }
 
+/* 原生输入控件基线。Arco / ElementPlus 组件内部的 input（select、picker、
+   cascader 等的内部输入框）必须排除——否则会被刷成白底块盖住组件内容。 */
 .app-workspace
   :is(
-    input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
-    select,
+    input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not(
+        :is([class*="arco-"], [class*="el-"]) *
+      ),
+    select:not(:is([class*="arco-"], [class*="el-"]) *),
     .arco-input-wrapper,
     .arco-select-view,
     .arco-picker,
@@ -75,8 +79,10 @@ body {
 
 .app-workspace
   :is(
-    input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
-    select
+    input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not(
+        :is([class*="arco-"], [class*="el-"]) *
+      ),
+    select:not(:is([class*="arco-"], [class*="el-"]) *)
   ) {
   height: 32px !important;
   padding-inline: 12px !important;

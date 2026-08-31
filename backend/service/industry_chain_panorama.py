@@ -589,7 +589,9 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             async with _graph_api_semaphore:
                 try:
                     # 只选一种关系时下推到图服务，避免拉回无关边；多选时仍在合并后统一过滤。
-                    edge_type = relation_types[0] if relation_types and len(relation_types) == 1 else None
+                    edge_type = (
+                        relation_types[0] if relation_types and len(relation_types) == 1 else None
+                    )
                     return await client.get_subgraph(
                         seed_vid, depth=depth, limit=60, edge_type=edge_type
                     )

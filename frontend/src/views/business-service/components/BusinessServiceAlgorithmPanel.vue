@@ -157,8 +157,18 @@ const lastUpdateTime = ref<number | null>(null);
 
 /** 全景图自动更新：勾选后每 60s 自动忽略缓存刷新一次。 */
 const panoramaAutoRefresh = ref(false);
+/** 正在进行中的全景图请求，新请求发出前取消它，避免自动更新与手动刷新互相覆盖。 */
+let panoramaRequestController: AbortController | null = null;
 const PANORAMA_AUTO_REFRESH_INTERVAL = 60_000;
 let panoramaAutoRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+/** 判断异常是否来自请求取消（AbortController / axios canceled）。 */
+function isAbortError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const name = (error as { name?: string }).name;
+  const code = (error as { code?: string }).code;
+  return name === "AbortError" || name === "CanceledError" || code === "ERR_CANCELED";
+}
 
 function startPanoramaAutoRefresh() {
   if (panoramaAutoRefreshTimer) return;
@@ -174,6 +184,8 @@ function stopPanoramaAutoRefresh() {
     clearInterval(panoramaAutoRefreshTimer);
     panoramaAutoRefreshTimer = null;
   }
+  panoramaRequestController?.abort();
+  panoramaRequestController = null;
 }
 
 watch(panoramaAutoRefresh, (enabled) => {
@@ -2253,7 +2265,13 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
     parameterErrors.value = {};
     try {
       const request = buildPanoramaRequest({ refresh: runOptions.refresh });
-      const response = await queryIndustryChainPanorama(request);
+      panoramaRequestController?.abort();
+      const controller = new AbortController();
+      panoramaRequestController = controller;
+      const response = await queryIndustryChainPanorama(
+        request,
+        controller.signal,
+      );
       panoramaResponse.value = response;
       panoramaError.value = null;
       selectedGraphNodeId.value = null;
@@ -2272,6 +2290,8 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         showToast("图谱已刷新", "success");
       }
     } catch (error) {
+      // 被新请求取代的旧请求不算失败，直接忽略，避免清空已渲染的图谱。
+      if (isAbortError(error)) return;
       const message = error instanceof Error ? error.message : String(error);
       panoramaError.value = message;
       panoramaResponse.value = null;

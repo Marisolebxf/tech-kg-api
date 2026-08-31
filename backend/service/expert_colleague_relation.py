@@ -248,13 +248,18 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
                     candidate_period = self._parse_period(
                         self._property({"properties": edge_props}, DATE_KEYS)
                     )
+                    # 关系本身的生效时段只由双方真实任职期决定。请求时间仅作为
+                    # 查询窗口判断该关系是否命中，不能截断响应里的生效时段、
+                    # 重叠月份，也不能改变按关系时段筛选成果的口径。
                     overlap = self._overlap(
-                        affiliation.get("period"), candidate_period, requested_period
+                        affiliation.get("period"), candidate_period, None
                     )
                     if overlap is None:
                         skipped_missing_period.add((candidate_id, affiliation["id"]))
                         continue
                     if overlap is False:
+                        continue
+                    if requested_period and self._overlap(overlap, requested_period, None) is False:
                         continue
                     expert_department = affiliation.get("department") or ""
                     common_department = (
@@ -506,7 +511,7 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
                 "type": "关系匹配规则",
                 "target": "两位专家及其 AFFILIATED_WITH 任职边",
                 "trigger": "两位专家均可唯一定位",
-                "logic": "将 work_experience_date/employment_period/tenure_period 解析为月份序号区间（年×12+月），求专家任职期、候选人任职期与请求时间三者交集；含“至今/present/current/now”时终点取当前年月，单点日期覆盖到该年12月，起止颠倒自动交换。",
+                "logic": "将 work_experience_date/employment_period/tenure_period 解析为月份序号区间（年×12+月），以双方任职期交集作为同事关系生效时段；请求时间仅用于判断关系是否命中，不截断生效时段。含“至今/present/current/now”时终点取当前年月，单点日期覆盖到该年12月，起止颠倒自动交换。",
                 "output": "同事关系生效时段、重叠月份、重叠年限",
                 "threshold": "任职时间存在至少 1 个月交集",
                 "audit": "任一任职边缺少时间字段时不生成同事关系，计入待复核",

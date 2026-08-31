@@ -251,9 +251,7 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
                     # 关系本身的生效时段只由双方真实任职期决定。请求时间仅作为
                     # 查询窗口判断该关系是否命中，不能截断响应里的生效时段、
                     # 重叠月份，也不能改变按关系时段筛选成果的口径。
-                    overlap = self._overlap(
-                        affiliation.get("period"), candidate_period, None
-                    )
+                    overlap = self._overlap(affiliation.get("period"), candidate_period, None)
                     if overlap is None:
                         skipped_missing_period.add((candidate_id, affiliation["id"]))
                         continue

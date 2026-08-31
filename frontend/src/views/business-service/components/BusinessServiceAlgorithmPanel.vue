@@ -1214,6 +1214,19 @@ const selectedEdgeNodes = computed(() => {
     to: graphNodes.value.find((node) => node.id === edge?.to),
   };
 });
+
+/** 关系页签只转换展示值，保留图数据中的原始 label/category。 */
+const relationTypeDisplay: Record<string, string> = {
+  AFFILIATED_WITH: "机构任职关系",
+};
+const relationCategoryDisplay: Record<string, string> = {
+  AFFILIATED_WITH: "任职",
+};
+const displayRelationType = (value?: string) =>
+  (value && relationTypeDisplay[value]) || value || "—";
+const displayRelationCategory = (value?: string) =>
+  (value && relationCategoryDisplay[value]) || value || "—";
+
 const relationDetailRows = computed(() => {
   const edge = activeRelationEdge.value;
   const from = selectedEdgeNodes.value.from;
@@ -1226,9 +1239,9 @@ const relationDetailRows = computed(() => {
 
     ["目标实体", `${to.label} / ${to.entityType}`] as const,
 
-    ["关系类型", edge.label] as const,
+    ["关系类型", displayRelationType(edge.label)] as const,
 
-    ["关系分类", edge.category] as const,
+    ["关系分类", displayRelationCategory(edge.category)] as const,
 
     [
       "置信度",
@@ -1595,8 +1608,8 @@ const liveRelationRows = computed(() => {
         `关系 ${index + 1}`,
         `${from?.label || relation.from} → ${to?.label || relation.to}`,
       ] as const,
-      ["类型", relation.label || "—"] as const,
-      ["分类", relation.category || "—"] as const,
+      ["类型", displayRelationType(relation.label)] as const,
+      ["分类", displayRelationCategory(relation.category)] as const,
       ["置信度", formatConfidence(relation.confidence)] as const,
     ];
   });

@@ -2,6 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 
 import { getOperationLogs, type OperationLogPage } from '../../api/auth'
+import { SEARCH_KEYWORD_MAX_LENGTH, searchKeywordError } from '../../utils/searchInput'
 
 const loading = ref(false)
 const feedback = ref('')
@@ -24,6 +25,11 @@ function deviceLabel(value: string) {
 }
 
 async function loadLogs(page = 1) {
+  const keywordError = searchKeywordError(filters.keyword)
+  if (keywordError) {
+    feedback.value = keywordError
+    return
+  }
   loading.value = true
   feedback.value = ''
   try {
@@ -60,7 +66,7 @@ onMounted(() => loadLogs())
 
     <section class="log-card">
       <header class="log-filter">
-        <input v-model.trim="filters.keyword" type="search" placeholder="搜索操作、详情或 IP" @keyup.enter="loadLogs(1)" />
+        <input v-model.trim="filters.keyword" type="search" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" placeholder="搜索操作、详情或 IP" @keyup.enter="loadLogs(1)" />
         <select v-model="filters.category"><option value="">全部类型</option><option value="登录">登录</option><option value="安全">安全</option><option value="账号">账号</option></select>
         <select v-model="filters.result"><option value="">全部结果</option><option value="成功">成功</option><option value="失败">失败</option></select>
         <button type="button" @click="loadLogs(1)">查询</button><button class="secondary" type="button" @click="resetFilters">重置</button>

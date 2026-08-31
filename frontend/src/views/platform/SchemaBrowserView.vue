@@ -20,6 +20,7 @@ import {
 } from '../../api/schemaManagement'
 import { listLlmConfigs, type LlmConfig } from '../../api/llmConfig'
 import { currentUserId as getCurrentUserId } from '../../api/currentUser'
+import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import KgGraphCanvas from '../../components/kg-graph-canvas.vue'
 import type { GraphEdgeData, GraphNodeData } from '../../data/graph-presets'
 import { useToast } from '../../composables/use-toast'
@@ -27,8 +28,7 @@ import { useToast } from '../../composables/use-toast'
 hljs.registerLanguage('python', python)
 
 type Entity = { id: string; name: string; label: string; level: '核心实体' | '支撑实体'; key: string; source: string; description: string; schema: SchemaDefinition }
-type Relation = { id: string; name: string; label: string; source: string; target: string; basis: string; level?: '标准' | '扩展'; schema: SchemaDefinition }
-type Attribute = { entity: string; key: string; core: string; dynamic: string; source: string }
+type Relation = { id: string; name: string; label: string; source: string; target: string; basis: string; schema: SchemaDefinition }
 
 type PropertyDataType = 'string' | 'int64' | 'double' | 'bool' | 'date' | 'datetime' | 'geo' | 'fixed_string'
 type PropertyRow = { name: string; dataType: PropertyDataType; length: number; required: boolean }
@@ -48,13 +48,11 @@ const activeTab = ref('标准实体')
 const keyword = ref('')
 // 版本记录（已隐藏）
 // const schemaVersionMessage = ref('')
-const tabs = ['标准实体', '事实关系', '推理关系', '属性定义']
+const tabs = ['标准实体', '关系']
 
 const entities = ref<Entity[]>([])
 
-const factRelations = ref<Relation[]>([])
-const inferenceRelations = ref<Relation[]>([])
-const attributes = ref<Attribute[]>([])
+const relations = ref<Relation[]>([])
 // 版本记录（已隐藏）
 // const schemaVersions = [
 //   { version: 'v1.8', status: '当前版本', time: '2026-07-12 22:10', entities: '14 个标准实体', relations: '42 标准 / 9 推理', change: '统一候选层字段；新增 Event 类型；调整 3 项关系约束', publisher: '张建图' },
@@ -150,7 +148,7 @@ function applyTopology(data: {
       from: edge.sourceSchemaId as string,
       to: edge.targetSchemaId as string,
       label: edge.label || edge.name,
-      category: edge.relationCategory === 'inferred' ? '间接关系' : '直接关系',
+      category: '直接关系',
     }))
 }
 
@@ -227,7 +225,7 @@ function emptyCreateForm(): CreateForm {
 }
 
 function isRelationTab(): boolean {
-  return activeTab.value === '事实关系' || activeTab.value === '推理关系'
+  return activeTab.value === '关系'
 }
 
 function addProperty() {
@@ -276,7 +274,6 @@ function mapRelation(schema: SchemaDefinition): Relation {
     source: schema.sourceSchemaName || '',
     target: schema.targetSchemaName || '',
     basis: schema.description,
-    level: schema.isSystem ? '标准' : '扩展',
     schema,
   }
 }
@@ -284,27 +281,9 @@ function mapRelation(schema: SchemaDefinition): Relation {
 function applyDefinitions(definitions: SchemaDefinition[]) {
   const entitySchemas = definitions.filter((item) => item.kind === 'entity')
   entities.value = entitySchemas.map(mapEntity)
-  factRelations.value = definitions
-    .filter((item) => item.kind === 'relation' && item.relationCategory === 'fact')
+  relations.value = definitions
+    .filter((item) => item.kind === 'relation')
     .map(mapRelation)
-  inferenceRelations.value = definitions
-    .filter((item) => item.kind === 'relation' && item.relationCategory === 'inferred')
-    .map(mapRelation)
-  attributes.value = entitySchemas
-    .filter((item) => item.isCore)
-    .map((item) => ({
-      entity: item.name,
-      key: item.attributeIdentityKey || item.identityKey,
-      core: item.properties
-        .filter((property) => property.category === 'core')
-        .map((property) => property.name)
-        .join(', '),
-      dynamic: item.properties
-        .filter((property) => property.category === 'dynamic')
-        .map((property) => property.name)
-        .join(', '),
-      source: item.attributeSource || item.mappings.join(' / '),
-    }))
   scriptByRow.value = Object.fromEntries(
     definitions
       .filter((item) => item.script)
@@ -531,22 +510,19 @@ onMounted(async () => {
 const normalizedKeyword = computed(() => keyword.value.trim().toLowerCase())
 const matches = (row: unknown) => !normalizedKeyword.value || Object.values(row as Record<string, unknown>).join(' ').toLowerCase().includes(normalizedKeyword.value)
 const filteredEntities = computed(() => entities.value.filter(matches))
-const filteredFacts = computed(() => factRelations.value.filter(matches))
-const filteredInference = computed(() => inferenceRelations.value.filter(matches))
-const filteredAttributes = computed(() => attributes.value.filter(matches))
+const filteredRelations = computed(() => relations.value.filter(matches))
 </script>
 
 <template>
   <main class="schema-page">
-    <section class="schema-summary" aria-label="Schema 概览">
-      <article><span>标准实体</span><strong>{{ overview.entityTypes }}</strong><em>专家、机构、论文等</em></article>
-      <article><span>标准事实关系</span><strong>{{ overview.factRelationTypes }}</strong><em>专家、机构、成果等</em></article>
-      <article><span>业务推理关系</span><strong>{{ overview.inferredRelationTypes }}</strong><em>均基于事实关系计算</em></article>
-      <!-- <article><span>当前 Schema 版本</span><strong>v1.8</strong><em>已发布 · 2026-07-12</em></article> -->
-    </section>
-
     <section class="schema-shell schema-topology-shell" aria-label="Schema 拓扑总览">
-      <div class="schema-toolbar"><div><strong>Schema 拓扑总览</strong><span>实体与关系的元图谱（{{ topologyNodes.length }} 实体 · {{ topologyEdges.length }} 关系）</span></div></div>
+      <div class="schema-toolbar">
+        <div><strong>Schema 拓扑总览</strong><span>实体与关系的元图谱</span></div>
+        <div class="schema-topology-legend" aria-label="图例">
+          <span class="legend-item"><i class="legend-node"></i>实体 {{ overview.entityTypes }}</span>
+          <span class="legend-item"><i class="legend-edge"></i>关系 {{ overview.relationTypes }}</span>
+        </div>
+      </div>
       <div class="schema-topology-canvas">
         <KgGraphCanvas
           v-if="topologyNodes.length"
@@ -560,16 +536,11 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 
     <section class="schema-shell">
       <nav class="schema-tabs"><button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="activeTab=tab;keyword=''">{{ tab }}</button></nav>
-      <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeTab === '属性定义'">枚举字典作为属性约束统一维护</span></div><div class="schema-toolbar__actions"><button v-if="activeTab !== '属性定义'" class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :placeholder="`搜索${activeTab}`" /></label></div></div>
-      <!-- <p v-if="schemaVersionMessage" class="schema-version-message">{{ schemaVersionMessage }}</p> -->
+      <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong></div><div class="schema-toolbar__actions"><button class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" :placeholder="`搜索${activeTab}`" /></label></div></div>
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : (row.schema.isSystem ? '系统内置，不可删除' : '被关系引用，不可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : (row.schema.isSystem ? '系统内置，不可删除' : '被关系引用，不可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
-
-      <div v-else-if="activeTab === '推理关系'" class="schema-table-wrap"><table><thead><tr><th>推理关系</th><th>Schema 名称</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredInference" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
-
-      <div v-else-if="activeTab === '属性定义'" class="schema-table-wrap"><table><thead><tr><th>实体</th><th>主键</th><th>核心属性</th><th>动态属性 / 补充</th><th>主要来源</th></tr></thead><tbody><tr v-for="row in filteredAttributes" :key="row.entity"><td><code>{{ row.entity }}</code></td><td><b>{{ row.key }}</b></td><td class="mono-list">{{ row.core }}</td><td>{{ row.dynamic }}</td><td>{{ row.source }}</td></tr></tbody></table></div>
+      <div v-else class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRelations" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr></tbody></table></div>
 
       <!-- 版本记录（已隐藏）
       <div v-else class="schema-table-wrap schema-version-table"><table><thead><tr><th>版本</th><th>状态</th><th>发布时间</th><th>实体范围</th><th>关系范围</th><th>变更内容</th><th>发布人</th><th>操作</th></tr></thead><tbody><tr v-for="row in schemaVersions" :key="row.version"><td><code>{{ row.version }}</code></td><td><span :class="row.status === '当前版本' ? 'core' : 'support'">{{ row.status }}</span></td><td>{{ row.time }}</td><td>{{ row.entities }}</td><td>{{ row.relations }}</td><td>{{ row.change }}</td><td>{{ row.publisher }}</td><td><div class="schema-version-actions"><button type="button" @click="schemaVersionMessage = `已打开 ${row.version} 的完整变更清单。`">变更详情</button><button v-if="row.status !== '当前版本'" class="danger" type="button" @click="schemaVersionMessage = `已创建回退至 ${row.version} 的申请，通过影响分析与审批后才会执行。`">申请回退</button></div></td></tr></tbody></table></div>
@@ -604,7 +575,7 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
               </a-form-item>
             </div>
 
-            <a-form-item class="create-field create-field--full" field="description" label="建模说明">
+            <a-form-item class="create-field create-field--full" field="description" label="说明">
               <a-textarea v-model="createForm.description" :auto-size="{ minRows: 2, maxRows: 4 }" />
             </a-form-item>
 
@@ -738,13 +709,16 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 </template>
 
 <style scoped>
-.schema-page{display:flex;height:100%;min-height:0;overflow:hidden;padding-bottom:2px;color:#142443;flex-direction:column}.schema-summary{display:grid;flex:0 0 auto;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-bottom:12px}.schema-summary article{display:grid;gap:5px;padding:13px 15px;border:1px solid #bfd6fa;border-radius:8px;background:linear-gradient(145deg,#fff,#f2f8ff)}.schema-summary span{color:#687996;font-size:11px}.schema-summary strong{font-size:23px}.schema-summary em{color:#8191aa;font-size:10px;font-style:normal}.schema-flow{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));margin-bottom:12px;padding:12px;border:1px solid #c5d9f6;border-radius:8px;background:#fff}.schema-flow>div{position:relative;display:flex;align-items:center;gap:7px;min-width:0;padding:4px 15px 4px 5px}.schema-flow i{display:grid;flex:0 0 auto;place-items:center;width:23px;height:23px;border-radius:50%;background:#eaf2ff;color:#165dff;font-size:10px;font-style:normal}.schema-flow span{color:#40536f;font-size:10px;line-height:15px}.schema-flow b{position:absolute;right:2px;color:#9bb5d9}.schema-shell{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #bcd4f7;border-radius:9px;background:#fff;box-shadow:0 10px 24px rgba(48,105,194,.08);flex-direction:column}.schema-tabs{display:flex;flex:0 0 auto;overflow:auto;padding:0 12px;border-bottom:1px solid #dce8f8}.schema-tabs button{padding:12px 15px;border:0;border-bottom:2px solid transparent;background:transparent;color:#566985;white-space:nowrap;cursor:pointer}.schema-tabs button.active{border-color:#165dff;color:#165dff;font-weight:600}.schema-toolbar{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:14px;padding:10px 13px;border-bottom:1px solid #e3ebf6;background:#f8fbff}.schema-toolbar>div{display:flex;align-items:center;gap:10px}.schema-toolbar strong{font-size:13px}.schema-toolbar>div span{color:#7b8ba3;font-size:10px}.schema-toolbar label{display:flex;align-items:center;gap:6px;width:270px;padding:0 9px;border:1px solid #c7d8ef;border-radius:5px;background:#fff}.schema-toolbar input{width:100%;height:30px;border:0;outline:0;font-size:11px}.schema-table-wrap{flex:1;min-height:0;max-height:none;overflow:auto}.schema-table-wrap table,.trace-layout table{width:100%;border-collapse:collapse;font-size:11px}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{padding:11px 13px;border-bottom:1px solid #e5edf8;text-align:left;line-height:17px;vertical-align:top}.schema-table-wrap th{position:sticky;z-index:2;top:0;background:#f1f6fc;color:#5e6f88;white-space:nowrap}.schema-table-wrap td{color:#344763}.schema-table-wrap td:nth-child(5),.schema-table-wrap td:nth-child(6){max-width:330px}.schema-table-wrap code,.trace-layout code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;white-space:nowrap}.core,.support,.evidence,.auto,.review{display:inline-flex;padding:2px 7px;border-radius:999px;background:#e9f8ef;color:#067647;font-size:9px;white-space:nowrap}.support{background:#f0f2f5;color:#5e6b7e}.evidence{background:#f0edff;color:#6941c6}.auto{white-space:normal}.review{background:#fff3df;color:#b54708;white-space:normal}.mono-list{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px}.arrow{margin:0 5px;color:#8ba2c2}.candidate-layout{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr) 245px}.candidate-layout>.schema-table-wrap{grid-column:1}.candidate-note{grid-column:1/-1;padding:10px 13px;border-bottom:1px solid #dce8f8;background:#f3f8ff}.candidate-note strong{font-size:12px}.candidate-note p{margin:3px 0 0;color:#657690;font-size:10px}.mention-fields{grid-column:2;grid-row:2;padding:13px;border-left:1px solid #e0e9f5;background:#fafcff}.mention-fields strong{display:block;margin-bottom:10px;font-size:12px}.mention-fields span{display:inline-flex;margin:0 5px 6px 0;padding:3px 6px;border-radius:4px;background:#edf4ff;color:#315b95;font:9px ui-monospace,SFMono-Regular,Menlo,monospace}.trace-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:12px;background:#f8fbff}.trace-layout section{overflow:hidden;border:1px solid #d5e3f5;border-radius:7px;background:#fff}.trace-layout header{display:flex;align-items:flex-start;justify-content:space-between;padding:13px;border-bottom:1px solid #e3ebf6}.trace-layout h2{margin:0;font-size:13px}.trace-layout p{margin:3px 0 0;color:#7b899e;font-size:10px}.trace-layout header>span{color:#165dff;font-size:10px}.trace-layout table{display:block;max-height:390px;overflow:auto}.trace-layout tbody,.trace-layout tr{display:table;width:100%;table-layout:fixed}.trace-layout td:first-child{width:160px}@media(max-width:1250px){.schema-summary{grid-template-columns:repeat(3,1fr)}.schema-flow{grid-template-columns:repeat(4,1fr)}.schema-flow b{display:none}}@media(max-width:900px){.schema-summary{grid-template-columns:repeat(2,1fr)}.trace-layout{grid-template-columns:1fr}.candidate-layout{display:block}.mention-fields{border-top:1px solid #e0e9f5;border-left:0}}
+.schema-page{display:flex;height:100%;min-height:0;overflow:hidden;padding-bottom:2px;color:#142443;flex-direction:column}.schema-flow{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));margin-bottom:12px;padding:12px;border:1px solid #c5d9f6;border-radius:8px;background:#fff}.schema-flow>div{position:relative;display:flex;align-items:center;gap:7px;min-width:0;padding:4px 15px 4px 5px}.schema-flow i{display:grid;flex:0 0 auto;place-items:center;width:23px;height:23px;border-radius:50%;background:#eaf2ff;color:#165dff;font-size:10px;font-style:normal}.schema-flow span{color:#40536f;font-size:10px;line-height:15px}.schema-flow b{position:absolute;right:2px;color:#9bb5d9}.schema-shell{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #bcd4f7;border-radius:9px;background:#fff;box-shadow:0 10px 24px rgba(48,105,194,.08);flex-direction:column}.schema-tabs{display:flex;flex:0 0 auto;overflow:auto;padding:0 12px;border-bottom:1px solid #dce8f8}.schema-tabs button{padding:12px 15px;border:0;border-bottom:2px solid transparent;background:transparent;color:#566985;white-space:nowrap;cursor:pointer}.schema-tabs button.active{border-color:#165dff;color:#165dff;font-weight:600}.schema-toolbar{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:14px;padding:10px 13px;border-bottom:1px solid #e3ebf6;background:#f8fbff}.schema-toolbar>div{display:flex;align-items:center;gap:10px}.schema-toolbar strong{font-size:13px}.schema-toolbar>div span{color:#7b8ba3;font-size:10px}.schema-toolbar label{display:flex;align-items:center;gap:6px;width:270px;padding:0 9px;border:1px solid #c7d8ef;border-radius:5px;background:#fff}.schema-toolbar input{width:100%;height:30px;border:0;outline:0;font-size:11px}.schema-table-wrap{flex:1;min-height:0;max-height:none;overflow:auto}.schema-table-wrap table,.trace-layout table{width:100%;border-collapse:collapse;font-size:11px}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{padding:11px 13px;border-bottom:1px solid #e5edf8;text-align:left;line-height:17px;vertical-align:top}.schema-table-wrap th{position:sticky;z-index:2;top:0;background:#f1f6fc;color:#5e6f88;white-space:nowrap}.schema-table-wrap td{color:#344763}.schema-table-wrap td:nth-child(5),.schema-table-wrap td:nth-child(6){max-width:330px}.schema-table-wrap code,.trace-layout code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;white-space:nowrap}.core,.support,.evidence,.auto,.review{display:inline-flex;padding:2px 7px;border-radius:999px;background:#e9f8ef;color:#067647;font-size:9px;white-space:nowrap}.support{background:#f0f2f5;color:#5e6b7e}.evidence{background:#f0edff;color:#6941c6}.auto{white-space:normal}.review{background:#fff3df;color:#b54708;white-space:normal}.arrow{margin:0 5px;color:#8ba2c2}.candidate-layout{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr) 245px}.candidate-layout>.schema-table-wrap{grid-column:1}.candidate-note{grid-column:1/-1;padding:10px 13px;border-bottom:1px solid #dce8f8;background:#f3f8ff}.candidate-note strong{font-size:12px}.candidate-note p{margin:3px 0 0;color:#657690;font-size:10px}.mention-fields{grid-column:2;grid-row:2;padding:13px;border-left:1px solid #e0e9f5;background:#fafcff}.mention-fields strong{display:block;margin-bottom:10px;font-size:12px}.mention-fields span{display:inline-flex;margin:0 5px 6px 0;padding:3px 6px;border-radius:4px;background:#edf4ff;color:#315b95;font:9px ui-monospace,SFMono-Regular,Menlo,monospace}.trace-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:12px;background:#f8fbff}.trace-layout section{overflow:hidden;border:1px solid #d5e3f5;border-radius:7px;background:#fff}.trace-layout header{display:flex;align-items:flex-start;justify-content:space-between;padding:13px;border-bottom:1px solid #e3ebf6}.trace-layout h2{margin:0;font-size:13px}.trace-layout p{margin:3px 0 0;color:#7b899e;font-size:10px}.trace-layout header>span{color:#165dff;font-size:10px}.trace-layout table{display:block;max-height:390px;overflow:auto}.trace-layout tbody,.trace-layout tr{display:table;width:100%;table-layout:fixed}.trace-layout td:first-child{width:160px}@media(max-width:1250px){.schema-flow{grid-template-columns:repeat(4,1fr)}.schema-flow b{display:none}}@media(max-width:900px){.trace-layout{grid-template-columns:1fr}.candidate-layout{display:block}.mention-fields{border-top:1px solid #e0e9f5;border-left:0}}
+
+/* 拓扑图例（替代原顶部统计卡片） */
+.schema-topology-legend{display:flex;align-items:center;gap:16px}
+.legend-item{display:inline-flex;align-items:center;gap:6px;color:#344763;font-size:11px;white-space:nowrap}
+.legend-node{width:10px;height:10px;border-radius:50%;background:#165dff}
+.legend-edge{position:relative;width:22px;height:0;border-top:2px solid #12b76a}
 
 /* Layout refinements for wide management screens. */
 .schema-page{box-sizing:border-box;padding:2px 2px 18px}
-.schema-summary article{position:relative;min-height:92px;padding:15px 17px;overflow:hidden}
-.schema-summary article::after{position:absolute;right:-15px;bottom:-28px;width:72px;height:72px;border-radius:50%;background:rgba(22,93,255,.055);content:""}
-.schema-summary span{font-size:12px}.schema-summary strong{font-size:26px;line-height:31px}.schema-summary em{font-size:11px}
 
 .schema-flow{display:block;margin-bottom:14px;padding:0;border-color:#bcd4f7;background:linear-gradient(180deg,#fff,#f6faff)}
 .schema-flow>header{display:flex;align-items:center;gap:12px;padding:10px 15px;border-bottom:1px solid #dce8f8}
@@ -789,10 +763,8 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 
 @media(max-width:1500px){.schema-flow li{padding-right:18px}.schema-flow li span{font-size:10px}.trace-card dl{grid-template-columns:1fr}.trace-card dl>div{border-right:0}}
 @media(max-width:1100px){.schema-flow ol{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.schema-flow li,.schema-flow li:last-child{border:1px solid #d5e4f7;border-radius:6px}.schema-flow li::after{display:none}.trace-layout{grid-template-columns:1fr}.trace-layout>aside{grid-column:1;align-items:flex-start;flex-direction:column;gap:7px}.trace-card dl{grid-template-columns:repeat(2,1fr)}.trace-card dl>div{border-right:1px solid #e8eef7}.trace-card dl>div:nth-child(2n){border-right:0}}
-.schema-summary{grid-template-columns:repeat(3,minmax(0,1fr))}
 .schema-version-message{margin:0;padding:9px 13px;border-bottom:1px solid #b7d0f5;background:#eef5ff;color:#344f7a;font-size:11px}
 .schema-version-table{max-height:470px}.schema-version-table td:nth-child(6){min-width:280px}.schema-version-actions{display:flex;gap:6px}.schema-version-actions button{padding:3px 7px;border:1px solid #bdd0ea;border-radius:4px;background:#fff;color:#165dff;font-size:9px;white-space:nowrap;cursor:pointer}.schema-version-actions button.danger{border-color:#f6b9b4;color:#b42318}
-@media(max-width:1500px){.schema-summary{grid-template-columns:repeat(3,1fr)}}
 
 .schema-toolbar__actions{display:flex;align-items:center;gap:10px}
 .schema-toolbar .primary{height:32px;padding:0 14px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:13px;cursor:pointer}
@@ -804,7 +776,6 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .schema-action-link:disabled{color:#a9b4c6;cursor:not-allowed;text-decoration:none}
 .schema-action-link--danger{color:#e5484d;padding-left:10px}
 .schema-action-link--danger:hover:not(:disabled){color:#b42318}
-.script-badge{max-width:120px;padding:0 8px;height:22px;border:1px solid #d8e6fa;border-radius:11px;background:#f7faff;color:#4e5969;font-size:11px;line-height:22px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .schema-modal{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;padding:24px}
 .schema-modal__mask{position:fixed;inset:0;border:0;background:rgba(16,38,76,0.42);backdrop-filter:blur(2px);cursor:pointer}
 .schema-modal__panel{position:relative;z-index:1;width:min(520px,100%);overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3)}
@@ -886,10 +857,6 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 <style scoped>
 /* DESIGN_RULES: Schema management page contract. */
 .schema-page{padding:0;color:#1d2129}
-.schema-summary{display:flex;gap:16px;margin-bottom:16px;border:0}
-.schema-summary article{flex:1;min-height:64px;gap:4px;padding:8px 16px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;box-shadow:none}
-.schema-summary article::after{display:none}
-.schema-summary span,.schema-summary em{font-size:12px;line-height:20px}.schema-summary strong{font-size:20px;line-height:28px;font-weight:600}
 .schema-shell{border-color:#e5e6eb;border-radius:6px;box-shadow:none}
 .schema-tabs{min-height:36px;padding:0 16px}.schema-tabs button{height:36px;padding:0 16px;font-size:14px;line-height:22px;font-weight:400}.schema-tabs button.active{font-weight:500}
 .schema-toolbar{min-height:48px;gap:16px;padding:8px 16px;background:#fff}.schema-toolbar>div,.schema-toolbar__actions{gap:16px}
@@ -900,7 +867,6 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .schema-table-wrap th{background:#f7f8fa;color:#1d2129;font-weight:500}.schema-action-link{font-size:14px;line-height:22px}
 .core,.support,.evidence,.auto,.review{gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}
 .core::before,.support::before,.evidence::before,.auto::before,.review::before{display:block;flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
-.script-badge{height:22px;border-radius:4px;font-size:12px;line-height:20px}
 .trace-layout{gap:16px;padding:16px;background:#f7f8fa}.trace-card,.trace-layout section{border-color:#e5e6eb;border-radius:6px;box-shadow:none}
 .trace-card>header{min-height:56px;padding:8px 16px;background:#f7f8fa}.trace-card h2{font-size:16px;line-height:24px;font-weight:600}.trace-card p,.trace-card dd,.trace-layout>aside span{font-size:12px;line-height:20px}
 .schema-modal__panel{width:min(560px,100%)}.schema-create-panel{display:grid;box-sizing:border-box;width:min(640px,calc(100vw - 48px));height:auto;max-height:calc(100vh - 48px);overflow:hidden;grid-template-rows:56px minmax(0,1fr) 64px}.schema-modal__panel header{height:56px;box-sizing:border-box;padding:0 24px}.schema-modal__panel header h2{font-size:16px;line-height:24px}.schema-modal__panel header button{width:32px;height:32px}
@@ -932,7 +898,7 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .schema-toolbar__actions>label{position:relative;display:block;box-sizing:border-box;width:280px;height:32px;padding:0;border:0;background:transparent}
 .schema-toolbar__actions>label>span{position:absolute;z-index:1;top:50%;left:12px;line-height:1;pointer-events:none;transform:translateY(-50%)}
 .schema-toolbar__actions>label>input{box-sizing:border-box;width:100%;height:32px;min-width:0;padding:0 12px 0 34px!important;border:1px solid #e5e6eb!important;border-radius:4px;background:#fff;font-size:14px;line-height:22px;box-shadow:none!important;outline:0}
-@media(max-width:900px){.schema-summary{display:grid;grid-template-columns:repeat(2,1fr)}.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
+@media(max-width:900px){.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
 .schema-create-body>.create-field,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{margin-bottom:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
 /* Schema 拓扑总览 */
 .schema-topology-shell{margin-bottom:16px;padding-bottom:0}

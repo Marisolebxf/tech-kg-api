@@ -119,6 +119,7 @@ def pipeline_steps(output: dict[str, Any] | None) -> list[dict[str, Any]]:
                 "output": state.get("output"),
                 "error": state.get("error"),
                 "access": state.get("access"),
+                "activities": state.get("activities"),
             }
         )
     return result

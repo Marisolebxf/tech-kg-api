@@ -36,6 +36,24 @@ Python is pinned to `>=3.11.13,<3.12` (the Docker image uses `python:3.11-slim`)
 - Integration tests use the `async_client` fixture in `tests/conftest.py` (ASGI transport against `main.app`).
 - `pymilvus` is a heavyweight default dep; the `milvus` project extra (`uv sync --extra milvus`) adds `milvus-model` + `jieba` needed only by `script/paper_milvus/` and paper/journal ETL.
 
+### Tests run in containers (mandatory)
+
+The backend and all infra (MySQL, MinIO, Temporal, Milvus, redis, trs-graph) run **only in Docker** — the host has none of them. **Never run backend-dependent tests on the host** (they fail with e.g. `Can't connect to MySQL server on 'temporal-mysql'`, DNS unresolvable; see `docs/FIVE_PAGE_DESIGN_REMEDIATION.md`). Verified in-container commands:
+
+```bash
+# Backend tests — inside the running api container (924 passed, ~28s):
+docker exec -w /app tech-kg-api-dev2 .venv/bin/python -m pytest tests -m "not external" -q
+
+# Frontend unit tests — inside the web image's builder stage (74 passed):
+docker build --target builder --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
+  --build-arg VITE_BASE=/ --build-arg VITE_API_BASE=/api -t tech-kg-dev2-frontend-test ./frontend
+docker run --rm tech-kg-dev2-frontend-test pnpm vitest run --exclude "src/__tests__/review-full-integration.spec.ts"
+```
+
+- The dev2 stack is `docker-compose.dev2.yml`: `tech-kg-api-dev2` (host port 8002) + `tech-kg-web-dev2` (host port 8089) + `temporal-mysql-dev2`/`temporal-dev2`. Inside the api container only `temporal-mysql-dev2` resolves, not the production `temporal-mysql`.
+- `frontend/src/__tests__/review-full-integration.spec.ts` is **environment-gated**: it spawns its own uvicorn backend (needs `uv` + backend venv) plus a MinIO at `127.0.0.1:9000` (minioadmin) and workflow MySQL — no existing container provides all of these. Its failure anywhere is an environment issue, not a regression; exclude it from test runs.
+- Frontend typecheck + build also happen inside Docker via `docker compose -f docker-compose.dev2.yml build web-dev2` (builder stage runs `vue-tsc -b && vite build`).
+
 ## Backend architecture (DDD layered)
 
 Request flow: `main.py` → `biz/router/register.py` → `biz/handler/*` → `application/*` → `service/*` → `dao/*` + `db_model/*` + `infra/*`. Pydantic request/response models for a module live in `biz/schemas/<module>.py`.

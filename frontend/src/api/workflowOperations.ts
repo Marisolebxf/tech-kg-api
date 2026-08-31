@@ -84,6 +84,18 @@ export interface PipelineStepInfo {
   name?: string
   /** 脚本运行期实际访问的资源（观测式溯源；旧执行记录无此字段）。 */
   access?: AccessReport
+  /** kg.custom.chain 专用：该脚本内部的 activity steps（Temporal activity 真实状态）。 */
+  activities?: Record<string, PipelineActivityInfo>
+}
+
+export interface PipelineActivityInfo {
+  status: 'COMPLETED' | 'RUNNING' | 'FAILED'
+  name?: string
+  input?: Record<string, unknown>
+  output?: Record<string, unknown>
+  error?: string
+  attempt?: number
+  access?: AccessReport
 }
 
 /** 脚本数据访问溯源报告（后端 sdk/access.py 渲染）。各桶 key 以 `_` 开头的是元信息（_unparsed/_ngql）。 */

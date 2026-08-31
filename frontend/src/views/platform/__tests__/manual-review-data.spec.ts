@@ -142,9 +142,8 @@ describe('业务分类（顶部 chips）', () => {
 })
 
 describe('演示数据标识（生产模式门控的前置契约）', () => {
-  // 场景 7：硬编码演示候选/证据须在生产模式移除。这里锁定演示种子可被识别，
-  // 生产模式（VITE_REVIEW_PRODUCTION_ENABLED=true）下视图改用服务端 dynamic form，
-  // 不消费这些演示记录（见 ManualReviewDynamicForm.spec.ts）。
+  // 场景 7：硬编码演示候选/证据仅用于本地演示。这里锁定演示种子可被识别，
+  // 视图实际消费服务端 dynamic form（见 ManualReviewDynamicForm.spec.ts），
   it('reviewRecords 为演示种子，id 统一 PI- 前缀', () => {
     expect(reviewRecords.length).toBeGreaterThan(0)
     expect(reviewRecords.every((r) => r.id.startsWith('PI-'))).toBe(true)

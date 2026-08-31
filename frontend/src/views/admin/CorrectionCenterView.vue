@@ -9,6 +9,7 @@ import {
 } from '../../api/corrections'
 import { getErrorMessage } from '../../api/http'
 import { getExampleCorrections } from '../../data/adminGovernanceExamples'
+import { SEARCH_KEYWORD_MAX_LENGTH, searchKeywordError } from '../../utils/searchInput'
 import { useAuthStore } from '../../stores/auth'
 
 const props = withDefaults(defineProps<{ scope?: 'mine' | 'admin'; initialStatus?: string; mode?: 'records' | 'review' }>(), {
@@ -146,6 +147,11 @@ function openCreate() {
   beforeText.value = '{}'; resetPayloadExample('expert'); formVisible.value = true
 }
 function submitQuery() {
+  const keywordError = searchKeywordError(queryForm.value.keyword)
+  if (keywordError) {
+    Message.warning(keywordError)
+    return
+  }
   activeQuery.value = { ...queryForm.value }
   page.value = 1
   if (dataMode.value === 'live') void load()
@@ -309,7 +315,7 @@ onMounted(() => { void load() })
     </section>
     <a-modal v-model:visible="queryVisible" :footer="false" :width="520" title="查询修正记录">
       <div class="query-form">
-        <label class="wide query-keyword"><span>关键词</span><a-input v-model="queryForm.keyword" placeholder="修正内容、对象 ID、申请人" @press-enter="submitQuery" /></label>
+        <label class="wide query-keyword"><span>关键词</span><a-input v-model="queryForm.keyword" :max-length="SEARCH_KEYWORD_MAX_LENGTH" placeholder="修正内容、对象 ID、申请人" @press-enter="submitQuery" /></label>
         <div class="form-field"><span>修正对象</span><a-select v-model="queryForm.targetType" aria-label="修正对象" class="correction-select" :scrollbar="true"><a-option value="">全部</a-option><a-option value="expert">专家</a-option><a-option value="organization">机构/企业</a-option><a-option value="relation">专家任职关系</a-option></a-select></div>
         <div class="form-field"><span>状态</span><a-select v-model="queryForm.status" aria-label="状态" class="correction-select" :scrollbar="true"><a-option value="">全部</a-option><a-option value="PENDING_REVIEW">待审核</a-option><a-option value="PENDING_SYNC">同步中</a-option><a-option value="SYNC_FAILED">同步失败</a-option><a-option v-if="!isReviewPage" value="COMPLETED">已完成</a-option><a-option v-if="!isReviewPage" value="REJECTED">已驳回</a-option><a-option v-if="!isReviewPage" value="CANCELLED">已撤销</a-option></a-select></div>
       </div>

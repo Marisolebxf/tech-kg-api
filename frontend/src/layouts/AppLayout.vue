@@ -487,19 +487,6 @@ onBeforeUnmount(() => {
               ></span>
               <span v-if="!sidebarCollapsed">平台总览</span>
             </RouterLink>
-            <RouterLink
-              class="app-nav__item app-nav__item--top app-nav__item--leaf"
-              active-class="app-nav__item--active"
-              to="/corrections"
-              :title="sidebarCollapsed ? '我的修正' : undefined"
-            >
-              <span
-                class="app-nav__icon"
-                :style="navIconStyle(navReview)"
-                aria-hidden="true"
-              ></span>
-              <span v-if="!sidebarCollapsed">我的修正</span>
-            </RouterLink>
 
             <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>图谱建设与治理</span>

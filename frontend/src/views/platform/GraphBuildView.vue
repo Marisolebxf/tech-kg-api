@@ -20,6 +20,7 @@ import { listGraphSpaces } from '../../api/graphSpace'
 import { currentUserId as getCurrentUserId } from '../../api/currentUser'
 import JobLaunchDialog from '../../components/JobLaunchDialog.vue'
 import { useToast } from '../../composables/use-toast'
+import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 
 const { showToast } = useToast()
 const router = useRouter()
@@ -184,7 +185,7 @@ onMounted(loadData)
       <header>
         <strong>任务列表（{{ filteredJobs.length }}）</strong>
         <div class="gb-filters">
-          <input v-model="filterName" placeholder="按名称搜索" />
+          <input v-model="filterName" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" placeholder="按名称搜索" />
           <a-select v-model="filterStatus" placeholder="状态" allow-clear style="width: 110px">
             <a-option value="启用">启用</a-option>
             <a-option value="暂停">暂停</a-option>

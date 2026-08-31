@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import ManualReviewDynamicForm from '../../components/manual-review/ManualReviewDynamicForm.vue'
-import { claimProductionReview, directDecideProductionReview, getManualReview, getProductionReview, heartbeatProductionReview, retryManualReview, submitManualReview, submitProductionReview, revokeManualReview, type ProductionReviewCase } from '../../api/workflowOperations'
+import { claimProductionReview, directDecideProductionReview, getProductionReview, heartbeatProductionReview, submitProductionReview, type ProductionReviewCase } from '../../api/workflowOperations'
 
 import {
   getHandleCategory,
@@ -18,7 +18,6 @@ import {
 } from './manual-review-data'
 
 const route = useRoute()
-const productionMode = import.meta.env.VITE_REVIEW_PRODUCTION_ENABLED === 'true'
 const productionCase = ref<ProductionReviewCase>()
 const record = ref<ReviewRecord | undefined>()
 let heartbeatTimer: number | undefined
@@ -73,16 +72,16 @@ const directTitle = computed(() => {
 })
 const isEditable = computed(() => {
   if (isDirectCase.value) return productionCase.value?.status === 'OPEN'
-  return productionMode ? ['CLAIMED','IN_REVIEW'].includes(productionCase.value?.status || '') : record.value?.status === '待处理'
+  return ['CLAIMED','IN_REVIEW'].includes(productionCase.value?.status || '')
 })
-const canClaim = computed(() => productionMode && productionCase.value?.status === 'OPEN' && !isDirectCase.value)
+const canClaim = computed(() => productionCase.value?.status === 'OPEN' && !isDirectCase.value)
 
 const template = computed(() => (record.value ? getReviewTemplate(record.value) : null))
 const impactScope = computed(() => (record.value ? getImpactScope(record.value) : '任务级'))
 const templateId = computed(() => template.value?.id ?? 'T_RUNTIME')
 const handleCategory = computed(() => (record.value ? getHandleCategory(record.value) : '质量校验'))
 const consequence = computed(() => {
-  if (productionMode && productionCase.value?.consequence) return { ...productionCase.value.consequence, rerunAnchor: productionCase.value.pipelineStepName || productionCase.value.consequence.rerunStepId, phase: record.value?.module || '图谱构建' }
+  if (productionCase.value?.consequence) return { ...productionCase.value.consequence, rerunAnchor: productionCase.value.pipelineStepName || productionCase.value.consequence.rerunStepId, phase: record.value?.module || '图谱构建' }
   return record.value ? getReviewConsequence(record.value) : null
 })
 const pipelineStep = computed(() => (record.value ? resolvePipelineStep(record.value) : null))
@@ -94,7 +93,7 @@ const feedback = ref('')
 const submitting = ref(false)
 const dynamicResult = ref<Record<string, unknown>>({})
 const safeComponentTypes = new Set(['mapping-table','field-editor','record-merge','entity-comparison','evidence-list','attribute-comparison','runtime-config','raw-json-readonly'])
-const hasUnknownComponent = computed(() => productionMode && Boolean(productionCase.value?.template?.displaySchema.sections.some((section) => !safeComponentTypes.has(section.type))))
+const hasUnknownComponent = computed(() => Boolean(productionCase.value?.template?.displaySchema.sections.some((section) => !safeComponentTypes.has(section.type))))
 const actionMeta: Record<string, { label: string; kind: string; rerun?: boolean }> = {
   'save-map-rerun': { label: '保存映射并重跑', kind: 'primary', rerun: true }, 'confirm-type': { label: '确认类型并重跑', kind: 'primary', rerun: true },
   'save-fill-rerun': { label: '保存补录并重跑', kind: 'primary', rerun: true }, 'merge-rerun': { label: '确认合并并重跑', kind: 'primary', rerun: true },
@@ -238,7 +237,7 @@ const mapProductionRecord = (item: ProductionReviewCase): ReviewRecord => ({
 })
 
 const startHeartbeat = () => {
-  if (!productionMode || !productionCase.value || !['CLAIMED','IN_REVIEW'].includes(productionCase.value.status)) return
+  if (!productionCase.value || !['CLAIMED','IN_REVIEW'].includes(productionCase.value.status)) return
   window.clearInterval(heartbeatTimer)
   heartbeatTimer = window.setInterval(async () => {
     if (!productionCase.value) return
@@ -249,17 +248,11 @@ const startHeartbeat = () => {
 
 async function loadReview() {
   try {
-    if (productionMode) {
-      productionCase.value = await getProductionReview(String(route.params.instanceId || ''))
-      record.value = mapProductionRecord(productionCase.value)
-      note.value = String(productionCase.value.draft?.note || '')
-      startHeartbeat()
-    } else {
-      const response = await getManualReview(String(route.params.instanceId || ''))
-      record.value = response as ReviewRecord
-      note.value = response.decisionNote ?? ''
-    }
+    productionCase.value = await getProductionReview(String(route.params.instanceId || ''))
+    record.value = mapProductionRecord(productionCase.value)
+    note.value = String(productionCase.value.draft?.note || '')
     initWorkspace(record.value)
+    startHeartbeat()
   } catch (error) { feedback.value = error instanceof Error ? error.message : '人工处理详情加载失败' }
 }
 
@@ -340,21 +333,7 @@ const dupRecords = [
   { id: '#3', hint: '来源渠道不同', detail: '标题一致 · 来源渠道补充' },
 ]
 
-const primaryActionLabel = computed(() => {
-  if (productionMode) return preferredProductionAction.value?.label || '无可用动作'
-  if (templateId.value === 'T_LINK') {
-    if (entityVerdict.value === 'merge') return '确认合并并重跑'
-    if (entityVerdict.value === 'create') return '确认新建并重跑'
-    return '驳回候选'
-  }
-  if (templateId.value === 'T_MAP' && record.value && isMapTypeFix(record.value)) return '确认类型并重跑'
-  if (templateId.value === 'T_EVIDENCE') {
-    if (relationVerdict.value === 'reject') return '驳回关系（退回抽取）'
-    if (relationVerdict.value === 'hold') return '保持隔离，继续补证'
-    return '确认关系并重跑入图'
-  }
-  return template.value?.actions.find((a) => a.kind === 'primary')?.label ?? '确认并重跑'
-})
+const primaryActionLabel = computed(() => preferredProductionAction.value?.label || '无可用动作')
 
 const isCooperationRelation = computed(() => record.value?.type.includes('合作关系') ?? false)
 const relationSchemaLabel = computed(() => isCooperationRelation.value ? 'COOPERATE_WITH\n企业合作' : 'CITES\n论文引用')
@@ -367,13 +346,7 @@ const relationEvidenceCount = computed(() => (
   + (extraEvidence.value.trim() ? 1 : 0)
 ))
 
-const isPrimaryDisabled = computed(() => {
-  if (!isEditable.value || hasUnknownComponent.value || (productionMode && !preferredProductionAction.value)) return true
-  if (productionMode) return false
-  if (templateId.value === 'T_DQ_FILL') return !fillTitleZh.value.trim()
-  if (templateId.value === 'T_EVIDENCE' && relationVerdict.value === 'approve') return relationEvidenceCount.value < 2
-  return false
-})
+const isPrimaryDisabled = computed(() => !isEditable.value || hasUnknownComponent.value || !preferredProductionAction.value)
 
 const footerHint = computed(() => {
   if (isHistory.value) return record.value?.status === '已撤销' ? '任务已撤销' : '处理已完成'
@@ -425,24 +398,6 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
     }
     return
   }
-  if (!productionMode && action.id === 'retry-task') {
-    try {
-      await retryManualReview(reviewRecord.id, { runtimeConfig: runtimeConfig.value })
-      feedback.value = '已重新下发当前任务，人工处理项保持待处理，可在任务中心查看执行进度。'
-    } catch (error) {
-      feedback.value = error instanceof Error ? error.message : '任务重试失败'
-    }
-    return
-  }
-  if (!productionMode && action.id === 'skip-task') {
-    try {
-      record.value = await revokeManualReview(reviewRecord.id, note.value || '人工确认撤销当前任务') as ReviewRecord
-      feedback.value = '任务已撤销，不再进入下游流程。'
-    } catch (error) {
-      feedback.value = error instanceof Error ? error.message : '任务撤销失败'
-    }
-    return
-  }
   let label = action.label
   if (action.id === 'entity-confirm' || action.id === 'confirm-type' || ((templateId.value === 'T_LINK' || (templateId.value === 'T_MAP' && isMapTypeFix(reviewRecord))) && action.kind === 'primary')) {
     label = primaryActionLabel.value
@@ -476,27 +431,22 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
     sedimentRule: sedimentRule.value,
     actionKind: 'actionKind' in action ? action.actionKind : undefined,
   }
-  if (productionMode) {
-    Object.assign(result, dynamicResult.value)
-    const parseJson = (key: string, target: string) => {
-      const raw = dynamicResult.value[key]
-      if (typeof raw === 'string' && raw.trim()) { try { (result as Record<string, unknown>)[target] = JSON.parse(raw) } catch { throw new Error(`${key} 不是合法 JSON`) } }
-    }
-    parseJson('mappingsJson', 'mappings'); parseJson('fieldsJson', 'fields'); parseJson('runtimeJson', 'runtimeConfig')
-    delete (result as Record<string, unknown>).rerunStepId
+  Object.assign(result, dynamicResult.value)
+  const parseJson = (key: string, target: string) => {
+    const raw = dynamicResult.value[key]
+    if (typeof raw === 'string' && raw.trim()) { try { (result as Record<string, unknown>)[target] = JSON.parse(raw) } catch { throw new Error(`${key} 不是合法 JSON`) } }
   }
+  parseJson('mappingsJson', 'mappings'); parseJson('fieldsJson', 'fields'); parseJson('runtimeJson', 'runtimeConfig')
+  delete (result as Record<string, unknown>).rerunStepId
   try {
-    if (productionMode && productionCase.value) {
+    if (productionCase.value) {
       productionCase.value = await submitProductionReview(reviewRecord.id, { version: productionCase.value.version, actionId: action.id, note: note.value, result })
       record.value = mapProductionRecord(productionCase.value)
       window.clearInterval(heartbeatTimer)
-    } else {
-      const response = await submitManualReview(reviewRecord.id, { actionId: action.id, note: note.value, result, rerun: Boolean(rerun) })
-      record.value = response.review as ReviewRecord
     }
     const messages = [
       rerun
-        ? `修正结果已回写到「${consequence.value?.writeTarget}」，系统已从「${consequence.value?.rerunAnchor ?? record.value.node}」创建重跑。可到图谱构建查看进度。`
+        ? `修正结果已回写到「${consequence.value?.writeTarget}」，系统已从「${consequence.value?.rerunAnchor ?? record.value?.node}」创建重跑。可到图谱构建查看进度。`
         : '处理结果已回写。',
     ]
     if (sedimentRule.value && sedimentHint.value) messages.push('裁决已勾选沉淀为规则。')
@@ -507,27 +457,12 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
 }
 
 const runPrimary = () => {
-  if (productionMode) { if (preferredProductionAction.value && !hasUnknownComponent.value) handleAction(preferredProductionAction.value); return }
-  if (templateId.value === 'T_LINK' && entityVerdict.value === 'reject') {
-    handleAction({ id: 'reject-candidate', label: '驳回候选', kind: 'secondary' })
-    return
-  }
-  if (templateId.value === 'T_EVIDENCE' && relationVerdict.value !== 'approve') {
-    handleAction({
-      id: relationVerdict.value === 'reject' ? 'reject-extract' : 'keep-isolated',
-      label: primaryActionLabel.value,
-      kind: 'secondary',
-      rerun: relationVerdict.value === 'reject',
-    })
-    return
-  }
-  const primary = template.value?.actions.find((a) => a.kind === 'primary')
-  if (primary) handleAction({ ...primary, label: primaryActionLabel.value })
+  if (preferredProductionAction.value && !hasUnknownComponent.value) handleAction(preferredProductionAction.value)
 }
 
 const secondaryActions = computed(() => {
-  if (productionMode) return hasUnknownComponent.value ? [] : productionActions.value.filter((action) => action.id !== preferredProductionAction.value?.id)
-  return templateId.value === 'T_EVIDENCE' ? [] : template.value?.actions.filter((a) => a.kind !== 'primary') ?? []
+  if (hasUnknownComponent.value) return []
+  return productionActions.value.filter((action) => action.id !== preferredProductionAction.value?.id)
 })
 </script>
 
@@ -582,7 +517,7 @@ const secondaryActions = computed(() => {
         </div>
       </header>
 
-      <ManualReviewDynamicForm v-if="productionMode && productionCase?.template && !isDirectCase" :sections="productionCase.template.displaySchema.sections" :data="productionCase.data || {}" @change="dynamicResult = $event" />
+      <ManualReviewDynamicForm v-if="productionCase?.template && !isDirectCase" :sections="productionCase.template.displaySchema.sections" :data="productionCase.data || {}" @change="dynamicResult = $event" />
       <template v-else>
       <!-- T_DIRECT：kg.custom.steps 候选入库决策 5 段式布局 -->
       <section v-if="templateId === 'T_DIRECT'" class="zone zone-direct">

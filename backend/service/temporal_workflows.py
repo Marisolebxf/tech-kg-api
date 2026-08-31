@@ -776,6 +776,7 @@ class StepPipelineWorkflow:
             load_workflow_definition,
             request["definitionId"],
             start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=ACTIVITY_RETRY_POLICY,
         )
         prev_outputs: dict[str, Any] = {}
         for step in definition.get("steps", []):
@@ -829,6 +830,12 @@ class ChainWorkflow:
     与 kg.custom.steps 的区别：steps 要求单文件内多函数；chain 的每一步是一个
     独立上传的 python 定义（如单实体/单关系抽取脚本），上一步输出经
     payload["_prevOutputs"] 传给下一步（脚本可忽略）。状态走 get_steps query。
+
+    每个脚本在 ``_steps[definitionId].activities`` 里记录其 activity steps：
+    - 普通脚本（kg.custom.python）整体一个 execute_python_script activity；
+    - steps 型脚本（kg.custom.steps，带 step manifest）按 manifest 逐步走
+      execute_pipeline_step activity（修复 steps 型脚本进链后找不到 workflow()
+      入口直接失败的问题）。任务详情页每个脚本一个 step，抽屉展开 activity steps。
     """
 
     def __init__(self) -> None:
@@ -842,6 +849,7 @@ class ChainWorkflow:
             load_workflow_definition,
             request["definitionId"],
             start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=ACTIVITY_RETRY_POLICY,
         )
         prev_outputs: dict[str, Any] = {}
         for step in chain.get("steps", []):
@@ -851,30 +859,91 @@ class ChainWorkflow:
                 load_workflow_definition,
                 step_id,
                 start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=ACTIVITY_RETRY_POLICY,
             )
             step_payload = {
                 **(request.get("payload", {}) or {}),
                 "_prevOutputs": prev_outputs,
             }
-            timeout_seconds = max(int(step_definition.get("timeoutSeconds", 60)), 1)
+            activities: dict[str, dict[str, Any]] = {}
+            # RUNNING 先落 state：get_steps 查询可见脚本执行中，activities 原地更新
+            self._steps[step_id] = {
+                "status": "RUNNING",
+                "name": step.get("name") or step_id,
+                "input": step_payload,
+                "activities": activities,
+            }
             try:
-                output = await workflow.execute_activity(
-                    execute_python_script,
-                    {
-                        "scriptPath": step_definition["scriptPath"],
-                        "functionName": step_definition.get("functionName", "workflow"),
-                        "payload": step_payload,
-                        "definitionId": step_id,
-                        "timeoutSeconds": timeout_seconds,
-                    },
-                    start_to_close_timeout=timedelta(seconds=timeout_seconds + 30),
-                    retry_policy=_retry_policy(step.get("retryPolicy", {})),
-                )
+                if step_definition.get("workflowType") == "kg.custom.steps" and step_definition.get(
+                    "steps"
+                ):
+                    # steps 型脚本：manifest 每个函数一个 activity，脚本内 prevOutputs 链式传递
+                    script_prev: dict[str, Any] = {}
+                    for manifest_step in step_definition["steps"]:
+                        manifest_step_id = manifest_step["id"]
+                        try:
+                            result = await workflow.execute_activity(
+                                execute_pipeline_step,
+                                {
+                                    "taskId": request.get("taskId"),
+                                    "executionId": request.get("executionId"),
+                                    "definitionId": step_id,
+                                    "stepId": manifest_step_id,
+                                    "functionName": manifest_step["functionName"],
+                                    "scriptPath": step_definition["scriptPath"],
+                                    "payload": step_payload,
+                                    "prevOutputs": script_prev,
+                                    "timeoutSeconds": manifest_step.get("timeoutSeconds", 600),
+                                },
+                                start_to_close_timeout=timedelta(
+                                    seconds=manifest_step.get("timeoutSeconds", 600) + 30
+                                ),
+                                retry_policy=_retry_policy(manifest_step.get("retryPolicy", {})),
+                            )
+                            activities[manifest_step_id] = {
+                                "status": "COMPLETED",
+                                "name": manifest_step.get("name") or manifest_step_id,
+                                "input": step_payload,
+                                "output": result["output"],
+                                "attempt": result["attempt"],
+                                "access": result.get("access"),
+                            }
+                            script_prev[manifest_step_id] = result["output"]
+                        except Exception as exc:
+                            activities[manifest_step_id] = {
+                                "status": "FAILED",
+                                "name": manifest_step.get("name") or manifest_step_id,
+                                "input": step_payload,
+                                "error": str(exc),
+                            }
+                            raise
+                    output = script_prev
+                else:
+                    timeout_seconds = max(int(step_definition.get("timeoutSeconds", 60)), 1)
+                    output = await workflow.execute_activity(
+                        execute_python_script,
+                        {
+                            "scriptPath": step_definition["scriptPath"],
+                            "functionName": step_definition.get("functionName", "workflow"),
+                            "payload": step_payload,
+                            "definitionId": step_id,
+                            "timeoutSeconds": timeout_seconds,
+                        },
+                        start_to_close_timeout=timedelta(seconds=timeout_seconds + 30),
+                        retry_policy=_retry_policy(step.get("retryPolicy", {})),
+                    )
+                    activities["execute"] = {
+                        "status": "COMPLETED",
+                        "name": "脚本执行",
+                        "input": step_payload,
+                        "output": output,
+                    }
                 self._steps[step_id] = {
                     "status": "COMPLETED",
                     "name": step.get("name") or step_id,
                     "input": step_payload,
                     "output": output,
+                    "activities": activities,
                 }
                 prev_outputs[step_id] = output
             except Exception as exc:
@@ -883,6 +952,7 @@ class ChainWorkflow:
                     "name": step.get("name") or step_id,
                     "input": step_payload,
                     "error": str(exc),
+                    "activities": activities,
                 }
                 raise
         return {"status": "completed", "steps": self._steps}

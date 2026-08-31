@@ -31,6 +31,7 @@ import {
 } from '../../api/platformOverview'
 import KgGraphCanvas from '../../components/kg-graph-canvas.vue'
 import { useToast } from '../../composables/use-toast'
+import { SEARCH_KEYWORD_MAX_LENGTH, searchKeywordError } from '../../utils/searchInput'
 import {
   getEdgeProvenance,
   getNodeProvenance,
@@ -4484,6 +4485,13 @@ async function handleQuery(): Promise<void> {
     return
   }
 
+  const keywordError = searchKeywordError(keyword)
+  if (keywordError) {
+    showToast(keywordError, 'warning')
+
+    return
+  }
+
   isActionLoading.value = true
 
   /*
@@ -4929,6 +4937,7 @@ const pageMeta = computed(() => {
             <input
               v-model="queryKeyword"
               type="search"
+              :maxlength="SEARCH_KEYWORD_MAX_LENGTH"
               placeholder="请输入实体名称或节点ID"
               @keyup.enter="handleQuery"
             />
@@ -5003,6 +5012,7 @@ const pageMeta = computed(() => {
         </div>
       </section>
 
+      <div class="platform-query-lower">
       <section class="kg-panel platform-query-graph">
         <div class="kg-panel__header">
           <h2 class="kg-panel__title">综合图谱展示</h2>
@@ -5245,6 +5255,7 @@ const pageMeta = computed(() => {
           </p>
         </div>
       </aside>
+      </div>
     </main>
 
     <main v-else :class="['platform-content', 'platform-service', { 'platform-service--api': activeServiceMode === 'api' }]">
@@ -7311,14 +7322,28 @@ print(response.json())</pre>
 }
 
 .platform-query {
+  /* flex 纵向布局：表单按内容撑开，不被父网格行拉伸/挤压，超出部分
+     由上层 .app-workspace（overflow:auto）滚动 */
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-self: start;
+  min-height: max-content;
+  overflow: visible;
+}
+
+.platform-query > * {
+  flex-shrink: 0;
+}
+
+.platform-query-lower {
+  display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
-  grid-template-rows: auto minmax(460px, 1fr);
+  gap: 16px;
   align-items: stretch;
 }
 
 .platform-query-graph {
-  grid-column: 1;
-  grid-row: 2;
   min-height: 480px;
   overflow: hidden;
 }
@@ -8356,8 +8381,8 @@ print(response.json())</pre>
 </style>
 <style scoped>
 /* DESIGN_RULES: graph query branch only. */
-.platform-query{grid-template-columns:minmax(0,1fr) 340px;grid-template-rows:auto minmax(460px,1fr);gap:16px}
-.platform-query>.kg-panel{border-color:#e5e6eb!important;border-radius:6px!important;background:#fff!important;box-shadow:none!important}
+.platform-query{gap:16px}
+.platform-query .kg-panel{border-color:#e5e6eb!important;border-radius:6px!important;background:#fff!important;box-shadow:none!important}
 .platform-query .kg-panel__header{min-height:40px;padding:8px 16px;border-color:#e5e6eb;background:#f7f8fa}
 .platform-query .kg-panel__title{font-size:16px;line-height:24px;font-weight:600}
 .platform-query-form{overflow:hidden;border:1px solid #e5e6eb!important;border-radius:6px!important}.platform-query-form .kg-panel__header{box-sizing:border-box;height:40px;min-height:40px;padding:0 16px}
@@ -8376,14 +8401,14 @@ print(response.json())</pre>
 .platform-query .platform-form-field :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;outline:0!important;opacity:0!important;pointer-events:none!important}
 .platform-query .platform-form-field :deep(.arco-select-view-value){width:0!important;min-width:0;overflow:hidden;line-height:30px;text-overflow:ellipsis;white-space:nowrap;flex:1 1 0%!important}
 .platform-query .kg-button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
-.platform-query-graph{min-height:480px}.platform-query>.platform-detail{width:auto;min-width:0}
+.platform-query-graph{min-height:480px}.platform-query-lower>.platform-detail{width:auto;min-width:0}
 .platform-query .platform-graph-legend{gap:8px 16px;min-height:40px;padding:8px 16px;border-color:#e5e6eb;background:#fff}.platform-query .platform-graph-legend__item{gap:8px;font-size:14px;line-height:22px}.platform-query .platform-graph-legend__item i{box-shadow:none}
 .platform-query .platform-detail__tabs{gap:0;padding:4px;border-radius:4px;background:#f2f3f5}.platform-query .platform-detail__tabs button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}.platform-query .platform-detail__tabs button.is-active{background:#fff;color:#165dff;font-weight:500}
 .platform-query .platform-detail__body{padding:16px}.platform-query .platform-detail dt{font-size:12px;line-height:20px}.platform-query .platform-detail dd{font-size:14px;line-height:22px}
 .platform-query .platform-status{display:inline-flex;align-items:center;gap:6px;min-height:22px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.platform-query .platform-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .platform-query .platform-table th,.platform-query .platform-table td{height:40px;padding:0 16px;font-size:14px;line-height:22px}.platform-query .platform-table th{background:#f7f8fa;font-weight:500}
 .platform-query-empty{gap:8px;padding:24px 16px}.platform-query-empty strong{font-size:16px;line-height:24px;font-weight:600}.platform-query-empty p{font-size:14px;line-height:22px}
-@media(max-width:1100px){.platform-query{grid-template-columns:minmax(0,1fr)}.platform-query>.platform-detail{grid-column:1;grid-row:3;max-height:420px}.platform-query .platform-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:1100px){.platform-query-lower{grid-template-columns:minmax(0,1fr)}.platform-query-lower>.platform-detail{max-height:420px}.platform-query .platform-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .platform-query .platform-form-field :deep(.arco-select-view){box-sizing:border-box;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important}
 .platform-query .platform-form-field :deep(.arco-select-view:hover){border-color:#c9cdd4!important}
 .platform-query .platform-form-field :deep(.arco-select-view-focus){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}

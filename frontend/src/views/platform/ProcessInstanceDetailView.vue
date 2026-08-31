@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getExecution, getJob, getTask, listExecutions, retryTask, triggerJob, type AccessReport, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch, type WorkflowExecution, type WorkflowJob } from '../../api/workflowOperations'
+import { getExecution, getJob, getTask, listExecutions, retryTask, triggerJob, type AccessReport, type PipelineActivityInfo, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch, type WorkflowExecution, type WorkflowJob } from '../../api/workflowOperations'
 import { accessChips } from '../../utils/accessReport'
 
 type StepStatus = '成功' | '运行中' | '需人工处理' | '待执行'
@@ -21,6 +21,8 @@ type Step = {
   input?: unknown
   output?: unknown
   access?: AccessReport
+  /** chain 任务：脚本 step 内含的 activity step 数（抽屉可展开）。 */
+  activityCount?: number
 }
 
 const route = useRoute()
@@ -41,6 +43,11 @@ const isConstructionTask = computed(() => processingInstance.value?.stage === '�
 const needsTaskReview = computed(() => ['执行出错', '等待人工审核'].includes(processingInstance.value?.taskStatus ?? ''))
 const activeTab = ref<DetailTab>('overview')
 const isPipelineTask = computed(() => ['kg.custom.steps', 'kg.custom.chain'].includes(processingInstance.value?.workflowType ?? ''))
+/** 多脚本串行任务：流程里每个 step 是一个脚本，点击在按钮下方展开该脚本的 activity steps。 */
+const isChainTask = computed(() => processingInstance.value?.workflowType === 'kg.custom.chain')
+/** chain 内联展开：当前展开的脚本 step 与选中的 activity step。 */
+const selectedActivityId = ref(String(route.query.activity || ''))
+const expandedScriptId = ref(selectedActivityId.value ? String(route.query.step || '') : '')
 
 const baseSteps: Omit<Step, 'status' | 'count' | 'abnormal' | 'duration'>[] = [
   { id: 'source', phase: '数据处理', name: '数据接入', risk: '低风险', description: '读取科技要素库增量数据并校验连接。', engine: 'Data Connector 3.1' },
@@ -57,11 +64,8 @@ const baseSteps: Omit<Step, 'status' | 'count' | 'abnormal' | 'duration'>[] = [
 ]
 
 const steps = computed<Step[]>(() => {
-  if (isPipelineTask.value) {
-    return buildPipelineSteps()
-  }
   if (processingInstance.value?.workflowType === 'kg.custom.python') {
-    // 单脚本任务：整个脚本就是一个 activity step，直接展示任务级输入输出
+    // 单脚本任务：脚本整体就是一个 activity step（execute_python_script），直接展示任务级输入输出
     const instance = processingInstance.value
     const failed = instance.taskStatus === '执行出错'
     return [{
@@ -73,11 +77,17 @@ const steps = computed<Step[]>(() => {
       count: '-',
       abnormal: failed ? '1' : '0',
       duration: '-',
-      description: '脚本 workflow(payload) 整体执行',
+      description: 'activity: execute_python_script · 脚本入口 workflow(payload) 整体执行',
       engine: 'Temporal Script Worker',
       input: instance.input,
       output: instance.output,
     }]
+  }
+  if (isPipelineTask.value) {
+    const built = buildPipelineSteps()
+    // kg.custom.steps 单脚本：流程 step 与脚本内 activity step 一一对应
+    if (built.length) return built
+    // pipeline 实时查询失败（如历史过期）时，退回落库的 task.steps（含真实 input/output）
   }
   if (processingInstance.value?.steps?.length) {
     return processingInstance.value.steps.map((step) => ({
@@ -154,13 +164,17 @@ function buildPipelineSteps(): Step[] {
   const state = processingInstance.value?.pipeline
   if (!state?.steps) return [] as Step[]
   const engine = processingInstance.value?.workflowType ?? 'kg.custom.steps'
-  return Object.entries(state.steps).map(([id, info]) => ({
+  const built = Object.entries(state.steps).map(([id, info]) => ({
     id,
     phase: '图谱构建' as const,
     name: info.name || id,
     status: mapPipelineStatus(info.status),
     risk: (info.status === 'FAILED' ? '高风险' : '低风险') as RiskLevel,
-    count: info.attempt ? `attempt=${info.attempt}` : '-',
+    count: info.activities
+      ? `${Object.keys(info.activities).length} 个 activity`
+      : info.attempt
+        ? `attempt=${info.attempt}`
+        : '-',
     abnormal: info.error ? '1' : '0',
     duration: '-',
     description: info.error || `${engine} · ${info.status}`,
@@ -168,11 +182,68 @@ function buildPipelineSteps(): Step[] {
     input: info.input,
     output: info.output,
     access: info.access,
+    activityCount: info.activities ? Object.keys(info.activities).length : undefined,
   }))
+  // 正在执行的 step 尚未写入 state：用 current 补一个「运行中」节点，避免流程断档
+  if (state.current && !state.steps[state.current]) {
+    built.push({
+      id: state.current,
+      phase: '图谱构建',
+      name: state.current,
+      status: '运行中',
+      risk: '低风险',
+      count: '-',
+      abnormal: '0',
+      duration: '-',
+      description: `${engine} · 执行中`,
+      engine,
+      input: undefined,
+      output: undefined,
+      access: undefined,
+      activityCount: undefined,
+    })
+  }
+  return built
+}
+
+/** chain 任务：某脚本 step 的 activity steps（Temporal activity 真实状态）。 */
+function chainActivities(scriptId: string): Array<{ id: string; info: PipelineActivityInfo }> {
+  const activities = processingInstance.value?.pipeline?.steps?.[scriptId]?.activities
+  if (!activities) return []
+  return Object.entries(activities).map(([id, info]) => ({ id, info }))
+}
+
+/** 把选中的 activity step 合成为右侧详情面板用的 Step。 */
+function buildActivityStep(scriptId: string, activityId: string): Step | null {
+  const entry = chainActivities(scriptId).find((item) => item.id === activityId)
+  if (!entry) return null
+  const scriptName = processingInstance.value?.pipeline?.steps?.[scriptId]?.name || scriptId
+  return {
+    id: `${scriptId}::${activityId}`,
+    phase: '图谱构建',
+    name: `${scriptName} · ${entry.info.name || activityId}`,
+    status: mapPipelineStatus(entry.info.status),
+    risk: (entry.info.status === 'FAILED' ? '高风险' : '低风险') as RiskLevel,
+    count: entry.info.attempt ? `attempt=${entry.info.attempt}` : '-',
+    abnormal: entry.info.error ? '1' : '0',
+    duration: '-',
+    description: entry.info.error || `脚本 activity step（${activityId}）· 输入输出为该 activity 真实上报 JSON`,
+    engine: 'Temporal Activity',
+    input: entry.info.input,
+    output: entry.info.output,
+    access: entry.info.access,
+  }
 }
 
 const selectedStepId = ref(String(route.query.step || initialStepId()))
-const selectedStep = computed(() => steps.value.find((step) => step.id === selectedStepId.value) ?? steps.value[0])
+const EMPTY_STEP: Step = { id: 'none', phase: '图谱构建', name: '暂无步骤数据', status: '待执行', risk: '低风险', count: '-', abnormal: '-', duration: '-', description: '未获取到步骤数据（workflow 可能仍在启动或状态查询失败）', engine: '-' }
+const selectedStep = computed<Step>(() => {
+  if (isChainTask.value && selectedActivityId.value) {
+    const activityStep = buildActivityStep(selectedStepId.value, selectedActivityId.value)
+    if (activityStep) return activityStep
+  }
+  return steps.value.find((step) => step.id === selectedStepId.value) ?? steps.value[0] ?? EMPTY_STEP
+})
 const visiblePhase = computed(() => isConstructionTask.value ? '图谱构建' as const : '数据处理' as const)
 const visibleSteps = computed(() => steps.value.filter((step) => step.phase === visiblePhase.value))
 const needsReview = computed(() => needsTaskReview.value && selectedStep.value.abnormal !== '0' && selectedStep.value.abnormal !== '-')
@@ -267,8 +338,26 @@ const lineageEvidenceRows = computed(() => {
 
 const selectStep = (id: string) => {
   selectedStepId.value = id
+  selectedActivityId.value = ''
   activeTab.value = 'overview'
-  void router.replace({ query: { ...route.query, step: id } })
+  // 多脚本任务：点击脚本 step 在按钮下方展开/收起该脚本的 activity steps
+  if (isChainTask.value) {
+    expandedScriptId.value = expandedScriptId.value === id ? '' : id
+  }
+  void router.replace({ query: { ...route.query, step: id, activity: undefined } })
+}
+
+const selectActivity = (scriptId: string, activityId: string) => {
+  selectedStepId.value = scriptId
+  selectedActivityId.value = activityId
+  activeTab.value = 'overview'
+  void router.replace({ query: { ...route.query, step: scriptId, activity: activityId } })
+}
+
+const clearActivitySelection = () => {
+  selectedActivityId.value = ''
+  activeTab.value = 'overview'
+  void router.replace({ query: { ...route.query, activity: undefined } })
 }
 
 // === kg.custom.steps 流水线状态 ===
@@ -316,6 +405,7 @@ async function loadTaskDetail() {
     if (!route.query.step) {
       selectedStepId.value = steps.value.find((step) => step.status === '需人工处理')?.id ?? steps.value[0]?.id ?? 'source'
     }
+    if (!route.query.activity) selectedActivityId.value = ''
   } catch {
     processingInstance.value = undefined
   }
@@ -360,6 +450,7 @@ async function selectExecution(executionId: string) {
         if (!route.query.step) {
           selectedStepId.value = steps.value[0]?.id ?? 'source'
         }
+        if (!route.query.activity) selectedActivityId.value = ''
       } catch {
         // 保留当前任务详情
       }
@@ -386,6 +477,11 @@ async function triggerJobRun() {
 
 watch(() => route.query.step, (step) => {
   if (step && steps.value.some((item) => item.id === String(step))) selectedStepId.value = String(step)
+})
+watch(() => route.query.activity, (value) => {
+  selectedActivityId.value = String(value || '')
+  // 深链带 activity 时确保对应脚本 step 处于展开状态
+  if (value && isChainTask.value) expandedScriptId.value = String(route.query.step || expandedScriptId.value)
 })
 watch(taskId, () => {
   void loadTaskDetail()
@@ -465,16 +561,26 @@ onMounted(async () => {
         <header><div><h2>{{ visiblePhase }}流程</h2></div><span>{{ visibleSteps.filter(step => step.status === '成功').length }}/{{ visibleSteps.length }}</span></header>
         <section class="phase-group">
           <div class="phase-title"><strong>{{ visiblePhase }}</strong></div>
-          <button v-for="step in visibleSteps" :key="step.id" type="button" :class="['process-step', `is-${step.status}`, `is-${step.risk}`, { active: selectedStep.id === step.id, 'has-review': step.abnormal !== '0' && step.abnormal !== '-' }]" @click="selectStep(step.id)">
-            <i>{{ step.status === '成功' ? '✓' : step.status === '需人工处理' ? '!' : '·' }}</i>
-            <span><strong>{{ step.name }}<b v-if="step.id === 'llm'">AI</b><b v-if="step.risk === '高风险'" class="risk">重点</b></strong><em>{{ step.count }}<template v-if="step.abnormal !== '0' && step.abnormal !== '-'"> · {{ step.abnormal }} 异常</template></em></span>
-            <small>{{ step.status }}</small>
-          </button>
+          <template v-for="step in visibleSteps" :key="step.id">
+            <button type="button" :class="['process-step', `is-${step.status}`, `is-${step.risk}`, { active: selectedStepId === step.id, 'has-review': step.abnormal !== '0' && step.abnormal !== '-', 'is-script': isChainTask, 'is-expanded': isChainTask && expandedScriptId === step.id }]" @click="selectStep(step.id)">
+              <i>{{ step.status === '成功' ? '✓' : step.status === '需人工处理' ? '!' : '·' }}</i>
+              <span><strong>{{ step.name }}<b v-if="step.id === 'llm'">AI</b><b v-if="step.risk === '高风险'" class="risk">重点</b></strong><em>{{ step.count }}<template v-if="step.abnormal !== '0' && step.abnormal !== '-'"> · {{ step.abnormal }} 异常</template></em></span>
+              <small>{{ step.status }}</small>
+            </button>
+            <template v-if="isChainTask && expandedScriptId === step.id">
+              <button v-for="act in chainActivities(step.id)" :key="`${step.id}::${act.id}`" type="button" :class="['process-substep', `is-${mapPipelineStatus(act.info.status)}`, { active: selectedActivityId === act.id && selectedStepId === step.id }]" @click="selectActivity(step.id, act.id)">
+                <i>{{ mapPipelineStatus(act.info.status) === '成功' ? '✓' : mapPipelineStatus(act.info.status) === '需人工处理' ? '!' : '·' }}</i>
+                <span><strong>{{ act.info.name || act.id }}</strong><em>{{ act.info.error ? '执行失败' : act.info.output !== undefined && act.info.output !== null ? '已上报输出 JSON' : '无输出记录' }}<template v-if="act.info.attempt"> · attempt={{ act.info.attempt }}</template></em></span>
+                <small>{{ mapPipelineStatus(act.info.status) }}</small>
+              </button>
+              <p v-if="!chainActivities(step.id).length" class="process-substep-empty">暂无 activity step 记录：脚本可能仍在执行，或为旧版本执行的链（重新执行可记录逐步状态）。</p>
+            </template>
+          </template>
         </section>
       </aside>
 
       <main class="step-detail">
-        <header class="step-head"><div><span>{{ selectedStep.phase }} · {{ attentionLabel }}</span><h2>{{ selectedStep.name }} <b v-if="isAiStep">AI 重点关注节点</b><b v-else-if="isQualityStep">含 AI 辅助检验</b></h2><p>{{ selectedStep.description }}</p></div><button v-if="isPipelineTask && isPipelineFailed" type="button" class="step-head-retry" :disabled="retrySubmitting" @click="handlePipelineRetry">{{ retrySubmitting ? '提交中…' : '重试（reset 回放）' }}</button><RouterLink v-else-if="!isPipelineTask && needsReview" :to="`/manual-review/task/${taskId}`">进入人工处理 →</RouterLink></header>
+        <header class="step-head"><div><span>{{ selectedStep.phase }} · {{ attentionLabel }}</span><h2>{{ selectedStep.name }} <b v-if="isAiStep">AI 重点关注节点</b><b v-else-if="isQualityStep">含 AI 辅助检验</b></h2><p>{{ selectedStep.description }}</p></div><div class="step-head-actions"><button v-if="isChainTask && selectedActivityId" type="button" class="step-head-back" @click="clearActivitySelection()">← 返回脚本级信息</button><button v-if="isPipelineTask && isPipelineFailed" type="button" class="step-head-retry" :disabled="retrySubmitting" @click="handlePipelineRetry">{{ retrySubmitting ? '提交中…' : '重试（reset 回放）' }}</button><RouterLink v-else-if="!isPipelineTask && needsReview" :to="`/manual-review/task/${taskId}`">进入人工处理 →</RouterLink></div></header>
         <nav class="detail-tabs"><button v-for="tab in ([['overview','概况与结果'],['io','输入输出'],['logs','异常与日志'],['lineage','数据溯源']] as const)" :key="tab[0]" type="button" :class="{ active: activeTab === tab[0] }" @click="activeTab = tab[0]">{{ tab[1] }}</button></nav>
 
         <div v-if="activeTab === 'overview'" class="overview-content">
@@ -500,6 +606,7 @@ onMounted(async () => {
             </div>
           </section>
           <section v-if="hasRealIo" class="real-io-card"><h3>阶段真实输入输出 <span>脚本上报</span></h3><div v-if="selectedStep.input" class="real-io-block"><strong>输入</strong><pre>{{ formatIo(selectedStep.input) }}</pre></div><div v-if="selectedStep.output" class="real-io-block"><strong>输出</strong><pre>{{ formatIo(selectedStep.output) }}</pre></div></section>
+          <template v-if="!hasRealIo">
           <section><h3>输入数据</h3><template v-if="isAiStep"><div class="sample-text"><span>实际任务输入 · {{ processingInstance?.sourceTable }} / {{ processingInstance?.sourceRecordId }}</span><p>“{{ processingInstance?.objectName }}，来源记录包含主体、机构、成果与关系证据，要求按当前 Schema 抽取候选结果……”</p></div></template><template v-else><pre>{
   "task_id": "{{ taskId }}",
   "source_table": "{{ processingInstance?.sourceTable || batch.source }}",
@@ -515,6 +622,7 @@ onMounted(async () => {
   "rule": "{{ processingInstance?.rule || selectedStep.engine }}",
   "result": "{{ processingInstance?.result || '已生成节点输出' }}"
 }</pre></template></section>
+          </template>
         </div>
 
         <div v-else-if="activeTab === 'logs'" class="log-content"><section class="issue-list"><h3>{{ isExecutionInterrupted ? '执行异常' : '结果验收' }}</h3><article><span>{{ processingInstance?.reviewType || '自动质量判定' }}</span><strong :class="{ safe: !needsTaskReview }">{{ isExecutionInterrupted ? '已中断' : needsTaskReview ? '待确认' : '已通过' }}</strong><em>执行状态：{{ taskStatus }} · 结果状态：{{ resultStatus }}</em></article></section><pre>{{ processingInstance?.processedAt || '02:00:00' }} INFO  具体任务 {{ taskId }} 启动
@@ -555,8 +663,36 @@ onMounted(async () => {
 .pipeline-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
 .pipeline-head h2{margin:0;font-size:15px}
 .pipeline-message{margin:0 0 10px;padding:8px 12px;border:1px solid #b2ccff;border-radius:6px;background:#f0f5ff;color:#344f7a;font-size:11px}
+/* 真实输入输出（脚本上报 JSON）：跨两列，输入/输出分块，超长 JSON 内部滚动 */
+.real-io-card{grid-column:1/-1}
+.real-io-card h3 span{padding:2px 6px;border-radius:4px;background:#e5f6ee;color:#067647;font-size:8px;font-weight:500}
+.real-io-block{padding:12px 14px;border-bottom:1px solid #eef2f7}
+.real-io-block:last-child{border-bottom:0}
+.real-io-block strong{display:block;margin-bottom:7px;color:#34405e;font-size:10px}
+.real-io-block pre{min-height:0;max-height:340px}
 .step-head-retry{height:34px;padding:0 14px;border:1px solid #d92d20;border-radius:6px;background:#d92d20;color:#fff;cursor:pointer;font-size:11px}
 .step-head-retry:disabled{opacity:.6;cursor:not-allowed}
+.step-head-actions{display:flex;align-items:center;gap:8px}
+.step-head-actions a{color:#165dff;font-size:11px;text-decoration:none}
+.step-head-back{height:32px;padding:0 12px;border:1px solid #bfd4f0;border-radius:6px;background:#f4f8ff;color:#175cd3;cursor:pointer;font-size:11px}
+.step-head-back:hover{background:#e8f1ff}
+/* chain 任务：脚本 step 可展开 activity steps 的视觉提示（chevron 展开时旋转） */
+.process-step.is-script::after{color:#9db1cc;content:"›";font-size:16px;font-weight:700;transition:transform .15s ease}
+.process-step.is-script.is-expanded::after{color:#165dff;transform:rotate(90deg)}
+/* chain 任务：脚本 step 下方内联展开的 activity steps */
+.process-substep{display:grid;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;gap:7px;width:calc(100% - 6px);min-height:38px;margin:0 0 4px 14px;padding:5px 8px;border:1px solid transparent;border-left:2px solid #cfe0f8;border-radius:6px;background:#f4f8fd;color:#4a5a74;text-align:left;cursor:pointer}
+.process-substep:hover{border-color:#a9c8f5;background:#eef5ff}
+.process-substep.active{border-color:#165dff;background:#edf4ff;box-shadow:0 0 0 1px #165dff inset}
+.process-substep>i{display:grid;place-items:center;width:17px;height:17px;border-radius:50%;background:#12b76a;color:#fff;font-size:9px;font-style:normal}
+.process-substep.is-需人工处理{border-left-color:#f4a9a2;background:#fff6f5}
+.process-substep.is-需人工处理>i{background:#d92d20}
+.process-substep.is-待执行{opacity:.62}
+.process-substep.is-待执行>i{background:#98a2b3}
+.process-substep>span{display:grid;gap:2px;min-width:0}
+.process-substep span strong{overflow:hidden;color:#2b3a55;font-size:10px;text-overflow:ellipsis;white-space:nowrap}
+.process-substep span em{overflow:hidden;color:#7c899d;font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap}
+.process-substep>small{color:#667085;font-size:8px}
+.process-substep-empty{margin:0 0 6px 16px;padding:8px 10px;border:1px dashed #d5e2f2;border-radius:6px;background:#f8fbff;color:#8290a7;font-size:9px;line-height:15px}
 /* 执行记录面板 */
 .execution-record-panel{overflow:hidden;margin-bottom:12px;border:1px solid #c9dcf7;border-radius:9px;background:#fff}
 .execution-record-panel>header{display:flex;align-items:center;justify-content:space-between;padding:11px 15px;border-bottom:1px solid #dce8f8;background:#fbfdff}

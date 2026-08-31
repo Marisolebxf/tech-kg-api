@@ -85,3 +85,7 @@ asyncio_mode = "auto"
 markers = [
     "external: tests that require real external services such as MySQL, Redis, TRSGraph, Kafka, or Milvus",
 ]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

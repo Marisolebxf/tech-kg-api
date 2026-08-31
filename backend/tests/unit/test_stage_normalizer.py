@@ -136,6 +136,51 @@ def test_pipeline_steps_preserves_input_output() -> None:
     assert second["error"] == "boom"
 
 
+def test_pipeline_steps_preserves_activities() -> None:
+    """chain 工作流脚本级 activities 原样保留（任务详情页抽屉展开 activity steps 用）。"""
+    output = {
+        "status": "completed",
+        "steps": {
+            "plain-echo": {
+                "status": "COMPLETED",
+                "name": "普通脚本",
+                "input": {"value": 7},
+                "output": {"echo": 7},
+                "activities": {
+                    "execute": {
+                        "status": "COMPLETED",
+                        "name": "脚本执行",
+                        "input": {"value": 7},
+                        "output": {"echo": 7},
+                    }
+                },
+            },
+            "mini-pipeline": {
+                "status": "FAILED",
+                "name": "两步流水线",
+                "input": {},
+                "error": "boom",
+                "activities": {
+                    "step_a": {"status": "COMPLETED", "name": "步骤A", "output": {"a": 1}},
+                    "step_b": {"status": "FAILED", "name": "步骤B", "error": "boom"},
+                },
+            },
+            "legacy-script": {
+                "status": "COMPLETED",
+                "name": "旧版本链脚本",
+                "input": {},
+                "output": {"ok": True},
+            },
+        },
+    }
+    steps = pipeline_steps(output)
+    by_id = {s["id"]: s for s in steps}
+    assert by_id["plain-echo"]["activities"]["execute"]["output"] == {"echo": 7}
+    assert by_id["mini-pipeline"]["activities"]["step_b"]["status"] == "FAILED"
+    # 无 activities 的旧执行记录：键为 None，调用方按缺省处理
+    assert by_id["legacy-script"]["activities"] is None
+
+
 def test_pipeline_steps_empty_for_non_pipeline_output() -> None:
     assert pipeline_steps(None) == []
     assert pipeline_steps({"status": "completed", "result": {...}}) == []

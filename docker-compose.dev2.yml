@@ -180,8 +180,11 @@ services:
       context: ./frontend
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
-        VITE_BASE: ${VITE_BASE:-/}
-        VITE_API_BASE: ${VITE_API_BASE:-/api}
+        # dev2 nginx 挂在根路径（nginx.dev2.conf 无 /bkg_zpt/ 映射），锁死 base=/，
+        # 不读根 .env 的 VITE_BASE=/bkg_zpt/（生产门户路径）——否则 vite 产物引用
+        # /bkg_zpt/assets/* 而 nginx 404 → 白屏。与 TRS_GRAPH_SPACE 锁死同一理由。
+        VITE_BASE: /
+        VITE_API_BASE: /api
         VITE_GRAPH_SPACE: ${VITE_GRAPH_SPACE:-test}
         VITE_AUTH_ENABLED: ${VITE_AUTH_ENABLED:-false}
         VITE_PORTAL_EMBEDDED_DEFAULT: ${VITE_PORTAL_EMBEDDED_DEFAULT:-false}

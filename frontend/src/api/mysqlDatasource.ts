@@ -122,3 +122,45 @@ export async function listMysqlDatabases(id: string, userId = currentUserId()): 
     await asApiPromise<{ items: string[] }>(http.get(`${PREFIX}/${id}/databases`, { headers: headers(userId) })),
   ).items
 }
+
+export interface MysqlTable {
+  name: string
+  type: string
+}
+
+export interface MysqlColumn {
+  name: string
+  dataType: string
+  nullable: boolean
+}
+
+export async function listMysqlTables(
+  id: string,
+  database: string,
+  userId = currentUserId(),
+): Promise<MysqlTable[]> {
+  return unwrap(
+    await asApiPromise<{ items: MysqlTable[] }>(
+      http.get(`${PREFIX}/${id}/tables`, {
+        params: { database },
+        headers: headers(userId),
+      }),
+    ),
+  ).items
+}
+
+export async function listMysqlTableColumns(
+  id: string,
+  table: string,
+  database: string,
+  userId = currentUserId(),
+): Promise<MysqlColumn[]> {
+  return unwrap(
+    await asApiPromise<{ items: MysqlColumn[] }>(
+      http.get(`${PREFIX}/${id}/tables/${encodeURIComponent(table)}/columns`, {
+        params: { database },
+        headers: headers(userId),
+      }),
+    ),
+  ).items
+}

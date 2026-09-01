@@ -6,11 +6,14 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
-from datetime import timedelta
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 from temporalio import activity, workflow
@@ -181,6 +184,128 @@ def _cleanup_sidecar(sidecar_path: str | None) -> None:
         pass
 
 
+# 单参入口 runner：调 workflow(payload)
+_SINGLE_ARG_RUNNER = """
+import asyncio
+import importlib.util
+import inspect
+import json
+import sys
+
+from kg_sdk import access_report, flush_access_sidecar
+
+path, function_name = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("uploaded_workflow", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+function = getattr(module, function_name)
+payload = json.loads(sys.stdin.read() or "{}")
+try:
+    result = function(payload)
+    if inspect.isawaitable(result):
+        result = asyncio.run(result)
+except BaseException:
+    flush_access_sidecar()
+    raise
+flush_access_sidecar()
+print(json.dumps({"result": result, "_access": access_report()}, ensure_ascii=False))
+"""
+
+# 双参入口 runner：读 {"payload":..., "ctx":...} 一份 JSON，调 fn(payload, ctx)
+_DUAL_ARG_RUNNER = """
+import asyncio
+import importlib.util
+import inspect
+import json
+import sys
+
+from kg_sdk import Context, access_report, flush_access_sidecar
+
+path, function_name = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("uploaded_step_module", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+function = getattr(module, function_name)
+data = json.loads(sys.stdin.read() or "{}")
+payload = data.get("payload", {})
+ctx = Context(data.get("ctx", {}))
+try:
+    result = function(payload, ctx)
+    if inspect.isawaitable(result):
+        result = asyncio.run(result)
+except BaseException:
+    flush_access_sidecar()
+    raise
+flush_access_sidecar()
+print(json.dumps({"result": result, "_access": access_report()}, ensure_ascii=False))
+"""
+
+
+async def _spawn_script(
+    script_path: Path,
+    function_name: str,
+    stdin_data: bytes,
+    ctx: dict[str, Any],
+    timeout: float,
+    runner: str,
+    context_label: str,
+) -> tuple[dict[str, Any], str]:
+    """共享的脚本子进程启动逻辑（execute_python_script / execute_pipeline_step / 平台喂数抽取共用）。
+
+    在隔离子进程中以 ``runner`` 调 ``script_path`` 的 ``function_name``；``ctx``
+    经 ``KG_SCRIPT_CTX`` env 注入（单参脚本用 kg_sdk.current_context 取）。
+    返回 ``(解析后的 stdout 包装 dict, sidecar 路径)``——调用方负责合并 access
+    报告并在 finally 里 ``_cleanup_sidecar``。超时/非零退出抛 RuntimeError。
+    """
+    # 上传脚本需要 backend 模块（infra/dao/sdk）与凭据（MySQL/TRSGraph）。
+    # worker 进程不 import infra，故这里显式加载 backend/.env，并把 backend + backend/sdk
+    # 目录加入 PYTHONPATH。密钥经 env 传递的安全面与 MYSQL_PASSWORD 等
+    # sub_env={**os.environ} 一致（见 docs/workflow_operations_api.md）。
+    backend_dir = Path(__file__).resolve().parents[1]
+    load_dotenv(backend_dir / ".env")
+    sdk_dir = backend_dir / "sdk"
+    pythonpath = os.pathsep.join(
+        filter(None, [str(backend_dir), str(sdk_dir), str(script_path.parent)])
+    )
+    sidecar = tempfile.NamedTemporaryFile(prefix="kg_access_", suffix=".jsonl", delete=False)
+    sidecar_path = sidecar.name
+    sidecar.close()
+    sub_env = {
+        **os.environ,
+        "PYTHONPATH": pythonpath,
+        "KG_SCRIPT_CTX": json.dumps(ctx, ensure_ascii=False),
+        "KG_ACCESS_LOG": sidecar_path,
+    }
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        runner,
+        str(script_path),
+        function_name,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=sub_env,
+    )
+    try:
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(stdin_data), timeout=timeout
+            )
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            _log_failed_access(f"{context_label} 执行超时", sidecar_path)
+            raise RuntimeError(f"{context_label} 执行超时") from None
+        if process.returncode != 0:
+            _log_failed_access(f"{context_label} 退出码 {process.returncode}", sidecar_path)
+            raise RuntimeError(stderr.decode(errors="replace")[-4000:])
+        wrapped = json.loads(stdout.decode() or "null")
+        return wrapped, sidecar_path
+    finally:
+        pass  # sidecar 清理由调用方在合并 access 报告后进行
+
+
 @activity.defn
 async def execute_kg_step(request: dict[str, Any]) -> dict[str, Any]:
     """Return lightweight bookkeeping results for built-in domain pipeline steps."""
@@ -217,79 +342,19 @@ async def execute_python_script(request: dict[str, Any]) -> dict[str, Any]:
     if not script_path.is_file():
         raise ValueError(f"脚本不存在: {script_path}")
     function_name = request.get("functionName", "workflow")
-    runner = """
-import asyncio
-import importlib.util
-import inspect
-import json
-import sys
-
-from kg_sdk import access_report, flush_access_sidecar
-
-path, function_name = sys.argv[1], sys.argv[2]
-spec = importlib.util.spec_from_file_location("uploaded_workflow", path)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-function = getattr(module, function_name)
-payload = json.loads(sys.stdin.read() or "{}")
-try:
-    result = function(payload)
-    if inspect.isawaitable(result):
-        result = asyncio.run(result)
-except BaseException:
-    flush_access_sidecar()
-    raise
-flush_access_sidecar()
-print(json.dumps({"result": result, "_access": access_report()}, ensure_ascii=False))
-"""
-    # 上传脚本需要 backend 模块（infra/dao/sdk）与凭据（MySQL/TRSGraph）。
-    # worker 进程不 import infra，故这里显式加载 backend/.env，并把 backend + backend/sdk
-    # 目录加入 PYTHONPATH。KG_SCRIPT_CTX 注入已解析的连接参数 + 水位，单参脚本用
-    # `from kg_sdk import current_context` 取 Context。密钥经 env 传递的安全面与
-    # MYSQL_PASSWORD 等 sub_env={**os.environ} 一致（见 docs/workflow_operations_api.md）。
-    backend_dir = Path(__file__).resolve().parents[1]
-    load_dotenv(backend_dir / ".env")
     payload = request.get("payload", {})
     resolved = _resolve_resources(payload, request.get("definitionId"), "_default")
-    sdk_dir = backend_dir / "sdk"
-    pythonpath = os.pathsep.join(
-        filter(None, [str(backend_dir), str(sdk_dir), str(script_path.parent)])
-    )
-    sidecar = tempfile.NamedTemporaryFile(prefix="kg_access_", suffix=".jsonl", delete=False)
-    sidecar_path = sidecar.name
-    sidecar.close()
-    sub_env = {
-        **os.environ,
-        "PYTHONPATH": pythonpath,
-        "KG_SCRIPT_CTX": json.dumps(resolved, ensure_ascii=False),
-        "KG_ACCESS_LOG": sidecar_path,
-    }
-    process = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-c",
-        runner,
-        str(script_path),
-        function_name,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=sub_env,
-    )
+    sidecar_path: str | None = None
     try:
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(json.dumps(payload, ensure_ascii=False).encode()),
-                timeout=float(request.get("timeoutSeconds", 60)),
-            )
-        except TimeoutError:
-            process.kill()
-            await process.wait()
-            _log_failed_access("上传脚本执行超时", sidecar_path)
-            raise RuntimeError("上传脚本执行超时") from None
-        if process.returncode != 0:
-            _log_failed_access(f"上传脚本退出码 {process.returncode}", sidecar_path)
-            raise RuntimeError(stderr.decode(errors="replace")[-4000:])
-        wrapped = json.loads(stdout.decode() or "null")
+        wrapped, sidecar_path = await _spawn_script(
+            script_path,
+            function_name,
+            json.dumps(payload, ensure_ascii=False).encode(),
+            resolved,
+            float(request.get("timeoutSeconds", 60)),
+            _SINGLE_ARG_RUNNER,
+            "上传脚本",
+        )
         output = (
             wrapped.get("result") if isinstance(wrapped, dict) and "result" in wrapped else wrapped
         )
@@ -401,77 +466,17 @@ async def execute_pipeline_step(request: dict[str, Any]) -> dict[str, Any]:
     # 在 worker 内解析 config_id → 连接参数 + 读水位，合并进 ctx（两参脚本直接用 ctx.mysql 等）。
     resolved = _resolve_resources(payload, request.get("definitionId"), request["stepId"])
     ctx.update(resolved)
-    runner = """
-import asyncio
-import importlib.util
-import inspect
-import json
-import sys
-
-from kg_sdk import Context, access_report, flush_access_sidecar
-
-path, function_name = sys.argv[1], sys.argv[2]
-spec = importlib.util.spec_from_file_location("uploaded_step_module", path)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-function = getattr(module, function_name)
-data = json.loads(sys.stdin.read() or "{}")
-payload = data.get("payload", {})
-ctx = Context(data.get("ctx", {}))
-try:
-    result = function(payload, ctx)
-    if inspect.isawaitable(result):
-        result = asyncio.run(result)
-except BaseException:
-    flush_access_sidecar()
-    raise
-flush_access_sidecar()
-print(json.dumps({"result": result, "_access": access_report()}, ensure_ascii=False))
-"""
-    backend_dir = Path(__file__).resolve().parents[1]
-    load_dotenv(backend_dir / ".env")
-    sdk_dir = backend_dir / "sdk"
-    pythonpath = os.pathsep.join(
-        filter(None, [str(backend_dir), str(sdk_dir), str(script_path.parent)])
-    )
-    sidecar = tempfile.NamedTemporaryFile(prefix="kg_access_", suffix=".jsonl", delete=False)
-    sidecar_path = sidecar.name
-    sidecar.close()
-    sub_env = {
-        **os.environ,
-        "PYTHONPATH": pythonpath,
-        "KG_SCRIPT_CTX": json.dumps(ctx, ensure_ascii=False),
-        "KG_ACCESS_LOG": sidecar_path,
-    }
-    process = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-c",
-        runner,
-        str(script_path),
-        function_name,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=sub_env,
-    )
-    stdin_data = json.dumps({"payload": payload, "ctx": ctx}, ensure_ascii=False).encode()
+    sidecar_path: str | None = None
     try:
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(stdin_data),
-                timeout=float(request.get("timeoutSeconds", 600)),
-            )
-        except TimeoutError:
-            process.kill()
-            await process.wait()
-            _log_failed_access(f"step {request['stepId']} 执行超时", sidecar_path)
-            raise RuntimeError(f"step {request['stepId']} 执行超时") from None
-        if process.returncode != 0:
-            _log_failed_access(
-                f"step {request['stepId']} 退出码 {process.returncode}", sidecar_path
-            )
-            raise RuntimeError(stderr.decode(errors="replace")[-4000:])
-        wrapped = json.loads(stdout.decode() or "null")
+        wrapped, sidecar_path = await _spawn_script(
+            script_path,
+            function_name,
+            json.dumps({"payload": payload, "ctx": ctx}, ensure_ascii=False).encode(),
+            ctx,
+            float(request.get("timeoutSeconds", 600)),
+            _DUAL_ARG_RUNNER,
+            f"step {request['stepId']}",
+        )
         output = (
             wrapped.get("result") if isinstance(wrapped, dict) and "result" in wrapped else wrapped
         )
@@ -557,6 +562,253 @@ def _enqueue_pending_review(request: dict[str, Any], pending: list[Any], attempt
         logging.getLogger("workflow.kg.custom.steps").warning(
             "enqueue pending review unavailable (service load failed): %s", exc
         )
+
+
+# ---------------------------------------------------------------------------
+# Schema 平台喂数抽取（kg.schema.extract）
+# ---------------------------------------------------------------------------
+
+_MYSQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+
+
+def _require_identifier(name: str) -> str:
+    if not _MYSQL_IDENTIFIER_RE.fullmatch(name):
+        raise ValueError(f"非法 MySQL 标识符: {name}")
+    return name
+
+
+def _jsonable(value: Any) -> Any:
+    """把 MySQL 行值转成 JSON 可序列化形式（datetime→ISO、Decimal→float、bytes→str）。"""
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", errors="replace")
+    if isinstance(value, timedelta):
+        return str(value)
+    return value
+
+
+@activity.defn
+async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
+    """读控制库组装抽取计划：kind/name/activeProps（过滤 is_deleted）/sources/脚本（S3 下载到临时文件）。"""
+    from sqlalchemy.orm import Session as OrmSession
+
+    from db_model.schema_management import GraphSchemaDefinition
+    from infra.s3 import get_schema_s3_storage
+    from infra.workflow_mysql import get_workflow_engine
+
+    engine = get_workflow_engine()
+    with OrmSession(engine) as session:
+        definition = session.get(GraphSchemaDefinition, schema_id)
+        if definition is None:
+            raise ValueError(f"Schema 不存在: {schema_id}")
+        kind = definition.kind
+        name = definition.name
+        label = definition.label
+        schema_key = definition.schema_key
+        active_props = [p.name for p in definition.properties if not p.is_deleted]
+        sources = [
+            {
+                "id": item.id,
+                "datasourceId": item.datasource_id,
+                "databaseName": item.database_name,
+                "tableName": item.table_name,
+                "pkColumn": item.pk_column,
+                "timeColumn": item.time_column,
+            }
+            for item in definition.sources
+        ]
+        script = definition.script
+        bucket = script.bucket if script else None
+        object_key = script.object_key if script else None
+        function_name = (script.workflow_function_name if script else None) or "workflow"
+        timeout_seconds = int(os.getenv("SCHEMA_WORKFLOW_TIMEOUT_SECONDS", "3600"))
+    if bucket is None or object_key is None:
+        raise ValueError(f"Schema 未上传脚本: {schema_id}")
+    if not sources:
+        raise ValueError(f"Schema 未绑定来源表: {schema_id}")
+
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+    storage = get_schema_s3_storage()
+    body = None
+    try:
+        body = storage.get_object(bucket, object_key)
+        data = body.read()
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"下载 Schema 脚本失败: {exc}") from exc
+    finally:
+        if body is not None:
+            try:
+                body.close()
+            except Exception:  # noqa: BLE001
+                logger.exception("关闭脚本流失败: %s", schema_id)
+    script_file = tempfile.NamedTemporaryFile(
+        prefix=f"kg_schema_extract_{schema_key}_", suffix=".py", delete=False
+    )
+    script_file.write(data)
+    script_file.close()
+    return {
+        "schemaId": schema_id,
+        "schemaKey": schema_key,
+        "kind": kind,
+        "name": name,
+        "label": label,
+        "activeProps": active_props,
+        "sources": sources,
+        "scriptPath": script_file.name,
+        "functionName": function_name,
+        "timeoutSeconds": timeout_seconds,
+    }
+
+
+@activity.defn
+async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
+    """按时间列水位读取一批行：``SELECT * FROM db.table WHERE time > :wm ORDER BY time, pk LIMIT :n``。
+
+    连接参数由 activity 内按 datasourceId 解析（密钥只在 worker 进程内，不进 workflow
+    状态）。标识符经白名单校验防注入；时间/主键列参数化绑定。
+    返回 ``{rows, maxTime}``——rows 为 JSON 行，maxTime 为本批最大时间列值（推进水位）。
+    """
+    from sqlalchemy import create_engine, text
+
+    from service.mysql_datasource import get_mysql_settings_by_id
+
+    datasource_id = request["datasourceId"]
+    database = _require_identifier(request["database"])
+    table = _require_identifier(request["table"])
+    time_column = _require_identifier(request["timeColumn"])
+    pk_column = _require_identifier(request["pkColumn"])
+    watermark = request.get("watermark") or "1970-01-01 00:00:00"
+    batch_size = min(max(int(request.get("batchSize", 500)), 1), 5000)
+
+    params = get_mysql_settings_by_id(datasource_id)
+    if params is None:
+        raise ValueError(f"来源数据源不存在: {datasource_id}")
+    user = params["username"]
+    password = params["password"]
+    host = params["host"]
+    port = int(params["port"])
+    url = f"mysql+pymysql://{quote_plus(user)}:{quote_plus(password)}@{host}:{port}/{database}?charset=utf8mb4"
+    engine = create_engine(url, pool_pre_ping=True)
+    try:
+        sql = text(
+            f"SELECT * FROM `{database}`.`{table}` "
+            f"WHERE `{time_column}` > :wm "
+            f"ORDER BY `{time_column}`, `{pk_column}` LIMIT :n"
+        )
+        with engine.connect() as conn:
+            raw_rows = conn.execute(sql, {"wm": watermark, "n": batch_size}).mappings().all()
+    finally:
+        engine.dispose()
+
+    rows: list[dict[str, Any]] = []
+    max_time: str | None = None
+    for raw in raw_rows:
+        row = {key: _jsonable(value) for key, value in dict(raw).items()}
+        rows.append(row)
+        candidate = row.get(time_column)
+        if candidate is not None and (max_time is None or str(candidate) > max_time):
+            max_time = str(candidate)
+    return {"rows": rows, "maxTime": max_time}
+
+
+@activity.defn
+async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
+    """把批次行交给脚本转换：payload["rows"] = 行 JSON，调 workflow(payload)。
+
+    脚本返回 ``{"entities": [{id, props}]}`` 或 ``{"edges": [{fromId, toId, props}]}``；
+    脚本的 ``_watermark``/``_checkpoint`` 元字段被忽略（水位由平台管理）。
+    """
+    script_path = Path(request["scriptPath"])
+    if not script_path.is_file():
+        raise ValueError(f"脚本不存在: {script_path}")
+    function_name = request.get("functionName", "workflow")
+    rows = request.get("rows") or []
+    source = request.get("source") or {}
+    kind = request.get("kind", "entity")
+    payload = {
+        "rows": rows,
+        "source_table": f"{source.get('databaseName')}.{source.get('tableName')}",
+        "kind": kind,
+        "source": source,
+    }
+    sidecar_path: str | None = None
+    try:
+        wrapped, sidecar_path = await _spawn_script(
+            script_path,
+            function_name,
+            json.dumps(payload, ensure_ascii=False).encode(),
+            {},
+            float(request.get("timeoutSeconds", 600)),
+            _SINGLE_ARG_RUNNER,
+            "平台喂数转换脚本",
+        )
+        output = (
+            wrapped.get("result") if isinstance(wrapped, dict) and "result" in wrapped else wrapped
+        )
+        stdout_access = wrapped.pop("_access", None) if isinstance(wrapped, dict) else None
+        access = _merge_access(stdout_access, sidecar_path)
+        if access is not None and isinstance(output, dict):
+            output = {**output, "access": access}
+        # 忽略脚本的 _watermark/_checkpoint（平台按批次 maxTime 管理水位）
+        output = _strip_watermark_meta(output)
+        return output if isinstance(output, dict) else {}
+    finally:
+        _cleanup_sidecar(sidecar_path)
+
+
+@activity.defn
+async def write_records(request: dict[str, Any]) -> dict[str, Any]:
+    """把转换结果 merge 写图：实体 merge_node / 关系 merge_edge。
+
+    只写 activeProps 内的属性——已删属性「插空」即省略键（图库列不动）。
+    ``graph.space`` 指定目标图空间（默认 TRS_GRAPH_SPACE）。
+    """
+    from infra.graph_db.client import TRSGraphClient
+    from infra.graph_db.config import TRSGraphSettings
+
+    kind = request["kind"]
+    name = request["name"]
+    active_props = set(request.get("activeProps") or [])
+    records = request.get("records") or []
+    graph = request.get("graph") or {}
+
+    settings = TRSGraphSettings.from_env()
+    space = graph.get("space")
+    if space:
+        settings.space = space
+    client = TRSGraphClient(settings)
+    try:
+        client.connect()
+
+        def filtered(props: dict[str, Any] | None) -> dict[str, Any]:
+            if not props:
+                return {}
+            if not active_props:
+                return dict(props)
+            return {key: value for key, value in props.items() if key in active_props}
+
+        written = 0
+        if kind == "entity":
+            for record in records:
+                client.merge_node([name], {"id": record["id"]}, filtered(record.get("props")))
+                written += 1
+        else:
+            for record in records:
+                client.merge_edge(
+                    record["fromId"], record["toId"], name, {}, filtered(record.get("props"))
+                )
+                written += 1
+        return {"written": written}
+    finally:
+        try:
+            client.close()
+        except Exception:  # noqa: BLE001
+            logger.exception("关闭图客户端失败")
 
 
 async def _run_domain_pipeline(request: dict[str, Any], kind: str, domain: str) -> dict[str, Any]:
@@ -962,6 +1214,166 @@ class ChainWorkflow:
         return {"current": self._current_step, "steps": self._steps}
 
 
+@workflow.defn(name="kg.schema.extract")
+class SchemaExtractWorkflow:
+    """Schema 平台喂数抽取：读源表批次 → 脚本转换 → merge 写图 → 推水位。
+
+    各来源表 ``asyncio.gather`` 并行（仅 await activity，deterministic 安全）；
+    单来源内批次串行（读→转→写→推水位），直到本批行数 < batchSize。
+    水位键 ``schema-extract-{key}`` + step ``source:{绑定行 id}``——按绑定独立推进。
+    """
+
+    def __init__(self) -> None:
+        self._sources: dict[str, dict[str, Any]] = {}
+        self._current_source: str | None = None
+
+    @workflow.run
+    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
+        schema_id = request["schemaId"]
+        graph_space = request.get("graphSpace")
+        batch_size = int(request.get("batchSize", 500))
+        graph = {"space": graph_space} if graph_space else {}
+        plan = await workflow.execute_activity(
+            load_schema_extract_plan,
+            schema_id,
+            start_to_close_timeout=timedelta(seconds=120),
+            retry_policy=ACTIVITY_RETRY_POLICY,
+        )
+        timeout_seconds = max(int(plan.get("timeoutSeconds", 3600)), 60)
+        definition_id = f"schema-extract-{plan['schemaKey']}"
+
+        async def extract_source(source: dict[str, Any]) -> dict[str, Any]:
+            source_id = source["id"]
+            step_id = f"source:{source_id}"
+            self._current_source = step_id
+            self._sources[step_id] = {
+                "status": "RUNNING",
+                "table": f"{source['databaseName']}.{source['tableName']}",
+                "batches": 0,
+                "rows": 0,
+                "written": 0,
+            }
+            try:
+                from service.script_watermark import read_watermark
+
+                watermark = None
+                wm_row = read_watermark(definition_id, step_id)
+                if wm_row:
+                    watermark = wm_row.get("watermark")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("读水位失败 %s/%s: %s", definition_id, step_id, exc)
+                watermark = None
+
+            total_rows = 0
+            total_written = 0
+            batches = 0
+            while True:
+                batch = await workflow.execute_activity(
+                    read_source_batch,
+                    {
+                        "datasourceId": source["datasourceId"],
+                        "database": source["databaseName"],
+                        "table": source["tableName"],
+                        "timeColumn": source["timeColumn"],
+                        "pkColumn": source["pkColumn"],
+                        "watermark": watermark,
+                        "batchSize": batch_size,
+                    },
+                    start_to_close_timeout=timedelta(seconds=300),
+                    retry_policy=ACTIVITY_RETRY_POLICY,
+                )
+                rows = batch.get("rows") or []
+                max_time = batch.get("maxTime")
+                if not rows:
+                    break
+                batches += 1
+                total_rows += len(rows)
+                transformed = await workflow.execute_activity(
+                    execute_transform,
+                    {
+                        "scriptPath": plan["scriptPath"],
+                        "functionName": plan["functionName"],
+                        "rows": rows,
+                        "source": source,
+                        "kind": plan["kind"],
+                        "timeoutSeconds": timeout_seconds,
+                    },
+                    start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
+                    retry_policy=ACTIVITY_RETRY_POLICY,
+                )
+                records = transformed.get("entities") or transformed.get("edges") or []
+                if records:
+                    write_result = await workflow.execute_activity(
+                        write_records,
+                        {
+                            "kind": plan["kind"],
+                            "name": plan["name"],
+                            "activeProps": plan["activeProps"],
+                            "records": records,
+                            "graph": graph,
+                        },
+                        start_to_close_timeout=timedelta(seconds=600),
+                        retry_policy=ACTIVITY_RETRY_POLICY,
+                    )
+                    total_written += int(write_result.get("written", 0))
+                self._sources[step_id] = {
+                    **self._sources[step_id],
+                    "batches": batches,
+                    "rows": total_rows,
+                    "written": total_written,
+                }
+                if max_time and max_time != watermark:
+                    await workflow.execute_activity(
+                        advance_schema_extract_watermark,
+                        {
+                            "definitionId": definition_id,
+                            "stepId": step_id,
+                            "watermark": max_time,
+                        },
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=ACTIVITY_RETRY_POLICY,
+                    )
+                    watermark = max_time
+                if len(rows) < batch_size:
+                    break
+            self._sources[step_id] = {
+                **self._sources[step_id],
+                "status": "COMPLETED",
+                "watermark": watermark,
+            }
+            return {
+                "source": step_id,
+                "table": f"{source['databaseName']}.{source['tableName']}",
+                "batches": batches,
+                "rows": total_rows,
+                "written": total_written,
+                "watermark": watermark,
+            }
+
+        results = await asyncio.gather(*(extract_source(source) for source in plan["sources"]))
+        return {"status": "completed", "schemaId": schema_id, "sources": list(results)}
+
+    @workflow.query
+    def get_progress(self) -> dict[str, Any]:
+        return {"current": self._current_source, "sources": self._sources}
+
+
+@activity.defn
+async def advance_schema_extract_watermark(request: dict[str, Any]) -> dict[str, Any]:
+    """批次成功写图后推进该来源绑定的水位（step_id = source:{绑定行 id}，按绑定独立）。"""
+    from service.script_watermark import write_watermark
+
+    watermark = request.get("watermark")
+    parsed = None
+    if watermark:
+        try:
+            parsed = datetime.fromisoformat(str(watermark).replace(" ", "T"))
+        except ValueError:
+            parsed = None
+    write_watermark(request.get("definitionId"), request["stepId"], watermark=parsed)
+    return {"ok": True, "watermark": watermark}
+
+
 WORKFLOW_CLASSES = [
     PaperEntityWorkflow,
     ScholarEntityWorkflow,
@@ -977,6 +1389,7 @@ WORKFLOW_CLASSES = [
     PythonScriptWorkflow,
     StepPipelineWorkflow,
     ChainWorkflow,
+    SchemaExtractWorkflow,
 ]
 
 ACTIVITIES = [
@@ -985,4 +1398,9 @@ ACTIVITIES = [
     execute_python_script,
     execute_pipeline_step,
     register_scheduled_execution,
+    load_schema_extract_plan,
+    read_source_batch,
+    execute_transform,
+    write_records,
+    advance_schema_extract_watermark,
 ]

@@ -252,6 +252,40 @@ def step_persist(payload, ctx):
 
 触发（带选择器，见 §7）后：每步成功，平台自动写 `(paper-pipeline, load)` 等水位；下次只增量加载 `updated_at > 上次水位` 的论文。失败步走 `POST /task-center/tasks/{id}/retry` reset，已完成步靠 Temporal event history replay 不重跑，失败步重读上次成功水位重处理同一窗口。
 
+## 9. 平台喂数模式（Schema 抽取）
+
+在 Schema 管理页上传脚本并绑定来源表后，`POST /api/v1/schema-management/schemas/{id}/extract`
+触发 `kg.schema.extract` 工作流。与 §6 的自读库模式不同，**平台负责读源表与写图**：
+
+1. 平台按每张来源表绑定的**时间列水位**（默认 `update_time`，每张表独立）分批读取行：
+   `SELECT * FROM db.table WHERE time_col > :水位 ORDER BY time_col, pk LIMIT :batchSize`；
+2. 把行 JSON 放进 `payload["rows"]`，调脚本的 `workflow(payload)`（**入口签名不变**）；
+3. 脚本**只做转换**：返回实体或关系 dict，不自读库、不自写图；
+4. 平台对返回结果 `merge_node` / `merge_edge` 写图（只写 Schema 目录中未删除的属性——已删属性
+   「插空」即省略键），然后推进该来源表的水位。
+
+返回格式（二选一，`props` 键名须在 Schema 目录内）：
+
+```python
+def workflow(payload):
+    rows = payload["rows"]  # 本批行（JSON dict）
+    table = payload["source_table"]  # "库名.表名"
+    kind = payload["kind"]  # "entity" | "relation"
+
+    return {
+        "entities": [
+            {"id": row["id"], "props": {"id": row["id"], "name": row["name"]}},
+        ]
+    }
+    # 关系：{"edges": [{"fromId": "S-1", "toId": "O-1", "props": {...}}]}
+```
+
+注意：
+
+- 脚本返回的 `_watermark` / `_checkpoint` 元字段**被忽略**——水位由平台按批次最大时间列值管理；
+- 需要外部资源（MySQL/图/LLM）时仍可用 `current_context()`（触发时可带 §7 的选择器）；
+- 多张来源表并行抽取、单表内批次串行；执行进度在任务中心 / `get_progress` 查询可见。
+
 ## 附：相关后端端点
 
 | 端点 | 用途 |
@@ -264,3 +298,6 @@ def step_persist(payload, ctx):
 | `GET /api/v1/graph-spaces` | 列出图空间（只读） |
 | `POST /api/v1/workflow-system/definitions/steps` | 上传 step pipeline 脚本 + manifest |
 | `POST /api/v1/workflow-system/definitions/{id}/execute` | 触发（带 §7 选择器） |
+| `PUT /api/v1/schema-management/schemas/{id}/sources` | 绑定来源表（§9 平台喂数） |
+| `POST /api/v1/schema-management/schemas/{id}/extract` | 触发平台喂数抽取（§9） |
+| `GET /mysql-datasources/{id}/tables?database=` · `GET /{id}/tables/{t}/columns` | 来源表绑定选表 / 选列 |

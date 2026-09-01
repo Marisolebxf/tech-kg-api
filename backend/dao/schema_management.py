@@ -23,6 +23,7 @@ class SchemaManagementDAO:
             selectinload(GraphSchemaDefinition.properties),
             selectinload(GraphSchemaDefinition.mappings),
             selectinload(GraphSchemaDefinition.script),
+            selectinload(GraphSchemaDefinition.sources),
             selectinload(GraphSchemaDefinition.source_schema),
             selectinload(GraphSchemaDefinition.target_schema),
         )
@@ -237,13 +238,21 @@ class SchemaManagementDAO:
             or 0
         )
         property_count = (
-            self.session.scalar(select(func.count()).select_from(GraphSchemaProperty)) or 0
+            self.session.scalar(
+                select(func.count())
+                .select_from(GraphSchemaProperty)
+                .where(GraphSchemaProperty.is_deleted.is_(False))
+            )
+            or 0
         )
         required_count = (
             self.session.scalar(
                 select(func.count())
                 .select_from(GraphSchemaProperty)
-                .where(GraphSchemaProperty.required.is_(True))
+                .where(
+                    GraphSchemaProperty.required.is_(True),
+                    GraphSchemaProperty.is_deleted.is_(False),
+                )
             )
             or 0
         )
@@ -251,7 +260,10 @@ class SchemaManagementDAO:
             self.session.scalar(
                 select(func.count())
                 .select_from(GraphSchemaProperty)
-                .where(GraphSchemaProperty.rule != "")
+                .where(
+                    GraphSchemaProperty.rule != "",
+                    GraphSchemaProperty.is_deleted.is_(False),
+                )
             )
             or 0
         )

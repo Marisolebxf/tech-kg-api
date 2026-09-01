@@ -81,3 +81,25 @@ def run_schema_ddl(kind: str, name: str, properties: list[dict[str, Any]]) -> di
         "error": error,
         "executed_at": datetime.now().isoformat() if status == "succeeded" else None,
     }
+
+
+def build_alter_add_ddl(kind: str, name: str, prop: dict[str, Any]) -> str:
+    """构建 ``ALTER TAG/EDGE <name> ADD (<prop> <type>)`` nGQL。
+
+    Nebula 的 ALTER ADD 不支持 NOT NULL——新增属性在图里一律可空
+    （目录保留 required 口径，仅约束语义）。
+    """
+    keyword = "TAG" if kind == "entity" else "EDGE"
+    return f"ALTER {keyword} {name} ADD ({prop['name']} {prop['data_type']});"
+
+
+def run_alter_add_ddl(kind: str, name: str, prop: dict[str, Any]) -> dict[str, Any]:
+    """构建并执行属性新增 DDL，返回 ``{statement, status, error, executed_at}``。"""
+    ddl = build_alter_add_ddl(kind, name, prop)
+    status, error = execute_schema_ddl(ddl)
+    return {
+        "statement": ddl,
+        "status": status,
+        "error": error,
+        "executed_at": datetime.now().isoformat() if status == "succeeded" else None,
+    }

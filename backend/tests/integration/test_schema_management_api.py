@@ -137,9 +137,12 @@ async def test_schema_management_full_flow(schema_api, monkeypatch: pytest.Monke
         assert created_entity.status_code == 201
         entity = created_entity.json()["data"]
         assert entity["canDelete"] is True
+        assert entity["canManageProperties"] is True
         assert entity["script"] is None
         assert entity["ddlStatus"] == "succeeded"
         assert "CREATE TAG IF NOT EXISTS Technology" in entity["ddlStatement"]
+        locked_names = [p["name"] for p in entity["properties"] if p.get("locked")]
+        assert locked_names == ["id", "name", "create_time", "update_time", "source_table"]
         assert storage.objects  # expert.py 仍在
 
         relation_payload = {

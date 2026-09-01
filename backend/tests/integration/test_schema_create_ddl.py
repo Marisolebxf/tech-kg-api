@@ -111,8 +111,12 @@ async def test_create_entity_executes_ddl(schema_api) -> None:
     data = response.json()["data"]
     assert data["ddlStatus"] == "succeeded"
     assert data["ddlError"] is None
+    # 公共必选属性（id/name/create_time/update_time/source_table）注入头部 + 用户属性
     assert data["ddlStatement"] == (
-        "CREATE TAG IF NOT EXISTS Gadget(gadget_id string NOT NULL, weight double);"
+        "CREATE TAG IF NOT EXISTS Gadget("
+        "id string NOT NULL, name string NOT NULL, create_time string NOT NULL, "
+        "update_time string NOT NULL, source_table string NOT NULL, "
+        "gadget_id string NOT NULL, weight double);"
     )
     assert fake_graph.writes == [data["ddlStatement"]]
 

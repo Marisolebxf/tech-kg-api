@@ -36,3 +36,9 @@ class MysqlDatasourceApplication:
 
     def list_databases(self, config_id: str) -> list[str]:
         return self._service.list_databases(config_id)
+
+    def list_tables(self, config_id: str, database: str | None = None) -> list[dict]:
+        return self._service.list_tables(config_id, database)
+
+    def list_columns(self, config_id: str, table: str, database: str | None = None) -> list[dict]:
+        return self._service.list_columns(config_id, table, database)

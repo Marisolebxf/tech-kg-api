@@ -18,6 +18,7 @@ from db_model.schema_management import (
     GraphSchemaMapping,
     GraphSchemaProperty,
     GraphSchemaScript,
+    GraphSchemaSource,
 )
 from infra.workflow_mysql import get_workflow_engine
 from service.schema_catalog_seed import (
@@ -33,6 +34,7 @@ MANAGED_TABLES = [
     GraphSchemaProperty.__table__,
     GraphSchemaMapping.__table__,
     GraphSchemaScript.__table__,
+    GraphSchemaSource.__table__,
 ]
 
 INCREMENTAL_COLUMNS = {
@@ -51,6 +53,8 @@ INCREMENTAL_COLUMNS = {
     },
     "kg_schema_property": {
         "category": "VARCHAR(16) NOT NULL DEFAULT 'core'",
+        "is_deleted": "TINYINT(1) NOT NULL DEFAULT 0",
+        "deleted_at": "DATETIME NULL",
     },
     "kg_schema_script": {
         "workflow_definition_id": "VARCHAR(64) NULL",

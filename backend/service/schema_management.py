@@ -17,10 +17,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from dao.schema_management import SchemaManagementDAO
-from db_model.schema_management import GraphSchemaDefinition, GraphSchemaScript
+from db_model.schema_management import (
+    GraphSchemaDefinition,
+    GraphSchemaProperty,
+    GraphSchemaScript,
+    GraphSchemaSource,
+)
 from infra.llm import LLMClient, get_llm_client
 from infra.s3 import S3Storage, get_schema_s3_storage
-from service.schema_ddl import run_schema_ddl
+from service.schema_ddl import run_alter_add_ddl, run_schema_ddl
 from service.script_security import review_script_security
 
 logger = logging.getLogger(__name__)
@@ -108,6 +113,42 @@ def _inject_provenance_properties(kind: str, payload: dict[str, Any]) -> None:
             properties.append({**prop, "required": False, "rule": ""})
 
 
+# 公共必选属性：平台喂数抽取依赖的标准列。创建时强制注入头部并置 required=True；
+# 用户已声明同名属性则强制 required + category=required（保留用户数据类型口径）。
+# source_table 与溯源注入共享去重（先注入 required，provenance 不会再重复追加）。
+_ENTITY_REQUIRED_PROPERTIES: list[dict[str, str]] = [
+    {"name": "id", "data_type": "string", "category": "required"},
+    {"name": "name", "data_type": "string", "category": "required"},
+    {"name": "create_time", "data_type": "string", "category": "required"},
+    {"name": "update_time", "data_type": "string", "category": "required"},
+    {"name": "source_table", "data_type": "string", "category": "required"},
+]
+_RELATION_REQUIRED_PROPERTIES: list[dict[str, str]] = [
+    {"name": "create_time", "data_type": "string", "category": "required"},
+    {"name": "update_time", "data_type": "string", "category": "required"},
+    {"name": "source_table", "data_type": "string", "category": "required"},
+]
+
+
+def _inject_required_properties(kind: str, payload: dict[str, Any]) -> None:
+    """把公共必选属性注入 payload['properties'] 头部（已声明的强制 required + category=required）。"""
+    required = _ENTITY_REQUIRED_PROPERTIES if kind == "entity" else _RELATION_REQUIRED_PROPERTIES
+    properties = payload.setdefault("properties", [])
+    missing: list[dict[str, Any]] = []
+    for prop in required:
+        declared = next(
+            (p for p in properties if isinstance(p, dict) and p.get("name") == prop["name"]),
+            None,
+        )
+        if declared is None:
+            missing.append({**prop, "required": True, "rule": ""})
+        else:
+            declared["required"] = True
+            declared["category"] = "required"
+    if missing:
+        properties[0:0] = missing
+
+
 def _schema_admin_user_ids() -> set[str]:
     return {
         item.strip()
@@ -133,6 +174,14 @@ def _workflow_definition_id(schema_key: str) -> str:
         return candidate
     suffix = hashlib.sha256(candidate.encode()).hexdigest()[:8]
     return f"{candidate[:55]}-{suffix}"
+
+
+def _validate_datasource_exists(datasource_id: str) -> None:
+    """校验平台数据源存在（业务库 dao，独立短连接）。失败抛 SchemaConflictError。"""
+    from service.mysql_datasource import get_mysql_settings_by_id
+
+    if get_mysql_settings_by_id(datasource_id) is None:
+        raise SchemaConflictError(f"来源数据源不存在: {datasource_id}")
 
 
 class SchemaManagementService:
@@ -308,6 +357,28 @@ class SchemaManagementService:
         is_platform_admin: bool = False,
     ) -> GraphSchemaDefinition:
         """前置校验：schema 存在 + 用户有权限更换脚本。失败抛领域错误（→ HTTP 4xx）。"""
+        return self.assert_mutable(
+            schema_id,
+            user_id,
+            is_platform_admin=is_platform_admin,
+            denied_system_message="只有 Schema 管理员可以更换系统 Schema 脚本",
+            denied_owner_message="只能更换自己创建的 Schema 脚本",
+        )
+
+    def assert_mutable(
+        self,
+        schema_id: str,
+        user_id: str,
+        *,
+        is_platform_admin: bool = False,
+        denied_system_message: str = "只有 Schema 管理员可以修改系统 Schema",
+        denied_owner_message: str = "只能修改自己创建的 Schema",
+    ) -> GraphSchemaDefinition:
+        """前置校验：schema 存在 + 用户可修改（脚本 / 属性 / 来源表共用同一规则）。
+
+        规则：is_system 需平台管理员或在 SCHEMA_ADMIN_USER_IDS 中；非系统需
+        owner 或平台管理员。失败抛领域错误（→ HTTP 4xx）。
+        """
         user_id = user_id.strip()
         if not user_id or len(user_id) > 128:
             raise SchemaPermissionError("登录用户 ID 不能为空且不能超过 128 个字符")
@@ -317,9 +388,9 @@ class SchemaManagementService:
             and not is_platform_admin
             and user_id not in _schema_admin_user_ids()
         ):
-            raise SchemaPermissionError("只有 Schema 管理员可以更换系统 Schema 脚本")
+            raise SchemaPermissionError(denied_system_message)
         if not definition.is_system and not is_platform_admin and definition.created_by != user_id:
-            raise SchemaPermissionError("只能更换自己创建的 Schema 脚本")
+            raise SchemaPermissionError(denied_owner_message)
         return definition
 
     def verify_and_save_script(
@@ -548,6 +619,137 @@ class SchemaManagementService:
         refreshed = self._require_schema(schema_id)
         return refreshed, cleanup_succeeded
 
+    def add_property(
+        self,
+        *,
+        schema_id: str,
+        payload: dict[str, Any],
+        user_id: str,
+        is_platform_admin: bool = False,
+    ) -> dict[str, Any]:
+        """新增属性：目录插入 position=max+1 + 图 ``ALTER TAG/EDGE ADD``。
+
+        与 ``_create`` 的「DDL 失败保留 catalog 行」语义不同：属性新增必须保证
+        目录与图一致（目录列在图里不存在会导致 merge_node 400），DDL 失败即
+        回滚目录行并抛 SchemaDdlError。Nebula ALTER ADD 不支持 NOT NULL →
+        新增属性在图里一律可空（目录保留 required 口径）。
+        """
+        from biz.schemas.schema_management import SchemaPropertyInput
+
+        definition = self.assert_mutable(schema_id, user_id, is_platform_admin=is_platform_admin)
+        prop = SchemaPropertyInput(**payload)
+
+        existing = next((p for p in definition.properties if p.name == prop.name), None)
+        if existing is not None and not existing.is_deleted:
+            raise SchemaConflictError("属性名已存在")
+
+        max_position = max((p.position for p in definition.properties), default=-1)
+        try:
+            if existing is not None:
+                # 同名属性曾软删 → 复活（更新口径，清软删标记）
+                existing.data_type = prop.data_type
+                existing.required = prop.required
+                existing.rule = prop.rule
+                existing.category = prop.category
+                existing.is_deleted = False
+                existing.deleted_at = None
+                existing.position = max_position + 1
+            else:
+                definition.properties.append(
+                    GraphSchemaProperty(
+                        name=prop.name,
+                        data_type=prop.data_type,
+                        required=prop.required,
+                        rule=prop.rule,
+                        category=prop.category,
+                        position=max_position + 1,
+                        is_deleted=False,
+                    )
+                )
+            self._session.flush()
+        except IntegrityError as exc:
+            self._session.rollback()
+            raise SchemaConflictError("属性名已存在") from exc
+
+        ddl_result = run_alter_add_ddl(definition.kind, definition.name, prop.model_dump())
+        if ddl_result["status"] != "succeeded":
+            self._session.rollback()
+            raise SchemaDdlError(f"图 ALTER DDL 执行失败: {ddl_result['error']}")
+
+        try:
+            self._session.commit()
+        except Exception as exc:
+            self._session.rollback()
+            raise SchemaManagementError(f"属性保存失败: {exc}") from exc
+
+        refreshed = self._require_schema(schema_id)
+        row = next(p for p in refreshed.properties if p.name == prop.name)
+        return {
+            "property": self._serialize_property(row),
+            "ddlStatement": ddl_result["statement"],
+            "ddlStatus": ddl_result["status"],
+            "ddlError": ddl_result["error"],
+        }
+
+    def delete_property(
+        self,
+        *,
+        schema_id: str,
+        property_name: str,
+        user_id: str,
+        is_platform_admin: bool = False,
+    ) -> dict[str, Any]:
+        """目录级软删属性：置 is_deleted flag，**不发图 DDL**。
+
+        图库 TAG/EDGE 列不动；后续抽取对已删属性插空/跳过（只写 activeProps），
+        查询按目录过滤掉已删属性。只有非必选（category != required）属性可删。
+        """
+        definition = self.assert_mutable(schema_id, user_id, is_platform_admin=is_platform_admin)
+        row = next((p for p in definition.properties if p.name == property_name), None)
+        if row is None or row.is_deleted:
+            raise SchemaNotFoundError(f"属性不存在: {property_name}")
+        if row.category == "required":
+            raise SchemaConflictError("必选属性不可删除")
+        row.is_deleted = True
+        row.deleted_at = datetime.now()
+        self._session.commit()
+        return {"deleted": True, "propertyName": property_name}
+
+    def replace_sources(
+        self,
+        *,
+        schema_id: str,
+        sources: list[dict[str, Any]],
+        user_id: str,
+        is_platform_admin: bool = False,
+    ) -> dict[str, Any]:
+        """全量替换 schema 的来源表绑定（实体/关系都可绑多张表）。
+
+        每次调用覆盖全部绑定；datasource 存在性经业务库校验。绑定独立水位
+        （definition_id + ``source:{id}`` step_id），多表可并行抽取。
+        """
+        definition = self.assert_mutable(schema_id, user_id, is_platform_admin=is_platform_admin)
+        for item in sources:
+            _validate_datasource_exists(item["datasource_id"])
+        try:
+            definition.sources = [
+                GraphSchemaSource(
+                    datasource_id=item["datasource_id"],
+                    database_name=item["database_name"],
+                    table_name=item["table_name"],
+                    pk_column=item.get("pk_column") or "id",
+                    time_column=item.get("time_column") or "update_time",
+                    position=index,
+                )
+                for index, item in enumerate(sources)
+            ]
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
+        refreshed = self._require_schema(schema_id)
+        return {"sources": [self._serialize_source(item) for item in refreshed.sources]}
+
     def delete_schema(
         self,
         schema_id: str,
@@ -602,6 +804,9 @@ class SchemaManagementService:
         payload: dict[str, Any],
         user_id: str,
     ) -> dict[str, Any]:
+        # 公共必选属性（id/name/create_time/update_time/source_table）注入头部：
+        # 平台喂数抽取按这些标准列写入；先于溯源注入，source_table 共享去重。
+        _inject_required_properties(kind, payload)
         # 自动注入溯源属性：新 ETL 脚本（entity_extractors_one_entity / relation_extractors_one_relation）
         # 统一写 source_system/source_table/source_record_id/source_url/ingest_batch/ingest_time/
         # source_update_time/confidence/match_method/match_evidence + vid 等 11 个溯源属性。
@@ -752,25 +957,54 @@ class SchemaManagementService:
                 and not definition.is_system
                 and (is_platform_admin or definition.created_by == user_id)
             ),
+            "canManageProperties": bool(
+                is_platform_admin
+                or (
+                    not definition.is_system
+                    and user_id is not None
+                    and definition.created_by == user_id
+                )
+            ),
         }
         if detail:
             result["properties"] = [
-                {
-                    "name": item.name,
-                    "dataType": item.data_type,
-                    "required": item.required,
-                    "rule": item.rule,
-                    "category": item.category,
-                }
+                self._serialize_property(item)
                 for item in definition.properties
+                if not item.is_deleted
             ]
+            result["sources"] = [self._serialize_source(item) for item in definition.sources]
             result["script"] = self._serialize_script(definition.script, definition.id)
         else:
-            result["propertyCount"] = len(definition.properties)
+            result["propertyCount"] = sum(
+                1 for item in definition.properties if not item.is_deleted
+            )
             result["scriptFilename"] = (
                 definition.script.original_filename if definition.script else None
             )
         return result
+
+    @staticmethod
+    def _serialize_property(item: GraphSchemaProperty) -> dict[str, Any]:
+        return {
+            "name": item.name,
+            "dataType": item.data_type,
+            "required": item.required,
+            "rule": item.rule,
+            "category": item.category,
+            "locked": item.category == "required",
+        }
+
+    @staticmethod
+    def _serialize_source(item: GraphSchemaSource) -> dict[str, Any]:
+        return {
+            "id": item.id,
+            "datasourceId": item.datasource_id,
+            "databaseName": item.database_name,
+            "tableName": item.table_name,
+            "pkColumn": item.pk_column,
+            "timeColumn": item.time_column,
+            "position": item.position,
+        }
 
     @staticmethod
     def _serialize_script(

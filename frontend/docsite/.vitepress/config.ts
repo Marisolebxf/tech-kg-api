@@ -40,6 +40,7 @@ export default defineConfig({
             { text: "实体抽取与写入", link: "/sdk/entities" },
             { text: "关系抽取与写入", link: "/sdk/relations" },
             { text: "抽取主流程与双入口", link: "/sdk/runners" },
+            { text: "平台喂数模式", link: "/sdk/platform-fed" },
             { text: "数据访问溯源", link: "/sdk/observability" },
             { text: "API 速查表", link: "/sdk/reference" },
           ],

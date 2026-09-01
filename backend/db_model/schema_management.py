@@ -89,6 +89,11 @@ class GraphSchemaDefinition(Base):
         cascade="all, delete-orphan",
         order_by="GraphSchemaMapping.position",
     )
+    sources: Mapped[list[GraphSchemaSource]] = relationship(
+        back_populates="schema",
+        cascade="all, delete-orphan",
+        order_by="GraphSchemaSource.position",
+    )
     script: Mapped[GraphSchemaScript | None] = relationship(
         back_populates="schema", cascade="all, delete-orphan", uselist=False
     )
@@ -119,6 +124,10 @@ class GraphSchemaProperty(Base):
     rule: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     category: Mapped[str] = mapped_column(String(16), nullable=False, default="core")
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 目录级软删 flag：删除属性只标记目录（不动图库 schema），
+    # 后续抽取跳过已删属性、查询按目录过滤。只有非必选属性可删。
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     schema: Mapped[GraphSchemaDefinition] = relationship(back_populates="properties")
 
@@ -172,3 +181,42 @@ class GraphSchemaScript(Base):
     )
 
     schema: Mapped[GraphSchemaDefinition] = relationship(back_populates="script")
+
+
+class GraphSchemaSource(Base):
+    """Schema 来源表绑定（平台喂数抽取按绑定分批读源表）。
+
+    实体和关系都可绑定多张来源表；每张表独立水位（watermark），可并行抽取。
+    """
+
+    __tablename__ = "kg_schema_source"
+    __table_args__ = (
+        UniqueConstraint(
+            "schema_id",
+            "datasource_id",
+            "database_name",
+            "table_name",
+            name="uk_kg_schema_source_table",
+        ),
+        Index("idx_kg_schema_source_schema", "schema_id"),
+        {"comment": "Schema 来源表绑定"},
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    schema_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("kg_schema_definition.id", ondelete="CASCADE"), nullable=False
+    )
+    datasource_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    database_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    table_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    pk_column: Mapped[str] = mapped_column(String(128), nullable=False, default="id")
+    time_column: Mapped[str] = mapped_column(String(128), nullable=False, default="update_time")
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    schema: Mapped[GraphSchemaDefinition] = relationship(back_populates="sources")

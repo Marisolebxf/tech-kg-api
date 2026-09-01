@@ -15,7 +15,13 @@ from starlette.background import BackgroundTask
 from application.schema_management import SchemaManagementApplication
 from biz.dependencies.auth import CurrentActor
 from biz.schemas.common import ApiResponse
-from biz.schemas.schema_management import EntitySchemaCreate, RelationSchemaCreate
+from biz.schemas.schema_management import (
+    EntitySchemaCreate,
+    RelationSchemaCreate,
+    SchemaExtractRequest,
+    SchemaPropertyInput,
+    SchemaSourcesReplace,
+)
 from infra.workflow_mysql import get_workflow_session
 from service.schema_management import (
     SchemaConflictError,
@@ -160,6 +166,90 @@ def delete_schema(
             is_platform_admin=actor.is_admin,
         )
         return ApiResponse(data=data, msg="Schema 删除成功")
+    except SchemaManagementError as exc:
+        _raise_domain_error(exc)
+
+
+@router.post("/schemas/{schema_id}/properties", response_model=ApiResponse, status_code=201)
+def add_schema_property(
+    schema_id: str,
+    actor: CurrentActor,
+    session: Annotated[Session, Depends(get_workflow_session)],
+    payload: SchemaPropertyInput,
+) -> ApiResponse:
+    """新增属性：目录插入 + 图 ALTER ADD；DDL 失败回滚目录行（目录与图保持一致）。"""
+    try:
+        data = _application(session).add_property(
+            schema_id=schema_id,
+            payload=payload.model_dump(),
+            user_id=actor.user_id,
+            is_platform_admin=actor.is_admin,
+        )
+        return ApiResponse(data=data, msg="属性新增成功")
+    except SchemaManagementError as exc:
+        _raise_domain_error(exc)
+
+
+@router.delete("/schemas/{schema_id}/properties/{property_name}", response_model=ApiResponse)
+def delete_schema_property(
+    schema_id: str,
+    property_name: str,
+    actor: CurrentActor,
+    session: Annotated[Session, Depends(get_workflow_session)],
+) -> ApiResponse:
+    """目录级软删属性：置 is_deleted flag，不发图 DDL。必选属性不可删除。"""
+    try:
+        data = _application(session).delete_property(
+            schema_id=schema_id,
+            property_name=property_name,
+            user_id=actor.user_id,
+            is_platform_admin=actor.is_admin,
+        )
+        return ApiResponse(data=data, msg="属性已删除")
+    except SchemaManagementError as exc:
+        _raise_domain_error(exc)
+
+
+@router.put("/schemas/{schema_id}/sources", response_model=ApiResponse)
+def replace_schema_sources(
+    schema_id: str,
+    actor: CurrentActor,
+    session: Annotated[Session, Depends(get_workflow_session)],
+    payload: SchemaSourcesReplace,
+) -> ApiResponse:
+    """全量替换来源表绑定（实体/关系可绑多张表，每表独立水位）。"""
+    try:
+        data = _application(session).replace_sources(
+            schema_id=schema_id,
+            sources=[item.model_dump() for item in payload.sources],
+            user_id=actor.user_id,
+            is_platform_admin=actor.is_admin,
+        )
+        return ApiResponse(data=data, msg="来源表绑定已保存")
+    except SchemaManagementError as exc:
+        _raise_domain_error(exc)
+
+
+@router.post("/schemas/{schema_id}/extract", response_model=ApiResponse, status_code=201)
+async def trigger_schema_extraction(
+    schema_id: str,
+    actor: CurrentActor,
+    session: Annotated[Session, Depends(get_workflow_session)],
+    payload: SchemaExtractRequest | None = None,
+) -> ApiResponse:
+    """触发平台喂数抽取（kg.schema.extract）：按来源表水位分批读取 → 脚本转换 → 写图。
+
+    要求已上传脚本且已绑定 ≥1 来源表，否则 409。执行记录可在任务中心查看。
+    """
+    try:
+        data = await _application(session).trigger_extraction(
+            schema_id=schema_id,
+            user_id=actor.user_id,
+            is_platform_admin=actor.is_admin,
+            graph_space=payload.graph_space if payload else None,
+            batch_size=payload.batch_size if payload else None,
+        )
+        return ApiResponse(data=data, msg="抽取已触发")
     except SchemaManagementError as exc:
         _raise_domain_error(exc)
 

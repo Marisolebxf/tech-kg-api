@@ -12,6 +12,8 @@ ENTITY_NAME_PATTERN = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 RELATION_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 PROPERTY_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# MySQL 标识符（库名/表名/列名）：防止拼接进 information_schema / 抽取 SQL 时注入。
+IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 
 
 def _to_camel(value: str) -> str:
@@ -30,7 +32,7 @@ class SchemaPropertyInput(CamelModel):
     data_type: str = Field(min_length=1, max_length=128)
     required: bool = False
     rule: str = Field(default="", max_length=512)
-    category: str = Field(default="core", pattern="^(core|dynamic)$")
+    category: str = Field(default="core", pattern="^(core|dynamic|required|provenance)$")
 
     @field_validator("name")
     @classmethod
@@ -116,3 +118,40 @@ class RelationSchemaCreate(SchemaCreateBase):
         if not self.target_schema_id and not self.target_expression:
             raise ValueError("必须提供关系终点 Schema 或终点表达式")
         return self
+
+
+class SchemaSourceInput(CamelModel):
+    """Schema 来源表绑定项（平台喂数抽取的读取源）。"""
+
+    datasource_id: str = Field(min_length=1, max_length=64)
+    database_name: str = Field(min_length=1, max_length=128)
+    table_name: str = Field(min_length=1, max_length=128)
+    pk_column: str = Field(default="id", min_length=1, max_length=128)
+    time_column: str = Field(default="update_time", min_length=1, max_length=128)
+
+    @field_validator("database_name", "table_name", "pk_column", "time_column")
+    @classmethod
+    def validate_identifier(cls, value: str) -> str:
+        if not IDENTIFIER_PATTERN.fullmatch(value):
+            raise ValueError("库名/表名/列名只能包含字母、数字、下划线和 $，且不能以数字开头")
+        return value
+
+
+class SchemaSourcesReplace(CamelModel):
+    """全量替换来源表绑定的请求体。"""
+
+    sources: list[SchemaSourceInput] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_no_duplicates(self) -> SchemaSourcesReplace:
+        keys = [(item.datasource_id, item.database_name, item.table_name) for item in self.sources]
+        if len(set(keys)) != len(keys):
+            raise ValueError("来源表绑定不能重复")
+        return self
+
+
+class SchemaExtractRequest(CamelModel):
+    """触发平台喂数抽取的请求体。"""
+
+    graph_space: str | None = Field(default=None, min_length=1, max_length=128)
+    batch_size: int | None = Field(default=None, ge=1, le=5000)

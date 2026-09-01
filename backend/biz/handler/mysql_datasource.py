@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from application.mysql_datasource import MysqlDatasourceApplication
@@ -123,3 +123,30 @@ def list_mysql_databases(
 ) -> ApiResponse:
     _owned_config(_application(session), actor, datasource_id)
     return ApiResponse(data={"items": _application(session).list_databases(datasource_id)})
+
+
+@router.get("/{datasource_id}/tables", response_model=ApiResponse)
+def list_mysql_tables(
+    datasource_id: str,
+    actor: CurrentActor,
+    session: Annotated[Session, Depends(get_session)],
+    database: Annotated[str | None, Query(max_length=128)] = None,
+) -> ApiResponse:
+    """列出指定库（缺省为数据源默认库）的表，供 Schema 来源表绑定选择。"""
+    _owned_config(_application(session), actor, datasource_id)
+    return ApiResponse(data={"items": _application(session).list_tables(datasource_id, database)})
+
+
+@router.get("/{datasource_id}/tables/{table_name}/columns", response_model=ApiResponse)
+def list_mysql_table_columns(
+    datasource_id: str,
+    table_name: str,
+    actor: CurrentActor,
+    session: Annotated[Session, Depends(get_session)],
+    database: Annotated[str | None, Query(max_length=128)] = None,
+) -> ApiResponse:
+    """列出指定表的列，供选主键列/时间列。"""
+    _owned_config(_application(session), actor, datasource_id)
+    return ApiResponse(
+        data={"items": _application(session).list_columns(datasource_id, table_name, database)}
+    )

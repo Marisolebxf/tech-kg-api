@@ -173,6 +173,70 @@ class MysqlDatasourceService:
         finally:
             client.dispose()
 
+    def list_tables(self, config_id: str, database: str | None = None) -> list[dict[str, Any]]:
+        """列出指定库（缺省为数据源默认库）的表。连接失败返回 []。"""
+        row = self._dao.get(config_id)
+        if row is None:
+            return []
+        db = database or row.default_database
+        if not db:
+            return []
+        client = MySQLClient(
+            host=row.host,
+            port=row.port,
+            database=None,
+            username=row.username,
+            password=row.password,
+        )
+        try:
+            with client.engine.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        "SELECT TABLE_NAME, TABLE_TYPE FROM information_schema.tables "
+                        "WHERE TABLE_SCHEMA = :db ORDER BY TABLE_NAME"
+                    ),
+                    {"db": db},
+                ).fetchall()
+            return [{"name": r[0], "type": r[1]} for r in rows]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("列表失败 id=%s db=%s: %s", config_id, db, exc)
+            return []
+        finally:
+            client.dispose()
+
+    def list_columns(
+        self, config_id: str, table: str, database: str | None = None
+    ) -> list[dict[str, Any]]:
+        """列出指定表的列（供选主键列/时间列）。连接失败返回 []。"""
+        row = self._dao.get(config_id)
+        if row is None:
+            return []
+        db = database or row.default_database
+        if not db:
+            return []
+        client = MySQLClient(
+            host=row.host,
+            port=row.port,
+            database=None,
+            username=row.username,
+            password=row.password,
+        )
+        try:
+            with client.engine.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE FROM information_schema.columns "
+                        "WHERE TABLE_SCHEMA = :db AND TABLE_NAME = :t ORDER BY ORDINAL_POSITION"
+                    ),
+                    {"db": db, "t": table},
+                ).fetchall()
+            return [{"name": r[0], "dataType": r[1], "nullable": r[2] == "YES"} for r in rows]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("列列失败 id=%s db=%s table=%s: %s", config_id, db, table, exc)
+            return []
+        finally:
+            client.dispose()
+
 
 def get_mysql_settings_by_id(config_id: str | None) -> dict[str, Any] | None:
     """供 activity 解析：按 id 查 MysqlDatasource 并返回连接参数 dict。

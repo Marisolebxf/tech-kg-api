@@ -4,34 +4,49 @@ import hljs from 'highlight.js/lib/core'
 import python from 'highlight.js/lib/languages/python'
 import 'highlight.js/styles/github-dark.css'
 import {
+  addSchemaProperty,
   createEntitySchema,
   createRelationSchema,
   deleteSchema,
+  deleteSchemaProperty,
+  getSchemaDetail,
   getScriptContent,
   getSchemaOverview,
   getSchemaTopology,
   listAllSchemas,
+  replaceSchemaSources,
   schemaErrorMessage,
+  triggerSchemaExtraction,
   verifyAndSaveScript,
   type EntitySchemaCreatePayload,
   type RelationSchemaCreatePayload,
   type SchemaDefinition,
   type SchemaOverview,
+  type SchemaProperty,
 } from '../../api/schemaManagement'
-import { listLlmConfigs, type LlmConfig } from '../../api/llmConfig'
 import { currentUserId as getCurrentUserId } from '../../api/currentUser'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import KgGraphCanvas from '../../components/kg-graph-canvas.vue'
 import type { GraphEdgeData, GraphNodeData } from '../../data/graph-presets'
 import { useToast } from '../../composables/use-toast'
+import {
+  buildRequiredPropertyRows,
+  emptyPropertyRow,
+  PROPERTY_TYPES,
+  type PropertyDataType,
+  type PropertyRow,
+} from './schema-browser/propertyRows'
+import SourceBindings from './schema-browser/sourceBindings.vue'
+import {
+  toSourcePayload,
+  type SourceBindingRow,
+} from './schema-browser/sourceBindingRows'
 
 hljs.registerLanguage('python', python)
 
 type Entity = { id: string; name: string; label: string; level: '核心实体' | '支撑实体'; key: string; source: string; description: string; schema: SchemaDefinition }
 type Relation = { id: string; name: string; label: string; source: string; target: string; basis: string; schema: SchemaDefinition }
 
-type PropertyDataType = 'string' | 'int64' | 'double' | 'bool' | 'date' | 'datetime' | 'geo' | 'fixed_string'
-type PropertyRow = { name: string; dataType: PropertyDataType; length: number; required: boolean }
 type CreateForm = {
   name: string
   label: string
@@ -39,7 +54,7 @@ type CreateForm = {
   sourceEntityId: string
   targetEntityId: string
   properties: PropertyRow[]
-  llmConfigId: string
+  sources: SourceBindingRow[]
 }
 
 const currentUserId = getCurrentUserId()
@@ -97,7 +112,6 @@ const createFormRules = {
 }
 const creating = ref(false)
 const confirming = ref(false)
-const llmConfigs = ref<LlmConfig[]>([])
 const scriptByRow = ref<Record<string, { name: string; workflowDefinitionId: string | null }>>({})
 
 // Schema 拓扑总览（实体 -关系-> 实体 元图谱）
@@ -176,6 +190,187 @@ const deleteModalOpen = ref(false)
 const deleteTarget = ref<SchemaDefinition | null>(null)
 const deleting = ref(false)
 
+// 属性管理弹窗（行级「属性管理」）
+const propertyModalOpen = ref(false)
+const propertyTarget = ref<SchemaDefinition | null>(null)
+const propertySaving = ref(false)
+const propertyForm = ref<{ name: string; dataType: PropertyDataType; length: number; required: boolean }>({
+  name: '',
+  dataType: 'string',
+  length: 64,
+  required: false,
+})
+// 删除属性二次确认
+const propertyDeleteTarget = ref<SchemaProperty | null>(null)
+const propertyDeleteConfirmOpen = ref(false)
+const propertyDeleting = ref(false)
+// 变更成功后的「立即触发重新抽取」二次确认
+const propertyExtractConfirmOpen = ref(false)
+
+// 来源表管理弹窗（行级「来源表」）
+const sourcesModalOpen = ref(false)
+const sourcesTarget = ref<SchemaDefinition | null>(null)
+const sourcesForm = ref<SourceBindingRow[]>([])
+const sourcesSaving = ref(false)
+const extracting = ref(false)
+
+async function triggerExtraction(schema: SchemaDefinition) {
+  if (extracting.value) return null
+  extracting.value = true
+  try {
+    const result = await triggerSchemaExtraction(schema.id, currentUserId)
+    showToast(`抽取已触发（执行 ${result.executionId}），可在任务中心查看进度`, 'success')
+    return result
+  } catch (error) {
+    showToast(schemaErrorMessage(error), 'warning')
+    return null
+  } finally {
+    extracting.value = false
+  }
+}
+
+async function confirmTriggerExtraction() {
+  const target = propertyTarget.value
+  propertyExtractConfirmOpen.value = false
+  if (!target) return
+  await triggerExtraction(target)
+}
+
+async function triggerExtractionFromSources() {
+  const target = sourcesTarget.value
+  if (!target || sourcesSaving.value) return
+  const saved = await saveSources()
+  if (saved) await triggerExtraction(sourcesTarget.value || target)
+}
+
+function openSourcesModal(schema: SchemaDefinition) {
+  if (!schema.canManageProperties) {
+    showToast(schema.isSystem ? '系统 Schema 仅 Schema 管理员可维护来源表' : '只有创建者或管理员可维护来源表', 'warning')
+    return
+  }
+  sourcesTarget.value = schema
+  sourcesForm.value = (schema.sources || []).map((s) => ({
+    datasourceId: s.datasourceId,
+    databaseName: s.databaseName,
+    tableName: s.tableName,
+    pkColumn: s.pkColumn,
+    timeColumn: s.timeColumn,
+  }))
+  sourcesModalOpen.value = true
+}
+
+async function saveSources(): Promise<boolean> {
+  const target = sourcesTarget.value
+  if (!target || sourcesSaving.value) return false
+  const payloads = sourcesForm.value
+    .map((row) => toSourcePayload(row))
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+  if (payloads.length !== sourcesForm.value.length) {
+    showToast('存在未选择完整的来源表绑定（数据源/库/表均需选择）', 'warning')
+    return false
+  }
+  sourcesSaving.value = true
+  try {
+    await replaceSchemaSources(target.id, payloads, currentUserId)
+    showToast('来源表绑定已保存', 'success')
+    sourcesModalOpen.value = false
+    await loadSchemas()
+    return true
+  } catch (error) {
+    showToast(schemaErrorMessage(error), 'warning')
+    return false
+  } finally {
+    sourcesSaving.value = false
+  }
+}
+
+function openPropertyModal(schema: SchemaDefinition) {
+  if (!schema.canManageProperties) {
+    showToast(schema.isSystem ? '系统 Schema 仅 Schema 管理员可维护属性' : '只有创建者或管理员可维护属性', 'warning')
+    return
+  }
+  propertyTarget.value = schema
+  propertyForm.value = { name: '', dataType: 'string', length: 64, required: false }
+  propertyDeleteTarget.value = null
+  propertyDeleteConfirmOpen.value = false
+  propertyExtractConfirmOpen.value = false
+  propertyModalOpen.value = true
+}
+
+function closePropertyModal() {
+  propertyModalOpen.value = false
+  propertyTarget.value = null
+}
+
+async function refreshPropertyTarget() {
+  const target = propertyTarget.value
+  if (!target) return
+  try {
+    propertyTarget.value = await getSchemaDetail(target.id, currentUserId)
+  } catch (error) {
+    showToast(schemaErrorMessage(error), 'warning')
+  }
+  await loadSchemas().catch(() => undefined)
+}
+
+async function submitAddProperty() {
+  const target = propertyTarget.value
+  if (!target || propertySaving.value) return
+  const name = propertyForm.value.name.trim()
+  if (!name) {
+    showToast('请填写属性名', 'warning')
+    return
+  }
+  const dataType =
+    propertyForm.value.dataType === 'fixed_string'
+      ? `fixed_string(${propertyForm.value.length || 64})`
+      : propertyForm.value.dataType
+  propertySaving.value = true
+  try {
+    const result = await addSchemaProperty(
+      target.id,
+      { name, dataType, required: propertyForm.value.required, rule: '', category: 'core' },
+      currentUserId,
+    )
+    if (result.ddlStatus === 'succeeded') {
+      showToast(`属性已新增并执行图 DDL：${result.ddlStatement}`, 'success')
+    } else {
+      showToast(`属性已新增，但图 DDL 执行失败：${result.ddlError || '未知错误'}`, 'warning')
+    }
+    propertyForm.value = { name: '', dataType: 'string', length: 64, required: false }
+    await refreshPropertyTarget()
+    propertyExtractConfirmOpen.value = true
+  } catch (error) {
+    showToast(schemaErrorMessage(error), 'warning')
+  } finally {
+    propertySaving.value = false
+  }
+}
+
+function requestDeleteProperty(prop: SchemaProperty) {
+  propertyDeleteTarget.value = prop
+  propertyDeleteConfirmOpen.value = true
+}
+
+async function confirmDeleteProperty() {
+  const target = propertyTarget.value
+  const prop = propertyDeleteTarget.value
+  if (!target || !prop || propertyDeleting.value) return
+  propertyDeleting.value = true
+  try {
+    await deleteSchemaProperty(target.id, prop.name, currentUserId)
+    showToast(`属性 ${prop.name} 已从目录删除`, 'success')
+    propertyDeleteConfirmOpen.value = false
+    propertyDeleteTarget.value = null
+    await refreshPropertyTarget()
+    propertyExtractConfirmOpen.value = true
+  } catch (error) {
+    showToast(schemaErrorMessage(error), 'warning')
+  } finally {
+    propertyDeleting.value = false
+  }
+}
+
 function openDeleteModal(schema: SchemaDefinition) {
   if (!schema.canDelete) {
     showToast(schema.isSystem ? '系统内置 Schema 不可删除' : '被关系引用的实体 Schema 不可删除', 'warning')
@@ -210,8 +405,6 @@ const viewContent = ref('')
 const viewError = ref('')
 const viewCodeRef = ref<HTMLElement | null>(null)
 
-const PROPERTY_TYPES: PropertyDataType[] = ['string', 'int64', 'double', 'bool', 'date', 'datetime', 'geo', 'fixed_string']
-
 function emptyCreateForm(): CreateForm {
   return {
     name: '',
@@ -219,8 +412,8 @@ function emptyCreateForm(): CreateForm {
     description: '',
     sourceEntityId: '',
     targetEntityId: '',
-    properties: [{ name: '', dataType: 'string', length: 64, required: true }],
-    llmConfigId: '',
+    properties: buildRequiredPropertyRows(isRelationTab() ? 'relation' : 'entity'),
+    sources: [],
   }
 }
 
@@ -229,10 +422,11 @@ function isRelationTab(): boolean {
 }
 
 function addProperty() {
-  createForm.value.properties.push({ name: '', dataType: 'string', length: 64, required: false })
+  createForm.value.properties.push(emptyPropertyRow())
 }
 
 function removeProperty(index: number) {
+  if (createForm.value.properties[index]?.locked) return
   createForm.value.properties.splice(index, 1)
 }
 
@@ -306,14 +500,6 @@ async function loadSchemas() {
   applyDefinitions(definitions)
 }
 
-async function loadLlmConfigs() {
-  try {
-    llmConfigs.value = await listLlmConfigs(currentUserId)
-  } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
-  }
-}
-
 function openCreate() {
   createForm.value = emptyCreateForm()
   confirming.value = false
@@ -328,8 +514,13 @@ function schemaKey(name: string) {
 }
 
 async function saveItem() {
-  const validationErrors = await createFormRef.value?.validate()
-  if (validationErrors) return
+  // arco form.validate() 校验失败时 reject（不是 resolve 错误对象）——必须捕获，
+  // 否则静默中断（空表单点「预览并创建」无反应的根因）。
+  try {
+    await createFormRef.value?.validate()
+  } catch {
+    return
+  }
   const f = createForm.value
   if (!f.name.trim()) {
     showToast(isRelationTab() ? '请填写关系英文名（UPPER_SNAKE_CASE）' : '请填写实体名（PascalCase）', 'warning')
@@ -360,9 +551,8 @@ async function saveItem() {
     dataType: resolveDataType(p),
     required: p.required,
     rule: '',
-    category: 'core' as const,
+    category: p.locked ? ('required' as const) : ('core' as const),
   }))
-  const llmConfigId = f.llmConfigId || null
 
   creating.value = true
   try {
@@ -380,10 +570,11 @@ async function saveItem() {
         targetExpression: target?.name || '',
         relationCategory: activeTab.value === '事实关系' ? 'fact' : 'inferred',
         properties,
-        llmConfigId,
+        llmConfigId: null,
       }
       const result = await createRelationSchema(payload, currentUserId)
       toastCreateResult(result)
+      await bindSourcesAfterCreate(result.id, f.sources)
     } else {
       const payload: EntitySchemaCreatePayload = {
         schemaKey: schemaKey(f.name),
@@ -393,10 +584,11 @@ async function saveItem() {
         identityKey: '',
         properties,
         isCore: false,
-        llmConfigId,
+        llmConfigId: null,
       }
       const result = await createEntitySchema(payload, currentUserId)
       toastCreateResult(result)
+      await bindSourcesAfterCreate(result.id, f.sources)
     }
     modalOpen.value = false
     await loadSchemas()
@@ -404,6 +596,23 @@ async function saveItem() {
     showToast(schemaErrorMessage(error), 'warning')
   } finally {
     creating.value = false
+  }
+}
+
+async function bindSourcesAfterCreate(schemaId: string, sources: SourceBindingRow[]) {
+  if (!sources.length) return
+  const payloads = sources
+    .map((row) => toSourcePayload(row))
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+  if (!payloads.length) return
+  try {
+    await replaceSchemaSources(schemaId, payloads, currentUserId)
+    showToast('来源表绑定已保存', 'success')
+  } catch (error) {
+    showToast(
+      `来源表绑定保存失败（${schemaErrorMessage(error)}），可稍后在行级「来源表」入口补绑`,
+      'warning',
+    )
   }
 }
 
@@ -501,7 +710,6 @@ async function openViewModal(rowId: string, rowName: string) {
 onMounted(async () => {
   try {
     await loadSchemas()
-    await loadLlmConfigs()
     await loadTopology()
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
@@ -511,6 +719,28 @@ const normalizedKeyword = computed(() => keyword.value.trim().toLowerCase())
 const matches = (row: unknown) => !normalizedKeyword.value || Object.values(row as Record<string, unknown>).join(' ').toLowerCase().includes(normalizedKeyword.value)
 const filteredEntities = computed(() => entities.value.filter(matches))
 const filteredRelations = computed(() => relations.value.filter(matches))
+
+// 列表属性 chip 展示（前 6 个 + 溢出展开明细）
+const PROPERTY_CHIP_LIMIT = 6
+const expandedPropertyRows = ref<Set<string>>(new Set())
+
+function propertyChips(schema: SchemaDefinition): string[] {
+  return schema.properties.slice(0, PROPERTY_CHIP_LIMIT).map((p) => `${p.name}:${p.dataType}`)
+}
+
+function propertyOverflow(schema: SchemaDefinition): number {
+  return Math.max(schema.properties.length - PROPERTY_CHIP_LIMIT, 0)
+}
+
+function togglePropertyDetail(schemaId: string): void {
+  const next = new Set(expandedPropertyRows.value)
+  if (next.has(schemaId)) {
+    next.delete(schemaId)
+  } else {
+    next.add(schemaId)
+  }
+  expandedPropertyRows.value = next
+}
 </script>
 
 <template>
@@ -538,9 +768,9 @@ const filteredRelations = computed(() => relations.value.filter(matches))
       <nav class="schema-tabs"><button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="activeTab=tab;keyword=''">{{ tab }}</button></nav>
       <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong></div><div class="schema-toolbar__actions"><button class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" :placeholder="`搜索${activeTab}`" /></label></div></div>
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : (row.schema.isSystem ? '系统内置，不可删除' : '被关系引用，不可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in filteredEntities" :key="row.name"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.description }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : (row.schema.isSystem ? '系统内置，不可删除' : '被关系引用，不可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="5"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
 
-      <div v-else class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRelations" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr></tbody></table></div>
+      <div v-else class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in filteredRelations" :key="row.name"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="7"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
 
       <!-- 版本记录（已隐藏）
       <div v-else class="schema-table-wrap schema-version-table"><table><thead><tr><th>版本</th><th>状态</th><th>发布时间</th><th>实体范围</th><th>关系范围</th><th>变更内容</th><th>发布人</th><th>操作</th></tr></thead><tbody><tr v-for="row in schemaVersions" :key="row.version"><td><code>{{ row.version }}</code></td><td><span :class="row.status === '当前版本' ? 'core' : 'support'">{{ row.status }}</span></td><td>{{ row.time }}</td><td>{{ row.entities }}</td><td>{{ row.relations }}</td><td>{{ row.change }}</td><td>{{ row.publisher }}</td><td><div class="schema-version-actions"><button type="button" @click="schemaVersionMessage = `已打开 ${row.version} 的完整变更清单。`">变更详情</button><button v-if="row.status !== '当前版本'" class="danger" type="button" @click="schemaVersionMessage = `已创建回退至 ${row.version} 的申请，通过影响分析与审批后才会执行。`">申请回退</button></div></td></tr></tbody></table></div>
@@ -579,12 +809,6 @@ const filteredRelations = computed(() => relations.value.filter(matches))
               <a-textarea v-model="createForm.description" :auto-size="{ minRows: 2, maxRows: 4 }" />
             </a-form-item>
 
-            <a-form-item class="create-field create-field--full" field="llmConfigId" label="默认 LLM 配置（作业启动时默认使用，可临时覆盖）">
-              <a-select v-model="createForm.llmConfigId" class="schema-llm-select" placeholder="使用全局默认" popup-container=".schema-create-modal" allow-clear>
-                <a-option v-for="c in llmConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）{{ c.isDefault ? ' ★默认' : '' }}</a-option>
-              </a-select>
-            </a-form-item>
-
             <a-form-item class="create-props" field="properties" required label-component="div">
               <template #label>
                 <div class="create-props__head">
@@ -597,20 +821,34 @@ const filteredRelations = computed(() => relations.value.filter(matches))
                 v-for="(p, i) in createForm.properties"
                 :key="i"
                 class="create-prop-row"
-                :class="{ 'create-prop-row--has-length': p.dataType === 'fixed_string' }"
+                :class="{ 'create-prop-row--has-length': p.dataType === 'fixed_string', 'create-prop-row--locked': p.locked }"
               >
                 <a-form-item class="prop-name-field" :field="`properties.${i}.name`" :rules="[{ required: true, message: '请输入属性名称' }]" hide-label>
-                  <input v-model="p.name" placeholder="属性名" class="prop-name" />
+                  <input v-model="p.name" placeholder="属性名" class="prop-name" :disabled="p.locked" :title="p.locked ? '公共必选属性，不可修改' : undefined" />
                 </a-form-item>
-                <a-select v-model="p.dataType" class="prop-type" popup-container=".schema-create-modal" :scrollbar="false">
-                  <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
-                </a-select>
-                <input v-if="p.dataType === 'fixed_string'" v-model.number="p.length" type="number" min="1" max="1024" class="prop-len" placeholder="N" />
-                <a-checkbox v-model="p.required" class="prop-required">必填</a-checkbox>
-                <button type="button" class="prop-remove" @click="removeProperty(i)" title="删除">×</button>
+                <template v-if="p.locked">
+                  <span class="prop-locked-type">string</span>
+                  <span class="prop-locked-required">必填 🔒</span>
+                </template>
+                <template v-else>
+                  <a-select v-model="p.dataType" class="prop-type" popup-container=".schema-create-modal" :scrollbar="false">
+                    <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
+                  </a-select>
+                  <input v-if="p.dataType === 'fixed_string'" v-model.number="p.length" type="number" min="1" max="1024" class="prop-len" placeholder="N" />
+                  <a-checkbox v-model="p.required" class="prop-required">必填</a-checkbox>
+                  <button type="button" class="prop-remove" @click="removeProperty(i)" title="删除">×</button>
+                </template>
                 </div>
               </div>
             </a-form-item>
+
+            <div class="create-sources">
+              <div class="create-sources__head">
+                <span>来源表（可选）</span>
+                <span class="create-sources__hint">绑定后可在行级触发「平台喂数」抽取：按时间列水位分批读取来源表 → 脚本转换 → 写入图谱</span>
+              </div>
+              <SourceBindings v-model="createForm.sources" />
+            </div>
 
             <div class="create-ddl">
               <span class="create-ddl__label">nGQL 预览（创建时将执行）</span>
@@ -639,6 +877,101 @@ const filteredRelations = computed(() => relations.value.filter(matches))
           <footer>
             <button type="button" @click="deleteModalOpen = false">取消</button>
             <button type="button" class="danger" :disabled="deleting" @click="confirmDelete">{{ deleting ? '删除中...' : '确认删除' }}</button>
+          </footer>
+        </aside>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="propertyModalOpen" class="schema-modal property-modal">
+        <button class="schema-modal__mask" type="button" @click="closePropertyModal"></button>
+        <aside class="schema-modal__panel property-panel">
+          <header><h2>属性管理 · {{ propertyTarget?.label || propertyTarget?.name }}</h2><button type="button" @click="closePropertyModal">×</button></header>
+          <div class="schema-modal__body property-body">
+            <div class="property-section">
+              <div class="property-section__head"><strong>现有属性</strong><span>{{ propertyTarget?.properties.length || 0 }} 个</span></div>
+              <div class="property-table">
+                <div class="property-table__row property-table__row--head">
+                  <span>属性名</span><span>类型</span><span>必填</span><span>操作</span>
+                </div>
+                <div v-for="p in propertyTarget?.properties || []" :key="p.name" class="property-table__row" :class="{ 'property-table__row--locked': p.locked }">
+                  <span class="property-table__name"><code>{{ p.name }}</code><b v-if="p.locked" class="property-table__lock" title="公共必选属性，不可删除">🔒</b></span>
+                  <span class="property-table__type">{{ p.dataType }}</span>
+                  <span>{{ p.required ? '是' : '否' }}</span>
+                  <span>
+                    <button v-if="!p.locked" type="button" class="schema-action-link schema-action-link--danger" @click="requestDeleteProperty(p)">删除</button>
+                    <span v-else class="property-table__locked-note">公共属性</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div class="property-section">
+              <div class="property-section__head"><strong>新增属性</strong><span>新增后在图库执行 ALTER ADD（可空列）</span></div>
+              <div class="property-add-form">
+                <input v-model="propertyForm.name" placeholder="属性名（字母/数字/下划线）" class="property-add-form__name" />
+                <a-select v-model="propertyForm.dataType" class="property-add-form__type" popup-container=".property-modal" :scrollbar="false">
+                  <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
+                </a-select>
+                <input v-if="propertyForm.dataType === 'fixed_string'" v-model.number="propertyForm.length" type="number" min="1" max="1024" class="property-add-form__len" placeholder="N" />
+                <label class="property-add-form__required"><input v-model="propertyForm.required" type="checkbox" />必填</label>
+                <button type="button" class="primary" :disabled="propertySaving" @click="submitAddProperty">{{ propertySaving ? '新增中...' : '＋ 新增属性' }}</button>
+              </div>
+            </div>
+          </div>
+          <footer>
+            <button type="button" @click="closePropertyModal">关闭</button>
+          </footer>
+        </aside>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="propertyDeleteConfirmOpen && propertyDeleteTarget" class="schema-modal property-delete-modal">
+        <button class="schema-modal__mask" type="button" @click="propertyDeleteConfirmOpen = false"></button>
+        <aside class="schema-modal__panel schema-delete-panel">
+          <header><h2>删除属性</h2><button type="button" @click="propertyDeleteConfirmOpen = false">×</button></header>
+          <div class="schema-modal__body">
+            <p class="schema-delete-text">确认删除属性 <b><code>{{ propertyDeleteTarget.name }}</code></b>（{{ propertyTarget?.label || propertyTarget?.name }}）？</p>
+            <p class="schema-delete-note">仅在目录中标记为已删：后续抽取不再写入该属性、查询不再返回；图库 TAG/EDGE 中的对应列不会被删除；如需恢复可重新新增同名属性。</p>
+          </div>
+          <footer>
+            <button type="button" @click="propertyDeleteConfirmOpen = false">取消</button>
+            <button type="button" class="danger" :disabled="propertyDeleting" @click="confirmDeleteProperty">{{ propertyDeleting ? '删除中...' : '确认删除' }}</button>
+          </footer>
+        </aside>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="sourcesModalOpen" class="schema-modal sources-modal">
+        <button class="schema-modal__mask" type="button" @click="sourcesModalOpen = false"></button>
+        <aside class="schema-modal__panel sources-panel">
+          <header><h2>来源表 · {{ sourcesTarget?.label || sourcesTarget?.name }}</h2><button type="button" @click="sourcesModalOpen = false">×</button></header>
+          <div class="schema-modal__body">
+            <p class="sources-note">绑定来源表后，可通过「触发抽取」让平台按各表独立的时间列水位分批读取行数据交给脚本转换并写入图谱；每张表可独立并行推进。</p>
+            <SourceBindings v-model="sourcesForm" />
+          </div>
+          <footer>
+            <button type="button" @click="sourcesModalOpen = false">取消</button>
+            <button type="button" :disabled="sourcesSaving || extracting" @click="saveSources">{{ sourcesSaving ? '保存中...' : '仅保存绑定' }}</button>
+            <button type="button" class="primary" :disabled="sourcesSaving || extracting" @click="triggerExtractionFromSources">{{ extracting ? '抽取中...' : '保存并触发抽取' }}</button>
+          </footer>
+        </aside>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="propertyExtractConfirmOpen" class="schema-modal property-extract-modal">
+        <button class="schema-modal__mask" type="button" @click="propertyExtractConfirmOpen = false"></button>
+        <aside class="schema-modal__panel schema-delete-panel">
+          <header><h2>触发重新抽取</h2><button type="button" @click="propertyExtractConfirmOpen = false">×</button></header>
+          <div class="schema-modal__body">
+            <p class="schema-delete-text">Schema 属性已变更，是否立即触发重新抽取？</p>
+            <p class="schema-delete-note">平台将按各来源表的时间列水位分批读取行数据，交给脚本转换后 merge 写入图谱（已删除属性不再写入）。</p>
+          </div>
+          <footer>
+            <button type="button" @click="propertyExtractConfirmOpen = false">稍后再说</button>
+            <button type="button" class="primary" :disabled="extracting" @click="confirmTriggerExtraction">{{ extracting ? '触发中...' : '立即抽取' }}</button>
           </footer>
         </aside>
       </div>
@@ -776,6 +1109,18 @@ const filteredRelations = computed(() => relations.value.filter(matches))
 .schema-action-link:disabled{color:#a9b4c6;cursor:not-allowed;text-decoration:none}
 .schema-action-link--danger{color:#e5484d;padding-left:10px}
 .schema-action-link--danger:hover:not(:disabled){color:#b42318}
+.schema-props-cell{max-width:360px}
+.prop-chips{display:flex;flex-wrap:wrap;gap:4px}
+.prop-chip{display:inline-flex;max-width:160px;overflow:hidden;padding:1px 8px;border:1px solid #d6e2f5;border-radius:999px;background:#f4f8ff;color:#3a5686;font-size:11px;line-height:18px;text-overflow:ellipsis;white-space:nowrap}
+.prop-chip--more{border-color:#bcd4f7;background:#eaf2ff;color:#165dff;cursor:pointer}
+.prop-chip--more:hover{background:#dcebff}
+.schema-prop-detail-row>td{padding:8px 16px;background:#f9fbff}
+.prop-detail{display:flex;flex-wrap:wrap;gap:8px 18px}
+.prop-detail__item{display:inline-flex;align-items:center;gap:6px;color:#4e5969;font-size:12px;line-height:20px;white-space:nowrap}
+.prop-detail__item code{padding:1px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:11px}
+.prop-detail__item em{color:#86909c;font-size:11px;font-style:normal;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.prop-detail__item b{padding:0 6px;border-radius:999px;background:#f2f3f5;color:#4e5969;font-size:10px;font-weight:400}
+.prop-detail__locked{background:#fff7e8;color:#b54708}
 .schema-modal{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;padding:24px}
 .schema-modal__mask{position:fixed;inset:0;border:0;background:rgba(16,38,76,0.42);backdrop-filter:blur(2px);cursor:pointer}
 .schema-modal__panel{position:relative;z-index:1;width:min(520px,100%);overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3)}
@@ -797,6 +1142,35 @@ const filteredRelations = computed(() => relations.value.filter(matches))
 .schema-delete-panel{max-width:420px}
 .schema-delete-text{margin:0;font-size:13px;line-height:22px;color:#1d2129}
 .schema-delete-note{margin:0;font-size:11px;line-height:18px;color:#86909c}
+
+/* 属性管理弹窗 */
+.property-panel{width:min(640px,100%)}
+.property-body{gap:18px}
+.property-section{display:flex;flex-direction:column;gap:8px}
+.property-section__head{display:flex;align-items:baseline;justify-content:space-between}
+.property-section__head strong{font-size:13px;color:#1d2129}
+.property-section__head span{font-size:11px;color:#86909c}
+.property-table{display:flex;flex-direction:column;border:1px solid #e5e6eb;border-radius:6px;overflow:hidden}
+.property-table__row{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(90px,1fr) 60px 90px;gap:8px;align-items:center;padding:7px 12px;border-bottom:1px solid #f2f3f5;font-size:12px;color:#4e5969}
+.property-table__row:last-child{border-bottom:0}
+.property-table__row--head{background:#f7f8fa;font-size:11px;color:#86909c}
+.property-table__row--locked{background:#fffbf4}
+.property-table__name{display:flex;align-items:center;gap:6px;min-width:0}
+.property-table__name code{overflow:hidden;padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:11px;text-overflow:ellipsis;white-space:nowrap}
+.property-table__lock{font-size:11px;font-weight:400}
+.property-table__type{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:#86909c}
+.property-table__locked-note{font-size:11px;color:#b54708}
+.property-add-form{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(110px,1fr) auto auto;gap:8px;align-items:center}
+.property-add-form__name,.property-add-form__len{height:32px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;font-size:13px;color:#1d2129;background:#fff}
+.property-add-form__name{box-sizing:border-box;width:100%}
+.property-add-form__len{width:72px;grid-column:3}
+.property-add-form__type{min-width:0}
+.property-add-form__type :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:13px;line-height:22px}
+.property-add-form__required{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#4e5969;white-space:nowrap}
+.property-add-form__required input{margin:0}
+.property-add-form .primary{height:32px;padding:0 14px;border:0;border-radius:4px;background:#165dff;color:#fff;font-size:13px;cursor:pointer;white-space:nowrap}
+.property-add-form .primary:hover{background:#0e4ed8}
+.property-add-form .primary:disabled{opacity:.6;cursor:not-allowed}
 
 /* 上传脚本弹窗 */
 .script-upload-modal .schema-modal__body{min-height:140px}
@@ -852,6 +1226,11 @@ const filteredRelations = computed(() => relations.value.filter(matches))
 .create-ddl__label{font-size:11px;color:#74849b}
 .create-ddl__pre{margin:0;padding:10px 12px;max-height:140px;overflow:auto;background:#0d1117;border-radius:6px;color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:18px;white-space:pre-wrap;word-break:break-all}
 .create-ddl__confirm{margin:6px 0 0;color:#b54708;font-size:11px;line-height:16px}
+.create-sources{display:flex;flex-direction:column;gap:8px}
+.create-sources__head{display:flex;flex-direction:column;gap:2px;font-size:12px;color:#4e5969}
+.create-sources__hint{font-size:11px;line-height:16px;color:#86909c}
+.sources-panel{width:min(760px,100%)}
+.sources-note{margin:0;font-size:12px;line-height:20px;color:#86909c}
 .schema-create-body>.create-field,.schema-create-body>.create-props,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{gap:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
 </style>
 <style scoped>
@@ -888,6 +1267,9 @@ const filteredRelations = computed(() => relations.value.filter(matches))
 .create-prop-row--has-length .prop-required{grid-column:4}
 .prop-remove{grid-column:4;justify-self:end;align-self:center}
 .create-prop-row--has-length .prop-remove{grid-column:5}
+.create-prop-row--locked .prop-name{background:#f7f8fa;color:#4e5969;cursor:not-allowed}
+.prop-locked-type{grid-column:2;align-self:center;color:#86909c;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.prop-locked-required{grid-column:3;align-self:center;color:#4e5969;font-size:12px;white-space:nowrap}
 .schema-modal__panel footer{height:64px;box-sizing:border-box;gap:16px;padding:0 24px}.schema-create-panel footer{align-items:center;padding:16px 24px}.schema-modal__panel footer button{height:32px;padding:0 16px;font-size:14px;line-height:22px}
 :is(.schema-llm-select){box-sizing:border-box;width:100%;min-width:0}
 :is(.schema-llm-select) :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:14px;line-height:22px}

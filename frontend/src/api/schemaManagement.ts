@@ -31,7 +31,8 @@ export interface SchemaProperty {
   dataType: string
   required: boolean
   rule: string
-  category: 'core' | 'dynamic'
+  category: 'core' | 'dynamic' | 'required' | 'provenance'
+  locked?: boolean
 }
 
 export interface SchemaScript {
@@ -72,7 +73,9 @@ export interface SchemaDefinition {
   targetSchemaName: string | null
   mappings: string[]
   canDelete: boolean
+  canManageProperties?: boolean
   properties: SchemaProperty[]
+  sources?: SchemaSource[]
   script: SchemaScript | null
   llmConfigId: string | null
   ddlStatement: string | null
@@ -93,7 +96,7 @@ export interface SchemaPropertyInput {
   dataType: string
   required: boolean
   rule?: string
-  category?: 'core' | 'dynamic'
+  category?: 'core' | 'dynamic' | 'required' | 'provenance'
 }
 
 export interface EntitySchemaCreatePayload {
@@ -131,8 +134,31 @@ function headers(userId: string) {
   return { 'X-User-Id': userId }
 }
 
+interface ValidationErrorItem {
+  loc?: unknown[]
+  msg?: string
+}
+
+function formatValidationErrors(items: ValidationErrorItem[]): string {
+  return items
+    .map((item) => {
+      const field = Array.isArray(item.loc)
+        ? item.loc.filter((part) => part !== 'body').join('.')
+        : ''
+      const message = item.msg || '校验失败'
+      return field ? `${field}: ${message}` : message
+    })
+    .filter(Boolean)
+    .join('；')
+}
+
 function unwrap<T>(response: ApiResponse<T>): T {
   if (!response.success || response.code !== 200) {
+    if (response.code === 422 && Array.isArray(response.data)) {
+      const fieldErrors = formatValidationErrors(response.data as ValidationErrorItem[])
+      const base = response.msg || '请求参数校验失败'
+      throw new Error(fieldErrors ? `${base}：${fieldErrors}` : base)
+    }
     throw new Error(response.msg || `Schema 接口请求失败：${response.code}`)
   }
   return response.data
@@ -217,6 +243,115 @@ export interface SchemaDeleteResult {
   id: string
   deleted: boolean
   scriptCleanupSucceeded?: boolean
+}
+
+export interface SchemaSource {
+  id: string
+  datasourceId: string
+  databaseName: string
+  tableName: string
+  pkColumn: string
+  timeColumn: string
+  position: number
+}
+
+export interface SchemaSourceInput {
+  datasourceId: string
+  databaseName: string
+  tableName: string
+  pkColumn: string
+  timeColumn: string
+}
+
+export interface SchemaSourcesReplaceResult {
+  sources: SchemaSource[]
+}
+
+export interface SchemaPropertyAddResult {
+  property: SchemaProperty
+  ddlStatement: string
+  ddlStatus: 'succeeded' | 'failed'
+  ddlError: string | null
+}
+
+export interface SchemaPropertyDeleteResult {
+  deleted: boolean
+  propertyName: string
+}
+
+export async function getSchemaDetail(
+  schemaId: string,
+  userId: string,
+): Promise<SchemaDefinition> {
+  return unwrap(
+    await asApiPromise<SchemaDefinition>(
+      http.get(`${PREFIX}/schemas/${schemaId}`, { headers: headers(userId) }),
+    ),
+  )
+}
+
+export async function addSchemaProperty(
+  schemaId: string,
+  payload: SchemaPropertyInput,
+  userId: string,
+): Promise<SchemaPropertyAddResult> {
+  return unwrap(
+    await asApiPromise<SchemaPropertyAddResult>(
+      http.post(`${PREFIX}/schemas/${schemaId}/properties`, payload, {
+        headers: headers(userId),
+      }),
+    ),
+  )
+}
+
+export async function deleteSchemaProperty(
+  schemaId: string,
+  propertyName: string,
+  userId: string,
+): Promise<SchemaPropertyDeleteResult> {
+  return unwrap(
+    await asApiPromise<SchemaPropertyDeleteResult>(
+      http.delete(`${PREFIX}/schemas/${schemaId}/properties/${encodeURIComponent(propertyName)}`, {
+        headers: headers(userId),
+      }),
+    ),
+  )
+}
+
+export async function replaceSchemaSources(
+  schemaId: string,
+  sources: SchemaSourceInput[],
+  userId: string,
+): Promise<SchemaSourcesReplaceResult> {
+  return unwrap(
+    await asApiPromise<SchemaSourcesReplaceResult>(
+      http.put(`${PREFIX}/schemas/${schemaId}/sources`, { sources }, { headers: headers(userId) }),
+    ),
+  )
+}
+
+export interface SchemaExtractTriggerResult {
+  executionId: string
+  workflowId: string
+  status: string
+}
+
+export async function triggerSchemaExtraction(
+  schemaId: string,
+  userId: string,
+  options?: { graphSpace?: string; batchSize?: number },
+): Promise<SchemaExtractTriggerResult> {
+  return unwrap(
+    await asApiPromise<SchemaExtractTriggerResult>(
+      http.post(
+        `${PREFIX}/schemas/${schemaId}/extract`,
+        options?.graphSpace || options?.batchSize
+          ? { graphSpace: options.graphSpace, batchSize: options.batchSize }
+          : {},
+        { headers: headers(userId) },
+      ),
+    ),
+  )
 }
 
 export async function deleteSchema(

@@ -141,6 +141,22 @@ def test_request_accepts_valid_top_n() -> None:
     assert IndustryNodeTopEventsRequest.model_validate({"chain_node_id": "IC0007007"}).top_n == 10
 
 
+@pytest.mark.parametrize("max_orgs", [1, 50])
+def test_request_accepts_max_orgs_boundaries(max_orgs: int) -> None:
+    request = IndustryNodeTopEventsRequest.model_validate(
+        {"chain_node_id": "IC0007007", "max_orgs": max_orgs}
+    )
+    assert request.max_orgs == max_orgs
+
+
+@pytest.mark.parametrize("max_orgs", [0, 51, -1, 1.5, "20", True, None])
+def test_request_rejects_invalid_max_orgs(max_orgs: object) -> None:
+    with pytest.raises(ValidationError):
+        IndustryNodeTopEventsRequest.model_validate(
+            {"chain_node_id": "IC0007007", "max_orgs": max_orgs}
+        )
+
+
 def test_request_accepts_and_rejects_month_time_range() -> None:
     """月级 time_range（YYYY-MM~YYYY-MM，industry-chain-event 算法测试页两个 month 选择器合并）。
 

@@ -158,19 +158,22 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
         try:
             async with graph_api() as client:
-                # 分层和子图才是这个模块的主体，全库规模统计只是页面上的一行文案，
-                # 统计慢或失败时不能把真实分层一起拖成样例数据。
+                # 全库统计只用于摘要，和分层/子图并行执行，避免三秒统计等待叠加到主查询。
+                summary_task = asyncio.create_task(self._fetch_summary(client, industry_kw))
+                layers, seed_vids = await self._fetch_layers(client, industry_kw, top_k)
+                graph = await self._fetch_graph(
+                    client,
+                    seed_vids,
+                    anchor,
+                    depth,
+                    relation_types=rel_types,
+                )
                 try:
-                    # 全库统计是全量扫描，冷缓存时要二十秒以上；这里最多等 3 秒，
-                    # 等不到就用分层结果推算规模文案，绝不能把整个全景图请求拖到超时。
-                    summary = await asyncio.wait_for(
-                        self._fetch_summary(client, industry_kw), timeout=3.0
-                    )
+                    summary = await asyncio.wait_for(summary_task, timeout=0.1)
                 except Exception:  # noqa: BLE001
+                    summary_task.cancel()
                     logger.warning("panorama summary unavailable, keep real layers", exc_info=True)
                     summary = {}
-                layers, seed_vids = await self._fetch_layers(client, industry_kw, top_k)
-                graph = await self._fetch_graph(client, seed_vids, anchor, depth)
                 graph = self._filter_graph_by_relation_types(graph, rel_types)
         except GraphAPIError as exc:
             logger.warning("graph API unavailable for panorama, falling back: %s", exc)
@@ -554,6 +557,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         seed_vids: list[str],
         anchor_id: str | None,
         depth: int,
+        relation_types: list[str] | None = None,
     ) -> dict[str, list[Any]]:
         """以锚点或首个可寻址实体为中心扩展子图。
 
@@ -584,7 +588,13 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         async def _fetch_one(seed_vid: str) -> dict[str, Any] | None:
             async with _graph_api_semaphore:
                 try:
-                    return await client.get_subgraph(seed_vid, depth=depth, limit=60)
+                    # 只选一种关系时下推到图服务，避免拉回无关边；多选时仍在合并后统一过滤。
+                    edge_type = (
+                        relation_types[0] if relation_types and len(relation_types) == 1 else None
+                    )
+                    return await client.get_subgraph(
+                        seed_vid, depth=depth, limit=60, edge_type=edge_type
+                    )
                 except GraphAPIError:
                     return None
 

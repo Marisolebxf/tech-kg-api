@@ -66,8 +66,17 @@ import {
   buildIndirectRelationGraph,
   indirectSummaryRows,
 } from "../indirect-relation-view";
-import { isFutureMonth, monthRangeToApiDates } from "../utils/month-range";
-import { buildRequestPayload } from "../utils/request-payload";
+import {
+  isFutureMonth,
+  monthRangePairErrors,
+  monthRangeToApiDates,
+} from "../utils/month-range";
+import {
+  buildRequestPayload,
+  integerRangeError,
+  limitPerTypeError,
+  numericInputRangeError,
+} from "../utils/request-payload";
 
 type PanoramaLayerKey =
   | "core_technology"
@@ -307,15 +316,20 @@ function parameterFieldError(fieldName: string, value: string): string | null {
   ) {
     return identifierError(value);
   }
+  if (isLiveCoop.value && fieldName === "limitPerType") {
+    return limitPerTypeError(value);
+  }
   if (isLiveAlumni.value) {
     if (fieldName === "expertId" || fieldName === "targetExpertId")
       return identifierError(value);
     if (fieldName === "school") return schoolError(value);
+    if (fieldName === "limit") return numericInputRangeError(value, 1, 50);
   }
   if (isExpertDirect.value) {
     if (fieldName === "expertAId" || fieldName === "expertBId")
       return identifierError(value);
     if (fieldName === "institution") return keywordError(value);
+    if (fieldName === "limit") return integerRangeError(value, 1, 100);
   }
   if (isPanorama.value) {
     if (fieldName === "anchorId") return identifierError(value);
@@ -334,6 +348,7 @@ function parameterFieldError(fieldName: string, value: string): string | null {
     if (fieldName === "chain_node_id" || fieldName === "event_type")
       return identifierError(value);
     if (fieldName === "top_n") return topNError(value);
+    if (fieldName === "max_orgs") return integerRangeError(value, 1, 50);
   }
   return null;
 }
@@ -484,8 +499,9 @@ const isLiveModule = computed(
 );
 /** 当前业务模块需要做实时校验、且不交由浏览器 maxlength 截断的字段名
  * （超长输入交给 JS 校验器拦截，以便给出「超出字段长度」提示而非静默截断）。 */
-const liveIdFieldNames = computed<readonly string[]>(() => {
-  if (isExpertIndirect.value) return ["core_node_id"];
+const liveValidationFieldNames = computed<readonly string[]>(() => {
+  if (isExpertIndirect.value)
+    return ["core_node_id", "path_depth", "min_strength"];
   if (isPaperCooperation.value) return ["expertAId", "expertBId"];
   if (isLiveColleague.value) return ["expert_a_id", "expert_b_id"];
   if (isLiveEnterpriseRelation.value)
@@ -2289,6 +2305,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       "expertAId",
       "expertBId",
       "institution",
+      "limit",
     ]);
     const startTime = optionalParam(parameterValues.value.startTime);
     if (startTime && startTime > currentMonth) {
@@ -2483,18 +2500,23 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         ? identifierError(targetExpertIdRaw)
         : null;
       const institutionError = schoolError(schoolRaw);
+      const limitError = numericInputRangeError(
+        parameterValues.value.limit ?? "",
+        1,
+        50,
+      );
       if (sourceError) alumniErrors.expertId = sourceError;
       if (targetError) alumniErrors.targetExpertId = targetError;
       if (institutionError) alumniErrors.school = institutionError;
+      if (limitError) alumniErrors.limit = limitError;
       if (Object.keys(alumniErrors).length) {
         parameterErrors.value = alumniErrors;
         showToast("请修正参数后再执行", "warning");
         return;
       }
       parameterErrors.value = {};
-      const limitRaw = Number(parameterValues.value.limit);
-      const limit =
-        limitRaw && limitRaw >= 1 && limitRaw <= 50 ? Math.floor(limitRaw) : 20;
+      const limitValue = optionalParam(parameterValues.value.limit);
+      const limit = limitValue ? Number(limitValue) : 20;
       const body = {
         expertId,
         targetExpertId: optionalParam(targetExpertIdRaw),
@@ -2546,8 +2568,12 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       const coopErrors: Record<string, string> = {};
       const sourceError = identifierError(sourceExpertIdRaw);
       const targetError = identifierError(targetExpertIdRaw);
+      const limitError = limitPerTypeError(
+        parameterValues.value.limitPerType ?? "",
+      );
       if (sourceError) coopErrors.sourceExpertId = sourceError;
       if (targetError) coopErrors.targetExpertId = targetError;
+      if (limitError) coopErrors.limitPerType = limitError;
       if (Object.keys(coopErrors).length) {
         parameterErrors.value = coopErrors;
         showToast("请修正参数后再执行", "warning");
@@ -2563,6 +2589,12 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         : undefined;
       const startMonth = optionalParam(parameterValues.value.timeRangeStart);
       const endMonth = optionalParam(parameterValues.value.timeRangeEnd);
+      const pairErrors = monthRangePairErrors(startMonth, endMonth);
+      if (Object.keys(pairErrors).length) {
+        parameterErrors.value = pairErrors;
+        showToast("开始月份和结束月份必须同时填写", "warning");
+        return;
+      }
       if (
         [startMonth, endMonth].some(
           (value) => value && !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(value),
@@ -2604,9 +2636,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         endMonth,
       );
       const limitPerTypeRaw = optionalParam(parameterValues.value.limitPerType);
-      const limitPerType = limitPerTypeRaw
-        ? Math.min(50, Math.max(1, Number(limitPerTypeRaw) || 20))
-        : 20;
+      const limitPerType = limitPerTypeRaw ? Number(limitPerTypeRaw) : 20;
       const body = {
         sourceExpertId,
         targetExpertId,
@@ -2729,6 +2759,12 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       // top_n：非数字 / 不在 1-50 范围（0826 任务用例）
       const topNErr = topNError(parameterValues.value.top_n ?? "");
       if (topNErr) errors.top_n = topNErr;
+      const maxOrgsErr = integerRangeError(
+        parameterValues.value.max_orgs ?? "",
+        1,
+        50,
+      );
+      if (maxOrgsErr) errors.max_orgs = maxOrgsErr;
       const startTime = optionalParam(parameterValues.value.time_range_start);
       const endTime = optionalParam(parameterValues.value.time_range_end);
       if (Boolean(startTime) !== Boolean(endTime)) {
@@ -3139,8 +3175,7 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :title="field.description"
           :aria-invalid="Boolean(parameterErrors[field.name])"
           :maxlength="
-            liveIdFieldNames.includes(field.name) ||
-            (isExpertIndirect && field.name === 'core_node_id')
+            liveValidationFieldNames.includes(field.name)
               ? undefined
               : field.maxLength
           "

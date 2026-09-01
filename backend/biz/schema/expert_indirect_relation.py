@@ -1,8 +1,8 @@
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-NODE_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
 IndirectRelationType = Literal["学术关联", "机构关联", "项目关联"]
 
 
@@ -22,7 +22,6 @@ class ExpertIndirectRelationRequest(BaseModel):
         ...,
         min_length=1,
         max_length=64,
-        pattern=NODE_ID_PATTERN,
         description="核心专家或人才节点 ID。",
     )
     relation_types: list[IndirectRelationType] = Field(
@@ -44,9 +43,13 @@ class ExpertIndirectRelationRequest(BaseModel):
     def normalize_core_node_id(cls, value: str) -> str:
         if value is None:
             return value
-        value = str(value).strip()
+        value = str(value)
+        if re.search(r"\s", value):
+            raise ValueError("核心节点 ID 不能包含空格或 !@#￥%& 等异常字符")
         if len(value) > 64:
             raise ValueError("核心节点 ID 长度不能超过 64 个字符")
+        if not re.fullmatch(r"[\w\u4e00-\u9fff·.\-]+", value):
+            raise ValueError("核心节点 ID 不能包含空格或 !@#￥%& 等异常字符")
         return value
 
     @field_validator("relation_types", mode="before")

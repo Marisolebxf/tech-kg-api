@@ -427,11 +427,11 @@ export const serviceModules: ServiceModule[] = [
     moduleRequirement: '科技产业链点 TOP-N 事件关系服务针对科技产业链中的特定环节或节点，通过收集知识图谱中与该节点相关的事件数据，运用事件影响力评估算法，筛选出影响力排名前 N 的核心事件。服务会构建这些 TOP-N 事件与相关科技专家或人才的关联关系，分析事件对产业链节点的影响及后续发展趋势，为产业链节点的风险预警与机遇挖掘提供支持。',
     requestFields: [
       { name: 'chain_node_id', type: 'string', required: '是', maxLength: 64, description: '请输入产业链节点标识（如 IC0007007），最多 64 个字符' },
-      { name: 'top_n', type: 'number', required: '否', description: '返回事件数量，请输入 1-50 的整数，默认 10' },
+      { name: 'top_n', type: 'number', required: '否', defaultValue: '10', placeholder: '选填，1-50，默认 10', description: '返回事件数量，请输入 1-50 的整数，默认 10' },
       { name: 'event_type', type: 'string', required: '否', maxLength: 64, description: '事件类型筛选（financing/bankruptcy/bid/news/…，可留空，最多 64 个字符）' },
       { name: 'time_range_start', type: 'month', required: '否', description: '起始年月（留空不筛）；与 time_range_end 合并为接口参数 time_range，格式 YYYY-MM~YYYY-MM（保留月份，后端按月筛）' },
       { name: 'time_range_end', type: 'month', required: '否', description: '结束年月（留空不筛）；与 time_range_start 合并为接口参数 time_range，格式 YYYY-MM~YYYY-MM（保留月份，后端按月筛）' },
-      { name: 'max_orgs', type: 'number', required: '否', maxLength: 64, placeholder: '选填，1-50，默认 20', description: '最多扫描企业数，取值 1-50 的整数，默认 20' },
+      { name: 'max_orgs', type: 'number', required: '否', defaultValue: '20', maxLength: 64, placeholder: '选填，1-50，默认 20', description: '最多扫描企业数，取值 1-50 的整数，默认 20' },
     ],
     responseFields: [
       { name: 'code', type: 'number', description: '服务状态码（200 成功）' },

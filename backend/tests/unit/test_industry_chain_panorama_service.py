@@ -39,7 +39,9 @@ async def test_resolve_seed_vids_stops_after_enough_resolved_ids() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_by_keyword_scans_pages_in_batches_and_stops_on_first_hit_batch(monkeypatch) -> None:
+async def test_search_by_keyword_scans_pages_in_batches_and_stops_on_first_hit_batch(
+    monkeypatch,
+) -> None:
     service = IndustryChainPanoramaService()
     requested_offsets: list[int] = []
 
@@ -82,26 +84,30 @@ def test_build_summary_counts_only_returned_layer_items_and_graph_edges() -> Non
     service = IndustryChainPanoramaService()
 
     summary = service._build_summary(
-        '人工智能',
+        "人工智能",
         [
-            {'key': 'core_technology', 'title': '核心技术', 'items': [{'id': 'kw_1'}, {'id': 'kw_2'}]},
-            {'key': 'leading_enterprise', 'title': '领军企业', 'items': [{'id': 'org_1'}]},
-            {'key': 'leading_expert', 'title': '领军专家', 'items': []},
+            {
+                "key": "core_technology",
+                "title": "核心技术",
+                "items": [{"id": "kw_1"}, {"id": "kw_2"}],
+            },
+            {"key": "leading_enterprise", "title": "领军企业", "items": [{"id": "org_1"}]},
+            {"key": "leading_expert", "title": "领军专家", "items": []},
         ],
         {
-            'nodes': [{'id': 'kw_1'}, {'id': 'org_1'}],
-            'edges': [
-                {'label': 'HAS_KEYWORD'},
-                {'label': 'HAS_KEYWORD'},
-                {'label': 'RELATED_TO'},
+            "nodes": [{"id": "kw_1"}, {"id": "org_1"}],
+            "edges": [
+                {"label": "HAS_KEYWORD"},
+                {"label": "HAS_KEYWORD"},
+                {"label": "RELATED_TO"},
             ],
         },
     )
 
     assert summary == {
-        'industry': '人工智能',
-        'totalNodes': 3,
-        'totalEdges': 3,
-        'nodesByLabel': {'核心技术': 2, '领军企业': 1, '领军专家': 0},
-        'edgesByType': {'HAS_KEYWORD': 2, 'RELATED_TO': 1},
+        "industry": "人工智能",
+        "totalNodes": 3,
+        "totalEdges": 3,
+        "nodesByLabel": {"核心技术": 2, "领军企业": 1, "领军专家": 0},
+        "edgesByType": {"HAS_KEYWORD": 2, "RELATED_TO": 1},
     }

@@ -34,12 +34,8 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
         pattern=EXPERT_ID_PATTERN,
         description="专家B唯一标识，仅支持字母、数字、下划线和中划线。",
     )
-    startTime: str | None = Field(
-        default=None, description="统计开始时间，格式 YYYY-MM-DD。"
-    )
-    endTime: str | None = Field(
-        default=None, description="统计结束时间，格式 YYYY-MM-DD。"
-    )
+    startTime: str | None = Field(default=None, description="统计开始时间，格式 YYYY-MM-DD。")
+    endTime: str | None = Field(default=None, description="统计结束时间，格式 YYYY-MM-DD。")
 
     @field_validator("expertAId", "expertBId", mode="before")
     @classmethod

@@ -131,10 +131,11 @@ async def validation_error_handler(request, exc: RequestValidationError) -> JSON
     paper_cooperation_path = (
         path == "/api/v1/kg-construction/expert-paper-cooperation-relations/structured-result"
     )
-    uses_http_422 = indirect_relation_path or paper_cooperation_path or path == (
-        "/api/v1/kg-construction/expert-cooperation-achievements/query"
-    ) or (
-        path.startswith("/api/v1/workflow-system/definitions/") and path.endswith("/execute")
+    uses_http_422 = (
+        indirect_relation_path
+        or paper_cooperation_path
+        or path == ("/api/v1/kg-construction/expert-cooperation-achievements/query")
+        or (path.startswith("/api/v1/workflow-system/definitions/") and path.endswith("/execute"))
     )
     validation_message = "接口参数校验错误" if indirect_relation_path else "请求参数校验失败"
     if paper_cooperation_path:

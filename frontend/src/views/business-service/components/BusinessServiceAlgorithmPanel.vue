@@ -300,9 +300,13 @@ function topNError(value: string): string | null {
 }
 
 function panoramaTopKError(value: string): string | null {
+  const trimmed = value.trim();
   if (value.length > MAX_PARAMETER_LENGTH)
     return `输入长度不能超过 ${MAX_PARAMETER_LENGTH} 个字符`;
-  return integerRangeError(value, 1, 20);
+  if (!trimmed) return null;
+  if (!/^\d+$/.test(trimmed)) return "不能包含空格或 !@#￥%& 等异常字符";
+  if (Number(trimmed) < 1) return "topK 必须大于等于 1";
+  return null;
 }
 
 function paperCooperationTimeErrors(
@@ -1938,7 +1942,10 @@ function buildPanoramaRequest(
     industry: (raw.industry ?? "").trim() || undefined,
     anchorId: (raw.anchorId ?? "").trim() || undefined,
     depth: clampInt(raw.depth ?? "", 1, 3, 2, "展开层级"),
-    topK: clampInt(raw.topK ?? "", 1, 20, 5, "topK"),
+    topK: (() => {
+      const topKRaw = (raw.topK ?? "").trim();
+      return topKRaw === "" ? 5 : Number(topKRaw);
+    })(),
     relationTypes: relationTypes.length ? relationTypes : undefined,
     refresh: forceRefresh || undefined,
   };

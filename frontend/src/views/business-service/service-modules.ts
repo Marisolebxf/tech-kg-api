@@ -431,7 +431,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'event_type', type: 'string', required: '否', maxLength: 64, description: '事件类型筛选（financing/bankruptcy/bid/news/…，可留空，最多 64 个字符）' },
       { name: 'time_range_start', type: 'month', required: '否', description: '起始年月（留空不筛）；与 time_range_end 合并为接口参数 time_range，格式 YYYY-MM~YYYY-MM（保留月份，后端按月筛）' },
       { name: 'time_range_end', type: 'month', required: '否', description: '结束年月（留空不筛）；与 time_range_start 合并为接口参数 time_range，格式 YYYY-MM~YYYY-MM（保留月份，后端按月筛）' },
-      { name: 'max_orgs', type: 'number', required: '否', description: '最多扫描企业数，取值 1-50，默认 20' },
+      { name: 'max_orgs', type: 'number', required: '否', maxLength: 64, placeholder: '选填，1-50，默认 20', description: '最多扫描企业数，取值 1-50 的整数，默认 20' },
     ],
     responseFields: [
       { name: 'code', type: 'number', description: '服务状态码（200 成功）' },

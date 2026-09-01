@@ -267,6 +267,16 @@ function topNError(value: string): string | null {
   return null;
 }
 
+/** max_orgs：必须是 1-50 的整数，留空合法（后端取默认 20）。与后端 _validate_max_orgs 同口径。 */
+function maxOrgsError(value: string): string | null {
+  const s = (value ?? "").trim();
+  if (s === "") return null; // 留空 → 后端取默认 20
+  if (!/^\d+$/.test(s)) return "max_orgs 必须是数字";
+  const n = Number(s);
+  if (n < 1 || n > 50) return "max_orgs 取值范围为 1-50";
+  return null;
+}
+
 function paperCooperationTimeErrors(
   startValue: string | undefined,
   endValue: string | undefined,
@@ -346,6 +356,7 @@ function parameterFieldError(fieldName: string, value: string): string | null {
     if (fieldName === "chain_node_id" || fieldName === "event_type")
       return identifierError(value);
     if (fieldName === "top_n") return topNError(value);
+    if (fieldName === "max_orgs") return maxOrgsError(value);
   }
   return null;
 }
@@ -2787,6 +2798,9 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       // top_n：非数字 / 不在 1-50 范围（0826 任务用例）
       const topNErr = topNError(parameterValues.value.top_n ?? "");
       if (topNErr) errors.top_n = topNErr;
+      // max_orgs：非数字 / 不在 1-50 范围（0901 任务用例：0/51/65位/abc!@#）
+      const maxOrgsErr = maxOrgsError(parameterValues.value.max_orgs ?? "");
+      if (maxOrgsErr) errors.max_orgs = maxOrgsErr;
       const startTime = optionalParam(parameterValues.value.time_range_start);
       const endTime = optionalParam(parameterValues.value.time_range_end);
       if (Boolean(startTime) !== Boolean(endTime)) {

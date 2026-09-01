@@ -92,6 +92,63 @@ def test_request_accepts_valid_inputs() -> None:
     assert req.chain_node_id == "节点-IC0007"
 
 
+def test_request_rejects_non_numeric_max_orgs() -> None:
+    """max_orgs 输入非数字 → 提示必须是数字（0901 任务用例：abc!@#）。"""
+    for bad in ("abc!@#", "十", "1.5", True):
+        with pytest.raises(ValidationError, match="必须是数字"):
+            IndustryNodeTopEventsRequest.model_validate(
+                {"chain_node_id": "IC0007007", "max_orgs": bad}
+            )
+
+
+def test_request_rejects_max_orgs_out_of_range() -> None:
+    """max_orgs 不在 1-50 范围 → 提示取值范围（0901 任务用例：0 / 51 / 65 位数字）。"""
+    for bad in (0, -1, 51, 999):
+        with pytest.raises(ValidationError, match="取值范围"):
+            IndustryNodeTopEventsRequest.model_validate(
+                {"chain_node_id": "IC0007007", "max_orgs": bad}
+            )
+    # 65 位纯数字远超 1-50 范围 → 取值范围（0901 任务用例）
+    with pytest.raises(ValidationError, match="取值范围"):
+        IndustryNodeTopEventsRequest.model_validate(
+            {"chain_node_id": "IC0007007", "max_orgs": "9" * 65}
+        )
+    # 字符串数字同样受范围约束
+    with pytest.raises(ValidationError, match="取值范围"):
+        IndustryNodeTopEventsRequest.model_validate(
+            {"chain_node_id": "IC0007007", "max_orgs": "999"}
+        )
+
+
+def test_request_accepts_valid_max_orgs() -> None:
+    """合法 max_orgs（int / 数字字符串 / 留空默认 20）应通过。"""
+    req = IndustryNodeTopEventsRequest.model_validate(
+        {"chain_node_id": "IC0007007", "max_orgs": 30}
+    )
+    assert req.max_orgs == 30
+    req = IndustryNodeTopEventsRequest.model_validate(
+        {"chain_node_id": "IC0007007", "max_orgs": "25"}
+    )
+    assert req.max_orgs == 25
+    # 边界值 1 与 50 合法
+    assert (
+        IndustryNodeTopEventsRequest.model_validate(
+            {"chain_node_id": "IC0007007", "max_orgs": 1}
+        ).max_orgs
+        == 1
+    )
+    assert (
+        IndustryNodeTopEventsRequest.model_validate(
+            {"chain_node_id": "IC0007007", "max_orgs": 50}
+        ).max_orgs
+        == 50
+    )
+    # 留空取默认 20
+    assert (
+        IndustryNodeTopEventsRequest.model_validate({"chain_node_id": "IC0007007"}).max_orgs == 20
+    )
+
+
 def test_request_rejects_non_numeric_top_n() -> None:
     """top_n 输入非数字 → 提示必须是数字（0826 任务用例）。"""
     with pytest.raises(ValidationError, match="必须是数字"):

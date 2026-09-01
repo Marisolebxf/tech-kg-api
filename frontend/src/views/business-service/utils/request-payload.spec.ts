@@ -86,4 +86,8 @@ describe('integerRangeError', () => {
   it.each(['0', '51', '-1', '1.5', 'abc', 'true'])('rejects max_orgs %j', (value) => {
     expect(integerRangeError(value, 1, 50)).toBe('请输入 1-50 之间的整数')
   })
+
+  it('rejects a 65-digit alumni limit without throwing', () => {
+    expect(integerRangeError('9'.repeat(65), 1, 50)).toBe('请输入 1-50 之间的整数')
+  })
 })

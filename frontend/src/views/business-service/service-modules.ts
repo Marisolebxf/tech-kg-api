@@ -174,7 +174,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'achievementTypes', type: 'multi-select', required: '否', description: '成果类型多选：全部 / 论文 / 专利 / 项目，留空返回全部' },
       { name: 'timeRangeStart', type: 'month', required: '否', description: '成果开始月份 YYYY-MM，留空不限' },
       { name: 'timeRangeEnd', type: 'month', required: '否', description: '成果结束月份 YYYY-MM，留空不限' },
-      { name: 'limitPerType', type: 'number', defaultValue: '20', required: '否', placeholder: '选填，1-50，默认 20', description: '每类成果返回数上限，1-50，默认 20' },
+      { name: 'limitPerType', type: 'number', defaultValue: '20', required: '否', maxLength: 64, placeholder: '选填，1-50，默认 20', description: '每类成果返回数上限，1-50，默认 20，最多输入 64 个字符' },
     ],
     responseFields: commonResponseFields,
     requestExample: {
@@ -275,7 +275,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'targetExpertId', type: 'string', required: '否', description: '请输入目标专家，如 person_9F9A0004' },
       { name: 'school', type: 'string', required: '否', description: '请输入院校，如清华大学' },
       { name: 'educationStage', type: 'string', required: '否', description: '教育阶段，可多选（如 博士、硕士），多选时以逗号拼接提交' },
-      { name: 'limit', type: 'number', defaultValue: '20', required: '否', placeholder: '选填，1-50，默认 20', description: '返回校友关系数上限，1-50，默认 20' },
+      { name: 'limit', type: 'number', defaultValue: '20', required: '否', maxLength: 64, placeholder: '选填，1-50，默认 20', description: '返回校友关系数上限，1-50，默认 20，最多输入 64 个字符' },
     ],
     responseFields: commonResponseFields,
     requestExample: {

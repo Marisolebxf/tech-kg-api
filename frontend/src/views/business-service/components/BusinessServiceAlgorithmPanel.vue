@@ -234,8 +234,31 @@ function identifierError(value: string): string | null {
   return null;
 }
 
-function indirectCoreNodeIdError(value: string): string | null {
-  return value.length > 64 ? "输入长度不能超过 64 个字符" : null;
+function pathDepthError(value: string): string | null {
+  if (value.length > MAX_PARAMETER_LENGTH)
+    return `输入长度不能超过 ${MAX_PARAMETER_LENGTH} 个字符`;
+  if (value && !/^\d+$/.test(value)) {
+    return "只能输入数字 2 或 3，不能包含空格或异常字符";
+  }
+  if (value) {
+    const depth = Number(value);
+    if (!Number.isInteger(depth) || depth < 2 || depth > 3) {
+      return "路径分析深度只能填写 2 或 3";
+    }
+  }
+  return null;
+}
+
+function minStrengthError(value: string): string | null {
+  if (value.length > MAX_PARAMETER_LENGTH)
+    return `输入长度不能超过 ${MAX_PARAMETER_LENGTH} 个字符`;
+  if (value && !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value)) {
+    return "只能输入 0-1 范围内的数字，不能包含空格或异常字符";
+  }
+  if (value && (Number(value) < 0 || Number(value) > 1)) {
+    return "最小关联强度必须在 0-1 范围内";
+  }
+  return null;
 }
 
 const paperCooperationExpertIdPattern = /^[A-Za-z0-9_-]+$/;
@@ -298,8 +321,10 @@ function schoolError(value: string): string | null {
 
 /** 按模块和字段名返回校验错误，与后端 pydantic 校验规则保持一致。 */
 function parameterFieldError(fieldName: string, value: string): string | null {
-  if (isExpertIndirect.value && fieldName === "core_node_id") {
-    return indirectCoreNodeIdError(value);
+  if (isExpertIndirect.value) {
+    if (fieldName === "core_node_id") return identifierError(value);
+    if (fieldName === "path_depth") return pathDepthError(value);
+    if (fieldName === "min_strength") return minStrengthError(value);
   }
   if (
     isPaperCooperation.value &&
@@ -496,8 +521,9 @@ const isLiveModule = computed(
 );
 /** 当前业务模块需要做实时校验、且不交由浏览器 maxlength 截断的字段名
  * （超长输入交给 JS 校验器拦截，以便给出「超出字段长度」提示而非静默截断）。 */
-const liveIdFieldNames = computed<readonly string[]>(() => {
-  if (isExpertIndirect.value) return ["core_node_id"];
+const liveValidationFieldNames = computed<readonly string[]>(() => {
+  if (isExpertIndirect.value)
+    return ["core_node_id", "path_depth", "min_strength"];
   if (isPaperCooperation.value) return ["expertAId", "expertBId"];
   if (isLiveColleague.value) return ["expert_a_id", "expert_b_id"];
   if (isLiveEnterpriseRelation.value)
@@ -2381,7 +2407,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         return;
       }
 
-      const coreNodeIdError = indirectCoreNodeIdError(coreNodeIdRaw);
+      const coreNodeIdError = identifierError(coreNodeIdRaw);
       if (coreNodeIdError) {
         parameterErrors.value = { core_node_id: coreNodeIdError };
         expertIndirectResponse.value = null;
@@ -2391,21 +2417,25 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       }
 
       parameterErrors.value = {};
-      const pathDepthRaw = parameterValues.value.path_depth?.trim() ?? "";
+      const pathDepthInput = parameterValues.value.path_depth ?? "";
+      const pathDepthMessage = pathDepthError(pathDepthInput);
+      if (pathDepthMessage) {
+        parameterErrors.value = { path_depth: pathDepthMessage };
+        showToast("请修正参数后再执行", "warning");
+        return;
+      }
+      const pathDepthRaw = pathDepthInput.trim();
       const pathDepth = pathDepthRaw === "" ? 2 : Number(pathDepthRaw);
-      if (!Number.isInteger(pathDepth) || pathDepth < 2 || pathDepth > 3) {
-        parameterErrors.value = { path_depth: "路径分析深度只能填写 2 或 3" };
-        showToast("请修正参数后再执行", "warning");
-        return;
-      }
 
-      const minStrengthRaw = parameterValues.value.min_strength?.trim() ?? "";
-      const minStrength = minStrengthRaw === "" ? 0.65 : Number(minStrengthRaw);
-      if (!Number.isFinite(minStrength) || minStrength < 0 || minStrength > 1) {
-        parameterErrors.value = { min_strength: "最小关联强度必须在 0-1 范围内" };
+      const minStrengthInput = parameterValues.value.min_strength ?? "";
+      const minStrengthMessage = minStrengthError(minStrengthInput);
+      if (minStrengthMessage) {
+        parameterErrors.value = { min_strength: minStrengthMessage };
         showToast("请修正参数后再执行", "warning");
         return;
       }
+      const minStrengthRaw = minStrengthInput.trim();
+      const minStrength = minStrengthRaw === "" ? 0.65 : Number(minStrengthRaw);
 
       const response = await analyzeExpertIndirectRelation({
         core_node_id: coreNodeId,
@@ -3184,7 +3214,9 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :title="field.description"
           :aria-invalid="Boolean(parameterErrors[field.name])"
           :maxlength="
-            liveIdFieldNames.includes(field.name) ? undefined : field.maxLength
+            liveValidationFieldNames.includes(field.name)
+              ? undefined
+              : field.maxLength
           "
           @input="handleParameterInput(field.name, $event)"
         />

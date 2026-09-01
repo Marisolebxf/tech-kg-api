@@ -28,7 +28,7 @@ async def query_industry_chain_panorama(
         industry=body.industry,
         anchor_id=body.anchorId,
         depth=body.depth,
-        top_k=body.topK,
+        top_k=min(body.topK, MAX_KEY_ENTITIES),
         relation_types=body.relationTypes,
         refresh=body.refresh,
     )

@@ -82,8 +82,10 @@ async def test_expert_paper_cooperation_returns_structured_result(async_client, 
         ({"expertBId": "BAD ID!"}, "专家标识输入字符存在异常字符"),
         ({"expertAId": "A" * 65}, "专家标识长度不能超过 64 个字符"),
         ({"expertBId": "4P566No1"}, "expertAId 和 expertBId 不能相同"),
-        ({"startTime": "2024/01/01"}, "String should match pattern"),
-        ({"startTime": "2024-99-99"}, "时间格式错误"),
+        ({"startTime": "2021-08"}, "时间格式错误，请使用有效日期 YYYY-MM-DD"),
+        ({"endTime": "2021-08"}, "时间格式错误，请使用有效日期 YYYY-MM-DD"),
+        ({"startTime": "2021-02-30"}, "时间格式错误，请使用有效日期 YYYY-MM-DD"),
+        ({"endTime": "2021-02-30"}, "时间格式错误，请使用有效日期 YYYY-MM-DD"),
         ({"startTime": f"{FUTURE_YEAR}-01-01"}, "startTime 超出当前时间"),
         ({"endTime": f"{FUTURE_YEAR}-01-31"}, "endTime 超出当前时间"),
         ({"startTime": "2025-01-01", "endTime": "2024-12-31"}, "startTime 不能晚于 endTime"),
@@ -99,11 +101,11 @@ async def test_expert_paper_cooperation_rejects_invalid_payloads(
 
     response = await async_client.post(ENDPOINT, json=payload)
 
-    # 当前项目全局 RequestValidationError 处理器使用业务 code=422 包装返回。
-    assert response.status_code == 200
+    assert response.status_code == 422
     data = response.json()
     assert data["code"] == 422
     assert data["success"] is False
+    assert expected_message in data["msg"]
     assert expected_message in response.text
 
 
@@ -114,10 +116,11 @@ async def test_expert_paper_cooperation_rejects_missing_required_field(async_cli
 
     response = await async_client.post(ENDPOINT, json=payload)
 
-    assert response.status_code == 200
+    assert response.status_code == 422
     data = response.json()
     assert data["code"] == 422
     assert data["success"] is False
+    assert "Field required" in data["msg"]
     assert "Field required" in response.text
 
 

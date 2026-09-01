@@ -44,7 +44,7 @@ async def query_expert_direct_relation_get(
     institution: Annotated[str | None, Query()] = None,
     startTime: Annotated[str | None, Query()] = None,
     endTime: Annotated[str | None, Query()] = None,
-    limit: Annotated[int, Query(ge=1)] = 10,
+    limit: Annotated[int, Query(ge=1, le=MAX_QUERY_LIMIT)] = 10,
 ) -> dict[str, object]:
     # GET 与 POST 共用同一套入参校验，避免绕过长度/异常字符/未来时间限制
     try:
@@ -66,5 +66,5 @@ async def query_expert_direct_relation_get(
         institution=body.institution,
         start_time=body.startTime,
         end_time=body.endTime,
-        limit=min(body.limit, MAX_QUERY_LIMIT),
+        limit=body.limit,
     )

@@ -14,6 +14,7 @@ import TDirectDemoView from '../views/platform/TDirectDemoView.vue'
 import ProcessInstanceDetailView from '../views/platform/ProcessInstanceDetailView.vue'
 import SchemaBrowserView from '../views/platform/SchemaBrowserView.vue'
 import GraphBuildView from '../views/platform/GraphBuildView.vue'
+import EntityListView from '../views/platform/EntityListView.vue'
 import ConfigurationManagementView from '../views/platform/ConfigurationManagementView.vue'
 import AccessDeniedView from '../views/auth/AccessDeniedView.vue'
 import CorrectionCenterView from '../views/admin/CorrectionCenterView.vue'
@@ -71,6 +72,12 @@ export const router = createRouter({
       component: PlatformWorkbenchView,
       props: { initialTab: 'query' },
       meta: { title: '图谱查询' },
+    },
+    {
+      path: '/graph-query/entities',
+      name: 'graph-query-entities',
+      component: EntityListView,
+      meta: { title: '实体列表' },
     },
     { path: '/admin', redirect: '/admin/reviews' },
     { path: '/admin/corrections', name: 'admin-corrections', component: CorrectionCenterView, props: { scope: 'admin' }, meta: { title: '修正记录', admin: true } },

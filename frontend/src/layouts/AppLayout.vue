@@ -60,6 +60,26 @@ const isAdminArea = computed(() => route.path.startsWith("/admin"));
 const pageTitle = computed(() => String(route.meta.title ?? "亿级知识图谱"));
 const routeError = ref("");
 const serviceNavCollapsed = ref(false);
+// 图谱查询折叠组（综合查询 / 实体列表）
+const queryNavCollapsed = ref(false);
+const queryNavItems = [
+  { to: "/graph-query", label: "综合查询", fullLabel: "图谱查询 · 综合查询" },
+  { to: "/graph-query/entities", label: "实体列表", fullLabel: "图谱查询 · 实体列表" },
+];
+const showQueryNavItems = computed(
+  () => !sidebarCollapsed.value && !queryNavCollapsed.value,
+);
+const isGraphQueryRoute = computed(() =>
+  queryNavItems.some((item) => item.to === route.path),
+);
+function toggleQueryNav() {
+  // 侧边栏收起时点击走默认子页（与服务组飞出菜单并存的兜底入口）
+  if (sidebarCollapsed.value) {
+    void router.push("/graph-query");
+    return;
+  }
+  queryNavCollapsed.value = !queryNavCollapsed.value;
+}
 const alertDrawerOpen = ref(false);
 const alertPreviewOpen = ref(false);
 const userMenuOpen = ref(false);
@@ -554,19 +574,66 @@ onBeforeUnmount(() => {
             <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>查询与服务</span>
             </div>
-            <RouterLink
-              class="app-nav__item app-nav__item--top app-nav__item--leaf"
-              active-class="app-nav__item--active"
-              to="/graph-query"
-              :title="sidebarCollapsed ? '图谱查询' : undefined"
-            >
-              <span
-                class="app-nav__icon"
-                :style="navIconStyle(navQuery)"
-                aria-hidden="true"
-              ></span>
-              <span v-if="!sidebarCollapsed">图谱查询</span>
-            </RouterLink>
+            <div class="app-nav__query-group">
+              <button
+                class="app-nav__item app-nav__item--top app-nav__item--button"
+                :class="{
+                  'app-nav__item--open': !queryNavCollapsed,
+                  'app-nav__item--context': isGraphQueryRoute,
+                }"
+                type="button"
+                :title="sidebarCollapsed ? '图谱查询' : undefined"
+                :aria-expanded="
+                  sidebarCollapsed ? undefined : !queryNavCollapsed
+                "
+                @click="toggleQueryNav"
+              >
+                <span
+                  class="app-nav__icon"
+                  :style="navIconStyle(navQuery)"
+                  aria-hidden="true"
+                ></span>
+                <span v-if="!sidebarCollapsed" class="app-nav__service-title app-nav__marquee"><span class="app-nav__service-title-label app-nav__marquee-label">图谱查询</span></span>
+                <svg
+                  v-if="!sidebarCollapsed"
+                  class="app-nav__arrow"
+                  viewBox="0 0 16 16"
+                  aria-hidden="true"
+                >
+                  <path d="m4 6 4 4 4-4" />
+                </svg>
+              </button>
+              <template v-if="showQueryNavItems">
+                <RouterLink
+                  v-for="item in queryNavItems"
+                  :key="item.to"
+                  class="app-nav__item app-nav__item--sub"
+                  active-class="app-nav__item--active"
+                  :to="item.to"
+                  :title="item.fullLabel"
+                >
+                  <span class="app-nav__sub-wrap app-nav__marquee"
+                    ><span class="app-nav__sub-label app-nav__marquee-label">{{
+                      item.label
+                    }}</span></span
+                  >
+                </RouterLink>
+              </template>
+              <aside
+                v-if="sidebarCollapsed"
+                class="app-nav__flyout"
+                aria-label="图谱查询子功能"
+              >
+                <strong>图谱查询</strong>
+                <RouterLink
+                  v-for="item in queryNavItems"
+                  :key="`query-flyout-${item.to}`"
+                  active-class="app-nav__flyout-item--active"
+                  :to="item.to"
+                  >{{ item.fullLabel }}</RouterLink
+                >
+              </aside>
+            </div>
             <div class="app-nav__service-group">
               <button
                 class="app-nav__item app-nav__item--top app-nav__item--button"
@@ -1279,6 +1346,20 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.app-nav__query-group {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-nav__query-group:hover .app-nav__flyout,
+.app-nav__query-group:focus-within .app-nav__flyout {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
 }
 
 .app-nav__flyout {

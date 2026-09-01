@@ -9,6 +9,7 @@ from biz.handler.embedding_config import router as embedding_config_router
 from biz.handler.enterprise_background_analysis import (
     router as enterprise_background_analysis_router,
 )
+from biz.handler.entity_search import router as entity_search_router
 from biz.handler.expert_alumni_relation import legacy_router as expert_alumni_relation_legacy_router
 from biz.handler.expert_alumni_relation import router as expert_alumni_relation_router
 from biz.handler.expert_colleague_relation import router as expert_colleague_relation_router
@@ -76,6 +77,7 @@ def register_routers(app: FastAPI) -> None:
         industry_chain_panorama_router,
         graph_search_router,
         graph_console_router,
+        entity_search_router,
         correction_router,
         expert_colleague_service_router,
         tech_enterprise_relation_business_router,

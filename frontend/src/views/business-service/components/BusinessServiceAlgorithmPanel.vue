@@ -59,11 +59,16 @@ import {
   buildIndirectRelationGraph,
   indirectSummaryRows,
 } from "../indirect-relation-view";
-import { isFutureMonth, monthRangeToApiDates } from "../utils/month-range";
+import {
+  isFutureMonth,
+  monthRangePairErrors,
+  monthRangeToApiDates,
+} from "../utils/month-range";
 import {
   buildRequestPayload,
   integerRangeError,
   limitPerTypeError,
+  numericInputRangeError,
 } from "../utils/request-payload";
 
 type PanoramaLayerKey =
@@ -330,7 +335,7 @@ function parameterFieldError(fieldName: string, value: string): string | null {
     if (fieldName === "expertId" || fieldName === "targetExpertId")
       return identifierError(value);
     if (fieldName === "school") return schoolError(value);
-    if (fieldName === "limit") return integerRangeError(value, 1, 50);
+    if (fieldName === "limit") return numericInputRangeError(value, 1, 50);
   }
   if (isExpertDirect.value) {
     if (fieldName === "expertAId" || fieldName === "expertBId")
@@ -2552,7 +2557,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         ? identifierError(targetExpertIdRaw)
         : null;
       const institutionError = schoolError(schoolRaw);
-      const limitError = integerRangeError(
+      const limitError = numericInputRangeError(
         parameterValues.value.limit ?? "",
         1,
         50,
@@ -2641,6 +2646,12 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         : undefined;
       const startMonth = optionalParam(parameterValues.value.timeRangeStart);
       const endMonth = optionalParam(parameterValues.value.timeRangeEnd);
+      const pairErrors = monthRangePairErrors(startMonth, endMonth);
+      if (Object.keys(pairErrors).length) {
+        parameterErrors.value = pairErrors;
+        showToast("开始月份和结束月份必须同时填写", "warning");
+        return;
+      }
       if (
         [startMonth, endMonth].some(
           (value) => value && !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(value),

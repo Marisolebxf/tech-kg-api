@@ -11,8 +11,15 @@ export function integerRangeError(value: string, min: number, max: number): stri
   return null
 }
 
+export function numericInputRangeError(value: string, min: number, max: number): string | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  if (!/^\d+$/.test(trimmed)) return '只能输入数字'
+  return integerRangeError(trimmed, min, max)
+}
+
 export function limitPerTypeError(value: string): string | null {
-  return integerRangeError(value, 1, 50)
+  return numericInputRangeError(value, 1, 50)
 }
 
 export function buildRequestPayload(

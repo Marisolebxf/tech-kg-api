@@ -130,12 +130,30 @@ async def test_query_cooperation_achievement_rejects_invalid_expert_ids(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["timeRangeStart", "timeRangeEnd"])
 async def test_query_cooperation_achievement_rejects_future_month(async_client, field):
-    payload = {"sourceExpertId": "S1", "targetExpertId": "S2", field: "2999-01"}
+    payload = {
+        "sourceExpertId": "S1",
+        "targetExpertId": "S2",
+        "timeRangeStart": "2025-01",
+        "timeRangeEnd": "2025-01",
+        field: "2999-01",
+    }
     resp = await async_client.post(
         "/api/v1/kg-construction/expert-cooperation-achievements/query", json=payload
     )
     assert resp.status_code == 422
     assert any("输入时间不能超过当前时间" in error["msg"] for error in resp.json()["data"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["timeRangeStart", "timeRangeEnd"])
+async def test_query_cooperation_achievement_requires_complete_time_range(async_client, field):
+    payload = {"sourceExpertId": "S1", "targetExpertId": "S2", field: "2025-01"}
+    resp = await async_client.post(
+        "/api/v1/kg-construction/expert-cooperation-achievements/query", json=payload
+    )
+
+    assert resp.status_code == 422
+    assert any("开始时间和结束时间必须同时填写" in error["msg"] for error in resp.json()["data"])
 
 
 @pytest.mark.asyncio

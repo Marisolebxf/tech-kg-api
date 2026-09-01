@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import type { ServiceField } from '../service-modules'
-import { buildRequestPayload, integerRangeError, limitPerTypeError } from './request-payload'
+import {
+  buildRequestPayload,
+  integerRangeError,
+  limitPerTypeError,
+  numericInputRangeError,
+} from './request-payload'
 
 const fields: ServiceField[] = [
   { name: 'achievementTypes', type: 'multi-select', description: '' },
@@ -62,8 +67,26 @@ describe('limitPerTypeError', () => {
     expect(limitPerTypeError(value)).toBeNull()
   })
 
-  it.each(['0', '51', '-1', '1.5', 'abc', 'true'])('rejects %j', (value) => {
+  it.each(['0', '51'])('rejects out-of-range value %j', (value) => {
     expect(limitPerTypeError(value)).toBe('请输入 1-50 之间的整数')
+  })
+
+  it.each(['-1', '1.5', 'abc', 'true', '1e2', '!'])('rejects non-digit value %j', (value) => {
+    expect(limitPerTypeError(value)).toBe('只能输入数字')
+  })
+})
+
+describe('numericInputRangeError', () => {
+  it.each(['', '1', '20', '50'])('accepts alumni limit %j', (value) => {
+    expect(numericInputRangeError(value, 1, 50)).toBeNull()
+  })
+
+  it.each(['0', '51', '9'.repeat(65)])('rejects out-of-range alumni limit %j', (value) => {
+    expect(numericInputRangeError(value, 1, 50)).toBe('请输入 1-50 之间的整数')
+  })
+
+  it.each(['-1', '1.5', 'abc', 'true', '1e2', '!'])('rejects non-digit alumni limit %j', (value) => {
+    expect(numericInputRangeError(value, 1, 50)).toBe('只能输入数字')
   })
 })
 

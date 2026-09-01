@@ -70,6 +70,9 @@ class CooperationAchievementQueryRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_time_bounds(self) -> CooperationAchievementQueryRequest:
+        if bool(self.timeRangeStart) != bool(self.timeRangeEnd):
+            raise ValueError("开始时间和结束时间必须同时填写")
+
         today = date.today()
 
         def boundary(value: str, *, end: bool) -> date:

@@ -63,6 +63,15 @@ class IndustryChainPanoramaQueryRequest(BaseModel):
         default=False, description="true 时忽略服务端缓存，强制重新组装分层与子图。"
     )
 
+    @field_validator("topK", mode="before")
+    @classmethod
+    def validate_top_k_length(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        if len(str(value).strip()) > MAX_TEXT_LENGTH:
+            raise ValueError(f"topK 长度不能超过 {MAX_TEXT_LENGTH} 个字符")
+        return value
+
     @field_validator("topK")
     @classmethod
     def clamp_top_k(cls, value: int) -> int:

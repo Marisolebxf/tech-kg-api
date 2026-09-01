@@ -119,7 +119,7 @@ class FakeGraphSearchGateway:
 
 
 @pytest.mark.asyncio
-async def test_query_infers_colleague_from_edge_time_overlap() -> None:
+async def test_query_time_window_filters_without_clipping_employment_overlap() -> None:
     gateway = FakeGraphSearchGateway()
     result = await ExpertColleagueRelationService().query(
         gateway,
@@ -132,13 +132,27 @@ async def test_query_infers_colleague_from_edge_time_overlap() -> None:
     assert result["total"] == 1
     relation = result["colleagues"][0]
     assert relation["colleague"]["id"] == "person_b"
-    assert relation["effectivePeriod"] == "2020-01 至 2022-12"
-    assert relation["overlapMonths"] == 36
-    assert relation["overlapYears"] == 3.0
+    assert relation["effectivePeriod"] == "2020-01 至 2023-12"
+    assert relation["overlapMonths"] == 48
+    assert relation["overlapYears"] == 4.0
+    assert result["summary"]["effectivePeriod"] == "2020-01 至 2023-12"
+    assert result["summary"]["overlapDuration"] == "48个月"
     assert relation["reviewRequired"] is False
     assert relation["achievements"][0]["id"] == "paper_1"
     assert "论文合作" in relation["collaborationScenes"]
     assert all(call["path"].startswith("/api/v1/graph-search/") for call in result["apiCalls"])
+
+
+@pytest.mark.asyncio
+async def test_query_time_window_outside_employment_overlap_excludes_colleague() -> None:
+    result = await ExpertColleagueRelationService().query(
+        FakeGraphSearchGateway(),
+        expert_id="person_a",
+        overlap_period="2024-2025",
+    )
+
+    assert result["total"] == 0
+    assert result["colleagues"] == []
 
 
 @pytest.mark.asyncio

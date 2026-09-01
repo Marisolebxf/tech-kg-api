@@ -126,15 +126,32 @@ export interface IndustryChainPanoramaQueryResponse {
 
 const PANORAMA_QUERY_ENDPOINT = '/v1/kg-construction/industry-chain-panorama/query'
 
+/**
+ * 查询超时（ms）。
+ *
+ * 该接口要拉 4 个分层再拼子图，冷缓存或大产业下耗时明显高于普通查询；
+ * 后端 graph_api_client / trs-graph 侧超时均为 30s，前端若沿用 axios 默认的
+ * 20s 会先于后端掐断请求，浏览器只能看到一个没有响应体的失败请求。
+ * 故与校友 / 同事 / 两点合作等同类查图接口保持一致，放宽到 60s。
+ */
+const PANORAMA_QUERY_TIMEOUT_MS = 60_000
+
 
 /**
  * 触发产业链全景图查询。
+ *
+ * @param request 查询参数。
+ * @param signal 可选的取消信号，用于自动更新与手动刷新并发时丢弃旧请求。
  */
 export function queryIndustryChainPanorama(
   request: IndustryChainPanoramaQueryRequest,
+  signal?: AbortSignal,
 ) {
   return http.post<
     IndustryChainPanoramaQueryResponse,
     IndustryChainPanoramaQueryResponse
-  >(PANORAMA_QUERY_ENDPOINT, request)
+  >(PANORAMA_QUERY_ENDPOINT, request, {
+    timeout: PANORAMA_QUERY_TIMEOUT_MS,
+    signal,
+  })
 }

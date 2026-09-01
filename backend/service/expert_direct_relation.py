@@ -2,8 +2,8 @@
 
 数据流：
 1. ``expertAId`` 必填。按 VID / scholar_id / 姓名定位专家A；查不到 → 空结果。
-2. 若 ``expertBId`` 为空：不查询专家B、不拉合作关系，仅返回专家A的节点
-   （``items`` 为空，``graph`` 仅含 A 节点，``source.reason="anchor_a_only"``）。
+2. 若 ``expertBId`` 为空：返回专家A的全部直接关系（按共同论文数降序取 ``limit`` 条）；
+   一条关系都没有时退回仅返回 A 节点（``source.reason="no_relation_for_a"``）。
 3. 若 ``expertBId`` 非空：定位专家B；查不到 → 空结果。在 A、B 之间找一条
    ``COAUTHOR_WITH`` 边；找不到 → 空结果。找到则据此组装唯一一条关系。
 4. 机构过滤 & 时间过滤：在服务层按 ``institution`` 关键字、``relation_time`` 过滤该条关系。
@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -58,7 +59,11 @@ _FALLBACK_REASON_TEXT = {
     "no_relation_between_a_b": "两位专家之间在图库中不存在直接合作关系",
     "institution_filtered": "该关系不匹配所给机构关键词",
     "anchor_a_only": "已定位到专家A，未指定专家B，仅返回专家A节点",
+    "no_relation_for_a": "图库中该专家没有任何直接合作关系",
 }
+
+# 补对端节点详情时的并发上限，避免 limit=100 时瞬间打满 trs-graph。
+_PEER_FETCH_CONCURRENCY = 5
 
 
 class ExpertDirectRelationService(KGModuleScaffoldService):
@@ -108,14 +113,27 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 if node_a is None:
                     fallback_reason = "anchor_a_not_found"
                 elif not b_keyword:
-                    # 仅指定专家A：不查询专家B、不拉合作关系，只返回专家A的节点。
-                    anchor_only_node = node_a
-                    source = {
-                        "requested": "all",
-                        "actual": "graph-api",
-                        "fallback": False,
-                        "reason": "anchor_a_only",
-                    }
+                    # 仅指定专家A：返回该专家的全部直接关系（按共同论文数降序取 limit 条）。
+                    collected = await self._collect_relations(
+                        client, node_a, limit=normalized_limit
+                    )
+                    if institution:
+                        collected = [
+                            row for row in collected if self._matches_institution(row, institution)
+                        ]
+                        if not collected:
+                            fallback_reason = "institution_filtered"
+                    if collected:
+                        rows = collected
+                    elif fallback_reason is None:
+                        # A 命中但一条直接关系都没有：仍然把 A 节点画出来，别给一张空图。
+                        anchor_only_node = node_a
+                        source = {
+                            "requested": "all",
+                            "actual": "graph-api",
+                            "fallback": False,
+                            "reason": "no_relation_for_a",
+                        }
                 else:
                     node_b = await self._find_person(client, b_keyword)
                     if node_b is None:
@@ -229,6 +247,69 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             if peer_id == b_id:
                 return edge
         return None
+
+    async def _collect_relations(
+        self,
+        client: Any,
+        node_a: dict[str, Any],
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """拉取专家A的全部直接关系，按共同论文数降序返回前 ``limit`` 条。
+
+        先按边属性排序，只对最终要返回的对端取节点详情，避免为一百条边打一百次
+        ``get_node``。
+
+        Args:
+            client: 图查询 API 客户端。
+            node_a: 已定位的专家A节点。
+            limit: 最多返回多少条关系。
+
+        Returns:
+            ``_build_row`` 结构的关系行列表；没有任何直接关系时为空列表。
+        """
+        a_id = str(node_a.get("id") or "")
+        edges = await client.get_node_edges(
+            a_id, edge_type="COAUTHOR_WITH", limit=_MAX_EDGES_PER_EXPERT
+        )
+
+        def _co_paper_count(edge: dict[str, Any]) -> int:
+            props = edge.get("properties") or {}
+            try:
+                return int(props.get("co_paper_count") or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        peers: list[tuple[str, dict[str, Any]]] = []
+        seen: set[str] = set()
+        for edge in sorted(edges, key=_co_paper_count, reverse=True):
+            peer_id = str(
+                edge.get("target") if str(edge.get("source")) == a_id else edge.get("source")
+            )
+            if not peer_id or peer_id == a_id or peer_id in seen:
+                continue
+            seen.add(peer_id)
+            peers.append((peer_id, edge))
+            if len(peers) >= limit:
+                break
+
+        # 对端节点相互独立，并发取详情；单个取不到就跳过，不影响其余关系。
+        semaphore = asyncio.Semaphore(_PEER_FETCH_CONCURRENCY)
+
+        async def _resolve(peer_id: str) -> dict[str, Any] | None:
+            async with semaphore:
+                try:
+                    return await client.get_node(peer_id)
+                except GraphAPIError:
+                    return None
+
+        nodes = await asyncio.gather(*[_resolve(peer_id) for peer_id, _ in peers])
+        rows: list[dict[str, Any]] = []
+        for (_, edge), node_b in zip(peers, nodes, strict=True):
+            if node_b is None:
+                continue
+            rows.append(self._build_row(node_a, node_b, edge))
+        return rows
 
     async def _find_person(self, client: Any, keyword: str) -> dict[str, Any] | None:
         """按 VID / scholar_id / 姓名定位一个 Person 节点。

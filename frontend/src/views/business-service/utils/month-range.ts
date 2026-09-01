@@ -16,6 +16,17 @@ export function isFutureMonth(value: string | undefined, now = new Date()): bool
   )
 }
 
+export function monthRangePairErrors(
+  startMonth: string | undefined,
+  endMonth: string | undefined,
+): Partial<Record<'timeRangeStart' | 'timeRangeEnd', string>> {
+  if (Boolean(startMonth) === Boolean(endMonth)) return {}
+  return {
+    ...(!startMonth ? { timeRangeStart: '开始月份和结束月份必须同时填写' } : {}),
+    ...(!endMonth ? { timeRangeEnd: '开始月份和结束月份必须同时填写' } : {}),
+  }
+}
+
 export function monthRangeToApiDates(
   startMonth: string | undefined,
   endMonth: string | undefined,

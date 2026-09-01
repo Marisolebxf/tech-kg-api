@@ -125,13 +125,29 @@ async def validation_error_handler(request, exc: RequestValidationError) -> JSON
         for e in exc.errors()
     ]
     path = request.url.path
-    uses_http_422 = path == "/api/v1/kg-construction/expert-cooperation-achievements/query" or (
+    indirect_relation_path = (
+        path == "/api/v1/kg-construction/expert-indirect-relations/demo/structured-result"
+    )
+    paper_cooperation_path = (
+        path == "/api/v1/kg-construction/expert-paper-cooperation-relations/structured-result"
+    )
+    uses_http_422 = indirect_relation_path or paper_cooperation_path or path == (
+        "/api/v1/kg-construction/expert-cooperation-achievements/query"
+    ) or (
         path.startswith("/api/v1/workflow-system/definitions/") and path.endswith("/execute")
     )
+    validation_message = "接口参数校验错误" if indirect_relation_path else "请求参数校验失败"
+    if paper_cooperation_path:
+        first_error = errors[0]["msg"] if errors else "请求参数校验失败"
+        detail_message = first_error.removeprefix("Value error, ")
+        validation_message = f"接口参数校验错误：{detail_message}"
     return JSONResponse(
         status_code=422 if uses_http_422 else 200,
         content=ApiResponse(
-            code=422, success=False, msg="请求参数校验失败", data=errors
+            code=422,
+            success=False,
+            msg=validation_message,
+            data=errors,
         ).model_dump(),
     )
 

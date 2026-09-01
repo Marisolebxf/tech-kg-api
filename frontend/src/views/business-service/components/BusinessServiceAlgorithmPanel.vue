@@ -56,6 +56,13 @@ import { invokeKgService } from "../../../api/kgService";
 import type { ServiceModule, ServiceSummaryRow } from "../service-modules";
 import { actualServiceRules } from "../actual-service-rules";
 import {
+  indirectCoreNodeIdError,
+  indirectMinStrengthError,
+  indirectPathDepthError,
+  validateExpertIndirectParameters,
+} from "../expert-indirect-validation";
+import { paperCooperationTimeErrors } from "../expert-paper-cooperation-validation";
+import {
   buildIndirectRelationGraph,
   indirectSummaryRows,
 } from "../indirect-relation-view";
@@ -214,6 +221,7 @@ const queryFeedbackTitle = computed(() =>
     : "查询失败",
 );
 const currentMonth = dayjs().format("YYYY-MM");
+const currentDate = dayjs().format("YYYY-MM-DD");
 const disableFutureMonth = (value: Date) =>
   dayjs(value).isAfter(dayjs(), "month");
 const MAX_PARAMETER_LENGTH = 64;
@@ -232,10 +240,6 @@ function identifierError(value: string): string | null {
     return "不能包含空格或 !@#￥%& 等异常字符";
   }
   return null;
-}
-
-function indirectCoreNodeIdError(value: string): string | null {
-  return value.length > 64 ? "输入长度不能超过 64 个字符" : null;
 }
 
 const paperCooperationExpertIdPattern = /^[A-Za-z0-9_-]+$/;
@@ -267,26 +271,6 @@ function topNError(value: string): string | null {
   return null;
 }
 
-function paperCooperationTimeErrors(
-  startValue: string | undefined,
-  endValue: string | undefined,
-): Record<string, string> {
-  const errors: Record<string, string> = {};
-  const startMonth = optionalParam(startValue);
-  const endMonth = optionalParam(endValue);
-  if (startMonth && endMonth && startMonth > endMonth) {
-    errors.startTime = "开始时间不能晚于结束时间";
-    errors.endTime = "结束时间不能早于开始时间";
-  }
-  if (startMonth && startMonth > currentMonth) {
-    errors.startTime = "开始时间超出当前时间";
-  }
-  if (endMonth && endMonth > currentMonth) {
-    errors.endTime = "结束时间超出当前时间";
-  }
-  return errors;
-}
-
 function schoolError(value: string): string | null {
   if (value.length > MAX_SCHOOL_LENGTH)
     return `输入长度不能超过 ${MAX_SCHOOL_LENGTH} 个字符`;
@@ -298,8 +282,12 @@ function schoolError(value: string): string | null {
 
 /** 按模块和字段名返回校验错误，与后端 pydantic 校验规则保持一致。 */
 function parameterFieldError(fieldName: string, value: string): string | null {
-  if (isExpertIndirect.value && fieldName === "core_node_id") {
-    return indirectCoreNodeIdError(value);
+  if (isExpertIndirect.value) {
+    if (fieldName === "core_node_id") return indirectCoreNodeIdError(value);
+    if (fieldName === "path_depth") return indirectPathDepthError(value);
+    if (fieldName === "min_strength") {
+      return indirectMinStrengthError(value);
+    }
   }
   if (
     isPaperCooperation.value &&
@@ -2125,19 +2113,6 @@ async function loadModuleDescribe() {
   }
 }
 
-function normalizeMonthBoundary(
-  value: string | undefined,
-  boundary: "start" | "end",
-) {
-  const normalized = optionalParam(value);
-  if (!normalized || !/^[0-9]{4}-[0-9]{2}$/.test(normalized)) return normalized;
-  if (boundary === "start") return normalized + "-01";
-  const parts = normalized.split("-");
-  const lastDay = new Date(
-    Date.UTC(Number(parts[0]), Number(parts[1]), 0),
-  ).getUTCDate();
-  return normalized + "-" + String(lastDay).padStart(2, "0");
-}
 function resetParameters({ notify = true }: { notify?: boolean } = {}) {
   expertDirectAbortController?.abort();
   expertDirectAbortController = null;
@@ -2363,56 +2338,23 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
 
   if (isExpertIndirect.value) {
     try {
-      const coreNodeIdRaw = parameterValues.value.core_node_id ?? "";
-      const coreNodeId = coreNodeIdRaw.trim();
-      const relationType = (parameterValues.value.relation_types ?? "").trim();
-      const missingRequiredFields: Record<string, string> = {
-        ...(!coreNodeId
-          ? { core_node_id: "请输入核心专家或人才节点 ID" }
-          : {}),
-        ...(!relationType ? { relation_types: "请选择间接关系类型" } : {}),
-      };
-      if (Object.keys(missingRequiredFields).length) {
-        parameterErrors.value = missingRequiredFields;
+      const validation = validateExpertIndirectParameters(parameterValues.value);
+      if (!validation.payload) {
+        parameterErrors.value = validation.errors;
         expertIndirectResponse.value = null;
         expertIndirectError.value = null;
         resultMode.value = "summary";
-        showToast("请完善必填项后再执行", "warning");
-        return;
-      }
-
-      const coreNodeIdError = indirectCoreNodeIdError(coreNodeIdRaw);
-      if (coreNodeIdError) {
-        parameterErrors.value = { core_node_id: coreNodeIdError };
-        expertIndirectResponse.value = null;
-        expertIndirectError.value = null;
-        showToast("请修正参数后再执行", "warning");
+        showToast(
+          validation.hasMissingRequired
+            ? "请完善必填项后再执行"
+            : "请修正参数后再执行",
+          "warning",
+        );
         return;
       }
 
       parameterErrors.value = {};
-      const pathDepthRaw = parameterValues.value.path_depth?.trim() ?? "";
-      const pathDepth = pathDepthRaw === "" ? 2 : Number(pathDepthRaw);
-      if (!Number.isInteger(pathDepth) || pathDepth < 2 || pathDepth > 3) {
-        parameterErrors.value = { path_depth: "路径分析深度只能填写 2 或 3" };
-        showToast("请修正参数后再执行", "warning");
-        return;
-      }
-
-      const minStrengthRaw = parameterValues.value.min_strength?.trim() ?? "";
-      const minStrength = minStrengthRaw === "" ? 0.65 : Number(minStrengthRaw);
-      if (!Number.isFinite(minStrength) || minStrength < 0 || minStrength > 1) {
-        parameterErrors.value = { min_strength: "最小关联强度必须在 0-1 范围内" };
-        showToast("请修正参数后再执行", "warning");
-        return;
-      }
-
-      const response = await analyzeExpertIndirectRelation({
-        core_node_id: coreNodeId,
-        relation_types: [relationType],
-        path_depth: pathDepth,
-        min_strength: minStrength,
-      });
+      const response = await analyzeExpertIndirectRelation(validation.payload);
       expertIndirectResponse.value = response;
       expertIndirectError.value = null;
       selectedGraphNodeId.value = null;
@@ -2896,9 +2838,9 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         showToast("请修正参数后再执行", "warning");
         return;
       }
-      const startMonth = optionalParam(parameterValues.value.startTime);
-      const endMonth = optionalParam(parameterValues.value.endTime);
-      const timeErrors = paperCooperationTimeErrors(startMonth, endMonth);
+      const startTime = optionalParam(parameterValues.value.startTime);
+      const endTime = optionalParam(parameterValues.value.endTime);
+      const timeErrors = paperCooperationTimeErrors(startTime, endTime, currentDate);
       if (Object.keys(timeErrors).length) {
         parameterErrors.value = timeErrors;
         liveResponse.value = null;
@@ -2909,8 +2851,6 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       }
       parameterErrors.value = {};
       const body: Record<string, any> = { expertAId, expertBId };
-      const startTime = normalizeMonthBoundary(startMonth, "start");
-      const endTime = normalizeMonthBoundary(endMonth, "end");
       if (startTime) body.startTime = startTime;
       if (endTime) body.endTime = endTime;
       const res = (await invokeKgService(
@@ -2973,10 +2913,25 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
 
 function handleParameterInput(fieldName: string, event: Event) {
   const value = (event.target as HTMLInputElement | HTMLSelectElement).value;
-  parameterValues.value = {
+  const nextValues = {
     ...parameterValues.value,
     [fieldName]: value,
   };
+  parameterValues.value = nextValues;
+  if (
+    isPaperCooperation.value &&
+    (fieldName === "startTime" || fieldName === "endTime")
+  ) {
+    const nextErrors = { ...parameterErrors.value };
+    delete nextErrors.startTime;
+    delete nextErrors.endTime;
+    Object.assign(
+      nextErrors,
+      paperCooperationTimeErrors(nextValues.startTime, nextValues.endTime, currentDate),
+    );
+    parameterErrors.value = nextErrors;
+    return;
+  }
   const error = parameterFieldError(fieldName, value);
   if (error) {
     parameterErrors.value = { ...parameterErrors.value, [fieldName]: error };
@@ -3008,7 +2963,7 @@ function handleMonthParameterInput(fieldName: string, value: string | null) {
     delete nextErrors.endTime;
     Object.assign(
       nextErrors,
-      paperCooperationTimeErrors(nextValues.startTime, nextValues.endTime),
+      paperCooperationTimeErrors(nextValues.startTime, nextValues.endTime, currentDate),
     );
     parameterErrors.value = nextErrors;
     return;
@@ -3184,7 +3139,10 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
           :title="field.description"
           :aria-invalid="Boolean(parameterErrors[field.name])"
           :maxlength="
-            liveIdFieldNames.includes(field.name) ? undefined : field.maxLength
+            liveIdFieldNames.includes(field.name) ||
+            (isExpertIndirect && field.name === 'core_node_id')
+              ? undefined
+              : field.maxLength
           "
           @input="handleParameterInput(field.name, $event)"
         />

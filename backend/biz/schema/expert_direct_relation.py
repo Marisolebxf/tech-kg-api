@@ -50,12 +50,13 @@ class ExpertDirectRelationQueryRequest(BaseModel):
     )
     startTime: str | None = Field(default=None, description="开始日期 YYYY-MM 或 YYYY-MM-DD。")
     endTime: str | None = Field(default=None, description="结束日期 YYYY-MM 或 YYYY-MM-DD。")
-    limit: int = Field(default=10, ge=1, description=f"返回结果数，最大 {MAX_QUERY_LIMIT}。")
-
-    @field_validator("limit")
-    @classmethod
-    def clamp_limit(cls, value: int) -> int:
-        return min(value, MAX_QUERY_LIMIT)
+    limit: int = Field(
+        default=10,
+        strict=True,
+        ge=1,
+        le=MAX_QUERY_LIMIT,
+        description=f"返回结果数，1-{MAX_QUERY_LIMIT}。",
+    )
 
     @field_validator("expertAId", mode="before")
     @classmethod

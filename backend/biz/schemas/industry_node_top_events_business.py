@@ -39,7 +39,11 @@ class IndustryNodeTopEventsRequest(BaseModel):
     )
     time_range: str = Field("", description="事件时间范围筛选，如 2025-2026")
     max_orgs: int = Field(
-        20, ge=1, le=50, description="链节点下最多扫描企业数（按 chain_score 排序）"
+        20,
+        strict=True,
+        ge=1,
+        le=50,
+        description="链节点下最多扫描企业数（按 chain_score 排序）",
     )
 
     @field_validator("chain_node_id", "event_type", mode="before")

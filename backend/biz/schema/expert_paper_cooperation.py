@@ -34,12 +34,8 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
         pattern=EXPERT_ID_PATTERN,
         description="专家B唯一标识，仅支持字母、数字、下划线和中划线。",
     )
-    startTime: str | None = Field(
-        default=None, pattern=DATE_PATTERN, description="统计开始时间，格式 YYYY-MM-DD。"
-    )
-    endTime: str | None = Field(
-        default=None, pattern=DATE_PATTERN, description="统计结束时间，格式 YYYY-MM-DD。"
-    )
+    startTime: str | None = Field(default=None, description="统计开始时间，格式 YYYY-MM-DD。")
+    endTime: str | None = Field(default=None, description="统计结束时间，格式 YYYY-MM-DD。")
 
     @field_validator("expertAId", "expertBId", mode="before")
     @classmethod
@@ -59,7 +55,11 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
         if value is None:
             return None
         value = str(value).strip()
-        return value or None
+        if not value:
+            return None
+        if not re.fullmatch(DATE_PATTERN, value):
+            raise ValueError("时间格式错误，请使用有效日期 YYYY-MM-DD")
+        return value
 
     @field_validator("startTime", "endTime")
     @classmethod
@@ -76,10 +76,10 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
     def validate_experts(self):
         if self.expertAId == self.expertBId:
             raise ValueError("expertAId 和 expertBId 不能相同")
-        current_month = date.today().strftime("%Y-%m")
-        if self.startTime and self.startTime[:7] > current_month:
+        today = date.today()
+        if self.startTime and date.fromisoformat(self.startTime) > today:
             raise ValueError("startTime 超出当前时间")
-        if self.endTime and self.endTime[:7] > current_month:
+        if self.endTime and date.fromisoformat(self.endTime) > today:
             raise ValueError("endTime 超出当前时间")
         if self.startTime and self.endTime:
             start_date = date.fromisoformat(self.startTime)

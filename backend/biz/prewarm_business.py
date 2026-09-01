@@ -57,11 +57,19 @@ _PREWARM_CASES: list[tuple[str, dict]] = [
         "/api/v1/kg-construction/industry-chain-panorama/query",
         {"dataSource": "all", "industry": "", "depth": 2, "topK": 5},
     ),
+    (
+        "/api/v1/kg-construction/industry-chain-panorama/query",
+        {"dataSource": "all", "industry": "人工智能", "depth": 2, "topK": 5},
+    ),
+    (
+        "/api/v1/kg-construction/industry-chain-panorama/query",
+        {"dataSource": "all", "industry": "集成电路", "depth": 1, "topK": 3},
+    ),
 ]
 
 
 async def prewarm_business(app: object) -> None:
-    """对 9 大业务接口各发一次请求，填满本 worker 结果缓存。"""
+    """对业务接口及热点全景图参数各发一次请求，填满本 worker 结果缓存。"""
     if os.getenv("PREWARM_BUSINESS", "false").lower() != "true":
         return
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), timeout=120) as client:

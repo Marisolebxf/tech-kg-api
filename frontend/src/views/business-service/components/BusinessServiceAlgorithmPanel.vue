@@ -227,6 +227,7 @@ const disableFutureMonth = (value: Date) =>
   dayjs(value).isAfter(dayjs(), "month");
 const MAX_PARAMETER_LENGTH = 64;
 const MAX_SCHOOL_LENGTH = 100;
+const PANORAMA_TOP_K_MAX = 20;
 /** 标识类字段（专家 ID、节点 VID）：不允许空格与 !@#￥%& 等异常符号。 */
 const identifierPattern = /^[\w\u4e00-\u9fff·.\-]+$/u;
 /** 关键词类字段（机构、产业）：额外允许空格、括号、顿号和斜杠。 */
@@ -305,7 +306,10 @@ function panoramaTopKError(value: string): string | null {
     return `输入长度不能超过 ${MAX_PARAMETER_LENGTH} 个字符`;
   if (!trimmed) return null;
   if (!/^\d+$/.test(trimmed)) return "不能包含空格或 !@#￥%& 等异常字符";
-  if (Number(trimmed) < 1) return "topK 必须大于等于 1";
+  const topK = Number(trimmed);
+  if (topK < 1 || topK > PANORAMA_TOP_K_MAX) {
+    return "topK 取值范围为 1-20";
+  }
   return null;
 }
 
@@ -1942,10 +1946,13 @@ function buildPanoramaRequest(
     industry: (raw.industry ?? "").trim() || undefined,
     anchorId: (raw.anchorId ?? "").trim() || undefined,
     depth: clampInt(raw.depth ?? "", 1, 3, 2, "展开层级"),
-    topK: (() => {
-      const topKRaw = (raw.topK ?? "").trim();
-      return topKRaw === "" ? 5 : Number(topKRaw);
-    })(),
+    topK: clampInt(
+      (raw.topK ?? "").trim(),
+      1,
+      PANORAMA_TOP_K_MAX,
+      5,
+      "topK",
+    ),
     relationTypes: relationTypes.length ? relationTypes : undefined,
     refresh: forceRefresh || undefined,
   };

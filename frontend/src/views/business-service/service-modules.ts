@@ -495,7 +495,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'anchorId', type: 'string', required: '否', description: '核心节点 VID，用于生成扩展子图，最多 64 个字符，不能包含空格或 !@#￥%& 等异常字符' },
       { name: 'depth', type: 'select', options: ['1', '2', '3'], defaultValue: '2', required: '否', description: '从核心节点向外展开的层级（跳数），可选 1-3，默认 2；层级越大子图越完整但越慢' },
       { name: 'relationTypes', type: 'multi-select', required: '否', description: '只保留选中的关系类型：产业链归属 / 论文合作 / 机构任职，留空表示不筛选' },
-      { name: 'topK', type: 'number', defaultValue: '5', required: '否', placeholder: '选填，正整数，默认 5', description: '每类关键实体返回数上限，正整数，默认 5' },
+      { name: 'topK', type: 'number', defaultValue: '5', required: '否', placeholder: '选填，1-20 的正整数，默认 5', description: '每类关键实体返回数上限，1-20 的正整数，默认 5' },
     ],
     // 后端还接受 dataSource（固定 "all"，前端自动填充）和 refresh（bool，由「刷新图谱」按钮触发），
     // 二者均非用户输入项，故不在 requestFields 表单中展示。

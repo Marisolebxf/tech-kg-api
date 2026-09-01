@@ -46,9 +46,7 @@ def test_request_accepts_limit_boundaries(limit: int) -> None:
 @pytest.mark.parametrize("limit", [0, 101, -1, 1.5, "10", True, None])
 def test_request_rejects_invalid_limit(limit: object) -> None:
     with pytest.raises(ValidationError):
-        ExpertDirectRelationQueryRequest.model_validate(
-            {"expertAId": "007Rb117", "limit": limit}
-        )
+        ExpertDirectRelationQueryRequest.model_validate({"expertAId": "007Rb117", "limit": limit})
 
 
 @pytest.mark.parametrize("field", ["expertAId", "expertBId"])

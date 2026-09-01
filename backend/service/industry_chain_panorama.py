@@ -266,7 +266,9 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         preset = _PRESET_FAST_ANCHOR_HINTS.get(industry)
         if preset:
             for label, props in preset:  # 只按关键词做轻量唯一命中，不依赖固定图 ID
-                resolved = await self._resolve_unique_anchor_candidate(client, label, props, industry)
+                resolved = await self._resolve_unique_anchor_candidate(
+                    client, label, props, industry
+                )
                 if resolved:
                     return resolved
 
@@ -314,7 +316,9 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         if not compact_without_anchor:
             return list(_LAYER_DEFINITIONS)
         allowed_keys = {"core_technology", "leading_enterprise"}
-        return [definition for definition in _LAYER_DEFINITIONS if definition["key"] in allowed_keys]
+        return [
+            definition for definition in _LAYER_DEFINITIONS if definition["key"] in allowed_keys
+        ]
 
     @staticmethod
     def _normalize_relation_types(relation_types: list[str] | None) -> list[str]:

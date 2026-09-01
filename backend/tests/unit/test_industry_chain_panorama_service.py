@@ -180,19 +180,38 @@ async def test_query_falls_back_to_compact_overview_when_keyword_misses(monkeypa
 
     async def _fake_fetch_layers(client, industry, top_k, compact_without_anchor):
         if industry == "人工智能":
-            return ([
-                {"key": "core_technology", "title": "核心技术", "total": 0, "items": []},
-                {"key": "leading_enterprise", "title": "领军企业", "total": 0, "items": []},
-            ], [])
+            return (
+                [
+                    {"key": "core_technology", "title": "核心技术", "total": 0, "items": []},
+                    {"key": "leading_enterprise", "title": "领军企业", "total": 0, "items": []},
+                ],
+                [],
+            )
         assert industry is None
         assert compact_without_anchor is True
-        return ([
-            {"key": "core_technology", "title": "核心技术", "total": 1, "items": [{"id": "kw_1"}]},
-            {"key": "leading_enterprise", "title": "领军企业", "total": 1, "items": [{"id": "org_1"}]},
-        ], ["kw_1"])
+        return (
+            [
+                {
+                    "key": "core_technology",
+                    "title": "核心技术",
+                    "total": 1,
+                    "items": [{"id": "kw_1"}],
+                },
+                {
+                    "key": "leading_enterprise",
+                    "title": "领军企业",
+                    "total": 1,
+                    "items": [{"id": "org_1"}],
+                },
+            ],
+            ["kw_1"],
+        )
 
     async def _fake_fetch_graph(client, seed_vids, anchor_id, depth):
-        return {"nodes": [{"id": seed_vids[0], "label": seed_vids[0]}] if seed_vids else [], "edges": []}
+        return {
+            "nodes": [{"id": seed_vids[0], "label": seed_vids[0]}] if seed_vids else [],
+            "edges": [],
+        }
 
     class _GraphCtx:
         async def __aenter__(self):
@@ -203,7 +222,11 @@ async def test_query_falls_back_to_compact_overview_when_keyword_misses(monkeypa
 
     monkeypatch.setattr(service, "_fetch_layers", _fake_fetch_layers)
     monkeypatch.setattr(service, "_fetch_graph", _fake_fetch_graph)
-    monkeypatch.setattr(service, "_resolve_anchor_from_keyword", lambda *args, **kwargs: __import__('asyncio').sleep(0, result=None))
+    monkeypatch.setattr(
+        service,
+        "_resolve_anchor_from_keyword",
+        lambda *args, **kwargs: __import__("asyncio").sleep(0, result=None),
+    )
     monkeypatch.setattr("service.industry_chain_panorama.graph_api", lambda: _GraphCtx())
 
     result = await service.query(industry="人工智能", depth=1, top_k=3)
@@ -211,4 +234,3 @@ async def test_query_falls_back_to_compact_overview_when_keyword_misses(monkeypa
     assert result["source"]["reason"] == "keyword_fallback_overview"
     assert [layer["key"] for layer in result["layers"]] == ["core_technology", "leading_enterprise"]
     assert result["summary"]["totalNodes"] == 2
-

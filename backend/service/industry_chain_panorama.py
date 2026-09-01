@@ -2,7 +2,7 @@
 
 ## 输出结构
 
-1. ``summary``：整体规模（各标签节点数、各类型边数）。
+1. ``summary``：本次查询结果规模（命中的分层实体数、返回子图里的关系数）。
 2. ``layers``：四个分层（核心技术、领军企业、领军专家、代表成果），每层按检索
    到的实体展示；产业关键词非空时先用属性搜索精确过滤，未命中再有界扫描做包含
    匹配，关键词为空时按标签分页取前 K。
@@ -11,7 +11,6 @@
 
 ## 图查询 API 使用
 
-- ``GET /graph-search/stats`` — 全库统计
 - ``GET /graph-search/nodes?label=X`` — 按标签分页
 - ``POST /graph-search/nodes/search`` — 按属性搜索（产业关键词）
 - ``GET /graph-search/subgraph/{vid}?depth=N`` — 以核心节点扩展子图
@@ -39,6 +38,8 @@ MAX_RELATION_TYPES = 20
 _KEYWORD_SCAN_LIMIT = 500
 # 关键词包含匹配的扫描总量上限（分页扫描，避免大标签只看前 500 个永远命不中）。
 _KEYWORD_SCAN_MAX = 3000
+# 包含匹配扫描按批次分页，请求够用就停，避免首批命中时仍把全部分页都打到图服务。
+_KEYWORD_SCAN_BATCH_PAGES = 2
 # 子图合并时最多取多少个种子节点。
 _MAX_SUBGRAPH_SEEDS = 5
 # 图服务（trs-graph）承受不住太高并发，全标签扫描类请求并发过多会 500，
@@ -158,17 +159,6 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
         try:
             async with graph_api() as client:
-                # 分层和子图才是这个模块的主体，全库规模统计只是页面上的一行文案，
-                # 统计慢或失败时不能把真实分层一起拖成样例数据。
-                try:
-                    # 全库统计是全量扫描，冷缓存时要二十秒以上；这里最多等 3 秒，
-                    # 等不到就用分层结果推算规模文案，绝不能把整个全景图请求拖到超时。
-                    summary = await asyncio.wait_for(
-                        self._fetch_summary(client, industry_kw), timeout=3.0
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.warning("panorama summary unavailable, keep real layers", exc_info=True)
-                    summary = {}
                 layers, seed_vids = await self._fetch_layers(client, industry_kw, top_k)
                 graph = await self._fetch_graph(client, seed_vids, anchor, depth)
                 graph = self._filter_graph_by_relation_types(graph, rel_types)
@@ -190,8 +180,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                 fallback_reason,
                 industry_kw,
             )
-        if not summary:
-            summary = self._fallback_summary(industry_kw, layers)
+        summary = self._build_summary(industry_kw, layers, graph)
 
         source = {
             "requested": "all",
@@ -301,31 +290,6 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         asyncio.get_running_loop().create_task(_run())
 
     # ---------------- 各分层数据 ----------------
-    async def _fetch_summary(
-        self,
-        client: GraphAPIClient,
-        industry: str | None,
-    ) -> dict[str, Any]:
-        """取全库规模统计。
-
-        Args:
-            client: 图查询 API 客户端。
-            industry: 产业关键词，仅原样回填到结果里。
-
-        Returns:
-            含 ``totalNodes`` / ``totalEdges`` / 分标签与分类型计数的字典。
-        """
-        stats = await client.get_stats()
-        nodes_by_label = dict(stats.get("nodes") or {})
-        edges_by_type = dict(stats.get("edges") or {})
-        return {
-            "industry": industry,
-            "totalNodes": sum(nodes_by_label.values()),
-            "totalEdges": sum(edges_by_type.values()),
-            "nodesByLabel": nodes_by_label,
-            "edgesByType": edges_by_type,
-        }
-
     async def _fetch_layers(
         self,
         client: GraphAPIClient,
@@ -344,7 +308,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             专家 → 机构 → 技术的偏好顺序排列，只包含能按 VID 寻址的节点。
         """
         layers: list[dict[str, Any]] = []
-        seeds_by_key: dict[str, list[str]] = {}
+        seed_candidates_by_key: dict[str, list[dict[str, Any]]] = {}
         # 四个分层互不依赖；属性搜索在图服务侧是全标签扫描，单个要 1~2 秒，
         # 串行拉满 9 秒起，并发后整体耗时约等于最慢的那一层。
         collected = await asyncio.gather(
@@ -363,15 +327,9 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                     "items": [self._node_to_key_entity(node, definition) for node in picked],
                 }
             )
-            seeds_by_key[definition["key"]] = [
-                str(node["id"]) for node in picked if node.get("id") and node.get("_addressable")
-            ]
+            seed_candidates_by_key[definition["key"]] = picked
 
-        seed_vids: list[str] = []
-        for key in ("leading_expert", "leading_enterprise", "core_technology"):
-            seed_vids.extend(seeds_by_key.pop(key, []))
-        for remaining in seeds_by_key.values():
-            seed_vids.extend(remaining)
+        seed_vids = await self._resolve_seed_vids(client, seed_candidates_by_key)
         return layers, seed_vids
 
     async def _collect_layer_nodes(
@@ -390,8 +348,8 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             top_k: 目标条数。
 
         Returns:
-            节点列表。每个节点带 ``_addressable`` 标记，表示其 ``id`` 是否能按
-            VID 直接取回（只有能寻址的节点才可用于扩展子图）。
+            节点列表。分层展示直接使用命中节点；是否能扩展子图会在后续种子解析阶段
+            再判断，避免为每个候选都额外打一轮寻址请求。
         """
         results: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -431,7 +389,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             top_k: 目标条数。
 
         Returns:
-            命中的节点列表，均带 ``_addressable`` 标记。
+            命中的节点列表。
         """
         found: list[dict[str, Any]] = []
         # 各候选属性的精确搜索并发执行（每个都是图服务侧的全标签扫描）。
@@ -442,7 +400,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             )
         )
         for payload in search_results:
-            found.extend(await self._mark_addressable(client, (payload or {}).get("items", [])))
+            found.extend((payload or {}).get("items", []))
             if len(found) >= top_k:
                 return found[:top_k]
         if found:
@@ -454,24 +412,31 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         needle = industry.casefold()
         found: list[dict[str, Any]] = []
         page_count = -(-_KEYWORD_SCAN_MAX // _KEYWORD_SCAN_LIMIT)
-        pages = await asyncio.gather(
-            *(
-                self._list_by_label_throttled(
-                    client, label, _KEYWORD_SCAN_LIMIT, i * _KEYWORD_SCAN_LIMIT
+        for start_page in range(0, page_count, _KEYWORD_SCAN_BATCH_PAGES):
+            pages = await asyncio.gather(
+                *(
+                    self._list_by_label_throttled(
+                        client,
+                        label,
+                        _KEYWORD_SCAN_LIMIT,
+                        page_index * _KEYWORD_SCAN_LIMIT,
+                    )
+                    for page_index in range(
+                        start_page,
+                        min(start_page + _KEYWORD_SCAN_BATCH_PAGES, page_count),
+                    )
                 )
-                for i in range(page_count)
             )
-        )
-        for page in pages:
-            for node in page:
-                props = node.get("properties") or {}
-                for prop in definition["keyword_props"]:
-                    value = str(props.get(prop) or "")
-                    if value and needle in value.casefold():
-                        found.append(node)
-                        break
-                if len(found) >= top_k:
-                    return found
+            for page in pages:
+                for node in page:
+                    props = node.get("properties") or {}
+                    for prop in definition["keyword_props"]:
+                        value = str(props.get(prop) or "")
+                        if value and needle in value.casefold():
+                            found.append(node)
+                            break
+                    if len(found) >= top_k:
+                        return found
         return found
 
     @staticmethod
@@ -519,34 +484,85 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                     return []
                 await asyncio.sleep(0.3)
 
-    @staticmethod
-    async def _mark_addressable(
+    async def _resolve_seed_vids(
+        self,
         client: GraphAPIClient,
-        items: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """标注属性搜索结果能否按 VID 寻址，并尽量换成可寻址节点。
+        candidates_by_key: dict[str, list[dict[str, Any]]],
+    ) -> list[str]:
+        """只为可能用于扩图的少量候选解析可寻址 VID。"""
+        ordered: list[dict[str, Any]] = []
+        seen_raw_ids: set[str] = set()
+        preferred_keys = ("leading_expert", "leading_enterprise", "core_technology")
+        for key in preferred_keys:
+            for node in candidates_by_key.get(key, []):
+                raw_id = str(node.get("id") or "")
+                if raw_id and raw_id not in seen_raw_ids:
+                    seen_raw_ids.add(raw_id)
+                    ordered.append(node)
+        for key, nodes in candidates_by_key.items():
+            if key in preferred_keys:
+                continue
+            for node in nodes:
+                raw_id = str(node.get("id") or "")
+                if raw_id and raw_id not in seen_raw_ids:
+                    seen_raw_ids.add(raw_id)
+                    ordered.append(node)
 
-        ``/nodes/search`` 返回的 ``id`` 不保证是业务 VID，不做校验就拿去扩展子图
-        会静默查不到数据。
+        if not ordered:
+            return []
 
-        Args:
-            client: 图查询 API 客户端。
-            items: 属性搜索返回的节点列表。
-
-        Returns:
-            与入参等长的节点列表，每项带 ``_addressable`` 标记。
-        """
-        marked: list[dict[str, Any]] = []
-        for item in items:
+        async def _resolve(node: dict[str, Any]) -> str | None:
             try:
-                resolved = await client.resolve_addressable_node(item)
+                resolved = await client.resolve_addressable_node(
+                    node,
+                    vid_candidates=self._node_vid_candidates(node),
+                )
             except GraphAPIError:
-                resolved = None
-            if resolved is not None:
-                marked.append({**resolved, "_addressable": True})
-            else:
-                marked.append({**item, "_addressable": False})
-        return marked
+                return None
+            return str(resolved.get("id") or "") if resolved else None
+
+        seed_vids: list[str] = []
+        seen_seed_ids: set[str] = set()
+        max_seed_count = _MAX_SUBGRAPH_SEEDS + 1
+        batch_size = max_seed_count
+        for start in range(0, len(ordered), batch_size):
+            batch = ordered[start : start + batch_size]
+            resolved_ids = await asyncio.gather(*[_resolve(node) for node in batch])
+            for resolved_id in resolved_ids:
+                if not resolved_id or resolved_id in seen_seed_ids:
+                    continue
+                seen_seed_ids.add(resolved_id)
+                seed_vids.append(resolved_id)
+                if len(seed_vids) >= max_seed_count:
+                    return seed_vids
+        return seed_vids
+
+    @staticmethod
+    def _node_vid_candidates(node: dict[str, Any]) -> list[str]:
+        """基于常见主键字段补一组候选 VID，提升属性搜索结果的可寻址率。"""
+        props = node.get("properties") or {}
+        candidates: list[str] = []
+        for value in (
+            node.get("id"),
+            props.get("vid"),
+            props.get("id"),
+            props.get("source_record_id"),
+            props.get("scholar_id"),
+            props.get("org_id"),
+            props.get("keyword_id"),
+            props.get("paper_id"),
+            props.get("patent_id"),
+            props.get("project_id"),
+        ):
+            text = str(value or "").strip()
+            if text and text not in candidates:
+                candidates.append(text)
+        scholar_id = str(props.get("scholar_id") or "").strip()
+        if scholar_id:
+            person_vid = f"person_{scholar_id}"
+            if person_vid not in candidates:
+                candidates.append(person_vid)
+        return candidates
 
     async def _fetch_graph(
         self,
@@ -644,7 +660,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         """组装实体/关系溯源信息，字段结构与校友关系模块保持一致。
 
         Args:
-            summary: 全库规模统计，降级时为样例数据。
+            summary: 本次查询命中的实体/关系统计。
             layers: 四个分层结果。
             graph: 已组装的子图。
             source: 数据来源标记，含 ``fallback`` 与降级 ``reason``。
@@ -666,8 +682,8 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         nodes = graph.get("nodes") or []
         edges = graph.get("edges") or []
         provenance_summary = (
-            f"{head}全库规模 {summary.get('totalNodes') or 0} 节点 / "
-            f"{summary.get('totalEdges') or 0} 关系；本次子图 {len(nodes)} 节点 / {len(edges)} 关系。"
+            f"{head}本次命中 {summary.get('totalNodes') or 0} 个实体 / "
+            f"{summary.get('totalEdges') or 0} 条关系；本次子图 {len(nodes)} 节点 / {len(edges)} 关系。"
         )
 
         evidences: list[dict[str, Any]] = []
@@ -804,19 +820,25 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                 return key
         return None
 
-    # ---------------- 兜底文案 ----------------
-    def _fallback_summary(
-        self, industry: str | None, layers: list[dict[str, Any]]
+    def _build_summary(
+        self,
+        industry: str | None,
+        layers: list[dict[str, Any]],
+        graph: dict[str, list[Any]],
     ) -> dict[str, Any]:
-        """全库统计拿不到时，用各分层命中数推算规模文案（不编造数字）。"""
+        """汇总本次查询命中的实体和关系，不做全库扫描。"""
         nodes_by_label = {
-            str(layer.get("title") or layer.get("key")): int(layer.get("total") or 0)
+            str(layer.get("title") or layer.get("key")): len(layer.get("items") or [])
             for layer in layers
         }
+        edges_by_type: dict[str, int] = {}
+        for edge in graph.get("edges") or []:
+            edge_type = str((edge or {}).get("label") or "UNKNOWN")
+            edges_by_type[edge_type] = edges_by_type.get(edge_type, 0) + 1
         return {
             "industry": industry,
             "totalNodes": sum(nodes_by_label.values()),
-            "totalEdges": 0,
+            "totalEdges": sum(edges_by_type.values()),
             "nodesByLabel": nodes_by_label,
-            "edgesByType": {},
+            "edgesByType": edges_by_type,
         }

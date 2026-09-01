@@ -299,6 +299,12 @@ function topNError(value: string): string | null {
   return null;
 }
 
+function panoramaTopKError(value: string): string | null {
+  if (value.length > MAX_PARAMETER_LENGTH)
+    return `输入长度不能超过 ${MAX_PARAMETER_LENGTH} 个字符`;
+  return integerRangeError(value, 1, 20);
+}
+
 function paperCooperationTimeErrors(
   startValue: string | undefined,
   endValue: string | undefined,
@@ -371,6 +377,7 @@ function parameterFieldError(fieldName: string, value: string): string | null {
   if (isPanorama.value) {
     if (fieldName === "anchorId") return identifierError(value);
     if (fieldName === "industry") return keywordError(value);
+    if (fieldName === "topK") return panoramaTopKError(value);
   }
   if (isLiveEnterpriseRelation.value) {
     if (fieldName === "expert_id") return identifierError(value);
@@ -2296,7 +2303,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
   liveError.value = null;
 
   if (isPanorama.value) {
-    const panoramaErrors = collectParameterErrors(["industry", "anchorId"]);
+    const panoramaErrors = collectParameterErrors(["industry", "anchorId", "topK"]);
     if (Object.keys(panoramaErrors).length) {
       parameterErrors.value = panoramaErrors;
       running.value = false;

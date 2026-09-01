@@ -49,3 +49,8 @@ def test_request_rejects_overlong_and_abnormal_anchor_id() -> None:
 
     request = IndustryChainPanoramaQueryRequest.model_validate({"anchorId": "person_4G7t0B0t"})
     assert request.anchorId == "person_4G7t0B0t"
+
+
+def test_request_rejects_overlong_top_k() -> None:
+    with pytest.raises(ValidationError, match="64"):
+        IndustryChainPanoramaQueryRequest.model_validate({"topK": "9" * 65})

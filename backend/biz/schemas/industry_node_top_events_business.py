@@ -39,7 +39,11 @@ class IndustryNodeTopEventsRequest(BaseModel):
     )
     time_range: str = Field("", description="事件时间范围筛选，如 2025-2026")
     max_orgs: int = Field(
-        20, ge=1, le=50, description="链节点下最多扫描企业数（按 chain_score 排序）"
+        20,
+        strict=True,
+        ge=1,
+        le=50,
+        description="链节点下最多扫描企业数（按 chain_score 排序）",
     )
 
     @field_validator("chain_node_id", "event_type", mode="before")
@@ -88,31 +92,6 @@ class IndustryNodeTopEventsRequest(BaseModel):
             raise ValueError("top_n 必须是数字")
         if n < 1 or n > 50:
             raise ValueError("top_n 取值范围为 1-50")
-        return n
-
-    @field_validator("max_orgs", mode="before")
-    @classmethod
-    def _validate_max_orgs(cls, value: object) -> int:
-        """max_orgs：必须是 1-50 的整数，留空取默认 20。
-
-        与 _validate_top_n 同口径：非数字 → 提示「必须是数字」；
-        不在范围 → 提示「取值范围为 1-50」。前端 max_orgs 为文本框（可输入任意字符），
-        故此处兼容字符串/浮点/布尔等脏输入，统一给出中文提示，再交由 Field 的 ge/le 兜底。
-        """
-        if value is None or (isinstance(value, str) and value.strip() == ""):
-            return 20
-        if isinstance(value, bool):  # bool 是 int 子类，但语义上不是数字输入
-            raise ValueError("max_orgs 必须是数字")
-        if isinstance(value, int):
-            n: int = value
-        elif isinstance(value, float) and value.is_integer():
-            n = int(value)
-        elif isinstance(value, str) and re.fullmatch(r"\d+", value.strip()):
-            n = int(value.strip())
-        else:
-            raise ValueError("max_orgs 必须是数字")
-        if n < 1 or n > 50:
-            raise ValueError("max_orgs 取值范围为 1-50")
         return n
 
     @model_validator(mode="after")

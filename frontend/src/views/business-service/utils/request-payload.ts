@@ -1,5 +1,27 @@
 import type { ServiceField } from '../service-modules'
 
+export function integerRangeError(value: string, min: number, max: number): string | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const message = `请输入 ${min}-${max} 之间的整数`
+  if (!/^\d+$/.test(trimmed)) return message
+
+  const limit = Number(trimmed)
+  if (limit < min || limit > max) return message
+  return null
+}
+
+export function numericInputRangeError(value: string, min: number, max: number): string | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  if (!/^\d+$/.test(trimmed)) return '只能输入数字'
+  return integerRangeError(trimmed, min, max)
+}
+
+export function limitPerTypeError(value: string): string | null {
+  return numericInputRangeError(value, 1, 50)
+}
+
 export function buildRequestPayload(
   fields: ServiceField[],
   values: Record<string, string>,

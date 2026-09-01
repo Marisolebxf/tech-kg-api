@@ -26,12 +26,13 @@ class AlumniRelationQueryRequest(BaseModel):
     educationStage: str | None = Field(
         default=None, description="教育阶段/学历过滤，多选时用逗号分隔"
     )
-    limit: int = Field(default=20, ge=1, description=f"返回校友数上限，最大 {MAX_ALUMNI_LIMIT}")
-
-    @field_validator("limit")
-    @classmethod
-    def clamp_limit(cls, value: int) -> int:
-        return min(value, MAX_ALUMNI_LIMIT)
+    limit: int = Field(
+        default=20,
+        strict=True,
+        ge=1,
+        le=MAX_ALUMNI_LIMIT,
+        description=f"返回校友数上限，1-{MAX_ALUMNI_LIMIT}",
+    )
 
     @field_validator("expertId", "targetExpertId", mode="before")
     @classmethod

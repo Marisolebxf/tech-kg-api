@@ -34,12 +34,28 @@ logger = logging.getLogger(__name__)
 
 MAX_TOP_K = 20
 MAX_RELATION_TYPES = 20
+_PRESET_INDUSTRY_ALIASES: dict[str | None, tuple[str, ...]] = {
+    None: ("产业全景", "全景图", "全产业链", "全部产业"),
+    "人工智能": ("人工智能", "人工智能产业", "人工智能产业链", "ai", "AI"),
+    "集成电路": ("集成电路", "集成电路产业", "集成电路产业链", "芯片", "半导体"),
+}
+_PRESET_FAST_ANCHOR_HINTS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
+    "人工智能": (
+        ("IndustryChain", ("name", "chain_name")),
+        ("IndustryNode", ("node_name", "name")),
+        ("Keyword", ("keyword",)),
+    ),
+    "集成电路": (
+        ("IndustryNode", ("node_name", "name")),
+        ("IndustryChain", ("name", "chain_name")),
+        ("Keyword", ("keyword",)),
+    ),
+}
 # 属性搜索只支持精确等值；未命中时退化为有界扫描 + 本地包含匹配的扫描上限。
-_KEYWORD_SCAN_LIMIT = 500
-# 关键词包含匹配的扫描总量上限（分页扫描，避免大标签只看前 500 个永远命不中）。
-_KEYWORD_SCAN_MAX = 3000
-# 包含匹配扫描按批次分页，请求够用就停，避免首批命中时仍把全部分页都打到图服务。
-_KEYWORD_SCAN_BATCH_PAGES = 2
+_KEYWORD_SCAN_LIMIT = 50
+# 精确未命中后的兜底只做小范围扫描，控制在单页内，避免全量分页拖慢接口。
+_COMPACT_KEYWORD_SCAN_LIMIT = 50
+_COMPACT_SCAN_LABELS = {"IndustryNode", "IndustryChain", "Keyword"}
 # 子图合并时最多取多少个种子节点。
 _MAX_SUBGRAPH_SEEDS = 5
 # 图服务（trs-graph）承受不住太高并发，全标签扫描类请求并发过多会 500，
@@ -58,6 +74,7 @@ _FALLBACK_REASON_TEXT = {
     "keyword_no_match": "产业关键词未命中任何实体",
     "graph_api_error": "图查询服务不可用",
     "unexpected_error": "图查询过程异常",
+    "keyword_fallback_overview": "关键词未命中，已回退到紧凑全景",
 }
 
 _LAYER_DEFINITIONS: list[dict[str, Any]] = [
@@ -118,7 +135,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         relation_types: list[str] | None = None,
         refresh: bool = False,
     ) -> dict[str, Any]:
-        industry_kw = (industry or "").strip() or None
+        industry_kw = self._normalize_industry_keyword(industry)
         anchor = (anchor_id or "").strip() or None
         top_k = max(1, min(int(top_k or 5), MAX_TOP_K))
         depth = max(1, min(int(depth or 2), 3))
@@ -159,9 +176,18 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
         try:
             async with graph_api() as client:
-                layers, seed_vids = await self._fetch_layers(client, industry_kw, top_k)
+                resolved_anchor, layer_payload = await asyncio.gather(
+                    self._resolve_anchor_from_keyword(client, industry_kw, anchor),
+                    self._fetch_layers(client, industry_kw, top_k, anchor is None),
+                )
+                layers, seed_vids = layer_payload
+                anchor = resolved_anchor
+                if industry_kw and not anchor and not any(layer["items"] for layer in layers):
+                    layers, seed_vids = await self._fetch_layers(client, None, top_k, True)
+                    fallback_reason = "keyword_fallback_overview"
                 graph = await self._fetch_graph(client, seed_vids, anchor, depth)
                 graph = self._filter_graph_by_relation_types(graph, rel_types)
+                query_input["anchorId"] = anchor or ""
         except GraphAPIError as exc:
             logger.warning("graph API unavailable for panorama, falling back: %s", exc)
             fallback_reason = "graph_api_error"
@@ -187,6 +213,10 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "actual": "graph-api",
             "fallback": False,
         }
+        if industry_kw != (industry or "").strip() and (industry or "").strip():
+            source["normalizedIndustry"] = industry_kw or ""
+        if anchor and not anchor_id:
+            source["autoAnchorId"] = anchor
         if fallback_reason is not None:
             source["reason"] = fallback_reason
 
@@ -209,6 +239,86 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             # 请求 10 分钟内都拿不到数据。
             _panorama_cache[cache_key] = (time.monotonic(), result)
         return result
+
+    @classmethod
+    def _normalize_industry_keyword(cls, industry: str | None) -> str | None:
+        raw = (industry or "").strip()
+        if not raw:
+            return None
+        folded = raw.casefold()
+        for canonical, aliases in _PRESET_INDUSTRY_ALIASES.items():
+            if any(folded == alias.casefold() for alias in aliases):
+                return canonical
+        return raw
+
+    async def _resolve_anchor_from_keyword(
+        self,
+        client: GraphAPIClient,
+        industry: str | None,
+        anchor_id: str | None,
+    ) -> str | None:
+        """显式 anchor 优先；否则对热点关键词做轻量唯一命中，直转 anchorId。"""
+        if anchor_id:
+            return anchor_id
+        if not industry:
+            return None
+
+        preset = _PRESET_FAST_ANCHOR_HINTS.get(industry)
+        if preset:
+            for label, props in preset:  # 只按关键词做轻量唯一命中，不依赖固定图 ID
+                resolved = await self._resolve_unique_anchor_candidate(
+                    client, label, props, industry
+                )
+                if resolved:
+                    return resolved
+
+        generic_plan = (
+            ("IndustryNode", ("node_name", "name")),
+            ("IndustryChain", ("name", "chain_name")),
+            ("Keyword", ("keyword",)),
+        )
+        for label, props in generic_plan:
+            resolved = await self._resolve_unique_anchor_candidate(client, label, props, industry)
+            if resolved:
+                return resolved
+        return None
+
+    async def _resolve_unique_anchor_candidate(
+        self,
+        client: GraphAPIClient,
+        label: str,
+        props: tuple[str, ...],
+        industry: str,
+    ) -> str | None:
+        seen: dict[str, dict[str, Any]] = {}
+        for prop in props:
+            payload = await self._safe_search_nodes(client, label, prop, industry, 2)
+            for item in (payload or {}).get("items", []):
+                item_id = str(item.get("id") or "")
+                if item_id and item_id not in seen:
+                    seen[item_id] = item
+            if len(seen) > 1:
+                return None
+        if len(seen) != 1:
+            return None
+        candidate = next(iter(seen.values()))
+        try:
+            resolved = await client.resolve_addressable_node(
+                candidate,
+                vid_candidates=self._node_vid_candidates(candidate),
+            )
+        except GraphAPIError:
+            return None
+        return str(resolved.get("id") or "") if resolved else None
+
+    @staticmethod
+    def _select_layer_definitions(compact_without_anchor: bool) -> list[dict[str, Any]]:
+        if not compact_without_anchor:
+            return list(_LAYER_DEFINITIONS)
+        allowed_keys = {"core_technology", "leading_enterprise"}
+        return [
+            definition for definition in _LAYER_DEFINITIONS if definition["key"] in allowed_keys
+        ]
 
     @staticmethod
     def _normalize_relation_types(relation_types: list[str] | None) -> list[str]:
@@ -295,6 +405,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         client: GraphAPIClient,
         industry: str | None,
         top_k: int,
+        compact_without_anchor: bool,
     ) -> tuple[list[dict[str, Any]], list[str]]:
         """构造四个分层，并收集可用于扩展子图的种子 VID。
 
@@ -309,15 +420,15 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         """
         layers: list[dict[str, Any]] = []
         seed_candidates_by_key: dict[str, list[dict[str, Any]]] = {}
-        # 四个分层互不依赖；属性搜索在图服务侧是全标签扫描，单个要 1~2 秒，
-        # 串行拉满 9 秒起，并发后整体耗时约等于最慢的那一层。
+        selected_definitions = self._select_layer_definitions(compact_without_anchor)
+        # 无显式 anchorId 时只保留技术/产业节点 + 企业两层，减少全景发现成本。
         collected = await asyncio.gather(
             *(
                 self._collect_layer_nodes(client, definition, industry, top_k)
-                for definition in _LAYER_DEFINITIONS
+                for definition in selected_definitions
             )
         )
-        for definition, nodes in zip(_LAYER_DEFINITIONS, collected, strict=True):
+        for definition, nodes in zip(selected_definitions, collected, strict=True):
             picked = nodes[:top_k]
             layers.append(
                 {
@@ -344,7 +455,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         Args:
             client: 图查询 API 客户端。
             definition: ``_LAYER_DEFINITIONS`` 中的一项。
-            industry: 产业关键词；非空时先精确搜属性，未命中再有界扫描做包含匹配。
+            industry: 产业关键词；非空时先精确搜属性，未命中仅做小范围扫描。
             top_k: 目标条数。
 
         Returns:
@@ -378,8 +489,8 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
     ) -> list[dict[str, Any]]:
         """按产业关键词找某个标签下的节点。
 
-        属性搜索只支持精确等值，关键词与库里存的字面值稍有差异就会全空；因此
-        精确搜索未命中时，再有界扫描 ``_KEYWORD_SCAN_LIMIT`` 个节点做包含匹配。
+        属性搜索先做精确等值；未命中时只在少量候选标签上做单页小范围包含匹配，
+        避免继续走大范围分页扫描。
 
         Args:
             client: 图查询 API 客户端。
@@ -406,38 +517,21 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         if found:
             return found
 
-        # 精确等值没命中，退化为分页有界扫描 + 本地包含匹配。
-        # 大标签（如 Person 有几十万节点）只扫前 500 个基本永远命不中，
-        # 所以按页继续扫（页间并发拉取），直到命中或达到 _KEYWORD_SCAN_MAX。
+        if label not in _COMPACT_SCAN_LABELS:
+            return []
+        page = await self._list_by_label_throttled(client, label, _COMPACT_KEYWORD_SCAN_LIMIT, 0)
         needle = industry.casefold()
-        found: list[dict[str, Any]] = []
-        page_count = -(-_KEYWORD_SCAN_MAX // _KEYWORD_SCAN_LIMIT)
-        for start_page in range(0, page_count, _KEYWORD_SCAN_BATCH_PAGES):
-            pages = await asyncio.gather(
-                *(
-                    self._list_by_label_throttled(
-                        client,
-                        label,
-                        _KEYWORD_SCAN_LIMIT,
-                        page_index * _KEYWORD_SCAN_LIMIT,
-                    )
-                    for page_index in range(
-                        start_page,
-                        min(start_page + _KEYWORD_SCAN_BATCH_PAGES, page_count),
-                    )
-                )
-            )
-            for page in pages:
-                for node in page:
-                    props = node.get("properties") or {}
-                    for prop in definition["keyword_props"]:
-                        value = str(props.get(prop) or "")
-                        if value and needle in value.casefold():
-                            found.append(node)
-                            break
-                    if len(found) >= top_k:
-                        return found
-        return found
+        compact_matches: list[dict[str, Any]] = []
+        for node in page:
+            props = node.get("properties") or {}
+            for prop in definition["keyword_props"]:
+                value = str(props.get(prop) or "")
+                if value and needle in value.casefold():
+                    compact_matches.append(node)
+                    break
+            if len(compact_matches) >= top_k:
+                break
+        return compact_matches
 
     @staticmethod
     async def _safe_search_nodes(

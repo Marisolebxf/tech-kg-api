@@ -93,7 +93,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'institution', type: 'string', required: '否', placeholder: '选填，机构关键词，如 新加坡国立大学', description: '机构关键词，任一端命中即保留，最多 64 个字符，不能包含 !@#￥%& 等异常字符' },
       { name: 'startTime', type: 'month', ui: 'month-calendar', required: '否', placeholder: '选填，选择年月，如 2020-01', description: '筛选条件：只保留关系建立时间不早于该年月的直接关系，不能晚于当前月份；留空表示不限时间' },
       { name: 'endTime', type: 'month', ui: 'month-calendar', required: '否', placeholder: '选填，选择年月，如 2020-12', description: '筛选条件：只保留关系建立时间不晚于该年月的直接关系，不能晚于当前月份；留空表示不限时间' },
-      { name: 'limit', type: 'number', defaultValue: '10', required: '否', placeholder: '选填，1-100，默认 10', description: '返回结果数，1-100，默认 10；超出 100 会被后端 clamp 到 100' },
+      { name: 'limit', type: 'number', defaultValue: '10', required: '否', placeholder: '选填，1-100，默认 10', description: '返回结果数，必须为 1-100 之间的整数，默认 10' },
     ],
     responseFields: commonResponseFields,
     requestExample: { dataSource: 'all', expertAId: '007Rb117', expertBId: '00867K10', institution: '', startTime: '', endTime: '', limit: 3 },

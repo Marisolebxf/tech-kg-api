@@ -32,13 +32,12 @@ class CooperationAchievementQueryRequest(BaseModel):
     timeRangeStart: str | None = Field(default=None, description="可选时间起点 YYYY / YYYY-MM-DD")
     timeRangeEnd: str | None = Field(default=None, description="可选时间终点 YYYY / YYYY-MM-DD")
     limitPerType: int = Field(
-        default=20, ge=1, description=f"每类成果上限，最大 {MAX_LIMIT_PER_TYPE}"
+        default=20,
+        strict=True,
+        ge=1,
+        le=MAX_LIMIT_PER_TYPE,
+        description=f"每类成果上限，1-{MAX_LIMIT_PER_TYPE}",
     )
-
-    @field_validator("limitPerType")
-    @classmethod
-    def clamp_limit(cls, value: int) -> int:
-        return min(value, MAX_LIMIT_PER_TYPE)
 
     @field_validator("sourceExpertId", "targetExpertId", mode="before")
     @classmethod

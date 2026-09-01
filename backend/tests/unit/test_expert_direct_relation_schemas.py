@@ -20,14 +20,14 @@ def _future_month() -> str:
     return f"{year}-{month:02d}"
 
 
-def test_request_normalizes_blank_filters_and_clamps_limit() -> None:
+def test_request_normalizes_blank_filters() -> None:
     request = ExpertDirectRelationQueryRequest(
         expertAId=" 007Rb117 ",
         expertBId="",
         institution="  ",
         startTime="",
         endTime="",
-        limit=999,
+        limit=MAX_QUERY_LIMIT,
     )
 
     assert request.expertAId == "007Rb117"
@@ -35,6 +35,20 @@ def test_request_normalizes_blank_filters_and_clamps_limit() -> None:
     assert request.institution is None
     assert request.startTime is None
     assert request.limit == MAX_QUERY_LIMIT
+
+
+@pytest.mark.parametrize("limit", [1, MAX_QUERY_LIMIT])
+def test_request_accepts_limit_boundaries(limit: int) -> None:
+    request = ExpertDirectRelationQueryRequest(expertAId="007Rb117", limit=limit)
+    assert request.limit == limit
+
+
+@pytest.mark.parametrize("limit", [0, 101, -1, 1.5, "10", True, None])
+def test_request_rejects_invalid_limit(limit: object) -> None:
+    with pytest.raises(ValidationError):
+        ExpertDirectRelationQueryRequest.model_validate(
+            {"expertAId": "007Rb117", "limit": limit}
+        )
 
 
 @pytest.mark.parametrize("field", ["expertAId", "expertBId"])

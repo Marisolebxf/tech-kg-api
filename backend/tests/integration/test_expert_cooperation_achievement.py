@@ -41,6 +41,39 @@ async def test_query_cooperation_achievement_success(async_client, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [1, 50])
+async def test_query_cooperation_achievement_accepts_limit_boundaries(
+    async_client, monkeypatch, limit
+):
+    received = {}
+
+    def _query(**kwargs):
+        received.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(handler.application, "query", _query)
+    resp = await async_client.post(
+        "/api/v1/kg-construction/expert-cooperation-achievements/query",
+        json={"sourceExpertId": "S1", "targetExpertId": "S2", "limitPerType": limit},
+    )
+
+    assert resp.status_code == 200
+    assert received["limit_per_type"] == limit
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [0, 51, -1, 1.5, "20", True, None])
+async def test_query_cooperation_achievement_rejects_invalid_limit(async_client, limit):
+    resp = await async_client.post(
+        "/api/v1/kg-construction/expert-cooperation-achievements/query",
+        json={"sourceExpertId": "S1", "targetExpertId": "S2", "limitPerType": limit},
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 422
+
+
+@pytest.mark.asyncio
 async def test_query_cooperation_achievement_not_found(async_client, monkeypatch):
     def _raise(**kwargs):
         raise KeyError("未找到专家: S404")

@@ -34,6 +34,33 @@ const directToId = computed<string>(() => String(directCandidate.value._toId || 
 const directCandidateFields = computed<Array<[string, unknown]>>(() =>
   Object.entries(directCandidate.value).filter(([k]) => !k.startsWith('_'))
 )
+// 候选字段修正（修正后入库）：编辑态 + 每个字段的输入值；`_` 元字段不可编辑（后端以快照为准）
+const directEditing = ref(false)
+const directEdits = ref<Record<string, string>>({})
+const directOriginalText = (val: unknown) => (typeof val === 'object' && val !== null ? JSON.stringify(val) : String(val))
+const directEditedKeys = computed(() =>
+  directCandidateFields.value
+    .filter(([key, val]) => directEdits.value[key] !== undefined && directEdits.value[key] !== directOriginalText(val))
+    .map(([key]) => key),
+)
+const directPatchedCandidate = computed<Record<string, unknown> | null>(() => {
+  if (!directEditedKeys.value.length) return null
+  const patched: Record<string, unknown> = {}
+  for (const [key, val] of directCandidateFields.value) {
+    patched[key] = directEdits.value[key] !== undefined ? directEdits.value[key] : val
+  }
+  return patched
+})
+function toggleDirectEdit() {
+  directEditing.value = !directEditing.value
+  if (directEditing.value) {
+    const initial: Record<string, string> = {}
+    for (const [key, val] of directCandidateFields.value) initial[key] = directOriginalText(val)
+    directEdits.value = initial
+  } else {
+    directEdits.value = {}
+  }
+}
 const directConfidence = computed<number | null>(() => {
   const c = (productionCase.value?.input as Record<string, unknown>)?.confidence
   return typeof c === 'number' ? c : null
@@ -380,17 +407,29 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
     if (validationErrors) return
   }
   // kg.custom.steps T_DIRECT 案例：accept 直接写图，reject 丢弃，不走 claim/submit/approve 4-eyes 流程
-  if (isDirectCase.value && productionCase.value && (action.id === 'accept' || action.id === 'reject')) {
+  if (isDirectCase.value && productionCase.value && ['accept', 'accept-fix', 'reject'].includes(action.id)) {
+    const patched = action.id === 'accept-fix' ? directPatchedCandidate.value : undefined
+    if (action.id === 'accept-fix' && !patched) {
+      feedback.value = '请先修改候选字段，再修正后入库'
+      return
+    }
+    // 修改数字要在响应覆盖 candidate 前取（响应里的候选已是修正值，事后取恒为 0）
+    const editedCount = directEditedKeys.value.length
     submitting.value = true
     try {
       productionCase.value = await directDecideProductionReview(
         productionCase.value.id,
         productionCase.value.version,
-        action.id === 'accept',
+        action.id !== 'reject',
         note.value,
+        patched ?? undefined,
       )
       record.value = mapProductionRecord(productionCase.value)
-      feedback.value = action.id === 'accept' ? '已通过，候选已写入图' : '已驳回，候选丢弃'
+      directEditing.value = false
+      directEdits.value = {}
+      feedback.value = action.id === 'accept-fix'
+        ? `已按修正后候选写入图（修改 ${editedCount} 个字段，已记入审计）`
+        : action.id === 'accept' ? '已通过，候选已写入图' : '已驳回，候选丢弃'
     } catch (error) {
       feedback.value = error instanceof Error ? error.message : '决策失败'
     } finally {
@@ -523,7 +562,11 @@ const secondaryActions = computed(() => {
       <section v-if="templateId === 'T_DIRECT'" class="zone zone-direct">
         <!-- ① 候选：要审核的实体/关系（最显眼，一上来就让人知道审什么） -->
         <section class="direct-candidate">
-          <h3>① 候选</h3>
+          <header class="direct-candidate-head">
+            <h3>① 候选</h3>
+            <button v-if="isEditable && !directEditing" type="button" class="direct-edit-toggle" @click="toggleDirectEdit">编辑字段</button>
+            <button v-else-if="directEditing && isEditable" type="button" class="direct-edit-toggle is-active" @click="toggleDirectEdit">取消编辑</button>
+          </header>
           <header class="direct-target">
             <span class="direct-target-tag">{{ directKind === 'relation' ? '审核关系' : '审核实体' }}</span>
             <template v-if="directKind === 'entity'">
@@ -540,15 +583,17 @@ const secondaryActions = computed(() => {
               <em>未知候选类型 · {{ directKind || 'no kind' }}</em>
             </template>
           </header>
-          <table v-if="directCandidateFields.length" class="direct-fields">
+          <table v-if="directCandidateFields.length" class="direct-fields" :class="{ 'is-editing': directEditing }">
             <tbody>
-              <tr v-for="[key, val] in directCandidateFields" :key="String(key)">
+              <tr v-for="[key, val] in directCandidateFields" :key="String(key)" :class="{ 'is-edited': directEditing && directEdits[key] !== undefined && directEdits[key] !== directOriginalText(val) }">
                 <th>{{ key }}</th>
-                <td>{{ typeof val === 'object' ? JSON.stringify(val) : String(val) }}</td>
+                <td v-if="directEditing"><input v-model="directEdits[key]" :placeholder="directOriginalText(val)" /></td>
+                <td v-else>{{ directOriginalText(val) }}</td>
               </tr>
             </tbody>
           </table>
           <p v-else class="direct-empty">暂无候选字段</p>
+          <p v-if="directEditing" class="direct-edit-hint">发现 schema 映射字段不对时可在此修正；修改后用「修正后入库」提交，修改内容会记入审计日志。</p>
         </section>
 
         <!-- ② 为什么需要你确认：confidence 追溯 -->
@@ -622,7 +667,11 @@ const secondaryActions = computed(() => {
             <input v-model="note" placeholder="审核备注..." />
           </label>
           <div v-if="isEditable" class="direct-actions">
-            <button class="direct-accept" :disabled="submitting" @click="handleAction({ id: 'accept', label: '通过·入库', kind: 'primary' })">
+            <button v-if="directEditing" class="direct-accept direct-accept-fix" :disabled="submitting || !directPatchedCandidate" @click="handleAction({ id: 'accept-fix', label: '修正后入库', kind: 'primary' })">
+              <strong>修正后入库</strong>
+              <em>{{ directPatchedCandidate ? `覆盖 ${directEditedKeys.length} 个字段并写图 · 记入审计` : '请先在①候选中修改字段' }}</em>
+            </button>
+            <button v-if="!directEditing" class="direct-accept" :disabled="submitting" @click="handleAction({ id: 'accept', label: '通过·入库', kind: 'primary' })">
               <strong>通过·入库</strong>
               <em>{{ directKind === 'relation' ? `创建${labelZh(directEdgeType) || '?'}边` : `创建${labelZh(directNodeLabel) || '?'}节点` }}</em>
             </button>
@@ -1778,6 +1827,17 @@ const secondaryActions = computed(() => {
 .direct-fields th{width:180px;background:#f8fafc;color:#66758f;font-weight:500;font-size:11px}
 .direct-fields td{color:#17233b;word-break:break-word}
 .direct-empty{margin:0;padding:14px;text-align:center;color:#9aa5b5;font-size:11px}
+.direct-candidate-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.direct-edit-toggle{height:26px;padding:0 12px;border:1px solid #bfd4f0;border-radius:4px;background:#f4f8ff;color:#175cd3;font-size:11px;cursor:pointer;white-space:nowrap}
+.direct-edit-toggle:hover{background:#e8f1ff}
+.direct-edit-toggle.is-active{border-color:#f6b9b4;background:#fff7f6;color:#b42318}
+.direct-fields.is-editing td input{width:100%;padding:5px 8px;border:1px solid #c9d8ee;border-radius:4px;font-size:12px;color:#17233b;box-sizing:border-box}
+.direct-fields.is-editing td input:focus{outline:none;border-color:#165dff}
+.direct-fields tr.is-edited th{background:#fff8ec;color:#b54708}
+.direct-fields tr.is-edited td input{border-color:#f0c877;background:#fffdf5}
+.direct-edit-hint{margin:10px 0 0;padding:8px 10px;border:1px dashed #e2c98f;border-radius:6px;background:#fffcf2;color:#8a6512;font-size:11px;line-height:17px}
+.direct-accept-fix{border-color:#f79009;background:#f79009}
+.direct-accept-fix:disabled{border-color:#f2d5a8;background:#fdeccd}
 /* ① 原始记录（折叠块） */
 .direct-section-details{padding-left:10px;border-left:3px solid #165dff}
 .direct-section-details summary{cursor:pointer;font-size:13px;font-weight:600;color:#344054;list-style:none;margin:0;padding:0}

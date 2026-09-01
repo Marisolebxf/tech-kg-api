@@ -153,3 +153,124 @@ def test_correction_hash_and_execution_ordering():
         )["status"]
         == "RESOLVED"
     )
+
+
+class FakeGraph:
+    def __init__(self, fields):
+        self.fields = fields
+        self.merged: list[tuple[list[str], dict, dict]] = []
+        self.edges: list[tuple[str, str, str, dict]] = []
+
+    def execute_query(self, ngql):
+        return {"records": [{"Field": f} for f in self.fields]}
+
+    def merge_node(self, labels, key, props):
+        self.merged.append((labels, key, props))
+
+    def create_edge(self, from_id, to_id, edge_type, props):
+        self.edges.append((from_id, to_id, edge_type, props))
+
+
+def _reviewer():
+    from service.manual_review_domain import ReviewIdentity
+
+    return ReviewIdentity(
+        "r1", "r1", frozenset({"reviewer"}), frozenset({"*"}), "org", "req-direct"
+    )
+
+
+def _direct_case(svc, monkeypatch, **overrides):
+    graph = FakeGraph(["scholar_id", "name_zh", "name_en"])
+    monkeypatch.setattr("infra.graph_db.get_trs_graph_client", lambda: graph)
+    kwargs = dict(
+        task_id="TASK-1",
+        execution_id="EXEC-1",
+        step_id="extract",
+        kind="entity",
+        candidate={"scholar_id": "S-1", "name_zh": "张三", "name_en": "Zhang San"},
+        object_id="S-1",
+        node_label="Scholar",
+        reason="low confidence",
+        confidence=0.4,
+    )
+    kwargs.update(overrides)
+    created = svc.create_direct_case(**kwargs)
+    return created["reviewId"], graph
+
+
+def test_direct_decide_accept_with_modified_candidate_writes_corrected_fields(monkeypatch):
+    svc = service()
+    case_id, graph = _direct_case(svc, monkeypatch)
+    identity = _reviewer()
+    result = svc.direct_decide(
+        case_id,
+        1,
+        True,
+        "字段修正",
+        identity,
+        candidate={"scholar_id": "S-1", "name_zh": "李四", "org": "清华"},
+    )
+    assert result["status"] == "RESOLVED"
+    labels, key, props = graph.merged[0]
+    assert labels == ["Scholar"]
+    assert key == {"vid": "S-1"}  # 写图 vid 固定取 object_id
+    assert props["name_zh"] == "李四"
+    # org 不在 schema 且无 extra_json，被 _coerce_to_schema 丢弃
+    assert "org" not in props
+    assert props["scholar_id"] == "S-1"
+
+
+def test_direct_decide_candidate_meta_fields_ignored(monkeypatch):
+    svc = service()
+    case_id, graph = _direct_case(svc, monkeypatch)
+    svc.direct_decide(
+        case_id,
+        1,
+        True,
+        "",
+        _reviewer(),
+        candidate={
+            "scholar_id": "S-1",
+            "name_zh": "李四",
+            "_nodeLabel": "Paper",
+            "_fromId": "EVIL",
+        },
+    )
+    labels, _, _ = graph.merged[0]
+    assert labels == ["Scholar"]  # 元字段以快照为准，传入的 _ 前缀键被丢弃
+
+
+def test_direct_decide_empty_or_underscore_only_candidate_rejected(monkeypatch):
+    svc = service()
+    case_id, _ = _direct_case(svc, monkeypatch)
+    with pytest.raises(ReviewValidationError, match="不能为空"):
+        svc.direct_decide(case_id, 1, True, "", _reviewer(), candidate={"_nodeLabel": "Paper"})
+
+
+def test_direct_decide_reject_with_candidate_rejected(monkeypatch):
+    svc = service()
+    case_id, graph = _direct_case(svc, monkeypatch)
+    with pytest.raises(ReviewValidationError, match="驳回"):
+        svc.direct_decide(case_id, 1, False, "", _reviewer(), candidate={"name_zh": "李四"})
+    assert graph.merged == []
+
+
+def test_direct_decide_audit_records_modified_fields(monkeypatch):
+    svc = service()
+    case_id, _ = _direct_case(svc, monkeypatch)
+    svc.direct_decide(
+        case_id,
+        1,
+        True,
+        "修正",
+        _reviewer(),
+        candidate={"scholar_id": "S-1", "name_zh": "李四", "title": "教授"},
+    )
+    entries = svc.logs(case_id, _reviewer())
+    accept = [e for e in entries if e["eventType"] == "DIRECT_ACCEPTED"][-1]
+    detail = accept["detail"]
+    assert detail["candidateModified"] is True
+    assert detail["modifiedFields"]["added"] == ["title"]
+    assert detail["modifiedFields"]["changed"] == ["name_zh"]
+    assert detail["modifiedFields"]["removed"] == ["name_en"]
+    assert detail["originalCandidateSha256"]

@@ -24,11 +24,18 @@ import {
   type AssetChangeRow,
   type AssetOverviewGroup,
   type AssetOverviewKey,
-  type LatestChange,
-  type ManagementRisk,
   type PlatformOverviewData,
   type StructureItem,
 } from '../../api/platformOverview'
+import {
+  countJobUnifiedStatuses,
+  deriveJobUnifiedStatus,
+  getProductionReviews,
+  JOB_STATUS_TONE,
+  listJobs,
+  type ProductionReviewCase,
+  type WorkflowJob,
+} from '../../api/workflowOperations'
 import KgGraphCanvas from '../../components/kg-graph-canvas.vue'
 import { useToast } from '../../composables/use-toast'
 import { SEARCH_KEYWORD_MAX_LENGTH, searchKeywordError } from '../../utils/searchInput'
@@ -40,6 +47,7 @@ import {
   type GraphNodeData,
   type GraphNodeType,
 } from '../../data/graph-presets'
+import { edgeProvenanceTriple, nodeProvenanceTriple } from '../../utils/graphProvenance'
 
 interface RelationGraphResult {
   nodes: GraphNodeData[]
@@ -416,10 +424,62 @@ const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
   relation: [],
   property: [],
 })
-const latestChanges = ref<LatestChange[]>([])
-const managementRisks = ref<ManagementRisk[]>([])
 const entityStructure = ref<StructureItem[]>([])
 const relationStructure = ref<StructureItem[]>([])
+
+// 总览两卡片：直连任务/审核队列真实数据（不进 platform_overview 的 60s 缓存），各自容错
+const overviewJobs = ref<WorkflowJob[]>([])
+const overviewJobsState = ref<'loading' | 'ready' | 'error'>('loading')
+const overviewJobsError = ref('')
+const overviewReviews = ref<ProductionReviewCase[]>([])
+const overviewReviewsTotal = ref(0)
+const overviewReviewsState = ref<'loading' | 'ready' | 'empty' | 'forbidden' | 'error'>('loading')
+const overviewReviewsError = ref('')
+
+const overviewJobStats = computed(() => {
+  const counts = countJobUnifiedStatuses(overviewJobs.value)
+  return [
+    { label: '运行中', value: counts['运行中'], tone: JOB_STATUS_TONE['运行中'] },
+    { label: '已完成', value: counts['已完成'], tone: JOB_STATUS_TONE['已完成'] },
+    { label: '运行失败', value: counts['运行失败'], tone: JOB_STATUS_TONE['运行失败'] },
+    { label: '已暂停', value: counts['已暂停'], tone: JOB_STATUS_TONE['已暂停'] },
+  ]
+})
+
+const recentOverviewJobs = computed(() =>
+  [...overviewJobs.value]
+    .sort((a, b) => String(b.lastRunAt || b.createdAt || '').localeCompare(String(a.lastRunAt || a.createdAt || '')))
+    .slice(0, 5),
+)
+
+function isForbiddenError(error: unknown): boolean {
+  const status = (error as { response?: { status?: number } })?.response?.status
+  if (status === 403) return true
+  // 兜底：部分错误路径只剩文案
+  return /403|权限|无权/.test(getErrorMessage(error))
+}
+
+async function loadOverviewCards(): Promise<void> {
+  overviewJobsState.value = 'loading'
+  overviewReviewsState.value = 'loading'
+  try {
+    const data = await listJobs()
+    overviewJobs.value = data.items
+    overviewJobsState.value = 'ready'
+  } catch (error) {
+    overviewJobsError.value = getErrorMessage(error)
+    overviewJobsState.value = 'error'
+  }
+  try {
+    const data = await getProductionReviews({ statusGroup: 'pending', page: 1, pageSize: 5 })
+    overviewReviews.value = data.items
+    overviewReviewsTotal.value = data.total
+    overviewReviewsState.value = data.items.length ? 'ready' : 'empty'
+  } catch (error) {
+    overviewReviewsError.value = getErrorMessage(error)
+    overviewReviewsState.value = isForbiddenError(error) ? 'forbidden' : 'error'
+  }
+}
 const activeAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === selectedAssetChange.value))
 const entityAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'entity'))
 const relationAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'relation'))
@@ -664,48 +724,17 @@ const nodeSearchFieldMap:
     ],
   }
 
-const entityLegendItems = [
-  {
-    label: '专家/人才',
-    schema: 'Person',
-    tone: 'expert',
-  },
-  {
-    label: '机构/企业',
-    schema: 'Organization / organization_base',
-    tone: 'org',
-  },
-  {
-    label: '论文/期刊/报告',
-    schema: 'Paper / Journal / Report',
-    tone: 'paper',
-  },
-  {
-    label: '项目/专利',
-    schema: 'Project / Patent / PatentFamily',
-    tone: 'project',
-  },
-  {
-    label: '事件/资讯',
-    schema: 'Event / News',
-    tone: 'event',
-  },
-  {
-    label: '产业链节点',
-    schema: 'IndustryChain / IndustryNode',
-    tone: 'chain',
-  },
-  {
-    label: '产品/关键词',
-    schema: 'Product / Keyword',
-    tone: 'field',
-  },
-  {
-    label: '数据来源',
-    schema: 'DataSource',
-    tone: 'source',
-  },
-]
+/**
+ * 综合图谱展示的实体颜色图例：跟随返回的图数据动态变化
+ * （对齐九大业务页做法——按可见节点 nodeType 去重，label 用真实 entityType）。
+ */
+const queryEntityLegendItems = computed(() => {
+  const byType = new Map<GraphNodeType, string>()
+  for (const node of queryVisibleNodes.value) {
+    if (!byType.has(node.nodeType)) byType.set(node.nodeType, node.entityType)
+  }
+  return Array.from(byType.entries()).map(([tone, label]) => ({ tone, label }))
+})
 
 const selectedQueryScopeDescription = computed(() => (
   queryScopeDescriptions[selectedQueryType.value] ?? queryScopeDescriptions.全部图谱
@@ -1217,6 +1246,21 @@ const selectedQueryProvenance = computed(() => {
     )
   }
   return null
+})
+
+/** 溯源三要素（与九大业务统一）：源数据表 / 英文字段名 / 图空间 VID。 */
+const selectedNodeProvenanceTriple = computed(() =>
+  selectedQueryNode.value ? nodeProvenanceTriple(selectedQueryNode.value) : null,
+)
+const selectedEdgeProvenanceTriple = computed(() =>
+  selectedQueryEdge.value ? edgeProvenanceTriple(selectedQueryEdge.value) : null,
+)
+const selectedRelationEndpointTriples = computed(() => {
+  const { from, to } = selectedQueryEdgeNodes.value
+  const endpoints: Array<{ role: string; name: string; triple: ReturnType<typeof nodeProvenanceTriple> }> = []
+  if (from) endpoints.push({ role: '起点实体', name: from.label, triple: nodeProvenanceTriple(from) })
+  if (to) endpoints.push({ role: '终点实体', name: to.label, triple: nodeProvenanceTriple(to) })
+  return endpoints
 })
 
 const selectedQueryProvenanceTarget = computed(() => {
@@ -4448,8 +4492,6 @@ async function loadPlatformOverview(): Promise<void> {
     }
     assetOverviewGroups.value = data.assetOverviewGroups
     assetChangeRows.value = data.assetChangeRows
-    latestChanges.value = data.latestChanges
-    managementRisks.value = data.managementRisks
     entityStructure.value = data.entityStructure
     relationStructure.value = data.relationStructure
   } catch (error) {
@@ -4459,15 +4501,23 @@ async function loadPlatformOverview(): Promise<void> {
 }
 
 
+// 总览数据只在 overview tab 首次可见时加载：/graph-query 等其他 tab 挂载时
+// 不渲染总览内容，提前拉取是纯浪费（listJobs 还会触发后端 Temporal 复核级联）
+const overviewDataLoaded = ref(false)
+watch(activeTab, (tab) => {
+  if (tab === 'overview' && !overviewDataLoaded.value) {
+    overviewDataLoaded.value = true
+    void loadPlatformOverview()
+    void loadOverviewCards()
+  }
+}, { immediate: true })
+
 onMounted(async () => {
   /*
-   * 首页数据和图空间互不依赖，可以并行加载。
+   * 图空间为查询页所需，挂载即加载；
    * 图谱查询仅在用户点击「查询图谱」按钮或回车时执行，不在挂载时自动触发。
    */
-  await Promise.all([
-    loadPlatformOverview(),
-    initializeGraphSpace(),
-  ])
+  await initializeGraphSpace()
 })
 
 async function handleQuery(): Promise<void> {
@@ -4675,14 +4725,49 @@ const pageMeta = computed(() => {
       </section>
 
       <section class="platform-overview-main">
-        <div class="kg-panel platform-latest-changes">
-          <div class="kg-panel__header"><div><h2 class="kg-panel__title">今日新增与变化</h2></div><RouterLink to="/graph-build">查看全部任务 →</RouterLink></div>
-          <div class="platform-change-feed"><RouterLink v-for="item in latestChanges" :key="`${item.time}-${item.title}`" :to="item.to"><time>{{ item.time }}</time><span :class="`is-${item.type}`">{{ item.type }}</span><div><strong>{{ item.title }}</strong><p>{{ item.detail }}</p><em>{{ item.domain }} · {{ item.impact }}</em></div><b>查看详情 →</b></RouterLink></div>
+        <div class="kg-panel platform-jobs-panel">
+          <div class="kg-panel__header"><div><h2 class="kg-panel__title">图谱构建</h2></div><RouterLink to="/graph-build">查看全部任务 →</RouterLink></div>
+          <template v-if="overviewJobsState === 'ready'">
+            <div class="platform-jobs-stats">
+              <article v-for="stat in overviewJobStats" :key="stat.label"><span :class="`is-${stat.tone}`">{{ stat.value }}</span><em>{{ stat.label }}</em></article>
+            </div>
+            <div class="platform-jobs-list" v-if="recentOverviewJobs.length">
+              <RouterLink v-for="job in recentOverviewJobs" :key="job.id" :to="`/graph-build/jobs/${job.id}`">
+                <strong>{{ job.name }}</strong>
+                <span :class="JOB_STATUS_TONE[deriveJobUnifiedStatus(job)]">{{ deriveJobUnifiedStatus(job) }}</span>
+                <em>{{ job.lastRunAt || job.createdAt }}</em>
+              </RouterLink>
+            </div>
+            <div v-else class="platform-card-empty">
+              <strong>暂无构建任务</strong>
+              <p>创建一次性 / 周期性任务，触发脚本抽取写入图空间。</p>
+              <RouterLink class="primary" to="/graph-build">去新建任务</RouterLink>
+            </div>
+          </template>
+          <div v-else-if="overviewJobsState === 'loading'" class="platform-card-empty"><strong>任务数据加载中…</strong></div>
+          <div v-else class="platform-card-empty"><strong>任务数据暂不可用</strong><p>{{ overviewJobsError }}</p><RouterLink to="/graph-build">前往图谱构建 →</RouterLink></div>
         </div>
 
-        <aside class="kg-panel platform-risk-panel">
-          <div class="kg-panel__header"><div><h2 class="kg-panel__title">需要人工审核的任务</h2></div><RouterLink to="/manual-review">查看处理队列 →</RouterLink></div>
-          <div class="platform-risk-list"><article v-for="item in managementRisks" :key="item.title"><i /><div><strong>{{ item.title }}</strong><p>{{ item.detail }}</p><nav><RouterLink :to="item.detailTo">查看详情</RouterLink><RouterLink class="primary" :to="item.reviewTo">人工处理</RouterLink></nav></div></article></div>
+        <aside class="kg-panel platform-review-panel">
+          <div class="kg-panel__header"><div><h2 class="kg-panel__title">人工审核</h2></div><RouterLink to="/manual-review">查看处理队列 →</RouterLink></div>
+          <template v-if="overviewReviewsState === 'ready'">
+            <div class="platform-review-count">待处理 <strong>{{ overviewReviewsTotal }}</strong> 条</div>
+            <div class="platform-review-list">
+              <RouterLink v-for="item in overviewReviews" :key="item.id" :to="`/manual-review/task/${item.id}`">
+                <strong>{{ item.objectName || item.objectId }}</strong>
+                <em>{{ item.category }}</em>
+                <span class="is-risk">风险 {{ item.riskLevel }}</span>
+              </RouterLink>
+            </div>
+          </template>
+          <div v-else-if="overviewReviewsState === 'empty'" class="platform-card-empty">
+            <strong>当前没有待审核任务</strong>
+            <p>构建流程发现的低置信度候选会进入这里等待人工决策。</p>
+            <RouterLink to="/manual-review">前往人工审核</RouterLink>
+          </div>
+          <div v-else-if="overviewReviewsState === 'loading'" class="platform-card-empty"><strong>审核队列加载中…</strong></div>
+          <div v-else-if="overviewReviewsState === 'forbidden'" class="platform-card-empty"><strong>暂无审核权限</strong><p>需要审核角色（reviewer / 数据质量 / 图谱治理）后才能查看队列。</p><RouterLink to="/manual-review">前往人工审核</RouterLink></div>
+          <div v-else class="platform-card-empty"><strong>审核队列暂不可用</strong><p>{{ overviewReviewsError }}</p><RouterLink to="/manual-review">前往人工审核 →</RouterLink></div>
         </aside>
       </section>
 
@@ -5018,12 +5103,12 @@ const pageMeta = computed(() => {
           <h2 class="kg-panel__title">综合图谱展示</h2>
           <span>{{ querySummary }} · {{ queryGraphStats }}</span>
         </div>
-        <div class="platform-graph-legend" aria-label="实体类型图例">
+        <div v-if="queryEntityLegendItems.length" class="platform-graph-legend" aria-label="实体类型图例">
           <span
-            v-for="item in entityLegendItems"
-            :key="item.schema"
+            v-for="item in queryEntityLegendItems"
+            :key="item.tone"
             :class="['platform-graph-legend__item', `is-${item.tone}`]"
-            :title="item.schema"
+            :title="item.label"
           >
             <i />
             {{ item.label }}
@@ -5210,22 +5295,28 @@ const pageMeta = computed(() => {
               <h3 class="platform-provenance__section-title">实体溯源</h3>
               <dl class="platform-provenance__source">
                 <div><dt>实体类型</dt><dd>{{ selectedQueryProvenanceTarget.type }}</dd></div>
-                <div><dt>源数据表</dt><dd><code>{{ selectedQueryProvenance.evidences[0]?.technicalTable }}</code></dd></div>
-                <div><dt>字段标识 ID</dt><dd><code>{{ selectedQueryProvenance.evidences[0]?.fieldIdentifier }}</code></dd></div>
+                <div><dt>源数据表</dt><dd><code>{{ selectedNodeProvenanceTriple?.sourceTable }}</code></dd></div>
+                <div><dt>英文字段名</dt><dd><code>{{ selectedNodeProvenanceTriple?.sourceField }}</code></dd></div>
+                <div><dt>图空间 VID</dt><dd><code>{{ selectedNodeProvenanceTriple?.graphVid }}</code></dd></div>
                 <div><dt>构建任务 ID</dt><dd><code>{{ selectedQueryProvenance.task.instanceId }}</code></dd></div>
               </dl>
               <div class="platform-provenance__task-meta"><button type="button" @click="openSelectedProcessingInstance">查看构建详情 →</button></div>
             </template>
-            <template v-else-if="selectedQueryProvenance.relationEndpoints?.length">
+            <template v-else-if="selectedQueryEdge">
               <h3 class="platform-provenance__section-title">关系溯源</h3>
-              <dl class="platform-provenance__source"><div><dt>关系类型</dt><dd>{{ selectedQueryProvenanceTarget.type }}</dd></div></dl>
+              <dl class="platform-provenance__source">
+                <div><dt>关系类型</dt><dd>{{ selectedQueryProvenanceTarget.type }}</dd></div>
+                <div><dt>源数据表</dt><dd><code>{{ selectedEdgeProvenanceTriple?.sourceTable }}</code></dd></div>
+                <div><dt>英文字段名</dt><dd><code>{{ selectedEdgeProvenanceTriple?.sourceField }}</code></dd></div>
+                <div><dt>图空间 VID</dt><dd><code>{{ selectedEdgeProvenanceTriple?.graphVid }}</code></dd></div>
+              </dl>
               <h3 class="platform-provenance__section-title">两端实体来源</h3>
-              <div class="platform-provenance__evidence-list">
-                <article v-for="endpoint in selectedQueryProvenance.relationEndpoints" :key="endpoint.role">
+              <div v-if="selectedRelationEndpointTriples.length" class="platform-provenance__evidence-list">
+                <article v-for="endpoint in selectedRelationEndpointTriples" :key="endpoint.role">
                   <header><strong>{{ endpoint.role }} · {{ endpoint.name }}</strong></header>
-                  <p><b>实体类型：{{ endpoint.entityType }}</b></p>
-                  <span>源数据表：<code>{{ endpoint.technicalTable }}</code></span>
-                  <span>字段标识 ID：<code>{{ endpoint.fieldIdentifier }}</code></span>
+                  <span>源数据表：<code>{{ endpoint.triple.sourceTable }}</code></span>
+                  <span>英文字段名：<code>{{ endpoint.triple.sourceField }}</code></span>
+                  <span>图空间 VID：<code>{{ endpoint.triple.graphVid }}</code></span>
                 </article>
               </div>
               <dl class="platform-provenance__source"><div><dt>构建任务 ID</dt><dd><code>{{ selectedQueryProvenance.task.instanceId }}</code></dd></div></dl>
@@ -5553,6 +5644,23 @@ print(response.json())</pre>
   min-height: 0;
   overflow: auto;
   padding-bottom: 2px;
+  /* 总览内容常超一屏（资产卡+任务/审核卡+分布图），外层工作区滚动条被隐藏，
+     这里必须露出自己的滚动条，否则底部扇形图"看不到" */
+  scrollbar-width: thin;
+  scrollbar-color: #b8ccec transparent;
+}
+
+.platform-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.platform-content::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: #b8ccec;
+}
+
+.platform-content::-webkit-scrollbar-thumb:hover {
+  background: #9db9e0;
 }
 
 .platform-overview {
@@ -5656,13 +5764,38 @@ print(response.json())</pre>
 .platform-summary-card__items em { overflow:hidden;color:#8290a5;font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }.platform-summary-card__items strong { overflow:hidden;color:#344861;font-size:10px;text-overflow:ellipsis;white-space:nowrap; }
 
 .platform-overview-main { display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:14px; }
-.platform-latest-changes,.platform-risk-panel { min-width:0;overflow:hidden; }
-.platform-latest-changes .kg-panel__header>div,.platform-risk-panel .kg-panel__header>div { display:grid;gap:2px; }.platform-latest-changes .kg-panel__header span,.platform-risk-panel .kg-panel__header span { color:#7b8aa1;font-size:10px; }.platform-latest-changes .kg-panel__header>a,.platform-risk-panel .kg-panel__header>a { color:#165dff;font-size:10px;text-decoration:none; }
-.platform-change-feed { display:grid; }
-.platform-change-feed>a { display:grid;grid-template-columns:48px 44px minmax(0,1fr) 70px;align-items:center;gap:10px;min-height:70px;padding:10px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
-.platform-change-feed>a:last-child { border-bottom:0; }.platform-change-feed>a:hover { background:#f4f8ff; }
-.platform-change-feed time { color:#71819a;font-size:10px; }.platform-change-feed>a>span { justify-self:start;padding:3px 7px;border-radius:999px;background:#eaf2ff;color:#165dff;font-size:8px; }.platform-change-feed>a>span.is-新增 { background:#e9f8ef;color:#067647; }.platform-change-feed>a>span.is-对齐 { background:#f0edff;color:#6941c6; }.platform-change-feed>a>span.is-质量 { background:#fff3df;color:#b54708; }.platform-change-feed>a>span.is-Schema { background:#edf2f7;color:#475467; }
-.platform-change-feed>a>div { display:grid;gap:3px;min-width:0; }.platform-change-feed>a>div strong { overflow:hidden;color:#253752;font-size:11px;text-overflow:ellipsis;white-space:nowrap; }.platform-change-feed>a>div p { margin:0;color:#62728a;font-size:9px;line-height:15px; }.platform-change-feed>a>div em { color:#8a97aa;font-size:8px;font-style:normal; }.platform-change-feed>a>b { color:#165dff;font-size:9px;font-weight:500;white-space:nowrap; }
+.platform-jobs-panel,.platform-review-panel { min-width:0;overflow:hidden; }
+.platform-jobs-panel .kg-panel__header>div,.platform-review-panel .kg-panel__header>div { display:grid;gap:2px; }
+.platform-jobs-panel .kg-panel__header span,.platform-review-panel .kg-panel__header span { color:#7b8aa1;font-size:10px; }
+.platform-jobs-panel .kg-panel__header>a,.platform-review-panel .kg-panel__header>a { color:#165dff;font-size:11px;text-decoration:none; }
+.platform-jobs-stats { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-bottom:1px solid #e4ecf6; }
+.platform-jobs-stats article { display:grid;gap:2px;padding:12px 8px;text-align:center;border-right:1px solid #edf2f8; }
+.platform-jobs-stats article:last-child { border-right:0; }
+.platform-jobs-stats article span { font-size:18px;font-weight:600; }
+.platform-jobs-stats article span.is-run { color:#175cd3; }.platform-jobs-stats article span.is-ok { color:#067647; }.platform-jobs-stats article span.is-err { color:#b42318; }.platform-jobs-stats article span.is-warn { color:#b54708; }
+.platform-jobs-stats article em { color:#8290a7;font-size:10px;font-style:normal; }
+.platform-jobs-list { display:grid; }
+.platform-jobs-list a { display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;min-height:44px;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
+.platform-jobs-list a:last-child { border-bottom:0; }
+.platform-jobs-list a:hover { background:#f4f8ff; }
+.platform-jobs-list strong { overflow:hidden;color:#253752;font-size:11px;text-overflow:ellipsis;white-space:nowrap; }
+.platform-jobs-list a>span { padding:2px 8px;border-radius:999px;background:#eaf2ff;color:#175cd3;font-size:9px;white-space:nowrap; }
+.platform-jobs-list a>span.ok { color:#067647;background:#e9f8ef; }.platform-jobs-list a>span.err { color:#b42318;background:#fee4e2; }.platform-jobs-list a>span.warn { color:#b54708;background:#fff3df; }
+.platform-jobs-list em { color:#98a2b3;font-size:9px;font-style:normal;white-space:nowrap; }
+.platform-review-count { padding:11px 14px;border-bottom:1px solid #e4ecf6;color:#62728a;font-size:11px; }
+.platform-review-count strong { margin:0 4px;color:#10264c;font-size:18px; }
+.platform-review-list { display:grid; }
+.platform-review-list a { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;align-items:center;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
+.platform-review-list a:last-child { border-bottom:0; }
+.platform-review-list a:hover { background:#f4f8ff; }
+.platform-review-list strong { overflow:hidden;color:#253752;font-size:11px;text-overflow:ellipsis;white-space:nowrap; }
+.platform-review-list em { overflow:hidden;color:#8a97aa;font-size:9px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
+.platform-review-list .is-risk { justify-self:end;color:#b54708;font-size:9px;white-space:nowrap; }
+.platform-card-empty { display:grid;gap:6px;justify-items:center;align-content:center;min-height:170px;padding:20px;text-align:center; }
+.platform-card-empty strong { color:#253752;font-size:12px; }
+.platform-card-empty p { margin:0;color:#8a97aa;font-size:10px;line-height:16px; }
+.platform-card-empty a.primary { margin-top:6px;padding:7px 14px;border-radius:5px;background:#165dff;color:#fff;font-size:11px;text-decoration:none; }
+.platform-card-empty a:not(.primary) { margin-top:6px;color:#165dff;font-size:11px;text-decoration:none; }
 
 .platform-management-focus { display:grid;grid-template-columns:minmax(0,1.65fr) minmax(340px,.72fr);gap:14px; }
 .platform-change-panel,.platform-risk-panel,.platform-trend-panel { min-width:0;overflow:hidden; }
@@ -5684,14 +5817,6 @@ print(response.json())</pre>
 .platform-change-body>aside article { display:grid;grid-template-columns:25px minmax(0,1fr);gap:9px;padding:9px 0;border-bottom:1px solid #e6edf6; }.platform-change-body>aside article:last-child { border-bottom:0; }
 .platform-change-body>aside article>i { display:grid;place-items:center;width:23px;height:23px;border-radius:50%;background:#eaf2ff;color:#165dff;font-size:10px;font-style:normal; }.platform-change-body>aside article>i.success { background:#dcfae6;color:#067647; }.platform-change-body>aside article>i.warning { background:#fef0c7;color:#b54708; }
 .platform-change-body>aside article>span { display:grid;gap:3px; }.platform-change-body>aside article strong { color:#344661;font-size:10px; }.platform-change-body>aside article em { color:#7b899e;font-size:9px;font-style:normal; }
-
-.platform-risk-list { display:grid; }.platform-risk-list article { position:relative;display:grid;grid-template-columns:9px minmax(0,1fr);gap:10px;min-height:88px;padding:14px;border-bottom:1px solid #e3ebf6;background:#fff; }.platform-risk-list article:last-child { border-bottom:0; }
-.platform-risk-list article>i { width:8px;height:8px;margin-top:5px;border-radius:50%;background:#2e90fa;box-shadow:0 0 0 4px #d6e9ff; }
-.platform-risk-list article>div { display:grid;gap:3px; }
-.platform-risk-list article strong { color:#253752;font-size:11px; }.platform-risk-list article p { margin:0;color:#7b899e;font-size:9px;line-height:15px; }
-.platform-risk-list article nav { display:flex;justify-content:flex-end;gap:8px;margin-top:7px; }
-.platform-risk-list article a { display:inline-flex;align-items:center;height:28px;padding:0 9px;border:1px solid #cbdaf0;border-radius:5px;background:#fff;color:#165dff;font-size:11px;text-decoration:none;white-space:nowrap; }
-.platform-risk-list article a.primary { border-color:#165dff;background:#165dff;color:#fff; }
 
 .platform-monitor-grid { display:grid;grid-template-columns:minmax(0,1fr) minmax(480px,1fr);gap:14px; }
 .platform-trend-legend { display:flex!important;align-items:center;gap:10px!important; }.platform-trend-legend span { display:flex;align-items:center;gap:5px; }.platform-trend-legend i { width:7px;height:7px;border-radius:2px;background:#2e90fa; }.platform-trend-legend span:last-child i { background:#7a5af8; }
@@ -5748,7 +5873,7 @@ print(response.json())</pre>
 .platform-structure-chart header { display:flex;align-items:center;justify-content:space-between;margin-bottom:8px; }
 .platform-structure-chart header>strong { color:#253752;font-size:13px; }
 .platform-structure-chart header>a { color:#165dff;font-size:11px;text-decoration:none; }
-.platform-donut-layout { display:grid;grid-template-columns:170px minmax(0,1fr);align-items:center;gap:20px;min-height:190px; }
+.platform-donut-layout { display:grid;grid-template-columns:170px minmax(0,1fr);align-items:center;gap:20px;min-height:150px; }
 .platform-donut { position:relative;display:grid;place-items:center;width:154px;height:154px;border-radius:50%; }
 .platform-donut::after { position:absolute;inset:25px;border-radius:50%;background:#fff;box-shadow:0 0 0 1px #e5edf8;content:""; }
 .platform-donut.is-entity { background:conic-gradient(#2e90fa 0 34%,#7a5af8 34% 57%,#12b76a 57% 74%,#f79009 74% 85%,#98a2b3 85% 100%); }
@@ -5756,7 +5881,7 @@ print(response.json())</pre>
 .platform-donut>span { position:relative;z-index:1;display:grid;gap:2px;text-align:center; }
 .platform-donut>span strong { color:#10264c;font-size:19px; }
 .platform-donut>span em { color:#8290a7;font-size:10px;font-style:normal; }
-.platform-structure-legend article { display:grid;grid-template-columns:minmax(0,1fr) 160px;align-items:center;gap:14px;min-height:38px;border-bottom:1px solid #edf2f8; }
+.platform-structure-legend article { display:grid;grid-template-columns:minmax(0,1fr) 160px;align-items:center;gap:14px;min-height:34px;border-bottom:1px solid #edf2f8; }
 .platform-structure-legend article:last-child { border-bottom:0; }
 .platform-structure-legend article>span { display:flex;align-items:center;gap:7px;min-width:0;overflow:hidden;color:#40516c;font-size:11px;white-space:nowrap; }
 .platform-structure-legend article>span>i { flex:0 0 auto;width:8px;height:8px;border-radius:50%; }
@@ -8274,6 +8399,10 @@ print(response.json())</pre>
     grid-template-rows: auto auto auto;
   }
 
+  .platform-jobs-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .platform-jobs-stats article:nth-child(2n) { border-right:0; }
+  .platform-jobs-stats article:nth-child(-n+2) { border-bottom:1px solid #edf2f8; }
+
   .platform-query-graph,
   .platform-query > .platform-detail {
     grid-column: 1;
@@ -8432,4 +8561,17 @@ print(response.json())</pre>
 .platform-ngql-result th,.platform-ngql-result td{padding:8px 14px;border-bottom:1px solid #e5e6eb;vertical-align:top}
 .platform-ngql-result td pre{max-width:420px;margin:0;overflow:auto;color:#1d2129;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
 .platform-ngql-result__empty{padding:24px;color:#86909c;font-size:13px;text-align:center}
+/* 窄屏（此前该宽度区间对分布图无任何处理）：donut 与图例上下堆叠，避免固定列挤压 */
+@media(max-width:760px){
+  .platform-donut-layout{grid-template-columns:minmax(0,1fr);justify-items:center;gap:12px;min-height:0;padding-bottom:8px}
+  .platform-donut{width:120px;height:120px}
+  .platform-donut::after{inset:20px}
+  .platform-donut>span strong{font-size:15px}
+  .platform-structure-legend{width:100%}
+  .platform-structure-legend article>strong{grid-template-columns:minmax(60px,1fr) 40px}
+  .platform-jobs-list a{grid-template-columns:minmax(0,1fr) auto}
+  .platform-jobs-list em{display:none}
+  .platform-review-list a{grid-template-columns:minmax(0,1fr)}
+  .platform-review-list .is-risk{justify-self:start}
+}
 </style>

@@ -233,8 +233,21 @@ export const approveProductionReview = (id: string, version:number, note='') => 
 export const rejectProductionReview = (id: string, version:number, note='') => unwrap(http.post(`/v1/manual-reviews/production/${id}/reject`, { version, note })) as Promise<ProductionReviewCase>
 export const retryProductionReview = (id: string, version:number) => unwrap(http.post(`/v1/manual-reviews/production/${id}/retry`, { version })) as Promise<ProductionReviewCase>
 
-/** kg.custom.steps T_DIRECT 案例直接决策：accept 写图，reject 丢弃。不走 4-eyes claim/submit 流程。 */
-export const directDecideProductionReview = (id: string, version: number, accepted: boolean, note = '') => unwrap(http.post(`/v1/manual-reviews/production/${id}/direct-decide`, { version, accepted, note })) as Promise<ProductionReviewCase>
+/** kg.custom.steps T_DIRECT 案例直接决策：accept 写图，reject 丢弃。不走 4-eyes claim/submit 流程。
+ * candidate 为"修正后的完整候选"（仅 accepted 时有意义）：覆盖候选快照后写图并记审计。 */
+export const directDecideProductionReview = (
+  id: string,
+  version: number,
+  accepted: boolean,
+  note = '',
+  candidate?: Record<string, unknown>,
+) =>
+  unwrap(http.post(`/v1/manual-reviews/production/${id}/direct-decide`, {
+    version,
+    accepted,
+    note,
+    ...(candidate !== undefined ? { candidate } : {}),
+  })) as Promise<ProductionReviewCase>
 
 // ---- 工作流定义、Python 脚本上传与执行（任务中心提交脚本用） ----
 
@@ -424,6 +437,38 @@ export const listJobs = (
   filters: { name?: string; status?: string; taskType?: string } = {},
 ) =>
   unwrap(http.get('/v1/workflow-system/jobs', { params: filters })) as Promise<{ items: WorkflowJob[]; total: number }>
+
+/** 任务统一状态：列表页/总览卡共用同一派生口径。 */
+export type JobUnifiedStatus = '未运行' | '运行中' | '已暂停' | '已完成' | '运行失败'
+
+const JOB_RUNNING_STATUSES = new Set(['RUNNING'])
+const JOB_FAILED_STATUSES = new Set(['FAILED', 'CANCELED', 'TERMINATED', 'TIMED_OUT'])
+
+export function deriveJobUnifiedStatus(job: Pick<WorkflowJob, 'status' | 'lastExecutionStatus'>): JobUnifiedStatus {
+  if (job.lastExecutionStatus && JOB_RUNNING_STATUSES.has(job.lastExecutionStatus)) return '运行中'
+  if (job.status === '暂停') return '已暂停'
+  if (job.lastExecutionStatus === 'COMPLETED') return '已完成'
+  if (job.lastExecutionStatus && JOB_FAILED_STATUSES.has(job.lastExecutionStatus)) return '运行失败'
+  // QUEUED = Temporal 不可用时的本地待下发记录，不会自愈，按未运行处理（可重新触发）
+  return '未运行'
+}
+
+/** 统一状态 → 状态点色调（对应 GraphBuildView/总览卡的 span.ok/.err/.warn/.run）。 */
+export const JOB_STATUS_TONE: Record<JobUnifiedStatus, 'ok' | 'err' | 'warn' | 'run'> = {
+  未运行: 'warn',
+  运行中: 'run',
+  已暂停: 'warn',
+  已完成: 'ok',
+  运行失败: 'err',
+}
+
+export function countJobUnifiedStatuses(
+  jobs: Array<Pick<WorkflowJob, 'status' | 'lastExecutionStatus'>>,
+): Record<JobUnifiedStatus, number> {
+  const counts: Record<JobUnifiedStatus, number> = { 未运行: 0, 运行中: 0, 已暂停: 0, 已完成: 0, 运行失败: 0 }
+  for (const job of jobs) counts[deriveJobUnifiedStatus(job)] += 1
+  return counts
+}
 
 export const createJob = (input: JobCreateInput) =>
   unwrap(http.post('/v1/workflow-system/jobs', input)) as Promise<WorkflowJob>

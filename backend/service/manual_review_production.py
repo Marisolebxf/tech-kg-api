@@ -10,7 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from db_model.manual_review import (
@@ -65,6 +65,15 @@ def load(v):
 
 def sha(v):
     return hashlib.sha256(dump(v).encode()).hexdigest()
+
+
+# 存量 T_DIRECT 案例的 risk_level 是中文"中/高"（旧口径），序列化时归一到 P1/P0，
+# 保证展示与过滤口径统一；排序用同款 CASE 归一，避免"高"按码点沉底。
+_RISK_NORMALIZE = {"中": "P1", "高": "P0"}
+
+
+def _risk_label(v: str | None) -> str:
+    return _RISK_NORMALIZE.get(v or "", v or "")
 
 
 class ManualReviewService:
@@ -239,7 +248,7 @@ class ManualReviewService:
         return {
             "reviewId": c.id,
             "status": c.status,
-            "riskLevel": c.risk_level,
+            "riskLevel": _risk_label(c.risk_level),
             "isolationStrategy": "BLOCK_BATCH_AND_DOWNSTREAM"
             if c.isolation_scope == "BATCH"
             else "ISOLATE_OBJECT",
@@ -319,7 +328,14 @@ class ManualReviewService:
             rows = s.scalars(
                 select(ReviewCase)
                 .where(*q)
-                .order_by(ReviewCase.risk_level, ReviewCase.created_at)
+                .order_by(
+                    case(
+                        {"高": "P0", "中": "P1"},
+                        value=ReviewCase.risk_level,
+                        else_=ReviewCase.risk_level,
+                    ),
+                    ReviewCase.created_at,
+                )
                 .offset((page - 1) * size)
                 .limit(size)
             ).all()
@@ -428,7 +444,7 @@ class ManualReviewService:
             if c.version != v or c.status not in EDITABLE_STATUSES:
                 raise ReviewConflictError("状态或版本冲突")
             validate_action(c.template_id, action, result)
-            approval = requires_approval(c.risk_level, action, result)
+            approval = requires_approval(_risk_label(c.risk_level), action, result)
             t = now()
             d = ReviewDecision(
                 case_id=i,
@@ -542,7 +558,7 @@ class ManualReviewService:
             "_confidence": confidence,
         }
         dedupe_key = sha([task_id, step_id, obj_id, sha(snapshot)])
-        risk = "中" if (confidence is None or confidence >= 0.7) else "高"
+        risk = "P1" if (confidence is None or confidence >= 0.7) else "P0"
         c = ReviewCase(
             id=f"MR-{t:%Y%m%d}-{uuid4().hex[:12].upper()}",
             dedupe_key=dedupe_key,
@@ -625,13 +641,30 @@ class ManualReviewService:
         return self._ingress_response(c, False)
 
     def direct_decide(
-        self, case_id: str, version: int, accepted: bool, note: str, identity: Any
+        self,
+        case_id: str,
+        version: int,
+        accepted: bool,
+        note: str,
+        identity: Any,
+        candidate: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """kg.custom.steps T_DIRECT 案例两步决策：accept 直接写图，reject 丢弃。
 
         不调 enqueue_correction、不重启 workflow、不要求 submit 阶段。
+        candidate 传"修正后的完整候选"（仅 accept 有效）：``_`` 前缀元字段
+        （写图目标/审计元数据）一律以快照为准，防止改写 label/端点注入。
         """
         require_role(identity, "reviewer")
+        stripped: dict[str, Any] | None = None
+        if candidate is not None:
+            if not accepted:
+                raise ReviewValidationError("驳回不需要候选修正")
+            stripped = {k: v for k, v in candidate.items() if not k.startswith("_")}
+            if not stripped:
+                raise ReviewValidationError("修正后的候选不能为空")
+            if len(dump(stripped)) > int(os.getenv("REVIEW_SNAPSHOT_MAX_BYTES", "2097152")):
+                raise ReviewValidationError("修正后的候选超出大小限制")
         with self.sf() as s:
             c = self.need(s, case_id)
             require_domain_access(identity, c.domain)
@@ -640,6 +673,23 @@ class ManualReviewService:
             if c.version != version or c.status != "OPEN":
                 raise ReviewConflictError("状态或版本冲突")
             old = c.status
+            audit_detail: dict[str, Any] = {"note": note}
+            if stripped is not None:
+                old_snapshot = load(c.candidate_snapshot) or {}
+                old_fields = {k: v for k, v in old_snapshot.items() if not k.startswith("_")}
+                meta = {k: v for k, v in old_snapshot.items() if k.startswith("_")}
+                # 只记 key 不记值，避免敏感数据/大快照进审计日志
+                audit_detail["candidateModified"] = True
+                audit_detail["modifiedFields"] = {
+                    "added": sorted(k for k in stripped if k not in old_fields),
+                    "changed": sorted(
+                        k for k in stripped if k in old_fields and old_fields[k] != stripped[k]
+                    ),
+                    "removed": sorted(k for k in old_fields if k not in stripped),
+                }
+                audit_detail["originalCandidateSha256"] = sha(old_fields)
+                c.candidate_snapshot = dump({**stripped, **meta})
+                c.updated_at = now()
             if accepted:
                 self._write_candidate_to_graph(c)
                 c.status = "RESOLVED"
@@ -655,7 +705,7 @@ class ManualReviewService:
                 "DIRECT_ACCEPTED" if accepted else "DIRECT_REJECTED",
                 old,
                 c.status,
-                {"note": note},
+                audit_detail,
             )
             s.commit()
             return self.detail(s, c)
@@ -1318,7 +1368,7 @@ class ManualReviewService:
             "templateId": canonical_template(c.template_id),
             "domain": c.domain,
             "phase": c.phase,
-            "riskLevel": c.risk_level,
+            "riskLevel": _risk_label(c.risk_level),
             "scope": c.scope,
             "isolationScope": c.isolation_scope,
             "status": c.status,

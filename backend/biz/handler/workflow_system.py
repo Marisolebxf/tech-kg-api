@@ -301,10 +301,12 @@ async def delete_schedule(schedule_id: str) -> ApiResponse:
 
 
 def _job_error(exc: WorkflowJobError) -> HTTPException:
-    from service.workflow_jobs import WorkflowJobPermissionError
+    from service.workflow_jobs import WorkflowJobConflictError, WorkflowJobPermissionError
 
     if isinstance(exc, WorkflowJobPermissionError):
         return HTTPException(status_code=403, detail=str(exc))
+    if isinstance(exc, WorkflowJobConflictError):
+        return HTTPException(status_code=409, detail=str(exc))
     return HTTPException(status_code=400, detail=str(exc))
 
 
@@ -315,7 +317,7 @@ async def list_jobs(
     status: str | None = Query(None, pattern="^(启用|暂停)$"),
     task_type: Annotated[str | None, Query(alias="taskType")] = None,
 ) -> ApiResponse:
-    items = job_service.list_jobs(actor, name=name, status=status, task_type=task_type)
+    items = await job_service.list_jobs(actor, name=name, status=status, task_type=task_type)
     return ApiResponse(data={"items": items, "total": len(items)})
 
 

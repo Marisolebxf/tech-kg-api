@@ -275,7 +275,7 @@ async def direct_decide_case(case_id: str, body: DirectDecideRequest, identity: 
     try:
         return ApiResponse(
             data=production_service.direct_decide(
-                case_id, body.version, body.accepted, body.note, identity
+                case_id, body.version, body.accepted, body.note, identity, body.candidate
             )
         )
     except Exception as exc:

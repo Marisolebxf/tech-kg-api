@@ -8,6 +8,7 @@ import pytest
 
 from service.platform_access import PlatformActor
 from service.workflow_jobs import (
+    WorkflowJobConflictError,
     WorkflowJobPermissionError,
     WorkflowJobService,
 )
@@ -108,6 +109,7 @@ class FakeOps:
     def __init__(self) -> None:
         self.chain_calls: list[tuple[str, list[str], str | None]] = []
         self.executed: list[dict[str, Any]] = []
+        self.execution_by_id: dict[str, dict[str, Any]] = {}
 
     def create_chain_definition(self, name, definition_ids, definition_id=None):
         self.chain_calls.append((name, definition_ids, definition_id))
@@ -121,14 +123,19 @@ class FakeOps:
 
     async def execute_definition(self, definition, payload, workflow_id=None, persist_task=False):
         self.executed.append({"definition": definition, "payload": payload})
-        return {
-            "id": "EXEC-1",
+        execution = {
+            "id": f"EXEC-{len(self.executed)}",
             "definitionId": definition["id"],
             "workflowId": "wf-1",
             "status": "RUNNING",
             "startedAt": "2026-08-30 10:00:00",
             "jobId": payload.get("jobId"),
         }
+        self.execution_by_id[execution["id"]] = execution
+        return execution
+
+    async def get_execution(self, execution_id):
+        return self.execution_by_id.get(execution_id)
 
 
 class FakeTemporal:
@@ -262,10 +269,10 @@ async def test_owner_isolation(env):
     with pytest.raises(WorkflowJobPermissionError):
         await service.trigger_job(_actor("u2"), job["id"])
     # 非管理员列表只见自己的
-    assert service.list_jobs(_actor("u2")) == []
-    assert len(service.list_jobs(_actor("u1"))) == 1
+    assert await service.list_jobs(_actor("u2")) == []
+    assert len(await service.list_jobs(_actor("u1"))) == 1
     # 管理员可见全部
-    assert len(service.list_jobs(_actor("admin", is_admin=True))) == 1
+    assert len(await service.list_jobs(_actor("admin", is_admin=True))) == 1
 
 
 async def test_delete_job_removes_schedule(env):
@@ -286,14 +293,19 @@ async def test_delete_job_removes_schedule(env):
     assert repo.get_schedule(schedule_id) is None
 
 
-async def test_set_job_state_only_for_cron(env):
-    service, _, _, _ = env
+async def test_set_job_state_once_job_toggles_local_status(env):
+    """once 任务也支持暂停/恢复：无 Schedule，纯本地标记（暂停 = 拒绝手动触发）。"""
+    service, repo, _, temporal = env
     job = await service.create_job(
         _actor("u1"),
         {"name": "一次性", "taskType": "single", "definitionId": "entity-paper"},
     )
-    with pytest.raises(Exception, match="暂停"):
-        await service.set_job_state(_actor("u1"), job["id"], False)
+    paused = await service.set_job_state(_actor("u1"), job["id"], False)
+    assert paused["status"] == "暂停"
+    assert "scheduleId" not in repo.jobs[job["id"]]
+    assert temporal.schedules == {}
+    resumed = await service.set_job_state(_actor("u1"), job["id"], True)
+    assert resumed["status"] == "启用"
 
     cron_job = await service.create_job(
         _actor("u1"),
@@ -304,5 +316,49 @@ async def test_set_job_state_only_for_cron(env):
             "schedule": {"kind": "cron", "cron": "0 2 * * *"},
         },
     )
-    paused = await service.set_job_state(_actor("u1"), cron_job["id"], False)
-    assert paused["status"] == "暂停"
+    paused_cron = await service.set_job_state(_actor("u1"), cron_job["id"], False)
+    assert paused_cron["status"] == "暂停"
+    assert paused_cron["dispatchStatus"] == "TEMPORAL_UPDATED"
+
+
+async def test_trigger_rejected_while_paused(env):
+    service, _, _, _ = env
+    job = await service.create_job(
+        _actor("u1"),
+        {"name": "一次性", "taskType": "single", "definitionId": "entity-paper"},
+    )
+    await service.set_job_state(_actor("u1"), job["id"], False)
+    with pytest.raises(WorkflowJobConflictError, match="恢复"):
+        await service.trigger_job(_actor("u1"), job["id"])
+
+
+async def test_trigger_rejected_while_running_and_allowed_after_finish(env):
+    service, _, ops, _ = env
+    job = await service.create_job(
+        _actor("u1"),
+        {"name": "一次性", "taskType": "single", "definitionId": "entity-paper"},
+    )
+    await service.trigger_job(_actor("u1"), job["id"])
+    with pytest.raises(WorkflowJobConflictError, match="仍在进行中"):
+        await service.trigger_job(_actor("u1"), job["id"])
+
+    ops.execution_by_id["EXEC-1"]["status"] = "COMPLETED"
+    execution = await service.trigger_job(_actor("u1"), job["id"])
+    assert execution["id"] == "EXEC-2"
+    assert service.repo.get_job(job["id"])["lastExecutionId"] == "EXEC-2"
+
+
+async def test_list_jobs_refreshes_stale_running(env):
+    """执行已结束但 job.lastExecutionStatus 卡在 RUNNING 时，列表做惰性刷新。"""
+    service, repo, ops, _ = env
+    job = await service.create_job(
+        _actor("u1"),
+        {"name": "一次性", "taskType": "single", "definitionId": "entity-paper"},
+    )
+    await service.trigger_job(_actor("u1"), job["id"])
+    assert repo.jobs[job["id"]]["lastExecutionStatus"] == "RUNNING"
+
+    ops.execution_by_id["EXEC-1"]["status"] = "COMPLETED"
+    items = await service.list_jobs(_actor("u1"))
+    assert items[0]["lastExecutionStatus"] == "COMPLETED"
+    assert repo.jobs[job["id"]]["lastExecutionStatus"] == "COMPLETED"

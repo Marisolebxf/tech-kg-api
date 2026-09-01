@@ -51,13 +51,24 @@ class WorkflowJobPermissionError(PermissionError):
     """跨用户访问 Job，handler 映射 403。"""
 
 
+class WorkflowJobConflictError(WorkflowJobError):
+    """任务当前状态不允许该操作（暂停中/执行中），handler 映射 409。"""
+
+
+# 视为"仍在运行"的状态。QUEUED 是 Temporal 不可用时的本地待下发记录，
+# 不会自愈，必须允许重新触发作为恢复手段，故不算运行中。
+# CONTINUED_AS_NEW 同理不算：我们的 workflow 从不 continue-as-new，且所有
+# 惰性刷新路径只认字面 RUNNING，把它算进运行中会永久 409 且无法自愈。
+_NON_TERMINAL_RUNNING = {"RUNNING"}
+
+
 class WorkflowJobService:
     def __init__(self, repo=repository) -> None:  # noqa: ANN001 — WorkflowRepository
         self.repo = repo
 
     # ---------- 查询 ----------
 
-    def list_jobs(
+    async def list_jobs(
         self,
         actor: PlatformActor,
         name: str | None = None,
@@ -65,7 +76,37 @@ class WorkflowJobService:
         task_type: str | None = None,
     ) -> list[dict[str, Any]]:
         owner = None if actor.is_admin else actor.user_id
-        return self.repo.list_jobs(name=name, status=status, task_type=task_type, owner=owner)
+        jobs = self.repo.list_jobs(name=name, status=status, task_type=task_type, owner=owner)
+        await self._refresh_running_jobs(jobs)
+        return jobs
+
+    async def _refresh_running_jobs(self, jobs: list[dict[str, Any]], limit: int = 10) -> None:
+        """列表里 lastExecutionStatus=RUNNING 的 job 惰性向 Temporal 复核（有界）。
+
+        执行完成后只有 get_job_detail 会刷新，列表不刷会永久卡在"运行中"。
+        """
+        from service.workflow_operations import workflow_operations_service
+
+        checked = 0
+        for job in jobs:
+            if checked >= limit:
+                break
+            if job.get("lastExecutionStatus") != "RUNNING" or not job.get("lastExecutionId"):
+                continue
+            checked += 1
+            try:
+                refreshed = await workflow_operations_service.get_execution(job["lastExecutionId"])
+            except Exception:  # noqa: BLE001
+                # Temporal/DB 不可用：继续循环只会每个 job 重建一次连接，直接放弃本次复核
+                break
+            if refreshed is not None and job["lastExecutionStatus"] != refreshed.get("status"):
+                job["lastExecutionStatus"] = refreshed.get("status")
+                # 跨 RPC 窗口内并发写（trigger/set_job_state）可能已更新 job；
+                # 重新读一份只补 lastExecutionStatus，避免整包旧 payload 回滚并发写入
+                current = self.repo.get_job(job["id"])
+                if current is not None:
+                    current["lastExecutionStatus"] = job["lastExecutionStatus"]
+                    self.repo.save_job(current)
 
     def get_job(self, actor: PlatformActor, job_id: str) -> dict[str, Any]:
         job = self.repo.get_job(job_id)
@@ -207,6 +248,18 @@ class WorkflowJobService:
         from service.workflow_operations import workflow_operations_service
 
         job = self.get_job(actor, job_id)
+        if job.get("status") == "暂停":
+            raise WorkflowJobConflictError("任务已暂停，请先恢复后再触发")
+        if job.get("lastExecutionStatus") in _NON_TERMINAL_RUNNING and job.get("lastExecutionId"):
+            # 惰性复核：列表里的 RUNNING 可能是执行完成后的过期状态。
+            # 复核失败（DB/Temporal 异常）时退回已存状态判断，不让触发请求 500。
+            try:
+                latest = await workflow_operations_service.get_execution(job["lastExecutionId"])
+                status = (latest or {}).get("status") or job["lastExecutionStatus"]
+            except Exception:  # noqa: BLE001
+                status = job["lastExecutionStatus"]
+            if status in _NON_TERMINAL_RUNNING:
+                raise WorkflowJobConflictError("上一次执行仍在进行中，请等待完成后再触发")
         definition = self.repo.get_definition(job["definitionId"])
         if definition is None:
             raise WorkflowJobError(f"任务脚本定义已丢失: {job['definitionId']}")
@@ -223,17 +276,17 @@ class WorkflowJobService:
         self, actor: PlatformActor, job_id: str, active: bool
     ) -> dict[str, Any]:
         job = self.get_job(actor, job_id)
-        if job["schedule"].get("kind") != "cron":
-            raise WorkflowJobError("一次性任务没有暂停/恢复状态")
-        schedule_id = job.get("scheduleId")
-        if schedule_id:
-            try:
-                await temporal_runtime.pause_schedule(schedule_id, paused=not active)
-                job["dispatchStatus"] = "TEMPORAL_UPDATED"
-            except Exception as exc:  # noqa: BLE001
-                temporal_runtime._client = None
-                job["dispatchStatus"] = "LOCAL_SAVED"
-                job["message"] = str(exc)
+        if job["schedule"].get("kind") == "cron":
+            schedule_id = job.get("scheduleId")
+            if schedule_id:
+                try:
+                    await temporal_runtime.pause_schedule(schedule_id, paused=not active)
+                    job["dispatchStatus"] = "TEMPORAL_UPDATED"
+                except Exception as exc:  # noqa: BLE001
+                    temporal_runtime._client = None
+                    job["dispatchStatus"] = "LOCAL_SAVED"
+                    job["message"] = str(exc)
+        # once 任务无 Schedule：暂停只是拒绝后续手动触发，正在运行的执行自然跑完
         job["status"] = "启用" if active else "暂停"
         job["updatedAt"] = _now()
         self.repo.save_job(job)

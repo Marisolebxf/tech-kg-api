@@ -295,7 +295,13 @@ async function unbindSpace(name: string) {
 async function switchCategory(key: string) {
   activeCategory.value = key
   selected.value = null
-  await loadByCategory(key)
+  // 首屏已并行加载全部分类，点击切换不再重拉；仅当本地没有该分类数据（首屏加载失败）时补拉。
+  // 增删改后的刷新由各 mutation 内的 loadByCategory 覆盖。
+  if (key === '图空间') {
+    if (!graphSpaces.value.length) await loadGraphSpaces()
+    return
+  }
+  if (!items.value.some((item) => item.category === key)) await loadByCategory(key)
 }
 
 function emptyForm(kind: ConfigKind): ConfigForm {
@@ -519,9 +525,32 @@ async function removeConfig(item: ConfigItem) {
   }
 }
 
+/** 首屏并行加载全部四类，让分类计数固定展示（loadByCategory 是替换式合并，并发会互相覆盖）。 */
+async function loadAllCategories() {
+  const [llm, embedding, mysql, milvus] = await Promise.allSettled([
+    listLlmConfigs(currentUserId()),
+    listEmbeddingConfigs(currentUserId()),
+    listMysqlDatasources(currentUserId()),
+    listMilvusConfigs(currentUserId()),
+  ])
+  const loaded: ConfigItem[] = []
+  const failed: string[] = []
+  if (llm.status === 'fulfilled') loaded.push(...llm.value.map((c) => toConfigItem('llm', c)))
+  else failed.push('模型服务')
+  if (embedding.status === 'fulfilled') loaded.push(...embedding.value.map((c) => toConfigItem('embedding', c)))
+  else failed.push('抽取与向量模型')
+  if (mysql.status === 'fulfilled') loaded.push(...mysql.value.map((c) => toConfigItem('mysql', c)))
+  else failed.push('数据源')
+  if (milvus.status === 'fulfilled') loaded.push(...milvus.value.map((c) => toConfigItem('milvus', c)))
+  else failed.push('数据源')
+  if (failed.length) showToast(`加载${[...new Set(failed)].join('、')}配置失败`, 'warning')
+  items.value = loaded
+}
+
 onMounted(() => {
   isAdmin.value = currentUserIsAdmin()
-  loadByCategory('模型服务')
+  void loadAllCategories()
+  void loadGraphSpaces()
 })
 </script>
 
@@ -577,35 +606,37 @@ onMounted(() => {
     <button v-if="selected" class="mask" type="button" aria-label="关闭" @click="selected=null" />
     <aside v-if="selected" class="detail-drawer">
       <header><div><span>{{ selected.id }}</span><h2>{{ selected.name }}<b v-if="selected.isDefault" class="default-tag">默认</b></h2><p>{{ selected.description }}</p></div><button type="button" @click="selected=null">×</button></header>
-      <section class="health-card"><i :class="`is-${selected.status}`" /><div><strong>{{ selected.status === '正常' ? '配置可用' : selected.status === '异常' ? '连接存在异常' : '配置已停用' }}</strong><span>后端真实探活</span></div><button type="button" :disabled="testingId === selected.id" @click="testConnection(selected)">{{ testingId === selected.id ? '测试中…' : '测试连接' }}</button></section>
-      <a-form ref="detailFormRef" :model="selected" :rules="detailFormRules" class="detail-form" layout="vertical">
-        <a-form-item field="name" label="配置名称" required><input v-model="selected.name" /></a-form-item>
-        <a-form-item label="服务类型"><input :value="selected.type" readonly /></a-form-item>
-        <template v-if="selected.kind === 'llm' || selected.kind === 'embedding'">
-          <a-form-item class="wide" field="baseUrl" label="Base URL" required><input v-model="selected.baseUrl" /></a-form-item>
-          <a-form-item field="model" label="模型" required><input v-model="selected.model" /></a-form-item>
-          <a-form-item v-if="selected.kind === 'embedding'" label="维度"><input v-model.number="selected.dimensions" type="number" /></a-form-item>
-          <a-form-item label="访问凭据"><input :value="selected.apiKeyMasked || (selected.hasApiKey ? '••••••••' : '未设置')" readonly /></a-form-item>
-          <a-form-item class="wide" label="更新 API Key（留空保留原值）"><input v-model="selected.apiKey" type="password" placeholder="输入新 Key 覆盖原值" /></a-form-item>
-        </template>
-        <template v-else-if="selected.kind === 'mysql'">
-          <a-form-item field="host" label="主机" required><input v-model="selected.host" /></a-form-item>
-          <a-form-item label="端口"><input v-model.number="selected.port" type="number" /></a-form-item>
-          <a-form-item label="默认库"><input v-model="selected.defaultDatabase" /></a-form-item>
-          <a-form-item field="username" label="用户名" required><input v-model="selected.username" /></a-form-item>
-          <a-form-item label="访问凭据"><input :value="selected.passwordMasked || (selected.hasPassword ? '••••••••' : '未设置')" readonly /></a-form-item>
-          <a-form-item class="wide" label="更新密码（留空保留原值）"><input v-model="selected.password" type="password" placeholder="输入新密码覆盖原值" /></a-form-item>
-        </template>
-        <template v-else>
-          <a-form-item class="wide" label="URI"><input v-model="selected.uri" placeholder="留空回退 env MILVUS_*" /></a-form-item>
-          <a-form-item label="默认库"><input v-model="selected.defaultDb" /></a-form-item>
-          <a-form-item label="访问凭据"><input :value="selected.tokenMasked || (selected.hasToken ? '••••••••' : '未设置')" readonly /></a-form-item>
-          <a-form-item class="wide" label="更新 Token（留空保留原值）"><input v-model="selected.token" type="password" placeholder="输入新 Token 覆盖原值" /></a-form-item>
-        </template>
-        <a-form-item class="wide" label="配置说明"><a-textarea v-model="selected.description" /></a-form-item>
-        <a-form-item label="负责人"><input v-model="selected.owner" /></a-form-item>
-      </a-form>
-      <section class="reference-card"><header><strong>引用关系</strong><span>{{ selected.usage }}</span></header><p>配置变更将在下次脚本调用时生效（context 按触发时所选数据源 / 图空间 / Milvus / LLM / embedding 注入）。</p></section>
+      <div class="detail-drawer-body">
+        <section class="health-card"><i :class="`is-${selected.status}`" /><div><strong>{{ selected.status === '正常' ? '配置可用' : selected.status === '异常' ? '连接存在异常' : '配置已停用' }}</strong><span>后端真实探活</span></div><button type="button" :disabled="testingId === selected.id" @click="testConnection(selected)">{{ testingId === selected.id ? '测试中…' : '测试连接' }}</button></section>
+        <a-form ref="detailFormRef" :model="selected" :rules="detailFormRules" class="detail-form" layout="vertical">
+          <a-form-item field="name" label="配置名称" required><input v-model="selected.name" /></a-form-item>
+          <a-form-item label="服务类型"><input :value="selected.type" readonly /></a-form-item>
+          <template v-if="selected.kind === 'llm' || selected.kind === 'embedding'">
+            <a-form-item class="wide" field="baseUrl" label="Base URL" required><input v-model="selected.baseUrl" /></a-form-item>
+            <a-form-item field="model" label="模型" required><input v-model="selected.model" /></a-form-item>
+            <a-form-item v-if="selected.kind === 'embedding'" label="维度"><input v-model.number="selected.dimensions" type="number" /></a-form-item>
+            <a-form-item label="访问凭据"><input :value="selected.apiKeyMasked || (selected.hasApiKey ? '••••••••' : '未设置')" readonly /></a-form-item>
+            <a-form-item class="wide" label="更新 API Key（留空保留原值）"><input v-model="selected.apiKey" type="password" placeholder="输入新 Key 覆盖原值" /></a-form-item>
+          </template>
+          <template v-else-if="selected.kind === 'mysql'">
+            <a-form-item field="host" label="主机" required><input v-model="selected.host" /></a-form-item>
+            <a-form-item label="端口"><input v-model.number="selected.port" type="number" /></a-form-item>
+            <a-form-item label="默认库"><input v-model="selected.defaultDatabase" /></a-form-item>
+            <a-form-item field="username" label="用户名" required><input v-model="selected.username" /></a-form-item>
+            <a-form-item label="访问凭据"><input :value="selected.passwordMasked || (selected.hasPassword ? '••••••••' : '未设置')" readonly /></a-form-item>
+            <a-form-item class="wide" label="更新密码（留空保留原值）"><input v-model="selected.password" type="password" placeholder="输入新密码覆盖原值" /></a-form-item>
+          </template>
+          <template v-else>
+            <a-form-item class="wide" label="URI"><input v-model="selected.uri" placeholder="留空回退 env MILVUS_*" /></a-form-item>
+            <a-form-item label="默认库"><input v-model="selected.defaultDb" /></a-form-item>
+            <a-form-item label="访问凭据"><input :value="selected.tokenMasked || (selected.hasToken ? '••••••••' : '未设置')" readonly /></a-form-item>
+            <a-form-item class="wide" label="更新 Token（留空保留原值）"><input v-model="selected.token" type="password" placeholder="输入新 Token 覆盖原值" /></a-form-item>
+          </template>
+          <a-form-item class="wide" label="配置说明"><a-textarea v-model="selected.description" /></a-form-item>
+          <a-form-item label="负责人"><input v-model="selected.owner" /></a-form-item>
+        </a-form>
+        <section class="reference-card"><header><strong>引用关系</strong><span>{{ selected.usage }}</span></header><p>配置变更将在下次脚本调用时生效（context 按触发时所选数据源 / 图空间 / Milvus / LLM / embedding 注入）。</p></section>
+      </div>
       <footer>
         <button v-if="!selected.isDefault" type="button" @click="setAsDefault(selected)">设为默认</button>
         <button type="button" @click="toggleItem(selected)">{{ selected.status === '停用' ? '启用配置' : '停用配置' }}</button>
@@ -693,7 +724,9 @@ onMounted(() => {
 .detail-drawer>footer,.create-dialog>footer{height:64px;box-sizing:border-box;gap:16px;padding:0 24px}.detail-drawer>footer button,.create-dialog>footer button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
 .default-tag{border-radius:4px;font-size:12px;line-height:20px}.subkind-toggle{gap:8px}.subkind-toggle button{height:32px;border-radius:4px;font-size:14px;line-height:22px}
 /* Isolate the status Arco Select from native search-input styles. */
-.config-list nav :deep(.arco-select){width:140px;min-width:140px}
+/* 列表头操作按钮（新建配置/绑定）：与输入框同规格，禁止换行与压缩导致文字溢出 */
+.config-list nav button{height:32px;padding:0 16px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px;white-space:nowrap;flex-shrink:0}
+.config-list nav :deep(.arco-select){width:140px;min-width:140px;flex-shrink:0}
 .config-list nav :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff}
 .config-list nav :deep(.arco-select-view-input){height:100%!important;min-height:0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important}
 .config-list nav :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;pointer-events:none!important}
@@ -705,6 +738,13 @@ onMounted(() => {
 .create-dialog>header{align-items:center;padding:0 24px}.create-dialog>header>div{display:flex;height:24px;align-items:center}.create-dialog>header span{display:none}.create-dialog h2{margin:0;font-size:16px;line-height:24px}
 .create-dialog>footer{align-items:center;padding:16px 24px}
 .create-dialog-mask{z-index:49;background:rgba(16,38,76,.42);backdrop-filter:blur(2px);cursor:pointer}.create-dialog{z-index:50}
+/* 详情抽屉：中间内容区可滚动，footer 钉底（表单超一屏时原来会溢出不可滚） */
+.detail-drawer-body{display:flex;flex:1 1 auto;min-height:0;flex-direction:column;overflow:auto}
+.detail-drawer-body .detail-form{padding-bottom:0}
+/* 新建弹窗：限高 + 表单区内部滚动（原来 overflow:hidden 直接裁掉超高表单） */
+.create-dialog{display:flex;max-height:min(88vh,760px);flex-direction:column}
+.create-dialog .dialog-form{flex:1 1 auto;min-height:0;overflow:auto}
+.create-dialog>footer{margin-top:auto}
 /* 图空间分类 */
 .bind-nav{display:flex;gap:8px;align-items:center}.bind-nav :deep(.arco-select){width:200px;min-width:200px}.bind-nav button{height:32px;padding:0 16px;border:1px solid #bdd0ea;border-radius:4px;font-size:14px;cursor:pointer}
 .space-hint{margin:12px 16px;color:#86909c;font-size:12px;line-height:20px}

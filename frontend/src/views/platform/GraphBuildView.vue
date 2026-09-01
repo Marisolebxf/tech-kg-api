@@ -2,8 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
+  countJobUnifiedStatuses,
   deleteJob,
-  getTaskOverview,
+  deriveJobUnifiedStatus,
+  JOB_STATUS_TONE,
   listDefinitions,
   listJobs,
   triggerJob,
@@ -33,7 +35,6 @@ const embeddingConfigs = ref<EmbeddingConfig[]>([])
 const milvusConfigs = ref<MilvusConfig[]>([])
 const mysqlDatasources = ref<MysqlDatasource[]>([])
 const graphSpaces = ref<string[]>([])
-const summary = ref<{ label: string; value: string; hint: string }[]>([])
 const loading = ref(false)
 const createOpen = ref(false)
 const triggeringJobId = ref('')
@@ -48,11 +49,21 @@ const TASK_TYPE_LABELS: Record<string, string> = {
   upload: '上传脚本',
 }
 
+const summaryItems = computed(() => {
+  const counts = countJobUnifiedStatuses(jobs.value)
+  return [
+    { label: '运行中', value: counts['运行中'], hint: '正在执行的任务' },
+    { label: '已完成', value: counts['已完成'], hint: '最近一次执行成功' },
+    { label: '运行失败', value: counts['运行失败'], hint: '最近一次执行出错' },
+    { label: '已暂停', value: counts['已暂停'], hint: '已暂停触发' },
+  ]
+})
+
 const filteredJobs = computed(() => {
   const name = filterName.value.trim().toLowerCase()
   return jobs.value.filter((job) => {
     if (name && !job.name.toLowerCase().includes(name)) return false
-    if (filterStatus.value && job.status !== filterStatus.value) return false
+    if (filterStatus.value && deriveJobUnifiedStatus(job) !== filterStatus.value) return false
     if (filterTaskType.value && job.taskType !== filterTaskType.value) return false
     return true
   })
@@ -61,9 +72,8 @@ const filteredJobs = computed(() => {
 async function loadData() {
   loading.value = true
   try {
-    const [jobList, overview] = await Promise.all([listJobs(), getTaskOverview()])
+    const jobList = await listJobs()
     jobs.value = jobList.items
-    summary.value = overview.summary
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
   } finally {
@@ -105,12 +115,9 @@ function jobScriptLabel(job: WorkflowJob): string {
   return job.definitionName || job.definitionId
 }
 
-function jobRunning(job: WorkflowJob): boolean {
-  return job.lastExecutionStatus === 'RUNNING'
-}
-
 async function onTrigger(job: WorkflowJob) {
-  if (jobRunning(job) || triggeringJobId.value) return
+  // 未运行首启 + 运行失败重跑；已完成按产品决策不提供重复执行
+  if (!['未运行', '运行失败'].includes(deriveJobUnifiedStatus(job)) || triggeringJobId.value) return
   triggeringJobId.value = job.id
   try {
     await triggerJob(job.id)
@@ -124,7 +131,9 @@ async function onTrigger(job: WorkflowJob) {
 }
 
 async function onToggleState(job: WorkflowJob) {
-  const active = job.status !== '启用'
+  // 方向必须按统一状态推导：运行中(含已暂停但仍在跑)→暂停；已暂停→恢复。
+  // 用原始 job.status 推导会在「运行中点暂停」后再点变成反向操作。
+  const active = deriveJobUnifiedStatus(job) === '已暂停'
   try {
     await updateJobState(job.id, active)
     showToast(active ? '已恢复' : '已暂停', 'success')
@@ -164,8 +173,8 @@ onMounted(loadData)
   <main class="graph-build-page">
     <header class="gb-header">
       <div>
-        <h1>任务中心</h1>
-        <p>创建一次性 / 周期性任务 → 触发执行 → 查看执行历史与每步输入输出</p>
+        <h1>图谱构建</h1>
+        <p>创建一次性 / 周期性任务 → 触发执行 → 查看执行状态与每步输入输出</p>
       </div>
       <div class="gb-actions">
         <button type="button" :disabled="loading" @click="loadData">{{ loading ? '刷新中…' : '刷新' }}</button>
@@ -174,7 +183,7 @@ onMounted(loadData)
     </header>
 
     <section class="gb-summary">
-      <article v-for="item in summary" :key="item.label">
+      <article v-for="item in summaryItems" :key="item.label">
         <span>{{ item.label }}</span>
         <strong>{{ item.value }}</strong>
         <em v-if="item.hint">{{ item.hint }}</em>
@@ -187,8 +196,11 @@ onMounted(loadData)
         <div class="gb-filters">
           <input v-model="filterName" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" placeholder="按名称搜索" />
           <a-select v-model="filterStatus" placeholder="状态" allow-clear style="width: 110px">
-            <a-option value="启用">启用</a-option>
-            <a-option value="暂停">暂停</a-option>
+            <a-option value="未运行">未运行</a-option>
+            <a-option value="运行中">运行中</a-option>
+            <a-option value="已暂停">已暂停</a-option>
+            <a-option value="已完成">已完成</a-option>
+            <a-option value="运行失败">运行失败</a-option>
           </a-select>
           <a-select v-model="filterTaskType" placeholder="类型" allow-clear style="width: 130px">
             <a-option value="single">单脚本抽取</a-option>
@@ -200,7 +212,7 @@ onMounted(loadData)
       <div class="gb-task-table">
         <table>
           <thead>
-            <tr><th>任务名</th><th>类型</th><th>脚本</th><th>图空间</th><th>调度</th><th>状态</th><th>最近执行</th><th>操作</th></tr>
+            <tr><th>任务名</th><th>类型</th><th>脚本</th><th>图空间</th><th>调度</th><th>状态</th><th>最近任务 ID</th><th>最近执行</th><th>操作</th></tr>
           </thead>
           <tbody>
             <tr v-for="job in filteredJobs" :key="job.id">
@@ -209,20 +221,26 @@ onMounted(loadData)
               <td><code>{{ jobScriptLabel(job) }}</code></td>
               <td>{{ job.graphSpace || '默认' }}</td>
               <td>{{ job.schedule.kind === 'cron' ? `cron ${job.schedule.cron}` : '单次' }}</td>
-              <td><span :class="job.status === '启用' ? 'ok' : 'warn'">{{ job.status }}</span></td>
+              <td><span :class="JOB_STATUS_TONE[deriveJobUnifiedStatus(job)]">{{ deriveJobUnifiedStatus(job) }}</span></td>
+              <td>
+                <code v-if="job.lastExecutionId">{{ job.lastExecutionId }}</code>
+                <span v-else class="muted">—</span>
+              </td>
               <td>
                 <span v-if="job.lastExecutionStatus" :class="executionStatusClass(job.lastExecutionStatus)">{{ job.lastExecutionStatus }}</span>
                 <span v-else class="muted">未执行</span>
                 <small v-if="job.lastRunAt" class="gb-last-run">{{ job.lastRunAt }}</small>
               </td>
               <td class="gb-job-actions">
-                <button type="button" class="primary" :disabled="jobRunning(job) || triggeringJobId === job.id" @click="onTrigger(job)">执行</button>
-                <button v-if="job.schedule.kind === 'cron'" type="button" @click="onToggleState(job)">{{ job.status === '启用' ? '暂停' : '恢复' }}</button>
+                <button v-if="['未运行', '运行失败'].includes(deriveJobUnifiedStatus(job))" type="button" class="primary" :disabled="triggeringJobId === job.id" @click="onTrigger(job)">{{ deriveJobUnifiedStatus(job) === '运行失败' ? '重新执行' : '执行' }}</button>
+                <button v-if="deriveJobUnifiedStatus(job) === '运行中'" type="button" @click="onToggleState(job)">暂停</button>
+                <button v-if="deriveJobUnifiedStatus(job) === '已暂停'" type="button" class="primary" @click="onToggleState(job)">恢复</button>
                 <button type="button" @click="openJobDetail(job)">查看详情</button>
-                <button type="button" class="danger" @click="onDelete(job)">删除</button>
+                <button v-if="deriveJobUnifiedStatus(job) === '已完成' && job.schedule.kind === 'cron'" type="button" @click="onToggleState(job)">暂停调度</button>
+                <button v-if="deriveJobUnifiedStatus(job) !== '运行中'" type="button" class="danger" @click="onDelete(job)">删除</button>
               </td>
             </tr>
-            <tr v-if="!filteredJobs.length"><td colspan="8" class="empty">暂无任务，点击「新建任务」创建</td></tr>
+            <tr v-if="!filteredJobs.length"><td colspan="9" class="empty">暂无任务，点击「新建任务」创建</td></tr>
           </tbody>
         </table>
       </div>

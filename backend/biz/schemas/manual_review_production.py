@@ -27,10 +27,15 @@ class ApprovalRequest(VersionRequest):
 
 
 class DirectDecideRequest(VersionRequest):
-    """kg.custom.steps T_DIRECT 案例直接决策：accept 写图，reject 丢弃。"""
+    """kg.custom.steps T_DIRECT 案例直接决策：accept 写图，reject 丢弃。
+
+    candidate 为"修正后的完整候选"（可选，仅 accepted 时有效）：
+    覆盖候选快照后写图；``_`` 前缀元字段以快照为准，传入的一律丢弃。
+    """
 
     accepted: bool
     note: str = ""
+    candidate: dict[str, Any] | None = None
 
 
 class CancelRequest(VersionRequest):

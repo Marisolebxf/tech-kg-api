@@ -50,6 +50,7 @@ INCREMENTAL_COLUMNS = {
         "ddl_status": "VARCHAR(16) NOT NULL DEFAULT 'pending'",
         "ddl_error": "VARCHAR(1024) NULL",
         "ddl_executed_at": "DATETIME NULL",
+        "property_revision": "INT NOT NULL DEFAULT 1",
     },
     "kg_schema_property": {
         "category": "VARCHAR(16) NOT NULL DEFAULT 'core'",
@@ -60,6 +61,9 @@ INCREMENTAL_COLUMNS = {
         "workflow_definition_id": "VARCHAR(64) NULL",
         "workflow_function_name": "VARCHAR(128) NULL",
         "uploaded_by": "VARCHAR(128) NOT NULL DEFAULT ''",
+        "captured_revision": "INT NOT NULL DEFAULT 1",
+        "last_run_status": "VARCHAR(16) NOT NULL DEFAULT 'none'",
+        "last_run_error": "VARCHAR(1024) NULL",
     },
     "kg_schema_source": {
         "query_sql": "TEXT NULL",

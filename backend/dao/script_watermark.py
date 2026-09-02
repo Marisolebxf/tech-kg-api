@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from db_model.script_watermark import ScriptWatermark
@@ -33,6 +33,25 @@ class ScriptWatermarkDAO:
                 ScriptWatermark.step_id == step_id,
             )
             return session.scalars(stmt).first()
+        finally:
+            if should_close:
+                session.close()
+
+    def delete_source_watermarks(self, definition_id: str) -> int:
+        """删除该 definition 的全部 ``source:{id}`` 水位（回填=重置增量游标），返回删除行数。"""
+        session, should_close = self._get_session()
+        try:
+            result = session.execute(
+                delete(ScriptWatermark).where(
+                    ScriptWatermark.definition_id == definition_id,
+                    ScriptWatermark.step_id.like("source:%"),
+                )
+            )
+            session.commit()
+            return int(result.rowcount or 0)
+        except Exception:
+            session.rollback()
+            raise
         finally:
             if should_close:
                 session.close()

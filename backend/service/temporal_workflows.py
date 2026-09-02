@@ -602,7 +602,7 @@ def _jsonable(value: Any) -> Any:
 
 @activity.defn
 async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
-    """读控制库组装抽取计划：kind/name/activeProps（过滤 is_deleted）/sources/脚本（S3 下载到临时文件）。"""
+    """读控制库组装抽取计划：kind/name/activeProps（目录属性全集）/sources/脚本（S3 下载到临时文件）。"""
     from sqlalchemy.orm import Session as OrmSession
 
     from db_model.schema_management import GraphSchemaDefinition
@@ -618,7 +618,7 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         name = definition.name
         label = definition.label
         schema_key = definition.schema_key
-        active_props = [p.name for p in definition.properties if not p.is_deleted]
+        active_props = [p.name for p in definition.properties]
         sources = [
             {
                 "id": item.id,
@@ -739,6 +739,15 @@ def build_source_batch_sql(
 
 def _chunked(items: list[Any], size: int) -> list[list[Any]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+_UNKNOWN_COLUMN_RE = re.compile(r"unknown column [`'\"]?([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
+
+
+def _unknown_column_name(exc: Exception) -> str | None:
+    """从图库报错解析 unknown column 列名（Nebula: ``Unknown column 'X' in schema``）。"""
+    match = _UNKNOWN_COLUMN_RE.search(str(exc))
+    return match.group(1) if match else None
 
 
 @activity.defn
@@ -949,9 +958,14 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
     id/name 建成 NOT NULL 列，merge 永远缺列。只写 activeProps 内的属性，
     Schema 注入的 NOT NULL 溯源列（create_time/update_time/source_table）
     缺省时由平台补默认值（脚本只管业务字段）。``graph.space`` 指定目标图空间。
+
+    写图自愈：写图遇 ``GraphRequestError`` 且报错为 unknown column 时，从该条
+    props 中剔除对应列重试（兜住「运行任务检查通过 → 任务恰好启动 → 属性被删」
+    的时序窗口及一切计划快照与图库 schema 的错位）；无法定位列名则原样抛出。
     """
     from infra.graph_db.client import TRSGraphClient
     from infra.graph_db.config import TRSGraphSettings
+    from infra.graph_db.exceptions import GraphRequestError
 
     kind = request["kind"]
     name = request["name"]
@@ -996,27 +1010,39 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                 return merged
             return {key: value for key, value in merged.items() if key in active_props}
 
+        def write_with_self_heal(record: dict[str, Any], props: dict[str, Any]) -> None:
+            while True:
+                try:
+                    if kind == "entity":
+                        cols = ", ".join(f"`{key}`" for key in props)
+                        values = ", ".join(ngql_value(value) for value in props.values())
+                        vid = json.dumps(str(record["id"]), ensure_ascii=False)
+                        client.execute_write(
+                            f"INSERT VERTEX `{name}`({cols}) VALUES {vid}:({values})"
+                        )
+                    else:
+                        client.merge_edge(record["fromId"], record["toId"], name, {}, props)
+                    return
+                except GraphRequestError as exc:
+                    bad_column = _unknown_column_name(exc)
+                    if props and bad_column and bad_column in props and len(props) > 1:
+                        logger.warning(
+                            "写图遇未知列 %s，剔除后重试（%s %s）",
+                            bad_column,
+                            name,
+                            record.get("id") or record.get("fromId"),
+                        )
+                        props.pop(bad_column)
+                        continue
+                    raise
+
         written = 0
-        if kind == "entity":
-            for record in records:
-                props = filtered(record.get("props"))
-                if not props:
-                    continue
-                cols = ", ".join(f"`{key}`" for key in props)
-                values = ", ".join(ngql_value(value) for value in props.values())
-                vid = json.dumps(str(record["id"]), ensure_ascii=False)
-                client.execute_write(f"INSERT VERTEX `{name}`({cols}) VALUES {vid}:({values})")
-                written += 1
-        else:
-            for record in records:
-                client.merge_edge(
-                    record["fromId"],
-                    record["toId"],
-                    name,
-                    {},
-                    filtered(record.get("props")),
-                )
-                written += 1
+        for record in records:
+            props = filtered(record.get("props"))
+            if kind == "entity" and not props:
+                continue
+            write_with_self_heal(record, props)
+            written += 1
         return {"written": written}
     finally:
         try:
@@ -1670,8 +1696,34 @@ class SchemaExtractWorkflow:
         self._slots: dict[str, dict[int, dict[str, Any]]] = {}
         self._current_source: str | None = None
 
+    async def _report_script_run(self, schema_id: str, *, ok: bool, error: str | None) -> None:
+        """收尾回写脚本健康信号（best-effort，失败不影响主流程状态）。"""
+        try:
+            await workflow.execute_activity(
+                record_schema_script_run,
+                {
+                    "schemaId": schema_id,
+                    "status": "ok" if ok else "failed",
+                    "error": error,
+                },
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=ACTIVITY_RETRY_POLICY,
+            )
+        except ActivityError:
+            workflow.logger.warning("回写脚本运行状态失败: %s", schema_id)
+
     @workflow.run
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
+        schema_id = request["schemaId"]
+        try:
+            result = await self._extract(request)
+        except Exception as exc:
+            await self._report_script_run(schema_id, ok=False, error=str(exc)[:1000])
+            raise
+        await self._report_script_run(schema_id, ok=True, error=None)
+        return result
+
+    async def _extract(self, request: dict[str, Any]) -> dict[str, Any]:
         schema_id = request["schemaId"]
         graph_space = request.get("graphSpace") or request.get("graph_space")
         batch_size = min(max(int(request.get("batchSize", 500)), 1), 5000)
@@ -2083,6 +2135,34 @@ async def advance_schema_extract_watermark(request: dict[str, Any]) -> dict[str,
     return {"ok": True, "watermark": watermark, "checkpoint": request.get("checkpoint")}
 
 
+@activity.defn
+async def record_schema_script_run(request: dict[str, Any]) -> dict[str, Any]:
+    """抽取工作流收尾回写脚本健康信号：``last_run_status`` = ok/failed + ``last_run_error``。
+
+    与 staleness（captured_revision 版本号比较，事前可知）是两个独立维度：
+    这里只反映"上次跑起来成没成"。schema 已删/脚本行不存在时静默跳过。
+    """
+    from sqlalchemy import select as sa_select
+    from sqlalchemy.orm import Session as OrmSession
+
+    from db_model.schema_management import GraphSchemaScript
+    from infra.workflow_mysql import get_workflow_engine
+
+    schema_id = request["schemaId"]
+    status = "ok" if request.get("status") == "ok" else "failed"
+    error = (str(request.get("error") or "").strip())[:1024] or None
+    with OrmSession(get_workflow_engine()) as session:
+        row = session.scalar(
+            sa_select(GraphSchemaScript).where(GraphSchemaScript.schema_id == schema_id)
+        )
+        if row is None:
+            return {"ok": False, "reason": "script-missing"}
+        row.last_run_status = status
+        row.last_run_error = error if status == "failed" else None
+        session.commit()
+    return {"ok": True, "status": status}
+
+
 WORKFLOW_CLASSES = [
     PaperEntityWorkflow,
     ScholarEntityWorkflow,
@@ -2112,6 +2192,7 @@ ACTIVITIES = [
     execute_transform,
     write_records,
     advance_schema_extract_watermark,
+    record_schema_script_run,
     detect_extract_collisions,
     record_extract_failures,
     resolve_failure_cases,

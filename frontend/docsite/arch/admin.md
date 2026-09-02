@@ -12,7 +12,7 @@
 | admin | + `require_platform_admin` | schema 管理、工作流系统、任务中心、人工审核工作台、修正中心、成员管理、配置管理 |
 | internal | 无鉴权（内网） | `manual_review_internal`（审核 worker 回调）、operator internal |
 
-配置类资源（MySQL 数据源 / Milvus / LLM / embedding 配置、schema、工作流定义）**按创建者隔离**：普通用户只见自己创建的记录 + 平台预置项；admin 可见全部（详见任务中心 Job 注册表重构，2026-08-30）。
+配置类资源（语言模型 / 向量模型 / MySQL 数据源 / 向量数据空间 / 图数据空间、schema、工作流定义）**按创建者隔离**：普通用户只见自己创建的记录 + 平台预置项；admin 可见全部（详见任务中心 Job 注册表重构，2026-08-30）。
 
 ## 修正中心（`/api/v1/corrections`）
 

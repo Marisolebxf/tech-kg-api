@@ -11,7 +11,11 @@ from application.embedding_config import EmbeddingConfigApplication
 from biz.dependencies.auth import CurrentActor
 from biz.dependencies.resources import ensure_owner_access, resource_owner_filter
 from biz.schemas.common import ApiResponse
-from biz.schemas.embedding_config import EmbeddingConfigCreate, EmbeddingConfigUpdate
+from biz.schemas.embedding_config import (
+    EmbeddingConfigCreate,
+    EmbeddingConfigUpdate,
+    EmbeddingConfigVerifyRequest,
+)
 from infra.mysql import get_session
 
 router = APIRouter(prefix="/embedding-config", tags=["embedding-config"])
@@ -113,3 +117,18 @@ def test_embedding_config(
 ) -> ApiResponse:
     _owned_config(_application(session), actor, config_id)
     return ApiResponse(data=_application(session).test_connection(config_id))
+
+
+@router.post("/verify", response_model=ApiResponse)
+def verify_embedding_config(
+    payload: EmbeddingConfigVerifyRequest,
+    actor: CurrentActor,
+    session: Annotated[Session, Depends(get_session)],
+) -> ApiResponse:
+    """新建弹窗保存前验证：直接用未落库的 baseUrl/model/apiKey 探活。"""
+    result = _application(session).verify_connection(
+        base_url=payload.base_url,
+        model=payload.model,
+        api_key=payload.api_key,
+    )
+    return ApiResponse(data=result)

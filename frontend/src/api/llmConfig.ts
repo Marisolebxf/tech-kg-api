@@ -130,4 +130,15 @@ export async function testLlmConfig(
   )
 }
 
+export async function verifyLlmConfig(
+  payload: { baseUrl: string; model: string; apiKey: string },
+  userId: string,
+): Promise<TestConnectionResult> {
+  return unwrap(
+    await asApiPromise<TestConnectionResult>(
+      http.post(`${PREFIX}/llm-configs/verify`, payload, { headers: headers(userId) }),
+    ),
+  )
+}
+
 export { currentUserId } from './currentUser'

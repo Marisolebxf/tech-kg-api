@@ -45,6 +45,11 @@ export interface SchemaScript {
   uploadedAt: string | null
   workflowDefinitionId: string | null
   workflowFunctionName: string | null
+  capturedRevision: number
+  lastRunStatus: 'none' | 'ok' | 'failed'
+  lastRunError: string | null
+  stale: boolean
+  staleBehind: number
   downloadUrl: string
 }
 
@@ -74,6 +79,7 @@ export interface SchemaDefinition {
   mappings: string[]
   canDelete: boolean
   canManageProperties?: boolean
+  propertyRevision?: number
   properties: SchemaProperty[]
   sources?: SchemaSource[]
   script: SchemaScript | null
@@ -277,6 +283,10 @@ export interface SchemaPropertyAddResult {
 export interface SchemaPropertyDeleteResult {
   deleted: boolean
   propertyName: string
+  warnings: string[]
+  ddlStatement: string | null
+  ddlStatus: 'succeeded' | 'skipped' | 'failed'
+  ddlError: string | null
 }
 
 export async function getSchemaDetail(
@@ -334,6 +344,29 @@ export interface SchemaExtractTriggerResult {
   executionId: string
   workflowId: string
   status: string
+  staleScript?: boolean
+  staleBehind?: number
+}
+
+export interface SchemaBackfillResult extends SchemaExtractTriggerResult {
+  watermarksCleared: number
+  forced: boolean
+}
+
+export async function backfillSchemaHistory(
+  schemaId: string,
+  userId: string,
+  options?: { force?: boolean; graphSpace?: string; batchSize?: number },
+): Promise<SchemaBackfillResult> {
+  const body: Record<string, unknown> = {}
+  if (options?.force) body.force = true
+  if (options?.graphSpace) body.graphSpace = options.graphSpace
+  if (options?.batchSize) body.batchSize = options.batchSize
+  return unwrap(
+    await asApiPromise<SchemaBackfillResult>(
+      http.post(`${PREFIX}/schemas/${schemaId}/backfill`, body, { headers: headers(userId) }),
+    ),
+  )
 }
 
 export async function triggerSchemaExtraction(

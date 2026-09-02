@@ -113,3 +113,14 @@ export async function testEmbeddingConfig(id: string, userId = currentUserId()):
     ),
   )
 }
+
+export async function verifyEmbeddingConfig(
+  payload: { baseUrl: string; model: string; apiKey: string },
+  userId = currentUserId(),
+): Promise<TestConnectionResult> {
+  return unwrap(
+    await asApiPromise<TestConnectionResult>(
+      http.post(`${PREFIX}/verify`, payload, { headers: headers(userId) }),
+    ),
+  )
+}

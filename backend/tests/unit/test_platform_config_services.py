@@ -213,3 +213,60 @@ def test_resolve_resources_empty_payload(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr("service.script_watermark.read_watermark", lambda did, sid: None)
     resolved = temporal_workflows._resolve_resources({}, "def-1", "load")
     assert resolved == {}
+
+
+def test_llm_config_serialization_is_camel_case(sqlite_session_factory) -> None:
+    """前端契约是 camelCase（baseUrl/isDefault/...）；llm 曾漏出 snake_case 导致地址列空白。"""
+    from service.llm_config import LlmConfigService
+
+    _seed(sqlite_session_factory)
+    service = LlmConfigService(sqlite_session_factory())
+    out = service.get_config("LLM-1")
+    assert out is not None
+    assert out["baseUrl"] == "http://llm"
+    assert out["isDefault"] is False
+    assert out["hasApiKey"] is True
+    assert out["apiKeyMasked"] == "••"  # key "lk" 长度 2，全部打码
+    assert "base_url" not in out and "is_default" not in out
+
+
+def test_verify_connection_without_api_key(sqlite_session_factory) -> None:
+    from service.embedding_config import EmbeddingConfigService
+    from service.llm_config import LlmConfigService
+
+    llm = LlmConfigService(sqlite_session_factory()).verify_connection(
+        base_url="http://llm", model="m", api_key=""
+    )
+    assert llm["ok"] is False and llm["error"] == "未填写 API Key"
+
+    emb = EmbeddingConfigService(sqlite_session_factory()).verify_connection(
+        base_url="http://emb", model="emb", api_key=""
+    )
+    assert emb["ok"] is False and emb["error"] == "未填写 API Key"
+
+
+def test_verify_connection_ping(monkeypatch: pytest.MonkeyPatch) -> None:
+    import service.llm_config as llm_module
+    from service.llm_config import LlmConfigService
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            return {"ok": True}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            pass
+
+        chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+    monkeypatch.setattr(llm_module, "OpenAI", FakeOpenAI)
+    ok_result = LlmConfigService(None).verify_connection("http://llm", "m", "k")
+    assert ok_result["ok"] is True and ok_result["latencyMs"] is not None
+
+    class BoomOpenAI:
+        def __init__(self, **kwargs):
+            raise RuntimeError("dial tcp refused")
+
+    monkeypatch.setattr(llm_module, "OpenAI", BoomOpenAI)
+    err_result = LlmConfigService(None).verify_connection("http://llm", "m", "k")
+    assert err_result["ok"] is False and "refused" in err_result["error"]

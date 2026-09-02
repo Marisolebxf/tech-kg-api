@@ -50,3 +50,11 @@ class TestConnectionResult(CamelModel):
     ok: bool
     latency_ms: int | None = None
     error: str | None = None
+
+
+class LlmConfigVerifyRequest(CamelModel):
+    """未保存前的连通性验证：直接用弹窗里的原始参数。"""
+
+    base_url: str = Field(min_length=1, max_length=256)
+    model: str = Field(min_length=1, max_length=128)
+    api_key: str = Field(min_length=1, max_length=256)

@@ -1,4 +1,4 @@
-"""Schema 属性管理（增删 + 目录级软删 + 管理员只读）集成测试。"""
+"""Schema 属性管理（新增 + 硬删除 + 管理员只读）集成测试。"""
 
 from __future__ import annotations
 
@@ -60,6 +60,10 @@ def property_api(monkeypatch):
     monkeypatch.setattr("service.schema_management.get_schema_s3_storage", lambda: storage)
     monkeypatch.delenv("SCHEMA_ALLOW_SYSTEM_DELETE", raising=False)
     monkeypatch.setenv("SCHEMA_AUTO_PROVENANCE", "false")
+    # 硬删除前置 guard 默认放行（无运行中抽取任务）；具体用例覆盖
+    monkeypatch.setattr(
+        "service.schema_management.find_running_extraction", lambda definition: None
+    )
 
     def set_actor(user_id: str, is_admin: bool) -> None:
         actor = _actor(user_id, is_admin)
@@ -72,7 +76,41 @@ def property_api(monkeypatch):
     engine.dispose()
 
 
-async def _create_entity(client: AsyncClient, *, name: str = "Widget") -> dict:
+def _fake_add_ddl(kind: str, name: str, prop: dict) -> dict:
+    return {
+        "statement": f"ALTER {'TAG' if kind == 'entity' else 'EDGE'} {name} ADD ({prop['name']} {prop['data_type']});",
+        "status": "succeeded",
+        "error": None,
+        "executed_at": "2026-09-02T00:00:00",
+    }
+
+
+def _patch_drop(
+    monkeypatch: pytest.MonkeyPatch,
+    columns: list[str] | None,
+    *,
+    status: str = "succeeded",
+    error: str | None = None,
+) -> None:
+    """patch 图库列存在性检查与 DROP DDL。columns=None 模拟对象不存在。"""
+
+    monkeypatch.setattr(
+        "service.schema_management.describe_schema_columns", lambda kind, name: columns
+    )
+    monkeypatch.setattr(
+        "service.schema_management.run_alter_drop_ddl",
+        lambda kind, name, prop: {
+            "statement": f"ALTER {'TAG' if kind == 'entity' else 'EDGE'} {name} DROP ({prop});",
+            "status": status,
+            "error": error,
+            "executed_at": "2026-09-02T00:00:00" if status == "succeeded" else None,
+        },
+    )
+
+
+async def _create_entity(
+    client: AsyncClient, *, name: str = "Widget", identity_key: str = ""
+) -> dict:
     response = await client.post(
         "/api/v1/schema-management/schemas/entities",
         json={
@@ -80,6 +118,7 @@ async def _create_entity(client: AsyncClient, *, name: str = "Widget") -> dict:
             "name": name,
             "label": name,
             "description": "",
+            "identityKey": identity_key,
             "properties": [
                 {"name": "widget_id", "dataType": "string", "required": True},
             ],
@@ -239,17 +278,13 @@ async def test_add_property_ddl_failure_rolls_back_catalog(
 
 
 @pytest.mark.asyncio
-async def test_delete_property_semantics(property_api, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_delete_property_hard_delete_semantics(
+    property_api, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _, _set_actor = property_api
-    monkeypatch.setattr(
-        "service.schema_management.run_alter_add_ddl",
-        lambda kind, name, prop: {
-            "statement": "ALTER ...",
-            "status": "succeeded",
-            "error": None,
-            "executed_at": None,
-        },
-    )
+    monkeypatch.setattr("service.schema_management.run_alter_add_ddl", _fake_add_ddl)
+    columns = ["id", "name", "create_time", "update_time", "source_table", "widget_id", "rank"]
+    _patch_drop(monkeypatch, columns)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         entity = await _create_entity(client)
         await client.post(
@@ -269,21 +304,22 @@ async def test_delete_property_semantics(property_api, monkeypatch: pytest.Monke
         )
         assert missing.status_code == 404
 
-        before = await _detail(client, entity["id"])
-        before_count = before["propertyCount"] if "propertyCount" in before else None
-        assert before_count is None  # detail 带 properties 列表，非 propertyCount
-
         deleted = await client.delete(
             f"/api/v1/schema-management/schemas/{entity['id']}/properties/rank"
         )
         assert deleted.status_code == 200
-        assert deleted.json()["data"] == {"deleted": True, "propertyName": "rank"}
+        data = deleted.json()["data"]
+        assert data["deleted"] is True
+        assert data["propertyName"] == "rank"
+        assert data["warnings"] == []
+        assert data["ddlStatus"] == "succeeded"
+        assert "ALTER TAG Widget DROP (rank)" in data["ddlStatement"]
 
-        # 列表过滤已删属性
+        # 目录行已物理删除
         after = await _detail(client, entity["id"])
         assert "rank" not in [p["name"] for p in after["properties"]]
 
-        # 列表（非 detail）的 propertyCount 同步过滤
+        # 列表（非 detail）的 propertyCount 同步
         listing = await client.get(
             "/api/v1/schema-management/schemas",
             params={"kind": "entity", "pageSize": 100},
@@ -291,28 +327,152 @@ async def test_delete_property_semantics(property_api, monkeypatch: pytest.Monke
         row = next(item for item in listing.json()["data"]["items"] if item["id"] == entity["id"])
         assert row["propertyCount"] == len(after["properties"])
 
-        # 再次删除已删属性 → 404
+        # 再次删除已删属性 → 404（目录行已物理删除）
         again = await client.delete(
             f"/api/v1/schema-management/schemas/{entity['id']}/properties/rank"
         )
         assert again.status_code == 404
 
-        # 软删后可复活（同名重新添加成功）
-        resurrect = await client.post(
+        # 硬删除后可重新新增同名属性（全新行，非复活）
+        readd = await client.post(
             f"/api/v1/schema-management/schemas/{entity['id']}/properties",
             json={"name": "rank", "dataType": "string"},
         )
-        assert resurrect.status_code == 201
+        assert readd.status_code == 201
         detail = await _detail(client, entity["id"])
         rank = next(p for p in detail["properties"] if p["name"] == "rank")
         assert rank["dataType"] == "string"
 
 
 @pytest.mark.asyncio
-async def test_stats_excludes_deleted_properties(property_api) -> None:
+async def test_add_delete_bump_property_revision(
+    property_api, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _, _set_actor = property_api
+    monkeypatch.setattr("service.schema_management.run_alter_add_ddl", _fake_add_ddl)
+    _patch_drop(monkeypatch, ["widget_id", "rank"])
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # 删除一个系统 schema 的非必选属性后，overview 的 propertyFields 应减少
+        entity = await _create_entity(client)
+        assert (await _detail(client, entity["id"]))["propertyRevision"] == 1
+
+        await client.post(
+            f"/api/v1/schema-management/schemas/{entity['id']}/properties",
+            json={"name": "rank", "dataType": "int64"},
+        )
+        assert (await _detail(client, entity["id"]))["propertyRevision"] == 2
+
+        response = await client.delete(
+            f"/api/v1/schema-management/schemas/{entity['id']}/properties/rank"
+        )
+        assert response.status_code == 200
+        assert (await _detail(client, entity["id"]))["propertyRevision"] == 3
+
+
+@pytest.mark.asyncio
+async def test_delete_property_running_task_blocked(
+    property_api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, _set_actor = property_api
+    _patch_drop(monkeypatch, ["widget_id", "rank"])
+    monkeypatch.setattr(
+        "service.schema_management.find_running_extraction",
+        lambda definition: {"executionId": "EXEC-1", "name": "Widget 平台喂数抽取"},
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        entity = await _create_entity(client)
+        response = await client.delete(
+            f"/api/v1/schema-management/schemas/{entity['id']}/properties/widget_id"
+        )
+        assert response.status_code == 409
+        assert "任务「Widget 平台喂数抽取」正在抽取该 Schema" in response.json()["detail"]
+        assert "任务中心" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_delete_property_collects_warnings(
+    property_api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, _set_actor = property_api
+    monkeypatch.setattr("service.schema_management.run_alter_add_ddl", _fake_add_ddl)
+    _patch_drop(monkeypatch, ["widget_id", "rank"])
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # identity_key 引用 rank：删除只警告不拦
+        entity = await _create_entity(client, identity_key="rank")
+        await client.post(
+            f"/api/v1/schema-management/schemas/{entity['id']}/properties",
+            json={"name": "rank", "dataType": "int64"},
+        )
+        response = await client.delete(
+            f"/api/v1/schema-management/schemas/{entity['id']}/properties/rank"
+        )
+        assert response.status_code == 200
+        warnings = response.json()["data"]["warnings"]
+        assert warnings and any("identity_key" in item for item in warnings)
+
+
+@pytest.mark.asyncio
+async def test_delete_property_ddl_failure_keeps_catalog(
+    property_api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, _set_actor = property_api
+    monkeypatch.setattr("service.schema_management.run_alter_add_ddl", _fake_add_ddl)
+    _patch_drop(
+        monkeypatch,
+        ["widget_id", "rank"],
+        status="failed",
+        error="SemanticError: conflicting index",
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        entity = await _create_entity(client)
+        await client.post(
+            f"/api/v1/schema-management/schemas/{entity['id']}/properties",
+            json={"name": "rank", "dataType": "int64"},
+        )
+        revision_before = (await _detail(client, entity["id"]))["propertyRevision"]
+
+        response = await client.delete(
+            f"/api/v1/schema-management/schemas/{entity['id']}/properties/rank"
+        )
+        assert response.status_code == 502
+        assert "conflicting index" in response.json()["detail"]
+
+        # 图库 DROP 失败：目录行与修订号都不动
+        detail = await _detail(client, entity["id"])
+        assert "rank" in [p["name"] for p in detail["properties"]]
+        assert detail["propertyRevision"] == revision_before
+
+
+@pytest.mark.asyncio
+async def test_delete_property_column_missing_skips_ddl(
+    property_api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, _set_actor = property_api
+    monkeypatch.setattr("service.schema_management.run_alter_add_ddl", _fake_add_ddl)
+    # DESCRIBE 结果不含 rank（system schema DDL 未跑过 / 已删过）
+    _patch_drop(monkeypatch, ["widget_id"])
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        entity = await _create_entity(client)
+        await client.post(
+            f"/api/v1/schema-management/schemas/{entity['id']}/properties",
+            json={"name": "rank", "dataType": "int64"},
+        )
+        response = await client.delete(
+            f"/api/v1/schema-management/schemas/{entity['id']}/properties/rank"
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["ddlStatus"] == "skipped"
+        assert data["ddlStatement"] is None
+        assert "rank" not in [
+            p["name"] for p in (await _detail(client, entity["id"]))["properties"]
+        ]
+
+
+@pytest.mark.asyncio
+async def test_stats_after_hard_delete(property_api, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, _set_actor = property_api
+    _patch_drop(monkeypatch, None)  # 图库对象不存在 → 跳 DDL 只删目录
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         overview_before = await client.get("/api/v1/schema-management/overview")
         before = overview_before.json()["data"]["propertyFields"]
 

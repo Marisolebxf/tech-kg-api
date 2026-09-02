@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from service.schema_management import (
     SchemaConflictError,
     SchemaManagementService,
+    _stale_behind,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,16 @@ logger = logging.getLogger(__name__)
 EXTRACT_WORKFLOW_TYPE = "kg.schema.extract"
 DEFAULT_BATCH_SIZE = 500
 MAX_BATCH_SIZE = 5000
+
+
+def extract_watermark_definition_ids(schema_key: str) -> list[str]:
+    """该 schema 抽取水位的 definition_id 候选（回填清水位用）。
+
+    抽取工作流按 ``schema-extract-{schema_key}``（原始 key）推水位，而执行记录
+    落库用的是 sanitized 变体（``extract_definition_id``）——两个都清，兜住
+    schema_key 含大写/特殊字符时的错位。
+    """
+    return sorted({f"schema-extract-{schema_key}", extract_definition_id(schema_key)})
 
 
 def extract_definition_id(schema_key: str) -> str:
@@ -111,6 +122,8 @@ def load_extract_schema(schema_id: str, *, session: Session | None = None) -> di
             "kind": row.kind,
             "name": row.name,
             "label": row.label,
+            "property_revision": row.property_revision,
+            "captured_revision": row.script.captured_revision if row.script else None,
         }
         return has_script, has_sources, info
 
@@ -162,10 +175,64 @@ class SchemaExtractionService:
         execution = await workflow_operations_service.execute_definition(
             definition, payload, persist_task=True
         )
-        return {
+        result = {
             "executionId": execution["id"],
             "workflowId": execution["workflowId"],
             "status": execution["status"],
+        }
+        # 下发检查：脚本落后于 Schema → 提示但放行（旧脚本永远跑不挂：
+        # 删掉的属性被 activeProps 过滤、新属性只是没人产出留 NULL）
+        stale_behind = _stale_behind(info.get("property_revision"), info.get("captured_revision"))
+        if stale_behind:
+            result["staleScript"] = True
+            result["staleBehind"] = stale_behind
+        return result
+
+    async def backfill(
+        self,
+        *,
+        schema_id: str,
+        user_id: str,
+        is_platform_admin: bool = False,
+        force: bool = False,
+        graph_space: str | None = None,
+        batch_size: int | None = None,
+    ) -> dict[str, Any]:
+        """回填历史数据：清空该 Schema 全部来源水位后全量重跑抽取。
+
+        merge_node/INSERT VERTEX 是 UPSERT：回填用源表当前值覆盖既有属性；
+        失败可直接重跑（清水位幂等）。脚本落后于 Schema 时回填可能无效
+        （脚本不产出新增属性，重跑完新列还是 NULL）——未带 ``force`` 时 409。
+        """
+        self._schema_service.assert_mutable(
+            schema_id,
+            user_id,
+            is_platform_admin=is_platform_admin,
+            denied_system_message="只有 Schema 管理员可以回填系统 Schema",
+            denied_owner_message="只能回填自己创建的 Schema",
+        )
+        info = load_extract_schema(schema_id, session=self._session)
+        stale_behind = _stale_behind(info.get("property_revision"), info.get("captured_revision"))
+        if stale_behind and not force:
+            raise SchemaConflictError(
+                f"当前脚本未覆盖最新属性（落后 {stale_behind} 版），"
+                "回填可能无效，请先更新脚本后再回填"
+            )
+
+        from service.script_watermark import clear_watermarks
+
+        cleared = clear_watermarks(extract_watermark_definition_ids(info["schema_key"]))
+        result = await self.trigger_extraction(
+            schema_id=schema_id,
+            user_id=user_id,
+            is_platform_admin=is_platform_admin,
+            graph_space=graph_space,
+            batch_size=batch_size,
+        )
+        return {
+            **result,
+            "watermarksCleared": cleared,
+            "forced": bool(force and stale_behind),
         }
 
 

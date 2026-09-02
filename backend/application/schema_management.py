@@ -50,6 +50,9 @@ class SchemaManagementApplication:
     async def trigger_extraction(self, **kwargs) -> dict[str, Any]:
         return await self._extraction.trigger_extraction(**kwargs)
 
+    async def backfill(self, **kwargs) -> dict[str, Any]:
+        return await self._extraction.backfill(**kwargs)
+
     def replace_script(self, **kwargs) -> dict[str, Any]:
         return self._service.replace_script(**kwargs)
 

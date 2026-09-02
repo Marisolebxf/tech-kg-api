@@ -25,7 +25,12 @@ from db_model.schema_management import (
 )
 from infra.llm import LLMClient, get_llm_client
 from infra.s3 import S3Storage, get_schema_s3_storage
-from service.schema_ddl import run_alter_add_ddl, run_schema_ddl
+from service.schema_ddl import (
+    describe_schema_columns,
+    run_alter_add_ddl,
+    run_alter_drop_ddl,
+    run_schema_ddl,
+)
 from service.script_security import review_script_security
 
 logger = logging.getLogger(__name__)
@@ -182,6 +187,41 @@ def _validate_datasource_exists(datasource_id: str) -> None:
 
     if get_mysql_settings_by_id(datasource_id) is None:
         raise SchemaConflictError(f"来源数据源不存在: {datasource_id}")
+
+
+def find_running_extraction(definition: GraphSchemaDefinition) -> dict[str, Any] | None:
+    """查该 Schema 是否有运行中的 kg.schema.extract 执行记录（删除属性前拦截用）。
+
+    返回 ``{executionId, name}``（name 为任务中心展示名）或 ``None``。
+    """
+    from service.schema_extraction import extract_definition_id
+    from service.workflow_repository import repository
+
+    executions = repository.list_executions(
+        definition_id=extract_definition_id(definition.schema_key), limit=100
+    )
+    for execution in executions:
+        if execution.get("status") != "RUNNING":
+            continue
+        if (execution.get("payload") or {}).get("schemaId") != definition.id:
+            continue
+        task_name = None
+        task_id = execution.get("taskId")
+        if task_id:
+            task = repository.get_task(task_id) or {}
+            task_name = task.get("objectName")
+        return {
+            "executionId": execution["id"],
+            "name": task_name or f"{definition.label} 平台喂数抽取",
+        }
+    return None
+
+
+def _stale_behind(property_revision: int | None, captured_revision: int | None) -> int:
+    """脚本落后版本数：未上传脚本（captured 为 None）或未落后返回 0。"""
+    if property_revision is None or captured_revision is None:
+        return 0
+    return max(int(property_revision) - int(captured_revision), 0)
 
 
 class SchemaManagementService:
@@ -600,6 +640,8 @@ class SchemaManagementService:
                         workflow_definition["id"] if workflow_definition else None
                     ),
                     "workflow_function_name": workflow_function_name,
+                    # 上传时快照属性修订号：脚本是否"落后于 Schema"由此判定
+                    "captured_revision": definition.property_revision,
                 },
             )
             self._session.commit()
@@ -639,33 +681,21 @@ class SchemaManagementService:
         definition = self.assert_mutable(schema_id, user_id, is_platform_admin=is_platform_admin)
         prop = SchemaPropertyInput(**payload)
 
-        existing = next((p for p in definition.properties if p.name == prop.name), None)
-        if existing is not None and not existing.is_deleted:
+        if any(p.name == prop.name for p in definition.properties):
             raise SchemaConflictError("属性名已存在")
 
         max_position = max((p.position for p in definition.properties), default=-1)
         try:
-            if existing is not None:
-                # 同名属性曾软删 → 复活（更新口径，清软删标记）
-                existing.data_type = prop.data_type
-                existing.required = prop.required
-                existing.rule = prop.rule
-                existing.category = prop.category
-                existing.is_deleted = False
-                existing.deleted_at = None
-                existing.position = max_position + 1
-            else:
-                definition.properties.append(
-                    GraphSchemaProperty(
-                        name=prop.name,
-                        data_type=prop.data_type,
-                        required=prop.required,
-                        rule=prop.rule,
-                        category=prop.category,
-                        position=max_position + 1,
-                        is_deleted=False,
-                    )
+            definition.properties.append(
+                GraphSchemaProperty(
+                    name=prop.name,
+                    data_type=prop.data_type,
+                    required=prop.required,
+                    rule=prop.rule,
+                    category=prop.category,
+                    position=max_position + 1,
                 )
+            )
             self._session.flush()
         except IntegrityError as exc:
             self._session.rollback()
@@ -676,6 +706,7 @@ class SchemaManagementService:
             self._session.rollback()
             raise SchemaDdlError(f"图 ALTER DDL 执行失败: {ddl_result['error']}")
 
+        definition.property_revision += 1
         try:
             self._session.commit()
         except Exception as exc:
@@ -699,21 +730,85 @@ class SchemaManagementService:
         user_id: str,
         is_platform_admin: bool = False,
     ) -> dict[str, Any]:
-        """目录级软删属性：置 is_deleted flag，**不发图 DDL**。
+        """硬删除属性：图库 ``ALTER ... DROP`` 物理删列 + 目录删行，不可逆。
 
-        图库 TAG/EDGE 列不动；后续抽取对已删属性插空/跳过（只写 activeProps），
-        查询按目录过滤掉已删属性。只有非必选（category != required）属性可删。
+        Guard 顺序：required 属性硬拦 → 运行中抽取任务硬拦（先去任务中心停止）→
+        业务引用（identity/关系表达式）只收集进 ``warnings`` 返回不拦。
+        列不存在（system schema DDL 未跑过 / 已删过）时跳过 DDL 只删目录行，
+        让目录与图库回到同一个事实源。成功后 ``property_revision += 1``。
         """
         definition = self.assert_mutable(schema_id, user_id, is_platform_admin=is_platform_admin)
         row = next((p for p in definition.properties if p.name == property_name), None)
-        if row is None or row.is_deleted:
+        if row is None:
             raise SchemaNotFoundError(f"属性不存在: {property_name}")
         if row.category == "required":
             raise SchemaConflictError("必选属性不可删除")
-        row.is_deleted = True
-        row.deleted_at = datetime.now()
-        self._session.commit()
-        return {"deleted": True, "propertyName": property_name}
+        running = find_running_extraction(definition)
+        if running is not None:
+            raise SchemaConflictError(
+                f"任务「{running['name']}」正在抽取该 Schema，请先到任务中心停止，任务结束后重试"
+            )
+        warnings = self._collect_property_warnings(definition, property_name)
+
+        ddl_statement: str | None = None
+        ddl_status = "skipped"
+        ddl_error: str | None = None
+        columns = describe_schema_columns(definition.kind, definition.name)
+        if columns and property_name in columns:
+            ddl_result = run_alter_drop_ddl(definition.kind, definition.name, property_name)
+            if ddl_result["status"] != "succeeded":
+                # 图库删列失败（如索引依赖）：目录不动，错误如实透出
+                raise SchemaDdlError(f"图 ALTER DDL 执行失败: {ddl_result['error']}")
+            ddl_statement = ddl_result["statement"]
+            ddl_status = ddl_result["status"]
+            ddl_error = ddl_result["error"]
+
+        definition.properties.remove(row)
+        definition.property_revision += 1
+        try:
+            self._session.commit()
+        except Exception as exc:
+            self._session.rollback()
+            if ddl_status == "succeeded":
+                # 极小概率坏状态：图库列已删但目录行还在，只告警不做自动补偿
+                logger.exception(
+                    "DROP 已成功但目录提交失败（目录有/图库无）: %s.%s",
+                    definition.name,
+                    property_name,
+                )
+            raise SchemaManagementError(f"属性删除失败: {exc}") from exc
+        return {
+            "deleted": True,
+            "propertyName": property_name,
+            "warnings": warnings,
+            "ddlStatement": ddl_statement,
+            "ddlStatus": ddl_status,
+            "ddlError": ddl_error,
+        }
+
+    def _collect_property_warnings(
+        self, definition: GraphSchemaDefinition, property_name: str
+    ) -> list[str]:
+        """收集属性被删除后可能失效的业务引用（substring 匹配，只警告不拦）。
+
+        - 本 definition 的 identity_key / attribute_identity_key；
+        - 引用该实体的关系的 source_expression / target_expression。
+        脚本内引用不扫（由脚本版本号机制提示）。
+        """
+        warnings: list[str] = []
+        for field in ("identity_key", "attribute_identity_key"):
+            if property_name in (getattr(definition, field) or ""):
+                warnings.append(f"本 Schema 的 {field} 引用了该属性，删除后唯一性判定可能失效")
+        for relation in self._dao.referencing_relations(definition.id):
+            for field, expression in (
+                ("source_expression", relation.source_expression),
+                ("target_expression", relation.target_expression),
+            ):
+                if property_name in (expression or ""):
+                    warnings.append(
+                        f"关系 {relation.name} 的 {field} 引用了该属性，删除后表达式可能失效"
+                    )
+        return warnings
 
     def replace_sources(
         self,
@@ -972,17 +1067,14 @@ class SchemaManagementService:
             ),
         }
         if detail:
+            result["propertyRevision"] = definition.property_revision
             result["properties"] = [
-                self._serialize_property(item)
-                for item in definition.properties
-                if not item.is_deleted
+                self._serialize_property(item) for item in definition.properties
             ]
             result["sources"] = [self._serialize_source(item) for item in definition.sources]
-            result["script"] = self._serialize_script(definition.script, definition.id)
+            result["script"] = self._serialize_script(definition.script, definition)
         else:
-            result["propertyCount"] = sum(
-                1 for item in definition.properties if not item.is_deleted
-            )
+            result["propertyCount"] = len(definition.properties)
             result["scriptFilename"] = (
                 definition.script.original_filename if definition.script else None
             )
@@ -1014,10 +1106,11 @@ class SchemaManagementService:
 
     @staticmethod
     def _serialize_script(
-        script: GraphSchemaScript | None, schema_id: str
+        script: GraphSchemaScript | None, definition: GraphSchemaDefinition
     ) -> dict[str, Any] | None:
         if script is None:
             return None
+        stale_behind = _stale_behind(definition.property_revision, script.captured_revision)
         return {
             "filename": script.original_filename,
             "contentType": script.content_type,
@@ -1028,7 +1121,12 @@ class SchemaManagementService:
             "uploadedAt": _iso(script.uploaded_at),
             "workflowDefinitionId": script.workflow_definition_id,
             "workflowFunctionName": script.workflow_function_name,
-            "downloadUrl": f"/api/v1/schema-management/schemas/{schema_id}/script",
+            "capturedRevision": script.captured_revision,
+            "lastRunStatus": script.last_run_status,
+            "lastRunError": script.last_run_error,
+            "stale": stale_behind > 0,
+            "staleBehind": stale_behind,
+            "downloadUrl": f"/api/v1/schema-management/schemas/{definition.id}/script",
         }
 
     @staticmethod

@@ -33,3 +33,6 @@ class LlmConfigApplication:
 
     def test_connection(self, config_id: str) -> dict:
         return self._service.test_connection(config_id)
+
+    def verify_connection(self, base_url: str, model: str, api_key: str) -> dict:
+        return self._service.verify_connection(base_url, model, api_key)

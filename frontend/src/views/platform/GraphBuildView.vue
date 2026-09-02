@@ -277,7 +277,8 @@ onMounted(loadData)
 .gb-filters{display:flex;align-items:center;gap:8px;font-weight:400}
 .gb-filters input{height:30px;width:200px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;font-size:12px}
 .gb-task-table{flex:1;min-height:0;overflow:auto}
-.gb-task-table table{width:100%;border-collapse:collapse;font-size:13px;line-height:22px}
+/* 9 列任务表在窄视口下禁止压扁列（否则中文逐字换行"竖排"）：列内容不足时横向滚动 */
+.gb-task-table table{width:100%;min-width:1200px;border-collapse:collapse;font-size:13px;line-height:22px}
 .gb-task-table th{position:sticky;z-index:2;top:0;padding:0 16px;height:40px;background:#f7f8fa;color:#1d2129;font-weight:500;text-align:left;white-space:nowrap}
 .gb-task-table td{height:40px;padding:0 16px;border-bottom:1px solid #e5edf8;color:#344763;vertical-align:middle}
 .gb-task-table tbody tr:hover td{background:#f4f8ff}
@@ -291,7 +292,7 @@ onMounted(loadData)
 .gb-job-actions button:disabled{opacity:.45;cursor:not-allowed}
 .empty{padding:40px 14px;text-align:center;color:#8290a7;font-size:12px}
 .muted{color:#8191aa;font-size:12px}
-span.ok,span.err,span.warn,span.run{display:inline-flex;align-items:center;gap:6px;font-size:14px;line-height:22px;border-radius:0;background:transparent;padding:0}
+span.ok,span.err,span.warn,span.run{display:inline-flex;align-items:center;gap:6px;font-size:14px;line-height:22px;border-radius:0;background:transparent;padding:0;white-space:nowrap}
 span.ok::before,span.err::before,span.warn::before,span.run::before{display:block;flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 span.ok{color:#067647}
 span.err{color:#b42318}

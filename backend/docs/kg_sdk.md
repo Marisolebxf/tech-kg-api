@@ -31,10 +31,10 @@ from kg_sdk import Context, current_context
 | 属性 | 类型 | 说明 |
 |---|---|---|
 | `ctx.mysql` | `infra.mysql.MySQLClient \| None` | 触发时所选 MySQL 数据源 + 库；未选则 `None`。可用 `.create_session()` / `.session_scope()` |
-| `ctx.graph` | `infra.graph_db.TRSGraphClient \| None` | 触发时所选图空间；构造时已 `connect()`。未选则 `None` |
-| `ctx.milvus` | `pymilvus.MilvusClient \| None` | 触发时所选 Milvus 配置 + 库；未选则 `None` |
-| `ctx.llm` | `infra.llm.LLMClient \| None` | 触发时所选 LLM（OpenAI 兼容，chat）；未选或缺 key 则 `None`。`.synthesize(prompt)` 返回 `str \| None` |
-| `ctx.embedding` | `infra.llm.EmbeddingClient \| None` | 触发时所选 embedding 模型；未选或缺 key 则 `None`。`.embed(texts)` / `.embed_one(text)` |
+| `ctx.graph` | `infra.graph_db.TRSGraphClient \| None` | 触发时所选图数据空间（NebulaGraph 图空间）；构造时已 `connect()`。未选则 `None` |
+| `ctx.milvus` | `pymilvus.MilvusClient \| None` | 触发时所选向量数据空间（Milvus 向量库）+ 库；未选则 `None` |
+| `ctx.llm` | `infra.llm.LLMClient \| None` | 触发时所选语言模型（OpenAI 兼容，chat）；未选或缺 key 则 `None`。`.synthesize(prompt)` 返回 `str \| None` |
+| `ctx.embedding` | `infra.llm.EmbeddingClient \| None` | 触发时所选向量模型（embedding）；未选或缺 key 则 `None`。`.embed(texts)` / `.embed_one(text)` |
 
 ### 增量游标与元数据
 
@@ -141,17 +141,17 @@ def workflow(payload):
 
 ## 7. 触发端字段名
 
-调用 `POST /api/v1/workflow-system/definitions/{id}/execute` 时，除 `payload` 外可选传以下字段（均为可选；不传 = 该资源走默认/env，对应 `ctx` 属性为 `None`）：
+调用 `POST /api/v1/workflow-system/definitions/{id}/execute` 时，除 `payload` 外可选传以下字段（均为可选；不传 = 该资源走默认/env，对应 `ctx` 属性为 `None`）。资源统一在**配置管理**页维护，共五个分类：**语言模型 / 向量模型 / MySQL 数据源 / 向量数据空间 / 图数据空间**；列表行内可直接 停用/启用、删除，右上角"＋ 新建配置"新增：
 
 | 字段 | 作用 |
 |---|---|
-| `mysqlDatasourceId` | 选 MySQL 数据源（配置页增删） |
+| `mysqlDatasourceId` | 选 MySQL 数据源（配置管理 → MySQL 数据源） |
 | `mysqlDatabase` | 覆盖该数据源的默认库（下拉从 `GET /mysql-datasources/{id}/databases` 取） |
-| `graphSpace` | 选图空间（`GET /graph-spaces` 列出） |
-| `milvusConfigId` | 选 Milvus 配置（配置页增删） |
+| `graphSpace` | 选图数据空间（配置管理 → 图数据空间，`GET /graph-spaces` 列出） |
+| `milvusConfigId` | 选向量数据空间（配置管理 → 向量数据空间，即 Milvus 向量库配置） |
 | `milvusDatabase` | 覆盖该配置的默认库（`GET /milvus-configs/{id}/databases`） |
-| `llmConfigId` | 选 LLM（配置页增删，OpenAI 兼容 chat 模型） |
-| `embeddingConfigId` | 选 embedding 模型（配置页增删） |
+| `llmConfigId` | 选语言模型（配置管理 → 语言模型，OpenAI 兼容 chat 模型） |
+| `embeddingConfigId` | 选向量模型（配置管理 → 向量模型） |
 | `since` | 业务自带的"起始时间"提示（透传进 payload，与 `watermark` 无关） |
 
 示例：

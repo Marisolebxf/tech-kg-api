@@ -37,16 +37,37 @@ def _to_out(cfg: LlmConfig) -> dict:
         "id": cfg.id,
         "name": cfg.name,
         "description": cfg.description,
-        "base_url": cfg.base_url,
+        "baseUrl": cfg.base_url,
         "model": cfg.model,
         "owner": cfg.owner,
-        "is_default": cfg.is_default,
+        "isDefault": cfg.is_default,
         "status": cfg.status,
-        "has_api_key": bool(cfg.api_key),
-        "api_key_masked": _mask_api_key(cfg.api_key),
-        "created_at": cfg.created_at,
-        "updated_at": cfg.updated_at,
+        "hasApiKey": bool(cfg.api_key),
+        "apiKeyMasked": _mask_api_key(cfg.api_key),
+        "createdAt": cfg.created_at,
+        "updatedAt": cfg.updated_at,
     }
+
+
+def _ping_llm(base_url: str, model: str, api_key: str) -> dict:
+    """真实调用一次 chat completion 验证连通性；返回 {ok, latencyMs, error}。"""
+    start = time.perf_counter()
+
+    def result(ok: bool, error: str | None) -> dict:
+        return {"ok": ok, "latencyMs": int((time.perf_counter() - start) * 1000), "error": error}
+
+    try:
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=DEFAULT_TIMEOUT)
+        client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=1,
+            extra_body={"thinking": {"type": "disabled"}},
+        )
+        return result(True, None)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("LLM 连接验证失败 base_url=%s model=%s: %s", base_url, model, exc)
+        return result(False, str(exc))
 
 
 class LlmConfigService:
@@ -126,28 +147,16 @@ class LlmConfigService:
     def test_connection(self, config_id: str) -> dict:
         row = self._dao.get(config_id)
         if row is None:
-            return {"ok": False, "latency_ms": None, "error": "配置不存在"}
+            return {"ok": False, "latencyMs": None, "error": "配置不存在"}
         if not row.api_key:
-            return {"ok": False, "latency_ms": None, "error": "未配置 API Key"}
-        start = time.perf_counter()
-        try:
-            client = OpenAI(
-                api_key=row.api_key,
-                base_url=row.base_url,
-                timeout=DEFAULT_TIMEOUT,
-            )
-            client.chat.completions.create(
-                model=row.model,
-                messages=[{"role": "user", "content": "ping"}],
-                max_tokens=1,
-                extra_body={"thinking": {"type": "disabled"}},
-            )
-            latency_ms = int((time.perf_counter() - start) * 1000)
-            return {"ok": True, "latency_ms": latency_ms, "error": None}
-        except Exception as exc:  # noqa: BLE001
-            latency_ms = int((time.perf_counter() - start) * 1000)
-            logger.warning("LLM 测试连接失败 id=%s: %s", config_id, exc)
-            return {"ok": False, "latency_ms": latency_ms, "error": str(exc)}
+            return {"ok": False, "latencyMs": None, "error": "未配置 API Key"}
+        return _ping_llm(row.base_url, row.model, row.api_key)
+
+    def verify_connection(self, base_url: str, model: str, api_key: str) -> dict:
+        """未保存前的验证：直接用弹窗里的原始参数探活。"""
+        if not api_key:
+            return {"ok": False, "latencyMs": None, "error": "未填写 API Key"}
+        return _ping_llm(base_url, model, api_key)
 
     def get_active_config(self) -> LlmConfig | None:
         """返回当前默认 LLM 配置；DB 无记录时返回 None（由调用方回退 env）。"""

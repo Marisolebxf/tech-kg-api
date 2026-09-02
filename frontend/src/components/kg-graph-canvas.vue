@@ -14,6 +14,7 @@ const props = withDefaults(
     selectedEdgeId?: string | null
     ariaLabel?: string
     nodeShape?: 'rect' | 'circle'
+    showEdgeLabels?: boolean
   }>(),
   {
     activeCategories: null,
@@ -21,6 +22,7 @@ const props = withDefaults(
     selectedEdgeId: null,
     ariaLabel: '知识图谱',
     nodeShape: 'circle',
+    showEdgeLabels: false,
   },
 )
 
@@ -135,6 +137,13 @@ function nodeRadius(node: GraphNodeData) {
 function displayLabel(node: GraphNodeData) {
   const max = 6
   return node.label.length > max ? `${node.label.slice(0, max)}…` : node.label
+}
+
+/** 边名称过长时截断，防止长关系名压住相邻元素；ASCII 名称（如 AUTHORED_BY）字符窄，放宽上限。 */
+function displayEdgeLabel(edge: GraphEdgeData) {
+  const label = edge.label
+  const max = /^[\x20-\x7e]+$/.test(label) ? 16 : 8
+  return label.length > max ? `${label.slice(0, max)}…` : label
 }
 
 function nodeBoundaryOffset(node: GraphNodeData, dx: number, dy: number, gap = 0) {
@@ -304,6 +313,12 @@ onUnmounted(() => {
             :y2="getLineCoords(edge)!.y2"
             @click.stop="handleEdgeClick(edge)"
           />
+          <text
+            v-if="showEdgeLabels && edge.label && getLineCoords(edge)"
+            :class="['platform-network-line__label', { 'is-dimmed': !isEdgeActive(edge) }]"
+            :x="(getLineCoords(edge)!.x1 + getLineCoords(edge)!.x2) / 2"
+            :y="(getLineCoords(edge)!.y1 + getLineCoords(edge)!.y2) / 2"
+          >{{ displayEdgeLabel(edge) }}</text>
         </template>
         <g
           v-for="node in laidOutNodes"
@@ -529,6 +544,24 @@ onUnmounted(() => {
   stroke-width: 14;
   cursor: pointer;
   pointer-events: stroke;
+}
+
+/* 边名称：白色描边光晕保证压在线上也清晰，不拦截点击（点击走 hit-area 线） */
+.platform-network-line__label {
+  fill: #4e5969;
+  font-size: 8px;
+  font-weight: 500;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: #fff;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.platform-network-line__label.is-dimmed {
+  opacity: 0.18;
 }
 
 .platform-node {

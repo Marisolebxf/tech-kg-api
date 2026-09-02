@@ -17,7 +17,7 @@
 ## 公共能力接口
 
 - `GET /kg-construction/options` —— 聚合前端测试参数弹窗的全部下拉项：学者/边（图）、企业（MySQL）、relationTypes/roles/dimensions/techFields/cpcCodes（catalog）。**每个数据源独立包裹**——某一个失败只返回 `[]`，不拖垮整个响应；
-- 图搜索、平台概览、配置管理（MySQL 数据源 / Milvus / LLM / embedding 配置 CRUD + 测连 + 列库）等支撑路由。
+- 图搜索、平台概览、配置管理等支撑路由。配置管理页分五个分类：**语言模型**（LLM）、**向量模型**（embedding）、**MySQL 数据源**、**向量数据空间**（Milvus 向量库）、**图数据空间**（NebulaGraph 图空间绑定）；均支持 CRUD + 测连 + 列库，列表行内可 停用/启用、删除。
 
 ## 参考子系统：重点关注科技企业关系
 

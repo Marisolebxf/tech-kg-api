@@ -103,3 +103,39 @@ def run_alter_add_ddl(kind: str, name: str, prop: dict[str, Any]) -> dict[str, A
         "error": error,
         "executed_at": datetime.now().isoformat() if status == "succeeded" else None,
     }
+
+
+def build_alter_drop_ddl(kind: str, name: str, prop_name: str) -> str:
+    """构建 ``ALTER TAG/EDGE <name> DROP (<prop>)`` nGQL（物理删列连带全量数据）。"""
+    keyword = "TAG" if kind == "entity" else "EDGE"
+    return f"ALTER {keyword} {name} DROP ({prop_name});"
+
+
+def run_alter_drop_ddl(kind: str, name: str, prop_name: str) -> dict[str, Any]:
+    """构建并执行属性删除 DDL，返回 ``{statement, status, error, executed_at}``。"""
+    ddl = build_alter_drop_ddl(kind, name, prop_name)
+    status, error = execute_schema_ddl(ddl)
+    return {
+        "statement": ddl,
+        "status": status,
+        "error": error,
+        "executed_at": datetime.now().isoformat() if status == "succeeded" else None,
+    }
+
+
+def describe_schema_columns(kind: str, name: str) -> list[str] | None:
+    """``DESCRIBE TAG/EDGE`` 列出图库属性列名；对象不存在/查询失败返回 ``None``。"""
+    keyword = "TAG" if kind == "entity" else "EDGE"
+    try:
+        client = get_trs_graph_client()
+        result = client.execute_query(f"DESCRIBE {keyword} {name};")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("DESCRIBE %s %s 失败: %s", keyword, name, exc)
+        return None
+    columns: list[str] = []
+    for record in result.records or []:
+        if isinstance(record, dict):
+            field = record.get("Field")
+            if field:
+                columns.append(str(field))
+    return columns

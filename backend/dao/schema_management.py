@@ -185,6 +185,17 @@ class SchemaManagementDAO:
         )
         return list(self.session.scalars(statement).all())
 
+    def referencing_relations(self, schema_id: str) -> list[GraphSchemaDefinition]:
+        """引用该实体的关系定义（删除属性时检查 source/target 表达式引用）。"""
+        statement = select(GraphSchemaDefinition).where(
+            GraphSchemaDefinition.kind == "relation",
+            or_(
+                GraphSchemaDefinition.source_schema_id == schema_id,
+                GraphSchemaDefinition.target_schema_id == schema_id,
+            ),
+        )
+        return list(self.session.scalars(statement).all())
+
     def delete(self, definition: GraphSchemaDefinition) -> None:
         self.session.delete(definition)
 
@@ -238,21 +249,13 @@ class SchemaManagementDAO:
             or 0
         )
         property_count = (
-            self.session.scalar(
-                select(func.count())
-                .select_from(GraphSchemaProperty)
-                .where(GraphSchemaProperty.is_deleted.is_(False))
-            )
-            or 0
+            self.session.scalar(select(func.count()).select_from(GraphSchemaProperty)) or 0
         )
         required_count = (
             self.session.scalar(
                 select(func.count())
                 .select_from(GraphSchemaProperty)
-                .where(
-                    GraphSchemaProperty.required.is_(True),
-                    GraphSchemaProperty.is_deleted.is_(False),
-                )
+                .where(GraphSchemaProperty.required.is_(True))
             )
             or 0
         )
@@ -260,10 +263,7 @@ class SchemaManagementDAO:
             self.session.scalar(
                 select(func.count())
                 .select_from(GraphSchemaProperty)
-                .where(
-                    GraphSchemaProperty.rule != "",
-                    GraphSchemaProperty.is_deleted.is_(False),
-                )
+                .where(GraphSchemaProperty.rule != "")
             )
             or 0
         )

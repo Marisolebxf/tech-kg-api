@@ -82,14 +82,12 @@ def plan_env(monkeypatch: pytest.MonkeyPatch):
             GraphSchemaProperty(
                 name="rank", data_type="int64", required=False, category="core", position=2
             ),
-            # 已软删属性不应进入 activeProps
             GraphSchemaProperty(
                 name="legacy",
                 data_type="string",
                 required=False,
                 category="core",
                 position=3,
-                is_deleted=True,
             ),
         ]
         definition.sources = [
@@ -124,11 +122,12 @@ def plan_env(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-async def test_load_schema_extract_plan_filters_deleted(plan_env) -> None:
+async def test_load_schema_extract_plan_includes_all_properties(plan_env) -> None:
+    """软删退役：activeProps 为目录属性全集（用户脚本多出的列写图前再剔除兜底）。"""
     plan = await load_schema_extract_plan("schema-1")
     assert plan["kind"] == "entity"
     assert plan["name"] == "Widget"
-    assert plan["activeProps"] == ["id", "name", "rank"]
+    assert plan["activeProps"] == ["id", "name", "rank", "legacy"]
     assert plan["sources"] == [
         {
             "id": plan["sources"][0]["id"],

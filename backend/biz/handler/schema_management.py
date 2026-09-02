@@ -18,6 +18,7 @@ from biz.schemas.common import ApiResponse
 from biz.schemas.schema_management import (
     EntitySchemaCreate,
     RelationSchemaCreate,
+    SchemaBackfillRequest,
     SchemaExtractRequest,
     SchemaPropertyInput,
     SchemaSourcesReplace,
@@ -197,7 +198,11 @@ def delete_schema_property(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
 ) -> ApiResponse:
-    """目录级软删属性：置 is_deleted flag，不发图 DDL。必选属性不可删除。"""
+    """硬删除属性：图库 ALTER DROP 物理删列 + 目录删行，不可逆。
+
+    required 属性与运行中抽取任务硬拦（409）；identity/关系表达式引用只随
+    ``warnings`` 警告。列不存在时跳过 DDL 只删目录行。
+    """
     try:
         data = _application(session).delete_property(
             schema_id=schema_id,
@@ -250,6 +255,32 @@ async def trigger_schema_extraction(
             batch_size=payload.batch_size if payload else None,
         )
         return ApiResponse(data=data, msg="抽取已触发")
+    except SchemaManagementError as exc:
+        _raise_domain_error(exc)
+
+
+@router.post("/schemas/{schema_id}/backfill", response_model=ApiResponse, status_code=201)
+async def backfill_schema_history(
+    schema_id: str,
+    actor: CurrentActor,
+    session: Annotated[Session, Depends(get_workflow_session)],
+    payload: SchemaBackfillRequest | None = None,
+) -> ApiResponse:
+    """回填历史数据：清空该 Schema 全部来源水位后触发全量重跑（可反复执行）。
+
+    前置同触发抽取（已上传脚本 + ≥1 来源绑定）。脚本落后于 Schema 时回填可能
+    无效，未带 ``force`` 返回 409，前端强确认后带 force 重发。
+    """
+    try:
+        data = await _application(session).backfill(
+            schema_id=schema_id,
+            user_id=actor.user_id,
+            is_platform_admin=actor.is_admin,
+            force=payload.force if payload else False,
+            graph_space=payload.graph_space if payload else None,
+            batch_size=payload.batch_size if payload else None,
+        )
+        return ApiResponse(data=data, msg="历史数据回填已触发")
     except SchemaManagementError as exc:
         _raise_domain_error(exc)
 

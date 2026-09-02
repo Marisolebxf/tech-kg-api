@@ -29,3 +29,11 @@ class EmbeddingConfigUpdate(CamelModel):
     owner: str | None = Field(default=None, max_length=128)
     is_default: bool | None = None
     status: str | None = Field(default=None, max_length=32)
+
+
+class EmbeddingConfigVerifyRequest(CamelModel):
+    """未保存前的连通性验证：直接用弹窗里的原始参数。"""
+
+    base_url: str = Field(min_length=1, max_length=256)
+    model: str = Field(min_length=1, max_length=128)
+    api_key: str = Field(min_length=1, max_length=256)

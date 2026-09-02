@@ -26,6 +26,22 @@ def _mask_api_key(api_key: str) -> str:
     return f"••••••••{api_key[-4:]}"
 
 
+def _ping_embedding(base_url: str, model: str, api_key: str) -> dict[str, Any]:
+    """真实调用一次 embeddings 验证连通性；返回 {ok, latencyMs, error}。"""
+    start = time.perf_counter()
+
+    def result(ok: bool, error: str | None) -> dict[str, Any]:
+        return {"ok": ok, "latencyMs": int((time.perf_counter() - start) * 1000), "error": error}
+
+    try:
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=DEFAULT_TIMEOUT)
+        client.embeddings.create(model=model, input="ping")
+        return result(True, None)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("embedding 连接验证失败 base_url=%s model=%s: %s", base_url, model, exc)
+        return result(False, str(exc))
+
+
 def _to_out(cfg: EmbeddingConfig) -> dict[str, Any]:
     return {
         "id": cfg.id,
@@ -130,16 +146,13 @@ class EmbeddingConfigService:
             return {"ok": False, "latencyMs": None, "error": "配置不存在"}
         if not row.api_key:
             return {"ok": False, "latencyMs": None, "error": "未配置 API Key"}
-        start = time.perf_counter()
-        try:
-            client = OpenAI(api_key=row.api_key, base_url=row.base_url, timeout=DEFAULT_TIMEOUT)
-            client.embeddings.create(model=row.model, input="ping")
-            latency_ms = int((time.perf_counter() - start) * 1000)
-            return {"ok": True, "latencyMs": latency_ms, "error": None}
-        except Exception as exc:  # noqa: BLE001
-            latency_ms = int((time.perf_counter() - start) * 1000)
-            logger.warning("embedding 测试连接失败 id=%s: %s", config_id, exc)
-            return {"ok": False, "latencyMs": latency_ms, "error": str(exc)}
+        return _ping_embedding(row.base_url, row.model, row.api_key)
+
+    def verify_connection(self, base_url: str, model: str, api_key: str) -> dict[str, Any]:
+        """未保存前的验证：直接用弹窗里的原始参数探活。"""
+        if not api_key:
+            return {"ok": False, "latencyMs": None, "error": "未填写 API Key"}
+        return _ping_embedding(base_url, model, api_key)
 
 
 def get_embedding_settings_by_id(config_id: str | None) -> dict[str, Any] | None:

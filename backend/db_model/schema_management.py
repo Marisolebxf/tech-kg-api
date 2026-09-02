@@ -72,6 +72,9 @@ class GraphSchemaDefinition(Base):
     )
     ddl_error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     ddl_executed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 属性修订号：增/删属性 +1，与展示口径 version（v1.0 式）互不复用；
+    # 脚本上传时快照到 kg_schema_script.captured_revision，用于"脚本落后于 Schema"判定
+    property_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
@@ -124,8 +127,8 @@ class GraphSchemaProperty(Base):
     rule: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     category: Mapped[str] = mapped_column(String(16), nullable=False, default="core")
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # 目录级软删 flag：删除属性只标记目录（不动图库 schema），
-    # 后续抽取跳过已删属性、查询按目录过滤。只有非必选属性可删。
+    # 软删已退役（属性删除改为目录删行 + 图库 ALTER DROP 的硬删除）：
+    # 列与库表保留仅为兼容存量库，代码不再读写
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -174,6 +177,11 @@ class GraphSchemaScript(Base):
     uploaded_by: Mapped[str] = mapped_column(String(128), nullable=False)
     workflow_definition_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     workflow_function_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # 上传时快照的 property_revision：落后于当前修订号即"脚本未覆盖最新属性"
+    captured_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # 抽取工作流收尾回写的健康信号：none（未跑过）/ ok / failed
+    last_run_status: Mapped[str] = mapped_column(String(16), nullable=False, default="none")
+    last_run_error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     safety_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     safety_issues: Mapped[str] = mapped_column(Text, nullable=False, default="")
     uploaded_at: Mapped[datetime] = mapped_column(

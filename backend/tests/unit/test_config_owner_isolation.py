@@ -211,7 +211,7 @@ async def test_set_default_scoped_to_owner(session_factory) -> None:
             await client.post("/api/v1/llm-config/llm-configs/LLM-B1/set-default")
         ).status_code == 200
         resp = await client.get("/api/v1/llm-config/llm-configs")
-        defaults = {item["id"] for item in resp.json()["data"] if item["is_default"]}
+        defaults = {item["id"] for item in resp.json()["data"] if item["isDefault"]}
         assert defaults == {"LLM-B1"}
 
     s = session_factory()

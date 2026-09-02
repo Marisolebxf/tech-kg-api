@@ -45,4 +45,4 @@ flush_access_sidecar() -> None   # 把当前报告落盘到 KG_ACCESS_LOG 指向
 - **手写读取循环、不走 `ctx.mysql`** 的 legacy 路径：不会进报告；
 - **单测**里断言访问行为：`reset_access_report()` → 跑代码 → `access_report()`。
 
-相关端点：任务详情接口返回的执行记录里携带各 step 的 access report；前端任务中心据此展示「本次运行访问了哪些表 / 图空间 / collection」。
+相关端点：任务详情接口返回的执行记录里携带各 step 的 access report；前端任务中心据此展示「本次运行访问了哪些表 / 图数据空间 / collection」。

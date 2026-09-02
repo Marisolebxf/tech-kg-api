@@ -5,6 +5,7 @@ import python from 'highlight.js/lib/languages/python'
 import 'highlight.js/styles/github-dark.css'
 import {
   addSchemaProperty,
+  backfillSchemaHistory,
   createEntitySchema,
   createRelationSchema,
   deleteSchema,
@@ -23,6 +24,7 @@ import {
   type SchemaDefinition,
   type SchemaOverview,
   type SchemaProperty,
+  type SchemaScript,
 } from '../../api/schemaManagement'
 import { currentUserId as getCurrentUserId } from '../../api/currentUser'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
@@ -112,7 +114,7 @@ const createFormRules = {
 }
 const creating = ref(false)
 const confirming = ref(false)
-const scriptByRow = ref<Record<string, { name: string; workflowDefinitionId: string | null }>>({})
+const scriptByRow = ref<Record<string, SchemaScript>>({})
 
 // Schema 拓扑总览（实体 -关系-> 实体 元图谱）
 const topologyNodes = ref<GraphNodeData[]>([])
@@ -214,12 +216,59 @@ const sourcesForm = ref<SourceBindingRow[]>([])
 const sourcesSaving = ref(false)
 const extracting = ref(false)
 
+// 回填历史数据（清空来源水位全量重跑）；脚本落后于 Schema 时需强确认
+const backfilling = ref(false)
+const backfillConfirmOpen = ref(false)
+
+async function requestBackfill() {
+  const target = sourcesTarget.value
+  if (!target || backfilling.value || extracting.value) return
+  if (target.script?.stale) {
+    backfillConfirmOpen.value = true
+    return
+  }
+  await runBackfill(false)
+}
+
+async function runBackfill(force: boolean) {
+  const target = sourcesTarget.value
+  if (!target || backfilling.value) return
+  backfilling.value = true
+  try {
+    const result = await backfillSchemaHistory(target.id, currentUserId, { force })
+    showToast(
+      `回填已触发（执行 ${result.executionId}，重置 ${result.watermarksCleared} 个来源水位），可在任务中心查看进度`,
+      'success',
+    )
+    backfillConfirmOpen.value = false
+    sourcesModalOpen.value = false
+  } catch (error) {
+    const message = schemaErrorMessage(error)
+    // 列表数据可能过期：后端判定脚本已落后 → 升级为强确认
+    if (!force && message.includes('回填可能无效')) {
+      backfillConfirmOpen.value = true
+      return
+    }
+    showToast(message, 'warning')
+  } finally {
+    backfilling.value = false
+  }
+}
+
 async function triggerExtraction(schema: SchemaDefinition) {
   if (extracting.value) return null
   extracting.value = true
   try {
     const result = await triggerSchemaExtraction(schema.id, currentUserId)
-    showToast(`抽取已触发（执行 ${result.executionId}），可在任务中心查看进度`, 'success')
+    if (result.staleScript) {
+      showToast(
+        `抽取已触发（执行 ${result.executionId}），但当前脚本落后于 Schema ${result.staleBehind} 版：` +
+          '新增属性不会被产出、已删属性不再写入，建议更新脚本后回填历史数据',
+        'warning',
+      )
+    } else {
+      showToast(`抽取已触发（执行 ${result.executionId}），可在任务中心查看进度`, 'success')
+    }
     return result
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
@@ -358,8 +407,16 @@ async function confirmDeleteProperty() {
   if (!target || !prop || propertyDeleting.value) return
   propertyDeleting.value = true
   try {
-    await deleteSchemaProperty(target.id, prop.name, currentUserId)
-    showToast(`属性 ${prop.name} 已从目录删除`, 'success')
+    const result = await deleteSchemaProperty(target.id, prop.name, currentUserId)
+    if (result.warnings?.length) {
+      showToast(`属性 ${prop.name} 已删除，但存在引用警告：${result.warnings.join('；')}`, 'warning')
+    } else {
+      const ddlNote =
+        result.ddlStatus === 'succeeded'
+          ? '图库列及其全部数据已删除'
+          : '图库未找到该列，仅删除目录记录'
+      showToast(`属性 ${prop.name} 已删除（${ddlNote}）`, 'success')
+    }
     propertyDeleteConfirmOpen.value = false
     propertyDeleteTarget.value = null
     await refreshPropertyTarget()
@@ -481,13 +538,7 @@ function applyDefinitions(definitions: SchemaDefinition[]) {
   scriptByRow.value = Object.fromEntries(
     definitions
       .filter((item) => item.script)
-      .map((item) => [
-        item.name,
-        {
-          name: item.script!.filename,
-          workflowDefinitionId: item.script!.workflowDefinitionId,
-        },
-      ]),
+      .map((item) => [item.name, item.script as SchemaScript]),
   )
 }
 
@@ -758,6 +809,7 @@ function togglePropertyDetail(schemaId: string): void {
           v-if="topologyNodes.length"
           :nodes="topologyNodes"
           :edges="topologyEdges"
+          show-edge-labels
           aria-label="Schema 实体关系拓扑"
         />
         <div v-else class="schema-topology-canvas__empty">暂无实体 Schema，新增后此处将展示实体 -关系-> 实体元图谱</div>
@@ -768,9 +820,9 @@ function togglePropertyDetail(schemaId: string): void {
       <nav class="schema-tabs"><button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="activeTab=tab;keyword=''">{{ tab }}</button></nav>
       <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong></div><div class="schema-toolbar__actions"><button class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" :placeholder="`搜索${activeTab}`" /></label></div></div>
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in filteredEntities" :key="row.name"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.description }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : (row.schema.isSystem ? '系统内置，不可删除' : '被关系引用，不可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="5"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in filteredEntities" :key="row.name"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.description }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : (row.schema.isSystem ? '系统内置，不可删除' : '被关系引用，不可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="5"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
 
-      <div v-else class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in filteredRelations" :key="row.name"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="7"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
+      <div v-else class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in filteredRelations" :key="row.name"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="7"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
 
       <!-- 版本记录（已隐藏）
       <div v-else class="schema-table-wrap schema-version-table"><table><thead><tr><th>版本</th><th>状态</th><th>发布时间</th><th>实体范围</th><th>关系范围</th><th>变更内容</th><th>发布人</th><th>操作</th></tr></thead><tbody><tr v-for="row in schemaVersions" :key="row.version"><td><code>{{ row.version }}</code></td><td><span :class="row.status === '当前版本' ? 'core' : 'support'">{{ row.status }}</span></td><td>{{ row.time }}</td><td>{{ row.entities }}</td><td>{{ row.relations }}</td><td>{{ row.change }}</td><td>{{ row.publisher }}</td><td><div class="schema-version-actions"><button type="button" @click="schemaVersionMessage = `已打开 ${row.version} 的完整变更清单。`">变更详情</button><button v-if="row.status !== '当前版本'" class="danger" type="button" @click="schemaVersionMessage = `已创建回退至 ${row.version} 的申请，通过影响分析与审批后才会执行。`">申请回退</button></div></td></tr></tbody></table></div>
@@ -931,12 +983,12 @@ function togglePropertyDetail(schemaId: string): void {
         <aside class="schema-modal__panel schema-delete-panel">
           <header><h2>删除属性</h2><button type="button" @click="propertyDeleteConfirmOpen = false">×</button></header>
           <div class="schema-modal__body">
-            <p class="schema-delete-text">确认删除属性 <b><code>{{ propertyDeleteTarget.name }}</code></b>（{{ propertyTarget?.label || propertyTarget?.name }}）？</p>
-            <p class="schema-delete-note">仅在目录中标记为已删：后续抽取不再写入该属性、查询不再返回；图库 TAG/EDGE 中的对应列不会被删除；如需恢复可重新新增同名属性。</p>
+            <p class="schema-delete-text">确认删除属性 <b><code>{{ propertyDeleteTarget.name }}</code></b>（{{ propertyTarget?.label || propertyTarget?.name }}）？<b class="danger-text">此操作不可逆。</b></p>
+            <p class="schema-delete-note">将删除图库中该属性列及其全部数据（ALTER ... DROP），并从 Schema 目录移除；如有运行中的抽取任务会被拦截，请先到任务中心停止。</p>
           </div>
           <footer>
             <button type="button" @click="propertyDeleteConfirmOpen = false">取消</button>
-            <button type="button" class="danger" :disabled="propertyDeleting" @click="confirmDeleteProperty">{{ propertyDeleting ? '删除中...' : '确认删除' }}</button>
+            <button type="button" class="danger" :disabled="propertyDeleting" @click="confirmDeleteProperty">{{ propertyDeleting ? '删除中...' : '确认删除（不可逆）' }}</button>
           </footer>
         </aside>
       </div>
@@ -948,13 +1000,31 @@ function togglePropertyDetail(schemaId: string): void {
         <aside class="schema-modal__panel sources-panel">
           <header><h2>来源表 · {{ sourcesTarget?.label || sourcesTarget?.name }}</h2><button type="button" @click="sourcesModalOpen = false">×</button></header>
           <div class="schema-modal__body">
-            <p class="sources-note">绑定来源表后，可通过「触发抽取」让平台按各表独立的时间列水位分批读取行数据交给脚本转换并写入图谱；每张表可独立并行推进。</p>
+            <p class="sources-note">绑定来源表后，可通过「触发抽取」让平台按各表独立的时间列水位分批读取行数据交给脚本转换并写入图谱；每张表可独立并行推进。「回填历史数据」会清空全部来源水位后全量重跑（新属性对历史数据的补齐需脚本先覆盖该属性）。</p>
             <SourceBindings v-model="sourcesForm" />
           </div>
           <footer>
             <button type="button" @click="sourcesModalOpen = false">取消</button>
             <button type="button" :disabled="sourcesSaving || extracting" @click="saveSources">{{ sourcesSaving ? '保存中...' : '仅保存绑定' }}</button>
             <button type="button" class="primary" :disabled="sourcesSaving || extracting" @click="triggerExtractionFromSources">{{ extracting ? '抽取中...' : '保存并触发抽取' }}</button>
+            <button type="button" :disabled="sourcesSaving || extracting || backfilling" @click="requestBackfill">{{ backfilling ? '回填中...' : '回填历史数据' }}</button>
+          </footer>
+        </aside>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="backfillConfirmOpen" class="schema-modal backfill-confirm-modal">
+        <button class="schema-modal__mask" type="button" @click="backfillConfirmOpen = false"></button>
+        <aside class="schema-modal__panel schema-delete-panel">
+          <header><h2>回填历史数据</h2><button type="button" @click="backfillConfirmOpen = false">×</button></header>
+          <div class="schema-modal__body">
+            <p class="schema-delete-text">当前脚本未覆盖最新属性（落后 {{ sourcesTarget?.script?.staleBehind || 1 }} 版），回填可能无效。</p>
+            <p class="schema-delete-note">脚本不产出新增属性，全量重跑后新列仍为 NULL。建议先更新脚本（更新后角标消失）再回填；确认仍要回填请点击「仍要回填」。</p>
+          </div>
+          <footer>
+            <button type="button" @click="backfillConfirmOpen = false">取消</button>
+            <button type="button" class="danger" :disabled="backfilling" @click="runBackfill(true)">{{ backfilling ? '回填中...' : '仍要回填' }}</button>
           </footer>
         </aside>
       </div>
@@ -967,7 +1037,7 @@ function togglePropertyDetail(schemaId: string): void {
           <header><h2>触发重新抽取</h2><button type="button" @click="propertyExtractConfirmOpen = false">×</button></header>
           <div class="schema-modal__body">
             <p class="schema-delete-text">Schema 属性已变更，是否立即触发重新抽取？</p>
-            <p class="schema-delete-note">平台将按各来源表的时间列水位分批读取行数据，交给脚本转换后 merge 写入图谱（已删除属性不再写入）。</p>
+            <p class="schema-delete-note">本次抽取按时间列水位只处理增量数据：新增属性对历史数据不生效（留 NULL）、已删属性不再写入。如需为历史数据补齐新属性，请到「来源表 → 回填历史数据」全量重跑。</p>
           </div>
           <footer>
             <button type="button" @click="propertyExtractConfirmOpen = false">稍后再说</button>
@@ -1142,6 +1212,11 @@ function togglePropertyDetail(schemaId: string): void {
 .schema-delete-panel{max-width:420px}
 .schema-delete-text{margin:0;font-size:13px;line-height:22px;color:#1d2129}
 .schema-delete-note{margin:0;font-size:11px;line-height:18px;color:#86909c}
+.danger-text{color:#e5484d}
+
+/* 脚本双信号角标：落后于 Schema / 上次运行失败 */
+.script-badge{display:inline-flex;align-items:center;padding:1px 7px;border-radius:999px;background:#fff7e8;color:#b54708;font-size:10px;line-height:16px;white-space:nowrap}
+.script-badge--failed{background:#fef3f2;color:#b42318}
 
 /* 属性管理弹窗 */
 .property-panel{width:min(640px,100%)}

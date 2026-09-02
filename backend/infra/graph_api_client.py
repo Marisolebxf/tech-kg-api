@@ -60,6 +60,7 @@ class GraphAPIClient:
 
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self._http = http_client
+        self._node_cache: dict[tuple[str, str | None], dict[str, Any] | None] = {}
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """GET ``/api/v1/graph-search{path}``。
@@ -128,13 +129,19 @@ class GraphAPIClient:
     # ------------- 图查询原子能力 -------------
     async def get_node(self, vid: str, *, space: str | None = None) -> dict[str, Any] | None:
         """按 VID 取节点详情。节点不存在时返回 ``None``。"""
+        cache_key = (vid, space)
+        if cache_key in self._node_cache:
+            return self._node_cache[cache_key]
         params = {"space": space} if space else None
         try:
-            return await self._get(f"/nodes/{vid}", params=params)
+            node = await self._get(f"/nodes/{vid}", params=params)
         except GraphAPIError as exc:
             if exc.status_code == 404:
+                self._node_cache[cache_key] = None
                 return None
             raise
+        self._node_cache[cache_key] = node
+        return node
 
     async def list_nodes(
         self,

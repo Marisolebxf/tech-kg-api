@@ -185,7 +185,16 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                 if industry_kw and not anchor and not any(layer["items"] for layer in layers):
                     layers, seed_vids = await self._fetch_layers(client, None, top_k, True)
                     fallback_reason = "keyword_fallback_overview"
-                graph = await self._fetch_graph(client, seed_vids, anchor, depth)
+                if rel_types:
+                    graph = await self._fetch_graph(
+                        client,
+                        seed_vids,
+                        anchor,
+                        depth,
+                        relation_types=rel_types,
+                    )
+                else:
+                    graph = await self._fetch_graph(client, seed_vids, anchor, depth)
                 graph = self._filter_graph_by_relation_types(graph, rel_types)
                 query_input["anchorId"] = anchor or ""
         except GraphAPIError as exc:
@@ -664,6 +673,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         seed_vids: list[str],
         anchor_id: str | None,
         depth: int,
+        relation_types: list[str] | None = None,
     ) -> dict[str, list[Any]]:
         """以锚点或首个可寻址实体为中心扩展子图。
 
@@ -691,14 +701,28 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
         # 多 seed 子图互相独立，并行拉取（套 semaphore 防压垮 trs-graph）；
         # 单 seed 失败 except GraphAPIError → None 跳过，合并后统一去重，结果不变。
-        async def _fetch_one(seed_vid: str) -> dict[str, Any] | None:
+        async def _fetch_one(seed_vid: str, edge_type: str | None = None) -> dict[str, Any] | None:
             async with _graph_api_semaphore:
                 try:
-                    return await client.get_subgraph(seed_vid, depth=depth, limit=60)
+                    return await client.get_subgraph(
+                        seed_vid,
+                        depth=depth,
+                        limit=60,
+                        edge_type=edge_type,
+                    )
                 except GraphAPIError:
                     return None
 
-        subgraphs = await asyncio.gather(*[_fetch_one(s) for s in seeds])
+        pushed_edge_types = (
+            relation_types if relation_types and len(relation_types) == 1 else [None]
+        )
+        subgraphs = await asyncio.gather(
+            *[
+                _fetch_one(seed_vid, edge_type)
+                for seed_vid in seeds
+                for edge_type in pushed_edge_types
+            ]
+        )
         for subgraph in subgraphs:
             if not subgraph:
                 continue

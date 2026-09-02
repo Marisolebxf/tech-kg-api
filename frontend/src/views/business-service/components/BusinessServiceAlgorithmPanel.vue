@@ -1831,11 +1831,11 @@ function computePanoramaSummaryRows(
     if (!layer) return "—";
     if (!layer.items.length) return `${layer.title} · 0`;
     const names = layer.items
-      .slice(0, 5)
+      .slice(0, 1)
       .map((item: PanoramaKeyEntity) => item.label)
       .join("、");
     const suffix =
-      layer.items.length > 5
+      layer.items.length > 1
         ? ` 等 ${layer.total} 项`
         : ` · 共 ${layer.total} 项`;
     return `${names}${suffix}`;

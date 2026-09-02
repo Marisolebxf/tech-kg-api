@@ -1,4 +1,4 @@
-export type ReviewStatus = '待处理' | '已完成' | '已撤销' | '已驳回'
+export type ReviewStatus = '待处理' | '已完成' | '已撤销' | '已驳回' | '重跑中' | '重跑失败'
 export type ReviewPriority = 'P0' | 'P1' | 'P2'
 
 export type ReviewBatch = {

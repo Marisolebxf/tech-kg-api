@@ -980,6 +980,7 @@ class WorkflowRepository:
         definition_id: str | None = None,
         schedule_id: str | None = None,
         job_id: str | None = None,
+        trigger_source: str | None = None,
     ) -> list[dict[str, Any]]:
         with workflow_session_scope() as session:
             stmt = select(WorkflowExecution).order_by(WorkflowExecution.started_at.desc())
@@ -987,11 +988,15 @@ class WorkflowRepository:
                 stmt = stmt.where(WorkflowExecution.definition_id == definition_id)
             if job_id:
                 stmt = stmt.where(WorkflowExecution.job_id == job_id)
-            rows = session.scalars(stmt.limit(limit if not schedule_id else 500)).all()
+            # scheduleId/triggerSource 只存 payload JSON 里，取较多行后内存过滤；
+            # 非 RERUN 执行超过 500 条时较旧的匹配会被截断（当前量小可接受）
+            scan_limit = limit if not (schedule_id or trigger_source) else 500
+            rows = session.scalars(stmt.limit(scan_limit)).all()
             items = [json.loads(row.payload) for row in rows]
             if schedule_id:
-                # scheduleId 存在 payload JSON 里，取较多行后内存过滤
                 items = [item for item in items if item.get("scheduleId") == schedule_id]
+            if trigger_source:
+                items = [item for item in items if item.get("triggerSource") == trigger_source]
             return items[:limit]
 
     def save_job(self, job: dict[str, Any]) -> None:

@@ -4724,6 +4724,14 @@ const pageMeta = computed(() => {
         </article>
       </section>
 
+      <section class="kg-panel platform-structure-overview">
+        <div class="kg-panel__header"><div><h2 class="kg-panel__title">当前图谱资产</h2></div><span>实体 {{ entityAssetOverview?.total ?? '--' }} · 关系 {{ relationAssetOverview?.total ?? '--' }} · 数据截至 {{ overviewMeta.updatedAt }}</span></div>
+        <div class="platform-structure-grid">
+          <div class="platform-structure-chart"><header><strong>实体分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-entity"><span><strong>{{ entityAssetOverview?.total ?? '--' }}</strong><em>{{ entityAssetOverview?.totalLabel ?? '实体总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.schema"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
+          <div class="platform-structure-chart"><header><strong>关系分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-relation"><span><strong>{{ relationAssetOverview?.total ?? '--' }}</strong><em>{{ relationAssetOverview?.totalLabel ?? '关系总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.schema"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
+        </div>
+      </section>
+
       <section class="platform-overview-main">
         <div class="kg-panel platform-jobs-panel">
           <div class="kg-panel__header"><div><h2 class="kg-panel__title">图谱构建</h2></div><RouterLink to="/graph-build">查看全部任务 →</RouterLink></div>
@@ -4769,14 +4777,6 @@ const pageMeta = computed(() => {
           <div v-else-if="overviewReviewsState === 'forbidden'" class="platform-card-empty"><strong>暂无审核权限</strong><p>需要审核角色（reviewer / 数据质量 / 图谱治理）后才能查看队列。</p><RouterLink to="/manual-review">前往人工审核</RouterLink></div>
           <div v-else class="platform-card-empty"><strong>审核队列暂不可用</strong><p>{{ overviewReviewsError }}</p><RouterLink to="/manual-review">前往人工审核 →</RouterLink></div>
         </aside>
-      </section>
-
-      <section class="kg-panel platform-structure-overview">
-        <div class="kg-panel__header"><div><h2 class="kg-panel__title">当前图谱资产</h2></div><span>实体 {{ entityAssetOverview?.total ?? '--' }} · 关系 {{ relationAssetOverview?.total ?? '--' }} · 数据截至 {{ overviewMeta.updatedAt }}</span></div>
-        <div class="platform-structure-grid">
-          <div class="platform-structure-chart"><header><strong>实体分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-entity"><span><strong>{{ entityAssetOverview?.total ?? '--' }}</strong><em>{{ entityAssetOverview?.totalLabel ?? '实体总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.schema"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
-          <div class="platform-structure-chart"><header><strong>关系分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-relation"><span><strong>{{ relationAssetOverview?.total ?? '--' }}</strong><em>{{ relationAssetOverview?.totalLabel ?? '关系总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.schema"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
-        </div>
       </section>
     </main>
 
@@ -5664,9 +5664,16 @@ print(response.json())</pre>
 }
 
 .platform-overview {
-  display: grid;
-  grid-template-rows: repeat(3, auto);
+  /* 不用 grid auto 行：.platform-content 高度确定（内滚容器），auto 行 + stretch 会
+     形成循环依赖，行高忽略内容退化成 min-height（未设的区块塌成 header 高度被
+     overflow:hidden 裁掉，饼图因此"看不见"）。flex 纵向堆叠高度纯内容驱动。 */
+  display: flex;
+  flex-direction: column;
   gap: 14px;
+}
+
+.platform-overview > * {
+  flex-shrink: 0;
 }
 
 .platform-metrics {
@@ -5747,7 +5754,8 @@ print(response.json())</pre>
 .platform-metric.is-orange strong { color: #ff7d00; }
 .platform-metric.is-red strong { color: #d92d20; }
 
-.platform-summary-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px; }
+/* 加载态预留就绪高度（3 卡实测 202px）：避免数据到达撑高后把下方资产饼图挤出视口闪现 */
+.platform-summary-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;min-height:202px; }
 .platform-summary-card { position:relative;min-width:0;overflow:hidden; }
 .platform-summary-card::after { position:absolute;right:-35px;bottom:-55px;width:130px;height:130px;border-radius:50%;background:rgba(22,93,255,.045);content:"";pointer-events:none; }
 .platform-summary-card>header { display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px;border-bottom:1px solid #dce8f8;background:rgba(255,255,255,.75); }
@@ -5763,7 +5771,8 @@ print(response.json())</pre>
 .platform-summary-card__items>a { display:grid;gap:3px;padding:2px 8px;border-right:1px solid #e1eaf5;color:inherit;text-decoration:none;transition:background-color .2s ease; }.platform-summary-card__items>a:last-child { border-right:0; }.platform-summary-card__items>a:hover { background:#eef5ff; }
 .platform-summary-card__items em { overflow:hidden;color:#8290a5;font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }.platform-summary-card__items strong { overflow:hidden;color:#344861;font-size:10px;text-overflow:ellipsis;white-space:nowrap; }
 
-.platform-overview-main { display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:14px; }
+/* 同上：任务/审核面板加载中只占小高度，预留就绪高度防止布局跳动 */
+.platform-overview-main { display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:14px;min-height:340px; }
 .platform-jobs-panel,.platform-review-panel { min-width:0;overflow:hidden; }
 .platform-jobs-panel .kg-panel__header>div,.platform-review-panel .kg-panel__header>div { display:grid;gap:2px; }
 .platform-jobs-panel .kg-panel__header span,.platform-review-panel .kg-panel__header span { color:#7b8aa1;font-size:10px; }

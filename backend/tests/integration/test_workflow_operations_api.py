@@ -164,6 +164,37 @@ async def test_execute_definition_rejects_invalid_limit(async_client, fake_tempo
     assert response.json()["code"] == 422
 
 
+async def test_list_executions_filters_by_trigger_source(async_client, fake_temporal):
+    """重跑记录视图依赖 triggerSource=RERUN 过滤：只返回重跑执行，非法值 422。"""
+    rerun = await async_client.post(
+        "/api/v1/workflow-system/definitions/entity-project/execute",
+        json={"payload": {"triggerSource": "RERUN", "rerunCaseIds": ["CASE-1", "CASE-2"]}},
+    )
+    assert rerun.status_code == 200
+    manual = await async_client.post(
+        "/api/v1/workflow-system/definitions/entity-project/execute",
+        json={"payload": {"dry_run": True}},
+    )
+    assert manual.status_code == 200
+
+    only_rerun = await async_client.get(
+        "/api/v1/workflow-system/executions", params={"triggerSource": "RERUN"}
+    )
+    assert only_rerun.status_code == 200
+    items = only_rerun.json()["data"]["items"]
+    assert [e["id"] for e in items] == [rerun.json()["data"]["id"]]
+    assert items[0]["triggerSource"] == "RERUN"
+    assert items[0]["payload"]["rerunCaseIds"] == ["CASE-1", "CASE-2"]
+
+    all_items = await async_client.get("/api/v1/workflow-system/executions")
+    assert all_items.json()["data"]["total"] == 2
+
+    invalid = await async_client.get(
+        "/api/v1/workflow-system/executions", params={"triggerSource": "BOGUS"}
+    )
+    assert invalid.status_code == 422
+
+
 @pytest.mark.parametrize("body", [None, {"payload": None}, {"payload": []}])
 async def test_execute_definition_uses_http_422_for_invalid_body(async_client, body):
     response = await async_client.post(

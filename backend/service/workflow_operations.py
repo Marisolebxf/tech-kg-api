@@ -77,9 +77,13 @@ class WorkflowOperationsService:
         limit: int = 100,
         definition_id: str | None = None,
         schedule_id: str | None = None,
+        trigger_source: str | None = None,
     ) -> dict[str, Any]:
         items = self.repo.list_executions(
-            limit=limit, definition_id=definition_id, schedule_id=schedule_id
+            limit=limit,
+            definition_id=definition_id,
+            schedule_id=schedule_id,
+            trigger_source=trigger_source,
         )
         return {"items": items, "total": len(items)}
 

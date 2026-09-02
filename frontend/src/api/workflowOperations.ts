@@ -2,7 +2,7 @@ import { http } from './http'
 import { unwrapApiResponse, type ApiResponse } from './graphSearch'
 
 export type TaskStatus = '执行中' | '执行出错' | '等待人工审核' | '执行完成'
-export type ReviewStatus = '待处理' | '已完成' | '已撤销' | '已驳回'
+export type ReviewStatus = '待处理' | '已完成' | '已撤销' | '已驳回' | '重跑中' | '重跑失败'
 
 export interface UpdateBatch {
   id: string
@@ -376,7 +376,7 @@ export const getExecution = (executionId: string) =>
 
 export const listExecutions = (
   limit = 100,
-  filters: { definitionId?: string; scheduleId?: string; jobId?: string } = {},
+  filters: { definitionId?: string; scheduleId?: string; jobId?: string; triggerSource?: TriggerSource } = {},
 ) =>
   unwrap(http.get('/v1/workflow-system/executions', { params: { limit, ...filters } })) as Promise<{ items: WorkflowExecution[]; total: number }>
 

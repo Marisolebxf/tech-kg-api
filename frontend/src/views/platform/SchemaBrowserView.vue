@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
+import { IconSearch } from '@arco-design/web-vue/es/icon'
 import hljs from 'highlight.js/lib/core'
 import python from 'highlight.js/lib/languages/python'
 import 'highlight.js/styles/github-dark.css'
@@ -907,8 +908,10 @@ function togglePropertyDetail(schemaId: string): void {
     </section>
 
     <section class="schema-shell">
-      <nav class="schema-tabs"><button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="activeTab=tab;keyword=''">{{ tab }}</button></nav>
-      <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeSpace">图空间：{{ activeSpace }}</span></div><div class="schema-toolbar__actions"><div class="space-picker"><span>图空间</span><a-select :model-value="activeSpace" placeholder="选择图空间" style="width:170px" @change="switchSpace"><a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option></a-select></div><button class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" :placeholder="`搜索${activeTab}`" /></label></div></div>
+      <nav class="schema-tabs" aria-label="Schema 类型切换">
+        <div class="schema-tabs__items"><button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="activeTab=tab;keyword=''">{{ tab }}</button></div>
+      </nav>
+      <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeSpace">图空间：{{ activeSpace }}</span></div><div class="schema-toolbar__actions"><div class="space-picker"><span>图空间</span><a-select :model-value="activeSpace" placeholder="选择图空间" style="width:170px" @change="switchSpace"><a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option></a-select></div><button class="primary" type="button" @click="openCreate">＋ 增加</button><a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`"><template #prefix><IconSearch /></template></a-input></div></div>
 
       <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in filteredEntities" :key="row.name"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.description }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : (row.schema.isSystem ? '系统内置，不可删除' : '被关系引用，不可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="5"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
 
@@ -933,22 +936,22 @@ function togglePropertyDetail(schemaId: string): void {
 
             <div class="create-row">
               <a-form-item class="create-field" field="name" :label="isRelationTab() ? '关系英文名' : '实体名'" required>
-                <input v-model="createForm.name" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
+                <input v-model="createForm.name" class="create-text-input" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
               </a-form-item>
               <a-form-item class="create-field" field="label" label="中文名" required>
-                <input v-model="createForm.label" placeholder="如：技术" />
+                <input v-model="createForm.label" class="create-text-input" placeholder="如：技术" />
               </a-form-item>
             </div>
 
             <div v-if="isRelationTab()" class="create-row">
               <a-form-item class="create-field" field="sourceEntityId" label="起点实体" required>
-                <a-select v-model="createForm.sourceEntityId" placeholder="请选择">
+                <a-select v-model="createForm.sourceEntityId" class="schema-select" placeholder="请选择">
                   <a-option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
                   <template #empty>当前图空间暂无实体 Schema，请先新增实体</template>
                 </a-select>
               </a-form-item>
               <a-form-item class="create-field" field="targetEntityId" label="终点实体" required>
-                <a-select v-model="createForm.targetEntityId" placeholder="请选择">
+                <a-select v-model="createForm.targetEntityId" class="schema-select" placeholder="请选择">
                   <a-option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
                   <template #empty>当前图空间暂无实体 Schema，请先新增实体</template>
                 </a-select>
@@ -956,9 +959,8 @@ function togglePropertyDetail(schemaId: string): void {
             </div>
 
             <a-form-item class="create-field create-field--full" field="description" label="说明">
-              <a-textarea v-model="createForm.description" :auto-size="{ minRows: 2, maxRows: 4 }" />
+              <a-textarea v-model="createForm.description" :auto-size="{ minRows: 3, maxRows: 5 }" />
             </a-form-item>
-
             <a-form-item class="create-props" field="properties" required label-component="div">
               <template #label>
                 <div class="create-props__head">
@@ -981,7 +983,7 @@ function togglePropertyDetail(schemaId: string): void {
                   <span class="prop-locked-required">必填 🔒</span>
                 </template>
                 <template v-else>
-                  <a-select v-model="p.dataType" class="prop-type" popup-container=".schema-create-modal" :scrollbar="false">
+                  <a-select v-model="p.dataType" class="schema-select prop-type" popup-container=".schema-create-modal" :scrollbar="false">
                     <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                   </a-select>
                   <input v-if="p.dataType === 'fixed_string'" :value="p.length" type="text" inputmode="numeric" maxlength="64" class="prop-len" :class="{ 'prop-len--invalid': fixedLengthInvalid(p) }" :title="validateFixedLength(p.length) || undefined" placeholder="1~1024" @input="onLengthInput(p, $event)" />
@@ -1383,7 +1385,7 @@ function togglePropertyDetail(schemaId: string): void {
 .create-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .create-field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#4e5969}
 .create-field--full{grid-column:1/-1}
-.create-field input,.create-field textarea,.create-field select{height:32px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:13px;color:#1d2129;background:#fff}
+.create-text-input,.create-field textarea,.create-field select{height:32px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:13px;color:#1d2129;background:#fff}
 .create-field textarea{height:auto;padding:6px 8px;resize:vertical}
 .create-field select{appearance:auto}
 .create-props{display:flex;flex-direction:column;gap:8px}
@@ -1412,11 +1414,11 @@ function togglePropertyDetail(schemaId: string): void {
 /* DESIGN_RULES: Schema management page contract. */
 .schema-page{padding:0;color:#1d2129}
 .schema-shell{border-color:#e5e6eb;border-radius:6px;box-shadow:none}
-.schema-tabs{min-height:36px;padding:0 16px}.schema-tabs button{height:36px;padding:0 16px;font-size:14px;line-height:22px;font-weight:400}.schema-tabs button.active{font-weight:500}
+.schema-tabs{display:flex;min-height:48px;padding:8px 16px;align-items:center;justify-content:space-between;gap:16px}.schema-tabs__items{display:flex;align-self:stretch;overflow:auto}.schema-tabs button{height:32px;padding:0 16px;font-size:14px;line-height:22px;font-weight:400}.schema-tabs button.active{font-weight:500}
 .schema-toolbar{min-height:48px;gap:16px;padding:8px 16px;background:#fff}.schema-toolbar>div,.schema-toolbar__actions{gap:16px}
 .schema-toolbar strong{font-size:16px;line-height:24px;font-weight:600}.schema-toolbar>div span{font-size:12px;line-height:20px}
 .schema-toolbar label{gap:8px;width:280px;height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px}.schema-toolbar input{height:30px;padding:0!important;font-size:14px;line-height:22px}
-.schema-toolbar .primary{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
+.schema-toolbar .primary,.schema-tabs .primary{height:32px;padding:0 16px;border:0;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;white-space:nowrap;cursor:pointer}.schema-tabs .primary:hover{background:#4080ff}.schema-tabs .primary:active{background:#0e42d2}
 .schema-table-wrap table,.trace-layout table{font-size:14px;line-height:22px}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{height:40px;padding:0 16px;line-height:22px;vertical-align:middle}
 .schema-table-wrap th{background:#f7f8fa;color:#1d2129;font-weight:500}.schema-action-link{font-size:14px;line-height:22px}
 .core,.support,.evidence,.auto,.review{gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}
@@ -1425,7 +1427,8 @@ function togglePropertyDetail(schemaId: string): void {
 .trace-card>header{min-height:56px;padding:8px 16px;background:#f7f8fa}.trace-card h2{font-size:16px;line-height:24px;font-weight:600}.trace-card p,.trace-card dd,.trace-layout>aside span{font-size:12px;line-height:20px}
 .schema-modal__panel{width:min(560px,100%)}.schema-create-panel{display:grid;box-sizing:border-box;width:min(640px,calc(100vw - 48px));height:auto;max-height:calc(100vh - 48px);overflow:hidden;grid-template-rows:56px minmax(0,1fr) 64px}.schema-modal__panel header{height:56px;box-sizing:border-box;padding:0 24px}.schema-modal__panel header h2{font-size:16px;line-height:24px}.schema-modal__panel header button{width:32px;height:32px}
 .schema-modal__body{gap:16px;padding:24px}.schema-create-body{min-height:0;max-height:none;overflow-x:hidden;overflow-y:auto}.schema-modal__body label,.create-field{gap:8px;font-size:14px;line-height:22px}.create-row{gap:16px}
-.create-field input,.create-field textarea,.create-field select{height:32px;padding:0 12px;font-size:14px;line-height:22px;appearance:none}
+.create-row>.create-field{min-width:0}.create-row>.create-field :deep(.arco-form-item-wrapper-col),.create-row>.create-field :deep(.arco-form-item-content-wrapper),.create-row>.create-field :deep(.arco-form-item-content){box-sizing:border-box;width:100%;min-width:0}.create-text-input,.create-field textarea,.create-field select{box-sizing:border-box;width:100%;height:32px;padding:0 12px;font-size:14px;line-height:22px;appearance:none}
+.create-field :deep(.arco-textarea-wrapper){box-sizing:border-box;width:100%;min-height:80px;border:1px solid #e5e6eb;border-radius:4px;background:#fff!important}.create-field :deep(.arco-textarea){box-sizing:border-box;width:100%;min-height:78px;padding:8px 12px 28px;background:#fff!important;color:#1d2129;font-size:14px;line-height:22px}.create-field :deep(.arco-textarea-word-limit){right:12px;bottom:6px;color:#86909c;font-size:12px;line-height:20px}.create-field :deep(.arco-textarea-wrapper:hover){border-color:#4080ff}.create-field :deep(.arco-textarea-wrapper.arco-textarea-focus){border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
 .create-props{gap:16px}.create-props :deep(.arco-form-item-label-col),.create-props :deep(.arco-form-item-label){box-sizing:border-box;width:100%}.create-props :deep(.arco-form-item-label){display:flex;align-items:center}.create-prop-list{display:grid;width:100%;gap:16px}.create-props :deep(.arco-form-item-content-flex){width:100%}.create-props__head{display:flex;width:100%;align-items:center;justify-content:space-between;font-size:14px;line-height:22px}.create-props__add{height:28px;font-size:14px}.create-prop-row{gap:8px}
 .prop-name,.prop-type,.prop-len{height:32px;font-size:14px;appearance:none}.prop-required{font-size:14px;line-height:22px}
 .create-prop-row{grid-template-columns:minmax(0,1.4fr) minmax(120px,1.2fr) auto 24px;align-items:center;column-gap:16px;row-gap:8px}
@@ -1437,6 +1440,8 @@ function togglePropertyDetail(schemaId: string): void {
 .prop-type :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:14px;line-height:22px}
 .prop-type :deep(.arco-select-view-input){height:100%!important;min-height:0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important}
 .prop-type :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;outline:0!important;opacity:0!important;box-shadow:none!important;pointer-events:none!important}
+:deep(.prop-type.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb!important;border-radius:4px;background:#fff!important}:deep(.prop-type.arco-select-view:hover){border-color:#c9cdd4!important}:deep(.prop-type.arco-select-view-focus){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+:deep(.prop-type.arco-select-view) .arco-select-view-value,:deep(.prop-type.arco-select-view) .arco-select-view-input{background:#fff!important}
 .prop-len{grid-column:3;box-sizing:border-box;width:72px;height:32px}
 .prop-required{display:inline-flex!important;grid-column:3;flex-direction:row!important;align-items:center!important;justify-self:start;height:32px;margin:0!important;gap:8px!important;align-self:center;white-space:nowrap}
 .create-prop-row--has-length .prop-required{grid-column:4}
@@ -1451,14 +1456,41 @@ function togglePropertyDetail(schemaId: string): void {
 :is(.schema-llm-select) :deep(.arco-select-view-input){height:100%!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important}
 :is(.schema-llm-select) :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;outline:0!important;opacity:0!important;pointer-events:none!important}
 :is(.schema-llm-select) :deep(.arco-select-view-value){min-width:0;overflow:hidden;line-height:30px;text-overflow:ellipsis;white-space:nowrap}
+:deep(.schema-llm-select.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb!important;border-radius:4px;background:#fff!important}:deep(.schema-llm-select.arco-select-view:hover){border-color:#c9cdd4!important}:deep(.schema-llm-select.arco-select-view-focus){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+:deep(.schema-llm-select.arco-select-view) .arco-select-view-value,:deep(.schema-llm-select.arco-select-view) .arco-select-view-input{background:#fff!important}
 :is(.schema-llm-select) :deep(.arco-select-view-focus){border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
-.schema-toolbar__actions>label{position:relative;display:block;box-sizing:border-box;width:280px;height:32px;padding:0;border:0;background:transparent}
-.schema-toolbar__actions>label>span{position:absolute;z-index:1;top:50%;left:12px;line-height:1;pointer-events:none;transform:translateY(-50%)}
-.schema-toolbar__actions>label>input{box-sizing:border-box;width:100%;height:32px;min-width:0;padding:0 12px 0 34px!important;border:1px solid #e5e6eb!important;border-radius:4px;background:#fff;font-size:14px;line-height:22px;box-shadow:none!important;outline:0}
-@media(max-width:900px){.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
+.schema-search-input.arco-input-wrapper{box-sizing:border-box;width:280px;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
+.schema-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
+.schema-search-input.arco-input-wrapper:focus-within,.schema-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+.schema-search-input.arco-input-wrapper :deep(.arco-input-prefix){padding-right:8px;color:#4e5969}.schema-search-input.arco-input-focus :deep(.arco-input-prefix){color:#165dff}
+.schema-search-input.arco-input-wrapper :deep(.arco-input-prefix svg){width:16px;height:16px;font-size:16px}
+.schema-search-input.arco-input-wrapper :deep(.arco-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px;box-shadow:none!important;outline:none!important}
+:is(.create-text-input,.prop-name,.prop-len){box-sizing:border-box;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:22px;outline:none;box-shadow:none;transition:border-color .1s ease,box-shadow .1s ease}
+:is(.create-text-input,.prop-name,.prop-len):hover{border-color:#4080ff}
+:is(.create-text-input,.prop-name,.prop-len):focus{border-color:#165dff;outline:none;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
+:is(.create-text-input,.prop-name,.prop-len):focus-visible{border-color:#165dff;outline:none;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
+:deep(.schema-select.arco-select-view){display:inline-flex;box-sizing:border-box;width:100%;min-width:0;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;align-items:center}
+:deep(.schema-select.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
+:deep(.schema-select.arco-select-view:focus-within),:deep(.schema-select.arco-select-view-focus){border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+:deep(.schema-select.arco-select-view .arco-select-view-input){width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
+:deep(.schema-select.arco-select-view .arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}
+.schema-create-panel{font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;letter-spacing:0}
+.schema-create-panel header h2{font-size:16px;line-height:24px;font-weight:600}.schema-create-panel header button{font-size:16px;line-height:16px;font-weight:400}
+.schema-create-body,.schema-create-body :deep(.arco-form-item-label),.schema-create-body :deep(.arco-checkbox-label){font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
+.schema-create-body :is(.create-text-input,.prop-name,.prop-len),.schema-create-body :deep(.arco-textarea),.schema-create-body :deep(.arco-select-view-input),.schema-create-body :deep(.arco-select-view-value){font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
+.schema-create-body :deep(.arco-form-item-message),.schema-create-body :deep(.arco-textarea-word-limit){font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
+.schema-create-panel .create-props__head,.schema-create-panel .create-props__add,.schema-create-panel .prop-required{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
+.schema-create-panel .prop-remove{font-size:16px;line-height:16px;font-weight:400}
+.schema-create-panel .create-ddl__label,.schema-create-panel .create-ddl__confirm{font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
+.schema-create-panel .create-ddl__pre{font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
+.schema-create-panel footer button{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
+@media(max-width:900px){.schema-tabs{align-items:stretch;flex-direction:column}.schema-tabs__items{min-height:36px}.schema-toolbar__actions{justify-content:flex-end}.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
 .schema-create-body>.create-field,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{margin-bottom:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
 /* Schema 拓扑总览 */
 .schema-topology-shell{margin-bottom:16px;padding-bottom:0}
 .schema-topology-canvas{height:260px;overflow:hidden;border-top:1px solid #e5e6eb;background:radial-gradient(circle at 50% 40%,#f7faff 0,#fff 70%)}
 .schema-topology-canvas__empty{display:grid;place-items:center;height:100%;color:#86909c;font-size:12px}
+</style>
+<style>
+.app-workspace .schema-toolbar__actions .schema-search-input.arco-input-wrapper .arco-input{height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;outline:none!important}
 </style>

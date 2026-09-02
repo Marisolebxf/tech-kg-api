@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { IconSearch } from '@arco-design/web-vue/es/icon'
 import {
   createLlmConfig,
   currentUserId,
@@ -601,13 +602,13 @@ onMounted(() => {
     <section class="config-workbench">
       <aside class="category-nav">
         <header><strong>配置分类</strong><span>按能力域管理</span></header>
-        <button v-for="category in categories" :key="category.key" type="button" :class="{ active: activeCategory === category.key }" @click="switchCategory(category.key)">
+        <button v-for="category in categories" :key="category.key" type="button" :class="{ active: activeCategory === category.key }" :title="`${category.label}：${category.hint}`" @click="switchCategory(category.key)">
           <i>{{ category.icon }}</i><span><strong>{{ category.label }}</strong><small>{{ category.hint }}</small></span><em>{{ categoryCount(category.key) }}</em>
         </button>
       </aside>
 
       <main class="config-list">
-        <header><div><h2>{{ categories.find(item => item.key === activeCategory)?.label }}</h2><span>{{ isGraphSpaceCategory ? `${mySpaces.length} 个已绑定空间` : `${visibleItems.length} 项配置` }}</span></div><nav v-if="!isGraphSpaceCategory"><input v-model="keyword" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" placeholder="搜索名称、标识或地址" /><a-select v-model="statusFilter"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button></nav><nav v-else class="bind-nav"><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button></nav></header>
+        <header><div><h2>{{ categories.find(item => item.key === activeCategory)?.label }}</h2><span>{{ isGraphSpaceCategory ? `${mySpaces.length} 个已绑定空间` : `${visibleItems.length} 项配置` }}</span></div><nav v-if="!isGraphSpaceCategory"><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input><a-select v-model="statusFilter"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button></nav><nav v-else class="bind-nav"><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
             <thead><tr><th>图数据空间</th><th>绑定状态</th><th>操作</th></tr></thead>
@@ -702,9 +703,9 @@ onMounted(() => {
         <footer><button type="button" @click="spaceDialogOpen=false">取消</button><button class="primary" type="button" :disabled="!newSpaceName.trim() || spaceWorking" @click="createSpace">{{ spaceWorking ? '创建中…' : '创建' }}</button></footer>
       </aside>
       <button v-if="dialogOpen" class="mask create-dialog-mask" type="button" aria-label="关闭新建配置弹窗" @click="dialogOpen=false" />
-      <aside v-if="dialogOpen" class="create-dialog">
+      <aside v-if="dialogOpen" class="create-dialog config-create-dialog">
       <header><div><span>NEW CONFIGURATION</span><h2>新建{{ categories.find(item => item.key === activeCategory)?.label }}</h2></div><button type="button" @click="dialogOpen=false">×</button></header>
-      <a-form ref="configFormRef" :model="form" :rules="configFormRules" class="dialog-form" layout="vertical">
+      <a-form ref="configFormRef" :model="form" :rules="configFormRules" class="dialog-form config-create-form" layout="vertical">
         <template v-if="formKind === 'llm' || formKind === 'embedding'">
           <a-form-item class="wide" field="name" label="配置名称" required><input v-model="form.name" placeholder="例如：科技文本抽取大模型" /></a-form-item>
           <a-form-item class="wide" field="baseUrl" label="Base URL" required><input v-model="form.baseUrl" /></a-form-item>
@@ -728,7 +729,7 @@ onMounted(() => {
           <a-form-item label="负责人"><input v-model="form.owner" /></a-form-item>
           <a-form-item class="wide" label="Token"><input v-model="form.token" type="password" /></a-form-item>
         </template>
-        <a-form-item class="wide" label="说明"><a-textarea v-model="form.description" /></a-form-item>
+        <a-form-item class="wide" label="说明"><a-textarea v-model="form.description" :max-length="200" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" /></a-form-item>
         <a-form-item class="wide" field="isDefault"><a-checkbox v-model="form.isDefault" class="default-config-checkbox">设为默认（同一类别仅一条默认生效）</a-checkbox></a-form-item>
       </a-form>
       <footer>
@@ -749,13 +750,11 @@ onMounted(() => {
 </style>
 <style scoped>
 /* DESIGN_RULES: configuration management page contract. */
-.configuration-page{padding:0;color:#1d2129}.page-header{align-items:center;margin-bottom:16px}.page-header>div{display:none}.page-header button{height:32px;margin-left:auto;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
-.summary-grid{display:flex;gap:16px;margin-bottom:16px;border:0}.summary-grid article{flex:1;gap:8px;padding:8px 16px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;box-shadow:none}
-.summary-grid article>i{width:32px;height:32px;border-radius:4px}.summary-grid article>div{gap:4px}.summary-grid span{color:#4e5969;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}.summary-grid small{color:#86909c;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}.summary-grid strong{font-size:20px;line-height:28px;font-weight:600}
+.configuration-page{padding:0;color:#1d2129}.page-header{align-items:center;margin-bottom:16px}.page-header>div{display:none}.page-header button{height:32px;margin-right:auto;margin-left:0;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
 .config-workbench{grid-template-columns:240px minmax(0,1fr);border-color:#e5e6eb;border-radius:6px}.category-nav{border-color:#e5e6eb;background:#f7f8fa}
 .category-nav>header{gap:4px;padding:16px}.category-nav>header strong{font-size:16px;line-height:24px}.category-nav>header span{font-size:12px;line-height:20px}
-.category-nav>button{grid-template-columns:20px minmax(0,1fr) auto;gap:8px;min-height:40px;padding:0 16px;border-bottom:0;font-size:14px;line-height:22px}.category-nav>button.active{background:#e8f3ff;box-shadow:none;color:#165dff;font-weight:500}
-.category-nav>button>i{width:20px;height:20px;border-radius:4px;font-size:12px}.category-nav>button strong{font-size:14px;line-height:22px}.category-nav>button small{font-size:12px;line-height:20px}.category-nav>button em{padding:0;border-radius:0;background:transparent;font-size:12px;line-height:20px}
+.category-nav>button{box-sizing:border-box;grid-template-columns:20px minmax(0,1fr) auto;gap:8px;width:calc(100% - 16px);height:56px;min-height:56px;margin-right:8px;margin-left:8px;padding:4px 16px;border:1px solid transparent;border-radius:4px;font-size:14px;line-height:22px}.category-nav>header+button{margin-top:4px}.category-nav>button+button{margin-top:4px}.category-nav>button.active{border-color:#fff;background:#e8f3ff;box-shadow:none;color:#165dff;font-weight:500}
+.category-nav>button>i{width:20px;height:20px;border-radius:4px;font-size:12px}.category-nav>button>span{display:grid;min-width:0;gap:4px}.category-nav>button strong{display:block;overflow:hidden;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap}.category-nav>button small{display:block;overflow:hidden;color:#86909c;font-size:12px;line-height:20px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}.category-nav>button em{padding:0;border-radius:0;background:transparent;font-size:12px;line-height:20px}
 .config-list>header{min-height:56px;box-sizing:border-box;gap:16px;padding:8px 16px}.config-list h2{font-size:16px;line-height:24px;font-weight:600}.config-list>header span{font-size:12px;line-height:20px}.config-list nav{gap:16px}
 .config-list input,.config-list select{height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px}
 .table-wrap table{font-size:14px;line-height:22px}.table-wrap th,.table-wrap td{height:40px;padding:0 16px}.table-wrap th{background:#f7f8fa;color:#1d2129;font-weight:500}.config-name{gap:8px}.config-name>i{width:28px;height:28px;border-radius:4px;font-size:12px}.config-name strong,.type-name,.link{font-size:14px;line-height:22px}.config-name small,.updated,.table-wrap code{font-size:12px;line-height:20px}
@@ -771,6 +770,12 @@ onMounted(() => {
 .reference-card{margin:0 24px;padding:16px;border-radius:6px}.reference-card strong{font-size:14px;line-height:22px}.reference-card span,.reference-card p{font-size:12px;line-height:20px}
 .detail-drawer>footer,.create-dialog>footer{height:64px;box-sizing:border-box;gap:16px;padding:0 24px}.detail-drawer>footer button,.create-dialog>footer button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
 .default-tag{border-radius:4px;font-size:12px;line-height:20px}
+.config-search-input.arco-input-wrapper{box-sizing:border-box;width:180px;min-width:180px;max-width:180px;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 180px}
+.config-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
+.config-search-input.arco-input-wrapper:focus-within,.config-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+.config-search-input.arco-input-wrapper :deep(.arco-input-prefix){padding-right:8px;color:#4e5969}.config-search-input.arco-input-focus :deep(.arco-input-prefix){color:#165dff}
+.config-search-input.arco-input-wrapper :deep(.arco-input-prefix svg){width:16px;height:16px;font-size:16px}
+.config-search-input.arco-input-wrapper :deep(.arco-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:none!important}
 /* Isolate the status Arco Select from native search-input styles. */
 /* 列表头操作按钮（新建配置/绑定）：与输入框同规格，禁止换行与压缩导致文字溢出 */
 .config-list nav button{height:32px;padding:0 16px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px;white-space:nowrap;flex-shrink:0}
@@ -781,11 +786,15 @@ onMounted(() => {
 .config-list nav :deep(.arco-select-view-input){height:100%!important;min-height:0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important}
 .config-list nav :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;pointer-events:none!important}
 .config-list nav :deep(.arco-select-view-value){min-width:0;line-height:30px}
-@media(max-width:1024px){.config-workbench{grid-template-columns:84px minmax(0,1fr)}.category-nav>header span,.category-nav>button span,.category-nav>button em{display:none}.category-nav>button{grid-template-columns:20px;justify-content:center;padding:0}}
+@media(max-width:1024px){.config-workbench{grid-template-columns:84px minmax(0,1fr)}.category-nav>header span,.category-nav>button span,.category-nav>button em{display:none}.category-nav>button{grid-template-columns:20px;width:52px;height:40px;min-height:40px;margin-right:auto;margin-left:auto;justify-content:center;padding:0}}
 .dialog-form :deep(.arco-form-item){margin-bottom:0}.dialog-form :deep(.arco-form-item-layout-vertical>.arco-form-item-label-col){margin-bottom:8px}
 .dialog-form .default-config-checkbox{display:inline-flex!important;flex-direction:row!important;align-items:center!important;justify-content:flex-start;gap:0!important;white-space:nowrap}
-.dialog-form :deep(.arco-textarea-wrapper){height:72px;min-height:72px;max-height:72px}.dialog-form :deep(textarea.arco-textarea){height:72px!important;min-height:72px!important;max-height:72px!important;resize:none!important;overflow-y:auto}
+.config-create-form input:not([type="checkbox"]){box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0;outline:none;box-shadow:none;transition:border-color .1s ease,box-shadow .1s ease}
+.config-create-form input:not([type="checkbox"]):hover{border-color:#4080ff}.config-create-form input:not([type="checkbox"]):focus,.config-create-form input:not([type="checkbox"]):focus-visible{border-color:#165dff;outline:none;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
+.config-create-form :deep(.arco-textarea-wrapper){box-sizing:border-box;width:100%;height:auto;min-height:80px;max-height:none;border:1px solid #e5e6eb;border-radius:4px;background:#fff!important;box-shadow:none;transition:border-color .1s ease,box-shadow .1s ease}.config-create-form :deep(.arco-textarea-wrapper:hover){border-color:#4080ff}.config-create-form :deep(.arco-textarea-wrapper.arco-textarea-focus){border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
+.config-create-form :deep(textarea.arco-textarea){box-sizing:border-box;width:100%;height:auto;min-height:78px;padding:8px 12px 28px;background:#fff!important;color:#1d2129;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0;resize:vertical;overflow-y:auto}.config-create-form :deep(.arco-textarea-word-limit){right:12px;bottom:6px;color:#86909c;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .create-dialog>header{align-items:center;padding:0 24px}.create-dialog>header>div{display:flex;height:24px;align-items:center}.create-dialog>header span{display:none}.create-dialog h2{margin:0;font-size:16px;line-height:24px}
+.config-create-dialog>header>button{display:grid;width:32px;height:32px;padding:0;border:0;background:transparent;color:#4e5969;font-size:20px;line-height:1;place-items:center}.config-create-dialog>header>button:hover{background:transparent;color:#165dff}.config-create-dialog>header>button:focus-visible{background:transparent;outline:2px solid rgba(22,93,255,.16);outline-offset:2px}
 .create-dialog>footer{align-items:center;padding:16px 24px}
 .create-dialog-mask{z-index:49;background:rgba(16,38,76,.42);backdrop-filter:blur(2px);cursor:pointer}.create-dialog{z-index:50}
 /* 详情抽屉：中间内容区可滚动，footer 钉底（表单超一屏时原来会溢出不可滚） */
@@ -799,4 +808,9 @@ onMounted(() => {
 .bind-nav{display:flex;gap:8px;align-items:center}.bind-nav :deep(.arco-select){width:200px;min-width:200px}.bind-nav button{height:32px;padding:0 16px;border:1px solid #bdd0ea;border-radius:4px;font-size:14px;cursor:pointer}
 .space-hint{margin:12px 16px;color:#86909c;font-size:12px;line-height:20px}
 .space-dialog-hint{grid-column:1/-1;margin:0;color:#86909c;font-size:12px;line-height:20px}
+</style>
+<style>
+/* The wrapper is the only visible shell; global native-input rules must not restyle Arco's inner field. */
+.app-workspace .configuration-page .config-list .config-search-input.arco-input-wrapper input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
+.app-workspace .configuration-page .config-list .config-search-input.arco-input-wrapper input.arco-input:focus{border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
 </style>

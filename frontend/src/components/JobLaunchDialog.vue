@@ -225,23 +225,23 @@ async function submit() {
     <aside v-if="open" class="job-launch-dialog">
       <header>
         <h2>新建任务</h2>
-        <button type="button" @click="emit('close')">×</button>
+        <button type="button" aria-label="关闭弹窗" title="关闭" @click="emit('close')">×</button>
       </header>
       <div class="job-launch-body">
-        <div class="job-row">
+        <div class="job-basics">
           <label class="job-field">
             <span>任务名称</span>
             <input v-model="name" placeholder="如：论文-专家抽取" />
           </label>
-          <label class="job-field">
+          <div class="job-field">
             <span>任务类型</span>
-            <a-radio-group v-model="taskType">
-              <a-radio value="extract">数据抽取</a-radio>
-              <a-radio value="single">单脚本抽取</a-radio>
-              <a-radio value="chain">多脚本串行</a-radio>
-              <a-radio value="upload">上传脚本</a-radio>
-            </a-radio-group>
-          </label>
+            <a-select v-model="taskType" class="job-select" aria-label="任务类型">
+              <a-option value="extract">数据抽取</a-option>
+              <a-option value="single">单脚本抽取</a-option>
+              <a-option value="chain">多脚本串行</a-option>
+              <a-option value="upload">上传脚本</a-option>
+            </a-select>
+          </div>
         </div>
 
         <p v-if="taskType === 'extract' && !schemasLoading && !extractSchemas.length" class="muted-warn">
@@ -252,7 +252,7 @@ async function submit() {
           <!-- label 会把点击转发给 a-select 内部 input 造成"开→关"双切换，包 a-select 的字段一律用 div -->
           <div class="job-field">
             <span>目标 Schema（已传脚本并绑定来源表）</span>
-            <a-select v-model="extractSchemaId" :loading="schemasLoading" placeholder="选择要抽取的实体/关系" allow-search allow-clear>
+            <a-select v-model="extractSchemaId" class="job-select" :loading="schemasLoading" placeholder="选择要抽取的实体/关系" allow-search allow-clear>
               <a-option v-for="s in extractSchemas" :key="s.id" :value="s.id">{{ s.label }}（{{ s.kind === 'entity' ? '实体' : '关系' }} · {{ s.name }}）</a-option>
             </a-select>
           </div>
@@ -263,14 +263,14 @@ async function submit() {
         </div>
         <div v-else-if="taskType === 'single'" class="job-field">
           <span>抽取脚本（可搜索）</span>
-          <a-select v-model="singleDefinitionId" placeholder="搜索并选择脚本" allow-search allow-clear :filter-option="filterScript">
+          <a-select v-model="singleDefinitionId" class="job-select" placeholder="搜索并选择脚本" allow-search allow-clear :filter-option="filterScript">
             <a-option v-for="d in scriptDefinitions" :key="d.id" :value="d.id">{{ d.name }}（{{ d.id }}）</a-option>
           </a-select>
         </div>
 
         <div v-else-if="taskType === 'chain'" class="job-field">
           <span>抽取脚本队列（按顺序串行执行）</span>
-          <a-select :model-value="chainPick" placeholder="搜索并添加脚本" allow-search allow-clear :filter-option="filterScript" @change="addChainStep">
+          <a-select :model-value="chainPick" class="job-select" placeholder="搜索并添加脚本" allow-search allow-clear :filter-option="filterScript" @change="addChainStep">
             <a-option v-for="d in scriptDefinitions" :key="d.id" :value="d.id">{{ d.name }}（{{ d.id }}）</a-option>
           </a-select>
           <ol v-if="chainSteps.length" class="chain-steps">
@@ -299,13 +299,13 @@ async function submit() {
           <div class="job-row">
             <div class="job-field">
               <span>图空间</span>
-              <a-select v-model="graphSpace" placeholder="默认空间" allow-clear>
+              <a-select v-model="graphSpace" class="job-select" placeholder="默认空间" allow-clear>
                 <a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option>
               </a-select>
             </div>
             <div class="job-field">
               <span>大模型配置</span>
-              <a-select v-model="llmConfigId" placeholder="使用默认" allow-clear>
+              <a-select v-model="llmConfigId" class="job-select" placeholder="使用默认" allow-clear>
                 <a-option v-for="c in llmConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）</a-option>
               </a-select>
             </div>
@@ -313,7 +313,7 @@ async function submit() {
           <div class="job-row">
             <div class="job-field">
               <span>MySQL 数据源</span>
-              <a-select v-model="mysqlDatasourceId" placeholder="使用默认" allow-clear>
+              <a-select v-model="mysqlDatasourceId" class="job-select" placeholder="使用默认" allow-clear>
                 <a-option v-for="d in mysqlDatasources" :key="d.id" :value="d.id">{{ d.name }}</a-option>
               </a-select>
             </div>
@@ -325,13 +325,13 @@ async function submit() {
           <div class="job-row">
             <div class="job-field">
               <span>Embedding 配置</span>
-              <a-select v-model="embeddingConfigId" placeholder="使用默认" allow-clear>
+              <a-select v-model="embeddingConfigId" class="job-select" placeholder="使用默认" allow-clear>
                 <a-option v-for="c in embeddingConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）</a-option>
               </a-select>
             </div>
             <div class="job-field">
               <span>Milvus 配置</span>
-              <a-select v-model="milvusConfigId" placeholder="使用默认" allow-clear>
+              <a-select v-model="milvusConfigId" class="job-select" placeholder="使用默认" allow-clear>
                 <a-option v-for="c in milvusConfigs" :key="c.id" :value="c.id">{{ c.name }}</a-option>
               </a-select>
             </div>
@@ -361,7 +361,7 @@ async function submit() {
             <template v-if="executeMode === 'recurring'">
               <div class="job-field">
                 <span>频率</span>
-                <a-select v-model="frequency" :options="['每天', '每12小时', '每6小时', '每周']" />
+                <a-select v-model="frequency" class="job-select" aria-label="频率" :options="['每天', '每12小时', '每6小时', '每周']" />
               </div>
               <label class="job-field">
                 <span>执行时间</span>
@@ -385,18 +385,27 @@ async function submit() {
 <style scoped>
 .job-launch-mask{position:fixed;inset:0;z-index:49;border:0;background:rgba(16,38,76,0.42);backdrop-filter:blur(2px);cursor:pointer}
 .job-launch-dialog{position:fixed;z-index:50;top:50%;left:50%;width:min(720px,calc(100vw - 48px));max-height:calc(100vh - 48px);display:flex;flex-direction:column;overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3);transform:translate(-50%,-50%)}
-.job-launch-dialog>header{display:flex;box-sizing:border-box;flex:0 0 56px;height:56px;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:1px solid #e3ebf6;background:linear-gradient(90deg,#eef5ff,#fff)}
+.job-launch-dialog>header{display:flex;box-sizing:border-box;flex:0 0 56px;height:56px;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:1px solid #e5e6eb;background:#fff}
 .job-launch-dialog h2{margin:0;font-size:16px;line-height:24px;color:#1d2129}
-.job-launch-dialog header button{width:32px;height:32px;border:0;border-radius:4px;background:#f0f4fa;color:#4e5969;font-size:18px;cursor:pointer}
-.job-launch-body{flex:1;min-height:0;box-sizing:border-box;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:14px}
-.job-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.job-launch-dialog header button{display:grid;box-sizing:border-box;width:32px;height:32px;padding:0;border:0;border-radius:4px;background:#fff;color:#4e5969;font-size:18px;line-height:18px;cursor:pointer;place-items:center}
+.job-launch-body{flex:1;min-height:0;box-sizing:border-box;overflow-x:hidden;overflow-y:auto;padding:24px;display:flex;flex-direction:column;gap:16px}
+.job-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .job-row:has(> :nth-child(3)){grid-template-columns:1fr 1fr 1fr}
-.job-field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#4e5969}
-.job-field>span{color:#5d6e87;font-size:12px;line-height:20px}
-.job-field input{height:32px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:13px;color:#1d2129;background:#fff}
+.job-basics{display:grid;gap:16px}
+.job-field{display:flex;min-width:0;flex-direction:column;gap:8px;color:#4e5969;font-size:14px;line-height:22px}
+.job-field>span{color:#4e5969;font-size:14px;line-height:22px}
+.job-field>input:not([type="file"]){box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:22px;outline:0;box-shadow:none}
+.job-field>input:not([type="file"]):hover{border-color:#4080ff}
+.job-field>input:not([type="file"]):focus,.job-field>input:not([type="file"]):focus-visible{border-color:#165dff;outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
+:deep(.job-select.arco-select-view){display:inline-flex;box-sizing:border-box;width:100%;min-width:0;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;align-items:center}
+:deep(.job-select.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
+:deep(.job-select.arco-select-view:focus-within),:deep(.job-select.arco-select-view-focus){border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+:deep(.job-select.arco-select-view .arco-select-view-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
+:deep(.job-select.arco-select-view .arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
+:deep(.job-select.arco-select-view .arco-select-view-value),:deep(.job-select.arco-select-view .arco-select-view-placeholder){min-width:0;overflow:hidden;background:transparent!important;font-size:14px;line-height:30px;text-overflow:ellipsis;white-space:nowrap}
 .job-field.checkbox-field{justify-content:flex-end}
-.job-section{display:flex;flex-direction:column;gap:12px;margin:0;padding:14px 16px 4px;border:1px solid #e5e6eb;border-radius:6px}
-.job-section legend{padding:0 6px;color:#165dff;font-size:12px}
+.job-section{display:flex;flex-direction:column;gap:16px;margin:0;padding:16px;border:1px solid #e5e6eb;border-radius:6px;background:#f7f8fa}
+.job-section legend{padding:0 8px;color:#165dff;font-size:14px;line-height:22px}
 .job-launch-dialog>footer{display:flex;box-sizing:border-box;flex:0 0 64px;height:64px;align-items:center;justify-content:flex-end;gap:16px;padding:16px 24px;border-top:1px solid #e3ebf6;background:#fff}
 .job-launch-dialog footer button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;cursor:pointer}
 .job-launch-dialog footer .primary{border-color:#165dff;background:#165dff;color:#fff}

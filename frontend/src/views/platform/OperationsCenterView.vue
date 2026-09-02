@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { IconSearch } from '@arco-design/web-vue/es/icon'
 
 import { getExecution, getProductionReviews, listExecutions, rerunExtractFailures, type ProductionReviewCase, type ReviewRecord } from '../../api/workflowOperations'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
@@ -297,7 +298,6 @@ onMounted(loadReviews)
 
       <p v-if="actionFeedback" class="ops-feedback">{{ actionFeedback }}</p>
     </template>
-
     <section class="ops-panel">
       <div v-if="mode === 'review'" class="alert-tabs">
         <nav>
@@ -340,7 +340,8 @@ onMounted(loadReviews)
 
       <div v-if="mode === 'alerts'" class="alert-tabs"><nav><button v-for="item in alertCategories" :key="item" type="button" :class="{ active:alertCategory===item }" @click="alertCategory=item">{{ item }}</button></nav><a-checkbox v-model="blockingOnly">仅看已阻断</a-checkbox></div>
       <a-form v-if="mode === 'alerts' || reviewCategory === 'A' || rerunView === 'cases'" :model="{ keyword, severity, domain, status, reviewStatusFilter, reviewKindFilter }" :class="['ops-filter', { 'is-review': mode === 'review' }]" layout="vertical">
-        <a-form-item field="keyword"><input v-model="keyword" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" :placeholder="mode === 'review' ? '搜索处理实例 ID、对象或来源记录' : '搜索批次、对象、异常原因'" /></a-form-item>
+        <a-form-item v-if="mode === 'review'" field="keyword"><a-input v-model="keyword" class="review-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录"><template #prefix><IconSearch /></template></a-input></a-form-item>
+        <a-form-item v-else field="keyword"><input v-model="keyword" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索批次、对象、异常原因" placeholder="搜索批次、对象、异常原因" /></a-form-item>
         <template v-if="mode === 'alerts'">
           <a-form-item field="severity"><a-select v-model="severity" :options="['全部风险', '高风险', '中风险', '低风险']" /></a-form-item>
           <a-form-item field="domain"><a-select v-model="domain" :options="['全部业务域', '人才域', '论文域', '企业域']" /></a-form-item>
@@ -532,6 +533,7 @@ onMounted(loadReviews)
 .ops-metrics span,.ops-metrics em{font-size:12px;line-height:20px}.ops-metrics strong{font-size:20px;line-height:28px;font-weight:600}
 .ops-panel{border-color:#e5e6eb;border-radius:6px;background:#fff;box-shadow:none}
 .ops-filter,.ops-filter.is-review{box-sizing:border-box;width:100%;grid-template-columns:minmax(280px,1fr) minmax(160px,200px) minmax(160px,200px) auto;column-gap:16px!important;row-gap:16px!important;padding:16px!important;background:#fff}
+.alert-tabs nav button{height:36px;padding:0 16px;font-size:14px;line-height:22px}.alert-tabs nav button.active{font-weight:500}
 .ops-filter input,.ops-filter select,.ops-filter button{height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px}.ops-filter button{padding:0 16px}
 .ops-review-table-scroll table{min-width:1280px;font-size:14px;line-height:22px}.ops-review-table-scroll th,.ops-review-table-scroll td{height:40px;padding:0 16px}.ops-review-table-scroll th{background:#f7f8fa;color:#1d2129;font-weight:500}
 .ops-review-table-scroll td small,.review-source-cell strong,.review-question-cell strong,.review-confidence-cell>b{font-size:12px;line-height:20px}
@@ -546,6 +548,12 @@ onMounted(loadReviews)
 .ops-filter :deep(.arco-form-item-wrapper-col),.ops-filter :deep(.arco-form-item-content-wrapper),.ops-filter :deep(.arco-form-item-content){box-sizing:border-box;width:100%;min-width:0}
 /* Prevent page-level native input rules from styling Arco Select's internal input. */
 .ops-filter :deep(.arco-select){width:100%;min-width:0}
+.review-search-input.arco-input-wrapper{box-sizing:border-box;width:100%;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
+.review-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
+.review-search-input.arco-input-wrapper:focus-within,.review-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+.review-search-input.arco-input-wrapper :deep(.arco-input-prefix){padding-right:8px;color:#4e5969}.review-search-input.arco-input-focus :deep(.arco-input-prefix){color:#165dff}
+.review-search-input.arco-input-wrapper :deep(.arco-input-prefix svg){width:16px;height:16px;font-size:16px}
+.review-search-input.arco-input-wrapper :deep(.arco-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:none!important}
 .ops-filter :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff}
 .ops-filter :deep(.arco-select-view-input){height:100%!important;min-height:0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important}
 .ops-filter :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;pointer-events:none!important}
@@ -569,4 +577,9 @@ onMounted(loadReviews)
 .review-status.is-已完成{color:#067647}
 .review-status.is-排队中{color:#b54708}
 .review-status.is-已取消{color:#86909c}
+</style>
+<style>
+/* Keep the Arco input's native field transparent; the wrapper is the only visible input shell. */
+.app-workspace .ops-page .ops-filter.is-review .review-search-input.arco-input-wrapper input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
+.app-workspace .ops-page .ops-filter.is-review .review-search-input.arco-input-wrapper input.arco-input:focus{border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
 </style>

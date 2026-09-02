@@ -6,6 +6,7 @@ import {
   watch,
 } from 'vue'
 import { useRouter } from 'vue-router'
+import { IconInfoCircle } from '@arco-design/web-vue/es/icon'
 import {
   getSubgraph,
   listGraphSpaces,
@@ -5055,11 +5056,20 @@ const pageMeta = computed(() => {
         </a-form>
         <div v-else class="platform-ngql-input">
           <div class="platform-ngql-input__bar">
-            <label>图空间</label>
-            <a-select v-model="ngqlSpace" class="platform-ngql-input__space">
-              <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
-            </a-select>
-            <span class="platform-ngql-input__hint">只读语句所有用户可执行；写语句仅平台管理员；DDL 禁止执行</span>
+            <div class="platform-ngql-input__space-field">
+              <label>图空间</label>
+              <a-select v-model="ngqlSpace" class="platform-ngql-input__space">
+                <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
+              </a-select>
+            </div>
+            <div class="platform-ngql-input__hint" role="note">
+              <IconInfoCircle aria-hidden="true" />
+              <span>只读语句所有用户可执行</span>
+              <i aria-hidden="true"></i>
+              <span>写语句仅平台管理员</span>
+              <i aria-hidden="true"></i>
+              <span>DDL 禁止执行</span>
+            </div>
           </div>
           <textarea
             v-model="ngqlStatement"
@@ -8515,7 +8525,7 @@ print(response.json())</pre>
 .platform-query .kg-panel__header{min-height:40px;padding:8px 16px;border-color:#e5e6eb;background:#f7f8fa}
 .platform-query .kg-panel__title{font-size:16px;line-height:24px;font-weight:600}
 .platform-query-form{overflow:hidden;border:1px solid #e5e6eb!important;border-radius:6px!important}.platform-query-form .kg-panel__header{box-sizing:border-box;height:40px;min-height:40px;padding:0 16px}
-.platform-query .platform-form-grid{grid-template-columns:repeat(4,minmax(0,1fr));column-gap:16px;row-gap:16px;padding:16px}
+.platform-query .platform-form-grid{grid-template-columns:repeat(3,minmax(0,1fr));column-gap:16px;row-gap:16px;padding:16px}
 .platform-query .platform-form-grid :deep(.arco-form-item){width:100%;min-width:0;margin-bottom:0}
 .platform-query .platform-form-field :deep(.arco-form-item-wrapper-col),.platform-query .platform-form-field :deep(.arco-form-item-content-wrapper),.platform-query .platform-form-field :deep(.arco-form-item-content){box-sizing:border-box;width:100%;min-width:0;max-width:100%;flex:1 1 0%}
 .platform-query .platform-form-field :deep(.arco-form-item-content-flex){display:flex;width:100%;min-width:0;max-width:100%;flex:1 1 0%}
@@ -8547,11 +8557,19 @@ print(response.json())</pre>
 .platform-query-mode-toggle__item{padding:4px 14px;border:0;background:#fff;color:#4e5969;font-size:13px;line-height:20px;cursor:pointer}
 .platform-query-mode-toggle__item+.platform-query-mode-toggle__item{border-left:1px solid #e5e6eb}
 .platform-query-mode-toggle__item.is-active{background:#165dff;color:#fff}
-.platform-ngql-input{display:grid;gap:8px;padding:0 16px 16px}
-.platform-ngql-input__bar{display:flex;align-items:center;gap:8px;font-size:13px;color:#4e5969}
-.platform-ngql-input__bar>label{flex:0 0 auto}
-.platform-ngql-input__space{width:200px}
-.platform-ngql-input__hint{margin-left:auto;color:#86909c;font-size:12px}
+.platform-ngql-input{display:grid;gap:16px;padding:16px}
+.platform-ngql-input__bar{display:flex;align-items:center;gap:16px;color:#4e5969;font-size:14px;line-height:22px;flex-wrap:wrap}
+.platform-ngql-input__space-field{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;white-space:nowrap}.platform-ngql-input__space-field>label{flex:0 0 auto}
+.platform-ngql-input__space-field :deep(.arco-select){width:180px;min-width:180px;max-width:180px;flex:0 0 180px}
+.platform-ngql-input__space-field :deep(.arco-select-view){display:inline-flex;box-sizing:border-box;width:180px;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;align-items:center}
+.platform-ngql-input__space-field :deep(.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
+.platform-ngql-input__space-field :deep(.arco-select-view:focus-within),.platform-ngql-input__space-field :deep(.arco-select-view-focus){border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+.platform-ngql-input__space :deep(.arco-select-view-input){box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
+.platform-ngql-input__space :deep(.arco-select-view-input:focus),.platform-ngql-input__space :deep(.arco-select-view-input:focus-visible){border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
+.platform-ngql-input__space :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
+.platform-ngql-input__space :deep(.arco-select-view-value){min-width:0;overflow:hidden;color:#1d2129;font-size:14px;line-height:30px;text-overflow:ellipsis;white-space:nowrap}
+.platform-ngql-input__hint{display:inline-flex;min-height:32px;box-sizing:border-box;align-items:center;gap:8px;margin-left:0;padding:0;background:transparent;color:#4e5969;font-size:12px;line-height:20px;flex-wrap:wrap}
+.platform-ngql-input__hint>svg{flex:0 0 16px;width:16px;height:16px;color:inherit}.platform-ngql-input__hint>span{white-space:nowrap}.platform-ngql-input__hint>i{flex:0 0 4px;width:4px;height:4px;border-radius:50%;background:#86909c}
 .platform-ngql-input__textarea{box-sizing:border-box;width:100%;padding:10px 12px;border:1px solid #e5e6eb;border-radius:4px;background:#0d1117;color:#e6edf3;font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical;outline:0}
 .platform-ngql-input__textarea:focus{border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
 .platform-ngql-result{overflow:hidden}
@@ -8574,4 +8592,10 @@ print(response.json())</pre>
   .platform-review-list a{grid-template-columns:minmax(0,1fr)}
   .platform-review-list .is-risk{justify-self:start}
 }
+</style>
+<style>
+/* The SelectView owns the only visible shell; its readonly input must never paint over the selected value. */
+.app-workspace .platform-query .platform-ngql-input__space input.arco-select-view-input{box-sizing:border-box;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
+.app-workspace .platform-query .platform-ngql-input__space input.arco-select-view-input:focus,.app-workspace .platform-query .platform-ngql-input__space input.arco-select-view-input:focus-visible{border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
+.app-workspace .platform-query .platform-ngql-input__space input.arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
 </style>

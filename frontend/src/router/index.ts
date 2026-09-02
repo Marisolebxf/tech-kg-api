@@ -87,7 +87,7 @@ export const router = createRouter({
     { path: '/admin/tasks', redirect: '/admin/corrections' },
     { path: '/admin/pipelines', redirect: '/admin/corrections' },
     { path: '/admin/configurations', redirect: '/admin/corrections' },
-    { path: '/schema', name: 'schema', component: SchemaBrowserView, meta: { title: '图谱 Schema' } },
+    { path: '/schema', name: 'schema', component: SchemaBrowserView, meta: { title: 'Schema 管理' } },
     { path: '/graph-build', name: 'graph-build', component: GraphBuildView, meta: { title: '图谱构建' } },
     { path: '/graph-build/jobs/:jobId', name: 'job-detail', component: ProcessInstanceDetailView, meta: { title: '任务详情' } },
     { path: '/manual-review', name: 'manual-review', component: OperationsCenterView, props: { mode: 'review' }, meta: { title: '人工审核' } },

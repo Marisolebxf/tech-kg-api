@@ -185,13 +185,16 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                 if industry_kw and not anchor and not any(layer["items"] for layer in layers):
                     layers, seed_vids = await self._fetch_layers(client, None, top_k, True)
                     fallback_reason = "keyword_fallback_overview"
-                graph = await self._fetch_graph(
-                    client,
-                    seed_vids,
-                    anchor,
-                    depth,
-                    relation_types=rel_types,
-                )
+                if rel_types:
+                    graph = await self._fetch_graph(
+                        client,
+                        seed_vids,
+                        anchor,
+                        depth,
+                        relation_types=rel_types,
+                    )
+                else:
+                    graph = await self._fetch_graph(client, seed_vids, anchor, depth)
                 graph = self._filter_graph_by_relation_types(graph, rel_types)
                 query_input["anchorId"] = anchor or ""
         except GraphAPIError as exc:

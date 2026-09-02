@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from uuid import uuid4
 
@@ -31,14 +32,21 @@ class GraphSchemaDefinition(Base):
 
     __tablename__ = "kg_schema_definition"
     __table_args__ = (
-        UniqueConstraint("schema_key", name="uk_kg_schema_definition_key"),
-        UniqueConstraint("name", name="uk_kg_schema_definition_name"),
+        UniqueConstraint("schema_key", "graph_space", name="uk_kg_schema_definition_key"),
+        UniqueConstraint("name", "graph_space", name="uk_kg_schema_definition_name"),
         Index("idx_kg_schema_definition_kind_created", "kind", "created_at"),
+        Index("idx_kg_schema_definition_space", "graph_space"),
         {"comment": "知识图谱实体与关系 Schema 定义"},
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     schema_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Schema 归属图空间：DDL 在该空间执行，同名 schema 可存在于不同空间
+    graph_space: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default=lambda: os.getenv("TRS_GRAPH_SPACE", "techkg"),
+    )
     kind: Mapped[str] = mapped_column(String(16), nullable=False, comment="entity/relation")
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     label: Mapped[str] = mapped_column(String(128), nullable=False)

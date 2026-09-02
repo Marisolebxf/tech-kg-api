@@ -26,6 +26,7 @@ from db_model.schema_management import (
 from infra.llm import LLMClient, get_llm_client
 from infra.s3 import S3Storage, get_schema_s3_storage
 from service.schema_ddl import (
+    default_graph_space,
     describe_schema_columns,
     run_alter_add_ddl,
     run_alter_drop_ddl,
@@ -189,6 +190,23 @@ def _validate_datasource_exists(datasource_id: str) -> None:
         raise SchemaConflictError(f"来源数据源不存在: {datasource_id}")
 
 
+def _resolve_graph_space(payload: dict[str, Any]) -> str:
+    """解析并校验目标图空间：payload 显式指定 > TRS_GRAPH_SPACE 默认。
+
+    空间必须真实存在于图服务（SHOW SPACES），不存在抛 SchemaConflictError。
+    """
+    space = (payload.get("graph_space") or "").strip() or default_graph_space()
+    try:
+        from service.schema_ddl import list_graph_spaces
+
+        spaces = list_graph_spaces()
+    except Exception as exc:  # noqa: BLE001
+        raise SchemaConflictError(f"图服务不可用，无法校验图空间: {exc}") from exc
+    if space not in spaces:
+        raise SchemaConflictError(f"图空间 {space} 不存在，请先在配置管理页创建或绑定该图空间")
+    return space
+
+
 def find_running_extraction(definition: GraphSchemaDefinition) -> dict[str, Any] | None:
     """查该 Schema 是否有运行中的 kg.schema.extract 执行记录（删除属性前拦截用）。
 
@@ -230,8 +248,8 @@ class SchemaManagementService:
         self._dao = SchemaManagementDAO(session)
         self._storage = storage or get_schema_s3_storage()
 
-    def overview(self) -> dict[str, Any]:
-        stats = self._dao.stats()
+    def overview(self, graph_space: str | None = None) -> dict[str, Any]:
+        stats = self._dao.stats(graph_space)
         return {
             "currentVersion": os.getenv("SCHEMA_CATALOG_VERSION", "tech-kg-schema-v1.8"),
             "environment": os.getenv("SCHEMA_CATALOG_ENVIRONMENT", "生产中"),
@@ -257,9 +275,12 @@ class SchemaManagementService:
         user_id: str | None,
         include_details: bool = False,
         is_platform_admin: bool = False,
+        graph_space: str | None = None,
     ) -> dict[str, Any]:
         user_id = user_id.strip() if user_id else None
-        items, total = self._dao.list(kind=kind, keyword=keyword, page=page, page_size=page_size)
+        items, total = self._dao.list(
+            kind=kind, keyword=keyword, page=page, page_size=page_size, graph_space=graph_space
+        )
         return {
             "items": [
                 self._serialize(
@@ -296,9 +317,10 @@ class SchemaManagementService:
         user_id: str | None,
         *,
         is_platform_admin: bool = False,
+        graph_space: str | None = None,
     ) -> dict[str, Any]:
         user_id = user_id.strip() if user_id else None
-        definitions = self._dao.list_all()
+        definitions = self._dao.list_all(graph_space)
         nodes = [
             self._serialize(
                 item,
@@ -349,6 +371,15 @@ class SchemaManagementService:
             raise SchemaConflictError("关系终点必须引用已存在的实体 Schema")
         if not source_id or not target_id:
             raise SchemaConflictError("用户新建关系的起点和终点必须是已存在的实体 Schema")
+        # 关系与其端点实体必须同空间：DDL 与端点解析都按空间语义执行
+        space = payload.get("graph_space") or default_graph_space()
+        for endpoint, role in ((source, "起点"), (target, "终点")):
+            if endpoint.graph_space != space:
+                raise SchemaConflictError(
+                    f"关系{role}实体 {endpoint.name} 属于图空间 {endpoint.graph_space}，"
+                    f"与目标图空间 {space} 不一致，请在同一空间内选择关联实体"
+                )
+        payload["graph_space"] = space
         payload["source_expression"] = payload.get("source_expression") or source.name
         payload["target_expression"] = payload.get("target_expression") or target.name
         return self._create(kind="relation", payload=payload, user_id=user_id)
@@ -701,7 +732,9 @@ class SchemaManagementService:
             self._session.rollback()
             raise SchemaConflictError("属性名已存在") from exc
 
-        ddl_result = run_alter_add_ddl(definition.kind, definition.name, prop.model_dump())
+        ddl_result = run_alter_add_ddl(
+            definition.kind, definition.name, prop.model_dump(), definition.graph_space
+        )
         if ddl_result["status"] != "succeeded":
             self._session.rollback()
             raise SchemaDdlError(f"图 ALTER DDL 执行失败: {ddl_result['error']}")
@@ -753,9 +786,11 @@ class SchemaManagementService:
         ddl_statement: str | None = None
         ddl_status = "skipped"
         ddl_error: str | None = None
-        columns = describe_schema_columns(definition.kind, definition.name)
+        columns = describe_schema_columns(definition.kind, definition.name, definition.graph_space)
         if columns and property_name in columns:
-            ddl_result = run_alter_drop_ddl(definition.kind, definition.name, property_name)
+            ddl_result = run_alter_drop_ddl(
+                definition.kind, definition.name, property_name, definition.graph_space
+            )
             if ddl_result["status"] != "succeeded":
                 # 图库删列失败（如索引依赖）：目录不动，错误如实透出
                 raise SchemaDdlError(f"图 ALTER DDL 执行失败: {ddl_result['error']}")
@@ -916,7 +951,10 @@ class SchemaManagementService:
         user_id = user_id.strip()
         if not user_id or len(user_id) > 128:
             raise SchemaPermissionError("X-User-Id 不能为空且不能超过 128 个字符")
-        if self._dao.exists_by_key_or_name(payload["schema_key"], payload["name"]):
+        # 解析并锁定目标图空间：目录唯一性按空间判定，DDL 定向执行
+        graph_space = _resolve_graph_space(payload)
+        payload["graph_space"] = graph_space
+        if self._dao.exists_by_key_or_name(payload["schema_key"], payload["name"], graph_space):
             raise SchemaConflictError("schemaKey 或 Schema 名称已存在")
 
         schema_id = str(uuid4())
@@ -937,7 +975,7 @@ class SchemaManagementService:
             raise
 
         # 落库后执行图 DDL，结果回写。DDL 失败不回滚 catalog 行。
-        ddl_result = run_schema_ddl(kind, payload["name"], payload["properties"])
+        ddl_result = run_schema_ddl(kind, payload["name"], payload["properties"], graph_space)
         try:
             definition = self._require_schema(schema_id)
             definition.ddl_statement = ddl_result["statement"]
@@ -1026,6 +1064,7 @@ class SchemaManagementService:
             "key": definition.schema_key,
             "kind": definition.kind,
             "kindLabel": "实体" if definition.kind == "entity" else "关系",
+            "graphSpace": definition.graph_space,
             "name": definition.name,
             "label": definition.label,
             "description": definition.description,

@@ -61,6 +61,7 @@ class WorkflowRepository:
         # 这里只建表 + seed（可选）+ 注册 builtin 工作流定义。
         Base.metadata.create_all(self._engine)
         self._migrate_job_columns()
+        self._migrate_schema_space_column()
         demo_enabled = os.getenv("WORKFLOW_DEMO_DATA_ENABLED", "false").lower() in {
             "1",
             "true",
@@ -91,6 +92,34 @@ class WorkflowRepository:
                     "ADD COLUMN job_id VARCHAR(255) NULL, "
                     "ADD INDEX ix_workflow_executions_job_id (job_id)"
                 )
+            )
+
+    def _migrate_schema_space_column(self) -> None:
+        """幂等为 kg_schema_definition 补 graph_space 列并把唯一键升级为 (col, space) 复合。
+
+        存量行回填为当前环境的 TRS_GRAPH_SPACE；仅 MySQL 方言（SQLite 测试库走 create_all）。
+        """
+        from sqlalchemy import inspect, text
+
+        inspector = inspect(self._engine)
+        if "kg_schema_definition" not in inspector.get_table_names():
+            return
+        columns = {column["name"] for column in inspector.get_columns("kg_schema_definition")}
+        if "graph_space" in columns:
+            return
+        default_space = os.getenv("TRS_GRAPH_SPACE", "techkg")
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE kg_schema_definition "
+                    "ADD COLUMN graph_space VARCHAR(64) NOT NULL DEFAULT :space, "
+                    "ADD INDEX idx_kg_schema_definition_space (graph_space), "
+                    "DROP INDEX uk_kg_schema_definition_key, "
+                    "ADD UNIQUE KEY uk_kg_schema_definition_key (schema_key, graph_space), "
+                    "DROP INDEX uk_kg_schema_definition_name, "
+                    "ADD UNIQUE KEY uk_kg_schema_definition_name (name, graph_space)"
+                ),
+                {"space": default_space},
             )
 
     def _ensure_builtin_definitions(self) -> None:

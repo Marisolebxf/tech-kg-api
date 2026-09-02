@@ -121,7 +121,7 @@ def test_alter_add_drop_symmetry() -> None:
 def test_run_alter_drop_ddl_wraps_execute(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, str] = {}
 
-    def fake_execute(ddl: str):
+    def fake_execute(ddl: str, graph_space: str | None = None):
         captured["ddl"] = ddl
         return "succeeded", None
 

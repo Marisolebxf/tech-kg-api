@@ -122,6 +122,7 @@ def load_extract_schema(schema_id: str, *, session: Session | None = None) -> di
             "kind": row.kind,
             "name": row.name,
             "label": row.label,
+            "graph_space": row.graph_space,
             "property_revision": row.property_revision,
             "captured_revision": row.script.captured_revision if row.script else None,
         }
@@ -167,7 +168,10 @@ class SchemaExtractionService:
 
         payload = {
             "schemaId": schema_id,
-            "graphSpace": graph_space or os.getenv("TRS_GRAPH_SPACE", "techkg"),
+            # 空间优先级：显式传参 > Schema 目录登记的归属空间 > env 默认
+            "graphSpace": graph_space
+            or info.get("graph_space")
+            or os.getenv("TRS_GRAPH_SPACE", "techkg"),
             "batchSize": min(max(int(batch_size or DEFAULT_BATCH_SIZE), 1), MAX_BATCH_SIZE),
             "triggerSource": "MANUAL",
         }

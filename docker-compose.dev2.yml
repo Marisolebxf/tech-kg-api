@@ -191,7 +191,7 @@ services:
         # /bkg_zpt/assets/* 而 nginx 404 → 白屏。与 TRS_GRAPH_SPACE 锁死同一理由。
         VITE_BASE: /
         VITE_API_BASE: /api
-        VITE_GRAPH_SPACE: ${VITE_GRAPH_SPACE:-test}
+        VITE_GRAPH_SPACE: ${VITE_GRAPH_SPACE:-dev2}
         VITE_AUTH_ENABLED: ${VITE_AUTH_ENABLED:-false}
         VITE_PORTAL_EMBEDDED_DEFAULT: ${VITE_PORTAL_EMBEDDED_DEFAULT:-false}
         VITE_PORTAL_ALLOWED_ORIGINS: ${VITE_PORTAL_ALLOWED_ORIGINS:-https://edu.itic-sci.com}

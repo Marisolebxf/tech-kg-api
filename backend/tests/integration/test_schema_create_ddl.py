@@ -43,6 +43,10 @@ class _FakeGraphClient:
         self.writes: list[str] = []
         self._raise = raise_on_write
 
+    def list_spaces(self) -> list[str]:
+        # 与钉住的 TRS_GRAPH_SPACE 一致，使 _resolve_graph_space 校验通过
+        return ["techkg"]
+
     def execute_write(self, query: str) -> None:
         self.writes.append(query)
         if self._raise:
@@ -58,6 +62,8 @@ def schema_api(monkeypatch):
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+    # 先钉住空间再种子：kg_schema_definition.graph_space 的模型默认值取该 env
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "techkg")
     initialize_schema_management(engine)
     storage = FakeS3Storage()
 

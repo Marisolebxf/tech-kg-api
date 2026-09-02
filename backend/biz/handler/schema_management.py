@@ -65,8 +65,11 @@ def _raise_domain_error(exc: SchemaManagementError) -> None:
 
 
 @router.get("/overview", response_model=ApiResponse)
-def get_schema_overview(session: Annotated[Session, Depends(get_workflow_session)]) -> ApiResponse:
-    return ApiResponse(data=_application(session).overview())
+def get_schema_overview(
+    session: Annotated[Session, Depends(get_workflow_session)],
+    graph_space: Annotated[str | None, Query(alias="graphSpace", max_length=64)] = None,
+) -> ApiResponse:
+    return ApiResponse(data=_application(session).overview(graph_space))
 
 
 @router.get("/schemas", response_model=ApiResponse)
@@ -78,6 +81,7 @@ def list_schemas(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
     include_details: Annotated[bool, Query(alias="includeDetails")] = False,
+    graph_space: Annotated[str | None, Query(alias="graphSpace", max_length=64)] = None,
 ) -> ApiResponse:
     data = _application(session).list_schemas(
         kind=kind,
@@ -87,6 +91,7 @@ def list_schemas(
         user_id=actor.user_id,
         include_details=include_details,
         is_platform_admin=actor.is_admin,
+        graph_space=graph_space,
     )
     return ApiResponse(data=data)
 
@@ -95,11 +100,13 @@ def list_schemas(
 def get_schema_topology(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
+    graph_space: Annotated[str | None, Query(alias="graphSpace", max_length=64)] = None,
 ) -> ApiResponse:
     return ApiResponse(
         data=_application(session).topology(
             actor.user_id,
             is_platform_admin=actor.is_admin,
+            graph_space=graph_space,
         )
     )
 

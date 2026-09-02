@@ -17,8 +17,8 @@ class SchemaManagementApplication:
         self._service = SchemaManagementService(session, storage=storage)
         self._extraction = SchemaExtractionService(session)
 
-    def overview(self) -> dict[str, Any]:
-        return self._service.overview()
+    def overview(self, graph_space: str | None = None) -> dict[str, Any]:
+        return self._service.overview(graph_space)
 
     def list_schemas(self, **kwargs) -> dict[str, Any]:
         return self._service.list_schemas(**kwargs)

@@ -6,7 +6,7 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from service.schema_ddl import is_valid_data_type
+from service.schema_ddl import FIXED_STRING_MAX_LENGTH, is_valid_data_type
 
 ENTITY_NAME_PATTERN = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 RELATION_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -44,6 +44,8 @@ class SchemaPropertyInput(CamelModel):
     @field_validator("data_type")
     @classmethod
     def validate_data_type(cls, value: str) -> str:
+        if re.fullmatch(r"fixed_string\(\d+\)", value) and not is_valid_data_type(value):
+            raise ValueError(f"fixed_string 长度必须在 1～{FIXED_STRING_MAX_LENGTH} 之间")
         if not is_valid_data_type(value):
             raise ValueError(
                 "data_type 必须是 string/int64/double/bool/date/datetime/geo 或 fixed_string(N)"
@@ -62,12 +64,21 @@ class SchemaCreateBase(CamelModel):
     is_core: bool = False
     version: str = Field(default="v1.0", min_length=1, max_length=32)
     llm_config_id: str | None = Field(default=None, max_length=64)
+    # 目标图空间：缺省回退 TRS_GRAPH_SPACE；DDL 在该空间执行
+    graph_space: str | None = Field(default=None, min_length=1, max_length=64)
 
     @field_validator("schema_key")
     @classmethod
     def validate_key(cls, value: str) -> str:
         if not KEY_PATTERN.fullmatch(value):
             raise ValueError("schemaKey 必须以小写字母开头，只能包含小写字母、数字、-、_")
+        return value
+
+    @field_validator("graph_space")
+    @classmethod
+    def validate_graph_space(cls, value: str | None) -> str | None:
+        if value and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", value):
+            raise ValueError("图空间名称仅支持字母、数字、下划线，且以字母或下划线开头（最长 64）")
         return value
 
     @field_validator("mappings")

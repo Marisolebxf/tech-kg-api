@@ -27,6 +27,7 @@ import {
   type SchemaScript,
 } from '../../api/schemaManagement'
 import { currentUserId as getCurrentUserId } from '../../api/currentUser'
+import { listGraphSpaces } from '../../api/graphSpace'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import KgGraphCanvas from '../../components/kg-graph-canvas.vue'
 import type { GraphEdgeData, GraphNodeData } from '../../data/graph-presets'
@@ -35,6 +36,8 @@ import {
   buildRequiredPropertyRows,
   emptyPropertyRow,
   PROPERTY_TYPES,
+  sanitizeLengthInput,
+  validateFixedLength,
   type PropertyDataType,
   type PropertyRow,
 } from './schema-browser/propertyRows'
@@ -50,6 +53,7 @@ type Entity = { id: string; name: string; label: string; level: '核心实体' |
 type Relation = { id: string; name: string; label: string; source: string; target: string; basis: string; schema: SchemaDefinition }
 
 type CreateForm = {
+  graphSpace: string
   name: string
   label: string
   description: string
@@ -62,6 +66,9 @@ type CreateForm = {
 const currentUserId = getCurrentUserId()
 
 const activeTab = ref('标准实体')
+// Schema 管理按图空间维度隔离：列表/拓扑/新建都以当前空间为准
+const graphSpaces = ref<string[]>([])
+const activeSpace = ref('')
 const keyword = ref('')
 // 版本记录（已隐藏）
 // const schemaVersionMessage = ref('')
@@ -170,7 +177,7 @@ function applyTopology(data: {
 
 async function loadTopology() {
   try {
-    applyTopology(await getSchemaTopology())
+    applyTopology(await getSchemaTopology(activeSpace.value || undefined))
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
   }
@@ -196,10 +203,10 @@ const deleting = ref(false)
 const propertyModalOpen = ref(false)
 const propertyTarget = ref<SchemaDefinition | null>(null)
 const propertySaving = ref(false)
-const propertyForm = ref<{ name: string; dataType: PropertyDataType; length: number; required: boolean }>({
+const propertyForm = ref<{ name: string; dataType: PropertyDataType; length: string; required: boolean }>({
   name: '',
   dataType: 'string',
-  length: 64,
+  length: '64',
   required: false,
 })
 // 删除属性二次确认
@@ -339,7 +346,7 @@ function openPropertyModal(schema: SchemaDefinition) {
     return
   }
   propertyTarget.value = schema
-  propertyForm.value = { name: '', dataType: 'string', length: 64, required: false }
+  propertyForm.value = { name: '', dataType: 'string', length: '64', required: false }
   propertyDeleteTarget.value = null
   propertyDeleteConfirmOpen.value = false
   propertyExtractConfirmOpen.value = false
@@ -370,9 +377,16 @@ async function submitAddProperty() {
     showToast('请填写属性名', 'warning')
     return
   }
+  if (propertyForm.value.dataType === 'fixed_string') {
+    const error = validateFixedLength(propertyForm.value.length)
+    if (error) {
+      showToast(error, 'warning')
+      return
+    }
+  }
   const dataType =
     propertyForm.value.dataType === 'fixed_string'
-      ? `fixed_string(${propertyForm.value.length || 64})`
+      ? `fixed_string(${propertyForm.value.length})`
       : propertyForm.value.dataType
   propertySaving.value = true
   try {
@@ -386,7 +400,7 @@ async function submitAddProperty() {
     } else {
       showToast(`属性已新增，但图 DDL 执行失败：${result.ddlError || '未知错误'}`, 'warning')
     }
-    propertyForm.value = { name: '', dataType: 'string', length: 64, required: false }
+    propertyForm.value = { name: '', dataType: 'string', length: '64', required: false }
     await refreshPropertyTarget()
     propertyExtractConfirmOpen.value = true
   } catch (error) {
@@ -464,6 +478,7 @@ const viewCodeRef = ref<HTMLElement | null>(null)
 
 function emptyCreateForm(): CreateForm {
   return {
+    graphSpace: activeSpace.value,
     name: '',
     label: '',
     description: '',
@@ -488,7 +503,39 @@ function removeProperty(index: number) {
 }
 
 function resolveDataType(row: PropertyRow): string {
-  return row.dataType === 'fixed_string' ? `fixed_string(${row.length || 64})` : row.dataType
+  return row.dataType === 'fixed_string' ? `fixed_string(${row.length})` : row.dataType
+}
+
+function fixedLengthInvalid(row: PropertyRow): boolean {
+  return row.dataType === 'fixed_string' && validateFixedLength(row.length) !== null
+}
+
+/** fixed_string 长度输入：即时净化（仅数字、≤64 字符），非法输入不会静默变成默认值 */
+function onLengthInput(row: PropertyRow, event: Event) {
+  const input = event.target as HTMLInputElement
+  row.length = sanitizeLengthInput(input.value)
+  input.value = row.length
+}
+
+const propertyLengthError = computed(() =>
+  propertyForm.value.dataType === 'fixed_string' ? validateFixedLength(propertyForm.value.length) : null,
+)
+const propertyLengthInvalid = computed(() => propertyLengthError.value !== null)
+
+function onPropertyLengthInput(event: Event) {
+  const input = event.target as HTMLInputElement
+  propertyForm.value.length = sanitizeLengthInput(input.value)
+  input.value = propertyForm.value.length
+}
+
+/** 首个 fixed_string 长度校验错误文案（用于 toast）；全部合法返回 null */
+function firstFixedLengthError(rows: PropertyRow[]): string | null {
+  for (const [index, row] of rows.entries()) {
+    if (row.dataType !== 'fixed_string') continue
+    const error = validateFixedLength(row.length)
+    if (error) return `第 ${index + 1} 个属性「${row.name || '未命名'}」：${error}`
+  }
+  return null
 }
 
 const createDdlPreview = computed(() => {
@@ -544,11 +591,36 @@ function applyDefinitions(definitions: SchemaDefinition[]) {
 
 async function loadSchemas() {
   const [overviewData, definitions] = await Promise.all([
-    getSchemaOverview(),
-    listAllSchemas(currentUserId),
+    getSchemaOverview(activeSpace.value || undefined),
+    listAllSchemas(currentUserId, activeSpace.value || undefined),
   ])
   overview.value = overviewData
   applyDefinitions(definitions)
+}
+
+async function loadSpaces() {
+  try {
+    graphSpaces.value = await listGraphSpaces(currentUserId)
+  } catch {
+    graphSpaces.value = []
+  }
+  if (!activeSpace.value && graphSpaces.value.length) {
+    // 构建期注入的 VITE_GRAPH_SPACE 优先（与部署环境默认空间一致），不在列表再回退首个
+    const preferred = import.meta.env.VITE_GRAPH_SPACE?.trim()
+    activeSpace.value =
+      preferred && graphSpaces.value.includes(preferred) ? preferred : graphSpaces.value[0]
+  }
+}
+
+async function switchSpace(value: string | number | boolean | Record<string, unknown> | unknown[]) {
+  const space = String(value ?? '')
+  if (!space || space === activeSpace.value) return
+  activeSpace.value = space
+  try {
+    await Promise.all([loadSchemas(), loadTopology()])
+  } catch (error) {
+    showToast(schemaErrorMessage(error), 'warning')
+  }
 }
 
 function openCreate() {
@@ -573,6 +645,10 @@ async function saveItem() {
     return
   }
   const f = createForm.value
+  if (!f.graphSpace) {
+    showToast('请选择图空间', 'warning')
+    return
+  }
   if (!f.name.trim()) {
     showToast(isRelationTab() ? '请填写关系英文名（UPPER_SNAKE_CASE）' : '请填写实体名（PascalCase）', 'warning')
     return
@@ -586,9 +662,20 @@ async function saveItem() {
     showToast('至少添加一个属性', 'warning')
     return
   }
+  const lengthError = firstFixedLengthError(props)
+  if (lengthError) {
+    showToast(lengthError, 'warning')
+    return
+  }
   const relation = isRelationTab()
   if (relation && (!f.sourceEntityId || !f.targetEntityId)) {
     showToast('请选择起点和终点实体', 'warning')
+    return
+  }
+  // 来源表绑定必须完整（FUNC-00435）：不完整的行直接阻止提交，而不是静默丢弃
+  const sources = f.sources.map((row) => toSourcePayload(row))
+  if (sources.some((item) => item === null)) {
+    showToast('存在未选择完整的来源表绑定（数据源/库/表均需选择），请补全或删除该行', 'warning')
     return
   }
 
@@ -622,6 +709,7 @@ async function saveItem() {
         relationCategory: activeTab.value === '事实关系' ? 'fact' : 'inferred',
         properties,
         llmConfigId: null,
+        graphSpace: f.graphSpace,
       }
       const result = await createRelationSchema(payload, currentUserId)
       toastCreateResult(result)
@@ -636,6 +724,7 @@ async function saveItem() {
         properties,
         isCore: false,
         llmConfigId: null,
+        graphSpace: f.graphSpace,
       }
       const result = await createEntitySchema(payload, currentUserId)
       toastCreateResult(result)
@@ -760,6 +849,7 @@ async function openViewModal(rowId: string, rowName: string) {
 
 onMounted(async () => {
   try {
+    await loadSpaces()
     await loadSchemas()
     await loadTopology()
   } catch (error) {
@@ -818,7 +908,7 @@ function togglePropertyDetail(schemaId: string): void {
 
     <section class="schema-shell">
       <nav class="schema-tabs"><button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="activeTab=tab;keyword=''">{{ tab }}</button></nav>
-      <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong></div><div class="schema-toolbar__actions"><button class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" :placeholder="`搜索${activeTab}`" /></label></div></div>
+      <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeSpace">图空间：{{ activeSpace }}</span></div><div class="schema-toolbar__actions"><div class="space-picker"><span>图空间</span><a-select :model-value="activeSpace" placeholder="选择图空间" style="width:170px" @change="switchSpace"><a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option></a-select></div><button class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" :placeholder="`搜索${activeTab}`" /></label></div></div>
 
       <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in filteredEntities" :key="row.name"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.description }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : (row.schema.isSystem ? '系统内置，不可删除' : '被关系引用，不可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="5"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
 
@@ -835,6 +925,12 @@ function togglePropertyDetail(schemaId: string): void {
         <aside class="schema-modal__panel schema-create-panel">
           <header><h2>新增{{ activeTab }}</h2><button type="button" @click="modalOpen = false">×</button></header>
           <a-form ref="createFormRef" :model="createForm" :rules="createFormRules" class="schema-modal__body schema-create-body" layout="vertical">
+            <a-form-item class="create-field create-field--full" field="graphSpace" label="图空间" required>
+              <a-select v-model="createForm.graphSpace" placeholder="选择目标图空间">
+                <a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option>
+              </a-select>
+            </a-form-item>
+
             <div class="create-row">
               <a-form-item class="create-field" field="name" :label="isRelationTab() ? '关系英文名' : '实体名'" required>
                 <input v-model="createForm.name" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
@@ -848,11 +944,13 @@ function togglePropertyDetail(schemaId: string): void {
               <a-form-item class="create-field" field="sourceEntityId" label="起点实体" required>
                 <a-select v-model="createForm.sourceEntityId" placeholder="请选择">
                   <a-option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
+                  <template #empty>当前图空间暂无实体 Schema，请先新增实体</template>
                 </a-select>
               </a-form-item>
               <a-form-item class="create-field" field="targetEntityId" label="终点实体" required>
                 <a-select v-model="createForm.targetEntityId" placeholder="请选择">
                   <a-option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
+                  <template #empty>当前图空间暂无实体 Schema，请先新增实体</template>
                 </a-select>
               </a-form-item>
             </div>
@@ -886,7 +984,7 @@ function togglePropertyDetail(schemaId: string): void {
                   <a-select v-model="p.dataType" class="prop-type" popup-container=".schema-create-modal" :scrollbar="false">
                     <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                   </a-select>
-                  <input v-if="p.dataType === 'fixed_string'" v-model.number="p.length" type="number" min="1" max="1024" class="prop-len" placeholder="N" />
+                  <input v-if="p.dataType === 'fixed_string'" :value="p.length" type="text" inputmode="numeric" maxlength="64" class="prop-len" :class="{ 'prop-len--invalid': fixedLengthInvalid(p) }" :title="validateFixedLength(p.length) || undefined" placeholder="1~1024" @input="onLengthInput(p, $event)" />
                   <a-checkbox v-model="p.required" class="prop-required">必填</a-checkbox>
                   <button type="button" class="prop-remove" @click="removeProperty(i)" title="删除">×</button>
                 </template>
@@ -964,7 +1062,7 @@ function togglePropertyDetail(schemaId: string): void {
                 <a-select v-model="propertyForm.dataType" class="property-add-form__type" popup-container=".property-modal" :scrollbar="false">
                   <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                 </a-select>
-                <input v-if="propertyForm.dataType === 'fixed_string'" v-model.number="propertyForm.length" type="number" min="1" max="1024" class="property-add-form__len" placeholder="N" />
+                <input v-if="propertyForm.dataType === 'fixed_string'" :value="propertyForm.length" type="text" inputmode="numeric" maxlength="64" class="property-add-form__len" :class="{ 'property-add-form__len--invalid': propertyLengthInvalid }" :title="propertyLengthError || undefined" placeholder="1~1024" @input="onPropertyLengthInput" />
                 <label class="property-add-form__required"><input v-model="propertyForm.required" type="checkbox" />必填</label>
                 <button type="button" class="primary" :disabled="propertySaving" @click="submitAddProperty">{{ propertySaving ? '新增中...' : '＋ 新增属性' }}</button>
               </div>
@@ -1170,6 +1268,8 @@ function togglePropertyDetail(schemaId: string): void {
 .schema-version-table{max-height:470px}.schema-version-table td:nth-child(6){min-width:280px}.schema-version-actions{display:flex;gap:6px}.schema-version-actions button{padding:3px 7px;border:1px solid #bdd0ea;border-radius:4px;background:#fff;color:#165dff;font-size:9px;white-space:nowrap;cursor:pointer}.schema-version-actions button.danger{border-color:#f6b9b4;color:#b42318}
 
 .schema-toolbar__actions{display:flex;align-items:center;gap:10px}
+.space-picker{display:flex;align-items:center;gap:8px;font-size:12px;color:#4e5969}
+.prop-len--invalid,.property-add-form__len--invalid{border-color:#e5484d!important;background:#fff3f3!important}
 .schema-toolbar .primary{height:32px;padding:0 14px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:13px;cursor:pointer}
 .schema-toolbar .primary:hover{background:#0e4ed8}
 .schema-actions{white-space:nowrap}

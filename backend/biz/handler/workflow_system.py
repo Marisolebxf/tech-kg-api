@@ -214,9 +214,7 @@ async def list_executions(
     trigger_source: Annotated[str | None, Query(alias="triggerSource")] = None,
 ) -> ApiResponse:
     if trigger_source is not None and trigger_source not in ("MANUAL", "SCHEDULE", "RERUN"):
-        raise HTTPException(
-            status_code=422, detail="triggerSource 仅支持 MANUAL/SCHEDULE/RERUN"
-        )
+        raise HTTPException(status_code=422, detail="triggerSource 仅支持 MANUAL/SCHEDULE/RERUN")
     return ApiResponse(
         data=service.list_executions(
             limit=limit,

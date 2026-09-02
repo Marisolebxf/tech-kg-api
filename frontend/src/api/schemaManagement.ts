@@ -58,6 +58,7 @@ export interface SchemaDefinition {
   key: string
   kind: 'entity' | 'relation'
   kindLabel: '实体' | '关系'
+  graphSpace?: string
   name: string
   label: string
   description: string
@@ -116,6 +117,7 @@ export interface EntitySchemaCreatePayload {
   isCore?: boolean
   version?: string
   llmConfigId?: string | null
+  graphSpace?: string
 }
 
 export interface RelationSchemaCreatePayload {
@@ -132,6 +134,7 @@ export interface RelationSchemaCreatePayload {
   mappings?: string[]
   version?: string
   llmConfigId?: string | null
+  graphSpace?: string
 }
 
 const PREFIX = '/v1/schema-management'
@@ -174,9 +177,11 @@ function asApiPromise<T>(request: unknown): Promise<ApiResponse<T>> {
   return request as Promise<ApiResponse<T>>
 }
 
-export async function getSchemaOverview(): Promise<SchemaOverview> {
+export async function getSchemaOverview(graphSpace?: string): Promise<SchemaOverview> {
   return unwrap(
-    await asApiPromise<SchemaOverview>(http.get(`${PREFIX}/overview`)),
+    await asApiPromise<SchemaOverview>(
+      http.get(`${PREFIX}/overview`, { params: graphSpace ? { graphSpace } : undefined }),
+    ),
   )
 }
 
@@ -185,17 +190,24 @@ export interface SchemaTopology {
   edges: Array<SchemaDefinition & { sourceSchemaId: string | null; targetSchemaId: string | null }>
 }
 
-export async function getSchemaTopology(): Promise<SchemaTopology> {
+export async function getSchemaTopology(graphSpace?: string): Promise<SchemaTopology> {
   return unwrap(
-    await asApiPromise<SchemaTopology>(http.get(`${PREFIX}/schemas/topology`)),
+    await asApiPromise<SchemaTopology>(
+      http.get(`${PREFIX}/schemas/topology`, {
+        params: graphSpace ? { graphSpace } : undefined,
+      }),
+    ),
   )
 }
 
-export async function listAllSchemas(userId: string): Promise<SchemaDefinition[]> {
+export async function listAllSchemas(
+  userId: string,
+  graphSpace?: string,
+): Promise<SchemaDefinition[]> {
   const first = unwrap(
     await asApiPromise<SchemaListData>(
       http.get(`${PREFIX}/schemas`, {
-        params: { page: 1, pageSize: 100, includeDetails: true },
+        params: { page: 1, pageSize: 100, includeDetails: true, graphSpace },
         headers: headers(userId),
       }),
     ),
@@ -209,7 +221,7 @@ export async function listAllSchemas(userId: string): Promise<SchemaDefinition[]
         unwrap(
           await asApiPromise<SchemaListData>(
             http.get(`${PREFIX}/schemas`, {
-              params: { page, pageSize: 100, includeDetails: true },
+              params: { page, pageSize: 100, includeDetails: true, graphSpace },
               headers: headers(userId),
             }),
           ),

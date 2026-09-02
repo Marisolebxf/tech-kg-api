@@ -11,6 +11,7 @@ from db_model.schema_management import (
     GraphSchemaProperty,
     GraphSchemaScript,
 )
+from service.schema_ddl import default_graph_space
 
 
 class SchemaManagementDAO:
@@ -43,12 +44,13 @@ class SchemaManagementDAO:
         )
         return self.session.scalar(statement)
 
-    def exists_by_key_or_name(self, schema_key: str, name: str) -> bool:
+    def exists_by_key_or_name(self, schema_key: str, name: str, graph_space: str) -> bool:
         statement = select(GraphSchemaDefinition.id).where(
+            GraphSchemaDefinition.graph_space == graph_space,
             or_(
                 GraphSchemaDefinition.schema_key == schema_key,
                 GraphSchemaDefinition.name == name,
-            )
+            ),
         )
         return self.session.scalar(statement) is not None
 
@@ -59,10 +61,13 @@ class SchemaManagementDAO:
         keyword: str | None,
         page: int,
         page_size: int,
+        graph_space: str | None = None,
     ) -> tuple[list[GraphSchemaDefinition], int]:
         filters = []
         if kind:
             filters.append(GraphSchemaDefinition.kind == kind)
+        if graph_space:
+            filters.append(GraphSchemaDefinition.graph_space == graph_space)
         if keyword:
             pattern = f"%{keyword}%"
             filters.append(
@@ -92,17 +97,16 @@ class SchemaManagementDAO:
         )
         return list(self.session.scalars(statement).all()), int(total)
 
-    def list_all(self) -> list[GraphSchemaDefinition]:
-        statement = (
-            select(GraphSchemaDefinition)
-            .options(*self._load_options())
-            .order_by(
-                GraphSchemaDefinition.kind,
-                GraphSchemaDefinition.relation_category,
-                GraphSchemaDefinition.display_order,
-                GraphSchemaDefinition.created_at,
-                GraphSchemaDefinition.id,
-            )
+    def list_all(self, graph_space: str | None = None) -> list[GraphSchemaDefinition]:
+        statement = select(GraphSchemaDefinition).options(*self._load_options())
+        if graph_space:
+            statement = statement.where(GraphSchemaDefinition.graph_space == graph_space)
+        statement = statement.order_by(
+            GraphSchemaDefinition.kind,
+            GraphSchemaDefinition.relation_category,
+            GraphSchemaDefinition.display_order,
+            GraphSchemaDefinition.created_at,
+            GraphSchemaDefinition.id,
         )
         return list(self.session.scalars(statement).all())
 
@@ -118,6 +122,7 @@ class SchemaManagementDAO:
         definition = GraphSchemaDefinition(
             id=schema_id,
             schema_key=payload["schema_key"],
+            graph_space=payload.get("graph_space") or default_graph_space(),
             kind=kind,
             name=payload["name"],
             label=payload["label"],
@@ -199,54 +204,31 @@ class SchemaManagementDAO:
     def delete(self, definition: GraphSchemaDefinition) -> None:
         self.session.delete(definition)
 
-    def stats(self) -> dict[str, int]:
-        entity_count = (
-            self.session.scalar(
-                select(func.count())
-                .select_from(GraphSchemaDefinition)
-                .where(GraphSchemaDefinition.kind == "entity")
-            )
-            or 0
-        )
-        relation_count = (
-            self.session.scalar(
-                select(func.count())
-                .select_from(GraphSchemaDefinition)
-                .where(GraphSchemaDefinition.kind == "relation")
-            )
-            or 0
-        )
-        core_count = (
-            self.session.scalar(
-                select(func.count())
-                .select_from(GraphSchemaDefinition)
-                .where(
-                    GraphSchemaDefinition.kind == "entity", GraphSchemaDefinition.is_core.is_(True)
+    def stats(self, graph_space: str | None = None) -> dict[str, int]:
+        space_filters = [GraphSchemaDefinition.graph_space == graph_space] if graph_space else []
+
+        def _count(*conditions):
+            return (
+                self.session.scalar(
+                    select(func.count())
+                    .select_from(GraphSchemaDefinition)
+                    .where(*space_filters, *conditions)
                 )
+                or 0
             )
-            or 0
+
+        entity_count = _count(GraphSchemaDefinition.kind == "entity")
+        relation_count = _count(GraphSchemaDefinition.kind == "relation")
+        core_count = _count(
+            GraphSchemaDefinition.kind == "entity", GraphSchemaDefinition.is_core.is_(True)
         )
-        fact_count = (
-            self.session.scalar(
-                select(func.count())
-                .select_from(GraphSchemaDefinition)
-                .where(
-                    GraphSchemaDefinition.kind == "relation",
-                    GraphSchemaDefinition.relation_category == "fact",
-                )
-            )
-            or 0
+        fact_count = _count(
+            GraphSchemaDefinition.kind == "relation",
+            GraphSchemaDefinition.relation_category == "fact",
         )
-        inferred_count = (
-            self.session.scalar(
-                select(func.count())
-                .select_from(GraphSchemaDefinition)
-                .where(
-                    GraphSchemaDefinition.kind == "relation",
-                    GraphSchemaDefinition.relation_category == "inferred",
-                )
-            )
-            or 0
+        inferred_count = _count(
+            GraphSchemaDefinition.kind == "relation",
+            GraphSchemaDefinition.relation_category == "inferred",
         )
         property_count = (
             self.session.scalar(select(func.count()).select_from(GraphSchemaProperty)) or 0

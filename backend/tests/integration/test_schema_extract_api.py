@@ -231,7 +231,7 @@ async def test_extract_stale_script_signal(extract_api, monkeypatch: pytest.Monk
     _, _set_actor, _executions, _storage = extract_api
     monkeypatch.setattr(
         "service.schema_management.run_alter_add_ddl",
-        lambda kind, name, prop: {
+        lambda kind, name, prop, graph_space=None: {
             "statement": "ALTER ...",
             "status": "succeeded",
             "error": None,
@@ -316,7 +316,7 @@ async def test_backfill_stale_requires_force(extract_api, monkeypatch: pytest.Mo
     _, _set_actor, executions, _storage = extract_api
     monkeypatch.setattr(
         "service.schema_management.run_alter_add_ddl",
-        lambda kind, name, prop: {
+        lambda kind, name, prop, graph_space=None: {
             "statement": "ALTER ...",
             "status": "succeeded",
             "error": None,

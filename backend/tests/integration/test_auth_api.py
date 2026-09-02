@@ -80,6 +80,7 @@ def _test_app() -> FastAPI:
         client_secret="secret",
         session_backend="memory",
         cookie_secure=False,
+        cookie_path="/",
         frontend_url="https://kg.test/bkg_zp",
     )
     application = AuthApplication(
@@ -108,6 +109,7 @@ def _portal_cookie_test_app() -> FastAPI:
         client_secret="secret",
         session_backend="memory",
         cookie_secure=False,
+        cookie_path="/",
         portal_cookie_login_enabled=True,
         portal_token_cookie_name="access_token",
     )
@@ -218,7 +220,9 @@ async def test_v21_portal_cookie_is_exchanged_for_local_session() -> None:
 
         assert first.status_code == 200
         assert first.json()["data"]["user"]["nickname"] == "普通用户"
-        assert client.cookies.get("techkg_session")
+        # jar 里同时存在手工预置的过期 session 与新 session，httpx 新版对
+        # 同名 cookie 的 get 会抛 CookieConflict —— 以 set-cookie 头为准断言
+        assert "techkg_session=" in first.headers["set-cookie"]
         assert "HttpOnly" in first.headers["set-cookie"]
         assert "portal-access-token" not in first.headers["set-cookie"]
 

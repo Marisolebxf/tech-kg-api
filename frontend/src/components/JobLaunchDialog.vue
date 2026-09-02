@@ -249,23 +249,24 @@ async function submit() {
         </p>
 
         <div v-if="taskType === 'extract'" class="job-row">
-          <label class="job-field">
+          <!-- label 会把点击转发给 a-select 内部 input 造成"开→关"双切换，包 a-select 的字段一律用 div -->
+          <div class="job-field">
             <span>目标 Schema（已传脚本并绑定来源表）</span>
             <a-select v-model="extractSchemaId" :loading="schemasLoading" placeholder="选择要抽取的实体/关系" allow-search allow-clear>
               <a-option v-for="s in extractSchemas" :key="s.id" :value="s.id">{{ s.label }}（{{ s.kind === 'entity' ? '实体' : '关系' }} · {{ s.name }}）</a-option>
             </a-select>
-          </label>
+          </div>
           <label class="job-field">
             <span>批大小（默认 500）</span>
             <input v-model.number="extractBatchSize" type="number" min="1" max="5000" placeholder="500" />
           </label>
         </div>
-        <label v-else-if="taskType === 'single'" class="job-field">
+        <div v-else-if="taskType === 'single'" class="job-field">
           <span>抽取脚本（可搜索）</span>
           <a-select v-model="singleDefinitionId" placeholder="搜索并选择脚本" allow-search allow-clear :filter-option="filterScript">
             <a-option v-for="d in scriptDefinitions" :key="d.id" :value="d.id">{{ d.name }}（{{ d.id }}）</a-option>
           </a-select>
-        </label>
+        </div>
 
         <div v-else-if="taskType === 'chain'" class="job-field">
           <span>抽取脚本队列（按顺序串行执行）</span>
@@ -296,44 +297,44 @@ async function submit() {
         <fieldset class="job-section">
           <legend>运行资源配置</legend>
           <div class="job-row">
-            <label class="job-field">
+            <div class="job-field">
               <span>图空间</span>
               <a-select v-model="graphSpace" placeholder="默认空间" allow-clear>
                 <a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option>
               </a-select>
-            </label>
-            <label class="job-field">
+            </div>
+            <div class="job-field">
               <span>大模型配置</span>
               <a-select v-model="llmConfigId" placeholder="使用默认" allow-clear>
                 <a-option v-for="c in llmConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）</a-option>
               </a-select>
-            </label>
+            </div>
           </div>
           <div class="job-row">
-            <label class="job-field">
+            <div class="job-field">
               <span>MySQL 数据源</span>
               <a-select v-model="mysqlDatasourceId" placeholder="使用默认" allow-clear>
                 <a-option v-for="d in mysqlDatasources" :key="d.id" :value="d.id">{{ d.name }}</a-option>
               </a-select>
-            </label>
+            </div>
             <label class="job-field">
               <span>数据库</span>
               <input v-model="mysqlDatabase" placeholder="如 gkx_element（默认取数据源配置）" />
             </label>
           </div>
           <div class="job-row">
-            <label class="job-field">
+            <div class="job-field">
               <span>Embedding 配置</span>
               <a-select v-model="embeddingConfigId" placeholder="使用默认" allow-clear>
                 <a-option v-for="c in embeddingConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）</a-option>
               </a-select>
-            </label>
-            <label class="job-field">
+            </div>
+            <div class="job-field">
               <span>Milvus 配置</span>
               <a-select v-model="milvusConfigId" placeholder="使用默认" allow-clear>
                 <a-option v-for="c in milvusConfigs" :key="c.id" :value="c.id">{{ c.name }}</a-option>
               </a-select>
-            </label>
+            </div>
           </div>
           <div class="job-row">
             <label class="job-field">
@@ -358,10 +359,10 @@ async function submit() {
               </a-radio-group>
             </label>
             <template v-if="executeMode === 'recurring'">
-              <label class="job-field">
+              <div class="job-field">
                 <span>频率</span>
                 <a-select v-model="frequency" :options="['每天', '每12小时', '每6小时', '每周']" />
-              </label>
+              </div>
               <label class="job-field">
                 <span>执行时间</span>
                 <input v-model="executionTime" type="time" />

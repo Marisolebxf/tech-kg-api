@@ -76,7 +76,7 @@ def property_api(monkeypatch):
     engine.dispose()
 
 
-def _fake_add_ddl(kind: str, name: str, prop: dict) -> dict:
+def _fake_add_ddl(kind: str, name: str, prop: dict, graph_space: str | None = None) -> dict:
     return {
         "statement": f"ALTER {'TAG' if kind == 'entity' else 'EDGE'} {name} ADD ({prop['name']} {prop['data_type']});",
         "status": "succeeded",
@@ -95,11 +95,11 @@ def _patch_drop(
     """patch 图库列存在性检查与 DROP DDL。columns=None 模拟对象不存在。"""
 
     monkeypatch.setattr(
-        "service.schema_management.describe_schema_columns", lambda kind, name: columns
+        "service.schema_management.describe_schema_columns", lambda kind, name, graph_space=None: columns
     )
     monkeypatch.setattr(
         "service.schema_management.run_alter_drop_ddl",
-        lambda kind, name, prop: {
+        lambda kind, name, prop, graph_space=None: {
             "statement": f"ALTER {'TAG' if kind == 'entity' else 'EDGE'} {name} DROP ({prop});",
             "status": status,
             "error": error,
@@ -138,7 +138,7 @@ async def _detail(client: AsyncClient, schema_id: str) -> dict:
 async def test_add_property_success(property_api, monkeypatch: pytest.MonkeyPatch) -> None:
     _, set_actor = property_api
 
-    def fake_alter_ddl(kind: str, name: str, prop: dict) -> dict:
+    def fake_alter_ddl(kind: str, name: str, prop: dict, graph_space: str | None = None) -> dict:
         return {
             "statement": f"ALTER {'TAG' if kind == 'entity' else 'EDGE'} {name} ADD ({prop['name']} {prop['data_type']});",
             "status": "succeeded",
@@ -175,7 +175,7 @@ async def test_add_property_duplicate_conflict(
     _, _set_actor = property_api
     monkeypatch.setattr(
         "service.schema_management.run_alter_add_ddl",
-        lambda kind, name, prop: {
+        lambda kind, name, prop, graph_space=None: {
             "statement": "ALTER ...",
             "status": "succeeded",
             "error": None,
@@ -225,7 +225,7 @@ async def test_non_owner_non_admin_forbidden(property_api, monkeypatch: pytest.M
     _, set_actor = property_api
     monkeypatch.setattr(
         "service.schema_management.run_alter_add_ddl",
-        lambda kind, name, prop: {
+        lambda kind, name, prop, graph_space=None: {
             "statement": "ALTER ...",
             "status": "succeeded",
             "error": None,
@@ -258,7 +258,7 @@ async def test_add_property_ddl_failure_rolls_back_catalog(
     _, _set_actor = property_api
     monkeypatch.setattr(
         "service.schema_management.run_alter_add_ddl",
-        lambda kind, name, prop: {
+        lambda kind, name, prop, graph_space=None: {
             "statement": "ALTER ...",
             "status": "failed",
             "error": "SemanticError",

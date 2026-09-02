@@ -43,6 +43,8 @@ def schema_api(monkeypatch):
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+    # 先钉住空间再种子：kg_schema_definition.graph_space 的模型默认值取该 env
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "techkg")
     initialize_schema_management(engine)
     storage = FakeS3Storage()
 
@@ -65,7 +67,9 @@ async def test_schema_management_full_flow(schema_api, monkeypatch: pytest.Monke
     _, storage = schema_api
     ddl_calls: list[tuple[str, str, list[dict]]] = []
 
-    def fake_run_ddl(kind: str, name: str, properties: list[dict]) -> dict:
+    def fake_run_ddl(
+        kind: str, name: str, properties: list[dict], graph_space: str | None = None
+    ) -> dict:
         ddl_calls.append((kind, name, properties))
         return {
             "statement": f"CREATE {'TAG' if kind == 'entity' else 'EDGE'} IF NOT EXISTS {name}(...);",
@@ -75,6 +79,8 @@ async def test_schema_management_full_flow(schema_api, monkeypatch: pytest.Monke
         }
 
     monkeypatch.setattr("service.schema_management.run_schema_ddl", fake_run_ddl)
+    # 空间校验走桩，避免测试依赖真实图服务
+    monkeypatch.setattr("service.schema_ddl.list_graph_spaces", lambda: ["techkg"])
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         overview = await client.get("/api/v1/schema-management/overview")

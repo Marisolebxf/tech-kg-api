@@ -49,6 +49,19 @@ logger = logging.getLogger("infra.graph_db")
 _VID_KEYS: tuple[str, ...] = ("vid", "id", "name")
 
 
+def _error_detail(resp: httpx.Response) -> str:
+    """从 trs-graph 错误响应体里提取人类可读信息（如 Nebula SemanticError）。"""
+    try:
+        data = resp.json()
+    except ValueError:
+        return ""
+    if isinstance(data, dict):
+        message = data.get("message") or data.get("error")
+        if message:
+            return f": {message}"
+    return ""
+
+
 def _ensure_vid(props: dict[str, Any]) -> dict[str, Any]:
     """Return props with a vid guaranteed.
 
@@ -151,7 +164,7 @@ class TRSGraphClient:
             raise GraphNotFoundError(f"{method} {path} -> 404")
         if not resp.is_success:
             raise GraphRequestError(
-                f"{method} {path} -> {resp.status_code}",
+                f"{method} {path} -> {resp.status_code}{_error_detail(resp)}",
                 status_code=resp.status_code,
                 body=resp.text,
             )

@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from biz.schemas.text_rules import check_text
+
 
 class ExpertColleagueRelationRequest(BaseModel):
     """科技专家同事关系查询条件。"""
@@ -93,7 +95,9 @@ class ExpertColleagueRelationRequest(BaseModel):
         if value is None:
             return None
         value = value.strip()
-        return value or None
+        if not value:
+            return None
+        return check_text(value, label="机构/部门/团队关键词", allow_space=True)
 
     @field_validator("overlapPeriod")
     @classmethod

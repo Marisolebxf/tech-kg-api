@@ -15,6 +15,7 @@ from biz.schemas.correction import (
     CorrectionReviewRequest,
     CorrectionUpdateRequest,
 )
+from biz.schemas.text_rules import IDENTIFIER_QUERY_PATTERN, KEYWORD_QUERY_PATTERN
 from infra.mysql import get_session
 from service.correction import CorrectionService
 
@@ -40,10 +41,12 @@ def list_corrections(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
     scope: str = Query(default="mine", pattern="^(mine|all)$"),
-    status: str | None = None,
-    statuses: str | None = None,
-    target_type: str | None = Query(default=None, alias="targetType"),
-    keyword: str | None = None,
+    status: str | None = Query(default=None, max_length=64),
+    statuses: str | None = Query(default=None, max_length=64, pattern=KEYWORD_QUERY_PATTERN),
+    target_type: str | None = Query(
+        default=None, alias="targetType", max_length=64, pattern=IDENTIFIER_QUERY_PATTERN
+    ),
+    keyword: str | None = Query(default=None, max_length=64, pattern=KEYWORD_QUERY_PATTERN),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, alias="pageSize", ge=1, le=100),
 ) -> ApiResponse:

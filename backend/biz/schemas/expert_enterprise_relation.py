@@ -4,13 +4,21 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
+from biz.schemas.text_rules import check_text
 from service.enterprise_relation_catalog import validate_relation_types
 
 
 class ExpertEnterpriseBuildRequest(BaseModel):
-    scholarId: str
-    enterpriseId: str
+    scholarId: str = Field(..., min_length=1, max_length=64, description="专家唯一标识")
+    enterpriseId: str = Field(..., min_length=1, max_length=64, description="企业唯一标识")
     relationTypes: list[str]
+
+    @field_validator("scholarId", "enterpriseId", mode="before")
+    @classmethod
+    def _validate_ids(cls, v: str) -> str:
+        if v is None:
+            return v
+        return check_text(str(v).strip(), label="标识")
 
     @field_validator("relationTypes")
     @classmethod

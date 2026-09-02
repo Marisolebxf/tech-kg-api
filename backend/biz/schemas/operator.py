@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from biz.schemas.text_rules import check_text
 from service.operator_registry import OperatorKind
 
 
@@ -26,11 +27,25 @@ class OperatorUploadRequest(BaseModel):
         }
     )
 
-    name: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=64)
     version: str = Field(min_length=1, max_length=64)
     kind: OperatorKind
     source: str = Field(min_length=1, max_length=262_144)
-    description: str = Field(default="", max_length=500)
+    description: str = Field(default="", max_length=64)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        if v is None or v == "":
+            return v
+        return check_text(str(v).strip(), label="算子名称")
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _validate_description(cls, v: str) -> str:
+        if v is None or v == "":
+            return v
+        return check_text(str(v).strip(), label="算子描述", allow_space=True)
 
 
 class OperatorUpdateRequest(BaseModel):
@@ -48,7 +63,14 @@ class OperatorUpdateRequest(BaseModel):
     version: str = Field(min_length=1, max_length=64)
     kind: OperatorKind
     source: str = Field(min_length=1, max_length=262_144)
-    description: str = Field(default="", max_length=500)
+    description: str = Field(default="", max_length=64)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _validate_description(cls, v: str) -> str:
+        if v is None or v == "":
+            return v
+        return check_text(str(v).strip(), label="算子描述", allow_space=True)
 
 
 class OperatorInvokeRequest(BaseModel):

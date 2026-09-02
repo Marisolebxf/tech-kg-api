@@ -1,9 +1,74 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from biz.schemas.text_rules import check_text
+
+# 各文本字段的校验口径:标识类(identifier)/自由文本类(keyword)
+_ID_FIELDS = (
+    "assigneeId",
+    "actionId",
+    "sourceTaskId",
+    "batchId",
+    "nodeId",
+    "objectId",
+    "objectType",
+    "errorFingerprint",
+    "templateId",
+    "domain",
+    "phase",
+    "sourceTable",
+    "sourceRecordId",
+    "ruleVersion",
+    "modelVersion",
+    "sha256",
+    "evidenceId",
+    "bucket",
+    "trustLevel",
+)
+_TEXT_FIELDS = (
+    "assigneeName",
+    "note",
+    "reason",
+    "objectName",
+    "category",
+    "scopeHint",
+    "diagnosis",
+    "fileName",
+    "contentType",
+    "objectKey",
+    "source",
+    "error",
+)
 
 
-class VersionRequest(BaseModel):
+def _check_identifier(value):
+    if value is None or value == "":
+        return value
+    return check_text(str(value).strip(), label="标识")
+
+
+def _check_keyword(value):
+    if value is None or value == "":
+        return value
+    return check_text(str(value).strip(), label="输入", allow_space=True)
+
+
+class _TextRuleMixin(BaseModel):
+    """为 _ID_FIELDS/_TEXT_FIELDS 中声明的字段套用统一文本校验。"""
+
+    @field_validator(*_ID_FIELDS, mode="before", check_fields=False)
+    @classmethod
+    def _validate_id_fields(cls, v):
+        return _check_identifier(v)
+
+    @field_validator(*_TEXT_FIELDS, mode="before", check_fields=False)
+    @classmethod
+    def _validate_text_fields(cls, v):
+        return _check_keyword(v)
+
+
+class VersionRequest(_TextRuleMixin):
     version: int = Field(ge=1)
 
 
@@ -30,7 +95,7 @@ class CancelRequest(VersionRequest):
     reason: str = Field(min_length=1)
 
 
-class CreateCaseRequest(BaseModel):
+class CreateCaseRequest(_TextRuleMixin):
     sourceTaskId: str
     batchId: str | None = None
     nodeId: str
@@ -53,7 +118,7 @@ class CreateCaseRequest(BaseModel):
     candidate: dict[str, Any] = Field(default_factory=dict)
 
 
-class EvidenceUploadRequest(BaseModel):
+class EvidenceUploadRequest(_TextRuleMixin):
     fileName: str
     contentType: str
     sizeBytes: int = Field(gt=0)
@@ -68,6 +133,6 @@ class EvidenceCompleteRequest(EvidenceUploadRequest):
     trustLevel: str = "UNVERIFIED"
 
 
-class ExecutionCompleteRequest(BaseModel):
+class ExecutionCompleteRequest(_TextRuleMixin):
     success: bool
     error: str = ""

@@ -8,6 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from biz.schemas.text_rules import check_text
+
 DATE_PATTERN = re.compile(
     r"^(?:\d{4}|\d{4}-(?:0[1-9]|1[0-2])|"
     r"\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))$"
@@ -52,6 +54,13 @@ class CooperationAchievementQueryRequest(BaseModel):
         if not cleaned:
             raise ValueError("专家 ID 不能为空")
         return cleaned
+
+    @field_validator("limitPerType", mode="before")
+    @classmethod
+    def validate_limit_per_type(cls, value: object) -> object:
+        # 只做长度/异常字符检查,类型与范围仍交给 strict int 约束
+        check_text(str(value).strip(), label="每类成果上限")
+        return value
 
     @field_validator("timeRangeStart", "timeRangeEnd")
     @classmethod

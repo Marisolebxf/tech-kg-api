@@ -710,9 +710,15 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                 except GraphAPIError:
                     return None
 
-        pushed_edge_types = relation_types if relation_types and len(relation_types) == 1 else [None]
+        pushed_edge_types = (
+            relation_types if relation_types and len(relation_types) == 1 else [None]
+        )
         subgraphs = await asyncio.gather(
-            *[_fetch_one(seed_vid, edge_type) for seed_vid in seeds for edge_type in pushed_edge_types]
+            *[
+                _fetch_one(seed_vid, edge_type)
+                for seed_vid in seeds
+                for edge_type in pushed_edge_types
+            ]
         )
         for subgraph in subgraphs:
             if not subgraph:

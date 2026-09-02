@@ -1,21 +1,12 @@
-"""One-entity extractor for Person.
+"""One-entity transform for Person（平台喂数抽取：脚本只输出实体 JSON）。
 
-三个来源分别复刻旧脚本口径：
+四个来源分别复刻旧脚本口径（按来源表名分发 mapper）：
 
-- ``--source scholar``：旧 ``load_scholar_entities.py``（dwd_scholar，status=1）。
-- ``--source paper-author``：旧 ``workflow/paper_journal_chain_etl.py``（论文作者，
-  paper_id 去掉 ``__数字`` 后缀后与 author_id 均非空才建点，同 author 首次出现胜出）。
-- ``--source organization-role``：旧 ``organization_entity_etl.py``（高管/股东/受益人/
-  实控人各表 + 机构表的法定代表人，person_vid 旧公式）。
-
-Dual-mode 入口：
-- CLI: ``python -m script.entity_extractors_one_entity.person_entity --dry-run --limit 1``
-- Temporal workflow: 脚本顶层 ``workflow(payload)`` 函数，由
-  ``service/temporal_workflows.py:execute_python_script`` Activity 子进程加载并调用。
-  payload key 用 snake_case（跟 argparse 转换后的 vars(args) 同形态）。
+- ``dwd_scholar``（自定义聚合 SQL，status=1）→ scholar_person；
+- ``dwd_zh_author`` / ``dwd_en_author`` → paper_author_person；
+- PERSON_TABLES（机构任职）→ organization_role_person（mappers）；
+- ORGANIZATION_TABLES（法定代表人）→ legal_representative_person（mappers）。
 """
-
-from __future__ import annotations
 
 import re
 from collections.abc import Mapping
@@ -23,14 +14,8 @@ from typing import Any
 
 from script.entity_extractors_one_entity.common import (
     EntityRecord,
-    build_parser,
-    common_args_from_payload,
-    configure_logging,
     extra_json,
-    paper_text,
-    print_json,
     provenance,
-    run_entity_extractor,
     text_or_empty,
 )
 from script.entity_extractors_one_entity.mappers import (
@@ -38,10 +23,9 @@ from script.entity_extractors_one_entity.mappers import (
     organization_role_person,
 )
 from script.entity_extractors_one_entity.org_catalog import ORGANIZATION_TABLES, PERSON_TABLES
+from script.extract_transform_common import entity_transform
 
-_SUFFIX_RE = re.compile(r"__\d+$")
-
-SCHOLAR_SQL = """
+SCHOLAR_QUERY_SQL = """
 SELECT s.*,
        (SELECT tf.academician FROM dwd_scholar_talent_flag tf
           WHERE tf.scholar_id = s.scholar_id ORDER BY tf.update_time DESC LIMIT 1) AS academician,
@@ -50,8 +34,9 @@ SELECT s.*,
          AS research_fields
 FROM dwd_scholar s
 WHERE s.status = 1
-ORDER BY s.scholar_id
 """
+
+_SUFFIX_RE = re.compile(r"__\d+$")
 
 
 def scholar_person(table: str, row: Mapping[str, Any], batch: str) -> list[EntityRecord]:
@@ -102,8 +87,7 @@ def scholar_person(table: str, row: Mapping[str, Any], batch: str) -> list[Entit
             source_update_time=row.get("update_time"),
         ),
     }
-    # 旧口径：merge identity 除 vid 外还带 source_record_id。
-    return [EntityRecord("Person", vid, props, identity={"vid": vid, "source_record_id": sid})]
+    return [EntityRecord("Person", vid, props)]
 
 
 def paper_author_person(table: str, row: Mapping[str, Any], batch: str) -> list[EntityRecord]:
@@ -114,91 +98,36 @@ def paper_author_person(table: str, row: Mapping[str, Any], batch: str) -> list[
         return []
     vid = f"person_{aid}"
     props = {
-        "name_zh": paper_text(row.get("zh_name")),
-        "name_en": paper_text(row.get("en_name")),
+        "name_zh": text_or_empty(row.get("zh_name")),
+        "name_en": text_or_empty(row.get("en_name")),
         "extra_json": extra_json(row),
         **provenance(table=table, record_id=vid, ingest_batch=batch),
     }
     return [EntityRecord("Person", vid, props)]
 
 
-def build_sources(
-    payload: Mapping[str, Any],
-) -> tuple[list[tuple[str, str, Any]], str | None]:
-    """从 payload dict 构造 (sources, dedupe)；CLI vars(args) 与 workflow payload 同形态。"""
-    source = payload.get("source", "scholar")
-    if source == "scholar":
-        return [("dwd_scholar", SCHOLAR_SQL, scholar_person)], None
-    if source == "paper-author":
-        # 旧口径：同一 author_id 首次出现的姓名胜出。
-        return (
-            [
-                (
-                    "dwd_zh_author",
-                    "SELECT * FROM dwd_zh_author ORDER BY author_id",
-                    paper_author_person,
-                ),
-                (
-                    "dwd_en_author",
-                    "SELECT * FROM dwd_en_author ORDER BY author_id",
-                    paper_author_person,
-                ),
-            ],
-            "first",
-        )
-    return (
-        [
-            (table, f"SELECT * FROM {table} ORDER BY 1", organization_role_person)
-            for table in PERSON_TABLES
-        ]
-        + [
-            (table, f"SELECT * FROM {table} ORDER BY 1", legal_representative_person)
-            for table in ORGANIZATION_TABLES
-        ],
-        None,
-    )
+MAPPER_BY_TABLE: dict[str, Any] = {
+    "dwd_scholar": scholar_person,
+    "dwd_zh_author": paper_author_person,
+    "dwd_en_author": paper_author_person,
+    **{table: organization_role_person for table in PERSON_TABLES},
+    **{table: legal_representative_person for table in ORGANIZATION_TABLES},
+}
+
+SOURCES = [
+    {
+        "table": "dwd_scholar",
+        "pk": "scholar_id",
+        "time": "update_time",
+        "query_sql": SCHOLAR_QUERY_SQL,
+    },
+    {"table": "dwd_zh_author", "pk": "author_id", "time": "update_time"},
+    {"table": "dwd_en_author", "pk": "author_id", "time": "update_time"},
+    *[{"table": t, "pk": "id", "time": "update_time"} for t in PERSON_TABLES],
+    *[{"table": t, "pk": "id", "time": "update_time"} for t in ORGANIZATION_TABLES],
+]
 
 
-def main() -> None:
-    parser = build_parser(__doc__ or "")
-    parser.add_argument(
-        "--source",
-        choices=("scholar", "paper-author", "organization-role"),
-        default="scholar",
-    )
-    args = parser.parse_args()
-    configure_logging(args.log_level)
-    sources, dedupe = build_sources(vars(args))
-    print_json(
-        run_entity_extractor(
-            database=args.database,
-            batch_size=args.batch_size,
-            limit=args.limit,
-            dry_run=args.dry_run,
-            ingest_batch=args.ingest_batch,
-            since=args.since,
-            dedupe=dedupe,
-            sources=sources,
-        )
-    )
-
-
-def workflow(payload: dict[str, Any]) -> dict[str, Any]:
-    """Temporal workflow 入口；payload 同 main() 的 vars(args) 形态。"""
-    common = common_args_from_payload(payload)
-    configure_logging(common["log_level"])
-    sources, dedupe = build_sources(payload)
-    return run_entity_extractor(
-        database=common["database"],
-        batch_size=common["batch_size"],
-        limit=common["limit"],
-        dry_run=common["dry_run"],
-        ingest_batch=common["ingest_batch"],
-        since=common["since"],
-        dedupe=dedupe,
-        sources=sources,
-    )
-
-
-if __name__ == "__main__":
-    main()
+def transform(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """kg.schema.extract 转换入口：payload["rows"] → {"entities": [...], "failures": [...]}。"""
+    return entity_transform(payload, mapper_by_table=MAPPER_BY_TABLE)

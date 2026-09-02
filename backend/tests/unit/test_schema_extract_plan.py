@@ -137,9 +137,12 @@ async def test_load_schema_extract_plan_filters_deleted(plan_env) -> None:
             "tableName": "scholar",
             "pkColumn": "id",
             "timeColumn": "update_time",
+            "querySql": None,
         }
     ]
-    assert plan["functionName"] == "workflow"
+    # 入口名以脚本上传时存储为准（旧脚本 workflow，新脚本 transform）
+    assert plan["functionName"] in ("workflow", "transform")
+    assert plan["maxInflight"] >= 1 and plan["failureCaseCap"] >= 0
     with open(plan["scriptPath"], "rb") as handle:
         assert b"def workflow(payload)" in handle.read()
 

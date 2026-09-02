@@ -1,4 +1,4 @@
-"""One-relation extractor: APPLIED_BY / OWNED_BY（Patent → Organization，专利域匹配边）.
+"""One-relation transform for APPLIED_BY / OWNED_BY（Patent → Organization）（平台喂数抽取：只输出边 JSON）.
 
 复刻旧 load_patent_relations.py 口径：
 
@@ -17,28 +17,17 @@
 
 Organization/Patent 端点直接取图内真实 vid，不做端点验存。
 
-Dual-mode 入口：
-- CLI: ``python -m script.relation_extractors_one_relation.applied_by_relation --dry-run --limit 1``
-- Temporal workflow: 脚本顶层 ``workflow(payload)`` 函数，由
-  ``service/temporal_workflows.py:execute_python_script`` Activity 子进程加载并调用。
-  payload key 用 snake_case（跟 argparse 转换后的 vars(args) 同形态）。
 """
 
 from collections import Counter
-from pathlib import Path
 from typing import Any
 
+from script.extract_transform_common import edge_transform, pending_review_items
 from script.relation_extractors_one_relation.common import (
     EdgeRecord,
-    apply_since,
-    build_parser,
-    common_args_from_payload,
-    configure_logging,
     ensure_edge_schema,
     graph_client,
     mysql_engine,
-    print_json,
-    run_relation_extractor,
 )
 from script.relation_extractors_one_relation.patent_matching import (
     EDGE_PROPERTY_SCHEMAS,
@@ -51,7 +40,6 @@ from script.relation_extractors_one_relation.patent_matching import (
     party_items,
     party_properties,
     patent_indexes,
-    write_reviews,
 )
 
 SOURCE_SQL = (
@@ -154,11 +142,6 @@ def applied_by_mapper(
     return mapper
 
 
-def _resolve_review_output(payload: dict[str, Any]) -> Path:
-    raw = payload.get("review_output")
-    return Path(raw) if raw else Path(DEFAULT_REVIEW_OUTPUT)
-
-
 def _load_indexes(
     database: str, dry_run: bool
 ) -> tuple[dict[str, str], dict[str, list[dict]], dict[str, list[dict]]]:
@@ -179,73 +162,26 @@ def _load_indexes(
     return vid_by_id, person_index, org_index
 
 
-def main() -> None:
-    parser = build_parser(__doc__ or "")
-    parser.add_argument(
-        "--review-output",
-        type=Path,
-        default=Path(DEFAULT_REVIEW_OUTPUT),
-        help="待人工审核 JSONL 输出路径（dry-run 也照常输出）",
-    )
-    args = parser.parse_args()
-    configure_logging(args.log_level)
-    vid_by_id, person_index, org_index = _load_indexes(args.database, args.dry_run)
+SOURCES = [
+    {
+        "table": "dwd_patent",
+        "pk": "id",
+        "time": "update_time",
+        "query_sql": ("SELECT id, patent_id, inventors, applicants, assignees FROM dwd_patent"),
+    },
+]
+
+
+def transform(payload: dict[str, Any]) -> dict[str, Any]:
+    """kg.schema.extract 转换入口：rows → edges JSON；歧义候选进 pendingReview（人工审核）。"""
+    database = (payload.get("source") or {}).get("databaseName") or "gkx_element"
+    vid_by_id, person_index, org_index = _load_indexes(database, dry_run=False)
     reviews: list[ReviewRecord] = []
     stats: Counter = Counter()
-    summary = run_relation_extractor(
-        database=args.database,
-        batch_size=args.batch_size,
-        limit=args.limit,
-        dry_run=args.dry_run,
-        ingest_batch=args.ingest_batch,
-        sources=[
-            (
-                "dwd_patent",
-                # 旧表无 updated_time，增量水位走 update_time 列。
-                apply_since(SOURCE_SQL, args.since, col="update_time"),
-                applied_by_mapper(vid_by_id, org_index, person_index, reviews, stats),
-            )
-        ],
-        # since 已预应用到 SQL（update_time 列），此处只补绑定参数。
-        extra_params={"since": args.since} if args.since else None,
+    result = edge_transform(
+        payload, builder=applied_by_mapper(vid_by_id, org_index, person_index, reviews, stats)
     )
+    result["pendingReview"] = pending_review_items(reviews, source_table="dwd_patent")
     stats["review_records"] = len(reviews)
-    summary["sources"]["dwd_patent"].update(stats)
-    write_reviews(args.review_output, reviews)
-    summary["review_output"] = str(args.review_output)
-    print_json(summary)
-
-
-def workflow(payload: dict[str, Any]) -> dict[str, Any]:
-    """Temporal workflow 入口；payload 同 main() 的 vars(args) 形态。"""
-    common = common_args_from_payload(payload)
-    configure_logging(common["log_level"])
-    vid_by_id, person_index, org_index = _load_indexes(common["database"], common["dry_run"])
-    reviews: list[ReviewRecord] = []
-    stats: Counter = Counter()
-    review_output = _resolve_review_output(payload)
-    summary = run_relation_extractor(
-        database=common["database"],
-        batch_size=common["batch_size"],
-        limit=common["limit"],
-        dry_run=common["dry_run"],
-        ingest_batch=common["ingest_batch"],
-        sources=[
-            (
-                "dwd_patent",
-                # 旧表无 updated_time，增量水位走 update_time 列。
-                apply_since(SOURCE_SQL, common["since"], col="update_time"),
-                applied_by_mapper(vid_by_id, org_index, person_index, reviews, stats),
-            )
-        ],
-        extra_params={"since": common["since"]} if common["since"] else None,
-    )
-    stats["review_records"] = len(reviews)
-    summary["sources"]["dwd_patent"].update(stats)
-    write_reviews(review_output, reviews)
-    summary["review_output"] = str(review_output)
-    return summary
-
-
-if __name__ == "__main__":
-    main()
+    result["stats"] = {**(result.get("stats") or {}), **dict(stats)}
+    return result

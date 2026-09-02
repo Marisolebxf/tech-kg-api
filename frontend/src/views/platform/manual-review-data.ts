@@ -215,6 +215,7 @@ export type ReviewTemplateId =
   | 'T_DQ_MERGE'
   | 'T_RUNTIME'
   | 'T_DIRECT'
+  | 'T_EXTRACT_FAIL'
 
 /** @deprecated 兼容旧引用 */
 export type ReviewModeId = ReviewTemplateId
@@ -319,12 +320,22 @@ const templateCatalog: Record<ReviewTemplateId, ReviewTemplateMeta> = {
       { id: 'reject', label: '驳回·丢弃', kind: 'danger', actionKind: 'discard' },
     ],
   },
+  T_EXTRACT_FAIL: {
+    id: 'T_EXTRACT_FAIL',
+    title: '抽取失败重跑',
+    question: '该源记录在批次抽取中解析失败，点击重跑只重读该记录（新执行 · 类别=重新执行）。',
+    actions: [
+      { id: 'rerun-record', label: '重跑该记录', kind: 'primary', rerun: true, actionKind: 'apply_and_rerun' },
+      { id: 'discard-record', label: '忽略该记录', kind: 'secondary', actionKind: 'discard' },
+    ],
+  },
 }
 
 const modeByRulePrefix = (ruleId: string): ReviewTemplateId | null => {
   const id = ruleId.toUpperCase()
   // T_DIRECT 是字面值匹配（kg.custom.steps 后端直接把 templateId 当 ruleId 写进 record）
   if (id === 'T_DIRECT') return 'T_DIRECT'
+  if (id === 'T_EXTRACT_FAIL') return 'T_EXTRACT_FAIL'
   if (/^(NORM-DICT|DICT-CONFIG|DQ-ENUM|SCHEMA-MAP|SCHEMA-TYPE)/.test(id)) return 'T_MAP'
   if (/^(NORM-REQ|DQ-REQUIRED)/.test(id)) return 'T_DQ_FILL'
   if (/^(NORM-UNIQ|DQ-UNIQUE)/.test(id)) return 'T_DQ_MERGE'

@@ -1,4 +1,4 @@
-"""One-relation extractor: HAS_KEYWORD（Project → Keyword）.
+"""One-relation transform for HAS_KEYWORD（Project → Keyword）（平台喂数抽取：只输出边 JSON）.
 
 复刻旧 load_project_graph.py stage_keywords 口径：dwd_zh/en_project.keywords 按
 parse_list 解析、normalize_text 去重排序，每个关键词一条边；边属性仅溯源四件套
@@ -13,33 +13,23 @@ source_record_id（= 项目 ID）幂等。
 - 本脚本不再创建 Keyword 顶点（keyword_entity.py 已承接）；Keyword 端点不验存，
   以兼容实体侧解析口径差异产生的悬空目标（旧脚本在写边时顺手建点）。
 
-Dual-mode 入口：
-- CLI: ``python -m script.relation_extractors_one_relation.project_has_keyword_relation --dry-run --limit 1``
-- Temporal workflow: 脚本顶层 ``workflow(payload)`` 函数，由
-  ``service/temporal_workflows.py:execute_python_script`` Activity 子进程加载并调用。
-  payload key 用 snake_case（跟 argparse 转换后的 vars(args) 同形态）。
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from script.extract_transform_common import edge_transform
 from script.project_entity_matcher import normalize_text
 from script.project_graph_utils import parse_list
 from script.project_ingest_report import ProjectIngestReport
 from script.relation_extractors_one_relation.common import (
     EdgeRecord,
-    build_parser,
-    common_args_from_payload,
-    configure_logging,
     edge_provenance,
     ensure_edge_schema,
     graph_client,
-    print_json,
-    run_relation_extractor,
 )
 from script.relation_extractors_one_relation.resolvers import keyword_vid
 
@@ -112,61 +102,21 @@ def _ensure_schema(dry_run: bool) -> None:
         graph.close()
 
 
-def main() -> None:
-    parser = build_parser(__doc__ or "")
-    parser.add_argument("--table", choices=("all", *TABLES), default="all")
-    parser.add_argument("--report-dir", type=Path)
-    args = parser.parse_args()
-    configure_logging(args.log_level)
-    tables = _resolve_tables(vars(args))
-    batch = args.ingest_batch or f"RELATION_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-    _ensure_schema(args.dry_run)
+SOURCES = [
+    {"table": t, "pk": "id", "time": "update_time", "query_sql": f"SELECT * FROM {t}"}
+    for t in TABLES
+]
+
+
+def transform(payload: dict[str, Any]) -> dict[str, Any]:
+    """kg.schema.extract 转换入口：rows → edges JSON。"""
+    source = payload.get("source") or {}
+    batch = f"se-{str(source.get('id') or 'x')[:8]}"
+    _ensure_schema(False)
     report = ProjectIngestReport(
-        _resolve_report_dir(vars(args), batch),
-        ingest_batch=batch,
-        dry_run=args.dry_run,
+        _resolve_report_dir(payload, batch), ingest_batch=batch, dry_run=False
     )
-    sources = build_sources(tables, report)
-    summary = run_relation_extractor(
-        database=args.database,
-        batch_size=args.batch_size,
-        limit=args.limit,
-        dry_run=args.dry_run,
-        ingest_batch=batch,
-        since=args.since,
-        sources=sources,
-    )
-    summary["report_dir"] = str(report.report_dir)
-    summary["report"] = report.write()
-    print_json(summary)
-
-
-def workflow(payload: dict[str, Any]) -> dict[str, Any]:
-    """Temporal workflow 入口；payload 同 main() 的 vars(args) 形态。"""
-    common = common_args_from_payload(payload)
-    configure_logging(common["log_level"])
-    tables = _resolve_tables(payload)
-    batch = common["ingest_batch"] or f"RELATION_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-    _ensure_schema(common["dry_run"])
-    report = ProjectIngestReport(
-        _resolve_report_dir(payload, batch),
-        ingest_batch=batch,
-        dry_run=common["dry_run"],
-    )
-    sources = build_sources(tables, report)
-    summary = run_relation_extractor(
-        database=common["database"],
-        batch_size=common["batch_size"],
-        limit=common["limit"],
-        dry_run=common["dry_run"],
-        ingest_batch=batch,
-        since=common["since"],
-        sources=sources,
-    )
-    summary["report_dir"] = str(report.report_dir)
-    summary["report"] = report.write()
-    return summary
-
-
-if __name__ == "__main__":
-    main()
+    result = edge_transform(payload, builder=make_project_has_keyword_mapper(report))
+    result["report_dir"] = str(report.report_dir)
+    result["report"] = report.write()
+    return result

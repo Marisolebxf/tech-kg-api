@@ -1,4 +1,4 @@
-"""One-relation extractor: CITES（Patent → Patent，专利域匹配边）.
+"""One-relation transform for CITES（Patent → Patent，专利引文）（平台喂数抽取：只输出边 JSON）.
 
 复刻旧 load_patent_relations.py 口径：
 
@@ -13,27 +13,17 @@
 - 候选索引 ``identifier_index`` 由图内 Patent（限定 dwd_patent.patent_id 集合）
   查询构建，端点直接取图内真实 vid，不做端点验存。
 
-Dual-mode 入口：
-- CLI: ``python -m script.relation_extractors_one_relation.patent_cites_relation --dry-run --limit 1``
-- Temporal workflow: 脚本顶层 ``workflow(payload)`` 函数，由
-  ``service/temporal_workflows.py:execute_python_script`` Activity 子进程加载并调用。
-  payload key 用 snake_case（跟 argparse 转换后的 vars(args) 同形态）。
 """
 
 from collections import Counter
 from typing import Any
 
+from script.extract_transform_common import edge_transform
 from script.relation_extractors_one_relation.common import (
     EdgeRecord,
-    apply_since,
-    build_parser,
-    common_args_from_payload,
-    configure_logging,
     ensure_edge_schema,
     graph_client,
     mysql_engine,
-    print_json,
-    run_relation_extractor,
 )
 from script.relation_extractors_one_relation.patent_matching import (
     EDGE_PROPERTY_SCHEMAS,
@@ -104,60 +94,21 @@ def _load_index(database: str, dry_run: bool) -> dict[str, list[str]]:
     return patent_index
 
 
-def main() -> None:
-    parser = build_parser(__doc__ or "")
-    args = parser.parse_args()
-    configure_logging(args.log_level)
-    patent_index = _load_index(args.database, args.dry_run)
+SOURCES = [
+    {
+        "table": "dwd_patent_cited",
+        "pk": "id",
+        "time": "update_time",
+        "query_sql": ("SELECT id, patent_id, patent_citations, cited_by FROM dwd_patent_cited"),
+    },
+]
+
+
+def transform(payload: dict[str, Any]) -> dict[str, Any]:
+    """kg.schema.extract 转换入口：rows → edges JSON（专利号精确唯一匹配）。"""
+    database = (payload.get("source") or {}).get("databaseName") or "gkx_element"
+    patent_index = _load_index(database, dry_run=False)
     stats: Counter = Counter()
-    summary = run_relation_extractor(
-        database=args.database,
-        batch_size=args.batch_size,
-        limit=args.limit,
-        dry_run=args.dry_run,
-        ingest_batch=args.ingest_batch,
-        sources=[
-            (
-                "dwd_patent_cited",
-                # 旧表无 updated_time，增量水位走 update_time 列。
-                apply_since(SOURCE_SQL, args.since, col="update_time"),
-                cites_mapper(patent_index, stats),
-            )
-        ],
-        # since 已预应用到 SQL（update_time 列），此处只补绑定参数。
-        extra_params={"since": args.since} if args.since else None,
-        dedupe="first",
-    )
-    summary["sources"]["dwd_patent_cited"].update(stats)
-    print_json(summary)
-
-
-def workflow(payload: dict[str, Any]) -> dict[str, Any]:
-    """Temporal workflow 入口；payload 同 main() 的 vars(args) 形态。"""
-    common = common_args_from_payload(payload)
-    configure_logging(common["log_level"])
-    patent_index = _load_index(common["database"], common["dry_run"])
-    stats: Counter = Counter()
-    summary = run_relation_extractor(
-        database=common["database"],
-        batch_size=common["batch_size"],
-        limit=common["limit"],
-        dry_run=common["dry_run"],
-        ingest_batch=common["ingest_batch"],
-        sources=[
-            (
-                "dwd_patent_cited",
-                # 旧表无 updated_time，增量水位走 update_time 列。
-                apply_since(SOURCE_SQL, common["since"], col="update_time"),
-                cites_mapper(patent_index, stats),
-            )
-        ],
-        extra_params={"since": common["since"]} if common["since"] else None,
-        dedupe="first",
-    )
-    summary["sources"]["dwd_patent_cited"].update(stats)
-    return summary
-
-
-if __name__ == "__main__":
-    main()
+    result = edge_transform(payload, builder=cites_mapper(patent_index, stats))
+    result["stats"] = {**(result.get("stats") or {}), **dict(stats)}
+    return result

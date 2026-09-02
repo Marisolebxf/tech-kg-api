@@ -139,14 +139,29 @@ class WorkflowJobService:
         from service.workflow_operations import workflow_operations_service
 
         task_type = request.get("taskType", "single")
-        if task_type not in {"single", "chain", "upload"}:
+        if task_type not in {"single", "chain", "upload", "extract"}:
             raise WorkflowJobError("任务类型必须是 single / chain / upload")
         name = (request.get("name") or "").strip()
         if not name:
             raise WorkflowJobError("任务名称不能为空")
 
         job_hex = uuid4().hex[:12]
-        if task_type == "chain":
+        if task_type == "extract":
+            schema_id = request.get("schemaId")
+            if not schema_id:
+                raise WorkflowJobError("数据抽取任务必须选择 Schema")
+            from service.schema_extraction import (
+                build_extract_definition,
+                load_extract_schema,
+                persist_extract_definition,
+            )
+
+            try:
+                info = load_extract_schema(schema_id)
+            except Exception as exc:
+                raise WorkflowJobError(str(exc)) from exc
+            definition = persist_extract_definition(build_extract_definition(info))
+        elif task_type == "chain":
             definition_ids = request.get("definitionIds") or []
             if len(definition_ids) < 2:
                 raise WorkflowJobError("多脚本串行任务至少选择 2 个脚本")
@@ -188,6 +203,10 @@ class WorkflowJobService:
         for key in _SELECTOR_KEYS:
             if request.get(key) not in (None, ""):
                 job[key] = request[key]
+        if task_type == "extract":
+            job["schemaId"] = schema_id
+            if request.get("batchSize"):
+                job["batchSize"] = min(max(int(request["batchSize"]), 1), 5000)
 
         if schedule["kind"] == "cron":
             schedule_id = f"{job['id']}-sched"
@@ -266,6 +285,11 @@ class WorkflowJobService:
         payload = self.selector_payload(job)
         payload["jobId"] = job["id"]
         payload["jobName"] = job["name"]
+        if job.get("taskType") == "extract":
+            payload["schemaId"] = job.get("schemaId")
+            payload["triggerSource"] = "MANUAL"
+            if job.get("batchSize"):
+                payload["batchSize"] = job["batchSize"]
         execution = await workflow_operations_service.execute_definition(
             definition, payload, persist_task=True
         )
@@ -317,12 +341,18 @@ class WorkflowJobService:
     async def _create_job_schedule(
         self, schedule_id: str, job: dict[str, Any], definition: dict[str, Any]
     ) -> None:
+        schedule_payload = {**self.selector_payload(job), "jobId": job["id"]}
+        if job.get("taskType") == "extract":
+            # kg.schema.extract 收扁平 payload：schemaId/batchSize 直接并入
+            schedule_payload["schemaId"] = job.get("schemaId")
+            if job.get("batchSize"):
+                schedule_payload["batchSize"] = job["batchSize"]
         schedule = {
             "id": schedule_id,
             "cron": job["schedule"]["cron"],
             "timezone": job["schedule"].get("timezone", "Asia/Shanghai"),
             "active": job.get("status", "启用") == "启用",
-            "payload": {**self.selector_payload(job), "jobId": job["id"]},
+            "payload": schedule_payload,
             "definitionId": definition["id"],
             "jobId": job["id"],
         }

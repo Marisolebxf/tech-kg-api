@@ -463,4 +463,4 @@ class TestProjectRelationModules:
             has_output_relation,
             project_has_keyword_relation,
         ):
-            assert callable(module.main)
+            assert callable(module.transform)

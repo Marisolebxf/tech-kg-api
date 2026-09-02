@@ -732,6 +732,10 @@ class SchemaManagementService:
         for item in sources:
             _validate_datasource_exists(item["datasource_id"])
         try:
+            # 先删后插：同一 flush 里「新行 INSERT 早于旧行 DELETE」会撞
+            # uk_kg_schema_source_table 唯一键（重跑幂等必需）
+            definition.sources.clear()
+            self._session.flush()
             definition.sources = [
                 GraphSchemaSource(
                     datasource_id=item["datasource_id"],
@@ -739,6 +743,7 @@ class SchemaManagementService:
                     table_name=item["table_name"],
                     pk_column=item.get("pk_column") or "id",
                     time_column=item.get("time_column") or "update_time",
+                    query_sql=(item.get("query_sql") or None),
                     position=index,
                 )
                 for index, item in enumerate(sources)
@@ -872,15 +877,15 @@ class SchemaManagementService:
             raise SchemaScriptError(
                 f"Python 脚本语法错误（第 {exc.lineno or 0} 行）: {exc.msg}"
             ) from exc
-        return next(
-            (
-                node.name
-                for node in tree.body
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name == "workflow"
-            ),
-            None,
-        )
+        functions = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        # 优先平台喂数抽取入口 transform(payload)；旧全量脚本入口 workflow(payload) 兼容
+        if "transform" in functions:
+            return "transform"
+        return "workflow" if "workflow" in functions else None
 
     @staticmethod
     def _register_workflow(
@@ -1003,6 +1008,7 @@ class SchemaManagementService:
             "tableName": item.table_name,
             "pkColumn": item.pk_column,
             "timeColumn": item.time_column,
+            "querySql": item.query_sql,
             "position": item.position,
         }
 

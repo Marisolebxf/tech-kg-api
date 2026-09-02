@@ -1,4 +1,4 @@
-"""One-relation extractor: HAS_PARTICIPANT（Project → Person）.
+"""One-relation transform for HAS_PARTICIPANT（Project → Person）（平台喂数抽取：只输出边 JSON）.
 
 复刻旧 load_project_graph.py stage_project_relations 口径：dwd_zh/en_project 的
 participants 按 parse_list 解析、normalize_text 去重排序后逐个经 person 索引
@@ -7,34 +7,24 @@ ambiguous/not_found 进 ProjectIngestReport 复核目录。候选集沿用旧
 collect_match_candidates 的 person 通道（project_host + participants 全集，二者
 会并入同一索引）。REST merge_edge 按 source_record_id（= 项目 ID）幂等。
 
-Dual-mode 入口：
-- CLI: ``python -m script.relation_extractors_one_relation.has_participant_relation --dry-run --limit 1``
-- Temporal workflow: 脚本顶层 ``workflow(payload)`` 函数，由
-  ``service/temporal_workflows.py:execute_python_script`` Activity 子进程加载并调用。
-  payload key 用 snake_case（跟 argparse 转换后的 vars(args) 同形态）。
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from script.extract_transform_common import edge_transform
 from script.project_entity_matcher import ProjectEntityMatcher, normalize_text
 from script.project_graph_utils import match_audit_props, parse_list
 from script.project_ingest_report import ProjectIngestReport
 from script.relation_extractors_one_relation.common import (
     EdgeRecord,
-    build_parser,
-    common_args_from_payload,
-    configure_logging,
     edge_provenance,
     ensure_edge_schema,
     graph_client,
     mysql_engine,
-    print_json,
-    run_relation_extractor,
 )
 from script.relation_extractors_one_relation.leads_relation import collect_person_candidates
 
@@ -160,69 +150,30 @@ def _load_matcher(candidates: set[str], dry_run: bool) -> ProjectEntityMatcher:
     return matcher
 
 
-def main() -> None:
-    parser = build_parser(__doc__ or "")
-    parser.add_argument("--table", choices=("all", *TABLES), default="all")
-    parser.add_argument("--report-dir", type=Path)
-    args = parser.parse_args()
-    configure_logging(args.log_level)
-    tables = _resolve_tables(vars(args))
-    batch = args.ingest_batch or f"RELATION_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-    candidates = _collect_candidates(args.database, tables, args.batch_size, args.limit, args.since)
-    matcher = _load_matcher(candidates, args.dry_run)
+SOURCES = [
+    {"table": t, "pk": "id", "time": "update_time", "query_sql": f"SELECT * FROM {t}"}
+    for t in TABLES
+]
+
+
+def transform(payload: dict[str, Any]) -> dict[str, Any]:
+    """kg.schema.extract 转换入口：rows → edges JSON；matcher 候选取自本批行。"""
+    source = payload.get("source") or {}
+    batch = f"se-{str(source.get('id') or 'x')[:8]}"
+    rows = payload.get("rows") or []
+    candidates = set()
+    for r in rows:
+        host = str(r.get("project_host") or "").strip()
+        if host:
+            candidates.add(host)
+        for value in parse_list(r.get("participants")):
+            if str(value).strip():
+                candidates.add(str(value).strip())
+    matcher = _load_matcher(candidates, dry_run=False)
     report = ProjectIngestReport(
-        _resolve_report_dir(vars(args), batch),
-        ingest_batch=batch,
-        dry_run=args.dry_run,
+        _resolve_report_dir(payload, batch), ingest_batch=batch, dry_run=False
     )
-    summary = run_relation_extractor(
-        database=args.database,
-        batch_size=args.batch_size,
-        limit=args.limit,
-        dry_run=args.dry_run,
-        ingest_batch=batch,
-        since=args.since,
-        sources=[
-            (table, PROJECT_SQL.format(table=table), make_has_participant_mapper(matcher, report))
-            for table in tables
-        ],
-    )
-    summary["report_dir"] = str(report.report_dir)
-    summary["report"] = report.write()
-    print_json(summary)
-
-
-def workflow(payload: dict[str, Any]) -> dict[str, Any]:
-    """Temporal workflow 入口；payload 同 main() 的 vars(args) 形态。"""
-    common = common_args_from_payload(payload)
-    configure_logging(common["log_level"])
-    tables = _resolve_tables(payload)
-    batch = common["ingest_batch"] or f"RELATION_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-    candidates = _collect_candidates(
-        common["database"], tables, common["batch_size"], common["limit"], common["since"]
-    )
-    matcher = _load_matcher(candidates, common["dry_run"])
-    report = ProjectIngestReport(
-        _resolve_report_dir(payload, batch),
-        ingest_batch=batch,
-        dry_run=common["dry_run"],
-    )
-    summary = run_relation_extractor(
-        database=common["database"],
-        batch_size=common["batch_size"],
-        limit=common["limit"],
-        dry_run=common["dry_run"],
-        ingest_batch=batch,
-        since=common["since"],
-        sources=[
-            (table, PROJECT_SQL.format(table=table), make_has_participant_mapper(matcher, report))
-            for table in tables
-        ],
-    )
-    summary["report_dir"] = str(report.report_dir)
-    summary["report"] = report.write()
-    return summary
-
-
-if __name__ == "__main__":
-    main()
+    result = edge_transform(payload, builder=make_has_participant_mapper(matcher, report))
+    result["report_dir"] = str(report.report_dir)
+    result["report"] = report.write()
+    return result

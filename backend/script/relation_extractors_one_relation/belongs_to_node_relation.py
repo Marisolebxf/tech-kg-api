@@ -1,30 +1,24 @@
-"""One-relation extractor: BELONGS_TO_NODE（Organization → IndustryNode）.
+"""One-relation transform for BELONGS_TO_NODE（Organization → IndustryNode）（平台喂数抽取）。"""
 
-复刻旧 load_industry_chain_graph.py 口径：dwd_org_industry_chain_dtl，
-org 端 VID = org_{antitypic}，仅当图中已存在该 Organization 才建边
-（写层端点验存，防悬挂）；chain_score 数值，解析失败落 0.0。
+from collections.abc import Mapping
+from typing import Any
 
-Dual-mode 入口：
-- CLI: ``python -m script.relation_extractors_one_relation.belongs_to_node_relation --dry-run --limit 1``
-- Temporal workflow: 脚本顶层 ``workflow(payload)`` 函数，由
-  ``service/temporal_workflows.py:execute_python_script`` Activity 子进程加载并调用。
-  payload key 用 snake_case（跟 argparse 转换后的 vars(args) 同形态）。
-"""
+from script.extract_transform_common import edge_transform
+from script.relation_extractors_one_relation.common import EdgeRecord, now_utc
 
-from script.relation_extractors_one_relation.common import (
-    EdgeRecord,
-    build_parser,
-    common_args_from_payload,
-    configure_logging,
-    now_utc,
-    print_json,
-    run_relation_extractor,
-)
-
-SQL = "SELECT * FROM dwd_org_industry_chain_dtl ORDER BY 1"
+SOURCES = [
+    {
+        "table": "dwd_org_industry_chain_dtl",
+        "pk": "row_id",
+        "time": "update_time",
+        "query_sql": (
+            "SELECT *, CONCAT(antitypic, '__', node_id) AS row_id FROM dwd_org_industry_chain_dtl"
+        ),
+    },
+]
 
 
-def belongs_to_node(table: str, row: dict, batch: str) -> list[EdgeRecord]:
+def belongs_to_node(table: str, row: Mapping[str, Any], batch: str) -> list[EdgeRecord]:
     antitypic = str(row.get("antitypic") or "").strip()
     node_id = str(row.get("node_id") or "").strip()
     if not antitypic or not node_id:
@@ -52,42 +46,6 @@ def belongs_to_node(table: str, row: dict, batch: str) -> list[EdgeRecord]:
     ]
 
 
-def build_sources() -> list[tuple[str, str, object]]:
-    """构造 sources；单源固定，无需 payload 参数。"""
-    return [("dwd_org_industry_chain_dtl", SQL, belongs_to_node)]
-
-
-def main() -> None:
-    parser = build_parser(__doc__ or "")
-    args = parser.parse_args()
-    configure_logging(args.log_level)
-    sources = build_sources()
-    print_json(
-        run_relation_extractor(
-            database=args.database,
-            batch_size=args.batch_size,
-            limit=args.limit,
-            dry_run=args.dry_run,
-            ingest_batch=args.ingest_batch,
-            sources=sources,
-        )
-    )
-
-
-def workflow(payload: dict) -> dict:
-    """Temporal workflow 入口；payload 同 main() 的 vars(args) 形态。"""
-    common = common_args_from_payload(payload)
-    configure_logging(common["log_level"])
-    sources = build_sources()
-    return run_relation_extractor(
-        database=common["database"],
-        batch_size=common["batch_size"],
-        limit=common["limit"],
-        dry_run=common["dry_run"],
-        ingest_batch=common["ingest_batch"],
-        sources=sources,
-    )
-
-
-if __name__ == "__main__":
-    main()
+def transform(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """kg.schema.extract 转换入口：payload["rows"] → {"edges": [...], "failures": [...]}。"""
+    return edge_transform(payload, builder=belongs_to_node)

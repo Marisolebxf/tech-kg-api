@@ -164,6 +164,10 @@ class TemporalRuntime:
                 "_scheduleId": schedule_id,
             }
             workflow_payload = {"definitionId": definition["id"], "payload": workflow_payload}
+        elif definition.get("sourceKind") == "extract":
+            # kg.schema.extract 收扁平 request（schemaId/graphSpace/...），
+            # 不包装 definitionId/payload，只 merge 周期来源标记
+            workflow_payload = {**workflow_payload, "_scheduleId": schedule_id}
         await client.create_schedule(
             schedule_id,
             Schedule(
@@ -221,6 +225,7 @@ class TemporalRuntime:
             "payload": payload,
             "dispatchMode": dispatch.get("dispatchMode", "TEMPORAL"),
             "message": dispatch.get("message", "工作流已下发"),
+            "triggerSource": dispatch.get("triggerSource", "MANUAL"),
         }
 
 

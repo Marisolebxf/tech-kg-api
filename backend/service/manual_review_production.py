@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -65,6 +66,9 @@ def load(v):
 
 def sha(v):
     return hashlib.sha256(dump(v).encode()).hexdigest()
+
+
+logger = logging.getLogger("service.manual_review")
 
 
 # 存量 T_DIRECT 案例的 risk_level 是中文"中/高"（旧口径），序列化时归一到 P1/P0，
@@ -302,10 +306,12 @@ class ManualReviewService:
         if f.get("queue") in queues:
             q.append(queues[f["queue"]])
         # category 过滤：A=入库决策（T_DIRECT/T_LINK/T_EVIDENCE）；B=数据修正（T_MAP/T_DQ_FILL/T_DQ_MERGE/T_ATTR）；
-        # 不传=所有 template；T_RUNTIME 始终不进审核队列（属于代码问题，自动重试/告警另行处理）
+        # C=抽取失败重跑（T_EXTRACT_FAIL）；不传=所有 template；T_RUNTIME 始终不进审核队列
+        # （属于代码问题，自动重试/告警另行处理）
         categories = {
             "A": ("T_DIRECT", "T_LINK", "T_EVIDENCE"),
             "B": ("T_MAP", "T_DQ_FILL", "T_DQ_MERGE", "T_ATTR"),
+            "C": ("T_EXTRACT_FAIL",),
         }
         if f.get("category") in categories:
             q.append(ReviewCase.template_id.in_(categories[f["category"]]))
@@ -533,12 +539,18 @@ class ManualReviewService:
         source_record_id: str | None = None,
         llm_input: dict[str, Any] | None = None,
         llm_output: str | None = None,
+        template_id: str = "T_DIRECT",
+        workflow_type: str | None = None,
+        exception_code: str | None = None,
+        resume_token: str | None = None,
+        extra_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """kg.custom.steps pendingReview 项入队。
+        """直接 OPEN 状态入队（不走 4-eyes claim/submit）。
 
-        直接 OPEN 状态，不走 4-eyes claim/submit 流程；template_id=T_DIRECT。
-        candidate_snapshot 里附加 kind/nodeLabel/edgeType/fromId/toId 元字段，
-        direct_decide 读这些字段决定怎么写图。
+        默认 T_DIRECT（kg.custom.steps pendingReview）：candidate_snapshot 附加
+        kind/nodeLabel/edgeType/fromId/toId 元字段，direct_decide 读这些字段写图。
+        ``template_id`` 可选 T_EXTRACT_FAIL（抽取失败重跑）/ T_LINK（同名冲突对齐），
+        ``extra_snapshot`` 合入 input_snapshot 供对应处理端读取。
         """
         t = now()
         obj_id = (
@@ -559,6 +571,7 @@ class ManualReviewService:
         }
         dedupe_key = sha([task_id, step_id, obj_id, sha(snapshot)])
         risk = "P1" if (confidence is None or confidence >= 0.7) else "P0"
+        effective_workflow_type = workflow_type or "kg.custom.steps"
         c = ReviewCase(
             id=f"MR-{t:%Y%m%d}-{uuid4().hex[:12].upper()}",
             dedupe_key=dedupe_key,
@@ -572,8 +585,8 @@ class ManualReviewService:
             object_name=obj_name,
             error_type=reason or "需要人工审核",
             error_fingerprint=sha([reason, snapshot]),
-            category=TEMPLATES["T_DIRECT"]["title"],
-            template_id="T_DIRECT",
+            category=TEMPLATES[template_id]["title"],
+            template_id=template_id,
             template_version="1.0",
             domain=domain,
             phase="图谱构建",
@@ -583,12 +596,12 @@ class ManualReviewService:
             version=1,
             sla_claim_at=t + timedelta(hours=1),
             sla_resolve_at=t + timedelta(hours=24),
-            workflow_type="kg.custom.steps",
+            workflow_type=effective_workflow_type,
             workflow_id=workflow_id,
             workflow_run_id=workflow_run_id,
             task_queue="tech-kg-workflows",
-            resume_token=f"kg-step:{task_id}:{step_id}",
-            exception_code="KG_STEP_PENDING_REVIEW",
+            resume_token=resume_token or f"kg-step:{task_id}:{step_id}",
+            exception_code=exception_code or "KG_STEP_PENDING_REVIEW",
             isolation_scope="OBJECT",
             template_payload_version="1.0",
             input_snapshot=dump(
@@ -599,6 +612,7 @@ class ManualReviewService:
                     "source_record": source_record,
                     "llm_input": llm_input,
                     "llm_output": llm_output,
+                    **(extra_snapshot or {}),
                 }
             ),
             source_table=source_table,
@@ -639,6 +653,244 @@ class ManualReviewService:
                     raise
                 return self._ingress_response(existing, True)
         return self._ingress_response(c, False)
+
+    # ------------------------------------------------------------------
+    # T_EXTRACT_FAIL：抽取失败记录重跑生命周期
+    # ------------------------------------------------------------------
+
+    def _extract_service_actor(self, tag: str) -> ReviewIdentity:
+        return ReviewIdentity(
+            "kg.schema.extract",
+            "kg.schema.extract",
+            frozenset({"review_admin"}),
+            frozenset({"*"}),
+            "service",
+            f"{tag}-{uuid4().hex[:8]}",
+        )
+
+    def list_extract_fail_cases(
+        self,
+        *,
+        case_ids: list[str] | None = None,
+        execution_id: str | None = None,
+        statuses: tuple[str, ...] = ("OPEN", "RERUN_FAILED"),
+    ) -> list[dict[str, Any]]:
+        """查可重跑的 T_EXTRACT_FAIL case（供重跑服务分组、下发）。"""
+        with self.sf() as s:
+            q = select(ReviewCase).where(ReviewCase.template_id == "T_EXTRACT_FAIL")
+            if case_ids:
+                q = q.where(ReviewCase.id.in_(case_ids))
+            if statuses:
+                q = q.where(ReviewCase.status.in_(statuses))
+            rows = s.scalars(q).all()
+        result: list[dict[str, Any]] = []
+        for c in rows:
+            snapshot = load(c.input_snapshot) or {}
+            if execution_id and snapshot.get("executionId") != execution_id:
+                continue
+            record_id = str(c.source_record_id or "")
+            if not record_id:
+                continue
+            result.append(
+                {
+                    "caseId": c.id,
+                    "recordId": record_id,
+                    "sourceBindingId": str(snapshot.get("sourceBindingId") or ""),
+                    "schemaId": snapshot.get("schemaId"),
+                    "schemaKey": snapshot.get("schemaKey"),
+                    "executionId": snapshot.get("executionId"),
+                    "jobId": snapshot.get("jobId"),
+                    "attempt": int(snapshot.get("attempt") or 1),
+                    "sourceTable": c.source_table,
+                    "status": c.status,
+                }
+            )
+        return result
+
+    def mark_extract_rerun(
+        self, case_ids: list[str], *, rerun_execution_id: str | None = None
+    ) -> int:
+        """重跑下发前把 T_EXTRACT_FAIL case 标 RERUNNING（必须在触发执行**之前**调用）。
+
+        先标记再触发，避免竞态（执行先完成而 case 尚未标记导致回写落空）。
+        执行 id 由 ``attach_rerun_execution`` 在触发成功后补写进 snapshot。
+        触发失败由调用方 ``revert_extract_rerun`` 回滚为 OPEN。
+        """
+        actor = self._extract_service_actor("rerun")
+        t = now()
+        marked = 0
+        with self.sf() as s:
+            for case_id in case_ids:
+                c = s.scalar(select(ReviewCase).where(ReviewCase.id == case_id))
+                if c is None or c.template_id != "T_EXTRACT_FAIL":
+                    continue
+                if c.status in TERMINAL_STATUSES or c.status == "RERUNNING":
+                    continue
+                snapshot = load(c.input_snapshot) or {}
+                if rerun_execution_id:
+                    snapshot["rerunExecutionId"] = rerun_execution_id
+                c.input_snapshot = dump(snapshot)
+                old = c.status
+                c.status = "RERUNNING"
+                c.version += 1
+                c.updated_at = t
+                self.audit(
+                    s,
+                    c,
+                    actor,
+                    "RERUN_STARTED",
+                    old,
+                    c.status,
+                    {"rerunExecutionId": rerun_execution_id},
+                )
+                marked += 1
+            s.commit()
+        return marked
+
+    def attach_rerun_execution(self, case_ids: list[str], rerun_execution_id: str) -> int:
+        """触发成功后把重跑执行 id 补写进 case snapshot（前端展示/追踪）。"""
+        t = now()
+        attached = 0
+        try:
+            with self.sf() as s:
+                for case_id in case_ids:
+                    c = s.scalar(select(ReviewCase).where(ReviewCase.id == case_id))
+                    if c is None:
+                        continue
+                    snapshot = load(c.input_snapshot) or {}
+                    snapshot["rerunExecutionId"] = rerun_execution_id
+                    c.input_snapshot = dump(snapshot)
+                    c.updated_at = t
+                    attached += 1
+                s.commit()
+        except Exception:  # noqa: BLE001
+            logger.warning("补写 rerunExecutionId 失败 cases=%s", case_ids, exc_info=True)
+        return attached
+
+    def revert_extract_rerun(self, case_ids: list[str], *, reason: str) -> int:
+        """重跑触发失败时把 RERUNNING 回滚为 OPEN（best-effort，不抛错）。"""
+        actor = self._extract_service_actor("rerun-revert")
+        t = now()
+        reverted = 0
+        try:
+            with self.sf() as s:
+                for case_id in case_ids:
+                    c = s.scalar(select(ReviewCase).where(ReviewCase.id == case_id))
+                    if c is None or c.status != "RERUNNING":
+                        continue
+                    old = c.status
+                    c.status = "OPEN"
+                    c.version += 1
+                    c.updated_at = t
+                    self.audit(s, c, actor, "RERUN_PROGRESS", old, c.status, {"reason": reason})
+                    reverted += 1
+                s.commit()
+        except Exception:  # noqa: BLE001
+            return reverted
+        return reverted
+
+    def resolve_extract_rerun(
+        self,
+        *,
+        rerun_case_ids: list[str],
+        failed_records: list[dict[str, Any]],
+        rerun_execution_id: str | None,
+        task_id: str,
+        kind: str = "entity",
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        """重跑执行结束后回写 T_EXTRACT_FAIL case。
+
+        记录不在本次 failures → RESOLVED（RERUN_SUCCEEDED）；仍失败 → 原 case
+        RESOLVED（被取代）+ 新 case（attempt+1，绑本次重跑执行），供再次点击重跑。
+        """
+        failed_by_key: dict[tuple[str, str], dict[str, Any]] = {
+            (str(f.get("sourceBindingId") or ""), str(f.get("recordId") or "")): f
+            for f in failed_records
+            if isinstance(f, dict)
+        }
+        actor = self._extract_service_actor("rerun-resolve")
+        t = now()
+        resolved = 0
+        refailed: list[dict[str, Any]] = []
+        with self.sf() as s:
+            cases = s.scalars(
+                select(ReviewCase).where(ReviewCase.id.in_(rerun_case_ids or []))
+            ).all()
+            for c in cases:
+                if c.template_id != "T_EXTRACT_FAIL" or c.status != "RERUNNING":
+                    continue
+                snapshot = load(c.input_snapshot) or {}
+                key = (str(snapshot.get("sourceBindingId") or ""), str(c.source_record_id))
+                old = c.status
+                c.status = "RESOLVED"
+                c.updated_at = t
+                if key in failed_by_key:
+                    self.audit(
+                        s,
+                        c,
+                        actor,
+                        "RERUN_FAILED",
+                        old,
+                        "RESOLVED",
+                        {"rerunExecutionId": rerun_execution_id, "superseded": True},
+                    )
+                    refailed.append(
+                        {"case": c, "snapshot": snapshot, "failure": failed_by_key[key]}
+                    )
+                else:
+                    self.audit(
+                        s,
+                        c,
+                        actor,
+                        "RERUN_SUCCEEDED",
+                        old,
+                        "RESOLVED",
+                        {"rerunExecutionId": rerun_execution_id},
+                    )
+                resolved += 1
+            s.commit()
+        recreated = 0
+        for item in refailed:
+            case = item["case"]
+            snapshot = item["snapshot"]
+            failure = item["failure"]
+            try:
+                self.create_direct_case(
+                    task_id=case.source_task_id or task_id,
+                    execution_id=rerun_execution_id,
+                    step_id=case.pipeline_step_id or "extract",
+                    kind=case.object_type or kind,
+                    candidate={
+                        "recordId": str(case.source_record_id),
+                        "error": str(failure.get("error") or ""),
+                        "schemaKey": snapshot.get("schemaKey"),
+                    },
+                    object_id=str(case.source_record_id),
+                    object_name=case.object_name,
+                    node_label=(name if (case.object_type or kind) == "entity" else None),
+                    edge_type=(name if (case.object_type or kind) != "entity" else None),
+                    reason=f"重跑仍失败: {str(failure.get('error') or '')[:500]}",
+                    workflow_id=case.workflow_id,
+                    source_table=case.source_table,
+                    source_record_id=str(case.source_record_id),
+                    domain=case.domain or "graph",
+                    service_actor="kg.schema.extract",
+                    template_id="T_EXTRACT_FAIL",
+                    workflow_type="kg.schema.extract",
+                    exception_code="KG_EXTRACT_RECORD_FAILED",
+                    resume_token=f"extract-fail:{rerun_execution_id}:{case.source_record_id}",
+                    extra_snapshot={
+                        **{k: v for k, v in snapshot.items() if k != "rerunExecutionId"},
+                        "attempt": int(snapshot.get("attempt") or 1) + 1,
+                        "rerunOfExecutionId": snapshot.get("executionId"),
+                        "executionId": rerun_execution_id,
+                    },
+                )
+                recreated += 1
+            except Exception:  # noqa: BLE001
+                logger.warning("重跑仍失败的新 case 创建失败: %s", case.id, exc_info=True)
+        return {"resolved": resolved, "refailed": len(refailed), "recreated": recreated}
 
     def direct_decide(
         self,
@@ -755,9 +1007,8 @@ class ManualReviewService:
         - schema 查询失败：原样发（让 trs-graph 报 400 暴露问题）
         """
         import json
-        import logging
 
-        log = logging.getLogger("service.manual_review")
+        log = logger
         try:
             desc = graph.execute_query(
                 f"DESCRIBE EDGE `{label}`" if is_edge else f"DESCRIBE TAG `{label}`"

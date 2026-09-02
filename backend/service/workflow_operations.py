@@ -275,6 +275,9 @@ class WorkflowOperationsService:
                 "message": f"Temporal 暂不可用，已保存待下发记录: {exc}",
             }
         execution = temporal_runtime.execution_record(definition["id"], dispatch, payload)
+        execution["triggerSource"] = payload.get("triggerSource") or (
+            "SCHEDULE" if payload.get("_scheduleId") else "MANUAL"
+        )
         if payload.get("jobId"):
             execution["jobId"] = payload["jobId"]
         self.repo.save_execution(execution)

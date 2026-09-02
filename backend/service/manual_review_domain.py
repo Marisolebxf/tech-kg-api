@@ -40,7 +40,11 @@ PIPELINE_STEPS = {
         "templates": {"T_MAP", "T_DQ_FILL", "T_DQ_MERGE", "T_RUNTIME"},
     },
     "schema": {"name": "Schema 映射", "phase": "图谱构建", "templates": {"T_MAP", "T_RUNTIME"}},
-    "extract": {"name": "实体关系抽取", "phase": "图谱构建", "templates": {"T_RUNTIME"}},
+    "extract": {
+        "name": "实体关系抽取",
+        "phase": "图谱构建",
+        "templates": {"T_EXTRACT_FAIL", "T_RUNTIME"},
+    },
     "align": {"name": "实体对齐消歧", "phase": "图谱构建", "templates": {"T_LINK", "T_RUNTIME"}},
     "validate": {
         "name": "规则与证据校验",
@@ -105,6 +109,12 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         "adapter": "direct",
         "components": [{"type": "candidate-detail", "source": "data.candidate"}],
     },
+    "T_EXTRACT_FAIL": {
+        "title": "抽取失败重跑",
+        "actions": {"rerun-record", "discard-record"},
+        "adapter": "extract-fail",
+        "components": [{"type": "record-error", "source": "data.candidate"}],
+    },
 }
 RESULT_SCHEMAS: dict[str, dict[str, Any]] = {
     "T_MAP": {
@@ -137,6 +147,10 @@ RESULT_SCHEMAS: dict[str, dict[str, Any]] = {
     "T_DIRECT": {
         "type": "object",
         "properties": {"accepted": {"type": "boolean"}, "note": {"type": "string"}},
+    },
+    "T_EXTRACT_FAIL": {
+        "type": "object",
+        "properties": {"rerun": {"type": "boolean"}, "note": {"type": "string"}},
     },
 }
 
@@ -264,6 +278,7 @@ def write_target(template_id: str) -> str:
         "T_ATTR": "属性融合 correction 层",
         "T_RUNTIME": "任务配置 correction 层",
         "T_DIRECT": "图数据库直写（accept 时 merge_node/create_edge）",
+        "T_EXTRACT_FAIL": "失败记录重跑（重新执行抽取）",
     }[canonical_template(template_id)]
 
 

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import ManualReviewDynamicForm from '../../components/manual-review/ManualReviewDynamicForm.vue'
-import { claimProductionReview, directDecideProductionReview, getProductionReview, heartbeatProductionReview, submitProductionReview, type ProductionReviewCase } from '../../api/workflowOperations'
+import { claimProductionReview, directDecideProductionReview, getProductionReview, heartbeatProductionReview, rerunExtractFailures, submitProductionReview, type ProductionReviewCase } from '../../api/workflowOperations'
 
 import {
   getHandleCategory,
@@ -24,6 +24,32 @@ let heartbeatTimer: number | undefined
 const isSupported = computed(() => Boolean(record.value))
 const isHistory = computed(() => record.value?.status === '已完成' || record.value?.status === '已撤销' || record.value?.status === '已驳回')
 const isDirectCase = computed(() => productionCase.value?.template?.id === 'T_DIRECT' || productionCase.value?.workflowType === 'kg.custom.steps')
+
+// T_EXTRACT_FAIL：抽取失败记录（input_snapshot 带 schemaId/sourceBindingId/attempt/rerunExecutionId）
+const extractInput = computed<Record<string, unknown>>(() => ((productionCase.value?.data?.input || productionCase.value?.input || {}) as Record<string, unknown>))
+const extractErrorFields = computed(() => {
+  const candidate = (productionCase.value?.candidate || {}) as Record<string, unknown>
+  return Object.entries(candidate).filter(([key]) => !key.startsWith('_'))
+})
+const extractAttempt = computed(() => Number(extractInput.value.attempt ?? 1))
+const extractRerunExecutionId = computed(() => String(extractInput.value.rerunExecutionId ?? ''))
+const extractRerunning = computed(() => productionCase.value?.status === 'RERUNNING')
+const extractRerunSubmitting = ref(false)
+
+async function rerunThisRecord() {
+  if (!productionCase.value || extractRerunSubmitting.value) return
+  extractRerunSubmitting.value = true
+  try {
+    const result = await rerunExtractFailures({ caseIds: [productionCase.value.id] })
+    const executionId = result.executions[0]?.executionId ?? '—'
+    window.alert(`已下发重跑（新执行 ${executionId}，类别=重新执行），完成后本条自动关闭；仍失败会生成新的待处理记录。`)
+    productionCase.value = await getProductionReview(productionCase.value.id)
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : '重跑下发失败')
+  } finally {
+    extractRerunSubmitting.value = false
+  }
+}
 // T_DIRECT 候选解析：candidate_snapshot 含 _kind/_nodeLabel/_edgeType/_fromId/_toId + 候选本体字段
 const directCandidate = computed<Record<string, unknown>>(() => (productionCase.value?.candidate as Record<string, unknown>) || {})
 const directKind = computed<string>(() => String(directCandidate.value._kind || productionCase.value?.objectType || ''))
@@ -681,6 +707,60 @@ const secondaryActions = computed(() => {
             </button>
           </div>
           <p v-else class="direct-done">已决策 · 状态 {{ record.status }}</p>
+        </section>
+      </section>
+
+      <!-- T_EXTRACT_FAIL：抽取失败记录重跑 -->
+      <section v-else-if="templateId === 'T_EXTRACT_FAIL'" class="zone zone-direct">
+        <section class="direct-candidate">
+          <header class="direct-candidate-head"><h3>失败记录</h3></header>
+          <header class="direct-target">
+            <span class="direct-target-tag">来源记录</span>
+            <strong class="direct-target-nodelabel">{{ record.sourceTable || '—' }}</strong>
+            <code class="direct-target-id">{{ productionCase?.sourceRecordId || '—' }}</code>
+            <em class="direct-target-name">第 {{ extractAttempt }} 次尝试</em>
+          </header>
+          <table v-if="extractErrorFields.length" class="direct-fields">
+            <tbody>
+              <tr v-for="[key, val] in extractErrorFields" :key="String(key)">
+                <th>{{ key }}</th>
+                <td>{{ typeof val === 'object' ? JSON.stringify(val) : String(val) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else class="direct-empty">暂无记录详情</p>
+        </section>
+
+        <section class="direct-why">
+          <h3>失败原因</h3>
+          <pre class="extract-error-text">{{ record.sourceResult || productionCase?.diagnosis || '—' }}</pre>
+          <details class="direct-trace">
+            <summary>溯源信息</summary>
+            <dl>
+              <div><dt>Schema</dt><dd><code>{{ String(extractInput.schemaKey ?? '—') }}</code></dd></div>
+              <div><dt>来源绑定</dt><dd><code>{{ String(extractInput.sourceBindingId ?? '—') }}</code></dd></div>
+              <div><dt>原执行</dt><dd><RouterLink :to="`/processing-instance/${String(extractInput.executionId ?? '')}`" class="direct-trace-link"><code>{{ String(extractInput.executionId ?? '—') }}</code></RouterLink></dd></div>
+              <div v-if="extractRerunExecutionId"><dt>重跑执行</dt><dd><RouterLink :to="`/processing-instance/${extractRerunExecutionId}`" class="direct-trace-link"><code>{{ extractRerunExecutionId }}</code></RouterLink></dd></div>
+              <div v-if="extractInput.jobId"><dt>所属任务</dt><dd><code>{{ String(extractInput.jobId) }}</code></dd></div>
+            </dl>
+          </details>
+        </section>
+
+        <section class="direct-decision">
+          <h3>操作</h3>
+          <div class="direct-actions">
+            <button
+              v-if="productionCase?.status === 'OPEN'"
+              class="direct-accept"
+              :disabled="extractRerunSubmitting"
+              @click="rerunThisRecord"
+            >
+              <strong>{{ extractRerunSubmitting ? '下发中…' : '重跑该记录' }}</strong>
+              <em>只重读该记录 · 新执行类别=重新执行</em>
+            </button>
+            <p v-else-if="extractRerunning" class="direct-done">重跑执行中（{{ extractRerunExecutionId || '新执行' }}）· 完成后自动关闭，仍失败会生成新记录</p>
+            <p v-else class="direct-done">已处理 · 状态 {{ record.status }}</p>
+          </div>
         </section>
       </section>
 
@@ -1896,6 +1976,7 @@ const secondaryActions = computed(() => {
 .direct-accept:disabled,.direct-reject:disabled{opacity:.5;cursor:not-allowed}
 .direct-accept:hover:not(:disabled),.direct-reject:hover:not(:disabled){opacity:.92}
 .direct-done{margin:0;padding:14px;text-align:center;color:#475569;font-size:13px;background:#fff;border-radius:6px;border:1px solid #e4ecf6}
+.extract-error-text{margin:0;padding:10px 12px;border:1px solid #f6c6b4;border-radius:6px;background:#fff8f5;color:#b42318;font-size:12px;line-height:19px;white-space:pre-wrap;word-break:break-all}
 </style>
 <style scoped>
 /* DESIGN_RULES: manual review detail contract. */

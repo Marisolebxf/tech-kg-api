@@ -211,6 +211,7 @@ class GraphSchemaSource(Base):
     table_name: Mapped[str] = mapped_column(String(128), nullable=False)
     pk_column: Mapped[str] = mapped_column(String(128), nullable=False, default="id")
     time_column: Mapped[str] = mapped_column(String(128), nullable=False, default="update_time")
+    query_sql: Mapped[str | None] = mapped_column(Text, nullable=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()

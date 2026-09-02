@@ -83,3 +83,11 @@ class EvidenceCompleteRequest(EvidenceUploadRequest):
 class ExecutionCompleteRequest(BaseModel):
     success: bool
     error: str = ""
+
+
+class ExtractFailuresRerunRequest(BaseModel):
+    """T_EXTRACT_FAIL 抽取失败记录重跑：单条（caseIds 一个）/ 批量勾选 / 按原执行全量。"""
+
+    caseIds: list[str] | None = Field(default=None, max_length=2000)
+    executionId: str | None = None
+    batchSize: int | None = Field(default=None, ge=1, le=5000)

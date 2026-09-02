@@ -1,25 +1,16 @@
-"""One-entity extractor for Patent.
+"""One-entity transform for Patent（平台喂数抽取：脚本只输出实体 JSON）。
 
-聚合 SQL 复刻旧 dao/sql/patent_entity_extract.sql（过滤 ``p.id REGEXP '^[0-9]+$'``），
-分页复刻旧 keyset 游标（``CAST(p.id AS UNSIGNED) > :cursor``）。
-
-Dual-mode 入口：
-- CLI: ``python -m script.entity_extractors_one_entity.patent_entity --dry-run --limit 1``
-- Temporal workflow: 脚本顶层 ``workflow(payload)`` 函数，由
-  ``service/temporal_workflows.py:execute_python_script`` Activity 子进程加载并调用。
-  payload key 用 snake_case（跟 argparse 转换后的 vars(args) 同形态）。
+聚合 SQL 复刻旧 dao/sql/patent_entity_extract.sql（过滤 ``p.id REGEXP '^[0-9]+$'``）。
+平台以 PATENT_QUERY_SQL 为基表包水位条件（暴露 source_row_id/update_time 列）。
 """
 
-from script.entity_extractors_one_entity.common import (
-    build_parser,
-    common_args_from_payload,
-    configure_logging,
-    print_json,
-    run_entity_extractor,
-)
-from script.entity_extractors_one_entity.mappers import patent_record
+from typing import Any
 
-PATENT_SQL = """
+from script.entity_extractors_one_entity.mappers import patent_record
+from script.extract_transform_common import entity_transform
+
+# 聚合基查询：平台在其外包 WHERE update_time > :wm ORDER BY update_time, source_row_id
+PATENT_QUERY_SQL = """
 SELECT
   p.id AS source_row_id, p.patent_id, p.publication_number,
   JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apno')) AS application_number,
@@ -66,52 +57,19 @@ LEFT JOIN (
   FROM dwd_patent_family
   GROUP BY patent_id
 ) f ON f.patent_id = p.patent_id
-WHERE p.id REGEXP '^[0-9]+$' AND CAST(p.id AS UNSIGNED) > :cursor
-ORDER BY CAST(p.id AS UNSIGNED)
-LIMIT :limit
+WHERE p.id REGEXP '^[0-9]+$'
 """
 
-
-def build_sources() -> list[tuple[str, str, object]]:
-    """构造 sources；patent 单源固定，无需 payload 参数。"""
-    return [("dwd_patent", PATENT_SQL, patent_record)]
-
-
-def main() -> None:
-    parser = build_parser(__doc__ or "")
-    args = parser.parse_args()
-    configure_logging(args.log_level)
-    sources = build_sources()
-    print_json(
-        run_entity_extractor(
-            database=args.database,
-            batch_size=args.batch_size,
-            limit=args.limit,
-            dry_run=args.dry_run,
-            ingest_batch=args.ingest_batch,
-            since=args.since,
-            sources=sources,
-            cursor_column="source_row_id",
-        )
-    )
+SOURCES = [
+    {
+        "table": "dwd_patent",
+        "pk": "source_row_id",
+        "time": "update_time",
+        "query_sql": PATENT_QUERY_SQL,
+    },
+]
 
 
-def workflow(payload: dict) -> dict:
-    """Temporal workflow 入口；payload 同 main() 的 vars(args) 形态。"""
-    common = common_args_from_payload(payload)
-    configure_logging(common["log_level"])
-    sources = build_sources()
-    return run_entity_extractor(
-        database=common["database"],
-        batch_size=common["batch_size"],
-        limit=common["limit"],
-        dry_run=common["dry_run"],
-        ingest_batch=common["ingest_batch"],
-        since=common["since"],
-        sources=sources,
-        cursor_column="source_row_id",
-    )
-
-
-if __name__ == "__main__":
-    main()
+def transform(payload: dict[str, Any]) -> dict[str, Any]:
+    """kg.schema.extract 转换入口：payload["rows"] → {"entities": [...], "failures": [...]}。"""
+    return entity_transform(payload, builder=patent_record)

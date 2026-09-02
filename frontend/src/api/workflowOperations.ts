@@ -172,6 +172,8 @@ export interface ReviewRecord {
   confidenceLabel?: string
   modifiedResult?: Record<string, unknown>
   flow?: ProcessStep[]
+  templateId?: string
+  rawStatus?: string
 }
 
 export interface TaskOverview {
@@ -233,6 +235,13 @@ export const approveProductionReview = (id: string, version:number, note='') => 
 export const rejectProductionReview = (id: string, version:number, note='') => unwrap(http.post(`/v1/manual-reviews/production/${id}/reject`, { version, note })) as Promise<ProductionReviewCase>
 export const retryProductionReview = (id: string, version:number) => unwrap(http.post(`/v1/manual-reviews/production/${id}/retry`, { version })) as Promise<ProductionReviewCase>
 
+/** T_EXTRACT_FAIL 抽取失败记录重跑：所选 case 按 schema 合并为新执行（triggerSource=RERUN）。 */
+export const rerunExtractFailures = (data: { caseIds?: string[]; executionId?: string; batchSize?: number }) =>
+  unwrap(http.post('/v1/manual-reviews/production/rerun-extract-failures', data)) as Promise<{
+    executions: Array<{ executionId: string; schemaId: string; records: number; cases: number }>
+    cases: number
+  }>
+
 /** kg.custom.steps T_DIRECT 案例直接决策：accept 写图，reject 丢弃。不走 4-eyes claim/submit 流程。
  * candidate 为"修正后的完整候选"（仅 accepted 时有意义）：覆盖候选快照后写图并记审计。 */
 export const directDecideProductionReview = (
@@ -282,6 +291,15 @@ export interface WorkflowExecution {
   scheduleId?: string
   jobId?: string
   stepsState?: Record<string, unknown>
+  triggerSource?: TriggerSource
+}
+
+/** 执行触发方式：MANUAL 手动 / SCHEDULE 定期 / RERUN 重新执行（失败记录重跑）。 */
+export type TriggerSource = 'MANUAL' | 'SCHEDULE' | 'RERUN'
+export const TRIGGER_SOURCE_LABEL: Record<TriggerSource, string> = {
+  MANUAL: '手动触发',
+  SCHEDULE: '定期触发',
+  RERUN: '重新执行',
 }
 
 export interface WorkflowSchedule {
@@ -390,8 +408,10 @@ export interface JobScheduleSpec {
 export interface WorkflowJob {
   id: string
   name: string
-  taskType: 'single' | 'chain' | 'upload'
+  taskType: 'single' | 'chain' | 'upload' | 'extract'
   definitionIds: string[]
+  schemaId?: string
+  batchSize?: number
   definitionId: string
   definitionName?: string
   schedule: JobScheduleSpec
@@ -418,8 +438,10 @@ export interface WorkflowJob {
 
 export interface JobCreateInput {
   name: string
-  taskType: 'single' | 'chain' | 'upload'
+  taskType: 'single' | 'chain' | 'upload' | 'extract'
   definitionId?: string
+  schemaId?: string
+  batchSize?: number
   definitionIds?: string[]
   schedule?: JobScheduleSpec
   runNow?: boolean

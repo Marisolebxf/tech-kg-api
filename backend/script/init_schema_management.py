@@ -61,6 +61,9 @@ INCREMENTAL_COLUMNS = {
         "workflow_function_name": "VARCHAR(128) NULL",
         "uploaded_by": "VARCHAR(128) NOT NULL DEFAULT ''",
     },
+    "kg_schema_source": {
+        "query_sql": "TEXT NULL",
+    },
 }
 
 

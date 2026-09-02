@@ -187,7 +187,7 @@ def test_every_step_template_combination_matches_handoff_table():
         "source": {"T_RUNTIME"},
         "normalize": {"T_MAP", "T_DQ_FILL", "T_DQ_MERGE", "T_RUNTIME"},
         "schema": {"T_MAP", "T_RUNTIME"},
-        "extract": {"T_RUNTIME"},
+        "extract": {"T_EXTRACT_FAIL", "T_RUNTIME"},
         "align": {"T_LINK", "T_RUNTIME"},
         "validate": {"T_EVIDENCE", "T_ATTR", "T_RUNTIME"},
         "persist": {"T_RUNTIME"},
@@ -289,6 +289,7 @@ def test_client_supplied_rerun_step_id_is_rejected_for_every_template(tid):
         "T_ATTR": {"attrVerdict": "v"},
         "T_RUNTIME": {"runtimeConfig": {}},
         "T_DIRECT": {"accepted": True},
+        "T_EXTRACT_FAIL": {"rerun": True},
     }[tid]
     minimal["rerunStepId"] = "persist"
     with pytest.raises(ReviewValidationError):

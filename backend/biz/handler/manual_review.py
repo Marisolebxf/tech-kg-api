@@ -18,6 +18,7 @@ from biz.schemas.manual_review_production import (
     EvidenceCompleteRequest,
     EvidenceUploadRequest,
     ExecutionCompleteRequest,
+    ExtractFailuresRerunRequest,
     SubmitRequest,
     TransferRequest,
     VersionRequest,
@@ -278,6 +279,36 @@ async def direct_decide_case(case_id: str, body: DirectDecideRequest, identity: 
                 case_id, body.version, body.accepted, body.note, identity, body.candidate
             )
         )
+    except Exception as exc:
+        _raise_production_error(exc)
+
+
+@router.post("/production/rerun-extract-failures", response_model=ApiResponse)
+async def rerun_extract_failures(body: ExtractFailuresRerunRequest, identity: ReviewIdentityDep):
+    """T_EXTRACT_FAIL 抽取失败记录重跑：所选 case 按 schema 合并为新执行（重新执行）。
+
+    单条 case 与批量勾选共用；不传 caseIds 时按 executionId 重跑该执行全部失败记录。
+    """
+    from service.manual_review_domain import require_role
+    from service.schema_extraction import SchemaConflictError, rerun_failed_records
+
+    require_role(
+        identity,
+        "reviewer",
+        "data_quality_reviewer",
+        "graph_governance_reviewer",
+        "approver",
+        "review_admin",
+    )
+    try:
+        data = await rerun_failed_records(
+            case_ids=body.caseIds,
+            execution_id=body.executionId,
+            batch_size=body.batchSize,
+        )
+        return ApiResponse(data=data, msg="重跑已下发")
+    except SchemaConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         _raise_production_error(exc)
 

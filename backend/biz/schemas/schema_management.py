@@ -127,13 +127,24 @@ class SchemaSourceInput(CamelModel):
     database_name: str = Field(min_length=1, max_length=128)
     table_name: str = Field(min_length=1, max_length=128)
     pk_column: str = Field(default="id", min_length=1, max_length=128)
-    time_column: str = Field(default="update_time", min_length=1, max_length=128)
+    # 留空 = 无时间列，走 pk keyset 增量
+    time_column: str = Field(default="update_time", max_length=128)
+    # 自定义只读查询（SELECT/WITH 开头）；提供时以其为基表包水位/keyset 条件，
+    # 须暴露与 time_column/pk_column 同名的列
+    query_sql: str | None = Field(default=None, max_length=8000)
 
-    @field_validator("database_name", "table_name", "pk_column", "time_column")
+    @field_validator("database_name", "table_name", "pk_column")
     @classmethod
     def validate_identifier(cls, value: str) -> str:
         if not IDENTIFIER_PATTERN.fullmatch(value):
             raise ValueError("库名/表名/列名只能包含字母、数字、下划线和 $，且不能以数字开头")
+        return value
+
+    @field_validator("time_column")
+    @classmethod
+    def validate_time_column(cls, value: str) -> str:
+        if value and not IDENTIFIER_PATTERN.fullmatch(value):
+            raise ValueError("时间列只能包含字母、数字、下划线和 $，且不能以数字开头")
         return value
 
 

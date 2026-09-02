@@ -18,6 +18,7 @@ from urllib.parse import quote_plus
 from dotenv import load_dotenv
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ActivityError
 
 logger = logging.getLogger(__name__)
 
@@ -392,6 +393,7 @@ async def register_scheduled_execution(request: dict[str, Any]) -> dict[str, Any
         "status": "RUNNING",
         "dispatchMode": "TEMPORAL_SCHEDULE",
         "message": "周期任务自动触发",
+        "triggerSource": "SCHEDULE",
     }
     execution = temporal_runtime.execution_record(
         request["definitionId"], dispatch, request.get("payload", {})
@@ -531,6 +533,12 @@ def _enqueue_pending_review(request: dict[str, Any], pending: list[Any], attempt
                     task_id=task_id,
                     execution_id=execution_id,
                     step_id=request["stepId"],
+                    template_id=str(item.get("templateId") or "T_DIRECT"),
+                    workflow_type=(
+                        "kg.schema.extract"
+                        if str(item.get("templateId") or "T_DIRECT") != "T_DIRECT"
+                        else None
+                    ),
                     kind=item.get("kind", "entity"),
                     candidate=item.get("candidate", {}),
                     object_id=item.get("objectId"),
@@ -616,17 +624,23 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
                 "id": item.id,
                 "datasourceId": item.datasource_id,
                 "databaseName": item.database_name,
-                "tableName": item.table_name,
+                "tableName": item.table_name or "",
                 "pkColumn": item.pk_column,
-                "timeColumn": item.time_column,
+                "timeColumn": item.time_column or "",
+                "querySql": getattr(item, "query_sql", None),
             }
             for item in definition.sources
         ]
         script = definition.script
         bucket = script.bucket if script else None
         object_key = script.object_key if script else None
-        function_name = (script.workflow_function_name if script else None) or "workflow"
+        function_name = (script.workflow_function_name if script else None) or "transform"
         timeout_seconds = int(os.getenv("SCHEMA_WORKFLOW_TIMEOUT_SECONDS", "3600"))
+        max_inflight = max(1, int(os.getenv("SCHEMA_EXTRACT_MAX_INFLIGHT", "3")))
+        failure_case_cap = max(0, int(os.getenv("SCHEMA_EXTRACT_FAILURE_CASE_CAP", "2000")))
+        index_timeout_seconds = max(
+            60, int(os.getenv("SCHEMA_EXTRACT_INDEX_TIMEOUT_SECONDS", "1800"))
+        )
     if bucket is None or object_key is None:
         raise ValueError(f"Schema 未上传脚本: {schema_id}")
     if not sources:
@@ -662,32 +676,161 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         "scriptPath": script_file.name,
         "functionName": function_name,
         "timeoutSeconds": timeout_seconds,
+        "maxInflight": max_inflight,
+        "failureCaseCap": failure_case_cap,
+        "indexTimeoutSeconds": index_timeout_seconds,
     }
+
+
+def _validate_query_sql(query_sql: str) -> str:
+    """校验来源绑定上的自定义查询为只读单条 SELECT/WITH。"""
+    stripped = (query_sql or "").strip().rstrip(";").strip()
+    if not stripped:
+        raise ValueError("querySql 不能为空")
+    if ";" in stripped:
+        raise ValueError("querySql 不允许包含多语句（;）")
+    if not stripped.upper().startswith(("SELECT", "WITH")):
+        raise ValueError("querySql 必须以 SELECT/WITH 开头（只读）")
+    if re.search(r"\bINTO\b", stripped, re.IGNORECASE):
+        raise ValueError("querySql 不允许包含 INTO（只读）")
+    return stripped
+
+
+def build_source_batch_sql(
+    *,
+    database: str,
+    table: str | None,
+    time_column: str | None,
+    pk_column: str,
+    query_sql: str | None = None,
+    cursor_kind: str = "watermark",
+    record_ids: list[Any] | None = None,
+) -> str:
+    """构造来源批次 SQL（纯函数，便于单测）。
+
+    - 基表：``query_sql`` 存在时包成子查询（须暴露与 time/pk 同名的列），
+      否则 ``{database}.{table}`` 全表；
+    - watermark 模式（time_column 非空）：``WHERE time > :wm ORDER BY time, pk LIMIT :n``；
+    - keyset 模式（time_column 为空）：``WHERE pk > :cursor ORDER BY pk LIMIT :n``（游标存 checkpoint）；
+    - offset 模式（普通表，主键不保证唯一）：``[WHERE time > :wm] ORDER BY pk LIMIT :n OFFSET :offset``
+      ——与旧脚本 LIMIT/OFFSET 同语义，增量靠时间列过滤 + 结束后一次性推水位；
+    - ids 模式（重跑）：``WHERE pk IN (:id_0, ...)``（无 LIMIT，调用方按 500 分块）。
+    """
+    if query_sql:
+        base = f"SELECT * FROM ({_validate_query_sql(query_sql)}) AS src"
+    else:
+        db = _require_identifier(database)
+        tbl = _require_identifier(table or "")
+        base = f"SELECT * FROM `{db}`.`{tbl}`"
+    if cursor_kind == "ids":
+        if not record_ids:
+            raise ValueError("ids 模式必须提供 recordIds")
+        placeholders = ", ".join(f":id_{i}" for i in range(len(record_ids)))
+        return f"{base} WHERE `{pk_column}` IN ({placeholders})"
+    if cursor_kind == "keyset":
+        return f"{base} WHERE `{pk_column}` > :cursor ORDER BY `{pk_column}` LIMIT :n"
+    if cursor_kind == "offset":
+        where = f" WHERE `{time_column}` > :wm" if time_column else ""
+        return f"{base}{where} ORDER BY `{pk_column}` LIMIT :n OFFSET :offset"
+    if not time_column:
+        raise ValueError("watermark 模式必须提供 timeColumn")
+    return f"{base} WHERE `{time_column}` > :wm ORDER BY `{time_column}`, `{pk_column}` LIMIT :n"
+
+
+def _chunked(items: list[Any], size: int) -> list[list[Any]]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
 
 
 @activity.defn
 async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
-    """按时间列水位读取一批行：``SELECT * FROM db.table WHERE time > :wm ORDER BY time, pk LIMIT :n``。
+    """按来源绑定读一批行（连接参数由 activity 内按 datasourceId 解析，密钥不进 workflow 状态）。
 
-    连接参数由 activity 内按 datasourceId 解析（密钥只在 worker 进程内，不进 workflow
-    状态）。标识符经白名单校验防注入；时间/主键列参数化绑定。
-    返回 ``{rows, maxTime}``——rows 为 JSON 行，maxTime 为本批最大时间列值（推进水位）。
+    三种模式：
+    - 水位模式（timeColumn 非空）：``WHERE time > :wm ORDER BY time, pk LIMIT :n``，返回 maxTime；
+    - keyset 模式（timeColumn 为空）：``WHERE pk > :cursor ORDER BY pk LIMIT :n``，返回 maxPk；
+    - recordIds 模式（重跑）：``WHERE pk IN (...)``，activity 内按 500 分块聚合，无水位。
+
+    ``querySql`` 存在时以之为基础包子查询。首批未显式带游标且提供 definitionId/stepId
+    时，activity 自行读持久化水位/keyset 游标（workflow 线程禁 DB 访问）。
+    返回 ``{rows, recordIds, maxTime, maxPk}``。
     """
     from sqlalchemy import create_engine, text
 
     from service.mysql_datasource import get_mysql_settings_by_id
+    from service.script_watermark import read_watermark
 
     datasource_id = request["datasourceId"]
-    database = _require_identifier(request["database"])
-    table = _require_identifier(request["table"])
-    time_column = _require_identifier(request["timeColumn"])
+    database = request.get("database") or ""
+    table = request.get("table") or ""
+    time_column = (request.get("timeColumn") or "").strip()
     pk_column = _require_identifier(request["pkColumn"])
-    watermark = request.get("watermark") or "1970-01-01 00:00:00"
+    query_sql = request.get("querySql") or None
     batch_size = min(max(int(request.get("batchSize", 500)), 1), 5000)
+    record_ids = request.get("recordIds")
 
     params = get_mysql_settings_by_id(datasource_id)
     if params is None:
         raise ValueError(f"来源数据源不存在: {datasource_id}")
+
+    pagination = str(request.get("pagination") or "")
+    if record_ids is not None:
+        cursor_kind = "ids"
+    elif pagination == "offset" or (not query_sql and pagination != "cursor"):
+        cursor_kind = "offset"  # 普通表默认 offset（主键不保证唯一）
+    elif time_column:
+        cursor_kind = "watermark"
+    else:
+        cursor_kind = "keyset"
+
+    binds: dict[str, Any] = {}
+    if cursor_kind == "ids":
+        pass  # 每块单独构造 binds
+    elif cursor_kind == "offset":
+        binds = {"n": batch_size, "offset": int(request.get("offset") or 0)}
+        if time_column:
+            watermark = request.get("watermark")
+            if watermark is None and not request.get("chained"):
+                wm_row = read_watermark(request.get("definitionId"), request.get("stepId") or "")
+                watermark = (wm_row or {}).get("watermark") or "1970-01-01 00:00:00"
+            if watermark is not None:
+                binds["wm"] = str(watermark)
+    elif cursor_kind == "watermark":
+        watermark = request.get("watermark")
+        if watermark is None:
+            wm_row = read_watermark(request.get("definitionId"), request.get("stepId") or "")
+            watermark = (wm_row or {}).get("watermark") or "1970-01-01 00:00:00"
+        binds = {"wm": str(watermark), "n": batch_size}
+    else:
+        cursor = request.get("cursor")
+        if cursor is None:
+            wm_row = read_watermark(request.get("definitionId"), request.get("stepId") or "")
+            cursor = ((wm_row or {}).get("checkpoint") or {}).get("pkCursor") or ""
+        binds = {"cursor": str(cursor), "n": batch_size}
+
+    sqls: list[tuple[str, dict[str, Any]]] = []
+    if cursor_kind == "ids":
+        for chunk in _chunked([str(i) for i in record_ids], 500):
+            sql = build_source_batch_sql(
+                database=database,
+                table=table,
+                time_column=time_column or None,
+                pk_column=pk_column,
+                query_sql=query_sql,
+                cursor_kind="ids",
+                record_ids=chunk,
+            )
+            sqls.append((sql, {f"id_{i}": v for i, v in enumerate(chunk)}))
+    else:
+        sql = build_source_batch_sql(
+            database=database,
+            table=table,
+            time_column=time_column or None,
+            pk_column=pk_column,
+            query_sql=query_sql,
+            cursor_kind=cursor_kind,
+        )
+        sqls.append((sql, binds))
+
     user = params["username"]
     password = params["password"]
     host = params["host"]
@@ -695,38 +838,51 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
     url = f"mysql+pymysql://{quote_plus(user)}:{quote_plus(password)}@{host}:{port}/{database}?charset=utf8mb4"
     engine = create_engine(url, pool_pre_ping=True)
     try:
-        sql = text(
-            f"SELECT * FROM `{database}`.`{table}` "
-            f"WHERE `{time_column}` > :wm "
-            f"ORDER BY `{time_column}`, `{pk_column}` LIMIT :n"
-        )
-        with engine.connect() as conn:
-            raw_rows = conn.execute(sql, {"wm": watermark, "n": batch_size}).mappings().all()
+        raw_rows = []
+        for sql, sql_binds in sqls:
+            with engine.connect() as conn:
+                raw_rows.extend(conn.execute(text(sql), sql_binds).mappings().all())
     finally:
         engine.dispose()
 
     rows: list[dict[str, Any]] = []
     max_time: str | None = None
+    max_pk: str | None = None
     for raw in raw_rows:
         row = {key: _jsonable(value) for key, value in dict(raw).items()}
         rows.append(row)
-        candidate = row.get(time_column)
-        if candidate is not None and (max_time is None or str(candidate) > max_time):
-            max_time = str(candidate)
-    return {"rows": rows, "maxTime": max_time}
+        pk_value = row.get(pk_column)
+        if pk_value is not None:
+            max_pk = str(_jsonable(pk_value))
+        if time_column:
+            candidate = row.get(time_column)
+            if candidate is not None and (max_time is None or str(candidate) > max_time):
+                max_time = str(candidate)
+    return {
+        "rows": rows,
+        "recordIds": [str(r.get(pk_column)) for r in rows if r.get(pk_column) is not None],
+        "maxTime": max_time,
+        "maxPk": max_pk,
+        # offset 模式回传本批生效的增量水位（时间列过滤起点），reader 链式透传
+        **({"watermark": binds.get("wm")} if cursor_kind == "offset" else {}),
+    }
 
 
 @activity.defn
 async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
-    """把批次行交给脚本转换：payload["rows"] = 行 JSON，调 workflow(payload)。
+    """把批次行交给脚本转换：payload["rows"] = 行 JSON，调脚本入口（默认 transform）。
 
-    脚本返回 ``{"entities": [{id, props}]}`` 或 ``{"edges": [{fromId, toId, props}]}``；
+    脚本只做转换，返回 ``{"entities": [{id, props}]}`` / ``{"edges": [{fromId, toId, props}]}``；
+    可选 ``failures: [{recordId, error}]``（逐行解析失败 → 平台记 T_EXTRACT_FAIL 审核重跑）
+    与 ``pendingReview: [...]``（低置信/消歧候选 → 审核队列，item 可带 templateId=T_LINK）。
+    ctx 注入触发时选择的 mysql/graph/llm/embedding（未显式选 mysql 时回退来源绑定数据源，
+    脚本内 resolver 可用 ``current_context().mysql.engine`` 加载查找表）。
     脚本的 ``_watermark``/``_checkpoint`` 元字段被忽略（水位由平台管理）。
     """
     script_path = Path(request["scriptPath"])
     if not script_path.is_file():
         raise ValueError(f"脚本不存在: {script_path}")
-    function_name = request.get("functionName", "workflow")
+    function_name = request.get("functionName", "transform")
     rows = request.get("rows") or []
     source = request.get("source") or {}
     kind = request.get("kind", "entity")
@@ -736,13 +892,31 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
         "kind": kind,
         "source": source,
     }
+    resolved = _resolve_resources(
+        request.get("selectors") or {},
+        request.get("definitionId"),
+        request.get("stepId") or "_default",
+    )
+    if "mysql" not in resolved and source.get("datasourceId"):
+        try:
+            from service.mysql_datasource import get_mysql_settings_by_id
+
+            src_params = get_mysql_settings_by_id(source["datasourceId"])
+            if src_params:
+                resolved["mysql"] = {
+                    **src_params,
+                    "database": source.get("databaseName") or src_params.get("database"),
+                }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("解析来源数据源 %s 失败: %s", source["datasourceId"], exc)
+    resolved["source"] = {k: v for k, v in source.items() if k != "datasourceId"}
     sidecar_path: str | None = None
     try:
         wrapped, sidecar_path = await _spawn_script(
             script_path,
             function_name,
             json.dumps(payload, ensure_ascii=False).encode(),
-            {},
+            resolved,
             float(request.get("timeoutSeconds", 600)),
             _SINGLE_ARG_RUNNER,
             "平台喂数转换脚本",
@@ -754,8 +928,13 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
         access = _merge_access(stdout_access, sidecar_path)
         if access is not None and isinstance(output, dict):
             output = {**output, "access": access}
-        # 忽略脚本的 _watermark/_checkpoint（平台按批次 maxTime 管理水位）
+        # 忽略脚本的 _watermark/_checkpoint（平台按批次游标管理水位）
         output = _strip_watermark_meta(output)
+        pending = output.pop("pendingReview", []) if isinstance(output, dict) else []
+        if pending:
+            _enqueue_pending_review(
+                {**request, "stepId": request.get("stepId") or "extract"}, pending, 1
+            )
         return output if isinstance(output, dict) else {}
     finally:
         _cleanup_sidecar(sidecar_path)
@@ -763,10 +942,13 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
 
 @activity.defn
 async def write_records(request: dict[str, Any]) -> dict[str, Any]:
-    """把转换结果 merge 写图：实体 merge_node / 关系 merge_edge。
+    """把转换结果写图：实体 nGQL INSERT VERTEX / 关系 merge_edge。
 
-    只写 activeProps 内的属性——已删属性「插空」即省略键（图库列不动）。
-    ``graph.space`` 指定目标图空间（默认 TRS_GRAPH_SPACE）。
+    实体走 nGQL ``INSERT VERTEX``（vid=记录 id，列级 upsert 幂等）——REST
+    ``/nodes/merge`` 会把 id/name/vid 当身份键从属性剥离，而 Schema DDL 把
+    id/name 建成 NOT NULL 列，merge 永远缺列。只写 activeProps 内的属性，
+    Schema 注入的 NOT NULL 溯源列（create_time/update_time/source_table）
+    缺省时由平台补默认值（脚本只管业务字段）。``graph.space`` 指定目标图空间。
     """
     from infra.graph_db.client import TRSGraphClient
     from infra.graph_db.config import TRSGraphSettings
@@ -776,31 +958,63 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
     active_props = set(request.get("activeProps") or [])
     records = request.get("records") or []
     graph = request.get("graph") or {}
+    source_table = str(request.get("sourceTable") or "")
 
     settings = TRSGraphSettings.from_env()
     space = graph.get("space")
     if space:
         settings.space = space
     client = TRSGraphClient(settings)
+
+    def ngql_value(value: Any) -> str:
+        if value is None:
+            return "NULL"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return str(value)
+        return json.dumps(str(value), ensure_ascii=False)
+
     try:
         client.connect()
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         def filtered(props: dict[str, Any] | None) -> dict[str, Any]:
             if not props:
                 return {}
+            merged = dict(props)
+            # Schema 注入的 NOT NULL 溯源列缺省时补默认值（脚本只管业务字段；
+            # 其余溯源列可空，不强填以免类型不匹配）
+            for key, default in (
+                ("source_table", source_table or "platform"),
+                ("create_time", now_str),
+                ("update_time", now_str),
+            ):
+                if not active_props or key in active_props:
+                    merged.setdefault(key, default)
             if not active_props:
-                return dict(props)
-            return {key: value for key, value in props.items() if key in active_props}
+                return merged
+            return {key: value for key, value in merged.items() if key in active_props}
 
         written = 0
         if kind == "entity":
             for record in records:
-                client.merge_node([name], {"id": record["id"]}, filtered(record.get("props")))
+                props = filtered(record.get("props"))
+                if not props:
+                    continue
+                cols = ", ".join(f"`{key}`" for key in props)
+                values = ", ".join(ngql_value(value) for value in props.values())
+                vid = json.dumps(str(record["id"]), ensure_ascii=False)
+                client.execute_write(f"INSERT VERTEX `{name}`({cols}) VALUES {vid}:({values})")
                 written += 1
         else:
             for record in records:
                 client.merge_edge(
-                    record["fromId"], record["toId"], name, {}, filtered(record.get("props"))
+                    record["fromId"],
+                    record["toId"],
+                    name,
+                    {},
+                    filtered(record.get("props")),
                 )
                 written += 1
         return {"written": written}
@@ -809,6 +1023,214 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
             client.close()
         except Exception:  # noqa: BLE001
             logger.exception("关闭图客户端失败")
+
+
+@activity.defn
+async def detect_extract_collisions(request: dict[str, Any]) -> dict[str, Any]:
+    """消歧 v1——同名冲突检测：对本批写入实体按显示名（props.name）查图库同名节点。
+
+    同名不同 vid（含批内互相重名）→ T_LINK「实体对齐裁决」case，人工决定 merge；
+    不阻塞写图。入队失败仅告警。
+    """
+    from infra.graph_db.client import TRSGraphClient
+    from infra.graph_db.config import TRSGraphSettings
+
+    name_tag = request["name"]
+    records = request.get("records") or []
+    graph = request.get("graph") or {}
+    schema_key = request.get("schemaKey")
+
+    by_name: dict[str, list[str]] = {}
+    for record in records:
+        props = record.get("props") or {}
+        display = str(props.get("name") or "").strip()
+        if not display:
+            continue
+        by_name.setdefault(display, []).append(str(record.get("id")))
+    if not by_name:
+        return {"collisions": 0}
+
+    settings = TRSGraphSettings.from_env()
+    if graph.get("space"):
+        settings.space = graph["space"]
+    client = TRSGraphClient(settings)
+    existing: dict[str, list[str]] = {}
+    try:
+        client.connect()
+        names = list(by_name)
+        name_list = ",".join(json.dumps(n, ensure_ascii=False) for n in names)
+        ngql = (
+            f"MATCH (v:`{name_tag}`) WHERE v.name IN [{name_list}] "
+            f"RETURN id(v) AS vid, v.name AS nm LIMIT 200"
+        )
+        result = client.execute_read(ngql)
+        for rec in result.records or []:
+            nm = str(rec.get("nm") or "")
+            vid = str(rec.get("vid") or "")
+            if nm and vid:
+                existing.setdefault(nm, []).append(vid)
+    finally:
+        try:
+            client.close()
+        except Exception:  # noqa: BLE001
+            logger.exception("关闭图客户端失败")
+
+    info = activity.info()
+    try:
+        from service.workflow_repository import repository
+
+        execution = repository.get_execution_by_workflow(info.workflow_id) or {}
+    except Exception:  # noqa: BLE001
+        execution = {}
+    task_id = execution.get("taskId") or f"PI-extract-{info.workflow_id[:12]}"
+    execution_id = execution.get("id")
+
+    from service.manual_review_production import manual_review_service
+
+    collisions = 0
+    for display, new_ids in by_name.items():
+        existing_vids = [v for v in existing.get(display, []) if v not in new_ids]
+        internal_dup = len(set(new_ids)) > 1
+        if not existing_vids and not internal_dup:
+            continue
+        collisions += 1
+        try:
+            manual_review_service.create_direct_case(
+                task_id=task_id,
+                execution_id=execution_id,
+                step_id=request.get("stepId") or "align",
+                kind="entity",
+                candidate={
+                    "name": display,
+                    "newIds": sorted(set(new_ids)),
+                    "existingCandidates": [{"vid": v, "name": display} for v in existing_vids],
+                    "schemaKey": schema_key,
+                },
+                object_id=sorted(set(new_ids))[0],
+                object_name=display,
+                node_label=name_tag,
+                reason="同名实体冲突（不同 id），需人工对齐裁决",
+                workflow_id=info.workflow_id,
+                workflow_run_id=info.workflow_run_id,
+                template_id="T_LINK",
+                workflow_type="kg.schema.extract",
+                exception_code="KG_EXTRACT_NAME_COLLISION",
+                resume_token=f"extract-link:{execution_id}:{display}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("同名冲突 case 创建失败 name=%s: %s", display, exc)
+    return {"collisions": collisions}
+
+
+@activity.defn
+async def record_extract_failures(request: dict[str, Any]) -> dict[str, Any]:
+    """把逐行抽取失败落成 T_EXTRACT_FAIL 审核case（前端人工审核页展示、点击重跑）。"""
+    info = activity.info()
+    try:
+        from service.workflow_repository import repository
+
+        execution = repository.get_execution_by_workflow(info.workflow_id) or {}
+    except Exception:  # noqa: BLE001
+        execution = {}
+    task_id = execution.get("taskId") or f"PI-extract-{info.workflow_id[:12]}"
+    execution_id = execution.get("id")
+    kind = request.get("kind", "entity")
+    name = request.get("name")
+    schema_id = request.get("schemaId")
+    schema_key = request.get("schemaKey")
+    job_id = request.get("jobId")
+
+    from service.manual_review_production import manual_review_service
+
+    recorded = 0
+    for item in request.get("failures") or []:
+        if not isinstance(item, dict):
+            continue
+        record_id = str(item.get("recordId") or "")
+        if not record_id:
+            continue
+        source_table = item.get("sourceTable") or ""
+        error = str(item.get("error") or "")[:1000]
+        try:
+            manual_review_service.create_direct_case(
+                task_id=task_id,
+                execution_id=execution_id,
+                step_id="extract",
+                kind=kind,
+                candidate={"recordId": record_id, "error": error, "schemaKey": schema_key},
+                object_id=record_id,
+                object_name=f"{source_table}#{record_id}" if source_table else record_id,
+                node_label=(name if kind == "entity" else None),
+                edge_type=(name if kind != "entity" else None),
+                reason=f"记录解析失败: {error}",
+                workflow_id=info.workflow_id,
+                workflow_run_id=info.workflow_run_id,
+                source_table=source_table or None,
+                source_record_id=record_id,
+                service_actor="kg.schema.extract",
+                template_id="T_EXTRACT_FAIL",
+                workflow_type="kg.schema.extract",
+                exception_code="KG_EXTRACT_RECORD_FAILED",
+                resume_token=f"extract-fail:{execution_id}:{record_id}",
+                extra_snapshot={
+                    "schemaId": schema_id,
+                    "schemaKey": schema_key,
+                    "sourceBindingId": str(item.get("sourceBindingId") or ""),
+                    "jobId": job_id,
+                    "attempt": 1,
+                },
+            )
+            recorded += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("抽取失败 case 创建失败 record=%s: %s", record_id, exc)
+    return {"recorded": recorded}
+
+
+@activity.defn
+async def resolve_failure_cases(request: dict[str, Any]) -> dict[str, Any]:
+    """重跑执行结束后回写 T_EXTRACT_FAIL case：成功→RESOLVED；仍失败→新 case（attempt+1）。"""
+    info = activity.info()
+    try:
+        from service.workflow_repository import repository
+
+        execution = repository.get_execution_by_workflow(info.workflow_id) or {}
+    except Exception:  # noqa: BLE001
+        execution = {}
+    task_id = execution.get("taskId") or f"PI-extract-{info.workflow_id[:12]}"
+
+    from service.manual_review_production import manual_review_service
+
+    result = manual_review_service.resolve_extract_rerun(
+        rerun_case_ids=request.get("rerunCaseIds") or [],
+        failed_records=request.get("failures") or [],
+        rerun_execution_id=execution.get("id"),
+        task_id=task_id,
+        kind=request.get("kind", "entity"),
+        name=request.get("name"),
+    )
+    return result
+
+
+@activity.defn
+async def build_entity_index(request: dict[str, Any]) -> dict[str, Any]:
+    """重建实体 Milvus 混合检索索引（kg_entity 集合）：图 → embedding+BM25 → Milvus。
+
+    reindex 为同步重操作（含全局单飞锁），放线程池执行；并发冲突由 activity 重试兜底。
+    """
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
+    from infra.mysql import get_mysql_client
+    from service.entity_search import EntitySearchService
+
+    space = request.get("space")
+    entity_types = request.get("entityTypes") or []
+
+    def _run() -> dict[str, Any]:
+        with get_mysql_client().session_scope() as session:
+            return EntitySearchService(session).reindex(space=space, entity_types=entity_types)
+
+    result = await asyncio.to_thread(_run)
+    return {"reindexed": result}
 
 
 async def _run_domain_pipeline(request: dict[str, Any], kind: str, domain: str) -> dict[str, Any]:
@@ -1214,24 +1636,45 @@ class ChainWorkflow:
         return {"current": self._current_step, "steps": self._steps}
 
 
+_EXTRACT_SELECTOR_KEYS = (
+    "mysql_datasource_id",
+    "mysql_database",
+    "milvus_config_id",
+    "milvus_database",
+    "graph_space",
+    "llm_config_id",
+    "embedding_config_id",
+    "since",
+)
+
+
 @workflow.defn(name="kg.schema.extract")
 class SchemaExtractWorkflow:
-    """Schema 平台喂数抽取：读源表批次 → 脚本转换 → merge 写图 → 推水位。
+    """Schema 平台喂数抽取：分批读源表 → 脚本转换（只出 JSON）→ 平台写图/消歧/索引。
 
-    各来源表 ``asyncio.gather`` 并行（仅 await activity，deterministic 安全）；
-    单来源内批次串行（读→转→写→推水位），直到本批行数 < batchSize。
-    水位键 ``schema-extract-{key}`` + step ``source:{绑定行 id}``——按绑定独立推进。
+    - 来源间 ``asyncio.gather`` 并行；来源内 1 reader（串行读推进游标）+ N worker
+      （转换→写图→冲突检测）经 ``asyncio.Queue(maxsize=N)`` 背压并发——十万级数据
+      也不会一次进内存/一次跑完。
+    - 游标（水位或 pk keyset）在该来源**全部批次成功后**一次性推进——并发处理下
+      逐批推进会留洞；批次 activity 重试耗尽 → workflow FAILED，游标停在上一轮，
+      下轮从断点续读（merge 写图幂等）。
+    - 逐行失败由脚本捕获经 ``failures`` 返回（正常模式 → T_EXTRACT_FAIL 审核 case）；
+      重跑模式（``recordIdsBySource``）批次失败不炸 workflow——整批记为失败记录，
+      结束时 ``resolve_failure_cases`` 必调（case 不滞留 RERUNING）。
+    - 结尾：实体构建 Milvus 索引（``buildIndex`` 默认实体开启）+ 同名冲突检测入
+      T_LINK 人工对齐队列（消歧）。
     """
 
     def __init__(self) -> None:
         self._sources: dict[str, dict[str, Any]] = {}
+        self._slots: dict[str, dict[int, dict[str, Any]]] = {}
         self._current_source: str | None = None
 
     @workflow.run
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
         schema_id = request["schemaId"]
-        graph_space = request.get("graphSpace")
-        batch_size = int(request.get("batchSize", 500))
+        graph_space = request.get("graphSpace") or request.get("graph_space")
+        batch_size = min(max(int(request.get("batchSize", 500)), 1), 5000)
         graph = {"space": graph_space} if graph_space else {}
         plan = await workflow.execute_activity(
             load_schema_extract_plan,
@@ -1240,127 +1683,388 @@ class SchemaExtractWorkflow:
             retry_policy=ACTIVITY_RETRY_POLICY,
         )
         timeout_seconds = max(int(plan.get("timeoutSeconds", 3600)), 60)
+        kind = plan.get("kind", "entity")
         definition_id = f"schema-extract-{plan['schemaKey']}"
+
+        # 周期 Schedule 触发：request 是扁平 shape（非 {definitionId, payload}），
+        # 直接调注册 activity 落 execution/task 行（幂等）。
+        schedule_id = request.get("_scheduleId")
+        if schedule_id:
+            info = workflow.info()
+            await workflow.execute_activity(
+                register_scheduled_execution,
+                {
+                    "definitionId": definition_id,
+                    "scheduleId": schedule_id,
+                    "workflowId": info.workflow_id,
+                    "runId": info.run_id,
+                    "payload": request,
+                },
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=ACTIVITY_RETRY_POLICY,
+            )
+
+        rerun_ids: dict[str, list[Any]] = request.get("recordIdsBySource") or {}
+        rerun_case_ids: list[str] = request.get("rerunCaseIds") or []
+        rerun_mode = bool(rerun_ids)
+        max_inflight = max(1, min(int(plan.get("maxInflight", 3)), 8))
+        failure_cap = int(plan.get("failureCaseCap", 2000))
+        detect_collisions = request.get("detectCollisions", True)
+        selectors = {
+            key: request[key] for key in _EXTRACT_SELECTOR_KEYS if request.get(key) is not None
+        }
 
         async def extract_source(source: dict[str, Any]) -> dict[str, Any]:
             source_id = source["id"]
             step_id = f"source:{source_id}"
+            table_label = (
+                f"{source.get('databaseName')}.{source.get('tableName')}"
+                if source.get("tableName")
+                else "自定义查询"
+            )
             self._current_source = step_id
             self._sources[step_id] = {
                 "status": "RUNNING",
-                "table": f"{source['databaseName']}.{source['tableName']}",
+                "table": table_label,
                 "batches": 0,
                 "rows": 0,
                 "written": 0,
+                "failed": 0,
             }
-            try:
-                from service.script_watermark import read_watermark
+            self._slots[step_id] = {}
 
-                watermark = None
-                wm_row = read_watermark(definition_id, step_id)
-                if wm_row:
-                    watermark = wm_row.get("watermark")
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("读水位失败 %s/%s: %s", definition_id, step_id, exc)
-                watermark = None
+            if rerun_mode and not (rerun_ids.get(source_id) or []):
+                self._sources[step_id] = {**self._sources[step_id], "status": "COMPLETED"}
+                return {
+                    "source": step_id,
+                    "table": table_label,
+                    "batches": 0,
+                    "rows": 0,
+                    "written": 0,
+                    "failed": 0,
+                    "failures": [],
+                    "watermark": None,
+                    "pkCursor": None,
+                }
 
-            total_rows = 0
-            total_written = 0
-            batches = 0
-            while True:
-                batch = await workflow.execute_activity(
-                    read_source_batch,
-                    {
-                        "datasourceId": source["datasourceId"],
-                        "database": source["databaseName"],
-                        "table": source["tableName"],
-                        "timeColumn": source["timeColumn"],
-                        "pkColumn": source["pkColumn"],
-                        "watermark": watermark,
-                        "batchSize": batch_size,
-                    },
-                    start_to_close_timeout=timedelta(seconds=300),
-                    retry_policy=ACTIVITY_RETRY_POLICY,
-                )
-                rows = batch.get("rows") or []
-                max_time = batch.get("maxTime")
-                if not rows:
-                    break
-                batches += 1
-                total_rows += len(rows)
-                transformed = await workflow.execute_activity(
-                    execute_transform,
-                    {
-                        "scriptPath": plan["scriptPath"],
-                        "functionName": plan["functionName"],
-                        "rows": rows,
-                        "source": source,
-                        "kind": plan["kind"],
-                        "timeoutSeconds": timeout_seconds,
-                    },
-                    start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
-                    retry_policy=ACTIVITY_RETRY_POLICY,
-                )
-                records = transformed.get("entities") or transformed.get("edges") or []
-                if records:
-                    write_result = await workflow.execute_activity(
-                        write_records,
-                        {
-                            "kind": plan["kind"],
-                            "name": plan["name"],
-                            "activeProps": plan["activeProps"],
-                            "records": records,
-                            "graph": graph,
-                        },
+            queue: asyncio.Queue = asyncio.Queue(maxsize=max_inflight)
+            slots: dict[int, dict[str, Any]] = self._slots[step_id]
+            pk_column = source["pkColumn"]
+
+            async def reader() -> dict[str, Any]:
+                read_base = {
+                    "datasourceId": source["datasourceId"],
+                    "database": source.get("databaseName") or "",
+                    "table": source.get("tableName") or "",
+                    "timeColumn": source.get("timeColumn") or "",
+                    "pkColumn": pk_column,
+                    "querySql": source.get("querySql"),
+                    "batchSize": batch_size,
+                    "definitionId": definition_id,
+                    "stepId": step_id,
+                }
+                if rerun_mode:
+                    read_base["recordIds"] = rerun_ids.get(source_id)
+                    try:
+                        batch = await workflow.execute_activity(
+                            read_source_batch,
+                            read_base,
+                            start_to_close_timeout=timedelta(seconds=600),
+                            retry_policy=ACTIVITY_RETRY_POLICY,
+                        )
+                    except ActivityError:
+                        # 读源失败也是重跑失败：整批 id 记为失败，case 由 resolve 关闭并重建
+                        return {
+                            "batches": 0,
+                            "readError": "读取来源记录失败",
+                            "watermark": None,
+                            "pkCursor": None,
+                        }
+                    await queue.put((0, batch))
+                    return {"batches": 1, "watermark": None, "pkCursor": None}
+                plain_table = not source.get("querySql")
+                cursor: dict[str, Any] = {}
+                offset = 0
+                idx = 0
+                final: dict[str, Any] = {}
+                final_wm: str | None = None
+                while True:
+                    batch = await workflow.execute_activity(
+                        read_source_batch,
+                        {**read_base, **cursor},
                         start_to_close_timeout=timedelta(seconds=600),
                         retry_policy=ACTIVITY_RETRY_POLICY,
                     )
-                    total_written += int(write_result.get("written", 0))
-                self._sources[step_id] = {
-                    **self._sources[step_id],
-                    "batches": batches,
-                    "rows": total_rows,
-                    "written": total_written,
+                    rows = batch.get("rows") or []
+                    if not rows:
+                        break
+                    await queue.put((idx, batch))
+                    idx += 1
+                    if batch.get("maxTime") and (final_wm is None or batch["maxTime"] > final_wm):
+                        final_wm = batch["maxTime"]
+                    if plain_table:
+                        # 普通表 offset 分页（主键不保证唯一）；增量水位链式透传
+                        offset += len(rows)
+                        cursor = {"offset": offset, "chained": True}
+                        if batch.get("watermark") is not None:
+                            cursor["watermark"] = batch["watermark"]
+                    else:
+                        final = {"watermark": batch.get("maxTime"), "pkCursor": batch.get("maxPk")}
+                        # 游标列全 NULL 时无法增量分页，读完一批即止（防死循环）
+                        if final["watermark"] is None and final["pkCursor"] is None:
+                            break
+                        cursor = {k: v for k, v in final.items() if v is not None}
+                    if len(rows) < batch_size:
+                        break
+                if plain_table:
+                    return {"batches": idx, "watermark": final_wm, "pkCursor": None}
+                return {"batches": idx, **final}
+
+            async def worker() -> list[dict[str, Any]]:
+                failures: list[dict[str, Any]] = []
+                while True:
+                    item = await queue.get()
+                    if item is None:
+                        break
+                    idx, batch = item
+                    rows = batch.get("rows") or []
+                    for start in range(0, len(rows), batch_size):
+                        chunk = rows[start : start + batch_size]
+                        chunk_ids = [str(r.get(pk_column)) for r in chunk]
+                        written = 0
+                        batch_failures: list[dict[str, Any]] = []
+                        try:
+                            transformed = await workflow.execute_activity(
+                                execute_transform,
+                                {
+                                    "scriptPath": plan["scriptPath"],
+                                    "functionName": plan["functionName"],
+                                    "rows": chunk,
+                                    "source": source,
+                                    "kind": kind,
+                                    "timeoutSeconds": timeout_seconds,
+                                    "selectors": selectors,
+                                    "definitionId": definition_id,
+                                    "stepId": step_id,
+                                },
+                                start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
+                                retry_policy=ACTIVITY_RETRY_POLICY,
+                            )
+                            records = transformed.get("entities") or transformed.get("edges") or []
+                            if records:
+                                write_result = await workflow.execute_activity(
+                                    write_records,
+                                    {
+                                        "kind": kind,
+                                        "name": plan["name"],
+                                        "activeProps": plan["activeProps"],
+                                        "records": records,
+                                        "graph": graph,
+                                        "sourceTable": table_label,
+                                    },
+                                    start_to_close_timeout=timedelta(seconds=600),
+                                    retry_policy=ACTIVITY_RETRY_POLICY,
+                                )
+                                written = int(write_result.get("written", 0))
+                            if kind == "entity" and records and detect_collisions:
+                                await workflow.execute_activity(
+                                    detect_extract_collisions,
+                                    {
+                                        "name": plan["name"],
+                                        "records": records,
+                                        "graph": graph,
+                                        "schemaKey": plan["schemaKey"],
+                                        "stepId": step_id,
+                                    },
+                                    start_to_close_timeout=timedelta(seconds=120),
+                                    retry_policy=ACTIVITY_RETRY_POLICY,
+                                )
+                            batch_failures = [
+                                {
+                                    "sourceBindingId": source_id,
+                                    "sourceTable": table_label,
+                                    "recordId": str(f.get("recordId") or ""),
+                                    "error": str(f.get("error") or ""),
+                                }
+                                for f in (transformed.get("failures") or [])
+                                if isinstance(f, dict) and f.get("recordId") is not None
+                            ]
+                        except ActivityError:
+                            if not rerun_mode:
+                                raise
+                            batch_failures = [
+                                {
+                                    "sourceBindingId": source_id,
+                                    "sourceTable": table_label,
+                                    "recordId": rid,
+                                    "error": "批次执行失败（脚本或写图异常，整批记录待重跑）",
+                                }
+                                for rid in chunk_ids
+                            ]
+                        failures.extend(batch_failures)
+                        prev = slots.get(idx) or {"rows": 0, "written": 0, "failed": 0}
+                        slots[idx] = {
+                            "rows": prev["rows"] + len(chunk),
+                            "written": prev["written"] + written,
+                            "failed": prev["failed"] + len(batch_failures),
+                        }
+                return failures
+
+            async def guarded_reader() -> dict[str, Any]:
+                # reader 正常结束后给每个 worker 发哨兵；reader 异常时也补发，
+                # 让 worker 能收尾退出（异常仍向外传播使 workflow FAILED）。
+                try:
+                    return await reader()
+                finally:
+                    for _ in range(max_inflight):
+                        await queue.put(None)
+
+            outcomes = await asyncio.gather(
+                guarded_reader(), *(worker() for _ in range(max_inflight))
+            )
+            read_summary = outcomes[0]
+            source_failures = [f for out in outcomes[1:] for f in out]
+            if rerun_mode and read_summary.get("readError"):
+                source_failures.extend(
+                    {
+                        "sourceBindingId": source_id,
+                        "sourceTable": table_label,
+                        "recordId": str(rid),
+                        "error": str(read_summary["readError"]),
+                    }
+                    for rid in (rerun_ids.get(source_id) or [])
+                )
+            total_rows = sum(s["rows"] for s in slots.values())
+            total_written = sum(s["written"] for s in slots.values())
+
+            # 游标一次性推进（全部批次成功才到这里；失败路径 gather 直接抛出）
+            if not rerun_mode and read_summary.get("batches"):
+                advance_req: dict[str, Any] = {
+                    "definitionId": definition_id,
+                    "stepId": step_id,
                 }
-                if max_time and max_time != watermark:
+                if read_summary.get("watermark") is not None:
+                    advance_req["watermark"] = read_summary["watermark"]
+                if read_summary.get("pkCursor") is not None:
+                    advance_req["checkpoint"] = {"pkCursor": str(read_summary["pkCursor"])}
+                if "watermark" in advance_req or "checkpoint" in advance_req:
                     await workflow.execute_activity(
                         advance_schema_extract_watermark,
-                        {
-                            "definitionId": definition_id,
-                            "stepId": step_id,
-                            "watermark": max_time,
-                        },
+                        advance_req,
                         start_to_close_timeout=timedelta(seconds=30),
                         retry_policy=ACTIVITY_RETRY_POLICY,
                     )
-                    watermark = max_time
-                if len(rows) < batch_size:
-                    break
+
             self._sources[step_id] = {
                 **self._sources[step_id],
                 "status": "COMPLETED",
-                "watermark": watermark,
+                "batches": read_summary.get("batches", 0),
+                "rows": total_rows,
+                "written": total_written,
+                "failed": len(source_failures),
             }
             return {
                 "source": step_id,
-                "table": f"{source['databaseName']}.{source['tableName']}",
-                "batches": batches,
+                "table": table_label,
+                "batches": read_summary.get("batches", 0),
                 "rows": total_rows,
                 "written": total_written,
-                "watermark": watermark,
+                "failed": len(source_failures),
+                "failures": source_failures,
+                "watermark": read_summary.get("watermark"),
+                "pkCursor": read_summary.get("pkCursor"),
             }
 
         results = await asyncio.gather(*(extract_source(source) for source in plan["sources"]))
-        return {"status": "completed", "schemaId": schema_id, "sources": list(results)}
+        all_failures = [f for r in results for f in (r.get("failures") or [])]
+        truncated = len(all_failures) > failure_cap
+        capped = all_failures[:failure_cap]
+        index_summary: Any = None
+        if rerun_mode:
+            # 重跑：resolve 必调且拿全量失败键（未截断），仍失败记录由服务端重建 case
+            await workflow.execute_activity(
+                resolve_failure_cases,
+                {
+                    "rerunCaseIds": rerun_case_ids,
+                    "rerunOfExecutionId": request.get("rerunOfExecutionId"),
+                    "failures": all_failures,
+                    "schemaId": schema_id,
+                    "schemaKey": plan["schemaKey"],
+                    "kind": kind,
+                    "name": plan["name"],
+                },
+                start_to_close_timeout=timedelta(seconds=300),
+                retry_policy=ACTIVITY_RETRY_POLICY,
+            )
+        else:
+            do_index = request.get("buildIndex")
+            if do_index is None:
+                do_index = kind == "entity"
+            if do_index and kind == "entity":
+                # 索引是后置增强（embedding/Milvus 依赖外部服务），失败降级不拖垮抽取
+                try:
+                    index_result = await workflow.execute_activity(
+                        build_entity_index,
+                        {"space": graph_space, "entityTypes": [plan["name"]]},
+                        start_to_close_timeout=timedelta(
+                            seconds=int(plan.get("indexTimeoutSeconds", 1800))
+                        ),
+                        retry_policy=ACTIVITY_RETRY_POLICY,
+                    )
+                    index_summary = (index_result or {}).get("reindexed")
+                except ActivityError as exc:
+                    index_summary = {"degraded": True, "error": str(exc)[:300]}
+            if capped:
+                await workflow.execute_activity(
+                    record_extract_failures,
+                    {
+                        "failures": capped,
+                        "schemaId": schema_id,
+                        "schemaKey": plan["schemaKey"],
+                        "kind": kind,
+                        "name": plan["name"],
+                        "jobId": request.get("jobId"),
+                    },
+                    start_to_close_timeout=timedelta(seconds=600),
+                    retry_policy=ACTIVITY_RETRY_POLICY,
+                )
+
+        return {
+            "status": "completed",
+            "schemaId": schema_id,
+            "schemaKey": plan["schemaKey"],
+            "kind": kind,
+            "triggerSource": request.get("triggerSource", "MANUAL"),
+            "sources": [{k: v for k, v in r.items() if k != "failures"} for r in results],
+            "failures": {
+                "count": len(all_failures),
+                "recorded": len(capped),
+                "truncated": truncated,
+            },
+            "rerun": (
+                {"ofExecutionId": request.get("rerunOfExecutionId"), "caseIds": rerun_case_ids}
+                if rerun_mode
+                else None
+            ),
+            "index": index_summary,
+        }
 
     @workflow.query
     def get_progress(self) -> dict[str, Any]:
-        return {"current": self._current_source, "sources": self._sources}
+        return {
+            "current": self._current_source,
+            "sources": self._sources,
+            "slots": self._slots,
+        }
 
 
 @activity.defn
 async def advance_schema_extract_watermark(request: dict[str, Any]) -> dict[str, Any]:
-    """批次成功写图后推进该来源绑定的水位（step_id = source:{绑定行 id}，按绑定独立）。"""
+    """来源全部批次成功后一次性推进游标（step_id = source:{绑定行 id}，按绑定独立）。
+
+    水位模式写 watermark（ISO 时间）；keyset 模式把 pk 游标写进 checkpoint.pkCursor
+    （watermark 列是 DATETIME，非时间游标存 checkpoint）。
+    """
     from service.script_watermark import write_watermark
 
     watermark = request.get("watermark")
@@ -1370,8 +2074,13 @@ async def advance_schema_extract_watermark(request: dict[str, Any]) -> dict[str,
             parsed = datetime.fromisoformat(str(watermark).replace(" ", "T"))
         except ValueError:
             parsed = None
-    write_watermark(request.get("definitionId"), request["stepId"], watermark=parsed)
-    return {"ok": True, "watermark": watermark}
+    write_watermark(
+        request.get("definitionId"),
+        request["stepId"],
+        watermark=parsed,
+        checkpoint=request.get("checkpoint"),
+    )
+    return {"ok": True, "watermark": watermark, "checkpoint": request.get("checkpoint")}
 
 
 WORKFLOW_CLASSES = [
@@ -1403,4 +2112,8 @@ ACTIVITIES = [
     execute_transform,
     write_records,
     advance_schema_extract_watermark,
+    detect_extract_collisions,
+    record_extract_failures,
+    resolve_failure_cases,
+    build_entity_index,
 ]

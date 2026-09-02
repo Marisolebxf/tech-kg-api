@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
-import { getProductionReviews, type ProductionReviewCase, type ReviewRecord } from '../../api/workflowOperations'
+import { getProductionReviews, rerunExtractFailures, type ProductionReviewCase, type ReviewRecord } from '../../api/workflowOperations'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import {
   getImpactScope,
@@ -88,12 +88,48 @@ const reviewTotalPages = computed(() => Math.max(1, Math.ceil(reviewTotal.value 
 
 watch(() => route.query.keyword, (value) => { keyword.value = clampSearchKeyword(String(value || '')) })
 
+/** 审核队列分类：A=入库决策（T_DIRECT/T_LINK/T_EVIDENCE）；C=抽取失败重跑（T_EXTRACT_FAIL）。 */
+const reviewCategory = ref<'A' | 'C'>('A')
+/** C 类勾选的待重跑 case。 */
+const rerunSelection = ref<Set<string>>(new Set())
+const rerunSubmitting = ref(false)
+
+function switchReviewCategory(category: 'A' | 'C') {
+  if (reviewCategory.value === category) return
+  reviewCategory.value = category
+  rerunSelection.value = new Set()
+  reviewPage.value = 1
+  void loadReviews()
+}
+
+function toggleRerunPick(id: string, checked: boolean) {
+  if (checked) rerunSelection.value.add(id)
+  else rerunSelection.value.delete(id)
+}
+
+async function rerunSelected(caseIds: string[] | undefined = undefined) {
+  const ids = caseIds ?? [...rerunSelection.value]
+  if (!ids.length || rerunSubmitting.value) return
+  rerunSubmitting.value = true
+  try {
+    const result = await rerunExtractFailures({ caseIds: ids })
+    window.alert(`已下发重跑：${result.cases} 条失败记录 → ${result.executions.length} 个新执行（${result.executions.map((e) => e.executionId).join('、')}），类别=重新执行`)
+    rerunSelection.value = new Set()
+    void loadReviews()
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : '重跑下发失败')
+  } finally {
+    rerunSubmitting.value = false
+  }
+}
+
 async function loadReviews() {
   if (props.mode !== 'review') return
   try {
-    // 默认只显示 A 类（入库决策：T_DIRECT/T_LINK/T_EVIDENCE）；B 类数据修正在 TODO，先不混入
+    // A=入库决策（T_DIRECT/T_LINK/T_EVIDENCE）；C=抽取失败重跑（T_EXTRACT_FAIL）；
+    // B 类数据修正在 TODO，先不混入
     const response = await getProductionReviews({
-      category: 'A',
+      category: reviewCategory.value,
       keyword: keyword.value || undefined,
       statusGroup: reviewStatusFilter.value === '全部' ? undefined : reviewStatusFilter.value === '待处理' ? 'pending' : 'processed',
       kind: reviewKindFilter.value === '全部' ? undefined : reviewKindFilter.value === '实体' ? 'entity' : 'relation',
@@ -107,7 +143,7 @@ async function loadReviews() {
       return loadReviews()
     }
     reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
-      id: row.id, batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待领取', status: row.status === 'RESOLVED' ? '已完成' : row.status === 'REJECTED' ? '已驳回' : row.status === 'CANCELLED' ? '已撤销' : '待处理', updatedAt: row.updatedAt, sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
+      id: row.id, templateId: row.templateId, rawStatus: row.status, batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待领取', status: row.status === 'RESOLVED' ? '已完成' : row.status === 'REJECTED' ? '已驳回' : row.status === 'CANCELLED' ? '已撤销' : '待处理', updatedAt: row.updatedAt, sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
     }))
     reviewLoadError.value = ''
   } catch (error) { reviewLoadError.value = error instanceof Error ? error.message : '人工处理队列加载失败' }
@@ -162,6 +198,20 @@ onMounted(loadReviews)
     </template>
 
     <section class="ops-panel">
+      <div v-if="mode === 'review'" class="alert-tabs">
+        <nav>
+          <button type="button" :class="{ active: reviewCategory === 'A' }" @click="switchReviewCategory('A')">入库决策</button>
+          <button type="button" :class="{ active: reviewCategory === 'C' }" @click="switchReviewCategory('C')">抽取失败重跑</button>
+        </nav>
+        <button
+          v-if="reviewCategory === 'C'"
+          class="primary rerun-batch-btn"
+          type="button"
+          :disabled="!rerunSelection.size || rerunSubmitting"
+          @click="rerunSelected()"
+        >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
+      </div>
+
       <div v-if="mode === 'alerts'" class="alert-tabs"><nav><button v-for="item in alertCategories" :key="item" type="button" :class="{ active:alertCategory===item }" @click="alertCategory=item">{{ item }}</button></nav><a-checkbox v-model="blockingOnly">仅看已阻断</a-checkbox></div>
       <a-form :model="{ keyword, severity, domain, status, reviewStatusFilter, reviewKindFilter }" :class="['ops-filter', { 'is-review': mode === 'review' }]" layout="vertical">
         <a-form-item field="keyword"><input v-model="keyword" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" :placeholder="mode === 'review' ? '搜索处理实例 ID、对象或来源记录' : '搜索批次、对象、异常原因'" /></a-form-item>
@@ -185,6 +235,14 @@ onMounted(loadReviews)
       <div v-else class="ops-review-table-scroll"><table>
         <thead>
           <tr>
+            <th v-if="reviewCategory === 'C'" class="pick-col"><input
+              type="checkbox"
+              :checked="reviewRows.length > 0 && reviewRows.every((row) => rerunSelection.has(row.id))"
+              @change="((event?: Event) => {
+                const checked = ((event?.target as HTMLInputElement) || {} as HTMLInputElement).checked
+                reviewRows.forEach((row) => toggleRerunPick(row.id, checked && row.rawStatus === 'OPEN'))
+              })()"
+            /></th>
             <th>处理实例 ID</th>
             <th>待处理对象</th>
             <th>阻断节点</th>
@@ -198,6 +256,12 @@ onMounted(loadReviews)
         </thead>
         <tbody>
           <tr v-for="row in reviewRows" :key="row.id">
+            <td v-if="reviewCategory === 'C'" class="pick-col"><input
+              v-if="row.rawStatus === 'OPEN'"
+              type="checkbox"
+              :checked="rerunSelection.has(row.id)"
+              @change="((event?: Event) => toggleRerunPick(row.id, Boolean((event?.target as HTMLInputElement)?.checked)))"
+            /></td>
             <td class="review-id-cell">
               <RouterLink class="link" :to="`/manual-review/task/${row.id}`">{{ row.id }}</RouterLink>
             </td>
@@ -219,13 +283,22 @@ onMounted(loadReviews)
             <td><span :class="['review-status', `is-${row.status}`]">{{ row.status }}</span></td>
             <td>{{ row.completedAt || row.updatedAt }}</td>
             <td>
-              <RouterLink class="link" :to="`/manual-review/task/${row.id}`">
-                {{ row.status === '待处理' ? '进入处理' : '查看记录' }} →
-              </RouterLink>
+              <div class="alert-actions">
+                <RouterLink class="link" :to="`/manual-review/task/${row.id}`">
+                  {{ row.status === '待处理' ? '进入处理' : '查看记录' }} →
+                </RouterLink>
+                <button
+                  v-if="reviewCategory === 'C' && row.rawStatus === 'OPEN'"
+                  class="link rerun-link"
+                  type="button"
+                  :disabled="rerunSubmitting"
+                  @click="rerunSelected([row.id])"
+                >重跑该记录</button>
+              </div>
             </td>
           </tr>
           <tr v-if="!reviewRows.length">
-            <td class="review-empty" colspan="9">{{ reviewLoadError || (reviewStatusFilter === '全部' && reviewKindFilter === '全部' && !keyword ? '暂无人工处理记录' : '暂无符合条件的记录') }}</td>
+            <td class="review-empty" :colspan="reviewCategory === 'C' ? 10 : 9">{{ reviewLoadError || (reviewStatusFilter === '全部' && reviewKindFilter === '全部' && !keyword ? '暂无人工处理记录' : '暂无符合条件的记录') }}</td>
           </tr>
         </tbody>
       </table></div>
@@ -254,6 +327,9 @@ onMounted(loadReviews)
 .review-context{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px;padding:12px 14px;border:1px solid #b2ccff;border-radius:7px;background:#f0f5ff}.review-context div{display:grid;gap:3px}.review-context strong{font-size:13px}.review-context span{color:#65738b;font-size:11px}.review-context a{color:#165dff;font-size:12px;text-decoration:none;white-space:nowrap}
 .review-evidence{min-width:260px;max-width:360px;white-space:normal;line-height:19px}.review-status{display:inline-flex;padding:3px 8px;border-radius:10px;background:#edf2f7;color:#52647f}.review-status.is-待处理{background:#fff0e8;color:#c4320a}.review-status.is-已完成{background:#e9f8ef;color:#067647}
 .link-disabled{color:#98a2b3;font-size:12px;cursor:default}
+.pick-col{width:36px;text-align:center}.pick-col input{cursor:pointer}
+.rerun-batch-btn{height:30px;font-size:12px}.rerun-batch-btn:disabled{opacity:.5;cursor:not-allowed}
+.rerun-link{padding:0;font-size:12px;border:0;background:transparent}
 .review-severity{min-width:230px;max-width:300px;white-space:normal}.review-severity small{margin:0 0 6px}.review-severity span{display:block;color:#65738b;font-size:11px;line-height:17px}
 .review-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.24)}.review-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;width:620px;height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}.review-drawer>header{display:flex;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.review-drawer header span{color:#165dff;font-size:11px}.review-drawer h2{margin:6px 0 3px;font-size:19px}.review-drawer header p{margin:0;color:#70809a;font-size:12px}.review-drawer header>button{width:30px;height:30px;border:0;border-radius:5px;background:#f0f4fa;font-size:20px;cursor:pointer}.review-body{overflow:auto;padding:16px}.review-body section,.review-compare article{padding:14px;border:1px solid #dce8f8;border-radius:7px;background:#fff}.review-body h3{margin:0 0 8px;font-size:14px}.review-body p,.review-body li{color:#61708a;font-size:12px;line-height:20px}.review-compare{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}.review-compare span{display:block;margin-bottom:9px;color:#70809a;font-size:11px}.review-compare strong{font-size:13px}.review-compare em{color:#d92d20;font-size:11px;font-style:normal}.review-compare input,.review-compare textarea{width:100%;padding:8px;border:1px solid #bdd0ea;border-radius:5px;font:inherit}.review-compare textarea{min-height:90px;margin-top:8px;resize:vertical}.review-success{padding:10px 12px;border:1px solid #a6f4c5;border-radius:6px;background:#ecfdf3!important;color:#067647!important}.review-drawer>footer{display:flex;justify-content:flex-end;gap:8px;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.review-drawer>footer button{height:34px;padding:0 13px;border:1px solid #bdd0ea;border-radius:6px;background:#fff;color:#40516d;cursor:pointer}.review-drawer>footer .primary{border-color:#165dff;background:#165dff;color:#fff}@media(max-width:720px){.review-drawer{width:94vw}.review-compare{grid-template-columns:1fr}}
 .ops-page{display:flex;box-sizing:border-box;min-height:0;overflow:hidden;padding-bottom:2px;flex-direction:column}.ops-head,.ops-metrics,.ops-feedback,.review-context{flex:0 0 auto}.ops-panel{display:flex;flex:1;min-height:0;flex-direction:column}.alert-tabs,.ops-filter,.alert-pagination,.review-pagination{flex:0 0 auto}.ops-table-scroll,.ops-review-table-scroll{flex:1;min-height:0;max-height:none;overflow:auto}.ops-filter.is-review{grid-template-columns:minmax(280px,1fr) 170px 170px auto}.ops-review-table-scroll table{min-width:1900px}.review-pagination{display:flex;align-items:center;gap:14px;padding:11px 14px;border-top:1px solid #e4ecf6;background:#fff;color:#71809a;font-size:11px}.review-pagination>span{white-space:nowrap}.review-pagination .review-page-size{display:flex;align-items:center;gap:6px;margin-left:auto;white-space:nowrap}.review-pagination :deep(.arco-select){width:76px}.review-pagination :deep(.arco-select-view){box-sizing:border-box;width:76px;height:28px;border:1px solid #d3deee;border-radius:4px;background:#fff}.review-empty{height:100px!important;color:#8290a7;text-align:center!important}.ops-review-table-scroll td code{color:#175cd3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}

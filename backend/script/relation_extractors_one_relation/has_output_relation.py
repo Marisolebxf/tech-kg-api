@@ -1,4 +1,4 @@
-"""One-relation extractor: HAS_OUTPUT（Project → Paper/Patent/Report）.
+"""One-relation transform for HAS_OUTPUT（Project → Paper/Patent/Report）（平台喂数抽取：只输出边 JSON）.
 
 复刻旧 load_project_graph.py stage_outputs 口径：dwd_zh/en_project_output JOIN
 项目表（等价旧 allowed_ids 过滤：产出所属项目必须存在于 zh/en 项目表之一），
@@ -9,22 +9,17 @@ source_record_id = ``{project_id}|{output_type}|{target_vid}``，REST merge_edge
 其幂等。不做 update_node 产出计数回填（project_entity.py 实体侧职责）；
 跨域 OUTPUT_OF（dwd_rel_project_paper/patent）只写报告分类，不建边。
 
-Dual-mode 入口：
-- CLI: ``python -m script.relation_extractors_one_relation.has_output_relation --dry-run --limit 1``
-- Temporal workflow: 脚本顶层 ``workflow(payload)`` 函数，由
-  ``service/temporal_workflows.py:execute_python_script`` Activity 子进程加载并调用。
-  payload key 用 snake_case（跟 argparse 转换后的 vars(args) 同形态）。
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
 
+from script.extract_transform_common import edge_transform
 from script.project_entity_matcher import (
     ProjectEntityMatcher,
     normalize_doi,
@@ -35,16 +30,11 @@ from script.project_ingest_report import ProjectIngestReport
 from script.relation_extractors_one_relation.common import (
     EdgeRecord,
     apply_since,
-    build_parser,
-    common_args_from_payload,
-    configure_logging,
     ensure_edge_schema,
     graph_client,
     iter_rows,
     mysql_engine,
     now_utc,
-    print_json,
-    run_relation_extractor,
 )
 
 TABLES = ("dwd_zh_project_output", "dwd_en_project_output")
@@ -341,68 +331,54 @@ def _report_cross_domain(database: str, report: ProjectIngestReport) -> None:
         engine.dispose()
 
 
-def main() -> None:
-    parser = build_parser(__doc__ or "")
-    parser.add_argument("--table", choices=("all", *TABLES), default="all")
-    parser.add_argument("--report-dir", type=Path)
-    args = parser.parse_args()
-    configure_logging(args.log_level)
-    tables = _resolve_tables(vars(args))
-    batch = args.ingest_batch or f"RELATION_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-    candidates = _collect_candidates(args.database, tables, args.batch_size, args.limit, args.since)
-    matcher = _load_matcher(candidates, args.dry_run)
+SOURCES = [
+    {
+        "table": t,
+        "pk": "id",
+        "time": "updated_time",
+        "query_sql": (
+            f"SELECT o.* FROM {t} o JOIN ("
+            f"SELECT id FROM dwd_zh_project UNION ALL SELECT id FROM dwd_en_project"
+            ") p ON p.id = o.id"
+        ),
+    }
+    for t in TABLES
+]
+
+
+def transform(payload: dict[str, Any]) -> dict[str, Any]:
+    """kg.schema.extract 转换入口：rows → edges JSON；matcher 候选取自本批行。"""
+    source = payload.get("source") or {}
+    batch = f"se-{str(source.get('id') or 'x')[:8]}"
+    rows = payload.get("rows") or []
+    candidates = {key: set() for key in EMPTY_CANDIDATES}
+    for r in rows:
+        for field in (
+            "output_journal_articles",
+            "output_conference_papers",
+            "output_degree_papers",
+        ):
+            for item in parse_json_objects(r.get(field)):
+                _add(candidates["paper_doi"], item.get("doi"))
+                _add(candidates["paper_doi"], normalize_doi(item.get("doi")))
+                _add(candidates["paper_title"], item.get("title"))
+        for item in parse_json_objects(r.get("output_patents")):
+            number = (
+                item.get("patent_number")
+                or item.get("application_number")
+                or item.get("publication_number")
+                or item.get("patent_id")
+            )
+            _add(candidates["patent_number"], number)
+            _add(candidates["patent_number"], normalize_patent_number(number))
+            _add(candidates["patent_title"], item.get("patent_title") or item.get("title"))
+        for item in parse_json_objects(r.get("output_reports")):
+            _add(candidates["report_title"], item.get("title"))
+    matcher = _load_matcher(candidates, dry_run=False)
     report = ProjectIngestReport(
-        _resolve_report_dir(vars(args), batch),
-        ingest_batch=batch,
-        dry_run=args.dry_run,
+        _resolve_report_dir(payload, batch), ingest_batch=batch, dry_run=False
     )
-    sources = _build_sources(tables, args.since, matcher, report)
-    summary = run_relation_extractor(
-        database=args.database,
-        batch_size=args.batch_size,
-        limit=args.limit,
-        dry_run=args.dry_run,
-        ingest_batch=batch,
-        # since 已按 o.updated_time 预注入（JOIN 下默认列名有歧义）。
-        sources=sources,
-        extra_params={"since": args.since} if args.since else None,
-    )
-    _report_cross_domain(args.database, report)
-    summary["report_dir"] = str(report.report_dir)
-    summary["report"] = report.write()
-    print_json(summary)
-
-
-def workflow(payload: dict[str, Any]) -> dict[str, Any]:
-    """Temporal workflow 入口；payload 同 main() 的 vars(args) 形态。"""
-    common = common_args_from_payload(payload)
-    configure_logging(common["log_level"])
-    tables = _resolve_tables(payload)
-    batch = common["ingest_batch"] or f"RELATION_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-    candidates = _collect_candidates(
-        common["database"], tables, common["batch_size"], common["limit"], common["since"]
-    )
-    matcher = _load_matcher(candidates, common["dry_run"])
-    report = ProjectIngestReport(
-        _resolve_report_dir(payload, batch),
-        ingest_batch=batch,
-        dry_run=common["dry_run"],
-    )
-    sources = _build_sources(tables, common["since"], matcher, report)
-    summary = run_relation_extractor(
-        database=common["database"],
-        batch_size=common["batch_size"],
-        limit=common["limit"],
-        dry_run=common["dry_run"],
-        ingest_batch=batch,
-        sources=sources,
-        extra_params={"since": common["since"]} if common["since"] else None,
-    )
-    _report_cross_domain(common["database"], report)
-    summary["report_dir"] = str(report.report_dir)
-    summary["report"] = report.write()
-    return summary
-
-
-if __name__ == "__main__":
-    main()
+    result = edge_transform(payload, builder=make_has_output_mapper(matcher, report))
+    result["report_dir"] = str(report.report_dir)
+    result["report"] = report.write()
+    return result

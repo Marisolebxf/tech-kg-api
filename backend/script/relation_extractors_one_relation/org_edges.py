@@ -476,3 +476,44 @@ def org_relation_cli(key: str) -> None:
             table=None if args.table == "all" else args.table,
         )
     )
+
+
+def org_relation_sources(key: str) -> list[dict[str, Any]]:
+    """该 relation key 下全部源表的来源绑定元数据（register_platform_extraction 用）。"""
+    from script.relation_extractors_one_relation.catalog import SPECS_BY_KEY
+
+    return [
+        {"table": spec.source_table, "pk": "id", "time": "update_time"}
+        for spec in SPECS_BY_KEY[key]
+    ]
+
+
+def transform_org_relation(key: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """kg.schema.extract 转换入口：机构域边按 spec 驱动转换，只输出边 JSON。
+
+    resolver 每批从平台注入的 mysql ctx 构建一次（7 张机构表名称索引）；
+    端点不验存/不建点（实体侧脚本负责），逐行失败进 failures。
+    """
+    from script.extract_transform_common import edge_transform
+    from script.relation_extractors_one_relation.catalog import SPECS_BY_KEY
+    from script.relation_extractors_one_relation.common import mysql_engine
+    from script.relation_extractors_one_relation.resolvers import ExactOrganizationResolver
+
+    database = (payload.get("source") or {}).get("databaseName") or "gkx_element"
+    engine = mysql_engine(database)
+    try:
+        resolver = ExactOrganizationResolver.load(engine, database)
+    finally:
+        engine.dispose()
+    specs = {spec.source_table: spec for spec in SPECS_BY_KEY[key]}
+
+    def builder(table: str, row: Mapping[str, Any], batch: str) -> list[Any]:
+        spec = specs.get(table)
+        if spec is None:
+            return []
+        if is_virtual_source_row(row):
+            return []
+        record_id = stable_record_id(spec.source_table, row, spec.source_record_fields)
+        return extract_edge(spec, row, record_id, batch, resolver)
+
+    return edge_transform(payload, builder=builder)

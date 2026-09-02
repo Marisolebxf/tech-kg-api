@@ -9,6 +9,8 @@ import type { LlmConfig } from '../api/llmConfig'
 import type { EmbeddingConfig } from '../api/embeddingConfig'
 import type { MilvusConfig } from '../api/milvusConfig'
 import type { MysqlDatasource } from '../api/mysqlDatasource'
+import { listAllSchemas, type SchemaDefinition } from '../api/schemaManagement'
+import { currentUserId as getCurrentUserId } from '../api/currentUser'
 import { useToast } from '../composables/use-toast'
 
 const props = defineProps<{
@@ -33,7 +35,7 @@ function filterScript(value: string, option: { label?: string; value?: unknown }
   return text.includes(value.toLowerCase())
 }
 
-type TaskType = 'single' | 'chain' | 'upload'
+type TaskType = 'single' | 'chain' | 'upload' | 'extract'
 const taskType = ref<TaskType>('single')
 const name = ref('')
 const singleDefinitionId = ref('')
@@ -41,6 +43,12 @@ const chainPick = ref('')
 const chainSteps = ref<Array<{ id: string; name: string }>>([])
 const uploadFile = ref<File | null>(null)
 const runNow = ref(true)
+
+// 数据抽取任务：选 Schema（须已传脚本且绑定来源表），平台分批并发喂数转换
+const extractSchemaId = ref('')
+const extractBatchSize = ref<number | null>(null)
+const extractSchemas = ref<SchemaDefinition[]>([])
+const schemasLoading = ref(false)
 
 const graphSpace = ref('')
 const llmConfigId = ref('')
@@ -67,8 +75,22 @@ const canSubmit = computed(() => {
   if (!name.value.trim()) return false
   if (taskType.value === 'single') return Boolean(singleDefinitionId.value)
   if (taskType.value === 'chain') return chainSteps.value.length >= 2
+  if (taskType.value === 'extract') return Boolean(extractSchemaId.value)
   return Boolean(uploadFile.value)
 })
+
+async function loadExtractSchemas() {
+  if (extractSchemas.value.length || schemasLoading.value) return
+  schemasLoading.value = true
+  try {
+    const all = await listAllSchemas(getCurrentUserId())
+    extractSchemas.value = all.filter((s) => s.script && (s.sources?.length ?? 0) > 0)
+  } catch {
+    extractSchemas.value = []
+  } finally {
+    schemasLoading.value = false
+  }
+}
 
 function reset() {
   taskType.value = 'single'
@@ -77,6 +99,8 @@ function reset() {
   chainPick.value = ''
   chainSteps.value = []
   uploadFile.value = null
+  extractSchemaId.value = ''
+  extractBatchSize.value = null
   runNow.value = true
   graphSpace.value = ''
   llmConfigId.value = ''
@@ -92,7 +116,14 @@ function reset() {
 }
 
 watch(() => props.open, (open) => {
-  if (open) reset()
+  if (open) {
+    reset()
+    if (taskType.value === 'extract') loadExtractSchemas()
+  }
+})
+
+watch(taskType, (type) => {
+  if (type === 'extract') loadExtractSchemas()
 })
 
 function addChainStep(value: string | number | boolean | Record<string, any> | undefined) {
@@ -162,6 +193,8 @@ async function submit() {
       taskType: taskType.value,
       definitionId,
       definitionIds,
+      schemaId: taskType.value === 'extract' ? extractSchemaId.value : undefined,
+      batchSize: taskType.value === 'extract' ? (extractBatchSize.value || undefined) : undefined,
       schedule: executeMode.value === 'recurring'
         ? { kind: 'cron', cron: buildCron(), timezone: 'Asia/Shanghai' }
         : { kind: 'once' },
@@ -203,6 +236,7 @@ async function submit() {
           <label class="job-field">
             <span>任务类型</span>
             <a-radio-group v-model="taskType">
+              <a-radio value="extract">数据抽取</a-radio>
               <a-radio value="single">单脚本抽取</a-radio>
               <a-radio value="chain">多脚本串行</a-radio>
               <a-radio value="upload">上传脚本</a-radio>
@@ -210,7 +244,23 @@ async function submit() {
           </label>
         </div>
 
-        <label v-if="taskType === 'single'" class="job-field">
+        <p v-if="taskType === 'extract' && !schemasLoading && !extractSchemas.length" class="muted-warn">
+          暂无可抽取 Schema——请先在 Schema 管理页上传抽取脚本并绑定来源表
+        </p>
+
+        <div v-if="taskType === 'extract'" class="job-row">
+          <label class="job-field">
+            <span>目标 Schema（已传脚本并绑定来源表）</span>
+            <a-select v-model="extractSchemaId" :loading="schemasLoading" placeholder="选择要抽取的实体/关系" allow-search allow-clear>
+              <a-option v-for="s in extractSchemas" :key="s.id" :value="s.id">{{ s.label }}（{{ s.kind === 'entity' ? '实体' : '关系' }} · {{ s.name }}）</a-option>
+            </a-select>
+          </label>
+          <label class="job-field">
+            <span>批大小（默认 500）</span>
+            <input v-model.number="extractBatchSize" type="number" min="1" max="5000" placeholder="500" />
+          </label>
+        </div>
+        <label v-else-if="taskType === 'single'" class="job-field">
           <span>抽取脚本（可搜索）</span>
           <a-select v-model="singleDefinitionId" placeholder="搜索并选择脚本" allow-search allow-clear :filter-option="filterScript">
             <a-option v-for="d in scriptDefinitions" :key="d.id" :value="d.id">{{ d.name }}（{{ d.id }}）</a-option>

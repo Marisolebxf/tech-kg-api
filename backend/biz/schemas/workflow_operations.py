@@ -162,12 +162,17 @@ class JobScheduleSpec(BaseModel):
 
 
 class JobCreateRequest(BaseModel):
-    """任务中心新建任务：single 单脚本 / chain 多脚本串行 / upload 上传脚本。"""
+    """任务中心新建任务：single 单脚本 / chain 多脚本串行 / upload 上传脚本 / extract 数据抽取。"""
 
     name: str = Field(min_length=1, max_length=128)
-    task_type: Literal["single", "chain", "upload"] = Field(default="single", alias="taskType")
+    task_type: Literal["single", "chain", "upload", "extract"] = Field(
+        default="single", alias="taskType"
+    )
     definition_id: str | None = Field(default=None, alias="definitionId")
     definition_ids: list[str] | None = Field(default=None, max_length=20, alias="definitionIds")
+    # extract 任务：目标 Schema（须已传脚本且绑定来源表）
+    schema_id: str | None = Field(default=None, alias="schemaId")
+    batch_size: int | None = Field(default=None, ge=1, le=5000, alias="batchSize")
     schedule: JobScheduleSpec = Field(default_factory=JobScheduleSpec)
     run_now: bool = Field(default=False, alias="runNow")
     llm_config_id: str | None = Field(default=None, alias="llmConfigId")

@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { deriveJobUnifiedStatus, getExecution, getJob, getTask, listExecutions, retryTask, type AccessReport, type PipelineActivityInfo, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch, type WorkflowExecution, type WorkflowJob } from '../../api/workflowOperations'
+import { deriveJobUnifiedStatus, getExecution, getJob, getTask, listExecutions, retryTask, TRIGGER_SOURCE_LABEL, type AccessReport, type PipelineActivityInfo, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch, type WorkflowExecution, type WorkflowJob } from '../../api/workflowOperations'
 import { accessChips } from '../../utils/accessReport'
+
+const triggerLabel = (e: WorkflowExecution) => TRIGGER_SOURCE_LABEL[e.triggerSource ?? 'MANUAL'] ?? '手动触发'
+const failureCount = (e: WorkflowExecution) =>
+  ((e as { output?: { failures?: { count?: number } } }).output?.failures?.count) ?? '—'
 
 type StepStatus = '成功' | '运行中' | '需人工处理' | '待执行'
 type RiskLevel = '低风险' | '中风险' | '高风险'
@@ -321,6 +325,9 @@ async function loadTaskDetail() {
 const scheduleId = computed(() => String(route.query.scheduleId || ''))
 /** 最新一次执行的状态/备注：执行没落任务记录（如脚本启动即崩）时，这是唯一的失败原因出处。 */
 const latestExecutionMessage = ref('')
+/** job 执行历史（含触发方式：手动/定期/重新执行），点击行切换展示的执行。 */
+const jobExecutions = ref<WorkflowExecution[]>([])
+const selectedExecutionId = ref('')
 
 async function loadLatestExecution() {
   let executions: WorkflowExecution[] = []
@@ -338,9 +345,16 @@ async function loadLatestExecution() {
   } catch {
     executions = []
   }
+  jobExecutions.value = executions
   if (!executions.length) return
+  await selectExecution(executions[0].id)
+}
+
+/** 选中一条执行（含重新执行类）：拉详情并填充下方流程面板。 */
+async function selectExecution(executionId: string) {
+  selectedExecutionId.value = executionId
   try {
-    const execution = await getExecution(executions[0].id)
+    const execution = await getExecution(executionId)
     latestExecutionMessage.value = [execution?.status, execution?.message].filter(Boolean).join(' · ')
     // job / 周期任务视图：用最新 execution 的任务填充流程详情
     if ((jobId.value || scheduleId.value) && execution?.taskId) {
@@ -401,7 +415,32 @@ onMounted(async () => {
       </div>
     </section>
 
-    <section v-else-if="processingInstance" class="summary-grid">
+    <section v-if="job && jobExecutions.length" class="job-executions-panel">
+      <h2>执行历史</h2>
+      <div class="exec-table-wrap">
+        <table class="exec-table">
+          <thead>
+            <tr><th>执行 ID</th><th>触发方式</th><th>状态</th><th>开始时间</th><th>失败记录</th></tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="e in jobExecutions"
+              :key="e.id"
+              :class="{ active: e.id === selectedExecutionId }"
+              @click="selectExecution(e.id)"
+            >
+              <td><code>{{ e.id }}</code></td>
+              <td><span class="trigger-chip" :data-kind="e.triggerSource || 'MANUAL'">{{ triggerLabel(e) }}</span></td>
+              <td>{{ e.status }}</td>
+              <td>{{ e.startedAt }}</td>
+              <td>{{ failureCount(e) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section v-if="!job && processingInstance" class="summary-grid">
       <article><span>执行状态</span><strong :class="isExecutionInterrupted ? 'danger' : 'success-text'">{{ taskStatus }}</strong><em>{{ isExecutionInterrupted ? '任务未完成' : '程序无异常退出' }}</em></article>
     </section>
 
@@ -558,4 +597,17 @@ onMounted(async () => {
 .job-config-grid>div{display:grid;gap:4px;padding:11px 15px;border-right:1px solid #e8eef7;border-bottom:1px solid #e8eef7}
 .job-config-grid span{color:#6b7890;font-size:10px}
 .job-config-grid strong{overflow:hidden;color:#1d2129;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.job-executions-panel{margin-bottom:16px;padding:14px 18px;border:1px solid #e5e6eb;border-radius:8px;background:#fff}
+.job-executions-panel h2{margin:0 0 10px;font-size:14px;color:#1d2129}
+.exec-table-wrap{max-height:240px;overflow:auto}
+.exec-table{width:100%;border-collapse:collapse;font-size:12px}
+.exec-table th{position:sticky;top:0;padding:8px 10px;background:#f7f8fa;color:#4e5969;text-align:left;font-weight:600}
+.exec-table td{padding:8px 10px;border-top:1px solid #f2f3f5;color:#1d2129}
+.exec-table tbody tr{cursor:pointer}
+.exec-table tbody tr:hover{background:#f7f9ff}
+.exec-table tbody tr.active{background:#eef4ff}
+.exec-table code{font-size:11px;color:#165dff}
+.trigger-chip{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;background:#f2f3f5;color:#4e5969}
+.trigger-chip[data-kind='SCHEDULE']{background:#e8ffea;color:#00b42a}
+.trigger-chip[data-kind='RERUN']{background:#fff3e8;color:#f77234}
 </style>

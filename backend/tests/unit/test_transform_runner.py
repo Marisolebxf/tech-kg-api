@@ -12,6 +12,7 @@ class FakeGraphClient:
         self.settings = settings
         self.merged_nodes: list[tuple] = []
         self.merged_edges: list[tuple] = []
+        self.written_queries: list[str] = []
 
     def connect(self) -> None:
         self.connected = True
@@ -24,6 +25,10 @@ class FakeGraphClient:
 
     def merge_edge(self, source_id, target_id, edge_type, identity_props, properties=None):
         self.merged_edges.append((source_id, target_id, edge_type, properties or {}))
+
+    def execute_write(self, query, params=None):
+        self.written_queries.append(query)
+        return {"records": []}
 
 
 @pytest.fixture
@@ -111,11 +116,11 @@ async def test_write_records_filters_non_active_props(fake_graph) -> None:
     assert result["written"] == 2
     client = fake_graph[0]
     assert client.settings.space == "techkg"
-    assert len(client.merged_nodes) == 2
-    labels, identity, props = client.merged_nodes[0]
-    assert labels == ["Scholar"]
-    assert identity == {"id": "S-1"}
-    assert props == {"id": "S-1", "name": "张三", "rank": 1}  # legacy 已剥离（插空=省略键）
+    # 实体走 nGQL INSERT VERTEX（REST merge 会剥离 id/name，schema NOT NULL 列会 400）
+    assert len(client.written_queries) == 2
+    first = client.written_queries[0]
+    assert first.startswith("INSERT VERTEX `Scholar`(")
+    assert '"S-1"' in first and '"张三"' in first and "legacy" not in first  # legacy 已剥离
 
 
 @pytest.mark.asyncio
@@ -150,5 +155,5 @@ async def test_write_records_without_active_props_writes_all(fake_graph) -> None
             "graph": {},
         }
     )
-    _, _, props = fake_graph[0].merged_nodes[0]
-    assert props == {"id": "S-1", "extra": 1}
+    query = fake_graph[0].written_queries[0]
+    assert "`id`" in query and "`extra`" in query

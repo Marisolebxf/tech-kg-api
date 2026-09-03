@@ -373,6 +373,8 @@ def test_local_development_login_is_recorded_in_member_table(
             raise
 
     monkeypatch.setattr(platform_access, "session_scope", test_session_scope)
+    # 开发模式的登记 memo 是模块级状态，隔离此前测试留下的痕迹以验证“首次登记”路径
+    monkeypatch.setattr(platform_access, "_DEV_ACTOR_UPSERTED", set())
     actor = platform_access.actor_from_profile(
         SimpleNamespace(
             user=SimpleNamespace(

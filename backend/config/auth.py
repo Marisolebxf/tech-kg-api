@@ -100,7 +100,7 @@ class AuthSettings:
             session_cookie_name=os.getenv("AUTH_SESSION_COOKIE", "techkg_session"),
             portal_token_cookie_name=os.getenv(
                 "USER_CENTER_PORTAL_TOKEN_COOKIE",
-                "access_token",
+                "portal_access_token",
             ),
             portal_cookie_login_enabled=_env_bool(
                 "USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED",

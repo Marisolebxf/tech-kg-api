@@ -71,7 +71,7 @@ There is one module per KG-construction feature (`expert_direct_relation`, `expe
 
 1. **Bearer token** — `Authorization: Bearer <token>` for third-party API callers; resolved via `application.resolve_bearer`.
 2. **Session cookie** — `techkg_session` (name from `AUTH_SESSION_COOKIE`), Redis-backed (`AUTH_SESSION_BACKEND=redis`).
-3. **Portal cookie SSO** — when `USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED=true`, a portal `access_token` cookie is exchanged for a local session via the 统一用户中心 OAuth2 client (`infra/user_center.py`). This is the production default.
+3. **Portal cookie SSO** — when `USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED=true`, the portal's `portal_access_token` cookie is exchanged for a local session via the 统一用户中心 OAuth2 client (`infra/user_center.py`). This is the production default.
 
 Admin routers additionally require `require_platform_admin` (checks platform role). First-admin bootstrap via `PLATFORM_BOOTSTRAP_FIRST_ADMIN` + `PLATFORM_INITIAL_ADMIN_USER_IDS`. Auth config lives in `config/auth.py` (`AuthSettings`); audit logs go to Redis with TTL.
 

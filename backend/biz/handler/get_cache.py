@@ -12,6 +12,7 @@ import json
 from urllib.parse import urlencode
 
 from fastapi import Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response
 
 from infra import result_cache
@@ -36,8 +37,10 @@ def store(prefix: str, request: Request, payload: dict) -> Response:
 
     separators 用紧凑风格，与 FastAPI 原生 JSONResponse 输出一致
     （默认风格的 ``"code": 200`` 带空格，会破坏调用方按 ``"code":200`` 断言）。
+    payload 先过 jsonable_encoder，datetime 等类型与 response_model 路径序列化一致。
     """
-    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    encoded = jsonable_encoder(payload)
+    body = json.dumps(encoded, ensure_ascii=False, separators=(",", ":"))
     result_cache.set_cached_json(_key(prefix, request), body)
     return Response(content=body, media_type="application/json")
 

@@ -58,25 +58,30 @@ export type ServiceModule = {
   rules: ServiceRule[]
 }
 
-const commonResponseFields: ServiceField[] = [
-  { name: 'code', type: 'number', description: '服务状态码' },
-  { name: 'message', type: 'string', description: '服务返回信息' },
-  { name: 'data', type: 'object', description: '结构化业务结果、图谱节点关系和证据链' },
-  { name: 'confidence', type: 'number', description: '综合置信度' },
-  { name: 'evidence', type: 'array', description: '支撑本次结果的数据来源和证据' },
+const apiResponseFields: ServiceField[] = [
+  { name: 'code', type: 'number', description: '业务状态码' },
+  { name: 'success', type: 'boolean', description: '请求是否成功' },
+  { name: 'data', type: 'object', description: '结构化业务结果' },
+  { name: 'msg', type: 'string', description: '服务返回信息' },
 ]
 
-const expertColleagueResponseFields: ServiceField[] = [
-  { name: 'code', type: 'number', description: '服务状态码，成功时为 200/0' },
-  { name: 'success', type: 'boolean', description: '服务是否成功' },
-  { name: 'msg', type: 'string', description: '服务返回信息' },
-  { name: 'data.expert', type: 'object', description: '核心专家实体详情，含 confidence、details、provenance' },
-  { name: 'data.colleagues', type: 'array', description: '同事关系列表，含生效时段、团队、共同工作内容、成果、confidence、evidence' },
-  { name: 'data.graph.nodes', type: 'array', description: '图谱展示节点，node.data 为真实实体详情和溯源字段' },
-  { name: 'data.graph.edges', type: 'array', description: '图谱展示关系边，edge.data 含关系 confidence、evidence、ruleName' },
-  { name: 'data.rules', type: 'array', description: '本接口实际使用的任职时间、团队归属、成果关联规则' },
-  { name: 'data.apiCalls', type: 'array', description: '后端组合调用查图 API 的路径、参数和结果摘要' },
+const structuredRelationResponseFields: ServiceField[] = [
+  { name: 'structuredResult', type: 'object', description: '结构化关系分析结果' },
+  { name: 'provenance', type: 'object', description: '数据溯源信息和证据列表' },
+  { name: 'rules', type: 'array', description: '本次分析应用的规则' },
 ]
+
+const expertDirectResponseFields: ServiceField[] = [
+  { name: 'taskName', type: 'string', description: '任务名称' },
+  { name: 'input', type: 'object', description: '本次查询的归一化输入' },
+  { name: 'total', type: 'number', description: '直接关系总数' },
+  { name: 'items', type: 'array', description: '直接关系明细列表' },
+  { name: 'graph', type: 'object', description: '关系图节点和边' },
+  { name: 'source', type: 'object', description: '实际数据来源及降级状态' },
+  { name: 'provenance', type: 'object', description: '数据溯源信息' },
+  { name: 'apiResultExample', type: 'object', description: '接口结果示例' },
+]
+
 
 export const serviceModules: ServiceModule[] = [
   {
@@ -95,10 +100,10 @@ export const serviceModules: ServiceModule[] = [
       { name: 'endTime', type: 'month', ui: 'month-calendar', required: '否', placeholder: '选填，选择年月，如 2020-12', description: '筛选条件：只保留关系建立时间不晚于该年月的直接关系，不能晚于当前月份；留空表示不限时间' },
       { name: 'limit', type: 'number', defaultValue: '10', required: '否', placeholder: '选填，1-100，默认 10', description: '返回结果数，必须为 1-100 之间的整数，默认 10' },
     ],
-    responseFields: commonResponseFields,
-    requestExample: { dataSource: 'all', expertAId: '007Rb117', expertBId: '00867K10', institution: '', startTime: '', endTime: '', limit: 3 },
+    responseFields: expertDirectResponseFields,
+    requestExample: { expertAId: '007Rb117', expertBId: '00867K10', institution: '', startTime: '', endTime: '', limit: 3 },
     prefillFormFromExample: false,
-    responseExample: { code: 0, message: 'success', data: { relation_type: '论文合作', relation_count: 12, scenario: '科研合作', confidence: 0.94 } },
+    responseExample: { taskName: '科技专家/人才直接关系', input: { dataSource: 'all', expertAId: '007Rb117', limit: 10 }, total: 1, items: [], graph: { nodes: [], edges: [] }, source: { requested: 'all', actual: 'graph-api', fallback: false }, provenance: null, apiResultExample: {} },
     resultRows: [
       { label: '直接关系', value: '12', tone: 'blue' },
       { label: '关系类型', value: '4', tone: 'green' },
@@ -138,7 +143,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'path_depth', type: 'number', required: '否', maxLength: 64, placeholder: '默认 2，可选 2 或 3', description: '路径分析深度，只能输入 2 或 3，最多 64 个字符' },
       { name: 'min_strength', type: 'number', required: '否', maxLength: 64, description: '最小关联强度阈值，只能输入 0-1 范围内的数字，最多 64 个字符' },
     ],
-    responseFields: commonResponseFields,
+    responseFields: structuredRelationResponseFields,
     requestExample: { core_node_id: '4G7t0B0t', min_strength: 0.65, path_depth: 2, relation_types: ['学术关联'] },
     responseExample: { structuredResult: { indirectNodeCount: 0, pathCount: 0, relationTypeCount: {}, averageStrength: 0 } },
     resultRows: [
@@ -176,7 +181,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'timeRangeEnd', type: 'month', required: '否', description: '成果结束月份 YYYY-MM；与开始月份同时填写，二者均留空表示不限' },
       { name: 'limitPerType', type: 'number', defaultValue: '20', required: '否', maxLength: 64, placeholder: '选填，1-50，默认 20', description: '每类成果返回数上限，1-50，默认 20，最多输入 64 个字符' },
     ],
-    responseFields: commonResponseFields,
+    responseFields: apiResponseFields,
     requestExample: {
       sourceExpertId: 'person_9F9A0001',
       targetExpertId: 'person_9F9A0004',
@@ -237,7 +242,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'start_time', type: 'month', required: '否', description: '可选；留空则使用数据库任职开始时间' },
       { name: 'end_time', type: 'month', required: '否', description: '可选；留空则使用数据库任职结束时间' },
     ],
-    responseFields: expertColleagueResponseFields,
+    responseFields: apiResponseFields,
     // 测试数据不再作为表单默认值，避免用户误提交样例专家。
     requestExample: { expert_a_id: 'person_0512632S', expert_b_id: 'person_2406B66w', start_time: '2020-01', end_time: '2024-12' },
     responseExample: { code: 200, success: true, msg: 'success', data: { total: 1, summary: { commonOrganization: '中国科学院自动化研究所', commonDepartment: '智能系统实验室', effectivePeriod: '2018-01 至 2022-12', overlapDuration: '4 年', periodAchievements: 6 } } },
@@ -277,7 +282,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'educationStage', type: 'string', required: '否', description: '教育阶段，可多选（如 博士、硕士），多选时以逗号拼接提交' },
       { name: 'limit', type: 'number', defaultValue: '20', required: '否', maxLength: 64, placeholder: '选填，1-50，默认 20', description: '返回校友关系数上限，1-50，默认 20，最多输入 64 个字符' },
     ],
-    responseFields: commonResponseFields,
+    responseFields: apiResponseFields,
     requestExample: {
       expertId: 'person_9F9A0001',
       targetExpertId: 'person_9F9A0004',
@@ -330,7 +335,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'startTime', type: 'month', required: '否', placeholder: '请选择年月', description: '统计开始月份，格式 YYYY-MM；与结束月份同时填写，不能晚于当前月份' },
       { name: 'endTime', type: 'month', required: '否', placeholder: '请选择年月', description: '统计结束月份，格式 YYYY-MM；与开始月份同时填写，不能晚于当前月份' },
     ],
-    responseFields: commonResponseFields,
+    responseFields: structuredRelationResponseFields,
     requestExample: { expertAId: 'person_121d48631f434f4d323ba521d33032ad', expertBId: 'person_42914016fe8d6e0e1d01dad5845c47e6', startTime: '2021-01', endTime: '2026-08' },
     responseExample: { structuredResult: { cooperationPaperCount: 0, citation: { total: 0, max: 0 }, stableTeamMembers: [], paperTopics: [] } },
     resultRows: [
@@ -370,31 +375,10 @@ export const serviceModules: ServiceModule[] = [
       { name: 'industry', type: 'string', required: '否', maxLength: 64, description: '请输入行业方向筛选（可留空，最多 64 个字符，不能包含 !@#￥%& 等异常字符）' },
       { name: 'key_tech_enterprise_only', type: 'boolean', defaultValue: 'true', required: '否', description: '只保留重点科技企业（默认 true）；提交布尔 true/false', options: ['true', 'false'] },
     ],
-    responseFields: [
-      { name: 'code', type: 'number', description: '服务状态码（200 成功）' },
-      { name: 'success', type: 'boolean', description: '是否成功' },
-      { name: 'msg', type: 'string', description: '提示消息' },
-      { name: 'data.expert_id', type: 'string', description: '专家标识' },
-      { name: 'data.expert_name', type: 'string', description: '专家姓名' },
-      { name: 'data.enterprises', type: 'number', description: '关联重点科技企业数' },
-      { name: 'data.roles', type: 'number', description: '角色类型数' },
-      { name: 'data.cooperation_fields', type: 'array', description: '合作领域列表' },
-      { name: 'data.relations', type: 'array', description: '专家-企业关系列表' },
-      { name: 'data.relations[].enterprise_id', type: 'string', description: '企业 VID' },
-      { name: 'data.relations[].enterprise_name', type: 'string', description: '企业名称' },
-      { name: 'data.relations[].cooperation_type', type: 'string', description: '关系类型：governance/project_cooperation/patent_cooperation' },
-      { name: 'data.relations[].cooperation_mode', type: 'string', description: '合作模式：高管任职/法人代表/项目合作/专利合作…' },
-      { name: 'data.relations[].role_label', type: 'string', description: '专家企业角色' },
-      { name: 'data.relations[].role_level', type: 'string', description: '角色层级 L1/L2/L3' },
-      { name: 'data.relations[].tech_field', type: 'string', description: '合作领域' },
-      { name: 'data.relations[].period', type: 'object', description: '合作时间 {start, end}' },
-      { name: 'data.relations[].enterprise_background', type: 'object', description: '企业背景（行业地位/技术方向/经营状况，从 org 节点 extra_json 摊平）' },
-      { name: 'data.relations[].risk_summary', type: 'string', description: '首要企业风险事件摘要（best-effort 探测）' },
-      { name: 'data.evidence', type: 'array', description: '证据链' },
-    ],
+    responseFields: apiResponseFields,
     // 测试数据不再预填到表单，避免误提交样例；测试用例见 backend/docs/enterprise_relation_test_parameters.md
     requestExample: { expert_id: 'person_8A636L1c' },
-    responseExample: { code: 0, message: 'success', data: { enterprises: 9, roles: 4, cooperation_fields: ['芯片设计', '智能制造'] } },
+    responseExample: { code: 200, success: true, data: { enterprises: 9, roles: 4, cooperation_fields: ['芯片设计', '智能制造'] }, msg: 'success' },
     resultRows: [
       { label: '关联企业', value: '9', tone: 'blue' },
       { label: '角色类型', value: '4', tone: 'green' },
@@ -429,37 +413,14 @@ export const serviceModules: ServiceModule[] = [
       { name: 'chain_node_id', type: 'string', required: '是', maxLength: 64, description: '请输入产业链节点标识（如 IC0007007），最多 64 个字符' },
       { name: 'top_n', type: 'number', required: '否', defaultValue: '10', placeholder: '选填，1-50，默认 10', description: '返回事件数量，请输入 1-50 的整数，默认 10' },
       { name: 'event_type', type: 'string', required: '否', maxLength: 64, description: '事件类型筛选（financing/bankruptcy/bid/news/…，可留空，最多 64 个字符）' },
-      { name: 'time_range_start', type: 'month', required: '否', description: '起始年月（留空不筛）；与 time_range_end 合并为接口参数 time_range，格式 YYYY-MM~YYYY-MM（保留月份，后端按月筛）' },
-      { name: 'time_range_end', type: 'month', required: '否', description: '结束年月（留空不筛）；与 time_range_start 合并为接口参数 time_range，格式 YYYY-MM~YYYY-MM（保留月份，后端按月筛）' },
+      { name: 'time_range_start', type: 'month', required: '否', description: '起始年月 YYYY-MM；与 time_range_end 同时填写，留空表示不筛选' },
+      { name: 'time_range_end', type: 'month', required: '否', description: '结束年月 YYYY-MM；与 time_range_start 同时填写，留空表示不筛选' },
       { name: 'max_orgs', type: 'number', required: '否', defaultValue: '20', maxLength: 64, placeholder: '选填，1-50，默认 20', description: '最多扫描企业数，取值 1-50 的整数，默认 20' },
     ],
-    responseFields: [
-      { name: 'code', type: 'number', description: '服务状态码（200 成功）' },
-      { name: 'success', type: 'boolean', description: '是否成功' },
-      { name: 'msg', type: 'string', description: '提示消息' },
-      { name: 'data.chain_node_id', type: 'string', description: '产业链节点标识' },
-      { name: 'data.chain_node_name', type: 'string', description: '节点名称' },
-      { name: 'data.chain_name', type: 'string', description: '产业链名称' },
-      { name: 'data.events', type: 'number', description: 'TOP-N 事件数' },
-      { name: 'data.experts', type: 'number', description: '关联专家数' },
-      { name: 'data.enterprises', type: 'number', description: '关联企业数' },
-      { name: 'data.risk_level', type: 'string', description: '风险等级：高/中/低' },
-      { name: 'data.top_events', type: 'array', description: 'TOP 事件列表（按影响力降序）' },
-      { name: 'data.top_events[].event_type', type: 'string', description: '事件类型' },
-      { name: 'data.top_events[].occur_date', type: 'string', description: '发生时间' },
-      { name: 'data.top_events[].title', type: 'string', description: '事件标题' },
-      { name: 'data.top_events[].impact_score', type: 'number', description: '影响力评分' },
-      { name: 'data.top_events[].rank', type: 'number', description: '影响力排名' },
-      { name: 'data.top_events[].org_name', type: 'string', description: '关联企业名称' },
-      { name: 'data.relations', type: 'array', description: '事件-专家关系列表（event→org→expert）' },
-      { name: 'data.node_impact', type: 'string', description: '节点影响分析（标书维度）' },
-      { name: 'data.trend', type: 'string', description: '发展趋势分析（标书维度）' },
-      { name: 'data.opportunity', type: 'string', description: '机遇挖掘分析（标书维度）' },
-      { name: 'data.evidence', type: 'array', description: '证据链' },
-    ],
+    responseFields: apiResponseFields,
     // 测试数据不再预填到表单，避免误提交样例；测试用例见 backend/docs/industry_chain_topn_test_parameters.md
     requestExample: { chain_node_id: 'IC0007007', top_n: 10 },
-    responseExample: { code: 0, message: 'success', data: { events: 10, experts: 18, enterprises: 24, risk_level: '中' } },
+    responseExample: { code: 200, success: true, data: { events: 10, experts: 18, enterprises: 24, risk_level: '中' }, msg: 'success' },
     resultRows: [
       { label: 'TOP事件', value: '10', tone: 'blue' },
       { label: '关联专家', value: '18', tone: 'green' },
@@ -497,8 +458,7 @@ export const serviceModules: ServiceModule[] = [
       { name: 'relationTypes', type: 'multi-select', required: '否', description: '只保留选中的关系类型：产业链归属 / 论文合作 / 机构任职，留空表示不筛选' },
       { name: 'topK', type: 'number', defaultValue: '5', required: '否', placeholder: '选填，1-20 的正整数，默认 5', description: '每类关键实体返回数上限，1-20 的正整数，默认 5' },
     ],
-    // 后端还接受 dataSource（固定 "all"，前端自动填充）和 refresh（bool，由「刷新图谱」按钮触发），
-    // 二者均非用户输入项，故不在 requestFields 表单中展示。
+    // refresh 由「刷新图谱」按钮触发，用于绕过服务端缓存，不属于用户表单输入。
     responseFields: [
       { name: 'taskName', type: 'string', description: '服务名称' },
       { name: 'input', type: 'object', description: '回填的查询入参' },
@@ -506,12 +466,13 @@ export const serviceModules: ServiceModule[] = [
       { name: 'layers', type: 'array', description: '四个分层：核心技术、领军企业、领军专家、代表成果' },
       { name: 'graph', type: 'object', description: '以核心节点扩展的子图（nodes/edges）' },
       { name: 'source', type: 'object', description: '数据来源，标记是否降级到样例数据' },
+      { name: 'provenance', type: 'object', description: '数据溯源信息' },
       { name: 'apiResultExample', type: 'object', description: '接口调用示例' },
     ],
-    requestExample: { dataSource: 'all', industry: '人工智能', anchorId: '', depth: 2, topK: 3, relationTypes: ['COAUTHOR_WITH'] },
+    requestExample: { industry: '人工智能', anchorId: '', depth: 2, topK: 3, relationTypes: ['COAUTHOR_WITH'] },
     responseExample: {
       taskName: '科技产业链全景图',
-      input: { dataSource: 'all', industry: '人工智能', anchorId: '', depth: 2, topK: 5 },
+      input: { industry: '人工智能', anchorId: '', depth: 2, topK: 5 },
       summary: {
         industry: '人工智能',
         totalNodes: 186,
@@ -530,7 +491,7 @@ export const serviceModules: ServiceModule[] = [
       apiResultExample: {
         url: '/api/v1/kg-construction/industry-chain-panorama/query',
         method: 'POST',
-        query: { dataSource: 'all', industry: '人工智能', anchorId: '', depth: 2, topK: 5 },
+        query: { industry: '人工智能', anchorId: '', depth: 2, topK: 5 },
       },
     },
     resultRows: [

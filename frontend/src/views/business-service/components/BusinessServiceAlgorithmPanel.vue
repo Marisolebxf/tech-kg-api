@@ -1927,7 +1927,6 @@ function buildPanoramaRequest(
     .map((value) => value.trim())
     .filter(Boolean);
   return {
-    dataSource: "all",
     industry: (raw.industry ?? "").trim() || undefined,
     anchorId: (raw.anchorId ?? "").trim() || undefined,
     depth: clampInt(raw.depth ?? "", 1, 3, 2, "展开层级"),
@@ -2267,18 +2266,6 @@ function optionalParam(value: string | undefined): string | undefined {
   return cleaned ? cleaned : undefined;
 }
 
-/**
- * 将两个 month 选择器值（YYYY-MM）合并为后端 time_range 的 "YYYY-MM~YYYY-MM" 月份区间。
- * 保留月份粒度：后端按 occur_date[:7] 月级筛选（含 ~ 走月级，否则按年）。
- * 用 ~ 分隔避免与 YYYY-MM 自带的 - 冲突；留空端表示不设该侧边界。
- */
-function buildTimeRange(start?: string, end?: string): string {
-  const lo = (start ?? "").trim();
-  const hi = (end ?? "").trim();
-  if (!lo && !hi) return "";
-  return `${lo}~${hi}`;
-}
-
 async function handleRun(runOptions: { refresh?: boolean } = {}) {
   if (running.value) return;
   running.value = true;
@@ -2487,7 +2474,6 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         expert_b_id: expertBId,
         start_time: startTime,
         end_time: endTime,
-        limit: 1,
       };
       const res = await queryExpertColleagueRelation(body);
       if (
@@ -2830,16 +2816,13 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       const topN = optionalParam(parameterValues.value.top_n);
       const maxOrgs = optionalParam(parameterValues.value.max_orgs);
       const eventType = optionalParam(parameterValues.value.event_type);
-      // 两个 month 选择器合并为后端 time_range 的 "YYYY-MM~YYYY-MM" 月份区间（保留月份）
-      const timeRange = buildTimeRange(
-        optionalParam(parameterValues.value.time_range_start),
-        optionalParam(parameterValues.value.time_range_end),
-      );
+
       const body: Record<string, any> = { chain_node_id: chainNodeId };
       if (topN) body.top_n = Number(topN);
       if (maxOrgs) body.max_orgs = Number(maxOrgs);
       if (eventType) body.event_type = eventType;
-      if (timeRange) body.time_range = timeRange;
+      if (startTime) body.time_range_start = startTime;
+      if (endTime) body.time_range_end = endTime;
       const res = (await invokeKgService(
         props.moduleInfo.endpoint,
         body,

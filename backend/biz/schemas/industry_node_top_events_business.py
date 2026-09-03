@@ -1,8 +1,7 @@
 """科技产业链点 TOP-N 事件关系业务（九大业务之一）请求/响应模型。
 
 对齐前端 service-modules.ts 的 industry-chain-event 契约：
-端点 POST /api/v1/kg-service/industry-node-top-events，请求 {chain_node_id, top_n, event_type,
-time_range}，响应 data={events, experts, enterprises, risk_level, top_events, relations}。
+端点 POST /api/v1/kg-service/industry-node-top-events，请求 {chain_node_id, top_n, event_type, time_range_start, time_range_end}，响应 data={events, experts, enterprises, risk_level, top_events, relations}。
 """
 
 from __future__ import annotations
@@ -10,15 +9,14 @@ from __future__ import annotations
 import re
 from datetime import date
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from biz.schemas.tech_enterprise_relation_business import EntityProvenance
 
 # 标识类字段允许的字符：字母数字下划线、中文、间隔号、点、连字符。
 _ID_LIKE_PATTERN = re.compile(r"[\w一-鿿·.\-]+")
 
-# 月级 time_range 端点格式：YYYY-MM（如 2025-01）。用于 industry-chain-event 算法测试页
-# 两个 month 选择器合并出的 "YYYY-MM~YYYY-MM" 月份区间（保留月份，后端按 occur_date[:7] 筛）。
+# 页面与接口统一使用 YYYY-MM 月份边界，后端按 occur_date[:7] 筛选。
 _YYYY_MM_PATTERN = re.compile(r"\d{4}-\d{2}")
 
 
@@ -30,6 +28,8 @@ def _is_yyyymm(s: str) -> bool:
 
 
 class IndustryNodeTopEventsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     chain_node_id: str = Field(
         ..., max_length=64, description="产业链节点标识，如 IC0007007（集成电路设计）"
     )
@@ -37,7 +37,8 @@ class IndustryNodeTopEventsRequest(BaseModel):
     event_type: str = Field(
         "", max_length=64, description="事件类型筛选（financing/bankruptcy/bid/...）"
     )
-    time_range: str = Field("", description="事件时间范围筛选，如 2025-2026")
+    time_range_start: str = Field("", description="事件筛选开始月份，格式 YYYY-MM")
+    time_range_end: str = Field("", description="事件筛选结束月份，格式 YYYY-MM")
     max_orgs: int = Field(
         20,
         strict=True,
@@ -94,46 +95,24 @@ class IndustryNodeTopEventsRequest(BaseModel):
             raise ValueError("top_n 取值范围为 1-50")
         return n
 
+    @field_validator("time_range_start", "time_range_end", mode="before")
+    @classmethod
+    def normalize_time_boundary(cls, value: str | None) -> str:
+        value = (value or "").strip()
+        if value and not _is_yyyymm(value):
+            raise ValueError("时间格式应为 YYYY-MM，如 2025-01")
+        return value
+
     @model_validator(mode="after")
     def validate_time_range(self) -> IndustryNodeTopEventsRequest:
-        """time_range 支持两种粒度：
-
-        - 月级 "YYYY-MM~YYYY-MM"（industry-chain-event 算法测试页两个 month 选择器合并，
-          保留月份；可单端开放如 "2025-01~" / "~2025-06"）；按月比较，不晚于当前月。
-        - 年级 "YYYY-YYYY"（兼容旧格式与 graph-query 页；可单端开放如 "2025-"）；
-          按年比较，不晚于当前年。
-
-        校验：起始不晚于结束；起止均不晚于当前时间（测试用例：填未来应提示超出当前时间）。
-        用 ~ 分隔月级区间，避免与 YYYY-MM 自带的 - 冲突。
-        """
-        if not self.time_range:
-            return self
-        if "~" in self.time_range:
-            lo, _, hi = self.time_range.partition("~")
-            current_month = date.today().strftime("%Y-%m")
-            if lo and not _is_yyyymm(lo):
-                raise ValueError("time_range_start 格式应为 YYYY-MM，如 2025-01") from None
-            if hi and not _is_yyyymm(hi):
-                raise ValueError("time_range_end 格式应为 YYYY-MM，如 2025-06") from None
-            if lo and hi and lo > hi:
-                raise ValueError("time_range_start 不能晚于 time_range_end")
-            if lo and lo > current_month:
-                raise ValueError("time_range_start 不能晚于当前时间")
-            if hi and hi > current_month:
-                raise ValueError("time_range_end 不能晚于当前时间")
-            return self
-        lo, _, hi = self.time_range.partition("-")
-        current_year = date.today().strftime("%Y")
-        try:
-            lo_year = int(lo[:4]) if lo else None
-            hi_year = int(hi[:4]) if hi else None
-        except ValueError:
-            raise ValueError("time_range 格式应为 YYYY-YYYY，如 2025-2026") from None
-        if lo_year and hi_year and lo_year > hi_year:
+        if bool(self.time_range_start) != bool(self.time_range_end):
+            raise ValueError("time_range_start 和 time_range_end 必须同时提供")
+        if self.time_range_start and self.time_range_start > self.time_range_end:
             raise ValueError("time_range_start 不能晚于 time_range_end")
-        if lo_year and lo_year > int(current_year):
+        current_month = date.today().strftime("%Y-%m")
+        if self.time_range_start and self.time_range_start > current_month:
             raise ValueError("time_range_start 不能晚于当前时间")
-        if hi_year and hi_year > int(current_year):
+        if self.time_range_end and self.time_range_end > current_month:
             raise ValueError("time_range_end 不能晚于当前时间")
         return self
 

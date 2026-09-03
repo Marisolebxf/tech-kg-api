@@ -41,53 +41,58 @@ def test_request_rejects_whitespace(field: str) -> None:
         IndustryNodeTopEventsRequest.model_validate(payload)
 
 
-def test_request_rejects_future_time_range() -> None:
-    future_year = str(date.today().year + 1)
+def test_request_validates_page_time_range_fields() -> None:
+    request = IndustryNodeTopEventsRequest.model_validate(
+        {
+            "chain_node_id": "IC0007007",
+            "event_type": "financing",
+            "time_range_start": "2024-03",
+            "time_range_end": "2024-08",
+        }
+    )
+    assert request.time_range_start == "2024-03"
+    assert request.time_range_end == "2024-08"
+
+    with pytest.raises(ValidationError, match="必须同时提供"):
+        IndustryNodeTopEventsRequest.model_validate(
+            {"chain_node_id": "IC0007007", "time_range_start": "2024-03"}
+        )
+    with pytest.raises(ValidationError, match="不能晚于"):
+        IndustryNodeTopEventsRequest.model_validate(
+            {
+                "chain_node_id": "IC0007007",
+                "time_range_start": "2025-06",
+                "time_range_end": "2025-01",
+            }
+        )
+    with pytest.raises(ValidationError, match="YYYY-MM"):
+        IndustryNodeTopEventsRequest.model_validate(
+            {
+                "chain_node_id": "IC0007007",
+                "time_range_start": "2025-01",
+                "time_range_end": "2025-13",
+            }
+        )
+
+    future = f"{date.today().year + 1}-01"
     with pytest.raises(ValidationError, match="当前时间"):
         IndustryNodeTopEventsRequest.model_validate(
-            {"chain_node_id": "IC0007007", "time_range": f"{future_year}-{future_year}"}
+            {"chain_node_id": "IC0007007", "time_range_start": future, "time_range_end": future}
         )
 
-    # 仅起始端为未来时间
-    with pytest.raises(ValidationError, match="time_range_start 不能晚于当前时间"):
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         IndustryNodeTopEventsRequest.model_validate(
-            {"chain_node_id": "IC0007007", "time_range": f"{future_year}-"}
-        )
-
-    # 仅结束端为未来时间
-    with pytest.raises(ValidationError, match="time_range_end 不能晚于当前时间"):
-        IndustryNodeTopEventsRequest.model_validate(
-            {"chain_node_id": "IC0007007", "time_range": f"-{future_year}"}
-        )
-
-
-def test_request_rejects_time_range_start_after_end() -> None:
-    with pytest.raises(ValidationError, match="time_range_start 不能晚于 time_range_end"):
-        IndustryNodeTopEventsRequest.model_validate(
-            {"chain_node_id": "IC0007007", "time_range": "2025-2024"}
+            {"chain_node_id": "IC0007007", "time_range": "2024-03~2024-08"}
         )
 
 
 def test_request_accepts_valid_inputs() -> None:
-    # 完整年份区间
     req = IndustryNodeTopEventsRequest.model_validate(
-        {"chain_node_id": "IC0007007", "event_type": "financing", "time_range": "2024-2025"}
+        {"chain_node_id": "IC0007007", "event_type": "financing"}
     )
     assert req.chain_node_id == "IC0007007"
     assert req.event_type == "financing"
-    assert req.time_range == "2024-2025"
 
-    # event_type 可留空（默认 ""），不触发校验
-    req = IndustryNodeTopEventsRequest.model_validate({"chain_node_id": "IC0007007"})
-    assert req.event_type == ""
-
-    # 单端开放的年份区间
-    req = IndustryNodeTopEventsRequest.model_validate(
-        {"chain_node_id": "IC0007007", "time_range": "2024-"}
-    )
-    assert req.time_range == "2024-"
-
-    # 含中文/连字符的合法标识
     req = IndustryNodeTopEventsRequest.model_validate({"chain_node_id": "节点-IC0007"})
     assert req.chain_node_id == "节点-IC0007"
 
@@ -154,51 +159,4 @@ def test_request_rejects_invalid_max_orgs(max_orgs: object) -> None:
     with pytest.raises(ValidationError):
         IndustryNodeTopEventsRequest.model_validate(
             {"chain_node_id": "IC0007007", "max_orgs": max_orgs}
-        )
-
-
-def test_request_accepts_and_rejects_month_time_range() -> None:
-    """月级 time_range（YYYY-MM~YYYY-MM，industry-chain-event 算法测试页两个 month 选择器合并）。
-
-    保留月份粒度，后端按 occur_date[:7] 月级筛选；与旧 YYYY-YYYY 年级格式共存。
-    """
-    # 合法月份区间通过
-    req = IndustryNodeTopEventsRequest.model_validate(
-        {"chain_node_id": "IC0007007", "time_range": "2024-03~2024-08"}
-    )
-    assert req.time_range == "2024-03~2024-08"
-
-    # 单端开放合法
-    req = IndustryNodeTopEventsRequest.model_validate(
-        {"chain_node_id": "IC0007007", "time_range": "2024-03~"}
-    )
-    assert req.time_range == "2024-03~"
-    req = IndustryNodeTopEventsRequest.model_validate(
-        {"chain_node_id": "IC0007007", "time_range": "~2024-08"}
-    )
-    assert req.time_range == "~2024-08"
-
-    # 起始晚于结束 → 拒绝
-    with pytest.raises(ValidationError, match="time_range_start 不能晚于 time_range_end"):
-        IndustryNodeTopEventsRequest.model_validate(
-            {"chain_node_id": "IC0007007", "time_range": "2025-06~2025-01"}
-        )
-
-    # 非法月份（13 月）→ 拒绝
-    with pytest.raises(ValidationError, match="YYYY-MM"):
-        IndustryNodeTopEventsRequest.model_validate(
-            {"chain_node_id": "IC0007007", "time_range": "2025-01~2025-13"}
-        )
-
-    # 格式错误（缺月）→ 拒绝
-    with pytest.raises(ValidationError, match="YYYY-MM"):
-        IndustryNodeTopEventsRequest.model_validate(
-            {"chain_node_id": "IC0007007", "time_range": "2025-01~2025"}
-        )
-
-    # 未来月份 → 拒绝
-    future = f"{date.today().year + 1}-01"
-    with pytest.raises(ValidationError, match="当前时间"):
-        IndustryNodeTopEventsRequest.model_validate(
-            {"chain_node_id": "IC0007007", "time_range": f"{future}~{future}"}
         )

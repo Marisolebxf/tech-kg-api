@@ -44,6 +44,11 @@ from sqlalchemy import text
 from infra.graph_db import close_trs_graph_client, get_trs_graph_client
 from infra.mysql import MySQLClient
 
+HUAZHONG_UNIVERSITY = '华中科技大学'
+PEKING_UNIVERSITY = 'Peking University'
+SHANGHAI_JIAO_TONG_UNIVERSITY = '上海交通大学'
+TSINGHUA_UNIVERSITY = 'Tsinghua University'
+
 BATCH = "EXPERT_MODULES_E2E_V1"
 # 预留号段：形态像真，与现网抽样不冲突；清理靠白名单 + BATCH 确认。
 PAPER_ID_BASE = 889900000  # paper ids: 889900001 .. 889900080
@@ -55,13 +60,13 @@ LEGACY_PAPER_ID_BASE = 9930000000000000
 
 # 校友邻域：Person -[STUDIED_AT]-> Organization；org vid 由院校名确定性生成。
 _CANONICAL_SCHOOLS: dict[str, tuple[str, str]] = {
-    "清华大学": ("清华大学", "Tsinghua University"),
-    "华中科技大学": ("华中科技大学", "Huazhong University of Science and Technology"),
-    "北京大学": ("北京大学", "Peking University"),
+    "清华大学": ("清华大学", TSINGHUA_UNIVERSITY),
+    HUAZHONG_UNIVERSITY: (HUAZHONG_UNIVERSITY, "Huazhong University of Science and Technology"),
+    "北京大学": ("北京大学", PEKING_UNIVERSITY),
     "复旦大学": ("复旦大学", "Fudan University"),
     "燕山大学": ("燕山大学", "Yanshan University"),
     "浙江大学": ("浙江大学", "Zhejiang University"),
-    "上海交通大学": ("上海交通大学", "Shanghai Jiao Tong University"),
+    SHANGHAI_JIAO_TONG_UNIVERSITY: (SHANGHAI_JIAO_TONG_UNIVERSITY, "Shanghai Jiao Tong University"),
 }
 
 
@@ -345,9 +350,9 @@ NAMES = (
 def people() -> list[Person]:
     """生成100人：保留原80人边界场景，并追加20位多院校专家。"""
     schools = (
-        (56, "清华大学", "Tsinghua University"),
-        (6, "华中科技大学", "Huazhong University of Science and Technology"),
-        (4, "北京大学", "Peking University"),
+        (56, "清华大学", TSINGHUA_UNIVERSITY),
+        (6, HUAZHONG_UNIVERSITY, "Huazhong University of Science and Technology"),
+        (4, "北京大学", PEKING_UNIVERSITY),
         (2, "复旦大学", "Fudan University"),
         (2, "燕山大学", "Yanshan University"),
     )
@@ -372,12 +377,12 @@ def people() -> list[Person]:
             number += 1
 
     special = (
-        (" 清华大学 ", "Tsinghua University", "博士", "PhD", "2010-2014"),
-        ("清华大学　", "Tsinghua University", "硕士", "Master", "2012-2016"),
-        (None, "Tsinghua University", "博士", "PhD", "2011-2015"),
+        (" 清华大学 ", TSINGHUA_UNIVERSITY, "博士", "PhD", "2010-2014"),
+        ("清华大学　", TSINGHUA_UNIVERSITY, "硕士", "Master", "2012-2016"),
+        (None, TSINGHUA_UNIVERSITY, "博士", "PhD", "2011-2015"),
         ("清华大学研究生院", "Graduate School of Tsinghua University", "博士", "PhD", "2013-2017"),
-        ("清华大学", "Tsinghua University", None, None, None),
-        ("清华大学", "Tsinghua University", None, None, None),
+        ("清华大学", TSINGHUA_UNIVERSITY, None, None, None),
+        ("清华大学", TSINGHUA_UNIVERSITY, None, None, None),
         (None, None, "博士", "PhD", "2010-2014"),
         (None, None, "硕士", "Master", "2012-2016"),
         (None, None, None, None, None),
@@ -389,10 +394,10 @@ def people() -> list[Person]:
         )
         number += 1
     extra_schools = (
-        ("清华大学", "Tsinghua University"),
-        ("北京大学", "Peking University"),
+        ("清华大学", TSINGHUA_UNIVERSITY),
+        ("北京大学", PEKING_UNIVERSITY),
         ("浙江大学", "Zhejiang University"),
-        ("上海交通大学", "Shanghai Jiao Tong University"),
+        (SHANGHAI_JIAO_TONG_UNIVERSITY, "Shanghai Jiao Tong University"),
     )
     for extra_no in range(20):
         school_zh, school_en = extra_schools[extra_no % len(extra_schools)]
@@ -1104,6 +1109,7 @@ def sync_graph_from_mysql() -> dict[str, int]:
     def merge_edge(
         source: str, target: str, edge_type: str, key: str, props: dict[str, Any] | None = None
     ) -> None:
+        _ = key
         graph.create_edge(source, target, edge_type, props or {})
 
     try:
@@ -1239,11 +1245,10 @@ def sync_graph_from_mysql() -> dict[str, int]:
                 awards_json = str(raw_awards or "[]").strip() or "[]"
             try:
                 parsed_awards = json.loads(awards_json)
-                awards_n = (
-                    len(parsed_awards)
-                    if isinstance(parsed_awards, list)
-                    else (1 if parsed_awards else 0)
-                )
+                if isinstance(parsed_awards, list):
+                    awards_n = len(parsed_awards)
+                else:
+                    awards_n = int(bool(parsed_awards))
             except json.JSONDecodeError:
                 awards_n = 0 if awards_json in ("", "[]") else 1
             graph.merge_node(

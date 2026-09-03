@@ -303,7 +303,8 @@ async def test_remote_fake_graph_service_pulls_correction_and_resumes(
     assert received, "假图谱服务应收到 resume 请求"
     payload = __import__("json").loads(received[0])
     # 假服务拿到准确 stepId/scope/correctionUrl
-    assert payload["stepId"] == "align" and payload["scope"] == "OBJECT"
+    assert payload['stepId'] == 'align'
+    assert payload['scope'] == 'OBJECT'
     assert payload["correctionId"].startswith("COR-")
     assert payload["correctionUrl"].endswith("/correction")
     # 重复投递同一 correction 不产生第二个 executionId（幂等）

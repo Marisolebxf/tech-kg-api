@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 DDL_FILE = Path(__file__).resolve().parents[1] / "schemas" / "ddl" / "patent_relation_ddl.ngql"
 NAME_CLEAN_RE = re.compile(r"[^0-9a-z\u4e00-\u9fff]+")
 IDENTIFIER_CLEAN_RE = re.compile(r"[^0-9a-z]+")
-CN_APPLICATION_RE = re.compile(r"^(?:cn|zl)?(\d{12})(?:[a-z]|\d)?$")
+CN_APPLICATION_RE = re.compile(r"^(?:cn|zl)?(\d{12})[a-z\d]?$")
 PERSON_EDGE_TYPES = {"INVENTED_BY", "APPLIED_BY", "OWNED_BY"}
 ALL_EDGE_TYPES = ("INVENTED_BY", "APPLIED_BY", "OWNED_BY", "CITES", "OUTPUT_OF")
 DEFAULT_VECTOR_STATE_DIR = Path(".cache/organization_milvus")
@@ -315,7 +315,7 @@ def execute_batched(
 
 def ensure_schema(graph: Any) -> None:
     ddl = DDL_FILE.read_text(encoding="utf-8")
-    for statement in re.findall(r"CREATE\s+EDGE\b.*?;", ddl, flags=re.I | re.S):
+    for statement in re.findall(r"CREATE\s+EDGE\b[^;]*;", ddl, flags=re.I):
         graph.execute_write(statement)
     for edge_type, wanted in SHARED_EDGE_PROPERTIES.items():
         existing = {
@@ -388,8 +388,6 @@ def canonical_entities(
     for node in graph_people:
         if str(node.get("source_table") or "") != "dwd_scholar":
             continue
-        # Person是否进入候选只由其正式来源和图中姓名决定。source_record_id
-        # 仅在恰好能定位同源学者记录时补充机构经历，不能作为过滤条件。
         source = people_by_id.get(str(node.get("source_record_id") or ""), {})
         person = dict(
             source,
@@ -701,13 +699,12 @@ def build_relations(
                 )
                 stats[f"INVENTED_BY:{confidence:.2f}"] += 1
             else:
-                reason = (
-                    "同名候选仍有多个"
-                    if len(candidates) > 1
-                    else "只有姓名证据"
-                    if len(candidates) == 1
-                    else "人才表未找到同名人员"
-                )
+                if len(candidates) > 1:
+                    reason = "同名候选仍有多个"
+                elif len(candidates) == 1:
+                    reason = "只有姓名证据"
+                else:
+                    reason = "人才表未找到同名人员"
                 reviews.append(
                     review(
                         str(row["patent_id"]),
@@ -805,7 +802,12 @@ def build_relations(
 def _json_object(text: str) -> dict[str, Any] | None:
     cleaned = text.strip()
     if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.I)
+        opening_end = cleaned.find("\n")
+        opening = cleaned[:opening_end].strip().lower() if opening_end >= 0 else ""
+        if opening in {"```", "```json"}:
+            cleaned = cleaned[opening_end + 1 :]
+        if cleaned.rstrip().endswith("```"):
+            cleaned = cleaned.rstrip()[:-3].rstrip()
     try:
         value = json.loads(cleaned)
     except json.JSONDecodeError:

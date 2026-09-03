@@ -35,13 +35,15 @@ from service.manual_review_domain import (
 )
 from service.manual_review_production import manual_review_service as production_service
 
+REVIEW_TASK_NOT_FOUND = '人工处理任务不存在'
+
 ReviewIdentityDep = Annotated[ReviewIdentity, Depends(get_review_identity)]
 router = APIRouter(prefix="/manual-reviews", tags=["manual-review"])
 
 service = workflow_operations_application.service
 
 
-@router.get("", response_model=ApiResponse)
+@router.get("")
 async def list_reviews(
     status: str | None = None,
     domain: str | None = None,
@@ -68,15 +70,15 @@ async def list_reviews(
     )
 
 
-@router.get("/{review_id}", response_model=ApiResponse)
+@router.get("/{review_id}", responses={404: {"description": "请求的资源不存在"}})
 async def get_review(review_id: str) -> ApiResponse:
     try:
         return ApiResponse(data=service.get_review(review_id))
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="人工处理任务不存在") from exc
+        raise HTTPException(status_code=404, detail=REVIEW_TASK_NOT_FOUND) from exc
 
 
-@router.get("/{review_id}/flow", response_model=ApiResponse)
+@router.get("/{review_id}/flow", responses={404: {"description": "请求的资源不存在"}})
 async def get_review_flow(review_id: str) -> ApiResponse:
     try:
         review = service.get_review(review_id)
@@ -84,41 +86,41 @@ async def get_review_flow(review_id: str) -> ApiResponse:
             data={"id": review_id, "flow": review.get("flow", []), "task": review.get("task")}
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="人工处理任务不存在") from exc
+        raise HTTPException(status_code=404, detail=REVIEW_TASK_NOT_FOUND) from exc
 
 
-@router.post("/{review_id}/actions", response_model=ApiResponse)
+@router.post("/{review_id}/actions", responses={404: {"description": "请求的资源不存在"}, 409: {"description": "资源状态冲突"}})
 async def handle_review(review_id: str, request: ReviewActionRequest) -> ApiResponse:
     try:
         result = await service.handle_review(review_id, request.model_dump())
         return ApiResponse(data=result, msg="人工处理结果已提交")
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="人工处理任务不存在") from exc
+        raise HTTPException(status_code=404, detail=REVIEW_TASK_NOT_FOUND) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.put("/{review_id}/result", response_model=ApiResponse)
+@router.put("/{review_id}/result", responses={404: {"description": "请求的资源不存在"}})
 async def modify_result(review_id: str, request: ReviewResultRequest) -> ApiResponse:
     try:
         return ApiResponse(
             data=service.modify_review_result(review_id, request.model_dump()), msg="任务结果已修改"
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="人工处理任务不存在") from exc
+        raise HTTPException(status_code=404, detail=REVIEW_TASK_NOT_FOUND) from exc
 
 
-@router.post("/{review_id}/retry", response_model=ApiResponse)
+@router.post("/{review_id}/retry", responses={404: {"description": "请求的资源不存在"}})
 async def retry_review(review_id: str, request: RetryRequest) -> ApiResponse:
     try:
         return ApiResponse(
             data=await service.retry_review(review_id, request.payload), msg="重试工作流已下发"
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="人工处理任务不存在") from exc
+        raise HTTPException(status_code=404, detail=REVIEW_TASK_NOT_FOUND) from exc
 
 
-@router.post("/{review_id}/revoke", response_model=ApiResponse)
+@router.post("/{review_id}/revoke", responses={404: {"description": "请求的资源不存在"}})
 async def revoke_review(review_id: str, request: RevokeRequest) -> ApiResponse:
     try:
         return ApiResponse(
@@ -126,12 +128,12 @@ async def revoke_review(review_id: str, request: RevokeRequest) -> ApiResponse:
             msg="人工任务已撤销",
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="人工处理任务不存在") from exc
+        raise HTTPException(status_code=404, detail=REVIEW_TASK_NOT_FOUND) from exc
 
 
 def _raise_production_error(exc: Exception) -> None:
     if isinstance(exc, KeyError):
-        raise HTTPException(404, "人工处理任务不存在")
+        raise HTTPException(404, REVIEW_TASK_NOT_FOUND)
     if isinstance(exc, ReviewForbiddenError):
         raise HTTPException(403, str(exc))
     if isinstance(exc, ReviewConflictError):

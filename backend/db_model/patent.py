@@ -12,6 +12,9 @@ from sqlalchemy.dialects.mysql import JSON
 
 from db_model.base import Base
 
+PATENT_PRIMARY_KEY = '专利主键ID'
+PATENT_PUBLICATION_NUMBER = '专利公开(公告)号'
+
 
 class OdsPatent(Base):
     """深势-专利信息表"""
@@ -310,9 +313,9 @@ class OdsPatentBiblio(Base):
     __table_args__ = {"comment": "全球专利-著录项目"}
 
     patent_id = Column(
-        "patent_id", String(20), primary_key=True, nullable=False, comment="专利主键ID"
+        "patent_id", String(20), primary_key=True, nullable=False, comment=PATENT_PRIMARY_KEY
     )
-    pn = Column("pn", String(32), nullable=False, comment="专利公开(公告)号")
+    pn = Column("pn", String(32), nullable=False, comment=PATENT_PUBLICATION_NUMBER)
     exdt = Column("exdt", Integer(), nullable=True, comment="智慧芽专利预估到期日")
     parties = Column("parties", Text(), nullable=True, comment="当事人信息(申请人、发明人等)")
     abstracts = Column("abstracts", Text(), nullable=True, comment="摘要信息")
@@ -348,9 +351,9 @@ class OdsPatentCited(Base):
     __table_args__ = {"comment": "全球专利-专利被引用"}
 
     patent_id = Column(
-        "patent_id", String(20), primary_key=True, nullable=False, comment="专利主键ID"
+        "patent_id", String(20), primary_key=True, nullable=False, comment=PATENT_PRIMARY_KEY
     )
-    pn = Column("pn", String(32), nullable=False, comment="专利公开(公告)号")
+    pn = Column("pn", String(32), nullable=False, comment=PATENT_PUBLICATION_NUMBER)
     patent_cited = Column("patent_cited", Text(), nullable=True, comment="被引用详情")
 
 
@@ -361,9 +364,9 @@ class OdsPatentClaims(Base):
     __table_args__ = {"comment": "全球专利-权利要求"}
 
     patent_id = Column(
-        "patent_id", String(20), primary_key=True, nullable=False, comment="专利主键ID"
+        "patent_id", String(20), primary_key=True, nullable=False, comment=PATENT_PRIMARY_KEY
     )
-    pn = Column("pn", String(32), nullable=False, comment="专利公开(公告)号")
+    pn = Column("pn", String(32), nullable=False, comment=PATENT_PUBLICATION_NUMBER)
     claims = Column("claims", Text(), nullable=True, comment="权利要求信息")
     claim_count = Column("claim_count", Integer(), nullable=True, comment="权利要求统计")
 
@@ -375,9 +378,9 @@ class OdsPatentDescription(Base):
     __table_args__ = {"comment": "全球专利-说明书"}
 
     patent_id = Column(
-        "patent_id", String(20), primary_key=True, nullable=False, comment="专利主键ID"
+        "patent_id", String(20), primary_key=True, nullable=False, comment=PATENT_PRIMARY_KEY
     )
-    pn = Column("pn", String(32), nullable=False, comment="专利公开(公告)号")
+    pn = Column("pn", String(32), nullable=False, comment=PATENT_PUBLICATION_NUMBER)
     description = Column("description", Text(), nullable=True, comment="说明书信息")
 
 
@@ -388,9 +391,9 @@ class OdsPatentDrawing(Base):
     __table_args__ = {"comment": "全球专利-摘要附图"}
 
     patent_id = Column(
-        "patent_id", String(20), primary_key=True, nullable=False, comment="专利主键ID"
+        "patent_id", String(20), primary_key=True, nullable=False, comment=PATENT_PRIMARY_KEY
     )
-    pn = Column("pn", String(32), nullable=False, comment="专利公开(公告)号")
+    pn = Column("pn", String(32), nullable=False, comment=PATENT_PUBLICATION_NUMBER)
     abstract_drawing = Column("abstract_drawing", Text(), nullable=True, comment="摘要附图信息")
 
 
@@ -401,9 +404,9 @@ class OdsPatentFamily(Base):
     __table_args__ = {"comment": "全球专利-专利家族"}
 
     patent_id = Column(
-        "patent_id", String(20), primary_key=True, nullable=False, comment="专利主键ID"
+        "patent_id", String(20), primary_key=True, nullable=False, comment=PATENT_PRIMARY_KEY
     )
-    pn = Column("pn", String(32), nullable=False, comment="专利公开(公告)号")
+    pn = Column("pn", String(32), nullable=False, comment=PATENT_PUBLICATION_NUMBER)
     patent_family = Column("patent_family", Text(), nullable=True, comment="专利家族信息")
 
 
@@ -414,9 +417,9 @@ class OdsPatentLegalStatus(Base):
     __table_args__ = {"comment": "全球专利-法律状态"}
 
     patent_id = Column(
-        "patent_id", String(20), primary_key=True, nullable=False, comment="专利主键ID"
+        "patent_id", String(20), primary_key=True, nullable=False, comment=PATENT_PRIMARY_KEY
     )
-    pn = Column("pn", String(32), nullable=False, comment="专利公开(公告)号")
+    pn = Column("pn", String(32), nullable=False, comment=PATENT_PUBLICATION_NUMBER)
     legal_date = Column("legal_date", String(20), nullable=True, comment="法定日期")
     patent_legal = Column("patent_legal", Text(), nullable=True, comment="法律状态详情")
 

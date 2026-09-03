@@ -324,7 +324,7 @@ def _typed_path_from_record(
 # ---------- API 端点 ----------
 
 
-@router.get("/nodes/{node_id}", response_model=ApiResponse)
+@router.get("/nodes/{node_id}")
 async def get_node(
     node_id: str,
     space: str | None = Query(None, description="图空间，如 dev/techkg，缺省用默认空间"),
@@ -339,7 +339,7 @@ async def get_node(
         return ApiResponse(code=500, success=False, msg=str(exc))
 
 
-@router.get("/nodes", response_model=ApiResponse)
+@router.get("/nodes")
 async def list_nodes(
     label: str = Query(..., description="节点标签，如 Paper/Person/Journal/Report"),
     limit: int = Query(20, ge=1, le=500),
@@ -361,7 +361,7 @@ async def list_nodes(
         return ApiResponse(code=500, success=False, msg=str(exc))
 
 
-@router.post("/nodes/search", response_model=ApiResponse)
+@router.post("/nodes/search")
 async def search_nodes(
     label: str = Query(..., description="节点标签"),
     properties: dict[str, Any] | None = None,
@@ -379,7 +379,7 @@ async def search_nodes(
         return ApiResponse(code=500, success=False, msg=str(exc))
 
 
-@router.post("/paths/search", response_model=ApiResponse)
+@router.post("/paths/search")
 async def search_typed_paths(body: TypedPathSearchRequest) -> ApiResponse:
     """按逐跳边类型和方向查询全部匹配路径，支持中间节点属性过滤与分页。"""
     try:
@@ -413,7 +413,7 @@ async def search_typed_paths(body: TypedPathSearchRequest) -> ApiResponse:
         return ApiResponse(code=500, success=False, msg=str(exc))
 
 
-@router.get("/subgraph/{node_id}", response_model=ApiResponse)
+@router.get("/subgraph/{node_id}")
 async def get_subgraph(
     node_id: str,
     depth: int = Query(1, ge=1, le=3, description="跳数 1-3"),
@@ -495,7 +495,7 @@ def _collect_subgraph(
     return {"nodes": nodes, "edges": edges}
 
 
-@router.get("/filtered-subgraph/{node_id}", response_model=ApiResponse)
+@router.get("/filtered-subgraph/{node_id}")
 async def get_filtered_subgraph(
     node_id: str,
     edge_types: str = Query(..., description="逗号分隔的边类型，如 EXECUTIVE_OF,HAS_PARTICPTANT"),
@@ -567,7 +567,7 @@ async def get_filtered_subgraph(
         return ApiResponse(code=500, success=False, msg=str(exc))
 
 
-@router.get("/node/{node_id}/edges", response_model=ApiResponse)
+@router.get("/node/{node_id}/edges")
 async def get_node_edges(
     node_id: str,
     direction: Literal["out", "in", "both"] = Query("both", description="out/in/both"),
@@ -590,7 +590,7 @@ async def get_node_edges(
         return ApiResponse(code=500, success=False, msg=str(exc))
 
 
-@router.get("/node/{node_id}/neighbours", response_model=ApiResponse)
+@router.get("/node/{node_id}/neighbours")
 async def get_neighbours(
     node_id: str,
     direction: Literal["out", "in", "both"] = Query("both", description="out/in/both"),
@@ -609,7 +609,7 @@ async def get_neighbours(
         return ApiResponse(code=500, success=False, msg=str(exc))
 
 
-@router.get("/shortest-path", response_model=ApiResponse)
+@router.get("/shortest-path")
 async def shortest_path(
     source: str = Query(..., description="起始节点 VID"),
     target: str = Query(..., description="目标节点 VID"),
@@ -628,7 +628,7 @@ async def shortest_path(
         return ApiResponse(code=500, success=False, msg=str(exc))
 
 
-@router.get("/spaces", response_model=ApiResponse)
+@router.get("/spaces")
 async def list_spaces() -> ApiResponse:
     """列出所有可用的图空间。"""
     try:
@@ -638,7 +638,7 @@ async def list_spaces() -> ApiResponse:
         return ApiResponse(code=500, success=False, msg=str(exc))
 
 
-@router.get("/stats", response_model=ApiResponse)
+@router.get("/stats")
 async def get_stats(
     space: str | None = Query(None, description="图空间"),
     refresh: bool = Query(False, description="强制重新统计，忽略缓存"),

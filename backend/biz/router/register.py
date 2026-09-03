@@ -45,9 +45,11 @@ from biz.handler.tech_enterprise_relation_business import (
 )
 from biz.handler.workflow_system import router as workflow_system_router
 
+API_V1_PREFIX = '/api/v1'
+
 
 def register_routers(app: FastAPI) -> None:
-    app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(auth_router, prefix=API_V1_PREFIX)
 
     protected_dependencies = [Depends(require_authenticated_user)]
     protected_routers = (
@@ -78,7 +80,7 @@ def register_routers(app: FastAPI) -> None:
     for router in protected_routers:
         app.include_router(
             router,
-            prefix="/api/v1",
+            prefix=API_V1_PREFIX,
             dependencies=protected_dependencies,
         )
     admin_dependencies = [Depends(require_authenticated_user), Depends(require_platform_admin)]
@@ -92,6 +94,6 @@ def register_routers(app: FastAPI) -> None:
         admin_member_router,
     )
     for router in admin_routers:
-        app.include_router(router, prefix="/api/v1", dependencies=admin_dependencies)
-    app.include_router(manual_review_internal_router, prefix="/api/v1")
+        app.include_router(router, prefix=API_V1_PREFIX, dependencies=admin_dependencies)
+    app.include_router(manual_review_internal_router, prefix=API_V1_PREFIX)
     app.include_router(operator_internal_router)

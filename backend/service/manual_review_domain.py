@@ -179,17 +179,14 @@ def validate_step_template(step_id: str, template_id: str) -> str:
 def risk_policy(error_type: str, scope_hint: str | None = None, severity: str | None = None):
     t = datetime.now(UTC).replace(tzinfo=None)
     scope = "批次级" if scope_hint in ("batch", "BATCH", "REVIEW_BATCH") else "任务级"
-    risk = (
-        severity
-        if severity in ("P0", "P1", "P2")
-        else (
-            "P0"
-            if scope == "批次级"
-            else "P1"
-            if any(x in error_type for x in ("冲突", "不足", "缺失", "失败", "超时"))
-            else "P2"
-        )
-    )
+    if severity in ("P0", "P1", "P2"):
+        risk = severity
+    elif scope == "批次级":
+        risk = "P0"
+    elif any(x in error_type for x in ("冲突", "不足", "缺失", "失败", "超时")):
+        risk = "P1"
+    else:
+        risk = "P2"
     if risk == "P0":
         return risk, scope, t + timedelta(minutes=15), t + timedelta(minutes=30)
     if risk == "P1":

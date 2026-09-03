@@ -15,27 +15,27 @@ const toggleEvidence=(item:unknown,event:Event)=>{ const checked=(event.target a
   <div class="dynamic-form">
     <section v-for="(section,index) in sections" :key="`${section.type}-${index}`" class="dynamic-section">
       <template v-if="section.type==='mapping-table'">
-        <h3>字段/字典映射</h3><textarea v-model="value.mappingsJson" placeholder='[{"source":"源字段","target":"目标字段"}]' />
+        <h3>字段/字典映射</h3><textarea aria-label="[{&quot;source&quot;:&quot;源字段&quot;,&quot;target&quot;:&quot;目标字段&quot;}]" v-model="value.mappingsJson" placeholder='[{"source":"源字段","target":"目标字段"}]' />
       </template>
       <template v-else-if="section.type==='field-editor'">
-        <h3>缺失字段补录</h3><pre>{{ json(candidate?.missingFields) }}</pre><textarea v-model="value.fieldsJson" placeholder='{"field":"人工值"}' />
+        <h3>缺失字段补录</h3><pre>{{ json(candidate?.missingFields) }}</pre><textarea aria-label="{&quot;field&quot;:&quot;人工值&quot;}" v-model="value.fieldsJson" placeholder='{"field":"人工值"}' />
       </template>
       <template v-else-if="section.type==='record-merge'">
-        <h3>重复记录定主</h3><pre>{{ json(candidate?.records) }}</pre><input v-model="value.mergeMaster" placeholder="主记录 ID" />
+        <h3>重复记录定主</h3><pre>{{ json(candidate?.records) }}</pre><input aria-label="主记录 ID" v-model="value.mergeMaster" placeholder="主记录 ID" />
       </template>
       <template v-else-if="section.type==='entity-comparison'">
         <h3>候选与存量实体</h3><div class="compare"><pre>{{ json(candidate) }}</pre><pre>{{ json(candidate?.existingCandidates) }}</pre></div>
-        <select v-model="value.entityVerdict"><option value="merge">合并</option><option value="create">新建</option><option value="retype">改类型</option><option value="reject">驳回</option></select>
-        <input v-model="value.targetEntityId" placeholder="目标实体 ID（合并时必填）" />
+        <select aria-label="选择或输入内容" v-model="value.entityVerdict"><option value="merge">合并</option><option value="create">新建</option><option value="retype">改类型</option><option value="reject">驳回</option></select>
+        <input aria-label="目标实体 ID（合并时必填）" v-model="value.targetEntityId" placeholder="目标实体 ID（合并时必填）" />
       </template>
       <template v-else-if="section.type==='evidence-list'">
-        <h3>关系证据</h3><label v-for="(item,i) in evidence" :key="i"><input type="checkbox" @change="toggleEvidence(item,$event)" /> <code>{{ json(item) }}</code></label>
+        <h3>关系证据</h3><label v-for="(item,i) in evidence" :key="i"><input aria-label="选择此项" type="checkbox" @change="toggleEvidence(item,$event)" /> <code>{{ json(item) }}</code></label>
       </template>
       <template v-else-if="section.type==='attribute-comparison'">
-        <h3>属性来源对照</h3><pre>{{ json(candidate?.conflicts) }}</pre><textarea v-model="value.fieldsJson" placeholder='{"属性":"最终值"}' />
+        <h3>属性来源对照</h3><pre>{{ json(candidate?.conflicts) }}</pre><textarea aria-label="{&quot;属性&quot;:&quot;最终值&quot;}" v-model="value.fieldsJson" placeholder='{"属性":"最终值"}' />
       </template>
       <template v-else-if="section.type==='runtime-config'">
-        <h3>运行配置</h3><pre>{{ json(candidate?.runtime) }}</pre><textarea v-model="value.runtimeJson" placeholder='{"model":"...","timeoutSeconds":60}' />
+        <h3>运行配置</h3><pre>{{ json(candidate?.runtime) }}</pre><textarea aria-label="{&quot;model&quot;:&quot;...&quot;,&quot;timeoutSeconds&quot;:60}" v-model="value.runtimeJson" placeholder='{"model":"...","timeoutSeconds":60}' />
       </template>
       <template v-else-if="section.type==='raw-json-readonly' || !supported.has(section.type)">
         <h3>只读异常数据</h3><p v-if="!supported.has(section.type)" class="warning">未知安全组件 {{ section.type }}，仅允许查看并升级治理员。</p><pre>{{ json(data) }}</pre>

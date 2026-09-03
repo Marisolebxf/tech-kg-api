@@ -5,7 +5,6 @@
 """
 
 import json
-import re
 
 from dotenv import load_dotenv
 
@@ -110,8 +109,14 @@ def extract(text: str, source_type: str = "general") -> list:
             ],
         )
         raw = resp.choices[0].message.content.strip()
-        # 去除可能的 markdown 代码块包裹
-        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+        # 去除可能的 markdown 代码块包裹，避免用可产生灾难性回溯的正则。
+        if raw.startswith("```"):
+            opening_end = raw.find("\n")
+            opening = raw[:opening_end].strip().lower() if opening_end >= 0 else ""
+            if opening in {"```", "```json"}:
+                raw = raw[opening_end + 1 :]
+            if raw.rstrip().endswith("```"):
+                raw = raw.rstrip()[:-3].rstrip()
         return json.loads(raw).get("entities", [])
 
     except json.JSONDecodeError as e:

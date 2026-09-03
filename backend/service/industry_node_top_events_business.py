@@ -227,8 +227,8 @@ TREND_BASE_YEAR = 2026
 
 # 事件置信度（标书「实体共现和语义关联置信度」）：风险类最高，资讯类低
 EVENT_CONFIDENCE = {
-    **{et: 0.9 for et in RISK_EVENT_TYPES},
-    **{et: 0.85 for et in ("financing", "stock_finance", "annual_finance")},
+    **dict.fromkeys(RISK_EVENT_TYPES, 0.9),
+    **dict.fromkeys(("financing", "stock_finance", "annual_finance"), 0.85),
     "bid": 0.8,
     "news": 0.7,
     "change_record": 0.7,

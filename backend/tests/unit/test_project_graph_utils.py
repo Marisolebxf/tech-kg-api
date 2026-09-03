@@ -34,14 +34,15 @@ def test_parse_list_empty():
 def test_vids_stable():
     assert project_vid("fake-zh-proj-001") == "project_fake-zh-proj-001"
     assert person_vid("张伟") == person_vid(" 张伟 ")
-    assert org_vid("清华大学") == org_vid("清华大学")
+    assert org_vid("清华大学") == org_vid(" 清华大学 ")
     assert keyword_vid("Knowledge Graph") == keyword_vid("knowledge graph")
 
 
 def test_parse_json_objects():
     raw = '[{"title":"A","doi":"10.1/x"},{"title":"B"}]'
     objs = parse_json_objects(raw)
-    assert len(objs) == 2 and objs[0]["doi"] == "10.1/x"
+    assert len(objs) == 2
+    assert objs[0]['doi'] == '10.1/x'
 
 
 def test_build_project_props():
@@ -160,7 +161,9 @@ def test_build_output_count_props():
         other_outputs_count=0,
     )
     p = build_output_count_props(row)
-    assert p["total_outputs"] == 5 and p["patents_count"] == 1 and p["clinical_trials_count"] == 0
+    assert p['total_outputs'] == 5
+    assert p['patents_count'] == 1
+    assert p['clinical_trials_count'] == 0
     assert p["awards_count"] == 2
     assert '"示范奖"' in p["output_awards"]
 

@@ -10,6 +10,9 @@ from sqlalchemy import (
 
 from db_model.base import Base
 
+INDUSTRY_CHAIN_CODE = '产业链代码'
+INDUSTRY_CHAIN_NAME = '产业链名称'
+
 
 class DwdIndustryChainInfo(Base):
     """产业链图谱"""
@@ -17,8 +20,8 @@ class DwdIndustryChainInfo(Base):
     __tablename__ = "dwd_industry_chain_info"
     __table_args__ = {"comment": "产业链图谱"}
 
-    chain_code = Column("chain_code", String(255), nullable=True, comment="产业链代码")
-    chain_name = Column("chain_name", String(255), nullable=True, comment="产业链名称")
+    chain_code = Column("chain_code", String(255), nullable=True, comment=INDUSTRY_CHAIN_CODE)
+    chain_name = Column("chain_name", String(255), nullable=True, comment=INDUSTRY_CHAIN_NAME)
     node_id = Column("node_id", String(255), nullable=True, comment="节点代码")
     node_name = Column("node_name", String(255), nullable=True, comment="节点名称")
     node_type = Column("node_type", Integer(), nullable=True, comment="节点类型")
@@ -44,8 +47,8 @@ class DwdIndustryChainNewsInfo(Base):
     __tablename__ = "dwd_industry_chain_news_info"
     __table_args__ = {"comment": "产业动态资讯"}
 
-    chain_code = Column("chain_code", String(255), nullable=True, comment="产业链代码")
-    chain_name = Column("chain_name", String(255), nullable=True, comment="产业链名称")
+    chain_code = Column("chain_code", String(255), nullable=True, comment=INDUSTRY_CHAIN_CODE)
+    chain_name = Column("chain_name", String(255), nullable=True, comment=INDUSTRY_CHAIN_NAME)
     news_id = Column("news_id", String(255), nullable=True, comment="资讯id")
     title = Column("title", String(255), nullable=True, comment="标题")
     relaese_date = Column("relaese_date", Date(), nullable=True, comment="发布时间")
@@ -65,8 +68,8 @@ class DwdOrgIndustryChainDtl(Base):
     __tablename__ = "dwd_org_industry_chain_dtl"
     __table_args__ = {"comment": "产业关联企业信息"}
 
-    chain_code = Column("chain_code", String(255), nullable=True, comment="产业链代码")
-    chain_name = Column("chain_name", String(255), nullable=True, comment="产业链名称")
+    chain_code = Column("chain_code", String(255), nullable=True, comment=INDUSTRY_CHAIN_CODE)
+    chain_name = Column("chain_name", String(255), nullable=True, comment=INDUSTRY_CHAIN_NAME)
     node_id = Column("node_id", String(255), nullable=True, comment="节点代码")
     node_name = Column("node_name", String(255), nullable=True, comment="节点名称")
     antitypic = Column("antitypic", String(255), nullable=True, comment="企业id")
@@ -86,8 +89,8 @@ class DwdOrgIndustryChainPatDtl(Base):
     __tablename__ = "dwd_org_industry_chain_pat_dtl"
     __table_args__ = {"comment": "产业链关联专利信息"}
 
-    chain_code = Column("chain_code", String(255), nullable=True, comment="产业链代码")
-    chain_name = Column("chain_name", String(255), nullable=True, comment="产业链名称")
+    chain_code = Column("chain_code", String(255), nullable=True, comment=INDUSTRY_CHAIN_CODE)
+    chain_name = Column("chain_name", String(255), nullable=True, comment=INDUSTRY_CHAIN_NAME)
     node_id = Column("node_id", String(255), nullable=True, comment="节点代码")
     node_name = Column("node_name", String(255), nullable=True, comment="节点名称")
     apno = Column("apno", String(255), nullable=True, comment="申请号")
@@ -111,8 +114,8 @@ class DwdOrgIndustryChainProdDtl(Base):
     __tablename__ = "dwd_org_industry_chain_prod_dtl"
     __table_args__ = {"comment": "产业链企业关联产品信息"}
 
-    chain_code = Column("chain_code", String(255), nullable=True, comment="产业链代码")
-    chain_name = Column("chain_name", String(255), nullable=True, comment="产业链名称")
+    chain_code = Column("chain_code", String(255), nullable=True, comment=INDUSTRY_CHAIN_CODE)
+    chain_name = Column("chain_name", String(255), nullable=True, comment=INDUSTRY_CHAIN_NAME)
     antitypic = Column("antitypic", String(255), nullable=True, comment="企业id")
     company_name = Column("company_name", String(500), nullable=True, comment="企业名称")
     credit_code = Column("credit_code", String(255), nullable=True, comment="统一社会信用代码")

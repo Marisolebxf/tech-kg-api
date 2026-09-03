@@ -80,6 +80,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         end_time: str | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
+        _ = data_source
         normalized_limit = max(1, min(int(limit or 10), MAX_QUERY_LIMIT))
         a_keyword = (expert_a_id or "").strip()
         b_keyword = (expert_b_id or "").strip()
@@ -462,7 +463,10 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             return f"{year}-{int(month):02d}-{int(day or 1):02d}"
 
         lower = f"{start[:7]}-01" if start else ""
-        upper = f"{end[:7]}-31" if end and len(end) == 7 else end[:10] if end else ""
+        if end and len(end) == 7:
+            upper = f"{end[:7]}-31"
+        else:
+            upper = end[:10] if end else ""
         filtered: list[dict[str, Any]] = []
         for row in rows:
             relation_date = normalized_relation_date(row)
@@ -494,11 +498,10 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
 
         relation_strength = min(99, max(60, 60 + evidence_count * 5 + len(reason_tags) * 4))
         relation_time = row.get("relation_time")
-        last_updated_at = (
-            relation_time.strftime("%Y-%m-%d %H:%M:%S")
-            if hasattr(relation_time, "strftime")
-            else (str(relation_time) if relation_time else None)
-        )
+        if hasattr(relation_time, "strftime"):
+            last_updated_at = relation_time.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            last_updated_at = str(relation_time) if relation_time else None
 
         expert_a = {
             "expertId": str(row.get("expert_a_id") or ""),

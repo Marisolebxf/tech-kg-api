@@ -203,9 +203,9 @@ def test_every_step_template_combination_matches_handoff_table():
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("tid", list(TEMPLATES))
 def test_each_template_has_action_result_contract_and_write_target(tid):
-    assert (
-        "title" in TEMPLATES[tid] and "actions" in TEMPLATES[tid] and "components" in TEMPLATES[tid]
-    )
+    assert 'title' in TEMPLATES[tid]
+    assert 'actions' in TEMPLATES[tid]
+    assert 'components' in TEMPLATES[tid]
     assert tid in RESULT_SCHEMAS
     # 合同返回结构稳定
     from service.manual_review_domain import template_contract
@@ -299,7 +299,8 @@ def test_client_supplied_rerun_step_id_is_rejected_for_every_template(tid):
 # --------------------------------------------------------------------------- #
 def test_risk_policy_p0_batch_has_short_sla_and_block_isolation():
     risk, scope, claim, resolve = risk_policy("Schema 映射失败", "BATCH", "P0")
-    assert risk == "P0" and scope == "批次级"
+    assert risk == 'P0'
+    assert scope == '批次级'
     assert resolve - claim == timedelta(minutes=15)
 
 
@@ -362,13 +363,15 @@ def test_dual_idempotency_event_and_business_key(service):
     # 换 eventId 但同业务键（sourceTaskId+step+objectId+fingerprint）
     same_business = service.create_review_required(report(event="evt-2"), "graph-build")
     assert first["reviewId"] == same_event["reviewId"] == same_business["reviewId"]
-    assert same_event["duplicate"] and same_business["duplicate"]
+    assert same_event['duplicate']
+    assert same_business['duplicate']
 
 
 def test_different_object_id_creates_distinct_case(service):
     a = service.create_review_required(report(obj_id="OBJ-A"), "graph-build")
     b = service.create_review_required(report(obj_id="OBJ-B", event="evt-b"), "graph-build")
-    assert a["reviewId"] != b["reviewId"] and not b["duplicate"]
+    assert a['reviewId'] != b['reviewId']
+    assert not b['duplicate']
 
 
 # --------------------------------------------------------------------------- #
@@ -442,7 +445,8 @@ def test_callback_duplicate_event_is_idempotent(service):
     replay = service.execution_event(
         case["id"], {**common, "eventId": "d1", "type": "RERUN_SUCCEEDED"}
     )
-    assert first["status"] == "VERIFYING" and replay["duplicate"] is True
+    assert first['status'] == 'VERIFYING'
+    assert replay['duplicate'] is True
 
 
 def test_p0_decision_does_not_enqueue_correction_before_approval(service):
@@ -774,7 +778,8 @@ def test_evidence_upload_validates_size_type_and_sha_format(service, monkeypatch
         service.evidence_upload(created["reviewId"], "a.pdf", "application/pdf", 0, "a" * 64, a)
     # 合法
     res = service.evidence_upload(created["reviewId"], "a.pdf", "application/pdf", 100, "A" * 64, a)
-    assert res["evidenceId"].startswith("EVD-") and res["uploadUrl"]
+    assert res['evidenceId'].startswith('EVD-')
+    assert res['uploadUrl']
 
 
 def test_evidence_complete_integrity_check(service, monkeypatch):

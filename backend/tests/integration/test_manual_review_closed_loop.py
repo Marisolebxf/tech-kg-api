@@ -266,7 +266,8 @@ async def test_full_closed_loop_success(async_client, loop_env, monkeypatch):
     body = review_required_body("align", "T_LINK", event_id="evt-loop-1")
     created = (await _post_review(async_client, body)).json()["data"]
     rid = created["reviewId"]
-    assert created["status"] == "OPEN" and created["isolationStrategy"] == "ISOLATE_OBJECT"
+    assert created['status'] == 'OPEN'
+    assert created['isolationStrategy'] == 'ISOLATE_OBJECT'
 
     # L2：人工处理领取 + 裁决（P1 无需双人审批）→ APPLYING + correction + outbox
     submitted = await _claim_submit(
@@ -278,14 +279,17 @@ async def test_full_closed_loop_success(async_client, loop_env, monkeypatch):
     assert (await service.process_outbox()) == {"processed": 1, "failed": 0}
     assert len(fake.resume_requests) == 1
     resume = fake.resume_requests[0]
-    assert resume["stepId"] == "align" and resume["scope"] == "OBJECT"
+    assert resume['stepId'] == 'align'
+    assert resume['scope'] == 'OBJECT'
     assert resume["correctionUrl"].endswith(f"/api/v1/internal/manual-reviews/{rid}/correction")
 
     # L4：伪图谱构建已回拉 correction 并通过 SHA-256 校验
     assert len(fake.corrections_pulled) == 1
     assert fake.sha_mismatches == 0
     corr = fake.corrections_pulled[0]
-    assert corr["stepId"] == "align" and corr["payloadSha256"] and len(corr["payloadSha256"]) == 64
+    assert corr['stepId'] == 'align'
+    assert corr['payloadSha256']
+    assert len(corr['payloadSha256']) == 64
     exec_id = fake.executions[resume["correctionId"]]
     detail = (await async_client.get(f"/api/v1/manual-reviews/production/{rid}")).json()["data"]
     assert detail["status"] == "RERUNNING"
@@ -318,11 +322,13 @@ async def test_full_closed_loop_success(async_client, loop_env, monkeypatch):
 
     # 重复回调幂等
     replay = await _fire_event(async_client, rid, exec_id, "cb-4", "VERIFICATION_SUCCEEDED")
-    assert replay["duplicate"] is True and replay["status"] == "RESOLVED"
+    assert replay['duplicate'] is True
+    assert replay['status'] == 'RESOLVED'
     # correction 落为 APPLIED
     with service.sf() as s:
         cor = s.scalar(select(ReviewCorrection).where(ReviewCorrection.case_id == rid))
-        assert cor.status == "APPLIED" and cor.applied_at is not None
+        assert cor.status == 'APPLIED'
+        assert cor.applied_at is not None
 
 
 # --------------------------------------------------------------------------- #

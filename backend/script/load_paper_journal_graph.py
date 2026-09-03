@@ -24,12 +24,14 @@ from infra.graph_db import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
 from infra.mysql import MySQLClient
 
+UPDATED_SINCE_CLAUSE = 'WHERE updated_time > :since'
+
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 BATCH = 1  # trs-graph 不支持多值 INSERT，每次 1 条
-PAPER_LIMIT = ""  # 空=全量加载
+PAPER_LIMIT = ""
 MAX_WORKERS = 10  # 并发线程数
 
 
@@ -116,7 +118,7 @@ def batch_insert_edge(
 def load_zh_papers(
     client: TRSGraphClient, session, since: str | None = None
 ) -> tuple[int, str | None]:
-    where = "WHERE updated_time > :since" if since else ""
+    where = UPDATED_SINCE_CLAUSE if since else ""
     params: dict = {"since": since} if since else {}
     rows = session.execute(
         text(
@@ -185,7 +187,7 @@ def load_zh_papers(
 def load_en_papers(
     client: TRSGraphClient, session, since: str | None = None
 ) -> tuple[int, str | None]:
-    where = "WHERE updated_time > :since" if since else ""
+    where = UPDATED_SINCE_CLAUSE if since else ""
     params: dict = {"since": since} if since else {}
     rows = session.execute(
         text(
@@ -260,7 +262,7 @@ def load_authors(
     edges = []
     max_ts = ""
     for tbl, src_label in [("dwd_zh_author", "zh_paper"), ("dwd_en_author", "en_paper")]:
-        where = "WHERE updated_time > :since" if since else ""
+        where = UPDATED_SINCE_CLAUSE if since else ""
         params: dict = {"since": since} if since else {}
         rows = session.execute(
             text(

@@ -19,8 +19,8 @@ async def describe_expert_paper_cooperation() -> dict[str, object]:
 
 
 @router.post(
-    "/structured-result", response_model=ExpertPaperCooperationStructuredResultOnlyResponse
-)
+    "/structured-result"
+, responses={404: {"description": "请求的资源不存在"}, 500: {"description": "服务内部错误"}})
 async def analyze_expert_paper_cooperation_structured_result(
     body: ExpertPaperCooperationDemoRequest,
     request: Request,

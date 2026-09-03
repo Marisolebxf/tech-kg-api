@@ -10,6 +10,9 @@ from sqlalchemy import (
 
 from db_model.base import Base
 
+LAST_UPDATED_COMMENT = '记录最后更新时间'
+VALIDITY_STATUS_COMMENT = '状态：0:无效,1:有效'
+
 
 class DwdScholar(Base):
     """深势-学者表"""
@@ -89,9 +92,9 @@ class DwdScholar(Base):
     paper_nums = Column("paper_nums", Integer(), nullable=False, comment="论文数量")
     citation_nums = Column("citation_nums", Integer(), nullable=False, comment="被引数量")
     h_index = Column("h_index", Integer(), nullable=False, comment="H指数")
-    status = Column("status", Integer(), nullable=False, comment="状态：0:无效,1:有效")
+    status = Column("status", Integer(), nullable=False, comment=VALIDITY_STATUS_COMMENT)
     create_time = Column("create_time", DateTime(), nullable=False, comment="创建时间")
-    update_time = Column("update_time", DateTime(), nullable=False, comment="记录最后更新时间")
+    update_time = Column("update_time", DateTime(), nullable=False, comment=LAST_UPDATED_COMMENT)
 
 
 class DwdScholarCoauthor(Base):
@@ -129,9 +132,9 @@ class DwdScholarCoauthor(Base):
         "co_scholar_org_id", String(64), nullable=True, comment="合作学者所属机构ID"
     )
     co_paper_count = Column("co_paper_count", Integer(), nullable=False, comment="合作论文数量")
-    status = Column("status", Integer(), nullable=False, comment="状态：0:无效,1:有效")
+    status = Column("status", Integer(), nullable=False, comment=VALIDITY_STATUS_COMMENT)
     create_time = Column("create_time", DateTime(), nullable=False, comment="记录创建时间")
-    update_time = Column("update_time", DateTime(), nullable=False, comment="记录最后更新时间")
+    update_time = Column("update_time", DateTime(), nullable=False, comment=LAST_UPDATED_COMMENT)
 
 
 class DwdScholarPaperRelation(Base):
@@ -149,9 +152,9 @@ class DwdScholarPaperRelation(Base):
     scholar_id = Column("scholar_id", String(32), nullable=False, comment="学者id")
     citations = Column("citations", Integer(), nullable=False, comment="被引用次数")
     publish_time = Column("publish_time", DateTime(), nullable=True, comment="发布时间")
-    status = Column("status", Integer(), nullable=False, comment="状态：0:无效,1:有效")
+    status = Column("status", Integer(), nullable=False, comment=VALIDITY_STATUS_COMMENT)
     create_time = Column("create_time", DateTime(), nullable=False, comment="创建时间")
-    update_time = Column("update_time", DateTime(), nullable=False, comment="记录最后更新时间")
+    update_time = Column("update_time", DateTime(), nullable=False, comment=LAST_UPDATED_COMMENT)
     publication_id = Column("publication_id", BigInteger(), nullable=False, comment="期刊id")
 
 
@@ -168,8 +171,8 @@ class DwdScholarPapers(Base):
     paper_url = Column("paper_url", String(1024), nullable=False, comment="论文原始链接")
     cover_date_start = Column("cover_date_start", DateTime(), nullable=True, comment="发表时间")
     create_time = Column("create_time", DateTime(), nullable=True, comment="创建时间")
-    update_time = Column("update_time", DateTime(), nullable=True, comment="记录最后更新时间")
-    status = Column("status", SmallInteger(), nullable=True, comment="状态：0:无效,1:有效")
+    update_time = Column("update_time", DateTime(), nullable=True, comment=LAST_UPDATED_COMMENT)
+    status = Column("status", SmallInteger(), nullable=True, comment=VALIDITY_STATUS_COMMENT)
     zh_abstract = Column("zh_abstract", Text(), nullable=True, comment="中文摘要")
     en_abstract = Column("en_abstract", Text(), nullable=True, comment="英文摘要")
     doi = Column("doi", String(512), nullable=False)
@@ -186,7 +189,7 @@ class DwdScholarResearchDirection(Base):
     scholar_id = Column("scholar_id", String(32), nullable=False, comment="学者ID")
     fields = Column("fields", Text(), nullable=True, comment="研究方向")
     create_time = Column("create_time", DateTime(), nullable=False, comment="创建时间")
-    update_time = Column("update_time", DateTime(), nullable=False, comment="记录最后更新时间")
+    update_time = Column("update_time", DateTime(), nullable=False, comment=LAST_UPDATED_COMMENT)
 
 
 class DwdScholarTalentFlag(Base):
@@ -199,7 +202,7 @@ class DwdScholarTalentFlag(Base):
     scholar_id = Column("scholar_id", String(32), nullable=False, comment="学者ID")
     academician = Column("academician", Integer(), nullable=False, comment="是否为院士：0:否,1:是")
     create_time = Column("create_time", DateTime(), nullable=False, comment="创建时间")
-    update_time = Column("update_time", DateTime(), nullable=False, comment="记录最后更新时间")
+    update_time = Column("update_time", DateTime(), nullable=False, comment=LAST_UPDATED_COMMENT)
 
 
 class Scholar(Base):

@@ -1,7 +1,7 @@
 /* GKX production UI contract. Loaded last to reconcile legacy page styles. */
 :root {
   --control-height: 32px;
-  --gkx-brand: #165dff;
+  --gkx-brand: #004ecc;
   --gkx-brand-hover: #4080ff;
   --gkx-brand-active: #0e42d2;
   --gkx-brand-light: #e8f3ff;
@@ -385,7 +385,7 @@ body {
 }
 
 .app-workspace .business-service__toolbar .kg-tabs__item.is-active {
-  color: #165dff;
+  color: #004ecc;
   font-weight: 500;
 }
 
@@ -396,7 +396,7 @@ body {
   left: 0;
   height: 3px;
   border-radius: 2px;
-  background: #165dff;
+  background: #004ecc;
   content: "";
 }
 
@@ -441,13 +441,13 @@ body {
   width: 3px;
   height: 14px;
   border-radius: 2px;
-  background: #165dff;
+  background: #004ecc;
   content: "";
 }
 
 .app-workspace .service-console__head p {
   margin: 0;
-  color: #86909c;
+  color: #59636f;
   font-size: 12px;
   line-height: 20px;
 }
@@ -489,12 +489,12 @@ body {
   padding: 0;
   border: 0 !important;
   background: transparent !important;
-  color: #165dff;
+  color: #004ecc;
   line-height: 22px;
 }
 
 .app-workspace .service-console__actions .kg-button--secondary {
-  color: #86909c;
+  color: #59636f;
 }
 
 .app-workspace .service-console--alumni .service-console__head,
@@ -1385,7 +1385,7 @@ body {
   padding-inline: 16px !important;
   border: 1px solid transparent !important;
   border-radius: 4px;
-  background: #165dff !important;
+  background: #004ecc !important;
   color: #fff;
 }
 
@@ -1405,9 +1405,9 @@ body {
 }
 
 .app-workspace .business-service .service-console__actions .kg-button--secondary:hover {
-  border-color: #165dff !important;
+  border-color: #004ecc !important;
   background: #e8f3ff !important;
-  color: #165dff;
+  color: #004ecc;
 }
 
 .app-workspace .business-service .prototype-table tbody tr:hover td {

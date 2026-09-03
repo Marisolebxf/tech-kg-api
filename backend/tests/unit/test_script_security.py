@@ -24,7 +24,8 @@ def test_review_safe() -> None:
     assert verdict.safe is True
     assert verdict.issues == []
     assert verdict.summary == "安全"
-    assert client.calls and client.calls[0][1] == 1024
+    assert client.calls
+    assert client.calls[0][1] == 1024
 
 
 def test_review_unsafe() -> None:

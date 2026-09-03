@@ -95,7 +95,7 @@ function handleFileChange(event: Event) {
 <template>
   <Teleport to="body">
     <div v-if="open && config && action" class="kg-modal" @click.self="emit('close')">
-      <section class="kg-modal__panel construction-action-modal" role="dialog" aria-modal="true" :aria-label="config.title">
+      <dialog open class="kg-modal__panel construction-action-modal" :aria-label="config.title">
         <header class="kg-modal__header">
           <h2>{{ config.title }}</h2>
           <button type="button" aria-label="关闭" @click="emit('close')">×</button>
@@ -106,11 +106,11 @@ function handleFileChange(event: Event) {
             <template v-if="action === 'entity'">
               <label>
                 <span>实体名称</span>
-                <input v-model="entityForm.name" required />
+                <input aria-label="输入内容" v-model="entityForm.name" required />
               </label>
               <label>
                 <span>实体类型</span>
-                <select v-model="entityForm.type">
+                <select aria-label="选择或输入内容" v-model="entityForm.type">
                   <option>科技专家</option>
                   <option>科技企业</option>
                   <option>机构团队</option>
@@ -119,11 +119,11 @@ function handleFileChange(event: Event) {
               </label>
               <label>
                 <span>别名</span>
-                <input v-model="entityForm.alias" placeholder="可选" />
+                <input aria-label="可选" v-model="entityForm.alias" placeholder="可选" />
               </label>
               <label>
                 <span>来源批次</span>
-                <select v-model="entityForm.batch">
+                <select aria-label="选择或输入内容" v-model="entityForm.batch">
                   <option>KG-INC-20260706-01</option>
                   <option>KG-INC-20260706-02</option>
                 </select>
@@ -133,15 +133,15 @@ function handleFileChange(event: Event) {
             <template v-else-if="action === 'relation'">
               <label>
                 <span>源实体</span>
-                <input v-model="relationForm.source" required />
+                <input aria-label="输入内容" v-model="relationForm.source" required />
               </label>
               <label>
                 <span>目标实体</span>
-                <input v-model="relationForm.target" required />
+                <input aria-label="输入内容" v-model="relationForm.target" required />
               </label>
               <label>
                 <span>关系类型</span>
-                <select v-model="relationForm.relation">
+                <select aria-label="选择或输入内容" v-model="relationForm.relation">
                   <option>论文合作</option>
                   <option>同事关系</option>
                   <option>校友关系</option>
@@ -150,27 +150,27 @@ function handleFileChange(event: Event) {
               </label>
               <label>
                 <span>置信度</span>
-                <input v-model="relationForm.confidence" />
+                <input aria-label="输入内容" v-model="relationForm.confidence" />
               </label>
             </template>
 
             <template v-else-if="action === 'property'">
               <label>
                 <span>对象</span>
-                <input v-model="propertyForm.object" required />
+                <input aria-label="输入内容" v-model="propertyForm.object" required />
               </label>
               <label>
                 <span>属性名</span>
-                <input v-model="propertyForm.name" required />
+                <input aria-label="输入内容" v-model="propertyForm.name" required />
               </label>
               <label>
                 <span>属性值</span>
-                <input v-model="propertyForm.value" required />
+                <input aria-label="输入内容" v-model="propertyForm.value" required />
               </label>
             </template>
 
             <template v-else-if="action === 'batch-audit'">
-              <table class="construction-action-table">
+              <table aria-label="数据表" class="construction-action-table">
                 <thead>
                   <tr>
                     <th>
@@ -193,11 +193,11 @@ function handleFileChange(event: Event) {
             <template v-else>
               <label>
                 <span>规则文件</span>
-                <input type="file" accept=".json,.yaml,.yml,.csv" @change="handleFileChange" />
+                <input aria-label="上传文件" type="file" accept=".json,.yaml,.yml,.csv" @change="handleFileChange" />
               </label>
               <label>
                 <span>规则类型</span>
-                <select v-model="ruleImportForm.ruleType">
+                <select aria-label="选择或输入内容" v-model="ruleImportForm.ruleType">
                   <option>实体消歧</option>
                   <option>关系抽取</option>
                   <option>属性映射</option>
@@ -205,7 +205,7 @@ function handleFileChange(event: Event) {
               </label>
               <label>
                 <span>导入方式</span>
-                <select v-model="ruleImportForm.mode">
+                <select aria-label="选择或输入内容" v-model="ruleImportForm.mode">
                   <option>增量导入</option>
                   <option>全量覆盖</option>
                 </select>
@@ -219,7 +219,7 @@ function handleFileChange(event: Event) {
             <button class="kg-button" type="submit" :disabled="isSubmitting">{{ config.submitLabel }}</button>
           </footer>
         </form>
-      </section>
+      </dialog>
     </div>
   </Teleport>
 </template>

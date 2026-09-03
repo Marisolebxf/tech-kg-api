@@ -51,7 +51,8 @@ async def test_http_create_queue_claim_draft_submit(async_client, production_api
             "/api/v1/manual-reviews/production/queue", params={"queue": "unclaimed"}
         )
     ).json()["data"]
-    assert queue["total"] == 1 and queue["items"][0]["id"] == created["id"]
+    assert queue['total'] == 1
+    assert queue['items'][0]['id'] == created['id']
     claimed = (
         await async_client.post(
             f"/api/v1/manual-reviews/production/{created['id']}/claim",

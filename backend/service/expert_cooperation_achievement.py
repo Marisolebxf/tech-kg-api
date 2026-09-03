@@ -362,10 +362,10 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         text = str(val).strip()
         if not text:
             return []
-        if text.startswith("[") or text.startswith("{"):
+        if text.startswith(("[", "{")):
             try:
                 parsed = json.loads(text)
-            except (TypeError, ValueError, json.JSONDecodeError):
+            except (TypeError, ValueError):
                 parsed = None
             if parsed is not None:
                 return cls._coerce_field_values(parsed)
@@ -623,7 +623,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
 
     @classmethod
     def _item_summary_rows(cls, items: list[dict[str, Any]]) -> list[dict[str, str]]:
-        """摘要：成果N=名称，下行完成时间/所属领域/奖项/评价。"""
+        """Build compact achievement summary rows for the frontend."""
         rows: list[dict[str, str]] = []
         for index, item in enumerate(items, start=1):
             title = str(item.get("title") or item.get("id") or "—")

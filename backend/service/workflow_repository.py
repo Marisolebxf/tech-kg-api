@@ -12,6 +12,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+EXPERT_BASIC_INFO_TABLE = '专家基本信息表'
+PAPER_ACHIEVEMENT_TABLE = '论文成果表'
+PAPER_TITLE_MISSING = '论文标题缺失'
+PENDING_MANUAL_REVIEW = '等待人工审核'
+RESULT_BELOW_THRESHOLD = '结果低于阈值'
+SCHEMA_MAPPING_LABEL = 'Schema 映射'
+SQL_AND = ' AND '
+SQL_WHERE = ' WHERE '
+TECH_ELEMENT_DATABASE = '科技要素数据库'
+
 
 def _now() -> str:
     return datetime.now(UTC).astimezone().strftime("%Y-%m-%d %H:%M:%S")
@@ -160,7 +170,7 @@ class WorkflowRepository:
                 "name": "2026-07-14 数据更新",
                 "updateDate": "2026-07-14",
                 "dataWindow": "2026-07-13 02:00—2026-07-14 02:00",
-                "source": "科技要素数据库",
+                "source": TECH_ELEMENT_DATABASE,
                 "trigger": "每日定时更新",
                 "input": 25140,
                 "entities": 8426,
@@ -177,7 +187,7 @@ class WorkflowRepository:
                 "name": "2026-07-13 数据更新",
                 "updateDate": "2026-07-13",
                 "dataWindow": "2026-07-12 02:00—2026-07-13 02:00",
-                "source": "科技要素数据库",
+                "source": TECH_ELEMENT_DATABASE,
                 "trigger": "每日定时更新",
                 "input": 23876,
                 "entities": 7981,
@@ -343,7 +353,7 @@ class WorkflowRepository:
         raw = [
             ("source", "数据接入", "数据处理", "读取业务域增量数据"),
             ("normalize", "清洗标准化", "数据处理", "执行字段、枚举和字典标准化"),
-            ("schema", "Schema 映射", "图谱构建", "映射实体、关系与属性 Schema"),
+            ("schema", SCHEMA_MAPPING_LABEL, "图谱构建", "映射实体、关系与属性 Schema"),
             ("extract", "实体关系抽取", "图谱构建", "运行领域专属实体/关系工作流"),
             ("align", "实体对齐消歧", "图谱构建", "候选实体与存量图谱召回、消歧与合并"),
             ("validate", "质量校验", "图谱构建", "执行置信度、证据与唯一性校验"),
@@ -426,7 +436,7 @@ class WorkflowRepository:
                 "李晓峰 / Li Xiaofeng",
                 "候选专家实体",
                 "实体对齐",
-                "专家基本信息表",
+                EXPERT_BASIC_INFO_TABLE,
                 "单任务执行失败",
                 "执行出错",
                 "align",
@@ -440,7 +450,7 @@ class WorkflowRepository:
                 "张明远",
                 "科技专家",
                 "新增实体",
-                "专家基本信息表",
+                EXPERT_BASIC_INFO_TABLE,
                 "",
                 "执行完成",
                 None,
@@ -456,7 +466,7 @@ class WorkflowRepository:
                 "新增关系",
                 "实体主题关联表",
                 "低置信度",
-                "等待人工审核",
+                PENDING_MANUAL_REVIEW,
                 "validate",
                 "0.72",
             ),
@@ -468,9 +478,9 @@ class WorkflowRepository:
                 "张明远 / Zhang Mingyuan",
                 "候选专家实体",
                 "实体合并",
-                "专家基本信息表",
+                EXPERT_BASIC_INFO_TABLE,
                 "实体冲突",
-                "等待人工审核",
+                PENDING_MANUAL_REVIEW,
                 "validate",
                 "0.82",
             ),
@@ -484,7 +494,7 @@ class WorkflowRepository:
                 "新增关系",
                 "企业合作记录表",
                 "关系证据不足",
-                "等待人工审核",
+                PENDING_MANUAL_REVIEW,
                 "validate",
                 "0.74",
             ),
@@ -496,9 +506,9 @@ class WorkflowRepository:
                 "重复论文成果记录",
                 "论文成果",
                 "记录去重",
-                "论文成果表",
+                PAPER_ACHIEVEMENT_TABLE,
                 "唯一性冲突",
-                "等待人工审核",
+                PENDING_MANUAL_REVIEW,
                 "validate",
                 "0.69",
             ),
@@ -507,10 +517,10 @@ class WorkflowRepository:
                 "数据处理",
                 "属性",
                 "论文",
-                "论文标题缺失",
+                PAPER_TITLE_MISSING,
                 "论文成果",
                 "属性补全",
-                "论文成果表",
+                PAPER_ACHIEVEMENT_TABLE,
                 "必填缺失",
                 "执行完成",
                 None,
@@ -524,7 +534,7 @@ class WorkflowRepository:
                 "陈卓 / Chen Zhuo",
                 "科技专家",
                 "实体合并",
-                "专家基本信息表",
+                EXPERT_BASIC_INFO_TABLE,
                 "低置信度",
                 "执行完成",
                 None,
@@ -563,11 +573,9 @@ class WorkflowRepository:
                     "rule": review_type or "领域图谱质量规则",
                     "confidence": confidence,
                     "result": "等待人工确认" if blocking else "任务已完成并产生可验收结果",
-                    "status": "待人工处理" if status == "等待人工审核" else "已完成",
+                    "status": "待人工处理" if status == PENDING_MANUAL_REVIEW else "已完成",
                     "taskStatus": status,
-                    "dataDomain": f"{domain}域"
-                    if domain not in {"企业", "专利"}
-                    else f"{domain}域",
+                    "dataDomain": f"{domain}域",
                     "processedAt": f"2026-07-{13 if batch_id.endswith('13') else 14} 10:{8 + index:02d}:00",
                     "reviewType": review_type or None,
                     "currentStep": next(
@@ -606,7 +614,7 @@ class WorkflowRepository:
                 "",
                 "张建图",
                 "大模型抽取",
-                "论文成果表",
+                PAPER_ACHIEVEMENT_TABLE,
                 "P202607140326",
                 "抽取流程异常",
             ),
@@ -620,10 +628,10 @@ class WorkflowRepository:
                 "来源字段无法映射到 Organization.org_category",
                 "",
                 "张建图",
-                "Schema 映射",
+                SCHEMA_MAPPING_LABEL,
                 "企业基本信息表",
                 "ORG_4403018892",
-                "Schema 映射",
+                SCHEMA_MAPPING_LABEL,
             ),
             (
                 "PI-20260714-0103",
@@ -651,7 +659,7 @@ class WorkflowRepository:
                 "0.81",
                 "王审核",
                 "实体对齐消歧",
-                "专家基本信息表",
+                EXPERT_BASIC_INFO_TABLE,
                 "EXPERT-20566",
                 "实体对齐异常",
             ),
@@ -668,7 +676,7 @@ class WorkflowRepository:
                 "关系校验",
                 "实体主题关联表",
                 "TOPIC-DIGITAL-040",
-                "结果低于阈值",
+                RESULT_BELOW_THRESHOLD,
             ),
             (
                 "PI-20260714-0004",
@@ -681,9 +689,9 @@ class WorkflowRepository:
                 "0.82",
                 "王审核",
                 "Schema 实体分类",
-                "专家基本信息表",
+                EXPERT_BASIC_INFO_TABLE,
                 "EXPERT-20418",
-                "结果低于阈值",
+                RESULT_BELOW_THRESHOLD,
             ),
             (
                 "PI-20260714-0005",
@@ -698,7 +706,7 @@ class WorkflowRepository:
                 "关系证据校验",
                 "企业合作记录表",
                 "COOP-89321-A",
-                "结果低于阈值",
+                RESULT_BELOW_THRESHOLD,
             ),
             (
                 "PI-20260714-0007",
@@ -711,13 +719,13 @@ class WorkflowRepository:
                 "0.69",
                 "李质量",
                 "唯一性校验",
-                "论文成果表",
+                PAPER_ACHIEVEMENT_TABLE,
                 "P202607130089",
                 "数据质量",
             ),
             (
                 "PI-20260714-0010",
-                "论文标题缺失",
+                PAPER_TITLE_MISSING,
                 "论文",
                 "论文源记录",
                 "《知识图谱增量构建方法研究》",
@@ -726,7 +734,7 @@ class WorkflowRepository:
                 "0.93",
                 "李质量",
                 "必填校验",
-                "论文成果表",
+                PAPER_ACHIEVEMENT_TABLE,
                 "P202607130068",
                 "数据质量",
             ),
@@ -741,9 +749,9 @@ class WorkflowRepository:
                 "0.72",
                 "陈治理",
                 "实体结果校验",
-                "专家基本信息表",
+                EXPERT_BASIC_INFO_TABLE,
                 "EXPERT-19882",
-                "结果低于阈值",
+                RESULT_BELOW_THRESHOLD,
             ),
         ]
         completed = {"PI-20260714-0010", "PI-20260713-0008"}
@@ -770,7 +778,7 @@ class WorkflowRepository:
                     "id": item_id,
                     "batch": "UPD-20260713" if "20260713" in item_id else "UPD-20260714",
                     "module": "数据处理"
-                    if review_type in {"论文唯一性冲突", "论文标题缺失", "专利状态标准化失败"}
+                    if review_type in {"论文唯一性冲突", PAPER_TITLE_MISSING, "专利状态标准化失败"}
                     else "图谱构建",
                     "node": node,
                     "type": review_type,
@@ -837,7 +845,7 @@ class WorkflowRepository:
             params.append(filters["end_time"])
         sql = "SELECT payload FROM tasks"
         if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
+            sql += SQL_WHERE + SQL_AND.join(clauses)
         sql += " ORDER BY processed_at DESC"
         with self._connect() as connection:
             items = self._rows(connection.execute(sql, params))
@@ -891,7 +899,7 @@ class WorkflowRepository:
             params.append(filters["end_time"])
         sql = "SELECT payload FROM reviews"
         if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
+            sql += SQL_WHERE + SQL_AND.join(clauses)
         sql += " ORDER BY updated_at DESC"
         with self._connect() as connection:
             items = self._rows(connection.execute(sql, params))
@@ -939,7 +947,7 @@ class WorkflowRepository:
             params.append(until)
         sql = "SELECT payload FROM source_updates"
         if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
+            sql += SQL_WHERE + SQL_AND.join(clauses)
         sql += " ORDER BY detected_at DESC"
         with self._connect() as connection:
             return self._rows(connection.execute(sql, params))
@@ -1054,7 +1062,7 @@ class WorkflowRepository:
         return [
             {
                 "id": "mysql-elements",
-                "name": "科技要素数据库",
+                "name": TECH_ELEMENT_DATABASE,
                 "type": "MySQL",
                 "domain": "综合",
                 "status": "健康",

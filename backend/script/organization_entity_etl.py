@@ -60,6 +60,8 @@ from script.organization_etl_common import (
     to_int,
 )
 
+NULLABLE_STRING_TYPE = 'string NULL'
+
 logger = logging.getLogger("script.organization_entity_etl")
 
 DEFAULT_BATCH_SIZE = 100
@@ -797,24 +799,24 @@ def reconcile_existing_schema(graph: TRSGraphClient) -> None:
     additions: list[tuple[str, str, str, str]] = []
     additions.extend(
         (
-            ("TAG", "Organization", "organization_base", "string NULL"),
-            ("TAG", "Person", "organization_base", "string NULL"),
-            ("TAG", "Project", "extra_json", "string NULL"),
-            ("EDGE", "PARTICIPATES_IN", "extra_json", "string NULL"),
-            ("EDGE", "FUNDED_BY", "extra_json", "string NULL"),
+            ("TAG", "Organization", "organization_base", NULLABLE_STRING_TYPE),
+            ("TAG", "Person", "organization_base", NULLABLE_STRING_TYPE),
+            ("TAG", "Project", "extra_json", NULLABLE_STRING_TYPE),
+            ("EDGE", "PARTICIPATES_IN", "extra_json", NULLABLE_STRING_TYPE),
+            ("EDGE", "FUNDED_BY", "extra_json", NULLABLE_STRING_TYPE),
         )
     )
     for tag in ("Organization", "Person", "News", "Event", "Product"):
         additions.extend(
             (
-                ("TAG", tag, "organization_id", "string NULL"),
+                ("TAG", tag, "organization_id", NULLABLE_STRING_TYPE),
                 ("TAG", tag, "confidence", "double NULL"),
             )
         )
     for edge_type in sorted({spec.edge_type for spec in RELATION_SPECS}):
         additions.extend(
             (
-                ("EDGE", edge_type, "organization_id", "string NULL"),
+                ("EDGE", edge_type, "organization_id", NULLABLE_STRING_TYPE),
                 ("EDGE", edge_type, "confidence", "double NULL"),
             )
         )

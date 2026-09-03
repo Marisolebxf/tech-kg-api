@@ -129,8 +129,10 @@ async def test_topn_via_graph_helpers(monkeypatch):
     assert resp.experts == 1
     assert resp.relations[0].expert_id == "person_x"
     # 标书分析维度：后端真实派生（非空）
-    assert resp.node_impact and "bankruptcy" in resp.node_impact
-    assert resp.trend and "分布平稳" in resp.trend
+    assert resp.node_impact
+    assert 'bankruptcy' in resp.node_impact
+    assert resp.trend
+    assert '分布平稳' in resp.trend
     assert resp.opportunity  # 非空（即便 0 条也有兜底文案）
     # 置信度：风险等级 高 → 0.9；bankruptcy 事件 → 0.9
     assert resp.confidence == 0.9
@@ -217,7 +219,8 @@ def test_derive_analysis_dimensions():
     assert "波及 2 家链上企业" in node_impact
     # 发展趋势：2025+2026 占 2/3 > 50% → 短期热度上升
     assert "短期热度上升" in trend
-    assert "2025" in trend and "2026" in trend
+    assert '2025' in trend
+    assert '2026' in trend
     # 机遇挖掘：financing + news 命中机遇类
     assert "2 条" in opportunity
     assert "financing" in opportunity

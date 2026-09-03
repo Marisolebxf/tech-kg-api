@@ -71,12 +71,19 @@ def source_database_name() -> str:
     return os.getenv("SOURCE_MYSQL_DATABASE") or os.getenv("MYSQL_DATABASE", "gkx")
 
 
+def required_connection_setting(primary: str, fallback: str) -> str:
+    value = os.getenv(primary) or os.getenv(fallback)
+    if not value:
+        raise RuntimeError(f"必须通过 {primary} 或 {fallback} 配置源数据库连接")
+    return value
+
+
 def connect() -> pymysql.Connection:
     load_dotenv()
     return pymysql.connect(
-        host=os.getenv("SOURCE_MYSQL_HOST") or os.getenv("MYSQL_HOST", "183.240.141.251"),
+        host=required_connection_setting("SOURCE_MYSQL_HOST", "MYSQL_HOST"),
         port=int(os.getenv("SOURCE_MYSQL_PORT") or os.getenv("MYSQL_PORT", "3318")),
-        user=os.getenv("SOURCE_MYSQL_USERNAME") or os.getenv("MYSQL_USERNAME", "gkx_reader_zp"),
+        user=required_connection_setting("SOURCE_MYSQL_USERNAME", "MYSQL_USERNAME"),
         password=os.getenv("SOURCE_MYSQL_PASSWORD") or os.getenv("MYSQL_PASSWORD", ""),
         database=source_database_name(),
         charset="utf8mb4",
@@ -93,9 +100,7 @@ def domain_for_table(table_name: str) -> str:
         return "domestic_project"
     if table_name.startswith("ods_en_project"):
         return "foreign_project"
-    if table_name.startswith("dwd_industry_chain") or table_name.startswith(
-        "dwd_org_industry_chain"
-    ):
+    if table_name.startswith(("dwd_industry_chain", "dwd_org_industry_chain")):
         return "industry_chain"
     if table_name.startswith("dwd_org_"):
         return "domestic_organization"
@@ -302,7 +307,7 @@ def write_schema_readme(
             "## 同步命令",
             "",
             "```bash",
-            "SOURCE_MYSQL_HOST=183.240.141.251 \\",
+            "SOURCE_MYSQL_HOST=<数据库地址> \\",
             "SOURCE_MYSQL_PORT=3318 \\",
             "SOURCE_MYSQL_DATABASE=gkx \\",
             "SOURCE_MYSQL_USERNAME=gkx_reader_zp \\",

@@ -57,17 +57,17 @@ def _raise_domain_error(exc: SchemaManagementError) -> None:
     raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
-@router.get("/overview", response_model=ApiResponse)
+@router.get("/overview")
 def get_schema_overview(session: Annotated[Session, Depends(get_session)]) -> ApiResponse:
     return ApiResponse(data=_application(session).overview())
 
 
-@router.get("/source-tables", response_model=ApiResponse)
+@router.get("/source-tables")
 def list_source_tables(session: Annotated[Session, Depends(get_session)]) -> ApiResponse:
     return ApiResponse(data=_application(session).list_source_tables())
 
 
-@router.get("/schemas", response_model=ApiResponse)
+@router.get("/schemas")
 def list_schemas(
     admin: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
@@ -89,7 +89,7 @@ def list_schemas(
     return ApiResponse(data=data)
 
 
-@router.get("/schemas/topology", response_model=ApiResponse)
+@router.get("/schemas/topology")
 def get_schema_topology(
     admin: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
@@ -102,7 +102,7 @@ def get_schema_topology(
     )
 
 
-@router.get("/schemas/{schema_id}", response_model=ApiResponse)
+@router.get("/schemas/{schema_id}")
 def get_schema_detail(
     schema_id: str,
     admin: CurrentAdmin,
@@ -120,7 +120,7 @@ def get_schema_detail(
         _raise_domain_error(exc)
 
 
-@router.post("/schemas/entities", response_model=ApiResponse, status_code=201)
+@router.post("/schemas/entities", status_code=201)
 def create_entity_schema(
     admin: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
@@ -136,7 +136,7 @@ def create_entity_schema(
         _raise_domain_error(exc)
 
 
-@router.post("/schemas/relations", response_model=ApiResponse, status_code=201)
+@router.post("/schemas/relations", status_code=201)
 def create_relation_schema(
     admin: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
@@ -152,7 +152,7 @@ def create_relation_schema(
         _raise_domain_error(exc)
 
 
-@router.delete("/schemas/{schema_id}", response_model=ApiResponse)
+@router.delete("/schemas/{schema_id}")
 def delete_schema(
     schema_id: str,
     admin: CurrentAdmin,
@@ -169,7 +169,7 @@ def delete_schema(
         _raise_domain_error(exc)
 
 
-@router.put("/schemas/{schema_id}/script", response_model=ApiResponse)
+@router.put("/schemas/{schema_id}/script")
 def replace_schema_script(
     schema_id: str,
     admin: CurrentAdmin,
@@ -197,7 +197,7 @@ def _format_sse(event: dict[str, Any]) -> bytes:
 _SENTINEL = object()
 
 
-@router.post("/schemas/{schema_id}/script/verify")
+@router.post("/schemas/{schema_id}/script/verify", responses={500: {"description": "服务内部错误"}})
 async def verify_and_save_script(
     schema_id: str,
     admin: CurrentAdmin,
@@ -282,7 +282,7 @@ async def verify_and_save_script(
     )
 
 
-@router.get("/schemas/{schema_id}/script/content", response_model=ApiResponse)
+@router.get("/schemas/{schema_id}/script/content")
 def get_schema_script_content(
     schema_id: str,
     session: Annotated[Session, Depends(get_session)],

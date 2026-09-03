@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 
 from infra.llm import LLMClient
 
+LLM_RESPONSE_FORMAT_ERROR = 'LLM 返回格式异常'
+
 
 @dataclass
 class ScriptSecurityVerdict:
@@ -57,7 +59,7 @@ def _parse_verdict(raw: str) -> ScriptSecurityVerdict:
         return ScriptSecurityVerdict(
             safe=False,
             issues=["LLM 返回格式异常：未找到 JSON"],
-            summary="LLM 返回格式异常",
+            summary=LLM_RESPONSE_FORMAT_ERROR,
         )
     try:
         data = json.loads(match.group(0))
@@ -65,13 +67,13 @@ def _parse_verdict(raw: str) -> ScriptSecurityVerdict:
         return ScriptSecurityVerdict(
             safe=False,
             issues=["LLM 返回格式异常：JSON 解析失败"],
-            summary="LLM 返回格式异常",
+            summary=LLM_RESPONSE_FORMAT_ERROR,
         )
     if not isinstance(data, dict):
         return ScriptSecurityVerdict(
             safe=False,
             issues=["LLM 返回格式异常：根节点不是对象"],
-            summary="LLM 返回格式异常",
+            summary=LLM_RESPONSE_FORMAT_ERROR,
         )
     safe = data.get("safe")
     issues = data.get("issues", [])
@@ -80,7 +82,7 @@ def _parse_verdict(raw: str) -> ScriptSecurityVerdict:
         return ScriptSecurityVerdict(
             safe=False,
             issues=["LLM 返回格式异常：safe 字段缺失或非布尔"],
-            summary="LLM 返回格式异常",
+            summary=LLM_RESPONSE_FORMAT_ERROR,
         )
     if not isinstance(issues, list) or not all(isinstance(i, str) for i in issues):
         issues = []

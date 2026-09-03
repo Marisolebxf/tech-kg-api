@@ -101,7 +101,8 @@ def test_event_and_business_idempotency():
     same_event = svc.create_review_required(report(), "graph-build")
     same_business = svc.create_review_required(report(event="evt-2"), "graph-build")
     assert first["reviewId"] == same_event["reviewId"] == same_business["reviewId"]
-    assert same_event["duplicate"] is True and same_business["duplicate"] is True
+    assert same_event['duplicate'] is True
+    assert same_business['duplicate'] is True
 
 
 def test_batch_requires_p0():

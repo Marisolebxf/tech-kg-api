@@ -12,6 +12,8 @@ import os
 
 import httpx
 
+PANORAMA_QUERY_PATH = '/api/v1/kg-construction/industry-chain-panorama/query'
+
 logger = logging.getLogger(__name__)
 
 # 预热用的固定入参（与 JMeter 压测计划一致；用真实存在的 ID 以返回 200+success）。
@@ -54,15 +56,15 @@ _PREWARM_CASES: list[tuple[str, dict]] = [
     ("/api/v1/kg-service/key-enterprise-relation", {"expert_id": "person_855924f1"}),
     ("/api/v1/kg-service/industry-node-top-events", {"chain_node_id": "IC0007007", "top_n": 10}),
     (
-        "/api/v1/kg-construction/industry-chain-panorama/query",
+        PANORAMA_QUERY_PATH,
         {"dataSource": "all", "industry": "", "depth": 2, "topK": 5},
     ),
     (
-        "/api/v1/kg-construction/industry-chain-panorama/query",
+        PANORAMA_QUERY_PATH,
         {"dataSource": "all", "industry": "人工智能", "depth": 2, "topK": 5},
     ),
     (
-        "/api/v1/kg-construction/industry-chain-panorama/query",
+        PANORAMA_QUERY_PATH,
         {"dataSource": "all", "industry": "集成电路", "depth": 1, "topK": 3},
     ),
 ]
@@ -76,7 +78,7 @@ async def prewarm_business(app: object) -> None:
         for path, body in _PREWARM_CASES:
             try:
                 # ASGI transport 按路径路由，URL 需带 scheme/host（httpx 要求完整 URL）
-                resp = await client.post(f"http://prewarm{path}", json=body)
+                resp = await client.post(f"https://prewarm{path}", json=body)
                 logger.info("prewarm %s -> %s", path, resp.status_code)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("prewarm %s 失败: %s", path, exc)

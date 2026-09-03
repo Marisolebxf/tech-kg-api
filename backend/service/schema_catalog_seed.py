@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+CHAIN_NODE_PRIMARY_KEY = 'chain_code + node_id'
+EXPERT_PERSON_TYPE = 'Expert / Person'
+ORGANIZATION_PERSON_TYPE = 'Organization / Person'
+
 ENTITY_SPECS = [
     (
         "Expert",
@@ -71,7 +75,7 @@ ENTITY_SPECS = [
         "IndustryChainNode",
         "产业链节点",
         True,
-        "chain_code + node_id",
+        CHAIN_NODE_PRIMARY_KEY,
         "dwd_industry_chain_info",
         "产业链的上游、中游、下游及具体环节",
     ),
@@ -167,7 +171,7 @@ ATTRIBUTE_SPECS = {
         "dwd_industry_chain_news_info / dwd_org_important_news_info",
     ),
     "IndustryChainNode": (
-        "chain_code + node_id",
+        CHAIN_NODE_PRIMARY_KEY,
         "node_name, node_type, level, parent_id, node_stage",
         "chain_score",
         "dwd_industry_chain_info",
@@ -189,12 +193,12 @@ ATTRIBUTE_SPECS = {
 FACT_RELATION_SPECS = [
     ("HAS_RESEARCH_FIELD", "专家研究方向", "Expert", "ResearchField", "专家方向拆分、标准化"),
     ("PUBLISH", "发表论文", "Expert", "Paper", "作者对齐后生成，保留作者顺序"),
-    ("WORKS_AT", "任职", "Expert / Person", "Organization", "工作经历抽取机构、职位和时间"),
-    ("STUDY_AT", "就读", "Expert / Person", "Organization", "教育背景抽取学校、专业、学历和时间"),
+    ("WORKS_AT", "任职", EXPERT_PERSON_TYPE, "Organization", "工作经历抽取机构、职位和时间"),
+    ("STUDY_AT", "就读", EXPERT_PERSON_TYPE, "Organization", "教育背景抽取学校、专业、学历和时间"),
     (
         "AFFILIATED_WITH",
         "作者发表时单位",
-        "Expert / Person",
+        EXPERT_PERSON_TYPE,
         "Organization",
         "论文作者单位对齐后生成",
     ),
@@ -205,16 +209,16 @@ FACT_RELATION_SPECS = [
     (
         "SHAREHOLDER_OF",
         "股东关系",
-        "Organization / Person",
+        ORGANIZATION_PERSON_TYPE,
         "Organization",
         "股东名称对齐，保留持股比例",
     ),
     ("SUBSIDIARY_OF", "子公司关系", "Organization", "Organization", "子公司对齐后生成"),
-    ("EXECUTIVE_OF", "高管任职", "Expert / Person", "Organization", "高管姓名、职务和机构对齐"),
+    ("EXECUTIVE_OF", "高管任职", EXPERT_PERSON_TYPE, "Organization", "高管姓名、职务和机构对齐"),
     ("HAS_PRODUCT", "企业拥有产品", "Organization", "Product", "产品拆分、标准化后生成"),
     ("HAS_EVENT", "主体发生事件", "Organization", "Event", "企业与资讯、融资、并购等事件连接"),
     ("LEAD_PROJECT", "主持项目", "Expert", "Project", "项目主持人对齐后生成"),
-    ("PARTICIPATE_IN", "参与项目", "Expert / Person", "Project", "参与者拆分对齐后生成"),
+    ("PARTICIPATE_IN", "参与项目", EXPERT_PERSON_TYPE, "Project", "参与者拆分对齐后生成"),
     ("FUNDED_BY", "项目受资助", "Project", "Organization", "资助机构对齐后生成"),
     (
         "PARTICIPATE_IN_PROJECT",
@@ -227,12 +231,12 @@ FACT_RELATION_SPECS = [
     ("PROJECT_OUTPUT_PAPER", "项目产出论文", "Project", "Paper", "DOI 或 paper_id 对齐"),
     ("PROJECT_OUTPUT_PATENT", "项目产出专利", "Project", "Patent", "专利号或 patent_id 对齐"),
     ("PROJECT_OUTPUT_REPORT", "项目产出报告", "Project", "Report", "报告对齐后生成"),
-    ("INVENT_PATENT", "发明专利", "Expert / Person", "Patent", "发明人对齐后生成"),
-    ("APPLY_PATENT", "申请专利", "Organization / Person", "Patent", "申请人对齐后生成"),
-    ("OWN_PATENT", "拥有专利", "Organization / Person", "Patent", "当前权利人对齐后生成"),
+    ("INVENT_PATENT", "发明专利", EXPERT_PERSON_TYPE, "Patent", "发明人对齐后生成"),
+    ("APPLY_PATENT", "申请专利", ORGANIZATION_PERSON_TYPE, "Patent", "申请人对齐后生成"),
+    ("OWN_PATENT", "拥有专利", ORGANIZATION_PERSON_TYPE, "Patent", "当前权利人对齐后生成"),
     ("PATENT_FIELD", "专利技术方向", "Patent", "ResearchField", "IPC / IPCR / CPC 分类标准化"),
     ("PATENT_CITES", "专利引用", "Patent", "Patent", "被引用专利对齐后生成"),
-    ("AUTHOR_OF_REPORT", "报告作者", "Expert / Person", "Report", "报告作者对齐后生成"),
+    ("AUTHOR_OF_REPORT", "报告作者", EXPERT_PERSON_TYPE, "Report", "报告作者对齐后生成"),
     ("REPORT_ORG", "报告机构", "Report", "Organization", "完成单位对齐后生成"),
     ("REPORT_RELATED_PAPER", "报告关联论文", "Report", "Paper", "相关文献对齐"),
     ("REPORT_RELATED_PROJECT", "报告关联项目", "Report", "Project", "相关项目对齐"),
@@ -251,7 +255,7 @@ FACT_RELATION_SPECS = [
         "产业链包含节点",
         "IndustryChain",
         "IndustryChainNode",
-        "chain_code + node_id",
+        CHAIN_NODE_PRIMARY_KEY,
     ),
     (
         "PARENT_OF",

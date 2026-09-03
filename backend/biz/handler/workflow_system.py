@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import Response
 
 from application.workflow_operations import workflow_operations_application
+from biz.handler import get_cache
 from biz.schemas.common import ApiResponse
 from biz.schemas.workflow_operations import (
     ScheduleStateRequest,
@@ -26,16 +28,25 @@ async def workflow_health() -> ApiResponse:
 
 
 @router.get("/definitions", response_model=ApiResponse)
-async def list_definitions() -> ApiResponse:
+async def list_definitions(request: Request) -> Response:
+    cached = get_cache.try_get("workflow:definitions", request)
+    if cached is not None:
+        return cached
     items = service.repo.list_definitions()
-    return ApiResponse(data={"items": items, "total": len(items)})
+    return get_cache.store(
+        "workflow:definitions",
+        request,
+        ApiResponse(data={"items": items, "total": len(items)}).model_dump(),
+    )
 
 
 @router.post("/definitions", response_model=ApiResponse)
 async def create_definition(request: WorkflowDefinitionRequest) -> ApiResponse:
-    return ApiResponse(
+    result = ApiResponse(
         data=service.create_definition(request.model_dump()), msg="自定义工作流定义已保存"
     )
+    get_cache.invalidate("workflow:definitions")
+    return result
 
 
 @router.post("/definitions/python", response_model=ApiResponse)
@@ -56,6 +67,7 @@ async def upload_python_definition(
             name,
             timeout_seconds=timeout_seconds,
         )
+        get_cache.invalidate("workflow:definitions")
         return ApiResponse(data=definition, msg="Python 工作流脚本已上传并完成校验")
     except (UnicodeDecodeError, SyntaxError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

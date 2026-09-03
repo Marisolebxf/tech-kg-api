@@ -14,9 +14,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from biz.handler import get_cache
 from biz.schemas.common import ApiResponse
 from infra.graph_db import TRSGraphClient, get_trs_graph_client
 from infra.graph_db.config import TRSGraphSettings
@@ -640,18 +642,31 @@ async def list_spaces() -> ApiResponse:
 
 @router.get("/stats", response_model=ApiResponse)
 async def get_stats(
+    request: Request,
     space: str | None = Query(None, description="图空间"),
     refresh: bool = Query(False, description="强制重新统计，忽略缓存"),
-) -> ApiResponse:
+) -> Response:
     """图统计：各标签节点数 + 各边类型边数（前端仪表盘用）。
 
     结果按空间缓存 5 分钟：底层 count 是全量扫描，实时统计一次要几十秒。
+    外层再套 GET 结果缓存（命中返回预序列化 JSON，跳过序列化开销）；
+    ``refresh=true`` 表示调用方要最新数据，跳过外层缓存且不写入。
     """
+    if not refresh:
+        cached = get_cache.try_get("graph-search:stats", request)
+        if cached is not None:
+            return cached
     try:
         data = await _load_stats(space, refresh=refresh)
-        return ApiResponse(data=data)
+        payload = ApiResponse(data=data)
     except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+        payload = ApiResponse(code=500, success=False, msg=str(exc))
+    if refresh:
+        return Response(
+            content=json.dumps(payload.model_dump(), ensure_ascii=False),
+            media_type="application/json",
+        )
+    return get_cache.store("graph-search:stats", request, payload.model_dump())
 
 
 async def _load_stats(space: str | None, *, refresh: bool) -> dict[str, Any]:

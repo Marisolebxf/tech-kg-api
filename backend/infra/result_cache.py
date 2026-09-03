@@ -30,3 +30,9 @@ def set_cached_json(key: str, json_str: str) -> None:
 
 def clear() -> None:
     _store.clear()
+
+
+def discard_prefix(prefix: str) -> None:
+    """按键前缀清除缓存（写接口修改数据后让对应 GET 列表立即失效）。"""
+    for key in [k for k in _store if k.split("?", 1)[0] == prefix]:
+        _store.pop(key, None)

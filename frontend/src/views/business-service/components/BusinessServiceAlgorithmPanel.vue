@@ -22,7 +22,6 @@ import {
   type IndustryChainPanoramaQueryResponse,
   type PanoramaGraphEdge,
   type PanoramaGraphNode,
-  type PanoramaKeyEntity,
 } from "../../../api/industryChainPanorama";
 import {
   queryExpertDirectRelation,
@@ -235,6 +234,44 @@ const disableFutureMonth = (value: Date) =>
 const MAX_PARAMETER_LENGTH = 64;
 const MAX_SCHOOL_LENGTH = 100;
 const PANORAMA_TOP_K_MAX = 20;
+const SUMMARY_DISPLAY_MAX = 15;
+
+function charLength(value: string): number {
+  return Array.from(value).length;
+}
+
+function sliceChars(value: string, count: number): string {
+  return Array.from(value).slice(0, Math.max(count, 0)).join("");
+}
+
+function compactSummaryText(
+  value: string | null | undefined,
+  maxLength = SUMMARY_DISPLAY_MAX,
+  suffix = "",
+): string {
+  const normalized = (value ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized) return suffix || "—";
+  if (charLength(normalized) + charLength(suffix) <= maxLength) {
+    return `${normalized}${suffix}`;
+  }
+
+  const budget = maxLength - charLength(suffix);
+  if (budget <= 0) return sliceChars(suffix, maxLength);
+
+  for (const delimiter of ["｜", "、", "，", ",", "；", ";", "（", "(", "/", "·", " "]) {
+    const index = normalized.indexOf(delimiter);
+    if (index <= 0) continue;
+    const head = normalized.slice(0, index).trim();
+    if (!head) continue;
+    if (charLength(head) + 1 <= budget) {
+      return `${head}…${suffix}`;
+    }
+  }
+
+  if (budget <= 1) return `${sliceChars(normalized, budget)}${suffix}`;
+  return `${sliceChars(normalized, budget - 1)}…${suffix}`;
+}
+
 /** 标识类字段（专家 ID、节点 VID）：不允许空格与 !@#￥%& 等异常符号。 */
 const identifierPattern = /^[\w\u4e00-\u9fff·.\-]+$/u;
 /** 关键词类字段（机构、产业）：额外允许空格、括号、顿号和斜杠。 */
@@ -1818,16 +1855,10 @@ function computePanoramaSummaryRows(
   const layerLabel = (key: PanoramaLayerKey) => {
     const layer = resp.layers.find((l) => l.key === key);
     if (!layer) return "—";
-    if (!layer.items.length) return `${layer.title} · 0`;
-    const names = layer.items
-      .slice(0, 1)
-      .map((item: PanoramaKeyEntity) => item.label)
-      .join("、");
-    const suffix =
-      layer.items.length > 1
-        ? ` 等 ${layer.total} 项`
-        : ` · 共 ${layer.total} 项`;
-    return `${names}${suffix}`;
+    if (!layer.items.length) return "0项";
+    const lead = layer.items[0]?.label || layer.title;
+    const suffix = layer.total > 1 ? `等${layer.total}项` : `${layer.total}项`;
+    return compactSummaryText(lead, SUMMARY_DISPLAY_MAX, suffix);
   };
   const industry =
     resp.summary.industry ||
@@ -1843,12 +1874,12 @@ function computePanoramaSummaryRows(
     (l) => l.key === ("core_technology" as PanoramaLayerKey),
   );
   const overrides = new Map<string, string>([
-    ["产业链名称", industry],
+    ["产业链名称", compactSummaryText(industry)],
     ["展开层级", `第 ${depthValue} 跳（topK=${topKValue}）`],
     [
       "核心环节",
       coreSegment && coreSegment.items.length
-        ? coreSegment.items[0].label
+        ? compactSummaryText(coreSegment.items[0].label)
         : "—",
     ],
     ["关键技术", layerLabel("core_technology")],
@@ -1857,13 +1888,15 @@ function computePanoramaSummaryRows(
     ["产业动态事件", layerLabel("flagship_achievement")],
     [
       "图谱规模",
-      `子图 ${resp.graph.nodes.length} 个节点｜${resp.graph.edges.length} 条关系（全库 ${resp.summary.totalNodes}｜${resp.summary.totalEdges}）`,
+      compactSummaryText(
+        `子图${resp.graph.nodes.length}点${resp.graph.edges.length}边，全库${resp.summary.totalNodes}点${resp.summary.totalEdges}边`,
+      ),
     ],
     ["动态更新", updateStatus.value],
   ]);
   return props.moduleInfo.summaryRows.map((row) => {
     const overrideValue = overrides.get(row.label);
-    return [row.label, overrideValue ?? row.value] as const;
+    return [row.label, compactSummaryText(overrideValue ?? row.value)] as const;
   });
 }
 
@@ -2050,33 +2083,29 @@ function computeExpertDirectSummaryRows(
     );
   }
   {
-    const expertALabel = [
-      item.expertA.name,
-      item.expertA.title,
-      item.expertA.organization,
-    ]
-      .filter(Boolean)
-      .join("｜");
-    const expertBLabel = [
-      item.expertB.name,
-      item.expertB.title,
-      item.expertB.organization,
-    ]
-      .filter(Boolean)
-      .join("｜");
+    const expertALabel = compactSummaryText(
+      [item.expertA.name, item.expertA.title, item.expertA.organization]
+        .filter(Boolean)
+        .join("｜"),
+    );
+    const expertBLabel = compactSummaryText(
+      [item.expertB.name, item.expertB.title, item.expertB.organization]
+        .filter(Boolean)
+        .join("｜"),
+    );
     const reasonText = item.reasonTags?.length
-      ? item.reasonTags.join("、")
+      ? compactSummaryText(item.reasonTags.join("、"))
       : "—";
     overrides.set("专家 A", expertALabel || "—");
     overrides.set("专家 B", expertBLabel || "—");
     overrides.set(
       "直接关系类型",
-      item.relationSummary || item.relationType || "—",
+      compactSummaryText(item.relationSummary || item.relationType || "—"),
     );
-    overrides.set("关系发生时间", item.lastUpdatedAt || "—");
-    overrides.set("交互场景", item.institution || "合作关系");
+    overrides.set("关系发生时间", compactSummaryText(item.lastUpdatedAt || "—"));
+    overrides.set("交互场景", compactSummaryText(item.institution || "合作关系"));
     overrides.set("关系数量", `${resp.total ?? resp.items.length} 条`);
-    overrides.set("相关成果", `共同论文 ${item.coPaperCount} 篇`);
+    overrides.set("相关成果", compactSummaryText(`共同论文${item.coPaperCount}篇`));
     overrides.set("代表成果", reasonText);
     overrides.set(
       "关系置信度",
@@ -2085,7 +2114,7 @@ function computeExpertDirectSummaryRows(
   }
   return props.moduleInfo.summaryRows.map((row) => {
     const overrideValue = overrides.get(row.label);
-    return [row.label, overrideValue ?? row.value] as const;
+    return [row.label, compactSummaryText(overrideValue ?? row.value)] as const;
   });
 }
 

@@ -105,7 +105,6 @@ def test_request_schema_does_not_expose_data_source():
     assert "dataSource" not in schema["properties"]
 
 
-
 @pytest.mark.parametrize(
     ("expert_a_id", "expert_b_id"),
     [
@@ -128,9 +127,7 @@ def test_expert_ids_accept_the_same_characters_as_colleague_relation(
 
 @pytest.mark.parametrize("field", ["expertAId", "expertBId"])
 @pytest.mark.parametrize("invalid_id", ["person A", "person@A", " person_A", "person_A\n"])
-def test_expert_ids_reject_whitespace_and_abnormal_characters(
-    field: str, invalid_id: str
-):
+def test_expert_ids_reject_whitespace_and_abnormal_characters(field: str, invalid_id: str):
     payload = {"expertAId": "person_A", "expertBId": "person_B"}
     payload[field] = invalid_id
 

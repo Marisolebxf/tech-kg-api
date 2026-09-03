@@ -6,7 +6,8 @@ import { http } from './http'
  * @param params 请求参数
  * @param timeout 超时（ms），业务编排可能多跳查图，默认 60s
  *
- * baseURL 已为 /api，dev 由 vite 代理到 VITE_API_TARGET，生产由 nginx 代理到后端。
+ * baseURL 为相对路径 ./api（可被 VITE_API_BASE 覆盖），dev 由 vite 代理到 VITE_API_TARGET，
+ * 生产由 nginx 代理到后端；网关子路径部署时浏览器按页面 URL 解析出带前缀的请求。
  */
 export async function invokeKgService(
   endpoint: string,

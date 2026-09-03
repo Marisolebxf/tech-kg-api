@@ -1,6 +1,10 @@
 export const INDIRECT_CORE_NODE_ID_MAX_LENGTH = 64;
+export const INDIRECT_CORE_NODE_ID_ERROR =
+  "不能包含空格或 !@#￥%& 等异常字符";
 export const INDIRECT_PATH_DEPTH_ERROR = "路径分析深度只能填写 2 或 3";
 export const INDIRECT_MIN_STRENGTH_ERROR = "最小关联强度必须在 0-1 范围内";
+
+const indirectCoreNodeIdPattern = /^[\w\u4e00-\u9fff·.\-]+$/u;
 
 export interface ExpertIndirectFormValues {
   core_node_id?: string;
@@ -24,9 +28,13 @@ export interface ExpertIndirectValidationResult {
 }
 
 export function indirectCoreNodeIdError(value: string): string | null {
-  return value.length > INDIRECT_CORE_NODE_ID_MAX_LENGTH
-    ? `输入长度不能超过 ${INDIRECT_CORE_NODE_ID_MAX_LENGTH} 个字符`
-    : null;
+  if (value.length > INDIRECT_CORE_NODE_ID_MAX_LENGTH) {
+    return `输入长度不能超过 ${INDIRECT_CORE_NODE_ID_MAX_LENGTH} 个字符`;
+  }
+  if (value && !indirectCoreNodeIdPattern.test(value)) {
+    return INDIRECT_CORE_NODE_ID_ERROR;
+  }
+  return null;
 }
 
 export function indirectPathDepthError(value: string): string | null {

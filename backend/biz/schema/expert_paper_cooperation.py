@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-EXPERT_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
+EXPERT_ID_PATTERN = r"^[\w\u4e00-\u9fff·.\-]+$"
 DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 
 
@@ -25,14 +25,14 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
         min_length=1,
         max_length=64,
         pattern=EXPERT_ID_PATTERN,
-        description="专家A唯一标识，仅支持字母、数字、下划线和中划线。",
+        description="专家 A 的 VID、scholar_id、source_record_id 或精确姓名。",
     )
     expertBId: str = Field(
         ...,
         min_length=1,
         max_length=64,
         pattern=EXPERT_ID_PATTERN,
-        description="专家B唯一标识，仅支持字母、数字、下划线和中划线。",
+        description="专家 B 的 VID、scholar_id、source_record_id 或精确姓名。",
     )
     startTime: str | None = Field(default=None, description="统计开始时间，格式 YYYY-MM-DD。")
     endTime: str | None = Field(default=None, description="统计结束时间，格式 YYYY-MM-DD。")
@@ -42,11 +42,14 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
     def normalize_expert_id(cls, value: str) -> str:
         if value is None:
             return value
-        value = str(value).strip()
+        value = str(value)
+        if re.search(r"\s", value):
+            raise ValueError("专家标识不能包含空格或 !@#￥%& 等异常字符")
+        value = value.strip()
         if len(value) > 64:
             raise ValueError("专家标识长度不能超过 64 个字符")
         if value and not re.fullmatch(EXPERT_ID_PATTERN, value):
-            raise ValueError("专家标识输入字符存在异常字符，仅支持字母、数字、下划线和中划线")
+            raise ValueError("专家标识不能包含空格或 !@#￥%& 等异常字符")
         return value
 
     @field_validator("startTime", "endTime", mode="before")

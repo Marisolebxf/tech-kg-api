@@ -325,13 +325,13 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技专家论文合作关系服务通过分析知识图谱中科技专家发表的学术论文数据，提取论文的作者列表、作者单位、合作发表时间、论文主题等信息，运用作者关联与合作频次算法，构建专家之间的论文合作关系。服务会统计专家之间的合作论文数量、合作发表的期刊或会议级别、论文被引情况，分析合作论文的研究方向与共同贡献，同时识别长期稳定的论文合作团队与核心合作人员，为研究学术合作网络与专家学术影响力提供依据。',
     requestFields: [
-      { name: 'expertAId', type: 'string', required: '是', maxLength: 64, description: '专家 A 唯一标识，最多 64 个字符' },
-      { name: 'expertBId', type: 'string', required: '是', maxLength: 64, description: '专家 B 唯一标识，最多 64 个字符' },
-      { name: 'startTime', type: 'date', required: '否', placeholder: '选填，格式 YYYY-MM-DD，如 2021-01-01', description: '统计开始时间，格式 YYYY-MM-DD，不能晚于当前日期' },
-      { name: 'endTime', type: 'date', required: '否', placeholder: '选填，格式 YYYY-MM-DD，如 2026-08-31', description: '统计结束时间，格式 YYYY-MM-DD，不能晚于当前日期' },
+      { name: 'expertAId', type: 'string', required: '是', maxLength: 64, description: '专家 A 唯一标识，最多 64 个字符，不能包含空格或 !@#￥%& 等异常字符' },
+      { name: 'expertBId', type: 'string', required: '是', maxLength: 64, description: '专家 B 唯一标识，最多 64 个字符，不能包含空格或 !@#￥%& 等异常字符' },
+      { name: 'startTime', type: 'month', required: '否', placeholder: '请选择年月', description: '统计开始月份，格式 YYYY-MM；与结束月份同时填写，不能晚于当前月份' },
+      { name: 'endTime', type: 'month', required: '否', placeholder: '请选择年月', description: '统计结束月份，格式 YYYY-MM；与开始月份同时填写，不能晚于当前月份' },
     ],
     responseFields: commonResponseFields,
-    requestExample: { expertAId: 'person_121d48631f434f4d323ba521d33032ad', expertBId: 'person_42914016fe8d6e0e1d01dad5845c47e6', startTime: '2021-01-01', endTime: '2026-08-31' },
+    requestExample: { expertAId: 'person_121d48631f434f4d323ba521d33032ad', expertBId: 'person_42914016fe8d6e0e1d01dad5845c47e6', startTime: '2021-01', endTime: '2026-08' },
     responseExample: { structuredResult: { cooperationPaperCount: 0, citation: { total: 0, max: 0 }, stableTeamMembers: [], paperTopics: [] } },
     resultRows: [
       { label: '合作论文', value: '14', tone: 'blue' },

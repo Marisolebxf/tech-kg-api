@@ -16,4 +16,13 @@ describe('serviceModules', () => {
 
     expect(field?.maxLength).toBe(64)
   })
+
+  it('uses month calendars for paper cooperation start and end times', () => {
+    const module = serviceModules.find((item) => item.key === 'paper-cooperation')
+    const startTime = module?.requestFields.find((item) => item.name === 'startTime')
+    const endTime = module?.requestFields.find((item) => item.name === 'endTime')
+
+    expect(startTime?.type).toBe('month')
+    expect(endTime?.type).toBe('month')
+  })
 })

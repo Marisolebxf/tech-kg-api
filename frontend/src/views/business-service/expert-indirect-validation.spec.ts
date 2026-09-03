@@ -24,6 +24,18 @@ describe("科技单节点间接关系参数校验", () => {
       "输入长度不能超过 64 个字符",
     ],
     [
+      "core_node_id 包含异常字符",
+      { core_node_id: "!#@!@#" },
+      "core_node_id",
+      "不能包含空格或 !@#￥%& 等异常字符",
+    ],
+    [
+      "core_node_id 包含空格",
+      { core_node_id: "person 123" },
+      "core_node_id",
+      "不能包含空格或 !@#￥%& 等异常字符",
+    ],
+    [
       "未选择 relation_types",
       { relation_types: "" },
       "relation_types",
@@ -99,19 +111,9 @@ describe("科技单节点间接关系参数校验", () => {
     expect(result.errors[field]).toBe(message);
   });
 
-  it("将 core_node_id 异常字符交给后端做最终校验", () => {
-    const result = validateExpertIndirectParameters({
-      ...validValues,
-      core_node_id: "!#@!@#",
-    });
-
-    expect(result.errors).toEqual({});
-    expect(result.payload?.core_node_id).toBe("!#@!@#");
-  });
-
   it("为可选参数应用默认值", () => {
     const result = validateExpertIndirectParameters({
-      core_node_id: " 4G7t0B0t ",
+      core_node_id: "4G7t0B0t",
       relation_types: "学术关联",
     });
 

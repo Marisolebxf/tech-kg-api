@@ -230,7 +230,6 @@ const queryFeedbackTitle = computed(() =>
     : "查询失败",
 );
 const currentMonth = dayjs().format("YYYY-MM");
-const currentDate = dayjs().format("YYYY-MM-DD");
 const disableFutureMonth = (value: Date) =>
   dayjs(value).isAfter(dayjs(), "month");
 const MAX_PARAMETER_LENGTH = 64;
@@ -248,16 +247,6 @@ function identifierError(value: string): string | null {
     return `输入长度不能超过 ${MAX_PARAMETER_LENGTH} 个字符`;
   if (value && !identifierPattern.test(value)) {
     return "不能包含空格或 !@#￥%& 等异常字符";
-  }
-  return null;
-}
-
-const paperCooperationExpertIdPattern = /^[A-Za-z0-9_-]+$/;
-
-function paperCooperationExpertIdError(value: string): string | null {
-  if (value.length > 64) return "输入长度不能超过 64 个字符";
-  if (value && !paperCooperationExpertIdPattern.test(value)) {
-    return "输入字符存在异常字符，仅支持字母、数字、下划线和中划线";
   }
   return null;
 }
@@ -316,7 +305,7 @@ function parameterFieldError(fieldName: string, value: string): string | null {
     isPaperCooperation.value &&
     (fieldName === "expertAId" || fieldName === "expertBId")
   ) {
-    return paperCooperationExpertIdError(value);
+    return identifierError(value);
   }
   if (
     isLiveColleague.value &&
@@ -2884,7 +2873,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         ["expertAId", expertAIdRaw],
         ["expertBId", expertBIdRaw],
       ] as const) {
-        const error = paperCooperationExpertIdError(value);
+        const error = identifierError(value);
         if (error) expertIdErrors[field] = error;
       }
       if (Object.keys(expertIdErrors).length) {
@@ -2897,7 +2886,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       }
       const startTime = optionalParam(parameterValues.value.startTime);
       const endTime = optionalParam(parameterValues.value.endTime);
-      const timeErrors = paperCooperationTimeErrors(startTime, endTime, currentDate);
+      const timeErrors = paperCooperationTimeErrors(startTime, endTime, currentMonth);
       if (Object.keys(timeErrors).length) {
         parameterErrors.value = timeErrors;
         liveResponse.value = null;
@@ -2908,8 +2897,9 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       }
       parameterErrors.value = {};
       const body: Record<string, any> = { expertAId, expertBId };
-      if (startTime) body.startTime = startTime;
-      if (endTime) body.endTime = endTime;
+      const apiTimeRange = monthRangeToApiDates(startTime, endTime);
+      if (apiTimeRange.start) body.startTime = apiTimeRange.start;
+      if (apiTimeRange.end) body.endTime = apiTimeRange.end;
       const res = (await invokeKgService(
         props.moduleInfo.endpoint,
         body,
@@ -2984,7 +2974,7 @@ function handleParameterInput(fieldName: string, event: Event) {
     delete nextErrors.endTime;
     Object.assign(
       nextErrors,
-      paperCooperationTimeErrors(nextValues.startTime, nextValues.endTime, currentDate),
+      paperCooperationTimeErrors(nextValues.startTime, nextValues.endTime, currentMonth),
     );
     parameterErrors.value = nextErrors;
     return;
@@ -3020,7 +3010,7 @@ function handleMonthParameterInput(fieldName: string, value: string | null) {
     delete nextErrors.endTime;
     Object.assign(
       nextErrors,
-      paperCooperationTimeErrors(nextValues.startTime, nextValues.endTime, currentDate),
+      paperCooperationTimeErrors(nextValues.startTime, nextValues.endTime, currentMonth),
     );
     parameterErrors.value = nextErrors;
     return;

@@ -105,6 +105,36 @@ def test_request_schema_does_not_expose_data_source():
     assert "dataSource" not in schema["properties"]
 
 
+@pytest.mark.parametrize(
+    ("expert_a_id", "expert_b_id"),
+    [
+        ("专家甲", "专家乙"),
+        ("person_A.1", "person_B-2"),
+        ("专家·甲", "专家·乙"),
+    ],
+)
+def test_expert_ids_accept_the_same_characters_as_colleague_relation(
+    expert_a_id: str, expert_b_id: str
+):
+    body = ExpertPaperCooperationDemoRequest(
+        expertAId=expert_a_id,
+        expertBId=expert_b_id,
+    )
+
+    assert body.expertAId == expert_a_id
+    assert body.expertBId == expert_b_id
+
+
+@pytest.mark.parametrize("field", ["expertAId", "expertBId"])
+@pytest.mark.parametrize("invalid_id", ["person A", "person@A", " person_A", "person_A\n"])
+def test_expert_ids_reject_whitespace_and_abnormal_characters(field: str, invalid_id: str):
+    payload = {"expertAId": "person_A", "expertBId": "person_B"}
+    payload[field] = invalid_id
+
+    with pytest.raises(ValueError, match="异常字符"):
+        ExpertPaperCooperationDemoRequest(**payload)
+
+
 def test_year_filters_use_string_publication_year():
     body = ExpertPaperCooperationDemoRequest(
         expertAId="A",

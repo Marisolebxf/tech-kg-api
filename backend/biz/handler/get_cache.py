@@ -32,8 +32,12 @@ def try_get(prefix: str, request: Request) -> Response | None:
 
 
 def store(prefix: str, request: Request, payload: dict) -> Response:
-    """序列化并存缓存，返回与命中路径一致的 Response。"""
-    body = json.dumps(payload, ensure_ascii=False)
+    """序列化并存缓存，返回与命中路径一致的 Response。
+
+    separators 用紧凑风格，与 FastAPI 原生 JSONResponse 输出一致
+    （默认风格的 ``"code": 200`` 带空格，会破坏调用方按 ``"code":200`` 断言）。
+    """
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     result_cache.set_cached_json(_key(prefix, request), body)
     return Response(content=body, media_type="application/json")
 

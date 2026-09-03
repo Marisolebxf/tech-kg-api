@@ -19,7 +19,7 @@ async def test_expert_colleague_route_is_registered_and_wraps_result(async_clien
     ):
         response = await async_client.post(
             "/api/v1/kg-service/expert-colleague-relation",
-            json={"expertId": "person_a"},
+            json={"expert_a_id": "person_a", "expert_b_id": "person_b"},
         )
 
     assert response.status_code == 200
@@ -29,10 +29,10 @@ async def test_expert_colleague_route_is_registered_and_wraps_result(async_clien
 
 
 @pytest.mark.asyncio
-async def test_expert_colleague_request_requires_expert_id(async_client) -> None:
+async def test_expert_colleague_request_requires_both_expert_ids(async_client) -> None:
     response = await async_client.post(
         "/api/v1/kg-service/expert-colleague-relation",
-        json={},
+        json={"expert_a_id": "person_a"},
     )
 
     assert response.status_code == 200

@@ -227,33 +227,28 @@ async def test_summary_and_graph_cover_tender_details() -> None:
     )
 
 
-def test_request_validates_period_and_normalizes_filters() -> None:
-    request = ExpertColleagueRelationRequest(
-        expertId="person_a",
-        organization=" 自动化研究所 ",
-        overlapPeriod="2020-2022",
-        offset=10,
-    )
-
-    assert request.expertId == "person_a"
-    assert request.organization == "自动化研究所"
-    assert request.offset == 10
-    with pytest.raises(ValidationError):
-        ExpertColleagueRelationRequest(expertId="person_a", overlapPeriod="not-a-period")
-
+def test_request_accepts_only_page_fields_and_requires_expert_b() -> None:
     request = ExpertColleagueRelationRequest(
         expert_a_id="person_a",
         expert_b_id="person_b",
         start_time="2021-01",
         end_time="2022-12",
     )
+    assert request.expertId == "person_a"
+    assert request.targetExpertId == "person_b"
     assert request.startTime == "2021-01"
     assert request.endTime == "2022-12"
+
     with pytest.raises(ValidationError):
-        ExpertColleagueRelationRequest(expert_a_id="person_a", start_time="2022-01")
+        ExpertColleagueRelationRequest(expert_a_id="person_a")
+    with pytest.raises(ValidationError):
+        ExpertColleagueRelationRequest(
+            expert_a_id="person_a", expert_b_id="person_b", start_time="2022-01"
+        )
     with pytest.raises(ValidationError):
         ExpertColleagueRelationRequest(
             expert_a_id="person_a",
+            expert_b_id="person_b",
             start_time="2023-01",
             end_time="2022-12",
         )
@@ -392,20 +387,27 @@ async def test_gateway_subgraph_respects_total_limit() -> None:
     assert len(subgraph_calls) == 1
 
 
-def test_request_accepts_page_snake_case_fields() -> None:
-    request = ExpertColleagueRelationRequest.model_validate(
-        {
-            "expert_id": "E10001",
-            "overlap_period": "2018-2022",
-            "team_or_project": " 知识工程项目组 ",
-            "min_confidence": 0.6,
-        }
-    )
-
-    assert request.expertId == "E10001"
-    assert request.overlapPeriod == "2018-2022"
-    assert request.teamOrProject == "知识工程项目组"
-    assert request.minConfidence == 0.6
+@pytest.mark.parametrize(
+    "extra_field",
+    [
+        "organization",
+        "department",
+        "team_or_project",
+        "achievement_types",
+        "min_confidence",
+        "limit",
+        "offset",
+        "overlap_period",
+    ],
+)
+def test_request_rejects_removed_parameters(extra_field: str) -> None:
+    payload = {
+        "expert_a_id": "E10001",
+        "expert_b_id": "E10002",
+        extra_field: "unused",
+    }
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        ExpertColleagueRelationRequest.model_validate(payload)
 
 
 @pytest.mark.asyncio

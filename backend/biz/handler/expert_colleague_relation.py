@@ -26,16 +26,7 @@ def _json_response(payload: ApiResponse) -> Response:
 
 
 def _cache_key(body: ExpertColleagueRelationRequest) -> str:
-    overlap = (
-        f"{body.startTime}至{body.endTime}"
-        if body.startTime and body.endTime
-        else body.overlapPeriod
-    )
-    return (
-        f"{body.expertId}|{body.targetExpertId}|{body.organization}|{body.department}|"
-        f"{overlap}|{body.teamOrProject}|{tuple(body.achievementTypes or [])}|"
-        f"{body.minConfidence}|{body.limit}|{body.offset}"
-    )
+    return f"{body.expertId}|{body.targetExpertId}|{body.startTime}|{body.endTime}"
 
 
 @router.get("")
@@ -63,18 +54,11 @@ async def query_expert_colleague_relation(
                 client,
                 expert_id=body.expertId,
                 target_expert_id=body.targetExpertId,
-                organization=body.organization,
-                department=body.department,
                 overlap_period=(
                     f"{body.startTime} 至 {body.endTime}"
                     if body.startTime and body.endTime
-                    else body.overlapPeriod
+                    else None
                 ),
-                team_or_project=body.teamOrProject,
-                achievement_types=body.achievementTypes,
-                min_confidence=body.minConfidence,
-                limit=body.limit,
-                offset=body.offset,
             )
         validated = ExpertColleagueRelationData.model_validate(data)
         resp = ApiResponse(data=validated.model_dump())

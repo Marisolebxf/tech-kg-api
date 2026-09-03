@@ -1,9 +1,8 @@
 import re
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-DataSource = Literal["all"]
 MAX_KEY_ENTITIES = 20
 MAX_TEXT_LENGTH = 64
 MAX_RELATION_TYPES = 20
@@ -27,19 +26,18 @@ class IndustryChainPanoramaQueryRequest(BaseModel):
     """
 
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "example": {
-                "dataSource": "all",
                 "industry": "人工智能",
                 "anchorId": "",
                 "depth": 2,
                 "topK": 5,
                 "relationTypes": ["COAUTHOR_WITH", "AFFILIATED_WITH"],
             }
-        }
+        },
     )
 
-    dataSource: DataSource = Field(default="all", description="数据来源，固定为 all。")
     industry: str | None = Field(
         default=None,
         description=f"产业关键词，如 人工智能 / 集成电路，最多 {MAX_TEXT_LENGTH} 个字符。",

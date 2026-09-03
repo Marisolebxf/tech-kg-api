@@ -33,7 +33,10 @@ export function getErrorMessage(error: unknown, fallback = '操作失败'): stri
 }
 
 export const http = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE || '/api',
+  // 相对路径 './api'：站点挂在网关子路径（如 https://host/bkg_zp/）下时，
+  // 浏览器按当前页面 URL 解析出 {子路径}/api/...，网关剥前缀后正好命中本容器的 /api/；
+  // 根路径部署时解析为 /api/，与旧行为一致。仍可用 VITE_API_BASE 构建参数覆盖。
+  baseURL: import.meta.env.VITE_API_BASE || './api',
   timeout: 20_000,
   withCredentials: true,
 })

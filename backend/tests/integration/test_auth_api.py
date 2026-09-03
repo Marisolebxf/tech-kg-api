@@ -109,7 +109,7 @@ def _portal_cookie_test_app() -> FastAPI:
         session_backend="memory",
         cookie_secure=False,
         portal_cookie_login_enabled=True,
-        portal_token_cookie_name="access_token",
+        portal_token_cookie_name="portal_access_token",
     )
     application = AuthApplication(
         settings=settings,
@@ -212,7 +212,7 @@ async def test_v21_portal_cookie_is_exchanged_for_local_session() -> None:
         transport=ASGITransport(app=_portal_cookie_test_app()),
         base_url="http://test",
     ) as client:
-        client.cookies.set("access_token", "portal-access-token", domain="test.local")
+        client.cookies.set("portal_access_token", "portal-access-token", domain="test.local")
         client.cookies.set("techkg_session", "expired-local-session", domain="test.local")
         first = await client.get("/api/v1/auth/me")
 
@@ -228,7 +228,7 @@ async def test_v21_portal_cookie_is_exchanged_for_local_session() -> None:
         refreshed = await client.post("/api/v1/auth/refresh")
         assert refreshed.status_code == 200
 
-        client.cookies.delete("access_token")
+        client.cookies.delete("portal_access_token")
         second = await client.get("/api/v1/auth/me")
 
     assert second.status_code == 200
@@ -239,7 +239,7 @@ async def test_portal_cookie_login_is_disabled_by_default() -> None:
         transport=ASGITransport(app=_test_app()),
         base_url="http://test",
     ) as client:
-        client.cookies.set("access_token", "portal-access-token")
+        client.cookies.set("portal_access_token", "portal-access-token")
         response = await client.get("/api/v1/auth/me")
 
         assert response.status_code == 401

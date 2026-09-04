@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository layout
 
-Monorepo: `backend/` (Python FastAPI) + `frontend/` (Vue 3 + TS + Vite). A top-level `docker-compose.yml` builds and runs both, plus the supporting infra services (Milvus+etcd+MinIO, RustFS, schema MinIO, m3e-embedding, auth-redis, Temporal).
+Monorepo: `backend/` (Python FastAPI) + `frontend/` (Vue 3 + TS + Vite). A top-level `docker-compose.yml` builds and runs both, plus the supporting infra services (Milvus+etcd, one shared RustFS S3 for schema scripts / operator bundles / Milvus internal storage — no MinIO, m3e-embedding, auth-redis, Temporal).
 
 The root `README.md` and `backend/README.md` are **current** — they document connection info, env vars, and the Docker setup. Treat them as authoritative for environment/connection questions.
 
@@ -38,7 +38,7 @@ Python is pinned to `>=3.11.13,<3.12` (the Docker image uses `python:3.11-slim`)
 
 ### Tests run in containers (mandatory)
 
-The backend and all infra (MySQL, MinIO, Temporal, Milvus, redis, trs-graph) run **only in Docker** — the host has none of them. **Never run backend-dependent tests on the host** (they fail with e.g. `Can't connect to MySQL server on 'temporal-mysql'`, DNS unresolvable; see `docs/FIVE_PAGE_DESIGN_REMEDIATION.md`). Verified in-container commands:
+The backend and all infra (MySQL, RustFS, Temporal, Milvus, redis, trs-graph) run **only in Docker** — the host has none of them. **Never run backend-dependent tests on the host** (they fail with e.g. `Can't connect to MySQL server on 'temporal-mysql'`, DNS unresolvable; see `docs/FIVE_PAGE_DESIGN_REMEDIATION.md`). Verified in-container commands:
 
 ```bash
 # Backend tests — inside the running api container (924 passed, ~28s):
@@ -160,12 +160,12 @@ pnpm test:compatibility # playwright (playwright.compatibility.config.ts)
 
 ## Docker
 
-`docker-compose.yml` runs the two app services plus supporting infra (Milvus + etcd + MinIO, RustFS for operators, schema MinIO, m3e-embedding, auth-redis, Temporal):
+`docker-compose.yml` runs the two app services plus supporting infra (Milvus + etcd, one shared `operator-rustfs` S3 for schema scripts / operator bundles / Milvus internal storage, m3e-embedding, auth-redis, Temporal + temporal-mysql):
 
 - `api` — `./backend`, host port **8001** → container 8000. Connects to trs-graph/MySQL via `host.docker.internal` (`extra_hosts: host-gateway`) or via the compose `engine`/`graph` networks. Env defaults inline; override with a `.env` or shell env.
 - `web` — `./frontend`, host port **8088** → container 80. Depends on `api`.
 - Compose does **not** create MySQL — it expects an external `mysql` service on the `engine` network with `gkx_element` already loaded. Run MySQL separately or point `MYSQL_HOST` at a host DB.
-- Milvus uses dedicated ports to avoid clashing with a host `tech-kg-engine` Milvus: `19531` (SDK), `9093` (health), MinIO API `9010` / console `9011`.
+- Milvus uses dedicated ports to avoid clashing with a host `tech-kg-engine` Milvus: `19531` (SDK), `9093` (health). RustFS S3 is at host `9020` / console `9021`.
 
 Both Dockerfiles accept a mirror build arg and default to Aliyun mirrors: backend `PYPI_INDEX_URL` (used for both `pip install uv` and `uv sync`), frontend `NPM_REGISTRY` (used for corepack + pnpm install). If you switch mirrors, test that `uv` itself installs (some mirrors 403 on the `uv` wheel).
 

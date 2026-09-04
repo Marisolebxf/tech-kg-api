@@ -12,7 +12,7 @@
 | MySQL | **不创建**——期望 engine 网络上的外部 `mysql` 服务（已载 `gkx_element`），或 `MYSQL_HOST` 指向宿主库 | 容器内只解析 `temporal-mysql-dev2`，不解析生产的 `temporal-mysql` |
 | nginx upstream | `api:8000`（`nginx.conf`） | `api-dev2` + resolver（`nginx.dev2.conf`） |
 
-基础设施工件（Milvus + etcd + MinIO、RustFS 算子存储、schema MinIO、m3e-embedding、auth-redis、Temporal）都在生产 compose 里。Milvus 用专用端口避开宿主 `tech-kg-engine` 的 Milvus：SDK `19531`、健康 `9093`、MinIO API `9010` / 控制台 `9011`。
+基础设施工件（Milvus + etcd、共用一个 RustFS S3 承载 schema 脚本 / operator 包 / Milvus 内部存储、m3e-embedding、auth-redis、Temporal）都在生产 compose 里。Milvus 用专用端口避开宿主 `tech-kg-engine` 的 Milvus：SDK `19531`、健康 `9093`；RustFS S3 宿主端口 `9020` / 控制台 `9021`。
 
 ::: warning 端口冲突
 8001/8088 被占时改 compose 里的 host 端口，**不要**停其他服务腾端口。

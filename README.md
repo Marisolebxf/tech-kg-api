@@ -21,8 +21,7 @@
 - **MySQL 8.0**（业务数据）
 - （可选）智谱 GLM API Key——仅「企业背景关联分析」用，未配置时自动降级
 
-根 Compose 另外启动一个独立 RustFS，用 S3 兼容协议持久化用户上传的 Python 算子源码。
-它与 Milvus 配套的 MinIO 相互独立，MinIO 不做替换。
+根 Compose 另外启动一个独立 RustFS（`operator-rustfs`），用 S3 兼容协议统一承载 schema 管理脚本、用户上传的 Python 算子源码和 Milvus 的内部对象存储；栈内**不依赖 MinIO**。
 
 ## 快速开始
 
@@ -90,21 +89,21 @@ docker exec tech-kg-api-dev2 printenv TRS_GRAPH_SPACE                           
 
 ### Milvus standalone
 
-Milvus 已合并到根目录 `docker-compose.yml`，与前后端使用同一份 Compose。为避免与服务器已有的 `tech-kg-engine` Milvus 冲突，本项目使用独立容器、命名卷和端口：Milvus `19531`、健康检查 `9093`、MinIO API `9010`、MinIO Console `9011`。
+Milvus 已合并到根目录 `docker-compose.yml`，与前后端使用同一份 Compose。为避免与服务器已有的 `tech-kg-engine` Milvus 冲突，本项目使用独立容器、命名卷和端口：Milvus `19531`、健康检查 `9093`；Milvus 的对象存储走共用的 `operator-rustfs`（S3 兼容，宿主端口 API `9020` / 控制台 `9021`）。
 
 ```bash
-# 只启动本项目的 Milvus、etcd 和 MinIO
-docker compose up -d milvus-etcd milvus-minio milvus
+# 只启动本项目的 Milvus、etcd 和对象存储 RustFS
+docker compose up -d milvus-etcd operator-rustfs milvus
 
 # 查看状态和日志
-docker compose ps milvus-etcd milvus-minio milvus
+docker compose ps milvus-etcd operator-rustfs milvus
 docker compose logs -f milvus
 
 # 健康检查
 curl -f http://127.0.0.1:9093/healthz
 ```
 
-数据保存在 Docker 命名卷 `tech-kg-api_milvus-etcd-data`、`tech-kg-api_milvus-minio-data` 和 `tech-kg-api_milvus-data` 中。停止容器可执行 `docker compose stop milvus milvus-minio milvus-etcd`；不要使用 `down -v`，否则会删除数据卷。
+数据保存在 Docker 命名卷 `tech-kg-api_milvus-etcd-data`、`tech-kg-api_milvus-data`（Milvus 主数据）和 `tech-kg-api_operator-rustfs-data`（Milvus 内部对象存储，与 schema/算子共用）中。停止容器可执行 `docker compose stop milvus milvus-etcd operator-rustfs`；不要使用 `down -v`，否则会删除数据卷。
 
 #### 连接 Milvus
 
@@ -137,7 +136,7 @@ client = MilvusClient(uri="http://127.0.0.1:19531")
 print(client.list_collections())
 ```
 
-远程使用者需要服务器 IP `211.81.248.211`、Milvus 端口 `19531`，并确保其网络可访问该 TCP 端口。MinIO 的 `9010/9011` 端口不需要提供给普通 Milvus 客户端。
+远程使用者需要服务器 IP `211.81.248.211`、Milvus 端口 `19531`，并确保其网络可访问该 TCP 端口。RustFS 的 `9020/9021` 端口不需要提供给普通 Milvus 客户端。
 
 当前实例未启用认证，不应将 `19531` 无限制暴露到公网。建议通过防火墙限制来源 IP，或使用 SSH 隧道：
 

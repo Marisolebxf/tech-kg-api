@@ -101,7 +101,7 @@ export async function updateLlmConfig(
 }
 
 export async function deleteLlmConfig(id: string, userId: string): Promise<void> {
-  await unwrap(
+  unwrap(
     await asApiPromise<{ deleted: boolean }>(
       http.delete(`${PREFIX}/llm-configs/${id}`, { headers: headers(userId) }),
     ),

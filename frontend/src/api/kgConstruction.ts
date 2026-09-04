@@ -32,7 +32,7 @@ const PREFIX =
 export type RelationModuleStatus =
   | 'ready'
   | 'scaffold'
-  | string
+  | (string & {})
 
 
 /**

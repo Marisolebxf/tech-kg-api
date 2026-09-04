@@ -448,7 +448,7 @@ onUnmounted(() => {
 
 .kg-graph-map-controls__button:hover:not(:disabled) {
   background: #f2f3f5;
-  color: #165dff;
+  color: #004ecc;
 }
 
 .kg-graph-map-controls__button:focus-visible {
@@ -467,7 +467,7 @@ onUnmounted(() => {
 }
 
 .kg-graph-map-controls__slider :deep(.arco-slider-bar) {
-  background: #165dff;
+  background: #004ecc;
 }
 
 .kg-graph-map-controls__slider :deep(.arco-slider-btn) {
@@ -512,7 +512,7 @@ onUnmounted(() => {
 }
 
 .platform-network-line.is-selected {
-  stroke: #165dff;
+  stroke: #004ecc;
   stroke-width: 2;
   filter: drop-shadow(0 0 4px rgba(22, 93, 255, 0.22));
 }
@@ -572,7 +572,7 @@ onUnmounted(() => {
 }
 
 .platform-node.is-selected .node-shape {
-  stroke: #165dff;
+  stroke: #004ecc;
   stroke-width: 1.8;
   filter: drop-shadow(0 0 7px rgba(22, 93, 255, 0.2));
 }
@@ -590,7 +590,7 @@ onUnmounted(() => {
 }
 
 .platform-node__meta {
-  fill: #86909c;
+  fill: #59636f;
   font-size: 9px;
   font-weight: 400;
 }

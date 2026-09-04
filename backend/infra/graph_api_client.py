@@ -29,6 +29,7 @@ async def foo():
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
@@ -294,8 +295,7 @@ def _load_app() -> Any:
 @asynccontextmanager
 async def graph_api(
     *,
-    base_url: str = "http://kg-internal",
-    timeout: float = _DEFAULT_TIMEOUT_SECONDS,
+    base_url: str = "https://kg-internal",
 ) -> Any:
     """构造一个绑定当前 FastAPI 应用（ASGI transport）的 :class:`GraphAPIClient`。
 
@@ -306,6 +306,7 @@ async def graph_api(
     app = _load_app()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url=base_url, timeout=timeout
+        transport=transport, base_url=base_url, timeout=None
     ) as http_client:
-        yield GraphAPIClient(http_client)
+        async with asyncio.timeout(_DEFAULT_TIMEOUT_SECONDS):
+            yield GraphAPIClient(http_client)

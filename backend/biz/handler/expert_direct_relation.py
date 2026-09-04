@@ -38,23 +38,23 @@ async def query_expert_direct_relation(
 
 @router.get("/query", response_model=ExpertDirectRelationQueryResponse)
 async def query_expert_direct_relation_get(
-    expertAId: Annotated[str, Query()],
-    dataSource: Annotated[DataSource, Query()] = "all",
-    expertBId: Annotated[str | None, Query()] = None,
+    expert_a_id: Annotated[str, Query(alias="expertAId")],
+    data_source: Annotated[DataSource, Query(alias="dataSource")] = "all",
+    expert_b_id: Annotated[str | None, Query(alias="expertBId")] = None,
     institution: Annotated[str | None, Query()] = None,
-    startTime: Annotated[str | None, Query()] = None,
-    endTime: Annotated[str | None, Query()] = None,
+    start_time: Annotated[str | None, Query(alias="startTime")] = None,
+    end_time: Annotated[str | None, Query(alias="endTime")] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_QUERY_LIMIT)] = 10,
 ) -> dict[str, object]:
     # GET 与 POST 共用同一套入参校验，避免绕过长度/异常字符/未来时间限制
     try:
         body = ExpertDirectRelationQueryRequest(
-            dataSource=dataSource,
-            expertAId=expertAId,
-            expertBId=expertBId,
+            dataSource=data_source,
+            expertAId=expert_a_id,
+            expertBId=expert_b_id,
             institution=institution,
-            startTime=startTime,
-            endTime=endTime,
+            startTime=start_time,
+            endTime=end_time,
             limit=limit,
         )
     except ValidationError as exc:

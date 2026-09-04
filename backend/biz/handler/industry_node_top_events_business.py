@@ -20,13 +20,15 @@ from biz.schemas.industry_node_top_events_business import IndustryNodeTopEventsR
 from infra.result_cache import get_cached_json, set_cached_json
 from service.industry_node_top_events_business import IndustryNodeTopEventsService
 
+APPLICATION_JSON = "application/json"
+
 router = APIRouter(prefix="/kg-service", tags=["kg-service"])
 service = IndustryNodeTopEventsService()
 
 
 def _json_response(payload: ApiResponse) -> Response:
     return Response(
-        content=json.dumps(payload.model_dump(), ensure_ascii=False), media_type="application/json"
+        content=json.dumps(payload.model_dump(), ensure_ascii=False), media_type=APPLICATION_JSON
     )
 
 
@@ -64,12 +66,12 @@ async def run_industry_node_top_events(req: IndustryNodeTopEventsRequest) -> Res
     key = _cache_key(req)
     cached = get_cached_json(key)
     if cached is not None:
-        return Response(content=cached, media_type="application/json")
+        return Response(content=cached, media_type=APPLICATION_JSON)
     try:
         data = await service.run(req)
         body = json.dumps(ApiResponse(data=data.model_dump()).model_dump(), ensure_ascii=False)
         set_cached_json(key, body)
-        return Response(content=body, media_type="application/json")
+        return Response(content=body, media_type=APPLICATION_JSON)
     except KeyError as exc:  # noqa: BLE001
         return _json_response(ApiResponse(code=404, success=False, msg=str(exc)))
     except Exception as exc:  # noqa: BLE001

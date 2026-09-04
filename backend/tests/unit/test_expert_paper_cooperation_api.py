@@ -163,7 +163,8 @@ def test_rules_describe_the_actual_paper_cooperation_algorithm():
         "论文指标与合作成员统计规则",
         "学术影响力与共同贡献计算规则",
     ]
-    assert "仅取" in rules[0]["logic"] and "年份" in rules[0]["logic"]
+    assert "仅取" in rules[0]["logic"]
+    assert "年份" in rules[0]["logic"]
     assert "未配置 status=1" in rules[0]["threshold"]
     assert "至少覆盖 2 个不同发表年份" in rules[1]["threshold"]
     assert "论文数×6.5" in rules[2]["logic"]

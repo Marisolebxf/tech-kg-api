@@ -138,12 +138,7 @@ class WorkflowDefinitionRequest(BaseModel):
     @field_validator("steps", mode="before")
     @classmethod
     def _validate_steps(cls, v: list[str | dict[str, Any]]) -> list[str | dict[str, Any]]:
-        if not v:
-            return v
-        for item in v:
-            if isinstance(item, str):
-                _check_id(item)
-        return v
+        return [_check_id(item) if isinstance(item, str) else item for item in v]
 
 
 class WorkflowExecuteRequest(BaseModel):
@@ -162,12 +157,12 @@ class WorkflowExecuteRequest(BaseModel):
     @field_validator("payload")
     @classmethod
     def validate_limit(cls, value: dict[str, Any]) -> dict[str, Any]:
-        if "limit" not in value:
-            return value
-        limit = value["limit"]
-        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
-            raise ValueError("limit 必须为正整数")
-        return value
+        validated = dict(value)
+        if "limit" in validated:
+            limit = validated["limit"]
+            if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+                raise ValueError("limit 必须为正整数")
+        return validated
 
 
 class WorkflowScheduleRequest(BaseModel):

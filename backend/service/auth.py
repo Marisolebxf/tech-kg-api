@@ -25,6 +25,8 @@ from config.auth import AuthSettings
 from infra.redis import AsyncJsonStore
 from infra.user_center import UserCenterClient, UserCenterError
 
+OVERVIEW_PATH = "/overview"
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,9 +79,9 @@ class AuthService:
         self.store = store
         self.user_center = user_center
 
-    async def create_login_url(self, next_path: str = "/overview") -> tuple[str, int, str]:
+    async def create_login_url(self, next_path: str = OVERVIEW_PATH) -> tuple[str, int, str]:
         if not next_path.startswith("/") or next_path.startswith("//"):
-            next_path = "/overview"
+            next_path = OVERVIEW_PATH
         state = secrets.token_urlsafe(32)
         try:
             url = self.user_center.build_login_url(state)
@@ -105,7 +107,7 @@ class AuthService:
         session_id = secrets.token_urlsafe(32)
         context.session_id = session_id
         await self._save_session(context)
-        return context, str(state_data.get("next") or "/overview")
+        return context, str(state_data.get("next") or OVERVIEW_PATH)
 
     async def get_session(self, session_id: str) -> AuthContext:
         record = await self._store_get_json(f"{self.SESSION_KEY_PREFIX}{session_id}")
@@ -316,7 +318,7 @@ class AuthService:
         return AccountSecurityData(
             account_status="正常" if profile.user.status == 0 else "停用",
             authentication_method="统一用户中心 OAuth2",
-            password_managed_by="统一用户中心",
+            password_managed_by="统一用户中心",  # NOSONAR
             account_management_url=self.settings.user_center_portal_url,
             email_bound=bool(profile.user.email),
             mobile_bound=bool(profile.user.mobile),

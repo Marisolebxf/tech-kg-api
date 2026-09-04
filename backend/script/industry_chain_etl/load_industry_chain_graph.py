@@ -331,7 +331,7 @@ def main() -> None:
         news_nodes = []
         cover_edges = []
         for r in news_rows:
-            news_id, title, summary, rdate, source, chain_code = r
+            news_id, title, summary, rdate, _, chain_code = r
             if not news_id:
                 continue
             news_nodes.append(

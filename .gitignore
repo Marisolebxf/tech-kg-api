@@ -35,6 +35,7 @@ Thumbs.db
 .coverage
 htmlcov/
 coverage/
+/backend/coverage.xml
 .scannerwork/
 server.log
 backend/output/organization_graph/

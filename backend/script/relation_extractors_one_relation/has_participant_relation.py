@@ -12,7 +12,6 @@ collect_match_candidates 的 person 通道（project_host + participants 全集�
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from script.extract_transform_common import edge_transform
@@ -25,9 +24,9 @@ from script.relation_extractors_one_relation.common import (
     ensure_edge_schema,
     graph_client,
     mysql_engine,
+    resolve_report_dir,
 )
 from script.relation_extractors_one_relation.leads_relation import collect_person_candidates
-from utils.runtime_paths import private_state_dir
 
 TABLES = ("dwd_zh_project", "dwd_en_project")
 PROJECT_SQL = "SELECT * FROM {table} ORDER BY id"
@@ -115,11 +114,6 @@ def _resolve_tables(payload: dict[str, Any]) -> tuple[str, ...]:
     return TABLES if table_choice == "all" else (str(table_choice),)
 
 
-def _resolve_report_dir(payload: dict[str, Any], batch: str) -> Path:
-    configured = payload.get("report_dir")
-    return Path(configured) if configured else private_state_dir("project-ingest-reports", batch)
-
-
 def _collect_candidates(
     database: str,
     tables: tuple[str, ...],
@@ -173,7 +167,7 @@ def transform(payload: dict[str, Any]) -> dict[str, Any]:
                 candidates.add(str(value).strip())
     matcher = _load_matcher(candidates, dry_run=False)
     report = ProjectIngestReport(
-        _resolve_report_dir(payload, batch), ingest_batch=batch, dry_run=False
+        resolve_report_dir(payload, batch), ingest_batch=batch, dry_run=False
     )
     result = edge_transform(payload, builder=make_has_participant_mapper(matcher, report))
     result["report_dir"] = str(report.report_dir)

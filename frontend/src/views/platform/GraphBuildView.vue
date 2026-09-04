@@ -23,6 +23,7 @@ import { currentUserId as getCurrentUserId } from '../../api/currentUser'
 import JobLaunchDialog from '../../components/JobLaunchDialog.vue'
 import { useToast } from '../../composables/use-toast'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
+import { describeCron } from '../../utils/cronSchedule'
 
 const { showToast } = useToast()
 const router = useRouter()
@@ -216,7 +217,13 @@ onMounted(loadData)
               <td>{{ TASK_TYPE_LABELS[job.taskType] || job.taskType }}</td>
               <td><code>{{ jobScriptLabel(job) }}</code></td>
               <td>{{ job.graphSpace || '默认' }}</td>
-              <td>{{ job.schedule.kind === 'cron' ? `cron ${job.schedule.cron}` : '单次' }}</td>
+              <td>
+                <span
+                  v-if="job.schedule.kind === 'cron'"
+                  :title="`cron ${job.schedule.cron}`"
+                >{{ describeCron(job.schedule.cron ?? '') }}</span>
+                <span v-else>单次</span>
+              </td>
               <td><span :class="JOB_STATUS_TONE[deriveJobUnifiedStatus(job)]">{{ deriveJobUnifiedStatus(job) }}</span></td>
               <td>
                 <code v-if="job.lastExecutionId">{{ job.lastExecutionId }}</code>

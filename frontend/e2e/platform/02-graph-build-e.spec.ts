@@ -342,12 +342,14 @@ test.describe.serial('E. 任务中心', () => {
       },
       { label: '周期任务入列' },
     )
-    // 调度列显示 cron */12
+    // 锚点语义：每12小时 + 默认首次执行时间 02:00 → cron `0 2,14 * * *`（02:00、14:00 各一次）
+    expect(jobs.schedule?.cron).toBe('0 2,14 * * *')
+    // 调度列人话化展示（cron 原文收进 title）
     await page.goto('/graph-build')
     await page.waitForLoadState('networkidle')
     const row = page.locator('tbody tr', { hasText: jobName }).first()
     await expect(row).toBeVisible()
-    await expect(row.getByText(/cron .*\/12/)).toBeVisible()
+    await expect(row.getByText(/每12小时 · 02:00、14:00/)).toBeVisible()
 
     // 「暂停调度」入口只对 已完成+cron 的任务展示（未运行没有）：API 触发一次使其完成
     await apiMust<any>(request, 'POST', `/workflow-system/jobs/${jobs.id}/trigger`, undefined, '首跑')

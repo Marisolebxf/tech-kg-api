@@ -2,6 +2,7 @@ services:
   api:
     build:
       context: ./backend
+      target: ${API_BUILD_TARGET:-runtime}
       args:
         PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     container_name: tech-kg-api
@@ -123,6 +124,7 @@ services:
   m3e-embedding:
     build:
       context: ./backend
+      target: runtime
       args:
         PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     container_name: tech-kg-api-m3e-embedding
@@ -194,6 +196,7 @@ services:
   temporal-worker:
     build:
       context: ./backend
+      target: runtime
       args:
         PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     container_name: tech-kg-temporal-worker

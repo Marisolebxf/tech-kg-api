@@ -20,7 +20,10 @@ async def describe_expert_indirect_relation() -> dict[str, object]:
     return application.describe()
 
 
-@router.post("/demo/structured-result")
+@router.post(
+    "/demo/structured-result",
+    responses={404: {"description": "请求的资源不存在"}, 500: {"description": "服务内部错误"}},
+)
 async def analyze_expert_indirect_relation(
     body: ExpertIndirectRelationRequest,
     request: Request,

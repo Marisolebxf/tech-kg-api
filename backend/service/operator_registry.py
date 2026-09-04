@@ -33,6 +33,8 @@ from service.operator_builtins import (
     relation_load,
 )
 
+DEFAULT_OPERATOR_TIMESTAMP = "2026-01-01T00:00:00+00:00"
+
 logger = logging.getLogger(__name__)
 
 JsonObject = dict[str, Any]
@@ -101,7 +103,7 @@ BUILTIN_OPERATORS: tuple[tuple[OperatorManifest, OperatorCallable], ...] = (
             kind=OperatorKind.DATA_PROCESSING,
             description="字符串清洗、字段映射和空值过滤",
             builtin=True,
-            updated_at="2026-01-01T00:00:00+00:00",
+            updated_at=DEFAULT_OPERATOR_TIMESTAMP,
         ),
         data_normalize,
     ),
@@ -112,7 +114,7 @@ BUILTIN_OPERATORS: tuple[tuple[OperatorManifest, OperatorCallable], ...] = (
             kind=OperatorKind.ENTITY_EXTRACTION,
             description="基于正则规则的实体抽取",
             builtin=True,
-            updated_at="2026-01-01T00:00:00+00:00",
+            updated_at=DEFAULT_OPERATOR_TIMESTAMP,
         ),
         entity_extract,
     ),
@@ -123,7 +125,7 @@ BUILTIN_OPERATORS: tuple[tuple[OperatorManifest, OperatorCallable], ...] = (
             kind=OperatorKind.RELATION_EXTRACTION,
             description="基于字段映射或正则规则的关系抽取",
             builtin=True,
-            updated_at="2026-01-01T00:00:00+00:00",
+            updated_at=DEFAULT_OPERATOR_TIMESTAMP,
         ),
         relation_extract,
     ),
@@ -134,7 +136,7 @@ BUILTIN_OPERATORS: tuple[tuple[OperatorManifest, OperatorCallable], ...] = (
             kind=OperatorKind.ENTITY_INGESTION,
             description="基于主键和名称匹配的实体入库计划",
             builtin=True,
-            updated_at="2026-01-01T00:00:00+00:00",
+            updated_at=DEFAULT_OPERATOR_TIMESTAMP,
         ),
         entity_load,
     ),
@@ -145,7 +147,7 @@ BUILTIN_OPERATORS: tuple[tuple[OperatorManifest, OperatorCallable], ...] = (
             kind=OperatorKind.RELATION_INGESTION,
             description="基于关系组合键匹配的关系入库计划",
             builtin=True,
-            updated_at="2026-01-01T00:00:00+00:00",
+            updated_at=DEFAULT_OPERATOR_TIMESTAMP,
         ),
         relation_load,
     ),

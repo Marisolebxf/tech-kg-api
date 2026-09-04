@@ -12,7 +12,7 @@ INDUSTRY_PATTERN = re.compile(r"[\w\u4e00-\u9fff·.\-()（）、，,/\s]+")
 # 核心节点 VID：不允许空格与 !@#￥%& 等符号
 ANCHOR_ID_PATTERN = re.compile(r"[\w\u4e00-\u9fff·.\-]+")
 # 关系类型（Nebula 边类型）：大写字母、数字和下划线
-RELATION_TYPE_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
+RELATION_TYPE_PATTERN = re.compile(r"[A-Za-z]\w*")
 
 
 class IndustryChainPanoramaQueryRequest(BaseModel):

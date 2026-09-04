@@ -75,7 +75,7 @@ async def require_authenticated_user(
 CurrentUser = Annotated[AuthContext, Depends(require_authenticated_user)]
 
 
-async def require_platform_actor(
+def require_platform_actor(
     context: CurrentUser,
     application: AuthApplicationDependency,
 ) -> PlatformActor:
@@ -85,7 +85,7 @@ async def require_platform_actor(
 CurrentActor = Annotated[PlatformActor, Depends(require_platform_actor)]
 
 
-async def require_platform_admin(
+def require_platform_admin(
     actor: CurrentActor,
 ) -> PlatformActor:
     if not actor.is_admin:
@@ -100,7 +100,7 @@ CurrentAdmin = Annotated[PlatformActor, Depends(require_platform_admin)]
 
 
 def require_permission(permission: str):
-    async def dependency(
+    def dependency(
         context: CurrentUser,
         application: AuthApplicationDependency,
     ) -> AuthContext:

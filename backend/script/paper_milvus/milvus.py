@@ -55,7 +55,7 @@ def get_milvus_client() -> Any:
     with _client_lock:
         if _client is not None:
             return _client
-        MilvusClient = _load_milvus_client_cls()
+        milvus_client_class = _load_milvus_client_cls()
         uri = os.environ.get("MILVUS_URI", _DEFAULT_URI)
         token = os.environ.get("MILVUS_TOKEN") or None
         db_name = os.environ.get("MILVUS_DB_NAME", _DEFAULT_DB)
@@ -64,7 +64,7 @@ def get_milvus_client() -> Any:
         kwargs: dict[str, Any] = {"uri": uri, "db_name": db_name, "timeout": timeout}
         if token:
             kwargs["token"] = token
-        _client = MilvusClient(**kwargs)
+        _client = milvus_client_class(**kwargs)
     return _client
 
 

@@ -24,6 +24,9 @@ from infra.s3 import S3Storage, get_schema_s3_storage
 from service.schema_ddl import run_schema_ddl
 from service.script_security import review_script_security
 
+OWN_SCHEMA_SCRIPT_REQUIRED = "只能更换自己创建的 Schema 脚本"
+SYSTEM_SCHEMA_ADMIN_REQUIRED = "只有 Schema 管理员可以更换系统 Schema 脚本"
+
 logger = logging.getLogger(__name__)
 
 
@@ -280,9 +283,9 @@ class SchemaManagementService:
             and not is_platform_admin
             and user_id not in _schema_admin_user_ids()
         ):
-            raise SchemaPermissionError("只有 Schema 管理员可以更换系统 Schema 脚本")
+            raise SchemaPermissionError(SYSTEM_SCHEMA_ADMIN_REQUIRED)
         if not definition.is_system and not is_platform_admin and definition.created_by != user_id:
-            raise SchemaPermissionError("只能更换自己创建的 Schema 脚本")
+            raise SchemaPermissionError(OWN_SCHEMA_SCRIPT_REQUIRED)
         return definition
 
     def verify_and_save_script(
@@ -328,8 +331,8 @@ class SchemaManagementService:
                     "type": "error",
                     "code": "permission",
                     "stage": "pre",
-                    "message": "只有 Schema 管理员可以更换系统 Schema 脚本",
-                    "issues": ["只有 Schema 管理员可以更换系统 Schema 脚本"],
+                    "message": SYSTEM_SCHEMA_ADMIN_REQUIRED,
+                    "issues": [SYSTEM_SCHEMA_ADMIN_REQUIRED],
                 }
                 return
             if (
@@ -341,8 +344,8 @@ class SchemaManagementService:
                     "type": "error",
                     "code": "permission",
                     "stage": "pre",
-                    "message": "只能更换自己创建的 Schema 脚本",
-                    "issues": ["只能更换自己创建的 Schema 脚本"],
+                    "message": OWN_SCHEMA_SCRIPT_REQUIRED,
+                    "issues": [OWN_SCHEMA_SCRIPT_REQUIRED],
                 }
                 return
 
@@ -653,7 +656,7 @@ class SchemaManagementService:
                 f"{definition.label} Schema 抽取",
                 timeout_seconds=int(os.getenv("SCHEMA_WORKFLOW_TIMEOUT_SECONDS", "3600")),
             )
-        except (UnicodeDecodeError, SyntaxError, ValueError, OSError) as exc:
+        except (SyntaxError, ValueError, OSError) as exc:
             raise SchemaScriptError(f"Schema 脚本工作流注册失败: {exc}") from exc
 
     def _require_schema(self, schema_id: str) -> GraphSchemaDefinition:

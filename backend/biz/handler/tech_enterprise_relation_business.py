@@ -40,7 +40,7 @@ async def describe_key_enterprise_relation() -> dict[str, object]:
     }
 
 
-@router.post("/key-enterprise-relation", response_model=ApiResponse)
+@router.post("/key-enterprise-relation")
 async def run_key_enterprise_relation(
     req: KeyEnterpriseRelationRequest, request: Request
 ) -> ApiResponse:

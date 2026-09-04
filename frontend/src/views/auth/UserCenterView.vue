@@ -102,12 +102,12 @@ async function refreshProfile() {
 <style scoped>
 .user-center { height: 100%; padding: 6px; overflow: auto; color: #243854; }
 .user-center__hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 24px 26px; border: 1px solid #b9d5f7; border-radius: 10px; background: linear-gradient(120deg, #edf5ff, #fff 56%, #eaf8ff); box-shadow: 0 12px 28px rgba(48,105,194,.1); }
-.user-center__hero span { color: #165dff; font-size: 10px; font-weight: 700; letter-spacing: .16em; }
+.user-center__hero span { color: #004ecc; font-size: 10px; font-weight: 700; letter-spacing: .16em; }
 .user-center__hero h1 { margin: 7px 0 5px; font-size: 25px; }
 .user-center__hero p { margin: 0; color: #71819a; font-size: 12px; }
-.user-center__hero button { height: 36px; padding: 0 15px; border: 1px solid #165dff; border-radius: 6px; background: #165dff; color: #fff; font-size: 12px; cursor: pointer; }
+.user-center__hero button { height: 36px; padding: 0 15px; border: 1px solid #004ecc; border-radius: 6px; background: #004ecc; color: #fff; font-size: 12px; cursor: pointer; }
 .user-center__hero button:disabled { opacity: .6; cursor: wait; }
-.user-center__feedback { margin: 12px 0 0; padding: 10px 13px; border-radius: 7px; background: #eaf6ff; color: #175cd3; font-size: 11px; }
+.user-center__feedback { margin: 12px 0 0; padding: 10px 13px; border-radius: 7px; background: #eaf6ff; color: #004ecc; font-size: 11px; }
 .profile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; padding-bottom: 20px; }
 .profile-card { min-height: 210px; padding: 18px; border: 1px solid #c9ddf6; border-radius: 9px; background: rgba(255,255,255,.92); box-shadow: 0 8px 22px rgba(48,105,194,.07); }
 .profile-card__heading { display: flex; align-items: center; justify-content: space-between; padding-bottom: 13px; border-bottom: 1px solid #e4edf8; }
@@ -121,7 +121,7 @@ async function refreshProfile() {
 .profile-card dl div { padding: 9px 10px; border-radius: 6px; background: #f6f9fd; }.profile-card dt { color: #8a98aa; font-size: 9px; }.profile-card dd { margin: 4px 0 0; overflow: hidden; color: #344761; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .chip-list { display: grid; gap: 9px; margin-top: 15px; }.chip-list > span { display: grid; gap: 4px; padding: 11px 12px; border: 1px solid #dce8f8; border-radius: 7px; background: #f9fbff; }.chip-list b { font-size: 12px; }.chip-list small { color: #8290a4; font-size: 9px; }
 .organization-list { display: grid; gap: 9px; margin-top: 15px; }.organization-list > div { display: grid; gap: 5px; padding: 11px 12px; border-left: 3px solid #2e90fa; background: #f7faff; }.organization-list strong { font-size: 12px; }.organization-list span { color: #8290a4; font-size: 9px; }
-.profile-card--permissions { grid-column: 1 / -1; min-height: 150px; }.permission-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 15px; }.permission-list code { padding: 5px 8px; border: 1px solid #cfe0f7; border-radius: 5px; background: #eef5ff; color: #175cd3; font-size: 10px; }
+.profile-card--permissions { grid-column: 1 / -1; min-height: 150px; }.permission-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 15px; }.permission-list code { padding: 5px 8px; border: 1px solid #cfe0f7; border-radius: 5px; background: #eef5ff; color: #004ecc; font-size: 10px; }
 .menu-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; margin-top: 15px; }.menu-list>span { display:grid;gap:4px;padding:10px 12px;border:1px solid #dce8f8;border-radius:7px;background:#f9fbff; }.menu-list b { font-size:11px; }.menu-list small { overflow:hidden;color:#8290a4;font-size:9px;text-overflow:ellipsis;white-space:nowrap; }
 .empty-state { margin: 28px 0 0; color: #96a2b3; font-size: 11px; text-align: center; }
 @media (max-width: 900px) { .profile-grid { grid-template-columns: 1fr; }.profile-card--permissions { grid-column: auto; }.menu-list { grid-template-columns:1fr; }.user-center__hero { align-items: flex-start; flex-direction: column; } }

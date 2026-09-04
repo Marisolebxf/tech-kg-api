@@ -53,7 +53,7 @@ const EDGE_AVOID_STRENGTH = 0.25
 function hashStr(s: string): number {
   let h = 0x811c9dc5
   for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i)
+    h ^= s.codePointAt(i) ?? 0
     h = Math.imul(h, 0x01000193) >>> 0
   }
   return h >>> 0
@@ -101,7 +101,7 @@ export function runForceLayout(
   const seen = new Set<string>()
   const ordered: GraphNodeData[] = []
   for (const node of nodes) {
-    if (!node || !node.id || seen.has(node.id)) continue
+    if (!node?.id || seen.has(node.id)) continue
     seen.add(node.id)
     ordered.push(node)
   }
@@ -186,7 +186,7 @@ export function runForceLayout(
     for (const [a, b] of adj) {
       const dx = x[b] - x[a]
       const dy = y[b] - y[a]
-      const dist = Math.sqrt(dx * dx + dy * dy) || 0.01
+      const dist = Math.hypot(dx, dy) || 0.01
       const diff = dist - SPRING_LENGTH
       const ux = dx / dist
       const uy = dy / dist
@@ -260,7 +260,7 @@ export function runForceLayout(
       for (let j = i + 1; j < n; j++) {
         const dx = x[j] - x[i]
         const dy = y[j] - y[i]
-        const d = Math.sqrt(dx * dx + dy * dy)
+        const d = Math.hypot(dx, dy)
         const minD = r[i] + r[j]
         if (d >= minD) continue
         if (d > 0.0001) {

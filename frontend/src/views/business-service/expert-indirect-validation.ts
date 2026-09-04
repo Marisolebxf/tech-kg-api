@@ -4,7 +4,7 @@ export const INDIRECT_CORE_NODE_ID_ERROR =
 export const INDIRECT_PATH_DEPTH_ERROR = "路径分析深度只能填写 2 或 3";
 export const INDIRECT_MIN_STRENGTH_ERROR = "最小关联强度必须在 0-1 范围内";
 
-const indirectCoreNodeIdPattern = /^[\w\u4e00-\u9fff·.\-]+$/u;
+const indirectCoreNodeIdPattern = /^[\w\u4e00-\u9fff·.-]+$/u;
 
 export interface ExpertIndirectFormValues {
   core_node_id?: string;

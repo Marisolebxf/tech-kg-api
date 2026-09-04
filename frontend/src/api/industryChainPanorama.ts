@@ -52,7 +52,7 @@ export type PanoramaLayerKey =
 
 
 export interface PanoramaLayer {
-  key: PanoramaLayerKey | string
+  key: PanoramaLayerKey | (string & {})
   title: string
   total: number
   items: PanoramaKeyEntity[]

@@ -218,7 +218,10 @@ def _workflow_run(args: argparse.Namespace, *, dry_run: bool) -> tuple[int, dict
         result["failedItems"] = failures
     if quality_issues:
         result["qualityIssues"] = quality_issues
-    return (1 if failures else 3 if quality_issues else 0), result
+    exit_code = 1 if failures else 0
+    if not failures and quality_issues:
+        exit_code = 3
+    return exit_code, result
 
 
 def _init_schema(confirmed: bool) -> tuple[int, dict[str, Any]]:

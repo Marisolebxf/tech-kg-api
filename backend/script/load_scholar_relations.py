@@ -47,7 +47,7 @@ import logging
 import os
 import time
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import select, text
 
@@ -64,7 +64,7 @@ from script.scholar_provenance import (
 
 logger = logging.getLogger("script.load_scholar_relations")
 
-BATCH_ID = f"BATCH_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_scholar_rel"
+BATCH_ID = f"BATCH_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_scholar_rel"
 
 # 学者的机构信息来自学者表本身；对齐到正式 Organization 之前机构溯源表就是 dwd_scholar。
 ORGANIZATION_BASE_TABLE = "dwd_scholar"
@@ -382,7 +382,7 @@ def load_studied_at(
 
     仅当教育院校名能匹配图中已存在 Organization 时写入；匹配不到则跳过，不建桩 org。
     """
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     ok = skipped = shown = 0
     index = org_index or {}
 
@@ -444,7 +444,7 @@ def load_affiliations(
     Returns:
         统计字典，含写入条数、无机构跳过条数、桩机构条数。
     """
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     ok = skipped = shown = placeholder = 0
 
     for rec in _iter_scholar_affiliations(session):
@@ -515,7 +515,7 @@ def load_affiliations(
 
 def load_coauthors(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
     """写入 COAUTHOR_WITH 边。返回统计信息。"""
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     ok = shown = 0
 
     for rec in _iter_coauthor_rows(session):
@@ -557,7 +557,7 @@ def load_authored_by_fallback(session, graph, *, dry_run: bool, preview: int = 5
     对每个 Paper / Person VID 通过 ``graph.get_node`` 做一次存在性探测并缓存，
     避免重复查询同一顶点。
     """
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     written = shown = 0
     skipped_missing_paper = skipped_missing_person = 0
 

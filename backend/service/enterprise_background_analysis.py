@@ -201,7 +201,7 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
             if start >= 0 and end > start:
                 data = json.loads(text[start : end + 1])
                 return {k: str(v) for k, v in data.items()}
-        except (json.JSONDecodeError, ValueError) as exc:
+        except ValueError as exc:
             logger.warning("LLM conclusion parse failed: %s", exc)
         return {}
 

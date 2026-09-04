@@ -145,7 +145,8 @@ def md5_vid(prefix: str, key: str, short: bool = False) -> str:
     short=True 取 md5 前 16 位，与 dev 已有 CITES/CITED_BY 桩（`paper_ref_{md5[:16]}`）一致，
     保证幂等；Keyword 仍用 32 位（与已有 Keyword 顶点一致）。
     """
-    h = hashlib.md5(key.encode()).hexdigest()
+    # Compatibility identifier only; it is not used for integrity or authentication.
+    h = hashlib.md5(key.encode(), usedforsecurity=False).hexdigest()
     return f"{prefix}_{h[:16] if short else h}"
 
 

@@ -13,6 +13,8 @@ from biz.schemas.expert_colleague_relation import (
 )
 from infra.result_cache import get_cached_json, set_cached_json
 
+APPLICATION_JSON = "application/json"
+
 router = APIRouter(prefix="/kg-construction/expert-colleague-relations", tags=["expert-colleague"])
 service_router = APIRouter(
     prefix="/kg-service/expert-colleague-relation", tags=["expert-colleague"]
@@ -22,7 +24,7 @@ application = ExpertColleagueRelationApplication()
 
 def _json_response(payload: ApiResponse) -> Response:
     return Response(
-        content=json.dumps(payload.model_dump(), ensure_ascii=False), media_type="application/json"
+        content=json.dumps(payload.model_dump(), ensure_ascii=False), media_type=APPLICATION_JSON
     )
 
 
@@ -45,11 +47,11 @@ async def query_expert_colleague_relation(
     cached = get_cached_json(key)
     if cached is not None:
         # 命中预序列化 JSON，跳过 ASGITransport 自调用 + model_dump 序列化，避免 500 并发互锁
-        return Response(content=cached, media_type="application/json")
+        return Response(content=cached, media_type=APPLICATION_JSON)
     try:
         async with AsyncClient(
             transport=ASGITransport(app=request.app),
-            base_url="http://fastapi-internal",
+            base_url="https://fastapi-internal",
             headers=get_internal_api_auth_headers(request),
         ) as client:
             data = await application.query(
@@ -66,7 +68,7 @@ async def query_expert_colleague_relation(
         resp = ApiResponse(data=validated.model_dump())
         body_json = json.dumps(resp.model_dump(), ensure_ascii=False)
         set_cached_json(key, body_json)
-        return Response(content=body_json, media_type="application/json")
+        return Response(content=body_json, media_type=APPLICATION_JSON)
     except LookupError as exc:
         return _json_response(ApiResponse(code=404, success=False, msg=str(exc)))
     except Exception as exc:  # noqa: BLE001

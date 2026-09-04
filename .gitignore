@@ -34,6 +34,8 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+coverage/
+.scannerwork/
 server.log
 backend/output/organization_graph/
 

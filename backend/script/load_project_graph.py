@@ -35,6 +35,7 @@ from script.project_graph_utils import (
 )
 from script.project_ingest_report import ProjectIngestReport
 from script.project_match_candidates import collect_match_candidates
+from utils.runtime_paths import private_state_dir
 
 __all__ = ["parse_list", "project_vid", "load_project_graph"]
 logger = logging.getLogger("script.load_project_graph")
@@ -69,7 +70,7 @@ def _merge_node(graph: TRSGraphClient, labels: list[str], vid: str, props: dict[
     try:
         graph.merge_node(labels, {"vid": vid}, {**props, "vid": vid})
     except GraphRequestError as exc:
-        logger.error("merge_node failed labels=%s vid=%s body=%s", labels, vid, exc.body)
+        logger.exception("merge_node failed labels=%s vid=%s body=%s", labels, vid, exc.body)
         raise
 
 
@@ -499,7 +500,7 @@ def load_project_graph(
     ingest_batch = ingest_batch or datetime.now().strftime("BATCH_%Y%m%d_%H%M%S")
     ingest_time = datetime.now().isoformat(sep=" ", timespec="seconds")
     report = ProjectIngestReport(
-        report_dir or Path("/tmp/project-ingest-reports") / ingest_batch,
+        report_dir or private_state_dir("project-ingest-reports", ingest_batch),
         ingest_batch=ingest_batch,
         dry_run=dry_run,
     )

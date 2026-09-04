@@ -25,7 +25,8 @@ async def test_mine_endpoint_returns_unified_response(async_client, monkeypatch)
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["code"] == 200 and body["success"] is True
+    assert body["code"] == 200
+    assert body["success"] is True
     assert body["data"]["scholarName"] == "吴边"
     assert body["msg"] == "success"
 
@@ -41,7 +42,8 @@ async def test_mine_endpoint_404(async_client, monkeypatch):
         json={"scholarId": "nope"},
     )
     body = response.json()
-    assert body["code"] == 404 and body["success"] is False
+    assert body["code"] == 404
+    assert body["success"] is False
 
 
 async def test_mine_endpoint_validation_error(async_client):

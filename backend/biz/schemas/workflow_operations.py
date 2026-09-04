@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+DEFAULT_TIMEZONE = "Asia/Shanghai"
+
 
 class UpdatePolicyRequest(BaseModel):
     enabled: bool = True
@@ -13,7 +15,7 @@ class UpdatePolicyRequest(BaseModel):
     execution_time: str = Field(
         default="02:00", alias="executionTime", pattern=r"^([01]\d|2[0-3]):[0-5]\d$"
     )
-    timezone: str = "Asia/Shanghai"
+    timezone: str = DEFAULT_TIMEZONE
     skip_when_no_changes: bool = Field(default=True, alias="skipWhenNoChanges")
 
     model_config = {"populate_by_name": True}
@@ -82,18 +84,17 @@ class WorkflowExecuteRequest(BaseModel):
     @field_validator("payload")
     @classmethod
     def validate_limit(cls, value: dict[str, Any]) -> dict[str, Any]:
-        if "limit" not in value:
-            return value
-        limit = value["limit"]
-        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
-            raise ValueError("limit 必须为正整数")
+        if "limit" in value:
+            limit = value["limit"]
+            if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+                raise ValueError("limit 必须为正整数")
         return value
 
 
 class WorkflowScheduleRequest(BaseModel):
     id: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]{2,127}$")
     cron: str = Field(min_length=5, max_length=100)
-    timezone: str = "Asia/Shanghai"
+    timezone: str = DEFAULT_TIMEZONE
     active: bool = True
     payload: dict[str, Any] = Field(default_factory=dict)
     llm_config_id: str | None = Field(default=None, alias="llmConfigId")
@@ -158,7 +159,7 @@ class JobScheduleSpec(BaseModel):
 
     kind: Literal["once", "cron"] = "once"
     cron: str | None = Field(default=None, min_length=5, max_length=100)
-    timezone: str = "Asia/Shanghai"
+    timezone: str = DEFAULT_TIMEZONE
 
 
 class JobCreateRequest(BaseModel):

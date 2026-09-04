@@ -35,7 +35,9 @@ class SchemaManagementDAO:
     def get(self, schema_id: str) -> GraphSchemaDefinition | None:
         statement = (
             select(GraphSchemaDefinition)
-            .where(GraphSchemaDefinition.id == schema_id, GraphSchemaDefinition.is_deleted.is_(False))
+            .where(
+                GraphSchemaDefinition.id == schema_id, GraphSchemaDefinition.is_deleted.is_(False)
+            )
             .options(*self._load_options())
         )
         return self.session.scalar(statement)
@@ -103,8 +105,10 @@ class SchemaManagementDAO:
         return list(self.session.scalars(statement).all()), int(total)
 
     def list_all(self, graph_space: str | None = None) -> list[GraphSchemaDefinition]:
-        statement = select(GraphSchemaDefinition).options(*self._load_options()).where(
-            GraphSchemaDefinition.is_deleted.is_(False)
+        statement = (
+            select(GraphSchemaDefinition)
+            .options(*self._load_options())
+            .where(GraphSchemaDefinition.is_deleted.is_(False))
         )
         if graph_space:
             statement = statement.where(GraphSchemaDefinition.graph_space == graph_space)

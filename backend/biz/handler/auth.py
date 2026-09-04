@@ -55,7 +55,7 @@ def _clear_state_cookie(response: Response, application: AuthApplication) -> Non
     )
 
 
-@router.get("/login-url", response_model=LoginUrlResponse)
+@router.get("/login-url")
 async def get_login_url(
     response: Response,
     application: AuthApplicationDependency,
@@ -145,7 +145,7 @@ async def oauth_callback(
     return response
 
 
-@router.get("/me", response_model=AuthProfileResponse)
+@router.get("/me")
 async def get_current_profile(
     context: CurrentUser,
     application: AuthApplicationDependency,
@@ -156,12 +156,12 @@ async def get_current_profile(
         _raise_auth_error(exc)
 
 
-@router.get("/permissions", response_model=PermissionInfoResponse)
+@router.get("/permissions")
 async def get_current_permissions(context: CurrentUser) -> PermissionInfoResponse:
     return PermissionInfoResponse(data=context.permission_info)
 
 
-@router.get("/security", response_model=AccountSecurityResponse)
+@router.get("/security")
 async def get_account_security(
     context: CurrentUser,
     application: AuthApplicationDependency,
@@ -169,7 +169,7 @@ async def get_account_security(
     return AccountSecurityResponse(data=application.account_security(context))
 
 
-@router.get("/operation-logs", response_model=OperationLogResponse)
+@router.get("/operation-logs")
 async def get_operation_logs(
     context: CurrentUser,
     application: AuthApplicationDependency,
@@ -190,7 +190,7 @@ async def get_operation_logs(
     return OperationLogResponse(data=data)
 
 
-@router.post("/refresh", response_model=AuthProfileResponse)
+@router.post("/refresh")
 async def refresh_session(
     request: Request,
     context: CurrentUser,
@@ -210,7 +210,7 @@ async def refresh_session(
         _raise_auth_error(exc)
 
 
-@router.post("/logout", response_model=LogoutResponse)
+@router.post("/logout")
 async def logout(
     request: Request,
     response: Response,

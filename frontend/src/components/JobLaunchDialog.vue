@@ -245,7 +245,7 @@ async function submit() {
         <div class="job-basics">
           <label class="job-field">
             <span>任务名称</span>
-            <input v-model="name" :maxlength="JOB_NAME_RULE.max" placeholder="如：论文-专家抽取" />
+            <input aria-label="如：论文-专家抽取" v-model="name" :maxlength="JOB_NAME_RULE.max" placeholder="如：论文-专家抽取" />
             <small v-if="nameError" class="field-error">{{ nameError }}</small>
           </label>
           <div class="job-field">
@@ -273,7 +273,7 @@ async function submit() {
           </div>
           <label class="job-field">
             <span>批大小（默认 500）</span>
-            <input v-model.number="extractBatchSize" type="number" min="1" max="5000" placeholder="500" />
+            <input aria-label="500" v-model.number="extractBatchSize" type="number" min="1" max="5000" placeholder="500" />
           </label>
         </div>
         <div v-else-if="taskType === 'single'" class="job-field">
@@ -306,7 +306,7 @@ async function submit() {
             <button type="button" @click="uploadFileInput?.click()">{{ uploadFile ? '重新选择' : '选择 .py 文件' }}</button>
             <code v-if="uploadFile">{{ uploadFile.name }}</code>
           </div>
-          <input ref="uploadFileInput" type="file" accept=".py" hidden @change="onUploadFileChosen" />
+          <input aria-label="file-input" ref="uploadFileInput" type="file" accept=".py" hidden @change="onUploadFileChosen" />
         </div>
 
         <fieldset class="job-section">
@@ -334,7 +334,7 @@ async function submit() {
             </div>
             <label class="job-field">
               <span>数据库</span>
-              <input v-model="mysqlDatabase" :maxlength="MYSQL_DB_RULE.max" placeholder="如 gkx_element（默认取数据源配置）" />
+              <input aria-label="如 gkx_element（默认取数据源配置）" v-model="mysqlDatabase" :maxlength="MYSQL_DB_RULE.max" placeholder="如 gkx_element（默认取数据源配置）" />
               <small v-if="dbError" class="field-error">{{ dbError }}</small>
             </label>
           </div>
@@ -347,7 +347,7 @@ async function submit() {
             </div>
             <label class="job-field">
               <span>增量游标 since（可空）</span>
-              <input v-model="since" :maxlength="SINCE_RULE.max" placeholder="如 2026-08-01 00:00:00" />
+              <input aria-label="如 2026-08-01 00:00:00" v-model="since" :maxlength="SINCE_RULE.max" placeholder="如 2026-08-01 00:00:00" />
               <small v-if="sinceError" class="field-error">{{ sinceError }}</small>
             </label>
           </div>
@@ -356,13 +356,13 @@ async function submit() {
         <fieldset class="job-section">
           <legend>调度方式</legend>
           <div class="job-row">
-            <label class="job-field">
+            <div class="job-field">
               <span>执行模式</span>
-              <a-radio-group v-model="executeMode">
+              <a-radio-group v-model="executeMode" aria-label="执行模式">
                 <a-radio value="once">一次性</a-radio>
                 <a-radio value="recurring">周期性</a-radio>
               </a-radio-group>
-            </label>
+            </div>
             <template v-if="executeMode === 'recurring'">
               <div class="job-field">
                 <span>频率</span>
@@ -382,12 +382,12 @@ async function submit() {
               </div>
               <label class="job-field">
                 <span>首次执行时间</span>
-                <input v-model="executionTime" type="time" />
+                <input aria-label="executionTime" v-model="executionTime" type="time" />
               </label>
             </template>
-            <label v-else class="job-field checkbox-field">
-              <a-checkbox v-model="runNow">创建后立即执行</a-checkbox>
-            </label>
+            <div v-else class="job-field checkbox-field">
+              <a-checkbox v-model="runNow" aria-label="创建后立即执行">创建后立即执行</a-checkbox>
+            </div>
           </div>
           <p v-if="executeMode === 'recurring'" class="schedule-preview">
             执行计划：<strong>{{ schedulePreview }}</strong><span class="cron-hint">（首次执行时间即第一次触发，之后按频率顺延）</span>

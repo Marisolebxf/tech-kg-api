@@ -247,6 +247,14 @@ print(json.dumps({"result": result, "_access": access_report()}, ensure_ascii=Fa
 """
 
 
+def _write_private_tempfile(*, prefix: str, suffix: str, data: bytes | None = None) -> str:
+    """Create a private temporary file outside the event-loop thread."""
+    with tempfile.NamedTemporaryFile(prefix=prefix, suffix=suffix, delete=False) as handle:
+        if data is not None:
+            handle.write(data)
+        return handle.name
+
+
 async def _spawn_script(
     script_path: Path,
     function_name: str,
@@ -273,9 +281,9 @@ async def _spawn_script(
     pythonpath = os.pathsep.join(
         filter(None, [str(backend_dir), str(sdk_dir), str(script_path.parent)])
     )
-    sidecar = tempfile.NamedTemporaryFile(prefix="kg_access_", suffix=".jsonl", delete=False)
-    sidecar_path = sidecar.name
-    sidecar.close()
+    sidecar_path = await asyncio.to_thread(
+        _write_private_tempfile, prefix="kg_access_", suffix=".jsonl"
+    )
     sub_env = {
         **os.environ,
         "PYTHONPATH": pythonpath,
@@ -665,11 +673,12 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
                 body.close()
             except Exception:  # noqa: BLE001
                 logger.exception("关闭脚本流失败: %s", schema_id)
-    script_file = tempfile.NamedTemporaryFile(
-        prefix=f"kg_schema_extract_{schema_key}_", suffix=".py", delete=False
+    script_path = await asyncio.to_thread(
+        _write_private_tempfile,
+        prefix=f"kg_schema_extract_{schema_key}_",
+        suffix=".py",
+        data=data,
     )
-    script_file.write(data)
-    script_file.close()
     return {
         "schemaId": schema_id,
         "schemaKey": schema_key,
@@ -678,7 +687,7 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         "label": label,
         "activeProps": active_props,
         "sources": sources,
-        "scriptPath": script_file.name,
+        "scriptPath": script_path,
         "functionName": function_name,
         "timeoutSeconds": timeout_seconds,
         "maxInflight": max_inflight,
@@ -882,7 +891,10 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
                 effective_batch = n
                 if n <= 1:
                     break
-                if len(json.dumps(rows, ensure_ascii=False, default=str).encode()) <= _MAX_BATCH_ROWS_BYTES:
+                if (
+                    len(json.dumps(rows, ensure_ascii=False, default=str).encode())
+                    <= _MAX_BATCH_ROWS_BYTES
+                ):
                     break
                 n = max(1, n // 2)
     finally:
@@ -1032,7 +1044,9 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
         column_types: dict[str, str] = {}
         not_null_cols: set[str] = set()
         try:
-            described = client.execute_read(f"DESCRIBE {'TAG' if kind == 'entity' else 'EDGE'} `{name}`")
+            described = client.execute_read(
+                f"DESCRIBE {'TAG' if kind == 'entity' else 'EDGE'} `{name}`"
+            )
             for row in described.records or []:
                 col = str(row.get("Field"))
                 column_types[col] = str(row.get("Type")).lower()

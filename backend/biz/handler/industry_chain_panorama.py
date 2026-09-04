@@ -37,20 +37,20 @@ async def query_industry_chain_panorama(
 @router.get("/query", response_model=IndustryChainPanoramaQueryResponse)
 async def query_industry_chain_panorama_get(
     industry: Annotated[str | None, Query()] = None,
-    anchorId: Annotated[str | None, Query()] = None,
+    anchor_id: Annotated[str | None, Query(alias="anchorId")] = None,
     depth: Annotated[int, Query(ge=1, le=3)] = 2,
-    topK: Annotated[int, Query(ge=1)] = 5,
-    relationTypes: Annotated[list[str] | None, Query()] = None,
+    top_k: Annotated[int, Query(ge=1, alias="topK")] = 5,
+    relation_types: Annotated[list[str] | None, Query(alias="relationTypes")] = None,
     refresh: Annotated[bool, Query()] = False,
 ) -> dict[str, object]:
     # GET 与 POST 共用同一套入参校验，避免绕过长度/异常字符限制
     try:
         body = IndustryChainPanoramaQueryRequest(
             industry=industry,
-            anchorId=anchorId,
+            anchorId=anchor_id,
             depth=depth,
-            topK=topK,
-            relationTypes=relationTypes,
+            topK=top_k,
+            relationTypes=relation_types,
             refresh=refresh,
         )
     except ValidationError as exc:

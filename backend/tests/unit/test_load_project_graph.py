@@ -15,5 +15,5 @@ def test_project_vid():
 
 def test_stub_vids_stable():
     assert person_vid("张伟") == person_vid(" 张伟 ")
-    assert org_vid("清华大学") == org_vid("清华大学")
+    assert org_vid("清华大学") == org_vid(" 清华大学 ")
     assert keyword_vid("KG") == keyword_vid("kg")

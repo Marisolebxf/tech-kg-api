@@ -14,6 +14,8 @@ from service.stage_normalizer import normalize_stages, pipeline_steps
 from service.temporal_runtime import temporal_runtime
 from service.workflow_repository import WorkflowRepository, repository
 
+PENDING_MANUAL_REVIEW = "等待人工审核"
+
 
 def _now() -> str:
     return datetime.now(UTC).astimezone().strftime("%Y-%m-%d %H:%M:%S")
@@ -32,7 +34,7 @@ class WorkflowOperationsService:
         ]
         counts = {
             status: sum(item["taskStatus"] == status for item in latest_tasks)
-            for status in ("执行中", "执行出错", "等待人工审核", "执行完成")
+            for status in ("执行中", "执行出错", PENDING_MANUAL_REVIEW, "执行完成")
         }
         changes = self.repo.list_source_updates(None, None, None)
         return {
@@ -44,7 +46,11 @@ class WorkflowOperationsService:
                 },
                 {"label": "执行完成", "value": str(counts["执行完成"]), "hint": ""},
                 {"label": "执行出错", "value": str(counts["执行出错"]), "hint": ""},
-                {"label": "等待人工审核", "value": str(counts["等待人工审核"]), "hint": ""},
+                {
+                    "label": PENDING_MANUAL_REVIEW,
+                    "value": str(counts[PENDING_MANUAL_REVIEW]),
+                    "hint": "",
+                },
             ],
             "statusCounts": counts,
             "latestBatch": latest_batch,

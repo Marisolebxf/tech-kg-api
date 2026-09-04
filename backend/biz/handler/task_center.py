@@ -16,18 +16,18 @@ router = APIRouter(prefix="/task-center", tags=["task-center"])
 service = workflow_operations_application.service
 
 
-@router.get("/overview", response_model=ApiResponse)
+@router.get("/overview")
 async def get_overview() -> ApiResponse:
     return ApiResponse(data=service.task_overview())
 
 
-@router.get("/batches", response_model=ApiResponse)
+@router.get("/batches")
 async def list_batches() -> ApiResponse:
     items = service.repo.list_batches()
     return ApiResponse(data={"items": items, "total": len(items)})
 
 
-@router.get("/tasks", response_model=ApiResponse)
+@router.get("/tasks")
 async def list_tasks(
     stage: str | None = None,
     status: str | None = None,
@@ -56,7 +56,7 @@ async def list_tasks(
     )
 
 
-@router.get("/tasks/{task_id}", response_model=ApiResponse)
+@router.get("/tasks/{task_id}", responses={404: {"description": "请求的资源不存在"}})
 async def get_task(task_id: str) -> ApiResponse:
     try:
         task = service.get_task(task_id)
@@ -82,7 +82,7 @@ async def retry_task(task_id: str, request: TaskRetryRequest) -> ApiResponse:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.get("/data-sources/health", response_model=ApiResponse)
+@router.get("/data-sources/health")
 async def source_health() -> ApiResponse:
     health = service.repo.source_health()
     temporal = await service.temporal_health() if hasattr(service, "temporal_health") else None
@@ -93,7 +93,7 @@ async def source_health() -> ApiResponse:
     return ApiResponse(data={"items": health, "total": len(health)})
 
 
-@router.get("/data-sources/updates", response_model=ApiResponse)
+@router.get("/data-sources/updates")
 async def source_updates(
     domain: str | None = None,
     since: str | None = None,
@@ -114,18 +114,18 @@ async def source_updates(
     )
 
 
-@router.get("/update-policy", response_model=ApiResponse)
+@router.get("/update-policy")
 async def get_update_policy() -> ApiResponse:
     return ApiResponse(data=service.repo.get_setting("update_policy"))
 
 
-@router.put("/update-policy", response_model=ApiResponse)
+@router.put("/update-policy")
 async def save_update_policy(request: UpdatePolicyRequest) -> ApiResponse:
     result = await service.save_update_policy(request.model_dump())
     return ApiResponse(data=result, msg="自动建图更新策略已保存")
 
 
-@router.post("/trigger", response_model=ApiResponse)
+@router.post("/trigger")
 async def trigger_graph_build(request: TriggerGraphBuildRequest) -> ApiResponse:
     return ApiResponse(
         data=await service.trigger_graph_build(request.model_dump()), msg="图谱构建任务已创建"

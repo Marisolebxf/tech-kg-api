@@ -35,11 +35,11 @@ RUN pnpm build
 # 文档站（VitePress）产物写入 dist/docs/，随主应用产物一同拷入 nginx 镜像。
 RUN pnpm docs:build
 
-FROM nginx:1.27-alpine
+FROM nginxinc/nginx-unprivileged:1.27-alpine
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-EXPOSE 80
+EXPOSE 8080
 
 CMD ["nginx", "-g", "daemon off;"]

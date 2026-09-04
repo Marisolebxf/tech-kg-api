@@ -221,7 +221,7 @@ onMounted(() => {
       <div class="entity-filters">
         <label class="entity-filters__search">
           <span aria-hidden="true">⌕</span>
-          <input
+          <input aria-label="输入实体名称 / 属性关键词（语义 + 关键词混合检索）；留空则分页浏览全部实体"
             v-model="keyword"
             :maxlength="SEARCH_KEYWORD_MAX_LENGTH"
             placeholder="输入实体名称 / 属性关键词（语义 + 关键词混合检索）；留空则分页浏览全部实体"

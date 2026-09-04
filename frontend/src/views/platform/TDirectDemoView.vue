@@ -362,7 +362,7 @@ const handleDecide = (accepted: boolean) => {
 
     <nav class="dd-switcher">
       <span class="dd-switcher-label">示例 schema：</span>
-      <button v-for="c in demoCases" :key="c.id" :class="['dd-switch', { active: c.id === currentCaseId }]" @click="switchCase(c.id)">{{ c.label }}</button>
+      <button type="button" v-for="c in demoCases" :key="c.id" :class="['dd-switch', { active: c.id === currentCaseId }]" @click="switchCase(c.id)">{{ c.label }}</button>
     </nav>
 
     <!-- 1. 原始记录（数据流起点） -->
@@ -455,14 +455,14 @@ const handleDecide = (accepted: boolean) => {
       <h2 class="dd-block-title">⑤ 决策</h2>
       <label class="dd-note">
         <span>备注（可选）</span>
-        <input v-model="note" placeholder="审核备注..." />
+        <input aria-label="审核备注..." v-model="note" placeholder="审核备注..." />
       </label>
       <div class="dd-actions">
-        <button class="dd-accept" :disabled="submitting" @click="handleDecide(true)">
+        <button type="button" class="dd-accept" :disabled="submitting" @click="handleDecide(true)">
           <strong>通过·入库</strong>
           <em>{{ isEntity ? `创建 ${currentCase.candidate._nodeLabel} 节点` : `创建 ${currentCase.candidate._edgeType} 边` }}</em>
         </button>
-        <button class="dd-reject" :disabled="submitting" @click="handleDecide(false)">
+        <button type="button" class="dd-reject" :disabled="submitting" @click="handleDecide(false)">
           <strong>驳回·丢弃</strong>
           <em>候选丢弃，不写图</em>
         </button>

@@ -16,7 +16,7 @@ def _header_env(name: str, default: str) -> str:
     return os.getenv(name, default)
 
 
-async def get_review_identity(request: Request) -> ReviewIdentity:
+def get_review_identity(request: Request) -> ReviewIdentity:
     """Read canonical or environment-configured gateway headers and verify their HMAC."""
 
     def value(env_name: str, default: str) -> str:

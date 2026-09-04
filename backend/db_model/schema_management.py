@@ -22,6 +22,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from service.workflow_models import Base
 
+DELETE_ORPHAN_CASCADE = "all, delete-orphan"
+SCHEMA_DEFINITION_ID_FK = "kg_schema_definition.id"
+
 
 def _uuid() -> str:
     return str(uuid4())
@@ -64,10 +67,10 @@ class GraphSchemaDefinition(Base):
     is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_schema_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("kg_schema_definition.id", ondelete="RESTRICT"), nullable=True
+        String(36), ForeignKey(SCHEMA_DEFINITION_ID_FK, ondelete="RESTRICT"), nullable=True
     )
     target_schema_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("kg_schema_definition.id", ondelete="RESTRICT"), nullable=True
+        String(36), ForeignKey(SCHEMA_DEFINITION_ID_FK, ondelete="RESTRICT"), nullable=True
     )
     source_expression: Mapped[str | None] = mapped_column(String(512), nullable=True)
     target_expression: Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -96,12 +99,12 @@ class GraphSchemaDefinition(Base):
 
     properties: Mapped[list[GraphSchemaProperty]] = relationship(
         back_populates="schema",
-        cascade="all, delete-orphan",
+        cascade=DELETE_ORPHAN_CASCADE,
         order_by="GraphSchemaProperty.position",
     )
     mappings: Mapped[list[GraphSchemaMapping]] = relationship(
         back_populates="schema",
-        cascade="all, delete-orphan",
+        cascade=DELETE_ORPHAN_CASCADE,
         order_by="GraphSchemaMapping.position",
     )
     sources: Mapped[list[GraphSchemaSource]] = relationship(
@@ -110,7 +113,7 @@ class GraphSchemaDefinition(Base):
         order_by="GraphSchemaSource.position",
     )
     script: Mapped[GraphSchemaScript | None] = relationship(
-        back_populates="schema", cascade="all, delete-orphan", uselist=False
+        back_populates="schema", cascade=DELETE_ORPHAN_CASCADE, uselist=False
     )
     source_schema: Mapped[GraphSchemaDefinition | None] = relationship(
         foreign_keys=[source_schema_id], remote_side=[id]
@@ -131,7 +134,7 @@ class GraphSchemaProperty(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     schema_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("kg_schema_definition.id", ondelete="CASCADE"), nullable=False
+        String(36), ForeignKey(SCHEMA_DEFINITION_ID_FK, ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     data_type: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -158,7 +161,7 @@ class GraphSchemaMapping(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     schema_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("kg_schema_definition.id", ondelete="CASCADE"), nullable=False
+        String(36), ForeignKey(SCHEMA_DEFINITION_ID_FK, ondelete="CASCADE"), nullable=False
     )
     source_name: Mapped[str] = mapped_column(String(255), nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -177,7 +180,7 @@ class GraphSchemaScript(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     schema_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("kg_schema_definition.id", ondelete="CASCADE"), nullable=False
+        String(36), ForeignKey(SCHEMA_DEFINITION_ID_FK, ondelete="CASCADE"), nullable=False
     )
     bucket: Mapped[str] = mapped_column(String(128), nullable=False)
     object_key: Mapped[str] = mapped_column(String(512), nullable=False)

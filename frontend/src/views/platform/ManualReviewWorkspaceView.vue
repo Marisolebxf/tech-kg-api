@@ -622,7 +622,7 @@ const secondaryActions = computed(() => {
             <tbody>
               <tr v-for="[key, val] in directCandidateFields" :key="String(key)" :class="{ 'is-edited': directEditing && directEdits[key] !== undefined && directEdits[key] !== directOriginalText(val) }">
                 <th>{{ key }}</th>
-                <td v-if="directEditing"><input v-model="directEdits[key]" :placeholder="directOriginalText(val)" /></td>
+                <td v-if="directEditing"><input aria-label="directEdits[key]" v-model="directEdits[key]" :placeholder="directOriginalText(val)" /></td>
                 <td v-else>{{ directOriginalText(val) }}</td>
               </tr>
             </tbody>
@@ -699,18 +699,18 @@ const secondaryActions = computed(() => {
           <h3>⑤ 决策</h3>
           <label v-if="isEditable" class="direct-note">
             <span>备注（可选）</span>
-            <input v-model="note" placeholder="审核备注..." />
+            <input aria-label="审核备注..." v-model="note" placeholder="审核备注..." />
           </label>
           <div v-if="isEditable" class="direct-actions">
-            <button v-if="directEditing" class="direct-accept direct-accept-fix" :disabled="submitting || !directPatchedCandidate" @click="handleAction({ id: 'accept-fix', label: '修正后入库', kind: 'primary' })">
+            <button type="button" v-if="directEditing" class="direct-accept direct-accept-fix" :disabled="submitting || !directPatchedCandidate" @click="handleAction({ id: 'accept-fix', label: '修正后入库', kind: 'primary' })">
               <strong>修正后入库</strong>
               <em>{{ directPatchedCandidate ? `覆盖 ${directEditedKeys.length} 个字段并写图 · 记入审计` : '请先在①候选中修改字段' }}</em>
             </button>
-            <button v-if="!directEditing" class="direct-accept" :disabled="submitting" @click="handleAction({ id: 'accept', label: '通过·入库', kind: 'primary' })">
+            <button type="button" v-if="!directEditing" class="direct-accept" :disabled="submitting" @click="handleAction({ id: 'accept', label: '通过·入库', kind: 'primary' })">
               <strong>通过·入库</strong>
               <em>{{ directKind === 'relation' ? `创建${labelZh(directEdgeType) || '?'}边` : `创建${labelZh(directNodeLabel) || '?'}节点` }}</em>
             </button>
-            <button class="direct-reject" :disabled="submitting" @click="handleAction({ id: 'reject', label: '驳回·丢弃', kind: 'danger' })">
+            <button type="button" class="direct-reject" :disabled="submitting" @click="handleAction({ id: 'reject', label: '驳回·丢弃', kind: 'danger' })">
               <strong>驳回·丢弃</strong>
               <em>候选丢弃，不写图</em>
             </button>
@@ -758,7 +758,7 @@ const secondaryActions = computed(() => {
         <section class="direct-decision">
           <h3>操作</h3>
           <div class="direct-actions">
-            <button
+            <button type="button"
               v-if="productionCase?.status === 'OPEN'"
               class="direct-accept"
               :disabled="extractRerunSubmitting"
@@ -813,13 +813,13 @@ const secondaryActions = computed(() => {
             </a-select>
           </div>
           <a-checkbox v-if="record.type.includes('标准化失败')" v-model="keepRawEnum" class="check-line" :disabled="!isEditable">保留原始值用于追溯</a-checkbox>
-          <label v-if="record.type === '专利状态标准化失败'" class="inline-select">
+          <div v-if="record.type === '专利状态标准化失败'" class="inline-select">
             <span>字典版本</span>
-            <a-select v-model="dictVersion" :disabled="!isEditable">
+            <a-select v-model="dictVersion" aria-label="字典版本" :disabled="!isEditable">
               <a-option value="v1.2">回滚到 dict-patent-v1.2</a-option>
               <a-option value="v1.3-fix">在 v1.3 新增枚举条目</a-option>
             </a-select>
-          </label>
+          </div>
         </template>
       </section>
 
@@ -879,7 +879,7 @@ const secondaryActions = computed(() => {
         </a-form-item>
         <label v-if="isEditable" class="wide-field">
           <span>补充证据（链接或记录 ID）</span>
-          <input v-model="extraEvidence" placeholder="例如：COOP-89321-B 或公告 URL" />
+          <input aria-label="例如：COOP-89321-B 或公告 URL" v-model="extraEvidence" placeholder="例如：COOP-89321-B 或公告 URL" />
         </label>
         <h3 class="zone-subtitle">处理结论</h3>
         <a-form-item field="relationVerdict" hide-label>
@@ -912,8 +912,8 @@ const secondaryActions = computed(() => {
           <a-radio value="B" :disabled="!isEditable">采用来源 B</a-radio>
           <a-radio value="manual" :disabled="!isEditable">
             手工改写
-            <input v-model="attrManualOrg" class="mini" placeholder="机构" :disabled="!isEditable || attrVerdict !== 'manual'" />
-            <input v-model="attrManualRange" class="mini" placeholder="起止时间" :disabled="!isEditable || attrVerdict !== 'manual'" />
+            <input aria-label="机构" v-model="attrManualOrg" class="mini" placeholder="机构" :disabled="!isEditable || attrVerdict !== 'manual'" />
+            <input aria-label="起止时间" v-model="attrManualRange" class="mini" placeholder="起止时间" :disabled="!isEditable || attrVerdict !== 'manual'" />
           </a-radio>
           <a-radio value="split" :disabled="!isEditable">时间切分（两段都保留）</a-radio>
         </a-radio-group>
@@ -945,8 +945,8 @@ const secondaryActions = computed(() => {
         </div>
         <div class="fill-form">
           <h3 class="zone-subtitle">补录结果</h3>
-          <a-form-item class="wide-field" field="fillTitleZh" label="title_zh" required><input v-model="fillTitleZh" :disabled="!isEditable" placeholder="论文中文标题" /></a-form-item>
-          <a-form-item class="wide-field" field="fillTitleEn" label="title_en"><input v-model="fillTitleEn" :disabled="!isEditable" placeholder="论文英文标题（可选）" /></a-form-item>
+          <a-form-item class="wide-field" field="fillTitleZh" label="title_zh" required><input aria-label="论文中文标题" v-model="fillTitleZh" :disabled="!isEditable" placeholder="论文中文标题" /></a-form-item>
+          <a-form-item class="wide-field" field="fillTitleEn" label="title_en"><input aria-label="论文英文标题（可选）" v-model="fillTitleEn" :disabled="!isEditable" placeholder="论文英文标题（可选）" /></a-form-item>
           <p class="fill-rerun-note">保存后将从「清洗标准化」节点重跑当前记录，不影响同批次其他数据。</p>
         </div>
       </section>
@@ -1027,7 +1027,7 @@ const secondaryActions = computed(() => {
         >
           {{ action.label }}
         </button>
-        <label class="note-inline"><input v-model="note" placeholder="备注（可选）" /></label>
+        <label class="note-inline"><span class="sr-only">备注（可选）</span><input v-model="note" placeholder="备注（可选）" /></label>
         <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ primaryActionLabel }}</button>
       </div>
     </footer>

@@ -112,7 +112,7 @@ const spaceWorking = ref(false)
 const items = ref<ConfigItem[]>([])
 const activeCategory = ref('语言模型')
 const keyword = ref('')
-const statusFilter = ref('全部状态')
+const statusFilter = ref<string | undefined>('全部状态')
 const selected = ref<ConfigItem | null>(null)
 const dialogOpen = ref(false)
 const testingId = ref('')
@@ -184,7 +184,7 @@ const visibleItems = computed(() => items.value.filter((item) => {
   const query = keyword.value.trim().toLowerCase()
   const endpointOrUrl = item.baseUrl || item.host || item.uri || item.endpoint
   const matchKeyword = !query || `${item.name}${item.id}${item.type}${endpointOrUrl}${item.model || ''}`.toLowerCase().includes(query)
-  const matchStatus = statusFilter.value === '全部状态' || item.status === statusFilter.value
+  const matchStatus = !statusFilter.value || statusFilter.value === '全部状态' || item.status === statusFilter.value
   return matchCategory && matchKeyword && matchStatus
 }))
 
@@ -609,7 +609,7 @@ onMounted(() => {
       </aside>
 
       <main class="config-list">
-        <header><div><h2>{{ categories.find(item => item.key === activeCategory)?.label }}</h2><span>{{ isGraphSpaceCategory ? `${mySpaces.length} 个已绑定空间` : `${visibleItems.length} 项配置` }}</span></div><nav v-if="!isGraphSpaceCategory"><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input><a-select v-model="statusFilter"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button></nav><nav v-else class="bind-nav"><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button></nav></header>
+        <header><div><h2>{{ categories.find(item => item.key === activeCategory)?.label }}</h2><span>{{ isGraphSpaceCategory ? `${mySpaces.length} 个已绑定空间` : `${visibleItems.length} 项配置` }}</span></div><nav v-if="!isGraphSpaceCategory"><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button></nav><nav v-else class="bind-nav"><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
             <thead><tr><th>图数据空间</th><th>绑定状态</th><th>操作</th></tr></thead>

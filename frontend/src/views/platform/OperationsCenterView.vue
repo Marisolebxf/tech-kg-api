@@ -23,9 +23,10 @@ const route = useRoute()
 const keyword = ref(clampSearchKeyword(String(route.query.keyword || '')))
 const status = ref('全部状态')
 const domain = ref('全部业务域')
-/** 人工审核筛选：状态分组（待处理/已处理）与对象种类（实体/关系/都看）；C 类额外支持 重跑中/重跑失败 精确过滤。 */
-const reviewStatusFilter = ref<'全部' | '待处理' | '已处理' | '重跑中' | '重跑失败'>('全部')
-const reviewKindFilter = ref<'全部' | '实体' | '关系'>('全部')
+/** 人工审核筛选：状态分组（待处理/已处理）与对象种类（实体/关系/都看）；C 类额外支持 重跑中/重跑失败 精确过滤。
+ *  undefined = 未选择（清空），语义等同「全部」。 */
+const reviewStatusFilter = ref<'全部' | '待处理' | '已处理' | '重跑中' | '重跑失败' | undefined>('全部')
+const reviewKindFilter = ref<'全部' | '实体' | '关系' | undefined>('全部')
 const reviewTotal = ref(0)
 const severity = ref('全部风险')
 const actionFeedback = ref('')
@@ -77,11 +78,11 @@ const resetFilters = () => {
 const filteredAlertRows = computed(() => alertRows.filter((row) => {
     const text = Object.values(row).join(' ')
     return (!keyword.value || text.includes(keyword.value))
-      && (alertCategory.value === '全部异常' || text.includes(alertCategory.value))
-      && (severity.value === '全部风险' || text.includes(severity.value))
+      && (!alertCategory.value || alertCategory.value === '全部异常' || text.includes(alertCategory.value))
+      && (!severity.value || severity.value === '全部风险' || text.includes(severity.value))
       && (!blockingOnly.value || row.blocked)
-      && (status.value === '全部状态' || text.includes(status.value))
-      && (domain.value === '全部业务域' || text.includes(domain.value.replace('域', '')))
+      && (!status.value || status.value === '全部状态' || text.includes(status.value))
+      && (!domain.value || domain.value === '全部业务域' || text.includes(domain.value.replace('域', '')))
       && (!route.query.batch || text.includes(String(route.query.batch)))
 }))
 
@@ -229,11 +230,9 @@ async function loadReviews() {
     const response = await getProductionReviews({
       category: reviewCategory.value,
       keyword: keyword.value || undefined,
-      statusGroup: ['待处理', '已处理'].includes(reviewStatusFilter.value)
-        ? (reviewStatusFilter.value === '待处理' ? 'pending' : 'processed')
-        : undefined,
+      statusGroup: reviewStatusFilter.value === '待处理' ? 'pending' : reviewStatusFilter.value === '已处理' ? 'processed' : undefined,
       status: reviewStatusFilter.value === '重跑中' ? 'RERUNNING' : reviewStatusFilter.value === '重跑失败' ? 'RERUN_FAILED' : undefined,
-      kind: reviewKindFilter.value === '全部' ? undefined : reviewKindFilter.value === '实体' ? 'entity' : 'relation',
+      kind: !reviewKindFilter.value || reviewKindFilter.value === '全部' ? undefined : reviewKindFilter.value === '实体' ? 'entity' : 'relation',
       page: reviewPage.value,
       pageSize: reviewPageSize.value,
     })
@@ -343,13 +342,13 @@ onMounted(loadReviews)
         <a-form-item v-if="mode === 'review'" field="keyword"><a-input v-model="keyword" class="review-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录"><template #prefix><IconSearch /></template></a-input></a-form-item>
         <a-form-item v-else field="keyword"><input v-model="keyword" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索批次、对象、异常原因" placeholder="搜索批次、对象、异常原因" /></a-form-item>
         <template v-if="mode === 'alerts'">
-          <a-form-item field="severity"><a-select v-model="severity" :options="['全部风险', '高风险', '中风险', '低风险']" /></a-form-item>
-          <a-form-item field="domain"><a-select v-model="domain" :options="['全部业务域', '人才域', '论文域', '企业域']" /></a-form-item>
-          <a-form-item field="status"><a-select v-model="status" :options="['全部状态', '待处理', '处理中', '已关闭']" /></a-form-item>
+          <a-form-item field="severity"><a-select v-model="severity" allow-clear placeholder="全部风险" :options="['全部风险', '高风险', '中风险', '低风险']" /></a-form-item>
+          <a-form-item field="domain"><a-select v-model="domain" allow-clear placeholder="全部业务域" :options="['全部业务域', '人才域', '论文域', '企业域']" /></a-form-item>
+          <a-form-item field="status"><a-select v-model="status" allow-clear placeholder="全部状态" :options="['全部状态', '待处理', '处理中', '已关闭']" /></a-form-item>
         </template>
         <template v-else>
-          <a-form-item field="reviewStatus"><a-select v-model="reviewStatusFilter" :options="reviewStatusOptions" /></a-form-item>
-          <a-form-item field="reviewKind"><a-select v-model="reviewKindFilter" :options="['全部', '实体', '关系']" /></a-form-item>
+          <a-form-item field="reviewStatus"><a-select v-model="reviewStatusFilter" allow-clear placeholder="全部" :options="reviewStatusOptions" /></a-form-item>
+          <a-form-item field="reviewKind"><a-select v-model="reviewKindFilter" allow-clear placeholder="全部" :options="['全部', '实体', '关系']" /></a-form-item>
         </template>
         <a-form-item><button type="button" @click="resetFilters">清空筛选</button></a-form-item>
       </a-form>

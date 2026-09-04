@@ -272,11 +272,12 @@ const router = useRouter()
 const activeTab = ref<PlatformTab>(props.initialTab ?? 'overview')
 const activeServiceKey = ref(props.initialServiceKey ?? modules[0]?.key ?? '')
 const activeServiceMode = ref<'test' | 'api'>('test')
-const selectedQueryType = ref('全部图谱')
+// 图谱范围/关系类型/置信度：清空（未选择）分别等同 全部图谱/全部关系/不限
+const selectedQueryType = ref<string | undefined>('全部图谱')
 const queryKeyword = ref('')
-const queryRelationFilter = ref('全部关系')
-const queryEntityConfidence = ref('不限')
-const queryRelationConfidence = ref('不限')
+const queryRelationFilter = ref<string | undefined>('全部关系')
+const queryEntityConfidence = ref<string | undefined>('不限')
+const queryRelationConfidence = ref<string | undefined>('不限')
 const queryFormRef = ref()
 const queryFormModel = computed(() => ({
   queryKeyword: queryKeyword.value,
@@ -287,6 +288,7 @@ const queryFormModel = computed(() => ({
 }))
 const queryFormRules = {
   queryKeyword: [{ required: true, message: '请输入实体名称或ID' }],
+  selectedGraphSpace: [{ required: true, message: '请选择图空间' }],
 }
 const queryApplied = ref(false)
 const processingDomainFilter = ref('全部业务域')
@@ -738,7 +740,7 @@ const queryEntityLegendItems = computed(() => {
 })
 
 const selectedQueryScopeDescription = computed(() => (
-  queryScopeDescriptions[selectedQueryType.value] ?? queryScopeDescriptions.全部图谱
+  queryScopeDescriptions[selectedQueryType.value || '全部图谱'] ?? queryScopeDescriptions.全部图谱
 ))
 
 const querySummary = computed(() => {
@@ -4424,6 +4426,12 @@ async function handleNgqlQuery(): Promise<void> {
     return
   }
 
+  // 图空间必选：清空后不允许执行（后端按 X-Graph-Space 路由）
+  if (!ngqlSpace.value) {
+    showToast('请选择图空间', 'warning')
+    return
+  }
+
   ngqlLoading.value = true
   ngqlResult.value = null
 
@@ -4536,6 +4544,12 @@ async function handleQuery(): Promise<void> {
     return
   }
 
+  // 图空间必选：清空后不允许发起查询（后端按 X-Graph-Space 路由）
+  if (!selectedGraphSpace.value) {
+    showToast('请选择图空间', 'warning')
+    return
+  }
+
   const keywordError = searchKeywordError(keyword)
   if (keywordError) {
     showToast(keywordError, 'warning')
@@ -4561,9 +4575,15 @@ async function handleQuery(): Promise<void> {
   queryDetailMode.value = 'summary'
 
   try {
+    // 未选择（清空）的筛选按默认语义执行：全部图谱 / 全部关系 / 不限
+    const queryType =
+      selectedQueryType.value || '全部图谱'
+    const relationFilter =
+      queryRelationFilter.value || '全部关系'
+
     const nodeLabels =
       queryTypeNodeLabelsMap[
-        selectedQueryType.value
+        queryType
       ] ?? queryTypeNodeLabelsMap.全部图谱
 
     const centerNode =
@@ -4581,7 +4601,7 @@ async function handleQuery(): Promise<void> {
     const relationGraph =
       await queryRelationByType(
         centerNode,
-        queryRelationFilter.value,
+        relationFilter,
       )
 
     queryGraphNodes.value =
@@ -4598,14 +4618,12 @@ async function handleQuery(): Promise<void> {
     */
     appliedGraphQuery.value = {
       keyword,
-      queryType:
-        selectedQueryType.value,
-      relationFilter:
-        queryRelationFilter.value,
+      queryType,
+      relationFilter,
       entityConfidence:
-        queryEntityConfidence.value,
+        queryEntityConfidence.value || '不限',
       relationConfidence:
-        queryRelationConfidence.value,
+        queryRelationConfidence.value || '不限',
     }
 
     /*
@@ -5029,27 +5047,27 @@ const pageMeta = computed(() => {
             />
           </a-form-item>
           <a-form-item class="platform-form-field" field="selectedQueryType" label="图谱范围">
-            <a-select v-model="selectedQueryType">
+            <a-select v-model="selectedQueryType" allow-clear placeholder="全部图谱">
               <a-option v-for="item in queryTypes" :key="item" :value="item">{{ item }}</a-option>
             </a-select>
           </a-form-item>
           <a-form-item class="platform-form-field" field="queryRelationFilter" label="关系类型">
-            <a-select v-model="queryRelationFilter">
+            <a-select v-model="queryRelationFilter" allow-clear placeholder="全部关系">
               <a-option v-for="item in relationFilters" :key="item" :value="item">{{ item }}</a-option>
             </a-select>
           </a-form-item>
           <a-form-item class="platform-form-field" field="queryEntityConfidence" label="实体置信度">
-            <a-select v-model="queryEntityConfidence">
+            <a-select v-model="queryEntityConfidence" allow-clear placeholder="不限">
               <a-option v-for="item in confidenceOptions" :key="`entity-${item}`" :value="item">{{ item }}</a-option>
             </a-select>
           </a-form-item>
           <a-form-item class="platform-form-field" field="queryRelationConfidence" label="关系置信度">
-            <a-select v-model="queryRelationConfidence">
+            <a-select v-model="queryRelationConfidence" allow-clear placeholder="不限">
               <a-option v-for="item in confidenceOptions" :key="`relation-${item}`" :value="item">{{ item }}</a-option>
             </a-select>
           </a-form-item>
-          <a-form-item class="platform-form-field" field="selectedGraphSpace" label="图空间">
-            <a-select v-model="selectedGraphSpace">
+          <a-form-item class="platform-form-field" field="selectedGraphSpace" label="图空间" required>
+            <a-select v-model="selectedGraphSpace" allow-clear placeholder="请选择图空间">
               <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
             </a-select>
           </a-form-item>
@@ -5058,7 +5076,7 @@ const pageMeta = computed(() => {
           <div class="platform-ngql-input__bar">
             <div class="platform-ngql-input__space-field">
               <label>图空间</label>
-              <a-select v-model="ngqlSpace" class="platform-ngql-input__space">
+              <a-select v-model="ngqlSpace" allow-clear placeholder="请选择图空间" class="platform-ngql-input__space">
                 <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
               </a-select>
             </div>

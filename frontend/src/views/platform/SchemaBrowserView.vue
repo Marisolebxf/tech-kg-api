@@ -30,6 +30,14 @@ import {
 import { currentUserId as getCurrentUserId } from '../../api/currentUser'
 import { listGraphSpaces } from '../../api/graphSpace'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
+import {
+  PROP_NAME_RULE,
+  SCHEMA_DESC_RULE,
+  SCHEMA_ENTITY_NAME_RULE,
+  SCHEMA_LABEL_RULE,
+  SCHEMA_RELATION_NAME_RULE,
+  validateText,
+} from '../../utils/textInput'
 import KgGraphCanvas from '../../components/kg-graph-canvas.vue'
 import type { GraphEdgeData, GraphNodeData } from '../../data/graph-presets'
 import { useToast } from '../../composables/use-toast'
@@ -105,8 +113,33 @@ const modalOpen = ref(false)
 const createForm = ref<CreateForm>(emptyCreateForm())
 const createFormRef = ref()
 const createFormRules = {
-  name: [{ required: true, message: '请输入名称' }],
-  label: [{ required: true, message: '请输入中文名' }],
+  name: [
+    { required: true, message: '请输入名称' },
+    {
+      validator: (value: string, callback: (error?: string) => void) => {
+        const isRelation = isRelationTab()
+        const error = validateText(
+          isRelation ? '关系英文名' : '实体名',
+          value || '',
+          isRelation ? SCHEMA_RELATION_NAME_RULE : SCHEMA_ENTITY_NAME_RULE,
+        )
+        callback(error ?? undefined)
+      },
+    },
+  ],
+  label: [
+    { required: true, message: '请输入中文名' },
+    {
+      validator: (value: string, callback: (error?: string) => void) =>
+        callback(validateText('中文名', value || '', SCHEMA_LABEL_RULE) ?? undefined),
+    },
+  ],
+  description: [
+    {
+      validator: (value: string, callback: (error?: string) => void) =>
+        callback(value ? (validateText('说明', value, SCHEMA_DESC_RULE) ?? undefined) : undefined),
+    },
+  ],
   sourceEntityId: [{
     validator: (value: string, callback: (error?: string) => void) =>
       callback(!isRelationTab() || value ? undefined : '请选择起点实体'),
@@ -119,6 +152,10 @@ const createFormRules = {
     validator: (value: PropertyRow[], callback: (error?: string) => void) =>
       callback(value.some((property) => property.name.trim()) ? undefined : '请至少填写一个属性名称'),
   }],
+}
+
+function validatePropName(value: string, callback: (error?: string) => void) {
+  callback(value.trim() ? (validateText('属性名', value, PROP_NAME_RULE) ?? undefined) : undefined)
 }
 const creating = ref(false)
 const confirming = ref(false)
@@ -378,6 +415,11 @@ async function submitAddProperty() {
     showToast('请填写属性名', 'warning')
     return
   }
+  const propNameError = validateText('属性名', name, PROP_NAME_RULE)
+  if (propNameError) {
+    showToast(propNameError, 'warning')
+    return
+  }
   if (propertyForm.value.dataType === 'fixed_string') {
     const error = validateFixedLength(propertyForm.value.length)
     if (error) {
@@ -615,7 +657,8 @@ async function loadSpaces() {
 
 async function switchSpace(value: string | number | boolean | Record<string, unknown> | unknown[]) {
   const space = String(value ?? '')
-  if (!space || space === activeSpace.value) return
+  if (space === activeSpace.value) return
+  // 清空（未选择）= 不按空间过滤，列出所有可见空间的 Schema
   activeSpace.value = space
   try {
     await Promise.all([loadSchemas(), loadTopology()])
@@ -911,11 +954,11 @@ function togglePropertyDetail(schemaId: string): void {
       <nav class="schema-tabs" aria-label="Schema 类型切换">
         <div class="schema-tabs__items"><button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="activeTab=tab;keyword=''">{{ tab }}</button></div>
       </nav>
-      <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeSpace">图空间：{{ activeSpace }}</span></div><div class="schema-toolbar__actions"><div class="space-picker"><span>图空间</span><a-select :model-value="activeSpace" placeholder="选择图空间" style="width:170px" @change="switchSpace"><a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option></a-select></div><button class="primary" type="button" @click="openCreate">＋ 增加</button><a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`"><template #prefix><IconSearch /></template></a-input></div></div>
+      <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeSpace">图空间：{{ activeSpace }}</span></div><div class="schema-toolbar__actions"><div class="space-picker"><span>图空间</span><a-select :model-value="activeSpace || undefined" allow-clear placeholder="全部空间" style="width:170px" @change="switchSpace" @clear="switchSpace('')"><a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option></a-select></div><button class="primary" type="button" @click="openCreate">＋ 增加</button><a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`"><template #prefix><IconSearch /></template></a-input></div></div>
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in filteredEntities" :key="row.name"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.description }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : (row.schema.isSystem ? '系统内置，不可删除' : '被关系引用，不可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="5"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in filteredEntities" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.description }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : (row.schema.isSystem ? '系统内置，不可删除' : '被关系引用，不可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="5"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
 
-      <div v-else class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in filteredRelations" :key="row.name"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="7"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
+      <div v-else class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in filteredRelations" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="7"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
 
       <!-- 版本记录（已隐藏）
       <div v-else class="schema-table-wrap schema-version-table"><table><thead><tr><th>版本</th><th>状态</th><th>发布时间</th><th>实体范围</th><th>关系范围</th><th>变更内容</th><th>发布人</th><th>操作</th></tr></thead><tbody><tr v-for="row in schemaVersions" :key="row.version"><td><code>{{ row.version }}</code></td><td><span :class="row.status === '当前版本' ? 'core' : 'support'">{{ row.status }}</span></td><td>{{ row.time }}</td><td>{{ row.entities }}</td><td>{{ row.relations }}</td><td>{{ row.change }}</td><td>{{ row.publisher }}</td><td><div class="schema-version-actions"><button type="button" @click="schemaVersionMessage = `已打开 ${row.version} 的完整变更清单。`">变更详情</button><button v-if="row.status !== '当前版本'" class="danger" type="button" @click="schemaVersionMessage = `已创建回退至 ${row.version} 的申请，通过影响分析与审批后才会执行。`">申请回退</button></div></td></tr></tbody></table></div>
@@ -936,10 +979,10 @@ function togglePropertyDetail(schemaId: string): void {
 
             <div class="create-row">
               <a-form-item class="create-field" field="name" :label="isRelationTab() ? '关系英文名' : '实体名'" required>
-                <input v-model="createForm.name" class="create-text-input" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
+                <input v-model="createForm.name" class="create-text-input" :maxlength="SCHEMA_ENTITY_NAME_RULE.max" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
               </a-form-item>
               <a-form-item class="create-field" field="label" label="中文名" required>
-                <input v-model="createForm.label" class="create-text-input" placeholder="如：技术" />
+                <input v-model="createForm.label" class="create-text-input" :maxlength="SCHEMA_LABEL_RULE.max" placeholder="如：技术" />
               </a-form-item>
             </div>
 
@@ -959,7 +1002,7 @@ function togglePropertyDetail(schemaId: string): void {
             </div>
 
             <a-form-item class="create-field create-field--full" field="description" label="说明">
-              <a-textarea v-model="createForm.description" :auto-size="{ minRows: 3, maxRows: 5 }" />
+              <a-textarea v-model="createForm.description" :auto-size="{ minRows: 3, maxRows: 5 }" :max-length="SCHEMA_DESC_RULE.max" />
             </a-form-item>
             <a-form-item class="create-props" field="properties" required label-component="div">
               <template #label>
@@ -975,8 +1018,8 @@ function togglePropertyDetail(schemaId: string): void {
                 class="create-prop-row"
                 :class="{ 'create-prop-row--has-length': p.dataType === 'fixed_string', 'create-prop-row--locked': p.locked }"
               >
-                <a-form-item class="prop-name-field" :field="`properties.${i}.name`" :rules="[{ required: true, message: '请输入属性名称' }]" hide-label>
-                  <input v-model="p.name" placeholder="属性名" class="prop-name" :disabled="p.locked" :title="p.locked ? '公共必选属性，不可修改' : undefined" />
+                <a-form-item class="prop-name-field" :field="`properties.${i}.name`" :rules="[{ required: true, message: '请输入属性名称' }, { validator: validatePropName }]" hide-label>
+                  <input v-model="p.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名" class="prop-name" :disabled="p.locked" :title="p.locked ? '公共必选属性，不可修改' : undefined" />
                 </a-form-item>
                 <template v-if="p.locked">
                   <span class="prop-locked-type">string</span>
@@ -1060,7 +1103,7 @@ function togglePropertyDetail(schemaId: string): void {
             <div class="property-section">
               <div class="property-section__head"><strong>新增属性</strong><span>新增后在图库执行 ALTER ADD（可空列）</span></div>
               <div class="property-add-form">
-                <input v-model="propertyForm.name" placeholder="属性名（字母/数字/下划线）" class="property-add-form__name" />
+                <input v-model="propertyForm.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名（字母/数字/下划线）" class="property-add-form__name" />
                 <a-select v-model="propertyForm.dataType" class="property-add-form__type" popup-container=".property-modal" :scrollbar="false">
                   <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                 </a-select>

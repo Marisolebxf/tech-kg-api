@@ -12,8 +12,8 @@ from sqlalchemy.dialects.mysql import JSON
 
 from db_model.base import Base
 
-PATENT_PRIMARY_KEY = '专利主键ID'
-PATENT_PUBLICATION_NUMBER = '专利公开(公告)号'
+PATENT_PRIMARY_KEY = "专利主键ID"
+PATENT_PUBLICATION_NUMBER = "专利公开(公告)号"
 
 
 class OdsPatent(Base):

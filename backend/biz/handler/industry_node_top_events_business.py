@@ -21,7 +21,7 @@ from biz.schemas.industry_node_top_events_business import IndustryNodeTopEventsR
 from infra.result_cache import get_cached_json, set_cached_json
 from service.industry_node_top_events_business import IndustryNodeTopEventsService
 
-APPLICATION_JSON = 'application/json'
+APPLICATION_JSON = "application/json"
 
 router = APIRouter(prefix="/kg-service", tags=["kg-service"])
 service = IndustryNodeTopEventsService()

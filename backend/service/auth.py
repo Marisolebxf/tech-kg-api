@@ -25,7 +25,7 @@ from config.auth import AuthSettings
 from infra.redis import AsyncJsonStore
 from infra.user_center import UserCenterClient, UserCenterError
 
-OVERVIEW_PATH = '/overview'
+OVERVIEW_PATH = "/overview"
 
 logger = logging.getLogger(__name__)
 

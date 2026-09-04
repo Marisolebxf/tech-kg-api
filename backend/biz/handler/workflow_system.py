@@ -16,8 +16,8 @@ from biz.schemas.workflow_operations import (
 )
 from service.temporal_runtime import temporal_runtime
 
-SCHEDULE_NOT_FOUND = 'Schedule 不存在'
-WORKFLOW_DEFINITION_NOT_FOUND = '工作流定义不存在'
+SCHEDULE_NOT_FOUND = "Schedule 不存在"
+WORKFLOW_DEFINITION_NOT_FOUND = "工作流定义不存在"
 
 router = APIRouter(prefix="/workflow-system", tags=["workflow-system"])
 service = workflow_operations_application.service
@@ -72,7 +72,10 @@ async def get_definition(definition_id: str) -> ApiResponse:
     return ApiResponse(data=definition)
 
 
-@router.post("/definitions/{definition_id}/execute", responses={404: {"description": "请求的资源不存在"}, 409: {"description": "资源状态冲突"}})
+@router.post(
+    "/definitions/{definition_id}/execute",
+    responses={404: {"description": "请求的资源不存在"}, 409: {"description": "资源状态冲突"}},
+)
 async def execute_definition(definition_id: str, request: WorkflowExecuteRequest) -> ApiResponse:
     definition = service.repo.get_definition(definition_id)
     if definition is None:
@@ -112,7 +115,9 @@ async def list_schedules() -> ApiResponse:
     return ApiResponse(data={"items": items, "total": len(items)})
 
 
-@router.post("/definitions/{definition_id}/schedules", responses={404: {"description": "请求的资源不存在"}})
+@router.post(
+    "/definitions/{definition_id}/schedules", responses={404: {"description": "请求的资源不存在"}}
+)
 async def create_schedule(definition_id: str, request: WorkflowScheduleRequest) -> ApiResponse:
     definition = service.repo.get_definition(definition_id)
     if definition is None:
@@ -145,7 +150,9 @@ async def update_schedule_state(schedule_id: str, request: ScheduleStateRequest)
     return ApiResponse(data=schedule)
 
 
-@router.post("/schedules/{schedule_id}/trigger", responses={404: {"description": "请求的资源不存在"}})
+@router.post(
+    "/schedules/{schedule_id}/trigger", responses={404: {"description": "请求的资源不存在"}}
+)
 async def trigger_schedule(schedule_id: str) -> ApiResponse:
     if service.repo.get_schedule(schedule_id) is None:
         raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND)

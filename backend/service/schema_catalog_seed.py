@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-CHAIN_NODE_PRIMARY_KEY = 'chain_code + node_id'
-EXPERT_PERSON_TYPE = 'Expert / Person'
-ORGANIZATION_PERSON_TYPE = 'Organization / Person'
+CHAIN_NODE_PRIMARY_KEY = "chain_code + node_id"
+EXPERT_PERSON_TYPE = "Expert / Person"
+ORGANIZATION_PERSON_TYPE = "Organization / Person"
 
 ENTITY_SPECS = [
     (

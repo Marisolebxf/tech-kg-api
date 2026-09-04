@@ -45,7 +45,7 @@ from biz.handler.tech_enterprise_relation_business import (
 )
 from biz.handler.workflow_system import router as workflow_system_router
 
-API_V1_PREFIX = '/api/v1'
+API_V1_PREFIX = "/api/v1"
 
 
 def register_routers(app: FastAPI) -> None:

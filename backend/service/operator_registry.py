@@ -33,7 +33,7 @@ from service.operator_builtins import (
     relation_load,
 )
 
-DEFAULT_OPERATOR_TIMESTAMP = '2026-01-01T00:00:00+00:00'
+DEFAULT_OPERATOR_TIMESTAMP = "2026-01-01T00:00:00+00:00"
 
 logger = logging.getLogger(__name__)
 

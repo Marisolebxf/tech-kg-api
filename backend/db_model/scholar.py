@@ -10,8 +10,8 @@ from sqlalchemy import (
 
 from db_model.base import Base
 
-LAST_UPDATED_COMMENT = '记录最后更新时间'
-VALIDITY_STATUS_COMMENT = '状态：0:无效,1:有效'
+LAST_UPDATED_COMMENT = "记录最后更新时间"
+VALIDITY_STATUS_COMMENT = "状态：0:无效,1:有效"
 
 
 class DwdScholar(Base):

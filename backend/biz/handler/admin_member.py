@@ -27,7 +27,10 @@ def get_members(
     return ApiResponse(data={"items": items, "total": len(items)})
 
 
-@router.put("/{user_id}/admin", responses={404: {"description": "请求的资源不存在"}, 409: {"description": "资源状态冲突"}})
+@router.put(
+    "/{user_id}/admin",
+    responses={404: {"description": "请求的资源不存在"}, 409: {"description": "资源状态冲突"}},
+)
 def update_admin_role(
     user_id: str,
     request: AdminRoleUpdateRequest,

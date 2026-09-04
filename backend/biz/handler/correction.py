@@ -42,16 +42,12 @@ def list_corrections(
     session: Annotated[Session, Depends(get_session)],
     scope: Annotated[str, Query(pattern="^(mine|all)$")] = "mine",
     status: Annotated[str | None, Query(max_length=64)] = None,
-    statuses: Annotated[
-        str | None, Query(max_length=64, pattern=KEYWORD_QUERY_PATTERN)
-    ] = None,
+    statuses: Annotated[str | None, Query(max_length=64, pattern=KEYWORD_QUERY_PATTERN)] = None,
     target_type: Annotated[
         str | None,
         Query(alias="targetType", max_length=64, pattern=IDENTIFIER_QUERY_PATTERN),
     ] = None,
-    keyword: Annotated[
-        str | None, Query(max_length=64, pattern=KEYWORD_QUERY_PATTERN)
-    ] = None,
+    keyword: Annotated[str | None, Query(max_length=64, pattern=KEYWORD_QUERY_PATTERN)] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
 ) -> ApiResponse:

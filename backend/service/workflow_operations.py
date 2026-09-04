@@ -13,7 +13,7 @@ from uuid import uuid4
 from service.temporal_runtime import temporal_runtime
 from service.workflow_repository import WorkflowRepository, repository
 
-PENDING_MANUAL_REVIEW = '等待人工审核'
+PENDING_MANUAL_REVIEW = "等待人工审核"
 
 
 def _now() -> str:
@@ -45,7 +45,11 @@ class WorkflowOperationsService:
                 },
                 {"label": "执行完成", "value": str(counts["执行完成"]), "hint": ""},
                 {"label": "执行出错", "value": str(counts["执行出错"]), "hint": ""},
-                {"label": PENDING_MANUAL_REVIEW, "value": str(counts[PENDING_MANUAL_REVIEW]), "hint": ""},
+                {
+                    "label": PENDING_MANUAL_REVIEW,
+                    "value": str(counts[PENDING_MANUAL_REVIEW]),
+                    "hint": "",
+                },
             ],
             "statusCounts": counts,
             "latestBatch": latest_batch,

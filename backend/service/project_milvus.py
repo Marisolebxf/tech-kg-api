@@ -32,9 +32,7 @@ def sparse_to_dict(row: Any) -> dict[int, float]:
     """Convert a scipy CSR / COO sparse row to ``{col: value}`` for pymilvus upsert."""
     if isinstance(row, dict):
         return {
-            int(k): float(v)
-            for k, v in row.items()
-            if not isclose(float(v), 0.0, abs_tol=1e-12)
+            int(k): float(v) for k, v in row.items() if not isclose(float(v), 0.0, abs_tol=1e-12)
         }
     if hasattr(row, "tocoo"):
         coo = row.tocoo()

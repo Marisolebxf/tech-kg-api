@@ -549,9 +549,7 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
         if primary and primary["achievements"]:
             period_achievements = f"{len(primary['achievements'])}项具体成果"
         elif primary and primary.get("coPaperCount"):
-            period_achievements = (
-                f"0项具体成果（合著统计{primary.get('coPaperCount', 0)}篇）"
-            )
+            period_achievements = f"0项具体成果（合著统计{primary.get('coPaperCount', 0)}篇）"
         return {
             "coreExpert": f"{expert['name']} | {expert.get('title') or '-'}",
             "coreExpertOrganization": expert.get("organization") or "-",

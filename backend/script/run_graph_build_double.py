@@ -73,7 +73,10 @@ def create_app(backend_url: str, token: str) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.post("/internal/review-resumes", responses={422: {"description": "请求无法处理"}, 502: {"description": "上游服务返回错误"}})
+    @app.post(
+        "/internal/review-resumes",
+        responses={422: {"description": "请求无法处理"}, 502: {"description": "上游服务返回错误"}},
+    )
     async def review_resumes(
         body: ResumeRequest,
         request: Request,

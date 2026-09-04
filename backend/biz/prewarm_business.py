@@ -12,7 +12,7 @@ import os
 
 import httpx
 
-PANORAMA_QUERY_PATH = '/api/v1/kg-construction/industry-chain-panorama/query'
+PANORAMA_QUERY_PATH = "/api/v1/kg-construction/industry-chain-panorama/query"
 
 logger = logging.getLogger(__name__)
 

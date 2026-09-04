@@ -12,7 +12,7 @@ from biz.schemas.expert_colleague_relation import (
 )
 from infra.result_cache import get_cached_json, set_cached_json
 
-APPLICATION_JSON = 'application/json'
+APPLICATION_JSON = "application/json"
 
 router = APIRouter(prefix="/kg-construction/expert-colleague-relations", tags=["expert-colleague"])
 service_router = APIRouter(

@@ -10,8 +10,8 @@ from sqlalchemy import (
 
 from db_model.base import Base
 
-INDUSTRY_CHAIN_CODE = '产业链代码'
-INDUSTRY_CHAIN_NAME = '产业链名称'
+INDUSTRY_CHAIN_CODE = "产业链代码"
+INDUSTRY_CHAIN_NAME = "产业链名称"
 
 
 class DwdIndustryChainInfo(Base):

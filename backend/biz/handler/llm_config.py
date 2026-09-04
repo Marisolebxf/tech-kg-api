@@ -12,7 +12,7 @@ from biz.schemas.common import ApiResponse
 from biz.schemas.llm_config import LlmConfigCreate, LlmConfigUpdate
 from infra.mysql import get_session
 
-LLM_CONFIG_NOT_FOUND = 'LLM 配置不存在'
+LLM_CONFIG_NOT_FOUND = "LLM 配置不存在"
 
 router = APIRouter(prefix="/llm-config", tags=["llm-config"])
 
@@ -69,7 +69,9 @@ def delete_llm_config(
     return ApiResponse(data={"deleted": True}, msg="LLM 配置已删除")
 
 
-@router.post("/llm-configs/{config_id}/set-default", responses={404: {"description": "请求的资源不存在"}})
+@router.post(
+    "/llm-configs/{config_id}/set-default", responses={404: {"description": "请求的资源不存在"}}
+)
 def set_default_llm_config(
     config_id: str,
     session: Annotated[Session, Depends(get_session)],

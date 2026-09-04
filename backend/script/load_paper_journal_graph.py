@@ -24,7 +24,7 @@ from infra.graph_db import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
 from infra.mysql import MySQLClient
 
-UPDATED_SINCE_CLAUSE = 'WHERE updated_time > :since'
+UPDATED_SINCE_CLAUSE = "WHERE updated_time > :since"
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)

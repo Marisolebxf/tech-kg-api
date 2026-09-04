@@ -12,15 +12,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-EXPERT_BASIC_INFO_TABLE = '专家基本信息表'
-PAPER_ACHIEVEMENT_TABLE = '论文成果表'
-PAPER_TITLE_MISSING = '论文标题缺失'
-PENDING_MANUAL_REVIEW = '等待人工审核'
-RESULT_BELOW_THRESHOLD = '结果低于阈值'
-SCHEMA_MAPPING_LABEL = 'Schema 映射'
-SQL_AND = ' AND '
-SQL_WHERE = ' WHERE '
-TECH_ELEMENT_DATABASE = '科技要素数据库'
+EXPERT_BASIC_INFO_TABLE = "专家基本信息表"
+PAPER_ACHIEVEMENT_TABLE = "论文成果表"
+PAPER_TITLE_MISSING = "论文标题缺失"
+PENDING_MANUAL_REVIEW = "等待人工审核"
+RESULT_BELOW_THRESHOLD = "结果低于阈值"
+SCHEMA_MAPPING_LABEL = "Schema 映射"
+SQL_AND = " AND "
+SQL_WHERE = " WHERE "
+TECH_ELEMENT_DATABASE = "科技要素数据库"
 
 
 def _now() -> str:

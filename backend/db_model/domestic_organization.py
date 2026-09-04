@@ -11,13 +11,13 @@ from sqlalchemy import (
 
 from db_model.base import Base
 
-ENFORCED_PERSON_TYPE = '被执行人类型'
-HIDDEN_FLAG = '是否不展示'
-ORIGINAL_URL = '原始连接URL'
-PARTY_ROLE_TYPE = '当事人角色类型'
-PARTY_TYPE = '当事人类型'
-RELATED_PERSON_NAME = '相关人名称'
-UNIFIED_SOCIAL_CREDIT_CODE = '统一社会信用代码'
+ENFORCED_PERSON_TYPE = "被执行人类型"
+HIDDEN_FLAG = "是否不展示"
+ORIGINAL_URL = "原始连接URL"
+PARTY_ROLE_TYPE = "当事人角色类型"
+PARTY_TYPE = "当事人类型"
+RELATED_PERSON_NAME = "相关人名称"
+UNIFIED_SOCIAL_CREDIT_CODE = "统一社会信用代码"
 
 
 class DwdOrgAnnualFinancialInfo(Base):
@@ -94,9 +94,7 @@ class DwdOrgBankruptcyPublicCasesList(Base):
     related_person_name = Column(
         "related_person_name", String(255), nullable=True, comment=RELATED_PERSON_NAME
     )
-    party_role_type = Column(
-        "party_role_type", String(255), nullable=True, comment=PARTY_ROLE_TYPE
-    )
+    party_role_type = Column("party_role_type", String(255), nullable=True, comment=PARTY_ROLE_TYPE)
     party_type = Column("party_type", String(255), nullable=True, comment=PARTY_TYPE)
     org_id = Column("org_id", String(255), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(255), nullable=True, comment="机构名称")
@@ -752,9 +750,7 @@ class DwdOrgRiskCourtAnnouncementList(Base):
     notice_id = Column("notice_id", String(255), nullable=True, comment="公告id")
     party_identity = Column("party_identity", String(255), nullable=True, comment="当事人身份")
     party_type = Column("party_type", String(255), nullable=True, comment=PARTY_TYPE)
-    party_role_type = Column(
-        "party_role_type", String(255), nullable=True, comment=PARTY_ROLE_TYPE
-    )
+    party_role_type = Column("party_role_type", String(255), nullable=True, comment=PARTY_ROLE_TYPE)
     related_person_name = Column(
         "related_person_name", String(255), nullable=True, comment=RELATED_PERSON_NAME
     )
@@ -888,9 +884,7 @@ class DwdOrgRiskCourtNoticeList(Base):
 
     notice_id = Column("notice_id", String(255), nullable=True, comment="公告id")
     party_role = Column("party_role", String(255), nullable=True, comment="当事人角色")
-    party_role_type = Column(
-        "party_role_type", String(255), nullable=True, comment=PARTY_ROLE_TYPE
-    )
+    party_role_type = Column("party_role_type", String(255), nullable=True, comment=PARTY_ROLE_TYPE)
     party_type = Column("party_type", String(255), nullable=True, comment=PARTY_TYPE)
     org_id = Column("org_id", String(255), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(255), nullable=True, comment="机构名称")
@@ -961,9 +955,7 @@ class DwdOrgRiskLawsuitList(Base):
 
     main_doc_id = Column("main_doc_id", String(255), nullable=True, comment="主表docid")
     party_identity = Column("party_identity", String(255), nullable=True, comment="当事人身份")
-    party_role_type = Column(
-        "party_role_type", String(255), nullable=True, comment=PARTY_ROLE_TYPE
-    )
+    party_role_type = Column("party_role_type", String(255), nullable=True, comment=PARTY_ROLE_TYPE)
     party_type = Column("party_type", String(255), nullable=True, comment=PARTY_TYPE)
     related_person_name = Column(
         "related_person_name", String(255), nullable=True, comment=RELATED_PERSON_NAME
@@ -1123,7 +1115,9 @@ class DwdOrgRiskZhixing(Base):
     __table_args__ = {"comment": "前海数据机构被执行人记录"}
 
     exec_person_id = Column("exec_person_id", String(50), nullable=True, comment="唯一索引id")
-    exec_person_type = Column("exec_person_type", Integer(), nullable=True, comment=ENFORCED_PERSON_TYPE)
+    exec_person_type = Column(
+        "exec_person_type", Integer(), nullable=True, comment=ENFORCED_PERSON_TYPE
+    )
     exec_person_name = Column("exec_person_name", String(50), nullable=True, comment="被执行人名称")
     gender = Column("gender", String(50), nullable=True, comment="性别")
     id_no = Column("id_no", String(50), nullable=True, comment="证件号码")

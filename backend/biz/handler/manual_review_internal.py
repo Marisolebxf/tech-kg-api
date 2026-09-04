@@ -21,7 +21,12 @@ def fail(exc):
     raise exc
 
 
-@router.post("/review-required", response_model=ApiResponse, status_code=201, responses={422: {"description": "请求无法处理"}})
+@router.post(
+    "/review-required",
+    response_model=ApiResponse,
+    status_code=201,
+    responses={422: {"description": "请求无法处理"}},
+)
 async def review_required(
     body: ReviewRequiredRequest,
     idempotency_key: str = Header(alias="Idempotency-Key"),
@@ -45,7 +50,11 @@ async def get_correction(review_id: str, _: str = Depends(require_graph_service)
         fail(exc)
 
 
-@router.post("/{review_id}/execution-events", response_model=ApiResponse, responses={422: {"description": "请求无法处理"}})
+@router.post(
+    "/{review_id}/execution-events",
+    response_model=ApiResponse,
+    responses={422: {"description": "请求无法处理"}},
+)
 async def execution_event(
     review_id: str,
     body: ExecutionEventRequest,

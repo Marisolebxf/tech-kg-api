@@ -35,7 +35,7 @@ from service.manual_review_domain import (
 )
 from service.manual_review_production import manual_review_service as production_service
 
-REVIEW_TASK_NOT_FOUND = '人工处理任务不存在'
+REVIEW_TASK_NOT_FOUND = "人工处理任务不存在"
 
 ReviewIdentityDep = Annotated[ReviewIdentity, Depends(get_review_identity)]
 router = APIRouter(prefix="/manual-reviews", tags=["manual-review"])
@@ -89,7 +89,10 @@ async def get_review_flow(review_id: str) -> ApiResponse:
         raise HTTPException(status_code=404, detail=REVIEW_TASK_NOT_FOUND) from exc
 
 
-@router.post("/{review_id}/actions", responses={404: {"description": "请求的资源不存在"}, 409: {"description": "资源状态冲突"}})
+@router.post(
+    "/{review_id}/actions",
+    responses={404: {"description": "请求的资源不存在"}, 409: {"description": "资源状态冲突"}},
+)
 async def handle_review(review_id: str, request: ReviewActionRequest) -> ApiResponse:
     try:
         result = await service.handle_review(review_id, request.model_dump())

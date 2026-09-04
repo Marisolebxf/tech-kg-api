@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from infra.llm import LLMClient
 
-LLM_RESPONSE_FORMAT_ERROR = 'LLM 返回格式异常'
+LLM_RESPONSE_FORMAT_ERROR = "LLM 返回格式异常"
 
 
 @dataclass

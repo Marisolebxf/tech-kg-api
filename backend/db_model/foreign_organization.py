@@ -6,7 +6,7 @@ from sqlalchemy import (
 
 from db_model.base import Base
 
-ENTERPRISE_ENGLISH_NAME = '企业英文名称'
+ENTERPRISE_ENGLISH_NAME = "企业英文名称"
 
 
 class DwdForgAggIdentifier(Base):

@@ -49,7 +49,7 @@ from service.manual_review_domain import (
     write_target,
 )
 
-STATE_OR_VERSION_CONFLICT = '状态或版本冲突'
+STATE_OR_VERSION_CONFLICT = "状态或版本冲突"
 
 
 def now():

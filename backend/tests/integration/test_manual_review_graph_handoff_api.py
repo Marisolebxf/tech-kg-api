@@ -103,8 +103,8 @@ async def test_all_seven_nodes_enter_queue_and_duplicate_is_idempotent(
             "/api/v1/manual-reviews/production/queue", params={"queue": "unclaimed"}
         )
     ).json()["data"]
-    assert queue['total'] == 7
-    assert {item['pipelineStepId'] for item in queue['items']} == {x[0] for x in pairs}
+    assert queue["total"] == 7
+    assert {item["pipelineStepId"] for item in queue["items"]} == {x[0] for x in pairs}
     body = payload("align", "T_LINK")
     duplicate = await async_client.post(
         "/api/v1/internal/manual-reviews/review-required",
@@ -136,8 +136,8 @@ async def test_dynamic_detail_correction_resume_and_callbacks(async_client, grap
         "data"
     ]
     assert detail["template"]["displaySchema"]["sections"][0]["type"] == "entity-comparison"
-    assert detail['data']['input'] == body['inputSnapshot']
-    assert detail['consequence']['rerunStepId'] == 'align'
+    assert detail["data"]["input"] == body["inputSnapshot"]
+    assert detail["consequence"]["rerunStepId"] == "align"
     claimed = (
         await async_client.post(
             f"/api/v1/manual-reviews/production/{review_id}/claim",
@@ -160,8 +160,8 @@ async def test_dynamic_detail_correction_resume_and_callbacks(async_client, grap
         f"/api/v1/internal/manual-reviews/{review_id}/correction", headers=HEADERS
     )
     correction = correction_response.json()["data"]
-    assert correction['stepId'] == 'align'
-    assert len(correction['payloadSha256']) == 64
+    assert correction["stepId"] == "align"
+    assert len(correction["payloadSha256"]) == 64
     assert (await service.process_outbox()) == {"processed": 1, "failed": 0}
     assert (await service.process_outbox()) == {"processed": 0, "failed": 0}
 

@@ -21,8 +21,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db_model.base import Base
 
-DELETE_ORPHAN_CASCADE = 'all, delete-orphan'
-SCHEMA_DEFINITION_ID_FK = 'kg_schema_definition.id'
+DELETE_ORPHAN_CASCADE = "all, delete-orphan"
+SCHEMA_DEFINITION_ID_FK = "kg_schema_definition.id"
 
 
 def _uuid() -> str:

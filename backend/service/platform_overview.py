@@ -19,8 +19,8 @@ from biz.schemas.platform_overview import (
 )
 from infra.graph_db import get_trs_graph_client
 
-EXPERT_ENTITY_LABEL = '专家 / 人才'
-ORGANIZATION_ENTITY_LABEL = '机构 / 企业'
+EXPERT_ENTITY_LABEL = "专家 / 人才"
+ORGANIZATION_ENTITY_LABEL = "机构 / 企业"
 
 logger = logging.getLogger(__name__)
 

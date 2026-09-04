@@ -48,9 +48,9 @@ def test_build_creates_edge_with_english_codes_and_returns_chinese_label():
     assert resp["effective"] is True
     graph.create_edge.assert_called_once()
     args = graph.create_edge.call_args.args
-    assert args[0] == 'S001'
-    assert args[1] == 'E001'
-    assert args[2] == 'EMPLOYED_BY'
+    assert args[0] == "S001"
+    assert args[1] == "E001"
+    assert args[2] == "EMPLOYED_BY"
     assert args[3]["relation_type"] == "employment"
     assert len(resp["relations"]) == 2
     assert resp["relations"][0]["enterpriseName"] == "华智科技"

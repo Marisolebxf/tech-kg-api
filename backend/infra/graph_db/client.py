@@ -39,7 +39,7 @@ from infra.graph_db.models import (
     GraphQueryResult,
 )
 
-SCHEMA_INDEXES_PATH = '/api/v1/schema/indexes'
+SCHEMA_INDEXES_PATH = "/api/v1/schema/indexes"
 
 logger = logging.getLogger("infra.graph_db")
 

@@ -60,7 +60,7 @@ from script.organization_etl_common import (
     to_int,
 )
 
-NULLABLE_STRING_TYPE = 'string NULL'
+NULLABLE_STRING_TYPE = "string NULL"
 
 logger = logging.getLogger("script.organization_entity_etl")
 

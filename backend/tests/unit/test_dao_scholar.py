@@ -28,6 +28,6 @@ def test_get_and_list():
         dao = ScholarDAO(s)
         got = dao.get("S1")
         assert got is not None
-        assert got.name_zh == '张伟'
+        assert got.name_zh == "张伟"
         rows = dao.list(limit=10)
         assert len(rows) == 1

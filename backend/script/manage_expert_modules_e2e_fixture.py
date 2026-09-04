@@ -44,10 +44,10 @@ from sqlalchemy import text
 from infra.graph_db import close_trs_graph_client, get_trs_graph_client
 from infra.mysql import MySQLClient
 
-HUAZHONG_UNIVERSITY = '华中科技大学'
-PEKING_UNIVERSITY = 'Peking University'
-SHANGHAI_JIAO_TONG_UNIVERSITY = '上海交通大学'
-TSINGHUA_UNIVERSITY = 'Tsinghua University'
+HUAZHONG_UNIVERSITY = "华中科技大学"
+PEKING_UNIVERSITY = "Peking University"
+SHANGHAI_JIAO_TONG_UNIVERSITY = "上海交通大学"
+TSINGHUA_UNIVERSITY = "Tsinghua University"
 
 BATCH = "EXPERT_MODULES_E2E_V1"
 # 预留号段：形态像真，与现网抽样不冲突；清理靠白名单 + BATCH 确认。

@@ -21,6 +21,7 @@ import os
 import re
 import threading
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from infra.graph_api_client import GraphAPIError, graph_api
@@ -79,6 +80,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         start_time: str | None = None,
         end_time: str | None = None,
         limit: int = 10,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         normalized_limit = max(1, min(int(limit or 10), MAX_QUERY_LIMIT))
         a_keyword = (expert_a_id or "").strip()
@@ -108,7 +110,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         fallback_reason: str | None = None
 
         try:
-            async with graph_api() as client:
+            async with graph_api(auth_headers=auth_headers) as client:
                 node_a = await self._find_person(client, a_keyword)
                 if node_a is None:
                     fallback_reason = "anchor_a_not_found"

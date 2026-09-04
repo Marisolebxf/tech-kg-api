@@ -5,6 +5,7 @@ from fastapi.responses import Response
 from httpx import ASGITransport, AsyncClient
 
 from application.expert_colleague_relation import ExpertColleagueRelationApplication
+from biz.dependencies.internal_api import get_internal_api_auth_headers
 from biz.schemas.common import ApiResponse
 from biz.schemas.expert_colleague_relation import (
     ExpertColleagueRelationData,
@@ -49,6 +50,7 @@ async def query_expert_colleague_relation(
         async with AsyncClient(
             transport=ASGITransport(app=request.app),
             base_url="http://fastapi-internal",
+            headers=get_internal_api_auth_headers(request),
         ) as client:
             data = await application.query(
                 client,

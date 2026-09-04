@@ -1,10 +1,11 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
 from application.expert_direct_relation import ExpertDirectRelationApplication
+from biz.dependencies.internal_api import get_internal_api_auth_headers
 from biz.schema.expert_direct_relation import (
     MAX_QUERY_LIMIT,
     DataSource,
@@ -24,6 +25,7 @@ async def describe_expert_direct_relation() -> dict[str, object]:
 @router.post("/query", response_model=ExpertDirectRelationQueryResponse)
 async def query_expert_direct_relation(
     body: ExpertDirectRelationQueryRequest,
+    request: Request,
 ) -> dict[str, object]:
     return await application.query(
         data_source=body.dataSource,
@@ -33,12 +35,14 @@ async def query_expert_direct_relation(
         start_time=body.startTime,
         end_time=body.endTime,
         limit=body.limit,
+        auth_headers=get_internal_api_auth_headers(request),
     )
 
 
 @router.get("/query", response_model=ExpertDirectRelationQueryResponse)
 async def query_expert_direct_relation_get(
     expertAId: Annotated[str, Query()],
+    request: Request,
     dataSource: Annotated[DataSource, Query()] = "all",
     expertBId: Annotated[str | None, Query()] = None,
     institution: Annotated[str | None, Query()] = None,
@@ -67,4 +71,5 @@ async def query_expert_direct_relation_get(
         start_time=body.startTime,
         end_time=body.endTime,
         limit=body.limit,
+        auth_headers=get_internal_api_auth_headers(request),
     )

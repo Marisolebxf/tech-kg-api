@@ -796,11 +796,16 @@ onMounted(() => {
 .create-dialog>footer{align-items:center;padding:16px 24px}
 .create-dialog-mask{z-index:49;background:rgba(16,38,76,.42);backdrop-filter:blur(2px);cursor:pointer}.create-dialog{z-index:50}
 /* 详情抽屉：中间内容区可滚动，footer 钉底（表单超一屏时原来会溢出不可滚） */
-/* 抽屉内容区滚动：底部留出呼吸空间——footer 是 fixed 布局外的 flex 尾行，
-   margin-top:auto 会挤压内容导致"滚到底仍被遮"；改为 footer 固定高度 + 内容区
-   独占剩余空间滚动，末尾 padding 保证最后一屏可见 */
-.detail-drawer{display:flex;height:100vh}
-.detail-drawer-body{flex:1 1 auto;min-height:0;overflow-y:auto;padding-bottom:32px;box-sizing:border-box}
+/* 抽屉三段式布局：header/footer 钉住、body 独占剩余空间滚动。
+   此前 body 用 flex-basis:auto（内容高），header 又被 padding 撑到 ~120px，
+   三段总高超出 100vh → footer（保存修改/设为默认/停用/删除）被挤出视口外，
+   表现为"没有保存按钮/没有设为默认"。basis:0 强制 body 只分剩余空间。 */
+/* fixed 定位祖先被 transform 包裹时（AppLayout 滚动容器），top:0 相对祖先
+   而非视口——height:100vh 会整体下移把 footer 挤出视口（表现为"没有保存/
+   设为默认按钮"）。改 top/bottom 钉住包含块全高，不依赖 100vh */
+.detail-drawer{display:flex;flex-direction:column;top:0;bottom:0;height:auto;overflow:hidden}
+.detail-drawer>header{flex:0 0 auto;box-sizing:border-box}
+.detail-drawer-body{flex:1 1 0;min-height:0;overflow-y:auto;padding-bottom:32px;box-sizing:border-box}
 .detail-drawer-body .detail-form{padding-bottom:0}
 .detail-drawer>footer{flex:0 0 auto;margin-top:0}
 /* 新建弹窗：限高 + 表单区内部滚动（原来 overflow:hidden 直接裁掉超高表单） */

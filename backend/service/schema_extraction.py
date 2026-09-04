@@ -112,7 +112,7 @@ def load_extract_schema(schema_id: str, *, session: Session | None = None) -> di
 
     def _load(row_session):
         row = row_session.get(GraphSchemaDefinition, schema_id)
-        if row is None:
+        if row is None or row.is_deleted:
             raise SchemaConflictError(f"Schema 不存在: {schema_id}")
         has_script = row.script is not None
         has_sources = len(row.sources) > 0

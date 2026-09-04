@@ -928,8 +928,8 @@ function togglePropertyDetail(schemaId: string): void {
         <aside class="schema-modal__panel schema-create-panel">
           <header><h2>新增{{ activeTab }}</h2><button type="button" @click="modalOpen = false">×</button></header>
           <a-form ref="createFormRef" :model="createForm" :rules="createFormRules" class="schema-modal__body schema-create-body" layout="vertical">
-            <a-form-item class="create-field create-field--full" field="graphSpace" label="图空间" required>
-              <a-select v-model="createForm.graphSpace" placeholder="选择目标图空间">
+            <a-form-item class="create-field create-field--full" field="graphSpace" label="图空间" label-component="div" required>
+              <a-select v-model="createForm.graphSpace" placeholder="选择目标图空间" popup-container=".schema-create-modal" :scrollbar="false">
                 <a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option>
               </a-select>
             </a-form-item>
@@ -944,14 +944,14 @@ function togglePropertyDetail(schemaId: string): void {
             </div>
 
             <div v-if="isRelationTab()" class="create-row">
-              <a-form-item class="create-field" field="sourceEntityId" label="起点实体" required>
-                <a-select v-model="createForm.sourceEntityId" class="schema-select" placeholder="请选择">
+              <a-form-item class="create-field" field="sourceEntityId" label="起点实体" label-component="div" required>
+                <a-select v-model="createForm.sourceEntityId" class="schema-select" placeholder="请选择" popup-container=".schema-create-modal" :scrollbar="false">
                   <a-option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
                   <template #empty>当前图空间暂无实体 Schema，请先新增实体</template>
                 </a-select>
               </a-form-item>
-              <a-form-item class="create-field" field="targetEntityId" label="终点实体" required>
-                <a-select v-model="createForm.targetEntityId" class="schema-select" placeholder="请选择">
+              <a-form-item class="create-field" field="targetEntityId" label="终点实体" label-component="div" required>
+                <a-select v-model="createForm.targetEntityId" class="schema-select" placeholder="请选择" popup-container=".schema-create-modal" :scrollbar="false">
                   <a-option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
                   <template #empty>当前图空间暂无实体 Schema，请先新增实体</template>
                 </a-select>

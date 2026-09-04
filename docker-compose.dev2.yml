@@ -74,7 +74,9 @@ services:
       CORRECTION_SYNC_WORKER_ENABLED: ${CORRECTION_SYNC_WORKER_ENABLED:-true}
       CORRECTION_SYNC_INTERVAL_SECONDS: ${CORRECTION_SYNC_INTERVAL_SECONDS:-30}
       CORRECTION_SYNC_MAX_ATTEMPTS: ${CORRECTION_SYNC_MAX_ATTEMPTS:-8}
-      CORRECTION_SYNC_MODE: ${CORRECTION_SYNC_MODE:-projection}
+      CORRECTION_SYNC_MODE: ${CORRECTION_SYNC_MODE:-dual}
+      # 单存储节点集群：3 副本建空间会 Host not enough
+      GRAPH_SPACE_REPLICA_FACTOR: ${GRAPH_SPACE_REPLICA_FACTOR:-1}
       SCHEMA_AUTO_INIT: ${SCHEMA_AUTO_INIT:-false}
       SCHEMA_ALLOW_SYSTEM_DELETE: ${SCHEMA_ALLOW_SYSTEM_DELETE:-true}
       # 与主 compose 一致：schema 脚本走共享的 operator-rustfs
@@ -164,6 +166,13 @@ services:
       WORKFLOW_MYSQL_USERNAME: root
       WORKFLOW_MYSQL_PASSWORD: temporal
       WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
+      # worker 也跑 build_entity_index activity：embedding 缺省会回退智谱默认端点，
+      # 吃 401 重试 5 次才降级（执行拖到 3 分钟），补齐与 api 一致的 m3e 配置
+      PATENT_EMBEDDING_PROVIDER: ${PATENT_EMBEDDING_PROVIDER:-openai}
+      PATENT_EMBEDDING_BASE_URL: ${PATENT_EMBEDDING_BASE_URL:-http://m3e-embedding:8010/v1}
+      PATENT_EMBEDDING_MODEL: ${PATENT_EMBEDDING_MODEL:-moka-ai/m3e-small}
+      PATENT_EMBEDDING_DIM: ${PATENT_EMBEDDING_DIM:-512}
+      PATENT_EMBEDDING_API_KEY: ${PATENT_EMBEDDING_API_KEY:-local-no-auth}
       SCHEMA_S3_ENDPOINT_URL: ${SCHEMA_S3_ENDPOINT_URL:-http://operator-rustfs:9000}
       SCHEMA_S3_ACCESS_KEY: ${SCHEMA_S3_ACCESS_KEY:-rustfsadmin}
       SCHEMA_S3_SECRET_KEY: ${SCHEMA_S3_SECRET_KEY:-rustfsadmin}

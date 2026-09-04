@@ -30,15 +30,17 @@ async def get_review_identity(request: Request) -> ReviewIdentity:
     request_id = value("REVIEW_HEADER_REQUEST_ID", "X-Request-Id")
     signature = value("REVIEW_HEADER_SIGNATURE", "X-Identity-Signature")
     require_signature = os.getenv("REVIEW_IDENTITY_REQUIRE_SIGNATURE", "true").lower() == "true"
-    # 开发期 fallback：禁用签名校验且未传 X-User-Id 时返回 dev identity，
-    # 让前端无需网关头即可调审核 API。生产保持 require_signature=true。
-    if not user_id and not require_signature:
+    # 开发期 fallback：禁用签名校验时返回 dev identity，让前端无需网关头即可调
+    # 审核 API。仅带 X-User-Id（前端 currentUserId 必发）但网关未注入角色头时，
+    # 同样按 dev 角色放行——否则免登录部署里审核决策接口全部 403。
+    # 生产保持 require_signature=true。
+    if not require_signature and not roles and not signature:
         return ReviewIdentity(
-            user_id="dev-anonymous",
-            user_name="Dev Anonymous",
+            user_id=user_id or "dev-anonymous",
+            user_name=user_name or "Dev Anonymous",
             roles=frozenset({"review_admin", "reviewer"}),
             domains=frozenset({"*"}),
-            organization="dev",
+            organization=organization or "dev",
             request_id=request_id or f"dev-{uuid4().hex[:8]}",
         )
     if not user_id:

@@ -77,6 +77,14 @@ class FakeGraphClient:
                 f"TRS Graph query failed: Unknown column `{self.entity_bad}` in schema",
                 status_code=200,
             )
+        if self.edge_bad and f"`{self.edge_bad}`" in statement:
+            raise GraphRequestError(
+                f"TRS Graph query failed: Unknown column '{self.edge_bad}' in schema",
+                status_code=400,
+            )
+
+    def execute_read(self, query, params=None):
+        return {"records": []}
 
     def merge_edge(self, from_id, to_id, name, base, props):
         self.merged_props.append(dict(props))
@@ -130,9 +138,10 @@ async def test_write_records_edge_self_heals_unknown_column(monkeypatch):
         }
     )
     assert result == {"written": 1}
-    assert len(client.merged_props) == 2
-    assert "confidence" not in client.merged_props[1]
-    assert client.merged_props[1]["role"] == "engineer"
+    # 关系走 INSERT EDGE 自愈：首写含 confidence 列被拒 → 剔除后重写成功
+    assert len(client.writes) == 2
+    assert "confidence" not in client.writes[1]
+    assert "role" in client.writes[1]
 
 
 @pytest.mark.asyncio

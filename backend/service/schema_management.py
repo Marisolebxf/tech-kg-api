@@ -207,6 +207,27 @@ def _resolve_graph_space(payload: dict[str, Any]) -> str:
     return space
 
 
+def _execution_actually_running(execution: dict[str, Any]) -> bool:
+    """向 Temporal 核实 RUNNING 行的真实状态，就地回填终态。
+
+    控制库的 RUNNING 行可能是工作流已结束后未回写的陈旧记录（get_execution
+    的惰性回填只在有人看执行详情时触发）——不核实会把已完成的抽取误判为
+    运行中，硬拦住属性删除。Temporal 不可达时保守视为运行中。
+    调用方（sync handler 线程池）保证无活动事件循环。
+    """
+    import asyncio
+
+    from service.temporal_runtime import temporal_runtime
+
+    try:
+        refreshed = asyncio.run(temporal_runtime.refresh_execution(execution))
+    except Exception:  # noqa: BLE001
+        logger.warning("核实执行 %s 状态失败，保守按运行中处理", execution.get("id"))
+        return True
+    execution.update(refreshed)
+    return refreshed.get("status") == "RUNNING"
+
+
 def find_running_extraction(definition: GraphSchemaDefinition) -> dict[str, Any] | None:
     """查该 Schema 是否有运行中的 kg.schema.extract 执行记录（删除属性前拦截用）。
 
@@ -222,6 +243,13 @@ def find_running_extraction(definition: GraphSchemaDefinition) -> dict[str, Any]
         if execution.get("status") != "RUNNING":
             continue
         if (execution.get("payload") or {}).get("schemaId") != definition.id:
+            continue
+        if not _execution_actually_running(execution):
+            # 陈旧 RUNNING：回写终态，不拦截
+            try:
+                repository.save_execution(execution)
+            except Exception:  # noqa: BLE001
+                logger.exception("回写执行 %s 终态失败", execution.get("id"))
             continue
         task_name = None
         task_id = execution.get("taskId")

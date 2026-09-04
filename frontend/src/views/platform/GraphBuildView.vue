@@ -17,7 +17,6 @@ import {
 import { schemaErrorMessage } from '../../api/schemaManagement'
 import { listLlmConfigs, type LlmConfig } from '../../api/llmConfig'
 import { listEmbeddingConfigs, type EmbeddingConfig } from '../../api/embeddingConfig'
-import { listMilvusConfigs, type MilvusConfig } from '../../api/milvusConfig'
 import { listMysqlDatasources, type MysqlDatasource } from '../../api/mysqlDatasource'
 import { listGraphSpaces } from '../../api/graphSpace'
 import { currentUserId as getCurrentUserId } from '../../api/currentUser'
@@ -33,7 +32,6 @@ const jobs = ref<WorkflowJob[]>([])
 const definitions = ref<WorkflowDefinition[]>([])
 const llmConfigs = ref<LlmConfig[]>([])
 const embeddingConfigs = ref<EmbeddingConfig[]>([])
-const milvusConfigs = ref<MilvusConfig[]>([])
 const mysqlDatasources = ref<MysqlDatasource[]>([])
 const graphSpaces = ref<string[]>([])
 const loading = ref(false)
@@ -84,18 +82,16 @@ async function loadData() {
 
 async function loadDialogResources() {
   try {
-    const [defs, llm, embedding, milvus, mysql, spaces] = await Promise.all([
+    const [defs, llm, embedding, mysql, spaces] = await Promise.all([
       listDefinitions(),
       listLlmConfigs(currentUserId),
       listEmbeddingConfigs(currentUserId),
-      listMilvusConfigs(currentUserId),
       listMysqlDatasources(currentUserId),
       listGraphSpaces(currentUserId),
     ])
     definitions.value = defs.items
     llmConfigs.value = llm
     embeddingConfigs.value = embedding
-    milvusConfigs.value = milvus
     mysqlDatasources.value = mysql
     graphSpaces.value = spaces
   } catch (error) {
@@ -251,7 +247,6 @@ onMounted(loadData)
       :definitions="definitions"
       :llm-configs="llmConfigs"
       :embedding-configs="embeddingConfigs"
-      :milvus-configs="milvusConfigs"
       :mysql-datasources="mysqlDatasources"
       :graph-spaces="graphSpaces"
       @close="createOpen = false"

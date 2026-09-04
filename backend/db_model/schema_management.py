@@ -83,6 +83,10 @@ class GraphSchemaDefinition(Base):
     # 属性修订号：增/删属性 +1，与展示口径 version（v1.0 式）互不复用；
     # 脚本上传时快照到 kg_schema_script.captured_revision，用于"脚本落后于 Schema"判定
     property_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # 目录假删：置标记而非物理删行（读取路径统一过滤），删除时改写
+    # schema_key/name 释放 (key,graph_space)/(name,graph_space) 唯一键，允许同名重建
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )

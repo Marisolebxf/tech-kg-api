@@ -100,7 +100,9 @@ const categories = [
   { key: '图数据空间', label: '图数据空间', icon: 'GS', hint: '我的图空间绑定' },
 ]
 
-const isAdmin = ref(false)
+// 响应式跟随 auth store（profile 异步加载，一次性赋值会把 admin 恒判 false——
+// 免登录部署下绑定入口/新建空间入口不渲染）
+const isAdmin = computed(() => currentUserIsAdmin())
 const graphSpaces = ref<GraphSpaceItem[]>([])
 const spaceDialogOpen = ref(false)
 const newSpaceName = ref('')
@@ -587,7 +589,6 @@ async function loadAllCategories() {
 }
 
 onMounted(() => {
-  isAdmin.value = currentUserIsAdmin()
   void loadAllCategories()
   void loadGraphSpaces()
 })
@@ -625,7 +626,7 @@ onMounted(() => {
         </div>
         <div v-else class="table-wrap">
           <table>
-            <thead><tr><th>配置名称</th><th>类型 / 地址</th><th>状态</th><th>引用情况</th><th>负责人 / 更新时间</th><th>操作</th></tr></thead>
+            <thead><tr><th>配置名称</th><th>类型 / 地址</th><th>状态</th><th>引用情况</th><th>更新时间</th><th>操作</th></tr></thead>
             <tbody>
               <tr v-for="item in visibleItems" :key="item.id" @click="selected=item">
                 <td><div class="config-name"><i>{{ defaultIcon(item.kind) }}</i><span><strong>{{ item.name }}<b v-if="item.isDefault" class="default-tag">默认</b></strong><small>{{ item.id }} · {{ item.description }}</small></span></div></td>
@@ -678,7 +679,6 @@ onMounted(() => {
             <a-form-item class="wide" label="更新 Token（留空保留原值）"><input v-model="selected.token" type="password" placeholder="输入新 Token 覆盖原值" /></a-form-item>
           </template>
           <a-form-item class="wide" label="配置说明"><a-textarea v-model="selected.description" /></a-form-item>
-          <a-form-item label="负责人"><input v-model="selected.owner" /></a-form-item>
         </a-form>
         <section class="reference-card"><header><strong>引用关系</strong><span>{{ selected.usage }}</span></header><p>配置变更将在下次脚本调用时生效（context 按触发时所选数据源 / 图空间 / Milvus / LLM / embedding 注入）。</p></section>
       </div>
@@ -719,14 +719,12 @@ onMounted(() => {
           <a-form-item label="端口"><input v-model.number="form.port" type="number" /></a-form-item>
           <a-form-item label="默认库"><input v-model="form.defaultDatabase" /></a-form-item>
           <a-form-item field="username" label="用户名" required><input v-model="form.username" /></a-form-item>
-          <a-form-item label="负责人"><input v-model="form.owner" /></a-form-item>
           <a-form-item class="wide" label="密码"><input v-model="form.password" type="password" /></a-form-item>
         </template>
         <template v-else-if="formKind === 'milvus'">
           <a-form-item class="wide" field="name" label="配置名称" required><input v-model="form.name" /></a-form-item>
           <a-form-item class="wide" label="URI"><input v-model="form.uri" placeholder="留空回退 env MILVUS_*" /></a-form-item>
           <a-form-item label="默认库"><input v-model="form.defaultDb" /></a-form-item>
-          <a-form-item label="负责人"><input v-model="form.owner" /></a-form-item>
           <a-form-item class="wide" label="Token"><input v-model="form.token" type="password" /></a-form-item>
         </template>
         <a-form-item class="wide" label="说明"><a-textarea v-model="form.description" :max-length="200" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" /></a-form-item>
@@ -798,8 +796,13 @@ onMounted(() => {
 .create-dialog>footer{align-items:center;padding:16px 24px}
 .create-dialog-mask{z-index:49;background:rgba(16,38,76,.42);backdrop-filter:blur(2px);cursor:pointer}.create-dialog{z-index:50}
 /* 详情抽屉：中间内容区可滚动，footer 钉底（表单超一屏时原来会溢出不可滚） */
-.detail-drawer-body{display:flex;flex:1 1 auto;min-height:0;flex-direction:column;overflow:auto}
+/* 抽屉内容区滚动：底部留出呼吸空间——footer 是 fixed 布局外的 flex 尾行，
+   margin-top:auto 会挤压内容导致"滚到底仍被遮"；改为 footer 固定高度 + 内容区
+   独占剩余空间滚动，末尾 padding 保证最后一屏可见 */
+.detail-drawer{display:flex;height:100vh}
+.detail-drawer-body{flex:1 1 auto;min-height:0;overflow-y:auto;padding-bottom:32px;box-sizing:border-box}
 .detail-drawer-body .detail-form{padding-bottom:0}
+.detail-drawer>footer{flex:0 0 auto;margin-top:0}
 /* 新建弹窗：限高 + 表单区内部滚动（原来 overflow:hidden 直接裁掉超高表单） */
 .create-dialog{display:flex;max-height:min(88vh,760px);flex-direction:column}
 .create-dialog .dialog-form{flex:1 1 auto;min-height:0;overflow:auto}

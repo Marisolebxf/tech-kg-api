@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from collections.abc import Callable
@@ -27,6 +28,8 @@ SYNC_FAILED = "SYNC_FAILED"
 COMPLETED = "COMPLETED"
 REJECTED = "REJECTED"
 CANCELLED = "CANCELLED"
+
+logger = logging.getLogger(__name__)
 
 _EDGE_TYPE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 

@@ -37,7 +37,9 @@ const loading = ref(false)
 const reindexing = ref(false)
 const expandedRows = ref<Set<string>>(new Set())
 
-const isAdmin = canReindexEntityIndex()
+// 响应式跟随 auth store：profile 在路由守卫/启动钩子异步加载后才到位，
+// setup 时一次性调用会把 admin 恒判为 false（免登录部署下按钮永不出现）
+const isAdmin = computed(() => canReindexEntityIndex())
 const items = computed(() => result.value?.items ?? [])
 const isBrowseMode = computed(() => !appliedKeyword.value)
 const totalPages = computed(() => {

@@ -315,8 +315,12 @@ class EntitySearchService:
             cursor = 0
             for label in labels:
                 count = counts[label]
-                if count <= 0 or cursor >= window_end:
+                if cursor >= window_end:
                     break
+                # 空标签（0 节点 TAG）只跳过——break 会把排在其后的有数据标签
+                # 一并砍掉，浏览分页整体空白
+                if count <= 0:
+                    continue
                 label_start = cursor
                 label_end = cursor + count
                 cursor = label_end
@@ -556,6 +560,21 @@ class EntitySearchService:
             conditions.append(f'entity_type == "{_escape_expression(entity_type)}"')
         expr = " and ".join(conditions)
 
+        # 纯符号/乱码关键词（分词器分不出任何 token）：余弦相似度对此类输入
+        # 无区分度（m3e 对符号串与任意实体的相似度都 0.65+，"搜什么都一样"），
+        # 按无匹配返回。注意不能以"BM25 词项命中为空"判断——合法关键词的 token
+        # 可能不在（小）词表里，那应走 dense 正常检索
+        if not tokenize_alignment_text(keyword):
+            return {
+                "items": [],
+                "offset": offset,
+                "limit": limit,
+                "returned": 0,
+                "keyword": keyword,
+                "entityType": entity_type,
+                "graphSpace": resolved_space,
+                "mode": "keyword",
+            }
         dense_vector = _embedding_client().embed_one(keyword)
         encoder = _load_bm25_from_state(self._session, resolved_space)
         sparse_vector = encoder.encode_query(keyword) if encoder else None

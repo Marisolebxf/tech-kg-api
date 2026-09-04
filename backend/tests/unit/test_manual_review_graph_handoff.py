@@ -160,9 +160,14 @@ class FakeGraph:
         self.fields = fields
         self.merged: list[tuple[list[str], dict, dict]] = []
         self.edges: list[tuple[str, str, str, dict]] = []
+        self.writes: list[str] = []
 
     def execute_query(self, ngql):
         return {"records": [{"Field": f} for f in self.fields]}
+
+    def execute_write(self, ngql):
+        self.writes.append(ngql)
+        return {"records": []}
 
     def merge_node(self, labels, key, props):
         self.merged.append((labels, key, props))
@@ -211,13 +216,14 @@ def test_direct_decide_accept_with_modified_candidate_writes_corrected_fields(mo
         candidate={"scholar_id": "S-1", "name_zh": "李四", "org": "清华"},
     )
     assert result["status"] == "RESOLVED"
-    labels, key, props = graph.merged[0]
-    assert labels == ["Scholar"]
-    assert key == {"vid": "S-1"}  # 写图 vid 固定取 object_id
-    assert props["name_zh"] == "李四"
+    assert graph.writes, "实体直写走 nGQL INSERT VERTEX"
+    stmt = graph.writes[0]
+    assert stmt.startswith("INSERT VERTEX Scholar(")  # label 以快照为准
+    assert '"S-1":' in stmt  # 写图 vid 固定取 object_id
+    assert '"李四"' in stmt  # 修正后的字段值
     # org 不在 schema 且无 extra_json，被 _coerce_to_schema 丢弃
-    assert "org" not in props
-    assert props["scholar_id"] == "S-1"
+    assert "org" not in stmt
+    assert '"S-1"' in stmt  # scholar_id
 
 
 def test_direct_decide_candidate_meta_fields_ignored(monkeypatch):
@@ -236,8 +242,8 @@ def test_direct_decide_candidate_meta_fields_ignored(monkeypatch):
             "_fromId": "EVIL",
         },
     )
-    labels, _, _ = graph.merged[0]
-    assert labels == ["Scholar"]  # 元字段以快照为准，传入的 _ 前缀键被丢弃
+    assert graph.writes, "实体直写走 nGQL INSERT VERTEX"
+    assert graph.writes[0].startswith("INSERT VERTEX Scholar(")  # 元字段以快照为准（Scholar），传入 _nodeLabel=Paper 被忽略
 
 
 def test_direct_decide_empty_or_underscore_only_candidate_rejected(monkeypatch):

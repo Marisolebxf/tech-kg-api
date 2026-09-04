@@ -7,7 +7,6 @@ import {
 } from '../api/workflowOperations'
 import type { LlmConfig } from '../api/llmConfig'
 import type { EmbeddingConfig } from '../api/embeddingConfig'
-import type { MilvusConfig } from '../api/milvusConfig'
 import type { MysqlDatasource } from '../api/mysqlDatasource'
 import { listAllSchemas, type SchemaDefinition } from '../api/schemaManagement'
 import { currentUserId as getCurrentUserId } from '../api/currentUser'
@@ -18,7 +17,6 @@ const props = defineProps<{
   definitions: WorkflowDefinition[]
   llmConfigs: LlmConfig[]
   embeddingConfigs: EmbeddingConfig[]
-  milvusConfigs: MilvusConfig[]
   mysqlDatasources: MysqlDatasource[]
   graphSpaces: string[]
 }>()
@@ -55,8 +53,6 @@ const llmConfigId = ref('')
 const embeddingConfigId = ref('')
 const mysqlDatasourceId = ref('')
 const mysqlDatabase = ref('')
-const milvusConfigId = ref('')
-const milvusDatabase = ref('')
 const since = ref('')
 
 const executeMode = ref<'once' | 'recurring'>('once')
@@ -79,11 +75,13 @@ const canSubmit = computed(() => {
   return Boolean(uploadFile.value)
 })
 
-async function loadExtractSchemas() {
-  if (extractSchemas.value.length || schemasLoading.value) return
+async function loadExtractSchemas(force = false) {
+  if (schemasLoading.value) return
+  if (!force && extractSchemas.value.length) return
   schemasLoading.value = true
   try {
-    const all = await listAllSchemas(getCurrentUserId())
+    // M4 图空间联动：下拉只列所选空间绑定的可抽取 schema，随空间切换重查
+    const all = await listAllSchemas(getCurrentUserId(), graphSpace.value || undefined)
     extractSchemas.value = all.filter((s) => s.script && (s.sources?.length ?? 0) > 0)
   } catch {
     extractSchemas.value = []
@@ -107,8 +105,6 @@ function reset() {
   embeddingConfigId.value = ''
   mysqlDatasourceId.value = ''
   mysqlDatabase.value = ''
-  milvusConfigId.value = ''
-  milvusDatabase.value = ''
   since.value = ''
   executeMode.value = 'once'
   frequency.value = '每天'
@@ -124,6 +120,14 @@ watch(() => props.open, (open) => {
 
 watch(taskType, (type) => {
   if (type === 'extract') loadExtractSchemas()
+})
+
+watch(graphSpace, () => {
+  // 换空间后原选择不再属于该空间：清空并按新空间重查
+  if (taskType.value === 'extract') {
+    extractSchemaId.value = ''
+    loadExtractSchemas(true)
+  }
 })
 
 function addChainStep(value: string | number | boolean | Record<string, any> | undefined) {
@@ -176,7 +180,7 @@ async function submit() {
       definitionId = singleDefinitionId.value
     } else if (taskType.value === 'chain') {
       definitionIds = chainSteps.value.map((s) => s.id)
-    } else {
+    } else if (taskType.value === 'upload') {
       if (!uploadFile.value) {
         showToast('请选择脚本文件', 'warning')
         return
@@ -187,6 +191,7 @@ async function submit() {
       })
       definitionId = definition.id
     }
+    // extract：走 schemaId + 平台喂数抽取，不需要 workflow definition
 
     const job = await createJob({
       name: name.value.trim(),
@@ -204,8 +209,6 @@ async function submit() {
       embeddingConfigId: embeddingConfigId.value || undefined,
       mysqlDatasourceId: mysqlDatasourceId.value || undefined,
       mysqlDatabase: mysqlDatabase.value || undefined,
-      milvusConfigId: milvusConfigId.value || undefined,
-      milvusDatabase: milvusDatabase.value || undefined,
       since: since.value.trim() || undefined,
     })
     showToast(`任务「${job.name}」已创建${runNow.value && executeMode.value === 'once' ? '并触发执行' : ''}`, 'success')
@@ -329,18 +332,6 @@ async function submit() {
                 <a-option v-for="c in embeddingConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）</a-option>
               </a-select>
             </div>
-            <div class="job-field">
-              <span>Milvus 配置</span>
-              <a-select v-model="milvusConfigId" class="job-select" placeholder="使用默认" allow-clear>
-                <a-option v-for="c in milvusConfigs" :key="c.id" :value="c.id">{{ c.name }}</a-option>
-              </a-select>
-            </div>
-          </div>
-          <div class="job-row">
-            <label class="job-field">
-              <span>Milvus 数据库</span>
-              <input v-model="milvusDatabase" placeholder="默认 default" />
-            </label>
             <label class="job-field">
               <span>增量游标 since（可空）</span>
               <input v-model="since" placeholder="如 2026-08-01 00:00:00" />

@@ -22,6 +22,11 @@ from temporalio.exceptions import ActivityError
 
 logger = logging.getLogger(__name__)
 
+# 单批行 JSON 序列化字节预算。两个 4MB 限制都要过：单条 activity 结果/输入
+# 的 gRPC 上限，以及 workflow task 完成时**聚合多个在飞批次结果**的事务上限
+# （max_inflight=3 + 队列积压，实测 3MB/批时事务 4.29MB 超限）→ 收紧到 512KB
+_MAX_BATCH_ROWS_BYTES = 512 * 1024
+
 ACTIVITY_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=2),
     backoff_coefficient=2.0,
@@ -612,7 +617,7 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
     engine = get_workflow_engine()
     with OrmSession(engine) as session:
         definition = session.get(GraphSchemaDefinition, schema_id)
-        if definition is None:
+        if definition is None or definition.is_deleted:
             raise ValueError(f"Schema 不存在: {schema_id}")
         kind = definition.kind
         name = definition.name
@@ -845,21 +850,47 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
     host = params["host"]
     port = int(params["port"])
     url = f"mysql+pymysql://{quote_plus(user)}:{quote_plus(password)}@{host}:{port}/{database}?charset=utf8mb4"
+
+    # Temporal 单条 activity 结果/输入受 gRPC 4MB 限制：大文本行（专利摘要等）
+    # 一批 500 行轻易超限，activity 完成报 ResourceExhausted 无限重试。这里对
+    # 游标/offset 模式自适应折半 LIMIT 直到序列化结果 ≤ 预算；未取的尾部行由
+    # 下一批重读（游标按实际返回行推进），语义不丢数据。
+    effective_batch = batch_size
+
+    def _fetch(n: int) -> list[dict[str, Any]]:
+        scaled_binds = {**binds, "n": n}
+        scaled_sqls = [(sqls[0][0], scaled_binds)] if cursor_kind != "ids" else sqls
+        fetched: list[dict[str, Any]] = []
+        for sql, sql_binds in scaled_sqls:
+            with engine.connect() as conn:
+                for raw in conn.execute(text(sql), sql_binds).mappings().all():
+                    fetched.append({k: _jsonable(v) for k, v in dict(raw).items()})
+        return fetched
+
     engine = create_engine(url, pool_pre_ping=True)
     try:
-        raw_rows = []
-        for sql, sql_binds in sqls:
-            with engine.connect() as conn:
-                raw_rows.extend(conn.execute(text(sql), sql_binds).mappings().all())
+        rows: list[dict[str, Any]] = []
+        if cursor_kind == "ids":
+            for sql, sql_binds in sqls:
+                with engine.connect() as conn:
+                    for raw in conn.execute(text(sql), sql_binds).mappings().all():
+                        rows.append({k: _jsonable(v) for k, v in dict(raw).items()})
+        else:
+            n = batch_size
+            while True:
+                rows = _fetch(n)
+                effective_batch = n
+                if n <= 1:
+                    break
+                if len(json.dumps(rows, ensure_ascii=False, default=str).encode()) <= _MAX_BATCH_ROWS_BYTES:
+                    break
+                n = max(1, n // 2)
     finally:
         engine.dispose()
 
-    rows: list[dict[str, Any]] = []
     max_time: str | None = None
     max_pk: str | None = None
-    for raw in raw_rows:
-        row = {key: _jsonable(value) for key, value in dict(raw).items()}
-        rows.append(row)
+    for row in rows:
         pk_value = row.get(pk_column)
         if pk_value is not None:
             max_pk = str(_jsonable(pk_value))
@@ -872,6 +903,7 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
         "recordIds": [str(r.get(pk_column)) for r in rows if r.get(pk_column) is not None],
         "maxTime": max_time,
         "maxPk": max_pk,
+        "effectiveBatchSize": effective_batch,
         # offset 模式回传本批生效的增量水位（时间列过滤起点），reader 链式透传
         **({"watermark": binds.get("wm")} if cursor_kind == "offset" else {}),
     }
@@ -993,6 +1025,34 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
         client.connect()
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # 列类型感知序列化：注册 schema 的业务列大量声明 string，而脚本输出的
+        # 数值（计数/金额）是 int/float——数字字面量写 string 列会被 Nebula 拒绝
+        # （"data type does not meet the requirements"）。DESCRIBE 一次拿列类型，
+        # string 列一律转字符串，int/double 列保持数字字面量。
+        column_types: dict[str, str] = {}
+        not_null_cols: set[str] = set()
+        try:
+            described = client.execute_read(f"DESCRIBE {'TAG' if kind == 'entity' else 'EDGE'} `{name}`")
+            for row in described.records or []:
+                col = str(row.get("Field"))
+                column_types[col] = str(row.get("Type")).lower()
+                if str(row.get("Null")).upper() == "NO":
+                    not_null_cols.add(col)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("DESCRIBE %s %s 失败，按值类型写图: %s", kind, name, exc)
+
+        def ngql_value_typed(value: Any, col: str | None) -> str:
+            col_type = column_types.get(col or "", "") if col else ""
+            if value is None:
+                return "NULL"
+            if isinstance(value, bool):
+                return "true" if value else "false"
+            if isinstance(value, (int, float)) and not col_type.startswith("string"):
+                return str(value)
+            if isinstance(value, (int, float)):
+                return json.dumps(str(value), ensure_ascii=False)
+            return json.dumps(str(value), ensure_ascii=False)
+
         def filtered(props: dict[str, Any] | None) -> dict[str, Any]:
             if not props:
                 return {}
@@ -1008,20 +1068,40 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                     merged.setdefault(key, default)
             if not active_props:
                 return merged
-            return {key: value for key, value in merged.items() if key in active_props}
+            result = {key: value for key, value in merged.items() if key in active_props}
+            # 脚本没输出的 NOT NULL 列补类型适配的空值——缺列整条 INSERT 会被
+            # Nebula 拒绝（"not null field doesn't have a default value"）
+            for col in not_null_cols:
+                if col in active_props and col not in result:
+                    default = "" if column_types.get(col, "string").startswith("string") else "0"
+                    result[col] = default
+            return result
 
         def write_with_self_heal(record: dict[str, Any], props: dict[str, Any]) -> None:
             while True:
                 try:
                     if kind == "entity":
                         cols = ", ".join(f"`{key}`" for key in props)
-                        values = ", ".join(ngql_value(value) for value in props.values())
+                        values = ", ".join(
+                            ngql_value_typed(value, key) for key, value in props.items()
+                        )
                         vid = json.dumps(str(record["id"]), ensure_ascii=False)
                         client.execute_write(
                             f"INSERT VERTEX `{name}`({cols}) VALUES {vid}:({values})"
                         )
                     else:
-                        client.merge_edge(record["fromId"], record["toId"], name, {}, props)
+                        # 关系也走 nGQL INSERT EDGE（列级 upsert，同实体结论）：
+                        # REST /edges/merge 要求 identityProps 非空（平台语义里
+                        # 边以 from/to/rank 定位），空 identity 会被 400 拒绝
+                        ecols = ", ".join(f"`{key}`" for key in props)
+                        evalues = ", ".join(
+                            ngql_value_typed(value, key) for key, value in props.items()
+                        )
+                        src = json.dumps(str(record["fromId"]), ensure_ascii=False)
+                        dst = json.dumps(str(record["toId"]), ensure_ascii=False)
+                        client.execute_write(
+                            f"INSERT EDGE `{name}`({ecols}) VALUES {src}->{dst}:({evalues})"
+                        )
                     return
                 except GraphRequestError as exc:
                     bad_column = _unknown_column_name(exc)
@@ -1245,14 +1325,18 @@ async def build_entity_index(request: dict[str, Any]) -> dict[str, Any]:
     """
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-    from infra.mysql import get_mysql_client
+    from infra.workflow_mysql import get_workflow_engine
     from service.entity_search import EntitySearchService
 
     space = request.get("space")
     entity_types = request.get("entityTypes") or []
 
     def _run() -> dict[str, Any]:
-        with get_mysql_client().session_scope() as session:
+        # BM25 状态表（kg_entity_search_state）在控制库：与 handler 的
+        # get_workflow_session 同源，走默认业务库会报 Table doesn't exist
+        from sqlalchemy.orm import Session as OrmSession
+
+        with OrmSession(get_workflow_engine()) as session:
             return EntitySearchService(session).reindex(space=space, entity_types=entity_types)
 
     result = await asyncio.to_thread(_run)
@@ -1866,7 +1950,10 @@ class SchemaExtractWorkflow:
                         if final["watermark"] is None and final["pkCursor"] is None:
                             break
                         cursor = {k: v for k, v in final.items() if v is not None}
-                    if len(rows) < batch_size:
+                    # 大文本行时 activity 会折半 LIMIT（结果 ≤ 4MB gRPC 上限）：
+                    # 终止判断用本批实际请求量，防早停丢尾批
+                    effective = int(batch.get("effectiveBatchSize") or batch_size)
+                    if len(rows) < effective:
                         break
                 if plain_table:
                     return {"batches": idx, "watermark": final_wm, "pkCursor": None}

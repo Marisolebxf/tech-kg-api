@@ -979,7 +979,34 @@ class ManualReviewService:
             if not node_label:
                 raise ReviewValidationError("entity 候选缺 nodeLabel")
             candidate = self._coerce_to_schema(graph, node_label, candidate)
-            graph.merge_node([node_label], {"vid": c.object_id}, candidate)
+            # 实体走 nGQL INSERT VERTEX（列级 upsert 幂等）——REST /nodes/merge 会把
+            # id/name/vid 当身份键从属性剥离，而 schema DDL 把 id/name 建成 NOT NULL，
+            # merge 永远 400（与平台抽取 write_records 同一结论）
+            import json as _json
+
+            def _ngql_value(value: Any) -> str:
+                if value is None:
+                    return "NULL"
+                if isinstance(value, bool):
+                    return "true" if value else "false"
+                if isinstance(value, (int, float)):
+                    return str(value)
+                return _json.dumps(str(value), ensure_ascii=False)
+
+            from datetime import datetime as _dt
+
+            props = dict(candidate)
+            props.setdefault("id", c.object_id)
+            now_str = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+            props.setdefault("create_time", now_str)
+            props.setdefault("update_time", now_str)
+            props.setdefault("source_table", "manual_review")
+            cols = list(props.keys())
+            stmt = (
+                f'INSERT VERTEX {node_label}({", ".join(cols)}) VALUES "{c.object_id}": '
+                f'({", ".join(_ngql_value(props[col]) for col in cols)})'
+            )
+            graph.execute_write(stmt)
         elif kind == "relation":
             edge_type = snapshot.get("_edgeType")
             from_id = snapshot.get("_fromId")
@@ -1609,7 +1636,11 @@ class ManualReviewService:
             "batchId": c.batch_id,
             "nodeId": c.pipeline_step_id,
             "pipelineStepId": c.pipeline_step_id,
-            "pipelineStepName": PIPELINE_STEPS[c.pipeline_step_id]["name"],
+            # kg.custom.steps 流水线的 step id 是 manifest 自定义的（如 seed），
+            # 不在标准 PIPELINE_STEPS 里——取不到时回退原值，别让队列接口 404
+            "pipelineStepName": (PIPELINE_STEPS.get(c.pipeline_step_id) or {}).get(
+                "name", c.pipeline_step_id
+            ),
             "objectId": c.object_id,
             "objectType": c.object_type,
             "objectName": c.object_name,

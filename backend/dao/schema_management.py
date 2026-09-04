@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from uuid import uuid4
+
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -32,7 +35,7 @@ class SchemaManagementDAO:
     def get(self, schema_id: str) -> GraphSchemaDefinition | None:
         statement = (
             select(GraphSchemaDefinition)
-            .where(GraphSchemaDefinition.id == schema_id)
+            .where(GraphSchemaDefinition.id == schema_id, GraphSchemaDefinition.is_deleted.is_(False))
             .options(*self._load_options())
         )
         return self.session.scalar(statement)
@@ -41,12 +44,14 @@ class SchemaManagementDAO:
         statement = select(GraphSchemaDefinition).where(
             GraphSchemaDefinition.id == schema_id,
             GraphSchemaDefinition.kind == "entity",
+            GraphSchemaDefinition.is_deleted.is_(False),
         )
         return self.session.scalar(statement)
 
     def exists_by_key_or_name(self, schema_key: str, name: str, graph_space: str) -> bool:
         statement = select(GraphSchemaDefinition.id).where(
             GraphSchemaDefinition.graph_space == graph_space,
+            GraphSchemaDefinition.is_deleted.is_(False),
             or_(
                 GraphSchemaDefinition.schema_key == schema_key,
                 GraphSchemaDefinition.name == name,
@@ -63,7 +68,7 @@ class SchemaManagementDAO:
         page_size: int,
         graph_space: str | None = None,
     ) -> tuple[list[GraphSchemaDefinition], int]:
-        filters = []
+        filters = [GraphSchemaDefinition.is_deleted.is_(False)]
         if kind:
             filters.append(GraphSchemaDefinition.kind == kind)
         if graph_space:
@@ -98,7 +103,9 @@ class SchemaManagementDAO:
         return list(self.session.scalars(statement).all()), int(total)
 
     def list_all(self, graph_space: str | None = None) -> list[GraphSchemaDefinition]:
-        statement = select(GraphSchemaDefinition).options(*self._load_options())
+        statement = select(GraphSchemaDefinition).options(*self._load_options()).where(
+            GraphSchemaDefinition.is_deleted.is_(False)
+        )
         if graph_space:
             statement = statement.where(GraphSchemaDefinition.graph_space == graph_space)
         statement = statement.order_by(
@@ -183,6 +190,7 @@ class SchemaManagementDAO:
     def referenced_relation_names(self, schema_id: str) -> list[str]:
         statement = select(GraphSchemaDefinition.name).where(
             GraphSchemaDefinition.kind == "relation",
+            GraphSchemaDefinition.is_deleted.is_(False),
             or_(
                 GraphSchemaDefinition.source_schema_id == schema_id,
                 GraphSchemaDefinition.target_schema_id == schema_id,
@@ -194,6 +202,7 @@ class SchemaManagementDAO:
         """引用该实体的关系定义（删除属性时检查 source/target 表达式引用）。"""
         statement = select(GraphSchemaDefinition).where(
             GraphSchemaDefinition.kind == "relation",
+            GraphSchemaDefinition.is_deleted.is_(False),
             or_(
                 GraphSchemaDefinition.source_schema_id == schema_id,
                 GraphSchemaDefinition.target_schema_id == schema_id,
@@ -202,10 +211,23 @@ class SchemaManagementDAO:
         return list(self.session.scalars(statement).all())
 
     def delete(self, definition: GraphSchemaDefinition) -> None:
-        self.session.delete(definition)
+        """目录假删：置 is_deleted 标记保留物理行（审计/图库存量数据不受影响）。
+
+        同时改写 schema_key/name 释放 (key,graph_space)/(name,graph_space) 唯一键，
+        否则删除后无法在同名空间重建同名 schema（假删行仍占用唯一约束）。
+        """
+        now = datetime.now()
+        stamp = now.strftime("%Y%m%d%H%M%S") + uuid4().hex[:4]
+        definition.is_deleted = True
+        definition.deleted_at = now
+        definition.schema_key = f"{definition.schema_key[:48]}#del-{stamp}"
+        definition.name = f"{definition.name[:110]}#del-{stamp}"
+        self.session.add(definition)
 
     def stats(self, graph_space: str | None = None) -> dict[str, int]:
-        space_filters = [GraphSchemaDefinition.graph_space == graph_space] if graph_space else []
+        space_filters = [GraphSchemaDefinition.is_deleted.is_(False)]
+        if graph_space:
+            space_filters.append(GraphSchemaDefinition.graph_space == graph_space)
 
         def _count(*conditions):
             return (

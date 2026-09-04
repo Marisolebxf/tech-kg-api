@@ -19,6 +19,7 @@ import {
   type GraphNode,
 } from '../../api/graphSearch'
 import { runNgql, type GraphConsoleResult } from '../../api/graphConsole'
+import { graphSpace } from '../../config'
 import { getErrorMessage } from '../../api/http'
 import {
   getPlatformOverview,
@@ -310,9 +311,7 @@ const queryDetailMode = ref<'summary' | 'entity' | 'relation' | 'provenance'>('s
  * 页面原来的“图谱范围”继续表示业务子图类型，
  * 不改变负责人要求保留的页面结构和样式。
  */
-const defaultGraphSpace =
-  import.meta.env.VITE_GRAPH_SPACE?.trim()
-  || 'test'
+const defaultGraphSpace = graphSpace?.trim() || 'test'
 
 const selectedGraphSpace = ref(defaultGraphSpace)
 

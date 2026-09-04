@@ -2,6 +2,7 @@ import type { AxiosError } from 'axios'
 
 import { fetchEventSource } from '@microsoft/fetch-event-source'
 
+import { apiBase } from '../config'
 import { http } from './http'
 
 export interface ApiResponse<T> {
@@ -482,7 +483,7 @@ export async function verifyAndSaveScript(
   userId: string,
   handlers: VerifyScriptHandlers,
 ): Promise<void> {
-  const baseUrl = import.meta.env.VITE_API_BASE || '/api'
+  const baseUrl = apiBase
   const url = `${baseUrl}${PREFIX}/schemas/${schemaId}/script/verify`
   const body = new FormData()
   body.append('script', file)

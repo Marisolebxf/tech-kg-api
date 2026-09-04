@@ -28,6 +28,7 @@ import {
   type SchemaScript,
 } from '../../api/schemaManagement'
 import { currentUserId as getCurrentUserId } from '../../api/currentUser'
+import { graphSpace } from '../../config'
 import { listGraphSpaces } from '../../api/graphSpace'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import {
@@ -649,7 +650,7 @@ async function loadSpaces() {
   }
   if (!activeSpace.value && graphSpaces.value.length) {
     // 构建期注入的 VITE_GRAPH_SPACE 优先（与部署环境默认空间一致），不在列表再回退首个
-    const preferred = import.meta.env.VITE_GRAPH_SPACE?.trim()
+    const preferred = graphSpace
     activeSpace.value =
       preferred && graphSpaces.value.includes(preferred) ? preferred : graphSpaces.value[0]
   }

@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+import { appBase, authDisabled } from '../config'
+
 import { useAuthStore } from '../stores/auth'
 import { isPortalEmbeddedMode } from '../portal/iframeBridge'
 import BusinessServiceView from '../views/business-service/BusinessServiceView.vue'
@@ -33,7 +35,7 @@ const serviceRoutes = [
 ] as const
 
 export const router = createRouter({
-  history: createWebHistory(import.meta.env.BASE_URL),
+  history: createWebHistory(appBase),
   routes: [
     {
       path: '/login',
@@ -133,7 +135,7 @@ function loginRedirect(fullPath: string, error?: string) {
 }
 
 router.beforeEach(async (to) => {
-  if (import.meta.env.VITE_AUTH_ENABLED === 'false') {
+  if (authDisabled) {
     return to.name === 'login' ? { path: '/overview' } : true
   }
 

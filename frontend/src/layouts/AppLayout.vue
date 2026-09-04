@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { appBase, authDisabled } from "../config";
 import {
   IconHistory,
   IconSwap,
@@ -38,14 +39,13 @@ import logoKg from "../assets/images/logo-kg.png";
 
 const route = useRoute();
 const router = useRouter();
-// BASE_URL 为 './' 或 '/xxx/'（都以 / 结尾）；扁平单段路由下相对解析恒指向站点根下的 docs/
-const docsHref = `${import.meta.env.BASE_URL}docs/`;
+const docsHref = `${appBase}docs/`;
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const currentUser = computed(() => authStore.profile?.user);
 const userAvatar = computed(() => currentUser.value?.avatar || accountAvatar);
 const isAdminUser = computed(() =>
-  import.meta.env.VITE_AUTH_ENABLED === "false" || authStore.isAdmin,
+  authDisabled || authStore.isAdmin,
 );
 const userRoleName = computed(() =>
   isAdminUser.value ? "管理员" : "普通用户",

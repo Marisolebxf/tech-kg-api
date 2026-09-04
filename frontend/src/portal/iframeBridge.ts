@@ -1,3 +1,5 @@
+import { portalAllowedOrigins, portalEmbeddedDefault, portalTargetOrigin } from '../config'
+
 export const IFRAME_BRIDGE_PROTOCOL = 'iframe-bridge'
 export const IFRAME_BRIDGE_VERSION = '1.0'
 
@@ -208,11 +210,11 @@ export class IframeBridge {
   }
 }
 
-const envAllowedOrigins = parsePortalOrigins(import.meta.env.VITE_PORTAL_ALLOWED_ORIGINS)
+const envAllowedOrigins = parsePortalOrigins(portalAllowedOrigins)
 
 export const portalBridge = new IframeBridge({
   allowedOrigins: envAllowedOrigins,
-  targetOrigin: import.meta.env.VITE_PORTAL_TARGET_ORIGIN,
+  targetOrigin: portalTargetOrigin,
 })
 
 function isTruthyFlag(value: unknown): boolean {
@@ -235,5 +237,5 @@ export function isPortalEmbeddedMode(routeFlag?: unknown): boolean {
   return portalBridge.isInIframe
     || isTruthyFlag(routeFlag)
     || locationEmbeddedFlag()
-    || isTruthyFlag(import.meta.env.VITE_PORTAL_EMBEDDED_DEFAULT)
+    || isTruthyFlag(portalEmbeddedDefault)
 }

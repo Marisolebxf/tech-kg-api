@@ -1,6 +1,7 @@
 # web：前端静态资源 + /api/ 反代（独立前端镜像）。
 # 镜像内 nginx 反代 http://api:8000，与 api Service 同命名空间直连。
-# 注意：前端构建时 VITE_BASE / VITE_API_BASE 需与外部代理路径一致（见文档第八节）。
+# 部署前缀等配置运行时注入：envFrom 同一份 tech-kg-config（APP_BASE 等），
+# 镜像一次构建、多环境部署（见 docs/前端一次构建多环境部署方案.md）。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -22,6 +23,9 @@ spec:
         - name: web
           image: 10.50.62.9:30303/bkg/baked-web:v0.0.1
           imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: tech-kg-config
           ports:
             - containerPort: 80
               name: http

@@ -1,6 +1,7 @@
 import { defineConfig } from '@playwright/test'
 
-// dev2 全功能线 E2E：宿主机 Playwright → 容器化 web(8089) + api(8002)。
+// dev2 全功能线 E2E：宿主机 Playwright → 容器化 web 根路径实例(8091) + api(8002)。
+// 门户前缀实例在 8089（/bkg_zpt），e2e 走根路径实例避免改动全部用例路径。
 // 串行执行（workers=1）：场景间存在造数依赖链（C 组 schema → E/F 任务 → G/H），
 // 文件名数字前缀决定执行顺序。
 export default defineConfig({
@@ -16,7 +17,7 @@ export default defineConfig({
     ['html', { outputFolder: '../artifacts/playwright-platform/html', open: 'never' }],
   ],
   use: {
-    baseURL: 'http://localhost:8089',
+    baseURL: 'http://localhost:8091',
     browserName: 'chromium',
     headless: true,
     // 1280 默认宽度命中响应式断点会隐藏 hero 徽标/部分操作列，统一用宽视口

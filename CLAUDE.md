@@ -50,7 +50,7 @@ docker build --target builder --build-arg NPM_REGISTRY=https://registry.npmmirro
 docker run --rm tech-kg-dev2-frontend-test pnpm vitest run --exclude "src/__tests__/review-full-integration.spec.ts"
 ```
 
-- The dev2 stack is `docker-compose.dev2.yml`: `tech-kg-api-dev2` (host port 8002) + `tech-kg-web-dev2` (host port 8089) + `temporal-mysql-dev2`/`temporal-dev2`. Inside the api container only `temporal-mysql-dev2` resolves, not the production `temporal-mysql`.
+- The dev2 stack is `docker-compose.dev2.yml`: `tech-kg-api-dev2` (host port 8002) + `tech-kg-web-dev2` (host port 8089, portal entry — edu.itic-sci.com/bkg_zpt forwards here **with the /bkg_zpt prefix stripped**; nginx serves root paths, runtime-config.js injects base=/bkg_zpt) + `tech-kg-web-dev2-root` (host port 8091, root-path instance for platform e2e & local dev; `playwright.platform.config.ts` points here) + `temporal-mysql-dev2`/`temporal-dev2`. Inside the api container only `temporal-mysql-dev2` resolves, not the production `temporal-mysql`.
 - `frontend/src/__tests__/review-full-integration.spec.ts` is **environment-gated**: it spawns its own uvicorn backend (needs `uv` + backend venv) plus a MinIO at `127.0.0.1:9000` (minioadmin) and workflow MySQL — no existing container provides all of these. Its failure anywhere is an environment issue, not a regression; exclude it from test runs.
 - Frontend typecheck + build also happen inside Docker via `docker compose -f docker-compose.dev2.yml build web-dev2` (builder stage runs `vue-tsc -b && vite build`).
 

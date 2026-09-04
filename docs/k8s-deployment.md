@@ -75,12 +75,11 @@ docker build -t <REGISTRY>/tech-kg-api:0.1.0 \
   --build-arg PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
   ./backend
 
-# 前端镜像（web）
+# 前端镜像（web）——一次构建、部署期注入（方案 B），不传任何 VITE_*；
+# 部署前缀等由 APP_BASE / TRS_GRAPH_SPACE / AUTH_ENABLED 等环境变量在运行时
+# 注入（见 docs/前端一次构建多环境部署方案.md），多环境共用同一镜像
 docker build -t <REGISTRY>/tech-kg-web:0.1.0 \
   --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
-  --build-arg VITE_BASE=/bkg_zpt/ \
-  --build-arg VITE_API_BASE=/api \
-  --build-arg VITE_GRAPH_SPACE=dev2 \
   ./frontend
 
 docker push <REGISTRY>/tech-kg-api:0.1.0
@@ -123,6 +122,8 @@ metadata:
   name: tech-kg-config
   namespace: tech-kg
 data:
+  # ---- 前端部署前缀（web Pod envFrom 本 ConfigMap 运行时注入）----
+  APP_BASE: /bkg_zpt
   # ---- 图数据库 ----
   TRS_GRAPH_BASE_URL: http://trs-graph-service:8090
   TRS_GRAPH_SPACE: dev
@@ -800,6 +801,9 @@ spec:
       containers:
         - name: web
           image: <REGISTRY>/tech-kg-web:0.1.0
+          # 部署前缀等运行时注入（APP_BASE 等，与 api 共用同一 ConfigMap）
+          envFrom:
+            - configMapRef: { name: tech-kg-config }
           ports: [{ containerPort: 80 }]
           readinessProbe:
             httpGet: { path: /, port: 80 }
@@ -816,7 +820,9 @@ spec:
   ports: [{ port: 80, targetPort: 80 }]
 ```
 
-> 前端镜像的 `nginx.conf` 中 `proxy_pass http://api:8000;` 直接走集群 DNS，K8s Service `api` 会解析到对应 Endpoints。
+> 前端镜像的 nginx 模板中 `proxy_pass http://api:8000;` 直接走集群 DNS，K8s Service `api` 会解析到对应 Endpoints。
+>
+> **入口形态**：镜像内置模板是前缀式（`location ^~ ${APP_BASE}/`），适用于 Ingress/NodePort **直连子路径**；若入口网关是门户式**剥前缀转发**（容器收到根路径），需挂载根路径全兜底模板覆盖（参考 `frontend/nginx.dev2.conf`），`APP_BASE` 此时仅驱动 runtime-config.js。同一镜像已在 dev2 栈双实例（前缀/根路径）验证。
 
 ---
 

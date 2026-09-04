@@ -1122,8 +1122,9 @@ spec:
 
 注意事项：
 
-1. **前端构建参数必须与代理路径一致**：`baked-web` 镜像构建时需传 `VITE_BASE=/bkg_zp/`、`VITE_API_BASE=/bkg_zp/api`（默认 `./` 与 `/api` 只适用于根路径部署）。
-2. **认证 Cookie 路径**：`AUTH_COOKIE_PATH=/bkg_zp`（已配置在 02-configmap.yaml），与代理路径保持一致，否则登录态无法写入。
-3. **HTTPS**：`AUTH_COOKIE_SECURE=true` 要求外部入口必须是 HTTPS，平台证书按域名 `edu.itic-sci.com` 配置。
-4. **SSO 回调**：`USER_CENTER_REDIRECT_URI=https://edu.itic-sci.com/bkg_zp/api/v1/auth/callback` 需在用户中心完成客户端注册（`USER_CENTER_CLIENT_ID` / `USER_CENTER_CLIENT_SECRET`）。
-5. **temporal-ui**（NodePort 30833）与 rustfs console 仅供运维排障，建议不对外网暴露。
+1. **前端镜像一次构建、部署期注入**：`baked-web` 镜像不再传任何 `VITE_*` 构建参数（只留 `NPM_REGISTRY`）；部署前缀等配置由 web Pod `envFrom` 同一份 `tech-kg-config` 运行时注入（`APP_BASE` / `TRS_GRAPH_SPACE` / `AUTH_ENABLED` / `PORTAL_*`），详见 `docs/前端一次构建多环境部署方案.md`。同一镜像已在 dev2 栈以双实例验证（门户前缀 `APP_BASE=/bkg_zpt` 与根路径 `APP_BASE=""`）。
+2. **入口形态决定 nginx 配置**：镜像内置模板是前缀式（`location ^~ /bkg_zpt/` 前缀映射 + `/bkg_zpt/api/` 去前缀代理），适用于 NodePort/Ingress **直连子路径**访问。若入口是统一门户式**剥前缀转发**（浏览器 URL 带 `/bkg_zpt`、容器收到根路径），需挂载根路径全兜底模板覆盖（参考 `frontend/nginx.dev2.conf`），此时 `APP_BASE` 仅驱动 runtime-config.js（前端 base/apiBase），nginx 不感知前缀。交付前先确认入口网关的转发方式。
+3. **认证 Cookie 路径**：`AUTH_COOKIE_PATH=/bkg_zpt`（已配置在 02-configmap.yaml），与代理路径保持一致，否则登录态无法写入。
+4. **HTTPS**：`AUTH_COOKIE_SECURE=true` 要求外部入口必须是 HTTPS，平台证书按域名 `edu.itic-sci.com` 配置。
+5. **SSO 回调**：`USER_CENTER_REDIRECT_URI=https://edu.itic-sci.com/bkg_zpt/api/v1/auth/callback` 需在用户中心完成客户端注册（`USER_CENTER_CLIENT_ID` / `USER_CENTER_CLIENT_SECRET`），回调白名单需同步登记 `/bkg_zpt` 路径。
+6. **temporal-ui**（NodePort 30833）与 rustfs console 仅供运维排障，建议不对外网暴露。

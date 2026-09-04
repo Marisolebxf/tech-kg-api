@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { API_BASE } from './helpers'
+import { API_BASE, WEB_BASE } from './helpers'
 
 // J/K/L 三条冒烟（方案 §J–L）：HTTP 断言 + 公共页渲染，不写完整交互用例。
 test.describe('J/K/L 冒烟', () => {
@@ -25,7 +25,7 @@ test.describe('J/K/L 冒烟', () => {
   })
 
   test('K: 文档中心 VitePress 可访问（防回归）', async ({ request }) => {
-    const resp = await request.get('http://localhost:8089/docs/')
+    const resp = await request.get(`${WEB_BASE}/docs/`)
     expect(resp.status()).toBe(200)
     const html = await resp.text()
     expect(html).toContain('Tech KG 文档中心')

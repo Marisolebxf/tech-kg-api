@@ -4,7 +4,7 @@ import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 
-export const WEB_BASE = 'http://localhost:8089'
+export const WEB_BASE = 'http://localhost:8091'
 export const API_BASE = 'http://localhost:8002/api/v1'
 
 /** 造数统一前缀 + 短随机后缀，保证幂等重跑不撞名。 */
@@ -108,7 +108,7 @@ export async function graphCount(request: APIRequestContext, space: string, patt
 
 /** 直连 trs-graph 执行语句（绕过 graph-console 的 DDL 禁令，仅测试环境造数/清理用）。 */
 export async function graphWrite(statement: string, space = 'dev2'): Promise<any> {
-  const resp = await fetch(`http://localhost:8090/api/v1/query/write`, {
+  const resp = await fetch(`http://localhost:8091/api/v1/query/write`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-API-Key': 'ysukeg', 'X-Graph-Space': space },
     body: JSON.stringify({ query: statement }),

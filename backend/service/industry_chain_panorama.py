@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from infra.graph_api_client import GraphAPIClient, GraphAPIError, graph_api
@@ -132,6 +133,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         top_k: int = 5,
         relation_types: list[str] | None = None,
         refresh: bool = False,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         industry_kw = self._normalize_industry_keyword(industry)
         anchor = (anchor_id or "").strip() or None
@@ -154,6 +156,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                 depth=depth,
                 top_k=top_k,
                 relation_types=rel_types,
+                auth_headers=auth_headers,
             )
             return cached[1]
         query_input = {
@@ -173,7 +176,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         fallback_reason: str | None = None
 
         try:
-            async with graph_api() as client:
+            async with graph_api(auth_headers=auth_headers) as client:
                 resolved_anchor, layer_payload = await asyncio.gather(
                     self._resolve_anchor_from_keyword(client, industry_kw, anchor),
                     self._fetch_layers(client, industry_kw, top_k, anchor is None),
@@ -381,6 +384,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         depth: int,
         top_k: int,
         relation_types: list[str] | None = None,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> None:
         """缓存过期时后台重建，期间请求继续用旧结果。"""
         if cache_key in _panorama_rebuilding:
@@ -396,6 +400,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                     depth=depth,
                     top_k=top_k,
                     relation_types=relation_types,
+                    auth_headers=auth_headers,
                 )
             except Exception:  # noqa: BLE001 - 后台重建失败保留空位，下次请求再现场组装
                 logger.warning("panorama background rebuild failed", exc_info=True)

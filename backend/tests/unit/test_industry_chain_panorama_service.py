@@ -227,7 +227,7 @@ async def test_query_falls_back_to_compact_overview_when_keyword_misses(monkeypa
         "_resolve_anchor_from_keyword",
         lambda *args, **kwargs: __import__("asyncio").sleep(0, result=None),
     )
-    monkeypatch.setattr("service.industry_chain_panorama.graph_api", lambda: _GraphCtx())
+    monkeypatch.setattr("service.industry_chain_panorama.graph_api", lambda **kwargs: _GraphCtx())
 
     result = await service.query(industry="人工智能", depth=1, top_k=3)
 

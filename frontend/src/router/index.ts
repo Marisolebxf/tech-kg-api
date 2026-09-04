@@ -71,7 +71,7 @@ export const router = createRouter({
       name: 'graph-query',
       component: PlatformWorkbenchView,
       props: { initialTab: 'query' },
-      meta: { title: '图谱查询' },
+      meta: { title: '综合查询' },
     },
     {
       path: '/graph-query/entities',

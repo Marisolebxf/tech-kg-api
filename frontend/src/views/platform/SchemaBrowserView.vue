@@ -44,6 +44,7 @@ import {
 } from './schema-browser/propertyRows'
 import SourceBindings from './schema-browser/sourceBindings.vue'
 import {
+  emptySourceBindingRow,
   toSourcePayload,
   type SourceBindingRow,
 } from './schema-browser/sourceBindingRows'
@@ -498,6 +499,10 @@ function addProperty() {
   createForm.value.properties.push(emptyPropertyRow())
 }
 
+function addSourceBinding() {
+  createForm.value.sources.push(emptySourceBindingRow())
+}
+
 function removeProperty(index: number) {
   if (createForm.value.properties[index]?.locked) return
   createForm.value.properties.splice(index, 1)
@@ -907,11 +912,33 @@ function togglePropertyDetail(schemaId: string): void {
       </div>
     </section>
 
-    <section class="schema-shell">
+    <section class="schema-catalog">
       <nav class="schema-tabs" aria-label="Schema 类型切换">
-        <div class="schema-tabs__items"><button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="activeTab=tab;keyword=''">{{ tab }}</button></div>
+        <div class="schema-tabs__items">
+          <button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="activeTab=tab;keyword=''">{{ tab }}</button>
+        </div>
+        <div class="schema-toolbar__actions">
+          <div class="space-picker">
+            <span>图空间</span>
+            <a-select
+              id="schema-space-select"
+              :model-value="activeSpace"
+              class="schema-space-select"
+              placeholder="选择图空间"
+              :scrollbar="false"
+              style="width: 170px"
+              @change="switchSpace"
+            >
+              <a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option>
+            </a-select>
+          </div>
+          <a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`">
+            <template #prefix><IconSearch /></template>
+          </a-input>
+          <button class="primary" type="button" @click="openCreate">＋ 增加</button>
+        </div>
       </nav>
-      <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeSpace">图空间：{{ activeSpace }}</span></div><div class="schema-toolbar__actions"><div class="space-picker"><span>图空间</span><a-select :model-value="activeSpace" placeholder="选择图空间" style="width:170px" @change="switchSpace"><a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option></a-select></div><button class="primary" type="button" @click="openCreate">＋ 增加</button><a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`"><template #prefix><IconSearch /></template></a-input></div></div>
+      <div class="schema-shell schema-table-shell">
 
       <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in filteredEntities" :key="row.name"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.description }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : (row.schema.isSystem ? '系统内置，不可删除' : '被关系引用，不可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="5"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
 
@@ -920,6 +947,7 @@ function togglePropertyDetail(schemaId: string): void {
       <!-- 版本记录（已隐藏）
       <div v-else class="schema-table-wrap schema-version-table"><table><thead><tr><th>版本</th><th>状态</th><th>发布时间</th><th>实体范围</th><th>关系范围</th><th>变更内容</th><th>发布人</th><th>操作</th></tr></thead><tbody><tr v-for="row in schemaVersions" :key="row.version"><td><code>{{ row.version }}</code></td><td><span :class="row.status === '当前版本' ? 'core' : 'support'">{{ row.status }}</span></td><td>{{ row.time }}</td><td>{{ row.entities }}</td><td>{{ row.relations }}</td><td>{{ row.change }}</td><td>{{ row.publisher }}</td><td><div class="schema-version-actions"><button type="button" @click="schemaVersionMessage = `已打开 ${row.version} 的完整变更清单。`">变更详情</button><button v-if="row.status !== '当前版本'" class="danger" type="button" @click="schemaVersionMessage = `已创建回退至 ${row.version} 的申请，通过影响分析与审批后才会执行。`">申请回退</button></div></td></tr></tbody></table></div>
       -->
+      </div>
     </section>
 
     <Teleport to="body">
@@ -929,7 +957,13 @@ function togglePropertyDetail(schemaId: string): void {
           <header><h2>新增{{ activeTab }}</h2><button type="button" @click="modalOpen = false">×</button></header>
           <a-form ref="createFormRef" :model="createForm" :rules="createFormRules" class="schema-modal__body schema-create-body" layout="vertical">
             <a-form-item class="create-field create-field--full" field="graphSpace" label="图空间" required>
-              <a-select v-model="createForm.graphSpace" placeholder="选择目标图空间">
+              <a-select
+                v-model="createForm.graphSpace"
+                class="schema-create-select"
+                placeholder="选择目标图空间"
+                popup-container=".schema-create-modal"
+                :scrollbar="false"
+              >
                 <a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option>
               </a-select>
             </a-form-item>
@@ -959,7 +993,7 @@ function togglePropertyDetail(schemaId: string): void {
             </div>
 
             <a-form-item class="create-field create-field--full" field="description" label="说明">
-              <a-textarea v-model="createForm.description" :auto-size="{ minRows: 3, maxRows: 5 }" />
+              <a-textarea v-model="createForm.description" class="schema-description-textarea" :max-length="200" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" />
             </a-form-item>
             <a-form-item class="create-props" field="properties" required label-component="div">
               <template #label>
@@ -997,9 +1031,10 @@ function togglePropertyDetail(schemaId: string): void {
             <div class="create-sources">
               <div class="create-sources__head">
                 <span>来源表（可选）</span>
+                <button type="button" class="create-sources__add" @click="addSourceBinding">＋ 绑定来源表</button>
                 <span class="create-sources__hint">绑定后可在行级触发「平台喂数」抽取：按时间列水位分批读取来源表 → 脚本转换 → 写入图谱</span>
               </div>
-              <SourceBindings v-model="createForm.sources" />
+              <SourceBindings v-model="createForm.sources" :show-add-button="false" />
             </div>
 
             <div class="create-ddl">
@@ -1270,6 +1305,7 @@ function togglePropertyDetail(schemaId: string): void {
 .schema-version-table{max-height:470px}.schema-version-table td:nth-child(6){min-width:280px}.schema-version-actions{display:flex;gap:6px}.schema-version-actions button{padding:3px 7px;border:1px solid #bdd0ea;border-radius:4px;background:#fff;color:#165dff;font-size:9px;white-space:nowrap;cursor:pointer}.schema-version-actions button.danger{border-color:#f6b9b4;color:#b42318}
 
 .schema-toolbar__actions{display:flex;align-items:center;gap:10px}
+.schema-tabs>.schema-toolbar__actions{min-width:0;margin-left:auto}.schema-tabs .space-picker{flex:0 0 auto}
 .space-picker{display:flex;align-items:center;gap:8px;font-size:12px;color:#4e5969}
 .prop-len--invalid,.property-add-form__len--invalid{border-color:#e5484d!important;background:#fff3f3!important}
 .schema-toolbar .primary{height:32px;padding:0 14px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:13px;cursor:pointer}
@@ -1381,7 +1417,7 @@ function togglePropertyDetail(schemaId: string): void {
 
 /* 创建 Schema 弹窗 */
 .schema-create-panel{width:min(680px,100%)}
-.schema-create-body{max-height:72vh;gap:14px}
+.schema-create-body{max-height:72vh;gap:16px}
 .create-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .create-field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#4e5969}
 .create-field--full{grid-column:1/-1}
@@ -1390,8 +1426,8 @@ function togglePropertyDetail(schemaId: string): void {
 .create-field select{appearance:auto}
 .create-props{display:flex;flex-direction:column;gap:8px}
 .create-props__head{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#4e5969}
-.create-props__add{height:26px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#165dff;font-size:12px;cursor:pointer}
-.create-props__add:hover{border-color:#165dff}
+.create-props__add,.create-sources__add{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:120px;min-width:120px;height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#165dff;font-size:12px;white-space:nowrap;cursor:pointer}
+.create-props__add:hover,.create-sources__add:hover{border-color:#165dff}
 .create-prop-row{display:grid;grid-template-columns:1.4fr 1.2fr 0.6fr auto auto;gap:8px;align-items:center}
 .prop-name,.prop-type,.prop-len{height:30px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:12px;color:#1d2129;background:#fff}
 .prop-type{appearance:auto}
@@ -1399,13 +1435,14 @@ function togglePropertyDetail(schemaId: string): void {
 .prop-required input{margin:0}
 .prop-remove{width:24px;height:24px;border:0;border-radius:4px;background:transparent;color:#e54848;font-size:16px;cursor:pointer}
 .prop-remove:hover{background:#fff3f3}
-.create-ddl{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.create-ddl{display:flex;flex-direction:column;gap:8px;margin-top:0}
 .create-ddl__label{font-size:11px;color:#74849b}
 .create-ddl__pre{margin:0;padding:10px 12px;max-height:140px;overflow:auto;background:#0d1117;border-radius:6px;color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:18px;white-space:pre-wrap;word-break:break-all}
 .create-ddl__confirm{margin:6px 0 0;color:#b54708;font-size:11px;line-height:16px}
 .create-sources{display:flex;flex-direction:column;gap:8px}
-.create-sources__head{display:flex;flex-direction:column;gap:2px;font-size:12px;color:#4e5969}
-.create-sources__hint{font-size:11px;line-height:16px;color:#86909c}
+.create-sources__head{display:grid;align-items:center;grid-template-columns:minmax(0,1fr) auto;column-gap:8px;row-gap:4px;font-size:12px;color:#4e5969}
+.create-sources__head>span:first-child,.create-ddl__label{color:#4e5969;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
+.create-sources__hint{grid-column:1/-1;color:#86909c;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .sources-panel{width:min(760px,100%)}
 .sources-note{margin:0;font-size:12px;line-height:20px;color:#86909c}
 .schema-create-body>.create-field,.schema-create-body>.create-props,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{gap:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
@@ -1479,18 +1516,70 @@ function togglePropertyDetail(schemaId: string): void {
 .schema-create-body,.schema-create-body :deep(.arco-form-item-label),.schema-create-body :deep(.arco-checkbox-label){font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 .schema-create-body :is(.create-text-input,.prop-name,.prop-len),.schema-create-body :deep(.arco-textarea),.schema-create-body :deep(.arco-select-view-input),.schema-create-body :deep(.arco-select-view-value){font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 .schema-create-body :deep(.arco-form-item-message),.schema-create-body :deep(.arco-textarea-word-limit){font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
-.schema-create-panel .create-props__head,.schema-create-panel .create-props__add,.schema-create-panel .prop-required{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
+.schema-create-panel .create-props__head,.schema-create-panel .create-props__add,.schema-create-panel .create-sources__add,.schema-create-panel .prop-required{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 .schema-create-panel .prop-remove{font-size:16px;line-height:16px;font-weight:400}
-.schema-create-panel .create-ddl__label,.schema-create-panel .create-ddl__confirm{font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
+.schema-create-panel .create-ddl__label{color:#4e5969;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}.schema-create-panel .create-ddl__confirm{font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schema-create-panel .create-ddl__pre{font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schema-create-panel footer button{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 @media(max-width:900px){.schema-tabs{align-items:stretch;flex-direction:column}.schema-tabs__items{min-height:36px}.schema-toolbar__actions{justify-content:flex-end}.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
 .schema-create-body>.create-field,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{margin-bottom:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
 /* Schema 拓扑总览 */
 .schema-topology-shell{margin-bottom:16px;padding-bottom:0}
-.schema-topology-canvas{height:260px;overflow:hidden;border-top:1px solid #e5e6eb;background:radial-gradient(circle at 50% 40%,#f7faff 0,#fff 70%)}
+.schema-topology-canvas{height:260px;overflow:hidden;border-top:1px solid #e5e6eb;background: #fff;}
 .schema-topology-canvas__empty{display:grid;place-items:center;height:100%;color:#86909c;font-size:12px}
+
+/* Schema 管理页统一排版规范。 */
+.schema-page,.schema-page :deep(*),.schema-modal,.schema-modal :deep(*){font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;letter-spacing:0}
+.schema-page,.schema-modal{font-size:14px;line-height:22px;font-weight:400}
+.schema-page :is(button,input,textarea,select),.schema-modal :is(button,input,textarea,select){font-family:inherit;letter-spacing:0}
+.schema-toolbar strong,.trace-card h2,.trace-layout h2,.property-section__head strong,.schema-modal__panel header h2{font-size:16px;line-height:24px;font-weight:600}
+.schema-tabs button,.schema-toolbar .primary,.schema-tabs .primary,.schema-action-link{font-size:14px;line-height:22px;font-weight:400}
+.schema-tabs button.active{font-weight:500}
+.space-picker,.space-picker>span{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
+.schema-space-select :deep(.arco-select-view-input),.schema-space-select :deep(.arco-select-view-value),.schema-search-input :deep(.arco-input),.schema-llm-select :deep(.arco-select-view-input),.schema-llm-select :deep(.arco-select-view-value){font-size:14px!important;line-height:22px!important;font-weight:400;letter-spacing:0}
+.schema-table-wrap table,.trace-layout table,.schema-table-wrap td,.trace-layout td{font-size:14px;line-height:22px;font-weight:400}
+.schema-table-wrap th,.property-table__row--head{font-size:14px;line-height:22px;font-weight:500}
+.schema-table-wrap td b{font-weight:400}
+.legend-item,.schema-topology-canvas__empty,.schema-flow span,.schema-flow>header span,.candidate-note p,.mention-fields span,.trace-card p,.trace-card dd,.trace-card code,.trace-card>header b,.trace-layout header>span,.trace-layout>aside strong,.trace-layout>aside span{font-size:12px;line-height:20px;font-weight:400}
+.prop-chip,.prop-detail__item,.prop-detail__item code,.prop-detail__item em,.prop-detail__item b,.script-badge{font-size:12px;line-height:20px;font-weight:400}
+.schema-delete-text,.property-table__row,.property-table__name code,.property-table__lock,.property-table__type,.property-table__locked-note,.property-add-form__name,.property-add-form__len,.property-add-form__type :deep(.arco-select-view),.property-add-form__required,.property-add-form .primary,.upload-idle p,.upload-idle .primary,.upload-working__text strong,.upload-result strong,.view-loading,.view-error{font-size:14px;line-height:22px;font-weight:400}
+.schema-delete-note,.property-section__head span,.upload-stage,.upload-message,.upload-result span,.upload-result__msg,.upload-result__issues,.script-pre code,.create-ddl__pre,.create-ddl__confirm,.create-sources__hint,.sources-note{font-size:12px;line-height:20px;font-weight:400}
+.schema-modal__body label,.schema-modal__body input,.schema-modal__body textarea,.schema-modal__panel footer button,.create-field,.create-text-input,.create-field textarea,.create-field select,.create-props__head,.create-props__add,.prop-name,.prop-type,.prop-len,.prop-required{font-size:14px;line-height:22px;font-weight:400}
+.schema-version-message{font-size:12px;line-height:20px;font-weight:400}
+.schema-version-actions button{font-size:14px;line-height:22px;font-weight:400}
+.candidate-note strong,.mention-fields strong,.schema-flow>header strong{font-size:16px;line-height:24px;font-weight:600}
+.schema-flow li i,.trace-card>header i{font-size:12px;line-height:20px}
+
+/* Schema 类型切换沿用科技专家同事关系页的摘要/实体分段按钮，并置于表格边框之外。 */
+.schema-catalog{display:flex;flex:1;min-height:0;flex-direction:column;gap:12px}
+.schema-table-shell{flex:1;min-height:0}
+.schema-tabs{min-height:40px;padding:0;border-bottom:0;background:transparent;overflow:visible}
+.schema-tabs__items{box-sizing:border-box;height:40px;padding:4px;border-radius:4px;background:#f2f3f5;align-self:auto;overflow:visible}
+.schema-tabs__items button{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:88px;height:32px;padding:5px 16px;border:0;border-radius:4px;background:transparent;color:#4e5969;text-align:center}
+.schema-tabs__items button+button{border-left:1px solid #c9cdd4}
+.schema-tabs__items button.active{border-left-color:transparent;background:#fff;color:#165dff;font-weight:500}
+.schema-tabs__items button.active+button{border-left-color:transparent}
+.schema-tabs__items button:hover:not(.active){background:#fff;color:#165dff}
+.schema-tabs__items button:focus-visible{outline:2px solid rgba(22,93,255,.28);outline-offset:1px}
+
+/* 新增 Schema：图空间下拉框对齐“新建任务”的任务类型控件。 */
+:deep(.schema-create-select.arco-select-view){display:inline-flex;box-sizing:border-box;width:100%;min-width:0;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;align-items:center}
+:deep(.schema-create-select.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
+:deep(.schema-create-select.arco-select-view:focus-within),:deep(.schema-create-select.arco-select-view-focus){border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+:deep(.schema-create-select.arco-select-view .arco-select-view-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
+:deep(.schema-create-select.arco-select-view .arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
+:deep(.schema-create-select.arco-select-view .arco-select-view-value),:deep(.schema-create-select.arco-select-view .arco-select-view-placeholder){min-width:0;overflow:hidden;background:transparent!important;font-size:14px;line-height:30px;text-overflow:ellipsis;white-space:nowrap}
+
+/* 新增 Schema：说明文本框对齐“新建配置”的说明控件。 */
+:deep(.schema-description-textarea.arco-textarea-wrapper){box-sizing:border-box;width:100%;height:auto;min-height:80px;max-height:none;border:1px solid #e5e6eb;border-radius:4px;background:#fff!important;box-shadow:none;transition:border-color .1s ease,box-shadow .1s ease}
 </style>
 <style>
 .app-workspace .schema-toolbar__actions .schema-search-input.arco-input-wrapper .arco-input{height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;outline:none!important}
+.app-workspace .schema-tabs #schema-space-select.schema-space-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
+.app-workspace .schema-tabs #schema-space-select.schema-space-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}
+.app-workspace .schema-tabs #schema-space-select.schema-space-select.arco-select-view:focus-within,.app-workspace .schema-tabs #schema-space-select.schema-space-select.arco-select-view-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+.app-workspace .schema-tabs #schema-space-select input.arco-select-view-input{box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
+.app-workspace .schema-tabs #schema-space-select .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}
+.app-workspace .schema-tabs #schema-space-select .arco-select-view-value{min-width:0;overflow:hidden;line-height:30px;text-overflow:ellipsis;white-space:nowrap}
+.app-workspace .schema-tabs #schema-space-select :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
 </style>

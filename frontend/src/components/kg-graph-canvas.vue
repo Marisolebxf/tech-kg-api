@@ -15,6 +15,7 @@ const props = withDefaults(
     ariaLabel?: string
     nodeShape?: 'rect' | 'circle'
     showEdgeLabels?: boolean
+    uniformNodeSize?: boolean
   }>(),
   {
     activeCategories: null,
@@ -23,6 +24,7 @@ const props = withDefaults(
     ariaLabel: '知识图谱',
     nodeShape: 'circle',
     showEdgeLabels: false,
+    uniformNodeSize: false,
   },
 )
 
@@ -103,7 +105,7 @@ function nodeClass(
    * 中心节点只负责加粗、加大，
    * 不再改变实体类型颜色。
    */
-  if (node.level === 0) {
+  if (node.level === 0 && !props.uniformNodeSize) {
     classes.push(
       'platform-node--center',
     )
@@ -121,16 +123,16 @@ function nodeClass(
 
 function nodeWidth(node: GraphNodeData) {
   const preferred = Math.max(104, node.label.length * 11 + 28)
-  return Math.min(node.level === 0 ? 164 : 144, preferred)
+  return Math.min(node.level === 0 && !props.uniformNodeSize ? 164 : 144, preferred)
 }
 
 function nodeHeight(node: GraphNodeData) {
-  return node.level === 0 ? 54 : 46
+  return node.level === 0 && !props.uniformNodeSize ? 54 : 46
 }
 
 /** 圆形节点半径，渲染与连线偏移共用，避免节点/连线半径不一致。 */
 function nodeRadius(node: GraphNodeData) {
-  return node.level === 0 ? 20 : 15
+  return node.level === 0 && !props.uniformNodeSize ? 20 : 15
 }
 
 /** 标签过长时截断，防止长文本撑爆画布。 */

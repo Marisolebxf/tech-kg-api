@@ -234,7 +234,14 @@ async function submit() {
             <input v-model="name" placeholder="如：论文-专家抽取" />
           </label>
           <div class="job-field">
-            <span>任务类型</span>
+            <div class="job-field__label-row">
+              <span>任务类型</span>
+              <small
+                v-if="taskType === 'extract' && !schemasLoading && !extractSchemas.length"
+                class="muted-warn"
+                role="status"
+              >暂无可抽取 Schema——请先在 Schema 管理页上传抽取脚本并绑定来源表</small>
+            </div>
             <a-select v-model="taskType" class="job-select" aria-label="任务类型">
               <a-option value="extract">数据抽取</a-option>
               <a-option value="single">单脚本抽取</a-option>
@@ -243,10 +250,6 @@ async function submit() {
             </a-select>
           </div>
         </div>
-
-        <p v-if="taskType === 'extract' && !schemasLoading && !extractSchemas.length" class="muted-warn">
-          暂无可抽取 Schema——请先在 Schema 管理页上传抽取脚本并绑定来源表
-        </p>
 
         <div v-if="taskType === 'extract'" class="job-row">
           <!-- label 会把点击转发给 a-select 内部 input 造成"开→关"双切换，包 a-select 的字段一律用 div -->
@@ -294,8 +297,7 @@ async function submit() {
           <input ref="uploadFileInput" type="file" accept=".py" hidden @change="onUploadFileChosen" />
         </div>
 
-        <fieldset class="job-section">
-          <legend>运行资源配置</legend>
+        <div class="job-field-group">
           <div class="job-row">
             <div class="job-field">
               <span>图空间</span>
@@ -346,10 +348,9 @@ async function submit() {
               <input v-model="since" placeholder="如 2026-08-01 00:00:00" />
             </label>
           </div>
-        </fieldset>
+        </div>
 
-        <fieldset class="job-section">
-          <legend>调度方式</legend>
+        <div class="job-field-group">
           <div class="job-row">
             <label class="job-field">
               <span>执行模式</span>
@@ -372,7 +373,7 @@ async function submit() {
               <a-checkbox v-model="runNow">创建后立即执行</a-checkbox>
             </label>
           </div>
-        </fieldset>
+        </div>
       </div>
       <footer>
         <button type="button" @click="emit('close')">取消</button>
@@ -384,9 +385,10 @@ async function submit() {
 
 <style scoped>
 .job-launch-mask{position:fixed;inset:0;z-index:49;border:0;background:rgba(16,38,76,0.42);backdrop-filter:blur(2px);cursor:pointer}
-.job-launch-dialog{position:fixed;z-index:50;top:50%;left:50%;width:min(720px,calc(100vw - 48px));max-height:calc(100vh - 48px);display:flex;flex-direction:column;overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3);transform:translate(-50%,-50%)}
+.job-launch-dialog{position:fixed;z-index:50;top:50%;left:50%;width:min(720px,calc(100vw - 48px));max-height:calc(100vh - 48px);display:flex;flex-direction:column;overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3);font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0;transform:translate(-50%,-50%)}
+.job-launch-dialog :deep(*){font-family:inherit;letter-spacing:0}
 .job-launch-dialog>header{display:flex;box-sizing:border-box;flex:0 0 56px;height:56px;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:1px solid #e5e6eb;background:#fff}
-.job-launch-dialog h2{margin:0;font-size:16px;line-height:24px;color:#1d2129}
+.job-launch-dialog h2{margin:0;color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
 .job-launch-dialog header button{display:grid;box-sizing:border-box;width:32px;height:32px;padding:0;border:0;border-radius:4px;background:#fff;color:#4e5969;font-size:18px;line-height:18px;cursor:pointer;place-items:center}
 .job-launch-body{flex:1;min-height:0;box-sizing:border-box;overflow-x:hidden;overflow-y:auto;padding:24px;display:flex;flex-direction:column;gap:16px}
 .job-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
@@ -394,6 +396,7 @@ async function submit() {
 .job-basics{display:grid;gap:16px}
 .job-field{display:flex;min-width:0;flex-direction:column;gap:8px;color:#4e5969;font-size:14px;line-height:22px}
 .job-field>span{color:#4e5969;font-size:14px;line-height:22px}
+.job-field__label-row{display:flex;min-width:0;align-items:center;gap:8px;flex-wrap:wrap}.job-field__label-row>span{flex:0 0 auto;color:#4e5969;font-size:14px;line-height:22px}.job-field__label-row>.muted-warn{color:#ff7d00!important}
 .job-field>input:not([type="file"]){box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:22px;outline:0;box-shadow:none}
 .job-field>input:not([type="file"]):hover{border-color:#4080ff}
 .job-field>input:not([type="file"]):focus,.job-field>input:not([type="file"]):focus-visible{border-color:#165dff;outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
@@ -402,23 +405,22 @@ async function submit() {
 :deep(.job-select.arco-select-view:focus-within),:deep(.job-select.arco-select-view-focus){border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 :deep(.job-select.arco-select-view .arco-select-view-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 :deep(.job-select.arco-select-view .arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
-:deep(.job-select.arco-select-view .arco-select-view-value),:deep(.job-select.arco-select-view .arco-select-view-placeholder){min-width:0;overflow:hidden;background:transparent!important;font-size:14px;line-height:30px;text-overflow:ellipsis;white-space:nowrap}
+:deep(.job-select.arco-select-view .arco-select-view-value),:deep(.job-select.arco-select-view .arco-select-view-placeholder){min-width:0;overflow:hidden;background:transparent!important;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 .job-field.checkbox-field{justify-content:flex-end}
-.job-section{display:flex;flex-direction:column;gap:16px;margin:0;padding:16px;border:1px solid #e5e6eb;border-radius:6px;background:#f7f8fa}
-.job-section legend{padding:0 8px;color:#165dff;font-size:14px;line-height:22px}
+.job-field-group{display:flex;min-width:0;gap:16px;flex-direction:column}
 .job-launch-dialog>footer{display:flex;box-sizing:border-box;flex:0 0 64px;height:64px;align-items:center;justify-content:flex-end;gap:16px;padding:16px 24px;border-top:1px solid #e3ebf6;background:#fff}
-.job-launch-dialog footer button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;cursor:pointer}
+.job-launch-dialog footer button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
 .job-launch-dialog footer .primary{border-color:#165dff;background:#165dff;color:#fff}
 .job-launch-dialog footer button:disabled{opacity:.5;cursor:not-allowed}
 .chain-steps{display:flex;flex-direction:column;gap:6px;margin:6px 0 0;padding:0;list-style:none}
 .chain-steps li{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid #d5e4f7;border-radius:5px;background:#f8fbff}
-.chain-steps em{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#e9f2ff;color:#165dff;font-size:11px;font-style:normal;font-weight:600}
-.chain-steps code{flex:1;padding:1px 5px;border-radius:3px;background:#edf4ff;color:#165dff;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chain-steps button{width:24px;height:24px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:12px;cursor:pointer}
+.chain-steps em{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#e9f2ff;color:#165dff;font-size:12px;line-height:20px;font-style:normal;font-weight:400}
+.chain-steps code{flex:1;padding:1px 5px;border-radius:3px;background:#edf4ff;color:#165dff;font-family:inherit;font-size:12px;line-height:20px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chain-steps button{width:24px;height:24px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:12px;line-height:20px;font-weight:400;cursor:pointer}
 .chain-steps button:disabled{opacity:.35;cursor:not-allowed}
 .chain-steps button.danger{border-color:#f6b9b4;color:#b42318}
 .upload-row{display:flex;align-items:center;gap:10px}
-.upload-row button{height:32px;padding:0 14px;border:1px solid #165dff;border-radius:4px;background:#fff;color:#165dff;font-size:13px;cursor:pointer}
-.upload-row code{color:#165dff;font-size:12px}
-.muted-warn{color:#b54708;font-size:12px}
+.upload-row button{height:32px;padding:0 14px;border:1px solid #165dff;border-radius:4px;background:#fff;color:#165dff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
+.upload-row code{color:#165dff;font-family:inherit;font-size:12px;line-height:20px;font-weight:400}
+.muted-warn{margin:0;color:#ff7d00;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 </style>

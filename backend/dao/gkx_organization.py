@@ -67,9 +67,10 @@ class GkxOrganizationDAO:
             if "org_id" not in cols:
                 continue
             # 企业名优先 name_cn，无则用 org_name（如 innovation_carrier 用 org_name）
-            name_col = (
-                "name_cn" if "name_cn" in cols else ("org_name" if "org_name" in cols else None)
-            )
+            if "name_cn" in cols:
+                name_col = "name_cn"
+            else:
+                name_col = "org_name" if "org_name" in cols else None
             if name_col is None:
                 continue
             rows = self._s.execute(

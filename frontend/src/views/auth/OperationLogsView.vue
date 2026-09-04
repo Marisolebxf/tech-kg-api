@@ -66,9 +66,9 @@ onMounted(() => loadLogs())
 
     <section class="log-card">
       <header class="log-filter">
-        <input v-model.trim="filters.keyword" type="search" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" placeholder="搜索操作、详情或 IP" @keyup.enter="loadLogs(1)" />
-        <select v-model="filters.category"><option value="">全部类型</option><option value="登录">登录</option><option value="安全">安全</option><option value="账号">账号</option></select>
-        <select v-model="filters.result"><option value="">全部结果</option><option value="成功">成功</option><option value="失败">失败</option></select>
+        <input aria-label="搜索操作、详情或 IP" v-model.trim="filters.keyword" type="search" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" placeholder="搜索操作、详情或 IP" @keyup.enter="loadLogs(1)" />
+        <select v-model="filters.category" aria-label="操作类型"><option value="">全部类型</option><option value="登录">登录</option><option value="安全">安全</option><option value="账号">账号</option></select>
+        <select v-model="filters.result" aria-label="操作结果"><option value="">全部结果</option><option value="成功">成功</option><option value="失败">失败</option></select>
         <button type="button" @click="loadLogs(1)">查询</button><button class="secondary" type="button" @click="resetFilters">重置</button>
       </header>
 

@@ -95,7 +95,8 @@ def _patch_drop(
     """patch 图库列存在性检查与 DROP DDL。columns=None 模拟对象不存在。"""
 
     monkeypatch.setattr(
-        "service.schema_management.describe_schema_columns", lambda kind, name, graph_space=None: columns
+        "service.schema_management.describe_schema_columns",
+        lambda kind, name, graph_space=None: columns,
     )
     monkeypatch.setattr(
         "service.schema_management.run_alter_drop_ddl",

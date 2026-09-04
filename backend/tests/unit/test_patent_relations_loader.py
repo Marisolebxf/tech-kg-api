@@ -42,6 +42,13 @@ def test_normalizers_are_deterministic():
     assert loader.normalize_identifier("CN 123-456 A") == "cn123456a"
 
 
+@pytest.mark.parametrize("opening", ["```", "```json", "```JSON"])
+def test_json_object_accepts_markdown_fences_without_regex(opening):
+    payload = f'{opening}\n{{"relation": "CITES"}}\n```'
+
+    assert loader._json_object(payload) == {"relation": "CITES"}
+
+
 def test_application_number_key_aligns_supplier_and_project_formats():
     assert loader.application_number_key("CN-201811400598-A") == "cn201811400598"
     assert loader.application_number_key("CN201811400598.8") == "cn201811400598"

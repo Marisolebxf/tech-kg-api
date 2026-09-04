@@ -19,6 +19,7 @@ def operator(data, ctx):
     Returns:
         单元素列表，含 ``status``（ok/error）、``params`` 与 ``stats``。
     """
+    _ = data
     from script.dedupe_scholar_persons import run
 
     ctx = ctx or {}

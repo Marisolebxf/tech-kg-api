@@ -490,7 +490,7 @@ def relation_confidence(row: Mapping[str, Any], *, source_table: str) -> float:
 
 
 def md5_hex(value: str) -> str:
-    return hashlib.md5(value.encode("utf-8")).hexdigest()
+    return hashlib.md5(value.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def normalize_key(value: Any) -> str:
@@ -498,7 +498,7 @@ def normalize_key(value: Any) -> str:
 
 
 def md5_vid(prefix: str, value: Any, *, short: bool = True) -> str:
-    digest = hashlib.md5(normalize_key(value).encode("utf-8")).hexdigest()
+    digest = hashlib.md5(normalize_key(value).encode("utf-8"), usedforsecurity=False).hexdigest()
     return f"{prefix}_{digest[:16] if short else digest}"
 
 

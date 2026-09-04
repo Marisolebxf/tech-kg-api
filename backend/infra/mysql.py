@@ -82,12 +82,12 @@ class MySQLClient:
     @property
     def engine(self) -> Engine:
         if self._engine is None:
-            kwargs: dict[str, Any] = dict(
-                pool_pre_ping=True,
-                pool_recycle=3600,
-                echo=self.echo,
-                future=True,
-            )
+            kwargs: dict[str, Any] = {
+                "pool_pre_ping": True,
+                "pool_recycle": 3600,
+                "echo": self.echo,
+                "future": True,
+            }
             # SQLite（测试用）不支持 pool_size/max_overflow
             if not self.url.startswith("sqlite"):
                 kwargs["pool_size"] = self.pool_size

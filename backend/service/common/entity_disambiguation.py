@@ -259,6 +259,7 @@ def context_rerank_score(sentence: str, mention: str, entity: dict) -> float:
 
 
 def llm_judge(sentence: str, mention: str, entity: dict, rerank_score_val: float) -> dict:
+    _ = mention
     reasons: list[str] = []
     confidence = rerank_score_val
 

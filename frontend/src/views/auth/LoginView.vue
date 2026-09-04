@@ -231,7 +231,7 @@ onMounted(async () => {
   padding: 5px 10px;
   border-radius: 999px;
   background: #eaf3ff;
-  color: #165dff;
+  color: #004ecc;
   font-size: 11px;
   font-weight: 600;
 }
@@ -266,7 +266,7 @@ onMounted(async () => {
   height: 28px;
   border-radius: 50%;
   background: #e5f8ee;
-  color: #079455;
+  color: #067647;
   font-style: normal;
   font-weight: 700;
 }

@@ -78,7 +78,8 @@ def _source_paper_id(raw_id: str) -> str:
 
 
 def _md5_vid(prefix: str, key: str, short: bool = True) -> str:
-    h = hashlib.md5(key.encode()).hexdigest()
+    # Compatibility identifier only; it is not used for integrity or authentication.
+    h = hashlib.md5(key.encode(), usedforsecurity=False).hexdigest()
     return f"{prefix}_{h[:16] if short else h}"
 
 

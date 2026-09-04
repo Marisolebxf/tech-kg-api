@@ -4825,11 +4825,11 @@ const pageMeta = computed(() => {
           </label>
           <label v-if="processingScope === '指定时间范围'" class="platform-range-fields">
             <span>时间范围</span>
-            <i><input v-model="processingStartDate" type="date" /><b>至</b><input v-model="processingEndDate" type="date" /></i>
+            <i><input aria-label="processingStartDate" v-model="processingStartDate" type="date" /><b>至</b><input aria-label="processingEndDate" v-model="processingEndDate" type="date" /></i>
           </label>
           <label v-if="processingPriority === '紧急'">
             <span>紧急原因</span>
-            <input v-model="processingReason" placeholder="必填，用于审计与排队依据" />
+            <input aria-label="必填，用于审计与排队依据" v-model="processingReason" placeholder="必填，用于审计与排队依据" />
           </label>
           <button class="kg-button" type="button" :disabled="isActionLoading || (processingPriority === '紧急' && !processingReason.trim())" @click="handleStartTask">{{ processingActionLabel }}</button>
         </div>
@@ -4859,7 +4859,7 @@ const pageMeta = computed(() => {
           <h2 class="kg-panel__title">数据处理流程</h2>
         </div>
         <div class="platform-cleaning-steps">
-          <article v-for="(item, index) in dataProcessingSteps" :key="item.name" class="is-clickable-card" tabindex="0" role="button" @click="openProcessDetail('processing', 'DP-20260713-0200', item.id)" @keydown.enter="openProcessDetail('processing', 'DP-20260713-0200', item.id)">
+          <button v-for="(item, index) in dataProcessingSteps" :key="item.name" class="is-clickable-card" type="button" @click="openProcessDetail('processing', 'DP-20260713-0200', item.id)">
             <i>{{ index + 1 }}</i>
             <div>
               <strong>{{ item.name }}</strong>
@@ -4867,7 +4867,7 @@ const pageMeta = computed(() => {
             </div>
             <span>{{ item.status }}</span>
             <b class="platform-card-arrow">查看详情 →</b>
-          </article>
+          </button>
         </div>
       </section>
 
@@ -4894,8 +4894,8 @@ const pageMeta = computed(() => {
         <div class="kg-panel__header">
           <h2 class="kg-panel__title">最近数据处理任务</h2>
           <div class="platform-task-filters">
-            <select v-model="processingDomainFilter"><option v-for="item in processingDomainOptions" :key="item">{{ item }}</option></select>
-            <select v-model="processingStatusFilter"><option v-for="item in processingStatusOptions" :key="item">{{ item }}</option></select>
+            <select v-model="processingDomainFilter" aria-label="处理领域"><option v-for="item in processingDomainOptions" :key="item">{{ item }}</option></select>
+            <select v-model="processingStatusFilter" aria-label="处理状态"><option v-for="item in processingStatusOptions" :key="item">{{ item }}</option></select>
             <span>{{ filteredProcessingTaskRows.length }} 个任务</span>
             <RouterLink to="/graph-build?module=数据处理">全部任务 →</RouterLink>
           </div>
@@ -4927,7 +4927,7 @@ const pageMeta = computed(() => {
 
     <main v-else-if="activeTab === 'construction'" class="platform-content platform-construction">
       <section class="platform-build-stats" aria-label="图谱构建统计">
-        <article v-for="item in buildStats" :key="item.label" class="is-clickable-card" tabindex="0" role="button" @click="openProcessDetail('construction', 'KG-INC-20260713-018')" @keydown.enter="openProcessDetail('construction', 'KG-INC-20260713-018')"><span>{{ item.label }}</span><strong>{{ item.value }}</strong><em>{{ item.note }}</em><b class="platform-card-arrow">查看 →</b></article>
+        <button v-for="item in buildStats" :key="item.label" class="is-clickable-card" type="button" @click="openProcessDetail('construction', 'KG-INC-20260713-018')"><span>{{ item.label }}</span><strong>{{ item.value }}</strong><em>{{ item.note }}</em><b class="platform-card-arrow">查看 →</b></button>
       </section>
 
       <section class="kg-panel platform-build-pipeline">
@@ -4935,7 +4935,7 @@ const pageMeta = computed(() => {
           <h2 class="kg-panel__title">结构化数据建图过程</h2>
         </div>
         <div class="platform-build-pipeline__body">
-          <article v-for="(item, index) in buildPipelineSteps" :key="item.name" class="is-clickable-card" tabindex="0" role="button" @click="openProcessDetail('construction', 'KG-INC-20260713-018', item.id)" @keydown.enter="openProcessDetail('construction', 'KG-INC-20260713-018', item.id)">
+          <button v-for="(item, index) in buildPipelineSteps" :key="item.name" class="is-clickable-card" type="button" @click="openProcessDetail('construction', 'KG-INC-20260713-018', item.id)">
             <i>{{ index + 1 }}</i>
             <div>
               <span>{{ item.name }}</span>
@@ -4944,7 +4944,7 @@ const pageMeta = computed(() => {
             </div>
             <em>{{ item.status }}</em>
             <b class="platform-card-arrow">详情 →</b>
-          </article>
+          </button>
         </div>
       </section>
 
@@ -5037,7 +5037,7 @@ const pageMeta = computed(() => {
         </div>
         <a-form v-if="queryMode === 'params'" ref="queryFormRef" :rules="queryFormRules" :model="queryFormModel" class="platform-form-grid" layout="vertical">
           <a-form-item class="platform-query-question" field="queryKeyword" label="实体名称或ID" required>
-            <input
+            <input aria-label="请输入实体名称或节点ID"
               v-model="queryKeyword"
               type="search"
               :maxlength="SEARCH_KEYWORD_MAX_LENGTH"
@@ -5074,8 +5074,8 @@ const pageMeta = computed(() => {
         <div v-else class="platform-ngql-input">
           <div class="platform-ngql-input__bar">
             <div class="platform-ngql-input__space-field">
-              <label>图空间</label>
-              <a-select v-model="ngqlSpace" allow-clear placeholder="请选择图空间" class="platform-ngql-input__space">
+              <span>图空间</span>
+              <a-select v-model="ngqlSpace" aria-label="图空间" allow-clear placeholder="请选择图空间" class="platform-ngql-input__space">
                 <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
               </a-select>
             </div>
@@ -5090,6 +5090,7 @@ const pageMeta = computed(() => {
           </div>
           <textarea
             v-model="ngqlStatement"
+            aria-label="nGQL 查询语句"
             class="platform-ngql-input__textarea"
             rows="5"
             spellcheck="false"
@@ -5392,22 +5393,22 @@ const pageMeta = computed(() => {
         <div class="platform-service-console__body">
           <label>
             <span>当前模块</span>
-            <input :value="activeService.title" readonly />
+            <input aria-label="input-field" :value="activeService.title" readonly />
           </label>
           <template v-if="activeServiceMode === 'test'">
             <label v-for="field in activeService.requestFields.slice(0, 3)" :key="field.name">
               <span>{{ field.name }}</span>
-              <input :value="activeService.requestExample[field.name] ?? ''" />
+              <input aria-label="input-field" :value="activeService.requestExample[field.name] ?? ''" />
             </label>
           </template>
           <template v-else>
             <label>
             <span>接口路径</span>
-            <input :value="activeService.endpoint" readonly />
+            <input aria-label="input-field" :value="activeService.endpoint" readonly />
             </label>
             <label>
             <span>请求方法</span>
-            <input :value="activeService.method" readonly />
+            <input aria-label="input-field" :value="activeService.method" readonly />
             </label>
           </template>
           <div class="platform-service-console__actions">
@@ -6158,7 +6159,7 @@ print(response.json())</pre>
 .platform-table tr.is-clickable { cursor: pointer; }
 .platform-table tr.is-clickable:hover td { background: #f0f6ff; }
 .platform-table tr.is-clickable:focus-visible { outline: 2px solid #165dff; outline-offset: -2px; }
-.is-clickable-card { cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
+.is-clickable-card { color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
 .is-clickable-card:hover,.is-clickable-card:focus-visible { border-color: #7aa9ee!important; box-shadow: 0 8px 20px rgba(22,93,255,.12)!important; transform: translateY(-1px); outline: none; }
 .platform-card-arrow { color: #165dff!important; font-size: 11px!important; font-weight: 600!important; white-space: nowrap; }
 .platform-cleaning-steps .platform-card-arrow,.platform-build-pipeline__body .platform-card-arrow { grid-column: 2; justify-self: end; }
@@ -6268,7 +6269,7 @@ print(response.json())</pre>
   padding: 16px;
 }
 
-.platform-cleaning-steps article {
+.platform-cleaning-steps button {
   position: relative;
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr);
@@ -6282,7 +6283,7 @@ print(response.json())</pre>
   background: linear-gradient(145deg, #fff, #f6fbff);
 }
 
-.platform-cleaning-steps article:not(:last-child)::after {
+.platform-cleaning-steps button:not(:last-child)::after {
   position: absolute;
   top: 50%;
   right: -17px;
@@ -6292,7 +6293,7 @@ print(response.json())</pre>
   content: "";
 }
 
-.platform-cleaning-steps article:not(:last-child)::before {
+.platform-cleaning-steps button:not(:last-child)::before {
   position: absolute;
   top: calc(50% - 4px);
   right: -18px;
@@ -6790,7 +6791,7 @@ print(response.json())</pre>
   gap: 12px;
 }
 
-.platform-build-stats article {
+.platform-build-stats button {
   display: grid;
   gap: 5px;
   padding: 15px 17px;
@@ -6977,7 +6978,7 @@ print(response.json())</pre>
   padding: 14px;
 }
 
-.platform-build-pipeline__body article {
+.platform-build-pipeline__body button {
   position: relative;
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
@@ -6990,7 +6991,7 @@ print(response.json())</pre>
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 249, 255, 0.9));
 }
 
-.platform-build-pipeline__body article:not(:last-child)::after {
+.platform-build-pipeline__body button:not(:last-child)::after {
   position: absolute;
   top: 50%;
   right: -15px;

@@ -394,7 +394,7 @@ onMounted(loadReviews)
       <div v-else class="ops-review-table-scroll"><table>
         <thead>
           <tr>
-            <th v-if="reviewCategory === 'C'" class="pick-col"><input
+            <th v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
               type="checkbox"
               :checked="rerunAllChecked"
               :indeterminate="rerunSomeChecked"
@@ -416,7 +416,7 @@ onMounted(loadReviews)
         </thead>
         <tbody>
           <tr v-for="row in reviewRows" :key="row.id">
-            <td v-if="reviewCategory === 'C'" class="pick-col"><input
+            <td v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
               v-if="row.rawStatus === 'OPEN'"
               type="checkbox"
               :checked="rerunSelection.has(row.id)"

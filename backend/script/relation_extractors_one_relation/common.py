@@ -24,6 +24,7 @@ import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine, text
@@ -31,11 +32,20 @@ from sqlalchemy.engine import Engine
 
 from infra.graph_db import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
+from utils.runtime_paths import private_state_dir
 
 logger = logging.getLogger("relation_extractors_one_relation")
 
 DEFAULT_DB = "gkx_element"
 DEFAULT_BATCH_SIZE = 500
+
+
+def resolve_report_dir(payload: Mapping[str, Any], batch: str) -> Path:
+    """Resolve an explicit report directory or a private runtime default."""
+    configured = payload.get("report_dir")
+    return (
+        Path(str(configured)) if configured else private_state_dir("project-ingest-reports", batch)
+    )
 
 
 @dataclass(frozen=True)

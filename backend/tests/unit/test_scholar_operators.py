@@ -22,7 +22,8 @@ def _load_operator(module_stem: str) -> Callable[[list[dict], dict], list[dict]]
     source_path = _OP_DIR / f"{module_stem}.py"
     module_name = f"scholar_operator_{module_stem.replace('.', '_')}"
     spec = importlib.util.spec_from_file_location(module_name, source_path)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
@@ -76,7 +77,8 @@ def test_operator_success_wraps_run_return(
     operator = _load_operator(op_stem)
     result = operator([], {})
 
-    assert isinstance(result, list) and len(result) == 1
+    assert isinstance(result, list)
+    assert len(result) == 1
     entry = result[0]
     assert entry["operator"] == op_stem
     assert entry["status"] == "ok"

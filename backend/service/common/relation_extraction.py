@@ -31,7 +31,7 @@ class Relation:
     """关系三元组"""
 
     head: Entity
-    relation: str
+    relation_type: str
     tail: Entity
     confidence: float = 1.0
     source: str = "unknown"  # rule / llm / hybrid
@@ -39,14 +39,14 @@ class Relation:
     def to_dict(self):
         return {
             "head": self.head.to_dict(),
-            "relation": self.relation,
+            "relation": self.relation_type,
             "tail": self.tail.to_dict(),
             "confidence": self.confidence,
             "source": self.source,
         }
 
     def to_triple(self):
-        return (self.head.text, self.relation, self.tail.text)
+        return (self.head.text, self.relation_type, self.tail.text)
 
 
 # ============================================================
@@ -316,7 +316,7 @@ class RuleBasedExtractor:
                 relations.append(
                     Relation(
                         head=head_ent,
-                        relation=rel_type,
+                        relation_type=rel_type,
                         tail=tail_ent,
                         confidence=0.85,
                         source="rule",
@@ -404,8 +404,8 @@ class LLMExtractor:
             return response.choices[0].message.content
         except ImportError:
             pass
-        except Exception as e:
-            logger.error(f"zhipuai调用失败: {e}")
+        except Exception:
+            logger.exception("zhipuai调用失败")
 
         try:
             from openai import OpenAI
@@ -421,8 +421,8 @@ class LLMExtractor:
                 max_tokens=2048,
             )
             return response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"LLM调用失败: {e}")
+        except Exception:
+            logger.exception("LLM调用失败")
             return ""
         finally:
             for v, val in _saved.items():
@@ -473,7 +473,7 @@ class LLMExtractor:
                 relations.append(
                     Relation(
                         head=head_ent,
-                        relation=rel.get("relation", "UNKNOWN"),
+                        relation_type=rel.get("relation", "UNKNOWN"),
                         tail=tail_ent,
                         confidence=rel.get("confidence", 0.8),
                         source="llm",
@@ -547,8 +547,8 @@ class HybridExtractor:
                     else:
                         result["relations"].append(rel)
 
-            except Exception as e:
-                logger.error(f"LLM抽取失败，仅使用规则结果: {e}")
+            except Exception:
+                logger.exception("LLM抽取失败，仅使用规则结果")
 
         # 转换为可序列化格式
         result["entities"] = [e.to_dict() for e in result["entities"]]

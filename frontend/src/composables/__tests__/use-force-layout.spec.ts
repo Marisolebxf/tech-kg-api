@@ -177,7 +177,7 @@ describe('useForceLayout', () => {
       const edges = ref([makeEdge('a', 'b')])
       return useForceLayout(nodes, edges)
     })!
-    expect(result.laidOutNodes.value.length).toBe(2)
+    expect(result.laidOutNodes.value).toHaveLength(2)
     expect(result.laidOutNodes.value[0]).toHaveProperty('x')
     expect(result.laidOutNodes.value[0]).toHaveProperty('y')
     scope.stop()

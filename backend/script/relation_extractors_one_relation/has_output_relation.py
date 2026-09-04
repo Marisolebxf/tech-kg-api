@@ -14,7 +14,6 @@ source_record_id = ``{project_id}|{output_type}|{target_vid}``，REST merge_edge
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
@@ -35,6 +34,7 @@ from script.relation_extractors_one_relation.common import (
     iter_rows,
     mysql_engine,
     now_utc,
+    resolve_report_dir,
 )
 
 TABLES = ("dwd_zh_project_output", "dwd_en_project_output")
@@ -271,10 +271,6 @@ def _resolve_tables(payload: dict[str, Any]) -> tuple[str, ...]:
     return TABLES if table_choice == "all" else (str(table_choice),)
 
 
-def _resolve_report_dir(payload: dict[str, Any], batch: str) -> Path:
-    return Path(payload.get("report_dir") or f"/tmp/project-ingest-reports/{batch}")
-
-
 def _collect_candidates(
     database: str,
     tables: tuple[str, ...],
@@ -376,7 +372,7 @@ def transform(payload: dict[str, Any]) -> dict[str, Any]:
             _add(candidates["report_title"], item.get("title"))
     matcher = _load_matcher(candidates, dry_run=False)
     report = ProjectIngestReport(
-        _resolve_report_dir(payload, batch), ingest_batch=batch, dry_run=False
+        resolve_report_dir(payload, batch), ingest_batch=batch, dry_run=False
     )
     result = edge_transform(payload, builder=make_has_output_mapper(matcher, report))
     result["report_dir"] = str(report.report_dir)

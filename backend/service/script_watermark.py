@@ -6,7 +6,7 @@ watermark 是领域 ETL 游标（类比 Kafka offset），非 Temporal workflow 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from dao.script_watermark import ScriptWatermarkDAO
@@ -34,7 +34,7 @@ class ScriptWatermarkService:
         watermark: datetime | None = None,
         checkpoint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        ts = watermark or datetime.utcnow()
+        ts = watermark or datetime.now(UTC)
         row = self._dao.upsert(definition_id, step_id, ts, checkpoint)
         return {
             "definitionId": definition_id,

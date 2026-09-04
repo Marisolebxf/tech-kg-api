@@ -98,7 +98,7 @@ class GraphQueryApiClient:
         # GraphQueryApiError）保持不变。app 由 handler 传 request.app，避免在 service 里 import main。
         self._client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
-            base_url="http://testserver/api/v1",
+            base_url="https://testserver/api/v1",
             timeout=timeout,
             headers=auth_headers,
         )

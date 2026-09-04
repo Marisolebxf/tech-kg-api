@@ -980,10 +980,10 @@ function togglePropertyDetail(schemaId: string): void {
 
             <div class="create-row">
               <a-form-item class="create-field" field="name" :label="isRelationTab() ? '关系英文名' : '实体名'" required>
-                <input v-model="createForm.name" class="create-text-input" :maxlength="SCHEMA_ENTITY_NAME_RULE.max" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
+                <input aria-label="name" v-model="createForm.name" class="create-text-input" :maxlength="SCHEMA_ENTITY_NAME_RULE.max" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
               </a-form-item>
               <a-form-item class="create-field" field="label" label="中文名" required>
-                <input v-model="createForm.label" class="create-text-input" :maxlength="SCHEMA_LABEL_RULE.max" placeholder="如：技术" />
+                <input aria-label="如：技术" v-model="createForm.label" class="create-text-input" :maxlength="SCHEMA_LABEL_RULE.max" placeholder="如：技术" />
               </a-form-item>
             </div>
 
@@ -1020,7 +1020,7 @@ function togglePropertyDetail(schemaId: string): void {
                 :class="{ 'create-prop-row--has-length': p.dataType === 'fixed_string', 'create-prop-row--locked': p.locked }"
               >
                 <a-form-item class="prop-name-field" :field="`properties.${i}.name`" :rules="[{ required: true, message: '请输入属性名称' }, { validator: validatePropName }]" hide-label>
-                  <input v-model="p.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名" class="prop-name" :disabled="p.locked" :title="p.locked ? '公共必选属性，不可修改' : undefined" />
+                  <input aria-label="属性名" v-model="p.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名" class="prop-name" :disabled="p.locked" :title="p.locked ? '公共必选属性，不可修改' : undefined" />
                 </a-form-item>
                 <template v-if="p.locked">
                   <span class="prop-locked-type">string</span>
@@ -1030,7 +1030,7 @@ function togglePropertyDetail(schemaId: string): void {
                   <a-select v-model="p.dataType" class="schema-select prop-type" popup-container=".schema-create-modal" :scrollbar="false">
                     <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                   </a-select>
-                  <input v-if="p.dataType === 'fixed_string'" :value="p.length" type="text" inputmode="numeric" maxlength="64" class="prop-len" :class="{ 'prop-len--invalid': fixedLengthInvalid(p) }" :title="validateFixedLength(p.length) || undefined" placeholder="1~1024" @input="onLengthInput(p, $event)" />
+                  <input aria-label="1~1024" v-if="p.dataType === 'fixed_string'" :value="p.length" type="text" inputmode="numeric" maxlength="64" class="prop-len" :class="{ 'prop-len--invalid': fixedLengthInvalid(p) }" :title="validateFixedLength(p.length) || undefined" placeholder="1~1024" @input="onLengthInput(p, $event)" />
                   <a-checkbox v-model="p.required" class="prop-required">必填</a-checkbox>
                   <button type="button" class="prop-remove" @click="removeProperty(i)" title="删除">×</button>
                 </template>
@@ -1104,12 +1104,12 @@ function togglePropertyDetail(schemaId: string): void {
             <div class="property-section">
               <div class="property-section__head"><strong>新增属性</strong><span>新增后在图库执行 ALTER ADD（可空列）</span></div>
               <div class="property-add-form">
-                <input v-model="propertyForm.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名（字母/数字/下划线）" class="property-add-form__name" />
+                <input aria-label="属性名（字母/数字/下划线）" v-model="propertyForm.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名（字母/数字/下划线）" class="property-add-form__name" />
                 <a-select v-model="propertyForm.dataType" class="property-add-form__type" popup-container=".property-modal" :scrollbar="false">
                   <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                 </a-select>
-                <input v-if="propertyForm.dataType === 'fixed_string'" :value="propertyForm.length" type="text" inputmode="numeric" maxlength="64" class="property-add-form__len" :class="{ 'property-add-form__len--invalid': propertyLengthInvalid }" :title="propertyLengthError || undefined" placeholder="1~1024" @input="onPropertyLengthInput" />
-                <label class="property-add-form__required"><input v-model="propertyForm.required" type="checkbox" />必填</label>
+                <input aria-label="1~1024" v-if="propertyForm.dataType === 'fixed_string'" :value="propertyForm.length" type="text" inputmode="numeric" maxlength="64" class="property-add-form__len" :class="{ 'property-add-form__len--invalid': propertyLengthInvalid }" :title="propertyLengthError || undefined" placeholder="1~1024" @input="onPropertyLengthInput" />
+                <label class="property-add-form__required"><input aria-label="required" v-model="propertyForm.required" type="checkbox" />必填</label>
                 <button type="button" class="primary" :disabled="propertySaving" @click="submitAddProperty">{{ propertySaving ? '新增中...' : '＋ 新增属性' }}</button>
               </div>
             </div>
@@ -1191,7 +1191,7 @@ function togglePropertyDetail(schemaId: string): void {
       </div>
     </Teleport>
 
-    <input ref="uploadFileInput" type="file" accept=".py" hidden @change="onUploadFileChosen" />    <Teleport to="body">
+    <input aria-label="file-input" ref="uploadFileInput" type="file" accept=".py" hidden @change="onUploadFileChosen" />    <Teleport to="body">
       <div v-if="uploadModalOpen" class="schema-modal script-upload-modal">
         <button class="schema-modal__mask" type="button" @click="closeUploadModal"></button>
         <aside class="schema-modal__panel">

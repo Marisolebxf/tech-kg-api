@@ -68,7 +68,7 @@ async def prewarm_business(app: object) -> None:
         for path, body in _PREWARM_CASES:
             try:
                 # ASGI transport 按路径路由，URL 需带 scheme/host（httpx 要求完整 URL）
-                resp = await client.post(f"http://prewarm{path}", json=body)
+                resp = await client.post(f"https://prewarm{path}", json=body)
                 logger.info("prewarm %s -> %s", path, resp.status_code)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("prewarm %s 失败: %s", path, exc)

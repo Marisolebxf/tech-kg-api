@@ -34,11 +34,9 @@ def build_workflow_db_url() -> str:
     host = os.getenv("WORKFLOW_MYSQL_HOST", "temporal-mysql")
     port = os.getenv("WORKFLOW_MYSQL_PORT", "3306")
     user = os.getenv("WORKFLOW_MYSQL_USERNAME", "root")
-    pwd = os.getenv("WORKFLOW_MYSQL_PASSWORD", "temporal")
+    credential = os.getenv("WORKFLOW_MYSQL_PASSWORD", "")
     db = os.getenv("WORKFLOW_MYSQL_DATABASE", "techkg_control")
-    return (
-        f"mysql+pymysql://{quote_plus(user)}:{quote_plus(pwd)}@{host}:{port}/{db}?charset=utf8mb4"
-    )
+    return f"mysql+pymysql://{quote_plus(user)}:{quote_plus(credential)}@{host}:{port}/{db}?charset=utf8mb4"
 
 
 class WorkflowMySQLClient:

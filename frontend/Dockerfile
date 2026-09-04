@@ -39,7 +39,7 @@ RUN pnpm build
 # 文档站（VitePress）产物写入 dist/docs/，随主应用产物一同拷入 nginx 镜像。
 RUN pnpm docs:build
 
-FROM nginx:1.27-alpine
+FROM nginxinc/nginx-unprivileged:1.27-alpine
 
 # 部署期注入的环境变量（可用 k8s envFrom / docker run -e 覆盖）
 ENV APP_BASE=/bkg_zpt
@@ -52,6 +52,6 @@ RUN chmod +x /docker-entrypoint.d/40-app-runtime-config.sh
 
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-EXPOSE 80
+EXPOSE 8080
 
 CMD ["nginx", "-g", "daemon off;"]

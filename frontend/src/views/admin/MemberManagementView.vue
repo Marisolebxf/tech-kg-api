@@ -2,6 +2,8 @@
 import { Message } from '@arco-design/web-vue'
 import { computed, onMounted, ref } from 'vue'
 
+import { adminExampleFallback } from '../../config'
+
 import { listPlatformMembers, setMemberAdmin, type PlatformMember } from '../../api/corrections'
 import { getErrorMessage } from '../../api/http'
 import { getExampleMembers } from '../../data/adminGovernanceExamples'
@@ -12,7 +14,7 @@ const loading = ref(false)
 const changingId = ref('')
 const members = ref<PlatformMember[]>([])
 const dataMode = ref<'live' | 'example'>('live')
-const exampleFallbackEnabled = import.meta.env.VITE_ADMIN_EXAMPLE_FALLBACK !== 'false'
+const exampleFallbackEnabled = adminExampleFallback
 const adminCount = computed(() => members.value.filter((item) => item.isAdmin).length)
 
 function errorMessage(error: unknown) {

@@ -12,6 +12,7 @@ import ArcoVue from '@arco-design/web-vue'
 
 import App from './App.vue'
 import { router } from './router'
+import { useAuthStore } from './stores/auth'
 
 const scrollingTimers = new WeakMap<Element, number>()
 
@@ -59,6 +60,10 @@ try {
     renderFatalError(error)
   }
   app.use(createPinia()).use(router).use(ArcoVue).mount('#app')
+  // AUTH_ENABLED=false 时路由守卫短路放行，不会加载 profile——导致 isAdmin 判定
+  // 恒为 false、admin 按钮（实体列表「重建索引」等）在免登录部署里不可见。
+  // 启动时无条件补拉一次：后端 /auth/me 在免登录态返回 dev 管理员身份。
+  void useAuthStore().loadCurrentUser().catch(() => undefined)
 } catch (error) {
   console.error(error)
   renderFatalError(error)

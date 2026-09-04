@@ -131,7 +131,16 @@ const canClaim = computed(() => productionCase.value?.status === 'OPEN' && !isDi
 
 const template = computed(() => (record.value ? getReviewTemplate(record.value) : null))
 const impactScope = computed(() => (record.value ? getImpactScope(record.value) : '任务级'))
-const templateId = computed(() => template.value?.id ?? 'T_RUNTIME')
+// 生产 case 的模板以服务端 templateId 为准（T_EXTRACT_FAIL/T_DIRECT/T_LINK 等
+// 专用工作台依赖它路由）；legacy 映射只对旧 demo record 生效
+const templateId = computed(
+  () => productionCase.value?.templateId ?? template.value?.id ?? 'T_RUNTIME',
+)
+// 这些模板有专用五段式/重跑工作台，不走服务端 displaySchema 动态表单——
+// 否则带 template 的 case 全部落进 DynamicForm 分支，专用布局永远不渲染
+const hasDedicatedWorkspace = computed(() =>
+  ['T_DIRECT', 'T_EXTRACT_FAIL', 'T_LINK', 'T_EVIDENCE'].includes(templateId.value),
+)
 const handleCategory = computed(() => (record.value ? getHandleCategory(record.value) : '质量校验'))
 const consequence = computed(() => {
   if (productionCase.value?.consequence) return { ...productionCase.value.consequence, rerunAnchor: productionCase.value.pipelineStepName || productionCase.value.consequence.rerunStepId, phase: record.value?.module || '图谱构建' }
@@ -582,7 +591,7 @@ const secondaryActions = computed(() => {
         </div>
       </header>
 
-      <ManualReviewDynamicForm v-if="productionCase?.template && !isDirectCase" :sections="productionCase.template.displaySchema.sections" :data="productionCase.data || {}" @change="dynamicResult = $event" />
+      <ManualReviewDynamicForm v-if="productionCase?.template && !isDirectCase && !hasDedicatedWorkspace" :sections="productionCase.template.displaySchema.sections" :data="productionCase.data || {}" @change="dynamicResult = $event" />
       <template v-else>
       <!-- T_DIRECT：kg.custom.steps 候选入库决策 5 段式布局 -->
       <section v-if="templateId === 'T_DIRECT'" class="zone zone-direct">

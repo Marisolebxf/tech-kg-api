@@ -74,7 +74,9 @@ services:
       CORRECTION_SYNC_WORKER_ENABLED: ${CORRECTION_SYNC_WORKER_ENABLED:-true}
       CORRECTION_SYNC_INTERVAL_SECONDS: ${CORRECTION_SYNC_INTERVAL_SECONDS:-30}
       CORRECTION_SYNC_MAX_ATTEMPTS: ${CORRECTION_SYNC_MAX_ATTEMPTS:-8}
-      CORRECTION_SYNC_MODE: ${CORRECTION_SYNC_MODE:-projection}
+      CORRECTION_SYNC_MODE: ${CORRECTION_SYNC_MODE:-dual}
+      # 单存储节点集群：3 副本建空间会 Host not enough
+      GRAPH_SPACE_REPLICA_FACTOR: ${GRAPH_SPACE_REPLICA_FACTOR:-1}
       SCHEMA_AUTO_INIT: ${SCHEMA_AUTO_INIT:-false}
       SCHEMA_ALLOW_SYSTEM_DELETE: ${SCHEMA_ALLOW_SYSTEM_DELETE:-true}
       # 与主 compose 一致：schema 脚本走共享的 operator-rustfs
@@ -164,6 +166,13 @@ services:
       WORKFLOW_MYSQL_USERNAME: root
       WORKFLOW_MYSQL_PASSWORD: temporal
       WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
+      # worker 也跑 build_entity_index activity：embedding 缺省会回退智谱默认端点，
+      # 吃 401 重试 5 次才降级（执行拖到 3 分钟），补齐与 api 一致的 m3e 配置
+      PATENT_EMBEDDING_PROVIDER: ${PATENT_EMBEDDING_PROVIDER:-openai}
+      PATENT_EMBEDDING_BASE_URL: ${PATENT_EMBEDDING_BASE_URL:-http://m3e-embedding:8010/v1}
+      PATENT_EMBEDDING_MODEL: ${PATENT_EMBEDDING_MODEL:-moka-ai/m3e-small}
+      PATENT_EMBEDDING_DIM: ${PATENT_EMBEDDING_DIM:-512}
+      PATENT_EMBEDDING_API_KEY: ${PATENT_EMBEDDING_API_KEY:-local-no-auth}
       SCHEMA_S3_ENDPOINT_URL: ${SCHEMA_S3_ENDPOINT_URL:-http://operator-rustfs:9000}
       SCHEMA_S3_ACCESS_KEY: ${SCHEMA_S3_ACCESS_KEY:-rustfsadmin}
       SCHEMA_S3_SECRET_KEY: ${SCHEMA_S3_SECRET_KEY:-rustfsadmin}
@@ -181,29 +190,48 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  # 门户入口实例：edu.itic-sci.com/bkg_zpt → 本机 8089。方案 B 运行时注入——
+  # 镜像哨兵构建（不传 VITE_*），部署前缀/图空间/认证等由 environment 注入
   web-dev2:
     build:
       context: ./frontend
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
-        # dev2 nginx 挂在根路径（nginx.dev2.conf 无 /bkg_zpt/ 映射），锁死 base=/，
-        # 不读根 .env 的 VITE_BASE=/bkg_zpt/（生产门户路径）——否则 vite 产物引用
-        # /bkg_zpt/assets/* 而 nginx 404 → 白屏。与 TRS_GRAPH_SPACE 锁死同一理由。
-        VITE_BASE: /
-        VITE_API_BASE: /api
-        VITE_GRAPH_SPACE: ${VITE_GRAPH_SPACE:-dev2}
-        VITE_AUTH_ENABLED: ${VITE_AUTH_ENABLED:-false}
-        VITE_PORTAL_EMBEDDED_DEFAULT: ${VITE_PORTAL_EMBEDDED_DEFAULT:-false}
-        VITE_PORTAL_ALLOWED_ORIGINS: ${VITE_PORTAL_ALLOWED_ORIGINS:-https://edu.itic-sci.com}
-        VITE_PORTAL_TARGET_ORIGIN: ${VITE_PORTAL_TARGET_ORIGIN:-https://edu.itic-sci.com}
-        VITE_PORTAL_SOURCE: ${VITE_PORTAL_SOURCE:-tech-kg-api}
     image: tech-kg-api-dev2-web:latest
     container_name: tech-kg-web-dev2
     ports:
       - "8089:80"
+    environment:
+      APP_BASE: /bkg_zpt
+      TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-dev2}
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      PORTAL_ALLOWED_ORIGINS: ${PORTAL_ALLOWED_ORIGINS:-https://edu.itic-sci.com}
+      PORTAL_TARGET_ORIGIN: ${PORTAL_TARGET_ORIGIN:-https://edu.itic-sci.com}
     volumes:
-      # 覆盖镜像内默认 nginx.conf，upstream 指向 api-dev2 而非生产的 api
-      - ./frontend/nginx.dev2.conf:/etc/nginx/conf.d/default.conf:ro
+      # 覆盖镜像内 nginx 模板（upstream 指向 api-dev2 而非生产的 api）。
+      # 必须挂到 templates/ 供 20-envsubst 渲染——直挂 conf.d 只读文件会让
+      # envsubst 写入失败导致 nginx 起不来
+      - ./frontend/nginx.dev2.conf:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      - api-dev2
+    networks:
+      - app
+    restart: unless-stopped
+
+  # 根路径实例：e2e（playwright.platform，baseURL 指向 8091）与本地根路径访问。
+  # 与 web-dev2 同镜像同模板，仅 APP_BASE=/
+  web-dev2-root:
+    image: tech-kg-api-dev2-web:latest
+    container_name: tech-kg-web-dev2-root
+    ports:
+      - "8091:80"
+    environment:
+      # 空串而非 "/"："/" 经 envsubst 会渲染出 ^~ //api/、^~ // 畸形 location
+      APP_BASE: ""
+      TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-dev2}
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+    volumes:
+      - ./frontend/nginx.dev2.conf:/etc/nginx/templates/default.conf.template:ro
     depends_on:
       - api-dev2
     networks:

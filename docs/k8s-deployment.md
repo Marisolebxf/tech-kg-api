@@ -3,6 +3,9 @@
 本文档描述将 `tech-kg-api`（FastAPI 后端 + Vue3 前端）及其依赖中间件部署到 Kubernetes 集群的完整方案。对应仓库根目录的 `docker-compose.yml`，按 K8s 原生方式重新组织。
 
 > 说明：仓库内 README.md 描述的是旧的 Neo4j 版本，已过时；以本文与 `docker-compose.yml`、`CLAUDE.md` 为准。
+>
+> **对象存储已统一为 `operator-rustfs`（S3 兼容），不依赖 MinIO**：schema 脚本、operator 包、Milvus 内部存储共用同一个 RustFS 实例（`rustfsadmin` 凭证）。Milvus 的 `MINIO_*` 环境变量只是 Milvus 自身的配置项命名，指向的也是 RustFS。
+> 交付版清单（命名空间 `bkg`，含真实镜像仓库地址）见 `docs/k8s-bkg/`，与本文结构一致，可按环境二选一。
 
 ---
 
@@ -22,13 +25,11 @@
 | 组件 | 镜像 | 端口 | 持久化 |
 |------|------|------|--------|
 | `auth-redis` | redis:7.4-alpine | 6379 | `/data` (appendonly) |
-| `schema-minio` | minio/minio:RELEASE.2025-04-22T22-12-26Z | 9000 / 9001 | `/data`，schema DDL 脚本对象存储 |
-| `operator-rustfs` | rustfs/rustfs:latest | 9000 / 9001 | `/data` (uid 10001)，operator 脚本对象存储 |
+| `operator-rustfs` | rustfs/rustfs:latest | 9000 / 9001 | `/data` (uid 10001)，schema 脚本 / operator 包 / milvus 内部存储共用的 S3 |
 | `milvus-etcd` | quay.io/coreos/etcd:v3.5.5 | 2379 | `/etcd` |
-| `milvus-minio` | minio/minio:RELEASE.2023-03-20T20-16-18Z | 9000 / 9001 | `/minio_data` |
 | `milvus` | milvusdb/milvus:v2.4.17 | 19530 / 9091 | `/var/lib/milvus` |
-| `temporal-postgresql` | postgres:16-alpine | 5432 | `/var/lib/postgresql/data` |
-| `temporal` | temporalio/auto-setup:1.29.2 | 7233 | 无（数据在 pg） |
+| `temporal-mysql` | mysql:8.4 | 3306 | `/var/lib/mysql`，temporal 元数据 + 控制面库 `techkg_control` |
+| `temporal` | temporalio/auto-setup:1.29.2 | 7233 | 无（数据在 mysql） |
 | `temporal-ui` | temporalio/ui:2.39.0 | 8080 | 无 |
 
 ### 1.3 集群外依赖（需独立提供）
@@ -42,13 +43,11 @@
 
 | compose 卷 | K8s PVC | 挂载点 | 介质建议 |
 |------------|---------|--------|----------|
-| `schema-minio-data` | `schema-minio-data` | `/data` | 对象存储盘 |
 | `milvus-etcd-data` | `milvus-etcd-data` | `/etcd` | 高 IOPS SSD |
-| `milvus-minio-data` | `milvus-minio-data` | `/minio_data` | 对象存储盘 |
 | `milvus-data` | `milvus-data` | `/var/lib/milvus` | 高 IOPS SSD |
-| `temporal-postgresql-data` | `temporal-postgresql-data` | `/var/lib/postgresql/data` | SSD |
+| `temporal-mysql-data` | `temporal-mysql-data` | `/var/lib/mysql` | SSD |
 | `workflow-state` | `workflow-state` | `/var/lib/tech-kg` | SSD |
-| `m3e-model-cache` | `m3e-model-cache` | `/models/huggingface` | 大容量 HDD（只读缓存） |
+| `m3e-model-cache` | `m3e-model-cache` | `/models/huggingface` | HDD 即可（只读模型缓存） |
 | `patent-index-state` | `patent-index-state` | `/app/var/patent_indexes` | SSD |
 | `operator-data` | `operator-data` | `/app/operators/user` | SSD |
 | `operator-rustfs-data` | `operator-rustfs-data` | `/data` | 对象存储盘 |
@@ -76,11 +75,11 @@ docker build -t <REGISTRY>/tech-kg-api:0.1.0 \
   --build-arg PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
   ./backend
 
-# 前端镜像（web）
+# 前端镜像（web）——一次构建、部署期注入（方案 B），不传任何 VITE_*；
+# 部署前缀等由 APP_BASE / TRS_GRAPH_SPACE / AUTH_ENABLED 等环境变量在运行时
+# 注入（见 docs/前端一次构建多环境部署方案.md），多环境共用同一镜像
 docker build -t <REGISTRY>/tech-kg-web:0.1.0 \
   --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
-  --build-arg VITE_BASE=./ \
-  --build-arg VITE_API_BASE=/api \
   ./frontend
 
 docker push <REGISTRY>/tech-kg-api:0.1.0
@@ -123,6 +122,8 @@ metadata:
   name: tech-kg-config
   namespace: tech-kg
 data:
+  # ---- 前端部署前缀（web Pod envFrom 本 ConfigMap 运行时注入）----
+  APP_BASE: /bkg_zpt
   # ---- 图数据库 ----
   TRS_GRAPH_BASE_URL: http://trs-graph-service:8090
   TRS_GRAPH_SPACE: dev
@@ -147,11 +148,15 @@ data:
   TEMPORAL_ADDRESS: temporal:7233
   TEMPORAL_NAMESPACE: default
   TEMPORAL_TASK_QUEUE: tech-kg-workflows
-  WORKFLOW_DATABASE_PATH: /var/lib/tech-kg/workflows.db
+  # 控制面库（workflow 编排状态）在 temporal-mysql 的 techkg_control，不再是 SQLite
+  WORKFLOW_MYSQL_HOST: temporal-mysql
+  WORKFLOW_MYSQL_PORT: "3306"
+  WORKFLOW_MYSQL_DATABASE: techkg_control
+  WORKFLOW_MYSQL_USERNAME: root
   WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
-  # ---- schema S3 (minio) ----
+  # ---- schema S3（与 operator / milvus 共用 operator-rustfs） ----
   SCHEMA_AUTO_INIT: "true"
-  SCHEMA_S3_ENDPOINT_URL: http://schema-minio:9000
+  SCHEMA_S3_ENDPOINT_URL: http://operator-rustfs:9000
   SCHEMA_S3_BUCKET: tech-kg-schema-scripts
   SCHEMA_S3_REGION: us-east-1
   SCHEMA_S3_SECURE: "false"
@@ -185,6 +190,9 @@ data:
   USER_CENTER_OAUTH_BASE_URL: https://edu.itic-sci.com/uc/admin-api/system/oauth2
   USER_CENTER_ACCOUNT_URL: https://edu.itic-sci.com/uc/admin/login?redirect=/index
   USER_CENTER_REDIRECT_URI: https://edu.itic-sci.com/bkg_zp/api/v1/auth/callback
+  # 统一门户 iframe 嵌入时，用门户主域 access_token Cookie 换本地会话
+  USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED: "true"
+  USER_CENTER_PORTAL_TOKEN_COOKIE: access_token
   REDIS_URL: redis://auth-redis:6379/0
 ```
 
@@ -209,11 +217,13 @@ stringData:
   MYSQL_PASSWORD: "123456789"                # 替换为真实密码
   PAPER_COOP_MYSQL_PASSWORD: "123456789"
   LLM_API_KEY: ""                            # 智谱 API key
-  SCHEMA_S3_ACCESS_KEY: minioadmin
-  SCHEMA_S3_SECRET_KEY: minioadmin
+  # schema / operator / milvus 共用 operator-rustfs，凭证一套即可
+  SCHEMA_S3_ACCESS_KEY: rustfsadmin
+  SCHEMA_S3_SECRET_KEY: rustfsadmin
   PATENT_EMBEDDING_API_KEY: local-no-auth
   OPERATOR_S3_ACCESS_KEY_ID: rustfsadmin
   OPERATOR_S3_SECRET_ACCESS_KEY: rustfsadmin
+  WORKFLOW_MYSQL_PASSWORD: temporal          # temporal-mysql root 密码
   USER_CENTER_CLIENT_ID: ""
   USER_CENTER_CLIENT_SECRET: ""
   OPERATOR_RELOAD_TOKEN: ""
@@ -233,30 +243,12 @@ kubectl apply -f k8s/11-secret.yaml
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: schema-minio-data
-  namespace: tech-kg
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources: { requests: { storage: 50Gi } }
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
   name: milvus-etcd-data
   namespace: tech-kg
 spec:
   accessModes: ["ReadWriteOnce"]
   resources: { requests: { storage: 10Gi } }
   storageClassName: ssd
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: milvus-minio-data
-  namespace: tech-kg
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources: { requests: { storage: 100Gi } }
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -271,11 +263,11 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: temporal-postgresql-data
+  name: temporal-mysql-data
   namespace: tech-kg
 spec:
   accessModes: ["ReadWriteOnce"]
-  resources: { requests: { storage: 20Gi } }
+  resources: { requests: { storage: 50Gi } }
   storageClassName: ssd
 ---
 apiVersion: v1
@@ -295,7 +287,7 @@ metadata:
   namespace: tech-kg
 spec:
   accessModes: ["ReadWriteOnce"]
-  resources: { requests: { storage: 20Gi } }
+  resources: { requests: { storage: 5Gi } }
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -390,55 +382,9 @@ spec:
   ports: [{ port: 6379, targetPort: 6379 }]
 ```
 
-### 8.2 schema-minio
+### 8.2 operator-rustfs
 
-```yaml
-# k8s/31-schema-minio.yaml
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: schema-minio
-  namespace: tech-kg
-spec:
-  serviceName: schema-minio
-  replicas: 1
-  selector: { matchLabels: { app: schema-minio } }
-  template:
-    metadata:
-      labels: { app: schema-minio }
-    spec:
-      containers:
-        - name: minio
-          image: minio/minio:RELEASE.2025-04-22T22-12-26Z
-          args: ["server", "/data", "--console-address", ":9001"]
-          envFrom:
-            - secretRef: { name: tech-kg-secret }   # 用 SCHEMA_S3_ACCESS_KEY/SECRET_KEY
-          ports:
-            - { containerPort: 9000, name: s3 }
-            - { containerPort: 9001, name: console }
-          volumeMounts:
-            - { name: data, mountPath: /data }
-          readinessProbe:
-            httpGet: { path: /minio/health/live, port: 9000 }
-            periodSeconds: 10
-            failureThreshold: 10
-      volumes:
-        - name: data
-          persistentVolumeClaim: { claimName: schema-minio-data }
----
-apiVersion: v1
-kind: Service
-metadata: { name: schema-minio, namespace: tech-kg }
-spec:
-  selector: { app: schema-minio }
-  ports:
-    - { name: s3, port: 9000, targetPort: 9000 }
-    - { name: console, port: 9001, targetPort: 9001 }
-```
-
-### 8.3 operator-rustfs
-
-需要先以 uid 10001 初始化数据卷（compose 用 init 容器完成 `chown`）。
+**唯一的对象存储**：schema DDL 脚本、operator 包、Milvus 内部存储三个用途共用这一个 S3，不再部署 MinIO。需要先以 uid 10001 初始化数据卷（compose 用 init 容器完成 `chown`）。
 
 ```yaml
 # k8s/32-operator-rustfs.yaml
@@ -505,7 +451,7 @@ spec:
     - { name: console, port: 9001, targetPort: 9001 }
 ```
 
-### 8.4 Milvus（etcd + minio + standalone）
+### 8.3 Milvus（etcd + standalone，对象存储走 operator-rustfs）
 
 ```yaml
 # k8s/33-milvus-etcd.yaml
@@ -547,43 +493,6 @@ spec:
 ```
 
 ```yaml
-# k8s/34-milvus-minio.yaml
-apiVersion: apps/v1
-kind: StatefulSet
-metadata: { name: milvus-minio, namespace: tech-kg }
-spec:
-  serviceName: milvus-minio
-  replicas: 1
-  selector: { matchLabels: { app: milvus-minio } }
-  template:
-    metadata: { labels: { app: milvus-minio } }
-    spec:
-      containers:
-        - name: minio
-          image: minio/minio:RELEASE.2023-03-20T20-16-18Z
-          args: ["server", "/minio_data", "--console-address", ":9001"]
-          env:
-            - { name: MINIO_ACCESS_KEY, value: minioadmin }
-            - { name: MINIO_SECRET_KEY, value: minioadmin }
-          ports:
-            - { containerPort: 9000 }
-            - { containerPort: 9001 }
-          volumeMounts: [{ name: data, mountPath: /minio_data }]
-      volumes:
-        - name: data
-          persistentVolumeClaim: { claimName: milvus-minio-data }
----
-apiVersion: v1
-kind: Service
-metadata: { name: milvus-minio, namespace: tech-kg }
-spec:
-  selector: { app: milvus-minio }
-  ports:
-    - { port: 9000, targetPort: 9000 }
-    - { port: 9001, targetPort: 9001 }
-```
-
-```yaml
 # k8s/35-milvus.yaml
 apiVersion: apps/v1
 kind: StatefulSet
@@ -601,7 +510,11 @@ spec:
           args: ["milvus", "run", "standalone"]
           env:
             - { name: ETCD_ENDPOINTS, value: milvus-etcd:2379 }
-            - { name: MINIO_ADDRESS, value: milvus-minio:9000 }
+            # MINIO_* 是 Milvus 自身的配置项命名，指向的是 operator-rustfs（S3 兼容）；
+            # bucket 用默认 a-bucket，启动时自动创建。
+            - { name: MINIO_ADDRESS, value: operator-rustfs:9000 }
+            - { name: MINIO_ACCESS_KEY_ID, value: rustfsadmin }
+            - { name: MINIO_SECRET_ACCESS_KEY, value: rustfsadmin }
           ports:
             - { containerPort: 19530, name: grpc }
             - { containerPort: 9091, name: metrics }
@@ -624,38 +537,42 @@ spec:
     - { name: metrics, port: 9091, targetPort: 9091 }
 ```
 
-### 8.5 Temporal（postgresql + auto-setup + ui）
+### 8.4 Temporal（mysql + auto-setup + ui）
 
 ```yaml
-# k8s/36-temporal-postgresql.yaml
+# k8s/36-temporal-mysql.yaml
 apiVersion: apps/v1
 kind: StatefulSet
-metadata: { name: temporal-postgresql, namespace: tech-kg }
+metadata: { name: temporal-mysql, namespace: tech-kg }
 spec:
-  serviceName: temporal-postgresql
+  serviceName: temporal-mysql
   replicas: 1
-  selector: { matchLabels: { app: temporal-postgresql } }
+  selector: { matchLabels: { app: temporal-mysql } }
   template:
-    metadata: { labels: { app: temporal-postgresql } }
+    metadata: { labels: { app: temporal-mysql } }
     spec:
       containers:
-        - name: postgres
-          image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/postgres:16-alpine
+        - name: mysql
+          image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/mysql:8.4
           env:
-            - { name: POSTGRES_USER, value: temporal }
-            - { name: POSTGRES_PASSWORD, value: temporal }
-          ports: [{ containerPort: 5432 }]
-          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+            - { name: MYSQL_ROOT_PASSWORD, value: temporal }
+          ports: [{ containerPort: 3306 }]
+          volumeMounts: [{ name: data, mountPath: /var/lib/mysql }]
+          readinessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-ptemporal"]
+            periodSeconds: 5
+            failureThreshold: 20
       volumes:
         - name: data
-          persistentVolumeClaim: { claimName: temporal-postgresql-data }
+          persistentVolumeClaim: { claimName: temporal-mysql-data }
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: temporal-postgresql, namespace: tech-kg }
+metadata: { name: temporal-mysql, namespace: tech-kg }
 spec:
-  selector: { app: temporal-postgresql }
-  ports: [{ port: 5432, targetPort: 5432 }]
+  selector: { app: temporal-mysql }
+  ports: [{ port: 3306, targetPort: 3306 }]
 ```
 
 ```yaml
@@ -673,11 +590,13 @@ spec:
         - name: temporal
           image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/temporalio/auto-setup:1.29.2
           env:
-            - { name: DB, value: postgres12 }
-            - { name: DB_PORT, value: "5432" }
-            - { name: POSTGRES_USER, value: temporal }
-            - { name: POSTGRES_PWD, value: temporal }
-            - { name: POSTGRES_SEEDS, value: temporal-postgresql }
+            # 官方 mysql:8.4 镜像的 MYSQL_USER 不是 superuser，auto-setup 无法
+            # CREATE DATABASE；用 root 连（密码即 temporal-mysql 的 MYSQL_ROOT_PASSWORD）。
+            - { name: DB, value: mysql8 }
+            - { name: DB_PORT, value: "3306" }
+            - { name: MYSQL_USER, value: root }
+            - { name: MYSQL_PWD, value: temporal }
+            - { name: MYSQL_SEEDS, value: temporal-mysql }
           ports: [{ containerPort: 7233 }]
           readinessProbe:
             tcpSocket: { port: 7233 }
@@ -717,7 +636,7 @@ spec:
   ports: [{ port: 8080, targetPort: 8080 }]
 ```
 
-### 8.6 m3e-embedding
+### 8.5 m3e-embedding
 
 启动慢（首次需下模型），`start_period` 给足 180s。
 
@@ -824,7 +743,7 @@ spec:
   ports: [{ port: 8000, targetPort: 8000 }]
 ```
 
-> `workflow-state` 卷是 SQLite + 脚本目录，**不能多副本并发写**。若 `api` replicas > 1，把 workflow 写路径迁出 `api`，仅由 `temporal-worker` 持有；或将该卷改为 `ReadWriteOnce` 并把 `api` 改成单副本。
+> workflow 控制面状态已迁到 temporal-mysql 的 `techkg_control` 库（`WORKFLOW_MYSQL_*`），不再是卷上 SQLite；`workflow-state` 卷现在承载 `WORKFLOW_SCRIPT_DIR` 脚本目录，与 `temporal-worker` 共享，仍需注意 RWO 卷的单写者约束（多副本 `api` 时建议脚本写路径只归 worker，或改 RWX）。
 
 ### 9.2 temporal-worker
 
@@ -843,12 +762,19 @@ spec:
         - name: worker
           image: <REGISTRY>/tech-kg-api:0.1.0
           command: [".venv/bin/python", "-m", "script.run_temporal_worker"]
+          # activity 里直连 trs-graph / 主 MySQL / Milvus，复用 configmap+secret 即可；
+          # 基础 env（TRS_GRAPH_* / MYSQL_* / MILVUS_* / WORKFLOW_MYSQL_*）都在
+          # tech-kg-config / tech-kg-secret 中，此处只放 worker 专属项。
+          envFrom:
+            - configMapRef: { name: tech-kg-config }
+            - secretRef: { name: tech-kg-secret }
           env:
             - { name: TEMPORAL_ADDRESS, value: temporal:7233 }
             - { name: TEMPORAL_NAMESPACE, value: default }
             - { name: TEMPORAL_TASK_QUEUE, value: tech-kg-workflows }
-            - { name: WORKFLOW_DATABASE_PATH, value: /var/lib/tech-kg/workflows.db }
             - { name: WORKFLOW_SCRIPT_DIR, value: /var/lib/tech-kg/scripts }
+            - { name: TEMPORAL_MAX_CONCURRENT_ACTIVITIES, value: "4" }
+            - { name: ORG_MILVUS_STATE_DIR, value: /var/lib/tech-kg/organization_milvus }
           volumeMounts:
             - { name: workflow-state, mountPath: /var/lib/tech-kg }
           resources:
@@ -875,6 +801,9 @@ spec:
       containers:
         - name: web
           image: <REGISTRY>/tech-kg-web:0.1.0
+          # 部署前缀等运行时注入（APP_BASE 等，与 api 共用同一 ConfigMap）
+          envFrom:
+            - configMapRef: { name: tech-kg-config }
           ports: [{ containerPort: 80 }]
           readinessProbe:
             httpGet: { path: /, port: 80 }
@@ -891,7 +820,9 @@ spec:
   ports: [{ port: 80, targetPort: 80 }]
 ```
 
-> 前端镜像的 `nginx.conf` 中 `proxy_pass http://api:8000;` 直接走集群 DNS，K8s Service `api` 会解析到对应 Endpoints。
+> 前端镜像的 nginx 模板中 `proxy_pass http://api:8000;` 直接走集群 DNS，K8s Service `api` 会解析到对应 Endpoints。
+>
+> **入口形态**：镜像内置模板是前缀式（`location ^~ ${APP_BASE}/`），适用于 Ingress/NodePort **直连子路径**；若入口网关是门户式**剥前缀转发**（容器收到根路径），需挂载根路径全兜底模板覆盖（参考 `frontend/nginx.dev2.conf`），`APP_BASE` 此时仅驱动 runtime-config.js。同一镜像已在 dev2 栈双实例（前缀/根路径）验证。
 
 ---
 
@@ -1070,11 +1001,10 @@ kubectl apply -f k8s/20-pvc.yaml
 
 # 3) 中间件（按依赖顺序）
 kubectl apply -f k8s/30-auth-redis.yaml
-kubectl apply -f k8s/31-schema-minio.yaml
-kubectl apply -f k8s/32-operator-rustfs.yaml
-kubectl apply -f k8s/33-milvus-etcd.yaml -f k8s/34-milvus-minio.yaml
-kubectl apply -f k8s/35-milvus.yaml
-kubectl apply -f k8s/36-temporal-postgresql.yaml
+kubectl apply -f k8s/32-operator-rustfs.yaml          # 唯一对象存储，先起
+kubectl apply -f k8s/33-milvus-etcd.yaml
+kubectl apply -f k8s/35-milvus.yaml                   # 对象存储走 operator-rustfs
+kubectl apply -f k8s/36-temporal-mysql.yaml
 kubectl apply -f k8s/37-temporal.yaml -f k8s/38-temporal-ui.yaml
 kubectl apply -f k8s/39-m3e-embedding.yaml
 
@@ -1149,7 +1079,7 @@ kubectl -n tech-kg rollout restart deploy/api
 
 ### 16.2 关键陷阱
 
-1. **`workflow-state` / `operator-data` 是 RWO SQLite 卷**：多副本 `api` 会冲突，建议 replicas=1 或迁到对象存储。
+1. **`workflow-state` / `operator-data` 是 RWO 卷**（脚本目录与 operator 运行时缓存）：多副本 `api` 会冲突，建议 replicas=1 或迁到对象存储；workflow 控制面状态本身已在 temporal-mysql 的 `techkg_control` 库，不受此限。
 2. **m3e-embedding 首次拉模型很慢**：readinessProbe 的 `initialDelaySeconds` 给 180s 以上；首次部署可手动 `kubectl wait` 等 Pod Ready。
 3. **trs-graph 节点 CRUD 不可靠**（`find_nodes` 返回假 vid、`merge_node` 仅 ETL 用），详见内部记忆。线上业务只用 edge + node-read。
 4. **`init_graph_schema.py` 创建 SPACE 后会因传播延迟报错**，Job 设置 `backoffLimit: 6`，重试即可。
@@ -1170,10 +1100,9 @@ kubectl -n tech-kg rollout restart deploy/api
 | m3e-embedding | 1 / 2 | 2Gi / 4Gi | CPU 推理，单副本 |
 | milvus | 1 / 4 | 4Gi / 8Gi | 向量库主进程 |
 | auth-redis | 100m / 500m | 128Mi / 512Mi | 仅 session |
-| schema-minio | 200m / 1 | 256Mi / 1Gi | |
-| operator-rustfs | 200m / 1 | 256Mi / 1Gi | |
+| operator-rustfs | 200m / 1 | 256Mi / 1Gi | schema/operator/milvus 共用 |
 | temporal | 500m / 2 | 512Mi / 2Gi | |
-| temporal-postgresql | 500m / 2 | 512Mi / 2Gi | |
+| temporal-mysql | 500m / 2 | 512Mi / 2Gi | temporal 元数据 + techkg_control |
 
 ### 16.4 升级流程
 
@@ -1193,9 +1122,9 @@ kubectl -n tech-kg rollout status deploy/api
 ### 16.5 备份
 
 - **MySQL**：业务库（`gkx_element`、`gkx_local`）走 DBA 既定的备份策略。
-- **temporal-postgresql-data**：定期 `pg_dump` 或 Velero 卷快照。
-- **schema-minio / operator-rustfs**：通过 mc / rustfs CLI 同步到异地对象存储。
-- **workflow-state**：`workflow.db` + `scripts/` 目录，建议每日 rsync 到备份盘。
+- **temporal-mysql-data**：定期 `mysqldump`（含 temporal 库与 `techkg_control` 控制面库）或 Velero 卷快照。
+- **operator-rustfs**：schema 脚本 / operator 包 / milvus 内部对象都在这一实例，通过 rustfs CLI（S3 兼容）同步到异地对象存储。
+- **workflow-state**：`scripts/` 脚本目录，建议每日 rsync 到备份盘。
 - **Cluster 整体**：推荐 Velero 做 namespace 级别备份与迁移。
 
 ---
@@ -1211,12 +1140,10 @@ k8s/
 ├── 11-secret.yaml
 ├── 20-pvc.yaml
 ├── 30-auth-redis.yaml
-├── 31-schema-minio.yaml
 ├── 32-operator-rustfs.yaml
 ├── 33-milvus-etcd.yaml
-├── 34-milvus-minio.yaml
 ├── 35-milvus.yaml
-├── 36-temporal-postgresql.yaml
+├── 36-temporal-mysql.yaml
 ├── 37-temporal.yaml
 ├── 38-temporal-ui.yaml
 ├── 39-m3e-embedding.yaml

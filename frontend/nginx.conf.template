@@ -1,0 +1,62 @@
+# 前端 nginx 配置模板：由官方镜像 20-envsubst 在启动期用环境变量渲染
+# （APP_BASE 缺省 /bkg_zpt，见 Dockerfile ENV）。根路径部署（APP_BASE 空）的
+# 302 自指/空前缀 location 由 docker/40-app-runtime-config.sh 修正。
+# 注意：$uri/$host 等 nginx 变量未被环境定义，envsubst 不会替换。
+server {
+  listen 80;
+  server_name _;
+
+  root /usr/share/nginx/html;
+  index index.html;
+
+  gzip on;
+  gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss image/svg+xml;
+
+  # 门户基座下的 API 调用（运行时 apiBase 缺省 ${base}api）：
+  # 去前缀代理到后端，否则落到 SPA fallback 返回 HTML
+  location ^~ ${APP_BASE}/api/ {
+    rewrite ^${APP_BASE}/api/(.*)$ /api/$1 break;
+    proxy_pass http://api:8000;
+    proxy_http_version 1.1;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location ^~ /api/ {
+    proxy_pass http://api:8000;
+    proxy_http_version 1.1;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  # 门户基座 ${APP_BASE}/（部署前缀）：入口重定向 + SPA 资产/路由回退
+  location = / {
+    return 302 ${APP_BASE}/;
+  }
+
+  # 构建产物按部署前缀引用 ${APP_BASE}/assets/...——alias 去前缀映射到根
+  # dist；SPA 路由回退到根 index.html（其引用的资产再经此 location 兜住）
+  location ^~ ${APP_BASE}/ {
+    # 仅允许同源页面和国科信统一门户嵌入，禁止任意第三方站点 framing。
+    add_header Content-Security-Policy "frame-ancestors 'self' https://edu.itic-sci.com" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    alias /usr/share/nginx/html/;
+    try_files $uri $uri/ /index.html;
+  }
+
+  location = ${APP_BASE} {
+    return 302 ${APP_BASE}/;
+  }
+
+  location ~* \.(?:js|css|png|jpg|jpeg|gif|ico|svg|woff2?)$ {
+    expires 7d;
+    add_header Cache-Control "public, max-age=604800";
+    try_files $uri =404;
+  }
+}

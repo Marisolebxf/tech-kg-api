@@ -1,5 +1,6 @@
 import axios from 'axios'
 
+import { apiBase } from '../config'
 import { PortalAction, portalBridge } from '../portal/iframeBridge'
 
 const RAW_REQUEST_ERROR = /request failed|network error|status code 5\d\d|failed to fetch|load failed/i
@@ -33,7 +34,7 @@ export function getErrorMessage(error: unknown, fallback = '操作失败'): stri
 }
 
 export const http = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE || '/api',
+  baseURL: apiBase,
   timeout: 20_000,
   withCredentials: true,
 })

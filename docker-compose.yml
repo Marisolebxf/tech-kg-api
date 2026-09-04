@@ -40,7 +40,7 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
       TEMPORAL_TASK_QUEUE: tech-kg-workflows
-      # 控制面 MySQL（temporal-mysql 的 techkg_control 库，跟 Temporal 共用实例但独立库）
+      # 控制面 MySQL（共享栈容器名带 tech-kg- 前缀；跨 compose project 只有容器名 DNS）
       WORKFLOW_MYSQL_HOST: temporal-mysql
       WORKFLOW_MYSQL_PORT: "3306"
       WORKFLOW_MYSQL_DATABASE: techkg_control
@@ -122,6 +122,8 @@ services:
       - app
       - engine
       - graph
+      - shared-infra
+      - business-mysql
     restart: unless-stopped
 
   m3e-embedding:
@@ -285,9 +287,9 @@ services:
       context: ./frontend
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
-        VITE_BASE: ${VITE_BASE:-./}
+        VITE_BASE: ${VITE_BASE:-/bkg_zpt/}
         VITE_API_BASE: ${VITE_API_BASE:-/api}
-        VITE_GRAPH_SPACE: ${VITE_GRAPH_SPACE:-test}
+        VITE_GRAPH_SPACE: ${VITE_GRAPH_SPACE:-dev2}
         VITE_AUTH_ENABLED: ${VITE_AUTH_ENABLED:-false}
     container_name: tech-kg-web
     ports:
@@ -391,6 +393,15 @@ volumes:
 
 networks:
   app:
+  # 共享 infra 栈（operator-rustfs / temporal 等）所在网络——跨 compose project
+  # 只有容器名 DNS，且需与该网络互通才能解析
+  shared-infra:
+    external: true
+    name: tech-kg-api_app
+  # 业务库 tech-kg-mysql（gkx_element）所在网络，别名 mysql
+  business-mysql:
+    external: true
+    name: gkx-mysql_default
   engine:
     external: true
     name: tech-kg-engine_default

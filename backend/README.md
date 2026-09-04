@@ -17,8 +17,7 @@
 | Redis | `127.0.0.1:6379`，DB `0` | `redis` | - | 无密码 |
 | Kafka | `127.0.0.1:9092` | `kafka` | - | Consumer Group `techkg` |
 | Milvus | `127.0.0.1:19530` | `milvus` | - | 无账号密码配置 |
-| MinIO | API `127.0.0.1:9000`，控制台 `127.0.0.1:9001` | `minio` | `minioadmin` | `minioadmin` |
-| RustFS（用户算子） | API `127.0.0.1:9020`，控制台 `127.0.0.1:9021` | `operator-rustfs` | `rustfsadmin` | `rustfsadmin`，Python 通过 S3 API 使用 |
+| RustFS（schema 脚本 / 用户算子 / Milvus 内部存储共用） | API `127.0.0.1:9020`，控制台 `127.0.0.1:9021` | `operator-rustfs` | `rustfsadmin` | `rustfsadmin`，Python 通过 S3 API 使用，栈内不部署 MinIO |
 
 后端直接在宿主机运行时，MySQL 地址通常使用 `127.0.0.1`；后端在项目 Compose 的 `api` 容器内运行时，通过外部 Docker 网络使用服务名 `mysql`。Milvus 使用 Compose 服务名 `milvus`，M3E 向量服务使用 `m3e-embedding`。实际连接值以 `.env` 和 Compose 的 `environment` 覆盖项为准。 后期环境若使用 `tdsql-mysql`，通过部署环境设置 `MYSQL_HOST=tdsql-mysql`，无需修改代码。
 
@@ -53,7 +52,7 @@ TRSGraph 由外部 TRSGraph 服务提供，当前 Python 后端只负责连接�
 | Python 依赖和检查配置 | `pyproject.toml` | uv 依赖、pytest、ruff 配置 |
 | 后端 Docker 镜像 | `Dockerfile` | 构建 FastAPI 后端镜像 |
 | 后端 Docker 编排 | `docker-compose.yml` | 只启动后端 API 容器，适合已有外部基础设施时使用 |
-| 项目级 Docker 编排 | `../docker-compose.yml` | 启动 API、M3E、Milvus/MinIO 和用户算子 RustFS；MySQL 使用外部现有服务 |
+| 项目级 Docker 编排 | `../docker-compose.yml` | 启动 API、M3E、Milvus 和共用的 RustFS S3（schema 脚本 / 用户算子 / Milvus 内部存储）；MySQL 使用外部现有服务 |
 
 ### Docker 和代码部署的关系
 

@@ -2,9 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>frontend</title>
+    <!-- 运行时配置：由容器启动脚本生成（构建一次、部署期注入）；
+         非容器环境无此文件（404），前端回落 import.meta.env 构建期值 -->
+    <script src="%BASE_URL%runtime-config.js"></script>
   </head>
   <body>
     <div id="app"></div>

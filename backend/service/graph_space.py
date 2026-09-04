@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from datetime import datetime
@@ -133,9 +134,14 @@ class GraphSpaceService:
             raise GraphSpaceError(f"图服务不可用: {exc}") from exc
         if space_name in existing:
             raise GraphSpaceError(f"图空间 {space_name} 已存在")
+        # 副本数与分区数可按集群规模配置：单存储节点集群 replica_factor=3 会
+        # "Host not enough!"（Nebula 按副本数找主机），默认 3 适配生产多节点
+        replica = int(os.getenv("GRAPH_SPACE_REPLICA_FACTOR", "3"))
+        partition = int(os.getenv("GRAPH_SPACE_PARTITION_NUM", "100"))
         try:
             self.client.execute_write(
-                f"CREATE SPACE IF NOT EXISTS `{space_name}` (vid_type = FIXED_STRING(64));"
+                f"CREATE SPACE IF NOT EXISTS `{space_name}` "
+                f"(vid_type = FIXED_STRING(64), partition_num = {partition}, replica_factor = {replica});"
             )
         except Exception as exc:  # noqa: BLE001
             raise GraphSpaceError(f"创建图空间失败: {exc}") from exc

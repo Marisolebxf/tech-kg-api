@@ -328,6 +328,13 @@ const latestExecutionMessage = ref('')
 /** job 执行历史（含触发方式：手动/定期/重新执行），点击行切换展示的执行。 */
 const jobExecutions = ref<WorkflowExecution[]>([])
 const selectedExecutionId = ref('')
+const selectedExecution = ref<WorkflowExecution | null>(null)
+/** F6：embedding/Milvus 等外部服务故障导致索引构建降级时，执行详情必须显式提醒（不能只埋在输出 JSON 里）。 */
+const indexDegrade = computed(() => {
+  const output = (selectedExecution.value as { output?: { index?: { degraded?: boolean; error?: string } } } | null)?.output
+  const index = output?.index
+  return index && typeof index === 'object' && (index.degraded || index.error) ? index : null
+})
 
 async function loadLatestExecution() {
   let executions: WorkflowExecution[] = []
@@ -341,6 +348,16 @@ async function loadLatestExecution() {
       executions = (await listExecutions(200, { scheduleId: scheduleId.value })).items
     } else if (processingInstance.value?.rule) {
       executions = (await listExecutions(200, { definitionId: String(processingInstance.value.rule) })).items
+    } else if (String(route.params.instanceId || '').startsWith('EXEC-')) {
+      // /processing-instance/{执行ID} 直达：路由参数是执行 ID 本身（重跑记录
+      // 视图/审核 case 跳转入口），直接加载该执行——否则 selectedExecution
+      // 恒空，F6 索引降级告警等执行级信息不展示
+      const execution = await getExecution(String(route.params.instanceId))
+      selectedExecution.value = execution ?? null
+      jobExecutions.value = execution ? [execution] : []
+      selectedExecutionId.value = execution?.id ?? ''
+      latestExecutionMessage.value = [execution?.status, execution?.message].filter(Boolean).join(' · ')
+      return
     }
   } catch {
     executions = []
@@ -355,6 +372,7 @@ async function selectExecution(executionId: string) {
   selectedExecutionId.value = executionId
   try {
     const execution = await getExecution(executionId)
+    selectedExecution.value = execution ?? null
     latestExecutionMessage.value = [execution?.status, execution?.message].filter(Boolean).join(' · ')
     // job / 周期任务视图：用最新 execution 的任务填充流程详情
     if ((jobId.value || scheduleId.value) && execution?.taskId) {
@@ -445,6 +463,13 @@ onMounted(async () => {
     </section>
 
     <p v-if="pipelineMessage" class="pipeline-message">{{ pipelineMessage }}</p>
+
+    <div v-if="indexDegrade" class="index-degrade-alert" role="alert" aria-label="索引构建降级告警">
+      <strong>⚠ 实体索引构建失败（已降级）</strong>
+      <span>图数据写入正常，但实体检索索引未重建——关键词 / 语义检索将缺失本次新增实体。</span>
+      <code v-if="indexDegrade.error">{{ indexDegrade.error }}</code>
+      <em>请检查 embedding 服务可用性后，在实体列表页对该图空间「重建索引」。</em>
+    </div>
 
     <section class="detail-workspace">
       <aside class="process-sidebar">
@@ -559,6 +584,10 @@ onMounted(async () => {
 .pipeline-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
 .pipeline-head h2{margin:0;font-size:15px}
 .pipeline-message{margin:0 0 10px;padding:8px 12px;border:1px solid #b2ccff;border-radius:6px;background:#f0f5ff;color:#344f7a;font-size:11px}
+.index-degrade-alert{display:flex;flex-direction:column;gap:4px;margin:0 0 12px;padding:10px 14px;border:1px solid #f0a6a6;border-left:4px solid #d92d20;border-radius:6px;background:#fef3f2;color:#912018;font-size:12px}
+.index-degrade-alert strong{font-size:13px}
+.index-degrade-alert code{padding:2px 6px;border-radius:4px;background:#fde8e8;word-break:break-all}
+.index-degrade-alert em{color:#a8655c;font-style:normal;font-size:11px}
 /* 真实输入输出（脚本上报 JSON）：跨两列，输入/输出分块，超长 JSON 内部滚动 */
 .real-io-card{grid-column:1/-1}
 .real-io-card h3 span{padding:2px 6px;border-radius:4px;background:#e5f6ee;color:#067647;font-size:8px;font-weight:500}

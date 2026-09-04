@@ -7,18 +7,23 @@ import {
 } from '../api/workflowOperations'
 import type { LlmConfig } from '../api/llmConfig'
 import type { EmbeddingConfig } from '../api/embeddingConfig'
-import type { MilvusConfig } from '../api/milvusConfig'
 import type { MysqlDatasource } from '../api/mysqlDatasource'
 import { listAllSchemas, type SchemaDefinition } from '../api/schemaManagement'
 import { currentUserId as getCurrentUserId } from '../api/currentUser'
 import { useToast } from '../composables/use-toast'
+import { buildScheduleCron, describeCron, type ScheduleFrequency } from '../utils/cronSchedule'
+import {
+  JOB_NAME_RULE,
+  MYSQL_DB_RULE,
+  SINCE_RULE,
+  validateText,
+} from '../utils/textInput'
 
 const props = defineProps<{
   open: boolean
   definitions: WorkflowDefinition[]
   llmConfigs: LlmConfig[]
   embeddingConfigs: EmbeddingConfig[]
-  milvusConfigs: MilvusConfig[]
   mysqlDatasources: MysqlDatasource[]
   graphSpaces: string[]
 }>()
@@ -55,13 +60,17 @@ const llmConfigId = ref('')
 const embeddingConfigId = ref('')
 const mysqlDatasourceId = ref('')
 const mysqlDatabase = ref('')
-const milvusConfigId = ref('')
-const milvusDatabase = ref('')
 const since = ref('')
 
 const executeMode = ref<'once' | 'recurring'>('once')
-const frequency = ref('每天')
+const frequency = ref<ScheduleFrequency>('每天')
 const executionTime = ref('02:00')
+const weekday = ref(1)
+
+/** 预览与提交共用同一生成函数，所见即所得 */
+const schedulePreview = computed(() =>
+  describeCron(buildScheduleCron(frequency.value, executionTime.value, weekday.value)),
+)
 
 const submitting = ref(false)
 const uploadFileInput = ref<HTMLInputElement | null>(null)
@@ -71,19 +80,30 @@ const scriptDefinitions = computed(() =>
   props.definitions.filter((d) => d.sourceKind === 'python'),
 )
 
+const nameError = computed(() => validateText('任务名称', name.value, JOB_NAME_RULE))
+const dbError = computed(() =>
+  mysqlDatabase.value.trim() ? validateText('数据库', mysqlDatabase.value, MYSQL_DB_RULE) : null,
+)
+const sinceError = computed(() =>
+  since.value.trim() ? validateText('增量游标', since.value, SINCE_RULE) : null,
+)
+
 const canSubmit = computed(() => {
   if (!name.value.trim()) return false
+  if (nameError.value || dbError.value || sinceError.value) return false
   if (taskType.value === 'single') return Boolean(singleDefinitionId.value)
   if (taskType.value === 'chain') return chainSteps.value.length >= 2
   if (taskType.value === 'extract') return Boolean(extractSchemaId.value)
   return Boolean(uploadFile.value)
 })
 
-async function loadExtractSchemas() {
-  if (extractSchemas.value.length || schemasLoading.value) return
+async function loadExtractSchemas(force = false) {
+  if (schemasLoading.value) return
+  if (!force && extractSchemas.value.length) return
   schemasLoading.value = true
   try {
-    const all = await listAllSchemas(getCurrentUserId())
+    // M4 图空间联动：下拉只列所选空间绑定的可抽取 schema，随空间切换重查
+    const all = await listAllSchemas(getCurrentUserId(), graphSpace.value || undefined)
     extractSchemas.value = all.filter((s) => s.script && (s.sources?.length ?? 0) > 0)
   } catch {
     extractSchemas.value = []
@@ -107,12 +127,11 @@ function reset() {
   embeddingConfigId.value = ''
   mysqlDatasourceId.value = ''
   mysqlDatabase.value = ''
-  milvusConfigId.value = ''
-  milvusDatabase.value = ''
   since.value = ''
   executeMode.value = 'once'
   frequency.value = '每天'
   executionTime.value = '02:00'
+  weekday.value = 1
 }
 
 watch(() => props.open, (open) => {
@@ -124,6 +143,14 @@ watch(() => props.open, (open) => {
 
 watch(taskType, (type) => {
   if (type === 'extract') loadExtractSchemas()
+})
+
+watch(graphSpace, () => {
+  // 换空间后原选择不再属于该空间：清空并按新空间重查
+  if (taskType.value === 'extract') {
+    extractSchemaId.value = ''
+    loadExtractSchemas(true)
+  }
 })
 
 function addChainStep(value: string | number | boolean | Record<string, any> | undefined) {
@@ -154,18 +181,6 @@ function onUploadFileChosen(event: Event) {
   uploadFile.value = input.files?.[0] || null
 }
 
-function buildCron(): string {
-  const [h, m] = executionTime.value.split(':')
-  const hour = Number(h) || 0
-  const min = Number(m) || 0
-  switch (frequency.value) {
-    case '每12小时': return `${min} */12 * * *`
-    case '每6小时': return `${min} */6 * * *`
-    case '每周': return `${min} ${hour} * * 1`
-    default: return `${min} ${hour} * * *`
-  }
-}
-
 async function submit() {
   if (!canSubmit.value || submitting.value) return
   submitting.value = true
@@ -176,7 +191,7 @@ async function submit() {
       definitionId = singleDefinitionId.value
     } else if (taskType.value === 'chain') {
       definitionIds = chainSteps.value.map((s) => s.id)
-    } else {
+    } else if (taskType.value === 'upload') {
       if (!uploadFile.value) {
         showToast('请选择脚本文件', 'warning')
         return
@@ -187,6 +202,7 @@ async function submit() {
       })
       definitionId = definition.id
     }
+    // extract：走 schemaId + 平台喂数抽取，不需要 workflow definition
 
     const job = await createJob({
       name: name.value.trim(),
@@ -196,7 +212,7 @@ async function submit() {
       schemaId: taskType.value === 'extract' ? extractSchemaId.value : undefined,
       batchSize: taskType.value === 'extract' ? (extractBatchSize.value || undefined) : undefined,
       schedule: executeMode.value === 'recurring'
-        ? { kind: 'cron', cron: buildCron(), timezone: 'Asia/Shanghai' }
+        ? { kind: 'cron', cron: buildScheduleCron(frequency.value, executionTime.value, weekday.value), timezone: 'Asia/Shanghai' }
         : { kind: 'once' },
       runNow: executeMode.value === 'once' && runNow.value,
       graphSpace: graphSpace.value || undefined,
@@ -204,8 +220,6 @@ async function submit() {
       embeddingConfigId: embeddingConfigId.value || undefined,
       mysqlDatasourceId: mysqlDatasourceId.value || undefined,
       mysqlDatabase: mysqlDatabase.value || undefined,
-      milvusConfigId: milvusConfigId.value || undefined,
-      milvusDatabase: milvusDatabase.value || undefined,
       since: since.value.trim() || undefined,
     })
     showToast(`任务「${job.name}」已创建${runNow.value && executeMode.value === 'once' ? '并触发执行' : ''}`, 'success')
@@ -231,7 +245,8 @@ async function submit() {
         <div class="job-basics">
           <label class="job-field">
             <span>任务名称</span>
-            <input v-model="name" placeholder="如：论文-专家抽取" />
+            <input v-model="name" :maxlength="JOB_NAME_RULE.max" placeholder="如：论文-专家抽取" />
+            <small v-if="nameError" class="field-error">{{ nameError }}</small>
           </label>
           <div class="job-field">
             <div class="job-field__label-row">
@@ -321,7 +336,8 @@ async function submit() {
             </div>
             <label class="job-field">
               <span>数据库</span>
-              <input v-model="mysqlDatabase" placeholder="如 gkx_element（默认取数据源配置）" />
+              <input v-model="mysqlDatabase" :maxlength="MYSQL_DB_RULE.max" placeholder="如 gkx_element（默认取数据源配置）" />
+              <small v-if="dbError" class="field-error">{{ dbError }}</small>
             </label>
           </div>
           <div class="job-row">
@@ -331,21 +347,10 @@ async function submit() {
                 <a-option v-for="c in embeddingConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）</a-option>
               </a-select>
             </div>
-            <div class="job-field">
-              <span>Milvus 配置</span>
-              <a-select v-model="milvusConfigId" class="job-select" placeholder="使用默认" allow-clear>
-                <a-option v-for="c in milvusConfigs" :key="c.id" :value="c.id">{{ c.name }}</a-option>
-              </a-select>
-            </div>
-          </div>
-          <div class="job-row">
-            <label class="job-field">
-              <span>Milvus 数据库</span>
-              <input v-model="milvusDatabase" placeholder="默认 default" />
-            </label>
             <label class="job-field">
               <span>增量游标 since（可空）</span>
-              <input v-model="since" placeholder="如 2026-08-01 00:00:00" />
+              <input v-model="since" :maxlength="SINCE_RULE.max" placeholder="如 2026-08-01 00:00:00" />
+              <small v-if="sinceError" class="field-error">{{ sinceError }}</small>
             </label>
           </div>
         </div>
@@ -364,8 +369,20 @@ async function submit() {
                 <span>频率</span>
                 <a-select v-model="frequency" class="job-select" aria-label="频率" :options="['每天', '每12小时', '每6小时', '每周']" />
               </div>
+              <div v-if="frequency === '每周'" class="job-field">
+                <span>星期</span>
+                <a-select v-model="weekday" class="job-select" aria-label="星期">
+                  <a-option :value="1">周一</a-option>
+                  <a-option :value="2">周二</a-option>
+                  <a-option :value="3">周三</a-option>
+                  <a-option :value="4">周四</a-option>
+                  <a-option :value="5">周五</a-option>
+                  <a-option :value="6">周六</a-option>
+                  <a-option :value="0">周日</a-option>
+                </a-select>
+              </div>
               <label class="job-field">
-                <span>执行时间</span>
+                <span>首次执行时间</span>
                 <input v-model="executionTime" type="time" />
               </label>
             </template>
@@ -373,6 +390,9 @@ async function submit() {
               <a-checkbox v-model="runNow">创建后立即执行</a-checkbox>
             </label>
           </div>
+          <p v-if="executeMode === 'recurring'" class="schedule-preview">
+            执行计划：<strong>{{ schedulePreview }}</strong><span class="cron-hint">（首次执行时间即第一次触发，之后按频率顺延）</span>
+          </p>
         </div>
       </div>
       <footer>
@@ -423,4 +443,8 @@ async function submit() {
 .upload-row button{height:32px;padding:0 14px;border:1px solid #165dff;border-radius:4px;background:#fff;color:#165dff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
 .upload-row code{color:#165dff;font-family:inherit;font-size:12px;line-height:20px;font-weight:400}
 .muted-warn{margin:0;color:#ff7d00;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
+.schedule-preview{margin:0;color:#4e5969;font-size:12px;line-height:20px}
+.field-error{color:#e4322d;font-size:12px;line-height:18px}
+.schedule-preview strong{color:#165dff;font-weight:600}
+.schedule-preview .cron-hint{color:#86909c}
 </style>

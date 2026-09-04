@@ -24,7 +24,9 @@ class ReviewCase(Base):
     source_task_id: Mapped[str] = mapped_column(String(128), nullable=False)
     batch_id: Mapped[str | None] = mapped_column(String(128))
     node_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    pipeline_step_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    # 抽取消歧用 "source:{绑定行uuid}" 形式的 step id（44 字符），32 放不下会
+    # 让 T_LINK case 创建整条失败
+    pipeline_step_id: Mapped[str] = mapped_column(String(128), nullable=False)
     object_id: Mapped[str] = mapped_column(String(256), nullable=False)
     object_type: Mapped[str] = mapped_column(String(64), nullable=False)
     object_name: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -113,7 +115,8 @@ class ReviewCorrection(Base):
     payload: Mapped[str] = mapped_column(Text, nullable=False)
     correction_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    rerun_step_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    # 抽取消歧的 step id 形如 "source:{绑定行uuid}"（44 字符）
+    rerun_step_id: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text)

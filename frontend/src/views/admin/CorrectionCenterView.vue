@@ -2,6 +2,8 @@
 import { Message } from '@arco-design/web-vue'
 import { computed, onMounted, ref, watch } from 'vue'
 
+import { adminExampleFallback } from '../../config'
+
 import {
   cancelCorrection, createCorrection, getCorrection, listCorrections, retryCorrection,
   reviewCorrection, updateCorrection, type CorrectionOperation, type CorrectionRecord,
@@ -25,7 +27,7 @@ const page = ref(1)
 const pageSize = 20
 const dataMode = ref<'live' | 'example'>('live')
 const exampleRows = ref(getExampleCorrections())
-const exampleFallbackEnabled = import.meta.env.VITE_ADMIN_EXAMPLE_FALLBACK !== 'false'
+const exampleFallbackEnabled = adminExampleFallback
 const formVisible = ref(false)
 const queryVisible = ref(false)
 const reviewVisible = ref(false)

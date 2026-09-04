@@ -159,7 +159,7 @@ class MysqlDatasourceService:
         client = MySQLClient(
             host=row.host,
             port=row.port,
-            database=None,
+            database="",
             username=row.username,
             password=row.password,
         )
@@ -184,7 +184,7 @@ class MysqlDatasourceService:
         client = MySQLClient(
             host=row.host,
             port=row.port,
-            database=None,
+            database="",
             username=row.username,
             password=row.password,
         )
@@ -217,7 +217,7 @@ class MysqlDatasourceService:
         client = MySQLClient(
             host=row.host,
             port=row.port,
-            database=None,
+            database="",
             username=row.username,
             password=row.password,
         )

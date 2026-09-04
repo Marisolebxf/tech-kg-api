@@ -30,6 +30,10 @@ class FakeGraphClient:
         self.written_queries.append(query)
         return {"records": []}
 
+    def execute_read(self, query, params=None):
+        # DESCRIBE TAG/EDGE 返回空列集（按值类型写图）
+        return {"records": []}
+
 
 @pytest.fixture
 def fake_graph(monkeypatch: pytest.MonkeyPatch):
@@ -139,9 +143,12 @@ async def test_write_records_edges(fake_graph) -> None:
     )
     assert result["written"] == 1
     client = fake_graph[0]
-    source_id, target_id, edge_type, props = client.merged_edges[0]
-    assert (source_id, target_id, edge_type) == ("S-1", "O-1", "EMPLOYED_BY")
-    assert props == {"source_table": "gkx.scholar"}
+    # 关系写入走 nGQL INSERT EDGE（REST merge 的 identityProps 必非空，平台边语义无 identity）
+    assert len(client.written_queries) == 1
+    stmt = client.written_queries[0]
+    assert stmt.startswith("INSERT EDGE `EMPLOYED_BY`(")
+    assert '"S-1"->"O-1"' in stmt
+    assert "gkx.scholar" in stmt
 
 
 @pytest.mark.asyncio

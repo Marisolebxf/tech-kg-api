@@ -8,6 +8,8 @@ metadata:
   name: tech-kg-config
   namespace: bkg
 data:
+  # 前端部署前缀（运行时注入，见 docs/前端一次构建多环境部署方案.md）
+  APP_BASE: "/bkg_zpt"
   # ---- 图谱服务（外部依赖，按实际环境修改）----
   TRS_GRAPH_BASE_URL: "http://trs-graph-service:8090"
   TRS_GRAPH_SPACE: "dev"
@@ -79,14 +81,14 @@ data:
   AUTH_AUDIT_MAX_ITEMS: "200"
   AUTH_COOKIE_SECURE: "true"
   AUTH_COOKIE_SAMESITE: "lax"
-  AUTH_COOKIE_PATH: "/bkg_zp"
-  AUTH_FRONTEND_URL: "https://edu.itic-sci.com/bkg_zp"
+  AUTH_COOKIE_PATH: "/bkg_zpt"
+  AUTH_FRONTEND_URL: "https://edu.itic-sci.com/bkg_zpt"
   USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED: "false"
   USER_CENTER_PORTAL_TOKEN_COOKIE: "access_token"
   USER_CENTER_SSO_LOGIN_URL: "https://edu.itic-sci.com/uc/sso/login"
   USER_CENTER_OAUTH_BASE_URL: "https://edu.itic-sci.com/uc/admin-api/system/oauth2"
   USER_CENTER_ACCOUNT_URL: "https://edu.itic-sci.com/uc/admin/login?redirect=/index"
-  USER_CENTER_REDIRECT_URI: "https://edu.itic-sci.com/bkg_zp/api/v1/auth/callback"
+  USER_CENTER_REDIRECT_URI: "https://edu.itic-sci.com/bkg_zpt/api/v1/auth/callback"
 
   # ---- Redis 会话 ----
   REDIS_URL: "redis://auth-redis:6379/0"

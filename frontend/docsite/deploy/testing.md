@@ -4,7 +4,7 @@
 
 ## 铁律：测试只在容器内跑
 
-后端与全部基础设施（MySQL、MinIO、Temporal、Milvus、redis、trs-graph）**只跑在 Docker 里**，宿主机上什么都没有。**永远不要在宿主机跑依赖后端服务的测试**——会报 `Can't connect to MySQL server on 'temporal-mysql'`（DNS 不可解析）。
+后端与全部基础设施（MySQL、RustFS、Temporal、Milvus、redis、trs-graph）**只跑在 Docker 里**，宿主机上什么都没有。**永远不要在宿主机跑依赖后端服务的测试**——会报 `Can't connect to MySQL server on 'temporal-mysql'`（DNS 不可解析）。
 
 ## 后端
 

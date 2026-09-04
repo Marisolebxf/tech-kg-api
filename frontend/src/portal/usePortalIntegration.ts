@@ -1,6 +1,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import { portalSource } from '../config'
 import { useAuthStore } from '../stores/auth'
 import {
   PortalAction,
@@ -8,7 +9,7 @@ import {
   portalBridge,
 } from './iframeBridge'
 
-const PORTAL_SOURCE = import.meta.env.VITE_PORTAL_SOURCE || 'tech-kg-api'
+const PORTAL_SOURCE = portalSource
 
 function routeTitle(title: unknown): string {
   return typeof title === 'string' && title.trim()

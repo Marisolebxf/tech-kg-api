@@ -17,13 +17,13 @@ import {
 import { schemaErrorMessage } from '../../api/schemaManagement'
 import { listLlmConfigs, type LlmConfig } from '../../api/llmConfig'
 import { listEmbeddingConfigs, type EmbeddingConfig } from '../../api/embeddingConfig'
-import { listMilvusConfigs, type MilvusConfig } from '../../api/milvusConfig'
 import { listMysqlDatasources, type MysqlDatasource } from '../../api/mysqlDatasource'
 import { listGraphSpaces } from '../../api/graphSpace'
 import { currentUserId as getCurrentUserId } from '../../api/currentUser'
 import JobLaunchDialog from '../../components/JobLaunchDialog.vue'
 import { useToast } from '../../composables/use-toast'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
+import { describeCron } from '../../utils/cronSchedule'
 
 const { showToast } = useToast()
 const router = useRouter()
@@ -33,7 +33,6 @@ const jobs = ref<WorkflowJob[]>([])
 const definitions = ref<WorkflowDefinition[]>([])
 const llmConfigs = ref<LlmConfig[]>([])
 const embeddingConfigs = ref<EmbeddingConfig[]>([])
-const milvusConfigs = ref<MilvusConfig[]>([])
 const mysqlDatasources = ref<MysqlDatasource[]>([])
 const graphSpaces = ref<string[]>([])
 const loading = ref(false)
@@ -84,18 +83,16 @@ async function loadData() {
 
 async function loadDialogResources() {
   try {
-    const [defs, llm, embedding, milvus, mysql, spaces] = await Promise.all([
+    const [defs, llm, embedding, mysql, spaces] = await Promise.all([
       listDefinitions(),
       listLlmConfigs(currentUserId),
       listEmbeddingConfigs(currentUserId),
-      listMilvusConfigs(currentUserId),
       listMysqlDatasources(currentUserId),
       listGraphSpaces(currentUserId),
     ])
     definitions.value = defs.items
     llmConfigs.value = llm
     embeddingConfigs.value = embedding
-    milvusConfigs.value = milvus
     mysqlDatasources.value = mysql
     graphSpaces.value = spaces
   } catch (error) {
@@ -224,7 +221,13 @@ onMounted(loadData)
               <td>{{ TASK_TYPE_LABELS[job.taskType] || job.taskType }}</td>
               <td><code>{{ jobScriptLabel(job) }}</code></td>
               <td>{{ job.graphSpace || '默认' }}</td>
-              <td>{{ job.schedule.kind === 'cron' ? `cron ${job.schedule.cron}` : '单次' }}</td>
+              <td>
+                <span
+                  v-if="job.schedule.kind === 'cron'"
+                  :title="`cron ${job.schedule.cron}`"
+                >{{ describeCron(job.schedule.cron ?? '') }}</span>
+                <span v-else>单次</span>
+              </td>
               <td><span :class="JOB_STATUS_TONE[deriveJobUnifiedStatus(job)]">{{ deriveJobUnifiedStatus(job) }}</span></td>
               <td>
                 <code v-if="job.lastExecutionId">{{ job.lastExecutionId }}</code>
@@ -256,7 +259,6 @@ onMounted(loadData)
       :definitions="definitions"
       :llm-configs="llmConfigs"
       :embedding-configs="embeddingConfigs"
-      :milvus-configs="milvusConfigs"
       :mysql-datasources="mysqlDatasources"
       :graph-spaces="graphSpaces"
       @close="createOpen = false"

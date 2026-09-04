@@ -49,7 +49,11 @@ class MySQLClient:
         self._explicit_url = url
         self.host = host or os.getenv("MYSQL_HOST", "127.0.0.1")
         self.port = port or _get_int_env("MYSQL_PORT", 3306)
-        self.database = database or os.getenv("MYSQL_DATABASE", "gkx_element")
+        # database="" 显式表示"不选库"（SHOW DATABASES 等服务器级操作）；
+        # None 才回退 env 默认库
+        self.database = (
+            database if database is not None else os.getenv("MYSQL_DATABASE", "gkx_element")
+        )
         self.username = username or os.getenv("MYSQL_USERNAME", "root")
         self.password = (
             password if password is not None else os.getenv("MYSQL_PASSWORD", "123456789")
@@ -69,9 +73,10 @@ class MySQLClient:
             return self._explicit_url
         username = quote_plus(self.username)
         password = quote_plus(self.password)
+        db_part = f"{self.database}" if self.database else ""
         return (
             f"mysql+pymysql://{username}:{password}@{self.host}:{self.port}/"
-            f"{self.database}?charset=utf8mb4"
+            f"{db_part}?charset=utf8mb4"
         )
 
     @property

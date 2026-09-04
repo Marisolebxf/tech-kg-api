@@ -175,17 +175,22 @@ def get_active_llm_config() -> LlmConfig | None:
 
 
 def resolve_llm_settings() -> tuple[str, str, str] | None:
-    """返回 (api_key, base_url, model)。DB 优先，DB 无记录回退 env。无任何配置返回 None。"""
+    """返回 (api_key, base_url, model)。DB 优先，DB 无记录**或缺 api_key** 回退 env。
+
+    DB 默认配置缺 key（如建配置时未填、后续被清空）时直接返回空 key 客户端
+    会让所有 LLM 调用报 "Missing credentials"——env 明明配了可用 key 却被
+    空配置屏蔽，必须跳过无效 DB 配置继续走 env。
+    """
     import os
 
+    env_key = os.getenv("LLM_API_KEY") or os.getenv("ZHIPUAI_API_KEY")
     cfg = get_active_llm_config()
-    if cfg is not None:
+    if cfg is not None and (cfg.api_key or not env_key):
         return cfg.api_key, cfg.base_url, cfg.model
-    api_key = os.getenv("LLM_API_KEY") or os.getenv("ZHIPUAI_API_KEY")
-    if not api_key:
+    if not env_key:
         return None
     return (
-        api_key,
+        env_key,
         os.getenv("LLM_BASE_URL", DEFAULT_BASE_URL),
         os.getenv("LLM_MODEL", DEFAULT_MODEL),
     )

@@ -2,7 +2,7 @@
 
 > 来源：根 `CLAUDE.md` · 根/backend `README.md`
 
-本仓库是 monorepo：`backend/`（Python FastAPI）+ `frontend/`（Vue 3 + TS + Vite）。顶层 `docker-compose.yml` 构建并运行两个应用及配套基础设施（Milvus+etcd+MinIO、RustFS、schema MinIO、m3e-embedding、auth-redis、Temporal）。
+本仓库是 monorepo：`backend/`（Python FastAPI）+ `frontend/`（Vue 3 + TS + Vite）。顶层 `docker-compose.yml` 构建并运行两个应用及配套基础设施（Milvus+etcd、共用一个 RustFS S3 承载 schema 脚本 / operator 包 / Milvus 内部存储——不依赖 MinIO、m3e-embedding、auth-redis、Temporal）。
 
 ## 请求流（后端 DDD 五层）
 

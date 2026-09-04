@@ -36,8 +36,8 @@
 |------|------|
 | 容器平台 | k8s 云业务平台，集成了多种功能在界面进行操作和监控 |
 | 镜像仓库 | 用于存储业务所用的镜像仓库（本环境为 10.50.62.9:30303） |
-| baked | 后端业务镜像（api / temporal-worker / m3e-embedding 三个 Deployment 共用同一镜像，通过不同启动命令区分） |
-| baked-web | 前端业务镜像（nginx 静态资源 + `/api/` 反代） |
+| backend | 后端业务镜像（api / temporal-worker / m3e-embedding 三个 Deployment 共用同一镜像，通过不同启动命令区分） |
+| web | 前端业务镜像（nginx 静态资源 + `/api/` 反代） |
 | rustfs | S3 兼容对象存储，承载 schema 脚本、operator 包、milvus 内部存储 |
 | temporal | 工作流引擎，图谱构建任务通过它编排调度 |
 
@@ -56,8 +56,8 @@
 | mysql | 8.4 | temporal 专用库 + 业务控制面库 techkg_control |
 | temporal | 1.29.2（auto-setup） | 工作流引擎 |
 | temporal-ui | 2.39.0 | 工作流控制台（运维观察用） |
-| baked | v0.0.1（Python 3.11） | 后端业务镜像 ×3（api / temporal-worker / m3e-embedding） |
-| baked-web | v0.0.1（nginx 1.27） | 前端业务镜像 |
+| backend | v0.0.1（Python 3.11） | 后端业务镜像 ×3（api / temporal-worker / m3e-embedding） |
+| web | v0.0.1（nginx 1.27） | 前端业务镜像 |
 
 **集群外依赖**（需提前准备，yaml 中只填连接地址）：
 
@@ -762,7 +762,7 @@ spec:
 
 4. **主 MySQL 业务库**：在外部主 MySQL 上确认 `gkx_element`、`gkx_local` 两个库存在且账号有权限；`SCHEMA_AUTO_INIT=true` 时 `gkx_element` 表结构由 api 启动时自动创建/补齐。若交付含存量数据，按数据交付清单另行导入。
 
-5. **rustfs bucket**：`tech-kg-schema-scripts`、`tech-kg-operators` 两个 bucket 由业务首次写入时自动创建，无需手工创建。
+5. **rustfs bucket**：`bkg-schema-scripts`、`bkg-operators` 两个 bucket 由业务首次写入时自动创建，无需手工创建。
 
 6. **首个管理员**：`PLATFORM_BOOTSTRAP_FIRST_ADMIN=true` 时，首个通过用户中心 SSO 登录的账号自动成为平台管理员；也可用 `PLATFORM_INITIAL_ADMIN_USER_IDS` 预置。
 
@@ -770,7 +770,7 @@ spec:
 
 ### 后端
 
-后端三个 Deployment 共用镜像 `10.50.62.9:30303/bkg/baked:v0.0.1`，仅启动命令不同。
+后端三个 Deployment 共用镜像 `10.50.62.9:30303/bkg/backend:v0.0.1`，仅启动命令不同。
 
 **1、m3e-embedding（专利向量化服务）**
 
@@ -795,7 +795,7 @@ spec:
     spec:
       containers:
         - name: m3e-embedding
-          image: 10.50.62.9:30303/bkg/baked:v0.0.1
+          image: 10.50.62.9:30303/bkg/backend:v0.0.1
           imagePullPolicy: IfNotPresent
           command:
             [
@@ -891,14 +891,14 @@ spec:
     spec:
       containers:
         - name: temporal-worker
-          image: 10.50.62.9:30303/bkg/baked:v0.0.1
+          image: 10.50.62.9:30303/bkg/backend:v0.0.1
           imagePullPolicy: IfNotPresent
           command: [".venv/bin/python", "-m", "script.run_temporal_worker"]
           envFrom:
             - configMapRef:
-                name: tech-kg-config
+                name: bkg-config
             - secretRef:
-                name: tech-kg-secrets
+                name: bkg-secrets
           resources:
             requests:
               cpu: 500m
@@ -908,7 +908,7 @@ spec:
               memory: 4Gi
           volumeMounts:
             - name: workflow-state
-              mountPath: /var/lib/tech-kg
+              mountPath: /var/lib/bkg
       volumes:
         - name: workflow-state
           persistentVolumeClaim:
@@ -940,13 +940,13 @@ spec:
     spec:
       containers:
         - name: api
-          image: 10.50.62.9:30303/bkg/baked:v0.0.1
+          image: 10.50.62.9:30303/bkg/backend:v0.0.1
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
-                name: tech-kg-config
+                name: bkg-config
             - secretRef:
-                name: tech-kg-secrets
+                name: bkg-secrets
           ports:
             - containerPort: 8000
               name: http
@@ -977,7 +977,7 @@ spec:
             - name: patent-index-state
               mountPath: /app/var/patent_indexes
             - name: workflow-state
-              mountPath: /var/lib/tech-kg
+              mountPath: /var/lib/bkg
       volumes:
         - name: operator-data
           persistentVolumeClaim:
@@ -1028,7 +1028,7 @@ spec:
     spec:
       containers:
         - name: web
-          image: 10.50.62.9:30303/bkg/baked-web:v0.0.1
+          image: 10.50.62.9:30303/bkg/web:v0.0.1
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
@@ -1122,7 +1122,7 @@ spec:
 
 注意事项：
 
-1. **前端镜像一次构建、部署期注入**：`baked-web` 镜像不再传任何 `VITE_*` 构建参数（只留 `NPM_REGISTRY`）；部署前缀等配置由 web Pod `envFrom` 同一份 `tech-kg-config` 运行时注入（`APP_BASE` / `TRS_GRAPH_SPACE` / `AUTH_ENABLED` / `PORTAL_*`），详见 `docs/前端一次构建多环境部署方案.md`。同一镜像已在 dev2 栈以双实例验证（门户前缀 `APP_BASE=/bkg_zpt` 与根路径 `APP_BASE=""`）。
+1. **前端镜像一次构建、部署期注入**：`web` 镜像不再传任何 `VITE_*` 构建参数（只留 `NPM_REGISTRY`）；部署前缀等配置由 web Pod `envFrom` 同一份 `bkg-config` 运行时注入（`APP_BASE` / `TRS_GRAPH_SPACE` / `AUTH_ENABLED` / `PORTAL_*`），详见 `docs/前端一次构建多环境部署方案.md`。同一镜像已在 dev2 栈以双实例验证（门户前缀 `APP_BASE=/bkg_zpt` 与根路径 `APP_BASE=""`）。
 2. **入口形态决定 nginx 配置**：镜像内置模板是前缀式（`location ^~ /bkg_zpt/` 前缀映射 + `/bkg_zpt/api/` 去前缀代理），适用于 NodePort/Ingress **直连子路径**访问。若入口是统一门户式**剥前缀转发**（浏览器 URL 带 `/bkg_zpt`、容器收到根路径），需挂载根路径全兜底模板覆盖（参考 `frontend/nginx.dev2.conf`），此时 `APP_BASE` 仅驱动 runtime-config.js（前端 base/apiBase），nginx 不感知前缀。交付前先确认入口网关的转发方式。
 3. **认证 Cookie 路径**：`AUTH_COOKIE_PATH=/bkg_zpt`（已配置在 02-configmap.yaml），与代理路径保持一致，否则登录态无法写入。
 4. **HTTPS**：`AUTH_COOKIE_SECURE=true` 要求外部入口必须是 HTTPS，平台证书按域名 `edu.itic-sci.com` 配置。

@@ -1,11 +1,11 @@
-# tech-kg 业务非敏感配置（api / temporal-worker 共用，envFrom 注入）。
+# bkg 业务非敏感配置（api / temporal-worker 共用，envFrom 注入）。
 # ★ 部署前必须确认两类外部依赖的地址：
 #   1. MYSQL_HOST / PAPER_COOP_MYSQL_* —— 主库（gkx_element）与论文合作库（gkx_local）
 #   2. TRS_GRAPH_BASE_URL —— trs-graph-service（NebulaGraph 网关）
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: tech-kg-config
+  name: bkg-config
   namespace: bkg
 data:
   # 前端部署前缀（运行时注入，见 docs/前端一次构建多环境部署方案.md）
@@ -13,6 +13,8 @@ data:
   # ---- 图谱服务（外部依赖，按实际环境修改）----
   TRS_GRAPH_BASE_URL: "http://trs-graph-service:8090"
   TRS_GRAPH_SPACE: "dev"
+  # TRS Graph 单副本 storaged，建图空间必须 replica_factor=1（默认 3 会 Host not enough）
+  GRAPH_SPACE_REPLICA_FACTOR: "1"
   TRS_GRAPH_TIMEOUT: "30"
 
   # ---- 主 MySQL（外部依赖，按实际环境修改）----
@@ -33,7 +35,7 @@ data:
   PATENT_INDEX_STATE_DIR: "/app/var/patent_indexes"
   PATENT_INDEX_PAGE_SIZE: "1000"
   PATENT_BM25_DIM: "262144"
-  ORG_MILVUS_STATE_DIR: "/var/lib/tech-kg/organization_milvus"
+  ORG_MILVUS_STATE_DIR: "/var/lib/bkg/organization_milvus"
 
   # ---- LLM（未配置 LLM_API_KEY 时相关功能自动降级）----
   LLM_MODEL: "glm-4.7-flash"
@@ -42,26 +44,26 @@ data:
   # ---- Temporal 工作流 ----
   TEMPORAL_ADDRESS: "temporal:7233"
   TEMPORAL_NAMESPACE: "default"
-  TEMPORAL_TASK_QUEUE: "tech-kg-workflows"
+  TEMPORAL_TASK_QUEUE: "bkg-workflows"
   TEMPORAL_MAX_CONCURRENT_ACTIVITIES: "4"
   # 控制面 MySQL（temporal-mysql 的 techkg_control 库，跟 Temporal 共用实例但独立库）
   WORKFLOW_MYSQL_HOST: "temporal-mysql"
   WORKFLOW_MYSQL_PORT: "3306"
   WORKFLOW_MYSQL_DATABASE: "techkg_control"
   WORKFLOW_MYSQL_USERNAME: "root"
-  WORKFLOW_SCRIPT_DIR: "/var/lib/tech-kg/scripts"
+  WORKFLOW_SCRIPT_DIR: "/var/lib/bkg/scripts"
   WORKFLOW_DEMO_DATA_ENABLED: "false"
 
   # ---- S3（operator-rustfs，schema 脚本 / operator 包 / milvus 内部存储共用）----
   SCHEMA_S3_ENDPOINT_URL: "http://operator-rustfs:9000"
-  SCHEMA_S3_BUCKET: "tech-kg-schema-scripts"
+  SCHEMA_S3_BUCKET: "bkg-schema-scripts"
   SCHEMA_S3_REGION: "us-east-1"
   SCHEMA_S3_SECURE: "false"
   SCHEMA_SCRIPT_MAX_BYTES: "10485760"
   SCHEMA_ADMIN_USER_IDS: "schema-admin"
   OPERATOR_DIR: "/app/operators/user"
   OPERATOR_S3_ENDPOINT_URL: "http://operator-rustfs:9000"
-  OPERATOR_S3_BUCKET: "tech-kg-operators"
+  OPERATOR_S3_BUCKET: "bkg-operators"
   OPERATOR_S3_PREFIX: "operators"
   OPERATOR_S3_REGION: "us-east-1"
 

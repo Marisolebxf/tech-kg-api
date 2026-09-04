@@ -1,6 +1,6 @@
 # operator-rustfs：S3 兼容对象存储。
 # schema 脚本 / operator 包 / milvus 内部存储三类数据共用这一个实例。
-# 凭证在 tech-kg-secrets 与 rustfs-secrets 中各有一份，修改时两处必须同步。
+# 凭证在 bkg-secrets 与 rustfs-secrets 中各有一份，修改时两处必须同步。
 apiVersion: v1
 kind: Secret
 metadata:
@@ -40,6 +40,8 @@ spec:
           volumeMounts:
             - name: rustfs-data
               mountPath: /data
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: rustfs
           image: 10.50.62.9:30303/library/rustfs:1.0.0-alpha.93

@@ -16,6 +16,8 @@ spec:
       labels:
         app: milvus-etcd
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: etcd
           image: 10.50.62.9:30303/library/etcd:3.5.5
@@ -84,6 +86,8 @@ spec:
       labels:
         app: milvus
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: milvus
           image: 10.50.62.9:30303/library/milvus:v2.4.17

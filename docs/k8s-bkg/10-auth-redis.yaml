@@ -15,6 +15,8 @@ spec:
       labels:
         app: auth-redis
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: auth-redis
           image: 10.50.62.9:30303/library/redis:7.4-alpine

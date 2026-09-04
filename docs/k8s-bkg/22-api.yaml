@@ -1,4 +1,4 @@
-# api：FastAPI 主服务（后端镜像 baked 默认启动命令，无需覆盖 command）。
+# api：FastAPI 主服务（后端镜像 backend 默认启动命令，无需覆盖 command）。
 # Service 必须命名为 api —— 前端镜像内 nginx.conf 固定反代 http://api:8000。
 apiVersion: apps/v1
 kind: Deployment
@@ -17,15 +17,17 @@ spec:
       labels:
         app: api
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: api
-          image: 10.50.62.9:30303/bkg/baked:v0.0.1
+          image: 10.50.62.9:30303/bkg/backend:v0.0.1
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
-                name: tech-kg-config
+                name: bkg-config
             - secretRef:
-                name: tech-kg-secrets
+                name: bkg-secrets
           ports:
             - containerPort: 8000
               name: http
@@ -56,7 +58,7 @@ spec:
             - name: patent-index-state
               mountPath: /app/var/patent_indexes
             - name: workflow-state
-              mountPath: /var/lib/tech-kg
+              mountPath: /var/lib/bkg
       volumes:
         - name: operator-data
           persistentVolumeClaim:

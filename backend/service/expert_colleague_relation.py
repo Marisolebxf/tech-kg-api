@@ -248,9 +248,6 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
                     candidate_period = self._parse_period(
                         self._property({"properties": edge_props}, DATE_KEYS)
                     )
-                    # 关系本身的生效时段只由双方真实任职期决定。请求时间仅作为
-                    # 查询窗口判断该关系是否命中，不能截断响应里的生效时段、
-                    # 重叠月份，也不能改变按关系时段筛选成果的口径。
                     overlap = self._overlap(affiliation.get("period"), candidate_period, None)
                     if overlap is None:
                         skipped_missing_period.add((candidate_id, affiliation["id"]))
@@ -548,6 +545,11 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
         }
         overlaps = [item["overlapYears"] for item in colleagues if item["overlapYears"] is not None]
         primary = colleagues[0] if colleagues else None
+        period_achievements = "0项"
+        if primary and primary["achievements"]:
+            period_achievements = f"{len(primary['achievements'])}项具体成果"
+        elif primary and primary.get("coPaperCount"):
+            period_achievements = f"0项具体成果（合著统计{primary.get('coPaperCount', 0)}篇）"
         return {
             "coreExpert": f"{expert['name']} | {expert.get('title') or '-'}",
             "coreExpertOrganization": expert.get("organization") or "-",
@@ -572,13 +574,7 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             "overlapDuration": (f"{primary['overlapMonths']}个月" if primary else "-"),
             "workContent": ("、".join(primary["workContent"]) if primary else "-"),
             "collaborationScenes": ("、".join(primary["collaborationScenes"]) if primary else "-"),
-            "periodAchievements": (
-                f"{len(primary['achievements'])}项具体成果"
-                if primary and primary["achievements"]
-                else f"0项具体成果（合著统计{primary.get('coPaperCount', 0)}篇）"
-                if primary and primary.get("coPaperCount")
-                else "0项"
-            ),
+            "periodAchievements": period_achievements,
             "colleagueCount": len(colleagues),
             "teamCount": len(teams),
             "maxOverlapYears": max(overlaps, default=0),

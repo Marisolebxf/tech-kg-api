@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import delete, select
@@ -78,13 +78,13 @@ class ScriptWatermarkDAO:
                     step_id=step_id,
                     watermark=watermark,
                     checkpoint=checkpoint,
-                    updated_at=datetime.utcnow(),
+                    updated_at=datetime.now(UTC),
                 )
                 session.add(row)
             else:
                 existing.watermark = watermark
                 existing.checkpoint = checkpoint
-                existing.updated_at = datetime.utcnow()
+                existing.updated_at = datetime.now(UTC)
             session.commit()
             return existing if existing is not None else row  # type: ignore[name-defined]
         except Exception:

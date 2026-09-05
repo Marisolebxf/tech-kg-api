@@ -95,9 +95,12 @@ def test_self_approval_uses_outbox_and_sync_is_idempotent() -> None:
     correction = session.get(ManualCorrection, created["id"])
     projection = session.scalar(select(CorrectionProjection))
     task = session.scalar(select(CorrectionSyncTask))
-    assert correction is not None and correction.status == "COMPLETED"
-    assert projection is not None and projection.version == 1
-    assert task is not None and task.status == "SUCCEEDED"
+    assert correction is not None
+    assert correction.status == "COMPLETED"
+    assert projection is not None
+    assert projection.version == 1
+    assert task is not None
+    assert task.status == "SUCCEEDED"
     assert graph.node_merges[0][1] == {"scholar_id": "person_001"}
     assert [item["action"] for item in service.get(created["id"], actor)["history"]] == [
         "SUBMIT",
@@ -126,12 +129,15 @@ def test_graph_failure_is_recorded_and_can_be_retried() -> None:
     task = session.scalar(select(CorrectionSyncTask))
     correction = session.get(ManualCorrection, created["id"])
     projection = session.scalar(select(CorrectionProjection))
-    assert task is not None and task.status == "RETRYING"
+    assert task is not None
+    assert task.status == "RETRYING"
     assert task.mysql_status == "SUCCEEDED"
     assert task.graph_status == "FAILED"
     assert "graph unavailable" in task.last_error
-    assert correction is not None and correction.status == "SYNC_FAILED"
-    assert projection is not None and projection.version == 1
+    assert correction is not None
+    assert correction.status == "SYNC_FAILED"
+    assert projection is not None
+    assert projection.version == 1
 
     graph.fail = False
     retried = service.retry(created["id"], "恢复后重试", actor)
@@ -247,9 +253,12 @@ def test_projection_mode_soft_deletes_without_touching_graph() -> None:
     correction = session.get(ManualCorrection, created["id"])
     projection = session.scalar(select(CorrectionProjection))
     task = session.scalar(select(CorrectionSyncTask))
-    assert correction is not None and correction.status == "COMPLETED"
-    assert projection is not None and projection.active is False
-    assert task is not None and task.graph_status == "SKIPPED"
+    assert correction is not None
+    assert correction.status == "COMPLETED"
+    assert projection is not None
+    assert projection.active is False
+    assert task is not None
+    assert task.graph_status == "SKIPPED"
     assert graph.node_merges == []
 
 

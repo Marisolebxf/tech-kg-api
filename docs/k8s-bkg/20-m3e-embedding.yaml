@@ -1,4 +1,4 @@
-# m3e-embedding：专利向量化推理服务（后端镜像 baked 换启动命令）。
+# m3e-embedding：专利向量化推理服务（后端镜像 backend 换启动命令）。
 # 首次启动需从 HuggingFace 下载 moka-ai/m3e-small 模型，start_period 给足时间；
 # 若集群无法直连 HF，可在 env 增加 HF_ENDPOINT 指向镜像站。
 apiVersion: apps/v1
@@ -18,9 +18,11 @@ spec:
       labels:
         app: m3e-embedding
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: m3e-embedding
-          image: 10.50.62.9:30303/bkg/baked:v0.0.1
+          image: 10.50.62.9:30303/bkg/backend:v0.0.1
           imagePullPolicy: IfNotPresent
           command:
             [

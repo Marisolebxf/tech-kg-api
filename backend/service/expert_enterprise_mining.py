@@ -259,7 +259,6 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
             relations.append(entry)
 
         matched_count = len(relations)
-        # 未在企业表中找到的抽取企业，也带入关系列表并提醒（status=unmatched）
         for idx, sk in enumerate(skipped, start=matched_count + 1):
             relations.append(
                 {

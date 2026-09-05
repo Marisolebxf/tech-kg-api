@@ -110,8 +110,8 @@ MAPPER_BY_TABLE: dict[str, Any] = {
     "dwd_scholar": scholar_person,
     "dwd_zh_author": paper_author_person,
     "dwd_en_author": paper_author_person,
-    **{table: organization_role_person for table in PERSON_TABLES},
-    **{table: legal_representative_person for table in ORGANIZATION_TABLES},
+    **dict.fromkeys(PERSON_TABLES, organization_role_person),
+    **dict.fromkeys(ORGANIZATION_TABLES, legal_representative_person),
 }
 
 SOURCES = [

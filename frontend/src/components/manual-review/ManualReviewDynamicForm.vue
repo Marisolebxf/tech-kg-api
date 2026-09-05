@@ -22,12 +22,12 @@ const toggleEvidence=(item:unknown,checked:boolean)=>{ value.evidence=checked?[.
         <h3>缺失字段补录</h3><pre>{{ json(candidate?.missingFields) }}</pre><a-form-item field="fieldsJson"><a-textarea v-model="value.fieldsJson" :auto-size="{ minRows: 4, maxRows: 10 }" placeholder='{"field":"人工值"}' /></a-form-item>
       </template>
       <template v-else-if="section.type==='record-merge'">
-        <h3>重复记录定主</h3><pre>{{ json(candidate?.records) }}</pre><input v-model="value.mergeMaster" placeholder="主记录 ID" />
+        <h3>重复记录定主</h3><pre>{{ json(candidate?.records) }}</pre><input aria-label="主记录 ID" v-model="value.mergeMaster" placeholder="主记录 ID" />
       </template>
       <template v-else-if="section.type==='entity-comparison'">
         <h3>候选与存量实体</h3><div class="compare"><pre>{{ json(candidate) }}</pre><pre>{{ json(candidate?.existingCandidates) }}</pre></div>
         <a-form-item field="entityVerdict" label="实体裁决"><a-select v-model="value.entityVerdict" placeholder="请选择裁决结果"><a-option value="merge">合并</a-option><a-option value="create">新建</a-option><a-option value="retype">改类型</a-option><a-option value="reject">驳回</a-option></a-select></a-form-item>
-        <input v-model="value.targetEntityId" placeholder="目标实体 ID（合并时必填）" />
+        <input aria-label="目标实体 ID（合并时必填）" v-model="value.targetEntityId" placeholder="目标实体 ID（合并时必填）" />
       </template>
       <template v-else-if="section.type==='evidence-list'">
         <h3>关系证据</h3><a-checkbox v-for="(item,i) in evidence" :key="i" :model-value="value.evidence.includes(item)" @change="checked => toggleEvidence(item, checked === true)"><code>{{ json(item) }}</code></a-checkbox>

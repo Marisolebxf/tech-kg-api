@@ -32,6 +32,7 @@ from script.relation_extractors_one_relation.common import (
     graph_client,
 )
 from script.relation_extractors_one_relation.resolvers import keyword_vid
+from utils.runtime_paths import private_state_dir
 
 TABLES = ("dwd_zh_project", "dwd_en_project")
 PROJECT_SQL = "SELECT * FROM {table} ORDER BY id"
@@ -89,7 +90,8 @@ def _resolve_tables(payload: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _resolve_report_dir(payload: dict[str, Any], batch: str) -> Path:
-    return Path(payload.get("report_dir") or f"/tmp/project-ingest-reports/{batch}")
+    configured = payload.get("report_dir")
+    return Path(configured) if configured else private_state_dir("project-ingest-reports", batch)
 
 
 def _ensure_schema(dry_run: bool) -> None:

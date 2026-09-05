@@ -101,7 +101,8 @@ def test_event_and_business_idempotency():
     same_event = svc.create_review_required(report(), "graph-build")
     same_business = svc.create_review_required(report(event="evt-2"), "graph-build")
     assert first["reviewId"] == same_event["reviewId"] == same_business["reviewId"]
-    assert same_event["duplicate"] is True and same_business["duplicate"] is True
+    assert same_event["duplicate"] is True
+    assert same_business["duplicate"] is True
 
 
 def test_batch_requires_p0():
@@ -243,7 +244,9 @@ def test_direct_decide_candidate_meta_fields_ignored(monkeypatch):
         },
     )
     assert graph.writes, "实体直写走 nGQL INSERT VERTEX"
-    assert graph.writes[0].startswith("INSERT VERTEX Scholar(")  # 元字段以快照为准（Scholar），传入 _nodeLabel=Paper 被忽略
+    assert graph.writes[0].startswith(
+        "INSERT VERTEX Scholar("
+    )  # 元字段以快照为准（Scholar），传入 _nodeLabel=Paper 被忽略
 
 
 def test_direct_decide_empty_or_underscore_only_candidate_rejected(monkeypatch):

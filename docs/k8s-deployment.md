@@ -5,7 +5,7 @@
 > 说明：仓库内 README.md 描述的是旧的 Neo4j 版本，已过时；以本文与 `docker-compose.yml`、`CLAUDE.md` 为准。
 >
 > **对象存储已统一为 `operator-rustfs`（S3 兼容），不依赖 MinIO**：schema 脚本、operator 包、Milvus 内部存储共用同一个 RustFS 实例（`rustfsadmin` 凭证）。Milvus 的 `MINIO_*` 环境变量只是 Milvus 自身的配置项命名，指向的也是 RustFS。
-> 交付版清单（命名空间 `bkg`，含真实镜像仓库地址）见 `docs/k8s-bkg/`，与本文结构一致，可按环境二选一。
+> 交付版清单（含真实镜像仓库地址）见 `docs/k8s-bkg/`。命名空间统一为 `bkg`：TRS Graph 图数据库平台（trs-graph-service 等）同在 `bkg` 命名空间，本项目后端的 `TRS_GRAPH_BASE_URL=http://trs-graph-service:8090` 依赖同命名空间解析，**不可部署到其他命名空间**。
 
 ---
 
@@ -46,7 +46,7 @@
 | `milvus-etcd-data` | `milvus-etcd-data` | `/etcd` | 高 IOPS SSD |
 | `milvus-data` | `milvus-data` | `/var/lib/milvus` | 高 IOPS SSD |
 | `temporal-mysql-data` | `temporal-mysql-data` | `/var/lib/mysql` | SSD |
-| `workflow-state` | `workflow-state` | `/var/lib/tech-kg` | SSD |
+| `workflow-state` | `workflow-state` | `/var/lib/bkg` | SSD |
 | `m3e-model-cache` | `m3e-model-cache` | `/models/huggingface` | HDD 即可（只读模型缓存） |
 | `patent-index-state` | `patent-index-state` | `/app/var/patent_indexes` | SSD |
 | `operator-data` | `operator-data` | `/app/operators/user` | SSD |
@@ -71,19 +71,19 @@
 
 ```bash
 # 后端镜像（api / temporal-worker / m3e-embedding 共用）
-docker build -t <REGISTRY>/tech-kg-api:0.1.0 \
+docker build -t <REGISTRY>/bkg/backend:0.1.0 \
   --build-arg PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
   ./backend
 
 # 前端镜像（web）——一次构建、部署期注入（方案 B），不传任何 VITE_*；
 # 部署前缀等由 APP_BASE / TRS_GRAPH_SPACE / AUTH_ENABLED 等环境变量在运行时
 # 注入（见 docs/前端一次构建多环境部署方案.md），多环境共用同一镜像
-docker build -t <REGISTRY>/tech-kg-web:0.1.0 \
+docker build -t <REGISTRY>/bkg/web:0.1.0 \
   --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
   ./frontend
 
-docker push <REGISTRY>/tech-kg-api:0.1.0
-docker push <REGISTRY>/tech-kg-web:0.1.0
+docker push <REGISTRY>/bkg/backend:0.1.0
+docker push <REGISTRY>/bkg/web:0.1.0
 ```
 
 > `backend/Dockerfile` 默认从阿里云 PyPI 拉 `uv`，**不要切到清华源**（会 403）。
@@ -98,14 +98,14 @@ docker push <REGISTRY>/tech-kg-web:0.1.0
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: tech-kg
+  name: bkg
   labels:
-    app.kubernetes.io/part-of: tech-kg
+    app.kubernetes.io/part-of: bkg
 ```
 
 ```bash
 kubectl apply -f k8s/00-namespace.yaml
-kubectl config set-context --current --namespace=tech-kg
+kubectl config set-context --current --namespace=bkg
 ```
 
 ---
@@ -119,14 +119,16 @@ kubectl config set-context --current --namespace=tech-kg
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: tech-kg-config
-  namespace: tech-kg
+  name: bkg-config
+  namespace: bkg
 data:
   # ---- 前端部署前缀（web Pod envFrom 本 ConfigMap 运行时注入）----
   APP_BASE: /bkg_zpt
   # ---- 图数据库 ----
   TRS_GRAPH_BASE_URL: http://trs-graph-service:8090
   TRS_GRAPH_SPACE: dev
+  # TRS Graph 为单副本 storaged，建图空间必须 replica_factor=1（默认 3 会 Host not enough）
+  GRAPH_SPACE_REPLICA_FACTOR: "1"
   TRS_GRAPH_TIMEOUT: "30"
   # ---- 主 MySQL ----
   MYSQL_HOST: mysql
@@ -147,17 +149,17 @@ data:
   # ---- Temporal ----
   TEMPORAL_ADDRESS: temporal:7233
   TEMPORAL_NAMESPACE: default
-  TEMPORAL_TASK_QUEUE: tech-kg-workflows
+  TEMPORAL_TASK_QUEUE: bkg-workflows
   # 控制面库（workflow 编排状态）在 temporal-mysql 的 techkg_control，不再是 SQLite
   WORKFLOW_MYSQL_HOST: temporal-mysql
   WORKFLOW_MYSQL_PORT: "3306"
   WORKFLOW_MYSQL_DATABASE: techkg_control
   WORKFLOW_MYSQL_USERNAME: root
-  WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
+  WORKFLOW_SCRIPT_DIR: /var/lib/bkg/scripts
   # ---- schema S3（与 operator / milvus 共用 operator-rustfs） ----
   SCHEMA_AUTO_INIT: "true"
   SCHEMA_S3_ENDPOINT_URL: http://operator-rustfs:9000
-  SCHEMA_S3_BUCKET: tech-kg-schema-scripts
+  SCHEMA_S3_BUCKET: bkg-schema-scripts
   SCHEMA_S3_REGION: us-east-1
   SCHEMA_S3_SECURE: "false"
   SCHEMA_SCRIPT_MAX_BYTES: "10485760"
@@ -170,7 +172,7 @@ data:
   # ---- operator S3 (rustfs) ----
   OPERATOR_DIR: /app/operators/user
   OPERATOR_S3_ENDPOINT_URL: http://operator-rustfs:9000
-  OPERATOR_S3_BUCKET: tech-kg-operators
+  OPERATOR_S3_BUCKET: bkg-operators
   OPERATOR_S3_PREFIX: operators
   OPERATOR_S3_REGION: us-east-1
   # ---- 认证 ----
@@ -209,8 +211,8 @@ data:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: tech-kg-secret
-  namespace: tech-kg
+  name: bkg-secret
+  namespace: bkg
 type: Opaque
 stringData:
   TRS_GRAPH_API_KEY: ysukeg                  # 替换为真实 key
@@ -244,7 +246,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: milvus-etcd-data
-  namespace: tech-kg
+  namespace: bkg
 spec:
   accessModes: ["ReadWriteOnce"]
   resources: { requests: { storage: 10Gi } }
@@ -254,7 +256,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: milvus-data
-  namespace: tech-kg
+  namespace: bkg
 spec:
   accessModes: ["ReadWriteOnce"]
   resources: { requests: { storage: 100Gi } }
@@ -264,7 +266,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: temporal-mysql-data
-  namespace: tech-kg
+  namespace: bkg
 spec:
   accessModes: ["ReadWriteOnce"]
   resources: { requests: { storage: 50Gi } }
@@ -274,7 +276,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: workflow-state
-  namespace: tech-kg
+  namespace: bkg
 spec:
   accessModes: ["ReadWriteOnce"]
   resources: { requests: { storage: 10Gi } }
@@ -284,7 +286,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: m3e-model-cache
-  namespace: tech-kg
+  namespace: bkg
 spec:
   accessModes: ["ReadWriteOnce"]
   resources: { requests: { storage: 5Gi } }
@@ -293,7 +295,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: patent-index-state
-  namespace: tech-kg
+  namespace: bkg
 spec:
   accessModes: ["ReadWriteOnce"]
   resources: { requests: { storage: 20Gi } }
@@ -303,7 +305,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: operator-data
-  namespace: tech-kg
+  namespace: bkg
 spec:
   accessModes: ["ReadWriteOnce"]
   resources: { requests: { storage: 10Gi } }
@@ -313,7 +315,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: operator-rustfs-data
-  namespace: tech-kg
+  namespace: bkg
 spec:
   accessModes: ["ReadWriteOnce"]
   resources: { requests: { storage: 50Gi } }
@@ -322,7 +324,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: auth-redis-data
-  namespace: tech-kg
+  namespace: bkg
 spec:
   accessModes: ["ReadWriteOnce"]
   resources: { requests: { storage: 5Gi } }
@@ -343,7 +345,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: auth-redis
-  namespace: tech-kg
+  namespace: bkg
 spec:
   serviceName: auth-redis
   replicas: 1
@@ -376,7 +378,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: auth-redis
-  namespace: tech-kg
+  namespace: bkg
 spec:
   selector: { app: auth-redis }
   ports: [{ port: 6379, targetPort: 6379 }]
@@ -392,7 +394,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: operator-rustfs
-  namespace: tech-kg
+  namespace: bkg
 spec:
   serviceName: operator-rustfs
   replicas: 1
@@ -419,8 +421,8 @@ spec:
             capabilities: { drop: ["ALL"] }
             readOnlyRootFilesystem: false
           envFrom:
-            - secretRef: { name: tech-kg-secret }
-            - configMapRef: { name: tech-kg-config }
+            - secretRef: { name: bkg-secret }
+            - configMapRef: { name: bkg-config }
           env:
             - { name: RUSTFS_VOLUMES, value: /data }
             - { name: RUSTFS_ADDRESS, value: 0.0.0.0:9000 }
@@ -443,7 +445,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: operator-rustfs, namespace: tech-kg }
+metadata: { name: operator-rustfs, namespace: bkg }
 spec:
   selector: { app: operator-rustfs }
   ports:
@@ -457,7 +459,7 @@ spec:
 # k8s/33-milvus-etcd.yaml
 apiVersion: apps/v1
 kind: StatefulSet
-metadata: { name: milvus-etcd, namespace: tech-kg }
+metadata: { name: milvus-etcd, namespace: bkg }
 spec:
   serviceName: milvus-etcd
   replicas: 1
@@ -486,7 +488,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: milvus-etcd, namespace: tech-kg }
+metadata: { name: milvus-etcd, namespace: bkg }
 spec:
   selector: { app: milvus-etcd }
   ports: [{ port: 2379, targetPort: 2379 }]
@@ -496,7 +498,7 @@ spec:
 # k8s/35-milvus.yaml
 apiVersion: apps/v1
 kind: StatefulSet
-metadata: { name: milvus, namespace: tech-kg }
+metadata: { name: milvus, namespace: bkg }
 spec:
   serviceName: milvus
   replicas: 1
@@ -529,7 +531,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: milvus, namespace: tech-kg }
+metadata: { name: milvus, namespace: bkg }
 spec:
   selector: { app: milvus }
   ports:
@@ -543,7 +545,7 @@ spec:
 # k8s/36-temporal-mysql.yaml
 apiVersion: apps/v1
 kind: StatefulSet
-metadata: { name: temporal-mysql, namespace: tech-kg }
+metadata: { name: temporal-mysql, namespace: bkg }
 spec:
   serviceName: temporal-mysql
   replicas: 1
@@ -569,7 +571,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: temporal-mysql, namespace: tech-kg }
+metadata: { name: temporal-mysql, namespace: bkg }
 spec:
   selector: { app: temporal-mysql }
   ports: [{ port: 3306, targetPort: 3306 }]
@@ -579,7 +581,7 @@ spec:
 # k8s/37-temporal.yaml
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: temporal, namespace: tech-kg }
+metadata: { name: temporal, namespace: bkg }
 spec:
   replicas: 1
   selector: { matchLabels: { app: temporal } }
@@ -604,7 +606,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: temporal, namespace: tech-kg }
+metadata: { name: temporal, namespace: bkg }
 spec:
   selector: { app: temporal }
   ports: [{ port: 7233, targetPort: 7233 }]
@@ -614,7 +616,7 @@ spec:
 # k8s/38-temporal-ui.yaml
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: temporal-ui, namespace: tech-kg }
+metadata: { name: temporal-ui, namespace: bkg }
 spec:
   replicas: 1
   selector: { matchLabels: { app: temporal-ui } }
@@ -630,7 +632,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: temporal-ui, namespace: tech-kg }
+metadata: { name: temporal-ui, namespace: bkg }
 spec:
   selector: { app: temporal-ui }
   ports: [{ port: 8080, targetPort: 8080 }]
@@ -644,7 +646,7 @@ spec:
 # k8s/39-m3e-embedding.yaml
 apiVersion: apps/v1
 kind: StatefulSet
-metadata: { name: m3e-embedding, namespace: tech-kg }
+metadata: { name: m3e-embedding, namespace: bkg }
 spec:
   serviceName: m3e-embedding
   replicas: 1
@@ -654,7 +656,7 @@ spec:
     spec:
       containers:
         - name: m3e
-          image: <REGISTRY>/tech-kg-api:0.1.0
+          image: <REGISTRY>/bkg/backend:0.1.0
           command: [".venv/bin/uvicorn", "script.m3e_embedding_service:app", "--host", "0.0.0.0", "--port", "8010"]
           env:
             - { name: M3E_MODEL_NAME, value: moka-ai/m3e-small }
@@ -682,7 +684,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: m3e-embedding, namespace: tech-kg }
+metadata: { name: m3e-embedding, namespace: bkg }
 spec:
   selector: { app: m3e-embedding }
   ports: [{ port: 8010, targetPort: 8010 }]
@@ -698,7 +700,7 @@ spec:
 # k8s/50-api.yaml
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: api, namespace: tech-kg }
+metadata: { name: api, namespace: bkg }
 spec:
   replicas: 2
   selector: { matchLabels: { app: api } }
@@ -707,11 +709,11 @@ spec:
     spec:
       containers:
         - name: api
-          image: <REGISTRY>/tech-kg-api:0.1.0
+          image: <REGISTRY>/bkg/backend:0.1.0
           ports: [{ containerPort: 8000 }]
           envFrom:
-            - configMapRef: { name: tech-kg-config }
-            - secretRef: { name: tech-kg-secret }
+            - configMapRef: { name: bkg-config }
+            - secretRef: { name: bkg-secret }
           readinessProbe:
             httpGet: { path: /health, port: 8000 }
             periodSeconds: 5
@@ -723,7 +725,7 @@ spec:
           volumeMounts:
             - { name: operator-data, mountPath: /app/operators/user }
             - { name: patent-index-state, mountPath: /app/var/patent_indexes }
-            - { name: workflow-state, mountPath: /var/lib/tech-kg }
+            - { name: workflow-state, mountPath: /var/lib/bkg }
           resources:
             requests: { cpu: 500m, memory: 1Gi }
             limits: { cpu: 2, memory: 4Gi }
@@ -737,7 +739,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: api, namespace: tech-kg }
+metadata: { name: api, namespace: bkg }
 spec:
   selector: { app: api }
   ports: [{ port: 8000, targetPort: 8000 }]
@@ -751,7 +753,7 @@ spec:
 # k8s/51-temporal-worker.yaml
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: temporal-worker, namespace: tech-kg }
+metadata: { name: temporal-worker, namespace: bkg }
 spec:
   replicas: 1
   selector: { matchLabels: { app: temporal-worker } }
@@ -760,23 +762,23 @@ spec:
     spec:
       containers:
         - name: worker
-          image: <REGISTRY>/tech-kg-api:0.1.0
+          image: <REGISTRY>/bkg/backend:0.1.0
           command: [".venv/bin/python", "-m", "script.run_temporal_worker"]
           # activity 里直连 trs-graph / 主 MySQL / Milvus，复用 configmap+secret 即可；
           # 基础 env（TRS_GRAPH_* / MYSQL_* / MILVUS_* / WORKFLOW_MYSQL_*）都在
-          # tech-kg-config / tech-kg-secret 中，此处只放 worker 专属项。
+          # bkg-config / bkg-secret 中，此处只放 worker 专属项。
           envFrom:
-            - configMapRef: { name: tech-kg-config }
-            - secretRef: { name: tech-kg-secret }
+            - configMapRef: { name: bkg-config }
+            - secretRef: { name: bkg-secret }
           env:
             - { name: TEMPORAL_ADDRESS, value: temporal:7233 }
             - { name: TEMPORAL_NAMESPACE, value: default }
-            - { name: TEMPORAL_TASK_QUEUE, value: tech-kg-workflows }
-            - { name: WORKFLOW_SCRIPT_DIR, value: /var/lib/tech-kg/scripts }
+            - { name: TEMPORAL_TASK_QUEUE, value: bkg-workflows }
+            - { name: WORKFLOW_SCRIPT_DIR, value: /var/lib/bkg/scripts }
             - { name: TEMPORAL_MAX_CONCURRENT_ACTIVITIES, value: "4" }
-            - { name: ORG_MILVUS_STATE_DIR, value: /var/lib/tech-kg/organization_milvus }
+            - { name: ORG_MILVUS_STATE_DIR, value: /var/lib/bkg/organization_milvus }
           volumeMounts:
-            - { name: workflow-state, mountPath: /var/lib/tech-kg }
+            - { name: workflow-state, mountPath: /var/lib/bkg }
           resources:
             requests: { cpu: 500m, memory: 1Gi }
             limits: { cpu: 2, memory: 4Gi }
@@ -791,7 +793,7 @@ spec:
 # k8s/52-web.yaml
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: web, namespace: tech-kg }
+metadata: { name: web, namespace: bkg }
 spec:
   replicas: 2
   selector: { matchLabels: { app: web } }
@@ -800,10 +802,10 @@ spec:
     spec:
       containers:
         - name: web
-          image: <REGISTRY>/tech-kg-web:0.1.0
+          image: <REGISTRY>/bkg/web:0.1.0
           # 部署前缀等运行时注入（APP_BASE 等，与 api 共用同一 ConfigMap）
           envFrom:
-            - configMapRef: { name: tech-kg-config }
+            - configMapRef: { name: bkg-config }
           ports: [{ containerPort: 80 }]
           readinessProbe:
             httpGet: { path: /, port: 80 }
@@ -814,7 +816,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: web, namespace: tech-kg }
+metadata: { name: web, namespace: bkg }
 spec:
   selector: { app: web }
   ports: [{ port: 80, targetPort: 80 }]
@@ -838,7 +840,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: trs-graph-service
-  namespace: tech-kg
+  namespace: bkg
 spec:
   type: ExternalName
   externalName: trs-graph.host.example.com   # 真实外部地址
@@ -850,13 +852,13 @@ spec:
 # k8s/60-trs-graph-endpoints.yaml
 apiVersion: v1
 kind: Service
-metadata: { name: trs-graph-service, namespace: tech-kg }
+metadata: { name: trs-graph-service, namespace: bkg }
 spec:
   ports: [{ port: 8090, targetPort: 8090 }]
 ---
 apiVersion: v1
 kind: Endpoints
-metadata: { name: trs-graph-service, namespace: tech-kg }
+metadata: { name: trs-graph-service, namespace: bkg }
 subsets:
   - addresses:
       - ip: 10.0.0.20
@@ -870,7 +872,7 @@ subsets:
 # k8s/61-mysql-externalname.yaml
 apiVersion: v1
 kind: Service
-metadata: { name: mysql, namespace: tech-kg }
+metadata: { name: mysql, namespace: bkg }
 spec:
   type: ExternalName
   externalName: mysql.prod.svc.cluster.local   # 或外部地址
@@ -886,7 +888,7 @@ spec:
 # k8s/70-init-db-job.yaml
 apiVersion: batch/v1
 kind: Job
-metadata: { name: init-db, namespace: tech-kg }
+metadata: { name: init-db, namespace: bkg }
 spec:
   backoffLimit: 4
   ttlSecondsAfterFinished: 600
@@ -895,18 +897,18 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: init-db
-          image: <REGISTRY>/tech-kg-api:0.1.0
+          image: <REGISTRY>/bkg/backend:0.1.0
           command: [".venv/bin/python", "-m", "script.init_db"]
           envFrom:
-            - configMapRef: { name: tech-kg-config }
-            - secretRef: { name: tech-kg-secret }
+            - configMapRef: { name: bkg-config }
+            - secretRef: { name: bkg-secret }
 ```
 
 ```yaml
 # k8s/71-init-graph-schema-job.yaml
 apiVersion: batch/v1
 kind: Job
-metadata: { name: init-graph-schema, namespace: tech-kg }
+metadata: { name: init-graph-schema, namespace: bkg }
 spec:
   backoffLimit: 6              # CREATE SPACE 有传播延迟，失败重试
   template:
@@ -914,11 +916,11 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: init-graph
-          image: <REGISTRY>/tech-kg-api:0.1.0
+          image: <REGISTRY>/bkg/backend:0.1.0
           command: [".venv/bin/python", "-m", "script.init_graph_schema"]
           envFrom:
-            - configMapRef: { name: tech-kg-config }
-            - secretRef: { name: tech-kg-secret }
+            - configMapRef: { name: bkg-config }
+            - secretRef: { name: bkg-secret }
 ```
 
 > **注意**：`init_paper_journal_schema.py` 会 DROP dev 空间，切勿在共享环境运行。详见内部记忆条目「trs-graph-service 的三个坑」。
@@ -932,8 +934,8 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: tech-kg-ingress
-  namespace: tech-kg
+  name: bkg-ingress
+  namespace: bkg
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: 50m
     nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
@@ -942,10 +944,10 @@ metadata:
 spec:
   ingressClassName: nginx
   tls:
-    - hosts: [tech-kg.example.com]
-      secretName: tech-kg-tls
+    - hosts: [bkg.example.com]
+      secretName: bkg-tls
   rules:
-    - host: tech-kg.example.com
+    - host: bkg.example.com
       http:
         paths:
           - path: /api/
@@ -970,7 +972,7 @@ spec:
 # k8s/90-hpa-api.yaml
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
-metadata: { name: api, namespace: tech-kg }
+metadata: { name: api, namespace: bkg }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -1027,9 +1029,9 @@ kubectl apply -f k8s/90-hpa-api.yaml
 ### 等待就绪
 
 ```bash
-kubectl -n tech-kg wait --for=condition=ready pod -l app=api --timeout=300s
-kubectl -n tech-kg rollout status deploy/api
-kubectl -n tech-kg rollout status deploy/web
+kubectl -n bkg wait --for=condition=ready pod -l app=api --timeout=300s
+kubectl -n bkg rollout status deploy/api
+kubectl -n bkg rollout status deploy/web
 ```
 
 ---
@@ -1038,21 +1040,21 @@ kubectl -n tech-kg rollout status deploy/web
 
 ```bash
 # 1) Pod 全部 Running
-kubectl -n tech-kg get pods -o wide
+kubectl -n bkg get pods -o wide
 
 # 2) Service 端口
-kubectl -n tech-kg get svc
+kubectl -n bkg get svc
 
 # 3) api 健康检查
-kubectl -n tech-kg port-forward svc/api 8000:8000
+kubectl -n bkg port-forward svc/api 8000:8000
 curl http://127.0.0.1:8000/health    # {"status":"ok"}
 
 # 4) 前端
-kubectl -n tech-kg port-forward svc/web 8080:80
+kubectl -n bkg port-forward svc/web 8080:80
 curl -I http://127.0.0.1:8080/
 
 # 5) Temporal UI
-kubectl -n tech-kg port-forward svc/temporal-ui 8233:8080
+kubectl -n bkg port-forward svc/temporal-ui 8233:8080
 
 # 6) 模块 catalog（需要先登录或关闭 AUTH_ENABLED）
 curl http://127.0.0.1:8000/api/v1/kg-construction/options
@@ -1066,15 +1068,15 @@ curl http://127.0.0.1:8000/api/v1/kg-construction/options
 
 ```bash
 # 日志
-kubectl -n tech-kg logs -f deploy/api
-kubectl -n tech-kg logs -f deploy/temporal-worker
-kubectl -n tech-kg logs -f statefulset/m3e-embedding
+kubectl -n bkg logs -f deploy/api
+kubectl -n bkg logs -f deploy/temporal-worker
+kubectl -n bkg logs -f statefulset/m3e-embedding
 
 # 进容器
-kubectl -n tech-kg exec -it deploy/api -- .venv/bin/python -c "from infra.mysql import get_mysql_client; print(get_mysql_client())"
+kubectl -n bkg exec -it deploy/api -- .venv/bin/python -c "from infra.mysql import get_mysql_client; print(get_mysql_client())"
 
 # 重启 Deployment
-kubectl -n tech-kg rollout restart deploy/api
+kubectl -n bkg rollout restart deploy/api
 ```
 
 ### 16.2 关键陷阱
@@ -1108,15 +1110,15 @@ kubectl -n tech-kg rollout restart deploy/api
 
 ```bash
 # 构建新 tag → 推送
-docker build -t <REGISTRY>/tech-kg-api:0.2.0 ./backend
-docker push <REGISTRY>/tech-kg-api:0.2.0
+docker build -t <REGISTRY>/bkg/backend:0.2.0 ./backend
+docker push <REGISTRY>/bkg/backend:0.2.0
 
 # 滚动更新
-kubectl -n tech-kg set image deploy/api api=<REGISTRY>/tech-kg-api:0.2.0
-kubectl -n tech-kg set image deploy/temporal-worker worker=<REGISTRY>/tech-kg-api:0.2.0
-kubectl -n tech-kg set image statefulset/m3e-embedding m3e=<REGISTRY>/tech-kg-api:0.2.0
+kubectl -n bkg set image deploy/api api=<REGISTRY>/bkg/backend:0.2.0
+kubectl -n bkg set image deploy/temporal-worker worker=<REGISTRY>/bkg/backend:0.2.0
+kubectl -n bkg set image statefulset/m3e-embedding m3e=<REGISTRY>/bkg/backend:0.2.0
 
-kubectl -n tech-kg rollout status deploy/api
+kubectl -n bkg rollout status deploy/api
 ```
 
 ### 16.5 备份

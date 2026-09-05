@@ -123,7 +123,8 @@ def keyword_values(value: Any) -> list[str]:
 
 def keyword_vid(keyword: str) -> str:
     normalized = keyword.casefold().encode("utf-8")
-    return f"keyword_{hashlib.md5(normalized).hexdigest()}"  # noqa: S324
+    # Compatibility identifier only; it is not used for integrity or authentication.
+    return f"keyword_{hashlib.md5(normalized, usedforsecurity=False).hexdigest()}"
 
 
 def json_snapshot(value: Any) -> str:
@@ -215,6 +216,7 @@ def keyword_statements(
     rows: list[dict[str, Any]], batch_id: str = "", ingest_time: datetime | None = None
 ) -> tuple[str, str]:
     """生成Keyword顶点和HAS_KEYWORD边nGQL。"""
+    _ = batch_id, ingest_time
     vertices: dict[str, str] = {}
     edges: dict[tuple[str, str], str] = {}
     for row in rows:
@@ -233,8 +235,8 @@ def keyword_statements(
         vertex_ngql = f"INSERT VERTEX Keyword(keyword,confidence,organization_base,organization_id) VALUES {values};"
     if edges:
         values = ",".join(
-            f"{ngql_string(src)}->{ngql_string(dst)}:(1.0,{ngql_string('dwd_patent')},{ngql_string(src.removeprefix('patent_'))})"
-            for src, dst in edges
+            f"{ngql_string(src)}->{ngql_string(dst)}:(1.0,{ngql_string('dwd_patent')},{ngql_string(source_record_id)})"
+            for (src, dst), source_record_id in edges.items()
         )
         edge_ngql = (
             f"INSERT EDGE HAS_KEYWORD(confidence,source_table,source_record_id) VALUES {values};"
@@ -277,7 +279,7 @@ DDL_FILE = Path(__file__).resolve().parents[1] / "schemas" / "ddl" / "patent_ddl
 def ensure_schema(graph: Any) -> None:
     """幂等创建本加载器所需Schema，并为旧HAS_KEYWORD补字段。"""
     ddl = DDL_FILE.read_text(encoding="utf-8")
-    definitions = re.findall(r"CREATE\s+(?:TAG|EDGE)\b.*?;", ddl, flags=re.I | re.S)
+    definitions = re.findall(r"CREATE\s+(?:TAG|EDGE)\b[^;]*;", ddl, flags=re.I)
     for statement in definitions:
         graph.execute_write(statement)
     for name in ("PatentFamily", "MEMBER_OF_FAMILY"):

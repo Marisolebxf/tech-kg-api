@@ -46,8 +46,6 @@ _MAX_SUBGRAPH_SEEDS = 5
 # 用信号量把同时打到图服务的请求数压住。
 _GRAPH_API_CONCURRENCY = 6
 _graph_api_semaphore = asyncio.Semaphore(_GRAPH_API_CONCURRENCY)
-# 全景图结果缓存：图数据按批次入库、变更频率低，实时组装一次要数秒，
-# 同参数查询直接复用上次结果，过期后台刷新。
 _PANORAMA_CACHE_TTL_SECONDS = 600.0
 # 缓存键：产业关键词 / 锚点 VID / 展开层级 / topK / 关系筛选（逗号拼接的边类型）
 _panorama_cache: dict[tuple[str, str, int, int, str], tuple[float, dict[str, Any]]] = {}
@@ -171,8 +169,6 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
         has_real_layers = any(layer["items"] for layer in layers)
         if not has_real_layers:
-            # 关键词没命中时如实返回空分层并标明原因，不再塞内置示例数据，
-            # 避免用户把假数据当成真实查询结果。
             if fallback_reason is None:
                 fallback_reason = "keyword_no_match" if industry_kw else "empty_result"
             logger.info(
@@ -585,8 +581,6 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         seed = anchor_id or (seed_vids[0] if seed_vids else None)
         if not seed:
             return {"nodes": [], "edges": []}
-        # 以锚点为中心；未指定锚点时对前几个种子各扩一跳子图再合并，
-        # 只用一个种子时图里往往只有两三个节点。
         seeds = [seed] if anchor_id else [s for s in seed_vids if s != seed][:_MAX_SUBGRAPH_SEEDS]
         if not seeds:
             seeds = [seed]

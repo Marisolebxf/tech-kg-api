@@ -41,7 +41,8 @@ _PAPER_SUFFIX_RE = re.compile(r"__\d+$")
 def keyword_vid(keyword: str) -> str:
     """三域统一：NFKC + 空白折叠 + casefold 后的完整 md5（专利域旧公式）。"""
     normalized = " ".join(unicodedata.normalize("NFKC", str(keyword)).strip().split())
-    return f"keyword_{hashlib.md5(normalized.casefold().encode('utf-8')).hexdigest()}"
+    digest = hashlib.md5(normalized.casefold().encode("utf-8"), usedforsecurity=False).hexdigest()
+    return f"keyword_{digest}"
 
 
 def paper_source_id(raw_id: Any) -> str:
@@ -52,7 +53,7 @@ def paper_source_id(raw_id: Any) -> str:
 
 def paper_stub_vid(prefix: str, key: str) -> str:
     """论文工作流旧口径的 md5 桩：``{prefix}_{md5(key)[:16]}``（key 不做归一）。"""
-    digest = hashlib.md5(key.encode("utf-8")).hexdigest()
+    digest = hashlib.md5(key.encode("utf-8"), usedforsecurity=False).hexdigest()
     return f"{prefix}_{digest[:16]}"
 
 

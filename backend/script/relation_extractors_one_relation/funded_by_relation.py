@@ -13,7 +13,6 @@ REST merge_edge 按 source_record_id（= 项目 ID）幂等。
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from script.extract_transform_common import edge_transform
@@ -33,6 +32,7 @@ from script.relation_extractors_one_relation.common import (
     graph_client,
     iter_rows,
     mysql_engine,
+    resolve_report_dir,
 )
 
 TABLES = ("dwd_zh_project", "dwd_en_project")
@@ -160,10 +160,6 @@ def _resolve_tables(payload: dict[str, Any]) -> tuple[str, ...]:
     return TABLES if table_choice == "all" else (str(table_choice),)
 
 
-def _resolve_report_dir(payload: dict[str, Any], batch: str) -> Path:
-    return Path(payload.get("report_dir") or f"/tmp/project-ingest-reports/{batch}")
-
-
 def _collect_candidates(
     database: str,
     tables: tuple[str, ...],
@@ -214,7 +210,7 @@ def transform(payload: dict[str, Any]) -> dict[str, Any]:
     candidates.discard("")
     matcher = _load_matcher(candidates, dry_run=False)
     report = ProjectIngestReport(
-        _resolve_report_dir(payload, batch), ingest_batch=batch, dry_run=False
+        resolve_report_dir(payload, batch), ingest_batch=batch, dry_run=False
     )
     result = edge_transform(payload, builder=make_funded_by_mapper(matcher, report))
     result["report_dir"] = str(report.report_dir)

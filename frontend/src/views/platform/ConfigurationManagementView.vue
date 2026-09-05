@@ -652,28 +652,28 @@ onMounted(() => {
       <div class="detail-drawer-body">
         <section class="health-card"><i :class="`is-${selected.status}`" /><div><strong>{{ selected.status === '正常' ? '配置可用' : selected.status === '异常' ? '连接存在异常' : '配置已停用' }}</strong><span>后端真实探活</span></div><button type="button" :disabled="testingId === selected.id" @click="testConnection(selected)">{{ testingId === selected.id ? '测试中…' : '测试连接' }}</button></section>
         <a-form ref="detailFormRef" :model="selected" :rules="detailFormRules" class="detail-form" layout="vertical">
-          <a-form-item field="name" label="配置名称" required><input v-model="selected.name" /></a-form-item>
-          <a-form-item label="服务类型"><input :value="selected.type" readonly /></a-form-item>
+          <a-form-item field="name" label="配置名称" required><input aria-label="name" v-model="selected.name" /></a-form-item>
+          <a-form-item label="服务类型"><input aria-label="input-field" :value="selected.type" readonly /></a-form-item>
           <template v-if="selected.kind === 'llm' || selected.kind === 'embedding'">
-            <a-form-item class="wide" field="baseUrl" label="Base URL" required><input v-model="selected.baseUrl" /></a-form-item>
-            <a-form-item field="model" label="模型" required><input v-model="selected.model" /></a-form-item>
-            <a-form-item v-if="selected.kind === 'embedding'" label="维度"><input v-model.number="selected.dimensions" type="number" /></a-form-item>
-            <a-form-item label="访问凭据"><input :value="selected.apiKeyMasked || (selected.hasApiKey ? '••••••••' : '未设置')" readonly /></a-form-item>
-            <a-form-item class="wide" label="更新 API Key（留空保留原值）"><input v-model="selected.apiKey" type="password" placeholder="输入新 Key 覆盖原值" /></a-form-item>
+            <a-form-item class="wide" field="baseUrl" label="Base URL" required><input aria-label="baseUrl" v-model="selected.baseUrl" /></a-form-item>
+            <a-form-item field="model" label="模型" required><input aria-label="model" v-model="selected.model" /></a-form-item>
+            <a-form-item v-if="selected.kind === 'embedding'" label="维度"><input aria-label="number-input" v-model.number="selected.dimensions" type="number" /></a-form-item>
+            <a-form-item label="访问凭据"><input aria-label="input-field" :value="selected.apiKeyMasked || (selected.hasApiKey ? '••••••••' : '未设置')" readonly /></a-form-item>
+            <a-form-item class="wide" label="更新 API Key（留空保留原值）"><input aria-label="输入新 Key 覆盖原值" v-model="selected.apiKey" type="password" placeholder="输入新 Key 覆盖原值" /></a-form-item>
           </template>
           <template v-else-if="selected.kind === 'mysql'">
-            <a-form-item field="host" label="主机" required><input v-model="selected.host" /></a-form-item>
-            <a-form-item label="端口"><input v-model.number="selected.port" type="number" /></a-form-item>
-            <a-form-item label="默认库"><input v-model="selected.defaultDatabase" /></a-form-item>
-            <a-form-item field="username" label="用户名" required><input v-model="selected.username" /></a-form-item>
-            <a-form-item label="访问凭据"><input :value="selected.passwordMasked || (selected.hasPassword ? '••••••••' : '未设置')" readonly /></a-form-item>
-            <a-form-item class="wide" label="更新密码（留空保留原值）"><input v-model="selected.password" type="password" placeholder="输入新密码覆盖原值" /></a-form-item>
+            <a-form-item field="host" label="主机" required><input aria-label="host" v-model="selected.host" /></a-form-item>
+            <a-form-item label="端口"><input aria-label="number-input" v-model.number="selected.port" type="number" /></a-form-item>
+            <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="selected.defaultDatabase" /></a-form-item>
+            <a-form-item field="username" label="用户名" required><input aria-label="username" v-model="selected.username" /></a-form-item>
+            <a-form-item label="访问凭据"><input aria-label="input-field" :value="selected.passwordMasked || (selected.hasPassword ? '••••••••' : '未设置')" readonly /></a-form-item>
+            <a-form-item class="wide" label="更新密码（留空保留原值）"><input aria-label="输入新密码覆盖原值" v-model="selected.password" type="password" placeholder="输入新密码覆盖原值" /></a-form-item>
           </template>
           <template v-else>
-            <a-form-item class="wide" label="URI"><input v-model="selected.uri" placeholder="留空回退 env MILVUS_*" /></a-form-item>
-            <a-form-item label="默认库"><input v-model="selected.defaultDb" /></a-form-item>
-            <a-form-item label="访问凭据"><input :value="selected.tokenMasked || (selected.hasToken ? '••••••••' : '未设置')" readonly /></a-form-item>
-            <a-form-item class="wide" label="更新 Token（留空保留原值）"><input v-model="selected.token" type="password" placeholder="输入新 Token 覆盖原值" /></a-form-item>
+            <a-form-item class="wide" label="URI"><input aria-label="留空回退 env MILVUS_*" v-model="selected.uri" placeholder="留空回退 env MILVUS_*" /></a-form-item>
+            <a-form-item label="默认库"><input aria-label="defaultDb" v-model="selected.defaultDb" /></a-form-item>
+            <a-form-item label="访问凭据"><input aria-label="input-field" :value="selected.tokenMasked || (selected.hasToken ? '••••••••' : '未设置')" readonly /></a-form-item>
+            <a-form-item class="wide" label="更新 Token（留空保留原值）"><input aria-label="输入新 Token 覆盖原值" v-model="selected.token" type="password" placeholder="输入新 Token 覆盖原值" /></a-form-item>
           </template>
           <a-form-item class="wide" label="配置说明"><a-textarea v-model="selected.description" /></a-form-item>
         </a-form>
@@ -694,7 +694,7 @@ onMounted(() => {
         <header><div><h2>新建图数据空间</h2></div><button type="button" @click="spaceDialogOpen=false">×</button></header>
         <a-form class="dialog-form" layout="vertical" :model="{}">
           <a-form-item class="wide" label="图数据空间名称" required>
-            <input v-model="newSpaceName" placeholder="仅字母、数字、下划线，以字母或下划线开头" />
+            <input aria-label="仅字母、数字、下划线，以字母或下划线开头" v-model="newSpaceName" placeholder="仅字母、数字、下划线，以字母或下划线开头" />
           </a-form-item>
           <p class="space-dialog-hint">将真实执行 CREATE SPACE 并自动绑定到你的账号；空间创建后有秒级传播延迟。</p>
         </a-form>
@@ -705,25 +705,25 @@ onMounted(() => {
       <header><div><span>NEW CONFIGURATION</span><h2>新建{{ categories.find(item => item.key === activeCategory)?.label }}</h2></div><button type="button" @click="dialogOpen=false">×</button></header>
       <a-form ref="configFormRef" :model="form" :rules="configFormRules" class="dialog-form config-create-form" layout="vertical">
         <template v-if="formKind === 'llm' || formKind === 'embedding'">
-          <a-form-item class="wide" field="name" label="配置名称" required><input v-model="form.name" placeholder="例如：科技文本抽取大模型" /></a-form-item>
-          <a-form-item class="wide" field="baseUrl" label="Base URL" required><input v-model="form.baseUrl" /></a-form-item>
-          <a-form-item class="wide" field="model" label="模型" required><input v-model="form.model" /></a-form-item>
-          <a-form-item v-if="formKind === 'embedding'" field="dimensions" label="维度"><input v-model.number="form.dimensions" type="number" /></a-form-item>
-          <a-form-item class="wide" field="apiKey" label="API Key" required><input v-model="form.apiKey" type="password" placeholder="必填；验证通过后才能保存，明文入库脱敏展示" /></a-form-item>
+          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="例如：科技文本抽取大模型" v-model="form.name" placeholder="例如：科技文本抽取大模型" /></a-form-item>
+          <a-form-item class="wide" field="baseUrl" label="Base URL" required><input aria-label="baseUrl" v-model="form.baseUrl" /></a-form-item>
+          <a-form-item class="wide" field="model" label="模型" required><input aria-label="model" v-model="form.model" /></a-form-item>
+          <a-form-item v-if="formKind === 'embedding'" field="dimensions" label="维度"><input aria-label="number-input" v-model.number="form.dimensions" type="number" /></a-form-item>
+          <a-form-item class="wide" field="apiKey" label="API Key" required><input aria-label="必填；验证通过后才能保存，明文入库脱敏展示" v-model="form.apiKey" type="password" placeholder="必填；验证通过后才能保存，明文入库脱敏展示" /></a-form-item>
         </template>
         <template v-else-if="formKind === 'mysql'">
-          <a-form-item class="wide" field="name" label="配置名称" required><input v-model="form.name" /></a-form-item>
-          <a-form-item field="host" label="主机" required><input v-model="form.host" /></a-form-item>
-          <a-form-item label="端口"><input v-model.number="form.port" type="number" /></a-form-item>
-          <a-form-item label="默认库"><input v-model="form.defaultDatabase" /></a-form-item>
-          <a-form-item field="username" label="用户名" required><input v-model="form.username" /></a-form-item>
-          <a-form-item class="wide" label="密码"><input v-model="form.password" type="password" /></a-form-item>
+          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="name" v-model="form.name" /></a-form-item>
+          <a-form-item field="host" label="主机" required><input aria-label="host" v-model="form.host" /></a-form-item>
+          <a-form-item label="端口"><input aria-label="number-input" v-model.number="form.port" type="number" /></a-form-item>
+          <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="form.defaultDatabase" /></a-form-item>
+          <a-form-item field="username" label="用户名" required><input aria-label="username" v-model="form.username" /></a-form-item>
+          <a-form-item class="wide" label="密码"><input aria-label="password" v-model="form.password" type="password" /></a-form-item>
         </template>
         <template v-else-if="formKind === 'milvus'">
-          <a-form-item class="wide" field="name" label="配置名称" required><input v-model="form.name" /></a-form-item>
-          <a-form-item class="wide" label="URI"><input v-model="form.uri" placeholder="留空回退 env MILVUS_*" /></a-form-item>
-          <a-form-item label="默认库"><input v-model="form.defaultDb" /></a-form-item>
-          <a-form-item class="wide" label="Token"><input v-model="form.token" type="password" /></a-form-item>
+          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="name" v-model="form.name" /></a-form-item>
+          <a-form-item class="wide" label="URI"><input aria-label="留空回退 env MILVUS_*" v-model="form.uri" placeholder="留空回退 env MILVUS_*" /></a-form-item>
+          <a-form-item label="默认库"><input aria-label="defaultDb" v-model="form.defaultDb" /></a-form-item>
+          <a-form-item class="wide" label="Token"><input aria-label="token" v-model="form.token" type="password" /></a-form-item>
         </template>
         <a-form-item class="wide" label="说明"><a-textarea v-model="form.description" :max-length="200" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" /></a-form-item>
         <a-form-item class="wide" field="isDefault"><a-checkbox v-model="form.isDefault" class="default-config-checkbox">设为默认（同一类别仅一条默认生效）</a-checkbox></a-form-item>

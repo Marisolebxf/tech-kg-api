@@ -9,6 +9,7 @@ load_patent_graph / load_project_graph / load_industry_chain_graph）的口径�
 from __future__ import annotations
 
 import json
+import math
 import re
 import unicodedata
 from collections.abc import Mapping
@@ -390,7 +391,7 @@ def _has_value(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip() != ""
     if isinstance(value, (int, float)):
-        return float(value) != 0.0
+        return not math.isclose(float(value), 0.0)
     return bool(value)
 
 

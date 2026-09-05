@@ -249,7 +249,7 @@ def _save_state(
     type_counts: dict[str, int],
     embedding_model: str,
 ) -> None:
-    from datetime import datetime
+    from datetime import UTC, datetime
 
     from db_model.entity_search import EntitySearchState
 
@@ -268,7 +268,7 @@ def _save_state(
     row.entity_count = entity_count
     row.type_counts = json.dumps(type_counts, ensure_ascii=False)
     row.embedding_model = embedding_model
-    row.updated_at = datetime.utcnow()
+    row.updated_at = datetime.now(UTC)
     session.commit()
 
 

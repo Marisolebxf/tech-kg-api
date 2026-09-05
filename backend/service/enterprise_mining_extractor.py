@@ -64,7 +64,13 @@ def _build_prompt(profile: dict[str, Any]) -> str:
 
 def _parse_json_array(text: str) -> list | None:
     text = text.strip()
-    text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.MULTILINE).strip()
+    if text.startswith("```"):
+        opening_end = text.find("\n")
+        opening = text[:opening_end].strip().lower() if opening_end >= 0 else ""
+        if opening in {"```", "```json"}:
+            text = text[opening_end + 1 :]
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3].rstrip()
     start, end = text.find("["), text.rfind("]")
     if start == -1 or end == -1 or end < start:
         return None

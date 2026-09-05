@@ -54,7 +54,9 @@ def test_build_org_node_props():
         incorporation_year=1911,
     )
     p = build_org_node_props(o)
-    assert p["org_id"] == "O1" and p["name_cn"] == "清华大学" and p["province"] == "北京市"
+    assert p["org_id"] == "O1"
+    assert p["name_cn"] == "清华大学"
+    assert p["province"] == "北京市"
 
 
 def test_load_graph_empty_mysql(monkeypatch):

@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -99,7 +99,7 @@ class GraphSpaceService:
         if not self.is_bound(actor.user_id, space_name):
             self._session.add(
                 UserGraphSpace(
-                    user_id=actor.user_id, space_name=space_name, created_at=datetime.utcnow()
+                    user_id=actor.user_id, space_name=space_name, created_at=datetime.now(UTC)
                 )
             )
             self._session.commit()
@@ -155,7 +155,7 @@ class GraphSpaceService:
         if not self.is_bound(actor.user_id, space_name):
             self._session.add(
                 UserGraphSpace(
-                    user_id=actor.user_id, space_name=space_name, created_at=datetime.utcnow()
+                    user_id=actor.user_id, space_name=space_name, created_at=datetime.now(UTC)
                 )
             )
             self._session.commit()

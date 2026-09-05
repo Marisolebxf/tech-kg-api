@@ -38,19 +38,19 @@ const example: PlatformOverviewData = {
   entityStructure: [
     { label: '专家/人才', schema: 'Expert', count: '4,286 万', ratio: 34, tone: '#2e90fa' },
     { label: '论文成果', schema: 'Paper', count: '2,931 万', ratio: 23, tone: '#7a5af8' },
-    { label: '机构/企业', schema: 'Organization', count: '2,164 万', ratio: 17, tone: '#12b76a' },
+    { label: '机构/企业', schema: 'Organization', count: '2,164 万', ratio: 17, tone: '#067647' },
     { label: '项目/专利', schema: 'Project / Patent', count: '1,438 万', ratio: 11, tone: '#f79009' },
-    { label: '其他实体', schema: 'Event / Product / Field', count: '1,901 万', ratio: 15, tone: '#98a2b3' },
+    { label: '其他实体', schema: 'Event / Product / Field', count: '1,901 万', ratio: 15, tone: '#59636f' },
   ],
   relationStructure: [
-    { label: '发表/引用/成果', schema: 'PUBLISH / CITES / OUTPUT', count: '2.04 亿', ratio: 32, tone: '#165dff' },
+    { label: '发表/引用/成果', schema: 'PUBLISH / CITES / OUTPUT', count: '2.04 亿', ratio: 32, tone: '#004ecc' },
     { label: '任职/就读/作者单位', schema: 'WORKS_AT / STUDY_AT', count: '1.28 亿', ratio: 20, tone: '#2e90fa' },
     { label: '项目/专利参与', schema: 'LEAD_PROJECT / INVENT_PATENT', count: '1.16 亿', ratio: 18, tone: '#06aed4' },
     { label: '企业/产品/事件', schema: 'HAS_PRODUCT / HAS_EVENT', count: '0.92 亿', ratio: 14, tone: '#7a5af8' },
-    { label: '其他关系', schema: '产业链 / 推理关系', count: '1.02 亿', ratio: 16, tone: '#98a2b3' },
+    { label: '其他关系', schema: '产业链 / 推理关系', count: '1.02 亿', ratio: 16, tone: '#59636f' },
   ],
 }
 
 export function getExamplePlatformOverview(): PlatformOverviewData {
-  return JSON.parse(JSON.stringify(example)) as PlatformOverviewData
+  return structuredClone(example)
 }

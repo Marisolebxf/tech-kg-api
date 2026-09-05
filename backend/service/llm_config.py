@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from openai import OpenAI
@@ -86,7 +86,7 @@ class LlmConfigService:
         return _to_out(row) if row else None
 
     def create_config(self, payload: dict) -> dict:
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         config_id = f"LLM-{uuid.uuid4().hex[:8].upper()}"
         row = self._dao.create(
             id=config_id,
@@ -110,7 +110,7 @@ class LlmConfigService:
         row = self._dao.get(config_id)
         if row is None:
             return None
-        updates: dict = {"updated_at": datetime.utcnow()}
+        updates: dict = {"updated_at": datetime.now(UTC)}
         for field in ("name", "description", "base_url", "model", "owner", "is_default", "status"):
             if field in payload and payload[field] is not None:
                 updates[field] = payload[field]
@@ -140,7 +140,7 @@ class LlmConfigService:
         if row is None:
             return None
         self._dao.clear_other_defaults(config_id, owner=row.owner)
-        updated = self._dao.update(config_id, is_default=True, updated_at=datetime.utcnow())
+        updated = self._dao.update(config_id, is_default=True, updated_at=datetime.now(UTC))
         reset_llm_client()
         return _to_out(updated) if updated else None
 

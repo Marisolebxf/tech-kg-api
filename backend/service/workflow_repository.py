@@ -579,9 +579,7 @@ class WorkflowRepository:
                     "result": "等待人工确认" if blocking else "任务已完成并产生可验收结果",
                     "status": "待人工处理" if status == "等待人工审核" else "已完成",
                     "taskStatus": status,
-                    "dataDomain": f"{domain}域"
-                    if domain not in {"企业", "专利"}
-                    else f"{domain}域",
+                    "dataDomain": f"{domain}域",
                     "processedAt": f"2026-07-{13 if batch_id.endswith('13') else 14} 10:{8 + index:02d}:00",
                     "reviewType": review_type or None,
                     "currentStep": next(

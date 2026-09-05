@@ -25,6 +25,8 @@ spec:
       labels:
         app: temporal-mysql
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: mysql
           image: 10.50.62.9:30303/library/mysql:8.4
@@ -91,6 +93,8 @@ spec:
       labels:
         app: temporal
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: temporal
           image: 10.50.62.9:30303/library/temporal-auto-setup:1.29.2
@@ -160,6 +164,8 @@ spec:
       labels:
         app: temporal-ui
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: temporal-ui
           image: 10.50.62.9:30303/library/temporal-ui:2.39.0

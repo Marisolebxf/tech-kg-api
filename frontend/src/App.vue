@@ -15,7 +15,7 @@ const showEmbeddedAuthState = computed(
 </script>
 
 <template>
-  <main v-if="showEmbeddedAuthState" class="portal-auth-state" role="status">
+  <output v-if="showEmbeddedAuthState" class="portal-auth-state">
     <section>
       <span aria-hidden="true">!</span>
       <div>
@@ -23,7 +23,7 @@ const showEmbeddedAuthState = computed(
         <p>{{ portalStatusText }}</p>
       </div>
     </section>
-  </main>
+  </output>
   <div v-else-if="isEmbedded" class="portal-embedded-view">
     <RouterView />
   </div>
@@ -63,7 +63,7 @@ const showEmbeddedAuthState = computed(
   border-radius: 50%;
   place-items: center;
   color: #fff;
-  background: #165dff;
+  background: #004ecc;
   font-weight: 700;
 }
 

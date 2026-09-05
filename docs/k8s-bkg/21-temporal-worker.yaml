@@ -1,4 +1,4 @@
-# temporal-worker：Temporal 任务队列消费者（后端镜像 baked 换启动命令）。
+# temporal-worker：Temporal 任务队列消费者（后端镜像 backend 换启动命令）。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,16 +16,18 @@ spec:
       labels:
         app: temporal-worker
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: temporal-worker
-          image: 10.50.62.9:30303/bkg/baked:v0.0.1
+          image: 10.50.62.9:30303/bkg/backend:v0.0.1
           imagePullPolicy: IfNotPresent
           command: [".venv/bin/python", "-m", "script.run_temporal_worker"]
           envFrom:
             - configMapRef:
-                name: tech-kg-config
+                name: bkg-config
             - secretRef:
-                name: tech-kg-secrets
+                name: bkg-secrets
           resources:
             requests:
               cpu: 500m
@@ -35,7 +37,7 @@ spec:
               memory: 4Gi
           volumeMounts:
             - name: workflow-state
-              mountPath: /var/lib/tech-kg
+              mountPath: /var/lib/bkg
       volumes:
         - name: workflow-state
           persistentVolumeClaim:

@@ -6,9 +6,10 @@ import os
 import secrets
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 
 from application.operator import OperatorApplication
+from biz.handler import get_cache
 from biz.schemas.operator import (
     OperatorInvokeRequest,
     OperatorInvokeResponse,
@@ -55,10 +56,14 @@ def _raise_http_error(exc: OperatorRegistryError) -> None:
 
 @router.get("", response_model=OperatorListResponse)
 async def list_operators(
+    request: Request,
     app: OperatorApplicationDependency,
     kind: OperatorKind | None = None,
-) -> dict[str, object]:
-    return {"items": app.list(kind)}
+) -> Response:
+    cached = get_cache.try_get("operator:list", request)
+    if cached is not None:
+        return cached
+    return get_cache.store("operator:list", request, {"items": app.list(kind)})
 
 
 @router.get("/{name}", response_model=OperatorManifestResponse)
@@ -74,9 +79,11 @@ async def create_operator(
     body: OperatorUploadRequest, app: OperatorApplicationDependency
 ) -> dict[str, object]:
     try:
-        return await app.create(**body.model_dump())
+        result = await app.create(**body.model_dump())
     except OperatorRegistryError as exc:
         _raise_http_error(exc)
+    get_cache.invalidate("operator:list")
+    return result
 
 
 @router.put("/{name}", response_model=OperatorManifestResponse)
@@ -84,9 +91,11 @@ async def update_operator(
     name: str, body: OperatorUpdateRequest, app: OperatorApplicationDependency
 ) -> dict[str, object]:
     try:
-        return await app.update(name=name, **body.model_dump())
+        result = await app.update(name=name, **body.model_dump())
     except OperatorRegistryError as exc:
         _raise_http_error(exc)
+    get_cache.invalidate("operator:list")
+    return result
 
 
 @router.delete("/{name}", status_code=status.HTTP_204_NO_CONTENT)
@@ -95,6 +104,7 @@ async def delete_operator(name: str, app: OperatorApplicationDependency) -> Resp
         await app.delete(name)
     except OperatorRegistryError as exc:
         _raise_http_error(exc)
+    get_cache.invalidate("operator:list")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

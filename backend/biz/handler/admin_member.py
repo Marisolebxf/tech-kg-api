@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from biz.dependencies.auth import AuthApplicationDependency, CurrentAdmin
+from biz.handler import get_cache
 from biz.schemas.common import ApiResponse
 from biz.schemas.correction import AdminRoleUpdateRequest
 from infra.mysql import get_session
@@ -20,11 +22,19 @@ router = APIRouter(prefix="/admin/members", tags=["admin-members"])
 def get_members(
     admin: CurrentAdmin,
     application: AuthApplicationDependency,
+    request: Request,
     session: Annotated[Session, Depends(get_session)],
-) -> ApiResponse:
+) -> Response:
+    cached = get_cache.try_get("admin-member:list", request)
+    if cached is not None:
+        return cached
     effective_admin_ids = (*application.settings.initial_admin_user_ids, admin.user_id)
     items = list_members(session, initial_admin_ids=effective_admin_ids)
-    return ApiResponse(data={"items": items, "total": len(items)})
+    return get_cache.store(
+        "admin-member:list",
+        request,
+        ApiResponse(data={"items": items, "total": len(items)}).model_dump(),
+    )
 
 
 @router.put(
@@ -46,6 +56,7 @@ def update_admin_role(
             actor=admin,
             immutable_admin_ids=application.settings.initial_admin_user_ids,
         )
+        get_cache.invalidate("admin-member:list")
         return ApiResponse(data=result, msg="成员权限已更新")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="用户不存在或尚未登录过本系统") from exc

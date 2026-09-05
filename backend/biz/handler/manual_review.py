@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 
 from application.workflow_operations import workflow_operations_application
 from biz.dependencies.review_identity import get_review_identity
+from biz.handler import get_cache
 from biz.schemas.common import ApiResponse
 from biz.schemas.manual_review_production import (
     ApprovalRequest,
@@ -45,6 +47,7 @@ service = workflow_operations_application.service
 
 @router.get("")
 async def list_reviews(
+    request: Request,
     status: str | None = None,
     domain: str | None = None,
     category: str | None = None,
@@ -54,19 +57,26 @@ async def list_reviews(
     keyword: str | None = None,
     page: int = 1,
     page_size: int = Query(default=50, alias="pageSize"),
-) -> ApiResponse:
-    return ApiResponse(
-        data=service.list_reviews(
-            status=status,
-            domain=domain,
-            category=category,
-            batch_id=batch_id,
-            start_time=start_time,
-            end_time=end_time,
-            keyword=keyword,
-            page=page,
-            page_size=page_size,
-        )
+) -> Response:
+    cached = get_cache.try_get("manual-review:list", request)
+    if cached is not None:
+        return cached
+    return get_cache.store(
+        "manual-review:list",
+        request,
+        ApiResponse(
+            data=service.list_reviews(
+                status=status,
+                domain=domain,
+                category=category,
+                batch_id=batch_id,
+                start_time=start_time,
+                end_time=end_time,
+                keyword=keyword,
+                page=page,
+                page_size=page_size,
+            )
+        ).model_dump(),
     )
 
 
@@ -96,6 +106,7 @@ async def get_review_flow(review_id: str) -> ApiResponse:
 async def handle_review(review_id: str, request: ReviewActionRequest) -> ApiResponse:
     try:
         result = await service.handle_review(review_id, request.model_dump())
+        get_cache.invalidate("manual-review:list")
         return ApiResponse(data=result, msg="人工处理结果已提交")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=REVIEW_TASK_NOT_FOUND) from exc
@@ -106,9 +117,9 @@ async def handle_review(review_id: str, request: ReviewActionRequest) -> ApiResp
 @router.put("/{review_id}/result", responses={404: {"description": "请求的资源不存在"}})
 async def modify_result(review_id: str, request: ReviewResultRequest) -> ApiResponse:
     try:
-        return ApiResponse(
-            data=service.modify_review_result(review_id, request.model_dump()), msg="任务结果已修改"
-        )
+        result = service.modify_review_result(review_id, request.model_dump())
+        get_cache.invalidate("manual-review:list")
+        return ApiResponse(data=result, msg="任务结果已修改")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=REVIEW_TASK_NOT_FOUND) from exc
 
@@ -116,9 +127,9 @@ async def modify_result(review_id: str, request: ReviewResultRequest) -> ApiResp
 @router.post("/{review_id}/retry", responses={404: {"description": "请求的资源不存在"}})
 async def retry_review(review_id: str, request: RetryRequest) -> ApiResponse:
     try:
-        return ApiResponse(
-            data=await service.retry_review(review_id, request.payload), msg="重试工作流已下发"
-        )
+        result = await service.retry_review(review_id, request.payload)
+        get_cache.invalidate("manual-review:list")
+        return ApiResponse(data=result, msg="重试工作流已下发")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=REVIEW_TASK_NOT_FOUND) from exc
 
@@ -126,10 +137,9 @@ async def retry_review(review_id: str, request: RetryRequest) -> ApiResponse:
 @router.post("/{review_id}/revoke", responses={404: {"description": "请求的资源不存在"}})
 async def revoke_review(review_id: str, request: RevokeRequest) -> ApiResponse:
     try:
-        return ApiResponse(
-            data=service.revoke_review(review_id, request.reason, request.handler),
-            msg="人工任务已撤销",
-        )
+        result = service.revoke_review(review_id, request.reason, request.handler)
+        get_cache.invalidate("manual-review:list")
+        return ApiResponse(data=result, msg="人工任务已撤销")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=REVIEW_TASK_NOT_FOUND) from exc
 

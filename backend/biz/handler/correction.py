@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from biz.dependencies.auth import CurrentActor, CurrentAdmin
+from biz.handler import get_cache
 from biz.schemas.common import ApiResponse
 from biz.schemas.correction import (
     CorrectionCreateRequest,
@@ -39,6 +41,7 @@ def _raise_error(exc: Exception) -> None:
 @router.get("")
 def list_corrections(
     actor: CurrentActor,
+    request: Request,
     session: Annotated[Session, Depends(get_session)],
     scope: Annotated[str, Query(pattern="^(mine|all)$")] = "mine",
     status: Annotated[str | None, Query(max_length=64)] = None,
@@ -50,18 +53,27 @@ def list_corrections(
     keyword: Annotated[str | None, Query(max_length=64, pattern=KEYWORD_QUERY_PATTERN)] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
-) -> ApiResponse:
-    return ApiResponse(
-        data=_service(session).list(
-            actor,
-            all_users=scope == "all",
-            status=status,
-            statuses=tuple(item.strip() for item in (statuses or "").split(",") if item.strip()),
-            target_type=target_type,
-            keyword=keyword,
-            page=page,
-            page_size=page_size,
-        )
+) -> Response:
+    cached = get_cache.try_get("correction:list", request)
+    if cached is not None:
+        return cached
+    return get_cache.store(
+        "correction:list",
+        request,
+        ApiResponse(
+            data=_service(session).list(
+                actor,
+                all_users=scope == "all",
+                status=status,
+                statuses=tuple(
+                    item.strip() for item in (statuses or "").split(",") if item.strip()
+                ),
+                target_type=target_type,
+                keyword=keyword,
+                page=page,
+                page_size=page_size,
+            )
+        ).model_dump(),
     )
 
 
@@ -71,10 +83,12 @@ def create_correction(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    return ApiResponse(
+    result = ApiResponse(
         data=_service(session).create(request.model_dump(), actor),
         msg="人工修正申请已提交",
     )
+    get_cache.invalidate("correction:list")
+    return result
 
 
 @router.get("/{correction_id}")
@@ -97,7 +111,7 @@ def update_correction(
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     try:
-        return ApiResponse(
+        result = ApiResponse(
             data=_service(session).update(
                 correction_id,
                 request.model_dump(exclude_unset=True),
@@ -105,6 +119,8 @@ def update_correction(
             ),
             msg="人工修正记录已更新",
         )
+        get_cache.invalidate("correction:list")
+        return result
     except (KeyError, PermissionError, ValueError) as exc:
         _raise_error(exc)
 
@@ -116,10 +132,12 @@ def cancel_correction(
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     try:
-        return ApiResponse(
+        result = ApiResponse(
             data=_service(session).cancel(correction_id, actor),
             msg="人工修正申请已撤销",
         )
+        get_cache.invalidate("correction:list")
+        return result
     except (KeyError, PermissionError, ValueError) as exc:
         _raise_error(exc)
 
@@ -132,7 +150,7 @@ def review_correction(
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     try:
-        return ApiResponse(
+        result = ApiResponse(
             data=_service(session).decide(
                 correction_id,
                 request.decision,
@@ -141,6 +159,8 @@ def review_correction(
             ),
             msg="审核结果已保存",
         )
+        get_cache.invalidate("correction:list")
+        return result
     except (KeyError, ValueError) as exc:
         _raise_error(exc)
 
@@ -153,9 +173,11 @@ def retry_correction(
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     try:
-        return ApiResponse(
+        result = ApiResponse(
             data=_service(session).retry(correction_id, request.note, admin),
             msg="已加入同步重试队列",
         )
+        get_cache.invalidate("correction:list")
+        return result
     except (KeyError, ValueError) as exc:
         _raise_error(exc)

@@ -118,7 +118,11 @@ async def invoke_operator(
         _raise_http_error(exc)
 
 
-@internal_router.post("/reload", response_model=OperatorReloadResponse)
+@internal_router.post(
+    "/reload",
+    response_model=OperatorReloadResponse,
+    responses={401: {"description": "身份认证失败"}, 503: {"description": "服务暂不可用"}},
+)
 async def reload_operators(
     app: OperatorApplicationDependency,
     body: OperatorSyncRequest | None = None,

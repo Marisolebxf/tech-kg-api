@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from openai import OpenAI
 from sqlalchemy.orm import Session
@@ -21,6 +21,11 @@ from infra.llm import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _utcnow_naive() -> datetime:
+    """Return a UTC timestamp compatible with the existing naive SQL columns."""
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _mask_api_key(api_key: str) -> str:
@@ -62,7 +67,7 @@ class LlmConfigService:
         return _to_out(row) if row else None
 
     def create_config(self, payload: dict) -> dict:
-        now = datetime.utcnow()
+        now = _utcnow_naive()
         config_id = f"LLM-{uuid.uuid4().hex[:8].upper()}"
         row = self._dao.create(
             id=config_id,
@@ -86,7 +91,7 @@ class LlmConfigService:
         row = self._dao.get(config_id)
         if row is None:
             return None
-        updates: dict = {"updated_at": datetime.utcnow()}
+        updates: dict = {"updated_at": _utcnow_naive()}
         for field in ("name", "description", "base_url", "model", "owner", "is_default", "status"):
             if field in payload and payload[field] is not None:
                 updates[field] = payload[field]
@@ -116,7 +121,7 @@ class LlmConfigService:
         if row is None:
             return None
         self._dao.clear_other_defaults(config_id)
-        updated = self._dao.update(config_id, is_default=True, updated_at=datetime.utcnow())
+        updated = self._dao.update(config_id, is_default=True, updated_at=_utcnow_naive())
         reset_llm_client()
         return _to_out(updated) if updated else None
 

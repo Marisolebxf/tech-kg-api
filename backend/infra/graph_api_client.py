@@ -29,8 +29,9 @@ async def foo():
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
@@ -294,18 +295,25 @@ def _load_app() -> Any:
 @asynccontextmanager
 async def graph_api(
     *,
-    base_url: str = "http://kg-internal",
-    timeout: float = _DEFAULT_TIMEOUT_SECONDS,
+    base_url: str = "https://kg-internal",
+    auth_headers: Mapping[str, str] | None = None,
 ) -> Any:
     """构造一个绑定当前 FastAPI 应用（ASGI transport）的 :class:`GraphAPIClient`。
 
     ``base_url`` 只是给 httpx 一个虚拟主机名，实际不会发起网络请求；请求会经
-    ``ASGITransport`` 直达 FastAPI 路由。``timeout`` 用于兜住底层图服务/Milvus
-    卡住的情况，避免请求长期悬挂。
+    ``ASGITransport`` 直达 FastAPI 路由。外层 ``asyncio.timeout`` 用于兜住底层
+    图服务/Milvus 卡住的情况，避免请求长期悬挂。
+
+    ``auth_headers`` 是调用方（handler 从 ``get_internal_api_auth_headers`` 取得的）
+    凭证头；graph-search 路由受鉴权保护，进程内回环调用不带凭证会被 401 拦截。
     """
     app = _load_app()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url=base_url, timeout=timeout
+        transport=transport,
+        base_url=base_url,
+        timeout=None,
+        headers=dict(auth_headers) if auth_headers else None,
     ) as http_client:
-        yield GraphAPIClient(http_client)
+        async with asyncio.timeout(_DEFAULT_TIMEOUT_SECONDS):
+            yield GraphAPIClient(http_client)

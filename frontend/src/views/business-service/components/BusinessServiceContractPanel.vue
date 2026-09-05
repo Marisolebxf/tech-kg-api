@@ -18,7 +18,7 @@ defineEmits<{
     <div class="developer-view__meta">
       <label>
         <span>子功能名称：</span>
-        <select
+        <select aria-label="选择或输入内容"
           class="select-with-icon"
           :value="moduleInfo.key"
           @change="
@@ -38,7 +38,7 @@ defineEmits<{
       </label>
       <label>
         <span>接口路径：</span>
-        <input :value="moduleInfo.endpoint" readonly />
+        <input aria-label="输入内容" :value="moduleInfo.endpoint" readonly />
       </label>
       <span>请求方法： {{ moduleInfo.method }}</span>
     </div>
@@ -48,7 +48,7 @@ defineEmits<{
           <h2 class="kg-panel__title">请求参数</h2>
         </div>
         <div class="developer-view__table-scroll">
-          <table class="prototype-table prototype-table--request">
+          <table aria-label="数据表" class="prototype-table prototype-table--request">
             <colgroup>
               <col class="col-name" />
               <col class="col-type" />
@@ -80,7 +80,7 @@ defineEmits<{
           <h2 class="kg-panel__title">返回字段</h2>
         </div>
         <div class="developer-view__table-scroll">
-          <table class="prototype-table prototype-table--response">
+          <table aria-label="数据表" class="prototype-table prototype-table--response">
             <colgroup>
               <col class="col-name" />
               <col class="col-type" />

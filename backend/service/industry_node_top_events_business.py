@@ -227,8 +227,8 @@ TREND_BASE_YEAR = 2026
 
 # 事件置信度（标书「实体共现和语义关联置信度」）：风险类最高，资讯类低
 EVENT_CONFIDENCE = {
-    **{et: 0.9 for et in RISK_EVENT_TYPES},
-    **{et: 0.85 for et in ("financing", "stock_finance", "annual_finance")},
+    **dict.fromkeys(RISK_EVENT_TYPES, 0.9),
+    **dict.fromkeys(("financing", "stock_finance", "annual_finance"), 0.85),
     "bid": 0.8,
     "news": 0.7,
     "change_record": 0.7,
@@ -286,9 +286,7 @@ class IndustryNodeTopEventsService:
         self.timeout = timeout
 
     async def run(self, req: IndustryNodeTopEventsRequest) -> IndustryNodeTopEventsResponse:
-        cache_key = (
-            f"{req.chain_node_id}|{req.top_n}|{req.event_type}|{req.time_range}|{req.max_orgs}"
-        )
+        cache_key = f"{req.chain_node_id}|{req.top_n}|{req.event_type}|{req.time_range_start}|{req.time_range_end}|{req.max_orgs}"
         cached = _result_cache_get(cache_key)
         if cached is not None:
             return cached
@@ -362,28 +360,13 @@ class IndustryNodeTopEventsService:
         def _keep(ev):
             if req.event_type and ev.get("event_type") != req.event_type:
                 return False
-            if req.time_range and ev.get("occur_date"):
-                od = str(ev["occur_date"])
-                if "~" in req.time_range:
-                    # 月级：比较 occur_date[:7]（YYYY-MM）。occur_date 无月份则无法筛，放行。
-                    lo, _, hi = req.time_range.partition("~")
-                    om = od[:7]
-                    if len(om) >= 7:
-                        if lo and om < lo:
-                            return False
-                        if hi and om > hi:
-                            return False
-                else:
-                    # 年级：比较 occur_date[:4]（兼容旧 YYYY-YYYY 格式与 graph-query 页）
-                    yr = od[:4]
-                    try:
-                        lo, _, hi = req.time_range.partition("-")
-                        if lo and int(yr) < int(lo[:4]):
-                            return False
-                        if hi and int(yr) > int(hi[:4]):
-                            return False
-                    except ValueError:
-                        pass
+            if req.time_range_start and ev.get("occur_date"):
+                event_month = str(ev["occur_date"])[:7]
+                if len(event_month) >= 7:
+                    if event_month < req.time_range_start:
+                        return False
+                    if event_month > req.time_range_end:
+                        return False
             return True
 
         events = [ev for ev in events if _keep(ev)]

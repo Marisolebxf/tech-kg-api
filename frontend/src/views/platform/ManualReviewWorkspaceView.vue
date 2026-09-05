@@ -156,8 +156,14 @@ const initWorkspace = (item?: ReviewRecord) => {
   }
 }
 
+const reviewRecordStatus = (status: string) => {
+  if (status === 'RESOLVED') return '已完成'
+  if (status === 'CANCELLED') return '已撤销'
+  return '待处理'
+}
+
 const mapProductionRecord = (item: ProductionReviewCase): ReviewRecord => ({
-  id:item.id, batch:item.batchId || '-', module:item.phase, node:item.nodeId, type:item.errorType, domain:item.domain, objectType:item.objectType, objectId:item.objectId, object:item.objectName, ruleId:item.templateId, evidence:`${item.evidence?.length || 0} 项真实证据`, score:item.riskLevel, handler:item.assigneeName || '待领取', status:item.status === 'RESOLVED' ? '已完成' : item.status === 'CANCELLED' ? '已撤销' : '待处理', updatedAt:item.updatedAt, sourceResult:item.diagnosis, suggestion:item.scope, sourceTable:item.sourceTable || '-', sourceRecordId:item.sourceRecordId || '-',
+  id:item.id, batch:item.batchId || '-', module:item.phase, node:item.nodeId, type:item.errorType, domain:item.domain, objectType:item.objectType, objectId:item.objectId, object:item.objectName, ruleId:item.templateId, evidence:`${item.evidence?.length || 0} 项真实证据`, score:item.riskLevel, handler:item.assigneeName || '待领取', status:reviewRecordStatus(item.status), updatedAt:item.updatedAt, sourceResult:item.diagnosis, suggestion:item.scope, sourceTable:item.sourceTable || '-', sourceRecordId:item.sourceRecordId || '-',
 })
 
 const startHeartbeat = () => {
@@ -406,7 +412,12 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
 }
 
 const runPrimary = () => {
-  if (productionMode) { if (preferredProductionAction.value && !hasUnknownComponent.value) handleAction(preferredProductionAction.value); return }
+  if (productionMode) {
+    if (preferredProductionAction.value && !hasUnknownComponent.value) {
+      handleAction(preferredProductionAction.value)
+    }
+    return
+  }
   if (templateId.value === 'T_LINK' && entityVerdict.value === 'reject') {
     handleAction({ id: 'reject-candidate', label: '驳回候选', kind: 'secondary' })
     return
@@ -505,9 +516,9 @@ const secondaryActions = computed(() => {
           </div>
           <div class="verdict" role="radiogroup" aria-label="类型裁决">
             <label :class="{ active: entityVerdict === 'retype' }">
-              <input v-model="entityVerdict" type="radio" value="retype" :disabled="!isEditable" />
+              <input aria-label="选择此项" v-model="entityVerdict" type="radio" value="retype" :disabled="!isEditable" />
               修正类型为
-              <select v-model="entityTypeFix" :disabled="!isEditable">
+              <select aria-label="选择或输入内容" v-model="entityTypeFix" :disabled="!isEditable">
                 <option v-for="t in entityTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
               </select>
             </label>
@@ -519,16 +530,16 @@ const secondaryActions = computed(() => {
           <div v-for="row in mappingRows" :key="row.source" class="map-row">
             <code>{{ row.source }}</code>
             <span>{{ row.sample }}</span>
-            <select v-model="row.target" :disabled="!isEditable">
+            <select aria-label="选择或输入内容" v-model="row.target" :disabled="!isEditable">
               <option v-for="opt in row.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
             </select>
           </div>
           <label v-if="record.type.includes('标准化失败')" class="check-line">
-            <input v-model="keepRawEnum" type="checkbox" :disabled="!isEditable" /> 保留原始值用于追溯
+            <input aria-label="选择此项" v-model="keepRawEnum" type="checkbox" :disabled="!isEditable" /> 保留原始值用于追溯
           </label>
           <label v-if="record.type === '专利状态标准化失败'" class="inline-select">
             <span>字典版本</span>
-            <select v-model="dictVersion" :disabled="!isEditable">
+            <select aria-label="选择或输入内容" v-model="dictVersion" :disabled="!isEditable">
               <option value="v1.2">回滚到 dict-patent-v1.2</option>
               <option value="v1.3-fix">在 v1.3 新增枚举条目</option>
             </select>
@@ -557,9 +568,9 @@ const secondaryActions = computed(() => {
           </article>
         </div>
         <div class="verdict" role="radiogroup" aria-label="实体对齐裁决">
-          <label :class="{ active: entityVerdict === 'merge' }"><input v-model="entityVerdict" type="radio" value="merge" :disabled="!isEditable" /> 合并到右侧存量实体</label>
-          <label :class="{ active: entityVerdict === 'create' }"><input v-model="entityVerdict" type="radio" value="create" :disabled="!isEditable" /> 保留为新建实体</label>
-          <label :class="{ active: entityVerdict === 'reject' }"><input v-model="entityVerdict" type="radio" value="reject" :disabled="!isEditable" /> 不是同一实体，驳回候选</label>
+          <label :class="{ active: entityVerdict === 'merge' }"><input aria-label="选择此项" v-model="entityVerdict" type="radio" value="merge" :disabled="!isEditable" /> 合并到右侧存量实体</label>
+          <label :class="{ active: entityVerdict === 'create' }"><input aria-label="选择此项" v-model="entityVerdict" type="radio" value="create" :disabled="!isEditable" /> 保留为新建实体</label>
+          <label :class="{ active: entityVerdict === 'reject' }"><input aria-label="选择此项" v-model="entityVerdict" type="radio" value="reject" :disabled="!isEditable" /> 不是同一实体，驳回候选</label>
         </div>
       </section>
 
@@ -579,7 +590,7 @@ const secondaryActions = computed(() => {
         <h3 class="zone-subtitle">关系证据</h3>
         <div class="evidence-list">
           <label v-for="item in evidenceItems" :key="item.id" class="evidence-item">
-            <input v-model="item.checked" type="checkbox" :disabled="!isEditable || item.recordId === '—'" />
+            <input aria-label="选择此项" v-model="item.checked" type="checkbox" :disabled="!isEditable || item.recordId === '—'" />
             <div>
               <strong>{{ item.label }} <em>{{ item.trust }}</em></strong>
               <p>{{ item.excerpt }}</p>
@@ -589,13 +600,13 @@ const secondaryActions = computed(() => {
         </div>
         <label v-if="isEditable" class="wide-field">
           <span>补充证据（链接或记录 ID）</span>
-          <input v-model="extraEvidence" placeholder="例如：COOP-89321-B 或公告 URL" />
+          <input aria-label="例如：COOP-89321-B 或公告 URL" v-model="extraEvidence" placeholder="例如：COOP-89321-B 或公告 URL" />
         </label>
         <h3 class="zone-subtitle">处理结论</h3>
         <div class="verdict relation-verdict">
-          <label :class="{ active: relationVerdict === 'approve' }"><input v-model="relationVerdict" type="radio" value="approve" :disabled="!isEditable" /><span><strong>确认关系入图</strong><small>证据充分，允许该关系进入图谱</small></span></label>
-          <label :class="{ active: relationVerdict === 'hold' }"><input v-model="relationVerdict" type="radio" value="hold" :disabled="!isEditable" /><span><strong>保持隔离</strong><small>暂不入图，等待补充第二独立来源</small></span></label>
-          <label :class="{ active: relationVerdict === 'reject' }"><input v-model="relationVerdict" type="radio" value="reject" :disabled="!isEditable" /><span><strong>驳回关系</strong><small>认定当前证据不支持该关系，退回抽取节点</small></span></label>
+          <label :class="{ active: relationVerdict === 'approve' }"><input aria-label="选择此项" v-model="relationVerdict" type="radio" value="approve" :disabled="!isEditable" /><span><strong>确认关系入图</strong><small>证据充分，允许该关系进入图谱</small></span></label>
+          <label :class="{ active: relationVerdict === 'hold' }"><input aria-label="选择此项" v-model="relationVerdict" type="radio" value="hold" :disabled="!isEditable" /><span><strong>保持隔离</strong><small>暂不入图，等待补充第二独立来源</small></span></label>
+          <label :class="{ active: relationVerdict === 'reject' }"><input aria-label="选择此项" v-model="relationVerdict" type="radio" value="reject" :disabled="!isEditable" /><span><strong>驳回关系</strong><small>认定当前证据不支持该关系，退回抽取节点</small></span></label>
         </div>
       </section>
 
@@ -615,14 +626,14 @@ const secondaryActions = computed(() => {
           </article>
         </div>
         <div class="verdict">
-          <label :class="{ active: attrVerdict === 'A' }"><input v-model="attrVerdict" type="radio" value="A" :disabled="!isEditable" /> 采用来源 A</label>
-          <label :class="{ active: attrVerdict === 'B' }"><input v-model="attrVerdict" type="radio" value="B" :disabled="!isEditable" /> 采用来源 B</label>
+          <label :class="{ active: attrVerdict === 'A' }"><input aria-label="选择此项" v-model="attrVerdict" type="radio" value="A" :disabled="!isEditable" /> 采用来源 A</label>
+          <label :class="{ active: attrVerdict === 'B' }"><input aria-label="选择此项" v-model="attrVerdict" type="radio" value="B" :disabled="!isEditable" /> 采用来源 B</label>
           <label :class="{ active: attrVerdict === 'manual' }">
-            <input v-model="attrVerdict" type="radio" value="manual" :disabled="!isEditable" /> 手工改写
-            <input v-model="attrManualOrg" class="mini" placeholder="机构" :disabled="!isEditable || attrVerdict !== 'manual'" />
-            <input v-model="attrManualRange" class="mini" placeholder="起止时间" :disabled="!isEditable || attrVerdict !== 'manual'" />
+            <input aria-label="选择此项" v-model="attrVerdict" type="radio" value="manual" :disabled="!isEditable" /> 手工改写
+            <input aria-label="机构" v-model="attrManualOrg" class="mini" placeholder="机构" :disabled="!isEditable || attrVerdict !== 'manual'" />
+            <input aria-label="起止时间" v-model="attrManualRange" class="mini" placeholder="起止时间" :disabled="!isEditable || attrVerdict !== 'manual'" />
           </label>
-          <label :class="{ active: attrVerdict === 'split' }"><input v-model="attrVerdict" type="radio" value="split" :disabled="!isEditable" /> 时间切分（两段都保留）</label>
+          <label :class="{ active: attrVerdict === 'split' }"><input aria-label="选择此项" v-model="attrVerdict" type="radio" value="split" :disabled="!isEditable" /> 时间切分（两段都保留）</label>
         </div>
       </section>
 
@@ -651,8 +662,8 @@ const secondaryActions = computed(() => {
         </div>
         <div class="fill-form">
           <h3 class="zone-subtitle">补录结果</h3>
-          <label class="wide-field"><span>title_zh <b>必填</b></span><input v-model="fillTitleZh" :disabled="!isEditable" placeholder="论文中文标题" /></label>
-          <label class="wide-field"><span>title_en</span><input v-model="fillTitleEn" :disabled="!isEditable" placeholder="论文英文标题（可选）" /></label>
+          <label class="wide-field"><span>title_zh <b>必填</b></span><input aria-label="论文中文标题" v-model="fillTitleZh" :disabled="!isEditable" placeholder="论文中文标题" /></label>
+          <label class="wide-field"><span>title_en</span><input aria-label="论文英文标题（可选）" v-model="fillTitleEn" :disabled="!isEditable" placeholder="论文英文标题（可选）" /></label>
           <p class="fill-rerun-note">保存后将从「清洗标准化」节点重跑当前记录，不影响同批次其他数据。</p>
         </div>
       </section>
@@ -662,16 +673,16 @@ const secondaryActions = computed(() => {
         <p class="zone-banner">同一 paper_id 命中 {{ dupRecords.length }} 条源记录</p>
         <div class="verdict">
           <label v-for="(row, index) in dupRecords" :key="row.id" :class="{ active: mergeMaster === index }">
-            <input v-model="mergeMaster" type="radio" :value="index" :disabled="!isEditable" />
+            <input aria-label="选择此项" v-model="mergeMaster" type="radio" :value="index" :disabled="!isEditable" />
             主记录 {{ row.id }} · {{ row.hint }}
             <small>{{ row.detail }}</small>
           </label>
         </div>
         <div class="merge-fields">
           <span>从非主记录并入字段</span>
-          <label><input v-model="mergeFields.authors" type="checkbox" :disabled="!isEditable" /> authors</label>
-          <label><input v-model="mergeFields.affiliation" type="checkbox" :disabled="!isEditable" /> affiliation</label>
-          <label><input v-model="mergeFields.source_channel" type="checkbox" :disabled="!isEditable" /> source_channel</label>
+          <label><input aria-label="选择此项" v-model="mergeFields.authors" type="checkbox" :disabled="!isEditable" /> authors</label>
+          <label><input aria-label="选择此项" v-model="mergeFields.affiliation" type="checkbox" :disabled="!isEditable" /> affiliation</label>
+          <label><input aria-label="选择此项" v-model="mergeFields.source_channel" type="checkbox" :disabled="!isEditable" /> source_channel</label>
         </div>
       </section>
 
@@ -688,7 +699,7 @@ const secondaryActions = computed(() => {
         </div>
         <label v-if="isEditable && impactScope === '批次级'" class="inline-select">
           <span>重跑使用 Prompt</span>
-          <select v-model="runtimeConfig">
+          <select aria-label="选择或输入内容" v-model="runtimeConfig">
             <option value="kg-extract-v2.6.1">kg-extract-v2.6.1（当前）</option>
             <option value="kg-extract-v2.5.0">kg-extract-v2.5.0（回退）</option>
             <option value="kg-extract-v2.6.2-rc">kg-extract-v2.6.2-rc（试验）</option>
@@ -715,7 +726,7 @@ const secondaryActions = computed(() => {
       </div>
       <p v-if="pipelineStep" class="pipeline-hint">流水线：{{ pipelineStep.phase }} · 节点 <code>{{ pipelineStep.id }}</code>（{{ pipelineStep.name }}）· 原始节点「{{ record.node }}」</p>
       <label v-if="isEditable && sedimentHint" class="sediment-line">
-        <input v-model="sedimentRule" type="checkbox" />
+        <input aria-label="选择此项" v-model="sedimentRule" type="checkbox" />
         <span>{{ sedimentHint }}</span>
       </label>
     </section>
@@ -733,7 +744,7 @@ const secondaryActions = computed(() => {
         >
           {{ action.label }}
         </button>
-        <label class="note-inline"><input v-model="note" placeholder="备注（可选）" /></label>
+        <div class="note-inline"><input aria-label="备注（可选）" v-model="note" placeholder="备注（可选）" /></div>
         <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ primaryActionLabel }}</button>
       </div>
     </footer>
@@ -763,7 +774,7 @@ const secondaryActions = computed(() => {
 }
 
 .rw-head a {
-  color: #165dff;
+  color: #004ecc;
   font-size: 12px;
   text-decoration: none;
 }
@@ -778,7 +789,7 @@ const secondaryActions = computed(() => {
   flex-wrap: wrap;
   gap: 8px 14px;
   margin: 0;
-  color: #667085;
+  color: #475467;
   font-size: 12px;
 }
 
@@ -786,7 +797,7 @@ const secondaryActions = computed(() => {
   padding: 1px 6px;
   border-radius: 4px;
   background: #eef4ff;
-  color: #175cd3;
+  color: #004ecc;
 }
 
 .rw-head__badges {
@@ -808,7 +819,7 @@ const secondaryActions = computed(() => {
 
 .scope.is-task {
   background: #eaf2ff;
-  color: #175cd3;
+  color: #004ecc;
 }
 
 .status.is-待处理 {
@@ -889,7 +900,7 @@ const secondaryActions = computed(() => {
 
 .rw-zone-head p {
   margin: 4px 0 0;
-  color: #667085;
+  color: #475467;
   font-size: 12px;
 }
 
@@ -902,7 +913,7 @@ const secondaryActions = computed(() => {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: #165dff;
+  background: #004ecc;
   color: #fff;
   font-size: 12px;
   font-weight: 600;
@@ -932,7 +943,7 @@ const secondaryActions = computed(() => {
 
 .rw-sec__head p {
   margin: 3px 0 0;
-  color: #667085;
+  color: #475467;
   font-size: 11px;
 }
 
@@ -952,7 +963,7 @@ const secondaryActions = computed(() => {
   padding: 4px 10px;
   border-radius: 99px;
   background: #eef4ff;
-  color: #175cd3;
+  color: #004ecc;
   font-size: 11px;
 }
 
@@ -1003,7 +1014,7 @@ const secondaryActions = computed(() => {
 
 .pipeline-hint {
   margin: 10px 0 0;
-  color: #667085;
+  color: #475467;
   font-size: 11px;
 }
 
@@ -1011,7 +1022,7 @@ const secondaryActions = computed(() => {
   padding: 1px 6px;
   border-radius: 4px;
   background: #eef4ff;
-  color: #175cd3;
+  color: #004ecc;
   font-size: 11px;
 }
 
@@ -1045,7 +1056,7 @@ const secondaryActions = computed(() => {
 
 .map-head {
   margin-bottom: 6px;
-  color: #667085;
+  color: #475467;
   font-size: 10px;
 }
 
@@ -1058,7 +1069,7 @@ const secondaryActions = computed(() => {
 }
 
 .map-row code {
-  color: #175cd3;
+  color: #004ecc;
   font-size: 11px;
 }
 
@@ -1097,7 +1108,7 @@ const secondaryActions = computed(() => {
 
 .entity-compare > b {
   align-self: center;
-  color: #165dff;
+  color: #004ecc;
   font-size: 12px;
 }
 
@@ -1134,7 +1145,7 @@ const secondaryActions = computed(() => {
 
 .rel-card em {
   align-self: center;
-  color: #165dff;
+  color: #004ecc;
   font-size: 11px;
   font-style: normal;
 }
@@ -1174,7 +1185,7 @@ const secondaryActions = computed(() => {
 
 .verdict label.active,
 .evidence-item:has(input:checked) {
-  border-color: #165dff;
+  border-color: #004ecc;
   background: #f5f8ff;
 }
 
@@ -1399,7 +1410,7 @@ const secondaryActions = computed(() => {
 
 .fill-form .wide-field span b {
   margin-left: 5px;
-  color: #d92d20;
+  color: #b42318;
   font-size: 9px;
 }
 
@@ -1440,7 +1451,7 @@ const secondaryActions = computed(() => {
 }
 
 .merge-fields > span {
-  color: #667085;
+  color: #475467;
   font-size: 11px;
 }
 
@@ -1472,7 +1483,7 @@ const secondaryActions = computed(() => {
 .linkish {
   border: 0;
   background: transparent;
-  color: #165dff;
+  color: #004ecc;
   font-size: 12px;
   cursor: pointer;
   text-decoration: none;
@@ -1487,12 +1498,12 @@ const secondaryActions = computed(() => {
 
 .rw-readonly p {
   margin: 6px 0;
-  color: #667085;
+  color: #475467;
   font-size: 12px;
 }
 
 .rw-readonly em {
-  color: #98a2b3;
+  color: #59636f;
   font-size: 11px;
   font-style: normal;
 }
@@ -1521,7 +1532,7 @@ const secondaryActions = computed(() => {
 }
 
 .rw-foot > span {
-  color: #667085;
+  color: #475467;
   font-size: 11px;
 }
 
@@ -1544,15 +1555,15 @@ const secondaryActions = computed(() => {
 }
 
 .rw-foot button.primary {
-  border-color: #165dff;
-  background: #165dff;
+  border-color: #004ecc;
+  background: #004ecc;
   color: #fff;
 }
 
 .rw-foot button:disabled {
   border-color: #d0d5dd;
   background: #eaecf0;
-  color: #98a2b3;
+  color: #59636f;
   cursor: not-allowed;
 }
 
@@ -1579,7 +1590,7 @@ const secondaryActions = computed(() => {
 }
 
 .rw-empty a {
-  color: #165dff;
+  color: #004ecc;
 }
 
 @media (max-width: 960px) {

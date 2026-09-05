@@ -12,7 +12,7 @@ from service.schema_ddl import is_valid_data_type
 ENTITY_NAME_PATTERN = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 RELATION_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
-PROPERTY_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+PROPERTY_NAME_PATTERN = re.compile(r"^[A-Za-z_]\w*$")
 
 
 def _to_camel(value: str) -> str:

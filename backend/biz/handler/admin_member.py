@@ -18,7 +18,7 @@ from service.platform_access import list_members, set_admin_role
 router = APIRouter(prefix="/admin/members", tags=["admin-members"])
 
 
-@router.get("", response_model=ApiResponse)
+@router.get("")
 def get_members(
     admin: CurrentAdmin,
     application: AuthApplicationDependency,
@@ -37,7 +37,10 @@ def get_members(
     )
 
 
-@router.put("/{user_id}/admin", response_model=ApiResponse)
+@router.put(
+    "/{user_id}/admin",
+    responses={404: {"description": "请求的资源不存在"}, 409: {"description": "资源状态冲突"}},
+)
 def update_admin_role(
     user_id: str,
     request: AdminRoleUpdateRequest,

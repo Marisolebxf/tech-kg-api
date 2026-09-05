@@ -4,6 +4,31 @@ export function isValidYearMonth(value: string | undefined): value is string {
   return Boolean(value && YEAR_MONTH_PATTERN.test(value));
 }
 
+function requiredPairErrors(
+  startTime: string | undefined,
+  endTime: string | undefined,
+): Record<string, string> | null {
+  if (Boolean(startTime) === Boolean(endTime)) return null;
+  const errors: Record<string, string> = {};
+  if (!startTime) errors.startTime = "开始时间和结束时间必须同时填写";
+  if (!endTime) errors.endTime = "开始时间和结束时间必须同时填写";
+  return errors;
+}
+
+function addRangeErrors(
+  errors: Record<string, string>,
+  startTime: string,
+  endTime: string,
+  currentMonth: string,
+): void {
+  if (startTime > endTime) {
+    errors.startTime = "开始时间不能晚于结束时间";
+    errors.endTime = "结束时间不能早于开始时间";
+  }
+  if (startTime > currentMonth) errors.startTime = "开始时间不能晚于当前月份";
+  if (endTime > currentMonth) errors.endTime = "结束时间不能晚于当前月份";
+}
+
 export function paperCooperationTimeErrors(
   startValue: string | undefined,
   endValue: string | undefined,
@@ -13,11 +38,8 @@ export function paperCooperationTimeErrors(
   const startTime = startValue?.trim() || undefined;
   const endTime = endValue?.trim() || undefined;
 
-  if (Boolean(startTime) !== Boolean(endTime)) {
-    if (!startTime) errors.startTime = "开始时间和结束时间必须同时填写";
-    if (!endTime) errors.endTime = "开始时间和结束时间必须同时填写";
-    return errors;
-  }
+  const missingPairErrors = requiredPairErrors(startTime, endTime);
+  if (missingPairErrors) return missingPairErrors;
 
   if (startTime && !isValidYearMonth(startTime)) {
     errors.startTime = "开始时间必须使用 YYYY-MM 格式";
@@ -27,15 +49,6 @@ export function paperCooperationTimeErrors(
   }
   if (Object.keys(errors).length) return errors;
 
-  if (startTime && endTime && startTime > endTime) {
-    errors.startTime = "开始时间不能晚于结束时间";
-    errors.endTime = "结束时间不能早于开始时间";
-  }
-  if (startTime && startTime > currentMonth) {
-    errors.startTime = "开始时间不能晚于当前月份";
-  }
-  if (endTime && endTime > currentMonth) {
-    errors.endTime = "结束时间不能晚于当前月份";
-  }
+  if (startTime && endTime) addRangeErrors(errors, startTime, endTime, currentMonth);
   return errors;
 }

@@ -13,6 +13,8 @@ jobs:
     env:
       LLM_API_KEY: ${{ secrets.GLM_API_KEY }}
       ZHIPUAI_API_KEY: ${{ secrets.GLM_API_KEY }}
+      # Build the CI-only image stage that includes pytest and integration tests.
+      API_BUILD_TARGET: test
       # Integration tests provide their own SQLite Schema store; CI has no MySQL service.
       SCHEMA_AUTO_INIT: "false"
 
@@ -79,7 +81,7 @@ jobs:
           exit 1
 
       - name: Run integration tests
-        run: docker compose exec -T api env PYTHONPATH=. AUTH_ENABLED=false AUTH_COOKIE_SECURE=false AUTH_COOKIE_PATH=/ uv run pytest tests/integration -m "not external" -v
+        run: docker compose exec -T api env PYTHONPATH=. AUTH_ENABLED=false AUTH_COOKIE_SECURE=false AUTH_COOKIE_PATH=/ .venv/bin/pytest tests/integration -m "not external" -v
 
       - name: Tear down
         if: always()

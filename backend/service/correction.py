@@ -124,7 +124,7 @@ class CorrectionService:
             "total": total,
             "page": current_page,
             "pageSize": size,
-            "statusCounts": {status_name: count for status_name, count in count_rows},
+            "statusCounts": dict(count_rows),
         }
 
     def get(self, correction_id: str, actor: PlatformActor) -> dict[str, Any]:

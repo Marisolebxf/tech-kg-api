@@ -427,7 +427,7 @@ async function openViewModal(rowId: string, rowName: string) {
     viewState.value = 'ready'
     await nextTick()
     if (viewCodeRef.value) {
-      viewCodeRef.value.removeAttribute('data-highlighted')
+      delete viewCodeRef.value.dataset.highlighted
       viewCodeRef.value.className = 'language-python'
       hljs.highlightElement(viewCodeRef.value)
     }
@@ -459,55 +459,50 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
       <article><span>标准实体</span><strong>{{ overview.entityTypes }}</strong><em>专家、机构、论文等</em></article>
       <article><span>标准事实关系</span><strong>{{ overview.factRelationTypes }}</strong><em>专家、机构、成果等</em></article>
       <article><span>业务推理关系</span><strong>{{ overview.inferredRelationTypes }}</strong><em>均基于事实关系计算</em></article>
-      <!-- <article><span>当前 Schema 版本</span><strong>v1.8</strong><em>已发布 · 2026-07-12</em></article> -->
     </section>
 
     <section class="schema-shell">
-      <nav class="schema-tabs"><button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="activeTab=tab;keyword=''">{{ tab }}</button></nav>
-      <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeTab === '属性定义'">枚举字典作为属性约束统一维护</span></div><div class="schema-toolbar__actions"><button v-if="activeTab !== '属性定义'" class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input v-model="keyword" :placeholder="`搜索${activeTab}`" /></label></div></div>
-      <!-- <p v-if="schemaVersionMessage" class="schema-version-message">{{ schemaVersionMessage }}</p> -->
+      <nav aria-label="功能导航 1" class="schema-tabs"><button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="activeTab=tab;keyword=''">{{ tab }}</button></nav>
+      <div class="schema-toolbar"><div><strong>{{ activeTab }}</strong><span v-if="activeTab === '属性定义'">枚举字典作为属性约束统一维护</span></div><div class="schema-toolbar__actions"><button v-if="activeTab !== '属性定义'" class="primary" type="button" @click="openCreate">＋ 增加</button><label><span>⌕</span><input aria-label="`搜索${activeTab}`" v-model="keyword" :placeholder="`搜索${activeTab}`" /></label></div></div>
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button v-if="scriptByRow[row.name]?.workflowDefinitionId" type="button" class="schema-action-link" @click="executeSchemaWorkflow(row.name)">执行工作流 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table aria-label="数据表"><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>主键 / 唯一标识</th><th>主要来源表组</th><th>建模说明</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredEntities" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.key }}</td><td>{{ row.source }}</td><td>{{ row.description }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button v-if="scriptByRow[row.name]?.workflowDefinitionId" type="button" class="schema-action-link" @click="executeSchemaWorkflow(row.name)">执行工作流 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-else-if="activeTab === '事实关系'" class="schema-table-wrap"><table aria-label="数据表"><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredFacts" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '推理关系'" class="schema-table-wrap"><table><thead><tr><th>推理关系</th><th>Schema 名称</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredInference" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
+      <div v-else-if="activeTab === '推理关系'" class="schema-table-wrap"><table aria-label="数据表"><thead><tr><th>推理关系</th><th>Schema 名称</th><th>起点</th><th>终点</th><th>生成依据</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredInference" :key="row.name"><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><span v-if="scriptByRow[row.name]" class="script-badge">{{ scriptByRow[row.name].name }}</span></div></td></tr></tbody></table></div>
 
-      <div v-else-if="activeTab === '属性定义'" class="schema-table-wrap"><table><thead><tr><th>实体</th><th>主键</th><th>核心属性</th><th>动态属性 / 补充</th><th>主要来源</th></tr></thead><tbody><tr v-for="row in filteredAttributes" :key="row.entity"><td><code>{{ row.entity }}</code></td><td><b>{{ row.key }}</b></td><td class="mono-list">{{ row.core }}</td><td>{{ row.dynamic }}</td><td>{{ row.source }}</td></tr></tbody></table></div>
+      <div v-else-if="activeTab === '属性定义'" class="schema-table-wrap"><table aria-label="数据表"><thead><tr><th>实体</th><th>主键</th><th>核心属性</th><th>动态属性 / 补充</th><th>主要来源</th></tr></thead><tbody><tr v-for="row in filteredAttributes" :key="row.entity"><td><code>{{ row.entity }}</code></td><td><b>{{ row.key }}</b></td><td class="mono-list">{{ row.core }}</td><td>{{ row.dynamic }}</td><td>{{ row.source }}</td></tr></tbody></table></div>
 
-      <!-- 版本记录（已隐藏）
-      <div v-else class="schema-table-wrap schema-version-table"><table><thead><tr><th>版本</th><th>状态</th><th>发布时间</th><th>实体范围</th><th>关系范围</th><th>变更内容</th><th>发布人</th><th>操作</th></tr></thead><tbody><tr v-for="row in schemaVersions" :key="row.version"><td><code>{{ row.version }}</code></td><td><span :class="row.status === '当前版本' ? 'core' : 'support'">{{ row.status }}</span></td><td>{{ row.time }}</td><td>{{ row.entities }}</td><td>{{ row.relations }}</td><td>{{ row.change }}</td><td>{{ row.publisher }}</td><td><div class="schema-version-actions"><button type="button" @click="schemaVersionMessage = `已打开 ${row.version} 的完整变更清单。`">变更详情</button><button v-if="row.status !== '当前版本'" class="danger" type="button" @click="schemaVersionMessage = `已创建回退至 ${row.version} 的申请，通过影响分析与审批后才会执行。`">申请回退</button></div></td></tr></tbody></table></div>
-      -->
     </section>
 
     <Teleport to="body">
       <div v-if="modalOpen" class="schema-modal schema-create-modal">
         <button class="schema-modal__mask" type="button" @click="modalOpen = false"></button>
-        <aside class="schema-modal__panel schema-create-panel">
+        <aside aria-label="辅助区域 1" class="schema-modal__panel schema-create-panel">
           <header><h2>新增{{ activeTab }}</h2><button type="button" @click="modalOpen = false">×</button></header>
           <div class="schema-modal__body schema-create-body">
             <div class="create-row">
               <label class="create-field">
                 <span>{{ isRelationTab() ? '关系英文名 *' : '实体名 *' }}</span>
-                <input v-model="createForm.name" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
+                <input aria-label="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" v-model="createForm.name" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
               </label>
               <label class="create-field">
                 <span>中文名 *</span>
-                <input v-model="createForm.label" placeholder="如：技术" />
+                <input aria-label="如：技术" v-model="createForm.label" placeholder="如：技术" />
               </label>
             </div>
 
             <div v-if="isRelationTab()" class="create-row">
               <label class="create-field">
                 <span>起点实体 *</span>
-                <select v-model="createForm.sourceEntityId">
+                <select aria-label="选择或输入内容" v-model="createForm.sourceEntityId">
                   <option value="">请选择</option>
                   <option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</option>
                 </select>
               </label>
               <label class="create-field">
                 <span>终点实体 *</span>
-                <select v-model="createForm.targetEntityId">
+                <select aria-label="选择或输入内容" v-model="createForm.targetEntityId">
                   <option value="">请选择</option>
                   <option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</option>
                 </select>
@@ -516,14 +511,14 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 
             <label class="create-field create-field--full">
               <span>建模说明</span>
-              <textarea v-model="createForm.description" rows="2"></textarea>
+              <textarea aria-label="选择或输入内容" v-model="createForm.description" rows="2"></textarea>
             </label>
 
             <div class="create-field create-field--full">
               <span>来源表（科技要素库，可多选）<small class="source-table-count">已选 {{ createForm.sourceTables.length }} / {{ sourceTables.length }} 张</small></span>
               <div class="source-table-list">
                 <label v-for="t in sourceTables" :key="t.name" class="source-table-item">
-                  <input type="checkbox" :checked="createForm.sourceTables.includes(t.name)" @change="toggleSourceTable(t.name)" />
+                  <input aria-label="选择此项" type="checkbox" :checked="createForm.sourceTables.includes(t.name)" @change="toggleSourceTable(t.name)" />
                   <code>{{ t.name }}</code>
                   <span v-if="t.comment" class="source-table-comment">{{ t.comment }}</span>
                 </label>
@@ -533,7 +528,7 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 
             <label class="create-field create-field--full">
               <span>默认 LLM 配置（作业启动时默认使用，可临时覆盖）</span>
-              <select v-model="createForm.llmConfigId">
+              <select aria-label="选择或输入内容" v-model="createForm.llmConfigId">
                 <option value="">使用全局默认</option>
                 <option v-for="c in llmConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）{{ c.isDefault ? ' ★默认' : '' }}</option>
               </select>
@@ -545,12 +540,12 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
                 <button type="button" class="create-props__add" @click="addProperty">＋ 添加属性</button>
               </div>
               <div v-for="(p, i) in createForm.properties" :key="i" class="create-prop-row">
-                <input v-model="p.name" placeholder="属性名" class="prop-name" />
-                <select v-model="p.dataType" class="prop-type">
+                <input aria-label="属性名" v-model="p.name" placeholder="属性名" class="prop-name" />
+                <select aria-label="选择或输入内容" v-model="p.dataType" class="prop-type">
                   <option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</option>
                 </select>
-                <input v-if="p.dataType === 'fixed_string'" v-model.number="p.length" type="number" min="1" max="1024" class="prop-len" placeholder="N" />
-                <label class="prop-required"><input v-model="p.required" type="checkbox" />必填</label>
+                <input aria-label="N" v-if="p.dataType === 'fixed_string'" v-model.number="p.length" type="number" min="1" max="1024" class="prop-len" placeholder="N" />
+                <label class="prop-required"><input aria-label="选择此项" v-model="p.required" type="checkbox" />必填</label>
                 <button type="button" class="prop-remove" @click="removeProperty(i)" title="删除">×</button>
               </div>
             </div>
@@ -570,12 +565,12 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
       </div>
     </Teleport>
 
-    <input ref="uploadFileInput" type="file" accept=".py" hidden @change="onUploadFileChosen" />
+    <input aria-label="上传文件" ref="uploadFileInput" type="file" accept=".py" hidden @change="onUploadFileChosen" />
 
     <Teleport to="body">
       <div v-if="uploadModalOpen" class="schema-modal script-upload-modal">
         <button class="schema-modal__mask" type="button" @click="closeUploadModal"></button>
-        <aside class="schema-modal__panel">
+        <aside aria-label="辅助区域 2" class="schema-modal__panel">
           <header><h2>上传脚本 · {{ uploadTargetName }}</h2><button type="button" @click="closeUploadModal">×</button></header>
           <div class="schema-modal__body">
             <div v-if="uploadState === 'idle'" class="upload-idle">
@@ -620,7 +615,7 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
     <Teleport to="body">
       <div v-if="viewModalOpen" class="schema-modal script-view-modal">
         <button class="schema-modal__mask" type="button" @click="viewModalOpen = false"></button>
-        <aside class="schema-modal__panel script-view-panel">
+        <aside aria-label="辅助区域 3" class="schema-modal__panel script-view-panel">
           <header><h2>查看脚本 · {{ viewFilename }}</h2><button type="button" @click="viewModalOpen = false">×</button></header>
           <div class="schema-modal__body script-view-body">
             <div v-if="viewState === 'loading'" class="view-loading">加载中...</div>
@@ -637,7 +632,7 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 </template>
 
 <style scoped>
-.schema-page{display:flex;height:100%;min-height:0;overflow:hidden;padding-bottom:2px;color:#142443;flex-direction:column}.schema-summary{display:grid;flex:0 0 auto;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-bottom:12px}.schema-summary article{display:grid;gap:5px;padding:13px 15px;border:1px solid #bfd6fa;border-radius:8px;background:linear-gradient(145deg,#fff,#f2f8ff)}.schema-summary span{color:#687996;font-size:11px}.schema-summary strong{font-size:23px}.schema-summary em{color:#8191aa;font-size:10px;font-style:normal}.schema-flow{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));margin-bottom:12px;padding:12px;border:1px solid #c5d9f6;border-radius:8px;background:#fff}.schema-flow>div{position:relative;display:flex;align-items:center;gap:7px;min-width:0;padding:4px 15px 4px 5px}.schema-flow i{display:grid;flex:0 0 auto;place-items:center;width:23px;height:23px;border-radius:50%;background:#eaf2ff;color:#165dff;font-size:10px;font-style:normal}.schema-flow span{color:#40536f;font-size:10px;line-height:15px}.schema-flow b{position:absolute;right:2px;color:#9bb5d9}.schema-shell{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #bcd4f7;border-radius:9px;background:#fff;box-shadow:0 10px 24px rgba(48,105,194,.08);flex-direction:column}.schema-tabs{display:flex;flex:0 0 auto;overflow:auto;padding:0 12px;border-bottom:1px solid #dce8f8}.schema-tabs button{padding:12px 15px;border:0;border-bottom:2px solid transparent;background:transparent;color:#566985;white-space:nowrap;cursor:pointer}.schema-tabs button.active{border-color:#165dff;color:#165dff;font-weight:600}.schema-toolbar{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:14px;padding:10px 13px;border-bottom:1px solid #e3ebf6;background:#f8fbff}.schema-toolbar>div{display:flex;align-items:center;gap:10px}.schema-toolbar strong{font-size:13px}.schema-toolbar>div span{color:#7b8ba3;font-size:10px}.schema-toolbar label{display:flex;align-items:center;gap:6px;width:270px;padding:0 9px;border:1px solid #c7d8ef;border-radius:5px;background:#fff}.schema-toolbar input{width:100%;height:30px;border:0;outline:0;font-size:11px}.schema-table-wrap{flex:1;min-height:0;max-height:none;overflow:auto}.schema-table-wrap table,.trace-layout table{width:100%;border-collapse:collapse;font-size:11px}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{padding:11px 13px;border-bottom:1px solid #e5edf8;text-align:left;line-height:17px;vertical-align:top}.schema-table-wrap th{position:sticky;z-index:2;top:0;background:#f1f6fc;color:#5e6f88;white-space:nowrap}.schema-table-wrap td{color:#344763}.schema-table-wrap td:nth-child(5),.schema-table-wrap td:nth-child(6){max-width:330px}.schema-table-wrap code,.trace-layout code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;white-space:nowrap}.core,.support,.evidence,.auto,.review{display:inline-flex;padding:2px 7px;border-radius:999px;background:#e9f8ef;color:#067647;font-size:9px;white-space:nowrap}.support{background:#f0f2f5;color:#5e6b7e}.evidence{background:#f0edff;color:#6941c6}.auto{white-space:normal}.review{background:#fff3df;color:#b54708;white-space:normal}.mono-list{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px}.arrow{margin:0 5px;color:#8ba2c2}.candidate-layout{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr) 245px}.candidate-layout>.schema-table-wrap{grid-column:1}.candidate-note{grid-column:1/-1;padding:10px 13px;border-bottom:1px solid #dce8f8;background:#f3f8ff}.candidate-note strong{font-size:12px}.candidate-note p{margin:3px 0 0;color:#657690;font-size:10px}.mention-fields{grid-column:2;grid-row:2;padding:13px;border-left:1px solid #e0e9f5;background:#fafcff}.mention-fields strong{display:block;margin-bottom:10px;font-size:12px}.mention-fields span{display:inline-flex;margin:0 5px 6px 0;padding:3px 6px;border-radius:4px;background:#edf4ff;color:#315b95;font:9px ui-monospace,SFMono-Regular,Menlo,monospace}.trace-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:12px;background:#f8fbff}.trace-layout section{overflow:hidden;border:1px solid #d5e3f5;border-radius:7px;background:#fff}.trace-layout header{display:flex;align-items:flex-start;justify-content:space-between;padding:13px;border-bottom:1px solid #e3ebf6}.trace-layout h2{margin:0;font-size:13px}.trace-layout p{margin:3px 0 0;color:#7b899e;font-size:10px}.trace-layout header>span{color:#165dff;font-size:10px}.trace-layout table{display:block;max-height:390px;overflow:auto}.trace-layout tbody,.trace-layout tr{display:table;width:100%;table-layout:fixed}.trace-layout td:first-child{width:160px}@media(max-width:1250px){.schema-summary{grid-template-columns:repeat(3,1fr)}.schema-flow{grid-template-columns:repeat(4,1fr)}.schema-flow b{display:none}}@media(max-width:900px){.schema-summary{grid-template-columns:repeat(2,1fr)}.trace-layout{grid-template-columns:1fr}.candidate-layout{display:block}.mention-fields{border-top:1px solid #e0e9f5;border-left:0}}
+.schema-page{display:flex;height:100%;min-height:0;overflow:hidden;padding-bottom:2px;color:#142443;flex-direction:column}.schema-summary{display:grid;flex:0 0 auto;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-bottom:12px}.schema-summary article{display:grid;gap:5px;padding:13px 15px;border:1px solid #bfd6fa;border-radius:8px;background:linear-gradient(145deg,#fff,#f2f8ff)}.schema-summary span{color:#687996;font-size:11px}.schema-summary strong{font-size:23px}.schema-summary em{color:#8191aa;font-size:10px;font-style:normal}.schema-flow{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));margin-bottom:12px;padding:12px;border:1px solid #c5d9f6;border-radius:8px;background:#fff}.schema-flow>div{position:relative;display:flex;align-items:center;gap:7px;min-width:0;padding:4px 15px 4px 5px}.schema-flow i{display:grid;flex:0 0 auto;place-items:center;width:23px;height:23px;border-radius:50%;background:#eaf2ff;color:#004ecc;font-size:10px;font-style:normal}.schema-flow span{color:#40536f;font-size:10px;line-height:15px}.schema-flow b{position:absolute;right:2px;color:#9bb5d9}.schema-shell{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #bcd4f7;border-radius:9px;background:#fff;box-shadow:0 10px 24px rgba(48,105,194,.08);flex-direction:column}.schema-tabs{display:flex;flex:0 0 auto;overflow:auto;padding:0 12px;border-bottom:1px solid #dce8f8}.schema-tabs button{padding:12px 15px;border:0;border-bottom:2px solid transparent;background:transparent;color:#566985;white-space:nowrap;cursor:pointer}.schema-tabs button.active{border-color:#004ecc;color:#004ecc;font-weight:600}.schema-toolbar{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:14px;padding:10px 13px;border-bottom:1px solid #e3ebf6;background:#f8fbff}.schema-toolbar>div{display:flex;align-items:center;gap:10px}.schema-toolbar strong{font-size:13px}.schema-toolbar>div span{color:#7b8ba3;font-size:10px}.schema-toolbar label{display:flex;align-items:center;gap:6px;width:270px;padding:0 9px;border:1px solid #c7d8ef;border-radius:5px;background:#fff}.schema-toolbar input{width:100%;height:30px;border:0;outline:0;font-size:11px}.schema-table-wrap{flex:1;min-height:0;max-height:none;overflow:auto}.schema-table-wrap table,.trace-layout table{width:100%;border-collapse:collapse;font-size:11px}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{padding:11px 13px;border-bottom:1px solid #e5edf8;text-align:left;line-height:17px;vertical-align:top}.schema-table-wrap th{position:sticky;z-index:2;top:0;background:#f1f6fc;color:#5e6f88;white-space:nowrap}.schema-table-wrap td{color:#344763}.schema-table-wrap td:nth-child(5),.schema-table-wrap td:nth-child(6){max-width:330px}.schema-table-wrap code,.trace-layout code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#004ecc;white-space:nowrap}.core,.support,.evidence,.auto,.review{display:inline-flex;padding:2px 7px;border-radius:999px;background:#e9f8ef;color:#067647;font-size:9px;white-space:nowrap}.support{background:#f0f2f5;color:#5e6b7e}.evidence{background:#f0edff;color:#53389e}.auto{white-space:normal}.review{background:#fff3df;color:#b54708;white-space:normal}.mono-list{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px}.arrow{margin:0 5px;color:#8ba2c2}.candidate-layout{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr) 245px}.candidate-layout>.schema-table-wrap{grid-column:1}.candidate-note{grid-column:1/-1;padding:10px 13px;border-bottom:1px solid #dce8f8;background:#f3f8ff}.candidate-note strong{font-size:12px}.candidate-note p{margin:3px 0 0;color:#657690;font-size:10px}.mention-fields{grid-column:2;grid-row:2;padding:13px;border-left:1px solid #e0e9f5;background:#fafcff}.mention-fields strong{display:block;margin-bottom:10px;font-size:12px}.mention-fields span{display:inline-flex;margin:0 5px 6px 0;padding:3px 6px;border-radius:4px;background:#edf4ff;color:#315b95;font:9px ui-monospace,SFMono-Regular,Menlo,monospace}.trace-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:12px;background:#f8fbff}.trace-layout section{overflow:hidden;border:1px solid #d5e3f5;border-radius:7px;background:#fff}.trace-layout header{display:flex;align-items:flex-start;justify-content:space-between;padding:13px;border-bottom:1px solid #e3ebf6}.trace-layout h2{margin:0;font-size:13px}.trace-layout p{margin:3px 0 0;color:#7b899e;font-size:10px}.trace-layout header>span{color:#004ecc;font-size:10px}.trace-layout table{display:block;max-height:390px;overflow:auto}.trace-layout tbody,.trace-layout tr{display:table;width:100%;table-layout:fixed}.trace-layout td:first-child{width:160px}@media(max-width:1250px){.schema-summary{grid-template-columns:repeat(3,1fr)}.schema-flow{grid-template-columns:repeat(4,1fr)}.schema-flow b{display:none}}@media(max-width:900px){.schema-summary{grid-template-columns:repeat(2,1fr)}.trace-layout{grid-template-columns:1fr}.candidate-layout{display:block}.mention-fields{border-top:1px solid #e0e9f5;border-left:0}}
 
 /* Layout refinements for wide management screens. */
 .schema-page{box-sizing:border-box;padding:2px 2px 18px}
@@ -654,9 +649,9 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .schema-flow li:first-child{border-radius:6px 0 0 6px}
 .schema-flow li:last-child{border-right:1px solid #d5e4f7;border-radius:0 6px 6px 0}
 .schema-flow li:not(:last-child)::after{position:absolute;z-index:2;right:-8px;width:15px;height:15px;border-top:1px solid #d5e4f7;border-right:1px solid #d5e4f7;background:#fff;content:"";transform:rotate(45deg)}
-.schema-flow li i{position:relative;z-index:3;display:grid;flex:0 0 auto;place-items:center;width:25px;height:25px;border-radius:50%;background:#e9f2ff;color:#165dff;font-size:11px;font-style:normal;font-weight:700}
+.schema-flow li i{position:relative;z-index:3;display:grid;flex:0 0 auto;place-items:center;width:25px;height:25px;border-radius:50%;background:#e9f2ff;color:#004ecc;font-size:11px;font-style:normal;font-weight:700}
 .schema-flow li:nth-child(4) i,.schema-flow li:nth-child(5) i{background:#e9f8ef;color:#067647}
-.schema-flow li:nth-child(6) i,.schema-flow li:nth-child(7) i{background:#f1edff;color:#6941c6}
+.schema-flow li:nth-child(6) i,.schema-flow li:nth-child(7) i{background:#f1edff;color:#53389e}
 .schema-flow li span{position:relative;z-index:3;color:#40536f;font-size:11px;line-height:16px}
 
 .schema-shell{min-height:0}
@@ -670,35 +665,35 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .trace-card{display:flex;min-width:0;overflow:hidden;border:1px solid #cfdef2;border-radius:9px;background:#fff;box-shadow:0 6px 16px rgba(48,105,194,.06);flex-direction:column}
 .trace-card>header{display:flex;align-items:center;justify-content:space-between;min-height:68px;padding:13px 15px;border-bottom:1px solid #e0e9f5;background:linear-gradient(90deg,#eef5ff,#fff 62%)}
 .trace-card>header>div{display:flex;align-items:center;gap:10px}
-.trace-card>header i{display:grid;place-items:center;width:31px;height:31px;border-radius:8px;background:#165dff;color:#fff;font-size:11px;font-style:normal;font-weight:700}
+.trace-card>header i{display:grid;place-items:center;width:31px;height:31px;border-radius:8px;background:#004ecc;color:#fff;font-size:11px;font-style:normal;font-weight:700}
 .trace-card>header span{display:block}
 .trace-card h2{margin:0;color:#20324e;font-size:14px}
 .trace-card p{margin:3px 0 0;color:#74849b;font-size:10px}
-.trace-card>header b{padding:4px 8px;border-radius:999px;background:#eaf2ff;color:#165dff;font-size:10px;font-weight:500;white-space:nowrap}
+.trace-card>header b{padding:4px 8px;border-radius:999px;background:#eaf2ff;color:#004ecc;font-size:10px;font-weight:500;white-space:nowrap}
 .trace-card dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-content:start;margin:0;padding:10px}
 .trace-card dl>div{min-width:0;padding:10px 11px;border-right:1px solid #e8eef7;border-bottom:1px solid #e8eef7}
 .trace-card dl>div:nth-child(2n){border-right:0}
 .trace-card dt{margin-bottom:5px}
 .trace-card dd{margin:0;color:#53647d;font-size:10px;line-height:16px}
-.trace-card code{display:inline-flex;max-width:100%;padding:3px 7px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trace-card code{display:inline-flex;max-width:100%;padding:3px 7px;border-radius:4px;background:#edf4ff;color:#004ecc;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .trace-layout>aside{grid-column:1/-1;display:flex;align-items:center;gap:22px;min-height:48px;padding:10px 14px;border:1px solid #d4e1f2;border-radius:7px;background:#fff}
 .trace-layout>aside strong{color:#263b5a;font-size:11px;white-space:nowrap}
 .trace-layout>aside span{display:flex;align-items:flex-start;gap:7px;color:#64758d;font-size:10px;line-height:16px}
-.trace-layout>aside i{flex:0 0 auto;width:6px;height:6px;margin-top:5px;border-radius:50%;background:#165dff}
+.trace-layout>aside i{flex:0 0 auto;width:6px;height:6px;margin-top:5px;border-radius:50%;background:#004ecc}
 
 @media(max-width:1500px){.schema-flow li{padding-right:18px}.schema-flow li span{font-size:10px}.trace-card dl{grid-template-columns:1fr}.trace-card dl>div{border-right:0}}
 @media(max-width:1100px){.schema-flow ol{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.schema-flow li,.schema-flow li:last-child{border:1px solid #d5e4f7;border-radius:6px}.schema-flow li::after{display:none}.trace-layout{grid-template-columns:1fr}.trace-layout>aside{grid-column:1;align-items:flex-start;flex-direction:column;gap:7px}.trace-card dl{grid-template-columns:repeat(2,1fr)}.trace-card dl>div{border-right:1px solid #e8eef7}.trace-card dl>div:nth-child(2n){border-right:0}}
 .schema-summary{grid-template-columns:repeat(3,minmax(0,1fr))}
 .schema-version-message{margin:0;padding:9px 13px;border-bottom:1px solid #b7d0f5;background:#eef5ff;color:#344f7a;font-size:11px}
-.schema-version-table{max-height:470px}.schema-version-table td:nth-child(6){min-width:280px}.schema-version-actions{display:flex;gap:6px}.schema-version-actions button{padding:3px 7px;border:1px solid #bdd0ea;border-radius:4px;background:#fff;color:#165dff;font-size:9px;white-space:nowrap;cursor:pointer}.schema-version-actions button.danger{border-color:#f6b9b4;color:#b42318}
+.schema-version-table{max-height:470px}.schema-version-table td:nth-child(6){min-width:280px}.schema-version-actions{display:flex;gap:6px}.schema-version-actions button{padding:3px 7px;border:1px solid #bdd0ea;border-radius:4px;background:#fff;color:#004ecc;font-size:9px;white-space:nowrap;cursor:pointer}.schema-version-actions button.danger{border-color:#f6b9b4;color:#b42318}
 @media(max-width:1500px){.schema-summary{grid-template-columns:repeat(3,1fr)}}
 
 .schema-toolbar__actions{display:flex;align-items:center;gap:10px}
-.schema-toolbar .primary{height:32px;padding:0 14px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:13px;cursor:pointer}
+.schema-toolbar .primary{height:32px;padding:0 14px;border:0;border-radius:6px;background:#004ecc;color:#fff;font-size:13px;cursor:pointer}
 .schema-toolbar .primary:hover{background:#0e4ed8}
 .schema-actions{white-space:nowrap}
 .schema-actions__inner{display:flex;gap:8px;align-items:center}
-.schema-action-link{border:0;background:transparent;color:#165dff;font-size:11px;line-height:17px;padding:0;cursor:pointer}
+.schema-action-link{border:0;background:transparent;color:#004ecc;font-size:11px;line-height:17px;padding:0;cursor:pointer}
 .schema-action-link:hover{text-decoration:underline}
 .script-badge{max-width:120px;padding:0 8px;height:22px;border:1px solid #d8e6fa;border-radius:11px;background:#f7faff;color:#4e5969;font-size:11px;line-height:22px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .schema-modal{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;padding:24px}
@@ -706,7 +701,7 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .schema-modal__panel{position:relative;z-index:1;width:min(520px,100%);overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3)}
 .schema-modal__panel header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #e5e6eb}
 .schema-modal__panel header h2{margin:0;font-size:15px;font-weight:600;color:#1d2129}
-.schema-modal__panel header button{width:24px;height:24px;border:0;background:transparent;color:#86909c;font-size:18px;cursor:pointer}
+.schema-modal__panel header button{width:24px;height:24px;border:0;background:transparent;color:#59636f;font-size:18px;cursor:pointer}
 .schema-modal__body{padding:18px;display:flex;flex-direction:column;gap:12px;max-height:60vh;overflow:auto}
 .schema-modal__body label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#4e5969}
 .schema-modal__body label em{color:#f53f3f;font-style:normal;margin-left:2px}
@@ -714,20 +709,20 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .schema-modal__body textarea{height:auto;padding:6px 8px;resize:vertical}
 .schema-modal__panel footer{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #e5e6eb}
 .schema-modal__panel footer button{height:32px;padding:0 14px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:13px;cursor:pointer}
-.schema-modal__panel footer .primary{background:#165dff;color:#fff;border-color:#165dff}
+.schema-modal__panel footer .primary{background:#004ecc;color:#fff;border-color:#004ecc}
 .schema-modal__panel footer button:disabled{opacity:.6;cursor:not-allowed}
 
 /* 上传脚本弹窗 */
 .script-upload-modal .schema-modal__body{min-height:140px}
 .upload-idle{display:flex;flex-direction:column;gap:14px;align-items:center;padding:14px 0;text-align:center}
 .upload-idle p{margin:0;color:#4e5969;font-size:13px;line-height:20px}
-.upload-idle .primary{height:34px;padding:0 18px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:13px;cursor:pointer}
+.upload-idle .primary{height:34px;padding:0 18px;border:0;border-radius:6px;background:#004ecc;color:#fff;font-size:13px;cursor:pointer}
 .upload-working{display:flex;align-items:center;gap:16px;padding:10px 4px}
-.spinner{flex:0 0 auto;width:28px;height:28px;border:3px solid #e3ebf6;border-top-color:#165dff;border-radius:50%;animation:spin 0.9s linear infinite}
+.spinner{flex:0 0 auto;width:28px;height:28px;border:3px solid #e3ebf6;border-top-color:#004ecc;border-radius:50%;animation:spin 0.9s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .upload-working__text{display:flex;flex-direction:column;gap:4px;min-width:0}
 .upload-working__text strong{font-size:13px;color:#1d2129;word-break:break-all}
-.upload-stage{color:#165dff;font-size:11px}
+.upload-stage{color:#004ecc;font-size:11px}
 .upload-message{color:#74849b;font-size:11px}
 .upload-result{display:flex;flex-direction:column;gap:8px;align-items:center;padding:18px 0;text-align:center}
 .upload-result__icon{display:grid;place-items:center;width:42px;height:42px;border-radius:50%;font-size:22px;color:#fff}
@@ -758,8 +753,8 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .create-field select{appearance:auto}
 .create-props{display:flex;flex-direction:column;gap:8px}
 .create-props__head{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#4e5969}
-.create-props__add{height:26px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#165dff;font-size:12px;cursor:pointer}
-.create-props__add:hover{border-color:#165dff}
+.create-props__add{height:26px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#004ecc;font-size:12px;cursor:pointer}
+.create-props__add:hover{border-color:#004ecc}
 .create-prop-row{display:grid;grid-template-columns:1.4fr 1.2fr 0.6fr auto auto;gap:8px;align-items:center}
 .prop-name,.prop-type,.prop-len{height:30px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:12px;color:#1d2129;background:#fff}
 .prop-type{appearance:auto}
@@ -771,13 +766,13 @@ const filteredAttributes = computed(() => attributes.value.filter(matches))
 .create-ddl__label{font-size:11px;color:#74849b}
 .create-ddl__pre{margin:0;padding:10px 12px;max-height:140px;overflow:auto;background:#0d1117;border-radius:6px;color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:18px;white-space:pre-wrap;word-break:break-all}
 .create-ddl__confirm{margin:6px 0 0;color:#b54708;font-size:11px;line-height:16px}
-.source-table-count{float:right;color:#165dff;font-size:10px;font-weight:400}
+.source-table-count{float:right;color:#004ecc;font-size:10px;font-weight:400}
 .source-table-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:6px;max-height:280px;overflow:auto;padding:8px;border:1px solid #e3ebf6;border-radius:4px;background:#fafcff}
 .source-table-item{display:flex;align-items:center;gap:6px;min-width:0;padding:6px 8px;border:1px solid #e3ebf6;border-radius:5px;font-size:11px;color:#4e5969;background:#fff;cursor:pointer;transition:border-color .15s,box-shadow .15s}
-.source-table-item:hover{border-color:#165dff;box-shadow:0 2px 6px rgba(22,93,255,.12)}
-.source-table-item:has(input:checked){border-color:#165dff;background:#eef5ff}
+.source-table-item:hover{border-color:#004ecc;box-shadow:0 2px 6px rgba(22,93,255,.12)}
+.source-table-item:has(input:checked){border-color:#004ecc;background:#eef5ff}
 .source-table-item input{flex:0 0 auto;margin:0}
-.source-table-item code{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 5px;border-radius:3px;background:#edf4ff;color:#165dff;font-size:10px}
+.source-table-item code{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 5px;border-radius:3px;background:#edf4ff;color:#004ecc;font-size:10px}
 .source-table-comment{flex:1;min-width:0;color:#8191aa;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .source-table-empty{grid-column:1/-1;padding:12px;text-align:center;color:#8191aa;font-size:11px}
 </style>

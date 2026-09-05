@@ -21,6 +21,7 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
@@ -252,7 +253,11 @@ class KeyEnterpriseRelationService:
         return r.json()
 
     async def run(
-        self, req: KeyEnterpriseRelationRequest, *, app: Any = None
+        self,
+        req: KeyEnterpriseRelationRequest,
+        *,
+        app: Any = None,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> KeyEnterpriseRelationResponse:
         cache_key = (
             f"{req.expert_id}|{req.enterprise_name}|{req.role_type}|"
@@ -266,7 +271,11 @@ class KeyEnterpriseRelationService:
         resp = KeyEnterpriseRelationResponse(expert_id=req.expert_id)
         # ASGI 进程内 transport：替代真实 HTTP 回环 8200，消除 socket/accept 队列开销
         # 与高并发自调用饱和。app 由 handler 传 request.app，避免在 service 里 import main。
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app)) as client:
+        # graph-search 路由受鉴权保护，须带上调用方凭证头，否则 401 被当成空图。
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            headers=dict(auth_headers) if auth_headers else None,
+        ) as client:
             # 1) filtered-subgraph(depth=2) 只拿业务需要的 12 种边，不捞论文/合作者/引用
             edge_types = ",".join(
                 [
@@ -426,7 +435,7 @@ class KeyEnterpriseRelationService:
         # 首要企业 best-effort 风险事件探测（标书「经营状况」之风险提示维度）
         # 只查 relations[0]，避免 N×调用；失败降级为空串，不阻断主流程。
         if relations:
-            await self._probe_primary_risk(relations[0], app=app)
+            await self._probe_primary_risk(relations[0], app=app, auth_headers=auth_headers)
         resp.relations = relations
         # 实体溯源：专家 + 各关联企业，供前端溯源栏展示真实源数据表/英文字段名/图空间 VID
         resp.entity_provenance = {
@@ -477,13 +486,20 @@ class KeyEnterpriseRelationService:
         )
 
     async def _probe_primary_risk(
-        self, primary: EnterpriseRelationItem, *, app: Any = None
+        self,
+        primary: EnterpriseRelationItem,
+        *,
+        app: Any = None,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> None:
         """对首要关联企业查 INVOLVED_IN 风险事件，回填 risk_summary（best-effort）。"""
         org_id = primary.enterprise_id
         if not org_id:
             return
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app)) as client:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            headers=dict(auth_headers) if auth_headers else None,
+        ) as client:
             try:
                 rj = await self._get(
                     client,

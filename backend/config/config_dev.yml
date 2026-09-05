@@ -28,16 +28,16 @@ server_mysql:
   port: ${SERVER_MYSQL_PORT:5306}
   database: ${SERVER_MYSQL_DATABASE:trendAdmin}
   username: ${SERVER_MYSQL_USERNAME:root}
-  password: ${SERVER_MYSQL_PASSWORD:q123456Q.}
+  password: ${SERVER_MYSQL_PASSWORD:}
 
 mongo:
-  uri: "${MONGO_URI:mongodb://root:x+s9zI&VA!s@10.50.125.110:47017}"
+  uri: "${MONGO_URI:}"
   database: ${MONGO_DATABASE:test}
 
 elasticsearch:
-  url: ${ELASTICSEARCH_URL:http://123.57.233.22:9200}
+  url: ${ELASTICSEARCH_URL:}
   username: ${ELASTICSEARCH_USERNAME:elastic}
-  password: "${ELASTICSEARCH_PASSWORD:*7A0#7i7@DzKD1pr}"
+  password: "${ELASTICSEARCH_PASSWORD:}"
 
 nginx:
   gateway_url: ${NGINX_GATEWAY_URL:https://analysis_ckcest.aminer.cn/microtrend-api-beta/}

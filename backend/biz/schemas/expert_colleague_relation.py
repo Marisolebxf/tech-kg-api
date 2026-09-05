@@ -4,16 +4,14 @@ import re
 from datetime import date
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
-
-from biz.schemas.text_rules import check_text
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ExpertColleagueRelationRequest(BaseModel):
     """科技专家同事关系查询条件。"""
 
     model_config = ConfigDict(
-        populate_by_name=True,
+        populate_by_name=False,
         extra="forbid",
         json_schema_extra={
             "example": {
@@ -21,8 +19,6 @@ class ExpertColleagueRelationRequest(BaseModel):
                 "expert_b_id": "person_1S5195f4",
                 "start_time": "2021-01",
                 "end_time": "2026-08",
-                "limit": 1,
-                "offset": 0,
             }
         },
     )
@@ -30,54 +26,29 @@ class ExpertColleagueRelationRequest(BaseModel):
     expertId: str = Field(
         min_length=1,
         max_length=64,
-        validation_alias=AliasChoices("expertId", "expert_id", "expert_a_id"),
+        validation_alias="expert_a_id",
         description="专家 A 的 VID、scholar_id、source_record_id 或精确姓名。",
     )
-    targetExpertId: str | None = Field(
-        default=None,
+    targetExpertId: str = Field(
         min_length=1,
         max_length=64,
-        validation_alias=AliasChoices("targetExpertId", "target_expert_id", "expert_b_id"),
+        validation_alias="expert_b_id",
         description="专家 B 的 VID、scholar_id、source_record_id 或精确姓名。",
-    )
-    organization: str | None = Field(default=None, description="共同任职机构关键词。")
-    department: str | None = Field(default=None, description="共同部门、实验室或团队关键词。")
-    overlapPeriod: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("overlapPeriod", "overlap_period"),
-        description="任职重叠时间，如 2018-2022。",
     )
     startTime: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("startTime", "start_time"),
+        validation_alias="start_time",
         description="查询开始时间，格式 YYYY-MM。",
     )
     endTime: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("endTime", "end_time"),
+        validation_alias="end_time",
         description="查询结束时间，格式 YYYY-MM。",
     )
-    teamOrProject: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("teamOrProject", "team_or_project"),
-        description="共同团队或项目组筛选。",
-    )
-    achievementTypes: list[str] | None = Field(
-        default=None,
-        validation_alias=AliasChoices("achievementTypes", "achievement_types"),
-        description="成果类型筛选。",
-    )
-    minConfidence: float = Field(
-        default=0.0, ge=0, le=1, validation_alias=AliasChoices("minConfidence", "min_confidence")
-    )
-    limit: int = Field(default=20, ge=1, le=50)
-    offset: int = Field(default=0, ge=0, description="分页偏移量。")
 
     @field_validator("expertId", "targetExpertId", mode="before")
     @classmethod
-    def normalize_expert_id(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
+    def normalize_expert_id(cls, value: str) -> str:
         if re.search(r"\s", value):
             raise ValueError("专家标识不能包含空格或 !@#￥%& 等异常字符")
         value = value.strip()
@@ -87,28 +58,6 @@ class ExpertColleagueRelationRequest(BaseModel):
             raise ValueError("专家标识长度不能超过 64 个字符")
         if not re.fullmatch(r"[\w\u4e00-\u9fff·.\-]+", value):
             raise ValueError("专家标识不能包含空格或 !@#￥%& 等异常字符")
-        return value
-
-    @field_validator("organization", "department", "teamOrProject")
-    @classmethod
-    def normalize_optional_text(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        value = value.strip()
-        if not value:
-            return None
-        return check_text(value, label="机构/部门/团队关键词", allow_space=True)
-
-    @field_validator("overlapPeriod")
-    @classmethod
-    def validate_overlap_period(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        value = value.strip()
-        matches = re.findall(r"((?:19|20)\d{2})(?:[-/.年](0?[1-9]|1[0-2])(?!\d))?", value)
-        is_open_ended = re.search(r"至今|present|current|now", value, re.I)
-        if not matches or (len(matches) == 1 and not is_open_ended):
-            raise ValueError("overlapPeriod 必须是起止时间区间，如 2018-2022")
         return value
 
     @field_validator("startTime", "endTime")
@@ -127,8 +76,6 @@ class ExpertColleagueRelationRequest(BaseModel):
             raise ValueError("start_time 和 end_time 必须同时提供")
         if self.startTime and self.endTime and self.startTime > self.endTime:
             raise ValueError("start_time 不能晚于 end_time")
-        if self.overlapPeriod and self.startTime:
-            raise ValueError("请使用 start_time/end_time，不要同时传 overlap_period")
         current_month = date.today().strftime("%Y-%m")
         if self.startTime and self.startTime > current_month:
             raise ValueError("start_time 不能晚于当前月份")

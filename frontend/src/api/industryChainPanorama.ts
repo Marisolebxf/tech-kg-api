@@ -17,7 +17,6 @@ import { http } from './http'
  * 请求参数。
  */
 export interface IndustryChainPanoramaQueryRequest {
-  dataSource?: 'all'
   industry?: string | null
   anchorId?: string | null
   depth?: number
@@ -53,7 +52,7 @@ export type PanoramaLayerKey =
 
 
 export interface PanoramaLayer {
-  key: PanoramaLayerKey | string
+  key: PanoramaLayerKey | (string & {})
   title: string
   total: number
   items: PanoramaKeyEntity[]

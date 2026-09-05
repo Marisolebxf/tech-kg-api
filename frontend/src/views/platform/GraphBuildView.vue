@@ -102,7 +102,7 @@ onMounted(loadData)
       <div class="gb-task-panel">
         <header><strong>作业执行记录（{{ executions.length }}）</strong></header>
         <div class="gb-task-table">
-          <table>
+          <table aria-label="数据表">
             <thead>
               <tr><th>执行 ID</th><th>工作流定义</th><th>状态</th><th>下发模式</th><th>启动时间</th></tr>
             </thead>
@@ -120,7 +120,7 @@ onMounted(loadData)
         </div>
       </div>
 
-      <aside class="gb-detail-panel">
+      <aside aria-label="辅助区域 1" class="gb-detail-panel">
         <header><strong>执行详情</strong></header>
         <div v-if="!selectedExecution" class="empty">选择左侧记录查看详情</div>
         <div v-else class="gb-detail-body">
@@ -165,10 +165,10 @@ onMounted(loadData)
 .graph-build-page{display:flex;height:100%;min-height:0;overflow:hidden;padding:2px 2px 18px;color:#142443;flex-direction:column;box-sizing:border-box}
 .gb-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px}
 .gb-header h1{margin:0;font-size:18px;color:#1d2129}
-.gb-header p{margin:4px 0 0;color:#66758f;font-size:12px}
+.gb-header p{margin:4px 0 0;color:#475467;font-size:12px}
 .gb-actions{display:flex;gap:8px}
 .gb-actions button{height:34px;padding:0 14px;border:1px solid #c9cdd4;border-radius:6px;background:#fff;color:#4e5969;font-size:13px;cursor:pointer}
-.gb-actions .primary{border-color:#165dff;background:#165dff;color:#fff}
+.gb-actions .primary{border-color:#004ecc;background:#004ecc;color:#fff}
 .gb-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
 .gb-summary article{display:grid;gap:3px;padding:12px 14px;border:1px solid #bfd6fa;border-radius:8px;background:linear-gradient(145deg,#fff,#f2f8ff)}
 .gb-summary span{color:#687996;font-size:11px}
@@ -184,22 +184,22 @@ onMounted(loadData)
 .gb-task-table tbody tr{cursor:pointer}
 .gb-task-table tbody tr:hover td{background:#f4f8ff}
 .gb-task-table tbody tr.active td{background:#eaf2ff}
-.gb-task-table code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:11px}
-.empty{padding:40px 14px;text-align:center;color:#8290a7;font-size:12px}
+.gb-task-table code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#004ecc;font-size:11px}
+.empty{padding:40px 14px;text-align:center;color:#52627a;font-size:12px}
 .gb-detail-body{flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:14px}
 .gb-detail-meta{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .gb-detail-meta>div{display:flex;flex-direction:column;gap:3px;padding:9px 11px;border:1px solid #e3ebf6;border-radius:6px;background:#fafcff}
 .gb-detail-meta span{color:#687996;font-size:10px}
 .gb-detail-meta code,.gb-detail-meta strong{font-size:12px;color:#1d2129}
-.gb-detail-meta code{padding:1px 5px;border-radius:3px;background:#edf4ff;color:#165dff;font-size:11px}
+.gb-detail-meta code{padding:1px 5px;border-radius:3px;background:#edf4ff;color:#004ecc;font-size:11px}
 .gb-steps{display:flex;flex-direction:column;gap:4px}
 .gb-steps-head{font-size:12px;color:#4e5969;font-weight:600;margin-bottom:4px}
 .gb-step{display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid #e3ebf6;border-radius:5px;background:#fff}
-.gb-step-index{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#eaf2ff;color:#165dff;font-size:10px;font-weight:600}
+.gb-step-index{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#eaf2ff;color:#004ecc;font-size:10px;font-weight:600}
 .gb-step-name{flex:1;font-size:12px;color:#344763}
 .gb-step-status{padding:2px 7px;border-radius:999px;font-size:10px}
 .gb-step-status.ok{background:#dcfae6;color:#067647}
-.gb-step-status.run{background:#eaf2ff;color:#175cd3}
+.gb-step-status.run{background:#eaf2ff;color:#004ecc}
 .gb-step-status.warn{background:#fff3d8;color:#b54708}
 .gb-step-status.pending{background:#f0f2f5;color:#5e6b7e}
 .gb-step-duration{color:#8191aa;font-size:10px}
@@ -207,11 +207,11 @@ onMounted(loadData)
 .gb-logs strong{font-size:12px;color:#4e5969}
 .gb-logs pre{margin:0;max-height:200px;overflow:auto;padding:10px;background:#0d1117;border-radius:6px;color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:17px;white-space:pre-wrap}
 .gb-detail-actions{display:flex;justify-content:flex-end}
-.gb-detail-actions button{height:32px;padding:0 14px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:12px;cursor:pointer}
+.gb-detail-actions button{height:32px;padding:0 14px;border:0;border-radius:6px;background:#004ecc;color:#fff;font-size:12px;cursor:pointer}
 .muted{color:#8191aa;font-size:11px}
 span.ok{display:inline-flex;padding:2px 8px;border-radius:999px;background:#dcfae6;color:#067647;font-size:11px}
 span.err{display:inline-flex;padding:2px 8px;border-radius:999px;background:#fee4e2;color:#b42318;font-size:11px}
 span.warn{display:inline-flex;padding:2px 8px;border-radius:999px;background:#fff3d8;color:#b54708;font-size:11px}
-span.run{display:inline-flex;padding:2px 8px;border-radius:999px;background:#eaf2ff;color:#175cd3;font-size:11px}
+span.run{display:inline-flex;padding:2px 8px;border-radius:999px;background:#eaf2ff;color:#004ecc;font-size:11px}
 @media(max-width:1200px){.gb-summary{grid-template-columns:repeat(2,1fr)}.gb-body{grid-template-columns:1fr}}
 </style>

@@ -215,9 +215,6 @@ export type ReviewTemplateId =
   | 'T_DQ_MERGE'
   | 'T_RUNTIME'
 
-/** @deprecated 兼容旧引用 */
-export type ReviewModeId = ReviewTemplateId
-
 export type ReviewAction = {
   id: string
   label: string
@@ -478,9 +475,6 @@ export const HANDLE_CATEGORIES: HandleCategory[] = [
   '质量校验',
 ]
 
-/** @deprecated 兼容旧调用；请用 getHandleCategory */
-export type ReviewCategory = HandleCategory
-
 const categoryByStep: Partial<Record<PipelineStepId, HandleCategory>> = {
   normalize: '清洗标准化',
   schema: 'Schema 映射',
@@ -534,13 +528,15 @@ export const getReviewConsequence = (record: ReviewRecord): ReviewConsequence =>
   const tid = getReviewTemplateId(record)
   let writeTarget = '处理结果'
   if (tid === 'T_MAP') {
-    writeTarget = isMapTypeFix(record)
-      ? '实体分类结果'
-      : record.type.includes('Schema 字段映射')
-        ? 'Schema 映射表'
-        : record.type.includes('标准化失败')
-          ? '标准字典'
-          : '标准字典 / 枚举字段'
+    if (isMapTypeFix(record)) {
+      writeTarget = '实体分类结果'
+    } else if (record.type.includes('Schema 字段映射')) {
+      writeTarget = 'Schema 映射表'
+    } else if (record.type.includes('标准化失败')) {
+      writeTarget = '标准字典'
+    } else {
+      writeTarget = '标准字典 / 枚举字段'
+    }
   } else if (tid === 'T_LINK') writeTarget = '实体对齐结果'
   else if (tid === 'T_EVIDENCE') writeTarget = '候选关系隔离区'
   else if (tid === 'T_ATTR') writeTarget = '属性融合结果'

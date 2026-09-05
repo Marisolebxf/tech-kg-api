@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
+from biz.dependencies.internal_api import get_internal_api_auth_headers
 from biz.schemas.common import ApiResponse
 from biz.schemas.tech_enterprise_relation_business import (
     KeyEnterpriseRelationRequest,
@@ -39,12 +40,16 @@ async def describe_key_enterprise_relation() -> dict[str, object]:
     }
 
 
-@router.post("/key-enterprise-relation", response_model=ApiResponse)
+@router.post("/key-enterprise-relation")
 async def run_key_enterprise_relation(
     req: KeyEnterpriseRelationRequest, request: Request
 ) -> ApiResponse:
     try:
-        data = await service.run(req, app=request.app)
+        data = await service.run(
+            req,
+            app=request.app,
+            auth_headers=get_internal_api_auth_headers(request),
+        )
         return ApiResponse(data=data.model_dump())
     except KeyError as exc:  # noqa: BLE001
         return ApiResponse(code=404, success=False, msg=str(exc))

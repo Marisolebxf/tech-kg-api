@@ -38,20 +38,21 @@ def _raise_error(exc: Exception) -> None:
     raise exc
 
 
-@router.get("", response_model=ApiResponse)
+@router.get("")
 def list_corrections(
     actor: CurrentActor,
     request: Request,
     session: Annotated[Session, Depends(get_session)],
-    scope: str = Query(default="mine", pattern="^(mine|all)$"),
-    status: str | None = Query(default=None, max_length=64),
-    statuses: str | None = Query(default=None, max_length=64, pattern=KEYWORD_QUERY_PATTERN),
-    target_type: str | None = Query(
-        default=None, alias="targetType", max_length=64, pattern=IDENTIFIER_QUERY_PATTERN
-    ),
-    keyword: str | None = Query(default=None, max_length=64, pattern=KEYWORD_QUERY_PATTERN),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, alias="pageSize", ge=1, le=100),
+    scope: Annotated[str, Query(pattern="^(mine|all)$")] = "mine",
+    status: Annotated[str | None, Query(max_length=64)] = None,
+    statuses: Annotated[str | None, Query(max_length=64, pattern=KEYWORD_QUERY_PATTERN)] = None,
+    target_type: Annotated[
+        str | None,
+        Query(alias="targetType", max_length=64, pattern=IDENTIFIER_QUERY_PATTERN),
+    ] = None,
+    keyword: Annotated[str | None, Query(max_length=64, pattern=KEYWORD_QUERY_PATTERN)] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
 ) -> Response:
     cached = get_cache.try_get("correction:list", request)
     if cached is not None:
@@ -76,7 +77,7 @@ def list_corrections(
     )
 
 
-@router.post("", response_model=ApiResponse, status_code=201)
+@router.post("", status_code=201)
 def create_correction(
     request: CorrectionCreateRequest,
     actor: CurrentActor,
@@ -90,7 +91,7 @@ def create_correction(
     return result
 
 
-@router.get("/{correction_id}", response_model=ApiResponse)
+@router.get("/{correction_id}")
 def get_correction(
     correction_id: str,
     actor: CurrentActor,
@@ -102,7 +103,7 @@ def get_correction(
         _raise_error(exc)
 
 
-@router.patch("/{correction_id}", response_model=ApiResponse)
+@router.patch("/{correction_id}")
 def update_correction(
     correction_id: str,
     request: CorrectionUpdateRequest,
@@ -124,7 +125,7 @@ def update_correction(
         _raise_error(exc)
 
 
-@router.delete("/{correction_id}", response_model=ApiResponse)
+@router.delete("/{correction_id}")
 def cancel_correction(
     correction_id: str,
     actor: CurrentActor,
@@ -141,7 +142,7 @@ def cancel_correction(
         _raise_error(exc)
 
 
-@router.post("/{correction_id}/review", response_model=ApiResponse)
+@router.post("/{correction_id}/review")
 def review_correction(
     correction_id: str,
     request: CorrectionReviewRequest,
@@ -164,7 +165,7 @@ def review_correction(
         _raise_error(exc)
 
 
-@router.post("/{correction_id}/retry", response_model=ApiResponse)
+@router.post("/{correction_id}/retry")
 def retry_correction(
     correction_id: str,
     request: CorrectionRetryRequest,

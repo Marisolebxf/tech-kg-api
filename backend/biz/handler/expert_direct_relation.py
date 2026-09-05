@@ -1,10 +1,11 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
 from application.expert_direct_relation import ExpertDirectRelationApplication
+from biz.dependencies.internal_api import get_internal_api_auth_headers
 from biz.schema.expert_direct_relation import (
     MAX_QUERY_LIMIT,
     DataSource,
@@ -24,6 +25,7 @@ async def describe_expert_direct_relation() -> dict[str, object]:
 @router.post("/query", response_model=ExpertDirectRelationQueryResponse)
 async def query_expert_direct_relation(
     body: ExpertDirectRelationQueryRequest,
+    request: Request,
 ) -> dict[str, object]:
     return await application.query(
         data_source=body.dataSource,
@@ -33,28 +35,30 @@ async def query_expert_direct_relation(
         start_time=body.startTime,
         end_time=body.endTime,
         limit=body.limit,
+        auth_headers=get_internal_api_auth_headers(request),
     )
 
 
 @router.get("/query", response_model=ExpertDirectRelationQueryResponse)
 async def query_expert_direct_relation_get(
-    expertAId: Annotated[str, Query()],
-    dataSource: Annotated[DataSource, Query()] = "all",
-    expertBId: Annotated[str | None, Query()] = None,
+    request: Request,
+    expert_a_id: Annotated[str, Query(alias="expertAId")],
+    data_source: Annotated[DataSource, Query(alias="dataSource")] = "all",
+    expert_b_id: Annotated[str | None, Query(alias="expertBId")] = None,
     institution: Annotated[str | None, Query()] = None,
-    startTime: Annotated[str | None, Query()] = None,
-    endTime: Annotated[str | None, Query()] = None,
+    start_time: Annotated[str | None, Query(alias="startTime")] = None,
+    end_time: Annotated[str | None, Query(alias="endTime")] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_QUERY_LIMIT)] = 10,
 ) -> dict[str, object]:
     # GET 与 POST 共用同一套入参校验，避免绕过长度/异常字符/未来时间限制
     try:
         body = ExpertDirectRelationQueryRequest(
-            dataSource=dataSource,
-            expertAId=expertAId,
-            expertBId=expertBId,
+            dataSource=data_source,
+            expertAId=expert_a_id,
+            expertBId=expert_b_id,
             institution=institution,
-            startTime=startTime,
-            endTime=endTime,
+            startTime=start_time,
+            endTime=end_time,
             limit=limit,
         )
     except ValidationError as exc:
@@ -67,4 +71,5 @@ async def query_expert_direct_relation_get(
         start_time=body.startTime,
         end_time=body.endTime,
         limit=body.limit,
+        auth_headers=get_internal_api_auth_headers(request),
     )

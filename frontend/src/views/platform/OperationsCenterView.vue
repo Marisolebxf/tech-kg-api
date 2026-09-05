@@ -394,7 +394,19 @@ onMounted(loadReviews)
         </tbody>
       </table></div>
 
-      <div v-else class="ops-review-table-scroll"><table>
+      <div v-else class="ops-review-table-scroll"><table class="review-case-table" :class="{ 'review-case-table--selectable': reviewCategory === 'C' }">
+        <colgroup>
+          <col v-if="reviewCategory === 'C'" class="review-col-pick" />
+          <col class="review-col-id" />
+          <col class="review-col-object" />
+          <col class="review-col-node" />
+          <col class="review-col-source" />
+          <col class="review-col-batch" />
+          <col class="review-col-handler" />
+          <col class="review-col-status" />
+          <col class="review-col-time" />
+          <col class="review-col-action" />
+        </colgroup>
         <thead>
           <tr>
             <th v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
@@ -414,7 +426,7 @@ onMounted(loadReviews)
             <th>处理人</th>
             <th>状态</th>
             <th>更新时间</th>
-            <th>操作</th>
+            <th class="review-action-col">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -445,7 +457,7 @@ onMounted(loadReviews)
             <td>{{ row.handler }}</td>
             <td><span :class="['review-status', `is-${row.status}`]">{{ row.status }}</span></td>
             <td>{{ row.completedAt || row.updatedAt }}</td>
-            <td>
+            <td class="review-action-col">
               <div class="alert-actions">
                 <RouterLink class="link" :to="`/manual-review/task/${row.id}`">
                   {{ row.status === '待处理' ? '进入处理' : '查看记录' }} →
@@ -628,6 +640,14 @@ onMounted(loadReviews)
 .rerun-refresh{height:32px;padding:0 16px;font-size:14px;line-height:22px;font-weight:400}
 .rerun-feedback{gap:8px;padding:8px 16px}.rerun-feedback-close{width:24px;height:24px}
 .rerun-confirm-text{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
+.ops-review-table-scroll .review-action-col{position:sticky;right:0;box-sizing:border-box;width:144px;min-width:144px;background:#fff;box-shadow:-1px 0 #e5e6eb}
+.ops-review-table-scroll th.review-action-col{z-index:4;background:#f7f8fa}
+.ops-review-table-scroll td.review-action-col{z-index:1}
+.review-action-col .alert-actions{width:max-content;min-width:0}
+.ops-review-table-scroll th,.ops-review-table-scroll td{box-sizing:border-box;padding-right:16px;padding-left:16px}
+.ops-review-table-scroll table.review-case-table{width:100%;min-width:1356px;table-layout:auto}
+.ops-review-table-scroll table.review-case-table--selectable{min-width:1408px}
+.review-col-pick{width:52px}.review-col-id{width:160px}.review-col-object{width:180px}.review-col-node{width:200px}.review-col-source{width:170px}.review-col-batch{width:150px}.review-col-handler{width:96px}.review-col-status{width:96px}.review-col-time{width:160px}.review-col-action{width:144px}
 </style>
 <style>
 /* Keep the Arco input's native field transparent; the wrapper is the only visible input shell. */

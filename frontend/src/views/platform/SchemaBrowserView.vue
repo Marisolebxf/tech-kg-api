@@ -1060,7 +1060,10 @@ function togglePropertyDetail(schemaId: string): void {
                 </a-form-item>
                 <template v-if="p.locked">
                   <span class="prop-locked-type">string</span>
-                  <span class="prop-locked-required">必填 🔒</span>
+                  <span class="prop-locked-required">
+                    <span>必填</span>
+                    <span class="prop-locked-required__state">锁定</span>
+                  </span>
                 </template>
                 <template v-else>
                   <a-select v-model="p.dataType" class="schema-select prop-type" popup-container=".schema-create-modal" :scrollbar="false">
@@ -1486,7 +1489,7 @@ function togglePropertyDetail(schemaId: string): void {
 .create-ddl__pre{margin:0;padding:10px 12px;max-height:140px;overflow:auto;background:#0d1117;border-radius:6px;color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:18px;white-space:pre-wrap;word-break:break-all}
 .create-ddl__confirm{margin:6px 0 0;color:#b54708;font-size:11px;line-height:16px}
 .create-sources{display:flex;flex-direction:column;gap:8px}
-.create-sources__head{display:grid;align-items:center;grid-template-columns:minmax(0,1fr) auto;column-gap:8px;row-gap:4px;font-size:12px;color:#4e5969}
+.create-sources__head{display:grid;align-items:center;grid-template-columns:minmax(0,1fr) auto;column-gap:8px;row-gap:8px;font-size:12px;color:#4e5969}
 .create-sources__head>span:first-child,.create-ddl__label{color:#4e5969;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 .create-sources__hint{grid-column:1/-1;color:#86909c;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .sources-panel{width:min(760px,100%)}
@@ -1526,13 +1529,21 @@ function togglePropertyDetail(schemaId: string): void {
 :deep(.prop-type.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb!important;border-radius:4px;background:#fff!important}:deep(.prop-type.arco-select-view:hover){border-color:#c9cdd4!important}:deep(.prop-type.arco-select-view-focus){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 :deep(.prop-type.arco-select-view) .arco-select-view-value,:deep(.prop-type.arco-select-view) .arco-select-view-input{background:#fff!important}
 .prop-len{grid-column:3;box-sizing:border-box;width:72px;height:32px}
-.prop-required{display:inline-flex!important;grid-column:3;flex-direction:row!important;align-items:center!important;justify-self:start;height:32px;margin:0!important;gap:8px!important;align-self:center;white-space:nowrap}
+.prop-required{display:inline-flex!important;box-sizing:border-box;grid-column:3;flex-direction:row!important;align-items:center!important;justify-self:start;min-width:76px;height:32px;margin:0!important;padding:0 8px!important;border:1px solid #e5e6eb;border-radius:4px!important;background:#fff;color:#4e5969;gap:0!important;align-self:center;white-space:nowrap;cursor:pointer;transition:border-color .2s ease,background-color .2s ease,color .2s ease,box-shadow .2s ease}
+.prop-required:hover{border-color:#4080ff;background:#f7faff;color:#1d2129}
+.prop-required:focus-within{border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
+.prop-required.arco-checkbox-checked{border-color:#94bfff;background:#e8f3ff;color:#165dff}
+.prop-required :deep(.arco-checkbox-icon-hover){display:inline-flex;align-items:center;justify-content:center}
+.prop-required :deep(.arco-checkbox-icon){box-sizing:border-box;width:14px;height:14px;border-width:1px;border-color:#c9cdd4;border-radius:3px;background:#fff}
+.prop-required.arco-checkbox-checked :deep(.arco-checkbox-icon){border-color:#165dff;background:#165dff}
+.prop-required :deep(.arco-checkbox-label){margin-left:8px;color:inherit;font-size:14px;line-height:22px}
 .create-prop-row--has-length .prop-required{grid-column:4}
 .prop-remove{grid-column:4;justify-self:end;align-self:center}
 .create-prop-row--has-length .prop-remove{grid-column:5}
 .create-prop-row--locked .prop-name{background:#f7f8fa;color:#4e5969;cursor:not-allowed}
 .prop-locked-type{grid-column:2;align-self:center;color:#86909c;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.prop-locked-required{grid-column:3;align-self:center;color:#4e5969;font-size:12px;white-space:nowrap}
+.prop-locked-required{display:inline-flex;box-sizing:border-box;grid-column:3;align-items:center;justify-self:start;height:28px;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#4e5969;font-size:14px;line-height:22px;white-space:nowrap}
+.prop-locked-required__state{display:inline-flex;align-items:center;margin-left:8px;padding-left:8px;border-left:1px solid #c9cdd4;color:#86909c;font-size:12px;line-height:20px}
 .schema-modal__panel footer{height:64px;box-sizing:border-box;gap:16px;padding:0 24px}.schema-create-panel footer{align-items:center;padding:16px 24px}.schema-modal__panel footer button{height:32px;padding:0 16px;font-size:14px;line-height:22px}
 :is(.schema-llm-select){box-sizing:border-box;width:100%;min-width:0}
 :is(.schema-llm-select) :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:14px;line-height:22px}

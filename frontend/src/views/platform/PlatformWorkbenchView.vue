@@ -5030,12 +5030,12 @@ const pageMeta = computed(() => {
             />
           </a-form-item>
           <a-form-item class="platform-form-field" field="selectedQueryType" label="图谱范围">
-            <a-select v-model="selectedQueryType" allow-clear placeholder="全部图谱">
+            <a-select v-model="selectedQueryType" allow-clear placeholder="全部图谱" :scrollbar="false">
               <a-option v-for="item in queryTypes" :key="item" :value="item">{{ item }}</a-option>
             </a-select>
           </a-form-item>
           <a-form-item class="platform-form-field" field="queryRelationFilter" label="关系类型">
-            <a-select v-model="queryRelationFilter" allow-clear placeholder="全部关系">
+            <a-select v-model="queryRelationFilter" allow-clear placeholder="全部关系" :scrollbar="false">
               <a-option v-for="item in relationFilters" :key="item" :value="item">{{ item }}</a-option>
             </a-select>
           </a-form-item>
@@ -5050,28 +5050,12 @@ const pageMeta = computed(() => {
             </a-select>
           </a-form-item>
           <a-form-item class="platform-form-field" field="selectedGraphSpace" label="图空间" required>
-            <a-select v-model="selectedGraphSpace" allow-clear placeholder="请选择图空间">
+            <a-select v-model="selectedGraphSpace" allow-clear placeholder="请选择图空间" :scrollbar="false">
               <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
             </a-select>
           </a-form-item>
         </a-form>
         <div v-else class="platform-ngql-input">
-          <div class="platform-ngql-input__bar">
-            <div class="platform-ngql-input__space-field">
-              <span>图空间</span>
-              <a-select v-model="ngqlSpace" aria-label="图空间" allow-clear placeholder="请选择图空间" class="platform-ngql-input__space">
-                <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
-              </a-select>
-            </div>
-            <div class="platform-ngql-input__hint" role="note">
-              <IconInfoCircle aria-hidden="true" />
-              <span>只读语句所有用户可执行</span>
-              <i aria-hidden="true"></i>
-              <span>写语句仅平台管理员</span>
-              <i aria-hidden="true"></i>
-              <span>DDL 禁止执行</span>
-            </div>
-          </div>
           <textarea
             v-model="ngqlStatement"
             aria-label="nGQL 查询语句"

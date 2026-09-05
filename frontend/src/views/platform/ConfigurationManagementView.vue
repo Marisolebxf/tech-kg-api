@@ -622,15 +622,23 @@ onMounted(() => {
         </div>
         <div v-else class="table-wrap">
           <table>
-            <thead><tr><th>配置名称</th><th>类型 / 地址</th><th>状态</th><th>引用情况</th><th>更新时间</th><th>操作</th></tr></thead>
+            <colgroup>
+              <col class="config-col-name" />
+              <col class="config-col-type" />
+              <col class="config-col-status" />
+              <col class="config-col-usage" />
+              <col class="config-col-time" />
+              <col class="config-col-action" />
+            </colgroup>
+            <thead><tr><th>配置名称</th><th>类型 / 地址</th><th class="config-status-col">状态</th><th class="config-usage-col">引用情况</th><th class="config-time-col">更新时间</th><th class="config-action-col">操作</th></tr></thead>
             <tbody>
               <tr v-for="item in visibleItems" :key="item.id" @click="selected=item">
                 <td><div class="config-name"><i>{{ defaultIcon(item.kind) }}</i><span><strong>{{ item.name }}<b v-if="item.isDefault" class="default-tag">默认</b></strong><small>{{ item.id }} · {{ item.description }}</small></span></div></td>
                 <td><strong class="type-name">{{ item.type }}<template v-if="item.model"> · {{ item.model }}</template></strong><code>{{ item.baseUrl || item.host && `${item.host}:${item.port}` || item.uri || item.endpoint }}</code></td>
-                <td><span class="status" :class="`is-${item.status}`"><i />{{ item.status }}</span></td>
-                <td>{{ item.usage }}</td>
-                <td><span>{{ item.owner }}</span><small class="updated">{{ item.updatedAt }}</small></td>
-                <td>
+                <td class="config-status-col"><span class="status" :class="`is-${item.status}`"><i />{{ item.status }}</span></td>
+                <td class="config-usage-col">{{ item.usage }}</td>
+                <td class="config-time-col"><span>{{ item.owner }}</span><small class="updated">{{ item.updatedAt }}</small></td>
+                <td class="config-action-col">
                   <div class="row-actions">
                     <button class="link" type="button" @click.stop="selected=item">管理</button>
                     <button class="link" type="button" @click.stop="toggleItem(item)">{{ item.status === '停用' ? '启用' : '停用' }}</button>
@@ -757,8 +765,8 @@ onMounted(() => {
 .status{gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px;white-space:nowrap}.status.is-正常,.status.is-异常,.status.is-停用{background:transparent}
 /* 行内操作列：管理/停用/删除 并排，删除用警示红 */
 .row-actions{display:flex;gap:12px;align-items:center;white-space:nowrap}.row-actions .link{padding:0;height:auto}.link.danger{color:#f53f3f}
-/* 窄视口下禁止压扁表格列（否则中文逐字换行"竖排"）：列内容不足时改为横向滚动 */
-.table-wrap:not(.space-table) table{min-width:1020px}
+/* 列宽由实际可用空间决定，窄容器按信息优先级收起辅助列。 */
+.table-wrap:not(.space-table) table{width:100%;table-layout:auto}
 .detail-drawer{width:min(640px,calc(100vw - 48px));background:#fff}.create-dialog{width:min(640px,calc(100vw - 48px));border-radius:8px;background:#fff}
 .create-dialog>header{height:56px;box-sizing:border-box;padding:8px 24px}.detail-drawer>header{min-height:56px;height:auto;box-sizing:border-box;padding:8px 24px}.detail-drawer>header span,.create-dialog>header span{font-size:12px;line-height:20px}.detail-drawer h2,.create-dialog h2{font-size:16px;line-height:24px}
 .detail-form,.dialog-form{gap:16px;padding:24px}.detail-form label,.dialog-form label{gap:8px}.detail-form label span,.dialog-form label span,.checkbox span{font-size:14px;line-height:22px}
@@ -856,13 +864,19 @@ onMounted(() => {
 .config-list-actions .create-entry{background:#165dff!important;color:#fff!important}
 .config-list-actions :deep(.arco-select-view),
 .config-list-actions .config-search-input{background:#fff!important}
-.table-wrap{box-sizing:border-box;margin:0 16px;background:transparent}
-.table-wrap th{background:#f2f3f5!important;color:#1d2129!important;font-weight:500!important}
+.table-wrap{box-sizing:border-box;margin:0 16px;background:transparent;container-type:inline-size}
+.table-wrap th{background:#f7f8fa!important;color:#1d2129!important;font-weight:500!important}
 .table-wrap table,
 .table-wrap tbody,
 .table-wrap tbody tr,
 .table-wrap tbody td,
 .table-wrap tbody tr:hover td{background:transparent}
+.table-wrap:not(.space-table) .config-action-col{box-sizing:border-box;overflow:visible;white-space:nowrap}
+.config-action-col .row-actions{display:inline-flex;width:auto;min-width:max-content;align-items:center;overflow:visible}
+.table-wrap:not(.space-table) th,.table-wrap:not(.space-table) td{box-sizing:border-box;padding-right:16px;padding-left:16px}
+@container(max-width:900px){.config-col-usage,.config-usage-col{display:none}}
+@container(max-width:720px){.config-col-time,.config-time-col{display:none}}
+@container(max-width:560px){.config-col-status,.config-status-col{display:none}}
 </style>
 <style>
 /* The wrapper is the only visible shell; global native-input rules must not restyle Arco's inner field. */

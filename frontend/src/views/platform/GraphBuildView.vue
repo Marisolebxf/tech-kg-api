@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { IconSearch } from '@arco-design/web-vue/es/icon'
+import { IconInfoCircle, IconSearch } from '@arco-design/web-vue/es/icon'
 import {
   countJobUnifiedStatuses,
   deleteJob,
@@ -169,43 +169,47 @@ onMounted(loadData)
 
 <template>
   <main class="graph-build-page">
-    <header class="gb-header">
-      <div>
-        <h1>图谱构建</h1>
-        <p>创建一次性 / 周期性任务 → 触发执行 → 查看执行状态与每步输入输出</p>
-      </div>
-      <div class="gb-actions">
-        <button type="button" :disabled="loading" @click="loadData">{{ loading ? '刷新中…' : '刷新' }}</button>
-        <button type="button" class="primary" @click="openCreate">＋ 新建任务</button>
-      </div>
-    </header>
+    <div class="gb-actions">
+      <button type="button" class="primary" @click="openCreate">＋ 新建任务</button>
+      <button type="button" :disabled="loading" @click="loadData">{{ loading ? '刷新中…' : '刷新' }}</button>
+    </div>
 
     <section class="gb-summary">
       <article v-for="item in summaryItems" :key="item.label">
-        <span>{{ item.label }}</span>
-        <div class="gb-summary__task-stats"><strong>{{ item.value }}</strong><i v-if="item.hint" aria-hidden="true"></i><em v-if="item.hint">{{ item.hint }}</em></div>
+        <div class="gb-summary__label">
+          <span>{{ item.label }}</span>
+          <a-tooltip v-if="item.hint" :content="item.hint">
+            <button class="gb-summary__hint" type="button" :aria-label="item.hint">
+              <IconInfoCircle aria-hidden="true" />
+            </button>
+          </a-tooltip>
+        </div>
+        <div class="gb-summary__task-stats">
+          <strong>{{ item.value }}</strong>
+        </div>
       </article>
     </section>
 
-    <section class="gb-jobs-panel">
-      <header>
-        <strong>任务列表（{{ filteredJobs.length }}）</strong>
+    <section class="gb-jobs-section">
+      <header class="gb-jobs-toolbar">
+        <strong class="gb-section-title">任务列表</strong>
         <div class="gb-filters">
-          <a-input id="graph-build-filter-name" v-model="filterName" class="gb-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="按名称搜索" placeholder="按名称搜索"><template #prefix><IconSearch /></template></a-input>
-          <a-select id="graph-build-filter-status" v-model="filterStatus" class="gb-filter-select" placeholder="状态" allow-clear style="width: 110px">
+          <a-select id="graph-build-filter-status" v-model="filterStatus" class="gb-filter-select" placeholder="状态" allow-clear>
             <a-option value="未运行">未运行</a-option>
             <a-option value="运行中">运行中</a-option>
             <a-option value="已暂停">已暂停</a-option>
             <a-option value="已完成">已完成</a-option>
             <a-option value="运行失败">运行失败</a-option>
           </a-select>
-          <a-select id="graph-build-filter-type" v-model="filterTaskType" class="gb-filter-select" placeholder="类型" allow-clear style="width: 130px">
+          <a-select id="graph-build-filter-type" v-model="filterTaskType" class="gb-filter-select" placeholder="类型" allow-clear>
             <a-option value="single">单脚本抽取</a-option>
             <a-option value="chain">多脚本串行</a-option>
             <a-option value="upload">上传脚本</a-option>
           </a-select>
+          <a-input id="graph-build-filter-name" v-model="filterName" class="gb-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="按名称搜索" placeholder="按名称搜索"><template #prefix><IconSearch /></template></a-input>
         </div>
       </header>
+      <div class="gb-jobs-panel">
       <div class="gb-task-table">
         <table>
           <thead>
@@ -247,6 +251,7 @@ onMounted(loadData)
           </tbody>
         </table>
       </div>
+      </div>
     </section>
 
     <JobLaunchDialog
@@ -263,37 +268,38 @@ onMounted(loadData)
 </template>
 
 <style scoped>
-.graph-build-page{display:flex;height:100%;min-height:0;overflow:hidden;padding:2px 2px 18px;color:#142443;flex-direction:column;box-sizing:border-box}
-.gb-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px}
-.gb-header h1{margin:0;font-size:18px;color:#1d2129}
-.gb-header p{margin:4px 0 0;color:#66758f;font-size:12px}
-.gb-actions{display:flex;gap:8px}
-.gb-actions button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;cursor:pointer}
+.graph-build-page{display:flex;box-sizing:border-box;height:100%;min-height:0;overflow:hidden;padding:0;color:#1d2129;font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0;flex-direction:column}
+.graph-build-page :deep(*){font-family:inherit;letter-spacing:0}
+.gb-actions{display:flex;gap:8px;margin-bottom:12px}
+.gb-actions button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
 .gb-actions .primary{border-color:#165dff;background:#165dff;color:#fff}
 .gb-summary{display:flex;gap:16px;margin-bottom:16px}
 .gb-summary article{display:flex;flex:1;min-height:80px;gap:8px;padding:12px 16px;border:1px solid #e5e6eb;border-radius:6px;background:#fff;flex-direction:column;justify-content:center}
 .gb-summary span{color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
-.gb-summary strong{color:#1d2129;font-size:28px;line-height:32px;font-weight:600}
-.gb-summary__task-stats{display:flex;align-items:center;gap:12px;min-width:0}.gb-summary__task-stats i{display:block;flex:0 0 1px;width:1px;height:24px;background:#e5e6eb}.gb-summary__task-stats em{min-width:0;color:#4e5969;font-size:12px;line-height:20px;font-style:normal;white-space:nowrap}
-.gb-jobs-panel{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #bcd4f7;border-radius:9px;background:#fff;box-shadow:0 10px 24px rgba(48,105,194,.08);flex-direction:column}
-.gb-jobs-panel>header{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:14px;min-height:40px;box-sizing:border-box;padding:8px 16px;border-bottom:1px solid #e3ebf6;background:#f7f8fa;font-size:14px;line-height:22px;font-weight:600;color:#1d2129}
+.gb-summary strong{color:#1d2129;font-size:28px;line-height:32px;font-weight:600;letter-spacing:0}
+.gb-summary__label,.gb-summary__task-stats{display:flex;align-items:center;min-width:0}.gb-summary__label{gap:8px}.gb-summary__hint{display:inline-flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;height:24px;padding:0;border:0;border-radius:4px;background:transparent;color:#86909c;cursor:help}.gb-summary__hint:hover,.gb-summary__hint:focus-visible{background:#f2f3f5;color:#165dff}.gb-summary__hint svg{width:16px;height:16px}
+.gb-jobs-section{display:flex;flex:1;min-height:0;flex-direction:column;gap:16px}
+.gb-jobs-toolbar{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:16px;min-height:32px;box-sizing:border-box;color:#1d2129}
+.gb-section-title{position:relative;padding-left:11px;font-size:16px;line-height:24px;font-weight:600}
+.gb-section-title::before{position:absolute;top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#165dff;content:""}
+.gb-jobs-panel{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #e5e6eb;border-radius:6px;background:#fff;box-shadow:none;flex-direction:column}
 .gb-filters{display:flex;align-items:center;gap:8px;font-weight:400}
-.gb-task-table{flex:1;min-height:0;overflow:auto}
+.gb-task-table{flex:1;min-height:0;overflow:auto;padding:0}
 /* 9 列任务表在窄视口下禁止压扁列（否则中文逐字换行"竖排"）：列内容不足时横向滚动 */
-.gb-task-table table{width:100%;min-width:1200px;border-collapse:collapse;font-size:13px;line-height:22px}
-.gb-task-table th{position:sticky;z-index:2;top:0;padding:0 16px;height:40px;background:#f7f8fa;color:#1d2129;font-weight:500;text-align:left;white-space:nowrap}
-.gb-task-table td{height:40px;padding:0 16px;border-bottom:1px solid #e5edf8;color:#344763;vertical-align:middle}
+.gb-task-table table{width:100%;min-width:1200px;margin:0;border-collapse:collapse;font-size:14px;line-height:22px}
+.gb-task-table th{position:sticky;z-index:2;top:0;height:40px;padding:0 16px;background:#f7f8fa;color:#1d2129;font-size:14px;line-height:22px;font-weight:500;text-align:left;white-space:nowrap}
+.gb-task-table td{height:40px;padding:0 16px;border-bottom:1px solid #e5edf8;color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle}
 .gb-task-table tbody tr:hover td{background:#f4f8ff}
-.gb-task-table code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px}
-.gb-task-table b{font-weight:600;color:#1d2129}
-.gb-last-run{display:block;color:#8191aa;font-size:11px;line-height:16px}
+.gb-task-table code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-family:inherit;font-size:14px;line-height:22px;font-weight:400}
+.gb-task-table b{color:#1d2129;font-weight:400}
+.gb-last-run{display:block;color:#8191aa;font-size:12px;line-height:20px;font-weight:400}
 .gb-job-actions{display:flex;gap:6px;white-space:nowrap}
-.gb-job-actions button{height:26px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:12px;cursor:pointer}
+.gb-job-actions button{height:26px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
 .gb-job-actions button.primary{border-color:#165dff;background:#165dff;color:#fff}
 .gb-job-actions button.danger{border-color:#f6b9b4;color:#b42318}
 .gb-job-actions button:disabled{opacity:.45;cursor:not-allowed}
-.empty{padding:40px 14px;text-align:center;color:#8290a7;font-size:12px}
-.muted{color:#8191aa;font-size:12px}
+.empty{padding:40px 14px;text-align:center;color:#8290a7;font-size:12px;line-height:20px;font-weight:400}
+.muted{color:#8191aa;font-size:12px;line-height:20px;font-weight:400}
 span.ok,span.err,span.warn,span.run{display:inline-flex;align-items:center;gap:6px;font-size:14px;line-height:22px;border-radius:0;background:transparent;padding:0;white-space:nowrap}
 span.ok::before,span.err::before,span.warn::before,span.run::before{display:block;flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 span.ok{color:#067647}
@@ -302,15 +308,15 @@ span.warn{color:#b54708}
 span.run{color:#175cd3}
 </style>
 <style>
-.app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper{box-sizing:border-box;width:200px;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
+.app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper{box-sizing:border-box;width:280px;min-width:280px;max-width:280px;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 280px}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper:focus-within,.app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 .app-workspace .gb-filters #graph-build-filter-name .arco-input-prefix{padding-right:8px;color:#4e5969}.app-workspace .gb-filters #graph-build-filter-name.arco-input-focus .arco-input-prefix{color:#165dff}.app-workspace .gb-filters #graph-build-filter-name .arco-input-prefix svg{width:16px;height:16px;font-size:16px}
 .app-workspace .gb-filters #graph-build-filter-name input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
+.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:160px;min-width:160px;max-width:160px;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 160px}
 .app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}
 .app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view:focus-within,.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 .app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type) input.arco-select-view-input{box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type) .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type) .arco-select-view-value{min-width:0;overflow:hidden;line-height:30px;text-overflow:ellipsis;white-space:nowrap}
+.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type) .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type) .arco-select-view-value{min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 .app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type) :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
 </style>

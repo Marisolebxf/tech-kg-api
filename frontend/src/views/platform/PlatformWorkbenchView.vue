@@ -6,7 +6,6 @@ import {
   watch,
 } from 'vue'
 import { useRouter } from 'vue-router'
-import { IconInfoCircle } from '@arco-design/web-vue/es/icon'
 import {
   getSubgraph,
   listGraphSpaces,
@@ -49,7 +48,6 @@ import {
   type GraphNodeData,
   type GraphNodeType,
 } from '../../data/graph-presets'
-import { edgeProvenanceTriple, nodeProvenanceTriple } from '../../utils/graphProvenance'
 
 interface RelationGraphResult {
   nodes: GraphNodeData[]
@@ -292,6 +290,7 @@ const queryFormRules = {
   selectedGraphSpace: [{ required: true, message: '请选择图空间' }],
 }
 const queryApplied = ref(false)
+const queryLastTestTime = ref('—')
 const processingDomainFilter = ref('全部业务域')
 const processingStatusFilter = ref('全部状态')
 const processingTaskDomain = ref('论文域')
@@ -728,12 +727,31 @@ const nodeSearchFieldMap:
 
 /**
  * 综合图谱展示的实体颜色图例：跟随返回的图数据动态变化
- * （对齐九大业务页做法——按可见节点 nodeType 去重，label 用真实 entityType）。
+ * （对齐科技专家同事关系页做法——按可见节点 nodeType 去重，显示中文业务名称）。
  */
+const queryEntityTypeLabelMap: Record<GraphNodeType, string> = {
+  main: '科技专家',
+  expert: '科技专家',
+  org: '共同机构',
+  company: '重点企业',
+  paper: '合作成果',
+  project: '合作成果',
+  event: '产业事件',
+  topic: '研究主题',
+  chain: '产业链',
+  field: '产品/关键词',
+  source: '数据来源',
+}
+
 const queryEntityLegendItems = computed(() => {
   const byType = new Map<GraphNodeType, string>()
   for (const node of queryVisibleNodes.value) {
-    if (!byType.has(node.nodeType)) byType.set(node.nodeType, node.entityType)
+    if (!byType.has(node.nodeType)) {
+      byType.set(
+        node.nodeType,
+        queryEntityTypeLabelMap[node.nodeType] || node.entityType,
+      )
+    }
   }
   return Array.from(byType.entries()).map(([tone, label]) => ({ tone, label }))
 })
@@ -756,6 +774,11 @@ const querySummary = computed(() => {
     + `${applied.relationFilter}`
   )
 })
+
+function formatQueryTimestamp(date: Date) {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
 
 interface AppliedGraphQuery {
   keyword: string
@@ -1145,101 +1168,71 @@ const selectedQueryRelationConfidence =
     )
   })
 
-const selectedQueryEdgeRows =
+const queryRelationRows =
   computed(() => {
-    const from =
-      selectedQueryEdgeNodes.value.from
+    const selected = selectedQueryEdge.value
 
-    const to =
-      selectedQueryEdgeNodes.value.to
+    if (selected) {
+      const from = selectedQueryEdgeNodes.value.from
+      const to = selectedQueryEdgeNodes.value.to
 
-    const edge =
-      selectedQueryEdge.value
-
-    if (
-      !from
-      || !to
-      || !edge
-    ) {
-      return []
+      return [
+        ['源实体', `${from?.label || selected.from} / ${from?.entityType || '—'}`] as const,
+        ['目标实体', `${to?.label || selected.to} / ${to?.entityType || '—'}`] as const,
+        ['关系类型', selected.label] as const,
+        ['关系分类', selected.category] as const,
+        ['置信度', formatConfidence(selected.confidence)] as const,
+        ['命中规则', selected.matchMethod || '—'] as const,
+      ]
     }
 
-    return [
-      [
-        '源实体',
-        `${from.label} / ${from.entityType}`,
-      ] as const,
+    const nodesById = new Map(
+      queryVisibleNodes.value.map((node) => [node.id, node]),
+    )
 
-      [
-        '目标实体',
-        `${to.label} / ${to.entityType}`,
-      ] as const,
+    return queryVisibleEdges.value.flatMap((relation, index) => {
+      const from = nodesById.get(relation.from)
+      const to = nodesById.get(relation.to)
 
-      [
-        '关系类型',
-        edge.label,
-      ] as const,
-
-      [
-        '关系分类',
-        edge.category,
-      ] as const,
-
-      [
-        '关系置信度',
-        formatConfidence(
-          edge.confidence,
-        ),
-      ] as const,
-
-      [
-        '来源说明',
-        '由关键词聚类得到',
-      ] as const,
-    ]
+      return [
+        [
+          `关系 ${index + 1}`,
+          `${from?.label || relation.from} → ${to?.label || relation.to}`,
+        ] as const,
+        ['类型', relation.label] as const,
+        ['分类', relation.category] as const,
+        ['置信度', formatConfidence(relation.confidence)] as const,
+      ]
+    })
   })
 
-const selectedQueryNodeRows =
-  computed(() => {
-    const node =
-      selectedQueryNode.value
+const queryEntityRows = computed(() => {
+  const selected = selectedQueryNode.value
 
-    if (!node) {
-      return []
-    }
-
+  if (selected) {
     return [
-      [
-        '实体名称',
-        node.label,
-      ] as const,
-
-      [
-        '实体类型',
-        node.entityType,
-      ] as const,
-
-      [
-        '关系数',
-        node.relations,
-      ] as const,
-
-      [
-        '实体置信度',
-        formatConfidence(
-          node.confidence,
-        ),
-      ] as const,
-
-      [
-        '判断依据',
-        '实体对齐、名称消歧、类型归一、多源交叉校验',
-      ] as const,
+      ['实体名称', selected.label] as const,
+      ['实体类型', selected.entityType] as const,
+      ['命中关系', selected.relations || '—'] as const,
+      ['置信度', formatConfidence(selected.confidence)] as const,
     ]
-  })
+  }
+
+  return queryVisibleNodes.value.flatMap((entity, index) => [
+      [`实体 ${index + 1}`, `${entity.label}（${entity.id}）`] as const,
+      ['类型', entity.entityType] as const,
+      ['关系', entity.relations || '—'] as const,
+      ['置信度', formatConfidence(entity.confidence)] as const,
+    ])
+})
+
+const queryProvenanceNode = computed(() =>
+  selectedQueryNode.value
+  ?? (!selectedQueryEdge.value ? queryVisibleNodes.value[0] ?? null : null),
+)
 
 const selectedQueryProvenance = computed(() => {
-  if (selectedQueryNode.value) return getNodeProvenance(selectedQueryNode.value)
+  if (queryProvenanceNode.value) return getNodeProvenance(queryProvenanceNode.value)
   if (selectedQueryEdge.value) {
     return getEdgeProvenance(
       selectedQueryEdge.value,
@@ -1250,23 +1243,8 @@ const selectedQueryProvenance = computed(() => {
   return null
 })
 
-/** 溯源三要素（与九大业务统一）：源数据表 / 英文字段名 / 图空间 VID。 */
-const selectedNodeProvenanceTriple = computed(() =>
-  selectedQueryNode.value ? nodeProvenanceTriple(selectedQueryNode.value) : null,
-)
-const selectedEdgeProvenanceTriple = computed(() =>
-  selectedQueryEdge.value ? edgeProvenanceTriple(selectedQueryEdge.value) : null,
-)
-const selectedRelationEndpointTriples = computed(() => {
-  const { from, to } = selectedQueryEdgeNodes.value
-  const endpoints: Array<{ role: string; name: string; triple: ReturnType<typeof nodeProvenanceTriple> }> = []
-  if (from) endpoints.push({ role: '起点实体', name: from.label, triple: nodeProvenanceTriple(from) })
-  if (to) endpoints.push({ role: '终点实体', name: to.label, triple: nodeProvenanceTriple(to) })
-  return endpoints
-})
-
 const selectedQueryProvenanceTarget = computed(() => {
-  const node = selectedQueryNode.value
+  const node = queryProvenanceNode.value
   if (node) {
     return {
       kind: '实体',
@@ -1746,6 +1724,9 @@ function convertApiGraphNodes(
       const isCenter =
         node.id === centerNodeId
 
+      const nodeType =
+        mapApiNodeType(node)
+
       const position =
         layoutPositions.get(node.id) ??
         calculateApiNodePosition(
@@ -1802,8 +1783,7 @@ function convertApiGraphNodes(
         label:
           getApiNodeDisplayName(node),
 
-        nodeType:
-          mapApiNodeType(node),
+        nodeType,
 
         x: position.x,
         y: position.y,
@@ -1812,14 +1792,7 @@ function convertApiGraphNodes(
           isCenter ? 16 : 12,
 
         entityType:
-          node.labels
-            .filter(
-              (label) =>
-                label !== 'organization_base',
-            )
-            .join('、')
-          || node.labels.join('、')
-          || 'Unknown',
+          queryEntityTypeLabelMap[nodeType],
 
         // 只读取后端/图谱已有置信度
         confidence,
@@ -4624,16 +4597,11 @@ async function handleQuery(): Promise<void> {
       relationConfidence:
         queryRelationConfidence.value || '不限',
     }
+    queryLastTestTime.value = formatQueryTimestamp(new Date())
 
-    /*
-    * 查询完成后默认选中中心节点，
-    * 但右侧先显示摘要。
-    */
-    selectedGraphNodeId.value =
-      centerNode.id
-
-    selectedGraphEdgeId.value =
-      null
+    /* 查询成功后保持无显式选择，实体/关系页签先展示完整清单。 */
+    selectedGraphNodeId.value = null
+    selectedGraphEdgeId.value = null
 
     queryDetailMode.value =
       'summary'
@@ -4711,7 +4679,7 @@ const pageMeta = computed(() => {
     overview: { title: '亿级科技知识图谱平台' },
     processing: { title: '数据处理与结构化输出' },
     construction: { title: '图谱构建与治理' },
-    query: { title: '综合图谱查询' },
+    query: { title: '综合查询' },
     service: { title: activeService.value.title },
   }
   return map[activeTab.value]
@@ -4728,7 +4696,7 @@ const pageMeta = computed(() => {
       <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><!-- <RouterLink to="/graph-build?module=图谱版本">当前图谱 KG-2026.07.12.008</RouterLink> --><RouterLink to="/graph-build">查看任务</RouterLink><RouterLink to="/manual-review">进入人工处理</RouterLink></div>
     </header>
 
-    <header v-else class="platform-page-head">
+    <header v-else-if="activeTab !== 'query'" class="platform-page-head">
       <div>
         <h1>{{ pageMeta.title }}</h1>
       </div>
@@ -4992,22 +4960,31 @@ const pageMeta = computed(() => {
     <main v-else-if="activeTab === 'query'" class="platform-content platform-query">
       <section class="kg-panel platform-query-form">
         <div class="kg-panel__header">
-          <h2 class="kg-panel__title">图谱查询条件</h2>
-          <div class="platform-query-mode-toggle" role="tablist" aria-label="查询模式切换">
-            <button
-              type="button"
-              :class="['platform-query-mode-toggle__item', { 'is-active': queryMode === 'params' }]"
-              @click="queryMode = 'params'"
-            >
-              参数模式
-            </button>
-            <button
-              type="button"
-              :class="['platform-query-mode-toggle__item', { 'is-active': queryMode === 'ngql' }]"
-              @click="queryMode = 'ngql'"
-            >
-              nGQL 模式
-            </button>
+          <div class="platform-query-mode-group">
+            <div class="platform-query-mode-toggle" role="tablist" aria-label="查询模式切换">
+              <button
+                type="button"
+                :class="['platform-query-mode-toggle__item', { 'is-active': queryMode === 'params' }]"
+                @click="queryMode = 'params'"
+              >
+                参数模式
+              </button>
+              <button
+                type="button"
+                :class="['platform-query-mode-toggle__item', { 'is-active': queryMode === 'ngql' }]"
+                @click="queryMode = 'ngql'"
+              >
+                nGQL 模式
+              </button>
+            </div>
+            <div v-if="queryMode === 'ngql'" class="platform-ngql-permission-hint" role="note">
+              <IconInfoCircle aria-hidden="true" />
+              <span>只读语句所有用户可执行</span>
+              <i aria-hidden="true"></i>
+              <span>写语句仅平台管理员</span>
+              <i aria-hidden="true"></i>
+              <span>DDL 禁止执行</span>
+            </div>
           </div>
           <button
             v-if="queryMode === 'params'"
@@ -5022,18 +4999,25 @@ const pageMeta = computed(() => {
             {{
               isActionLoading
                 ? '查询中…'
-                : '查询图谱'
+              : '查询图谱'
             }}
           </button>
-          <button
-            v-else
-            class="kg-button"
-            type="button"
-            :disabled="ngqlLoading || !ngqlStatement.trim()"
-            @click="handleNgqlQuery"
-          >
-            {{ ngqlLoading ? '执行中…' : '执行 nGQL' }}
-          </button>
+          <div v-else class="platform-ngql-header-actions">
+            <div class="platform-ngql-input__space-field">
+              <label>图空间</label>
+              <a-select v-model="ngqlSpace" class="platform-ngql-input__space" :scrollbar="false">
+                <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
+              </a-select>
+            </div>
+            <button
+              class="kg-button"
+              type="button"
+              :disabled="ngqlLoading || !ngqlStatement.trim()"
+              @click="handleNgqlQuery"
+            >
+              {{ ngqlLoading ? '执行中…' : '执行 nGQL' }}
+            </button>
+          </div>
         </div>
         <a-form v-if="queryMode === 'params'" ref="queryFormRef" :rules="queryFormRules" :model="queryFormModel" class="platform-form-grid" layout="vertical">
           <a-form-item class="platform-query-question" field="queryKeyword" label="实体名称或ID" required>
@@ -5046,12 +5030,12 @@ const pageMeta = computed(() => {
             />
           </a-form-item>
           <a-form-item class="platform-form-field" field="selectedQueryType" label="图谱范围">
-            <a-select v-model="selectedQueryType" allow-clear placeholder="全部图谱">
+            <a-select v-model="selectedQueryType" allow-clear placeholder="全部图谱" :scrollbar="false">
               <a-option v-for="item in queryTypes" :key="item" :value="item">{{ item }}</a-option>
             </a-select>
           </a-form-item>
           <a-form-item class="platform-form-field" field="queryRelationFilter" label="关系类型">
-            <a-select v-model="queryRelationFilter" allow-clear placeholder="全部关系">
+            <a-select v-model="queryRelationFilter" allow-clear placeholder="全部关系" :scrollbar="false">
               <a-option v-for="item in relationFilters" :key="item" :value="item">{{ item }}</a-option>
             </a-select>
           </a-form-item>
@@ -5066,28 +5050,12 @@ const pageMeta = computed(() => {
             </a-select>
           </a-form-item>
           <a-form-item class="platform-form-field" field="selectedGraphSpace" label="图空间" required>
-            <a-select v-model="selectedGraphSpace" allow-clear placeholder="请选择图空间">
+            <a-select v-model="selectedGraphSpace" allow-clear placeholder="请选择图空间" :scrollbar="false">
               <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
             </a-select>
           </a-form-item>
         </a-form>
         <div v-else class="platform-ngql-input">
-          <div class="platform-ngql-input__bar">
-            <div class="platform-ngql-input__space-field">
-              <span>图空间</span>
-              <a-select v-model="ngqlSpace" aria-label="图空间" allow-clear placeholder="请选择图空间" class="platform-ngql-input__space">
-                <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
-              </a-select>
-            </div>
-            <div class="platform-ngql-input__hint" role="note">
-              <IconInfoCircle aria-hidden="true" />
-              <span>只读语句所有用户可执行</span>
-              <i aria-hidden="true"></i>
-              <span>写语句仅平台管理员</span>
-              <i aria-hidden="true"></i>
-              <span>DDL 禁止执行</span>
-            </div>
-          </div>
           <textarea
             v-model="ngqlStatement"
             aria-label="nGQL 查询语句"
@@ -5129,7 +5097,7 @@ const pageMeta = computed(() => {
       <section class="kg-panel platform-query-graph">
         <div class="kg-panel__header">
           <h2 class="kg-panel__title">综合图谱展示</h2>
-          <span>{{ querySummary }} · {{ queryGraphStats }}</span>
+          <div class="platform-query-last-test"><span>最近测试时间：</span><strong>{{ queryLastTestTime }}</strong></div>
         </div>
         <div v-if="queryEntityLegendItems.length" class="platform-graph-legend" aria-label="实体类型图例">
           <span
@@ -5142,19 +5110,23 @@ const pageMeta = computed(() => {
             {{ item.label }}
           </span>
         </div>
-        <KgGraphCanvas
-          v-if="queryApplied"
-          :nodes="queryVisibleNodes"
-          :edges="queryVisibleEdges"
-          :active-categories="queryActiveCategories"
-          :selected-node-id="selectedGraphNodeId"
-          :selected-edge-id="selectedGraphEdgeId"
-          aria-label="图谱查询结果"
-          @select-node="openNodeDetail"
-          @select-edge="openEdgeDetail"
-        />
-        <div v-else class="platform-query-graph__empty">
-          暂无图谱数据，请填写参数并点击「查询图谱」后查看结果
+        <div class="platform-query-graph__canvas">
+          <div v-if="!queryApplied" class="platform-query-graph__empty" role="status">
+            <span>暂无图谱数据，请填写参数并点击「查询图谱」后查看结果</span>
+          </div>
+          <KgGraphCanvas
+            :nodes="queryVisibleNodes"
+            :edges="queryVisibleEdges"
+            :active-categories="queryActiveCategories"
+            :selected-node-id="selectedGraphNodeId"
+            :selected-edge-id="selectedGraphEdgeId"
+            node-shape="circle"
+            show-edge-labels
+            uniform-node-size
+            aria-label="图谱查询结果"
+            @select-node="openNodeDetail"
+            @select-edge="openEdgeDetail"
+          />
         </div>
       </section>
 
@@ -5187,26 +5159,15 @@ const pageMeta = computed(() => {
           v-if="queryDetailMode === 'summary'"
           class="platform-detail__body"
         >
-          <div
-            v-if="!queryApplied"
-            class="platform-query-empty"
-          >
-            <strong>暂未查询到图谱数据</strong>
-
-            <p>
-              输入实体名称或ID后，
-              点击“查询图谱”获取真实节点和关系。
-            </p>
-          </div>
-
-          <template v-else>
-            <dl>
+          <dl>
               <div>
                 <dt>图谱范围</dt>
 
                 <dd>
                   {{
-                    selectedQueryScopeDescription
+                    queryApplied
+                      ? selectedQueryScopeDescription
+                      : '—'
                   }}
                 </dd>
               </div>
@@ -5215,7 +5176,7 @@ const pageMeta = computed(() => {
                 <dt>覆盖实体</dt>
 
                 <dd>
-                  {{ graphEntitySummary || '暂无' }}
+                  {{ queryApplied ? (graphEntitySummary || '暂无') : '—' }}
                 </dd>
               </div>
 
@@ -5223,7 +5184,7 @@ const pageMeta = computed(() => {
                 <dt>查询条件</dt>
 
                 <dd>
-                  {{ querySummary }}
+                  {{ queryApplied ? querySummary : '—' }}
                 </dd>
               </div>
 
@@ -5231,7 +5192,7 @@ const pageMeta = computed(() => {
                 <dt>图谱规模</dt>
 
                 <dd>
-                  {{ queryGraphStats }}
+                  {{ queryApplied ? queryGraphStats : '—' }}
                 </dd>
               </div>
 
@@ -5240,9 +5201,9 @@ const pageMeta = computed(() => {
 
                 <dd>
                   {{
-                    appliedGraphQuery
-                      ?.relationFilter
-                      ?? '全部关系'
+                    queryApplied
+                      ? (appliedGraphQuery?.relationFilter ?? '全部关系')
+                      : '—'
                   }}
                 </dd>
               </div>
@@ -5252,9 +5213,9 @@ const pageMeta = computed(() => {
 
                 <dd>
                   {{
-                    appliedGraphQuery
-                      ?.entityConfidence
-                      ?? '不限'
+                    queryApplied
+                      ? (appliedGraphQuery?.entityConfidence ?? '不限')
+                      : '—'
                   }}
                 </dd>
               </div>
@@ -5264,51 +5225,35 @@ const pageMeta = computed(() => {
 
                 <dd>
                   {{
-                    appliedGraphQuery
-                      ?.relationConfidence
-                      ?? '不限'
+                    queryApplied
+                      ? (appliedGraphQuery?.relationConfidence ?? '不限')
+                      : '—'
                   }}
                 </dd>
               </div>
-            </dl>
-
-            <div class="platform-evidence">
-              <ul>
-                <li>
-                  点击实体节点查看实体属性、
-                  命中关系与来源信息。
-                </li>
-
-                <li>
-                  点击关系线查看两端实体之间的
-                  关系类型与来源说明。
-                </li>
-              </ul>
-            </div>
-          </template>
-        </div>
-        <div v-else-if="queryDetailMode === 'entity' && selectedQueryNode" class="platform-detail__body">
-          <dl>
-            <div v-for="([label, value], index) in selectedQueryNodeRows" :key="`${label}-${index}`">
-              <dt>{{ label }}</dt>
-              <dd>{{ value }}</dd>
-            </div>
           </dl>
-          <div v-if="selectedQueryNode.evidence.length" class="platform-evidence">
-            <strong>对齐依据</strong>
-            <ul>
-              <li v-for="(line, index) in selectedQueryNode.evidence.slice(0, 3)" :key="index">{{ line }}</li>
-            </ul>
-          </div>
         </div>
-        <div v-else-if="queryDetailMode === 'relation' && selectedQueryEdge" class="platform-detail__body">
+                <div v-else-if="queryDetailMode === 'entity' && queryApplied" class="platform-detail__body">
+                  <dl>
+                    <div v-for="([label, value], index) in queryEntityRows" :key="`${label}-${index}`">
+                      <dt>{{ label }}</dt>
+                      <dd>{{ value }}</dd>
+                    </div>
+                  </dl>
+                </div>
+        <div v-else-if="queryDetailMode === 'relation' && queryApplied" class="platform-detail__body">
           <dl>
-            <div v-for="([label, value], index) in selectedQueryEdgeRows" :key="`${label}-${index}`">
+            <div v-for="([label, value], index) in queryRelationRows" :key="`${label}-${index}`">
               <dt>{{ label }}</dt>
               <dd>{{ value }}</dd>
             </div>
           </dl>
         </div>
+        <div
+          v-else-if="queryDetailMode === 'entity' || queryDetailMode === 'relation'"
+          class="platform-query-detail-empty"
+          aria-hidden="true"
+        ></div>
         <div v-else-if="queryDetailMode === 'provenance' && selectedQueryProvenance && selectedQueryProvenanceTarget" class="platform-detail__body">
           <section class="platform-provenance" aria-label="图谱数据溯源">
             <div class="platform-provenance__title">
@@ -5319,32 +5264,30 @@ const pageMeta = computed(() => {
               <strong>{{ selectedQueryProvenanceTarget.name }}</strong>
               <span>{{ selectedQueryProvenanceTarget.kind }}</span>
             </div>
-            <template v-if="selectedQueryNode">
+            <template v-if="queryProvenanceNode">
               <h3 class="platform-provenance__section-title">实体溯源</h3>
               <dl class="platform-provenance__source">
                 <div><dt>实体类型</dt><dd>{{ selectedQueryProvenanceTarget.type }}</dd></div>
-                <div><dt>源数据表</dt><dd><code>{{ selectedNodeProvenanceTriple?.sourceTable }}</code></dd></div>
-                <div><dt>英文字段名</dt><dd><code>{{ selectedNodeProvenanceTriple?.sourceField }}</code></dd></div>
-                <div><dt>图空间 VID</dt><dd><code>{{ selectedNodeProvenanceTriple?.graphVid }}</code></dd></div>
+                <div><dt>源数据表</dt><dd><code>{{ selectedQueryProvenance.evidences[0]?.technicalTable }}</code></dd></div>
+                <div><dt>英文字段名</dt><dd><code>{{ selectedQueryProvenance.evidences[0]?.sourceField || '—' }}</code></dd></div>
+                <div><dt>图空间 VID</dt><dd><code>{{ selectedQueryProvenance.evidences[0]?.graphVid || selectedQueryProvenanceTarget.id }}</code></dd></div>
                 <div><dt>构建任务 ID</dt><dd><code>{{ selectedQueryProvenance.task.instanceId }}</code></dd></div>
               </dl>
               <div class="platform-provenance__task-meta"><button type="button" @click="openSelectedProcessingInstance">查看构建详情 →</button></div>
             </template>
-            <template v-else-if="selectedQueryEdge">
+            <template v-else-if="selectedQueryEdge && selectedQueryProvenance.relationEndpoints?.length">
               <h3 class="platform-provenance__section-title">关系溯源</h3>
               <dl class="platform-provenance__source">
                 <div><dt>关系类型</dt><dd>{{ selectedQueryProvenanceTarget.type }}</dd></div>
-                <div><dt>源数据表</dt><dd><code>{{ selectedEdgeProvenanceTriple?.sourceTable }}</code></dd></div>
-                <div><dt>英文字段名</dt><dd><code>{{ selectedEdgeProvenanceTriple?.sourceField }}</code></dd></div>
-                <div><dt>图空间 VID</dt><dd><code>{{ selectedEdgeProvenanceTriple?.graphVid }}</code></dd></div>
               </dl>
               <h3 class="platform-provenance__section-title">两端实体来源</h3>
-              <div v-if="selectedRelationEndpointTriples.length" class="platform-provenance__evidence-list">
-                <article v-for="endpoint in selectedRelationEndpointTriples" :key="endpoint.role">
+              <div class="platform-provenance__evidence-list">
+                <article v-for="endpoint in selectedQueryProvenance.relationEndpoints" :key="endpoint.role">
                   <header><strong>{{ endpoint.role }} · {{ endpoint.name }}</strong></header>
-                  <span>源数据表：<code>{{ endpoint.triple.sourceTable }}</code></span>
-                  <span>英文字段名：<code>{{ endpoint.triple.sourceField }}</code></span>
-                  <span>图空间 VID：<code>{{ endpoint.triple.graphVid }}</code></span>
+                  <p><b>实体类型：{{ endpoint.entityType }}</b></p>
+                  <span>源数据表：<code>{{ endpoint.technicalTable }}</code></span>
+                  <span>英文字段名：<code>{{ endpoint.sourceField || '—' }}</code></span>
+                  <span>图空间 VID：<code>{{ endpoint.graphVid }}</code></span>
                 </article>
               </div>
               <dl class="platform-provenance__source"><div><dt>构建任务 ID</dt><dd><code>{{ selectedQueryProvenance.task.instanceId }}</code></dd></div></dl>
@@ -5352,27 +5295,9 @@ const pageMeta = computed(() => {
             </template>
           </section>
         </div>
-        <div
-          v-else
-          class="
-            platform-detail__body
-            platform-query-empty
-          "
-        >
-          <strong>
-            {{
-              queryDetailMode === 'entity'
-                ? '请选择一个实体节点'
-                : queryDetailMode === 'relation'
-                  ? '请选择一条关系线'
-                  : '请选择需要溯源的实体或关系'
-            }}
-          </strong>
-
-          <p>
-            在左侧图谱中点击对应的节点或关系线
-          </p>
-        </div>
+                <p v-else-if="queryDetailMode === 'provenance'" class="platform-query-provenance-empty">
+                  暂无溯源数据，请先查询图谱，或在图谱中选中一个实体/关系。
+                </p>
       </aside>
       </div>
     </main>
@@ -8547,12 +8472,12 @@ print(response.json())</pre>
 </style>
 <style scoped>
 /* DESIGN_RULES: graph query branch only. */
-.platform-query{gap:16px}
+.platform-query{gap:16px;margin:0;padding:0}
 .platform-query .kg-panel{border-color:#e5e6eb!important;border-radius:6px!important;background:#fff!important;box-shadow:none!important}
 .platform-query .kg-panel__header{min-height:40px;padding:8px 16px;border-color:#e5e6eb;background:#f7f8fa}
 .platform-query .kg-panel__title{font-size:16px;line-height:24px;font-weight:600}
-.platform-query-form{overflow:hidden;border:1px solid #e5e6eb!important;border-radius:6px!important}.platform-query-form .kg-panel__header{box-sizing:border-box;height:40px;min-height:40px;padding:0 16px}
-.platform-query .platform-form-grid{grid-template-columns:repeat(3,minmax(0,1fr));column-gap:16px;row-gap:16px;padding:16px}
+.platform-query .platform-query-form{margin:0;overflow:visible;border:0!important;border-bottom:1px dashed #c9cdd4!important;border-radius:0!important;background:transparent!important}.platform-query-form .kg-panel__header{box-sizing:border-box;height:40px;min-height:40px;padding:0;border:0!important;background:transparent!important}
+.platform-query .platform-form-grid{grid-template-columns:repeat(6,minmax(0,1fr));column-gap:16px;row-gap:16px;padding:16px 0}
 .platform-query .platform-form-grid :deep(.arco-form-item){width:100%;min-width:0;margin-bottom:0}
 .platform-query .platform-form-field :deep(.arco-form-item-wrapper-col),.platform-query .platform-form-field :deep(.arco-form-item-content-wrapper),.platform-query .platform-form-field :deep(.arco-form-item-content){box-sizing:border-box;width:100%;min-width:0;max-width:100%;flex:1 1 0%}
 .platform-query .platform-form-field :deep(.arco-form-item-content-flex){display:flex;width:100%;min-width:0;max-width:100%;flex:1 1 0%}
@@ -8571,6 +8496,46 @@ print(response.json())</pre>
 .platform-query .platform-graph-legend{gap:8px 16px;min-height:40px;padding:8px 16px;border-color:#e5e6eb;background:#fff}.platform-query .platform-graph-legend__item{gap:8px;font-size:14px;line-height:22px}.platform-query .platform-graph-legend__item i{box-shadow:none}
 .platform-query .platform-detail__tabs{gap:0;padding:4px;border-radius:4px;background:#f2f3f5}.platform-query .platform-detail__tabs button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}.platform-query .platform-detail__tabs button.is-active{background:#fff;color:#165dff;font-weight:500}
 .platform-query .platform-detail__body{padding:16px}.platform-query .platform-detail dt{font-size:12px;line-height:20px}.platform-query .platform-detail dd{font-size:14px;line-height:22px}
+
+/* 综合图谱展示 / 查询结果：复用科技专家同事关系页的预览与详情布局。 */
+.platform-query{grid-row:1/-1;height:100%;min-height:0;align-self:stretch;overflow:auto}
+.platform-query-lower{grid-template-columns:minmax(0,633fr) minmax(0,511fr);gap:16px;align-items:stretch;min-height:480px;flex:1 1 480px}
+.platform-query .platform-query-lower>.kg-panel{display:flex;min-height:480px;overflow:hidden;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;flex-direction:column}
+.platform-query .platform-query-lower>.kg-panel>.kg-panel__header{min-height:24px;padding:0;border:0!important;background:transparent!important}
+.platform-query .platform-query-lower .kg-panel__title{position:relative;padding-left:11px;color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
+.platform-query .platform-query-lower .kg-panel__title::before{top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#165dff}
+.platform-query .platform-query-graph>.kg-panel__header{flex:0 0 24px;align-items:center}
+.platform-query-last-test{display:flex;align-items:center;gap:8px;color:#86909c;font-size:12px;line-height:20px;white-space:nowrap}.platform-query-last-test strong{color:#86909c;font-weight:400}
+.platform-query .platform-graph-legend{box-sizing:border-box;flex:0 0 32px;min-height:32px;padding:4px 0 8px;border:0!important;background:transparent!important}
+.platform-query .platform-graph-legend__item{gap:8px;color:#4e5969;font-size:12px;line-height:20px}
+.platform-query .platform-graph-legend__item i{width:9px;height:9px}
+.platform-query .platform-query-graph__canvas{position:relative;box-sizing:border-box;min-height:0;overflow:hidden;border:1px solid #e5e6eb;border-radius:4px;background:#fff;flex:1 1 auto}
+.platform-query .platform-query-graph>.kg-panel__header+.platform-query-graph__canvas{margin-top:32px}
+.platform-query .platform-query-graph :deep(.kg-graph-viewport){box-sizing:border-box;width:100%;height:100%;min-height:0;border:0;border-radius:0;background:transparent}
+.platform-query .platform-query-graph__empty{position:absolute;z-index:2;inset:0;display:flex;align-items:center;justify-content:center;box-sizing:border-box;min-height:0;margin:0;border:0;background:transparent;color:#4e5969;font-size:14px;line-height:22px;pointer-events:none}
+.platform-query .platform-query-lower>.platform-detail>.kg-panel__header{display:flex;flex:0 0 auto;align-items:flex-start;gap:16px;flex-direction:column}
+.platform-query .platform-detail__tabs{box-sizing:border-box;height:40px;padding:4px;border:0;border-radius:4px;background:#f2f3f5}
+.platform-query .platform-detail__tabs button{box-sizing:border-box;height:32px!important;min-height:32px!important;padding:5px 16px!important;border:0;border-radius:4px!important;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;box-shadow:none}
+.platform-query .platform-detail__tabs button+button{border-left:1px solid #c9cdd4}
+.platform-query .platform-detail__tabs button.is-active{margin:0;border-left-color:transparent;background:#fff;color:#165dff;font-weight:500;box-shadow:none}
+.platform-query .platform-detail__tabs button.is-active+button{border-left-color:transparent}
+.platform-query .platform-detail__tabs button:hover:not(.is-active){background:#fff;color:#165dff}
+.platform-query .platform-detail__tabs button:focus-visible{outline:2px solid rgba(22,93,255,.28);outline-offset:1px}
+.platform-query .platform-query-lower>.platform-detail>.platform-detail__body{display:flex;box-sizing:border-box;min-height:0;padding:16px 0 0;overflow:hidden;flex:1 1 auto}
+.platform-query .platform-detail__body>dl{display:flex;min-width:0;min-height:0;margin:0;border:1px solid #e5e6eb;border-radius:4px;background:#fff;overflow:auto;gap:0;flex:1 1 auto;flex-direction:column}
+.platform-query .platform-detail__body>dl>div{position:relative;display:grid;min-height:44px;padding:0;border:0;border-radius:0;background:#fff;grid-template-columns:132px minmax(0,1fr);gap:0;flex:0 0 auto}
+.platform-query .platform-detail__body>dl dt,.platform-query .platform-detail__body>dl dd{display:flex;box-sizing:border-box;align-items:center;min-width:0;margin:0;padding:10px 16px;font-family:var(--font-family);font-size:14px;font-style:normal;line-height:22px;letter-spacing:0}
+.platform-query .platform-detail__body>dl dt{justify-content:flex-end;border:0;background:#f2f3f5;color:#1d2129;font-weight:500;text-align:right}
+.platform-query .platform-detail__body>dl dd{background:#fff;color:#1d2129;font-weight:400;overflow-wrap:anywhere}
+.platform-query-detail-empty{box-sizing:border-box;min-height:0;margin-top:16px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;flex:1 1 auto}
+.platform-query .platform-provenance{box-sizing:border-box;min-width:0;min-height:0;gap:16px;margin:0 16px 16px;padding:16px;border:1px solid #cfe0ff;border-radius:8px;background:linear-gradient(180deg,#f7faff 0%,#fff 100%);overflow:auto;flex:1 1 auto;align-self:stretch}
+.platform-query .platform-provenance__title span{font-size:14px;line-height:22px;font-weight:600}.platform-query .platform-provenance__title em{font-size:12px;line-height:20px}
+.platform-query .platform-provenance__target{gap:4px;padding:16px;border-radius:6px}.platform-query .platform-provenance__target strong{font-size:14px;line-height:22px}.platform-query .platform-provenance__target span{font-size:12px;line-height:20px}
+.platform-query .platform-provenance__section-title{margin:0;font-size:12px;line-height:20px;font-weight:600}
+.platform-query .platform-detail .platform-provenance__source{display:block;margin:0;overflow:visible;flex:none}.platform-query .platform-detail .platform-provenance__source div{display:block;min-height:34px;padding:0;border:0;border-radius:6px;background:rgba(255,255,255,.82)}
+.platform-query .platform-detail .platform-provenance__source dt,.platform-query .platform-detail .platform-provenance__source dd{display:block;box-sizing:border-box;min-width:0;padding:8px 16px;font-size:12px;line-height:20px;overflow-wrap:anywhere}.platform-query .platform-detail .platform-provenance__source dt{margin:0}.platform-query .platform-detail .platform-provenance__source dd{margin:0 0 0 40px}
+.platform-query .platform-provenance__evidence-list{gap:8px}.platform-query .platform-provenance__evidence-list article{gap:8px;padding:16px;border-radius:6px}
+.platform-query-provenance-empty{margin:16px 0 0;color:#86909c;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 .platform-query .platform-status{display:inline-flex;align-items:center;gap:6px;min-height:22px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.platform-query .platform-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .platform-query .platform-table th,.platform-query .platform-table td{height:40px;padding:0 16px;font-size:14px;line-height:22px}.platform-query .platform-table th{background:#f7f8fa;font-weight:500}
 .platform-query-empty{gap:8px;padding:24px 16px}.platform-query-empty strong{font-size:16px;line-height:24px;font-weight:600}.platform-query-empty p{font-size:14px;line-height:22px}
@@ -8580,12 +8545,18 @@ print(response.json())</pre>
 .platform-query .platform-form-field :deep(.arco-select-view-focus){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 @media(max-width:768px){.platform-query .platform-form-grid{grid-template-columns:1fr}}
 /* nGQL 查询模式 */
-.platform-query-mode-toggle{display:inline-flex;gap:0;margin-right:auto;margin-left:16px;border:1px solid #e5e6eb;border-radius:4px;overflow:hidden}
-.platform-query-mode-toggle__item{padding:4px 14px;border:0;background:#fff;color:#4e5969;font-size:13px;line-height:20px;cursor:pointer}
-.platform-query-mode-toggle__item+.platform-query-mode-toggle__item{border-left:1px solid #e5e6eb}
-.platform-query-mode-toggle__item.is-active{background:#165dff;color:#fff}
-.platform-ngql-input{display:grid;gap:16px;padding:16px}
-.platform-ngql-input__bar{display:flex;align-items:center;gap:16px;color:#4e5969;font-size:14px;line-height:22px;flex-wrap:wrap}
+.platform-query-mode-group{display:flex;min-width:0;align-items:center;gap:16px;margin-right:auto}
+.platform-query-mode-toggle{display:inline-flex;box-sizing:border-box;height:40px;gap:0;margin-right:0;padding:4px;border:0;border-radius:4px;background:#f2f3f5;overflow:visible;flex:0 0 auto}
+.platform-ngql-permission-hint{display:inline-flex;min-width:0;align-items:center;gap:8px;color:#86909c;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0;white-space:nowrap}
+.platform-ngql-permission-hint>svg{width:16px;height:16px;color:#86909c;font-size:16px;flex:0 0 auto}
+.platform-ngql-permission-hint>i{width:1px;height:12px;background:#c9cdd4;flex:0 0 auto}
+.platform-query-mode-toggle__item{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:120px;height:32px!important;min-height:32px!important;padding:5px 16px!important;border:0;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;text-align:center;cursor:pointer}
+.platform-query-mode-toggle__item+.platform-query-mode-toggle__item{border-left:1px solid #c9cdd4}
+.platform-query-mode-toggle__item.is-active{border-left-color:transparent;background:#fff;color:#165dff;font-weight:500}
+.platform-query-mode-toggle__item.is-active+.platform-query-mode-toggle__item{border-left-color:transparent}
+.platform-query-mode-toggle__item:hover:not(.is-active){background:#fff;color:#165dff}
+.platform-ngql-input{display:grid;gap:16px;padding:16px 0}
+.platform-ngql-header-actions{display:flex;align-items:center;gap:16px;flex:0 0 auto}
 .platform-ngql-input__space-field{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;white-space:nowrap}.platform-ngql-input__space-field>label{flex:0 0 auto}
 .platform-ngql-input__space-field :deep(.arco-select){width:180px;min-width:180px;max-width:180px;flex:0 0 180px}
 .platform-ngql-input__space-field :deep(.arco-select-view){display:inline-flex;box-sizing:border-box;width:180px;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;align-items:center}
@@ -8595,8 +8566,6 @@ print(response.json())</pre>
 .platform-ngql-input__space :deep(.arco-select-view-input:focus),.platform-ngql-input__space :deep(.arco-select-view-input:focus-visible){border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
 .platform-ngql-input__space :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
 .platform-ngql-input__space :deep(.arco-select-view-value){min-width:0;overflow:hidden;color:#1d2129;font-size:14px;line-height:30px;text-overflow:ellipsis;white-space:nowrap}
-.platform-ngql-input__hint{display:inline-flex;min-height:32px;box-sizing:border-box;align-items:center;gap:8px;margin-left:0;padding:0;background:transparent;color:#4e5969;font-size:12px;line-height:20px;flex-wrap:wrap}
-.platform-ngql-input__hint>svg{flex:0 0 16px;width:16px;height:16px;color:inherit}.platform-ngql-input__hint>span{white-space:nowrap}.platform-ngql-input__hint>i{flex:0 0 4px;width:4px;height:4px;border-radius:50%;background:#86909c}
 .platform-ngql-input__textarea{box-sizing:border-box;width:100%;padding:10px 12px;border:1px solid #e5e6eb;border-radius:4px;background:#0d1117;color:#e6edf3;font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical;outline:0}
 .platform-ngql-input__textarea:focus{border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
 .platform-ngql-result{overflow:hidden}

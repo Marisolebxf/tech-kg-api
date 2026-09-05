@@ -297,28 +297,38 @@ onMounted(loadReviews)
 
       <p v-if="actionFeedback" class="ops-feedback">{{ actionFeedback }}</p>
     </template>
-    <section class="ops-panel">
-      <div v-if="mode === 'review'" class="alert-tabs">
-        <nav>
-          <button type="button" :class="{ active: reviewCategory === 'A' }" @click="switchReviewCategory('A')">入库决策</button>
-          <button type="button" :class="{ active: reviewCategory === 'C' }" @click="switchReviewCategory('C')">抽取失败重跑</button>
-        </nav>
-        <button
-          v-if="reviewCategory === 'C' && rerunView === 'cases'"
-          class="primary rerun-batch-btn"
-          type="button"
-          :disabled="!rerunSelection.size || rerunSubmitting"
-          @click="rerunSelected()"
-        >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
+    <div v-if="mode === 'review'" class="alert-tabs review-tabs">
+      <nav>
+        <button type="button" :class="{ active: reviewCategory === 'A' }" @click="switchReviewCategory('A')">入库决策</button>
+        <button type="button" :class="{ active: reviewCategory === 'C' }" @click="switchReviewCategory('C')">抽取失败重跑</button>
+      </nav>
+      <div class="review-toolbar-actions">
+        <div
+          v-if="reviewCategory === 'A' || rerunView === 'cases'"
+          class="ops-filter is-review review-filter-row"
+        >
+          <a-select v-model="reviewStatusFilter" class="review-filter-select" :options="reviewStatusOptions" />
+          <a-select v-model="reviewKindFilter" class="review-filter-select" :options="['全部', '实体', '关系']" />
+          <a-input v-model="keyword" class="review-search-input review-filter-search" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录"><template #prefix><IconSearch /></template></a-input>
+        </div>
       </div>
+    </div>
 
+    <section class="ops-panel">
       <div v-if="mode === 'review' && reviewCategory === 'C'" class="rerun-subtabs">
         <nav>
           <button type="button" :class="{ active: rerunView === 'cases' }" @click="switchRerunView('cases')">失败列表</button>
           <button type="button" :class="{ active: rerunView === 'history' }" @click="switchRerunView('history')">重跑记录</button>
         </nav>
         <button
-          v-if="rerunView === 'history'"
+          v-if="rerunView === 'cases'"
+          class="rerun-batch-action"
+          type="button"
+          :disabled="!rerunSelection.size || rerunSubmitting"
+          @click="rerunSelected()"
+        >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
+        <button
+          v-else
           class="rerun-refresh"
           type="button"
           :disabled="rerunHistoryLoading"
@@ -338,18 +348,11 @@ onMounted(loadReviews)
       </div>
 
       <div v-if="mode === 'alerts'" class="alert-tabs"><nav><button v-for="item in alertCategories" :key="item" type="button" :class="{ active:alertCategory===item }" @click="alertCategory=item">{{ item }}</button></nav><a-checkbox v-model="blockingOnly">仅看已阻断</a-checkbox></div>
-      <a-form v-if="mode === 'alerts' || reviewCategory === 'A' || rerunView === 'cases'" :model="{ keyword, severity, domain, status, reviewStatusFilter, reviewKindFilter }" :class="['ops-filter', { 'is-review': mode === 'review' }]" layout="vertical">
-        <a-form-item v-if="mode === 'review'" field="keyword"><a-input v-model="keyword" class="review-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录"><template #prefix><IconSearch /></template></a-input></a-form-item>
-        <a-form-item v-else field="keyword"><input v-model="keyword" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索批次、对象、异常原因" placeholder="搜索批次、对象、异常原因" /></a-form-item>
-        <template v-if="mode === 'alerts'">
-          <a-form-item field="severity"><a-select v-model="severity" allow-clear placeholder="全部风险" :options="['全部风险', '高风险', '中风险', '低风险']" /></a-form-item>
-          <a-form-item field="domain"><a-select v-model="domain" allow-clear placeholder="全部业务域" :options="['全部业务域', '人才域', '论文域', '企业域']" /></a-form-item>
-          <a-form-item field="status"><a-select v-model="status" allow-clear placeholder="全部状态" :options="['全部状态', '待处理', '处理中', '已关闭']" /></a-form-item>
-        </template>
-        <template v-else>
-          <a-form-item field="reviewStatus"><a-select v-model="reviewStatusFilter" allow-clear placeholder="全部" :options="reviewStatusOptions" /></a-form-item>
-          <a-form-item field="reviewKind"><a-select v-model="reviewKindFilter" allow-clear placeholder="全部" :options="['全部', '实体', '关系']" /></a-form-item>
-        </template>
+      <a-form v-if="mode === 'alerts'" :model="{ keyword, severity, domain, status }" class="ops-filter" layout="vertical">
+        <a-form-item field="keyword"><input v-model="keyword" :maxlength="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索批次、对象、异常原因" placeholder="搜索批次、对象、异常原因" /></a-form-item>
+        <a-form-item field="severity"><a-select v-model="severity" allow-clear placeholder="全部风险" :options="['全部风险', '高风险', '中风险', '低风险']" /></a-form-item>
+        <a-form-item field="domain"><a-select v-model="domain" allow-clear placeholder="全部业务域" :options="['全部业务域', '人才域', '论文域', '企业域']" /></a-form-item>
+        <a-form-item field="status"><a-select v-model="status" allow-clear placeholder="全部状态" :options="['全部状态', '待处理', '处理中', '已关闭']" /></a-form-item>
         <a-form-item><button type="button" @click="resetFilters">清空筛选</button></a-form-item>
       </a-form>
 
@@ -391,7 +394,19 @@ onMounted(loadReviews)
         </tbody>
       </table></div>
 
-      <div v-else class="ops-review-table-scroll"><table>
+      <div v-else class="ops-review-table-scroll"><table class="review-case-table" :class="{ 'review-case-table--selectable': reviewCategory === 'C' }">
+        <colgroup>
+          <col v-if="reviewCategory === 'C'" class="review-col-pick" />
+          <col class="review-col-id" />
+          <col class="review-col-object" />
+          <col class="review-col-node" />
+          <col class="review-col-source" />
+          <col class="review-col-batch" />
+          <col class="review-col-handler" />
+          <col class="review-col-status" />
+          <col class="review-col-time" />
+          <col class="review-col-action" />
+        </colgroup>
         <thead>
           <tr>
             <th v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
@@ -411,7 +426,7 @@ onMounted(loadReviews)
             <th>处理人</th>
             <th>状态</th>
             <th>更新时间</th>
-            <th>操作</th>
+            <th class="review-action-col">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -442,7 +457,7 @@ onMounted(loadReviews)
             <td>{{ row.handler }}</td>
             <td><span :class="['review-status', `is-${row.status}`]">{{ row.status }}</span></td>
             <td>{{ row.completedAt || row.updatedAt }}</td>
-            <td>
+            <td class="review-action-col">
               <div class="alert-actions">
                 <RouterLink class="link" :to="`/manual-review/task/${row.id}`">
                   {{ row.status === '待处理' ? '进入处理' : '查看记录' }} →
@@ -467,7 +482,7 @@ onMounted(loadReviews)
       <footer v-else-if="reviewCategory === 'A' || rerunView === 'cases'" class="review-pagination">
         <span>共 {{ reviewTotal }} 条 · 第 {{ reviewPage }} / {{ reviewTotalPages }} 页</span>
         <span class="review-page-size">每页
-          <a-select :model-value="reviewPageSize" :options="reviewPageSizeOptions" @change="changeReviewPageSize" />
+          <a-select class="review-page-size-select" :model-value="reviewPageSize" :options="reviewPageSizeOptions" :scrollbar="false" @change="changeReviewPageSize" />
         </span>
         <a-pagination
           :current="reviewPage"
@@ -481,7 +496,9 @@ onMounted(loadReviews)
 
     <a-modal
       v-model:visible="rerunConfirmVisible"
+      modal-class="rerun-confirm-modal"
       title="确认批量重跑"
+      :width="560"
       ok-text="下发重跑"
       cancel-text="取消"
       :ok-loading="rerunSubmitting"
@@ -498,7 +515,6 @@ onMounted(loadReviews)
 .review-evidence{min-width:260px;max-width:360px;white-space:normal;line-height:19px}.review-status{display:inline-flex;padding:3px 8px;border-radius:10px;background:#edf2f7;color:#52647f}.review-status.is-待处理{background:#fff0e8;color:#c4320a}.review-status.is-已完成{background:#e9f8ef;color:#067647}
 .link-disabled{color:#98a2b3;font-size:12px;cursor:default}
 .pick-col{width:36px;text-align:center}.pick-col input{cursor:pointer}
-.rerun-batch-btn{height:30px;font-size:12px}.rerun-batch-btn:disabled{opacity:.5;cursor:not-allowed}
 .rerun-link{padding:0;font-size:12px;border:0;background:transparent}
 .review-severity{min-width:230px;max-width:300px;white-space:normal}.review-severity small{margin:0 0 6px}.review-severity span{display:block;color:#65738b;font-size:11px;line-height:17px}
 .review-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.24)}.review-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;width:620px;height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}.review-drawer>header{display:flex;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.review-drawer header span{color:#165dff;font-size:11px}.review-drawer h2{margin:6px 0 3px;font-size:19px}.review-drawer header p{margin:0;color:#70809a;font-size:12px}.review-drawer header>button{width:30px;height:30px;border:0;border-radius:5px;background:#f0f4fa;font-size:20px;cursor:pointer}.review-body{overflow:auto;padding:16px}.review-body section,.review-compare article{padding:14px;border:1px solid #dce8f8;border-radius:7px;background:#fff}.review-body h3{margin:0 0 8px;font-size:14px}.review-body p,.review-body li{color:#61708a;font-size:12px;line-height:20px}.review-compare{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}.review-compare span{display:block;margin-bottom:9px;color:#70809a;font-size:11px}.review-compare strong{font-size:13px}.review-compare em{color:#d92d20;font-size:11px;font-style:normal}.review-compare input,.review-compare textarea{width:100%;padding:8px;border:1px solid #bdd0ea;border-radius:5px;font:inherit}.review-compare textarea{min-height:90px;margin-top:8px;resize:vertical}.review-success{padding:10px 12px;border:1px solid #a6f4c5;border-radius:6px;background:#ecfdf3!important;color:#067647!important}.review-drawer>footer{display:flex;justify-content:flex-end;gap:8px;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.review-drawer>footer button{height:34px;padding:0 13px;border:1px solid #bdd0ea;border-radius:6px;background:#fff;color:#40516d;cursor:pointer}.review-drawer>footer .primary{border-color:#165dff;background:#165dff;color:#fff}@media(max-width:720px){.review-drawer{width:94vw}.review-compare{grid-template-columns:1fr}}
@@ -558,11 +574,30 @@ onMounted(loadReviews)
 .ops-filter :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;pointer-events:none!important}
 .ops-filter :deep(.arco-select-view-value){min-width:0;line-height:30px}
 @media(max-width:900px){.ops-filter,.ops-filter.is-review{grid-template-columns:1fr}.review-risk-explain{grid-template-columns:1fr}.ops-metrics{display:grid;grid-template-columns:repeat(2,1fr)}}
+/* 人工审核一级切换与筛选工具栏沿用 Schema 管理页的二级分段按钮。 */
+.review-tabs{display:flex;box-sizing:border-box;width:100%;min-height:40px;margin-bottom:16px;padding:0;border:0;background:transparent;align-items:center;justify-content:space-between;gap:16px;flex:0 0 auto;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;white-space:nowrap}
+.review-tabs>nav{display:flex;box-sizing:border-box;height:40px;padding:4px;border-radius:4px;background:#f2f3f5;flex:0 0 auto;overflow:visible}
+.review-tabs>nav button{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:120px;height:32px;padding:5px 16px;border:0;border-radius:4px;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;text-align:center}
+.review-tabs>nav button+button{border-left:1px solid #c9cdd4}
+.review-tabs>nav button.active{border-left-color:transparent;background:#fff;color:#165dff;font-weight:500}
+.review-tabs>nav button.active+button{border-left-color:transparent}
+.review-tabs>nav button:hover:not(.active){background:#fff;color:#165dff}
+.review-toolbar-actions{display:flex;min-width:0;align-items:center;justify-content:flex-end;gap:16px;margin-left:auto;flex:0 0 auto;flex-wrap:nowrap}
+.review-tabs .ops-filter.is-review{display:flex;box-sizing:border-box;width:auto;min-width:0;align-items:center;grid-template-columns:none;gap:16px!important;padding:0!important;border:0;background:transparent;flex:0 0 auto;flex-wrap:nowrap}
+.review-filter-row :deep(.review-filter-select.arco-select-view){flex:0 0 160px;width:160px}
+.review-filter-row :deep(.review-filter-search.arco-input-wrapper){flex:0 0 280px;width:280px}
+.review-tabs .ops-filter.is-review :deep(.arco-select-view-value){font-size:14px;line-height:22px;font-weight:400}
+.ops-review-table-scroll td{color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle}
+.ops-review-table-scroll td>b,.ops-review-table-scroll td>strong{font-weight:400}
 /* 抽取失败重跑：二级子视图 / 重跑反馈条 / 状态徽标扩展 */
 .rerun-subtabs{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid #e5e6eb;background:#fff}
 .rerun-subtabs nav{display:flex;gap:4px}
 .rerun-subtabs nav button{padding:9px 12px;border:0;border-bottom:2px solid transparent;background:transparent;color:#4e5969;font-size:13px;line-height:20px;cursor:pointer}
 .rerun-subtabs nav button.active{border-color:#165dff;color:#165dff;font-weight:600}
+.rerun-batch-action{height:32px;padding:0 16px;border:1px solid #165dff;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
+.rerun-batch-action:hover:not(:disabled){border-color:#4080ff;background:#4080ff}
+.rerun-batch-action:active:not(:disabled){border-color:#0e42d2;background:#0e42d2}
+.rerun-batch-action:disabled{border-color:#94bfff;background:#94bfff;color:#fff;cursor:not-allowed}
 .rerun-refresh{height:28px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#4e5969;font-size:12px;cursor:pointer}
 .rerun-refresh:disabled{opacity:.5;cursor:not-allowed}
 .rerun-feedback{flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid #a6f4c5;background:#ecfdf3;color:#067647;font-size:12px;line-height:20px}
@@ -576,9 +611,48 @@ onMounted(loadReviews)
 .review-status.is-已完成{color:#067647}
 .review-status.is-排队中{color:#b54708}
 .review-status.is-已取消{color:#86909c}
+
+/* 人工审核页排版、间距与控件合同。 */
+.ops-page,.ops-page :deep(*){font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;letter-spacing:0}
+.ops-page{font-size:14px;line-height:22px;font-weight:400}
+.review-tabs>nav button{padding:0 16px}
+.review-filter-row :deep(.arco-select-view:hover){border-color:#4080ff}
+.review-filter-row :deep(.arco-select-view-focus),.review-filter-row :deep(.arco-select-view:focus-within){border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
+.ops-review-table-scroll table,.ops-review-table-scroll td{font-size:14px;line-height:22px;font-weight:400}
+.ops-review-table-scroll th{font-size:14px;line-height:22px;font-weight:500}
+.ops-review-table-scroll td code,.review-id-cell .link{font-family:inherit;font-size:14px;line-height:22px;font-weight:400}
+.ops-review-table-scroll td small,.ops-review-table-scroll td small code{font-size:12px;line-height:20px;font-weight:400}
+.review-source-cell strong{font-size:14px;line-height:22px;font-weight:400}
+.alert-actions{gap:4px}.alert-actions .link,.rerun-link{font-size:14px;line-height:22px;font-weight:400}
+.pick-col{box-sizing:border-box;width:52px;min-width:52px;padding-right:16px!important;padding-left:16px!important}
+.review-pagination{gap:16px;padding:8px 16px}
+.review-pagination :deep(.arco-select-view),.review-pagination :deep(.arco-pagination-item){height:32px;min-height:32px}
+.review-pagination :deep(.arco-pagination-item){min-width:32px;font-size:14px;line-height:22px}
+.review-pagination :deep(.review-page-size-select.arco-select-view){display:inline-flex;box-sizing:border-box;align-items:center;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
+.review-pagination :deep(.review-page-size-select.arco-select-view:hover){border-color:#4080ff!important}.review-pagination :deep(.review-page-size-select.arco-select-view:focus-within),.review-pagination :deep(.review-page-size-select.arco-select-view-focus){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+.review-pagination :deep(.review-page-size-select .arco-select-view-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
+.review-pagination :deep(.review-page-size-select .arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
+.review-pagination :deep(.review-page-size-select .arco-select-view-value){min-width:0;font-size:14px;line-height:22px;font-weight:400}
+.ops-review-table-scroll .pick-col{vertical-align:middle;text-align:center}.ops-review-table-scroll .pick-col input[type="checkbox"]{display:block;width:14px;height:14px;margin:0 auto;vertical-align:middle;cursor:pointer}
+.rerun-subtabs{min-height:48px;padding:8px 16px}
+.rerun-subtabs nav{gap:0}.rerun-subtabs nav button{height:32px;padding:0 16px;font-size:14px;line-height:22px;font-weight:400}.rerun-subtabs nav button.active{font-weight:500}
+.rerun-batch-action:focus-visible{outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.2)}
+.rerun-refresh{height:32px;padding:0 16px;font-size:14px;line-height:22px;font-weight:400}
+.rerun-feedback{gap:8px;padding:8px 16px}.rerun-feedback-close{width:24px;height:24px}
+.rerun-confirm-text{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
+.ops-review-table-scroll .review-action-col{position:sticky;right:0;box-sizing:border-box;width:144px;min-width:144px;background:#fff;box-shadow:-1px 0 #e5e6eb}
+.ops-review-table-scroll th.review-action-col{z-index:4;background:#f7f8fa}
+.ops-review-table-scroll td.review-action-col{z-index:1}
+.review-action-col .alert-actions{width:max-content;min-width:0}
+.ops-review-table-scroll th,.ops-review-table-scroll td{box-sizing:border-box;padding-right:16px;padding-left:16px}
+.ops-review-table-scroll table.review-case-table{width:100%;min-width:1356px;table-layout:auto}
+.ops-review-table-scroll table.review-case-table--selectable{min-width:1408px}
+.review-col-pick{width:52px}.review-col-id{width:160px}.review-col-object{width:180px}.review-col-node{width:200px}.review-col-source{width:170px}.review-col-batch{width:150px}.review-col-handler{width:96px}.review-col-status{width:96px}.review-col-time{width:160px}.review-col-action{width:144px}
 </style>
 <style>
 /* Keep the Arco input's native field transparent; the wrapper is the only visible input shell. */
 .app-workspace .ops-page .ops-filter.is-review .review-search-input.arco-input-wrapper input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 .app-workspace .ops-page .ops-filter.is-review .review-search-input.arco-input-wrapper input.arco-input:focus{border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
+.rerun-confirm-modal{border-radius:8px;font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
+.rerun-confirm-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}.rerun-confirm-modal .arco-modal-title{font-size:16px;line-height:24px;font-weight:600;letter-spacing:0}.rerun-confirm-modal .arco-modal-body{padding:24px}.rerun-confirm-modal .arco-modal-footer{box-sizing:border-box;min-height:64px;padding:16px 24px}.rerun-confirm-modal .arco-btn{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}.rerun-confirm-modal .arco-btn+.arco-btn{margin-left:16px}
 </style>

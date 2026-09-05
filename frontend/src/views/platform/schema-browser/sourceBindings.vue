@@ -8,6 +8,7 @@ import SourceBindingRowVue from './sourceBindingRow.vue'
 
 const props = defineProps<{
   modelValue: SourceBindingRow[]
+  showAddButton?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -57,13 +58,13 @@ function updateRow(index: number, value: SourceBindingRow) {
       @update:model-value="(value) => updateRow(index, value)"
       @remove="removeRow(index)"
     />
-    <button type="button" class="source-bindings__add" @click="addRow">＋ 绑定来源表</button>
+    <button v-if="showAddButton !== false" type="button" class="source-bindings__add" @click="addRow">＋ 绑定来源表</button>
   </div>
 </template>
 
 <style scoped>
-.source-bindings{display:flex;flex-direction:column;gap:10px}
-.source-bindings__empty{padding:10px 12px;border:1px dashed #e5e6eb;border-radius:6px;color:#86909c;font-size:12px;line-height:20px}
+.source-bindings{display:flex;flex-direction:column;gap:8px}
+.source-bindings__empty{padding:8px 16px;border:1px dashed #e5e6eb;border-radius:6px;color:#86909c;font-size:12px;line-height:20px}
 .source-bindings__add{align-self:flex-start;height:28px;padding:0 12px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#165dff;font-size:12px;cursor:pointer}
 .source-bindings__add:hover{border-color:#165dff}
 </style>

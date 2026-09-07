@@ -9,6 +9,7 @@ import { usePortalIntegration } from './portal/usePortalIntegration'
 const route = useRoute()
 const useBlankLayout = computed(() => route.meta.layout === 'blank')
 const { isEmbedded, portalStatusText } = usePortalIntegration()
+const embeddedPageTitle = computed(() => String(route.meta.title ?? '亿级知识图谱平台'))
 const showEmbeddedAuthState = computed(
   () => isEmbedded.value && route.name === 'login',
 )
@@ -25,7 +26,14 @@ const showEmbeddedAuthState = computed(
     </section>
   </output>
   <div v-else-if="isEmbedded" class="portal-embedded-view">
-    <RouterView />
+    <main class="portal-embedded-main">
+      <section
+        class="app-workspace portal-embedded-workspace"
+        :aria-label="embeddedPageTitle"
+      >
+        <RouterView />
+      </section>
+    </main>
   </div>
   <RouterView v-else-if="useBlankLayout" />
   <AppLayout v-else />
@@ -34,8 +42,50 @@ const showEmbeddedAuthState = computed(
 
 <style scoped>
 .portal-embedded-view {
+  box-sizing: border-box;
   width: 100%;
-  min-height: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  padding: 16px;
+  overflow: hidden;
+  background: var(--gkx-bg-page);
+}
+
+.portal-embedded-main {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.portal-embedded-workspace {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+  overflow: auto;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.8);
+  scrollbar-width: none;
+}
+
+.portal-embedded-workspace::-webkit-scrollbar {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .portal-embedded-view {
+    padding: 10px;
+  }
+
+  .portal-embedded-workspace {
+    padding: 10px;
+    border-radius: 6px;
+  }
 }
 
 .portal-auth-state {

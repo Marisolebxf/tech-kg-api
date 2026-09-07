@@ -1499,7 +1499,7 @@ body {
 
 .app-workspace .business-service .result-panel__table div {
   grid-template-columns: 136px minmax(0, 1fr);
-  flex: 0 0 40px;
+  flex: 0 0 auto;
   min-height: 40px;
 }
 
@@ -1517,6 +1517,8 @@ body {
 
 .app-workspace .business-service .result-panel__table dd {
   min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 

@@ -41,8 +41,6 @@ import {
 import KgGraphCanvas from "../../../components/kg-graph-canvas.vue";
 import { useToast } from "../../../composables/use-toast";
 import {
-  getEdgeProvenance,
-  getNodeProvenance,
   getServiceGraphPreset,
 } from "../../../data/graph-presets";
 import type {
@@ -234,7 +232,7 @@ const disableFutureMonth = (value: Date) =>
 const MAX_PARAMETER_LENGTH = 64;
 const MAX_SCHOOL_LENGTH = 100;
 const PANORAMA_TOP_K_MAX = 20;
-const SUMMARY_DISPLAY_MAX = 15;
+const SUMMARY_DISPLAY_MAX = 80;
 
 function charLength(value: string): number {
   return Array.from(value).length;
@@ -1260,10 +1258,6 @@ const selectedEdge = computed(() =>
       null)
     : null,
 );
-// 未点选节点/关系时，实体/关系 tab 展示图里第一个对象，避免查询后 tab 空白。
-const activeEntityNode = computed(
-  () => selectedNode.value ?? graphNodes.value[0] ?? null,
-);
 const activeRelationEdge = computed(
   () => selectedEdge.value ?? graphEdges.value[0] ?? null,
 );
@@ -1315,18 +1309,6 @@ const relationDetailRows = computed(() => {
       props.moduleInfo.rules[0]?.name ?? "已命中关系识别规则",
     ] as const,
   ];
-});
-const selectedProvenance = computed(() => {
-  if (selectedNode.value) return getNodeProvenance(selectedNode.value);
-  if (selectedEdge.value) {
-    return getEdgeProvenance(
-      selectedEdge.value,
-      selectedEdgeNodes.value.from,
-      selectedEdgeNodes.value.to,
-    );
-  }
-  const defaultNode = graphNodes.value[0];
-  return defaultNode ? getNodeProvenance(defaultNode) : null;
 });
 const selectedProvenanceTarget = computed(() => {
   const node =
@@ -1696,6 +1678,51 @@ const liveProvenance = computed(() => {
   return null;
 });
 
+/** 溯源证据列表：未点击时全量，点击节点/边时按 graphVid 筛选。 */
+const displayedProvenanceEvidences = computed(() => {
+  const pv = liveProvenance.value;
+  if (!pv?.evidences?.length) return [];
+  const node = selectedNode.value;
+  const edge = selectedEdge.value;
+  if (!node && !edge) return pv.evidences;
+  if (node) {
+    const filtered = pv.evidences.filter(
+      (ev: any) => ev.graphVid === node.id,
+    );
+    return filtered.length ? filtered : pv.evidences;
+  }
+  if (edge) {
+    const filtered = pv.evidences.filter((ev: any) => {
+      const vid = String(ev.graphVid || "");
+      return vid.includes(edge.from) && vid.includes(edge.to);
+    });
+    return filtered.length ? filtered : pv.evidences;
+  }
+  return pv.evidences;
+});
+
+/** 溯源筛选提示：点击时若筛选命中则显示筛选范围，未命中回退全量时提示。 */
+const provenanceFilterHint = computed(() => {
+  const node = selectedNode.value;
+  const edge = selectedEdge.value;
+  if (!node && !edge) return "";
+  const pv = liveProvenance.value;
+  if (!pv?.evidences?.length) return "";
+  const total = pv.evidences.length;
+  const shown = displayedProvenanceEvidences.value.length;
+  if (node) {
+    return shown < total
+      ? `已筛选：节点 ${node.label}（${shown}/${total}）`
+      : `节点 ${node.label} 无独立溯源，展示全部`;
+  }
+  if (edge) {
+    return shown < total
+      ? `已筛选：边 ${edge.from}→${edge.to}（${shown}/${total}）`
+      : `该边无独立溯源，展示全部`;
+  }
+  return "";
+});
+
 const usesThreeFieldProvenance = computed(
   () => isExpertIndirect.value || isPaperCooperation.value,
 );
@@ -1886,7 +1913,10 @@ function computePanoramaSummaryRows(
     [
       "核心环节",
       coreSegment && coreSegment.items.length
-        ? compactSummaryText(coreSegment.items[0].label)
+        ? compactSummaryText(
+            coreSegment.items.map((i) => i.label).join("、"),
+            60,
+          )
         : "—",
     ],
     ["关键技术", layerLabel("core_technology")],
@@ -2076,10 +2106,9 @@ function derivedGraphFromExpertResponse(
 function computeExpertDirectSummaryRows(
   resp: ExpertDirectRelationQueryResponse,
 ): ReadonlyArray<readonly [string, string]> {
-  const item = resp.items?.[0];
+  const items = resp.items ?? [];
   const overrides = new Map<string, string>();
-  if (!item) {
-    // 查不到数据时不回落到静态示例值，避免把示例误当成真实结果
+  if (!items.length) {
     return props.moduleInfo.summaryRows.map(
       (row) =>
         [
@@ -2088,39 +2117,50 @@ function computeExpertDirectSummaryRows(
         ] as const,
     );
   }
-  {
-    const expertALabel = compactSummaryText(
-      [item.expertA.name, item.expertA.title, item.expertA.organization]
-        .filter(Boolean)
-        .join("｜"),
-    );
-    const expertBLabel = compactSummaryText(
-      [item.expertB.name, item.expertB.title, item.expertB.organization]
-        .filter(Boolean)
-        .join("｜"),
-    );
-    const reasonText = item.reasonTags?.length
-      ? compactSummaryText(item.reasonTags.join("、"))
-      : "—";
-    overrides.set("专家 A", expertALabel || "—");
-    overrides.set("专家 B", expertBLabel || "—");
-    overrides.set(
-      "直接关系类型",
-      compactSummaryText(item.relationSummary || item.relationType || "—"),
-    );
-    overrides.set("关系发生时间", compactSummaryText(item.lastUpdatedAt || "—"));
-    overrides.set("交互场景", compactSummaryText(item.institution || "合作关系"));
-    overrides.set("关系数量", `${resp.total ?? resp.items.length} 条`);
-    overrides.set("相关成果", compactSummaryText(`共同论文${item.coPaperCount}篇`));
-    overrides.set("代表成果", reasonText);
-    overrides.set(
-      "关系置信度",
-      ((item.relationStrength ?? 0) / 100).toFixed(2),
-    );
+  // 汇总所有关系，不再只取 items[0]
+  const allExperts = new Set<string>();
+  const allReasons = new Set<string>();
+  const allInstitutions = new Set<string>();
+  let totalCoPapers = 0;
+  let minStrength = Infinity;
+  let maxStrength = -Infinity;
+  let sumStrength = 0;
+  const times: string[] = [];
+  for (const item of items) {
+    if (item.expertA?.name) allExperts.add(item.expertA.name);
+    if (item.expertB?.name) allExperts.add(item.expertB.name);
+    for (const tag of item.reasonTags ?? []) allReasons.add(tag);
+    if (item.institution) allInstitutions.add(item.institution);
+    totalCoPapers += item.coPaperCount ?? 0;
+    const s = item.relationStrength ?? 0;
+    minStrength = Math.min(minStrength, s);
+    maxStrength = Math.max(maxStrength, s);
+    sumStrength += s;
+    if (item.lastUpdatedAt) times.push(item.lastUpdatedAt);
   }
+  times.sort();
+  const expertList = [...allExperts].join("、");
+  overrides.set("专家 A", expertList || "—");
+  overrides.set("专家 B", "—");
+  overrides.set("直接关系类型", [...allReasons].join("、") || "—");
+  overrides.set(
+    "关系发生时间",
+    times.length
+      ? `${times[0].slice(0, 10)} 至 ${times[times.length - 1].slice(0, 10)}`
+      : "—",
+  );
+  overrides.set("交互场景", [...allInstitutions].join("、") || "合作关系");
+  overrides.set("关系数量", `${resp.total ?? items.length} 条`);
+  overrides.set("相关成果", `共同论文 ${totalCoPapers} 篇`);
+  overrides.set("代表成果", "见关系列表");
+  const avg = sumStrength / items.length;
+  overrides.set(
+    "关系置信度",
+    `最高 ${(maxStrength / 100).toFixed(2)}｜最低 ${(minStrength / 100).toFixed(2)}｜平均 ${(avg / 100).toFixed(2)}`,
+  );
   return props.moduleInfo.summaryRows.map((row) => {
     const overrideValue = overrides.get(row.label);
-    return [row.label, compactSummaryText(overrideValue ?? row.value)] as const;
+    return [row.label, overrideValue ?? row.value] as const;
   });
 }
 
@@ -3419,29 +3459,12 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <dd>{{ value }}</dd>
           </div>
         </dl>
-        <dl
-          v-else-if="resultMode === 'entity' && activeEntityNode"
-          class="result-panel__table"
+        <p
+          v-else-if="resultMode === 'entity'"
+          class="result-panel__empty"
         >
-          <div>
-            <dt>实体名称</dt>
-            <dd>{{ activeEntityNode.label }}</dd>
-          </div>
-          <div>
-            <dt>实体类型</dt>
-            <dd>{{ activeEntityNode.entityType }}</dd>
-          </div>
-          <div>
-            <dt>命中关系</dt>
-            <dd>{{ activeEntityNode.relations }}</dd>
-          </div>
-          <div>
-            <dt>置信度</dt>
-            <dd>
-              {{ formatConfidence(activeEntityNode.confidence) }}
-            </dd>
-          </div>
-        </dl>
+          暂无实体数据，请先执行查询。
+        </p>
         <dl
           v-else-if="resultMode === 'relation' && liveRelationRows"
           class="result-panel__table"
@@ -3454,18 +3477,12 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <dd>{{ value }}</dd>
           </div>
         </dl>
-        <dl
-          v-else-if="resultMode === 'relation' && activeRelationEdge"
-          class="result-panel__table"
+        <p
+          v-else-if="resultMode === 'relation'"
+          class="result-panel__empty"
         >
-          <div
-            v-for="([label, value], index) in relationDetailRows"
-            :key="`${label}-${index}`"
-          >
-            <dt>{{ label }}</dt>
-            <dd>{{ value }}</dd>
-          </div>
-        </dl>
+          暂无关系数据，请先执行查询。
+        </p>
         <section
           v-else-if="
             resultMode === 'provenance' &&
@@ -3514,10 +3531,16 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <strong>{{ liveProvenance.sourceDatabase }}</strong>
             <span>{{ liveProvenance.summary || "—" }}</span>
           </div>
+          <p
+            v-if="provenanceFilterHint"
+            class="result-provenance__filter-hint"
+          >
+            {{ provenanceFilterHint }}
+          </p>
           <h3>证据列表</h3>
           <div class="result-provenance__evidence-list">
             <article
-              v-for="(ev, index) in liveProvenance.evidences"
+              v-for="(ev, index) in displayedProvenanceEvidences"
               :key="`${ev.recordId}-${index}`"
             >
               <header>
@@ -3557,150 +3580,6 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
               </template>
             </article>
           </div>
-        </section>
-        <section
-          v-else-if="
-            resultMode === 'provenance' &&
-            selectedProvenance &&
-            selectedProvenanceTarget
-          "
-          class="result-provenance"
-        >
-          <header>
-            <strong>当前追溯对象</strong
-            ><span>{{ selectedProvenanceTarget.kind }}</span>
-          </header>
-          <div class="result-provenance__target">
-            <strong>{{ selectedProvenanceTarget.name }}</strong>
-            <span>{{ selectedProvenanceTarget.kind }}</span>
-          </div>
-          <template v-if="!selectedEdge">
-            <h3>实体溯源</h3>
-            <dl class="result-provenance__source">
-              <div>
-                <dt>实体类型</dt>
-                <dd>{{ selectedProvenanceTarget.type }}</dd>
-              </div>
-              <div>
-                <dt>源数据表</dt>
-                <dd>
-                  <code>{{
-                    selectedProvenance.evidences[0]?.technicalTable
-                  }}</code>
-                </dd>
-              </div>
-              <div>
-                <dt>英文字段名</dt>
-                <dd>
-                  <code>{{
-                    selectedProvenance.evidences[0]?.sourceField || "—"
-                  }}</code>
-                </dd>
-              </div>
-              <div>
-                <dt>图空间 VID</dt>
-                <dd>
-                  <code>{{
-                    selectedProvenance.evidences[0]?.graphVid ||
-                    selectedProvenanceTarget.id
-                  }}</code>
-                </dd>
-              </div>
-              <div v-if="!isExpertIndirect && !isPaperCooperation">
-                <dt>构建任务 ID</dt>
-                <dd>
-                  <code>{{ selectedProvenance.task.instanceId }}</code>
-                </dd>
-              </div>
-            </dl>
-            <div
-              v-if="!isExpertIndirect && !isPaperCooperation"
-              class="result-provenance__task-meta"
-            >
-              <RouterLink
-                :to="{
-                  name: 'processing-instance-detail',
-                  params: { instanceId: selectedProvenance.task.instanceId },
-                  query: {
-                    stage: '图谱构建',
-                    objectName: selectedProvenanceTarget.name,
-                    objectId: selectedProvenanceTarget.id,
-                    objectType: selectedProvenanceTarget.type,
-                    kind: selectedProvenanceTarget.kind,
-                    sourceTable:
-                      selectedProvenance.evidences[0]?.technicalTable,
-                    sourceRecordId:
-                      selectedProvenance.evidences[0]?.fieldIdentifier,
-                  },
-                }"
-                >查看构建详情 →</RouterLink
-              >
-            </div>
-          </template>
-          <template v-else-if="selectedProvenance.relationEndpoints?.length">
-            <h3>关系溯源</h3>
-            <dl class="result-provenance__source">
-              <div>
-                <dt>关系类型</dt>
-                <dd>{{ selectedProvenanceTarget.type }}</dd>
-              </div>
-            </dl>
-            <h3>两端实体来源</h3>
-            <div class="result-provenance__evidence-list">
-              <article
-                v-for="endpoint in selectedProvenance.relationEndpoints"
-                :key="endpoint.role"
-              >
-                <header>
-                  <strong>{{ endpoint.role }} · {{ endpoint.name }}</strong>
-                </header>
-                <p>
-                  <b>实体类型：{{ endpoint.entityType }}</b>
-                </p>
-                <span
-                  >源数据表：<code>{{ endpoint.technicalTable }}</code></span
-                >
-                <span
-                  >英文字段名：<code>{{
-                    endpoint.sourceField || "—"
-                  }}</code></span
-                >
-                <span
-                  >图空间 VID：<code>{{ endpoint.graphVid }}</code></span
-                >
-              </article>
-            </div>
-            <dl
-              v-if="!isExpertIndirect && !isPaperCooperation"
-              class="result-provenance__source"
-            >
-              <div>
-                <dt>构建任务 ID</dt>
-                <dd>
-                  <code>{{ selectedProvenance.task.instanceId }}</code>
-                </dd>
-              </div>
-            </dl>
-            <div
-              v-if="!isExpertIndirect && !isPaperCooperation"
-              class="result-provenance__task-meta"
-            >
-              <RouterLink
-                :to="{
-                  name: 'processing-instance-detail',
-                  params: { instanceId: selectedProvenance.task.instanceId },
-                  query: {
-                    stage: '图谱构建',
-                    objectName: selectedProvenanceTarget.name,
-                    objectId: selectedProvenanceTarget.id,
-                    objectType: selectedProvenanceTarget.type,
-                    kind: selectedProvenanceTarget.kind,
-                  },
-                }"
-                >查看构建详情 →</RouterLink
-              >
-            </div>
-          </template>
         </section>
         <section
           v-else-if="resultMode === 'provenance' && liveResponse"
@@ -5033,6 +4912,25 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .result-panel__table dd {
   background: #fff;
   color: #1d2129;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.result-panel__empty {
+  margin: 16px;
+  padding: 24px;
+  text-align: center;
+  color: #86909c;
+  font-size: 14px;
+}
+
+.result-provenance__filter-hint {
+  margin: 0;
+  padding: 6px 12px;
+  background: #e8f3ff;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #165dff;
 }
 
 /* 移除预览与结果详情的外层衬板；保留内部白色画布与详情表格。 */

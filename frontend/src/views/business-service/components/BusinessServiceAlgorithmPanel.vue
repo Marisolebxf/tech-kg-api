@@ -41,8 +41,6 @@ import {
 import KgGraphCanvas from "../../../components/kg-graph-canvas.vue";
 import { useToast } from "../../../composables/use-toast";
 import {
-  getEdgeProvenance,
-  getNodeProvenance,
   getServiceGraphPreset,
 } from "../../../data/graph-presets";
 import type {
@@ -234,7 +232,7 @@ const disableFutureMonth = (value: Date) =>
 const MAX_PARAMETER_LENGTH = 64;
 const MAX_SCHOOL_LENGTH = 100;
 const PANORAMA_TOP_K_MAX = 20;
-const SUMMARY_DISPLAY_MAX = 15;
+const SUMMARY_DISPLAY_MAX = 80;
 
 function charLength(value: string): number {
   return Array.from(value).length;
@@ -516,6 +514,8 @@ const expertDirectResponse = ref<ExpertDirectRelationQueryResponse | null>(
   null,
 );
 const expertDirectError = ref<string | null>(null);
+/** 摘要页签展示第几条关系（直接关系多条时用于分页切换，不改变字段结构）。 */
+const summaryRelationPage = ref(0);
 let expertDirectAbortController: AbortController | null = null;
 const expertIndirectResponse = ref<ExpertIndirectRelationResponse | null>(null);
 const expertIndirectError = ref<string | null>(null);
@@ -1260,10 +1260,6 @@ const selectedEdge = computed(() =>
       null)
     : null,
 );
-// 未点选节点/关系时，实体/关系 tab 展示图里第一个对象，避免查询后 tab 空白。
-const activeEntityNode = computed(
-  () => selectedNode.value ?? graphNodes.value[0] ?? null,
-);
 const activeRelationEdge = computed(
   () => selectedEdge.value ?? graphEdges.value[0] ?? null,
 );
@@ -1315,18 +1311,6 @@ const relationDetailRows = computed(() => {
       props.moduleInfo.rules[0]?.name ?? "已命中关系识别规则",
     ] as const,
   ];
-});
-const selectedProvenance = computed(() => {
-  if (selectedNode.value) return getNodeProvenance(selectedNode.value);
-  if (selectedEdge.value) {
-    return getEdgeProvenance(
-      selectedEdge.value,
-      selectedEdgeNodes.value.from,
-      selectedEdgeNodes.value.to,
-    );
-  }
-  const defaultNode = graphNodes.value[0];
-  return defaultNode ? getNodeProvenance(defaultNode) : null;
 });
 const selectedProvenanceTarget = computed(() => {
   const node =
@@ -1696,9 +1680,86 @@ const liveProvenance = computed(() => {
   return null;
 });
 
+/** 溯源证据列表：未点击时全量，点击节点/边时按 graphVid 筛选。 */
+const displayedProvenanceEvidences = computed(() => {
+  const pv = liveProvenance.value;
+  if (!pv?.evidences?.length) return [];
+  const node = selectedNode.value;
+  const edge = selectedEdge.value;
+  if (!node && !edge) return pv.evidences;
+  if (node) {
+    const filtered = pv.evidences.filter(
+      (ev: any) => ev.graphVid === node.id,
+    );
+    return filtered.length ? filtered : pv.evidences;
+  }
+  if (edge) {
+    const filtered = pv.evidences.filter((ev: any) => {
+      const vid = String(ev.graphVid || "");
+      return vid.includes(edge.from) && vid.includes(edge.to);
+    });
+    return filtered.length ? filtered : pv.evidences;
+  }
+  return pv.evidences;
+});
+
+/** 溯源筛选提示：点击时若筛选命中则显示筛选范围，未命中回退全量时提示。 */
+const provenanceFilterHint = computed(() => {
+  const node = selectedNode.value;
+  const edge = selectedEdge.value;
+  if (!node && !edge) return "";
+  const pv = liveProvenance.value;
+  if (!pv?.evidences?.length) return "";
+  const total = pv.evidences.length;
+  const shown = displayedProvenanceEvidences.value.length;
+  if (node) {
+    return shown < total
+      ? `已筛选：节点 ${node.label}（${shown}/${total}）`
+      : `节点 ${node.label} 无独立溯源，展示全部`;
+  }
+  if (edge) {
+    return shown < total
+      ? `已筛选：边 ${edge.from}→${edge.to}（${shown}/${total}）`
+      : `该边无独立溯源，展示全部`;
+  }
+  return "";
+});
+
 const usesThreeFieldProvenance = computed(
   () => isExpertIndirect.value || isPaperCooperation.value,
 );
+
+/** 摘要分页总页数：一条关系一页，按真实数据量出现。 */
+const summaryPageTotal = computed(
+  () => expertDirectResponse.value?.items?.length ?? 0,
+);
+
+/**
+ * 分页页项：首页 + 末页 + 当前页 ±2，断档处插入省略号。
+ * 总页数 ≤ 7 时全部展开；超出时最多 9 个页项，避免 limit=100 时横向溢出。
+ */
+const summaryPageItems = computed<Array<number | "start" | "end">>(() => {
+  const total = summaryPageTotal.value;
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i);
+  }
+  const current = summaryRelationPage.value;
+  const last = total - 1;
+  const around = new Set<number>([0, last]);
+  for (let p = current - 2; p <= current + 2; p += 1) {
+    if (p > 0 && p < last) around.add(p);
+  }
+  const pages = [...around].sort((a, b) => a - b);
+  const items: Array<number | "start" | "end"> = [];
+  pages.forEach((page, index) => {
+    const prev = pages[index - 1];
+    if (index > 0 && page - prev > 1) {
+      items.push(prev === 0 ? "start" : "end");
+    }
+    items.push(page);
+  });
+  return items;
+});
 
 const detailRows = computed(() => {
   if (lastTestTime.value === "—") {
@@ -2076,10 +2137,10 @@ function derivedGraphFromExpertResponse(
 function computeExpertDirectSummaryRows(
   resp: ExpertDirectRelationQueryResponse,
 ): ReadonlyArray<readonly [string, string]> {
-  const item = resp.items?.[0];
+  const items = resp.items ?? [];
+  const item = items[summaryRelationPage.value] ?? items[0];
   const overrides = new Map<string, string>();
   if (!item) {
-    // 查不到数据时不回落到静态示例值，避免把示例误当成真实结果
     return props.moduleInfo.summaryRows.map(
       (row) =>
         [
@@ -2362,6 +2423,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       );
       if (controller.signal.aborted) return;
       expertDirectResponse.value = response;
+      summaryRelationPage.value = 0;
       expertDirectError.value = null;
       selectedGraphNodeId.value = null;
       selectedGraphEdgeId.value = null;
@@ -3398,15 +3460,84 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             </button>
           </div>
         </div>
-        <dl v-if="resultMode === 'summary'" class="result-panel__table">
-          <div
-            v-for="([label, value], index) in detailRows"
-            :key="`${label}-${index}`"
+        <template v-if="resultMode === 'summary'">
+          <dl class="result-panel__table">
+            <div
+              v-for="([label, value], index) in detailRows"
+              :key="`${label}-${index}`"
+            >
+              <dt>{{ label }}</dt>
+              <dd>{{ value || '—' }}</dd>
+            </div>
+          </dl>
+          <nav
+            v-if="isExpertDirect && summaryPageTotal > 1"
+            class="result-pagination"
+            aria-label="关系分页"
           >
-            <dt>{{ label }}</dt>
-            <dd>{{ value || '—' }}</dd>
-          </div>
-        </dl>
+            <button
+              class="result-pagination__item result-pagination__item--nav"
+              type="button"
+              aria-label="上一页"
+              :disabled="summaryRelationPage === 0"
+              @click="summaryRelationPage -= 1"
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path
+                  d="M10 3l-5 5 5 5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <template
+              v-for="item in summaryPageItems"
+              :key="`summary-page-${item}`"
+            >
+              <span
+                v-if="typeof item === 'string'"
+                class="result-pagination__ellipsis"
+                aria-hidden="true"
+                >···</span
+              >
+              <button
+                v-else
+                class="result-pagination__item"
+                :class="{ 'is-current': summaryRelationPage === item }"
+                type="button"
+                :aria-label="`第 ${item + 1} 页`"
+                :aria-current="summaryRelationPage === item ? 'page' : undefined"
+                @click="summaryRelationPage = item"
+              >
+                {{ item + 1 }}
+              </button>
+            </template>
+            <button
+              class="result-pagination__item result-pagination__item--nav"
+              type="button"
+              aria-label="下一页"
+              :disabled="summaryRelationPage >= summaryPageTotal - 1"
+              @click="summaryRelationPage += 1"
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path
+                  d="M6 3l5 5-5 5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <span class="result-pagination__total"
+              >共 {{ summaryPageTotal }} 条关系</span
+            >
+          </nav>
+        </template>
         <dl
           v-else-if="resultMode === 'entity' && liveEntityRows"
           class="result-panel__table"
@@ -3419,29 +3550,12 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <dd>{{ value }}</dd>
           </div>
         </dl>
-        <dl
-          v-else-if="resultMode === 'entity' && activeEntityNode"
-          class="result-panel__table"
+        <p
+          v-else-if="resultMode === 'entity'"
+          class="result-panel__empty"
         >
-          <div>
-            <dt>实体名称</dt>
-            <dd>{{ activeEntityNode.label }}</dd>
-          </div>
-          <div>
-            <dt>实体类型</dt>
-            <dd>{{ activeEntityNode.entityType }}</dd>
-          </div>
-          <div>
-            <dt>命中关系</dt>
-            <dd>{{ activeEntityNode.relations }}</dd>
-          </div>
-          <div>
-            <dt>置信度</dt>
-            <dd>
-              {{ formatConfidence(activeEntityNode.confidence) }}
-            </dd>
-          </div>
-        </dl>
+          暂无实体数据，请先执行查询。
+        </p>
         <dl
           v-else-if="resultMode === 'relation' && liveRelationRows"
           class="result-panel__table"
@@ -3454,18 +3568,12 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <dd>{{ value }}</dd>
           </div>
         </dl>
-        <dl
-          v-else-if="resultMode === 'relation' && activeRelationEdge"
-          class="result-panel__table"
+        <p
+          v-else-if="resultMode === 'relation'"
+          class="result-panel__empty"
         >
-          <div
-            v-for="([label, value], index) in relationDetailRows"
-            :key="`${label}-${index}`"
-          >
-            <dt>{{ label }}</dt>
-            <dd>{{ value }}</dd>
-          </div>
-        </dl>
+          暂无关系数据，请先执行查询。
+        </p>
         <section
           v-else-if="
             resultMode === 'provenance' &&
@@ -3514,10 +3622,16 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <strong>{{ liveProvenance.sourceDatabase }}</strong>
             <span>{{ liveProvenance.summary || "—" }}</span>
           </div>
+          <p
+            v-if="provenanceFilterHint"
+            class="result-provenance__filter-hint"
+          >
+            {{ provenanceFilterHint }}
+          </p>
           <h3>证据列表</h3>
           <div class="result-provenance__evidence-list">
             <article
-              v-for="(ev, index) in liveProvenance.evidences"
+              v-for="(ev, index) in displayedProvenanceEvidences"
               :key="`${ev.recordId}-${index}`"
             >
               <header>
@@ -3557,150 +3671,6 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
               </template>
             </article>
           </div>
-        </section>
-        <section
-          v-else-if="
-            resultMode === 'provenance' &&
-            selectedProvenance &&
-            selectedProvenanceTarget
-          "
-          class="result-provenance"
-        >
-          <header>
-            <strong>当前追溯对象</strong
-            ><span>{{ selectedProvenanceTarget.kind }}</span>
-          </header>
-          <div class="result-provenance__target">
-            <strong>{{ selectedProvenanceTarget.name }}</strong>
-            <span>{{ selectedProvenanceTarget.kind }}</span>
-          </div>
-          <template v-if="!selectedEdge">
-            <h3>实体溯源</h3>
-            <dl class="result-provenance__source">
-              <div>
-                <dt>实体类型</dt>
-                <dd>{{ selectedProvenanceTarget.type }}</dd>
-              </div>
-              <div>
-                <dt>源数据表</dt>
-                <dd>
-                  <code>{{
-                    selectedProvenance.evidences[0]?.technicalTable
-                  }}</code>
-                </dd>
-              </div>
-              <div>
-                <dt>英文字段名</dt>
-                <dd>
-                  <code>{{
-                    selectedProvenance.evidences[0]?.sourceField || "—"
-                  }}</code>
-                </dd>
-              </div>
-              <div>
-                <dt>图空间 VID</dt>
-                <dd>
-                  <code>{{
-                    selectedProvenance.evidences[0]?.graphVid ||
-                    selectedProvenanceTarget.id
-                  }}</code>
-                </dd>
-              </div>
-              <div v-if="!isExpertIndirect && !isPaperCooperation">
-                <dt>构建任务 ID</dt>
-                <dd>
-                  <code>{{ selectedProvenance.task.instanceId }}</code>
-                </dd>
-              </div>
-            </dl>
-            <div
-              v-if="!isExpertIndirect && !isPaperCooperation"
-              class="result-provenance__task-meta"
-            >
-              <RouterLink
-                :to="{
-                  name: 'processing-instance-detail',
-                  params: { instanceId: selectedProvenance.task.instanceId },
-                  query: {
-                    stage: '图谱构建',
-                    objectName: selectedProvenanceTarget.name,
-                    objectId: selectedProvenanceTarget.id,
-                    objectType: selectedProvenanceTarget.type,
-                    kind: selectedProvenanceTarget.kind,
-                    sourceTable:
-                      selectedProvenance.evidences[0]?.technicalTable,
-                    sourceRecordId:
-                      selectedProvenance.evidences[0]?.fieldIdentifier,
-                  },
-                }"
-                >查看构建详情 →</RouterLink
-              >
-            </div>
-          </template>
-          <template v-else-if="selectedProvenance.relationEndpoints?.length">
-            <h3>关系溯源</h3>
-            <dl class="result-provenance__source">
-              <div>
-                <dt>关系类型</dt>
-                <dd>{{ selectedProvenanceTarget.type }}</dd>
-              </div>
-            </dl>
-            <h3>两端实体来源</h3>
-            <div class="result-provenance__evidence-list">
-              <article
-                v-for="endpoint in selectedProvenance.relationEndpoints"
-                :key="endpoint.role"
-              >
-                <header>
-                  <strong>{{ endpoint.role }} · {{ endpoint.name }}</strong>
-                </header>
-                <p>
-                  <b>实体类型：{{ endpoint.entityType }}</b>
-                </p>
-                <span
-                  >源数据表：<code>{{ endpoint.technicalTable }}</code></span
-                >
-                <span
-                  >英文字段名：<code>{{
-                    endpoint.sourceField || "—"
-                  }}</code></span
-                >
-                <span
-                  >图空间 VID：<code>{{ endpoint.graphVid }}</code></span
-                >
-              </article>
-            </div>
-            <dl
-              v-if="!isExpertIndirect && !isPaperCooperation"
-              class="result-provenance__source"
-            >
-              <div>
-                <dt>构建任务 ID</dt>
-                <dd>
-                  <code>{{ selectedProvenance.task.instanceId }}</code>
-                </dd>
-              </div>
-            </dl>
-            <div
-              v-if="!isExpertIndirect && !isPaperCooperation"
-              class="result-provenance__task-meta"
-            >
-              <RouterLink
-                :to="{
-                  name: 'processing-instance-detail',
-                  params: { instanceId: selectedProvenance.task.instanceId },
-                  query: {
-                    stage: '图谱构建',
-                    objectName: selectedProvenanceTarget.name,
-                    objectId: selectedProvenanceTarget.id,
-                    objectType: selectedProvenanceTarget.type,
-                    kind: selectedProvenanceTarget.kind,
-                  },
-                }"
-                >查看构建详情 →</RouterLink
-              >
-            </div>
-          </template>
         </section>
         <section
           v-else-if="resultMode === 'provenance' && liveResponse"
@@ -5033,6 +5003,99 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
 .result-panel__table dd {
   background: #fff;
   color: #1d2129;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.result-panel__empty {
+  margin: 16px;
+  padding: 24px;
+  text-align: center;
+  color: #86909c;
+  font-size: 14px;
+}
+
+.result-provenance__filter-hint {
+  margin: 0;
+  padding: 6px 12px;
+  background: #e8f3ff;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #165dff;
+}
+
+/* 分页：页项 32px，当前页蓝字浅蓝底（设计规范「表格 · 分页」）。 */
+.result-pagination {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px;
+  border-top: 1px solid #e5e6eb;
+}
+
+.result-pagination__item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #1d2129;
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.result-pagination__item:not(:disabled):hover {
+  background: #f2f3f5;
+}
+
+.result-pagination__item:focus-visible {
+  outline: 2px solid #e8f3ff;
+  outline-offset: 0;
+}
+
+.result-pagination__item.is-current {
+  background: #e8f3ff;
+  color: #165dff;
+  font-weight: 500;
+}
+
+.result-pagination__item--nav {
+  color: #4e5969;
+}
+
+.result-pagination__item--nav svg {
+  width: 16px;
+  height: 16px;
+}
+
+.result-pagination__item:disabled {
+  color: #c9cdd4;
+  cursor: not-allowed;
+}
+
+.result-pagination__ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  color: #86909c;
+  font-size: 14px;
+  line-height: 22px;
+  user-select: none;
+}
+
+.result-pagination__total {
+  margin-left: 8px;
+  color: #86909c;
+  font-size: 14px;
+  line-height: 22px;
 }
 
 /* 移除预览与结果详情的外层衬板；保留内部白色画布与详情表格。 */

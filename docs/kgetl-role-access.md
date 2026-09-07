@@ -36,10 +36,14 @@ OAuth 成功和失败回跳均使用 `kgetl` 当前的 history 路径（例如 `
 ```dotenv
 AUTH_ENABLED=true
 AUTH_SESSION_BACKEND=redis
+AUTH_COOKIE_PATH=/bkg_zpt
+AUTH_COOKIE_SECURE=true
 AUTH_FRONTEND_URL=https://edu.itic-sci.com/bkg_zpt
 USER_CENTER_REDIRECT_URI=https://edu.itic-sci.com/bkg_zpt/api/v1/auth/callback
 USER_CENTER_CLIENT_ID=<现有客户端 ID>
 USER_CENTER_CLIENT_SECRET=<现有客户端密钥>
+USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED=true
+USER_CENTER_PORTAL_TOKEN_COOKIE=access_token
 USER_CENTER_OPEN_API_BASE_URL=https://edu.itic-sci.com/uc/open-api/system
 USER_CENTER_PORTAL_ADMIN_ENABLED=true
 USER_CENTER_PORTAL_ROLE_CACHE_TTL_SECONDS=60
@@ -51,6 +55,8 @@ ADMIN_EXAMPLE_FALLBACK=false
 `docker-compose.dev2.yml` 从根 `.env` 读取 `AUTH_ENABLED`，并向前后端传递同一个值。已有 `.env` 会覆盖 Compose 默认值，修改默认值本身不会让已部署环境自动开启登录。`PLATFORM_INITIAL_ADMIN_USER_IDS` 中的既有授权继续有效，无需为了门户继承重新配置；是否保留由交付管理员决定，不自动清除。
 
 统一用户中心需允许 `bkg_zpt` 的生产回调（与 `bkg_zp` 不同）及该客户端访问签名接口。真实联调须确认已知门户管理员确实返回 `gkxUser.role=1`，普通用户返回 `0` 或无关联账号；文档将该字段称为“原官网角色”。如果门户的管理员由另一套应用角色表示，须先确认映射，不能按名称猜测授予权限。
+
+门户 iframe 复用登录依赖门户按既定约定写入可发送到本系统的 `access_token` Cookie，因此这里显式开启 Cookie SSO；直接访问系统仍支持原 OAuth 登录。该 Cookie 仅用于向用户中心核验身份，前端消息不能直接授予管理员。
 
 加载新代码和环境变量需重建相关容器，单独 `restart` 不会重读 Compose 环境变量：
 

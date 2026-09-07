@@ -89,8 +89,17 @@ def _subgraphs() -> dict[str, dict]:
 
 
 def _governance() -> dict[str, list]:
-    """org_id -> [(expert_id, position), ...]。"""
-    return {ORG_A: [("person_x", "董事长")], ORG_B: []}
+    """org_id -> [(expert_id, position, expert_props), ...]。"""
+    return {
+        ORG_A: [
+            (
+                "person_x",
+                "董事长",
+                {"name_cn": "张三", "source_record_id": "sch-001", "source_table": "dwd_scholar"},
+            )
+        ],
+        ORG_B: [],
+    }
 
 
 @pytest.mark.asyncio
@@ -128,6 +137,10 @@ async def test_topn_via_graph_helpers(monkeypatch):
     # orgA 有专家
     assert resp.experts == 1
     assert resp.relations[0].expert_id == "person_x"
+    # 专家姓名来自 Person 节点属性；溯源为真实字段（不再缺省让前端回退静态映射）
+    assert resp.relations[0].expert_name == "张三"
+    assert resp.entity_provenance["person_x"].sourceField == "scholar_id"
+    assert resp.entity_provenance["person_x"].sourceValue == "sch-001"
     # 标书分析维度：后端真实派生（非空）
     assert resp.node_impact
     assert "bankruptcy" in resp.node_impact

@@ -876,7 +876,7 @@ function buildLiveGraph(
     nodeType: GraphNodeData["nodeType"],
     entityType: string,
     relations = "",
-    confidence = 1,
+    confidence?: number,
     provenance?: {
       sourceTable?: string;
       sourceField?: string;
@@ -910,6 +910,7 @@ function buildLiveGraph(
     to: string,
     label: string,
     category: string,
+    confidence?: number,
   ) => {
     edges.push({
       id: `${from}->${to}-${edges.length}`,
@@ -917,17 +918,19 @@ function buildLiveGraph(
       to,
       label,
       category,
+      confidence,
     });
   };
 
   if (key === "enterprise-relation") {
+    // 实体本身无置信度概念（置信度定义在关系上），不传 → 面板显示"暂无"并按规则解释
     addNode(
       data.expert_id,
       data.expert_name,
       "expert",
       "科技专家",
       `${data.relations?.length ?? 0} 条企业关联`,
-      1,
+      undefined,
       data.entity_provenance?.[data.expert_id],
     );
     for (const r of data.relations || []) {
@@ -937,7 +940,7 @@ function buildLiveGraph(
         "company",
         "企业",
         `${r.cooperation_mode || ""}｜${r.role_label || ""}`,
-        1,
+        undefined,
         data.entity_provenance?.[r.enterprise_id],
       );
       addEdge(
@@ -945,6 +948,8 @@ function buildLiveGraph(
         r.enterprise_id,
         r.cooperation_mode || r.cooperation_type || "关联",
         r.cooperation_type || "relation",
+        // 关系置信度直接透传后端值（governance 0.9 / 项目·专利合作 0.8）
+        typeof r.confidence === "number" ? r.confidence : undefined,
       );
     }
   } else if (key === "industry-chain-event") {
@@ -954,7 +959,7 @@ function buildLiveGraph(
       "main",
       "产业链节点",
       `${data.enterprises ?? 0} 家企业｜TOP ${data.events ?? 0} 事件`,
-      1,
+      undefined,
       data.entity_provenance?.[data.chain_node_id],
     );
     const orgEventCount: Record<string, number> = {};
@@ -967,7 +972,7 @@ function buildLiveGraph(
         "company",
         "企业",
         `TOP 事件 ${orgEventCount[ev0.org_id] || 0} 件`,
-        1,
+        undefined,
         data.entity_provenance?.[ev0.org_id],
       );
       addEdge(data.chain_node_id, ev0.org_id, "关联企业", "chain");
@@ -977,13 +982,29 @@ function buildLiveGraph(
         "event",
         ev0.event_type || "事件",
         `${ev0.event_type || ""}｜${(ev0.occur_date || "").slice(0, 10)}｜评分 ${ev0.impact_score}`,
-        Math.min(1, (ev0.impact_score || 0) / 10),
+        // 事件置信度用后端 EVENT_CONFIDENCE 值（风险 0.9 / 财务 0.85 / 中标 0.8 / 资讯 0.7）
+        typeof ev0.confidence === "number" ? ev0.confidence : undefined,
         data.entity_provenance?.[ev0.event_id],
       );
-      addEdge(ev0.org_id, ev0.event_id, ev0.event_type || "事件", "event");
+      addEdge(
+        ev0.org_id,
+        ev0.event_id,
+        ev0.event_type || "事件",
+        "event",
+        typeof ev0.confidence === "number" ? ev0.confidence : undefined,
+      );
     }
     for (const rel of data.relations || []) {
-      addNode(rel.expert_id, rel.expert_name, "expert", "专家", "关联事件");
+      addNode(
+        rel.expert_id,
+        rel.expert_name || rel.expert_id,
+        "expert",
+        "专家",
+        rel.role ? `关联专家｜${rel.role}` : "关联事件",
+        undefined,
+        // 后端 governance 边带出 Person 属性的真实溯源；缺失时面板按"-"展示
+        data.entity_provenance?.[rel.expert_id],
+      );
       addEdge(rel.event_id, rel.expert_id, "关联专家", "expert");
     }
   } else if (key === "paper-cooperation") {
@@ -1388,21 +1409,40 @@ function buildLiveSummary(
   if (!d) return {};
   const out: Record<string, string> = {};
   if (key === "enterprise-relation") {
-    const r0 = d.relations?.[0] || {};
+    // 摘要按返回的 relations 全量汇总，不再只取第一条（对齐"摘要=全部汇总"的要求）
+    const relations: any[] = d.relations || [];
+    const r0 = relations[0] || {};
     const bg = r0.enterprise_background || {};
+    const roles = [
+      ...new Set(relations.map((r: any) => r?.role_label).filter(Boolean)),
+    ];
+    const modes = [
+      ...new Set(
+        relations.map((r: any) => r?.cooperation_mode).filter(Boolean),
+      ),
+    ];
+    const confidences = relations
+      .map((r: any) => r?.confidence)
+      .filter((v: any) => typeof v === "number");
     out["科技专家"] = d.expert_name || d.expert_id || "-";
-    out["重点关注企业"] = r0.enterprise_name || "-";
-    out["专家企业角色"] = r0.role_label || "-";
+    out["重点关注企业"] = r0.enterprise_name
+      ? relations.length > 1
+        ? `${r0.enterprise_name}（首要，共 ${d.enterprises ?? relations.length} 家）`
+        : r0.enterprise_name
+      : "-";
+    out["专家企业角色"] = roles.length ? roles.join("、") : "-";
     out["合作时间"] = "-";
     if (r0.period?.start) {
       const periodEnd = r0.period.end ? ` 至 ${r0.period.end}` : " 至今";
-      out["合作时间"] = `${r0.period.start}${periodEnd}`;
+      out["合作时间"] = `${r0.period.start}${periodEnd}${
+        relations.length > 1 ? "（首要关系）" : ""
+      }`;
     }
     out["合作领域"] =
       (d.cooperation_fields?.length
         ? d.cooperation_fields.join("、")
         : r0.tech_field) || "-";
-    out["合作模式"] = r0.cooperation_mode || "-";
+    out["合作模式"] = modes.length ? modes.join("、") : "-";
     out["行业地位"] = "-";
     if (bg.listing_status) {
       const stockType = bg.stock_type ? `｜${bg.stock_type}` : "";
@@ -1417,20 +1457,23 @@ function buildLiveSummary(
       ]
         .filter(Boolean)
         .join("｜") || "-";
-    out["关联企业数量"] = `${d.enterprises ?? 0} 家`;
-    out["风险提示"] = bg.listing_status
-      ? `${bg.listing_status}，暂无该企业风险事件数据`
-      : "暂无该企业风险事件数据";
+    out["关联企业数量"] = `${d.enterprises ?? relations.length} 家`;
+    // 风险提示用后端对首要企业探测的真实风险事件摘要（risk_summary）
+    out["风险提示"] = r0.risk_summary || "暂无首要企业风险事件数据";
     out["资源对接价值"] = d.cooperation_fields?.length
       ? `专家合作领域 ${d.cooperation_fields.join("、")}`
       : "待评估合作领域匹配度";
+    out["综合置信度"] = confidences.length
+      ? `${Math.max(...confidences).toFixed(2)}（关系置信度最大值：治理类 0.9，项目/专利合作 0.8）`
+      : "暂无（无关系命中）";
   } else if (key === "industry-chain-event") {
     const ev0 = d.top_events?.[0] || {};
     out["产业链"] = d.chain_name || "-";
     out["产业链节点"] = d.chain_node_name || "-";
     out["筛选范围"] =
       `TOP ${d.events ?? 0}｜${[...new Set((d.top_events || []).map((e: any) => e.event_type).filter(Boolean))].join("、") || "事件"}`;
-    out["重点事件"] = ev0.title || "-";
+    // 键名与 summaryRows 的"核心事件"对齐（此前写成"重点事件"导致恒显示静态 demo 值）
+    out["核心事件"] = ev0.title || "-";
     out["事件类型/时间"] =
       `${ev0.event_type || "-"}｜${(ev0.occur_date || "").slice(0, 10)}`;
     out["影响力排名"] = ev0.rank
@@ -1444,6 +1487,10 @@ function buildLiveSummary(
         (d.top_events || []).map((e: any) => e.event_type).filter(Boolean),
       ),
     ];
+    // 节点影响/发展趋势/机遇挖掘优先用后端规则派生的真实文案
+    out["节点影响"] =
+      d.node_impact ||
+      `TOP 事件类型 ${types.join("、") || "无"}，风险等级 ${d.risk_level || "-"}`;
     const years = [
       ...new Set(
         (d.top_events || [])
@@ -1451,11 +1498,11 @@ function buildLiveSummary(
           .filter(Boolean),
       ),
     ];
-    out["节点影响"] =
-      `TOP 事件类型 ${types.join("、") || "无"}，风险等级 ${d.risk_level || "-"}`;
     const trendPeriod = years.length ? `，集中在 ${years.join("、")}` : "";
-    out["发展趋势"] = `近期 TOP 事件 ${d.events ?? 0} 条${trendPeriod}`;
+    out["发展趋势"] =
+      d.trend || `近期 TOP 事件 ${d.events ?? 0} 条${trendPeriod}`;
     out["机遇挖掘"] =
+      d.opportunity ||
       `涉及企业 ${d.enterprises ?? 0} 家，事件类型 ${types.join("、") || "无"}`;
   } else if (key === "paper-cooperation") {
     const sr = d?.structuredResult || res?.structuredResult || d || res;

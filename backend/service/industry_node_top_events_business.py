@@ -166,10 +166,16 @@ def _fetch_org_events_sync(
     return events
 
 
-def _fetch_org_governance_sync(client: TRSGraphClient, org_id: str) -> list[tuple[str, str | None]]:
-    """同步取单个企业的 governance 边关联专家，返回 [(expert_id, position), ...]。"""
+def _fetch_org_governance_sync(
+    client: TRSGraphClient, org_id: str
+) -> list[tuple[str, str | None, dict[str, Any]]]:
+    """同步取单个企业的 governance 边关联专家。
+
+    返回 [(expert_id, position, expert_props), ...]——顺带取 Person 节点属性，
+    供专家姓名与实体溯源使用（缺失时 props 为空 dict，前端回退 vid 展示）。
+    """
     seen_pids: set[str] = set()
-    experts: list[tuple[str, str | None]] = []
+    experts: list[tuple[str, str | None, dict[str, Any]]] = []
     for et in GOVERNANCE_EDGES:
         try:
             edge_list = client.get_node_edges(org_id, direction="in", edge_type=et, limit=20)
@@ -179,7 +185,17 @@ def _fetch_org_governance_sync(client: TRSGraphClient, org_id: str) -> list[tupl
             pid = str(e.source_id if str(e.target_id) == org_id else e.target_id)
             if pid and pid != org_id and pid not in seen_pids:
                 seen_pids.add(pid)
-                experts.append((pid, (e.properties or {}).get("position")))
+                try:
+                    node = client.get_node(pid)
+                except Exception:
+                    node = None
+                experts.append(
+                    (
+                        pid,
+                        (e.properties or {}).get("position"),
+                        dict(node.properties or {}) if node else {},
+                    )
+                )
     return experts
 
 
@@ -429,33 +445,39 @@ class IndustryNodeTopEventsService:
             ],
             return_exceptions=True,
         )
-        experts_by_org: dict[str, list[tuple[str, str | None]]] = {}
+        experts_by_org: dict[str, list[tuple[str, str | None, dict[str, Any]]]] = {}
         for org_id, result in zip(top_org_ids, gov_results, strict=False):
             if isinstance(result, Exception):
                 continue
             experts_by_org[org_id] = result
 
         all_expert_ids = set()
+        expert_props_by_pid: dict[str, dict[str, Any]] = {}
         for ev in top:
-            for pid, role in experts_by_org.get(ev.get("org_id", ""), []):
+            for pid, role, props in experts_by_org.get(ev.get("org_id", ""), []):
                 all_expert_ids.add(pid)
+                expert_props_by_pid.setdefault(pid, props)
                 resp.relations.append(
                     EventExpertRelation(
                         event_id=ev["event_id"],
                         event_title=ev.get("title"),
                         expert_id=pid,
-                        expert_name=None,
+                        expert_name=(
+                            props.get("name_cn") or props.get("name_zh") or props.get("name_en")
+                        ),
                         role=role,
                         org_id=ev.get("org_id", ""),
                         org_name=ev.get("org_name"),
                     )
                 )
         resp.experts = len(all_expert_ids)
-        # 实体溯源：链节点 + 关联企业 + TOP 事件（专家走 governance 边无节点属性，前端回退静态映射）
+        # 实体溯源：链节点 + 关联企业 + TOP 事件 + 专家（governance 边带出 Person 属性，溯源为真实值）
         # 链节点 key 用 req.chain_node_id（前端画板主节点 id），属性仍按 node_vid 取
         resp.entity_provenance = {
             req.chain_node_id: _entity_provenance(nodes_map.get(node_vid, {}), {"IndustryNode"})
         }
+        for pid, props in expert_props_by_pid.items():
+            resp.entity_provenance[pid] = _entity_provenance(props, {"Person"})
         for org_vid in top_org_ids:
             resp.entity_provenance[org_vid] = _entity_provenance(
                 nodes_map.get(org_vid, {}), {"Organization"}

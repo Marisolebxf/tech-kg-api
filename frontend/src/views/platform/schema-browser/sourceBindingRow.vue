@@ -146,7 +146,7 @@ function applyColumnDefaults() {
       placeholder="数据源"
       allow-search
       :loading="false"
-      popup-container=".source-bindings"
+      popup-container=".schema-modal"
       @change="onDatasourceChange"
     >
       <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id" :label="`${ds.name}（${ds.host}）`">
@@ -160,7 +160,7 @@ function applyColumnDefaults() {
       allow-search
       :loading="loadingDatabases"
       :disabled="!row.datasourceId"
-      popup-container=".source-bindings"
+      popup-container=".schema-modal"
       @change="onDatabaseChange"
     >
       <a-option v-for="db in databases" :key="db" :value="db">{{ db }}</a-option>
@@ -172,7 +172,7 @@ function applyColumnDefaults() {
       allow-search
       :loading="loadingTables"
       :disabled="!row.databaseName"
-      popup-container=".source-bindings"
+      popup-container=".schema-modal"
       @change="onTableChange"
     >
       <a-option v-for="t in tables" :key="t.name" :value="t.name">{{ t.name }}</a-option>
@@ -184,7 +184,7 @@ function applyColumnDefaults() {
       allow-search
       :loading="loadingColumns"
       :disabled="!row.tableName"
-      popup-container=".source-bindings"
+      popup-container=".schema-modal"
       @change="(value) => patch({ pkColumn: asString(value) })"
     >
       <a-option v-for="c in columns" :key="c.name" :value="c.name">{{ c.name }}</a-option>
@@ -196,7 +196,7 @@ function applyColumnDefaults() {
       allow-search
       :loading="loadingColumns"
       :disabled="!row.tableName"
-      popup-container=".source-bindings"
+      popup-container=".schema-modal"
       @change="(value) => patch({ timeColumn: asString(value) })"
     >
       <a-option v-for="c in columns" :key="c.name" :value="c.name">{{ c.name }}</a-option>
@@ -216,7 +216,13 @@ function applyColumnDefaults() {
 <style scoped>
 .source-binding-row{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,0.9fr) minmax(0,1fr) minmax(90px,0.7fr) minmax(110px,0.8fr) 24px;gap:8px;align-items:center}
 .source-binding-row__select{min-width:0}
-.source-binding-row__select :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:13px;line-height:22px}
+:deep(.source-binding-row__select.arco-select-view){display:inline-flex;box-sizing:border-box;align-items:center;width:100%;min-width:0;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;font-size:14px;line-height:22px;box-shadow:none!important}
+:deep(.source-binding-row__select.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
+:deep(.source-binding-row__select.arco-select-view:focus-within),:deep(.source-binding-row__select.arco-select-view-focus){border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+:deep(.source-binding-row__select.arco-select-view .arco-select-view-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
+:deep(.source-binding-row__select.arco-select-view .arco-select-view-input:focus),:deep(.source-binding-row__select.arco-select-view .arco-select-view-input:focus-visible){border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
+:deep(.source-binding-row__select.arco-select-view .arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
+:deep(.source-binding-row__select.arco-select-view .arco-select-view-value),:deep(.source-binding-row__select.arco-select-view .arco-select-view-placeholder){min-width:0;overflow:hidden;background:transparent!important;font-size:14px;line-height:30px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 .source-binding-row__remove{width:24px;height:24px;border:0;border-radius:4px;background:transparent;color:#e54848;font-size:16px;cursor:pointer}
 .source-binding-row__remove:hover{background:#fff3f3}
 </style>

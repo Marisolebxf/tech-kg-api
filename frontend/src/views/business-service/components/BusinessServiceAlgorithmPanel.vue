@@ -514,6 +514,8 @@ const expertDirectResponse = ref<ExpertDirectRelationQueryResponse | null>(
   null,
 );
 const expertDirectError = ref<string | null>(null);
+/** 摘要页签展示第几条关系（直接关系多条时用于分页切换，不改变字段结构）。 */
+const summaryRelationPage = ref(0);
 let expertDirectAbortController: AbortController | null = null;
 const expertIndirectResponse = ref<ExpertIndirectRelationResponse | null>(null);
 const expertIndirectError = ref<string | null>(null);
@@ -1913,10 +1915,7 @@ function computePanoramaSummaryRows(
     [
       "核心环节",
       coreSegment && coreSegment.items.length
-        ? compactSummaryText(
-            coreSegment.items.map((i) => i.label).join("、"),
-            60,
-          )
+        ? compactSummaryText(coreSegment.items[0].label)
         : "—",
     ],
     ["关键技术", layerLabel("core_technology")],
@@ -2107,8 +2106,9 @@ function computeExpertDirectSummaryRows(
   resp: ExpertDirectRelationQueryResponse,
 ): ReadonlyArray<readonly [string, string]> {
   const items = resp.items ?? [];
+  const item = items[summaryRelationPage.value] ?? items[0];
   const overrides = new Map<string, string>();
-  if (!items.length) {
+  if (!item) {
     return props.moduleInfo.summaryRows.map(
       (row) =>
         [
@@ -2117,50 +2117,39 @@ function computeExpertDirectSummaryRows(
         ] as const,
     );
   }
-  // 汇总所有关系，不再只取 items[0]
-  const allExperts = new Set<string>();
-  const allReasons = new Set<string>();
-  const allInstitutions = new Set<string>();
-  let totalCoPapers = 0;
-  let minStrength = Infinity;
-  let maxStrength = -Infinity;
-  let sumStrength = 0;
-  const times: string[] = [];
-  for (const item of items) {
-    if (item.expertA?.name) allExperts.add(item.expertA.name);
-    if (item.expertB?.name) allExperts.add(item.expertB.name);
-    for (const tag of item.reasonTags ?? []) allReasons.add(tag);
-    if (item.institution) allInstitutions.add(item.institution);
-    totalCoPapers += item.coPaperCount ?? 0;
-    const s = item.relationStrength ?? 0;
-    minStrength = Math.min(minStrength, s);
-    maxStrength = Math.max(maxStrength, s);
-    sumStrength += s;
-    if (item.lastUpdatedAt) times.push(item.lastUpdatedAt);
+  {
+    const expertALabel = compactSummaryText(
+      [item.expertA.name, item.expertA.title, item.expertA.organization]
+        .filter(Boolean)
+        .join("｜"),
+    );
+    const expertBLabel = compactSummaryText(
+      [item.expertB.name, item.expertB.title, item.expertB.organization]
+        .filter(Boolean)
+        .join("｜"),
+    );
+    const reasonText = item.reasonTags?.length
+      ? compactSummaryText(item.reasonTags.join("、"))
+      : "—";
+    overrides.set("专家 A", expertALabel || "—");
+    overrides.set("专家 B", expertBLabel || "—");
+    overrides.set(
+      "直接关系类型",
+      compactSummaryText(item.relationSummary || item.relationType || "—"),
+    );
+    overrides.set("关系发生时间", compactSummaryText(item.lastUpdatedAt || "—"));
+    overrides.set("交互场景", compactSummaryText(item.institution || "合作关系"));
+    overrides.set("关系数量", `${resp.total ?? resp.items.length} 条`);
+    overrides.set("相关成果", compactSummaryText(`共同论文${item.coPaperCount}篇`));
+    overrides.set("代表成果", reasonText);
+    overrides.set(
+      "关系置信度",
+      ((item.relationStrength ?? 0) / 100).toFixed(2),
+    );
   }
-  times.sort();
-  const expertList = [...allExperts].join("、");
-  overrides.set("专家 A", expertList || "—");
-  overrides.set("专家 B", "—");
-  overrides.set("直接关系类型", [...allReasons].join("、") || "—");
-  overrides.set(
-    "关系发生时间",
-    times.length
-      ? `${times[0].slice(0, 10)} 至 ${times[times.length - 1].slice(0, 10)}`
-      : "—",
-  );
-  overrides.set("交互场景", [...allInstitutions].join("、") || "合作关系");
-  overrides.set("关系数量", `${resp.total ?? items.length} 条`);
-  overrides.set("相关成果", `共同论文 ${totalCoPapers} 篇`);
-  overrides.set("代表成果", "见关系列表");
-  const avg = sumStrength / items.length;
-  overrides.set(
-    "关系置信度",
-    `最高 ${(maxStrength / 100).toFixed(2)}｜最低 ${(minStrength / 100).toFixed(2)}｜平均 ${(avg / 100).toFixed(2)}`,
-  );
   return props.moduleInfo.summaryRows.map((row) => {
     const overrideValue = overrides.get(row.label);
-    return [row.label, overrideValue ?? row.value] as const;
+    return [row.label, compactSummaryText(overrideValue ?? row.value)] as const;
   });
 }
 
@@ -2402,6 +2391,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       );
       if (controller.signal.aborted) return;
       expertDirectResponse.value = response;
+      summaryRelationPage.value = 0;
       expertDirectError.value = null;
       selectedGraphNodeId.value = null;
       selectedGraphEdgeId.value = null;
@@ -3438,15 +3428,39 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             </button>
           </div>
         </div>
-        <dl v-if="resultMode === 'summary'" class="result-panel__table">
+        <template v-if="resultMode === 'summary'">
+          <dl class="result-panel__table">
+            <div
+              v-for="([label, value], index) in detailRows"
+              :key="`${label}-${index}`"
+            >
+              <dt>{{ label }}</dt>
+              <dd>{{ value || '—' }}</dd>
+            </div>
+          </dl>
           <div
-            v-for="([label, value], index) in detailRows"
-            :key="`${label}-${index}`"
+            v-if="isExpertDirect && (expertDirectResponse?.items?.length ?? 0) > 1"
+            class="result-panel__summary-pager"
           >
-            <dt>{{ label }}</dt>
-            <dd>{{ value || '—' }}</dd>
+            <button
+              type="button"
+              :disabled="summaryRelationPage === 0"
+              @click="summaryRelationPage -= 1"
+            >
+              上一条
+            </button>
+            <span
+              >第 {{ summaryRelationPage + 1 }} / {{ expertDirectResponse?.items?.length }} 条关系</span
+            >
+            <button
+              type="button"
+              :disabled="summaryRelationPage >= (expertDirectResponse?.items?.length ?? 1) - 1"
+              @click="summaryRelationPage += 1"
+            >
+              下一条
+            </button>
           </div>
-        </dl>
+        </template>
         <dl
           v-else-if="resultMode === 'entity' && liveEntityRows"
           class="result-panel__table"
@@ -4930,6 +4944,37 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   background: #e8f3ff;
   border-radius: 4px;
   font-size: 13px;
+  color: #165dff;
+}
+
+.result-panel__summary-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid #e5e6eb;
+  font-size: 13px;
+  color: #4e5969;
+}
+
+.result-panel__summary-pager button {
+  padding: 4px 14px;
+  border: 1px solid #c9cdd4;
+  border-radius: 4px;
+  background: #fff;
+  color: #1d2129;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.result-panel__summary-pager button:disabled {
+  color: #c9cdd4;
+  cursor: not-allowed;
+}
+
+.result-panel__summary-pager button:not(:disabled):hover {
+  border-color: #165dff;
   color: #165dff;
 }
 

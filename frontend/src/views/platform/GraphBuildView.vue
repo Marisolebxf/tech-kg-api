@@ -239,12 +239,14 @@ onMounted(loadData)
                 <small v-if="job.lastRunAt" class="gb-last-run">{{ job.lastRunAt }}</small>
               </td>
               <td class="gb-job-actions">
-                <button v-if="['未运行', '运行失败'].includes(deriveJobUnifiedStatus(job))" type="button" class="primary" :disabled="triggeringJobId === job.id" @click="onTrigger(job)">{{ deriveJobUnifiedStatus(job) === '运行失败' ? '重新执行' : '执行' }}</button>
-                <button v-if="deriveJobUnifiedStatus(job) === '运行中'" type="button" @click="onToggleState(job)">暂停</button>
-                <button v-if="deriveJobUnifiedStatus(job) === '已暂停'" type="button" class="primary" @click="onToggleState(job)">恢复</button>
-                <button type="button" @click="openJobDetail(job)">查看详情</button>
-                <button v-if="deriveJobUnifiedStatus(job) === '已完成' && job.schedule.kind === 'cron'" type="button" @click="onToggleState(job)">暂停调度</button>
-                <button v-if="deriveJobUnifiedStatus(job) !== '运行中'" type="button" class="danger" @click="onDelete(job)">删除</button>
+                <div class="gb-job-actions__inner">
+                  <button v-if="['未运行', '运行失败'].includes(deriveJobUnifiedStatus(job))" type="button" class="primary" :disabled="triggeringJobId === job.id" @click="onTrigger(job)">{{ deriveJobUnifiedStatus(job) === '运行失败' ? '重新执行' : '执行' }}</button>
+                  <button v-if="deriveJobUnifiedStatus(job) === '运行中'" type="button" @click="onToggleState(job)">暂停</button>
+                  <button v-if="deriveJobUnifiedStatus(job) === '已暂停'" type="button" class="primary" @click="onToggleState(job)">恢复</button>
+                  <button type="button" @click="openJobDetail(job)">查看详情</button>
+                  <button v-if="deriveJobUnifiedStatus(job) === '已完成' && job.schedule.kind === 'cron'" type="button" @click="onToggleState(job)">暂停调度</button>
+                  <button v-if="deriveJobUnifiedStatus(job) !== '运行中'" type="button" class="danger" @click="onDelete(job)">删除</button>
+                </div>
               </td>
             </tr>
             <tr v-if="!filteredJobs.length"><td colspan="9" class="empty">暂无任务，点击「新建任务」创建</td></tr>
@@ -285,15 +287,16 @@ onMounted(loadData)
 .gb-jobs-panel{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #e5e6eb;border-radius:6px;background:#fff;box-shadow:none;flex-direction:column}
 .gb-filters{display:flex;align-items:center;gap:8px;font-weight:400}
 .gb-task-table{flex:1;min-height:0;overflow:auto;padding:0}
-/* 9 列任务表在窄视口下禁止压扁列（否则中文逐字换行"竖排"）：列内容不足时横向滚动 */
-.gb-task-table table{width:100%;min-width:1200px;margin:0;border-collapse:collapse;font-size:14px;line-height:22px}
+/* 与 Schema 管理表一致：由内容语义自动分配列宽，空间不足时由表格容器承接横向滚动。 */
+.gb-task-table table{width:100%;margin:0;border-collapse:collapse;font-size:14px;line-height:22px}
 .gb-task-table th{position:sticky;z-index:2;top:0;height:40px;padding:0 16px;background:#f7f8fa;color:#1d2129;font-size:14px;line-height:22px;font-weight:500;text-align:left;white-space:nowrap}
 .gb-task-table td{height:40px;padding:0 16px;border-bottom:1px solid #e5edf8;color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle}
 .gb-task-table tbody tr:hover td{background:#f4f8ff}
-.gb-task-table code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-family:inherit;font-size:14px;line-height:22px;font-weight:400}
+.gb-task-table code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap}
 .gb-task-table b{color:#1d2129;font-weight:400}
 .gb-last-run{display:block;color:#8191aa;font-size:12px;line-height:20px;font-weight:400}
-.gb-job-actions{display:flex;gap:6px;white-space:nowrap}
+.gb-job-actions{white-space:nowrap}
+.gb-job-actions__inner{display:flex;align-items:center;gap:8px}
 .gb-job-actions button{height:26px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
 .gb-job-actions button.primary{border-color:#165dff;background:#165dff;color:#fff}
 .gb-job-actions button.danger{border-color:#f6b9b4;color:#b42318}

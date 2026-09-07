@@ -314,27 +314,28 @@ onMounted(loadReviews)
       </div>
     </div>
 
+    <div v-if="mode === 'review' && reviewCategory === 'C'" class="rerun-subtabs">
+      <nav>
+        <button type="button" :class="{ active: rerunView === 'cases' }" @click="switchRerunView('cases')">失败列表</button>
+        <button type="button" :class="{ active: rerunView === 'history' }" @click="switchRerunView('history')">重跑记录</button>
+      </nav>
+      <button
+        v-if="rerunView === 'cases'"
+        class="rerun-batch-action"
+        type="button"
+        :disabled="!rerunSelection.size || rerunSubmitting"
+        @click="rerunSelected()"
+      >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
+      <button
+        v-else
+        class="rerun-refresh"
+        type="button"
+        :disabled="rerunHistoryLoading"
+        @click="loadRerunExecutions"
+      >{{ rerunHistoryLoading ? '加载中…' : '刷新' }}</button>
+    </div>
+
     <section class="ops-panel">
-      <div v-if="mode === 'review' && reviewCategory === 'C'" class="rerun-subtabs">
-        <nav>
-          <button type="button" :class="{ active: rerunView === 'cases' }" @click="switchRerunView('cases')">失败列表</button>
-          <button type="button" :class="{ active: rerunView === 'history' }" @click="switchRerunView('history')">重跑记录</button>
-        </nav>
-        <button
-          v-if="rerunView === 'cases'"
-          class="rerun-batch-action"
-          type="button"
-          :disabled="!rerunSelection.size || rerunSubmitting"
-          @click="rerunSelected()"
-        >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
-        <button
-          v-else
-          class="rerun-refresh"
-          type="button"
-          :disabled="rerunHistoryLoading"
-          @click="loadRerunExecutions"
-        >{{ rerunHistoryLoading ? '加载中…' : '刷新' }}</button>
-      </div>
 
       <div v-if="rerunFeedback" :class="['rerun-feedback', `is-${rerunFeedback.type}`]">
         <span>{{ rerunFeedback.text }}</span>
@@ -395,18 +396,6 @@ onMounted(loadReviews)
       </table></div>
 
       <div v-else class="ops-review-table-scroll"><table class="review-case-table" :class="{ 'review-case-table--selectable': reviewCategory === 'C' }">
-        <colgroup>
-          <col v-if="reviewCategory === 'C'" class="review-col-pick" />
-          <col class="review-col-id" />
-          <col class="review-col-object" />
-          <col class="review-col-node" />
-          <col class="review-col-source" />
-          <col class="review-col-batch" />
-          <col class="review-col-handler" />
-          <col class="review-col-status" />
-          <col class="review-col-time" />
-          <col class="review-col-action" />
-        </colgroup>
         <thead>
           <tr>
             <th v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
@@ -590,10 +579,14 @@ onMounted(loadReviews)
 .ops-review-table-scroll td{color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle}
 .ops-review-table-scroll td>b,.ops-review-table-scroll td>strong{font-weight:400}
 /* 抽取失败重跑：二级子视图 / 重跑反馈条 / 状态徽标扩展 */
-.rerun-subtabs{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid #e5e6eb;background:#fff}
-.rerun-subtabs nav{display:flex;gap:4px}
-.rerun-subtabs nav button{padding:9px 12px;border:0;border-bottom:2px solid transparent;background:transparent;color:#4e5969;font-size:13px;line-height:20px;cursor:pointer}
-.rerun-subtabs nav button.active{border-color:#165dff;color:#165dff;font-weight:600}
+.rerun-subtabs{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;padding:0 16px;border:0;background:transparent}
+.rerun-subtabs nav{display:flex;gap:0}
+.rerun-subtabs nav button{position:relative;padding:9px 0;border:0;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer;transition:color .2s cubic-bezier(0,0,1,1)}
+.rerun-subtabs nav button::after{position:absolute;right:0;bottom:0;left:0;height:2px;background:#165dff;content:"";opacity:0;transform:scaleX(0);transition:opacity .2s cubic-bezier(0,0,1,1),transform .2s cubic-bezier(.34,.69,.1,1)}
+.rerun-subtabs nav button:hover{color:#1d2129}
+.rerun-subtabs nav button.active{color:#165dff;font-weight:500}
+.rerun-subtabs nav button.active::after{opacity:1;transform:scaleX(1)}
+.rerun-subtabs nav button:focus-visible{border-radius:2px;outline:2px solid rgba(22,93,255,.28);outline-offset:2px}
 .rerun-batch-action{height:32px;padding:0 16px;border:1px solid #165dff;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
 .rerun-batch-action:hover:not(:disabled){border-color:#4080ff;background:#4080ff}
 .rerun-batch-action:active:not(:disabled){border-color:#0e42d2;background:#0e42d2}
@@ -604,7 +597,7 @@ onMounted(loadReviews)
 .rerun-feedback.is-error{border-color:#f5b8b3;background:#fef3f2;color:#b42318}
 .rerun-feedback-close{margin-left:auto;width:22px;height:22px;border:0;border-radius:4px;background:transparent;color:inherit;font-size:14px;cursor:pointer}
 .rerun-confirm-text{margin:0;color:#4e5969;font-size:13px;line-height:22px}
-.rerun-history-scroll table{min-width:1100px}
+.rerun-history-scroll table{min-width:0}
 .rerun-fail-count{color:#b42318;font-weight:600}
 .review-status.is-重跑中,.review-status.is-执行中{color:#175cd3}
 .review-status.is-重跑失败,.review-status.is-失败{color:#b42318}
@@ -634,20 +627,20 @@ onMounted(loadReviews)
 .review-pagination :deep(.review-page-size-select .arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
 .review-pagination :deep(.review-page-size-select .arco-select-view-value){min-width:0;font-size:14px;line-height:22px;font-weight:400}
 .ops-review-table-scroll .pick-col{vertical-align:middle;text-align:center}.ops-review-table-scroll .pick-col input[type="checkbox"]{display:block;width:14px;height:14px;margin:0 auto;vertical-align:middle;cursor:pointer}
-.rerun-subtabs{min-height:48px;padding:8px 16px}
-.rerun-subtabs nav{gap:0}.rerun-subtabs nav button{height:32px;padding:0 16px;font-size:14px;line-height:22px;font-weight:400}.rerun-subtabs nav button.active{font-weight:500}
+.rerun-subtabs{min-height:36px}
+.rerun-subtabs nav button{height:36px;padding:0 16px}
 .rerun-batch-action:focus-visible{outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.2)}
 .rerun-refresh{height:32px;padding:0 16px;font-size:14px;line-height:22px;font-weight:400}
 .rerun-feedback{gap:8px;padding:8px 16px}.rerun-feedback-close{width:24px;height:24px}
 .rerun-confirm-text{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
-.ops-review-table-scroll .review-action-col{position:sticky;right:0;box-sizing:border-box;width:144px;min-width:144px;background:#fff;box-shadow:-1px 0 #e5e6eb}
-.ops-review-table-scroll th.review-action-col{z-index:4;background:#f7f8fa}
-.ops-review-table-scroll td.review-action-col{z-index:1}
-.review-action-col .alert-actions{width:max-content;min-width:0}
+.ops-review-table-scroll .review-action-col{position:static;box-sizing:border-box;width:auto;min-width:0;box-shadow:none;white-space:nowrap}
+.review-action-col .alert-actions{display:flex;width:max-content;min-width:0;align-items:center;gap:8px}
 .ops-review-table-scroll th,.ops-review-table-scroll td{box-sizing:border-box;padding-right:16px;padding-left:16px}
-.ops-review-table-scroll table.review-case-table{width:100%;min-width:1356px;table-layout:auto}
-.ops-review-table-scroll table.review-case-table--selectable{min-width:1408px}
-.review-col-pick{width:52px}.review-col-id{width:160px}.review-col-object{width:180px}.review-col-node{width:200px}.review-col-source{width:170px}.review-col-batch{width:150px}.review-col-handler{width:96px}.review-col-status{width:96px}.review-col-time{width:160px}.review-col-action{width:144px}
+.ops-review-table-scroll table,.ops-review-table-scroll table.review-case-table,.ops-review-table-scroll table.review-case-table--selectable{width:100%;min-width:0;table-layout:auto}
+.ops-review-table-scroll td{white-space:normal}
+.ops-review-table-scroll :is(code,.review-id-cell,.review-status){white-space:nowrap}
+.ops-review-table-scroll :is(th,td):last-child{white-space:nowrap}
+.ops-review-table-scroll .review-id-cell,.ops-review-table-scroll .review-source-cell{min-width:0}
 </style>
 <style>
 /* Keep the Arco input's native field transparent; the wrapper is the only visible input shell. */

@@ -622,14 +622,6 @@ onMounted(() => {
         </div>
         <div v-else class="table-wrap">
           <table>
-            <colgroup>
-              <col class="config-col-name" />
-              <col class="config-col-type" />
-              <col class="config-col-status" />
-              <col class="config-col-usage" />
-              <col class="config-col-time" />
-              <col class="config-col-action" />
-            </colgroup>
             <thead><tr><th>配置名称</th><th>类型 / 地址</th><th class="config-status-col">状态</th><th class="config-usage-col">引用情况</th><th class="config-time-col">更新时间</th><th class="config-action-col">操作</th></tr></thead>
             <tbody>
               <tr v-for="item in visibleItems" :key="item.id" @click="selected=item">
@@ -761,12 +753,12 @@ onMounted(() => {
 .category-nav>button>i{width:20px;height:20px;border-radius:4px;font-size:12px}.category-nav>button>span{display:flex;min-width:0;align-items:center;justify-content:flex-start}.category-nav>button strong{display:block;overflow:hidden;font-size:14px;line-height:22px;text-align:left;text-overflow:ellipsis;white-space:nowrap}.category-nav>button em{padding:0;border-radius:0;background:transparent;font-size:12px;line-height:20px}
 .config-list>header{min-height:56px;box-sizing:border-box;justify-content:flex-end;gap:16px;padding:8px 16px}.config-list nav{gap:16px}.config-list-actions{width:100%}.config-list-actions .config-search-input{margin-left:auto}
 .config-list input,.config-list select{height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px}
-.table-wrap table{font-size:14px;line-height:22px}.table-wrap th,.table-wrap td{height:40px;padding:0 16px;border-top:1px solid #e5e6eb;border-bottom:1px solid #e5e6eb}.table-wrap th{background:#f7f8fa;color:#1d2129;font-weight:500}.config-name{gap:8px}.config-name>i{width:28px;height:28px;border-radius:4px;font-size:12px}.config-name strong,.type-name,.link{font-size:14px;line-height:22px}.config-name small,.updated,.table-wrap code{font-size:12px;line-height:20px}
+.table-wrap table{font-size:14px;line-height:22px}.table-wrap th,.table-wrap td{height:40px;padding:0 16px;border-bottom:1px solid #e5e6eb}.table-wrap th{background:#f7f8fa;color:#1d2129;font-weight:500}.config-name{min-width:0;gap:8px}.config-name>i{width:28px;height:28px;border-radius:4px;font-size:12px}.config-name strong,.type-name,.link{font-size:14px;line-height:22px}.config-name small,.updated,.table-wrap code{font-size:12px;line-height:20px}
 .status{gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px;white-space:nowrap}.status.is-正常,.status.is-异常,.status.is-停用{background:transparent}
 /* 行内操作列：管理/停用/删除 并排，删除用警示红 */
 .row-actions{display:flex;gap:12px;align-items:center;white-space:nowrap}.row-actions .link{padding:0;height:auto}.link.danger{color:#f53f3f}
-/* 列宽由实际可用空间决定，窄容器按信息优先级收起辅助列。 */
-.table-wrap:not(.space-table) table{width:100%;table-layout:auto}
+/* 与 Schema 管理表一致：所有列按内容语义自动分配，空间不足时由表格容器横向滚动。 */
+.table-wrap table{width:100%;table-layout:auto}
 .detail-drawer{width:min(640px,calc(100vw - 48px));background:#fff}.create-dialog{width:min(640px,calc(100vw - 48px));border-radius:8px;background:#fff}
 .create-dialog>header{height:56px;box-sizing:border-box;padding:8px 24px}.detail-drawer>header{min-height:56px;height:auto;box-sizing:border-box;padding:8px 24px}.detail-drawer>header span,.create-dialog>header span{font-size:12px;line-height:20px}.detail-drawer h2,.create-dialog h2{font-size:16px;line-height:24px}
 .detail-form,.dialog-form{gap:16px;padding:24px}.detail-form label,.dialog-form label{gap:8px}.detail-form label span,.dialog-form label span,.checkbox span{font-size:14px;line-height:22px}
@@ -848,7 +840,7 @@ onMounted(() => {
 .category-nav>button,.category-nav>button strong,.config-list nav button,.config-list nav :deep(.arco-select-view-value),.config-search-input :deep(.arco-input){font-size:14px;line-height:22px;font-weight:400}
 .category-nav>button.active{font-weight:500}
 .category-nav>button>i{font-size:12px;line-height:20px;font-weight:600}.category-nav>button em{font-size:12px;line-height:20px;font-weight:400}
-.config-name>span{gap:4px}.config-name strong,.type-name,.table-wrap td,.row-actions .link{font-size:14px;line-height:22px;font-weight:400}.config-name small,.updated,.table-wrap code{font-size:12px;line-height:20px;font-weight:400}.table-wrap code{margin-top:4px;font-family:inherit}
+.config-name>span{min-width:0;gap:4px}.config-name strong,.type-name,.table-wrap td,.row-actions .link{font-size:14px;line-height:22px;font-weight:400}.config-name small,.updated,.table-wrap code{font-size:12px;line-height:20px;font-weight:400}.table-wrap code{max-width:none;margin-top:4px;overflow:visible;font-family:inherit;text-overflow:clip;white-space:nowrap}
 .row-actions{gap:8px}.default-tag{margin-left:8px;padding:0 4px;font-size:12px;line-height:20px;font-weight:500}
 .config-list nav :deep(.arco-select-view-value){line-height:22px}
 .detail-drawer>header button,.create-dialog>header button{width:32px;height:32px;border-radius:4px}
@@ -864,7 +856,7 @@ onMounted(() => {
 .config-list-actions .create-entry{background:#165dff!important;color:#fff!important}
 .config-list-actions :deep(.arco-select-view),
 .config-list-actions .config-search-input{background:#fff!important}
-.table-wrap{box-sizing:border-box;margin:0 16px;background:transparent;container-type:inline-size}
+.table-wrap{box-sizing:border-box;margin:0 16px;background:transparent}
 .table-wrap th{background:#f7f8fa!important;color:#1d2129!important;font-weight:500!important}
 .table-wrap table,
 .table-wrap tbody,
@@ -873,10 +865,7 @@ onMounted(() => {
 .table-wrap tbody tr:hover td{background:transparent}
 .table-wrap:not(.space-table) .config-action-col{box-sizing:border-box;overflow:visible;white-space:nowrap}
 .config-action-col .row-actions{display:inline-flex;width:auto;min-width:max-content;align-items:center;overflow:visible}
-.table-wrap:not(.space-table) th,.table-wrap:not(.space-table) td{box-sizing:border-box;padding-right:16px;padding-left:16px}
-@container(max-width:900px){.config-col-usage,.config-usage-col{display:none}}
-@container(max-width:720px){.config-col-time,.config-time-col{display:none}}
-@container(max-width:560px){.config-col-status,.config-status-col{display:none}}
+.table-wrap th,.table-wrap td{box-sizing:border-box;padding-right:16px;padding-left:16px}
 </style>
 <style>
 /* The wrapper is the only visible shell; global native-input rules must not restyle Arco's inner field. */

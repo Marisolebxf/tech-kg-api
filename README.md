@@ -38,6 +38,8 @@ docker compose up --build
 
 ### dev2 公网部署（`https://edu.itic-sci.com/bkg_zpt`）
 
+管理员权限交付方案见 [kgetl 管理员权限启用说明](docs/kgetl-role-access.md)。下文的免登录配置用于开发；启用真实权限时以前述说明为准，前后端通过运行时 `AUTH_ENABLED` 保持一致。
+
 dev2 栈（`docker-compose.dev2.yml`，api 宿主端口 **8002** / web 宿主端口 **8089**）由外部门户网关以 `/bkg_zpt` 前缀代理到 web-dev2（网关会剥掉前缀）；web 容器内 nginx 再把 `/api/` 反代到 api-dev2。默认图空间为 **dev2**（api 的 `TRS_GRAPH_SPACE` 在 compose 里锁死；前端经 `VITE_GRAPH_SPACE=dev2` 构建注入）。
 
 **开发/部署容器时一律关闭用户系统（免登录模式）**：根 `.env` 保持 `AUTH_ENABLED=false`（后端：所有请求走开发上下文、平台管理员直接放行，与生产 8001 行为一致）+ `VITE_AUTH_ENABLED=false`（前端：不跳登录页），用户端与管理端免登录直进。两端开关必须一致，否则所有接口 401。将来要开启登录：两个开关同改 `true` 重建，并需在统一用户中心为 OAuth client 增加 `https://edu.itic-sci.com/bkg_zpt/api/v1/auth/callback` 回调白名单（管理端完整 OAuth 流程才通；门户 iframe 的 cookie 交换路径不受白名单影响）。

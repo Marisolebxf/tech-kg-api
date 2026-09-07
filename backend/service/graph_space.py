@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db_model.platform_governance import UserGraphSpace
-from infra.graph_db import TRSGraphClient, get_trs_graph_client
+from infra.graph_db import TRSGraphClient, TRSGraphSettings, get_trs_graph_client
 from service.platform_access import PlatformActor
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,11 @@ def _validate_name(name: str) -> str:
     if not SPACE_NAME_PATTERN.fullmatch(name):
         raise GraphSpaceError("图空间名称仅支持字母、数字、下划线，且以字母或下划线开头（最长 64）")
     return name
+
+
+def default_graph_space() -> str:
+    """复用图客户端的真实配置，默认业务空间向已登录用户开放读取。"""
+    return TRSGraphSettings.from_env().space
 
 
 class GraphSpaceService:
@@ -72,19 +77,19 @@ class GraphSpaceService:
         return self._session.execute(stmt).scalars().first() is not None
 
     def list_spaces_for_actor(self, actor: PlatformActor) -> list[dict]:
-        """管理员返回 SHOW SPACES 全量；普通用户仅返回自己绑定的空间。"""
+        """管理员看全量；普通用户可读默认业务空间及原有绑定空间。"""
+        bound_names = [item["name"] for item in self.bound_spaces(actor.user_id)]
+        bound = set(bound_names)
+        if not actor.is_admin:
+            # 共享读取不落永久绑定，也不赋予创建空间或图写入权限。
+            names = dict.fromkeys([default_graph_space(), *bound_names])
+            return [{"name": name, "bound": name in bound, "mine": name in bound} for name in names]
         try:
             all_spaces = self.client.list_spaces()
         except Exception as exc:  # noqa: BLE001
             logger.warning("列出图空间失败: %s", exc)
             all_spaces = []
-        if actor.is_admin:
-            bound = {item["name"] for item in self.bound_spaces(actor.user_id)}
-            return [{"name": s, "bound": s in bound, "mine": s in bound} for s in all_spaces]
-        return [
-            {"name": item["name"], "bound": True, "mine": True}
-            for item in self.bound_spaces(actor.user_id)
-        ]
+        return [{"name": s, "bound": s in bound, "mine": s in bound} for s in all_spaces]
 
     # ---------- 绑定 / 解绑 ----------
 

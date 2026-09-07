@@ -62,7 +62,6 @@ def register_routers(app: FastAPI) -> None:
         common_capability_router,
         kg_construction_router,
         options_router,
-        platform_overview_router,
         expert_direct_relation_router,
         expert_indirect_relation_router,
         expert_cooperation_achievement_router,
@@ -84,14 +83,6 @@ def register_routers(app: FastAPI) -> None:
         expert_colleague_service_router,
         tech_enterprise_relation_business_router,
         industry_node_top_events_business_router,
-        task_center_router,
-        workflow_system_router,
-        schema_management_router,
-        llm_config_router,
-        mysql_datasource_router,
-        milvus_config_router,
-        embedding_config_router,
-        graph_space_router,
     )
     for router in protected_routers:
         app.include_router(
@@ -101,6 +92,15 @@ def register_routers(app: FastAPI) -> None:
         )
     admin_dependencies = [Depends(require_authenticated_user), Depends(require_platform_admin)]
     admin_routers = (
+        platform_overview_router,
+        task_center_router,
+        workflow_system_router,
+        schema_management_router,
+        llm_config_router,
+        mysql_datasource_router,
+        milvus_config_router,
+        embedding_config_router,
+        graph_space_router,
         manual_review_router,
         operator_router,
         admin_member_router,

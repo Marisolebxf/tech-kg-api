@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import secrets
+import time
 from typing import Any
 from urllib.parse import urlencode
 
@@ -17,7 +21,7 @@ class UserCenterError(RuntimeError):
 
 
 class UserCenterClient:
-    """按《统一用户中心开放授权接口文档 v2.3.1》的 OAuth2 章节调用。"""
+    """按统一用户中心 v2.4 调用 OAuth2 与签名开放接口。"""
 
     def __init__(
         self,
@@ -85,6 +89,30 @@ class UserCenterClient:
         result = await self._request("GET", "/logout", params={"token": access_token})
         return bool(result)
 
+    async def get_user_by_token(self, access_token: str) -> dict[str, Any]:
+        """v2.4 2.5：服务端获取原官网角色，业务参数不参与签名。"""
+        public_params = {
+            "clientId": self.settings.client_id,
+            "timestamp": int(time.time() * 1000),
+            "nonce": secrets.token_hex(16),
+        }
+        payload = "&".join(f"{key}={public_params[key]}" for key in sorted(public_params))
+        signature = hmac.new(
+            self.settings.client_secret.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        result = await self._request(
+            "POST",
+            "/user/get-by-token",
+            base_url=self.settings.user_center_open_api_base_url
+            or f"{self.settings.user_center_base_url.split('/admin-api/', 1)[0]}/open-api/system",
+            json_body={**public_params, "signature": signature, "token": access_token},
+        )
+        if not isinstance(result, dict):
+            raise UserCenterError("统一用户中心未返回有效的门户用户信息")
+        return result
+
     async def _request(
         self,
         method: str,
@@ -92,6 +120,8 @@ class UserCenterClient:
         *,
         data: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+        base_url: str | None = None,
     ) -> Any:
         try:
             self.settings.require_oauth_credentials()
@@ -100,7 +130,7 @@ class UserCenterClient:
 
         try:
             async with httpx.AsyncClient(
-                base_url=self.settings.user_center_base_url,
+                base_url=base_url or self.settings.user_center_base_url,
                 auth=httpx.BasicAuth(
                     username=self.settings.client_id,
                     password=self.settings.client_secret,
@@ -108,7 +138,9 @@ class UserCenterClient:
                 timeout=15,
                 transport=self._transport,
             ) as client:
-                response = await client.request(method, path, data=data, params=params)
+                response = await client.request(
+                    method, path, data=data, params=params, json=json_body
+                )
         except httpx.HTTPError as exc:
             raise UserCenterError("统一用户中心暂时不可用") from exc
 

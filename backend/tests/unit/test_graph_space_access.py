@@ -15,13 +15,18 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from biz.handler import graph_search, workflow_system
+from biz.handler import entity_search, graph_search, workflow_system
 from db_model.base import Base
 from db_model.llm_config import LlmConfig
 from service.platform_access import PlatformActor
 
 USER_A = "101"
 USER_B = "202"
+
+
+@pytest.fixture(autouse=True)
+def configured_shared_space(monkeypatch):
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "shared_business")
 
 
 def _actor(user_id: str, is_admin: bool = False) -> PlatformActor:
@@ -86,6 +91,15 @@ class TestEnsureSpaceAccess:
         )
         graph_search._ensure_space_access(_actor(USER_A), None)
 
+    def test_explicit_default_space_needs_no_binding(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            graph_search,
+            "create_session",
+            lambda: (_ for _ in ()).throw(AssertionError("默认空间不应查绑定库")),
+        )
+        graph_search._ensure_space_access(_actor(USER_A), "shared_business")
+        entity_search._ensure_space_access(_actor(USER_A), "shared_business")
+
     def test_admin_passes(self, monkeypatch) -> None:
         monkeypatch.setattr(
             "service.graph_space.GraphSpaceService",
@@ -110,6 +124,21 @@ class TestEnsureSpaceAccess:
         with pytest.raises(HTTPException) as exc_info:
             graph_search._ensure_space_access(_actor(USER_A), "dev")
         assert exc_info.value.status_code == 403
+
+
+async def test_ordinary_space_list_fallback_only_exposes_configured_default(monkeypatch) -> None:
+    monkeypatch.setattr(
+        graph_search,
+        "create_session",
+        lambda: (_ for _ in ()).throw(RuntimeError("绑定库不可用")),
+    )
+    monkeypatch.setattr(
+        graph_search,
+        "_get_client",
+        lambda space: (_ for _ in ()).throw(AssertionError("不应列出其他图空间")),
+    )
+    response = await graph_search.list_spaces(_actor(USER_A))
+    assert response.data == {"spaces": ["shared_business"]}
 
 
 class TestValidateResourceSelectors:

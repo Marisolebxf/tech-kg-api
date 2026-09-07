@@ -84,6 +84,9 @@ class FakeUserCenter:
         self.logout_count += 1
         return access_token in {"access-token", "refreshed-token"}
 
+    async def get_user_by_token(self, access_token: str) -> dict[str, Any]:
+        return {"id": 139, "status": 0, "gkxUser": {"role": 0}}
+
 
 class BrokenJsonStore(MemoryJsonStore):
     async def set_json(self, key: str, value: dict[str, Any], ttl_seconds: int) -> None:

@@ -54,6 +54,9 @@ class AuthSettings:
     initial_admin_user_ids: tuple[str, ...]
     bootstrap_first_admin: bool
     dev_first_user_admin: bool
+    user_center_open_api_base_url: str = ""
+    portal_admin_enabled: bool = True
+    portal_role_cache_ttl_seconds: int = 60
 
     @classmethod
     def from_env(cls) -> AuthSettings:
@@ -80,6 +83,14 @@ class AuthSettings:
             cookie_samesite = "lax"
 
         return cls(
+            user_center_open_api_base_url=os.getenv(
+                "USER_CENTER_OPEN_API_BASE_URL",
+                f"{base_url.split('/admin-api/', 1)[0]}/open-api/system",
+            ).rstrip("/"),
+            portal_admin_enabled=_env_bool("USER_CENTER_PORTAL_ADMIN_ENABLED", True),
+            portal_role_cache_ttl_seconds=max(
+                1, _env_int("USER_CENTER_PORTAL_ROLE_CACHE_TTL_SECONDS", 60)
+            ),
             enabled=_env_bool("AUTH_ENABLED", True),
             user_center_base_url=base_url,
             sso_login_url=sso_login_url,

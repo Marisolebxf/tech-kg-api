@@ -113,9 +113,14 @@ def classify_statement(statement: str) -> str:
 def run_statement(actor: PlatformActor, space: str, statement: str) -> dict:
     """按分类执行语句并返回 {records, columns, summary}。
 
-    空间必须存在于图服务；普通用户还需已绑定该空间。
+    空间必须存在于图服务；普通用户可读默认业务空间及已绑定空间。
     """
-    from service.graph_space import SPACE_NAME_PATTERN, GraphSpaceError, GraphSpaceService
+    from service.graph_space import (
+        SPACE_NAME_PATTERN,
+        GraphSpaceError,
+        GraphSpaceService,
+        default_graph_space,
+    )
 
     if not SPACE_NAME_PATTERN.fullmatch(space or ""):
         raise GraphConsoleError("图空间名称不合法")
@@ -138,6 +143,11 @@ def run_statement(actor: PlatformActor, space: str, statement: str) -> dict:
         try:
             space_service = GraphSpaceService(session)
             spaces = space_service.client.list_spaces()
+            space_allowed = (
+                actor.is_admin
+                or space == default_graph_space()
+                or space_service.is_bound(actor.user_id, space)
+            )
         finally:
             session.close()
     except GraphSpaceError as exc:
@@ -147,7 +157,7 @@ def run_statement(actor: PlatformActor, space: str, statement: str) -> dict:
         raise GraphConsoleError(f"图服务不可用: {exc}") from exc
     if space not in spaces:
         raise GraphConsoleError(f"图空间 {space} 不存在")
-    if not actor.is_admin and not space_service.is_bound(actor.user_id, space):
+    if not space_allowed:
         raise GraphConsoleError("无权访问未绑定的图空间", status_code=403)
 
     try:

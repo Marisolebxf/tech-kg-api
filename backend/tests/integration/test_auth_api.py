@@ -71,6 +71,9 @@ class _FakeUserCenter:
     async def logout(self, access_token: str) -> bool:
         return True
 
+    async def get_user_by_token(self, access_token: str) -> dict[str, Any]:
+        return {"id": 139, "status": 0, "gkxUser": {"role": 0}}
+
 
 def _test_app() -> FastAPI:
     settings = replace(
@@ -133,7 +136,9 @@ async def test_browser_login_cookie_profile_and_logout_flow() -> None:
         unauthorized = await client.get("/api/v1/protected")
         assert unauthorized.status_code == 401
 
-        login = await client.get("/api/v1/auth/login-url", params={"next": "/schema"})
+        login = await client.get(
+            "/api/v1/auth/login-url", params={"next": "/schema?tab=entities#details"}
+        )
         state = parse_qs(urlparse(login.json()["data"]["url"]).query)["state"][0]
         assert client.cookies.get("techkg_session_oauth_state") == state
         callback = await client.get(
@@ -142,7 +147,7 @@ async def test_browser_login_cookie_profile_and_logout_flow() -> None:
         )
 
         assert callback.status_code == 302
-        assert callback.headers["location"] == "https://kg.test/bkg_zp/#/schema"
+        assert callback.headers["location"] == "https://kg.test/bkg_zp/schema?tab=entities#details"
         assert "HttpOnly" in callback.headers["set-cookie"]
         assert client.cookies.get("techkg_session_oauth_state") is None
 
@@ -205,7 +210,12 @@ async def test_oauth_callback_rejects_state_from_another_browser() -> None:
             )
 
         assert callback.status_code == 302
-        assert "/#/login?" in callback.headers["location"]
+        redirect = urlparse(callback.headers["location"])
+        assert redirect.scheme == "https"
+        assert redirect.netloc == "kg.test"
+        assert redirect.path == "/bkg_zp/login"
+        assert redirect.fragment == ""
+        assert parse_qs(redirect.query)["error"] == ["登录请求与当前浏览器不匹配，请重新登录"]
         assert "techkg_session=" not in callback.headers.get("set-cookie", "")
 
 

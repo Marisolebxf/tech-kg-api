@@ -111,12 +111,13 @@ def test_unbind_never_drops(session_factory) -> None:
     assert service.unbind(_actor(USER_A), "dev2") is False  # 再解绑 404
 
 
-def test_list_spaces_for_actor(session_factory) -> None:
+def test_list_spaces_for_actor(session_factory, monkeypatch) -> None:
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "dev2")
     client = FakeGraphClient(spaces=["dev2", "techkg"])
     service = _service(session_factory, client)
     service.bind(_actor(USER_A), "dev2")
 
-    # 普通用户只看自己的
+    # 默认空间与已有绑定去重，保持真实绑定标记。
     assert service.list_spaces_for_actor(_actor(USER_A)) == [
         {"name": "dev2", "bound": True, "mine": True}
     ]
@@ -124,6 +125,31 @@ def test_list_spaces_for_actor(session_factory) -> None:
     admin_view = service.list_spaces_for_actor(_actor("admin", is_admin=True))
     assert {item["name"] for item in admin_view} == {"dev2", "techkg"}
     assert {item["name"] for item in admin_view if item["mine"]} == set()
+
+
+def test_new_user_reads_configured_default_without_binding(session_factory, monkeypatch) -> None:
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "delivery_graph")
+    client = FakeGraphClient(spaces=["delivery_graph", "private_graph"])
+    service = _service(session_factory, client)
+
+    assert service.list_spaces_for_actor(_actor(USER_A)) == [
+        {"name": "delivery_graph", "bound": False, "mine": False}
+    ]
+    assert service.bound_spaces(USER_A) == []
+    assert client.statements == []
+
+
+def test_shared_default_preserves_other_bound_spaces(session_factory, monkeypatch) -> None:
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "delivery_graph")
+    client = FakeGraphClient(spaces=["delivery_graph", "private_graph", "another_users_graph"])
+    service = _service(session_factory, client)
+    service.bind(_actor(USER_A), "private_graph")
+    service.bind(_actor(USER_B), "another_users_graph")
+
+    assert service.list_spaces_for_actor(_actor(USER_A)) == [
+        {"name": "delivery_graph", "bound": False, "mine": False},
+        {"name": "private_graph", "bound": True, "mine": True},
+    ]
 
 
 def test_created_at_populated(session_factory) -> None:

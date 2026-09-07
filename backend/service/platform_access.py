@@ -16,6 +16,8 @@ from infra.mysql import session_scope
 logger = logging.getLogger(__name__)
 
 ADMIN_ROLE = "platform_admin"
+# 仅供成员列表展示的最近一次门户身份；绝不作为接口授权或本地管理员依据。
+PORTAL_ROLE_SNAPSHOT = "portal_admin_snapshot"
 USER_PERMISSIONS = ("analysis:read", "correction:submit")
 ADMIN_PERMISSIONS = (
     "admin:access",
@@ -34,6 +36,7 @@ class PlatformActor:
     display_name: str
     email: str
     is_admin: bool
+    portal_is_admin: bool = False
 
     @property
     def roles(self) -> list[str]:
@@ -57,12 +60,14 @@ def actor_from_profile(
 ) -> PlatformActor:
     user_id = str(profile.user.id)
     bootstrap_admin = not auth_enabled or force_admin or user_id in initial_admin_ids
+    portal_admin = auth_enabled and getattr(profile, "portal_is_admin", False) is True
     database_admin = False
     try:
         with session_scope() as session:
             _upsert_user(session, profile)
             session.flush()
             if auth_enabled:
+                _sync_portal_role_snapshot(session, user_id, portal_admin)
                 role_id = session.scalar(
                     select(PlatformUserRole.id).where(
                         PlatformUserRole.user_id == user_id,
@@ -70,7 +75,7 @@ def actor_from_profile(
                     )
                 )
                 database_admin = role_id is not None
-                if bootstrap_first_admin and role_id is None:
+                if bootstrap_first_admin and role_id is None and not portal_admin:
                     first_admin_exists = bool(initial_admin_ids) or (
                         session.scalar(
                             select(PlatformUserRole.id)
@@ -97,8 +102,26 @@ def actor_from_profile(
         username=profile.user.username,
         display_name=profile.user.nickname or profile.user.username,
         email=profile.user.email,
-        is_admin=bootstrap_admin or database_admin,
+        is_admin=bootstrap_admin or database_admin or portal_admin,
+        portal_is_admin=portal_admin,
     )
+
+
+def _sync_portal_role_snapshot(session: Session, user_id: str, is_admin: bool) -> None:
+    existing = session.scalar(
+        select(PlatformUserRole).where(
+            PlatformUserRole.user_id == user_id,
+            PlatformUserRole.role_code == PORTAL_ROLE_SNAPSHOT,
+        )
+    )
+    if is_admin and existing is None:
+        session.add(
+            PlatformUserRole(
+                user_id=user_id, role_code=PORTAL_ROLE_SNAPSHOT, granted_by="user-center"
+            )
+        )
+    elif not is_admin and existing is not None:
+        session.delete(existing)
 
 
 def _upsert_user(session: Session, profile) -> PlatformUser:
@@ -120,7 +143,9 @@ def list_members(
 ) -> list[dict[str, object]]:
     admin_ids = set(
         session.scalars(
-            select(PlatformUserRole.user_id).where(PlatformUserRole.role_code == ADMIN_ROLE)
+            select(PlatformUserRole.user_id).where(
+                PlatformUserRole.role_code.in_((ADMIN_ROLE, PORTAL_ROLE_SNAPSHOT))
+            )
         )
     )
     admin_ids.update(initial_admin_ids)
@@ -157,6 +182,14 @@ def set_admin_role(
     )
     if not enabled and user_id in immutable_admin_ids:
         raise ValueError("环境变量配置的首批管理员不能在页面中取消")
+    portal_snapshot = session.scalar(
+        select(PlatformUserRole.id).where(
+            PlatformUserRole.user_id == user_id,
+            PlatformUserRole.role_code == PORTAL_ROLE_SNAPSHOT,
+        )
+    )
+    if not enabled and existing is None and portal_snapshot is not None:
+        raise ValueError("该成员的管理员权限来自门户，请在门户取消管理员身份")
     if enabled and existing is None:
         session.add(
             PlatformUserRole(user_id=user_id, role_code=ADMIN_ROLE, granted_by=actor.user_id)
@@ -167,7 +200,7 @@ def set_admin_role(
             .select_from(PlatformUserRole)
             .where(PlatformUserRole.role_code == ADMIN_ROLE)
         )
-        if persisted_admins <= 1 and not immutable_admin_ids:
+        if persisted_admins <= 1 and not immutable_admin_ids and not actor.portal_is_admin:
             raise ValueError("至少需要保留一名全局管理员")
         session.execute(delete(PlatformUserRole).where(PlatformUserRole.id == existing.id))
     session.add(
@@ -177,7 +210,7 @@ def set_admin_role(
             action="GRANT_ADMIN" if enabled else "REVOKE_ADMIN",
             resource_type="platform_user",
             resource_id=user_id,
-            detail={"isAdmin": enabled},
+            detail={"isAdmin": enabled, "source": "local"},
         )
     )
-    return {"userId": user_id, "isAdmin": enabled}
+    return {"userId": user_id, "isAdmin": enabled or portal_snapshot is not None}

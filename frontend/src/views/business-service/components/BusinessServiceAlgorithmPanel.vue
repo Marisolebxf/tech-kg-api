@@ -1729,6 +1729,38 @@ const usesThreeFieldProvenance = computed(
   () => isExpertIndirect.value || isPaperCooperation.value,
 );
 
+/** 摘要分页总页数：一条关系一页，按真实数据量出现。 */
+const summaryPageTotal = computed(
+  () => expertDirectResponse.value?.items?.length ?? 0,
+);
+
+/**
+ * 分页页项：首页 + 末页 + 当前页 ±2，断档处插入省略号。
+ * 总页数 ≤ 7 时全部展开；超出时最多 9 个页项，避免 limit=100 时横向溢出。
+ */
+const summaryPageItems = computed<Array<number | "start" | "end">>(() => {
+  const total = summaryPageTotal.value;
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i);
+  }
+  const current = summaryRelationPage.value;
+  const last = total - 1;
+  const around = new Set<number>([0, last]);
+  for (let p = current - 2; p <= current + 2; p += 1) {
+    if (p > 0 && p < last) around.add(p);
+  }
+  const pages = [...around].sort((a, b) => a - b);
+  const items: Array<number | "start" | "end"> = [];
+  pages.forEach((page, index) => {
+    const prev = pages[index - 1];
+    if (index > 0 && page - prev > 1) {
+      items.push(prev === 0 ? "start" : "end");
+    }
+    items.push(page);
+  });
+  return items;
+});
+
 const detailRows = computed(() => {
   if (lastTestTime.value === "—") {
     return props.moduleInfo.summaryRows.map((row) => [row.label, ""] as const);
@@ -3438,28 +3470,73 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
               <dd>{{ value || '—' }}</dd>
             </div>
           </dl>
-          <div
-            v-if="isExpertDirect && (expertDirectResponse?.items?.length ?? 0) > 1"
-            class="result-panel__summary-pager"
+          <nav
+            v-if="isExpertDirect && summaryPageTotal > 1"
+            class="result-pagination"
+            aria-label="关系分页"
           >
             <button
+              class="result-pagination__item result-pagination__item--nav"
               type="button"
+              aria-label="上一页"
               :disabled="summaryRelationPage === 0"
               @click="summaryRelationPage -= 1"
             >
-              上一条
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path
+                  d="M10 3l-5 5 5 5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
             </button>
-            <span
-              >第 {{ summaryRelationPage + 1 }} / {{ expertDirectResponse?.items?.length }} 条关系</span
+            <template
+              v-for="item in summaryPageItems"
+              :key="`summary-page-${item}`"
             >
+              <span
+                v-if="typeof item === 'string'"
+                class="result-pagination__ellipsis"
+                aria-hidden="true"
+                >···</span
+              >
+              <button
+                v-else
+                class="result-pagination__item"
+                :class="{ 'is-current': summaryRelationPage === item }"
+                type="button"
+                :aria-label="`第 ${item + 1} 页`"
+                :aria-current="summaryRelationPage === item ? 'page' : undefined"
+                @click="summaryRelationPage = item"
+              >
+                {{ item + 1 }}
+              </button>
+            </template>
             <button
+              class="result-pagination__item result-pagination__item--nav"
               type="button"
-              :disabled="summaryRelationPage >= (expertDirectResponse?.items?.length ?? 1) - 1"
+              aria-label="下一页"
+              :disabled="summaryRelationPage >= summaryPageTotal - 1"
               @click="summaryRelationPage += 1"
             >
-              下一条
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path
+                  d="M6 3l5 5-5 5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
             </button>
-          </div>
+            <span class="result-pagination__total"
+              >共 {{ summaryPageTotal }} 条关系</span
+            >
+          </nav>
         </template>
         <dl
           v-else-if="resultMode === 'entity' && liveEntityRows"
@@ -4947,35 +5024,78 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   color: #165dff;
 }
 
-.result-panel__summary-pager {
+/* 分页：页项 32px，当前页蓝字浅蓝底（设计规范「表格 · 分页」）。 */
+.result-pagination {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 10px 16px;
+  gap: 8px;
+  padding: 16px;
   border-top: 1px solid #e5e6eb;
-  font-size: 13px;
-  color: #4e5969;
 }
 
-.result-panel__summary-pager button {
-  padding: 4px 14px;
-  border: 1px solid #c9cdd4;
+.result-pagination__item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
   border-radius: 4px;
-  background: #fff;
+  background: transparent;
   color: #1d2129;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 22px;
   cursor: pointer;
 }
 
-.result-panel__summary-pager button:disabled {
+.result-pagination__item:not(:disabled):hover {
+  background: #f2f3f5;
+}
+
+.result-pagination__item:focus-visible {
+  outline: 2px solid #e8f3ff;
+  outline-offset: 0;
+}
+
+.result-pagination__item.is-current {
+  background: #e8f3ff;
+  color: #165dff;
+  font-weight: 500;
+}
+
+.result-pagination__item--nav {
+  color: #4e5969;
+}
+
+.result-pagination__item--nav svg {
+  width: 16px;
+  height: 16px;
+}
+
+.result-pagination__item:disabled {
   color: #c9cdd4;
   cursor: not-allowed;
 }
 
-.result-panel__summary-pager button:not(:disabled):hover {
-  border-color: #165dff;
-  color: #165dff;
+.result-pagination__ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  color: #86909c;
+  font-size: 14px;
+  line-height: 22px;
+  user-select: none;
+}
+
+.result-pagination__total {
+  margin-left: 8px;
+  color: #86909c;
+  font-size: 14px;
+  line-height: 22px;
 }
 
 /* 移除预览与结果详情的外层衬板；保留内部白色画布与详情表格。 */

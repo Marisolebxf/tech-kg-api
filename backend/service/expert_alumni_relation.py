@@ -717,6 +717,24 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         dims = payload["dimensionsCatalog"]
         meta = payload["sourceMeta"]
         first = items[0] if items else None
+        alumni_names = [str(item.get("name") or item.get("alumniId")) for item in items]
+        dimension_counts: dict[str, int] = {}
+        shared_achievement_ids: set[str] = set()
+        paper_count = patent_count = project_count = 0
+        coauthor_count = 0
+        for item in items:
+            for dimension in item.get("dimensions") or []:
+                dimension_counts[dimension] = dimension_counts.get(dimension, 0) + 1
+            interactions = item.get("interactions") or {}
+            paper_count += int(interactions.get("paperCount") or 0)
+            patent_count += int(interactions.get("patentCount") or 0)
+            project_count += int(interactions.get("projectCount") or 0)
+            coauthor_count += 1 if interactions.get("coauthorEdge") else 0
+            shared_achievement_ids.update(
+                str(achievement.get("id"))
+                for achievement in interactions.get("sharedAchievements") or []
+                if achievement.get("id")
+            )
 
         summary_rows = [
             {"label": "专家", "value": f"{expert.get('name') or '—'}（{expert.get('id')}）"},
@@ -728,29 +746,18 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 "value": "是（list 扫描未穷尽）" if meta.get("truncated") else "否",
             },
             {"label": "图空间", "value": str(meta.get("space") or "—")},
+            {"label": "命中校友", "value": "、".join(alumni_names) if alumni_names else "—"},
+            {
+                "label": "关系维度统计",
+                "value": "、".join(f"{key} {value} 人" for key, value in dimension_counts.items()) or "—",
+            },
+            {"label": "共同论文", "value": f"{paper_count} 篇"},
+            {"label": "共同专利", "value": f"{patent_count} 项"},
+            {"label": "共同项目", "value": f"{project_count} 项"},
+            {"label": "共同成果总数", "value": f"{len(shared_achievement_ids)} 项"},
+            {"label": "存在合著关系", "value": f"{coauthor_count} 人" if coauthor_count else "无"},
         ]
-        if first:
-            summary_rows.extend(
-                [
-                    {
-                        "label": "首条校友",
-                        "value": f"{first.get('name') or '—'}（{first.get('alumniId')}）",
-                    },
-                    {
-                        "label": "共享院校",
-                        "value": "、".join(first.get("sharedInstitutions") or []) or "—",
-                    },
-                    {
-                        "label": "关系维度",
-                        "value": "、".join(first.get("dimensions") or []) or "—",
-                    },
-                    {
-                        "label": "互动摘要",
-                        "value": (first.get("interactions") or {}).get("summary") or "—",
-                    },
-                ]
-            )
-        else:
+        if not first:
             summary_rows.append({"label": "说明", "value": "未命中校友（无同校教育属性或异校）"})
 
         result_rows = [

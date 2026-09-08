@@ -739,7 +739,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             paper_count += int(interactions.get("paperCount") or 0)
             patent_count += int(interactions.get("patentCount") or 0)
             project_count += int(interactions.get("projectCount") or 0)
-            coauthor_count += 1 if interactions.get("coauthorEdge") else 0
+            coauthor_count += (
+                1 if (interactions.get("coauthorEdge") or interactions.get("paperCount")) else 0
+            )
             shared_achievement_ids.update(
                 str(achievement.get("id"))
                 for achievement in interactions.get("sharedAchievements") or []

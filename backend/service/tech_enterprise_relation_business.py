@@ -453,7 +453,7 @@ class KeyEnterpriseRelationService:
         resp.cooperation_fields = sorted({r.tech_field for r in relations if r.tech_field})
         resp.confidence = max((r.confidence for r in relations), default=0.0)
         resp.evidence = [
-            f"从 dev 空间专家 {req.expert_id} 2 跳子图解析出 {len(relations)} 条专家-企业关系",
+            f"从 {SPACE} 空间专家 {req.expert_id} 2 跳子图解析出 {len(relations)} 条专家-企业关系",
             "合作时间来源：项目 research_period / 专利 application_date / 学者 work_experience_date",
             "角色定位来源：EXECUTIVE_OF.position 等边属性 + 边类型映射",
         ]

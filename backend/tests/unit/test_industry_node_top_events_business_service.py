@@ -176,6 +176,34 @@ async def test_enterprises_and_provenance_only_cover_topn_result(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_event_type_expands_scan_beyond_max_orgs(monkeypatch):
+    """指定 event_type 时扫描全链企业：目标事件在 chain_score 靠后企业也不被 max_orgs 截成空。
+
+    orgA(score=90) 只有 bankruptcy；orgB(score=60) 有 recruit。
+    max_orgs=1 时未过滤只会扫 orgA → 空；event_type=recruit 应扩窗扫到 orgB 命中。
+    """
+    subs = _subgraphs()
+    monkeypatch.setattr(
+        mod,
+        "_subgraph_sync",
+        lambda client, vid, edge_types, limit: subs.get(vid, {"nodes": [], "edges": []}),
+    )
+    monkeypatch.setattr(mod, "_fetch_org_governance_sync", lambda client, org_id: [])
+    monkeypatch.setattr(mod, "_get_dev_client", lambda: None)
+    monkeypatch.setattr(mod, "_result_cache", {})
+
+    resp = await IndustryNodeTopEventsService().run(
+        IndustryNodeTopEventsRequest(
+            chain_node_id="IC_test", top_n=10, max_orgs=1, event_type="recruit"
+        )
+    )
+
+    assert resp.events == 1
+    assert resp.top_events[0].event_type == "recruit"
+    assert resp.top_events[0].org_id == ORG_B
+
+
+@pytest.mark.asyncio
 async def test_topn_result_cache_hit(monkeypatch):
     """同参数二次请求命中 60s 缓存，_subgraph_sync 只被调用一次。"""
     subs = _subgraphs()

@@ -349,9 +349,12 @@ class IndustryNodeTopEventsService:
             elif et == "HAS_NODE" and t != node_vid:
                 resp.chain_name = nodes_map.get(t, {}).get("chain_name") or resp.chain_name
 
-        # 按 chain_score 排序，只取 top max_orgs 家企业查事件（避免过多调用）
+        # 按 chain_score 排序。未指定 event_type 时只取 top max_orgs 家企业查事件（避免过多调用）；
+        # 指定 event_type 时带目标事件的企业可能不在 chain_score 前列（如资讯多在中小链上企业），
+        # 扩大为全链扫描（上限 200 家），保证筛选条件真实命中而非被截断成空结果。
         orgs.sort(key=lambda x: x[1], reverse=True)
-        orgs = orgs[: req.max_orgs]
+        scan_window = min(len(orgs), 200) if req.event_type else req.max_orgs
+        orgs = orgs[:scan_window]
         if not orgs:
             resp.evidence.append(f"链节点 {req.chain_node_id} 无关联企业")
             return resp

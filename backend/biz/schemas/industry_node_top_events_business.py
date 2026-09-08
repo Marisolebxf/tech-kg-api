@@ -35,7 +35,10 @@ class IndustryNodeTopEventsRequest(BaseModel):
     )
     top_n: int = Field(10, ge=1, le=50, description="返回事件数量")
     event_type: str = Field(
-        "", max_length=64, description="事件类型筛选（financing/bankruptcy/bid/...）"
+        "",
+        max_length=64,
+        description="事件类型筛选（financing/bankruptcy/bid/news/...）；指定后扫描范围扩大为全链企业"
+        "（上限200家），不再受 max_orgs 截断，避免目标事件集中在 chain_score 靠后企业时返回空",
     )
     time_range_start: str = Field("", description="事件筛选开始月份，格式 YYYY-MM")
     time_range_end: str = Field("", description="事件筛选结束月份，格式 YYYY-MM")

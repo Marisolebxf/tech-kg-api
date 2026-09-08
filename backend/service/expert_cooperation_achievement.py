@@ -755,7 +755,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "nodeType": "main",
                 "confidence": 1.0,
                 "relations": f"合作成果 {total}",
-                "evidence": [f"id={source_id}"],
+                "evidence": [f"专家 {source_name}（{source_id}），共同成果 {total} 项。"],
                 "x": 220.0,
                 "y": 160.0,
             },
@@ -766,7 +766,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "nodeType": "expert",
                 "confidence": 1.0,
                 "relations": f"合作成果 {total}",
-                "evidence": [f"id={target_id}"],
+                "evidence": [f"专家 {target_name}（{target_id}），共同成果 {total} 项。"],
                 "x": 520.0,
                 "y": 160.0,
             },
@@ -814,8 +814,10 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "confidence": 0.9,
                 "relations": f"{type_label} · {item.get('time') or '—'}",
                 "evidence": [
-                    f"type={ach_type}",
-                    f"fields={','.join(item.get('fields') or []) or '-'}",
+                    f"成果类型 {type_label}；"
+                    f"完成时间 {item.get('time') or '暂无数据'}；"
+                    f"所属领域 {','.join(item.get('fields') or []) or '暂无数据'}；"
+                    f"奖项/评价 {self._format_award_or_evaluation(item)}。"
                 ],
                 "x": base_x + (idx % 3) * 40,
                 "y": base_y + (idx // 3) * 36,

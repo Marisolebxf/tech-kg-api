@@ -1290,6 +1290,27 @@ const relationDetailRows = computed(() => {
 
   if (!edge || !from || !to) return [];
 
+  if (isLiveAlumni.value && edge.category === "校友") {
+    const data = liveAlumniResult.value;
+    const expertId = data?.expert?.id;
+    const alumniId = [edge.from, edge.to].find((id) => id !== expertId);
+    const item = data?.items?.find((candidate) => candidate.alumniId === alumniId);
+    const interactions = item?.interactions;
+    const achievements = interactions?.sharedAchievements || [];
+    return [
+      ["源实体", `${from.label} / ${from.entityType}`] as const,
+      ["目标实体", `${to.label} / ${to.entityType}`] as const,
+      ["关系类型", "校友关系"] as const,
+      ["关系分类", item?.dimensions?.join("、") || "同校"] as const,
+      ["共享院校", item?.sharedInstitutions?.join("、") || "—"] as const,
+      ["共同论文", `${interactions?.paperCount ?? 0} 篇`] as const,
+      ["共同专利", `${interactions?.patentCount ?? 0} 项`] as const,
+      ["共同项目", `${interactions?.projectCount ?? 0} 项`] as const,
+      ["共同成果", achievements.map((achievement) => achievement.label).join("、") || "—"] as const,
+      ["命中规则", "教育经历匹配算法"] as const,
+    ];
+  }
+
   return [
     ["源实体", `${from.label} / ${from.entityType}`] as const,
 
@@ -1565,10 +1586,24 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       ];
     }
     if (data.summaryRows?.length) {
-      return data.summaryRows.map((row) => ({
+      const rows = data.summaryRows.map((row) => ({
         label: row.label,
         value: row.value,
       }));
+      const achievementRows = rows.filter((row) => /^成果\d+$/.test(row.label));
+      const nonAchievementRows = rows.filter(
+        (row) => !/^成果\d+$/.test(row.label),
+      );
+      const graphSpaceIndex = nonAchievementRows.findIndex(
+        (row) => row.label === "图空间",
+      );
+      rows.splice(0, rows.length, ...nonAchievementRows);
+      rows.splice(
+        graphSpaceIndex >= 0 ? graphSpaceIndex + 1 : rows.length,
+        0,
+        ...achievementRows,
+      );
+      return rows;
     }
     const s = data.summary;
     const firstItem = data.items?.[0];
@@ -1761,9 +1796,50 @@ const summaryPageItems = computed<Array<number | "start" | "end">>(() => {
   return items;
 });
 
+const cooperationSummaryHiddenLabels = new Set([
+  "完成时间",
+  "所属领域",
+  "奖项/评价",
+]);
+
+function isCooperationAchievementRow(label: string) {
+  return isLiveCoop.value && /^成果\d+$/.test(label);
+}
+
+function handleSelectCooperationAchievement(label: string) {
+  const index = Number(label.replace("成果", "")) - 1;
+  const item = liveCoopResult.value?.items?.[index];
+  if (!item) return;
+  const node = graphNodes.value.find(
+    (candidate) =>
+      candidate.id === item.id || candidate.label === item.title,
+  );
+  if (node) {
+    handleSelectGraphNode(node);
+    return;
+  }
+  // 后端未返回对应图节点时，仍切换到实体 Tab 展示成果基本信息。
+  selectedGraphNodeId.value = null;
+  selectedGraphEdgeId.value = null;
+  resultMode.value = "entity";
+}
+
+function filterCooperationSummaryRows(
+  rows: Array<{ label: string; value: string }>,
+) {
+  return rows.filter(
+    (row) =>
+      !cooperationSummaryHiddenLabels.has(row.label) &&
+      (!/^成果\d+$/.test(row.label) || Boolean(row.value)),
+  );
+}
+
 const detailRows = computed(() => {
   if (lastTestTime.value === "—") {
-    return props.moduleInfo.summaryRows.map((row) => [row.label, ""] as const);
+    const rows = isLiveCoop.value
+      ? filterCooperationSummaryRows(props.moduleInfo.summaryRows)
+      : props.moduleInfo.summaryRows;
+    return rows.map((row) => [row.label, ""] as const);
   }
   if (isPanorama.value && panoramaResponse.value) {
     return computePanoramaSummaryRows(panoramaResponse.value);
@@ -1783,14 +1859,17 @@ const detailRows = computed(() => {
     : {};
   // expert-alumni / two-point-achievement：用 liveSummaryRows 整套替换
   const rows = liveSummaryRows.value ?? props.moduleInfo.summaryRows;
+  const visibleRows = isLiveCoop.value
+    ? filterCooperationSummaryRows(rows)
+    : rows;
   // 产业链点 TOP-N：查不到事件时摘要全部留空（不显示 - / 0 / 静态 demo 值）
   if (isLiveIndustryEvent.value) {
     const d = liveResponse.value?.data ?? {};
     if (!(d.top_events?.length || d.events)) {
-      return rows.map((row) => [row.label, ""] as const);
+      return visibleRows.map((row) => [row.label, ""] as const);
     }
   }
-  return rows.map((row) => {
+  return visibleRows.map((row) => {
     if (row.label === "动态更新" && isPanorama.value) {
       return [row.label, updateStatus.value] as const;
     }
@@ -2276,6 +2355,16 @@ function buildPayload(): Record<string, unknown> {
     props.moduleInfo.requestFields,
     parameterValues.value,
   );
+}
+
+async function handleAlumniSummaryClick(alumniId: string) {
+  if (!isLiveAlumni.value || running.value) return;
+  parameterValues.value = {
+    ...parameterValues.value,
+    targetExpertId: alumniId,
+  };
+  await handleRun();
+  if (!liveError.value) resultMode.value = "relation";
 }
 
 function buildAlumniGraph(
@@ -3378,7 +3467,11 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
     </section>
 
     <aside aria-label="辅助区域 1" class="business-service__side">
-      <section class="kg-panel result-panel" id="result-mode-panel">
+      <section
+        class="kg-panel result-panel"
+        :class="{ 'result-panel--alumni': isLiveAlumni }"
+        id="result-mode-panel"
+      >
         <div class="kg-panel__header">
           <h2 class="kg-panel__title">结果详情</h2>
           <div
@@ -3465,9 +3558,40 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <div
               v-for="([label, value], index) in detailRows"
               :key="`${label}-${index}`"
+              :class="{
+                'result-panel__table-row--clickable':
+                  isCooperationAchievementRow(label),
+              }"
+              :role="isCooperationAchievementRow(label) ? 'button' : undefined"
+              :tabindex="isCooperationAchievementRow(label) ? 0 : undefined"
+              @click="
+                isCooperationAchievementRow(label) &&
+                handleSelectCooperationAchievement(label)
+              "
+              @keydown.enter="
+                isCooperationAchievementRow(label) &&
+                handleSelectCooperationAchievement(label)
+              "
             >
               <dt>{{ label }}</dt>
-              <dd>{{ value || '—' }}</dd>
+              <dd>
+                <span
+                  v-if="isLiveAlumni && label === '命中校友' && liveAlumniResult?.items?.length"
+                  class="alumni-summary-links"
+                >
+                  <button
+                    v-for="item in liveAlumniResult.items"
+                    :key="item.alumniId"
+                    class="alumni-summary-link"
+                    type="button"
+                    :disabled="running"
+                    @click="handleAlumniSummaryClick(item.alumniId)"
+                  >
+                    {{ item.name || item.alumniId }}
+                  </button>
+                </span>
+                <span v-else>{{ value || '—' }}</span>
+              </dd>
             </div>
           </dl>
           <nav
@@ -4505,6 +4629,15 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   border-bottom: 1px solid var(--border);
 }
 
+.result-panel__table-row--clickable {
+  cursor: pointer;
+}
+
+.result-panel__table-row--clickable:hover dt,
+.result-panel__table-row--clickable:hover dd {
+  background: #f2f7ff;
+}
+
 .result-panel__table dt,
 .result-panel__table dd {
   box-sizing: border-box;
@@ -5013,6 +5146,68 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   text-align: center;
   color: #86909c;
   font-size: 14px;
+}
+
+/* 校友关系摘要包含校友名单和维度统计等长文本：行高随内容增长，避免被固定高度裁切。 */
+.result-panel--alumni .result-panel__table div {
+  align-items: stretch;
+  min-height: 44px;
+  height: auto;
+}
+
+.result-panel--alumni .result-panel__table dt,
+.result-panel--alumni .result-panel__table dd {
+  min-height: 44px;
+  height: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.result-panel--alumni .result-panel__table dd {
+  line-height: 24px;
+}
+
+.result-panel--alumni .result-panel__table {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.result-panel--alumni .result-panel__table dd {
+  overflow-x: hidden;
+  white-space: normal;
+}
+
+.result-panel--alumni .alumni-summary-link {
+  display: inline-block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #1677ff;
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.result-panel--alumni .alumni-summary-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 10px;
+  min-width: 0;
+  width: 100%;
+}
+
+.result-panel--alumni .alumni-summary-link:hover {
+  color: #0958d9;
+  text-decoration: underline;
+}
+
+.result-panel--alumni .alumni-summary-link:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .result-provenance__filter-hint {

@@ -17,6 +17,12 @@ export interface AlumniInteraction {
   paperCount: number
   patentCount: number
   projectCount: number
+  sharedAchievements?: Array<{
+    id: string
+    label: string
+    kind: string
+    entityType: string
+  }>
   summary: string
 }
 

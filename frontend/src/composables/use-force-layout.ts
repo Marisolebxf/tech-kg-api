@@ -1,5 +1,6 @@
 import {
-  ref,
+  computed,
+  shallowRef,
   toValue,
   watch,
   type MaybeRefOrGetter,
@@ -309,14 +310,15 @@ export function runForceLayout(
  * 响应式力导向布局。仅当节点/边集合签名（id 列表 + 边拓扑 + 形状 + 画布尺寸）变化时重算，
  * 不响应 selectedNodeId / selectedEdgeId / activeCategories / 平移缩放。
  * immediate 首次运行，保证首屏渲染前已布局（无预设坐标闪烁）。
- * laidOutNodes 元素为 {...原节点, x, y}，保留全部非位置字段。
+ * 仅缓存布局坐标；节点内容独立响应最新输入，避免同 ID 的查询结果保留旧姓名/数量。
+ * laidOutNodes 元素为 {...最新节点, x, y}，保留全部非位置字段。
  */
 export function useForceLayout(
   nodes: MaybeRefOrGetter<readonly GraphNodeData[]>,
   edges: MaybeRefOrGetter<readonly GraphEdgeData[]>,
   options?: MaybeRefOrGetter<ForceLayoutOptions | undefined>,
 ): { laidOutNodes: Ref<GraphNodeData[]> } {
-  const laidOutNodes = ref<GraphNodeData[]>([]) as Ref<GraphNodeData[]>
+  const positions = shallowRef<Map<string, Vec>>(new Map())
 
   const signature = () => {
     const ns = toValue(nodes) ?? []
@@ -336,13 +338,16 @@ export function useForceLayout(
     () => {
       const ns = toValue(nodes) ?? []
       const es = toValue(edges) ?? []
-      const pos = runForceLayout(ns, es, toValue(options))
-      laidOutNodes.value = ns.map((node) => {
-        const p = pos.get(node.id) ?? { x: node.x, y: node.y }
-        return { ...node, x: p.x, y: p.y }
-      })
+      positions.value = runForceLayout(ns, es, toValue(options))
     },
     { immediate: true },
+  )
+
+  const laidOutNodes = computed<GraphNodeData[]>(() =>
+    (toValue(nodes) ?? []).map((node) => {
+      const p = positions.value.get(node.id) ?? { x: node.x, y: node.y }
+      return { ...node, x: p.x, y: p.y }
+    }),
   )
 
   return { laidOutNodes }

@@ -43,6 +43,7 @@ class AuthContext:
     expires_at: int | None
     session_id: str | None = None
     refresh_token: str = ""
+    portal_is_admin: bool = False
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -50,6 +51,7 @@ class AuthContext:
             "refresh_token": self.refresh_token,
             "expires_at": self.expires_at,
             "permission_info": self.permission_info,
+            "portal_is_admin": self.portal_is_admin,
         }
 
     @classmethod
@@ -60,6 +62,7 @@ class AuthContext:
             expires_at=record.get("expires_at"),
             permission_info=dict(record.get("permission_info") or {}),
             session_id=session_id,
+            portal_is_admin=record.get("portal_is_admin") is True,
         )
 
 
@@ -68,6 +71,7 @@ class AuthService:
     SESSION_KEY_PREFIX = "techkg:auth:session:"
     BEARER_KEY_PREFIX = "techkg:auth:bearer:"
     AUDIT_KEY_PREFIX = "techkg:auth:audit:"
+    PORTAL_ROLE_KEY_PREFIX = "techkg:auth:portal-role:"
 
     def __init__(
         self,
@@ -117,6 +121,7 @@ class AuthService:
         if context.expires_at is not None and context.expires_at <= int(time.time()) + 30:
             return await self.refresh_session(session_id, context=context)
         # 续期本地会话 TTL，使配置值表达“连续无操作时长”，而不是固定登录时长。
+        await self._refresh_portal_role(context)
         await self._save_session(context)
         return context
 
@@ -147,6 +152,7 @@ class AuthService:
                 permission_info=dict(permission_info or {}),
                 session_id=session_id,
             )
+            await self._refresh_portal_role(refreshed, force=True)
             await self._save_session(refreshed)
             return refreshed
         try:
@@ -166,7 +172,9 @@ class AuthService:
         key = f"{self.BEARER_KEY_PREFIX}{digest}"
         cached = await self._store_get_json(key)
         if cached is not None:
-            return AuthContext.from_record(cached, session_id="")
+            context = AuthContext.from_record(cached, session_id="")
+            await self._refresh_portal_role(context)
+            return context
 
         try:
             checked = await self.user_center.check_token(access_token)
@@ -181,6 +189,7 @@ class AuthService:
             permission_info=dict(permission_info or {}),
             expires_at=expires_at,
         )
+        await self._refresh_portal_role(context)
         ttl = self.settings.bearer_cache_ttl_seconds
         if expires_at is not None:
             ttl = max(1, min(ttl, expires_at - int(time.time())))
@@ -206,6 +215,7 @@ class AuthService:
         if context.expires_at <= int(time.time()):
             raise AuthenticationError("访问令牌已过期")
         context.session_id = secrets.token_urlsafe(32)
+        await self._refresh_portal_role(context)
         await self._save_session(context)
         return context
 
@@ -407,6 +417,7 @@ class AuthService:
             ],
             expires_at=context.expires_at,
             auth_enabled=self.settings.enabled,
+            portal_is_admin=context.portal_is_admin,
         )
 
     def dev_context(self) -> AuthContext:
@@ -448,11 +459,43 @@ class AuthService:
         except UserCenterError as exc:
             raise AuthenticationError(str(exc), status_code=exc.status_code) from exc
         expires_in = max(1, int(token.get("expires_in") or 3600))
-        return AuthContext(
+        context = AuthContext(
             access_token=access_token,
             refresh_token=str(token.get("refresh_token") or ""),
             expires_at=int(time.time()) + expires_in,
             permission_info=dict(permission_info or {}),
+        )
+        await self._refresh_portal_role(context, force=True)
+        return context
+
+    async def _refresh_portal_role(self, context: AuthContext, *, force: bool = False) -> None:
+        """仅使用后端验签接口的身份；每次请求读取短期缓存，不续期旧角色。"""
+        context.portal_is_admin = False
+        if not self.settings.enabled or not self.settings.portal_admin_enabled:
+            return
+        user_id = str((context.permission_info.get("userInfo") or {}).get("id", ""))
+        digest = hashlib.sha256(context.access_token.encode("utf-8")).hexdigest()
+        key = f"{self.PORTAL_ROLE_KEY_PREFIX}{self.settings.client_id}:{digest}"
+        cached = None if force else await self._store_get_json(key)
+        if cached is not None and cached.get("user_id") == user_id:
+            context.portal_is_admin = cached.get("is_admin") is True
+            return
+        try:
+            user = await self.user_center.get_user_by_token(context.access_token)
+        except UserCenterError as exc:
+            raise AuthenticationError(str(exc), status_code=exc.status_code) from exc
+        if not user_id or str(user.get("id", "")) != user_id:
+            raise AuthenticationError("统一用户中心返回的门户身份与登录用户不一致", status_code=502)
+        if user.get("status") != 0:
+            raise AuthenticationError("统一用户中心账号已停用")
+        gkx_user = user.get("gkxUser")
+        role = gkx_user.get("role") if isinstance(gkx_user, dict) else None
+        context.portal_is_admin = type(role) is int and role == 1
+        ttl = self.settings.portal_role_cache_ttl_seconds
+        if context.expires_at is not None:
+            ttl = max(1, min(ttl, context.expires_at - int(time.time())))
+        await self._store_set_json(
+            key, {"user_id": user_id, "is_admin": context.portal_is_admin}, ttl
         )
 
     async def _save_session(self, context: AuthContext) -> None:

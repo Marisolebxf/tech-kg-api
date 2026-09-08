@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
-from service.graph_console import GraphConsoleError, classify_statement
+from service.graph_console import GraphConsoleError, classify_statement, run_statement
 from service.platform_access import PlatformActor
 
 
@@ -80,3 +82,73 @@ def test_too_long_rejected() -> None:
 
 def test_trailing_semicolon_ok() -> None:
     assert classify_statement("SHOW TAGS;") == "read"
+
+
+@pytest.fixture
+def console_backend(monkeypatch):
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "shared_business")
+    calls = []
+    bindings = {("101", "bound_private")}
+
+    class Session:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    class Client:
+        def list_spaces(self):
+            return ["shared_business", "bound_private", "other_private"]
+
+        def execute_read(self, statement):
+            calls.append(("read", statement))
+            return SimpleNamespace(records=[{"result": 1}], summary={})
+
+        def execute_write(self, statement):
+            calls.append(("write", statement))
+            return SimpleNamespace(records=[], summary={})
+
+    client = Client()
+
+    class SpaceService:
+        def __init__(self, session):
+            self.session = session
+            self.client = client
+
+        def is_bound(self, user_id, space):
+            assert not self.session.closed
+            return (user_id, space) in bindings
+
+    monkeypatch.setattr("infra.mysql.create_session", Session)
+    monkeypatch.setattr("service.graph_space.GraphSpaceService", SpaceService)
+    monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: client)
+    return calls
+
+
+@pytest.mark.parametrize("space", ["shared_business", "bound_private"])
+def test_ordinary_user_can_read_shared_default_and_bound_space(console_backend, space) -> None:
+    result = run_statement(_actor(), space, "RETURN 1 AS result")
+    assert result["kind"] == "read"
+    assert result["records"] == [{"result": 1}]
+    assert console_backend == [("read", "RETURN 1 AS result")]
+
+
+def test_ordinary_user_cannot_read_other_private_space(console_backend) -> None:
+    with pytest.raises(GraphConsoleError) as exc_info:
+        run_statement(_actor(), "other_private", "RETURN 1 AS result")
+    assert exc_info.value.status_code == 403
+    assert console_backend == []
+
+
+@pytest.mark.parametrize("space", ["shared_business", "bound_private"])
+def test_shared_or_bound_read_access_never_grants_write(console_backend, space) -> None:
+    with pytest.raises(GraphConsoleError) as exc_info:
+        run_statement(_actor(), space, 'DELETE VERTEX "p1"')
+    assert exc_info.value.status_code == 403
+    assert console_backend == []
+
+
+def test_administrator_keeps_existing_write_permission(console_backend) -> None:
+    result = run_statement(_actor(is_admin=True), "other_private", 'DELETE VERTEX "p1"')
+    assert result["kind"] == "write"
+    assert console_backend == [("write", 'DELETE VERTEX "p1"')]

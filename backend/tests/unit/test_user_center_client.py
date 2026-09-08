@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+import json
 from dataclasses import replace
 from urllib.parse import parse_qs, urlparse
 
@@ -16,6 +19,7 @@ def _settings() -> AuthSettings:
         redirect_uri="https://example.test/api/v1/auth/callback",
         sso_login_url="https://sso.test/uc/sso/login",
         user_center_base_url="https://sso.test/uc/admin-api/system/oauth2",
+        user_center_open_api_base_url="https://sso.test/uc/open-api/system",
     )
 
 
@@ -102,3 +106,30 @@ async def test_permission_request_enables_v21_role_menu_mapping() -> None:
     query = parse_qs(captured["query"])
     assert query["token"] == ["access-1"]
     assert query["include_role_menu"] == ["true"]
+
+
+async def test_portal_identity_uses_v24_signed_json_and_basic_auth() -> None:
+    nonces = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert str(request.url) == "https://sso.test/uc/open-api/system/user/get-by-token"
+        assert request.headers["authorization"] == "Basic dGVjaGtnOnRvcC1zZWNyZXQ="
+        body = json.loads(request.content)
+        assert body["token"] == "access-token"
+        assert isinstance(body["timestamp"], int)
+        assert len(body["nonce"]) == 32
+        nonces.append(body["nonce"])
+        # 文档要求：只按 ASCII 字典序拼接三项公共参数，不签 token，不做 URL 编码。
+        payload = f"clientId=techkg&nonce={body['nonce']}&timestamp={body['timestamp']}"
+        expected = hmac.new(b"top-secret", payload.encode(), hashlib.sha256).hexdigest()
+        assert body["signature"] == expected
+        assert "client_secret" not in body
+        return httpx.Response(
+            200, json={"code": 0, "data": {"id": 139, "status": 0, "gkxUser": {"role": 1}}}
+        )
+
+    client = UserCenterClient(_settings(), transport=httpx.MockTransport(handler))
+    assert (await client.get_user_by_token("access-token"))["gkxUser"]["role"] == 1
+    await client.get_user_by_token("access-token")
+    assert len(set(nonces)) == 2

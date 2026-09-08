@@ -2,7 +2,7 @@
 import { Message } from '@arco-design/web-vue'
 import { computed, onMounted, ref } from 'vue'
 
-import { adminExampleFallback } from '../../config'
+import { adminExampleFallback, authDisabled } from '../../config'
 
 import { listPlatformMembers, setMemberAdmin, type PlatformMember } from '../../api/corrections'
 import { getErrorMessage } from '../../api/http'
@@ -14,7 +14,7 @@ const loading = ref(false)
 const changingId = ref('')
 const members = ref<PlatformMember[]>([])
 const dataMode = ref<'live' | 'example'>('live')
-const exampleFallbackEnabled = adminExampleFallback
+const exampleFallbackEnabled = authDisabled && adminExampleFallback
 const adminCount = computed(() => members.value.filter((item) => item.isAdmin).length)
 
 function errorMessage(error: unknown) {
@@ -46,7 +46,13 @@ async function toggleAdmin(member: PlatformMember) {
   if (!window.confirm(`确认${next ? '设为' : '取消'}“${member.nickname || member.username}”的全局管理员权限吗？`)) return
   if (dataMode.value === 'example') { member.isAdmin = next; Message.success('示例成员权限已更新'); return }
   changingId.value = member.userId
-  try { await setMemberAdmin(member.userId, next); member.isAdmin = next; Message.success('成员权限已更新') } catch (error) { Message.error(errorMessage(error)) } finally { changingId.value = '' }
+  try {
+    const result = await setMemberAdmin(member.userId, next)
+    // 取消本地授权后仍可能继承门户管理员身份，以后端的有效身份为准。
+    member.isAdmin = result.isAdmin
+    Message.success('成员权限已更新')
+    await load()
+  } catch (error) { Message.error(errorMessage(error)) } finally { changingId.value = '' }
 }
 if (exampleFallbackEnabled) applyExampleData()
 onMounted(() => { void load() })

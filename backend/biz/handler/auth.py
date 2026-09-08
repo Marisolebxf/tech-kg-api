@@ -38,7 +38,7 @@ def _raise_auth_error(exc: AuthenticationError) -> None:
 
 def _login_error_url(application: AuthApplication, message: str) -> str:
     query = urlencode({"error": message})
-    return f"{application.settings.frontend_url.rstrip('/')}/#/login?{query}"
+    return f"{application.frontend_redirect('/login')}?{query}"
 
 
 def _state_cookie_name(application: AuthApplication) -> str:

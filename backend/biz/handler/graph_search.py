@@ -152,13 +152,16 @@ def _get_client(space: str | None = None) -> TRSGraphClient:
 
 
 def _ensure_space_access(actor: Any, space: str | None) -> None:
-    """非管理员访问指定图空间时校验绑定关系；space=None（默认空间）与管理员放行。
+    """默认业务空间允许登录用户读取；其他空间仍校验绑定关系。
 
     在端点 try 块之前调用，HTTPException 不会被 except Exception 吞成 500。
     """
     if not space or actor.is_admin:
         return
-    from service.graph_space import GraphSpaceService
+    from service.graph_space import GraphSpaceService, default_graph_space
+
+    if space == default_graph_space():
+        return
 
     session = create_session()
     try:
@@ -649,7 +652,7 @@ async def shortest_path(
 
 @router.get("/spaces", response_model=ApiResponse)
 async def list_spaces(actor: CurrentActor) -> ApiResponse:
-    """列出当前用户可用的图空间（管理员 SHOW SPACES 全量，普通用户仅自己绑定的）。"""
+    """管理员看全量；普通用户仅默认业务空间及自己绑定的空间。"""
     try:
         from service.graph_space import GraphSpaceService
 
@@ -660,7 +663,12 @@ async def list_spaces(actor: CurrentActor) -> ApiResponse:
             session.close()
         return ApiResponse(data={"spaces": [item["name"] for item in items]})
     except Exception as exc:  # noqa: BLE001
-        # 绑定关系查不到（如 MySQL 不可用）时回退 SHOW SPACES，保持旧行为
+        # 绑定库不可用时，普通用户仍仅得到默认业务空间，不泄露其他空间列表。
+        if not actor.is_admin:
+            from service.graph_space import default_graph_space
+
+            return ApiResponse(data={"spaces": [default_graph_space()]})
+        # 管理员保留直接从图服务列空间的兜底。
         try:
             return ApiResponse(data={"spaces": _get_client(None).list_spaces()})
         except Exception:  # noqa: BLE001

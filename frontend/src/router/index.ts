@@ -58,7 +58,7 @@ export const router = createRouter({
       name: 'overview',
       component: PlatformWorkbenchView,
       props: { initialTab: 'overview' },
-      meta: { title: '平台总览' },
+      meta: { title: '平台总览', admin: true },
     },
     {
       path: '/data-processing',
@@ -89,21 +89,21 @@ export const router = createRouter({
     { path: '/admin/tasks', redirect: '/admin/corrections' },
     { path: '/admin/pipelines', redirect: '/admin/corrections' },
     { path: '/admin/configurations', redirect: '/admin/corrections' },
-    { path: '/schema', name: 'schema', component: SchemaBrowserView, meta: { title: 'Schema 管理' } },
-    { path: '/graph-build', name: 'graph-build', component: GraphBuildView, meta: { title: '图谱构建' } },
-    { path: '/graph-build/jobs/:jobId', name: 'job-detail', component: ProcessInstanceDetailView, meta: { title: '任务详情' } },
-    { path: '/manual-review', name: 'manual-review', component: OperationsCenterView, props: { mode: 'review' }, meta: { title: '人工审核' } },
-    { path: '/manual-review/task/:instanceId', name: 'manual-review-detail', component: ManualReviewWorkspaceView, meta: { title: '人工审核详情' } },
+    { path: '/schema', name: 'schema', component: SchemaBrowserView, meta: { title: 'Schema 管理', admin: true } },
+    { path: '/graph-build', name: 'graph-build', component: GraphBuildView, meta: { title: '图谱构建', admin: true } },
+    { path: '/graph-build/jobs/:jobId', name: 'job-detail', component: ProcessInstanceDetailView, meta: { title: '任务详情', admin: true } },
+    { path: '/manual-review', name: 'manual-review', component: OperationsCenterView, props: { mode: 'review' }, meta: { title: '人工审核', admin: true } },
+    { path: '/manual-review/task/:instanceId', name: 'manual-review-detail', component: ManualReviewWorkspaceView, meta: { title: '人工审核详情', admin: true } },
     { path: '/demo/t-direct', name: 'demo-t-direct', component: TDirectDemoView, meta: { title: 'T_DIRECT Demo', public: true } },
-    { path: '/configurations', name: 'configurations', component: ConfigurationManagementView, meta: { title: '配置管理' } },
+    { path: '/configurations', name: 'configurations', component: ConfigurationManagementView, meta: { title: '配置管理', admin: true } },
     { path: '/user-center', name: 'user-center', component: UserCenterView, meta: { title: '个人中心' } },
     { path: '/account-security', name: 'account-security', component: AccountSecurityView, meta: { title: '账号与安全' } },
     { path: '/operation-logs', name: 'operation-logs', component: OperationLogsView, meta: { title: '操作记录' } },
     { path: '/user-permissions', redirect: '/user-center' },
     { path: '/admin/task-detail/:area/:taskId', name: 'admin-task-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
     { path: '/admin/processing-instance/:instanceId', name: 'admin-processing-instance-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
-    { path: '/task-detail/:area/:taskId', name: 'task-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情' } },
-    { path: '/processing-instance/:instanceId', name: 'processing-instance-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情' } },
+    { path: '/task-detail/:area/:taskId', name: 'task-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
+    { path: '/processing-instance/:instanceId', name: 'processing-instance-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
     // { path: '/graph-versions', redirect: '/graph-build' },
     {
       path: '/business-service',
@@ -143,11 +143,16 @@ router.beforeEach(async (to) => {
 
   const authStore = useAuthStore()
   try {
-    const profile = await authStore.loadCurrentUser()
+    // 每次导航重新读取有效身份，及时反映门户或本系统的授权、撤权。
+    const profile = await authStore.loadCurrentUser(true)
     if (!profile) {
       return loginRedirect(to.fullPath, '登录状态已失效或已超时，请重新登录')
     }
     const requiredPermission = typeof to.meta.permission === 'string' ? to.meta.permission : ''
+    // 首页和旧 OAuth 回跳统一落到当前角色可访问的默认页面。
+    if (to.name === 'overview' && !profile.isAdmin) {
+      return { path: '/graph-query', query: to.query, hash: to.hash }
+    }
     if (to.meta.admin === true && !profile.isAdmin) {
       return { path: '/forbidden', query: { redirect: to.fullPath } }
     }

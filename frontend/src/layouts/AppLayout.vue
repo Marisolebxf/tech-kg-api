@@ -448,7 +448,7 @@ onBeforeUnmount(() => {
         </div>
 
         <nav class="app-nav" aria-label="平台功能导航">
-          <template v-if="isAdminArea">
+          <template v-if="isAdminArea && isAdminUser">
             <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>工作台</span>
             </div>
@@ -493,6 +493,7 @@ onBeforeUnmount(() => {
             </RouterLink>
           </template>
           <template v-else>
+            <template v-if="isAdminUser">
             <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>工作台</span>
             </div>
@@ -569,6 +570,7 @@ onBeforeUnmount(() => {
               ></span>
               <span v-if="!sidebarCollapsed">配置管理</span>
             </RouterLink>
+            </template>
 
             <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>查询与服务</span>

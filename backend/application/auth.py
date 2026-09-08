@@ -87,7 +87,7 @@ class AuthApplication:
             if next_path.startswith("/") and not next_path.startswith("//")
             else "/overview"
         )
-        return f"{self.settings.frontend_url.rstrip('/')}/#{safe_path}"
+        return f"{self.settings.frontend_url.rstrip('/')}{safe_path}"
 
 
 _application: AuthApplication | None = None

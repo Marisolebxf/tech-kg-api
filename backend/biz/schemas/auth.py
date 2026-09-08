@@ -110,6 +110,7 @@ class AuthProfile(CamelCaseModel):
         default_factory=lambda: ["analysis:read", "correction:submit"]
     )
     is_admin: bool = False
+    portal_is_admin: bool = False
 
 
 class LogoutData(CamelCaseModel):

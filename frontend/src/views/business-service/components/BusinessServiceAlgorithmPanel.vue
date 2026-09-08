@@ -980,7 +980,7 @@ function buildLiveGraph(
       // 完整标题放 relations 副标题与悬浮提示（title），摘要"核心事件"行也展示 TOP1 标题。
       addNode(
         ev0.event_id,
-        `${displayEventType(ev0.event_type)} ${(ev0.occur_date || "").slice(0, 10)}`,
+        `${displayEventType(ev0.event_type)} ${displayEventDate(ev0.occur_date)}`,
         "event",
         displayEventType(ev0.event_type),
         `${ev0.title || ""}｜评分 ${ev0.impact_score}`,
@@ -1323,6 +1323,15 @@ const eventTypeLabel: Record<string, string> = {
 const displayEventType = (code?: string | null) =>
   (code && eventTypeLabel[code]) || code || "事件";
 
+/** 事件时间规整展示：202512 → 2025-12；20251231... → 2025-12-31；不足位原样。 */
+const displayEventDate = (raw?: string | null) => {
+  const digits = (raw || "").replace(/[^\d]/g, "");
+  if (digits.length >= 8) return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+  if (digits.length >= 6) return `${digits.slice(0, 4)}-${digits.slice(4, 6)}`;
+  if (digits.length >= 4) return digits.slice(0, 4);
+  return raw || "-";
+};
+
 const relationTypeDisplay: Record<string, string> = {
   AFFILIATED_WITH: "机构任职关系",
 };
@@ -1510,7 +1519,7 @@ function buildLiveSummary(
     // 键名与 summaryRows 的"核心事件"对齐（此前写成"重点事件"导致恒显示静态 demo 值）
     out["核心事件"] = ev0.title || "-";
     out["事件类型/时间"] =
-      `${displayEventType(ev0.event_type)}｜${(ev0.occur_date || "").slice(0, 10)}`;
+      `${displayEventType(ev0.event_type)}｜${displayEventDate(ev0.occur_date)}`;
     out["影响力排名"] = ev0.rank
       ? `第 ${ev0.rank} 名｜影响力评分 ${ev0.impact_score}`
       : "-";

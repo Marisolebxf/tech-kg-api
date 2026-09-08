@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from application.auth import AuthApplication, get_auth_application
+from biz.auth_cookies import AuthSessionMiddleware
 from biz.dependencies.auth import require_authenticated_user
 from biz.handler.auth import router as auth_router
 from config.auth import AuthSettings
@@ -88,6 +89,7 @@ def _test_app() -> FastAPI:
         user_center=_FakeUserCenter(settings),
     )
     app = FastAPI()
+    app.add_middleware(AuthSessionMiddleware)
     app.dependency_overrides[get_auth_application] = lambda: application
     app.include_router(auth_router, prefix="/api/v1")
     protected = APIRouter(dependencies=[Depends(require_authenticated_user)])
@@ -117,6 +119,7 @@ def _portal_cookie_test_app() -> FastAPI:
         user_center=_FakeUserCenter(settings),
     )
     app = FastAPI()
+    app.add_middleware(AuthSessionMiddleware)
     app.dependency_overrides[get_auth_application] = lambda: application
     app.include_router(auth_router, prefix="/api/v1")
     return app

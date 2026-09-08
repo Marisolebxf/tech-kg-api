@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import logoKg from "../../assets/images/logo-kg.png";
 import { useAuthStore } from "../../stores/auth";
+import { safeLoginTarget } from "../../router/loginTarget";
 
 const route = useRoute();
 const router = useRouter();
@@ -19,7 +20,7 @@ function normalizeLoginFeedback(value: unknown): string {
 
 const feedback = ref(normalizeLoginFeedback(route.query.error));
 
-const redirectPath = computed(() => typeof route.query.redirect === "string" && route.query.redirect.startsWith("/") && !route.query.redirect.startsWith("//") ? route.query.redirect : "");
+const redirectPath = computed(() => safeLoginTarget(route.query.redirect));
 
 function errorMessage(error: unknown): string {
   if (typeof error === "object" && error !== null && "response" in error) {
@@ -36,29 +37,43 @@ function errorMessage(error: unknown): string {
 }
 
 async function login(portal: "business" | "admin") {
+  if (submitting.value || authStore.loading) return;
   submitting.value = portal;
   feedback.value = "";
   const defaultTarget = portal === "admin" ? "/admin/reviews" : "/overview";
   const target = redirectPath.value && (portal === "admin") === redirectPath.value.startsWith("/admin") ? redirectPath.value : defaultTarget;
   try {
-    if (authStore.isAuthenticated) {
+    if (await authStore.loadCurrentUser(true)) {
       await router.replace(target);
-      return;
+      if (route.name !== "login" || authStore.isAuthenticated) return;
     }
     await authStore.startLogin(target);
   } catch (error) {
     feedback.value = errorMessage(error);
+  } finally {
     submitting.value = "";
   }
 }
 
+function resetSubmitting() {
+  submitting.value = "";
+}
+
+watch(() => route.query.error, (error) => {
+  feedback.value = normalizeLoginFeedback(error);
+  resetSubmitting();
+});
+
 onMounted(async () => {
+  window.addEventListener("pageshow", resetSubmitting);
   try {
     await authStore.loadCurrentUser(true);
   } catch (error) {
     feedback.value = errorMessage(error);
   }
 });
+
+onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
 </script>
 
 <template>

@@ -10,6 +10,7 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from biz.auth_cookies import AuthSessionMiddleware
 from biz.router.register import register_routers
 from biz.schemas.common import ApiResponse
 from infra.graph_db import close_techkg_client, close_trs_graph_client
@@ -95,6 +96,7 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url=None,
 )
+app.add_middleware(AuthSessionMiddleware)
 
 app.mount("/static/swagger", StaticFiles(directory="static/swagger"), name="swagger-static")
 

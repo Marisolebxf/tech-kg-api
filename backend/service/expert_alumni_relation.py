@@ -659,11 +659,41 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         if coauthor and paper_count == 0:
             summary = f"存在合著边；{summary}"
 
+        shared_achievements: list[dict[str, str]] = []
+        # 返回三类共同成果的图节点信息。pair/list 两种模式都需要展示，
+        # 图谱组装阶段会按成果 VID 去重。
+        for kind, ids, type_label in (
+            ("paper", sorted(paper_ids), "论文成果"),
+            ("patent", sorted(patent_ids), "专利成果"),
+            ("project", sorted(project_ids), "项目成果"),
+        ):
+            for achievement_id in ids:
+                try:
+                    node = graph.get_node(achievement_id)
+                except GraphNotFoundError:
+                    node = None
+                props = getattr(node, "properties", None) or {}
+                label = next(
+                    (
+                        str(props.get(key)).strip()
+                        for key in (
+                            "title", "name", "name_zh", "title_zh", "paper_title",
+                            "patent_title", "project_name",
+                        )
+                        if props.get(key)
+                    ),
+                    achievement_id,
+                )
+                shared_achievements.append(
+                    {"id": str(achievement_id), "label": label, "kind": kind, "entityType": type_label}
+                )
+
         return {
             "coauthorEdge": coauthor,
             "paperCount": paper_count,
             "patentCount": patent_count,
             "projectCount": project_count,
+            "sharedAchievements": shared_achievements,
             "summary": summary,
         }
 
@@ -748,7 +778,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         if meta.get("truncated"):
             evidence.append("list 模式扫描达上限，结果可能未穷尽全图 Person。")
 
-        entities, relations, graph = self._build_graph_entities(expert, items)
+        entities, relations, graph = self._build_graph_entities(
+            expert, items, include_shared_achievements=True
+        )
         provenance = {
             "sourceDatabase": f"trs-graph / space={meta.get('space') or 'dev'}",
             "summary": (
@@ -800,7 +832,10 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
 
     @staticmethod
     def _build_graph_entities(
-        expert: dict[str, Any], items: list[dict[str, Any]]
+        expert: dict[str, Any],
+        items: list[dict[str, Any]],
+        *,
+        include_shared_achievements: bool = False,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         cx, cy, radius = 220.0, 200.0, 180.0
         source_id = str(expert.get("id") or "source")
@@ -828,7 +863,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         ]
         edges: list[dict[str, Any]] = []
 
-        for index, item in enumerate(items[:12]):
+        for index, item in enumerate(items):
             aid = str(item.get("alumniId") or f"alumni-{index}")
             aname = str(item.get("name") or aid)
             dims = item.get("dimensions") or []
@@ -845,7 +880,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 "evidence": [f"shared={shared}", interaction],
             }
             entities.append(entity)
-            angle = (math.pi * 2 * index) / max(len(items[:12]), 1) - math.pi / 2
+            angle = (math.pi * 2 * index) / max(len(items), 1) - math.pi / 2
             nodes.append(
                 {
                     **entity,
@@ -876,5 +911,37 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                     "category": "校友",
                 }
             )
+
+            if include_shared_achievements:
+                for achievement in (item.get("interactions") or {}).get("sharedAchievements") or []:
+                    achievement_id = str(achievement.get("id") or "")
+                    if not achievement_id or any(n.get("id") == achievement_id for n in nodes):
+                        continue
+                    nodes.append(
+                        {
+                            "id": achievement_id,
+                            "label": achievement.get("label") or achievement_id,
+                            "entityType": achievement.get("entityType") or "合作成果",
+                            "nodeType": (
+                                "project" if achievement.get("kind") == "project" else "paper"
+                            ),
+                            "confidence": 0.85,
+                            "relations": "共同成果",
+                            "evidence": ["两位专家共同关联"],
+                            "x": cx + 200.0 + (len(nodes) % 3) * 150.0,
+                            "y": cy + 180.0 + (len(nodes) // 3) * 90.0,
+                        }
+                    )
+                    for person_id in (source_id, aid):
+                        edge_id = f"shared-achievement-{person_id}-{achievement_id}"
+                        edges.append(
+                            {
+                                "id": edge_id,
+                                "from": person_id,
+                                "to": achievement_id,
+                                "label": "共同成果",
+                                "category": "合作成果",
+                            }
+                        )
 
         return entities, relations, {"nodes": nodes, "edges": edges}

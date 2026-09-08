@@ -1565,10 +1565,24 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       ];
     }
     if (data.summaryRows?.length) {
-      return data.summaryRows.map((row) => ({
+      const rows = data.summaryRows.map((row) => ({
         label: row.label,
         value: row.value,
       }));
+      const achievementRows = rows.filter((row) => /^成果\d+$/.test(row.label));
+      const nonAchievementRows = rows.filter(
+        (row) => !/^成果\d+$/.test(row.label),
+      );
+      const graphSpaceIndex = nonAchievementRows.findIndex(
+        (row) => row.label === "图空间",
+      );
+      rows.splice(0, rows.length, ...nonAchievementRows);
+      rows.splice(
+        graphSpaceIndex >= 0 ? graphSpaceIndex + 1 : rows.length,
+        0,
+        ...achievementRows,
+      );
+      return rows;
     }
     const s = data.summary;
     const firstItem = data.items?.[0];
@@ -1761,9 +1775,50 @@ const summaryPageItems = computed<Array<number | "start" | "end">>(() => {
   return items;
 });
 
+const cooperationSummaryHiddenLabels = new Set([
+  "完成时间",
+  "所属领域",
+  "奖项/评价",
+]);
+
+function isCooperationAchievementRow(label: string) {
+  return isLiveCoop.value && /^成果\d+$/.test(label);
+}
+
+function handleSelectCooperationAchievement(label: string) {
+  const index = Number(label.replace("成果", "")) - 1;
+  const item = liveCoopResult.value?.items?.[index];
+  if (!item) return;
+  const node = graphNodes.value.find(
+    (candidate) =>
+      candidate.id === item.id || candidate.label === item.title,
+  );
+  if (node) {
+    handleSelectGraphNode(node);
+    return;
+  }
+  // 后端未返回对应图节点时，仍切换到实体 Tab 展示成果基本信息。
+  selectedGraphNodeId.value = null;
+  selectedGraphEdgeId.value = null;
+  resultMode.value = "entity";
+}
+
+function filterCooperationSummaryRows(
+  rows: Array<{ label: string; value: string }>,
+) {
+  return rows.filter(
+    (row) =>
+      !cooperationSummaryHiddenLabels.has(row.label) &&
+      (!/^成果\d+$/.test(row.label) || Boolean(row.value)),
+  );
+}
+
 const detailRows = computed(() => {
   if (lastTestTime.value === "—") {
-    return props.moduleInfo.summaryRows.map((row) => [row.label, ""] as const);
+    const rows = isLiveCoop.value
+      ? filterCooperationSummaryRows(props.moduleInfo.summaryRows)
+      : props.moduleInfo.summaryRows;
+    return rows.map((row) => [row.label, ""] as const);
   }
   if (isPanorama.value && panoramaResponse.value) {
     return computePanoramaSummaryRows(panoramaResponse.value);
@@ -1783,14 +1838,17 @@ const detailRows = computed(() => {
     : {};
   // expert-alumni / two-point-achievement：用 liveSummaryRows 整套替换
   const rows = liveSummaryRows.value ?? props.moduleInfo.summaryRows;
+  const visibleRows = isLiveCoop.value
+    ? filterCooperationSummaryRows(rows)
+    : rows;
   // 产业链点 TOP-N：查不到事件时摘要全部留空（不显示 - / 0 / 静态 demo 值）
   if (isLiveIndustryEvent.value) {
     const d = liveResponse.value?.data ?? {};
     if (!(d.top_events?.length || d.events)) {
-      return rows.map((row) => [row.label, ""] as const);
+      return visibleRows.map((row) => [row.label, ""] as const);
     }
   }
-  return rows.map((row) => {
+  return visibleRows.map((row) => {
     if (row.label === "动态更新" && isPanorama.value) {
       return [row.label, updateStatus.value] as const;
     }
@@ -3465,6 +3523,20 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             <div
               v-for="([label, value], index) in detailRows"
               :key="`${label}-${index}`"
+              :class="{
+                'result-panel__table-row--clickable':
+                  isCooperationAchievementRow(label),
+              }"
+              :role="isCooperationAchievementRow(label) ? 'button' : undefined"
+              :tabindex="isCooperationAchievementRow(label) ? 0 : undefined"
+              @click="
+                isCooperationAchievementRow(label) &&
+                handleSelectCooperationAchievement(label)
+              "
+              @keydown.enter="
+                isCooperationAchievementRow(label) &&
+                handleSelectCooperationAchievement(label)
+              "
             >
               <dt>{{ label }}</dt>
               <dd>{{ value || '—' }}</dd>
@@ -4503,6 +4575,15 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   grid-template-columns: 190px minmax(0, 1fr);
   min-height: 44px;
   border-bottom: 1px solid var(--border);
+}
+
+.result-panel__table-row--clickable {
+  cursor: pointer;
+}
+
+.result-panel__table-row--clickable:hover dt,
+.result-panel__table-row--clickable:hover dd {
+  background: #f2f7ff;
 }
 
 .result-panel__table dt,

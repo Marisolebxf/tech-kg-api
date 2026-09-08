@@ -709,67 +709,68 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         }
 
     def _build_graph(self, items: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+        """组装展示用子图。
+
+        机构边只按各专家自己的 ``organization`` 连线：同机构时两人自然汇聚到同一个
+        机构节点，跨机构时各连各的，不再把双方一起挂到专家A的机构上造出假边。
+        没有机构属性的专家不产生机构节点与机构边。
+        """
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
         seen_nodes: set[str] = set()
+        seen_edges: set[tuple[str, str, str]] = set()
+
+        def add_node(node: dict[str, Any]) -> None:
+            if node["id"] in seen_nodes:
+                return
+            seen_nodes.add(node["id"])
+            nodes.append(node)
+
+        def add_edge(source: str, target: str, label: str, data: dict[str, Any]) -> None:
+            key = (source, target, label)
+            if key in seen_edges:
+                return
+            seen_edges.add(key)
+            edges.append({"source": source, "target": target, "label": label, "data": data})
 
         for item in items[:4]:
             expert_a = item["expertA"]
             expert_b = item["expertB"]
-            institution = item["institution"] or "合作关系"
-            institution_id = f"institution:{institution}"
 
-            for node in (
-                {
-                    "id": expert_a["expertId"],
-                    "type": "expert",
-                    "label": expert_a["name"],
-                    "subtitle": expert_a["organization"],
-                    "data": {"role": "A"},
-                },
-                {
-                    "id": expert_b["expertId"],
-                    "type": "expert",
-                    "label": expert_b["name"],
-                    "subtitle": expert_b["organization"],
-                    "data": {"role": "B"},
-                },
-                {
-                    "id": institution_id,
-                    "type": "institution",
-                    "label": institution,
-                    "subtitle": "关系归属",
-                    "data": {},
-                },
-            ):
-                if node["id"] not in seen_nodes:
-                    seen_nodes.add(node["id"])
-                    nodes.append(node)
+            for expert, role in ((expert_a, "A"), (expert_b, "B")):
+                add_node(
+                    {
+                        "id": expert["expertId"],
+                        "type": "expert",
+                        "label": expert["name"],
+                        "subtitle": expert["organization"],
+                        "data": {"role": role},
+                    }
+                )
 
-            edges.append(
-                {
-                    "source": expert_a["expertId"],
-                    "target": expert_b["expertId"],
-                    "label": f"直接关系 / {item['relationSummary']}",
-                    "data": {"strength": item["relationStrength"]},
-                }
+            add_edge(
+                expert_a["expertId"],
+                expert_b["expertId"],
+                f"直接关系 / {item['relationSummary']}",
+                {"strength": item["relationStrength"]},
             )
-            edges.append(
-                {
-                    "source": expert_a["expertId"],
-                    "target": institution_id,
-                    "label": "关联机构",
-                    "data": {},
-                }
-            )
-            edges.append(
-                {
-                    "source": expert_b["expertId"],
-                    "target": institution_id,
-                    "label": "关联机构",
-                    "data": {},
-                }
-            )
+
+            # 机构边逐个专家按其真实 organization 连线，避免出现该专家并不存在的机构关系。
+            for expert in (expert_a, expert_b):
+                organization = str(expert.get("organization") or "").strip()
+                if not organization:
+                    continue
+                institution_id = f"institution:{organization}"
+                add_node(
+                    {
+                        "id": institution_id,
+                        "type": "institution",
+                        "label": organization,
+                        "subtitle": "任职机构",
+                        "data": {},
+                    }
+                )
+                add_edge(expert["expertId"], institution_id, "关联机构", {})
 
         return {"nodes": nodes, "edges": edges}
 

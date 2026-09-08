@@ -157,6 +157,7 @@
 | `maxOverlapYears` | float | 最大重叠年数 |
 | `achievementCount` | int | 关联成果数量（去重） |
 | `reviewRequiredCount` | int | 需人工复核的同事数量 |
+| `relationConfidence` | float \| null | 首要同事关系置信度；未命中同事关系时为 `null` |
 | `generatedAt` | string | 生成时间（ISO 8601，UTC） |
 
 `graph` 结构：

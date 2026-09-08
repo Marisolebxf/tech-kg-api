@@ -216,6 +216,8 @@ def _iter_coauthor_rows(session, batch_size: int = 1000) -> Iterable[dict]:
                 DwdScholarCoauthor.scholar_id,
                 DwdScholarCoauthor.co_scholar_id,
                 DwdScholarCoauthor.co_paper_count,
+                DwdScholarCoauthor.update_time,
+                DwdScholarCoauthor.create_time,
             )
             .where(DwdScholarCoauthor.status == 1)
             .order_by(DwdScholarCoauthor.scholar_id, DwdScholarCoauthor.co_scholar_id)
@@ -225,10 +227,13 @@ def _iter_coauthor_rows(session, batch_size: int = 1000) -> Iterable[dict]:
         if not rows:
             break
         for r in rows:
+            # 与 dao/scholar.py 直查口径一致：无真实合作时间字段，用行更新时间代理
+            rel_time = r.update_time or r.create_time
             yield {
                 "scholar_id": r.scholar_id,
                 "co_scholar_id": r.co_scholar_id,
                 "co_paper_count": int(r.co_paper_count or 0),
+                "relation_time": rel_time.strftime("%Y-%m-%d %H:%M:%S") if rel_time else None,
             }
         offset += len(rows)
         if len(rows) < batch_size:
@@ -277,6 +282,9 @@ def ensure_schema(graph) -> None:
             ("source_record_id", "string"),
             ("ingest_batch", "string"),
             ("ingest_time", "string"),
+        ],
+        "COAUTHOR_WITH": [
+            ("relation_time", "string"),
         ],
         "STUDIED_AT": [
             ("degree_zh", "string"),
@@ -524,6 +532,7 @@ def load_coauthors(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
         rid = f"{rec['scholar_id']}_{rec['co_scholar_id']}"
         props = {
             "co_paper_count": rec["co_paper_count"],
+            "relation_time": rec["relation_time"],
             "source_table": "dwd_scholar_coauthor",
             "source_record_id": rid,
             "ingest_batch": BATCH_ID,

@@ -569,6 +569,16 @@ function formatConfidence(value: number | undefined): string {
   return value.toFixed(2);
 }
 
+/** 同事关系模块：置信度缺失时给出原因说明，避免只显示"暂无"。 */
+function colleagueConfidenceText(
+  value: number | undefined,
+  missingNote: string,
+): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value.toFixed(2)
+    : missingNote;
+}
+
 function mapLiveGraph(
   nodes:
     | Array<{
@@ -1295,9 +1305,11 @@ const selectedEdgeNodes = computed(() => {
 /** 关系页签只转换展示值，保留图数据中的原始 label/category。 */
 const relationTypeDisplay: Record<string, string> = {
   AFFILIATED_WITH: "机构任职关系",
+  COAUTHOR_WITH: "论文合著关系",
 };
 const relationCategoryDisplay: Record<string, string> = {
   AFFILIATED_WITH: "任职",
+  COAUTHOR_WITH: "论文合著",
 };
 const displayRelationType = (value?: string) =>
   (value && relationTypeDisplay[value]) || value || "—";
@@ -1344,8 +1356,13 @@ const relationDetailRows = computed(() => {
     [
       "置信度",
 
-      // 直接展示后端关系 confidence
-      formatConfidence(edge.confidence),
+      // 直接展示后端关系 confidence；同事关系模块缺失时给出原因
+      isLiveColleague.value
+        ? colleagueConfidenceText(
+            edge.confidence,
+            "暂无（原图边未携带置信度字段）",
+          )
+        : formatConfidence(edge.confidence),
     ] as const,
 
     [
@@ -1583,10 +1600,18 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
         { label: "共同工作内容", value: "—" },
         { label: "协作场景", value: "—" },
         { label: "同事期间成果", value: "—" },
+        { label: "关系置信度", value: "—" },
         { label: "关系判定", value: "—" },
       ];
     }
     const summary = data.summary || {};
+    const primary = data.colleagues?.[0];
+    const overlapValue =
+      summary.overlapDuration && typeof primary?.overlapYears === "number"
+        ? `${summary.overlapDuration}（约 ${primary.overlapYears} 年）`
+        : summary.overlapDuration || "—";
+    const relationConfidence =
+      summary.relationConfidence ?? primary?.confidence;
     return [
       { label: "专家 A", value: summary.coreExpert || "—" },
       { label: "核心专家机构", value: summary.coreExpertOrganization || "—" },
@@ -1601,13 +1626,20 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       { label: "共同机构", value: summary.commonOrganization || "—" },
       { label: "所属部门/团队", value: summary.departmentOrTeam || "—" },
       { label: "关系生效时段", value: summary.effectivePeriod || "—" },
-      { label: "任职重叠时间", value: summary.overlapDuration || "—" },
+      { label: "任职重叠时间", value: overlapValue },
       {
         label: "共同工作内容",
         value: summary.workContent || "暂无共同成果证据",
       },
       { label: "协作场景", value: summary.collaborationScenes || "—" },
       { label: "同事期间成果", value: summary.periodAchievements || "0项" },
+      {
+        label: "关系置信度",
+        value: colleagueConfidenceText(
+          relationConfidence,
+          "暂无（未生成同事关系）",
+        ),
+      },
       {
         label: "关系判定",
         value: data.total ? "存在同事关系" : "不存在同事关系",
@@ -1704,12 +1736,16 @@ const liveRules = computed<Array<Record<string, any>>>(() => {
 
 const liveEntityRows = computed(() => {
   const selected = selectedNode.value;
+  const entityConfidence = (value: number | undefined) =>
+    isLiveColleague.value
+      ? colleagueConfidenceText(value, "暂无（实体属性未携带置信度）")
+      : formatConfidence(value);
   if (selected) {
     const rows: Array<readonly [string, string]> = [
       ["实体名称", selected.label],
       ["实体类型", selected.entityType],
       ["命中关系", selected.relations],
-      ["置信度", formatConfidence(selected.confidence)],
+      ["置信度", entityConfidence(selected.confidence)],
     ];
     if (selected.evidence?.length) {
       rows.push(["证据", selected.evidence.join("；")]);
@@ -1722,7 +1758,7 @@ const liveEntityRows = computed(() => {
     [`实体 ${index + 1}`, `${entity.label}（${entity.id}）`] as const,
     ["类型", entity.entityType] as const,
     ["关系", entity.relations || "—"] as const,
-    ["置信度", formatConfidence(entity.confidence)] as const,
+    ["置信度", entityConfidence(entity.confidence)] as const,
   ]);
 });
 
@@ -1740,7 +1776,15 @@ const liveRelationRows = computed(() => {
       ] as const,
       ["类型", displayRelationType(relation.label)] as const,
       ["分类", displayRelationCategory(relation.category)] as const,
-      ["置信度", formatConfidence(relation.confidence)] as const,
+      [
+        "置信度",
+        isLiveColleague.value
+          ? colleagueConfidenceText(
+              relation.confidence,
+              "暂无（原图边未携带置信度字段）",
+            )
+          : formatConfidence(relation.confidence),
+      ] as const,
     ];
   });
 });
@@ -2701,16 +2745,21 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         resultMode.value = "summary";
       } else {
         const total = Number(res?.data?.total || 0);
-        if (!total) {
-          liveError.value = null;
-          showToast("未查询到相关同事关系数据", "info");
-          resultMode.value = "summary";
-          return;
-        }
         expertColleagueResponse.value = res;
         liveResponse.value = res as unknown as Record<string, any>;
         liveApiPayload.value = { request: body, response: res };
         liveError.value = null;
+        selectedGraphNodeId.value = null;
+        selectedGraphEdgeId.value = null;
+        if (!total) {
+          // 未命中同事关系也保留返回数据：摘要展示两位专家与"不存在同事关系"
+          const now = new Date();
+          lastTestTime.value = formatTimestamp(now);
+          lastUpdateTime.value = now.getTime();
+          showToast("未查询到相关同事关系数据", "info");
+          resultMode.value = "summary";
+          return;
+        }
         showToast("两位专家存在同事关系", "success");
         resultMode.value = "summary";
       }

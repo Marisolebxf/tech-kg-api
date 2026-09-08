@@ -215,6 +215,9 @@ async def test_summary_and_graph_cover_tender_details() -> None:
     assert summary["commonOrganization"] == "中国科学院自动化研究所"
     assert summary["effectivePeriod"] == "2020-01 至 2023-12"
     assert summary["workContent"] == "科技知识图谱关系推理"
+    # 摘要机构须与共同机构（即图谱预览展示的机构）一致，即使专家节点自带其他 scholar_org
+    assert summary["coreExpertOrganization"] == "中国科学院自动化研究所"
+    assert summary["relationConfidence"] == result["colleagues"][0]["confidence"]
     node_types = {item["type"] for item in result["graph"]["nodes"]}
     assert {"expert", "organization", "paper"} <= node_types
     assert {item["label"] for item in result["graph"]["edges"]} >= {

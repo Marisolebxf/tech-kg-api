@@ -766,8 +766,14 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             {"label": "共同专利", "value": f"{patent_count} 项"},
             {"label": "共同项目", "value": f"{project_count} 项"},
             {"label": "共同成果总数", "value": f"{len(shared_achievement_ids)} 项"},
-            {"label": "存在合著关系", "value": f"{coauthor_count} 人" if coauthor_count else "无"},
         ]
+        if mode == "list":
+            summary_rows.append(
+                {
+                    "label": "存在合著关系",
+                    "value": f"{coauthor_count} 人" if coauthor_count else "无",
+                }
+            )
         if not first:
             summary_rows.append({"label": "说明", "value": "未命中校友（无同校教育属性或异校）"})
 

@@ -755,9 +755,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "nodeType": "main",
                 "confidence": 1.0,
                 "relations": f"合作成果 {total}",
-                "evidence": [
-                    f"专家 {source_name}（{source_id}），共同成果 {total} 项。"
-                ],
+                "evidence": [f"专家 {source_name}（{source_id}），共同成果 {total} 项。"],
                 "x": 220.0,
                 "y": 160.0,
             },
@@ -768,9 +766,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "nodeType": "expert",
                 "confidence": 1.0,
                 "relations": f"合作成果 {total}",
-                "evidence": [
-                    f"专家 {target_name}（{target_id}），共同成果 {total} 项。"
-                ],
+                "evidence": [f"专家 {target_name}（{target_id}），共同成果 {total} 项。"],
                 "x": 520.0,
                 "y": 160.0,
             },

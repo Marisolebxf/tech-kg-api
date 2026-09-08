@@ -677,15 +677,25 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                     (
                         str(props.get(key)).strip()
                         for key in (
-                            "title", "name", "name_zh", "title_zh", "paper_title",
-                            "patent_title", "project_name",
+                            "title",
+                            "name",
+                            "name_zh",
+                            "title_zh",
+                            "paper_title",
+                            "patent_title",
+                            "project_name",
                         )
                         if props.get(key)
                     ),
                     achievement_id,
                 )
                 shared_achievements.append(
-                    {"id": str(achievement_id), "label": label, "kind": kind, "entityType": type_label}
+                    {
+                        "id": str(achievement_id),
+                        "label": label,
+                        "kind": kind,
+                        "entityType": type_label,
+                    }
                 )
 
         return {
@@ -749,7 +759,8 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             {"label": "命中校友", "value": "、".join(alumni_names) if alumni_names else "—"},
             {
                 "label": "关系维度统计",
-                "value": "、".join(f"{key} {value} 人" for key, value in dimension_counts.items()) or "—",
+                "value": "、".join(f"{key} {value} 人" for key, value in dimension_counts.items())
+                or "—",
             },
             {"label": "共同论文", "value": f"{paper_count} 篇"},
             {"label": "共同专利", "value": f"{patent_count} 项"},

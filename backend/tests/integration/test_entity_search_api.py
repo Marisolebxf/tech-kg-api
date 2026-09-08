@@ -13,6 +13,7 @@ from sqlalchemy.pool import StaticPool
 
 from biz.dependencies.auth import require_platform_actor
 from db_model.entity_search import EntitySearchState
+from db_model.platform_governance import UserGraphSpace
 from infra.workflow_mysql import get_workflow_session
 from main import app
 from service.platform_access import PlatformActor
@@ -180,6 +181,74 @@ async def test_types_and_status_empty_state(entity_search_api) -> None:
         assert data["indexed"] is False
         assert data["bm25Ready"] is False
         assert data["graphSpace"] == "dev2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["types", "index-status"])
+@pytest.mark.parametrize(
+    ("space", "user_id", "is_admin", "expected_status"),
+    [
+        (None, "new-user", False, 200),
+        ("dev2", "new-user", False, 200),
+        ("bound", "user-a", False, 200),
+        ("private", "user-a", False, 403),
+        ("bound", "new-user", False, 403),
+        ("private", "admin", True, 200),
+    ],
+    ids=["default", "explicit-default", "own-binding", "other-users-binding", "unbound", "admin"],
+)
+async def test_metadata_space_access(
+    entity_search_api, endpoint, space, user_id, is_admin, expected_status
+) -> None:
+    """实体元数据必须遵循实体浏览的持久化空间绑定规则。"""
+    engine, set_actor, monkeypatch = entity_search_api
+    UserGraphSpace.__table__.create(engine)
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "dev2")
+    monkeypatch.setattr("biz.handler.graph_search.create_session", lambda: Session(engine))
+    counts = {"dev2": 3, "bound": 5, "private": 17}
+    with Session(engine) as session:
+        session.add_all(
+            [
+                UserGraphSpace(user_id="user-a", space_name="bound"),
+                UserGraphSpace(user_id="user-b", space_name="private"),
+            ]
+        )
+        for name, count in counts.items():
+            session.add(
+                EntitySearchState(
+                    graph_space=name,
+                    entity_count=count,
+                    type_counts=json.dumps({f"{name}_sentinel": count}),
+                )
+            )
+        session.commit()
+    set_actor(user_id, is_admin)
+    if expected_status == 403:
+
+        def unexpected_application(_session):
+            pytest.fail("An unauthorized request reached metadata or external service access")
+
+        monkeypatch.setattr("biz.handler.entity_search._application", unexpected_application)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/api/v1/entity-search/{endpoint}", params={} if space is None else {"space": space}
+        )
+    assert response.status_code == expected_status
+    if expected_status == 403:
+        assert response.json() == {"detail": f"无权访问图空间 {space}，请先在配置页绑定"}
+    else:
+        resolved = space or "dev2"
+        expected_items = [{"name": f"{resolved}_sentinel", "count": counts[resolved]}]
+        data = response.json()["data"]
+        if endpoint == "types":
+            assert data == {"items": expected_items}
+        else:
+            assert data["graphSpace"] == resolved
+            assert data["entityCount"] == counts[resolved]
+            assert data["types"] == expected_items
+    with Session(engine) as session:
+        assert session.query(UserGraphSpace).count() == 2
 
 
 @pytest.mark.asyncio

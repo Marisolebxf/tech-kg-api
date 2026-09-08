@@ -75,6 +75,7 @@ def list_entity_types(
     space: str | None = Query(None, max_length=64, description="图空间"),
 ) -> ApiResponse:
     """索引内实体类型 + 数量（前端类型过滤下拉）。"""
+    _ensure_space_access(actor, space)
     return ApiResponse(data={"items": _application(session).types(space=space)})
 
 
@@ -85,6 +86,7 @@ def get_index_status(
     space: str | None = Query(None, max_length=64, description="图空间"),
 ) -> ApiResponse:
     """实体索引状态（是否已建、实体数、类型统计、更新时间、是否重建中）。"""
+    _ensure_space_access(actor, space)
     return ApiResponse(data=_application(session).status(space=space))
 
 

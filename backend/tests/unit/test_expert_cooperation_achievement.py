@@ -98,6 +98,15 @@ def test_query_shared_papers_and_patent_with_awards():
     assert resp["summary"]["awards"] >= 1
     types = {i["type"] for i in resp["items"]}
     assert types == {"paper", "patent"}
+
+    paper_only = _svc(graph).query(
+        source_expert_id="S1", target_expert_id="S2", achievement_types=["paper"]
+    )
+    distribution = next(
+        row["value"] for row in paper_only["summaryRows"] if row["label"] == "成果分布"
+    )
+    assert distribution == "论文 1"
+    assert "专利" not in distribution
     paper = next(i for i in resp["items"] if i["type"] == "paper")
     assert paper["title"] == "论文A"
     assert "图谱" in paper["fields"]

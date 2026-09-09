@@ -181,6 +181,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 core=core,
                 mode=mode,
                 space=str(space),
+                selected_types=type_filter,
             )
         )
         with _result_cache_lock:
@@ -647,6 +648,13 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             )
         return rows
 
+
+
+    @staticmethod
+    def _format_distribution(*, papers: int, patents: int, projects: int, selected_types: set[str]) -> str:
+        labels = (("paper", "论文", papers), ("patent", "专利", patents), ("project", "项目", projects))
+        return "、".join(f"{label} {count}" for key, label, count in labels if key in selected_types) or "—"
+
     def _frontend_view(
         self,
         *,
@@ -664,6 +672,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         core: str,
         mode: str,
         space: str,
+        selected_types: set[str],
     ) -> dict[str, Any]:
         total = papers + patents + projects
         type_labels = []
@@ -681,7 +690,12 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             {"label": "成果总量", "value": f"{total} 项"},
             {
                 "label": "成果分布",
-                "value": f"论文 {papers}、专利 {patents}、项目 {projects}",
+                "value": self._format_distribution(
+                    papers=papers,
+                    patents=patents,
+                    projects=projects,
+                    selected_types=selected_types,
+                ),
             },
             {"label": "获奖数量", "value": str(award_count)},
             {"label": "核心贡献", "value": core},

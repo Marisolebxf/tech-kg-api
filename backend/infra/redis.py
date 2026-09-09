@@ -16,6 +16,10 @@ class AsyncJsonStore(Protocol):
 
     async def set_json(self, key: str, value: dict[str, Any], ttl_seconds: int) -> None: ...
 
+    async def touch(self, key: str, ttl_seconds: int) -> bool: ...
+
+    async def replace_json(self, key: str, value: dict[str, Any], ttl_seconds: int) -> bool: ...
+
     async def pop_json(self, key: str) -> dict[str, Any] | None: ...
 
     async def delete(self, key: str) -> None: ...
@@ -42,6 +46,16 @@ class RedisClient:
 
     async def set_json(self, key: str, value: dict[str, Any], ttl_seconds: int) -> None:
         await self.client.set(key, json.dumps(value, ensure_ascii=False), ex=ttl_seconds)
+
+    async def touch(self, key: str, ttl_seconds: int) -> bool:
+        return bool(await self.client.expire(key, ttl_seconds))
+
+    async def replace_json(self, key: str, value: dict[str, Any], ttl_seconds: int) -> bool:
+        return bool(
+            await self.client.set(
+                key, json.dumps(value, ensure_ascii=False), ex=ttl_seconds, xx=True
+            )
+        )
 
     async def pop_json(self, key: str) -> dict[str, Any] | None:
         payload = await self.client.getdel(key)
@@ -83,6 +97,27 @@ class MemoryJsonStore:
                 self._now() + ttl_seconds,
                 json.loads(json.dumps(value, ensure_ascii=False)),
             )
+
+    async def touch(self, key: str, ttl_seconds: int) -> bool:
+        async with self._lock:
+            item = self._values.get(key)
+            if item is None or item[0] <= self._now():
+                self._values.pop(key, None)
+                return False
+            self._values[key] = (self._now() + ttl_seconds, item[1])
+            return True
+
+    async def replace_json(self, key: str, value: dict[str, Any], ttl_seconds: int) -> bool:
+        async with self._lock:
+            item = self._values.get(key)
+            if item is None or item[0] <= self._now():
+                self._values.pop(key, None)
+                return False
+            self._values[key] = (
+                self._now() + ttl_seconds,
+                json.loads(json.dumps(value, ensure_ascii=False)),
+            )
+            return True
 
     async def pop_json(self, key: str) -> dict[str, Any] | None:
         async with self._lock:

@@ -8,6 +8,7 @@ from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from application.auth import AuthApplication, get_auth_application
+from biz.auth_cookies import portal_sso_blocked
 from service.auth import AuthContext, AuthenticationError
 from service.platform_access import PlatformActor
 
@@ -35,11 +36,19 @@ async def require_authenticated_user(
         session_id = request.cookies.get(application.settings.session_cookie_name)
         if session_id:
             try:
-                return await application.get_session(session_id)
+                context = await application.get_session(session_id)
+                if context.token_source in {"portal", "unknown"} and portal_sso_blocked(
+                    request, application.settings, context.access_token
+                ):
+                    raise AuthenticationError("尚未登录")
+                request.state.auth_session_cookie = (application.settings, session_id)
+                return context
             except AuthenticationError as exc:
                 session_error = exc
 
-        if application.settings.portal_cookie_login_enabled:
+        if application.settings.portal_cookie_login_enabled and not portal_sso_blocked(
+            request, application.settings
+        ):
             access_token = request.cookies.get(application.settings.portal_token_cookie_name)
             if access_token:
                 context = await application.create_session_from_access_token(access_token)
@@ -51,14 +60,9 @@ async def require_authenticated_user(
                     ip_address=request.client.host if request.client else "",
                     user_agent=request.headers.get("user-agent", ""),
                 )
-                response.set_cookie(
-                    key=application.settings.session_cookie_name,
-                    value=context.session_id or "",
-                    max_age=application.settings.session_ttl_seconds,
-                    secure=application.settings.cookie_secure,
-                    httponly=True,
-                    samesite=application.settings.cookie_samesite,
-                    path=application.settings.cookie_path,
+                request.state.auth_session_cookie = (
+                    application.settings,
+                    context.session_id or "",
                 )
                 return context
         if session_error is not None:
@@ -68,7 +72,7 @@ async def require_authenticated_user(
         raise HTTPException(
             status_code=exc.status_code,
             detail=str(exc),
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={"WWW-Authenticate": "Bearer", "Cache-Control": "no-store"},
         ) from exc
 
 

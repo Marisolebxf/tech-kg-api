@@ -90,12 +90,15 @@ VITE_API_BASE=/bkg_zp/api
 本地尚未获得 OAuth 客户端凭证时，可以在 `backend/.env` 设置：
 
 ```dotenv
+APP_ENV=dev
 AUTH_ENABLED=false
+AUTH_ALLOW_INSECURE_DEV_CONTEXT=true
 AUTH_SESSION_BACKEND=memory
 ```
 
-此模式会返回明确标记为本地开发用户的资料，不连接 Redis 和用户中心；生产环境
-不得关闭鉴权。
+只有 `APP_ENV` 为 `dev`、`development`、`local` 或 `test`，且显式开启第二个开关时，
+此模式才会返回本地开发用户资料。否则所有受保护接口返回 503。生产环境不得关闭鉴权，
+也不得启用 `AUTH_ALLOW_INSECURE_DEV_CONTEXT`。
 
 ## 安全约束
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
@@ -23,6 +24,7 @@ WORKFLOW_DEFINITION_NOT_FOUND = "工作流定义不存在"
 
 router = APIRouter(prefix="/workflow-system", tags=["workflow-system"])
 service = workflow_operations_application.service
+logger = logging.getLogger(__name__)
 
 
 @router.get("/health")
@@ -137,10 +139,11 @@ async def create_schedule(definition_id: str, request: WorkflowScheduleRequest) 
     schedule = {**request.model_dump(), "definitionId": definition_id}
     try:
         schedule = await temporal_runtime.create_schedule(definition, schedule)
-    except Exception as exc:
+    except Exception:
+        logger.exception("创建 Temporal Schedule 失败，已仅保存本地记录")
         temporal_runtime._client = None
         schedule["dispatchStatus"] = "LOCAL_SAVED"
-        schedule["message"] = str(exc)
+        schedule["message"] = "Temporal 服务暂时不可用，计划仅保存到本地"
     service.repo.save_schedule(schedule)
     return ApiResponse(data=schedule, msg="Schedule 已保存")
 
@@ -153,10 +156,11 @@ async def update_schedule_state(schedule_id: str, request: ScheduleStateRequest)
     try:
         await temporal_runtime.pause_schedule(schedule_id, paused=not request.active)
         schedule["dispatchStatus"] = "TEMPORAL_UPDATED"
-    except Exception as exc:
+    except Exception:
+        logger.exception("更新 Temporal Schedule 状态失败，已仅更新本地记录")
         temporal_runtime._client = None
         schedule["dispatchStatus"] = "LOCAL_SAVED"
-        schedule["message"] = str(exc)
+        schedule["message"] = "Temporal 服务暂时不可用，状态仅保存到本地"
     schedule["active"] = request.active
     service.repo.save_schedule(schedule)
     return ApiResponse(data=schedule)
@@ -173,9 +177,15 @@ async def trigger_schedule(schedule_id: str) -> ApiResponse:
         return ApiResponse(
             data={"id": schedule_id, "dispatchStatus": "TRIGGERED"}, msg="Schedule 已立即触发"
         )
-    except Exception as exc:
+    except Exception:
+        logger.exception("立即触发 Temporal Schedule 失败")
         temporal_runtime._client = None
-        return ApiResponse(code=503, success=False, data={"id": schedule_id}, msg=str(exc))
+        return ApiResponse(
+            code=503,
+            success=False,
+            data={"id": schedule_id},
+            msg="Temporal 服务暂时不可用",
+        )
 
 
 @router.delete("/schedules/{schedule_id}", responses={404: {"description": "请求的资源不存在"}})

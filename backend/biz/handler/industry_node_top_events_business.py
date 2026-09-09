@@ -11,6 +11,7 @@ POST /api/v1/kg-service/industry-node-top-events，请求 {chain_node_id, top_n,
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter
 from fastapi.responses import Response
@@ -21,6 +22,7 @@ from infra.result_cache import get_cached_json, set_cached_json
 from service.industry_node_top_events_business import IndustryNodeTopEventsService
 
 APPLICATION_JSON = "application/json"
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/kg-service", tags=["kg-service"])
 service = IndustryNodeTopEventsService()
@@ -74,7 +76,8 @@ async def run_industry_node_top_events(req: IndustryNodeTopEventsRequest) -> Res
         return Response(content=body, media_type=APPLICATION_JSON)
     except KeyError as exc:  # noqa: BLE001
         return _json_response(ApiResponse(code=404, success=False, msg=str(exc)))
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
+        logger.exception("产业链点TOP-N事件业务执行失败")
         return _json_response(
-            ApiResponse(code=500, success=False, msg=f"产业链点TOP-N事件业务执行失败: {exc}")
+            ApiResponse(code=500, success=False, msg="产业链点TOP-N事件业务执行失败")
         )

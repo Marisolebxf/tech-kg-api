@@ -74,6 +74,9 @@ services:
       OPERATOR_S3_SECRET_ACCESS_KEY: ${OPERATOR_S3_SECRET_ACCESS_KEY:-rustfsadmin}
       OPERATOR_S3_REGION: ${OPERATOR_S3_REGION:-us-east-1}
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      # 即使 AUTH_ENABLED 被误设为 false，生产环境也必须默认拒绝匿名访问。
+      AUTH_ALLOW_INSECURE_DEV_CONTEXT: ${AUTH_ALLOW_INSECURE_DEV_CONTEXT:-false}
+      API_DOCS_ENABLED: ${API_DOCS_ENABLED:-false}
       AUTH_SESSION_BACKEND: redis
       AUTH_SESSION_COOKIE: ${AUTH_SESSION_COOKIE:-techkg_session}
       # 统一门户部署默认复用主域 portal_access_token；无该 Cookie 时仍回退标准 OAuth2 登录。

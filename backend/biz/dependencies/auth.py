@@ -25,7 +25,13 @@ async def require_authenticated_user(
     bearer: BearerDependency,
 ) -> AuthContext:
     if not application.settings.enabled:
-        return application.dev_context()
+        if application.settings.allow_insecure_dev_context:
+            return application.dev_context()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="认证服务未启用，受保护接口已拒绝访问",
+            headers={"Cache-Control": "no-store"},
+        )
     try:
         if bearer is not None:
             if bearer.scheme.lower() != "bearer" or not bearer.credentials:

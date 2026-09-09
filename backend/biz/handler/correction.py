@@ -161,7 +161,7 @@ def review_correction(
         )
         get_cache.invalidate("correction:list")
         return result
-    except (KeyError, ValueError) as exc:
+    except (KeyError, PermissionError, ValueError) as exc:
         _raise_error(exc)
 
 

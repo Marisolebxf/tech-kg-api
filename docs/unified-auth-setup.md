@@ -6,15 +6,20 @@
 
 ## 〇、临时关闭 / 重新启用登录
 
-后端用 `AUTH_ENABLED` 单变量控制，**不删任何代码**。当前为方便联调已关闭登录，所有受保护接口走 `dev_context()`（本地开发用户 / `local_admin` 角色 / `["*"]` 全权限）。
+后端默认开启统一鉴权。单独设置 `AUTH_ENABLED=false` 时，所有受保护接口会返回 503，避免部署误配导致匿名管理员权限。只有本地或测试环境显式开启第二个开发开关后，受保护接口才会走 `dev_context()`（本地开发用户 / `local_admin` 角色 / `["*"]` 全权限）。
 
-### 关闭登录（当前状态）
+### 仅在本地临时关闭登录
 
 根目录 `.env`：
 
 ```dotenv
+APP_ENV=dev
 AUTH_ENABLED=false
+AUTH_ALLOW_INSECURE_DEV_CONTEXT=true
 ```
+
+`AUTH_ALLOW_INSECURE_DEV_CONTEXT` 只在 `dev`、`development`、`local`、`test`
+环境生效，生产环境禁止设置为 `true`。
 
 应用方式（必须 `up -d` 重建容器，`restart` 不会重读 env）：
 

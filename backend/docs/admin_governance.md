@@ -56,7 +56,7 @@ cd backend
 .\.venv\Scripts\python.exe -m uvicorn main:app --reload --port 8000
 ```
 
-MySQL 连接参数使用 `backend/.env` 中的 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_DATABASE`、`MYSQL_USERNAME`、`MYSQL_PASSWORD`。只调试治理接口时，可在本机临时设置 `AUTH_ENABLED=false`，此时内置本地账号拥有管理员权限；不要把该设置带到部署环境。需要验证真实统一用户中心登录时，再恢复 `AUTH_ENABLED=true`。
+MySQL 连接参数使用 `backend/.env` 中的 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_DATABASE`、`MYSQL_USERNAME`、`MYSQL_PASSWORD`。只调试治理接口时，可在本机同时设置 `APP_ENV=dev`、`AUTH_ENABLED=false` 和 `AUTH_ALLOW_INSECURE_DEV_CONTEXT=true`，此时内置本地账号拥有管理员权限。该模拟管理员开关只对本地、开发和测试环境生效，禁止带到部署环境。需要验证真实统一用户中心登录时，恢复 `AUTH_ENABLED=true` 并关闭模拟管理员开关。
 
 启动前端后，可在 `http://127.0.0.1:8000/docs` 或管理端依次验证：
 

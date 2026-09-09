@@ -125,6 +125,55 @@ def _portal_cookie_test_app() -> FastAPI:
     return app
 
 
+def _disabled_auth_test_app(*, allow_insecure_dev_context: bool) -> FastAPI:
+    settings = replace(
+        AuthSettings.from_env(),
+        enabled=False,
+        allow_insecure_dev_context=allow_insecure_dev_context,
+        session_backend="memory",
+    )
+    application = AuthApplication(settings=settings, store=MemoryJsonStore())
+    app = FastAPI()
+    app.dependency_overrides[get_auth_application] = lambda: application
+    app.include_router(auth_router, prefix="/api/v1")
+    protected = APIRouter(dependencies=[Depends(require_authenticated_user)])
+
+    @protected.get("/protected")
+    async def protected_endpoint() -> dict[str, bool]:
+        return {"ok": True}
+
+    app.include_router(protected, prefix="/api/v1")
+    return app
+
+
+async def test_disabled_auth_fails_closed_without_explicit_dev_switch() -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=_disabled_auth_test_app(allow_insecure_dev_context=False)),
+        base_url="http://test",
+    ) as client:
+        protected = await client.get("/api/v1/protected")
+        profile = await client.get("/api/v1/auth/me")
+        login = await client.get("/api/v1/auth/login-url")
+
+    assert protected.status_code == 503
+    assert profile.status_code == 503
+    assert login.status_code == 503
+    assert protected.headers["cache-control"] == "no-store"
+
+
+async def test_disabled_auth_dev_context_requires_explicit_switch() -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=_disabled_auth_test_app(allow_insecure_dev_context=True)),
+        base_url="http://test",
+    ) as client:
+        protected = await client.get("/api/v1/protected")
+        profile = await client.get("/api/v1/auth/me")
+
+    assert protected.status_code == 200
+    assert profile.status_code == 200
+    assert profile.json()["data"]["isAdmin"] is True
+
+
 async def test_browser_login_cookie_profile_and_logout_flow() -> None:
     async with AsyncClient(
         transport=ASGITransport(app=_test_app()),

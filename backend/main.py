@@ -130,7 +130,16 @@ register_routers(app)
 
 @app.exception_handler(GraphRepoError)
 async def graph_error_handler(request, exc: GraphRepoError) -> JSONResponse:
-    return JSONResponse(status_code=502, content={"status": "error", "message": str(exc)})
+    logger.warning(
+        "图数据服务调用失败 path=%s error_type=%s",
+        request.url.path,
+        type(exc).__name__,
+        exc_info=exc,
+    )
+    return JSONResponse(
+        status_code=502,
+        content={"status": "error", "message": "图数据服务暂时不可用"},
+    )
 
 
 @app.exception_handler(RequestValidationError)

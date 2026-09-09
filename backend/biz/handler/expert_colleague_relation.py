@@ -1,4 +1,5 @@
 import json
+import logging
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
@@ -14,6 +15,7 @@ from biz.schemas.expert_colleague_relation import (
 from infra.result_cache import get_cached_json, set_cached_json
 
 APPLICATION_JSON = "application/json"
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/kg-construction/expert-colleague-relations", tags=["expert-colleague"])
 service_router = APIRouter(
@@ -71,7 +73,6 @@ async def query_expert_colleague_relation(
         return Response(content=body_json, media_type=APPLICATION_JSON)
     except LookupError as exc:
         return _json_response(ApiResponse(code=404, success=False, msg=str(exc)))
-    except Exception as exc:  # noqa: BLE001
-        return _json_response(
-            ApiResponse(code=500, success=False, msg=f"专家同事关系查询失败: {exc}")
-        )
+    except Exception:  # noqa: BLE001
+        logger.exception("专家同事关系查询失败")
+        return _json_response(ApiResponse(code=500, success=False, msg="专家同事关系查询失败"))

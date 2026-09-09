@@ -1,7 +1,6 @@
-# m3e-embedding：专利向量化推理服务。
-# 镜像 bkg/m3e-backend 在 backend 镜像基础上烘焙了 moka-ai/m3e-small 模型
-# （构建期经 hf-mirror.com 下载，见 backend/Dockerfile.m3e），
-# 运行期 HF_HUB_OFFLINE=1 纯离线启动，不依赖集群外网，也不需要模型缓存 PVC。
+# m3e-embedding：专利向量化推理服务（后端镜像 backend 换启动命令）。
+# v0.0.2 起模型已内置镜像（构建期预置 moka-ai/m3e-small 到 /models/huggingface），
+# 启动即用、无需联网下载；HF_HUB_OFFLINE=1 强制离线加载，禁止运行时碰 HF。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,7 +22,7 @@ spec:
         - name: bkg-image-pull-secret-0
       containers:
         - name: m3e-embedding
-          image: 10.50.62.9:30303/bkg/m3e-backend:v0.0.1
+          image: 10.50.62.9:30303/bkg/backend:v0.0.2
           imagePullPolicy: IfNotPresent
           command:
             [
@@ -47,8 +46,6 @@ spec:
               value: "64"
             - name: M3E_MAX_CONCURRENCY
               value: "1"
-            - name: HF_HOME
-              value: /opt/models/huggingface
             - name: HF_HUB_OFFLINE
               value: "1"
           ports:
@@ -65,8 +62,8 @@ spec:
             httpGet:
               path: /health
               port: 8010
-            periodSeconds: 10
-            failureThreshold: 18 # 模型已烘焙进镜像，启动 1-2 分钟
+            periodSeconds: 5
+            failureThreshold: 24 # 最长 2 分钟，本地加载模型绰绰有余
           readinessProbe:
             httpGet:
               path: /health

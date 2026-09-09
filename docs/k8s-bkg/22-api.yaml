@@ -21,7 +21,7 @@ spec:
         - name: bkg-image-pull-secret-0
       containers:
         - name: api
-          image: 10.50.62.9:30303/bkg/backend:v0.0.1
+          image: 10.50.62.9:30303/bkg/backend:v0.0.2
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:

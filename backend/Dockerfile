@@ -22,6 +22,16 @@ RUN uv sync --frozen --no-dev \
     && groupadd --system app \
     && useradd --system --gid app --home-dir /app --shell /usr/sbin/nologin app
 
+# 预置 m3e-small 模型：m3e-embedding 部署启动即用、无需联网下载
+# （api / temporal-worker 不加载模型，仅多占约 100MB）。层放在 COPY 代码之前，
+# 代码变更重建时模型层直接命中缓存。构建机无法直连 HuggingFace 时
+# 用 --build-arg HF_ENDPOINT=https://hf-mirror.com（或反向改回官方）覆盖。
+ARG HF_ENDPOINT=https://hf-mirror.com
+ENV HF_HOME=/models/huggingface \
+    HF_ENDPOINT=${HF_ENDPOINT}
+RUN .venv/bin/python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('moka-ai/m3e-small', device='cpu')" \
+    && chmod -R a+rX /models/huggingface
+
 # 仅复制运行所需代码，防止测试数据、凭据文件或构建上下文意外进入镜像。
 COPY application ./application
 COPY biz ./biz

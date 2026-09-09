@@ -47,7 +47,6 @@
 | `milvus-data` | `milvus-data` | `/var/lib/milvus` | 高 IOPS SSD |
 | `temporal-mysql-data` | `temporal-mysql-data` | `/var/lib/mysql` | SSD |
 | `workflow-state` | `workflow-state` | `/var/lib/bkg` | SSD |
-| `m3e-model-cache` | `m3e-model-cache` | `/models/huggingface` | HDD 即可（只读模型缓存） |
 | `patent-index-state` | `patent-index-state` | `/app/var/patent_indexes` | SSD |
 | `operator-data` | `operator-data` | `/app/operators/user` | SSD |
 | `operator-rustfs-data` | `operator-rustfs-data` | `/data` | 对象存储盘 |
@@ -281,15 +280,6 @@ spec:
   accessModes: ["ReadWriteOnce"]
   resources: { requests: { storage: 10Gi } }
   storageClassName: ssd
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: m3e-model-cache
-  namespace: bkg
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources: { requests: { storage: 5Gi } }
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -640,7 +630,7 @@ spec:
 
 ### 8.5 m3e-embedding
 
-启动慢（首次需下模型），`start_period` 给足 180s。
+m3e-small 模型已内置 backend 镜像（构建期预置，`docker build --build-arg HF_ENDPOINT=...`），启动即用、无需联网；`HF_HUB_OFFLINE=1` 强制离线加载，Pod 无外网也能起。
 
 ```yaml
 # k8s/39-m3e-embedding.yaml
@@ -665,22 +655,17 @@ spec:
             - { name: M3E_BATCH_SIZE, value: "8" }
             - { name: M3E_MAX_BATCH_SIZE, value: "64" }
             - { name: M3E_MAX_CONCURRENCY, value: "1" }
-            - { name: HF_HOME, value: /models/huggingface }
+            - { name: HF_HUB_OFFLINE, value: "1" }
           ports: [{ containerPort: 8010 }]
-          volumeMounts:
-            - { name: model-cache, mountPath: /models/huggingface }
           readinessProbe:
             exec:
               command: [".venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5)"]
             periodSeconds: 15
             failureThreshold: 20
-            initialDelaySeconds: 180
+            initialDelaySeconds: 30
           resources:
             requests: { cpu: 1, memory: 2Gi }
             limits: { cpu: 2, memory: 4Gi }
-      volumes:
-        - name: model-cache
-          persistentVolumeClaim: { claimName: m3e-model-cache }
 ---
 apiVersion: v1
 kind: Service

@@ -29,6 +29,7 @@
 
 | 版本 | 文档发布日期 | 修订内容 |
 | ------ | ------------ | --------- |
+| v0.0.3 | 2026/9/9 | m3e 模型内置 backend 镜像（v0.0.2）三个 Deployment 共用，启动免联网下载；删除 m3e-model-cache PVC；m3e 启动探针收紧；文档表格格式化、PVC 示例补 storageClassName |
 | v0.0.2 | 2026/9/4 | 前端镜像一次构建运行时注入（APP_BASE）；与 TRS Graph 同命名空间对齐（imagePullSecrets/GRAPH_SPACE_REPLICA_FACTOR）；项目内命名统一 bkg；新增镜像准备与拉取密钥章节 |
 | 1.0 | 2026/8/28 | 初版 |
 
@@ -38,7 +39,7 @@
 | ------ | ------ |
 | 容器平台 | k8s 云业务平台，集成了多种功能在界面进行操作和监控 |
 | 镜像仓库 | 用于存储业务所用的镜像仓库（本环境为 10.50.62.9:30303） |
-| backend | 后端业务镜像（api / temporal-worker 共用同一镜像；m3e-embedding 用其派生镜像 m3e-backend，已烘焙 m3e 模型） |
+| backend | 后端业务镜像（api / temporal-worker / m3e-embedding 三个 Deployment 共用同一镜像，已内置 m3e 模型，通过不同启动命令区分） |
 | web | 前端业务镜像（nginx 静态资源 + `/api/` 反代） |
 | rustfs | S3 兼容对象存储，承载 schema 脚本、operator 包、milvus 内部存储 |
 | temporal | 工作流引擎，图谱构建任务通过它编排调度 |
@@ -58,8 +59,7 @@
 | mysql | 8.4 | temporal 专用库 + 业务控制面库 techkg_control |
 | temporal | 1.29.2（auto-setup） | 工作流引擎 |
 | temporal-ui | 2.39.0 | 工作流控制台（运维观察用） |
-| backend | v0.0.1（Python 3.11） | 后端业务镜像 ×2（api / temporal-worker） |
-| m3e-backend | v0.0.1（backend + m3e-small） | 专利向量化服务 m3e-embedding |
+| backend | v0.0.2（Python 3.11） | 后端业务镜像 ×3（api / temporal-worker / m3e-embedding），已内置 m3e-small 模型 |
 | web | v0.0.1（nginx 1.27） | 前端业务镜像 |
 
 **集群外依赖**（需提前准备，yaml 中只填连接地址）：
@@ -92,22 +92,19 @@ docker login 10.50.62.9:30303
 ### 2、构建并推送业务镜像（后端一套、前端一套）
 
 ```bash
-# 后端（api / temporal-worker 两个 Deployment 共用同一镜像）
-docker build -t 10.50.62.9:30303/bkg/backend:v0.0.1 \
+# 后端（api / temporal-worker / m3e-embedding 三个 Deployment 共用同一镜像；
+# 构建期把 m3e-small 模型下载进镜像，m3e 服务启动即用、无需联网）
+docker build -t 10.50.62.9:30303/bkg/backend:v0.0.2 \
   --build-arg PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+  --build-arg HF_ENDPOINT=https://hf-mirror.com \
   ./backend
-
-# m3e-backend（backend 镜像 + 烘焙 m3e-small 模型，m3e-embedding 专用；
-# 构建机需能访问 hf-mirror.com，模型在构建期进入镜像层）
-docker build -t 10.50.62.9:30303/bkg/m3e-backend:v0.0.1 -f backend/Dockerfile.m3e backend
 
 # 前端（一次构建、部署期注入——不传任何 VITE_*，部署前缀由 bkg-config 的 APP_BASE 决定）
 docker build -t 10.50.62.9:30303/bkg/web:v0.0.1 \
   --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
   ./frontend
 
-docker push 10.50.62.9:30303/bkg/backend:v0.0.1
-docker push 10.50.62.9:30303/bkg/m3e-backend:v0.0.1
+docker push 10.50.62.9:30303/bkg/backend:v0.0.2
 docker push 10.50.62.9:30303/bkg/web:v0.0.1
 ```
 
@@ -842,7 +839,7 @@ spec:
 
 ### 后端
 
-后端三个 Deployment 共用镜像 `10.50.62.9:30303/bkg/backend:v0.0.1`，仅启动命令不同。
+后端三个 Deployment 共用镜像 `10.50.62.9:30303/bkg/backend:v0.0.2`，仅启动命令不同。
 
 **1、m3e-embedding（专利向量化服务）**
 
@@ -869,7 +866,7 @@ spec:
         - name: bkg-image-pull-secret-0
       containers:
         - name: m3e-embedding
-          image: 10.50.62.9:30303/bkg/m3e-backend:v0.0.1
+          image: 10.50.62.9:30303/bkg/backend:v0.0.2
           imagePullPolicy: IfNotPresent
           command:
             [
@@ -893,8 +890,6 @@ spec:
               value: "64"
             - name: M3E_MAX_CONCURRENCY
               value: "1"
-            - name: HF_HOME
-              value: /opt/models/huggingface
             - name: HF_HUB_OFFLINE
               value: "1"
           ports:
@@ -911,8 +906,8 @@ spec:
             httpGet:
               path: /health
               port: 8010
-            periodSeconds: 10
-            failureThreshold: 18 # 模型已烘焙进镜像，启动 1-2 分钟
+            periodSeconds: 5
+            failureThreshold: 24 # 最长 2 分钟，本地加载模型绰绰有余
           readinessProbe:
             httpGet:
               path: /health
@@ -935,7 +930,7 @@ spec:
       targetPort: 8010
 ```
 
-> 模型已在构建期烘焙进 `m3e-backend` 镜像（`backend/Dockerfile.m3e`，经 hf-mirror.com 下载），运行期 `HF_HUB_OFFLINE=1` 纯离线启动，不依赖集群外网，也不再需要 `m3e-model-cache` PVC。
+> m3e-small 模型已内置 backend 镜像（构建期预置，见第五节构建命令的 `HF_ENDPOINT`），启动无需联网；`HF_HUB_OFFLINE=1` 强制离线加载，Pod 无外网也能起，也不再需要 `m3e-model-cache` PVC。
 
 **2、temporal-worker（工作流消费者）**
 
@@ -960,7 +955,7 @@ spec:
     spec:
       containers:
         - name: temporal-worker
-          image: 10.50.62.9:30303/bkg/backend:v0.0.1
+          image: 10.50.62.9:30303/bkg/backend:v0.0.2
           imagePullPolicy: IfNotPresent
           command: [".venv/bin/python", "-m", "script.run_temporal_worker"]
           envFrom:
@@ -1009,7 +1004,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: 10.50.62.9:30303/bkg/backend:v0.0.1
+          image: 10.50.62.9:30303/bkg/backend:v0.0.2
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:

@@ -19,11 +19,33 @@ const edgeLabels: Record<string, string> = {
   PUBLISHED_IN: "期刊发表",
   CITES: "论文引用",
   CITED_BY: "被引用",
+  HAS_KEYWORD: "关键词关联",
+  HAS_TOPIC: "研究主题关联",
+  BELONGS_TO: "归属关系",
+  MEMBER_OF: "成员关系",
+};
+
+const entityTypeLabels: Record<string, string> = {
+  Person: "科技专家",
+  Scholar: "科技专家",
+  Expert: "科技专家",
+  Organization: "科研机构",
+  Project: "科研项目",
+  Paper: "论文成果",
+  Patent: "专利成果",
+  PatentFamily: "专利族",
+  Product: "科技产品",
+  Keyword: "研究主题",
+  Event: "科技事件",
+  News: "新闻资讯",
+  Report: "研究报告",
 };
 
 const graphNodeType = (node: IndirectNode, isCore = false): GraphNodeType => {
   if (isCore) return "main";
-  const label = node.labels[0];
+  const label = node.labels.find(
+    (item) => !["organization_base", "Entity", "Base"].includes(item),
+  );
   if (label === "Person") return "expert";
   if (label === "Organization") return "org";
   if (label === "Project" || label === "Patent" || label === "PatentFamily")
@@ -35,6 +57,25 @@ const graphNodeType = (node: IndirectNode, isCore = false): GraphNodeType => {
   if (label === "IndustryChain" || label === "IndustryNode") return "chain";
   if (label === "DataSource") return "source";
   return "topic";
+};
+
+const displayEntityType = (node: IndirectNode, isCore = false) => {
+  if (isCore) return "核心专家";
+  const semanticLabel = node.labels.find(
+    (label) => !["organization_base", "Entity", "Base"].includes(label),
+  );
+  return (semanticLabel && entityTypeLabels[semanticLabel]) || node.entityType || "实体";
+};
+
+const nodeEvidence = (node: IndirectNode): string[] => {
+  const table = nodeSourceTable(node);
+  const recordId = propertyString(node.properties, "source_record_id");
+  const sourceSystem = propertyString(node.properties, "source_system");
+  return [
+    table && `来源表：${table}`,
+    recordId && `源记录：${recordId}`,
+    sourceSystem && `来源系统：${sourceSystem}`,
+  ].filter((item): item is string => Boolean(item));
 };
 
 const propertyString = (properties: Record<string, unknown>, key: string) => {
@@ -98,7 +139,6 @@ export function buildIndirectRelationGraph(
   ]);
   const nodeLevels = new Map<string, number>([[result.coreNode.id, 0]]);
   const nodeStrengths = new Map<string, number>([[result.coreNode.id, 0.96]]);
-  const nodeEvidences = new Map<string, string[]>();
 
   selectedPaths.forEach((path) => {
     path.nodes.forEach((node, index) => {
@@ -111,14 +151,11 @@ export function buildIndirectRelationGraph(
         node.id,
         Math.max(nodeStrengths.get(node.id) ?? 0, path.strength),
       );
-      const evidences = nodeEvidences.get(node.id) ?? [];
-      if (!evidences.includes(path.pathText) && evidences.length < 2)
-        evidences.push(path.pathText);
-      nodeEvidences.set(node.id, evidences);
     });
   });
 
   const maxLevel = Math.max(2, ...nodeLevels.values());
+  const indirectNodeIds = new Set(result.indirectNodes.map((node) => node.id));
   const grouped = new Map<number, string[]>();
   nodeLevels.forEach((level, id) => {
     grouped.set(level, [...(grouped.get(level) ?? []), id]);
@@ -138,13 +175,16 @@ export function buildIndirectRelationGraph(
       nodeType: graphNodeType(node, node.id === result.coreNode.id),
       x: 85 + level * (550 / maxLevel),
       y,
-      entityType: node.id === result.coreNode.id ? "核心专家" : node.entityType,
+      entityType: displayEntityType(node, node.id === result.coreNode.id),
       confidence: nodeStrengths.get(node.id) ?? 0.8,
       relations:
         level === 0
-          ? `间接节点 ${result.indirectNodeCount}`
-          : `${level} 跳关联`,
-      evidence: nodeEvidences.get(node.id) ?? ["节点来自知识图谱多跳子图。"],
+          ? "核心节点"
+          : indirectNodeIds.has(node.id)
+            ? "间接关联节点"
+            : "路径中间节点",
+      // 实体证据只展示来源记录；传递路径已经在摘要和关系 Tab 单独展示。
+      evidence: nodeEvidence(node),
       sourceTable: nodeSourceTable(node),
       sourceRecordId: propertyString(node.properties, "source_record_id"),
       sourceField: nodeSourceField(node),

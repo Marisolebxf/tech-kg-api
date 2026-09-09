@@ -569,6 +569,13 @@ function formatConfidence(value: number | undefined): string {
   return value.toFixed(2);
 }
 
+function formatRelationConfidence(edge: GraphEdgeData): string {
+  if (isPaperCooperation.value && edge.confidence === undefined) {
+    return "不适用（统计关系）";
+  }
+  return formatConfidence(edge.confidence);
+}
+
 function mapLiveGraph(
   nodes:
     | Array<{
@@ -1026,21 +1033,18 @@ function buildLiveGraph(
       ...sr.journalLevelCount,
       ...sr.conferenceLevelCount,
     });
-    const highLevel = levelEntries
-      .filter(([k]) => k !== "未分级")
-      .reduce((s, [, v]) => s + (v as number), 0);
     const unitCount = units.filter(Boolean).length || 2;
     const overrides: Record<string, Partial<GraphNodeData>> = {
       core: {
         label: authors[0] || "专家 A",
-        relations: `合作论文 ${paperCount}`,
+        relations: "核心专家",
         evidence: [
           `专家 ${authors[0] || "-"}，单位 ${units[0] || "未知机构"}。`,
         ],
       },
       "expert-1": {
         label: authors[1] || "专家 B",
-        relations: `合作论文 ${paperCount}`,
+        relations: "合作专家",
         evidence: [
           `专家 ${authors[1] || "-"}，单位 ${units[1] || "未知机构"}。`,
         ],
@@ -1058,32 +1062,35 @@ function buildLiveGraph(
       },
       "topic-1": {
         label: topics[0] || "论文主题",
-        relations: `方向 ${topics.length}`,
+        relations: topics.length
+          ? `研究方向：${topics.join("、")}`
+          : "研究方向待补充",
         evidence: [topics.join("、") || "暂无主题数据。"],
       },
       "venue-1": {
         label: levelEntries.map(([k]) => k).join("/") || "期刊/会议",
-        relations: `发表成果 ${levelEntries.reduce((sum, [, v]) => sum + (v as number), 0)}`,
+        relations: "期刊/会议级别",
         evidence: [
           levelEntries.map(([k, v]) => `${k} ${v} 篇`).join("、") ||
             "暂无分级数据。",
         ],
       },
       "expert-2": {
-        relations: `核心人员 ${collabs.length}`,
+        label: collabs.join("、") || "合作团队",
+        relations: stable.length > 0 ? "稳定合作团队" : "合作团队",
         evidence: [
           `核心合作人员：${collabs.join("、") || "暂无"}。稳定团队：${stable.join("、") || "暂无"}。`,
         ],
       },
     };
     const edgeOverrides: Record<string, Partial<GraphEdgeData>> = {
-      pc1: { label: `论文合作 ${paperCount} 篇` },
-      pc2: { label: "共同作者" },
-      pc3: { label: "共同作者" },
-      pc4: { label: `作者单位 ${unitCount}` },
-      pc5: { label: `研究主题 ${topics.length}` },
-      pc6: { label: highLevel > 0 ? `高水平 ${highLevel} 篇` : "发表级别" },
-      pc7: { label: `团队 ${stable.length} 人` },
+      pc1: { label: "论文合作", category: "论文合作" },
+      pc2: { label: "共同作者", category: "论文作者" },
+      pc3: { label: "共同作者", category: "论文作者" },
+      pc4: { label: "作者单位", category: "作者单位" },
+      pc5: { label: "研究主题", category: "论文主题" },
+      pc6: { label: "发表于", category: "期刊/会议" },
+      pc7: { label: "团队成员", category: "合作团队" },
     };
     return {
       nodes: preset.nodes.map((n) => ({ ...n, ...overrides[n.id] })),
@@ -1384,7 +1391,7 @@ const relationDetailRows = computed(() => {
       "置信度",
 
       // 直接展示后端关系 confidence
-      formatConfidence(edge.confidence),
+      formatRelationConfidence(edge),
     ] as const,
 
     [
@@ -1423,7 +1430,7 @@ const selectedProvenanceTarget = computed(() => {
     id: edge.id,
 
     // 关系置信度直接使用后端返回值
-    confidence: formatConfidence(edge.confidence),
+    confidence: formatRelationConfidence(edge),
   };
 });
 function formatTimestamp(date: Date) {
@@ -1568,8 +1575,7 @@ function buildLiveSummary(
       ? levelParts.join("、")
       : "暂无分级数据";
     const cit = sr.citation || {};
-    out["论文被引情况"] =
-      cit.total > 0 ? `总被引 ${cit.total} 次｜最高 ${cit.max} 次` : "暂无数据";
+    out["论文被引情况"] = `总被引 ${cit.total ?? 0} 次｜最高 ${cit.max ?? 0} 次`;
     out["研究方向"] = (sr.paperTopics || []).slice(0, 5).join("、") || "-";
     out["共同贡献"] = (sr.sharedContribution || []).join("、") || "-";
     out["核心合作人员"] = (sr.coreCollaborators || []).join("、") || "暂无数据";
@@ -1779,7 +1785,7 @@ const liveRelationRows = computed(() => {
       ] as const,
       ["类型", displayRelationType(relation.label)] as const,
       ["分类", displayRelationCategory(relation.category)] as const,
-      ["置信度", formatConfidence(relation.confidence)] as const,
+      ["置信度", formatRelationConfidence(relation)] as const,
     ];
   });
 });

@@ -23,6 +23,13 @@ from service.operator_registry import REGISTRY
 logger = logging.getLogger(__name__)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _dispatch_corrections_once() -> int:
     with session_scope() as session:
         return process_due_sync_tasks(session)
@@ -89,26 +96,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         close_trs_graph_client()
 
 
+_app_env = os.getenv("APP_ENV", "prod").strip().lower()
+_api_docs_enabled = _env_bool(
+    "API_DOCS_ENABLED",
+    _app_env in {"dev", "development", "local", "test"},
+)
+
 app = FastAPI(
     title="Tech KG API",
     description="Backend service for the technology knowledge graph.",
     version="0.1.0",
     lifespan=lifespan,
     docs_url=None,
+    openapi_url="/openapi.json" if _api_docs_enabled else None,
 )
 app.add_middleware(AuthSessionMiddleware)
 
-app.mount("/static/swagger", StaticFiles(directory="static/swagger"), name="swagger-static")
+if _api_docs_enabled:
+    app.mount("/static/swagger", StaticFiles(directory="static/swagger"), name="swagger-static")
 
-
-@app.get("/docs", include_in_schema=False)
-async def custom_swagger_ui():
-    return get_swagger_ui_html(
-        openapi_url=app.openapi_url,
-        title=f"{app.title} - Swagger UI",
-        swagger_js_url="/static/swagger/swagger-ui-bundle.js",
-        swagger_css_url="/static/swagger/swagger-ui.css",
-    )
+    @app.get("/docs", include_in_schema=False)
+    async def custom_swagger_ui():
+        return get_swagger_ui_html(
+            openapi_url=app.openapi_url,
+            title=f"{app.title} - Swagger UI",
+            swagger_js_url="/static/swagger/swagger-ui-bundle.js",
+            swagger_css_url="/static/swagger/swagger-ui.css",
+        )
 
 
 register_routers(app)

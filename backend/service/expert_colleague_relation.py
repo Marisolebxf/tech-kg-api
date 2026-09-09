@@ -552,7 +552,11 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             period_achievements = f"0项具体成果（合著统计{primary.get('coPaperCount', 0)}篇）"
         return {
             "coreExpert": f"{expert['name']} | {expert.get('title') or '-'}",
-            "coreExpertOrganization": expert.get("organization") or "-",
+            # 命中同事关系时以关系发生的共同机构为准，保证摘要与图谱/共同机构一致；
+            # 未命中时回退专家节点自带的机构属性。
+            "coreExpertOrganization": (
+                primary["commonOrganization"] if primary else expert.get("organization") or "-"
+            ),
             "primaryColleague": (
                 f"{primary['colleague']['name']} | {primary['colleague'].get('title') or '-'}"
                 if primary
@@ -575,6 +579,7 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             "workContent": ("、".join(primary["workContent"]) if primary else "-"),
             "collaborationScenes": ("、".join(primary["collaborationScenes"]) if primary else "-"),
             "periodAchievements": period_achievements,
+            "relationConfidence": primary["confidence"] if primary else None,
             "colleagueCount": len(colleagues),
             "teamCount": len(teams),
             "maxOverlapYears": max(overlaps, default=0),

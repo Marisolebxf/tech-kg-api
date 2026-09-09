@@ -14,8 +14,6 @@ from pydantic import BaseModel, Field, field_validator
 
 # 标识类字段允许的字符：字母数字下划线、中文、间隔号、点、连字符。
 _ID_LIKE_PATTERN = re.compile(r"[\w一-鿿·.\-]+")
-# 关键词类筛选字段（企业名称/角色/行业）允许的字符：标识字符 + 空格、中英文括号、
-# 顿号、逗号、斜杠（兼容「（集团）」「高端装备/智能制造」等合法输入）。
 _KEYWORD_PATTERN = re.compile(r"[\w一-鿿·.\-()（）、，,/\s]+")
 
 

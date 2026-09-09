@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 from service.industry_chain_panorama import IndustryChainPanoramaService
 
 
@@ -17,6 +19,7 @@ class IndustryChainPanoramaApplication:
         top_k: int = 5,
         relation_types: list[str] | None = None,
         refresh: bool = False,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> dict[str, object]:
         return await self._service.query(
             industry=industry,
@@ -25,4 +28,5 @@ class IndustryChainPanoramaApplication:
             top_k=top_k,
             relation_types=relation_types,
             refresh=refresh,
+            auth_headers=auth_headers,
         )

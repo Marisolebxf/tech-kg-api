@@ -18,7 +18,6 @@ async def describe_relation_detail_annotation() -> dict[str, object]:
 
 @router.post(
     "/annotate",
-    response_model=ApiResponse,
     dependencies=[Depends(require_platform_admin)],
 )
 async def annotate_relation_detail(req: RelationDetailAnnotationRequest) -> ApiResponse:

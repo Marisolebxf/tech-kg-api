@@ -31,12 +31,12 @@ async def _get_overview() -> PlatformOverviewData:
     return await asyncio.to_thread(application.get_overview)
 
 
-@router.get("", response_model=PlatformOverviewResponse)
+@router.get("")
 async def get_platform_overview() -> PlatformOverviewResponse:
     return PlatformOverviewResponse(data=await _get_overview())
 
 
-@router.get("/assets", response_model=PlatformAssetSummaryResponse)
+@router.get("/assets")
 async def get_platform_assets() -> PlatformAssetSummaryResponse:
     overview = await _get_overview()
     return PlatformAssetSummaryResponse(
@@ -52,7 +52,7 @@ async def get_platform_assets() -> PlatformAssetSummaryResponse:
     )
 
 
-@router.get("/changes", response_model=PlatformAssetChangesResponse)
+@router.get("/changes")
 async def get_platform_asset_changes(
     asset_type: Annotated[AssetOverviewKey, Query(alias="assetType")] = "entity",
 ) -> PlatformAssetChangesResponse:
@@ -66,7 +66,7 @@ async def get_platform_asset_changes(
     )
 
 
-@router.get("/activity", response_model=PlatformActivityResponse)
+@router.get("/activity")
 async def get_platform_activity() -> PlatformActivityResponse:
     overview = await _get_overview()
     return PlatformActivityResponse(
@@ -77,7 +77,7 @@ async def get_platform_activity() -> PlatformActivityResponse:
     )
 
 
-@router.get("/risks", response_model=PlatformRiskResponse)
+@router.get("/risks")
 async def get_platform_risks() -> PlatformRiskResponse:
     overview = await _get_overview()
     return PlatformRiskResponse(
@@ -88,7 +88,7 @@ async def get_platform_risks() -> PlatformRiskResponse:
     )
 
 
-@router.get("/structures", response_model=PlatformStructureResponse)
+@router.get("/structures")
 async def get_platform_structures() -> PlatformStructureResponse:
     overview = await _get_overview()
     return PlatformStructureResponse(

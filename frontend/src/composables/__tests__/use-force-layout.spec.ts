@@ -177,7 +177,7 @@ describe('useForceLayout', () => {
       const edges = ref([makeEdge('a', 'b')])
       return useForceLayout(nodes, edges)
     })!
-    expect(result.laidOutNodes.value.length).toBe(2)
+    expect(result.laidOutNodes.value).toHaveLength(2)
     expect(result.laidOutNodes.value[0]).toHaveProperty('x')
     expect(result.laidOutNodes.value[0]).toHaveProperty('y')
     scope.stop()
@@ -196,6 +196,39 @@ describe('useForceLayout', () => {
     await nextTick()
     expect(result.laidOutNodes.value[0].x).toBe(beforeX)
     scope.stop()
+  })
+
+  it('相同节点 ID 的新查询结果同步姓名、论文数量和证据并保留坐标', async () => {
+    const scope = effectScope(true)
+    try {
+      const nodes = ref([
+        makeNode('core', { label: '陈明远' }),
+        makeNode('expert-1', { label: '刘博文' }),
+        makeNode('paper-1', { label: '合作论文3篇' }),
+      ])
+      const edges = ref([makeEdge('core', 'expert-1'), makeEdge('core', 'paper-1')])
+      const { laidOutNodes } = scope.run(() => useForceLayout(() => nodes.value, () => edges.value))!
+      const positions = laidOutNodes.value.map(({ x, y }) => ({ x, y }))
+      nodes.value = [
+        makeNode('core', { label: '陈明远', relations: '合作论文 2' }),
+        makeNode('expert-1', { label: '张若琳', evidence: ['最新合作证据'] }),
+        makeNode('paper-1', { label: '合作论文2篇' }),
+      ]
+      await nextTick()
+      expect(laidOutNodes.value.map((node) => node.label)).toEqual(['陈明远', '张若琳', '合作论文2篇'])
+      expect(laidOutNodes.value[0].relations).toBe('合作论文 2')
+      expect(laidOutNodes.value[1].evidence).toEqual(['最新合作证据'])
+      expect(laidOutNodes.value.map(({ x, y }) => ({ x, y }))).toEqual(positions)
+      nodes.value[1].label = '再次更新专家'
+      await nextTick()
+      expect(laidOutNodes.value[1].label).toBe('再次更新专家')
+      nodes.value = []
+      edges.value = []
+      await nextTick()
+      expect(laidOutNodes.value).toEqual([])
+    } finally {
+      scope.stop()
+    }
   })
 
   it('改节点 id 集合触发重布局', async () => {

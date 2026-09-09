@@ -47,6 +47,10 @@ class PlatformActor:
         return values
 
 
+# 开发模式（认证未启用）下本进程已登记过成员表的用户：避免每请求重复 upsert。
+_DEV_ACTOR_UPSERTED: set[str] = set()
+
+
 def actor_from_profile(
     profile,
     *,
@@ -57,11 +61,25 @@ def actor_from_profile(
 ) -> PlatformActor:
     user_id = str(profile.user.id)
     bootstrap_admin = not auth_enabled or force_admin or user_id in initial_admin_ids
+    if not auth_enabled and user_id in _DEV_ACTOR_UPSERTED:
+        # 认证未启用的开发模式：该用户已在本进程登记过成员表，直接返回内存 Actor。
+        # 否则管理端每个请求都会 upsert 同一用户行（last_seen_at），500 并发下
+        # 该行成为 InnoDB 行锁热点，管理端接口吞吐被串行化在 ~800/s。
+        return PlatformActor(
+            user_id=user_id,
+            username=profile.user.username,
+            display_name=profile.user.nickname or profile.user.username,
+            email=profile.user.email,
+            is_admin=bootstrap_admin,
+        )
     database_admin = False
     try:
         with session_scope() as session:
             _upsert_user(session, profile)
             session.flush()
+            if not auth_enabled:
+                # 开发模式仅首次登记成员表；真实认证路径每请求仍刷新 last_seen。
+                _DEV_ACTOR_UPSERTED.add(user_id)
             if auth_enabled:
                 role_id = session.scalar(
                     select(PlatformUserRole.id).where(

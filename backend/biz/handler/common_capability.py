@@ -115,7 +115,7 @@ async def metadata() -> dict[str, Any]:
     }
 
 
-@router.post("/entity-extraction")
+@router.post("/entity-extraction", responses={400: {"description": "请求参数无效"}})
 async def extract_entities(body: EntityExtractionRequest) -> dict[str, Any]:
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="text cannot be empty")
@@ -132,14 +132,14 @@ async def disambiguate_entity(body: EntityDisambiguationRequest) -> dict[str, An
     return application.disambiguate_entity(body.text, body.mention, body.kb, top_k=body.top_k)
 
 
-@router.post("/relation-extraction")
+@router.post("/relation-extraction", responses={400: {"description": "请求参数无效"}})
 async def extract_relation(body: RelationExtractionRequest) -> dict[str, Any]:
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="text cannot be empty")
     return application.extract_relations(body.text, method=body.method)
 
 
-@router.post("/relation-extraction/batch")
+@router.post("/relation-extraction/batch", responses={400: {"description": "请求参数无效"}})
 async def batch_extract_relation(body: BatchRelationExtractionRequest) -> dict[str, Any]:
     texts = [text for text in body.texts if text.strip()]
     if not texts:

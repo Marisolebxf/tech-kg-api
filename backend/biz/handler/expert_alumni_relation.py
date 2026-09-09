@@ -12,7 +12,7 @@ legacy_router = APIRouter(prefix="/kg-service/expert-alumni-relation")
 application = ExpertAlumniRelationApplication()
 
 
-async def _describe() -> dict[str, object]:
+def _describe() -> dict[str, object]:
     return application.describe()
 
 
@@ -45,20 +45,20 @@ def _query(body: AlumniRelationQueryRequest) -> ApiResponse:
 
 
 @router.get("")
-async def describe_expert_alumni_relation() -> dict[str, object]:
-    return await _describe()
+def describe_expert_alumni_relation() -> dict[str, object]:
+    return _describe()
 
 
-@router.post("/query", response_model=ApiResponse)
+@router.post("/query")
 def query_expert_alumni_relation(body: AlumniRelationQueryRequest) -> ApiResponse:
     return _query(body)
 
 
 @legacy_router.get("")
-async def legacy_describe_expert_alumni_relation() -> dict[str, object]:
-    return await _describe()
+def legacy_describe_expert_alumni_relation() -> dict[str, object]:
+    return _describe()
 
 
-@legacy_router.post("", response_model=ApiResponse)
+@legacy_router.post("")
 def legacy_query_expert_alumni_relation(body: AlumniRelationQueryRequest) -> ApiResponse:
     return _query(body)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import secrets
@@ -25,6 +26,8 @@ from config.auth import AuthSettings
 from infra.redis import AsyncJsonStore
 from infra.user_center import UserCenterClient, UserCenterError
 
+OVERVIEW_PATH = "/overview"
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,6 +44,7 @@ class AuthContext:
     expires_at: int | None
     session_id: str | None = None
     refresh_token: str = ""
+    token_source: str = "unknown"
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -48,6 +52,7 @@ class AuthContext:
             "refresh_token": self.refresh_token,
             "expires_at": self.expires_at,
             "permission_info": self.permission_info,
+            "token_source": self.token_source,
         }
 
     @classmethod
@@ -58,6 +63,10 @@ class AuthContext:
             expires_at=record.get("expires_at"),
             permission_info=dict(record.get("permission_info") or {}),
             session_id=session_id,
+            token_source=str(
+                record.get("token_source")
+                or ("oauth" if record.get("refresh_token") else "unknown")
+            ),
         )
 
 
@@ -76,10 +85,11 @@ class AuthService:
         self.settings = settings
         self.store = store
         self.user_center = user_center
+        self._refresh_tasks: dict[str, asyncio.Task[AuthContext]] = {}
 
-    async def create_login_url(self, next_path: str = "/overview") -> tuple[str, int, str]:
+    async def create_login_url(self, next_path: str = OVERVIEW_PATH) -> tuple[str, int, str]:
         if not next_path.startswith("/") or next_path.startswith("//"):
-            next_path = "/overview"
+            next_path = OVERVIEW_PATH
         state = secrets.token_urlsafe(32)
         try:
             url = self.user_center.build_login_url(state)
@@ -105,7 +115,7 @@ class AuthService:
         session_id = secrets.token_urlsafe(32)
         context.session_id = session_id
         await self._save_session(context)
-        return context, str(state_data.get("next") or "/overview")
+        return context, str(state_data.get("next") or OVERVIEW_PATH)
 
     async def get_session(self, session_id: str) -> AuthContext:
         record = await self._store_get_json(f"{self.SESSION_KEY_PREFIX}{session_id}")
@@ -115,7 +125,7 @@ class AuthService:
         if context.expires_at is not None and context.expires_at <= int(time.time()) + 30:
             return await self.refresh_session(session_id, context=context)
         # 续期本地会话 TTL，使配置值表达“连续无操作时长”，而不是固定登录时长。
-        await self._save_session(context)
+        await self._touch_session(session_id)
         return context
 
     async def refresh_session(
@@ -124,19 +134,34 @@ class AuthService:
         *,
         context: AuthContext | None = None,
     ) -> AuthContext:
-        if context is None:
-            record = await self._store_get_json(f"{self.SESSION_KEY_PREFIX}{session_id}")
-            if record is None:
-                raise AuthenticationError("登录已过期，请重新登录")
-            current = AuthContext.from_record(record, session_id=session_id)
-        else:
-            current = context
+        task = self._refresh_tasks.get(session_id)
+        if task is None:
+            task = asyncio.create_task(self._refresh_session(session_id, context))
+            self._refresh_tasks[session_id] = task
+
+            def finished(completed: asyncio.Task[AuthContext]) -> None:
+                self._refresh_tasks.pop(session_id, None)
+                if not completed.cancelled():
+                    completed.exception()
+
+            task.add_done_callback(finished)
+        return await asyncio.shield(task)
+
+    async def _refresh_session(self, session_id: str, previous: AuthContext | None) -> AuthContext:
+        record = await self._store_get_json(f"{self.SESSION_KEY_PREFIX}{session_id}")
+        if record is None:
+            raise AuthenticationError("登录已过期，请重新登录")
+        current = AuthContext.from_record(record, session_id=session_id)
+        if previous is not None and current.access_token != previous.access_token:
+            await self._touch_session(session_id)
+            return current
         if not current.refresh_token:
             try:
                 checked = await self.user_center.check_token(current.access_token)
                 permission_info = await self.user_center.get_permission_info(current.access_token)
             except UserCenterError as exc:
-                await self.delete_session(session_id)
+                if exc.status_code == 401:
+                    await self.delete_session(session_id)
                 raise AuthenticationError(str(exc), status_code=exc.status_code) from exc
             refreshed = AuthContext(
                 access_token=current.access_token,
@@ -144,8 +169,14 @@ class AuthService:
                 expires_at=(int(checked.get("exp")) if checked.get("exp") is not None else None),
                 permission_info=dict(permission_info or {}),
                 session_id=session_id,
+                token_source=current.token_source,
             )
-            await self._save_session(refreshed)
+            if refreshed.expires_at is None:
+                raise AuthenticationError("统一用户中心未返回访问令牌过期时间", status_code=502)
+            if refreshed.expires_at <= int(time.time()):
+                await self.delete_session(session_id)
+                raise AuthenticationError("访问令牌已过期")
+            await self._save_session(refreshed, existing=True)
             return refreshed
         try:
             token = await self.user_center.refresh(current.refresh_token)
@@ -153,10 +184,11 @@ class AuthService:
                 token["refresh_token"] = current.refresh_token
             refreshed = await self._context_from_token(token)
         except UserCenterError as exc:
-            await self.delete_session(session_id)
+            if exc.status_code == 401:
+                await self.delete_session(session_id)
             raise AuthenticationError(str(exc), status_code=exc.status_code) from exc
         refreshed.session_id = session_id
-        await self._save_session(refreshed)
+        await self._save_session(refreshed, existing=True)
         return refreshed
 
     async def resolve_bearer(self, access_token: str) -> AuthContext:
@@ -164,7 +196,9 @@ class AuthService:
         key = f"{self.BEARER_KEY_PREFIX}{digest}"
         cached = await self._store_get_json(key)
         if cached is not None:
-            return AuthContext.from_record(cached, session_id="")
+            context = AuthContext.from_record(cached, session_id="")
+            context.token_source = "bearer"
+            return context
 
         try:
             checked = await self.user_center.check_token(access_token)
@@ -178,6 +212,7 @@ class AuthService:
             access_token=access_token,
             permission_info=dict(permission_info or {}),
             expires_at=expires_at,
+            token_source="bearer",
         )
         ttl = self.settings.bearer_cache_ttl_seconds
         if expires_at is not None:
@@ -198,6 +233,7 @@ class AuthService:
             access_token=access_token,
             permission_info=dict(permission_info or {}),
             expires_at=expires_at,
+            token_source="portal",
         )
         if context.expires_at is None:
             raise AuthenticationError("统一用户中心未返回访问令牌过期时间", status_code=502)
@@ -208,15 +244,34 @@ class AuthService:
         return context
 
     async def logout(self, context: AuthContext) -> bool:
+        if context.session_id:
+            await self.delete_session(context.session_id)
         remote_revoked = False
         try:
-            if context.access_token and self.settings.enabled:
+            # 门户共享令牌由门户退出流程负责撤销，不能令其他系统的登录态半失效。
+            if (
+                context.access_token
+                and self.settings.enabled
+                and context.token_source in {"oauth", "bearer"}
+            ):
                 remote_revoked = await self.user_center.logout(context.access_token)
         except UserCenterError:
             remote_revoked = False
-        if context.session_id:
-            await self.delete_session(context.session_id)
+        if remote_revoked:
+            digest = hashlib.sha256(context.access_token.encode("utf-8")).hexdigest()
+            try:
+                await self.store.delete(f"{self.BEARER_KEY_PREFIX}{digest}")
+            except Exception as exc:
+                self._raise_store_unavailable(exc)
         return remote_revoked
+
+    async def logout_session(self, session_id: str) -> tuple[AuthContext | None, bool]:
+        """退出不续期、不换门户会话；过期或已删除的会话也能完成本地清理。"""
+        record = await self._store_pop_json(f"{self.SESSION_KEY_PREFIX}{session_id}")
+        if record is None:
+            return None, False
+        context = AuthContext.from_record(record, session_id=session_id)
+        return context, await self.logout(context)
 
     async def record_operation(
         self,
@@ -316,7 +371,7 @@ class AuthService:
         return AccountSecurityData(
             account_status="正常" if profile.user.status == 0 else "停用",
             authentication_method="统一用户中心 OAuth2",
-            password_managed_by="统一用户中心",
+            password_managed_by="统一用户中心",  # NOSONAR
             account_management_url=self.settings.user_center_portal_url,
             email_bound=bool(profile.user.email),
             mobile_bound=bool(profile.user.mobile),
@@ -451,11 +506,34 @@ class AuthService:
             refresh_token=str(token.get("refresh_token") or ""),
             expires_at=int(time.time()) + expires_in,
             permission_info=dict(permission_info or {}),
+            token_source="oauth",
         )
 
-    async def _save_session(self, context: AuthContext) -> None:
+    async def _touch_session(self, session_id: str) -> None:
+        try:
+            exists = await self.store.touch(
+                f"{self.SESSION_KEY_PREFIX}{session_id}", self.settings.session_ttl_seconds
+            )
+        except Exception as exc:
+            self._raise_store_unavailable(exc)
+        if not exists:
+            raise AuthenticationError("登录已过期，请重新登录")
+
+    async def _save_session(self, context: AuthContext, *, existing: bool = False) -> None:
         if not context.session_id:
             raise ValueError("session_id 不能为空")
+        if existing:
+            try:
+                exists = await self.store.replace_json(
+                    f"{self.SESSION_KEY_PREFIX}{context.session_id}",
+                    context.to_record(),
+                    self.settings.session_ttl_seconds,
+                )
+            except Exception as exc:
+                self._raise_store_unavailable(exc)
+            if not exists:
+                raise AuthenticationError("登录已过期，请重新登录")
+            return
         await self._store_set_json(
             f"{self.SESSION_KEY_PREFIX}{context.session_id}",
             context.to_record(),

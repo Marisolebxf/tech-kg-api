@@ -51,7 +51,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from pymilvus.exceptions import MilvusException
@@ -63,7 +63,7 @@ from script.scholar_provenance import confidence_props
 
 logger = logging.getLogger("script.dedupe_scholar_persons")
 
-BATCH_ID = f"BATCH_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_scholar_dedupe"
+BATCH_ID = f"BATCH_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_scholar_dedupe"
 COLLECTION_NAME = os.environ.get("SCHOLAR_MILVUS_COLLECTION", "scholar_person")
 DENSE_MODEL_NAME = os.environ.get("SCHOLAR_DENSE_MODEL", "moka-ai/m3e-small")
 BIO_MAX_CHARS = 500
@@ -364,7 +364,7 @@ def run(
     if report_path:
         payload = {
             "batch": BATCH_ID,
-            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "collection": COLLECTION_NAME,
             "counts": {"high": len(high_pairs), "mid": len(mid_pairs), "persons": len(persons)},
             "thresholds": {"high": high_threshold, "mid": mid_threshold},
@@ -379,7 +379,7 @@ def run(
     written = 0
     failed = 0
     if write and not dry_run:
-        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
         for entry in high_pairs:
             a_vid, b_vid = entry["a"]["vid"], entry["b"]["vid"]
             props = {

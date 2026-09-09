@@ -49,6 +49,8 @@ from service.manual_review_domain import (
     write_target,
 )
 
+STATE_OR_VERSION_CONFLICT = "状态或版本冲突"
+
 
 def now():
     return datetime.now(UTC).replace(tzinfo=None)
@@ -384,7 +386,7 @@ class ManualReviewService:
         with self.sf() as s:
             c = self.owned(s, i, a)
             if c.version != v or c.status not in EDITABLE_STATUSES:
-                raise ReviewConflictError("状态或版本冲突")
+                raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
             s.merge(ReviewDraft(case_id=i, payload=dump(p), updated_by=a.user_id, updated_at=now()))
             old = c.status
             c.status = "IN_REVIEW"
@@ -398,7 +400,7 @@ class ManualReviewService:
         with self.sf() as s:
             c = self.owned(s, i, a)
             if c.version != v or c.status not in EDITABLE_STATUSES:
-                raise ReviewConflictError("状态或版本冲突")
+                raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
             validate_action(c.template_id, action, result)
             approval = requires_approval(c.risk_level, action, result)
             t = now()
@@ -433,7 +435,7 @@ class ManualReviewService:
             c = self.need(s, i)
             require_domain_access(a, c.domain)
             if c.version != v or c.status != "PENDING_APPROVAL":
-                raise ReviewConflictError("状态或版本冲突")
+                raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
             d = s.scalar(
                 select(ReviewDecision)
                 .where(ReviewDecision.case_id == i, ReviewDecision.status == "PENDING_APPROVAL")
@@ -840,6 +842,7 @@ class ManualReviewService:
             return self.detail(s, c)
 
     def cancel(self, i, v, reason, a):
+        _ = reason
         require_role(a, "review_admin")
         return self.mutate(
             i, v, a, {"status": "CANCELLED", "completed_at": now()}, "CASE_CANCELLED", True

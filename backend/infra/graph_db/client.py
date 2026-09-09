@@ -39,6 +39,8 @@ from infra.graph_db.models import (
     GraphQueryResult,
 )
 
+SCHEMA_INDEXES_PATH = "/api/v1/schema/indexes"
+
 logger = logging.getLogger("infra.graph_db")
 
 # The trs-graph-service only treats these property keys as the Nebula vertex id
@@ -457,7 +459,7 @@ class TRSGraphClient:
         if query.lstrip().upper().startswith("USE "):
             return query
         space = self._settings.space
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", space):
+        if not re.fullmatch(r"[A-Za-z_]\w*", space, flags=re.ASCII):
             raise GraphRequestError(
                 "Invalid graph space name",
                 status_code=400,
@@ -554,17 +556,17 @@ class TRSGraphClient:
 
     def create_index(self, spec: GraphIndexSpec) -> None:
         body = {"label": spec.label, "properties": spec.properties, "unique": spec.unique}
-        self._request("POST", "/api/v1/schema/indexes", json=body)
+        self._request("POST", SCHEMA_INDEXES_PATH, json=body)
 
     def drop_index(self, label: str, properties: list[str]) -> None:
         params = {"label": label, "properties": ",".join(properties)}
-        self._request("DELETE", "/api/v1/schema/indexes", params=params)
+        self._request("DELETE", SCHEMA_INDEXES_PATH, params=params)
 
     def list_indexes(self, label: str | None = None) -> list[GraphIndexSpec]:
         params: dict[str, Any] = {}
         if label:
             params["label"] = label
-        resp = self._request("GET", "/api/v1/schema/indexes", params=params)
+        resp = self._request("GET", SCHEMA_INDEXES_PATH, params=params)
         data = resp.json()
         items = data if isinstance(data, list) else data.get("items", [])
         indexes: list[GraphIndexSpec] = []
@@ -580,7 +582,7 @@ class TRSGraphClient:
                         if isinstance(parsed, list):
                             clean_props.extend(_strip_quotes(x) for x in parsed)
                             continue
-                    except (json.JSONDecodeError, ValueError) as exc:
+                    except ValueError as exc:
                         logger.debug("list_indexes could not parse bracket property %r: %s", p, exc)
                 clean_props.append(p)
             indexes.append(

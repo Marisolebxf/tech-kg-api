@@ -1,0 +1,6 @@
+projectKey=tech-kg-api-scan
+serverUrl=http://211.81.248.211:9100
+serverVersion=26.8.0.126808
+dashboardUrl=http://211.81.248.211:9100/dashboard?id=tech-kg-api-scan
+ceTaskId=925abd1d-e5c1-4cf7-9bf0-dd2b7bcda827
+ceTaskUrl=http://211.81.248.211:9100/api/ce/task?id=925abd1d-e5c1-4cf7-9bf0-dd2b7bcda827

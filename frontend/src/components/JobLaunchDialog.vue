@@ -114,7 +114,7 @@ async function submit() {
 <template>
   <Teleport to="body">
     <button v-if="open" class="job-launch-mask" type="button" aria-label="关闭" @click="emit('close')" />
-    <aside v-if="open" class="job-launch-dialog">
+    <aside aria-label="辅助区域 1" v-if="open" class="job-launch-dialog">
       <header>
         <div><span>作业运行</span><h2>启动作业</h2></div>
         <button type="button" @click="emit('close')">×</button>
@@ -122,7 +122,7 @@ async function submit() {
       <div class="job-launch-body">
         <label class="job-field">
           <span>作业（Schema）*</span>
-          <select v-model="selectedSchemaId">
+          <select aria-label="选择或输入内容" v-model="selectedSchemaId">
             <option value="">请选择</option>
             <option v-for="s in schemas" :key="s.id" :value="s.id">{{ s.label }}（{{ s.name }}）</option>
           </select>
@@ -132,7 +132,7 @@ async function submit() {
 
         <label class="job-field">
           <span>大模型配置</span>
-          <select v-model="llmConfigId">
+          <select aria-label="选择或输入内容" v-model="llmConfigId">
             <option value="">使用全局默认</option>
             <option v-for="c in llmConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）{{ c.isDefault ? ' ★' : '' }}</option>
           </select>
@@ -142,15 +142,15 @@ async function submit() {
         <div class="job-field">
           <span>执行模式</span>
           <div class="job-radio-group">
-            <label><input v-model="executeMode" type="radio" value="once" /> 执行一次</label>
-            <label><input v-model="executeMode" type="radio" value="recurring" /> 定期执行</label>
+            <label><input aria-label="选择此项" v-model="executeMode" type="radio" value="once" /> 执行一次</label>
+            <label><input aria-label="选择此项" v-model="executeMode" type="radio" value="recurring" /> 定期执行</label>
           </div>
         </div>
 
         <div v-if="executeMode === 'recurring'" class="job-row">
           <label class="job-field">
             <span>频率</span>
-            <select v-model="frequency">
+            <select aria-label="选择或输入内容" v-model="frequency">
               <option>每天</option>
               <option>每12小时</option>
               <option>每6小时</option>
@@ -159,18 +159,18 @@ async function submit() {
           </label>
           <label class="job-field">
             <span>执行时间</span>
-            <input v-model="executionTime" type="time" />
+            <input aria-label="输入内容" v-model="executionTime" type="time" />
           </label>
         </div>
 
         <label class="job-field">
           <span>增量游标 since（可空，空 = 全量）</span>
-          <input v-model="since" placeholder="如 2026-08-01 00:00:00" />
+          <input aria-label="如 2026-08-01 00:00:00" v-model="since" placeholder="如 2026-08-01 00:00:00" />
         </label>
 
         <label class="job-field">
           <span>业务域范围（可空，逗号分隔）</span>
-          <input v-model="domains" placeholder="如 论文域,人才域" />
+          <input aria-label="如 论文域,人才域" v-model="domains" placeholder="如 论文域,人才域" />
         </label>
       </div>
       <p v-if="notice" class="job-launch-notice">{{ notice }}</p>
@@ -186,7 +186,7 @@ async function submit() {
 .job-launch-mask{position:fixed;inset:0;z-index:49;border:0;background:rgba(16,38,76,0.42);backdrop-filter:blur(2px);cursor:pointer}
 .job-launch-dialog{position:fixed;z-index:50;top:50%;left:50%;width:min(560px,calc(100vw - 40px));max-height:88vh;display:flex;flex-direction:column;overflow:hidden;border-radius:10px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3);transform:translate(-50%,-50%)}
 .job-launch-dialog>header{display:flex;align-items:flex-start;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #e3ebf6;background:linear-gradient(90deg,#eef5ff,#fff)}
-.job-launch-dialog header span{color:#165dff;font-size:10px}
+.job-launch-dialog header span{color:#004ecc;font-size:10px}
 .job-launch-dialog h2{margin:4px 0 0;font-size:17px;color:#1d2129}
 .job-launch-dialog header button{width:28px;height:28px;border:0;border-radius:5px;background:#f0f4fa;color:#4e5969;font-size:18px;cursor:pointer}
 .job-launch-body{flex:1;min-height:0;overflow:auto;padding:16px 18px;display:flex;flex-direction:column;gap:12px}
@@ -202,6 +202,6 @@ async function submit() {
 .job-launch-notice{margin:0;padding:10px 18px;border-top:1px solid #e3ebf6;background:#eef5ff;color:#315b95;font-size:11px;line-height:16px}
 .job-launch-dialog>footer{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #e3ebf6;background:#fff}
 .job-launch-dialog footer button{height:33px;padding:0 16px;border:1px solid #c9cdd4;border-radius:5px;background:#fff;color:#4e5969;font-size:13px;cursor:pointer}
-.job-launch-dialog footer .primary{border-color:#165dff;background:#165dff;color:#fff}
+.job-launch-dialog footer .primary{border-color:#004ecc;background:#004ecc;color:#fff}
 .job-launch-dialog footer button:disabled{opacity:.6;cursor:not-allowed}
 </style>

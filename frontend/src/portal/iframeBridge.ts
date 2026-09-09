@@ -12,7 +12,9 @@ export const PortalAction = {
   LOGOUT: 'LOGOUT',
 } as const
 
-export type PortalActionName = (typeof PortalAction)[keyof typeof PortalAction] | string
+export type PortalActionName =
+  | (typeof PortalAction)[keyof typeof PortalAction]
+  | (string & {})
 export type PortalMessageData = Record<string, unknown>
 
 export interface PortalMessage {
@@ -87,8 +89,7 @@ export function createPortalMessage(
 export function isPortalMessage(value: unknown): value is PortalMessage {
   const message = asObject(value)
   return Boolean(
-    message
-      && message.protocol === IFRAME_BRIDGE_PROTOCOL
+    message?.protocol === IFRAME_BRIDGE_PROTOCOL
       && message.version === IFRAME_BRIDGE_VERSION
       && typeof message.id === 'string'
       && message.id.length > 0

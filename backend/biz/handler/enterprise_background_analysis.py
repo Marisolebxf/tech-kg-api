@@ -15,7 +15,7 @@ async def describe_enterprise_background_analysis() -> dict[str, object]:
     return application.describe()
 
 
-@router.post("/analyze", response_model=ApiResponse)
+@router.post("/analyze")
 async def analyze_enterprise_background(req: EnterpriseBackgroundAnalysisRequest) -> ApiResponse:
     try:
         result = application.analyze(req.model_dump())

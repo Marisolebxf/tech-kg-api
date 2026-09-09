@@ -6,10 +6,11 @@ import hmac
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from application.auth import AuthApplication
-from biz.dependencies.auth import AuthApplicationDependency, CurrentUser
+from biz.auth_cookies import clear_browser_session, clear_portal_logout_cookie, set_session_cookie
+from biz.dependencies.auth import AuthApplicationDependency, BearerDependency, CurrentUser
 from biz.schemas.auth import (
     AccountSecurityResponse,
     AuthProfileResponse,
@@ -55,7 +56,7 @@ def _clear_state_cookie(response: Response, application: AuthApplication) -> Non
     )
 
 
-@router.get("/login-url", response_model=LoginUrlResponse)
+@router.get("/login-url")
 async def get_login_url(
     response: Response,
     application: AuthApplicationDependency,
@@ -63,6 +64,12 @@ async def get_login_url(
 ) -> LoginUrlResponse:
     response.headers["Cache-Control"] = "no-store"
     if not application.settings.enabled:
+        if not application.settings.allow_insecure_dev_context:
+            raise HTTPException(
+                status_code=503,
+                detail="认证服务未启用，登录入口已拒绝访问",
+                headers={"Cache-Control": "no-store"},
+            )
         return LoginUrlResponse(
             data=LoginUrlData(
                 url=application.frontend_redirect(next_path),
@@ -133,19 +140,12 @@ async def oauth_callback(
 
     response = RedirectResponse(application.frontend_redirect(next_path), status_code=302)
     _clear_state_cookie(response, application)
-    response.set_cookie(
-        key=application.settings.session_cookie_name,
-        value=context.session_id or "",
-        max_age=application.settings.session_ttl_seconds,
-        secure=application.settings.cookie_secure,
-        httponly=True,
-        samesite=application.settings.cookie_samesite,
-        path=application.settings.cookie_path,
-    )
+    clear_portal_logout_cookie(response, application.settings)
+    set_session_cookie(response, application.settings, context.session_id or "")
     return response
 
 
-@router.get("/me", response_model=AuthProfileResponse)
+@router.get("/me")
 async def get_current_profile(
     context: CurrentUser,
     application: AuthApplicationDependency,
@@ -156,12 +156,12 @@ async def get_current_profile(
         _raise_auth_error(exc)
 
 
-@router.get("/permissions", response_model=PermissionInfoResponse)
+@router.get("/permissions")
 async def get_current_permissions(context: CurrentUser) -> PermissionInfoResponse:
     return PermissionInfoResponse(data=context.permission_info)
 
 
-@router.get("/security", response_model=AccountSecurityResponse)
+@router.get("/security")
 async def get_account_security(
     context: CurrentUser,
     application: AuthApplicationDependency,
@@ -169,7 +169,7 @@ async def get_account_security(
     return AccountSecurityResponse(data=application.account_security(context))
 
 
-@router.get("/operation-logs", response_model=OperationLogResponse)
+@router.get("/operation-logs")
 async def get_operation_logs(
     context: CurrentUser,
     application: AuthApplicationDependency,
@@ -190,7 +190,7 @@ async def get_operation_logs(
     return OperationLogResponse(data=data)
 
 
-@router.post("/refresh", response_model=AuthProfileResponse)
+@router.post("/refresh")
 async def refresh_session(
     request: Request,
     context: CurrentUser,
@@ -214,22 +214,34 @@ async def refresh_session(
 async def logout(
     request: Request,
     response: Response,
-    context: CurrentUser,
     application: AuthApplicationDependency,
-) -> LogoutResponse:
-    await application.record_operation(
-        context,
-        action="退出登录",
-        category="登录",
-        detail="主动退出亿级知识图谱平台",
-        **_request_metadata(request),
-    )
-    remote_revoked = await application.logout(context)
-    response.delete_cookie(
-        application.settings.session_cookie_name,
-        path=application.settings.cookie_path,
-        secure=application.settings.cookie_secure,
-        httponly=True,
-        samesite=application.settings.cookie_samesite,
-    )
+    bearer: BearerDependency,
+) -> LogoutResponse | Response:
+    context = None
+    remote_revoked = False
+    try:
+        if application.settings.enabled:
+            session_id = request.cookies.get(application.settings.session_cookie_name)
+            if session_id:
+                context, remote_revoked = await application.logout_session(session_id)
+            elif bearer is not None and bearer.scheme.lower() == "bearer":
+                context = await application.resolve_bearer(bearer.credentials)
+                remote_revoked = await application.logout(context)
+    except AuthenticationError as exc:
+        if exc.status_code != 401:
+            # 存储故障仍报告失败，同时完成浏览器本地清理。
+            failure = JSONResponse({"detail": str(exc)}, status_code=exc.status_code)
+            clear_browser_session(request, failure, application.settings)
+            _clear_state_cookie(failure, application)
+            return failure
+    if context is not None:
+        await application.record_operation(
+            context,
+            action="退出登录",
+            category="登录",
+            detail="主动退出亿级知识图谱平台",
+            **_request_metadata(request),
+        )
+    clear_browser_session(request, response, application.settings)
+    _clear_state_cookie(response, application)
     return LogoutResponse(data=LogoutData(remote_revoked=remote_revoked))

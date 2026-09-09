@@ -220,6 +220,7 @@ def _person_vid_for_row(
     person_kind: str,
     name_field: str,
 ) -> str:
+    _ = spec
     name = clean_text(row.get(name_field))
     if name is None:
         raise RelationDataError("missing person name")

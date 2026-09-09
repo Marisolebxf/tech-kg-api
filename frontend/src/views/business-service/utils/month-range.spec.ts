@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest'
 
-import { isFutureMonth, monthRangeToApiDates } from './month-range'
+import { isFutureMonth, monthRangePairErrors, monthRangeToApiDates } from './month-range'
+
+describe('monthRangePairErrors', () => {
+  it('allows both months to be empty or both to be filled', () => {
+    expect(monthRangePairErrors(undefined, undefined)).toEqual({})
+    expect(monthRangePairErrors('2024-01', '2024-02')).toEqual({})
+  })
+
+  it('requires the missing month when only one is filled', () => {
+    expect(monthRangePairErrors('2024-01', undefined)).toEqual({
+      timeRangeEnd: '开始月份和结束月份必须同时填写',
+    })
+    expect(monthRangePairErrors(undefined, '2024-02')).toEqual({
+      timeRangeStart: '开始月份和结束月份必须同时填写',
+    })
+  })
+})
 
 describe('monthRangeToApiDates', () => {
   it('converts a start month to its first day', () => {

@@ -1,4 +1,5 @@
 import inspect
+import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -11,6 +12,7 @@ from biz.schema.expert_paper_cooperation import (
 
 router = APIRouter(prefix="/kg-construction/expert-paper-cooperation-relations")
 application = ExpertPaperCooperationApplication()
+logger = logging.getLogger(__name__)
 
 
 @router.get("")
@@ -19,7 +21,8 @@ async def describe_expert_paper_cooperation() -> dict[str, object]:
 
 
 @router.post(
-    "/structured-result", response_model=ExpertPaperCooperationStructuredResultOnlyResponse
+    "/structured-result",
+    responses={404: {"description": "请求的资源不存在"}, 500: {"description": "服务内部错误"}},
 )
 async def analyze_expert_paper_cooperation_structured_result(
     body: ExpertPaperCooperationDemoRequest,
@@ -37,6 +40,5 @@ async def analyze_expert_paper_cooperation_structured_result(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"专家论文合作关系结构化结果生成失败: {exc}"
-        ) from exc
+        logger.exception("专家论文合作关系结构化结果生成失败")
+        raise HTTPException(status_code=500, detail="专家论文合作关系结构化结果生成失败") from exc

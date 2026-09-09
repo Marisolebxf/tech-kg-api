@@ -11,7 +11,7 @@ legacy_router = APIRouter(prefix="/kg-service/two-point-achievements")
 application = ExpertCooperationAchievementApplication()
 
 
-async def _describe() -> dict[str, object]:
+def _describe() -> dict[str, object]:
     return application.describe()
 
 
@@ -45,11 +45,11 @@ def _query(body: CooperationAchievementQueryRequest) -> ApiResponse:
 
 
 @router.get("")
-async def describe_expert_cooperation_achievement() -> dict[str, object]:
-    return await _describe()
+def describe_expert_cooperation_achievement() -> dict[str, object]:
+    return _describe()
 
 
-@router.post("/query", response_model=ApiResponse)
+@router.post("/query")
 def query_expert_cooperation_achievement(
     body: CooperationAchievementQueryRequest,
 ) -> ApiResponse:
@@ -57,11 +57,11 @@ def query_expert_cooperation_achievement(
 
 
 @legacy_router.get("")
-async def legacy_describe_two_point_achievements() -> dict[str, object]:
-    return await _describe()
+def legacy_describe_two_point_achievements() -> dict[str, object]:
+    return _describe()
 
 
-@legacy_router.post("", response_model=ApiResponse)
+@legacy_router.post("")
 def legacy_query_two_point_achievements(
     body: CooperationAchievementQueryRequest,
 ) -> ApiResponse:

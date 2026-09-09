@@ -54,7 +54,8 @@ def claimed(service, p=None):
 def test_create_is_idempotent(service):
     first = service.create_case(payload(), actor())
     second = service.create_case(payload(), actor())
-    assert first["id"] == second["id"] and second["duplicate"] is True
+    assert first["id"] == second["id"]
+    assert second["duplicate"] is True
 
 
 def test_atomic_claim_and_optimistic_lock(service):

@@ -5,7 +5,9 @@ WORKDIR /app
 # Docker 构建默认使用阿里 npm 镜像，可通过 build arg 覆盖。
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG VITE_BASE=./
-ARG VITE_API_BASE=/api
+# 默认留空 → 前端代码 fallback 到相对路径 './api'，根路径/网关子路径部署都适用；
+# 需要显式绝对路径时在构建时传入（如 VITE_API_BASE=/bkg_zp/api）。
+ARG VITE_API_BASE=
 ARG VITE_AUTH_ENABLED=false
 ARG VITE_PORTAL_EMBEDDED_DEFAULT=false
 ARG VITE_PORTAL_ALLOWED_ORIGINS=https://edu.itic-sci.com
@@ -31,11 +33,11 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
 
-FROM nginx:1.27-alpine
+FROM nginxinc/nginx-unprivileged:1.27-alpine
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-EXPOSE 80
+EXPOSE 8080
 
 CMD ["nginx", "-g", "daemon off;"]

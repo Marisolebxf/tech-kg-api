@@ -39,7 +39,23 @@ const graphNodeType = (node: IndirectNode, isCore = false): GraphNodeType => {
 
 const propertyString = (properties: Record<string, unknown>, key: string) => {
   const value = properties[key];
-  return value === null || value === undefined ? undefined : String(value);
+  switch (typeof value) {
+    case "string":
+      return value;
+    case "number":
+    case "bigint":
+      return value.toString();
+    case "boolean":
+      return value ? "true" : "false";
+    case "symbol":
+      return value.description;
+    case "function":
+      return value.name;
+    case "object":
+      return value === null ? undefined : JSON.stringify(value);
+    default:
+      return undefined;
+  }
 };
 
 const propertyNumber = (properties: Record<string, unknown>, key: string) => {
@@ -142,7 +158,9 @@ export function buildIndirectRelationGraph(
   const edgeMap = new Map<string, GraphEdgeData>();
   selectedPaths.forEach((path) => {
     path.edges.forEach((edge) => {
-      const key = `${edge.type}:${[edge.source, edge.target].sort().join(":")}`;
+      const key = `${edge.type}:${[edge.source, edge.target]
+        .sort((left, right) => left.localeCompare(right))
+        .join(":")}`;
       if (edgeMap.has(key)) return;
       edgeMap.set(key, {
         id: edge.id || key,

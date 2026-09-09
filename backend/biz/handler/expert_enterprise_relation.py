@@ -18,7 +18,6 @@ async def describe_expert_enterprise_relation() -> dict[str, object]:
 
 @router.post(
     "/build",
-    response_model=ApiResponse,
     dependencies=[Depends(require_platform_admin)],
 )
 async def build_expert_enterprise_relation(req: ExpertEnterpriseBuildRequest) -> ApiResponse:

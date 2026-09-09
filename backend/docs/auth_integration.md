@@ -18,7 +18,7 @@ HttpOnly Session Cookie；`client_secret`、统一用户中心 `access_token` �
 
 ## 门户共享登录态（v2.1）
 
-v2.1 新增了同一主域名下由门户 Cookie 共享 `access_token` 的流程。本系统采用
+v2.1 新增了同一主域名下由门户 Cookie 共享 `portal_access_token` 的流程。本系统采用
 “后端兑换本地会话”的兼容方式：FastAPI 从请求 Cookie 读取门户 token，调用统一
 用户中心 `/check-token` 与 `/v1/get-permission-info` 完成校验，然后创建 Redis
 会话并下发本系统 HttpOnly Session Cookie。token 不写入 localStorage，也不由 Vue
@@ -30,7 +30,7 @@ v2.1 新增了同一主域名下由门户 Cookie 共享 `access_token` 的流程
 
 ```dotenv
 USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED=true
-USER_CENTER_PORTAL_TOKEN_COOKIE=access_token
+USER_CENTER_PORTAL_TOKEN_COOKIE=portal_access_token
 ```
 
 未携带门户 Cookie 或校验失败时仍返回 401，前端会继续使用标准 OAuth2 授权码登录。
@@ -71,7 +71,7 @@ USER_CENTER_OAUTH_BASE_URL=https://edu.itic-sci.com/uc/admin-api/system/oauth2
 USER_CENTER_ACCOUNT_URL=https://edu.itic-sci.com/uc/admin/login?redirect=/index
 USER_CENTER_SCOPE=
 USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED=true
-USER_CENTER_PORTAL_TOKEN_COOKIE=access_token
+USER_CENTER_PORTAL_TOKEN_COOKIE=portal_access_token
 ```
 
 `USER_CENTER_SCOPE` 默认留空。只有统一用户中心已明确给当前应用分配了授权范围时才填写；
@@ -90,12 +90,15 @@ VITE_API_BASE=/bkg_zp/api
 本地尚未获得 OAuth 客户端凭证时，可以在 `backend/.env` 设置：
 
 ```dotenv
+APP_ENV=dev
 AUTH_ENABLED=false
+AUTH_ALLOW_INSECURE_DEV_CONTEXT=true
 AUTH_SESSION_BACKEND=memory
 ```
 
-此模式会返回明确标记为本地开发用户的资料，不连接 Redis 和用户中心；生产环境
-不得关闭鉴权。
+只有 `APP_ENV` 为 `dev`、`development`、`local` 或 `test`，且显式开启第二个开关时，
+此模式才会返回本地开发用户资料。否则所有受保护接口返回 503。生产环境不得关闭鉴权，
+也不得启用 `AUTH_ALLOW_INSECURE_DEV_CONTEXT`。
 
 ## 安全约束
 

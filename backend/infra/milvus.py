@@ -38,7 +38,7 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunsplit
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,11 @@ class MilvusSettings:
     @property
     def client_uri(self) -> str:
         """Return the URI used by the high-level ``MilvusClient`` API."""
-        return self.uri or f"http://{self.host}:{self.port}"
+        if self.uri:
+            return self.uri
+        # The local Milvus service is normally isolated on the compose network.
+        # Production deployments can supply a TLS-enabled MILVUS_URI explicitly.
+        return urlunsplit(("http", f"{self.host}:{self.port}", "", "", ""))
 
     @classmethod
     def from_env(cls) -> MilvusSettings:
@@ -148,7 +152,7 @@ def get_milvus_client() -> Any:
         if _last_connect_error is not None and time.monotonic() < _connect_cooldown_until:
             # 冷却窗口内直接抛上次的错误，不再连一遍
             raise _last_connect_error
-        MilvusClient = _load_milvus_client_cls()
+        milvus_client_class = _load_milvus_client_cls()
         settings = MilvusSettings.from_env()
         logger.info(
             "Connecting to Milvus uri=%s db=%s",
@@ -163,7 +167,7 @@ def get_milvus_client() -> Any:
         if settings.token:
             kwargs["token"] = settings.token
         try:
-            _client = MilvusClient(**kwargs)
+            _client = milvus_client_class(**kwargs)
         except Exception as exc:
             _last_connect_error = exc
             _connect_cooldown_until = time.monotonic() + _CONNECT_RETRY_COOLDOWN_SECONDS

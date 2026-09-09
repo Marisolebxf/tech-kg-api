@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlunsplit
 
 from dotenv import load_dotenv
 
@@ -296,9 +297,14 @@ def main() -> None:
         parser.error("--resume 与 --rebuild 不能同时使用")
     from pymilvus import MilvusClient
 
-    uri = (
-        os.getenv("MILVUS_URI")
-        or f"http://{os.getenv('MILVUS_HOST', '127.0.0.1')}:{os.getenv('MILVUS_PORT', '19530')}"
+    uri = os.getenv("MILVUS_URI") or urlunsplit(
+        (
+            "http",
+            f"{os.getenv('MILVUS_HOST', '127.0.0.1')}:{os.getenv('MILVUS_PORT', '19530')}",
+            "",
+            "",
+            "",
+        )
     )
     client = MilvusClient(uri=uri, token=os.getenv("MILVUS_TOKEN") or None)
     graph = get_trs_graph_client()

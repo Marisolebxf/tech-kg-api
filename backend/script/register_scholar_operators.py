@@ -127,7 +127,7 @@ async def _run(*, invoke: bool) -> int:
     from main import app  # noqa: WPS433 - 延迟导入避免循环
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://kg-internal") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="https://kg-internal") as client:
         registered: list[dict[str, object]] = []
         for definition in _OPERATOR_DEFS:
             result = await _register_one(client, definition)

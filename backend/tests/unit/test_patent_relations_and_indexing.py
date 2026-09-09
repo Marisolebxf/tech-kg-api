@@ -9,7 +9,8 @@ def test_hashed_bm25_roundtrip_and_normalization():
     model.observe("知识图谱 graph database")
     model.observe("图数据库")
     vector = model.encode("知识图谱")
-    assert vector and all(0 <= key < 128 for key in vector)
+    assert vector
+    assert all(0 <= key < 128 for key in vector)
     restored = HashedBM25.from_dict(model.to_dict())
     assert restored.encode("知识图谱") == vector
     assert normalize_text(" ＣＮ-1 A ") == "cn-1 a"

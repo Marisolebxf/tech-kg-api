@@ -79,11 +79,11 @@ AUTH_COOKIE_SECURE=true
 AUTH_COOKIE_SAMESITE=lax
 AUTH_COOKIE_PATH=/bkg_zp
 USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED=true
-USER_CENTER_PORTAL_TOKEN_COOKIE=access_token
+USER_CENTER_PORTAL_TOKEN_COOKIE=portal_access_token
 USER_CENTER_REDIRECT_URI=https://edu.itic-sci.com/bkg_zp/api/v1/auth/callback
 ```
 
-统一门户写入的 `access_token` Cookie 必须能随 `/bkg_zp` 后端请求发送。推荐门户、
+统一门户写入的 `portal_access_token` Cookie 必须能随 `/bkg_zp` 后端请求发送。推荐门户、
 统一用户中心和子系统部署在同一主域名下，并由部署方确认 Cookie 的 `Domain`、
 `Path`、`Secure` 和 `SameSite`。本系统后端校验该 Token 后创建 HttpOnly Redis 会话；
 Vue 不读取、不持久化统一用户中心 Token。

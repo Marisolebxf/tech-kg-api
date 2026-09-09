@@ -11,7 +11,7 @@ async def list_modules() -> dict[str, object]:
     return {"items": application.list_modules()}
 
 
-@router.get("/modules/{module_code}")
+@router.get("/modules/{module_code}", responses={404: {"description": "请求的资源不存在"}})
 async def get_module(module_code: str) -> dict[str, object]:
     module = application.get_module(module_code)
     if module is None:

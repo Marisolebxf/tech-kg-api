@@ -13,7 +13,7 @@ export interface ApiResponse<T> {
 }
 
 export interface CooperationItem {
-  type: 'paper' | 'patent' | 'project' | string
+  type: 'paper' | 'patent' | 'project' | (string & {})
   id: string
   title: string
   time?: string | null

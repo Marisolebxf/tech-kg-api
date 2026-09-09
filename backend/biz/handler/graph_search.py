@@ -9,20 +9,30 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from biz.handler import get_cache
 from biz.schemas.common import ApiResponse
 from infra.graph_db import TRSGraphClient, get_trs_graph_client
 from infra.graph_db.config import TRSGraphSettings
 from infra.graph_db.exceptions import GraphRequestError
 
 router = APIRouter(prefix="/graph-search", tags=["graph-search"])
+logger = logging.getLogger(__name__)
+
+
+def _graph_query_error(operation: str) -> ApiResponse:
+    logger.exception("图数据查询失败 operation=%s", operation)
+    return ApiResponse(code=500, success=False, msg="图数据查询失败")
+
 
 # 按空间缓存客户端（避免每次请求重建连接）
 _space_clients: dict[str, TRSGraphClient] = {}
@@ -324,7 +334,7 @@ def _typed_path_from_record(
 # ---------- API 端点 ----------
 
 
-@router.get("/nodes/{node_id}", response_model=ApiResponse)
+@router.get("/nodes/{node_id}")
 async def get_node(
     node_id: str,
     space: str | None = Query(None, description="图空间，如 dev/techkg，缺省用默认空间"),
@@ -335,11 +345,11 @@ async def get_node(
         if node is None:
             return ApiResponse(code=404, success=False, msg=f"节点不存在: {node_id}")
         return ApiResponse(data=_node_to_data(node).model_dump())
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("get_node")
 
 
-@router.get("/nodes", response_model=ApiResponse)
+@router.get("/nodes")
 async def list_nodes(
     label: str = Query(..., description="节点标签，如 Paper/Person/Journal/Report"),
     limit: int = Query(20, ge=1, le=500),
@@ -357,11 +367,11 @@ async def list_nodes(
         items = [_node_to_data(n).model_dump() for n in result.items]
         total = await _node_count_cached(client, space, label)
         return ApiResponse(data=NodeListData(items=items, total=total).model_dump())
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("list_nodes")
 
 
-@router.post("/nodes/search", response_model=ApiResponse)
+@router.post("/nodes/search")
 async def search_nodes(
     label: str = Query(..., description="节点标签"),
     properties: dict[str, Any] | None = None,
@@ -375,11 +385,11 @@ async def search_nodes(
         )
         items = [_node_to_data(n).model_dump() for n in result.items]
         return ApiResponse(data=NodeListData(items=items, total=len(items)).model_dump())
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("search_nodes")
 
 
-@router.post("/paths/search", response_model=ApiResponse)
+@router.post("/paths/search")
 async def search_typed_paths(body: TypedPathSearchRequest) -> ApiResponse:
     """按逐跳边类型和方向查询全部匹配路径，支持中间节点属性过滤与分页。"""
     try:
@@ -409,11 +419,11 @@ async def search_typed_paths(body: TypedPathSearchRequest) -> ApiResponse:
             offset=body.offset,
         )
         return ApiResponse(data=data.model_dump())
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("search_typed_paths")
 
 
-@router.get("/subgraph/{node_id}", response_model=ApiResponse)
+@router.get("/subgraph/{node_id}")
 async def get_subgraph(
     node_id: str,
     depth: int = Query(1, ge=1, le=3, description="跳数 1-3"),
@@ -438,8 +448,8 @@ async def get_subgraph(
         if subgraph is None:
             return ApiResponse(code=404, success=False, msg=f"节点不存在: {node_id}")
         return ApiResponse(data=SubgraphData(**subgraph).model_dump())
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("get_subgraph")
 
 
 def _collect_subgraph(
@@ -495,7 +505,7 @@ def _collect_subgraph(
     return {"nodes": nodes, "edges": edges}
 
 
-@router.get("/filtered-subgraph/{node_id}", response_model=ApiResponse)
+@router.get("/filtered-subgraph/{node_id}")
 async def get_filtered_subgraph(
     node_id: str,
     edge_types: str = Query(..., description="逗号分隔的边类型，如 EXECUTIVE_OF,HAS_PARTICPTANT"),
@@ -563,11 +573,11 @@ async def get_filtered_subgraph(
             edges = edges[: limit * len(et_set)]
 
         return ApiResponse(data=SubgraphData(nodes=nodes, edges=edges).model_dump())
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("get_filtered_subgraph")
 
 
-@router.get("/node/{node_id}/edges", response_model=ApiResponse)
+@router.get("/node/{node_id}/edges")
 async def get_node_edges(
     node_id: str,
     direction: Literal["out", "in", "both"] = Query("both", description="out/in/both"),
@@ -586,11 +596,11 @@ async def get_node_edges(
         )
         edges = [_edge_to_data(e).model_dump() for e in edge_list]
         return ApiResponse(data={"edges": edges, "total": len(edges)})
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("get_node_edges")
 
 
-@router.get("/node/{node_id}/neighbours", response_model=ApiResponse)
+@router.get("/node/{node_id}/neighbours")
 async def get_neighbours(
     node_id: str,
     direction: Literal["out", "in", "both"] = Query("both", description="out/in/both"),
@@ -605,11 +615,11 @@ async def get_neighbours(
         )
         nodes = [_node_to_data(n).model_dump() for n in neighbours]
         return ApiResponse(data={"nodes": nodes, "total": len(nodes)})
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("get_neighbours")
 
 
-@router.get("/shortest-path", response_model=ApiResponse)
+@router.get("/shortest-path")
 async def shortest_path(
     source: str = Query(..., description="起始节点 VID"),
     target: str = Query(..., description="目标节点 VID"),
@@ -624,34 +634,47 @@ async def shortest_path(
         nodes = [_node_to_data(n).model_dump() for n in path.nodes]
         edges = [_edge_to_data(e).model_dump() for e in path.edges]
         return ApiResponse(data=PathData(nodes=nodes, edges=edges, found=True).model_dump())
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("shortest_path")
 
 
-@router.get("/spaces", response_model=ApiResponse)
+@router.get("/spaces")
 async def list_spaces() -> ApiResponse:
     """列出所有可用的图空间。"""
     try:
         names = _get_client(None).list_spaces()
         return ApiResponse(data={"spaces": names})
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("list_spaces")
 
 
-@router.get("/stats", response_model=ApiResponse)
+@router.get("/stats")
 async def get_stats(
+    request: Request,
     space: str | None = Query(None, description="图空间"),
     refresh: bool = Query(False, description="强制重新统计，忽略缓存"),
-) -> ApiResponse:
+) -> Response:
     """图统计：各标签节点数 + 各边类型边数（前端仪表盘用）。
 
     结果按空间缓存 5 分钟：底层 count 是全量扫描，实时统计一次要几十秒。
+    外层再套 GET 结果缓存（命中返回预序列化 JSON，跳过序列化开销）；
+    ``refresh=true`` 表示调用方要最新数据，跳过外层缓存且不写入。
     """
+    if not refresh:
+        cached = get_cache.try_get("graph-search:stats", request)
+        if cached is not None:
+            return cached
     try:
         data = await _load_stats(space, refresh=refresh)
-        return ApiResponse(data=data)
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+        payload = ApiResponse(data=data)
+    except Exception:
+        payload = _graph_query_error("get_stats")
+    if refresh:
+        return Response(
+            content=json.dumps(payload.model_dump(), ensure_ascii=False),
+            media_type="application/json",
+        )
+    return get_cache.store("graph-search:stats", request, payload.model_dump())
 
 
 async def _load_stats(space: str | None, *, refresh: bool) -> dict[str, Any]:

@@ -2,8 +2,8 @@
 
 数据流：
 1. ``expertAId`` 必填。按 VID / scholar_id / 姓名定位专家A；查不到 → 空结果。
-2. 若 ``expertBId`` 为空：不查询专家B、不拉合作关系，仅返回专家A的节点
-   （``items`` 为空，``graph`` 仅含 A 节点，``source.reason="anchor_a_only"``）。
+2. 若 ``expertBId`` 为空：返回专家A的全部直接关系（按共同论文数降序取 ``limit`` 条）；
+   一条关系都没有时退回仅返回 A 节点（``source.reason="no_relation_for_a"``）。
 3. 若 ``expertBId`` 非空：定位专家B；查不到 → 空结果。在 A、B 之间找一条
    ``COAUTHOR_WITH`` 边；找不到 → 空结果。找到则据此组装唯一一条关系。
 4. 机构过滤 & 时间过滤：在服务层按 ``institution`` 关键字、``relation_time`` 过滤该条关系。
@@ -15,11 +15,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 import os
 import re
 import threading
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from infra.graph_api_client import GraphAPIError, graph_api
@@ -58,7 +61,11 @@ _FALLBACK_REASON_TEXT = {
     "no_relation_between_a_b": "两位专家之间在图库中不存在直接合作关系",
     "institution_filtered": "该关系不匹配所给机构关键词",
     "anchor_a_only": "已定位到专家A，未指定专家B，仅返回专家A节点",
+    "no_relation_for_a": "图库中该专家没有任何直接合作关系",
 }
+
+# 补对端节点详情时的并发上限，避免 limit=100 时瞬间打满 trs-graph。
+_PEER_FETCH_CONCURRENCY = 5
 
 
 class ExpertDirectRelationService(KGModuleScaffoldService):
@@ -74,7 +81,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         start_time: str | None = None,
         end_time: str | None = None,
         limit: int = 10,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
+        _ = data_source
         normalized_limit = max(1, min(int(limit or 10), MAX_QUERY_LIMIT))
         a_keyword = (expert_a_id or "").strip()
         b_keyword = (expert_b_id or "").strip()
@@ -103,19 +112,32 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         fallback_reason: str | None = None
 
         try:
-            async with graph_api() as client:
+            async with graph_api(auth_headers=auth_headers) as client:
                 node_a = await self._find_person(client, a_keyword)
                 if node_a is None:
                     fallback_reason = "anchor_a_not_found"
                 elif not b_keyword:
-                    # 仅指定专家A：不查询专家B、不拉合作关系，只返回专家A的节点。
-                    anchor_only_node = node_a
-                    source = {
-                        "requested": "all",
-                        "actual": "graph-api",
-                        "fallback": False,
-                        "reason": "anchor_a_only",
-                    }
+                    # 仅指定专家A：返回该专家的全部直接关系（按共同论文数降序取 limit 条）。
+                    collected = await self._collect_relations(
+                        client, node_a, limit=normalized_limit
+                    )
+                    if institution:
+                        collected = [
+                            row for row in collected if self._matches_institution(row, institution)
+                        ]
+                        if not collected:
+                            fallback_reason = "institution_filtered"
+                    if collected:
+                        rows = collected
+                    elif fallback_reason is None:
+                        # A 命中但一条直接关系都没有：仍然把 A 节点画出来，别给一张空图。
+                        anchor_only_node = node_a
+                        source = {
+                            "requested": "all",
+                            "actual": "graph-api",
+                            "fallback": False,
+                            "reason": "no_relation_for_a",
+                        }
                 else:
                     node_b = await self._find_person(client, b_keyword)
                     if node_b is None:
@@ -229,6 +251,69 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             if peer_id == b_id:
                 return edge
         return None
+
+    async def _collect_relations(
+        self,
+        client: Any,
+        node_a: dict[str, Any],
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """拉取专家A的全部直接关系，按共同论文数降序返回前 ``limit`` 条。
+
+        先按边属性排序，只对最终要返回的对端取节点详情，避免为一百条边打一百次
+        ``get_node``。
+
+        Args:
+            client: 图查询 API 客户端。
+            node_a: 已定位的专家A节点。
+            limit: 最多返回多少条关系。
+
+        Returns:
+            ``_build_row`` 结构的关系行列表；没有任何直接关系时为空列表。
+        """
+        a_id = str(node_a.get("id") or "")
+        edges = await client.get_node_edges(
+            a_id, edge_type="COAUTHOR_WITH", limit=_MAX_EDGES_PER_EXPERT
+        )
+
+        def _co_paper_count(edge: dict[str, Any]) -> int:
+            props = edge.get("properties") or {}
+            try:
+                return int(props.get("co_paper_count") or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        peers: list[tuple[str, dict[str, Any]]] = []
+        seen: set[str] = set()
+        for edge in sorted(edges, key=_co_paper_count, reverse=True):
+            peer_id = str(
+                edge.get("target") if str(edge.get("source")) == a_id else edge.get("source")
+            )
+            if not peer_id or peer_id == a_id or peer_id in seen:
+                continue
+            seen.add(peer_id)
+            peers.append((peer_id, edge))
+            if len(peers) >= limit:
+                break
+
+        # 对端节点相互独立，并发取详情；单个取不到就跳过，不影响其余关系。
+        semaphore = asyncio.Semaphore(_PEER_FETCH_CONCURRENCY)
+
+        async def _resolve(peer_id: str) -> dict[str, Any] | None:
+            async with semaphore:
+                try:
+                    return await client.get_node(peer_id)
+                except GraphAPIError:
+                    return None
+
+        nodes = await asyncio.gather(*[_resolve(peer_id) for peer_id, _ in peers])
+        rows: list[dict[str, Any]] = []
+        for (_, edge), node_b in zip(peers, nodes, strict=True):
+            if node_b is None:
+                continue
+            rows.append(self._build_row(node_a, node_b, edge))
+        return rows
 
     async def _find_person(self, client: Any, keyword: str) -> dict[str, Any] | None:
         """按 VID / scholar_id / 姓名定位一个 Person 节点。
@@ -381,7 +466,10 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             return f"{year}-{int(month):02d}-{int(day or 1):02d}"
 
         lower = f"{start[:7]}-01" if start else ""
-        upper = f"{end[:7]}-31" if end and len(end) == 7 else end[:10] if end else ""
+        if end and len(end) == 7:
+            upper = f"{end[:7]}-31"
+        else:
+            upper = end[:10] if end else ""
         filtered: list[dict[str, Any]] = []
         for row in rows:
             relation_date = normalized_relation_date(row)
@@ -398,7 +486,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
     def _build_item(self, row: dict[str, Any]) -> dict[str, Any]:
         expert_a_org = str(row.get("expert_a_org") or "")
         expert_b_org = str(row.get("expert_b_org") or "")
-        institution = str(row.get("institution") or expert_a_org or expert_b_org or "合作关系")
+        # 只有 A、B 机构真实相同时才算"共同机构"；否则不能把单侧机构包装成双方共有属性。
+        shared_institution = expert_a_org if expert_a_org and expert_a_org == expert_b_org else ""
+        institution = shared_institution or "合作关系"
         evidence_kind = str(row.get("evidence_kind") or "paper")
         evidence_count = int(row.get("evidence_count") or row.get("co_paper_count") or 0)
 
@@ -408,16 +498,17 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             reason_tags = ["共项目"] if evidence_count else ["项目关联"]
         else:
             reason_tags = ["共论文"] if evidence_count else ["合作关系"]
-        if expert_a_org and expert_b_org and expert_a_org == expert_b_org:
+        if shared_institution:
             reason_tags.insert(0, "同机构")
 
-        relation_strength = min(99, max(60, 60 + evidence_count * 5 + len(reason_tags) * 4))
+        # 对数缩放：证据数量差距很大时（如 11 篇 vs 139 篇）仍能拉开置信度档位，
+        # 不再是线性公式一撞到 99 上限就全部趴平。
+        relation_strength = min(99, round(60 + math.log1p(evidence_count) * 10))
         relation_time = row.get("relation_time")
-        last_updated_at = (
-            relation_time.strftime("%Y-%m-%d %H:%M:%S")
-            if hasattr(relation_time, "strftime")
-            else (str(relation_time) if relation_time else None)
-        )
+        if hasattr(relation_time, "strftime"):
+            last_updated_at = relation_time.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            last_updated_at = str(relation_time) if relation_time else None
 
         expert_a = {
             "expertId": str(row.get("expert_a_id") or ""),
@@ -457,7 +548,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 ["专家 B 机构", expert_b["organization"] or ""],
                 ["专家 B H指数", expert_b["hIndex"]],
                 ["关系类型", "直接关系"],
-                ["共同机构/主关系", institution],
+                ["共同机构", shared_institution or "无"],
                 ["证据类型", self._evidence_label(evidence_kind)],
                 ["证据数量", evidence_count],
                 ["判定依据", reason_tags],
@@ -623,67 +714,69 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         }
 
     def _build_graph(self, items: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+        """组装展示用子图。
+
+        机构边只按各专家自己的 ``organization`` 连线：同机构时两人自然汇聚到同一个
+        机构节点，跨机构时各连各的，不再用 "合作关系" 之类的占位字符串伪造一个
+        双方共有的机构节点。没有机构属性的专家不产生机构节点与机构边。
+        """
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
         seen_nodes: set[str] = set()
+        seen_edges: set[tuple[str, str, str]] = set()
 
-        for item in items[:4]:
+        def add_node(node: dict[str, Any]) -> None:
+            if node["id"] in seen_nodes:
+                return
+            seen_nodes.add(node["id"])
+            nodes.append(node)
+
+        def add_edge(source: str, target: str, label: str, data: dict[str, Any]) -> None:
+            key = (source, target, label)
+            if key in seen_edges:
+                return
+            seen_edges.add(key)
+            edges.append({"source": source, "target": target, "label": label, "data": data})
+
+        for item in items:
             expert_a = item["expertA"]
             expert_b = item["expertB"]
-            institution = item["institution"] or "合作关系"
-            institution_id = f"institution:{institution}"
 
-            for node in (
-                {
-                    "id": expert_a["expertId"],
-                    "type": "expert",
-                    "label": expert_a["name"],
-                    "subtitle": expert_a["organization"],
-                    "data": {"role": "A"},
-                },
-                {
-                    "id": expert_b["expertId"],
-                    "type": "expert",
-                    "label": expert_b["name"],
-                    "subtitle": expert_b["organization"],
-                    "data": {"role": "B"},
-                },
-                {
-                    "id": institution_id,
-                    "type": "institution",
-                    "label": institution,
-                    "subtitle": "关系归属",
-                    "data": {},
-                },
-            ):
-                if node["id"] not in seen_nodes:
-                    seen_nodes.add(node["id"])
-                    nodes.append(node)
+            for expert, role in ((expert_a, "A"), (expert_b, "B")):
+                add_node(
+                    {
+                        "id": expert["expertId"],
+                        "type": "expert",
+                        "label": expert["name"],
+                        "subtitle": expert["organization"],
+                        "data": {"role": role},
+                    }
+                )
 
-            edges.append(
-                {
-                    "source": expert_a["expertId"],
-                    "target": expert_b["expertId"],
-                    "label": f"直接关系 / {item['relationSummary']}",
-                    "data": {"strength": item["relationStrength"]},
-                }
+            add_edge(
+                expert_a["expertId"],
+                expert_b["expertId"],
+                f"直接关系 / {item['relationSummary']}",
+                {"strength": item["relationStrength"]},
             )
-            edges.append(
-                {
-                    "source": expert_a["expertId"],
-                    "target": institution_id,
-                    "label": "关联机构",
-                    "data": {},
-                }
-            )
-            edges.append(
-                {
-                    "source": expert_b["expertId"],
-                    "target": institution_id,
-                    "label": "关联机构",
-                    "data": {},
-                }
-            )
+
+            # 机构边逐个专家按其真实 organization 连线，避免出现该专家并不存在的机构关系，
+            # 也不再用 "合作关系" 兜底字符串伪造一个双方共有的机构节点。
+            for expert in (expert_a, expert_b):
+                organization = str(expert.get("organization") or "").strip()
+                if not organization:
+                    continue
+                institution_id = f"institution:{organization}"
+                add_node(
+                    {
+                        "id": institution_id,
+                        "type": "institution",
+                        "label": organization,
+                        "subtitle": "任职机构",
+                        "data": {},
+                    }
+                )
+                add_edge(expert["expertId"], institution_id, "关联机构", {})
 
         return {"nodes": nodes, "edges": edges}
 

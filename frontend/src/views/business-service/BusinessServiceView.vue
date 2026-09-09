@@ -16,11 +16,15 @@ function handleViewTabKeydown(event: KeyboardEvent) {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
   event.preventDefault();
   const current = viewOrder.indexOf(activeView.value);
-  const next = event.key === "Home"
-    ? 0
-    : event.key === "End"
-      ? viewOrder.length - 1
-      : (current + (event.key === "ArrowRight" ? 1 : -1) + viewOrder.length) % viewOrder.length;
+  let next: number;
+  if (event.key === "Home") {
+    next = 0;
+  } else if (event.key === "End") {
+    next = viewOrder.length - 1;
+  } else {
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    next = (current + direction + viewOrder.length) % viewOrder.length;
+  }
   activeView.value = viewOrder[next];
   requestAnimationFrame(() => {
     document.getElementById(`business-view-tab-`)?.focus();
@@ -47,10 +51,13 @@ const requestJson = computed(() =>
 const responseJson = computed(() =>
   JSON.stringify(moduleInfo.value.responseExample, null, 2),
 );
+const escapedRequestJson = computed(() =>
+  requestJson.value.replaceAll("'", String.raw`\'`),
+);
 const curlSample = computed(
-  () => `curl -X ${moduleInfo.value.method} "${moduleInfo.value.endpoint}" \\
+  () => String.raw`curl -X ${moduleInfo.value.method} "${moduleInfo.value.endpoint}" \\
   -H "Content-Type: application/json" \\
-  -d '${requestJson.value.replaceAll("'", "\\'")}'`,
+  -d '${escapedRequestJson.value}'`,
 );
 
 watch(

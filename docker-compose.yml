@@ -2,6 +2,7 @@ services:
   api:
     build:
       context: ./backend
+      target: ${API_BUILD_TARGET:-runtime}
       args:
         PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     container_name: tech-kg-api
@@ -73,11 +74,14 @@ services:
       OPERATOR_S3_SECRET_ACCESS_KEY: ${OPERATOR_S3_SECRET_ACCESS_KEY:-rustfsadmin}
       OPERATOR_S3_REGION: ${OPERATOR_S3_REGION:-us-east-1}
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      # 即使 AUTH_ENABLED 被误设为 false，生产环境也必须默认拒绝匿名访问。
+      AUTH_ALLOW_INSECURE_DEV_CONTEXT: ${AUTH_ALLOW_INSECURE_DEV_CONTEXT:-false}
+      API_DOCS_ENABLED: ${API_DOCS_ENABLED:-false}
       AUTH_SESSION_BACKEND: redis
       AUTH_SESSION_COOKIE: ${AUTH_SESSION_COOKIE:-techkg_session}
-      # 统一门户部署默认复用主域 access_token；无该 Cookie 时仍回退标准 OAuth2 登录。
+      # 统一门户部署默认复用主域 portal_access_token；无该 Cookie 时仍回退标准 OAuth2 登录。
       USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED: ${USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED:-true}
-      USER_CENTER_PORTAL_TOKEN_COOKIE: ${USER_CENTER_PORTAL_TOKEN_COOKIE:-access_token}
+      USER_CENTER_PORTAL_TOKEN_COOKIE: ${USER_CENTER_PORTAL_TOKEN_COOKIE:-portal_access_token}
       # 连续 30 分钟无已认证请求后，本地会话失效。
       AUTH_SESSION_TTL_SECONDS: ${AUTH_SESSION_TTL_SECONDS:-1800}
       AUTH_STATE_TTL_SECONDS: ${AUTH_STATE_TTL_SECONDS:-300}
@@ -123,6 +127,7 @@ services:
   m3e-embedding:
     build:
       context: ./backend
+      target: runtime
       args:
         PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     container_name: tech-kg-api-m3e-embedding
@@ -194,6 +199,7 @@ services:
   temporal-worker:
     build:
       context: ./backend
+      target: runtime
       args:
         PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     container_name: tech-kg-temporal-worker
@@ -267,11 +273,11 @@ services:
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
         VITE_BASE: ${VITE_BASE:-./}
-        VITE_API_BASE: ${VITE_API_BASE:-/api}
+        VITE_API_BASE: ${VITE_API_BASE:-}
         VITE_AUTH_ENABLED: ${VITE_AUTH_ENABLED:-false}
     container_name: tech-kg-web
     ports:
-      - "8088:80"
+      - "8088:8080"
     depends_on:
       - api
     networks:

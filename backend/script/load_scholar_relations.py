@@ -47,7 +47,7 @@ import logging
 import os
 import time
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import select, text
 
@@ -64,7 +64,7 @@ from script.scholar_provenance import (
 
 logger = logging.getLogger("script.load_scholar_relations")
 
-BATCH_ID = f"BATCH_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_scholar_rel"
+BATCH_ID = f"BATCH_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_scholar_rel"
 
 # 学者的机构信息来自学者表本身；对齐到正式 Organization 之前机构溯源表就是 dwd_scholar。
 ORGANIZATION_BASE_TABLE = "dwd_scholar"
@@ -216,6 +216,8 @@ def _iter_coauthor_rows(session, batch_size: int = 1000) -> Iterable[dict]:
                 DwdScholarCoauthor.scholar_id,
                 DwdScholarCoauthor.co_scholar_id,
                 DwdScholarCoauthor.co_paper_count,
+                DwdScholarCoauthor.update_time,
+                DwdScholarCoauthor.create_time,
             )
             .where(DwdScholarCoauthor.status == 1)
             .order_by(DwdScholarCoauthor.scholar_id, DwdScholarCoauthor.co_scholar_id)
@@ -225,10 +227,13 @@ def _iter_coauthor_rows(session, batch_size: int = 1000) -> Iterable[dict]:
         if not rows:
             break
         for r in rows:
+            # 与 dao/scholar.py 直查口径一致：无真实合作时间字段，用行更新时间代理
+            rel_time = r.update_time or r.create_time
             yield {
                 "scholar_id": r.scholar_id,
                 "co_scholar_id": r.co_scholar_id,
                 "co_paper_count": int(r.co_paper_count or 0),
+                "relation_time": rel_time.strftime("%Y-%m-%d %H:%M:%S") if rel_time else None,
             }
         offset += len(rows)
         if len(rows) < batch_size:
@@ -277,6 +282,9 @@ def ensure_schema(graph) -> None:
             ("source_record_id", "string"),
             ("ingest_batch", "string"),
             ("ingest_time", "string"),
+        ],
+        "COAUTHOR_WITH": [
+            ("relation_time", "string"),
         ],
         "STUDIED_AT": [
             ("degree_zh", "string"),
@@ -382,7 +390,7 @@ def load_studied_at(
 
     仅当教育院校名能匹配图中已存在 Organization 时写入；匹配不到则跳过，不建桩 org。
     """
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     ok = skipped = shown = 0
     index = org_index or {}
 
@@ -444,7 +452,7 @@ def load_affiliations(
     Returns:
         统计字典，含写入条数、无机构跳过条数、桩机构条数。
     """
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     ok = skipped = shown = placeholder = 0
 
     for rec in _iter_scholar_affiliations(session):
@@ -515,7 +523,7 @@ def load_affiliations(
 
 def load_coauthors(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
     """写入 COAUTHOR_WITH 边。返回统计信息。"""
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     ok = shown = 0
 
     for rec in _iter_coauthor_rows(session):
@@ -524,6 +532,7 @@ def load_coauthors(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
         rid = f"{rec['scholar_id']}_{rec['co_scholar_id']}"
         props = {
             "co_paper_count": rec["co_paper_count"],
+            "relation_time": rec["relation_time"],
             "source_table": "dwd_scholar_coauthor",
             "source_record_id": rid,
             "ingest_batch": BATCH_ID,
@@ -557,7 +566,7 @@ def load_authored_by_fallback(session, graph, *, dry_run: bool, preview: int = 5
     对每个 Paper / Person VID 通过 ``graph.get_node`` 做一次存在性探测并缓存，
     避免重复查询同一顶点。
     """
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     written = shown = 0
     skipped_missing_paper = skipped_missing_person = 0
 

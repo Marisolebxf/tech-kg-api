@@ -155,7 +155,6 @@ def cleanup_project_stubs(
                     report["nodes_deleted"] += 1
                     continue
                 try:
-                    # detach=True：若仍有非项目域边一并摘掉，避免删点失败
                     if graph.delete_node(vid, detach=True):
                         report["nodes_deleted"] += 1
                 except Exception as exc:  # noqa: BLE001

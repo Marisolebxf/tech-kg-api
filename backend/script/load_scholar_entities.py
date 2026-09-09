@@ -26,7 +26,7 @@ import argparse
 import logging
 import os
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select, text
@@ -46,7 +46,7 @@ from script.scholar_provenance import (
 
 logger = logging.getLogger("script.load_scholar_entities")
 
-BATCH_ID = f"BATCH_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_scholar_entities"
+BATCH_ID = f"BATCH_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_scholar_entities"
 
 # 学者的机构信息（scholar_org_id / scholar_org_name_*）来自学者表本身，
 # 对齐到正式 Organization 之前，机构溯源表就是 dwd_scholar。
@@ -314,7 +314,7 @@ def load_persons(
     ``since``/``scholar_id``/``limit`` 透传给 :func:`_iter_scholars`(增量/定向/采样)。
     返回 ``written`` 与本批 ``max_update_time``(供增量前进水位)。
     """
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
     talent_flags = _fetch_talent_flags(session)
     logger.info("preloaded %d talent_flag rows", len(talent_flags))

@@ -26,7 +26,7 @@ def normalize_alignment_text(value: Any) -> str:
     if value is None:
         return ""
     text = unicodedata.normalize("NFKC", str(value)).casefold().strip()
-    text = re.sub(r"[\s\u3000]+", " ", text)
+    text = re.sub(r"\s+", " ", text)
     text = re.sub(r"[()（）【】\[\],，。.;；:：'\"“”‘’]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
@@ -300,7 +300,7 @@ class OrganizationHybridMatcher:
         retrieval_score = max(0.0, min(float(hit.score), 1.0))
         score = 0.60 * name_score + 0.25 * retrieval_score
         evidence: list[str] = []
-        if name_score == 1.0:
+        if math.isclose(name_score, 1.0):
             evidence.append("normalized_name_exact")
         elif name_score >= 0.9:
             evidence.append("name_high_similarity")
@@ -331,7 +331,9 @@ class OrganizationHybridMatcher:
             if address_score >= 0.85:
                 evidence.append("address_high_similarity")
         score = max(0.0, min(score + structured_weight, 1.0))
-        if name_score == 1.0 and not any(item.endswith("_conflict") for item in evidence):
+        if math.isclose(name_score, 1.0) and not any(
+            item.endswith("_conflict") for item in evidence
+        ):
             score = max(score, 0.95)
         return ScoredOrganizationCandidate(
             vid=hit.vid,

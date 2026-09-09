@@ -21,7 +21,8 @@ def normalize_keyword(value: str | None) -> str:
 
 
 def md5_hex(value: str) -> str:
-    return hashlib.md5(value.encode("utf-8")).hexdigest()
+    # Stable graph identifier only; it is not used for integrity or authentication.
+    return hashlib.md5(value.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def person_vid(name: str) -> str:
@@ -128,9 +129,6 @@ def to_int(value: Any) -> int:
         return 0
 
 
-# 实体（Project）置信度核心字段：标题为强字段，其余按完整度加权。
-# 与关系匹配置信度（confidence_from_method，写在边上）互补：这里度量
-# “这条项目源记录本身有多完整可信”，与匹配结果无关、可在灌点阶段一次算定。
 PROJECT_CONFIDENCE_FIELDS = (
     "title",
     "abstract",
@@ -147,9 +145,9 @@ def _has_value(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip() != ""
     if isinstance(value, Decimal):
-        return float(value) != 0.0
+        return bool(value)
     if isinstance(value, (int, float)):
-        return float(value) != 0.0
+        return bool(value)
     return bool(value)
 
 

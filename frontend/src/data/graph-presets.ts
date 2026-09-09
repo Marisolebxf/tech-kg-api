@@ -153,9 +153,21 @@ const nodeSourceMap: Record<GraphNodeType, { businessTable: string; technicalTab
   source: { businessTable: '以实体来源字段为准', technicalTable: '-', keyField: 'node_id', summary: '数据来源实体，实际来源以节点属性为准' },
 }
 
-const nodeSourceValue = (node: GraphNodeData) => node.id === 'core'
-  ? 'EXPERT-10286'
-  : node.id === 'org-1' ? 'ORG-10018' : node.id.toUpperCase()
+const nodeSourceValue = (node: GraphNodeData) => {
+  if (node.id === 'core') return 'EXPERT-10286'
+  if (node.id === 'org-1') return 'ORG-10018'
+  return node.id.toUpperCase()
+}
+
+const sourceFieldIdentifier = (node: GraphNodeData) => {
+  if (node.sourceField && node.sourceValue) {
+    return `${node.sourceField} = ${node.sourceValue}`
+  }
+  if (node.sourceRecordId) {
+    return `source_record_id = ${node.sourceRecordId}`
+  }
+  return nodeFieldIdentifier(node)
+}
 
 const nodeFieldIdentifier = (node: GraphNodeData) => `${nodeSourceMap[node.nodeType].keyField} = ${nodeSourceValue(node)}`
 
@@ -178,11 +190,7 @@ export function getNodeProvenance(node: GraphNodeData): GraphProvenance {
   const recordId =
     node.sourceRecordId || `${node.id.toUpperCase()}-SRC`
 
-  const fieldIdentifier = node.sourceField && node.sourceValue
-    ? `${node.sourceField} = ${node.sourceValue}`
-    : node.sourceRecordId
-    ? `source_record_id = ${node.sourceRecordId}`
-    : nodeFieldIdentifier(node)
+  const fieldIdentifier = sourceFieldIdentifier(node)
 
   const ingestBatch =
     node.ingestBatch || `PI-20260714-NODE-${node.id.toUpperCase()}`
@@ -241,11 +249,7 @@ function endpointFromNode(
     businessTable: source.businessTable,
     technicalTable: node.sourceTable || source.technicalTable,
     recordId: node.sourceRecordId || `${node.id.toUpperCase()}-SRC`,
-    fieldIdentifier: node.sourceField && node.sourceValue
-      ? `${node.sourceField} = ${node.sourceValue}`
-      : node.sourceRecordId
-      ? `source_record_id = ${node.sourceRecordId}`
-      : nodeFieldIdentifier(node),
+    fieldIdentifier: sourceFieldIdentifier(node),
     sourceField: node.sourceField || source.keyField,
     graphVid: node.id,
   }
@@ -275,8 +279,9 @@ export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?
   const inferredEndpoints = from && to
     ? [endpointFromNode(from, '源实体'), endpointFromNode(to, '目标实体')]
     : []
-  const evidences: GraphProvenanceEvidence[] = isPathInferred
-    ? [
+  let evidences: GraphProvenanceEvidence[]
+  if (isPathInferred) {
+    evidences = [
         {
           title: `${from?.label ?? '源实体'}关联记录`,
           businessTable: '实体主题关联表',
@@ -308,8 +313,8 @@ export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?
           summary: `${relationName}通过共同论文、项目或主题节点形成两跳路径`,
         },
       ]
-    : isFabricated && inferredEndpoints.length
-      ? inferredEndpoints.map((endpoint) => ({
+  } else if (isFabricated && inferredEndpoints.length) {
+    evidences = inferredEndpoints.map((endpoint) => ({
           title: `${endpoint.role}任职数据`,
           businessTable: endpoint.businessTable,
           technicalTable: endpoint.technicalTable,
@@ -319,7 +324,8 @@ export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?
           graphVid: endpoint.graphVid,
           summary: `${endpoint.name}的真实图谱实体及任职来源，用于推理同事关系`,
         }))
-      : [{
+  } else {
+    evidences = [{
         title: '原始业务记录',
         businessTable: source.businessTable,
         technicalTable,
@@ -329,6 +335,7 @@ export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?
         graphVid: edge.id,
         summary: evidenceSummary,
       }]
+  }
 
   // 同事边由服务端规则推理后写入图谱，来源证据是两端真实实体及任职数据。
   const taskInstanceId = isFabricated
@@ -339,11 +346,12 @@ export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?
     ? (edge.ingestTime || '-')
     : (edge.ingestTime || '2026-07-13 02:12:36')
 
-  const taskMode = isFabricated
-    ? '任职时间交集 + 机构/部门匹配'
-    : (isPathInferred
-      ? '两跳路径 + 共现规则'
-      : (edge.matchMethod || '业务规则识别'))
+  let taskMode = edge.matchMethod || '业务规则识别'
+  if (isFabricated) {
+    taskMode = '任职时间交集 + 机构/部门匹配'
+  } else if (isPathInferred) {
+    taskMode = '两跳路径 + 共现规则'
+  }
 
   const taskStatus = isFabricated
     ? '规则推理'

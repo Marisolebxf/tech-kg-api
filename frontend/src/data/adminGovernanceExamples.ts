@@ -83,7 +83,7 @@ const EXAMPLE_MEMBERS: PlatformMember[] = [
 ]
 
 function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T
+  return structuredClone(value)
 }
 
 export function getExampleCorrections(): CorrectionRecord[] {

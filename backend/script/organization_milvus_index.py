@@ -197,7 +197,7 @@ def _extra_json(properties: Mapping[str, Any]) -> Mapping[str, Any]:
         return {}
     try:
         parsed = json.loads(str(raw))
-    except (TypeError, ValueError, json.JSONDecodeError):
+    except (TypeError, ValueError):
         return {}
     return parsed if isinstance(parsed, Mapping) else {}
 

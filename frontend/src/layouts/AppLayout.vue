@@ -251,7 +251,6 @@ async function handleAccountAction(
     accountFeedback.value = "正在安全退出系统。";
     await authStore.logout();
     await router.replace("/login");
-    return;
   }
 }
 
@@ -416,7 +415,7 @@ onBeforeUnmount(() => {
         aria-label="关闭导航"
         @click="closeMobileNavigation"
       />
-      <aside class="app-sidebar" :aria-hidden="isMobile && !mobileNavOpen">
+      <aside aria-label="辅助区域 1" class="app-sidebar" :aria-hidden="isMobile && !mobileNavOpen">
         <div class="app-brand">
           <img class="app-brand__logo" :src="logoKg" alt="知识图谱平台" />
           <div v-if="!sidebarCollapsed" class="app-brand__name">
@@ -690,7 +689,7 @@ onBeforeUnmount(() => {
                     }}</span>
                   </div>
                 </header>
-                <nav>
+                <nav aria-label="功能导航 2">
                   <button
                     v-if="isAdminUser"
                     class="portal-switch"
@@ -821,7 +820,7 @@ onBeforeUnmount(() => {
               ><strong>{{ item.title }}</strong>
               <p>{{ item.meta }}</p>
               <small>{{ item.status }}</small>
-              <nav>
+              <nav aria-label="功能导航 3">
                 <template v-if="item.hasReviewDetail"
                   ><RouterLink :to="item.detailTo">查看详情</RouterLink
                   ><RouterLink class="primary" :to="item.reviewTo"
@@ -833,23 +832,6 @@ onBeforeUnmount(() => {
           </article>
         </div>
       </aside>
-      <!-- 问答小助手（已隐藏）
-        <aside v-if="assistantOpen" class="knowledge-assistant" :style="assistantPanelStyle" aria-label="知识图谱助手">
-          <header><div><i>AI</i><span><strong>知识图谱助手</strong></span></div><button type="button" aria-label="关闭知识助手" @click="assistantOpen=false">×</button></header>
-          <div class="knowledge-assistant__messages">
-            <article v-for="(message, index) in assistantMessages" :key="index" :class="`is-${message.role}`">
-              <p>{{ message.content }}</p>
-              <div v-if="message.sources"><span>证据来源</span><b v-for="source in message.sources" :key="source">{{ source }}</b></div>
-            </article>
-          </div>
-          <RouterLink class="knowledge-assistant__full" to="/graph-tools">进入完整知识检索问答 →</RouterLink>
-          <form @submit.prevent="askAssistant"><textarea v-model="assistantQuestion" placeholder="请输入要查询的问题，例如：当前有哪些异常需要处理？" @keydown.enter.exact.prevent="askAssistant" /><button type="submit" :disabled="!assistantQuestion.trim()">发送</button></form>
-        </aside>
-        <button ref="assistantEntryRef" class="knowledge-assistant-entry" type="button" :class="{ active: assistantOpen, dragging: assistantDragging }" :style="assistantEntryStyle" :aria-expanded="assistantOpen" aria-label="打开知识图谱助手，可拖动调整位置" @pointerdown="startAssistantDrag" @pointermove="moveAssistantDrag" @pointerup="stopAssistantDrag" @pointercancel="stopAssistantDrag" @click="toggleAssistant">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="13" rx="4"/><path d="M9 6V4h6v2M8.5 12h.01M15.5 12h.01M9 16h6"/></svg>
-          <span>{{ assistantOpen ? '收起助手' : '知识助手' }}</span>
-        </button>
-        -->
     </div>
   </div>
 </template>
@@ -1283,7 +1265,7 @@ onBeforeUnmount(() => {
 .app-nav__flyout a:hover,
 .app-nav__flyout .app-nav__flyout-item--active {
   background: #e8f3ff;
-  color: #165dff;
+  color: #004ecc;
 }
 
 .app-shell.is-collapsed .app-nav__item--context {
@@ -1446,7 +1428,7 @@ onBeforeUnmount(() => {
   padding: 0 7px 0 4px;
   border-radius: 14px;
   background: linear-gradient(90deg, #ebbd8c 0%, #f7d9b5 100%);
-  color: #7d5121;
+  color: #59350e;
   font-size: 12px;
   font-weight: 400;
   line-height: 20px;
@@ -1458,7 +1440,7 @@ onBeforeUnmount(() => {
 }
 .app-user-menu__description {
   overflow: hidden;
-  color: #86909c;
+  color: #59636f;
   font-size: 12px;
   font-weight: 400;
   line-height: 20px;
@@ -1513,7 +1495,7 @@ onBeforeUnmount(() => {
   padding: 8px 16px 12px;
   border-top: 1px solid #e5e6eb;
   background: #fff;
-  color: #86909c;
+  color: #59636f;
   font-size: 12px;
   line-height: 20px;
 }
@@ -1540,7 +1522,7 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: #86909c;
+  color: #59636f;
   cursor: pointer;
 }
 .app-alert-bell:hover,
@@ -1564,7 +1546,7 @@ onBeforeUnmount(() => {
   padding: 0 3px;
   border: 2px solid #d8e7fc;
   border-radius: 9px;
-  background: #d92d20;
+  background: #b42318;
   color: #fff;
   font-size: 9px;
   line-height: 1;
@@ -1617,7 +1599,7 @@ onBeforeUnmount(() => {
   font-size: 9px;
 }
 .alert-preview > header em {
-  color: #7a899f;
+  color: #52627a;
   font-size: 9px;
   font-style: normal;
 }
@@ -1637,14 +1619,14 @@ onBeforeUnmount(() => {
   background: #fff;
 }
 .alert-preview > section article strong {
-  color: #165dff;
+  color: #004ecc;
   font-size: 18px;
 }
 .alert-preview > section article.danger strong {
-  color: #d92d20;
+  color: #b42318;
 }
 .alert-preview > section article span {
-  color: #71809a;
+  color: #52627a;
   font-size: 9px;
 }
 .alert-preview > div {
@@ -1747,13 +1729,13 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: #66758f;
+  color: #475467;
   font-size: 12px;
   cursor: pointer;
 }
 .alert-drawer__filter button.active {
   background: #eaf2ff;
-  color: #165dff;
+  color: #004ecc;
   font-weight: 600;
 }
 .alert-drawer__list {
@@ -1784,7 +1766,7 @@ onBeforeUnmount(() => {
   background: #2e90fa;
 }
 .alert-item > i.is-blocked {
-  background: #d92d20;
+  background: #b42318;
   box-shadow: 0 0 0 4px #fee4e2;
 }
 .alert-item > div > span {
@@ -1825,7 +1807,7 @@ onBeforeUnmount(() => {
 }
 .alert-item small.is-processing {
   background: #eaf2ff;
-  color: #175cd3;
+  color: #004ecc;
 }
 .alert-item nav {
   display: flex;
@@ -1853,22 +1835,22 @@ onBeforeUnmount(() => {
   border: 1px solid #d8e1ed;
   border-radius: 5px;
   background: #f7f9fc;
-  color: #98a2b3;
+  color: #59636f;
   font-size: 12px;
   cursor: default;
 }
 .alert-item nav a.primary {
-  border-color: #165dff;
-  background: #165dff;
+  border-color: #004ecc;
+  background: #004ecc;
   color: #fff;
 }
 .alert-item nav a:hover {
   border-color: #8fb7f2;
-  color: #165dff;
+  color: #004ecc;
 }
 .alert-item nav a.primary:hover {
-  border-color: #4080ff;
-  background: #4080ff;
+  border-color: #004ecc;
+  background: #004ecc;
   color: #fff;
 }
 .alert-item__arrow {
@@ -1889,7 +1871,7 @@ onBeforeUnmount(() => {
   box-shadow: 0 -8px 18px rgba(42, 77, 128, 0.06);
 }
 .alert-drawer > footer a {
-  color: #165dff;
+  color: #004ecc;
   font-size: 12px;
   text-decoration: none;
 }
@@ -1897,7 +1879,7 @@ onBeforeUnmount(() => {
   height: 32px;
   padding: 0 12px;
   border-radius: 5px;
-  background: #165dff;
+  background: #004ecc;
   color: #fff;
   line-height: 32px;
 }
@@ -1951,7 +1933,7 @@ onBeforeUnmount(() => {
   padding: 0 14px 0 10px;
   border: 1px solid #8fb7f2;
   border-radius: 22px;
-  background: #165dff;
+  background: #004ecc;
   color: #fff;
   box-shadow: 0 10px 28px rgba(22, 93, 255, 0.28);
   cursor: grab;
@@ -2011,7 +1993,7 @@ onBeforeUnmount(() => {
   width: 30px;
   height: 30px;
   border-radius: 9px;
-  background: #165dff;
+  background: #004ecc;
   color: #fff;
   font-size: 10px;
   font-style: normal;
@@ -2058,9 +2040,9 @@ onBeforeUnmount(() => {
 }
 .knowledge-assistant__messages article.is-user {
   align-self: flex-end;
-  border-color: #165dff;
+  border-color: #004ecc;
   border-radius: 10px 3px 10px 10px;
-  background: #165dff;
+  background: #004ecc;
   color: #fff;
 }
 .knowledge-assistant__messages p {
@@ -2086,7 +2068,7 @@ onBeforeUnmount(() => {
   padding: 2px 6px;
   border-radius: 99px;
   background: #eaf2ff;
-  color: #175cd3;
+  color: #004ecc;
   font-size: 8px;
   font-weight: 500;
 }
@@ -2094,7 +2076,7 @@ onBeforeUnmount(() => {
   padding: 8px 13px;
   border-top: 1px solid #e2eaf5;
   background: #fff;
-  color: #165dff;
+  color: #004ecc;
   font-size: 9px;
   text-decoration: none;
 }
@@ -2119,7 +2101,7 @@ onBeforeUnmount(() => {
 .knowledge-assistant form button {
   border: 0;
   border-radius: 6px;
-  background: #165dff;
+  background: #004ecc;
   color: #fff;
   font-size: 10px;
   cursor: pointer;
@@ -2177,7 +2159,7 @@ onBeforeUnmount(() => {
 .app-breadcrumb__separator {
   flex: 0 0 auto;
   margin: 0;
-  color: #86909c;
+  color: #59636f;
   font-size: 12px;
   line-height: 12px;
   text-align: center;
@@ -2186,7 +2168,7 @@ onBeforeUnmount(() => {
 .app-breadcrumb__history {
   text-decoration: none;
   flex: 0 0 auto;
-  color: #86909c;
+  color: #59636f;
   font-size: 12px;
   line-height: 20px;
   white-space: nowrap;
@@ -2198,7 +2180,7 @@ onBeforeUnmount(() => {
 
 .app-breadcrumb__current {
   flex: 0 0 auto;
-  color: #86909c;
+  color: #59636f;
   font-size: 12px;
   line-height: 20px;
   font-weight: 400;

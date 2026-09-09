@@ -10,6 +10,7 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from biz.auth_cookies import AuthSessionMiddleware
 from biz.router.register import register_routers
 from biz.schemas.common import ApiResponse
 from infra.graph_db import close_techkg_client, close_trs_graph_client
@@ -20,6 +21,13 @@ from service.correction import process_due_sync_tasks
 from service.operator_registry import REGISTRY
 
 logger = logging.getLogger(__name__)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _dispatch_corrections_once() -> int:
@@ -88,25 +96,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         close_trs_graph_client()
 
 
+_app_env = os.getenv("APP_ENV", "prod").strip().lower()
+_api_docs_enabled = _env_bool(
+    "API_DOCS_ENABLED",
+    _app_env in {"dev", "development", "local", "test"},
+)
+
 app = FastAPI(
     title="Tech KG API",
     description="Backend service for the technology knowledge graph.",
     version="0.1.0",
     lifespan=lifespan,
     docs_url=None,
+    openapi_url="/openapi.json" if _api_docs_enabled else None,
 )
+app.add_middleware(AuthSessionMiddleware)
 
-app.mount("/static/swagger", StaticFiles(directory="static/swagger"), name="swagger-static")
+if _api_docs_enabled:
+    app.mount("/static/swagger", StaticFiles(directory="static/swagger"), name="swagger-static")
 
-
-@app.get("/docs", include_in_schema=False)
-async def custom_swagger_ui():
-    return get_swagger_ui_html(
-        openapi_url=app.openapi_url,
-        title=f"{app.title} - Swagger UI",
-        swagger_js_url="/static/swagger/swagger-ui-bundle.js",
-        swagger_css_url="/static/swagger/swagger-ui.css",
-    )
+    @app.get("/docs", include_in_schema=False)
+    async def custom_swagger_ui():
+        return get_swagger_ui_html(
+            openapi_url=app.openapi_url,
+            title=f"{app.title} - Swagger UI",
+            swagger_js_url="/static/swagger/swagger-ui-bundle.js",
+            swagger_css_url="/static/swagger/swagger-ui.css",
+        )
 
 
 register_routers(app)
@@ -114,7 +130,16 @@ register_routers(app)
 
 @app.exception_handler(GraphRepoError)
 async def graph_error_handler(request, exc: GraphRepoError) -> JSONResponse:
-    return JSONResponse(status_code=502, content={"status": "error", "message": str(exc)})
+    logger.warning(
+        "图数据服务调用失败 path=%s error_type=%s",
+        request.url.path,
+        type(exc).__name__,
+        exc_info=exc,
+    )
+    return JSONResponse(
+        status_code=502,
+        content={"status": "error", "message": "图数据服务暂时不可用"},
+    )
 
 
 @app.exception_handler(RequestValidationError)
@@ -125,13 +150,30 @@ async def validation_error_handler(request, exc: RequestValidationError) -> JSON
         for e in exc.errors()
     ]
     path = request.url.path
-    uses_http_422 = path == "/api/v1/kg-construction/expert-cooperation-achievements/query" or (
-        path.startswith("/api/v1/workflow-system/definitions/") and path.endswith("/execute")
+    indirect_relation_path = (
+        path == "/api/v1/kg-construction/expert-indirect-relations/demo/structured-result"
     )
+    paper_cooperation_path = (
+        path == "/api/v1/kg-construction/expert-paper-cooperation-relations/structured-result"
+    )
+    uses_http_422 = (
+        indirect_relation_path
+        or paper_cooperation_path
+        or path == ("/api/v1/kg-construction/expert-cooperation-achievements/query")
+        or (path.startswith("/api/v1/workflow-system/definitions/") and path.endswith("/execute"))
+    )
+    validation_message = "接口参数校验错误" if indirect_relation_path else "请求参数校验失败"
+    if paper_cooperation_path:
+        first_error = errors[0]["msg"] if errors else "请求参数校验失败"
+        detail_message = first_error.removeprefix("Value error, ")
+        validation_message = f"接口参数校验错误：{detail_message}"
     return JSONResponse(
         status_code=422 if uses_http_422 else 200,
         content=ApiResponse(
-            code=422, success=False, msg="请求参数校验失败", data=errors
+            code=422,
+            success=False,
+            msg=validation_message,
+            data=errors,
         ).model_dump(),
     )
 

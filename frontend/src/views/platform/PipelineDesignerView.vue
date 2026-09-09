@@ -24,7 +24,7 @@ const operatorCatalog: OperatorDefinition[] = [
     category: "输入",
     icon: "DB",
     description: "数据库、API、文件或消息流",
-    color: "#175cd3",
+    color: "#004ecc",
   },
   {
     type: "document-parser",
@@ -96,7 +96,7 @@ const operatorCatalog: OperatorDefinition[] = [
     category: "图谱",
     icon: "+SC",
     description: "创建新的实体或关系类型",
-    color: "#079455",
+    color: "#067647",
   },
   {
     type: "schema-delete",
@@ -104,7 +104,7 @@ const operatorCatalog: OperatorDefinition[] = [
     category: "图谱",
     icon: "-SC",
     description: "下线实体、关系或属性定义",
-    color: "#d92d20",
+    color: "#b42318",
   },
   {
     type: "graph-write",
@@ -112,7 +112,7 @@ const operatorCatalog: OperatorDefinition[] = [
     category: "图谱",
     icon: "KG",
     description: "校验并写入目标知识图谱",
-    color: "#079455",
+    color: "#067647",
   },
   {
     type: "quality-check",
@@ -396,7 +396,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
         </div>
         <p>{{ pipelineDescription }}</p>
       </div>
-      <nav>
+      <nav aria-label="功能导航 1">
         <button type="button" @click="showRuns = !showRuns">运行记录</button>
         <button
           type="button"
@@ -423,15 +423,15 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
     </p>
 
     <section class="designer-shell">
-      <aside class="operator-library">
+      <aside aria-label="辅助区域 1" class="operator-library">
         <header>
           <div>
             <strong>算子库</strong
             ><span>{{ operatorCatalog.length }} 个可用算子</span>
           </div>
-          <input v-model="operatorKeyword" placeholder="搜索算子" />
+          <input aria-label="搜索算子" v-model="operatorKeyword" placeholder="搜索算子" />
         </header>
-        <nav>
+        <nav aria-label="功能导航 2">
           <button
             v-for="category in categoryTabs"
             :key="category"
@@ -479,7 +479,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
             <strong>流程画布</strong
             ><span>{{ nodes.length }} 个节点 · 自动保存于 10:42:18</span>
           </div>
-          <nav>
+          <nav aria-label="功能导航 3">
             <button type="button" title="缩小">−</button><span>100%</span
             ><button type="button" title="放大">＋</button
             ><button type="button" title="整理布局">自动布局</button>
@@ -526,7 +526,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
                     >{{ node.icon }}</i
                   ><span
                     ><small>{{ node.category }}算子</small
-                    ><input v-model="node.title" @click.stop /></span
+                    ><input aria-label="输入内容" v-model="node.title" @click.stop /></span
                   ><em v-if="node.status === 'running'">运行中</em
                   ><em v-else-if="node.status === 'success'" class="success"
                     >成功</em
@@ -554,7 +554,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
                 </dl>
                 <footer>
                   <span>节点 {{ String(index + 1).padStart(2, "0") }}</span>
-                  <nav>
+                  <nav aria-label="功能导航 4">
                     <button
                       type="button"
                       :disabled="index === 0"
@@ -595,8 +595,8 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
         </div>
       </main>
 
-      <aside class="property-panel">
-        <nav>
+      <aside aria-label="辅助区域 2" class="property-panel">
+        <nav aria-label="功能导航 5">
           <button
             type="button"
             :class="{ active: showSettings }"
@@ -629,10 +629,10 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
           </header>
           <div class="property-form">
             <label
-              ><span>节点名称</span><input v-model="selectedNode.title"
+              ><span>节点名称</span><input aria-label="输入内容" v-model="selectedNode.title"
             /></label>
             <template v-for="(value, key) in selectedNode.config" :key="key">
-              <label v-if="typeof value === 'boolean'" class="toggle-field"
+              <div v-if="typeof value === 'boolean'" class="toggle-field"
                 ><span>{{ key }}</span
                 ><button
                   type="button"
@@ -640,15 +640,15 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
                   @click="selectedNode.config[key] = !value"
                 >
                   <i /></button
-              ></label>
+              ></div>
               <label v-else
                 ><span>{{ key }}</span
-                ><input
+                ><input aria-label="输入数值"
                   v-if="typeof value === 'number'"
                   v-model.number="selectedNode.config[key]"
-                  type="number" /><textarea
+                  type="number" /><textarea aria-label="选择或输入内容"
                   v-else-if="String(value).length > 44"
-                  v-model="selectedNode.config[key]" /><input
+                  v-model="selectedNode.config[key]" /><input aria-label="输入内容"
                   v-else
                   v-model="selectedNode.config[key]"
               /></label>
@@ -682,7 +682,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
             </div>
           </header>
           <div class="property-form schedule-form">
-            <label class="toggle-field"
+            <div class="toggle-field"
               ><span>启用定时任务<small>发布后按计划自动执行</small></span
               ><button
                 type="button"
@@ -690,10 +690,10 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
                 @click="scheduleEnabled = !scheduleEnabled"
               >
                 <i /></button
-            ></label>
+            ></div>
             <label
               ><span>执行频率</span
-              ><select v-model="scheduleMode" :disabled="!scheduleEnabled">
+              ><select aria-label="选择或输入内容" v-model="scheduleMode" :disabled="!scheduleEnabled">
                 <option>每小时</option>
                 <option>每 6 小时</option>
                 <option>每天</option>
@@ -703,22 +703,22 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
             >
             <label
               ><span>执行时间</span
-              ><input
+              ><input aria-label="输入内容"
                 v-model="scheduleTime"
                 type="time"
                 :disabled="!scheduleEnabled"
             /></label>
             <label
               ><span>失败重试次数</span
-              ><input v-model.number="retryCount" type="number" min="0" max="5"
+              ><input aria-label="输入数值" v-model.number="retryCount" type="number" min="0" max="5"
             /></label>
             <label
               ><span>运行超时（分钟）</span
-              ><input v-model.number="timeoutMinutes" type="number" min="10"
+              ><input aria-label="输入数值" v-model.number="timeoutMinutes" type="number" min="10"
             /></label>
             <label
               ><span>运行资源组</span
-              ><select>
+              ><select
                 <option>标准运行资源组（推荐）</option>
                 <option>大批量运行资源组</option>
                 <option>实时低延迟资源组</option>
@@ -726,7 +726,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
             >
             <label
               ><span>失败通知</span
-              ><select>
+              ><select
                 <option>平台通知 + 企业微信</option>
                 <option>仅平台通知</option>
                 <option>邮件通知</option>
@@ -759,7 +759,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
       aria-label="关闭运行记录"
       @click="showRuns = false"
     />
-    <aside v-if="showRuns" class="run-drawer">
+    <aside aria-label="辅助区域 3" v-if="showRuns" class="run-drawer">
       <header>
         <div>
           <span>RUN HISTORY</span>
@@ -825,7 +825,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   margin-bottom: 10px;
 }
 .pipeline-identity > span {
-  color: #165dff;
+  color: #004ecc;
   font-size: 9px;
   letter-spacing: 0.12em;
 }
@@ -863,7 +863,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   max-width: 720px;
   margin: 3px 0 0;
   overflow: hidden;
-  color: #66758f;
+  color: #475467;
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -887,8 +887,8 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   cursor: not-allowed;
 }
 .primary {
-  border-color: #165dff !important;
-  background: #165dff !important;
+  border-color: #004ecc !important;
+  background: #004ecc !important;
   color: #fff !important;
 }
 .designer-feedback {
@@ -909,7 +909,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #12b76a;
+  background: #067647;
   color: #fff;
 }
 .designer-feedback button {
@@ -949,7 +949,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   font-size: 12px;
 }
 .operator-library > header span {
-  color: #8290a7;
+  color: #52627a;
   font-size: 8px;
 }
 .operator-library > header input {
@@ -975,13 +975,13 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: #66758f;
+  color: #475467;
   font-size: 9px;
   cursor: pointer;
 }
 .operator-library > nav button.active {
   background: #eaf2ff;
-  color: #165dff;
+  color: #004ecc;
   font-weight: 600;
 }
 .operator-list {
@@ -1031,13 +1031,13 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
 }
 .operator-list small {
   overflow: hidden;
-  color: #8290a7;
+  color: #52627a;
   font-size: 8px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .operator-list em {
-  color: #165dff;
+  color: #004ecc;
   font-size: 15px;
   font-style: normal;
 }
@@ -1053,7 +1053,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
 }
 .operator-library > footer p {
   margin: 3px 0 0;
-  color: #71809a;
+  color: #52627a;
   font-size: 8px;
   line-height: 14px;
 }
@@ -1081,7 +1081,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   font-size: 12px;
 }
 .pipeline-canvas > header span {
-  color: #8290a7;
+  color: #52627a;
   font-size: 8px;
 }
 .pipeline-canvas > header nav {
@@ -1133,7 +1133,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   display: flex;
   align-items: center;
   gap: 5px;
-  color: #66758f;
+  color: #475467;
   font-size: 8px;
 }
 .pipeline-summary i {
@@ -1142,7 +1142,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   border-radius: 50%;
 }
 .pipeline-summary .green {
-  background: #12b76a;
+  background: #067647;
 }
 .pipeline-summary .blue {
   background: #2e90fa;
@@ -1173,7 +1173,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
 }
 .pipeline-node:hover,
 .pipeline-node.selected {
-  border-color: #165dff;
+  border-color: #004ecc;
   box-shadow:
     0 0 0 2px rgba(22, 93, 255, 0.12),
     0 9px 22px rgba(47, 82, 132, 0.13);
@@ -1210,7 +1210,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   gap: 2px;
 }
 .pipeline-node > header small {
-  color: #8290a7;
+  color: #52627a;
   font-size: 9px;
   line-height: 14px;
 }
@@ -1233,7 +1233,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   padding: 2px 6px;
   border-radius: 99px;
   background: #eaf2ff;
-  color: #175cd3;
+  color: #004ecc;
   font-size: 9px;
   font-style: normal;
   line-height: 14px;
@@ -1271,7 +1271,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
 }
 .pipeline-node dt {
   overflow: hidden;
-  color: #8290a7;
+  color: #52627a;
   font-size: 10px;
   line-height: 16px;
   text-overflow: ellipsis;
@@ -1296,7 +1296,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   background: #f8fbff;
 }
 .pipeline-node > footer > span {
-  color: #8290a7;
+  color: #52627a;
   font-size: 9px;
   line-height: 16px;
 }
@@ -1348,7 +1348,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
 .connector span {
   position: absolute;
   margin: -33px 0 0 9px;
-  color: #71809a;
+  color: #52627a;
   font-size: 9px;
   line-height: 14px;
   white-space: nowrap;
@@ -1365,7 +1365,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   border: 1px dashed #8fb7f2;
   border-radius: 4px;
   background: #eef5ff;
-  color: #165dff;
+  color: #004ecc;
   font-size: 9px;
   line-height: 14px;
   white-space: nowrap;
@@ -1399,13 +1399,13 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   border: 0;
   border-bottom: 2px solid transparent;
   background: #fff;
-  color: #66758f;
+  color: #475467;
   font-size: 9px;
   cursor: pointer;
 }
 .property-panel > nav button.active {
-  border-color: #165dff;
-  color: #165dff;
+  border-color: #004ecc;
+  color: #004ecc;
   font-weight: 600;
 }
 .property-panel > header {
@@ -1439,11 +1439,11 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   font-size: 10px;
 }
 .property-panel > header small {
-  color: #8290a7;
+  color: #52627a;
   font-size: 7px;
 }
 .property-panel > header em {
-  color: #8290a7;
+  color: #52627a;
   font-size: 8px;
   font-style: normal;
 }
@@ -1488,7 +1488,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
 .property-form input:disabled,
 .property-form select:disabled {
   background: #f2f4f7;
-  color: #98a2b3;
+  color: #59636f;
 }
 .property-form > section {
   padding: 9px;
@@ -1501,12 +1501,12 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
 }
 .property-form > section p {
   margin: 4px 0 0;
-  color: #71809a;
+  color: #52627a;
   font-size: 8px;
   line-height: 14px;
 }
 .property-form code {
-  color: #175cd3;
+  color: #004ecc;
 }
 .toggle-field {
   display: flex !important;
@@ -1518,7 +1518,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   gap: 2px;
 }
 .toggle-field small {
-  color: #98a2b3;
+  color: #59636f;
   font-size: 7px;
 }
 .toggle-field > button {
@@ -1542,7 +1542,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   transition: 0.15s;
 }
 .toggle-field > button.on {
-  background: #165dff;
+  background: #004ecc;
 }
 .toggle-field > button.on i {
   left: 16px;
@@ -1556,7 +1556,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   height: 31px;
   border: 0;
   border-radius: 5px;
-  background: #165dff;
+  background: #004ecc;
   color: #fff;
   font-size: 9px;
   cursor: pointer;
@@ -1589,7 +1589,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   background: #fff;
 }
 .run-drawer > header span {
-  color: #165dff;
+  color: #004ecc;
   font-size: 9px;
 }
 .run-drawer h2 {
@@ -1598,7 +1598,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
 }
 .run-drawer > header p {
   margin: 0;
-  color: #71809a;
+  color: #52627a;
   font-size: 10px;
 }
 .run-drawer > header button {
@@ -1625,7 +1625,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
   background: #fff;
 }
 .run-overview span {
-  color: #71809a;
+  color: #52627a;
   font-size: 9px;
 }
 .run-overview strong {
@@ -1672,7 +1672,7 @@ onBeforeUnmount(() => runTimers.forEach(window.clearTimeout));
 .run-list span,
 .run-list p {
   margin: 0;
-  color: #71809a;
+  color: #52627a;
   font-size: 8px;
   line-height: 14px;
 }

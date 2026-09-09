@@ -21,7 +21,7 @@ const emit = defineEmits<{
 <template>
   <Teleport to="body">
     <div v-if="open && payload" class="kg-modal" @click.self="emit('close')">
-      <section class="kg-modal__panel" role="dialog" aria-modal="true" :aria-label="payload.title">
+      <dialog open class="kg-modal__panel" :aria-label="payload.title">
         <header class="kg-modal__header">
           <div>
             <h2>{{ payload.title }}</h2>
@@ -45,7 +45,7 @@ const emit = defineEmits<{
         <footer class="kg-modal__footer">
           <button type="button" class="kg-button kg-button--secondary" @click="emit('close')">关闭</button>
         </footer>
-      </section>
+      </dialog>
     </div>
   </Teleport>
 </template>

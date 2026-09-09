@@ -285,7 +285,8 @@ export async function verifyAndSaveScript(
   userId: string,
   handlers: VerifyScriptHandlers,
 ): Promise<void> {
-  const baseUrl = import.meta.env.VITE_API_BASE || '/api'
+  // 相对路径：网关子路径部署（如 /bkg_zp/）时按页面 URL 解析，见 http.ts 同款注释
+  const baseUrl = import.meta.env.VITE_API_BASE || './api'
   const url = `${baseUrl}${PREFIX}/schemas/${schemaId}/script/verify`
   const body = new FormData()
   body.append('script', file)

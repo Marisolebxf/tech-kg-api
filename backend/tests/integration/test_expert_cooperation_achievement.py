@@ -41,6 +41,39 @@ async def test_query_cooperation_achievement_success(async_client, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [1, 50])
+async def test_query_cooperation_achievement_accepts_limit_boundaries(
+    async_client, monkeypatch, limit
+):
+    received = {}
+
+    def _query(**kwargs):
+        received.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(handler.application, "query", _query)
+    resp = await async_client.post(
+        "/api/v1/kg-construction/expert-cooperation-achievements/query",
+        json={"sourceExpertId": "S1", "targetExpertId": "S2", "limitPerType": limit},
+    )
+
+    assert resp.status_code == 200
+    assert received["limit_per_type"] == limit
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [0, 51, -1, 1.5, "20", True, None])
+async def test_query_cooperation_achievement_rejects_invalid_limit(async_client, limit):
+    resp = await async_client.post(
+        "/api/v1/kg-construction/expert-cooperation-achievements/query",
+        json={"sourceExpertId": "S1", "targetExpertId": "S2", "limitPerType": limit},
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 422
+
+
+@pytest.mark.asyncio
 async def test_query_cooperation_achievement_not_found(async_client, monkeypatch):
     def _raise(**kwargs):
         raise KeyError("未找到专家: S404")
@@ -97,12 +130,30 @@ async def test_query_cooperation_achievement_rejects_invalid_expert_ids(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["timeRangeStart", "timeRangeEnd"])
 async def test_query_cooperation_achievement_rejects_future_month(async_client, field):
-    payload = {"sourceExpertId": "S1", "targetExpertId": "S2", field: "2999-01"}
+    payload = {
+        "sourceExpertId": "S1",
+        "targetExpertId": "S2",
+        "timeRangeStart": "2025-01",
+        "timeRangeEnd": "2025-01",
+        field: "2999-01",
+    }
     resp = await async_client.post(
         "/api/v1/kg-construction/expert-cooperation-achievements/query", json=payload
     )
     assert resp.status_code == 422
     assert any("输入时间不能超过当前时间" in error["msg"] for error in resp.json()["data"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["timeRangeStart", "timeRangeEnd"])
+async def test_query_cooperation_achievement_requires_complete_time_range(async_client, field):
+    payload = {"sourceExpertId": "S1", "targetExpertId": "S2", field: "2025-01"}
+    resp = await async_client.post(
+        "/api/v1/kg-construction/expert-cooperation-achievements/query", json=payload
+    )
+
+    assert resp.status_code == 422
+    assert any("开始时间和结束时间必须同时填写" in error["msg"] for error in resp.json()["data"])
 
 
 @pytest.mark.asyncio

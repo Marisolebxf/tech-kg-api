@@ -1,7 +1,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 
 import { useAuthStore } from '../stores/auth'
-import { isPortalEmbeddedMode } from '../portal/iframeBridge'
+import { installSessionRecovery, loginRedirect, notifySessionExpired } from './sessionRecovery'
 import BusinessServiceView from '../views/business-service/BusinessServiceView.vue'
 import LoginView from '../views/auth/LoginView.vue'
 import UserCenterView from '../views/auth/UserCenterView.vue'
@@ -114,22 +114,6 @@ export const router = createRouter({
   ],
 })
 
-function loginRedirect(fullPath: string, error?: string) {
-  if (isPortalEmbeddedMode()) {
-    return {
-      path: '/login',
-      query: { embedded: '1', portalState: 'session-expired' },
-    }
-  }
-  return {
-    path: '/login',
-    query: {
-      redirect: fullPath,
-      ...(error ? { error } : {}),
-    },
-  }
-}
-
 router.beforeEach(async (to) => {
   if (import.meta.env.VITE_AUTH_ENABLED === 'false') {
     return to.name === 'login' ? { path: '/overview' } : true
@@ -139,8 +123,9 @@ router.beforeEach(async (to) => {
 
   const authStore = useAuthStore()
   try {
-    const profile = await authStore.loadCurrentUser()
+    const profile = await authStore.loadCurrentUser(true)
     if (!profile) {
+      if (!authStore.skipSilentLogin) notifySessionExpired('登录状态已失效或已超时，请重新登录')
       return loginRedirect(to.fullPath, '登录状态已失效或已超时，请重新登录')
     }
     const requiredPermission = typeof to.meta.permission === 'string' ? to.meta.permission : ''
@@ -159,3 +144,5 @@ router.beforeEach(async (to) => {
     return loginRedirect(to.fullPath, '登录服务暂时不可用，请稍后重试')
   }
 })
+
+installSessionRecovery(router)

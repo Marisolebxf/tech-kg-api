@@ -18,6 +18,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from utils.runtime_paths import private_state_dir
+
 logger = logging.getLogger("script.organization_etl_common")
 
 DEFAULT_SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
@@ -985,7 +987,8 @@ def parse_json_list(value: Any) -> list[Any]:
 
 
 def md5_hex(value: str) -> str:
-    return hashlib.md5(value.encode("utf-8")).hexdigest()
+    # Stable graph identifier only; it is not used for integrity or authentication.
+    return hashlib.md5(value.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def bounded_vid(value: str, max_bytes: int = VID_MAX_BYTES) -> str:
@@ -1119,7 +1122,7 @@ def node_provenance(
 
 
 def ngql_identifier(value: str) -> str:
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+    if not re.fullmatch(r"[A-Za-z_]\w*", value):
         raise ValueError(f"unsafe nGQL identifier: {value!r}")
     return f"`{value}`"
 
@@ -1152,8 +1155,11 @@ def exclusive_etl_lock(
     lock_path: Path | None = None,
 ) -> Iterator[None]:
     """Prevent entity and relation writers from running at the same time."""
-    path = lock_path or Path(
-        os.environ.get("ORGANIZATION_ETL_LOCK_FILE", "/tmp/tech_kg_organization_etl.lock")
+    configured_lock_path = os.environ.get("ORGANIZATION_ETL_LOCK_FILE")
+    path = lock_path or (
+        Path(configured_lock_path).expanduser()
+        if configured_lock_path
+        else private_state_dir("locks") / "organization-etl.lock"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+", encoding="utf-8") as handle:

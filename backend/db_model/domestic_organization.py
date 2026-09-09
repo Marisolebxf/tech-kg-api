@@ -11,6 +11,14 @@ from sqlalchemy import (
 
 from db_model.base import Base
 
+ENFORCED_PERSON_TYPE = "被执行人类型"
+HIDDEN_FLAG = "是否不展示"
+ORIGINAL_URL = "原始连接URL"
+PARTY_ROLE_TYPE = "当事人角色类型"
+PARTY_TYPE = "当事人类型"
+RELATED_PERSON_NAME = "相关人名称"
+UNIFIED_SOCIAL_CREDIT_CODE = "统一社会信用代码"
+
 
 class DwdOrgAnnualFinancialInfo(Base):
     """前海数据机构年报财务信息"""
@@ -22,7 +30,7 @@ class DwdOrgAnnualFinancialInfo(Base):
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     org_type = Column("org_type", String(50), nullable=True, comment="机构类型")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     year = Column("year", Integer(), nullable=True, comment="年报年度")
     total_assets = Column("total_assets", Float(), nullable=True, comment="资产总额")
@@ -84,16 +92,14 @@ class DwdOrgBankruptcyPublicCasesList(Base):
     )
     case_no = Column("case_no", String(255), nullable=True, comment="案号")
     related_person_name = Column(
-        "related_person_name", String(255), nullable=True, comment="相关人名称"
+        "related_person_name", String(255), nullable=True, comment=RELATED_PERSON_NAME
     )
-    party_role_type = Column(
-        "party_role_type", String(255), nullable=True, comment="当事人角色类型"
-    )
-    party_type = Column("party_type", String(255), nullable=True, comment="当事人类型")
+    party_role_type = Column("party_role_type", String(255), nullable=True, comment=PARTY_ROLE_TYPE)
+    party_type = Column("party_type", String(255), nullable=True, comment=PARTY_TYPE)
     org_id = Column("org_id", String(255), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(255), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(255), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(255), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     public_date = Column("public_date", String(255), nullable=True, comment="公开时间")
     is_deleted = Column("is_deleted", String(255), nullable=True, comment="是否删除")
@@ -144,7 +150,7 @@ class DwdOrgChangeRecordInfo(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     update_content = Column("update_content", String(50), nullable=True, comment="变更类型")
     current_name = Column("current_name", String(1000), nullable=True, comment="变更前内容")
@@ -167,7 +173,7 @@ class DwdOrgCompanyAbnormal(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     abnormal_id = Column("abnormal_id", String(50), nullable=True, comment="经营异常记录id")
     abn_reason = Column("abn_reason", String(1000), nullable=True, comment="列入原因")
@@ -195,7 +201,7 @@ class DwdOrgCompanyChattel(Base):
     org_id = Column("org_id", String(255), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(255), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(255), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(255), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     reg_no = Column("reg_no", String(255), nullable=True, comment="登记编号")
     reg_date = Column("reg_date", String(255), nullable=True, comment="登记日期")
@@ -230,7 +236,7 @@ class DwdOrgCompanyIllegal(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     sv_id = Column("sv_id", String(50), nullable=True, comment="严重违法记录id")
     category = Column("category", String(50), nullable=True, comment="类别")
@@ -268,14 +274,14 @@ class DwdOrgCompanyJustice(Base):
     use_flag = Column("use_flag", String(255), nullable=True, comment="使用标记")
     status = Column("status", String(255), nullable=True, comment="状态")
     executed_person_type = Column(
-        "executed_person_type", String(255), nullable=True, comment="被执行人类型"
+        "executed_person_type", String(255), nullable=True, comment=ENFORCED_PERSON_TYPE
     )
     executed_company_id = Column(
         "executed_company_id", String(255), nullable=True, comment="被执行人的company_id"
     )
     name_cn = Column("name_cn", String(255), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(255), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(255), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     data_source = Column("data_source", String(255), nullable=True, comment="数据来源")
     created_time = Column("created_time", DateTime(), nullable=True, comment="创建时间")
@@ -294,7 +300,7 @@ class DwdOrgCompanyPledge(Base):
     org_id = Column("org_id", String(255), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(255), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(255), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(255), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     pledge_id = Column("pledge_id", String(255), nullable=True, comment="股权出质记录id")
     reg_no = Column("reg_no", String(255), nullable=True, comment="登记编号")
@@ -352,7 +358,7 @@ class DwdOrgCompanyPunish(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     penalty_id = Column("penalty_id", String(50), nullable=True, comment="行政处罚记录id")
     decision_no = Column("decision_no", String(50), nullable=True, comment="决定书文号")
@@ -391,7 +397,7 @@ class DwdOrgExecutiveInfo(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     executives_name = Column("executives_name", String(50), nullable=True, comment="高管姓名")
     executives_position = Column(
@@ -414,7 +420,7 @@ class DwdOrgFinancingInfo(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     funding_round = Column("funding_round", String(50), nullable=True, comment="融资轮次")
     funding_amount = Column("funding_amount", BigInteger(), nullable=True, comment="获投金额")
@@ -441,7 +447,7 @@ class DwdOrgHelsInfo(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="高校id")
     name_cn = Column("name_cn", String(256), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     org_name = Column("org_name", String(256), nullable=True, comment="高校/科研机构名称(中文)")
     org_name_en = Column(
@@ -475,7 +481,7 @@ class DwdOrgImportantNewsInfo(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     news_title = Column("news_title", String(1000), nullable=True, comment="资讯标题")
     news_date = Column("news_date", String(50), nullable=True, comment="资讯日期")
@@ -506,7 +512,7 @@ class DwdOrgInnovationCarrier(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     org_name = Column("org_name", String(200), nullable=True, comment="关联单位名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     announcement = Column("announcement", String(500), nullable=True, comment="公告名称")
     publish_org = Column("publish_org", String(50), nullable=True, comment="发布单位")
@@ -526,7 +532,7 @@ class DwdOrgInvestInfo(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     inv_org_id = Column("inv_org_id", String(50), nullable=True, comment="被投企业id")
     inv_name = Column("inv_name", String(50), nullable=True, comment="被投资企业名称")
@@ -575,7 +581,7 @@ class DwdOrgOptJudicialCase(Base):
     company_name = Column("company_name", String(50), nullable=True, comment="企业名称")
     reg_no = Column("reg_no", String(50), nullable=True, comment="注册号")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     case_id = Column("case_id", String(50), nullable=True, comment="司法案件唯一标识")
@@ -606,7 +612,7 @@ class DwdOrgOrgProductInfo(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     industry_class = Column("industry_class", String(50), nullable=True, comment="公司行业分类")
     main_activities = Column("main_activities", Text(), nullable=True, comment="公司经营范围")
@@ -629,7 +635,7 @@ class DwdOrgRecruitInfo(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     job_title = Column("job_title", String(255), nullable=True, comment="岗位")
     job_description = Column("job_description", Text(), nullable=True, comment="工作描述")
@@ -724,9 +730,9 @@ class DwdOrgRiskCourtAnnouncement(Base):
         "publish_page_no", String(255), nullable=True, comment="公告刊登版面页码"
     )
     use_flag = Column("use_flag", String(255), nullable=True, comment="使用标志")
-    original_url = Column("original_url", Text(), nullable=True, comment="原始连接URL")
+    original_url = Column("original_url", Text(), nullable=True, comment=ORIGINAL_URL)
     content_md5 = Column("content_md5", String(255), nullable=True, comment="公告内容的md5值")
-    is_hidden = Column("is_hidden", String(255), nullable=True, comment="是否不展示")
+    is_hidden = Column("is_hidden", String(255), nullable=True, comment=HIDDEN_FLAG)
     data_source = Column("data_source", String(255), nullable=True, comment="数据来源")
     created_time = Column("created_time", DateTime(), nullable=True, comment="创建时间")
     updated_time = Column("updated_time", DateTime(), nullable=True, comment="更新时间")
@@ -743,20 +749,18 @@ class DwdOrgRiskCourtAnnouncementList(Base):
 
     notice_id = Column("notice_id", String(255), nullable=True, comment="公告id")
     party_identity = Column("party_identity", String(255), nullable=True, comment="当事人身份")
-    party_type = Column("party_type", String(255), nullable=True, comment="当事人类型")
-    party_role_type = Column(
-        "party_role_type", String(255), nullable=True, comment="当事人角色类型"
-    )
+    party_type = Column("party_type", String(255), nullable=True, comment=PARTY_TYPE)
+    party_role_type = Column("party_role_type", String(255), nullable=True, comment=PARTY_ROLE_TYPE)
     related_person_name = Column(
-        "related_person_name", String(255), nullable=True, comment="相关人名称"
+        "related_person_name", String(255), nullable=True, comment=RELATED_PERSON_NAME
     )
     publish_date = Column("publish_date", String(255), nullable=True, comment="公告刊登日期")
     use_flag = Column("use_flag", String(255), nullable=True, comment="使用标志")
-    is_hidden = Column("is_hidden", String(255), nullable=True, comment="是否不展示")
+    is_hidden = Column("is_hidden", String(255), nullable=True, comment=HIDDEN_FLAG)
     org_id = Column("org_id", String(255), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(255), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(255), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(255), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     data_source = Column("data_source", String(255), nullable=True, comment="数据来源")
     created_time = Column("created_time", DateTime(), nullable=True, comment="创建时间")
@@ -815,7 +819,7 @@ class DwdOrgRiskCourtFiledCaseLitigant(Base):
     org_id = Column("org_id", String(255), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(255), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(255), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(255), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     use_flag = Column("use_flag", String(255), nullable=True, comment="使用标志")
     data_source = Column("data_source", String(255), nullable=True, comment="数据来源")
@@ -857,8 +861,8 @@ class DwdOrgRiskCourtNotice(Base):
     province = Column("province", String(255), nullable=True, comment="省份")
     data_source = Column("data_source", String(255), nullable=True, comment="数据来源")
     use_flag = Column("use_flag", String(255), nullable=True, comment="使用标志")
-    original_url = Column("original_url", Text(), nullable=True, comment="原始连接URL")
-    is_hidden = Column("is_hidden", String(255), nullable=True, comment="是否不展示")
+    original_url = Column("original_url", Text(), nullable=True, comment=ORIGINAL_URL)
+    is_hidden = Column("is_hidden", String(255), nullable=True, comment=HIDDEN_FLAG)
     data_source_2 = Column(
         "data_source_2",
         String(255),
@@ -880,21 +884,19 @@ class DwdOrgRiskCourtNoticeList(Base):
 
     notice_id = Column("notice_id", String(255), nullable=True, comment="公告id")
     party_role = Column("party_role", String(255), nullable=True, comment="当事人角色")
-    party_role_type = Column(
-        "party_role_type", String(255), nullable=True, comment="当事人角色类型"
-    )
-    party_type = Column("party_type", String(255), nullable=True, comment="当事人类型")
+    party_role_type = Column("party_role_type", String(255), nullable=True, comment=PARTY_ROLE_TYPE)
+    party_type = Column("party_type", String(255), nullable=True, comment=PARTY_TYPE)
     org_id = Column("org_id", String(255), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(255), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(255), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(255), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     related_person_name = Column(
-        "related_person_name", String(255), nullable=True, comment="相关人名称"
+        "related_person_name", String(255), nullable=True, comment=RELATED_PERSON_NAME
     )
     hearing_date = Column("hearing_date", String(255), nullable=True, comment="开庭日期")
     use_flag = Column("use_flag", String(255), nullable=True, comment="使用标志")
-    is_hidden = Column("is_hidden", String(255), nullable=True, comment="是否不展示")
+    is_hidden = Column("is_hidden", String(255), nullable=True, comment=HIDDEN_FLAG)
     case_cause = Column("case_cause", String(255), nullable=True, comment="案由")
     reserve_field = Column("reserve_field", String(255), nullable=True, comment="预留字段")
     data_source = Column("data_source", String(255), nullable=True, comment="数据来源")
@@ -934,9 +936,9 @@ class DwdOrgRiskLawsuit(Base):
     publish_date = Column("publish_date", String(255), nullable=True, comment="公布日期")
     data_source = Column("data_source", String(255), nullable=True, comment="数据来源")
     use_flag = Column("use_flag", String(255), nullable=True, comment="使用标志")
-    original_url = Column("original_url", Text(), nullable=True, comment="原始连接URL")
+    original_url = Column("original_url", Text(), nullable=True, comment=ORIGINAL_URL)
     plaintiff = Column("plaintiff", String(255), nullable=True, comment="原告")
-    is_hidden = Column("is_hidden", String(255), nullable=True, comment="是否不展示")
+    is_hidden = Column("is_hidden", String(255), nullable=True, comment=HIDDEN_FLAG)
     source = Column("source", String(255), nullable=True, comment="数据来源")
     created_time = Column("created_time", DateTime(), nullable=True, comment="创建时间")
     updated_time = Column("updated_time", DateTime(), nullable=True, comment="更新时间")
@@ -953,23 +955,21 @@ class DwdOrgRiskLawsuitList(Base):
 
     main_doc_id = Column("main_doc_id", String(255), nullable=True, comment="主表docid")
     party_identity = Column("party_identity", String(255), nullable=True, comment="当事人身份")
-    party_role_type = Column(
-        "party_role_type", String(255), nullable=True, comment="当事人角色类型"
-    )
-    party_type = Column("party_type", String(255), nullable=True, comment="当事人类型")
+    party_role_type = Column("party_role_type", String(255), nullable=True, comment=PARTY_ROLE_TYPE)
+    party_type = Column("party_type", String(255), nullable=True, comment=PARTY_TYPE)
     related_person_name = Column(
-        "related_person_name", String(255), nullable=True, comment="相关人名称"
+        "related_person_name", String(255), nullable=True, comment=RELATED_PERSON_NAME
     )
     doc_publish_date = Column(
         "doc_publish_date", String(255), nullable=True, comment="文书公布日期"
     )
     case_cause = Column("case_cause", String(255), nullable=True, comment="案由")
     use_flag = Column("use_flag", String(255), nullable=True, comment="使用标志")
-    is_hidden = Column("is_hidden", String(255), nullable=True, comment="是否不展示")
+    is_hidden = Column("is_hidden", String(255), nullable=True, comment=HIDDEN_FLAG)
     org_id = Column("org_id", String(255), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(255), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(255), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(255), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     data_source = Column("data_source", String(255), nullable=True, comment="数据来源")
     created_time = Column("created_time", DateTime(), nullable=True, comment="创建时间")
@@ -989,7 +989,7 @@ class DwdOrgRiskShixin(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     official_id = Column("official_id", String(50), nullable=True, comment="官网id")
     case_no = Column("case_no", String(50), nullable=True, comment="案号")
@@ -1020,7 +1020,7 @@ class DwdOrgRiskShixin(Base):
     unexec_part = Column("unexec_part", String(50), nullable=True, comment="未执行部分")
     is_history = Column("is_history", Integer(), nullable=True, comment="是否历史数据")
     use_flag = Column("use_flag", Integer(), nullable=True, comment="使用标记")
-    is_hidden = Column("is_hidden", Integer(), nullable=True, comment="是否不展示")
+    is_hidden = Column("is_hidden", Integer(), nullable=True, comment=HIDDEN_FLAG)
     data_source = Column("data_source", String(50), nullable=True, comment="数据来源")
     created_time = Column("created_time", String(50), nullable=True, comment="创建时间")
     updated_time = Column("updated_time", String(50), nullable=True, comment="更新时间")
@@ -1064,7 +1064,7 @@ class DwdOrgRiskTaxPunish(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     is_history = Column("is_history", Integer(), nullable=True, comment="是否历史")
     data_source = Column("data_source", String(50), nullable=True, comment="数据来源")
@@ -1092,7 +1092,7 @@ class DwdOrgRiskXianxiao(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     company_cert_no = Column("company_cert_no", String(50), nullable=True, comment="企业证件号")
     xhfgk_doc_url = Column(
@@ -1115,7 +1115,9 @@ class DwdOrgRiskZhixing(Base):
     __table_args__ = {"comment": "前海数据机构被执行人记录"}
 
     exec_person_id = Column("exec_person_id", String(50), nullable=True, comment="唯一索引id")
-    exec_person_type = Column("exec_person_type", Integer(), nullable=True, comment="被执行人类型")
+    exec_person_type = Column(
+        "exec_person_type", Integer(), nullable=True, comment=ENFORCED_PERSON_TYPE
+    )
     exec_person_name = Column("exec_person_name", String(50), nullable=True, comment="被执行人名称")
     gender = Column("gender", String(50), nullable=True, comment="性别")
     id_no = Column("id_no", String(50), nullable=True, comment="证件号码")
@@ -1127,11 +1129,11 @@ class DwdOrgRiskZhixing(Base):
     web_id = Column("web_id", String(50), nullable=True, comment="执行信息公开网id")
     filing_date = Column("filing_date", String(50), nullable=True, comment="立案时间")
     use_flag = Column("use_flag", Integer(), nullable=True, comment="使用标记")
-    is_hidden = Column("is_hidden", Integer(), nullable=True, comment="是否不展示")
+    is_hidden = Column("is_hidden", Integer(), nullable=True, comment=HIDDEN_FLAG)
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     data_source = Column("data_source", String(50), nullable=True, comment="数据来源")
     created_time = Column("created_time", String(50), nullable=True, comment="创建时间")
@@ -1154,7 +1156,7 @@ class DwdOrgRiskZhongben(Base):
     gender = Column("gender", String(255), nullable=True, comment="性别")
     case_no = Column("case_no", String(255), nullable=True, comment="案号")
     executed_person_type = Column(
-        "executed_person_type", String(255), nullable=True, comment="被执行人类型"
+        "executed_person_type", String(255), nullable=True, comment=ENFORCED_PERSON_TYPE
     )
     id_no = Column("id_no", String(255), nullable=True, comment="证件号码")
     exec_court = Column("exec_court", String(255), nullable=True, comment="执行法院")
@@ -1170,12 +1172,12 @@ class DwdOrgRiskZhongben(Base):
     org_id = Column("org_id", String(255), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(255), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(255), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(255), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     data_source = Column("data_source", String(255), nullable=True, comment="数据来源zxgk")
     data_use_flag = Column("data_use_flag", String(255), nullable=True, comment="数据使用标记")
     is_history = Column("is_history", String(255), nullable=True, comment="是否是历史数据")
-    is_hidden = Column("is_hidden", String(255), nullable=True, comment="是否不展示")
+    is_hidden = Column("is_hidden", String(255), nullable=True, comment=HIDDEN_FLAG)
     data_source2 = Column("data_source2", String(255), nullable=True, comment="数据来源")
     created_time = Column("created_time", DateTime(), nullable=True, comment="创建时间")
     updated_time = Column("updated_time", DateTime(), nullable=True, comment="更新时间")
@@ -1193,7 +1195,7 @@ class DwdOrgShareholderInfo(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     inv_org_id = Column("inv_org_id", String(50), nullable=True, comment="股东id")
     owners_name = Column("owners_name", String(50), nullable=True, comment="股东名称")
@@ -1218,7 +1220,7 @@ class DwdOrgStockBase(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     stock_code = Column("stock_code", String(50), nullable=True, comment="股票代码")
     stock_noun = Column("stock_noun", String(50), nullable=True, comment="股票简称")
@@ -1242,7 +1244,7 @@ class DwdOrgStockFinanceInfo(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     stock_code = Column("stock_code", String(50), nullable=True, comment="股票代码")
     occur_period = Column("occur_period", String(50), nullable=True, comment="数据期")
@@ -1288,7 +1290,7 @@ class DwdOrgTagInfo(Base):
     org_id = Column("org_id", String(50), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(50), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(50), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(50), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     org_tag = Column("org_tag", String(50), nullable=True, comment="企业标签")
     tag_level = Column("tag_level", String(50), nullable=True, comment="级别")
@@ -1343,7 +1345,7 @@ class DwdOrgTbJudicialSaleInfoCompany(Base):
     org_id = Column("org_id", String(255), nullable=True, comment="机构id")
     name_cn = Column("name_cn", String(255), nullable=True, comment="机构名称")
     social_credit_code = Column(
-        "social_credit_code", String(255), nullable=True, comment="统一社会信用代码"
+        "social_credit_code", String(255), nullable=True, comment=UNIFIED_SOCIAL_CREDIT_CODE
     )
     use_flag = Column("use_flag", String(255), nullable=True, comment="使用标记")
     data_source = Column("data_source", String(255), nullable=True, comment="数据来源")

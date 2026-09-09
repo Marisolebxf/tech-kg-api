@@ -99,7 +99,7 @@ def test_builds_only_indirect_paths_and_deduplicates_reverse_edges():
 
 def test_relation_type_filter_and_string_normalization():
     body = ExpertIndirectRelationRequest(
-        core_node_id=" A ",
+        core_node_id="A",
         relation_types="学术关联",
         path_depth=2,
         min_strength=0.65,
@@ -125,6 +125,15 @@ def test_core_node_id_rejects_more_than_64_characters():
     with pytest.raises(ValidationError, match="核心节点 ID 长度不能超过 64 个字符"):
         ExpertIndirectRelationRequest(
             core_node_id="A" * 65,
+            relation_types=["学术关联"],
+        )
+
+
+@pytest.mark.parametrize("core_node_id", ["person_a!@#￥%&", "person a", " person_a"])
+def test_core_node_id_rejects_abnormal_characters(core_node_id: str):
+    with pytest.raises(ValidationError, match="异常字符"):
+        ExpertIndirectRelationRequest(
+            core_node_id=core_node_id,
             relation_types=["学术关联"],
         )
 

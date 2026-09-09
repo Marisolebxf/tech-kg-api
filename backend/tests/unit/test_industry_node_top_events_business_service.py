@@ -89,8 +89,17 @@ def _subgraphs() -> dict[str, dict]:
 
 
 def _governance() -> dict[str, list]:
-    """org_id -> [(expert_id, position), ...]。"""
-    return {ORG_A: [("person_x", "董事长")], ORG_B: []}
+    """org_id -> [(expert_id, position, expert_props), ...]。"""
+    return {
+        ORG_A: [
+            (
+                "person_x",
+                "董事长",
+                {"name_cn": "张三", "source_record_id": "sch-001", "source_table": "dwd_scholar"},
+            )
+        ],
+        ORG_B: [],
+    }
 
 
 @pytest.mark.asyncio
@@ -128,9 +137,16 @@ async def test_topn_via_graph_helpers(monkeypatch):
     # orgA 有专家
     assert resp.experts == 1
     assert resp.relations[0].expert_id == "person_x"
+    # 专家姓名来自 Person 节点属性；溯源为真实字段（不再缺省让前端回退静态映射）
+    assert resp.relations[0].expert_name == "张三"
+    assert resp.entity_provenance["person_x"].sourceField == "scholar_id"
+    assert resp.entity_provenance["person_x"].sourceValue == "sch-001"
     # 标书分析维度：后端真实派生（非空）
-    assert resp.node_impact and "bankruptcy" in resp.node_impact
-    assert resp.trend and "分布平稳" in resp.trend
+    assert resp.node_impact
+    # 分析文案使用中文事件类型（EVENT_TYPE_LABEL）
+    assert "破产" in resp.node_impact
+    assert resp.trend
+    assert "分布平稳" in resp.trend
     assert resp.opportunity  # 非空（即便 0 条也有兜底文案）
     # 置信度：风险等级 高 → 0.9；bankruptcy 事件 → 0.9
     assert resp.confidence == 0.9
@@ -158,6 +174,34 @@ async def test_enterprises_and_provenance_only_cover_topn_result(monkeypatch):
     assert {item.org_id for item in resp.top_events} == {ORG_A}
     assert ORG_A in resp.entity_provenance
     assert ORG_B not in resp.entity_provenance
+
+
+@pytest.mark.asyncio
+async def test_event_type_expands_scan_beyond_max_orgs(monkeypatch):
+    """指定 event_type 时扫描全链企业：目标事件在 chain_score 靠后企业也不被 max_orgs 截成空。
+
+    orgA(score=90) 只有 bankruptcy；orgB(score=60) 有 recruit。
+    max_orgs=1 时未过滤只会扫 orgA → 空；event_type=recruit 应扩窗扫到 orgB 命中。
+    """
+    subs = _subgraphs()
+    monkeypatch.setattr(
+        mod,
+        "_subgraph_sync",
+        lambda client, vid, edge_types, limit: subs.get(vid, {"nodes": [], "edges": []}),
+    )
+    monkeypatch.setattr(mod, "_fetch_org_governance_sync", lambda client, org_id: [])
+    monkeypatch.setattr(mod, "_get_dev_client", lambda: None)
+    monkeypatch.setattr(mod, "_result_cache", {})
+
+    resp = await IndustryNodeTopEventsService().run(
+        IndustryNodeTopEventsRequest(
+            chain_node_id="IC_test", top_n=10, max_orgs=1, event_type="recruit"
+        )
+    )
+
+    assert resp.events == 1
+    assert resp.top_events[0].event_type == "recruit"
+    assert resp.top_events[0].org_id == ORG_B
 
 
 @pytest.mark.asyncio
@@ -217,10 +261,12 @@ def test_derive_analysis_dimensions():
     assert "波及 2 家链上企业" in node_impact
     # 发展趋势：2025+2026 占 2/3 > 50% → 短期热度上升
     assert "短期热度上升" in trend
-    assert "2025" in trend and "2026" in trend
+    assert "2025" in trend
+    assert "2026" in trend
     # 机遇挖掘：financing + news 命中机遇类
     assert "2 条" in opportunity
-    assert "financing" in opportunity
+    # 机遇挖掘文案的事件类型为中文（EVENT_TYPE_LABEL）
+    assert "融资" in opportunity
     assert "涉及 2 家企业" in opportunity
 
 

@@ -40,7 +40,7 @@ import argparse
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from infra.graph_db import get_trs_graph_client
@@ -49,7 +49,7 @@ from script.scholar_provenance import confidence_props, organization_provenance
 
 logger = logging.getLogger("script.align_scholar_affiliations")
 
-BATCH_ID = f"BATCH_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_scholar_align"
+BATCH_ID = f"BATCH_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_scholar_align"
 ORG_COLLECTION = os.environ.get("SCHOLAR_ORG_COLLECTION", "organization")
 DENSE_MODEL_NAME = os.environ.get("SCHOLAR_DENSE_MODEL", "moka-ai/m3e-small")
 DENSE_DIM = 512  # m3e-small；须与机构 Milvus 集合的 dense_vec 维度一致
@@ -135,7 +135,7 @@ def _get_bm25_encoder(client: Any):
     bm25 = BM25EmbeddingFunction(analyzer=analyzer, k1=1.5, b=0.75)
     # 无语料时的默认 IDF：给一个非零基础字典即可；实际 sparse 分布对 top-k 影响可控。
     bm25.fit(["占位文本"])
-    _ = client  # placeholder; 集合内部索引已用其自身语料
+    _ = client
     return bm25
 
 
@@ -252,7 +252,7 @@ def run(
     bm25 = _get_bm25_encoder(milvus)
 
     # 3) 依次查询 + 写 SAME_AS
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     aligned = shown = 0
     skipped_low_score = 0
     for orphan_vid, info in orphan_targets.items():

@@ -72,6 +72,7 @@ from service.project_milvus import (
     decide_person,
     score_person_hit,
 )
+from utils.runtime_paths import private_state_dir
 
 logger = logging.getLogger("script.align_project_relations")
 
@@ -393,7 +394,7 @@ def run(
     )
     ingest_time = datetime.now().isoformat(sep=" ", timespec="seconds")
     report = ProjectIngestReport(
-        report_dir or Path("/tmp/project-align-reports") / ingest_batch,
+        report_dir or private_state_dir("project-align-reports", ingest_batch),
         ingest_batch=ingest_batch,
         dry_run=dry_run,
     )

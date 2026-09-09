@@ -7,7 +7,7 @@ import os
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, field_validator
@@ -77,10 +77,10 @@ def create_app(model_factory: Callable[..., Any] | None = None) -> FastAPI:
             "device": device,
         }
 
-    @app.post("/v1/embeddings")
+    @app.post("/v1/embeddings", responses={400: {"description": "请求参数无效"}})
     async def embeddings(
         request: EmbeddingRequest,
-        authorization: str | None = Header(default=None),
+        authorization: Annotated[str | None, Header()] = None,
     ) -> dict[str, object]:
         authorize(authorization)
         requested_model = request.model or model_name

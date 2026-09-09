@@ -540,7 +540,8 @@ class TestTraversal:
 
         repo = _make_repo(handler)
         path = repo.shortest_path("1", "2", edge_type="KNOWS")
-        assert path is not None and len(path.nodes) == 2
+        assert path is not None
+        assert len(path.nodes) == 2
         repo.close()
 
 

@@ -19,6 +19,9 @@ from biz.schemas.platform_overview import (
 )
 from infra.graph_db import get_trs_graph_client
 
+EXPERT_ENTITY_LABEL = "专家 / 人才"
+ORGANIZATION_ENTITY_LABEL = "机构 / 企业"
+
 logger = logging.getLogger(__name__)
 
 
@@ -138,9 +141,9 @@ def _build_structure(
     ratios = _ratios(buckets)
     definitions = (
         [
-            ("专家 / 人才", "Expert / Scholar", "#2e90fa"),
+            (EXPERT_ENTITY_LABEL, "Expert / Scholar", "#2e90fa"),
             ("论文成果", "Paper / Journal", "#7a5af8"),
-            ("机构 / 企业", "Organization / Enterprise", "#12b76a"),
+            (ORGANIZATION_ENTITY_LABEL, "Organization / Enterprise", "#12b76a"),
             ("项目 / 专利", "Project / Patent", "#f79009"),
             ("其他实体", "Other", "#98a2b3"),
         ]
@@ -282,14 +285,14 @@ class PlatformOverviewService:
             asset_change_rows={
                 "entity": [
                     AssetChangeRow(
-                        type="机构 / 企业",
+                        type=ORGANIZATION_ENTITY_LABEL,
                         object="华南智能芯片有限公司",
                         change="新增 Organization",
                         source="enterprise_profile",
                         time="10:30:13",
                     ),
                     AssetChangeRow(
-                        type="专家 / 人才",
+                        type=EXPERT_ENTITY_LABEL,
                         object="周启航",
                         change="新增 Expert",
                         source="expert_profile",
@@ -433,7 +436,7 @@ class PlatformOverviewService:
             ],
             entity_structure=[
                 StructureItem(
-                    label="专家 / 人才",
+                    label=EXPERT_ENTITY_LABEL,
                     schema="Expert",
                     count="4,286 万",
                     ratio=34,
@@ -447,7 +450,7 @@ class PlatformOverviewService:
                     tone="#7a5af8",
                 ),
                 StructureItem(
-                    label="机构 / 企业",
+                    label=ORGANIZATION_ENTITY_LABEL,
                     schema="Organization",
                     count="2,164 万",
                     ratio=17,

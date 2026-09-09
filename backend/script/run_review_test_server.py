@@ -23,6 +23,9 @@ os.environ.setdefault("GRAPH_BUILD_SERVICE_TOKEN", "test-service-token")
 os.environ.setdefault("REVIEW_PRODUCTION_ENABLED", "true")
 os.environ.setdefault("REVIEW_SNAPSHOT_MAX_BYTES", "2097152")
 os.environ.setdefault("REVIEW_RESUME_MAX_ATTEMPTS", "5")
+# Legacy review endpoint integration cases exercise the repository's built-in
+# deterministic fixtures. Production keeps this disabled by default.
+os.environ.setdefault("WORKFLOW_DEMO_DATA_ENABLED", "true")
 # workflow sqlite 落到临时文件，避免多人共用 /tmp 只读库
 os.environ.setdefault(
     "WORKFLOW_DATABASE_PATH",

@@ -17,7 +17,8 @@ def normalize_text(value: Any) -> str:
 
 def normalize_doi(value: Any) -> str:
     value = normalize_text(value)
-    for prefix in ("https://doi.org/", "http://doi.org/", "doi.org/", "doi:"):
+    value = re.sub(r"^https?://", "", value, count=1)
+    for prefix in ("doi.org/", "doi:"):
         if value.startswith(prefix):
             value = value[len(prefix) :]
             break

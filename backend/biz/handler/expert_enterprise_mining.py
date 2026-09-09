@@ -19,7 +19,7 @@ async def describe_expert_enterprise_mining() -> dict[str, object]:
     return application.describe()
 
 
-@router.post("/query", response_model=ApiResponse)
+@router.post("/query")
 async def query_expert_enterprise_relation(req: ExpertEnterpriseQueryRequest) -> ApiResponse:
     try:
         return ApiResponse(data=application.query_existing(req.model_dump()))
@@ -29,7 +29,6 @@ async def query_expert_enterprise_relation(req: ExpertEnterpriseQueryRequest) ->
 
 @router.post(
     "/mine",
-    response_model=ApiResponse,
     dependencies=[Depends(require_platform_admin)],
 )
 async def mine_expert_enterprise_relation(req: ExpertEnterpriseMiningRequest) -> ApiResponse:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from math import isclose
 from typing import Any
 
 from rapidfuzz import fuzz
@@ -30,11 +31,15 @@ def clean_text(value: Any) -> str:
 def sparse_to_dict(row: Any) -> dict[int, float]:
     """Convert a scipy CSR / COO sparse row to ``{col: value}`` for pymilvus upsert."""
     if isinstance(row, dict):
-        return {int(k): float(v) for k, v in row.items() if float(v) != 0.0}
+        return {
+            int(k): float(v) for k, v in row.items() if not isclose(float(v), 0.0, abs_tol=1e-12)
+        }
     if hasattr(row, "tocoo"):
         coo = row.tocoo()
         return {
-            int(k): float(v) for k, v in zip(coo.col, coo.data, strict=False) if float(v) != 0.0
+            int(k): float(v)
+            for k, v in zip(coo.col, coo.data, strict=False)
+            if not isclose(float(v), 0.0, abs_tol=1e-12)
         }
     raise TypeError(f"unsupported sparse vector type: {type(row)!r}")
 
@@ -164,7 +169,7 @@ def score_person_hit(
         score = min(1.0, score + 0.08)
     if discipline and normalize_alignment_text(discipline) in search_text:
         score = min(1.0, score + 0.02)
-    if name_score == 1.0:
+    if isclose(name_score, 1.0):
         score = max(score, 0.95)
     return AlignmentHit(vid=hit.vid, score=score, fields={**fields, "name_score": name_score})
 

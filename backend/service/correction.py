@@ -124,7 +124,7 @@ class CorrectionService:
             "total": total,
             "page": current_page,
             "pageSize": size,
-            "statusCounts": {status_name: count for status_name, count in count_rows},
+            "statusCounts": dict(count_rows),
         }
 
     def get(self, correction_id: str, actor: PlatformActor) -> dict[str, Any]:
@@ -167,6 +167,8 @@ class CorrectionService:
         correction = self._get(correction_id)
         if correction.status != PENDING_REVIEW:
             raise ValueError("该记录已处理，不能重复审核")
+        if correction.submitter_id == actor.user_id:
+            raise PermissionError("提交人与审核人不能是同一账号")
         if decision == "reject" and not note.strip():
             raise ValueError("驳回时必须填写原因")
         correction.reviewer_id = actor.user_id

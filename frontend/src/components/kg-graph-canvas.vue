@@ -132,9 +132,20 @@ function nodeRadius(node: GraphNodeData) {
 }
 
 /** 标签过长时截断，防止长文本撑爆画布。 */
-function displayLabel(node: GraphNodeData) {
-  const max = 6
-  return node.label.length > max ? `${node.label.slice(0, max)}…` : node.label
+/** 圆形节点标签最多两行、每行约 10 字，超长不再单行截断成省略号；
+ * 矩形节点保持单行（下方有 meta 行，两行会重叠）。 */
+function labelLines(node: GraphNodeData): string[] {
+  const label = node.label || ''
+  const perLine = 10
+  if (props.nodeShape !== 'circle' || label.length <= perLine) {
+    const max = 12
+    return [label.length > max ? `${label.slice(0, max)}…` : label]
+  }
+  const first = label.slice(0, perLine)
+  const rest = label.slice(perLine)
+  // 第二行超过一行仍截断（极少见：30+ 字长名），完整名称在 title 悬浮提示
+  const second = rest.length > perLine ? `${rest.slice(0, perLine)}…` : rest
+  return [first, second]
 }
 
 function nodeBoundaryOffset(node: GraphNodeData, dx: number, dy: number, gap = 0) {
@@ -329,8 +340,15 @@ onUnmounted(() => {
           />
           <text
             class="platform-node__title"
-            :y="nodeShape === 'circle' ? (nodeRadius(node) + 11) : -5"
-          >{{ displayLabel(node) }}</text>
+            :y="nodeShape === 'circle' ? (nodeRadius(node) + 11 - (labelLines(node).length - 1) * 6) : -5"
+          >
+            <tspan
+              v-for="(line, i) in labelLines(node)"
+              :key="i"
+              x="0"
+              :dy="i === 0 ? 0 : 12"
+            >{{ line }}</tspan>
+          </text>
           <text
             v-if="nodeShape !== 'circle'"
             class="platform-node__meta"
@@ -448,7 +466,7 @@ onUnmounted(() => {
 
 .kg-graph-map-controls__button:hover:not(:disabled) {
   background: #f2f3f5;
-  color: #165dff;
+  color: #004ecc;
 }
 
 .kg-graph-map-controls__button:focus-visible {
@@ -467,7 +485,7 @@ onUnmounted(() => {
 }
 
 .kg-graph-map-controls__slider :deep(.arco-slider-bar) {
-  background: #165dff;
+  background: #004ecc;
 }
 
 .kg-graph-map-controls__slider :deep(.arco-slider-btn) {
@@ -512,7 +530,7 @@ onUnmounted(() => {
 }
 
 .platform-network-line.is-selected {
-  stroke: #165dff;
+  stroke: #004ecc;
   stroke-width: 2;
   filter: drop-shadow(0 0 4px rgba(22, 93, 255, 0.22));
 }
@@ -572,7 +590,7 @@ onUnmounted(() => {
 }
 
 .platform-node.is-selected .node-shape {
-  stroke: #165dff;
+  stroke: #004ecc;
   stroke-width: 1.8;
   filter: drop-shadow(0 0 7px rgba(22, 93, 255, 0.2));
 }
@@ -590,7 +608,7 @@ onUnmounted(() => {
 }
 
 .platform-node__meta {
-  fill: #86909c;
+  fill: #59636f;
   font-size: 9px;
   font-weight: 400;
 }

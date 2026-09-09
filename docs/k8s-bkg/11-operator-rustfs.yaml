@@ -28,15 +28,18 @@ spec:
       labels:
         app: operator-rustfs
     spec:
+      # 必须以 root 运行：busybox init 容器执行 chown/chmod 需要 root，
+      # 非 root 的 chown 一律 Operation not permitted，pod 会卡死在 Init:Error。
+      # NFS 类 storageclass（nfs-client / managed-nfs-storage）普遍忽略 fsGroup，
+      # 因此用 chmod 777 兜底可写，不依赖目录属主与运行用户的匹配。
       securityContext:
-        runAsUser: 10001
-        runAsGroup: 10001
-        fsGroup: 10001
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
       initContainers:
-        # 修复 NFS 等共享存储的目录属主，保证 rustfs(uid 10001) 可写
         - name: fix-permissions
           image: 10.50.62.9:30303/library/busybox:1.36
-          command: ["sh", "-c", "chown -R 10001:10001 /data"]
+          command: ["sh", "-c", "chmod -R 777 /data && chown -R 0:0 /data"]
           volumeMounts:
             - name: rustfs-data
               mountPath: /data

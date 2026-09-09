@@ -4,13 +4,13 @@
 
 交付工程师依据本文档，部署科技知识图谱业务（命名空间 `bkg`）。
 
-- 镜像仓库地址：http://10.50.62.9:30303
-- 容器管理平台地址：https://10.50.199.115
+- 镜像仓库地址：<http://10.50.62.9:30303>
+- 容器管理平台地址：<https://10.50.199.115>
 
 本目录下的 yaml 文件与本文档内容一一对应，可直接 `kubectl apply -f` 或在容器平台界面导入：
 
 | 文件 | 内容 |
-|------|------|
+| ------ | ------ |
 | `00-namespace.yaml` | 命名空间 |
 | `01-pvc.yaml` | 全部持久化存储（PVC） |
 | `02-configmap.yaml` | 业务非敏感配置 |
@@ -28,17 +28,17 @@
 ## 二、修订记录
 
 | 版本 | 文档发布日期 | 修订内容 |
-|------|------------|---------|
+| ------ | ------------ | --------- |
 | v0.0.2 | 2026/9/4 | 前端镜像一次构建运行时注入（APP_BASE）；与 TRS Graph 同命名空间对齐（imagePullSecrets/GRAPH_SPACE_REPLICA_FACTOR）；项目内命名统一 bkg；新增镜像准备与拉取密钥章节 |
 | 1.0 | 2026/8/28 | 初版 |
 
 ## 三、名称解释
 
 | 名称 | 解释 |
-|------|------|
+| ------ | ------ |
 | 容器平台 | k8s 云业务平台，集成了多种功能在界面进行操作和监控 |
 | 镜像仓库 | 用于存储业务所用的镜像仓库（本环境为 10.50.62.9:30303） |
-| backend | 后端业务镜像（api / temporal-worker / m3e-embedding 三个 Deployment 共用同一镜像，通过不同启动命令区分） |
+| backend | 后端业务镜像（api / temporal-worker 共用同一镜像；m3e-embedding 用其派生镜像 m3e-backend，已烘焙 m3e 模型） |
 | web | 前端业务镜像（nginx 静态资源 + `/api/` 反代） |
 | rustfs | S3 兼容对象存储，承载 schema 脚本、operator 包、milvus 内部存储 |
 | temporal | 工作流引擎，图谱构建任务通过它编排调度 |
@@ -50,7 +50,7 @@
 本业务（bkg 命名空间）部署需要以下中间件：
 
 | 组件 | 版本 | 用途 |
-|------|------|------|
+| ------ | ------ | ------ |
 | redis | 7.4-alpine | 认证会话存储（auth-redis） |
 | rustfs | 1.0.0-alpha.93 | S3 对象存储（schema 脚本 / operator 包 / milvus 存储） |
 | etcd | 3.5.5 | milvus 元数据 |
@@ -58,20 +58,21 @@
 | mysql | 8.4 | temporal 专用库 + 业务控制面库 techkg_control |
 | temporal | 1.29.2（auto-setup） | 工作流引擎 |
 | temporal-ui | 2.39.0 | 工作流控制台（运维观察用） |
-| backend | v0.0.1（Python 3.11） | 后端业务镜像 ×3（api / temporal-worker / m3e-embedding） |
+| backend | v0.0.1（Python 3.11） | 后端业务镜像 ×2（api / temporal-worker） |
+| m3e-backend | v0.0.1（backend + m3e-small） | 专利向量化服务 m3e-embedding |
 | web | v0.0.1（nginx 1.27） | 前端业务镜像 |
 
 **集群外依赖**（需提前准备，yaml 中只填连接地址）：
 
 | 依赖 | 说明 |
-|------|------|
+| ------ | ------ |
 | 主 MySQL | 业务主库 `gkx_element` + 论文合作库 `gkx_local`（环境变量 `MYSQL_*` / `PAPER_COOP_MYSQL_*`） |
 | trs-graph-service | NebulaGraph REST 网关（Java），环境变量 `TRS_GRAPH_BASE_URL` / `TRS_GRAPH_API_KEY` / `TRS_GRAPH_SPACE` |
 | LLM API | 智谱 GLM（可选，未配置时相关功能自动降级） |
 | 用户中心 SSO | `edu.itic-sci.com`（开启 `AUTH_ENABLED=true` 时必需） |
 
-- 镜像仓库地址：http://10.50.62.9:30303
-- 容器管理平台地址：https://10.50.199.115
+- 镜像仓库地址：<http://10.50.62.9:30303>
+- 容器管理平台地址：<https://10.50.199.115>
 
 **与 TRS Graph 图数据库平台同命名空间（`bkg`）共存**（其部署文档：《图数据库平台（TRS Graph）K8s 部署文档》）：
 
@@ -91,10 +92,14 @@ docker login 10.50.62.9:30303
 ### 2、构建并推送业务镜像（后端一套、前端一套）
 
 ```bash
-# 后端（api / temporal-worker / m3e-embedding 三个 Deployment 共用同一镜像）
+# 后端（api / temporal-worker 两个 Deployment 共用同一镜像）
 docker build -t 10.50.62.9:30303/bkg/backend:v0.0.1 \
   --build-arg PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
   ./backend
+
+# m3e-backend（backend 镜像 + 烘焙 m3e-small 模型，m3e-embedding 专用；
+# 构建机需能访问 hf-mirror.com，模型在构建期进入镜像层）
+docker build -t 10.50.62.9:30303/bkg/m3e-backend:v0.0.1 -f backend/Dockerfile.m3e backend
 
 # 前端（一次构建、部署期注入——不传任何 VITE_*，部署前缀由 bkg-config 的 APP_BASE 决定）
 docker build -t 10.50.62.9:30303/bkg/web:v0.0.1 \
@@ -102,6 +107,7 @@ docker build -t 10.50.62.9:30303/bkg/web:v0.0.1 \
   ./frontend
 
 docker push 10.50.62.9:30303/bkg/backend:v0.0.1
+docker push 10.50.62.9:30303/bkg/m3e-backend:v0.0.1
 docker push 10.50.62.9:30303/bkg/web:v0.0.1
 ```
 
@@ -145,13 +151,12 @@ kubectl -n bkg create secret docker-registry bkg-image-pull-secret-0 \
 在平台上给所有组件创建 PVC（界面创建为主；名称必须与下表一致）：
 
 | PVC 名称 | 容量建议 | 挂载组件 |
-|----------|---------|---------|
+| ---------- | --------- | --------- |
 | operator-rustfs-data | 50Gi（ReadWriteMany） | operator-rustfs |
 | milvus-etcd-data | 10Gi | milvus-etcd |
 | milvus-data | 100Gi | milvus |
 | temporal-mysql-data | 50Gi | temporal-mysql |
 | workflow-state | 20Gi | temporal-worker / api |
-| m3e-model-cache | 5Gi | m3e-embedding（模型缓存） |
 | patent-index-state | 20Gi | api（专利索引状态） |
 | operator-data | 10Gi | api（operator 脚本） |
 | auth-redis-data | 10Gi | auth-redis |
@@ -176,6 +181,7 @@ spec:
   resources:
     requests:
       storage: 50Gi
+  storageClassName: managed-nfs-storage
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -187,6 +193,7 @@ spec:
   resources:
     requests:
       storage: 10Gi
+  storageClassName: managed-nfs-storage
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -197,7 +204,8 @@ spec:
   accessModes: ["ReadWriteOnce"]
   resources:
     requests:
-      storage: 100Gi
+      storage: 10Gi
+  storageClassName: managed-nfs-storage
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -208,7 +216,8 @@ spec:
   accessModes: ["ReadWriteOnce"]
   resources:
     requests:
-      storage: 50Gi
+      storage: 10Gi
+  storageClassName: managed-nfs-storage
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -219,18 +228,8 @@ spec:
   accessModes: ["ReadWriteOnce"]
   resources:
     requests:
-      storage: 20Gi
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: m3e-model-cache
-  namespace: bkg
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 5Gi
+      storage: 10Gi
+  storageClassName: managed-nfs-storage
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -242,6 +241,7 @@ spec:
   resources:
     requests:
       storage: 20Gi
+  storageClassName: managed-nfs-storage
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -253,6 +253,7 @@ spec:
   resources:
     requests:
       storage: 10Gi
+  storageClassName: managed-nfs-storage
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -264,6 +265,7 @@ spec:
   resources:
     requests:
       storage: 10Gi
+  storageClassName: managed-nfs-storage
 ```
 
 ### 2、部署 auth-redis（会话存储）
@@ -863,9 +865,11 @@ spec:
       labels:
         app: m3e-embedding
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: m3e-embedding
-          image: 10.50.62.9:30303/bkg/backend:v0.0.1
+          image: 10.50.62.9:30303/bkg/m3e-backend:v0.0.1
           imagePullPolicy: IfNotPresent
           command:
             [
@@ -890,7 +894,9 @@ spec:
             - name: M3E_MAX_CONCURRENCY
               value: "1"
             - name: HF_HOME
-              value: /models/huggingface
+              value: /opt/models/huggingface
+            - name: HF_HUB_OFFLINE
+              value: "1"
           ports:
             - containerPort: 8010
               name: http
@@ -905,20 +911,13 @@ spec:
             httpGet:
               path: /health
               port: 8010
-            periodSeconds: 15
-            failureThreshold: 60 # 最长 15 分钟，覆盖首次下载模型
+            periodSeconds: 10
+            failureThreshold: 18 # 模型已烘焙进镜像，启动 1-2 分钟
           readinessProbe:
             httpGet:
               path: /health
               port: 8010
             periodSeconds: 15
-          volumeMounts:
-            - name: m3e-model-cache
-              mountPath: /models/huggingface
-      volumes:
-        - name: m3e-model-cache
-          persistentVolumeClaim:
-            claimName: m3e-model-cache
 ---
 apiVersion: v1
 kind: Service
@@ -936,7 +935,7 @@ spec:
       targetPort: 8010
 ```
 
-> 首次启动需从 HuggingFace 下载 m3e 模型（约 15 分钟内）；集群无法直连 HF 时在 env 中增加 `HF_ENDPOINT` 指向镜像站。
+> 模型已在构建期烘焙进 `m3e-backend` 镜像（`backend/Dockerfile.m3e`，经 hf-mirror.com 下载），运行期 `HF_HUB_OFFLINE=1` 纯离线启动，不依赖集群外网，也不再需要 `m3e-model-cache` PVC。
 
 **2、temporal-worker（工作流消费者）**
 
@@ -1160,7 +1159,7 @@ kubectl -n bkg exec deploy/api -- curl -s http://localhost:8000/health
 
 ## 九、代理配置
 
-域名使用：https://edu.itic-sci.com/bkg_zpt
+域名使用：<https://edu.itic-sci.com/bkg_zpt>
 
 外部统一入口走平台的 nginx/Ingress 反代到 `web` 服务（NodePort 30880），路径规则：
 

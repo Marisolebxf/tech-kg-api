@@ -1,6 +1,7 @@
-# m3e-embedding：专利向量化推理服务（后端镜像 backend 换启动命令）。
-# 首次启动需从 HuggingFace 下载 moka-ai/m3e-small 模型，start_period 给足时间；
-# 若集群无法直连 HF，可在 env 增加 HF_ENDPOINT 指向镜像站。
+# m3e-embedding：专利向量化推理服务。
+# 镜像 bkg/m3e-backend 在 backend 镜像基础上烘焙了 moka-ai/m3e-small 模型
+# （构建期经 hf-mirror.com 下载，见 backend/Dockerfile.m3e），
+# 运行期 HF_HUB_OFFLINE=1 纯离线启动，不依赖集群外网，也不需要模型缓存 PVC。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -22,7 +23,7 @@ spec:
         - name: bkg-image-pull-secret-0
       containers:
         - name: m3e-embedding
-          image: 10.50.62.9:30303/bkg/backend:v0.0.1
+          image: 10.50.62.9:30303/bkg/m3e-backend:v0.0.1
           imagePullPolicy: IfNotPresent
           command:
             [
@@ -47,7 +48,9 @@ spec:
             - name: M3E_MAX_CONCURRENCY
               value: "1"
             - name: HF_HOME
-              value: /models/huggingface
+              value: /opt/models/huggingface
+            - name: HF_HUB_OFFLINE
+              value: "1"
           ports:
             - containerPort: 8010
               name: http
@@ -62,20 +65,13 @@ spec:
             httpGet:
               path: /health
               port: 8010
-            periodSeconds: 15
-            failureThreshold: 60 # 最长 15 分钟，覆盖首次下载模型
+            periodSeconds: 10
+            failureThreshold: 18 # 模型已烘焙进镜像，启动 1-2 分钟
           readinessProbe:
             httpGet:
               path: /health
               port: 8010
             periodSeconds: 15
-          volumeMounts:
-            - name: m3e-model-cache
-              mountPath: /models/huggingface
-      volumes:
-        - name: m3e-model-cache
-          persistentVolumeClaim:
-            claimName: m3e-model-cache
 ---
 apiVersion: v1
 kind: Service

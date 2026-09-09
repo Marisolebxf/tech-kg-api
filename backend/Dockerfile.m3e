@@ -1,0 +1,18 @@
+# m3e-embedding 专用镜像：在 backend 业务镜像上烘焙 moka-ai/m3e-small 模型，
+# 运行期完全离线启动，不依赖集群外网（构建机需能访问 HF_ENDPOINT 镜像站）。
+# 构建（仓库根目录执行）：
+#   docker build -t 10.50.62.9:30303/bkg/m3e-backend:v0.0.1 -f backend/Dockerfile.m3e backend
+ARG BASE=10.50.62.9:30303/bkg/backend:v0.0.1
+FROM ${BASE}
+
+# 基础镜像以非 root 的 app 用户运行，写 /opt/models 需临时切回 root
+USER root
+ENV HF_HOME=/opt/models/huggingface \
+    HF_ENDPOINT=https://hf-mirror.com
+RUN mkdir -p /opt/models/huggingface \
+    && chown -R app:app /opt/models \
+    && .venv/bin/python -c "from huggingface_hub import snapshot_download; snapshot_download('moka-ai/m3e-small')"
+USER app
+
+# 运行期纯离线：模型已在镜像内，启动不再访问任何网络
+ENV HF_HUB_OFFLINE=1

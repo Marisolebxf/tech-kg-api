@@ -174,6 +174,7 @@ class PanoramaGraphEdge(BaseModel):
     source: str
     target: str
     label: str
+    confidence: float | None = None
     data: dict[str, Any] = Field(default_factory=dict)
 
 

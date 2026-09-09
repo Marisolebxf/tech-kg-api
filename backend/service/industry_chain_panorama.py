@@ -905,11 +905,20 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         }
 
     def _edge_to_graph_edge(self, edge: dict[str, Any]) -> dict[str, Any]:
+        props = edge.get("properties") or {}
+        # 不同边类型的置信度字段名/量纲不同：chain_score 是 0-100 的产业链匹配分，
+        # confidence 已经是 0-1；统一换算成 0-1，避免前端拿不到值只能显示"暂无"。
+        confidence: float | None = None
+        if isinstance(props.get("confidence"), (int, float)):
+            confidence = min(1.0, max(0.0, float(props["confidence"])))
+        elif isinstance(props.get("chain_score"), (int, float)):
+            confidence = min(1.0, max(0.0, float(props["chain_score"]) / 100))
         return {
             "source": str(edge.get("source") or ""),
             "target": str(edge.get("target") or ""),
             "label": str(edge.get("type") or ""),
-            "data": edge.get("properties") or {},
+            "confidence": confidence,
+            "data": props,
         }
 
     @staticmethod

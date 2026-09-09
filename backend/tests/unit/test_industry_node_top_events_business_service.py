@@ -143,7 +143,8 @@ async def test_topn_via_graph_helpers(monkeypatch):
     assert resp.entity_provenance["person_x"].sourceValue == "sch-001"
     # 标书分析维度：后端真实派生（非空）
     assert resp.node_impact
-    assert "bankruptcy" in resp.node_impact
+    # 分析文案使用中文事件类型（EVENT_TYPE_LABEL）
+    assert "破产" in resp.node_impact
     assert resp.trend
     assert "分布平稳" in resp.trend
     assert resp.opportunity  # 非空（即便 0 条也有兜底文案）
@@ -264,7 +265,8 @@ def test_derive_analysis_dimensions():
     assert "2026" in trend
     # 机遇挖掘：financing + news 命中机遇类
     assert "2 条" in opportunity
-    assert "financing" in opportunity
+    # 机遇挖掘文案的事件类型为中文（EVENT_TYPE_LABEL）
+    assert "融资" in opportunity
     assert "涉及 2 家企业" in opportunity
 
 

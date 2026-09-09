@@ -976,12 +976,14 @@ function buildLiveGraph(
         data.entity_provenance?.[ev0.org_id],
       );
       addEdge(data.chain_node_id, ev0.org_id, "关联企业", "chain");
+      // 事件节点标签用「类型+日期」短文案：新闻标题 20-40 字，做标签必然截断出省略号；
+      // 完整标题放 relations 副标题与悬浮提示（title），摘要"核心事件"行也展示 TOP1 标题。
       addNode(
         ev0.event_id,
-        ev0.title,
+        `${displayEventType(ev0.event_type)} ${displayEventDate(ev0.occur_date)}`,
         "event",
-        ev0.event_type || "事件",
-        `${ev0.event_type || ""}｜${(ev0.occur_date || "").slice(0, 10)}｜评分 ${ev0.impact_score}`,
+        displayEventType(ev0.event_type),
+        `${ev0.title || ""}｜评分 ${ev0.impact_score}`,
         // 事件置信度用后端 EVENT_CONFIDENCE 值（风险 0.9 / 财务 0.85 / 中标 0.8 / 资讯 0.7）
         typeof ev0.confidence === "number" ? ev0.confidence : undefined,
         data.entity_provenance?.[ev0.event_id],
@@ -1293,6 +1295,43 @@ const selectedEdgeNodes = computed(() => {
 });
 
 /** 关系页签只转换展示值，保留图数据中的原始 label/category。 */
+// 事件类型码 → 中文（与后端 service/industry_node_top_events_business.py 的
+// EVENT_TYPE_LABEL 同款，接口字段返回英文码，页面展示中文）
+const eventTypeLabel: Record<string, string> = {
+  bankruptcy: "破产",
+  zhixing: "被执行",
+  shixin: "失信",
+  tax_punish: "税务处罚",
+  judicial_case: "司法案件",
+  illegal: "违法违规",
+  abnormal: "经营异常",
+  pledge: "股权质押",
+  chattel: "动产抵押",
+  equity_freeze: "股权冻结",
+  judicial_sale: "司法拍卖",
+  court_filed_case: "法院立案",
+  court_notice: "法院公告",
+  court_announcement: "法院送达",
+  financing: "融资",
+  stock_finance: "上市企业财务信息",
+  annual_finance: "年报财务信息",
+  bid: "中标",
+  change_record: "工商变更",
+  recruit: "招聘",
+  news: "资讯",
+};
+const displayEventType = (code?: string | null) =>
+  (code && eventTypeLabel[code]) || code || "事件";
+
+/** 事件时间规整展示：202512 → 2025-12；20251231... → 2025-12-31；不足位原样。 */
+const displayEventDate = (raw?: string | null) => {
+  const digits = (raw || "").replace(/[^\d]/g, "");
+  if (digits.length >= 8) return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+  if (digits.length >= 6) return `${digits.slice(0, 4)}-${digits.slice(4, 6)}`;
+  if (digits.length >= 4) return digits.slice(0, 4);
+  return raw || "-";
+};
+
 const relationTypeDisplay: Record<string, string> = {
   AFFILIATED_WITH: "机构任职关系",
 };
@@ -1476,11 +1515,11 @@ function buildLiveSummary(
     out["产业链"] = d.chain_name || "-";
     out["产业链节点"] = d.chain_node_name || "-";
     out["筛选范围"] =
-      `TOP ${d.events ?? 0}｜${[...new Set((d.top_events || []).map((e: any) => e.event_type).filter(Boolean))].join("、") || "事件"}`;
+      `TOP ${d.events ?? 0}｜${[...new Set((d.top_events || []).map((e: any) => e.event_type).filter(Boolean))].map((t: any) => displayEventType(t)).join("、") || "事件"}`;
     // 键名与 summaryRows 的"核心事件"对齐（此前写成"重点事件"导致恒显示静态 demo 值）
     out["核心事件"] = ev0.title || "-";
     out["事件类型/时间"] =
-      `${ev0.event_type || "-"}｜${(ev0.occur_date || "").slice(0, 10)}`;
+      `${displayEventType(ev0.event_type)}｜${displayEventDate(ev0.occur_date)}`;
     out["影响力排名"] = ev0.rank
       ? `第 ${ev0.rank} 名｜影响力评分 ${ev0.impact_score}`
       : "-";
@@ -1495,7 +1534,7 @@ function buildLiveSummary(
     // 节点影响/发展趋势/机遇挖掘优先用后端规则派生的真实文案
     out["节点影响"] =
       d.node_impact ||
-      `TOP 事件类型 ${types.join("、") || "无"}，风险等级 ${d.risk_level || "-"}`;
+      `TOP 事件类型 ${types.map((t: any) => displayEventType(t)).join("、") || "无"}，风险等级 ${d.risk_level || "-"}`;
     const years = [
       ...new Set(
         (d.top_events || [])
@@ -1508,7 +1547,7 @@ function buildLiveSummary(
       d.trend || `近期 TOP 事件 ${d.events ?? 0} 条${trendPeriod}`;
     out["机遇挖掘"] =
       d.opportunity ||
-      `涉及企业 ${d.enterprises ?? 0} 家，事件类型 ${types.join("、") || "无"}`;
+      `涉及企业 ${d.enterprises ?? 0} 家，事件类型 ${types.map((t: any) => displayEventType(t)).join("、") || "无"}`;
   } else if (key === "paper-cooperation") {
     const sr = d?.structuredResult || res?.structuredResult || d || res;
     const tr = sr.cooperationTimeRange || {};
@@ -1759,6 +1798,40 @@ const liveProvenance = computed(() => {
       liveResponse.value?.data?.provenance ??
       null
     );
+  // 企业关系 / 产业链TOP-N：用响应 entity_provenance 构建实体溯源列表，
+  // 未点击展示全部实体来源，点击节点/边按 graphVid 筛选（任务第 4 条）。
+  if (isLiveEnterpriseRelation.value || isLiveIndustryEvent.value) {
+    const data = liveResponse.value?.data;
+    const provMap = (data?.entity_provenance || {}) as Record<
+      string,
+      {
+        sourceTable?: string | null;
+        sourceField?: string | null;
+        sourceValue?: string | null;
+        ingestBatch?: string | null;
+        ingestTime?: string | null;
+      }
+    >;
+    const nodesById = new Map(graphNodes.value.map((n) => [n.id, n]));
+    const evidences = Object.entries(provMap).map(([vid, p]) => {
+      const node = nodesById.get(vid);
+      return {
+        title: `${node?.label || vid}（${node?.entityType || "实体"}）`,
+        summary: `${node?.entityType || "实体"}入图来源`,
+        sourceTable: p.sourceTable || undefined,
+        sourceField: p.sourceField || undefined,
+        recordId: p.sourceValue || undefined,
+        fieldIdentifier: p.sourceField || undefined,
+        graphVid: vid,
+      };
+    });
+    if (!evidences.length) return null;
+    return {
+      sourceDatabase: "科技要素数据库（gkx_element）",
+      summary: `共 ${evidences.length} 个实体的入图来源`,
+      evidences,
+    };
+  }
   return null;
 });
 
@@ -1776,9 +1849,11 @@ const displayedProvenanceEvidences = computed(() => {
     return filtered.length ? filtered : pv.evidences;
   }
   if (edge) {
+    // 点击边 → 展示两端实体的溯源（单实体溯源的 graphVid 不可能同时包含两端，
+    // 原来的 && 条件永远不命中而回退全量，不符合"点击边溯源跟着更新"）。
     const filtered = pv.evidences.filter((ev: any) => {
       const vid = String(ev.graphVid || "");
-      return vid.includes(edge.from) && vid.includes(edge.to);
+      return vid.includes(edge.from) || vid.includes(edge.to);
     });
     return filtered.length ? filtered : pv.evidences;
   }
@@ -2036,7 +2111,9 @@ const isUnifiedProvenance = computed(
     isExpertDirect.value ||
     isPanorama.value ||
     isLiveCoop.value ||
-    isLiveAlumni.value,
+    isLiveAlumni.value ||
+    isLiveEnterpriseRelation.value ||
+    isLiveIndustryEvent.value,
 );
 
 function computePanoramaSummaryRows(

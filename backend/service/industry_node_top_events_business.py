@@ -253,6 +253,35 @@ EVENT_CONFIDENCE = {
 # 综合置信度按风险等级赋值
 RISK_LEVEL_CONFIDENCE = {"高": 0.9, "中": 0.75, "低": 0.6}
 
+# 事件类型码 → 中文名（分析文案/证据里用中文，接口字段仍返回英文码）
+EVENT_TYPE_LABEL = {
+    "bankruptcy": "破产",
+    "zhixing": "被执行",
+    "shixin": "失信",
+    "tax_punish": "税务处罚",
+    "judicial_case": "司法案件",
+    "illegal": "违法违规",
+    "abnormal": "经营异常",
+    "pledge": "股权质押",
+    "chattel": "动产抵押",
+    "equity_freeze": "股权冻结",
+    "judicial_sale": "司法拍卖",
+    "court_filed_case": "法院立案",
+    "court_notice": "法院公告",
+    "court_announcement": "法院送达",
+    "financing": "融资",
+    "stock_finance": "上市企业财务信息",
+    "annual_finance": "年报财务信息",
+    "bid": "中标",
+    "change_record": "工商变更",
+    "recruit": "招聘",
+    "news": "资讯",
+}
+
+
+def _type_label(code: str | None) -> str:
+    return EVENT_TYPE_LABEL.get(code or "", code or "未知")
+
 
 def _impact_score(event_type, amount, occur_date, chain_score):
     weight = EVENT_WEIGHT.get(event_type or "", 1.0)
@@ -494,7 +523,7 @@ class IndustryNodeTopEventsService:
         resp.evidence = [
             f"链节点 {req.chain_node_id}({resp.chain_node_name or ''}) 关联 {len(orgs)} 家企业",
             f"汇总 {len(events)} 条事件，影响力排序取 TOP {len(top)}",
-            f"风险等级 {resp.risk_level}（基于事件类型 {sorted(top_types)}）",
+            f"风险等级 {resp.risk_level}（基于事件类型 {sorted(_type_label(t) for t in top_types)}）",
             f"节点影响：{resp.node_impact}",
             f"发展趋势：{resp.trend}",
             f"机遇挖掘：{resp.opportunity}",
@@ -523,7 +552,7 @@ class IndustryNodeTopEventsService:
         fin_n = sum(1 for ev in top if (ev.get("event_type") or "") in FINANCE_EVENT_TYPES)
         news_n = sum(1 for ev in top if ev.get("event_type") == "news")
         node_impact = (
-            f"TOP {len(top)} 事件以 {main_type} 为主，风险等级 {risk_level}，"
+            f"TOP {len(top)} 事件以 {_type_label(main_type)} 为主，风险等级 {risk_level}，"
             f"波及 {len(top_org_ids)} 家链上企业；"
             f"含 {risk_n} 条风险事件、{fin_n} 条财务事件、{news_n} 条资讯"
         )
@@ -554,7 +583,8 @@ class IndustryNodeTopEventsService:
             if t:
                 opp_type_counts[t] = opp_type_counts.get(t, 0) + 1
         opp_desc = "、".join(
-            f"{t} {c} 条" for t, c in sorted(opp_type_counts.items(), key=lambda x: -x[1])
+            f"{_type_label(t)} {c} 条"
+            for t, c in sorted(opp_type_counts.items(), key=lambda x: -x[1])
         )
         opportunity = (
             f"{len(opp_ev)} 条融资/中标/资讯类事件提示产业合作与资本运作机会"

@@ -46,6 +46,9 @@ class AuthApplication:
     async def logout(self, context: AuthContext) -> bool:
         return await self.service.logout(context)
 
+    async def logout_session(self, session_id: str) -> tuple[AuthContext | None, bool]:
+        return await self.service.logout_session(session_id)
+
     async def record_operation(self, context: AuthContext, **kwargs: str) -> None:
         await self.service.record_operation(context, **kwargs)
 

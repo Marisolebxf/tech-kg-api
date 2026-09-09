@@ -10,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 from biz.dependencies.auth import require_platform_actor, require_platform_admin
 from biz.handler.correction import router as correction_router
 from db_model.base import Base
+from db_model.platform_governance import ManualCorrection
 from infra.mysql import get_session
 from service.correction import process_due_sync_tasks
 from service.platform_access import PlatformActor
@@ -78,6 +79,12 @@ async def test_correction_crud_and_projection_sync_api(
         f"/api/v1/corrections/{correction_id}",
         json={"reason": "已经二次核验，确认记录无效"},
     )
+    with factory() as session:
+        correction = session.get(ManualCorrection, correction_id)
+        assert correction is not None
+        correction.submitter_id = "submitter-1"
+        correction.submitter_name = "测试提交人"
+        session.commit()
     reviewed = await client.post(
         f"/api/v1/corrections/{correction_id}/review",
         json={"decision": "approve", "note": "审核通过"},
@@ -103,6 +110,33 @@ async def test_correction_crud_and_projection_sync_api(
         "APPROVE",
         "SYNC_SUCCEEDED",
     ]
+
+
+async def test_submitter_cannot_review_own_correction(
+    correction_api: tuple[AsyncClient, sessionmaker[Session]],
+) -> None:
+    client, _ = correction_api
+    created = await client.post(
+        "/api/v1/corrections",
+        json={
+            "target_type": "expert",
+            "operation": "update",
+            "target_id": "person-self-review",
+            "title": "修改专家信息",
+            "reason": "验证审核职责分离",
+            "before_data": {"name_zh": "旧名称"},
+            "after_data": {"name_zh": "新名称"},
+        },
+    )
+    correction_id = created.json()["data"]["id"]
+
+    reviewed = await client.post(
+        f"/api/v1/corrections/{correction_id}/review",
+        json={"decision": "approve", "note": "自行审核"},
+    )
+
+    assert reviewed.status_code == 403
+    assert reviewed.json()["detail"] == "无权访问该人工修正记录"
 
 
 async def test_pending_correction_can_be_cancelled_through_delete_api(

@@ -569,6 +569,16 @@ function formatConfidence(value: number | undefined): string {
   return value.toFixed(2);
 }
 
+/** 同事关系模块：置信度缺失时给出原因说明，避免只显示"暂无"。 */
+function colleagueConfidenceText(
+  value: number | undefined,
+  missingNote: string,
+): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value.toFixed(2)
+    : missingNote;
+}
+
 function mapLiveGraph(
   nodes:
     | Array<{
@@ -993,13 +1003,16 @@ function buildLiveGraph(
         data.entity_provenance?.[ev0.org_id],
       );
       addEdge(data.chain_node_id, ev0.org_id, "关联企业", "chain");
+      // 事件节点标签用「类型+日期」短文案：新闻标题 20-40 字，做标签必然截断出省略号；
+      // 完整标题放 relations 副标题与悬浮提示（title），摘要"核心事件"行也展示 TOP1 标题。
       addNode(
         ev0.event_id,
-        ev0.title,
+        `${displayEventType(ev0.event_type)} ${displayEventDate(ev0.occur_date)}`,
         "event",
-        ev0.event_type || "事件",
-        `${ev0.event_type || ""}｜${(ev0.occur_date || "").slice(0, 10)}｜评分 ${ev0.impact_score}`,
-        Math.min(1, (ev0.impact_score || 0) / 10),
+        displayEventType(ev0.event_type),
+        `${ev0.title || ""}｜评分 ${ev0.impact_score}`,
+        // 事件置信度用后端 EVENT_CONFIDENCE 值（风险 0.9 / 财务 0.85 / 中标 0.8 / 资讯 0.7）
+        typeof ev0.confidence === "number" ? ev0.confidence : undefined,
         data.entity_provenance?.[ev0.event_id],
       );
       addEdge(ev0.org_id, ev0.event_id, ev0.event_type || "事件", "event");
@@ -1294,9 +1307,46 @@ const selectedEdgeNodes = computed(() => {
 });
 
 /** 关系页签只转换展示值，保留图数据中的原始 label/category。 */
+// 事件类型码 → 中文（与后端 service/industry_node_top_events_business.py 的
+// EVENT_TYPE_LABEL 同款，接口字段返回英文码，页面展示中文）
+const eventTypeLabel: Record<string, string> = {
+  bankruptcy: "破产",
+  zhixing: "被执行",
+  shixin: "失信",
+  tax_punish: "税务处罚",
+  judicial_case: "司法案件",
+  illegal: "违法违规",
+  abnormal: "经营异常",
+  pledge: "股权质押",
+  chattel: "动产抵押",
+  equity_freeze: "股权冻结",
+  judicial_sale: "司法拍卖",
+  court_filed_case: "法院立案",
+  court_notice: "法院公告",
+  court_announcement: "法院送达",
+  financing: "融资",
+  stock_finance: "上市企业财务信息",
+  annual_finance: "年报财务信息",
+  bid: "中标",
+  change_record: "工商变更",
+  recruit: "招聘",
+  news: "资讯",
+};
+const displayEventType = (code?: string | null) =>
+  (code && eventTypeLabel[code]) || code || "事件";
+
+/** 事件时间规整展示：202512 → 2025-12；20251231... → 2025-12-31；不足位原样。 */
+const displayEventDate = (raw?: string | null) => {
+  const digits = (raw || "").replace(/[^\d]/g, "");
+  if (digits.length >= 8) return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+  if (digits.length >= 6) return `${digits.slice(0, 4)}-${digits.slice(4, 6)}`;
+  if (digits.length >= 4) return digits.slice(0, 4);
+  return raw || "-";
+};
+
 const relationTypeDisplay: Record<string, string> = {
   AFFILIATED_WITH: "机构任职关系",
-  COAUTHOR_WITH: "论文合作关系",
+  COAUTHOR_WITH: "论文合著关系",
   BELONGS_TO_NODE: "产业链归属关系",
   HAS_NODE: "产业链节点关系",
   HAS_NEWS: "企业动态关系",
@@ -1304,7 +1354,7 @@ const relationTypeDisplay: Record<string, string> = {
 };
 const relationCategoryDisplay: Record<string, string> = {
   AFFILIATED_WITH: "任职",
-  COAUTHOR_WITH: "论文合作",
+  COAUTHOR_WITH: "论文合著",
   BELONGS_TO_NODE: "产业链归属",
   HAS_NODE: "产业链节点",
   HAS_NEWS: "企业动态",
@@ -1334,8 +1384,13 @@ const relationDetailRows = computed(() => {
     [
       "置信度",
 
-      // 直接展示后端关系 confidence
-      formatConfidence(edge.confidence),
+      // 直接展示后端关系 confidence；同事关系模块缺失时给出原因
+      isLiveColleague.value
+        ? colleagueConfidenceText(
+            edge.confidence,
+            "暂无（原图边未携带置信度字段）",
+          )
+        : formatConfidence(edge.confidence),
     ] as const,
 
     [
@@ -1445,10 +1500,11 @@ function buildLiveSummary(
     out["产业链"] = d.chain_name || "-";
     out["产业链节点"] = d.chain_node_name || "-";
     out["筛选范围"] =
-      `TOP ${d.events ?? 0}｜${[...new Set((d.top_events || []).map((e: any) => e.event_type).filter(Boolean))].join("、") || "事件"}`;
-    out["重点事件"] = ev0.title || "-";
+      `TOP ${d.events ?? 0}｜${[...new Set((d.top_events || []).map((e: any) => e.event_type).filter(Boolean))].map((t: any) => displayEventType(t)).join("、") || "事件"}`;
+    // 键名与 summaryRows 的"核心事件"对齐（此前写成"重点事件"导致恒显示静态 demo 值）
+    out["核心事件"] = ev0.title || "-";
     out["事件类型/时间"] =
-      `${ev0.event_type || "-"}｜${(ev0.occur_date || "").slice(0, 10)}`;
+      `${displayEventType(ev0.event_type)}｜${displayEventDate(ev0.occur_date)}`;
     out["影响力排名"] = ev0.rank
       ? `第 ${ev0.rank} 名｜影响力评分 ${ev0.impact_score}`
       : "-";
@@ -1460,6 +1516,10 @@ function buildLiveSummary(
         (d.top_events || []).map((e: any) => e.event_type).filter(Boolean),
       ),
     ];
+    // 节点影响/发展趋势/机遇挖掘优先用后端规则派生的真实文案
+    out["节点影响"] =
+      d.node_impact ||
+      `TOP 事件类型 ${types.map((t: any) => displayEventType(t)).join("、") || "无"}，风险等级 ${d.risk_level || "-"}`;
     const years = [
       ...new Set(
         (d.top_events || [])
@@ -1467,12 +1527,12 @@ function buildLiveSummary(
           .filter(Boolean),
       ),
     ];
-    out["节点影响"] =
-      `TOP 事件类型 ${types.join("、") || "无"}，风险等级 ${d.risk_level || "-"}`;
     const trendPeriod = years.length ? `，集中在 ${years.join("、")}` : "";
-    out["发展趋势"] = `近期 TOP 事件 ${d.events ?? 0} 条${trendPeriod}`;
+    out["发展趋势"] =
+      d.trend || `近期 TOP 事件 ${d.events ?? 0} 条${trendPeriod}`;
     out["机遇挖掘"] =
-      `涉及企业 ${d.enterprises ?? 0} 家，事件类型 ${types.join("、") || "无"}`;
+      d.opportunity ||
+      `涉及企业 ${d.enterprises ?? 0} 家，事件类型 ${types.map((t: any) => displayEventType(t)).join("、") || "无"}`;
   } else if (key === "paper-cooperation") {
     const sr = d?.structuredResult || res?.structuredResult || d || res;
     const tr = sr.cooperationTimeRange || {};
@@ -1547,10 +1607,18 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
         { label: "共同工作内容", value: "—" },
         { label: "协作场景", value: "—" },
         { label: "同事期间成果", value: "—" },
+        { label: "关系置信度", value: "—" },
         { label: "关系判定", value: "—" },
       ];
     }
     const summary = data.summary || {};
+    const primary = data.colleagues?.[0];
+    const overlapValue =
+      summary.overlapDuration && typeof primary?.overlapYears === "number"
+        ? `${summary.overlapDuration}（约 ${primary.overlapYears} 年）`
+        : summary.overlapDuration || "—";
+    const relationConfidence =
+      summary.relationConfidence ?? primary?.confidence;
     return [
       { label: "专家 A", value: summary.coreExpert || "—" },
       { label: "核心专家机构", value: summary.coreExpertOrganization || "—" },
@@ -1565,13 +1633,20 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       { label: "共同机构", value: summary.commonOrganization || "—" },
       { label: "所属部门/团队", value: summary.departmentOrTeam || "—" },
       { label: "关系生效时段", value: summary.effectivePeriod || "—" },
-      { label: "任职重叠时间", value: summary.overlapDuration || "—" },
+      { label: "任职重叠时间", value: overlapValue },
       {
         label: "共同工作内容",
         value: summary.workContent || "暂无共同成果证据",
       },
       { label: "协作场景", value: summary.collaborationScenes || "—" },
       { label: "同事期间成果", value: summary.periodAchievements || "0项" },
+      {
+        label: "关系置信度",
+        value: colleagueConfidenceText(
+          relationConfidence,
+          "暂无（未生成同事关系）",
+        ),
+      },
       {
         label: "关系判定",
         value: data.total ? "存在同事关系" : "不存在同事关系",
@@ -1654,12 +1729,16 @@ const liveRules = computed<Array<Record<string, any>>>(() => {
 
 const liveEntityRows = computed(() => {
   const selected = selectedNode.value;
+  const entityConfidence = (value: number | undefined) =>
+    isLiveColleague.value
+      ? colleagueConfidenceText(value, "暂无（实体属性未携带置信度）")
+      : formatConfidence(value);
   if (selected) {
     const rows: Array<readonly [string, string]> = [
       ["实体名称", selected.label],
       ["实体类型", selected.entityType],
       ["命中关系", selected.relations],
-      ["置信度", formatConfidence(selected.confidence)],
+      ["置信度", entityConfidence(selected.confidence)],
     ];
     if (selected.evidence?.length) {
       rows.push(["证据", selected.evidence.join("；")]);
@@ -1672,7 +1751,7 @@ const liveEntityRows = computed(() => {
     [`实体 ${index + 1}`, `${entity.label}（${entity.id}）`] as const,
     ["类型", entity.entityType] as const,
     ["关系", entity.relations || "—"] as const,
-    ["置信度", formatConfidence(entity.confidence)] as const,
+    ["置信度", entityConfidence(entity.confidence)] as const,
   ]);
 });
 
@@ -1695,7 +1774,15 @@ const liveRelationRows = computed(() => {
       ] as const,
       ["类型", displayRelationType(relation.label)] as const,
       ["分类", displayRelationCategory(relation.category)] as const,
-      ["置信度", formatConfidence(relation.confidence)] as const,
+      [
+        "置信度",
+        isLiveColleague.value
+          ? colleagueConfidenceText(
+              relation.confidence,
+              "暂无（原图边未携带置信度字段）",
+            )
+          : formatConfidence(relation.confidence),
+      ] as const,
     ];
   });
 });
@@ -1714,6 +1801,40 @@ const liveProvenance = computed(() => {
       liveResponse.value?.data?.provenance ??
       null
     );
+  // 企业关系 / 产业链TOP-N：用响应 entity_provenance 构建实体溯源列表，
+  // 未点击展示全部实体来源，点击节点/边按 graphVid 筛选（任务第 4 条）。
+  if (isLiveEnterpriseRelation.value || isLiveIndustryEvent.value) {
+    const data = liveResponse.value?.data;
+    const provMap = (data?.entity_provenance || {}) as Record<
+      string,
+      {
+        sourceTable?: string | null;
+        sourceField?: string | null;
+        sourceValue?: string | null;
+        ingestBatch?: string | null;
+        ingestTime?: string | null;
+      }
+    >;
+    const nodesById = new Map(graphNodes.value.map((n) => [n.id, n]));
+    const evidences = Object.entries(provMap).map(([vid, p]) => {
+      const node = nodesById.get(vid);
+      return {
+        title: `${node?.label || vid}（${node?.entityType || "实体"}）`,
+        summary: `${node?.entityType || "实体"}入图来源`,
+        sourceTable: p.sourceTable || undefined,
+        sourceField: p.sourceField || undefined,
+        recordId: p.sourceValue || undefined,
+        fieldIdentifier: p.sourceField || undefined,
+        graphVid: vid,
+      };
+    });
+    if (!evidences.length) return null;
+    return {
+      sourceDatabase: "科技要素数据库（gkx_element）",
+      summary: `共 ${evidences.length} 个实体的入图来源`,
+      evidences,
+    };
+  }
   return null;
 });
 
@@ -1736,9 +1857,11 @@ const displayedProvenanceEvidences = computed(() => {
     if (edge.category === "机构关联") {
       return [];
     }
+    // 点击边 → 展示两端实体的溯源（单实体溯源的 graphVid 不可能同时包含两端，
+    // 原来的 && 条件永远不命中而回退全量，不符合"点击边溯源跟着更新"）。
     const filtered = pv.evidences.filter((ev: any) => {
       const vid = String(ev.graphVid || "");
-      return vid.includes(edge.from) && vid.includes(edge.to);
+      return vid.includes(edge.from) || vid.includes(edge.to);
     });
     return filtered.length ? filtered : pv.evidences;
   }
@@ -1955,7 +2078,9 @@ const isUnifiedProvenance = computed(
     isExpertDirect.value ||
     isPanorama.value ||
     isLiveCoop.value ||
-    isLiveAlumni.value,
+    isLiveAlumni.value ||
+    isLiveEnterpriseRelation.value ||
+    isLiveIndustryEvent.value,
 );
 
 function computePanoramaSummaryRows(
@@ -2686,16 +2811,21 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         resultMode.value = "summary";
       } else {
         const total = Number(res?.data?.total || 0);
-        if (!total) {
-          liveError.value = null;
-          showToast("未查询到相关同事关系数据", "info");
-          resultMode.value = "summary";
-          return;
-        }
         expertColleagueResponse.value = res;
         liveResponse.value = res as unknown as Record<string, any>;
         liveApiPayload.value = { request: body, response: res };
         liveError.value = null;
+        selectedGraphNodeId.value = null;
+        selectedGraphEdgeId.value = null;
+        if (!total) {
+          // 未命中同事关系也保留返回数据：摘要展示两位专家与"不存在同事关系"
+          const now = new Date();
+          lastTestTime.value = formatTimestamp(now);
+          lastUpdateTime.value = now.getTime();
+          showToast("未查询到相关同事关系数据", "info");
+          resultMode.value = "summary";
+          return;
+        }
         showToast("两位专家存在同事关系", "success");
         resultMode.value = "summary";
       }

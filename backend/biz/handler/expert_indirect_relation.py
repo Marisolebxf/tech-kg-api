@@ -1,4 +1,5 @@
 import json
+import logging
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
@@ -13,6 +14,7 @@ from infra.result_cache import get_cached_json, set_cached_json
 
 router = APIRouter(prefix="/kg-construction/expert-indirect-relations")
 application = ExpertIndirectRelationApplication()
+logger = logging.getLogger(__name__)
 
 
 @router.get("")
@@ -48,7 +50,8 @@ async def analyze_expert_indirect_relation(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
+        logger.exception("科技单节点间接关系分析失败")
         raise HTTPException(
             status_code=500,
-            detail=f"科技单节点间接关系分析失败: {exc}",
+            detail="科技单节点间接关系分析失败",
         ) from exc

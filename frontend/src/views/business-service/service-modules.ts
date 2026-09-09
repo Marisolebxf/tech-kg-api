@@ -263,6 +263,7 @@ export const serviceModules: ServiceModule[] = [
       { label: '共同工作内容', value: '科技知识图谱构建、关系推理与系统研发' },
       { label: '协作场景', value: '同一实验室科研协作、联合项目攻关' },
       { label: '同事期间成果', value: '论文 3 篇、项目 2 项、技术报告 1 份' },
+      { label: '关系置信度', value: '0.81' },
       { label: '关系判定', value: '存在同事关系' },
     ],
     evidence: ['任职时间存在重叠，机构层级匹配到同一实验室。', '标注共同工作内容和协作场景。', '关联同事期间产生的合作成果。'],

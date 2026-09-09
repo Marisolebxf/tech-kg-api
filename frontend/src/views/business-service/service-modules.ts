@@ -116,7 +116,7 @@ export const serviceModules: ServiceModule[] = [
       { label: '直接关系类型', value: '论文合作、项目合作、同事协作、成果转化' },
       { label: '关系发生时间', value: '2020-01 至今' },
       { label: '交互场景', value: '科研合作、联合项目、学术交流' },
-      { label: '关系数量', value: '12 条' },
+      { label: '关系序号', value: '第 1 / 12 条' },
       { label: '相关成果', value: '共同论文 8 篇、联合项目 3 项、授权专利 2 件' },
       { label: '代表成果', value: '科技知识图谱关系推理方法、科研合作网络分析系统' },
       { label: '关系置信度', value: '0.94' },

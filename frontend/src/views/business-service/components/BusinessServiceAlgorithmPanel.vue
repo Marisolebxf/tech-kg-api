@@ -38,6 +38,7 @@ import {
   queryExpertColleagueRelation,
   type ExpertColleagueRelationResponse,
 } from "../../../api/expertColleagueRelation";
+import { colleagueEntityRows, colleagueProvenanceCards } from "../expert-colleague-details";
 import KgGraphCanvas from "../../../components/kg-graph-canvas.vue";
 import { useToast } from "../../../composables/use-toast";
 import {
@@ -1191,7 +1192,7 @@ const liveModuleGraph = computed(() => {
           y: position.y,
           entityType,
           confidence: node.data?.confidence,
-          relations: node.data?.title || node.label,
+          relations: "",
           evidence: node.data?.evidence || [],
           sourceTable: node.data?.provenance?.sourceTable,
           sourceRecordId: node.data?.provenance?.sourceValue,
@@ -1774,6 +1775,9 @@ const liveRules = computed<Array<Record<string, any>>>(() => {
 });
 
 const liveEntityRows = computed(() => {
+  if (isLiveColleague.value) {
+    return colleagueEntityRows(liveResponse.value?.data?.graph?.nodes ?? [], selectedNode.value?.id);
+  }
   const selected = selectedNode.value;
   const entityConfidence = (value: number | undefined) =>
     isLiveColleague.value
@@ -1827,6 +1831,13 @@ const liveRelationRows = computed(() => {
     ];
   });
 });
+
+const colleagueProvenance = computed(() => colleagueProvenanceCards(
+  liveResponse.value?.data?.graph?.nodes ?? [],
+  liveResponse.value?.data?.graph?.edges ?? [],
+  selectedNode.value?.id,
+  selectedEdge.value ? { source: selectedEdge.value.from, target: selectedEdge.value.to, label: selectedEdge.value.label } : undefined,
+));
 
 const liveProvenance = computed(() => {
   if (isLiveAlumni.value) return liveAlumniResult.value?.provenance ?? null;
@@ -3899,6 +3910,20 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
                 >图空间 VID：<code>{{ ev.graphVid || "-" }}</code></span
               >
             </article>
+          </div>
+        </section>
+        <section
+          v-else-if="resultMode === 'provenance' && isLiveColleague && liveResponse"
+          class="result-provenance"
+        >
+          <header><strong>数据来源与证据链</strong><span>同事关系查询</span></header>
+          <div class="result-provenance__evidence-list">
+            <article v-for="card in colleagueProvenance" :key="card.id">
+              <header><strong>{{ card.title }}</strong></header>
+              <p v-for="row in card.rows" :key="row[0]"><b>{{ row[0] }}：</b>{{ row[1] }}</p>
+              <p v-for="(evidence, index) in card.evidence" :key="index">{{ evidence }}</p>
+            </article>
+            <p v-if="!colleagueProvenance.length">暂无可追溯对象，请先执行查询。</p>
           </div>
         </section>
         <section

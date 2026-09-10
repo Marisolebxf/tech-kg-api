@@ -631,17 +631,6 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
                     "ruleName": "同事关系判定规则",
                 },
             )
-            coauthor_edge = item.get("coauthorEdge") or {}
-            if coauthor_edge:
-                add_edge(
-                    coauthor_edge["source"],
-                    coauthor_edge["target"],
-                    "COAUTHOR_WITH",
-                    {
-                        **coauthor_edge.get("properties", {}),
-                        "existingGraphEdge": True,
-                    },
-                )
             org_id = item.get("organizationId")
             if not org_id:
                 continue

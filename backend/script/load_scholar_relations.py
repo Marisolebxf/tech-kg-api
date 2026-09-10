@@ -148,10 +148,14 @@ def resolve_org_vid_from_source(session, graph, names: list[str]) -> str | None:
     candidates: set[str] = set()
     for table in ("dwd_org_base_info", "dwd_org_heis_info", "dwd_forg_base_info"):
         columns = {
-            row[0] for row in session.execute(text(
-                "SELECT COLUMN_NAME FROM information_schema.columns "
-                "WHERE table_schema=DATABASE() AND table_name=:table"
-            ), {"table": table})
+            row[0]
+            for row in session.execute(
+                text(
+                    "SELECT COLUMN_NAME FROM information_schema.columns "
+                    "WHERE table_schema=DATABASE() AND table_name=:table"
+                ),
+                {"table": table},
+            )
         }
         if "org_id" not in columns:
             continue
@@ -160,12 +164,16 @@ def resolve_org_vid_from_source(session, graph, names: list[str]) -> str | None:
             if not name_columns:
                 continue
             where = " OR ".join(f"`{key}`=:name" for key in name_columns)
-            for row in session.execute(text(f"SELECT org_id FROM `{table}` WHERE {where}"), {"name": name}):
+            for row in session.execute(
+                text(f"SELECT org_id FROM `{table}` WHERE {where}"), {"name": name}
+            ):
                 vid = org_vid(str(row[0]), "")
                 node = graph.get_node(vid)
                 if node is not None and "Organization" in node.labels:
-                    actual_names = {str(node.properties.get(key) or "").strip().casefold()
-                                    for key in ("name_cn", "name_en")}
+                    actual_names = {
+                        str(node.properties.get(key) or "").strip().casefold()
+                        for key in ("name_cn", "name_en")
+                    }
                     if any(value.casefold() in actual_names for value in names):
                         candidates.add(vid)
     # 同名多机构时不擅自选择其中一个。
@@ -191,7 +199,9 @@ def _has_dwd_scholar_column(session, column_name: str) -> bool:
     )
 
 
-def _iter_scholar_affiliations(session, batch_size: int = 500, scholar_ids: list[str] | None = None) -> Iterable[dict]:
+def _iter_scholar_affiliations(
+    session, batch_size: int = 500, scholar_ids: list[str] | None = None
+) -> Iterable[dict]:
     """从 ``dwd_scholar`` 分页读取学者→机构映射所需字段。
 
     直接用 SQL 而非 ORM，因为 ``scholar_org_id`` 等是新增字段，在部分环境的
@@ -208,7 +218,11 @@ def _iter_scholar_affiliations(session, batch_size: int = 500, scholar_ids: list
     col_select = [
         col if _has_dwd_scholar_column(session, col) else f"NULL AS {col}" for col in optional_cols
     ]
-    filters = " AND scholar_id IN (" + ",".join(f":sid{i}" for i in range(len(scholar_ids))) + ")" if scholar_ids else ""
+    filters = (
+        " AND scholar_id IN (" + ",".join(f":sid{i}" for i in range(len(scholar_ids))) + ")"
+        if scholar_ids
+        else ""
+    )
     id_params = {f"sid{i}": sid for i, sid in enumerate(scholar_ids or [])}
     sql = text(
         f"""
@@ -477,7 +491,12 @@ def load_studied_at(
 
 
 def load_affiliations(
-    session, graph, *, dry_run: bool, preview: int = 5, org_index: dict[str, str] | None = None,
+    session,
+    graph,
+    *,
+    dry_run: bool,
+    preview: int = 5,
+    org_index: dict[str, str] | None = None,
     scholar_ids: list[str] | None = None,
 ) -> dict:
     """写入 AFFILIATED_WITH 边。
@@ -492,8 +511,11 @@ def load_affiliations(
     now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     ok = skipped = shown = placeholder = 0
 
-    records = (_iter_scholar_affiliations(session, scholar_ids=scholar_ids)
-               if scholar_ids else _iter_scholar_affiliations(session))
+    records = (
+        _iter_scholar_affiliations(session, scholar_ids=scholar_ids)
+        if scholar_ids
+        else _iter_scholar_affiliations(session)
+    )
     source_matches: dict[tuple[str, str], str | None] = {}
     for rec in records:
         src = person_vid(rec["scholar_id"])
@@ -516,7 +538,11 @@ def load_affiliations(
                     source_matches[key] = resolve_org_vid_from_source(session, graph, list(key))
                 dst = source_matches[key]
             if not dst:
-                logger.warning("任职边跳过 scholar_id=%s org=%s：未找到唯一且已入图的真实机构", rec["scholar_id"], org_name)
+                logger.warning(
+                    "任职边跳过 scholar_id=%s org=%s：未找到唯一且已入图的真实机构",
+                    rec["scholar_id"],
+                    org_name,
+                )
                 skipped += 1
                 continue
             conf = confidence_props(
@@ -699,8 +725,9 @@ def run(
         if not dry_run:
             ensure_schema(graph)
         if affiliation_scholar_ids:
-            stats = load_affiliations(session, graph, dry_run=dry_run,
-                                      org_index={}, scholar_ids=affiliation_scholar_ids)
+            stats = load_affiliations(
+                session, graph, dry_run=dry_run, org_index={}, scholar_ids=affiliation_scholar_ids
+            )
             return {"batch": BATCH_ID, "affiliated_with": stats}
         # org name->vid 索引:scholar_org_id 缺失 / 教育院校匹配时按机构名 join 图里已存在 Organization。
         org_index = build_org_name_vid_index(graph)
@@ -757,8 +784,12 @@ def _parse_args() -> argparse.Namespace:
             "outgoing edges."
         ),
     )
-    ap.add_argument("--affiliation-scholar-id", action="append", default=None,
-                    help="仅重跑指定学者的任职边，可重复传入源表 scholar_id")
+    ap.add_argument(
+        "--affiliation-scholar-id",
+        action="append",
+        default=None,
+        help="仅重跑指定学者的任职边，可重复传入源表 scholar_id",
+    )
     return ap.parse_args()
 
 

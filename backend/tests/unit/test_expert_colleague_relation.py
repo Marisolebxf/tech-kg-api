@@ -218,8 +218,11 @@ async def test_summary_and_graph_cover_tender_details() -> None:
     # 摘要机构须与共同机构（即图谱预览展示的机构）一致，即使专家节点自带其他 scholar_org
     assert summary["coreExpertOrganization"] == "中国科学院自动化研究所"
     assert summary["relationConfidence"] == result["colleagues"][0]["confidence"]
-    expert_edges = [edge for edge in result["graph"]["edges"]
-                    if {edge["source"], edge["target"]} == {"person_a", "person_b"}]
+    expert_edges = [
+        edge
+        for edge in result["graph"]["edges"]
+        if {edge["source"], edge["target"]} == {"person_a", "person_b"}
+    ]
     assert [edge["label"] for edge in expert_edges] == ["同事关系"]
     assert result["colleagues"][0]["coauthorEdge"]  # 合著仍作为证据保留
     node_types = {item["type"] for item in result["graph"]["nodes"]}

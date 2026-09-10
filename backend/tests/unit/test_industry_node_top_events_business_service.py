@@ -25,15 +25,27 @@ def _subgraphs() -> dict[str, dict]:
             {
                 "id": NODE_VID,
                 "labels": ["IndustryNode"],
-                "properties": {"node_name": "测试节点", "node_imp_level": "1"},
+                "properties": {
+                    "node_name": "测试节点",
+                    "node_imp_level": "1",
+                    "confidence": 0.88,
+                },
             },
             {
                 "id": "chain_IC",
                 "labels": ["IndustryChain"],
                 "properties": {"chain_name": "测试产业链"},
             },
-            {"id": ORG_A, "labels": ["Organization"], "properties": {"name_cn": "甲公司"}},
-            {"id": ORG_B, "labels": ["Organization"], "properties": {"name_cn": "乙公司"}},
+            {
+                "id": ORG_A,
+                "labels": ["Organization"],
+                "properties": {"name_cn": "甲公司", "confidence": 0.81},
+            },
+            {
+                "id": ORG_B,
+                "labels": ["Organization"],
+                "properties": {"name_cn": "乙公司", "confidence": 0.76},
+            },
         ],
         "edges": [
             {"type": "HAS_NODE", "source": "chain_IC", "target": NODE_VID, "properties": {}},
@@ -141,6 +153,8 @@ async def test_topn_via_graph_helpers(monkeypatch):
     assert resp.relations[0].expert_name == "张三"
     assert resp.entity_provenance["person_x"].sourceField == "scholar_id"
     assert resp.entity_provenance["person_x"].sourceValue == "sch-001"
+    assert resp.entity_provenance["IC_test"].confidence == 0.88
+    assert resp.entity_provenance[ORG_A].confidence == 0.81
     # 标书分析维度：后端真实派生（非空）
     assert resp.node_impact
     # 分析文案使用中文事件类型（EVENT_TYPE_LABEL）

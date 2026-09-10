@@ -34,6 +34,8 @@ class EntityProvenance(BaseModel):
     sourceValue: str | None = None
     ingestBatch: str | None = None
     ingestTime: str | None = None
+    # mysql2trs 建图写入的实体置信度（Organization/Person/Event 节点 properties.confidence）
+    confidence: float | None = None
 
 
 class KeyEnterpriseRelationRequest(BaseModel):

@@ -315,12 +315,20 @@ def _entity_provenance(properties: dict[str, Any], labels: set[str]) -> EntityPr
         source_field, source_value = "organization_id", properties.get("organization_id")
     else:
         source_field, source_value = "source_record_id", properties.get("source_record_id")
+    confidence = None
+    raw_conf = properties.get("confidence")
+    if raw_conf not in (None, ""):
+        try:
+            confidence = float(raw_conf)
+        except (TypeError, ValueError):
+            confidence = None
     return EntityProvenance(
         sourceTable=str(source_table or "-"),
         sourceField=str(source_field or "-"),
         sourceValue=str(source_value or "-"),
         ingestBatch=str(properties.get("ingest_batch") or "-"),
         ingestTime=str(properties.get("ingest_time") or "-"),
+        confidence=confidence,
     )
 
 

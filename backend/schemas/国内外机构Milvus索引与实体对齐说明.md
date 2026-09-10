@@ -64,24 +64,18 @@ flowchart TD
     O --> P["保存 BM25 词表状态"]
 ```
 
-## 4. Organization 对齐与消歧策略
+## 4. Organization 关系端点解析策略
 
-关系补齐只发生在源表缺少可直接对应现有 Organization VID 的情况下。算法不创建临时节点，也不使用名称模糊结果强行连边。
+机构关系在各领域实体完成后建立，不再执行实体消歧。Milvus Collection 只保留给检索业务使用，不参与关系建图。
 
 ### 4.1 决策顺序
 
-1. 使用源表已有 `org_id`、`inv_org_id`、`entity_eid`、`company_id` 等稳定标识；
-2. 使用基础机构表中的唯一精确名称映射；
-3. 如果启用 `--alignment-mode hybrid`，用外部 ID 查询标量索引：
-   - 唯一命中：直接采用；
-   - 多个命中：标记 `review`，不写边；
-4. 执行 BM25 + 稠密向量混合召回；
-5. 对候选重新计算证据分：
-   - 规范化名称：60%；
-   - Milvus 混合召回分：25%；
-   - 国家/地区、城市、地址等结构化证据：最多约 25%，冲突会扣分；
-6. 默认总分至少 `0.88`，且第一名比第二名至少高 `0.08` 才自动匹配；
-7. 其余结果写入 JSONL 审计文件，状态为 `review` 或 `rejected`，不写图。
+1. 优先使用 `org_id`、`inv_org_id`、`entity_eid`、`company_id` 等稳定标识；
+2. 源表缺少端点 ID 时，只允许基础机构表中的唯一精确名称映射；
+3. 名称不存在或命中多个实体时跳过关系，不选取相似候选；
+4. 写边前批量检查两端 VID，任一端不存在即跳过，不创建桩节点；
+5. 稳定 ID 或结构化直接关系置信度为 `1.0`，唯一精确名称关系为 `0.9`；
+6. 每条已写关系必须有非空 `confidence`。
 
 ### 4.2 对齐序列图
 
@@ -89,28 +83,13 @@ flowchart TD
 sequenceDiagram
     participant ETL as 关系 ETL
     participant Exact as 精确 ID/名称解析器
-    participant Milvus as Organization Milvus 索引
-    participant Audit as JSONL 审计文件
     participant Graph as TRSGraph dev
 
-    ETL->>Exact: org_id / external_id / name
-    alt 唯一精确命中
+    ETL->>Exact: 稳定 ID / 唯一精确名称
+    alt 稳定 ID 或唯一精确命中
         Exact-->>ETL: 已有 Organization VID
-    else 未命中
-        ETL->>Milvus: external_id 标量查询
-        alt 唯一 external_id 命中
-            Milvus-->>ETL: 已有 Organization VID
-        else 需要混合召回
-            ETL->>Milvus: BM25 sparse + dense vector
-            Milvus-->>ETL: Top-K 候选及混合分
-            ETL->>ETL: 名称和地区证据重排
-            alt 分数及 Top-1 间隔达标
-                ETL->>Audit: 记录 matched 决策
-            else 不达标或歧义
-                ETL->>Audit: 记录 review / rejected
-                ETL-->>ETL: 跳过本条关系
-            end
-        end
+    else 未命中或歧义
+        ETL-->>ETL: 记录原因并跳过关系
     end
     ETL->>Graph: 批量检查源、目标 VID 是否存在
     alt 两端均存在
@@ -160,24 +139,20 @@ python -m script.organization_milvus_index \
   --replace
 ```
 
-先对少量关系做对齐 dry-run：
+先对少量关系做精确端点解析 dry-run：
 
 ```bash
 python -m script.organization_relation_etl \
   --relation all \
-  --alignment-mode hybrid \
   --max-records 100 \
-  --alignment-audit output/organization_alignment_sample.jsonl \
   --dry-run
 ```
 
-审查 JSONL 后，仅写入达到自动阈值且图中两端均存在的关系：
+审查统计后，仅写入稳定 ID 或唯一精确名称命中且图中两端均存在的关系：
 
 ```bash
 python -m script.organization_relation_etl \
   --relation all \
-  --alignment-mode hybrid \
-  --alignment-audit output/organization_alignment_full.jsonl \
   --batch-size 500 \
   --write
 ```
@@ -219,6 +194,4 @@ python -m script.organization_relation_etl \
 | `org_domain_product` | 2,039 | 同上；另有 1 个非 39 表 Product 被正确排除 |
 | `org_domain_datasource` | 39 | 同上；另有 14 个其他领域 DataSource 被正确排除 |
 
-关系对齐使用每个 RelationSpec 前 20 条记录完成 dry-run。优化为“稳定 ID 直接使用，仅缺 ID 才查询 Milvus”后，共产生 93 条真正需要混合消歧的决策，93 条均因低于阈值或没有语料词项而拒绝，自动匹配为 0。说明这批抽样中的未连接关系主要不是名称近似问题，而是候选 Organization 本身不在当前 39 表实体集合中。
-
-因此本次没有凭模糊名称新增图边，dry-run 前后 11 类边数量完全一致。代码已经具备补边能力；后续数据中只有出现高置信度 `matched` 且图中两端均存在时，显式 `--write` 才会增加或幂等更新关系。
+历史 dry-run 曾验证过 Milvus 模糊对齐，但当前反馈明确要求实体先建、关系后建，不进行实体消歧，因此关系 ETL 已移除该入口。后续仅当稳定 ID 或唯一精确名称命中且图中两端均存在时，显式 `--write` 才会增加或幂等更新关系。

@@ -139,6 +139,8 @@ def investment_candidate(source: str = "org_a", target: str = "org_b") -> EdgeCa
             "investment_amount": 10.5,
             "investment_ratio": 25.0,
             "extra_json": "{}",
+            "organization_id": "a",
+            "confidence": 1.0,
             "source_table": spec.source_table,
             "source_record_id": "r1",
             "ingest_batch": "b1",
@@ -247,6 +249,13 @@ def test_render_edge_keeps_schema_property_order() -> None:
     assert '"org_a"->"org_b"@' in query
 
 
+def test_render_edge_rejects_missing_confidence() -> None:
+    candidate = investment_candidate()
+    candidate.properties["confidence"] = None
+    with pytest.raises(RelationDataError, match="confidence must not be null"):
+        render_edge_insert(investment_spec(), [candidate])
+
+
 def test_exact_resolver_rejects_ambiguous_or_unknown_names() -> None:
     resolver = ExactOrganizationResolver({"唯一机构": {"o1"}, "重名机构": {"o2", "o3"}})
     assert resolver.resolve(" 唯一机构 ") == "o1"
@@ -274,6 +283,7 @@ def test_governance_edges_can_end_at_organization() -> None:
     assert candidates[0].target_tag == "Organization"
     assert candidates[0].target_vid == "org_o1"
     assert candidates[0].properties["position"] == "董事"
+    assert candidates[0].properties["confidence"] == 1.0
 
 
 def test_actual_controller_uses_explicit_organization_type_without_name_guessing() -> None:
@@ -507,12 +517,12 @@ def test_dirty_row_does_not_block_later_valid_row(
     assert stats.written == 1
 
 
-def test_foreign_shareholder_can_use_contextual_hybrid_resolution() -> None:
+def test_foreign_shareholder_unique_exact_name_has_reduced_confidence() -> None:
     spec = next(
         item for item in mod.RELATION_SPECS if item.source_table == "dwd_forg_shareholder_info"
     )
 
-    class HybridResolver:
+    class ExactResolver:
         def __init__(self) -> None:
             self.context: dict | None = None
 
@@ -522,7 +532,7 @@ def test_foreign_shareholder_can_use_contextual_hybrid_resolution() -> None:
                 return "alpha-holdings"
             return None
 
-    resolver = HybridResolver()
+    resolver = ExactResolver()
     candidates = extract_candidates(
         spec,
         {
@@ -539,12 +549,13 @@ def test_foreign_shareholder_can_use_contextual_hybrid_resolution() -> None:
     assert candidates[0].source_vid == "org_alpha-holdings"
     assert candidates[0].target_vid == "org_target-company"
     assert candidates[0].properties["ownership_percentage"] == 51.5
+    assert candidates[0].properties["confidence"] == 0.9
     assert resolver.context is not None
     assert resolver.context["country_code"] == "GB"
     assert resolver.context["source_table"] == "dwd_forg_shareholder_info"
 
 
-def test_stable_organization_id_bypasses_hybrid_alignment() -> None:
+def test_stable_organization_id_bypasses_name_resolution() -> None:
     spec = investment_spec()
 
     class ResolverMustNotRun:
@@ -565,3 +576,15 @@ def test_stable_organization_id_bypasses_hybrid_alignment() -> None:
     )
     assert candidates[0].source_vid == "org_investor-id"
     assert candidates[0].target_vid == "org_target-id"
+    assert candidates[0].properties["confidence"] == 1.0
+
+
+def test_relation_etl_rejects_entity_disambiguation_mode() -> None:
+    with pytest.raises(ValueError, match="entity disambiguation is disabled"):
+        run_etl(
+            relation="investment",
+            dry_run=True,
+            graph=FakeGraph(),
+            session=object(),
+            alignment_mode="hybrid",
+        )

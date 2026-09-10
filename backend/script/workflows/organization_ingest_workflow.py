@@ -69,12 +69,18 @@ def workflow(payload: dict[str, Any]) -> dict[str, Any]:
     stage = str(payload.get("stage", "all")).strip().lower()
     scope = str(payload.get("scope", "all")).strip().lower()
     space = str(payload.get("space", "dev")).strip()
+    alignment_mode = str(payload.get("alignment_mode", "exact")).strip().lower()
     if stage not in {"all", "entity", "relation"}:
         raise ValueError("stage must be all, entity or relation")
     if scope not in {"all", "domestic", "foreign"}:
         raise ValueError("scope must be all, domestic or foreign")
     if space not in {"dev", "test"} and not space.startswith("org_etl_test_"):
         raise ValueError("organization workflow supports dev, test or org_etl_test_ spaces only")
+    if alignment_mode != "exact":
+        raise ValueError(
+            "organization relation building only supports exact matching; "
+            "entity disambiguation is disabled"
+        )
     os.environ["TRS_GRAPH_SPACE"] = space
 
     from infra.graph_db.client import TRSGraphClient
@@ -133,7 +139,7 @@ def workflow(payload: dict[str, Any]) -> dict[str, Any]:
                 domestic_only=domestic_only,
                 foreign_only=foreign_only,
                 ingest_batch=str(ingest_batch),
-                alignment_mode=str(payload.get("alignment_mode", "exact")),
+                alignment_mode=alignment_mode,
                 graph=graph,
             )
             result["relations"] = {name: asdict(stats) for name, stats in relation_result.items()}

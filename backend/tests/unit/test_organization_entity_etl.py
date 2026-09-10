@@ -133,7 +133,7 @@ def test_entity_vid_and_source_record_id_are_stable() -> None:
     assert first.properties["source_record_id"] == second.properties["source_record_id"] == "o1"
     assert first.properties["registered_capital"] == 100.5
     assert first.properties["organization_id"] == "o1"
-    assert 0.0 <= first.properties["confidence"] <= 1.0
+    assert first.properties["confidence"] == 1.0
 
 
 def test_person_event_project_and_product_vertices_keep_full_raw_payload() -> None:
@@ -149,6 +149,7 @@ def test_person_event_project_and_product_vertices_keep_full_raw_payload() -> No
         "2026-07-27T00:00:00+00:00",
     )
     assert executive[0].tag == "Person"
+    assert executive[0].properties["confidence"] == 1.0
     assert "custom_long_tail" in executive[0].properties["extra_json"]
 
     event = entity.vertices_from_row(
@@ -158,6 +159,7 @@ def test_person_event_project_and_product_vertices_keep_full_raw_payload() -> No
         "2026-07-27T00:00:00+00:00",
     )
     assert event[0].tag == "Event"
+    assert event[0].properties["confidence"] == 1.0
 
     product_records = entity.vertices_from_row(
         entity.ENTITY_TABLE_BY_NAME["dwd_org_org_product_info"],
@@ -172,6 +174,20 @@ def test_person_event_project_and_product_vertices_keep_full_raw_payload() -> No
     }
     provenance = next(record for record in product_records if record.tag == "organization_base")
     assert provenance.properties["organization_id"] == "o1"
+    assert all(record.properties["confidence"] == 1.0 for record in product_records)
+
+
+def test_every_datasource_entity_has_full_confidence() -> None:
+    records = entity.datasource_records()
+    assert records
+    assert all(record.properties["confidence"] == 1.0 for record in records)
+
+
+def test_vertex_renderer_rejects_missing_confidence() -> None:
+    with pytest.raises(entity.RelationDataError, match="confidence must not be null"):
+        entity.render_vertex_insert(
+            [entity.VertexRecord("Organization", "org_o1", {"org_id": "o1"})]
+        )
 
 
 def test_bid_target_items_with_same_notice_keep_distinct_payloads() -> None:

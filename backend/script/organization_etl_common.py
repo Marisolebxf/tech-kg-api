@@ -831,69 +831,48 @@ def organization_id_from_row(row: Mapping[str, Any]) -> str | None:
 
 
 def entity_confidence(row: Mapping[str, Any], *, source_table: str) -> float:
-    """Score persisted organization-domain entity evidence deterministically.
+    """Return full confidence for a validated structured source entity.
 
-    DWD provenance contributes 0.40, stable identifiers 0.30, display identity
-    0.20, and supporting business attributes 0.10. No model value is used.
+    The organization domain currently ingests only one-to-one structured DWD
+    records. Invalid rows are rejected before this function is used; varying
+    model confidence is reserved for a future non-structured ingestion path.
     """
-    score = 0.40 if source_table.startswith("dwd_") else 0.30
-    if organization_id_from_row(row) is not None:
-        score += 0.20
-    if any(clean_text(row.get(name)) is not None for name in ("external_id", "credit_no")):
-        score += 0.10
-    if any(
-        clean_text(row.get(name)) is not None
-        for name in (
-            "name_cn",
-            "name_en",
-            "company_name",
-            "org_loc_name",
-            "executives_name",
-            "bo_name",
-            "entity_name",
-            "news_title",
-            "title",
-            "job_title",
-            "target_item_name",
-            "main_prod",
-            "main_products",
+    _ = row
+    if not source_table.startswith("dwd_"):
+        raise RelationDataError(
+            f"entity confidence is undefined for non-structured source: {source_table}"
         )
-    ):
-        score += 0.20
-    if any(
-        clean_text(row.get(name)) is not None
-        for name in ("country_code", "country", "province", "city", "address", "updated_time")
-    ):
-        score += 0.10
-    return round(min(max(score, 0.0), 1.0), 4)
+    return 1.0
 
 
-def relation_confidence(row: Mapping[str, Any], *, source_table: str) -> float:
-    """Score a relation from source reliability and explicit endpoint evidence."""
-    score = 0.55 if source_table.startswith("dwd_") else 0.45
-    id_fields = (
-        "organization_id",
-        "org_id",
-        "company_id",
-        "entity_eid",
-        "inv_org_id",
-        "acquiring_org_id",
-        "acquired_org_id",
-        "affiliate",
-        "affiliates_company_id",
-        "admin_org_id",
-        "antitypic",
-    )
-    explicit_ids = sum(clean_text(row.get(name)) is not None for name in id_fields)
-    if explicit_ids >= 1:
-        score += 0.25
-    if explicit_ids >= 2:
-        score += 0.10
-    if sum(clean_text(value) is not None for value in row.values()) >= 3:
-        score += 0.05
-    if any(clean_text(row.get(name)) is not None for name in ("external_id", "credit_no")):
-        score += 0.05
-    return round(min(max(score, 0.0), 1.0), 4)
+RELATION_CONFIDENCE_BY_EVIDENCE: dict[str, float] = {
+    "structured_direct": 1.0,
+    "stable_ids": 1.0,
+    "unique_exact_name": 0.9,
+}
+
+
+def relation_confidence(
+    row: Mapping[str, Any],
+    *,
+    source_table: str,
+    evidence: str = "structured_direct",
+) -> float:
+    """Return a non-null score determined by the relation's actual evidence.
+
+    Field-count heuristics are intentionally forbidden. A caller must either
+    provide stable/direct structured evidence or an unambiguous exact-name
+    join. Fuzzy, vector, and model-based matching are not accepted here.
+    """
+    _ = row
+    if not source_table.startswith("dwd_"):
+        raise RelationDataError(
+            f"relation confidence is undefined for non-structured source: {source_table}"
+        )
+    try:
+        return RELATION_CONFIDENCE_BY_EVIDENCE[evidence]
+    except KeyError as exc:
+        raise RelationDataError(f"unsupported relation evidence: {evidence}") from exc
 
 
 def to_float(value: Any) -> float | None:

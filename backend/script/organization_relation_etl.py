@@ -21,7 +21,6 @@ from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
@@ -29,7 +28,6 @@ from sqlalchemy.orm import Session
 
 from infra.gkx_element import gkx_element_read_session
 from infra.graph_db import TRSGraphClient, get_trs_graph_client
-from infra.milvus import OrganizationMilvusStore
 from script.etl_watermark import Watermark
 from script.organization_etl_common import (
     DEFAULT_SPACE,
@@ -64,19 +62,10 @@ from script.organization_etl_common import (
     to_float,
     to_int,
 )
-from service.organization_entity_alignment import (
-    AlignmentAuditWriter,
-    BM25SparseEncoder,
-    HashingDenseEncoder,
-    HybridOrganizationResolver,
-    OrganizationHybridMatcher,
-)
 
 logger = logging.getLogger("script.organization_relation_etl")
 
 DEFAULT_BATCH_SIZE = 500
-DEFAULT_ALIGNMENT_STATE_DIR = Path(".cache/organization_milvus")
-DEFAULT_ALIGNMENT_DENSE_DIMENSION = 384
 assert {spec.source_table for spec in RELATION_SPECS} <= set(DOMAIN_TABLE_BY_NAME)
 
 __all__ = [
@@ -267,10 +256,16 @@ def _edge_props(
     ingest_batch: str,
     ingest_time: str,
     business: Mapping[str, Any] | None = None,
+    *,
+    evidence: str = "structured_direct",
 ) -> dict[str, Any]:
     props: dict[str, Any] = {
         "organization_id": organization_id_from_row(row),
-        "confidence": relation_confidence(row, source_table=spec.source_table),
+        "confidence": relation_confidence(
+            row,
+            source_table=spec.source_table,
+            evidence=evidence,
+        ),
         "source_table": spec.source_table,
         "source_record_id": record_id,
         "ingest_batch": ingest_batch,
@@ -295,6 +290,21 @@ def _candidate(
     source_tag: str | None = None,
     target_tag: str | None = None,
 ) -> EdgeCandidate:
+    confidence = properties.get("confidence")
+    if confidence is None:
+        raise RelationDataError(
+            f"relation confidence must not be null edge={spec.edge_type} record={record_id}"
+        )
+    try:
+        numeric_confidence = float(confidence)
+    except (TypeError, ValueError) as exc:
+        raise RelationDataError(
+            f"invalid relation confidence edge={spec.edge_type} record={record_id}"
+        ) from exc
+    if not 0.0 <= numeric_confidence <= 1.0:
+        raise RelationDataError(
+            f"relation confidence must be between 0 and 1 edge={spec.edge_type} record={record_id}"
+        )
     return EdgeCandidate(
         edge_type=spec.edge_type,
         source_vid=source_vid,
@@ -348,7 +358,7 @@ def _organization_vid_from_row(
     city_fields: Sequence[str] = (),
     address_fields: Sequence[str] = (),
 ) -> str:
-    """Resolve an existing Organization, using hybrid matching only as fallback."""
+    """Resolve an existing Organization by stable ID or unique exact name."""
     raw_id = first_value(row, *id_fields)
     if clean_text(raw_id) is not None:
         exact_resolver = getattr(resolver, "resolve_exact", None)
@@ -452,6 +462,11 @@ def extract_candidates(
             ingest_batch,
             ingest_time,
             {"ownership_percentage": to_float(row.get("ownership_percentage"))},
+            evidence=(
+                "stable_ids"
+                if source_tag == "Person" or clean_text(row.get("inv_org_id")) is not None
+                else "unique_exact_name"
+            ),
         )
         return [
             _candidate(
@@ -493,6 +508,7 @@ def extract_candidates(
             ingest_batch,
             ingest_time,
             {"ownership_percentage": to_float(row.get("ownership_percentage"))},
+            evidence="unique_exact_name",
         )
         return [_candidate(spec, source, target, base_record_id, props)]
 
@@ -571,6 +587,7 @@ def extract_candidates(
         entity_type = (clean_text(row.get("entity_type")) or "").casefold()
         organization_types = {"organization", "company", "enterprise", "机构", "企业", "公司"}
         person_types = {"person", "individual", "natural person", "自然人", "个人"}
+        evidence = "structured_direct"
         if entity_type in organization_types:
             source = _organization_vid_from_row(
                 spec,
@@ -584,6 +601,8 @@ def extract_candidates(
                 country_fields=("entity_country", "country"),
             )
             source_tag = "Organization"
+            if clean_text(row.get("entity_eid")) is None:
+                evidence = "unique_exact_name"
         elif entity_type in person_types:
             source = _person_vid_for_row(
                 spec,
@@ -608,6 +627,7 @@ def extract_candidates(
                 )
             source = organization_vid(exact_id)
             source_tag = "Organization"
+            evidence = "unique_exact_name"
         if source == target:
             raise RelationDataError("actual controller resolves to target Organization itself")
         props = _edge_props(
@@ -620,6 +640,7 @@ def extract_candidates(
                 "direct_pct": to_float(first_value(row, "direct_pct_num", "direct_pct")),
                 "total_pct": to_float(first_value(row, "total_pct_num", "total_pct")),
             },
+            evidence=evidence,
         )
         return [
             _candidate(
@@ -706,6 +727,7 @@ def extract_candidates(
             name_fields=("name_en", "name_cn"),
         )
         target_id = clean_text(row.get("affiliate")) or clean_text(row.get("affiliates_company_id"))
+        evidence = "stable_ids"
         if target_id is None:
             target_id = resolver.resolve(
                 row.get("affiliates_name"),
@@ -718,6 +740,7 @@ def extract_candidates(
                     country_fields=("affiliates_country",),
                 ),
             )
+            evidence = "unique_exact_name"
         if target_id is None:
             raise RelationDataError(
                 "subsidiary target has no stable or exact unique Organization id"
@@ -733,7 +756,14 @@ def extract_candidates(
             country_code_fields=("affiliates_country_code",),
             country_fields=("affiliates_country",),
         )
-        props = _edge_props(spec, row, base_record_id, ingest_batch, ingest_time)
+        props = _edge_props(
+            spec,
+            row,
+            base_record_id,
+            ingest_batch,
+            ingest_time,
+            evidence=evidence,
+        )
         return [_candidate(spec, subsidiary, parent, base_record_id, props)]
 
     if extractor == "project":
@@ -746,6 +776,7 @@ def extract_candidates(
                 source_id = clean_text(
                     item.get("org_id") or item.get("organization_id") or item.get("institution_id")
                 )
+            evidence = "stable_ids" if source_id is not None else "unique_exact_name"
             source_id = source_id or resolver.resolve(name)
             if source_id is None:
                 logger.debug(
@@ -756,7 +787,14 @@ def extract_candidates(
                 )
                 continue
             record_id = f"{base_record_id}|participant|{index}|{clean_text(name) or source_id}"
-            props = _edge_props(spec, row, record_id, ingest_batch, ingest_time)
+            props = _edge_props(
+                spec,
+                row,
+                record_id,
+                ingest_batch,
+                ingest_time,
+                evidence=evidence,
+            )
             result.append(_candidate(spec, organization_vid(source_id), target, record_id, props))
         if not result:
             raise RelationDataError(
@@ -774,6 +812,7 @@ def extract_candidates(
                 target_id = clean_text(
                     item.get("org_id") or item.get("organization_id") or item.get("institution_id")
                 )
+            evidence = "stable_ids" if target_id is not None else "unique_exact_name"
             target_id = target_id or resolver.resolve(name)
             if target_id is None:
                 continue
@@ -788,6 +827,7 @@ def extract_candidates(
                     "funded_amount": to_float(row.get("funded_amount")),
                     "fund_category": clean_text(row.get("fund_category")),
                 },
+                evidence=evidence,
             )
             result.append(
                 _candidate(
@@ -878,6 +918,11 @@ def extract_candidates(
             ingest_batch,
             ingest_time,
             {"role": "bankruptcy_administrator"},
+            evidence=(
+                "stable_ids"
+                if clean_text(row.get("admin_org_id")) is not None
+                else "unique_exact_name"
+            ),
         )
         return [_candidate(spec, source, target, base_record_id, props)]
 
@@ -1028,6 +1073,25 @@ def render_edge_insert(spec: RelationSpec, candidates: Sequence[EdgeCandidate]) 
     """Build one deterministic, property-ordered INSERT EDGE statement."""
     if not candidates:
         raise ValueError("cannot render an empty edge insert")
+    for item in candidates:
+        confidence = item.properties.get("confidence")
+        if confidence is None:
+            raise RelationDataError(
+                f"relation confidence must not be null edge={item.edge_type} "
+                f"record={item.source_record_id}"
+            )
+        try:
+            numeric_confidence = float(confidence)
+        except (TypeError, ValueError) as exc:
+            raise RelationDataError(
+                f"invalid relation confidence edge={item.edge_type} "
+                f"record={item.source_record_id}"
+            ) from exc
+        if not 0.0 <= numeric_confidence <= 1.0:
+            raise RelationDataError(
+                f"relation confidence must be between 0 and 1 edge={item.edge_type} "
+                f"record={item.source_record_id}"
+            )
     props = ",".join(ngql_identifier(name) for name in spec.edge_properties)
     rows: list[str] = []
     for item in candidates:
@@ -1110,53 +1174,6 @@ def _schema_available(
     if spec.edge_type not in edge_types:
         return False, f"{spec.edge_type} edge is missing"
     return True, ""
-
-
-def _build_organization_resolver(
-    session: Session,
-    *,
-    alignment_mode: str,
-    alignment_state_dir: str | None,
-    alignment_threshold: float,
-    alignment_margin: float,
-    alignment_top_k: int,
-    alignment_dense_dimension: int,
-    alignment_audit_path: str | None,
-) -> tuple[Any, OrganizationMilvusStore | None]:
-    exact = ExactOrganizationResolver.load(session)
-    if alignment_mode == "exact":
-        return exact, None
-    if alignment_mode != "hybrid":
-        raise ValueError(f"unsupported alignment mode: {alignment_mode}")
-
-    store = OrganizationMilvusStore()
-    if not store.has_collection("Organization"):
-        store.close()
-        raise RuntimeError(
-            "Organization Milvus index is missing; run "
-            "`python -m script.organization_milvus_index --entity Organization --write` first"
-        )
-    state_dir = Path(
-        alignment_state_dir or os.environ.get("ORG_MILVUS_STATE_DIR") or DEFAULT_ALIGNMENT_STATE_DIR
-    ).resolve()
-    model_path = state_dir / f"{store.collection_name('Organization')}.bm25.json"
-    if not model_path.exists():
-        store.close()
-        raise RuntimeError(f"Organization BM25 model state is missing: {model_path}")
-    matcher = OrganizationHybridMatcher(
-        store,
-        BM25SparseEncoder.load(model_path),
-        HashingDenseEncoder(alignment_dense_dimension),
-        threshold=alignment_threshold,
-        margin=alignment_margin,
-        top_k=alignment_top_k,
-    )
-    resolver = HybridOrganizationResolver(
-        exact,
-        matcher,
-        AlignmentAuditWriter(Path(alignment_audit_path) if alignment_audit_path else None),
-    )
-    return resolver, store
 
 
 def _process_candidate_batch(
@@ -1274,12 +1291,6 @@ def run_etl(
     foreign_only: bool = False,
     ingest_batch: str | None = None,
     alignment_mode: str = "exact",
-    alignment_state_dir: str | None = None,
-    alignment_threshold: float = 0.88,
-    alignment_margin: float = 0.08,
-    alignment_top_k: int = 20,
-    alignment_dense_dimension: int = DEFAULT_ALIGNMENT_DENSE_DIMENSION,
-    alignment_audit_path: str | None = None,
     resolver: Any | None = None,
     graph: TRSGraphClient | None = None,
     session: Session | None = None,
@@ -1294,16 +1305,11 @@ def run_etl(
         raise ValueError("batch_size must be positive")
     if max_records is not None and max_records <= 0:
         raise ValueError("max_records must be positive")
-    if alignment_mode not in {"exact", "hybrid"}:
-        raise ValueError("alignment_mode must be exact or hybrid")
-    if not 0.0 <= alignment_threshold <= 1.0:
-        raise ValueError("alignment_threshold must be between 0 and 1")
-    if not 0.0 <= alignment_margin <= 1.0:
-        raise ValueError("alignment_margin must be between 0 and 1")
-    if alignment_top_k <= 0:
-        raise ValueError("alignment_top_k must be positive")
-    if alignment_dense_dimension <= 0:
-        raise ValueError("alignment_dense_dimension must be positive")
+    if alignment_mode != "exact":
+        raise ValueError(
+            "organization relation building only supports exact matching; "
+            "entity disambiguation is disabled"
+        )
     specs = _selected_specs(
         relation,
         domestic_only=domestic_only,
@@ -1323,20 +1329,10 @@ def run_etl(
         assert session_cm is not None
         session = session_cm.__enter__()
 
-    milvus_store: OrganizationMilvusStore | None = None
     try:
         validate_source_schema(session, specs)
         if resolver is None:
-            resolver, milvus_store = _build_organization_resolver(
-                session,
-                alignment_mode=alignment_mode,
-                alignment_state_dir=alignment_state_dir,
-                alignment_threshold=alignment_threshold,
-                alignment_margin=alignment_margin,
-                alignment_top_k=alignment_top_k,
-                alignment_dense_dimension=alignment_dense_dimension,
-                alignment_audit_path=alignment_audit_path,
-            )
+            resolver = ExactOrganizationResolver.load(session)
         labels = set(graph.labels())
         edge_types = set(graph.edge_types())
         results: dict[str, RelationStats] = {}
@@ -1441,8 +1437,6 @@ def run_etl(
             logger.info("org_relation watermark advanced to %s", max_ts)
         return results
     finally:
-        if milvus_store is not None:
-            milvus_store.close()
         if owns_session and session_cm is not None:
             session_cm.__exit__(None, None, None)
 
@@ -1476,22 +1470,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ingest-batch")
     parser.add_argument(
         "--alignment-mode",
-        choices=("exact", "hybrid"),
+        choices=("exact",),
         default="exact",
-        help="use conservative Milvus hybrid alignment only when explicitly selected",
-    )
-    parser.add_argument("--alignment-state-dir")
-    parser.add_argument("--alignment-threshold", type=float, default=0.88)
-    parser.add_argument("--alignment-margin", type=float, default=0.08)
-    parser.add_argument("--alignment-top-k", type=int, default=20)
-    parser.add_argument(
-        "--alignment-dense-dimension",
-        type=int,
-        default=DEFAULT_ALIGNMENT_DENSE_DIMENSION,
-    )
-    parser.add_argument(
-        "--alignment-audit",
-        help="JSONL path for matched, review and rejected alignment decisions",
+        help="only stable identifiers and unique exact names are allowed",
     )
     parser.add_argument("--log-level", default="INFO")
     return parser
@@ -1506,9 +1487,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     os.environ["TRS_GRAPH_SPACE"] = args.space
     now = datetime.now(UTC)
     ingest_batch = args.ingest_batch or f"ORG_REL_{now.strftime('%Y%m%dT%H%M%SZ')}"
-    alignment_audit = args.alignment_audit
-    if args.alignment_mode == "hybrid" and not alignment_audit:
-        alignment_audit = f"output/organization_alignment_{ingest_batch}.jsonl"
     with exclusive_etl_lock("organization_relation_etl", ingest_batch):
         results = run_etl(
             relation=args.relation,
@@ -1519,12 +1497,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             foreign_only=args.foreign_only,
             ingest_batch=ingest_batch,
             alignment_mode=args.alignment_mode,
-            alignment_state_dir=args.alignment_state_dir,
-            alignment_threshold=args.alignment_threshold,
-            alignment_margin=args.alignment_margin,
-            alignment_top_k=args.alignment_top_k,
-            alignment_dense_dimension=args.alignment_dense_dimension,
-            alignment_audit_path=alignment_audit,
             mode=args.mode,
         )
     summary = {table: asdict(stats) for table, stats in results.items()}

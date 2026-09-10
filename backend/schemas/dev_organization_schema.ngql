@@ -134,6 +134,8 @@ CREATE TAG IF NOT EXISTS `Project`(
   `abstract` string NULL,
   `final_report_abstract` string NULL,
   `project_page_url` string NULL,
+  `organization_id` string NULL,
+  `confidence` double NULL,
   `extra_json` string NULL,
   `source_system` string NULL,
   `source_table` string NULL,
@@ -164,7 +166,8 @@ CREATE TAG IF NOT EXISTS `DataSource`(
   `source_table` string NULL,
   `table_cn_name` string NULL,
   `tier` string NULL,
-  `library` string NULL
+  `library` string NULL,
+  `confidence` double NULL
 );
 
 CREATE EDGE IF NOT EXISTS `LEGAL_REP_OF`(

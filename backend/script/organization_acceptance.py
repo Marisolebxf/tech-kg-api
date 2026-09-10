@@ -17,7 +17,16 @@ from script.organization_etl_common import (
     ngql_literal,
 )
 
-OWNED_TAGS = ("Organization", "organization_base", "Person", "News", "Event", "Product")
+OWNED_TAGS = (
+    "Organization",
+    "organization_base",
+    "Person",
+    "News",
+    "Event",
+    "Project",
+    "Product",
+    "DataSource",
+)
 OWNED_EDGE_TYPES = tuple(sorted({spec.edge_type for spec in RELATION_SPECS}))
 
 
@@ -193,6 +202,10 @@ def write_acceptance_report(
             "relationConfidence": edge_conf,
             "relationOrganizationId": edge_org,
         },
+        "violations": {
+            "entityConfidenceMissing": entity_conf[1] - entity_conf[0],
+            "relationConfidenceMissing": edge_conf[1] - edge_conf[0],
+        },
         "workflow": dict(workflow_result),
     }
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -205,6 +218,8 @@ def write_acceptance_report(
         f"- 实体 organization_id 覆盖：{entity_org[0]}/{entity_org[1]} ({entity_org[2]:.2%})",
         f"- 关系 confidence 覆盖：{edge_conf[0]}/{edge_conf[1]} ({edge_conf[2]:.2%})",
         f"- 关系 organization_id 覆盖：{edge_org[0]}/{edge_org[1]} ({edge_org[2]:.2%})",
+        f"- 实体 confidence 空值：{entity_conf[1] - entity_conf[0]}",
+        f"- 关系 confidence 空值：{edge_conf[1] - edge_conf[0]}",
         f"- 桩节点：{after.get('virtual', {}).get('stubVertices', 0)}",
         f"- 明确虚拟关系：{after.get('virtual', {}).get('syntheticEdges', 0)}",
         "",

@@ -98,3 +98,8 @@ def test_workflow_supports_full_run_and_strict_boolean(monkeypatch) -> None:
 def test_workflow_rejects_ambiguous_boolean() -> None:
     with pytest.raises(ValueError, match="JSON boolean"):
         workflow({"stage": "entity", "dry_run": "not-a-bool", "report": False})
+
+
+def test_workflow_rejects_entity_disambiguation_mode() -> None:
+    with pytest.raises(ValueError, match="entity disambiguation is disabled"):
+        workflow({"stage": "relation", "alignment_mode": "hybrid", "report": False})

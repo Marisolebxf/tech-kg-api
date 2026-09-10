@@ -43,6 +43,8 @@ def test_acceptance_report_is_scoped_and_durable(tmp_path: Path) -> None:
     )
     payload = json.loads(Path(artifacts["json"]).read_text(encoding="utf-8"))
     assert payload["domain"] == "domestic_and_foreign_organization"
+    assert payload["violations"]["entityConfidenceMissing"] > 0
+    assert payload["violations"]["relationConfidenceMissing"] == 0
     assert Path(artifacts["markdown"]).is_file()
 
 

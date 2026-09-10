@@ -80,8 +80,28 @@ def test_organization_confidence_and_provenance_are_deterministic() -> None:
     relation_score = common.relation_confidence(
         {"org_id": "org-1", "inv_org_id": "org-2", "amount": 1},
         source_table="dwd_org_invest_info",
+        evidence="stable_ids",
     )
-    assert relation_score == 0.95
+    assert relation_score == 1.0
+    assert (
+        common.relation_confidence(
+            {"org_id": "org-1", "owners_name": "唯一机构"},
+            source_table="dwd_forg_shareholder_info",
+            evidence="unique_exact_name",
+        )
+        == 0.9
+    )
+
+
+def test_confidence_rejects_non_structured_or_unsupported_evidence() -> None:
+    with pytest.raises(common.RelationDataError, match="non-structured"):
+        common.entity_confidence({}, source_table="llm_extraction")
+    with pytest.raises(common.RelationDataError, match="unsupported relation evidence"):
+        common.relation_confidence(
+            {},
+            source_table="dwd_org_base_info",
+            evidence="fuzzy_match",
+        )
 
 
 def test_schema_declares_exact_organization_provenance_contract() -> None:
@@ -89,3 +109,4 @@ def test_schema_declares_exact_organization_provenance_contract() -> None:
     assert "CREATE TAG IF NOT EXISTS `organization_base`" in schema
     assert "`organization_id` string NULL" in schema
     assert "`confidence` double NULL" in schema
+    assert "CREATE TAG IF NOT EXISTS `DataSource`" in schema

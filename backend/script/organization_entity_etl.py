@@ -180,6 +180,8 @@ TAG_PROPERTIES: dict[str, tuple[str, ...]] = {
         "abstract",
         "final_report_abstract",
         "project_page_url",
+        "organization_id",
+        "confidence",
         "extra_json",
         "source_system",
         "source_table",
@@ -204,7 +206,7 @@ TAG_PROPERTIES: dict[str, tuple[str, ...]] = {
         "ingest_time",
         "source_update_time",
     ),
-    "DataSource": ("source_table", "table_cn_name", "tier", "library"),
+    "DataSource": ("source_table", "table_cn_name", "tier", "library", "confidence"),
     "organization_base": (
         "organization_id",
         "confidence",
@@ -223,9 +225,10 @@ TAG_NUMERIC_PROPERTIES: dict[str, frozenset[str]] = {
     "Person": frozenset({"confidence"}),
     "News": frozenset({"confidence"}),
     "Event": frozenset({"amount", "confidence"}),
-    "Project": frozenset({"funded_amount"}),
+    "Project": frozenset({"funded_amount", "confidence"}),
     "Product": frozenset({"confidence"}),
     "organization_base": frozenset({"confidence"}),
+    "DataSource": frozenset({"confidence"}),
 }
 
 ENTITY_TABLE_SPECS: tuple[DomainTableSpec, ...] = tuple(
@@ -701,6 +704,7 @@ def datasource_records() -> list[VertexRecord]:
                     "table_cn_name": cn_name,
                     "tier": "DWD",
                     "library": library,
+                    "confidence": 1.0,
                 },
             )
         )
@@ -713,6 +717,22 @@ def render_vertex_insert(records: Sequence[VertexRecord]) -> str:
     tag = records[0].tag
     if any(record.tag != tag for record in records):
         raise ValueError("one INSERT VERTEX batch must contain one tag")
+    for record in records:
+        confidence = record.properties.get("confidence")
+        if confidence is None:
+            raise RelationDataError(
+                f"entity confidence must not be null tag={record.tag} vid={record.vid}"
+            )
+        try:
+            numeric_confidence = float(confidence)
+        except (TypeError, ValueError) as exc:
+            raise RelationDataError(
+                f"invalid entity confidence tag={record.tag} vid={record.vid}"
+            ) from exc
+        if not 0.0 <= numeric_confidence <= 1.0:
+            raise RelationDataError(
+                f"entity confidence must be between 0 and 1 tag={record.tag} vid={record.vid}"
+            )
     allowed = TAG_PROPERTIES[tag]
     properties = tuple(name for name in allowed if name in records[0].properties)
     if any(
@@ -802,6 +822,9 @@ def reconcile_existing_schema(graph: TRSGraphClient) -> None:
             ("TAG", "Organization", "organization_base", NULLABLE_STRING_TYPE),
             ("TAG", "Person", "organization_base", NULLABLE_STRING_TYPE),
             ("TAG", "Project", "extra_json", NULLABLE_STRING_TYPE),
+            ("TAG", "Project", "organization_id", NULLABLE_STRING_TYPE),
+            ("TAG", "Project", "confidence", "double NULL"),
+            ("TAG", "DataSource", "confidence", "double NULL"),
             ("EDGE", "PARTICIPATES_IN", "extra_json", NULLABLE_STRING_TYPE),
             ("EDGE", "FUNDED_BY", "extra_json", NULLABLE_STRING_TYPE),
         )

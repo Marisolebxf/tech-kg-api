@@ -64,6 +64,12 @@ async def get_login_url(
 ) -> LoginUrlResponse:
     response.headers["Cache-Control"] = "no-store"
     if not application.settings.enabled:
+        if not application.settings.allow_insecure_dev_context:
+            raise HTTPException(
+                status_code=503,
+                detail="认证服务未启用，登录入口已拒绝访问",
+                headers={"Cache-Control": "no-store"},
+            )
         return LoginUrlResponse(
             data=LoginUrlData(
                 url=application.frontend_redirect(next_path),

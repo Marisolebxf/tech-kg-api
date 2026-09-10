@@ -98,6 +98,25 @@ def test_query_shared_papers_and_patent_with_awards():
     assert resp["summary"]["awards"] >= 1
     types = {i["type"] for i in resp["items"]}
     assert types == {"paper", "patent"}
+
+    paper_only = _svc(graph).query(
+        source_expert_id="S1", target_expert_id="S2", achievement_types=["paper"]
+    )
+    distribution = next(
+        row["value"] for row in paper_only["summaryRows"] if row["label"] == "成果分布"
+    )
+    assert distribution == "论文 1"
+    assert "专利" not in distribution
+    paper_only_entities = {entity["id"]: entity for entity in paper_only["entities"]}
+    assert paper_only_entities["S1"]["relations"] == "与乙存在共同成果关系：论文 1篇"
+    assert paper_only_entities["S2"]["relations"] == "与甲存在共同成果关系：论文 1篇"
+    assert paper_only_entities["P1"]["relations"] == "由甲、乙共同发表"
+    assert {edge["label"] for edge in paper_only["graph"]["edges"]} == {
+        "论文合作关系",
+        "发表",
+    }
+    assert "PT1" not in paper_only_entities
+    assert {edge["category"] for edge in paper_only["graph"]["edges"]} == {"科研合作", "成果关联"}
     paper = next(i for i in resp["items"] if i["type"] == "paper")
     assert paper["title"] == "论文A"
     assert "图谱" in paper["fields"]
@@ -128,6 +147,11 @@ def test_query_shared_papers_and_patent_with_awards():
     assert svc._coerce_field_values('["异构图", "实体关联"]') == ["异构图", "实体关联"]
     assert svc._normalize_time_label("20220901") == "2022-09-01"
     assert resp["graph"]["nodes"]
+    entities_by_id = {entity["id"]: entity for entity in resp["entities"]}
+    assert entities_by_id["S1"]["relations"] == ("与乙存在共同成果关系：论文 1篇、专利 1项")
+    assert entities_by_id["S2"]["relations"] == ("与甲存在共同成果关系：论文 1篇、专利 1项")
+    assert entities_by_id["P1"]["relations"] == "由甲、乙共同发表"
+    assert entities_by_id["PT1"]["relations"] == "由甲、乙共同发明"
     assert resp["rules"]
     assert resp["provenance"]["evidences"]
     source_evidence = resp["provenance"]["evidences"][0]
@@ -283,6 +307,11 @@ def test_query_empty_shared_achievements():
     assert resp["items"] == []
     assert resp["coreContribution"] == "暂无结构化共同成果"
     assert resp["cooperationMode"] == "暂无合作模式"
+    entities_by_id = {entity["id"]: entity for entity in resp["entities"]}
+    assert entities_by_id["S1"]["relations"] == "与乙暂无共同成果"
+    assert entities_by_id["S2"]["relations"] == "与甲暂无共同成果"
+    assert resp["relations"] == []
+    assert resp["graph"]["edges"] == []
 
 
 def test_cooperation_mode_long_term():

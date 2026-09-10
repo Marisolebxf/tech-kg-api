@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -25,6 +26,13 @@ from infra.graph_db.config import TRSGraphSettings
 from infra.graph_db.exceptions import GraphRequestError
 
 router = APIRouter(prefix="/graph-search", tags=["graph-search"])
+logger = logging.getLogger(__name__)
+
+
+def _graph_query_error(operation: str) -> ApiResponse:
+    logger.exception("图数据查询失败 operation=%s", operation)
+    return ApiResponse(code=500, success=False, msg="图数据查询失败")
+
 
 # 按空间缓存客户端（避免每次请求重建连接）
 _space_clients: dict[str, TRSGraphClient] = {}
@@ -337,8 +345,8 @@ async def get_node(
         if node is None:
             return ApiResponse(code=404, success=False, msg=f"节点不存在: {node_id}")
         return ApiResponse(data=_node_to_data(node).model_dump())
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("get_node")
 
 
 @router.get("/nodes")
@@ -359,8 +367,8 @@ async def list_nodes(
         items = [_node_to_data(n).model_dump() for n in result.items]
         total = await _node_count_cached(client, space, label)
         return ApiResponse(data=NodeListData(items=items, total=total).model_dump())
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("list_nodes")
 
 
 @router.post("/nodes/search")
@@ -377,8 +385,8 @@ async def search_nodes(
         )
         items = [_node_to_data(n).model_dump() for n in result.items]
         return ApiResponse(data=NodeListData(items=items, total=len(items)).model_dump())
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("search_nodes")
 
 
 @router.post("/paths/search")
@@ -411,8 +419,8 @@ async def search_typed_paths(body: TypedPathSearchRequest) -> ApiResponse:
             offset=body.offset,
         )
         return ApiResponse(data=data.model_dump())
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("search_typed_paths")
 
 
 @router.get("/subgraph/{node_id}")
@@ -440,8 +448,8 @@ async def get_subgraph(
         if subgraph is None:
             return ApiResponse(code=404, success=False, msg=f"节点不存在: {node_id}")
         return ApiResponse(data=SubgraphData(**subgraph).model_dump())
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("get_subgraph")
 
 
 def _collect_subgraph(
@@ -565,8 +573,8 @@ async def get_filtered_subgraph(
             edges = edges[: limit * len(et_set)]
 
         return ApiResponse(data=SubgraphData(nodes=nodes, edges=edges).model_dump())
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("get_filtered_subgraph")
 
 
 @router.get("/node/{node_id}/edges")
@@ -588,8 +596,8 @@ async def get_node_edges(
         )
         edges = [_edge_to_data(e).model_dump() for e in edge_list]
         return ApiResponse(data={"edges": edges, "total": len(edges)})
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("get_node_edges")
 
 
 @router.get("/node/{node_id}/neighbours")
@@ -607,8 +615,8 @@ async def get_neighbours(
         )
         nodes = [_node_to_data(n).model_dump() for n in neighbours]
         return ApiResponse(data={"nodes": nodes, "total": len(nodes)})
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("get_neighbours")
 
 
 @router.get("/shortest-path")
@@ -626,8 +634,8 @@ async def shortest_path(
         nodes = [_node_to_data(n).model_dump() for n in path.nodes]
         edges = [_edge_to_data(e).model_dump() for e in path.edges]
         return ApiResponse(data=PathData(nodes=nodes, edges=edges, found=True).model_dump())
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("shortest_path")
 
 
 @router.get("/spaces")
@@ -636,8 +644,8 @@ async def list_spaces() -> ApiResponse:
     try:
         names = _get_client(None).list_spaces()
         return ApiResponse(data={"spaces": names})
-    except Exception as exc:
-        return ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        return _graph_query_error("list_spaces")
 
 
 @router.get("/stats")
@@ -659,8 +667,8 @@ async def get_stats(
     try:
         data = await _load_stats(space, refresh=refresh)
         payload = ApiResponse(data=data)
-    except Exception as exc:
-        payload = ApiResponse(code=500, success=False, msg=str(exc))
+    except Exception:
+        payload = _graph_query_error("get_stats")
     if refresh:
         return Response(
             content=json.dumps(payload.model_dump(), ensure_ascii=False),

@@ -9,6 +9,8 @@ industry}。围绕科技专家，通过查图 API 挖掘图谱中专家↔企业
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Request
 
 from biz.dependencies.internal_api import get_internal_api_auth_headers
@@ -20,6 +22,7 @@ from service.tech_enterprise_relation_business import KeyEnterpriseRelationServi
 
 router = APIRouter(prefix="/kg-service", tags=["kg-service"])
 service = KeyEnterpriseRelationService()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/key-enterprise-relation")
@@ -53,5 +56,6 @@ async def run_key_enterprise_relation(
         return ApiResponse(data=data.model_dump())
     except KeyError as exc:  # noqa: BLE001
         return ApiResponse(code=404, success=False, msg=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        return ApiResponse(code=500, success=False, msg=f"重点关注科技企业关系业务执行失败: {exc}")
+    except Exception:  # noqa: BLE001
+        logger.exception("重点关注科技企业关系业务执行失败")
+        return ApiResponse(code=500, success=False, msg="重点关注科技企业关系业务执行失败")

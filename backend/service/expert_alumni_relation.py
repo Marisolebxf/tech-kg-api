@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -471,26 +472,88 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             "education_background_en",
             "education_background",
         ):
-            blob = self._as_str(props.get(blob_key))
-            if not blob:
+            raw_blob = props.get(blob_key)
+            if raw_blob is None:
                 continue
-            for segment in re.split(r"[;；\n|]+", blob):
-                segment = segment.strip()
-                if not segment:
+            records: Any = raw_blob
+            if isinstance(raw_blob, str):
+                text = raw_blob.strip()
+                if not text:
                     continue
-                # 极简：整段当作院校候选
-                edus.append({"institution": segment, "degree": None, "date": None})
+                try:
+                    records = json.loads(text)
+                except json.JSONDecodeError:
+                    records = [
+                        self._parse_education_text_segment(segment)
+                        for segment in re.split(r"[;；\n|]+", text)
+                        if segment.strip()
+                    ]
+            if isinstance(records, dict):
+                records = records.get("educations") or records.get("items") or [records]
+            if not isinstance(records, list):
+                continue
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                blob_institution = self._first_education_value(
+                    record, "institution", "school", "university", "institution_zh", "name"
+                )
+                blob_degree = self._first_education_value(
+                    record, "degree", "educationStage", "stage"
+                )
+                blob_date = self._first_education_value(
+                    record, "date", "period", "time", "educationDate"
+                )
+                if blob_institution or blob_degree or blob_date:
+                    edus.append(
+                        {
+                            "institution": blob_institution,
+                            "degree": blob_degree,
+                            "date": blob_date,
+                        }
+                    )
 
-        # dedupe by institution norm
-        seen: set[str] = set()
+        # 同院校的不同学历或不同时间段是独立教育经历，不能互相覆盖。
+        seen: set[tuple[str, str, str]] = set()
         out: list[dict[str, str | None]] = []
-        for e in edus:
-            key = self._norm_text(e.get("institution") or "")
-            if not key or key in seen:
+        for education in edus:
+            key = (
+                self._norm_text(education.get("institution") or ""),
+                self._norm_text(education.get("degree") or ""),
+                self._norm_text(education.get("date") or ""),
+            )
+            if not key[0] or key in seen:
                 continue
             seen.add(key)
-            out.append(e)
+            out.append(education)
         return out
+
+    def _first_education_value(self, record: dict[str, Any], *keys: str) -> str | None:
+        for key in keys:
+            value = self._as_str(record.get(key))
+            if value:
+                return value
+        return None
+
+    def _parse_education_text_segment(self, segment: str) -> dict[str, str | None]:
+        text = segment.strip()
+        date_match = re.search(r"(?:19|20)\d{2}(?:\s*[-至~—–]\s*(?:19|20)\d{2})?", text)
+        degree_match = re.search(
+            r"博士后|博士|硕士|学士|ph\.?d\.?|master(?:\x27s)?|bachelor(?:\x27s)?",
+            text,
+            flags=re.IGNORECASE,
+        )
+        institution = text
+        if date_match:
+            institution = institution.replace(date_match.group(0), "")
+        if degree_match:
+            institution = institution.replace(degree_match.group(0), "")
+        institution = re.sub(r"[（）()\[\]]", "", institution).strip(" ，,、:：-—")
+        return {
+            "institution": institution or None,
+            "degree": degree_match.group(0) if degree_match else None,
+            "date": date_match.group(0) if date_match else None,
+        }
 
     @staticmethod
     def _as_str(value: Any) -> str | None:
@@ -551,7 +614,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 c_deg_raw = c.get("degree") or ""
                 s_deg = self._norm_text(s_deg_raw)
                 c_deg = self._norm_text(c_deg_raw)
-                if stage_norms and not any(stage in c_deg for stage in stage_norms):
+                if stage_norms and not any(
+                    stage in s_deg and stage in c_deg for stage in stage_norms
+                ):
                     continue
 
                 if display and display not in shared_institutions:
@@ -891,7 +956,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             dimensions = "、".join(peer.get("dimensions") or [])
             schools = "、".join(peer.get("sharedInstitutions") or [])
             detail = "；".join(
-                part for part in (dimensions or "同校", f"共同院校：{schools}" if schools else "") if part
+                part
+                for part in (dimensions or "同校", f"共同院校：{schools}" if schools else "")
+                if part
             )
             source_relation = (
                 f"与{peer_name}存在校友关系（{detail}）"

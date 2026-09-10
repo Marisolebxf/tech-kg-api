@@ -136,8 +136,14 @@ def test_pair_same_school_and_degree():
     assert resp["entities"][0]["id"] == "S1"
     assert resp["relations"][0]["to"] == "S2"
     entities_by_id = {entity["id"]: entity for entity in resp["entities"]}
-    assert entities_by_id["S1"]["relations"] == "与乙存在校友关系（同校、同学历、同期；共同院校：北京大学）"
-    assert entities_by_id["S2"]["relations"] == "与甲存在校友关系（同校、同学历、同期；共同院校：北京大学）"
+    assert (
+        entities_by_id["S1"]["relations"]
+        == "与乙存在校友关系（同校、同学历、同期；共同院校：北京大学）"
+    )
+    assert (
+        entities_by_id["S2"]["relations"]
+        == "与甲存在校友关系（同校、同学历、同期；共同院校：北京大学）"
+    )
     assert resp["relations"][0]["label"] == "校友关系"
     assert resp["relations"][0]["category"] == "教育经历关联"
     assert resp["relations"][0]["dimensions"] == ["同校", "同学历", "同期"]
@@ -222,7 +228,7 @@ def test_pair_education_stage_accepts_multiple_values():
         {
             "name_zh": "甲",
             "education_background_institution_zh": "北京大学",
-            "education_background_degree_zh": "博士",
+            "education_background_degree_zh": "硕士",
         },
     )
     b = _node(
@@ -245,6 +251,61 @@ def test_pair_education_stage_accepts_multiple_values():
     )
 
     assert resp["total"] == 1
+
+
+def test_pair_education_stage_requires_both_experts_to_match():
+    source = _node(
+        "S1",
+        {
+            "name_zh": "甲",
+            "education_background_institution_zh": "北京大学",
+            "education_background_degree_zh": "硕士",
+        },
+    )
+    target = _node(
+        "S2",
+        {
+            "name_zh": "乙",
+            "education_background_institution_zh": "北京大学",
+            "education_background_degree_zh": "博士",
+        },
+    )
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: {"S1": source, "S2": target}.get(str(nid)))
+    graph.get_node_edges = MagicMock(return_value=[])
+    graph._settings = SimpleNamespace(space="dev")
+
+    response = _svc(graph).query(expert_id="S1", target_expert_id="S2", education_stage="博士")
+
+    assert response["total"] == 0
+    assert response["relations"] == []
+    assert response["graph"]["edges"] == []
+
+
+def test_parse_educations_preserves_multiple_stages_at_same_school():
+    service = ExpertAlumniRelationService()
+    educations = service._parse_educations(
+        {
+            "education_background": [
+                {"institution": "清华大学", "degree": "硕士", "date": "2012-2015"},
+                {"institution": "清华大学", "degree": "博士", "date": "2015-2019"},
+                {"institution": "清华大学", "degree": "博士", "date": "2015-2019"},
+            ]
+        }
+    )
+
+    text_educations = service._parse_educations(
+        {"education_background_zh": "清华大学（硕士，2012-2015）；清华大学（博士，2015-2019）"}
+    )
+    assert text_educations == [
+        {"institution": "清华大学", "degree": "硕士", "date": "2012-2015"},
+        {"institution": "清华大学", "degree": "博士", "date": "2015-2019"},
+    ]
+
+    assert educations == [
+        {"institution": "清华大学", "degree": "硕士", "date": "2012-2015"},
+        {"institution": "清华大学", "degree": "博士", "date": "2015-2019"},
+    ]
 
 
 def test_list_via_studied_at_neighborhood():

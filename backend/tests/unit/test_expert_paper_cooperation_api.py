@@ -189,7 +189,7 @@ async def test_coauthor_edge_fallback_keeps_unproven_fields_empty():
     assert shared_path_request["steps"][0]["direction"] == "in"
     assert shared_path_request["steps"][1]["direction"] == "out"
     assert result["paperTopics"][0] == "医学影像"
-    assert result["coreCollaborators"] == ["共同作者丙"]
+    assert result["coreCollaborators"] == ["共同作者丙", "专家乙", "专家甲"]
     assert result["stableTeamMembers"] == []
     assert result["cooperationTimeRange"]["displayText"] == ""
     assert result["journalLevelCount"] == {}

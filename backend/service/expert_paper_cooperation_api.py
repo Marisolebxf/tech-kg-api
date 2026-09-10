@@ -732,6 +732,15 @@ async def _build_structured_result(
             key=lambda item: (-item[1], item[0]),
         )
     ]
+    # 本接口分析的是指定的专家对。即使共同论文没有第三作者，对方也必然是
+    # 当前专家的核心合作人员，不能因为第三方作者列表为空而返回“暂无”。
+    pair_collaborators = [
+        _display_name(expert_b, body.expertBId),
+        _display_name(expert_a, body.expertAId),
+    ]
+    for name in pair_collaborators:
+        if name not in ranked_collaborators:
+            ranked_collaborators.append(name)
     stable_members = [
         name
         for name in ranked_collaborators
@@ -760,6 +769,11 @@ async def _build_structured_result(
 
     start_year = min(years) if years else 0
     end_year = max(years) if years else 0
+
+    # 至少两篇、跨至少两个年份的专家对属于稳定合作关系；团队成员就是本次
+    # 分析的两位专家。该结论来自真实合作论文的年份与数量，不补造第三方人员。
+    if not stable_members and len(papers) >= 2 and len(set(years)) >= 2:
+        stable_members = list(dict.fromkeys(pair_collaborators))
 
     # 当 Paper 节点缺失（fallback 路径）时，尝试从专家属性推断合作年份
     if not years and fallback_paper_count:

@@ -192,17 +192,34 @@ def _person_vid(node_id: str) -> str:
 
 def _node_name(node: dict[str, Any]) -> str:
     props = node.get("properties") or {}
-    for key in ("name_zh", "name_en", "title_zh", "title_en", "name", "keyword"):
+    for key in (
+        "name_zh",
+        "name_cn",
+        "organization_name",
+        "institution_name",
+        "org_name",
+        "name_en",
+        "title_zh",
+        "title_cn",
+        "title_en",
+        "name",
+        "keyword",
+    ):
         if props.get(key):
             return str(props[key])
     return str(node.get("id") or "未知节点")
 
 
 def _entity_type(node: dict[str, Any]) -> str:
-    labels = node.get("labels") or []
-    label = str(labels[0]) if labels else "Entity"
-    return {
+    labels = [
+        str(label)
+        for label in node.get("labels") or []
+        if str(label).lower() not in {"organization_base", "entity", "base"}
+    ]
+    type_map = {
         "Person": "科技专家",
+        "Scholar": "科技专家",
+        "Expert": "科技专家",
         "Organization": "科研机构",
         "Project": "科研项目",
         "Paper": "论文成果",
@@ -212,7 +229,11 @@ def _entity_type(node: dict[str, Any]) -> str:
         "Event": "科技事件",
         "News": "新闻资讯",
         "Report": "研究报告",
-    }.get(label, label)
+    }
+    for label in labels:
+        if label in type_map:
+            return type_map[label]
+    return labels[0] if labels else "实体"
 
 
 def _node_brief(node: dict[str, Any]) -> dict[str, Any]:
@@ -291,12 +312,17 @@ def _relation_type(edges: list[dict[str, Any]]) -> str:
 
 
 def _edge_brief(edge: dict[str, Any]) -> dict[str, Any]:
+    properties = dict(edge.get("properties") or {})
+    # 间接关系页面需要展示每段真实图边的关系置信度。图中未落该字段时，
+    # 使用与路径强度计算完全相同的边权规则，避免页面把可计算值误报为“暂无”。
+    properties.setdefault("confidence", round(_edge_strength(edge), 4))
+    properties.setdefault("match_method", "图谱关系权重")
     return {
         "id": str(edge.get("id") or ""),
         "type": str(edge.get("type") or ""),
         "source": str(edge.get("source") or ""),
         "target": str(edge.get("target") or ""),
-        "properties": edge.get("properties") or {},
+        "properties": properties,
     }
 
 

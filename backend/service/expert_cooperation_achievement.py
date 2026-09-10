@@ -823,33 +823,47 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "y": 160.0,
             },
         ]
-        relations = [
-            {
-                "id": f"coop-{source_id}-{target_id}",
-                "from": source_id,
-                "to": target_id,
-                "fromName": source_name,
-                "toName": target_name,
-                "label": "共同成果关系" if total else "暂无共同成果",
-                "category": "合作成果",
-                "summary": f"论文 {papers}、专利 {patents}、项目 {projects}",
-            }
-        ]
+        # 专家之间的关系按成果类型拆分，避免将“共同成果关系”作为过于
+        # 笼统的关系类型，也避免在没有共同成果时伪造一条关系边。
+        cooperation_relations = {
+            "paper": (papers, "论文合作关系", "共同论文"),
+            "patent": (patents, "专利合作关系", "共同专利"),
+            "project": (projects, "项目合作关系", "共同项目"),
+        }
+        relations = []
+        for ach_type, (count, label, evidence_label) in cooperation_relations.items():
+            if not count:
+                continue
+            relation_id = f"coop-{ach_type}-{source_id}-{target_id}"
+            unit = "篇" if ach_type == "paper" else "项"
+            relations.append(
+                {
+                    "id": relation_id,
+                    "from": source_id,
+                    "to": target_id,
+                    "fromName": source_name,
+                    "toName": target_name,
+                    "label": label,
+                    "category": "科研合作",
+                    "summary": f"{evidence_label} {count}{unit}",
+                }
+            )
         nodes = list(entities)
         edges = [
             {
-                "id": relations[0]["id"],
-                "from": source_id,
-                "to": target_id,
-                "label": relations[0]["label"],
-                "category": "合作成果",
+                "id": relation["id"],
+                "from": relation["from"],
+                "to": relation["to"],
+                "label": relation["label"],
+                "category": relation["category"],
             }
+            for relation in relations
         ]
 
         type_node_map = {
-            "paper": ("paper", "论文", "共同发表", "由{experts}共同发表", 370.0, 320.0),
-            "patent": ("topic", "专利", "共同发明", "由{experts}共同发明", 520.0, 340.0),
-            "project": ("project", "项目", "共同参与", "由{experts}共同参与", 220.0, 340.0),
+            "paper": ("paper", "论文", "发表", "由{experts}共同发表", 370.0, 320.0),
+            "patent": ("topic", "专利", "发明", "由{experts}共同发明", 520.0, 340.0),
+            "project": ("project", "项目", "参与", "由{experts}共同参与", 220.0, 340.0),
         }
         for idx, item in enumerate(items[:8]):
             ach_type = str(item.get("type") or "paper")
@@ -887,7 +901,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                         "from": expert_id,
                         "to": nid,
                         "label": edge_label,
-                        "category": "合作成果",
+                        "category": "成果关联",
                     }
                 )
 

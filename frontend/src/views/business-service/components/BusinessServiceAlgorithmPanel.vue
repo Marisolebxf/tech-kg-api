@@ -1759,8 +1759,9 @@ const liveRelationRows = computed(() => {
   if (selectedEdge.value) return relationDetailRows.value;
   // 机构从属边（"关联机构"）不是专家间的直接关系，关系 Tab 只展示真实的专家关系边，
   // 否则会出现 total=3 却显示 9 条这类"关系数量对不上"的问题。
-  const relationEdges = graphEdges.value.filter(
-    (edge) => edge.category !== "机构关联",
+  const relationEdges = graphEdges.value.filter((edge) =>
+    edge.category !== "机构关联" &&
+    (!isLiveCoop.value || edge.category === "科研合作"),
   );
   if (!relationEdges.length) return [] as Array<readonly [string, string]>;
   const nodesById = new Map(graphNodes.value.map((node) => [node.id, node]));

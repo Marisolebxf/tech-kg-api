@@ -112,10 +112,11 @@ def test_query_shared_papers_and_patent_with_awards():
     assert paper_only_entities["S2"]["relations"] == "与甲存在共同成果关系：论文 1篇"
     assert paper_only_entities["P1"]["relations"] == "由甲、乙共同发表"
     assert {edge["label"] for edge in paper_only["graph"]["edges"]} == {
-        "共同成果关系",
-        "共同发表",
+        "论文合作关系",
+        "发表",
     }
     assert "PT1" not in paper_only_entities
+    assert {edge["category"] for edge in paper_only["graph"]["edges"]} == {"科研合作", "成果关联"}
     paper = next(i for i in resp["items"] if i["type"] == "paper")
     assert paper["title"] == "论文A"
     assert "图谱" in paper["fields"]
@@ -309,6 +310,8 @@ def test_query_empty_shared_achievements():
     entities_by_id = {entity["id"]: entity for entity in resp["entities"]}
     assert entities_by_id["S1"]["relations"] == "与乙暂无共同成果"
     assert entities_by_id["S2"]["relations"] == "与甲暂无共同成果"
+    assert resp["relations"] == []
+    assert resp["graph"]["edges"] == []
 
 
 def test_cooperation_mode_long_term():

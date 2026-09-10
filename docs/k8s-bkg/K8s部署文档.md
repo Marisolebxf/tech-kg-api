@@ -7,9 +7,9 @@
 - 镜像仓库地址：<http://10.50.62.9:30303>
 - 容器管理平台地址：<https://10.50.199.115>
 
-本目录下的 yaml 文件与本文档内容一一对应，可直接 `kubectl apply -f` 或在容器平台界面导入：
+本文档自包含全部 13 份部署清单（见下表），**不再附带独立 yaml 文件**——以本文档为唯一交付物，避免正文与文件两份拷贝漂移。部署时将各节标注编号的 yaml 内容保存为同名临时文件后 `kubectl apply`，或直接在容器平台界面按序导入；其中 02/03 须先按第七节完成地址与密码的修改：
 
-| 文件 | 内容 |
+| 清单 | 内容 |
 | ------ | ------ |
 | `00-namespace.yaml` | 命名空间 |
 | `01-pvc.yaml` | 全部持久化存储（PVC） |
@@ -29,6 +29,10 @@
 
 | 版本 | 文档发布日期 | 修订内容 |
 | ------ | ------------ | --------- |
+| v0.0.7 | 2026/9/10 | §九 新增「临时改用 IP 直连登录」清单：5 个环境变量（APP_BASE / AUTH_COOKIE_PATH / AUTH_COOKIE_SECURE / AUTH_FRONTEND_URL / USER_CENTER_REDIRECT_URI）+ 用户中心回调登记 + `set env` 快速切换/回退命令与安全注意事项 |
+| v0.0.6 | 2026/9/10 | 图谱服务连接配置标注来源：§七 02-configmap 的 `TRS_GRAPH_*` 四项与 03-secret 的 `TRS_GRAPH_API_KEY`、§四 依赖表、`docs/k8s-deployment.md` ConfigMap 示例、后端 `infra/graph_db/config.py`，均注明取值对应《图数据库平台（TRS Graph）K8s 部署文档》的 §五.8 Service（trs-graph-service:8090）/ §五.3 Secret（api-key-hash 明文 ysukeg）/ §六 图空间（须与 TRS_GRAPH_SPACE 同名、replica_factor=1） |
+| v0.0.5 | 2026/9/10 | 交付物收口为单一部署文档：02-configmap / 03-secret / 24-web-nginx-template 内联进正文（02/03 在 §七、24 在 §八 前端），删除全部独立 yaml 文件，本文档为唯一交付物（PVC 容量维持 a65647d 统一后的 10Gi 口径） |
+| v0.0.4 | 2026/9/10 | 文档正文 9 个工作负载（auth-redis / milvus-etcd / milvus / temporal-mysql / temporal / temporal-ui / temporal-worker / api / web）补回缺失的 `imagePullSecrets: bkg-image-pull-secret-0`，与同目录 yaml 文件对齐，此前按正文直接部署会 ImagePullBackOff；正文 23-web 补回 `envFrom: bkg-config` 与 `bkg-nginx-template` 挂载（与文件对齐，否则剥前缀入口下前端静态资源/路由 404）；明确 02/03/24 内容以文件为准、正文不重复 |
 | v0.0.3 | 2026/9/9 | m3e 模型内置 backend 镜像（v0.0.2）三个 Deployment 共用，启动免联网下载；删除 m3e-model-cache PVC；m3e 启动探针收紧；文档表格格式化、PVC 示例补 storageClassName |
 | v0.0.2 | 2026/9/4 | 前端镜像一次构建运行时注入（APP_BASE）；与 TRS Graph 同命名空间对齐（imagePullSecrets/GRAPH_SPACE_REPLICA_FACTOR）；项目内命名统一 bkg；新增镜像准备与拉取密钥章节 |
 | 1.0 | 2026/8/28 | 初版 |
@@ -67,7 +71,7 @@
 | 依赖 | 说明 |
 | ------ | ------ |
 | 主 MySQL | 业务主库 `gkx_element` + 论文合作库 `gkx_local`（环境变量 `MYSQL_*` / `PAPER_COOP_MYSQL_*`） |
-| trs-graph-service | NebulaGraph REST 网关（Java），环境变量 `TRS_GRAPH_BASE_URL` / `TRS_GRAPH_API_KEY` / `TRS_GRAPH_SPACE` |
+| trs-graph-service | NebulaGraph REST 网关（Java），环境变量 `TRS_GRAPH_BASE_URL` / `TRS_GRAPH_API_KEY` / `TRS_GRAPH_SPACE`（三项分别对应《图数据库平台（TRS Graph）K8s 部署文档》§五.8 Service、§五.3 Secret、§六 图空间，逐项对应关系见 §七 内联 yaml 注释） |
 | LLM API | 智谱 GLM（可选，未配置时相关功能自动降级） |
 | 用户中心 SSO | `edu.itic-sci.com`（开启 `AUTH_ENABLED=true` 时必需） |
 
@@ -76,7 +80,7 @@
 
 **与 TRS Graph 图数据库平台同命名空间（`bkg`）共存**（其部署文档：《图数据库平台（TRS Graph）K8s 部署文档》）：
 
-- 本项目后端依赖其 `trs-graph-service:8090`（同命名空间 ClusterDNS 直连，`TRS_GRAPH_BASE_URL` 已配置）；API Key `ysukeg` 一致
+- 本项目后端依赖其 `trs-graph-service:8090`（其部署文档 §五.8 的 Service；同命名空间 ClusterDNS 直连，`TRS_GRAPH_BASE_URL` 已配置）；API Key `ysukeg` 一致（其 §五.3 Secret `trsgraph-secret` 中 api-key-hash 的明文）
 - Service / NodePort / Secret / ConfigMap / PVC 名称已逐一核对**无冲突**（其占用 NodePort 30090、30002；本项目占用 30880、30833）
 - **必须 `GRAPH_SPACE_REPLICA_FACTOR=1`**（已配置在 02-configmap）：对方 storaged 为单副本，默认 3 副本建图空间会 `Host not enough` 失败
 - 本项目命名空间不可更改（跨命名空间将解析不到 trs-graph-service）
@@ -285,6 +289,8 @@ spec:
       labels:
         app: auth-redis
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: auth-redis
           image: 10.50.62.9:30303/library/redis:7.4-alpine
@@ -479,6 +485,8 @@ spec:
       labels:
         app: milvus-etcd
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: etcd
           image: 10.50.62.9:30303/library/etcd:3.5.5
@@ -547,6 +555,8 @@ spec:
       labels:
         app: milvus
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: milvus
           image: 10.50.62.9:30303/library/milvus:v2.4.17
@@ -641,6 +651,8 @@ spec:
       labels:
         app: temporal-mysql
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: mysql
           image: 10.50.62.9:30303/library/mysql:8.4
@@ -707,6 +719,8 @@ spec:
       labels:
         app: temporal
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: temporal
           image: 10.50.62.9:30303/library/temporal-auto-setup:1.29.2
@@ -776,6 +790,8 @@ spec:
       labels:
         app: temporal-ui
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: temporal-ui
           image: 10.50.62.9:30303/library/temporal-ui:2.39.0
@@ -814,14 +830,167 @@ spec:
 
 ## 七、数据初始化
 
-1. **创建业务配置**（部署业务前完成，地址与密码按实际环境修改）：
+1. **创建业务配置**（部署业务前完成；两份清单见下方，地址与密码按实际环境修改后再 apply）：
 
-   - `02-configmap.yaml`：修改 `MYSQL_HOST`（主库地址）、`TRS_GRAPH_BASE_URL`（图谱服务地址）、`TRS_GRAPH_SPACE` 等外部依赖项。
-   - `03-secret.yaml`：替换 `MYSQL_PASSWORD` / `PAPER_COOP_MYSQL_PASSWORD` / `TRS_GRAPH_API_KEY` 等 `CHANGE_ME` 占位值；确认 rustfs 凭证与 `rustfs-secrets` 一致。
+   - `02-configmap.yaml`（ConfigMap `bkg-config`）：修改 `MYSQL_HOST`（主库地址）、`TRS_GRAPH_BASE_URL`（图谱服务地址）、`TRS_GRAPH_SPACE` 等外部依赖项（图谱三项与对方部署文档的逐项对应关系见下方 yaml 内注释；`TRS_GRAPH_SPACE` 必须与其 §六 实际创建的图空间同名）。
+   - `03-secret.yaml`（Secret `bkg-secrets`）：替换 `MYSQL_PASSWORD` / `PAPER_COOP_MYSQL_PASSWORD` / `TRS_GRAPH_API_KEY` 等 `CHANGE_ME` 占位值；确认 rustfs 凭证与 `rustfs-secrets` 一致。
 
-2. **temporal 库**：`temporal-auto-setup` 首次启动自动创建并初始化 Temporal 所需数据库，无需手工导入。
+```yaml
+# 02-configmap.yaml
+# bkg 业务非敏感配置（api / temporal-worker 共用，envFrom 注入）。
+# ★ 部署前必须确认两类外部依赖的地址：
+#   1. MYSQL_HOST / PAPER_COOP_MYSQL_* —— 主库（gkx_element）与论文合作库（gkx_local）
+#   2. TRS_GRAPH_BASE_URL —— trs-graph-service（NebulaGraph 网关）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bkg-config
+  namespace: bkg
+data:
+  # 前端部署前缀（运行时注入，见 docs/前端一次构建多环境部署方案.md）
+  APP_BASE: "/bkg_zpt"
+  # ---- 图谱服务（外部依赖，按实际环境修改）----
+  # ▼ 四项取值均来自《图数据库平台（TRS Graph）K8s 部署文档》（同命名空间 bkg），改任一侧需同步：
+  #   TRS_GRAPH_BASE_URL ← 其 §五.8「部署 trs-graph-service」的 Service 名 + 端口 8090
+  #     （集群内 ClusterIP 直连；集群外访问才用其 NodePort 30090 / Ingress /timks。
+  #       其 §五.5 的 trsgraph:9669 是 Nebula 原生协议口，仅 Studio/图算法直连用，本项目走 REST 不涉及）
+  #   TRS_GRAPH_SPACE ← 其 §六「数据初始化」实际创建的图空间名——其服务默认 space
+  #     （entity_binding_demo / TRSGRAPH_SPACE 变量）对本项目不生效：客户端每请求带
+  #     X-Graph-Space 头覆盖，两侧名字必须一致，否则所有图操作查不到数据
+  #   GRAPH_SPACE_REPLICA_FACTOR=1 ← 其 storaged 为单副本（§五.6），建空间默认 3 副本会 Host not enough
+  #   TRS_GRAPH_TIMEOUT ← 本项目侧请求超时，与对方配置无关
+  TRS_GRAPH_BASE_URL: "http://trs-graph-service:8090"
+  TRS_GRAPH_SPACE: "dev"
+  # TRS Graph 单副本 storaged，建图空间必须 replica_factor=1（默认 3 会 Host not enough）
+  GRAPH_SPACE_REPLICA_FACTOR: "1"
+  TRS_GRAPH_TIMEOUT: "30"
 
-3. **业务控制面库 techkg_control**（temporal-mysql 实例内，业务启动前创建一次）：
+  # ---- 主 MySQL（外部依赖，按实际环境修改）----
+  MYSQL_HOST: "mysql"
+  MYSQL_PORT: "3306"
+  MYSQL_DATABASE: "gkx_element"
+  MYSQL_USERNAME: "gkx"
+  # 论文合作库可独立部署；未单独配置时沿用主 MySQL 连接参数
+  PAPER_COOP_MYSQL_HOST: "mysql"
+  PAPER_COOP_MYSQL_PORT: "3306"
+  PAPER_COOP_MYSQL_DATABASE: "gkx_local"
+  PAPER_COOP_MYSQL_USERNAME: "root"
+
+  # ---- Milvus 向量库 ----
+  MILVUS_HOST: "milvus"
+  MILVUS_PORT: "19530"
+  PATENT_MILVUS_COLLECTION: "patent"
+  PATENT_INDEX_STATE_DIR: "/app/var/patent_indexes"
+  PATENT_INDEX_PAGE_SIZE: "1000"
+  PATENT_BM25_DIM: "262144"
+  ORG_MILVUS_STATE_DIR: "/var/lib/bkg/organization_milvus"
+
+  # ---- LLM（未配置 LLM_API_KEY 时相关功能自动降级）----
+  LLM_MODEL: "glm-5.3-flash"
+  LLM_BASE_URL: "https://open.bigmodel.cn/api/paas/v4"
+
+  # ---- Temporal 工作流 ----
+  TEMPORAL_ADDRESS: "temporal:7233"
+  TEMPORAL_NAMESPACE: "default"
+  TEMPORAL_TASK_QUEUE: "bkg-workflows"
+  TEMPORAL_MAX_CONCURRENT_ACTIVITIES: "4"
+  # 控制面 MySQL（temporal-mysql 的 techkg_control 库，跟 Temporal 共用实例但独立库）
+  WORKFLOW_MYSQL_HOST: "temporal-mysql"
+  WORKFLOW_MYSQL_PORT: "3306"
+  WORKFLOW_MYSQL_DATABASE: "techkg_control"
+  WORKFLOW_MYSQL_USERNAME: "root"
+  WORKFLOW_SCRIPT_DIR: "/var/lib/bkg/scripts"
+  WORKFLOW_DEMO_DATA_ENABLED: "false"
+
+  # ---- S3（operator-rustfs，schema 脚本 / operator 包 / milvus 内部存储共用）----
+  SCHEMA_S3_ENDPOINT_URL: "http://operator-rustfs:9000"
+  SCHEMA_S3_BUCKET: "bkg-schema-scripts"
+  SCHEMA_S3_REGION: "us-east-1"
+  SCHEMA_S3_SECURE: "false"
+  SCHEMA_SCRIPT_MAX_BYTES: "10485760"
+  SCHEMA_ADMIN_USER_IDS: "schema-admin"
+  OPERATOR_DIR: "/app/operators/user"
+  OPERATOR_S3_ENDPOINT_URL: "http://operator-rustfs:9000"
+  OPERATOR_S3_BUCKET: "bkg-operators"
+  OPERATOR_S3_PREFIX: "operators"
+  OPERATOR_S3_REGION: "us-east-1"
+
+  # ---- 专利 embedding（m3e-embedding 服务）----
+  PATENT_EMBEDDING_PROVIDER: "openai"
+  PATENT_EMBEDDING_BASE_URL: "http://m3e-embedding:8010/v1"
+  PATENT_EMBEDDING_MODEL: "moka-ai/m3e-small"
+  PATENT_EMBEDDING_DIM: "512"
+
+  # ---- 认证 / 用户中心 SSO ----
+  AUTH_ENABLED: "true"
+  AUTH_SESSION_BACKEND: "redis"
+  AUTH_SESSION_COOKIE: "techkg_session"
+  AUTH_SESSION_TTL_SECONDS: "604800"
+  AUTH_STATE_TTL_SECONDS: "300"
+  AUTH_AUDIT_TTL_SECONDS: "7776000"
+  AUTH_AUDIT_MAX_ITEMS: "200"
+  AUTH_COOKIE_SECURE: "true"
+  AUTH_COOKIE_SAMESITE: "lax"
+  AUTH_COOKIE_PATH: "/bkg_zpt"
+  AUTH_FRONTEND_URL: "https://edu.itic-sci.com/bkg_zpt"
+  USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED: "false"
+  USER_CENTER_PORTAL_TOKEN_COOKIE: "access_token"
+  USER_CENTER_SSO_LOGIN_URL: "https://edu.itic-sci.com/uc/sso/login"
+  USER_CENTER_OAUTH_BASE_URL: "https://edu.itic-sci.com/uc/admin-api/system/oauth2"
+  USER_CENTER_ACCOUNT_URL: "https://edu.itic-sci.com/uc/admin/login?redirect=/index"
+  USER_CENTER_REDIRECT_URI: "https://edu.itic-sci.com/bkg_zpt/api/v1/auth/callback"
+
+  # ---- Redis 会话 ----
+  REDIS_URL: "redis://auth-redis:6379/0"
+
+  # ---- 其他 ----
+  SCHEMA_AUTO_INIT: "true"
+  PLATFORM_BOOTSTRAP_FIRST_ADMIN: "true"
+  CORRECTION_SYNC_WORKER_ENABLED: "true"
+  CORRECTION_SYNC_INTERVAL_SECONDS: "30"
+  CORRECTION_SYNC_MAX_ATTEMPTS: "8"
+  CORRECTION_SYNC_MODE: "projection"
+```
+
+```yaml
+# 03-secret.yaml
+# bkg 业务敏感配置（api / temporal-worker 共用，envFrom 注入）。
+# ★ 上线前务必替换所有占位值；stringData 为明文写入，kubectl apply 后可改用 sealed-secret 管理。
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bkg-secrets
+  namespace: bkg
+type: Opaque
+stringData:
+  # 图谱服务 API Key ←《图数据库平台（TRS Graph）K8s 部署文档》§五.3「创建业务密钥」
+  #   Secret trsgraph-secret 的 api-key-hash（= sha256(明文)）：此处填明文，请求头
+  #   X-API-Key 携带明文、对方服务端哈希后比对；改 key 需两侧同步并重算哈希。
+  #   同一 Secret 的 username/password（root/trsadmin）是 Nebula 9669 直连账号
+  #   （Studio/图算法用），REST 调用方不涉及。
+  TRS_GRAPH_API_KEY: "ysukeg"
+  # 主 MySQL / 论文合作库密码
+  MYSQL_PASSWORD: "gkx_element"
+  PAPER_COOP_MYSQL_PASSWORD: "gkx_element"
+  # 控制面 MySQL（temporal-mysql root 密码，与 temporal-mysql-secret 保持一致）
+  WORKFLOW_MYSQL_PASSWORD: "temporal"
+  # LLM API Key（留空则 LLM 相关功能降级）
+  LLM_API_KEY: ""
+  # S3（operator-rustfs）凭证，与 rustfs 部署的 ACCESS_KEY/SECRET_KEY 保持一致
+  SCHEMA_S3_ACCESS_KEY: "rustfsadmin"
+  SCHEMA_S3_SECRET_KEY: "rustfsadmin"
+  OPERATOR_S3_ACCESS_KEY_ID: "rustfsadmin"
+  OPERATOR_S3_SECRET_ACCESS_KEY: "rustfsadmin"
+  # m3e-embedding 本地服务无鉴权
+  PATENT_EMBEDDING_API_KEY: "local-no-auth"
+  # 用户中心 SSO 客户端凭证（按实际环境填写）
+  USER_CENTER_CLIENT_ID: "98OPWXDM4QZUX54HZP7FYO6DJPWDDMQ9"
+  USER_CENTER_CLIENT_SECRET: "RccfLICuv5tZs4NmV2qQ4MSujQJu6KBugJjKsNVUnFEEgVVZjMkaL1bYGbHnAC7R"
+```
+
+1. **temporal 库**：`temporal-auto-setup` 首次启动自动创建并初始化 Temporal 所需数据库，无需手工导入。
+
+2. **业务控制面库 techkg_control**（temporal-mysql 实例内，业务启动前创建一次）：
 
    ```sql
    CREATE DATABASE IF NOT EXISTS techkg_control DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -829,11 +998,11 @@ spec:
 
    表结构由业务（`SCHEMA_AUTO_INIT=true`）自动初始化。
 
-4. **主 MySQL 业务库**：在外部主 MySQL 上确认 `gkx_element`、`gkx_local` 两个库存在且账号有权限；`SCHEMA_AUTO_INIT=true` 时 `gkx_element` 表结构由 api 启动时自动创建/补齐。若交付含存量数据，按数据交付清单另行导入。
+3. **主 MySQL 业务库**：在外部主 MySQL 上确认 `gkx_element`、`gkx_local` 两个库存在且账号有权限；`SCHEMA_AUTO_INIT=true` 时 `gkx_element` 表结构由 api 启动时自动创建/补齐。若交付含存量数据，按数据交付清单另行导入。
 
-5. **rustfs bucket**：`bkg-schema-scripts`、`bkg-operators` 两个 bucket 由业务首次写入时自动创建，无需手工创建。
+4. **rustfs bucket**：`bkg-schema-scripts`、`bkg-operators` 两个 bucket 由业务首次写入时自动创建，无需手工创建。
 
-6. **首个管理员**：`PLATFORM_BOOTSTRAP_FIRST_ADMIN=true` 时，首个通过用户中心 SSO 登录的账号自动成为平台管理员；也可用 `PLATFORM_INITIAL_ADMIN_USER_IDS` 预置。
+5. **首个管理员**：`PLATFORM_BOOTSTRAP_FIRST_ADMIN=true` 时，首个通过用户中心 SSO 登录的账号自动成为平台管理员；也可用 `PLATFORM_INITIAL_ADMIN_USER_IDS` 预置。
 
 ## 八、前后端业务部署
 
@@ -953,6 +1122,8 @@ spec:
       labels:
         app: temporal-worker
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: temporal-worker
           image: 10.50.62.9:30303/bkg/backend:v0.0.2
@@ -1002,6 +1173,8 @@ spec:
       labels:
         app: api
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: api
           image: 10.50.62.9:30303/bkg/backend:v0.0.2
@@ -1071,6 +1244,71 @@ spec:
 
 ### 前端
 
+先创建 nginx 根路径模板 ConfigMap（23-web 挂载它；模板来源 `frontend/nginx.k8s.conf`，入口剥前缀说明见 §九）：
+
+```yaml
+# 24-web-nginx-template.yaml
+# web 的 nginx 根路径模板（剥前缀入口用，挂载为 /etc/nginx/templates/ 渲染）。
+# 来源 frontend/nginx.k8s.conf——修改后用
+#   kubectl -n bkg create configmap bkg-nginx-template \
+#     --from-file=default.conf.template=frontend/nginx.k8s.conf --dry-run=client -o yaml | kubectl apply -f -
+# 重新生成本清单。若入口改为不剥前缀直连，删除 23-web 的挂载即可（镜像内置前缀模板）。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bkg-nginx-template
+  namespace: bkg
+data:
+  default.conf.template: |
+    # K8s 前端 nginx 模板：根路径全兜底（配合剥前缀入口）。
+    # 平台入口（Ingress rewrite-target /$2，见交付文档 §八）把 /bkg_zpt 前缀剥掉后
+    # 转发到本 Service——浏览器侧带前缀（runtime-config.js 注入 base=/bkg_zpt、
+    # apiBase=/bkg_zpt/api，资产引用经哨兵替换），到达本 nginx 时已是根路径：
+    #   /bkg_zpt/overview    → 入口转发 /overview    → location / SPA 回退
+    #   /bkg_zpt/assets/x.js → 入口转发 /assets/x.js → 静态文件
+    #   /bkg_zpt/api/v1/...  → 入口转发 /api/v1/...  → 下方 /api/ 代理
+    # 若入口改为不剥前缀的直连子路径，删除 23-web 的本模板挂载、
+    # 使用镜像内置前缀模板即可。
+    server {
+      listen 80;
+      server_name _;
+
+      root /usr/share/nginx/html;
+      index index.html;
+
+      gzip on;
+      gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss image/svg+xml;
+
+      # k8s Service 域名由集群 DNS 稳定解析，无需 docker 式 resolver 动态解析
+      location ^~ /api/ {
+        proxy_pass http://api:8000;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+      }
+
+      location / {
+        # 门户 iframe 嵌入仅允许同源与统一门户，禁止第三方 framing
+        add_header Content-Security-Policy "frame-ancestors 'self' https://edu.itic-sci.com" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        # SPA index.html 必须 no-cache，否则浏览器用 stale HTML（含旧 JS hash 引用）
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires "0" always;
+        try_files $uri $uri/ /index.html;
+      }
+
+      location ~* \.(?:js|css|png|jpg|jpeg|gif|ico|svg|woff2?)$ {
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800";
+        try_files $uri =404;
+      }
+    }
+```
+
 ```yaml
 # 23-web.yaml
 apiVersion: apps/v1
@@ -1090,10 +1328,15 @@ spec:
       labels:
         app: web
     spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
       containers:
         - name: web
           image: 10.50.62.9:30303/bkg/web:v0.0.1
           imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: bkg-config
           ports:
             - containerPort: 80
               name: http
@@ -1110,6 +1353,16 @@ spec:
               port: 80
             initialDelaySeconds: 5
             periodSeconds: 10
+          volumeMounts:
+            # 根路径模板（剥前缀入口用）；必须挂到 templates/ 供 20-envsubst 渲染
+            - name: nginx-template
+              mountPath: /etc/nginx/templates/default.conf.template
+              subPath: default.conf.template
+              readOnly: true
+      volumes:
+        - name: nginx-template
+          configMap:
+            name: bkg-nginx-template
 ---
 apiVersion: v1
 kind: Service
@@ -1131,6 +1384,8 @@ spec:
 
 ### 部署顺序与验证
 
+以下命令中的文件名指本文档对应编号的 yaml 清单——先把各节内容存为同名文件（或容器平台界面按序导入），再执行：
+
 ```bash
 # 顺序：存储 → 中间件 → 业务配置 → 业务
 kubectl apply -f 00-namespace.yaml
@@ -1139,7 +1394,7 @@ kubectl apply -f 10-auth-redis.yaml
 kubectl apply -f 11-operator-rustfs.yaml
 kubectl apply -f 12-milvus.yaml
 kubectl apply -f 13-temporal.yaml
-kubectl apply -f 02-configmap.yaml    # 先按第六节修改地址/密码
+kubectl apply -f 02-configmap.yaml    # 先按第七节修改地址/密码
 kubectl apply -f 03-secret.yaml
 kubectl apply -f 20-m3e-embedding.yaml
 kubectl apply -f 21-temporal-worker.yaml
@@ -1197,3 +1452,39 @@ spec:
 4. **HTTPS**：`AUTH_COOKIE_SECURE=true` 要求外部入口必须是 HTTPS，平台证书按域名 `edu.itic-sci.com` 配置。
 5. **SSO 回调**：`USER_CENTER_REDIRECT_URI=https://edu.itic-sci.com/bkg_zpt/api/v1/auth/callback` 需在用户中心完成客户端注册（`USER_CENTER_CLIENT_ID` / `USER_CENTER_CLIENT_SECRET`），回调白名单需同步登记 `/bkg_zpt` 路径。
 6. **temporal-ui**（NodePort 30833）与 rustfs console 仅供运维排障，建议不对外网暴露。
+
+### 临时改用 IP 直连登录（排障 / 冒烟）
+
+正式入口永远是 `https://edu.itic-sci.com/bkg_zpt/`。平台入口未就绪或内网冒烟需要用 `http://<node_ip>:30880` 直连并完成登录时，共改 **5 个环境变量 + 用户中心 1 项登记**（登录链路：前端 → api 302 用户中心 → 认证后 302 回回调接口 → 种 session cookie → 跳回前端）：
+
+| 配置（正式值见 02-configmap） | 临时值 | 原因 |
+| ----------------------------- | ------ | ---- |
+| `APP_BASE`（web Deployment） | `""` | 根路径直访；保留 `/bkg_zpt` 会因资源前缀 404 白屏 |
+| `AUTH_COOKIE_PATH` | `/` | 原值 `/bkg_zpt` 不覆盖根路径，浏览器不存 cookie |
+| `AUTH_COOKIE_SECURE` | `false` | **http 下浏览器拒存 Secure cookie**，不改则一切白搭 |
+| `AUTH_FRONTEND_URL` | `http://<node_ip>:30880` | 登录完成后的跳转目标 |
+| `USER_CENTER_REDIRECT_URI` | `http://<node_ip>:30880/api/v1/auth/callback` | OAuth 回调地址 |
+
+- **用户中心侧必须登记**新回调 `http://<node_ip>:30880/api/v1/auth/callback`，未登记会被 redirect_uri mismatch 拒绝（我们侧改配置绕不过）
+- 前提：浏览器同时可达 `edu.itic-sci.com`（SSO 页面在那）与 `<node_ip>:30880`；`bkg-secrets` 的 `USER_CENTER_CLIENT_ID/SECRET` 已填真值
+- **不用改**：`USER_CENTER_SSO/OAUTH/ACCOUNT_URL`（"去哪登录"与"回到哪"无关）、nginx 模板 CSP（只限制 iframe 嵌入）、`SameSite=lax`（SSO 回调是顶层 302 导航，不受影响）
+
+推荐用 `set env` 直接覆盖（优先级高于 `envFrom`，不污染 ConfigMap，回退一行搞定）：
+
+```bash
+kubectl -n bkg set env deploy/web APP_BASE=""
+kubectl -n bkg set env deploy/api \
+  AUTH_COOKIE_PATH=/ AUTH_COOKIE_SECURE=false \
+  AUTH_FRONTEND_URL=http://<node_ip>:30880 \
+  USER_CENTER_REDIRECT_URI=http://<node_ip>:30880/api/v1/auth/callback
+
+# 用完回退（恢复走 bkg-config 的正式值）
+kubectl -n bkg set env deploy/web APP_BASE-
+kubectl -n bkg set env deploy/api AUTH_COOKIE_PATH- AUTH_COOKIE_SECURE- AUTH_FRONTEND_URL- USER_CENTER_REDIRECT_URI-
+```
+
+注意：
+
+1. IP 与域名入口**不能在同一 web 实例并存**（`APP_BASE` 一实例一值）；要并存需第二个 root 实例（共用镜像 + `APP_BASE=""`），或在 nginx 模板加 `/bkg_zpt/` 剥前缀 location。
+2. `AUTH_COOKIE_SECURE=false` 是安全降级（session id 走明文 http），仅限内网测试期，切回正式入口时连同 5 个值一起还原。
+3. 只测功能、不走真实登录时可用 `kubectl -n bkg set env deploy/api AUTH_ENABLED=false`（admin 检查同样放行）——**裸奔模式，测试完必须撤销**。

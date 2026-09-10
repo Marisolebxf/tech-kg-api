@@ -151,9 +151,9 @@ kubectl -n bkg create secret docker-registry bkg-image-pull-secret-0 \
 | ---------- | --------- | --------- |
 | operator-rustfs-data | 50Gi（ReadWriteMany） | operator-rustfs |
 | milvus-etcd-data | 10Gi | milvus-etcd |
-| milvus-data | 100Gi | milvus |
-| temporal-mysql-data | 50Gi | temporal-mysql |
-| workflow-state | 20Gi | temporal-worker / api |
+| milvus-data | 10Gi | milvus |
+| temporal-mysql-data | 10Gi | temporal-mysql |
+| workflow-state | 10Gi | temporal-worker / api |
 | patent-index-state | 20Gi | api（专利索引状态） |
 | operator-data | 10Gi | api（operator 脚本） |
 | auth-redis-data | 10Gi | auth-redis |

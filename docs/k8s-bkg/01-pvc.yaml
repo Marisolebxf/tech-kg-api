@@ -1,6 +1,7 @@
 # 业务与中间件持久化存储。
 # 说明：若在容器管理平台界面创建 PVC（推荐），可跳过本文件，
 # 但 PVC 名称必须与下方一致，否则挂载失败。
+# storageClassName 按实际集群存储类修改（当前为 managed-nfs-storage）。
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -11,6 +12,7 @@ spec:
   resources:
     requests:
       storage: 50Gi
+  storageClassName: managed-nfs-storage
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -22,6 +24,7 @@ spec:
   resources:
     requests:
       storage: 10Gi
+  storageClassName: managed-nfs-storage
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -32,7 +35,8 @@ spec:
   accessModes: ["ReadWriteOnce"]
   resources:
     requests:
-      storage: 100Gi
+      storage: 10Gi
+  storageClassName: managed-nfs-storage
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -43,7 +47,8 @@ spec:
   accessModes: ["ReadWriteOnce"]
   resources:
     requests:
-      storage: 50Gi
+      storage: 10Gi
+  storageClassName: managed-nfs-storage
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -54,7 +59,8 @@ spec:
   accessModes: ["ReadWriteOnce"]
   resources:
     requests:
-      storage: 20Gi
+      storage: 10Gi
+  storageClassName: managed-nfs-storage
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -66,6 +72,7 @@ spec:
   resources:
     requests:
       storage: 20Gi
+  storageClassName: managed-nfs-storage
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -77,6 +84,7 @@ spec:
   resources:
     requests:
       storage: 10Gi
+  storageClassName: managed-nfs-storage
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -88,3 +96,4 @@ spec:
   resources:
     requests:
       storage: 10Gi
+  storageClassName: managed-nfs-storage

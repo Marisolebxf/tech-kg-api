@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -115,10 +116,18 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         graph = self._client()
         source = self._require_node(graph, expert_id, "专家")
         source_edus = self._parse_educations(getattr(source, "properties", None) or {})
+        target_profile: dict[str, Any] | None = None
         truncated = False
 
         if target_expert_id:
             target = self._require_node(graph, target_expert_id, "专家")
+            target_props = getattr(target, "properties", None) or {}
+            target_profile = {
+                "id": target_expert_id,
+                "name": self._display_name(target),
+                "educations": self._parse_educations(target_props),
+                "provenance": self._person_provenance(target_props, target_expert_id),
+            }
             candidates = [(target_expert_id, target)]
             mode = "pair"
         else:
@@ -178,6 +187,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         }
         payload = {
             "expert": expert,
+            "targetExpert": target_profile,
             "mode": mode,
             "total": len(items),
             "items": items,
@@ -462,26 +472,88 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             "education_background_en",
             "education_background",
         ):
-            blob = self._as_str(props.get(blob_key))
-            if not blob:
+            raw_blob = props.get(blob_key)
+            if raw_blob is None:
                 continue
-            for segment in re.split(r"[;；\n|]+", blob):
-                segment = segment.strip()
-                if not segment:
+            records: Any = raw_blob
+            if isinstance(raw_blob, str):
+                text = raw_blob.strip()
+                if not text:
                     continue
-                # 极简：整段当作院校候选
-                edus.append({"institution": segment, "degree": None, "date": None})
+                try:
+                    records = json.loads(text)
+                except json.JSONDecodeError:
+                    records = [
+                        self._parse_education_text_segment(segment)
+                        for segment in re.split(r"[;；\n|]+", text)
+                        if segment.strip()
+                    ]
+            if isinstance(records, dict):
+                records = records.get("educations") or records.get("items") or [records]
+            if not isinstance(records, list):
+                continue
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                blob_institution = self._first_education_value(
+                    record, "institution", "school", "university", "institution_zh", "name"
+                )
+                blob_degree = self._first_education_value(
+                    record, "degree", "educationStage", "stage"
+                )
+                blob_date = self._first_education_value(
+                    record, "date", "period", "time", "educationDate"
+                )
+                if blob_institution or blob_degree or blob_date:
+                    edus.append(
+                        {
+                            "institution": blob_institution,
+                            "degree": blob_degree,
+                            "date": blob_date,
+                        }
+                    )
 
-        # dedupe by institution norm
-        seen: set[str] = set()
+        # 同院校的不同学历或不同时间段是独立教育经历，不能互相覆盖。
+        seen: set[tuple[str, str, str]] = set()
         out: list[dict[str, str | None]] = []
-        for e in edus:
-            key = self._norm_text(e.get("institution") or "")
-            if not key or key in seen:
+        for education in edus:
+            key = (
+                self._norm_text(education.get("institution") or ""),
+                self._norm_text(education.get("degree") or ""),
+                self._norm_text(education.get("date") or ""),
+            )
+            if not key[0] or key in seen:
                 continue
             seen.add(key)
-            out.append(e)
+            out.append(education)
         return out
+
+    def _first_education_value(self, record: dict[str, Any], *keys: str) -> str | None:
+        for key in keys:
+            value = self._as_str(record.get(key))
+            if value:
+                return value
+        return None
+
+    def _parse_education_text_segment(self, segment: str) -> dict[str, str | None]:
+        text = segment.strip()
+        date_match = re.search(r"(?:19|20)\d{2}(?:\s*[-至~—–]\s*(?:19|20)\d{2})?", text)
+        degree_match = re.search(
+            r"博士后|博士|硕士|学士|ph\.?d\.?|master(?:\x27s)?|bachelor(?:\x27s)?",
+            text,
+            flags=re.IGNORECASE,
+        )
+        institution = text
+        if date_match:
+            institution = institution.replace(date_match.group(0), "")
+        if degree_match:
+            institution = institution.replace(degree_match.group(0), "")
+        institution = re.sub(r"[（）()\[\]]", "", institution).strip(" ，,、:：-—")
+        return {
+            "institution": institution or None,
+            "degree": degree_match.group(0) if degree_match else None,
+            "date": date_match.group(0) if date_match else None,
+        }
 
     @staticmethod
     def _as_str(value: Any) -> str | None:
@@ -543,7 +615,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 s_deg = self._norm_text(s_deg_raw)
                 c_deg = self._norm_text(c_deg_raw)
                 if stage_norms and not any(
-                    stage in s_deg or stage in c_deg for stage in stage_norms
+                    stage in s_deg and stage in c_deg for stage in stage_norms
                 ):
                     continue
 
@@ -655,9 +727,16 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         paper_count = len(paper_ids)
         patent_count = len(patent_ids)
         project_count = len(project_ids)
-        summary = f"共同论文 {paper_count} 篇、专利 {patent_count}、项目 {project_count}"
+        summary_parts: list[str] = []
         if coauthor and paper_count == 0:
-            summary = f"存在合著边；{summary}"
+            summary_parts.append("存在合著边")
+        if paper_count:
+            summary_parts.append(f"共同论文 {paper_count} 篇")
+        if patent_count:
+            summary_parts.append(f"共同专利 {patent_count} 项")
+        if project_count:
+            summary_parts.append(f"共同项目 {project_count} 项")
+        summary = "、".join(summary_parts) or "无共同成果"
 
         shared_achievements: list[dict[str, str]] = []
         # 返回三类共同成果的图节点信息。pair/list 两种模式都需要展示，
@@ -764,11 +843,18 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 "value": "、".join(f"{key} {value} 人" for key, value in dimension_counts.items())
                 or "—",
             },
-            {"label": "共同论文", "value": f"{paper_count} 篇"},
-            {"label": "共同专利", "value": f"{patent_count} 项"},
-            {"label": "共同项目", "value": f"{project_count} 项"},
-            {"label": "共同成果总数", "value": f"{len(shared_achievement_ids)} 项"},
         ]
+        for label, count, unit in (
+            ("共同论文", paper_count, "篇"),
+            ("共同专利", patent_count, "项"),
+            ("共同项目", project_count, "项"),
+        ):
+            if count:
+                summary_rows.append({"label": label, "value": f"{count} {unit}"})
+        if shared_achievement_ids:
+            summary_rows.append(
+                {"label": "共同成果总数", "value": f"{len(shared_achievement_ids)} 项"}
+            )
         if mode == "list":
             summary_rows.append(
                 {
@@ -805,7 +891,11 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             evidence.append("list 模式扫描达上限，结果可能未穷尽全图 Person。")
 
         entities, relations, graph = self._build_graph_entities(
-            expert, items, include_shared_achievements=True
+            expert,
+            items,
+            mode=mode,
+            target_expert=payload.get("targetExpert"),
+            include_shared_achievements=False,
         )
         provenance = {
             "sourceDatabase": f"trs-graph / space={meta.get('space') or 'dev'}",
@@ -861,11 +951,43 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         expert: dict[str, Any],
         items: list[dict[str, Any]],
         *,
+        mode: str = "list",
+        target_expert: dict[str, Any] | None = None,
         include_shared_achievements: bool = False,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         cx, cy, radius = 220.0, 200.0, 180.0
         source_id = str(expert.get("id") or "source")
         source_name = str(expert.get("name") or source_id)
+        first_item = items[0] if items else None
+        if mode == "pair":
+            peer = first_item or {}
+            peer_name = str(
+                peer.get("name")
+                or (target_expert or {}).get("name")
+                or (target_expert or {}).get("id")
+                or "目标专家"
+            )
+            dimensions = "、".join(peer.get("dimensions") or [])
+            schools = "、".join(peer.get("sharedInstitutions") or [])
+            detail = "；".join(
+                part
+                for part in (dimensions or "同校", f"共同院校：{schools}" if schools else "")
+                if part
+            )
+            source_relation = (
+                f"与{peer_name}存在校友关系（{detail}）"
+                if first_item
+                else f"与{peer_name}未形成校友关系（未命中共同院校）"
+            )
+        elif items:
+            names = [str(item.get("name") or item.get("alumniId")) for item in items]
+            preview = "、".join(names[:3])
+            if len(names) > 3:
+                source_relation = f"与{preview}等 {len(names)} 名专家存在校友关系"
+            else:
+                source_relation = f"与{preview}存在校友关系"
+        else:
+            source_relation = "未查询到符合条件的校友关系"
         entities: list[dict[str, Any]] = [
             {
                 "id": source_id,
@@ -873,9 +995,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 "entityType": "科技专家",
                 "nodeType": "main",
                 "confidence": 1.0,
-                "relations": f"校友 {len(items)}",
+                "relations": source_relation,
                 "evidence": [
-                    f"educations={len(expert.get('educations') or [])}",
+                    f"教育经历 {len(expert.get('educations') or [])} 条",
                 ],
             }
         ]
@@ -889,6 +1011,21 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         ]
         edges: list[dict[str, Any]] = []
 
+        if mode == "pair" and not items and target_expert:
+            target_id = str(target_expert.get("id") or "target")
+            target_name = str(target_expert.get("name") or target_id)
+            target_entity = {
+                "id": target_id,
+                "label": target_name,
+                "entityType": "科技专家",
+                "nodeType": "expert",
+                "confidence": 1.0,
+                "relations": f"与{source_name}未形成校友关系（未命中共同院校）",
+                "evidence": ["未命中同校教育经历，未生成校友关系边"],
+            }
+            entities.append(target_entity)
+            nodes.append({**target_entity, "x": cx + 400.0, "y": cy})
+
         for index, item in enumerate(items):
             aid = str(item.get("alumniId") or f"alumni-{index}")
             aname = str(item.get("name") or aid)
@@ -896,14 +1033,18 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             dim_text = "、".join(dims) if dims else "同校"
             shared = "、".join(item.get("sharedInstitutions") or []) or "—"
             interaction = (item.get("interactions") or {}).get("summary") or "无互动"
+            relation_summary_parts = [f"共同院校：{shared}", f"关系维度：{dim_text}"]
+            if interaction != "无互动":
+                relation_summary_parts.append(f"互动证据：{interaction}")
+            relation_summary = "；".join(relation_summary_parts)
             entity = {
                 "id": aid,
                 "label": aname,
                 "entityType": "校友专家",
                 "nodeType": "expert",
                 "confidence": 0.9,
-                "relations": dim_text,
-                "evidence": [f"shared={shared}", interaction],
+                "relations": f"与{source_name}存在校友关系（{dim_text}；共同院校：{shared}）",
+                "evidence": [f"共同院校：{shared}", f"互动证据：{interaction}"],
             }
             entities.append(entity)
             angle = (math.pi * 2 * index) / max(len(items), 1) - math.pi / 2
@@ -921,11 +1062,12 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 "to": aid,
                 "fromName": source_name,
                 "toName": aname,
-                "label": dims[0] if dims else "校友",
-                "category": "校友",
+                "label": "校友关系",
+                "category": "教育经历关联",
                 "dimensions": dims,
                 "sharedInstitutions": item.get("sharedInstitutions") or [],
                 "interactions": item.get("interactions") or {},
+                "summary": relation_summary,
             }
             relations.append(relation)
             edges.append(
@@ -934,7 +1076,11 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                     "from": source_id,
                     "to": aid,
                     "label": relation["label"],
-                    "category": "校友",
+                    "category": "教育经历关联",
+                    "dimensions": relation["dimensions"],
+                    "sharedInstitutions": relation["sharedInstitutions"],
+                    "summary": relation["summary"],
+                    "interactions": relation["interactions"],
                 }
             )
 
@@ -943,6 +1089,17 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                     achievement_id = str(achievement.get("id") or "")
                     if not achievement_id or any(n.get("id") == achievement_id for n in nodes):
                         continue
+                    achievement_kind = str(achievement.get("kind") or "")
+                    achievement_relation = {
+                        "paper": f"由{source_name}、{aname}共同发表",
+                        "patent": f"由{source_name}、{aname}共同发明",
+                        "project": f"由{source_name}、{aname}共同参与",
+                    }.get(achievement_kind, f"由{source_name}、{aname}共同产出")
+                    achievement_edge_label = {
+                        "paper": "发表",
+                        "patent": "发明",
+                        "project": "参与",
+                    }.get(achievement_kind, "共同产出")
                     nodes.append(
                         {
                             "id": achievement_id,
@@ -952,7 +1109,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                                 "project" if achievement.get("kind") == "project" else "paper"
                             ),
                             "confidence": 0.85,
-                            "relations": "共同成果",
+                            "relations": achievement_relation,
                             "evidence": ["两位专家共同关联"],
                             "x": cx + 200.0 + (len(nodes) % 3) * 150.0,
                             "y": cy + 180.0 + (len(nodes) // 3) * 90.0,
@@ -965,8 +1122,8 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                                 "id": edge_id,
                                 "from": person_id,
                                 "to": achievement_id,
-                                "label": "共同成果",
-                                "category": "合作成果",
+                                "label": achievement_edge_label,
+                                "category": "成果关联",
                             }
                         )
 

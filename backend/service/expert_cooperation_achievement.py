@@ -181,6 +181,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 core=core,
                 mode=mode,
                 space=str(space),
+                selected_types=type_filter,
             )
         )
         with _result_cache_lock:
@@ -647,6 +648,35 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             )
         return rows
 
+    @staticmethod
+    def _format_distribution(
+        *, papers: int, patents: int, projects: int, selected_types: set[str]
+    ) -> str:
+        labels = (
+            ("paper", "论文", papers),
+            ("patent", "专利", patents),
+            ("project", "项目", projects),
+        )
+        return (
+            "、".join(f"{label} {count}" for key, label, count in labels if key in selected_types)
+            or "—"
+        )
+
+    @staticmethod
+    def _format_nonzero_distribution(
+        *, papers: int, patents: int, projects: int, selected_types: set[str]
+    ) -> str:
+        labels = (
+            ("paper", "论文", papers, "篇"),
+            ("patent", "专利", patents, "项"),
+            ("project", "项目", projects, "项"),
+        )
+        return "、".join(
+            f"{label} {count}{unit}"
+            for key, label, count, unit in labels
+            if key in selected_types and count > 0
+        )
+
     def _frontend_view(
         self,
         *,
@@ -664,8 +694,25 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         core: str,
         mode: str,
         space: str,
+        selected_types: set[str],
     ) -> dict[str, Any]:
         total = papers + patents + projects
+        relation_distribution = self._format_nonzero_distribution(
+            papers=papers,
+            patents=patents,
+            projects=projects,
+            selected_types=selected_types,
+        )
+        source_relation = (
+            f"与{target_name}存在共同成果关系：{relation_distribution}"
+            if relation_distribution
+            else f"与{target_name}暂无共同成果"
+        )
+        target_relation = (
+            f"与{source_name}存在共同成果关系：{relation_distribution}"
+            if relation_distribution
+            else f"与{source_name}暂无共同成果"
+        )
         type_labels = []
         if papers:
             type_labels.append("论文")
@@ -681,7 +728,12 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             {"label": "成果总量", "value": f"{total} 项"},
             {
                 "label": "成果分布",
-                "value": f"论文 {papers}、专利 {patents}、项目 {projects}",
+                "value": self._format_distribution(
+                    papers=papers,
+                    patents=patents,
+                    projects=projects,
+                    selected_types=selected_types,
+                ),
             },
             {"label": "获奖数量", "value": str(award_count)},
             {"label": "核心贡献", "value": core},
@@ -754,7 +806,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "entityType": "科技专家",
                 "nodeType": "main",
                 "confidence": 1.0,
-                "relations": f"合作成果 {total}",
+                "relations": source_relation,
                 "evidence": [f"专家 {source_name}（{source_id}），共同成果 {total} 项。"],
                 "x": 220.0,
                 "y": 160.0,
@@ -765,44 +817,61 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "entityType": "科技专家",
                 "nodeType": "expert",
                 "confidence": 1.0,
-                "relations": f"合作成果 {total}",
+                "relations": target_relation,
                 "evidence": [f"专家 {target_name}（{target_id}），共同成果 {total} 项。"],
                 "x": 520.0,
                 "y": 160.0,
             },
         ]
-        relations = [
-            {
-                "id": f"coop-{source_id}-{target_id}",
-                "from": source_id,
-                "to": target_id,
-                "fromName": source_name,
-                "toName": target_name,
-                "label": mode if total else "暂无合作",
-                "category": "合作成果",
-                "summary": f"论文 {papers}、专利 {patents}、项目 {projects}",
-            }
-        ]
+        # 专家之间的关系按成果类型拆分，避免将“共同成果关系”作为过于
+        # 笼统的关系类型，也避免在没有共同成果时伪造一条关系边。
+        cooperation_relations = {
+            "paper": (papers, "论文合作关系", "共同论文"),
+            "patent": (patents, "专利合作关系", "共同专利"),
+            "project": (projects, "项目合作关系", "共同项目"),
+        }
+        relations = []
+        for ach_type, (count, label, evidence_label) in cooperation_relations.items():
+            if not count:
+                continue
+            relation_id = f"coop-{ach_type}-{source_id}-{target_id}"
+            unit = "篇" if ach_type == "paper" else "项"
+            relations.append(
+                {
+                    "id": relation_id,
+                    "from": source_id,
+                    "to": target_id,
+                    "fromName": source_name,
+                    "toName": target_name,
+                    "label": label,
+                    "category": "科研合作",
+                    "summary": f"{evidence_label} {count}{unit}",
+                }
+            )
         nodes = list(entities)
         edges = [
             {
-                "id": relations[0]["id"],
-                "from": source_id,
-                "to": target_id,
-                "label": relations[0]["label"],
-                "category": "合作成果",
+                "id": relation["id"],
+                "from": relation["from"],
+                "to": relation["to"],
+                "label": relation["label"],
+                "category": relation["category"],
             }
+            for relation in relations
         ]
 
         type_node_map = {
-            "paper": ("paper", "论文", 370.0, 320.0),
-            "patent": ("topic", "专利", 520.0, 340.0),
-            "project": ("project", "项目", 220.0, 340.0),
+            "paper": ("paper", "论文", "发表", "由{experts}共同发表", 370.0, 320.0),
+            "patent": ("topic", "专利", "发明", "由{experts}共同发明", 520.0, 340.0),
+            "project": ("project", "项目", "参与", "由{experts}共同参与", 220.0, 340.0),
         }
         for idx, item in enumerate(items[:8]):
             ach_type = str(item.get("type") or "paper")
-            node_type, type_label, base_x, base_y = type_node_map.get(
-                ach_type, ("paper", "成果", 370.0, 320.0)
+            node_type, type_label, edge_label, relation_template, base_x, base_y = (
+                type_node_map.get(
+                    ach_type,
+                    ("paper", "成果", "共同产出", "由{experts}共同产出", 370.0, 320.0),
+                )
             )
             nid = str(item.get("id") or f"ach-{idx}")
             title = str(item.get("title") or nid)
@@ -812,7 +881,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "entityType": type_label,
                 "nodeType": node_type,
                 "confidence": 0.9,
-                "relations": f"{type_label} · {item.get('time') or '—'}",
+                "relations": relation_template.format(experts=f"{source_name}、{target_name}"),
                 "evidence": [
                     f"成果类型 {type_label}；"
                     f"完成时间 {item.get('time') or '暂无数据'}；"
@@ -831,8 +900,8 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                         "id": eid,
                         "from": expert_id,
                         "to": nid,
-                        "label": type_label,
-                        "category": "合作成果",
+                        "label": edge_label,
+                        "category": "成果关联",
                     }
                 )
 

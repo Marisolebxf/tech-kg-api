@@ -38,11 +38,10 @@ import {
   queryExpertColleagueRelation,
   type ExpertColleagueRelationResponse,
 } from "../../../api/expertColleagueRelation";
+import { colleagueEntityRows, colleagueProvenanceCards } from "../expert-colleague-details";
 import KgGraphCanvas from "../../../components/kg-graph-canvas.vue";
 import { useToast } from "../../../composables/use-toast";
-import {
-  getServiceGraphPreset,
-} from "../../../data/graph-presets";
+import { getServiceGraphPreset } from "../../../data/graph-presets";
 import type {
   GraphEdgeData,
   GraphNodeData,
@@ -157,7 +156,8 @@ function handleResultTabKeydown(event: KeyboardEvent) {
     next = resultModeOrder.length - 1;
   } else {
     const direction = event.key === "ArrowRight" ? 1 : -1;
-    next = (current + direction + resultModeOrder.length) % resultModeOrder.length;
+    next =
+      (current + direction + resultModeOrder.length) % resultModeOrder.length;
   }
   resultMode.value = resultModeOrder[next];
   requestAnimationFrame(() => {
@@ -180,7 +180,9 @@ function isAbortError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const name = (error as { name?: string }).name;
   const code = (error as { code?: string }).code;
-  return name === "AbortError" || name === "CanceledError" || code === "ERR_CANCELED";
+  return (
+    name === "AbortError" || name === "CanceledError" || code === "ERR_CANCELED"
+  );
 }
 
 function startPanoramaAutoRefresh() {
@@ -256,7 +258,19 @@ function compactSummaryText(
   const budget = maxLength - charLength(suffix);
   if (budget <= 0) return sliceChars(suffix, maxLength);
 
-  for (const delimiter of ["｜", "、", "，", ",", "；", ";", "（", "(", "/", "·", " "]) {
+  for (const delimiter of [
+    "｜",
+    "、",
+    "，",
+    ",",
+    "；",
+    ";",
+    "（",
+    "(",
+    "/",
+    "·",
+    " ",
+  ]) {
     const index = normalized.indexOf(delimiter);
     if (index <= 0) continue;
     const head = normalized.slice(0, index).trim();
@@ -601,6 +615,15 @@ function mapLiveGraph(
         to: string;
         label: string;
         category: string;
+        dimensions?: string[];
+        sharedInstitutions?: string[];
+        summary?: string;
+        interactions?: {
+          paperCount?: number;
+          patentCount?: number;
+          projectCount?: number;
+          summary?: string;
+        };
         confidence?: number;
       }>
     | undefined,
@@ -640,6 +663,10 @@ function mapLiveGraph(
       to: edge.to,
       label: edge.label,
       category: edge.category,
+      dimensions: edge.dimensions,
+      sharedInstitutions: edge.sharedInstitutions,
+      summary: edge.summary,
+      interactions: edge.interactions,
 
       // 只读取后端关系置信度
       confidence: edge.confidence,
@@ -1281,7 +1308,7 @@ const liveModuleGraph = computed(() => {
           y: position.y,
           entityType,
           confidence: node.data?.confidence,
-          relations: node.data?.title || node.label,
+          relations: "",
           evidence: node.data?.evidence || [],
           sourceTable: node.data?.provenance?.sourceTable,
           sourceRecordId: node.data?.provenance?.sourceValue,
@@ -1424,7 +1451,8 @@ const displayEventType = (code?: string | null) =>
 /** 事件时间规整展示：202512 → 2025-12；20251231... → 2025-12-31；不足位原样。 */
 const displayEventDate = (raw?: string | null) => {
   const digits = (raw || "").replace(/[^\d]/g, "");
-  if (digits.length >= 8) return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+  if (digits.length >= 8)
+    return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
   if (digits.length >= 6) return `${digits.slice(0, 4)}-${digits.slice(4, 6)}`;
   if (digits.length >= 4) return digits.slice(0, 4);
   return raw || "-";
@@ -1473,6 +1501,19 @@ const displayRelationCategory = (value?: string) =>
   value ||
   "—";
 
+const alumniInteractionText = (edge: GraphEdgeData) => {
+  const interactions = edge.interactions;
+  if (!interactions) return "—";
+  const parts = [
+    interactions.paperCount ? `共同论文 ${interactions.paperCount} 篇` : null,
+    interactions.patentCount ? `共同专利 ${interactions.patentCount} 项` : null,
+    interactions.projectCount
+      ? `共同项目 ${interactions.projectCount} 项`
+      : null,
+  ].filter((part): part is string => Boolean(part));
+  return parts.join("、") || "无共同成果";
+};
+
 const relationDetailRows = computed(() => {
   const edge = activeRelationEdge.value;
   const from = selectedEdgeNodes.value.from;
@@ -1488,6 +1529,15 @@ const relationDetailRows = computed(() => {
     ["关系类型", displayRelationType(edge.label)] as const,
 
     ["关系分类", displayRelationCategory(edge.category)] as const,
+
+    ...(isLiveAlumni.value
+      ? [
+          ["关系维度", edge.dimensions?.join("、") || "—"] as const,
+          ["共同院校", edge.sharedInstitutions?.join("、") || "—"] as const,
+          ["关系说明", edge.summary || "—"] as const,
+          ["互动证据", alumniInteractionText(edge)] as const,
+        ]
+      : []),
 
     [
       "置信度",
@@ -1555,7 +1605,8 @@ const updateStatus = computed(() => {
   const elapsed = Math.floor((Date.now() - lastUpdateTime.value) / 1000);
   if (elapsed < 5) return `刚刚更新（${elapsed}s 前）${auto}`;
   if (elapsed < 60) return `已更新（${elapsed}s 前）${auto}`;
-  if (elapsed < 3600) return `已更新（${Math.floor(elapsed / 60)}min 前）${auto}`;
+  if (elapsed < 3600)
+    return `已更新（${Math.floor(elapsed / 60)}min 前）${auto}`;
   return `已更新（${Math.floor(elapsed / 3600)}h 前），数据可能过期${auto}`;
 });
 
@@ -1858,6 +1909,9 @@ const liveRules = computed<Array<Record<string, any>>>(() => {
 });
 
 const liveEntityRows = computed(() => {
+  if (isLiveColleague.value) {
+    return colleagueEntityRows(liveResponse.value?.data?.graph?.nodes ?? [], selectedNode.value?.id);
+  }
   const selected = selectedNode.value;
   const entityConfidence = (value: number | undefined) =>
     isLiveColleague.value
@@ -1890,7 +1944,9 @@ const liveRelationRows = computed(() => {
   // 机构从属边（"关联机构"）不是专家间的直接关系，关系 Tab 只展示真实的专家关系边，
   // 否则会出现 total=3 却显示 9 条这类"关系数量对不上"的问题。
   const relationEdges = graphEdges.value.filter(
-    (edge) => edge.category !== "机构关联",
+    (edge) =>
+      edge.category !== "机构关联" &&
+      (!isLiveCoop.value || edge.category === "科研合作"),
   );
   if (!relationEdges.length) return [] as Array<readonly [string, string]>;
   const nodesById = new Map(graphNodes.value.map((node) => [node.id, node]));
@@ -1904,6 +1960,17 @@ const liveRelationRows = computed(() => {
       ] as const,
       ["类型", displayRelationType(relation.label)] as const,
       ["分类", displayRelationCategory(relation.category)] as const,
+      ...(isLiveAlumni.value
+        ? [
+            ["关系维度", relation.dimensions?.join("、") || "—"] as const,
+            [
+              "共同院校",
+              relation.sharedInstitutions?.join("、") || "—",
+            ] as const,
+            ["关系说明", relation.summary || "—"] as const,
+            ["互动证据", alumniInteractionText(relation)] as const,
+          ]
+        : []),
       [
         "置信度",
         isLiveColleague.value
@@ -1916,6 +1983,13 @@ const liveRelationRows = computed(() => {
     ];
   });
 });
+
+const colleagueProvenance = computed(() => colleagueProvenanceCards(
+  liveResponse.value?.data?.graph?.nodes ?? [],
+  liveResponse.value?.data?.graph?.edges ?? [],
+  selectedNode.value?.id,
+  selectedEdge.value ? { source: selectedEdge.value.from, target: selectedEdge.value.to, label: selectedEdge.value.label } : undefined,
+));
 
 const liveProvenance = computed(() => {
   if (isLiveAlumni.value) return liveAlumniResult.value?.provenance ?? null;
@@ -1976,9 +2050,7 @@ const displayedProvenanceEvidences = computed(() => {
   const edge = selectedEdge.value;
   if (!node && !edge) return pv.evidences;
   if (node) {
-    const filtered = pv.evidences.filter(
-      (ev: any) => ev.graphVid === node.id,
-    );
+    const filtered = pv.evidences.filter((ev: any) => ev.graphVid === node.id);
     return filtered.length ? filtered : pv.evidences;
   }
   if (edge) {
@@ -2298,13 +2370,7 @@ function buildPanoramaRequest(
     industry: (raw.industry ?? "").trim() || undefined,
     anchorId: (raw.anchorId ?? "").trim() || undefined,
     depth: clampInt(raw.depth ?? "", 1, 3, 2, "展开层级"),
-    topK: clampInt(
-      (raw.topK ?? "").trim(),
-      1,
-      PANORAMA_TOP_K_MAX,
-      5,
-      "topK",
-    ),
+    topK: clampInt((raw.topK ?? "").trim(), 1, PANORAMA_TOP_K_MAX, 5, "topK"),
     relationTypes: relationTypes.length ? relationTypes : undefined,
     refresh: forceRefresh || undefined,
   };
@@ -2382,8 +2448,7 @@ function derivedGraphFromExpertResponse(
     const bId = item.expertB?.expertId;
     const strength = item.relationStrength ?? 0;
     const summary =
-      item.relationSummary ||
-      `共同论文${item.coPaperCount ?? 0}篇`;
+      item.relationSummary || `共同论文${item.coPaperCount ?? 0}篇`;
     if (aId) {
       const entry = expertRelations.get(aId) ?? {
         peerNames: [],
@@ -2518,7 +2583,8 @@ function computeExpertDirectSummaryRows(
   const overrides = new Map<string, string>();
   if (!item) {
     return props.moduleInfo.summaryRows.map(
-      (row) => [row.label, row.label === "关系序号" ? "第 0 / 0 条" : "—"] as const,
+      (row) =>
+        [row.label, row.label === "关系序号" ? "第 0 / 0 条" : "—"] as const,
     );
   }
   {
@@ -2541,14 +2607,23 @@ function computeExpertDirectSummaryRows(
       "直接关系类型",
       compactSummaryText(item.relationSummary || item.relationType || "—"),
     );
-    overrides.set("关系发生时间", compactSummaryText(item.lastUpdatedAt || "—"));
-    overrides.set("交互场景", compactSummaryText(item.institution || "合作关系"));
+    overrides.set(
+      "关系发生时间",
+      compactSummaryText(item.lastUpdatedAt || "—"),
+    );
+    overrides.set(
+      "交互场景",
+      compactSummaryText(item.institution || "合作关系"),
+    );
     // 摘要各字段统一为「当前这一条关系」的口径；全部关系总数由分页器承载。
     overrides.set(
       "关系序号",
       `第 ${summaryRelationPage.value + 1} / ${resp.total ?? items.length} 条`,
     );
-    overrides.set("相关成果", compactSummaryText(`共同论文${item.coPaperCount}篇`));
+    overrides.set(
+      "相关成果",
+      compactSummaryText(`共同论文${item.coPaperCount}篇`),
+    );
     overrides.set("代表成果", reasonText);
     overrides.set(
       "关系置信度",
@@ -2669,10 +2744,17 @@ function buildAlumniGraph(
       x: cx,
       y: cy,
       entityType: "科技专家",
-      relations: `校友 ${data.total}`,
+      relations: data.total
+        ? data.total > 3
+          ? `与${data.items
+              .slice(0, 3)
+              .map((item) => item.name || item.alumniId)
+              .join("、")}等 ${data.total} 名专家存在校友关系`
+          : `与${data.items.map((item) => item.name || item.alumniId).join("、")}存在校友关系`
+        : "未查询到符合条件的校友关系",
       evidence: [
-        `mode=${data.mode}`,
-        `educations=${data.expert.educations?.length ?? 0}`,
+        `查询模式：${data.mode}`,
+        `教育经历 ${data.expert.educations?.length ?? 0} 条`,
       ],
     },
   ];
@@ -2681,6 +2763,22 @@ function buildAlumniGraph(
     const angle =
       (Math.PI * 2 * index) / Math.max(items.length, 1) - Math.PI / 2;
     const radius = 180;
+    const dimensionText = item.dimensions.join("、") || "同校";
+    const sharedInstitutionText = item.sharedInstitutions.join("、") || "—";
+    const interactionText =
+      [
+        item.interactions?.paperCount
+          ? `共同论文 ${item.interactions.paperCount} 篇`
+          : null,
+        item.interactions?.patentCount
+          ? `共同专利 ${item.interactions.patentCount} 项`
+          : null,
+        item.interactions?.projectCount
+          ? `共同项目 ${item.interactions.projectCount} 项`
+          : null,
+      ]
+        .filter((part): part is string => Boolean(part))
+        .join("、") || "无共同成果";
     nodes.push({
       id: item.alumniId,
       label: item.name || item.alumniId.slice(0, 12),
@@ -2688,18 +2786,18 @@ function buildAlumniGraph(
       x: cx + Math.cos(angle) * radius + 200,
       y: cy + Math.sin(angle) * radius,
       entityType: "校友专家",
-      relations: item.dimensions.join("、") || "同校",
+      relations: `与${data.expert.name || data.expert.id}存在校友关系（${dimensionText}；共同院校：${sharedInstitutionText}）`,
       evidence: [
-        `shared=${item.sharedInstitutions.join("/") || "-"}`,
-        item.interactions?.summary || "无互动",
+        `共同院校：${item.sharedInstitutions.join("、") || "—"}`,
+        `互动证据：${interactionText}`,
       ],
     });
     edges.push({
       id: `alumni-${data.expert.id}-${item.alumniId}`,
       from: data.expert.id,
       to: item.alumniId,
-      label: item.dimensions[0] || "校友",
-      category: "校友",
+      label: "校友关系",
+      category: "教育经历关联",
     });
   });
   return { nodes, edges };
@@ -2716,7 +2814,11 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
   liveError.value = null;
 
   if (isPanorama.value) {
-    const panoramaErrors = collectParameterErrors(["industry", "anchorId", "topK"]);
+    const panoramaErrors = collectParameterErrors([
+      "industry",
+      "anchorId",
+      "topK",
+    ]);
     if (Object.keys(panoramaErrors).length) {
       parameterErrors.value = panoramaErrors;
       running.value = false;
@@ -2826,7 +2928,9 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
 
   if (isExpertIndirect.value) {
     try {
-      const validation = validateExpertIndirectParameters(parameterValues.value);
+      const validation = validateExpertIndirectParameters(
+        parameterValues.value,
+      );
       if (!validation.payload) {
         parameterErrors.value = validation.errors;
         expertIndirectResponse.value = null;
@@ -3346,7 +3450,11 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       }
       const startTime = optionalParam(parameterValues.value.startTime);
       const endTime = optionalParam(parameterValues.value.endTime);
-      const timeErrors = paperCooperationTimeErrors(startTime, endTime, currentMonth);
+      const timeErrors = paperCooperationTimeErrors(
+        startTime,
+        endTime,
+        currentMonth,
+      );
       if (Object.keys(timeErrors).length) {
         parameterErrors.value = timeErrors;
         liveResponse.value = null;
@@ -3434,7 +3542,11 @@ function handleParameterInput(fieldName: string, event: Event) {
     delete nextErrors.endTime;
     Object.assign(
       nextErrors,
-      paperCooperationTimeErrors(nextValues.startTime, nextValues.endTime, currentMonth),
+      paperCooperationTimeErrors(
+        nextValues.startTime,
+        nextValues.endTime,
+        currentMonth,
+      ),
     );
     parameterErrors.value = nextErrors;
     return;
@@ -3470,7 +3582,11 @@ function handleMonthParameterInput(fieldName: string, value: string | null) {
     delete nextErrors.endTime;
     Object.assign(
       nextErrors,
-      paperCooperationTimeErrors(nextValues.startTime, nextValues.endTime, currentMonth),
+      paperCooperationTimeErrors(
+        nextValues.startTime,
+        nextValues.endTime,
+        currentMonth,
+      ),
     );
     parameterErrors.value = nextErrors;
     return;
@@ -3544,7 +3660,8 @@ function clearGraphSelection() {
           ><i v-if="field.required === '是'">*</i
           >{{ field.label ?? field.name }}</span
         >
-        <select aria-label="选择或输入内容"
+        <select
+          aria-label="选择或输入内容"
           v-if="field.type === 'select' || field.type === 'boolean'"
           :key="`${field.name}-${paramResetToken}`"
           :value="parameterValues[field.name] ?? ''"
@@ -3643,20 +3760,21 @@ function clearGraphSelection() {
           @update:model-value="handleMonthParameterInput(field.name, $event)"
         />
         <div v-else class="service-console__input-wrap">
-          <input aria-label="field.placeholder ?? field.description"
-          type="text"
-          :key="`${field.name}-${paramResetToken}`"
-          :value="parameterValues[field.name] ?? ''"
-          :placeholder="field.placeholder ?? field.description"
-          :title="field.description"
-          :aria-invalid="Boolean(parameterErrors[field.name])"
-          :maxlength="
-            liveValidationFieldNames.includes(field.name)
-              ? undefined
-              : field.maxLength
-          "
-          @input="handleParameterInput(field.name, $event)"
-        />
+          <input
+            aria-label="field.placeholder ?? field.description"
+            type="text"
+            :key="`${field.name}-${paramResetToken}`"
+            :value="parameterValues[field.name] ?? ''"
+            :placeholder="field.placeholder ?? field.description"
+            :title="field.description"
+            :aria-invalid="Boolean(parameterErrors[field.name])"
+            :maxlength="
+              liveValidationFieldNames.includes(field.name)
+                ? undefined
+                : field.maxLength
+            "
+            @input="handleParameterInput(field.name, $event)"
+          />
           <button
             v-if="field.required !== '是' && parameterValues[field.name]"
             class="service-console__input-clear"
@@ -3696,7 +3814,10 @@ function clearGraphSelection() {
   </section>
 
   <div class="business-service__main">
-    <section class="kg-panel graph-panel" :class="{ 'graph-panel--panorama': isPanorama }">
+    <section
+      class="kg-panel graph-panel"
+      :class="{ 'graph-panel--panorama': isPanorama }"
+    >
       <div class="kg-panel__header">
         <h2 class="kg-panel__title">测试结果预览</h2>
         <div class="graph-panel__time">
@@ -3715,7 +3836,8 @@ function clearGraphSelection() {
             class="graph-panel__autorefresh"
             title="勾选后每 60 秒自动忽略缓存刷新一次"
           >
-            <input aria-label="选择此项"
+            <input
+              aria-label="选择此项"
               v-model="panoramaAutoRefresh"
               type="checkbox"
               :disabled="running"
@@ -3851,7 +3973,7 @@ function clearGraphSelection() {
               :key="`${label}-${index}`"
             >
               <dt>{{ label }}</dt>
-              <dd>{{ value || '—' }}</dd>
+              <dd>{{ value || "—" }}</dd>
             </div>
           </dl>
           <nav
@@ -3893,7 +4015,9 @@ function clearGraphSelection() {
                 :class="{ 'is-current': summaryRelationPage === item }"
                 type="button"
                 :aria-label="`第 ${item + 1} 页`"
-                :aria-current="summaryRelationPage === item ? 'page' : undefined"
+                :aria-current="
+                  summaryRelationPage === item ? 'page' : undefined
+                "
                 @click="summaryRelationPage = item"
               >
                 {{ item + 1 }}
@@ -3942,10 +4066,7 @@ function clearGraphSelection() {
             </div>
           </dl>
         </div>
-        <p
-          v-else-if="resultMode === 'entity'"
-          class="result-panel__empty"
-        >
+        <p v-else-if="resultMode === 'entity'" class="result-panel__empty">
           暂无实体数据，请先执行查询。
         </p>
         <div
@@ -3968,10 +4089,7 @@ function clearGraphSelection() {
             </div>
           </dl>
         </div>
-        <p
-          v-else-if="resultMode === 'relation'"
-          class="result-panel__empty"
-        >
+        <p v-else-if="resultMode === 'relation'" class="result-panel__empty">
           暂无关系数据，请先执行查询。
         </p>
         <section
@@ -4005,6 +4123,20 @@ function clearGraphSelection() {
           </div>
         </section>
         <section
+          v-else-if="resultMode === 'provenance' && isLiveColleague && liveResponse"
+          class="result-provenance"
+        >
+          <header><strong>数据来源与证据链</strong><span>同事关系查询</span></header>
+          <div class="result-provenance__evidence-list">
+            <article v-for="card in colleagueProvenance" :key="card.id">
+              <header><strong>{{ card.title }}</strong></header>
+              <p v-for="row in card.rows" :key="row[0]"><b>{{ row[0] }}：</b>{{ row[1] }}</p>
+              <p v-for="(evidence, index) in card.evidence" :key="index">{{ evidence }}</p>
+            </article>
+            <p v-if="!colleagueProvenance.length">暂无可追溯对象，请先执行查询。</p>
+          </div>
+        </section>
+        <section
           v-else-if="resultMode === 'provenance' && liveProvenance"
           class="result-provenance"
         >
@@ -4022,10 +4154,7 @@ function clearGraphSelection() {
             <strong>{{ liveProvenance.sourceDatabase }}</strong>
             <span>{{ liveProvenance.summary || "—" }}</span>
           </div>
-          <p
-            v-if="provenanceFilterHint"
-            class="result-provenance__filter-hint"
-          >
+          <p v-if="provenanceFilterHint" class="result-provenance__filter-hint">
             {{ provenanceFilterHint }}
           </p>
           <h3>证据列表</h3>
@@ -4258,7 +4387,9 @@ function clearGraphSelection() {
   color: #1f1f1f;
   font-size: 14px;
   line-height: 30px;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
 }
 
 .service-console__input-wrap > input:hover {

@@ -4,7 +4,8 @@
 专家 2 跳内全部关联，解析出三类专家↔企业关系：
 
   - governance：Person→Organization 直连边（EXECUTIVE_OF/LEGAL_REP_OF/ACTUAL_CONTROLLER_OF/
-    BENEFICIAL_OWNER_OF/SHAREHOLDER_OF/AFFILIATED_WITH），角色来自 position，无合作时间。
+    BENEFICIAL_OWNER_OF/SHAREHOLDER_OF/AFFILIATED_WITH），角色来自 position；合作时间取边
+    任期或专家 work_experience_date。
   - project_cooperation：Person→Project→Organization（HAS_PARTICIPANT/LEADS + PARTICIPATES_IN/
     FUNDED_BY），合作时间 = Project.research_period / approval_time。
   - patent_cooperation：Person→Patent→Organization（INVENTED_BY + APPLIED_BY），合作时间 =
@@ -185,7 +186,7 @@ def _flatten_org_props(props: dict) -> dict:
 
 # 业务背景字段的候选源列名（顶层 tag 名 / MySQL 列名 / extra_json 内字段名）
 _BG_ALIASES = {
-    "industry_l1_name": ("industry_l1_name", "industry", "industry_class"),
+    "industry_l1_name": ("industry_l1_name", "industry", "industry_class", "industry_type"),
     "industry_l2_name": ("industry_l2_name",),
     "registered_capital_value": ("registered_capital_value", "registered_capital", "capital_num"),
     "incorporation_year": ("incorporation_year", "founded_year", "est_year"),
@@ -241,6 +242,60 @@ def _parse_period(*vals: object) -> BusinessPeriod:
         if s.strip():
             return BusinessPeriod(start=s.strip())
     return BusinessPeriod()
+
+
+def _period_from_mapping(*maps: Mapping[str, Any] | None) -> BusinessPeriod:
+    """从边属性 / 专家属性里取任职或合作起止。
+
+    治理类边（EXECUTIVE_OF 等）源表常无任期字段；此时回退专家节点
+    ``work_experience_date``，避免摘要「合作时间」整行空白。
+    """
+    for raw in maps:
+        if not raw:
+            continue
+        start = raw.get("start_date") or raw.get("begin_date")
+        end = raw.get("end_date")
+        if start not in (None, "") or end not in (None, ""):
+            return BusinessPeriod(
+                start=str(start).strip() if start not in (None, "") else None,
+                end=str(end).strip() if end not in (None, "") else None,
+            )
+        parsed = _parse_period(
+            raw.get("work_experience_date"),
+            raw.get("incumbency_date"),
+            raw.get("tenure"),
+            raw.get("research_period"),
+            raw.get("approval_time"),
+            raw.get("application_date"),
+        )
+        if parsed.start:
+            return parsed
+    return BusinessPeriod()
+
+
+def _as_confidence(value: object) -> float | None:
+    """读取 mysql2trs 写入的实体置信度；缺失或非法则视为无。"""
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _pick_tech_field(bg: dict, op: dict) -> str | None:
+    """合作领域：行业分类优先，缺省时回退主营产品，避免摘要整行空白。"""
+    for candidate in (
+        bg.get("industry_l1_name"),
+        bg.get("industry_l2_name"),
+        op.get("industry"),
+        op.get("industry_class"),
+        bg.get("main_products"),
+        bg.get("description"),
+    ):
+        if candidate not in (None, "", []):
+            return str(candidate)
+    return None
 
 
 class KeyEnterpriseRelationService:
@@ -349,6 +404,7 @@ class KeyEnterpriseRelationService:
                 return
             op = node_props.get(org_id, {})
             bg = _enterprise_background(op)
+            filled_period = period if period.start else _period_from_mapping(op, expert_props)
             relations.append(
                 EnterpriseRelationItem(
                     enterprise_id=org_id,
@@ -363,8 +419,8 @@ class KeyEnterpriseRelationService:
                         and mode in {"法人代表", "实际控制", "受益所有", "股东持股"}
                         else None
                     ),
-                    tech_field=bg.get("industry_l1_name") or op.get("industry"),
-                    period=period,
+                    tech_field=_pick_tech_field(bg, op),
+                    period=filled_period,
                     enterprise_background=bg,
                     source=source,
                     confidence=COOPERATION_CONFIDENCE.get(ctype, 0.7),
@@ -378,9 +434,8 @@ class KeyEnterpriseRelationService:
                 # work_experience_position_zh（无 position 字段），两者都兜底，避免
                 # role 退化成通用 '任职'（反馈：角色关系任职不属实角色）。
                 role = props.get("position") or props.get("work_experience_position_zh") or ""
-                period = BusinessPeriod()
-                if et == "AFFILIATED_WITH":
-                    period = _parse_period(expert_props.get("work_experience_date"))
+                # 治理边优先用边上任期；缺失时回退专家工作经历日期，避免摘要合作时间为空
+                period = _period_from_mapping(props, expert_props)
                 _add(other, "governance", GOVERNANCE_MODE[et], role, period, et)
 
         # 3) 项目合作 expert→Project→Organization
@@ -483,6 +538,7 @@ class KeyEnterpriseRelationService:
             sourceValue=str(source_value or "-"),
             ingestBatch=str(properties.get("ingest_batch") or "-"),
             ingestTime=str(properties.get("ingest_time") or "-"),
+            confidence=_as_confidence(properties.get("confidence")),
         )
 
     async def _probe_primary_risk(

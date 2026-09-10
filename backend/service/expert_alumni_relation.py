@@ -551,9 +551,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 c_deg_raw = c.get("degree") or ""
                 s_deg = self._norm_text(s_deg_raw)
                 c_deg = self._norm_text(c_deg_raw)
-                if stage_norms and not any(
-                    stage in s_deg or stage in c_deg for stage in stage_norms
-                ):
+                if stage_norms and not any(stage in c_deg for stage in stage_norms):
                     continue
 
                 if display and display not in shared_institutions:
@@ -818,7 +816,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             items,
             mode=mode,
             target_expert=payload.get("targetExpert"),
-            include_shared_achievements=True,
+            include_shared_achievements=False,
         )
         provenance = {
             "sourceDatabase": f"trs-graph / space={meta.get('space') or 'dev'}",
@@ -883,20 +881,32 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         source_name = str(expert.get("name") or source_id)
         first_item = items[0] if items else None
         if mode == "pair":
+            peer = first_item or {}
             peer_name = str(
-                (first_item or {}).get("name")
+                peer.get("name")
                 or (target_expert or {}).get("name")
                 or (target_expert or {}).get("id")
                 or "目标专家"
             )
-            dimensions = "、".join((first_item or {}).get("dimensions") or [])
-            source_relation = (
-                f"与{peer_name}存在校友关系：{dimensions or '同校'}"
-                if first_item
-                else f"与{peer_name}暂无校友关系"
+            dimensions = "、".join(peer.get("dimensions") or [])
+            schools = "、".join(peer.get("sharedInstitutions") or [])
+            detail = "；".join(
+                part for part in (dimensions or "同校", f"共同院校：{schools}" if schools else "") if part
             )
+            source_relation = (
+                f"与{peer_name}存在校友关系（{detail}）"
+                if first_item
+                else f"与{peer_name}未形成校友关系（未命中共同院校）"
+            )
+        elif items:
+            names = [str(item.get("name") or item.get("alumniId")) for item in items]
+            preview = "、".join(names[:3])
+            if len(names) > 3:
+                source_relation = f"与{preview}等 {len(names)} 名专家存在校友关系"
+            else:
+                source_relation = f"与{preview}存在校友关系"
         else:
-            source_relation = f"命中 {len(items)} 名校友" if items else "暂无校友关系"
+            source_relation = "未查询到符合条件的校友关系"
         entities: list[dict[str, Any]] = [
             {
                 "id": source_id,
@@ -929,7 +939,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 "entityType": "科技专家",
                 "nodeType": "expert",
                 "confidence": 1.0,
-                "relations": f"与{source_name}暂无校友关系",
+                "relations": f"与{source_name}未形成校友关系（未命中共同院校）",
                 "evidence": ["未命中同校教育经历，未生成校友关系边"],
             }
             entities.append(target_entity)
@@ -942,13 +952,17 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             dim_text = "、".join(dims) if dims else "同校"
             shared = "、".join(item.get("sharedInstitutions") or []) or "—"
             interaction = (item.get("interactions") or {}).get("summary") or "无互动"
+            relation_summary_parts = [f"共同院校：{shared}", f"关系维度：{dim_text}"]
+            if interaction != "无互动":
+                relation_summary_parts.append(f"互动证据：{interaction}")
+            relation_summary = "；".join(relation_summary_parts)
             entity = {
                 "id": aid,
                 "label": aname,
                 "entityType": "校友专家",
                 "nodeType": "expert",
                 "confidence": 0.9,
-                "relations": f"与{source_name}存在校友关系：{dim_text}",
+                "relations": f"与{source_name}存在校友关系（{dim_text}；共同院校：{shared}）",
                 "evidence": [f"shared={shared}", interaction],
             }
             entities.append(entity)
@@ -968,10 +982,11 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 "fromName": source_name,
                 "toName": aname,
                 "label": "校友关系",
-                "category": "校友",
+                "category": "教育经历关联",
                 "dimensions": dims,
                 "sharedInstitutions": item.get("sharedInstitutions") or [],
                 "interactions": item.get("interactions") or {},
+                "summary": relation_summary,
             }
             relations.append(relation)
             edges.append(
@@ -980,7 +995,11 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                     "from": source_id,
                     "to": aid,
                     "label": relation["label"],
-                    "category": "校友",
+                    "category": "教育经历关联",
+                    "dimensions": relation["dimensions"],
+                    "sharedInstitutions": relation["sharedInstitutions"],
+                    "summary": relation["summary"],
+                    "interactions": relation["interactions"],
                 }
             )
 
@@ -996,9 +1015,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                         "project": f"由{source_name}、{aname}共同参与",
                     }.get(achievement_kind, f"由{source_name}、{aname}共同产出")
                     achievement_edge_label = {
-                        "paper": "共同发表",
-                        "patent": "共同发明",
-                        "project": "共同参与",
+                        "paper": "发表",
+                        "patent": "发明",
+                        "project": "参与",
                     }.get(achievement_kind, "共同产出")
                     nodes.append(
                         {
@@ -1023,7 +1042,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                                 "from": person_id,
                                 "to": achievement_id,
                                 "label": achievement_edge_label,
-                                "category": "合作成果",
+                                "category": "成果关联",
                             }
                         )
 

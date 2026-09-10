@@ -601,6 +601,10 @@ function mapLiveGraph(
         to: string;
         label: string;
         category: string;
+        dimensions?: string[];
+        sharedInstitutions?: string[];
+        summary?: string;
+        interactions?: { paperCount?: number; patentCount?: number; projectCount?: number; summary?: string };
         confidence?: number;
       }>
     | undefined,
@@ -640,6 +644,10 @@ function mapLiveGraph(
       to: edge.to,
       label: edge.label,
       category: edge.category,
+      dimensions: edge.dimensions,
+      sharedInstitutions: edge.sharedInstitutions,
+      summary: edge.summary,
+      interactions: edge.interactions,
 
       // 只读取后端关系置信度
       confidence: edge.confidence,
@@ -1365,6 +1373,12 @@ const displayRelationType = (value?: string) =>
 const displayRelationCategory = (value?: string) =>
   (value && relationCategoryDisplay[value]) || value || "—";
 
+const alumniInteractionText = (edge: GraphEdgeData) => {
+  const interactions = edge.interactions;
+  if (!interactions) return "—";
+  return `共同论文 ${interactions.paperCount ?? 0} 篇、共同专利 ${interactions.patentCount ?? 0} 项、共同项目 ${interactions.projectCount ?? 0} 项`;
+};
+
 const relationDetailRows = computed(() => {
   const edge = activeRelationEdge.value;
   const from = selectedEdgeNodes.value.from;
@@ -1380,6 +1394,15 @@ const relationDetailRows = computed(() => {
     ["关系类型", displayRelationType(edge.label)] as const,
 
     ["关系分类", displayRelationCategory(edge.category)] as const,
+
+    ...(isLiveAlumni.value
+      ? [
+          ["关系维度", edge.dimensions?.join("、") || "—"] as const,
+          ["共同院校", edge.sharedInstitutions?.join("、") || "—"] as const,
+          ["关系说明", edge.summary || "—"] as const,
+          ["互动证据", alumniInteractionText(edge)] as const,
+        ]
+      : []),
 
     [
       "置信度",
@@ -1775,6 +1798,14 @@ const liveRelationRows = computed(() => {
       ] as const,
       ["类型", displayRelationType(relation.label)] as const,
       ["分类", displayRelationCategory(relation.category)] as const,
+      ...(isLiveAlumni.value
+        ? [
+            ["关系维度", relation.dimensions?.join("、") || "—"] as const,
+            ["共同院校", relation.sharedInstitutions?.join("、") || "—"] as const,
+            ["关系说明", relation.summary || "—"] as const,
+            ["互动证据", alumniInteractionText(relation)] as const,
+          ]
+        : []),
       [
         "置信度",
         isLiveColleague.value
@@ -2540,7 +2571,11 @@ function buildAlumniGraph(
       x: cx,
       y: cy,
       entityType: "科技专家",
-      relations: `校友 ${data.total}`,
+      relations: data.total
+        ? data.total > 3
+          ? `与${data.items.slice(0, 3).map((item) => item.name || item.alumniId).join("、")}等 ${data.total} 名专家存在校友关系`
+          : `与${data.items.map((item) => item.name || item.alumniId).join("、")}存在校友关系`
+        : "未查询到符合条件的校友关系",
       evidence: [
         `mode=${data.mode}`,
         `educations=${data.expert.educations?.length ?? 0}`,
@@ -2552,6 +2587,8 @@ function buildAlumniGraph(
     const angle =
       (Math.PI * 2 * index) / Math.max(items.length, 1) - Math.PI / 2;
     const radius = 180;
+    const dimensionText = item.dimensions.join("、") || "同校";
+    const sharedInstitutionText = item.sharedInstitutions.join("、") || "—";
     nodes.push({
       id: item.alumniId,
       label: item.name || item.alumniId.slice(0, 12),
@@ -2559,7 +2596,7 @@ function buildAlumniGraph(
       x: cx + Math.cos(angle) * radius + 200,
       y: cy + Math.sin(angle) * radius,
       entityType: "校友专家",
-      relations: item.dimensions.join("、") || "同校",
+      relations: `与${data.expert.name || data.expert.id}存在校友关系（${dimensionText}；共同院校：${sharedInstitutionText}）`,
       evidence: [
         `shared=${item.sharedInstitutions.join("/") || "-"}`,
         item.interactions?.summary || "无互动",
@@ -2569,8 +2606,8 @@ function buildAlumniGraph(
       id: `alumni-${data.expert.id}-${item.alumniId}`,
       from: data.expert.id,
       to: item.alumniId,
-      label: item.dimensions[0] || "校友",
-      category: "校友",
+      label: "校友关系",
+      category: "教育经历关联",
     });
   });
   return { nodes, edges };

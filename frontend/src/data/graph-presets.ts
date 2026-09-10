@@ -45,6 +45,10 @@ export interface GraphEdgeData {
   to: string
   label: string
   category: string
+  dimensions?: string[]
+  sharedInstitutions?: string[]
+  summary?: string
+  interactions?: { paperCount?: number; patentCount?: number; projectCount?: number; summary?: string }
 
   /**
    * 真实图谱查询结果计算出的关系置信度。

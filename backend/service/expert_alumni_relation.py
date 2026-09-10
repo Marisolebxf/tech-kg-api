@@ -727,9 +727,16 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         paper_count = len(paper_ids)
         patent_count = len(patent_ids)
         project_count = len(project_ids)
-        summary = f"共同论文 {paper_count} 篇、专利 {patent_count}、项目 {project_count}"
+        summary_parts: list[str] = []
         if coauthor and paper_count == 0:
-            summary = f"存在合著边；{summary}"
+            summary_parts.append("存在合著边")
+        if paper_count:
+            summary_parts.append(f"共同论文 {paper_count} 篇")
+        if patent_count:
+            summary_parts.append(f"共同专利 {patent_count} 项")
+        if project_count:
+            summary_parts.append(f"共同项目 {project_count} 项")
+        summary = "、".join(summary_parts) or "无共同成果"
 
         shared_achievements: list[dict[str, str]] = []
         # 返回三类共同成果的图节点信息。pair/list 两种模式都需要展示，
@@ -836,11 +843,18 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 "value": "、".join(f"{key} {value} 人" for key, value in dimension_counts.items())
                 or "—",
             },
-            {"label": "共同论文", "value": f"{paper_count} 篇"},
-            {"label": "共同专利", "value": f"{patent_count} 项"},
-            {"label": "共同项目", "value": f"{project_count} 项"},
-            {"label": "共同成果总数", "value": f"{len(shared_achievement_ids)} 项"},
         ]
+        for label, count, unit in (
+            ("共同论文", paper_count, "篇"),
+            ("共同专利", patent_count, "项"),
+            ("共同项目", project_count, "项"),
+        ):
+            if count:
+                summary_rows.append({"label": label, "value": f"{count} {unit}"})
+        if shared_achievement_ids:
+            summary_rows.append(
+                {"label": "共同成果总数", "value": f"{len(shared_achievement_ids)} 项"}
+            )
         if mode == "list":
             summary_rows.append(
                 {
@@ -983,7 +997,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 "confidence": 1.0,
                 "relations": source_relation,
                 "evidence": [
-                    f"educations={len(expert.get('educations') or [])}",
+                    f"教育经历 {len(expert.get('educations') or [])} 条",
                 ],
             }
         ]
@@ -1030,7 +1044,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 "nodeType": "expert",
                 "confidence": 0.9,
                 "relations": f"与{source_name}存在校友关系（{dim_text}；共同院校：{shared}）",
-                "evidence": [f"shared={shared}", interaction],
+                "evidence": [f"共同院校：{shared}", f"互动证据：{interaction}"],
             }
             entities.append(entity)
             angle = (math.pi * 2 * index) / max(len(items), 1) - math.pi / 2

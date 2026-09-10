@@ -129,6 +129,11 @@ def test_pair_same_school_and_degree():
     assert "同院系" not in item["dimensions"]
     assert "同导师" not in item["dimensions"]
     assert item["interactions"]["coauthorEdge"] is True
+    assert item["interactions"]["summary"] == "存在合著边"
+    assert "0" not in item["interactions"]["summary"]
+    assert "共同论文" not in {row["label"] for row in resp["summaryRows"]}
+    assert "共同专利" not in {row["label"] for row in resp["summaryRows"]}
+    assert "共同项目" not in {row["label"] for row in resp["summaryRows"]}
     assert resp["summaryRows"]
     assert resp["resultRows"][0]["label"] == "校友数量"
     assert resp["graph"]["nodes"]
@@ -143,6 +148,14 @@ def test_pair_same_school_and_degree():
     assert (
         entities_by_id["S2"]["relations"]
         == "与甲存在校友关系（同校、同学历、同期；共同院校：北京大学）"
+    )
+    assert entities_by_id["S1"]["evidence"] == ["教育经历 1 条"]
+    assert entities_by_id["S2"]["evidence"][0] == "共同院校：北京大学"
+    assert entities_by_id["S2"]["evidence"][1].startswith("互动证据：")
+    assert all(
+        not evidence.startswith("shared=")
+        for entity in resp["entities"]
+        for evidence in entity["evidence"]
     )
     assert resp["relations"][0]["label"] == "校友关系"
     assert resp["relations"][0]["category"] == "教育经历关联"

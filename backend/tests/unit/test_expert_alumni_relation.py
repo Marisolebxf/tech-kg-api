@@ -135,6 +135,11 @@ def test_pair_same_school_and_degree():
     assert resp["graph"]["edges"]
     assert resp["entities"][0]["id"] == "S1"
     assert resp["relations"][0]["to"] == "S2"
+    entities_by_id = {entity["id"]: entity for entity in resp["entities"]}
+    assert entities_by_id["S1"]["relations"] == "与乙存在校友关系：同校、同学历、同期"
+    assert entities_by_id["S2"]["relations"] == "与甲存在校友关系：同校、同学历、同期"
+    assert resp["relations"][0]["label"] == "校友关系"
+    assert resp["graph"]["edges"][0]["label"] == "校友关系"
     assert resp["provenance"]["evidences"]
     source_evidence = resp["provenance"]["evidences"][0]
     assert source_evidence["technicalTable"] == "dwd_scholar_test"
@@ -146,6 +151,45 @@ def test_pair_same_school_and_degree():
     assert alumni_evidence["graphVid"] == "S2"
     assert resp["rules"][0]["name"] == "教育经历匹配算法"
     assert "同校" in resp["dimensionsCatalog"]
+
+
+def test_graph_entities_use_alumni_and_shared_achievement_relation_semantics():
+    expert = {"id": "S1", "name": "甲", "educations": []}
+    items = [
+        {
+            "alumniId": "S2",
+            "name": "乙",
+            "dimensions": ["同校", "同期"],
+            "sharedInstitutions": ["北京大学"],
+            "interactions": {
+                "summary": "共同论文 1 篇、专利 1、项目 1",
+                "sharedAchievements": [
+                    {"id": "P1", "label": "论文A", "kind": "paper", "entityType": "论文成果"},
+                    {"id": "PT1", "label": "专利A", "kind": "patent", "entityType": "专利成果"},
+                    {"id": "PR1", "label": "项目A", "kind": "project", "entityType": "项目成果"},
+                ],
+            },
+        }
+    ]
+
+    entities, relations, graph = ExpertAlumniRelationService._build_graph_entities(
+        expert, items, mode="pair", include_shared_achievements=True
+    )
+
+    entities_by_id = {entity["id"]: entity for entity in entities}
+    nodes_by_id = {node["id"]: node for node in graph["nodes"]}
+    assert entities_by_id["S1"]["relations"] == "与乙存在校友关系：同校、同期"
+    assert entities_by_id["S2"]["relations"] == "与甲存在校友关系：同校、同期"
+    assert nodes_by_id["P1"]["relations"] == "由甲、乙共同发表"
+    assert nodes_by_id["PT1"]["relations"] == "由甲、乙共同发明"
+    assert nodes_by_id["PR1"]["relations"] == "由甲、乙共同参与"
+    assert relations[0]["label"] == "校友关系"
+    assert {edge["label"] for edge in graph["edges"]} == {
+        "校友关系",
+        "共同发表",
+        "共同发明",
+        "共同参与",
+    }
 
 
 def test_pair_not_alumni():
@@ -160,6 +204,10 @@ def test_pair_not_alumni():
     resp = _svc(graph).query(expert_id="S1", target_expert_id="S2")
     assert resp["total"] == 0
     assert resp["items"] == []
+    entities_by_id = {entity["id"]: entity for entity in resp["entities"]}
+    assert entities_by_id["S1"]["relations"] == "与乙暂无校友关系"
+    assert entities_by_id["S2"]["relations"] == "与甲暂无校友关系"
+    assert resp["graph"]["edges"] == []
 
 
 def test_pair_education_stage_accepts_multiple_values():
@@ -216,6 +264,9 @@ def test_list_via_studied_at_neighborhood():
     assert resp["total"] == 1
     assert resp["items"][0]["alumniId"] == "S2"
     assert "同校" in resp["dimensionsCatalog"]
+    entities_by_id = {entity["id"]: entity for entity in resp["entities"]}
+    assert entities_by_id["S1"]["relations"] == "命中 1 名校友"
+    assert entities_by_id["S2"]["relations"] == "与甲存在校友关系：同校"
     graph.get_nodes_by_label.assert_not_called()
 
 

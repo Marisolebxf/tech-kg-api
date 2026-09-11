@@ -53,6 +53,7 @@ export interface DirectRelationItem {
   coPaperCount: number
   relationStrength: number
   reasonTags: string[]
+  representativeAchievements?: Array<{ id: string; title: string }>
   relationSummary: string
   lastUpdatedAt: string | null
   detailRows: Array<Array<string | number | string[]>>

@@ -167,6 +167,40 @@ async def test_topn_via_graph_helpers(monkeypatch):
     assert resp.top_events[0].confidence == 0.9
 
 
+def test_industry_node_confidence_falls_back_to_entity_completeness():
+    """图节点未携带 confidence 时，按 DWD 来源和核心字段完整度回退。"""
+    provenance = mod._entity_provenance(
+        {
+            "node_id": "IC0007007",
+            "node_name": "集成电路设计",
+            "node_type": "2",
+            "level": "3",
+            "node_imp_level": "1",
+            "node_stage": "2",
+            "node_path": "设计、制造、封测>IC设计>集成电路设计",
+            "source_table": "dwd_industry_chain_info",
+        },
+        {"IndustryNode"},
+    )
+
+    assert provenance.confidence == 1.0
+
+
+def test_industry_node_confidence_prefers_graph_value():
+    """图中已有置信度时保留原值，不被完整度回退覆盖。"""
+    provenance = mod._entity_provenance(
+        {
+            "node_id": "IC0007007",
+            "node_name": "集成电路设计",
+            "source_table": "dwd_industry_chain_info",
+            "confidence": 0.88,
+        },
+        {"IndustryNode"},
+    )
+
+    assert provenance.confidence == 0.88
+
+
 @pytest.mark.asyncio
 async def test_enterprises_and_provenance_only_cover_topn_result(monkeypatch):
     subs = _subgraphs()

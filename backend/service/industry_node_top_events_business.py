@@ -283,6 +283,34 @@ def _type_label(code: str | None) -> str:
     return EVENT_TYPE_LABEL.get(code or "", code or "未知")
 
 
+def _industry_node_entity_confidence(properties: dict[str, Any]) -> float:
+    """按实体核心字段完整度计算产业链节点置信度。
+
+    口径与机构域实体置信度保持一致：DWD 来源 0.40、稳定标识
+    0.30、展示名称 0.20、分类/层级等支撑属性 0.10。不使用事件
+    综合置信度，避免混淆实体质量与事件风险判定。
+    """
+    source_table = str(properties.get("source_table") or "")
+    score = 0.40 if source_table.startswith("dwd_") else 0.30
+    if properties.get("node_id") not in (None, ""):
+        score += 0.30
+    if properties.get("node_name") not in (None, ""):
+        score += 0.20
+    if any(
+        properties.get(name) not in (None, "")
+        for name in (
+            "node_type",
+            "level",
+            "node_seq",
+            "node_imp_level",
+            "node_stage",
+            "node_path",
+        )
+    ):
+        score += 0.10
+    return round(min(max(score, 0.0), 1.0), 4)
+
+
 def _impact_score(event_type, amount, occur_date, chain_score):
     weight = EVENT_WEIGHT.get(event_type or "", 1.0)
     try:
@@ -322,6 +350,8 @@ def _entity_provenance(properties: dict[str, Any], labels: set[str]) -> EntityPr
             confidence = float(raw_conf)
         except (TypeError, ValueError):
             confidence = None
+    if confidence is None and "IndustryNode" in labels:
+        confidence = _industry_node_entity_confidence(properties)
     return EntityProvenance(
         sourceTable=str(source_table or "-"),
         sourceField=str(source_field or "-"),

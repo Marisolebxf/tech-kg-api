@@ -417,9 +417,9 @@ onBeforeUnmount(() => {
       />
       <aside aria-label="辅助区域 1" class="app-sidebar" :aria-hidden="isMobile && !mobileNavOpen">
         <div class="app-brand">
-          <img class="app-brand__logo" :src="logoKg" alt="知识图谱平台" />
+          <img class="app-brand__logo" :src="logoKg" alt="亿级科技知识图谱引擎" />
           <div v-if="!sidebarCollapsed" class="app-brand__name">
-            知识图谱平台
+            亿级科技知识图谱引擎
           </div>
         </div>
 

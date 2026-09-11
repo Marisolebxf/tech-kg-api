@@ -40,27 +40,40 @@ def edge(source: str, target: str, edge_type: str, **properties: Any) -> dict[st
 
 def test_entity_provenance_prefers_explicit_mysql_source():
     entity = node(
-        "person_a", ["Person"], source_table="dwd_scholar",
-        source_field="scholar_id", source_record_id="a",
+        "person_a",
+        ["Person"],
+        source_table="dwd_scholar",
+        source_field="scholar_id",
+        source_record_id="a",
         organization_base="dwd_org_stock_base",
     )
     provenance = ExpertColleagueRelationService()._entity_data(entity, {})["provenance"]
     assert provenance["sourceTable"] == "dwd_scholar"
     assert provenance["sourceField"] == "scholar_id"
     entity["properties"]["source_field"] = "external_scholar_id"
-    assert ExpertColleagueRelationService()._entity_data(entity, {})["provenance"]["sourceField"] == "external_scholar_id"
+    assert (
+        ExpertColleagueRelationService()._entity_data(entity, {})["provenance"]["sourceField"]
+        == "external_scholar_id"
+    )
 
 
-@pytest.mark.parametrize('table,field,vid', [
-    ('dwd_scholar', 'scholar_id', 'person_99a94795'),
-    ('dwd_org_stock_base', 'org_id', 'org_047583dfefe252480e530d15c0d436df'),
-])
+@pytest.mark.parametrize(
+    "table,field,vid",
+    [
+        ("dwd_scholar", "scholar_id", "person_99a94795"),
+        ("dwd_org_stock_base", "org_id", "org_047583dfefe252480e530d15c0d436df"),
+    ],
+)
 def test_legacy_entity_provenance_uses_mysql_column(table, field, vid):
-    entity = node(vid, ['Person' if table == 'dwd_scholar' else 'Organization'],
-                  source_table=table, source_record_id=vid)
-    provenance = ExpertColleagueRelationService()._entity_data(entity, {})['provenance']
-    assert provenance['sourceTable'] == table
-    assert provenance['sourceField'] == field
+    entity = node(
+        vid,
+        ["Person" if table == "dwd_scholar" else "Organization"],
+        source_table=table,
+        source_record_id=vid,
+    )
+    provenance = ExpertColleagueRelationService()._entity_data(entity, {})["provenance"]
+    assert provenance["sourceTable"] == table
+    assert provenance["sourceField"] == field
 
 
 class FakeGraphSearchGateway:

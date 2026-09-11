@@ -754,7 +754,9 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             source_field, source_value = "source_record_id", properties.get("source_record_id")
         # These are MySQL column names, not the normalized graph property names.
         mysql_source_fields = {"dwd_scholar": "scholar_id", "dwd_org_stock_base": "org_id"}
-        source_field = properties.get("source_field") or mysql_source_fields.get(source_table) or source_field
+        source_field = (
+            properties.get("source_field") or mysql_source_fields.get(source_table) or source_field
+        )
         raw_confidence = properties.get("confidence", 1.0)
         try:
             confidence = float(raw_confidence)

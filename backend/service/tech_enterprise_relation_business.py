@@ -34,6 +34,7 @@ from biz.schemas.tech_enterprise_relation_business import (
     KeyEnterpriseRelationRequest,
     KeyEnterpriseRelationResponse,
 )
+from service.entity_confidence import fill_entity_confidence, parse_confidence
 from service.industry_node_top_events_business import RISK_EVENT_TYPES
 
 logger = logging.getLogger(__name__)
@@ -273,16 +274,6 @@ def _period_from_mapping(*maps: Mapping[str, Any] | None) -> BusinessPeriod:
     return BusinessPeriod()
 
 
-def _as_confidence(value: object) -> float | None:
-    """读取 mysql2trs 写入的实体置信度；缺失或非法则视为无。"""
-    if value in (None, ""):
-        return None
-    try:
-        return float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
-
-
 def _pick_tech_field(bg: dict, op: dict) -> str | None:
     """合作领域：行业分类优先，缺省时回退主营产品，避免摘要整行空白。"""
     for candidate in (
@@ -493,15 +484,32 @@ class KeyEnterpriseRelationService:
             await self._probe_primary_risk(relations[0], app=app, auth_headers=auth_headers)
         resp.relations = relations
         # 实体溯源：专家 + 各关联企业，供前端溯源栏展示真实源数据表/英文字段名/图空间 VID
+        graph_client = None
+        missing_confidence = parse_confidence(expert_props.get("confidence")) is None or any(
+            parse_confidence((node_props.get(rel.enterprise_id) or {}).get("confidence")) is None
+            for rel in relations
+        )
+        if missing_confidence:
+            try:
+                from infra.graph_db import get_trs_graph_client
+
+                graph_client = get_trs_graph_client()
+            except Exception:
+                graph_client = None
         resp.entity_provenance = {
             req.expert_id: self._entity_provenance(
-                expert_props, node_labels.get(req.expert_id, set())
+                expert_props,
+                node_labels.get(req.expert_id, set()),
+                vid=req.expert_id,
+                client=graph_client,
             )
         }
         for rel in relations:
             resp.entity_provenance[rel.enterprise_id] = self._entity_provenance(
                 node_props.get(rel.enterprise_id, {}),
                 node_labels.get(rel.enterprise_id, set()),
+                vid=rel.enterprise_id,
+                client=graph_client,
             )
         resp.enterprises = len({r.enterprise_id for r in relations})
         resp.roles = len({r.role_label for r in relations if r.role_label})
@@ -517,12 +525,19 @@ class KeyEnterpriseRelationService:
         return resp
 
     @staticmethod
-    def _entity_provenance(properties: dict[str, Any], labels: set[str]) -> EntityProvenance:
+    def _entity_provenance(
+        properties: dict[str, Any],
+        labels: set[str],
+        *,
+        vid: str | None = None,
+        client: Any = None,
+    ) -> EntityProvenance:
         """从图节点 properties 抽取实体溯源，与同事关系 _entity_data 同口径。
 
         Person 节点取 source_record_id（dwd_scholar 时字段名为 scholar_id）；
         Organization 节点取 organization_id；均缺失时回退 source_record_id。
         source_table 取 organization_base 或 source_table 属性。
+        置信度：图上已有值 → 证据规则计算并尽力写回 → 默认 0.80。
         """
         source_table = properties.get("organization_base") or properties.get("source_table")
         if "Person" in labels and properties.get("source_record_id") not in (None, ""):
@@ -532,13 +547,14 @@ class KeyEnterpriseRelationService:
             source_field, source_value = "organization_id", properties.get("organization_id")
         else:
             source_field, source_value = "source_record_id", properties.get("source_record_id")
+        confidence = fill_entity_confidence(properties, labels, vid=vid, client=client)
         return EntityProvenance(
             sourceTable=str(source_table or "-"),
             sourceField=str(source_field or "-"),
             sourceValue=str(source_value or "-"),
             ingestBatch=str(properties.get("ingest_batch") or "-"),
             ingestTime=str(properties.get("ingest_time") or "-"),
-            confidence=_as_confidence(properties.get("confidence")),
+            confidence=confidence,
         )
 
     async def _probe_primary_risk(

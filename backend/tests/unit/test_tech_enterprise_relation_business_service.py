@@ -23,6 +23,17 @@ def _isolate_caches():
     clear_caches()
 
 
+@pytest.fixture(autouse=True)
+def _no_live_graph(monkeypatch):
+    """缺置信度时会尽力写回图；单测禁止连真实 trs-graph。"""
+
+    class _NoGraph:
+        def execute_write(self, query: str) -> None:
+            return None
+
+    monkeypatch.setattr("infra.graph_db.get_trs_graph_client", lambda: _NoGraph())
+
+
 def _subgraph() -> dict:
     """构造一个 2 跳子图 mock：专家 --EXECUTIVE_BY--> 上市企业；专家 --HAS_PARTICIPANT--> 项目 --PARTICIPATES_IN--> 高校。"""
     nodes = [
@@ -183,6 +194,35 @@ async def test_run_populates_entity_provenance(monkeypatch):
     assert org_prov.sourceValue == "lvdie_org_id"
     assert org_prov.ingestBatch == "ORG_DEV_FINAL_20260811"
     assert org_prov.confidence == 0.85
+
+
+@pytest.mark.asyncio
+async def test_run_fills_missing_entity_confidence(monkeypatch):
+    """图节点没有 confidence 时按证据规则计算、写回，并保证实体 tab 拿到数字。"""
+    writes: list[str] = []
+
+    class _Graph:
+        def execute_write(self, query: str) -> None:
+            writes.append(query)
+
+    monkeypatch.setattr("infra.graph_db.get_trs_graph_client", lambda: _Graph())
+    payload = _subgraph()
+    for node in payload["data"]["nodes"]:
+        (node.get("properties") or {}).pop("confidence", None)
+
+    svc = KeyEnterpriseRelationService(base_url="http://x")
+    monkeypatch.setattr(
+        _httpx(),
+        "AsyncClient",
+        lambda *a, **kw: _FakeAsyncClient([("/graph-search/filtered-subgraph/", payload)]),
+    )
+    resp = await svc.run(KeyEnterpriseRelationRequest(expert_id=EXPERT))
+
+    # dwd + 稳定 ID + 姓名 + ingest_time → 0.90
+    assert resp.entity_provenance[EXPERT].confidence == 0.9
+    assert resp.entity_provenance["org_lvdie"].confidence == 0.9
+    assert any("UPDATE VERTEX ON `Person`" in q and EXPERT in q for q in writes)
+    assert any("UPDATE VERTEX ON `Organization`" in q and "org_lvdie" in q for q in writes)
 
 
 @pytest.mark.asyncio

@@ -25,15 +25,27 @@ def _subgraphs() -> dict[str, dict]:
             {
                 "id": NODE_VID,
                 "labels": ["IndustryNode"],
-                "properties": {"node_name": "测试节点", "node_imp_level": "1"},
+                "properties": {
+                    "node_name": "测试节点",
+                    "node_imp_level": "1",
+                    "confidence": 0.88,
+                },
             },
             {
                 "id": "chain_IC",
                 "labels": ["IndustryChain"],
                 "properties": {"chain_name": "测试产业链"},
             },
-            {"id": ORG_A, "labels": ["Organization"], "properties": {"name_cn": "甲公司"}},
-            {"id": ORG_B, "labels": ["Organization"], "properties": {"name_cn": "乙公司"}},
+            {
+                "id": ORG_A,
+                "labels": ["Organization"],
+                "properties": {"name_cn": "甲公司", "confidence": 0.81},
+            },
+            {
+                "id": ORG_B,
+                "labels": ["Organization"],
+                "properties": {"name_cn": "乙公司", "confidence": 0.76},
+            },
         ],
         "edges": [
             {"type": "HAS_NODE", "source": "chain_IC", "target": NODE_VID, "properties": {}},
@@ -141,6 +153,8 @@ async def test_topn_via_graph_helpers(monkeypatch):
     assert resp.relations[0].expert_name == "张三"
     assert resp.entity_provenance["person_x"].sourceField == "scholar_id"
     assert resp.entity_provenance["person_x"].sourceValue == "sch-001"
+    assert resp.entity_provenance["IC_test"].confidence == 0.88
+    assert resp.entity_provenance[ORG_A].confidence == 0.81
     # 标书分析维度：后端真实派生（非空）
     assert resp.node_impact
     # 分析文案使用中文事件类型（EVENT_TYPE_LABEL）
@@ -272,3 +286,191 @@ def test_derive_analysis_dimensions():
 
 def test_derive_analysis_empty():
     assert IndustryNodeTopEventsService._derive_analysis([], set(), "低") == ("", "", "")
+
+
+class _FakeEdge:
+    def __init__(self, source_id, target_id, edge_type, properties=None):
+        self.source_id = source_id
+        self.target_id = target_id
+        self.type = edge_type
+        self.properties = properties or {}
+
+
+class _FakeNode:
+    def __init__(self, node_id, labels, properties=None):
+        self.id = node_id
+        self.labels = labels
+        self.properties = properties or {}
+
+
+class _FakeClient:
+    def __init__(self, edges_by_type, nodes):
+        self.edges_by_type = edges_by_type
+        self.nodes = nodes
+
+    def get_node_edges(self, org_id, direction="in", edge_type=None, limit=20):
+        return list(self.edges_by_type.get(edge_type, []))[:limit]
+
+    def get_node(self, vid):
+        return self.nodes.get(vid)
+
+
+def test_fetch_org_governance_keeps_person_affiliation_drops_org_shareholder():
+    """任职学者要进关联专家；股东边对端若是机构则丢弃。"""
+    client = _FakeClient(
+        {
+            "AFFILIATED_WITH": [
+                _FakeEdge(
+                    "person_s1",
+                    ORG_A,
+                    "AFFILIATED_WITH",
+                    {"work_experience_position_zh": "研究员"},
+                )
+            ],
+            "SHAREHOLDER_OF": [_FakeEdge("org_hold", ORG_A, "SHAREHOLDER_OF")],
+            "EXECUTIVE_OF": [],
+        },
+        {
+            "person_s1": _FakeNode(
+                "person_s1",
+                ["Person"],
+                {"name_zh": "李四", "source_record_id": "s1", "source_table": "dwd_scholar"},
+            ),
+            "org_hold": _FakeNode("org_hold", ["Organization"], {"name_cn": "控股公司"}),
+        },
+    )
+    experts = mod._fetch_org_governance_sync(client, ORG_A)
+    assert len(experts) == 1
+    pid, role, props = experts[0]
+    assert pid == "person_s1"
+    assert role == "研究员"
+    assert props["name_zh"] == "李四"
+
+
+def test_select_top_covering_experts_replaces_last_when_window_has_none():
+    ranked = [
+        {"event_id": "e1", "org_id": ORG_A, "_score": 9},
+        {"event_id": "e2", "org_id": ORG_B, "_score": 3},
+        {"event_id": "e3", "org_id": "org_ccc", "_score": 2},
+    ]
+    picked = mod._select_top_covering_experts(
+        ranked, 2, {ORG_A: [], ORG_B: [], "org_ccc": [("person_x", "董事", {})]}
+    )
+    assert [ev["event_id"] for ev in picked] == ["e1", "e3"]
+
+
+@pytest.mark.asyncio
+async def test_topn_backfills_expert_org_outside_max_orgs(monkeypatch):
+    """max_orgs 截断窗外的有高管企业，首轮无专家时应补扫并写入 relations。"""
+    org_c = "org_ccc"
+    subs = _subgraphs()
+    subs[NODE_VID]["nodes"].append(
+        {"id": org_c, "labels": ["Organization"], "properties": {"name_cn": "丙公司"}}
+    )
+    subs[NODE_VID]["edges"].append(
+        {
+            "type": "BELONGS_TO_NODE",
+            "source": org_c,
+            "target": NODE_VID,
+            "properties": {"chain_score": 50},
+        }
+    )
+    subs[org_c] = {
+        "nodes": [
+            {"id": org_c, "labels": ["Organization"], "properties": {"name_cn": "丙公司"}},
+            {
+                "id": "ev_sf",
+                "labels": ["Event"],
+                "properties": {
+                    "event_type": "stock_finance",
+                    "occur_date": "2025-06-01",
+                    "amount": "1000",
+                    "title": "年报",
+                },
+            },
+        ],
+        "edges": [{"type": "INVOLVED_IN", "source": org_c, "target": "ev_sf", "properties": {}}],
+    }
+    govs = {
+        ORG_A: [],
+        ORG_B: [],
+        org_c: [("person_y", "董事长", {"name_cn": "王五", "source_record_id": "sch-y"})],
+    }
+    monkeypatch.setattr(
+        mod,
+        "_subgraph_sync",
+        lambda client, vid, edge_types, limit: subs.get(vid, {"nodes": [], "edges": []}),
+    )
+    monkeypatch.setattr(
+        mod, "_fetch_org_governance_sync", lambda client, org_id: govs.get(org_id, [])
+    )
+    monkeypatch.setattr(mod, "_get_dev_client", lambda: None)
+    monkeypatch.setattr(mod, "_result_cache", {})
+    monkeypatch.setattr(mod, "EXPERT_SCAN_EXTRA_ORGS", 30)
+    monkeypatch.setattr(mod, "EXPERT_PROBE_LIMIT", 10)
+
+    resp = await IndustryNodeTopEventsService().run(
+        IndustryNodeTopEventsRequest(chain_node_id="IC_test", top_n=1, max_orgs=1)
+    )
+
+    assert resp.experts == 1
+    assert resp.relations[0].expert_id == "person_y"
+    assert resp.relations[0].expert_name == "王五"
+    assert resp.top_events[0].org_id == org_c
+
+
+@pytest.mark.asyncio
+async def test_topn_covers_expert_org_inside_max_orgs_but_not_in_impact_top(monkeypatch):
+    """有高管企业已在 max_orgs 窗内、但 impact 排不进 TOP 时，仍应替换末位展示专家。"""
+    org_c = "org_ccc"
+    subs = _subgraphs()
+    subs[NODE_VID]["nodes"].append(
+        {"id": org_c, "labels": ["Organization"], "properties": {"name_cn": "丙公司"}}
+    )
+    subs[NODE_VID]["edges"].append(
+        {
+            "type": "BELONGS_TO_NODE",
+            "source": org_c,
+            "target": NODE_VID,
+            "properties": {"chain_score": 50},
+        }
+    )
+    subs[org_c] = {
+        "nodes": [
+            {"id": org_c, "labels": ["Organization"], "properties": {"name_cn": "丙公司"}},
+            {
+                "id": "ev_sf",
+                "labels": ["Event"],
+                "properties": {
+                    "event_type": "stock_finance",
+                    "occur_date": "2025-06-01",
+                    "amount": "1000",
+                    "title": "年报",
+                },
+            },
+        ],
+        "edges": [{"type": "INVOLVED_IN", "source": org_c, "target": "ev_sf", "properties": {}}],
+    }
+    govs = {
+        ORG_A: [],
+        ORG_B: [],
+        org_c: [("person_y", "董事长", {"name_cn": "王五", "source_record_id": "sch-y"})],
+    }
+    monkeypatch.setattr(
+        mod,
+        "_subgraph_sync",
+        lambda client, vid, edge_types, limit: subs.get(vid, {"nodes": [], "edges": []}),
+    )
+    monkeypatch.setattr(
+        mod, "_fetch_org_governance_sync", lambda client, org_id: govs.get(org_id, [])
+    )
+    monkeypatch.setattr(mod, "_get_dev_client", lambda: None)
+    monkeypatch.setattr(mod, "_result_cache", {})
+
+    resp = await IndustryNodeTopEventsService().run(
+        IndustryNodeTopEventsRequest(chain_node_id="IC_test", top_n=1, max_orgs=10)
+    )
+
+    assert resp.experts == 1
+    assert resp.relations[0].expert_id == "person_y"
+    assert resp.top_events[0].org_id == org_c

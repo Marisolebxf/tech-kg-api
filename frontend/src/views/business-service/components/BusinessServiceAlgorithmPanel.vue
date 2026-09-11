@@ -38,6 +38,7 @@ import {
   queryExpertColleagueRelation,
   type ExpertColleagueRelationResponse,
 } from "../../../api/expertColleagueRelation";
+import { colleagueEntityRows, colleagueProvenanceCards } from "../expert-colleague-details";
 import KgGraphCanvas from "../../../components/kg-graph-canvas.vue";
 import { useToast } from "../../../composables/use-toast";
 import { getServiceGraphPreset } from "../../../data/graph-presets";
@@ -592,6 +593,19 @@ function colleagueConfidenceText(
     : missingNote;
 }
 
+function formatRelationConfidence(edge: GraphEdgeData): string {
+  if (isPaperCooperation.value && edge.confidence === undefined) {
+    return "不适用（统计关系）";
+  }
+  if (isLiveColleague.value) {
+    return colleagueConfidenceText(
+      edge.confidence,
+      "暂无（原图边未携带置信度字段）",
+    );
+  }
+  return formatConfidence(edge.confidence);
+}
+
 function mapLiveGraph(
   nodes:
     | Array<{
@@ -926,6 +940,35 @@ function derivedGraphFromResponse(
   return { nodes, edges };
 }
 
+function uniqueTexts(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+  }
+  return out;
+}
+
+function displayCooperationType(code?: string | null): string {
+  const map: Record<string, string> = {
+    governance: "治理任职",
+    project_cooperation: "项目合作",
+    patent_cooperation: "专利合作",
+  };
+  return (code && map[code]) || code || "企业关联";
+}
+
+function formatCooperationPeriod(period?: {
+  start?: string | null;
+  end?: string | null;
+} | null): string {
+  if (!period?.start) return "";
+  return `${period.start}${period.end ? ` 至 ${period.end}` : " 至今"}`;
+}
+
 function buildLiveGraph(
   res: Record<string, any>,
   key: string,
@@ -942,16 +985,24 @@ function buildLiveGraph(
     nodeType: GraphNodeData["nodeType"],
     entityType: string,
     relations = "",
-    confidence = 1,
+    confidence?: number,
     provenance?: {
       sourceTable?: string;
       sourceField?: string;
       sourceValue?: string;
       ingestBatch?: string;
       ingestTime?: string;
+      confidence?: number;
     },
   ) => {
     if (!id || nodes.some((n) => n.id === id)) return;
+    const nodeConfidence =
+      typeof confidence === "number" && Number.isFinite(confidence)
+        ? confidence
+        : typeof provenance?.confidence === "number" &&
+            Number.isFinite(provenance.confidence)
+          ? provenance.confidence
+          : undefined;
     nodes.push({
       id,
       label: label || id,
@@ -959,7 +1010,7 @@ function buildLiveGraph(
       x: 0,
       y: 0,
       entityType,
-      confidence,
+      confidence: nodeConfidence,
       relations,
       evidence: ev,
       ...(provenance && {
@@ -976,6 +1027,7 @@ function buildLiveGraph(
     to: string,
     label: string,
     category: string,
+    confidence?: number,
   ) => {
     edges.push({
       id: `${from}->${to}-${edges.length}`,
@@ -983,77 +1035,127 @@ function buildLiveGraph(
       to,
       label,
       category,
+      confidence,
     });
   };
 
   if (key === "enterprise-relation") {
+    const rels = (data.relations || []) as Array<Record<string, any>>;
     addNode(
       data.expert_id,
       data.expert_name,
       "expert",
       "科技专家",
-      `${data.relations?.length ?? 0} 条企业关联`,
-      1,
+      uniqueTexts(
+        rels.map(
+          (r) =>
+            `${r.cooperation_mode || displayCooperationType(r.cooperation_type)} → ${r.enterprise_name || r.enterprise_id}`,
+        ),
+      ).join("；") || "暂无企业关联",
+      data.entity_provenance?.[data.expert_id]?.confidence,
       data.entity_provenance?.[data.expert_id],
     );
-    for (const r of data.relations || []) {
+    for (const r of rels) {
       addNode(
         r.enterprise_id,
         r.enterprise_name,
         "company",
         "企业",
-        `${r.cooperation_mode || ""}｜${r.role_label || ""}`,
-        1,
+        [r.cooperation_mode, r.role_label].filter(Boolean).join("｜") ||
+          displayCooperationType(r.cooperation_type),
+        data.entity_provenance?.[r.enterprise_id]?.confidence,
         data.entity_provenance?.[r.enterprise_id],
       );
       addEdge(
         data.expert_id,
         r.enterprise_id,
-        r.cooperation_mode || r.cooperation_type || "关联",
-        r.cooperation_type || "relation",
+        r.cooperation_mode || displayCooperationType(r.cooperation_type),
+        displayCooperationType(r.cooperation_type),
+        typeof r.confidence === "number" ? r.confidence : undefined,
       );
     }
   } else if (key === "industry-chain-event") {
+    const topEvents = (data.top_events || []) as Array<Record<string, any>>;
+    const eventTypesByOrg: Record<string, string[]> = {};
+    for (const ev0 of topEvents) {
+      const typeLabel = displayEventType(ev0.event_type);
+      const list = eventTypesByOrg[ev0.org_id] ?? [];
+      if (!list.includes(typeLabel)) list.push(typeLabel);
+      eventTypesByOrg[ev0.org_id] = list;
+    }
     addNode(
       data.chain_node_id,
       data.chain_node_name,
       "main",
       "产业链节点",
-      `${data.enterprises ?? 0} 家企业｜TOP ${data.events ?? 0} 事件`,
-      1,
+      uniqueTexts(
+        topEvents.map(
+          (ev0) =>
+            `${displayEventType(ev0.event_type)} → ${ev0.org_name || ev0.org_id}`,
+        ),
+      ).join("；") || "暂无关联事件",
+      data.entity_provenance?.[data.chain_node_id]?.confidence,
       data.entity_provenance?.[data.chain_node_id],
     );
-    const orgEventCount: Record<string, number> = {};
-    for (const ev0 of data.top_events || [])
-      orgEventCount[ev0.org_id] = (orgEventCount[ev0.org_id] || 0) + 1;
-    for (const ev0 of data.top_events || []) {
+    const linkedOrgs = new Set<string>();
+    for (const ev0 of topEvents) {
       addNode(
         ev0.org_id,
         ev0.org_name,
         "company",
         "企业",
-        `TOP 事件 ${orgEventCount[ev0.org_id] || 0} 件`,
-        1,
+        (eventTypesByOrg[ev0.org_id] || []).join("、") || "关联事件",
+        data.entity_provenance?.[ev0.org_id]?.confidence,
         data.entity_provenance?.[ev0.org_id],
       );
-      addEdge(data.chain_node_id, ev0.org_id, "关联企业", "chain");
+      if (ev0.org_id && !linkedOrgs.has(ev0.org_id)) {
+        linkedOrgs.add(ev0.org_id);
+        addEdge(
+          data.chain_node_id,
+          ev0.org_id,
+          "所属企业",
+          "产业链归属",
+          data.entity_provenance?.[ev0.org_id]?.confidence,
+        );
+      }
       // 事件节点标签用「类型+日期」短文案：新闻标题 20-40 字，做标签必然截断出省略号；
       // 完整标题放 relations 副标题与悬浮提示（title），摘要"核心事件"行也展示 TOP1 标题。
+      // 实体 tab 的「关系」只展示事件标题，不把 impact_score 拼进去。
       addNode(
         ev0.event_id,
         `${displayEventType(ev0.event_type)} ${displayEventDate(ev0.occur_date)}`,
         "event",
         displayEventType(ev0.event_type),
-        `${ev0.title || ""}｜评分 ${ev0.impact_score}`,
+        ev0.title || displayEventType(ev0.event_type),
         // 事件置信度用后端 EVENT_CONFIDENCE 值（风险 0.9 / 财务 0.85 / 中标 0.8 / 资讯 0.7）
         typeof ev0.confidence === "number" ? ev0.confidence : undefined,
         data.entity_provenance?.[ev0.event_id],
       );
-      addEdge(ev0.org_id, ev0.event_id, ev0.event_type || "事件", "event");
+      addEdge(
+        ev0.org_id,
+        ev0.event_id,
+        displayEventType(ev0.event_type),
+        "事件参与",
+        typeof ev0.confidence === "number" ? ev0.confidence : undefined,
+      );
     }
     for (const rel of data.relations || []) {
-      addNode(rel.expert_id, rel.expert_name, "expert", "专家", "关联事件");
-      addEdge(rel.event_id, rel.expert_id, "关联专家", "expert");
+      addNode(
+        rel.expert_id,
+        rel.expert_name,
+        "expert",
+        "专家",
+        [rel.role, rel.org_name].filter(Boolean).join("｜") || "企业高管",
+        data.entity_provenance?.[rel.expert_id]?.confidence,
+        data.entity_provenance?.[rel.expert_id],
+      );
+      addEdge(
+        rel.event_id,
+        rel.expert_id,
+        rel.role || "关联专家",
+        "专家任职",
+        data.entity_provenance?.[rel.expert_id]?.confidence,
+      );
     }
   } else if (key === "paper-cooperation") {
     // 保持 preset 图结构（节点位置/类型/边连接）不变，仅用 API 查询结果覆盖节点与边信息
@@ -1072,21 +1174,18 @@ function buildLiveGraph(
       ...sr.journalLevelCount,
       ...sr.conferenceLevelCount,
     });
-    const highLevel = levelEntries
-      .filter(([k]) => k !== "未分级")
-      .reduce((s, [, v]) => s + (v as number), 0);
     const unitCount = units.filter(Boolean).length || 2;
     const overrides: Record<string, Partial<GraphNodeData>> = {
       core: {
         label: authors[0] || "专家 A",
-        relations: `合作论文 ${paperCount}`,
+        relations: "核心专家",
         evidence: [
           `专家 ${authors[0] || "-"}，单位 ${units[0] || "未知机构"}。`,
         ],
       },
       "expert-1": {
         label: authors[1] || "专家 B",
-        relations: `合作论文 ${paperCount}`,
+        relations: "合作专家",
         evidence: [
           `专家 ${authors[1] || "-"}，单位 ${units[1] || "未知机构"}。`,
         ],
@@ -1104,32 +1203,35 @@ function buildLiveGraph(
       },
       "topic-1": {
         label: topics[0] || "论文主题",
-        relations: `方向 ${topics.length}`,
+        relations: topics.length
+          ? `研究方向：${topics.join("、")}`
+          : "研究方向待补充",
         evidence: [topics.join("、") || "暂无主题数据。"],
       },
       "venue-1": {
         label: levelEntries.map(([k]) => k).join("/") || "期刊/会议",
-        relations: `发表成果 ${levelEntries.reduce((sum, [, v]) => sum + (v as number), 0)}`,
+        relations: "期刊/会议级别",
         evidence: [
           levelEntries.map(([k, v]) => `${k} ${v} 篇`).join("、") ||
             "暂无分级数据。",
         ],
       },
       "expert-2": {
-        relations: `核心人员 ${collabs.length}`,
+        label: collabs.join("、") || "合作团队",
+        relations: stable.length > 0 ? "稳定合作团队" : "合作团队",
         evidence: [
           `核心合作人员：${collabs.join("、") || "暂无"}。稳定团队：${stable.join("、") || "暂无"}。`,
         ],
       },
     };
     const edgeOverrides: Record<string, Partial<GraphEdgeData>> = {
-      pc1: { label: `论文合作 ${paperCount} 篇` },
-      pc2: { label: "共同作者" },
-      pc3: { label: "共同作者" },
-      pc4: { label: `作者单位 ${unitCount}` },
-      pc5: { label: `研究主题 ${topics.length}` },
-      pc6: { label: highLevel > 0 ? `高水平 ${highLevel} 篇` : "发表级别" },
-      pc7: { label: `团队 ${stable.length} 人` },
+      pc1: { label: "论文合作", category: "论文合作" },
+      pc2: { label: "共同作者", category: "论文作者" },
+      pc3: { label: "共同作者", category: "论文作者" },
+      pc4: { label: "作者单位", category: "作者单位" },
+      pc5: { label: "研究主题", category: "论文主题" },
+      pc6: { label: "发表于", category: "期刊/会议" },
+      pc7: { label: "团队成员", category: "合作团队" },
     };
     return {
       nodes: preset.nodes.map((n) => ({ ...n, ...overrides[n.id] })),
@@ -1227,7 +1329,7 @@ const liveModuleGraph = computed(() => {
           y: position.y,
           entityType,
           confidence: node.data?.confidence,
-          relations: node.data?.title || node.label,
+          relations: "",
           evidence: node.data?.evidence || [],
           sourceTable: node.data?.provenance?.sourceTable,
           sourceRecordId: node.data?.provenance?.sourceValue,
@@ -1329,9 +1431,7 @@ const selectedEdge = computed(() =>
       null)
     : null,
 );
-const activeRelationEdge = computed(
-  () => selectedEdge.value ?? graphEdges.value[0] ?? null,
-);
+const activeRelationEdge = computed(() => selectedEdge.value);
 const selectedEdgeNodes = computed(() => {
   const edge = activeRelationEdge.value;
   return {
@@ -1386,6 +1486,17 @@ const relationTypeDisplay: Record<string, string> = {
   HAS_NODE: "产业链节点关系",
   HAS_NEWS: "企业动态关系",
   INVOLVED_IN: "事件参与关系",
+  governance: "治理任职",
+  project_cooperation: "项目合作",
+  patent_cooperation: "专利合作",
+  stock_finance: "上市企业财务信息",
+  annual_finance: "年报财务信息",
+  financing: "融资",
+  bankruptcy: "破产",
+  news: "资讯",
+  bid: "中标",
+  recruit: "招聘",
+  change_record: "工商变更",
 };
 const relationCategoryDisplay: Record<string, string> = {
   AFFILIATED_WITH: "任职",
@@ -1394,11 +1505,22 @@ const relationCategoryDisplay: Record<string, string> = {
   HAS_NODE: "产业链节点",
   HAS_NEWS: "企业动态",
   INVOLVED_IN: "事件参与",
+  governance: "治理任职",
+  project_cooperation: "项目合作",
+  patent_cooperation: "专利合作",
+  relation: "企业关联",
+  chain: "产业链归属",
+  event: "事件参与",
+  expert: "专家任职",
 };
 const displayRelationType = (value?: string) =>
-  (value && relationTypeDisplay[value]) || value || "—";
+  (value && (relationTypeDisplay[value] || eventTypeLabel[value])) ||
+  value ||
+  "—";
 const displayRelationCategory = (value?: string) =>
-  (value && relationCategoryDisplay[value]) || value || "—";
+  (value && (relationCategoryDisplay[value] || eventTypeLabel[value])) ||
+  value ||
+  "—";
 
 const alumniInteractionText = (edge: GraphEdgeData) => {
   const interactions = edge.interactions;
@@ -1494,13 +1616,8 @@ const relationDetailRows = computed(() => {
     [
       "置信度",
 
-      // 直接展示后端关系 confidence；同事关系模块缺失时给出原因
-      isLiveColleague.value
-        ? colleagueConfidenceText(
-            edge.confidence,
-            "暂无（原图边未携带置信度字段）",
-          )
-        : formatConfidence(edge.confidence),
+      // 直接展示后端关系 confidence，并兼容统计关系和历史缺失字段。
+      formatRelationConfidence(edge),
     ] as const,
 
     ...((isLiveAlumni.value || isLiveCoop.value) && edge.confidenceSource
@@ -1546,7 +1663,7 @@ const selectedProvenanceTarget = computed(() => {
     id: edge.id,
 
     // 关系置信度直接使用后端返回值
-    confidence: formatConfidence(edge.confidence),
+    confidence: formatRelationConfidence(edge),
   };
 });
 function formatTimestamp(date: Date) {
@@ -1577,27 +1694,43 @@ function buildLiveSummary(
   if (!d) return {};
   const out: Record<string, string> = {};
   if (key === "enterprise-relation") {
-    const r0 = d.relations?.[0] || {};
+    const rels = (d.relations || []) as Array<Record<string, any>>;
+    const r0 = rels[0] || {};
     const bg = r0.enterprise_background || {};
+    const fields = uniqueTexts([
+      ...(d.cooperation_fields || []),
+      ...rels.map((r) => r.tech_field),
+    ]);
+    const techDirections = uniqueTexts(
+      rels.map(
+        (r) =>
+          r.tech_field ||
+          r.enterprise_background?.main_products ||
+          r.enterprise_background?.description,
+      ),
+    );
     out["科技专家"] = d.expert_name || d.expert_id || "-";
-    out["重点关注企业"] = r0.enterprise_name || "-";
-    out["专家企业角色"] = r0.role_label || "-";
-    out["合作时间"] = "-";
-    if (r0.period?.start) {
-      const periodEnd = r0.period.end ? ` 至 ${r0.period.end}` : " 至今";
-      out["合作时间"] = `${r0.period.start}${periodEnd}`;
-    }
-    out["合作领域"] =
-      (d.cooperation_fields?.length
-        ? d.cooperation_fields.join("、")
-        : r0.tech_field) || "-";
-    out["合作模式"] = r0.cooperation_mode || "-";
+    out["重点关注企业"] =
+      uniqueTexts(rels.map((r) => r.enterprise_name)).join("、") || "-";
+    out["专家企业角色"] =
+      uniqueTexts(rels.map((r) => r.role_label)).join("、") || "-";
+    out["合作时间"] =
+      uniqueTexts(rels.map((r) => formatCooperationPeriod(r.period))).join(
+        "；",
+      ) || "源数据未标注任职起止";
+    out["合作领域"] = fields.join("、") || "源数据未标注行业领域";
+    out["合作模式"] =
+      uniqueTexts(rels.map((r) => r.cooperation_mode)).join("、") || "-";
     out["行业地位"] = "-";
     if (bg.listing_status) {
       const stockType = bg.stock_type ? `｜${bg.stock_type}` : "";
       out["行业地位"] = `${bg.listing_status}${stockType}`;
     }
-    out["技术方向"] = r0.tech_field || "-";
+    out["技术方向"] =
+      techDirections.join("、") ||
+      bg.main_products ||
+      bg.description ||
+      "源数据未标注主营产品";
     out["经营状况"] =
       [
         bg.listing_status,
@@ -1607,11 +1740,17 @@ function buildLiveSummary(
         .filter(Boolean)
         .join("｜") || "-";
     out["关联企业数量"] = `${d.enterprises ?? 0} 家`;
-    out["风险提示"] = bg.listing_status
-      ? `${bg.listing_status}，暂无该企业风险事件数据`
-      : "暂无该企业风险事件数据";
-    out["资源对接价值"] = d.cooperation_fields?.length
-      ? `专家合作领域 ${d.cooperation_fields.join("、")}`
+    out["风险提示"] =
+      r0.risk_summary ||
+      (bg.listing_status
+        ? `${bg.listing_status}，暂无该企业风险事件数据`
+        : "暂无该企业风险事件数据");
+    out["综合置信度"] =
+      typeof d.confidence === "number"
+        ? Number(d.confidence).toFixed(2)
+        : "-";
+    out["资源对接价值"] = fields.length
+      ? `专家合作领域 ${fields.join("、")}`
       : "待评估合作领域匹配度";
   } else if (key === "industry-chain-event") {
     const ev0 = d.top_events?.[0] || {};
@@ -1626,7 +1765,16 @@ function buildLiveSummary(
     out["影响力排名"] = ev0.rank
       ? `第 ${ev0.rank} 名｜影响力评分 ${ev0.impact_score}`
       : "-";
-    out["关联专家"] = `${d.experts ?? 0} 人`;
+    const expertNames = [
+      ...new Set(
+        (d.relations || [])
+          .map((rel: any) => rel.expert_name)
+          .filter(Boolean),
+      ),
+    ] as string[];
+    out["关联专家"] = expertNames.length
+      ? `${expertNames.slice(0, 3).join("、")}${expertNames.length > 3 ? " 等" : ""} ${d.experts ?? expertNames.length} 人`
+      : `${d.experts ?? 0} 人`;
     out["关联企业"] = `${d.enterprises ?? 0} 家`;
     out["风险预警"] = d.risk_level ? `风险等级 ${d.risk_level}` : "-";
     const types = [
@@ -1671,8 +1819,7 @@ function buildLiveSummary(
       ? levelParts.join("、")
       : "暂无分级数据";
     const cit = sr.citation || {};
-    out["论文被引情况"] =
-      cit.total > 0 ? `总被引 ${cit.total} 次｜最高 ${cit.max} 次` : "暂无数据";
+    out["论文被引情况"] = `总被引 ${cit.total ?? 0} 次｜最高 ${cit.max ?? 0} 次`;
     out["研究方向"] = (sr.paperTopics || []).slice(0, 5).join("、") || "-";
     out["共同贡献"] = (sr.sharedContribution || []).join("、") || "-";
     out["核心合作人员"] = (sr.coreCollaborators || []).join("、") || "暂无数据";
@@ -1846,6 +1993,9 @@ const liveRules = computed<Array<Record<string, any>>>(() => {
 });
 
 const liveEntityRows = computed(() => {
+  if (isLiveColleague.value) {
+    return colleagueEntityRows(liveResponse.value?.data?.graph?.nodes ?? [], selectedNode.value?.id);
+  }
   const selected = selectedNode.value;
   const entityConfidence = (value: number | undefined) =>
     isLiveColleague.value
@@ -1905,15 +2055,7 @@ const liveRelationRows = computed(() => {
             ["互动证据", alumniInteractionText(relation)] as const,
           ]
         : []),
-      [
-        "置信度",
-        isLiveColleague.value
-          ? colleagueConfidenceText(
-              relation.confidence,
-              "暂无（原图边未携带置信度字段）",
-            )
-          : formatConfidence(relation.confidence),
-      ] as const,
+      ["置信度", formatRelationConfidence(relation)] as const,
       ...((isLiveAlumni.value || isLiveCoop.value) && relation.confidenceSource
         ? [
             [
@@ -1926,6 +2068,13 @@ const liveRelationRows = computed(() => {
     ];
   });
 });
+
+const colleagueProvenance = computed(() => colleagueProvenanceCards(
+  liveResponse.value?.data?.graph?.nodes ?? [],
+  liveResponse.value?.data?.graph?.edges ?? [],
+  selectedNode.value?.id,
+  selectedEdge.value ? { source: selectedEdge.value.from, target: selectedEdge.value.to, label: selectedEdge.value.label } : undefined,
+));
 
 const liveProvenance = computed(() => {
   if (isLiveAlumni.value) return liveAlumniResult.value?.provenance ?? null;
@@ -3255,10 +3404,9 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
           count ? "success" : "info",
         );
         resultMode.value = "summary";
-        // 默认选中首条边：溯源 tab 直接出「关系溯源/两端实体来源」冒号排版（与同事关系溯源同款）；
-        // 点节点则切到单实体 dt/dd 排版，点其它边可切换。
+        // 不预选边：实体/关系页签默认展示全部；点击节点或边后再切到详情。
         selectedGraphNodeId.value = null;
-        selectedGraphEdgeId.value = graphEdges.value[0]?.id ?? null;
+        selectedGraphEdgeId.value = null;
       }
     } else if (props.moduleInfo.key === "industry-chain-event") {
       // 产业链点 TOP-N 事件关系
@@ -3345,10 +3493,9 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
           count ? "success" : "info",
         );
         resultMode.value = "summary";
-        // 默认选中首条边：溯源 tab 直接出「关系溯源/两端实体来源」冒号排版（与同事/企业关系同款）；
-        // 无事件时无边，溯源回退到链节点单实体 dt/dd。
+        // 不预选边：关系页签列出全部 TOP 事件/企业边；点击后再看单条详情。
         selectedGraphNodeId.value = null;
-        selectedGraphEdgeId.value = graphEdges.value[0]?.id ?? null;
+        selectedGraphEdgeId.value = null;
       }
     } else if (props.moduleInfo.key === "paper-cooperation") {
       const expertAIdRaw = parameterValues.value.expertAId ?? "";
@@ -3573,6 +3720,11 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   selectedGraphEdgeId.value = edge.id;
   selectedGraphNodeId.value = null;
   resultMode.value = "relation";
+}
+
+function clearGraphSelection() {
+  selectedGraphNodeId.value = null;
+  selectedGraphEdgeId.value = null;
 }
 </script>
 
@@ -3985,33 +4137,49 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
             >
           </nav>
         </template>
-        <dl
+        <div
           v-else-if="resultMode === 'entity' && liveEntityRows"
-          class="result-panel__table"
+          class="result-panel__detail"
         >
-          <div
-            v-for="([label, value], index) in liveEntityRows"
-            :key="`entity-${label}-${index}`"
-          >
-            <dt>{{ label }}</dt>
-            <dd>{{ value }}</dd>
+          <div v-if="selectedNode" class="result-panel__back">
+            <button type="button" @click="clearGraphSelection">
+              查看全部实体
+            </button>
+            <span>当前：{{ selectedNode.label }}</span>
           </div>
-        </dl>
+          <dl class="result-panel__table">
+            <div
+              v-for="([label, value], index) in liveEntityRows"
+              :key="`entity-${label}-${index}`"
+            >
+              <dt>{{ label }}</dt>
+              <dd>{{ value }}</dd>
+            </div>
+          </dl>
+        </div>
         <p v-else-if="resultMode === 'entity'" class="result-panel__empty">
           暂无实体数据，请先执行查询。
         </p>
-        <dl
+        <div
           v-else-if="resultMode === 'relation' && liveRelationRows"
-          class="result-panel__table"
+          class="result-panel__detail"
         >
-          <div
-            v-for="([label, value], index) in liveRelationRows"
-            :key="`rel-${label}-${index}`"
-          >
-            <dt>{{ label }}</dt>
-            <dd>{{ value }}</dd>
+          <div v-if="selectedEdge" class="result-panel__back">
+            <button type="button" @click="clearGraphSelection">
+              查看全部关系
+            </button>
+            <span>当前：已选中一条关系</span>
           </div>
-        </dl>
+          <dl class="result-panel__table">
+            <div
+              v-for="([label, value], index) in liveRelationRows"
+              :key="`rel-${label}-${index}`"
+            >
+              <dt>{{ label }}</dt>
+              <dd>{{ value }}</dd>
+            </div>
+          </dl>
+        </div>
         <p v-else-if="resultMode === 'relation'" class="result-panel__empty">
           暂无关系数据，请先执行查询。
         </p>
@@ -4043,6 +4211,20 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
                 >图空间 VID：<code>{{ ev.graphVid || "-" }}</code></span
               >
             </article>
+          </div>
+        </section>
+        <section
+          v-else-if="resultMode === 'provenance' && isLiveColleague && liveResponse"
+          class="result-provenance"
+        >
+          <header><strong>数据来源与证据链</strong><span>同事关系查询</span></header>
+          <div class="result-provenance__evidence-list">
+            <article v-for="card in colleagueProvenance" :key="card.id">
+              <header><strong>{{ card.title }}</strong></header>
+              <p v-for="row in card.rows" :key="row[0]"><b>{{ row[0] }}：</b>{{ row[1] }}</p>
+              <p v-for="(evidence, index) in card.evidence" :key="index">{{ evidence }}</p>
+            </article>
+            <p v-if="!colleagueProvenance.length">暂无可追溯对象，请先执行查询。</p>
           </div>
         </section>
         <section
@@ -4933,6 +5115,45 @@ function handleSelectGraphEdge(edge: GraphEdgeData) {
   font-size: 16px;
   line-height: 24px;
   font-weight: 600;
+}
+
+.result-panel__detail {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.result-panel__back {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-subtle);
+}
+
+.result-panel__back button {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.result-panel__back button:hover,
+.result-panel__back button:focus-visible {
+  border-color: var(--primary);
+}
+
+.result-panel__back span {
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .result-panel__table {

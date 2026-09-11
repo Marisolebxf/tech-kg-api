@@ -119,6 +119,90 @@ class FakeGraphSearchGateway:
 
 
 @pytest.mark.asyncio
+async def test_query_uses_affiliation_org_not_person_scholar_org() -> None:
+    gateway = FakeGraphSearchGateway()
+    gateway.expert = node(
+        "person_a",
+        ["Person"],
+        name_zh="张明远",
+        scholar_org="错误的展示机构",
+    )
+    gateway.colleague = node(
+        "person_b",
+        ["Person"],
+        name_zh="李佳宁",
+        scholar_org="另一个错误机构",
+    )
+    result = await ExpertColleagueRelationService().query(gateway, expert_id="person_a")
+
+    assert result["expert"]["organization"] == "中国科学院自动化研究所"
+    assert result["colleagues"][0]["colleague"]["organization"] == "中国科学院自动化研究所"
+    assert result["summary"]["coreExpertOrganization"] == "中国科学院自动化研究所"
+
+
+@pytest.mark.asyncio
+async def test_parent_and_subsidiary_orgs_are_not_colleagues() -> None:
+    gateway = FakeGraphSearchGateway()
+    parent = node("org_parent", ["Organization"], name_zh="某集团")
+    child = node("org_child", ["Organization"], name_zh="某子公司")
+    gateway.org = child
+    gateway.expert_aff_edge = edge(
+        "person_a",
+        "org_child",
+        "AFFILIATED_WITH",
+        affiliation_name="某子公司",
+        work_experience_date="2018-2023",
+        work_experience_department_zh="研发部",
+    )
+    gateway.colleague_aff_edge = edge(
+        "person_b",
+        "org_parent",
+        "AFFILIATED_WITH",
+        affiliation_name="某集团",
+        work_experience_date="2020-2025",
+        work_experience_department_zh="研发部",
+    )
+    hierarchy = edge("org_child", "org_parent", "SUBSIDIARY_OF")
+
+    async def subgraph(
+        node_id: str,
+        *,
+        depth: int,
+        limit: int,
+        direction: str = "both",
+        edge_type: str | None = None,
+        space: str | None = None,
+    ) -> dict[str, Any]:
+        gateway.api_calls.append(
+            {
+                "method": "GET",
+                "path": f"/api/v1/graph-search/subgraph/{node_id}",
+                "params": {"depth": depth, "direction": direction, "edge_type": edge_type},
+            }
+        )
+        if node_id == "person_a" and edge_type == "AFFILIATED_WITH":
+            return {"nodes": [gateway.expert, child], "edges": [gateway.expert_aff_edge]}
+        if node_id == "org_child":
+            return {
+                "nodes": [child, parent, gateway.expert],
+                "edges": [gateway.expert_aff_edge, hierarchy],
+            }
+        if node_id == "org_parent":
+            return {
+                "nodes": [parent, gateway.colleague],
+                "edges": [gateway.colleague_aff_edge],
+            }
+        if edge_type == "COAUTHOR_WITH":
+            return {"nodes": [gateway.expert], "edges": []}
+        return {"nodes": [gateway.expert, child], "edges": [gateway.expert_aff_edge]}
+
+    gateway.subgraph = subgraph  # type: ignore[method-assign]
+    result = await ExpertColleagueRelationService().query(gateway, expert_id="person_a")
+    assert result["total"] == 0
+    assert result["colleagues"] == []
+
+
+@pytest.mark.asyncio
 async def test_query_time_window_filters_without_clipping_employment_overlap() -> None:
     gateway = FakeGraphSearchGateway()
     result = await ExpertColleagueRelationService().query(
@@ -218,6 +302,13 @@ async def test_summary_and_graph_cover_tender_details() -> None:
     # 摘要机构须与共同机构（即图谱预览展示的机构）一致，即使专家节点自带其他 scholar_org
     assert summary["coreExpertOrganization"] == "中国科学院自动化研究所"
     assert summary["relationConfidence"] == result["colleagues"][0]["confidence"]
+    expert_edges = [
+        edge
+        for edge in result["graph"]["edges"]
+        if {edge["source"], edge["target"]} == {"person_a", "person_b"}
+    ]
+    assert [edge["label"] for edge in expert_edges] == ["同事关系"]
+    assert result["colleagues"][0]["coauthorEdge"]  # 合著仍作为证据保留
     node_types = {item["type"] for item in result["graph"]["nodes"]}
     assert {"expert", "organization", "paper"} <= node_types
     assert {item["label"] for item in result["graph"]["edges"]} >= {

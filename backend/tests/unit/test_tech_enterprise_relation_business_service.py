@@ -31,10 +31,12 @@ def _subgraph() -> dict:
             "labels": ["Person"],
             "properties": {
                 "name_cn": "左晶",
+                "work_experience_date": "2016-03 至 2024-12",
                 "source_table": "dwd_scholar",
                 "source_record_id": "left_jing",
                 "ingest_batch": "BATCH_20260823_092128_scholar_entities",
                 "ingest_time": "2026-08-23 09:21:28",
+                "confidence": 0.92,
             },
         },
         {
@@ -49,6 +51,12 @@ def _subgraph() -> dict:
                 "organization_id": "lvdie_org_id",
                 "ingest_batch": "ORG_DEV_FINAL_20260811",
                 "ingest_time": "2026-08-11T04:02:01+00:00",
+                "confidence": 0.85,
+                "extra_json": (
+                    '{"existing_payload": {"industry_l1_name": null},'
+                    '"source_records": {"dwd_org_org_product_info:x": '
+                    '{"main_prod": "谐波减速器"}}}'
+                ),
             },
         },
         {
@@ -135,6 +143,11 @@ async def test_run_parses_governance_and_project_cooperation(monkeypatch):
     assert rel.role_label == "副董事长"
     assert rel.role_level == "L1"
     assert rel.enterprise_background["stock_type"] == "中国_沪市A股_科创板"
+    # 治理边无任期时回退专家 work_experience_date；行业为空时回退主营产品
+    assert str(rel.period.start) == "2016-03"
+    assert str(rel.period.end) == "2024-12"
+    assert rel.tech_field == "谐波减速器"
+    assert resp.cooperation_fields == ["谐波减速器"]
     assert resp.enterprises == 1
     # 首要企业风险探测：mock 无 INVOLVED_IN 风险边 → 兜底文案
     assert rel.risk_summary == "暂无风险事件记录"
@@ -161,6 +174,7 @@ async def test_run_populates_entity_provenance(monkeypatch):
     assert expert_prov.sourceValue == "left_jing"
     assert expert_prov.ingestBatch == "BATCH_20260823_092128_scholar_entities"
     assert expert_prov.ingestTime == "2026-08-23 09:21:28"
+    assert expert_prov.confidence == 0.92
 
     # 企业节点：Organization + organization_id → 字段名 organization_id
     org_prov = resp.entity_provenance["org_lvdie"]
@@ -168,6 +182,7 @@ async def test_run_populates_entity_provenance(monkeypatch):
     assert org_prov.sourceField == "organization_id"
     assert org_prov.sourceValue == "lvdie_org_id"
     assert org_prov.ingestBatch == "ORG_DEV_FINAL_20260811"
+    assert org_prov.confidence == 0.85
 
 
 @pytest.mark.asyncio

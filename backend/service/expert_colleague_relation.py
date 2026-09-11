@@ -14,8 +14,6 @@ from service.base_module import KGModuleScaffoldService
 PERSON_LABELS = {"Person", "Scholar", "Expert"}
 ACHIEVEMENT_LABELS = {"Paper", "Project", "Patent", "Report", "Award"}
 TEAM_LABELS = {"Team", "Laboratory", "Department", "Project"}
-ORGANIZATION_LABELS = {"Organization", "Institution", "University", "Enterprise"}
-ORG_HIERARCHY_EDGE_TYPES = {"SUBSIDIARY_OF", "PARENT_OF", "PART_OF", "BELONGS_TO"}
 NAME_KEYS = ("name_zh", "name_cn", "name", "title", "name_en")
 ORG_KEYS = ("scholar_org", "organization", "affiliation_name", "institution_zh")
 DEPARTMENT_KEYS = ("work_experience_department_zh", "department", "team_name")
@@ -169,46 +167,13 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             ),
         )
         affiliations = self._affiliations(expert_node["id"], affiliation_graph)
-        direct_affiliations = list(affiliations)
-        # 将直接任职机构扩展到一跳上/下级机构，用于研究所-实验室、集团-子机构场景。
-        for affiliation in direct_affiliations:
-            hierarchy_graph = await gateway.subgraph(
-                affiliation["id"], depth=1, limit=100, direction="both", space=space
-            )
-            hierarchy_edges = [
-                edge
-                for edge in hierarchy_graph.get("edges", [])
-                if edge.get("type") in ORG_HIERARCHY_EDGE_TYPES
-                and affiliation["id"] in {str(edge.get("source")), str(edge.get("target"))}
-            ]
-            nodes = {str(node.get("id")): node for node in hierarchy_graph.get("nodes", [])}
-            for edge in hierarchy_edges:
-                related_id = (
-                    str(edge.get("target"))
-                    if str(edge.get("source")) == affiliation["id"]
-                    else str(edge.get("source"))
-                )
-                related = nodes.get(related_id)
-                if not related or not (self._labels(related) & ORGANIZATION_LABELS):
-                    continue
-                related_name = self._node_name(related)
-                if not related_name:
-                    continue
-                affiliations.append(
-                    {
-                        **affiliation,
-                        "id": related_id,
-                        "name": related_name,
-                        "entity": self._entity_data(related, {"name": related_name}),
-                        "hierarchyPath": [affiliation["name"], related_name],
-                    }
-                )
-        affiliations = list({item["id"]: item for item in affiliations}.values())
+        # 同事只按直接 AFFILIATED_WITH 的同一机构顶点判定。上下级机构
+        # （集团/子公司、研究所/实验室）不是同一任职点，不能当成同事。
         if organization:
             affiliations = [
                 item for item in affiliations if self._contains(item["name"], organization)
             ]
-        if not expert.get("organization") and affiliations:
+        if affiliations:
             expert["organization"] = affiliations[0]["name"]
 
         coauthor_counts = self._coauthor_counts(expert_node["id"], coauthor_graph)
@@ -325,7 +290,6 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
                         achievements=achievements,
                         co_papers=co_papers,
                         coauthor_edge=coauthor_edges.get(candidate_id),
-                        hierarchy_path=affiliation.get("hierarchyPath"),
                         expert_edge_properties=affiliation.get("edgeProperties", {}),
                         colleague_edge_properties=candidate_edge_props,
                     )
@@ -428,8 +392,10 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             scenes.append("论文合作")
         if teams:
             scenes.append("项目组协作")
+        colleague = self._expert(node)
+        colleague["organization"] = organization
         return {
-            "colleague": self._expert(node),
+            "colleague": colleague,
             "commonOrganization": organization,
             "organizationId": organization_id,
             "organizationEntity": organization_entity,
@@ -515,9 +481,9 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             {
                 "name": "团队归属规则",
                 "type": "关系匹配规则",
-                "target": "AFFILIATED_WITH 任职边、机构层级边、部门/团队字段与节点",
+                "target": "AFFILIATED_WITH 任职边、部门/团队字段与节点",
                 "trigger": "任职时间交集成立后",
-                "logic": "匹配共同任职机构或一跳机构层级（SUBSIDIARY_OF/PARENT_OF/PART_OF/BELONGS_TO），归一化比较部门/团队字段（work_experience_department_zh/department/team_name），并匹配 Team/Laboratory/Department/Project 共同节点，标注所属团队/项目组；同机构、同部门、共享团队分别计入置信度加权（0.42/0.12/0.05）。",
+                "logic": "只匹配双方直接 AFFILIATED_WITH 的同一机构顶点（不把集团/子公司、研究所/实验室等上下级机构当成同一任职点），归一化比较部门/团队字段（work_experience_department_zh/department/team_name），并匹配 Team/Laboratory/Department/Project 共同节点，标注所属团队/项目组；同机构、同部门、共享团队分别计入置信度加权（0.42/0.12/0.05）。",
                 "output": "共同机构、所属部门/团队、协作场景",
                 "threshold": "共同机构为同事必要前提；部门/团队匹配用于置信度加权，非强制",
                 "audit": "任职来源冲突时不生成同事关系，计入待复核",
@@ -631,17 +597,6 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
                     "ruleName": "同事关系判定规则",
                 },
             )
-            coauthor_edge = item.get("coauthorEdge") or {}
-            if coauthor_edge:
-                add_edge(
-                    coauthor_edge["source"],
-                    coauthor_edge["target"],
-                    "COAUTHOR_WITH",
-                    {
-                        **coauthor_edge.get("properties", {}),
-                        "existingGraphEdge": True,
-                    },
-                )
             org_id = item.get("organizationId")
             if not org_id:
                 continue

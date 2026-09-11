@@ -76,7 +76,12 @@ def test_affiliation_confidence_distinguishes_source_id_and_placeholder(
         },
     ]
     monkeypatch.setattr(load_scholar_relations, "_iter_scholar_affiliations", lambda _: rows)
-    graph = _GraphStub()
+    graph = _GraphStub(
+        {
+            "org_o1": SimpleNamespace(labels=["Organization"], properties={"name_cn": "机构一"}),
+            "org_er": SimpleNamespace(labels=["Organization"], properties={"name_cn": "机构二"}),
+        }
+    )
 
     # org_index: 机构二 在图里已存在 → s2 走名字 join(替代旧 md5 桩 vid)
     stats = load_scholar_relations.load_affiliations(
@@ -97,6 +102,53 @@ def test_affiliation_confidence_distinguishes_source_id_and_placeholder(
     assert placeholder_props["confidence"] == CONFIDENCE_PLACEHOLDER_ORG
     assert placeholder_props["organization_base"] == ""
     assert placeholder_props["organization_id"] == ""
+
+
+def test_affiliation_skips_when_org_id_not_in_graph(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = [
+        {
+            "scholar_id": "s1",
+            "scholar_org_id": "missing",
+            "org_zh": "幽灵机构",
+            "org_en": "",
+        }
+    ]
+    monkeypatch.setattr(load_scholar_relations, "_iter_scholar_affiliations", lambda _: rows)
+    graph = _GraphStub()
+
+    stats = load_scholar_relations.load_affiliations(None, graph, dry_run=False)
+
+    assert stats == {"written": 0, "skipped_no_org": 1, "placeholder_org": 0}
+    assert graph.edges == []
+
+
+def test_affiliation_skips_virtual_and_demo_org_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = [
+        {
+            "scholar_id": "kgtest_1",
+            "scholar_org_id": "o1",
+            "org_zh": "机构一",
+            "org_en": "",
+        },
+        {
+            "scholar_id": "c9915341",
+            "scholar_org_id": None,
+            "org_zh": "濠江測試數碼有限公司033",
+            "org_en": "",
+        },
+    ]
+    monkeypatch.setattr(load_scholar_relations, "_iter_scholar_affiliations", lambda _: rows)
+    graph = _GraphStub(
+        {"org_o1": SimpleNamespace(labels=["Organization"], properties={"name_cn": "机构一"})}
+    )
+
+    stats = load_scholar_relations.load_affiliations(
+        None, graph, dry_run=False, org_index={"濠江測試數碼有限公司033": "org_demo"}
+    )
+
+    assert stats["written"] == 0
+    assert stats["skipped_no_org"] == 2
+    assert graph.edges == []
 
 
 def test_authored_by_fallback_records_cross_domain_confidence(

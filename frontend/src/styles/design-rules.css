@@ -1081,8 +1081,8 @@ body {
 }
 
 /*
- * Split-screen/tablet layout: the algorithm panels stack below 1280px, so the
- * workspace (rather than fixed-height child panels) must own vertical scrolling.
+ * Compact desktop layout keeps the graph and details side by side. The
+ * workspace owns vertical scrolling when there is less room below the form.
  */
 @media (min-width: 768px) and (max-width: 1280px) {
   .app-workspace:has(> .business-service) {
@@ -1100,7 +1100,7 @@ body {
 
   .app-workspace .business-service .business-service__main {
     flex: none;
-    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-columns: minmax(0, 633fr) minmax(0, 511fr) !important;
     height: auto !important;
     min-height: 0 !important;
     overflow: visible !important;
@@ -1150,6 +1150,8 @@ body {
   }
 
   .app-workspace .business-service .developer-view__cards {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
     height: auto !important;
     min-height: 0 !important;
     overflow: visible !important;
@@ -1722,14 +1724,14 @@ body {
   }
 
   .app-workspace .business-service .developer-view__cards {
-    display: flex !important;
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
     flex: 0 0 auto !important;
     width: 100% !important;
     height: auto !important;
     min-height: auto !important;
     gap: 20px !important;
     overflow: visible !important;
-    flex-direction: column !important;
   }
 
   .app-workspace .business-service .developer-view__cards > .kg-panel {
@@ -1783,7 +1785,7 @@ body {
 
   .app-workspace .business-service .business-service__main {
     flex: none !important;
-    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-columns: minmax(0, 633fr) minmax(0, 511fr) !important;
     height: auto !important;
     min-height: 0 !important;
     overflow: visible !important;

@@ -169,6 +169,32 @@ def test_clean_text_and_empty_handling() -> None:
     assert clean_text(None) is None
 
 
+def test_clean_text_repairs_latin1_mojibake_but_keeps_real_cjk() -> None:
+    from script.organization_etl_common import repair_mojibake
+
+    garbled = "张颖".encode().decode("latin1")
+    assert garbled != "张颖"
+    assert repair_mojibake(garbled) == "张颖"
+    assert clean_text(garbled) == "张颖"
+    assert clean_text("清华大学") == "清华大学"
+    assert clean_text("Acme Inc") == "Acme Inc"
+    assert clean_text("café") == "café"
+
+
+def test_virtual_source_row_rejects_mock_kgtest_and_demo_orgs() -> None:
+    from script.organization_etl_common import is_virtual_source_row
+
+    assert is_virtual_source_row({"data_source": "mock"})
+    assert is_virtual_source_row({"org_id": "MOCK_ORG_001", "name_cn": "某某公司"})
+    assert is_virtual_source_row({"scholar_id": "kgtest_abc", "name_zh": "张三"})
+    assert is_virtual_source_row({"scholar_org_name_zh": "濠江測試數碼有限公司033"})
+    assert is_virtual_source_row({"extra_json": '{"id":"MOCK_ORG_9"}'})
+    assert not is_virtual_source_row(
+        {"org_id": "000213e718b09bd45e71789553cc53d7", "name_cn": "新智认知"}
+    )
+    assert not is_virtual_source_row({"scholar_id": "c9915341", "scholar_org_name_zh": "清华大学"})
+
+
 def test_date_and_datetime_conversion() -> None:
     assert clean_text(date(2026, 7, 23)) == "2026-07-23"
     assert clean_text(datetime(2026, 7, 23, 9, 8, 7)) == "2026-07-23 09:08:07"

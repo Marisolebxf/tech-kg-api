@@ -768,12 +768,40 @@ RELATION_KEYS = tuple(dict.fromkeys(spec.key for spec in RELATION_SPECS))
 assert {spec.source_table for spec in RELATION_SPECS} <= set(DOMAIN_TABLE_BY_NAME)
 
 
+_CJK_RE = re.compile(r"[一-鿿]")
+_MOJIBAKE_HINT_RE = re.compile(r"[åæøçéèêëìíîïðñòóôöùúûüÿÄÅÆÇÉÑÖØÜß¼½¾¤¢£¥¦§¨©ª«¬®¯°±²³´µ¶·¸¹º»]")
+
+
+def repair_mojibake(value: str) -> str:
+    """Repair UTF-8 text that was decoded as latin1/cp1252 then stored as utf8mb4.
+
+    Real CJK is left untouched. Latin/English without mojibake hints is left
+    untouched. Only strings that round-trip to CJK via latin1/cp1252→utf-8
+    are rewritten (e.g. ``å¼\\xa0é¢‘`` → ``张颖``).
+    """
+    if not value or _CJK_RE.search(value):
+        return value
+    if not _MOJIBAKE_HINT_RE.search(value) and "�" not in value:
+        return value
+    for encoding in ("latin1", "cp1252"):
+        try:
+            repaired = value.encode(encoding).decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+        if repaired != value and _CJK_RE.search(repaired):
+            return repaired
+    return value
+
+
 def clean_text(value: Any, *, max_length: int = MAX_TEXT_LENGTH) -> str | None:
     """Trim text-like input and return None for null or blank values."""
     if value is None:
         return None
     if isinstance(value, bytes):
-        value = value.decode("utf-8", errors="replace")
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:
+            value = value.decode("latin1")
     if isinstance(value, datetime):
         result = value.isoformat(sep=" ")
     elif isinstance(value, date):
@@ -782,6 +810,7 @@ def clean_text(value: Any, *, max_length: int = MAX_TEXT_LENGTH) -> str | None:
         result = str(value).strip()
     if not result:
         return None
+    result = repair_mojibake(result)
     if len(result) > max_length:
         logger.warning("truncate overlong value from %d to %d characters", len(result), max_length)
         result = result[:max_length]
@@ -790,10 +819,58 @@ def clean_text(value: Any, *, max_length: int = MAX_TEXT_LENGTH) -> str | None:
 
 VIRTUAL_SOURCE_MARKERS: tuple[str, ...] = ("mock", "stub", "virtual", "placeholder", "test")
 VIRTUAL_SOURCE_FIELDS: tuple[str, ...] = ("data_source", "source_system")
+VIRTUAL_ID_FIELDS: tuple[str, ...] = (
+    "org_id",
+    "organization_id",
+    "company_id",
+    "scholar_id",
+    "entity_eid",
+    "scholar_org_id",
+)
+VIRTUAL_ID_PREFIXES: tuple[str, ...] = (
+    "mock_org",
+    "stub_org",
+    "virtual_org",
+    "placeholder_org",
+    "org_stub",
+    "kgtest",
+)
+VIRTUAL_EXTRA_MARKERS: tuple[str, ...] = (
+    "mock_org",
+    "stub_org",
+    "virtual_org",
+    "placeholder_org",
+    "test_org",
+)
+DEMO_ORG_NAME_MARKERS: tuple[str, ...] = (
+    "濠江測試",
+    "濠江测试",
+    "測試數碼有限公司",
+    "测试数码有限公司",
+)
+VIRTUAL_NAME_FIELDS: tuple[str, ...] = (
+    "name_cn",
+    "name_zh",
+    "name_en",
+    "company_name",
+    "org_loc_name",
+    "scholar_org_name_zh",
+    "scholar_org_name_en",
+    "work_experience_institution_zh",
+    "work_experience_institution_en",
+)
+
+
+def _is_synthetic_token(value: str) -> bool:
+    normalized = value.casefold().replace("-", "_")
+    return any(
+        normalized == prefix or normalized.startswith(prefix + "_") or normalized.startswith(prefix)
+        for prefix in VIRTUAL_ID_PREFIXES
+    )
 
 
 def is_virtual_source_row(row: Mapping[str, Any]) -> bool:
-    """Reject explicitly labelled synthetic organization source records."""
+    """Reject synthetic / demo / kgtest source records that must not enter the graph."""
     for field_name in VIRTUAL_SOURCE_FIELDS:
         value = clean_text(row.get(field_name))
         if value is None:
@@ -807,6 +884,22 @@ def is_virtual_source_row(row: Mapping[str, Any]) -> bool:
                 or ("_" + marker + "_") in normalized
             ):
                 return True
+    for field_name in VIRTUAL_ID_FIELDS:
+        raw = row.get(field_name)
+        if raw is None:
+            continue
+        token = str(raw).strip()
+        if token and _is_synthetic_token(token):
+            return True
+    extra = row.get("extra_json")
+    extra_text = extra if isinstance(extra, str) else (clean_text(extra) or "")
+    extra_l = extra_text.casefold()
+    if extra_l and any(marker in extra_l for marker in VIRTUAL_EXTRA_MARKERS):
+        return True
+    for field_name in VIRTUAL_NAME_FIELDS:
+        value = clean_text(row.get(field_name))
+        if value and any(marker in value for marker in DEMO_ORG_NAME_MARKERS):
+            return True
     return False
 
 

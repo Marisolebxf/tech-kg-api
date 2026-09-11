@@ -17,8 +17,9 @@
   * 只做关系抽取，不新建 Person / Organization / Paper 顶点；顶点由对应领域批次写入。
   * 目标顶点使用命名约定：
         Person       -> ``person_{scholar_id}``
-        Organization -> ``org_{scholar_org_id}`` 优先，否则 ``org_{md5(name)[:16]}``
+        Organization -> ``org_{scholar_org_id}`` 优先；无 id 时按机构名匹配已入图 Organization
         Paper        -> ``paper_{paper_id}``
+  * 虚拟/测试/乱码源行、以及目标机构未入图时跳过任职边，不建桩机构。
   * ``merge_edge`` 幂等写入，重复执行不会产生重复边。
 
 用法::
@@ -54,6 +55,7 @@ from sqlalchemy import select, text
 from db_model.scholar import DwdScholarCoauthor, DwdScholarPaperRelation
 from infra.graph_db import get_trs_graph_client
 from infra.mysql import MySQLClient
+from script.organization_etl_common import clean_text, is_virtual_source_row
 from script.scholar_provenance import (
     CONFIDENCE_CROSS_DOMAIN_ID,
     CONFIDENCE_PLACEHOLDER_ORG,
@@ -246,11 +248,11 @@ def _iter_scholar_affiliations(
             yield {
                 "scholar_id": r.scholar_id,
                 "scholar_org_id": r.scholar_org_id,
-                "org_zh": r.scholar_org_name_zh,
-                "org_en": r.scholar_org_name_en,
-                "work_experience_date": r.work_experience_date or "",
-                "work_experience_department_zh": r.work_experience_department_zh or "",
-                "work_experience_position_zh": r.work_experience_position_zh or "",
+                "org_zh": clean_text(r.scholar_org_name_zh) or "",
+                "org_en": clean_text(r.scholar_org_name_en) or "",
+                "work_experience_date": clean_text(r.work_experience_date) or "",
+                "work_experience_department_zh": clean_text(r.work_experience_department_zh) or "",
+                "work_experience_position_zh": clean_text(r.work_experience_position_zh) or "",
             }
         offset += len(rows)
         if len(rows) < batch_size:
@@ -422,11 +424,11 @@ def _iter_scholar_educations(session, batch_size: int = 500) -> Iterable[dict]:
         for r in rows:
             yield {
                 "scholar_id": r.scholar_id,
-                "institution_zh": (r.education_background_institution_zh or "").strip(),
-                "institution_en": (r.education_background_institution_en or "").strip(),
-                "degree_zh": (r.education_background_degree_zh or "").strip(),
-                "degree_en": (r.education_background_degree_en or "").strip(),
-                "education_date": (r.education_background_date or "").strip(),
+                "institution_zh": clean_text(r.education_background_institution_zh) or "",
+                "institution_en": clean_text(r.education_background_institution_en) or "",
+                "degree_zh": clean_text(r.education_background_degree_zh) or "",
+                "degree_en": clean_text(r.education_background_degree_en) or "",
+                "education_date": clean_text(r.education_background_date) or "",
             }
         offset += len(rows)
         if len(rows) < batch_size:
@@ -501,9 +503,11 @@ def load_affiliations(
 ) -> dict:
     """写入 AFFILIATED_WITH 边。
 
-    置信度按机构标识来源分档：源表带 ``scholar_org_id`` 时为
+    置信度按机构标识来源分档：源表带 ``scholar_org_id`` 且该机构已入图时为
     :data:`~script.scholar_provenance.CONFIDENCE_SOURCE_PRIMARY_KEY`；只能按机构名
-    md5 生成桩机构时降为 :data:`~script.scholar_provenance.CONFIDENCE_PLACEHOLDER_ORG`。
+    匹配已存在 Organization 时降为
+    :data:`~script.scholar_provenance.CONFIDENCE_PLACEHOLDER_ORG`。机构未入图、
+    虚拟/测试/乱码源行一律跳过，不建桩。
 
     Returns:
         统计字典，含写入条数、无机构跳过条数、桩机构条数。
@@ -517,13 +521,50 @@ def load_affiliations(
         else _iter_scholar_affiliations(session)
     )
     source_matches: dict[tuple[str, str], str | None] = {}
+    org_exists: dict[str, bool] = {}
+
+    def _org_in_graph(vid: str) -> bool:
+        if vid in org_exists:
+            return org_exists[vid]
+        try:
+            node = graph.get_node(vid)
+        except Exception:  # noqa: BLE001
+            node = None
+        exists = node is not None and "Organization" in getattr(node, "labels", [])
+        org_exists[vid] = exists
+        return exists
+
     for rec in records:
         src = person_vid(rec["scholar_id"])
         org_name = rec["org_zh"] or rec["org_en"] or ""
-        has_org_id = bool(rec["scholar_org_id"] and rec["scholar_org_id"].strip())
+        if is_virtual_source_row(
+            {
+                "scholar_id": rec["scholar_id"],
+                "scholar_org_id": rec.get("scholar_org_id"),
+                "scholar_org_name_zh": rec.get("org_zh"),
+                "scholar_org_name_en": rec.get("org_en"),
+            }
+        ):
+            logger.info(
+                "任职边跳过 scholar_id=%s org=%s：虚拟/测试/乱码源行",
+                rec["scholar_id"],
+                org_name,
+            )
+            skipped += 1
+            continue
+        has_org_id = bool(rec["scholar_org_id"] and str(rec["scholar_org_id"]).strip())
         if has_org_id:
-            # 源表带 scholar_org_id:直接用 org_{scholar_org_id}
+            # 源表带 scholar_org_id:直接用 org_{scholar_org_id}，但机构必须已入图。
             dst = org_vid(rec["scholar_org_id"], org_name)
+            if not dst or not _org_in_graph(dst):
+                logger.warning(
+                    "任职边跳过 scholar_id=%s org=%s：scholar_org_id=%s 对应机构未入图",
+                    rec["scholar_id"],
+                    org_name,
+                    rec["scholar_org_id"],
+                )
+                skipped += 1
+                continue
             conf = confidence_props(
                 CONFIDENCE_SOURCE_PRIMARY_KEY,
                 "source_org_id",

@@ -214,6 +214,32 @@ def test_entity_renderer_cannot_generate_edges() -> None:
     assert "INSERT EDGE" not in query
 
 
+def test_reconcile_adds_org_person_fields_missing_from_scholar_tag() -> None:
+    """学者域先建的 Person 只有 name_zh 时，init-schema 必须 ALTER 补 name_cn。"""
+
+    class DescribeGraph(FakeGraph):
+        def execute_read(self, query: str) -> SimpleNamespace:
+            self.reads.append(query)
+            if "DESCRIBE TAG `Person`" in query or "DESCRIBE TAG Person" in query:
+                return SimpleNamespace(
+                    records=[
+                        {"Field": "name_zh"},
+                        {"Field": "name_en"},
+                        {"Field": "organization_id"},
+                        {"Field": "confidence"},
+                    ]
+                )
+            return SimpleNamespace(records=[{"Field": "organization_id"}, {"Field": "confidence"}])
+
+    graph = DescribeGraph()
+    entity.reconcile_existing_schema(graph)
+    person_alters = [w for w in graph.writes if "ALTER TAG `Person`" in w]
+    assert any("`name_cn`" in w for w in person_alters)
+    assert any("`person_kind`" in w for w in person_alters)
+    assert any("`birth_date`" in w for w in person_alters)
+    assert not any("`name_en`" in w for w in person_alters)
+
+
 def test_schema_initializer_skips_standalone_use_statement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

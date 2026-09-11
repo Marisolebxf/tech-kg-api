@@ -8,7 +8,7 @@
   1. 链节点 subgraph（BELONGS_TO_NODE + HAS_NODE）取链节点信息 + 关联企业 + 产业链
   2. 每个企业的 subgraph（INVOLVED_IN + HAS_NEWS）取事件 + 资讯，并行
   3. 事件影响力排序（event_type 权重 × 金额 × 时间新鲜度 × chain_score）→ TOP-N
-  4. TOP 事件企业的 governance 边（EXECUTIVE_OF 等）查专家，并行
+  4. TOP 事件企业的 Person→Organization 任职/治理边查专家，并行
   5. 风险等级 + event→org→expert 关联
 """
 
@@ -37,7 +37,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_BASE = os.getenv("BUSINESS_API_BASE", "http://127.0.0.1:8000")
 SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 
-GOVERNANCE_EDGES = {"EXECUTIVE_OF", "LEGAL_REP_OF", "ACTUAL_CONTROLLER_OF"}
+# 与重点科技企业关系 GOVERNANCE_MODE 对齐：事件企业上一跳 Person 边都算关联专家。
+# 仅查 EXECUTIVE_OF/LEGAL_REP_OF/ACTUAL_CONTROLLER_OF 会漏任职学者和股东/受益人；
+# SHAREHOLDER_OF 等也可能是机构→机构，必须再按 Person 过滤。
+PERSON_ORG_EDGE_ROLES = {
+    "EXECUTIVE_OF": "高管任职",
+    "LEGAL_REP_OF": "法人代表",
+    "ACTUAL_CONTROLLER_OF": "实际控制",
+    "BENEFICIAL_OWNER_OF": "受益所有",
+    "SHAREHOLDER_OF": "股东持股",
+    "AFFILIATED_WITH": "任职",
+}
 
 # 进程内 dev 空间 graph client（缓存，避免每次请求重建连接）
 _dev_client: TRSGraphClient | None = None
@@ -166,37 +176,136 @@ def _fetch_org_events_sync(
     return events
 
 
+def _is_person_node(pid: str, labels: list[str] | None) -> bool:
+    """只保留人才/专家顶点，丢掉股东边另一端的机构等。"""
+    if labels and "Person" in labels:
+        return True
+    return pid.startswith("person_")
+
+
 def _fetch_org_governance_sync(
     client: TRSGraphClient, org_id: str
 ) -> list[tuple[str, str | None, dict[str, Any]]]:
-    """同步取单个企业的 governance 边关联专家。
+    """同步取单个企业关联的科技专家/人才。
 
-    返回 [(expert_id, position, expert_props), ...]——顺带取 Person 节点属性，
+    查 Person→Organization 的任职与治理入边（与重点科技企业关系同一组边类型）。
+    返回 [(expert_id, role, expert_props), ...]——顺带取 Person 节点属性，
     供专家姓名与实体溯源使用（缺失时 props 为空 dict，前端回退 vid 展示）。
     """
     seen_pids: set[str] = set()
     experts: list[tuple[str, str | None, dict[str, Any]]] = []
-    for et in GOVERNANCE_EDGES:
+    for et, default_role in PERSON_ORG_EDGE_ROLES.items():
         try:
             edge_list = client.get_node_edges(org_id, direction="in", edge_type=et, limit=20)
         except Exception:
             continue
         for e in edge_list:
             pid = str(e.source_id if str(e.target_id) == org_id else e.target_id)
-            if pid and pid != org_id and pid not in seen_pids:
-                seen_pids.add(pid)
-                try:
-                    node = client.get_node(pid)
-                except Exception:
-                    node = None
-                experts.append(
-                    (
-                        pid,
-                        (e.properties or {}).get("position"),
-                        dict(node.properties or {}) if node else {},
-                    )
-                )
+            if not pid or pid == org_id or pid in seen_pids:
+                continue
+            try:
+                node = client.get_node(pid)
+            except Exception:
+                node = None
+            labels = list(node.labels or []) if node else []
+            if not _is_person_node(pid, labels):
+                continue
+            seen_pids.add(pid)
+            edge_props = e.properties or {}
+            node_props = dict(node.properties or {}) if node else {}
+            role = (
+                edge_props.get("position")
+                or edge_props.get("work_experience_position_zh")
+                or default_role
+            )
+            experts.append((pid, role, node_props))
     return experts
+
+
+# 默认 max_orgs 按 chain_score 截断时，有高管/任职的企业可能排在窗口外
+# （如 IC0007007 的瑞芯微约第 29）。首轮 TOP-N 无专家时，再扫后续企业补事件。
+EXPERT_SCAN_EXTRA_ORGS = 30
+EXPERT_PROBE_LIMIT = 10
+
+
+def _merge_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: dict[str, dict[str, Any]] = {}
+    for ev in events:
+        eid = ev.get("event_id")
+        if not eid:
+            continue
+        if eid not in seen or ev.get("chain_score", 0) > seen[eid].get("chain_score", 0):
+            seen[eid] = ev
+    return list(seen.values())
+
+
+def _score_and_rank(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for ev in events:
+        ev["_score"] = _impact_score(
+            ev.get("event_type"),
+            ev.get("amount"),
+            ev.get("occur_date"),
+            ev.get("chain_score", 0),
+        )
+    events.sort(key=lambda x: x["_score"], reverse=True)
+    return events
+
+
+def _select_top_covering_experts(
+    ranked_events: list[dict[str, Any]],
+    top_n: int,
+    experts_by_org: dict[str, list],
+) -> list[dict[str, Any]]:
+    """影响力 TOP-N，若全无专家则用一条有专家的事件替换末位，保证能展示关联。"""
+    top = ranked_events[:top_n]
+    if any(experts_by_org.get(ev.get("org_id") or "") for ev in top):
+        return top
+    for ev in ranked_events[top_n:]:
+        if experts_by_org.get(ev.get("org_id") or ""):
+            if not top:
+                return [ev]
+            replaced = [item for item in top if item.get("event_id") != ev.get("event_id")]
+            return replaced[: top_n - 1] + [ev]
+    return top
+
+
+async def _gather_org_events(
+    client: TRSGraphClient, orgs: list[tuple[str, float]]
+) -> list[dict[str, Any]]:
+    if not orgs:
+        return []
+    results = await asyncio.gather(
+        *[
+            asyncio.to_thread(_fetch_org_events_sync, client, org_vid, chain_score)
+            for org_vid, chain_score in orgs
+        ],
+        return_exceptions=True,
+    )
+    events: list[dict[str, Any]] = []
+    for org, result in zip(orgs, results, strict=False):
+        if isinstance(result, Exception):
+            logger.warning("subgraph %s 失败: %s", org[0], result)
+            continue
+        events.extend(result)
+    return events
+
+
+async def _gather_org_experts(
+    client: TRSGraphClient, org_ids: list[str] | set[str]
+) -> dict[str, list[tuple[str, str | None, dict[str, Any]]]]:
+    ordered = [oid for oid in org_ids if oid]
+    if not ordered:
+        return {}
+    results = await asyncio.gather(
+        *[asyncio.to_thread(_fetch_org_governance_sync, client, oid) for oid in ordered],
+        return_exceptions=True,
+    )
+    out: dict[str, list[tuple[str, str | None, dict[str, Any]]]] = {}
+    for oid, result in zip(ordered, results, strict=False):
+        if isinstance(result, Exception):
+            continue
+        out[oid] = result
+    return out
 
 
 EVENT_WEIGHT = {
@@ -389,28 +498,17 @@ class IndustryNodeTopEventsService:
         # 按 chain_score 排序。未指定 event_type 时只取 top max_orgs 家企业查事件（避免过多调用）；
         # 指定 event_type 时带目标事件的企业可能不在 chain_score 前列（如资讯多在中小链上企业），
         # 扩大为全链扫描（上限 200 家），保证筛选条件真实命中而非被截断成空结果。
-        orgs.sort(key=lambda x: x[1], reverse=True)
-        scan_window = min(len(orgs), 200) if req.event_type else req.max_orgs
-        orgs = orgs[:scan_window]
+        all_orgs = orgs
+        all_orgs.sort(key=lambda x: x[1], reverse=True)
+        scan_window = min(len(all_orgs), 200) if req.event_type else req.max_orgs
+        orgs = all_orgs[:scan_window]
         if not orgs:
             resp.evidence.append(f"链节点 {req.chain_node_id} 无关联企业")
             return resp
 
         # 2) 每个企业并行取 INVOLVED_IN 事件 + HAS_NEWS 资讯
         #    News 节点统一记为 event_type=news，参与影响力排序（资讯权重低，补"发展趋势"维度）
-        org_event_lists = await asyncio.gather(
-            *[
-                asyncio.to_thread(_fetch_org_events_sync, client, org_vid, chain_score)
-                for org_vid, chain_score in orgs
-            ],
-            return_exceptions=True,
-        )
-        events: list[dict[str, Any]] = []
-        for org_vid, result in zip(orgs, org_event_lists, strict=False):
-            if isinstance(result, Exception):
-                logger.warning("subgraph %s 失败: %s", org_vid[0], result)
-                continue
-            events.extend(result)
+        events = await _gather_org_events(client, orgs)
 
         # 筛选
         def _keep(ev):
@@ -425,27 +523,56 @@ class IndustryNodeTopEventsService:
                         return False
             return True
 
-        events = [ev for ev in events if _keep(ev)]
-        # 去重
-        seen = {}
-        for ev in events:
-            if (
-                ev["event_id"] not in seen
-                or ev["chain_score"] > seen[ev["event_id"]]["chain_score"]
-            ):
-                seen[ev["event_id"]] = ev
-        events = list(seen.values())
-
-        # 排序 → TOP-N
-        for ev in events:
-            ev["_score"] = _impact_score(
-                ev.get("event_type"),
-                ev.get("amount"),
-                ev.get("occur_date"),
-                ev.get("chain_score", 0),
-            )
-        events.sort(key=lambda x: x["_score"], reverse=True)
+        events = _merge_events([ev for ev in events if _keep(ev)])
+        events = _score_and_rank(events)
         top = events[: req.top_n]
+        top_org_ids = {ev.get("org_id") for ev in top if ev.get("org_id")}
+        experts_by_org = await _gather_org_experts(client, top_org_ids)
+
+        # TOP 事件全无专家时：先查扫描窗内其余有事件的企业（瑞芯微在 max_orgs=50
+        # 窗内仍进不了 impact TOP-10），再探测窗外企业。命中后替换末位。
+        scanned = {oid for oid, _ in orgs}
+
+        def _has_expert() -> bool:
+            return any(people for people in experts_by_org.values())
+
+        if top and not _has_expert():
+            rest_org_ids = list(
+                dict.fromkeys(
+                    ev.get("org_id")
+                    for ev in events[req.top_n :]
+                    if ev.get("org_id") and ev.get("org_id") not in experts_by_org
+                )
+            )
+            if rest_org_ids:
+                experts_by_org.update(await _gather_org_experts(client, rest_org_ids))
+        if top and not _has_expert():
+            extra_orgs = [item for item in all_orgs if item[0] not in scanned][
+                :EXPERT_SCAN_EXTRA_ORGS
+            ]
+            extra_hits: list[tuple[str, float]] = []
+            extra_experts: dict[str, list[tuple[str, str | None, dict[str, Any]]]] = {}
+            for i in range(0, len(extra_orgs), EXPERT_PROBE_LIMIT):
+                batch = extra_orgs[i : i + EXPERT_PROBE_LIMIT]
+                probed = await _gather_org_experts(client, [oid for oid, _ in batch])
+                for oid, score in batch:
+                    people = probed.get(oid) or []
+                    if people:
+                        extra_hits.append((oid, score))
+                        extra_experts[oid] = people
+            if extra_hits:
+                extra_events = await _gather_org_events(client, extra_hits)
+                extra_events = _merge_events([ev for ev in extra_events if _keep(ev)])
+                if extra_events:
+                    events = _score_and_rank(_merge_events(events + extra_events))
+                    experts_by_org.update(extra_experts)
+                    orgs = orgs + extra_hits
+                    scanned.update(oid for oid, _ in extra_hits)
+        top = _select_top_covering_experts(events, req.top_n, experts_by_org)
+        top_org_ids = {ev.get("org_id") for ev in top if ev.get("org_id")}
+        missing = [oid for oid in top_org_ids if oid not in experts_by_org]
+        if missing:
+            experts_by_org.update(await _gather_org_experts(client, missing))
 
         resp.events = len(top)
         resp.top_events = [
@@ -473,23 +600,9 @@ class IndustryNodeTopEventsService:
             resp.risk_level = "低"
         resp.confidence = RISK_LEVEL_CONFIDENCE.get(resp.risk_level, 0.6)
 
-        # 3) TOP 事件企业并行查专家（governance 边）
-        top_org_ids = {ev.get("org_id") for ev in top if ev.get("org_id")}
         # enterprises 与 top_events/relations 使用同一个 TOP-N 结果集合，不能返回
         # 链节点下未命中事件或未进入 TOP-N 的全量企业数。
         resp.enterprises = len(top_org_ids)
-        gov_results = await asyncio.gather(
-            *[
-                asyncio.to_thread(_fetch_org_governance_sync, client, org_id)
-                for org_id in top_org_ids
-            ],
-            return_exceptions=True,
-        )
-        experts_by_org: dict[str, list[tuple[str, str | None, dict[str, Any]]]] = {}
-        for org_id, result in zip(top_org_ids, gov_results, strict=False):
-            if isinstance(result, Exception):
-                continue
-            experts_by_org[org_id] = result
 
         all_expert_ids = set()
         expert_props_by_pid: dict[str, dict[str, Any]] = {}

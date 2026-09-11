@@ -11,6 +11,7 @@
 - `event_type`：可选；事件类型筛选（`financing`/`bankruptcy`/`bid`/`news`/…），留空不筛。
 - `time_range_start` / `time_range_end`：可选；起止年月，下拉选择日期，留空不筛。两端会自动合并为年份区间传给后端（如选 `2025-01` 至 `2026-12` → 等效 `2025-2026`）。
 - `max_orgs`：可选；链节点下最多扫描企业数（按 chain_score 排序），取值 `1-50`，默认 `20`。
+  默认窗口之外若仍有高管/任职企业，服务会再探测后续企业，把一条带专家的事件补进 TOP-N，用于展示「事件 ↔ 专家」关联。
 
 ## 第一组：集成电路设计 TOP 10
 
@@ -48,6 +49,22 @@
   "event_type": "stock_finance",
   "time_range_start": "2025-01",
   "time_range_end": "2026-12"
+}
+```
+
+## 第四组：看事件与专家关联（扩大扫描）
+
+- 节点：IC0007007。
+- `gkx_element` 上该节点 160 家企业里，有高管记录的主要是瑞芯微电子（`chain_score` 约第 29）。瑞芯微事件 impact 进不了前 10。
+- 本组把 `max_orgs` 提到 50，便于对上链上强度窗口。图上补完国内高管后，**main / 旧 API 也能 `experts>=1`**（实测 3：郑少波/范伟宏/陈向东）。本分支还会用覆盖替换把瑞芯微年报补进末位（励民等）。
+- 校验：`experts >= 1`，`relations` 非空，图上事件节点连到专家，摘要「关联专家」出现姓名。要核对励民/瑞芯微时用本分支 API。
+- 图上若无高管 Person / `EXECUTIVE_OF`，本组仍会是 0 个专家。灌数、部署与踩坑见 `docs/industry_chain_topn_event_expert_etl.md`。
+
+```json
+{
+  "chain_node_id": "IC0007007",
+  "top_n": 10,
+  "max_orgs": 50
 }
 ```
 

@@ -1697,7 +1697,16 @@ function buildLiveSummary(
     out["影响力排名"] = ev0.rank
       ? `第 ${ev0.rank} 名｜影响力评分 ${ev0.impact_score}`
       : "-";
-    out["关联专家"] = `${d.experts ?? 0} 人`;
+    const expertNames = [
+      ...new Set(
+        (d.relations || [])
+          .map((rel: any) => rel.expert_name)
+          .filter(Boolean),
+      ),
+    ] as string[];
+    out["关联专家"] = expertNames.length
+      ? `${expertNames.slice(0, 3).join("、")}${expertNames.length > 3 ? " 等" : ""} ${d.experts ?? expertNames.length} 人`
+      : `${d.experts ?? 0} 人`;
     out["关联企业"] = `${d.enterprises ?? 0} 家`;
     out["风险预警"] = d.risk_level ? `风险等级 ${d.risk_level}` : "-";
     const types = [

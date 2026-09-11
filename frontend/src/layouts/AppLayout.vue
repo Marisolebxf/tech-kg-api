@@ -32,7 +32,6 @@ import navFlow from "../assets/icons/nav-flow.svg";
 import navTools from "../assets/icons/nav-tools.svg";
 import { useAppStore } from "../stores/app";
 import { useAuthStore } from "../stores/auth";
-import logoKg from "../assets/images/logo-kg.png";
 
 const route = useRoute();
 const router = useRouter();
@@ -417,7 +416,7 @@ onBeforeUnmount(() => {
       />
       <aside aria-label="辅助区域 1" class="app-sidebar" :aria-hidden="isMobile && !mobileNavOpen">
         <div class="app-brand">
-          <img class="app-brand__logo" :src="logoKg" alt="亿级科技知识图谱引擎" />
+          <img class="app-brand__logo" src="/favicon.svg" alt="亿级科技知识图谱引擎" />
           <div v-if="!sidebarCollapsed" class="app-brand__name">
             亿级科技知识图谱引擎
           </div>

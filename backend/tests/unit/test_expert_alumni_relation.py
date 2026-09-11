@@ -165,6 +165,10 @@ def test_pair_same_school_and_degree():
     assert resp["graph"]["edges"][0]["label"] == "校友关系"
     assert resp["graph"]["edges"][0]["category"] == "教育经历关联"
     assert resp["graph"]["edges"][0]["dimensions"] == ["同校", "同学历", "同期"]
+    assert all(0 <= edge["confidence"] <= 1 for edge in resp["graph"]["edges"])
+    assert resp["relations"][0]["confidenceSource"] == "derived"
+    assert resp["relations"][0]["confidenceBasis"]["rule"] == "alumni-evidence-v1"
+    assert {edge["label"] for edge in resp["graph"]["edges"]} >= {"校友关系"}
     assert resp["provenance"]["evidences"]
     source_evidence = resp["provenance"]["evidences"][0]
     assert source_evidence["technicalTable"] == "dwd_scholar_test"
@@ -215,6 +219,25 @@ def test_graph_entities_use_alumni_and_shared_achievement_relation_semantics():
         "发明",
         "参与",
     }
+    assert all(edge.get("confidence") is not None for edge in graph["edges"])
+
+
+def test_pair_mode_pages_all_interaction_edges():
+    edges = [_edge("AUTHORED_BY", f"P{index}", "S1") for index in range(501)]
+    graph = MagicMock()
+
+    def get_edges(_nid, **kwargs):
+        if kwargs.get("edge_type") != "AUTHORED_BY":
+            return []
+        offset = kwargs.get("offset", 0)
+        limit = kwargs.get("limit", 500)
+        return edges[offset : offset + limit]
+
+    graph.get_node_edges = MagicMock(side_effect=get_edges)
+    result = _svc(graph)._all_interaction_edges(graph, "S1")
+
+    assert len(result) == 501
+    assert graph.get_node_edges.call_count >= 2
 
 
 def test_pair_not_alumni():

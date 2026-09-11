@@ -594,9 +594,6 @@ function colleagueConfidenceText(
 }
 
 function formatRelationConfidence(edge: GraphEdgeData): string {
-  if (isPaperCooperation.value && edge.confidence === undefined) {
-    return "不适用（统计关系）";
-  }
   if (isLiveColleague.value) {
     return colleagueConfidenceText(
       edge.confidence,
@@ -616,6 +613,8 @@ function mapLiveGraph(
         y?: number;
         entityType: string;
         confidence?: number;
+        confidenceSource?: "original" | "derived";
+        confidenceBasis?: GraphEdgeData["confidenceBasis"];
         relations: string;
         evidence: string[];
         level?: number;
@@ -638,6 +637,8 @@ function mapLiveGraph(
           summary?: string;
         };
         confidence?: number;
+        confidenceSource?: "original" | "derived";
+        confidenceBasis?: GraphEdgeData["confidenceBasis"];
       }>
     | undefined,
 ): {
@@ -666,6 +667,8 @@ function mapLiveGraph(
       y: node.y ?? 200,
       entityType: node.entityType,
       confidence: node.confidence,
+      confidenceSource: node.confidenceSource,
+      confidenceBasis: node.confidenceBasis,
       relations: node.relations ?? "",
       evidence: node.evidence ?? [],
       level: node.level,
@@ -683,6 +686,8 @@ function mapLiveGraph(
 
       // 只读取后端关系置信度
       confidence: edge.confidence,
+      confidenceSource: edge.confidenceSource,
+      confidenceBasis: edge.confidenceBasis,
     })),
   };
 }
@@ -1162,6 +1167,7 @@ function buildLiveGraph(
     const stable = sr.stableTeamMembers || [];
     const tr = sr.cooperationTimeRange || {};
     const paperCount = sr.cooperationPaperCount ?? 0;
+    const relationConfidences = sr.relationConfidences || {};
     const levelEntries = Object.entries({
       ...sr.journalLevelCount,
       ...sr.conferenceLevelCount,
@@ -1217,13 +1223,41 @@ function buildLiveGraph(
       },
     };
     const edgeOverrides: Record<string, Partial<GraphEdgeData>> = {
-      pc1: { label: "论文合作", category: "论文合作" },
-      pc2: { label: "共同作者", category: "论文作者" },
-      pc3: { label: "共同作者", category: "论文作者" },
-      pc4: { label: "作者单位", category: "作者单位" },
-      pc5: { label: "研究主题", category: "论文主题" },
-      pc6: { label: "发表于", category: "期刊/会议" },
-      pc7: { label: "团队成员", category: "合作团队" },
+      pc1: {
+        label: "论文合作",
+        category: "论文合作",
+        confidence: relationConfidences.paperCooperation,
+      },
+      pc2: {
+        label: "共同作者",
+        category: "论文作者",
+        confidence: relationConfidences.authorship,
+      },
+      pc3: {
+        label: "共同作者",
+        category: "论文作者",
+        confidence: relationConfidences.authorship,
+      },
+      pc4: {
+        label: "作者单位",
+        category: "作者单位",
+        confidence: relationConfidences.authorUnit,
+      },
+      pc5: {
+        label: "研究主题",
+        category: "论文主题",
+        confidence: relationConfidences.researchTopic,
+      },
+      pc6: {
+        label: "发表于",
+        category: "期刊/会议",
+        confidence: relationConfidences.publicationVenue,
+      },
+      pc7: {
+        label: "团队成员",
+        category: "合作团队",
+        confidence: relationConfidences.teamMembership,
+      },
     };
     return {
       nodes: preset.nodes.map((n) => ({ ...n, ...overrides[n.id] })),
@@ -1527,6 +1561,59 @@ const alumniInteractionText = (edge: GraphEdgeData) => {
   return parts.join("、") || "无共同成果";
 };
 
+const confidenceSourceText = (source?: "original" | "derived") =>
+  source === "original"
+    ? "图数据库原始值"
+    : source === "derived"
+      ? "规则推导"
+      : "—";
+
+const confidenceBreakdownLabels: Record<string, string> = {
+  originalConfidence: "原始置信度",
+  typeFallback: "关系类型兜底",
+  sameSchool: "同校基础分",
+  sameDegree: "同学历",
+  samePeriod: "同期",
+  paperInteraction: "论文互动",
+  patentInteraction: "专利互动",
+  projectInteraction: "项目互动",
+  degreeCompleteness: "学历完整度",
+  timeCompleteness: "时间完整度",
+  sharedAchievement: "共同成果基础分",
+  edgeReliability: "成果边可靠性",
+  achievementCount: "成果数量",
+  timeSpan: "时间跨度",
+  entityCompleteness: "成果实体完整度",
+};
+
+const confidenceRuleLabels: Record<string, string> = {
+  "original-edge-confidence": "图数据库原始关系置信度",
+  "exact-edge-evidence-fallback": "精确关系证据推导",
+  "matched-edge-evidence-fallback": "匹配证据推导",
+  "edge-type-fallback": "关系类型默认规则",
+  "alumni-evidence-v1": "校友关系证据评分",
+  "paper-cooperation-confidence-v1": "论文合作关系评分",
+  "patent-cooperation-confidence-v1": "专利合作关系评分",
+  "project-cooperation-confidence-v1": "项目合作关系评分",
+};
+
+const confidenceBasisText = (edge: GraphEdgeData) => {
+  const basis = edge.confidenceBasis;
+  if (!basis) return "—";
+  const breakdown = Object.entries(basis.scoreBreakdown || {})
+    .filter(([, value]) => Number.isFinite(value) && value !== 0)
+    .map(
+      ([key, value]) =>
+        `${confidenceBreakdownLabels[key] || key} ${Number(value).toFixed(2)}`,
+    )
+    .join("、");
+  const edgeType = basis.originalEdgeType
+    ? `原始边 ${basis.originalEdgeType}`
+    : "";
+  const rule = confidenceRuleLabels[basis.rule] || basis.rule;
+  return [rule, edgeType, breakdown].filter(Boolean).join("；") || "—";
+};
+
 const relationDetailRows = computed(() => {
   const edge = activeRelationEdge.value;
   const from = selectedEdgeNodes.value.from;
@@ -1558,6 +1645,13 @@ const relationDetailRows = computed(() => {
       // 直接展示后端关系 confidence，并兼容统计关系和历史缺失字段。
       formatRelationConfidence(edge),
     ] as const,
+
+    ...((isLiveAlumni.value || isLiveCoop.value) && edge.confidenceSource
+      ? [
+          ["评分来源", confidenceSourceText(edge.confidenceSource)] as const,
+          ["评分依据", confidenceBasisText(edge)] as const,
+        ]
+      : []),
 
     [
       "命中规则",
@@ -1929,10 +2023,18 @@ const liveEntityRows = computed(() => {
     return colleagueEntityRows(liveResponse.value?.data?.graph?.nodes ?? [], selectedNode.value?.id);
   }
   const selected = selectedNode.value;
-  const entityConfidence = (value: number | undefined) =>
-    isLiveColleague.value
-      ? colleagueConfidenceText(value, "暂无（实体属性未携带置信度）")
-      : formatConfidence(value);
+  const entityConfidence = (value: number | undefined) => {
+    if (isLiveColleague.value) {
+      return colleagueConfidenceText(value, "暂无（实体属性未携带置信度）");
+    }
+    if (
+      (isLiveEnterpriseRelation.value || isLiveIndustryEvent.value) &&
+      (typeof value !== "number" || !Number.isFinite(value))
+    ) {
+      return "0.80";
+    }
+    return formatConfidence(value);
+  };
   if (selected) {
     const rows: Array<readonly [string, string]> = [
       ["实体名称", selected.label],
@@ -1988,6 +2090,15 @@ const liveRelationRows = computed(() => {
           ]
         : []),
       ["置信度", formatRelationConfidence(relation)] as const,
+      ...((isLiveAlumni.value || isLiveCoop.value) && relation.confidenceSource
+        ? [
+            [
+              "评分来源",
+              confidenceSourceText(relation.confidenceSource),
+            ] as const,
+            ["评分依据", confidenceBasisText(relation)] as const,
+          ]
+        : []),
     ];
   });
 });
@@ -2806,6 +2917,12 @@ function buildAlumniGraph(
       to: item.alumniId,
       label: "校友关系",
       category: "教育经历关联",
+      dimensions: item.dimensions,
+      sharedInstitutions: item.sharedInstitutions,
+      interactions: item.interactions,
+      confidence: item.confidence,
+      confidenceSource: item.confidenceSource,
+      confidenceBasis: item.confidenceBasis,
     });
   });
   return { nodes, edges };

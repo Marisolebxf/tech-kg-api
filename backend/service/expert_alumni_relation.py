@@ -14,6 +14,11 @@ from typing import Any
 from infra.graph_db import GraphNotFoundError, TRSGraphClient, get_trs_graph_client
 from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
+from service.confidence_scoring import (
+    achievement_entity_confidence,
+    confidence_result,
+    edge_confidence,
+)
 
 STUDIED_AT_EDGE = "STUDIED_AT"
 EDGE_LIMIT = 500
@@ -48,6 +53,12 @@ PAPER_EDGE_TYPES = frozenset({"AUTHORED_BY"})
 PATENT_EDGE_TYPES = frozenset({"INVENTED_BY"})
 PROJECT_EDGE_TYPES = frozenset({"LEADS", "HAS_PARTICIPANT"})
 COAUTHOR_EDGE = "COAUTHOR_WITH"
+INTERACTION_EDGE_TYPES = (
+    COAUTHOR_EDGE,
+    *sorted(PAPER_EDGE_TYPES),
+    *sorted(PATENT_EDGE_TYPES),
+    *sorted(PROJECT_EDGE_TYPES),
+)
 
 # 与前端结果详情「规则」Tab 字段对齐（name/type/target/trigger/logic/output/threshold/audit）
 ALUMNI_RULES: list[dict[str, str]] = [
@@ -136,12 +147,13 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 graph, expert_id, source, school
             )
 
-        # 源专家的边对所有候选都相同，提前取一次复用，避免每个候选重复调 get_node_edges(expert_id)。
+        # 列表模式复用源专家边，避免为每个候选重复读取；两人模式由分页逻辑读取完整边集。
         expert_edges: list[Any] = []
-        try:
-            expert_edges = graph.get_node_edges(expert_id, direction="both", limit=EDGE_LIMIT)
-        except GraphNotFoundError:
-            expert_edges = []
+        if mode == "list":
+            try:
+                expert_edges = graph.get_node_edges(expert_id, direction="both", limit=EDGE_LIMIT)
+            except GraphNotFoundError:
+                expert_edges = []
 
         items: list[dict[str, Any]] = []
         dim_catalog: set[str] = set()
@@ -153,7 +165,14 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             if match is None:
                 continue
             shared_institutions, dimensions, match_summary = match
-            interactions = self._interactions(graph, expert_id, cand_id, expert_edges)
+            interactions = self._interactions(
+                graph,
+                expert_id,
+                cand_id,
+                expert_edges if mode == "list" else None,
+                fetch_all=mode == "pair",
+            )
+            relation_confidence = self._alumni_confidence(dimensions, match_summary, interactions)
             item = {
                 "alumniId": str(cand_id),
                 "name": self._display_name(cand_node),
@@ -162,6 +181,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 "educations": match_summary,
                 "interactions": interactions,
                 "provenance": self._person_provenance(cand_props, str(cand_id)),
+                **relation_confidence,
             }
             items.append(item)
             dim_catalog.update(dimensions)
@@ -630,6 +650,10 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                         "institution": display,
                         "degree": s_deg_raw or c_deg_raw or None,
                         "date": s.get("date") or c.get("date"),
+                        "sourceDegree": s_deg_raw or None,
+                        "targetDegree": c_deg_raw or None,
+                        "sourceDate": s.get("date"),
+                        "targetDate": c.get("date"),
                     }
                 )
 
@@ -643,6 +667,38 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             dimensions.append("同期")
 
         return shared_institutions, dimensions, match_summary
+
+    @staticmethod
+    def _alumni_confidence(
+        dimensions: list[str],
+        matched_educations: list[dict[str, Any]],
+        interactions: dict[str, Any],
+    ) -> dict[str, Any]:
+        education_complete = any(
+            record.get("sourceDegree") and record.get("targetDegree")
+            for record in matched_educations
+        )
+        time_complete = any(
+            record.get("sourceDate") and record.get("targetDate") for record in matched_educations
+        )
+        breakdown = {
+            "sameSchool": 0.70,
+            "sameDegree": 0.08 if "同学历" in dimensions else 0.0,
+            "samePeriod": 0.12 if "同期" in dimensions else 0.0,
+            "paperInteraction": (
+                0.04 if interactions.get("coauthorEdge") or interactions.get("paperCount") else 0.0
+            ),
+            "patentInteraction": 0.02 if interactions.get("patentCount") else 0.0,
+            "projectInteraction": 0.02 if interactions.get("projectCount") else 0.0,
+            "degreeCompleteness": 0.01 if education_complete else 0.0,
+            "timeCompleteness": 0.01 if time_complete else 0.0,
+        }
+        return confidence_result(
+            min(0.98, sum(breakdown.values())),
+            source="derived",
+            rule="alumni-evidence-v1",
+            score_breakdown=breakdown,
+        )
 
     def _date_overlap(self, a: str | None, b: str | None) -> bool:
         years_a = self._extract_years(a)
@@ -668,10 +724,13 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         a_id: str,
         b_id: str,
         a_edges: list[Any] | None = None,
+        *,
+        fetch_all: bool = False,
     ) -> dict[str, Any]:
         coauthor = False
-        # a_edges（源专家的边）由 query 主流程提前取一次复用，避免每个候选重复调用。
-        if a_edges is None:
+        if fetch_all:
+            edges = self._all_interaction_edges(graph, a_id)
+        elif a_edges is None:
             try:
                 edges = graph.get_node_edges(a_id, direction="both", limit=EDGE_LIMIT)
             except GraphNotFoundError:
@@ -679,51 +738,31 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         else:
             edges = a_edges
 
-        paper_ids: set[str] = set()
-        patent_ids: set[str] = set()
-        project_ids: set[str] = set()
-        a_papers: set[str] = set()
-        a_patents: set[str] = set()
-        a_projects: set[str] = set()
+        a_maps = self._achievement_edge_maps(edges, a_id)
 
         for edge in edges or []:
             et = str(getattr(edge, "type", "") or "")
             neighbor = self._neighbor_id(edge, a_id)
-            if not neighbor:
-                continue
             if et == COAUTHOR_EDGE and str(neighbor) == str(b_id):
                 coauthor = True
-            elif et in PAPER_EDGE_TYPES:
-                a_papers.add(str(neighbor))
-            elif et in PATENT_EDGE_TYPES:
-                a_patents.add(str(neighbor))
-            elif et in PROJECT_EDGE_TYPES:
-                a_projects.add(str(neighbor))
 
-        try:
-            b_edges = graph.get_node_edges(b_id, direction="both", limit=EDGE_LIMIT)
-        except GraphNotFoundError:
-            b_edges = []
-        b_papers: set[str] = set()
-        b_patents: set[str] = set()
-        b_projects: set[str] = set()
+        if fetch_all:
+            b_edges = self._all_interaction_edges(graph, b_id)
+        else:
+            try:
+                b_edges = graph.get_node_edges(b_id, direction="both", limit=EDGE_LIMIT)
+            except GraphNotFoundError:
+                b_edges = []
+        b_maps = self._achievement_edge_maps(b_edges, b_id)
         for edge in b_edges or []:
             et = str(getattr(edge, "type", "") or "")
             neighbor = self._neighbor_id(edge, b_id)
-            if not neighbor:
-                continue
             if et == COAUTHOR_EDGE and str(neighbor) == str(a_id):
                 coauthor = True
-            elif et in PAPER_EDGE_TYPES:
-                b_papers.add(str(neighbor))
-            elif et in PATENT_EDGE_TYPES:
-                b_patents.add(str(neighbor))
-            elif et in PROJECT_EDGE_TYPES:
-                b_projects.add(str(neighbor))
 
-        paper_ids = a_papers & b_papers
-        patent_ids = a_patents & b_patents
-        project_ids = a_projects & b_projects
+        paper_ids = set(a_maps["paper"]) & set(b_maps["paper"])
+        patent_ids = set(a_maps["patent"]) & set(b_maps["patent"])
+        project_ids = set(a_maps["project"]) & set(b_maps["project"])
         paper_count = len(paper_ids)
         patent_count = len(patent_ids)
         project_count = len(project_ids)
@@ -738,7 +777,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             summary_parts.append(f"共同项目 {project_count} 项")
         summary = "、".join(summary_parts) or "无共同成果"
 
-        shared_achievements: list[dict[str, str]] = []
+        shared_achievements: list[dict[str, Any]] = []
         # 返回三类共同成果的图节点信息。pair/list 两种模式都需要展示，
         # 图谱组装阶段会按成果 VID 去重。
         for kind, ids, type_label in (
@@ -768,12 +807,62 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                     ),
                     achievement_id,
                 )
+                time_value = next(
+                    (
+                        str(props.get(key)).strip()
+                        for key in (
+                            "publication_date",
+                            "publication_year",
+                            "approval_year",
+                            "year",
+                            "start_date",
+                            "end_date",
+                        )
+                        if props.get(key)
+                    ),
+                    None,
+                )
+                has_fields = any(
+                    props.get(key)
+                    for key in ("keywords", "keyword", "discipline", "field", "domain")
+                )
+                entity_score = achievement_entity_confidence(
+                    kind,
+                    props,
+                    title=label,
+                    time_value=time_value,
+                    fields=["present"] if has_fields else [],
+                    vid=str(achievement_id),
+                )
+                expert_relations = []
+                labels = {
+                    "AUTHORED_BY": "发表",
+                    "INVENTED_BY": "发明",
+                    "LEADS": "负责",
+                    "HAS_PARTICIPANT": "参与",
+                }
+                for expert_id, edge in (
+                    (a_id, a_maps[kind][achievement_id]),
+                    (b_id, b_maps[kind][achievement_id]),
+                ):
+                    edge_type = str(getattr(edge, "type", "") or "")
+                    expert_relations.append(
+                        {
+                            "expertId": expert_id,
+                            "edgeType": edge_type,
+                            "label": labels.get(edge_type, "关联成果"),
+                            **edge_confidence(edge, edge_type),
+                        }
+                    )
                 shared_achievements.append(
                     {
                         "id": str(achievement_id),
                         "label": label,
                         "kind": kind,
                         "entityType": type_label,
+                        "time": time_value,
+                        **entity_score,
+                        "expertRelations": expert_relations,
                     }
                 )
 
@@ -785,6 +874,64 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             "sharedAchievements": shared_achievements,
             "summary": summary,
         }
+
+    def _all_interaction_edges(self, graph: TRSGraphClient, person_id: str) -> list[Any]:
+        """Read every relevant pair-mode edge with bounded pages and duplicate guards."""
+        collected: list[Any] = []
+        seen: set[str] = set()
+        for edge_type in INTERACTION_EDGE_TYPES:
+            offset = 0
+            while True:
+                try:
+                    page = graph.get_node_edges(
+                        person_id,
+                        direction="both",
+                        edge_type=edge_type,
+                        limit=EDGE_LIMIT,
+                        offset=offset,
+                    )
+                except GraphNotFoundError:
+                    break
+                new_count = 0
+                for edge in page or []:
+                    if str(getattr(edge, "type", "") or "") != edge_type:
+                        continue
+                    identity = str(
+                        getattr(edge, "id", "")
+                        or (
+                            f"{edge_type}:{getattr(edge, 'source_id', '')}:"
+                            f"{getattr(edge, 'target_id', '')}"
+                        )
+                    )
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    collected.append(edge)
+                    new_count += 1
+                if len(page or []) < EDGE_LIMIT or new_count == 0:
+                    break
+                offset += len(page)
+        return collected
+
+    def _achievement_edge_maps(self, edges: list[Any], person_id: str) -> dict[str, dict[str, Any]]:
+        maps: dict[str, dict[str, Any]] = {"paper": {}, "patent": {}, "project": {}}
+        for edge in edges or []:
+            edge_type = str(getattr(edge, "type", "") or "")
+            neighbor = self._neighbor_id(edge, person_id)
+            if not neighbor:
+                continue
+            if edge_type in PAPER_EDGE_TYPES:
+                kind = "paper"
+            elif edge_type in PATENT_EDGE_TYPES:
+                kind = "patent"
+            elif edge_type in PROJECT_EDGE_TYPES:
+                kind = "project"
+            else:
+                continue
+            current = maps[kind].get(str(neighbor))
+            if current is None or edge_type == "LEADS":
+                maps[kind][str(neighbor)] = edge
+        return maps
 
     @staticmethod
     def _neighbor_id(edge: Any, person_id: str) -> str | None:
@@ -895,7 +1042,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             items,
             mode=mode,
             target_expert=payload.get("targetExpert"),
-            include_shared_achievements=False,
+            include_shared_achievements=mode == "pair",
         )
         provenance = {
             "sourceDatabase": f"trs-graph / space={meta.get('space') or 'dev'}",
@@ -1033,6 +1180,19 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             dim_text = "、".join(dims) if dims else "同校"
             shared = "、".join(item.get("sharedInstitutions") or []) or "—"
             interaction = (item.get("interactions") or {}).get("summary") or "无互动"
+            relation_score = (
+                {
+                    "confidence": item["confidence"],
+                    "confidenceSource": item["confidenceSource"],
+                    "confidenceBasis": item["confidenceBasis"],
+                }
+                if item.get("confidence") is not None
+                else ExpertAlumniRelationService._alumni_confidence(
+                    dims,
+                    item.get("educations") or [],
+                    item.get("interactions") or {},
+                )
+            )
             relation_summary_parts = [f"共同院校：{shared}", f"关系维度：{dim_text}"]
             if interaction != "无互动":
                 relation_summary_parts.append(f"互动证据：{interaction}")
@@ -1068,6 +1228,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 "sharedInstitutions": item.get("sharedInstitutions") or [],
                 "interactions": item.get("interactions") or {},
                 "summary": relation_summary,
+                **relation_score,
             }
             relations.append(relation)
             edges.append(
@@ -1081,6 +1242,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                     "sharedInstitutions": relation["sharedInstitutions"],
                     "summary": relation["summary"],
                     "interactions": relation["interactions"],
+                    "confidence": relation["confidence"],
+                    "confidenceSource": relation["confidenceSource"],
+                    "confidenceBasis": relation["confidenceBasis"],
                 }
             )
 
@@ -1090,16 +1254,27 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                     if not achievement_id or any(n.get("id") == achievement_id for n in nodes):
                         continue
                     achievement_kind = str(achievement.get("kind") or "")
+                    achievement_score = (
+                        {
+                            "confidence": achievement["confidence"],
+                            "confidenceSource": achievement["confidenceSource"],
+                            "confidenceBasis": achievement["confidenceBasis"],
+                        }
+                        if achievement.get("confidence") is not None
+                        else achievement_entity_confidence(
+                            achievement_kind,
+                            {},
+                            title=str(achievement.get("label") or achievement_id),
+                            time_value=achievement.get("time"),
+                            fields=[],
+                            vid=achievement_id,
+                        )
+                    )
                     achievement_relation = {
                         "paper": f"由{source_name}、{aname}共同发表",
                         "patent": f"由{source_name}、{aname}共同发明",
                         "project": f"由{source_name}、{aname}共同参与",
                     }.get(achievement_kind, f"由{source_name}、{aname}共同产出")
-                    achievement_edge_label = {
-                        "paper": "发表",
-                        "patent": "发明",
-                        "project": "参与",
-                    }.get(achievement_kind, "共同产出")
                     nodes.append(
                         {
                             "id": achievement_id,
@@ -1108,22 +1283,44 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                             "nodeType": (
                                 "project" if achievement.get("kind") == "project" else "paper"
                             ),
-                            "confidence": 0.85,
+                            **achievement_score,
                             "relations": achievement_relation,
                             "evidence": ["两位专家共同关联"],
                             "x": cx + 200.0 + (len(nodes) % 3) * 150.0,
                             "y": cy + 180.0 + (len(nodes) // 3) * 90.0,
                         }
                     )
+                    relations_by_expert = {
+                        relation["expertId"]: relation
+                        for relation in achievement.get("expertRelations") or []
+                    }
                     for person_id in (source_id, aid):
+                        expert_relation = relations_by_expert.get(person_id)
+                        if expert_relation is None:
+                            fallback_edge_type = {
+                                "paper": "AUTHORED_BY",
+                                "patent": "INVENTED_BY",
+                                "project": "HAS_PARTICIPANT",
+                            }.get(achievement_kind, "")
+                            expert_relation = {
+                                "label": {
+                                    "paper": "发表",
+                                    "patent": "发明",
+                                    "project": "参与",
+                                }.get(achievement_kind, "关联成果"),
+                                **edge_confidence(None, fallback_edge_type),
+                            }
                         edge_id = f"shared-achievement-{person_id}-{achievement_id}"
                         edges.append(
                             {
                                 "id": edge_id,
                                 "from": person_id,
                                 "to": achievement_id,
-                                "label": achievement_edge_label,
+                                "label": expert_relation["label"],
                                 "category": "成果关联",
+                                "confidence": expert_relation["confidence"],
+                                "confidenceSource": expert_relation["confidenceSource"],
+                                "confidenceBasis": expert_relation["confidenceBasis"],
                             }
                         )
 

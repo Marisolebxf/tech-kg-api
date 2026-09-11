@@ -38,7 +38,10 @@ import {
   queryExpertColleagueRelation,
   type ExpertColleagueRelationResponse,
 } from "../../../api/expertColleagueRelation";
-import { colleagueEntityRows, colleagueProvenanceCards } from "../expert-colleague-details";
+import {
+  colleagueEntityRows,
+  colleagueProvenanceCards,
+} from "../expert-colleague-details";
 import KgGraphCanvas from "../../../components/kg-graph-canvas.vue";
 import { useToast } from "../../../composables/use-toast";
 import { getServiceGraphPreset } from "../../../data/graph-presets";
@@ -958,10 +961,12 @@ function displayCooperationType(code?: string | null): string {
   return (code && map[code]) || code || "企业关联";
 }
 
-function formatCooperationPeriod(period?: {
-  start?: string | null;
-  end?: string | null;
-} | null): string {
+function formatCooperationPeriod(
+  period?: {
+    start?: string | null;
+    end?: string | null;
+  } | null,
+): string {
   if (!period?.start) return "";
   return `${period.start}${period.end ? ` 至 ${period.end}` : " 至今"}`;
 }
@@ -1772,9 +1777,7 @@ function buildLiveSummary(
         ? `${bg.listing_status}，暂无该企业风险事件数据`
         : "暂无该企业风险事件数据");
     out["综合置信度"] =
-      typeof d.confidence === "number"
-        ? Number(d.confidence).toFixed(2)
-        : "-";
+      typeof d.confidence === "number" ? Number(d.confidence).toFixed(2) : "-";
     out["资源对接价值"] = fields.length
       ? `专家合作领域 ${fields.join("、")}`
       : "待评估合作领域匹配度";
@@ -1793,9 +1796,7 @@ function buildLiveSummary(
       : "-";
     const expertNames = [
       ...new Set(
-        (d.relations || [])
-          .map((rel: any) => rel.expert_name)
-          .filter(Boolean),
+        (d.relations || []).map((rel: any) => rel.expert_name).filter(Boolean),
       ),
     ] as string[];
     out["关联专家"] = expertNames.length
@@ -1845,7 +1846,8 @@ function buildLiveSummary(
       ? levelParts.join("、")
       : "暂无分级数据";
     const cit = sr.citation || {};
-    out["论文被引情况"] = `总被引 ${cit.total ?? 0} 次｜最高 ${cit.max ?? 0} 次`;
+    out["论文被引情况"] =
+      `总被引 ${cit.total ?? 0} 次｜最高 ${cit.max ?? 0} 次`;
     out["研究方向"] = (sr.paperTopics || []).slice(0, 5).join("、") || "-";
     out["共同贡献"] = (sr.sharedContribution || []).join("、") || "-";
     out["核心合作人员"] = (sr.coreCollaborators || []).join("、") || "暂无数据";
@@ -2020,7 +2022,10 @@ const liveRules = computed<Array<Record<string, any>>>(() => {
 
 const liveEntityRows = computed(() => {
   if (isLiveColleague.value) {
-    return colleagueEntityRows(liveResponse.value?.data?.graph?.nodes ?? [], selectedNode.value?.id);
+    return colleagueEntityRows(
+      liveResponse.value?.data?.graph?.nodes ?? [],
+      selectedNode.value?.id,
+    );
   }
   const selected = selectedNode.value;
   const entityConfidence = (value: number | undefined) => {
@@ -2047,7 +2052,8 @@ const liveEntityRows = computed(() => {
     }
     return rows;
   }
-  const entities = isExpertDirect.value && selected ? [selected] : graphNodes.value;
+  const entities =
+    isExpertDirect.value && selected ? [selected] : graphNodes.value;
   if (!entities.length) return [] as Array<readonly [string, string]>;
   return entities.flatMap((entity, index) => [
     [`实体 ${index + 1}`, `${entity.label}（${entity.id}）`] as const,
@@ -2103,12 +2109,20 @@ const liveRelationRows = computed(() => {
   });
 });
 
-const colleagueProvenance = computed(() => colleagueProvenanceCards(
-  liveResponse.value?.data?.graph?.nodes ?? [],
-  liveResponse.value?.data?.graph?.edges ?? [],
-  selectedNode.value?.id,
-  selectedEdge.value ? { source: selectedEdge.value.from, target: selectedEdge.value.to, label: selectedEdge.value.label } : undefined,
-));
+const colleagueProvenance = computed(() =>
+  colleagueProvenanceCards(
+    liveResponse.value?.data?.graph?.nodes ?? [],
+    liveResponse.value?.data?.graph?.edges ?? [],
+    selectedNode.value?.id,
+    selectedEdge.value
+      ? {
+          source: selectedEdge.value.from,
+          target: selectedEdge.value.to,
+          label: selectedEdge.value.label,
+        }
+      : undefined,
+  ),
+);
 
 const liveProvenance = computed(() => {
   if (isLiveAlumni.value) return liveAlumniResult.value?.provenance ?? null;
@@ -2717,7 +2731,10 @@ function computeExpertDirectSummaryRows(
         .filter(Boolean)
         .join("｜"),
     );
-    const achievementTitles = item.representativeAchievements?.map(achievement => achievement.title).filter(Boolean) ?? [];
+    const achievementTitles =
+      item.representativeAchievements
+        ?.map((achievement) => achievement.title)
+        .filter(Boolean) ?? [];
     overrides.set("专家 A", expertALabel || "—");
     overrides.set("专家 B", expertBLabel || "—");
     overrides.set(
@@ -2741,7 +2758,10 @@ function computeExpertDirectSummaryRows(
       "相关成果",
       compactSummaryText(`共同论文${item.coPaperCount}篇`),
     );
-    overrides.set("代表成果", achievementTitles.join("；") || "暂无可核实的共同成果标题");
+    overrides.set(
+      "代表成果",
+      achievementTitles.join("；") || "暂无可核实的共同成果标题",
+    );
     overrides.set(
       "关系置信度",
       ((item.relationStrength ?? 0) / 100).toFixed(2),
@@ -2749,7 +2769,12 @@ function computeExpertDirectSummaryRows(
   }
   return props.moduleInfo.summaryRows.map((row) => {
     const overrideValue = overrides.get(row.label);
-    return [row.label, row.label === "代表成果" ? (overrideValue ?? row.value) : compactSummaryText(overrideValue ?? row.value)] as const;
+    return [
+      row.label,
+      row.label === "代表成果"
+        ? (overrideValue ?? row.value)
+        : compactSummaryText(overrideValue ?? row.value),
+    ] as const;
   });
 }
 
@@ -4173,7 +4198,10 @@ function clearGraphSelection() {
           v-else-if="resultMode === 'entity' && liveEntityRows"
           class="result-panel__detail"
         >
-          <div v-if="selectedNode && !isExpertDirect" class="result-panel__back">
+          <div
+            v-if="selectedNode && !isExpertDirect"
+            class="result-panel__back"
+          >
             <button type="button" @click="clearGraphSelection">
               查看全部实体
             </button>
@@ -4246,19 +4274,40 @@ function clearGraphSelection() {
           </div>
         </section>
         <section
-          v-else-if="resultMode === 'provenance' && isLiveColleague && liveResponse"
+          v-else-if="
+            resultMode === 'provenance' && isLiveColleague && liveResponse
+          "
           class="result-provenance"
         >
-          <header><strong>数据溯源</strong><span>{{ selectedNode ? '选中实体' : selectedEdge ? '选中关系' : '全部实体和关系' }}</span></header>
+          <header>
+            <strong>数据溯源</strong
+            ><span>{{
+              selectedNode
+                ? "选中实体"
+                : selectedEdge
+                  ? "选中关系"
+                  : "全部实体和关系"
+            }}</span>
+          </header>
           <div class="result-provenance__evidence-list">
             <article v-for="card in colleagueProvenance" :key="card.id">
-              <header><strong>{{ card.title }}</strong></header>
-              <div v-for="(section, index) in card.sections" :key="index" class="colleague-provenance-section">
+              <header>
+                <strong>{{ card.title }}</strong>
+              </header>
+              <div
+                v-for="(section, index) in card.sections"
+                :key="index"
+                class="colleague-provenance-section"
+              >
                 <h4 v-if="section.title">{{ section.title }}</h4>
-                <p v-for="row in section.rows" :key="row[0]"><b>{{ row[0] }}：</b><span>{{ row[1] }}</span></p>
+                <p v-for="row in section.rows" :key="row[0]">
+                  <b>{{ row[0] }}：</b><span>{{ row[1] }}</span>
+                </p>
               </div>
             </article>
-            <p v-if="!colleagueProvenance.length">暂无可追溯对象，请先执行查询。</p>
+            <p v-if="!colleagueProvenance.length">
+              暂无可追溯对象，请先执行查询。
+            </p>
           </div>
         </section>
         <section

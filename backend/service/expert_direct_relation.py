@@ -317,7 +317,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             rows.append(self._build_row(node_a, node_b, edge))
         return rows
 
-    async def _attach_representative_achievements(self, client: Any, rows: list[dict[str, Any]]) -> None:
+    async def _attach_representative_achievements(
+        self, client: Any, rows: list[dict[str, Any]]
+    ) -> None:
         paper_ids: dict[str, set[str]] = {}
         titles: dict[str, str] = {}
         edge_type = "AUTHORED" if TRSGraphSettings.from_env().space == "techkg" else "AUTHORED_BY"
@@ -325,9 +327,15 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             try:
                 for person_id in (row["expert_a_id"], row["expert_b_id"]):
                     if person_id not in paper_ids:
-                        edges = await client.get_node_edges(person_id, edge_type=edge_type, limit=200)
+                        edges = await client.get_node_edges(
+                            person_id, edge_type=edge_type, limit=200
+                        )
                         paper_ids[person_id] = {
-                            str(edge["target"] if edge.get("source") == person_id else edge["source"])
+                            str(
+                                edge["target"]
+                                if edge.get("source") == person_id
+                                else edge["source"]
+                            )
                             for edge in edges
                             if edge.get("source") == person_id or edge.get("target") == person_id
                         }
@@ -337,15 +345,31 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                     if paper_id not in titles:
                         paper = await client.get_node(paper_id)
                         props = (paper or {}).get("properties") or {}
-                        titles[paper_id] = next((str(props[key]).strip() for key in
-                            ("title_zh", "title_cn", "title", "title_en", "zh_name", "en_name", "name") if props.get(key)), "")
+                        titles[paper_id] = next(
+                            (
+                                str(props[key]).strip()
+                                for key in (
+                                    "title_zh",
+                                    "title_cn",
+                                    "title",
+                                    "title_en",
+                                    "zh_name",
+                                    "en_name",
+                                    "name",
+                                )
+                                if props.get(key)
+                            ),
+                            "",
+                        )
                     if titles[paper_id]:
                         achievements.append({"id": paper_id, "title": titles[paper_id]})
                     if len(achievements) == 3:
                         break
                 row["representative_achievements"] = achievements
             except GraphAPIError:
-                logger.warning("Could not retrieve representative papers for %s", row["relation_key"])
+                logger.warning(
+                    "Could not retrieve representative papers for %s", row["relation_key"]
+                )
 
     async def _find_person(self, client: Any, keyword: str) -> dict[str, Any] | None:
         """按 VID / scholar_id / 姓名定位一个 Person 节点。
@@ -540,7 +564,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         if hasattr(relation_time, "strftime"):
             last_updated_at = relation_time.strftime("%Y-%m-%d")
         else:
-            last_updated_at = re.split(r"[T ]", str(relation_time), maxsplit=1)[0] if relation_time else None
+            last_updated_at = (
+                re.split(r"[T ]", str(relation_time), maxsplit=1)[0] if relation_time else None
+            )
 
         expert_a = {
             "expertId": str(row.get("expert_a_id") or ""),

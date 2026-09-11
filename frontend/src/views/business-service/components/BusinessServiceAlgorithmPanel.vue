@@ -1929,10 +1929,18 @@ const liveEntityRows = computed(() => {
     return colleagueEntityRows(liveResponse.value?.data?.graph?.nodes ?? [], selectedNode.value?.id);
   }
   const selected = selectedNode.value;
-  const entityConfidence = (value: number | undefined) =>
-    isLiveColleague.value
-      ? colleagueConfidenceText(value, "暂无（实体属性未携带置信度）")
-      : formatConfidence(value);
+  const entityConfidence = (value: number | undefined) => {
+    if (isLiveColleague.value) {
+      return colleagueConfidenceText(value, "暂无（实体属性未携带置信度）");
+    }
+    if (
+      (isLiveEnterpriseRelation.value || isLiveIndustryEvent.value) &&
+      (typeof value !== "number" || !Number.isFinite(value))
+    ) {
+      return "0.80";
+    }
+    return formatConfidence(value);
+  };
   if (selected) {
     const rows: Array<readonly [string, string]> = [
       ["实体名称", selected.label],

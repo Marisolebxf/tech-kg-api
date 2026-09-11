@@ -31,6 +31,7 @@ from biz.schemas.industry_node_top_events_business import (
 from biz.schemas.tech_enterprise_relation_business import EntityProvenance
 from infra.graph_db import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
+from service.entity_confidence import fill_entity_confidence
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,9 @@ def _fetch_org_events_sync(
                 "organization_id": ep.get("organization_id"),
                 "ingest_batch": ep.get("ingest_batch"),
                 "ingest_time": ep.get("ingest_time"),
+                "confidence": ep.get("confidence"),
+                # 原始事件/资讯顶点属性，供实体置信度按事件自身证据计算，避免 org_id 串味。
+                "_node_props": ep,
             }
         )
     return events
@@ -409,12 +413,19 @@ def _impact_score(event_type, amount, occur_date, chain_score):
     return weight * (1 + amount_factor) * recency * (1 + chain_score / 100.0)
 
 
-def _entity_provenance(properties: dict[str, Any], labels: set[str]) -> EntityProvenance:
+def _entity_provenance(
+    properties: dict[str, Any],
+    labels: set[str],
+    *,
+    vid: str | None = None,
+    client: TRSGraphClient | None = None,
+) -> EntityProvenance:
     """从图节点 properties 抽取实体溯源，与同事关系/企业关系同口径。
 
     Person → source_record_id（dwd_scholar 时字段名 scholar_id）；
     Organization → organization_id；其余 → source_record_id。
     source_table 取 organization_base 或 source_table 属性。
+    置信度：图上已有值 → 证据规则计算并尽力写回 → 默认 0.80。
     """
     source_table = properties.get("organization_base") or properties.get("source_table")
     if "Person" in labels and properties.get("source_record_id") not in (None, ""):
@@ -424,13 +435,7 @@ def _entity_provenance(properties: dict[str, Any], labels: set[str]) -> EntityPr
         source_field, source_value = "organization_id", properties.get("organization_id")
     else:
         source_field, source_value = "source_record_id", properties.get("source_record_id")
-    confidence = None
-    raw_conf = properties.get("confidence")
-    if raw_conf not in (None, ""):
-        try:
-            confidence = float(raw_conf)
-        except (TypeError, ValueError):
-            confidence = None
+    confidence = fill_entity_confidence(properties, labels, vid=vid, client=client)
     return EntityProvenance(
         sourceTable=str(source_table or "-"),
         sourceField=str(source_field or "-"),
@@ -627,16 +632,31 @@ class IndustryNodeTopEventsService:
         # 实体溯源：链节点 + 关联企业 + TOP 事件 + 专家（governance 边带出 Person 属性，溯源为真实值）
         # 链节点 key 用 req.chain_node_id（前端画板主节点 id），属性仍按 node_vid 取
         resp.entity_provenance = {
-            req.chain_node_id: _entity_provenance(nodes_map.get(node_vid, {}), {"IndustryNode"})
+            req.chain_node_id: _entity_provenance(
+                nodes_map.get(node_vid, {}),
+                {"IndustryNode"},
+                vid=node_vid,
+                client=client,
+            )
         }
         for pid, props in expert_props_by_pid.items():
-            resp.entity_provenance[pid] = _entity_provenance(props, {"Person"})
+            resp.entity_provenance[pid] = _entity_provenance(
+                props, {"Person"}, vid=pid, client=client
+            )
         for org_vid in top_org_ids:
             resp.entity_provenance[org_vid] = _entity_provenance(
-                nodes_map.get(org_vid, {}), {"Organization"}
+                nodes_map.get(org_vid, {}),
+                {"Organization"},
+                vid=org_vid,
+                client=client,
             )
         for ev in top:
-            resp.entity_provenance[ev["event_id"]] = _entity_provenance(ev, {"Event"})
+            resp.entity_provenance[ev["event_id"]] = _entity_provenance(
+                ev.get("_node_props") or ev,
+                {"Event"},
+                vid=ev["event_id"],
+                client=client,
+            )
         # 标书分析维度：节点影响 / 发展趋势 / 机遇挖掘（从 TOP 事件池规则派生，纯内存无新图调用）
         resp.node_impact, resp.trend, resp.opportunity = self._derive_analysis(
             top, top_org_ids, resp.risk_level

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import threading
@@ -13,6 +14,12 @@ from typing import Any
 from infra.graph_db import GraphNotFoundError, TRSGraphClient, get_trs_graph_client
 from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
+from service.confidence_scoring import (
+    achievement_entity_confidence,
+    confidence_result,
+    edge_confidence,
+    expert_entity_confidence,
+)
 
 PAPER_EDGE_TYPES = frozenset({"AUTHORED_BY"})
 PATENT_EDGE_TYPES = frozenset({"INVENTED_BY"})
@@ -115,13 +122,12 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         target = self._require_node(graph, target_expert_id, "专家")
 
         type_filter = set(achievement_types or ["paper", "patent", "project"])
-        src_ids = self._collect_achievement_ids(graph, source_expert_id)
-        tgt_ids = self._collect_achievement_ids(graph, target_expert_id)
+        src_edges = self._collect_achievement_edges(graph, source_expert_id)
+        tgt_edges = self._collect_achievement_edges(graph, target_expert_id)
 
         shared: dict[str, set[str]] = {
-            "paper": src_ids["paper"] & tgt_ids["paper"],
-            "patent": src_ids["patent"] & tgt_ids["patent"],
-            "project": src_ids["project"] & tgt_ids["project"],
+            kind: set(src_edges[kind]) & set(tgt_edges[kind])
+            for kind in ("paper", "patent", "project")
         }
 
         items: list[dict[str, Any]] = []
@@ -130,7 +136,15 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 continue
             ordered = sorted(shared[ach_type], key=str)[:limit_per_type]
             for vid in ordered:
-                item = self._build_item(graph, ach_type, vid)
+                item = self._build_item(
+                    graph,
+                    ach_type,
+                    vid,
+                    source_expert_id=source_expert_id,
+                    target_expert_id=target_expert_id,
+                    source_edge=src_edges[ach_type][vid],
+                    target_edge=tgt_edges[ach_type][vid],
+                )
                 if not self._in_time_range(item.get("time"), time_range_start, time_range_end):
                     continue
                 items.append(item)
@@ -182,6 +196,8 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 mode=mode,
                 space=str(space),
                 selected_types=type_filter,
+                source_confidence=expert_entity_confidence(source_props, source_name),
+                target_confidence=expert_entity_confidence(target_props, target_name),
             )
         )
         with _result_cache_lock:
@@ -207,10 +223,10 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 return str(val)
         return str(getattr(node, "id", "") or "")
 
-    def _collect_achievement_ids(
+    def _collect_achievement_edges(
         self, graph: TRSGraphClient, person_id: str
-    ) -> dict[str, set[str]]:
-        result: dict[str, set[str]] = {"paper": set(), "patent": set(), "project": set()}
+    ) -> dict[str, dict[str, Any]]:
+        result: dict[str, dict[str, Any]] = {"paper": {}, "patent": {}, "project": {}}
         try:
             edges = graph.get_node_edges(person_id, direction="both", limit=EDGE_LIMIT)
         except GraphNotFoundError:
@@ -222,11 +238,13 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             if not neighbor:
                 continue
             if edge_type in PAPER_EDGE_TYPES:
-                result["paper"].add(str(neighbor))
+                result["paper"].setdefault(str(neighbor), edge)
             elif edge_type in PATENT_EDGE_TYPES:
-                result["patent"].add(str(neighbor))
+                result["patent"].setdefault(str(neighbor), edge)
             elif edge_type in PROJECT_EDGE_TYPES:
-                result["project"].add(str(neighbor))
+                current = result["project"].get(str(neighbor))
+                if current is None or edge_type == "LEADS":
+                    result["project"][str(neighbor)] = edge
         return result
 
     @staticmethod
@@ -240,22 +258,65 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             return src
         return None
 
-    def _build_item(self, graph: TRSGraphClient, ach_type: str, vid: str) -> dict[str, Any]:
+    def _build_item(
+        self,
+        graph: TRSGraphClient,
+        ach_type: str,
+        vid: str,
+        *,
+        source_expert_id: str,
+        target_expert_id: str,
+        source_edge: Any,
+        target_edge: Any,
+    ) -> dict[str, Any]:
         try:
             node = graph.get_node(vid)
         except GraphNotFoundError:
             node = None
         props = (getattr(node, "properties", None) or {}) if node else {}
         awards = self._extract_awards(props)
+        title = self._pick_title(props, vid)
+        time_value = self._pick_time(props)
+        fields = self._resolve_keyword_fields(graph, vid, props)
+        entity_score = achievement_entity_confidence(
+            ach_type,
+            props,
+            title=title,
+            time_value=time_value,
+            fields=fields,
+            vid=vid,
+        )
+        relation_labels = {
+            "AUTHORED_BY": "发表",
+            "INVENTED_BY": "发明",
+            "LEADS": "负责",
+            "HAS_PARTICIPANT": "参与",
+        }
+        expert_relations = []
+        for expert_id, edge in (
+            (source_expert_id, source_edge),
+            (target_expert_id, target_edge),
+        ):
+            edge_type = str(getattr(edge, "type", "") or "")
+            expert_relations.append(
+                {
+                    "expertId": expert_id,
+                    "edgeType": edge_type,
+                    "label": relation_labels.get(edge_type, "关联成果"),
+                    **edge_confidence(edge, edge_type),
+                }
+            )
         return {
             "type": ach_type,
             "id": vid,
-            "title": self._pick_title(props, vid),
-            "time": self._pick_time(props),
-            "fields": self._resolve_keyword_fields(graph, vid, props),
+            "title": title,
+            "time": time_value,
+            "fields": fields,
             "awards": awards,
             "evaluation": self._pick_evaluation(props),
             "provenance": self._entity_provenance(props, vid),
+            **entity_score,
+            "expertRelations": expert_relations,
         }
 
     def _resolve_keyword_fields(
@@ -677,6 +738,45 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             if key in selected_types and count > 0
         )
 
+    @classmethod
+    def _cooperation_confidence(cls, ach_type: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+        typed_items = [item for item in items if item.get("type") == ach_type]
+        pair_scores: list[float] = []
+        for item in typed_items:
+            scores = [
+                float(relation.get("confidence") or 0)
+                for relation in item.get("expertRelations") or []
+            ]
+            if len(scores) >= 2:
+                pair_scores.append(min(scores[:2]))
+        average_pair_score = sum(pair_scores) / len(pair_scores) if pair_scores else 0.0
+        count = len(typed_items)
+        years = [
+            year
+            for year in (cls._parse_year(item.get("time")) for item in typed_items)
+            if year is not None
+        ]
+        average_entity_score = (
+            sum(float(item.get("confidence") or 0) for item in typed_items) / count
+            if count
+            else 0.0
+        )
+        breakdown = {
+            "sharedAchievement": 0.65,
+            "edgeReliability": average_pair_score * 0.20,
+            "achievementCount": (
+                min(1.0, math.log1p(count) / math.log1p(20)) * 0.08 if count else 0.0
+            ),
+            "timeSpan": 0.03 if years and max(years) - min(years) >= 3 else 0.0,
+            "entityCompleteness": average_entity_score * 0.02,
+        }
+        return confidence_result(
+            min(0.98, sum(breakdown.values())),
+            source="derived",
+            rule=f"{ach_type}-cooperation-evidence-v1",
+            score_breakdown=breakdown,
+        )
+
     def _frontend_view(
         self,
         *,
@@ -695,6 +795,8 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         mode: str,
         space: str,
         selected_types: set[str],
+        source_confidence: dict[str, Any],
+        target_confidence: dict[str, Any],
     ) -> dict[str, Any]:
         total = papers + patents + projects
         relation_distribution = self._format_nonzero_distribution(
@@ -805,7 +907,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "label": source_name,
                 "entityType": "科技专家",
                 "nodeType": "main",
-                "confidence": 1.0,
+                **source_confidence,
                 "relations": source_relation,
                 "evidence": [f"专家 {source_name}（{source_id}），共同成果 {total} 项。"],
                 "x": 220.0,
@@ -816,7 +918,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "label": target_name,
                 "entityType": "科技专家",
                 "nodeType": "expert",
-                "confidence": 1.0,
+                **target_confidence,
                 "relations": target_relation,
                 "evidence": [f"专家 {target_name}（{target_id}），共同成果 {total} 项。"],
                 "x": 520.0,
@@ -836,6 +938,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 continue
             relation_id = f"coop-{ach_type}-{source_id}-{target_id}"
             unit = "篇" if ach_type == "paper" else "项"
+            relation_score = self._cooperation_confidence(ach_type, items)
             relations.append(
                 {
                     "id": relation_id,
@@ -846,6 +949,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                     "label": label,
                     "category": "科研合作",
                     "summary": f"{evidence_label} {count}{unit}",
+                    **relation_score,
                 }
             )
         nodes = list(entities)
@@ -856,22 +960,24 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "to": relation["to"],
                 "label": relation["label"],
                 "category": relation["category"],
+                "summary": relation["summary"],
+                "confidence": relation["confidence"],
+                "confidenceSource": relation["confidenceSource"],
+                "confidenceBasis": relation["confidenceBasis"],
             }
             for relation in relations
         ]
 
         type_node_map = {
-            "paper": ("paper", "论文", "发表", "由{experts}共同发表", 370.0, 320.0),
-            "patent": ("topic", "专利", "发明", "由{experts}共同发明", 520.0, 340.0),
-            "project": ("project", "项目", "参与", "由{experts}共同参与", 220.0, 340.0),
+            "paper": ("paper", "论文", "由{experts}共同发表", 370.0, 320.0),
+            "patent": ("topic", "专利", "由{experts}共同发明", 520.0, 340.0),
+            "project": ("project", "项目", "由{experts}共同参与", 220.0, 340.0),
         }
         for idx, item in enumerate(items[:8]):
             ach_type = str(item.get("type") or "paper")
-            node_type, type_label, edge_label, relation_template, base_x, base_y = (
-                type_node_map.get(
-                    ach_type,
-                    ("paper", "成果", "共同产出", "由{experts}共同产出", 370.0, 320.0),
-                )
+            node_type, type_label, relation_template, base_x, base_y = type_node_map.get(
+                ach_type,
+                ("paper", "成果", "由{experts}共同产出", 370.0, 320.0),
             )
             nid = str(item.get("id") or f"ach-{idx}")
             title = str(item.get("title") or nid)
@@ -880,7 +986,9 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 "label": title[:18],
                 "entityType": type_label,
                 "nodeType": node_type,
-                "confidence": 0.9,
+                "confidence": item["confidence"],
+                "confidenceSource": item["confidenceSource"],
+                "confidenceBasis": item["confidenceBasis"],
                 "relations": relation_template.format(experts=f"{source_name}、{target_name}"),
                 "evidence": [
                     f"成果类型 {type_label}；"
@@ -893,15 +1001,22 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             }
             entities.append(entity)
             nodes.append(entity)
+            relations_by_expert = {
+                relation["expertId"]: relation for relation in item.get("expertRelations") or []
+            }
             for expert_id in (source_id, target_id):
+                expert_relation = relations_by_expert[expert_id]
                 eid = f"{expert_id}->{nid}"
                 edges.append(
                     {
                         "id": eid,
                         "from": expert_id,
                         "to": nid,
-                        "label": edge_label,
+                        "label": expert_relation["label"],
                         "category": "成果关联",
+                        "confidence": expert_relation["confidence"],
+                        "confidenceSource": expert_relation["confidenceSource"],
+                        "confidenceBasis": expert_relation["confidenceBasis"],
                     }
                 )
 

@@ -45,14 +45,12 @@ export const router = createRouter({
     },
     {
       path: '/',
-      redirect: '/overview',
+      redirect: '/expert-direct',
     },
     {
       path: '/overview',
       name: 'overview',
-      component: PlatformWorkbenchView,
-      props: { initialTab: 'overview' },
-      meta: { title: '平台总览' },
+      redirect: '/expert-direct',
     },
     {
       path: '/data-processing',

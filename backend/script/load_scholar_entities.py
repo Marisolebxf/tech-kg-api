@@ -38,6 +38,7 @@ from db_model.scholar import (
 from infra.graph_db import get_trs_graph_client
 from infra.mysql import MySQLClient
 from script.etl_watermark import Watermark
+from script.organization_etl_common import clean_text, is_virtual_source_row
 from script.scholar_provenance import (
     CONFIDENCE_SOURCE_PRIMARY_KEY,
     confidence_props,
@@ -184,40 +185,48 @@ def _iter_scholars(
 # ---------------------------------------------------------------------------
 # Writer
 # ---------------------------------------------------------------------------
+def _text(value: Any) -> str:
+    return clean_text(value) or ""
+
+
 def _build_person_props(
     row: dict,
     academician: str,
     fields: str,
     now: str,
 ) -> dict:
-    org_name = row.get("scholar_org_name_zh") or row.get("scholar_org_name_en") or ""
+    org_name = _text(row.get("scholar_org_name_zh")) or _text(row.get("scholar_org_name_en"))
     return {
-        "name_en": row.get("name_en") or "",
-        "name_zh": row.get("name_zh") or "",
+        "name_en": _text(row.get("name_en")),
+        "name_zh": _text(row.get("name_zh")),
         "email": "",
         "source": "scholar",
-        "avatar": row.get("avatar") or "",
+        "avatar": _text(row.get("avatar")),
         "scholar_org": org_name,
-        "bio_zh": row.get("bio_zh") or "",
-        "biography": row.get("bio") or "",
+        "bio_zh": _text(row.get("bio_zh")),
+        "biography": _text(row.get("bio")),
         "paper_nums": int(row.get("paper_nums") or 0),
         "citation_nums": int(row.get("citation_nums") or 0),
         "h_index": int(row.get("h_index") or 0),
         "scholar_status": int(row.get("status") or 0),
         "is_academician": academician,
         "research_fields": fields,
-        "work_experience_date": row.get("work_experience_date") or "",
-        "work_experience_institution_en": row.get("work_experience_institution_en") or "",
-        "work_experience_department_en": row.get("work_experience_department_en") or "",
-        "work_experience_position_en": row.get("work_experience_position_en") or "",
-        "work_experience_institution_zh": row.get("work_experience_institution_zh") or "",
-        "work_experience_department_zh": row.get("work_experience_department_zh") or "",
-        "work_experience_position_zh": row.get("work_experience_position_zh") or "",
-        "education_background_date": row.get("education_background_date") or "",
-        "education_background_institution_en": row.get("education_background_institution_en") or "",
-        "education_background_degree_en": row.get("education_background_degree_en") or "",
-        "education_background_institution_zh": row.get("education_background_institution_zh") or "",
-        "education_background_degree_zh": row.get("education_background_degree_zh") or "",
+        "work_experience_date": _text(row.get("work_experience_date")),
+        "work_experience_institution_en": _text(row.get("work_experience_institution_en")),
+        "work_experience_department_en": _text(row.get("work_experience_department_en")),
+        "work_experience_position_en": _text(row.get("work_experience_position_en")),
+        "work_experience_institution_zh": _text(row.get("work_experience_institution_zh")),
+        "work_experience_department_zh": _text(row.get("work_experience_department_zh")),
+        "work_experience_position_zh": _text(row.get("work_experience_position_zh")),
+        "education_background_date": _text(row.get("education_background_date")),
+        "education_background_institution_en": _text(
+            row.get("education_background_institution_en")
+        ),
+        "education_background_degree_en": _text(row.get("education_background_degree_en")),
+        "education_background_institution_zh": _text(
+            row.get("education_background_institution_zh")
+        ),
+        "education_background_degree_zh": _text(row.get("education_background_degree_zh")),
         # Provenance
         "source_system": "gkx_element",
         "source_table": "dwd_scholar",
@@ -325,10 +334,14 @@ def load_persons(
     person_field_types = describe_tag_field_types(graph, "Person") if not dry_run else {}
     logger.info("Person tag fields: %d (%s)", len(person_field_types), list(person_field_types)[:6])
 
-    ok = shown = 0
+    ok = shown = skipped = 0
     max_ts = ""
     for row in _iter_scholars(session, since=since, scholar_id=scholar_id, limit=limit):
         sid = row["scholar_id"]
+        if is_virtual_source_row(row):
+            skipped += 1
+            logger.info("skip synthetic/garbled scholar_id=%s", sid)
+            continue
         vid = person_vid(sid)
         props = _build_person_props(row, talent_flags.get(sid, ""), directions.get(sid, ""), now)
         ts = row.get("update_time") or ""
@@ -349,7 +362,7 @@ def load_persons(
             # nGQL INSERT(替代 merge_node——后者在 trs-graph 上不可靠,见 CLAUDE.md)
             graph.execute_write(render_person_insert(vid, props, person_field_types))
         ok += 1
-    return {"written": ok, "max_update_time": max_ts or None}
+    return {"written": ok, "skipped_virtual": skipped, "max_update_time": max_ts or None}
 
 
 # ---------------------------------------------------------------------------

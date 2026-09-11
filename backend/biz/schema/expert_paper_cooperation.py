@@ -128,6 +128,10 @@ class StructuredPaperCooperationResult(BaseModel):
     stableTeamMembers: list[str] = Field(default_factory=list, description="长期稳定合作团队成员。")
     coreCollaborators: list[str] = Field(default_factory=list, description="核心合作人员。")
     sharedContribution: list[str] = Field(default_factory=list, description="合作贡献标签。")
+    relationConfidences: dict[str, float] = Field(
+        default_factory=dict,
+        description="按结构化证据规则计算的各类论文合作关系置信度，取值范围 0-1。",
+    )
 
 
 class PaperCooperationProvenanceEvidence(BaseModel):

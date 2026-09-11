@@ -594,9 +594,6 @@ function colleagueConfidenceText(
 }
 
 function formatRelationConfidence(edge: GraphEdgeData): string {
-  if (isPaperCooperation.value && edge.confidence === undefined) {
-    return "不适用（统计关系）";
-  }
   if (isLiveColleague.value) {
     return colleagueConfidenceText(
       edge.confidence,
@@ -1162,6 +1159,7 @@ function buildLiveGraph(
     const stable = sr.stableTeamMembers || [];
     const tr = sr.cooperationTimeRange || {};
     const paperCount = sr.cooperationPaperCount ?? 0;
+    const relationConfidences = sr.relationConfidences || {};
     const levelEntries = Object.entries({
       ...sr.journalLevelCount,
       ...sr.conferenceLevelCount,
@@ -1217,13 +1215,41 @@ function buildLiveGraph(
       },
     };
     const edgeOverrides: Record<string, Partial<GraphEdgeData>> = {
-      pc1: { label: "论文合作", category: "论文合作" },
-      pc2: { label: "共同作者", category: "论文作者" },
-      pc3: { label: "共同作者", category: "论文作者" },
-      pc4: { label: "作者单位", category: "作者单位" },
-      pc5: { label: "研究主题", category: "论文主题" },
-      pc6: { label: "发表于", category: "期刊/会议" },
-      pc7: { label: "团队成员", category: "合作团队" },
+      pc1: {
+        label: "论文合作",
+        category: "论文合作",
+        confidence: relationConfidences.paperCooperation,
+      },
+      pc2: {
+        label: "共同作者",
+        category: "论文作者",
+        confidence: relationConfidences.authorship,
+      },
+      pc3: {
+        label: "共同作者",
+        category: "论文作者",
+        confidence: relationConfidences.authorship,
+      },
+      pc4: {
+        label: "作者单位",
+        category: "作者单位",
+        confidence: relationConfidences.authorUnit,
+      },
+      pc5: {
+        label: "研究主题",
+        category: "论文主题",
+        confidence: relationConfidences.researchTopic,
+      },
+      pc6: {
+        label: "发表于",
+        category: "期刊/会议",
+        confidence: relationConfidences.publicationVenue,
+      },
+      pc7: {
+        label: "团队成员",
+        category: "合作团队",
+        confidence: relationConfidences.teamMembership,
+      },
     };
     return {
       nodes: preset.nodes.map((n) => ({ ...n, ...overrides[n.id] })),

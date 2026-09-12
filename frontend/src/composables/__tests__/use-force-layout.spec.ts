@@ -139,6 +139,28 @@ describe('runForceLayout', () => {
     expect(pos.has('ghost')).toBe(false)
   })
 
+  it('可将一级节点固定在中心外的环形轨道，避免与中心重叠', () => {
+    const center = makeNode('chain', { level: 0, nodeType: 'main', radius: 34 })
+    const technologies = Array.from({ length: 5 }, (_, index) =>
+      makeNode(`tech-${index}`, { level: 1, nodeType: 'topic', radius: 22 }),
+    )
+    const nodes = [center, ...technologies]
+    const edges = technologies.map((node) => makeEdge(center.id, node.id))
+    const ringRadius = 170
+
+    const positions = runForceLayout(nodes, edges, {
+      nodeShape: 'circle',
+      levelOneRingRadius: ringRadius,
+    })
+    const centerPosition = positions.get(center.id)!
+
+    for (const node of technologies) {
+      const position = positions.get(node.id)!
+      expect(Math.hypot(position.x - centerPosition.x, position.y - centerPosition.y))
+        .toBeCloseTo(ringRadius, 6)
+    }
+  })
+
   it('重复 id 被去重（保留首个）', () => {
     const first = makeNode('dup', { nodeType: 'main', level: 0 })
     const second = makeNode('dup', { nodeType: 'expert' })
@@ -196,6 +218,39 @@ describe('useForceLayout', () => {
     await nextTick()
     expect(result.laidOutNodes.value[0].x).toBe(beforeX)
     scope.stop()
+  })
+
+  it('相同节点 ID 的新查询结果同步姓名、论文数量和证据并保留坐标', async () => {
+    const scope = effectScope(true)
+    try {
+      const nodes = ref([
+        makeNode('core', { label: '陈明远' }),
+        makeNode('expert-1', { label: '刘博文' }),
+        makeNode('paper-1', { label: '合作论文3篇' }),
+      ])
+      const edges = ref([makeEdge('core', 'expert-1'), makeEdge('core', 'paper-1')])
+      const { laidOutNodes } = scope.run(() => useForceLayout(() => nodes.value, () => edges.value))!
+      const positions = laidOutNodes.value.map(({ x, y }) => ({ x, y }))
+      nodes.value = [
+        makeNode('core', { label: '陈明远', relations: '合作论文 2' }),
+        makeNode('expert-1', { label: '张若琳', evidence: ['最新合作证据'] }),
+        makeNode('paper-1', { label: '合作论文2篇' }),
+      ]
+      await nextTick()
+      expect(laidOutNodes.value.map((node) => node.label)).toEqual(['陈明远', '张若琳', '合作论文2篇'])
+      expect(laidOutNodes.value[0].relations).toBe('合作论文 2')
+      expect(laidOutNodes.value[1].evidence).toEqual(['最新合作证据'])
+      expect(laidOutNodes.value.map(({ x, y }) => ({ x, y }))).toEqual(positions)
+      nodes.value[1].label = '再次更新专家'
+      await nextTick()
+      expect(laidOutNodes.value[1].label).toBe('再次更新专家')
+      nodes.value = []
+      edges.value = []
+      await nextTick()
+      expect(laidOutNodes.value).toEqual([])
+    } finally {
+      scope.stop()
+    }
   })
 
   it('改节点 id 集合触发重布局', async () => {

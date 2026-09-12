@@ -6,9 +6,17 @@ const mocks = vi.hoisted(() => ({
   loadCurrentUser: vi.fn(),
 }))
 
-vi.mock('../config', () => ({ appBase: '/', get authDisabled() { return mocks.authDisabled } }))
+vi.mock('../config', () => ({
+  appBase: '/',
+  apiBase: '/',
+  get authDisabled() { return mocks.authDisabled },
+}))
 vi.mock('../stores/auth', () => ({ useAuthStore: () => ({ loadCurrentUser: mocks.loadCurrentUser }) }))
-vi.mock('../portal/iframeBridge', () => ({ isPortalEmbeddedMode: () => mocks.embedded }))
+vi.mock('../portal/iframeBridge', () => ({
+  isPortalEmbeddedMode: () => mocks.embedded,
+  PortalAction: { SESSION_EXPIRED: 'session-expired' },
+  portalBridge: { isInIframe: false, send: vi.fn() },
+}))
 vi.mock('../views/business-service/BusinessServiceView.vue', () => ({ default: {} }))
 vi.mock('../views/auth/LoginView.vue', () => ({ default: {} }))
 vi.mock('../views/auth/UserCenterView.vue', () => ({ default: {} }))
@@ -29,14 +37,16 @@ vi.mock('../views/admin/MemberManagementView.vue', () => ({ default: {} }))
 
 import { router } from './index'
 
+// 图谱查询（综合查询/实体列表）按产品决策并入管理端，仅管理员可见。
 const restrictedPaths = [
   '/schema', '/graph-build', '/graph-build/jobs/job-1', '/manual-review',
   '/manual-review/task/instance-1', '/configurations', '/task-detail/extract/task-1',
   '/processing-instance/instance-1', '/admin/members', '/admin/reviews', '/admin/corrections',
   '/admin/task-detail/extract/task-1', '/admin/processing-instance/instance-1',
+  '/graph-query', '/graph-query/entities',
 ]
 const sharedPaths = [
-  '/graph-query', '/graph-query/entities', '/expert-direct', '/node-indirect',
+  '/expert-direct', '/node-indirect',
   '/two-point-achievement', '/expert-colleague', '/expert-alumni', '/paper-cooperation',
   '/enterprise-relation', '/industry-chain-event', '/industry-chain-panorama',
 ]
@@ -61,9 +71,9 @@ describe('角色控制与默认入口', () => {
     expect(mocks.loadCurrentUser).toHaveBeenCalledWith(true)
   })
 
-  it.each(['/overview', '/'])('普通用户从 %s 进入综合查询并保留门户参数', async (path) => {
+  it.each(['/overview', '/'])('普通用户从 %s 落到专家直达并保留门户参数', async (path) => {
     await router.push(`${path}?embedded=1#entry`)
-    expect(router.currentRoute.value.fullPath).toBe('/graph-query?embedded=1#entry')
+    expect(router.currentRoute.value.fullPath).toBe('/expert-direct?embedded=1#entry')
   })
 
   it('旧管理路由重定向也经过角色检查', async () => {
@@ -99,7 +109,7 @@ describe('角色控制与默认入口', () => {
   it('iframe 内会话失效仍走现有门户登录提示', async () => {
     mocks.embedded = true
     mocks.loadCurrentUser.mockResolvedValue(null)
-    await router.push('/graph-query')
+    await router.push('/expert-direct')
     expect(router.currentRoute.value.path).toBe('/login')
     expect(router.currentRoute.value.query).toEqual({ embedded: '1', portalState: 'session-expired' })
   })

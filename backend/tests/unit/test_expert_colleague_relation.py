@@ -38,6 +38,44 @@ def edge(source: str, target: str, edge_type: str, **properties: Any) -> dict[st
     }
 
 
+def test_entity_provenance_prefers_explicit_mysql_source():
+    entity = node(
+        "person_a",
+        ["Person"],
+        source_table="dwd_scholar",
+        source_field="scholar_id",
+        source_record_id="a",
+        organization_base="dwd_org_stock_base",
+    )
+    provenance = ExpertColleagueRelationService()._entity_data(entity, {})["provenance"]
+    assert provenance["sourceTable"] == "dwd_scholar"
+    assert provenance["sourceField"] == "scholar_id"
+    entity["properties"]["source_field"] = "external_scholar_id"
+    assert (
+        ExpertColleagueRelationService()._entity_data(entity, {})["provenance"]["sourceField"]
+        == "external_scholar_id"
+    )
+
+
+@pytest.mark.parametrize(
+    "table,field,vid",
+    [
+        ("dwd_scholar", "scholar_id", "person_99a94795"),
+        ("dwd_org_stock_base", "org_id", "org_047583dfefe252480e530d15c0d436df"),
+    ],
+)
+def test_legacy_entity_provenance_uses_mysql_column(table, field, vid):
+    entity = node(
+        vid,
+        ["Person" if table == "dwd_scholar" else "Organization"],
+        source_table=table,
+        source_record_id=vid,
+    )
+    provenance = ExpertColleagueRelationService()._entity_data(entity, {})["provenance"]
+    assert provenance["sourceTable"] == table
+    assert provenance["sourceField"] == field
+
+
 class FakeGraphSearchGateway:
     def __init__(self) -> None:
         self.api_calls: list[dict[str, Any]] = []
@@ -116,6 +154,90 @@ class FakeGraphSearchGateway:
                 edge("paper_1", "person_b", "AUTHORED_BY"),
             ],
         }
+
+
+@pytest.mark.asyncio
+async def test_query_uses_affiliation_org_not_person_scholar_org() -> None:
+    gateway = FakeGraphSearchGateway()
+    gateway.expert = node(
+        "person_a",
+        ["Person"],
+        name_zh="张明远",
+        scholar_org="错误的展示机构",
+    )
+    gateway.colleague = node(
+        "person_b",
+        ["Person"],
+        name_zh="李佳宁",
+        scholar_org="另一个错误机构",
+    )
+    result = await ExpertColleagueRelationService().query(gateway, expert_id="person_a")
+
+    assert result["expert"]["organization"] == "中国科学院自动化研究所"
+    assert result["colleagues"][0]["colleague"]["organization"] == "中国科学院自动化研究所"
+    assert result["summary"]["coreExpertOrganization"] == "中国科学院自动化研究所"
+
+
+@pytest.mark.asyncio
+async def test_parent_and_subsidiary_orgs_are_not_colleagues() -> None:
+    gateway = FakeGraphSearchGateway()
+    parent = node("org_parent", ["Organization"], name_zh="某集团")
+    child = node("org_child", ["Organization"], name_zh="某子公司")
+    gateway.org = child
+    gateway.expert_aff_edge = edge(
+        "person_a",
+        "org_child",
+        "AFFILIATED_WITH",
+        affiliation_name="某子公司",
+        work_experience_date="2018-2023",
+        work_experience_department_zh="研发部",
+    )
+    gateway.colleague_aff_edge = edge(
+        "person_b",
+        "org_parent",
+        "AFFILIATED_WITH",
+        affiliation_name="某集团",
+        work_experience_date="2020-2025",
+        work_experience_department_zh="研发部",
+    )
+    hierarchy = edge("org_child", "org_parent", "SUBSIDIARY_OF")
+
+    async def subgraph(
+        node_id: str,
+        *,
+        depth: int,
+        limit: int,
+        direction: str = "both",
+        edge_type: str | None = None,
+        space: str | None = None,
+    ) -> dict[str, Any]:
+        gateway.api_calls.append(
+            {
+                "method": "GET",
+                "path": f"/api/v1/graph-search/subgraph/{node_id}",
+                "params": {"depth": depth, "direction": direction, "edge_type": edge_type},
+            }
+        )
+        if node_id == "person_a" and edge_type == "AFFILIATED_WITH":
+            return {"nodes": [gateway.expert, child], "edges": [gateway.expert_aff_edge]}
+        if node_id == "org_child":
+            return {
+                "nodes": [child, parent, gateway.expert],
+                "edges": [gateway.expert_aff_edge, hierarchy],
+            }
+        if node_id == "org_parent":
+            return {
+                "nodes": [parent, gateway.colleague],
+                "edges": [gateway.colleague_aff_edge],
+            }
+        if edge_type == "COAUTHOR_WITH":
+            return {"nodes": [gateway.expert], "edges": []}
+        return {"nodes": [gateway.expert, child], "edges": [gateway.expert_aff_edge]}
+
+    gateway.subgraph = subgraph  # type: ignore[method-assign]
+    result = await ExpertColleagueRelationService().query(gateway, expert_id="person_a")
+    assert result["total"] == 0
+    assert result["colleagues"] == []
 
 
 @pytest.mark.asyncio
@@ -215,6 +337,16 @@ async def test_summary_and_graph_cover_tender_details() -> None:
     assert summary["commonOrganization"] == "中国科学院自动化研究所"
     assert summary["effectivePeriod"] == "2020-01 至 2023-12"
     assert summary["workContent"] == "科技知识图谱关系推理"
+    # 摘要机构须与共同机构（即图谱预览展示的机构）一致，即使专家节点自带其他 scholar_org
+    assert summary["coreExpertOrganization"] == "中国科学院自动化研究所"
+    assert summary["relationConfidence"] == result["colleagues"][0]["confidence"]
+    expert_edges = [
+        edge
+        for edge in result["graph"]["edges"]
+        if {edge["source"], edge["target"]} == {"person_a", "person_b"}
+    ]
+    assert [edge["label"] for edge in expert_edges] == ["同事关系"]
+    assert result["colleagues"][0]["coauthorEdge"]  # 合著仍作为证据保留
     node_types = {item["type"] for item in result["graph"]["nodes"]}
     assert {"expert", "organization", "paper"} <= node_types
     assert {item["label"] for item in result["graph"]["edges"]} >= {
@@ -227,33 +359,28 @@ async def test_summary_and_graph_cover_tender_details() -> None:
     )
 
 
-def test_request_validates_period_and_normalizes_filters() -> None:
-    request = ExpertColleagueRelationRequest(
-        expertId="person_a",
-        organization=" 自动化研究所 ",
-        overlapPeriod="2020-2022",
-        offset=10,
-    )
-
-    assert request.expertId == "person_a"
-    assert request.organization == "自动化研究所"
-    assert request.offset == 10
-    with pytest.raises(ValidationError):
-        ExpertColleagueRelationRequest(expertId="person_a", overlapPeriod="not-a-period")
-
+def test_request_accepts_only_page_fields_and_requires_expert_b() -> None:
     request = ExpertColleagueRelationRequest(
         expert_a_id="person_a",
         expert_b_id="person_b",
         start_time="2021-01",
         end_time="2022-12",
     )
+    assert request.expertId == "person_a"
+    assert request.targetExpertId == "person_b"
     assert request.startTime == "2021-01"
     assert request.endTime == "2022-12"
+
     with pytest.raises(ValidationError):
-        ExpertColleagueRelationRequest(expert_a_id="person_a", start_time="2022-01")
+        ExpertColleagueRelationRequest(expert_a_id="person_a")
+    with pytest.raises(ValidationError):
+        ExpertColleagueRelationRequest(
+            expert_a_id="person_a", expert_b_id="person_b", start_time="2022-01"
+        )
     with pytest.raises(ValidationError):
         ExpertColleagueRelationRequest(
             expert_a_id="person_a",
+            expert_b_id="person_b",
             start_time="2023-01",
             end_time="2022-12",
         )
@@ -392,20 +519,27 @@ async def test_gateway_subgraph_respects_total_limit() -> None:
     assert len(subgraph_calls) == 1
 
 
-def test_request_accepts_page_snake_case_fields() -> None:
-    request = ExpertColleagueRelationRequest.model_validate(
-        {
-            "expert_id": "E10001",
-            "overlap_period": "2018-2022",
-            "team_or_project": " 知识工程项目组 ",
-            "min_confidence": 0.6,
-        }
-    )
-
-    assert request.expertId == "E10001"
-    assert request.overlapPeriod == "2018-2022"
-    assert request.teamOrProject == "知识工程项目组"
-    assert request.minConfidence == 0.6
+@pytest.mark.parametrize(
+    "extra_field",
+    [
+        "organization",
+        "department",
+        "team_or_project",
+        "achievement_types",
+        "min_confidence",
+        "limit",
+        "offset",
+        "overlap_period",
+    ],
+)
+def test_request_rejects_removed_parameters(extra_field: str) -> None:
+    payload = {
+        "expert_a_id": "E10001",
+        "expert_b_id": "E10002",
+        extra_field: "unused",
+    }
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        ExpertColleagueRelationRequest.model_validate(payload)
 
 
 @pytest.mark.asyncio

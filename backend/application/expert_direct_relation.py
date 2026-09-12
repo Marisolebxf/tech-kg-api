@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 from service.expert_direct_relation import ExpertDirectRelationService
 
 
@@ -18,6 +20,7 @@ class ExpertDirectRelationApplication:
         start_time: str | None = None,
         end_time: str | None = None,
         limit: int = 10,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> dict[str, object]:
         return await self._service.query(
             data_source=data_source,
@@ -27,4 +30,5 @@ class ExpertDirectRelationApplication:
             start_time=start_time,
             end_time=end_time,
             limit=limit,
+            auth_headers=auth_headers,
         )

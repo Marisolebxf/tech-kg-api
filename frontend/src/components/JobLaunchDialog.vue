@@ -419,10 +419,10 @@ async function submit() {
 .job-field__label-row{display:flex;min-width:0;align-items:center;gap:8px;flex-wrap:wrap}.job-field__label-row>span{flex:0 0 auto;color:#4e5969;font-size:14px;line-height:22px}.job-field__label-row>.muted-warn{color:#ff7d00!important}
 .job-field>input:not([type="file"]){box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:22px;outline:0;box-shadow:none}
 .job-field>input:not([type="file"]):hover{border-color:#4080ff}
-.job-field>input:not([type="file"]):focus,.job-field>input:not([type="file"]):focus-visible{border-color:#165dff;outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
+.job-field>input:not([type="file"]):focus,.job-field>input:not([type="file"]):focus-visible{border-color:#004ecc;outline:0;box-shadow:0 0 0 2px rgba(0,78,204,.1)}
 :deep(.job-select.arco-select-view){display:inline-flex;box-sizing:border-box;width:100%;min-width:0;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;align-items:center}
 :deep(.job-select.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
-:deep(.job-select.arco-select-view:focus-within),:deep(.job-select.arco-select-view-focus){border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+:deep(.job-select.arco-select-view:focus-within),:deep(.job-select.arco-select-view-focus){border-color:#004ecc!important;background:#fff!important;box-shadow:0 0 0 2px rgba(0,78,204,.1)!important}
 :deep(.job-select.arco-select-view .arco-select-view-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 :deep(.job-select.arco-select-view .arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
 :deep(.job-select.arco-select-view .arco-select-view-value),:deep(.job-select.arco-select-view .arco-select-view-placeholder){min-width:0;overflow:hidden;background:transparent!important;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
@@ -430,21 +430,21 @@ async function submit() {
 .job-field-group{display:flex;min-width:0;gap:16px;flex-direction:column}
 .job-launch-dialog>footer{display:flex;box-sizing:border-box;flex:0 0 64px;height:64px;align-items:center;justify-content:flex-end;gap:16px;padding:16px 24px;border-top:1px solid #e3ebf6;background:#fff}
 .job-launch-dialog footer button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
-.job-launch-dialog footer .primary{border-color:#165dff;background:#165dff;color:#fff}
+.job-launch-dialog footer .primary{border-color:#004ecc;background:#004ecc;color:#fff}
 .job-launch-dialog footer button:disabled{opacity:.5;cursor:not-allowed}
 .chain-steps{display:flex;flex-direction:column;gap:6px;margin:6px 0 0;padding:0;list-style:none}
 .chain-steps li{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid #d5e4f7;border-radius:5px;background:#f8fbff}
-.chain-steps em{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#e9f2ff;color:#165dff;font-size:12px;line-height:20px;font-style:normal;font-weight:400}
-.chain-steps code{flex:1;padding:1px 5px;border-radius:3px;background:#edf4ff;color:#165dff;font-family:inherit;font-size:12px;line-height:20px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chain-steps em{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#e9f2ff;color:#004ecc;font-size:12px;line-height:20px;font-style:normal;font-weight:400}
+.chain-steps code{flex:1;padding:1px 5px;border-radius:3px;background:#edf4ff;color:#004ecc;font-family:inherit;font-size:12px;line-height:20px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chain-steps button{width:24px;height:24px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:12px;line-height:20px;font-weight:400;cursor:pointer}
 .chain-steps button:disabled{opacity:.35;cursor:not-allowed}
 .chain-steps button.danger{border-color:#f6b9b4;color:#b42318}
 .upload-row{display:flex;align-items:center;gap:10px}
-.upload-row button{height:32px;padding:0 14px;border:1px solid #165dff;border-radius:4px;background:#fff;color:#165dff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
-.upload-row code{color:#165dff;font-family:inherit;font-size:12px;line-height:20px;font-weight:400}
+.upload-row button{height:32px;padding:0 14px;border:1px solid #004ecc;border-radius:4px;background:#fff;color:#004ecc;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
+.upload-row code{color:#004ecc;font-family:inherit;font-size:12px;line-height:20px;font-weight:400}
 .muted-warn{margin:0;color:#ff7d00;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schedule-preview{margin:0;color:#4e5969;font-size:12px;line-height:20px}
 .field-error{color:#e4322d;font-size:12px;line-height:18px}
-.schedule-preview strong{color:#165dff;font-weight:600}
+.schedule-preview strong{color:#004ecc;font-weight:600}
 .schedule-preview .cron-hint{color:#86909c}
 </style>

@@ -1,5 +1,6 @@
 """Unit tests for the global administrator member handlers."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,11 @@ from biz.schemas.correction import AdminRoleUpdateRequest
 
 def _application(*admin_ids: str) -> SimpleNamespace:
     return SimpleNamespace(settings=SimpleNamespace(initial_admin_user_ids=admin_ids))
+
+
+def _request() -> SimpleNamespace:
+    # get_cache 仅读取 query_params.multi_items() 组缓存键，空参数即可。
+    return SimpleNamespace(query_params=SimpleNamespace(multi_items=lambda: []))
 
 
 def test_get_members_includes_configured_and_current_admin(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -28,6 +34,7 @@ def test_get_members_includes_configured_and_current_admin(monkeypatch: pytest.M
     response = admin_member.get_members(
         SimpleNamespace(user_id="current-admin"),
         _application("configured-admin"),
+        _request(),
         session,
     )
 
@@ -35,7 +42,8 @@ def test_get_members_includes_configured_and_current_admin(monkeypatch: pytest.M
         "session": session,
         "initial_admin_ids": ("configured-admin", "current-admin"),
     }
-    assert response.data == {"items": [{"id": "member-1"}], "total": 1}
+    # get_cache.store 返回预序列化 Response，断言落到 JSON body 上。
+    assert json.loads(response.body)["data"] == {"items": [{"id": "member-1"}], "total": 1}
 
 
 def test_update_admin_role_maps_service_errors(monkeypatch: pytest.MonkeyPatch) -> None:

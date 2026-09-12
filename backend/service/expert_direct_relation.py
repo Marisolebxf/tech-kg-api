@@ -17,10 +17,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import re
 import threading
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from infra.graph_api_client import GraphAPIError, graph_api
@@ -79,6 +81,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         start_time: str | None = None,
         end_time: str | None = None,
         limit: int = 10,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         _ = data_source
         normalized_limit = max(1, min(int(limit or 10), MAX_QUERY_LIMIT))
@@ -109,7 +112,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         fallback_reason: str | None = None
 
         try:
-            async with graph_api() as client:
+            async with graph_api(auth_headers=auth_headers) as client:
                 node_a = await self._find_person(client, a_keyword)
                 if node_a is None:
                     fallback_reason = "anchor_a_not_found"
@@ -149,6 +152,8 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                                 fallback_reason = "institution_filtered"
                             else:
                                 rows = [row]
+                if rows:
+                    await self._attach_representative_achievements(client, rows)
         except GraphAPIError as exc:
             logger.warning("graph API unavailable: %s", exc)
             fallback_reason = "graph_api_error"
@@ -311,6 +316,60 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 continue
             rows.append(self._build_row(node_a, node_b, edge))
         return rows
+
+    async def _attach_representative_achievements(
+        self, client: Any, rows: list[dict[str, Any]]
+    ) -> None:
+        paper_ids: dict[str, set[str]] = {}
+        titles: dict[str, str] = {}
+        edge_type = "AUTHORED" if TRSGraphSettings.from_env().space == "techkg" else "AUTHORED_BY"
+        for row in rows:
+            try:
+                for person_id in (row["expert_a_id"], row["expert_b_id"]):
+                    if person_id not in paper_ids:
+                        edges = await client.get_node_edges(
+                            person_id, edge_type=edge_type, limit=200
+                        )
+                        paper_ids[person_id] = {
+                            str(
+                                edge["target"]
+                                if edge.get("source") == person_id
+                                else edge["source"]
+                            )
+                            for edge in edges
+                            if edge.get("source") == person_id or edge.get("target") == person_id
+                        }
+                shared = paper_ids[row["expert_a_id"]] & paper_ids[row["expert_b_id"]]
+                achievements = []
+                for paper_id in sorted(shared):
+                    if paper_id not in titles:
+                        paper = await client.get_node(paper_id)
+                        props = (paper or {}).get("properties") or {}
+                        titles[paper_id] = next(
+                            (
+                                str(props[key]).strip()
+                                for key in (
+                                    "title_zh",
+                                    "title_cn",
+                                    "title",
+                                    "title_en",
+                                    "zh_name",
+                                    "en_name",
+                                    "name",
+                                )
+                                if props.get(key)
+                            ),
+                            "",
+                        )
+                    if titles[paper_id]:
+                        achievements.append({"id": paper_id, "title": titles[paper_id]})
+                    if len(achievements) == 3:
+                        break
+                row["representative_achievements"] = achievements
+            except GraphAPIError:
+                logger.warning(
+                    "Could not retrieve representative papers for %s", row["relation_key"]
+                )
 
     async def _find_person(self, client: Any, keyword: str) -> dict[str, Any] | None:
         """按 VID / scholar_id / 姓名定位一个 Person 节点。
@@ -483,7 +542,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
     def _build_item(self, row: dict[str, Any]) -> dict[str, Any]:
         expert_a_org = str(row.get("expert_a_org") or "")
         expert_b_org = str(row.get("expert_b_org") or "")
-        institution = str(row.get("institution") or expert_a_org or expert_b_org or "合作关系")
+        # 只有 A、B 机构真实相同时才算"共同机构"；否则不能把单侧机构包装成双方共有属性。
+        shared_institution = expert_a_org if expert_a_org and expert_a_org == expert_b_org else ""
+        institution = shared_institution or "合作关系"
         evidence_kind = str(row.get("evidence_kind") or "paper")
         evidence_count = int(row.get("evidence_count") or row.get("co_paper_count") or 0)
 
@@ -493,15 +554,19 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             reason_tags = ["共项目"] if evidence_count else ["项目关联"]
         else:
             reason_tags = ["共论文"] if evidence_count else ["合作关系"]
-        if expert_a_org and expert_b_org and expert_a_org == expert_b_org:
+        if shared_institution:
             reason_tags.insert(0, "同机构")
 
-        relation_strength = min(99, max(60, 60 + evidence_count * 5 + len(reason_tags) * 4))
+        # 对数缩放：证据数量差距很大时（如 11 篇 vs 139 篇）仍能拉开置信度档位，
+        # 不再是线性公式一撞到 99 上限就全部趴平。
+        relation_strength = min(99, round(60 + math.log1p(evidence_count) * 10))
         relation_time = row.get("relation_time")
         if hasattr(relation_time, "strftime"):
-            last_updated_at = relation_time.strftime("%Y-%m-%d %H:%M:%S")
+            last_updated_at = relation_time.strftime("%Y-%m-%d")
         else:
-            last_updated_at = str(relation_time) if relation_time else None
+            last_updated_at = (
+                re.split(r"[T ]", str(relation_time), maxsplit=1)[0] if relation_time else None
+            )
 
         expert_a = {
             "expertId": str(row.get("expert_a_id") or ""),
@@ -531,6 +596,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             "coPaperCount": evidence_count if evidence_kind == "paper" else 0,
             "relationStrength": relation_strength,
             "reasonTags": reason_tags,
+            "representativeAchievements": row.get("representative_achievements", []),
             "relationSummary": " + ".join(reason_tags),
             "lastUpdatedAt": last_updated_at,
             "detailRows": [
@@ -541,7 +607,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 ["专家 B 机构", expert_b["organization"] or ""],
                 ["专家 B H指数", expert_b["hIndex"]],
                 ["关系类型", "直接关系"],
-                ["共同机构/主关系", institution],
+                ["共同机构", shared_institution or "无"],
                 ["证据类型", self._evidence_label(evidence_kind)],
                 ["证据数量", evidence_count],
                 ["判定依据", reason_tags],
@@ -707,67 +773,69 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         }
 
     def _build_graph(self, items: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+        """组装展示用子图。
+
+        机构边只按各专家自己的 ``organization`` 连线：同机构时两人自然汇聚到同一个
+        机构节点，跨机构时各连各的，不再用 "合作关系" 之类的占位字符串伪造一个
+        双方共有的机构节点。没有机构属性的专家不产生机构节点与机构边。
+        """
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
         seen_nodes: set[str] = set()
+        seen_edges: set[tuple[str, str, str]] = set()
 
-        for item in items[:4]:
+        def add_node(node: dict[str, Any]) -> None:
+            if node["id"] in seen_nodes:
+                return
+            seen_nodes.add(node["id"])
+            nodes.append(node)
+
+        def add_edge(source: str, target: str, label: str, data: dict[str, Any]) -> None:
+            key = (source, target, label)
+            if key in seen_edges:
+                return
+            seen_edges.add(key)
+            edges.append({"source": source, "target": target, "label": label, "data": data})
+
+        for item in items:
             expert_a = item["expertA"]
             expert_b = item["expertB"]
-            institution = item["institution"] or "合作关系"
-            institution_id = f"institution:{institution}"
 
-            for node in (
-                {
-                    "id": expert_a["expertId"],
-                    "type": "expert",
-                    "label": expert_a["name"],
-                    "subtitle": expert_a["organization"],
-                    "data": {"role": "A"},
-                },
-                {
-                    "id": expert_b["expertId"],
-                    "type": "expert",
-                    "label": expert_b["name"],
-                    "subtitle": expert_b["organization"],
-                    "data": {"role": "B"},
-                },
-                {
-                    "id": institution_id,
-                    "type": "institution",
-                    "label": institution,
-                    "subtitle": "关系归属",
-                    "data": {},
-                },
-            ):
-                if node["id"] not in seen_nodes:
-                    seen_nodes.add(node["id"])
-                    nodes.append(node)
+            for expert, role in ((expert_a, "A"), (expert_b, "B")):
+                add_node(
+                    {
+                        "id": expert["expertId"],
+                        "type": "expert",
+                        "label": expert["name"],
+                        "subtitle": expert["organization"],
+                        "data": {"role": role},
+                    }
+                )
 
-            edges.append(
-                {
-                    "source": expert_a["expertId"],
-                    "target": expert_b["expertId"],
-                    "label": f"直接关系 / {item['relationSummary']}",
-                    "data": {"strength": item["relationStrength"]},
-                }
+            add_edge(
+                expert_a["expertId"],
+                expert_b["expertId"],
+                f"直接关系 / {item['relationSummary']}",
+                {"strength": item["relationStrength"]},
             )
-            edges.append(
-                {
-                    "source": expert_a["expertId"],
-                    "target": institution_id,
-                    "label": "关联机构",
-                    "data": {},
-                }
-            )
-            edges.append(
-                {
-                    "source": expert_b["expertId"],
-                    "target": institution_id,
-                    "label": "关联机构",
-                    "data": {},
-                }
-            )
+
+            # 机构边逐个专家按其真实 organization 连线，避免出现该专家并不存在的机构关系，
+            # 也不再用 "合作关系" 兜底字符串伪造一个双方共有的机构节点。
+            for expert in (expert_a, expert_b):
+                organization = str(expert.get("organization") or "").strip()
+                if not organization:
+                    continue
+                institution_id = f"institution:{organization}"
+                add_node(
+                    {
+                        "id": institution_id,
+                        "type": "institution",
+                        "label": organization,
+                        "subtitle": "任职机构",
+                        "data": {},
+                    }
+                )
+                add_edge(expert["expertId"], institution_id, "关联机构", {})
 
         return {"nodes": nodes, "edges": edges}
 

@@ -1,5 +1,6 @@
 import {
-  ref,
+  computed,
+  shallowRef,
   toValue,
   watch,
   type MaybeRefOrGetter,
@@ -22,6 +23,8 @@ export interface ForceLayoutOptions {
   height?: number
   /** 最大迭代次数，默认 300。 */
   maxTicks?: number
+  /** 将 level=1 节点固定在中心外的环形半径；仅分层全景图按需启用。 */
+  levelOneRingRadius?: number
 }
 
 /**
@@ -121,6 +124,13 @@ export function runForceLayout(
   const pinned = new Set<number>()
   const centerIdx = ordered.findIndex((node) => node.level === 0)
   if (centerIdx >= 0) pinned.add(centerIdx)
+  const levelOneRingRadius = Math.max(0, options?.levelOneRingRadius ?? 0)
+  const levelOneIndices = centerIdx >= 0 && levelOneRingRadius > 0
+    ? ordered
+      .map((node, index) => (node.level === 1 ? index : -1))
+      .filter((index) => index >= 0)
+    : []
+  levelOneIndices.forEach((index) => pinned.add(index))
 
   const x = new Float64Array(n)
   const y = new Float64Array(n)
@@ -130,8 +140,15 @@ export function runForceLayout(
   for (let i = 0; i < n; i++) {
     r[i] = nodeCollisionRadius(ordered[i], shape)
     if (pinned.has(i)) {
-      x[i] = CX
-      y[i] = CY
+      const ringIndex = levelOneIndices.indexOf(i)
+      if (ringIndex >= 0) {
+        const angle = -Math.PI / 2 + (ringIndex * Math.PI * 2) / levelOneIndices.length
+        x[i] = CX + levelOneRingRadius * Math.cos(angle)
+        y[i] = CY + levelOneRingRadius * Math.sin(angle)
+      } else {
+        x[i] = CX
+        y[i] = CY
+      }
     } else {
       const h = hashStr(ordered[i].id)
       const angle = ((h % 2000) / 2000) * Math.PI * 2
@@ -263,6 +280,8 @@ export function runForceLayout(
         const d = Math.hypot(dx, dy)
         const minD = r[i] + r[j]
         if (d >= minD) continue
+        // 中心与一级环上的固定节点均不参与碰撞位移。
+        if (pinned.has(i) && pinned.has(j)) continue
         if (d > 0.0001) {
           const overlap = (minD - d) / 2
           const ux = dx / d
@@ -309,14 +328,15 @@ export function runForceLayout(
  * 响应式力导向布局。仅当节点/边集合签名（id 列表 + 边拓扑 + 形状 + 画布尺寸）变化时重算，
  * 不响应 selectedNodeId / selectedEdgeId / activeCategories / 平移缩放。
  * immediate 首次运行，保证首屏渲染前已布局（无预设坐标闪烁）。
- * laidOutNodes 元素为 {...原节点, x, y}，保留全部非位置字段。
+ * 仅缓存布局坐标；节点内容独立响应最新输入，避免同 ID 的查询结果保留旧姓名/数量。
+ * laidOutNodes 元素为 {...最新节点, x, y}，保留全部非位置字段。
  */
 export function useForceLayout(
   nodes: MaybeRefOrGetter<readonly GraphNodeData[]>,
   edges: MaybeRefOrGetter<readonly GraphEdgeData[]>,
   options?: MaybeRefOrGetter<ForceLayoutOptions | undefined>,
 ): { laidOutNodes: Ref<GraphNodeData[]> } {
-  const laidOutNodes = ref<GraphNodeData[]>([]) as Ref<GraphNodeData[]>
+  const positions = shallowRef<Map<string, Vec>>(new Map())
 
   const signature = () => {
     const ns = toValue(nodes) ?? []
@@ -328,6 +348,7 @@ export function useForceLayout(
       o?.nodeShape ?? 'circle',
       o?.width ?? 760,
       o?.height ?? 430,
+      o?.levelOneRingRadius ?? 0,
     ].join('#')
   }
 
@@ -336,13 +357,16 @@ export function useForceLayout(
     () => {
       const ns = toValue(nodes) ?? []
       const es = toValue(edges) ?? []
-      const pos = runForceLayout(ns, es, toValue(options))
-      laidOutNodes.value = ns.map((node) => {
-        const p = pos.get(node.id) ?? { x: node.x, y: node.y }
-        return { ...node, x: p.x, y: p.y }
-      })
+      positions.value = runForceLayout(ns, es, toValue(options))
     },
     { immediate: true },
+  )
+
+  const laidOutNodes = computed<GraphNodeData[]>(() =>
+    (toValue(nodes) ?? []).map((node) => {
+      const p = positions.value.get(node.id) ?? { x: node.x, y: node.y }
+      return { ...node, x: p.x, y: p.y }
+    }),
   )
 
   return { laidOutNodes }

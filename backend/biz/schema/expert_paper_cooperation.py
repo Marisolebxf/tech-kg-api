@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-EXPERT_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
+EXPERT_ID_PATTERN = r"^[\w\u4e00-\u9fff·.\-]+$"
 DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 
 
@@ -25,32 +25,31 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
         min_length=1,
         max_length=64,
         pattern=EXPERT_ID_PATTERN,
-        description="专家A唯一标识，仅支持字母、数字、下划线和中划线。",
+        description="专家 A 的 VID、scholar_id、source_record_id 或精确姓名。",
     )
     expertBId: str = Field(
         ...,
         min_length=1,
         max_length=64,
         pattern=EXPERT_ID_PATTERN,
-        description="专家B唯一标识，仅支持字母、数字、下划线和中划线。",
+        description="专家 B 的 VID、scholar_id、source_record_id 或精确姓名。",
     )
-    startTime: str | None = Field(
-        default=None, pattern=DATE_PATTERN, description="统计开始时间，格式 YYYY-MM-DD。"
-    )
-    endTime: str | None = Field(
-        default=None, pattern=DATE_PATTERN, description="统计结束时间，格式 YYYY-MM-DD。"
-    )
+    startTime: str | None = Field(default=None, description="统计开始时间，格式 YYYY-MM-DD。")
+    endTime: str | None = Field(default=None, description="统计结束时间，格式 YYYY-MM-DD。")
 
     @field_validator("expertAId", "expertBId", mode="before")
     @classmethod
     def normalize_expert_id(cls, value: str) -> str:
         if value is None:
             return value
-        value = str(value).strip()
+        value = str(value)
+        if re.search(r"\s", value):
+            raise ValueError("专家标识不能包含空格或 !@#￥%& 等异常字符")
+        value = value.strip()
         if len(value) > 64:
             raise ValueError("专家标识长度不能超过 64 个字符")
         if value and not re.fullmatch(EXPERT_ID_PATTERN, value):
-            raise ValueError("专家标识输入字符存在异常字符，仅支持字母、数字、下划线和中划线")
+            raise ValueError("专家标识不能包含空格或 !@#￥%& 等异常字符")
         return value
 
     @field_validator("startTime", "endTime", mode="before")
@@ -59,7 +58,11 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
         if value is None:
             return None
         value = str(value).strip()
-        return value or None
+        if not value:
+            return None
+        if not re.fullmatch(DATE_PATTERN, value):
+            raise ValueError("时间格式错误，请使用有效日期 YYYY-MM-DD")
+        return value
 
     @field_validator("startTime", "endTime")
     @classmethod
@@ -76,10 +79,10 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
     def validate_experts(self):
         if self.expertAId == self.expertBId:
             raise ValueError("expertAId 和 expertBId 不能相同")
-        current_month = date.today().strftime("%Y-%m")
-        if self.startTime and self.startTime[:7] > current_month:
+        today = date.today()
+        if self.startTime and date.fromisoformat(self.startTime) > today:
             raise ValueError("startTime 超出当前时间")
-        if self.endTime and self.endTime[:7] > current_month:
+        if self.endTime and date.fromisoformat(self.endTime) > today:
             raise ValueError("endTime 超出当前时间")
         if self.startTime and self.endTime:
             start_date = date.fromisoformat(self.startTime)
@@ -125,6 +128,10 @@ class StructuredPaperCooperationResult(BaseModel):
     stableTeamMembers: list[str] = Field(default_factory=list, description="长期稳定合作团队成员。")
     coreCollaborators: list[str] = Field(default_factory=list, description="核心合作人员。")
     sharedContribution: list[str] = Field(default_factory=list, description="合作贡献标签。")
+    relationConfidences: dict[str, float] = Field(
+        default_factory=dict,
+        description="按结构化证据规则计算的各类论文合作关系置信度，取值范围 0-1。",
+    )
 
 
 class PaperCooperationProvenanceEvidence(BaseModel):

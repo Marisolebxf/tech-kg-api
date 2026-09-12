@@ -830,7 +830,7 @@ function parseConfidenceThreshold(
 
   const match =
     value.match(
-      /([0-9]+(?:\.[0-9]+)?)/,
+      /(\d+(?:\.\d+)?)/,
     )
 
   if (!match) {
@@ -2333,7 +2333,7 @@ async function findGraphNodeByName(
         )
         .join('、')
 
-    throw new Error(
+    throw new TypeError(
       `匹配到 ${uniqueMatches.length} 个同名实体，`
       + `请使用更明确的名称或节点ID。`
       + `候选：${examples}`,
@@ -2640,7 +2640,7 @@ async function queryEnterpriseRelationGraph(
     successfulResults.length
       === 0
   ) {
-    throw new Error(
+    throw new TypeError(
       '企业关联查询失败，'
       + '当前所有企业关系类型均未能返回结果',
     )
@@ -3060,14 +3060,12 @@ async function queryColleagueRelationGraph(
       continue
     }
 
-    const otherId =
-      edge.source
-        === centerNode.id
-        ? edge.target
-        : edge.target
-            === centerNode.id
-          ? edge.source
-          : null
+    let otherId: string | null = null
+    if (edge.source === centerNode.id) {
+      otherId = edge.target
+    } else if (edge.target === centerNode.id) {
+      otherId = edge.source
+    }
 
     if (!otherId) {
       continue
@@ -3786,7 +3784,7 @@ async function queryAlumniRelationGraph(
       data.items,
     )
   ) {
-    throw new Error(
+    throw new TypeError(
       '校友关系查询返回结构异常',
     )
   }
@@ -4693,7 +4691,7 @@ const pageMeta = computed(() => {
       <div class="platform-hero__main">
         <h1>{{ pageMeta.title }}</h1>
       </div>
-      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><!-- <RouterLink to="/graph-build?module=图谱版本">当前图谱 KG-2026.07.12.008</RouterLink> --><RouterLink to="/graph-build">查看任务</RouterLink><RouterLink to="/manual-review">进入人工处理</RouterLink></div>
+      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><RouterLink to="/graph-build">查看任务</RouterLink><RouterLink to="/manual-review">进入人工处理</RouterLink></div>
     </header>
 
     <header v-else-if="activeTab !== 'query'" class="platform-page-head">
@@ -4775,19 +4773,19 @@ const pageMeta = computed(() => {
         <div class="platform-processing-controls">
           <label>
             <span>业务域</span>
-            <select v-model="processingTaskDomain">
+            <select aria-label="选择或输入内容" v-model="processingTaskDomain">
               <option v-for="item in processingTaskDomainOptions" :key="item">{{ item }}</option>
             </select>
           </label>
           <label>
             <span>数据范围</span>
-            <select v-model="processingScope">
+            <select aria-label="选择或输入内容" v-model="processingScope">
               <option v-for="item in processingScopeOptions" :key="item">{{ item }}</option>
             </select>
           </label>
           <label>
             <span>执行优先级</span>
-            <select v-model="processingPriority">
+            <select aria-label="选择或输入内容" v-model="processingPriority">
               <option v-for="item in processingPriorityOptions" :key="item">{{ item }}</option>
             </select>
           </label>
@@ -4803,7 +4801,7 @@ const pageMeta = computed(() => {
         </div>
         <div class="platform-update-help"><span><b>普通：</b>按提交顺序排队。</span><span><b>紧急：</b>优先排队，需填写原因。</span></div>
 
-        <div class="platform-sticky-table"><table class="platform-table">
+        <div class="platform-sticky-table"><table aria-label="数据表" class="platform-table">
           <thead>
             <tr><th>业务域</th><th>数据对象</th><th>物理表</th><th>调度方式</th><th>更新频率</th><th>最近成功</th><th>状态</th><th>追溯</th></tr>
           </thead>
@@ -4843,7 +4841,7 @@ const pageMeta = computed(() => {
         <div class="kg-panel__header">
           <h2 class="kg-panel__title">质量检验日志</h2>
         </div>
-        <table class="platform-table">
+        <table aria-label="数据表" class="platform-table">
           <thead><tr><th>质检规则</th><th>检验对象</th><th>来源批次</th><th>检验数</th><th>异常数</th><th>通过率</th><th>状态</th><th>操作</th></tr></thead>
           <tbody><tr v-for="row in qualityLogRows" :key="row.rule" class="is-clickable" tabindex="0" @click="openProcessDetail('processing', row.batch, 'quality')" @keydown.enter="openProcessDetail('processing', row.batch, 'quality')"><td>{{ row.rule }}</td><td>{{ row.object }}</td><td>{{ row.batch }}</td><td>{{ row.checked }}</td><td>{{ row.failed }}</td><td>{{ row.rate }}</td><td><span :class="['platform-status', `is-${row.status}`]">{{ row.status }}</span></td><td><button class="platform-trace-link" type="button" @click.stop="openProcessDetail('processing', row.batch, 'quality')">查看详情 →</button></td></tr></tbody>
         </table>
@@ -4868,7 +4866,7 @@ const pageMeta = computed(() => {
             <RouterLink to="/graph-build?module=数据处理">全部任务 →</RouterLink>
           </div>
         </div>
-        <table class="platform-table platform-progress-table">
+        <table aria-label="数据表" class="platform-table platform-progress-table">
           <thead>
             <tr><th>处理批次</th><th>源库表</th><th>触发方式</th><th>触发时间</th><th>输入记录</th><th>进度</th><th>目标库表</th><th>状态</th></tr>
           </thead>
@@ -4921,7 +4919,7 @@ const pageMeta = computed(() => {
           <h2 class="kg-panel__title">最近图谱构建任务</h2>
           <div class="platform-task-filters"><RouterLink to="/graph-build?module=图谱构建">全部任务 →</RouterLink></div>
         </div>
-        <table class="platform-table platform-progress-table">
+        <table aria-label="数据表" class="platform-table platform-progress-table">
           <thead>
             <tr><th>构建批次</th><th>数据域</th><th>当前阶段</th><th>实体</th><th>关系</th><th>属性</th><th>进度</th><th>隔离异常</th><th>状态</th></tr>
           </thead>
@@ -4938,9 +4936,9 @@ const pageMeta = computed(() => {
       <section class="kg-panel platform-schema-readonly">
         <div class="kg-panel__header">
           <h2 class="kg-panel__title">当前 Schema 摘要（只读）</h2>
-          <div class="platform-schema-head"><span>v1.8</span><!-- <RouterLink to="/schema">打开 Schema 浏览器 →</RouterLink> --></div>
+          <div class="platform-schema-head"><span>v1.8</span></div>
         </div>
-        <table class="platform-table">
+        <table aria-label="数据表" class="platform-table">
           <thead><tr><th>类型</th><th>Schema 名称</th><th>字段 / 属性</th><th>映射与生成规则</th><th>权限</th></tr></thead>
           <tbody><tr v-for="row in readonlySchemaRows" :key="row.name" class="is-clickable" tabindex="0" @click="openProcessDetail('construction', 'KG-INC-20260713-018', 'schema')" @keydown.enter="openProcessDetail('construction', 'KG-INC-20260713-018', 'schema')"><td>{{ row.type }}</td><td><code>{{ row.name }}</code></td><td>{{ row.fields }}</td><td>{{ row.rule }}</td><td><button class="platform-trace-link" type="button" @click.stop="openProcessDetail('construction', 'KG-INC-20260713-018', 'schema')">查看 →</button></td></tr></tbody>
         </table>
@@ -5075,7 +5073,7 @@ const pageMeta = computed(() => {
           <span>{{ ngqlResult.records.length }} 行记录</span>
         </div>
         <div class="platform-ngql-result__table-wrap">
-          <table v-if="ngqlResult.records.length">
+          <table v-if="ngqlResult.records.length" aria-label="nGQL 查询结果">
             <thead>
               <tr>
                 <th v-for="column in ngqlResult.columns" :key="column">{{ column }}</th>
@@ -5130,7 +5128,7 @@ const pageMeta = computed(() => {
         </div>
       </section>
 
-      <aside class="kg-panel platform-detail">
+      <aside aria-label="辅助区域 2" class="kg-panel platform-detail">
         <div class="kg-panel__header">
           <h2 class="kg-panel__title">
             {{ queryDetailMode === 'provenance' ? '数据溯源' : queryDetailMode === 'relation' ? '关系结构化结果' : queryDetailMode === 'entity' ? '实体结构化结果' : '查询结果' }}
@@ -5384,7 +5382,7 @@ const pageMeta = computed(() => {
           </div>
         </section>
 
-        <aside class="kg-panel platform-service-debug">
+        <aside aria-label="辅助区域 3" class="kg-panel platform-service-debug">
           <div class="kg-panel__header">
             <h2 class="kg-panel__title">请求与响应</h2>
           </div>
@@ -5426,7 +5424,7 @@ const pageMeta = computed(() => {
           <div class="platform-api-doc__grid">
             <article>
               <h3>请求参数</h3>
-              <table class="platform-table">
+              <table aria-label="数据表" class="platform-table">
                 <thead><tr><th>字段名</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
                 <tbody>
                   <tr v-for="field in activeService.requestFields.slice(0, 6)" :key="field.name">
@@ -5440,7 +5438,7 @@ const pageMeta = computed(() => {
             </article>
             <article>
               <h3>返回字段</h3>
-              <table class="platform-table">
+              <table aria-label="数据表" class="platform-table">
                 <thead><tr><th>字段名</th><th>类型</th><th>说明</th></tr></thead>
                 <tbody>
                   <tr v-for="field in activeService.responseFields" :key="field.name">
@@ -5481,10 +5479,10 @@ print(response.json())</pre>
     </main>
 
     <button v-if="selectedAssetChange" class="asset-change-mask" type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null" />
-    <aside v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
+    <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
       <header><div><span>今日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" @click="selectedAssetChange = null">×</button></header>
       <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
-      <div class="asset-change-table"><table><thead><tr><th>数据类型</th><th>具体对象</th><th>变更内容</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-for="row in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><strong>{{ row.object }}</strong></td><td>{{ row.change }}</td><td><code>{{ row.source }}</code></td><td>{{ row.time }}</td></tr></tbody></table></div>
+      <div class="asset-change-table"><table aria-label="数据表"><thead><tr><th>数据类型</th><th>具体对象</th><th>变更内容</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-for="row in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><strong>{{ row.object }}</strong></td><td>{{ row.change }}</td><td><code>{{ row.source }}</code></td><td>{{ row.time }}</td></tr></tbody></table></div>
       <footer><span>{{ assetChangeRows[selectedAssetChange].length }} 条变化</span><RouterLink to="/graph-build">查看对应更新任务 →</RouterLink></footer>
     </aside>
 
@@ -5560,13 +5558,13 @@ print(response.json())</pre>
 
 .platform-hero__flow { display:flex;align-items:center;gap:6px;margin-top:4px;color:#607493;font-size:10px; }
 .platform-hero__flow span { padding:2px 7px;border:1px solid rgba(126,168,229,.65);border-radius:99px;background:rgba(255,255,255,.58); }
-.platform-hero__flow i { color:#165dff;font-style:normal; }
+.platform-hero__flow i { color:#004ecc;font-style:normal; }
 
 .platform-hero__actions { display:flex;align-items:center;gap:8px;margin-left:auto; }
 .platform-hero__actions span { display:inline-flex;align-items:center;gap:7px;margin-right:4px;color:#526783;font-size:12px; }
-.platform-hero__actions span i { width:8px;height:8px;border-radius:50%;background:#12b76a;box-shadow:0 0 0 4px rgba(18,183,106,.12); }
-.platform-hero__actions a { height:32px;padding:0 12px;border:1px solid #9ec2f7;border-radius:6px;background:rgba(255,255,255,.72);color:#165dff;font-size:12px;line-height:32px;text-decoration:none; }
-.platform-hero__actions a:last-child { border-color:#165dff;background:#165dff;color:#fff; }
+.platform-hero__actions span i { width:8px;height:8px;border-radius:50%;background:#067647;box-shadow:0 0 0 4px rgba(18,183,106,.12); }
+.platform-hero__actions a { height:32px;padding:0 12px;border:1px solid #9ec2f7;border-radius:6px;background:rgba(255,255,255,.72);color:#004ecc;font-size:12px;line-height:32px;text-decoration:none; }
+.platform-hero__actions a:last-child { border-color:#004ecc;background:#004ecc;color:#fff; }
 
 .platform-page-head {
   display: flex;
@@ -5576,7 +5574,7 @@ print(response.json())</pre>
   padding: 0 2px 2px;
 }
 
-.platform-page-head__action { height:30px;padding:0 11px;border:1px solid #9ec2f7;border-radius:6px;background:#fff;color:#165dff;font-size:11px;line-height:30px;text-decoration:none; }
+.platform-page-head__action { height:30px;padding:0 11px;border:1px solid #9ec2f7;border-radius:6px;background:#fff;color:#004ecc;font-size:11px;line-height:30px;text-decoration:none; }
 
 .platform-page-head h1 {
   margin: 0;
@@ -5639,13 +5637,13 @@ print(response.json())</pre>
 .platform-stage-group { overflow:hidden;border:1px solid #d6e5f8;border-radius:8px;background:#f8fbff; }
 .platform-stage-group>header { display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #dce8f8;background:#fff; }
 .platform-stage-group>header strong { color:#20324e;font-size:13px; }
-.platform-stage-group>header a { color:#165dff;font-size:11px;text-decoration:none; }
+.platform-stage-group>header a { color:#004ecc;font-size:11px;text-decoration:none; }
 .platform-stage-group>div { display:grid;grid-template-columns:repeat(4,minmax(0,1fr)); }
 .platform-stage-group section { display:grid;gap:4px;padding:13px 14px;border-right:1px solid #e1ebf7; }
 .platform-stage-group section:last-child { border-right:0; }
-.platform-stage-group section span { color:#687892;font-size:11px; }
+.platform-stage-group section span { color:#475467;font-size:11px; }
 .platform-stage-group section strong { color:#10264c;font-size:20px; }
-.platform-stage-group section em { overflow:hidden;color:#8290a7;font-size:10px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
+.platform-stage-group section em { overflow:hidden;color:#52627a;font-size:10px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
 
 .platform-metric {
   position: relative;
@@ -5701,11 +5699,11 @@ print(response.json())</pre>
 
 .platform-metric>b { position:absolute;right:17px;top:17px;color:#7890b5;font-size:11px;font-weight:600; }
 
-.platform-metric.is-blue strong { color: #165dff; }
+.platform-metric.is-blue strong { color: #004ecc; }
 .platform-metric.is-green strong { color: #00a870; }
 .platform-metric.is-purple strong { color: #722ed1; }
 .platform-metric.is-orange strong { color: #ff7d00; }
-.platform-metric.is-red strong { color: #d92d20; }
+.platform-metric.is-red strong { color: #b42318; }
 
 /* 加载态预留就绪高度（3 卡实测 202px）：避免数据到达撑高后把下方资产饼图挤出视口闪现 */
 .platform-summary-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;min-height:202px; }
@@ -5713,13 +5711,13 @@ print(response.json())</pre>
 .platform-summary-card::after { position:absolute;right:-35px;bottom:-55px;width:130px;height:130px;border-radius:50%;background:rgba(22,93,255,.045);content:"";pointer-events:none; }
 .platform-summary-card>header { display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px;border-bottom:1px solid #dce8f8;background:rgba(255,255,255,.75); }
 .platform-summary-card>header>div { display:grid;gap:4px; }.platform-summary-card>header>div>strong { color:#263b5a;font-size:13px; }
-.platform-summary-card>header span { display:flex;align-items:center;gap:5px;color:#067647;font-size:9px; }.platform-summary-card>header span i { width:6px;height:6px;border-radius:50%;background:#12b76a;box-shadow:0 0 0 3px #dcfae6; }
-.platform-summary-card>header span.warning { color:#b42318; }.platform-summary-card>header span.warning i { background:#d92d20;box-shadow:0 0 0 3px #fee4e2; }
-.platform-summary-card>header a,.platform-summary-card>header button { padding:0;border:0;background:transparent;color:#165dff;font-size:10px;text-decoration:none;white-space:nowrap;cursor:pointer; }
+.platform-summary-card>header span { display:flex;align-items:center;gap:5px;color:#067647;font-size:9px; }.platform-summary-card>header span i { width:6px;height:6px;border-radius:50%;background:#067647;box-shadow:0 0 0 3px #dcfae6; }
+.platform-summary-card>header span.warning { color:#b42318; }.platform-summary-card>header span.warning i { background:#b42318;box-shadow:0 0 0 3px #fee4e2; }
+.platform-summary-card>header a,.platform-summary-card>header button { padding:0;border:0;background:transparent;color:#004ecc;font-size:10px;text-decoration:none;white-space:nowrap;cursor:pointer; }
 .platform-summary-card__main { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-height:112px;background:#fff; }
 .platform-summary-card__main section { display:flex;justify-content:center;gap:5px;padding:20px 18px;border-right:1px solid #e3ebf6;flex-direction:column; }.platform-summary-card__main section:last-child { border-right:0; }
-.platform-summary-card__main strong { color:#165dff;font-size:34px;line-height:40px;letter-spacing:-.5px; }.platform-summary-card.is-relation .platform-summary-card__main strong { color:#7a5af8; }.platform-summary-card.is-property .platform-summary-card__main strong { color:#f79009; }.platform-summary-card .platform-summary-card__main .is-added strong { color:#079455; }
-.platform-summary-card__main span { color:#66758f;font-size:12px; }
+.platform-summary-card__main strong { color:#004ecc;font-size:34px;line-height:40px;letter-spacing:-.5px; }.platform-summary-card.is-relation .platform-summary-card__main strong { color:#7a5af8; }.platform-summary-card.is-property .platform-summary-card__main strong { color:#f79009; }.platform-summary-card .platform-summary-card__main .is-added strong { color:#067647; }
+.platform-summary-card__main span { color:#475467;font-size:12px; }
 .platform-summary-card__items { position:relative;z-index:1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:10px 8px;background:#f8fbff; }
 .platform-summary-card__items>a { display:grid;gap:3px;padding:2px 8px;border-right:1px solid #e1eaf5;color:inherit;text-decoration:none;transition:background-color .2s ease; }.platform-summary-card__items>a:last-child { border-right:0; }.platform-summary-card__items>a:hover { background:#eef5ff; }
 .platform-summary-card__items em { overflow:hidden;color:#8290a5;font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }.platform-summary-card__items strong { overflow:hidden;color:#344861;font-size:10px;text-overflow:ellipsis;white-space:nowrap; }
@@ -5729,21 +5727,21 @@ print(response.json())</pre>
 .platform-jobs-panel,.platform-review-panel { min-width:0;overflow:hidden; }
 .platform-jobs-panel .kg-panel__header>div,.platform-review-panel .kg-panel__header>div { display:grid;gap:2px; }
 .platform-jobs-panel .kg-panel__header span,.platform-review-panel .kg-panel__header span { color:#7b8aa1;font-size:10px; }
-.platform-jobs-panel .kg-panel__header>a,.platform-review-panel .kg-panel__header>a { color:#165dff;font-size:11px;text-decoration:none; }
+.platform-jobs-panel .kg-panel__header>a,.platform-review-panel .kg-panel__header>a { color:#004ecc;font-size:11px;text-decoration:none; }
 .platform-jobs-stats { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-bottom:1px solid #e4ecf6; }
 .platform-jobs-stats article { display:grid;gap:2px;padding:12px 8px;text-align:center;border-right:1px solid #edf2f8; }
 .platform-jobs-stats article:last-child { border-right:0; }
 .platform-jobs-stats article span { font-size:18px;font-weight:600; }
-.platform-jobs-stats article span.is-run { color:#175cd3; }.platform-jobs-stats article span.is-ok { color:#067647; }.platform-jobs-stats article span.is-err { color:#b42318; }.platform-jobs-stats article span.is-warn { color:#b54708; }
-.platform-jobs-stats article em { color:#8290a7;font-size:10px;font-style:normal; }
+.platform-jobs-stats article span.is-run { color:#004ecc; }.platform-jobs-stats article span.is-ok { color:#067647; }.platform-jobs-stats article span.is-err { color:#b42318; }.platform-jobs-stats article span.is-warn { color:#b54708; }
+.platform-jobs-stats article em { color:#52627a;font-size:10px;font-style:normal; }
 .platform-jobs-list { display:grid; }
 .platform-jobs-list a { display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;min-height:44px;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
 .platform-jobs-list a:last-child { border-bottom:0; }
 .platform-jobs-list a:hover { background:#f4f8ff; }
 .platform-jobs-list strong { overflow:hidden;color:#253752;font-size:11px;text-overflow:ellipsis;white-space:nowrap; }
-.platform-jobs-list a>span { padding:2px 8px;border-radius:999px;background:#eaf2ff;color:#175cd3;font-size:9px;white-space:nowrap; }
+.platform-jobs-list a>span { padding:2px 8px;border-radius:999px;background:#eaf2ff;color:#004ecc;font-size:9px;white-space:nowrap; }
 .platform-jobs-list a>span.ok { color:#067647;background:#e9f8ef; }.platform-jobs-list a>span.err { color:#b42318;background:#fee4e2; }.platform-jobs-list a>span.warn { color:#b54708;background:#fff3df; }
-.platform-jobs-list em { color:#98a2b3;font-size:9px;font-style:normal;white-space:nowrap; }
+.platform-jobs-list em { color:#59636f;font-size:9px;font-style:normal;white-space:nowrap; }
 .platform-review-count { padding:11px 14px;border-bottom:1px solid #e4ecf6;color:#62728a;font-size:11px; }
 .platform-review-count strong { margin:0 4px;color:#10264c;font-size:18px; }
 .platform-review-list { display:grid; }
@@ -5756,19 +5754,19 @@ print(response.json())</pre>
 .platform-card-empty { display:grid;gap:6px;justify-items:center;align-content:center;min-height:170px;padding:20px;text-align:center; }
 .platform-card-empty strong { color:#253752;font-size:12px; }
 .platform-card-empty p { margin:0;color:#8a97aa;font-size:10px;line-height:16px; }
-.platform-card-empty a.primary { margin-top:6px;padding:7px 14px;border-radius:5px;background:#165dff;color:#fff;font-size:11px;text-decoration:none; }
-.platform-card-empty a:not(.primary) { margin-top:6px;color:#165dff;font-size:11px;text-decoration:none; }
+.platform-card-empty a.primary { margin-top:6px;padding:7px 14px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;text-decoration:none; }
+.platform-card-empty a:not(.primary) { margin-top:6px;color:#004ecc;font-size:11px;text-decoration:none; }
 
 .platform-management-focus { display:grid;grid-template-columns:minmax(0,1.65fr) minmax(340px,.72fr);gap:14px; }
 .platform-change-panel,.platform-risk-panel,.platform-trend-panel { min-width:0;overflow:hidden; }
 .platform-change-panel .kg-panel__header>div,.platform-risk-panel .kg-panel__header>div,.platform-trend-panel .kg-panel__header>div,.platform-recent-tasks .kg-panel__header>div { display:grid;gap:2px; }
 .platform-change-panel .kg-panel__header span,.platform-risk-panel .kg-panel__header span,.platform-trend-panel .kg-panel__header span,.platform-recent-tasks .kg-panel__header span { color:#7b8aa1;font-size:10px; }
-.platform-change-panel .kg-panel__header>a,.platform-risk-panel .kg-panel__header>a { color:#165dff;font-size:11px;text-decoration:none; }
+.platform-change-panel .kg-panel__header>a,.platform-risk-panel .kg-panel__header>a { color:#004ecc;font-size:11px;text-decoration:none; }
 .platform-change-stats { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-bottom:1px solid #dde8f5; }
 .platform-change-stats article { position:relative;display:grid;gap:4px;padding:13px 15px;border-right:1px solid #e2eaf5;background:#fff; }
 .platform-change-stats article:last-child { border-right:0; }
 .platform-change-stats article::before { position:absolute;top:14px;left:0;width:3px;height:30px;border-radius:0 3px 3px 0;background:#2e90fa;content:""; }
-.platform-change-stats article.is-purple::before { background:#7a5af8; }.platform-change-stats article.is-green::before { background:#12b76a; }.platform-change-stats article.is-orange::before { background:#f79009; }
+.platform-change-stats article.is-purple::before { background:#7a5af8; }.platform-change-stats article.is-green::before { background:#067647; }.platform-change-stats article.is-orange::before { background:#f79009; }
 .platform-change-stats span { color:#66758e;font-size:10px; }.platform-change-stats strong { color:#183153;font-size:20px; }.platform-change-stats em { color:#8a97aa;font-size:9px;font-style:normal; }
 .platform-change-body { display:grid;grid-template-columns:minmax(0,1.25fr) minmax(270px,.75fr);min-height:210px; }
 .platform-change-body>section { padding:13px 15px; }.platform-change-body>aside { padding:13px 14px;border-left:1px solid #e1eaf5;background:#f9fbfe; }
@@ -5777,7 +5775,7 @@ print(response.json())</pre>
 .platform-change-ranking article>span { display:grid;grid-template-columns:7px minmax(0,1fr);column-gap:8px; }.platform-change-ranking article>span>i { grid-row:1/3;width:7px;height:7px;margin-top:5px;border-radius:50%; }.platform-change-ranking article>span b { font-size:10px; }.platform-change-ranking article>span em { color:#8491a5;font-size:8px;font-style:normal; }
 .platform-change-ranking article>div { display:grid;grid-template-columns:minmax(70px,1fr) 62px;align-items:center;gap:8px; }.platform-change-ranking article>div>i { height:6px;overflow:hidden;border-radius:99px;background:#eaf0f8; }.platform-change-ranking article>div>i b { display:block;height:100%;border-radius:inherit; }.platform-change-ranking article>div strong { color:#40536f;font-size:10px;text-align:right; }
 .platform-change-body>aside article { display:grid;grid-template-columns:25px minmax(0,1fr);gap:9px;padding:9px 0;border-bottom:1px solid #e6edf6; }.platform-change-body>aside article:last-child { border-bottom:0; }
-.platform-change-body>aside article>i { display:grid;place-items:center;width:23px;height:23px;border-radius:50%;background:#eaf2ff;color:#165dff;font-size:10px;font-style:normal; }.platform-change-body>aside article>i.success { background:#dcfae6;color:#067647; }.platform-change-body>aside article>i.warning { background:#fef0c7;color:#b54708; }
+.platform-change-body>aside article>i { display:grid;place-items:center;width:23px;height:23px;border-radius:50%;background:#eaf2ff;color:#004ecc;font-size:10px;font-style:normal; }.platform-change-body>aside article>i.success { background:#dcfae6;color:#067647; }.platform-change-body>aside article>i.warning { background:#fef0c7;color:#b54708; }
 .platform-change-body>aside article>span { display:grid;gap:3px; }.platform-change-body>aside article strong { color:#344661;font-size:10px; }.platform-change-body>aside article em { color:#7b899e;font-size:9px;font-style:normal; }
 
 .platform-monitor-grid { display:grid;grid-template-columns:minmax(0,1fr) minmax(480px,1fr);gap:14px; }
@@ -5808,46 +5806,46 @@ print(response.json())</pre>
 
 .platform-operations-grid { display:grid;grid-template-columns:minmax(0,1.7fr) minmax(320px,.8fr);gap:14px; }
 .platform-recent-tasks,.platform-alert-overview { min-width:0;overflow:hidden; }
-.platform-recent-tasks .kg-panel__header a,.platform-alert-overview .kg-panel__header a { color:#165dff;font-size:12px;text-decoration:none; }
-.platform-recent-tasks td small { display:block;margin-top:2px;color:#8290a7;font-size:10px; }
+.platform-recent-tasks .kg-panel__header a,.platform-alert-overview .kg-panel__header a { color:#004ecc;font-size:12px;text-decoration:none; }
+.platform-recent-tasks td small { display:block;margin-top:2px;color:#52627a;font-size:10px; }
 .platform-status.is-阻断 { background:#fee4e2;color:#b42318; }
 .platform-status.is-成功,.platform-status.is-完成,.platform-status.is-正常 { background:#dcfae6;color:#067647; }
-.platform-status.is-运行中 { background:#eaf2ff;color:#165dff; }
+.platform-status.is-运行中 { background:#eaf2ff;color:#004ecc; }
 .platform-status.is-异常,.platform-status.is-告警 { background:#fef0c7;color:#b54708; }
-.platform-status.is-更新中,.platform-status.is-排队 { background:#eaf2ff;color:#165dff; }
+.platform-status.is-更新中,.platform-status.is-排队 { background:#eaf2ff;color:#004ecc; }
 .platform-alert-overview { display:grid;grid-template-rows:auto repeat(3,auto) 1fr; }
 .platform-alert-overview>button { display:grid;grid-template-columns:8px minmax(0,1fr) 14px;align-items:start;gap:10px;padding:12px 14px;border:0;border-bottom:1px solid #e3ebf7;background:rgba(255,255,255,.64);text-align:left;cursor:pointer; }
 .platform-alert-overview>button:hover { background:#f4f8ff; }
 .platform-alert-overview>button>i { width:7px;height:7px;margin-top:5px;border-radius:50%;background:#f79009; }
-.platform-alert-overview>button>i.is-严重 { background:#d92d20;box-shadow:0 0 0 4px #fee4e2; }
+.platform-alert-overview>button>i.is-严重 { background:#b42318;box-shadow:0 0 0 4px #fee4e2; }
 .platform-alert-overview>button>span { display:grid;gap:3px;min-width:0; }
 .platform-alert-overview>button b { color:#8a97aa;font-size:10px; }
 .platform-alert-overview>button strong { overflow:hidden;color:#253752;font-size:12px;text-overflow:ellipsis;white-space:nowrap; }
-.platform-alert-overview>button em { color:#71809a;font-size:10px;font-style:normal; }
+.platform-alert-overview>button em { color:#52627a;font-size:10px;font-style:normal; }
 .platform-alert-overview>button u { align-self:center;color:#8da0ba;font-size:20px;text-decoration:none; }
-.platform-alert-overview__review { align-self:end;justify-self:center;margin:12px;color:#165dff;font-size:12px;text-decoration:none; }
+.platform-alert-overview__review { align-self:end;justify-self:center;margin:12px;color:#004ecc;font-size:12px;text-decoration:none; }
 
 .platform-structure-overview { overflow:hidden; }
-.platform-structure-overview>.kg-panel__header>span { color:#71809a;font-size:11px; }
+.platform-structure-overview>.kg-panel__header>span { color:#52627a;font-size:11px; }
 .platform-structure-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr)); }
 .platform-structure-chart { padding:15px 18px; }
 .platform-structure-chart:first-child { border-right:1px solid #dce8f8; }
 .platform-structure-chart header { display:flex;align-items:center;justify-content:space-between;margin-bottom:8px; }
 .platform-structure-chart header>strong { color:#253752;font-size:13px; }
-.platform-structure-chart header>a { color:#165dff;font-size:11px;text-decoration:none; }
+.platform-structure-chart header>a { color:#004ecc;font-size:11px;text-decoration:none; }
 .platform-donut-layout { display:grid;grid-template-columns:170px minmax(0,1fr);align-items:center;gap:20px;min-height:150px; }
 .platform-donut { position:relative;display:grid;place-items:center;width:154px;height:154px;border-radius:50%; }
 .platform-donut::after { position:absolute;inset:25px;border-radius:50%;background:#fff;box-shadow:0 0 0 1px #e5edf8;content:""; }
-.platform-donut.is-entity { background:conic-gradient(#2e90fa 0 34%,#7a5af8 34% 57%,#12b76a 57% 74%,#f79009 74% 85%,#98a2b3 85% 100%); }
-.platform-donut.is-relation { background:conic-gradient(#165dff 0 32%,#2e90fa 32% 52%,#06aed4 52% 70%,#7a5af8 70% 84%,#98a2b3 84% 100%); }
+.platform-donut.is-entity { background:conic-gradient(#2e90fa 0 34%,#7a5af8 34% 57%,#067647 57% 74%,#f79009 74% 85%,#59636f 85% 100%); }
+.platform-donut.is-relation { background:conic-gradient(#004ecc 0 32%,#2e90fa 32% 52%,#06aed4 52% 70%,#7a5af8 70% 84%,#59636f 84% 100%); }
 .platform-donut>span { position:relative;z-index:1;display:grid;gap:2px;text-align:center; }
 .platform-donut>span strong { color:#10264c;font-size:19px; }
-.platform-donut>span em { color:#8290a7;font-size:10px;font-style:normal; }
+.platform-donut>span em { color:#52627a;font-size:10px;font-style:normal; }
 .platform-structure-legend article { display:grid;grid-template-columns:minmax(0,1fr) 160px;align-items:center;gap:14px;min-height:34px;border-bottom:1px solid #edf2f8; }
 .platform-structure-legend article:last-child { border-bottom:0; }
 .platform-structure-legend article>span { display:flex;align-items:center;gap:7px;min-width:0;overflow:hidden;color:#40516c;font-size:11px;white-space:nowrap; }
 .platform-structure-legend article>span>i { flex:0 0 auto;width:8px;height:8px;border-radius:50%; }
-.platform-structure-legend article em { overflow:hidden;color:#98a2b3;font-size:9px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
+.platform-structure-legend article em { overflow:hidden;color:#59636f;font-size:9px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
 .platform-structure-legend article>strong { display:grid;grid-template-columns:minmax(82px,1fr) 44px;align-items:center;gap:12px;color:#40516c;font-size:11px;text-align:right;white-space:nowrap; }
 .platform-structure-legend article>strong em { overflow:visible;text-overflow:clip; }
 
@@ -6083,10 +6081,10 @@ print(response.json())</pre>
 
 .platform-table tr.is-clickable { cursor: pointer; }
 .platform-table tr.is-clickable:hover td { background: #f0f6ff; }
-.platform-table tr.is-clickable:focus-visible { outline: 2px solid #165dff; outline-offset: -2px; }
+.platform-table tr.is-clickable:focus-visible { outline: 2px solid #004ecc; outline-offset: -2px; }
 .is-clickable-card { color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
 .is-clickable-card:hover,.is-clickable-card:focus-visible { border-color: #7aa9ee!important; box-shadow: 0 8px 20px rgba(22,93,255,.12)!important; transform: translateY(-1px); outline: none; }
-.platform-card-arrow { color: #165dff!important; font-size: 11px!important; font-weight: 600!important; white-space: nowrap; }
+.platform-card-arrow { color: #004ecc!important; font-size: 11px!important; font-weight: 600!important; white-space: nowrap; }
 .platform-cleaning-steps .platform-card-arrow,.platform-build-pipeline__body .platform-card-arrow { grid-column: 2; justify-self: end; }
 .platform-build-stats .platform-card-arrow { justify-self: end; }
 
@@ -6104,7 +6102,7 @@ print(response.json())</pre>
   background: #fff;
   color: var(--text-primary);
 }
-.platform-task-filters a { color:#165dff;font-size:11px;text-decoration:none;white-space:nowrap; }
+.platform-task-filters a { color:#004ecc;font-size:11px;text-decoration:none;white-space:nowrap; }
 
 .platform-review-notice {
   grid-column: 1 / -1;
@@ -6131,7 +6129,7 @@ print(response.json())</pre>
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  background: #165dff;
+  background: #004ecc;
   color: #fff;
   font-size: 18px;
   font-weight: 800;
@@ -6141,10 +6139,10 @@ print(response.json())</pre>
 .platform-review-notice strong { color: #10264c; font-size: 15px; }
 .platform-review-notice p { margin: 5px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 20px; }
 .platform-review-notice__actions { display: flex; align-items: center; gap: 8px; }
-.platform-review-notice__actions button,.platform-review-notice__actions a { display: inline-flex; align-items: center; height: 34px; padding: 0 13px; border: 1px solid #165dff; border-radius: 6px; background: #fff; color: #165dff; font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; cursor: pointer; }
-.platform-review-notice__actions a { background: #165dff; color: #fff; }
-.platform-review-notice.is-warning .platform-review-notice__actions button { border-color: #dc6803; color: #b54708; }
-.platform-review-notice.is-warning .platform-review-notice__actions a { border-color: #dc6803; background: #dc6803; }
+.platform-review-notice__actions button,.platform-review-notice__actions a { display: inline-flex; align-items: center; height: 34px; padding: 0 13px; border: 1px solid #004ecc; border-radius: 6px; background: #fff; color: #004ecc; font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; cursor: pointer; }
+.platform-review-notice__actions a { background: #004ecc; color: #fff; }
+.platform-review-notice.is-warning .platform-review-notice__actions button { border-color: #93370d; color: #b54708; }
+.platform-review-notice.is-warning .platform-review-notice__actions a { border-color: #93370d; background: #93370d; }
 
 .platform-processing-controls label {
   display: grid;
@@ -6175,7 +6173,7 @@ print(response.json())</pre>
 }
 
 .platform-range-fields>i { display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:6px;font-style:normal; }
-.platform-range-fields>i b { color:#71809a;font-size:10px;font-weight:400; }
+.platform-range-fields>i b { color:#52627a;font-size:10px;font-weight:400; }
 
 .platform-update-help { display:flex;flex-wrap:wrap;gap:8px 20px;padding:9px 14px;border-bottom:1px solid #dce8f8;background:#f8fbff;color:#65738b;font-size:10px;line-height:17px; }
 .platform-update-help b { color:#344766; }
@@ -6698,7 +6696,7 @@ print(response.json())</pre>
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(180deg, #14b8a6, #165dff);
+  background: linear-gradient(180deg, #14b8a6, #004ecc);
 }
 
 .platform-construction {
@@ -6770,7 +6768,7 @@ print(response.json())</pre>
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #165dff, #22d3ee);
+  background: linear-gradient(90deg, #004ecc, #22d3ee);
 }
 
 .platform-progress-cell span {
@@ -7138,7 +7136,7 @@ print(response.json())</pre>
 }
 
 .platform-segmented button.is-active {
-  background: linear-gradient(135deg, #165dff, #22d3ee);
+  background: linear-gradient(135deg, #004ecc, #22d3ee);
   color: #fff;
   box-shadow: 0 6px 16px rgba(22, 93, 255, 0.26);
 }
@@ -7169,7 +7167,7 @@ print(response.json())</pre>
 
 .platform-manual-toolbar button:first-child {
   border-color: transparent;
-  background: linear-gradient(135deg, #165dff, #0ea5e9);
+  background: linear-gradient(135deg, #004ecc, #0ea5e9);
   color: #fff;
   box-shadow: 0 8px 18px rgba(22, 93, 255, 0.22);
 }
@@ -7267,7 +7265,7 @@ print(response.json())</pre>
 
 .platform-row-actions button:last-child {
   border-color: #ffd6d6;
-  color: #d92d20;
+  color: #b42318;
   background: #fffafa;
 }
 
@@ -7607,7 +7605,7 @@ print(response.json())</pre>
 
 .platform-service-console__actions button:last-child {
   border-color: transparent;
-  background: linear-gradient(135deg, #165dff, #0ea5e9);
+  background: linear-gradient(135deg, #004ecc, #0ea5e9);
   color: #fff;
   box-shadow: 0 8px 18px rgba(22, 93, 255, 0.2);
 }
@@ -8464,10 +8462,10 @@ print(response.json())</pre>
 
 .asset-change-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.22)}
 .asset-change-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;width:min(820px,78vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}
-.asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#165dff;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:#f0f4fa;color:#52647f;font-size:20px;cursor:pointer}
-.asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#165dff;font-size:24px}.asset-change-summary article:last-child strong{color:#079455}
-.asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#165dff;font-family:inherit}
-.asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#165dff;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
+.asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:#f0f4fa;color:#52647f;font-size:20px;cursor:pointer}
+.asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}
+.asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}
+.asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
 @media(max-width:760px){.asset-change-drawer{width:94vw}.asset-change-table table{min-width:700px}}
 </style>
 <style scoped>
@@ -8494,7 +8492,7 @@ print(response.json())</pre>
 .platform-query .kg-button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
 .platform-query-graph{min-height:480px}.platform-query-lower>.platform-detail{width:auto;min-width:0}
 .platform-query .platform-graph-legend{gap:8px 16px;min-height:40px;padding:8px 16px;border-color:#e5e6eb;background:#fff}.platform-query .platform-graph-legend__item{gap:8px;font-size:14px;line-height:22px}.platform-query .platform-graph-legend__item i{box-shadow:none}
-.platform-query .platform-detail__tabs{gap:0;padding:4px;border-radius:4px;background:#f2f3f5}.platform-query .platform-detail__tabs button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}.platform-query .platform-detail__tabs button.is-active{background:#fff;color:#165dff;font-weight:500}
+.platform-query .platform-detail__tabs{gap:0;padding:4px;border-radius:4px;background:#f2f3f5}.platform-query .platform-detail__tabs button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}.platform-query .platform-detail__tabs button.is-active{background:#fff;color:#004ecc;font-weight:500}
 .platform-query .platform-detail__body{padding:16px}.platform-query .platform-detail dt{font-size:12px;line-height:20px}.platform-query .platform-detail dd{font-size:14px;line-height:22px}
 
 /* 综合图谱展示 / 查询结果：复用科技专家同事关系页的预览与详情布局。 */
@@ -8503,7 +8501,7 @@ print(response.json())</pre>
 .platform-query .platform-query-lower>.kg-panel{display:flex;min-height:480px;overflow:hidden;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;flex-direction:column}
 .platform-query .platform-query-lower>.kg-panel>.kg-panel__header{min-height:24px;padding:0;border:0!important;background:transparent!important}
 .platform-query .platform-query-lower .kg-panel__title{position:relative;padding-left:11px;color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
-.platform-query .platform-query-lower .kg-panel__title::before{top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#165dff}
+.platform-query .platform-query-lower .kg-panel__title::before{top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#004ecc}
 .platform-query .platform-query-graph>.kg-panel__header{flex:0 0 24px;align-items:center}
 .platform-query-last-test{display:flex;align-items:center;gap:8px;color:#86909c;font-size:12px;line-height:20px;white-space:nowrap}.platform-query-last-test strong{color:#86909c;font-weight:400}
 .platform-query .platform-graph-legend{box-sizing:border-box;flex:0 0 32px;min-height:32px;padding:4px 0 8px;border:0!important;background:transparent!important}
@@ -8517,9 +8515,9 @@ print(response.json())</pre>
 .platform-query .platform-detail__tabs{box-sizing:border-box;height:40px;padding:4px;border:0;border-radius:4px;background:#f2f3f5}
 .platform-query .platform-detail__tabs button{box-sizing:border-box;height:32px!important;min-height:32px!important;padding:5px 16px!important;border:0;border-radius:4px!important;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;box-shadow:none}
 .platform-query .platform-detail__tabs button+button{border-left:1px solid #c9cdd4}
-.platform-query .platform-detail__tabs button.is-active{margin:0;border-left-color:transparent;background:#fff;color:#165dff;font-weight:500;box-shadow:none}
+.platform-query .platform-detail__tabs button.is-active{margin:0;border-left-color:transparent;background:#fff;color:#004ecc;font-weight:500;box-shadow:none}
 .platform-query .platform-detail__tabs button.is-active+button{border-left-color:transparent}
-.platform-query .platform-detail__tabs button:hover:not(.is-active){background:#fff;color:#165dff}
+.platform-query .platform-detail__tabs button:hover:not(.is-active){background:#fff;color:#004ecc}
 .platform-query .platform-detail__tabs button:focus-visible{outline:2px solid rgba(22,93,255,.28);outline-offset:1px}
 .platform-query .platform-query-lower>.platform-detail>.platform-detail__body{display:flex;box-sizing:border-box;min-height:0;padding:16px 0 0;overflow:hidden;flex:1 1 auto}
 .platform-query .platform-detail__body>dl{display:flex;min-width:0;min-height:0;margin:0;border:1px solid #e5e6eb;border-radius:4px;background:#fff;overflow:auto;gap:0;flex:1 1 auto;flex-direction:column}
@@ -8542,7 +8540,7 @@ print(response.json())</pre>
 @media(max-width:1100px){.platform-query-lower{grid-template-columns:minmax(0,1fr)}.platform-query-lower>.platform-detail{max-height:420px}.platform-query .platform-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .platform-query .platform-form-field :deep(.arco-select-view){box-sizing:border-box;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important}
 .platform-query .platform-form-field :deep(.arco-select-view:hover){border-color:#c9cdd4!important}
-.platform-query .platform-form-field :deep(.arco-select-view-focus){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+.platform-query .platform-form-field :deep(.arco-select-view-focus){border-color:#004ecc!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 @media(max-width:768px){.platform-query .platform-form-grid{grid-template-columns:1fr}}
 /* nGQL 查询模式 */
 .platform-query-mode-group{display:flex;min-width:0;align-items:center;gap:16px;margin-right:auto}
@@ -8552,22 +8550,22 @@ print(response.json())</pre>
 .platform-ngql-permission-hint>i{width:1px;height:12px;background:#c9cdd4;flex:0 0 auto}
 .platform-query-mode-toggle__item{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:120px;height:32px!important;min-height:32px!important;padding:5px 16px!important;border:0;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;text-align:center;cursor:pointer}
 .platform-query-mode-toggle__item+.platform-query-mode-toggle__item{border-left:1px solid #c9cdd4}
-.platform-query-mode-toggle__item.is-active{border-left-color:transparent;background:#fff;color:#165dff;font-weight:500}
+.platform-query-mode-toggle__item.is-active{border-left-color:transparent;background:#fff;color:#004ecc;font-weight:500}
 .platform-query-mode-toggle__item.is-active+.platform-query-mode-toggle__item{border-left-color:transparent}
-.platform-query-mode-toggle__item:hover:not(.is-active){background:#fff;color:#165dff}
+.platform-query-mode-toggle__item:hover:not(.is-active){background:#fff;color:#004ecc}
 .platform-ngql-input{display:grid;gap:16px;padding:16px 0}
 .platform-ngql-header-actions{display:flex;align-items:center;gap:16px;flex:0 0 auto}
 .platform-ngql-input__space-field{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;white-space:nowrap}.platform-ngql-input__space-field>label{flex:0 0 auto}
 .platform-ngql-input__space-field :deep(.arco-select){width:180px;min-width:180px;max-width:180px;flex:0 0 180px}
 .platform-ngql-input__space-field :deep(.arco-select-view){display:inline-flex;box-sizing:border-box;width:180px;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;align-items:center}
 .platform-ngql-input__space-field :deep(.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
-.platform-ngql-input__space-field :deep(.arco-select-view:focus-within),.platform-ngql-input__space-field :deep(.arco-select-view-focus){border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+.platform-ngql-input__space-field :deep(.arco-select-view:focus-within),.platform-ngql-input__space-field :deep(.arco-select-view-focus){border-color:#004ecc!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 .platform-ngql-input__space :deep(.arco-select-view-input){box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 .platform-ngql-input__space :deep(.arco-select-view-input:focus),.platform-ngql-input__space :deep(.arco-select-view-input:focus-visible){border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
 .platform-ngql-input__space :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
 .platform-ngql-input__space :deep(.arco-select-view-value){min-width:0;overflow:hidden;color:#1d2129;font-size:14px;line-height:30px;text-overflow:ellipsis;white-space:nowrap}
 .platform-ngql-input__textarea{box-sizing:border-box;width:100%;padding:10px 12px;border:1px solid #e5e6eb;border-radius:4px;background:#0d1117;color:#e6edf3;font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical;outline:0}
-.platform-ngql-input__textarea:focus{border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
+.platform-ngql-input__textarea:focus{border-color:#004ecc;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
 .platform-ngql-result{overflow:hidden}
 .platform-ngql-result__table-wrap{max-height:320px;overflow:auto}
 .platform-ngql-result table{width:100%;border-collapse:collapse;font-size:13px}

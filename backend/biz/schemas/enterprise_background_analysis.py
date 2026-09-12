@@ -6,13 +6,29 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from biz.schemas.text_rules import check_text
+
 VALID_DIMENSIONS = {"industry_status", "core_tech", "financial"}
 
 
 class EnterpriseBackgroundAnalysisRequest(BaseModel):
-    enterpriseId: str
+    enterpriseId: str = Field(..., min_length=1, max_length=64, description="企业唯一标识")
     analysisDimensions: list[str]
     patentCPC: list[str] = Field(default_factory=list)
+
+    @field_validator("enterpriseId", mode="before")
+    @classmethod
+    def _validate_enterprise_id(cls, v: str) -> str:
+        if v is None:
+            return v
+        return check_text(str(v).strip(), label="企业标识")
+
+    @field_validator("patentCPC", mode="before")
+    @classmethod
+    def _validate_patent_cpc(cls, v: list[str]) -> list[str]:
+        if not v:
+            return v
+        return [check_text(str(item).strip(), label="CPC 分类号", allow_space=True) for item in v]
 
     @field_validator("analysisDimensions")
     @classmethod

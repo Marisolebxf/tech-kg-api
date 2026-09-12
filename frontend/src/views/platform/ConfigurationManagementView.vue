@@ -208,6 +208,12 @@ function buildUsage(kind: ConfigKind, isDefault: boolean): string {
   return '尚未引用'
 }
 
+function configStatus(status: string): ConfigStatus {
+  if (status === '正常') return '正常'
+  if (status === '停用') return '停用'
+  return '异常'
+}
+
 function toConfigItem(kind: ConfigKind, cfg: LlmConfig | MysqlDatasource | MilvusConfig | EmbeddingConfig): ConfigItem {
   const common = {
     id: cfg.id,
@@ -216,7 +222,7 @@ function toConfigItem(kind: ConfigKind, cfg: LlmConfig | MysqlDatasource | Milvu
     description: cfg.description,
     owner: cfg.owner || '',
     updatedAt: cfg.updatedAt,
-    status: (cfg.status === '正常' ? '正常' : cfg.status === '停用' ? '停用' : '异常') as ConfigStatus,
+    status: configStatus(cfg.status),
     isDefault: (cfg as { isDefault: boolean }).isDefault,
     usage: buildUsage(kind, (cfg as { isDefault: boolean }).isDefault),
   }

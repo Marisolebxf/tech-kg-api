@@ -25,6 +25,9 @@ os.environ.setdefault("REVIEW_SNAPSHOT_MAX_BYTES", "2097152")
 os.environ.setdefault("REVIEW_RESUME_MAX_ATTEMPTS", "5")
 # workflow 控制面已迁到 MySQL（temporal-mysql 的 techkg_control 库）；
 # 测试时如无 MySQL，需显式设 WORKFLOW_MYSQL_* 指向可用实例，否则 repository 初始化会失败。
+# Legacy review endpoint integration cases exercise the repository's built-in
+# deterministic fixtures. Production keeps this disabled by default.
+os.environ.setdefault("WORKFLOW_DEMO_DATA_ENABLED", "true")
 # 算子目录指到临时空目录，避免 watcher/初始化触碰真实算子
 _op_dir = Path(tempfile.gettempdir()) / f"tech-kg-operators-{os.getpid()}"
 _op_dir.mkdir(exist_ok=True)

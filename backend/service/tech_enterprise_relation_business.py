@@ -4,7 +4,8 @@
 专家 2 跳内全部关联，解析出三类专家↔企业关系：
 
   - governance：Person→Organization 直连边（EXECUTIVE_OF/LEGAL_REP_OF/ACTUAL_CONTROLLER_OF/
-    BENEFICIAL_OWNER_OF/SHAREHOLDER_OF/AFFILIATED_WITH），角色来自 position，无合作时间。
+    BENEFICIAL_OWNER_OF/SHAREHOLDER_OF/AFFILIATED_WITH），角色来自 position；合作时间取边
+    任期或专家 work_experience_date。
   - project_cooperation：Person→Project→Organization（HAS_PARTICIPANT/LEADS + PARTICIPATES_IN/
     FUNDED_BY），合作时间 = Project.research_period / approval_time。
   - patent_cooperation：Person→Patent→Organization（INVENTED_BY + APPLIED_BY），合作时间 =
@@ -21,6 +22,7 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
@@ -32,6 +34,7 @@ from biz.schemas.tech_enterprise_relation_business import (
     KeyEnterpriseRelationRequest,
     KeyEnterpriseRelationResponse,
 )
+from service.entity_confidence import fill_entity_confidence, parse_confidence
 from service.industry_node_top_events_business import RISK_EVENT_TYPES
 
 logger = logging.getLogger(__name__)
@@ -184,7 +187,7 @@ def _flatten_org_props(props: dict) -> dict:
 
 # 业务背景字段的候选源列名（顶层 tag 名 / MySQL 列名 / extra_json 内字段名）
 _BG_ALIASES = {
-    "industry_l1_name": ("industry_l1_name", "industry", "industry_class"),
+    "industry_l1_name": ("industry_l1_name", "industry", "industry_class", "industry_type"),
     "industry_l2_name": ("industry_l2_name",),
     "registered_capital_value": ("registered_capital_value", "registered_capital", "capital_num"),
     "incorporation_year": ("incorporation_year", "founded_year", "est_year"),
@@ -242,6 +245,50 @@ def _parse_period(*vals: object) -> BusinessPeriod:
     return BusinessPeriod()
 
 
+def _period_from_mapping(*maps: Mapping[str, Any] | None) -> BusinessPeriod:
+    """从边属性 / 专家属性里取任职或合作起止。
+
+    治理类边（EXECUTIVE_OF 等）源表常无任期字段；此时回退专家节点
+    ``work_experience_date``，避免摘要「合作时间」整行空白。
+    """
+    for raw in maps:
+        if not raw:
+            continue
+        start = raw.get("start_date") or raw.get("begin_date")
+        end = raw.get("end_date")
+        if start not in (None, "") or end not in (None, ""):
+            return BusinessPeriod(
+                start=str(start).strip() if start not in (None, "") else None,
+                end=str(end).strip() if end not in (None, "") else None,
+            )
+        parsed = _parse_period(
+            raw.get("work_experience_date"),
+            raw.get("incumbency_date"),
+            raw.get("tenure"),
+            raw.get("research_period"),
+            raw.get("approval_time"),
+            raw.get("application_date"),
+        )
+        if parsed.start:
+            return parsed
+    return BusinessPeriod()
+
+
+def _pick_tech_field(bg: dict, op: dict) -> str | None:
+    """合作领域：行业分类优先，缺省时回退主营产品，避免摘要整行空白。"""
+    for candidate in (
+        bg.get("industry_l1_name"),
+        bg.get("industry_l2_name"),
+        op.get("industry"),
+        op.get("industry_class"),
+        bg.get("main_products"),
+        bg.get("description"),
+    ):
+        if candidate not in (None, "", []):
+            return str(candidate)
+    return None
+
+
 class KeyEnterpriseRelationService:
     def __init__(self, base_url: str | None = None, timeout: float = 60.0) -> None:
         self.base = (base_url or DEFAULT_BASE).rstrip("/") + "/api/v1"
@@ -252,7 +299,11 @@ class KeyEnterpriseRelationService:
         return r.json()
 
     async def run(
-        self, req: KeyEnterpriseRelationRequest, *, app: Any = None
+        self,
+        req: KeyEnterpriseRelationRequest,
+        *,
+        app: Any = None,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> KeyEnterpriseRelationResponse:
         cache_key = (
             f"{req.expert_id}|{req.enterprise_name}|{req.role_type}|"
@@ -266,7 +317,11 @@ class KeyEnterpriseRelationService:
         resp = KeyEnterpriseRelationResponse(expert_id=req.expert_id)
         # ASGI 进程内 transport：替代真实 HTTP 回环 8200，消除 socket/accept 队列开销
         # 与高并发自调用饱和。app 由 handler 传 request.app，避免在 service 里 import main。
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app)) as client:
+        # graph-search 路由受鉴权保护，须带上调用方凭证头，否则 401 被当成空图。
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            headers=dict(auth_headers) if auth_headers else None,
+        ) as client:
             # 1) filtered-subgraph(depth=2) 只拿业务需要的 12 种边，不捞论文/合作者/引用
             edge_types = ",".join(
                 [
@@ -340,6 +395,7 @@ class KeyEnterpriseRelationService:
                 return
             op = node_props.get(org_id, {})
             bg = _enterprise_background(op)
+            filled_period = period if period.start else _period_from_mapping(op, expert_props)
             relations.append(
                 EnterpriseRelationItem(
                     enterprise_id=org_id,
@@ -354,8 +410,8 @@ class KeyEnterpriseRelationService:
                         and mode in {"法人代表", "实际控制", "受益所有", "股东持股"}
                         else None
                     ),
-                    tech_field=bg.get("industry_l1_name") or op.get("industry"),
-                    period=period,
+                    tech_field=_pick_tech_field(bg, op),
+                    period=filled_period,
                     enterprise_background=bg,
                     source=source,
                     confidence=COOPERATION_CONFIDENCE.get(ctype, 0.7),
@@ -369,9 +425,8 @@ class KeyEnterpriseRelationService:
                 # work_experience_position_zh（无 position 字段），两者都兜底，避免
                 # role 退化成通用 '任职'（反馈：角色关系任职不属实角色）。
                 role = props.get("position") or props.get("work_experience_position_zh") or ""
-                period = BusinessPeriod()
-                if et == "AFFILIATED_WITH":
-                    period = _parse_period(expert_props.get("work_experience_date"))
+                # 治理边优先用边上任期；缺失时回退专家工作经历日期，避免摘要合作时间为空
+                period = _period_from_mapping(props, expert_props)
                 _add(other, "governance", GOVERNANCE_MODE[et], role, period, et)
 
         # 3) 项目合作 expert→Project→Organization
@@ -426,25 +481,42 @@ class KeyEnterpriseRelationService:
         # 首要企业 best-effort 风险事件探测（标书「经营状况」之风险提示维度）
         # 只查 relations[0]，避免 N×调用；失败降级为空串，不阻断主流程。
         if relations:
-            await self._probe_primary_risk(relations[0], app=app)
+            await self._probe_primary_risk(relations[0], app=app, auth_headers=auth_headers)
         resp.relations = relations
         # 实体溯源：专家 + 各关联企业，供前端溯源栏展示真实源数据表/英文字段名/图空间 VID
+        graph_client = None
+        missing_confidence = parse_confidence(expert_props.get("confidence")) is None or any(
+            parse_confidence((node_props.get(rel.enterprise_id) or {}).get("confidence")) is None
+            for rel in relations
+        )
+        if missing_confidence:
+            try:
+                from infra.graph_db import get_trs_graph_client
+
+                graph_client = get_trs_graph_client()
+            except Exception:
+                graph_client = None
         resp.entity_provenance = {
             req.expert_id: self._entity_provenance(
-                expert_props, node_labels.get(req.expert_id, set())
+                expert_props,
+                node_labels.get(req.expert_id, set()),
+                vid=req.expert_id,
+                client=graph_client,
             )
         }
         for rel in relations:
             resp.entity_provenance[rel.enterprise_id] = self._entity_provenance(
                 node_props.get(rel.enterprise_id, {}),
                 node_labels.get(rel.enterprise_id, set()),
+                vid=rel.enterprise_id,
+                client=graph_client,
             )
         resp.enterprises = len({r.enterprise_id for r in relations})
         resp.roles = len({r.role_label for r in relations if r.role_label})
         resp.cooperation_fields = sorted({r.tech_field for r in relations if r.tech_field})
         resp.confidence = max((r.confidence for r in relations), default=0.0)
         resp.evidence = [
-            f"从 dev 空间专家 {req.expert_id} 2 跳子图解析出 {len(relations)} 条专家-企业关系",
+            f"从 {SPACE} 空间专家 {req.expert_id} 2 跳子图解析出 {len(relations)} 条专家-企业关系",
             "合作时间来源：项目 research_period / 专利 application_date / 学者 work_experience_date",
             "角色定位来源：EXECUTIVE_OF.position 等边属性 + 边类型映射",
         ]
@@ -453,12 +525,19 @@ class KeyEnterpriseRelationService:
         return resp
 
     @staticmethod
-    def _entity_provenance(properties: dict[str, Any], labels: set[str]) -> EntityProvenance:
+    def _entity_provenance(
+        properties: dict[str, Any],
+        labels: set[str],
+        *,
+        vid: str | None = None,
+        client: Any = None,
+    ) -> EntityProvenance:
         """从图节点 properties 抽取实体溯源，与同事关系 _entity_data 同口径。
 
         Person 节点取 source_record_id（dwd_scholar 时字段名为 scholar_id）；
         Organization 节点取 organization_id；均缺失时回退 source_record_id。
         source_table 取 organization_base 或 source_table 属性。
+        置信度：图上已有值 → 证据规则计算并尽力写回 → 默认 0.80。
         """
         source_table = properties.get("organization_base") or properties.get("source_table")
         if "Person" in labels and properties.get("source_record_id") not in (None, ""):
@@ -468,22 +547,31 @@ class KeyEnterpriseRelationService:
             source_field, source_value = "organization_id", properties.get("organization_id")
         else:
             source_field, source_value = "source_record_id", properties.get("source_record_id")
+        confidence = fill_entity_confidence(properties, labels, vid=vid, client=client)
         return EntityProvenance(
             sourceTable=str(source_table or "-"),
             sourceField=str(source_field or "-"),
             sourceValue=str(source_value or "-"),
             ingestBatch=str(properties.get("ingest_batch") or "-"),
             ingestTime=str(properties.get("ingest_time") or "-"),
+            confidence=confidence,
         )
 
     async def _probe_primary_risk(
-        self, primary: EnterpriseRelationItem, *, app: Any = None
+        self,
+        primary: EnterpriseRelationItem,
+        *,
+        app: Any = None,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> None:
         """对首要关联企业查 INVOLVED_IN 风险事件，回填 risk_summary（best-effort）。"""
         org_id = primary.enterprise_id
         if not org_id:
             return
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app)) as client:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            headers=dict(auth_headers) if auth_headers else None,
+        ) as client:
             try:
                 rj = await self._get(
                     client,

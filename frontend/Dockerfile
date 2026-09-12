@@ -47,10 +47,15 @@ ENV APP_BASE=/bkg_zpt
 # nginx conf 模板：20-envsubst 启动期用 ${APP_BASE} 渲染到 conf.d/default.conf
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 # 运行时配置注入：哨兵前缀替换 + 生成 runtime-config.js（在 envsubst 之后执行）
-COPY docker/40-app-runtime-config.sh /docker-entrypoint.d/40-app-runtime-config.sh
-RUN chmod +x /docker-entrypoint.d/40-app-runtime-config.sh
+# unprivileged 基镜像以 UID 101 运行：RUN chmod 会 EPERM，改用 COPY --chmod 赋权
+COPY --chmod=755 docker/40-app-runtime-config.sh /docker-entrypoint.d/40-app-runtime-config.sh
 
-COPY --from=builder /app/dist /usr/share/nginx/html
+# 注入脚本在启动期 sed 改写 html 产物并生成 runtime-config.js，
+# 文件与目录都必须归 UID 101（--chown 覆盖不到已存在目录本身，需 root 补一次）
+COPY --from=builder --chown=101:101 /app/dist /usr/share/nginx/html
+USER root
+RUN chown 101:101 /usr/share/nginx/html
+USER 101
 
 EXPOSE 8080
 

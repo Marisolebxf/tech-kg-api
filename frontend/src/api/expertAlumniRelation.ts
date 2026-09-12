@@ -12,15 +12,44 @@ export interface ApiResponse<T> {
   msg: string
 }
 
+export interface ConfidenceBasis {
+  rule: string
+  originalEdgeType?: string
+  scoreBreakdown: Record<string, number>
+}
+
+export interface ConfidenceFields {
+  confidence: number
+  confidenceSource: 'original' | 'derived'
+  confidenceBasis: ConfidenceBasis
+}
+
 export interface AlumniInteraction {
   coauthorEdge: boolean
   paperCount: number
   patentCount: number
   projectCount: number
+  sharedAchievements?: Array<{
+    id: string
+    label: string
+    kind: string
+    entityType: string
+    time?: string | null
+    confidence: number
+    confidenceSource: 'original' | 'derived'
+    confidenceBasis: ConfidenceBasis
+    expertRelations: Array<
+      ConfidenceFields & {
+        expertId: string
+        edgeType: string
+        label: string
+      }
+    >
+  }>
   summary: string
 }
 
-export interface AlumniItem {
+export interface AlumniItem extends ConfidenceFields {
   alumniId: string
   name: string
   sharedInstitutions: string[]
@@ -61,7 +90,7 @@ export interface AlumniEntity {
   y?: number
 }
 
-export interface AlumniRelation {
+export interface AlumniRelation extends ConfidenceFields {
   id: string
   from: string
   to: string
@@ -72,6 +101,7 @@ export interface AlumniRelation {
   dimensions?: string[]
   sharedInstitutions?: string[]
   interactions?: AlumniInteraction
+  summary?: string
 }
 
 export interface AlumniProvenanceEvidence {
@@ -109,7 +139,7 @@ export interface AlumniQueryResult {
   rules?: AlumniRule[]
   entities?: AlumniEntity[]
   relations?: AlumniRelation[]
-  graph?: { nodes: AlumniEntity[]; edges: Array<{ id: string; from: string; to: string; label: string; category: string }> }
+  graph?: { nodes: AlumniEntity[]; edges: AlumniRelation[] }
   provenance?: AlumniProvenance
 }
 
@@ -122,7 +152,9 @@ export type AlumniQueryRequest = {
 }
 
 export function describeExpertAlumniRelation() {
-  return http.get<Record<string, unknown>>('/v1/kg-construction/expert-alumni-relations')
+  return http.get<Record<string, unknown>>(
+    '/v1/kg-construction/expert-alumni-relations',
+  )
 }
 
 export function queryExpertAlumniRelation(body: AlumniQueryRequest) {

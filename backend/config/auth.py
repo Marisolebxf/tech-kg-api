@@ -27,6 +27,7 @@ class AuthSettings:
     """鉴权配置，密钥只允许通过后端环境变量注入。"""
 
     enabled: bool
+    allow_insecure_dev_context: bool
     user_center_base_url: str
     sso_login_url: str
     user_center_portal_url: str
@@ -92,6 +93,12 @@ class AuthSettings:
                 1, _env_int("USER_CENTER_PORTAL_ROLE_CACHE_TTL_SECONDS", 60)
             ),
             enabled=_env_bool("AUTH_ENABLED", True),
+            # 禁用真实鉴权时默认拒绝访问。仅允许本地/测试环境通过第二个显式开关
+            # 启用模拟管理员，避免生产环境误配 AUTH_ENABLED=false 后匿名提权。
+            allow_insecure_dev_context=(
+                app_env in {"dev", "development", "local", "test"}
+                and _env_bool("AUTH_ALLOW_INSECURE_DEV_CONTEXT", False)
+            ),
             user_center_base_url=base_url,
             sso_login_url=sso_login_url,
             user_center_portal_url=os.getenv(
@@ -111,7 +118,7 @@ class AuthSettings:
             session_cookie_name=os.getenv("AUTH_SESSION_COOKIE", "techkg_session"),
             portal_token_cookie_name=os.getenv(
                 "USER_CENTER_PORTAL_TOKEN_COOKIE",
-                "access_token",
+                "portal_access_token",
             ),
             portal_cookie_login_enabled=_env_bool(
                 "USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED",

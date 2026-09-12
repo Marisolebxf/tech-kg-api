@@ -12,6 +12,12 @@ server {
   gzip on;
   gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss image/svg+xml;
 
+  # 对页面、静态资源、错误响应和 API 代理统一生效。
+  add_header Content-Security-Policy "frame-ancestors 'self' https://edu.itic-sci.com" always;
+  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+
   # 门户基座下的 API 调用（运行时 apiBase 缺省 ${base}api）：
   # 去前缀代理到后端，否则落到 SPA fallback 返回 HTML
   location ^~ ${APP_BASE}/api/ {
@@ -43,9 +49,6 @@ server {
   # 构建产物按部署前缀引用 ${APP_BASE}/assets/...——alias 去前缀映射到根
   # dist；SPA 路由回退到根 index.html（其引用的资产再经此 location 兜住）
   location ^~ ${APP_BASE}/ {
-    # 仅允许同源页面和国科信统一门户嵌入，禁止任意第三方站点 framing。
-    add_header Content-Security-Policy "frame-ancestors 'self' https://edu.itic-sci.com" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     alias /usr/share/nginx/html/;
     try_files $uri $uri/ /index.html;
   }
@@ -57,6 +60,11 @@ server {
   location ~* \.(?:js|css|png|jpg|jpeg|gif|ico|svg|woff2?)$ {
     expires 7d;
     add_header Cache-Control "public, max-age=604800";
+    # Nginx 在 location 内出现 add_header 后不会继承 server 级响应头。
+    add_header Content-Security-Policy "frame-ancestors 'self' https://edu.itic-sci.com" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
     try_files $uri =404;
   }
 }

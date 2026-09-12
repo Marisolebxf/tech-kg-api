@@ -75,17 +75,18 @@ def _payload() -> dict:
     }
 
 
-def test_self_approval_uses_outbox_and_sync_is_idempotent() -> None:
+def test_separate_reviewer_uses_outbox_and_sync_is_idempotent() -> None:
     session = _session()
     graph = FakeGraph()
-    actor = _admin()
+    submitter = _admin("submitter-1")
+    reviewer = _admin("reviewer-1")
     service = CorrectionService(session, graph_factory=lambda: graph, sync_mode="dual")
 
-    created = service.create(_payload(), actor)
-    approved = service.decide(created["id"], "approve", "确认修正", actor)
+    created = service.create(_payload(), submitter)
+    approved = service.decide(created["id"], "approve", "确认修正", reviewer)
 
     assert approved["status"] == "PENDING_SYNC"
-    assert approved["reviewerId"] == actor.user_id
+    assert approved["reviewerId"] == reviewer.user_id
     assert graph.node_merges == []
     session.commit()
 
@@ -102,7 +103,7 @@ def test_self_approval_uses_outbox_and_sync_is_idempotent() -> None:
     assert task is not None
     assert task.status == "SUCCEEDED"
     assert graph.node_merges[0][1] == {"scholar_id": "person_001"}
-    assert [item["action"] for item in service.get(created["id"], actor)["history"]] == [
+    assert [item["action"] for item in service.get(created["id"], reviewer)["history"]] == [
         "SUBMIT",
         "APPROVE",
         "SYNC_SUCCEEDED",
@@ -113,15 +114,26 @@ def test_self_approval_uses_outbox_and_sync_is_idempotent() -> None:
     assert len(graph.node_merges) == 1
 
 
+def test_submitter_cannot_review_own_correction() -> None:
+    session = _session()
+    actor = _admin()
+    service = CorrectionService(session, sync_mode="projection")
+    created = service.create(_payload(), actor)
+
+    with pytest.raises(PermissionError, match="提交人与审核人不能是同一账号"):
+        service.decide(created["id"], "approve", "自行审核", actor)
+
+
 def test_graph_failure_is_recorded_and_can_be_retried() -> None:
     session = _session()
     graph = FakeGraph()
     graph.fail = True
-    actor = _admin()
+    submitter = _admin("submitter-1")
+    reviewer = _admin("reviewer-1")
     service = CorrectionService(session, graph_factory=lambda: graph, sync_mode="dual")
 
-    created = service.create(_payload(), actor)
-    service.decide(created["id"], "approve", "", actor)
+    created = service.create(_payload(), submitter)
+    service.decide(created["id"], "approve", "", reviewer)
     session.commit()
 
     assert process_due_sync_tasks(session, graph_factory=lambda: graph, sync_mode="dual") == 1
@@ -140,7 +152,7 @@ def test_graph_failure_is_recorded_and_can_be_retried() -> None:
     assert projection.version == 1
 
     graph.fail = False
-    retried = service.retry(created["id"], "恢复后重试", actor)
+    retried = service.retry(created["id"], "恢复后重试", reviewer)
     assert retried["status"] == "PENDING_SYNC"
     assert retried["sync"]["status"] == "PENDING"
     session.commit()
@@ -227,7 +239,8 @@ def test_list_uses_database_filters_and_pagination_beyond_one_hundred_rows() -> 
 def test_projection_mode_soft_deletes_without_touching_graph() -> None:
     session = _session()
     graph = FakeGraph()
-    actor = _admin()
+    submitter = _admin("submitter-1")
+    reviewer = _admin("reviewer-1")
     service = CorrectionService(session, graph_factory=lambda: graph, sync_mode="projection")
     payload = {
         **_payload(),
@@ -236,8 +249,8 @@ def test_projection_mode_soft_deletes_without_touching_graph() -> None:
         "after_data": {},
     }
 
-    created = service.create(payload, actor)
-    service.decide(created["id"], "approve", "确认软删除", actor)
+    created = service.create(payload, submitter)
+    service.decide(created["id"], "approve", "确认软删除", reviewer)
     session.commit()
 
     assert (
@@ -382,6 +395,8 @@ def test_local_development_login_is_recorded_in_member_table(
             raise
 
     monkeypatch.setattr(platform_access, "session_scope", test_session_scope)
+    # 开发模式的登记 memo 是模块级状态，隔离此前测试留下的痕迹以验证“首次登记”路径
+    monkeypatch.setattr(platform_access, "_DEV_ACTOR_UPSERTED", set())
     actor = platform_access.actor_from_profile(
         SimpleNamespace(
             user=SimpleNamespace(

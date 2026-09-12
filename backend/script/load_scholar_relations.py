@@ -17,8 +17,9 @@
   * 只做关系抽取，不新建 Person / Organization / Paper 顶点；顶点由对应领域批次写入。
   * 目标顶点使用命名约定：
         Person       -> ``person_{scholar_id}``
-        Organization -> ``org_{scholar_org_id}`` 优先，否则 ``org_{md5(name)[:16]}``
+        Organization -> ``org_{scholar_org_id}`` 优先；无 id 时按机构名匹配已入图 Organization
         Paper        -> ``paper_{paper_id}``
+  * 虚拟/测试/乱码源行、以及目标机构未入图时跳过任职边，不建桩机构。
   * ``merge_edge`` 幂等写入，重复执行不会产生重复边。
 
 用法::
@@ -54,6 +55,7 @@ from sqlalchemy import select, text
 from db_model.scholar import DwdScholarCoauthor, DwdScholarPaperRelation
 from infra.graph_db import get_trs_graph_client
 from infra.mysql import MySQLClient
+from script.organization_etl_common import clean_text, is_virtual_source_row
 from script.scholar_provenance import (
     CONFIDENCE_CROSS_DOMAIN_ID,
     CONFIDENCE_PLACEHOLDER_ORG,
@@ -138,6 +140,48 @@ def build_org_name_vid_index(graph) -> dict[str, str]:
     return index
 
 
+def resolve_org_vid_from_source(session, graph, names: list[str]) -> str | None:
+    """名称扫描遗漏时，以真实机构源主键精确回查；不创建机构或悬挂边。"""
+    if session is None:
+        return None
+    names = list(dict.fromkeys(name.strip() for name in names if name and name.strip()))
+    if not names:
+        return None
+    candidates: set[str] = set()
+    for table in ("dwd_org_base_info", "dwd_org_heis_info", "dwd_forg_base_info"):
+        columns = {
+            row[0]
+            for row in session.execute(
+                text(
+                    "SELECT COLUMN_NAME FROM information_schema.columns "
+                    "WHERE table_schema=DATABASE() AND table_name=:table"
+                ),
+                {"table": table},
+            )
+        }
+        if "org_id" not in columns:
+            continue
+        name_columns = [key for key in ("name_cn", "name_en") if key in columns]
+        for name in names:
+            if not name_columns:
+                continue
+            where = " OR ".join(f"`{key}`=:name" for key in name_columns)
+            for row in session.execute(
+                text(f"SELECT org_id FROM `{table}` WHERE {where}"), {"name": name}
+            ):
+                vid = org_vid(str(row[0]), "")
+                node = graph.get_node(vid)
+                if node is not None and "Organization" in node.labels:
+                    actual_names = {
+                        str(node.properties.get(key) or "").strip().casefold()
+                        for key in ("name_cn", "name_en")
+                    }
+                    if any(value.casefold() in actual_names for value in names):
+                        candidates.add(vid)
+    # 同名多机构时不擅自选择其中一个。
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
+
 # ---------------------------------------------------------------------------
 # Extraction helpers
 # ---------------------------------------------------------------------------
@@ -157,7 +201,9 @@ def _has_dwd_scholar_column(session, column_name: str) -> bool:
     )
 
 
-def _iter_scholar_affiliations(session, batch_size: int = 500) -> Iterable[dict]:
+def _iter_scholar_affiliations(
+    session, batch_size: int = 500, scholar_ids: list[str] | None = None
+) -> Iterable[dict]:
     """从 ``dwd_scholar`` 分页读取学者→机构映射所需字段。
 
     直接用 SQL 而非 ORM，因为 ``scholar_org_id`` 等是新增字段，在部分环境的
@@ -174,6 +220,12 @@ def _iter_scholar_affiliations(session, batch_size: int = 500) -> Iterable[dict]
     col_select = [
         col if _has_dwd_scholar_column(session, col) else f"NULL AS {col}" for col in optional_cols
     ]
+    filters = (
+        " AND scholar_id IN (" + ",".join(f":sid{i}" for i in range(len(scholar_ids))) + ")"
+        if scholar_ids
+        else ""
+    )
+    id_params = {f"sid{i}": sid for i, sid in enumerate(scholar_ids or [])}
     sql = text(
         f"""
         SELECT scholar_id,
@@ -181,7 +233,7 @@ def _iter_scholar_affiliations(session, batch_size: int = 500) -> Iterable[dict]
                scholar_org_name_zh,
                scholar_org_name_en
         FROM dwd_scholar
-        WHERE status = 1
+        WHERE status = 1 {filters}
         ORDER BY scholar_id
         LIMIT :limit OFFSET :offset
         """
@@ -189,18 +241,18 @@ def _iter_scholar_affiliations(session, batch_size: int = 500) -> Iterable[dict]
 
     offset = 0
     while True:
-        rows = session.execute(sql, {"limit": batch_size, "offset": offset}).all()
+        rows = session.execute(sql, {"limit": batch_size, "offset": offset, **id_params}).all()
         if not rows:
             break
         for r in rows:
             yield {
                 "scholar_id": r.scholar_id,
                 "scholar_org_id": r.scholar_org_id,
-                "org_zh": r.scholar_org_name_zh,
-                "org_en": r.scholar_org_name_en,
-                "work_experience_date": r.work_experience_date or "",
-                "work_experience_department_zh": r.work_experience_department_zh or "",
-                "work_experience_position_zh": r.work_experience_position_zh or "",
+                "org_zh": clean_text(r.scholar_org_name_zh) or "",
+                "org_en": clean_text(r.scholar_org_name_en) or "",
+                "work_experience_date": clean_text(r.work_experience_date) or "",
+                "work_experience_department_zh": clean_text(r.work_experience_department_zh) or "",
+                "work_experience_position_zh": clean_text(r.work_experience_position_zh) or "",
             }
         offset += len(rows)
         if len(rows) < batch_size:
@@ -216,6 +268,8 @@ def _iter_coauthor_rows(session, batch_size: int = 1000) -> Iterable[dict]:
                 DwdScholarCoauthor.scholar_id,
                 DwdScholarCoauthor.co_scholar_id,
                 DwdScholarCoauthor.co_paper_count,
+                DwdScholarCoauthor.update_time,
+                DwdScholarCoauthor.create_time,
             )
             .where(DwdScholarCoauthor.status == 1)
             .order_by(DwdScholarCoauthor.scholar_id, DwdScholarCoauthor.co_scholar_id)
@@ -225,10 +279,13 @@ def _iter_coauthor_rows(session, batch_size: int = 1000) -> Iterable[dict]:
         if not rows:
             break
         for r in rows:
+            # 与 dao/scholar.py 直查口径一致：无真实合作时间字段，用行更新时间代理
+            rel_time = r.update_time or r.create_time
             yield {
                 "scholar_id": r.scholar_id,
                 "co_scholar_id": r.co_scholar_id,
                 "co_paper_count": int(r.co_paper_count or 0),
+                "relation_time": rel_time.strftime("%Y-%m-%d %H:%M:%S") if rel_time else None,
             }
         offset += len(rows)
         if len(rows) < batch_size:
@@ -277,6 +334,9 @@ def ensure_schema(graph) -> None:
             ("source_record_id", "string"),
             ("ingest_batch", "string"),
             ("ingest_time", "string"),
+        ],
+        "COAUTHOR_WITH": [
+            ("relation_time", "string"),
         ],
         "STUDIED_AT": [
             ("degree_zh", "string"),
@@ -364,11 +424,11 @@ def _iter_scholar_educations(session, batch_size: int = 500) -> Iterable[dict]:
         for r in rows:
             yield {
                 "scholar_id": r.scholar_id,
-                "institution_zh": (r.education_background_institution_zh or "").strip(),
-                "institution_en": (r.education_background_institution_en or "").strip(),
-                "degree_zh": (r.education_background_degree_zh or "").strip(),
-                "degree_en": (r.education_background_degree_en or "").strip(),
-                "education_date": (r.education_background_date or "").strip(),
+                "institution_zh": clean_text(r.education_background_institution_zh) or "",
+                "institution_en": clean_text(r.education_background_institution_en) or "",
+                "degree_zh": clean_text(r.education_background_degree_zh) or "",
+                "degree_en": clean_text(r.education_background_degree_en) or "",
+                "education_date": clean_text(r.education_background_date) or "",
             }
         offset += len(rows)
         if len(rows) < batch_size:
@@ -433,13 +493,21 @@ def load_studied_at(
 
 
 def load_affiliations(
-    session, graph, *, dry_run: bool, preview: int = 5, org_index: dict[str, str] | None = None
+    session,
+    graph,
+    *,
+    dry_run: bool,
+    preview: int = 5,
+    org_index: dict[str, str] | None = None,
+    scholar_ids: list[str] | None = None,
 ) -> dict:
     """写入 AFFILIATED_WITH 边。
 
-    置信度按机构标识来源分档：源表带 ``scholar_org_id`` 时为
+    置信度按机构标识来源分档：源表带 ``scholar_org_id`` 且该机构已入图时为
     :data:`~script.scholar_provenance.CONFIDENCE_SOURCE_PRIMARY_KEY`；只能按机构名
-    md5 生成桩机构时降为 :data:`~script.scholar_provenance.CONFIDENCE_PLACEHOLDER_ORG`。
+    匹配已存在 Organization 时降为
+    :data:`~script.scholar_provenance.CONFIDENCE_PLACEHOLDER_ORG`。机构未入图、
+    虚拟/测试/乱码源行一律跳过，不建桩。
 
     Returns:
         统计字典，含写入条数、无机构跳过条数、桩机构条数。
@@ -447,13 +515,56 @@ def load_affiliations(
     now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     ok = skipped = shown = placeholder = 0
 
-    for rec in _iter_scholar_affiliations(session):
+    records = (
+        _iter_scholar_affiliations(session, scholar_ids=scholar_ids)
+        if scholar_ids
+        else _iter_scholar_affiliations(session)
+    )
+    source_matches: dict[tuple[str, str], str | None] = {}
+    org_exists: dict[str, bool] = {}
+
+    def _org_in_graph(vid: str) -> bool:
+        if vid in org_exists:
+            return org_exists[vid]
+        try:
+            node = graph.get_node(vid)
+        except Exception:  # noqa: BLE001
+            node = None
+        exists = node is not None and "Organization" in getattr(node, "labels", [])
+        org_exists[vid] = exists
+        return exists
+
+    for rec in records:
         src = person_vid(rec["scholar_id"])
         org_name = rec["org_zh"] or rec["org_en"] or ""
-        has_org_id = bool(rec["scholar_org_id"] and rec["scholar_org_id"].strip())
+        if is_virtual_source_row(
+            {
+                "scholar_id": rec["scholar_id"],
+                "scholar_org_id": rec.get("scholar_org_id"),
+                "scholar_org_name_zh": rec.get("org_zh"),
+                "scholar_org_name_en": rec.get("org_en"),
+            }
+        ):
+            logger.info(
+                "任职边跳过 scholar_id=%s org=%s：虚拟/测试/乱码源行",
+                rec["scholar_id"],
+                org_name,
+            )
+            skipped += 1
+            continue
+        has_org_id = bool(rec["scholar_org_id"] and str(rec["scholar_org_id"]).strip())
         if has_org_id:
-            # 源表带 scholar_org_id:直接用 org_{scholar_org_id}
+            # 源表带 scholar_org_id:直接用 org_{scholar_org_id}，但机构必须已入图。
             dst = org_vid(rec["scholar_org_id"], org_name)
+            if not dst or not _org_in_graph(dst):
+                logger.warning(
+                    "任职边跳过 scholar_id=%s org=%s：scholar_org_id=%s 对应机构未入图",
+                    rec["scholar_id"],
+                    org_name,
+                    rec["scholar_org_id"],
+                )
+                skipped += 1
+                continue
             conf = confidence_props(
                 CONFIDENCE_SOURCE_PRIMARY_KEY,
                 "source_org_id",
@@ -463,6 +574,16 @@ def load_affiliations(
             # scholar_org_id 缺失:按机构名 join 图里已存在 Organization(替代 md5 桩 vid,避免悬挂边)
             dst = resolve_org_vid_by_name(org_name, rec.get("org_en"), org_index or {})
             if not dst:
+                key = (org_name, rec.get("org_en") or "")
+                if key not in source_matches:
+                    source_matches[key] = resolve_org_vid_from_source(session, graph, list(key))
+                dst = source_matches[key]
+            if not dst:
+                logger.warning(
+                    "任职边跳过 scholar_id=%s org=%s：未找到唯一且已入图的真实机构",
+                    rec["scholar_id"],
+                    org_name,
+                )
                 skipped += 1
                 continue
             conf = confidence_props(
@@ -524,6 +645,7 @@ def load_coauthors(session, graph, *, dry_run: bool, preview: int = 5) -> dict:
         rid = f"{rec['scholar_id']}_{rec['co_scholar_id']}"
         props = {
             "co_paper_count": rec["co_paper_count"],
+            "relation_time": rec["relation_time"],
             "source_table": "dwd_scholar_coauthor",
             "source_record_id": rid,
             "ingest_batch": BATCH_ID,
@@ -624,6 +746,7 @@ def run(
     dry_run: bool = False,
     include_authored_by_fallback: bool = False,
     skip_studied_at: bool = False,
+    affiliation_scholar_ids: list[str] | None = None,
 ) -> dict:
     mysql = MySQLClient(database=database)
     graph = get_trs_graph_client()
@@ -642,6 +765,11 @@ def run(
         # dry-run 不得修改图 Schema；正式同步则先幂等补齐旧空间边字段，再写入关系数据。
         if not dry_run:
             ensure_schema(graph)
+        if affiliation_scholar_ids:
+            stats = load_affiliations(
+                session, graph, dry_run=dry_run, org_index={}, scholar_ids=affiliation_scholar_ids
+            )
+            return {"batch": BATCH_ID, "affiliated_with": stats}
         # org name->vid 索引:scholar_org_id 缺失 / 教育院校匹配时按机构名 join 图里已存在 Organization。
         org_index = build_org_name_vid_index(graph)
         aff_stats = load_affiliations(session, graph, dry_run=dry_run, org_index=org_index)
@@ -697,6 +825,12 @@ def _parse_args() -> argparse.Namespace:
             "outgoing edges."
         ),
     )
+    ap.add_argument(
+        "--affiliation-scholar-id",
+        action="append",
+        default=None,
+        help="仅重跑指定学者的任职边，可重复传入源表 scholar_id",
+    )
     return ap.parse_args()
 
 
@@ -710,5 +844,6 @@ if __name__ == "__main__":
         dry_run=args.dry_run,
         include_authored_by_fallback=args.include_authored_by_fallback,
         skip_studied_at=args.skip_studied_at,
+        affiliation_scholar_ids=args.affiliation_scholar_id,
     )
     logger.info("done: %s", result)

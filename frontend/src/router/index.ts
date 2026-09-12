@@ -3,7 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { appBase, authDisabled } from '../config'
 
 import { useAuthStore } from '../stores/auth'
-import { isPortalEmbeddedMode } from '../portal/iframeBridge'
+import { installSessionRecovery, loginRedirect, notifySessionExpired } from './sessionRecovery'
 import BusinessServiceView from '../views/business-service/BusinessServiceView.vue'
 import LoginView from '../views/auth/LoginView.vue'
 import UserCenterView from '../views/auth/UserCenterView.vue'
@@ -73,13 +73,13 @@ export const router = createRouter({
       name: 'graph-query',
       component: PlatformWorkbenchView,
       props: { initialTab: 'query' },
-      meta: { title: '综合查询' },
+      meta: { title: '综合查询', admin: true },
     },
     {
       path: '/graph-query/entities',
       name: 'graph-query-entities',
       component: EntityListView,
-      meta: { title: '实体列表' },
+      meta: { title: '实体列表', admin: true },
     },
     { path: '/admin', redirect: '/admin/reviews' },
     { path: '/admin/corrections', name: 'admin-corrections', component: CorrectionCenterView, props: { scope: 'admin' }, meta: { title: '修正记录', admin: true } },
@@ -118,22 +118,6 @@ export const router = createRouter({
   ],
 })
 
-function loginRedirect(fullPath: string, error?: string) {
-  if (isPortalEmbeddedMode()) {
-    return {
-      path: '/login',
-      query: { embedded: '1', portalState: 'session-expired' },
-    }
-  }
-  return {
-    path: '/login',
-    query: {
-      redirect: fullPath,
-      ...(error ? { error } : {}),
-    },
-  }
-}
-
 router.beforeEach(async (to) => {
   if (authDisabled) {
     return to.name === 'login' ? { path: '/overview' } : true
@@ -146,12 +130,13 @@ router.beforeEach(async (to) => {
     // 每次导航重新读取有效身份，及时反映门户或本系统的授权、撤权。
     const profile = await authStore.loadCurrentUser(true)
     if (!profile) {
+      if (!authStore.skipSilentLogin) notifySessionExpired('登录状态已失效或已超时，请重新登录')
       return loginRedirect(to.fullPath, '登录状态已失效或已超时，请重新登录')
     }
     const requiredPermission = typeof to.meta.permission === 'string' ? to.meta.permission : ''
     // 首页和旧 OAuth 回跳统一落到当前角色可访问的默认页面。
     if (to.name === 'overview' && !profile.isAdmin) {
-      return { path: '/graph-query', query: to.query, hash: to.hash }
+      return { path: '/expert-direct', query: to.query, hash: to.hash }
     }
     if (to.meta.admin === true && !profile.isAdmin) {
       return { path: '/forbidden', query: { redirect: to.fullPath } }
@@ -168,3 +153,5 @@ router.beforeEach(async (to) => {
     return loginRedirect(to.fullPath, '登录服务暂时不可用，请稍后重试')
   }
 })
+
+installSessionRecovery(router)

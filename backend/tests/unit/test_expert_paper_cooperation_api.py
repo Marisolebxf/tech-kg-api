@@ -7,6 +7,7 @@ from service.expert_paper_cooperation_api import (
     _build_rules,
     _build_structured_result,
     _fetch_paper_context,
+    _relation_confidences,
     _year_filters,
 )
 
@@ -105,6 +106,36 @@ def test_request_schema_does_not_expose_data_source():
     assert "dataSource" not in schema["properties"]
 
 
+@pytest.mark.parametrize(
+    ("expert_a_id", "expert_b_id"),
+    [
+        ("专家甲", "专家乙"),
+        ("person_A.1", "person_B-2"),
+        ("专家·甲", "专家·乙"),
+    ],
+)
+def test_expert_ids_accept_the_same_characters_as_colleague_relation(
+    expert_a_id: str, expert_b_id: str
+):
+    body = ExpertPaperCooperationDemoRequest(
+        expertAId=expert_a_id,
+        expertBId=expert_b_id,
+    )
+
+    assert body.expertAId == expert_a_id
+    assert body.expertBId == expert_b_id
+
+
+@pytest.mark.parametrize("field", ["expertAId", "expertBId"])
+@pytest.mark.parametrize("invalid_id", ["person A", "person@A", " person_A", "person_A\n"])
+def test_expert_ids_reject_whitespace_and_abnormal_characters(field: str, invalid_id: str):
+    payload = {"expertAId": "person_A", "expertBId": "person_B"}
+    payload[field] = invalid_id
+
+    with pytest.raises(ValueError, match="异常字符"):
+        ExpertPaperCooperationDemoRequest(**payload)
+
+
 def test_year_filters_use_string_publication_year():
     body = ExpertPaperCooperationDemoRequest(
         expertAId="A",
@@ -132,12 +163,37 @@ def test_rules_describe_the_actual_paper_cooperation_algorithm():
         "作者关联与合作频次算法",
         "论文指标与合作成员统计规则",
         "学术影响力与共同贡献计算规则",
+        "论文合作关系置信度规则",
     ]
     assert "仅取" in rules[0]["logic"]
     assert "年份" in rules[0]["logic"]
     assert "未配置 status=1" in rules[0]["threshold"]
     assert "至少覆盖 2 个不同发表年份" in rules[1]["threshold"]
     assert "论文数×6.5" in rules[2]["logic"]
+    assert "逐篇共同论文路径为 0.75" in rules[3]["logic"]
+    assert "不使用前端固定值" in rules[3]["threshold"]
+
+
+def test_relation_confidences_follow_structured_evidence_rules():
+    confidences = _relation_confidences(
+        paper_count=3,
+        years=[2018, 2021, 2024],
+        has_direct_paper_paths=True,
+        unit_count=2,
+        has_topic_edges=False,
+        has_topic_fallback=False,
+        venue_evidence_count=0,
+        has_stable_team=True,
+    )
+
+    assert confidences == {
+        "paperCooperation": 0.95,
+        "authorship": 1.0,
+        "authorUnit": 1.0,
+        "researchTopic": 0.0,
+        "publicationVenue": 0.0,
+        "teamMembership": 1.0,
+    }
 
 
 @pytest.mark.asyncio
@@ -159,12 +215,20 @@ async def test_coauthor_edge_fallback_keeps_unproven_fields_empty():
     assert shared_path_request["steps"][0]["direction"] == "in"
     assert shared_path_request["steps"][1]["direction"] == "out"
     assert result["paperTopics"][0] == "医学影像"
-    assert result["coreCollaborators"] == ["共同作者丙"]
+    assert result["coreCollaborators"] == ["共同作者丙", "专家乙", "专家甲"]
     assert result["stableTeamMembers"] == []
     assert result["cooperationTimeRange"]["displayText"] == ""
     assert result["journalLevelCount"] == {}
     assert result["conferenceLevelCount"] == {}
     assert result["citation"] == {"total": 0, "max": 0}
+    assert result["relationConfidences"] == {
+        "paperCooperation": 0.85,
+        "authorship": 0.85,
+        "authorUnit": 1.0,
+        "researchTopic": 0.8,
+        "publicationVenue": 0.0,
+        "teamMembership": 0.85,
+    }
     provenance = result["_provenance"]
     assert provenance["sourceDatabase"].startswith("trs-graph / space=")
     expert_evidence = next(

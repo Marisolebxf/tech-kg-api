@@ -3,7 +3,7 @@
 ## 输出结构
 
 1. ``summary``：本次查询结果规模（命中的分层实体数、返回子图里的关系数）。
-2. ``layers``：四个分层（核心技术、领军企业、领军专家、代表成果），每层按检索
+2. ``layers``：四个分层（核心技术、领军企业、领军专家、产业动态事件），每层按检索
    到的实体展示；产业关键词非空时先用属性搜索精确过滤，未命中再有界扫描做包含
    匹配，关键词为空时按标签分页取前 K。
 3. ``graph``：以 ``anchorId`` 或首个专家/机构为中心的 ``depth`` 跳子图，直接返回
@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from infra.graph_api_client import GraphAPIClient, GraphAPIError, graph_api
@@ -34,12 +35,58 @@ logger = logging.getLogger(__name__)
 
 MAX_TOP_K = 20
 MAX_RELATION_TYPES = 20
+_PRESET_INDUSTRY_ALIASES: dict[str | None, tuple[str, ...]] = {
+    None: ("产业全景", "全景图", "全产业链", "全部产业"),
+    "人工智能": ("人工智能", "人工智能产业", "人工智能产业链", "ai", "AI"),
+    "集成电路": ("集成电路", "集成电路产业", "集成电路产业链", "芯片", "半导体"),
+}
+_PRESET_FAST_ANCHOR_HINTS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
+    "人工智能": (
+        ("IndustryChain", ("name", "chain_name")),
+        ("IndustryNode", ("node_name", "name")),
+        ("Keyword", ("keyword",)),
+    ),
+    "集成电路": (
+        ("IndustryNode", ("node_name", "name")),
+        ("IndustryChain", ("name", "chain_name")),
+        ("Keyword", ("keyword",)),
+    ),
+}
 # 属性搜索只支持精确等值；未命中时退化为有界扫描 + 本地包含匹配的扫描上限。
-_KEYWORD_SCAN_LIMIT = 500
-# 关键词包含匹配的扫描总量上限（分页扫描，避免大标签只看前 500 个永远命不中）。
-_KEYWORD_SCAN_MAX = 3000
-# 包含匹配扫描按批次分页，请求够用就停，避免首批命中时仍把全部分页都打到图服务。
-_KEYWORD_SCAN_BATCH_PAGES = 2
+_KEYWORD_SCAN_LIMIT = 50
+# 精确未命中后的兜底只做小范围扫描，控制在单页内，避免全量分页拖慢接口。
+_COMPACT_KEYWORD_SCAN_LIMIT = 50
+_COMPACT_SCAN_LABELS = {"IndustryNode", "IndustryChain", "Keyword"}
+# 专家属性检索依赖图库索引；索引缺失时做有界分页扫描，并按研究领域相关性排序。
+_EXPERT_SCAN_LIMIT = 500
+_INDUSTRY_EXPERT_SCAN_PAGES: dict[str, int] = {
+    # 低空经济相关学者在专家库中的分布较靠后，有限扩展到 5 页即可覆盖
+    # 无人机网络、农业无人机和无人机视觉等核心方向。
+    "低空经济": 5,
+}
+_INDUSTRY_EXPERT_TERMS: dict[str, tuple[str, ...]] = {
+    "集成电路": (
+        "集成电路",
+        "芯片",
+        "半导体",
+        "integrated circuit",
+        "chip",
+        "semiconductor",
+        "vlsi",
+        "system-on-chip",
+        "fpga",
+    ),
+    "低空经济": (
+        "低空经济",
+        "无人机",
+        "无人驾驶航空器",
+        "通用航空",
+        "unmanned aerial vehicle",
+        "uav",
+        "drone",
+        "general aviation",
+    ),
+}
 # 子图合并时最多取多少个种子节点。
 _MAX_SUBGRAPH_SEEDS = 5
 # 图服务（trs-graph）承受不住太高并发，全标签扫描类请求并发过多会 500，
@@ -56,6 +103,7 @@ _FALLBACK_REASON_TEXT = {
     "keyword_no_match": "产业关键词未命中任何实体",
     "graph_api_error": "图查询服务不可用",
     "unexpected_error": "图查询过程异常",
+    "keyword_fallback_overview": "关键词未命中，已回退到紧凑全景",
 }
 
 _LAYER_DEFINITIONS: list[dict[str, Any]] = [
@@ -92,13 +140,13 @@ _LAYER_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "key": "flagship_achievement",
-        "title": "代表成果",
-        "labels": ["Paper", "Patent", "Project"],
-        "name_props": ("title_zh", "title_en", "title", "title_original"),
-        "metric_prop": "citation_nums",
-        "metric_label": "被引次数",
-        "type": "achievement",
-        "keyword_props": ("title_zh", "title_en", "keywords"),
+        "title": "产业动态事件",
+        "labels": ["Event"],
+        "name_props": ("title", "name", "event_name", "event_type"),
+        "metric_prop": "amount",
+        "metric_label": "事件金额",
+        "type": "event",
+        "keyword_props": ("title", "content", "event_type"),
     },
 ]
 
@@ -115,8 +163,9 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         top_k: int = 5,
         relation_types: list[str] | None = None,
         refresh: bool = False,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
-        industry_kw = (industry or "").strip() or None
+        industry_kw = self._normalize_industry_keyword(industry)
         anchor = (anchor_id or "").strip() or None
         top_k = max(1, min(int(top_k or 5), MAX_TOP_K))
         depth = max(1, min(int(depth or 2), 3))
@@ -137,6 +186,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                 depth=depth,
                 top_k=top_k,
                 relation_types=rel_types,
+                auth_headers=auth_headers,
             )
             return cached[1]
         query_input = {
@@ -156,10 +206,31 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         fallback_reason: str | None = None
 
         try:
-            async with graph_api() as client:
-                layers, seed_vids = await self._fetch_layers(client, industry_kw, top_k)
-                graph = await self._fetch_graph(client, seed_vids, anchor, depth)
+            async with graph_api(auth_headers=auth_headers) as client:
+                resolved_anchor, layer_payload = await asyncio.gather(
+                    self._resolve_anchor_from_keyword(client, industry_kw, anchor),
+                    self._fetch_layers(
+                        client, industry_kw, top_k, anchor is None and industry_kw is None
+                    ),
+                )
+                layers, seed_vids = layer_payload
+                anchor = resolved_anchor
+                if industry_kw and not anchor and not any(layer["items"] for layer in layers):
+                    layers, seed_vids = await self._fetch_layers(client, None, top_k, True)
+                    fallback_reason = "keyword_fallback_overview"
+                if rel_types:
+                    graph = await self._fetch_graph(
+                        client,
+                        seed_vids,
+                        anchor,
+                        depth,
+                        relation_types=rel_types,
+                    )
+                else:
+                    graph = await self._fetch_graph(client, seed_vids, anchor, depth)
+                layers = self._backfill_empty_layers_from_graph(layers, graph, top_k)
                 graph = self._filter_graph_by_relation_types(graph, rel_types)
+                query_input["anchorId"] = anchor or ""
         except GraphAPIError as exc:
             logger.warning("graph API unavailable for panorama, falling back: %s", exc)
             fallback_reason = "graph_api_error"
@@ -183,6 +254,10 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "actual": "graph-api",
             "fallback": False,
         }
+        if industry_kw != (industry or "").strip() and (industry or "").strip():
+            source["normalizedIndustry"] = industry_kw or ""
+        if anchor and not anchor_id:
+            source["autoAnchorId"] = anchor
         if fallback_reason is not None:
             source["reason"] = fallback_reason
 
@@ -205,6 +280,105 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             # 请求 10 分钟内都拿不到数据。
             _panorama_cache[cache_key] = (time.monotonic(), result)
         return result
+
+    @classmethod
+    def _normalize_industry_keyword(cls, industry: str | None) -> str | None:
+        raw = (industry or "").strip()
+        if not raw:
+            return None
+        folded = raw.casefold()
+        for canonical, aliases in _PRESET_INDUSTRY_ALIASES.items():
+            if any(folded == alias.casefold() for alias in aliases):
+                return canonical
+        return raw
+
+    async def _resolve_anchor_from_keyword(
+        self,
+        client: GraphAPIClient,
+        industry: str | None,
+        anchor_id: str | None,
+    ) -> str | None:
+        """显式 anchor 优先；否则对热点关键词做轻量唯一命中，直转 anchorId。"""
+        if anchor_id:
+            return anchor_id
+        if not industry:
+            return None
+
+        preset = _PRESET_FAST_ANCHOR_HINTS.get(industry)
+        if preset:
+            for label, props in preset:  # 只按关键词做轻量唯一命中，不依赖固定图 ID
+                resolved = await self._resolve_unique_anchor_candidate(
+                    client, label, props, industry
+                )
+                if resolved:
+                    return resolved
+
+        generic_plan = (
+            ("IndustryNode", ("node_name", "name")),
+            ("IndustryChain", ("name", "chain_name")),
+            ("Keyword", ("keyword",)),
+        )
+        for label, props in generic_plan:
+            resolved = await self._resolve_unique_anchor_candidate(client, label, props, industry)
+            if resolved:
+                return resolved
+        return None
+
+    async def _resolve_unique_anchor_candidate(
+        self,
+        client: GraphAPIClient,
+        label: str,
+        props: tuple[str, ...],
+        industry: str,
+    ) -> str | None:
+        seen: dict[str, dict[str, Any]] = {}
+        for prop in props:
+            payload = await self._safe_search_nodes(client, label, prop, industry, 2)
+            for item in (payload or {}).get("items", []):
+                item_id = str(item.get("id") or "")
+                if item_id and item_id not in seen:
+                    seen[item_id] = item
+            if len(seen) > 1:
+                return None
+        if not seen:
+            # trs-graph 的属性查找依赖对应字段索引。部分部署只有 VID 索引，
+            # find_nodes 会返回 IndexNotFound；此时对单页候选做严格等值匹配，
+            # 仍可把真实 IndustryChain 节点解析为锚点，避免回退到无关全库数据。
+            candidates = await self._list_by_label_throttled(
+                client, label, _COMPACT_KEYWORD_SCAN_LIMIT, 0
+            )
+            expected = industry.casefold()
+            for item in candidates:
+                item_props = item.get("properties") or {}
+                if not any(
+                    str(item_props.get(prop) or "").strip().casefold() == expected for prop in props
+                ):
+                    continue
+                item_id = str(item.get("id") or "")
+                if item_id and item_id not in seen:
+                    seen[item_id] = item
+                if len(seen) > 1:
+                    return None
+        if len(seen) != 1:
+            return None
+        candidate = next(iter(seen.values()))
+        try:
+            resolved = await client.resolve_addressable_node(
+                candidate,
+                vid_candidates=self._node_vid_candidates(candidate),
+            )
+        except GraphAPIError:
+            return None
+        return str(resolved.get("id") or "") if resolved else None
+
+    @staticmethod
+    def _select_layer_definitions(compact_without_anchor: bool) -> list[dict[str, Any]]:
+        if not compact_without_anchor:
+            return list(_LAYER_DEFINITIONS)
+        allowed_keys = {"core_technology", "leading_enterprise"}
+        return [
+            definition for definition in _LAYER_DEFINITIONS if definition["key"] in allowed_keys
+        ]
 
     @staticmethod
     def _normalize_relation_types(relation_types: list[str] | None) -> list[str]:
@@ -253,6 +427,66 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         nodes = [n for n in (graph.get("nodes") or []) if str(n.get("id") or "") in kept_ids]
         return {"nodes": nodes, "edges": edges}
 
+    @staticmethod
+    def _backfill_empty_layers_from_graph(
+        layers: list[dict[str, Any]],
+        graph: dict[str, list[Any]],
+        top_k: int,
+    ) -> list[dict[str, Any]]:
+        """用锚点真实子图补齐空分层，避免关键词索引缺失时展示无关抽样。"""
+        types_by_layer = {
+            "core_technology": {"keyword", "industrynode", "technology"},
+            "leading_enterprise": {"organization", "company"},
+            "leading_expert": {"person", "scholar", "expert"},
+            "flagship_achievement": {"event"},
+        }
+        entity_type_by_layer = {
+            "core_technology": "technology",
+            "leading_enterprise": "organization",
+            "leading_expert": "expert",
+            "flagship_achievement": "event",
+        }
+        output: list[dict[str, Any]] = []
+        for original in layers:
+            layer = {**original, "items": list(original.get("items") or [])}
+            if layer["items"]:
+                output.append(layer)
+                continue
+            layer_key = str(layer.get("key") or "")
+            allowed_types = types_by_layer.get(layer_key, set())
+            items: list[dict[str, Any]] = []
+            seen_ids: set[str] = set()
+            seen_labels: set[str] = set()
+            layer_limit = (
+                min(top_k, 3) if layer_key in {"leading_expert", "flagship_achievement"} else top_k
+            )
+            for node in graph.get("nodes") or []:
+                node_type = str(node.get("type") or "").casefold()
+                node_id = str(node.get("id") or "")
+                if node_type not in allowed_types or not node_id or node_id in seen_ids:
+                    continue
+                seen_ids.add(node_id)
+                node_label = str(node.get("label") or node_id)
+                if layer_key == "flagship_achievement" and node_label in seen_labels:
+                    continue
+                seen_labels.add(node_label)
+                items.append(
+                    {
+                        "id": node_id,
+                        "label": node_label,
+                        "type": entity_type_by_layer[layer_key],
+                        "subtitle": node.get("subtitle"),
+                        "metric": None,
+                        "metricValue": None,
+                    }
+                )
+                if len(items) >= layer_limit:
+                    break
+            layer["items"] = items
+            layer["total"] = len(items)
+            output.append(layer)
+        return output
+
     def _rebuild_in_background(
         self,
         cache_key: tuple[str, str, int, int, str],
@@ -262,6 +496,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         depth: int,
         top_k: int,
         relation_types: list[str] | None = None,
+        auth_headers: Mapping[str, str] | None = None,
     ) -> None:
         """缓存过期时后台重建，期间请求继续用旧结果。"""
         if cache_key in _panorama_rebuilding:
@@ -277,6 +512,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                     depth=depth,
                     top_k=top_k,
                     relation_types=relation_types,
+                    auth_headers=auth_headers,
                 )
             except Exception:  # noqa: BLE001 - 后台重建失败保留空位，下次请求再现场组装
                 logger.warning("panorama background rebuild failed", exc_info=True)
@@ -291,6 +527,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         client: GraphAPIClient,
         industry: str | None,
         top_k: int,
+        compact_without_anchor: bool,
     ) -> tuple[list[dict[str, Any]], list[str]]:
         """构造四个分层，并收集可用于扩展子图的种子 VID。
 
@@ -305,21 +542,26 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         """
         layers: list[dict[str, Any]] = []
         seed_candidates_by_key: dict[str, list[dict[str, Any]]] = {}
-        # 四个分层互不依赖；属性搜索在图服务侧是全标签扫描，单个要 1~2 秒，
-        # 串行拉满 9 秒起，并发后整体耗时约等于最慢的那一层。
+        selected_definitions = self._select_layer_definitions(compact_without_anchor)
+        # 无显式 anchorId 时只保留技术/产业节点 + 企业两层，减少全景发现成本。
         collected = await asyncio.gather(
             *(
                 self._collect_layer_nodes(client, definition, industry, top_k)
-                for definition in _LAYER_DEFINITIONS
+                for definition in selected_definitions
             )
         )
-        for definition, nodes in zip(_LAYER_DEFINITIONS, collected, strict=True):
-            picked = nodes[:top_k]
+        for definition, nodes in zip(selected_definitions, collected, strict=True):
+            layer_limit = (
+                min(top_k, 3)
+                if definition["key"] in {"leading_expert", "flagship_achievement"}
+                else top_k
+            )
+            picked = nodes[:layer_limit]
             layers.append(
                 {
                     "key": definition["key"],
                     "title": definition["title"],
-                    "total": len(nodes),
+                    "total": len(picked),
                     "items": [self._node_to_key_entity(node, definition) for node in picked],
                 }
             )
@@ -340,7 +582,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         Args:
             client: 图查询 API 客户端。
             definition: ``_LAYER_DEFINITIONS`` 中的一项。
-            industry: 产业关键词；非空时先精确搜属性，未命中再有界扫描做包含匹配。
+            industry: 产业关键词；非空时先精确搜属性，未命中仅做小范围扫描。
             top_k: 目标条数。
 
         Returns:
@@ -374,8 +616,8 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
     ) -> list[dict[str, Any]]:
         """按产业关键词找某个标签下的节点。
 
-        属性搜索只支持精确等值，关键词与库里存的字面值稍有差异就会全空；因此
-        精确搜索未命中时，再有界扫描 ``_KEYWORD_SCAN_LIMIT`` 个节点做包含匹配。
+        属性搜索先做精确等值；未命中时只在少量候选标签上做单页小范围包含匹配，
+        避免继续走大范围分页扫描。
 
         Args:
             client: 图查询 API 客户端。
@@ -402,38 +644,41 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         if found:
             return found
 
-        # 精确等值没命中，退化为分页有界扫描 + 本地包含匹配。
-        # 大标签（如 Person 有几十万节点）只扫前 500 个基本永远命不中，
-        # 所以按页继续扫（页间并发拉取），直到命中或达到 _KEYWORD_SCAN_MAX。
-        needle = industry.casefold()
-        found: list[dict[str, Any]] = []
-        page_count = -(-_KEYWORD_SCAN_MAX // _KEYWORD_SCAN_LIMIT)
-        for start_page in range(0, page_count, _KEYWORD_SCAN_BATCH_PAGES):
-            pages = await asyncio.gather(
-                *(
-                    self._list_by_label_throttled(
-                        client,
-                        label,
-                        _KEYWORD_SCAN_LIMIT,
-                        page_index * _KEYWORD_SCAN_LIMIT,
-                    )
-                    for page_index in range(
-                        start_page,
-                        min(start_page + _KEYWORD_SCAN_BATCH_PAGES, page_count),
-                    )
-                )
+        if label not in _COMPACT_SCAN_LABELS and label != "Person":
+            return []
+        scan_limit = _EXPERT_SCAN_LIMIT if label == "Person" else _COMPACT_KEYWORD_SCAN_LIMIT
+        scan_pages = _INDUSTRY_EXPERT_SCAN_PAGES.get(industry, 1) if label == "Person" else 1
+        pages = await asyncio.gather(
+            *(
+                self._list_by_label_throttled(client, label, scan_limit, page_index * scan_limit)
+                for page_index in range(scan_pages)
             )
-            for page in pages:
-                for node in page:
-                    props = node.get("properties") or {}
-                    for prop in definition["keyword_props"]:
-                        value = str(props.get(prop) or "")
-                        if value and needle in value.casefold():
-                            found.append(node)
-                            break
-                    if len(found) >= top_k:
-                        return found
-        return found
+        )
+        page = [node for nodes in pages for node in nodes]
+        terms = (
+            _INDUSTRY_EXPERT_TERMS.get(industry, (industry,)) if label == "Person" else (industry,)
+        )
+        folded_terms = tuple(term.casefold() for term in terms)
+        scored_matches: list[tuple[int, dict[str, Any]]] = []
+        seen_ids: set[str] = set()
+        for node in page:
+            node_id = str(node.get("id") or "")
+            if node_id and node_id in seen_ids:
+                continue
+            if node_id:
+                seen_ids.add(node_id)
+            props = node.get("properties") or {}
+            score = 0
+            for prop in definition["keyword_props"]:
+                value = str(props.get(prop) or "").casefold()
+                if not value:
+                    continue
+                weight = 3 if prop == "research_fields" else 1
+                score += weight * sum(term in value for term in folded_terms)
+            if score:
+                scored_matches.append((score, node))
+        scored_matches.sort(key=lambda item: item[0], reverse=True)
+        return [node for _score, node in scored_matches[:top_k]]
 
     @staticmethod
     async def _safe_search_nodes(
@@ -566,6 +811,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         seed_vids: list[str],
         anchor_id: str | None,
         depth: int,
+        relation_types: list[str] | None = None,
     ) -> dict[str, list[Any]]:
         """以锚点或首个可寻址实体为中心扩展子图。
 
@@ -591,14 +837,28 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
         # 多 seed 子图互相独立，并行拉取（套 semaphore 防压垮 trs-graph）；
         # 单 seed 失败 except GraphAPIError → None 跳过，合并后统一去重，结果不变。
-        async def _fetch_one(seed_vid: str) -> dict[str, Any] | None:
+        async def _fetch_one(seed_vid: str, edge_type: str | None = None) -> dict[str, Any] | None:
             async with _graph_api_semaphore:
                 try:
-                    return await client.get_subgraph(seed_vid, depth=depth, limit=60)
+                    return await client.get_subgraph(
+                        seed_vid,
+                        depth=depth,
+                        limit=60,
+                        edge_type=edge_type,
+                    )
                 except GraphAPIError:
                     return None
 
-        subgraphs = await asyncio.gather(*[_fetch_one(s) for s in seeds])
+        pushed_edge_types = (
+            relation_types if relation_types and len(relation_types) == 1 else [None]
+        )
+        subgraphs = await asyncio.gather(
+            *[
+                _fetch_one(seed_vid, edge_type)
+                for seed_vid in seeds
+                for edge_type in pushed_edge_types
+            ]
+        )
         for subgraph in subgraphs:
             if not subgraph:
                 continue
@@ -763,6 +1023,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "label": self._first_prop_value(
                 props,
                 (
+                    "chain_name",
                     "name_zh",
                     "name_cn",
                     "name",
@@ -782,11 +1043,20 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         }
 
     def _edge_to_graph_edge(self, edge: dict[str, Any]) -> dict[str, Any]:
+        props = edge.get("properties") or {}
+        # 不同边类型的置信度字段名/量纲不同：chain_score 是 0-100 的产业链匹配分，
+        # confidence 已经是 0-1；统一换算成 0-1，避免前端拿不到值只能显示"暂无"。
+        confidence: float | None = None
+        if isinstance(props.get("confidence"), (int, float)):
+            confidence = min(1.0, max(0.0, float(props["confidence"])))
+        elif isinstance(props.get("chain_score"), (int, float)):
+            confidence = min(1.0, max(0.0, float(props["chain_score"]) / 100))
         return {
             "source": str(edge.get("source") or ""),
             "target": str(edge.get("target") or ""),
             "label": str(edge.get("type") or ""),
-            "data": edge.get("properties") or {},
+            "confidence": confidence,
+            "data": props,
         }
 
     @staticmethod

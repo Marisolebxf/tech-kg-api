@@ -25,6 +25,9 @@ from service.workflow_models import Base
 DELETE_ORPHAN_CASCADE = "all, delete-orphan"
 SCHEMA_DEFINITION_ID_FK = "kg_schema_definition.id"
 
+DELETE_ORPHAN_CASCADE = "all, delete-orphan"
+SCHEMA_DEFINITION_ID_FK = "kg_schema_definition.id"
+
 
 def _uuid() -> str:
     return str(uuid4())

@@ -141,10 +141,8 @@ async def test_dynamic_detail_correction_resume_and_callbacks(async_client, grap
         "data"
     ]
     assert detail["template"]["displaySchema"]["sections"][0]["type"] == "entity-comparison"
-    assert (
-        detail["data"]["input"] == body["inputSnapshot"]
-        and detail["consequence"]["rerunStepId"] == "align"
-    )
+    assert detail["data"]["input"] == body["inputSnapshot"]
+    assert detail["consequence"]["rerunStepId"] == "align"
     claimed = (
         await async_client.post(
             f"/api/v1/manual-reviews/production/{review_id}/claim",
@@ -167,7 +165,8 @@ async def test_dynamic_detail_correction_resume_and_callbacks(async_client, grap
         f"/api/v1/internal/manual-reviews/{review_id}/correction", headers=HEADERS
     )
     correction = correction_response.json()["data"]
-    assert correction["stepId"] == "align" and len(correction["payloadSha256"]) == 64
+    assert correction["stepId"] == "align"
+    assert len(correction["payloadSha256"]) == 64
     assert (await service.process_outbox()) == {"processed": 1, "failed": 0}
     assert (await service.process_outbox()) == {"processed": 0, "failed": 0}
 

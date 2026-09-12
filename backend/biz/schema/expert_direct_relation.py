@@ -152,6 +152,7 @@ class DirectRelationItem(BaseModel):
     coPaperCount: int = 0
     relationStrength: int = 0
     reasonTags: list[str] = Field(default_factory=list)
+    representativeAchievements: list[dict[str, str]] = Field(default_factory=list)
     relationSummary: str = ""
     lastUpdatedAt: str | None = None
     detailRows: list[list[Any]] = Field(default_factory=list)

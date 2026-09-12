@@ -12,6 +12,8 @@ import os
 
 import httpx
 
+PANORAMA_QUERY_PATH = "/api/v1/kg-construction/industry-chain-panorama/query"
+
 logger = logging.getLogger(__name__)
 
 # 预热用的固定入参（与 JMeter 压测计划一致；用真实存在的 ID 以返回 200+success）。
@@ -54,14 +56,22 @@ _PREWARM_CASES: list[tuple[str, dict]] = [
     ("/api/v1/kg-service/key-enterprise-relation", {"expert_id": "person_855924f1"}),
     ("/api/v1/kg-service/industry-node-top-events", {"chain_node_id": "IC0007007", "top_n": 10}),
     (
-        "/api/v1/kg-construction/industry-chain-panorama/query",
+        PANORAMA_QUERY_PATH,
         {"dataSource": "all", "industry": "", "depth": 2, "topK": 5},
+    ),
+    (
+        PANORAMA_QUERY_PATH,
+        {"dataSource": "all", "industry": "人工智能", "depth": 2, "topK": 5},
+    ),
+    (
+        PANORAMA_QUERY_PATH,
+        {"dataSource": "all", "industry": "集成电路", "depth": 1, "topK": 3},
     ),
 ]
 
 
 async def prewarm_business(app: object) -> None:
-    """对 9 大业务接口各发一次请求，填满本 worker 结果缓存。"""
+    """对业务接口及热点全景图参数各发一次请求，填满本 worker 结果缓存。"""
     if os.getenv("PREWARM_BUSINESS", "false").lower() != "true":
         return
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), timeout=120) as client:

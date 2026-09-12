@@ -174,12 +174,10 @@ const currentServiceNavItem = computed(() =>
 const breadcrumbItems = computed(() => {
   if (route.query.breadcrumb === "business-service")
     return [
-      { label: "页面总览", to: "/overview" },
       { label: businessServiceTitle },
     ];
   if (currentServiceNavItem.value)
     return [
-      { label: "页面总览", to: "/overview" },
       { label: businessServiceTitle, to: "/business-service" },
       { label: currentServiceNavItem.value.fullLabel },
     ];
@@ -441,9 +439,9 @@ onBeforeUnmount(() => {
       />
       <aside aria-label="辅助区域 1" class="app-sidebar" :aria-hidden="isMobile && !mobileNavOpen">
         <div class="app-brand">
-          <img class="app-brand__logo" :src="logoKg" alt="知识图谱平台" />
+          <img class="app-brand__logo" :src="logoKg" alt="亿级科技知识图谱引擎" />
           <div v-if="!sidebarCollapsed" class="app-brand__name">
-            知识图谱平台
+            亿级科技知识图谱引擎
           </div>
         </div>
 
@@ -570,7 +568,6 @@ onBeforeUnmount(() => {
               ></span>
               <span v-if="!sidebarCollapsed">配置管理</span>
             </RouterLink>
-            </template>
 
             <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>查询与服务</span>
@@ -635,6 +632,7 @@ onBeforeUnmount(() => {
                 >
               </aside>
             </div>
+            </template>
             <div class="app-nav__service-group">
               <button
                 class="app-nav__item app-nav__item--top app-nav__item--button"
@@ -720,6 +718,7 @@ onBeforeUnmount(() => {
           </button>
           <div class="app-top-actions__right">
             <a
+              v-if="isAdminUser"
               class="app-docs-link"
               :href="docsHref"
               target="_blank"

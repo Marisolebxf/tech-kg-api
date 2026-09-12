@@ -6,6 +6,7 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from biz.schemas.text_rules import ABNORMAL_CHARS_HINT, KEYWORD_TEXT_PATTERN, check_text
 from service.schema_ddl import FIXED_STRING_MAX_LENGTH, is_valid_data_type
 
 ENTITY_NAME_PATTERN = re.compile(r"^[A-Z][A-Za-z0-9]*$")
@@ -28,11 +29,23 @@ class CamelModel(BaseModel):
 
 
 class SchemaPropertyInput(CamelModel):
-    name: str = Field(min_length=1, max_length=128)
-    data_type: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=64)
+    data_type: str = Field(min_length=1, max_length=64)
     required: bool = False
     rule: str = Field(default="", max_length=512)
     category: str = Field(default="core", pattern="^(core|dynamic|required|provenance)$")
+
+    @field_validator("rule", mode="before")
+    @classmethod
+    def validate_rule(cls, value: str) -> str:
+        if not value:
+            return value
+        # 属性规则允许较长说明文本（512），仅套用 text_rules 的关键词字符白名单，
+        # 不走 check_text 的 64 字符长度上限。
+        text = value.strip()
+        if not KEYWORD_TEXT_PATTERN.fullmatch(text):
+            raise ValueError(f"属性规则不能包含{ABNORMAL_CHARS_HINT}")
+        return text
 
     @field_validator("name")
     @classmethod
@@ -55,10 +68,10 @@ class SchemaPropertyInput(CamelModel):
 
 class SchemaCreateBase(CamelModel):
     schema_key: str = Field(min_length=1, max_length=64)
-    name: str = Field(min_length=1, max_length=128)
-    label: str = Field(min_length=1, max_length=128)
-    description: str = Field(default="", max_length=4000)
-    identity_key: str = Field(default="", max_length=512)
+    name: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=64)
+    description: str = Field(default="", max_length=64)
+    identity_key: str = Field(default="", max_length=64)
     properties: list[SchemaPropertyInput] = Field(min_length=1, max_length=200)
     mappings: list[str] = Field(default_factory=list, max_length=100)
     is_core: bool = False
@@ -81,14 +94,21 @@ class SchemaCreateBase(CamelModel):
             raise ValueError("图空间名称仅支持字母、数字、下划线，且以字母或下划线开头（最长 64）")
         return value
 
+    @field_validator("label", "description", "identity_key", mode="before")
+    @classmethod
+    def validate_texts(cls, value: str) -> str:
+        if not value:
+            return value
+        return check_text(value.strip(), label="Schema 文本", allow_space=True)
+
     @field_validator("mappings")
     @classmethod
     def validate_mappings(cls, value: list[str]) -> list[str]:
         normalized = [item.strip() for item in value if item.strip()]
         if len(set(normalized)) != len(normalized):
             raise ValueError("来源映射不能重复")
-        if any(len(item) > 255 for item in normalized):
-            raise ValueError("来源映射名称不能超过 255 个字符")
+        for item in normalized:
+            check_text(item, label="来源映射名称")
         return normalized
 
     @model_validator(mode="after")
@@ -111,9 +131,16 @@ class EntitySchemaCreate(SchemaCreateBase):
 class RelationSchemaCreate(SchemaCreateBase):
     source_schema_id: str | None = Field(default=None, min_length=1, max_length=36)
     target_schema_id: str | None = Field(default=None, min_length=1, max_length=36)
-    source_expression: str | None = Field(default=None, min_length=1, max_length=512)
-    target_expression: str | None = Field(default=None, min_length=1, max_length=512)
+    source_expression: str | None = Field(default=None, min_length=1, max_length=64)
+    target_expression: str | None = Field(default=None, min_length=1, max_length=64)
     relation_category: str = Field(default="fact", pattern="^(fact|inferred)$")
+
+    @field_validator("source_expression", "target_expression", mode="before")
+    @classmethod
+    def validate_expressions(cls, value: str | None) -> str | None:
+        if not value:
+            return value
+        return check_text(value.strip(), label="关系表达式", allow_space=True)
 
     @field_validator("name")
     @classmethod

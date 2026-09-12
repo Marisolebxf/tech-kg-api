@@ -253,6 +253,12 @@ cp .env.example .env
 不得写入 Vue、Docker 镜像、Git 提交或测试表；服务器部署时使用环境变量或密钥管理系统注入。
 新建应用未分配 OAuth scope 时保持 `USER_CENTER_SCOPE=`，否则用户中心会拒绝过大的授权范围。
 
+`AUTH_ENABLED=false` 默认会让所有受保护接口返回 503，不再自动授予管理员权限。
+只有本地或测试环境需要模拟账号时，才同时设置 `APP_ENV=dev`（或 `local`/`test`）
+和 `AUTH_ALLOW_INSECURE_DEV_CONTEXT=true`；生产环境禁止启用该开关。
+Swagger 与 OpenAPI 也只在本地、开发、测试环境默认开放；生产环境如需临时排障，
+必须显式设置 `API_DOCS_ENABLED=true`，完成后立即关闭。
+
 如果启动页提示缺少 Client ID/Secret，说明运行进程没有加载上述后端环境变量，
 不是前端缺少配置。配置完成后重启 FastAPI/`api` 容器即可。
 

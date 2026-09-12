@@ -6,6 +6,8 @@ import re
 
 from pydantic import BaseModel, Field, field_validator
 
+from biz.schemas.text_rules import check_text
+
 MAX_ALUMNI_LIMIT = 50
 MAX_EXPERT_ID_LENGTH = 64
 MAX_SCHOOL_LENGTH = 100
@@ -50,6 +52,13 @@ class AlumniRelationQueryRequest(BaseModel):
             raise ValueError("专家 ID 不能为空")
         return cleaned
 
+    @field_validator("limit", mode="before")
+    @classmethod
+    def validate_limit(cls, value: object) -> object:
+        # 只做长度/异常字符检查,类型与范围仍交给 strict int 约束
+        check_text(str(value).strip(), label="校友数量上限")
+        return value
+
     @field_validator("school", mode="before")
     @classmethod
     def validate_school(cls, value: str | None) -> str | None:
@@ -70,4 +79,6 @@ class AlumniRelationQueryRequest(BaseModel):
         if value is None:
             return None
         cleaned = value.strip()
-        return cleaned or None
+        if not cleaned:
+            return None
+        return check_text(cleaned, label="教育阶段", allow_space=True)

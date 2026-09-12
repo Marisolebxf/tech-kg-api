@@ -12,7 +12,19 @@ export interface ApiResponse<T> {
   msg: string
 }
 
-export interface CooperationItem {
+export interface ConfidenceBasis {
+  rule: string
+  originalEdgeType?: string
+  scoreBreakdown: Record<string, number>
+}
+
+export interface ConfidenceFields {
+  confidence: number
+  confidenceSource: 'original' | 'derived'
+  confidenceBasis: ConfidenceBasis
+}
+
+export interface CooperationItem extends ConfidenceFields {
   type: 'paper' | 'patent' | 'project' | (string & {})
   id: string
   title: string
@@ -20,6 +32,13 @@ export interface CooperationItem {
   fields?: string[]
   awards?: unknown[]
   evaluation?: string | null
+  expertRelations: Array<
+    ConfidenceFields & {
+      expertId: string
+      edgeType: string
+      label: string
+    }
+  >
 }
 
 export interface CooperationSummaryRow {
@@ -42,19 +61,18 @@ export interface CooperationRule {
   audit: string
 }
 
-export interface CooperationEntity {
+export interface CooperationEntity extends ConfidenceFields {
   id: string
   label: string
   entityType: string
   nodeType?: string
-  confidence: number
   relations: string
   evidence: string[]
   x?: number
   y?: number
 }
 
-export interface CooperationRelation {
+export interface CooperationRelation extends ConfidenceFields {
   id: string
   from: string
   to: string
@@ -83,7 +101,12 @@ export interface CooperationProvenance {
 export interface CooperationQueryResult {
   source: { id: string; name: string }
   target: { id: string; name: string }
-  summary: { papers: number; patents: number; projects: number; awards: number }
+  summary: {
+    papers: number
+    patents: number
+    projects: number
+    awards: number
+  }
   items: CooperationItem[]
   coreContribution: string
   cooperationMode: string
@@ -96,7 +119,7 @@ export interface CooperationQueryResult {
   relations?: CooperationRelation[]
   graph?: {
     nodes: CooperationEntity[]
-    edges: Array<{ id: string; from: string; to: string; label: string; category: string }>
+    edges: CooperationRelation[]
   }
   provenance?: CooperationProvenance
 }
@@ -111,10 +134,14 @@ export type CooperationQueryRequest = {
 }
 
 export function describeExpertCooperationAchievement() {
-  return http.get<Record<string, unknown>>('/v1/kg-construction/expert-cooperation-achievements')
+  return http.get<Record<string, unknown>>(
+    '/v1/kg-construction/expert-cooperation-achievements',
+  )
 }
 
-export function queryExpertCooperationAchievement(body: CooperationQueryRequest) {
+export function queryExpertCooperationAchievement(
+  body: CooperationQueryRequest,
+) {
   return http.post<ApiResponse<CooperationQueryResult>>(
     '/v1/kg-construction/expert-cooperation-achievements/query',
     body,

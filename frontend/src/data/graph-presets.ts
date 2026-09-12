@@ -20,6 +20,8 @@ export interface GraphNodeData {
   radius?: number
   entityType: string
   confidence?: number
+  confidenceSource?: 'original' | 'derived'
+  confidenceBasis?: ConfidenceBasis
   relations: string
   evidence: string[]
   level?: number
@@ -45,6 +47,10 @@ export interface GraphEdgeData {
   to: string
   label: string
   category: string
+  dimensions?: string[]
+  sharedInstitutions?: string[]
+  summary?: string
+  interactions?: { paperCount?: number; patentCount?: number; projectCount?: number; summary?: string }
 
   /**
    * 真实图谱查询结果计算出的关系置信度。
@@ -53,6 +59,8 @@ export interface GraphEdgeData {
    * 不一定具有关系置信度，因此设置为可选。
    */
   confidence?: number
+  confidenceSource?: 'original' | 'derived'
+  confidenceBasis?: ConfidenceBasis
 
   /**
    * 关系置信度的规则评估依据。
@@ -157,6 +165,12 @@ const nodeSourceValue = (node: GraphNodeData) => {
   if (node.id === 'core') return 'EXPERT-10286'
   if (node.id === 'org-1') return 'ORG-10018'
   return node.id.toUpperCase()
+}
+
+export interface ConfidenceBasis {
+  rule: string
+  originalEdgeType?: string
+  scoreBreakdown: Record<string, number>
 }
 
 const sourceFieldIdentifier = (node: GraphNodeData) => {

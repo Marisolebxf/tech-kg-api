@@ -19,42 +19,52 @@ export function colleagueEntityRows(nodes: ColleagueGraphNode[], selectedId?: st
   });
 }
 
+interface ProvenanceSection {
+  title: string;
+  rows: Row[];
+}
+
+function provenanceSection(node: ColleagueGraphNode, title: string): ProvenanceSection {
+  const p = node.data?.provenance ?? {};
+  const details = node.data?.details ?? {};
+  const value = (...values: unknown[]) => values
+    .map(item => item == null ? '' : String(item).trim())
+    .find(item => item && item !== '-' && item !== '未提供') ?? '';
+  const rows: Row[] = [
+    ['源数据表', value(details.source_table, p.sourceTable, details.organization_base)],
+    ['英文字段名', value(details.source_field, p.sourceField)],
+    ['图空间 VID', node.id],
+  ];
+  return { title, rows };
+}
+
 export function colleagueProvenanceCards(
-  nodes: ColleagueGraphNode[], edges: ColleagueGraphEdge[], selectedId?: string,
+  nodes: ColleagueGraphNode[], edges: ColleagueGraphEdge[],
+  selectedId?: string,
   selectedEdge?: Pick<ColleagueGraphEdge, 'source' | 'target' | 'label'>,
-): Array<{ id: string; title: string; rows: Row[]; evidence: string[] }> {
-  const visible = selectedId ? nodes.filter(node => node.id === selectedId) : selectedEdge
-    ? nodes.filter(node => node.id === selectedEdge.source || node.id === selectedEdge.target) : nodes;
-  const cards = visible.map(node => {
-    const p = node.data?.provenance ?? {};
-    return {
-      id: node.id, title: `${node.label} · 实体来源`,
-      rows: [
-        ['图空间 VID', node.id],
-        ['来源系统', text(node.data?.details?.source_system)],
-        ['源数据表', text(p.sourceTable)],
-        ['源字段', text(p.sourceField)],
-        ['源记录 ID', text(p.sourceValue)],
-        ['入图批次', text(p.ingestBatch)],
-        ['入图时间', text(p.ingestTime)],
-      ] as Row[],
-      evidence: [] as string[],
-    };
-  });
-  const relations = selectedId ? [] : selectedEdge
+): Array<{ id: string; title: string; sections: ProvenanceSection[] }> {
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const visibleNodes = selectedId ? nodes.filter(node => node.id === selectedId) : selectedEdge ? [] : nodes;
+  const visibleEdges = selectedId ? [] : selectedEdge
     ? edges.filter(edge => edge.source === selectedEdge.source && edge.target === selectedEdge.target && edge.label === selectedEdge.label)
-    : edges.filter(edge => edge.label === '同事关系');
-  for (const edge of relations) {
-    const d = edge.data ?? {};
-    const name = (id: string) => nodes.find(node => node.id === id)?.label ?? id;
-    cards.unshift({
-      id: `${edge.source}:${edge.label}:${edge.target}`,
-      title: `${name(edge.source)} → ${name(edge.target)} · ${edge.label === 'AFFILIATED_WITH' ? '机构任职关系' : edge.label}`,
-      rows: edge.label === '同事关系'
-        ? [['判定规则', text(d.ruleName)], ['共同机构', text(d.organization)], ['生效时段', text(d.period)]]
-        : [['源数据表', text(d.source_table)], ['源记录 ID', text(d.source_record_id)], ['生效时段', text(d.period)]],
-      evidence: d.evidence ?? [],
-    });
-  }
-  return cards;
+    : edges;
+  return [
+    ...visibleNodes.map(node => ({
+      id: `node:${node.id}`,
+      title: `${node.label} · 实体来源`,
+      sections: [provenanceSection(node, '')],
+    })),
+    ...visibleEdges.map((edge, index) => {
+      const source = byId.get(edge.source) ?? { id: edge.source, label: edge.source, type: '' };
+      const target = byId.get(edge.target) ?? { id: edge.target, label: edge.target, type: '' };
+      return {
+        id: `edge:${edge.id ?? index}:${edge.source}:${edge.target}`,
+        title: `${source.label} → ${target.label} · ${edge.label === 'AFFILIATED_WITH' ? '机构任职关系' : edge.label}`,
+        sections: [
+          provenanceSection(source, `源实体：${source.label}`),
+          provenanceSection(target, `目标实体：${target.label}`),
+        ],
+      };
+    }),
+  ];
 }

@@ -155,6 +155,8 @@ async def test_topn_via_graph_helpers(monkeypatch):
     assert resp.entity_provenance["person_x"].sourceValue == "sch-001"
     assert resp.entity_provenance["IC_test"].confidence == 0.88
     assert resp.entity_provenance[ORG_A].confidence == 0.81
+    # 专家节点 mock 未带 confidence：dwd_scholar + 稳定 ID + 姓名 → 0.80
+    assert resp.entity_provenance["person_x"].confidence == 0.8
     # 标书分析维度：后端真实派生（非空）
     assert resp.node_impact
     # 分析文案使用中文事件类型（EVENT_TYPE_LABEL）
@@ -165,6 +167,40 @@ async def test_topn_via_graph_helpers(monkeypatch):
     # 置信度：风险等级 高 → 0.9；bankruptcy 事件 → 0.9
     assert resp.confidence == 0.9
     assert resp.top_events[0].confidence == 0.9
+
+
+def test_industry_node_confidence_falls_back_to_entity_completeness():
+    """图节点未携带 confidence 时，按 DWD 来源和核心字段完整度回退。"""
+    provenance = mod._entity_provenance(
+        {
+            "node_id": "IC0007007",
+            "node_name": "集成电路设计",
+            "node_type": "2",
+            "level": "3",
+            "node_imp_level": "1",
+            "node_stage": "2",
+            "node_path": "设计、制造、封测>IC设计>集成电路设计",
+            "source_table": "dwd_industry_chain_info",
+        },
+        {"IndustryNode"},
+    )
+
+    assert provenance.confidence == 0.9
+
+
+def test_industry_node_confidence_prefers_graph_value():
+    """图中已有置信度时保留原值，不被完整度回退覆盖。"""
+    provenance = mod._entity_provenance(
+        {
+            "node_id": "IC0007007",
+            "node_name": "集成电路设计",
+            "source_table": "dwd_industry_chain_info",
+            "confidence": 0.88,
+        },
+        {"IndustryNode"},
+    )
+
+    assert provenance.confidence == 0.88
 
 
 @pytest.mark.asyncio
@@ -188,6 +224,43 @@ async def test_enterprises_and_provenance_only_cover_topn_result(monkeypatch):
     assert {item.org_id for item in resp.top_events} == {ORG_A}
     assert ORG_A in resp.entity_provenance
     assert ORG_B not in resp.entity_provenance
+
+
+@pytest.mark.asyncio
+async def test_topn_fills_missing_entity_confidence(monkeypatch):
+    """链节点/企业/事件缺图上 confidence 时按规则计算，实体 tab 仍拿到数字。"""
+    subs = _subgraphs()
+    for node in subs[NODE_VID]["nodes"]:
+        props = node.get("properties") or {}
+        props.pop("confidence", None)
+        if node.get("id") == NODE_VID:
+            props["source_record_id"] = "IC_test"
+            node["properties"] = props
+    govs = _governance()
+    monkeypatch.setattr(
+        mod,
+        "_subgraph_sync",
+        lambda client, vid, edge_types, limit: subs.get(vid, {"nodes": [], "edges": []}),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_fetch_org_governance_sync",
+        lambda client, org_id: govs.get(org_id, []),
+    )
+    monkeypatch.setattr(mod, "_get_dev_client", lambda: None)
+    monkeypatch.setattr(mod, "_result_cache", {})
+
+    resp = await IndustryNodeTopEventsService().run(
+        IndustryNodeTopEventsRequest(chain_node_id="IC_test", top_n=3, max_orgs=10)
+    )
+
+    # IndustryNode: 非 DWD + 稳定 ID + 名称 + node_imp_level → 0.80（规则分，不是空属性兜底）
+    assert resp.entity_provenance["IC_test"].confidence == 0.8
+    # Organization: 仅 name_cn → 0.30 + 0.20
+    assert resp.entity_provenance[ORG_A].confidence == 0.5
+    assert resp.entity_provenance["person_x"].confidence == 0.8
+    # Event: 有 title → 0.30 + 0.20，不再是 None/暂无
+    assert resp.entity_provenance["ev_bk"].confidence == 0.5
 
 
 @pytest.mark.asyncio

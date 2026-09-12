@@ -34,7 +34,8 @@ class EntityProvenance(BaseModel):
     sourceValue: str | None = None
     ingestBatch: str | None = None
     ingestTime: str | None = None
-    # mysql2trs 建图写入的实体置信度（Organization/Person/Event 节点 properties.confidence）
+    # 实体置信度：图上已有值优先；缺失时按入图证据计算并写回，最后兜底 0.80。
+    # 前端实体 tab 不能展示「暂无」。
     confidence: float | None = None
 
 

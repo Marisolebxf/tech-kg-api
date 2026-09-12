@@ -737,7 +737,7 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
 
     def _entity_data(self, node: dict[str, Any], normalized: dict[str, Any]) -> dict[str, Any]:
         properties = node.get("properties", {}) or {}
-        source_table = properties.get("organization_base") or properties.get("source_table")
+        source_table = properties.get("source_table") or properties.get("organization_base")
         if self._labels(node) & PERSON_LABELS and properties.get("source_record_id") not in (
             None,
             "",
@@ -752,6 +752,11 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             source_field, source_value = "organization_id", properties.get("organization_id")
         else:
             source_field, source_value = "source_record_id", properties.get("source_record_id")
+        # These are MySQL column names, not the normalized graph property names.
+        mysql_source_fields = {"dwd_scholar": "scholar_id", "dwd_org_stock_base": "org_id"}
+        source_field = (
+            properties.get("source_field") or mysql_source_fields.get(source_table) or source_field
+        )
         raw_confidence = properties.get("confidence", 1.0)
         try:
             confidence = float(raw_confidence)
@@ -763,7 +768,7 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             "details": properties,
             "provenance": {
                 "sourceTable": str(source_table or "-"),
-                "sourceField": source_field,
+                "sourceField": str(source_field),
                 "sourceValue": str(source_value or "-"),
                 "ingestBatch": str(properties.get("ingest_batch") or "-"),
                 "ingestTime": str(properties.get("ingest_time") or "-"),

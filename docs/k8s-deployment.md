@@ -5,7 +5,7 @@
 > 说明：仓库内 README.md 描述的是旧的 Neo4j 版本，已过时；以本文与 `docker-compose.yml`、`CLAUDE.md` 为准。
 >
 > **对象存储已统一为 `operator-rustfs`（S3 兼容），不依赖 MinIO**：schema 脚本、operator 包、Milvus 内部存储共用同一个 RustFS 实例（`rustfsadmin` 凭证）。Milvus 的 `MINIO_*` 环境变量只是 Milvus 自身的配置项命名，指向的也是 RustFS。
-> 交付版清单（含真实镜像仓库地址）见 `docs/k8s-bkg/`。命名空间统一为 `bkg`：TRS Graph 图数据库平台（trs-graph-service 等）同在 `bkg` 命名空间，本项目后端的 `TRS_GRAPH_BASE_URL=http://trs-graph-service:8090` 依赖同命名空间解析，**不可部署到其他命名空间**。
+> 交付版部署文档（含真实镜像仓库地址与全部部署清单）见 `docs/k8s-bkg/K8s部署文档.md`。命名空间统一为 `bkg`：TRS Graph 图数据库平台（trs-graph-service 等）同在 `bkg` 命名空间，本项目后端的 `TRS_GRAPH_BASE_URL=http://trs-graph-service:8090` 依赖同命名空间解析，**不可部署到其他命名空间**。
 
 ---
 
@@ -123,10 +123,14 @@ metadata:
 data:
   # ---- 前端部署前缀（web Pod envFrom 本 ConfigMap 运行时注入）----
   APP_BASE: /bkg_zpt
-  # ---- 图数据库 ----
+  # ---- 图数据库（取值均来自《图数据库平台（TRS Graph）K8s 部署文档》）----
+  # BASE_URL ← 其 §五.8 Service trs-graph-service 的名称 + 8090（同命名空间直连；9669 是
+  #   Nebula 原生协议口，仅 Studio/图算法用）；SPACE ← 其 §六 实际创建的图空间名（客户端
+  #   每请求 X-Graph-Space 覆盖其默认值，两侧必须同名）；API_KEY（Secret 里）← 其 §五.3
+  #   Secret trsgraph-secret 的 api-key-hash 对应明文
   TRS_GRAPH_BASE_URL: http://trs-graph-service:8090
   TRS_GRAPH_SPACE: dev
-  # TRS Graph 为单副本 storaged，建图空间必须 replica_factor=1（默认 3 会 Host not enough）
+  # TRS Graph 为单副本 storaged（其 §五.6），建图空间必须 replica_factor=1（默认 3 会 Host not enough）
   GRAPH_SPACE_REPLICA_FACTOR: "1"
   TRS_GRAPH_TIMEOUT: "30"
   # ---- 主 MySQL ----

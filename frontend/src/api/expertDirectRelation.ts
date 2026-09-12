@@ -9,103 +9,103 @@
  * 因此本文件仅使用 /v1/kg-construction/... 路径。
  */
 
-import type { AlumniProvenance } from './expertAlumniRelation'
-import { http } from './http'
+import type { AlumniProvenance } from "./expertAlumniRelation";
+import { http } from "./http";
 
 /**
  * 请求参数。
  */
 export interface ExpertDirectRelationQueryRequest {
-  dataSource?: 'all'
-  expertAId: string
-  expertBId?: string | null
-  institution?: string | null
-  startTime?: string | null
-  endTime?: string | null
-  limit?: number
+  dataSource?: "all";
+  expertAId: string;
+  expertBId?: string | null;
+  institution?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  limit?: number;
 }
 
 /**
  * 关系两端的专家信息。
  */
 export interface DirectRelationExpert {
-  expertId: string
-  name: string
-  organization: string | null
-  title: string
-  paperCount: number
-  citationCount: number
-  hIndex: number
+  expertId: string;
+  name: string;
+  organization: string | null;
+  title: string;
+  paperCount: number;
+  citationCount: number;
+  hIndex: number;
 }
 
 /**
  * 单条直接关系记录。
  */
 export interface DirectRelationItem {
-  key: string
-  relationType: string
-  expertA: DirectRelationExpert
-  expertB: DirectRelationExpert
-  institution: string | null
-  coPaperCount: number
-  relationStrength: number
-  reasonTags: string[]
-  representativeAchievements?: Array<{ id: string; title: string }>
-  relationSummary: string
-  lastUpdatedAt: string | null
-  detailRows: Array<Array<string | number | string[]>>
+  key: string;
+  relationType: string;
+  expertA: DirectRelationExpert;
+  expertB: DirectRelationExpert;
+  institution: string | null;
+  coPaperCount: number;
+  relationStrength: number;
+  reasonTags: string[];
+  representativeAchievements?: Array<{ id: string; title: string }>;
+  relationSummary: string;
+  lastUpdatedAt: string | null;
+  detailRows: Array<Array<string | number | string[]>>;
 }
 
 /**
  * 图谱节点：type 为业务节点类型（expert/institution 等）。
  */
 export interface DirectRelationGraphNode {
-  id: string
-  type: string
-  label: string
-  subtitle: string | null
-  data: Record<string, unknown>
+  id: string;
+  type: string;
+  label: string;
+  subtitle: string | null;
+  data: Record<string, unknown>;
 }
 
 /**
  * 图谱边：source/target 为节点 id，label 为业务边描述。
  */
 export interface DirectRelationGraphEdge {
-  source: string
-  target: string
-  label: string
-  data: Record<string, unknown>
+  source: string;
+  target: string;
+  label: string;
+  data: Record<string, unknown>;
 }
 
 /**
  * 数据来源信息，用于区分真实图查询结果与降级样例。
  */
 export interface DirectRelationSource {
-  requested: string
-  actual: string
-  fallback: boolean
-  reason?: string
+  requested: string;
+  actual: string;
+  fallback: boolean;
+  reason?: string;
 }
 
 /**
  * 接口返回结构。
  */
 export interface ExpertDirectRelationQueryResponse {
-  taskName: string
-  input: Record<string, unknown>
-  total: number
-  items: DirectRelationItem[]
+  taskName: string;
+  input: Record<string, unknown>;
+  total: number;
+  items: DirectRelationItem[];
   graph: {
-    nodes: DirectRelationGraphNode[]
-    edges: DirectRelationGraphEdge[]
-  }
-  source: DirectRelationSource
-  provenance?: AlumniProvenance
-  apiResultExample: Record<string, unknown>
+    nodes: DirectRelationGraphNode[];
+    edges: DirectRelationGraphEdge[];
+  };
+  source: DirectRelationSource;
+  provenance?: AlumniProvenance;
+  apiResultExample: Record<string, unknown>;
 }
 
 const EXPERT_DIRECT_RELATION_ENDPOINT =
-  '/v1/kg-construction/expert-direct-relations/query'
+  "/v1/kg-construction/expert-direct-relations/query";
 
 /**
  * 触发专家直接关系查询。
@@ -117,5 +117,5 @@ export function queryExpertDirectRelation(
   return http.post<
     ExpertDirectRelationQueryResponse,
     ExpertDirectRelationQueryResponse
-  >(EXPERT_DIRECT_RELATION_ENDPOINT, request, { signal })
+  >(EXPERT_DIRECT_RELATION_ENDPOINT, request, { signal });
 }

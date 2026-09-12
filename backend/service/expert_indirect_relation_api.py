@@ -203,6 +203,8 @@ def _node_name(node: dict[str, Any]) -> str:
         "title_cn",
         "title_en",
         "name",
+        # Project（dwd_zh_project / dwd_en_project）节点名称只存 title 属性
+        "title",
         "keyword",
     ):
         if props.get(key):

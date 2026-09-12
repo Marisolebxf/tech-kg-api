@@ -3,7 +3,7 @@
 ## 输出结构
 
 1. ``summary``：本次查询结果规模（命中的分层实体数、返回子图里的关系数）。
-2. ``layers``：四个分层（核心技术、领军企业、领军专家、代表成果），每层按检索
+2. ``layers``：四个分层（核心技术、领军企业、领军专家、产业动态事件），每层按检索
    到的实体展示；产业关键词非空时先用属性搜索精确过滤，未命中再有界扫描做包含
    匹配，关键词为空时按标签分页取前 K。
 3. ``graph``：以 ``anchorId`` 或首个专家/机构为中心的 ``depth`` 跳子图，直接返回
@@ -57,6 +57,36 @@ _KEYWORD_SCAN_LIMIT = 50
 # 精确未命中后的兜底只做小范围扫描，控制在单页内，避免全量分页拖慢接口。
 _COMPACT_KEYWORD_SCAN_LIMIT = 50
 _COMPACT_SCAN_LABELS = {"IndustryNode", "IndustryChain", "Keyword"}
+# 专家属性检索依赖图库索引；索引缺失时做有界分页扫描，并按研究领域相关性排序。
+_EXPERT_SCAN_LIMIT = 500
+_INDUSTRY_EXPERT_SCAN_PAGES: dict[str, int] = {
+    # 低空经济相关学者在专家库中的分布较靠后，有限扩展到 5 页即可覆盖
+    # 无人机网络、农业无人机和无人机视觉等核心方向。
+    "低空经济": 5,
+}
+_INDUSTRY_EXPERT_TERMS: dict[str, tuple[str, ...]] = {
+    "集成电路": (
+        "集成电路",
+        "芯片",
+        "半导体",
+        "integrated circuit",
+        "chip",
+        "semiconductor",
+        "vlsi",
+        "system-on-chip",
+        "fpga",
+    ),
+    "低空经济": (
+        "低空经济",
+        "无人机",
+        "无人驾驶航空器",
+        "通用航空",
+        "unmanned aerial vehicle",
+        "uav",
+        "drone",
+        "general aviation",
+    ),
+}
 # 子图合并时最多取多少个种子节点。
 _MAX_SUBGRAPH_SEEDS = 5
 # 图服务（trs-graph）承受不住太高并发，全标签扫描类请求并发过多会 500，
@@ -110,13 +140,13 @@ _LAYER_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "key": "flagship_achievement",
-        "title": "代表成果",
-        "labels": ["Paper", "Patent", "Project"],
-        "name_props": ("title_zh", "title_en", "title", "title_original"),
-        "metric_prop": "citation_nums",
-        "metric_label": "被引次数",
-        "type": "achievement",
-        "keyword_props": ("title_zh", "title_en", "keywords"),
+        "title": "产业动态事件",
+        "labels": ["Event"],
+        "name_props": ("title", "name", "event_name", "event_type"),
+        "metric_prop": "amount",
+        "metric_label": "事件金额",
+        "type": "event",
+        "keyword_props": ("title", "content", "event_type"),
     },
 ]
 
@@ -179,7 +209,9 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             async with graph_api(auth_headers=auth_headers) as client:
                 resolved_anchor, layer_payload = await asyncio.gather(
                     self._resolve_anchor_from_keyword(client, industry_kw, anchor),
-                    self._fetch_layers(client, industry_kw, top_k, anchor is None),
+                    self._fetch_layers(
+                        client, industry_kw, top_k, anchor is None and industry_kw is None
+                    ),
                 )
                 layers, seed_vids = layer_payload
                 anchor = resolved_anchor
@@ -196,6 +228,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                     )
                 else:
                     graph = await self._fetch_graph(client, seed_vids, anchor, depth)
+                layers = self._backfill_empty_layers_from_graph(layers, graph, top_k)
                 graph = self._filter_graph_by_relation_types(graph, rel_types)
                 query_input["anchorId"] = anchor or ""
         except GraphAPIError as exc:
@@ -307,6 +340,25 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                     seen[item_id] = item
             if len(seen) > 1:
                 return None
+        if not seen:
+            # trs-graph 的属性查找依赖对应字段索引。部分部署只有 VID 索引，
+            # find_nodes 会返回 IndexNotFound；此时对单页候选做严格等值匹配，
+            # 仍可把真实 IndustryChain 节点解析为锚点，避免回退到无关全库数据。
+            candidates = await self._list_by_label_throttled(
+                client, label, _COMPACT_KEYWORD_SCAN_LIMIT, 0
+            )
+            expected = industry.casefold()
+            for item in candidates:
+                item_props = item.get("properties") or {}
+                if not any(
+                    str(item_props.get(prop) or "").strip().casefold() == expected for prop in props
+                ):
+                    continue
+                item_id = str(item.get("id") or "")
+                if item_id and item_id not in seen:
+                    seen[item_id] = item
+                if len(seen) > 1:
+                    return None
         if len(seen) != 1:
             return None
         candidate = next(iter(seen.values()))
@@ -375,6 +427,66 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         nodes = [n for n in (graph.get("nodes") or []) if str(n.get("id") or "") in kept_ids]
         return {"nodes": nodes, "edges": edges}
 
+    @staticmethod
+    def _backfill_empty_layers_from_graph(
+        layers: list[dict[str, Any]],
+        graph: dict[str, list[Any]],
+        top_k: int,
+    ) -> list[dict[str, Any]]:
+        """用锚点真实子图补齐空分层，避免关键词索引缺失时展示无关抽样。"""
+        types_by_layer = {
+            "core_technology": {"keyword", "industrynode", "technology"},
+            "leading_enterprise": {"organization", "company"},
+            "leading_expert": {"person", "scholar", "expert"},
+            "flagship_achievement": {"event"},
+        }
+        entity_type_by_layer = {
+            "core_technology": "technology",
+            "leading_enterprise": "organization",
+            "leading_expert": "expert",
+            "flagship_achievement": "event",
+        }
+        output: list[dict[str, Any]] = []
+        for original in layers:
+            layer = {**original, "items": list(original.get("items") or [])}
+            if layer["items"]:
+                output.append(layer)
+                continue
+            layer_key = str(layer.get("key") or "")
+            allowed_types = types_by_layer.get(layer_key, set())
+            items: list[dict[str, Any]] = []
+            seen_ids: set[str] = set()
+            seen_labels: set[str] = set()
+            layer_limit = (
+                min(top_k, 3) if layer_key in {"leading_expert", "flagship_achievement"} else top_k
+            )
+            for node in graph.get("nodes") or []:
+                node_type = str(node.get("type") or "").casefold()
+                node_id = str(node.get("id") or "")
+                if node_type not in allowed_types or not node_id or node_id in seen_ids:
+                    continue
+                seen_ids.add(node_id)
+                node_label = str(node.get("label") or node_id)
+                if layer_key == "flagship_achievement" and node_label in seen_labels:
+                    continue
+                seen_labels.add(node_label)
+                items.append(
+                    {
+                        "id": node_id,
+                        "label": node_label,
+                        "type": entity_type_by_layer[layer_key],
+                        "subtitle": node.get("subtitle"),
+                        "metric": None,
+                        "metricValue": None,
+                    }
+                )
+                if len(items) >= layer_limit:
+                    break
+            layer["items"] = items
+            layer["total"] = len(items)
+            output.append(layer)
+        return output
+
     def _rebuild_in_background(
         self,
         cache_key: tuple[str, str, int, int, str],
@@ -439,12 +551,17 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             )
         )
         for definition, nodes in zip(selected_definitions, collected, strict=True):
-            picked = nodes[:top_k]
+            layer_limit = (
+                min(top_k, 3)
+                if definition["key"] in {"leading_expert", "flagship_achievement"}
+                else top_k
+            )
+            picked = nodes[:layer_limit]
             layers.append(
                 {
                     "key": definition["key"],
                     "title": definition["title"],
-                    "total": len(nodes),
+                    "total": len(picked),
                     "items": [self._node_to_key_entity(node, definition) for node in picked],
                 }
             )
@@ -527,21 +644,41 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         if found:
             return found
 
-        if label not in _COMPACT_SCAN_LABELS:
+        if label not in _COMPACT_SCAN_LABELS and label != "Person":
             return []
-        page = await self._list_by_label_throttled(client, label, _COMPACT_KEYWORD_SCAN_LIMIT, 0)
-        needle = industry.casefold()
-        compact_matches: list[dict[str, Any]] = []
+        scan_limit = _EXPERT_SCAN_LIMIT if label == "Person" else _COMPACT_KEYWORD_SCAN_LIMIT
+        scan_pages = _INDUSTRY_EXPERT_SCAN_PAGES.get(industry, 1) if label == "Person" else 1
+        pages = await asyncio.gather(
+            *(
+                self._list_by_label_throttled(client, label, scan_limit, page_index * scan_limit)
+                for page_index in range(scan_pages)
+            )
+        )
+        page = [node for nodes in pages for node in nodes]
+        terms = (
+            _INDUSTRY_EXPERT_TERMS.get(industry, (industry,)) if label == "Person" else (industry,)
+        )
+        folded_terms = tuple(term.casefold() for term in terms)
+        scored_matches: list[tuple[int, dict[str, Any]]] = []
+        seen_ids: set[str] = set()
         for node in page:
+            node_id = str(node.get("id") or "")
+            if node_id and node_id in seen_ids:
+                continue
+            if node_id:
+                seen_ids.add(node_id)
             props = node.get("properties") or {}
+            score = 0
             for prop in definition["keyword_props"]:
-                value = str(props.get(prop) or "")
-                if value and needle in value.casefold():
-                    compact_matches.append(node)
-                    break
-            if len(compact_matches) >= top_k:
-                break
-        return compact_matches
+                value = str(props.get(prop) or "").casefold()
+                if not value:
+                    continue
+                weight = 3 if prop == "research_fields" else 1
+                score += weight * sum(term in value for term in folded_terms)
+            if score:
+                scored_matches.append((score, node))
+        scored_matches.sort(key=lambda item: item[0], reverse=True)
+        return [node for _score, node in scored_matches[:top_k]]
 
     @staticmethod
     async def _safe_search_nodes(
@@ -886,6 +1023,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "label": self._first_prop_value(
                 props,
                 (
+                    "chain_name",
                     "name_zh",
                     "name_cn",
                     "name",

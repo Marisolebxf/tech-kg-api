@@ -2,7 +2,7 @@
 import { IconFullscreen, IconMinus, IconPlus } from '@arco-design/web-vue/es/icon'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 
-import { useForceLayout } from '../composables/use-force-layout'
+import { useForceLayout, type ForceLayoutOptions } from '../composables/use-force-layout'
 import type { GraphEdgeData, GraphNodeData } from '../data/graph-presets'
 
 const props = withDefaults(
@@ -14,6 +14,7 @@ const props = withDefaults(
     selectedEdgeId?: string | null
     ariaLabel?: string
     nodeShape?: 'rect' | 'circle'
+    layoutOptions?: ForceLayoutOptions
   }>(),
   {
     activeCategories: null,
@@ -60,7 +61,7 @@ const transform = computed(() => `translate(${panX.value} ${panY.value}) scale($
 const { laidOutNodes } = useForceLayout(
   () => props.nodes,
   () => props.edges,
-  () => ({ nodeShape: props.nodeShape }),
+  () => ({ ...props.layoutOptions, nodeShape: props.nodeShape }),
 )
 
 const edgeToneMap: Record<string, string> = {

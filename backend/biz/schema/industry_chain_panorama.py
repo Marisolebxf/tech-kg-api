@@ -154,7 +154,7 @@ class PanoramaKeyEntity(BaseModel):
 
 
 class PanoramaLayer(BaseModel):
-    """全景图分层：核心技术 / 领军企业 / 领军专家 / 代表成果。"""
+    """全景图分层：核心技术 / 领军企业 / 领军专家 / 产业动态事件。"""
 
     key: str
     title: str

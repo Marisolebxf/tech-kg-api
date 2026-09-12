@@ -23,6 +23,8 @@ export interface ForceLayoutOptions {
   height?: number
   /** 最大迭代次数，默认 300。 */
   maxTicks?: number
+  /** 将 level=1 节点固定在中心外的环形半径；仅分层全景图按需启用。 */
+  levelOneRingRadius?: number
 }
 
 /**
@@ -122,6 +124,13 @@ export function runForceLayout(
   const pinned = new Set<number>()
   const centerIdx = ordered.findIndex((node) => node.level === 0)
   if (centerIdx >= 0) pinned.add(centerIdx)
+  const levelOneRingRadius = Math.max(0, options?.levelOneRingRadius ?? 0)
+  const levelOneIndices = centerIdx >= 0 && levelOneRingRadius > 0
+    ? ordered
+      .map((node, index) => (node.level === 1 ? index : -1))
+      .filter((index) => index >= 0)
+    : []
+  levelOneIndices.forEach((index) => pinned.add(index))
 
   const x = new Float64Array(n)
   const y = new Float64Array(n)
@@ -131,8 +140,15 @@ export function runForceLayout(
   for (let i = 0; i < n; i++) {
     r[i] = nodeCollisionRadius(ordered[i], shape)
     if (pinned.has(i)) {
-      x[i] = CX
-      y[i] = CY
+      const ringIndex = levelOneIndices.indexOf(i)
+      if (ringIndex >= 0) {
+        const angle = -Math.PI / 2 + (ringIndex * Math.PI * 2) / levelOneIndices.length
+        x[i] = CX + levelOneRingRadius * Math.cos(angle)
+        y[i] = CY + levelOneRingRadius * Math.sin(angle)
+      } else {
+        x[i] = CX
+        y[i] = CY
+      }
     } else {
       const h = hashStr(ordered[i].id)
       const angle = ((h % 2000) / 2000) * Math.PI * 2
@@ -264,6 +280,8 @@ export function runForceLayout(
         const d = Math.hypot(dx, dy)
         const minD = r[i] + r[j]
         if (d >= minD) continue
+        // 中心与一级环上的固定节点均不参与碰撞位移。
+        if (pinned.has(i) && pinned.has(j)) continue
         if (d > 0.0001) {
           const overlap = (minD - d) / 2
           const ux = dx / d
@@ -330,6 +348,7 @@ export function useForceLayout(
       o?.nodeShape ?? 'circle',
       o?.width ?? 760,
       o?.height ?? 430,
+      o?.levelOneRingRadius ?? 0,
     ].join('#')
   }
 

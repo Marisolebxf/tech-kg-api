@@ -104,6 +104,15 @@ const propertyNumber = (properties: Record<string, unknown>, key: string) => {
   return Number.isFinite(value) ? value : undefined;
 };
 
+const nodeConfidence = (node: IndirectNode) => {
+  const confidence = propertyNumber(node.properties, "confidence");
+  // 本模块查询的是已经完成结构化入图的实体：图中有值时展示真实值；
+  // 历史节点缺少该字段时，按结构化数据一一映射的口径记为 1.0。
+  if (confidence === undefined) return 1.0;
+  const normalized = confidence > 1 ? confidence / 100 : confidence;
+  return Math.min(1, Math.max(0, normalized));
+};
+
 const nodeSourceTable = (node: IndirectNode) =>
   propertyString(node.properties, "organization_base") ||
   propertyString(node.properties, "source_table");
@@ -138,7 +147,6 @@ export function buildIndirectRelationGraph(
     [result.coreNode.id, result.coreNode],
   ]);
   const nodeLevels = new Map<string, number>([[result.coreNode.id, 0]]);
-  const nodeStrengths = new Map<string, number>([[result.coreNode.id, 0.96]]);
 
   selectedPaths.forEach((path) => {
     path.nodes.forEach((node, index) => {
@@ -146,10 +154,6 @@ export function buildIndirectRelationGraph(
       nodeLevels.set(
         node.id,
         Math.min(nodeLevels.get(node.id) ?? index, index),
-      );
-      nodeStrengths.set(
-        node.id,
-        Math.max(nodeStrengths.get(node.id) ?? 0, path.strength),
       );
     });
   });
@@ -176,7 +180,7 @@ export function buildIndirectRelationGraph(
       x: 85 + level * (550 / maxLevel),
       y,
       entityType: displayEntityType(node, node.id === result.coreNode.id),
-      confidence: nodeStrengths.get(node.id) ?? 0.8,
+      confidence: nodeConfidence(node),
       relations:
         level === 0
           ? "核心节点"

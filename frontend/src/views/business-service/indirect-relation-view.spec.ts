@@ -10,14 +10,22 @@ describe("科技单节点间接关系展示", () => {
       name: "专家甲",
       entityType: "科技专家",
       labels: ["Person"],
-      properties: { source_table: "dwd_scholar", source_record_id: "A" },
+      properties: {
+        source_table: "dwd_scholar",
+        source_record_id: "A",
+        confidence: 1.0,
+      },
     };
     const organization = {
       id: "org_b",
       name: "测试研究院",
       entityType: "科研机构",
       labels: ["organization_base", "Organization"],
-      properties: { organization_base: "dwd_organization", source_record_id: "B" },
+      properties: {
+        organization_base: "dwd_organization",
+        source_record_id: "B",
+        confidence: 0.9,
+      },
     };
     const result: ExpertIndirectRelationResult = {
       coreNode: core,
@@ -52,8 +60,10 @@ describe("科技单节点间接关系展示", () => {
 
     const graph = buildIndirectRelationGraph(result);
     expect(graph.nodes[0].relations).toBe("核心节点");
+    expect(graph.nodes[0].confidence).toBe(1.0);
     expect(graph.nodes[1].entityType).toBe("科研机构");
     expect(graph.nodes[1].relations).toBe("间接关联节点");
+    expect(graph.nodes[1].confidence).toBe(0.9);
     expect(graph.nodes[1].evidence).toEqual([
       "来源表：dwd_organization",
       "源记录：B",

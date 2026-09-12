@@ -956,6 +956,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         alumni_names = [str(item.get("name") or item.get("alumniId")) for item in items]
         dimension_counts: dict[str, int] = {}
         shared_achievement_ids: set[str] = set()
+        shared_achievements: list[dict[str, Any]] = []
         paper_count = patent_count = project_count = 0
         coauthor_count = 0
         for item in items:
@@ -968,11 +969,13 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             coauthor_count += (
                 1 if (interactions.get("coauthorEdge") or interactions.get("paperCount")) else 0
             )
-            shared_achievement_ids.update(
-                str(achievement.get("id"))
-                for achievement in interactions.get("sharedAchievements") or []
-                if achievement.get("id")
-            )
+            for achievement in interactions.get("sharedAchievements") or []:
+                achievement_id = str(achievement.get("id") or "")
+                if not achievement_id or achievement_id in shared_achievement_ids:
+                    continue
+                shared_achievement_ids.add(achievement_id)
+                if mode == "pair":
+                    shared_achievements.append(achievement)
 
         summary_rows = [
             {"label": "专家", "value": f"{expert.get('name') or '—'}（{expert.get('id')}）"},
@@ -1001,6 +1004,14 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         if shared_achievement_ids:
             summary_rows.append(
                 {"label": "共同成果总数", "value": f"{len(shared_achievement_ids)} 项"}
+            )
+        if mode == "pair":
+            summary_rows.extend(
+                {
+                    "label": f"成果 {index}",
+                    "value": str(achievement.get("label") or "").strip() or str(achievement["id"]),
+                }
+                for index, achievement in enumerate(shared_achievements, start=1)
             )
         if mode == "list":
             summary_rows.append(

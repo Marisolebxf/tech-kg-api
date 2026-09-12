@@ -1599,6 +1599,27 @@ const alumniInteractionText = (edge: GraphEdgeData) => {
   return parts.join("、") || "无共同成果";
 };
 
+const isAlumniExpertRelation = (
+  edge: GraphEdgeData,
+  from?: GraphNodeData,
+  to?: GraphNodeData,
+) => {
+  const isExpert = (node?: GraphNodeData) =>
+    Boolean(
+      node &&
+        (node.nodeType === "main" ||
+          node.nodeType === "expert" ||
+          node.entityType.includes("专家")),
+    );
+  return (
+    isLiveAlumni.value &&
+    edge.label === "校友关系" &&
+    edge.category === "教育经历关联" &&
+    isExpert(from) &&
+    isExpert(to)
+  );
+};
+
 const confidenceSourceText = (source?: "original" | "derived") =>
   source === "original"
     ? "图数据库原始值"
@@ -1606,6 +1627,7 @@ const confidenceSourceText = (source?: "original" | "derived") =>
       ? "规则推导"
       : "—";
 
+/* 暂不展示“评分依据”，保留格式化代码以便后续恢复。
 const confidenceBreakdownLabels: Record<string, string> = {
   originalConfidence: "原始置信度",
   typeFallback: "关系类型兜底",
@@ -1651,6 +1673,7 @@ const confidenceBasisText = (edge: GraphEdgeData) => {
   const rule = confidenceRuleLabels[basis.rule] || basis.rule;
   return [rule, edgeType, breakdown].filter(Boolean).join("；") || "—";
 };
+*/
 
 const relationDetailRows = computed(() => {
   const edge = activeRelationEdge.value;
@@ -1668,7 +1691,7 @@ const relationDetailRows = computed(() => {
 
     ["关系分类", displayRelationCategory(edge.category)] as const,
 
-    ...(isLiveAlumni.value
+    ...(isAlumniExpertRelation(edge, from, to)
       ? [
           ["关系维度", edge.dimensions?.join("、") || "—"] as const,
           ["共同院校", edge.sharedInstitutions?.join("、") || "—"] as const,
@@ -1687,7 +1710,8 @@ const relationDetailRows = computed(() => {
     ...((isLiveAlumni.value || isLiveCoop.value) && edge.confidenceSource
       ? [
           ["评分来源", confidenceSourceText(edge.confidenceSource)] as const,
-          ["评分依据", confidenceBasisText(edge)] as const,
+          // 暂不在关系详情中展示评分依据，后端字段继续保留以便后续恢复。
+          // ["评分依据", confidenceBasisText(edge)] as const,
         ]
       : []),
 
@@ -2150,7 +2174,7 @@ const liveRelationRows = computed(() => {
       ] as const,
       ["类型", displayRelationType(relation.label)] as const,
       ["分类", displayRelationCategory(relation.category)] as const,
-      ...(isLiveAlumni.value
+      ...(isAlumniExpertRelation(relation, from, to)
         ? [
             ["关系维度", relation.dimensions?.join("、") || "—"] as const,
             [
@@ -2168,7 +2192,8 @@ const liveRelationRows = computed(() => {
               "评分来源",
               confidenceSourceText(relation.confidenceSource),
             ] as const,
-            ["评分依据", confidenceBasisText(relation)] as const,
+            // 暂不在关系列表中展示评分依据，后端字段继续保留以便后续恢复。
+            // ["评分依据", confidenceBasisText(relation)] as const,
           ]
         : []),
     ];

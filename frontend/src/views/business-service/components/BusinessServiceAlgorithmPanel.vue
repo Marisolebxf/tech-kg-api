@@ -2103,7 +2103,7 @@ const liveEntityRows = computed(() => {
     }
     return formatConfidence(value);
   };
-  if (selected) {
+  if (selected && !isExpertDirect.value) {
     const rows: Array<readonly [string, string]> = [
       ["实体名称", selected.label],
       ["实体类型", selected.entityType],
@@ -2115,7 +2115,8 @@ const liveEntityRows = computed(() => {
     }
     return rows;
   }
-  const entities = graphNodes.value;
+  const entities =
+    isExpertDirect.value && selected ? [selected] : graphNodes.value;
   if (!entities.length) return [] as Array<readonly [string, string]>;
   return entities.flatMap((entity, index) => [
     [`实体 ${index + 1}`, `${entity.label}（${entity.id}）`] as const,
@@ -2805,9 +2806,10 @@ function computeExpertDirectSummaryRows(
         .filter(Boolean)
         .join("｜"),
     );
-    const reasonText = item.reasonTags?.length
-      ? compactSummaryText(item.reasonTags.join("、"))
-      : "—";
+    const achievementTitles =
+      item.representativeAchievements
+        ?.map((achievement) => achievement.title)
+        .filter(Boolean) ?? [];
     overrides.set("专家 A", expertALabel || "—");
     overrides.set("专家 B", expertBLabel || "—");
     overrides.set(
@@ -2816,7 +2818,7 @@ function computeExpertDirectSummaryRows(
     );
     overrides.set(
       "关系发生时间",
-      compactSummaryText(item.lastUpdatedAt || "—"),
+      (item.lastUpdatedAt || "—").split(/[T ]/)[0]!,
     );
     overrides.set(
       "交互场景",
@@ -2831,7 +2833,10 @@ function computeExpertDirectSummaryRows(
       "相关成果",
       compactSummaryText(`共同论文${item.coPaperCount}篇`),
     );
-    overrides.set("代表成果", reasonText);
+    overrides.set(
+      "代表成果",
+      achievementTitles.join("；") || "暂无可核实的共同成果标题",
+    );
     overrides.set(
       "关系置信度",
       ((item.relationStrength ?? 0) / 100).toFixed(2),
@@ -2839,7 +2844,12 @@ function computeExpertDirectSummaryRows(
   }
   return props.moduleInfo.summaryRows.map((row) => {
     const overrideValue = overrides.get(row.label);
-    return [row.label, compactSummaryText(overrideValue ?? row.value)] as const;
+    return [
+      row.label,
+      row.label === "代表成果"
+        ? (overrideValue ?? row.value)
+        : compactSummaryText(overrideValue ?? row.value),
+    ] as const;
   });
 }
 
@@ -4264,7 +4274,10 @@ function clearGraphSelection() {
           v-else-if="resultMode === 'entity' && liveEntityRows"
           class="result-panel__detail"
         >
-          <div v-if="selectedNode" class="result-panel__back">
+          <div
+            v-if="selectedNode && !isExpertDirect"
+            class="result-panel__back"
+          >
             <button type="button" @click="clearGraphSelection">
               查看全部实体
             </button>

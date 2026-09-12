@@ -23,13 +23,13 @@ def _node(nid: str, props: dict | None = None, labels: list[str] | None = None):
     return SimpleNamespace(id=nid, properties=props or {}, labels=labels or ["Person"])
 
 
-def _edge(etype: str, source: str, target: str):
+def _edge(etype: str, source: str, target: str, props: dict | None = None):
     return SimpleNamespace(
         id=f"{source}->{target}@0",
         type=etype,
         source_id=source,
         target_id=target,
-        properties={},
+        properties=props or {},
     )
 
 
@@ -117,6 +117,11 @@ def test_query_shared_papers_and_patent_with_awards():
     }
     assert "PT1" not in paper_only_entities
     assert {edge["category"] for edge in paper_only["graph"]["edges"]} == {"科研合作", "成果关联"}
+    assert all(0 <= edge["confidence"] <= 1 for edge in paper_only["graph"]["edges"])
+    assert all(
+        edge["confidenceSource"] in {"original", "derived"} for edge in paper_only["graph"]["edges"]
+    )
+    assert all(entity.get("confidence") is not None for entity in paper_only["entities"])
     paper = next(i for i in resp["items"] if i["type"] == "paper")
     assert paper["title"] == "论文A"
     assert "图谱" in paper["fields"]
@@ -363,6 +368,14 @@ def test_does_not_treat_project_level_as_award():
     assert resp["summary"]["projects"] == 1
     assert resp["summary"]["awards"] == 0
     assert resp["items"][0]["awards"] == []
+    project_edges = [edge for edge in resp["graph"]["edges"] if edge["category"] == "成果关联"]
+    assert {edge["label"] for edge in project_edges} == {"负责", "参与"}
+    assert all(edge["confidence"] > 0 for edge in project_edges)
+    project_relation = next(
+        edge for edge in resp["graph"]["edges"] if edge["label"] == "项目合作关系"
+    )
+    assert project_relation["confidenceSource"] == "derived"
+    assert project_relation["confidenceBasis"]["rule"] == "project-cooperation-evidence-v1"
 
 
 def test_project_awards_from_output_awards_prop():

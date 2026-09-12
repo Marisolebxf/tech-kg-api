@@ -794,8 +794,20 @@ def schema_fields(graph: TRSGraphClient, kind: str, name: str) -> set[str]:
     return fields
 
 
+def _tag_field_type(tag: str, field_name: str) -> str:
+    numeric = TAG_NUMERIC_PROPERTIES.get(tag, frozenset())
+    if field_name in numeric:
+        return "double NULL"
+    return NULLABLE_STRING_TYPE
+
+
 def reconcile_existing_schema(graph: TRSGraphClient) -> None:
-    """Add properties that CREATE IF NOT EXISTS cannot add to an existing schema."""
+    """Add properties that CREATE IF NOT EXISTS cannot add to an existing schema.
+
+    test 等共享空间的 Person 往往先按学者域建成（``name_zh``），机构 ETL 写的
+    ``name_cn`` / ``person_kind`` 并不存在。CREATE TAG IF NOT EXISTS 不会给已有
+    tag 加列，必须 ALTER，否则高管 Person 全量 INSERT 400。
+    """
     additions: list[tuple[str, str, str, str]] = []
     additions.extend(
         (
@@ -813,6 +825,9 @@ def reconcile_existing_schema(graph: TRSGraphClient) -> None:
                 ("TAG", tag, "confidence", "double NULL"),
             )
         )
+    # 学者域先建的 Person 只有 name_zh；机构高管 ETL 写 name_cn/person_kind。
+    for field_name in TAG_PROPERTIES["Person"]:
+        additions.append(("TAG", "Person", field_name, _tag_field_type("Person", field_name)))
     for edge_type in sorted({spec.edge_type for spec in RELATION_SPECS}):
         additions.extend(
             (

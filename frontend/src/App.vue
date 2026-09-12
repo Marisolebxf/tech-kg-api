@@ -26,12 +26,18 @@ const showEmbeddedAuthState = computed(
     </section>
   </output>
   <div v-else-if="isEmbedded" class="portal-embedded-view">
-    <main class="portal-embedded-main">
-      <section
-        class="app-workspace portal-embedded-workspace"
-        :aria-label="embeddedPageTitle"
-      >
-        <RouterView />
+    <main
+      class="app-main portal-embedded-main"
+      :class="{ 'is-overview-page': route.path === '/overview' }"
+    >
+      <section class="portal-embedded-stage">
+        <div class="portal-embedded-page-title">{{ embeddedPageTitle }}</div>
+        <section
+          class="app-workspace portal-embedded-workspace"
+          :aria-label="embeddedPageTitle"
+        >
+          <RouterView />
+        </section>
       </section>
     </main>
   </div>
@@ -50,6 +56,7 @@ const showEmbeddedAuthState = computed(
   padding: 16px;
   overflow: hidden;
   background: var(--gkx-bg-page);
+  scrollbar-gutter: auto;
 }
 
 .portal-embedded-main {
@@ -58,6 +65,7 @@ const showEmbeddedAuthState = computed(
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  scrollbar-gutter: auto;
 }
 
 .portal-embedded-workspace {
@@ -73,6 +81,47 @@ const showEmbeddedAuthState = computed(
   scrollbar-width: none;
 }
 
+/* Keep the same second-layer surface as AppLayout's app-stage when the
+   portal supplies the surrounding navigation. */
+.portal-embedded-stage {
+  box-sizing: border-box;
+  position: relative;
+  display: grid;
+  grid-template-rows: 22px minmax(0, 1fr);
+  gap: 16px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px 15px 16px 16px;
+  border: 1px solid #fff;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.48);
+  backdrop-filter: blur(8px);
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.portal-embedded-stage::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border: 1px solid #fff;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.portal-embedded-page-title {
+  min-width: 0;
+  overflow: hidden;
+  color: #59636f;
+  font-size: 12px;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .portal-embedded-workspace::-webkit-scrollbar {
   display: none;
 }
@@ -85,6 +134,14 @@ const showEmbeddedAuthState = computed(
   .portal-embedded-workspace {
     padding: 10px;
     border-radius: 6px;
+  }
+
+  .portal-embedded-stage {
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px;
+    border: 0;
+    border-radius: 0;
   }
 }
 

@@ -29,6 +29,7 @@
 2. 回填链节点关联企业：`script/industry_chain_etl/backfill_chain_org_nodes.py`（补 org_{antitypic} 节点及其 BELONGS_TO_NODE）。
 3. 事件与风险（INVOLVED_IN org→Event）：事件顶点来自 `organization_entity_etl load`，INVOLVED_IN 边来自 `organization_relation_etl --relation event`（或 `all`）。TOP-N 服务按 event_type 权重 + chain_score 排序取 TOP-N，无需单独脚本。
 - 说明：`paper_journal_chain_etl.py` 工作流的「产业链」部分也覆盖链节点/边，可与论文/期刊一并提交执行。
+- **事件 ↔ 专家**：TOP-N 只读图。缺高管 Person / `EXECUTIVE_OF` 时页面只有事件没有专家。共享空间 Person 若是学者 schema，须先 `init-schema` 再灌高管。补完图后旧 API 也能出专家；本分支才会覆盖替换瑞芯微/励民。映射、先点后边、最小补数与接口验收见 `docs/industry_chain_topn_event_expert_etl.md`。
 
 ## 运行顺序建议（三类都要重建时）
 

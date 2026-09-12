@@ -141,7 +141,7 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
         payload = {
             "structuredResult": result,
             "provenance": provenance,
-            "rules": _build_rules(result)[:1],
+            "rules": _build_rules(result),
         }
         with _result_cache_lock:
             _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, payload)
@@ -550,6 +550,42 @@ def _impact_score(paper_count: int, citation_total: int, high_level_count: int) 
     return min(99.5, round(raw, 1))
 
 
+def _relation_confidences(
+    *,
+    paper_count: int,
+    years: list[int],
+    has_direct_paper_paths: bool,
+    unit_count: int,
+    has_topic_edges: bool,
+    has_topic_fallback: bool,
+    venue_evidence_count: int,
+    has_stable_team: bool,
+) -> dict[str, float]:
+    """按各类关系的结构化证据充足度计算置信度。"""
+    if paper_count <= 0:
+        cooperation = 0.0
+    else:
+        base = 0.75 if has_direct_paper_paths else 0.65
+        paper_evidence = min(paper_count, 4) * 0.05
+        cross_year_evidence = 0.05 if len(set(years)) >= 2 else 0.0
+        cooperation = min(1.0, base + paper_evidence + cross_year_evidence)
+
+    authorship = 1.0 if has_direct_paper_paths else (0.85 if paper_count else 0.0)
+    author_unit = 1.0 if unit_count >= 2 else (0.5 if unit_count == 1 else 0.0)
+    research_topic = 1.0 if has_topic_edges else (0.8 if has_topic_fallback else 0.0)
+    publication_venue = min(1.0, venue_evidence_count / paper_count) if paper_count > 0 else 0.0
+    team_membership = min(1.0, cooperation + 0.05) if has_stable_team else cooperation
+
+    return {
+        "paperCooperation": round(cooperation, 2),
+        "authorship": round(authorship, 2),
+        "authorUnit": round(author_unit, 2),
+        "researchTopic": round(research_topic, 2),
+        "publicationVenue": round(publication_venue, 2),
+        "teamMembership": round(team_membership, 2),
+    }
+
+
 def _build_rules(result: dict[str, Any]) -> list[dict[str, Any]]:
     paper_count = int(result.get("cooperationPaperCount") or 0)
     stable_count = len(result.get("stableTeamMembers") or [])
@@ -588,6 +624,21 @@ def _build_rules(result: dict[str, Any]) -> list[dict[str, Any]]:
             "threshold": "无合作论文时影响力为 0；代码未配置平均场馆得分 70 或高影响论文淘汰阈值",
             "audit": audit,
             "appliedCount": 1 if impact_score > 0 else 0,
+        },
+        {
+            "name": "论文合作关系置信度规则",
+            "type": "结构化证据评分规则",
+            "target": "论文合作、作者、作者单位、论文主题、发表场馆和合作团队关系",
+            "trigger": "关系结构化结果生成完成后",
+            "logic": "论文合作以逐篇共同论文路径为 0.75 基础分（仅聚合边为 0.65），每篇共同论文加 0.05、最多计 4 篇，跨至少 2 个年份再加 0.05；作者边由逐篇结构化路径命中时为 1.0，仅聚合边回退时为 0.85；单位和主题按结构化字段或回退证据赋值；发表场馆按有场馆证据的论文覆盖率计算；稳定团队在合作分上加 0.05，所有结果封顶 1.0。",
+            "output": "relationConfidences（各展示关系的实际置信度）",
+            "threshold": "无对应证据时为 0.0，不使用前端固定值或默认值。",
+            "audit": audit,
+            "appliedCount": sum(
+                1
+                for value in (result.get("relationConfidences") or {}).values()
+                if isinstance(value, (int, float)) and value > 0
+            ),
         },
     ]
 
@@ -642,6 +693,7 @@ async def _build_structured_result(
     collaborator_years: dict[str, set[int]] = defaultdict(set)
     citation_counts: list[int] = []
     years: list[int] = []
+    venue_evidence_count = 0
 
     for name, strength in fallback_collaborators:
         collaborator_counter[name] = strength
@@ -663,6 +715,8 @@ async def _build_structured_result(
                 topic_counter[topic] += 1
 
         venues = _nodes_without_center(paper["published"], paper["id"])
+        if venues:
+            venue_evidence_count += 1
         level = _venue_level(venues[0]) if venues else "未分级"
         if _venue_type(paper) == "conference":
             conference_counter[level] += 1
@@ -721,6 +775,7 @@ async def _build_structured_result(
     a_fields = _split_fields((expert_a.get("properties") or {}).get("research_fields"))
     b_fields = _split_fields((expert_b.get("properties") or {}).get("research_fields"))
     topics = [name for name, _ in topic_counter.most_common(8)]
+    has_topic_edges = bool(topics)
     if not topics:
         common = [item for item in a_fields if item in set(b_fields)]
         topics = list(dict.fromkeys(common + a_fields + b_fields))[:8]
@@ -807,12 +862,23 @@ async def _build_structured_result(
         end_year = max(years) if years else 0
         # 注意：fallback 路径无法获取合作论文的逐篇引用数，
         # 专家的 citation_nums 是其所有论文引用# 引用总数，不是合作论文的，因此不使用。
+    author_units = [_organization(expert_a), _organization(expert_b)]
+    relation_confidences = _relation_confidences(
+        paper_count=paper_count,
+        years=years,
+        has_direct_paper_paths=bool(papers),
+        unit_count=sum(bool(unit) for unit in author_units),
+        has_topic_edges=has_topic_edges,
+        has_topic_fallback=bool(topics) and not has_topic_edges,
+        venue_evidence_count=venue_evidence_count,
+        has_stable_team=bool(stable_members),
+    )
     return {
         "authorList": [
             _display_name(expert_a, body.expertAId),
             _display_name(expert_b, body.expertBId),
         ],
-        "authorUnits": [_organization(expert_a), _organization(expert_b)],
+        "authorUnits": author_units,
         "cooperationTimeRange": {
             "startYear": start_year,
             "endYear": end_year,
@@ -828,6 +894,7 @@ async def _build_structured_result(
         "stableTeamMembers": stable_members,
         "coreCollaborators": ranked_collaborators[:5],
         "sharedContribution": shared_contribution,
+        "relationConfidences": relation_confidences,
         "_provenance": _build_provenance(
             expert_a,
             expert_b,

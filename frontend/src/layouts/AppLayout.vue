@@ -23,12 +23,9 @@ import accountLockIcon from "../assets/icons/account-menu/icon-lock.svg";
 import accountLogoutIcon from "../assets/icons/account-menu/icon-logout.svg";
 import accountMemberStar from "../assets/icons/account-menu/icon-member-star.svg";
 import iconMessage from "../assets/icons/icon-message.svg";
-import navOverview from "../assets/icons/nav-overview.svg";
-import navQuery from "../assets/icons/nav-query.svg";
 import navReview from "../assets/icons/nav-review.svg";
 import navServices from "../assets/icons/nav-services.svg";
 import navTasks from "../assets/icons/nav-tasks.svg";
-import navFlow from "../assets/icons/nav-flow.svg";
 import navTools from "../assets/icons/nav-tools.svg";
 import { useAppStore } from "../stores/app";
 import { useAuthStore } from "../stores/auth";
@@ -150,12 +147,10 @@ const currentServiceNavItem = computed(() =>
 const breadcrumbItems = computed(() => {
   if (route.query.breadcrumb === "business-service")
     return [
-      { label: "页面总览", to: "/overview" },
       { label: businessServiceTitle },
     ];
   if (currentServiceNavItem.value)
     return [
-      { label: "页面总览", to: "/overview" },
       { label: businessServiceTitle, to: "/business-service" },
       { label: currentServiceNavItem.value.fullLabel },
     ];
@@ -417,9 +412,9 @@ onBeforeUnmount(() => {
       />
       <aside aria-label="辅助区域 1" class="app-sidebar" :aria-hidden="isMobile && !mobileNavOpen">
         <div class="app-brand">
-          <img class="app-brand__logo" :src="logoKg" alt="知识图谱平台" />
+          <img class="app-brand__logo" :src="logoKg" alt="亿级科技知识图谱引擎" />
           <div v-if="!sidebarCollapsed" class="app-brand__name">
-            知识图谱平台
+            亿级科技知识图谱引擎
           </div>
         </div>
 
@@ -469,65 +464,6 @@ onBeforeUnmount(() => {
             </RouterLink>
           </template>
           <template v-else>
-            <div v-if="!sidebarCollapsed" class="app-nav__group">
-              <span>工作台</span>
-            </div>
-            <RouterLink
-              class="app-nav__item app-nav__item--top app-nav__item--leaf"
-              active-class="app-nav__item--active"
-              to="/overview"
-              :title="sidebarCollapsed ? '平台总览' : undefined"
-            >
-              <span
-                class="app-nav__icon"
-                :style="navIconStyle(navOverview)"
-                aria-hidden="true"
-              ></span>
-              <span v-if="!sidebarCollapsed">平台总览</span>
-            </RouterLink>
-            <RouterLink
-              class="app-nav__item app-nav__item--top app-nav__item--leaf"
-              active-class="app-nav__item--active"
-              to="/corrections"
-              :title="sidebarCollapsed ? '我的修正' : undefined"
-            >
-              <span
-                class="app-nav__icon"
-                :style="navIconStyle(navReview)"
-                aria-hidden="true"
-              ></span>
-              <span v-if="!sidebarCollapsed">我的修正</span>
-            </RouterLink>
-
-            <div v-if="!sidebarCollapsed" class="app-nav__group">
-              <span>查询与服务</span>
-            </div>
-            <RouterLink
-              class="app-nav__item app-nav__item--top app-nav__item--leaf"
-              active-class="app-nav__item--active"
-              to="/graph-query"
-              :title="sidebarCollapsed ? '图谱查询' : undefined"
-            >
-              <span
-                class="app-nav__icon"
-                :style="navIconStyle(navQuery)"
-                aria-hidden="true"
-              ></span>
-              <span v-if="!sidebarCollapsed">图谱查询</span>
-            </RouterLink>
-            <RouterLink
-              class="app-nav__item app-nav__item--top app-nav__item--leaf"
-              active-class="app-nav__item--active"
-              to="/graph-build"
-              :title="sidebarCollapsed ? '图谱构建' : undefined"
-            >
-              <span
-                class="app-nav__icon"
-                :style="navIconStyle(navFlow)"
-                aria-hidden="true"
-              ></span>
-              <span v-if="!sidebarCollapsed">图谱构建</span>
-            </RouterLink>
             <div class="app-nav__service-group">
               <button
                 class="app-nav__item app-nav__item--top app-nav__item--button"

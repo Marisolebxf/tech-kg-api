@@ -4343,19 +4343,30 @@ function clearGraphSelection() {
           class="result-provenance"
         >
           <header>
-            <strong>数据来源与证据链</strong><span>同事关系查询</span>
+            <strong>数据溯源</strong
+            ><span>{{
+              selectedNode
+                ? "选中实体"
+                : selectedEdge
+                  ? "选中关系"
+                  : "全部实体和关系"
+            }}</span>
           </header>
           <div class="result-provenance__evidence-list">
             <article v-for="card in colleagueProvenance" :key="card.id">
               <header>
                 <strong>{{ card.title }}</strong>
               </header>
-              <p v-for="row in card.rows" :key="row[0]">
-                <b>{{ row[0] }}：</b>{{ row[1] }}
-              </p>
-              <p v-for="(evidence, index) in card.evidence" :key="index">
-                {{ evidence }}
-              </p>
+              <div
+                v-for="(section, index) in card.sections"
+                :key="index"
+                class="colleague-provenance-section"
+              >
+                <h4 v-if="section.title">{{ section.title }}</h4>
+                <p v-for="row in section.rows" :key="row[0]">
+                  <b>{{ row[0] }}：</b><span>{{ row[1] }}</span>
+                </p>
+              </div>
             </article>
             <p v-if="!colleagueProvenance.length">
               暂无可追溯对象，请先执行查询。
@@ -5431,6 +5442,30 @@ function clearGraphSelection() {
 .result-provenance__evidence-list {
   display: grid;
   gap: 8px;
+}
+
+.colleague-provenance-section {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.colleague-provenance-section + .colleague-provenance-section {
+  border-top: 1px solid #e1eaf8;
+  margin-top: 8px;
+  padding-top: 12px;
+}
+
+.colleague-provenance-section h4 {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.colleague-provenance-section p span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .result-provenance__evidence-list article {

@@ -632,6 +632,11 @@ function mapLiveGraph(
         relations: string;
         evidence: string[];
         level?: number;
+        sourceTable?: string;
+        sourceRecordId?: string;
+        sourceField?: string;
+        ingestBatch?: string;
+        ingestTime?: string;
       }>
     | undefined,
   edges:
@@ -686,6 +691,11 @@ function mapLiveGraph(
       relations: node.relations ?? "",
       evidence: node.evidence ?? [],
       level: node.level,
+      sourceTable: node.sourceTable,
+      sourceRecordId: node.sourceRecordId,
+      sourceField: node.sourceField,
+      ingestBatch: node.ingestBatch,
+      ingestTime: node.ingestTime,
     })),
     edges: (edges || []).map((edge) => ({
       id: edge.id,

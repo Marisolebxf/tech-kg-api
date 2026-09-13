@@ -1073,6 +1073,11 @@ function buildPaperCoopRealGraph(
       entityType: entityTypeByBackend[type] || "实体",
       relations: String(node.subtitle || ""),
       evidence: [],
+      // 后端按证据规则算出的实体置信度（专家/论文/主题/期刊/合著者）。
+      confidence:
+        typeof node.data?.confidence === "number" ? node.data.confidence : undefined,
+      confidenceSource: node.data?.confidenceSource,
+      confidenceBasis: node.data?.confidenceBasis,
     };
   });
   const categoryByLabel: Record<string, string> = {

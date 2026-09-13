@@ -249,6 +249,14 @@ async def test_provenance_records_query_time_sources():
     assert expert_b_evidence["sourceTable"] == "trs-graph / space=dev"
     assert expert_b_evidence["sourceField"] == "name_zh"
     assert expert_b_evidence["summary"] == "节点未携带入图血缘，来源为本次图库查询"
+    # 实体置信度：图节点按证据规则携带 confidence，实体 Tab 不再显示"暂无"。
+    graph_nodes = {n["id"]: n for n in result["_graph"]["nodes"]}
+    assert graph_nodes["person_A"]["data"]["confidence"] == pytest.approx(0.98)
+    assert graph_nodes["person_A"]["data"]["confidenceSource"] == "derived"
+    assert graph_nodes["person_A"]["data"]["confidenceBasis"]["rule"] == (
+        "expert-entity-completeness-v1"
+    )
+    assert graph_nodes["person_B"]["data"]["confidence"] == pytest.approx(0.75)
 
 
 @pytest.mark.asyncio

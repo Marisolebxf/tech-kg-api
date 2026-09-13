@@ -13,6 +13,11 @@ import httpx
 
 from biz.schema.expert_paper_cooperation import ExpertPaperCooperationDemoRequest
 from service.base_module import KGModuleScaffoldService
+from service.confidence_scoring import (
+    achievement_entity_confidence,
+    expert_entity_confidence,
+)
+from service.entity_confidence import fill_entity_confidence
 from service.provenance_recorder import record_node_source
 
 MAX_SHARED_PAPERS = 1000
@@ -601,13 +606,43 @@ def _build_graph(
         if not node_id or node_id in seen_nodes:
             return
         seen_nodes.add(node_id)
+        props = node.get("properties") or {}
+        labels = node.get("labels") or []
+        # 实体置信度：专家/合著者、论文用既有证据规则，关键词/期刊用通用实体规则兜底，
+        # 保证实体 Tab 的置信度不再显示"暂无"。
+        if node_type in ("expert", "collaborator"):
+            score = expert_entity_confidence(props, label)
+        elif node_type == "paper":
+            year = _paper_year(node)
+            score = achievement_entity_confidence(
+                "paper",
+                props,
+                title=label,
+                time_value=str(year) if year else None,
+                fields=(
+                    ["present"]
+                    if str(props.get("keywords") or props.get("keyword") or "").strip()
+                    else []
+                ),
+                vid=node_id,
+            )
+        else:
+            score = {
+                "confidence": fill_entity_confidence(props, labels),
+                "confidenceSource": "derived",
+            }
         nodes.append(
             {
                 "id": node_id,
                 "type": node_type,
                 "label": label,
-                "subtitle": str((node.get("properties") or {}).get("scholar_org") or ""),
-                "data": {"labels": node.get("labels") or []},
+                "subtitle": str(props.get("scholar_org") or ""),
+                "data": {
+                    "labels": labels,
+                    "confidence": score["confidence"],
+                    "confidenceSource": score.get("confidenceSource"),
+                    "confidenceBasis": score.get("confidenceBasis"),
+                },
             }
         )
 

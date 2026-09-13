@@ -1072,7 +1072,8 @@ function buildPaperCoopRealGraph(
       y: position?.y ?? 200,
       entityType: entityTypeByBackend[type] || "实体",
       relations: String(node.subtitle || ""),
-      evidence: [],
+      // 机构名等属性信息保留在 evidence 里，命中关系由下方按边统计。
+      evidence: node.subtitle ? [String(node.subtitle)] : [],
       // 后端按证据规则算出的实体置信度（专家/论文/主题/期刊/合著者）。
       confidence:
         typeof node.data?.confidence === "number" ? node.data.confidence : undefined,
@@ -1099,6 +1100,26 @@ function buildPaperCoopRealGraph(
         label === "论文合作" ? relationConfidences.paperCooperation : undefined,
     };
   });
+  // 「命中关系」按每个节点在 edges 中真实相连的对端 + 关系类型统计（与重点企业关系
+  // 模块同口径），不再用 subtitle（专家机构名）顶替——论文/主题/期刊等非专家节点
+  // 的 subtitle 后端为空，导致点击时命中关系显示为空。机构名保留在 evidence 里。
+  const labelById = new Map(nodes.map((n) => [n.id, n.label]));
+  const relationsByNode = new Map<string, string[]>();
+  for (const edge of edges) {
+    const fromLabel = labelById.get(edge.from);
+    const toLabel = labelById.get(edge.to);
+    if (!fromLabel || !toLabel) continue;
+    const fromList = relationsByNode.get(edge.from) ?? [];
+    fromList.push(`${edge.label} → ${toLabel}`);
+    relationsByNode.set(edge.from, fromList);
+    const toList = relationsByNode.get(edge.to) ?? [];
+    toList.push(`${edge.label} ← ${fromLabel}`);
+    relationsByNode.set(edge.to, toList);
+  }
+  for (const node of nodes) {
+    const rels = relationsByNode.get(node.id);
+    if (rels?.length) node.relations = rels.slice(0, 5).join("；");
+  }
   return { nodes, edges };
 }
 

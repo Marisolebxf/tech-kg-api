@@ -62,6 +62,12 @@ export interface PanoramaGraphNode {
   type: string;
   label: string;
   subtitle: string | null;
+  /** 子图（展开层）节点的入图溯源字段，来自图节点 properties；缺失时为 null。 */
+  sourceTable?: string | null;
+  sourceField?: string | null;
+  sourceRecordId?: string | null;
+  ingestBatch?: string | null;
+  ingestTime?: string | null;
   data: Record<string, unknown>;
 }
 

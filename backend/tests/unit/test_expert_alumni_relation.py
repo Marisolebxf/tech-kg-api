@@ -176,8 +176,9 @@ def test_pair_same_school_and_degree():
     assert source_evidence["sourceField"] == "education_source_id"
     assert source_evidence["graphVid"] == "S1"
     alumni_evidence = resp["provenance"]["evidences"][1]
-    assert alumni_evidence["technicalTable"] == "-"
-    assert alumni_evidence["sourceField"] == "-"
+    # 查到即记：无入图血缘的校友节点如实记录图库查询来源与识别属性。
+    assert alumni_evidence["technicalTable"] == "trs-graph / space=dev"
+    assert alumni_evidence["sourceField"] == "name_zh"
     assert alumni_evidence["graphVid"] == "S2"
     assert resp["rules"][0]["name"] == "教育经历匹配算法"
     assert "同校" in resp["dimensionsCatalog"]
@@ -483,3 +484,63 @@ def test_same_id_raises():
     graph = MagicMock()
     with pytest.raises(ValueError, match="不能相同"):
         _svc(graph).query(expert_id="S1", target_expert_id="S1")
+
+
+def test_pair_shared_achievements_have_independent_provenance():
+    """查到即记：共同成果（论文/专利/项目）节点取到即记来源，
+    证据与图节点都覆盖成果 vid，前端点击成果节点/成果边不再显示"无独立溯源"。"""
+    a = _node("S1", {"name_zh": "甲", "education_background_institution_zh": "北京大学"})
+    b = _node("S2", {"name_zh": "乙", "education_background_institution_zh": "北京大学"})
+    paper = _node("P1", {"title": "论文A"}, ["Paper"])
+    patent = _node(
+        "PT1",
+        {
+            "patent_title": "专利A",
+            "source_table": "dwd_patent_test",
+            "ingest_batch": "BATCH_PT",
+            "ingest_time": "2026-09-01 08:00:00",
+        },
+        ["Patent"],
+    )
+    project = _node("PR1", {"project_name": "项目A"}, ["Project"])
+    nodes = {"S1": a, "S2": b, "P1": paper, "PT1": patent, "PR1": project}
+
+    edges_by_type = {
+        "COAUTHOR_WITH": [],
+        "AUTHORED_BY": [_edge("AUTHORED_BY", "P1", "S1"), _edge("AUTHORED_BY", "P1", "S2")],
+        "INVENTED_BY": [_edge("INVENTED_BY", "PT1", "S1"), _edge("INVENTED_BY", "PT1", "S2")],
+        "HAS_PARTICIPANT": [
+            _edge("HAS_PARTICIPANT", "PR1", "S1"),
+            _edge("HAS_PARTICIPANT", "PR1", "S2"),
+        ],
+        "LEADS": [],
+    }
+
+    def get_edges(_nid, **kwargs):
+        return list(edges_by_type.get(kwargs.get("edge_type") or "", []))
+
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
+    graph.get_node_edges = MagicMock(side_effect=get_edges)
+    graph._settings = SimpleNamespace(space="dev")
+
+    resp = _svc(graph).query(expert_id="S1", target_expert_id="S2")
+
+    interactions = resp["items"][0]["interactions"]
+    assert interactions["paperCount"] == 1
+    assert interactions["patentCount"] == 1
+    assert interactions["projectCount"] == 1
+    evidences = {e["graphVid"]: e for e in resp["provenance"]["evidences"]}
+    # 有入图血缘的专利透传 MySQL 血缘与入库批次。
+    assert evidences["PT1"]["technicalTable"] == "dwd_patent_test"
+    assert evidences["PT1"]["sourceField"] == "source_record_id"
+    assert evidences["PT1"]["summary"] == "入库批次：BATCH_PT；入库时间：2026-09-01 08:00:00"
+    # 无血缘的论文/项目如实记录图库查询来源与识别属性。
+    assert evidences["P1"]["technicalTable"] == "trs-graph / space=dev"
+    assert evidences["P1"]["sourceField"] == "title"
+    assert evidences["P1"]["summary"] == "节点未携带入图血缘，来源为本次图库查询"
+    assert evidences["PR1"]["technicalTable"] == "trs-graph / space=dev"
+    # 图节点同时携带溯源字段，前端证据未命中时可现场合成兜底卡。
+    graph_nodes = {n["id"]: n for n in resp["graph"]["nodes"]}
+    assert graph_nodes["PT1"]["sourceTable"] == "dwd_patent_test"
+    assert graph_nodes["P1"]["sourceTable"] == "trs-graph / space=dev"

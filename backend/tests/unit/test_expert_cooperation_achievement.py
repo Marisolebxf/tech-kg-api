@@ -170,8 +170,9 @@ def test_query_shared_papers_and_patent_with_awards():
     assert paper_evidence["sourceField"] == "paper_source_id"
 
     target_evidence = resp["provenance"]["evidences"][1]
-    assert target_evidence["technicalTable"] == "-"
-    assert target_evidence["sourceField"] == "-"
+    # 查到即记：无入图血缘的目标专家如实记录图库查询来源与识别属性。
+    assert target_evidence["technicalTable"] == "trs-graph / space=dev"
+    assert target_evidence["sourceField"] == "name_zh"
 
 
 def test_in_time_range_respects_month_and_day_bounds():

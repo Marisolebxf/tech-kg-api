@@ -187,10 +187,10 @@ async def test_run_populates_entity_provenance(monkeypatch):
     assert expert_prov.ingestTime == "2026-08-23 09:21:28"
     assert expert_prov.confidence == 0.92
 
-    # 企业节点：Organization + organization_id → 字段名 organization_id
+    # 企业节点：Organization + dwd_org_stock_base → 溯源英文字段名为真实主键 org_id
     org_prov = resp.entity_provenance["org_lvdie"]
     assert org_prov.sourceTable == "dwd_org_stock_base"
-    assert org_prov.sourceField == "organization_id"
+    assert org_prov.sourceField == "org_id"
     assert org_prov.sourceValue == "lvdie_org_id"
     assert org_prov.ingestBatch == "ORG_DEV_FINAL_20260811"
     assert org_prov.confidence == 0.85

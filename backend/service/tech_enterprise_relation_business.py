@@ -36,6 +36,7 @@ from biz.schemas.tech_enterprise_relation_business import (
 )
 from service.entity_confidence import fill_entity_confidence, parse_confidence
 from service.industry_node_top_events_business import RISK_EVENT_TYPES
+from service.provenance_recorder import record_node_source
 
 logger = logging.getLogger(__name__)
 
@@ -532,28 +533,18 @@ class KeyEnterpriseRelationService:
         vid: str | None = None,
         client: Any = None,
     ) -> EntityProvenance:
-        """从图节点 properties 抽取实体溯源，与同事关系 _entity_data 同口径。
+        """查到即记：入图血缘透传；无血缘时如实记录图库查询来源。
 
-        Person 节点取 source_record_id（dwd_scholar 时字段名为 scholar_id）；
-        Organization 节点取 organization_id；均缺失时回退 source_record_id。
-        source_table 取 organization_base 或 source_table 属性。
-        置信度：图上已有值 → 证据规则计算并尽力写回 → 默认 0.80。
+        置信度逻辑不变：图上已有值 → 证据规则计算并尽力写回 → 默认 0.80。
         """
-        source_table = properties.get("organization_base") or properties.get("source_table")
-        if "Person" in labels and properties.get("source_record_id") not in (None, ""):
-            source_field = "scholar_id" if source_table == "dwd_scholar" else "source_record_id"
-            source_value = properties.get("source_record_id")
-        elif properties.get("organization_id") not in (None, ""):
-            source_field, source_value = "organization_id", properties.get("organization_id")
-        else:
-            source_field, source_value = "source_record_id", properties.get("source_record_id")
+        recorded = record_node_source(properties, labels, space=SPACE)
         confidence = fill_entity_confidence(properties, labels, vid=vid, client=client)
         return EntityProvenance(
-            sourceTable=str(source_table or "-"),
-            sourceField=str(source_field or "-"),
-            sourceValue=str(source_value or "-"),
-            ingestBatch=str(properties.get("ingest_batch") or "-"),
-            ingestTime=str(properties.get("ingest_time") or "-"),
+            sourceTable=recorded["sourceTable"],
+            sourceField=recorded["sourceField"],
+            sourceValue=recorded["sourceValue"],
+            ingestBatch=recorded["ingestBatch"],
+            ingestTime=recorded["ingestTime"],
             confidence=confidence,
         )
 

@@ -2,7 +2,12 @@ import pytest
 from pydantic import ValidationError
 
 from biz.schema.expert_indirect_relation import ExpertIndirectRelationRequest
-from service.expert_indirect_relation_api import _build_provenance, _build_result, _build_rules
+from service.expert_indirect_relation_api import (
+    _build_provenance,
+    _build_result,
+    _build_rules,
+    _node_name,
+)
 
 
 def _core_node():
@@ -95,6 +100,26 @@ def test_builds_only_indirect_paths_and_deduplicates_reverse_edges():
     assert result["relationTypeCount"] == {"学术关联": 1}
     assert {path["targetNode"]["name"] for path in result["paths"]} == {"专家丙"}
     assert all(path["depth"] == 2 for path in result["paths"])
+
+
+def test_node_name_resolves_project_title_property():
+    """Project（dwd_*_project）节点名称只存 title 属性，应显示 title 而非 vid。"""
+    project = {
+        "id": "project_1",
+        "labels": ["Project"],
+        "properties": {"title": "AI 基础研究重点项目"},
+    }
+    assert _node_name(project) == "AI 基础研究重点项目"
+
+    # 既有名称字段仍优先于 title，避免改变其它实体的展示
+    named = {"id": "n1", "labels": [], "properties": {"name_zh": "专家甲", "title": "某标题"}}
+    assert _node_name(named) == "专家甲"
+    plain_name = {"id": "n2", "labels": [], "properties": {"name": "名称", "title": "标题"}}
+    assert _node_name(plain_name) == "名称"
+
+    # 无任何名称属性时仍回退 vid
+    anonymous = {"id": "n3", "labels": ["Project"], "properties": {}}
+    assert _node_name(anonymous) == "n3"
 
 
 def test_relation_type_filter_and_string_normalization():

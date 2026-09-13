@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from service.base_module import KGModuleScaffoldService
+from service.provenance_recorder import record_node_source
 
 PERSON_LABELS = {"Person", "Scholar", "Expert"}
 ACHIEVEMENT_LABELS = {"Paper", "Project", "Patent", "Report", "Award"}
@@ -737,26 +738,8 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
 
     def _entity_data(self, node: dict[str, Any], normalized: dict[str, Any]) -> dict[str, Any]:
         properties = node.get("properties", {}) or {}
-        source_table = properties.get("source_table") or properties.get("organization_base")
-        if self._labels(node) & PERSON_LABELS and properties.get("source_record_id") not in (
-            None,
-            "",
-        ):
-            source_field = "scholar_id" if source_table == "dwd_scholar" else "source_record_id"
-            source_value = properties.get("source_record_id")
-        elif properties.get("organization_id") == "scholar_id" and properties.get(
-            "source_record_id"
-        ) not in (None, ""):
-            source_field, source_value = "scholar_id", properties.get("source_record_id")
-        elif properties.get("organization_id") not in (None, ""):
-            source_field, source_value = "organization_id", properties.get("organization_id")
-        else:
-            source_field, source_value = "source_record_id", properties.get("source_record_id")
-        # These are MySQL column names, not the normalized graph property names.
-        mysql_source_fields = {"dwd_scholar": "scholar_id", "dwd_org_stock_base": "org_id"}
-        source_field = (
-            properties.get("source_field") or mysql_source_fields.get(source_table) or source_field
-        )
+        # 查到即记：入图血缘透传；无血缘时如实记录图库查询来源。
+        recorded = record_node_source(properties, self._labels(node))
         raw_confidence = properties.get("confidence", 1.0)
         try:
             confidence = float(raw_confidence)
@@ -767,11 +750,11 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             "confidence": max(0.0, min(confidence, 1.0)),
             "details": properties,
             "provenance": {
-                "sourceTable": str(source_table or "-"),
-                "sourceField": str(source_field),
-                "sourceValue": str(source_value or "-"),
-                "ingestBatch": str(properties.get("ingest_batch") or "-"),
-                "ingestTime": str(properties.get("ingest_time") or "-"),
+                "sourceTable": recorded["sourceTable"],
+                "sourceField": recorded["sourceField"],
+                "sourceValue": recorded["sourceValue"],
+                "ingestBatch": recorded["ingestBatch"],
+                "ingestTime": recorded["ingestTime"],
             },
         }
 

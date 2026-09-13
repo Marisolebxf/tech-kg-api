@@ -16,7 +16,8 @@ import { http } from "./http";
  * 请求参数。
  */
 export interface IndustryChainPanoramaQueryRequest {
-  industry?: string | null;
+  /** 产业关键词，必填，如 人工智能 / 集成电路。 */
+  industry: string;
   anchorId?: string | null;
   depth?: number;
   topK?: number;

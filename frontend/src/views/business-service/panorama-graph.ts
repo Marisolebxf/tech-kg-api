@@ -5,11 +5,10 @@ import type {
 } from "../../api/industryChainPanorama";
 
 /**
- * 汇总摘要中应计入的关键技术实体。
+ * 全量口径的关键技术实体标签（分层 items ∪ 子图技术节点，按实体 ID 去重）。
  *
- * 分层数据负责展示检索命中的技术，扩展子图还可能包含作为 anchor 的其他
- * IndustryNode/Keyword。两部分始终合并并按实体 ID 去重，保证摘要数量与
- * 左侧实际展示一致。
+ * 注意：页面摘要「关键技术」数量已改为按画布渲染节点统计（与画布一致），
+ * 本函数保留作为全量口径的工具集合，不再是摘要计数依据。
  */
 export function collectPanoramaTechnologyLabels(
   response: IndustryChainPanoramaQueryResponse,
@@ -70,8 +69,8 @@ export function collectPanoramaIndustryChainLabels(
 
 /**
  * 全景图全量实体口径：分层 items ∪ 子图节点，按 id 去重（子图在前，含产业链
- * 中心节点）。实体页、溯源页与画布「关系」行共用，保证各页数量一致；画布
- * 展开层仅渲染其中前若干个，不能作为全量列表的数据源。
+ * 中心节点）。作为实体元数据（置信度、溯源三要素）的统一来源；实体页与
+ * 溯源页按画布可见节点过滤后使用，展示数量与画布渲染的节点一致。
  */
 export interface PanoramaEntity {
   id: string;
@@ -145,24 +144,36 @@ export function collectPanoramaEntities(
 }
 
 /**
- * 每个实体的真实关系统计：从子图全量真实边统计（不含画布分层展示连线），
- * 格式「共 N 条：{类型} → {对端}；...」，不截断；没有真实边的实体不进入结果。
+ * 每个实体的关系统计：默认从子图全量真实边统计（不含画布分层展示连线）；
+ * 页面按画布口径调用时通过 options.edges 传入实际渲染的连线（可含分层
+ * 展示连线），统计范围随之收窄；端点名可用 options.labelById 覆盖（画布
+ * 节点标签）。格式「共 N 条：{类型} → {对端}；...」，不截断；没有连线的
+ * 实体不进入结果。
  */
 export function panoramaNodeRelationSummaries(
   response: IndustryChainPanoramaQueryResponse,
-  options: { edgeLabelDisplay?: (label: string) => string } = {},
+  options: {
+    edgeLabelDisplay?: (label: string) => string;
+    /** 关系统计口径；缺省为子图全量真实边。 */
+    edges?: PanoramaGraphEdge[];
+    /** 端点 id → 展示名；缺省从全量实体并集取。画布口径传画布节点标签，
+     * 让虚拟中心等不在并集里的展示元素也能显示名称。 */
+    labelById?: Map<string, string>;
+  } = {},
 ): Map<string, string> {
-  const labelById = new Map(
+  // 全量实体并集的标签；调用方传 labelById（画布口径）时优先使用。
+  const fallbackLabels = new Map(
     collectPanoramaEntities(response).map((entity) => [entity.id, entity.label]),
   );
-  const labelOf = (id: string) => labelById.get(id) || id;
+  const labelOf = (id: string) =>
+    options.labelById?.get(id) ?? fallbackLabels.get(id) ?? id;
   const relationsByNode = new Map<string, string[]>();
   const append = (id: string, text: string) => {
     const list = relationsByNode.get(id) ?? [];
     list.push(text);
     relationsByNode.set(id, list);
   };
-  for (const edge of response.graph.edges) {
+  for (const edge of options.edges ?? response.graph.edges) {
     const typeLabel = options.edgeLabelDisplay?.(edge.label) || edge.label;
     append(edge.source, `${typeLabel} → ${labelOf(edge.target)}`);
     append(edge.target, `${typeLabel} ← ${labelOf(edge.source)}`);
@@ -296,7 +307,8 @@ function panoramaProvenanceRows(entity: {
   return [
     ["源数据表", text(entity.sourceTable)],
     ["英文字段名", text(entity.sourceField)],
-    ["图空间 VID", entity.id],
+    // 页面内部合成 id（如虚拟产业链中心 __panorama_center__）不是图空间 VID。
+    ["图空间 VID", entity.id.startsWith("__") ? "—" : entity.id],
   ];
 }
 
@@ -305,9 +317,12 @@ function panoramaProvenanceRows(entity: {
  * 实体卡为「{名称} · 实体来源」，关系卡为「{源} → {目标} · {关系类型}」，
  * 关系卡内含「源实体 / 目标实体」两个区段，各自展示三要素行。
  *
- * 实体取分层 items 与子图节点的并集（按 id 去重）；关系只取子图中的真实图库边，
- * 画布为分层展示补的虚拟中心节点与连线不在此列。未选中时返回全部实体卡 +
- * 关系卡；选中节点只返回该实体卡；选中边只返回 source/target/label 均匹配的关系卡。
+ * 实体取分层 items 与子图节点的并集（按 id 去重），关系取真实图库边；传入
+ * visibleNodeIds / edges（画布口径）时实体卡与关系卡都收窄到画布渲染范围，
+ * 画布为分层展示补的虚拟中心节点不在此列。未选中时返回全部实体卡 +
+ * 关系卡；选中节点只返回该实体卡；选中边只返回 source/target/label 均匹配
+ * 的关系卡——选中边在 matchEdges（缺省用 edges）内匹配，画布口径传全部
+ * 连线时点击分层展示连线也能出两端实体的溯源卡。
  */
 export function panoramaProvenanceCards(
   response: IndustryChainPanoramaQueryResponse,
@@ -315,10 +330,25 @@ export function panoramaProvenanceCards(
     selectedNodeId?: string;
     selectedEdge?: { source: string; target: string; label: string };
     edgeLabelDisplay?: (label: string) => string;
+    /** 画布口径：仅这些 id 的实体生成实体卡；缺省为全量实体。 */
+    visibleNodeIds?: Set<string>;
+    /** 关系卡数据源（未选中时展示），缺省为子图全量真实边。 */
+    edges?: PanoramaGraphEdge[];
+    /** 选中边匹配池，缺省用 edges。画布口径传全部连线（含分层展示连线，
+     * data.inferred 标记），让点击虚拟连线也能出两端实体溯源卡（卡内注明
+     * 连线性质）。 */
+    matchEdges?: PanoramaGraphEdge[];
+    /** 端点 id → 展示名（画布口径传画布节点标签）；缺省从实体并集取。
+     * 虚拟产业链中心等不在并集里的展示元素也能显示产业名，而不是内部
+     * 合成 id。 */
+    labelById?: Map<string, string>;
   } = {},
 ): PanoramaProvenanceCard[] {
   // 分层 items 与子图节点按 id 去重合并；子图在前（含产业链中心节点）。
-  const entities = collectPanoramaEntities(response);
+  // 传入 visibleNodeIds（画布口径）时只保留画布渲染的实体。
+  const entities = collectPanoramaEntities(response).filter(
+    (entity) => !options.visibleNodeIds || options.visibleNodeIds.has(entity.id),
+  );
   const entityById = new Map(entities.map((entity) => [entity.id, entity]));
 
   const nodeCards: PanoramaProvenanceCard[] = [
@@ -331,7 +361,22 @@ export function panoramaProvenanceCards(
     })),
   ];
 
-  const labelOf = (id: string) => entityById.get(id)?.label || id;
+  const labelOf = (id: string) =>
+    options.labelById?.get(id) ?? entityById.get(id)?.label ?? id;
+  /** 关系端点实体：不在实体并集里的页面合成展示元素（如虚拟产业链中心
+   * __panorama_center__）按「查到即记」派生口径记录来源——宿主是查询
+   * 入参，不编造图库数据；其余未知 id 维持占位回退。 */
+  const endpointEntity = (id: string) =>
+    entityById.get(id) ??
+    (id.startsWith("__")
+      ? {
+          id,
+          label: labelOf(id),
+          type: "页面展示元素",
+          sourceTable: "页面合成 · 查询入参",
+          sourceField: "industry",
+        }
+      : { id });
   const buildEdgeCard = (edge: PanoramaGraphEdge, index: number): PanoramaProvenanceCard => {
     const relationName = options.edgeLabelDisplay?.(edge.label) || edge.label;
     return {
@@ -340,20 +385,17 @@ export function panoramaProvenanceCards(
       sections: [
         {
           title: `源实体：${labelOf(edge.source)}`,
-          rows: panoramaProvenanceRows(
-            entityById.get(edge.source) ?? { id: edge.source },
-          ),
+          rows: panoramaProvenanceRows(endpointEntity(edge.source)),
         },
         {
           title: `目标实体：${labelOf(edge.target)}`,
-          rows: panoramaProvenanceRows(
-            entityById.get(edge.target) ?? { id: edge.target },
-          ),
+          rows: panoramaProvenanceRows(endpointEntity(edge.target)),
         },
       ] satisfies PanoramaProvenanceSection[],
     };
   };
-  const edgeCards: PanoramaProvenanceCard[] = response.graph.edges.map(
+  const scopedEdges = options.edges ?? response.graph.edges;
+  const edgeCards: PanoramaProvenanceCard[] = scopedEdges.map(
     (edge, index) => buildEdgeCard(edge, index),
   );
 
@@ -363,7 +405,7 @@ export function panoramaProvenanceCards(
     return card ? [card] : [];
   }
   if (selectedEdge) {
-    return response.graph.edges
+    return (options.matchEdges ?? scopedEdges)
       .map((edge, index) => ({ edge, index }))
       .filter(
         ({ edge }) =>

@@ -236,7 +236,15 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                 else:
                     graph = await self._fetch_graph(client, seed_vids, anchor, depth)
                 layers = self._backfill_empty_layers_from_graph(layers, graph, top_k)
-                graph = self._filter_graph_by_relation_types(graph, rel_types)
+                if anchor and seed_vids and any(not layer["items"] for layer in layers):
+                    # 锚点子图只覆盖链自身结构（新入图的链可能只挂了新闻），
+                    # 第一轮回填后空层仍可能拿不到实体：用分层种子再扩一轮
+                    # 子图合并进图、只补仍为空的分层（已非空的层回填不动）。
+                    # 无锚点时子图本就从种子扩展而来，不做重复拉取。
+                    seed_graph = await self._fetch_graph(client, seed_vids, None, depth)
+                    graph = self._merge_graphs(graph, seed_graph)
+                    layers = self._backfill_empty_layers_from_graph(layers, graph, top_k)
+                graph = self._filter_graph_by_relation_types(graph, rel_types, anchor_id=anchor)
                 query_input["anchorId"] = anchor or ""
         except GraphAPIError as exc:
             logger.warning("graph API unavailable for panorama, falling back: %s", exc)
@@ -404,13 +412,23 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
     @staticmethod
     def _filter_graph_by_relation_types(
-        graph: dict[str, list[Any]], relation_types: list[str]
+        graph: dict[str, list[Any]],
+        relation_types: list[str],
+        *,
+        anchor_id: str | None = None,
     ) -> dict[str, list[Any]]:
         """按边类型筛选子图，并丢掉筛选后不再有连边的节点。
+
+        链节点（IndustryChain）与锚点节点是子图的结构骨架：链只通过 HAS_NODE
+        结构边连环节，若筛选不含 HAS_NODE（如只选产业链归属 BELONGS_TO_NODE），
+        裁边会把链节点一并裁掉，前端中心只能退化为页面合成的虚拟节点，链的
+        溯源信息（源数据表/英文字段名/图空间 VID）随之丢失。骨架节点始终
+        保留，其余节点仍在裁掉无连边者之列。
 
         Args:
             graph: ``_fetch_graph`` 产出的子图。
             relation_types: 规整后的边类型；为空表示不筛选。
+            anchor_id: 调用方指定或关键词解析出的锚点 VID；始终保留。
 
         Returns:
             筛选后的子图；不筛选时原样返回。
@@ -422,7 +440,50 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         kept_ids = {str(e.get("source") or "") for e in edges} | {
             str(e.get("target") or "") for e in edges
         }
-        nodes = [n for n in (graph.get("nodes") or []) if str(n.get("id") or "") in kept_ids]
+        skeleton_ids = {anchor_id} if anchor_id else set()
+        nodes = [
+            n
+            for n in (graph.get("nodes") or [])
+            if str(n.get("id") or "") in kept_ids
+            or str(n.get("id") or "") in skeleton_ids
+            or "industrychain" in str(n.get("type") or "").casefold()
+        ]
+        return {"nodes": nodes, "edges": edges}
+
+    @staticmethod
+    def _merge_graphs(
+        base: dict[str, list[Any]], extra: dict[str, list[Any]]
+    ) -> dict[str, list[Any]]:
+        """合并两个子图，节点按 id、边按 (source, target, label) 去重（base 优先）。
+
+        Args:
+            base: 锚点子图。
+            extra: 分层种子扩展出的补充子图。
+
+        Returns:
+            合并后的 ``{"nodes": [...], "edges": [...]}``。
+        """
+        nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, Any]] = []
+        seen_nodes: set[str] = set()
+        seen_edges: set[tuple[str, str, str]] = set()
+        for graph in (base, extra):
+            for node in graph.get("nodes") or []:
+                node_id = str(node.get("id") or "")
+                if not node_id or node_id in seen_nodes:
+                    continue
+                seen_nodes.add(node_id)
+                nodes.append(node)
+            for edge in graph.get("edges") or []:
+                key = (
+                    str(edge.get("source") or ""),
+                    str(edge.get("target") or ""),
+                    str(edge.get("label") or ""),
+                )
+                if key in seen_edges:
+                    continue
+                seen_edges.add(key)
+                edges.append(edge)
         return {"nodes": nodes, "edges": edges}
 
     @staticmethod
@@ -491,6 +552,14 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                         "subtitle": node.get("subtitle"),
                         "metric": None,
                         "metricValue": None,
+                        # 查到即记：子图节点已记录的溯源字段随回填透传，点击
+                        # 分层连线时溯源三要素不缺（此前回填丢字段，前端
+                        # 只能显示「—」）。
+                        "sourceTable": node.get("sourceTable"),
+                        "sourceField": node.get("sourceField"),
+                        "sourceRecordId": node.get("sourceRecordId"),
+                        "ingestBatch": node.get("ingestBatch"),
+                        "ingestTime": node.get("ingestTime"),
                     }
                 )
                 if len(items) >= layer_limit:

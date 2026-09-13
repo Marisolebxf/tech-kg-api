@@ -343,6 +343,43 @@ describe("panoramaNodeRelationSummaries", () => {
 
     expect(summaries.size).toBe(0);
   });
+
+  it("传入 edges 时仅统计指定边集合（画布口径，与画布渲染数量一致）", () => {
+    const response = relationResponse();
+    // 子图全量有 6 条边，画布口径只渲染其中 2 条。
+    const summaries = panoramaNodeRelationSummaries(response, {
+      edges: [
+        { source: "chain_1", target: "node_0", label: "HAS_NODE", data: {} },
+        { source: "chain_1", target: "node_1", label: "HAS_NODE", data: {} },
+      ],
+    });
+
+    expect(summaries.get("chain_1")).toContain("共 2 条：");
+    expect(summaries.has("node_0")).toBe(true);
+    expect(summaries.has("node_2")).toBe(false);
+  });
+
+  it("传入 labelById 时优先用它解析端点名（画布虚拟中心等展示元素）", () => {
+    const response = relationResponse();
+    // 分层展示连线：虚拟中心不在全量实体并集里，靠 labelById 显示产业名。
+    const summaries = panoramaNodeRelationSummaries(response, {
+      edges: [
+        {
+          source: "__panorama_center__",
+          target: "node_0",
+          label: "关键技术",
+          data: {},
+        },
+      ],
+      labelById: new Map([["__panorama_center__", "集成电路"]]),
+    });
+
+    expect(summaries.get("node_0")).toBe("共 1 条：关键技术 ← 集成电路");
+    // node_0 不在 labelById 里，回退全量并集标签「环节1」。
+    expect(summaries.get("__panorama_center__")).toBe(
+      "共 1 条：关键技术 → 环节1",
+    );
+  });
 });
 
 describe("panoramaEdgeConfidence", () => {
@@ -513,6 +550,117 @@ describe("panoramaProvenanceCards", () => {
     });
 
     expect(cards).toEqual([]);
+  });
+
+  it("传入画布口径时仅展示可见实体卡与指定真实边的关系卡", () => {
+    const response = provenanceResponse();
+    response.graph.edges.push({
+      source: "person_1",
+      target: "chain_IC0007",
+      label: "COVERS_CHAIN",
+      data: {},
+    });
+    // 画布只渲染 org_1 / person_1 两个节点与一条真实边。
+    const cards = panoramaProvenanceCards(response, {
+      visibleNodeIds: new Set(["org_1", "person_1"]),
+      edges: [
+        {
+          source: "person_1",
+          target: "org_1",
+          label: "AFFILIATED_WITH",
+          data: {},
+        },
+      ],
+    });
+
+    expect(cards.map((card) => card.id)).toEqual([
+      "node:org_1",
+      "node:person_1",
+      "edge:0:person_1:org_1",
+    ]);
+  });
+
+  it("画布口径下选中边只在指定真实边范围内匹配关系卡", () => {
+    const response = provenanceResponse();
+    // 选中边存在于子图全量边中，但不在画布渲染的边集合里。
+    const cards = panoramaProvenanceCards(response, {
+      selectedEdge: {
+        source: "person_1",
+        target: "org_1",
+        label: "AFFILIATED_WITH",
+      },
+      edges: [],
+    });
+
+    expect(cards).toEqual([]);
+  });
+
+  it("点击连到虚拟中心的分层连线：标题显示产业名，合成端点记录派生来源", () => {
+    const response = provenanceResponse();
+    // 子图没有 IndustryChain 节点时画布中心是页面合成的 __panorama_center__。
+    const cards = panoramaProvenanceCards(response, {
+      selectedEdge: {
+        source: "__panorama_center__",
+        target: "person_1",
+        label: "汇聚核心专家",
+      },
+      visibleNodeIds: new Set(["__panorama_center__", "person_1"]),
+      edges: [],
+      matchEdges: [
+        {
+          source: "__panorama_center__",
+          target: "person_1",
+          label: "汇聚核心专家",
+          data: { inferred: true },
+        },
+      ],
+      labelById: new Map([
+        ["__panorama_center__", "集成电路"],
+        ["person_1", "张明远"],
+      ]),
+    });
+
+    expect(cards).toHaveLength(1);
+    // 标题与区段名显示画布标签（产业名），而不是内部合成 id。
+    expect(cards[0].title).toContain("集成电路 → 张明远");
+    expect(cards[0].sections[0].title).toBe("源实体：集成电路");
+    // 合成展示元素按「查到即记」派生口径记录来源，不再全部显示「—」。
+    expect(cards[0].sections[0].rows).toEqual([
+      ["源数据表", "页面合成 · 查询入参"],
+      ["英文字段名", "industry"],
+      ["图空间 VID", "—"],
+    ]);
+  });
+
+  it("点击分层展示连线（matchEdges 含 inferred 标记）出关系卡", () => {
+    const response = provenanceResponse();
+    // 画布分层展示连线：虚拟中心 → 分层实体，不在子图真实边里。
+    // edges 只含真实边（未选中时展示的卡），matchEdges 含全部画布连线。
+    const cards = panoramaProvenanceCards(response, {
+      selectedEdge: {
+        source: "chain_IC0007",
+        target: "person_1",
+        label: "汇聚核心专家",
+      },
+      visibleNodeIds: new Set(["chain_IC0007", "person_1"]),
+      edges: [],
+      matchEdges: [
+        {
+          source: "chain_IC0007",
+          target: "person_1",
+          label: "汇聚核心专家",
+          data: { inferred: true },
+        },
+      ],
+    });
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0].title).toContain("集成电路 → 张明远");
+    // 两端实体的溯源三要素照常展示，不再附带连线说明区段。
+    expect(cards[0].sections.map((section) => section.title)).toEqual([
+      "源实体：集成电路",
+      "目标实体：张明远",
+    ]);
   });
 
   it("实体缺少溯源字段时三要素行显示占位符", () => {

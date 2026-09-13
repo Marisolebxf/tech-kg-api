@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from service import industry_chain_panorama as panorama_module
 from service.industry_chain_panorama import IndustryChainPanoramaService
 
 
@@ -342,11 +343,57 @@ def test_backfill_empty_layers_uses_real_anchor_subgraph() -> None:
             "subtitle": "上游",
             "metric": None,
             "metricValue": None,
+            "sourceTable": None,
+            "sourceField": None,
+            "sourceRecordId": None,
+            "ingestBatch": None,
+            "ingestTime": None,
         }
     ]
     assert result[1]["items"][0]["id"] == "org_1"
     assert result[2]["items"] == []
     assert result[0]["total"] == 1
+
+
+def test_backfill_empty_layers_carries_subgraph_provenance() -> None:
+    """回填分层的实体要带上子图节点已记录的溯源字段（查到即记），否则
+    前端点击分层连线时源数据表/英文字段名只能显示「—」。"""
+    service = IndustryChainPanoramaService()
+    layers = [
+        {"key": "leading_enterprise", "title": "领军企业", "total": 0, "items": []},
+    ]
+    graph = {
+        "nodes": [
+            {
+                "id": "org_1",
+                "type": "Organization",
+                "label": "集成电路企业",
+                "subtitle": None,
+                "sourceTable": "dwd_org_stock_base",
+                "sourceField": "org_id",
+                "sourceRecordId": "org_1",
+                "ingestBatch": "batch_20260901",
+                "ingestTime": "2026-09-01 00:00:00",
+            },
+        ],
+        "edges": [],
+    }
+
+    result = service._backfill_empty_layers_from_graph(layers, graph, top_k=5)
+
+    assert result[0]["items"][0] == {
+        "id": "org_1",
+        "label": "集成电路企业",
+        "type": "organization",
+        "subtitle": None,
+        "metric": None,
+        "metricValue": None,
+        "sourceTable": "dwd_org_stock_base",
+        "sourceField": "org_id",
+        "sourceRecordId": "org_1",
+        "ingestBatch": "batch_20260901",
+        "ingestTime": "2026-09-01 00:00:00",
+    }
 
 
 def test_backfill_enterprise_matches_secondary_organization_label() -> None:
@@ -420,6 +467,73 @@ def test_backfill_dynamic_events_keeps_three_unique_real_events() -> None:
     ]
     assert all(item["type"] == "event" for item in result[0]["items"])
     assert result[0]["total"] == 3
+
+
+def test_filter_graph_keeps_chain_and_anchor_skeleton() -> None:
+    """关系筛选裁边不能把链节点/锚点裁掉：链只经 HAS_NODE 连环节，筛选不含
+    HAS_NODE（如只选产业链归属）时链会变成孤立点被丢弃，前端中心退化为
+    虚拟节点、丢失链的溯源信息。骨架节点始终保留。"""
+    service = IndustryChainPanoramaService()
+    graph = {
+        "nodes": [
+            {
+                "id": "chain_IC0007",
+                "type": "IndustryChain",
+                "label": "集成电路",
+                "sourceTable": "dwd_industry_chain_info",
+                "sourceField": "source_record_id",
+            },
+            {"id": "node_IC0007007", "type": "IndustryNode", "label": "芯片设计"},
+            {"id": "org_1", "type": "Organization", "label": "某企业"},
+            {"id": "paper_1", "type": "Paper", "label": "无关论文"},
+        ],
+        "edges": [
+            {"source": "chain_IC0007", "target": "node_IC0007007", "label": "HAS_NODE"},
+            {
+                "source": "org_1",
+                "target": "node_IC0007007",
+                "label": "BELONGS_TO_NODE",
+            },
+            {"source": "paper_1", "target": "org_1", "label": "COVERS_CHAIN"},
+        ],
+    }
+
+    # 页面「产业链归属」筛选：只保留 BELONGS_TO_NODE 边。
+    result = service._filter_graph_by_relation_types(
+        graph, ["BELONGS_TO_NODE", "COAUTHOR_WITH"], anchor_id="node_IC0007007"
+    )
+
+    # 链节点（经被裁掉的 HAS_NODE 连图）与锚点节点保留；无关论文被裁掉。
+    assert [node["id"] for node in result["nodes"]] == [
+        "chain_IC0007",
+        "node_IC0007007",
+        "org_1",
+    ]
+    assert [edge["label"] for edge in result["edges"]] == ["BELONGS_TO_NODE"]
+    # 链节点的溯源字段随骨架保留，前端中心可展示真实溯源信息。
+    chain = result["nodes"][0]
+    assert chain["sourceTable"] == "dwd_industry_chain_info"
+
+
+def test_filter_graph_without_skeleton_keeps_only_connected_nodes() -> None:
+    """非骨架节点维持原行为：筛选后无保留边相连的节点照常裁掉。"""
+    service = IndustryChainPanoramaService()
+    graph = {
+        "nodes": [
+            {"id": "person_1", "type": "Person", "label": "专家A"},
+            {"id": "person_2", "type": "Person", "label": "专家B"},
+            {"id": "paper_1", "type": "Paper", "label": "论文"},
+        ],
+        "edges": [
+            {"source": "person_1", "target": "person_2", "label": "COAUTHOR_WITH"},
+            {"source": "person_1", "target": "paper_1", "label": "AUTHORED_BY"},
+        ],
+    }
+
+    result = service._filter_graph_by_relation_types(graph, ["COAUTHOR_WITH"])
+
+    assert [node["id"] for node in result["nodes"]] == ["person_1", "person_2"]
+    assert [edge["label"] for edge in result["edges"]] == ["COAUTHOR_WITH"]
 
 
 @pytest.mark.asyncio
@@ -681,3 +795,174 @@ def test_backfill_dynamic_events_uses_chain_news() -> None:
     ]
     assert all(item["type"] == "event" for item in result[0]["items"])
     assert result[0]["total"] == 2
+
+
+def test_merge_graphs_dedupes_nodes_and_edges_base_first() -> None:
+    service = IndustryChainPanoramaService()
+    base = {
+        "nodes": [
+            {"id": "chain_1", "label": "人工智能"},
+            {"id": "org_1", "label": "锚点侧企业"},
+        ],
+        "edges": [
+            {"source": "news_1", "target": "chain_1", "label": "COVERS_CHAIN"},
+        ],
+    }
+    extra = {
+        "nodes": [
+            {"id": "org_1", "label": "种子侧企业（重复）"},
+            {"id": "person_1", "label": "专家"},
+        ],
+        "edges": [
+            {"source": "news_1", "target": "chain_1", "label": "COVERS_CHAIN"},
+            {"source": "person_1", "target": "org_1", "label": "AFFILIATED_WITH"},
+        ],
+    }
+
+    merged = service._merge_graphs(base, extra)
+
+    assert [node["id"] for node in merged["nodes"]] == ["chain_1", "org_1", "person_1"]
+    # 重复节点保留 base 版本。
+    assert merged["nodes"][1]["label"] == "锚点侧企业"
+    assert [edge["label"] for edge in merged["edges"]] == ["COVERS_CHAIN", "AFFILIATED_WITH"]
+
+
+@pytest.mark.asyncio
+async def test_query_refills_still_empty_layers_from_seed_expansion(monkeypatch) -> None:
+    panorama_module._panorama_cache.clear()
+    """锚点子图过薄（如新链只挂了新闻）时空层回填仍拿不到实体：要用分层
+    种子再扩一轮子图合并回填，领军企业/领军专家不能因为锚点解析到薄链
+    而从有数据变成 0。"""
+    service = IndustryChainPanoramaService()
+    fetch_graph_anchors: list[str | None] = []
+
+    async def _fake_fetch_layers(client, industry, top_k):
+        return (
+            [
+                {
+                    "key": "core_technology",
+                    "title": "核心技术",
+                    "total": 1,
+                    "items": [{"id": "kw_1", "label": "人工智能"}],
+                },
+                {"key": "leading_enterprise", "title": "领军企业", "total": 0, "items": []},
+                {"key": "leading_expert", "title": "领军专家", "total": 0, "items": []},
+                {"key": "flagship_achievement", "title": "产业动态事件", "total": 0, "items": []},
+            ],
+            ["person_1"],
+        )
+
+    async def _fake_fetch_graph(client, seed_vids, anchor_id, depth, relation_types=None):
+        fetch_graph_anchors.append(anchor_id)
+        if anchor_id:
+            # 锚点（薄链）子图：只有链节点和挂链新闻，没有任何企业/专家。
+            return {
+                "nodes": [
+                    {"id": "chain_1", "type": "IndustryChain", "label": "人工智能"},
+                    {"id": "news_1", "type": "News", "label": "人工智能产业政策发布"},
+                ],
+                "edges": [{"source": "news_1", "target": "chain_1", "label": "COVERS_CHAIN"}],
+            }
+        # 种子扩展子图：专家及其任职企业（AFFILIATED_WITH）。
+        return {
+            "nodes": [
+                {"id": "person_1", "type": "Person", "label": "人工智能专家"},
+                {"id": "org_1", "type": "Organization", "label": "人工智能企业"},
+            ],
+            "edges": [{"source": "person_1", "target": "org_1", "label": "AFFILIATED_WITH"}],
+        }
+
+    async def _fake_resolve_anchor(client, industry, anchor_id):
+        return "chain_1"
+
+    class _GraphCtx:
+        async def __aenter__(self):
+            return _FakeGraphClient()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(service, "_fetch_layers", _fake_fetch_layers)
+    monkeypatch.setattr(service, "_fetch_graph", _fake_fetch_graph)
+    monkeypatch.setattr(service, "_resolve_anchor_from_keyword", _fake_resolve_anchor)
+    monkeypatch.setattr("service.industry_chain_panorama.graph_api", lambda **kwargs: _GraphCtx())
+
+    result = await service.query(industry="人工智能", depth=2, top_k=5)
+
+    # 第二轮用分层种子扩展（anchor=None），两轮子图合并。
+    assert fetch_graph_anchors == ["chain_1", None]
+    layer_by_key = {layer["key"]: layer for layer in result["layers"]}
+    assert layer_by_key["flagship_achievement"]["items"][0]["id"] == "news_1"
+    assert layer_by_key["leading_expert"]["items"][0]["id"] == "person_1"
+    assert layer_by_key["leading_enterprise"]["items"][0]["id"] == "org_1"
+    graph_ids = {node["id"] for node in result["graph"]["nodes"]}
+    assert graph_ids == {"chain_1", "news_1", "person_1", "org_1"}
+
+
+@pytest.mark.asyncio
+async def test_query_skips_seed_expansion_when_layers_already_filled(monkeypatch) -> None:
+    panorama_module._panorama_cache.clear()
+    """分层全部非空时不做种子二次扩展，锚点子图行为与既有验证结果保持一致。"""
+    service = IndustryChainPanoramaService()
+    fetch_graph_anchors: list[str | None] = []
+
+    async def _fake_fetch_layers(client, industry, top_k):
+        return (
+            [
+                {
+                    "key": "core_technology",
+                    "title": "核心技术",
+                    "total": 1,
+                    "items": [{"id": "kw_1", "label": "人工智能"}],
+                },
+                {
+                    "key": "leading_enterprise",
+                    "title": "领军企业",
+                    "total": 1,
+                    "items": [{"id": "org_1", "label": "人工智能企业"}],
+                },
+                {
+                    "key": "leading_expert",
+                    "title": "领军专家",
+                    "total": 1,
+                    "items": [{"id": "person_1", "label": "人工智能专家"}],
+                },
+                {
+                    "key": "flagship_achievement",
+                    "title": "产业动态事件",
+                    "total": 1,
+                    "items": [{"id": "news_1", "label": "人工智能产业政策发布"}],
+                },
+            ],
+            ["person_1"],
+        )
+
+    async def _fake_fetch_graph(client, seed_vids, anchor_id, depth, relation_types=None):
+        fetch_graph_anchors.append(anchor_id)
+        return {
+            "nodes": [
+                {"id": "chain_1", "type": "IndustryChain", "label": "人工智能"},
+                {"id": "news_1", "type": "News", "label": "人工智能产业政策发布"},
+            ],
+            "edges": [{"source": "news_1", "target": "chain_1", "label": "COVERS_CHAIN"}],
+        }
+
+    async def _fake_resolve_anchor(client, industry, anchor_id):
+        return "chain_1"
+
+    class _GraphCtx:
+        async def __aenter__(self):
+            return _FakeGraphClient()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(service, "_fetch_layers", _fake_fetch_layers)
+    monkeypatch.setattr(service, "_fetch_graph", _fake_fetch_graph)
+    monkeypatch.setattr(service, "_resolve_anchor_from_keyword", _fake_resolve_anchor)
+    monkeypatch.setattr("service.industry_chain_panorama.graph_api", lambda **kwargs: _GraphCtx())
+
+    result = await service.query(industry="人工智能", depth=2, top_k=5)
+
+    assert fetch_graph_anchors == ["chain_1"]
+    assert {node["id"] for node in result["graph"]["nodes"]} == {"chain_1", "news_1"}

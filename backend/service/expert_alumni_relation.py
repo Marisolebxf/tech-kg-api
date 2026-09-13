@@ -19,6 +19,7 @@ from service.confidence_scoring import (
     confidence_result,
     edge_confidence,
 )
+from service.provenance_recorder import record_node_source
 
 STUDIED_AT_EDGE = "STUDIED_AT"
 EDGE_LIMIT = 500
@@ -239,10 +240,11 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
 
     @staticmethod
     def _person_provenance(props: dict[str, Any], vid: str) -> dict[str, str]:
-        """Return only provenance values physically stored on the graph node."""
+        """查到即记：入图血缘透传；无血缘时如实记录图库查询来源。"""
+        recorded = record_node_source(props, ("Person",))
         return {
-            "sourceTable": str(props.get("source_table") or "-"),
-            "sourceField": str(props.get("source_field") or "-"),
+            "sourceTable": recorded["sourceTable"],
+            "sourceField": recorded["sourceField"],
             "graphVid": vid,
         }
 
@@ -1077,7 +1079,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                             f"{(item.get('interactions') or {}).get('summary') or ''}"
                         ),
                     }
-                    for item in items[:8]
+                    # 覆盖全部返回 items（数量已由查询 limit 封顶），
+                    # 保证前端点击任意校友节点都能按 graphVid 筛中证据。
+                    for item in items
                 ],
             ],
         }

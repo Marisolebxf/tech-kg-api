@@ -175,8 +175,9 @@ def test_pair_same_school_and_degree():
     assert source_evidence["sourceField"] == "education_source_id"
     assert source_evidence["graphVid"] == "S1"
     alumni_evidence = resp["provenance"]["evidences"][1]
-    assert alumni_evidence["technicalTable"] == "-"
-    assert alumni_evidence["sourceField"] == "-"
+    # 查到即记：无入图血缘的校友节点如实记录图库查询来源与识别属性。
+    assert alumni_evidence["technicalTable"] == "trs-graph / space=dev"
+    assert alumni_evidence["sourceField"] == "name_zh"
     assert alumni_evidence["graphVid"] == "S2"
     assert resp["rules"][0]["name"] == "教育经历匹配算法"
     assert "同校" in resp["dimensionsCatalog"]

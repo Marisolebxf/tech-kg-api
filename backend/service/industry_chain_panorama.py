@@ -30,6 +30,7 @@ from typing import Any
 from infra.graph_api_client import GraphAPIClient, GraphAPIError, graph_api
 from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
+from service.provenance_recorder import record_node_source
 
 logger = logging.getLogger(__name__)
 
@@ -889,6 +890,8 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         subtitle_prop = self._first_prop_value(
             props, ("scholar_org", "org_name", "affiliation", "industry_class", "node_type")
         )
+        # 查到即记：入图血缘透传；无血缘时记录图库查询来源（保证非空）。
+        recorded = record_node_source(props, node.get("labels") or [], space=self._graph_space())
         return {
             "id": str(node.get("id") or ""),
             "label": label,
@@ -897,8 +900,8 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "metric": definition["metric_label"] if metric_value_num is not None else None,
             "metricValue": metric_value_num,
             "sourceSystem": self._first_prop_value(props, ("source_system", "source")),
-            "sourceTable": self._first_prop_value(props, ("source_table",)),
-            "sourceField": self._first_prop_key(props, definition["name_props"]),
+            "sourceTable": recorded["sourceTable"],
+            "sourceField": recorded["sourceField"],
             "sourceRecordId": self._first_prop_value(props, ("source_record_id",)),
             "ingestBatch": self._first_prop_value(props, ("ingest_batch",)),
             "ingestTime": self._first_prop_value(props, ("ingest_time",)),
@@ -949,9 +952,18 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             items = layer.get("items") or []
             if not items:
                 continue
-            for item in items[:5]:
-                if not item.get("sourceRecordId"):
-                    continue
+            # 覆盖分层全部 items（每层数量已被 topK 封顶），保证前端
+            # 点击任意分层节点都能按 graphVid 筛中证据；查到即记——
+            # 无入图血缘的 item 也如实记录图库查询来源。
+            for item in items:
+                source_table = str(item.get("sourceTable") or "")
+                if source_table.startswith("trs-graph / space="):
+                    item_note = "节点未携带入图血缘，来源为本次图库查询"
+                else:
+                    item_note = (
+                        f"入库批次：{item.get('ingestBatch') or '—'}；"
+                        f"入库时间：{item.get('ingestTime') or '—'}"
+                    )
                 evidences.append(
                     {
                         "title": f"{layer.get('title') or layer.get('key')} · {item.get('label')}",
@@ -960,16 +972,13 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                         "recordId": str(item.get("sourceRecordId") or ""),
                         "fieldIdentifier": str(item.get("id") or ""),
                         # 溯源三要素：MySQL 源表名 / MySQL 英文字段名 / 图空间 VID
-                        "sourceTable": str(item.get("sourceTable") or "—"),
+                        "sourceTable": source_table or "—",
                         "sourceField": str(item.get("sourceField") or "—"),
                         "graphVid": str(item.get("id") or ""),
-                        "summary": (
-                            f"入库批次：{item.get('ingestBatch') or '—'}；"
-                            f"入库时间：{item.get('ingestTime') or '—'}"
-                        ),
+                        "summary": item_note,
                     }
                 )
-            labels = [str(item.get("label") or item.get("id") or "") for item in items[:5]]
+            labels = [str(item.get("label") or item.get("id") or "") for item in items]
             evidences.append(
                 {
                     "title": f"分层 · {layer.get('title') or layer.get('key')}",
@@ -1013,10 +1022,17 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "evidences": evidences,
         }
 
+    @staticmethod
+    def _graph_space() -> str:
+        return TRSGraphSettings.from_env().space or "dev"
+
     def _node_to_graph_node(self, node: dict[str, Any]) -> dict[str, Any]:
         props = node.get("properties") or {}
         labels = node.get("labels") or []
         primary_label = labels[0] if labels else "Node"
+        # 查到即记：子图（展开层）节点的溯源字段。带血缘透传；无血缘时
+        # 记录图库查询来源标记，保证前端点击任意展开层节点都能合成溯源卡。
+        recorded = record_node_source(props, labels, space=self._graph_space())
         return {
             "id": str(node.get("id") or ""),
             "type": primary_label,
@@ -1039,6 +1055,11 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "subtitle": self._first_prop_value(
                 props, ("scholar_org", "org_name", "affiliation", "industry_class", "node_type")
             ),
+            "sourceTable": recorded["sourceTable"],
+            "sourceField": recorded["sourceField"],
+            "sourceRecordId": self._first_prop_value(props, ("source_record_id",)),
+            "ingestBatch": self._first_prop_value(props, ("ingest_batch",)),
+            "ingestTime": self._first_prop_value(props, ("ingest_time",)),
             "data": {"labels": labels},
         }
 
@@ -1074,14 +1095,6 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             value = props.get(key)
             if value:
                 return str(value)
-        return None
-
-    @staticmethod
-    def _first_prop_key(props: dict[str, Any], keys: tuple[str, ...]) -> str | None:
-        """返回第一个有非空值的候选属性名，用于溯源展示「英文字段名」。"""
-        for key in keys:
-            if props.get(key):
-                return key
         return None
 
     def _build_summary(

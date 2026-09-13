@@ -197,7 +197,7 @@ def test_relation_confidences_follow_structured_evidence_rules():
 
 
 @pytest.mark.asyncio
-async def test_coauthor_edge_fallback_keeps_unproven_fields_empty():
+async def test_provenance_records_query_time_sources():
     body = ExpertPaperCooperationDemoRequest(
         expertAId="A",
         expertBId="B",
@@ -231,16 +231,24 @@ async def test_coauthor_edge_fallback_keeps_unproven_fields_empty():
     }
     provenance = result["_provenance"]
     assert provenance["sourceDatabase"].startswith("trs-graph / space=")
+    # 查到即记：带入图血缘的专家透传 MySQL 血缘。
     expert_evidence = next(
         item for item in provenance["evidences"] if item["graphVid"] == "person_A"
     )
     assert expert_evidence == {
-        "title": "实体 · 专家甲",
+        "title": "专家 · 专家甲",
         "sourceTable": "dwd_scholar",
         "sourceField": "scholar_id",
         "graphVid": "person_A",
+        "summary": "入库批次：BATCH_PERSON；入库时间：2026-08-23 09:21:28",
     }
-    assert all(not item["title"].startswith("关系 ·") for item in provenance["evidences"])
+    # 无入图血缘的专家如实记录图库查询来源与识别属性，不再默认断言 dwd_scholar。
+    expert_b_evidence = next(
+        item for item in provenance["evidences"] if item["graphVid"] == "person_B"
+    )
+    assert expert_b_evidence["sourceTable"] == "trs-graph / space=dev"
+    assert expert_b_evidence["sourceField"] == "name_zh"
+    assert expert_b_evidence["summary"] == "节点未携带入图血缘，来源为本次图库查询"
 
 
 @pytest.mark.asyncio

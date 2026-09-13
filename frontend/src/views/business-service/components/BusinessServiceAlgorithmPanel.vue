@@ -927,6 +927,13 @@ function derivedGraphFromResponse(
       relations: item.subtitle || item.type || visual.entityType,
       evidence: [`子图扩展 · depth=${resp.input?.depth ?? "—"}`],
       level: 4 + row,
+      // 展开层节点在证据列表里没有对应记录，带上入图溯源字段，
+      // 供溯源筛选在点击时现场合成证据卡。
+      sourceTable: item.sourceTable || undefined,
+      sourceField: item.sourceField || undefined,
+      sourceRecordId: item.sourceRecordId || undefined,
+      ingestBatch: item.ingestBatch || undefined,
+      ingestTime: item.ingestTime || undefined,
     };
     nodes.push(node);
     idMap.set(node.id, node);
@@ -1002,6 +1009,82 @@ function formatCooperationPeriod(
 ): string {
   if (!period?.start) return "";
   return `${period.start}${period.end ? ` 至 ${period.end}` : " 至今"}`;
+}
+
+/** 论文合作：后端按"查到即记"组装的真实子图（专家/论文/研究主题/期刊/合作者）。
+ * 节点 id 即真实 vid，溯源点击筛选直接精确匹配，无需 preset 别名换算。 */
+function buildPaperCoopRealGraph(
+  sr: Record<string, any>,
+  graph: { nodes: any[]; edges: any[] },
+): { nodes: GraphNodeData[]; edges: GraphEdgeData[] } {
+  const relationConfidences = sr.relationConfidences || {};
+  const nodeTypeByBackend: Record<string, GraphNodeData["nodeType"]> = {
+    expert: "expert",
+    paper: "paper",
+    keyword: "topic",
+    venue: "org",
+    collaborator: "expert",
+  };
+  const entityTypeByBackend: Record<string, string> = {
+    expert: "科技专家",
+    paper: "论文成果",
+    keyword: "研究主题",
+    venue: "期刊/会议",
+    collaborator: "合作专家",
+  };
+  // 布局：两位专家左右分列，合作论文绕中心，主题/期刊/合作者在外圈。
+  const experts = graph.nodes.filter((node) => node.type === "expert");
+  const others = graph.nodes.filter((node) => node.type !== "expert");
+  const positions = new Map<string, { x: number; y: number }>();
+  experts.forEach((node, index) => {
+    positions.set(String(node.id), {
+      x: index === 0 ? 200 : 660,
+      y: 300,
+    });
+  });
+  others.forEach((node, index) => {
+    const angle =
+      (Math.PI * 2 * index) / Math.max(1, others.length) - Math.PI / 2;
+    const radius = node.type === "paper" ? 190 : 280;
+    positions.set(String(node.id), {
+      x: 430 + Math.cos(angle) * radius,
+      y: 300 + Math.sin(angle) * radius * 0.8,
+    });
+  });
+  const nodes: GraphNodeData[] = graph.nodes.map((node) => {
+    const type = String(node.type || "");
+    const position = positions.get(String(node.id));
+    return {
+      id: String(node.id),
+      label: String(node.label || node.id),
+      nodeType: nodeTypeByBackend[type] || "expert",
+      x: position?.x ?? 220,
+      y: position?.y ?? 200,
+      entityType: entityTypeByBackend[type] || "实体",
+      relations: String(node.subtitle || ""),
+      evidence: [],
+    };
+  });
+  const categoryByLabel: Record<string, string> = {
+    论文合作: "论文合作",
+    发表: "论文作者",
+    研究主题: "论文主题",
+    发表于: "期刊/会议",
+    参与合著: "合作团队",
+  };
+  const edges: GraphEdgeData[] = graph.edges.map((edge, index) => {
+    const label = String(edge.label || "");
+    return {
+      id: `paper-coop-edge-${index}`,
+      from: String(edge.source),
+      to: String(edge.target),
+      label,
+      category: categoryByLabel[label] || label || "关联",
+      confidence:
+        label === "论文合作" ? relationConfidences.paperCooperation : undefined,
+    };
+  });
+  return { nodes, edges };
 }
 
 function buildLiveGraph(
@@ -1193,9 +1276,15 @@ function buildLiveGraph(
       );
     }
   } else if (key === "paper-cooperation") {
-    // 保持 preset 图结构（节点位置/类型/边连接）不变，仅用 API 查询结果覆盖节点与边信息
+    // 优先使用后端"查到即记"组装的真实子图（graph 与 structuredResult 平级）；
+    // 无 graph 字段时回退 preset 演示图
     const sr = res?.structuredResult || data?.structuredResult;
     if (!sr) return null;
+    const realGraph = res?.graph || data?.graph;
+    if (realGraph?.nodes?.length) {
+      return buildPaperCoopRealGraph(sr, realGraph);
+    }
+    // 保持 preset 图结构（节点位置/类型/边连接）不变，仅用 API 查询结果覆盖节点与边信息
     const preset = getServiceGraphPreset("paper-cooperation");
     const authors = sr.authorList || [];
     const units = sr.authorUnits || [];
@@ -2241,6 +2330,41 @@ const liveProvenance = computed(() => {
   return null;
 });
 
+/** 论文合作：响应无 graph 字段，画板用 preset 语义节点（core/expert-1/paper-1…）。
+ * 后端证据按固定顺序生成（专家A、专家B、其后为论文实体），据此把真实 vid
+ * 映射到 preset 节点 id，让"点击节点/边筛选溯源"与其它模块口径一致。 */
+const paperCoopEvidenceAlias = computed(() => {
+  const map = new Map<string, Set<string>>();
+  if (!isPaperCooperation.value) return map;
+  const evs = liveProvenance.value?.evidences ?? [];
+  const paperVids = new Set<string>();
+  evs.forEach((ev: any, index: number) => {
+    const vid = String(ev.graphVid || "");
+    if (!vid) return;
+    if (index === 0) map.set("core", new Set([vid]));
+    else if (index === 1) map.set("expert-1", new Set([vid]));
+    else paperVids.add(vid);
+  });
+  if (paperVids.size) map.set("paper-1", paperVids);
+  return map;
+});
+
+/** 证据列表里没有对应记录、但节点自身带溯源字段（如全景展开层节点）时，
+ * 用节点字段现场合成一张证据卡，而不是回退全量列表。 */
+function synthesizeNodeEvidence(node: GraphNodeData) {
+  if (!node.sourceTable && !node.ingestBatch && !node.sourceSystem) return null;
+  return {
+    title: `${node.label}（${node.entityType}）`,
+    summary: `${node.entityType}入图来源`,
+    sourceTable: node.sourceTable,
+    sourceField: node.sourceField,
+    recordId: node.sourceRecordId,
+    graphVid: node.id,
+    ingestBatch: node.ingestBatch,
+    ingestTime: node.ingestTime,
+  };
+}
+
 /** 溯源证据列表：未点击时全量，点击节点/边时按 graphVid 筛选。 */
 const displayedProvenanceEvidences = computed(() => {
   const pv = liveProvenance.value;
@@ -2249,27 +2373,53 @@ const displayedProvenanceEvidences = computed(() => {
   const edge = selectedEdge.value;
   if (!node && !edge) return pv.evidences;
   if (node) {
-    const filtered = pv.evidences.filter((ev: any) => ev.graphVid === node.id);
-    return filtered.length ? filtered : pv.evidences;
+    // 论文合作画板是 preset 语义节点，先换算成真实 vid 再精确匹配。
+    const alias = isPaperCooperation.value
+      ? paperCoopEvidenceAlias.value.get(node.id)
+      : undefined;
+    const filtered = alias
+      ? pv.evidences.filter((ev: any) => alias.has(String(ev.graphVid || "")))
+      : pv.evidences.filter((ev: any) => ev.graphVid === node.id);
+    if (filtered.length) return filtered;
+    // 无证据命中的节点不再回退全量列表：要么用节点自带入图元数据合成溯源，
+    // 要么明确显示"无独立溯源"（虚拟机构节点 / 演示节点本就没有图库证据）。
+    const synthesized = synthesizeNodeEvidence(node);
+    return synthesized ? [synthesized] : [];
   }
   if (edge) {
-    // 机构从属边（"关联机构"）连接的是虚拟机构节点，溯源里没有对应记录，
-    // 不能按专家关系边的规则去匹配，否则永远 0 命中而回退展示全部证据。
-    if (edge.category === "机构关联") {
-      return [];
+    // 论文合作的 preset 边两端换算成真实 vid 集合后按集合匹配；
+    // 其它模块沿用子串匹配（证据 graphVid 为完整 vid，等价于精确匹配）。
+    const aliasFrom = isPaperCooperation.value
+      ? paperCoopEvidenceAlias.value.get(edge.from)
+      : undefined;
+    const aliasTo = isPaperCooperation.value
+      ? paperCoopEvidenceAlias.value.get(edge.to)
+      : undefined;
+    if (aliasFrom || aliasTo) {
+      const filtered = pv.evidences.filter((ev: any) => {
+        const vid = String(ev.graphVid || "");
+        return aliasFrom?.has(vid) || aliasTo?.has(vid);
+      });
+      // 命中为空同样不回退全量，交给空态提示说明。
+      return filtered;
     }
-    // 点击边 → 展示两端实体的溯源（单实体溯源的 graphVid 不可能同时包含两端，
-    // 原来的 && 条件永远不命中而回退全量，不符合"点击边溯源跟着更新"）。
+    // 点击边 → 展示两端实体的溯源。复合 vid（"A -> B" 格式的关系证据）
+    // 必须两端都在这条边上才算命中：单专家模式下所有边共享同一 from 端，
+    // 若按单端子串匹配，其它关系的复合证据卡会混进当前边的筛选结果。
+    // 命中为空时同样返回空列表，由空态提示说明"无独立溯源"。
     const filtered = pv.evidences.filter((ev: any) => {
       const vid = String(ev.graphVid || "");
+      if (vid.includes("->")) {
+        return vid.includes(edge.from) && vid.includes(edge.to);
+      }
       return vid.includes(edge.from) || vid.includes(edge.to);
     });
-    return filtered.length ? filtered : pv.evidences;
+    return filtered;
   }
   return pv.evidences;
 });
 
-/** 溯源筛选提示：点击时若筛选命中则显示筛选范围，未命中回退全量时提示。 */
+/** 溯源筛选提示：点击时若筛选命中则显示筛选范围，未命中时说明无独立溯源。 */
 const provenanceFilterHint = computed(() => {
   const node = selectedNode.value;
   const edge = selectedEdge.value;
@@ -2279,17 +2429,14 @@ const provenanceFilterHint = computed(() => {
   const total = pv.evidences.length;
   const shown = displayedProvenanceEvidences.value.length;
   if (node) {
-    return shown < total
+    return shown
       ? `已筛选：节点 ${node.label}（${shown}/${total}）`
-      : `节点 ${node.label} 无独立溯源，展示全部`;
+      : `节点 ${node.label} 无独立溯源`;
   }
   if (edge) {
-    if (edge.category === "机构关联") {
-      return "机构从属边无对应溯源记录";
-    }
-    return shown < total
+    return shown
       ? `已筛选：边 ${edge.from}→${edge.to}（${shown}/${total}）`
-      : `该边无独立溯源，展示全部`;
+      : "该边无独立溯源";
   }
   return "";
 });
@@ -2775,7 +2922,10 @@ function derivedGraphFromExpertResponse(
       from: edge.source,
       to: edge.target,
       label,
-      category: label.includes("机构") ? "机构关联" : "直接关系",
+      // 机构从属边的 label 恒为"关联机构"（后端 _build_graph 固定值），必须精确匹配；
+      // 子串匹配会把"直接关系 / 同机构 + 共论文"这类真实关系边误判成机构从属边，
+      // 导致溯源/关系列表把它当机构边处理。
+      category: label === "关联机构" ? "机构关联" : "直接关系",
       confidence,
     });
   });
@@ -4329,9 +4479,12 @@ function clearGraphSelection() {
         >
           <header><strong>数据溯源</strong><span>实体来源</span></header>
           <h3>实体溯源</h3>
+          <p v-if="provenanceFilterHint" class="result-provenance__filter-hint">
+            {{ provenanceFilterHint }}
+          </p>
           <div class="result-provenance__evidence-list">
             <article
-              v-for="(ev, index) in liveProvenance.evidences"
+              v-for="(ev, index) in displayedProvenanceEvidences"
               :key="`${ev.graphVid || index}-${index}`"
             >
               <header>
@@ -4348,6 +4501,9 @@ function clearGraphSelection() {
               >
             </article>
           </div>
+          <p v-if="!displayedProvenanceEvidences.length" class="result-provenance__empty">
+            {{ provenanceFilterHint || "暂无溯源证据" }}
+          </p>
         </section>
         <section
           v-else-if="

@@ -139,6 +139,7 @@ class PaperCooperationProvenanceEvidence(BaseModel):
     sourceTable: str
     sourceField: str
     graphVid: str
+    summary: str = Field(default="", description="来源性质说明（入库血缘或图库查询）。")
 
 
 class PaperCooperationProvenance(BaseModel):
@@ -147,7 +148,31 @@ class PaperCooperationProvenance(BaseModel):
     evidences: list[PaperCooperationProvenanceEvidence] = Field(default_factory=list)
 
 
+class PaperCooperationGraphNode(BaseModel):
+    id: str
+    type: str
+    label: str
+    subtitle: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class PaperCooperationGraphEdge(BaseModel):
+    source: str
+    target: str
+    label: str
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class PaperCooperationGraph(BaseModel):
+    nodes: list[PaperCooperationGraphNode] = Field(default_factory=list)
+    edges: list[PaperCooperationGraphEdge] = Field(default_factory=list)
+
+
 class ExpertPaperCooperationStructuredResultOnlyResponse(BaseModel):
     structuredResult: StructuredPaperCooperationResult
     provenance: PaperCooperationProvenance
+    graph: PaperCooperationGraph = Field(
+        default_factory=PaperCooperationGraph,
+        description="查到即记组装的真实合作子图（专家/论文/主题/期刊/合作者）。",
+    )
     rules: list[dict[str, Any]] = Field(default_factory=list)

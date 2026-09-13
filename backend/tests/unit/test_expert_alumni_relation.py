@@ -134,6 +134,7 @@ def test_pair_same_school_and_degree():
     assert "共同论文" not in {row["label"] for row in resp["summaryRows"]}
     assert "共同专利" not in {row["label"] for row in resp["summaryRows"]}
     assert "共同项目" not in {row["label"] for row in resp["summaryRows"]}
+    assert not any(row["label"].startswith("成果 ") for row in resp["summaryRows"])
     assert resp["summaryRows"]
     assert resp["resultRows"][0]["label"] == "校友数量"
     assert resp["graph"]["nodes"]
@@ -240,6 +241,57 @@ def test_pair_mode_pages_all_interaction_edges():
     assert graph.get_node_edges.call_count >= 2
 
 
+def test_pair_summary_lists_each_shared_achievement_name_once():
+    source = _node("S1", {"name_zh": "甲", "education_background_institution_zh": "北京大学"})
+    target = _node("S2", {"name_zh": "乙", "education_background_institution_zh": "北京大学"})
+    achievements = {
+        "P1": _node("P1", {"title": "共同论文一"}, ["Paper"]),
+        "P2": _node("P2", {"title": "共同论文二"}, ["Paper"]),
+        "PT1": _node("PT1", {"title": "共同专利"}, ["Patent"]),
+        "PR1": _node("PR1", {"title": "共同项目"}, ["Project"]),
+    }
+    nodes = {"S1": source, "S2": target, **achievements}
+    edges = [
+        _edge("AUTHORED_BY", paper_id, person_id)
+        for paper_id in ("P1", "P2")
+        for person_id in ("S1", "S2")
+    ] + [
+        _edge(edge_type, achievement_id, person_id)
+        for edge_type, achievement_id in (("INVENTED_BY", "PT1"), ("HAS_PARTICIPANT", "PR1"))
+        for person_id in ("S1", "S2")
+    ]
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
+    graph.get_node_edges = MagicMock(
+        side_effect=lambda nid, **kwargs: [
+            edge
+            for edge in edges
+            if str(nid) in (edge.source_id, edge.target_id) and edge.type == kwargs.get("edge_type")
+        ]
+    )
+    graph._settings = SimpleNamespace(space="dev")
+
+    response = _svc(graph).query(expert_id="S1", target_expert_id="S2")
+
+    assert response["mode"] == "pair"
+    assert response["total"] == 1
+    assert response["items"][0]["interactions"]["sharedAchievements"]
+    assert [
+        (row["label"], row["value"])
+        for row in response["summaryRows"]
+        if row["label"].startswith("成果 ")
+    ] == [
+        ("成果 1", "共同论文一"),
+        ("成果 2", "共同论文二"),
+        ("成果 3", "共同专利"),
+        ("成果 4", "共同项目"),
+    ]
+    assert (
+        next(row["value"] for row in response["summaryRows"] if row["label"] == "共同成果总数")
+        == "4 项"
+    )
+
+
 def test_pair_not_alumni():
     a = _node("S1", {"name_zh": "甲", "education_background_institution_zh": "北京大学"})
     b = _node("S2", {"name_zh": "乙", "education_background_institution_zh": "清华大学"})
@@ -252,6 +304,7 @@ def test_pair_not_alumni():
     resp = _svc(graph).query(expert_id="S1", target_expert_id="S2")
     assert resp["total"] == 0
     assert resp["items"] == []
+    assert not any(row["label"].startswith("成果 ") for row in resp["summaryRows"])
     entities_by_id = {entity["id"]: entity for entity in resp["entities"]}
     assert entities_by_id["S1"]["relations"] == "与乙未形成校友关系（未命中共同院校）"
     assert entities_by_id["S2"]["relations"] == "与甲未形成校友关系（未命中共同院校）"
@@ -364,6 +417,7 @@ def test_list_via_studied_at_neighborhood():
     resp = _svc(graph).query(expert_id="S1", limit=10)
 
     assert resp["mode"] == "list"
+    assert not any(row["label"].startswith("成果 ") for row in resp["summaryRows"])
     assert resp["total"] == 1
     assert resp["items"][0]["alumniId"] == "S2"
     assert "同校" in resp["dimensionsCatalog"]

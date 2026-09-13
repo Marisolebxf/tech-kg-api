@@ -36,6 +36,12 @@ export interface PanoramaKeyEntity {
   subtitle: string | null;
   metric: string | null;
   metricValue: number | null;
+  /** 分层实体自身的入图溯源字段（与 PanoramaGraphNode 同款），缺失时为 null。 */
+  sourceTable?: string | null;
+  sourceField?: string | null;
+  sourceRecordId?: string | null;
+  ingestBatch?: string | null;
+  ingestTime?: string | null;
 }
 
 /**
@@ -88,6 +94,8 @@ export interface PanoramaGraphEdge {
  */
 export interface PanoramaSummary {
   industry: string | null;
+  /** 图库中的产业链名称（如 集成电路 / 低空经济），供摘要「产业链名称」统计展示。 */
+  industryChains?: string[];
   totalNodes: number;
   totalEdges: number;
   nodesByLabel: Record<string, number>;

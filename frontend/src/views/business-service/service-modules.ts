@@ -504,7 +504,6 @@ export const serviceModules: ServiceModule[] = [
     ],
     summaryRows: [
       { label: '产业链名称', value: '人工智能计算产业链' },
-      { label: '产业链标识', value: 'AI-COMPUTING' },
       { label: '展开层级', value: '3 级' },
       { label: '核心环节', value: '上游基础资源、中游核心技术、下游应用场景' },
       { label: '核心节点', value: '算力芯片、数据资源、知识图谱、大模型、行业应用' },

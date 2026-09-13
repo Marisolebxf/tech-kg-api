@@ -96,15 +96,39 @@ def test_build_summary_counts_only_returned_layer_items_and_graph_edges() -> Non
                 {"label": "RELATED_TO"},
             ],
         },
+        ["集成电路", "低空经济"],
     )
 
     assert summary == {
         "industry": "人工智能",
+        "industryChains": ["集成电路", "低空经济"],
         "totalNodes": 3,
         "totalEdges": 3,
         "nodesByLabel": {"核心技术": 2, "领军企业": 1, "领军专家": 0},
         "edgesByType": {"HAS_KEYWORD": 2, "RELATED_TO": 1},
     }
+
+
+@pytest.mark.asyncio
+async def test_fetch_industry_chain_labels_lists_and_dedupes_chain_names() -> None:
+    service = IndustryChainPanoramaService()
+
+    class _ChainClient:
+        async def list_nodes(self, *, label, limit=20, offset=0, space=None):
+            assert label == "IndustryChain"
+            return {
+                "items": [
+                    {"id": "chain_1", "properties": {"name": "集成电路"}},
+                    {"id": "chain_2", "properties": {"chain_name": "低空经济"}},
+                    {"id": "chain_3", "properties": {"name": "集成电路"}},
+                    {"id": "chain_4", "properties": {}},
+                ],
+                "total": 4,
+            }
+
+    labels = await service._fetch_industry_chain_labels(_ChainClient())
+
+    assert labels == ["集成电路", "低空经济"]
 
 
 def test_normalize_industry_keyword_uses_presets() -> None:
@@ -167,21 +191,27 @@ async def test_resolve_unique_anchor_candidate_rejects_ambiguous_hits() -> None:
     assert client.resolve_calls == []
 
 
-def test_select_layer_definitions_compacts_when_no_anchor() -> None:
+@pytest.mark.asyncio
+async def test_fetch_layers_collects_all_four_layers_without_keyword() -> None:
+    """重置参数后执行（无关键词、无锚点）时四层都要返回，核心专家/产业动态事件不能缺层。"""
     service = IndustryChainPanoramaService()
 
-    compact = service._select_layer_definitions(True)
-    full = service._select_layer_definitions(False)
+    layers, seed_vids = await service._fetch_layers(_FakeGraphClient(), None, 5)
 
-    assert [item["key"] for item in compact] == ["core_technology", "leading_enterprise"]
-    assert len(full) == 4
+    assert [layer["key"] for layer in layers] == [
+        "core_technology",
+        "leading_enterprise",
+        "leading_expert",
+        "flagship_achievement",
+    ]
+    assert seed_vids == []
 
 
 @pytest.mark.asyncio
 async def test_query_falls_back_to_compact_overview_when_keyword_misses(monkeypatch) -> None:
     service = IndustryChainPanoramaService()
 
-    async def _fake_fetch_layers(client, industry, top_k, compact_without_anchor):
+    async def _fake_fetch_layers(client, industry, top_k):
         if industry == "人工智能":
             return (
                 [
@@ -191,7 +221,6 @@ async def test_query_falls_back_to_compact_overview_when_keyword_misses(monkeypa
                 [],
             )
         assert industry is None
-        assert compact_without_anchor is True
         return (
             [
                 {
@@ -317,6 +346,47 @@ def test_backfill_empty_layers_uses_real_anchor_subgraph() -> None:
     ]
     assert result[1]["items"][0]["id"] == "org_1"
     assert result[2]["items"] == []
+    assert result[0]["total"] == 1
+
+
+def test_backfill_enterprise_matches_secondary_organization_label() -> None:
+    """organization_base 是入图打到几乎所有节点的基础标签，真企业靠叠加的
+    Organization 标签识别，论文/专家不应混入领军企业层。"""
+    service = IndustryChainPanoramaService()
+    layers = [
+        {"key": "leading_enterprise", "title": "领军企业", "total": 0, "items": []},
+    ]
+    graph = {
+        "nodes": [
+            {
+                "id": "org_1",
+                "type": "organization_base",
+                "label": "深圳市劲拓自动化设备股份有限公司",
+                "subtitle": None,
+                "data": {"labels": ["organization_base", "Organization"]},
+            },
+            {
+                "id": "paper_1",
+                "type": "organization_base",
+                "label": "人工智能产业分析论文",
+                "subtitle": None,
+                "data": {"labels": ["organization_base", "Paper"]},
+            },
+            {
+                "id": "person_1",
+                "type": "organization_base",
+                "label": "某专家",
+                "subtitle": None,
+                "data": {"labels": ["organization_base", "Person"]},
+            },
+        ],
+        "edges": [],
+    }
+
+    result = service._backfill_empty_layers_from_graph(layers, graph, top_k=5)
+
+    assert [item["id"] for item in result[0]["items"]] == ["org_1"]
+    assert result[0]["items"][0]["type"] == "organization"
     assert result[0]["total"] == 1
 
 
@@ -481,3 +551,133 @@ def test_graph_edge_exposes_numeric_confidence_from_chain_score() -> None:
 
     assert result["confidence"] == pytest.approx(0.9778)
     assert result["data"]["chain_score"] == 97.78
+
+
+@pytest.mark.asyncio
+async def test_fetch_graph_expands_chain_structure_when_anchor_present() -> None:
+    """锚点子图被 News 刷满 limit 时，HAS_NODE 环节和叶子环节的 BELONGS_TO_NODE
+    企业边（chain_score 置信度来源）仍要进图。"""
+    service = IndustryChainPanoramaService()
+
+    class _ChainGraphClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def get_subgraph(self, vid, *, depth=1, limit=50, edge_type=None, space=None):
+            self.calls.append({"vid": vid, "depth": depth, "edge_type": edge_type})
+            if vid == "chain_IC0007" and edge_type is None:
+                return {
+                    "nodes": [
+                        {"id": "chain_IC0007", "labels": ["IndustryChain"]},
+                        *[{"id": f"news_{i}", "labels": ["News"]} for i in range(60)],
+                    ],
+                    "edges": [
+                        {
+                            "source": f"news_{i}",
+                            "target": "chain_IC0007",
+                            "type": "COVERS_CHAIN",
+                            "properties": {},
+                        }
+                        for i in range(60)
+                    ],
+                }
+            if vid == "chain_IC0007" and edge_type == "HAS_NODE":
+                return {
+                    "nodes": [
+                        {"id": "chain_IC0007", "labels": ["IndustryChain"]},
+                        {
+                            "id": "node_IC0007001",
+                            "labels": ["IndustryNode"],
+                            "properties": {"node_type": "1", "node_name": "集成电路设计"},
+                        },
+                        {
+                            "id": "node_IC0007005",
+                            "labels": ["IndustryNode"],
+                            "properties": {
+                                "node_type": "2",
+                                "node_imp_level": "1",
+                                "node_name": "集成电路制造设备",
+                            },
+                        },
+                        {
+                            "id": "node_IC0007004",
+                            "labels": ["IndustryNode"],
+                            "properties": {"node_type": "2", "node_name": "集成电路制造"},
+                        },
+                    ],
+                    "edges": [
+                        {
+                            "source": "chain_IC0007",
+                            "target": "node_IC0007001",
+                            "type": "HAS_NODE",
+                            "properties": {},
+                        },
+                        {
+                            "source": "chain_IC0007",
+                            "target": "node_IC0007005",
+                            "type": "HAS_NODE",
+                            "properties": {},
+                        },
+                        {
+                            "source": "chain_IC0007",
+                            "target": "node_IC0007004",
+                            "type": "HAS_NODE",
+                            "properties": {},
+                        },
+                    ],
+                }
+            if vid in {"node_IC0007004", "node_IC0007005"} and edge_type == "BELONGS_TO_NODE":
+                return {
+                    "nodes": [
+                        {"id": vid, "labels": ["IndustryNode"]},
+                        {
+                            "id": "org_1",
+                            "labels": ["organization_base", "Organization"],
+                            "properties": {"name_cn": "某半导体股份有限公司"},
+                        },
+                    ],
+                    "edges": [
+                        {
+                            "source": "org_1",
+                            "target": vid,
+                            "type": "BELONGS_TO_NODE",
+                            "properties": {"chain_score": 97.78},
+                        }
+                    ],
+                }
+            return {"nodes": [], "edges": []}
+
+    client = _ChainGraphClient()
+    graph = await service._fetch_graph(client, [], "chain_IC0007", 2)
+
+    node_ids = {n["id"] for n in graph["nodes"]}
+    assert "node_IC0007004" in node_ids
+    assert "org_1" in node_ids
+    belongs_edges = [e for e in graph["edges"] if e["label"] == "BELONGS_TO_NODE"]
+    assert belongs_edges and belongs_edges[0]["confidence"] == pytest.approx(0.9778)
+    # 只探叶子环节（node_type=2）且重点环节（node_imp_level=1）优先，分类环节
+    # 不打企业边请求。
+    probed = [c for c in client.calls if c["edge_type"] == "BELONGS_TO_NODE"]
+    assert [c["vid"] for c in probed] == ["node_IC0007005", "node_IC0007004"]
+
+
+def test_backfill_dynamic_events_uses_chain_news() -> None:
+    """链上 News 是产业动态的载体，事件层为空时用新闻标题回填。"""
+    service = IndustryChainPanoramaService()
+    layers = [{"key": "flagship_achievement", "title": "产业动态事件", "total": 0, "items": []}]
+    graph = {
+        "nodes": [
+            {"id": "news_1", "type": "News", "label": "低空经济产业政策发布"},
+            {"id": "news_2", "type": "News", "label": "无人机新品发布"},
+        ],
+        "edges": [],
+    }
+
+    result = service._backfill_empty_layers_from_graph(layers, graph, top_k=5)
+
+    assert [item["label"] for item in result[0]["items"]] == [
+        "低空经济产业政策发布",
+        "无人机新品发布",
+    ]
+    assert all(item["type"] == "event" for item in result[0]["items"])
+    assert result[0]["total"] == 2

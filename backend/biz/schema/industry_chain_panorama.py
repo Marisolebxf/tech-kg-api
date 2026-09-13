@@ -180,6 +180,8 @@ class PanoramaGraphEdge(BaseModel):
 
 class PanoramaSummary(BaseModel):
     industry: str | None
+    # 图库中的产业链名称（如 集成电路 / 低空经济），供摘要「产业链名称」统计展示。
+    industryChains: list[str] = Field(default_factory=list)
     totalNodes: int
     totalEdges: int
     nodesByLabel: dict[str, int]

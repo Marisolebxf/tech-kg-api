@@ -71,6 +71,8 @@ async def test_expert_paper_cooperation_returns_structured_result(async_client, 
         "sourceTable": "dwd_scholar",
         "sourceField": "scholar_id",
         "graphVid": "person_4P566No1",
+        # 响应 schema 的 summary 有默认值：证据未携带时序列化为空串。
+        "summary": "",
     }
 
 

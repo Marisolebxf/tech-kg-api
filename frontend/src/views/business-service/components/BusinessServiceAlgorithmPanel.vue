@@ -3031,7 +3031,13 @@ function derivedGraphFromExpertResponse(
   const nodeIds = new Set(nodes.map((n) => n.id));
   rawEdges.forEach((edge: DirectRelationGraphEdge, idx) => {
     if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) return;
-    const label = edge.label || "直接关系";
+    // 后端把边 label 拼成「直接关系 / <关系摘要>」（expert_direct_relation 的
+    // _build_graph），关系页会再拼模块前缀「直接关系/」，出现双重前缀；这里
+    // 剥掉 label 自带的前缀，只留业务细目（共论文/同机构 + 共论文等）。
+    const rawLabel = edge.label || "直接关系";
+    const label = rawLabel.startsWith("直接关系 / ")
+      ? rawLabel.slice("直接关系 / ".length)
+      : rawLabel;
     // 后端已在 edge.data.strength 里算好置信度（0-99），映射时补上，
     // 否则 GraphEdgeData.confidence 一直是 undefined，前端只能显示"暂无"。
     const strength = edge.data?.strength;

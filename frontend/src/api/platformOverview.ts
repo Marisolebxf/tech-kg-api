@@ -73,12 +73,3 @@ export async function getPlatformOverview(): Promise<PlatformOverviewData> {
 
   return unwrapApiResponse(response)
 }
-
-export async function getPlatformOverviewRisks(): Promise<ManagementRisk[]> {
-  const response = await http.get<
-    ApiResponse<{ items: ManagementRisk[]; dataSource: string }>,
-    ApiResponse<{ items: ManagementRisk[]; dataSource: string }>
-  >(`${PLATFORM_OVERVIEW_ENDPOINT}/risks`)
-
-  return unwrapApiResponse(response).items
-}

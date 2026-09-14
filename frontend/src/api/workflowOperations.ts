@@ -117,32 +117,6 @@ export interface AccessReport {
   embedding?: Record<string, AccessEntry>
 }
 
-export interface SourceUpdate {
-  change: string
-  type: string
-  domain: string
-  id: string
-  content: string
-  time: string
-  detectedAt: string
-  source: string
-  field: string
-  before: string
-  after: string
-  result: string
-}
-
-export interface UpdatePolicy {
-  id: string
-  enabled: boolean
-  frequency: string
-  executionTime: string
-  timezone: string
-  cron: string
-  nextRunAt: string
-  skipWhenNoChanges: boolean
-}
-
 export interface ReviewRecord {
   id: string
   batch: string
@@ -176,23 +150,9 @@ export interface ReviewRecord {
   rawStatus?: string
 }
 
-export interface TaskOverview {
-  summary: { label: string; value: string; hint: string }[]
-  latestBatch: UpdateBatch | null
-  changeSummary: { total: number; added: number; updated: number; deleted: number; detectedAt: string; completedAt: string }
-  updatePolicy: UpdatePolicy
-  sourceHealth: { id: string; name: string; status: string; message: string; lastCheckedAt: string }[]
-}
-
 const unwrap = async <T>(request: Promise<unknown>) => unwrapApiResponse((await request) as ApiResponse<T>)
 
-export const getTaskOverview = () => unwrap(http.get('/v1/task-center/overview')) as Promise<TaskOverview>
-export const getTaskBatches = () => unwrap(http.get('/v1/task-center/batches')) as Promise<{ items: UpdateBatch[]; total: number }>
-export const getTasks = (params: Record<string, unknown> = {}) => unwrap(http.get('/v1/task-center/tasks', { params })) as Promise<{ items: ProcessingInstance[]; total: number }>
 export const getTask = (id: string) => unwrap(http.get(`/v1/task-center/tasks/${id}`)) as Promise<ProcessingInstance>
-export const getSourceUpdates = (params: Record<string, unknown> = {}) => unwrap(http.get('/v1/task-center/data-sources/updates', { params })) as Promise<{ items: SourceUpdate[]; total: number }>
-export const saveUpdatePolicy = (data: { enabled: boolean; frequency: string; executionTime: string; timezone: string; skipWhenNoChanges: boolean }) => unwrap(http.put('/v1/task-center/update-policy', data)) as Promise<{ policy: UpdatePolicy }>
-export const triggerGraphBuild = (data: Record<string, unknown> = {}) => unwrap(http.post('/v1/task-center/trigger', data)) as Promise<{ task: ProcessingInstance }>
 
 export const getManualReviews = (params: Record<string, unknown> = {}) => unwrap(http.get('/v1/manual-reviews', { params })) as Promise<{ items: ReviewRecord[]; total: number; statusCounts: Record<string, number> }>
 export const getManualReview = (id: string) => unwrap(http.get(`/v1/manual-reviews/${id}`)) as Promise<ReviewRecord>
@@ -302,31 +262,8 @@ export const TRIGGER_SOURCE_LABEL: Record<TriggerSource, string> = {
   RERUN: '重新执行',
 }
 
-export interface WorkflowSchedule {
-  id: string
-  definitionId: string
-  cron: string
-  timezone: string
-  active: boolean
-  payload?: Record<string, unknown>
-  dispatchStatus?: string
-  message?: string
-  [key: string]: unknown
-}
-
-export interface ScheduleCreateInput {
-  id: string
-  cron: string
-  timezone?: string
-  active?: boolean
-  payload?: Record<string, unknown>
-}
-
 export const listDefinitions = (category?: string) =>
   unwrap(http.get('/v1/workflow-system/definitions', { params: category ? { category } : {} })) as Promise<{ items: WorkflowDefinition[]; total: number }>
-
-export const getDefinition = (id: string) =>
-  unwrap(http.get(`/v1/workflow-system/definitions/${id}`)) as Promise<WorkflowDefinition>
 
 export const uploadPythonDefinition = (
   file: File,
@@ -343,34 +280,6 @@ export const uploadPythonDefinition = (
   return unwrap(http.post('/v1/workflow-system/definitions/python', form)) as Promise<WorkflowDefinition>
 }
 
-/** 把多个已注册 python 定义串成 kg.custom.chain 串行链。 */
-export const createChainDefinition = (
-  name: string,
-  definitionIds: string[],
-  definitionId?: string,
-) =>
-  unwrap(http.post('/v1/workflow-system/definitions/chains', { name, definitionIds, definitionId })) as Promise<WorkflowDefinition>
-
-export interface ExecuteDefinitionSelectors {
-  workflowId?: string
-  llmConfigId?: string
-  embeddingConfigId?: string
-  mysqlDatasourceId?: string
-  mysqlDatabase?: string
-  graphSpace?: string
-  milvusConfigId?: string
-  milvusDatabase?: string
-}
-
-export const executeDefinition = (
-  id: string,
-  payload: Record<string, unknown> = {},
-  selectors: ExecuteDefinitionSelectors = {},
-) =>
-  unwrap(
-    http.post(`/v1/workflow-system/definitions/${id}/execute`, { payload, ...selectors }),
-  ) as Promise<WorkflowExecution>
-
 export const getExecution = (executionId: string) =>
   unwrap(http.get(`/v1/workflow-system/executions/${executionId}`)) as Promise<WorkflowExecution>
 
@@ -379,23 +288,6 @@ export const listExecutions = (
   filters: { definitionId?: string; scheduleId?: string; jobId?: string; triggerSource?: TriggerSource } = {},
 ) =>
   unwrap(http.get('/v1/workflow-system/executions', { params: { limit, ...filters } })) as Promise<{ items: WorkflowExecution[]; total: number }>
-
-// ---- 工作流调度（定期执行） ----
-
-export const listSchedules = () =>
-  unwrap(http.get('/v1/workflow-system/schedules')) as Promise<{ items: WorkflowSchedule[]; total: number }>
-
-export const createSchedule = (definitionId: string, schedule: ScheduleCreateInput) =>
-  unwrap(http.post(`/v1/workflow-system/definitions/${definitionId}/schedules`, schedule)) as Promise<WorkflowSchedule>
-
-export const updateScheduleState = (scheduleId: string, active: boolean) =>
-  unwrap(http.put(`/v1/workflow-system/schedules/${scheduleId}/state`, { active })) as Promise<WorkflowSchedule>
-
-export const triggerSchedule = (scheduleId: string) =>
-  unwrap(http.post(`/v1/workflow-system/schedules/${scheduleId}/trigger`)) as Promise<{ id: string; dispatchStatus: string }>
-
-export const deleteSchedule = (scheduleId: string) =>
-  unwrap(http.delete(`/v1/workflow-system/schedules/${scheduleId}`)) as Promise<{ id: string }>
 
 // ---- 任务中心 Job ----
 
@@ -503,9 +395,6 @@ export const triggerJob = (jobId: string) =>
 
 export const updateJobState = (jobId: string, active: boolean) =>
   unwrap(http.put(`/v1/workflow-system/jobs/${jobId}/state`, { active })) as Promise<WorkflowJob>
-
-export const updateJob = (jobId: string, input: Partial<JobCreateInput>) =>
-  unwrap(http.put(`/v1/workflow-system/jobs/${jobId}`, input)) as Promise<WorkflowJob>
 
 export const deleteJob = (jobId: string) =>
   unwrap(http.delete(`/v1/workflow-system/jobs/${jobId}`)) as Promise<{ id: string }>

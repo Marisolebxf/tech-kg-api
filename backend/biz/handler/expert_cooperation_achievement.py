@@ -7,7 +7,6 @@ from biz.schemas.common import ApiResponse
 from biz.schemas.expert_cooperation_achievement import CooperationAchievementQueryRequest
 
 router = APIRouter(prefix="/kg-construction/expert-cooperation-achievements")
-legacy_router = APIRouter(prefix="/kg-service/two-point-achievements")
 application = ExpertCooperationAchievementApplication()
 
 
@@ -51,18 +50,6 @@ def describe_expert_cooperation_achievement() -> dict[str, object]:
 
 @router.post("/query")
 def query_expert_cooperation_achievement(
-    body: CooperationAchievementQueryRequest,
-) -> ApiResponse:
-    return _query(body)
-
-
-@legacy_router.get("")
-def legacy_describe_two_point_achievements() -> dict[str, object]:
-    return _describe()
-
-
-@legacy_router.post("")
-def legacy_query_two_point_achievements(
     body: CooperationAchievementQueryRequest,
 ) -> ApiResponse:
     return _query(body)

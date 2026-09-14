@@ -69,14 +69,6 @@ export async function listLlmConfigs(userId: string): Promise<LlmConfig[]> {
   )
 }
 
-export async function getLlmConfig(id: string, userId: string): Promise<LlmConfig> {
-  return unwrap(
-    await asApiPromise<LlmConfig>(http.get(`${PREFIX}/llm-configs/${id}`, {
-      headers: headers(userId),
-    })),
-  )
-}
-
 export async function createLlmConfig(
   payload: LlmConfigInput,
   userId: string,

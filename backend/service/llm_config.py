@@ -17,7 +17,6 @@ from infra.llm import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
     DEFAULT_TIMEOUT,
-    LLMClient,
     reset_llm_client,
 )
 
@@ -199,24 +198,6 @@ def resolve_llm_settings() -> tuple[str, str, str] | None:
         os.getenv("LLM_BASE_URL", DEFAULT_BASE_URL),
         os.getenv("LLM_MODEL", DEFAULT_MODEL),
     )
-
-
-def get_llm_client_by_id(config_id: str) -> LLMClient | None:
-    """按 id 查 LlmConfig 并构造临时 LLMClient，供作业 activity 使用。
-
-    不走进程单例（``infra.llm.get_llm_client``），每次按需构造。配置不存在或缺 api_key
-    时返回 None，由调用方回退全局默认。
-    """
-    from infra.mysql import create_session
-
-    session = create_session()
-    try:
-        row = LlmConfigDAO(session).get(config_id)
-        if row is None or not row.api_key:
-            return None
-        return LLMClient(api_key=row.api_key, base_url=row.base_url, model=row.model)
-    finally:
-        session.close()
 
 
 def get_llm_settings_by_id(config_id: str | None) -> dict[str, Any] | None:

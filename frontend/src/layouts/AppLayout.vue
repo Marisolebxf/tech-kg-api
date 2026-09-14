@@ -93,14 +93,6 @@ const sidebarCollapsed = computed(() => appStore.collapsed && !isMobile.value);
 const assistantPosition = ref({ x: 0, y: 0 });
 const assistantViewport = ref({ width: 1440, height: 900 });
 const businessServiceTitle = "科技专家/人才知识推理构建服务";
-// 问答小助手（已隐藏）
-// const assistantDragging = ref(false)
-// const assistantDragMoved = ref(false)
-// let assistantDragOrigin = { pointerX: 0, pointerY: 0, x: 0, y: 0 }
-// const assistantQuestion = ref('')
-// const assistantMessages = ref<Array<{ role: 'assistant' | 'user'; content: string; sources?: string[] }>>([
-//   { role: 'assistant', content: '可询问专家、机构、论文关系，或查询任务与异常。' },
-// ])
 const alertItems = ref<
   Array<{
     id: string;
@@ -214,20 +206,6 @@ watch([() => appStore.collapsed, serviceNavCollapsed, () => route.path], () => {
     void nextTick(refreshSubNavOverflow);
   }
 });
-// 问答小助手（已隐藏）
-// const assistantEntryStyle = computed(() => ({ left: `${assistantPosition.value.x}px`, top: `${assistantPosition.value.y}px` }))
-// const assistantPanelStyle = computed(() => {
-//   const viewportWidth = assistantViewport.value.width
-//   const viewportHeight = assistantViewport.value.height
-//   const width = Math.min(390, viewportWidth - 20)
-//   const height = Math.min(560, viewportHeight - 120)
-//   return {
-//     left: `${Math.max(10, Math.min(viewportWidth - width - 10, assistantPosition.value.x + 118 - width))}px`,
-//     top: `${Math.max(10, Math.min(viewportHeight - height - 10, assistantPosition.value.y - height - 10))}px`,
-//     width: `${width}px`,
-//     height: `${height}px`,
-//   }
-// })
 
 onErrorCaptured((error) => {
   routeError.value = error instanceof Error ? error.message : String(error);
@@ -275,41 +253,6 @@ async function handleAccountAction(
     await router.replace("/login");
   }
 }
-
-// 问答小助手（已隐藏）
-// function toggleAssistant() {
-//   if (assistantDragMoved.value) {
-//     assistantDragMoved.value = false
-//     return
-//   }
-//   alertDrawerOpen.value = false
-//   userMenuOpen.value = false
-//   assistantOpen.value = !assistantOpen.value
-// }
-
-// function startAssistantDrag(event: PointerEvent) {
-//   assistantDragging.value = true
-//   assistantDragMoved.value = false
-//   assistantDragOrigin = { pointerX: event.clientX, pointerY: event.clientY, x: assistantPosition.value.x, y: assistantPosition.value.y }
-//   ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
-// }
-
-// function moveAssistantDrag(event: PointerEvent) {
-//   if (!assistantDragging.value) return
-//   const deltaX = event.clientX - assistantDragOrigin.pointerX
-//   const deltaY = event.clientY - assistantDragOrigin.pointerY
-//   if (Math.abs(deltaX) + Math.abs(deltaY) > 4) assistantDragMoved.value = true
-//   assistantPosition.value = clampAssistantPosition({
-//     x: assistantDragOrigin.x + deltaX,
-//     y: assistantDragOrigin.y + deltaY,
-//   })
-// }
-
-// function stopAssistantDrag(event: PointerEvent) {
-//   assistantDragging.value = false
-//   const target = event.currentTarget as HTMLElement
-//   if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId)
-// }
 
 function clampAssistantPosition(position: { x: number; y: number }) {
   const entryWidth = assistantEntryRef.value?.offsetWidth ?? 126;
@@ -365,23 +308,6 @@ function toggleNavigation() {
 function closeMobileNavigation() {
   mobileNavOpen.value = false;
 }
-
-// 问答小助手（已隐藏）
-// function askAssistant() {
-//   const question = assistantQuestion.value.trim()
-//   if (!question) return
-//   assistantMessages.value.push({ role: 'user', content: question })
-//   assistantQuestion.value = ''
-//   if (question.includes('异常') || question.includes('审核') || question.includes('任务')) {
-//     assistantMessages.value.push({ role: 'assistant', content: '当前有 2 个阻断批次需要人工审核，共隔离 711 条异常记录。其中图谱构建批次 326 条，数据处理批次 385 条。', sources: ['任务中心', '人工处理', '异常通知'] })
-//     return
-//   }
-//   if (question.includes('张明远') || question.includes('专家')) {
-//     assistantMessages.value.push({ role: 'assistant', content: '检索结果显示，张明远近五年的核心合作方向集中在智能计算与芯片设计，主要合作机构包括中国科学院自动化研究所和华南智能芯片有限公司。', sources: ['专家实体', '论文合作记录', '项目与专利记录'] })
-//     return
-//   }
-//   assistantMessages.value.push({ role: 'assistant', content: '已从统一知识图谱中检索相关实体、关系和来源记录。您可以进入完整知识检索页继续限定时间、业务域或上传参考文档进行分析。', sources: ['统一知识图谱', 'Schema v1.8'] })
-// }
 
 watch(
   () => route.fullPath,

@@ -72,10 +72,6 @@ export async function listMysqlDatasources(userId = currentUserId()): Promise<My
   return unwrap(await asApiPromise<MysqlDatasource[]>(http.get(PREFIX, { headers: headers(userId) })))
 }
 
-export async function getMysqlDatasource(id: string, userId = currentUserId()): Promise<MysqlDatasource> {
-  return unwrap(await asApiPromise<MysqlDatasource>(http.get(`${PREFIX}/${id}`, { headers: headers(userId) })))
-}
-
 export async function createMysqlDatasource(
   payload: MysqlDatasourceInput,
   userId = currentUserId(),

@@ -66,10 +66,6 @@ export async function listMilvusConfigs(userId = currentUserId()): Promise<Milvu
   return unwrap(await asApiPromise<MilvusConfig[]>(http.get(PREFIX, { headers: headers(userId) })))
 }
 
-export async function getMilvusConfig(id: string, userId = currentUserId()): Promise<MilvusConfig> {
-  return unwrap(await asApiPromise<MilvusConfig>(http.get(`${PREFIX}/${id}`, { headers: headers(userId) })))
-}
-
 export async function createMilvusConfig(
   payload: MilvusConfigInput,
   userId = currentUserId(),
@@ -109,10 +105,4 @@ export async function testMilvusConfig(id: string, userId = currentUserId()): Pr
       http.post(`${PREFIX}/${id}/test`, {}, { headers: headers(userId) }),
     ),
   )
-}
-
-export async function listMilvusDatabases(id: string, userId = currentUserId()): Promise<string[]> {
-  return unwrap(
-    await asApiPromise<{ items: string[] }>(http.get(`${PREFIX}/${id}/databases`, { headers: headers(userId) })),
-  ).items
 }

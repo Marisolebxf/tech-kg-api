@@ -38,9 +38,7 @@ COPY biz ./biz
 COPY config ./config
 COPY dao ./dao
 COPY db_model ./db_model
-COPY idl ./idl
 COPY infra ./infra
-COPY middleware ./middleware
 COPY operators ./operators
 COPY organization_ETL ./organization_ETL
 COPY schemas ./schemas

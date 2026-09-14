@@ -69,10 +69,6 @@ export async function listEmbeddingConfigs(userId = currentUserId()): Promise<Em
   return unwrap(await asApiPromise<EmbeddingConfig[]>(http.get(PREFIX, { headers: headers(userId) })))
 }
 
-export async function getEmbeddingConfig(id: string, userId = currentUserId()): Promise<EmbeddingConfig> {
-  return unwrap(await asApiPromise<EmbeddingConfig>(http.get(`${PREFIX}/${id}`, { headers: headers(userId) })))
-}
-
 export async function createEmbeddingConfig(
   payload: EmbeddingConfigInput,
   userId = currentUserId(),

@@ -35,20 +35,17 @@
 | Nginx/GLM 网关 | `<gateway-url>` | - | 实际地址通过部署环境配置 |
 | TRSGraph | `127.0.0.1:9669`（后端和 TRSGraph 同机时） | `root` | `trsadmin` |
 
-TRSGraph 由外部 TRSGraph 服务提供，当前 Python 后端只负责连接。环境变量见 `.env.example`，分环境配置见 `config/config_dev.yml`、`config/config_stage.yml`、`config/config_product.yml`。
+TRSGraph 由外部 TRSGraph 服务提供，当前 Python 后端只负责连接。环境变量见 `.env.example`，全部配置经环境变量 / `.env`（python-dotenv）注入，无 yml 配置文件。
 
 ### 配置文件定位
 
-“位置”指配置文件在当前仓库中的相对路径。旧 Java/SpringBoot 文档里的 `backend/src/main/resources/application*.yml` 是 Java 项目路径，当前 Python/FastAPI 后端没有这些文件，等价配置已经迁移到 `.env` 和 `config/config_*.yml`。
+“位置”指配置文件在当前仓库中的相对路径。旧 Java/SpringBoot 文档里的 `backend/src/main/resources/application*.yml` 是 Java 项目路径，当前 Python/FastAPI 后端没有这些文件，等价配置已经迁移到 `.env` 和环境变量。
 
 | 文件 | 位置 | 用途 |
 |---|---|---|
 | 后端入口 | `main.py` | 创建 FastAPI 应用、注册中间件和路由 |
 | 后端环境变量 | `.env` | 本机或服务器直接启动后端时读取的实际连接信息，不提交 Git |
 | 后端环境变量模板 | `.env.example` | 新环境复制为 `.env` 后按实际环境修改 |
-| 后端开发配置 | `config/config_dev.yml` | dev 默认值和环境变量占位，默认业务库为 `gkx_element`、默认图空间为 `dev` |
-| 后端测试配置 | `config/config_stage.yml` | stage 环境配置，敏感值从环境变量传入 |
-| 后端生产配置 | `config/config_product.yml` | product 环境配置，敏感值从环境变量传入 |
 | Python 依赖和检查配置 | `pyproject.toml` | uv 依赖、pytest、ruff 配置 |
 | 后端 Docker 镜像 | `Dockerfile` | 构建 FastAPI 后端镜像 |
 | 后端 Docker 编排 | `docker-compose.yml` | 只启动后端 API 容器，适合已有外部基础设施时使用 |

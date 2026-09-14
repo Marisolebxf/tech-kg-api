@@ -71,48 +71,10 @@ export interface GraphNodeListData {
 
 
 /**
- * 节点关联边查询结果。
- */
-export interface GraphEdgeListData {
-  edges: GraphEdge[]
-  total: number
-}
-
-
-/**
- * 邻居节点查询结果。
- */
-export interface GraphNeighbourListData {
-  nodes: GraphNode[]
-  total: number
-}
-
-
-/**
- * 最短路径查询结果。
- *
- * 部分后端结果可能额外返回 found，
- * 因此这里将其定义为可选字段。
- */
-export interface GraphShortestPathData extends GraphData {
-  found?: boolean
-}
-
-
-/**
  * 图空间列表。
  */
 export interface GraphSpaceListData {
   spaces: string[]
-}
-
-
-/**
- * 图谱统计信息。
- */
-export interface GraphStatsData {
-  nodes: Record<string, number>
-  edges: Record<string, number>
 }
 
 
@@ -128,17 +90,6 @@ export type GraphDirection = 'out' | 'in' | 'both'
  * 后端当前限制为 1～3 跳。
  */
 export type GraphDepth = 1 | 2 | 3
-
-
-/**
- * 按标签查询节点的参数。
- */
-export interface ListGraphNodesParams {
-  label: string
-  limit?: number
-  offset?: number
-  space?: string
-}
 
 
 /**
@@ -161,28 +112,6 @@ export interface GetSubgraphParams {
   limit?: number
   edge_type?: string
   direction?: GraphDirection
-  space?: string
-}
-
-
-/**
- * 节点边和邻居节点的查询参数。
- */
-export interface GetNodeRelationsParams {
-  direction?: GraphDirection
-  edge_type?: string
-  limit?: number
-  space?: string
-}
-
-
-/**
- * 最短路径查询参数。
- */
-export interface GetShortestPathParams {
-  source: string
-  target: string
-  max_depth?: number
   space?: string
 }
 
@@ -224,44 +153,6 @@ export function unwrapApiResponse<T>(
 export function listGraphSpaces() {
   return http.get<ApiResponse<GraphSpaceListData>>(
     `${GRAPH_SEARCH_PREFIX}/spaces`,
-  )
-}
-
-
-/**
- * 获取指定图空间的节点和边统计。
- *
- * 对应后端：
- * GET /api/v1/graph-search/stats
- */
-export function getGraphStats(
-  space?: string,
-) {
-  return http.get<ApiResponse<GraphStatsData>>(
-    `${GRAPH_SEARCH_PREFIX}/stats`,
-    {
-      params: {
-        space,
-      },
-    },
-  )
-}
-
-
-/**
- * 按节点标签分页查询节点。
- *
- * 对应后端：
- * GET /api/v1/graph-search/nodes
- */
-export function listGraphNodes(
-  params: ListGraphNodesParams,
-) {
-  return http.get<ApiResponse<GraphNodeListData>>(
-    `${GRAPH_SEARCH_PREFIX}/nodes`,
-    {
-      params,
-    },
   )
 }
 
@@ -329,62 +220,6 @@ export function getSubgraph(
 ) {
   return http.get<ApiResponse<GraphData>>(
     `${GRAPH_SEARCH_PREFIX}/subgraph/${encodeURIComponent(nodeId)}`,
-    {
-      params,
-    },
-  )
-}
-
-
-/**
- * 查询指定节点的关联边。
- *
- * 对应后端：
- * GET /api/v1/graph-search/node/{node_id}/edges
- */
-export function getNodeEdges(
-  nodeId: string,
-  params: GetNodeRelationsParams = {},
-) {
-  return http.get<ApiResponse<GraphEdgeListData>>(
-    `${GRAPH_SEARCH_PREFIX}/node/${encodeURIComponent(nodeId)}/edges`,
-    {
-      params,
-    },
-  )
-}
-
-
-/**
- * 查询指定节点的邻居节点。
- *
- * 对应后端：
- * GET /api/v1/graph-search/node/{node_id}/neighbours
- */
-export function getNodeNeighbours(
-  nodeId: string,
-  params: GetNodeRelationsParams = {},
-) {
-  return http.get<ApiResponse<GraphNeighbourListData>>(
-    `${GRAPH_SEARCH_PREFIX}/node/${encodeURIComponent(nodeId)}/neighbours`,
-    {
-      params,
-    },
-  )
-}
-
-
-/**
- * 查询两个节点之间的最短路径。
- *
- * 对应后端：
- * GET /api/v1/graph-search/shortest-path
- */
-export function getShortestPath(
-  params: GetShortestPathParams,
-) {
-  return http.get<ApiResponse<GraphShortestPathData>>(
-    `${GRAPH_SEARCH_PREFIX}/shortest-path`,
     {
       params,
     },

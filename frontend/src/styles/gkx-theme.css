@@ -295,9 +295,7 @@ body {
 :is(
   .create-dialog,
   .task-update-dialog,
-  .schedule-dialog,
-  .construction-action-modal,
-  .kg-detail-modal
+  .schedule-dialog
 ) {
   border-radius: 8px !important;
   background: var(--gkx-bg-surface) !important;

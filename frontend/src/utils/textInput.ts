@@ -9,7 +9,8 @@
  */
 const ABNORMAL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060\uFEFF]/
 
-export function hasAbnormalChars(value: string): boolean {
+/** 仅供本文件 validateText 使用（外部无消费者）。 */
+function hasAbnormalChars(value: string): boolean {
   return ABNORMAL_CHARS.test(value)
 }
 

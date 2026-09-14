@@ -411,22 +411,6 @@ export async function deleteSchema(
   )
 }
 
-export async function replaceSchemaScript(
-  schemaId: string,
-  script: File,
-  userId: string,
-): Promise<SchemaDefinition> {
-  const body = new FormData()
-  body.append('script', script)
-  return unwrap(
-    await asApiPromise<SchemaDefinition>(
-      http.put(`${PREFIX}/schemas/${schemaId}/script`, body, {
-        headers: headers(userId),
-      }),
-    ),
-  )
-}
-
 export function schemaErrorMessage(error: unknown): string {
   const axiosError = error as AxiosError<{ detail?: string | Array<{ msg?: string }> }>
   const detail = axiosError.response?.data?.detail

@@ -56,7 +56,6 @@ export default defineConfig({
             { text: "图数据库 trs-graph", link: "/arch/graph" },
             { text: "Schema 管理", link: "/arch/schema" },
             { text: "Temporal 工作流系统", link: "/arch/workflow" },
-            { text: "算子注册表", link: "/arch/operators" },
             { text: "人工审核与修正中心", link: "/arch/review" },
             { text: "任务中心与公共能力", link: "/arch/tasks" },
             { text: "性能优化：结果缓存", link: "/arch/perf" },

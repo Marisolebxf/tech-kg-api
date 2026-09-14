@@ -48,7 +48,6 @@
 | `temporal-mysql-data` | `temporal-mysql-data` | `/var/lib/mysql` | SSD |
 | `workflow-state` | `workflow-state` | `/var/lib/bkg` | SSD |
 | `patent-index-state` | `patent-index-state` | `/app/var/patent_indexes` | SSD |
-| `operator-data` | `operator-data` | `/app/operators/user` | SSD |
 | `operator-rustfs-data` | `operator-rustfs-data` | `/data` | 对象存储盘 |
 | `auth-redis-data` | `auth-redis-data` | `/data` | SSD |
 
@@ -172,12 +171,6 @@ data:
   PATENT_EMBEDDING_BASE_URL: http://m3e-embedding:8010/v1
   PATENT_EMBEDDING_MODEL: moka-ai/m3e-small
   PATENT_EMBEDDING_DIM: "512"
-  # ---- operator S3 (rustfs) ----
-  OPERATOR_DIR: /app/operators/user
-  OPERATOR_S3_ENDPOINT_URL: http://operator-rustfs:9000
-  OPERATOR_S3_BUCKET: bkg-operators
-  OPERATOR_S3_PREFIX: operators
-  OPERATOR_S3_REGION: us-east-1
   # ---- 认证 ----
   AUTH_ENABLED: "true"
   AUTH_SESSION_BACKEND: redis
@@ -222,17 +215,13 @@ stringData:
   MYSQL_PASSWORD: "123456789"                # 替换为真实密码
   PAPER_COOP_MYSQL_PASSWORD: "123456789"
   LLM_API_KEY: ""                            # 智谱 API key
-  # schema / operator / milvus 共用 operator-rustfs，凭证一套即可
+  # schema 脚本 / milvus 共用 operator-rustfs，凭证一套即可
   SCHEMA_S3_ACCESS_KEY: rustfsadmin
   SCHEMA_S3_SECRET_KEY: rustfsadmin
   PATENT_EMBEDDING_API_KEY: local-no-auth
-  OPERATOR_S3_ACCESS_KEY_ID: rustfsadmin
-  OPERATOR_S3_SECRET_ACCESS_KEY: rustfsadmin
   WORKFLOW_MYSQL_PASSWORD: temporal          # temporal-mysql root 密码
   USER_CENTER_CLIENT_ID: ""
   USER_CENTER_CLIENT_SECRET: ""
-  OPERATOR_RELOAD_TOKEN: ""
-  OPERATOR_WORKER_BASE_URIS: ""
 ```
 
 ```bash
@@ -298,16 +287,6 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: operator-data
-  namespace: bkg
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources: { requests: { storage: 10Gi } }
-  storageClassName: ssd
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
   name: operator-rustfs-data
   namespace: bkg
 spec:
@@ -325,7 +304,7 @@ spec:
   storageClassName: ssd
 ```
 
-> 多副本可读的卷（如 `operator-data`、`workflow-state`）应使用 `ReadWriteMany`，或保持单副本以避免并发写冲突。
+> 多副本可读的卷（如 `workflow-state`）应使用 `ReadWriteMany`，或保持单副本以避免并发写冲突。
 
 ---
 
@@ -380,7 +359,7 @@ spec:
 
 ### 8.2 operator-rustfs
 
-**唯一的对象存储**：schema DDL 脚本、operator 包、Milvus 内部存储三个用途共用这一个 S3，不再部署 MinIO。需要先以 uid 10001 初始化数据卷（compose 用 init 容器完成 `chown`）。
+**唯一的对象存储**：schema DDL 脚本、Milvus 内部存储两个用途共用这一个 S3，不再部署 MinIO（operator 包用途已随算子注册模块于 2026-09-14 下线）。需要先以 uid 10001 初始化数据卷（compose 用 init 容器完成 `chown`）。
 
 ```yaml
 # k8s/32-operator-rustfs.yaml
@@ -712,15 +691,12 @@ spec:
             periodSeconds: 30
             failureThreshold: 3
           volumeMounts:
-            - { name: operator-data, mountPath: /app/operators/user }
             - { name: patent-index-state, mountPath: /app/var/patent_indexes }
             - { name: workflow-state, mountPath: /var/lib/bkg }
           resources:
             requests: { cpu: 500m, memory: 1Gi }
             limits: { cpu: 2, memory: 4Gi }
       volumes:
-        - name: operator-data
-          persistentVolumeClaim: { claimName: operator-data }
         - name: patent-index-state
           persistentVolumeClaim: { claimName: patent-index-state }
         - name: workflow-state
@@ -974,7 +950,7 @@ spec:
       resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
 ```
 
-> HPA 扩容 `api` 前请先确认 `workflow-state`、`operator-data` 等 RWO 卷是否允许并发挂载，否则需迁移到独立存储或改成对象存储。
+> HPA 扩容 `api` 前请先确认 `workflow-state` 等 RWO 卷是否允许并发挂载，否则需迁移到独立存储或改成对象存储。
 
 ---
 
@@ -1070,7 +1046,7 @@ kubectl -n bkg rollout restart deploy/api
 
 ### 16.2 关键陷阱
 
-1. **`workflow-state` / `operator-data` 是 RWO 卷**（脚本目录与 operator 运行时缓存）：多副本 `api` 会冲突，建议 replicas=1 或迁到对象存储；workflow 控制面状态本身已在 temporal-mysql 的 `techkg_control` 库，不受此限。
+1. **`workflow-state` 是 RWO 卷**（脚本目录等运行态）：多副本 `api` 会冲突，建议 replicas=1 或迁到对象存储；workflow 控制面状态本身已在 temporal-mysql 的 `techkg_control` 库，不受此限。
 2. **m3e-embedding 首次拉模型很慢**：readinessProbe 的 `initialDelaySeconds` 给 180s 以上；首次部署可手动 `kubectl wait` 等 Pod Ready。
 3. **trs-graph 节点 CRUD 不可靠**（`find_nodes` 返回假 vid、`merge_node` 仅 ETL 用），详见内部记忆。线上业务只用 edge + node-read。
 4. **`init_graph_schema.py` 创建 SPACE 后会因传播延迟报错**，Job 设置 `backoffLimit: 6`，重试即可。

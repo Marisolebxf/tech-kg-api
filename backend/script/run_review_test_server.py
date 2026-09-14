@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import tempfile
-from pathlib import Path
 
 # 在导入 main 之前配置环境，避免触碰真实 MySQL/共享 sqlite
 # 默认 real：dispatch_resume 走真实 HTTP 到图谱构建替身（run_graph_build_double），
@@ -25,10 +23,6 @@ os.environ.setdefault("REVIEW_SNAPSHOT_MAX_BYTES", "2097152")
 os.environ.setdefault("REVIEW_RESUME_MAX_ATTEMPTS", "5")
 # workflow 控制面已迁到 MySQL（temporal-mysql 的 techkg_control 库）；
 # 测试时如无 MySQL，需显式设 WORKFLOW_MYSQL_* 指向可用实例，否则 repository 初始化会失败。
-# 算子目录指到临时空目录，避免 watcher/初始化触碰真实算子
-_op_dir = Path(tempfile.gettempdir()) / f"tech-kg-operators-{os.getpid()}"
-_op_dir.mkdir(exist_ok=True)
-os.environ.setdefault("OPERATOR_DIR", str(_op_dir))
 
 from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402

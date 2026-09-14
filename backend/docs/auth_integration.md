@@ -47,8 +47,8 @@ USER_CENTER_PORTAL_TOKEN_COOKIE=portal_access_token
 - `POST /api/v1/auth/logout`：撤销统一用户中心 token 并清除本地会话。
 
 除健康检查、Swagger/OpenAPI 和上述登录入口外，`/api/v1` 业务路由统一要求
-Session Cookie 或 Bearer Token。`/internal/operators/reload` 继续使用独立的
-`X-Operator-Reload-Token`，供内部工作流回调。
+Session Cookie 或 Bearer Token。（原算子内部重载端点 `/internal/operators/reload`
+已随算子注册模块于 2026-09-14 下线。）
 
 ## 环境变量
 

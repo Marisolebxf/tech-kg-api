@@ -20,7 +20,6 @@ ADMIN_ROUTERS = [
     "task_center_router",
     "workflow_system_router",
     "manual_review_router",
-    "operator_router",
     "admin_member_router",
     "llm_config_router",
     "mysql_datasource_router",

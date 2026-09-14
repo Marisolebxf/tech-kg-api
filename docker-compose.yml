@@ -55,7 +55,7 @@ services:
       CORRECTION_SYNC_MAX_ATTEMPTS: ${CORRECTION_SYNC_MAX_ATTEMPTS:-8}
       CORRECTION_SYNC_MODE: ${CORRECTION_SYNC_MODE:-projection}
       SCHEMA_AUTO_INIT: ${SCHEMA_AUTO_INIT:-true}
-      # schema 脚本 / operator 包 / milvus 内部存储共用 operator-rustfs 一个 S3。
+      # schema 脚本 / milvus 内部存储共用 operator-rustfs 一个 S3。
       SCHEMA_S3_ENDPOINT_URL: ${SCHEMA_S3_ENDPOINT_URL:-http://operator-rustfs:9000}
       SCHEMA_S3_ACCESS_KEY: ${SCHEMA_S3_ACCESS_KEY:-rustfsadmin}
       SCHEMA_S3_SECRET_KEY: ${SCHEMA_S3_SECRET_KEY:-rustfsadmin}
@@ -69,15 +69,6 @@ services:
       PATENT_EMBEDDING_MODEL: ${PATENT_EMBEDDING_MODEL:-moka-ai/m3e-small}
       PATENT_EMBEDDING_DIM: ${PATENT_EMBEDDING_DIM:-512}
       PATENT_EMBEDDING_API_KEY: ${PATENT_EMBEDDING_API_KEY:-local-no-auth}
-      OPERATOR_DIR: /app/operators/user
-      OPERATOR_WORKER_BASE_URIS: ${OPERATOR_WORKER_BASE_URIS:-}
-      OPERATOR_RELOAD_TOKEN: ${OPERATOR_RELOAD_TOKEN:-}
-      OPERATOR_S3_ENDPOINT_URL: http://operator-rustfs:9000
-      OPERATOR_S3_BUCKET: ${OPERATOR_S3_BUCKET:-tech-kg-operators}
-      OPERATOR_S3_PREFIX: ${OPERATOR_S3_PREFIX:-operators}
-      OPERATOR_S3_ACCESS_KEY_ID: ${OPERATOR_S3_ACCESS_KEY_ID:-rustfsadmin}
-      OPERATOR_S3_SECRET_ACCESS_KEY: ${OPERATOR_S3_SECRET_ACCESS_KEY:-rustfsadmin}
-      OPERATOR_S3_REGION: ${OPERATOR_S3_REGION:-us-east-1}
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
       AUTH_SESSION_BACKEND: redis
       AUTH_SESSION_COOKIE: ${AUTH_SESSION_COOKIE:-techkg_session}
@@ -104,7 +95,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - operator-data:/app/operators/user
       - patent-index-state:/app/var/patent_indexes
       - workflow-state:/var/lib/tech-kg
     depends_on:
@@ -322,8 +312,8 @@ services:
       RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
       RUSTFS_CONSOLE_ENABLE: "true"
       RUSTFS_CONSOLE_CORS_ALLOWED_ORIGINS: "*"
-      RUSTFS_ACCESS_KEY: ${OPERATOR_S3_ACCESS_KEY_ID:-rustfsadmin}
-      RUSTFS_SECRET_KEY: ${OPERATOR_S3_SECRET_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
       RUSTFS_UNSAFE_BYPASS_DISK_CHECK: "true"
     volumes:
       - operator-rustfs-data:/data
@@ -365,10 +355,10 @@ services:
     environment:
       ETCD_ENDPOINTS: milvus-etcd:2379
       # Milvus 的对象存储也走 operator-rustfs（S3 兼容），bucket 用默认的 a-bucket，
-      # 启动时自动创建；凭证复用 OPERATOR_S3_*。
+      # 启动时自动创建；凭证复用 RUSTFS_*。
       MINIO_ADDRESS: operator-rustfs:9000
-      MINIO_ACCESS_KEY_ID: ${OPERATOR_S3_ACCESS_KEY_ID:-rustfsadmin}
-      MINIO_SECRET_ACCESS_KEY: ${OPERATOR_S3_SECRET_ACCESS_KEY:-rustfsadmin}
+      MINIO_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      MINIO_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
     volumes:
       - milvus-data:/var/lib/milvus
     depends_on:
@@ -387,7 +377,6 @@ volumes:
   workflow-state:
   m3e-model-cache:
   patent-index-state:
-  operator-data:
   operator-rustfs-data:
   auth-redis-data:
 

@@ -39,7 +39,6 @@ COPY config ./config
 COPY dao ./dao
 COPY db_model ./db_model
 COPY infra ./infra
-COPY operators ./operators
 COPY organization_ETL ./organization_ETL
 COPY schemas ./schemas
 COPY script ./script
@@ -49,8 +48,8 @@ COPY utils ./utils
 COPY main.py ./main.py
 
 # 运行时只允许写入明确的状态目录，应用源码和虚拟环境保持 root 只读。
-RUN mkdir -p /app/operators/user /app/var/patent_indexes /var/lib/tech-kg \
-    && chown -R app:app /app/operators/user /app/var /var/lib/tech-kg
+RUN mkdir -p /app/var/patent_indexes /var/lib/tech-kg \
+    && chown -R app:app /app/var /var/lib/tech-kg
 
 USER app
 

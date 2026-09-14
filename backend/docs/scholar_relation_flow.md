@@ -487,4 +487,4 @@ PYTHONPATH=. ./.venv/bin/python -m script.rebuild_scholar_graph
 - `script/load_graph.py` —— 早期版本，`merge_node` 行为不可靠。
 - `script/init_graph_schema.py` —— 老 `techkg` 空间 + `Scholar`/`EMPLOYED_BY` 命名，和现在的 `dev` + `Person` 无关。
 - `script/organization_*` —— 机构域，不由学者域负责。
-- `script/register_scholar_operators.py` —— 只是把 5 个脚本注册成 operator，**不提供编排**，不能替代本节顺序。
+- `register_scholar_operators.py`（已随算子注册模块删除，2026-09-14）—— 曾把 5 个脚本注册成 operator，本就不提供编排，不能替代本节顺序。

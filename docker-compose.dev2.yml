@@ -8,8 +8,8 @@
 # - TRS_GRAPH_SPACE 显式锁死 dev2（不读 ${TRS_GRAPH_SPACE}，避免根 .env 改回 dev 时静默切换）；
 # - 其余 env 完全复用 docker-compose.yml 的 environment 块（${VAR:-default} 从根 .env 插值）；
 # - 通过 external 网络 tech-kg-api_app 访问共享服务；
-# - 独立卷 workflow-state-dev2 / operator-data-dev2 / patent-index-state-dev2，
-#   不污染生产的 SQLite 控制面 / operator 存储 / 专利索引状态；
+# - 独立卷 workflow-state-dev2 / patent-index-state-dev2，
+#   不污染生产的 SQLite 控制面 / 专利索引状态；
 # - web 通过 volume 覆盖 nginx 配置，upstream 指向 api-dev2（见 frontend/nginx.dev2.conf）。
 #
 # 启动：docker compose -f docker-compose.dev2.yml up -d --build
@@ -93,15 +93,6 @@ services:
       PATENT_EMBEDDING_MODEL: ${PATENT_EMBEDDING_MODEL:-moka-ai/m3e-small}
       PATENT_EMBEDDING_DIM: ${PATENT_EMBEDDING_DIM:-512}
       PATENT_EMBEDDING_API_KEY: ${PATENT_EMBEDDING_API_KEY:-local-no-auth}
-      OPERATOR_DIR: /app/operators/user
-      OPERATOR_WORKER_BASE_URIS: ${OPERATOR_WORKER_BASE_URIS:-}
-      OPERATOR_RELOAD_TOKEN: ${OPERATOR_RELOAD_TOKEN:-}
-      OPERATOR_S3_ENDPOINT_URL: http://operator-rustfs:9000
-      OPERATOR_S3_BUCKET: ${OPERATOR_S3_BUCKET:-tech-kg-operators}
-      OPERATOR_S3_PREFIX: ${OPERATOR_S3_PREFIX:-operators}
-      OPERATOR_S3_ACCESS_KEY_ID: ${OPERATOR_S3_ACCESS_KEY_ID:-rustfsadmin}
-      OPERATOR_S3_SECRET_ACCESS_KEY: ${OPERATOR_S3_SECRET_ACCESS_KEY:-rustfsadmin}
-      OPERATOR_S3_REGION: ${OPERATOR_S3_REGION:-us-east-1}
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
       AUTH_SESSION_BACKEND: redis
       AUTH_SESSION_COOKIE: ${AUTH_SESSION_COOKIE:-techkg_session}
@@ -129,7 +120,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - operator-data-dev2:/app/operators/user
       - patent-index-state-dev2:/app/var/patent_indexes
       - workflow-state-dev2:/var/lib/tech-kg
     networks:
@@ -283,7 +273,6 @@ services:
 
 volumes:
   workflow-state-dev2:
-  operator-data-dev2:
   patent-index-state-dev2:
   temporal-mysql-data-dev2:
 

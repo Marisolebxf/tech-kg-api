@@ -35,8 +35,6 @@ from biz.handler.manual_review import router as manual_review_router
 from biz.handler.manual_review_internal import router as manual_review_internal_router
 from biz.handler.milvus_config import router as milvus_config_router
 from biz.handler.mysql_datasource import router as mysql_datasource_router
-from biz.handler.operator import internal_router as operator_internal_router
-from biz.handler.operator import router as operator_router
 from biz.handler.options import router as options_router
 from biz.handler.platform_overview import router as platform_overview_router
 from biz.handler.relation_detail_annotation import router as relation_detail_annotation_router
@@ -96,10 +94,8 @@ def register_routers(app: FastAPI) -> None:
         embedding_config_router,
         graph_space_router,
         manual_review_router,
-        operator_router,
         admin_member_router,
     )
     for router in admin_routers:
         app.include_router(router, prefix=API_V1_PREFIX, dependencies=admin_dependencies)
     app.include_router(manual_review_internal_router, prefix=API_V1_PREFIX)
-    app.include_router(operator_internal_router)

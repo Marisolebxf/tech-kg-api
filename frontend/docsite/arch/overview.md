@@ -2,7 +2,7 @@
 
 > 来源：根 `CLAUDE.md` · 根/backend `README.md`
 
-本仓库是 monorepo：`backend/`（Python FastAPI）+ `frontend/`（Vue 3 + TS + Vite）。顶层 `docker-compose.yml` 构建并运行两个应用及配套基础设施（Milvus+etcd、共用一个 RustFS S3 承载 schema 脚本 / operator 包 / Milvus 内部存储——不依赖 MinIO、m3e-embedding、auth-redis、Temporal）。
+本仓库是 monorepo：`backend/`（Python FastAPI）+ `frontend/`（Vue 3 + TS + Vite）。顶层 `docker-compose.yml` 构建并运行两个应用及配套基础设施（Milvus+etcd、共用一个 RustFS S3 承载 schema 脚本 / Milvus 内部存储——不依赖 MinIO、m3e-embedding、auth-redis、Temporal）。
 
 ## 请求流（后端 DDD 五层）
 
@@ -22,7 +22,7 @@ main.py → biz/router/register.py → biz/handler/* → application/* → servi
 
 ## 路由分组
 
-Router 分三组：**protected**（依赖 `require_authenticated_user`）、**admin**（再加 `require_platform_admin`）、**internal**（无鉴权：`manual_review_internal`、`operator` internal）。
+Router 分三组：**protected**（依赖 `require_authenticated_user`）、**admin**（再加 `require_platform_admin`）、**internal**（无鉴权：`manual_review_internal`）。
 
 ## infra/ 基础设施一览
 
@@ -34,11 +34,11 @@ Router 分三组：**protected**（依赖 `require_authenticated_user`）、**ad
 | `graph_db/` | trs-graph 客户端（见[图数据库](/arch/graph)） |
 | `graph_api_client.py` | 部分旧 ETL 脚本用的底层 HTTP 客户端 |
 | `milvus.py` | `MilvusClient` 单例 + `OrganizationMilvusStore`（懒加载 pymilvus） |
-| `s3.py` | 通用 boto3 S3 包装（MinIO 兼容）；`operator_store.py` 把用户算子包持久化到 S3（RustFS） |
+| `s3.py` | 通用 boto3 S3 包装（MinIO 兼容，schema 脚本走 RustFS） |
 | `result_cache.py` | 进程内预序列化 JSON 响应缓存（见[性能优化](/arch/perf)） |
 | `user_center.py` | 统一用户中心 OAuth2 客户端 |
 
-其他目录：`operators/`（`scholar/` 内置算子源码 + `user/` 运行时缓存，gitignored）、`organization_ETL/` + `script/`（ETL 脚本与 worker）、`schemas/`（nGQL DDL/spec 文件）、`var/`（SQLite 工作流 DB 等运行态）。
+其他目录：`organization_ETL/` + `script/`（ETL 脚本与 worker）、`schemas/`（nGQL DDL/spec 文件）、`var/`（patent index 状态等运行态）。算子注册表（`operators/` + `service/operator_registry.py`）已于 2026-09-14 整体下线。
 
 ## 新增一个图谱构建功能
 

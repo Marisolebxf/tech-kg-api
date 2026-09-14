@@ -45,7 +45,7 @@
 | 镜像仓库 | 用于存储业务所用的镜像仓库（本环境为 10.50.62.9:30303） |
 | backend | 后端业务镜像（api / temporal-worker / m3e-embedding 三个 Deployment 共用同一镜像，已内置 m3e 模型，通过不同启动命令区分） |
 | web | 前端业务镜像（nginx 静态资源 + `/api/` 反代） |
-| rustfs | S3 兼容对象存储，承载 schema 脚本、operator 包、milvus 内部存储 |
+| rustfs | S3 兼容对象存储，承载 schema 脚本、milvus 内部存储 |
 | temporal | 工作流引擎，图谱构建任务通过它编排调度 |
 
 ## 四、环境说明
@@ -57,7 +57,7 @@
 | 组件 | 版本 | 用途 |
 | ------ | ------ | ------ |
 | redis | 7.4-alpine | 认证会话存储（auth-redis） |
-| rustfs | 1.0.0-alpha.93 | S3 对象存储（schema 脚本 / operator 包 / milvus 存储） |
+| rustfs | 1.0.0-alpha.93 | S3 对象存储（schema 脚本 / milvus 存储） |
 | etcd | 3.5.5 | milvus 元数据 |
 | milvus | 2.4.17 | 专利 / 机构向量检索 |
 | mysql | 8.4 | temporal 专用库 + 业务控制面库 techkg_control |
@@ -159,7 +159,6 @@ kubectl -n bkg create secret docker-registry bkg-image-pull-secret-0 \
 | temporal-mysql-data | 10Gi | temporal-mysql |
 | workflow-state | 10Gi | temporal-worker / api |
 | patent-index-state | 20Gi | api（专利索引状态） |
-| operator-data | 10Gi | api（operator 脚本） |
 | auth-redis-data | 10Gi | auth-redis |
 
 ```yaml
@@ -247,18 +246,6 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: operator-data
-  namespace: bkg
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 10Gi
-  storageClassName: managed-nfs-storage
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
   name: auth-redis-data
   namespace: bkg
 spec:
@@ -337,7 +324,7 @@ spec:
 
 ### 3、部署 operator-rustfs（S3 对象存储）
 
-凭证默认 `rustfsadmin / rustfsadmin`，如修改需同步更新 `03-secret.yaml` 中 `SCHEMA_S3_*` / `OPERATOR_S3_*` 共 4 个 key。
+凭证默认 `rustfsadmin / rustfsadmin`，如修改需同步更新 `03-secret.yaml` 中 `SCHEMA_S3_*` 两个 key。
 
 ```yaml
 # 11-operator-rustfs.yaml
@@ -909,11 +896,6 @@ data:
   SCHEMA_S3_SECURE: "false"
   SCHEMA_SCRIPT_MAX_BYTES: "10485760"
   SCHEMA_ADMIN_USER_IDS: "schema-admin"
-  OPERATOR_DIR: "/app/operators/user"
-  OPERATOR_S3_ENDPOINT_URL: "http://operator-rustfs:9000"
-  OPERATOR_S3_BUCKET: "bkg-operators"
-  OPERATOR_S3_PREFIX: "operators"
-  OPERATOR_S3_REGION: "us-east-1"
 
   # ---- 专利 embedding（m3e-embedding 服务）----
   PATENT_EMBEDDING_PROVIDER: "openai"
@@ -979,8 +961,6 @@ stringData:
   # S3（operator-rustfs）凭证，与 rustfs 部署的 ACCESS_KEY/SECRET_KEY 保持一致
   SCHEMA_S3_ACCESS_KEY: "rustfsadmin"
   SCHEMA_S3_SECRET_KEY: "rustfsadmin"
-  OPERATOR_S3_ACCESS_KEY_ID: "rustfsadmin"
-  OPERATOR_S3_SECRET_ACCESS_KEY: "rustfsadmin"
   # m3e-embedding 本地服务无鉴权
   PATENT_EMBEDDING_API_KEY: "local-no-auth"
   # 用户中心 SSO 客户端凭证（按实际环境填写）
@@ -1000,7 +980,7 @@ stringData:
 
 3. **主 MySQL 业务库**：在外部主 MySQL 上确认 `gkx_element`、`gkx_local` 两个库存在且账号有权限；`SCHEMA_AUTO_INIT=true` 时 `gkx_element` 表结构由 api 启动时自动创建/补齐。若交付含存量数据，按数据交付清单另行导入。
 
-4. **rustfs bucket**：`bkg-schema-scripts`、`bkg-operators` 两个 bucket 由业务首次写入时自动创建，无需手工创建。
+4. **rustfs bucket**：`bkg-schema-scripts` bucket 由业务首次写入时自动创建，无需手工创建（原算子 `bkg-operators` bucket 已随算子注册模块于 2026-09-14 下线，无需创建）。
 
 5. **首个管理员**：`PLATFORM_BOOTSTRAP_FIRST_ADMIN=true` 时，首个通过用户中心 SSO 登录的账号自动成为平台管理员；也可用 `PLATFORM_INITIAL_ADMIN_USER_IDS` 预置。
 
@@ -1209,16 +1189,11 @@ spec:
             periodSeconds: 15
             failureThreshold: 12
           volumeMounts:
-            - name: operator-data
-              mountPath: /app/operators/user
             - name: patent-index-state
               mountPath: /app/var/patent_indexes
             - name: workflow-state
               mountPath: /var/lib/bkg
       volumes:
-        - name: operator-data
-          persistentVolumeClaim:
-            claimName: operator-data
         - name: patent-index-state
           persistentVolumeClaim:
             claimName: patent-index-state

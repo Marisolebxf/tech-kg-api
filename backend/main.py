@@ -19,7 +19,6 @@ from infra.mysql import session_scope
 from infra.redis import close_redis_client
 from infra.workflow_mysql import close_workflow_engine
 from service.correction import process_due_sync_tasks
-from service.operator_registry import REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +47,7 @@ async def _run_correction_dispatcher() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """初始化 Schema 和算子服务，并在退出时释放基础设施资源。"""
-    await asyncio.to_thread(REGISTRY.initialize_store)
-    REGISTRY.start_watcher()
+    """初始化各子系统的后台任务，并在退出时释放基础设施资源。"""
     correction_dispatcher = None
     if os.getenv("CORRECTION_SYNC_WORKER_ENABLED", "false").lower() in {
         "1",
@@ -106,7 +103,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             correction_dispatcher.cancel()
             with suppress(asyncio.CancelledError):
                 await correction_dispatcher
-        REGISTRY.stop_watcher()
         await close_redis_client()
         close_trs_graph_client()
         close_space_clients()

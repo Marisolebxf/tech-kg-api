@@ -1,5 +1,7 @@
 """示例 step pipeline 脚本。
 
+（注：kg.custom.steps 上传通道已随 2026-09-14 D2 下线，本脚本暂无消费方，随 D5 一并处置。）
+
 验证 ``kg.custom.steps`` 流水线 mechanics：4 个 step 函数，每步读上一步输出（ctx.prev_outputs）。
 manifest 示例：
 

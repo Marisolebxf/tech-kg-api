@@ -74,13 +74,12 @@ sources = [
 
 **invalid 与 missing 的区别**：`invalid` = mapper 抛异常（代码 bug 或极端脏数据，看 warning 日志定位）；`missing_*` = 记录合法但端点不在图里（多半是实体脚本没先跑，属于编排问题）。两者都不中断运行——任务结束看 summary 决定是否补跑。
 
-## 双入口模式：CLI + Temporal
+## CLI 入口（旧 ETL 脚本）
 
-每个脚本同时是（1）可独立调试的 CLI（2）被 Temporal activity 子进程加载的 workflow 函数。约定用 `build_sources(payload)` 把「参数 → sources」的决策收成一份，两个入口共享：
+`run_*_extractor` 家族是旧按域大批 ETL 的主流程（与平台抽取双轨并存，作回退手段保留）。每个脚本是可独立调试的 CLI，约定 `build_sources(vars(args))` 把「参数 → sources」的决策收成一份：
 
 ```python
 def build_sources(payload: dict):
-    # payload 既来自 vars(args)（CLI），也来自 Temporal 注入 —— 同形态
     table_choice = payload.get("table", "all")
     tables = TABLES if table_choice == "all" else (table_choice,)
     return [(t, f"SELECT * FROM {t} ORDER BY id", my_mapper) for t in tables]
@@ -93,86 +92,37 @@ def main() -> None:                      # CLI 入口
     configure_logging(args.log_level)
     sources = build_sources(vars(args))   # vars(args) 就是 payload
     print_json(run_relation_extractor(..., sources=sources))
-
-
-def workflow(payload: dict) -> dict:      # Temporal 入口
-    common = common_args_from_payload(payload)  # argparse 的 dict 化镜像
-    configure_logging(common["log_level"])
-    sources = build_sources(payload)
-    return run_relation_extractor(**common, sources=sources)
 ```
+
+> 旧脚本被 `kg.custom.python` 子进程加载的 `workflow(payload)` 入口已随该通道下线（2026-09-14 D2）；平台通道的脚本入口是 `transform(payload)`（平台分批送 `rows`，见下节示例）。
 
 通用 CLI 7 参数（`build_parser`）：`--log-level` / `--database` / `--batch-size` / `--limit` / `--since` / `--dry-run` / `--ingest-batch`。
 
-## 完整示例：4-step 论文流水线
+## 完整示例：论文实体 transform 脚本
 
-上传到 `POST /workflow-system/definitions/steps`（附 step manifest）：增量加载 → LLM 抽取 → 向量化 → 落图。
+在 **Schema 管理页**上传（唯一入口；LLM 安全校验通过后存 S3），绑定来源表后由 `kg.schema.extract` 执行——平台分批送 `rows`，脚本只做转换，落图 / 消歧 / 索引 / 水位全部由平台收尾：
 
 ```python
-"""论文实体流水线：增量加载 → LLM 抽取 → 向量化 → 落图。"""
+"""论文实体抽取：源行 → Paper 实体。"""
 import json
-from sqlalchemy import text
 
 
-def step_load(payload, ctx):
-    """增量加载：只取 watermark 之后的论文。"""
-    with ctx.mysql.session_scope() as s:
-        rows = s.execute(
-            text("SELECT id, title, abstract, updated_at FROM paper "
-                 "WHERE updated_at > :wm ORDER BY updated_at LIMIT :n"),
-            {"wm": ctx.config.watermark or "1970-01-01",
-             "n": payload.get("max_records", 500)},
-        ).fetchall()
-    items = [{"id": r.id, "title": r.title, "abstract": r.abstract,
-              "updated_at": r.updated_at} for r in rows]
-    max_ts = max((r["updated_at"] for r in items), default=None)
-    return {"items": items,
-            "_watermark": max_ts.isoformat() if max_ts else ctx.config.watermark}
+def transform(payload):
+    """只做转换：输入平台分批送来的 rows，输出 entities/failures。"""
+    from kg_sdk import current_context
 
-
-def step_extract(payload, ctx):
-    """LLM 抽取实体（未配 LLM 则降级为空）。"""
-    items = ctx.prev_outputs.get("load", {}).get("items", [])
-    out = []
-    for p in items:
-        raw = ctx.llm.synthesize(
-            f"从论文标题抽取关键实体，返回 JSON 数组：\n{p['title']}"
-        ) if ctx.llm else None
-        out.append({"paper_id": p["id"], "entities": json.loads(raw) if raw else []})
-    return {"items": out}
-
-
-def step_embed(payload, ctx):
-    """向量化并写 Milvus（未配则跳过）。"""
-    items = ctx.prev_outputs.get("extract", {}).get("items", [])
-    if ctx.embedding is None or ctx.milvus is None:
-        return {"embedded": 0, "skipped": True}
-    vecs = ctx.embedding.embed([i["paper_id"] for i in items]) or []
-    records = [{"vid": i["paper_id"], "dense_vector": v}
-               for i, v in zip(items, vecs)]
-    if records:
-        ctx.milvus.upsert("paper", records)
-    return {"embedded": len(records)}
-
-
-def step_persist(payload, ctx):
-    """落图：merge Paper 节点。"""
-    items = ctx.prev_outputs.get("extract", {}).get("items", [])
-    for p in items:
-        ctx.graph.merge_node(["Paper"], {"vid": p["paper_id"],
-                                         "title": p.get("title", "")})
-    return {"persisted": len(items)}
+    ctx = current_context()  # mysql 默认回退来源绑定数据源；llm 未选为 None
+    entities, failures = [], []
+    for row in payload["rows"]:
+        try:
+            entities.append({
+                "id": row["paper_id"],
+                "props": {"title": row["title"], "abstract": row.get("abstract", "")},
+            })
+        except Exception as exc:  # 逐行失败 → T_EXTRACT_FAIL 审核 case，可点重跑
+            failures.append({"recordId": str(row.get("paper_id")), "error": str(exc)})
+    # 可选 pendingReview：低置信/消歧候选 → 审核队列（可带 templateId=T_LINK）
+    return {"entities": entities, "failures": failures}
 ```
 
-manifest（上传时 `steps` 表单字段，JSON 编码）：
-
-```json
-[
-  {"id": "load",    "name": "增量加载", "functionName": "step_load",    "timeoutSeconds": 600,  "retryPolicy": {"maximumAttempts": 3}},
-  {"id": "extract", "name": "LLM 抽取", "functionName": "step_extract", "timeoutSeconds": 1200, "retryPolicy": {"maximumAttempts": 3}},
-  {"id": "embed",   "name": "向量化",   "functionName": "step_embed",   "timeoutSeconds": 600,  "retryPolicy": {"maximumAttempts": 2}},
-  {"id": "persist", "name": "落图",     "functionName": "step_persist", "timeoutSeconds": 1800, "retryPolicy": {"maximumAttempts": 1}}
-]
-```
-
-触发后：每步成功，平台自动写 `(paper-pipeline, load)` 等水位；下次只增量加载 `updated_at > 上次水位` 的论文。失败步走 `POST /task-center/tasks/{id}/retry` reset，已完成步靠 Temporal event history replay 不重跑，失败步重读上次成功水位重处理同一窗口。
+上传与执行闭环：Schema 管理上传脚本（语法 + 入口检查 + LLM 安全校验）→ 绑定来源表（复杂 SQL 走 `query_sql`）→ 触发抽取。平台按来源水位分批读源、隔离子进程跑 `transform`、实体 nGQL `INSERT VERTEX` 入库、入口消歧、重建索引（失败降级不拖垮抽取）、来源全部批次成功后一次性推水位。

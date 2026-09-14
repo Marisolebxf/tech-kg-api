@@ -1,5 +1,7 @@
 """Dev2 冒烟测试用 kg.custom.python 工作流脚本。
 
+（注：kg.custom.python 上传通道已随 2026-09-14 D2 下线，本脚本暂无消费方，随 D5 一并处置。）
+
 调用新的 entity_extractors_one_entity.project_entity 抽取器（dry-run），把统计结果回包。
 不调任何旧 ETL 入口（load_project_graph 等），只走新的「一实体一脚本」实现。
 

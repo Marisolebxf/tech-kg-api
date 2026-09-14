@@ -2,12 +2,12 @@
 
 > 来源：`backend/docs/kg_sdk.md` §1-2/§6-7 · `backend/sdk/kg_sdk.py` · `docs/script-sdk/context.html`
 
-平台支持两种用户脚本：
+平台用户脚本只有一个入口形态——**单参函数**，`ctx` 不经参数传入，统一用 `current_context()` 取：
 
-| 工作流类型 | 脚本签名 | Context 入口 |
+| 入口签名 | 通道 | 说明 |
 |---|---|---|
-| `kg.custom.steps`（多步流水线，推荐） | `def step_xxx(payload: dict, ctx: Context) -> dict` | `ctx` 已被平台包装成 `Context`，直接用 `ctx.mysql` 等 |
-| `kg.custom.python`（单函数，旧） | `def workflow(payload: dict) -> dict` | `from kg_sdk import current_context; ctx = current_context()` |
+| `def transform(payload: dict) -> dict` | Schema 管理上传（`kg.schema.extract`，**唯一通道**） | 平台按来源分批送 `rows`，脚本只做转换，返回 `{entities|edges, failures}` |
+| `def workflow(payload: dict) -> dict` | 旧签名兼容 | 仅入口名不同，ctx 取法一致 |
 
 `Context` 里的客户端是**懒构造**的——第一次访问 `.mysql` / `.graph` / `.milvus` / `.llm` / `.embedding` 时才建连并缓存。
 
@@ -31,64 +31,51 @@
 |---|---|---|
 | `ctx.config.watermark` | `str \| None` | 上次**成功**运行该 (definition, step) 的时间（ISO `YYYY-MM-DDTHH:MM:SS`）；首次运行为 `None` |
 | `ctx.config.checkpoint` | `dict \| None` | 上次成功运行脚本自填的检查点（见[增量水位](/sdk/incremental)） |
-| `ctx.step_id` | `str \| None` | 当前 step id（`kg.custom.steps` 有；单参为 `None`） |
-| `ctx.attempt` | `int \| None` | 当前 step 的 activity 重试次数（第 1 次 = 1） |
-| `ctx.prev_outputs` | `dict` | 前面各 step 的返回值，键为 step id（单参为 `{}`） |
+| `ctx.step_id` | `str \| None` | 多步通道遗留字段；抽取通道不注入（`None`） |
+| `ctx.attempt` | `int \| None` | 多步通道遗留字段；抽取通道不注入（`None`） |
+| `ctx.prev_outputs` | `dict` | 多步通道遗留字段；抽取通道恒为 `{}` |
 | `ctx.execution_id` | `str \| None` | 工作流执行记录 id |
 | `ctx.task_id` | `str \| None` | 任务中心 task id |
 | `ctx.definition_id` | `str \| None` | 工作流定义 id（水位按此 + step_id 索引） |
 
-单参脚本（`workflow(payload)`）只有 `definition_id` / `execution_id` / `task_id` / `config`（水位 step 固定为 `"_default"`）可用；`step_id` / `attempt` / `prev_outputs` 为 `None`/`{}`。
+抽取通道（`transform`）注入 `definition_id` / `execution_id` / `task_id` / `config` 与资源连接参数；`step_id` / `attempt` / `prev_outputs` 是多步通道遗留，恒为 `None`/`{}`。
 
-## 单参脚本入口：current_context()
+## 脚本入口：current_context()
 
-`kg.custom.python` 的 `workflow(payload)` 是单参签名，平台不向其传 `ctx`：
+平台脚本都是单参签名（`transform(payload)`，旧 `workflow(payload)` 兼容），平台不向其传 `ctx`：
 
 ```python
 from kg_sdk import current_context
 
 
-def workflow(payload):
+def transform(payload):
     ctx = current_context()
     if ctx is None:
-        # legacy 运行 / 本地 dev：没有注入 context，自行回退
-        return {"status": "no-context"}
+        # 本地 dev：没有注入 context，自行回退
+        return {"entities": [], "failures": []}
     with ctx.mysql.session_scope() as s:
-        ...
-    return {"status": "ok", "_watermark": "2026-08-25T12:00:00"}
+        ...  # 例：加载查找表做行级消歧（ctx.mysql 默认回退来源绑定数据源）
+    return {"entities": [...], "failures": []}
 ```
 
-`current_context()` 在同一子进程内缓存；未配置 `KG_SCRIPT_CTX` 时返回 `None`（不影响没用 SDK 的老脚本）。
+`current_context()` 在同一子进程内缓存；未配置 `KG_SCRIPT_CTX` 时返回 `None`（本地独立运行不受影响）。
 
-## 触发端字段名
+## 资源选择器（ctx 注入来源）
 
-调用 `POST /api/v1/workflow-system/definitions/{id}/execute` 时，除 `payload` 外可选传以下字段（不传 = 对应 `ctx` 属性为 `None`）。资源统一在**配置管理**页维护，共五个分类：**语言模型 / 向量模型 / MySQL 数据源 / 向量数据空间 / 图数据空间**；列表行内可直接 停用/启用、删除，右上角"＋ 新建配置"新增：
+抽取执行 payload 可带以下资源选择器（worker 内 `_resolve_resources` 解析成连接参数进 `KG_SCRIPT_CTX`；任一解析失败独立降级为缺该 key，对应 `ctx` 属性返回 `None`）。资源统一在**配置管理**页维护，共五个分类：**语言模型 / 向量模型 / MySQL 数据源 / 向量数据空间 / 图数据空间**：
 
 | 字段 | 作用 |
 |---|---|
-| `mysqlDatasourceId` | 选 MySQL 数据源（配置管理 → MySQL 数据源） |
-| `mysqlDatabase` | 覆盖该数据源的默认库（下拉从 `GET /mysql-datasources/{id}/databases` 取） |
-| `graphSpace` | 选图数据空间（配置管理 → 图数据空间，`GET /graph-spaces` 列出） |
-| `milvusConfigId` | 选向量数据空间（配置管理 → 向量数据空间，即 Milvus 向量库配置） |
-| `milvusDatabase` | 覆盖该配置的默认库 |
-| `llmConfigId` | 选语言模型（OpenAI 兼容 chat 模型） |
-| `embeddingConfigId` | 选向量模型（embedding） |
-| `since` | 业务自带的"起始时间"提示（透传进 payload，与 `watermark` 无关） |
+| `mysql_datasource_id` | 选 MySQL 数据源（配置管理 → MySQL 数据源） |
+| `mysql_database` | 覆盖该数据源的默认库 |
+| `graph_space` | 选图数据空间 |
+| `milvus_config_id` | 选向量数据空间（Milvus 向量库配置） |
+| `milvus_database` | 覆盖该配置的默认库 |
+| `llm_config_id` | 选语言模型（OpenAI 兼容 chat 模型） |
+| `embedding_config_id` | 选向量模型（embedding） |
+| `since` | 业务自带的"起始时间"提示（透传，与平台水位无关） |
 
-示例：
-
-```bash
-curl -X POST http://api:8000/api/v1/workflow-system/definitions/paper-pipeline/execute \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "payload": {"stage": "all", "max_records": 1000},
-    "mysqlDatasourceId": "MYSQL-AB12CD34",
-    "mysqlDatabase": "gkx_element",
-    "graphSpace": "techkg",
-    "llmConfigId": "LLM-1234ABCD",
-    "embeddingConfigId": "EMB-5678EFGH"
-  }'
-```
+**当前抽取入口（Schema 抽取触发 / Job / 自动策略）的 payload 默认只带 `schemaId` / `graphSpace` / `batchSize` / `triggerSource`**——即脚本实际通常拿到：`ctx.mysql`（未显式选 MySQL 时**回退来源绑定数据源**）+ `ctx.source`（来源表元数据，不含 `datasourceId`）；`graph` / `llm` / `embedding` 未选为 `None`，脚本按降级约定判空。历史示例（对 `definitions/{id}/execute` 传 `mysqlDatasourceId` 等驼峰字段）已随独立脚本通道下线而失效。
 
 ## LLM / embedding 降级
 

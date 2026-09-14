@@ -19,12 +19,12 @@ hero:
 features:
   - icon: 🧩
     title: 抽取脚本 SDK（kg_sdk）
-    details: 平台向脚本注入 Context（MySQL / trs-graph / Milvus / LLM / embedding 五类懒加载客户端），配合 watermark 水位做增量抽取、prev_outputs 做多步流水线、access report 做数据访问溯源。
+    details: 平台向 transform 脚本注入 Context（MySQL / trs-graph / Milvus / LLM / embedding 五类懒加载客户端），水位由平台按来源托管断点续读，access report 做数据访问溯源。
     link: /sdk/context
     linkText: 查看 SDK 文档
   - icon: 🏛️
     title: DDD 分层后端
-    details: FastAPI + biz/handler → application → service → dao/infra 五层架构；Temporal 工作流、算子注册表、人工审核、修正中心、schema 管理等子系统逐一拆解。
+    details: FastAPI + biz/handler → application → service → dao/infra 五层架构；Temporal 工作流、人工审核、修正中心、schema 管理等子系统逐一拆解。
     link: /arch/overview
     linkText: 查看架构文档
   - icon: 🚀

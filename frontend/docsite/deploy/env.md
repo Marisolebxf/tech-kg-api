@@ -39,8 +39,10 @@
 
 | 变量 | 说明 |
 |---|---|
-| `TEMPORAL_ADDRESS` | Temporal server |
-| `WORKFLOW_DATABASE_PATH` | SQLite 控制面路径（`var/` 下） |
+| `TEMPORAL_ADDRESS` / `TEMPORAL_NAMESPACE` | Temporal server 与命名空间 |
+| `TEMPORAL_TASK_QUEUE` | 唯一任务队列（默认 `tech-kg-workflows`） |
+| `TEMPORAL_MAX_CONCURRENT_ACTIVITIES` | worker 并发封顶（默认 4） |
+| `WORKFLOW_MYSQL_HOST/PORT/DATABASE/USERNAME/PASSWORD` | 控制面 MySQL（`techkg_control`，与 Temporal 共用 mysql 实例） |
 | `KG_SCRIPT_CTX` | activity 向脚本子进程注入的 Context 连接参数（JSON） |
 | `KG_ACCESS_LOG` | 访问溯源 sidecar 临时文件路径 |
 

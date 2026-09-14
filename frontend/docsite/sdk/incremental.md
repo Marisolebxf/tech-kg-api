@@ -2,48 +2,15 @@
 
 > 来源：`backend/docs/kg_sdk.md` §3-4 · `docs/script-sdk/reading.html` · `backend/script/entity_extractors_one_entity/common.py`
 
-## watermark 增量水位
+## watermark 增量水位（平台托管）
 
-`ctx.config.watermark` 记录上次成功运行时间。平台在 step **成功返回后**自动写入本次水位（默认 = 当前时间）。脚本可以在返回 dict 里带 `_watermark` / `_checkpoint` 覆盖默认值——例如用本批数据的最大 `updated_at` 做水位，下次只跑增量。
+抽取通道的增量水位**完全由平台管理**，脚本不用管：
 
-```python
-def step_load(payload, ctx):
-    sql = "SELECT id, name, updated_at FROM paper WHERE updated_at > :wm ORDER BY updated_at"
-    with ctx.mysql.session_scope() as s:
-        result = s.execute(text(sql), {"wm": ctx.config.watermark or "1970-01-01"})
-        rows = [dict(r._mapping) for r in result]
-    # 用本批最大 updated_at 做下次水位；空批显式回传旧值 → 水位不前进
-    max_ts = max((r["updated_at"] for r in rows), default=None)
-    return {
-        "count": len(rows),
-        "items": rows,
-        "_watermark": max_ts.isoformat() if max_ts else ctx.config.watermark,
-    }
-```
+- **读源**：`read_source_batch` 按来源绑定游标分批——水位模式 `WHERE time > :wm ORDER BY time, pk`，或 pk keyset 模式（合成唯一 pk）；
+- **推进**：该来源**全部批次成功后** `advance_schema_extract_watermark` 一次性推进（watermark 模式写时间；keyset 模式把 pk 游标写进 checkpoint）——并发下逐批推进会留洞，所以收口一次推；
+- **失败**：停在上一轮水位，下轮断点续读；执行失败可 `POST /task-center/tasks/{id}/retry` 走 Temporal reset 重放。
 
-规则要点：
-
-- 平台写水位用 `_watermark`（ISO 字符串，解析失败回退 `now()`）和 `_checkpoint`（任意 JSON，如 `{"last_id": 12345}`）。
-- 这两个字段会从 step 输出里**剥离**，不会出现在任务详情页的 step 结果里。
-- step 失败/超时**不写水位**——reset 后重读上次成功水位，重处理同一窗口，幂等。
-- 不同 step 各有独立水位（按 `(definition_id, step_id)` 索引）。
-
-## prev_outputs 多步链式
-
-`kg.custom.steps` 里前一步返回的 dict 自动作为后一步 `ctx.prev_outputs[step_id]`：
-
-```python
-def step_extract(payload, ctx):
-    papers = ctx.prev_outputs.get("load", {}).get("items", [])
-    extracted = [extract_entities(p["name"], ctx) for p in papers]
-    return {"items": extracted}
-
-
-def step_persist(payload, ctx):
-    for rec in ctx.prev_outputs.get("extract", {}).get("items", []):
-        ctx.graph.merge_node(["Paper"], {"vid": rec["paper_id"]})
-    return {"persisted": len(rec)}
-```
+脚本返回 dict 里的 `_watermark` / `_checkpoint` 元字段**被忽略**（平台按批次游标管理水位），仍会从输出里剥离、不进任务详情展示。`ctx.config.watermark` 不保证有值（抽取通道不依赖），脚本内查找表等自建增量请自行管理游标。
 
 ## iter_rows：大表安全读取
 
@@ -97,20 +64,14 @@ sql = apply_since(SQL, since)
 rows = iter_rows(engine, sql, batch_size=500, params={"since": since} if since else None)
 ```
 
-## 推荐的增量闭环
+## transform 脚本与增量的关系
+
+平台通道里**脚本不做增量读源**——平台按来源水位分批把 `rows` 送进 `transform(payload)`，脚本只做逐批转换。`iter_rows` / `apply_since` 供脚本内自建读取用（如增量加载查找表），或独立 CLI 运行旧 ETL 脚本（回退手段，D5 暂缓）：
 
 ```python
-def workflow(payload: dict) -> dict:
-    # ① 优先级：显式 payload > 上次成功运行的水位
-    ctx = current_context()
-    since = payload.get("since")
-    if ctx and ctx.config.watermark:
-        since = since or ctx.config.watermark
-    # ② 增量跑（主流程函数自动 apply_since + 注入 :since 绑定）
-    summary = run_entity_extractor(..., since=since, sources=sources)
-    # ③ 报告本次最大更新时间，供框架写回水位
-    summary["watermark"] = max_source_update_time(summary)
-    return summary
+def transform(payload: dict) -> dict:
+    rows = payload["rows"]  # 平台按来源水位分批送入，无需自行增量
+    entities = [mapper(r) for r in rows]
+    return {"entities": entities, "failures": []}
 ```
 
-首次运行传 `since=None` 即全量。

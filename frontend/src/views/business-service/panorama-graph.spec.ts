@@ -309,17 +309,18 @@ describe("panoramaNodeRelationSummaries", () => {
     return response;
   }
 
-  it("全量统计每个实体的真实关系，超过 5 条不截断并带总数前缀", () => {
+  it("全量统计每个实体的真实关系，超过 5 条不截断且不带总数前缀", () => {
     const summaries = panoramaNodeRelationSummaries(relationResponse());
 
     const center = summaries.get("chain_1");
     expect(center).toBeDefined();
-    expect(center).toContain("共 6 条：");
+    // 不带「共 N 条：」统计前缀，直接列关系线。
+    expect(center).not.toContain("共 ");
     // 6 条关系全部列出（旧逻辑只显示前 5 条）。
     for (let i = 1; i <= 6; i++) {
       expect(center).toContain(`环节${i}`);
     }
-    expect(summaries.get("node_0")).toBe("共 1 条：HAS_NODE ← 集成电路");
+    expect(summaries.get("node_0")).toBe("HAS_NODE ← 集成电路");
   });
 
   it("关系类型经展示函数中文化，对端实体不在子图时回退 id", () => {
@@ -331,9 +332,7 @@ describe("panoramaNodeRelationSummaries", () => {
       edgeLabelDisplay: () => "链上资讯关系",
     });
 
-    expect(summaries.get("node_0")).toBe(
-      "共 1 条：链上资讯关系 → unknown_vid",
-    );
+    expect(summaries.get("node_0")).toBe("链上资讯关系 → unknown_vid");
   });
 
   it("没有真实边的实体不进入统计结果", () => {
@@ -354,7 +353,10 @@ describe("panoramaNodeRelationSummaries", () => {
       ],
     });
 
-    expect(summaries.get("chain_1")).toContain("共 2 条：");
+    // 只统计传入的 2 条边，且不带总数前缀。
+    expect(summaries.get("chain_1")).toBe(
+      "HAS_NODE → 环节1；HAS_NODE → 环节2",
+    );
     expect(summaries.has("node_0")).toBe(true);
     expect(summaries.has("node_2")).toBe(false);
   });
@@ -374,11 +376,9 @@ describe("panoramaNodeRelationSummaries", () => {
       labelById: new Map([["__panorama_center__", "集成电路"]]),
     });
 
-    expect(summaries.get("node_0")).toBe("共 1 条：关键技术 ← 集成电路");
+    expect(summaries.get("node_0")).toBe("关键技术 ← 集成电路");
     // node_0 不在 labelById 里，回退全量并集标签「环节1」。
-    expect(summaries.get("__panorama_center__")).toBe(
-      "共 1 条：关键技术 → 环节1",
-    );
+    expect(summaries.get("__panorama_center__")).toBe("关键技术 → 环节1");
   });
 });
 

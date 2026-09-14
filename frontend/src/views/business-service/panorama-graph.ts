@@ -147,7 +147,7 @@ export function collectPanoramaEntities(
  * 每个实体的关系统计：默认从子图全量真实边统计（不含画布分层展示连线）；
  * 页面按画布口径调用时通过 options.edges 传入实际渲染的连线（可含分层
  * 展示连线），统计范围随之收窄；端点名可用 options.labelById 覆盖（画布
- * 节点标签）。格式「共 N 条：{类型} → {对端}；...」，不截断；没有连线的
+ * 节点标签）。格式「{类型} → {对端}；...」，不带总数前缀，不截断；没有连线的
  * 实体不进入结果。
  */
 export function panoramaNodeRelationSummaries(
@@ -180,7 +180,7 @@ export function panoramaNodeRelationSummaries(
   }
   const summaries = new Map<string, string>();
   for (const [id, relations] of relationsByNode) {
-    summaries.set(id, `共 ${relations.length} 条：${relations.join("；")}`);
+    summaries.set(id, relations.join("；"));
   }
   return summaries;
 }

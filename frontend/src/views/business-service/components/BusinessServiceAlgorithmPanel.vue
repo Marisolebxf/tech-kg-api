@@ -990,8 +990,8 @@ function derivedGraphFromResponse(
   });
 
   // 「命中关系」与实体页/关系页同口径：统计画布全部连线（真实图库边 + 分层
-  // 展示连线，连线类型即分层名），每个节点列出全部相邻关系与对端、带总数
-  // 前缀、不截断；标签取画布节点名（虚拟中心也能正确显示产业名）。
+  // 展示连线，连线类型即分层名），每个节点列出全部相邻关系与对端，不带
+  // 总数前缀、不截断；标签取画布节点名（虚拟中心也能正确显示产业名）。
   const relationSummaries = panoramaNodeRelationSummaries(resp, {
     edgeLabelDisplay: displayRelationType,
     edges: edges.map(canvasEdgeToPanoramaEdge),
@@ -1163,6 +1163,8 @@ function buildLiveGraph(
       ingestTime?: string;
       confidence?: number;
     },
+    // 节点级证据；缺省沿用响应级 evidence（实体页选中节点的「证据」行）。
+    nodeEvidence?: string[],
   ) => {
     if (!id || nodes.some((n) => n.id === id)) return;
     const nodeConfidence =
@@ -1181,7 +1183,7 @@ function buildLiveGraph(
       entityType,
       confidence: nodeConfidence,
       relations,
-      evidence: ev,
+      evidence: nodeEvidence ?? ev,
       ...(provenance && {
         sourceTable: provenance.sourceTable,
         sourceField: provenance.sourceField,
@@ -1288,8 +1290,9 @@ function buildLiveGraph(
         );
       }
       // 事件节点标签用「类型+日期」短文案：新闻标题 20-40 字，做标签必然截断出省略号；
-      // 完整标题放 relations 副标题与悬浮提示（title），摘要"核心事件"行也展示 TOP1 标题。
-      // 实体 tab 的「关系」只展示事件标题，不把 impact_score 拼进去。
+      // 完整标题放节点「证据」（实体页选中该事件的证据行），摘要"核心事件"行也展示
+      // TOP1 标题。实体 tab 的「关系」统一为下方按画布连线统计的箭头关系线，
+      // 不再把新闻标题顶替关系展示。
       addNode(
         ev0.event_id,
         `${displayEventType(ev0.event_type)} ${displayEventDate(ev0.occur_date)}`,
@@ -1299,6 +1302,7 @@ function buildLiveGraph(
         // 事件置信度用后端 EVENT_CONFIDENCE 值（风险 0.9 / 财务 0.85 / 中标 0.8 / 资讯 0.7）
         typeof ev0.confidence === "number" ? ev0.confidence : undefined,
         data.entity_provenance?.[ev0.event_id],
+        ev0.title ? [ev0.title] : undefined,
       );
       addEdge(
         ev0.org_id,
@@ -1309,14 +1313,18 @@ function buildLiveGraph(
       );
     }
     for (const rel of data.relations || []) {
+      const expertSummary = [rel.role, rel.org_name]
+        .filter(Boolean)
+        .join("｜");
       addNode(
         rel.expert_id,
         rel.expert_name,
         "expert",
         "专家",
-        [rel.role, rel.org_name].filter(Boolean).join("｜") || "企业高管",
+        expertSummary || "企业高管",
         data.entity_provenance?.[rel.expert_id]?.confidence,
         data.entity_provenance?.[rel.expert_id],
+        expertSummary ? [expertSummary] : undefined,
       );
       addEdge(
         rel.event_id,
@@ -1325,6 +1333,29 @@ function buildLiveGraph(
         "专家任职",
         data.entity_provenance?.[rel.expert_id]?.confidence,
       );
+    }
+    // 实体 tab 的「关系」统一为箭头关系线，参考实体 1（产业链节点）既有的
+    // 「事件类型 → 企业」展示：按画布连线统计每个实体到对端实体的关系，
+    // 出边「关系类型 → 对端」、入边「关系类型 ← 对端」（与论文合作/全景图
+    // 模块同口径）；产业链节点保留上方「事件类型 → 企业」的既有展示，
+    // 企业/事件/专家不再罗列事件类型、新闻标题或任职信息。
+    const labelById = new Map(nodes.map((node) => [node.id, node.label]));
+    const relationsByNode = new Map<string, string[]>();
+    for (const edge of edges) {
+      const fromLabel = labelById.get(edge.from);
+      const toLabel = labelById.get(edge.to);
+      if (!fromLabel || !toLabel) continue;
+      const fromList = relationsByNode.get(edge.from) ?? [];
+      fromList.push(`${edge.label} → ${toLabel}`);
+      relationsByNode.set(edge.from, fromList);
+      const toList = relationsByNode.get(edge.to) ?? [];
+      toList.push(`${edge.label} ← ${fromLabel}`);
+      relationsByNode.set(edge.to, toList);
+    }
+    for (const node of nodes) {
+      if (node.id === data.chain_node_id) continue;
+      const rels = relationsByNode.get(node.id);
+      if (rels?.length) node.relations = rels.join("；");
     }
   } else if (key === "paper-cooperation") {
     // 优先使用后端"查到即记"组装的真实子图（graph 与 structuredResult 平级）；
@@ -2371,9 +2402,9 @@ const liveEntityRows = computed(() => {
     return rows;
   }
   // 全景图：实体页与画布同口径，逐个列出画布渲染节点（产业链中心 + 分层 +
-  // 展开层），数量与画布节点数一致；「关系」行按画布全部连线统计并带总数
-  // 前缀，不截断——分层展示连线也计入，分层实体不再显示「—」；确无任何
-  // 连线的节点给出说明文案。
+  // 展开层），数量与画布节点数一致；「关系」行按画布全部连线统计，不带
+  // 总数前缀，不截断——分层展示连线也计入，分层实体不再显示「—」；确无
+  // 任何连线的节点给出说明文案。
   if (isPanorama.value && panoramaResponse.value) {
     return panoramaEntityList.value.flatMap(
       (entity, index): Array<readonly [string, string]> => [

@@ -1831,6 +1831,56 @@ const displayRelationType = (value?: string) =>
 const displayRelationDetail = (edge: GraphEdgeData) =>
   displayRelationType(edge.label || edge.category);
 
+/* 论文合作页「关系描述」专用口径：直接/间接 + 核实过的关系名（统一名词
+ * 形式，动词性名称加「关系」后缀）。该模块全部关系均为直接关系（单表一行
+ * 可查：署名 dwd_zh/en_author、合著 dwd_scholar_coauthor、期刊
+ * dwd_zh/en_journal、主题 paper.keywords、被引 dwd_*_paper_reference）。
+ * 画布边是展示语义（发表/参与合著/作者单位等），按边语义映射回关系名：
+ * 人↔人→专家合著关系，论文↔人→论文署名关系（作者单位是署名记录的
+ * affiliation 列，也归入论文署名），论文→期刊→论文发表关系，
+ * 论文→关键词→论文主题。 */
+const paperCoopRelationDescriptions: Record<string, string> = {
+  论文合作: "直接关系/专家合著关系",
+  发表: "直接关系/论文署名关系",
+  共同作者: "直接关系/论文署名关系",
+  参与合著: "直接关系/论文署名关系",
+  团队成员: "直接关系/论文署名关系",
+  作者单位: "直接关系/论文署名关系",
+  研究主题: "直接关系/论文主题",
+  发表于: "直接关系/论文发表关系",
+  发表级别: "直接关系/论文发表关系",
+};
+const paperCoopRelationDescription = (edge: GraphEdgeData): string =>
+  paperCoopRelationDescriptions[edge.label] ||
+  paperCoopRelationDescriptions[edge.category] ||
+  `直接关系/${displayRelationDetail(edge)}`;
+
+/* 企业关联页「关系描述」专用口径：映射到核实过的 13 条关系（名词名）。
+ * 治理任职为人-企业直连边（cooperation_mode 与边类型一一对应：高管任职
+ * EXECUTIVE_OF、法人代表 LEGAL_REP_OF、实际控制 ACTUAL_CONTROLLER_OF、
+ * 受益所有 BENEFICIAL_OWNER_OF、股东持股 SHAREHOLDER_OF、任职
+ * AFFILIATED_WITH），全部单表直查=直接。
+ * 项目合作是 专家→项目→企业 两跳组合：人侧 项目负责人/项目参加人、机构侧
+ * 项目资助方/项目参与机构，均单表直查=直接（前端数据不区分 LEADS 与
+ * HAS_PARTICIPANT，展示两侧代表名称）。
+ * 专利合作是 专家→专利→企业：人侧 专利发明人（dwd_patent.inventors，直接）；
+ * 机构侧 专利申请方 APPLIED_BY——图上 94% 边经 milvus_bm25_dense_hybrid
+ * 对齐到企业实体才成立，判间接。 */
+const enterpriseRelationDescriptions: Record<string, string> = {
+  高管任职: "直接关系/高管任职关系",
+  法人代表: "直接关系/法定代表关系",
+  实际控制: "直接关系/实际控制关系",
+  受益所有: "直接关系/最终受益关系",
+  股东持股: "直接关系/股东持股关系",
+  任职: "直接关系/任职关系",
+  项目合作: "直接关系/项目参加人、项目资助方",
+  专利合作: "直接关系/专利发明人、间接关系/专利申请方",
+};
+const enterpriseRelationDescription = (edge: GraphEdgeData): string =>
+  enterpriseRelationDescriptions[edge.label] ||
+  enterpriseRelationDescriptions[edge.category] ||
+  `直接关系/${displayRelationDetail(edge)}`;
+
 /* 暂不展示“评分依据”，保留格式化代码以便后续恢复。
 const confidenceBreakdownLabels: Record<string, string> = {
   originalConfidence: "原始置信度",
@@ -2338,7 +2388,11 @@ const liveRelationRows = computed(() => {
       ] as const,
       [
         "关系描述",
-        `${activeRelationCategory.value}/${displayRelationDetail(relation)}`,
+        isPaperCooperation.value
+          ? paperCoopRelationDescription(relation)
+          : isLiveEnterpriseRelation.value
+            ? enterpriseRelationDescription(relation)
+            : `${activeRelationCategory.value}/${displayRelationDetail(relation)}`,
       ] as const,
       ["置信度", formatRelationConfidence(relation)] as const,
     ];

@@ -215,7 +215,7 @@ export const serviceModules: ServiceModule[] = [
       { label: '成果分布', value: '' },
       { label: '成果1', value: '论文/专利/项目名称' },
       { label: '完成时间', value: '' },
-      { label: '所属领域', value: '' },
+      { label: '直接/所属领域', value: '' },
       { label: '奖项/评价', value: '' },
       { label: '核心贡献', value: '' },
       { label: '合作模式', value: '' },

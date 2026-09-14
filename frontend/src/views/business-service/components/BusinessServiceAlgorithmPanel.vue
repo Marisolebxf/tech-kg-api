@@ -106,7 +106,7 @@ const PANORAMA_LAYER_VISUAL: Record<
 > = {
   core_technology: {
     nodeType: "topic",
-    entityType: "关键技术",
+    entityType: "技术主题",
     level: 1,
     y: 140,
     edgeLabel: "关键技术",
@@ -114,7 +114,7 @@ const PANORAMA_LAYER_VISUAL: Record<
   },
   leading_enterprise: {
     nodeType: "company",
-    entityType: "重点企业",
+    entityType: "企业",
     level: 2,
     y: 235,
     edgeLabel: "重点企业",
@@ -122,7 +122,7 @@ const PANORAMA_LAYER_VISUAL: Record<
   },
   leading_expert: {
     nodeType: "expert",
-    entityType: "核心专家",
+    entityType: "科技专家",
     level: 2,
     y: 320,
     edgeLabel: "核心专家",
@@ -130,7 +130,7 @@ const PANORAMA_LAYER_VISUAL: Record<
   },
   flagship_achievement: {
     nodeType: "event",
-    entityType: "产业动态事件",
+    entityType: "事件",
     level: 3,
     y: 395,
     edgeLabel: "产业动态事件",
@@ -757,40 +757,38 @@ function mapPanoramaGraphNodeType(type: string): {
 } {
   const t = (type || "").toLowerCase();
   if (t.includes("person") || t.includes("scholar") || t.includes("expert")) {
-    return { nodeType: "expert", entityType: "扩展专家" };
+    return { nodeType: "expert", entityType: "科技专家" };
   }
-  if (
-    t.includes("organization") ||
-    t.includes("company") ||
-    t.includes("institution")
-  ) {
-    return { nodeType: "org", entityType: "扩展机构" };
+  if (t.includes("company") || t.includes("enterprise")) {
+    return { nodeType: "company", entityType: "企业" };
   }
-  // 专利/论文/报告分开标注，实体页「实体类别」才能归一到受控词表的
-  // 专利/论文/科技成果（此前专利与论文同标「扩展成果」会统一显示为论文）。
+  if (t.includes("organization") || t.includes("institution")) {
+    return { nodeType: "org", entityType: "机构" };
+  }
   if (t.includes("patent")) {
-    return { nodeType: "paper", entityType: "扩展专利" };
+    return { nodeType: "paper", entityType: "专利" };
   }
   if (t.includes("paper") || t.includes("publication")) {
-    return { nodeType: "paper", entityType: "扩展论文" };
+    return { nodeType: "paper", entityType: "论文" };
   }
+  // 报告属科技产出，按科技成果归类（词表内类别）。
   if (t.includes("report")) {
-    return { nodeType: "paper", entityType: "扩展成果" };
+    return { nodeType: "paper", entityType: "科技成果" };
   }
-  // 资讯（News）与事件同类，统一按事件展示，不再落到关键技术。
+  // 资讯（News）与事件同类，统一按事件展示，不再落到技术主题。
   if (t.includes("event") || t.includes("news")) {
-    return { nodeType: "event", entityType: "扩展事件" };
+    return { nodeType: "event", entityType: "事件" };
   }
   // 产品属科技产出，按科技成果归类；项目单列。
   if (t.includes("product")) {
-    return { nodeType: "project", entityType: "扩展成果" };
+    return { nodeType: "project", entityType: "科技成果" };
   }
   if (t.includes("project")) {
-    return { nodeType: "project", entityType: "扩展项目" };
+    return { nodeType: "project", entityType: "项目" };
   }
   // IndustryNode、Keyword 等产业技术节点在不同图空间中的 label 并不完全
-  // 一致；无法映射到专家、机构、成果等明确类型时，统一按关键技术展示。
-  return { nodeType: "topic", entityType: "关键技术" };
+  // 一致；无法映射到专家、机构、成果等明确类型时，统一按技术主题展示。
+  return { nodeType: "topic", entityType: "技术主题" };
 }
 
 /**
@@ -877,7 +875,7 @@ function derivedGraphFromResponse(
     id: centerId,
     label: centerSource?.label || industryLabel,
     nodeType: "main",
-    entityType: "产业链核心",
+    entityType: "产业链",
     x: 380,
     y: hasExpanded ? 24 : 50,
     radius: 34,
@@ -1061,10 +1059,10 @@ function buildPaperCoopRealGraph(
   };
   const entityTypeByBackend: Record<string, string> = {
     expert: "科技专家",
-    paper: "论文成果",
-    keyword: "研究主题",
-    venue: "期刊/会议",
-    collaborator: "合作专家",
+    paper: "论文",
+    keyword: "技术主题",
+    venue: "机构",
+    collaborator: "科技专家",
   };
   // 布局：两位专家左右分列，合作论文绕中心，主题/期刊/合作者在外圈。
   const experts = graph.nodes.filter((node) => node.type === "expert");
@@ -1094,7 +1092,7 @@ function buildPaperCoopRealGraph(
       nodeType: nodeTypeByBackend[type] || "expert",
       x: position?.x ?? 220,
       y: position?.y ?? 200,
-      entityType: entityTypeByBackend[type] || "实体",
+      entityType: entityTypeByBackend[type] || "科技成果",
       relations: String(node.subtitle || ""),
       // 机构名等属性信息保留在 evidence 里，命中关系由下方按边统计。
       evidence: node.subtitle ? [String(node.subtitle)] : [],
@@ -1334,7 +1332,7 @@ function buildLiveGraph(
         rel.expert_id,
         rel.expert_name,
         "expert",
-        "专家",
+        "科技专家",
         [rel.role, rel.org_name].filter(Boolean).join("｜") || "企业高管",
         data.entity_provenance?.[rel.expert_id]?.confidence,
         data.entity_provenance?.[rel.expert_id],
@@ -1539,12 +1537,25 @@ const liveModuleGraph = computed(() => {
           nodeType = "org";
         } else if (node.type === "expert") {
           nodeType = "expert";
+        } else if (["paper", "patent", "report", "award"].includes(node.type)) {
+          nodeType = "paper";
         }
-        let entityType = "合作成果";
+        // 实体类别统一用业务口径 12 类：同事成果按 paper/patent/project/
+        // report/award 映射，report/award 等无法细分的成果归入科技成果。
+        const achievementEntityTypes: Record<string, string> = {
+          paper: "论文",
+          patent: "专利",
+          project: "项目",
+          report: "科技成果",
+          award: "科技成果",
+        };
+        let entityType: string;
         if (node.type === "expert") {
           entityType = "科技专家";
         } else if (node.type === "organization") {
-          entityType = "共同机构";
+          entityType = "机构";
+        } else {
+          entityType = achievementEntityTypes[node.type] || "科技成果";
         }
         return {
           id: node.id,
@@ -1804,13 +1815,57 @@ Object.assign(relationTypeDisplay, {
 const relationCategoryByModule: Record<string, string> = {
   "expert-direct": "直接关系",
   "node-indirect": "间接关系",
-  "two-point-achievement": "合作关系",
-  "expert-colleague": "同事关系",
-  "expert-alumni": "校友关系",
+  // 两点合作成果：三条合成边（论文/专利/项目合作）均由双端成果边邻居集合
+  // 求交得到（多表 join 口径），前缀统一为「间接」，业务细目见边 label。
+  "two-point-achievement": "间接",
+  // 同事/校友模块的类别不走此静态映射,由 displayRelationCategory 按边
+  // 动态判定:命中下方关系详情映射(梳理文档中的直接关系)标"直接关系",
+  // 未命中默认"间接关系"。这里的值仅作兜底,正常不会读到。
+  "expert-colleague": "直接关系",
+  "expert-alumni": "直接关系",
   "paper-cooperation": "合作关系",
   "enterprise-relation": "企业关联关系",
   "industry-chain-event": "产业链关联关系",
   "industry-chain-panorama": "产业链关联关系",
+};
+
+// 关系详情:同事/校友模块只展示梳理文档(md)中的关系名(名词),不带后缀
+// (如"直接关系/同事");动词类关系名加"关系"构成名词(任职→任职关系)。
+// key 为画布边 label(同事边 label="同事关系"、任职边 label="AFFILIATED_WITH"、
+// 校友边 label="校友关系"、共同成果边 label="发表"/"发明"/"参与"或原始边类型)。
+const colleagueRelationDetails: Record<string, string> = {
+  同事关系: "同事",
+  AFFILIATED_WITH: "任职关系",
+  COAUTHOR_WITH: "合著关系",
+  AUTHORED_BY: "署名关系",
+  INVENTED_BY: "发明人",
+  LEADS: "项目负责人",
+  HAS_PARTICIPANT: "项目参与者",
+  // #7 反向变体(人→项目),与 HAS_PARTICIPANT 同属项目参与关系
+  PARTICIPATES_IN: "项目参与者",
+  // #12 共享节点(Report/Award/Team 等)关联边,类型不统一,按业务口径算直接
+  RELATED_TO: "关联关系",
+};
+
+const alumniRelationDetails: Record<string, string> = {
+  校友关系: "校友",
+  STUDIED_AT: "就读关系",
+  COAUTHOR_WITH: "合著关系",
+  // 校友图谱共同成果边用中文 label(后端 expertRelations):发表/发明/负责/参与,
+  // 与原始边类型(AUTHORED_BY/INVENTED_BY/LEADS/HAS_PARTICIPANT)同属一条关系。
+  发表: "署名关系",
+  发明: "发明人",
+  负责: "项目负责人",
+  参与: "项目参与者",
+  AUTHORED_BY: "署名关系",
+  INVENTED_BY: "发明人",
+  LEADS: "项目负责人",
+  HAS_PARTICIPANT: "项目参与者",
+};
+
+const relationDetailByModule: Record<string, Record<string, string>> = {
+  "expert-colleague": colleagueRelationDetails,
+  "expert-alumni": alumniRelationDetails,
 };
 
 const activeRelationCategory = computed(
@@ -1822,20 +1877,27 @@ const activeRelationCategory = computed(
  * 词表内的类别，不再把「扩展产品」等原文透出到实体页。 */
 function normalizeEntityCategory(node: GraphNodeData): string {
   const entityType = `${node.entityType || ""}`.toLowerCase();
-  if (/院校|学校|school|university/u.test(entityType)) return "院校";
-  if (/产业链节点|industry.?node/u.test(entityType)) return "产业链节点";
-  if (/产业链|chain/u.test(entityType)) return "产业链";
-  if (/企业|company|enterprise/u.test(entityType)) return "企业";
-  if (/专家|人才|学者|expert|person|scholar/u.test(entityType)) return "科技专家";
-  if (/机构|院所|organization|institution|\borg\b/u.test(entityType)) return "机构";
-  if (/论文|paper|journal|publication/u.test(entityType)) return "论文";
-  if (/专利|patent/u.test(entityType)) return "专利";
-  if (/项目|project/u.test(entityType)) return "项目";
-  if (/事件|资讯|event|news/u.test(entityType)) return "事件";
-  if (/技术|主题|关键词|topic|keyword|field/u.test(entityType)) return "技术主题";
-  if (/成果|achievement|output/u.test(entityType)) return "科技成果";
-  // entityType 文本未命中时按画布 nodeType（受控枚举）归类，避免事件类型
-  // 文案等杂字样把节点误判到其它类别。
+  const value = `${entityType} ${node.nodeType}`.toLowerCase();
+  if (/院校|学校|school|university/u.test(value)) return "院校";
+  if (/产业链节点|industry.?node/u.test(value)) return "产业链节点";
+  if (/产业链|chain/u.test(value)) return "产业链";
+  if (/企业|company|enterprise/u.test(value)) return "企业";
+  if (/专家|人才|学者|expert|person|scholar/u.test(value)) return "科技专家";
+  if (/机构|院所|organization|institution|\borg\b/u.test(value)) return "机构";
+  // 科技成果（entityType 明示）先于论文/项目判定：报告、产品类成果节点在
+  // 画布上复用 paper/project 形态，若先按 nodeType 匹配会被误归为论文/项目。
+  // 用「科技成果」全词而非「成果」，避免把「论文成果」「合作成果」提前截走。
+  if (/科技成果|achievement|output/u.test(entityType)) return "科技成果";
+  // 专利判定需先于论文：专利节点在画布上复用 paper 形态（nodeType=paper），
+  // 若先匹配论文会把「专利 paper」误归为论文。
+  if (/专利|patent/u.test(value)) return "专利";
+  if (/论文|paper|journal|report/u.test(value)) return "论文";
+  if (/项目|project/u.test(value)) return "项目";
+  if (/事件|资讯|event|news/u.test(value)) return "事件";
+  if (/技术|主题|关键词|topic|keyword|field/u.test(value)) return "技术主题";
+  if (/成果|achievement|output/u.test(value)) return "科技成果";
+  // entityType 文本未命中时按画布 nodeType（受控枚举）归类，保证实体页
+  // 「实体类别」始终落在受控词表内，不把原文透出到实体页。
   switch ((node.nodeType || "").toLowerCase()) {
     case "event":
       return "事件";
@@ -1863,8 +1925,74 @@ const displayRelationType = (value?: string) =>
   value ||
   "—";
 
-const displayRelationDetail = (edge: GraphEdgeData) =>
-  displayRelationType(edge.label || edge.category);
+const displayRelationDetail = (edge: GraphEdgeData) => {
+  const detailMap = relationDetailByModule[props.moduleInfo.key];
+  if (detailMap) {
+    const detail = detailMap[edge.label || edge.category || ""];
+    if (detail) return detail;
+  }
+  return displayRelationType(edge.label || edge.category);
+};
+
+// 关系类别:同事/校友模块按边动态判定——命中梳理文档(md)中的直接关系
+// 映射时标"直接关系",未命中默认"间接关系";其余模块沿用模块级类别。
+const displayRelationCategory = (edge: GraphEdgeData): string => {
+  const detailMap = relationDetailByModule[props.moduleInfo.key];
+  if (detailMap) {
+    return detailMap[edge.label || edge.category || ""] ? "直接关系" : "间接关系";
+  }
+  return activeRelationCategory.value;
+};
+
+/* 论文合作页「关系描述」专用口径：直接/间接 + 核实过的关系名（统一名词
+ * 形式，动词性名称加「关系」后缀）。该模块全部关系均为直接关系（单表一行
+ * 可查：署名 dwd_zh/en_author、合著 dwd_scholar_coauthor、期刊
+ * dwd_zh/en_journal、主题 paper.keywords、被引 dwd_*_paper_reference）。
+ * 画布边是展示语义（发表/参与合著/作者单位等），按边语义映射回关系名：
+ * 人↔人→专家合著关系，论文↔人→论文署名关系（作者单位是署名记录的
+ * affiliation 列，也归入论文署名），论文→期刊→论文发表关系，
+ * 论文→关键词→论文主题。 */
+const paperCoopRelationDescriptions: Record<string, string> = {
+  论文合作: "直接关系/专家合著关系",
+  发表: "直接关系/论文署名关系",
+  共同作者: "直接关系/论文署名关系",
+  参与合著: "直接关系/论文署名关系",
+  团队成员: "直接关系/论文署名关系",
+  作者单位: "直接关系/论文署名关系",
+  研究主题: "直接关系/论文主题",
+  发表于: "直接关系/论文发表关系",
+  发表级别: "直接关系/论文发表关系",
+};
+const paperCoopRelationDescription = (edge: GraphEdgeData): string =>
+  paperCoopRelationDescriptions[edge.label] ||
+  paperCoopRelationDescriptions[edge.category] ||
+  `直接关系/${displayRelationDetail(edge)}`;
+
+/* 企业关联页「关系描述」专用口径：映射到核实过的 13 条关系（名词名）。
+ * 治理任职为人-企业直连边（cooperation_mode 与边类型一一对应：高管任职
+ * EXECUTIVE_OF、法人代表 LEGAL_REP_OF、实际控制 ACTUAL_CONTROLLER_OF、
+ * 受益所有 BENEFICIAL_OWNER_OF、股东持股 SHAREHOLDER_OF、任职
+ * AFFILIATED_WITH），全部单表直查=直接。
+ * 项目合作是 专家→项目→企业 两跳组合：人侧 项目负责人/项目参加人、机构侧
+ * 项目资助方/项目参与机构，均单表直查=直接（前端数据不区分 LEADS 与
+ * HAS_PARTICIPANT，展示两侧代表名称）。
+ * 专利合作是 专家→专利→企业：人侧 专利发明人（dwd_patent.inventors，直接）；
+ * 机构侧 专利申请方 APPLIED_BY——图上 94% 边经 milvus_bm25_dense_hybrid
+ * 对齐到企业实体才成立，判间接。 */
+const enterpriseRelationDescriptions: Record<string, string> = {
+  高管任职: "直接关系/高管任职关系",
+  法人代表: "直接关系/法定代表关系",
+  实际控制: "直接关系/实际控制关系",
+  受益所有: "直接关系/最终受益关系",
+  股东持股: "直接关系/股东持股关系",
+  任职: "直接关系/任职关系",
+  项目合作: "直接关系/项目参加人、项目资助方",
+  专利合作: "直接关系/专利发明人、间接关系/专利申请方",
+};
+const enterpriseRelationDescription = (edge: GraphEdgeData): string =>
+  enterpriseRelationDescriptions[edge.label] ||
+  enterpriseRelationDescriptions[edge.category] ||
+  `直接关系/${displayRelationDetail(edge)}`;
 
 /** TOP-N 事件关系页「关系描述」口径：先判断画布连线对应的图关系类型，再按
  * 关系台账输出「关系类别/关系详情」；关系类别只取直接关系/间接关系。
@@ -2322,7 +2450,7 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
         { label: "成果分布", value: "" },
         { label: "成果1", value: "" },
         { label: "完成时间", value: "" },
-        { label: "所属领域", value: "" },
+        { label: "直接/所属领域", value: "" },
         { label: "奖项/评价", value: "" },
         { label: "核心贡献", value: "" },
         { label: "合作模式", value: "" },
@@ -2331,7 +2459,9 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
     }
     if (data.summaryRows?.length) {
       return data.summaryRows.map((row) => ({
-        label: row.label,
+        // 所属领域取自成果 HAS_KEYWORD 关键词（论文行字段直接抽取），
+        // 按统一口径补「直接/」前缀；其余摘要行不变。
+        label: row.label === "所属领域" ? "直接/所属领域" : row.label,
         value: row.value,
       }));
     }
@@ -2368,7 +2498,7 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       },
       { label: "成果1", value: firstTitle },
       { label: "完成时间", value: firstTime },
-      { label: "所属领域", value: firstFields },
+      { label: "直接/所属领域", value: firstFields },
       { label: "奖项/评价", value: firstAwards },
       { label: "核心贡献", value: data.coreContribution || "—" },
       { label: "合作模式", value: data.cooperationMode || "—" },
@@ -2453,8 +2583,9 @@ const liveRelationRows = computed(() => {
     const from = nodesById.get(relation.from);
     const to = nodesById.get(relation.to);
     // TOP-N 事件关系页 / 全景图页：关系类别只取直接关系/间接关系，详情按
-    // 关系台账（先判断连线对应的图关系类型，再取对应文案）；其它模块维持
-    // 原口径。
+    // 关系台账（先判断连线对应的图关系类型，再取对应文案）；论文合作/企业
+    // 关系用各自专用文案；其余模块按边动态判定关系类别（同事/校友命中梳理
+    // 文档映射时为直接关系）。
     const relationInfo = isLiveIndustryEvent.value
       ? industryEventRelationInfo(relation)
       : isPanorama.value
@@ -2462,7 +2593,11 @@ const liveRelationRows = computed(() => {
         : null;
     const relationDescription = relationInfo
       ? `${relationInfo.category}/${relationInfo.detail}`
-      : `${activeRelationCategory.value}/${displayRelationDetail(relation)}`;
+      : isPaperCooperation.value
+        ? paperCoopRelationDescription(relation)
+        : isLiveEnterpriseRelation.value
+          ? enterpriseRelationDescription(relation)
+          : `${displayRelationCategory(relation)}/${displayRelationDetail(relation)}`;
     return [
       [
         `关系 ${index + 1}`,
@@ -2928,10 +3063,10 @@ function computePanoramaSummaryRows(
         ? compactSummaryText(coreSegment.items[0].label)
         : "—",
     ],
-    ["关键技术", canvasLabel("关键技术")],
-    ["重点企业", canvasLabel("重点企业")],
-    ["核心专家", canvasLabel("核心专家")],
-    ["产业动态事件", canvasLabel("产业动态事件")],
+    ["关键技术", canvasLabel("技术主题")],
+    ["重点企业", canvasLabel("企业")],
+    ["核心专家", canvasLabel("科技专家")],
+    ["产业动态事件", canvasLabel("事件")],
     ["动态更新", updateStatus.value],
   ]);
   return props.moduleInfo.summaryRows.map((row) => {
@@ -3013,7 +3148,7 @@ function mapExpertNodeType(type: string): GraphNodeType {
 
 function mapExpertEntityType(type: string): string {
   const normalized = type.toLowerCase();
-  if (normalized === "expert" || normalized === "person") return "专家";
+  if (normalized === "expert" || normalized === "person") return "科技专家";
   if (
     normalized === "institution" ||
     normalized === "organization" ||
@@ -3021,11 +3156,13 @@ function mapExpertEntityType(type: string): string {
   )
     return "机构";
   if (normalized === "company" || normalized === "enterprise") return "企业";
-  if (normalized === "paper" || normalized === "publication") return "成果";
+  if (normalized === "paper" || normalized === "publication") return "论文";
+  if (normalized === "patent") return "专利";
   if (normalized === "project") return "项目";
   if (normalized === "event") return "事件";
-  if (normalized === "topic" || normalized === "keyword") return "关键词";
-  return type || "节点";
+  if (normalized === "topic" || normalized === "keyword") return "技术主题";
+  // 无法识别的类型按业务口径 12 类兜底为科技成果，避免实体页出现类别外文案。
+  return "科技成果";
 }
 
 function derivedGraphFromExpertResponse(
@@ -3156,7 +3293,13 @@ function derivedGraphFromExpertResponse(
   const nodeIds = new Set(nodes.map((n) => n.id));
   rawEdges.forEach((edge: DirectRelationGraphEdge, idx) => {
     if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) return;
-    const label = edge.label || "直接关系";
+    // 后端把边 label 拼成「直接关系 / <关系摘要>」（expert_direct_relation 的
+    // _build_graph），关系页会再拼模块前缀「直接关系/」，出现双重前缀；这里
+    // 剥掉 label 自带的前缀，只留业务细目（共论文/同机构 + 共论文等）。
+    const rawLabel = edge.label || "直接关系";
+    const label = rawLabel.startsWith("直接关系 / ")
+      ? rawLabel.slice("直接关系 / ".length)
+      : rawLabel;
     // 后端已在 edge.data.strength 里算好置信度（0-99），映射时补上，
     // 否则 GraphEdgeData.confidence 一直是 undefined，前端只能显示"暂无"。
     const strength = edge.data?.strength;
@@ -3397,7 +3540,7 @@ function buildAlumniGraph(
       nodeType: "expert",
       x: cx + Math.cos(angle) * radius + 200,
       y: cy + Math.sin(angle) * radius,
-      entityType: "校友专家",
+      entityType: "科技专家",
       relations: `与${data.expert.name || data.expert.id}存在校友关系（${dimensionText}；共同院校：${sharedInstitutionText}）`,
       evidence: [
         `共同院校：${item.sharedInstitutions.join("、") || "—"}`,

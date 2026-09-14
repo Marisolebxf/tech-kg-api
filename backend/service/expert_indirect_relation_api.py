@@ -219,19 +219,25 @@ def _entity_type(node: dict[str, Any]) -> str:
         for label in node.get("labels") or []
         if str(label).lower() not in {"organization_base", "entity", "base"}
     ]
+    # 实体类别统一用业务口径 12 类；Report/Product 等无法细分的成果归入
+    # 科技成果，Journal 按出版机构口径归入机构。
     type_map = {
         "Person": "科技专家",
         "Scholar": "科技专家",
         "Expert": "科技专家",
-        "Organization": "科研机构",
-        "Project": "科研项目",
-        "Paper": "论文成果",
-        "Patent": "专利成果",
-        "Product": "科技产品",
-        "Keyword": "研究主题",
-        "Event": "科技事件",
-        "News": "新闻资讯",
-        "Report": "研究报告",
+        "Organization": "机构",
+        "Project": "项目",
+        "Paper": "论文",
+        "Patent": "专利",
+        "PatentFamily": "专利",
+        "Product": "科技成果",
+        "Keyword": "技术主题",
+        "Event": "事件",
+        "News": "事件",
+        "Report": "科技成果",
+        "Journal": "机构",
+        "IndustryChain": "产业链",
+        "IndustryNode": "产业链节点",
     }
     for label in labels:
         if label in type_map:

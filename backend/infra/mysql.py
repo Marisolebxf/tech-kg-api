@@ -1,7 +1,7 @@
 """MySQL 同步接入（SQLAlchemy + pymysql）。"""
 
 import os
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from typing import Any
 from urllib.parse import quote_plus
@@ -22,21 +22,22 @@ def _get_int_env(name: str, default: int) -> int:
 
 def build_db_url() -> str:
     """根据 MYSQL_* 环境变量拼装 SQLAlchemy URL（兼容旧调用）。"""
-    host = os.getenv("MYSQL_HOST", "127.0.0.1")
-    port = os.getenv("MYSQL_PORT", "3306")
-    user = os.getenv("MYSQL_USERNAME", "root")
-    pwd = os.getenv("MYSQL_PASSWORD", "")
-    db = os.getenv("MYSQL_DATABASE", "gkx_element")
-    return f"mysql+pymysql://{user}:{pwd}@{host}:{port}/{db}?charset=utf8mb4"
+    return MySQLClient().url
 
 
 class MySQLClient:
-    """SQLAlchemy engine and session factory for the default MySQL database."""
+    """SQLAlchemy engine and session factory for a MySQL database.
+
+    连接参数解析顺序：显式 kwargs > ``{env_prefix}*`` 环境变量 > defaults。
+    业务库用默认 ``MYSQL_`` 前缀；其他数据面（控制面 ``WORKFLOW_MYSQL_*`` 等）
+    通过 ``env_prefix`` + ``defaults`` 复用本类，URL 拼装与引擎逻辑只此一份。
+    """
 
     def __init__(
         self,
         url: str | None = None,
         *,
+        env_prefix: str = "MYSQL_",
         host: str | None = None,
         port: int | None = None,
         database: str | None = None,
@@ -45,24 +46,43 @@ class MySQLClient:
         pool_size: int | None = None,
         max_overflow: int | None = None,
         echo: bool | None = None,
+        defaults: Mapping[str, Any] | None = None,
+        ensure_database: bool = False,
     ) -> None:
+        resolved: dict[str, Any] = {
+            "host": "127.0.0.1",
+            "port": 3306,
+            "database": "gkx_element",
+            "username": "root",
+            "password": "123456789",
+            "pool_size": 10,
+            "max_overflow": 20,
+        }
+        resolved.update(defaults or {})
         self._explicit_url = url
-        self.host = host or os.getenv("MYSQL_HOST", "127.0.0.1")
-        self.port = port or _get_int_env("MYSQL_PORT", 3306)
+        self.host = host or os.getenv(f"{env_prefix}HOST", resolved["host"])
+        self.port = port or _get_int_env(f"{env_prefix}PORT", resolved["port"])
         # database="" 显式表示"不选库"（SHOW DATABASES 等服务器级操作）；
-        # None 才回退 env 默认库
+        # None 才回退 env/defaults 默认库
         self.database = (
-            database if database is not None else os.getenv("MYSQL_DATABASE", "gkx_element")
+            database
+            if database is not None
+            else os.getenv(f"{env_prefix}DATABASE", resolved["database"])
         )
-        self.username = username or os.getenv("MYSQL_USERNAME", "root")
+        self.username = username or os.getenv(f"{env_prefix}USERNAME", resolved["username"])
         self.password = (
-            password if password is not None else os.getenv("MYSQL_PASSWORD", "123456789")
+            password
+            if password is not None
+            else os.getenv(f"{env_prefix}PASSWORD", resolved["password"])
         )
-        self.pool_size = pool_size or _get_int_env("MYSQL_POOL_SIZE", 10)
-        self.max_overflow = max_overflow or _get_int_env("MYSQL_MAX_OVERFLOW", 20)
-        self.echo = (
-            echo if echo is not None else os.getenv("SQLALCHEMY_ECHO", "false").lower() == "true"
+        self.pool_size = pool_size or _get_int_env(f"{env_prefix}POOL_SIZE", resolved["pool_size"])
+        self.max_overflow = max_overflow or _get_int_env(
+            f"{env_prefix}MAX_OVERFLOW", resolved["max_overflow"]
         )
+        # echo 开关沿用历史变量名：MYSQL_ 前缀是 SQLALCHEMY_ECHO，其余前缀是 {prefix}SQLALCHEMY_ECHO
+        echo_env = "SQLALCHEMY_ECHO" if env_prefix == "MYSQL_" else f"{env_prefix}SQLALCHEMY_ECHO"
+        self.echo = echo if echo is not None else os.getenv(echo_env, "false").lower() == "true"
+        self.ensure_database = ensure_database
 
         self._engine: Engine | None = None
         self._session_factory: sessionmaker[Session] | None = None
@@ -79,9 +99,35 @@ class MySQLClient:
             f"{db_part}?charset=utf8mb4"
         )
 
+    def _ensure_database(self) -> None:
+        """首次连库前确保目标库存在。
+
+        连接 URL 里不能带 dbname（MySQL 不支持 CREATE DATABASE IF NOT EXISTS
+        跨库执行），所以先连 server 级、CREATE DATABASE IF NOT EXISTS、再 dispose
+        让后续 engine 用带 dbname 的 URL 重建。
+        """
+        server_url = (
+            f"mysql+pymysql://{quote_plus(self.username)}:{quote_plus(self.password)}"
+            f"@{self.host}:{self.port}/?charset=utf8mb4"
+        )
+        server_engine = create_engine(server_url, future=True)
+        try:
+            with server_engine.connect() as conn:
+                conn.execute(
+                    text(
+                        f"CREATE DATABASE IF NOT EXISTS `{self.database}` "
+                        "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                    )
+                )
+                conn.commit()
+        finally:
+            server_engine.dispose()
+
     @property
     def engine(self) -> Engine:
         if self._engine is None:
+            if self.ensure_database:
+                self._ensure_database()
             kwargs: dict[str, Any] = {
                 "pool_pre_ping": True,
                 "pool_recycle": 3600,

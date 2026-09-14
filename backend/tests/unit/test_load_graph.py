@@ -80,7 +80,7 @@ def test_load_graph_empty_mysql(monkeypatch):
 
     monkeypatch.setattr("script.load_graph.ScholarDAO", FakeScholarDAO)
     monkeypatch.setattr("script.load_graph.OrganizationDAO", FakeOrgDAO)
-    monkeypatch.setattr("script.load_graph.get_techkg_client", lambda: graph)
+    monkeypatch.setattr("script.load_graph.get_trs_graph_client", lambda: graph)
     monkeypatch.setattr("script.load_graph.get_mysql_client", lambda: MagicMock())
 
     n = load_graph()
@@ -154,7 +154,7 @@ def test_load_graph_happy_path(monkeypatch):
 
     monkeypatch.setattr("script.load_graph.ScholarDAO", FakeScholarDAO)
     monkeypatch.setattr("script.load_graph.OrganizationDAO", FakeOrgDAO)
-    monkeypatch.setattr("script.load_graph.get_techkg_client", lambda: graph)
+    monkeypatch.setattr("script.load_graph.get_trs_graph_client", lambda: graph)
     monkeypatch.setattr("script.load_graph.get_mysql_client", lambda: MagicMock())
 
     n = load_graph(batch_limit=10)

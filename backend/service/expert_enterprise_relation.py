@@ -11,7 +11,7 @@ from typing import Any
 from dao.gkx_organization import GkxOrganizationDAO
 from dao.gkx_scholar import GkxScholarDAO
 from infra.gkx import get_gkx_session
-from infra.graph_db import TRSGraphClient, get_techkg_client
+from infra.graph_db import TRSGraphClient, get_trs_graph_client
 from service.base_module import KGModuleScaffoldService
 from service.enterprise_relation_catalog import relation_label, validate_relation_types
 
@@ -27,7 +27,7 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
 
     def _client(self) -> TRSGraphClient:
         if self._graph is None:
-            self._graph = get_techkg_client()
+            self._graph = get_trs_graph_client()
         return self._graph
 
     @staticmethod

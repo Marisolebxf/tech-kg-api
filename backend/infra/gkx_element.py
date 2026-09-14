@@ -3,6 +3,7 @@
 机构图 ETL 只从要素库读取数据。优先使用专用的 GKX_ELEMENT_MYSQL_*；未配置时
 复用项目现有 MYSQL_* 连接信息，但数据库名固定为 gkx_element，避免脚本误连
 techkg/gkx_local；会话在执行任何业务 SQL 前显式切换为只读事务。
+URL 拼装统一走 infra.mysql.MySQLClient。
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from __future__ import annotations
 import os
 from collections.abc import Generator
 from contextlib import contextmanager
-from urllib.parse import quote_plus
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -18,17 +19,19 @@ from sqlalchemy.orm import Session
 from infra.mysql import MySQLClient
 
 
+def _gkx_element_params() -> dict[str, Any]:
+    return {
+        "host": os.getenv("GKX_ELEMENT_MYSQL_HOST") or os.getenv("MYSQL_HOST", "127.0.0.1"),
+        "port": int(os.getenv("GKX_ELEMENT_MYSQL_PORT") or os.getenv("MYSQL_PORT", "3306")),
+        "database": os.getenv("GKX_ELEMENT_MYSQL_DATABASE") or "gkx_element",
+        "username": os.getenv("GKX_ELEMENT_MYSQL_USERNAME") or os.getenv("MYSQL_USERNAME", "root"),
+        "password": os.getenv("GKX_ELEMENT_MYSQL_PASSWORD")
+        or os.getenv("MYSQL_PASSWORD", "123456789"),
+    }
+
+
 def build_gkx_element_url() -> str:
-    host = os.getenv("GKX_ELEMENT_MYSQL_HOST") or os.getenv("MYSQL_HOST", "127.0.0.1")
-    port = int(os.getenv("GKX_ELEMENT_MYSQL_PORT") or os.getenv("MYSQL_PORT", "3306"))
-    database = os.getenv("GKX_ELEMENT_MYSQL_DATABASE") or "gkx_element"
-    username = quote_plus(
-        os.getenv("GKX_ELEMENT_MYSQL_USERNAME") or os.getenv("MYSQL_USERNAME", "root")
-    )
-    password = quote_plus(
-        os.getenv("GKX_ELEMENT_MYSQL_PASSWORD") or os.getenv("MYSQL_PASSWORD", "123456789")
-    )
-    return f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}?charset=utf8mb4"
+    return MySQLClient(**_gkx_element_params()).url
 
 
 _client: MySQLClient | None = None
@@ -37,7 +40,7 @@ _client: MySQLClient | None = None
 def get_gkx_element_client() -> MySQLClient:
     global _client
     if _client is None:
-        _client = MySQLClient(url=build_gkx_element_url(), pool_size=2, max_overflow=2)
+        _client = MySQLClient(pool_size=2, max_overflow=2, **_gkx_element_params())
     return _client
 
 

@@ -13,7 +13,6 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 from temporalio import activity, workflow
@@ -777,8 +776,9 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
     时，activity 自行读持久化水位/keyset 游标（workflow 线程禁 DB 访问）。
     返回 ``{rows, recordIds, maxTime, maxPk}``。
     """
-    from sqlalchemy import create_engine, text
+    from sqlalchemy import text
 
+    from infra.mysql import MySQLClient
     from service.mysql_datasource import get_mysql_settings_by_id
     from service.script_watermark import read_watermark
 
@@ -854,11 +854,14 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
         )
         sqls.append((sql, binds))
 
-    user = params["username"]
-    password = params["password"]
-    host = params["host"]
-    port = int(params["port"])
-    url = f"mysql+pymysql://{quote_plus(user)}:{quote_plus(password)}@{host}:{port}/{database}?charset=utf8mb4"
+    # 源库连接统一走 MySQLClient（URL 拼装与引擎参数只此一份）
+    source_client = MySQLClient(
+        host=params["host"],
+        port=int(params["port"]),
+        database=database,
+        username=params["username"],
+        password=params["password"],
+    )
 
     # Temporal 单条 activity 结果/输入受 gRPC 4MB 限制：大文本行（专利摘要等）
     # 一批 500 行轻易超限，activity 完成报 ResourceExhausted 无限重试。这里对
@@ -876,7 +879,7 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
                     fetched.append({k: _jsonable(v) for k, v in dict(raw).items()})
         return fetched
 
-    engine = create_engine(url, pool_pre_ping=True)
+    engine = source_client.engine
     try:
         rows: list[dict[str, Any]] = []
         if cursor_kind == "ids":
@@ -898,7 +901,7 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
                     break
                 n = max(1, n // 2)
     finally:
-        engine.dispose()
+        source_client.dispose()
 
     max_time: str | None = None
     max_pk: str | None = None

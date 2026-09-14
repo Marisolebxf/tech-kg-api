@@ -19,7 +19,7 @@ from db_model.platform_governance import (
     CorrectionSyncTask,
     ManualCorrection,
 )
-from infra.graph_db import TRSGraphClient, get_techkg_client
+from infra.graph_db import TRSGraphClient, get_trs_graph_client
 from service.platform_access import PlatformActor
 
 PENDING_REVIEW = "PENDING_REVIEW"
@@ -46,7 +46,7 @@ class CorrectionService:
     def __init__(
         self,
         session: Session,
-        graph_factory: Callable[[], TRSGraphClient] = get_techkg_client,
+        graph_factory: Callable[[], TRSGraphClient] = get_trs_graph_client,
         sync_mode: str | None = None,
     ) -> None:
         self.session = session
@@ -521,7 +521,7 @@ def process_due_sync_tasks(
     session: Session,
     *,
     limit: int = 20,
-    graph_factory: Callable[[], TRSGraphClient] = get_techkg_client,
+    graph_factory: Callable[[], TRSGraphClient] = get_trs_graph_client,
     sync_mode: str | None = None,
 ) -> int:
     now = _now()

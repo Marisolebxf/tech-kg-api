@@ -35,8 +35,6 @@ __all__ = [
     "TRSGraphSettings",
     "get_trs_graph_client",
     "close_trs_graph_client",
-    "get_techkg_client",
-    "close_techkg_client",
     "get_space_client",
     "close_space_clients",
     "GraphNode",
@@ -57,7 +55,10 @@ _client_lock = threading.Lock()
 
 
 def get_trs_graph_client() -> TRSGraphClient:
-    """Return the process-wide connected TRSGraphClient singleton (lazy, thread-safe)."""
+    """Return the process-wide connected TRSGraphClient singleton (lazy, thread-safe).
+
+    图空间统一读取 TRS_GRAPH_SPACE；历史上另有 get_techkg_client 双单例别名，已收敛到本函数。
+    """
     global _client
     if _client is not None:
         return _client
@@ -77,33 +78,6 @@ def close_trs_graph_client() -> None:
         if _client is not None:
             _client.close()
             _client = None
-
-
-_techkg_client: TRSGraphClient | None = None
-
-
-def get_techkg_client() -> TRSGraphClient:
-    """兼容旧调用名；图空间统一读取 TRS_GRAPH_SPACE。"""
-    global _techkg_client
-    if _techkg_client is not None:
-        return _techkg_client
-    with _client_lock:
-        if _techkg_client is not None:
-            return _techkg_client
-        settings = TRSGraphSettings.from_env()
-        client = TRSGraphClient(settings)
-        client.connect()
-        _techkg_client = client
-    return _techkg_client
-
-
-def close_techkg_client() -> None:
-    """关闭并释放 techkg 单例。"""
-    global _techkg_client
-    with _client_lock:
-        if _techkg_client is not None:
-            _techkg_client.close()
-            _techkg_client = None
 
 
 _space_clients: dict[str, TRSGraphClient] = {}

@@ -9,7 +9,7 @@ import logging
 
 from dao.organization import OrganizationDAO
 from dao.scholar import ScholarDAO
-from infra.graph_db import get_techkg_client
+from infra.graph_db import get_trs_graph_client
 from infra.mysql import get_mysql_client
 
 logger = logging.getLogger("script.load_graph")
@@ -50,7 +50,7 @@ def build_org_node_props(o) -> dict:
 def load_graph(batch_limit: int = 500) -> int:
     """灌图，返回写入的 Scholar 节点数。MySQL 空时返回 0。"""
     mysql = get_mysql_client()
-    graph = get_techkg_client()
+    graph = get_trs_graph_client()
 
     session = mysql.session()
     try:

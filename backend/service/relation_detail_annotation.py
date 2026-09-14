@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from infra.graph_db import TRSGraphClient, get_techkg_client
+from infra.graph_db import TRSGraphClient, get_trs_graph_client
 from service.base_module import KGModuleScaffoldService
 from service.enterprise_relation_catalog import role_info
 
@@ -20,7 +20,7 @@ class RelationDetailAnnotationService(KGModuleScaffoldService):
 
     def _client(self) -> TRSGraphClient:
         if self._graph is None:
-            self._graph = get_techkg_client()
+            self._graph = get_trs_graph_client()
         return self._graph
 
     def annotate(self, payload: dict[str, Any]) -> dict[str, Any]:

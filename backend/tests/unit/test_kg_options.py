@@ -15,7 +15,7 @@ def test_get_options_aggregates_all_sections(monkeypatch):
     graph = MagicMock()
     graph.get_nodes_by_label.return_value = MagicMock(items=[scholar])
     graph.get_edges_by_type.return_value = MagicMock(items=[edge])
-    monkeypatch.setattr(mod, "get_techkg_client", lambda: graph)
+    monkeypatch.setattr(mod, "get_trs_graph_client", lambda: graph)
 
     # mysql: enterprises
     org = MagicMock()
@@ -40,7 +40,7 @@ def test_get_options_aggregates_all_sections(monkeypatch):
 
 def test_get_options_tolerates_data_source_failure(monkeypatch):
     monkeypatch.setattr(
-        mod, "get_techkg_client", lambda: (_ for _ in ()).throw(RuntimeError("no graph"))
+        mod, "get_trs_graph_client", lambda: (_ for _ in ()).throw(RuntimeError("no graph"))
     )
     monkeypatch.setattr(
         mod, "get_gkx_session", lambda: (_ for _ in ()).throw(RuntimeError("no gkx"))

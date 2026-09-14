@@ -10,7 +10,7 @@ from dao.gkx_organization import GkxOrganizationDAO
 from dao.gkx_scholar import GkxScholarDAO
 from db_model.scholar import DwdScholar
 from infra.gkx import get_gkx_session
-from infra.graph_db import TRSGraphClient, get_techkg_client
+from infra.graph_db import TRSGraphClient, get_trs_graph_client
 from infra.llm import LLMClient, get_llm_client
 from service.base_module import KGModuleScaffoldService
 from service.enterprise_background_analysis import EnterpriseBackgroundAnalysisService
@@ -91,7 +91,7 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
 
     def _graph_client(self) -> TRSGraphClient:
         if self._graph is None:
-            self._graph = get_techkg_client()
+            self._graph = get_trs_graph_client()
         return self._graph
 
     def _llm_client(self):

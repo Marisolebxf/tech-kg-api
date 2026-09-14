@@ -10,7 +10,7 @@ from sqlalchemy import select
 from db_model.domestic_organization import DwdOrgRegInfo, DwdOrgStockBase
 from db_model.scholar import DwdScholar
 from infra.gkx import get_gkx_session
-from infra.graph_db import get_techkg_client
+from infra.graph_db import get_trs_graph_client
 from service.enterprise_relation_catalog import RELATION_TYPES, ROLE_CATALOG
 
 logger = logging.getLogger(__name__)
@@ -72,7 +72,7 @@ def _enterprises() -> list[dict[str, str]]:
 def _edges() -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     try:
-        res = get_techkg_client().get_edges_by_type("EMPLOYED_BY", limit=100)
+        res = get_trs_graph_client().get_edges_by_type("EMPLOYED_BY", limit=100)
         for e in res.items[:50]:
             if e.properties.get("manual_disabled") is True:
                 continue

@@ -2369,7 +2369,12 @@ const liveEntityRows = computed(() => {
           : entityConfidence(selected.confidence),
       ],
     ];
-    if (selected.evidence?.length) {
+    // 产业链两模块（TOP-N 事件关系 / 全景图）实体详情不展示「证据」行，其余模块保持原样。
+    if (
+      !isLiveIndustryEvent.value &&
+      !isPanorama.value &&
+      selected.evidence?.length
+    ) {
       rows.push(["证据", selected.evidence.join("；")]);
     }
     return rows;

@@ -1794,8 +1794,9 @@ const relationCategoryByModule: Record<string, string> = {
   "expert-direct": "直接关系",
   "node-indirect": "间接关系",
   "two-point-achievement": "合作关系",
-  // 同事/校友模块按《直接间接关系分析》梳理口径:两类模块涉及的关系
-  // 均可由一行源数据或多表 JOIN 直接得到,类别统一标"直接关系"。
+  // 同事/校友模块的类别不走此静态映射,由 displayRelationCategory 按边
+  // 动态判定:命中下方关系详情映射(梳理文档中的直接关系)标"直接关系",
+  // 未命中默认"间接关系"。这里的值仅作兜底,正常不会读到。
   "expert-colleague": "直接关系",
   "expert-alumni": "直接关系",
   "paper-cooperation": "合作关系",
@@ -1869,6 +1870,16 @@ const displayRelationDetail = (edge: GraphEdgeData) => {
     if (detail) return detail;
   }
   return displayRelationType(edge.label || edge.category);
+};
+
+// 关系类别:同事/校友模块按边动态判定——命中梳理文档(md)中的直接关系
+// 映射时标"直接关系",未命中默认"间接关系";其余模块沿用模块级类别。
+const displayRelationCategory = (edge: GraphEdgeData): string => {
+  const detailMap = relationDetailByModule[props.moduleInfo.key];
+  if (detailMap) {
+    return detailMap[edge.label || edge.category || ""] ? "直接关系" : "间接关系";
+  }
+  return activeRelationCategory.value;
 };
 
 /* 暂不展示“评分依据”，保留格式化代码以便后续恢复。
@@ -2378,7 +2389,7 @@ const liveRelationRows = computed(() => {
       ] as const,
       [
         "关系描述",
-        `${activeRelationCategory.value}/${displayRelationDetail(relation)}`,
+        `${displayRelationCategory(relation)}/${displayRelationDetail(relation)}`,
       ] as const,
       ["置信度", formatRelationConfidence(relation)] as const,
     ];

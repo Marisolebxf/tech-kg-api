@@ -19,6 +19,7 @@ from service.confidence_scoring import (
     confidence_result,
     edge_confidence,
 )
+from service.provenance_recorder import record_node_source
 
 STUDIED_AT_EDGE = "STUDIED_AT"
 EDGE_LIMIT = 500
@@ -239,10 +240,11 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
 
     @staticmethod
     def _person_provenance(props: dict[str, Any], vid: str) -> dict[str, str]:
-        """Return only provenance values physically stored on the graph node."""
+        """查到即记：入图血缘透传；无血缘时如实记录图库查询来源。"""
+        recorded = record_node_source(props, ("Person",))
         return {
-            "sourceTable": str(props.get("source_table") or "-"),
-            "sourceField": str(props.get("source_field") or "-"),
+            "sourceTable": recorded["sourceTable"],
+            "sourceField": recorded["sourceField"],
             "graphVid": vid,
         }
 
@@ -791,6 +793,15 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 except GraphNotFoundError:
                     node = None
                 props = getattr(node, "properties", None) or {}
+                # 查到即记：成果节点取到即记录来源（入图血缘透传，无血缘记图库查询）。
+                recorded = record_node_source(
+                    props,
+                    tuple(str(item) for item in (getattr(node, "labels", None) or [])),
+                    space=(
+                        getattr(getattr(graph, "_settings", None), "space", None)
+                        or TRSGraphSettings.from_env().space
+                    ),
+                )
                 label = next(
                     (
                         str(props.get(key)).strip()
@@ -863,6 +874,14 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                         "time": time_value,
                         **entity_score,
                         "expertRelations": expert_relations,
+                        "provenance": {
+                            "sourceTable": recorded["sourceTable"],
+                            "sourceField": recorded["sourceField"],
+                            "sourceValue": recorded["sourceValue"],
+                            "ingestBatch": recorded["ingestBatch"],
+                            "ingestTime": recorded["ingestTime"],
+                            "sourceKind": recorded["sourceKind"],
+                        },
                     }
                 )
 
@@ -956,6 +975,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         alumni_names = [str(item.get("name") or item.get("alumniId")) for item in items]
         dimension_counts: dict[str, int] = {}
         shared_achievement_ids: set[str] = set()
+        shared_achievements: list[dict[str, Any]] = []
         paper_count = patent_count = project_count = 0
         coauthor_count = 0
         for item in items:
@@ -968,11 +988,13 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             coauthor_count += (
                 1 if (interactions.get("coauthorEdge") or interactions.get("paperCount")) else 0
             )
-            shared_achievement_ids.update(
-                str(achievement.get("id"))
-                for achievement in interactions.get("sharedAchievements") or []
-                if achievement.get("id")
-            )
+            for achievement in interactions.get("sharedAchievements") or []:
+                achievement_id = str(achievement.get("id") or "")
+                if not achievement_id or achievement_id in shared_achievement_ids:
+                    continue
+                shared_achievement_ids.add(achievement_id)
+                if mode == "pair":
+                    shared_achievements.append(achievement)
 
         summary_rows = [
             {"label": "专家", "value": f"{expert.get('name') or '—'}（{expert.get('id')}）"},
@@ -1001,6 +1023,14 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         if shared_achievement_ids:
             summary_rows.append(
                 {"label": "共同成果总数", "value": f"{len(shared_achievement_ids)} 项"}
+            )
+        if mode == "pair":
+            summary_rows.extend(
+                {
+                    "label": f"成果 {index}",
+                    "value": str(achievement.get("label") or "").strip() or str(achievement["id"]),
+                }
+                for index, achievement in enumerate(shared_achievements, start=1)
             )
         if mode == "list":
             summary_rows.append(
@@ -1044,6 +1074,39 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             target_expert=payload.get("targetExpert"),
             include_shared_achievements=mode == "pair",
         )
+        # 查到即记：共同成果节点同样是本次图库查到的实体，逐个输出证据，
+        # 让前端点击论文/专利/项目成果节点与成果关联边都有独立溯源可命中。
+        achievement_evidences: list[dict[str, Any]] = []
+        seen_achievement_vids: set[str] = set()
+        for item in items:
+            for achievement in (item.get("interactions") or {}).get("sharedAchievements") or []:
+                vid = str(achievement.get("id") or "")
+                if not vid or vid in seen_achievement_vids:
+                    continue
+                seen_achievement_vids.add(vid)
+                recorded = achievement.get("provenance") or {}
+                if recorded.get("sourceKind") == "mysql":
+                    source_summary = (
+                        f"入库批次：{recorded.get('ingestBatch') or '-'}；"
+                        f"入库时间：{recorded.get('ingestTime') or '-'}"
+                    )
+                else:
+                    source_summary = "节点未携带入图血缘，来源为本次图库查询"
+                achievement_evidences.append(
+                    {
+                        "title": (
+                            f"{achievement.get('entityType') or '共同成果'}"
+                            f" · {achievement.get('label') or vid}"
+                        ),
+                        "businessTable": "共同成果查询结果",
+                        "technicalTable": recorded.get("sourceTable") or "-",
+                        "recordId": recorded.get("sourceValue") or vid,
+                        "fieldIdentifier": recorded.get("sourceField") or "-",
+                        "sourceField": recorded.get("sourceField") or "-",
+                        "graphVid": vid,
+                        "summary": source_summary,
+                    }
+                )
         provenance = {
             "sourceDatabase": f"trs-graph / space={meta.get('space') or 'dev'}",
             "summary": (
@@ -1077,8 +1140,11 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                             f"{(item.get('interactions') or {}).get('summary') or ''}"
                         ),
                     }
-                    for item in items[:8]
+                    # 覆盖全部返回 items（数量已由查询 limit 封顶），
+                    # 保证前端点击任意校友节点都能按 graphVid 筛中证据。
+                    for item in items
                 ],
+                *achievement_evidences,
             ],
         }
 
@@ -1275,6 +1341,8 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                         "patent": f"由{source_name}、{aname}共同发明",
                         "project": f"由{source_name}、{aname}共同参与",
                     }.get(achievement_kind, f"由{source_name}、{aname}共同产出")
+                    # 查到即记：图节点带上成果溯源字段，前端点击可现场合成溯源卡。
+                    achievement_provenance = achievement.get("provenance") or {}
                     nodes.append(
                         {
                             "id": achievement_id,
@@ -1286,6 +1354,11 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                             **achievement_score,
                             "relations": achievement_relation,
                             "evidence": ["两位专家共同关联"],
+                            "sourceTable": achievement_provenance.get("sourceTable"),
+                            "sourceField": achievement_provenance.get("sourceField"),
+                            "sourceRecordId": achievement_provenance.get("sourceValue"),
+                            "ingestBatch": achievement_provenance.get("ingestBatch"),
+                            "ingestTime": achievement_provenance.get("ingestTime"),
                             "x": cx + 200.0 + (len(nodes) % 3) * 150.0,
                             "y": cy + 180.0 + (len(nodes) // 3) * 90.0,
                         }

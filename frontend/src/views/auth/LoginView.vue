@@ -9,7 +9,8 @@ import { safeLoginTarget } from "../../router/loginTarget";
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
-const submitting = ref<"business" | "admin" | "">("");
+// 本次上线仅开放用户端（九大业务模块），登录页只保留用户端入口。
+const submitting = ref<"business" | "">("");
 function normalizeLoginFeedback(value: unknown): string {
   if (typeof value !== "string") return "";
   if (/request failed|network error|status code 5\d\d|failed to fetch/i.test(value)) {
@@ -36,12 +37,15 @@ function errorMessage(error: unknown): string {
   return "登录服务暂时不可用，请确认网络和后端服务后重试";
 }
 
-async function login(portal: "business" | "admin") {
+async function login() {
   if (submitting.value || authStore.loading) return;
-  submitting.value = portal;
+  submitting.value = "business";
   feedback.value = "";
-  const defaultTarget = portal === "admin" ? "/admin/reviews" : "/overview";
-  const target = redirectPath.value && (portal === "admin") === redirectPath.value.startsWith("/admin") ? redirectPath.value : defaultTarget;
+  // 管理端入口已屏蔽：管理路径的 redirect 不再跟随，统一落在用户端总览。
+  const target =
+    redirectPath.value && !redirectPath.value.startsWith("/admin")
+      ? redirectPath.value
+      : "/overview";
   try {
     if (await authStore.loadCurrentUser(true)) {
       await router.replace(target);
@@ -114,11 +118,8 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
           {{ feedback }}
         </p>
         <div class="login-portals">
-          <button type="button" :disabled="Boolean(submitting) || authStore.loading" @click="login('business')">
+          <button type="button" :disabled="Boolean(submitting) || authStore.loading" @click="login()">
             <strong>用户端</strong><b>{{ submitting === 'business' ? '跳转中…' : '进入 →' }}</b>
-          </button>
-          <button class="admin" type="button" :disabled="Boolean(submitting) || authStore.loading" @click="login('admin')">
-            <strong>管理端</strong><b>{{ submitting === 'admin' ? '跳转中…' : '进入 →' }}</b>
           </button>
         </div>
         <small>登录即表示你已获得访问本系统的组织授权。</small>

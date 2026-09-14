@@ -13,6 +13,7 @@ import httpx
 
 from biz.schema.expert_indirect_relation import ExpertIndirectRelationRequest
 from service.base_module import KGModuleScaffoldService
+from service.provenance_recorder import record_node_source
 
 GRAPH_SPACE = os.getenv("KG_GRAPH_SPACE", "dev")
 MAX_GRAPH_ITEMS = 200
@@ -203,6 +204,8 @@ def _node_name(node: dict[str, Any]) -> str:
         "title_cn",
         "title_en",
         "name",
+        # Project（dwd_zh_project / dwd_en_project）节点名称只存 title 属性
+        "title",
         "keyword",
     ):
         if props.get(key):
@@ -327,22 +330,13 @@ def _edge_brief(edge: dict[str, Any]) -> dict[str, Any]:
 
 
 def _node_source(node: dict[str, Any]) -> tuple[str, str]:
-    """按科技专家同事关系的口径返回 MySQL 源表和英文字段名。"""
-    properties = node.get("properties") or {}
-    source_table = properties.get("organization_base") or properties.get("source_table")
-    labels = {str(label) for label in node.get("labels") or []}
-    source_record_id = properties.get("source_record_id")
-    organization_id = properties.get("organization_id")
-
-    if labels & {"Person", "Scholar", "Expert"} and source_record_id not in (None, ""):
-        source_field = "scholar_id" if source_table == "dwd_scholar" else "source_record_id"
-    elif organization_id == "scholar_id" and source_record_id not in (None, ""):
-        source_field = "scholar_id"
-    elif organization_id not in (None, ""):
-        source_field = "organization_id"
-    else:
-        source_field = "source_record_id"
-    return str(source_table or "-"), source_field
+    """查到即记：返回节点的源数据表和英文字段名（无血缘时记录图库查询来源）。"""
+    recorded = record_node_source(
+        node.get("properties") or {},
+        node.get("labels") or [],
+        space=GRAPH_SPACE,
+    )
+    return recorded["sourceTable"], recorded["sourceField"]
 
 
 def _build_provenance(result: dict[str, Any]) -> dict[str, Any]:
@@ -365,8 +359,10 @@ def _build_provenance(result: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
+    # 覆盖全部返回路径（路径总数已被 MAX_RESULT_PATHS 封顶），
+    # 保证前端"点击节点按 graphVid 筛选溯源"对每个画布节点都有证据可命中。
     append_node(result["coreNode"])
-    for path in result.get("paths", [])[:8]:
+    for path in result.get("paths", []):
         for node in path.get("nodes", []):
             append_node(node)
 

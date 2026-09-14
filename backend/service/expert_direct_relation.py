@@ -28,6 +28,8 @@ from typing import Any
 from infra.graph_api_client import GraphAPIError, graph_api
 from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
+from service.confidence_scoring import edge_confidence
+from service.provenance_recorder import record_node_source
 
 # 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 graph-search/trs-graph。
 _RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
@@ -450,7 +452,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
 
     @staticmethod
     def _person_source(node: dict[str, Any]) -> dict[str, str]:
-        """抽取节点上真实的入库溯源元数据（source_system / ingest_batch 等）。"""
+        """查到即记：抽取节点上的入库溯源元数据；无血缘时记录图库查询来源。"""
         props = node.get("properties") or {}
         source: dict[str, str] = {}
         for key in (
@@ -464,6 +466,12 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             value = str(props.get(key) or "").strip()
             if value:
                 source[key] = value
+        if "source_table" not in source:
+            # 节点未携带入图血缘：如实记录本次查询来源（图空间 + 识别属性），
+            # 不再默认断言 dwd_scholar。
+            recorded = record_node_source(props, node.get("labels") or ("Person",))
+            source["source_table"] = recorded["sourceTable"]
+            source["source_field"] = recorded["sourceField"]
         return source
 
     @staticmethod
@@ -642,7 +650,12 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             )
 
         evidences: list[dict[str, Any]] = []
-        for row in rows[:8]:
+        # 已输出的实体证据 vid：单专家模式（expertBId 为空）下每条关系行都
+        # 重复携带核心专家（expert_a），同一专家的实体卡只保留第一次。
+        seen_entity_vids: set[str] = set()
+        # 覆盖全部关系行（数量已由查询 limit 封顶），保证前端点击任意
+        # 关系边/节点都能按 graphVid 筛中证据。
+        for row in rows:
             src_a = row.get("expert_a_source") or {}
             src_b = row.get("expert_b_source") or {}
             has_meta = bool(src_a or src_b)
@@ -667,9 +680,10 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                     "technicalTable": f"{system}.dwd_scholar" if system else "Person",
                     "recordId": record_id,
                     "fieldIdentifier": "scholar_id / name_zh",
-                    # 溯源三要素：MySQL 源表名 / MySQL 英文字段名 / 图空间 VID
-                    "sourceTable": src.get("source_table") or _SCHOLAR_SOURCE_TABLE,
-                    "sourceField": _SCHOLAR_SOURCE_FIELD,
+                    # 溯源三要素：MySQL 源表名 / MySQL 英文字段名 / 图空间 VID。
+                    # source_table 已由 _person_source 保证非空（无血缘时为图库来源标记）。
+                    "sourceTable": src.get("source_table") or "—",
+                    "sourceField": src.get("source_field") or _SCHOLAR_SOURCE_FIELD,
                     "graphVid": str(_row.get(f"expert_{side}_id") or ""),
                     "summary": (
                         f"机构：{_row.get(f'expert_{side}_org') or '—'}；"
@@ -679,8 +693,13 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 }
 
             if has_meta:
-                evidences.append(_side_evidence("a", row, src_a))
-                evidences.append(_side_evidence("b", row, src_b))
+                for side, src in (("a", src_a), ("b", src_b)):
+                    side_vid = str(row.get(f"expert_{side}_id") or "")
+                    if side_vid:
+                        if side_vid in seen_entity_vids:
+                            continue
+                        seen_entity_vids.add(side_vid)
+                    evidences.append(_side_evidence(side, row, src))
                 evidences.append(
                     {
                         "title": (
@@ -724,6 +743,77 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         ),
                     }
                 )
+
+        # 机构虚拟节点/从属边（查到即记）：机构名取自专家节点的 scholar_org
+        # 属性，溯源归因到宿主专家的来源，保证画布上每个节点/边都有证据可命中。
+        institution_hosts: dict[str, dict[str, Any]] = {}
+        institution_edges: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in rows:
+            for side in ("a", "b"):
+                org = str(row.get(f"expert_{side}_org") or "").strip()
+                expert_id = str(row.get(f"expert_{side}_id") or "")
+                if not org or not expert_id:
+                    continue
+                expert_name = str(row.get(f"expert_{side}_name") or expert_id)
+                src = row.get(f"expert_{side}_source") or {}
+                institution_id = f"institution:{org}"
+                host = institution_hosts.setdefault(
+                    institution_id,
+                    {
+                        "org": org,
+                        "table": str(src.get("source_table") or "—"),
+                        "hosts": [],
+                    },
+                )
+                host_label = f"{expert_name}（{expert_id}）"
+                if host_label not in host["hosts"]:
+                    host["hosts"].append(host_label)
+                institution_edges.setdefault(
+                    (expert_id, institution_id),
+                    {
+                        "expert_id": expert_id,
+                        "expert_name": expert_name,
+                        "org": org,
+                        "table": str(src.get("source_table") or "—"),
+                    },
+                )
+        for institution_id, host in institution_hosts.items():
+            evidences.append(
+                {
+                    "title": f"任职机构 · {host['org']}",
+                    "businessTable": "专家任职机构",
+                    "technicalTable": "Person.scholar_org 属性",
+                    "recordId": institution_id,
+                    "fieldIdentifier": "scholar_org",
+                    # 溯源三要素：机构名的来源是宿主专家的 scholar_org 字段
+                    "sourceTable": host["table"],
+                    "sourceField": "scholar_org",
+                    "graphVid": institution_id,
+                    "summary": (
+                        f"机构名取自专家 {'、'.join(host['hosts'])} 的 "
+                        "scholar_org 属性（查询路径：get_node 专家 VID）"
+                    ),
+                }
+            )
+        for (_, institution_id), edge in institution_edges.items():
+            evidences.append(
+                {
+                    "title": f"机构从属 · {edge['expert_name']} — {edge['org']}",
+                    "businessTable": "专家任职机构",
+                    "technicalTable": "Person.scholar_org 属性",
+                    "recordId": institution_id,
+                    "fieldIdentifier": "scholar_org",
+                    "sourceTable": edge["table"],
+                    "sourceField": "scholar_org",
+                    # 复合 vid（"专家VID -> institution:机构名"），前端点击
+                    # 机构从属边时按两端同时命中筛中这条证据。
+                    "graphVid": f"{edge['expert_id']} -> {institution_id}",
+                    "summary": (
+                        f"机构从属边由专家 {edge['expert_name']} 的 scholar_org "
+                        "属性派生（非图库实体边）"
+                    ),
+                }
+            )
 
         return {
             "sourceDatabase": source_database,
@@ -835,7 +925,15 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         "data": {},
                     }
                 )
-                add_edge(expert["expertId"], institution_id, "关联机构", {})
+                # 机构从属边是专家 organization 属性直读派生（非图库真实边），
+                # 置信度取边类型兜底规则（同校友模块合成边口径），避免前端显示"暂无"。
+                membership_confidence = edge_confidence(None, "")
+                add_edge(
+                    expert["expertId"],
+                    institution_id,
+                    "关联机构",
+                    {"strength": round(membership_confidence["confidence"] * 100)},
+                )
 
         return {"nodes": nodes, "edges": edges}
 

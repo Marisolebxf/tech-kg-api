@@ -170,8 +170,9 @@ def test_query_shared_papers_and_patent_with_awards():
     assert paper_evidence["sourceField"] == "paper_source_id"
 
     target_evidence = resp["provenance"]["evidences"][1]
-    assert target_evidence["technicalTable"] == "-"
-    assert target_evidence["sourceField"] == "-"
+    # 查到即记：无入图血缘的目标专家如实记录图库查询来源与识别属性。
+    assert target_evidence["technicalTable"] == "trs-graph / space=dev"
+    assert target_evidence["sourceField"] == "name_zh"
 
 
 def test_in_time_range_respects_month_and_day_bounds():
@@ -415,6 +416,29 @@ def test_project_awards_from_output_awards_prop():
     assert item["awards"][0]["year"] == 2020
     award_row = next(r for r in resp["summaryRows"] if r["label"] == "奖项/评价")
     assert "数字科技应用示范奖" in award_row["value"]
+
+
+def test_project_time_falls_back_to_approval_year():
+    """项目节点只有立项时间属性（无完成时间）时兜底读 approval_year。"""
+    nodes = {
+        "S1": _node("S1", {"name_zh": "甲"}),
+        "S2": _node("S2", {"name_zh": "乙"}),
+        "PR1": _node("PR1", {"title": "知识图谱关键项目", "approval_year": "2024"}),
+    }
+    edges = {
+        "S1": [_edge("LEADS", "PR1", "S1")],
+        "S2": [_edge("HAS_PARTICIPANT", "PR1", "S2")],
+    }
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
+    graph.get_node_edges = MagicMock(side_effect=lambda nid, **kw: edges.get(str(nid), []))
+    graph._settings = SimpleNamespace(space="dev")
+
+    resp = _svc(graph).query(source_expert_id="S1", target_expert_id="S2")
+    item = next(i for i in resp["items"] if i["type"] == "project")
+    assert item["time"] == "2024"
+    time_row = next(r for r in resp["summaryRows"] if r["label"] == "完成时间")
+    assert time_row["value"] == "2024"
 
 
 def test_fields_from_has_keyword_edges():

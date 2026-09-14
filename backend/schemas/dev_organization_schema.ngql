@@ -326,6 +326,9 @@ CREATE TAG INDEX IF NOT EXISTS `organization_org_id_idx` ON `Organization`(`org_
 CREATE TAG INDEX IF NOT EXISTS `organization_id_idx` ON `Organization`(`organization_id`(128));
 CREATE TAG INDEX IF NOT EXISTS `organization_base_id_idx` ON `organization_base`(`organization_id`(128));
 CREATE TAG INDEX IF NOT EXISTS `organization_name_cn_idx` ON `Organization`(`name_cn`(128));
+CREATE TAG INDEX IF NOT EXISTS `event_title_idx` ON `Event`(`title`(128));
+CREATE TAG INDEX IF NOT EXISTS `event_type_idx` ON `Event`(`event_type`(128));
+CREATE TAG INDEX IF NOT EXISTS `event_content_idx` ON `Event`(`content`(128));
 CREATE TAG INDEX IF NOT EXISTS `datasource_table_idx` ON `DataSource`(`source_table`(128));
 CREATE EDGE INDEX IF NOT EXISTS `shareholder_of_idx` ON `SHAREHOLDER_OF`();
 CREATE EDGE INDEX IF NOT EXISTS `legal_rep_of_idx` ON `LEGAL_REP_OF`();

@@ -134,6 +134,7 @@ def test_pair_same_school_and_degree():
     assert "共同论文" not in {row["label"] for row in resp["summaryRows"]}
     assert "共同专利" not in {row["label"] for row in resp["summaryRows"]}
     assert "共同项目" not in {row["label"] for row in resp["summaryRows"]}
+    assert not any(row["label"].startswith("成果 ") for row in resp["summaryRows"])
     assert resp["summaryRows"]
     assert resp["resultRows"][0]["label"] == "校友数量"
     assert resp["graph"]["nodes"]
@@ -175,8 +176,9 @@ def test_pair_same_school_and_degree():
     assert source_evidence["sourceField"] == "education_source_id"
     assert source_evidence["graphVid"] == "S1"
     alumni_evidence = resp["provenance"]["evidences"][1]
-    assert alumni_evidence["technicalTable"] == "-"
-    assert alumni_evidence["sourceField"] == "-"
+    # 查到即记：无入图血缘的校友节点如实记录图库查询来源与识别属性。
+    assert alumni_evidence["technicalTable"] == "trs-graph / space=dev"
+    assert alumni_evidence["sourceField"] == "name_zh"
     assert alumni_evidence["graphVid"] == "S2"
     assert resp["rules"][0]["name"] == "教育经历匹配算法"
     assert "同校" in resp["dimensionsCatalog"]
@@ -240,6 +242,57 @@ def test_pair_mode_pages_all_interaction_edges():
     assert graph.get_node_edges.call_count >= 2
 
 
+def test_pair_summary_lists_each_shared_achievement_name_once():
+    source = _node("S1", {"name_zh": "甲", "education_background_institution_zh": "北京大学"})
+    target = _node("S2", {"name_zh": "乙", "education_background_institution_zh": "北京大学"})
+    achievements = {
+        "P1": _node("P1", {"title": "共同论文一"}, ["Paper"]),
+        "P2": _node("P2", {"title": "共同论文二"}, ["Paper"]),
+        "PT1": _node("PT1", {"title": "共同专利"}, ["Patent"]),
+        "PR1": _node("PR1", {"title": "共同项目"}, ["Project"]),
+    }
+    nodes = {"S1": source, "S2": target, **achievements}
+    edges = [
+        _edge("AUTHORED_BY", paper_id, person_id)
+        for paper_id in ("P1", "P2")
+        for person_id in ("S1", "S2")
+    ] + [
+        _edge(edge_type, achievement_id, person_id)
+        for edge_type, achievement_id in (("INVENTED_BY", "PT1"), ("HAS_PARTICIPANT", "PR1"))
+        for person_id in ("S1", "S2")
+    ]
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
+    graph.get_node_edges = MagicMock(
+        side_effect=lambda nid, **kwargs: [
+            edge
+            for edge in edges
+            if str(nid) in (edge.source_id, edge.target_id) and edge.type == kwargs.get("edge_type")
+        ]
+    )
+    graph._settings = SimpleNamespace(space="dev")
+
+    response = _svc(graph).query(expert_id="S1", target_expert_id="S2")
+
+    assert response["mode"] == "pair"
+    assert response["total"] == 1
+    assert response["items"][0]["interactions"]["sharedAchievements"]
+    assert [
+        (row["label"], row["value"])
+        for row in response["summaryRows"]
+        if row["label"].startswith("成果 ")
+    ] == [
+        ("成果 1", "共同论文一"),
+        ("成果 2", "共同论文二"),
+        ("成果 3", "共同专利"),
+        ("成果 4", "共同项目"),
+    ]
+    assert (
+        next(row["value"] for row in response["summaryRows"] if row["label"] == "共同成果总数")
+        == "4 项"
+    )
+
+
 def test_pair_not_alumni():
     a = _node("S1", {"name_zh": "甲", "education_background_institution_zh": "北京大学"})
     b = _node("S2", {"name_zh": "乙", "education_background_institution_zh": "清华大学"})
@@ -252,6 +305,7 @@ def test_pair_not_alumni():
     resp = _svc(graph).query(expert_id="S1", target_expert_id="S2")
     assert resp["total"] == 0
     assert resp["items"] == []
+    assert not any(row["label"].startswith("成果 ") for row in resp["summaryRows"])
     entities_by_id = {entity["id"]: entity for entity in resp["entities"]}
     assert entities_by_id["S1"]["relations"] == "与乙未形成校友关系（未命中共同院校）"
     assert entities_by_id["S2"]["relations"] == "与甲未形成校友关系（未命中共同院校）"
@@ -364,6 +418,7 @@ def test_list_via_studied_at_neighborhood():
     resp = _svc(graph).query(expert_id="S1", limit=10)
 
     assert resp["mode"] == "list"
+    assert not any(row["label"].startswith("成果 ") for row in resp["summaryRows"])
     assert resp["total"] == 1
     assert resp["items"][0]["alumniId"] == "S2"
     assert "同校" in resp["dimensionsCatalog"]
@@ -429,3 +484,63 @@ def test_same_id_raises():
     graph = MagicMock()
     with pytest.raises(ValueError, match="不能相同"):
         _svc(graph).query(expert_id="S1", target_expert_id="S1")
+
+
+def test_pair_shared_achievements_have_independent_provenance():
+    """查到即记：共同成果（论文/专利/项目）节点取到即记来源，
+    证据与图节点都覆盖成果 vid，前端点击成果节点/成果边不再显示"无独立溯源"。"""
+    a = _node("S1", {"name_zh": "甲", "education_background_institution_zh": "北京大学"})
+    b = _node("S2", {"name_zh": "乙", "education_background_institution_zh": "北京大学"})
+    paper = _node("P1", {"title": "论文A"}, ["Paper"])
+    patent = _node(
+        "PT1",
+        {
+            "patent_title": "专利A",
+            "source_table": "dwd_patent_test",
+            "ingest_batch": "BATCH_PT",
+            "ingest_time": "2026-09-01 08:00:00",
+        },
+        ["Patent"],
+    )
+    project = _node("PR1", {"project_name": "项目A"}, ["Project"])
+    nodes = {"S1": a, "S2": b, "P1": paper, "PT1": patent, "PR1": project}
+
+    edges_by_type = {
+        "COAUTHOR_WITH": [],
+        "AUTHORED_BY": [_edge("AUTHORED_BY", "P1", "S1"), _edge("AUTHORED_BY", "P1", "S2")],
+        "INVENTED_BY": [_edge("INVENTED_BY", "PT1", "S1"), _edge("INVENTED_BY", "PT1", "S2")],
+        "HAS_PARTICIPANT": [
+            _edge("HAS_PARTICIPANT", "PR1", "S1"),
+            _edge("HAS_PARTICIPANT", "PR1", "S2"),
+        ],
+        "LEADS": [],
+    }
+
+    def get_edges(_nid, **kwargs):
+        return list(edges_by_type.get(kwargs.get("edge_type") or "", []))
+
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
+    graph.get_node_edges = MagicMock(side_effect=get_edges)
+    graph._settings = SimpleNamespace(space="dev")
+
+    resp = _svc(graph).query(expert_id="S1", target_expert_id="S2")
+
+    interactions = resp["items"][0]["interactions"]
+    assert interactions["paperCount"] == 1
+    assert interactions["patentCount"] == 1
+    assert interactions["projectCount"] == 1
+    evidences = {e["graphVid"]: e for e in resp["provenance"]["evidences"]}
+    # 有入图血缘的专利透传 MySQL 血缘与入库批次。
+    assert evidences["PT1"]["technicalTable"] == "dwd_patent_test"
+    assert evidences["PT1"]["sourceField"] == "source_record_id"
+    assert evidences["PT1"]["summary"] == "入库批次：BATCH_PT；入库时间：2026-09-01 08:00:00"
+    # 无血缘的论文/项目如实记录图库查询来源与识别属性。
+    assert evidences["P1"]["technicalTable"] == "trs-graph / space=dev"
+    assert evidences["P1"]["sourceField"] == "title"
+    assert evidences["P1"]["summary"] == "节点未携带入图血缘，来源为本次图库查询"
+    assert evidences["PR1"]["technicalTable"] == "trs-graph / space=dev"
+    # 图节点同时携带溯源字段，前端证据未命中时可现场合成兜底卡。
+    graph_nodes = {n["id"]: n for n in resp["graph"]["nodes"]}
+    assert graph_nodes["PT1"]["sourceTable"] == "dwd_patent_test"
+    assert graph_nodes["P1"]["sourceTable"] == "trs-graph / space=dev"

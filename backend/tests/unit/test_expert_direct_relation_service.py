@@ -50,3 +50,28 @@ async def test_representative_achievements_use_shared_paper_titles():
         {"id": "paper_2", "title": "A verified joint paper"}
     ]
     client.get_node.assert_awaited_once_with("paper_2")
+
+
+def test_build_graph_institution_edges_carry_confidence():
+    """机构从属边是 organization 属性直读派生，应带边类型兜底置信度，
+    前端按 data.strength/100 换算后不再显示"暂无"。"""
+    row = {
+        "expert_a_id": "a",
+        "expert_b_id": "b",
+        "expert_a_name": "甲",
+        "expert_b_name": "乙",
+        "expert_a_org": "大连理工大学",
+        "expert_b_org": "北京大学",
+        "evidence_kind": "paper",
+        "evidence_count": 3,
+        "relation_key": "a:b",
+    }
+    service = ExpertDirectRelationService()
+    graph = service._build_graph([service._build_item(row)])
+
+    institution_edges = [e for e in graph["edges"] if e["label"] == "关联机构"]
+    assert len(institution_edges) == 2
+    for edge in institution_edges:
+        assert edge["data"]["strength"] == 75  # edge_confidence 边类型兜底 0.75
+    relation_edge = next(e for e in graph["edges"] if e["label"] != "关联机构")
+    assert relation_edge["data"]["strength"] > 0

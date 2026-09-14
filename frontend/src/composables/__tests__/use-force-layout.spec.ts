@@ -139,6 +139,28 @@ describe('runForceLayout', () => {
     expect(pos.has('ghost')).toBe(false)
   })
 
+  it('可将一级节点固定在中心外的环形轨道，避免与中心重叠', () => {
+    const center = makeNode('chain', { level: 0, nodeType: 'main', radius: 34 })
+    const technologies = Array.from({ length: 5 }, (_, index) =>
+      makeNode(`tech-${index}`, { level: 1, nodeType: 'topic', radius: 22 }),
+    )
+    const nodes = [center, ...technologies]
+    const edges = technologies.map((node) => makeEdge(center.id, node.id))
+    const ringRadius = 170
+
+    const positions = runForceLayout(nodes, edges, {
+      nodeShape: 'circle',
+      levelOneRingRadius: ringRadius,
+    })
+    const centerPosition = positions.get(center.id)!
+
+    for (const node of technologies) {
+      const position = positions.get(node.id)!
+      expect(Math.hypot(position.x - centerPosition.x, position.y - centerPosition.y))
+        .toBeCloseTo(ringRadius, 6)
+    }
+  })
+
   it('重复 id 被去重（保留首个）', () => {
     const first = makeNode('dup', { nodeType: 'main', level: 0 })
     const second = makeNode('dup', { nodeType: 'expert' })

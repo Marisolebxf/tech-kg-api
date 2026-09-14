@@ -10,9 +10,17 @@ from collections.abc import Mapping
 from typing import Any
 
 import httpx
+from sqlalchemy import bindparam, text
 
 from biz.schema.expert_paper_cooperation import ExpertPaperCooperationDemoRequest
+from infra.gkx_element import gkx_element_read_session
 from service.base_module import KGModuleScaffoldService
+from service.confidence_scoring import (
+    achievement_entity_confidence,
+    expert_entity_confidence,
+)
+from service.entity_confidence import fill_entity_confidence
+from service.provenance_recorder import record_node_source
 
 MAX_SHARED_PAPERS = 1000
 GRAPH_PAGE_SIZE = 200
@@ -27,6 +35,7 @@ _result_cache_lock = threading.Lock()
 def clear_caches() -> None:
     """清空进程内缓存（测试隔离用）。"""
     _result_cache.clear()
+    _author_org_cache.clear()
 
 
 class GraphSearchApiError(RuntimeError):
@@ -138,8 +147,10 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
         ) as graph_api:
             result = await _build_structured_result(graph_api, body)
         provenance = result.pop("_provenance")
+        graph = result.pop("_graph")
         payload = {
             "structuredResult": result,
+            "graph": graph,
             "provenance": provenance,
             "rules": _build_rules(result),
         }
@@ -179,6 +190,108 @@ def _organization(node: dict[str, Any]) -> str:
         or props.get("scholar_org")
         or "未知机构"
     )
+
+
+def _affiliation_text(raw: Any) -> str:
+    """作者署名单位：affiliation 是 JSON 数组文本（如 '["xx大学"]'），取首个非空。"""
+    if raw is None:
+        return ""
+    value = str(raw).strip()
+    candidates: list[str] = []
+    if value.startswith("["):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            parsed = None
+        candidates = [str(item).strip() for item in parsed] if isinstance(parsed, list) else [value]
+    else:
+        candidates = [value]
+    return next((item for item in candidates if item), "")
+
+
+# 论文作者机构兜底缓存：author_id → (过期时间, 机构名或 None)，10 分钟。
+_AUTHOR_ORG_CACHE_TTL = 600.0
+_author_org_cache: dict[str, tuple[float, str | None]] = {}
+
+
+def _author_orgs_from_mysql(author_ids: list[str]) -> dict[str, str]:
+    """按 author_id 从 dwd_zh_author/dwd_en_author 查署名单位，最近更新优先。
+
+    论文 ETL 建 Person 节点时未写入 affiliation，机构信息只存在于源表；
+    图属性缺失时用这里的结果兜底展示（只读，不回写图）。
+    """
+    now = time.monotonic()
+    result: dict[str, str] = {}
+    pending: list[str] = []
+    for author_id in author_ids:
+        cached = _author_org_cache.get(author_id)
+        if cached and cached[0] > now:
+            if cached[1]:
+                result[author_id] = cached[1]
+        else:
+            pending.append(author_id)
+    if not pending:
+        return result
+    found: dict[str, str] = {}
+    # 查询成功才写缓存：MySQL 瞬时故障时异常向上抛（由调用方吞掉），
+    # 不把"未找到"缓存 10 分钟。
+    with gkx_element_read_session() as session:
+        for table in ("dwd_zh_author", "dwd_en_author"):
+            missing = [author_id for author_id in pending if author_id not in found]
+            if not missing:
+                break
+            rows = session.execute(
+                text(
+                    f"SELECT author_id, affiliation, institution FROM {table} "
+                    f"WHERE author_id IN :ids ORDER BY updated_time DESC"
+                ).bindparams(bindparam("ids", expanding=True)),
+                {"ids": missing},
+            ).all()
+            for author_id, affiliation, institution in rows:
+                if author_id in found:
+                    continue  # 结果按 updated_time 倒序，先见即最近
+                org = _affiliation_text(affiliation) or _affiliation_text(institution)
+                if org:
+                    found[author_id] = org
+    for author_id in pending:
+        _author_org_cache[author_id] = (
+            now + _AUTHOR_ORG_CACHE_TTL,
+            found.get(author_id),
+        )
+    result.update(found)
+    return result
+
+
+def _backfill_expert_org_from_mysql(experts: list[tuple[str, dict[str, Any]]]) -> None:
+    """图节点无机构属性时，用论文署名单位兜底写回 properties.scholar_org。
+
+    论文合作场景展示署名单位本就比"当前任职机构"贴切；源表查不到时保持
+    原样（仍显示"未知机构"），任何 MySQL 异常也不影响主查询。
+    """
+    missing: dict[str, dict[str, Any]] = {}
+    for vid, node in experts:
+        props = node.get("properties")
+        if not isinstance(props, dict):
+            continue
+        if (
+            props.get("scholar_org_name_zh")
+            or props.get("scholar_org_name_en")
+            or props.get("scholar_org")
+        ):
+            continue
+        author_id = vid.removeprefix("person_")
+        if author_id:
+            missing[author_id] = props
+    if not missing:
+        return
+    try:
+        orgs = _author_orgs_from_mysql(list(missing))
+    except Exception:
+        return
+    for author_id, props in missing.items():
+        org = orgs.get(author_id)
+        if org:
+            props["scholar_org"] = org
 
 
 def _split_fields(value: Any) -> list[str]:
@@ -478,35 +591,31 @@ def _topic_name(node: dict[str, Any]) -> str:
 
 
 def _node_source(node: dict[str, Any]) -> tuple[str, str]:
-    """按科技专家同事关系的口径返回 MySQL 源表和英文字段名。"""
-    properties = node.get("properties") or {}
-    source_table = properties.get("organization_base") or properties.get("source_table")
-    labels = {str(label) for label in node.get("labels") or []}
-    source_record_id = properties.get("source_record_id")
-    organization_id = properties.get("organization_id")
-
-    if labels & {"Person", "Scholar", "Expert"} and source_record_id not in (None, ""):
-        source_field = "scholar_id" if source_table == "dwd_scholar" else "source_record_id"
-    elif organization_id == "scholar_id" and source_record_id not in (None, ""):
-        source_field = "scholar_id"
-    elif organization_id not in (None, ""):
-        source_field = "organization_id"
-    else:
-        source_field = "source_record_id"
-    return str(source_table or "-"), source_field
+    """查到即记：返回节点的源数据表和英文字段名（无血缘时记录图库查询来源）。"""
+    recorded = record_node_source(
+        node.get("properties") or {},
+        node.get("labels") or [],
+        space=GRAPH_SPACE,
+    )
+    return recorded["sourceTable"], recorded["sourceField"]
 
 
 def _build_provenance(
     expert_a: dict[str, Any],
     expert_b: dict[str, Any],
-    papers: list[dict[str, Any]],
+    contexts: list[dict[str, Any]],
     paper_count: int,
 ) -> dict[str, Any]:
-    """按实体的 MySQL 源表、源字段和图空间 VID 生成证据链。"""
+    """查到即记：本次查询真实取到的每个实体都生成一条证据。
+
+    覆盖两位专家、全部合作论文，以及逐篇论文上下文里真实查到的
+    关键词、期刊/会议和第三方合作者节点；无入图血缘的节点如实
+    记录图库查询来源（见 provenance_recorder）。
+    """
     evidences: list[dict[str, str]] = []
     seen: set[str] = set()
 
-    def append_node(node: dict[str, Any]) -> None:
+    def append_node(node: dict[str, Any], kind: str = "实体") -> None:
         properties = node.get("properties") or {}
         node_id = str(node.get("id") or "")
         if not node_id or node_id in seen:
@@ -518,29 +627,210 @@ def _build_provenance(
             or properties.get("title_zh")
             or properties.get("title_en")
             or properties.get("title")
+            or properties.get("keyword")
             or node_id
         )
-        source_table, source_field = _node_source(node)
+        recorded = record_node_source(properties, node.get("labels") or [], space=GRAPH_SPACE)
+        if recorded["sourceKind"] == "mysql":
+            source_note = f"入库批次：{recorded['ingestBatch']}；入库时间：{recorded['ingestTime']}"
+        else:
+            source_note = "节点未携带入图血缘，来源为本次图库查询"
         evidences.append(
             {
-                "title": f"实体 · {name}",
-                "sourceTable": source_table,
-                "sourceField": source_field,
+                "title": f"{kind} · {name}",
+                "sourceTable": recorded["sourceTable"],
+                "sourceField": recorded["sourceField"],
                 "graphVid": node_id,
+                "summary": source_note,
             }
         )
 
-    append_node(expert_a)
-    append_node(expert_b)
-    for paper in papers[:8]:
-        append_node(paper)
+    append_node(expert_a, "专家")
+    append_node(expert_b, "专家")
+    for paper in contexts:
+        append_node(paper, "论文")
+        paper_id = str(paper.get("id") or "")
+        for node in _nodes_without_center(paper.get("keywords") or {}, paper_id):
+            append_node(node, "研究主题")
+        for node in _nodes_without_center(paper.get("published") or {}, paper_id):
+            append_node(node, "期刊/会议")
+        for node in _nodes_without_center(paper.get("authored") or {}, paper_id):
+            if str(node.get("id") or "") in {
+                str(expert_a.get("id") or ""),
+                str(expert_b.get("id") or ""),
+            }:
+                continue
+            append_node(node, "合作者")
 
-    evidence_scope = "专家及合作论文实体" if papers else "专家实体"
+    evidence_scope = "专家、论文及逐篇上下文实体" if contexts else "专家实体"
     return {
         "sourceDatabase": f"trs-graph / space={GRAPH_SPACE}",
-        "summary": f"两位专家命中 {paper_count} 篇合作论文；证据来自{evidence_scope}图属性。",
+        "summary": f"两位专家命中 {paper_count} 篇合作论文；证据来自{evidence_scope}。",
         "evidences": evidences,
     }
+
+
+# 真实图组装的上限：论文取全部（已被 MAX_SHARED_PAPERS 封顶），
+# 关键词/期刊/合作者按出现频次截断，保证画布规模可控。
+_MAX_GRAPH_KEYWORDS = 8
+_MAX_GRAPH_VENUES = 5
+_MAX_GRAPH_COLLABORATORS = 6
+
+
+def _node_label(node: dict[str, Any], *prop_keys: str) -> str:
+    props = node.get("properties") or {}
+    for key in prop_keys:
+        value = str(props.get(key) or "").strip()
+        if value:
+            return value
+    return str(node.get("id") or "")
+
+
+def _build_graph(
+    expert_a: dict[str, Any],
+    expert_b: dict[str, Any],
+    contexts: list[dict[str, Any]],
+    *,
+    paper_count: int,
+) -> dict[str, list[dict[str, Any]]]:
+    """查到即记：把本次查询真实取到的实体组装成图，替代前端静态演示图。
+
+    节点：两位专家、全部合作论文、按频次截断的关键词/期刊/合作者；
+    边：专家对合作关系、专家-论文发表、论文-关键词、论文-期刊、
+    合作者-论文。所有节点/边都在 provenance.evidences 里有对应记录。
+    """
+    expert_a_vid = str(expert_a.get("id") or "")
+    expert_b_vid = str(expert_b.get("id") or "")
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    seen_nodes: set[str] = set()
+    seen_edges: set[tuple[str, str, str]] = set()
+
+    def add_node(node: dict[str, Any], node_type: str, label: str) -> None:
+        node_id = str(node.get("id") or "")
+        if not node_id or node_id in seen_nodes:
+            return
+        seen_nodes.add(node_id)
+        props = node.get("properties") or {}
+        labels = node.get("labels") or []
+        # 实体置信度：专家/合著者、论文用既有证据规则，关键词/期刊用通用实体规则兜底，
+        # 保证实体 Tab 的置信度不再显示"暂无"。
+        if node_type in ("expert", "collaborator"):
+            score = expert_entity_confidence(props, label)
+        elif node_type == "paper":
+            year = _paper_year(node)
+            score = achievement_entity_confidence(
+                "paper",
+                props,
+                title=label,
+                time_value=str(year) if year else None,
+                fields=(
+                    ["present"]
+                    if str(props.get("keywords") or props.get("keyword") or "").strip()
+                    else []
+                ),
+                vid=node_id,
+            )
+        else:
+            score = {
+                "confidence": fill_entity_confidence(props, labels),
+                "confidenceSource": "derived",
+            }
+        nodes.append(
+            {
+                "id": node_id,
+                "type": node_type,
+                "label": label,
+                "subtitle": str(props.get("scholar_org") or ""),
+                "data": {
+                    "labels": labels,
+                    "confidence": score["confidence"],
+                    "confidenceSource": score.get("confidenceSource"),
+                    "confidenceBasis": score.get("confidenceBasis"),
+                },
+            }
+        )
+
+    def add_edge(source: str, target: str, label: str, data: dict[str, Any]) -> None:
+        if not source or not target or source == target:
+            return
+        key = (min(source, target), max(source, target), label)
+        if key in seen_edges:
+            return
+        seen_edges.add(key)
+        edges.append({"source": source, "target": target, "label": label, "data": data})
+
+    add_node(
+        expert_a,
+        "expert",
+        _node_label(expert_a, "name_zh", "name_en"),
+    )
+    add_node(
+        expert_b,
+        "expert",
+        _node_label(expert_b, "name_zh", "name_en"),
+    )
+    add_edge(
+        expert_a_vid,
+        expert_b_vid,
+        "论文合作",
+        {"cooperationPaperCount": paper_count},
+    )
+
+    keyword_count: Counter[str] = Counter()
+    venue_count: Counter[str] = Counter()
+    collaborator_count: Counter[str] = Counter()
+    keyword_by_name: dict[str, dict[str, Any]] = {}
+    venue_by_name: dict[str, dict[str, Any]] = {}
+    collaborator_by_name: dict[str, dict[str, Any]] = {}
+    excluded_ids = {expert_a_vid, expert_b_vid}
+
+    for paper in contexts:
+        paper_id = str(paper.get("id") or "")
+        if not paper_id:
+            continue
+        add_node(paper, "paper", _node_label(paper, "title_zh", "title_en", "title"))
+        add_edge(expert_a_vid, paper_id, "发表", {})
+        add_edge(expert_b_vid, paper_id, "发表", {})
+
+        for node in _nodes_without_center(paper.get("keywords") or {}, paper_id):
+            name = _topic_name(node)
+            node_id = str(node.get("id") or "")
+            if not name or not node_id:
+                continue
+            keyword_count[name] += 1
+            keyword_by_name.setdefault(name, node)
+            add_edge(paper_id, node_id, "研究主题", {})
+        for node in _nodes_without_center(paper.get("published") or {}, paper_id):
+            name = _node_label(node, "name_cn", "name_zh", "name_en", "name")
+            node_id = str(node.get("id") or "")
+            if not name or not node_id:
+                continue
+            venue_count[name] += 1
+            venue_by_name.setdefault(name, node)
+            add_edge(paper_id, node_id, "发表于", {})
+        for node in _nodes_without_center(paper.get("authored") or {}, paper_id):
+            node_id = str(node.get("id") or "")
+            if not node_id or node_id in excluded_ids:
+                continue
+            name = _node_label(node, "name_zh", "name_en")
+            collaborator_count[name] += 1
+            collaborator_by_name.setdefault(name, node)
+            add_edge(node_id, paper_id, "参与合著", {})
+
+    for name, _count in keyword_count.most_common(_MAX_GRAPH_KEYWORDS):
+        node = keyword_by_name[name]
+        add_node(node, "keyword", name)
+    for name, _count in venue_count.most_common(_MAX_GRAPH_VENUES):
+        node = venue_by_name[name]
+        add_node(node, "venue", name)
+    for name, _count in collaborator_count.most_common(_MAX_GRAPH_COLLABORATORS):
+        node = collaborator_by_name[name]
+        add_node(node, "collaborator", name)
+
+    # 截断后不在画布上的节点，其连边一并丢弃（与直接关系图口径一致）。
+    kept_edges = [e for e in edges if e["source"] in seen_nodes and e["target"] in seen_nodes]
+    return {"nodes": nodes, "edges": kept_edges}
 
 
 def _impact_score(paper_count: int, citation_total: int, high_level_count: int) -> float:
@@ -664,6 +954,12 @@ async def _build_structured_result(
         if isinstance(r, Exception):
             raise r
     expert_a, expert_b, paths = expert_a_r, expert_b_r, paths_r
+    # 论文 ETL 建 Person 节点时未写入 affiliation（机构只在 dwd_*_author 源表），
+    # 查询时从源表兜底署名单位：authorUnits/画布副标题/跨机构判断共用这里的结果。
+    await asyncio.to_thread(
+        _backfill_expert_org_from_mysql,
+        [(expert_a_vid, expert_a), (expert_b_vid, expert_b)],
+    )
     papers = _dedupe_shared_papers(paths)
     fallback_paper_count = 0
     fallback_collaborators: list[tuple[str, int]] = []
@@ -900,5 +1196,11 @@ async def _build_structured_result(
             expert_b,
             contexts,
             paper_count,
+        ),
+        "_graph": _build_graph(
+            expert_a,
+            expert_b,
+            contexts,
+            paper_count=paper_count,
         ),
     }

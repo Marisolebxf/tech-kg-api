@@ -2623,101 +2623,95 @@ const paperCoopEvidenceAlias = computed(() => {
   return map;
 });
 
-/** 证据列表里没有对应记录、但节点自身带溯源字段（如全景展开层节点）时，
- * 用节点字段现场合成一张证据卡，而不是回退全量列表。 */
-function synthesizeNodeEvidence(node: GraphNodeData) {
-  if (!node.sourceTable && !node.ingestBatch && !node.sourceSystem) return null;
-  return {
-    title: `${node.label}（${node.entityType}）`,
-    summary: `${node.entityType}入图来源`,
-    sourceTable: node.sourceTable,
-    sourceField: node.sourceField,
-    recordId: node.sourceRecordId,
-    graphVid: node.id,
-    ingestBatch: node.ingestBatch,
-    ingestTime: node.ingestTime,
-  };
-}
-
-/** 溯源证据列表：未点击时全量，点击节点/边时按 graphVid 筛选。 */
-const displayedProvenanceEvidences = computed(() => {
+/** 九大模块（同事关系/产业链全景已有各自实现）溯源卡片：与同事关系页同款
+ * 样式与口径——画布节点出「实体来源」卡，画布边出关系卡（两端实体各一节）。
+ * 溯源三要素优先取节点自带入图元数据（全景展开层节点等），缺失时回退响应
+ * provenance.evidences 按图空间 VID 匹配；复合 vid（"A -> B" 关系证据）不
+ * 参与实体匹配。未点击展示全部，点击节点/边只展示对应卡片。 */
+const moduleProvenanceCards = computed(() => {
+  if (isLiveColleague.value || isPanorama.value) return [];
   const pv = liveProvenance.value;
-  if (!pv?.evidences?.length) return [];
-  const node = selectedNode.value;
-  const edge = selectedEdge.value;
-  if (!node && !edge) return pv.evidences;
-  if (node) {
-    // 论文合作画板是 preset 语义节点，先换算成真实 vid 再精确匹配。
+  const evidences = (pv?.evidences ?? []) as Array<Record<string, any>>;
+  const hasNodeProvenance = (node: GraphNodeData) =>
+    Boolean(
+      node.sourceTable || node.sourceField || node.ingestBatch || node.sourceSystem,
+    );
+  // 无任何溯源信号（未查询 / 纯 preset 演示画板）时不出卡片。
+  if (!evidences.length && !graphNodes.value.some(hasNodeProvenance)) return [];
+
+  const evByVid = new Map<string, Record<string, any>>();
+  for (const ev of evidences) {
+    const vid = String(ev.graphVid || "");
+    if (vid && !vid.includes("->")) evByVid.set(vid, ev);
+  }
+  const vidsOf = (node: GraphNodeData): string[] => {
+    // 论文合作无 graph 字段时画板用 preset 语义节点，换算回真实 vid。
     const alias = isPaperCooperation.value
       ? paperCoopEvidenceAlias.value.get(node.id)
       : undefined;
-    const filtered = alias
-      ? pv.evidences.filter((ev: any) => alias.has(String(ev.graphVid || "")))
-      : pv.evidences.filter((ev: any) => ev.graphVid === node.id);
-    if (filtered.length) return filtered;
-    // 无证据命中的节点不再回退全量列表：要么用节点自带入图元数据合成溯源，
-    // 要么明确显示"无独立溯源"（虚拟机构节点 / 演示节点本就没有图库证据）。
-    const synthesized = synthesizeNodeEvidence(node);
-    return synthesized ? [synthesized] : [];
-  }
-  if (edge) {
-    // 论文合作的 preset 边两端换算成真实 vid 集合后按集合匹配；
-    // 其它模块沿用子串匹配（证据 graphVid 为完整 vid，等价于精确匹配）。
-    const aliasFrom = isPaperCooperation.value
-      ? paperCoopEvidenceAlias.value.get(edge.from)
-      : undefined;
-    const aliasTo = isPaperCooperation.value
-      ? paperCoopEvidenceAlias.value.get(edge.to)
-      : undefined;
-    if (aliasFrom || aliasTo) {
-      const filtered = pv.evidences.filter((ev: any) => {
-        const vid = String(ev.graphVid || "");
-        return aliasFrom?.has(vid) || aliasTo?.has(vid);
-      });
-      // 命中为空同样不回退全量，交给空态提示说明。
-      return filtered;
-    }
-    // 点击边 → 展示两端实体的溯源。复合 vid（"A -> B" 格式的关系证据）
-    // 必须两端都在这条边上才算命中：单专家模式下所有边共享同一 from 端，
-    // 若按单端子串匹配，其它关系的复合证据卡会混进当前边的筛选结果。
-    // 命中为空时同样返回空列表，由空态提示说明"无独立溯源"。
-    const filtered = pv.evidences.filter((ev: any) => {
-      const vid = String(ev.graphVid || "");
-      if (vid.includes("->")) {
-        return vid.includes(edge.from) && vid.includes(edge.to);
-      }
-      return vid.includes(edge.from) || vid.includes(edge.to);
-    });
-    return filtered;
-  }
-  return pv.evidences;
-});
+    return alias?.size ? [...alias] : [node.id];
+  };
+  const text = (...values: unknown[]) =>
+    values
+      .map((item) => (item == null ? "" : String(item).trim()))
+      .find((item) => item && item !== "-" && item !== "未提供") ?? "";
+  const sectionRows = (
+    node: GraphNodeData,
+  ): Array<readonly [string, string]> => {
+    const ev = vidsOf(node)
+      .map((vid) => evByVid.get(vid))
+      .find(Boolean);
+    return [
+      // 两点合作成果/校友的证据不带 sourceTable，真实表名在 technicalTable
+      // （businessTable 是"科技专家"这类业务口径标签，不作为表名兜底）。
+      [
+        "源数据表",
+        text(node.sourceTable, ev?.sourceTable, ev?.technicalTable) || "未提供",
+      ],
+      [
+        "英文字段名",
+        text(node.sourceField, ev?.sourceField, ev?.fieldIdentifier) || "未提供",
+      ],
+      ["图空间 VID", vidsOf(node).join("、") || node.id],
+    ];
+  };
 
-/** 溯源筛选提示：点击时若筛选命中则显示筛选范围，未命中时说明无独立溯源。 */
-const provenanceFilterHint = computed(() => {
-  const node = selectedNode.value;
-  const edge = selectedEdge.value;
-  if (!node && !edge) return "";
-  const pv = liveProvenance.value;
-  if (!pv?.evidences?.length) return "";
-  const total = pv.evidences.length;
-  const shown = displayedProvenanceEvidences.value.length;
-  if (node) {
-    return shown
-      ? `已筛选：节点 ${node.label}（${shown}/${total}）`
-      : `节点 ${node.label} 无独立溯源`;
-  }
-  if (edge) {
-    return shown
-      ? `已筛选：边 ${edge.from}→${edge.to}（${shown}/${total}）`
-      : "该边无独立溯源";
-  }
-  return "";
+  const byId = new Map(graphNodes.value.map((node) => [node.id, node]));
+  const selected = selectedNode.value;
+  const selectedEdgeData = selectedEdge.value;
+  const nodeCards = (
+    selected ? [selected] : selectedEdgeData ? [] : graphNodes.value
+  ).map((node) => ({
+    id: `node:${node.id}`,
+    title: `${node.label} · 实体来源`,
+    sections: [{ title: "", rows: sectionRows(node) }],
+  }));
+  const edgeCards = (
+    selectedEdgeData
+      ? [selectedEdgeData]
+      : selected
+        ? []
+        : graphEdges.value
+  ).map((edge) => {
+    const source = byId.get(edge.from);
+    const target = byId.get(edge.to);
+    return {
+      id: `edge:${edge.id}`,
+      title: `${source?.label ?? edge.from} → ${target?.label ?? edge.to} · ${
+        edge.label || "关联"
+      }`,
+      sections: [
+        ...(source
+          ? [{ title: `源实体：${source.label}`, rows: sectionRows(source) }]
+          : []),
+        ...(target
+          ? [{ title: `目标实体：${target.label}`, rows: sectionRows(target) }]
+          : []),
+      ],
+    };
+  });
+  return [...nodeCards, ...edgeCards];
 });
-
-const usesThreeFieldProvenance = computed(
-  () => isExpertIndirect.value || isPaperCooperation.value,
-);
 
 /** 摘要分页总页数：一条关系一页，按真实数据量出现。 */
 const summaryPageTotal = computed(
@@ -2893,17 +2887,6 @@ function isPanoramaEmpty(resp: IndustryChainPanoramaQueryResponse): boolean {
     (resp.layers ?? []).every((layer) => !layer.total && !layer.items.length)
   );
 }
-
-/** 统一展示「源数据表 / 英文字段名 / 图空间 VID」。 */
-const isUnifiedProvenance = computed(
-  () =>
-    isExpertDirect.value ||
-    isPanorama.value ||
-    isLiveCoop.value ||
-    isLiveAlumni.value ||
-    isLiveEnterpriseRelation.value ||
-    isLiveIndustryEvent.value,
-);
 
 function computePanoramaSummaryRows(
   resp: IndustryChainPanoramaQueryResponse,
@@ -4751,42 +4734,6 @@ function clearGraphSelection() {
         </p>
         <section
           v-else-if="
-            resultMode === 'provenance' &&
-            liveProvenance &&
-            usesThreeFieldProvenance
-          "
-          class="result-provenance"
-        >
-          <header><strong>数据溯源</strong><span>实体来源</span></header>
-          <h3>实体溯源</h3>
-          <p v-if="provenanceFilterHint" class="result-provenance__filter-hint">
-            {{ provenanceFilterHint }}
-          </p>
-          <div class="result-provenance__evidence-list">
-            <article
-              v-for="(ev, index) in displayedProvenanceEvidences"
-              :key="`${ev.graphVid || index}-${index}`"
-            >
-              <header>
-                <strong>{{ ev.title }}</strong>
-              </header>
-              <span
-                >源数据表：<code>{{ ev.sourceTable || "-" }}</code></span
-              >
-              <span
-                >英文字段名：<code>{{ ev.sourceField || "-" }}</code></span
-              >
-              <span
-                >图空间 VID：<code>{{ ev.graphVid || "-" }}</code></span
-              >
-            </article>
-          </div>
-          <p v-if="!displayedProvenanceEvidences.length" class="result-provenance__empty">
-            {{ provenanceFilterHint || "暂无溯源证据" }}
-          </p>
-        </section>
-        <section
-          v-else-if="
             resultMode === 'provenance' && isLiveColleague && liveResponse
           "
           class="result-provenance"
@@ -4870,69 +4817,37 @@ function clearGraphSelection() {
           <header>
             <strong>数据溯源</strong
             ><span>{{
-              isLiveCoop
-                ? "合作成果查询"
-                : isLiveAlumni
-                  ? "校友查询"
-                  : "查询结果"
+              selectedNode
+                ? "选中实体"
+                : selectedEdge
+                  ? "选中关系"
+                  : "全部实体和关系"
             }}</span>
           </header>
-          <div class="result-provenance__target">
-            <strong>{{ liveProvenance.sourceDatabase }}</strong>
-            <span>{{ liveProvenance.summary || "—" }}</span>
-          </div>
-          <p v-if="provenanceFilterHint" class="result-provenance__filter-hint">
-            {{ provenanceFilterHint }}
-          </p>
-          <h3>证据列表</h3>
-          <div
-            v-if="displayedProvenanceEvidences.length"
-            class="result-provenance__evidence-list"
-          >
-            <article
-              v-for="(ev, index) in displayedProvenanceEvidences"
-              :key="`${ev.recordId}-${index}`"
-            >
+          <div class="result-provenance__evidence-list">
+            <article v-for="card in moduleProvenanceCards" :key="card.id">
               <header>
-                <strong>{{ ev.title }}</strong>
+                <strong>{{ card.title }}</strong>
               </header>
-              <p>
-                <b>{{ ev.summary }}</b>
-              </p>
-              <template v-if="isUnifiedProvenance">
-                <span
-                  >源数据表：<code>{{
-                    ev.sourceTable || ev.technicalTable || "—"
-                  }}</code></span
-                >
-                <span
-                  >英文字段名：<code>{{
-                    ev.sourceField || ev.fieldIdentifier || "—"
-                  }}</code></span
-                >
-                <span
-                  >图空间 VID：<code>{{
-                    ev.graphVid || ev.recordId || "—"
-                  }}</code></span
-                >
-              </template>
-              <template v-else>
-                <span>业务表：{{ ev.businessTable }}</span>
-                <span
-                  >技术表：<code>{{ ev.technicalTable }}</code></span
-                >
-                <span
-                  >记录 ID：<code>{{ ev.recordId }}</code></span
-                >
-                <span
-                  >字段：<code>{{ ev.fieldIdentifier }}</code></span
-                >
-              </template>
+              <div
+                v-for="(section, index) in card.sections"
+                :key="index"
+                class="colleague-provenance-section"
+              >
+                <h4 v-if="section.title">{{ section.title }}</h4>
+                <p v-for="row in section.rows" :key="row[0]">
+                  <b>{{ row[0] }}：</b><span>{{ row[1] }}</span>
+                </p>
+              </div>
             </article>
+            <p v-if="!moduleProvenanceCards.length">
+              {{
+                selectedNode || selectedEdge
+                  ? "当前选中项无独立溯源信息。"
+                  : "暂无可追溯对象，请先执行查询。"
+              }}
+            </p>
           </div>
-          <p v-else class="result-provenance__empty">
-            {{ provenanceFilterHint || "暂无溯源证据" }}
-          </p>
         </section>
         <section
           v-else-if="resultMode === 'provenance' && liveResponse"

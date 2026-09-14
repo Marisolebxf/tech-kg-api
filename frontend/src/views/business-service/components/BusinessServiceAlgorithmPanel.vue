@@ -1823,8 +1823,11 @@ const alumniRelationDetails: Record<string, string> = {
   校友关系: "校友",
   STUDIED_AT: "就读关系",
   COAUTHOR_WITH: "合著关系",
+  // 校友图谱共同成果边用中文 label(后端 expertRelations):发表/发明/负责/参与,
+  // 与原始边类型(AUTHORED_BY/INVENTED_BY/LEADS/HAS_PARTICIPANT)同属一条关系。
   发表: "署名关系",
   发明: "发明人",
+  负责: "项目负责人",
   参与: "项目参与者",
   AUTHORED_BY: "署名关系",
   INVENTED_BY: "发明人",

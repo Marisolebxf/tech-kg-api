@@ -1793,7 +1793,9 @@ Object.assign(relationTypeDisplay, {
 const relationCategoryByModule: Record<string, string> = {
   "expert-direct": "直接关系",
   "node-indirect": "间接关系",
-  "two-point-achievement": "合作关系",
+  // 两点合作成果：三条合成边（论文/专利/项目合作）均由双端成果边邻居集合
+  // 求交得到（多表 join 口径），前缀统一为「间接」，业务细目见边 label。
+  "two-point-achievement": "间接",
   "expert-colleague": "同事关系",
   "expert-alumni": "校友关系",
   "paper-cooperation": "合作关系",
@@ -2201,7 +2203,7 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
         { label: "成果分布", value: "" },
         { label: "成果1", value: "" },
         { label: "完成时间", value: "" },
-        { label: "所属领域", value: "" },
+        { label: "直接/所属领域", value: "" },
         { label: "奖项/评价", value: "" },
         { label: "核心贡献", value: "" },
         { label: "合作模式", value: "" },
@@ -2210,7 +2212,9 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
     }
     if (data.summaryRows?.length) {
       return data.summaryRows.map((row) => ({
-        label: row.label,
+        // 所属领域取自成果 HAS_KEYWORD 关键词（论文行字段直接抽取），
+        // 按统一口径补「直接/」前缀；其余摘要行不变。
+        label: row.label === "所属领域" ? "直接/所属领域" : row.label,
         value: row.value,
       }));
     }
@@ -2247,7 +2251,7 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       },
       { label: "成果1", value: firstTitle },
       { label: "完成时间", value: firstTime },
-      { label: "所属领域", value: firstFields },
+      { label: "直接/所属领域", value: firstFields },
       { label: "奖项/评价", value: firstAwards },
       { label: "核心贡献", value: data.coreContribution || "—" },
       { label: "合作模式", value: data.cooperationMode || "—" },

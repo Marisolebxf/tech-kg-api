@@ -771,10 +771,19 @@ function mapPanoramaGraphNodeType(type: string): {
   if (t.includes("paper") || t.includes("publication")) {
     return { nodeType: "paper", entityType: "论文" };
   }
-  if (t.includes("event")) {
+  // 报告属科技产出，按科技成果归类（词表内类别）。
+  if (t.includes("report")) {
+    return { nodeType: "paper", entityType: "科技成果" };
+  }
+  // 资讯（News）与事件同类，统一按事件展示，不再落到技术主题。
+  if (t.includes("event") || t.includes("news")) {
     return { nodeType: "event", entityType: "事件" };
   }
-  if (t.includes("product") || t.includes("project")) {
+  // 产品属科技产出，按科技成果归类；项目单列。
+  if (t.includes("product")) {
+    return { nodeType: "project", entityType: "科技成果" };
+  }
+  if (t.includes("project")) {
     return { nodeType: "project", entityType: "项目" };
   }
   // IndustryNode、Keyword 等产业技术节点在不同图空间中的 label 并不完全
@@ -1298,6 +1307,8 @@ function buildLiveGraph(
       // 事件节点标签用「类型+日期」短文案：新闻标题 20-40 字，做标签必然截断出省略号；
       // 完整标题放 relations 副标题与悬浮提示（title），摘要"核心事件"行也展示 TOP1 标题。
       // 实体 tab 的「关系」只展示事件标题，不把 impact_score 拼进去。
+      // 实体类别固定为受控词表的「事件」：事件类型文案（如「上市企业财务
+      // 信息」）含「企业」等字样，按文本归类会把事件节点误判成企业。
       addNode(
         ev0.event_id,
         `${displayEventType(ev0.event_type)} ${displayEventDate(ev0.occur_date)}`,
@@ -1861,14 +1872,22 @@ const activeRelationCategory = computed(
   () => relationCategoryByModule[props.moduleInfo.key] || "直接关系",
 );
 
+/** 实体页「实体类别」统一归一到受控词表：科技专家/机构/企业/论文/专利/
+ * 项目/科技成果/产业链/产业链节点/事件/技术主题/院校。任何输入都只返回
+ * 词表内的类别，不再把「扩展产品」等原文透出到实体页。 */
 function normalizeEntityCategory(node: GraphNodeData): string {
-  const value = `${node.entityType} ${node.nodeType}`.toLowerCase();
+  const entityType = `${node.entityType || ""}`.toLowerCase();
+  const value = `${entityType} ${node.nodeType}`.toLowerCase();
   if (/院校|学校|school|university/u.test(value)) return "院校";
   if (/产业链节点|industry.?node/u.test(value)) return "产业链节点";
   if (/产业链|chain/u.test(value)) return "产业链";
   if (/企业|company|enterprise/u.test(value)) return "企业";
   if (/专家|人才|学者|expert|person|scholar/u.test(value)) return "科技专家";
   if (/机构|院所|organization|institution|\borg\b/u.test(value)) return "机构";
+  // 科技成果（entityType 明示）先于论文/项目判定：报告、产品类成果节点在
+  // 画布上复用 paper/project 形态，若先按 nodeType 匹配会被误归为论文/项目。
+  // 用「科技成果」全词而非「成果」，避免把「论文成果」「合作成果」提前截走。
+  if (/科技成果|achievement|output/u.test(entityType)) return "科技成果";
   // 专利判定需先于论文：专利节点在画布上复用 paper 形态（nodeType=paper），
   // 若先匹配论文会把「专利 paper」误归为论文。
   if (/专利|patent/u.test(value)) return "专利";
@@ -1877,7 +1896,28 @@ function normalizeEntityCategory(node: GraphNodeData): string {
   if (/事件|资讯|event|news/u.test(value)) return "事件";
   if (/技术|主题|关键词|topic|keyword|field/u.test(value)) return "技术主题";
   if (/成果|achievement|output/u.test(value)) return "科技成果";
-  return node.entityType;
+  // entityType 文本未命中时按画布 nodeType（受控枚举）归类，保证实体页
+  // 「实体类别」始终落在受控词表内，不把原文透出到实体页。
+  switch ((node.nodeType || "").toLowerCase()) {
+    case "event":
+      return "事件";
+    case "expert":
+      return "科技专家";
+    case "company":
+      return "企业";
+    case "org":
+      return "机构";
+    case "paper":
+      return "论文";
+    case "project":
+      return "项目";
+    case "topic":
+      return "技术主题";
+    case "main":
+      return "产业链";
+    default:
+      return "技术主题";
+  }
 }
 
 const displayRelationType = (value?: string) =>
@@ -1953,6 +1993,92 @@ const enterpriseRelationDescription = (edge: GraphEdgeData): string =>
   enterpriseRelationDescriptions[edge.label] ||
   enterpriseRelationDescriptions[edge.category] ||
   `直接关系/${displayRelationDetail(edge)}`;
+
+/** TOP-N 事件关系页「关系描述」口径：先判断画布连线对应的图关系类型，再按
+ * 关系台账输出「关系类别/关系详情」；关系类别只取直接关系/间接关系。
+ * - 产业链归属 → BELONGS_TO_NODE：企业归属产业链节点（源表单行直查，直接）；
+ * - 事件参与 → INVOLVED_IN/HAS_NEWS：企业参与事件/企业关联资讯（直接；
+ *   「资讯」出自 dwd_org_important_news_info，其余出自各事件源表）；
+ * - 专家任职 → EventExpertRelation（事件←企业←治理边 两跳派生，间接）。 */
+function industryEventRelationInfo(
+  edge: GraphEdgeData,
+): { category: "直接关系" | "间接关系"; detail: string } | null {
+  if (edge.category === "产业链归属") {
+    return { category: "直接关系", detail: "企业归属产业链节点" };
+  }
+  if (edge.category === "事件参与") {
+    return edge.label === "资讯"
+      ? { category: "直接关系", detail: "企业关联资讯" }
+      : { category: "直接关系", detail: "企业参与事件" };
+  }
+  if (edge.category === "专家任职") {
+    return { category: "间接关系", detail: "事件关联专家" };
+  }
+  return null;
+}
+
+/** 全景图「关系描述」关系台账：真实图库边按边类型码给出「关系类别/关系
+ * 详情」；关系类别只取直接关系/间接关系。间接口径：STUDIED_AT 靠院校名
+ * 跨源匹配定端点、FUNDED_BY/PARTICIPATES_IN 靠机构名解析（可选 Milvus
+ * 对齐）才能确定关系两端。 */
+const PANORAMA_RELATION_LEDGER: Record<
+  string,
+  { category: "直接关系" | "间接关系"; detail: string }
+> = {
+  HAS_NODE: { category: "直接关系", detail: "产业链包含产业节点" },
+  CHILD_OF: { category: "直接关系", detail: "产业节点上下级" },
+  DOWNSTREAM_OF: { category: "直接关系", detail: "产业上下游" },
+  BELONGS_TO_NODE: { category: "直接关系", detail: "企业归属产业链节点" },
+  COVERS_CHAIN: { category: "直接关系", detail: "产业资讯报道产业链" },
+  COAUTHOR_WITH: { category: "直接关系", detail: "论文合著合作" },
+  AFFILIATED_WITH: { category: "直接关系", detail: "学者任职于机构" },
+  STUDIED_AT: { category: "间接关系", detail: "求学于某院校" },
+  AUTHORED_BY: { category: "直接关系", detail: "论文撰写" },
+  PUBLISHED_IN: { category: "直接关系", detail: "论文发表于期刊" },
+  CITES: { category: "直接关系", detail: "论文引用" },
+  CITED_BY: { category: "直接关系", detail: "论文被引" },
+  RELATED_TO: { category: "直接关系", detail: "论文相关" },
+  HAS_KEYWORD: { category: "直接关系", detail: "关键词标注" },
+  INVOLVED_IN: { category: "直接关系", detail: "企业参与事件" },
+  HAS_NEWS: { category: "直接关系", detail: "企业关联资讯" },
+  PRODUCES: { category: "直接关系", detail: "企业生产产品" },
+  FUNDED_BY: { category: "间接关系", detail: "项目获机构资助" },
+  PARTICIPATES_IN: { category: "间接关系", detail: "企业参与项目" },
+};
+
+/** 全景图分层展示连线（inferred）的「关系详情」文案：按连线所在分层给出
+ * 业务语义描述，不出现「分层展示」字样；关系类别仍为间接关系。 */
+const PANORAMA_INFERRED_RELATION_DETAIL: Record<string, string> = {
+  关键技术: "产业链环节涉及关键技术",
+  重点企业: "产业链节点关联企业",
+  核心专家: "链上机构关联专家",
+  产业动态事件: "产业链关联动态事件",
+};
+
+/** 全景图「关系描述」口径：先判断连线对应的图关系类型，再按台账输出
+ * 「关系类别/关系详情」。
+ * - 分层展示连线（inferred）不是图库关系：统一按间接，详情按分层取业务
+ *   语义文案（如产业链节点关联企业）；
+ * - 台账外的真实边：SAME_AS 出自 Milvus 对齐按间接，其余 ETL 均为源表
+ *   单行直查按直接，详情沿用既有边类型中文名，保证关系类别始终二值。 */
+function panoramaRelationInfo(
+  edge: GraphEdgeData,
+): { category: "直接关系" | "间接关系"; detail: string } {
+  if (edge.inferred === true) {
+    return {
+      category: "间接关系",
+      detail:
+        PANORAMA_INFERRED_RELATION_DETAIL[edge.label] || "产业链关联",
+    };
+  }
+  const code = String(edge.label || "").toUpperCase();
+  const hit = PANORAMA_RELATION_LEDGER[code];
+  if (hit) return hit;
+  if (code === "SAME_AS") {
+    return { category: "间接关系", detail: displayRelationType(edge.label) };
+  }
+  return { category: "直接关系", detail: displayRelationType(edge.label) };
+}
 
 /* 暂不展示“评分依据”，保留格式化代码以便后续恢复。
 const confidenceBreakdownLabels: Record<string, string> = {
@@ -2456,19 +2582,28 @@ const liveRelationRows = computed(() => {
   return relationEdges.flatMap((relation, index) => {
     const from = nodesById.get(relation.from);
     const to = nodesById.get(relation.to);
+    // TOP-N 事件关系页 / 全景图页：关系类别只取直接关系/间接关系，详情按
+    // 关系台账（先判断连线对应的图关系类型，再取对应文案）；论文合作/企业
+    // 关系用各自专用文案；其余模块按边动态判定关系类别（同事/校友命中梳理
+    // 文档映射时为直接关系）。
+    const relationInfo = isLiveIndustryEvent.value
+      ? industryEventRelationInfo(relation)
+      : isPanorama.value
+        ? panoramaRelationInfo(relation)
+        : null;
+    const relationDescription = relationInfo
+      ? `${relationInfo.category}/${relationInfo.detail}`
+      : isPaperCooperation.value
+        ? paperCoopRelationDescription(relation)
+        : isLiveEnterpriseRelation.value
+          ? enterpriseRelationDescription(relation)
+          : `${displayRelationCategory(relation)}/${displayRelationDetail(relation)}`;
     return [
       [
         `关系 ${index + 1}`,
         `${from?.label || relation.from} → ${to?.label || relation.to}`,
       ] as const,
-      [
-        "关系描述",
-        isPaperCooperation.value
-          ? paperCoopRelationDescription(relation)
-          : isLiveEnterpriseRelation.value
-            ? enterpriseRelationDescription(relation)
-            : `${displayRelationCategory(relation)}/${displayRelationDetail(relation)}`,
-      ] as const,
+      ["关系描述", relationDescription] as const,
       ["置信度", formatRelationConfidence(relation)] as const,
     ];
   });

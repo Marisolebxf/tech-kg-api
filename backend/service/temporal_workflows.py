@@ -121,29 +121,6 @@ def _resolve_resources(
     return resources
 
 
-def _write_watermark(definition_id: str | None, step_id: str, output: Any) -> None:
-    """step 成功后写水位。脚本可在返回 dict 里带 ``_watermark``(ISO str)/``_checkpoint`` 覆盖默认 now()。
-
-    失败不阻塞 pipeline——记 warning 继续。
-    """
-    from datetime import datetime
-
-    from service.script_watermark import write_watermark
-
-    watermark_override = None
-    checkpoint = None
-    if isinstance(output, dict):
-        watermark_override = output.get("_watermark")
-        checkpoint = output.get("_checkpoint")
-    ts = None
-    if watermark_override:
-        try:
-            ts = datetime.fromisoformat(watermark_override)
-        except (ValueError, TypeError):
-            ts = None
-    write_watermark(definition_id, step_id, watermark=ts, checkpoint=checkpoint)
-
-
 def _strip_watermark_meta(output: Any) -> Any:
     """从脚本返回里剥离 ``_watermark``/``_checkpoint`` 元字段，避免污染 step 输出展示。"""
     if isinstance(output, dict):
@@ -216,35 +193,6 @@ flush_access_sidecar()
 print(json.dumps({"result": result, "_access": access_report()}, ensure_ascii=False))
 """
 
-# 双参入口 runner：读 {"payload":..., "ctx":...} 一份 JSON，调 fn(payload, ctx)
-_DUAL_ARG_RUNNER = """
-import asyncio
-import importlib.util
-import inspect
-import json
-import sys
-
-from kg_sdk import Context, access_report, flush_access_sidecar
-
-path, function_name = sys.argv[1], sys.argv[2]
-spec = importlib.util.spec_from_file_location("uploaded_step_module", path)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-function = getattr(module, function_name)
-data = json.loads(sys.stdin.read() or "{}")
-payload = data.get("payload", {})
-ctx = Context(data.get("ctx", {}))
-try:
-    result = function(payload, ctx)
-    if inspect.isawaitable(result):
-        result = asyncio.run(result)
-except BaseException:
-    flush_access_sidecar()
-    raise
-flush_access_sidecar()
-print(json.dumps({"result": result, "_access": access_report()}, ensure_ascii=False))
-"""
-
 
 def _write_private_tempfile(*, prefix: str, suffix: str, data: bytes | None = None) -> str:
     """Create a private temporary file outside the event-loop thread."""
@@ -263,7 +211,7 @@ async def _spawn_script(
     runner: str,
     context_label: str,
 ) -> tuple[dict[str, Any], str]:
-    """共享的脚本子进程启动逻辑（execute_python_script / execute_pipeline_step / 平台喂数抽取共用）。
+    """共享的脚本子进程启动逻辑（平台喂数抽取 execute_transform 共用）。
 
     在隔离子进程中以 ``runner`` 调 ``script_path`` 的 ``function_name``；``ctx``
     经 ``KG_SCRIPT_CTX`` env 注入（单参脚本用 kg_sdk.current_context 取）。
@@ -349,40 +297,6 @@ async def load_workflow_definition(definition_id: str) -> dict[str, Any]:
 
 
 @activity.defn
-async def execute_python_script(request: dict[str, Any]) -> dict[str, Any]:
-    """在隔离子进程中调用上传脚本的 workflow(payload) 函数。"""
-    script_path = Path(request["scriptPath"])
-    if not script_path.is_file():
-        raise ValueError(f"脚本不存在: {script_path}")
-    function_name = request.get("functionName", "workflow")
-    payload = request.get("payload", {})
-    resolved = _resolve_resources(payload, request.get("definitionId"), "_default")
-    sidecar_path: str | None = None
-    try:
-        wrapped, sidecar_path = await _spawn_script(
-            script_path,
-            function_name,
-            json.dumps(payload, ensure_ascii=False).encode(),
-            resolved,
-            float(request.get("timeoutSeconds", 60)),
-            _SINGLE_ARG_RUNNER,
-            "上传脚本",
-        )
-        output = (
-            wrapped.get("result") if isinstance(wrapped, dict) and "result" in wrapped else wrapped
-        )
-        stdout_access = wrapped.pop("_access", None) if isinstance(wrapped, dict) else None
-        access = _merge_access(stdout_access, sidecar_path)
-        _write_watermark(request.get("definitionId"), "_default", output)
-        output = _strip_watermark_meta(output)
-        if access is not None and isinstance(output, dict):
-            output = {**output, "access": access}
-        return output
-    finally:
-        _cleanup_sidecar(sidecar_path)
-
-
-@activity.defn
 async def register_scheduled_execution(request: dict[str, Any]) -> dict[str, Any]:
     """周期 Schedule 触发的运行落 workflow_executions + tasks（幂等：runId 已存在则跳过）。
 
@@ -440,77 +354,6 @@ def _stamp_job_latest(execution: dict[str, Any]) -> None:
         _repo.save_job(job)
     except Exception:  # noqa: BLE001
         pass
-
-
-def _retry_policy(config: dict[str, Any]) -> RetryPolicy:
-    """把 manifest 的 retryPolicy 配置翻译成 Temporal RetryPolicy。
-
-    maximumAttempts 默认 1（不重试）——stateful 步骤如 persist 由 manifest 显式声明。
-    """
-    return RetryPolicy(
-        maximum_attempts=max(int(config.get("maximumAttempts", 1)), 1),
-        initial_interval=timedelta(seconds=int(config.get("initialIntervalSeconds", 1))),
-        maximum_interval=timedelta(seconds=int(config.get("maximumIntervalSeconds", 100))),
-        non_retryable_error_types=config.get("nonRetryableErrorTypes") or None,
-    )
-
-
-@activity.defn
-async def execute_pipeline_step(request: dict[str, Any]) -> dict[str, Any]:
-    """运行 manifest 中某个 step 的用户函数 fn(payload, ctx)。
-
-    与 execute_python_script 的区别：runner 读 {"payload":..., "ctx":...} 一份 JSON，
-    调用 fn(payload, ctx) 双参签名；ctx 含 prevOutputs/stepId/attempt/executionId 等。
-    状态不写 DB——workflow state 是真相，UI 走 @workflow.query。
-    """
-    script_path = Path(request["scriptPath"])
-    if not script_path.is_file():
-        raise ValueError(f"脚本不存在: {script_path}")
-    function_name = request["functionName"]
-    attempt = activity.info().attempt
-    ctx = {
-        "stepId": request["stepId"],
-        "attempt": attempt,
-        "prevOutputs": request.get("prevOutputs", {}),
-        "executionId": request.get("executionId"),
-        "taskId": request.get("taskId"),
-        "definitionId": request.get("definitionId"),
-    }
-    payload = request.get("payload", {})
-    # 在 worker 内解析 config_id → 连接参数 + 读水位，合并进 ctx（两参脚本直接用 ctx.mysql 等）。
-    resolved = _resolve_resources(payload, request.get("definitionId"), request["stepId"])
-    ctx.update(resolved)
-    sidecar_path: str | None = None
-    try:
-        wrapped, sidecar_path = await _spawn_script(
-            script_path,
-            function_name,
-            json.dumps({"payload": payload, "ctx": ctx}, ensure_ascii=False).encode(),
-            ctx,
-            float(request.get("timeoutSeconds", 600)),
-            _DUAL_ARG_RUNNER,
-            f"step {request['stepId']}",
-        )
-        output = (
-            wrapped.get("result") if isinstance(wrapped, dict) and "result" in wrapped else wrapped
-        )
-        stdout_access = wrapped.pop("_access", None) if isinstance(wrapped, dict) else None
-        access = _merge_access(stdout_access, sidecar_path)
-        _write_watermark(request.get("definitionId"), request["stepId"], output)
-        output = _strip_watermark_meta(output)
-        # post-process pendingReview: 入 ReviewCase 队列，pipeline 不暂停
-        pending = output.pop("pendingReview", []) if isinstance(output, dict) else []
-        if pending:
-            _enqueue_pending_review(request, pending, attempt)
-        return {
-            "step": request["stepId"],
-            "status": "COMPLETED",
-            "output": output,
-            "attempt": attempt,
-            "access": access,
-        }
-    finally:
-        _cleanup_sidecar(sidecar_path)
 
 
 def _enqueue_pending_review(request: dict[str, Any], pending: list[Any], attempt: int) -> None:
@@ -1527,242 +1370,6 @@ class ConfigurableWorkflow:
         return {"definitionId": definition["id"], "status": "completed", "steps": results}
 
 
-@workflow.defn(name="kg.custom.python")
-class PythonScriptWorkflow:
-    """上传脚本工作流包装器，脚本函数在 Activity 子进程中运行以保证 Workflow 可重放。"""
-
-    @workflow.run
-    async def run(self, request: dict[str, Any]) -> Any:
-        await _register_scheduled_run(request)
-        definition = await workflow.execute_activity(
-            load_workflow_definition,
-            request["definitionId"],
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=ACTIVITY_RETRY_POLICY,
-        )
-        timeout_seconds = max(int(definition.get("timeoutSeconds", 60)), 1)
-        return await workflow.execute_activity(
-            execute_python_script,
-            {
-                "scriptPath": definition["scriptPath"],
-                "functionName": definition.get("functionName", "workflow"),
-                "payload": request.get("payload", {}),
-                "definitionId": request.get("definitionId"),
-                "timeoutSeconds": timeout_seconds,
-            },
-            start_to_close_timeout=timedelta(seconds=timeout_seconds + 30),
-            retry_policy=ACTIVITY_RETRY_POLICY,
-        )
-
-
-@workflow.defn(name="kg.custom.steps")
-class StepPipelineWorkflow:
-    """多步实体构建流水线：每步一个 Activity，带独立 retry/timeout。
-
-    审核是 post-hoc：step 返回的 pendingReview 字段被 activity 抽出写入 ReviewCase
-    队列（T_DIRECT 模板），pipeline 不暂停、跑到底。审核者异步处理队列，
-    accept 时直接写图，reject 时丢弃——与 workflow 完全解耦。
-    失败重试用 ResetWorkflowExecution 回放，已完成步靠 event history replay 不重跑。
-    状态放 workflow state：UI 用 get_steps query 读。
-    """
-
-    def __init__(self) -> None:
-        self._steps: dict[str, dict[str, Any]] = {}
-        self._current_step: str | None = None
-
-    @workflow.run
-    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        await _register_scheduled_run(request)
-        definition = await workflow.execute_activity(
-            load_workflow_definition,
-            request["definitionId"],
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=ACTIVITY_RETRY_POLICY,
-        )
-        prev_outputs: dict[str, Any] = {}
-        for step in definition.get("steps", []):
-            self._current_step = step["id"]
-            step_payload = dict(request.get("payload", {}) or {})
-            try:
-                result = await workflow.execute_activity(
-                    execute_pipeline_step,
-                    {
-                        "taskId": request.get("taskId"),
-                        "executionId": request.get("executionId"),
-                        "definitionId": request["definitionId"],
-                        "stepId": step["id"],
-                        "functionName": step["functionName"],
-                        "scriptPath": definition["scriptPath"],
-                        "payload": step_payload,
-                        "prevOutputs": prev_outputs,
-                        "timeoutSeconds": step.get("timeoutSeconds", 600),
-                    },
-                    start_to_close_timeout=timedelta(seconds=step.get("timeoutSeconds", 600) + 30),
-                    retry_policy=_retry_policy(step.get("retryPolicy", {})),
-                )
-                self._steps[step["id"]] = {
-                    "status": "COMPLETED",
-                    "input": step_payload,
-                    "output": result["output"],
-                    "attempt": result["attempt"],
-                    "access": result.get("access"),
-                }
-                prev_outputs[step["id"]] = result["output"]
-            except Exception as exc:
-                # Activity 重试耗尽后 workflow 失败；用户走 reset 回放重试。
-                # FAILED 状态写入 self._steps 让 query 在 reset 之前仍可读到失败原因。
-                self._steps[step["id"]] = {
-                    "status": "FAILED",
-                    "input": step_payload,
-                    "error": str(exc),
-                }
-                raise
-        return {"status": "completed", "steps": self._steps}
-
-    @workflow.query
-    def get_steps(self) -> dict[str, Any]:
-        return {"current": self._current_step, "steps": self._steps}
-
-
-@workflow.defn(name="kg.custom.chain")
-class ChainWorkflow:
-    """多脚本串行链：按 definition.steps 顺序逐个执行已注册的 python 定义。
-
-    与 kg.custom.steps 的区别：steps 要求单文件内多函数；chain 的每一步是一个
-    独立上传的 python 定义（如单实体/单关系抽取脚本），上一步输出经
-    payload["_prevOutputs"] 传给下一步（脚本可忽略）。状态走 get_steps query。
-
-    每个脚本在 ``_steps[definitionId].activities`` 里记录其 activity steps：
-    - 普通脚本（kg.custom.python）整体一个 execute_python_script activity；
-    - steps 型脚本（kg.custom.steps，带 step manifest）按 manifest 逐步走
-      execute_pipeline_step activity（修复 steps 型脚本进链后找不到 workflow()
-      入口直接失败的问题）。任务详情页每个脚本一个 step，抽屉展开 activity steps。
-    """
-
-    def __init__(self) -> None:
-        self._steps: dict[str, dict[str, Any]] = {}
-        self._current_step: str | None = None
-
-    @workflow.run
-    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        await _register_scheduled_run(request)
-        chain = await workflow.execute_activity(
-            load_workflow_definition,
-            request["definitionId"],
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=ACTIVITY_RETRY_POLICY,
-        )
-        prev_outputs: dict[str, Any] = {}
-        for step in chain.get("steps", []):
-            step_id = step["definitionId"]
-            self._current_step = step_id
-            step_definition = await workflow.execute_activity(
-                load_workflow_definition,
-                step_id,
-                start_to_close_timeout=timedelta(seconds=30),
-                retry_policy=ACTIVITY_RETRY_POLICY,
-            )
-            step_payload = {
-                **(request.get("payload", {}) or {}),
-                "_prevOutputs": prev_outputs,
-            }
-            activities: dict[str, dict[str, Any]] = {}
-            # RUNNING 先落 state：get_steps 查询可见脚本执行中，activities 原地更新
-            self._steps[step_id] = {
-                "status": "RUNNING",
-                "name": step.get("name") or step_id,
-                "input": step_payload,
-                "activities": activities,
-            }
-            try:
-                if step_definition.get("workflowType") == "kg.custom.steps" and step_definition.get(
-                    "steps"
-                ):
-                    # steps 型脚本：manifest 每个函数一个 activity，脚本内 prevOutputs 链式传递
-                    script_prev: dict[str, Any] = {}
-                    for manifest_step in step_definition["steps"]:
-                        manifest_step_id = manifest_step["id"]
-                        try:
-                            result = await workflow.execute_activity(
-                                execute_pipeline_step,
-                                {
-                                    "taskId": request.get("taskId"),
-                                    "executionId": request.get("executionId"),
-                                    "definitionId": step_id,
-                                    "stepId": manifest_step_id,
-                                    "functionName": manifest_step["functionName"],
-                                    "scriptPath": step_definition["scriptPath"],
-                                    "payload": step_payload,
-                                    "prevOutputs": script_prev,
-                                    "timeoutSeconds": manifest_step.get("timeoutSeconds", 600),
-                                },
-                                start_to_close_timeout=timedelta(
-                                    seconds=manifest_step.get("timeoutSeconds", 600) + 30
-                                ),
-                                retry_policy=_retry_policy(manifest_step.get("retryPolicy", {})),
-                            )
-                            activities[manifest_step_id] = {
-                                "status": "COMPLETED",
-                                "name": manifest_step.get("name") or manifest_step_id,
-                                "input": step_payload,
-                                "output": result["output"],
-                                "attempt": result["attempt"],
-                                "access": result.get("access"),
-                            }
-                            script_prev[manifest_step_id] = result["output"]
-                        except Exception as exc:
-                            activities[manifest_step_id] = {
-                                "status": "FAILED",
-                                "name": manifest_step.get("name") or manifest_step_id,
-                                "input": step_payload,
-                                "error": str(exc),
-                            }
-                            raise
-                    output = script_prev
-                else:
-                    timeout_seconds = max(int(step_definition.get("timeoutSeconds", 60)), 1)
-                    output = await workflow.execute_activity(
-                        execute_python_script,
-                        {
-                            "scriptPath": step_definition["scriptPath"],
-                            "functionName": step_definition.get("functionName", "workflow"),
-                            "payload": step_payload,
-                            "definitionId": step_id,
-                            "timeoutSeconds": timeout_seconds,
-                        },
-                        start_to_close_timeout=timedelta(seconds=timeout_seconds + 30),
-                        retry_policy=_retry_policy(step.get("retryPolicy", {})),
-                    )
-                    activities["execute"] = {
-                        "status": "COMPLETED",
-                        "name": "脚本执行",
-                        "input": step_payload,
-                        "output": output,
-                    }
-                self._steps[step_id] = {
-                    "status": "COMPLETED",
-                    "name": step.get("name") or step_id,
-                    "input": step_payload,
-                    "output": output,
-                    "activities": activities,
-                }
-                prev_outputs[step_id] = output
-            except Exception as exc:
-                self._steps[step_id] = {
-                    "status": "FAILED",
-                    "name": step.get("name") or step_id,
-                    "input": step_payload,
-                    "error": str(exc),
-                    "activities": activities,
-                }
-                raise
-        return {"status": "completed", "steps": self._steps}
-
-    @workflow.query
-    def get_steps(self) -> dict[str, Any]:
-        return {"current": self._current_step, "steps": self._steps}
-
-
 _EXTRACT_SELECTOR_KEYS = (
     "mysql_datasource_id",
     "mysql_database",
@@ -2279,17 +1886,12 @@ WORKFLOW_CLASSES = [
     CooperationRelationWorkflow,
     GraphBuildWorkflow,
     ConfigurableWorkflow,
-    PythonScriptWorkflow,
-    StepPipelineWorkflow,
-    ChainWorkflow,
     SchemaExtractWorkflow,
 ]
 
 ACTIVITIES = [
     execute_kg_step,
     load_workflow_definition,
-    execute_python_script,
-    execute_pipeline_step,
     register_scheduled_execution,
     load_schema_extract_plan,
     read_source_batch,

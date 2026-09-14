@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import ast
-import os
-import re
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -97,26 +93,6 @@ class WorkflowOperationsService:
         task["batch"] = self.repo.get_batch(task["batchId"])
         return task
 
-    async def query_step_state(self, task: dict[str, Any]) -> dict[str, Any] | None:
-        """kg.custom.steps 任务查 Temporal workflow 实时 state（@workflow.query get_steps）。
-
-        非 steps 任务、workflowId 缺失、或 Temporal 查询失败均返回 None，
-        让调用方回退到静态 _steps()。
-        """
-        if task.get("workflowType") not in {"kg.custom.steps", "kg.custom.chain"}:
-            return None
-        workflow_id = task.get("workflowId")
-        if not workflow_id:
-            return None
-        try:
-            client = await temporal_runtime.client()
-            handle = client.get_workflow_handle(workflow_id)
-            return await handle.query("get_steps")
-        except Exception as exc:
-            temporal_runtime._client = None
-            task["logs"] = (task.get("logs") or []) + [f"step state 查询失败: {exc}"]
-            return None
-
     @staticmethod
     def create_task_for_execution(
         definition: dict[str, Any], execution: dict[str, Any], payload: dict[str, Any]
@@ -201,43 +177,8 @@ class WorkflowOperationsService:
                 temporal_runtime._client = None
                 execution["message"] = f"状态刷新失败: {exc}"
             self.repo.save_execution(execution)
-        await self._capture_failed_pipeline_steps(execution)
         self._sync_task_from_execution(execution)
         return execution
-
-    async def _capture_failed_pipeline_steps(self, execution: dict[str, Any]) -> None:
-        """steps/chain 执行失败后 output 里没有 steps（异常即返回）；补查 get_steps 并落库。
-
-        worker 挂掉/历史保留期过后查询会失败——吞掉异常保持旧行为。
-        """
-        if execution.get("status") not in {"FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}:
-            return
-        output = execution.get("output")
-        if isinstance(output, dict) and output.get("steps"):
-            return
-        definition = self.repo.get_definition(execution.get("definitionId") or "")
-        if definition is None or definition.get("workflowType") not in {
-            "kg.custom.steps",
-            "kg.custom.chain",
-        }:
-            return
-        workflow_id = execution.get("workflowId")
-        if not workflow_id:
-            return
-        try:
-            client = await temporal_runtime.client()
-            handle = client.get_workflow_handle(workflow_id)
-            state = await handle.query("get_steps")
-        except Exception as exc:  # noqa: BLE001
-            temporal_runtime._client = None
-            execution["message"] = f"step 状态补查失败: {exc}"
-            return
-        steps = (state or {}).get("steps") or {}
-        if not steps:
-            return
-        execution["stepsState"] = state
-        execution["output"] = {**(output if isinstance(output, dict) else {}), "steps": steps}
-        self.repo.save_execution(execution)
 
     async def retry_task(self, task_id: str, reason: str = "manual retry") -> dict[str, Any]:
         """失败任务重试：调 Temporal ResetWorkflowExecution；新 run_id 回写 execution + task。
@@ -431,154 +372,6 @@ class WorkflowOperationsService:
             "active": request["active"],
             "sourceKind": "declarative",
             "steps": request["steps"],
-            "createdAt": _now(),
-        }
-        self.repo.save_definition(definition)
-        return definition
-
-    def create_python_definition(
-        self,
-        filename: str,
-        content: bytes,
-        function_name: str,
-        definition_id: str | None,
-        name: str | None,
-        timeout_seconds: int | None = None,
-        category: str = "custom",
-    ) -> dict[str, Any]:
-        if category not in {"entity", "relation", "graph", "custom"}:
-            raise ValueError("category 仅支持 entity / relation / graph / custom")
-        if len(content) > 1024 * 1024:
-            raise ValueError("Python 脚本不能超过 1 MiB")
-        source = content.decode("utf-8")
-        tree = ast.parse(source, filename=filename)
-        functions = {
-            node.name
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
-        if function_name not in functions:
-            raise ValueError(f"脚本必须定义 {function_name}(payload) 函数")
-        safe_id = definition_id or re.sub(r"[^a-z0-9_-]", "-", Path(filename).stem.lower()).strip(
-            "-"
-        )
-        safe_id = safe_id or f"python-{uuid4().hex[:8]}"
-        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,63}", safe_id):
-            raise ValueError("definition_id 只能包含小写字母、数字、下划线和连字符")
-        backend_dir = Path(__file__).resolve().parents[1]
-        directory = Path(
-            os.getenv("WORKFLOW_SCRIPT_DIR", str(backend_dir / "var" / "workflow-scripts"))
-        )
-        directory.mkdir(parents=True, exist_ok=True)
-        script_path = directory / f"{safe_id}.py"
-        script_path.write_bytes(content)
-        timeout = max(int(timeout_seconds), 1) if timeout_seconds else 60
-        definition = {
-            "id": safe_id,
-            "name": name or Path(filename).stem,
-            "workflowType": "kg.custom.python",
-            "category": category,
-            "taskQueue": temporal_runtime.task_queue,
-            "active": True,
-            "sourceKind": "python",
-            "functionName": function_name,
-            "scriptPath": str(script_path),
-            "timeoutSeconds": timeout,
-            "steps": [f"python:{function_name}"],
-            "createdAt": _now(),
-        }
-        self.repo.save_definition(definition)
-        return definition
-
-    def create_chain_definition(
-        self, name: str, definition_ids: list[str], definition_id: str | None = None
-    ) -> dict[str, Any]:
-        """把多个已注册 python 定义串成 kg.custom.chain 串行链。"""
-        if not definition_ids:
-            raise ValueError("至少选择一个脚本")
-        steps = []
-        for def_id in definition_ids:
-            item = self.repo.get_definition(def_id)
-            if item is None:
-                raise ValueError(f"工作流定义不存在: {def_id}")
-            if item.get("sourceKind") != "python":
-                raise ValueError(f"链中每步必须是上传的 python 脚本定义: {def_id}")
-            steps.append(
-                {
-                    "definitionId": item["id"],
-                    "name": item.get("name", item["id"]),
-                    "timeoutSeconds": item.get("timeoutSeconds", 60),
-                }
-            )
-        safe_id = definition_id or f"chain-{uuid4().hex[:8]}"
-        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,63}", safe_id):
-            raise ValueError("definition_id 只能包含小写字母、数字、下划线和连字符")
-        definition = {
-            "id": safe_id,
-            "name": name or "脚本串行链",
-            "workflowType": "kg.custom.chain",
-            "category": "custom",
-            "taskQueue": temporal_runtime.task_queue,
-            "active": True,
-            "sourceKind": "chain",
-            "steps": steps,
-            "createdAt": _now(),
-        }
-        self.repo.save_definition(definition)
-        return definition
-
-    def create_step_pipeline_definition(
-        self,
-        filename: str,
-        content: bytes,
-        steps: list[dict[str, Any]],
-        definition_id: str | None,
-        name: str | None,
-    ) -> dict[str, Any]:
-        """上传 kg.custom.steps 流水线脚本 + step manifest。
-
-        AST 校验每个 step.functionName 都在脚本里；step id 必须唯一。
-        """
-        if len(content) > 1024 * 1024:
-            raise ValueError("Python 脚本不能超过 1 MiB")
-        if not steps:
-            raise ValueError("steps manifest 至少 1 步")
-        source = content.decode("utf-8")
-        tree = ast.parse(source, filename=filename)
-        functions = {
-            node.name
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
-        missing = [s["functionName"] for s in steps if s.get("functionName") not in functions]
-        if missing:
-            raise ValueError(f"脚本缺少以下 step 函数: {missing}")
-        step_ids = [s["id"] for s in steps]
-        if len(set(step_ids)) != len(step_ids):
-            raise ValueError("steps 中 id 不能重复")
-        safe_id = definition_id or re.sub(r"[^a-z0-9_-]", "-", Path(filename).stem.lower()).strip(
-            "-"
-        )
-        safe_id = safe_id or f"steps-{uuid4().hex[:8]}"
-        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,63}", safe_id):
-            raise ValueError("definition_id 只能包含小写字母、数字、下划线和连字符")
-        backend_dir = Path(__file__).resolve().parents[1]
-        directory = Path(
-            os.getenv("WORKFLOW_SCRIPT_DIR", str(backend_dir / "var" / "workflow-scripts"))
-        )
-        directory.mkdir(parents=True, exist_ok=True)
-        script_path = directory / f"{safe_id}.py"
-        script_path.write_bytes(content)
-        definition = {
-            "id": safe_id,
-            "name": name or Path(filename).stem,
-            "workflowType": "kg.custom.steps",
-            "category": "custom",
-            "taskQueue": temporal_runtime.task_queue,
-            "active": True,
-            "sourceKind": "python",
-            "scriptPath": str(script_path),
-            "steps": steps,
             "createdAt": _now(),
         }
         self.repo.save_definition(definition)

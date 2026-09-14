@@ -224,21 +224,6 @@ export const TRIGGER_SOURCE_LABEL: Record<TriggerSource, string> = {
 export const listDefinitions = (category?: string) =>
   unwrap(http.get('/v1/workflow-system/definitions', { params: category ? { category } : {} })) as Promise<{ items: WorkflowDefinition[]; total: number }>
 
-export const uploadPythonDefinition = (
-  file: File,
-  functionName = 'workflow',
-  options: { definitionId?: string; name?: string; timeoutSeconds?: number; category?: string } = {},
-) => {
-  const form = new FormData()
-  form.append('file', file)
-  form.append('function_name', functionName)
-  if (options.definitionId) form.append('definition_id', options.definitionId)
-  if (options.name) form.append('name', options.name)
-  if (options.timeoutSeconds) form.append('timeoutSeconds', String(options.timeoutSeconds))
-  if (options.category) form.append('category', options.category)
-  return unwrap(http.post('/v1/workflow-system/definitions/python', form)) as Promise<WorkflowDefinition>
-}
-
 export const getExecution = (executionId: string) =>
   unwrap(http.get(`/v1/workflow-system/executions/${executionId}`)) as Promise<WorkflowExecution>
 
@@ -259,6 +244,7 @@ export interface JobScheduleSpec {
 export interface WorkflowJob {
   id: string
   name: string
+  /** 历史值 single/chain/upload 已随 D2 停止新建，仅存量行还带（触发会因 workflow 未注册而失败） */
   taskType: 'single' | 'chain' | 'upload' | 'extract'
   definitionIds: string[]
   schemaId?: string
@@ -289,11 +275,10 @@ export interface WorkflowJob {
 
 export interface JobCreateInput {
   name: string
-  taskType: 'single' | 'chain' | 'upload' | 'extract'
-  definitionId?: string
+  /** D2 后唯一类型：数据抽取（脚本通道收敛到 Schema 管理） */
+  taskType: 'extract'
   schemaId?: string
   batchSize?: number
-  definitionIds?: string[]
   schedule?: JobScheduleSpec
   runNow?: boolean
   llmConfigId?: string

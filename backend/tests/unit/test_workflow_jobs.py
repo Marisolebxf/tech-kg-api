@@ -9,6 +9,7 @@ import pytest
 from service.platform_access import PlatformActor
 from service.workflow_jobs import (
     WorkflowJobConflictError,
+    WorkflowJobError,
     WorkflowJobPermissionError,
     WorkflowJobService,
 )
@@ -107,19 +108,8 @@ class FakeRepo:
 
 class FakeOps:
     def __init__(self) -> None:
-        self.chain_calls: list[tuple[str, list[str], str | None]] = []
         self.executed: list[dict[str, Any]] = []
         self.execution_by_id: dict[str, dict[str, Any]] = {}
-
-    def create_chain_definition(self, name, definition_ids, definition_id=None):
-        self.chain_calls.append((name, definition_ids, definition_id))
-        return {
-            "id": definition_id or "chain-x",
-            "name": name,
-            "workflowType": "kg.custom.chain",
-            "sourceKind": "chain",
-            "taskQueue": "tech-kg-workflows",
-        }
 
     async def execute_definition(self, definition, payload, workflow_id=None, persist_task=False):
         self.executed.append({"definition": definition, "payload": payload})
@@ -161,59 +151,60 @@ def env(monkeypatch):
     temporal = FakeTemporal()
     monkeypatch.setattr("service.workflow_operations.workflow_operations_service", ops)
     monkeypatch.setattr("service.workflow_jobs.temporal_runtime", temporal)
+    # extract 任务走 schema_extraction 合成定义；单测里 fake 掉，不碰真实 Schema/S3
+    import service.schema_extraction as schema_extraction
+
+    monkeypatch.setattr(
+        schema_extraction, "load_extract_schema", lambda schema_id: {"schemaId": schema_id}
+    )
+    monkeypatch.setattr(
+        schema_extraction,
+        "build_extract_definition",
+        lambda info: {
+            "id": "schema-extract-widget",
+            "name": "widget 抽取",
+            "workflowType": "kg.schema.extract",
+            "sourceKind": "extract",
+            "taskQueue": "tech-kg-workflows",
+        },
+    )
+
+    def _persist(definition):
+        # 真实 persist_extract_definition 落控制库，trigger_job 按 definitionId 取回
+        repo.definitions[definition["id"]] = definition
+        return definition
+
+    monkeypatch.setattr(schema_extraction, "persist_extract_definition", _persist)
     service = WorkflowJobService(repo=repo)
     return service, repo, ops, temporal
 
 
-async def test_create_single_job(env):
+async def test_create_extract_job(env):
     service, repo, _, _ = env
     job = await service.create_job(
         _actor("u1"),
         {
             "name": "论文抽取",
-            "taskType": "single",
-            "definitionId": "entity-paper",
+            "taskType": "extract",
+            "schemaId": "schema-widget",
             "schedule": {"kind": "once"},
         },
     )
-    assert job["definitionId"] == "entity-paper"
-    assert job["definitionIds"] == ["entity-paper"]
+    assert job["definitionId"] == "schema-extract-widget"
+    assert job["definitionIds"] == ["schema-extract-widget"]
+    assert job["schemaId"] == "schema-widget"
     assert job["status"] == "启用"
     assert repo.jobs[job["id"]]["name"] == "论文抽取"
 
 
-async def test_create_single_requires_python_definition(env):
+async def test_create_rejects_legacy_task_types(env):
+    """single/chain/upload 已随 D2 下线：非 extract 一律拒绝。"""
     service, _, _, _ = env
-    with pytest.raises(Exception, match="python"):
-        await service.create_job(
-            _actor("u1"),
-            {"name": "x", "taskType": "single", "definitionId": "graph-build"},
-        )
-
-
-async def test_create_chain_job_creates_chain_definition(env):
-    service, repo, ops, _ = env
-    job = await service.create_job(
-        _actor("u1"),
-        {
-            "name": "两步链",
-            "taskType": "chain",
-            "definitionIds": ["entity-paper", "relation-authored"],
-            "schedule": {"kind": "once"},
-        },
-    )
-    assert job["definitionId"].startswith("chain-")
-    assert job["definitionIds"] == ["entity-paper", "relation-authored"]
-    assert ops.chain_calls[0][1] == ["entity-paper", "relation-authored"]
-
-
-async def test_create_chain_requires_two_scripts(env):
-    service, _, _, _ = env
-    with pytest.raises(Exception, match="2 个脚本"):
-        await service.create_job(
-            _actor("u1"),
-            {"name": "x", "taskType": "chain", "definitionIds": ["entity-paper"]},
-        )
+    for task_type in ("single", "chain", "upload"):
+        with pytest.raises(WorkflowJobError, match="extract"):
+            await service.create_job(
+                _actor("u1"), {"name": "x", "taskType": task_type, "schemaId": "schema-widget"}
+            )
 
 
 async def test_create_cron_job_saves_schedule_with_job_id(env):
@@ -222,8 +213,8 @@ async def test_create_cron_job_saves_schedule_with_job_id(env):
         _actor("u1"),
         {
             "name": "每日抽取",
-            "taskType": "single",
-            "definitionId": "entity-paper",
+            "taskType": "extract",
+            "schemaId": "schema-widget",
             "schedule": {"kind": "cron", "cron": "0 2 * * *"},
             "graphSpace": "dev",
         },
@@ -241,8 +232,8 @@ async def test_trigger_job_sends_selectors_and_job_id(env):
         _actor("u1"),
         {
             "name": "带配置",
-            "taskType": "single",
-            "definitionId": "entity-paper",
+            "taskType": "extract",
+            "schemaId": "schema-widget",
             "schedule": {"kind": "once"},
             "graphSpace": "dev",
             "mysqlDatasourceId": "MYSQL-1",
@@ -262,7 +253,7 @@ async def test_owner_isolation(env):
     service, _, _, _ = env
     job = await service.create_job(
         _actor("u1"),
-        {"name": "我的任务", "taskType": "single", "definitionId": "entity-paper"},
+        {"name": "我的任务", "taskType": "extract", "schemaId": "schema-widget"},
     )
     with pytest.raises(WorkflowJobPermissionError):
         service.get_job(_actor("u2"), job["id"])
@@ -281,8 +272,8 @@ async def test_delete_job_removes_schedule(env):
         _actor("u1"),
         {
             "name": "周期",
-            "taskType": "single",
-            "definitionId": "entity-paper",
+            "taskType": "extract",
+            "schemaId": "schema-widget",
             "schedule": {"kind": "cron", "cron": "0 2 * * *"},
         },
     )
@@ -298,7 +289,7 @@ async def test_set_job_state_once_job_toggles_local_status(env):
     service, repo, _, temporal = env
     job = await service.create_job(
         _actor("u1"),
-        {"name": "一次性", "taskType": "single", "definitionId": "entity-paper"},
+        {"name": "一次性", "taskType": "extract", "schemaId": "schema-widget"},
     )
     paused = await service.set_job_state(_actor("u1"), job["id"], False)
     assert paused["status"] == "暂停"
@@ -311,8 +302,8 @@ async def test_set_job_state_once_job_toggles_local_status(env):
         _actor("u1"),
         {
             "name": "周期",
-            "taskType": "single",
-            "definitionId": "entity-paper",
+            "taskType": "extract",
+            "schemaId": "schema-widget",
             "schedule": {"kind": "cron", "cron": "0 2 * * *"},
         },
     )
@@ -325,7 +316,7 @@ async def test_trigger_rejected_while_paused(env):
     service, _, _, _ = env
     job = await service.create_job(
         _actor("u1"),
-        {"name": "一次性", "taskType": "single", "definitionId": "entity-paper"},
+        {"name": "一次性", "taskType": "extract", "schemaId": "schema-widget"},
     )
     await service.set_job_state(_actor("u1"), job["id"], False)
     with pytest.raises(WorkflowJobConflictError, match="恢复"):
@@ -336,7 +327,7 @@ async def test_trigger_rejected_while_running_and_allowed_after_finish(env):
     service, _, ops, _ = env
     job = await service.create_job(
         _actor("u1"),
-        {"name": "一次性", "taskType": "single", "definitionId": "entity-paper"},
+        {"name": "一次性", "taskType": "extract", "schemaId": "schema-widget"},
     )
     await service.trigger_job(_actor("u1"), job["id"])
     with pytest.raises(WorkflowJobConflictError, match="仍在进行中"):
@@ -353,7 +344,7 @@ async def test_list_jobs_refreshes_stale_running(env):
     service, repo, ops, _ = env
     job = await service.create_job(
         _actor("u1"),
-        {"name": "一次性", "taskType": "single", "definitionId": "entity-paper"},
+        {"name": "一次性", "taskType": "extract", "schemaId": "schema-widget"},
     )
     await service.trigger_job(_actor("u1"), job["id"])
     assert repo.jobs[job["id"]]["lastExecutionStatus"] == "RUNNING"

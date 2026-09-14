@@ -62,11 +62,6 @@ def extract_api(monkeypatch):
     monkeypatch.setattr("service.schema_management.get_schema_s3_storage", lambda: storage)
     monkeypatch.setenv("SCHEMA_AUTO_PROVENANCE", "false")
     monkeypatch.setattr("service.schema_management._validate_datasource_exists", lambda ds_id: None)
-    # 脚本上传的工作流注册走 fake，避免写真实控制库
-    monkeypatch.setattr(
-        "service.workflow_operations.workflow_operations_service.create_python_definition",
-        lambda *args, **kwargs: {"id": "schema-widget"},
-    )
 
     executions: list[dict] = []
 

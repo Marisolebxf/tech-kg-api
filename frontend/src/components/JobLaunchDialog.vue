@@ -1,10 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import {
-  createJob,
-  uploadPythonDefinition,
-  type WorkflowDefinition,
-} from '../api/workflowOperations'
+import { createJob } from '../api/workflowOperations'
 import type { LlmConfig } from '../api/llmConfig'
 import type { EmbeddingConfig } from '../api/embeddingConfig'
 import type { MysqlDatasource } from '../api/mysqlDatasource'
@@ -21,7 +17,6 @@ import {
 
 const props = defineProps<{
   open: boolean
-  definitions: WorkflowDefinition[]
   llmConfigs: LlmConfig[]
   embeddingConfigs: EmbeddingConfig[]
   mysqlDatasources: MysqlDatasource[]
@@ -35,21 +30,10 @@ const emit = defineEmits<{
 
 const { showToast } = useToast()
 
-function filterScript(value: string, option: { label?: string; value?: unknown }) {
-  const text = `${option.label ?? ''}${String(option.value ?? '')}`.toLowerCase()
-  return text.includes(value.toLowerCase())
-}
-
-type TaskType = 'single' | 'chain' | 'upload' | 'extract'
-const taskType = ref<TaskType>('single')
 const name = ref('')
-const singleDefinitionId = ref('')
-const chainPick = ref('')
-const chainSteps = ref<Array<{ id: string; name: string }>>([])
-const uploadFile = ref<File | null>(null)
 const runNow = ref(true)
 
-// 数据抽取任务：选 Schema（须已传脚本且绑定来源表），平台分批并发喂数转换
+// 数据抽取任务（唯一类型）：选 Schema（须已传脚本且绑定来源表），平台分批并发喂数转换
 const extractSchemaId = ref('')
 const extractBatchSize = ref<number | null>(null)
 const extractSchemas = ref<SchemaDefinition[]>([])
@@ -73,12 +57,6 @@ const schedulePreview = computed(() =>
 )
 
 const submitting = ref(false)
-const uploadFileInput = ref<HTMLInputElement | null>(null)
-
-/** 可选为任务脚本的 python 定义（entity/relation/custom 类抽取脚本） */
-const scriptDefinitions = computed(() =>
-  props.definitions.filter((d) => d.sourceKind === 'python'),
-)
 
 const nameError = computed(() => validateText('任务名称', name.value, JOB_NAME_RULE))
 const dbError = computed(() =>
@@ -88,14 +66,10 @@ const sinceError = computed(() =>
   since.value.trim() ? validateText('增量游标', since.value, SINCE_RULE) : null,
 )
 
-const canSubmit = computed(() => {
-  if (!name.value.trim()) return false
-  if (nameError.value || dbError.value || sinceError.value) return false
-  if (taskType.value === 'single') return Boolean(singleDefinitionId.value)
-  if (taskType.value === 'chain') return chainSteps.value.length >= 2
-  if (taskType.value === 'extract') return Boolean(extractSchemaId.value)
-  return Boolean(uploadFile.value)
-})
+const canSubmit = computed(() =>
+  Boolean(name.value.trim() && extractSchemaId.value)
+  && !nameError.value && !dbError.value && !sinceError.value,
+)
 
 async function loadExtractSchemas(force = false) {
   if (schemasLoading.value) return
@@ -113,12 +87,7 @@ async function loadExtractSchemas(force = false) {
 }
 
 function reset() {
-  taskType.value = 'single'
   name.value = ''
-  singleDefinitionId.value = ''
-  chainPick.value = ''
-  chainSteps.value = []
-  uploadFile.value = null
   extractSchemaId.value = ''
   extractBatchSize.value = null
   runNow.value = true
@@ -137,80 +106,25 @@ function reset() {
 watch(() => props.open, (open) => {
   if (open) {
     reset()
-    if (taskType.value === 'extract') loadExtractSchemas()
+    loadExtractSchemas()
   }
-})
-
-watch(taskType, (type) => {
-  if (type === 'extract') loadExtractSchemas()
 })
 
 watch(graphSpace, () => {
   // 换空间后原选择不再属于该空间：清空并按新空间重查
-  if (taskType.value === 'extract') {
-    extractSchemaId.value = ''
-    loadExtractSchemas(true)
-  }
+  extractSchemaId.value = ''
+  loadExtractSchemas(true)
 })
-
-function addChainStep(value: string | number | boolean | Record<string, any> | undefined) {
-  const id = String(value ?? '')
-  if (!id) return
-  if (chainSteps.value.some((s) => s.id === id)) {
-    showToast('该脚本已在队列中', 'warning')
-    return
-  }
-  const definition = scriptDefinitions.value.find((d) => d.id === id)
-  chainSteps.value.push({ id, name: definition?.name || id })
-  chainPick.value = ''
-}
-
-function removeChainStep(index: number) {
-  chainSteps.value.splice(index, 1)
-}
-
-function moveChainStep(index: number, delta: -1 | 1) {
-  const target = index + delta
-  if (target < 0 || target >= chainSteps.value.length) return
-  const steps = chainSteps.value
-  ;[steps[index], steps[target]] = [steps[target], steps[index]]
-}
-
-function onUploadFileChosen(event: Event) {
-  const input = event.target as HTMLInputElement
-  uploadFile.value = input.files?.[0] || null
-}
 
 async function submit() {
   if (!canSubmit.value || submitting.value) return
   submitting.value = true
   try {
-    let definitionId: string | undefined
-    let definitionIds: string[] | undefined
-    if (taskType.value === 'single') {
-      definitionId = singleDefinitionId.value
-    } else if (taskType.value === 'chain') {
-      definitionIds = chainSteps.value.map((s) => s.id)
-    } else if (taskType.value === 'upload') {
-      if (!uploadFile.value) {
-        showToast('请选择脚本文件', 'warning')
-        return
-      }
-      const definition = await uploadPythonDefinition(uploadFile.value, 'workflow', {
-        name: name.value.trim(),
-        timeoutSeconds: 3600,
-      })
-      definitionId = definition.id
-    }
-    // extract：走 schemaId + 平台喂数抽取，不需要 workflow definition
-
     const job = await createJob({
       name: name.value.trim(),
-      taskType: taskType.value,
-      definitionId,
-      definitionIds,
-      schemaId: taskType.value === 'extract' ? extractSchemaId.value : undefined,
-      batchSize: taskType.value === 'extract' ? (extractBatchSize.value || undefined) : undefined,
+      taskType: 'extract',
+      schemaId: extractSchemaId.value,
+      batchSize: extractBatchSize.value || undefined,
       schedule: executeMode.value === 'recurring'
         ? { kind: 'cron', cron: buildScheduleCron(frequency.value, executionTime.value, weekday.value), timezone: 'Asia/Shanghai' }
         : { kind: 'once' },
@@ -252,21 +166,16 @@ async function submit() {
             <div class="job-field__label-row">
               <span>任务类型</span>
               <small
-                v-if="taskType === 'extract' && !schemasLoading && !extractSchemas.length"
+                v-if="!schemasLoading && !extractSchemas.length"
                 class="muted-warn"
                 role="status"
               >暂无可抽取 Schema——请先在 Schema 管理页上传抽取脚本并绑定来源表</small>
             </div>
-            <a-select v-model="taskType" class="job-select" aria-label="任务类型">
-              <a-option value="extract">数据抽取</a-option>
-              <a-option value="single">单脚本抽取</a-option>
-              <a-option value="chain">多脚本串行</a-option>
-              <a-option value="upload">上传脚本</a-option>
-            </a-select>
+            <div class="job-type-static">数据抽取</div>
           </div>
         </div>
 
-        <div v-if="taskType === 'extract'" class="job-row">
+        <div class="job-row">
           <!-- label 会把点击转发给 a-select 内部 input 造成"开→关"双切换，包 a-select 的字段一律用 div -->
           <div class="job-field">
             <span>目标 Schema（已传脚本并绑定来源表）</span>
@@ -278,38 +187,6 @@ async function submit() {
             <span>批大小（默认 500）</span>
             <input aria-label="500" v-model.number="extractBatchSize" type="number" min="1" max="5000" placeholder="500" />
           </label>
-        </div>
-        <div v-else-if="taskType === 'single'" class="job-field">
-          <span>抽取脚本（可搜索）</span>
-          <a-select v-model="singleDefinitionId" class="job-select" placeholder="搜索并选择脚本" allow-search allow-clear :filter-option="filterScript">
-            <a-option v-for="d in scriptDefinitions" :key="d.id" :value="d.id">{{ d.name }}（{{ d.id }}）</a-option>
-          </a-select>
-        </div>
-
-        <div v-else-if="taskType === 'chain'" class="job-field">
-          <span>抽取脚本队列（按顺序串行执行）</span>
-          <a-select :model-value="chainPick" class="job-select" placeholder="搜索并添加脚本" allow-search allow-clear :filter-option="filterScript" @change="addChainStep">
-            <a-option v-for="d in scriptDefinitions" :key="d.id" :value="d.id">{{ d.name }}（{{ d.id }}）</a-option>
-          </a-select>
-          <ol v-if="chainSteps.length" class="chain-steps">
-            <li v-for="(step, i) in chainSteps" :key="step.id">
-              <em>{{ i + 1 }}</em>
-              <code>{{ step.name }}</code>
-              <button type="button" title="上移" :disabled="i === 0" @click="moveChainStep(i, -1)">↑</button>
-              <button type="button" title="下移" :disabled="i === chainSteps.length - 1" @click="moveChainStep(i, 1)">↓</button>
-              <button type="button" title="移除" class="danger" @click="removeChainStep(i)">×</button>
-            </li>
-          </ol>
-          <small v-if="chainSteps.length === 1" class="muted-warn">多脚本串行任务至少选择 2 个脚本</small>
-        </div>
-
-        <div v-else class="job-field">
-          <span>脚本文件（需包含 workflow(payload) 函数）</span>
-          <div class="upload-row">
-            <button type="button" @click="uploadFileInput?.click()">{{ uploadFile ? '重新选择' : '选择 .py 文件' }}</button>
-            <code v-if="uploadFile">{{ uploadFile.name }}</code>
-          </div>
-          <input aria-label="file-input" ref="uploadFileInput" type="file" accept=".py" hidden @change="onUploadFileChosen" />
         </div>
 
         <div class="job-field-group">
@@ -417,31 +294,22 @@ async function submit() {
 .job-field{display:flex;min-width:0;flex-direction:column;gap:8px;color:#4e5969;font-size:14px;line-height:22px}
 .job-field>span{color:#4e5969;font-size:14px;line-height:22px}
 .job-field__label-row{display:flex;min-width:0;align-items:center;gap:8px;flex-wrap:wrap}.job-field__label-row>span{flex:0 0 auto;color:#4e5969;font-size:14px;line-height:22px}.job-field__label-row>.muted-warn{color:#ff7d00!important}
-.job-field>input:not([type="file"]){box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:22px;outline:0;box-shadow:none}
+.job-field>input:not([type="file"]){box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:14px;outline:0;box-shadow:none}
 .job-field>input:not([type="file"]):hover{border-color:#4080ff}
 .job-field>input:not([type="file"]):focus,.job-field>input:not([type="file"]):focus-visible{border-color:#004ecc;outline:0;box-shadow:0 0 0 2px rgba(0,78,204,.1)}
+.job-type-static{box-sizing:border-box;display:flex;align-items:center;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;color:#1d2129;font-size:14px;line-height:22px}
 :deep(.job-select.arco-select-view){display:inline-flex;box-sizing:border-box;width:100%;min-width:0;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;align-items:center}
 :deep(.job-select.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
-:deep(.job-select.arco-select-view:focus-within),:deep(.job-select.arco-select-view-focus){border-color:#004ecc!important;background:#fff!important;box-shadow:0 0 0 2px rgba(0,78,204,.1)!important}
+:deep(.job-select.arco-select-view:focus-within),:deep(.job-select.arco-select-view-focus){border-color:#004ecc;background:#fff!important;box-shadow:0 0 0 2px rgba(0,78,204,.1)!important}
 :deep(.job-select.arco-select-view .arco-select-view-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 :deep(.job-select.arco-select-view .arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
 :deep(.job-select.arco-select-view .arco-select-view-value),:deep(.job-select.arco-select-view .arco-select-view-placeholder){min-width:0;overflow:hidden;background:transparent!important;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 .job-field.checkbox-field{justify-content:flex-end}
 .job-field-group{display:flex;min-width:0;gap:16px;flex-direction:column}
 .job-launch-dialog>footer{display:flex;box-sizing:border-box;flex:0 0 64px;height:64px;align-items:center;justify-content:flex-end;gap:16px;padding:16px 24px;border-top:1px solid #e3ebf6;background:#fff}
-.job-launch-dialog footer button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
+.job-launch-dialog footer button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:14px;font-weight:400;cursor:pointer}
 .job-launch-dialog footer .primary{border-color:#004ecc;background:#004ecc;color:#fff}
 .job-launch-dialog footer button:disabled{opacity:.5;cursor:not-allowed}
-.chain-steps{display:flex;flex-direction:column;gap:6px;margin:6px 0 0;padding:0;list-style:none}
-.chain-steps li{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid #d5e4f7;border-radius:5px;background:#f8fbff}
-.chain-steps em{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#e9f2ff;color:#004ecc;font-size:12px;line-height:20px;font-style:normal;font-weight:400}
-.chain-steps code{flex:1;padding:1px 5px;border-radius:3px;background:#edf4ff;color:#004ecc;font-family:inherit;font-size:12px;line-height:20px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chain-steps button{width:24px;height:24px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:12px;line-height:20px;font-weight:400;cursor:pointer}
-.chain-steps button:disabled{opacity:.35;cursor:not-allowed}
-.chain-steps button.danger{border-color:#f6b9b4;color:#b42318}
-.upload-row{display:flex;align-items:center;gap:10px}
-.upload-row button{height:32px;padding:0 14px;border:1px solid #004ecc;border-radius:4px;background:#fff;color:#004ecc;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
-.upload-row code{color:#004ecc;font-family:inherit;font-size:12px;line-height:20px;font-weight:400}
 .muted-warn{margin:0;color:#ff7d00;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schedule-preview{margin:0;color:#4e5969;font-size:12px;line-height:20px}
 .field-error{color:#e4322d;font-size:12px;line-height:18px}

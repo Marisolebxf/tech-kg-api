@@ -16,7 +16,7 @@ async function execDocker(sql: string): Promise<void> {
 }
 
 // G. 人工审核（A 类：入库决策）
-// 造数：POST /internal/manual-reviews（worker 同款入口）注入 T_DIRECT 合成 case。
+// 造数：容器内直调 create_direct_case（管道同款入口）注入 T_DIRECT 合成 case。
 test.describe.serial('G. 人工审核（A 类）', () => {
   const suffix = runId()
   const directNames = [`e2e直入库甲${suffix}`, `e2e直入库乙${suffix}`]
@@ -24,71 +24,44 @@ test.describe.serial('G. 人工审核（A 类）', () => {
   let caseB = ''
 
 
-  /** 真实通道造数：python workflow 返回 pendingReview → 平台入队 T_DIRECT case。 */
+  /** 造数：容器内直调 create_direct_case（_enqueue_pending_review 同款入口）注入
+   *  T_DIRECT 合成 case。原 kg.custom.steps 造数通道已随 D2 下线（HTTP create_case
+   *  的 validate_step_template 不认 T_DIRECT）；execute_transform 的 pendingReview
+   *  真实入队链路由 G4（T_LINK 同名冲突）覆盖，这里只负责可控的 case 内容。 */
   async function seedDirectCasesViaWorkflow(request: any): Promise<void> {
-    const pending = directNames.map((name) => ({
-      templateId: 'T_DIRECT',
-      kind: 'entity',
-      nodeLabel: 'E2EWidget',
-      objectId: `e2e_obj_${suffix}_${name}`,
-      objectName: name,
-      reason: 'LLM 输出 confidence = 0.42 < 0.85，未达自动入库线',
-      confidence: 0.42,
-      sourceTable: 'techkg_e2e.widgets',
-      sourceRecordId: `e2e_src_${name}`,
-      candidate: {
-        _kind: 'entity',
-        _nodeLabel: 'E2EWidget',
-        id: `e2e_direct_${suffix}_${name}`,
-        name,
+    for (const [index, name] of directNames.entries()) {
+      const payload = {
+        task_id: `e2e-direct-seed-${suffix}`,
+        execution_id: null,
+        step_id: 'extract',
+        kind: 'entity',
+        node_label: 'E2EWidget',
+        template_id: 'T_DIRECT',
+        object_id: `e2e_obj_${suffix}_${name}`,
+        object_name: name,
+        reason: 'LLM 输出 confidence = 0.42 低于阈值 0.85，未达自动入库线',
         confidence: 0.42,
-      },
-    }))
-    const docquote = String.fromCharCode(34, 34, 34)
-    const script = (
-      docquote + 'e2e T_DIRECT pendingReview seeder' + docquote + '\n' +
-      'from typing import Any, Mapping\n\n\n' +
-      'PENDING = ' + JSON.stringify(pending) + '\n\n\n' +
-      'def seed(payload: Mapping[str, Any], ctx: Mapping[str, Any]) -> dict[str, Any]:\n' +
-      '    return {"status": "ok", "pendingReview": PENDING}\n'
-    )
-    const defName = `e2e-direct-steps-${suffix}`
-    // kg.custom.steps 流水线定义：execute_pipeline_step 才会消费 pendingReview
-    // （single=kg.custom.python 与 chain 均原样存 output）
-    const form = new FormData()
-    form.append('file', new Blob([script], { type: 'text/x-python' }), `${defName}.py`)
-    form.append('steps', JSON.stringify([{ id: 'seed', name: '造数', functionName: 'seed' }]))
-    form.append('name', defName)
-    const defResp = await request.post('http://localhost:8002/api/v1/workflow-system/definitions/steps', {
-      multipart: form,
-      headers: { 'X-User-Id': 'local-dev' },
-    })
-    const def = await defResp.json()
-    const definitionId = def?.data?.id
-    const job = await apiMust<any>(
-      request,
-      'POST',
-      '/workflow-system/jobs',
-      {
-        name: `e2e任务-审核造数-${suffix}`,
-        taskType: 'single',
-        definitionId,
-        schedule: { kind: 'once' },
-        runNow: true,
-        graphSpace: 'dev2',
-      },
-      '建造数任务',
-    )
-    await waitFor(
-      async () => {
-        const detail = await api<any>(request, 'GET', `/workflow-system/jobs/${job.id}`)
-        const done = (detail.data?.executions ?? []).find((e: any) =>
-          ['COMPLETED', 'FAILED'].includes(e.status),
-        )
-        return done?.status === 'COMPLETED' ? done : null
-      },
-      { timeout: 240_000, label: '造数任务完成' },
-    )
+        source_table: 'techkg_e2e.widgets',
+        source_record_id: `e2e_src_${index}_${suffix}`,
+        workflow_id: `e2e-seed-${suffix}`,
+        candidate: {
+          _kind: 'entity',
+          _nodeLabel: 'E2EWidget',
+          id: `e2e_direct_${suffix}_${name}`,
+          name,
+          confidence: 0.42,
+        },
+      }
+      const py =
+        'import json; from service.manual_review_production import manual_review_service; '
+        + 'manual_review_service.create_direct_case(**json.loads('
+        + JSON.stringify(JSON.stringify(payload)) + '))'
+      await execFileAsync(
+        'docker',
+        ['exec', 'tech-kg-api-dev2', '.venv/bin/python', '-c', py],
+        { timeout: 30_000 },
+      )
+    }
     await waitFor(
       async () => {
         const q = await api<any>(request, 'GET', '/manual-reviews/production/queue?category=A&statusGroup=pending&pageSize=50')

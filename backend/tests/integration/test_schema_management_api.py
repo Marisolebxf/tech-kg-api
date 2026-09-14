@@ -209,18 +209,8 @@ async def test_schema_management_full_flow(schema_api, monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_schema_script_upload_registers_no_workflow_avatar(
-    schema_api, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """kg.custom.python 化身已删（D1）：上传只存 S3 + 写 DB，不再进 workflow_definitions。"""
-
-    def explode(*args, **kwargs):
-        raise AssertionError("schema 脚本上传不应再注册 kg.custom.python 化身")
-
-    monkeypatch.setattr(
-        "service.workflow_operations.workflow_operations_service.create_python_definition",
-        explode,
-    )
+async def test_schema_script_upload_registers_no_workflow_avatar(schema_api) -> None:
+    """kg.custom.python 化身已删（D1/D2）：上传只存 S3 + 写 DB，不再进 workflow_definitions。"""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         listing = await client.get(
             "/api/v1/schema-management/schemas",

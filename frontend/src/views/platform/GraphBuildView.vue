@@ -7,11 +7,9 @@ import {
   deleteJob,
   deriveJobUnifiedStatus,
   JOB_STATUS_TONE,
-  listDefinitions,
   listJobs,
   triggerJob,
   updateJobState,
-  type WorkflowDefinition,
   type WorkflowJob,
 } from '../../api/workflowOperations'
 import { schemaErrorMessage } from '../../api/schemaManagement'
@@ -30,7 +28,6 @@ const router = useRouter()
 const currentUserId = getCurrentUserId()
 
 const jobs = ref<WorkflowJob[]>([])
-const definitions = ref<WorkflowDefinition[]>([])
 const llmConfigs = ref<LlmConfig[]>([])
 const embeddingConfigs = ref<EmbeddingConfig[]>([])
 const mysqlDatasources = ref<MysqlDatasource[]>([])
@@ -43,7 +40,9 @@ const filterName = ref('')
 const filterStatus = ref('')
 const filterTaskType = ref('')
 
+/** 历史键 single/chain/upload 已停止新建（D2），存量行仍需中文展示 */
 const TASK_TYPE_LABELS: Record<string, string> = {
+  extract: '数据抽取',
   single: '单脚本抽取',
   chain: '多脚本串行',
   upload: '上传脚本',
@@ -83,14 +82,12 @@ async function loadData() {
 
 async function loadDialogResources() {
   try {
-    const [defs, llm, embedding, mysql, spaces] = await Promise.all([
-      listDefinitions(),
+    const [llm, embedding, mysql, spaces] = await Promise.all([
       listLlmConfigs(currentUserId),
       listEmbeddingConfigs(currentUserId),
       listMysqlDatasources(currentUserId),
       listGraphSpaces(currentUserId),
     ])
-    definitions.value = defs.items
     llmConfigs.value = llm
     embeddingConfigs.value = embedding
     mysqlDatasources.value = mysql
@@ -202,6 +199,7 @@ onMounted(loadData)
             <a-option value="运行失败">运行失败</a-option>
           </a-select>
           <a-select id="graph-build-filter-type" v-model="filterTaskType" class="gb-filter-select" placeholder="类型" allow-clear>
+            <a-option value="extract">数据抽取</a-option>
             <a-option value="single">单脚本抽取</a-option>
             <a-option value="chain">多脚本串行</a-option>
             <a-option value="upload">上传脚本</a-option>
@@ -258,7 +256,6 @@ onMounted(loadData)
 
     <JobLaunchDialog
       :open="createOpen"
-      :definitions="definitions"
       :llm-configs="llmConfigs"
       :embedding-configs="embeddingConfigs"
       :mysql-datasources="mysqlDatasources"

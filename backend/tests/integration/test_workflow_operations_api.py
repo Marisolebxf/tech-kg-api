@@ -86,7 +86,8 @@ async def test_update_policy_creates_temporal_schedule(async_client, fake_tempor
     assert data["schedule"]["dispatchStatus"] == "TEMPORAL_CREATED"
 
 
-async def test_custom_definition_and_python_upload_api(async_client, fake_temporal, tmp_path: Path):
+async def test_custom_definition_and_upload_endpoints_removed(async_client, fake_temporal):
+    """declarative 定义入口保留（C1 范畴）；python/steps/chains 上传端点已随 D2 下线。"""
     definition = await async_client.post(
         "/api/v1/workflow-system/definitions",
         json={
@@ -105,18 +106,13 @@ async def test_custom_definition_and_python_upload_api(async_client, fake_tempor
     assert execution.json()["data"]["status"] == "RUNNING"
 
     script = b"def workflow(payload):\n    return {'value': payload['value'] * 2}\n"
-    uploaded = await async_client.post(
-        "/api/v1/workflow-system/definitions/python",
-        data={
-            "definition_id": "python-double",
-            "function_name": "workflow",
-            "name": "Python 倍增工作流",
-        },
-        files={"file": ("double.py", script, "text/x-python")},
-    )
-    assert uploaded.status_code == 200
-    assert uploaded.json()["data"]["workflowType"] == "kg.custom.python"
-    assert Path(uploaded.json()["data"]["scriptPath"]).is_file()
+    for path in ("python", "steps", "chains"):
+        uploaded = await async_client.post(
+            f"/api/v1/workflow-system/definitions/{path}",
+            data={"definition_id": "gone", "function_name": "workflow", "name": "gone"},
+            files={"file": ("double.py", script, "text/x-python")},
+        )
+        assert uploaded.status_code in (404, 405), f"{path} 端点应已下线"
 
 
 @pytest.mark.parametrize("limit", [0, -1, "abc"])

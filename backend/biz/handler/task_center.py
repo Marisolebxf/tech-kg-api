@@ -72,11 +72,6 @@ async def get_task(task_id: str) -> ApiResponse:
         task = service.get_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="任务不存在") from exc
-    # kg.custom.steps：用 Temporal workflow 实时 state 填 pipeline 字段
-    # task["steps"] 保留静态 _steps() 兼容老视图；新视图读 task["pipeline"]
-    step_state = await service.query_step_state(task)
-    if step_state is not None:
-        task["pipeline"] = step_state
     return ApiResponse(data=task)
 
 

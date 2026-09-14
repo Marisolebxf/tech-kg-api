@@ -142,45 +142,10 @@ class ScheduleStateRequest(BaseModel):
     active: bool
 
 
-class RetryPolicyConfig(BaseModel):
-    """Per-step Temporal RetryPolicy；缺省 maximumAttempts=1 不重试。"""
-
-    maximum_attempts: int = Field(default=1, ge=1, alias="maximumAttempts")
-    initial_interval_seconds: int = Field(default=1, ge=1, alias="initialIntervalSeconds")
-    maximum_interval_seconds: int = Field(default=100, ge=1, alias="maximumIntervalSeconds")
-    non_retryable_error_types: list[str] | None = Field(
-        default=None, alias="nonRetryableErrorTypes"
-    )
-
-    model_config = {"populate_by_name": True}
-
-
-class StepManifest(BaseModel):
-    """kg.custom.steps 流水线中单个 step 的声明。"""
-
-    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
-    name: str = Field(min_length=1, max_length=100)
-    function_name: str = Field(alias="functionName", pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-    timeout_seconds: int = Field(default=600, ge=1, alias="timeoutSeconds")
-    retry_policy: RetryPolicyConfig = Field(default_factory=RetryPolicyConfig, alias="retryPolicy")
-
-    model_config = {"populate_by_name": True}
-
-
 class TaskRetryRequest(BaseModel):
     """失败任务重试：调 Temporal ResetWorkflowExecution。"""
 
     reason: str = "manual retry"
-
-
-class WorkflowChainRequest(BaseModel):
-    """多脚本串行链：按顺序串行执行多个已注册 python 定义。"""
-
-    name: str = Field(min_length=1, max_length=100)
-    definition_ids: list[str] = Field(min_length=1, max_length=20, alias="definitionIds")
-    definition_id: str | None = Field(default=None, alias="definitionId")
-
-    model_config = {"populate_by_name": True}
 
 
 class JobScheduleSpec(BaseModel):
@@ -192,15 +157,11 @@ class JobScheduleSpec(BaseModel):
 
 
 class JobCreateRequest(BaseModel):
-    """任务中心新建任务：single 单脚本 / chain 多脚本串行 / upload 上传脚本 / extract 数据抽取。"""
+    """任务中心新建任务：extract 数据抽取（唯一类型，D2 后脚本通道已收敛到 Schema 管理）。"""
 
     name: str = Field(min_length=1, max_length=128)
-    task_type: Literal["single", "chain", "upload", "extract"] = Field(
-        default="single", alias="taskType"
-    )
-    definition_id: str | None = Field(default=None, alias="definitionId")
-    definition_ids: list[str] | None = Field(default=None, max_length=20, alias="definitionIds")
-    # extract 任务：目标 Schema（须已传脚本且绑定来源表）
+    task_type: Literal["extract"] = Field(default="extract", alias="taskType")
+    # 目标 Schema（须已传脚本且绑定来源表）
     schema_id: str | None = Field(default=None, alias="schemaId")
     batch_size: int | None = Field(default=None, ge=1, le=5000, alias="batchSize")
     schedule: JobScheduleSpec = Field(default_factory=JobScheduleSpec)
@@ -218,10 +179,9 @@ class JobCreateRequest(BaseModel):
 
 
 class JobUpdateRequest(BaseModel):
-    """编辑任务：名称 / 脚本顺序 / 资源选择器 / cron。"""
+    """编辑任务：名称 / 资源选择器 / cron。"""
 
     name: str | None = Field(default=None, min_length=1, max_length=128)
-    definition_ids: list[str] | None = Field(default=None, max_length=20, alias="definitionIds")
     schedule: JobScheduleSpec | None = None
     llm_config_id: str | None = Field(default=None, alias="llmConfigId")
     embedding_config_id: str | None = Field(default=None, alias="embeddingConfigId")

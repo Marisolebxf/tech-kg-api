@@ -136,47 +136,29 @@ class WorkflowJobService:
     # ---------- 创建 / 编辑 / 删除 ----------
 
     async def create_job(self, actor: PlatformActor, request: dict[str, Any]) -> dict[str, Any]:
-        from service.workflow_operations import workflow_operations_service
-
-        task_type = request.get("taskType", "single")
-        if task_type not in {"single", "chain", "upload", "extract"}:
-            raise WorkflowJobError("任务类型必须是 single / chain / upload")
+        task_type = request.get("taskType", "extract")
+        if task_type != "extract":
+            # single/chain/upload 已随 D2 下线：脚本唯一通道是 Schema 管理
+            raise WorkflowJobError("任务类型必须是 extract（数据抽取）")
         name = (request.get("name") or "").strip()
         if not name:
             raise WorkflowJobError("任务名称不能为空")
 
         job_hex = uuid4().hex[:12]
-        if task_type == "extract":
-            schema_id = request.get("schemaId")
-            if not schema_id:
-                raise WorkflowJobError("数据抽取任务必须选择 Schema")
-            from service.schema_extraction import (
-                build_extract_definition,
-                load_extract_schema,
-                persist_extract_definition,
-            )
+        schema_id = request.get("schemaId")
+        if not schema_id:
+            raise WorkflowJobError("数据抽取任务必须选择 Schema")
+        from service.schema_extraction import (
+            build_extract_definition,
+            load_extract_schema,
+            persist_extract_definition,
+        )
 
-            try:
-                info = load_extract_schema(schema_id)
-            except Exception as exc:
-                raise WorkflowJobError(str(exc)) from exc
-            definition = persist_extract_definition(build_extract_definition(info))
-        elif task_type == "chain":
-            definition_ids = request.get("definitionIds") or []
-            if len(definition_ids) < 2:
-                raise WorkflowJobError("多脚本串行任务至少选择 2 个脚本")
-            definition = workflow_operations_service.create_chain_definition(
-                name, definition_ids, definition_id=f"chain-{job_hex}"
-            )
-        else:
-            definition_id = request.get("definitionId")
-            if not definition_id:
-                raise WorkflowJobError("请选择脚本")
-            definition = self.repo.get_definition(definition_id)
-            if definition is None:
-                raise WorkflowJobError(f"工作流定义不存在: {definition_id}")
-            if task_type == "single" and definition.get("sourceKind") != "python":
-                raise WorkflowJobError(f"任务脚本必须是 python 脚本定义: {definition_id}")
+        try:
+            info = load_extract_schema(schema_id)
+        except Exception as exc:
+            raise WorkflowJobError(str(exc)) from exc
+        definition = persist_extract_definition(build_extract_definition(info))
 
         schedule = request.get("schedule") or {"kind": "once"}
         if schedule.get("kind") not in {"once", "cron"}:
@@ -188,7 +170,7 @@ class WorkflowJobService:
             "id": f"job-{job_hex}",
             "name": name,
             "taskType": task_type,
-            "definitionIds": request.get("definitionIds") or [definition["id"]],
+            "definitionIds": [definition["id"]],
             "definitionId": definition["id"],
             "definitionName": definition.get("name", definition["id"]),
             "schedule": schedule,
@@ -203,10 +185,9 @@ class WorkflowJobService:
         for key in _SELECTOR_KEYS:
             if request.get(key) not in (None, ""):
                 job[key] = request[key]
-        if task_type == "extract":
-            job["schemaId"] = schema_id
-            if request.get("batchSize"):
-                job["batchSize"] = min(max(int(request["batchSize"]), 1), 5000)
+        job["schemaId"] = schema_id
+        if request.get("batchSize"):
+            job["batchSize"] = min(max(int(request["batchSize"]), 1), 5000)
 
         if schedule["kind"] == "cron":
             schedule_id = f"{job['id']}-sched"
@@ -223,20 +204,7 @@ class WorkflowJobService:
     async def update_job(
         self, actor: PlatformActor, job_id: str, request: dict[str, Any]
     ) -> dict[str, Any]:
-        from service.workflow_operations import workflow_operations_service
-
         job = self.get_job(actor, job_id)
-        new_ids = request.get("definitionIds")
-        if job["taskType"] == "chain" and new_ids and new_ids != job.get("definitionIds"):
-            if len(new_ids) < 2:
-                raise WorkflowJobError("多脚本串行任务至少选择 2 个脚本")
-            definition = workflow_operations_service.create_chain_definition(
-                request.get("name") or job["name"],
-                new_ids,
-                definition_id=job["definitionId"],  # 确定性 id，覆盖原链定义
-            )
-            job["definitionIds"] = new_ids
-            job["definitionName"] = definition.get("name", definition["id"])
         if request.get("name"):
             job["name"] = request["name"].strip()
         for key in _SELECTOR_KEYS:

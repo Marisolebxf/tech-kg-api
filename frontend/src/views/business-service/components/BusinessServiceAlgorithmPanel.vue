@@ -1103,6 +1103,17 @@ function buildPaperCoopRealGraph(
     发表于: "期刊/会议",
     参与合著: "合作团队",
   };
+  // 关系置信度：后端 relationConfidences 按边语义映射，与无真实子图时的
+  // preset 兜底路径同口径（论文合作→paperCooperation、发表→authorship、
+  // 研究主题→researchTopic、发表于→publicationVenue、参与合著→teamMembership），
+  // 不再让真实子图的边退化为"不适用（统计关系）"。
+  const confidenceByLabel: Record<string, number | undefined> = {
+    论文合作: relationConfidences.paperCooperation,
+    发表: relationConfidences.authorship,
+    研究主题: relationConfidences.researchTopic,
+    发表于: relationConfidences.publicationVenue,
+    参与合著: relationConfidences.teamMembership,
+  };
   const edges: GraphEdgeData[] = graph.edges.map((edge, index) => {
     const label = String(edge.label || "");
     return {
@@ -1111,8 +1122,7 @@ function buildPaperCoopRealGraph(
       to: String(edge.target),
       label,
       category: categoryByLabel[label] || label || "关联",
-      confidence:
-        label === "论文合作" ? relationConfidences.paperCooperation : undefined,
+      confidence: confidenceByLabel[label],
     };
   });
   // 「命中关系」按每个节点在 edges 中真实相连的对端 + 关系类型统计（与重点企业关系

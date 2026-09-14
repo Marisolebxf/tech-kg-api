@@ -157,7 +157,7 @@ kubectl -n bkg create secret docker-registry bkg-image-pull-secret-0 \
 | milvus-etcd-data | 10Gi | milvus-etcd |
 | milvus-data | 10Gi | milvus |
 | temporal-mysql-data | 10Gi | temporal-mysql |
-| workflow-state | 10Gi | temporal-worker / api |
+| workflow-state | 10Gi | temporal-worker（本地运行态；D6 后 api 不再挂载） |
 | patent-index-state | 20Gi | api（专利索引状态） |
 | auth-redis-data | 10Gi | auth-redis |
 
@@ -886,7 +886,6 @@ data:
   WORKFLOW_MYSQL_PORT: "3306"
   WORKFLOW_MYSQL_DATABASE: "techkg_control"
   WORKFLOW_MYSQL_USERNAME: "root"
-  WORKFLOW_SCRIPT_DIR: "/var/lib/bkg/scripts"
   WORKFLOW_DEMO_DATA_ENABLED: "false"
 
   # ---- S3（operator-rustfs，schema 脚本 / operator 包 / milvus 内部存储共用）----
@@ -1191,15 +1190,10 @@ spec:
           volumeMounts:
             - name: patent-index-state
               mountPath: /app/var/patent_indexes
-            - name: workflow-state
-              mountPath: /var/lib/bkg
       volumes:
         - name: patent-index-state
           persistentVolumeClaim:
             claimName: patent-index-state
-        - name: workflow-state
-          persistentVolumeClaim:
-            claimName: workflow-state
 ---
 apiVersion: v1
 kind: Service

@@ -46,7 +46,6 @@ services:
       WORKFLOW_MYSQL_DATABASE: techkg_control
       WORKFLOW_MYSQL_USERNAME: root
       WORKFLOW_MYSQL_PASSWORD: temporal
-      WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
       WORKFLOW_DEMO_DATA_ENABLED: ${WORKFLOW_DEMO_DATA_ENABLED:-false}
       PLATFORM_INITIAL_ADMIN_USER_IDS: ${PLATFORM_INITIAL_ADMIN_USER_IDS:-}
       PLATFORM_BOOTSTRAP_FIRST_ADMIN: ${PLATFORM_BOOTSTRAP_FIRST_ADMIN:-true}
@@ -96,7 +95,6 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - patent-index-state:/app/var/patent_indexes
-      - workflow-state:/var/lib/tech-kg
     depends_on:
       operator-rustfs:
         condition: service_healthy
@@ -237,7 +235,6 @@ services:
       WORKFLOW_MYSQL_USERNAME: root
       WORKFLOW_MYSQL_PASSWORD: temporal
       TEMPORAL_MAX_CONCURRENT_ACTIVITIES: ${TEMPORAL_MAX_CONCURRENT_ACTIVITIES:-4}
-      WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
       TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://trs-graph-service:8090}
       TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-dev}
       TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
@@ -253,6 +250,8 @@ services:
       MILVUS_TOKEN: ${MILVUS_TOKEN:-}
       ORG_MILVUS_STATE_DIR: ${ORG_MILVUS_STATE_DIR:-/var/lib/tech-kg/organization_milvus}
     volumes:
+      # 用户脚本已全在 S3（D2 后 worker 按需下载）；本卷只承载 worker 本地运行态
+      # （org milvus BM25 state 等），不再与 api 共享（D6 拆分，多节点部署解锁）
       - workflow-state:/var/lib/tech-kg
     depends_on:
       - temporal

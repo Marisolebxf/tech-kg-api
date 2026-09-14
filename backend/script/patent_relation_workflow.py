@@ -10,6 +10,8 @@ activity 以子进程方式执行本脚本。子进程的 ``PYTHONPATH`` 只含�
 （``WORKFLOW_SCRIPT_DIR``，通常是 /tmp），不含 backend 根，因此本脚本需自举
 ``sys.path`` 才能 ``from script.load_patent_relations import load``。
 
+（注：``POST /definitions/python`` 上传通道与 ``kg.custom.python`` 已于 2026-09-14 D2 下线，
+``WORKFLOW_SCRIPT_DIR`` 亦随 D6 退场——本包装暂无消费方，随 D5 旧 ETL 批次一并处置。）
 本脚本只做入口适配、参数传递、结果 JSON 化；不复制/不修改关系抽取与建图逻辑。
 执行失败时向上抛出异常，让 Temporal 识别 FAILED 并按平台策略重试。
 """

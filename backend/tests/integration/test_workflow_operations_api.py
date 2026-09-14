@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from infra.workflow_mysql import WorkflowMySQLClient
@@ -12,8 +10,7 @@ TEST_CONTROL_DB = "techkg_control_test"
 
 
 @pytest.fixture(autouse=True)
-def reset_workflow_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("WORKFLOW_SCRIPT_DIR", str(tmp_path / "scripts"))
+def reset_workflow_state(monkeypatch: pytest.MonkeyPatch):
     # 控制面读写都经 infra.workflow_mysql 全局 client；指到独立测试库，
     # 绝不能 reset 真实 techkg_control（会连带 DROP schema 目录表）
     test_client = WorkflowMySQLClient(database=TEST_CONTROL_DB)

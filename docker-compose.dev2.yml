@@ -8,8 +8,8 @@
 # - TRS_GRAPH_SPACE 显式锁死 dev2（不读 ${TRS_GRAPH_SPACE}，避免根 .env 改回 dev 时静默切换）；
 # - 其余 env 完全复用 docker-compose.yml 的 environment 块（${VAR:-default} 从根 .env 插值）；
 # - 通过 external 网络 tech-kg-api_app 访问共享服务；
-# - 独立卷 workflow-state-dev2 / patent-index-state-dev2，
-#   不污染生产的 SQLite 控制面 / 专利索引状态；
+# - 独立卷 workflow-state-dev2（仅 temporal-worker 本地运行态，D6 后不再与 api 共享）
+#   / patent-index-state-dev2，不污染生产对应状态；
 # - web 通过 volume 覆盖 nginx 配置，upstream 指向 api-dev2（见 frontend/nginx.dev2.conf）。
 #
 # 启动：docker compose -f docker-compose.dev2.yml up -d --build
@@ -64,7 +64,6 @@ services:
       WORKFLOW_MYSQL_DATABASE: techkg_control
       WORKFLOW_MYSQL_USERNAME: root
       WORKFLOW_MYSQL_PASSWORD: temporal
-      WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
       WORKFLOW_DEMO_DATA_ENABLED: ${WORKFLOW_DEMO_DATA_ENABLED:-false}
       # 开发期关闭网关签名校验，未传 X-User-Id 时返回 dev-anonymous 身份。
       # 生产保持 REVIEW_IDENTITY_REQUIRE_SIGNATURE=true 且配 REVIEW_IDENTITY_HMAC_SECRET。
@@ -121,7 +120,6 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - patent-index-state-dev2:/app/var/patent_indexes
-      - workflow-state-dev2:/var/lib/tech-kg
     networks:
       - app
     depends_on:
@@ -158,7 +156,6 @@ services:
       WORKFLOW_MYSQL_DATABASE: techkg_control
       WORKFLOW_MYSQL_USERNAME: root
       WORKFLOW_MYSQL_PASSWORD: temporal
-      WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
       # worker 也跑 build_entity_index activity：embedding 缺省会回退智谱默认端点，
       # 吃 401 重试 5 次才降级（执行拖到 3 分钟），补齐与 api 一致的 m3e 配置
       PATENT_EMBEDDING_PROVIDER: ${PATENT_EMBEDDING_PROVIDER:-openai}
@@ -175,6 +172,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
+      # 用户脚本已全在 S3（D2 后 worker 按需下载）；本卷只承载 worker 本地运行态
+      # （org milvus BM25 state 等），不再与 api 共享（D6 拆分，多节点部署解锁）
       - workflow-state-dev2:/var/lib/tech-kg
     networks:
       - app

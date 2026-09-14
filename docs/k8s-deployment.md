@@ -46,7 +46,7 @@
 | `milvus-etcd-data` | `milvus-etcd-data` | `/etcd` | 高 IOPS SSD |
 | `milvus-data` | `milvus-data` | `/var/lib/milvus` | 高 IOPS SSD |
 | `temporal-mysql-data` | `temporal-mysql-data` | `/var/lib/mysql` | SSD |
-| `workflow-state` | `workflow-state` | `/var/lib/bkg` | SSD |
+| `workflow-state` | `workflow-state` | `/var/lib/bkg`（仅 temporal-worker） | SSD |
 | `patent-index-state` | `patent-index-state` | `/app/var/patent_indexes` | SSD |
 | `operator-rustfs-data` | `operator-rustfs-data` | `/data` | 对象存储盘 |
 | `auth-redis-data` | `auth-redis-data` | `/data` | SSD |
@@ -157,7 +157,6 @@ data:
   WORKFLOW_MYSQL_PORT: "3306"
   WORKFLOW_MYSQL_DATABASE: techkg_control
   WORKFLOW_MYSQL_USERNAME: root
-  WORKFLOW_SCRIPT_DIR: /var/lib/bkg/scripts
   # ---- schema S3（与 operator / milvus 共用 operator-rustfs） ----
   SCHEMA_AUTO_INIT: "true"
   SCHEMA_S3_ENDPOINT_URL: http://operator-rustfs:9000
@@ -304,7 +303,7 @@ spec:
   storageClassName: ssd
 ```
 
-> 多副本可读的卷（如 `workflow-state`）应使用 `ReadWriteMany`，或保持单副本以避免并发写冲突。
+> `workflow-state` 现仅 temporal-worker（replicas=1）挂载，RWO 即可；`patent-index-state` 仍按 api 副本数考虑 RWO/RWX。
 
 ---
 
@@ -692,15 +691,12 @@ spec:
             failureThreshold: 3
           volumeMounts:
             - { name: patent-index-state, mountPath: /app/var/patent_indexes }
-            - { name: workflow-state, mountPath: /var/lib/bkg }
           resources:
             requests: { cpu: 500m, memory: 1Gi }
             limits: { cpu: 2, memory: 4Gi }
       volumes:
         - name: patent-index-state
           persistentVolumeClaim: { claimName: patent-index-state }
-        - name: workflow-state
-          persistentVolumeClaim: { claimName: workflow-state }
 ---
 apiVersion: v1
 kind: Service
@@ -710,7 +706,7 @@ spec:
   ports: [{ port: 8000, targetPort: 8000 }]
 ```
 
-> workflow 控制面状态已迁到 temporal-mysql 的 `techkg_control` 库（`WORKFLOW_MYSQL_*`），不再是卷上 SQLite；`workflow-state` 卷现在承载 `WORKFLOW_SCRIPT_DIR` 脚本目录，与 `temporal-worker` 共享，仍需注意 RWO 卷的单写者约束（多副本 `api` 时建议脚本写路径只归 worker，或改 RWX）。
+> workflow 控制面状态已迁到 temporal-mysql 的 `techkg_control` 库（`WORKFLOW_MYSQL_*`），不再是卷上 SQLite；用户脚本已全在 S3（D2/D6，`WORKFLOW_SCRIPT_DIR` 退场），`workflow-state` 卷只剩 worker 本地运行态（org milvus BM25 state 等）且仅 temporal-worker 挂载——api 不再依赖共享卷，多节点/多副本部署由此解锁。
 
 ### 9.2 temporal-worker
 
@@ -739,7 +735,6 @@ spec:
             - { name: TEMPORAL_ADDRESS, value: temporal:7233 }
             - { name: TEMPORAL_NAMESPACE, value: default }
             - { name: TEMPORAL_TASK_QUEUE, value: bkg-workflows }
-            - { name: WORKFLOW_SCRIPT_DIR, value: /var/lib/bkg/scripts }
             - { name: TEMPORAL_MAX_CONCURRENT_ACTIVITIES, value: "4" }
             - { name: ORG_MILVUS_STATE_DIR, value: /var/lib/bkg/organization_milvus }
           volumeMounts:
@@ -1046,7 +1041,7 @@ kubectl -n bkg rollout restart deploy/api
 
 ### 16.2 关键陷阱
 
-1. **`workflow-state` 是 RWO 卷**（脚本目录等运行态）：多副本 `api` 会冲突，建议 replicas=1 或迁到对象存储；workflow 控制面状态本身已在 temporal-mysql 的 `techkg_control` 库，不受此限。
+1. **`workflow-state` 是 RWO 卷**（worker 本地运行态：org milvus BM25 state 等）：D6 后仅 temporal-worker 挂载，api 不受影响；workflow 控制面状态本身在 temporal-mysql 的 `techkg_control` 库。
 2. **m3e-embedding 首次拉模型很慢**：readinessProbe 的 `initialDelaySeconds` 给 180s 以上；首次部署可手动 `kubectl wait` 等 Pod Ready。
 3. **trs-graph 节点 CRUD 不可靠**（`find_nodes` 返回假 vid、`merge_node` 仅 ETL 用），详见内部记忆。线上业务只用 edge + node-read。
 4. **`init_graph_schema.py` 创建 SPACE 后会因传播延迟报错**，Job 设置 `backoffLimit: 6`，重试即可。

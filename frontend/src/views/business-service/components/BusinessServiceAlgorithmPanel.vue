@@ -989,9 +989,10 @@ function derivedGraphFromResponse(
     });
   });
 
-  // 「命中关系」与实体页/关系页同口径：统计画布全部连线（真实图库边 + 分层
+  // 节点相邻关系统计与关系页同口径：统计画布全部连线（真实图库边 + 分层
   // 展示连线，连线类型即分层名），每个节点列出全部相邻关系与对端、带总数
-  // 前缀、不截断；标签取画布节点名（虚拟中心也能正确显示产业名）。
+  // 前缀、不截断；结果写入 node.relations 供画布悬停提示使用；标签取画布
+  // 节点名（虚拟中心也能正确显示产业名）。
   const relationSummaries = panoramaNodeRelationSummaries(resp, {
     edgeLabelDisplay: displayRelationType,
     edges: edges.map(canvasEdgeToPanoramaEdge),
@@ -1103,6 +1104,17 @@ function buildPaperCoopRealGraph(
     发表于: "期刊/会议",
     参与合著: "合作团队",
   };
+  // 关系置信度：后端 relationConfidences 按边语义映射，与无真实子图时的
+  // preset 兜底路径同口径（论文合作→paperCooperation、发表→authorship、
+  // 研究主题→researchTopic、发表于→publicationVenue、参与合著→teamMembership），
+  // 不再让真实子图的边退化为"不适用（统计关系）"。
+  const confidenceByLabel: Record<string, number | undefined> = {
+    论文合作: relationConfidences.paperCooperation,
+    发表: relationConfidences.authorship,
+    研究主题: relationConfidences.researchTopic,
+    发表于: relationConfidences.publicationVenue,
+    参与合著: relationConfidences.teamMembership,
+  };
   const edges: GraphEdgeData[] = graph.edges.map((edge, index) => {
     const label = String(edge.label || "");
     return {
@@ -1111,13 +1123,12 @@ function buildPaperCoopRealGraph(
       to: String(edge.target),
       label,
       category: categoryByLabel[label] || label || "关联",
-      confidence:
-        label === "论文合作" ? relationConfidences.paperCooperation : undefined,
+      confidence: confidenceByLabel[label],
     };
   });
-  // 「命中关系」按每个节点在 edges 中真实相连的对端 + 关系类型统计（与重点企业关系
-  // 模块同口径），不再用 subtitle（专家机构名）顶替——论文/主题/期刊等非专家节点
-  // 的 subtitle 后端为空，导致点击时命中关系显示为空。机构名保留在 evidence 里。
+  // 节点相邻关系统计（真实相连的对端 + 关系类型）保留在 node.relations，
+  // 供画布悬停提示使用；实体详情页只展示实体自身信息，不再显示命中关系。
+  // 机构名保留在 evidence 里。
   const labelById = new Map(nodes.map((n) => [n.id, n.label]));
   const relationsByNode = new Map<string, string[]>();
   for (const edge of edges) {
@@ -2345,19 +2356,12 @@ const liveEntityRows = computed(() => {
     return formatConfidence(value);
   };
   if (selected && !isExpertDirect.value) {
-    // 全景图：命中关系与置信度均为画布口径（与实体页/关系页一致），直接取
-    // 选中节点自身；无真实边的展示元素回退画布文案（子图规模概览），保持
-    // 提示不空。
+    // 实体详情只展示实体自身信息（名称/类型/置信度/证据）；关系统计属于
+    // 关系口径，实体页不再显示「命中关系」行（关系内容看关系页/画布连线）。
+    // 全景图置信度为画布口径，直接取选中节点自身。
     const rows: Array<readonly [string, string]> = [
       ["实体名称", selected.label],
       ["实体类型", selected.entityType],
-      [
-        "命中关系",
-        isPanorama.value
-          ? (panoramaRelationSummaries.value.get(selected.id) ??
-            selected.relations)
-          : selected.relations,
-      ],
       [
         "置信度",
         isPanorama.value
@@ -2371,19 +2375,12 @@ const liveEntityRows = computed(() => {
     return rows;
   }
   // 全景图：实体页与画布同口径，逐个列出画布渲染节点（产业链中心 + 分层 +
-  // 展开层），数量与画布节点数一致；「关系」行按画布全部连线统计并带总数
-  // 前缀，不截断——分层展示连线也计入，分层实体不再显示「—」；确无任何
-  // 连线的节点给出说明文案。
+  // 展开层），数量与画布节点数一致；只展示实体自身信息（类型/置信度）。
   if (isPanorama.value && panoramaResponse.value) {
     return panoramaEntityList.value.flatMap(
       (entity, index): Array<readonly [string, string]> => [
         [`实体 ${index + 1}`, `${entity.label}（${entity.id}）`],
         ["类型", entity.entityType],
-        [
-          "关系",
-          panoramaRelationSummaries.value.get(entity.id) ??
-            "画布暂无关联连线（关联对端未在画布渲染）",
-        ],
         ["置信度", formatConfidence(entity.confidence)],
       ],
     );
@@ -2394,7 +2391,6 @@ const liveEntityRows = computed(() => {
   return entities.flatMap((entity, index) => [
     [`实体 ${index + 1}`, `${entity.label}（${entity.id}）`] as const,
     ["类型", entity.entityType] as const,
-    ["关系", entity.relations || "—"] as const,
     ["置信度", entityConfidence(entity.confidence)] as const,
   ]);
 });
@@ -2531,20 +2527,6 @@ const panoramaCanvasRealEdges = computed<PanoramaGraphEdge[]>(() => {
   return graphEdges.value
     .filter((edge) => edge.inferred !== true)
     .map(canvasEdgeToPanoramaEdge);
-});
-
-/** 全景图实体的关系统计（画布口径：画布全部连线，含分层展示连线，连线
- * 类型即分层名）：实体页「关系」行、选中态「命中关系」行与画布节点共用
- * 同一口径，不截断；端点名取画布节点标签（含虚拟中心名）。 */
-const panoramaRelationSummaries = computed(() => {
-  if (!isPanorama.value || !panoramaResponse.value) {
-    return new Map<string, string>();
-  }
-  return panoramaNodeRelationSummaries(panoramaResponse.value, {
-    edgeLabelDisplay: displayRelationType,
-    edges: panoramaCanvasEdges.value,
-    labelById: new Map(graphNodes.value.map((node) => [node.id, node.label])),
-  });
 });
 
 /** 全景图画布口径实体列表：与画布渲染节点一一对应（产业链中心 + 分层 +

@@ -783,9 +783,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         # 返回三类共同成果的图节点信息。pair/list 两种模式都需要展示，
         # 图谱组装阶段会按成果 VID 去重。
         for kind, ids, type_label in (
-            ("paper", sorted(paper_ids), "论文成果"),
-            ("patent", sorted(patent_ids), "专利成果"),
-            ("project", sorted(project_ids), "项目成果"),
+            ("paper", sorted(paper_ids), "论文"),
+            ("patent", sorted(patent_ids), "专利"),
+            ("project", sorted(project_ids), "项目"),
         ):
             for achievement_id in ids:
                 try:
@@ -1266,7 +1266,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             entity = {
                 "id": aid,
                 "label": aname,
-                "entityType": "校友专家",
+                "entityType": "科技专家",
                 "nodeType": "expert",
                 "confidence": 0.9,
                 "relations": f"与{source_name}存在校友关系（{dim_text}；共同院校：{shared}）",
@@ -1347,7 +1347,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                         {
                             "id": achievement_id,
                             "label": achievement.get("label") or achievement_id,
-                            "entityType": achievement.get("entityType") or "合作成果",
+                            "entityType": achievement.get("entityType") or "科技成果",
                             "nodeType": (
                                 "project" if achievement.get("kind") == "project" else "paper"
                             ),

@@ -65,6 +65,9 @@ TIME_KEYS = (
     "start_date",
     "start_year",
     "date",
+    # Project 节点只有立项时间属性（无完成时间），放最后兜底读取。
+    "approval_time",
+    "approval_year",
 )
 FIELD_KEYS = (
     "keywords",

@@ -1807,12 +1807,54 @@ const relationCategoryByModule: Record<string, string> = {
   // 两点合作成果：三条合成边（论文/专利/项目合作）均由双端成果边邻居集合
   // 求交得到（多表 join 口径），前缀统一为「间接」，业务细目见边 label。
   "two-point-achievement": "间接",
-  "expert-colleague": "同事关系",
-  "expert-alumni": "校友关系",
+  // 同事/校友模块的类别不走此静态映射,由 displayRelationCategory 按边
+  // 动态判定:命中下方关系详情映射(梳理文档中的直接关系)标"直接关系",
+  // 未命中默认"间接关系"。这里的值仅作兜底,正常不会读到。
+  "expert-colleague": "直接关系",
+  "expert-alumni": "直接关系",
   "paper-cooperation": "合作关系",
   "enterprise-relation": "企业关联关系",
   "industry-chain-event": "产业链关联关系",
   "industry-chain-panorama": "产业链关联关系",
+};
+
+// 关系详情:同事/校友模块只展示梳理文档(md)中的关系名(名词),不带后缀
+// (如"直接关系/同事");动词类关系名加"关系"构成名词(任职→任职关系)。
+// key 为画布边 label(同事边 label="同事关系"、任职边 label="AFFILIATED_WITH"、
+// 校友边 label="校友关系"、共同成果边 label="发表"/"发明"/"参与"或原始边类型)。
+const colleagueRelationDetails: Record<string, string> = {
+  同事关系: "同事",
+  AFFILIATED_WITH: "任职关系",
+  COAUTHOR_WITH: "合著关系",
+  AUTHORED_BY: "署名关系",
+  INVENTED_BY: "发明人",
+  LEADS: "项目负责人",
+  HAS_PARTICIPANT: "项目参与者",
+  // #7 反向变体(人→项目),与 HAS_PARTICIPANT 同属项目参与关系
+  PARTICIPATES_IN: "项目参与者",
+  // #12 共享节点(Report/Award/Team 等)关联边,类型不统一,按业务口径算直接
+  RELATED_TO: "关联关系",
+};
+
+const alumniRelationDetails: Record<string, string> = {
+  校友关系: "校友",
+  STUDIED_AT: "就读关系",
+  COAUTHOR_WITH: "合著关系",
+  // 校友图谱共同成果边用中文 label(后端 expertRelations):发表/发明/负责/参与,
+  // 与原始边类型(AUTHORED_BY/INVENTED_BY/LEADS/HAS_PARTICIPANT)同属一条关系。
+  发表: "署名关系",
+  发明: "发明人",
+  负责: "项目负责人",
+  参与: "项目参与者",
+  AUTHORED_BY: "署名关系",
+  INVENTED_BY: "发明人",
+  LEADS: "项目负责人",
+  HAS_PARTICIPANT: "项目参与者",
+};
+
+const relationDetailByModule: Record<string, Record<string, string>> = {
+  "expert-colleague": colleagueRelationDetails,
+  "expert-alumni": alumniRelationDetails,
 };
 
 const activeRelationCategory = computed(
@@ -1843,8 +1885,24 @@ const displayRelationType = (value?: string) =>
   value ||
   "—";
 
-const displayRelationDetail = (edge: GraphEdgeData) =>
-  displayRelationType(edge.label || edge.category);
+const displayRelationDetail = (edge: GraphEdgeData) => {
+  const detailMap = relationDetailByModule[props.moduleInfo.key];
+  if (detailMap) {
+    const detail = detailMap[edge.label || edge.category || ""];
+    if (detail) return detail;
+  }
+  return displayRelationType(edge.label || edge.category);
+};
+
+// 关系类别:同事/校友模块按边动态判定——命中梳理文档(md)中的直接关系
+// 映射时标"直接关系",未命中默认"间接关系";其余模块沿用模块级类别。
+const displayRelationCategory = (edge: GraphEdgeData): string => {
+  const detailMap = relationDetailByModule[props.moduleInfo.key];
+  if (detailMap) {
+    return detailMap[edge.label || edge.category || ""] ? "直接关系" : "间接关系";
+  }
+  return activeRelationCategory.value;
+};
 
 /* 论文合作页「关系描述」专用口径：直接/间接 + 核实过的关系名（统一名词
  * 形式，动词性名称加「关系」后缀）。该模块全部关系均为直接关系（单表一行
@@ -2409,7 +2467,7 @@ const liveRelationRows = computed(() => {
           ? paperCoopRelationDescription(relation)
           : isLiveEnterpriseRelation.value
             ? enterpriseRelationDescription(relation)
-            : `${activeRelationCategory.value}/${displayRelationDetail(relation)}`,
+            : `${displayRelationCategory(relation)}/${displayRelationDetail(relation)}`,
       ] as const,
       ["置信度", formatRelationConfidence(relation)] as const,
     ];

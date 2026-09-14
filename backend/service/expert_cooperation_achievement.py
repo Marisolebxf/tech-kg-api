@@ -1000,7 +1000,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             ach_type = str(item.get("type") or "paper")
             node_type, type_label, relation_template, base_x, base_y = type_node_map.get(
                 ach_type,
-                ("paper", "成果", "由{experts}共同产出", 370.0, 320.0),
+                ("paper", "科技成果", "由{experts}共同产出", 370.0, 320.0),
             )
             nid = str(item.get("id") or f"ach-{idx}")
             title = str(item.get("title") or nid)

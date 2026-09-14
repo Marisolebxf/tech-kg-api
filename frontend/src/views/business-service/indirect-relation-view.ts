@@ -25,20 +25,26 @@ const edgeLabels: Record<string, string> = {
   MEMBER_OF: "成员关系",
 };
 
+// 实体类别统一映射到业务口径 12 类（科技专家/机构/企业/论文/专利/项目/
+// 科技成果/产业链/产业链节点/事件/技术主题/院校）；Report/Product 等无法
+// 细分的成果类统一归入科技成果，Journal 按出版机构口径归入机构。
 const entityTypeLabels: Record<string, string> = {
   Person: "科技专家",
   Scholar: "科技专家",
   Expert: "科技专家",
-  Organization: "科研机构",
-  Project: "科研项目",
-  Paper: "论文成果",
-  Patent: "专利成果",
-  PatentFamily: "专利族",
-  Product: "科技产品",
-  Keyword: "研究主题",
-  Event: "科技事件",
-  News: "新闻资讯",
-  Report: "研究报告",
+  Organization: "机构",
+  Project: "项目",
+  Paper: "论文",
+  Patent: "专利",
+  PatentFamily: "专利",
+  Product: "科技成果",
+  Keyword: "技术主题",
+  Event: "事件",
+  News: "事件",
+  Report: "科技成果",
+  Journal: "机构",
+  IndustryChain: "产业链",
+  IndustryNode: "产业链节点",
 };
 
 const graphNodeType = (node: IndirectNode, isCore = false): GraphNodeType => {
@@ -60,7 +66,7 @@ const graphNodeType = (node: IndirectNode, isCore = false): GraphNodeType => {
 };
 
 const displayEntityType = (node: IndirectNode, isCore = false) => {
-  if (isCore) return "核心专家";
+  if (isCore) return "科技专家";
   const semanticLabel = node.labels.find(
     (label) => !["organization_base", "Entity", "Base"].includes(label),
   );
@@ -245,7 +251,7 @@ export function indirectSummaryRows(result: ExpertIndirectRelationResult) {
   return [
     [
       "核心节点",
-      `${result.coreNode.name}｜${result.coreNode.entityType}`,
+      `${result.coreNode.name}｜${displayEntityType(result.coreNode, true)}`,
     ] as const,
     ["路径分析深度", `${result.pathDepth} 跳`] as const,
     [

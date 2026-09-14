@@ -19,7 +19,7 @@ describe("科技单节点间接关系展示", () => {
     const organization = {
       id: "org_b",
       name: "测试研究院",
-      entityType: "科研机构",
+      entityType: "机构",
       labels: ["organization_base", "Organization"],
       properties: {
         organization_base: "dwd_organization",
@@ -61,7 +61,7 @@ describe("科技单节点间接关系展示", () => {
     const graph = buildIndirectRelationGraph(result);
     expect(graph.nodes[0].relations).toBe("核心节点");
     expect(graph.nodes[0].confidence).toBe(1.0);
-    expect(graph.nodes[1].entityType).toBe("科研机构");
+    expect(graph.nodes[1].entityType).toBe("机构");
     expect(graph.nodes[1].relations).toBe("间接关联节点");
     expect(graph.nodes[1].confidence).toBe(0.9);
     expect(graph.nodes[1].evidence).toEqual([

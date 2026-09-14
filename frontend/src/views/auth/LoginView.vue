@@ -10,6 +10,9 @@ const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const submitting = ref<"business" | "admin" | "">("");
+// 本次上线仅开放用户端（九大业务模块），管理端入口默认屏蔽；
+// 构建时传 VITE_ADMIN_LOGIN_ENABLED=true 可恢复展示。
+const adminLoginEnabled = import.meta.env.VITE_ADMIN_LOGIN_ENABLED === "true";
 function normalizeLoginFeedback(value: unknown): string {
   if (typeof value !== "string") return "";
   if (/request failed|network error|status code 5\d\d|failed to fetch/i.test(value)) {
@@ -117,7 +120,7 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
           <button type="button" :disabled="Boolean(submitting) || authStore.loading" @click="login('business')">
             <strong>用户端</strong><b>{{ submitting === 'business' ? '跳转中…' : '进入 →' }}</b>
           </button>
-          <button class="admin" type="button" :disabled="Boolean(submitting) || authStore.loading" @click="login('admin')">
+          <button v-if="adminLoginEnabled" class="admin" type="button" :disabled="Boolean(submitting) || authStore.loading" @click="login('admin')">
             <strong>管理端</strong><b>{{ submitting === 'admin' ? '跳转中…' : '进入 →' }}</b>
           </button>
         </div>

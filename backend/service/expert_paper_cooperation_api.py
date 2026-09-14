@@ -10,8 +10,10 @@ from collections.abc import Mapping
 from typing import Any
 
 import httpx
+from sqlalchemy import bindparam, text
 
 from biz.schema.expert_paper_cooperation import ExpertPaperCooperationDemoRequest
+from infra.gkx_element import gkx_element_read_session
 from service.base_module import KGModuleScaffoldService
 from service.confidence_scoring import (
     achievement_entity_confidence,
@@ -33,6 +35,7 @@ _result_cache_lock = threading.Lock()
 def clear_caches() -> None:
     """清空进程内缓存（测试隔离用）。"""
     _result_cache.clear()
+    _author_org_cache.clear()
 
 
 class GraphSearchApiError(RuntimeError):
@@ -187,6 +190,108 @@ def _organization(node: dict[str, Any]) -> str:
         or props.get("scholar_org")
         or "未知机构"
     )
+
+
+def _affiliation_text(raw: Any) -> str:
+    """作者署名单位：affiliation 是 JSON 数组文本（如 '["xx大学"]'），取首个非空。"""
+    if raw is None:
+        return ""
+    value = str(raw).strip()
+    candidates: list[str] = []
+    if value.startswith("["):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            parsed = None
+        candidates = [str(item).strip() for item in parsed] if isinstance(parsed, list) else [value]
+    else:
+        candidates = [value]
+    return next((item for item in candidates if item), "")
+
+
+# 论文作者机构兜底缓存：author_id → (过期时间, 机构名或 None)，10 分钟。
+_AUTHOR_ORG_CACHE_TTL = 600.0
+_author_org_cache: dict[str, tuple[float, str | None]] = {}
+
+
+def _author_orgs_from_mysql(author_ids: list[str]) -> dict[str, str]:
+    """按 author_id 从 dwd_zh_author/dwd_en_author 查署名单位，最近更新优先。
+
+    论文 ETL 建 Person 节点时未写入 affiliation，机构信息只存在于源表；
+    图属性缺失时用这里的结果兜底展示（只读，不回写图）。
+    """
+    now = time.monotonic()
+    result: dict[str, str] = {}
+    pending: list[str] = []
+    for author_id in author_ids:
+        cached = _author_org_cache.get(author_id)
+        if cached and cached[0] > now:
+            if cached[1]:
+                result[author_id] = cached[1]
+        else:
+            pending.append(author_id)
+    if not pending:
+        return result
+    found: dict[str, str] = {}
+    # 查询成功才写缓存：MySQL 瞬时故障时异常向上抛（由调用方吞掉），
+    # 不把"未找到"缓存 10 分钟。
+    with gkx_element_read_session() as session:
+        for table in ("dwd_zh_author", "dwd_en_author"):
+            missing = [author_id for author_id in pending if author_id not in found]
+            if not missing:
+                break
+            rows = session.execute(
+                text(
+                    f"SELECT author_id, affiliation, institution FROM {table} "
+                    f"WHERE author_id IN :ids ORDER BY updated_time DESC"
+                ).bindparams(bindparam("ids", expanding=True)),
+                {"ids": missing},
+            ).all()
+            for author_id, affiliation, institution in rows:
+                if author_id in found:
+                    continue  # 结果按 updated_time 倒序，先见即最近
+                org = _affiliation_text(affiliation) or _affiliation_text(institution)
+                if org:
+                    found[author_id] = org
+    for author_id in pending:
+        _author_org_cache[author_id] = (
+            now + _AUTHOR_ORG_CACHE_TTL,
+            found.get(author_id),
+        )
+    result.update(found)
+    return result
+
+
+def _backfill_expert_org_from_mysql(experts: list[tuple[str, dict[str, Any]]]) -> None:
+    """图节点无机构属性时，用论文署名单位兜底写回 properties.scholar_org。
+
+    论文合作场景展示署名单位本就比"当前任职机构"贴切；源表查不到时保持
+    原样（仍显示"未知机构"），任何 MySQL 异常也不影响主查询。
+    """
+    missing: dict[str, dict[str, Any]] = {}
+    for vid, node in experts:
+        props = node.get("properties")
+        if not isinstance(props, dict):
+            continue
+        if (
+            props.get("scholar_org_name_zh")
+            or props.get("scholar_org_name_en")
+            or props.get("scholar_org")
+        ):
+            continue
+        author_id = vid.removeprefix("person_")
+        if author_id:
+            missing[author_id] = props
+    if not missing:
+        return
+    try:
+        orgs = _author_orgs_from_mysql(list(missing))
+    except Exception:
+        return
+    for author_id, props in missing.items():
+        org = orgs.get(author_id)
+        if org:
+            props["scholar_org"] = org
 
 
 def _split_fields(value: Any) -> list[str]:
@@ -849,6 +954,12 @@ async def _build_structured_result(
         if isinstance(r, Exception):
             raise r
     expert_a, expert_b, paths = expert_a_r, expert_b_r, paths_r
+    # 论文 ETL 建 Person 节点时未写入 affiliation（机构只在 dwd_*_author 源表），
+    # 查询时从源表兜底署名单位：authorUnits/画布副标题/跨机构判断共用这里的结果。
+    await asyncio.to_thread(
+        _backfill_expert_org_from_mysql,
+        [(expert_a_vid, expert_a), (expert_b_vid, expert_b)],
+    )
     papers = _dedupe_shared_papers(paths)
     fallback_paper_count = 0
     fallback_collaborators: list[tuple[str, int]] = []

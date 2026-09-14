@@ -28,6 +28,7 @@ from typing import Any
 from infra.graph_api_client import GraphAPIError, graph_api
 from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
+from service.confidence_scoring import edge_confidence
 from service.provenance_recorder import record_node_source
 
 # 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 graph-search/trs-graph。
@@ -924,7 +925,15 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         "data": {},
                     }
                 )
-                add_edge(expert["expertId"], institution_id, "关联机构", {})
+                # 机构从属边是专家 organization 属性直读派生（非图库真实边），
+                # 置信度取边类型兜底规则（同校友模块合成边口径），避免前端显示"暂无"。
+                membership_confidence = edge_confidence(None, "")
+                add_edge(
+                    expert["expertId"],
+                    institution_id,
+                    "关联机构",
+                    {"strength": round(membership_confidence["confidence"] * 100)},
+                )
 
         return {"nodes": nodes, "edges": edges}
 

@@ -195,9 +195,9 @@ def test_graph_entities_use_alumni_and_shared_achievement_relation_semantics():
             "interactions": {
                 "summary": "共同论文 1 篇、专利 1、项目 1",
                 "sharedAchievements": [
-                    {"id": "P1", "label": "论文A", "kind": "paper", "entityType": "论文成果"},
-                    {"id": "PT1", "label": "专利A", "kind": "patent", "entityType": "专利成果"},
-                    {"id": "PR1", "label": "项目A", "kind": "project", "entityType": "项目成果"},
+                    {"id": "P1", "label": "论文A", "kind": "paper", "entityType": "论文"},
+                    {"id": "PT1", "label": "专利A", "kind": "patent", "entityType": "专利"},
+                    {"id": "PR1", "label": "项目A", "kind": "project", "entityType": "项目"},
                 ],
             },
         }

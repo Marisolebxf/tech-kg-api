@@ -106,7 +106,7 @@ const PANORAMA_LAYER_VISUAL: Record<
 > = {
   core_technology: {
     nodeType: "topic",
-    entityType: "关键技术",
+    entityType: "技术主题",
     level: 1,
     y: 140,
     edgeLabel: "关键技术",
@@ -114,7 +114,7 @@ const PANORAMA_LAYER_VISUAL: Record<
   },
   leading_enterprise: {
     nodeType: "company",
-    entityType: "重点企业",
+    entityType: "企业",
     level: 2,
     y: 235,
     edgeLabel: "重点企业",
@@ -122,7 +122,7 @@ const PANORAMA_LAYER_VISUAL: Record<
   },
   leading_expert: {
     nodeType: "expert",
-    entityType: "核心专家",
+    entityType: "科技专家",
     level: 2,
     y: 320,
     edgeLabel: "核心专家",
@@ -130,7 +130,7 @@ const PANORAMA_LAYER_VISUAL: Record<
   },
   flagship_achievement: {
     nodeType: "event",
-    entityType: "产业动态事件",
+    entityType: "事件",
     level: 3,
     y: 395,
     edgeLabel: "产业动态事件",
@@ -757,31 +757,29 @@ function mapPanoramaGraphNodeType(type: string): {
 } {
   const t = (type || "").toLowerCase();
   if (t.includes("person") || t.includes("scholar") || t.includes("expert")) {
-    return { nodeType: "expert", entityType: "扩展专家" };
+    return { nodeType: "expert", entityType: "科技专家" };
   }
-  if (
-    t.includes("organization") ||
-    t.includes("company") ||
-    t.includes("institution")
-  ) {
-    return { nodeType: "org", entityType: "扩展机构" };
+  if (t.includes("company") || t.includes("enterprise")) {
+    return { nodeType: "company", entityType: "企业" };
   }
-  if (
-    t.includes("paper") ||
-    t.includes("patent") ||
-    t.includes("publication")
-  ) {
-    return { nodeType: "paper", entityType: "扩展成果" };
+  if (t.includes("organization") || t.includes("institution")) {
+    return { nodeType: "org", entityType: "机构" };
+  }
+  if (t.includes("patent")) {
+    return { nodeType: "paper", entityType: "专利" };
+  }
+  if (t.includes("paper") || t.includes("publication")) {
+    return { nodeType: "paper", entityType: "论文" };
   }
   if (t.includes("event")) {
-    return { nodeType: "event", entityType: "扩展事件" };
+    return { nodeType: "event", entityType: "事件" };
   }
   if (t.includes("product") || t.includes("project")) {
-    return { nodeType: "project", entityType: "扩展产品" };
+    return { nodeType: "project", entityType: "项目" };
   }
   // IndustryNode、Keyword 等产业技术节点在不同图空间中的 label 并不完全
-  // 一致；无法映射到专家、机构、成果等明确类型时，统一按关键技术展示。
-  return { nodeType: "topic", entityType: "关键技术" };
+  // 一致；无法映射到专家、机构、成果等明确类型时，统一按技术主题展示。
+  return { nodeType: "topic", entityType: "技术主题" };
 }
 
 /**
@@ -868,7 +866,7 @@ function derivedGraphFromResponse(
     id: centerId,
     label: centerSource?.label || industryLabel,
     nodeType: "main",
-    entityType: "产业链核心",
+    entityType: "产业链",
     x: 380,
     y: hasExpanded ? 24 : 50,
     radius: 34,
@@ -1052,10 +1050,10 @@ function buildPaperCoopRealGraph(
   };
   const entityTypeByBackend: Record<string, string> = {
     expert: "科技专家",
-    paper: "论文成果",
-    keyword: "研究主题",
-    venue: "期刊/会议",
-    collaborator: "合作专家",
+    paper: "论文",
+    keyword: "技术主题",
+    venue: "机构",
+    collaborator: "科技专家",
   };
   // 布局：两位专家左右分列，合作论文绕中心，主题/期刊/合作者在外圈。
   const experts = graph.nodes.filter((node) => node.type === "expert");
@@ -1085,7 +1083,7 @@ function buildPaperCoopRealGraph(
       nodeType: nodeTypeByBackend[type] || "expert",
       x: position?.x ?? 220,
       y: position?.y ?? 200,
-      entityType: entityTypeByBackend[type] || "实体",
+      entityType: entityTypeByBackend[type] || "科技成果",
       relations: String(node.subtitle || ""),
       // 机构名等属性信息保留在 evidence 里，命中关系由下方按边统计。
       evidence: node.subtitle ? [String(node.subtitle)] : [],
@@ -1304,7 +1302,7 @@ function buildLiveGraph(
         ev0.event_id,
         `${displayEventType(ev0.event_type)} ${displayEventDate(ev0.occur_date)}`,
         "event",
-        displayEventType(ev0.event_type),
+        "事件",
         ev0.title || displayEventType(ev0.event_type),
         // 事件置信度用后端 EVENT_CONFIDENCE 值（风险 0.9 / 财务 0.85 / 中标 0.8 / 资讯 0.7）
         typeof ev0.confidence === "number" ? ev0.confidence : undefined,
@@ -1323,7 +1321,7 @@ function buildLiveGraph(
         rel.expert_id,
         rel.expert_name,
         "expert",
-        "专家",
+        "科技专家",
         [rel.role, rel.org_name].filter(Boolean).join("｜") || "企业高管",
         data.entity_provenance?.[rel.expert_id]?.confidence,
         data.entity_provenance?.[rel.expert_id],
@@ -1528,12 +1526,25 @@ const liveModuleGraph = computed(() => {
           nodeType = "org";
         } else if (node.type === "expert") {
           nodeType = "expert";
+        } else if (["paper", "patent", "report", "award"].includes(node.type)) {
+          nodeType = "paper";
         }
-        let entityType = "合作成果";
+        // 实体类别统一用业务口径 12 类：同事成果按 paper/patent/project/
+        // report/award 映射，report/award 等无法细分的成果归入科技成果。
+        const achievementEntityTypes: Record<string, string> = {
+          paper: "论文",
+          patent: "专利",
+          project: "项目",
+          report: "科技成果",
+          award: "科技成果",
+        };
+        let entityType: string;
         if (node.type === "expert") {
           entityType = "科技专家";
         } else if (node.type === "organization") {
-          entityType = "共同机构";
+          entityType = "机构";
+        } else {
+          entityType = achievementEntityTypes[node.type] || "科技成果";
         }
         return {
           id: node.id,
@@ -1816,8 +1827,10 @@ function normalizeEntityCategory(node: GraphNodeData): string {
   if (/企业|company|enterprise/u.test(value)) return "企业";
   if (/专家|人才|学者|expert|person|scholar/u.test(value)) return "科技专家";
   if (/机构|院所|organization|institution|\borg\b/u.test(value)) return "机构";
-  if (/论文|paper|journal|report/u.test(value)) return "论文";
+  // 专利判定需先于论文：专利节点在画布上复用 paper 形态（nodeType=paper），
+  // 若先匹配论文会把「专利 paper」误归为论文。
   if (/专利|patent/u.test(value)) return "专利";
+  if (/论文|paper|journal|report/u.test(value)) return "论文";
   if (/项目|project/u.test(value)) return "项目";
   if (/事件|资讯|event|news/u.test(value)) return "事件";
   if (/技术|主题|关键词|topic|keyword|field/u.test(value)) return "技术主题";
@@ -1832,6 +1845,56 @@ const displayRelationType = (value?: string) =>
 
 const displayRelationDetail = (edge: GraphEdgeData) =>
   displayRelationType(edge.label || edge.category);
+
+/* 论文合作页「关系描述」专用口径：直接/间接 + 核实过的关系名（统一名词
+ * 形式，动词性名称加「关系」后缀）。该模块全部关系均为直接关系（单表一行
+ * 可查：署名 dwd_zh/en_author、合著 dwd_scholar_coauthor、期刊
+ * dwd_zh/en_journal、主题 paper.keywords、被引 dwd_*_paper_reference）。
+ * 画布边是展示语义（发表/参与合著/作者单位等），按边语义映射回关系名：
+ * 人↔人→专家合著关系，论文↔人→论文署名关系（作者单位是署名记录的
+ * affiliation 列，也归入论文署名），论文→期刊→论文发表关系，
+ * 论文→关键词→论文主题。 */
+const paperCoopRelationDescriptions: Record<string, string> = {
+  论文合作: "直接关系/专家合著关系",
+  发表: "直接关系/论文署名关系",
+  共同作者: "直接关系/论文署名关系",
+  参与合著: "直接关系/论文署名关系",
+  团队成员: "直接关系/论文署名关系",
+  作者单位: "直接关系/论文署名关系",
+  研究主题: "直接关系/论文主题",
+  发表于: "直接关系/论文发表关系",
+  发表级别: "直接关系/论文发表关系",
+};
+const paperCoopRelationDescription = (edge: GraphEdgeData): string =>
+  paperCoopRelationDescriptions[edge.label] ||
+  paperCoopRelationDescriptions[edge.category] ||
+  `直接关系/${displayRelationDetail(edge)}`;
+
+/* 企业关联页「关系描述」专用口径：映射到核实过的 13 条关系（名词名）。
+ * 治理任职为人-企业直连边（cooperation_mode 与边类型一一对应：高管任职
+ * EXECUTIVE_OF、法人代表 LEGAL_REP_OF、实际控制 ACTUAL_CONTROLLER_OF、
+ * 受益所有 BENEFICIAL_OWNER_OF、股东持股 SHAREHOLDER_OF、任职
+ * AFFILIATED_WITH），全部单表直查=直接。
+ * 项目合作是 专家→项目→企业 两跳组合：人侧 项目负责人/项目参加人、机构侧
+ * 项目资助方/项目参与机构，均单表直查=直接（前端数据不区分 LEADS 与
+ * HAS_PARTICIPANT，展示两侧代表名称）。
+ * 专利合作是 专家→专利→企业：人侧 专利发明人（dwd_patent.inventors，直接）；
+ * 机构侧 专利申请方 APPLIED_BY——图上 94% 边经 milvus_bm25_dense_hybrid
+ * 对齐到企业实体才成立，判间接。 */
+const enterpriseRelationDescriptions: Record<string, string> = {
+  高管任职: "直接关系/高管任职关系",
+  法人代表: "直接关系/法定代表关系",
+  实际控制: "直接关系/实际控制关系",
+  受益所有: "直接关系/最终受益关系",
+  股东持股: "直接关系/股东持股关系",
+  任职: "直接关系/任职关系",
+  项目合作: "直接关系/项目参加人、项目资助方",
+  专利合作: "直接关系/专利发明人、间接关系/专利申请方",
+};
+const enterpriseRelationDescription = (edge: GraphEdgeData): string =>
+  enterpriseRelationDescriptions[edge.label] ||
+  enterpriseRelationDescriptions[edge.category] ||
+  `直接关系/${displayRelationDetail(edge)}`;
 
 /* 暂不展示“评分依据”，保留格式化代码以便后续恢复。
 const confidenceBreakdownLabels: Record<string, string> = {
@@ -2342,7 +2405,11 @@ const liveRelationRows = computed(() => {
       ] as const,
       [
         "关系描述",
-        `${activeRelationCategory.value}/${displayRelationDetail(relation)}`,
+        isPaperCooperation.value
+          ? paperCoopRelationDescription(relation)
+          : isLiveEnterpriseRelation.value
+            ? enterpriseRelationDescription(relation)
+            : `${activeRelationCategory.value}/${displayRelationDetail(relation)}`,
       ] as const,
       ["置信度", formatRelationConfidence(relation)] as const,
     ];
@@ -2803,10 +2870,10 @@ function computePanoramaSummaryRows(
         ? compactSummaryText(coreSegment.items[0].label)
         : "—",
     ],
-    ["关键技术", canvasLabel("关键技术")],
-    ["重点企业", canvasLabel("重点企业")],
-    ["核心专家", canvasLabel("核心专家")],
-    ["产业动态事件", canvasLabel("产业动态事件")],
+    ["关键技术", canvasLabel("技术主题")],
+    ["重点企业", canvasLabel("企业")],
+    ["核心专家", canvasLabel("科技专家")],
+    ["产业动态事件", canvasLabel("事件")],
     ["动态更新", updateStatus.value],
   ]);
   return props.moduleInfo.summaryRows.map((row) => {
@@ -2888,7 +2955,7 @@ function mapExpertNodeType(type: string): GraphNodeType {
 
 function mapExpertEntityType(type: string): string {
   const normalized = type.toLowerCase();
-  if (normalized === "expert" || normalized === "person") return "专家";
+  if (normalized === "expert" || normalized === "person") return "科技专家";
   if (
     normalized === "institution" ||
     normalized === "organization" ||
@@ -2896,11 +2963,13 @@ function mapExpertEntityType(type: string): string {
   )
     return "机构";
   if (normalized === "company" || normalized === "enterprise") return "企业";
-  if (normalized === "paper" || normalized === "publication") return "成果";
+  if (normalized === "paper" || normalized === "publication") return "论文";
+  if (normalized === "patent") return "专利";
   if (normalized === "project") return "项目";
   if (normalized === "event") return "事件";
-  if (normalized === "topic" || normalized === "keyword") return "关键词";
-  return type || "节点";
+  if (normalized === "topic" || normalized === "keyword") return "技术主题";
+  // 无法识别的类型按业务口径 12 类兜底为科技成果，避免实体页出现类别外文案。
+  return "科技成果";
 }
 
 function derivedGraphFromExpertResponse(
@@ -3278,7 +3347,7 @@ function buildAlumniGraph(
       nodeType: "expert",
       x: cx + Math.cos(angle) * radius + 200,
       y: cy + Math.sin(angle) * radius,
-      entityType: "校友专家",
+      entityType: "科技专家",
       relations: `与${data.expert.name || data.expert.id}存在校友关系（${dimensionText}；共同院校：${sharedInstitutionText}）`,
       evidence: [
         `共同院校：${item.sharedInstitutions.join("、") || "—"}`,

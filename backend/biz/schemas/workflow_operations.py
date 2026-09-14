@@ -36,19 +36,14 @@ class UpdatePolicyRequest(BaseModel):
 
 
 class TriggerGraphBuildRequest(BaseModel):
-    domains: list[str] = Field(default_factory=list, max_length=64)
-    entities: list[str] = Field(default_factory=list, max_length=64)
-    relations: list[str] = Field(default_factory=list, max_length=64)
+    """POST /task-center/trigger：遍历可抽取 schema 全量触发 kg.schema.extract（D3 重指向）。
+
+    旧 domains/entities/relations 域选择器已随 kg.graph.build stub 族删除——
+    触发范围即"已上传脚本且绑定来源的全部 schema"。
+    """
+
     since: str | None = None
     reason: str = "客户端立即触发"
-    payload: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("domains", "entities", "relations", mode="before")
-    @classmethod
-    def _validate_catalog_items(cls, v: list[str]) -> list[str]:
-        if not v:
-            return v
-        return [_check_id(item) for item in v]
 
     @field_validator("since", mode="before")
     @classmethod

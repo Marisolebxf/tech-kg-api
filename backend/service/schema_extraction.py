@@ -13,6 +13,7 @@ import logging
 import os
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from service.schema_management import (
@@ -97,6 +98,45 @@ def persist_extract_definition(definition: dict[str, Any]) -> dict[str, Any]:
     }
     repository.save_definition(merged)
     return merged
+
+
+def list_extract_eligible_schemas(*, session: Session | None = None) -> list[dict[str, Any]]:
+    """遍历可抽取 schema（已传脚本且 ≥1 来源绑定）——task-center 全量触发与策略调度用。
+
+    返回项与 ``load_extract_schema`` 的 info 同构，可直接喂 ``build_extract_definition``。
+    """
+    from sqlalchemy.orm import Session as OrmSession
+
+    from db_model.schema_management import GraphSchemaDefinition
+    from infra.workflow_mysql import get_workflow_engine
+
+    def _load(row_session):
+        rows = (
+            row_session.scalars(
+                select(GraphSchemaDefinition).where(GraphSchemaDefinition.is_deleted.is_(False))
+            )
+            .order_by(GraphSchemaDefinition.id)
+            .all()
+        )
+        return [
+            {
+                "id": row.id,
+                "schema_key": row.schema_key,
+                "kind": row.kind,
+                "name": row.name,
+                "label": row.label,
+                "graph_space": row.graph_space,
+                "property_revision": row.property_revision,
+                "captured_revision": row.script.captured_revision if row.script else None,
+            }
+            for row in rows
+            if row.script is not None and len(row.sources) > 0
+        ]
+
+    if session is not None:
+        return _load(session)
+    with OrmSession(get_workflow_engine()) as control_session:
+        return _load(control_session)
 
 
 def load_extract_schema(schema_id: str, *, session: Session | None = None) -> dict[str, Any]:

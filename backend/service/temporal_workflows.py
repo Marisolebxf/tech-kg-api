@@ -268,24 +268,6 @@ async def _spawn_script(
 
 
 @activity.defn
-async def execute_kg_step(request: dict[str, Any]) -> dict[str, Any]:
-    """Return lightweight bookkeeping results for built-in domain pipeline steps."""
-    domain = request.get("domain")
-    step = request["step"]
-    kind = request.get("kind")
-    payload = request.get("payload", {}) or {}
-    await asyncio.sleep(float(request.get("delaySeconds", 0)))
-    return {
-        "step": step,
-        "domain": domain,
-        "kind": kind,
-        "status": "completed",
-        "input": payload,
-        "output": payload,
-    }
-
-
-@activity.defn
 async def load_workflow_definition(definition_id: str) -> dict[str, Any]:
     # 延迟导入避免 Workflow sandbox 在模块加载阶段访问 SQLite。
     from service.workflow_repository import repository
@@ -1203,123 +1185,6 @@ async def build_entity_index(request: dict[str, Any]) -> dict[str, Any]:
     return {"reindexed": result}
 
 
-async def _run_domain_pipeline(request: dict[str, Any], kind: str, domain: str) -> dict[str, Any]:
-    results = []
-    for step in ("load_increment", "normalize", "extract", "align", "validate", "persist"):
-        results.append(
-            await workflow.execute_activity(
-                execute_kg_step,
-                {
-                    "step": step,
-                    "kind": kind,
-                    "domain": domain,
-                    "payload": request,
-                },
-                start_to_close_timeout=timedelta(minutes=10),
-                retry_policy=ACTIVITY_RETRY_POLICY,
-            )
-        )
-    return {"kind": kind, "domain": domain, "status": "completed", "steps": results}
-
-
-@workflow.defn(name="kg.entity.paper")
-class PaperEntityWorkflow:
-    @workflow.run
-    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        return await _run_domain_pipeline(request, "entity", "paper")
-
-
-@workflow.defn(name="kg.entity.scholar")
-class ScholarEntityWorkflow:
-    @workflow.run
-    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        return await _run_domain_pipeline(request, "entity", "scholar")
-
-
-@workflow.defn(name="kg.entity.patent")
-class PatentEntityWorkflow:
-    @workflow.run
-    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        return await _run_domain_pipeline(request, "entity", "patent")
-
-
-@workflow.defn(name="kg.entity.organization")
-class OrganizationEntityWorkflow:
-    @workflow.run
-    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        return await _run_domain_pipeline(request, "entity", "organization")
-
-
-@workflow.defn(name="kg.entity.project")
-class ProjectEntityWorkflow:
-    @workflow.run
-    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        return await _run_domain_pipeline(request, "entity", "project")
-
-
-@workflow.defn(name="kg.relation.authorship")
-class AuthorshipRelationWorkflow:
-    @workflow.run
-    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        return await _run_domain_pipeline(request, "relation", "authorship")
-
-
-@workflow.defn(name="kg.relation.employment")
-class EmploymentRelationWorkflow:
-    @workflow.run
-    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        return await _run_domain_pipeline(request, "relation", "employment")
-
-
-@workflow.defn(name="kg.relation.citation")
-class CitationRelationWorkflow:
-    @workflow.run
-    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        return await _run_domain_pipeline(request, "relation", "citation")
-
-
-@workflow.defn(name="kg.relation.cooperation")
-class CooperationRelationWorkflow:
-    @workflow.run
-    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        return await _run_domain_pipeline(request, "relation", "cooperation")
-
-
-@workflow.defn(name="kg.graph.build")
-class GraphBuildWorkflow:
-    """总工作流；按请求为每类实体和关系启动各自的子工作流。"""
-
-    @workflow.run
-    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        entities = request.get("entities") or [
-            "paper",
-            "scholar",
-            "patent",
-            "organization",
-            "project",
-        ]
-        relations = request.get("relations") or [
-            "authorship",
-            "employment",
-            "citation",
-            "cooperation",
-        ]
-        child_types = [
-            *(f"kg.entity.{item}" for item in entities),
-            *(f"kg.relation.{item}" for item in relations),
-        ]
-        results = []
-        for index, workflow_type in enumerate(child_types):
-            results.append(
-                await workflow.execute_child_workflow(
-                    workflow_type,
-                    request,
-                    id=f"{workflow.info().workflow_id}-{index}-{workflow_type.rsplit('.', 1)[-1]}",
-                )
-            )
-        return {"status": "completed", "children": results}
-
-
 async def _register_scheduled_run(request: dict[str, Any]) -> None:
     """payload 带 _scheduleId 时（周期 Schedule 触发），先落 execution/task 行。"""
     schedule_id = (request.get("payload") or {}).get("_scheduleId")
@@ -1342,6 +1207,12 @@ async def _register_scheduled_run(request: dict[str, Any]) -> None:
 
 @workflow.defn(name="kg.custom.configurable")
 class ConfigurableWorkflow:
+    """declarative 定义的记账工作流：按定义 steps 逐步回显 payload（占位语义，C1 范畴）。
+
+    D3 删掉 execute_kg_step 空壳 activity 后改为 workflow 内直接构造记账结果——
+    真实数据处理一律走 kg.schema.extract。
+    """
+
     @workflow.run
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
         await _register_scheduled_run(request)
@@ -1351,22 +1222,18 @@ class ConfigurableWorkflow:
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=ACTIVITY_RETRY_POLICY,
         )
-        results = []
-        for step in definition.get("steps", []):
-            step_name = step if isinstance(step, str) else step.get("id") or step.get("name")
-            results.append(
-                await workflow.execute_activity(
-                    execute_kg_step,
-                    {
-                        "step": step_name,
-                        "kind": "custom",
-                        "domain": definition["id"],
-                        "payload": request.get("payload", {}),
-                    },
-                    start_to_close_timeout=timedelta(minutes=10),
-                    retry_policy=ACTIVITY_RETRY_POLICY,
-                )
-            )
+        payload = request.get("payload", {})
+        results = [
+            {
+                "step": step if isinstance(step, str) else step.get("id") or step.get("name"),
+                "kind": "custom",
+                "domain": definition["id"],
+                "status": "completed",
+                "input": payload,
+                "output": payload,
+            }
+            for step in definition.get("steps", [])
+        ]
         return {"definitionId": definition["id"], "status": "completed", "steps": results}
 
 
@@ -1875,22 +1742,11 @@ async def record_schema_script_run(request: dict[str, Any]) -> dict[str, Any]:
 
 
 WORKFLOW_CLASSES = [
-    PaperEntityWorkflow,
-    ScholarEntityWorkflow,
-    PatentEntityWorkflow,
-    OrganizationEntityWorkflow,
-    ProjectEntityWorkflow,
-    AuthorshipRelationWorkflow,
-    EmploymentRelationWorkflow,
-    CitationRelationWorkflow,
-    CooperationRelationWorkflow,
-    GraphBuildWorkflow,
     ConfigurableWorkflow,
     SchemaExtractWorkflow,
 ]
 
 ACTIVITIES = [
-    execute_kg_step,
     load_workflow_definition,
     register_scheduled_execution,
     load_schema_extract_plan,

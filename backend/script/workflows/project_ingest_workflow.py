@@ -1,8 +1,8 @@
 """国内外项目抽取工作流脚本。
 
 流水线：ensure_schema → load_project_graph → align_project_relations → cleanup_project_stubs。
-供工作流平台 ``kg.custom.python`` 上传后在 Activity 子进程执行；也可由
-``kg.entity.project`` 的 Activity 直接 import 调用。
+旧 ETL 双轨保留（D5 暂缓）：按需手工执行；原 kg.custom.python 上传通道与
+kg.entity.project stub Activity 均已删除（D2/D3）。
 
 注意：stdout 必须只输出最终 JSON（runner 据此解析结果），日志一律走 stderr。
 """

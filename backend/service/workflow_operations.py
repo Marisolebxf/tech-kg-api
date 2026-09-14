@@ -119,7 +119,9 @@ class WorkflowOperationsService:
             "processedAt": _now(),
             "reviewType": None,
             "currentStep": "数据接入",
-            "steps": WorkflowRepository._steps(None),
+            # 静态 7 步模板已随 D3 删除：初始为空，真实 stages 由
+            # _sync_task_from_execution 拿 worker 输出回填（读取时惰性同步）
+            "steps": [],
             "workflowType": definition["workflowType"],
             "workflowId": execution["workflowId"],
             "runId": execution.get("runId"),
@@ -272,50 +274,34 @@ class WorkflowOperationsService:
         task["logs"] = (task.get("logs") or []) + [log_msg]
         self.repo.save_task(task)
 
-    async def trigger_graph_build(self, request: dict[str, Any]) -> dict[str, Any]:
-        definition = self.repo.get_definition("graph-build")
-        if definition is None:
-            raise RuntimeError("图谱构建工作流定义缺失")
-        payload = {
-            "domains": request.get("domains", []),
-            "entities": request.get("entities", []),
-            "relations": request.get("relations", []),
-            "since": request.get("since"),
-            "reason": request.get("reason"),
-            **request.get("payload", {}),
-        }
-        execution = await self.execute_definition(definition, payload)
-        task_id = f"PI-{datetime.now().strftime('%Y%m%d')}-{uuid4().hex[:6].upper()}"
-        task = {
-            "id": task_id,
-            "batchId": f"UPD-{datetime.now().strftime('%Y%m%d')}",
-            "stage": "图谱构建",
-            "kind": "实体",
-            "objectId": execution["workflowId"],
-            "objectName": "立即触发图谱构建",
-            "objectType": "工作流实例",
-            "action": "增量图谱构建",
-            "sourceTable": "按业务域增量",
-            "sourceRecordId": request.get("since") or "latest-cursor",
-            "rule": "AUTO-GRAPH-BUILD",
-            "confidence": "",
-            "result": execution["message"],
-            "status": "已完成" if execution["status"] == "COMPLETED" else "处理中",
-            "taskStatus": "执行中",
-            "dataDomain": "综合数据域",
-            "processedAt": _now(),
-            "reviewType": None,
-            "currentStep": "数据接入",
-            "steps": WorkflowRepository._steps(None),
-            "workflowType": definition["workflowType"],
-            "workflowId": execution["workflowId"],
-            "runId": execution.get("runId"),
-            "input": payload,
-            "output": None,
-            "logs": [execution["message"]],
-        }
-        self.repo.save_task(task)
-        return {"task": task, "execution": execution}
+    async def trigger_extract_all(self, request: dict[str, Any]) -> dict[str, Any]:
+        """立即触发数据抽取：遍历已上传脚本且绑定来源的 schema，逐个启动 kg.schema.extract。
+
+        原 kg.graph.build 域 stub 总工作流已随 D3 删除——executions 即唯一真相，
+        不再单独造 task 行（execute_definition 内 persist_task 仍会留 PI- 行）。
+        """
+        from service import schema_extraction
+
+        executions: list[dict[str, Any]] = []
+        skipped: list[dict[str, str]] = []
+        for info in schema_extraction.list_extract_eligible_schemas():
+            definition = schema_extraction.persist_extract_definition(
+                schema_extraction.build_extract_definition(info)
+            )
+            payload: dict[str, Any] = {
+                "schemaId": info["id"],
+                "triggerSource": "MANUAL",
+                "reason": request.get("reason") or "task-center 立即触发",
+            }
+            if request.get("since"):
+                payload["since"] = request["since"]
+            try:
+                executions.append(
+                    await self.execute_definition(definition, payload, persist_task=True)
+                )
+            except Exception as exc:  # noqa: BLE001
+                skipped.append({"schemaId": info["id"], "error": str(exc)})
+        return {"executions": executions, "skipped": skipped}
 
     async def save_update_policy(self, request: dict[str, Any]) -> dict[str, Any]:
         cron_map = {
@@ -330,7 +316,7 @@ class WorkflowOperationsService:
         if request["frequency"] in {"每天", "每周"}:
             cron = f"{int(minute)} {int(hour)}" + cron[cron.find(" ", cron.find(" ") + 1) :]
         policy = {
-            "id": "auto-graph-build",
+            "id": "auto-extract",
             "enabled": request["enabled"],
             "frequency": request["frequency"],
             "executionTime": request["execution_time"],
@@ -340,16 +326,26 @@ class WorkflowOperationsService:
             "updatedAt": _now(),
             "nextRunAt": "由 Temporal Schedule 计算",
         }
-        definition = self.repo.get_definition("graph-build")
-        schedule_record = {
-            "id": policy["id"],
-            "definitionId": "graph-build",
-            "cron": cron,
-            "timezone": policy["timezone"],
-            "active": policy["enabled"],
-            "payload": {"reason": "自动更新策略"},
-        }
-        if definition:
+        # 每个可抽取 schema 一个 Schedule（快照语义：保存策略时刷新；
+        # 后续新上传的 schema 在下次保存策略时纳入）。禁用时 Schedule 建为 paused。
+        from service import schema_extraction
+
+        schedules: list[dict[str, Any]] = []
+        keep_ids: set[str] = set()
+        for info in schema_extraction.list_extract_eligible_schemas():
+            definition = schema_extraction.persist_extract_definition(
+                schema_extraction.build_extract_definition(info)
+            )
+            schedule_id = f"auto-extract-{info['id']}"
+            keep_ids.add(schedule_id)
+            schedule_record = {
+                "id": schedule_id,
+                "definitionId": definition["id"],
+                "cron": cron,
+                "timezone": policy["timezone"],
+                "active": policy["enabled"],
+                "payload": {"schemaId": info["id"], "reason": "自动更新策略"},
+            }
             try:
                 schedule_record = await temporal_runtime.create_schedule(
                     definition, schedule_record
@@ -358,9 +354,22 @@ class WorkflowOperationsService:
                 temporal_runtime._client = None
                 schedule_record["dispatchStatus"] = "LOCAL_SAVED"
                 schedule_record["message"] = str(exc)
-        self.repo.save_schedule(schedule_record)
+            self.repo.save_schedule(schedule_record)
+            schedules.append(schedule_record)
+        # 清理不再属于当前 schema 集合的策略 Schedule 与旧 auto-graph-build（D3 存量）
+        for stale_id in [*(s.get("id") for s in self.repo.list_schedules() or [])]:
+            if not stale_id:
+                continue
+            if stale_id == "auto-graph-build" or (
+                stale_id.startswith("auto-extract-") and stale_id not in keep_ids
+            ):
+                try:
+                    await temporal_runtime.delete_schedule(stale_id)
+                except Exception:  # noqa: BLE001
+                    temporal_runtime._client = None
+                self.repo.delete_schedule(stale_id)
         self.repo.save_setting("update_policy", policy)
-        return {"policy": policy, "schedule": schedule_record}
+        return {"policy": policy, "schedules": schedules}
 
     def create_definition(self, request: dict[str, Any]) -> dict[str, Any]:
         definition = {

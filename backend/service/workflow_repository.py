@@ -32,8 +32,6 @@ from service.workflow_models import (
     WorkflowTask,
 )
 
-SCHEMA_MAPPING_LABEL = "Schema 映射"
-
 
 def _now() -> str:
     return datetime.now(UTC).astimezone().strftime("%Y-%m-%d %H:%M:%S")
@@ -59,11 +57,11 @@ class WorkflowRepository:
 
     def _initialize(self) -> None:
         # CREATE DATABASE IF NOT EXISTS 在 workflow_mysql_client.engine 首次访问时已做；
-        # 这里只建表 + 注册 builtin 工作流定义。
+        # 这里只建表（D3 后不再注册 builtin 工作流定义——域 stub 族已删，
+        # 执行入口收敛到 Schema 管理的 kg.schema.extract）。
         Base.metadata.create_all(self._engine)
         self._migrate_job_columns()
         self._migrate_schema_space_column()
-        self._ensure_builtin_definitions()
 
     def _migrate_job_columns(self) -> None:
         """无迁移框架：对已有 workflow_executions 表幂等补 job_id 列（仅 MySQL 方言）。"""
@@ -111,93 +109,6 @@ class WorkflowRepository:
                 ),
                 {"space": default_space},
             )
-
-    def _ensure_builtin_definitions(self) -> None:
-        """Idempotently insert built-in workflow definitions missing from older DBs.
-
-        9 个域工作流 + graph-build 总工作流原由 demo seed 顺带注册；seed 删除后
-        注册职责并到这里（graph-build 是 /task-center/trigger 与自动建图策略的
-        执行目标，不是演示数据）。
-        """
-        builtins = [
-            ("entity-paper", "kg.entity.paper", "entity", "论文实体工作流"),
-            ("entity-scholar", "kg.entity.scholar", "entity", "人才实体工作流"),
-            ("entity-patent", "kg.entity.patent", "entity", "专利实体工作流"),
-            ("entity-organization", "kg.entity.organization", "entity", "机构实体工作流"),
-            ("entity-project", "kg.entity.project", "entity", "国内外项目实体工作流"),
-            ("relation-authorship", "kg.relation.authorship", "relation", "论文作者关系工作流"),
-            ("relation-employment", "kg.relation.employment", "relation", "人才任职关系工作流"),
-            ("relation-citation", "kg.relation.citation", "relation", "论文引用关系工作流"),
-            ("relation-cooperation", "kg.relation.cooperation", "relation", "合作关系工作流"),
-            ("graph-build", "kg.graph.build", "graph", "图谱构建总工作流"),
-        ]
-        with workflow_session_scope() as session:
-            for definition_id, workflow_type, category, name in builtins:
-                exists = session.scalar(
-                    select(WorkflowDefinition).where(WorkflowDefinition.id == definition_id)
-                )
-                if exists:
-                    continue
-                payload = {
-                    "id": definition_id,
-                    "name": name,
-                    "workflowType": workflow_type,
-                    "category": category,
-                    "taskQueue": os.getenv("TEMPORAL_TASK_QUEUE", "tech-kg-workflows"),
-                    "active": True,
-                    "sourceKind": "builtin",
-                    "steps": ["读取增量", "标准化", "抽取/对齐", "质量校验", "图谱写入"],
-                    "createdAt": _now(),
-                }
-                session.add(
-                    WorkflowDefinition(
-                        id=definition_id,
-                        workflow_type=workflow_type,
-                        category=category,
-                        active=1,
-                        payload=_json(payload),
-                    )
-                )
-
-    @staticmethod
-    def _steps(blocking: str | None = None) -> list[dict[str, Any]]:
-        # 兜底模板:任务刚创建(还未执行)时填的静态 7 步,字段都是编造的演示值
-        # (count="1 个处理对象"、duration="6秒" 等)。
-        # 终态后 _sync_task_from_execution 会用 normalize_stages(output)
-        # 拿真实 worker stages 覆盖 task["steps"]。
-        # TODO: 移除——等 seed 数据 / 新建任务流程能产出真实步骤模板后删掉。
-        raw = [
-            ("source", "数据接入", "数据处理", "读取业务域增量数据"),
-            ("normalize", "清洗标准化", "数据处理", "执行字段、枚举和字典标准化"),
-            ("schema", SCHEMA_MAPPING_LABEL, "图谱构建", "映射实体、关系与属性 Schema"),
-            ("extract", "实体关系抽取", "图谱构建", "运行领域专属实体/关系工作流"),
-            ("align", "实体对齐消歧", "图谱构建", "候选实体与存量图谱召回、消歧与合并"),
-            ("validate", "质量校验", "图谱构建", "执行置信度、证据与唯一性校验"),
-            ("persist", "图谱入库", "图谱构建", "幂等写入实体、关系和属性"),
-        ]
-        result = []
-        blocked = False
-        for step_id, name, phase, description in raw:
-            if blocked:
-                status = "待执行"
-            elif step_id == blocking:
-                status = "需人工处理"
-                blocked = True
-            else:
-                status = "成功"
-            result.append(
-                {
-                    "id": step_id,
-                    "name": name,
-                    "phase": phase,
-                    "description": description,
-                    "status": status,
-                    "count": "1 个处理对象",
-                    "abnormal": "1" if status == "需人工处理" else "0",
-                    "duration": "未完成" if status != "成功" else "6秒",
-                }
-            )
-        return result
 
     def list_batches(self) -> list[dict[str, Any]]:
         with workflow_session_scope() as session:

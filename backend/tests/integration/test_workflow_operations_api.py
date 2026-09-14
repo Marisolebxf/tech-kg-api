@@ -42,7 +42,41 @@ def fake_temporal(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(temporal_runtime, "create_schedule", create_schedule)
 
 
-async def test_task_center_overview_and_trigger(async_client, fake_temporal):
+@pytest.fixture
+def fake_extract_schemas(monkeypatch: pytest.MonkeyPatch):
+    """D3 后 trigger/update-policy 遍历可抽取 schema：测试库无 schema 数据，fake 出一个。"""
+    from service import schema_extraction
+
+    info = {
+        "id": "schema-widget",
+        "schema_key": "widget",
+        "kind": "entity",
+        "name": "widget",
+        "label": "挂件",
+        "graph_space": "dev2",
+        "property_revision": 1,
+        "captured_revision": 1,
+    }
+    monkeypatch.setattr(
+        schema_extraction, "list_extract_eligible_schemas", lambda **_: [dict(info)]
+    )
+
+
+async def _seed_entity_project(client) -> None:
+    """D3 删 builtin 定义 seed 后，execute 类测试自建 declarative 定义 entity-project。"""
+    resp = await client.post(
+        "/api/v1/workflow-system/definitions",
+        json={
+            "id": "entity-project",
+            "name": "项目工作流",
+            "category": "custom",
+            "steps": ["extract"],
+        },
+    )
+    assert resp.status_code == 200
+
+
+async def test_task_center_overview_and_trigger(async_client, fake_temporal, fake_extract_schemas):
     overview = await async_client.get("/api/v1/task-center/overview")
     assert overview.status_code == 200
     data = overview.json()["data"]
@@ -61,15 +95,18 @@ async def test_task_center_overview_and_trigger(async_client, fake_temporal):
     )
     assert updates.json()["data"]["total"] == 0
 
-    trigger = await async_client.post(
-        "/api/v1/task-center/trigger",
-        json={"domains": ["论文"], "entities": ["paper"], "relations": ["authorship"]},
-    )
+    # D3 重指向：trigger 遍历可抽取 schema 逐个启动 kg.schema.extract
+    trigger = await async_client.post("/api/v1/task-center/trigger", json={})
     assert trigger.status_code == 200
-    assert trigger.json()["data"]["execution"]["runId"] == "run-test-001"
+    data = trigger.json()["data"]
+    assert len(data["executions"]) == 1
+    assert data["executions"][0]["runId"] == "run-test-001"
+    assert data["skipped"] == []
 
 
-async def test_update_policy_creates_temporal_schedule(async_client, fake_temporal):
+async def test_update_policy_creates_temporal_schedule(
+    async_client, fake_temporal, fake_extract_schemas
+):
     response = await async_client.put(
         "/api/v1/task-center/update-policy",
         json={
@@ -83,7 +120,12 @@ async def test_update_policy_creates_temporal_schedule(async_client, fake_tempor
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["policy"]["cron"] == "0 */6 * * *"
-    assert data["schedule"]["dispatchStatus"] == "TEMPORAL_CREATED"
+    # D3 重指向：每个可抽取 schema 一个 auto-extract-* Schedule
+    assert len(data["schedules"]) == 1
+    schedule = data["schedules"][0]
+    assert schedule["id"] == "auto-extract-schema-widget"
+    assert schedule["dispatchStatus"] == "TEMPORAL_CREATED"
+    assert schedule["payload"]["schemaId"] == "schema-widget"
 
 
 async def test_custom_definition_and_upload_endpoints_removed(async_client, fake_temporal):
@@ -117,6 +159,7 @@ async def test_custom_definition_and_upload_endpoints_removed(async_client, fake
 
 @pytest.mark.parametrize("limit", [0, -1, "abc"])
 async def test_execute_definition_rejects_invalid_limit(async_client, fake_temporal, limit):
+    await _seed_entity_project(async_client)
     response = await async_client.post(
         "/api/v1/workflow-system/definitions/entity-project/execute",
         json={"payload": {"dry_run": True, "limit": limit}},
@@ -127,6 +170,7 @@ async def test_execute_definition_rejects_invalid_limit(async_client, fake_tempo
 
 async def test_list_executions_filters_by_trigger_source(async_client, fake_temporal):
     """重跑记录视图依赖 triggerSource=RERUN 过滤：只返回重跑执行，非法值 422。"""
+    await _seed_entity_project(async_client)
     rerun = await async_client.post(
         "/api/v1/workflow-system/definitions/entity-project/execute",
         json={"payload": {"triggerSource": "RERUN", "rerunCaseIds": ["CASE-1", "CASE-2"]}},
@@ -169,6 +213,8 @@ async def test_execute_definition_uses_http_422_for_invalid_body(async_client, b
 async def test_execute_definition_rejects_duplicate_workflow_id(
     async_client, monkeypatch: pytest.MonkeyPatch
 ):
+    await _seed_entity_project(async_client)
+
     async def duplicate(*args, **kwargs):
         raise RuntimeError("Workflow execution already started")
 

@@ -29,29 +29,8 @@ class FakeRepo:
     def __init__(self) -> None:
         self.jobs: dict[str, dict[str, Any]] = {}
         self.schedules: dict[str, dict[str, Any]] = {}
-        self.definitions: dict[str, dict[str, Any]] = {
-            "entity-paper": {
-                "id": "entity-paper",
-                "name": "论文实体抽取",
-                "workflowType": "kg.custom.python",
-                "sourceKind": "python",
-                "taskQueue": "tech-kg-workflows",
-            },
-            "relation-authored": {
-                "id": "relation-authored",
-                "name": "撰写关系抽取",
-                "workflowType": "kg.custom.python",
-                "sourceKind": "python",
-                "taskQueue": "tech-kg-workflows",
-            },
-            "graph-build": {
-                "id": "graph-build",
-                "name": "图谱构建",
-                "workflowType": "kg.graph.build",
-                "sourceKind": "builtin",
-                "taskQueue": "tech-kg-workflows",
-            },
-        }
+        # D3 后 builtin/python 定义已删：extract 定义由 fixture 的 _persist 动态写入
+        self.definitions: dict[str, dict[str, Any]] = {}
         self.saved_executions: list[dict[str, Any]] = []
 
     def get_definition(self, definition_id: str) -> dict[str, Any] | None:

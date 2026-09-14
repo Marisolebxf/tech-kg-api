@@ -116,11 +116,12 @@ async def get_update_policy() -> ApiResponse:
 @router.put("/update-policy")
 async def save_update_policy(request: UpdatePolicyRequest) -> ApiResponse:
     result = await service.save_update_policy(request.model_dump())
-    return ApiResponse(data=result, msg="自动建图更新策略已保存")
+    return ApiResponse(data=result, msg="自动抽取更新策略已保存")
 
 
 @router.post("/trigger")
-async def trigger_graph_build(request: TriggerGraphBuildRequest) -> ApiResponse:
-    result = await service.trigger_graph_build(request.model_dump())
+async def trigger_extractions(request: TriggerGraphBuildRequest) -> ApiResponse:
+    """立即触发全量数据抽取（D3 后原 kg.graph.build 总工作流的重指向）。"""
+    result = await service.trigger_extract_all(request.model_dump())
     get_cache.invalidate("task-center:tasks")
-    return ApiResponse(data=result, msg="图谱构建任务已创建")
+    return ApiResponse(data=result, msg=f"已触发 {len(result['executions'])} 个数据抽取")

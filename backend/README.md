@@ -49,7 +49,7 @@ TRSGraph 由外部 TRSGraph 服务提供，当前 Python 后端只负责连接�
 | Python 依赖和检查配置 | `pyproject.toml` | uv 依赖、pytest、ruff 配置 |
 | 后端 Docker 镜像 | `Dockerfile` | 构建 FastAPI 后端镜像 |
 | 后端 Docker 编排 | `docker-compose.yml` | 只启动后端 API 容器，适合已有外部基础设施时使用 |
-| 项目级 Docker 编排 | `../docker-compose.yml` | 启动 API、M3E、Milvus 和共用的 RustFS S3（schema 脚本 / 用户算子 / Milvus 内部存储）；MySQL 使用外部现有服务 |
+| 项目级 Docker 编排 | `../docker-compose.yml` | 启动 API、M3E、Milvus 和共用的 RustFS S3（schema 脚本 / Milvus 内部存储）；MySQL 使用外部现有服务 |
 
 ### Docker 和代码部署的关系
 

@@ -29,9 +29,7 @@ Schema 管理是图谱构建的**元数据中枢**：定义实体/关系结构�
 - **LLM 安全校验**（`service/script_security.py`）：审计危险 import/eval/exec/网络/文件越界/混淆代码，判定纯计算变换才放行；结论（safe/issues/summary）落库到脚本的 `safety_summary`/`safety_issues`。
 - **SSE 流式上传校验**：`POST /schemas/{id}/script/verify` 边校验边推 `progress`/`error` 事件（前端走 `fetchEventSource`，支持 POST + 流式，不能用 axios）；流前失败（不存在/无权限）映射 HTTP 4xx，流中失败发 `type=error` 事件；整个流程在专用线程 + 独立 Session 中驱动（避免跨线程会话）。
 - 脚本本体存 **S3/RustFS**（`SCHEMA_S3_*` 配置），MySQL 只存元数据（bucket/object_key/sha256/etag/original_filename/size）；下载回放带 `X-Content-SHA256` 校验头。
-- **一份脚本、两个化身**（`_persist_script` 同时做两件事，`schema_management.py:684`）：
-  1. **S3 副本（主通道）**：`kg.schema.extract` 合成定义执行时由 worker 下载到临时文件调 `transform(payload)`；
-  2. **kg.custom.python 副本**：`_register_workflow` → `workflow_operations_service.create_python_definition` 把同一份脚本写入 `WORKFLOW_SCRIPT_DIR/schema-{safe_key}.py` 并在控制库注册 `kg.custom.python` 定义（id=`schema-{safe_key}`，steps=`["python:{入口}"]`）——因此它会出现在工作流系统定义列表、可被 execute / Job single 类型直接执行。注意 `kg.custom.steps` 与此无关（那是 `/workflow-system/definitions/steps` 上传的多步流水线）。
+- **单一执行通道**（原"两个化身"已收敛，2026-09-14 D1）：脚本只存 **S3 一份副本**，由 `kg.schema.extract` 合成定义执行时由 worker 下载到临时文件调 `transform(payload)`。历史上的 kg.custom.python 化身（`_register_workflow` → `create_python_definition` 注册 `schema-{safe_key}` 定义）已删除；`kg_schema_script.workflow_definition_id` 列保留做兼容、恒为 NULL。注意 `kg.custom.steps` 是工作流系统自身的多步流水线上传，与 Schema 脚本无关。
 - **脚本落后判定**：上传时快照 `captured_revision`，落后于当前 `property_revision` 即"脚本未覆盖最新属性"——触发抽取时提示、回填时需强确认（`force`）。
 
 ### 4. 平台喂数抽取（kg.schema.extract Temporal 工作流）

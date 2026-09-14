@@ -209,30 +209,17 @@ async def test_schema_management_full_flow(schema_api, monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_schema_workflow_script_is_registered_and_returned(
+async def test_schema_script_upload_registers_no_workflow_avatar(
     schema_api, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls: list[dict] = []
+    """kg.custom.python 化身已删（D1）：上传只存 S3 + 写 DB，不再进 workflow_definitions。"""
 
-    def register(
-        filename, content, function_name, definition_id, name, timeout_seconds=None, category=None
-    ):
-        calls.append(
-            {
-                "filename": filename,
-                "content": content,
-                "function_name": function_name,
-                "definition_id": definition_id,
-                "name": name,
-                "timeout_seconds": timeout_seconds,
-                "category": category,
-            }
-        )
-        return {"id": definition_id}
+    def explode(*args, **kwargs):
+        raise AssertionError("schema 脚本上传不应再注册 kg.custom.python 化身")
 
     monkeypatch.setattr(
         "service.workflow_operations.workflow_operations_service.create_python_definition",
-        register,
+        explode,
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         listing = await client.get(
@@ -256,6 +243,6 @@ async def test_schema_workflow_script_is_registered_and_returned(
 
     assert response.status_code == 200
     script = response.json()["data"]["script"]
-    assert script["workflowDefinitionId"] == "schema-organization"
+    # 化身停用：列保留做兼容，值恒为空；函数名探测（transform/workflow）保留
+    assert script["workflowDefinitionId"] is None
     assert script["workflowFunctionName"] == "workflow"
-    assert calls[0]["timeout_seconds"] == 3600

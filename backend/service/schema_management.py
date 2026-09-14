@@ -664,7 +664,7 @@ class SchemaManagementService:
         user_id: str,
         workflow_function_name: str | None,
     ) -> tuple[GraphSchemaDefinition, bool]:
-        """上传 S3 + 注册工作流 + 写 DB + commit；失败回滚并清理 S3。
+        """上传 S3 + 写 DB + commit；失败回滚并清理 S3。
 
         返回 (刷新后的 definition, 旧脚本清理是否成功)。
         """
@@ -681,12 +681,6 @@ class SchemaManagementService:
                 )
             except Exception as exc:
                 raise SchemaStorageError("上传 Schema Python 脚本失败") from exc
-            workflow_definition = self._register_workflow(
-                definition=definition,
-                filename=filename,
-                script_data=script_data,
-                function_name=workflow_function_name,
-            )
             self._dao.save_script(
                 definition,
                 script={
@@ -698,9 +692,8 @@ class SchemaManagementService:
                     "etag": stored.etag,
                     "sha256": hashlib.sha256(script_data).hexdigest(),
                     "uploaded_by": user_id,
-                    "workflow_definition_id": (
-                        workflow_definition["id"] if workflow_definition else None
-                    ),
+                    # kg.custom.python 化身已删（D1）：脚本唯一执行通道是 kg.schema.extract
+                    "workflow_definition_id": None,
                     "workflow_function_name": workflow_function_name,
                     # 上传时快照属性修订号：脚本是否"落后于 Schema"由此判定
                     "captured_revision": definition.property_revision,
@@ -1050,31 +1043,6 @@ class SchemaManagementService:
         if "transform" in functions:
             return "transform"
         return "workflow" if "workflow" in functions else None
-
-    @staticmethod
-    def _register_workflow(
-        *,
-        definition: GraphSchemaDefinition,
-        filename: str,
-        script_data: bytes,
-        function_name: str | None,
-    ) -> dict[str, Any] | None:
-        if function_name is None:
-            return None
-        from service.workflow_operations import workflow_operations_service
-
-        try:
-            return workflow_operations_service.create_python_definition(
-                filename,
-                script_data,
-                function_name,
-                _workflow_definition_id(definition.schema_key),
-                f"{definition.label} Schema 抽取",
-                timeout_seconds=int(os.getenv("SCHEMA_WORKFLOW_TIMEOUT_SECONDS", "3600")),
-                category="relation" if definition.kind == "relation" else "entity",
-            )
-        except (SyntaxError, ValueError, OSError) as exc:
-            raise SchemaScriptError(f"Schema 脚本工作流注册失败: {exc}") from exc
 
     def _require_schema(self, schema_id: str) -> GraphSchemaDefinition:
         definition = self._dao.get(schema_id)

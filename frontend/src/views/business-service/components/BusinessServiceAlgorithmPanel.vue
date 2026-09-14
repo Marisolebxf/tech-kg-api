@@ -1794,12 +1794,46 @@ const relationCategoryByModule: Record<string, string> = {
   "expert-direct": "直接关系",
   "node-indirect": "间接关系",
   "two-point-achievement": "合作关系",
-  "expert-colleague": "同事关系",
-  "expert-alumni": "校友关系",
+  // 同事/校友模块按《直接间接关系分析》梳理口径:两类模块涉及的关系
+  // 均可由一行源数据或多表 JOIN 直接得到,类别统一标"直接关系"。
+  "expert-colleague": "直接关系",
+  "expert-alumni": "直接关系",
   "paper-cooperation": "合作关系",
   "enterprise-relation": "企业关联关系",
   "industry-chain-event": "产业链关联关系",
   "industry-chain-panorama": "产业链关联关系",
+};
+
+// 关系详情:同事/校友模块只展示梳理文档(md)中的关系名(名词),不带后缀
+// (如"直接关系/同事");动词类关系名加"关系"构成名词(任职→任职关系)。
+// key 为画布边 label(同事边 label="同事关系"、任职边 label="AFFILIATED_WITH"、
+// 校友边 label="校友关系"、共同成果边 label="发表"/"发明"/"参与"或原始边类型)。
+const colleagueRelationDetails: Record<string, string> = {
+  同事关系: "同事",
+  AFFILIATED_WITH: "任职关系",
+  COAUTHOR_WITH: "合著关系",
+  AUTHORED_BY: "署名关系",
+  INVENTED_BY: "发明人",
+  LEADS: "项目负责人",
+  HAS_PARTICIPANT: "项目参与者",
+};
+
+const alumniRelationDetails: Record<string, string> = {
+  校友关系: "校友",
+  STUDIED_AT: "就读关系",
+  COAUTHOR_WITH: "合著关系",
+  发表: "署名关系",
+  发明: "发明人",
+  参与: "项目参与者",
+  AUTHORED_BY: "署名关系",
+  INVENTED_BY: "发明人",
+  LEADS: "项目负责人",
+  HAS_PARTICIPANT: "项目参与者",
+};
+
+const relationDetailByModule: Record<string, Record<string, string>> = {
+  "expert-colleague": colleagueRelationDetails,
+  "expert-alumni": alumniRelationDetails,
 };
 
 const activeRelationCategory = computed(
@@ -1828,8 +1862,14 @@ const displayRelationType = (value?: string) =>
   value ||
   "—";
 
-const displayRelationDetail = (edge: GraphEdgeData) =>
-  displayRelationType(edge.label || edge.category);
+const displayRelationDetail = (edge: GraphEdgeData) => {
+  const detailMap = relationDetailByModule[props.moduleInfo.key];
+  if (detailMap) {
+    const detail = detailMap[edge.label || edge.category || ""];
+    if (detail) return detail;
+  }
+  return displayRelationType(edge.label || edge.category);
+};
 
 /* 暂不展示“评分依据”，保留格式化代码以便后续恢复。
 const confidenceBreakdownLabels: Record<string, string> = {

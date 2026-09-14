@@ -1,8 +1,5 @@
 <script setup lang="ts">
-import {
-  IconHistory,
-  IconSwap,
-} from "@arco-design/web-vue/es/icon";
+import { IconHistory } from "@arco-design/web-vue/es/icon";
 import {
   computed,
   nextTick,
@@ -219,11 +216,6 @@ function toggleUserMenu() {
   const willOpen = !userMenuOpen.value;
   if (willOpen) accountFeedback.value = "";
   userMenuOpen.value = willOpen;
-}
-
-async function switchPortal() {
-  userMenuOpen.value = false;
-  await router.push(isAdminArea.value ? "/overview" : "/admin/reviews");
 }
 
 async function handleAccountAction(
@@ -626,15 +618,6 @@ onBeforeUnmount(() => {
                   </div>
                 </header>
                 <nav aria-label="功能导航 2">
-                  <button
-                    v-if="isAdminUser"
-                    class="portal-switch"
-                    type="button"
-                    @click="switchPortal"
-                  >
-                    <IconSwap class="app-user-menu__icon" />
-                    <span>{{ isAdminArea ? "返回用户端" : "进入管理端" }}</span>
-                  </button>
                   <button
                     :class="{ active: route.path === '/user-center' }"
                     type="button"

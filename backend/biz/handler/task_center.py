@@ -92,17 +92,6 @@ async def retry_task(task_id: str, request: TaskRetryRequest) -> ApiResponse:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.get("/data-sources/health")
-async def source_health() -> ApiResponse:
-    health = service.repo.source_health()
-    temporal = await service.temporal_health() if hasattr(service, "temporal_health") else None
-    if temporal:
-        health = [item for item in health if item["id"] != "temporal"] + [
-            {"id": "temporal", "name": "Temporal", "type": "Workflow", "domain": "调度", **temporal}
-        ]
-    return ApiResponse(data={"items": health, "total": len(health)})
-
-
 @router.get("/data-sources/updates")
 async def source_updates(
     domain: str | None = None,

@@ -2,7 +2,6 @@ import { http } from './http'
 import { unwrapApiResponse, type ApiResponse } from './graphSearch'
 
 export type TaskStatus = '执行中' | '执行出错' | '等待人工审核' | '执行完成'
-export type ReviewStatus = '待处理' | '已完成' | '已撤销' | '已驳回' | '重跑中' | '重跑失败'
 
 export interface UpdateBatch {
   id: string
@@ -117,52 +116,12 @@ export interface AccessReport {
   embedding?: Record<string, AccessEntry>
 }
 
-export interface ReviewRecord {
-  id: string
-  batch: string
-  module: string
-  node: string
-  type: string
-  category: string
-  domain: string
-  objectType: string
-  objectId: string
-  object: string
-  ruleId: string
-  evidence: string
-  score: string
-  handler: string
-  status: ReviewStatus
-  updatedAt: string
-  sourceResult: string
-  suggestion: string
-  sourceTable: string
-  sourceRecordId: string
-  decision?: string
-  decisionNote?: string
-  completedAt?: string
-  dataWindow?: string
-  confidenceValue?: string
-  confidenceLabel?: string
-  modifiedResult?: Record<string, unknown>
-  flow?: ProcessStep[]
-  templateId?: string
-  rawStatus?: string
-}
-
 const unwrap = async <T>(request: Promise<unknown>) => unwrapApiResponse((await request) as ApiResponse<T>)
 
 export const getTask = (id: string) => unwrap(http.get(`/v1/task-center/tasks/${id}`)) as Promise<ProcessingInstance>
 
-export const getManualReviews = (params: Record<string, unknown> = {}) => unwrap(http.get('/v1/manual-reviews', { params })) as Promise<{ items: ReviewRecord[]; total: number; statusCounts: Record<string, number> }>
-export const getManualReview = (id: string) => unwrap(http.get(`/v1/manual-reviews/${id}`)) as Promise<ReviewRecord>
-export const submitManualReview = (id: string, data: { actionId: string; note: string; result: Record<string, unknown>; rerun: boolean }) => unwrap(http.post(`/v1/manual-reviews/${id}/actions`, data)) as Promise<{ review: ReviewRecord }>
-export const retryManualReview = (id: string, payload: Record<string, unknown> = {}) => unwrap(http.post(`/v1/manual-reviews/${id}/retry`, { payload })) as Promise<{ id: string; status: string }>
-
 /** 失败任务重试：调 Temporal ResetWorkflowExecution，回放到失败 step 之前。 */
 export const retryTask = (taskId: string, reason = 'manual retry') => unwrap(http.post(`/v1/task-center/tasks/${taskId}/retry`, { reason })) as Promise<{ taskId: string; workflowId: string; newRunId: string }>
-export const modifyManualReviewResult = (id: string, result: Record<string, unknown>, note = '') => unwrap(http.put(`/v1/manual-reviews/${id}/result`, { result, note })) as Promise<ReviewRecord>
-export const revokeManualReview = (id: string, reason: string) => unwrap(http.post(`/v1/manual-reviews/${id}/revoke`, { reason })) as Promise<ReviewRecord>
 
 // ---- 生产级人工处理 API ----
 

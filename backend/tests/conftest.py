@@ -9,7 +9,6 @@ os.environ["AUTH_ALLOW_INSECURE_DEV_CONTEXT"] = "true"
 os.environ["API_DOCS_ENABLED"] = "true"
 os.environ["AUTH_SESSION_BACKEND"] = "memory"
 os.environ["USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED"] = "false"
-os.environ["WORKFLOW_DEMO_DATA_ENABLED"] = "true"
 
 
 @pytest.fixture

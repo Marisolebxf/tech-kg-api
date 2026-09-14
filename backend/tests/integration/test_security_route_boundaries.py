@@ -47,7 +47,7 @@ def _fail_closed_app() -> FastAPI:
             "/api/v1/schema-management/schemas/schema-1/script",
             {"files": {"file": ("workflow.py", b"def workflow(): pass", "text/x-python")}},
         ),
-        ("POST", "/api/v1/manual-reviews/review-1/actions", {"json": {}}),
+        ("POST", "/api/v1/manual-reviews/production/review-1/submit", {"json": {}}),
         ("GET", "/api/v1/workflow-system/definitions", {}),
     ],
 )

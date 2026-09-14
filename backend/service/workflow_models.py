@@ -40,19 +40,6 @@ class WorkflowTask(Base):
     payload: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
 
 
-class WorkflowReview(Base):
-    __tablename__ = "reviews"
-
-    id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    task_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    batch_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    domain: Mapped[str] = mapped_column(String(64), nullable=False)
-    category: Mapped[str] = mapped_column(String(64), nullable=False)
-    updated_at: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    payload: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
-
-
 class WorkflowSourceUpdate(Base):
     __tablename__ = "source_updates"
 
@@ -129,7 +116,6 @@ __all__ = [
     "WorkflowDefinition",
     "WorkflowExecution",
     "WorkflowJob",
-    "WorkflowReview",
     "WorkflowSchedule",
     "WorkflowSetting",
     "WorkflowSourceUpdate",

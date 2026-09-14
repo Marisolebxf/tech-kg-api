@@ -42,27 +42,24 @@ def fake_temporal(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(temporal_runtime, "create_schedule", create_schedule)
 
 
-async def test_task_center_supports_health_updates_filters_and_trigger(async_client, fake_temporal):
+async def test_task_center_overview_and_trigger(async_client, fake_temporal):
     overview = await async_client.get("/api/v1/task-center/overview")
     assert overview.status_code == 200
-    assert overview.json()["data"]["latestBatch"]["id"] == "UPD-20260714"
+    data = overview.json()["data"]
+    # demo seed 已删：latestBatch 为空、changeSummary 从真实 source_updates 聚合（零值）
+    assert data["latestBatch"] is None
+    assert data["changeSummary"] == {"total": 0, "added": 0, "updated": 0, "deleted": 0}
+    assert {"summary", "statusCounts", "updatePolicy"} <= set(data)
 
-    tasks = await async_client.get(
-        "/api/v1/task-center/tasks",
-        params={"status": "等待人工审核", "domain": "论文域", "pageSize": 100},
-    )
+    tasks = await async_client.get("/api/v1/task-center/tasks", params={"pageSize": 100})
     assert tasks.status_code == 200
-    assert tasks.json()["data"]["total"] >= 1
-    assert all(item["taskStatus"] == "等待人工审核" for item in tasks.json()["data"]["items"])
-
-    health = await async_client.get("/api/v1/task-center/data-sources/health")
-    assert health.json()["data"]["total"] >= 3
+    assert tasks.json()["data"]["total"] == 0
 
     updates = await async_client.get(
         "/api/v1/task-center/data-sources/updates",
         params={"domain": "论文", "since": "2026-07-14 00:00:00"},
     )
-    assert updates.json()["data"]["total"] == 1
+    assert updates.json()["data"]["total"] == 0
 
     trigger = await async_client.post(
         "/api/v1/task-center/trigger",
@@ -87,38 +84,6 @@ async def test_update_policy_creates_temporal_schedule(async_client, fake_tempor
     data = response.json()["data"]
     assert data["policy"]["cron"] == "0 */6 * * *"
     assert data["schedule"]["dispatchStatus"] == "TEMPORAL_CREATED"
-
-
-async def test_manual_review_filter_modify_retry_complete_and_revoke(async_client, fake_temporal):
-    pending = await async_client.get(
-        "/api/v1/manual-reviews", params={"status": "待处理", "domain": "论文", "pageSize": 100}
-    )
-    assert pending.json()["data"]["total"] >= 1
-
-    review_id = "PI-20260714-0003"
-    modified = await async_client.put(
-        f"/api/v1/manual-reviews/{review_id}/result",
-        json={"result": {"relation": "CITES", "approved": True}, "note": "补充 DOI 证据"},
-    )
-    assert modified.json()["data"]["modifiedResult"]["relation"] == "CITES"
-
-    completed = await async_client.post(
-        f"/api/v1/manual-reviews/{review_id}/actions",
-        json={
-            "actionId": "pass-rerun",
-            "note": "证据充分",
-            "result": {"approved": True},
-            "rerun": True,
-        },
-    )
-    assert completed.json()["data"]["review"]["status"] == "已完成"
-    assert completed.json()["data"]["execution"]["status"] == "RUNNING"
-
-    revoked = await async_client.post(
-        "/api/v1/manual-reviews/PI-20260714-0004/revoke",
-        json={"reason": "源记录已撤回"},
-    )
-    assert revoked.json()["data"]["status"] == "已撤销"
 
 
 async def test_custom_definition_and_python_upload_api(async_client, fake_temporal, tmp_path: Path):

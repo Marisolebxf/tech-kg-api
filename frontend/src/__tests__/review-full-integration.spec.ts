@@ -10,7 +10,7 @@
  *  - 证据：真实 MinIO（127.0.0.1:9020），预签名 PUT + head_object 完整性校验。
  *  - 前端：真实 workflowOperations.ts 的 axios 函数 + 共享 http 实例。
  *
- * 覆盖人工处理模块设计的全部接口（production + internal + legacy），
+ * 覆盖人工处理模块设计的全部接口（production + internal），
  * 每种异常类型（七模板）跑多种场景，含安全与故障路径。
  */
 // @vitest-environment node
@@ -34,12 +34,6 @@ import {
   approveProductionReview,
   rejectProductionReview,
   retryProductionReview,
-  getManualReviews,
-  getManualReview,
-  submitManualReview,
-  retryManualReview,
-  modifyManualReviewResult,
-  revokeManualReview,
 } from '../api/workflowOperations'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -1211,66 +1205,5 @@ describe('图谱构建替身 §6 幂等（同 correctionId 返回同 executionId
     })
     expect(r2.data.executionId).toBe(r1.data.executionId)
     void execId
-  })
-})
-
-// ============================ 25. legacy /manual-reviews（任务中心审核）============================
-describe('Legacy /manual-reviews（任务中心审核，真实 sqlite 仓库）', () => {
-  it('列表返回 items + statusCounts', async () => {
-    const r = await getManualReviews({})
-    expect(r.items).toBeInstanceOf(Array)
-    expect(r).toHaveProperty('statusCounts')
-  })
-
-  it('详情返回单条审核 + task/batchDetail', async () => {
-    const list = await getManualReviews({})
-    const id = list.items[0].id
-    const r = await getManualReview(id)
-    expect(r.id).toBe(id)
-    expect(r).toHaveProperty('task')
-  })
-
-  it('flow 返回 {id, flow, task}', async () => {
-    const list = await getManualReviews({})
-    const id = list.items[0].id
-    const r = (await raw('get', `/v1/manual-reviews/${id}/flow`)).body.data
-    expect(r.id).toBe(id)
-    expect(r).toHaveProperty('flow')
-  })
-
-  it('actions 提交处置 → 已完成', async () => {
-    // 找一个待处理单
-    const list = await getManualReviews({})
-    const pending = list.items.find((i) => i.status === '待处理')
-    expect(pending).toBeTruthy()
-    const r = await submitManualReview(pending!.id, { actionId: 'confirm', note: '通过', result: { ok: true }, handler: 'tester', rerun: false })
-    expect(r.review.status).toBe('已完成')
-  })
-
-  it('result 修改结果 → revision 推进', async () => {
-    const list = await getManualReviews({})
-    const id = list.items[0].id
-    const before = (await getManualReview(id)).revision || 1
-    const r = await modifyManualReviewResult(id, { patch: true }, '联调修改')
-    expect(r.revision).toBeGreaterThan(before)
-  })
-
-  it('retry 重试工作流（Temporal 不可用走 LOCAL_FALLBACK）', async () => {
-    // 先确保 graph-build 工作流定义存在（seed 仅含 entity-project），真实创建之
-    await http.post('/v1/workflow-system/definitions', {
-      id: 'graph-build', name: '图谱构建', category: 'graph', steps: ['增量抽取', '图谱写入'], taskQueue: 'tech-kg-workflows', active: true,
-    })
-    const list = await getManualReviews({})
-    const id = list.items[0].id
-    const r = await retryManualReview(id, { reason: '联调重试' })
-    expect(r).toHaveProperty('id')
-    expect(['QUEUED', 'RUNNING', 'COMPLETED', 'LOCAL_FALLBACK']).toContain(r.status || 'QUEUED')
-  })
-
-  it('revoke 撤销 → 已撤销', async () => {
-    const list = await getManualReviews({})
-    const pending = list.items.find((i) => i.status === '待处理') || list.items[0]
-    const r = await revokeManualReview(pending.id, '联调撤销')
-    expect(r.status).toBe('已撤销')
   })
 })

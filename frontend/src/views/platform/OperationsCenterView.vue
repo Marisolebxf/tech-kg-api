@@ -3,11 +3,12 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 
-import { getExecution, getProductionReviews, listExecutions, rerunExtractFailures, type ProductionReviewCase, type ReviewRecord } from '../../api/workflowOperations'
+import { getExecution, getProductionReviews, listExecutions, rerunExtractFailures, type ProductionReviewCase } from '../../api/workflowOperations'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import {
   getImpactScope,
   resolvePipelineStep,
+  type ReviewRecord,
 } from './manual-review-data'
 import {
   extractCaseStatusBadge,
@@ -26,7 +27,9 @@ const keyword = ref(clampSearchKeyword(String(route.query.keyword || '')))
 const reviewStatusFilter = ref<'全部' | '待处理' | '已处理' | '重跑中' | '重跑失败' | undefined>('全部')
 const reviewKindFilter = ref<'全部' | '实体' | '关系' | undefined>('全部')
 const reviewTotal = ref(0)
-const reviewRecords = ref<ReviewRecord[]>([])
+/** 队列行 = manual-review-data 的 ReviewRecord + C 类重跑所需的原始状态与模板 id。 */
+type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string }
+const reviewRecords = ref<ReviewRow[]>([])
 const reviewLoadError = ref('')
 
 const reviewRows = computed(() => reviewRecords.value)

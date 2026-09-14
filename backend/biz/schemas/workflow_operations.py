@@ -61,67 +61,6 @@ class TriggerGraphBuildRequest(BaseModel):
         return _check_text(v)
 
 
-class ReviewActionRequest(BaseModel):
-    action_id: str = Field(alias="actionId", min_length=1, max_length=64)
-    note: str = ""
-    result: dict[str, Any] = Field(default_factory=dict)
-    handler: str | None = Field(default=None, max_length=64)
-    rerun: bool = False
-
-    model_config = {"populate_by_name": True}
-
-    @field_validator("action_id", "handler", mode="before")
-    @classmethod
-    def _validate_ids(cls, v: str | None) -> str | None:
-        return _check_id(v)
-
-    @field_validator("note", mode="before")
-    @classmethod
-    def _validate_note(cls, v: str) -> str:
-        return _check_text(v)
-
-
-class ReviewResultRequest(BaseModel):
-    result: dict[str, Any]
-    note: str = ""
-    handler: str | None = Field(default=None, max_length=64)
-
-    @field_validator("handler", mode="before")
-    @classmethod
-    def _validate_handler(cls, v: str | None) -> str | None:
-        return _check_id(v)
-
-    @field_validator("note", mode="before")
-    @classmethod
-    def _validate_note(cls, v: str) -> str:
-        return _check_text(v)
-
-
-class RetryRequest(BaseModel):
-    note: str = ""
-    payload: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("note", mode="before")
-    @classmethod
-    def _validate_note(cls, v: str) -> str:
-        return _check_text(v)
-
-
-class RevokeRequest(BaseModel):
-    reason: str = Field(min_length=1, max_length=64)
-    handler: str | None = Field(default=None, max_length=64)
-
-    @field_validator("handler", mode="before")
-    @classmethod
-    def _validate_handler(cls, v: str | None) -> str | None:
-        return _check_id(v)
-
-    @field_validator("reason", mode="before")
-    @classmethod
-    def _validate_reason(cls, v: str) -> str:
-        return _check_text(v)
-
-
 class WorkflowDefinitionRequest(BaseModel):
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{2,63}$")
     name: str = Field(min_length=1, max_length=64)

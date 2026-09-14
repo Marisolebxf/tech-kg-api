@@ -1,8 +1,9 @@
-"""任务中心、人工审核与工作流定义的控制面仓库（temporal-mysql 的 techkg_control 库）。
+"""任务中心与工作流定义的控制面仓库（temporal-mysql 的 techkg_control 库）。
 
 原 SQLite 实现已迁至 SQLAlchemy ORM + MySQL（详见 service/workflow_models.py、
-infra/workflow_mysql.py）。保留全部 public 方法签名；seed/`_steps` 等静态
-数据方法原样保留，仅把 `_seed` 的 INSERT 语句换成 session.add。
+infra/workflow_mysql.py）。legacy 人工审核链（reviews 表）与 demo seed 数据
+（_seed/_seed_tasks/_seed_reviews、WORKFLOW_DEMO_DATA_ENABLED、source_health
+静态假数据）已于 2026-09-14 清理；生产审核走 service/manual_review_production.py。
 
 ORM 模型不带 workflow_type UNIQUE 约束（kg.custom.python 多定义共享同一
 workflow_type，原 SQLite 实现的 _remove_workflow_type_unique_constraint 即为
@@ -17,7 +18,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Engine, select
-from sqlalchemy.orm import Session
 
 from infra.workflow_mysql import workflow_mysql_client, workflow_session_scope
 from service.workflow_models import (
@@ -26,20 +26,13 @@ from service.workflow_models import (
     WorkflowDefinition,
     WorkflowExecution,
     WorkflowJob,
-    WorkflowReview,
     WorkflowSchedule,
     WorkflowSetting,
     WorkflowSourceUpdate,
     WorkflowTask,
 )
 
-EXPERT_BASIC_INFO_TABLE = "专家基本信息表"
-PAPER_ACHIEVEMENT_TABLE = "论文成果表"
-PAPER_TITLE_MISSING = "论文标题缺失"
-PENDING_MANUAL_REVIEW = "等待人工审核"
-RESULT_BELOW_THRESHOLD = "结果低于阈值"
 SCHEMA_MAPPING_LABEL = "Schema 映射"
-TECH_ELEMENT_DATABASE = "科技要素数据库"
 
 
 def _now() -> str:
@@ -66,21 +59,10 @@ class WorkflowRepository:
 
     def _initialize(self) -> None:
         # CREATE DATABASE IF NOT EXISTS 在 workflow_mysql_client.engine 首次访问时已做；
-        # 这里只建表 + seed（可选）+ 注册 builtin 工作流定义。
+        # 这里只建表 + 注册 builtin 工作流定义。
         Base.metadata.create_all(self._engine)
         self._migrate_job_columns()
         self._migrate_schema_space_column()
-        demo_enabled = os.getenv("WORKFLOW_DEMO_DATA_ENABLED", "false").lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        if demo_enabled:
-            with workflow_session_scope() as session:
-                any_task = session.scalar(select(WorkflowTask.id).limit(1))
-                if any_task is None:
-                    self._seed(session)
         self._ensure_builtin_definitions()
 
     def _migrate_job_columns(self) -> None:
@@ -131,9 +113,23 @@ class WorkflowRepository:
             )
 
     def _ensure_builtin_definitions(self) -> None:
-        """Idempotently insert built-in workflow definitions missing from older DBs."""
+        """Idempotently insert built-in workflow definitions missing from older DBs.
+
+        9 个域工作流 + graph-build 总工作流原由 demo seed 顺带注册；seed 删除后
+        注册职责并到这里（graph-build 是 /task-center/trigger 与自动建图策略的
+        执行目标，不是演示数据）。
+        """
         builtins = [
+            ("entity-paper", "kg.entity.paper", "entity", "论文实体工作流"),
+            ("entity-scholar", "kg.entity.scholar", "entity", "人才实体工作流"),
+            ("entity-patent", "kg.entity.patent", "entity", "专利实体工作流"),
+            ("entity-organization", "kg.entity.organization", "entity", "机构实体工作流"),
             ("entity-project", "kg.entity.project", "entity", "国内外项目实体工作流"),
+            ("relation-authorship", "kg.relation.authorship", "relation", "论文作者关系工作流"),
+            ("relation-employment", "kg.relation.employment", "relation", "人才任职关系工作流"),
+            ("relation-citation", "kg.relation.citation", "relation", "论文引用关系工作流"),
+            ("relation-cooperation", "kg.relation.cooperation", "relation", "合作关系工作流"),
+            ("graph-build", "kg.graph.build", "graph", "图谱构建总工作流"),
         ]
         with workflow_session_scope() as session:
             for definition_id, workflow_type, category, name in builtins:
@@ -162,198 +158,6 @@ class WorkflowRepository:
                         payload=_json(payload),
                     )
                 )
-
-    def _seed(self, session: Session) -> None:
-        batches = [
-            {
-                "id": "UPD-20260714",
-                "name": "2026-07-14 数据更新",
-                "updateDate": "2026-07-14",
-                "dataWindow": "2026-07-13 02:00—2026-07-14 02:00",
-                "source": TECH_ELEMENT_DATABASE,
-                "trigger": "每日定时更新",
-                "input": 25140,
-                "entities": 8426,
-                "relations": 35620,
-                "completed": 43335,
-                "abnormal": 711,
-                "progress": 99,
-                "status": "待审核",
-                "startedAt": "2026-07-14 02:00:00",
-                "completedAt": "等待人工处理完成",
-            },
-            {
-                "id": "UPD-20260713",
-                "name": "2026-07-13 数据更新",
-                "updateDate": "2026-07-13",
-                "dataWindow": "2026-07-12 02:00—2026-07-13 02:00",
-                "source": TECH_ELEMENT_DATABASE,
-                "trigger": "每日定时更新",
-                "input": 23876,
-                "entities": 7981,
-                "relations": 32450,
-                "completed": 40431,
-                "abnormal": 42,
-                "progress": 100,
-                "status": "已完成",
-                "startedAt": "2026-07-13 02:00:00",
-                "completedAt": "2026-07-13 02:36:42",
-            },
-        ]
-        for batch in batches:
-            session.add(
-                WorkflowBatch(
-                    id=batch["id"],
-                    update_date=batch["updateDate"],
-                    payload=_json(batch),
-                )
-            )
-
-        for task in self._seed_tasks():
-            session.add(
-                WorkflowTask(
-                    id=task["id"],
-                    batch_id=task["batchId"],
-                    stage=task["stage"],
-                    task_status=task["taskStatus"],
-                    domain=task["dataDomain"],
-                    kind=task["kind"],
-                    processed_at=task["processedAt"],
-                    payload=_json(task),
-                )
-            )
-
-        for review in self._seed_reviews():
-            session.add(
-                WorkflowReview(
-                    id=review["id"],
-                    task_id=review["id"],
-                    batch_id=review["batch"],
-                    status=review["status"],
-                    domain=review["domain"],
-                    category=review["category"],
-                    updated_at=review["updatedAt"],
-                    payload=_json(review),
-                )
-            )
-
-        updates = [
-            {
-                "change": "新增",
-                "type": "论文",
-                "domain": "论文",
-                "id": "P202607140018",
-                "content": "《多模态大模型知识推理方法研究》",
-                "time": "02:00:13",
-                "detectedAt": "2026-07-14 02:00:13",
-                "source": "dwd_zh_paper_detail",
-                "field": "整条记录",
-                "before": "不存在",
-                "after": "新增论文标题、作者、机构、关键词和 DOI 信息",
-                "result": "已进入数据清洗与论文实体对齐",
-            },
-            {
-                "change": "新增",
-                "type": "专家",
-                "domain": "人才",
-                "id": "EXPERT_20418",
-                "content": "周启航 · 中国科学院自动化研究所",
-                "time": "02:00:18",
-                "detectedAt": "2026-07-14 02:00:18",
-                "source": "dwd_scholar",
-                "field": "整条记录",
-                "before": "不存在",
-                "after": "新增专家姓名、任职机构与研究方向",
-                "result": "已进入专家候选实体对齐",
-            },
-            {
-                "change": "修改",
-                "type": "专利",
-                "domain": "专利",
-                "id": "CN2026102841",
-                "content": "法律状态：公开 → 实质审查",
-                "time": "02:00:22",
-                "detectedAt": "2026-07-14 02:00:22",
-                "source": "dwd_patent",
-                "field": "legal_status",
-                "before": "公开",
-                "after": "实质审查",
-                "result": "已更新专利属性，等待增量图谱入库",
-            },
-            {
-                "change": "删除",
-                "type": "项目",
-                "domain": "项目",
-                "id": "PROJ_2024_0892",
-                "content": "来源记录已标记删除，图谱对象待下线",
-                "time": "02:00:31",
-                "detectedAt": "2026-07-14 02:00:31",
-                "source": "dwd_zh_project",
-                "field": "is_deleted",
-                "before": "0",
-                "after": "1",
-                "result": "已进入删除影响分析，确认关系依赖后下线",
-            },
-        ]
-        for item in updates:
-            session.add(
-                WorkflowSourceUpdate(
-                    domain=item["domain"],
-                    detected_at=item["detectedAt"],
-                    payload=_json(item),
-                )
-            )
-
-        policy = {
-            "id": "auto-graph-build",
-            "enabled": True,
-            "frequency": "每天",
-            "executionTime": "02:00",
-            "timezone": "Asia/Shanghai",
-            "cron": "0 2 * * *",
-            "nextRunAt": "2026-07-15 02:00:00",
-            "skipWhenNoChanges": True,
-        }
-        session.add(WorkflowSetting(key="update_policy", payload=_json(policy)))
-
-        definitions = [
-            ("entity-paper", "kg.entity.paper", "entity", "论文实体工作流"),
-            ("entity-scholar", "kg.entity.scholar", "entity", "人才实体工作流"),
-            ("entity-patent", "kg.entity.patent", "entity", "专利实体工作流"),
-            ("entity-organization", "kg.entity.organization", "entity", "机构实体工作流"),
-            ("entity-project", "kg.entity.project", "entity", "国内外项目实体工作流"),
-            ("relation-authorship", "kg.relation.authorship", "relation", "论文作者关系工作流"),
-            ("relation-employment", "kg.relation.employment", "relation", "人才任职关系工作流"),
-            ("relation-citation", "kg.relation.citation", "relation", "论文引用关系工作流"),
-            ("relation-cooperation", "kg.relation.cooperation", "relation", "合作关系工作流"),
-            ("graph-build", "kg.graph.build", "graph", "图谱构建总工作流"),
-        ]
-        for definition_id, workflow_type, category, name in definitions:
-            exists = session.scalar(
-                select(WorkflowDefinition).where(WorkflowDefinition.id == definition_id)
-            )
-            if exists:
-                continue
-            payload = {
-                "id": definition_id,
-                "name": name,
-                "workflowType": workflow_type,
-                "category": category,
-                "taskQueue": os.getenv("TEMPORAL_TASK_QUEUE", "tech-kg-workflows"),
-                "active": True,
-                "sourceKind": "builtin",
-                "steps": ["读取增量", "标准化", "抽取/对齐", "质量校验", "图谱写入"],
-                "createdAt": _now(),
-            }
-            session.add(
-                WorkflowDefinition(
-                    id=definition_id,
-                    workflow_type=workflow_type,
-                    category=category,
-                    active=1,
-                    payload=_json(payload),
-                )
-            )
 
     @staticmethod
     def _steps(blocking: str | None = None) -> list[dict[str, Any]]:
@@ -391,429 +195,6 @@ class WorkflowRepository:
                     "count": "1 个处理对象",
                     "abnormal": "1" if status == "需人工处理" else "0",
                     "duration": "未完成" if status != "成功" else "6秒",
-                }
-            )
-        return result
-
-    @classmethod
-    def _seed_tasks(cls) -> list[dict[str, Any]]:
-        base = [
-            (
-                "PI-20260714-0101",
-                "图谱构建",
-                "实体",
-                "论文",
-                "大模型抽取批次",
-                "流程实例",
-                "批量实体关系抽取",
-                "论文成果批次",
-                "模型批量输出异常",
-                "执行出错",
-                "extract",
-                "",
-            ),
-            (
-                "PI-20260714-0102",
-                "图谱构建",
-                "属性",
-                "企业",
-                "Schema 映射批次",
-                "流程实例",
-                "批量 Schema 映射",
-                "企业基本信息表",
-                "Schema 批量映射失败",
-                "执行出错",
-                "schema",
-                "",
-            ),
-            (
-                "PI-20260714-0103",
-                "数据处理",
-                "属性",
-                "专利",
-                "专利状态标准化批次",
-                "流程实例",
-                "公共字典标准化",
-                "专利基本信息表",
-                "公共字典配置异常",
-                "执行出错",
-                "normalize",
-                "",
-            ),
-            (
-                "PI-20260714-0104",
-                "图谱构建",
-                "实体",
-                "人才",
-                "李晓峰 / Li Xiaofeng",
-                "候选专家实体",
-                "实体对齐",
-                EXPERT_BASIC_INFO_TABLE,
-                "单任务执行失败",
-                "执行出错",
-                "align",
-                "",
-            ),
-            (
-                "PI-20260714-0001",
-                "图谱构建",
-                "实体",
-                "人才",
-                "张明远",
-                "科技专家",
-                "新增实体",
-                EXPERT_BASIC_INFO_TABLE,
-                "",
-                "执行完成",
-                None,
-                "0.94",
-            ),
-            (
-                "PI-20260714-0003",
-                "图谱构建",
-                "关系",
-                "论文",
-                "数字抽象 → 矩阵分析",
-                "主题相近",
-                "新增关系",
-                "实体主题关联表",
-                "低置信度",
-                PENDING_MANUAL_REVIEW,
-                "validate",
-                "0.72",
-            ),
-            (
-                "PI-20260714-0004",
-                "图谱构建",
-                "实体",
-                "人才",
-                "张明远 / Zhang Mingyuan",
-                "候选专家实体",
-                "实体合并",
-                EXPERT_BASIC_INFO_TABLE,
-                "实体冲突",
-                PENDING_MANUAL_REVIEW,
-                "validate",
-                "0.82",
-            ),
-            (
-                "PI-20260714-0005",
-                "图谱构建",
-                "关系",
-                "企业",
-                "华南智能芯片 → 腾讯",
-                "企业合作",
-                "新增关系",
-                "企业合作记录表",
-                "关系证据不足",
-                PENDING_MANUAL_REVIEW,
-                "validate",
-                "0.74",
-            ),
-            (
-                "PI-20260714-0007",
-                "数据处理",
-                "实体",
-                "论文",
-                "重复论文成果记录",
-                "论文成果",
-                "记录去重",
-                PAPER_ACHIEVEMENT_TABLE,
-                "唯一性冲突",
-                PENDING_MANUAL_REVIEW,
-                "validate",
-                "0.69",
-            ),
-            (
-                "PI-20260714-0010",
-                "数据处理",
-                "属性",
-                "论文",
-                PAPER_TITLE_MISSING,
-                "论文成果",
-                "属性补全",
-                PAPER_ACHIEVEMENT_TABLE,
-                "必填缺失",
-                "执行完成",
-                None,
-                "0.93",
-            ),
-            (
-                "PI-20260713-0008",
-                "图谱构建",
-                "实体",
-                "专利",
-                "陈卓 / Chen Zhuo",
-                "科技专家",
-                "实体合并",
-                EXPERT_BASIC_INFO_TABLE,
-                "低置信度",
-                "执行完成",
-                None,
-                "0.72",
-            ),
-        ]
-        result = []
-        for index, row in enumerate(base):
-            (
-                task_id,
-                stage,
-                kind,
-                domain,
-                object_name,
-                object_type,
-                action,
-                source_table,
-                review_type,
-                status,
-                blocking,
-                confidence,
-            ) = row
-            batch_id = "UPD-20260713" if "20260713" in task_id else "UPD-20260714"
-            result.append(
-                {
-                    "id": task_id,
-                    "batchId": batch_id,
-                    "stage": stage,
-                    "kind": kind,
-                    "objectId": task_id.replace("PI-", "OBJ-"),
-                    "objectName": object_name,
-                    "objectType": object_type,
-                    "action": action,
-                    "sourceTable": source_table,
-                    "sourceRecordId": task_id.replace("PI-", "SRC-"),
-                    "rule": review_type or "领域图谱质量规则",
-                    "confidence": confidence,
-                    "result": "等待人工确认" if blocking else "任务已完成并产生可验收结果",
-                    "status": "待人工处理" if status == PENDING_MANUAL_REVIEW else "已完成",
-                    "taskStatus": status,
-                    "dataDomain": f"{domain}域",
-                    "processedAt": f"2026-07-{13 if batch_id.endswith('13') else 14} 10:{8 + index:02d}:00",
-                    "reviewType": review_type or None,
-                    "currentStep": next(
-                        (
-                            item["name"]
-                            for item in cls._steps(blocking)
-                            if item["id"] == (blocking or "persist")
-                        ),
-                        "图谱入库",
-                    ),
-                    "steps": cls._steps(blocking),
-                    "workflowType": "kg.graph.build",
-                    "workflowId": f"wf-{task_id.lower()}",
-                    "runId": None,
-                    "input": {"batchId": batch_id, "domain": domain},
-                    "output": {"object": object_name, "confidence": confidence},
-                    "logs": [
-                        f"{task_id} INFO 开始执行 {stage} 工作流",
-                        f"{task_id} {'WARN 等待人工处理' if blocking else 'INFO 执行完成'}",
-                    ],
-                }
-            )
-        return result
-
-    @staticmethod
-    def _seed_reviews() -> list[dict[str, Any]]:
-        rows = [
-            (
-                "PI-20260714-0101",
-                "大模型输出格式错误",
-                "论文",
-                "论文记录",
-                "《多模态大模型知识推理方法研究》",
-                "LLM-SCHEMA-FAIL-001",
-                "模型返回字段无法解析为目标 JSON Schema",
-                "",
-                "张建图",
-                "大模型抽取",
-                PAPER_ACHIEVEMENT_TABLE,
-                "P202607140326",
-                "抽取流程异常",
-            ),
-            (
-                "PI-20260714-0102",
-                "Schema 字段映射失败",
-                "企业",
-                "企业记录",
-                "华南智能芯片有限公司",
-                "SCHEMA-MAP-FAIL-006",
-                "来源字段无法映射到 Organization.org_category",
-                "",
-                "张建图",
-                SCHEMA_MAPPING_LABEL,
-                "企业基本信息表",
-                "ORG_4403018892",
-                SCHEMA_MAPPING_LABEL,
-            ),
-            (
-                "PI-20260714-0103",
-                "专利状态标准化失败",
-                "专利",
-                "专利记录",
-                "《一种智能芯片封装方法》",
-                "DICT-CONFIG-FAIL-003",
-                "原始状态未命中当前专利状态字典",
-                "",
-                "李质量",
-                "清洗标准化",
-                "专利基本信息表",
-                "CN2026101843",
-                "标准化/枚举",
-            ),
-            (
-                "PI-20260714-0104",
-                "专家实体对齐歧义",
-                "人才",
-                "专家实体",
-                "李晓峰 / Li Xiaofeng",
-                "ALIGN-AMBIGUITY-004",
-                "召回 3 个高相似存量专家，无法自动消歧合并",
-                "0.81",
-                "王审核",
-                "实体对齐消歧",
-                EXPERT_BASIC_INFO_TABLE,
-                "EXPERT-20566",
-                "实体对齐异常",
-            ),
-            (
-                "PI-20260714-0003",
-                "关系类型置信度不足",
-                "论文",
-                "论文引用关系",
-                "《数字抽象方法研究》 → 《矩阵分析基础》",
-                "REL-CONFIDENCE-003",
-                "主题共现与两跳路径证据不足以自动入图",
-                "0.72",
-                "王审核",
-                "关系校验",
-                "实体主题关联表",
-                "TOPIC-DIGITAL-040",
-                RESULT_BELOW_THRESHOLD,
-            ),
-            (
-                "PI-20260714-0004",
-                "实体类型判断错误",
-                "人才",
-                "专家实体",
-                "张明远 / Zhang Mingyuan",
-                "ALIGN-ENTITY-017",
-                "源记录应归类为专家，系统映射为人才",
-                "0.82",
-                "王审核",
-                "Schema 实体分类",
-                EXPERT_BASIC_INFO_TABLE,
-                "EXPERT-20418",
-                RESULT_BELOW_THRESHOLD,
-            ),
-            (
-                "PI-20260714-0005",
-                "合作关系证据不足",
-                "企业",
-                "企业合作关系",
-                "华南智能芯片有限公司 → 腾讯科技有限公司",
-                "REL-EVIDENCE-009",
-                "仅命中 1 个来源，未达到双来源入库条件",
-                "0.74",
-                "陈治理",
-                "关系证据校验",
-                "企业合作记录表",
-                "COOP-89321-A",
-                RESULT_BELOW_THRESHOLD,
-            ),
-            (
-                "PI-20260714-0007",
-                "论文唯一性冲突",
-                "论文",
-                "论文源记录",
-                "《多源科技数据融合方法研究》",
-                "DQ-UNIQUE-003",
-                "同一 paper_id 对应 3 条来源记录",
-                "0.69",
-                "李质量",
-                "唯一性校验",
-                PAPER_ACHIEVEMENT_TABLE,
-                "P202607130089",
-                "数据质量",
-            ),
-            (
-                "PI-20260714-0010",
-                PAPER_TITLE_MISSING,
-                "论文",
-                "论文源记录",
-                "《知识图谱增量构建方法研究》",
-                "DQ-REQUIRED-001",
-                "原始标题为空，DOI 可匹配可信成果",
-                "0.93",
-                "李质量",
-                "必填校验",
-                PAPER_ACHIEVEMENT_TABLE,
-                "P202607130068",
-                "数据质量",
-            ),
-            (
-                "PI-20260713-0008",
-                "专家实体置信度不足",
-                "专利",
-                "专利发明人实体",
-                "陈卓 / Chen Zhuo",
-                "ALIGN-CONFIDENCE-003",
-                "机构别名经人工确认后完成合并",
-                "0.72",
-                "陈治理",
-                "实体结果校验",
-                EXPERT_BASIC_INFO_TABLE,
-                "EXPERT-19882",
-                RESULT_BELOW_THRESHOLD,
-            ),
-        ]
-        completed = {"PI-20260714-0010", "PI-20260713-0008"}
-        result = []
-        for index, row in enumerate(rows):
-            (
-                item_id,
-                review_type,
-                domain,
-                object_type,
-                obj,
-                rule_id,
-                evidence,
-                score,
-                handler,
-                node,
-                source_table,
-                source_record_id,
-                category,
-            ) = row
-            status = "已完成" if item_id in completed else "待处理"
-            result.append(
-                {
-                    "id": item_id,
-                    "batch": "UPD-20260713" if "20260713" in item_id else "UPD-20260714",
-                    "module": "数据处理"
-                    if review_type in {"论文唯一性冲突", PAPER_TITLE_MISSING, "专利状态标准化失败"}
-                    else "图谱构建",
-                    "node": node,
-                    "type": review_type,
-                    "category": category,
-                    "domain": domain,
-                    "objectType": object_type,
-                    "objectId": item_id.replace("PI-", "OBJ-"),
-                    "object": obj,
-                    "ruleId": rule_id,
-                    "evidence": evidence,
-                    "score": score,
-                    "handler": handler,
-                    "status": status,
-                    "updatedAt": f"07-14 10:{8 + index:02d}",
-                    "sourceResult": "异常结果已隔离，未进入生产图谱",
-                    "suggestion": "人工修正后从当前节点重跑",
-                    "sourceTable": source_table,
-                    "sourceRecordId": source_record_id,
-                    "decision": "修正后重跑并通过" if status == "已完成" else None,
-                    "decisionNote": "已人工核验并完成重跑。" if status == "已完成" else None,
-                    "completedAt": "2026-07-14 10:21:47" if status == "已完成" else None,
-                    "flow": WorkflowRepository._steps("validate"),
-                    "revision": 1,
                 }
             )
         return result
@@ -872,50 +253,6 @@ class WorkflowRepository:
                     kind=task["kind"],
                     processed_at=task["processedAt"],
                     payload=_json(task),
-                )
-            )
-
-    def list_reviews(self, filters: dict[str, Any]) -> list[dict[str, Any]]:
-        with workflow_session_scope() as session:
-            stmt = select(WorkflowReview).order_by(WorkflowReview.updated_at.desc())
-            mapping = {
-                "status": WorkflowReview.status,
-                "domain": WorkflowReview.domain,
-                "category": WorkflowReview.category,
-                "batch_id": WorkflowReview.batch_id,
-            }
-            for key, column in mapping.items():
-                value = filters.get(key)
-                if value:
-                    stmt = stmt.where(column == value)
-            if filters.get("start_time"):
-                stmt = stmt.where(WorkflowReview.updated_at >= filters["start_time"])
-            if filters.get("end_time"):
-                stmt = stmt.where(WorkflowReview.updated_at <= filters["end_time"])
-            rows = session.scalars(stmt).all()
-            items = [json.loads(row.payload) for row in rows]
-        keyword = filters.get("keyword")
-        if keyword:
-            items = [item for item in items if keyword.lower() in _json(item).lower()]
-        return items
-
-    def get_review(self, review_id: str) -> dict[str, Any] | None:
-        with workflow_session_scope() as session:
-            row = session.scalar(select(WorkflowReview).where(WorkflowReview.id == review_id))
-            return json.loads(row.payload) if row else None
-
-    def save_review(self, review: dict[str, Any]) -> None:
-        with workflow_session_scope() as session:
-            session.merge(
-                WorkflowReview(
-                    id=review["id"],
-                    task_id=review["id"],
-                    batch_id=review["batch"],
-                    status=review["status"],
-                    domain=review["domain"],
-                    category=review["category"],
-                    updated_at=review["updatedAt"],
-                    payload=_json(review),
                 )
             )
 
@@ -1112,41 +449,6 @@ class WorkflowRepository:
                 return False
             session.delete(row)
             return True
-
-    def source_health(self) -> list[dict[str, Any]]:
-        now = datetime.now(UTC).astimezone()
-        return [
-            {
-                "id": "mysql-elements",
-                "name": TECH_ELEMENT_DATABASE,
-                "type": "MySQL",
-                "domain": "综合",
-                "status": "健康",
-                "latencyMs": 18,
-                "lastCheckedAt": now.strftime("%Y-%m-%d %H:%M:%S"),
-                "message": "连接与增量游标正常",
-            },
-            {
-                "id": "trs-graph",
-                "name": "图数据库服务",
-                "type": "NebulaGraph",
-                "domain": "图谱",
-                "status": "健康",
-                "latencyMs": 32,
-                "lastCheckedAt": now.strftime("%Y-%m-%d %H:%M:%S"),
-                "message": "读写探针正常",
-            },
-            {
-                "id": "temporal",
-                "name": "Temporal",
-                "type": "Workflow",
-                "domain": "调度",
-                "status": "待探测",
-                "latencyMs": None,
-                "lastCheckedAt": now.strftime("%Y-%m-%d %H:%M:%S"),
-                "message": "调用 /workflow-system/health 获取实时状态",
-            },
-        ]
 
     def reset_for_tests(self) -> None:
         # 原 SQLite 实现是删 db 文件 + 重建；MySQL 下用 DROP+CREATE 全部表

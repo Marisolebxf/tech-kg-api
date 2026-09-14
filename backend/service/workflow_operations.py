@@ -56,14 +56,11 @@ class WorkflowOperationsService:
             "latestBatch": latest_batch,
             "changeSummary": {
                 "total": latest_batch["input"] if latest_batch else len(changes),
-                "added": 18420,
-                "updated": 6408,
-                "deleted": 312,
-                "detectedAt": "2026-07-14 02:00:00",
-                "completedAt": "2026-07-14 02:18:00",
+                "added": sum(c["change"] == "新增" for c in changes),
+                "updated": sum(c["change"] == "修改" for c in changes),
+                "deleted": sum(c["change"] == "删除" for c in changes),
             },
             "updatePolicy": self.repo.get_setting("update_policy"),
-            "sourceHealth": self.repo.source_health(),
         }
 
     def list_tasks(self, **filters: Any) -> dict[str, Any]:
@@ -98,7 +95,6 @@ class WorkflowOperationsService:
         if task is None:
             raise KeyError(task_id)
         task["batch"] = self.repo.get_batch(task["batchId"])
-        task["review"] = self.repo.get_review(task_id)
         return task
 
     async def query_step_state(self, task: dict[str, Any]) -> dict[str, Any] | None:
@@ -120,112 +116,6 @@ class WorkflowOperationsService:
             temporal_runtime._client = None
             task["logs"] = (task.get("logs") or []) + [f"step state 查询失败: {exc}"]
             return None
-
-    def list_reviews(self, **filters: Any) -> dict[str, Any]:
-        items = self.repo.list_reviews(filters)
-        batches = {item["id"]: item for item in self.repo.list_batches()}
-        for item in items:
-            batch = batches.get(item["batch"])
-            item["dataWindow"] = batch["dataWindow"] if batch else "-"
-            score = item.get("score")
-            item["confidenceValue"] = (
-                score if score and float(score) < 0.9 and item["module"] != "数据处理" else "—"
-            )
-            item["confidenceLabel"] = "低于阈值" if item["confidenceValue"] != "—" else ""
-        page = max(int(filters.get("page") or 1), 1)
-        page_size = min(max(int(filters.get("page_size") or 50), 1), 200)
-        start = (page - 1) * page_size
-        status_counts = {
-            status: sum(item["status"] == status for item in items)
-            for status in ("待处理", "已完成", "已撤销")
-        }
-        return {
-            "items": items[start : start + page_size],
-            "total": len(items),
-            "page": page,
-            "pageSize": page_size,
-            "statusCounts": status_counts,
-        }
-
-    def get_review(self, review_id: str) -> dict[str, Any]:
-        review = self.repo.get_review(review_id)
-        if review is None:
-            raise KeyError(review_id)
-        review["task"] = self.repo.get_task(review_id)
-        review["batchDetail"] = self.repo.get_batch(review["batch"])
-        return review
-
-    async def handle_review(self, review_id: str, action: dict[str, Any]) -> dict[str, Any]:
-        review = self.get_review(review_id)
-        if review["status"] != "待处理":
-            raise ValueError("只有待处理任务可以提交处置")
-        review.pop("task", None)
-        review.pop("batchDetail", None)
-        review["decision"] = action["action_id"]
-        review["decisionNote"] = action.get("note", "")
-        review["modifiedResult"] = action.get("result", {})
-        review["handler"] = action.get("handler") or review["handler"]
-        review["status"] = "已完成"
-        review["completedAt"] = _now()
-        review["updatedAt"] = _now()
-        review["revision"] = int(review.get("revision", 1)) + 1
-        execution = None
-        if action.get("rerun"):
-            execution = await self.retry_review(
-                review_id, action.get("result", {}), save_review=False
-            )
-            review["retryExecutionId"] = execution["id"]
-        self.repo.save_review(review)
-        return {"review": review, "execution": execution}
-
-    def modify_review_result(self, review_id: str, request: dict[str, Any]) -> dict[str, Any]:
-        review = self.get_review(review_id)
-        review.pop("task", None)
-        review.pop("batchDetail", None)
-        review["modifiedResult"] = request["result"]
-        review["decisionNote"] = request.get("note", review.get("decisionNote", ""))
-        review["handler"] = request.get("handler") or review["handler"]
-        review["updatedAt"] = _now()
-        review["revision"] = int(review.get("revision", 1)) + 1
-        self.repo.save_review(review)
-        return review
-
-    async def retry_review(
-        self, review_id: str, payload: dict[str, Any] | None = None, *, save_review: bool = True
-    ) -> dict[str, Any]:
-        review = self.get_review(review_id)
-        definition = self.repo.get_definition("graph-build")
-        if definition is None:
-            raise RuntimeError("图谱构建工作流定义缺失")
-        merged_payload = {
-            "reviewId": review_id,
-            "batchId": review["batch"],
-            "domain": review["domain"],
-            **(payload or {}),
-        }
-        execution = await self.execute_definition(definition, merged_payload)
-        if save_review:
-            review.pop("task", None)
-            review.pop("batchDetail", None)
-            review["lastRetryAt"] = _now()
-            review["retryExecutionId"] = execution["id"]
-            review["updatedAt"] = _now()
-            self.repo.save_review(review)
-        return execution
-
-    def revoke_review(self, review_id: str, reason: str, handler: str | None) -> dict[str, Any]:
-        review = self.get_review(review_id)
-        review.pop("task", None)
-        review.pop("batchDetail", None)
-        review["status"] = "已撤销"
-        review["decision"] = "撤销任务"
-        review["decisionNote"] = reason
-        review["handler"] = handler or review["handler"]
-        review["completedAt"] = _now()
-        review["updatedAt"] = _now()
-        review["revision"] = int(review.get("revision", 1)) + 1
-        self.repo.save_review(review)
-        return review
 
     @staticmethod
     def create_task_for_execution(

@@ -2187,18 +2187,17 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
     if (!data) {
       return [
         { label: "专家", value: "" },
-        { label: "模式", value: "" },
         { label: "校友数", value: "" },
         { label: "维度目录", value: "" },
-        { label: "截断", value: "" },
-        { label: "图空间", value: "" },
       ];
     }
     if (data.summaryRows?.length) {
-      return data.summaryRows.map((row) => ({
-        label: row.label,
-        value: row.value,
-      }));
+      return data.summaryRows
+        .filter((row) => !["模式", "截断", "图空间"].includes(row.label))
+        .map((row) => ({
+          label: row.label,
+          value: row.value,
+        }));
     }
   }
   if (isLiveColleague.value) {

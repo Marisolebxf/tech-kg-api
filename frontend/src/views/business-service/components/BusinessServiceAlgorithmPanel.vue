@@ -1817,6 +1817,10 @@ const colleagueRelationDetails: Record<string, string> = {
   INVENTED_BY: "发明人",
   LEADS: "项目负责人",
   HAS_PARTICIPANT: "项目参与者",
+  // #7 反向变体(人→项目),与 HAS_PARTICIPANT 同属项目参与关系
+  PARTICIPATES_IN: "项目参与者",
+  // #12 共享节点(Report/Award/Team 等)关联边,类型不统一,按业务口径算直接
+  RELATED_TO: "关联关系",
 };
 
 const alumniRelationDetails: Record<string, string> = {

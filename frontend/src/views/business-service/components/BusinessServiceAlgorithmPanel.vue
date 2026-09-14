@@ -39,7 +39,6 @@ import {
   type ExpertColleagueRelationResponse,
 } from "../../../api/expertColleagueRelation";
 import {
-  colleagueEntityRows,
   colleagueProvenanceCards,
 } from "../expert-colleague-details";
 import KgGraphCanvas from "../../../components/kg-graph-canvas.vue";
@@ -1511,15 +1510,58 @@ const displayEventDate = (raw?: string | null) => {
 };
 
 const relationTypeDisplay: Record<string, string> = {
-  AFFILIATED_WITH: "机构任职关系",
-  COAUTHOR_WITH: "论文合著关系",
-  BELONGS_TO_NODE: "产业链归属关系",
-  HAS_NODE: "产业链节点关系",
-  HAS_NEWS: "企业动态关系",
-  INVOLVED_IN: "事件参与关系",
-  governance: "治理任职",
-  project_cooperation: "项目合作",
-  patent_cooperation: "专利合作",
+  ACQUIRES: "并购关系",
+  ACTUAL_CONTROLLER_OF: "实际控制关系",
+  AFFILIATED_WITH: "隶属机构关系",
+  AUTHORED_BY: "论文署名关系",
+  BELONGS_TO_NODE: "归属产业节点关系",
+  BENEFICIAL_OWNER_OF: "最终受益关系",
+  CHILD_OF: "上下级节点关系",
+  CITED_BY: "被引用关系",
+  CITES: "引用关系",
+  COAUTHOR_WITH: "合著关系",
+  COVERS_CHAIN: "产业链报道关系",
+  DOWNSTREAM_OF: "产业下游关系",
+  EMPLOYED_BY: "企业任职合作关系",
+  EXECUTIVE_OF: "高管任职关系",
+  FUNDED_BY: "项目资助关系",
+  HAS_KEYWORD: "关键词关系",
+  HAS_NEWS: "关联资讯关系",
+  HAS_NODE: "包含产业节点关系",
+  HAS_PARTICIPANT: "项目参与人员关系",
+  INVENTED_BY: "专利发明关系",
+  INVESTS_IN: "投资关系",
+  INVOLVED_IN: "涉及事件关系",
+  LEADS: "项目牵头关系",
+  LEGAL_REP_OF: "法定代表关系",
+  MEMBER_OF_FAMILY: "专利族归属关系",
+  OUTPUT_OF: "项目成果关系",
+  PARTICIPATES_IN: "参与项目关系",
+  PRODUCES: "产品生产关系",
+  PUBLISHED_IN: "期刊发表关系",
+  REFERENCED_BY: "被参考关系",
+  RELATED_TO: "一般关联关系",
+  SAME_AS: "同一实体关系",
+  SHAREHOLDER_OF: "股东持股关系",
+  STUDIED_AT: "教育经历关系",
+  SUBSIDIARY_OF: "母子公司关系",
+  governance: "高管任职关系",
+  project_cooperation: "项目牵头关系",
+  patent_cooperation: "专利发明关系",
+  直接关系: "合著关系",
+  间接关系: "一般关联关系",
+  同事关系: "隶属机构关系",
+  校友关系: "教育经历关系",
+  论文合作: "合著关系",
+  科研合作: "合著关系",
+  项目合作: "项目牵头关系",
+  专利合作: "专利发明关系",
+  关联机构: "隶属机构关系",
+  机构关联: "隶属机构关系",
+  产业链归属: "归属产业节点关系",
+  产业链节点: "包含产业节点关系",
+  企业动态: "关联资讯关系",
+  事件参与: "涉及事件关系",
   stock_finance: "上市企业财务信息",
   annual_finance: "年报财务信息",
   financing: "融资",
@@ -1529,141 +1571,51 @@ const relationTypeDisplay: Record<string, string> = {
   recruit: "招聘",
   change_record: "工商变更",
 };
-const relationCategoryDisplay: Record<string, string> = {
-  AFFILIATED_WITH: "任职",
-  COAUTHOR_WITH: "论文合著",
-  BELONGS_TO_NODE: "产业链归属",
-  HAS_NODE: "产业链节点",
-  HAS_NEWS: "企业动态",
-  INVOLVED_IN: "事件参与",
-  governance: "治理任职",
-  project_cooperation: "项目合作",
-  patent_cooperation: "专利合作",
-  relation: "企业关联",
-  chain: "产业链归属",
-  event: "事件参与",
-  expert: "专家任职",
-};
 const displayRelationType = (value?: string) =>
   (value && (relationTypeDisplay[value] || eventTypeLabel[value])) ||
   value ||
   "—";
-const displayRelationCategory = (value?: string) =>
-  (value && (relationCategoryDisplay[value] || eventTypeLabel[value])) ||
-  value ||
-  "—";
 
-const alumniInteractionText = (edge: GraphEdgeData) => {
-  const interactions = edge.interactions;
-  if (!interactions) return "—";
-  const parts = [
-    interactions.paperCount ? `共同论文 ${interactions.paperCount} 篇` : null,
-    interactions.patentCount ? `共同专利 ${interactions.patentCount} 项` : null,
-    interactions.projectCount
-      ? `共同项目 ${interactions.projectCount} 项`
-      : null,
-  ].filter((part): part is string => Boolean(part));
-  return parts.join("、") || "无共同成果";
+const relationCategoryByModule: Record<string, string> = {
+  "expert-direct": "直接关系",
+  "node-indirect": "间接关系",
+  "two-point-achievement": "合作关系",
+  "expert-colleague": "同事关系",
+  "expert-alumni": "校友关系",
+  "paper-cooperation": "合作关系",
+  "enterprise-relation": "企业关联关系",
+  "industry-chain-event": "产业链关联关系",
+  "industry-chain-panorama": "产业链关联关系",
 };
 
-const confidenceSourceText = (source?: "original" | "derived") =>
-  source === "original"
-    ? "图数据库原始值"
-    : source === "derived"
-      ? "规则推导"
-      : "—";
+const activeRelationCategory = computed(
+  () => relationCategoryByModule[props.moduleInfo.key] || "直接关系",
+);
 
-const confidenceBreakdownLabels: Record<string, string> = {
-  originalConfidence: "原始置信度",
-  typeFallback: "关系类型兜底",
-  sameSchool: "同校基础分",
-  sameDegree: "同学历",
-  samePeriod: "同期",
-  paperInteraction: "论文互动",
-  patentInteraction: "专利互动",
-  projectInteraction: "项目互动",
-  degreeCompleteness: "学历完整度",
-  timeCompleteness: "时间完整度",
-  sharedAchievement: "共同成果基础分",
-  edgeReliability: "成果边可靠性",
-  achievementCount: "成果数量",
-  timeSpan: "时间跨度",
-  entityCompleteness: "成果实体完整度",
-};
+function normalizeEntityCategory(node: GraphNodeData): string {
+  const value = `${node.entityType} ${node.nodeType}`.toLowerCase();
+  if (/院校|学校|school|university/u.test(value)) return "院校";
+  if (/产业链节点|industry.?node/u.test(value)) return "产业链节点";
+  if (/产业链|chain/u.test(value)) return "产业链";
+  if (/企业|company|enterprise/u.test(value)) return "企业";
+  if (/专家|人才|学者|expert|person|scholar/u.test(value)) return "科技专家";
+  if (/机构|院所|organization|institution|\borg\b/u.test(value)) return "机构";
+  if (/论文|paper|journal|report/u.test(value)) return "论文";
+  if (/专利|patent/u.test(value)) return "专利";
+  if (/项目|project/u.test(value)) return "项目";
+  if (/事件|资讯|event|news/u.test(value)) return "事件";
+  if (/技术|主题|关键词|topic|keyword|field/u.test(value)) return "技术主题";
+  if (/成果|achievement|output/u.test(value)) return "科技成果";
+  return node.entityType || "科技成果";
+}
 
-const confidenceRuleLabels: Record<string, string> = {
-  "original-edge-confidence": "图数据库原始关系置信度",
-  "exact-edge-evidence-fallback": "精确关系证据推导",
-  "matched-edge-evidence-fallback": "匹配证据推导",
-  "edge-type-fallback": "关系类型默认规则",
-  "alumni-evidence-v1": "校友关系证据评分",
-  "paper-cooperation-confidence-v1": "论文合作关系评分",
-  "patent-cooperation-confidence-v1": "专利合作关系评分",
-  "project-cooperation-confidence-v1": "项目合作关系评分",
-};
+const displayRelationDetail = (edge: GraphEdgeData) =>
+  relationTypeDisplay[edge.label] ||
+  relationTypeDisplay[edge.category] ||
+  eventTypeLabel[edge.label] ||
+  edge.label ||
+  "一般关联关系";
 
-const confidenceBasisText = (edge: GraphEdgeData) => {
-  const basis = edge.confidenceBasis;
-  if (!basis) return "—";
-  const breakdown = Object.entries(basis.scoreBreakdown || {})
-    .filter(([, value]) => Number.isFinite(value) && value !== 0)
-    .map(
-      ([key, value]) =>
-        `${confidenceBreakdownLabels[key] || key} ${Number(value).toFixed(2)}`,
-    )
-    .join("、");
-  const edgeType = basis.originalEdgeType
-    ? `原始边 ${basis.originalEdgeType}`
-    : "";
-  const rule = confidenceRuleLabels[basis.rule] || basis.rule;
-  return [rule, edgeType, breakdown].filter(Boolean).join("；") || "—";
-};
-
-const relationDetailRows = computed(() => {
-  const edge = activeRelationEdge.value;
-  const from = selectedEdgeNodes.value.from;
-  const to = selectedEdgeNodes.value.to;
-
-  if (!edge || !from || !to) return [];
-
-  return [
-    ["源实体", `${from.label} / ${from.entityType}`] as const,
-
-    ["目标实体", `${to.label} / ${to.entityType}`] as const,
-
-    ["关系类型", displayRelationType(edge.label)] as const,
-
-    ["关系分类", displayRelationCategory(edge.category)] as const,
-
-    ...(isLiveAlumni.value
-      ? [
-          ["关系维度", edge.dimensions?.join("、") || "—"] as const,
-          ["共同院校", edge.sharedInstitutions?.join("、") || "—"] as const,
-          ["关系说明", edge.summary || "—"] as const,
-          ["互动证据", alumniInteractionText(edge)] as const,
-        ]
-      : []),
-
-    [
-      "置信度",
-
-      // 直接展示后端关系 confidence，并兼容统计关系和历史缺失字段。
-      formatRelationConfidence(edge),
-    ] as const,
-
-    ...((isLiveAlumni.value || isLiveCoop.value) && edge.confidenceSource
-      ? [
-          ["评分来源", confidenceSourceText(edge.confidenceSource)] as const,
-          ["评分依据", confidenceBasisText(edge)] as const,
-        ]
-      : []),
-
-    [
-      "命中规则",
-      props.moduleInfo.rules[0]?.name ?? "已命中关系识别规则",
-    ] as const,
-  ];
-});
 const selectedProvenanceTarget = computed(() => {
   const node =
     selectedNode.value ?? (!selectedEdge.value ? graphNodes.value[0] : null);
@@ -2021,58 +1973,26 @@ const liveRules = computed<Array<Record<string, any>>>(() => {
 });
 
 const liveEntityRows = computed(() => {
-  if (isLiveColleague.value) {
-    return colleagueEntityRows(
-      liveResponse.value?.data?.graph?.nodes ?? [],
-      selectedNode.value?.id,
-    );
-  }
-  const selected = selectedNode.value;
-  const entityConfidence = (value: number | undefined) => {
-    if (isLiveColleague.value) {
-      return colleagueConfidenceText(value, "暂无（实体属性未携带置信度）");
-    }
-    if (
-      (isLiveEnterpriseRelation.value || isLiveIndustryEvent.value) &&
-      (typeof value !== "number" || !Number.isFinite(value))
-    ) {
-      return "0.80";
-    }
-    return formatConfidence(value);
-  };
-  if (selected && !isExpertDirect.value) {
-    const rows: Array<readonly [string, string]> = [
-      ["实体名称", selected.label],
-      ["实体类型", selected.entityType],
-      ["命中关系", selected.relations],
-      ["置信度", entityConfidence(selected.confidence)],
-    ];
-    if (selected.evidence?.length) {
-      rows.push(["证据", selected.evidence.join("；")]);
-    }
-    return rows;
-  }
-  const entities =
-    isExpertDirect.value && selected ? [selected] : graphNodes.value;
+  const entities = selectedNode.value ? [selectedNode.value] : graphNodes.value;
   if (!entities.length) return [] as Array<readonly [string, string]>;
+
   return entities.flatMap((entity, index) => [
     [`实体 ${index + 1}`, `${entity.label}（${entity.id}）`] as const,
-    ["类型", entity.entityType] as const,
-    ["关系", entity.relations || "—"] as const,
-    ["置信度", entityConfidence(entity.confidence)] as const,
+    ["实体类别", normalizeEntityCategory(entity)] as const,
+    ["置信度", formatConfidence(entity.confidence)] as const,
   ]);
 });
 
 const liveRelationRows = computed(() => {
-  if (selectedEdge.value) return relationDetailRows.value;
-  // 机构从属边（"关联机构"）不是专家间的直接关系，关系 Tab 只展示真实的专家关系边，
-  // 否则会出现 total=3 却显示 9 条这类"关系数量对不上"的问题。
-  const relationEdges = graphEdges.value.filter(
-    (edge) =>
-      edge.category !== "机构关联" &&
-      (!isLiveCoop.value || edge.category === "科研合作"),
-  );
+  const relationEdges = selectedEdge.value
+    ? [selectedEdge.value]
+    : graphEdges.value.filter(
+        (edge) =>
+          (!isExpertDirect.value || edge.category !== "机构关联") &&
+          (!isLiveCoop.value || edge.category === "科研合作"),
+      );
   if (!relationEdges.length) return [] as Array<readonly [string, string]>;
+
   const nodesById = new Map(graphNodes.value.map((node) => [node.id, node]));
   return relationEdges.flatMap((relation, index) => {
     const from = nodesById.get(relation.from);
@@ -2082,29 +2002,11 @@ const liveRelationRows = computed(() => {
         `关系 ${index + 1}`,
         `${from?.label || relation.from} → ${to?.label || relation.to}`,
       ] as const,
-      ["类型", displayRelationType(relation.label)] as const,
-      ["分类", displayRelationCategory(relation.category)] as const,
-      ...(isLiveAlumni.value
-        ? [
-            ["关系维度", relation.dimensions?.join("、") || "—"] as const,
-            [
-              "共同院校",
-              relation.sharedInstitutions?.join("、") || "—",
-            ] as const,
-            ["关系说明", relation.summary || "—"] as const,
-            ["互动证据", alumniInteractionText(relation)] as const,
-          ]
-        : []),
+      [
+        "关系描述",
+        `${activeRelationCategory.value}/${displayRelationDetail(relation)}`,
+      ] as const,
       ["置信度", formatRelationConfidence(relation)] as const,
-      ...((isLiveAlumni.value || isLiveCoop.value) && relation.confidenceSource
-        ? [
-            [
-              "评分来源",
-              confidenceSourceText(relation.confidenceSource),
-            ] as const,
-            ["评分依据", confidenceBasisText(relation)] as const,
-          ]
-        : []),
     ];
   });
 });

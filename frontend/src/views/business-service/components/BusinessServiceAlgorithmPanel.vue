@@ -1942,11 +1942,6 @@ const relationDetailRows = computed(() => {
           // ["评分依据", confidenceBasisText(edge)] as const,
         ]
       : []),
-
-    [
-      "命中规则",
-      props.moduleInfo.rules[0]?.name ?? "已命中关系识别规则",
-    ] as const,
   ];
 });
 const selectedProvenanceTarget = computed(() => {
@@ -2419,11 +2414,12 @@ const liveRelationRows = computed(() => {
       ],
     );
   }
-  // 机构从属边（"关联机构"）不是专家间的直接关系，关系 Tab 只展示真实的专家关系边，
-  // 否则会出现 total=3 却显示 9 条这类"关系数量对不上"的问题。
+  // 关系 Tab 与画布同口径：列出画布全部真实连线（含专家直接关系模块的
+  // "关联机构"从属边），不再按分类过滤——过滤会导致画布画了 9 条边、
+  // 关系页只显示 4 条专家关系。全景图分层展示连线与两点成果的非科研合作
+  // 边仍按原规则排除。
   const relationEdges = graphEdges.value.filter(
     (edge) =>
-      edge.category !== "机构关联" &&
       // 全景图的分层展示连线并非图库真实关系，不应进入关系详情并显示
       // 非数值置信度；关系页只列出带原始边语义的真实关系。
       (!isPanorama.value || edge.inferred !== true) &&

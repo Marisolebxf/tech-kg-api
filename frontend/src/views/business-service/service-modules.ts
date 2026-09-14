@@ -311,7 +311,10 @@ export const serviceModules: ServiceModule[] = [
     summaryRows: [
       { label: '专家', value: '' },
       { label: '校友数', value: '' },
-      { label: '关联维度', value: '' },
+      { label: '维度目录', value: '' },
+      { label: '命中校友', value: '' },
+      { label: '关系维度统计', value: '' },
+      { label: '共同成果', value: '' },
     ],
     evidence: [
       '同校为成立校友的必要条件（院校字段 NFKC 归一后比较）。',

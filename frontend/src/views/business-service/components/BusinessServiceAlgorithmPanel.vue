@@ -2396,7 +2396,8 @@ const liveEntityRows = computed(() => {
           : entityConfidence(selected.confidence),
       ],
     ];
-    if (selected.evidence?.length) {
+    // 全景图实体内容不展示「证据」行，其余模块保持原样。
+    if (!isPanorama.value && selected.evidence?.length) {
       rows.push(["证据", selected.evidence.join("；")]);
     }
     return rows;

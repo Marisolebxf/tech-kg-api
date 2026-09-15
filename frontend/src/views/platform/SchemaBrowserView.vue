@@ -15,7 +15,8 @@ import {
   getScriptContent,
   getSchemaOverview,
   getSchemaTopology,
-  listAllSchemas,
+  listEntityOptions,
+  listSchemasPaged,
   replaceSchemaSources,
   schemaErrorMessage,
   triggerSchemaExtraction,
@@ -23,6 +24,7 @@ import {
   type EntitySchemaCreatePayload,
   type RelationSchemaCreatePayload,
   type SchemaDefinition,
+  type SchemaListData,
   type SchemaOverview,
   type SchemaProperty,
   type SchemaScript,
@@ -40,6 +42,7 @@ import {
   validateText,
 } from '../../utils/textInput'
 import KgGraphCanvas from '../../components/kg-graph-canvas.vue'
+import ListPagination from '../../components/list-pagination.vue'
 import type { GraphEdgeData, GraphNodeData } from '../../data/graph-presets'
 import { useToast } from '../../composables/use-toast'
 import {
@@ -88,6 +91,25 @@ const tabs = ['标准实体', '关系']
 const entities = ref<Entity[]>([])
 
 const relations = ref<Relation[]>([])
+
+// 列表服务端分页：默认每页 10 条，档位在 ListPagination 组件；两个页签各自记住页码
+const pageSize = ref(10)
+const entityPage = ref(1)
+const relationPage = ref(1)
+const entityTotal = ref(0)
+const relationTotal = ref(0)
+const listLoading = ref(false)
+
+// 关系新建弹窗的起点/终点下拉需要全量实体：列表分页后单独轻量拉取（不带明细）
+const entityOptions = ref<SchemaDefinition[]>([])
+
+async function loadEntityOptions() {
+  try {
+    entityOptions.value = await listEntityOptions(currentUserId, activeSpace.value || undefined)
+  } catch {
+    entityOptions.value = []
+  }
+}
 // 版本记录（已隐藏）
 // const schemaVersions = [
 //   { version: 'v1.8', status: '当前版本', time: '2026-07-12 22:10', entities: '14 个标准实体', relations: '42 标准 / 9 推理', change: '统一候选层字段；新增 Event 类型；调整 3 项关系约束', publisher: '张建图' },
@@ -519,6 +541,7 @@ async function confirmDelete() {
     deleteModalOpen.value = false
     deleteTarget.value = null
     await Promise.all([loadSchemas(), loadTopology()])
+    void loadEntityOptions()
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
   } finally {
@@ -638,26 +661,93 @@ function mapRelation(schema: SchemaDefinition): Relation {
   }
 }
 
-function applyDefinitions(definitions: SchemaDefinition[]) {
-  const entitySchemas = definitions.filter((item) => item.kind === 'entity')
-  entities.value = entitySchemas.map(mapEntity)
-  relations.value = definitions
-    .filter((item) => item.kind === 'relation')
-    .map(mapRelation)
+function applyPageData(kind: 'entity' | 'relation', listData: SchemaListData) {
   scriptByRow.value = Object.fromEntries(
-    definitions
+    listData.items
       .filter((item) => item.script)
       .map((item) => [item.name, item.script as SchemaScript]),
   )
+  if (kind === 'entity') {
+    entities.value = listData.items.map(mapEntity)
+    entityTotal.value = listData.total
+  } else {
+    relations.value = listData.items.map(mapRelation)
+    relationTotal.value = listData.total
+  }
+}
+
+const activeKind = computed<'entity' | 'relation'>(() => (isRelationTab() ? 'relation' : 'entity'))
+const activePage = computed(() => (isRelationTab() ? relationPage.value : entityPage.value))
+const activeTotal = computed(() => (isRelationTab() ? relationTotal.value : entityTotal.value))
+
+function setActivePage(page: number) {
+  if (isRelationTab()) relationPage.value = page
+  else entityPage.value = page
+}
+
+/** 重置两个页签的页码（搜索/切空间/改每页条数后从头看起） */
+function resetPages() {
+  entityPage.value = 1
+  relationPage.value = 1
 }
 
 async function loadSchemas() {
-  const [overviewData, definitions] = await Promise.all([
-    getSchemaOverview(activeSpace.value || undefined),
-    listAllSchemas(currentUserId, activeSpace.value || undefined),
-  ])
-  overview.value = overviewData
-  applyDefinitions(definitions)
+  listLoading.value = true
+  try {
+    const kind = activeKind.value
+    const [overviewData, listData] = await Promise.all([
+      getSchemaOverview(activeSpace.value || undefined),
+      listSchemasPaged(currentUserId, {
+        kind,
+        keyword: keyword.value,
+        page: activePage.value,
+        pageSize: pageSize.value,
+        graphSpace: activeSpace.value || undefined,
+      }),
+    ])
+    overview.value = overviewData
+    // 末页最后一条被删后 total 缩水：回退到新的最后一页，避免停在空页
+    if (listData.items.length === 0 && listData.total > 0 && activePage.value > 1) {
+      setActivePage(Math.ceil(listData.total / listData.pageSize))
+      await loadSchemas()
+      return
+    }
+    applyPageData(kind, listData)
+  } finally {
+    listLoading.value = false
+  }
+}
+
+async function changePage(page: number) {
+  if (page === activePage.value) return
+  setActivePage(page)
+  await loadSchemas()
+}
+
+async function changePageSize(size: unknown) {
+  const next = Number(size)
+  if (!Number.isFinite(next) || next <= 0 || next === pageSize.value) return
+  pageSize.value = next
+  resetPages()
+  await loadSchemas()
+}
+
+async function switchTab(tab: string) {
+  if (activeTab.value === tab) return
+  activeTab.value = tab
+  keyword.value = ''
+  clearTimeout(searchTimer)
+  await loadSchemas()
+}
+
+// 搜索走服务端 keyword（匹配名称/中文名/标识），输入防抖 300ms 后重新拉第一页
+let searchTimer: ReturnType<typeof setTimeout> | undefined
+function onKeywordInput() {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    resetPages()
+    void loadSchemas()
+  }, 300)
 }
 
 async function loadSpaces() {
@@ -679,6 +769,7 @@ async function switchSpace(value: string | number | boolean | Record<string, unk
   if (space === activeSpace.value) return
   // 清空（未选择）= 不按空间过滤，列出所有可见空间的 Schema
   activeSpace.value = space
+  resetPages()
   try {
     await Promise.all([loadSchemas(), loadTopology()])
   } catch (error) {
@@ -690,6 +781,8 @@ function openCreate() {
   createForm.value = emptyCreateForm()
   confirming.value = false
   modalOpen.value = true
+  // 关系表单的起点/终点下拉需要全量实体；列表已分页，不能复用当前页数据
+  if (isRelationTab()) void loadEntityOptions()
 }
 
 function schemaKey(name: string) {
@@ -758,8 +851,8 @@ async function saveItem() {
   creating.value = true
   try {
     if (relation) {
-      const source = entities.value.find((e) => e.id === f.sourceEntityId)
-      const target = entities.value.find((e) => e.id === f.targetEntityId)
+      const source = entityOptions.value.find((e) => e.id === f.sourceEntityId)
+      const target = entityOptions.value.find((e) => e.id === f.targetEntityId)
       const payload: RelationSchemaCreatePayload = {
         schemaKey: schemaKey(f.name),
         name: f.name.trim(),
@@ -795,6 +888,7 @@ async function saveItem() {
     }
     modalOpen.value = false
     await loadSchemas()
+    void loadEntityOptions()
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
   } finally {
@@ -919,10 +1013,6 @@ onMounted(async () => {
     showToast(schemaErrorMessage(error), 'warning')
   }
 })
-const normalizedKeyword = computed(() => keyword.value.trim().toLowerCase())
-const matches = (row: unknown) => !normalizedKeyword.value || Object.values(row as Record<string, unknown>).join(' ').toLowerCase().includes(normalizedKeyword.value)
-const filteredEntities = computed(() => entities.value.filter(matches))
-const filteredRelations = computed(() => relations.value.filter(matches))
 
 // 列表属性 chip 展示（前 6 个 + 溢出展开明细）
 const PROPERTY_CHIP_LIMIT = 6
@@ -972,7 +1062,7 @@ function togglePropertyDetail(schemaId: string): void {
     <section class="schema-catalog">
       <nav class="schema-tabs" aria-label="Schema 类型切换">
         <div class="schema-tabs__items">
-          <button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="activeTab=tab;keyword=''">{{ tab }}</button>
+          <button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="switchTab(tab)">{{ tab }}</button>
         </div>
         <div class="schema-toolbar__actions">
           <div class="space-picker">
@@ -991,7 +1081,7 @@ function togglePropertyDetail(schemaId: string): void {
               <a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option>
             </a-select>
           </div>
-          <a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`">
+          <a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`" @input="onKeywordInput">
             <template #prefix><IconSearch /></template>
           </a-input>
           <button class="primary" type="button" @click="openCreate">＋ 增加</button>
@@ -999,9 +1089,19 @@ function togglePropertyDetail(schemaId: string): void {
       </nav>
       <div class="schema-shell schema-table-shell">
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in filteredEntities" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.description }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : (row.schema.isSystem ? '系统内置，不可删除' : '被关系引用，不可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="5"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in entities" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.description }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : (row.schema.isSystem ? '系统内置，不可删除' : '被关系引用，不可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="5"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
 
-      <div v-else class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in filteredRelations" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="7"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
+      <div v-else class="schema-table-wrap"><table><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in relations" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><code>{{ row.name }}</code></td><td>{{ row.source }}</td><td>{{ row.target }}</td><td>{{ row.basis }}</td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="7"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
+
+      <!-- 列表分页（服务端分页，两个页签共用每页条数、各自记住页码） -->
+      <ListPagination
+        :total="activeTotal"
+        :page="activePage"
+        :page-size="pageSize"
+        :disabled="listLoading"
+        @change="changePage"
+        @change-size="changePageSize"
+      />
 
       <!-- 版本记录（已隐藏）
       <div v-else class="schema-table-wrap schema-version-table"><table><thead><tr><th>版本</th><th>状态</th><th>发布时间</th><th>实体范围</th><th>关系范围</th><th>变更内容</th><th>发布人</th><th>操作</th></tr></thead><tbody><tr v-for="row in schemaVersions" :key="row.version"><td><code>{{ row.version }}</code></td><td><span :class="row.status === '当前版本' ? 'core' : 'support'">{{ row.status }}</span></td><td>{{ row.time }}</td><td>{{ row.entities }}</td><td>{{ row.relations }}</td><td>{{ row.change }}</td><td>{{ row.publisher }}</td><td><div class="schema-version-actions"><button type="button" @click="schemaVersionMessage = `已打开 ${row.version} 的完整变更清单。`">变更详情</button><button v-if="row.status !== '当前版本'" class="danger" type="button" @click="schemaVersionMessage = `已创建回退至 ${row.version} 的申请，通过影响分析与审批后才会执行。`">申请回退</button></div></td></tr></tbody></table></div>
@@ -1039,13 +1139,13 @@ function togglePropertyDetail(schemaId: string): void {
             <div v-if="isRelationTab()" class="create-row">
               <a-form-item class="create-field" field="sourceEntityId" label="起点实体" label-component="div" required>
                 <a-select v-model="createForm.sourceEntityId" class="schema-select" placeholder="请选择" popup-container=".schema-create-modal" :scrollbar="false">
-                  <a-option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
+                  <a-option v-for="e in entityOptions" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
                   <template #empty>当前图空间暂无实体 Schema，请先新增实体</template>
                 </a-select>
               </a-form-item>
               <a-form-item class="create-field" field="targetEntityId" label="终点实体" label-component="div" required>
                 <a-select v-model="createForm.targetEntityId" class="schema-select" placeholder="请选择" popup-container=".schema-create-modal" :scrollbar="false">
-                  <a-option v-for="e in entities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
+                  <a-option v-for="e in entityOptions" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
                   <template #empty>当前图空间暂无实体 Schema，请先新增实体</template>
                 </a-select>
               </a-form-item>
@@ -1309,7 +1409,8 @@ function togglePropertyDetail(schemaId: string): void {
 </template>
 
 <style scoped>
-.schema-page{display:flex;height:100%;min-height:0;overflow:hidden;padding-bottom:2px;color:#142443;flex-direction:column}.schema-flow{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));margin-bottom:12px;padding:12px;border:1px solid #c5d9f6;border-radius:8px;background:#fff}.schema-flow>div{position:relative;display:flex;align-items:center;gap:7px;min-width:0;padding:4px 15px 4px 5px}.schema-flow i{display:grid;flex:0 0 auto;place-items:center;width:23px;height:23px;border-radius:50%;background:#eaf2ff;color:#165dff;font-size:10px;font-style:normal}.schema-flow span{color:#40536f;font-size:10px;line-height:15px}.schema-flow b{position:absolute;right:2px;color:#9bb5d9}.schema-shell{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #bcd4f7;border-radius:9px;background:#fff;box-shadow:0 10px 24px rgba(48,105,194,.08);flex-direction:column}.schema-tabs{display:flex;flex:0 0 auto;overflow:auto;padding:0 12px;border-bottom:1px solid #dce8f8}.schema-tabs button{padding:12px 15px;border:0;border-bottom:2px solid transparent;background:transparent;color:#566985;white-space:nowrap;cursor:pointer}.schema-tabs button.active{border-color:#165dff;color:#165dff;font-weight:600}.schema-toolbar{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:14px;padding:10px 13px;border-bottom:1px solid #e3ebf6;background:#f8fbff}.schema-toolbar>div{display:flex;align-items:center;gap:10px}.schema-toolbar strong{font-size:13px}.schema-toolbar>div span{color:#7b8ba3;font-size:10px}.schema-toolbar label{display:flex;align-items:center;gap:6px;width:270px;padding:0 9px;border:1px solid #c7d8ef;border-radius:5px;background:#fff}.schema-toolbar input{width:100%;height:30px;border:0;outline:0;font-size:11px}.schema-table-wrap{flex:1;min-height:0;max-height:none;overflow:auto}.schema-table-wrap table,.trace-layout table{width:100%;border-collapse:collapse;font-size:11px}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{padding:11px 13px;border-bottom:1px solid #e5edf8;text-align:left;line-height:17px;vertical-align:top}.schema-table-wrap th{position:sticky;z-index:2;top:0;background:#f1f6fc;color:#5e6f88;white-space:nowrap}.schema-table-wrap td{color:#344763}.schema-table-wrap td:nth-child(5),.schema-table-wrap td:nth-child(6){max-width:330px}.schema-table-wrap code,.trace-layout code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;white-space:nowrap}.core,.support,.evidence,.auto,.review{display:inline-flex;padding:2px 7px;border-radius:999px;background:#e9f8ef;color:#067647;font-size:9px;white-space:nowrap}.support{background:#f0f2f5;color:#5e6b7e}.evidence{background:#f0edff;color:#6941c6}.auto{white-space:normal}.review{background:#fff3df;color:#b54708;white-space:normal}.arrow{margin:0 5px;color:#8ba2c2}.candidate-layout{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr) 245px}.candidate-layout>.schema-table-wrap{grid-column:1}.candidate-note{grid-column:1/-1;padding:10px 13px;border-bottom:1px solid #dce8f8;background:#f3f8ff}.candidate-note strong{font-size:12px}.candidate-note p{margin:3px 0 0;color:#657690;font-size:10px}.mention-fields{grid-column:2;grid-row:2;padding:13px;border-left:1px solid #e0e9f5;background:#fafcff}.mention-fields strong{display:block;margin-bottom:10px;font-size:12px}.mention-fields span{display:inline-flex;margin:0 5px 6px 0;padding:3px 6px;border-radius:4px;background:#edf4ff;color:#315b95;font:9px ui-monospace,SFMono-Regular,Menlo,monospace}.trace-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:12px;background:#f8fbff}.trace-layout section{overflow:hidden;border:1px solid #d5e3f5;border-radius:7px;background:#fff}.trace-layout header{display:flex;align-items:flex-start;justify-content:space-between;padding:13px;border-bottom:1px solid #e3ebf6}.trace-layout h2{margin:0;font-size:13px}.trace-layout p{margin:3px 0 0;color:#7b899e;font-size:10px}.trace-layout header>span{color:#165dff;font-size:10px}.trace-layout table{display:block;max-height:390px;overflow:auto}.trace-layout tbody,.trace-layout tr{display:table;width:100%;table-layout:fixed}.trace-layout td:first-child{width:160px}@media(max-width:1250px){.schema-flow{grid-template-columns:repeat(4,1fr)}.schema-flow b{display:none}}@media(max-width:900px){.trace-layout{grid-template-columns:1fr}.candidate-layout{display:block}.mention-fields{border-top:1px solid #e0e9f5;border-left:0}}
+.schema-page{display:flex;height:100%;min-height:0;overflow:hidden;padding-bottom:2px;color:#142443;flex-direction:column}.schema-flow{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));margin-bottom:12px;padding:12px;border:1px solid #c5d9f6;border-radius:8px;background:#fff}.schema-flow>div{position:relative;display:flex;align-items:center;gap:7px;min-width:0;padding:4px 15px 4px 5px}.schema-flow i{display:grid;flex:0 0 auto;place-items:center;width:23px;height:23px;border-radius:50%;background:#eaf2ff;color:#165dff;font-size:10px;font-style:normal}.schema-flow span{color:#40536f;font-size:10px;line-height:15px}.schema-flow b{position:absolute;right:2px;color:#9bb5d9}.schema-shell{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #bcd4f7;border-radius:9px;background:#fff;box-shadow:0 10px 24px rgba(48,105,194,.08);flex-direction:column}.schema-tabs{display:flex;flex:0 0 auto;overflow:auto;padding:0 12px;border-bottom:1px solid #dce8f8}.schema-tabs button{padding:12px 15px;border:0;border-bottom:2px solid transparent;background:transparent;color:#566985;white-space:nowrap;cursor:pointer}.schema-tabs button.active{border-color:#165dff;color:#165dff;font-weight:600}.schema-toolbar{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:14px;padding:10px 13px;border-bottom:1px solid #e3ebf6;background:#f8fbff}.schema-toolbar>div{display:flex;align-items:center;gap:10px}.schema-toolbar strong{font-size:13px}.schema-toolbar>div span{color:#7b8ba3;font-size:10px}.schema-toolbar label{display:flex;align-items:center;gap:6px;width:270px;padding:0 9px;border:1px solid #c7d8ef;border-radius:5px;background:#fff}.schema-toolbar input{width:100%;height:30px;border:0;outline:0;font-size:11px}.schema-table-wrap{flex:1;min-height:0;max-height:none;overflow:auto}
+.schema-table-wrap table,.trace-layout table{width:100%;border-collapse:collapse;font-size:11px}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{padding:11px 13px;border-bottom:1px solid #e5edf8;text-align:left;line-height:17px;vertical-align:top}.schema-table-wrap th{position:sticky;z-index:2;top:0;background:#f1f6fc;color:#5e6f88;white-space:nowrap}.schema-table-wrap td{color:#344763}.schema-table-wrap td:nth-child(5),.schema-table-wrap td:nth-child(6){max-width:330px}.schema-table-wrap code,.trace-layout code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;white-space:nowrap}.core,.support,.evidence,.auto,.review{display:inline-flex;padding:2px 7px;border-radius:999px;background:#e9f8ef;color:#067647;font-size:9px;white-space:nowrap}.support{background:#f0f2f5;color:#5e6b7e}.evidence{background:#f0edff;color:#6941c6}.auto{white-space:normal}.review{background:#fff3df;color:#b54708;white-space:normal}.arrow{margin:0 5px;color:#8ba2c2}.candidate-layout{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr) 245px}.candidate-layout>.schema-table-wrap{grid-column:1}.candidate-note{grid-column:1/-1;padding:10px 13px;border-bottom:1px solid #dce8f8;background:#f3f8ff}.candidate-note strong{font-size:12px}.candidate-note p{margin:3px 0 0;color:#657690;font-size:10px}.mention-fields{grid-column:2;grid-row:2;padding:13px;border-left:1px solid #e0e9f5;background:#fafcff}.mention-fields strong{display:block;margin-bottom:10px;font-size:12px}.mention-fields span{display:inline-flex;margin:0 5px 6px 0;padding:3px 6px;border-radius:4px;background:#edf4ff;color:#315b95;font:9px ui-monospace,SFMono-Regular,Menlo,monospace}.trace-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:12px;background:#f8fbff}.trace-layout section{overflow:hidden;border:1px solid #d5e3f5;border-radius:7px;background:#fff}.trace-layout header{display:flex;align-items:flex-start;justify-content:space-between;padding:13px;border-bottom:1px solid #e3ebf6}.trace-layout h2{margin:0;font-size:13px}.trace-layout p{margin:3px 0 0;color:#7b899e;font-size:10px}.trace-layout header>span{color:#165dff;font-size:10px}.trace-layout table{display:block;max-height:390px;overflow:auto}.trace-layout tbody,.trace-layout tr{display:table;width:100%;table-layout:fixed}.trace-layout td:first-child{width:160px}@media(max-width:1250px){.schema-flow{grid-template-columns:repeat(4,1fr)}.schema-flow b{display:none}}@media(max-width:900px){.trace-layout{grid-template-columns:1fr}.candidate-layout{display:block}.mention-fields{border-top:1px solid #e0e9f5;border-left:0}}
 
 /* 拓扑图例（替代原顶部统计卡片） */
 .schema-topology-legend{display:flex;align-items:center;gap:16px}

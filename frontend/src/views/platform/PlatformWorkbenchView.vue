@@ -19,6 +19,8 @@ import {
 } from '../../api/graphSearch'
 import { runNgql, type GraphConsoleResult } from '../../api/graphConsole'
 import { graphSpace } from '../../config'
+import ListPagination from '../../components/list-pagination.vue'
+import { useClientPagination } from '../../composables/use-client-pagination'
 import { getErrorMessage } from '../../api/http'
 import {
   getPlatformOverview,
@@ -323,6 +325,17 @@ const ngqlStatement = ref('')
 const ngqlSpace = ref(defaultGraphSpace)
 const ngqlLoading = ref(false)
 const ngqlResult = ref<GraphConsoleResult | null>(null)
+// nGQL 结果客户端分页：后端不限制返回行数，大结果集翻页展示（表头徽标仍显示总行数）
+const ngqlRecords = computed(() => ngqlResult.value?.records ?? [])
+const {
+  page: ngqlPage,
+  pageSize: ngqlPageSize,
+  total: ngqlTotal,
+  pagedItems: pagedNgqlRecords,
+  resetPage: resetNgqlPage,
+  changePage: changeNgqlPage,
+  changePageSize: changeNgqlPageSize,
+} = useClientPagination(ngqlRecords, 20)
 
 /**
  * 当前真实查询得到的图谱数据。
@@ -4404,6 +4417,7 @@ async function handleNgqlQuery(): Promise<void> {
 
   ngqlLoading.value = true
   ngqlResult.value = null
+  resetNgqlPage()
 
   try {
     ngqlResult.value =
@@ -5080,7 +5094,7 @@ const pageMeta = computed(() => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(record, index) in ngqlResult.records" :key="index">
+              <tr v-for="(record, index) in pagedNgqlRecords" :key="index">
                 <td v-for="column in ngqlResult.columns" :key="column">
                   <pre>{{ formatNgqlCell(record[column]) }}</pre>
                 </td>
@@ -5089,6 +5103,15 @@ const pageMeta = computed(() => {
           </table>
           <div v-else class="platform-ngql-result__empty">语句执行成功，无返回记录</div>
         </div>
+        <ListPagination
+          v-if="ngqlTotal > 0"
+          :total="ngqlTotal"
+          :page="ngqlPage"
+          :page-size="ngqlPageSize"
+          :disabled="ngqlLoading"
+          @change="changeNgqlPage"
+          @change-size="changeNgqlPageSize"
+        />
       </section>
 
       <div class="platform-query-lower">

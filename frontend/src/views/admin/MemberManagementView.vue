@@ -8,11 +8,23 @@ import { listPlatformMembers, setMemberAdmin, type PlatformMember } from '../../
 import { getErrorMessage } from '../../api/http'
 import { getExampleMembers } from '../../data/adminGovernanceExamples'
 import { useAuthStore } from '../../stores/auth'
+import ListPagination from '../../components/list-pagination.vue'
+import { useClientPagination } from '../../composables/use-client-pagination'
 
 const authStore = useAuthStore()
 const loading = ref(false)
 const changingId = ref('')
 const members = ref<PlatformMember[]>([])
+
+// 成员列表客户端分页（接口全量返回；汇总卡继续用全量 members）
+const {
+  page: memberPage,
+  pageSize: memberPageSize,
+  total: memberTotal,
+  pagedItems: pagedMembers,
+  changePage: changeMemberPage,
+  changePageSize: changeMemberPageSize,
+} = useClientPagination(members, 10)
 const dataMode = ref<'live' | 'example'>('live')
 const exampleFallbackEnabled = authDisabled && adminExampleFallback
 const adminCount = computed(() => members.value.filter((item) => item.isAdmin).length)
@@ -62,7 +74,7 @@ onMounted(() => { void load() })
   <div class="member-page">
     <header class="page-heading"><a-button :loading="loading" @click="load">刷新</a-button></header>
     <section class="member-summary"><article><span>已登录成员</span><strong>{{ members.length }}</strong></article><article><span>全局管理员</span><strong>{{ adminCount }}</strong></article></section>
-    <section class="member-panel"><div><table aria-label="数据表"><colgroup><col class="col-member"><col class="col-id"><col class="col-email"><col class="col-time"><col class="col-role"><col class="col-action"></colgroup><thead><tr><th>成员</th><th>统一用户中心 ID</th><th>邮箱</th><th>最后访问</th><th>平台角色</th><th>操作</th></tr></thead><tbody><tr v-for="member in members" :key="member.userId"><td><span class="member-name">{{ member.nickname || member.username }}</span></td><td><code>{{ member.userId }}</code></td><td>{{ member.email || '—' }}</td><td class="time-cell">{{ member.lastSeenAt?.replace('T', ' ').slice(0, 16) || '—' }}</td><td><span class="role">{{ member.isAdmin ? '全局管理员' : '普通用户' }}</span></td><td><button class="member-action" type="button" :disabled="changingId === member.userId || (String(authStore.profile?.user.id) === member.userId && member.isAdmin)" @click="toggleAdmin(member)">{{ member.isAdmin ? '取消管理员' : '设为管理员' }}</button></td></tr><tr v-if="!members.length"><td colspan="6" class="empty">{{ loading ? '正在加载…' : '暂无成员记录；用户首次登录后会自动出现在这里。' }}</td></tr></tbody></table></div></section>
+    <section class="member-panel"><div><table aria-label="数据表"><colgroup><col class="col-member"><col class="col-id"><col class="col-email"><col class="col-time"><col class="col-role"><col class="col-action"></colgroup><thead><tr><th>成员</th><th>统一用户中心 ID</th><th>邮箱</th><th>最后访问</th><th>平台角色</th><th>操作</th></tr></thead><tbody><tr v-for="member in pagedMembers" :key="member.userId"><td><span class="member-name">{{ member.nickname || member.username }}</span></td><td><code>{{ member.userId }}</code></td><td>{{ member.email || '—' }}</td><td class="time-cell">{{ member.lastSeenAt?.replace('T', ' ').slice(0, 16) || '—' }}</td><td><span class="role">{{ member.isAdmin ? '全局管理员' : '普通用户' }}</span></td><td><button class="member-action" type="button" :disabled="changingId === member.userId || (String(authStore.profile?.user.id) === member.userId && member.isAdmin)" @click="toggleAdmin(member)">{{ member.isAdmin ? '取消管理员' : '设为管理员' }}</button></td></tr><tr v-if="!members.length"><td colspan="6" class="empty">{{ loading ? '正在加载…' : '暂无成员记录；用户首次登录后会自动出现在这里。' }}</td></tr></tbody></table></div><ListPagination v-if="memberTotal > 0" :total="memberTotal" :page="memberPage" :page-size="memberPageSize" :disabled="loading" @change="changeMemberPage" @change-size="changeMemberPageSize" /></section>
   </div>
 </template>
 

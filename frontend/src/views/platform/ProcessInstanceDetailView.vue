@@ -3,6 +3,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { deriveJobUnifiedStatus, getExecution, getJob, getTask, listExecutions, retryTask, TRIGGER_SOURCE_LABEL, type AccessReport, type PipelineActivityInfo, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch, type WorkflowExecution, type WorkflowJob } from '../../api/workflowOperations'
 import { accessChips } from '../../utils/accessReport'
+import ListPagination from '../../components/list-pagination.vue'
+import { useClientPagination } from '../../composables/use-client-pagination'
 
 const triggerLabel = (e: WorkflowExecution) => TRIGGER_SOURCE_LABEL[e.triggerSource ?? 'MANUAL'] ?? '手动触发'
 const failureCount = (e: WorkflowExecution) =>
@@ -327,6 +329,16 @@ const scheduleId = computed(() => String(route.query.scheduleId || ''))
 const latestExecutionMessage = ref('')
 /** job 执行历史（含触发方式：手动/定期/重新执行），点击行切换展示的执行。 */
 const jobExecutions = ref<WorkflowExecution[]>([])
+// 执行历史客户端分页：翻页不影响 selectedExecutionId（选中态独立于当前页）
+const {
+  page: execPage,
+  pageSize: execPageSize,
+  total: execTotal,
+  pagedItems: pagedExecutions,
+  resetPage: resetExecPage,
+  changePage: changeExecPage,
+  changePageSize: changeExecPageSize,
+} = useClientPagination(jobExecutions, 10)
 const selectedExecutionId = ref('')
 const selectedExecution = ref<WorkflowExecution | null>(null)
 /** F6：embedding/Milvus 等外部服务故障导致索引构建降级时，执行详情必须显式提醒（不能只埋在输出 JSON 里）。 */
@@ -363,6 +375,7 @@ async function loadLatestExecution() {
     executions = []
   }
   jobExecutions.value = executions
+  resetExecPage()
   if (!executions.length) return
   await selectExecution(executions[0].id)
 }
@@ -442,7 +455,7 @@ onMounted(async () => {
           </thead>
           <tbody>
             <tr
-              v-for="e in jobExecutions"
+              v-for="e in pagedExecutions"
               :key="e.id"
               :class="{ active: e.id === selectedExecutionId }"
               @click="selectExecution(e.id)"
@@ -456,6 +469,14 @@ onMounted(async () => {
           </tbody>
         </table>
       </div>
+      <ListPagination
+        v-if="execTotal > 0"
+        :total="execTotal"
+        :page="execPage"
+        :page-size="execPageSize"
+        @change="changeExecPage"
+        @change-size="changeExecPageSize"
+      />
     </section>
 
     <section v-if="!job && processingInstance" class="summary-grid">

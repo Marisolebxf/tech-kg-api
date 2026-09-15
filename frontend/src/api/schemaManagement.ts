@@ -201,32 +201,90 @@ export async function getSchemaTopology(graphSpace?: string): Promise<SchemaTopo
   )
 }
 
-export async function listAllSchemas(
+export interface SchemaPageQuery {
+  kind?: 'entity' | 'relation'
+  keyword?: string
+  page?: number
+  pageSize?: number
+  includeDetails?: boolean
+  graphSpace?: string
+}
+
+async function requestSchemaPage(
   userId: string,
-  graphSpace?: string,
-): Promise<SchemaDefinition[]> {
-  const first = unwrap(
+  query: SchemaPageQuery = {},
+): Promise<SchemaListData> {
+  const {
+    kind,
+    keyword,
+    page = 1,
+    pageSize = 10,
+    includeDetails = true,
+    graphSpace,
+  } = query
+  return unwrap(
     await asApiPromise<SchemaListData>(
       http.get(`${PREFIX}/schemas`, {
-        params: { page: 1, pageSize: 100, includeDetails: true, graphSpace },
+        params: {
+          kind,
+          keyword: keyword?.trim() || undefined,
+          page,
+          pageSize,
+          includeDetails,
+          graphSpace,
+        },
         headers: headers(userId),
       }),
     ),
   )
+}
+
+/** 服务端分页拉取 Schema 列表（列表页用，避免一次性拉全量导致开屏慢） */
+export function listSchemasPaged(
+  userId: string,
+  query: SchemaPageQuery = {},
+): Promise<SchemaListData> {
+  return requestSchemaPage(userId, query)
+}
+
+/** 轻量拉取全部实体（不带属性/来源/脚本明细），供关系新建弹窗的起点/终点下拉 */
+export async function listEntityOptions(
+  userId: string,
+  graphSpace?: string,
+): Promise<SchemaDefinition[]> {
+  const fetchPage = (page: number) =>
+    requestSchemaPage(userId, {
+      kind: 'entity',
+      page,
+      pageSize: 100,
+      includeDetails: false,
+      graphSpace,
+    })
+  const first = await fetchPage(1)
   if (first.total <= first.items.length) return first.items
 
   const pageCount = Math.ceil(first.total / first.pageSize)
   const remaining = await Promise.all(
     Array.from({ length: pageCount - 1 }, (_, index) => index + 2).map(
-      async (page) =>
-        unwrap(
-          await asApiPromise<SchemaListData>(
-            http.get(`${PREFIX}/schemas`, {
-              params: { page, pageSize: 100, includeDetails: true, graphSpace },
-              headers: headers(userId),
-            }),
-          ),
-        ).items,
+      async (page) => (await fetchPage(page)).items,
+    ),
+  )
+  return [...first.items, ...remaining.flat()]
+}
+
+export async function listAllSchemas(
+  userId: string,
+  graphSpace?: string,
+): Promise<SchemaDefinition[]> {
+  const fetchPage = (page: number) =>
+    requestSchemaPage(userId, { page, pageSize: 100, includeDetails: true, graphSpace })
+  const first = await fetchPage(1)
+  if (first.total <= first.items.length) return first.items
+
+  const pageCount = Math.ceil(first.total / first.pageSize)
+  const remaining = await Promise.all(
+    Array.from({ length: pageCount - 1 }, (_, index) => index + 2).map(
+      async (page) => (await fetchPage(page)).items,
     ),
   )
   return [...first.items, ...remaining.flat()]

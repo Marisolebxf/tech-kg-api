@@ -92,11 +92,15 @@ class SchemaManagementDAO:
             select(GraphSchemaDefinition)
             .where(*filters)
             .options(*self._load_options())
+            # 分页列表最新在前（与任务中心一致：新建后第 1 页立即可见）。
+            # 系统种子同秒落库，created_at 相同 → 事实/推理分组 + display_order
+            # 升序保持目录内既定次序；relation_category 不能先于 created_at，
+            # 否则新建的推理关系会被排在全部事实关系之后（不在第 1 页）
             .order_by(
                 GraphSchemaDefinition.kind,
+                GraphSchemaDefinition.created_at.desc(),
                 GraphSchemaDefinition.relation_category,
                 GraphSchemaDefinition.display_order,
-                GraphSchemaDefinition.created_at,
                 GraphSchemaDefinition.id,
             )
             .offset((page - 1) * page_size)

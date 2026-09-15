@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
+import ListPagination from '../../components/list-pagination.vue'
+import { useClientPagination } from '../../composables/use-client-pagination'
 import {
   createLlmConfig,
   currentUserId,
@@ -187,6 +189,18 @@ const visibleItems = computed(() => items.value.filter((item) => {
   const matchStatus = !statusFilter.value || statusFilter.value === '全部状态' || item.status === statusFilter.value
   return matchCategory && matchKeyword && matchStatus
 }))
+
+// 配置列表客户端分页；筛选/切类后回到第一页（图数据空间分类下 visibleItems 恒空，分页条自动隐藏）
+const {
+  page: configPage,
+  pageSize: configPageSize,
+  total: configTotal,
+  pagedItems,
+  resetPage: resetConfigPage,
+  changePage: changeConfigPage,
+  changePageSize: changeConfigPageSize,
+} = useClientPagination(visibleItems, 10)
+watch([keyword, statusFilter, activeCategory], resetConfigPage)
 
 function defaultIcon(kind: ConfigKind) {
   return kind === 'llm' ? 'AI' : kind === 'embedding' ? 'EM' : kind === 'mysql' ? 'MY' : 'ML'
@@ -630,7 +644,7 @@ onMounted(() => {
           <table>
             <thead><tr><th>配置名称</th><th>类型 / 地址</th><th class="config-status-col">状态</th><th class="config-usage-col">引用情况</th><th class="config-time-col">更新时间</th><th class="config-action-col">操作</th></tr></thead>
             <tbody>
-              <tr v-for="item in visibleItems" :key="item.id" @click="selected=item">
+              <tr v-for="item in pagedItems" :key="item.id" @click="selected=item">
                 <td><div class="config-name"><i>{{ defaultIcon(item.kind) }}</i><span><strong>{{ item.name }}<b v-if="item.isDefault" class="default-tag">默认</b></strong><small>{{ item.id }} · {{ item.description }}</small></span></div></td>
                 <td><strong class="type-name">{{ item.type }}<template v-if="item.model"> · {{ item.model }}</template></strong><code>{{ item.baseUrl || item.host && `${item.host}:${item.port}` || item.uri || item.endpoint }}</code></td>
                 <td class="config-status-col"><span class="status" :class="`is-${item.status}`"><i />{{ item.status }}</span></td>
@@ -648,6 +662,14 @@ onMounted(() => {
             </tbody>
           </table>
         </div>
+        <ListPagination
+          v-if="configTotal > 0"
+          :total="configTotal"
+          :page="configPage"
+          :page-size="configPageSize"
+          @change="changeConfigPage"
+          @change-size="changeConfigPageSize"
+        />
       </main>
     </section>
 

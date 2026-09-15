@@ -3,6 +3,7 @@ import { onMounted, reactive, ref } from 'vue'
 
 import { getOperationLogs, type OperationLogPage } from '../../api/auth'
 import { SEARCH_KEYWORD_MAX_LENGTH, searchKeywordError } from '../../utils/searchInput'
+import ListPagination from '../../components/list-pagination.vue'
 
 const loading = ref(false)
 const feedback = ref('')
@@ -40,6 +41,11 @@ async function loadLogs(page = 1) {
       category: filters.category || undefined,
       result: filters.result || undefined,
     })
+    // 末页最后一条被删后 total 缩水：回退到新的最后一页，避免停在空页
+    if (!logs.value.items.length && logs.value.total > 0 && page > 1) {
+      await loadLogs(Math.ceil(logs.value.total / logs.value.pageSize))
+      return
+    }
   } catch (error) {
     feedback.value = error instanceof Error ? error.message : '操作记录加载失败。'
   } finally {
@@ -51,6 +57,12 @@ function resetFilters() {
   filters.keyword = ''
   filters.category = ''
   filters.result = ''
+  void loadLogs(1)
+}
+
+/** 每页条数变化：loadLogs 读 logs.value.pageSize，必须先写回再回第一页 */
+function changePageSize(size: number) {
+  logs.value = { ...logs.value, pageSize: size }
   void loadLogs(1)
 }
 
@@ -87,7 +99,15 @@ onMounted(() => loadLogs())
         </table>
       </div>
 
-      <footer><span>共 {{ logs.total }} 条记录</span><nav aria-label="功能导航 1"><button type="button" :disabled="logs.page <= 1 || loading" @click="loadLogs(logs.page - 1)">上一页</button><em>第 {{ logs.page }} 页</em><button type="button" :disabled="logs.page * logs.pageSize >= logs.total || loading" @click="loadLogs(logs.page + 1)">下一页</button></nav></footer>
+      <ListPagination
+        v-if="logs.total > 0"
+        :total="logs.total"
+        :page="logs.page"
+        :page-size="logs.pageSize"
+        :disabled="loading"
+        @change="(page: number) => loadLogs(page)"
+        @change-size="changePageSize"
+      />
     </section>
   </div>
 </template>
@@ -96,6 +116,5 @@ onMounted(() => loadLogs())
 .logs-page { height:100%;padding:6px;overflow:auto;color:#243854; }.logs-hero { display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding:24px 26px;border:1px solid #b9d5f7;border-radius:10px;background:linear-gradient(120deg,#edf5ff,#fff 56%,#eaf8ff);box-shadow:0 12px 28px rgba(48,105,194,.1); }.logs-hero span { color:#004ecc;font-size:10px;font-weight:700;letter-spacing:.16em; }.logs-hero h1 { margin:7px 0 5px;font-size:25px; }.logs-hero p { margin:0;color:#71819a;font-size:12px; }.logs-hero>b { padding:6px 10px;border-radius:999px;background:#e8f8ef;color:#067647;font-size:9px; }.logs-hero>b.demo { background:#fff3d8;color:#b54708; }
 .log-card { margin-top:14px;overflow:hidden;border:1px solid #c9ddf6;border-radius:9px;background:#fff;box-shadow:0 8px 22px rgba(48,105,194,.07); }.log-filter { display:flex;gap:8px;padding:13px;border-bottom:1px solid #e2ebf6;background:#fbfdff; }.log-filter input { min-width:230px;flex:1; }.log-filter input,.log-filter select { height:34px;padding:0 10px;border:1px solid #cbdaf0;border-radius:6px;background:#fff;color:#344766;font-size:10px;outline:none; }.log-filter input:focus,.log-filter select:focus { border-color:#75a7ef;box-shadow:0 0 0 3px #eaf2ff; }.log-filter button { height:34px;padding:0 16px;border:1px solid #004ecc;border-radius:6px;background:#004ecc;color:#fff;font-size:10px;cursor:pointer; }.log-filter button.secondary { border-color:#cbdaf0;background:#fff;color:#526783; }
 .feedback { margin:0;padding:12px 14px;border-bottom:1px solid #e4edf8;background:#edf5ff;color:#004ecc;font-size:10px; }.feedback.is-error { background:#fff0ee;color:#b42318; }.table-wrap { overflow:auto; }table { width:100%;border-collapse:collapse;white-space:nowrap; }th { padding:11px 13px;background:#f5f8fc;color:#475467;font-size:9px;font-weight:600;text-align:left; }td { max-width:240px;padding:13px;border-top:1px solid #edf2f8;color:#526783;font-size:10px;overflow:hidden;text-overflow:ellipsis; }td strong { color:#263853;font-size:11px; }.category { padding:3px 7px;border-radius:999px;background:#eaf2ff;color:#004ecc; }td code { color:#526783;font-size:9px; }td>b { color:#067647;font-size:9px; }td>b.failed { color:#b42318; }.empty { height:150px;color:#59636f;text-align:center; }
-.log-card>footer { display:flex;align-items:center;justify-content:space-between;padding:11px 13px;border-top:1px solid #e2ebf6;background:#fbfdff;color:#52627a;font-size:9px; }.log-card footer nav { display:flex;align-items:center;gap:8px; }.log-card footer button { height:28px;padding:0 10px;border:1px solid #cbdaf0;border-radius:5px;background:#fff;color:#526783;font-size:9px;cursor:pointer; }.log-card footer button:disabled { cursor:not-allowed;opacity:.45; }.log-card footer em { font-style:normal; }
 @media (max-width:900px) { .logs-hero { align-items:flex-start;flex-direction:column; }.log-filter { flex-wrap:wrap; }.log-filter input { min-width:100%; }.log-filter select { flex:1; } }
 </style>

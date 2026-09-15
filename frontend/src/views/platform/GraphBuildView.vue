@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { IconInfoCircle, IconSearch } from '@arco-design/web-vue/es/icon'
 import {
@@ -19,6 +19,8 @@ import { listMysqlDatasources, type MysqlDatasource } from '../../api/mysqlDatas
 import { listGraphSpaces } from '../../api/graphSpace'
 import { currentUserId as getCurrentUserId } from '../../api/currentUser'
 import JobLaunchDialog from '../../components/JobLaunchDialog.vue'
+import ListPagination from '../../components/list-pagination.vue'
+import { useClientPagination } from '../../composables/use-client-pagination'
 import { useToast } from '../../composables/use-toast'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import { describeCron } from '../../utils/cronSchedule'
@@ -67,6 +69,18 @@ const filteredJobs = computed(() => {
     return true
   })
 })
+
+// 任务列表客户端分页（后端按 created_at desc，最新任务总在第 1 页——e2e 按名称找行依赖这一点）
+const {
+  page: jobPage,
+  pageSize: jobPageSize,
+  total: jobTotal,
+  pagedItems: pagedJobs,
+  resetPage: resetJobPage,
+  changePage: changeJobPage,
+  changePageSize: changeJobPageSize,
+} = useClientPagination(filteredJobs, 10)
+watch([filterName, filterStatus, filterTaskType], resetJobPage)
 
 async function loadData() {
   loading.value = true
@@ -214,7 +228,7 @@ onMounted(loadData)
             <tr><th>任务名</th><th>类型</th><th>脚本</th><th>图空间</th><th>调度</th><th>状态</th><th>最近任务 ID</th><th>最近执行</th><th>操作</th></tr>
           </thead>
           <tbody>
-            <tr v-for="job in filteredJobs" :key="job.id">
+            <tr v-for="job in pagedJobs" :key="job.id">
               <td><b>{{ job.name }}</b></td>
               <td>{{ TASK_TYPE_LABELS[job.taskType] || job.taskType }}</td>
               <td><code>{{ jobScriptLabel(job) }}</code></td>
@@ -251,6 +265,15 @@ onMounted(loadData)
           </tbody>
         </table>
       </div>
+      <ListPagination
+        v-if="jobTotal > 0"
+        :total="jobTotal"
+        :page="jobPage"
+        :page-size="jobPageSize"
+        :disabled="loading"
+        @change="changeJobPage"
+        @change-size="changeJobPageSize"
+      />
       </div>
     </section>
 

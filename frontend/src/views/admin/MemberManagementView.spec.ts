@@ -21,7 +21,12 @@ vi.mock('../../api/corrections', () => ({ listPlatformMembers: mocks.listPlatfor
 vi.mock('../../api/http', () => ({ getErrorMessage: (error: Error) => error.message }))
 vi.mock('../../data/adminGovernanceExamples', () => ({ getExampleMembers: mocks.getExampleMembers }))
 vi.mock('../../stores/auth', () => ({ useAuthStore: () => ({ profile: { user: { id: 'current-admin' } } }) }))
-vi.mock('@arco-design/web-vue', () => ({ Message: { success: mocks.success, error: mocks.error } }))
+// 视图内嵌的 ListPagination 局部导入 Pagination/Select，mock 需提供占位组件
+vi.mock('@arco-design/web-vue', () => ({
+  Message: { success: mocks.success, error: mocks.error },
+  Pagination: { name: 'Pagination', setup: () => () => null },
+  Select: { name: 'Select', setup: () => () => null },
+}))
 
 const member = (isAdmin = true): PlatformMember => ({
   userId: 'member-1', username: 'member', nickname: '真实成员', email: 'member@example.test',

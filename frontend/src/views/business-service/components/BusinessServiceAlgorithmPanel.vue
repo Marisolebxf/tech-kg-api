@@ -2041,33 +2041,47 @@ function industryEventRelationInfo(
   return null;
 }
 
-/** 全景图「关系描述」关系台账：真实图库边按边类型码给出「关系类别/关系
- * 详情」；关系类别只取直接关系/间接关系。间接口径：STUDIED_AT 靠院校名
- * 跨源匹配定端点、FUNDED_BY/PARTICIPATES_IN 靠机构名解析（可选 Milvus
- * 对齐）才能确定关系两端。 */
+/** 全景图「关系类别/关系详情」关系台账：真实图库边按边类型码给出关系
+ * 类别（只取直接关系/间接关系）与关系详情（按业务划分类别的中文细目）。
+ * 间接口径：FUNDED_BY 靠机构名解析（可选 Milvus 对齐）、APPLIED_BY 经
+ * 向量对齐到企业实体才能成立。 */
 const PANORAMA_RELATION_LEDGER: Record<
   string,
   { category: "直接关系" | "间接关系"; detail: string }
 > = {
+  // 产业链关联关系
   HAS_NODE: { category: "直接关系", detail: "产业链包含产业节点" },
   CHILD_OF: { category: "直接关系", detail: "产业节点上下级" },
   DOWNSTREAM_OF: { category: "直接关系", detail: "产业上下游" },
   BELONGS_TO_NODE: { category: "直接关系", detail: "企业归属产业链节点" },
   COVERS_CHAIN: { category: "直接关系", detail: "产业资讯报道产业链" },
-  COAUTHOR_WITH: { category: "直接关系", detail: "论文合著合作" },
-  AFFILIATED_WITH: { category: "直接关系", detail: "学者任职于机构" },
-  STUDIED_AT: { category: "间接关系", detail: "求学于某院校" },
-  AUTHORED_BY: { category: "直接关系", detail: "论文撰写" },
-  PUBLISHED_IN: { category: "直接关系", detail: "论文发表于期刊" },
-  CITES: { category: "直接关系", detail: "论文引用" },
-  CITED_BY: { category: "直接关系", detail: "论文被引" },
-  RELATED_TO: { category: "直接关系", detail: "论文相关" },
-  HAS_KEYWORD: { category: "直接关系", detail: "关键词标注" },
+  PRODUCES: { category: "直接关系", detail: "企业生产产品" },
+  // 企业关联关系
+  AFFILIATED_WITH: { category: "直接关系", detail: "任职关系" },
+  EXECUTIVE_OF: { category: "直接关系", detail: "高管任职关系" },
+  LEGAL_REP_OF: { category: "直接关系", detail: "法定代表关系" },
+  ACTUAL_CONTROLLER_OF: { category: "直接关系", detail: "实际控制关系" },
+  BENEFICIAL_OWNER_OF: { category: "直接关系", detail: "最终受益关系" },
+  SHAREHOLDER_OF: { category: "直接关系", detail: "股东持股关系" },
   INVOLVED_IN: { category: "直接关系", detail: "企业参与事件" },
   HAS_NEWS: { category: "直接关系", detail: "企业关联资讯" },
-  PRODUCES: { category: "直接关系", detail: "企业生产产品" },
+  // 合作关系（论文/项目/专利）
+  AUTHORED_BY: { category: "直接关系", detail: "论文署名关系" },
+  COAUTHOR_WITH: { category: "直接关系", detail: "专家合著关系" },
+  PUBLISHED_IN: { category: "直接关系", detail: "论文发表关系" },
+  HAS_KEYWORD: { category: "直接关系", detail: "论文主题" },
+  CITES: { category: "直接关系", detail: "论文被引关系" },
+  CITED: { category: "直接关系", detail: "论文被引关系" },
+  CITED_BY: { category: "直接关系", detail: "论文被引关系" },
+  RELATED_TO: { category: "直接关系", detail: "论文关联" },
+  LEADS: { category: "直接关系", detail: "项目负责人" },
+  HAS_PARTICIPANT: { category: "直接关系", detail: "项目参加人" },
+  PARTICIPATES_IN: { category: "直接关系", detail: "项目参与机构" },
+  INVENTED_BY: { category: "直接关系", detail: "专利发明人" },
   FUNDED_BY: { category: "间接关系", detail: "项目获机构资助" },
-  PARTICIPATES_IN: { category: "间接关系", detail: "企业参与项目" },
+  APPLIED_BY: { category: "间接关系", detail: "专利申请方" },
+  // 校友关系
+  STUDIED_AT: { category: "直接关系", detail: "就读所属院校" },
 };
 
 /** 全景图分层展示连线（inferred）的「关系详情」文案：按连线所在分层给出
@@ -2607,10 +2621,11 @@ const liveRelationRows = computed(() => {
   return relationEdges.flatMap((relation, index) => {
     const from = nodesById.get(relation.from);
     const to = nodesById.get(relation.to);
-    // TOP-N 事件关系页 / 全景图页：关系类别只取直接关系/间接关系，详情按
-    // 关系台账（先判断连线对应的图关系类型，再取对应文案）；论文合作/企业
-    // 关系用各自专用文案；其余模块按边动态判定关系类别（同事/校友命中梳理
-    // 文档映射时为直接关系）。
+    // TOP-N 事件关系页 / 全景图页：关系描述一行展示「关系类别/关系详情」
+    // （如 间接关系/产业链环节涉及关键技术），类别只取直接关系/间接关系，
+    // 详情按关系台账（先判断连线对应的图关系类型，再取对应文案）；论文
+    // 合作/企业关系用各自专用文案；其余模块按边动态判定关系类别（同事/
+    // 校友命中梳理文档映射时为直接关系）。
     const relationInfo = isLiveIndustryEvent.value
       ? industryEventRelationInfo(relation)
       : isPanorama.value
@@ -2625,14 +2640,15 @@ const liveRelationRows = computed(() => {
           : isLiveCoop.value
             ? coopAchievementRelationDescription(relation)
             : `${displayRelationCategory(relation)}/${displayRelationDetail(relation)}`;
-    return [
+    const rows: Array<readonly [string, string]> = [
       [
         `关系 ${index + 1}`,
         `${from?.label || relation.from} → ${to?.label || relation.to}`,
-      ] as const,
-      ["关系描述", relationDescription] as const,
-      ["置信度", formatRelationConfidence(relation)] as const,
+      ],
+      ["关系描述", relationDescription],
+      ["置信度", formatRelationConfidence(relation)],
     ];
+    return rows;
   });
 });
 

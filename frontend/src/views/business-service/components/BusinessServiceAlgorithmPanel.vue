@@ -5960,9 +5960,17 @@ function clearGraphSelection() {
 
 .result-panel__table dt {
   color: var(--text-tertiary);
-  text-align: right;
+  text-align: center;
   border-right: 1px solid var(--border);
   font-weight: 600;
+}
+
+/* 标签列居中：design-rules 全局表把 dt 设为 flex + 右对齐、标签列仅 96px，
+   「直接关系/所属领域」这类长标签首字会溢出单元格左边界；这里提高选择器
+   优先级强制居中，溢出时对称分布且正常换行，不再单侧出血。 */
+.result-panel .result-panel__table dt {
+  justify-content: center;
+  text-align: center;
 }
 
 .result-panel__table dd {

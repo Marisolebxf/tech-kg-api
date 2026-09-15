@@ -4,7 +4,10 @@
 1. 科技专家两点合作成果
 2. 科技专家校友关系
 3. 科技专家论文合作关系（合作论文被引链路：dwd_zh_paper_citation 源表 +
-   图上 CITED_BY/CITES 双向边，被引次数=边数，引用方可经 AUTHORED_BY 追溯作者）
+   图上 CITED_BY/CITES 双向边，被引次数=边数，引用方可经 AUTHORED_BY 追溯作者；
+   期刊/会议分级链路：dwd_zh_journal 源表 + Journal 节点 + PUBLISHED_IN 边，
+   SCIE 期刊显示 JCR 分区（虚构 Q1/Q2）、中文核心期刊（classify_list→zh_core）
+   显示核心标识、其余如实显示“未分级”）
 
 安全约束：默认只输出计划；只有 ``--apply`` 才写库；``--cleanup`` 必须同时提供
 ``--confirm-cleanup EXPERT_MODULES_E2E_V1``。脚本仅允许
@@ -141,6 +144,8 @@ class Paper:
     authors: tuple[int, ...]
     fields: tuple[str, ...] = ()
     awards: tuple[str, ...] = ()
+    # 发表期刊序号（1 起，对应 journals()）；决定期刊/会议级别显示 SCI 还是未分级。
+    journal: int = 1
 
     @property
     def mysql_id(self) -> int:
@@ -150,6 +155,33 @@ class Paper:
     def vid(self) -> str:
         # 与正式论文加载器 paper_vid(paper_id) 保持一致。
         return f"paper_{self.mysql_id}"
+
+
+@dataclass(frozen=True)
+class Journal:
+    """虚构期刊（PUBLISHED_IN 源表 dwd_zh_journal）。"""
+
+    publication_id: int
+    zh_name: str
+    en_name: str
+    name_abbr: str
+    issn: str
+    founding_time: int
+    impact_factor: float
+    cite_nums: int
+    annual_publication: int
+    is_sci: int
+    publication_cycle: str
+    # 中文核心分类（源列 classify_list→图属性 zh_core）：非 SCI 刊的级别显示来源。
+    zh_core: str = ""
+    # JCR/中科院分区（虚构值；源表无对应列，仅在图节点上展示 SCIE 刊的分级）。
+    jcr_zone: str = ""
+    scope_zone: str = ""
+
+    @property
+    def vid(self) -> str:
+        # 与真实 ETL（load_paper_journal_graph.load_journals）一致：journal_{publication_id}。
+        return f"journal_{self.publication_id}"
 
 
 @dataclass(frozen=True)
@@ -229,12 +261,84 @@ def fixture_patent_ids() -> list[str]:
     return [p.patent_id for p in patents()]
 
 
+def journals() -> list[Journal]:
+    """4 本虚构期刊：两本 SCIE（JCR-Q1/Q2）、一本中文核心（“北大核心”）、一本普通（“未分级”）。
+
+    publication_id 使用预留号段 8899000x（真实 zh/en 期刊表与图上均无占用），
+    节点为本批次私有，随 cleanup 一并删除。
+    """
+    return [
+        Journal(
+            88990001,
+            "知识工程学报",
+            "Journal of Knowledge Engineering",
+            "JKE",
+            "2096-1878",
+            1987,
+            3.2,
+            5210,
+            192,
+            1,
+            "月刊",
+            jcr_zone="Q1",
+            scope_zone="2区",
+        ),
+        Journal(
+            88990002,
+            "智能系统研究",
+            "Journal of Intelligent Systems Research",
+            "JISR",
+            "2096-3921",
+            1999,
+            1.6,
+            1830,
+            96,
+            1,
+            "双月刊",
+            jcr_zone="Q2",
+            scope_zone="3区",
+        ),
+        Journal(
+            88990003,
+            "数据科学论坛",
+            "Data Science Forum",
+            "DSF",
+            "2096-7408",
+            2015,
+            0.7,
+            420,
+            64,
+            0,
+            "季刊",
+            "北大核心",
+        ),
+        Journal(
+            88990004,
+            "新兴科技评论",
+            "Emerging Technology Review",
+            "ETR",
+            "2096-8216",
+            2018,
+            0.9,
+            260,
+            48,
+            0,
+            "双月刊",
+        ),
+    ]
+
+
+def fixture_journal_vids() -> list[str]:
+    return [j.vid for j in journals()]
+
+
 def fixture_vids() -> list[str]:
     return [
         *(p.vid for p in people()),
         *(p.vid for p in papers()),
         *(p.vid for p in projects()),
         *(p.vid for p in patents()),
+        *fixture_journal_vids(),
         *fixture_org_vids(),
     ]
 
@@ -425,6 +529,9 @@ def people() -> list[Person]:
 
 
 def papers() -> list[Paper]:
+    # journal 序号：论文 1-12 显式指定（论文合作用例的论文 4/5/6/7/12 落在 JCR 分区期刊，
+    # 年份缺失的论文 8 落在普通期刊覆盖“未分级”）；13-80 轮换前三本期刊，
+    # 其中 no%3==2 的论文落在中文核心期刊覆盖“北大核心”。
     rows = [
         Paper(
             1,
@@ -433,6 +540,7 @@ def papers() -> list[Paper]:
             2020,
             (1, 2),
             ("知识图谱", "可信推理"),
+            journal=1,
         ),
         Paper(
             2,
@@ -441,6 +549,7 @@ def papers() -> list[Paper]:
             2021,
             (1, 3),
             ("实体消歧",),
+            journal=1,
         ),
         Paper(
             3,
@@ -449,6 +558,7 @@ def papers() -> list[Paper]:
             2023,
             (1, 3),
             ("图表示学习",),
+            journal=2,
         ),
         Paper(
             4,
@@ -457,6 +567,7 @@ def papers() -> list[Paper]:
             2022,
             (1, 4),
             ("合作网络",),
+            journal=1,
         ),
         Paper(
             5,
@@ -465,6 +576,7 @@ def papers() -> list[Paper]:
             2018,
             (1, 5),
             ("增量计算",),
+            journal=2,
         ),
         Paper(
             6,
@@ -473,6 +585,7 @@ def papers() -> list[Paper]:
             2021,
             (1, 5),
             ("知识融合",),
+            journal=1,
         ),
         Paper(
             7,
@@ -482,6 +595,7 @@ def papers() -> list[Paper]:
             (1, 5),
             ("图查询", "并行计算"),
             ("科技创新优秀成果奖",),
+            journal=2,
         ),
         Paper(
             8,
@@ -490,6 +604,7 @@ def papers() -> list[Paper]:
             None,
             (1, 6),
             ("专家画像",),
+            journal=4,
         ),
         Paper(
             9,
@@ -498,6 +613,7 @@ def papers() -> list[Paper]:
             2019,
             (1, 7),
             ("语义检索",),
+            journal=1,
         ),
         Paper(
             10,
@@ -506,6 +622,7 @@ def papers() -> list[Paper]:
             2025,
             (1, 8),
             ("主题发现",),
+            journal=2,
         ),
         Paper(
             11,
@@ -514,6 +631,7 @@ def papers() -> list[Paper]:
             2024,
             (9, 10),
             ("材料计算",),
+            journal=1,
         ),
         Paper(
             12,
@@ -523,6 +641,7 @@ def papers() -> list[Paper]:
             (1, 4),
             ("数据治理",),
             ("优秀论文奖",),
+            journal=2,
         ),
     ]
     topics = (
@@ -574,6 +693,7 @@ def papers() -> list[Paper]:
                 (first, second),
                 (topic_zh, method),
                 ("青年科技创新奖",) if no % 17 == 0 else (),
+                1 + (no % 3),
             )
         )
     # 2023-01 起的时间窗内 1↔4 可见的共同论文（带领域与奖项，供「所属领域」
@@ -818,6 +938,7 @@ def scenario_manifest() -> dict[str, list[str]]:
             "被引次数为 0（未被引用的论文）",
             "论文主题（HAS_KEYWORD→Keyword，源表 dwd_zh_paper_classification）",
             "专家研究方向（dwd_scholar_research_direction → Person.research_fields 回退）",
+            "期刊/会议级别（PUBLISHED_IN→Journal，源表 dwd_zh_journal，JCR 分区/中文核心/未分级期刊覆盖）",
         ],
     }
 
@@ -848,6 +969,9 @@ def plan() -> dict[str, Any]:
             "keywordEdges": sum(len(x.fields) for x in pas if x.fields)
             + sum(len(x.fields) for x in prs if x.fields),
             "researchDirectionRows": len(research_fields_by_person()),
+            "journalRows": len(pas),
+            "journalNodes": len(journals()),
+            "publishedInEdges": len(pas),
         },
         "sampleIds": {
             "person1": ps[0].vid,
@@ -856,6 +980,7 @@ def plan() -> dict[str, Any]:
             "project1": prs[0].vid,
             "patent1": pts[0].vid,
             "scholarId1": ps[0].scholar_id,
+            "journal1": journals()[0].vid,
         },
         "scenarios": scenario_manifest(),
     }
@@ -911,6 +1036,12 @@ def _delete_mysql(con) -> None:
             f"DELETE FROM dwd_zh_paper_classification WHERE ({cit_id_in}) OR data_source = :batch"
         ),
         {**cit_id_params, "batch": BATCH},
+    )
+    # 期刊映射表（PUBLISHED_IN 源表）：paper_id 为 varchar，按号段字符串 + 批次删除。
+    jpaper_in, jpaper_params = _sql_in("paper_id", [str(i) for i in paper_ids], "jp")
+    con.execute(
+        text(f"DELETE FROM dwd_zh_journal WHERE ({jpaper_in}) OR data_source = :batch"),
+        {**jpaper_params, "batch": BATCH},
     )
     con.execute(
         text(f"DELETE FROM dwd_scholar_research_direction WHERE ({sid_in})"),
@@ -1067,6 +1198,37 @@ def write_mysql() -> dict[str, int]:
                     }
                     for p in papers()
                     if p.fields
+                ],
+            )
+            # 期刊权威源（真实 ETL 的 Journal 节点 + PUBLISHED_IN 边数据源）：
+            # 每篇论文一行 paper_id→publication_id 映射，附带刊名/ISSN/影响因子等元数据。
+            con.execute(
+                text("""INSERT INTO dwd_zh_journal
+                (paper_id,publication_id,zh_name,en_name,name_abbr,issn,country,founding_time,
+                 impact_factor,cite_nums,annual_publication,is_sci,publication_cycle,classify_list,
+                 data_source,created_time,updated_time)
+                VALUES (:paper_id,:pub_id,:zh_name,:en_name,:abbr,:issn,'中国',:founded,
+                 :impact,:cites,:annual,:is_sci,:cycle,:zh_core,:batch,:now,:now)"""),
+                [
+                    {
+                        "paper_id": str(p.mysql_id),
+                        "pub_id": j.publication_id,
+                        "zh_name": j.zh_name,
+                        "en_name": j.en_name,
+                        "abbr": j.name_abbr,
+                        "issn": j.issn,
+                        "founded": j.founding_time,
+                        "impact": j.impact_factor,
+                        "cites": j.cite_nums,
+                        "annual": j.annual_publication,
+                        "is_sci": j.is_sci,
+                        "cycle": j.publication_cycle,
+                        "zh_core": j.zh_core or None,
+                        "batch": BATCH,
+                        "now": now,
+                    }
+                    for p in papers()
+                    for j in (journals()[p.journal - 1],)
                 ],
             )
             # 专家研究方向：分号分隔（老实现与图 Person.research_fields 回退均按分号切分）。
@@ -1322,6 +1484,17 @@ def sync_graph_from_mysql() -> dict[str, int]:
                 .mappings()
                 .all()
             )
+            journal_rows = (
+                con.execute(
+                    text(
+                        "SELECT paper_id,publication_id FROM dwd_zh_journal "
+                        "WHERE data_source = :batch ORDER BY paper_id"
+                    ),
+                    {"batch": BATCH},
+                )
+                .mappings()
+                .all()
+            )
     finally:
         client.dispose()
 
@@ -1497,6 +1670,45 @@ def sync_graph_from_mysql() -> dict[str, int]:
                         "ingest_time": now,
                     },
                 )
+        # 论文期刊（PUBLISHED_IN 源表 dwd_zh_journal）：Journal 桩 vid 与真实 ETL
+        # （load_paper_journal_graph.load_journals）同为 journal_{publication_id}，节点
+        # 属性按中文期刊 ETL 映射（classify_list→zh_core 中文核心；SCIE 刊的
+        # jcr_zone/scope_zone 源表无对应列，按定义写入虚构 Q1/Q2；dev 的 Journal
+        # TAG 无溯源属性，故只写 TAG 内属性），PUBLISHED_IN 边带 confidence=1.0。
+        # 预留号段内的期刊节点为本批次私有，已进 fixture_vids 随 cleanup 一并删除。
+        journal_defs = {j.publication_id: j for j in journals()}
+        for row in journal_rows:
+            definition = journal_defs[int(row["publication_id"])]
+            jvid = definition.vid
+            if graph.get_node(jvid) is None:
+                graph.merge_node(
+                    ["Journal"],
+                    {"vid": jvid},
+                    {
+                        "name_zh": definition.zh_name,
+                        "name_en": definition.en_name,
+                        "name_abbr": definition.name_abbr,
+                        "issn": definition.issn,
+                        "country": "中国",
+                        "founding_time": str(definition.founding_time),
+                        "impact_factor": str(definition.impact_factor),
+                        "is_sci": str(definition.is_sci),
+                        "zh_core": definition.zh_core,
+                        "jcr_zone": definition.jcr_zone,
+                        "scope_zone": definition.scope_zone,
+                        "cite_nums": str(definition.cite_nums),
+                        "annual_publication": str(definition.annual_publication),
+                        "publication_cycle": definition.publication_cycle,
+                        "source": "zh_journal",
+                    },
+                )
+            merge_edge(
+                f"paper_{row['paper_id']}",
+                jvid,
+                "PUBLISHED_IN",
+                f"published_in:paper_{row['paper_id']}:{jvid}",
+                {"confidence": 1.0},
+            )
         for query in (
             "CREATE EDGE IF NOT EXISTS STUDIED_AT("
             "degree_zh string, degree_en string, education_date string, "
@@ -1737,6 +1949,10 @@ def verify() -> dict[str, Any]:
             text(f"SELECT COUNT(*) FROM dwd_scholar_research_direction WHERE {sid_in}"),
             sid_params,
         ).scalar_one()
+        journal_rows = con.execute(
+            text("SELECT COUNT(*) FROM dwd_zh_journal WHERE data_source = :batch"),
+            {"batch": BATCH},
+        ).scalar_one()
         relation_citations = dict(
             con.execute(
                 text(
@@ -1843,6 +2059,40 @@ def verify() -> dict[str, Any]:
             node = graph.get_node(people()[person_no - 1].vid)
             if not ((node.properties if node else None) or {}).get("research_fields"):
                 research_fields_ok = False
+        # 期刊分级链路：每篇种子论文恰有 1 条 PUBLISHED_IN 出边，目标 Journal 节点
+        # 存在且刊名/SCI/JCR 分区标记与定义一致（级别显示 JCR/中文核心/未分级的数据基础）。
+        published_in_ok = True
+        venue_sample: list[str] = []
+        for p in papers():
+            definition = journals()[p.journal - 1]
+            try:
+                pub_edges = graph.get_node_edges(
+                    p.vid, direction="out", edge_type="PUBLISHED_IN", limit=10
+                )
+            except Exception:  # noqa: BLE001
+                published_in_ok = False
+                continue
+            if len(pub_edges or []) != 1:
+                published_in_ok = False
+                continue
+            jvid = str(getattr(pub_edges[0], "target_id", "") or "")
+            jnode = graph.get_node(jvid) if jvid else None
+            jprops = (jnode.properties if jnode else None) or {}
+            if jprops.get("name_zh") != definition.zh_name or str(
+                jprops.get("is_sci") or "0"
+            ) != str(definition.is_sci):
+                published_in_ok = False
+            if jprops.get("jcr_zone") != definition.jcr_zone:
+                published_in_ok = False
+            if definition.jcr_zone:
+                level = f"JCR-{definition.jcr_zone}"
+            elif definition.is_sci:
+                level = "SCI"
+            else:
+                level = definition.zh_core or "未分级"
+            label = f"{definition.zh_name}（{level}）"
+            if label not in venue_sample:
+                venue_sample.append(label)
     finally:
         close_trs_graph_client()
     ok = (
@@ -1855,9 +2105,11 @@ def verify() -> dict[str, Any]:
         and citation_edges_ok
         and classification_rows == expected["classificationRows"]
         and research_rows == expected["researchDirectionRows"]
+        and journal_rows == expected["journalRows"]
         and keyword_edges_ok
         and awards_props_ok
         and research_fields_ok
+        and published_in_ok
     )
     return {
         "ok": ok,
@@ -1871,10 +2123,13 @@ def verify() -> dict[str, Any]:
         "citationEdgesOk": citation_edges_ok,
         "classificationRows": classification_rows,
         "researchDirectionRows": research_rows,
+        "journalRows": journal_rows,
         "keywordEdgesOk": keyword_edges_ok,
         "awardsPropsOk": awards_props_ok,
         "keywordSample": sorted(keyword_sample),
         "researchFieldsOk": research_fields_ok,
+        "publishedInOk": published_in_ok,
+        "venueSample": venue_sample,
         "sampleIds": plan()["sampleIds"],
         "scenarioManifest": scenario_manifest(),
     }

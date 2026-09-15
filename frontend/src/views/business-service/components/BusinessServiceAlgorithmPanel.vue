@@ -234,11 +234,26 @@ const parameterErrors = ref<Record<string, string>>({});
 const hasParameterErrors = computed(
   () => Object.keys(parameterErrors.value).length > 0,
 );
-const queryFeedbackTitle = computed(() =>
-  liveError.value && /(?:未找到|不存在|无匹配)/u.test(liveError.value)
-    ? "未查询到结果"
-    : "查询失败",
+const NOT_FOUND_MESSAGE_PATTERN = /(?:未找到|不存在|无匹配)/u;
+// 必填值不存在（未找到/不存在/无匹配）时按全景图未命中的空态展示：
+// 画布回落「暂无图谱数据」，实体/关系/溯源走统一空态提示，不再弹红色错误框。
+const activeModuleError = computed(() => {
+  if (isExpertDirect.value) return expertDirectError.value ?? liveError.value;
+  if (isExpertIndirect.value)
+    return expertIndirectError.value ?? liveError.value;
+  return liveError.value;
+});
+const isNotFoundResult = computed(
+  () =>
+    Boolean(activeModuleError.value) &&
+    NOT_FOUND_MESSAGE_PATTERN.test(activeModuleError.value ?? ""),
 );
+const queryFeedbackTitle = computed(() =>
+  isNotFoundResult.value ? "未查询到结果" : "查询失败",
+);
+function isNotFoundMessage(message: string | null | undefined): boolean {
+  return Boolean(message) && NOT_FOUND_MESSAGE_PATTERN.test(message ?? "");
+}
 const currentMonth = dayjs().format("YYYY-MM");
 const disableFutureMonth = (value: Date) =>
   dayjs(value).isAfter(dayjs(), "month");
@@ -846,6 +861,9 @@ function canvasEdgeToPanoramaEdge(edge: GraphEdgeData): PanoramaGraphEdge {
 function derivedGraphFromResponse(
   resp: IndustryChainPanoramaQueryResponse,
 ): GraphPreset {
+  // 关键词未命中等空结果不生成虚拟产业链中心：画布与实体页保持空，
+  // 走「暂无图谱数据」与「暂无实体数据」空态提示。
+  if (isPanoramaEmpty(resp)) return { nodes: [], edges: [] };
   const nodes: GraphNodeData[] = [];
   const edges: GraphEdgeData[] = [];
   const idMap = new Map<string, GraphNodeData>();
@@ -1618,6 +1636,8 @@ const graphPreset = computed<GraphPreset>(() => {
 });
 const graphNodes = computed<GraphNodeData[]>(() => {
   if (lastTestTime.value === "—") return [];
+  // 必填值不存在：按全景图未命中空态展示，不残留上一轮结果或示例图谱。
+  if (isNotFoundResult.value) return [];
   if (isLiveModule.value) return liveModuleGraph.value?.nodes ?? [];
   if (liveGraph.value) return liveGraph.value.nodes;
   return graphPreset.value.nodes;
@@ -1831,54 +1851,57 @@ const relationCategoryByModule: Record<string, string> = {
   // 求交得到（多表 join 口径），前缀统一为「间接关系」，业务细目见边 label；
   // 每条边的具体文案优先走下方 coopAchievementRelationDescription 台账。
   "two-point-achievement": "间接关系",
-  // 同事/校友模块的类别不走此静态映射,由 displayRelationCategory 按边
-  // 动态判定:命中下方关系详情映射(梳理文档中的直接关系)标"直接关系",
-  // 未命中默认"间接关系"。这里的值仅作兜底,正常不会读到。
-  "expert-colleague": "直接关系",
-  "expert-alumni": "直接关系",
+  // 同事/校友模块的类别不走此静态映射,由 displayRelationCategory 按边查
+  // 下方《图数据库关系分类对照表》spec:同一模块内直接/间接混合,逐边取值;
+  // 这里的值仅作兜底,正常不会读到。
+  "expert-colleague": "间接关系",
+  "expert-alumni": "间接关系",
   "paper-cooperation": "合作关系",
   "enterprise-relation": "企业关联关系",
   "industry-chain-event": "产业链关联关系",
   "industry-chain-panorama": "产业链关联关系",
 };
 
-// 关系详情:同事/校友模块只展示梳理文档(md)中的关系名(名词),不带后缀
-// (如"直接关系/同事");动词类关系名加"关系"构成名词(任职→任职关系)。
+// 关系描述:同事/校友模块按《图数据库关系分类对照表》逐边登记
+// {关系类别, 关系详情}——类别在同一模块内直接/间接混合,不再整模块统一。
 // key 为画布边 label(同事边 label="同事关系"、任职边 label="AFFILIATED_WITH"、
-// 校友边 label="校友关系"、共同成果边 label="发表"/"发明"/"参与"或原始边类型)。
-const colleagueRelationDetails: Record<string, string> = {
-  同事关系: "同事",
-  AFFILIATED_WITH: "任职关系",
-  COAUTHOR_WITH: "合著关系",
-  AUTHORED_BY: "署名关系",
-  INVENTED_BY: "发明人",
-  LEADS: "项目负责人",
-  HAS_PARTICIPANT: "项目参与者",
-  // #7 反向变体(人→项目),与 HAS_PARTICIPANT 同属项目参与关系
-  PARTICIPATES_IN: "项目参与者",
-  // #12 共享节点(Report/Award/Team 等)关联边,类型不统一,按业务口径算直接
-  RELATED_TO: "关联关系",
+// 校友边 label="校友关系"、共同成果边 label="发表"/"发明"/"参与"或原始边类型),
+// 同时登记原始边类型(COLLEAGUE/ALUMNI),后端直接返回英文类型时也能命中。
+const colleagueRelationSpecs: Record<string, { category: string; detail: string }> = {
+  同事关系: { category: "间接关系", detail: "同事" },
+  COLLEAGUE: { category: "间接关系", detail: "同事" },
+  AFFILIATED_WITH: { category: "间接关系", detail: "任职关系" },
+  COAUTHOR_WITH: { category: "直接关系", detail: "专家合著关系" },
+  AUTHORED_BY: { category: "直接关系", detail: "论文署名关系" },
+  INVENTED_BY: { category: "间接关系", detail: "专利发明人" },
+  LEADS: { category: "间接关系", detail: "项目负责人" },
+  HAS_PARTICIPANT: { category: "间接关系", detail: "项目参加人" },
+  // #7 反向变体(人→项目):对照表口径为"项目参与机构"
+  PARTICIPATES_IN: { category: "间接关系", detail: "项目参与机构" },
+  // #12 共享节点(Report/Award/Team 等)关联边:对照表口径"论文关联"
+  RELATED_TO: { category: "直接关系", detail: "论文关联" },
 };
 
-const alumniRelationDetails: Record<string, string> = {
-  校友关系: "校友",
-  STUDIED_AT: "就读关系",
-  COAUTHOR_WITH: "合著关系",
+const alumniRelationSpecs: Record<string, { category: string; detail: string }> = {
+  校友关系: { category: "间接关系", detail: "校友" },
+  ALUMNI: { category: "间接关系", detail: "校友" },
+  STUDIED_AT: { category: "间接关系", detail: "就读所属院校" },
+  COAUTHOR_WITH: { category: "直接关系", detail: "专家合著关系" },
   // 校友图谱共同成果边用中文 label(后端 expertRelations):发表/发明/负责/参与,
   // 与原始边类型(AUTHORED_BY/INVENTED_BY/LEADS/HAS_PARTICIPANT)同属一条关系。
-  发表: "署名关系",
-  发明: "发明人",
-  负责: "项目负责人",
-  参与: "项目参与者",
-  AUTHORED_BY: "署名关系",
-  INVENTED_BY: "发明人",
-  LEADS: "项目负责人",
-  HAS_PARTICIPANT: "项目参与者",
+  发表: { category: "直接关系", detail: "论文署名关系" },
+  发明: { category: "间接关系", detail: "专利发明人" },
+  负责: { category: "间接关系", detail: "项目负责人" },
+  参与: { category: "间接关系", detail: "项目参加人" },
+  AUTHORED_BY: { category: "直接关系", detail: "论文署名关系" },
+  INVENTED_BY: { category: "间接关系", detail: "专利发明人" },
+  LEADS: { category: "间接关系", detail: "项目负责人" },
+  HAS_PARTICIPANT: { category: "间接关系", detail: "项目参加人" },
 };
 
-const relationDetailByModule: Record<string, Record<string, string>> = {
-  "expert-colleague": colleagueRelationDetails,
-  "expert-alumni": alumniRelationDetails,
+const relationSpecsByModule: Record<string, Record<string, { category: string; detail: string }>> = {
+  "expert-colleague": colleagueRelationSpecs,
+  "expert-alumni": alumniRelationSpecs,
 };
 
 const activeRelationCategory = computed(
@@ -1939,20 +1962,18 @@ const displayRelationType = (value?: string) =>
   "—";
 
 const displayRelationDetail = (edge: GraphEdgeData) => {
-  const detailMap = relationDetailByModule[props.moduleInfo.key];
-  if (detailMap) {
-    const detail = detailMap[edge.label || edge.category || ""];
-    if (detail) return detail;
-  }
+  const specs = relationSpecsByModule[props.moduleInfo.key];
+  const spec = specs?.[edge.label || edge.category || ""];
+  if (spec) return spec.detail;
   return displayRelationType(edge.label || edge.category);
 };
 
-// 关系类别:同事/校友模块按边动态判定——命中梳理文档(md)中的直接关系
-// 映射时标"直接关系",未命中默认"间接关系";其余模块沿用模块级类别。
+// 关系类别:同事/校友模块按对照表逐边取 spec.category;未登记的边默认
+// "间接关系"(对照表 40 项中间接占多数);其余模块沿用模块级类别。
 const displayRelationCategory = (edge: GraphEdgeData): string => {
-  const detailMap = relationDetailByModule[props.moduleInfo.key];
-  if (detailMap) {
-    return detailMap[edge.label || edge.category || ""] ? "直接关系" : "间接关系";
+  const specs = relationSpecsByModule[props.moduleInfo.key];
+  if (specs) {
+    return specs[edge.label || edge.category || ""]?.category || "间接关系";
   }
   return activeRelationCategory.value;
 };
@@ -1981,31 +2002,29 @@ const paperCoopRelationDescription = (edge: GraphEdgeData): string =>
   paperCoopRelationDescriptions[edge.category] ||
   `直接关系/${displayRelationDetail(edge)}`;
 
-/* 企业关联页「关系描述」专用口径：映射到核实过的 13 条关系（名词名）。
- * 治理任职为人-企业直连边（cooperation_mode 与边类型一一对应：高管任职
+/* 企业关联页「关系描述」专用口径：按《图数据库关系分类对照表》逐边登记
+ * 「关系类别/关系详情」。该模块涉及的图边（EXECUTIVE_OF/LEGAL_REP_OF/
+ * ACTUAL_CONTROLLER_OF/BENEFICIAL_OWNER_OF/SHAREHOLDER_OF/AFFILIATED_WITH/
+ * LEADS/HAS_PARTICIPANT/FUNDED_BY/PARTICIPATES_IN/INVENTED_BY/APPLIED_BY）
+ * 在对照表中均判间接关系。cooperation_mode 与边类型一一对应（高管任职
  * EXECUTIVE_OF、法人代表 LEGAL_REP_OF、实际控制 ACTUAL_CONTROLLER_OF、
  * 受益所有 BENEFICIAL_OWNER_OF、股东持股 SHAREHOLDER_OF、任职
- * AFFILIATED_WITH），全部单表直查=直接。
- * 项目合作是 专家→项目→企业 两跳组合：人侧 项目负责人/项目参加人、机构侧
- * 项目资助方/项目参与机构，均单表直查=直接（前端数据不区分 LEADS 与
- * HAS_PARTICIPANT，展示两侧代表名称）。
- * 专利合作是 专家→专利→企业：人侧 专利发明人（dwd_patent.inventors，直接）；
- * 机构侧 专利申请方 APPLIED_BY——图上 94% 边经 milvus_bm25_dense_hybrid
- * 对齐到企业实体才成立，判间接。 */
+ * AFFILIATED_WITH）；项目/专利合作为两跳组合，前端数据不区分 LEADS 与
+ * HAS_PARTICIPANT，展示两侧代表名称。 */
 const enterpriseRelationDescriptions: Record<string, string> = {
-  高管任职: "直接关系/高管任职关系",
-  法人代表: "直接关系/法定代表关系",
-  实际控制: "直接关系/实际控制关系",
-  受益所有: "直接关系/最终受益关系",
-  股东持股: "直接关系/股东持股关系",
-  任职: "直接关系/任职关系",
-  项目合作: "直接关系/项目参加人、项目资助方",
-  专利合作: "直接关系/专利发明人、间接关系/专利申请方",
+  高管任职: "间接关系/高管任职关系",
+  法人代表: "间接关系/法定代表关系",
+  实际控制: "间接关系/实际控制关系",
+  受益所有: "间接关系/最终受益关系",
+  股东持股: "间接关系/股东持股关系",
+  任职: "间接关系/任职关系",
+  项目合作: "间接关系/项目参加人、项目资助方",
+  专利合作: "间接关系/专利发明人、专利申请方",
 };
 const enterpriseRelationDescription = (edge: GraphEdgeData): string =>
   enterpriseRelationDescriptions[edge.label] ||
   enterpriseRelationDescriptions[edge.category] ||
-  `直接关系/${displayRelationDetail(edge)}`;
+  `间接关系/${displayRelationDetail(edge)}`;
 
 /* 两点合作成果页「关系描述」专用口径：先判直接关系/间接关系，再拼业务
  * 细目。三条专家-专家合成边均由双端成果边邻居集合求交得到（多表 join
@@ -2062,10 +2081,10 @@ const expertDirectRelationDescription = (edge: GraphEdgeData): string => {
 };
 
 /** TOP-N 事件关系页「关系描述」口径：先判断画布连线对应的图关系类型，再按
- * 关系台账输出「关系类别/关系详情」；关系类别只取直接关系/间接关系。
- * - 产业链归属 → BELONGS_TO_NODE：企业归属产业链节点（源表单行直查，直接）；
- * - 事件参与 → INVOLVED_IN/HAS_NEWS：企业参与事件/企业关联资讯（直接；
- *   「资讯」出自 dwd_org_important_news_info，其余出自各事件源表）；
+ * 用户关系台账输出「关系类别/关系详情」；关系类别只取直接关系/间接关系。
+ * - 产业链归属 → BELONGS_TO_NODE：企业归属产业链节点（直接）；
+ * - 事件参与 → INVOLVED_IN：涉及风险事件关系、HAS_NEWS：企业关联资讯
+ *   （均按台账判间接）；
  * - 专家任职 → EventExpertRelation（事件←企业←治理边 两跳派生，间接）。 */
 function industryEventRelationInfo(
   edge: GraphEdgeData,
@@ -2075,8 +2094,8 @@ function industryEventRelationInfo(
   }
   if (edge.category === "事件参与") {
     return edge.label === "资讯"
-      ? { category: "直接关系", detail: "企业关联资讯" }
-      : { category: "直接关系", detail: "企业参与事件" };
+      ? { category: "间接关系", detail: "企业关联资讯" }
+      : { category: "间接关系", detail: "涉及风险事件关系" };
   }
   if (edge.category === "专家任职") {
     return { category: "间接关系", detail: "事件关联专家" };
@@ -2086,8 +2105,9 @@ function industryEventRelationInfo(
 
 /** 全景图「关系类别/关系详情」关系台账：真实图库边按边类型码给出关系
  * 类别（只取直接关系/间接关系）与关系详情（按业务划分类别的中文细目）。
- * 间接口径：FUNDED_BY 靠机构名解析（可选 Milvus 对齐）、APPLIED_BY 经
- * 向量对齐到企业实体才能成立。 */
+ * 口径以用户 2026-09-15 关系台账表格为准（业务表格口径优先于 ETL 数据
+ * 源分析结论）：治理/项目/专利人侧等跨源或派生边判间接，论文与产业链
+ * 结构边判直接。 */
 const PANORAMA_RELATION_LEDGER: Record<
   string,
   { category: "直接关系" | "间接关系"; detail: string }
@@ -2098,33 +2118,39 @@ const PANORAMA_RELATION_LEDGER: Record<
   DOWNSTREAM_OF: { category: "直接关系", detail: "产业上下游" },
   BELONGS_TO_NODE: { category: "直接关系", detail: "企业归属产业链节点" },
   COVERS_CHAIN: { category: "直接关系", detail: "产业资讯报道产业链" },
-  PRODUCES: { category: "直接关系", detail: "企业生产产品" },
+  PRODUCES: { category: "间接关系", detail: "企业生产产品" },
   // 企业关联关系
-  AFFILIATED_WITH: { category: "直接关系", detail: "任职关系" },
-  EXECUTIVE_OF: { category: "直接关系", detail: "高管任职关系" },
-  LEGAL_REP_OF: { category: "直接关系", detail: "法定代表关系" },
-  ACTUAL_CONTROLLER_OF: { category: "直接关系", detail: "实际控制关系" },
-  BENEFICIAL_OWNER_OF: { category: "直接关系", detail: "最终受益关系" },
-  SHAREHOLDER_OF: { category: "直接关系", detail: "股东持股关系" },
-  INVOLVED_IN: { category: "直接关系", detail: "企业参与事件" },
-  HAS_NEWS: { category: "直接关系", detail: "企业关联资讯" },
-  // 合作关系（论文/项目/专利）
+  AFFILIATED_WITH: { category: "间接关系", detail: "任职关系" },
+  EXECUTIVE_OF: { category: "间接关系", detail: "高管任职关系" },
+  LEGAL_REP_OF: { category: "间接关系", detail: "法定代表关系" },
+  ACTUAL_CONTROLLER_OF: { category: "间接关系", detail: "实际控制关系" },
+  BENEFICIAL_OWNER_OF: { category: "间接关系", detail: "最终受益关系" },
+  SHAREHOLDER_OF: { category: "间接关系", detail: "股东持股关系" },
+  INVOLVED_IN: { category: "间接关系", detail: "涉及风险事件关系" },
+  HAS_NEWS: { category: "间接关系", detail: "企业关联资讯" },
+  EMPLOYED_BY: { category: "间接关系", detail: "企业任职关系" },
+  MEMBER_OF_FAMILY: { category: "直接关系", detail: "家族成员关系" },
+  // 合作关系（论文/项目/专利/成果）
   AUTHORED_BY: { category: "直接关系", detail: "论文署名关系" },
   COAUTHOR_WITH: { category: "直接关系", detail: "专家合著关系" },
   PUBLISHED_IN: { category: "直接关系", detail: "论文发表关系" },
   HAS_KEYWORD: { category: "直接关系", detail: "论文主题" },
-  CITES: { category: "直接关系", detail: "论文被引关系" },
+  CITES: { category: "直接关系", detail: "论文引用关系" },
   CITED: { category: "直接关系", detail: "论文被引关系" },
   CITED_BY: { category: "直接关系", detail: "论文被引关系" },
   RELATED_TO: { category: "直接关系", detail: "论文关联" },
-  LEADS: { category: "直接关系", detail: "项目负责人" },
-  HAS_PARTICIPANT: { category: "直接关系", detail: "项目参加人" },
-  PARTICIPATES_IN: { category: "直接关系", detail: "项目参与机构" },
-  INVENTED_BY: { category: "直接关系", detail: "专利发明人" },
-  FUNDED_BY: { category: "间接关系", detail: "项目获机构资助" },
+  LEADS: { category: "间接关系", detail: "项目负责人" },
+  HAS_PARTICIPANT: { category: "间接关系", detail: "项目参加人" },
+  PARTICIPATES_IN: { category: "间接关系", detail: "项目参与机构" },
+  FUNDED_BY: { category: "间接关系", detail: "项目资助方" },
+  INVENTED_BY: { category: "间接关系", detail: "专利发明人" },
   APPLIED_BY: { category: "间接关系", detail: "专利申请方" },
-  // 校友关系
-  STUDIED_AT: { category: "直接关系", detail: "就读所属院校" },
+  OUTPUT_OF: { category: "间接关系", detail: "成果归属关系" },
+  HAS_OUTPUT: { category: "间接关系", detail: "成果产出关系" },
+  // 校友/同事关系
+  STUDIED_AT: { category: "间接关系", detail: "就读所属院校" },
+  COLLEAGUE: { category: "间接关系", detail: "同事" },
+  ALUMNI: { category: "间接关系", detail: "校友" },
 };
 
 /** 全景图分层展示连线（inferred）的「关系详情」文案：按连线所在分层给出
@@ -3701,12 +3727,8 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       lastTestTime.value = formatTimestamp(now);
       lastUpdateTime.value = now.getTime();
       if (isPanoramaEmpty(response)) {
-        showToast(
-          response.source?.reason === "keyword_no_match"
-            ? "产业关键词未命中，请更换关键词"
-            : "未查询到符合条件的产业链全景图数据",
-          "info",
-        );
+        // 未命中/空结果：与同事关系页同款右上角提示（KgToast，info 色调）。
+        showToast("未查询到相关产业链全景图数据", "info");
       } else if (runOptions.refresh) {
         showToast("图谱已刷新", "success");
       }
@@ -3826,7 +3848,9 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       const message = error instanceof Error ? error.message : String(error);
       expertIndirectError.value = message;
       expertIndirectResponse.value = null;
-      resultMode.value = "api";
+      // 必填值不存在时留在结果详情页（实体/关系/溯源展示统一空态提示），
+      // 不跳 API 页签；其他错误仍跳 API 页签查看原始报错。
+      resultMode.value = isNotFoundMessage(message) ? "summary" : "api";
       showToast(message, "warning");
     } finally {
       running.value = false;
@@ -3892,6 +3916,10 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         const isExpertNotFound =
           res?.code === 404 && /未找到专家/u.test(res?.msg || "");
         if (isExpertNotFound) {
+          // 必填专家不存在：清空上一轮数据，按全景图空态展示（画布空态 +
+          // 实体/关系/溯源统一提示），不残留上一次查询的图谱与详情。
+          expertColleagueResponse.value = null;
+          liveResponse.value = null;
           liveError.value = null;
           showToast(res?.msg || "未查询到相关同事关系数据", "warning");
           resultMode.value = "summary";
@@ -3978,7 +4006,10 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         liveAlumniResult.value = null;
         liveError.value = resp.msg || `业务码 ${resp.code}`;
         showToast(liveError.value, "warning");
-        resultMode.value = "api";
+        // 必填值不存在时留在结果详情页（实体/关系/溯源统一空态提示），不跳 API 页签。
+        resultMode.value = isNotFoundMessage(liveError.value)
+          ? "summary"
+          : "api";
       } else {
         liveAlumniResult.value = resp.data;
         showToast(
@@ -4101,7 +4132,10 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         liveCoopResult.value = null;
         liveError.value = resp.msg || `业务码 ${resp.code}`;
         showToast(liveError.value, "warning");
-        resultMode.value = "api";
+        // 必填值不存在时留在结果详情页（实体/关系/溯源统一空态提示），不跳 API 页签。
+        resultMode.value = isNotFoundMessage(liveError.value)
+          ? "summary"
+          : "api";
       } else {
         liveCoopResult.value = resp.data;
         const total =
@@ -4164,7 +4198,10 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       ) {
         liveError.value = (res?.msg as string) || `业务码 ${res?.code}`;
         showToast(liveError.value, "warning");
-        resultMode.value = "api";
+        // 必填值不存在时留在结果详情页（实体/关系/溯源统一空态提示），不跳 API 页签。
+        resultMode.value = isNotFoundMessage(liveError.value)
+          ? "summary"
+          : "api";
       } else {
         const count = Number(res?.data?.enterprises ?? 0);
         liveError.value = null;
@@ -4253,7 +4290,10 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       ) {
         liveError.value = (res?.msg as string) || `业务码 ${res?.code}`;
         showToast(liveError.value, "warning");
-        resultMode.value = "api";
+        // 必填值不存在时留在结果详情页（实体/关系/溯源统一空态提示），不跳 API 页签。
+        resultMode.value = isNotFoundMessage(liveError.value)
+          ? "summary"
+          : "api";
       } else {
         const count = Number(res?.data?.events ?? 0);
         liveError.value = null;
@@ -4345,7 +4385,10 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       ) {
         liveError.value = (res?.msg as string) || `业务码 ${res?.code}`;
         showToast(liveError.value, "warning");
-        resultMode.value = "api";
+        // 必填值不存在时留在结果详情页（实体/关系/溯源统一空态提示），不跳 API 页签。
+        resultMode.value = isNotFoundMessage(liveError.value)
+          ? "summary"
+          : "api";
       } else {
         const sr = res?.structuredResult || res?.data?.structuredResult;
         const count = sr?.cooperationPaperCount || 0;
@@ -4380,14 +4423,14 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       error: message,
     };
     showToast(message, "warning");
-    resultMode.value = "api";
+    resultMode.value = isNotFoundMessage(message) ? "summary" : "api";
   } finally {
     running.value = false;
   }
 }
 
-function handleParameterInput(fieldName: string, event: Event) {
-  const value = (event.target as HTMLInputElement | HTMLSelectElement).value;
+function handleParameterInput(fieldName: string, event: Event | string) {
+  const value = typeof event === "string" ? event : (event.target as HTMLInputElement).value;
   const nextValues = {
     ...parameterValues.value,
     [fieldName]: value,
@@ -4514,30 +4557,35 @@ function clearGraphSelection() {
       <label
         v-for="field in moduleInfo.requestFields"
         :key="field.name"
+        :data-field="field.name"
         :class="{ 'has-error': Boolean(parameterErrors[field.name]) }"
       >
         <span
           ><i v-if="field.required === '是'">*</i
           >{{ field.label ?? field.name }}</span
         >
-        <select
-          aria-label="选择或输入内容"
+        <ElSelect
           v-if="field.type === 'select' || field.type === 'boolean'"
           :key="`${field.name}-${paramResetToken}`"
-          :value="parameterValues[field.name] ?? ''"
-          :class="{ 'is-empty-control': !parameterValues[field.name] }"
+          class="service-console__select"
+          popper-class="business-parameter-options"
+          :fit-input-width="true"
+          :model-value="parameterValues[field.name] ?? ''"
+          :aria-label="field.label ?? field.name"
+          :aria-invalid="Boolean(parameterErrors[field.name])"
+          placeholder="请选择"
           :title="field.description"
-          @change="handleParameterInput(field.name, $event)"
+          @update:model-value="handleParameterInput(field.name, $event)"
         >
-          <option value="" :disabled="field.required === '是'">请选择</option>
-          <option v-for="option in field.options" :key="option" :value="option">
-            {{ option }}
-          </option>
-        </select>
+          <ElOption value="" label="请选择" :disabled="field.required === '是'" />
+          <ElOption v-for="option in field.options" :key="option" :value="option" :label="option" />
+        </ElSelect>
         <ElSelect
           v-else-if="field.name === 'achievementTypes'"
           v-model="achievementTypeSelection"
           class="cooperation-type-select"
+          popper-class="business-parameter-options"
+          :fit-input-width="true"
           :data-empty="achievementTypeSelection.length === 0"
           multiple
           collapse-tags
@@ -4559,6 +4607,8 @@ function clearGraphSelection() {
           v-else-if="field.name === 'relationTypes'"
           v-model="panoramaRelationSelection"
           class="cooperation-type-select"
+          popper-class="business-parameter-options"
+          :fit-input-width="true"
           :data-empty="panoramaRelationSelection.length === 0"
           multiple
           collapse-tags
@@ -4580,6 +4630,8 @@ function clearGraphSelection() {
           v-else-if="field.name === 'educationStage' && isLiveAlumni"
           v-model="educationStageSelection"
           class="alumni-stage-select"
+          popper-class="business-parameter-options"
+          :fit-input-width="true"
           :data-empty="educationStageSelection.length === 0"
           multiple
           collapse-tags
@@ -4601,10 +4653,12 @@ function clearGraphSelection() {
           :key="`${field.name}-${paramResetToken}`"
           :model-value="parameterValues[field.name] || ''"
           class="service-console__month-picker"
+          :trigger-props="{ contentClass: 'business-month-options', autoFitPosition: true, autoFitPopupWidth: true }"
           format="YYYY年MM月"
           value-format="YYYY-MM"
           :placeholder="field.placeholder ?? '请选择年月'"
           allow-clear
+          disabled-input
           :locale="zhCN"
           :title="field.description"
           :aria-label="field.name"
@@ -4621,7 +4675,7 @@ function clearGraphSelection() {
         />
         <div v-else class="service-console__input-wrap">
           <input
-            aria-label="field.placeholder ?? field.description"
+            :aria-label="field.label ?? field.name"
             type="text"
             :key="`${field.name}-${paramResetToken}`"
             :value="parameterValues[field.name] ?? ''"
@@ -4718,7 +4772,11 @@ function clearGraphSelection() {
         </span>
       </div>
       <div class="graph-panel__canvas">
-        <div v-if="liveError" class="graph-panel__feedback" role="alert">
+        <div
+          v-if="liveError && !isNotFoundResult"
+          class="graph-panel__feedback"
+          role="alert"
+        >
           <strong>{{ queryFeedbackTitle }}</strong>
           <span>{{ liveError }}</span>
           <small>请检查专家 ID 后重新执行测试</small>
@@ -4950,11 +5008,7 @@ function clearGraphSelection() {
           </dl>
         </div>
         <p v-else-if="resultMode === 'entity'" class="result-provenance__empty">
-          {{
-            lastTestTime === "—"
-              ? "暂无实体数据，请先执行查询，或在图谱中选中一个实体/关系。"
-              : "暂无实体数据，请先执行查询。"
-          }}
+          暂无实体数据，请先执行查询，或在图谱中选中一个实体/关系。
         </p>
         <div
           v-else-if="resultMode === 'relation' && liveRelationRows.length"
@@ -4977,11 +5031,7 @@ function clearGraphSelection() {
           </dl>
         </div>
         <p v-else-if="resultMode === 'relation'" class="result-provenance__empty">
-          {{
-            lastTestTime === "—"
-              ? "暂无关系数据，请先执行查询，或在图谱中选中一个实体/关系。"
-              : "暂无关系数据，请先执行查询。"
-          }}
+          暂无关系数据，请先执行查询，或在图谱中选中一个实体/关系。
         </p>
         <section
           v-else-if="
@@ -5101,7 +5151,9 @@ function clearGraphSelection() {
           </div>
         </section>
         <section
-          v-else-if="resultMode === 'provenance' && liveResponse"
+          v-else-if="
+            resultMode === 'provenance' && liveResponse && !isNotFoundResult
+          "
           class="result-provenance"
         >
           <header>
@@ -5480,6 +5532,46 @@ function clearGraphSelection() {
   background-position: right 10px center;
   background-size: 16px;
   cursor: pointer;
+}
+
+.service-console__select {
+  width: 100%;
+  min-width: 0;
+}
+
+.service-console__select :deep(.el-select__wrapper) {
+  min-height: 32px;
+  border-radius: 6px;
+}
+
+.service-console__select :deep(.el-select__selected-item:not(.is-transparent)) {
+  color: var(--text-primary);
+}
+
+.service-console__params label.has-error .service-console__select :deep(.el-select__wrapper) {
+  box-shadow: 0 0 0 1px var(--danger) inset;
+}
+
+:global(.business-parameter-options) {
+  max-width: calc(100vw - 24px);
+}
+
+:global(.business-parameter-options .el-select-dropdown__item) {
+  height: auto;
+  min-height: 34px;
+  padding-block: 6px;
+  line-height: 22px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+:global(.business-month-options) {
+  max-width: calc(100vw - 24px);
+}
+
+:global(.business-month-options :is(.arco-picker-container, .arco-panel-month, .arco-panel-year)) {
+  width: 100%;
+  min-width: 0;
 }
 
 .cooperation-type-select {
@@ -5881,6 +5973,9 @@ function clearGraphSelection() {
 
 .result-panel__tabs {
   display: inline-flex;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
   gap: 0;
   padding: 2px;
   border: 1px solid var(--border);
@@ -5889,6 +5984,8 @@ function clearGraphSelection() {
 }
 
 .result-panel__tabs button {
+  flex: 0 0 auto;
+  white-space: nowrap;
   height: 26px;
   padding: 0 6px;
   border: 0;
@@ -6262,6 +6359,7 @@ function clearGraphSelection() {
 
 .result-panel__rules header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;

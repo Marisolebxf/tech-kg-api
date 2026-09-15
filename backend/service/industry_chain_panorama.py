@@ -110,7 +110,6 @@ _FALLBACK_REASON_TEXT = {
     "keyword_no_match": "产业关键词未命中任何实体",
     "graph_api_error": "图查询服务不可用",
     "unexpected_error": "图查询过程异常",
-    "keyword_fallback_overview": "关键词未命中，已回退到紧凑全景",
 }
 
 _LAYER_DEFINITIONS: list[dict[str, Any]] = [
@@ -222,9 +221,8 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                 )
                 layers, seed_vids = layer_payload
                 anchor = resolved_anchor
-                if industry_kw and not anchor and not any(layer["items"] for layer in layers):
-                    layers, seed_vids = await self._fetch_layers(client, None, top_k)
-                    fallback_reason = "keyword_fallback_overview"
+                # 关键词未命中不兜底：不再回退到全库紧凑全景，让结果保持空，
+                # 由 reason=keyword_no_match 驱动前端「未查询到数据」提示。
                 if rel_types:
                     graph = await self._fetch_graph(
                         client,

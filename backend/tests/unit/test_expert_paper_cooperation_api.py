@@ -12,6 +12,7 @@ from service.expert_paper_cooperation_api import (
     _fetch_paper_context,
     _relation_confidences,
     _stable_team_note,
+    _venue_level,
     _year_filters,
     clear_caches,
 )
@@ -184,6 +185,29 @@ def test_year_filters_use_string_publication_year():
         {"property": "publication_year", "operator": "gte", "value": "2021"},
         {"property": "publication_year", "operator": "lte", "value": "2026"},
     ]
+
+
+@pytest.mark.parametrize(
+    ("props", "expected"),
+    [
+        # 1) Paper 节点自带 venue_level 时最高优先
+        ({"venue_level": "CCF-A"}, "CCF-A"),
+        ({"venue_level": "未分级", "jcr_zone": "Q1"}, "JCR-Q1"),
+        # 2) 期刊分级体系按影响力排序
+        ({"jcr_zone": "Q2"}, "JCR-Q2"),
+        ({"scope_zone": "1区"}, "中科院-1区"),
+        ({"sub_quartile": "2区"}, "分区-2区"),
+        ({"top": "1"}, "Top期刊"),
+        ({"is_sci": "1", "zh_core": "北大核心"}, "SCI"),
+        # 3) 中文核心（未被 SCIE 收录的中文核心刊）排在 SCI 之后兜底
+        ({"zh_core": "北大核心/CSSCI/CSCD"}, "北大核心/CSSCI/CSCD"),
+        ({"zh_core": "EI/北大核心"}, "EI/北大核心"),
+        ({"zh_core": "  "}, "未分级"),
+        ({}, "未分级"),
+    ],
+)
+def test_venue_level_prefers_grading_systems_in_order(props, expected):
+    assert _venue_level({"id": "journal_1", "properties": props}) == expected
 
 
 def test_rules_describe_the_actual_paper_cooperation_algorithm():

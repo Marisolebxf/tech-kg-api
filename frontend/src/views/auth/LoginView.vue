@@ -132,7 +132,14 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
 .login-page {
   display: grid;
   grid-template-columns: minmax(460px, 1.2fr) minmax(420px, 0.8fr);
-  min-height: 100vh;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
   color: var(--gkx-text-primary);
   background: var(--gkx-bg-page);
 }
@@ -141,7 +148,8 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
   position: relative;
   display: grid;
   align-content: space-between;
-  min-height: 100vh;
+  min-width: 0;
+  min-height: 0;
   padding: 42px clamp(44px, 7vw, 110px);
   overflow: hidden;
   color: #fff;
@@ -232,10 +240,13 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
 .login-panel {
   display: grid;
   place-items: center;
+  min-width: 0;
   padding: 48px;
 }
 .login-card {
   width: min(390px, 100%);
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 42px;
   border: 1px solid rgba(255, 255, 255, 0.92);
   border-radius: 8px;
@@ -309,14 +320,16 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
 
 @media (max-width: 900px) {
   .login-page {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: max-content max-content;
+    align-content: start;
   }
   .login-intro {
-    min-height: 340px;
+    min-height: 0;
     padding: 28px;
   }
   .login-intro__content {
-    margin: 48px 0;
+    margin: 24px 0 0;
   }
   .login-intro h1 {
     font-size: 34px;
@@ -327,6 +340,34 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
   }
   .login-panel {
     padding: 32px 20px;
+  }
+}
+
+@media (max-width: 600px) {
+  .login-intro {
+    padding: 20px;
+  }
+  .login-brand {
+    gap: 10px;
+    font-size: 16px;
+  }
+  .login-intro h1 {
+    font-size: 28px;
+    letter-spacing: 0;
+  }
+  .login-intro__content > p:not(.login-kicker) {
+    margin-top: 16px;
+    font-size: 14px;
+  }
+  .login-kicker {
+    letter-spacing: 0;
+    overflow-wrap: anywhere;
+  }
+  .login-panel {
+    padding: 20px 16px max(20px, env(safe-area-inset-bottom));
+  }
+  .login-card {
+    padding: 24px;
   }
 }
 </style>

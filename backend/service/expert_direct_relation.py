@@ -9,10 +9,11 @@
 4. 机构过滤 & 时间过滤：在服务层按 ``institution`` 关键字、``relation_time`` 过滤该条关系。
 5. 图数据/详情：按业务格式组装 items + graph + provenance。
 6. 代表成果：优先图上 AUTHORED_BY 共同论文；真实专家常无 AUTHORED_BY 边
-   （跨域兜底 ETL 默认关闭），此时回退 MySQL ``dwd_scholar_paper_relation``
-   自连接取共同论文标题（标题按 paper_id / related_paper_id 两个号段从
-   ``dwd_scholar_papers`` / ``dwd_zh_paper`` / ``dwd_en_paper`` 核实，仅保留
-   查得到标题的行）。
+   （跨域兜底 ETL 默认关闭），此时回退 MySQL 两级：先 ``dwd_scholar_paper_relation``
+   自连接（标题按 paper_id / related_paper_id 两个号段从 ``dwd_scholar_papers`` /
+   ``dwd_zh_paper`` / ``dwd_en_paper`` 核实）；仍无标题且为单对查询时，按双方
+   姓名同时出现在 ``dwd_scholar_papers.authors`` 反查（真实行 id 未灌、只能按
+   姓名关联）。两级均仅保留查得到标题的行。
 
 查询结果一律来自图库；未命中或图服务异常时返回空结果并在 ``source.reason`` 标明原因，
 不返回内置示例数据。
@@ -377,11 +378,19 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         break
                 if not achievements:
                     # 真实专家常无 AUTHORED_BY 边（跨域兜底 ETL 默认关闭且 Paper
-                    # 顶点缺失）：回退 MySQL 关系表自连接，取有标题的共同论文。
+                    # 顶点缺失）：回退 MySQL。姓名反查要扫 dwd_scholar_papers
+                    # 全表（约 2.5s），只在单对查询（A+B 都指定）时启用，列表
+                    # 模式仅走关系表自连接的索引查询。
+                    a_names, b_names = await self._person_name_forms(
+                        client, row["expert_a_id"], row["expert_b_id"]
+                    )
                     achievements = await asyncio.to_thread(
                         self._shared_paper_titles_from_mysql,
                         row["expert_a_id"],
                         row["expert_b_id"],
+                        a_names,
+                        b_names,
+                        len(rows) == 1,
                     )
                 row["representative_achievements"] = achievements
             except GraphAPIError:
@@ -390,8 +399,41 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 )
 
     @staticmethod
-    def _shared_paper_titles_from_mysql(a_vid: str, b_vid: str) -> list[dict[str, str]]:
-        """MySQL 回退：共同论文标题（仅保留标题可核实的行，按被引降序取 3 条）。"""
+    async def _person_name_forms(
+        client: Any, a_vid: str, b_vid: str
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """取两位专家的中英文姓名（姓名反查回退的匹配素材）。"""
+        forms: list[tuple[str, ...]] = []
+        for vid in (a_vid, b_vid):
+            try:
+                node = await client.get_node(vid)
+            except GraphAPIError:
+                node = None
+            props = (node or {}).get("properties") or {}
+            forms.append(
+                tuple(
+                    str(props[key]).strip()
+                    for key in ("name_zh", "name_en")
+                    if str(props.get(key) or "").strip()
+                )
+            )
+        return forms[0], forms[1]
+
+    @staticmethod
+    def _shared_paper_titles_from_mysql(
+        a_vid: str,
+        b_vid: str,
+        a_names: tuple[str, ...] = (),
+        b_names: tuple[str, ...] = (),
+        allow_name_match: bool = False,
+    ) -> list[dict[str, str]]:
+        """MySQL 回退：共同论文标题（仅保留标题可核实的行，按被引降序取 3 条）。
+
+        两级：先 ``dwd_scholar_paper_relation`` 自连接（paper_id / related_paper_id
+        双号段核实标题，索引查询）；仍无标题且 ``allow_name_match`` 时，按双方
+        姓名同时出现在 ``dwd_scholar_papers.authors``（逗号分隔作者姓名，真实行
+        无 id 无法按 paper_id 关联）反查，按发表时间降序取 3 条。
+        """
         a_scholar = a_vid.removeprefix("person_")
         b_scholar = b_vid.removeprefix("person_")
         if not a_scholar or not b_scholar or a_scholar == b_scholar:
@@ -418,11 +460,14 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 "representative achievements mysql fallback failed: %s x %s", a_vid, b_vid
             )
             return []
-        return [
+        achievements = [
             {"id": f"paper_{row['paper_id']}", "title": str(row["title"])}
             for row in rows
             if row["title"]
         ]
+        if achievements or not allow_name_match:
+            return achievements
+        return _shared_paper_titles_by_author_names(a_names, b_names)
 
     async def _find_person(self, client: Any, keyword: str) -> dict[str, Any] | None:
         """按 VID / scholar_id / 姓名定位一个 Person 节点。
@@ -1045,3 +1090,49 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         if evidence_kind == "project":
             return "共同项目"
         return "共同论文"
+
+
+def _matchable_names(names: tuple[str, ...]) -> list[str]:
+    """过滤可用的姓名匹配素材：非空、长度 >= 2、不是节点 VID 兜底串。"""
+    return [name for name in names if len(name) >= 2 and not name.startswith("person_")]
+
+
+def _shared_paper_titles_by_author_names(
+    a_names: tuple[str, ...], b_names: tuple[str, ...]
+) -> list[dict[str, str]]:
+    """按双方姓名反查 ``dwd_scholar_papers.authors``（约 25 万行 LIKE 扫描）。
+
+    该表真实行的 id 未灌入（无法按 paper_id 关联），但 authors 存逗号分隔的
+    作者姓名——双方中/英文名任一形态同时命中的行即共同论文。中文姓名按子串
+    匹配可能撞上更长的姓名，靠双方同时命中 + 仅单对查询兜底；标题取
+    zh_name/en_name，按发表时间降序取 3 条。
+    """
+    usable_a = _matchable_names(a_names)
+    usable_b = _matchable_names(b_names)
+    if not usable_a or not usable_b:
+        return []
+    where_a = " OR ".join(f"authors LIKE :a{i}" for i in range(len(usable_a)))
+    where_b = " OR ".join(f"authors LIKE :b{i}" for i in range(len(usable_b)))
+    params = {f"a{i}": f"%{name}%" for i, name in enumerate(usable_a)}
+    params.update({f"b{i}": f"%{name}%" for i, name in enumerate(usable_b)})
+    sql = text(
+        "SELECT doi, COALESCE(NULLIF(zh_name, ''), NULLIF(en_name, '')) AS title "
+        "FROM dwd_scholar_papers "
+        f"WHERE ({where_a}) AND ({where_b}) "
+        "ORDER BY cover_date_start DESC LIMIT 3"
+    )
+    try:
+        with session_scope() as session:
+            rows = session.execute(sql, params).mappings().all()
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "representative achievements author-name fallback failed: %s x %s",
+            usable_a[0],
+            usable_b[0],
+        )
+        return []
+    return [
+        {"id": str(row["doi"] or row["title"]), "title": str(row["title"])}
+        for row in rows
+        if row["title"]
+    ]

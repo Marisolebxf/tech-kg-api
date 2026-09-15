@@ -53,9 +53,9 @@ TSINGHUA_UNIVERSITY = "Tsinghua University"
 
 BATCH = "EXPERT_MODULES_E2E_V1"
 # 预留号段：形态像真，与现网抽样不冲突；清理靠白名单 + BATCH 确认。
-PAPER_ID_BASE = 889900000  # paper ids: 889900001 .. 889900080
+PAPER_ID_BASE = 889900000  # paper ids: 889900001 .. 889900081
 EXPECTED_PERSONS = 100
-EXPECTED_ACHIEVEMENTS = 100
+EXPECTED_ACHIEVEMENTS = 101
 # 旧版 ID（expert_e2e_v1_* / 9930…），apply/cleanup 时一并清除以免残留。
 LEGACY_PREFIX = "expert_e2e_v1_"
 LEGACY_PAPER_ID_BASE = 9930000000000000
@@ -161,6 +161,8 @@ class Project:
     participants: tuple[int, ...]
     fields: tuple[str, ...]
     awards: tuple[str, ...] = ()
+    # 成果评价（图 Project.evaluation 属性，两点合作成果「奖项/评价」行的评价来源）
+    evaluation: str = ""
 
     @property
     def mysql_id(self) -> str:
@@ -180,6 +182,8 @@ class Patent:
     year: int
     inventors: tuple[int, ...]
     fields: tuple[str, ...]
+    # 成果评价（图 Patent.evaluation 属性，两点合作成果「奖项/评价」行的评价来源）
+    evaluation: str = ""
 
     @property
     def patent_id(self) -> str:
@@ -572,6 +576,19 @@ def papers() -> list[Paper]:
                 ("青年科技创新奖",) if no % 17 == 0 else (),
             )
         )
+    # 2023-01 起的时间窗内 1↔4 可见的共同论文（带领域与奖项，供「所属领域」
+    # 「奖项/评价」摘要行有数据）。
+    rows.append(
+        Paper(
+            81,
+            "大规模知识图谱质量评价方法",
+            "Quality Evaluation for Large-scale Knowledge Graphs",
+            2024,
+            (1, 4),
+            ("知识图谱构建", "质量评价"),
+            ("科技创新优秀成果奖",),
+        )
+    )
     return rows
 
 
@@ -587,7 +604,16 @@ def projects() -> list[Project]:
             ("数字科技应用示范奖",),
         ),
         Project(2, "高性能图数据库查询引擎研制", 2024, 1, (7,), ("图数据库", "高性能计算")),
-        Project(3, "跨领域科研成果智能发现平台", 2023, 4, (1,), ("成果发现", "人工智能")),
+        Project(
+            3,
+            "跨领域科研成果智能发现平台",
+            2023,
+            4,
+            (1,),
+            ("成果发现", "人工智能"),
+            ("省部级科技进步一等奖",),
+            "结题验收优秀，成果已在多家科研单位示范应用",
+        ),
         Project(4, "先进材料智能设计与验证平台", 2024, 9, (10,), ("先进材料", "智能设计")),
     ]
     project_topics = (
@@ -641,6 +667,7 @@ def patents() -> list[Patent]:
             2023,
             (1, 4),
             ("语义计算", "数据治理"),
+            "已落地应用于科技情报检索系统",
         ),
         Patent(
             4,
@@ -818,7 +845,8 @@ def plan() -> dict[str, Any]:
             "citedByEdges": len(CITATIONS),
             "citesEdges": len(CITATIONS),
             "classificationRows": sum(1 for x in pas if x.fields),
-            "keywordEdges": sum(len(x.fields) for x in pas if x.fields),
+            "keywordEdges": sum(len(x.fields) for x in pas if x.fields)
+            + sum(len(x.fields) for x in prs if x.fields),
             "researchDirectionRows": len(research_fields_by_person()),
         },
         "sampleIds": {
@@ -1331,6 +1359,13 @@ def sync_graph_from_mysql() -> dict[str, int]:
             time.sleep(3)  # DDL 有 schema 传播延迟，与上方 CREATE EDGE 同口径
         except Exception as exc:  # noqa: BLE001
             print(f"skip ddl: ALTER EDGE {edge_type} | {exc}")
+    # 成果评价列（「奖项/评价」行的评价来源）；output_awards/keywords 列本空间已有。
+    for tag in ("Patent", "Project"):
+        try:
+            graph.execute_write(f"ALTER TAG {tag} ADD (evaluation string)")
+            time.sleep(3)
+        except Exception as exc:  # noqa: BLE001
+            print(f"skip ddl: ALTER TAG {tag} | {exc}")
 
     def merge_edge(
         source: str, target: str, edge_type: str, key: str, props: dict[str, Any] | None = None
@@ -1378,6 +1413,8 @@ def sync_graph_from_mysql() -> dict[str, int]:
                 },
             )
         paper_defs = {p.mysql_id: p for p in papers()}
+        project_defs = {p.mysql_id: p for p in projects()}
+        patent_defs = {p.patent_id: p for p in patents()}
         for row in paper_rows:
             definition = paper_defs[row["id"]]
             graph.merge_node(
@@ -1391,6 +1428,14 @@ def sync_graph_from_mysql() -> dict[str, int]:
                     if row["cover_date_start"]
                     else "",
                     "doi": row["doi"],
+                    # 获奖（与 Project.output_awards 同构，模块按 AWARD_KEYS 读取）
+                    "output_awards": json.dumps(
+                        [
+                            {"year": definition.year or "", "title": name}
+                            for name in definition.awards
+                        ],
+                        ensure_ascii=False,
+                    ),
                     "source": BATCH,
                 },
             )
@@ -1433,7 +1478,12 @@ def sync_graph_from_mysql() -> dict[str, int]:
             keywords = [kw.strip() for kw in str(row["keywords"] or "").split(",") if kw.strip()]
             for kw in keywords:
                 kvid = f"keyword_{hashlib.md5(kw.encode('utf-8')).hexdigest()}"
-                if graph.get_node(kvid) is None:
+                try:
+                    kword_exists = graph.get_node(kvid) is not None
+                except Exception:  # noqa: BLE001
+                    # DDL 后偶发瞬时读失败：按不存在处理，merge_node 幂等兜底
+                    kword_exists = False
+                if not kword_exists:
                     graph.merge_node(["Keyword"], {"vid": kvid}, {"keyword": kw})
                 merge_edge(
                     f"paper_{row['id']}",
@@ -1531,6 +1581,7 @@ def sync_graph_from_mysql() -> dict[str, int]:
                     awards_n = int(bool(parsed_awards))
             except json.JSONDecodeError:
                 awards_n = 0 if awards_json in ("", "[]") else 1
+            project_definition = project_defs[row["id"]]
             graph.merge_node(
                 ["Project"],
                 {"vid": pvid},
@@ -1540,6 +1591,9 @@ def sync_graph_from_mysql() -> dict[str, int]:
                     "abstract": row["abstract"] or "",
                     "awards_count": awards_n,
                     "output_awards": awards_json,
+                    # 所属领域（与真实项目 ETL 的 keywords → HAS_KEYWORD 双写口径一致）
+                    "keywords": row["keywords"] or "[]",
+                    "evaluation": project_definition.evaluation,
                     "source_system": "gkx_element",
                     "source_table": "dwd_zh_project",
                     "source_record_id": row["id"],
@@ -1547,6 +1601,30 @@ def sync_graph_from_mysql() -> dict[str, int]:
                     "ingest_time": now,
                 },
             )
+            # 项目关键词（HAS_KEYWORD，源 dwd_zh_project.keywords；kvid 与论文侧同构）
+            for kw in json.loads(row["keywords"] or "[]"):
+                kw = str(kw).strip()
+                if not kw:
+                    continue
+                kvid = f"keyword_{hashlib.md5(kw.encode('utf-8')).hexdigest()}"
+                try:
+                    kword_exists = graph.get_node(kvid) is not None
+                except Exception:  # noqa: BLE001
+                    kword_exists = False
+                if not kword_exists:
+                    graph.merge_node(["Keyword"], {"vid": kvid}, {"keyword": kw})
+                merge_edge(
+                    pvid,
+                    kvid,
+                    "HAS_KEYWORD",
+                    f"has_keyword:{pvid}:{kvid}",
+                    {
+                        "source_table": "dwd_zh_project",
+                        "source_record_id": str(row["id"]),
+                        "ingest_batch": BATCH,
+                        "ingest_time": now,
+                    },
+                )
             host = row["project_host"]
             if host:
                 merge_edge(pvid, f"person_{host}", "LEADS", f"project:{row['id']}:lead:{host}")
@@ -1579,6 +1657,7 @@ def sync_graph_from_mysql() -> dict[str, int]:
                         str(publication.get("date") or "").replace("-", "") or 0
                     ),
                     "keywords": json.dumps(keywords, ensure_ascii=False),
+                    "evaluation": patent_defs[row["patent_id"]].evaluation,
                     "publication_number": row["publication_number"],
                     "patent_id": row["patent_id"],
                     "db_source": BATCH,
@@ -1722,8 +1801,10 @@ def verify() -> dict[str, Any]:
                 citation_edges_ok = False
         # 论文主题链路：每篇种子论文的 HAS_KEYWORD 出边数 = 源表关键词数，
         # 且关键词目标节点真实存在（keyword_{md5} 共享维度节点）。
+        # 项目侧同构校验（所属领域 HAS_KEYWORD），并抽验论文获奖属性。
         keyword_edges_ok = True
         keyword_sample: list[str] = []
+        awards_props_ok = True
         for p in papers():
             try:
                 kw_edges = graph.get_node_edges(
@@ -1734,6 +1815,10 @@ def verify() -> dict[str, Any]:
                 continue
             if len(kw_edges or []) != len(p.fields):
                 keyword_edges_ok = False
+            node = graph.get_node(p.vid)
+            node_props = (node.properties if node else None) or {}
+            if p.awards and p.awards[0] not in str(node_props.get("output_awards") or ""):
+                awards_props_ok = False
             for edge in kw_edges or []:
                 kvid = str(getattr(edge, "target_id", "") or "")
                 knode = graph.get_node(kvid) if kvid else None
@@ -1742,6 +1827,16 @@ def verify() -> dict[str, Any]:
                     keyword_edges_ok = False
                 elif kprops["keyword"] not in keyword_sample:
                     keyword_sample.append(str(kprops["keyword"]))
+        for prj in projects():
+            try:
+                kw_edges = graph.get_node_edges(
+                    prj.vid, direction="out", edge_type="HAS_KEYWORD", limit=50
+                )
+            except Exception:  # noqa: BLE001
+                keyword_edges_ok = False
+                continue
+            if len(kw_edges or []) != len(prj.fields):
+                keyword_edges_ok = False
         # 研究方向回退：有成果领域的专家，Person.research_fields 必须非空。
         research_fields_ok = True
         for person_no in research_fields_by_person():
@@ -1761,6 +1856,7 @@ def verify() -> dict[str, Any]:
         and classification_rows == expected["classificationRows"]
         and research_rows == expected["researchDirectionRows"]
         and keyword_edges_ok
+        and awards_props_ok
         and research_fields_ok
     )
     return {
@@ -1776,6 +1872,7 @@ def verify() -> dict[str, Any]:
         "classificationRows": classification_rows,
         "researchDirectionRows": research_rows,
         "keywordEdgesOk": keyword_edges_ok,
+        "awardsPropsOk": awards_props_ok,
         "keywordSample": sorted(keyword_sample),
         "researchFieldsOk": research_fields_ok,
         "sampleIds": plan()["sampleIds"],

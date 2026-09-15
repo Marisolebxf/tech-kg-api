@@ -1,12 +1,12 @@
 """用户抽取脚本 SDK。
 
 activity 在子进程外把"已解析的连接参数"（不是活对象）序列化进 ``KG_SCRIPT_CTX``
-环境变量（两参 step 脚本同时合并进 ``ctx`` dict）。脚本里：
+环境变量。脚本一律单参入口（``transform(payload)`` 或 STEPS 多步的
+``step_fn(payload)``），函数内取上下文：
 
-- 两参 ``step_fn(payload, ctx)``：``ctx`` 是 :class:`Context`（activity 已包装），
-  直接 ``ctx.mysql`` / ``ctx.graph`` / ``ctx.llm`` ... 取懒构造客户端。
-- 单参 ``workflow(payload)``：``from kg_sdk import current_context``，
-  ``ctx = current_context()``（未配置时返回 None，脚本降级）。
+- ``from kg_sdk import current_context``，``ctx = current_context()``
+  （未配置时返回 None，脚本降级），直接 ``ctx.mysql`` / ``ctx.graph`` /
+  ``ctx.llm`` / ``ctx.config`` ... 取懒构造客户端与增量游标。
 
 未配置某选择器时对应属性返回 ``None``（与 ``infra.llm.get_llm_client`` 降级约定一致），
 脚本应 ``if ctx.llm:`` 判空后再用。
@@ -29,7 +29,11 @@ _UNSET = object()
 
 @dataclass(frozen=True)
 class ScriptConfig:
-    """跨运行增量游标，由 activity 在 step 成功后写入。"""
+    """跨运行增量游标（``kg_script_watermark``，**只读**）。
+
+    水位由平台在来源全部批次整链成功后按批次游标推进；脚本返回值里的
+    ``_watermark``/``_checkpoint`` 元字段会被 activity 忽略（不归脚本管）。
+    """
 
     watermark: str | None = None
     checkpoint: dict[str, Any] | None = None

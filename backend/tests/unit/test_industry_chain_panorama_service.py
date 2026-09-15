@@ -209,42 +209,23 @@ async def test_fetch_layers_collects_all_four_layers_without_keyword() -> None:
 
 
 @pytest.mark.asyncio
-async def test_query_falls_back_to_compact_overview_when_keyword_misses(monkeypatch) -> None:
+async def test_query_returns_keyword_no_match_when_keyword_misses(monkeypatch) -> None:
+    """关键词未命中不再回退全库紧凑全景：结果保持空并标记 keyword_no_match。"""
+
     service = IndustryChainPanoramaService()
 
     async def _fake_fetch_layers(client, industry, top_k):
-        if industry == "人工智能":
-            return (
-                [
-                    {"key": "core_technology", "title": "核心技术", "total": 0, "items": []},
-                    {"key": "leading_enterprise", "title": "领军企业", "total": 0, "items": []},
-                ],
-                [],
-            )
-        assert industry is None
+        assert industry == "人工智能"
         return (
             [
-                {
-                    "key": "core_technology",
-                    "title": "核心技术",
-                    "total": 1,
-                    "items": [{"id": "kw_1"}],
-                },
-                {
-                    "key": "leading_enterprise",
-                    "title": "领军企业",
-                    "total": 1,
-                    "items": [{"id": "org_1"}],
-                },
+                {"key": "core_technology", "title": "核心技术", "total": 0, "items": []},
+                {"key": "leading_enterprise", "title": "领军企业", "total": 0, "items": []},
             ],
-            ["kw_1"],
+            [],
         )
 
     async def _fake_fetch_graph(client, seed_vids, anchor_id, depth):
-        return {
-            "nodes": [{"id": seed_vids[0], "label": seed_vids[0]}] if seed_vids else [],
-            "edges": [],
-        }
+        return {"nodes": [], "edges": []}
 
     class _GraphCtx:
         async def __aenter__(self):
@@ -264,9 +245,10 @@ async def test_query_falls_back_to_compact_overview_when_keyword_misses(monkeypa
 
     result = await service.query(industry="人工智能", depth=1, top_k=3)
 
-    assert result["source"]["reason"] == "keyword_fallback_overview"
-    assert [layer["key"] for layer in result["layers"]] == ["core_technology", "leading_enterprise"]
-    assert result["summary"]["totalNodes"] == 2
+    assert result["source"]["reason"] == "keyword_no_match"
+    assert [not layer["items"] for layer in result["layers"]]
+    assert result["graph"]["nodes"] == []
+    assert result["summary"]["totalNodes"] == 0
 
 
 @pytest.mark.asyncio

@@ -843,6 +843,9 @@ function canvasEdgeToPanoramaEdge(edge: GraphEdgeData): PanoramaGraphEdge {
 function derivedGraphFromResponse(
   resp: IndustryChainPanoramaQueryResponse,
 ): GraphPreset {
+  // 关键词未命中等空结果不生成虚拟产业链中心：画布与实体页保持空，
+  // 走「暂无图谱数据」与「暂无实体数据」空态提示。
+  if (isPanoramaEmpty(resp)) return { nodes: [], edges: [] };
   const nodes: GraphNodeData[] = [];
   const edges: GraphEdgeData[] = [];
   const idMap = new Map<string, GraphNodeData>();
@@ -2051,10 +2054,10 @@ const expertDirectRelationDescription = (edge: GraphEdgeData): string => {
 };
 
 /** TOP-N 事件关系页「关系描述」口径：先判断画布连线对应的图关系类型，再按
- * 关系台账输出「关系类别/关系详情」；关系类别只取直接关系/间接关系。
- * - 产业链归属 → BELONGS_TO_NODE：企业归属产业链节点（源表单行直查，直接）；
- * - 事件参与 → INVOLVED_IN/HAS_NEWS：企业参与事件/企业关联资讯（直接；
- *   「资讯」出自 dwd_org_important_news_info，其余出自各事件源表）；
+ * 用户关系台账输出「关系类别/关系详情」；关系类别只取直接关系/间接关系。
+ * - 产业链归属 → BELONGS_TO_NODE：企业归属产业链节点（直接）；
+ * - 事件参与 → INVOLVED_IN：涉及风险事件关系、HAS_NEWS：企业关联资讯
+ *   （均按台账判间接）；
  * - 专家任职 → EventExpertRelation（事件←企业←治理边 两跳派生，间接）。 */
 function industryEventRelationInfo(
   edge: GraphEdgeData,
@@ -2064,8 +2067,8 @@ function industryEventRelationInfo(
   }
   if (edge.category === "事件参与") {
     return edge.label === "资讯"
-      ? { category: "直接关系", detail: "企业关联资讯" }
-      : { category: "直接关系", detail: "企业参与事件" };
+      ? { category: "间接关系", detail: "企业关联资讯" }
+      : { category: "间接关系", detail: "涉及风险事件关系" };
   }
   if (edge.category === "专家任职") {
     return { category: "间接关系", detail: "事件关联专家" };
@@ -2075,8 +2078,9 @@ function industryEventRelationInfo(
 
 /** 全景图「关系类别/关系详情」关系台账：真实图库边按边类型码给出关系
  * 类别（只取直接关系/间接关系）与关系详情（按业务划分类别的中文细目）。
- * 间接口径：FUNDED_BY 靠机构名解析（可选 Milvus 对齐）、APPLIED_BY 经
- * 向量对齐到企业实体才能成立。 */
+ * 口径以用户 2026-09-15 关系台账表格为准（业务表格口径优先于 ETL 数据
+ * 源分析结论）：治理/项目/专利人侧等跨源或派生边判间接，论文与产业链
+ * 结构边判直接。 */
 const PANORAMA_RELATION_LEDGER: Record<
   string,
   { category: "直接关系" | "间接关系"; detail: string }
@@ -2087,33 +2091,39 @@ const PANORAMA_RELATION_LEDGER: Record<
   DOWNSTREAM_OF: { category: "直接关系", detail: "产业上下游" },
   BELONGS_TO_NODE: { category: "直接关系", detail: "企业归属产业链节点" },
   COVERS_CHAIN: { category: "直接关系", detail: "产业资讯报道产业链" },
-  PRODUCES: { category: "直接关系", detail: "企业生产产品" },
+  PRODUCES: { category: "间接关系", detail: "企业生产产品" },
   // 企业关联关系
-  AFFILIATED_WITH: { category: "直接关系", detail: "任职关系" },
-  EXECUTIVE_OF: { category: "直接关系", detail: "高管任职关系" },
-  LEGAL_REP_OF: { category: "直接关系", detail: "法定代表关系" },
-  ACTUAL_CONTROLLER_OF: { category: "直接关系", detail: "实际控制关系" },
-  BENEFICIAL_OWNER_OF: { category: "直接关系", detail: "最终受益关系" },
-  SHAREHOLDER_OF: { category: "直接关系", detail: "股东持股关系" },
-  INVOLVED_IN: { category: "直接关系", detail: "企业参与事件" },
-  HAS_NEWS: { category: "直接关系", detail: "企业关联资讯" },
-  // 合作关系（论文/项目/专利）
+  AFFILIATED_WITH: { category: "间接关系", detail: "任职关系" },
+  EXECUTIVE_OF: { category: "间接关系", detail: "高管任职关系" },
+  LEGAL_REP_OF: { category: "间接关系", detail: "法定代表关系" },
+  ACTUAL_CONTROLLER_OF: { category: "间接关系", detail: "实际控制关系" },
+  BENEFICIAL_OWNER_OF: { category: "间接关系", detail: "最终受益关系" },
+  SHAREHOLDER_OF: { category: "间接关系", detail: "股东持股关系" },
+  INVOLVED_IN: { category: "间接关系", detail: "涉及风险事件关系" },
+  HAS_NEWS: { category: "间接关系", detail: "企业关联资讯" },
+  EMPLOYED_BY: { category: "间接关系", detail: "企业任职关系" },
+  MEMBER_OF_FAMILY: { category: "直接关系", detail: "家族成员关系" },
+  // 合作关系（论文/项目/专利/成果）
   AUTHORED_BY: { category: "直接关系", detail: "论文署名关系" },
   COAUTHOR_WITH: { category: "直接关系", detail: "专家合著关系" },
   PUBLISHED_IN: { category: "直接关系", detail: "论文发表关系" },
   HAS_KEYWORD: { category: "直接关系", detail: "论文主题" },
-  CITES: { category: "直接关系", detail: "论文被引关系" },
+  CITES: { category: "直接关系", detail: "论文引用关系" },
   CITED: { category: "直接关系", detail: "论文被引关系" },
   CITED_BY: { category: "直接关系", detail: "论文被引关系" },
   RELATED_TO: { category: "直接关系", detail: "论文关联" },
-  LEADS: { category: "直接关系", detail: "项目负责人" },
-  HAS_PARTICIPANT: { category: "直接关系", detail: "项目参加人" },
-  PARTICIPATES_IN: { category: "直接关系", detail: "项目参与机构" },
-  INVENTED_BY: { category: "直接关系", detail: "专利发明人" },
-  FUNDED_BY: { category: "间接关系", detail: "项目获机构资助" },
+  LEADS: { category: "间接关系", detail: "项目负责人" },
+  HAS_PARTICIPANT: { category: "间接关系", detail: "项目参加人" },
+  PARTICIPATES_IN: { category: "间接关系", detail: "项目参与机构" },
+  FUNDED_BY: { category: "间接关系", detail: "项目资助方" },
+  INVENTED_BY: { category: "间接关系", detail: "专利发明人" },
   APPLIED_BY: { category: "间接关系", detail: "专利申请方" },
-  // 校友关系
-  STUDIED_AT: { category: "直接关系", detail: "就读所属院校" },
+  OUTPUT_OF: { category: "间接关系", detail: "成果归属关系" },
+  HAS_OUTPUT: { category: "间接关系", detail: "成果产出关系" },
+  // 校友/同事关系
+  STUDIED_AT: { category: "间接关系", detail: "就读所属院校" },
+  COLLEAGUE: { category: "间接关系", detail: "同事" },
+  ALUMNI: { category: "间接关系", detail: "校友" },
 };
 
 /** 全景图分层展示连线（inferred）的「关系详情」文案：按连线所在分层给出
@@ -3690,12 +3700,8 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       lastTestTime.value = formatTimestamp(now);
       lastUpdateTime.value = now.getTime();
       if (isPanoramaEmpty(response)) {
-        showToast(
-          response.source?.reason === "keyword_no_match"
-            ? "产业关键词未命中，请更换关键词"
-            : "未查询到符合条件的产业链全景图数据",
-          "info",
-        );
+        // 未命中/空结果：与同事关系页同款右上角提示（KgToast，info 色调）。
+        showToast("未查询到相关产业链全景图数据", "info");
       } else if (runOptions.refresh) {
         showToast("图谱已刷新", "success");
       }
@@ -4918,11 +4924,7 @@ function clearGraphSelection() {
           </dl>
         </div>
         <p v-else-if="resultMode === 'entity'" class="result-provenance__empty">
-          {{
-            lastTestTime === "—"
-              ? "暂无实体数据，请先执行查询，或在图谱中选中一个实体/关系。"
-              : "暂无实体数据，请先执行查询。"
-          }}
+          暂无实体数据，请先执行查询，或在图谱中选中一个实体/关系。
         </p>
         <div
           v-else-if="resultMode === 'relation' && liveRelationRows.length"
@@ -4945,11 +4947,7 @@ function clearGraphSelection() {
           </dl>
         </div>
         <p v-else-if="resultMode === 'relation'" class="result-provenance__empty">
-          {{
-            lastTestTime === "—"
-              ? "暂无关系数据，请先执行查询，或在图谱中选中一个实体/关系。"
-              : "暂无关系数据，请先执行查询。"
-          }}
+          暂无关系数据，请先执行查询，或在图谱中选中一个实体/关系。
         </p>
         <section
           v-else-if="

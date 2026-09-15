@@ -286,6 +286,8 @@ const queryFormModel = computed(() => ({
   queryRelationFilter: queryRelationFilter.value,
   queryEntityConfidence: queryEntityConfidence.value,
   queryRelationConfidence: queryRelationConfidence.value,
+  // 图空间规则校验读 model.selectedGraphSpace，缺键时 required 永假 → 查询全被拦（3f0ef4c 引入）
+  selectedGraphSpace: selectedGraphSpace.value,
 }))
 const queryFormRules = {
   queryKeyword: [{ required: true, message: '请输入实体名称或ID' }],

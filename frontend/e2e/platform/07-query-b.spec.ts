@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { apiMust, waitFor } from './helpers'
+import { apiMust, graphWrite, waitFor } from './helpers'
 
 // B. 图谱查询（/graph-query，PlatformWorkbenchView 的 query Tab）
 // 环境说明：dev2 已为各 TAG 的搜索字段建属性索引（e2e_idx_*，见测试报告）；
@@ -8,6 +8,16 @@ import { apiMust, waitFor } from './helpers'
 test.describe('B. 图谱查询', () => {
   const PERSON_NAME = '吴边'
   const ORG_NAME = '平安银行股份有限公司'
+
+  test.beforeAll(async () => {
+    // B1 机构查询素材：原种子机构已随 dev2 数据演进消失（现仅剩 ETL 测试残留的
+    // name_cn 外文机构），幂等补一个机构点保证断言数据无关（搜索字段 name_cn，
+    // 索引 e2e_idx_org_name_cn；Organization 全列可空）
+    await graphWrite(
+      'INSERT VERTEX Organization (name_cn, name_en, source_system) VALUES "e2e_org_pingan":("平安银行股份有限公司", "Ping An Bank Co., Ltd. (e2e)", "e2e-b1")',
+      'dev2',
+    )
+  })
 
   test('B1 参数模式查询：画布 + 统计 + 详情四 Tab + 动态图例', async ({ page }) => {
     await page.goto('/graph-query')
@@ -21,11 +31,10 @@ test.describe('B. 图谱查询', () => {
     await expect(queryBtn).toBeEnabled()
     await queryBtn.click()
 
-    // 综合图谱展示：「N 个节点 / M 条关系」统计（N≥1）
-    const graphPanel = page.locator('.platform-query-graph')
+    // 综合图谱展示：「N 个节点 / M 条关系」统计（N≥1，设计规范改版后统计在详情面板「图谱规模」）
     await waitFor(
       async () => {
-        const text = await graphPanel.locator('.kg-panel__header span').first().innerText()
+        const text = await page.getByText(/\d+ 个节点 \/ \d+ 条关系/).first().innerText()
         const m = text.match(/(\d+) 个节点 \/ (\d+) 条关系/)
         return m && Number(m[1]) >= 1 ? text : null
       },
@@ -50,7 +59,8 @@ test.describe('B. 图谱查询', () => {
     await queryBtn.click()
     await waitFor(
       async () => {
-        const text = await graphPanel.locator('.kg-panel__header span').first().innerText()
+        // 设计规范改版后统计移入详情面板「图谱规模」，面板头不再有统计 span
+        const text = await page.getByText(/\d+ 个节点 \/ \d+ 条关系/).first().innerText()
         const m = text.match(/(\d+) 个节点 \/ (\d+) 条关系/)
         return m && Number(m[1]) >= 1 ? text : null
       },
@@ -133,18 +143,18 @@ test.describe('B. 图谱查询', () => {
     await page.waitForLoadState('networkidle')
     await page.locator('input[placeholder="请输入实体名称或节点ID"]').fill(PATENT_TITLE)
     await page.getByRole('button', { name: '查询图谱', exact: true }).click()
+    // 设计规范改版：查询画布 uniform-node-size，中心节点不再渲染 --center 加粗类，
+    // 按标题定位中心实体节点（子图首个节点即查询命中的中心实体）
+    const centerNode = page
+      .locator('[aria-label="图谱查询结果"] .platform-node', { hasText: PATENT_TITLE })
+      .first()
     await waitFor(
-      async () =>
-        (await page
-          .locator('[aria-label="图谱查询结果"] .platform-node--center')
-          .first()
-          .isVisible()
-          .catch(() => false)),
+      async () => (await centerNode.isVisible().catch(() => false)),
       { label: '中心节点渲染' },
     )
 
     // 选中心实体节点 → 溯源 Tab → 三要素齐全且与图库一致
-    await page.locator('[aria-label="图谱查询结果"] .platform-node--center').first().click()
+    await centerNode.click()
     await page.locator('[aria-label="图谱详情类型"] button', { hasText: '溯源' }).click()
     const detail = page.locator('.platform-detail')
     await expect(detail.getByText('实体溯源')).toBeVisible({ timeout: 10_000 })

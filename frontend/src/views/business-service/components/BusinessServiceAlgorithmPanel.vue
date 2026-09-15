@@ -234,11 +234,26 @@ const parameterErrors = ref<Record<string, string>>({});
 const hasParameterErrors = computed(
   () => Object.keys(parameterErrors.value).length > 0,
 );
-const queryFeedbackTitle = computed(() =>
-  liveError.value && /(?:未找到|不存在|无匹配)/u.test(liveError.value)
-    ? "未查询到结果"
-    : "查询失败",
+const NOT_FOUND_MESSAGE_PATTERN = /(?:未找到|不存在|无匹配)/u;
+// 必填值不存在（未找到/不存在/无匹配）时按全景图未命中的空态展示：
+// 画布回落「暂无图谱数据」，实体/关系/溯源走统一空态提示，不再弹红色错误框。
+const activeModuleError = computed(() => {
+  if (isExpertDirect.value) return expertDirectError.value ?? liveError.value;
+  if (isExpertIndirect.value)
+    return expertIndirectError.value ?? liveError.value;
+  return liveError.value;
+});
+const isNotFoundResult = computed(
+  () =>
+    Boolean(activeModuleError.value) &&
+    NOT_FOUND_MESSAGE_PATTERN.test(activeModuleError.value ?? ""),
 );
+const queryFeedbackTitle = computed(() =>
+  isNotFoundResult.value ? "未查询到结果" : "查询失败",
+);
+function isNotFoundMessage(message: string | null | undefined): boolean {
+  return Boolean(message) && NOT_FOUND_MESSAGE_PATTERN.test(message ?? "");
+}
 const currentMonth = dayjs().format("YYYY-MM");
 const disableFutureMonth = (value: Date) =>
   dayjs(value).isAfter(dayjs(), "month");
@@ -1618,6 +1633,8 @@ const graphPreset = computed<GraphPreset>(() => {
 });
 const graphNodes = computed<GraphNodeData[]>(() => {
   if (lastTestTime.value === "—") return [];
+  // 必填值不存在：按全景图未命中空态展示，不残留上一轮结果或示例图谱。
+  if (isNotFoundResult.value) return [];
   if (isLiveModule.value) return liveModuleGraph.value?.nodes ?? [];
   if (liveGraph.value) return liveGraph.value.nodes;
   return graphPreset.value.nodes;
@@ -3817,7 +3834,9 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       const message = error instanceof Error ? error.message : String(error);
       expertIndirectError.value = message;
       expertIndirectResponse.value = null;
-      resultMode.value = "api";
+      // 必填值不存在时留在结果详情页（实体/关系/溯源展示统一空态提示），
+      // 不跳 API 页签；其他错误仍跳 API 页签查看原始报错。
+      resultMode.value = isNotFoundMessage(message) ? "summary" : "api";
       showToast(message, "warning");
     } finally {
       running.value = false;
@@ -3883,6 +3902,10 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         const isExpertNotFound =
           res?.code === 404 && /未找到专家/u.test(res?.msg || "");
         if (isExpertNotFound) {
+          // 必填专家不存在：清空上一轮数据，按全景图空态展示（画布空态 +
+          // 实体/关系/溯源统一提示），不残留上一次查询的图谱与详情。
+          expertColleagueResponse.value = null;
+          liveResponse.value = null;
           liveError.value = null;
           showToast(res?.msg || "未查询到相关同事关系数据", "warning");
           resultMode.value = "summary";
@@ -3969,7 +3992,10 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         liveAlumniResult.value = null;
         liveError.value = resp.msg || `业务码 ${resp.code}`;
         showToast(liveError.value, "warning");
-        resultMode.value = "api";
+        // 必填值不存在时留在结果详情页（实体/关系/溯源统一空态提示），不跳 API 页签。
+        resultMode.value = isNotFoundMessage(liveError.value)
+          ? "summary"
+          : "api";
       } else {
         liveAlumniResult.value = resp.data;
         showToast(
@@ -4092,7 +4118,10 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         liveCoopResult.value = null;
         liveError.value = resp.msg || `业务码 ${resp.code}`;
         showToast(liveError.value, "warning");
-        resultMode.value = "api";
+        // 必填值不存在时留在结果详情页（实体/关系/溯源统一空态提示），不跳 API 页签。
+        resultMode.value = isNotFoundMessage(liveError.value)
+          ? "summary"
+          : "api";
       } else {
         liveCoopResult.value = resp.data;
         const total =
@@ -4155,7 +4184,10 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       ) {
         liveError.value = (res?.msg as string) || `业务码 ${res?.code}`;
         showToast(liveError.value, "warning");
-        resultMode.value = "api";
+        // 必填值不存在时留在结果详情页（实体/关系/溯源统一空态提示），不跳 API 页签。
+        resultMode.value = isNotFoundMessage(liveError.value)
+          ? "summary"
+          : "api";
       } else {
         const count = Number(res?.data?.enterprises ?? 0);
         liveError.value = null;
@@ -4244,7 +4276,10 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       ) {
         liveError.value = (res?.msg as string) || `业务码 ${res?.code}`;
         showToast(liveError.value, "warning");
-        resultMode.value = "api";
+        // 必填值不存在时留在结果详情页（实体/关系/溯源统一空态提示），不跳 API 页签。
+        resultMode.value = isNotFoundMessage(liveError.value)
+          ? "summary"
+          : "api";
       } else {
         const count = Number(res?.data?.events ?? 0);
         liveError.value = null;
@@ -4336,7 +4371,10 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       ) {
         liveError.value = (res?.msg as string) || `业务码 ${res?.code}`;
         showToast(liveError.value, "warning");
-        resultMode.value = "api";
+        // 必填值不存在时留在结果详情页（实体/关系/溯源统一空态提示），不跳 API 页签。
+        resultMode.value = isNotFoundMessage(liveError.value)
+          ? "summary"
+          : "api";
       } else {
         const sr = res?.structuredResult || res?.data?.structuredResult;
         const count = sr?.cooperationPaperCount || 0;
@@ -4371,7 +4409,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       error: message,
     };
     showToast(message, "warning");
-    resultMode.value = "api";
+    resultMode.value = isNotFoundMessage(message) ? "summary" : "api";
   } finally {
     running.value = false;
   }
@@ -4709,7 +4747,11 @@ function clearGraphSelection() {
         </span>
       </div>
       <div class="graph-panel__canvas">
-        <div v-if="liveError" class="graph-panel__feedback" role="alert">
+        <div
+          v-if="liveError && !isNotFoundResult"
+          class="graph-panel__feedback"
+          role="alert"
+        >
           <strong>{{ queryFeedbackTitle }}</strong>
           <span>{{ liveError }}</span>
           <small>请检查专家 ID 后重新执行测试</small>
@@ -5065,7 +5107,9 @@ function clearGraphSelection() {
           </div>
         </section>
         <section
-          v-else-if="resultMode === 'provenance' && liveResponse"
+          v-else-if="
+            resultMode === 'provenance' && liveResponse && !isNotFoundResult
+          "
           class="result-provenance"
         >
           <header>

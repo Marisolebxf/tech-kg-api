@@ -281,6 +281,7 @@ defineEmits<{
   font-size: 14px;
   line-height: 20px;
   vertical-align: top;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
@@ -601,14 +602,7 @@ defineEmits<{
     min-height: 40px;
     padding: 10px 12px;
     line-height: 20px;
-    overflow-wrap: normal;
     word-break: normal;
-  }
-
-  .prototype-table th,
-  .prototype-table td:first-child,
-  .prototype-table td:nth-child(2) {
-    white-space: nowrap;
   }
 
   .developer-view__code-wrap,

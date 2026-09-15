@@ -4022,8 +4022,8 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
   }
 }
 
-function handleParameterInput(fieldName: string, event: Event) {
-  const value = (event.target as HTMLInputElement | HTMLSelectElement).value;
+function handleParameterInput(fieldName: string, event: Event | string) {
+  const value = typeof event === "string" ? event : (event.target as HTMLInputElement).value;
   const nextValues = {
     ...parameterValues.value,
     [fieldName]: value,
@@ -4150,30 +4150,35 @@ function clearGraphSelection() {
       <label
         v-for="field in moduleInfo.requestFields"
         :key="field.name"
+        :data-field="field.name"
         :class="{ 'has-error': Boolean(parameterErrors[field.name]) }"
       >
         <span
           ><i v-if="field.required === '是'">*</i
           >{{ field.label ?? field.name }}</span
         >
-        <select
-          aria-label="选择或输入内容"
+        <ElSelect
           v-if="field.type === 'select' || field.type === 'boolean'"
           :key="`${field.name}-${paramResetToken}`"
-          :value="parameterValues[field.name] ?? ''"
-          :class="{ 'is-empty-control': !parameterValues[field.name] }"
+          class="service-console__select"
+          popper-class="business-parameter-options"
+          :fit-input-width="true"
+          :model-value="parameterValues[field.name] ?? ''"
+          :aria-label="field.label ?? field.name"
+          :aria-invalid="Boolean(parameterErrors[field.name])"
+          placeholder="请选择"
           :title="field.description"
-          @change="handleParameterInput(field.name, $event)"
+          @update:model-value="handleParameterInput(field.name, $event)"
         >
-          <option value="" :disabled="field.required === '是'">请选择</option>
-          <option v-for="option in field.options" :key="option" :value="option">
-            {{ option }}
-          </option>
-        </select>
+          <ElOption value="" label="请选择" :disabled="field.required === '是'" />
+          <ElOption v-for="option in field.options" :key="option" :value="option" :label="option" />
+        </ElSelect>
         <ElSelect
           v-else-if="field.name === 'achievementTypes'"
           v-model="achievementTypeSelection"
           class="cooperation-type-select"
+          popper-class="business-parameter-options"
+          :fit-input-width="true"
           :data-empty="achievementTypeSelection.length === 0"
           multiple
           collapse-tags
@@ -4195,6 +4200,8 @@ function clearGraphSelection() {
           v-else-if="field.name === 'relationTypes'"
           v-model="panoramaRelationSelection"
           class="cooperation-type-select"
+          popper-class="business-parameter-options"
+          :fit-input-width="true"
           :data-empty="panoramaRelationSelection.length === 0"
           multiple
           collapse-tags
@@ -4216,6 +4223,8 @@ function clearGraphSelection() {
           v-else-if="field.name === 'educationStage' && isLiveAlumni"
           v-model="educationStageSelection"
           class="alumni-stage-select"
+          popper-class="business-parameter-options"
+          :fit-input-width="true"
           :data-empty="educationStageSelection.length === 0"
           multiple
           collapse-tags
@@ -4237,6 +4246,7 @@ function clearGraphSelection() {
           :key="`${field.name}-${paramResetToken}`"
           :model-value="parameterValues[field.name] || ''"
           class="service-console__month-picker"
+          :trigger-props="{ contentClass: 'business-month-options', autoFitPosition: true, autoFitPopupWidth: true }"
           format="YYYY年MM月"
           value-format="YYYY-MM"
           :placeholder="field.placeholder ?? '请选择年月'"
@@ -4257,7 +4267,7 @@ function clearGraphSelection() {
         />
         <div v-else class="service-console__input-wrap">
           <input
-            aria-label="field.placeholder ?? field.description"
+            :aria-label="field.label ?? field.name"
             type="text"
             :key="`${field.name}-${paramResetToken}`"
             :value="parameterValues[field.name] ?? ''"
@@ -5088,6 +5098,46 @@ function clearGraphSelection() {
   background-position: right 10px center;
   background-size: 16px;
   cursor: pointer;
+}
+
+.service-console__select {
+  width: 100%;
+  min-width: 0;
+}
+
+.service-console__select :deep(.el-select__wrapper) {
+  min-height: 32px;
+  border-radius: 6px;
+}
+
+.service-console__select :deep(.el-select__selected-item:not(.is-transparent)) {
+  color: var(--text-primary);
+}
+
+.service-console__params label.has-error .service-console__select :deep(.el-select__wrapper) {
+  box-shadow: 0 0 0 1px var(--danger) inset;
+}
+
+:global(.business-parameter-options) {
+  max-width: calc(100vw - 24px);
+}
+
+:global(.business-parameter-options .el-select-dropdown__item) {
+  height: auto;
+  min-height: 34px;
+  padding-block: 6px;
+  line-height: 22px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+:global(.business-month-options) {
+  max-width: calc(100vw - 24px);
+}
+
+:global(.business-month-options :is(.arco-picker-container, .arco-panel-month, .arco-panel-year)) {
+  width: 100%;
+  min-width: 0;
 }
 
 .cooperation-type-select {

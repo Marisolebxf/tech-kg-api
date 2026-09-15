@@ -2037,10 +2037,11 @@ const indirectRelationDescription = (edge: GraphEdgeData): string =>
 
 /* 专家直接关系页「关系描述」名词口径（定稿命名）：专家-专家合著边
  * （后端关系摘要「共论文」，含「同机构 + 共论文」复合标签）→ 论文合著
- * 关系；专家-机构连线（organization 属性派生，label 关联机构）→
- * 专家合著关系。其余沿用模块级前缀 + 通用映射。 */
+ * 关系；专家-机构连线（organization 属性派生，label 关联机构，与
+ * AFFILIATED_BY/AFFILIATED_WITH 同为任职语义）→ 任职关系（标准词表
+ * 中 AFFILIATED_WITH 的名称）。其余沿用模块级前缀 + 通用映射。 */
 const expertDirectRelationDescriptions: Record<string, string> = {
-  关联机构: "直接关系/专家合著关系",
+  关联机构: "直接关系/任职关系",
 };
 const expertDirectRelationDescription = (edge: GraphEdgeData): string => {
   const mapped = expertDirectRelationDescriptions[edge.label];

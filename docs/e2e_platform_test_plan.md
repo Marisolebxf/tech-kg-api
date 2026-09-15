@@ -148,7 +148,7 @@
 
 ### D2 新建 LLM 配置（验证连接门禁）
 - **步骤**：「＋ 新建配置」→ 分类=语言模型 → 填表 → 先点「验证连接」→ 再保存。
-- **输入**：名称 `e2e_llm`；Base URL `https://open.bigmodel.cn/api/paas/v4`；模型 `glm-4.7-flash`；API Key 取 api 容器 `LLM_API_KEY`/`ZHIPUAI_API_KEY` 环境值。
+- **输入**：名称 `e2e_llm`；Base URL `https://open.bigmodel.cn/api/paas/v4`；模型 `glm-5.3-flash`；API Key 取 api 容器 `LLM_API_KEY`/`ZHIPUAI_API_KEY` 环境值。
 - **预期输出**：未验证前保存按钮文案为「验证通过后可保存」且不可提交；验证通过后可保存；列表出现 `e2e_llm` 状态正常。
 - **最终状态**：`GET /llm-config/llm-configs` 含新 id。
 

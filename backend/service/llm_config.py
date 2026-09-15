@@ -18,6 +18,7 @@ from infra.llm import (
     DEFAULT_MODEL,
     DEFAULT_TIMEOUT,
     reset_llm_client,
+    thinking_extra_body,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ def _ping_llm(base_url: str, model: str, api_key: str) -> dict:
             model=model,
             messages=[{"role": "user", "content": "ping"}],
             max_tokens=1,
-            extra_body={"thinking": {"type": "disabled"}},
+            extra_body=thinking_extra_body(model),
         )
         return result(True, None)
     except Exception as exc:  # noqa: BLE001

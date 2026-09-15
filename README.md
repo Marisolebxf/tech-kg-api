@@ -412,5 +412,5 @@ tech-kg-api/                       # monorepo 根
 | `MYSQL_HOST` / `MYSQL_PORT` | `127.0.0.1` / `3306` | MySQL 连接 |
 | `MYSQL_DATABASE` / `MYSQL_USERNAME` / `MYSQL_PASSWORD` | `gkx_element` / `root` / — | MySQL 库/账密 |
 | `LLM_API_KEY` | — | 智谱 GLM key；未配置时 #3 自动降级 |
-| `LLM_MODEL` | `glm-4.7-flash` | LLM 模型（推理模型，读 `message.content`） |
+| `LLM_MODEL` | `glm-5.3-flash` | LLM 模型（推理模型，读 `message.content`） |
 | `LLM_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | LLM 接口地址 |

@@ -146,7 +146,7 @@ data:
   MILVUS_HOST: milvus
   MILVUS_PORT: "19530"
   # ---- LLM ----
-  LLM_MODEL: glm-4.7-flash
+  LLM_MODEL: glm-5.3-flash
   LLM_BASE_URL: https://open.bigmodel.cn/api/paas/v4
   # ---- Temporal ----
   TEMPORAL_ADDRESS: temporal:7233

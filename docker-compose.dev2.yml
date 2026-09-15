@@ -53,7 +53,7 @@ services:
       PATENT_INDEX_PAGE_SIZE: ${PATENT_INDEX_PAGE_SIZE:-1000}
       PATENT_BM25_DIM: ${PATENT_BM25_DIM:-262144}
       LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_MODEL: ${LLM_MODEL:-glm-4.7-flash}
+      LLM_MODEL: ${LLM_MODEL:-glm-5.3-flash}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
       TEMPORAL_ADDRESS: temporal-dev2:7233
       TEMPORAL_NAMESPACE: default

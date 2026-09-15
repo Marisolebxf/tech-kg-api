@@ -11,15 +11,27 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "glm-4.7-flash"
+DEFAULT_MODEL = "glm-5.3-flash"
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 DEFAULT_MAX_TOKENS = 2048
 DEFAULT_TIMEOUT = 40
 JSON_MODES = ("json_schema", "json_object", "prompt_only")
 
 
+def thinking_extra_body(model: str) -> dict[str, Any]:
+    """按模型决定是否关闭思考（thinking）。
+
+    glm-4.x 等推理模型关闭思考以免思考文本混入答案；glm-5.x flash 系
+    “始终思考”，不接受 thinking:disabled（报 1210）——省略参数让其默认
+    思考即可，思考文本在 reasoning_content，不影响 message.content 解析。
+    """
+    if model.startswith("glm-5."):
+        return {}
+    return {"thinking": {"type": "disabled"}}
+
+
 class LLMClient:
-    """智谱 GLM 客户端。glm-4.7-flash 为推理模型，需较大 max_tokens，读 message.content。"""
+    """智谱 GLM 客户端。默认 glm-5.3-flash 始终思考，读 message.content（思考在 reasoning_content）。"""
 
     def __init__(
         self,
@@ -50,8 +62,7 @@ class LLMClient:
                 model=self._model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=max_tokens,
-                # 统一关闭沉思（thinking），避免推理模型返回思考文本导致 JSON 解析失败
-                extra_body={"thinking": {"type": "disabled"}},
+                extra_body=thinking_extra_body(self._model),
             )
             return resp.choices[0].message.content or None
         except Exception as exc:  # noqa: BLE001
@@ -107,7 +118,7 @@ class LLMClient:
                 create_kwargs: dict[str, Any] = {
                     "model": self._model,
                     "max_tokens": max_tokens,
-                    "extra_body": {"thinking": {"type": "disabled"}},
+                    "extra_body": thinking_extra_body(self._model),
                     **kwargs,
                 }
                 if timeout is not None:

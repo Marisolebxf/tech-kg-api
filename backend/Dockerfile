@@ -42,6 +42,9 @@ COPY infra ./infra
 COPY organization_ETL ./organization_ETL
 COPY schemas ./schemas
 COPY script ./script
+# 抽取脚本 SDK：execute_transform 子进程 PYTHONPATH 含 /app/sdk，
+# runner 启动即 import kg_sdk——缺了它平台喂数抽取必挂（ModuleNotFoundError）
+COPY sdk ./sdk
 COPY service ./service
 COPY static ./static
 COPY utils ./utils

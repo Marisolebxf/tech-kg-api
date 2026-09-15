@@ -73,7 +73,7 @@ test.describe.serial('D. 配置管理', () => {
 
     await field('配置名称').fill(LLM_NAME)
     await field('Base URL').fill('https://open.bigmodel.cn/api/paas/v4')
-    await field('模型').fill('glm-4.7-flash')
+    await field('模型').fill('glm-5.3-flash')
     await field('API Key').fill(apiKey)
 
     // 未验证前保存按钮文案为「验证通过后可保存」且不可提交

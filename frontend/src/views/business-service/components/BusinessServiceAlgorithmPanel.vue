@@ -4676,7 +4676,7 @@ function clearGraphSelection() {
           <small>请检查专家 ID 后重新执行测试</small>
         </div>
         <output
-          v-else-if="!displayedGraphNodes.length && lastTestTime === '—'"
+          v-else-if="!displayedGraphNodes.length"
           class="graph-panel__empty"
         >
           <span>暂无图谱数据，请填写参数并点击「执行测试」后查看结果</span>
@@ -4860,7 +4860,7 @@ function clearGraphSelection() {
           </nav>
         </template>
         <div
-          v-else-if="resultMode === 'entity' && liveEntityRows"
+          v-else-if="resultMode === 'entity' && liveEntityRows.length"
           class="result-panel__detail"
         >
           <div
@@ -4882,11 +4882,15 @@ function clearGraphSelection() {
             </div>
           </dl>
         </div>
-        <p v-else-if="resultMode === 'entity'" class="result-panel__empty">
-          暂无实体数据，请先执行查询。
+        <p v-else-if="resultMode === 'entity'" class="result-provenance__empty">
+          {{
+            lastTestTime === "—"
+              ? "暂无实体数据，请先执行查询，或在图谱中选中一个实体/关系。"
+              : "暂无实体数据，请先执行查询。"
+          }}
         </p>
         <div
-          v-else-if="resultMode === 'relation' && liveRelationRows"
+          v-else-if="resultMode === 'relation' && liveRelationRows.length"
           class="result-panel__detail"
         >
           <div v-if="selectedEdge" class="result-panel__back">
@@ -4905,8 +4909,12 @@ function clearGraphSelection() {
             </div>
           </dl>
         </div>
-        <p v-else-if="resultMode === 'relation'" class="result-panel__empty">
-          暂无关系数据，请先执行查询。
+        <p v-else-if="resultMode === 'relation'" class="result-provenance__empty">
+          {{
+            lastTestTime === "—"
+              ? "暂无关系数据，请先执行查询，或在图谱中选中一个实体/关系。"
+              : "暂无关系数据，请先执行查询。"
+          }}
         </p>
         <section
           v-else-if="

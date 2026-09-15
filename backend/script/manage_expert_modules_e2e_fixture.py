@@ -6,7 +6,8 @@
 3. 科技专家论文合作关系（合作论文被引链路：dwd_zh_paper_citation 源表 +
    图上 CITED_BY/CITES 双向边，被引次数=边数，引用方可经 AUTHORED_BY 追溯作者；
    期刊/会议分级链路：dwd_zh_journal 源表 + Journal 节点 + PUBLISHED_IN 边，
-   SCI 期刊显示“SCI”、非 SCI 期刊如实显示“未分级”）
+   SCI 期刊显示“SCI”、中文核心期刊（classify_list→zh_core）显示核心标识、
+   其余如实显示“未分级”）
 
 安全约束：默认只输出计划；只有 ``--apply`` 才写库；``--cleanup`` 必须同时提供
 ``--confirm-cleanup EXPERT_MODULES_E2E_V1``。脚本仅允许
@@ -171,6 +172,8 @@ class Journal:
     annual_publication: int
     is_sci: int
     publication_cycle: str
+    # 中文核心分类（源列 classify_list→图属性 zh_core）：非 SCI 刊的级别显示来源。
+    zh_core: str = ""
 
     @property
     def vid(self) -> str:
@@ -252,7 +255,7 @@ def fixture_patent_ids() -> list[str]:
 
 
 def journals() -> list[Journal]:
-    """3 本虚构期刊：两本 SCI（级别显示“SCI”）、一本普通期刊（如实“未分级”）。
+    """4 本虚构期刊：两本 SCI（“SCI”）、一本中文核心（“北大核心”）、一本普通（“未分级”）。
 
     publication_id 使用预留号段 8899000x（真实 zh/en 期刊表与图上均无占用），
     节点为本批次私有，随 cleanup 一并删除。
@@ -296,6 +299,20 @@ def journals() -> list[Journal]:
             64,
             0,
             "季刊",
+            "北大核心",
+        ),
+        Journal(
+            88990004,
+            "新兴科技评论",
+            "Emerging Technology Review",
+            "ETR",
+            "2096-8216",
+            2018,
+            0.9,
+            260,
+            48,
+            0,
+            "双月刊",
         ),
     ]
 
@@ -502,7 +519,8 @@ def people() -> list[Person]:
 
 def papers() -> list[Paper]:
     # journal 序号：论文 1-12 显式指定（论文合作用例的论文 4/5/6/7/12 落在 SCI 期刊，
-    # 年份缺失的论文 8 落在普通期刊覆盖“未分级”）；13-80 轮换三本期刊。
+    # 年份缺失的论文 8 落在普通期刊覆盖“未分级”）；13-80 轮换前三本期刊，
+    # 其中 no%3==2 的论文落在中文核心期刊覆盖“北大核心”。
     rows = [
         Paper(
             1,
@@ -575,7 +593,7 @@ def papers() -> list[Paper]:
             None,
             (1, 6),
             ("专家画像",),
-            journal=3,
+            journal=4,
         ),
         Paper(
             9,
@@ -886,7 +904,7 @@ def scenario_manifest() -> dict[str, list[str]]:
             "被引次数为 0（未被引用的论文）",
             "论文主题（HAS_KEYWORD→Keyword，源表 dwd_zh_paper_classification）",
             "专家研究方向（dwd_scholar_research_direction → Person.research_fields 回退）",
-            "期刊/会议级别（PUBLISHED_IN→Journal，源表 dwd_zh_journal，SCI/未分级期刊覆盖）",
+            "期刊/会议级别（PUBLISHED_IN→Journal，源表 dwd_zh_journal，SCI/中文核心/未分级期刊覆盖）",
         ],
     }
 
@@ -1148,10 +1166,10 @@ def write_mysql() -> dict[str, int]:
             con.execute(
                 text("""INSERT INTO dwd_zh_journal
                 (paper_id,publication_id,zh_name,en_name,name_abbr,issn,country,founding_time,
-                 impact_factor,cite_nums,annual_publication,is_sci,publication_cycle,
+                 impact_factor,cite_nums,annual_publication,is_sci,publication_cycle,classify_list,
                  data_source,created_time,updated_time)
                 VALUES (:paper_id,:pub_id,:zh_name,:en_name,:abbr,:issn,'中国',:founded,
-                 :impact,:cites,:annual,:is_sci,:cycle,:batch,:now,:now)"""),
+                 :impact,:cites,:annual,:is_sci,:cycle,:zh_core,:batch,:now,:now)"""),
                 [
                     {
                         "paper_id": str(p.mysql_id),
@@ -1166,6 +1184,7 @@ def write_mysql() -> dict[str, int]:
                         "annual": j.annual_publication,
                         "is_sci": j.is_sci,
                         "cycle": j.publication_cycle,
+                        "zh_core": j.zh_core or None,
                         "batch": BATCH,
                         "now": now,
                     }
@@ -1533,9 +1552,10 @@ def sync_graph_from_mysql() -> dict[str, int]:
                 )
         # 论文期刊（PUBLISHED_IN 源表 dwd_zh_journal）：Journal 桩 vid 与真实 ETL
         # （load_paper_journal_graph.load_journals）同为 journal_{publication_id}，节点
-        # 属性按中文期刊 ETL 映射（jcr_zone 恒空；dev 的 Journal TAG 无溯源属性，
-        # 故只写 TAG 内属性），PUBLISHED_IN 边带 confidence=1.0。预留号段内的期刊
-        # 节点为本批次私有，已进 fixture_vids 随 cleanup 一并删除。
+        # 属性按中文期刊 ETL 映射（jcr_zone 恒空；classify_list→zh_core 中文核心；
+        # dev 的 Journal TAG 无溯源属性，故只写 TAG 内属性），PUBLISHED_IN 边带
+        # confidence=1.0。预留号段内的期刊节点为本批次私有，已进 fixture_vids 随
+        # cleanup 一并删除。
         journal_defs = {j.publication_id: j for j in journals()}
         for row in journal_rows:
             definition = journal_defs[int(row["publication_id"])]
@@ -1553,6 +1573,7 @@ def sync_graph_from_mysql() -> dict[str, int]:
                         "founding_time": str(definition.founding_time),
                         "impact_factor": str(definition.impact_factor),
                         "is_sci": str(definition.is_sci),
+                        "zh_core": definition.zh_core,
                         "cite_nums": str(definition.cite_nums),
                         "annual_publication": str(definition.annual_publication),
                         "publication_cycle": definition.publication_cycle,
@@ -1894,7 +1915,8 @@ def verify() -> dict[str, Any]:
                 jprops.get("is_sci") or "0"
             ) != str(definition.is_sci):
                 published_in_ok = False
-            label = f"{definition.zh_name}（{'SCI' if definition.is_sci else '未分级'}）"
+            level = "SCI" if definition.is_sci else (definition.zh_core or "未分级")
+            label = f"{definition.zh_name}（{level}）"
             if label not in venue_sample:
                 venue_sample.append(label)
     finally:

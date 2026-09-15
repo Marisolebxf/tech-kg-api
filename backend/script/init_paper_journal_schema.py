@@ -28,7 +28,8 @@ TAG_DDL = [
     """CREATE TAG IF NOT EXISTS Journal(
         name_zh string, name_en string, name_abbr string, issn string, eissn string,
         country string, founding_time string, impact_factor string, is_sci string,
-        jcr_zone string, cite_nums string, annual_publication string, publication_cycle string, source string
+        jcr_zone string, scope_zone string, sub_quartile string, top string, zh_core string,
+        cite_nums string, annual_publication string, publication_cycle string, source string
     )""",
     """CREATE TAG IF NOT EXISTS Report(
         title_cn string, title_en string, report_category string, report_type string,

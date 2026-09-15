@@ -11,6 +11,7 @@ from service.expert_paper_cooperation_api import (
     _build_structured_result,
     _fetch_paper_context,
     _relation_confidences,
+    _stable_team_note,
     _year_filters,
     clear_caches,
 )
@@ -231,6 +232,39 @@ def test_relation_confidences_follow_structured_evidence_rules():
     }
 
 
+def test_stable_team_note_explains_why_no_stable_team():
+    """未构成稳定团队时按数据说明原因；构成时为空，不遮蔽正向结论。"""
+    papers = [{"id": f"paper_{i}"} for i in range(1, 4)]
+    assert (
+        _stable_team_note(
+            stable_members=["专家甲"],
+            papers=papers,
+            years=[2021, 2023],
+            fallback_paper_count=0,
+        )
+        == ""
+    )
+    # 单年集中合作（两条规则门槛都只差“跨年”这一条）。
+    assert (
+        _stable_team_note(
+            stable_members=[], papers=papers[:2], years=[2022, 2022], fallback_paper_count=0
+        )
+        == "共同论文 2 篇均发表于 2022 年，未跨年持续合作，不构成长期稳定团队"
+    )
+    # 共同论文不足 2 篇。
+    assert (
+        _stable_team_note(
+            stable_members=[], papers=papers[:1], years=[2022], fallback_paper_count=0
+        )
+        == "共同论文仅 1 篇，未达长期稳定团队标准（需共同论文≥2篇且覆盖≥2个年份）"
+    )
+    # 时间范围内无共同论文。
+    assert (
+        _stable_team_note(stable_members=[], papers=[], years=[], fallback_paper_count=0)
+        == "筛选时间范围内无共同论文，未形成合作团队"
+    )
+
+
 @pytest.mark.asyncio
 async def test_provenance_records_query_time_sources():
     body = ExpertPaperCooperationDemoRequest(
@@ -252,6 +286,10 @@ async def test_provenance_records_query_time_sources():
     assert result["paperTopics"][0] == "医学影像"
     assert result["coreCollaborators"] == ["共同作者丙", "专家乙", "专家甲"]
     assert result["stableTeamMembers"] == []
+    # 聚合回退路径没有逐篇年份，说明须如实指出无法判定，而非“暂无数据”。
+    assert result["stableTeamNote"] == (
+        "共同论文仅聚合统计 35 篇，缺少逐篇发表年份，无法判定是否跨年持续合作"
+    )
     assert result["cooperationTimeRange"]["displayText"] == ""
     assert result["journalLevelCount"] == {}
     assert result["conferenceLevelCount"] == {}

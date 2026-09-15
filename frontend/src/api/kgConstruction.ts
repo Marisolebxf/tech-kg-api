@@ -327,6 +327,9 @@ export interface PaperCooperationStructuredResult {
 
   stableTeamMembers: string[]
 
+  /** 未构成长期稳定合作团队时的原因说明；已构成时为空。 */
+  stableTeamNote?: string
+
   coreCollaborators: string[]
 
   sharedContribution: string[]

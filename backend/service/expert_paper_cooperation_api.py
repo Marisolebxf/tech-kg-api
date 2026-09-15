@@ -523,6 +523,35 @@ def _paper_year(paper: dict[str, Any]) -> int:
         return 0
 
 
+def _stable_team_note(
+    *,
+    stable_members: list[str],
+    papers: list[dict[str, Any]],
+    years: list[int],
+    fallback_paper_count: int,
+) -> str:
+    """未构成长期稳定合作团队时，按真实合作数据说明原因；已构成时返回空串。
+
+    摘要「合作团队特征」行据此展示原因，而不是笼统的“暂无数据”。
+    """
+    if stable_members:
+        return ""
+    if papers:
+        if len(papers) < 2:
+            return (
+                f"共同论文仅 {len(papers)} 篇，未达长期稳定团队标准（需共同论文≥2篇且覆盖≥2个年份）"
+            )
+        distinct_years = sorted({int(y) for y in years if y})
+        year_text = f"{distinct_years[0]} 年" if distinct_years else "同一年份"
+        return f"共同论文 {len(papers)} 篇均发表于 {year_text}，未跨年持续合作，不构成长期稳定团队"
+    if fallback_paper_count:
+        return (
+            f"共同论文仅聚合统计 {fallback_paper_count} 篇，缺少逐篇发表年份，"
+            "无法判定是否跨年持续合作"
+        )
+    return "筛选时间范围内无共同论文，未形成合作团队"
+
+
 def _venue_type(paper: dict[str, Any]) -> str:
     props = paper.get("properties") or {}
     raw = str(
@@ -899,7 +928,7 @@ def _build_rules(result: dict[str, Any]) -> list[dict[str, Any]]:
             "target": "共同论文及其 PUBLISHED_IN、HAS_KEYWORD、CITED_BY、作者关系",
             "trigger": "命中共同论文路径",
             "logic": "主题按关键词出现次数取前 8；期刊/会议按论文类型和场馆分级属性统计；被引数依次读取论文 citation_count、作者边 citations、CITED_BY 边数量；共同作者按共同论文次数排序取前 5。",
-            "output": "论文主题、期刊/会议级别、总被引、最高单篇被引和核心合作人员",
+            "output": "论文主题、期刊/会议级别、总被引、最高单篇被引和核心合作人员；未构成稳定团队时输出原因说明（stableTeamNote）",
             "threshold": "稳定团队成员须共同论文数 >= 2 且至少覆盖 2 个不同发表年份",
             "audit": audit,
             "appliedCount": stable_count,
@@ -1158,6 +1187,13 @@ async def _build_structured_result(
         end_year = max(years) if years else 0
         # 注意：fallback 路径无法获取合作论文的逐篇引用数，
         # 专家的 citation_nums 是其所有论文引用# 引用总数，不是合作论文的，因此不使用。
+    # 无稳定团队时给出原因说明，摘要「合作团队特征」行据此展示而非“暂无数据”。
+    stable_team_note = _stable_team_note(
+        stable_members=stable_members,
+        papers=papers,
+        years=years,
+        fallback_paper_count=fallback_paper_count,
+    )
     author_units = [_organization(expert_a), _organization(expert_b)]
     relation_confidences = _relation_confidences(
         paper_count=paper_count,
@@ -1188,6 +1224,7 @@ async def _build_structured_result(
         "cooperationFrequency": paper_count,
         "academicImpactScore": _impact_score(paper_count, citation_total, high_level_count),
         "stableTeamMembers": stable_members,
+        "stableTeamNote": stable_team_note,
         "coreCollaborators": ranked_collaborators[:5],
         "sharedContribution": shared_contribution,
         "relationConfidences": relation_confidences,

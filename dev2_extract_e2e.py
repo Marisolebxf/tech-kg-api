@@ -114,11 +114,12 @@ def main():
     datasource_id = ds["id"]
     print(f"  datasource={datasource_id}")
 
-    # 2. schema（幂等：删旧建新）
+    # 2. schema（幂等：删旧建新；keyword 命中删旧，防分页截断漏查）
     step("2. 创建实体 Schema E2EWidget（自动执行图 DDL 建 tag）")
-    code, resp = req("GET", "/schema-management/schemas?limit=200")
+    code, resp = req("GET", "/schema-management/schemas?keyword=E2EWidget&pageSize=100")
     old = next(
-        (i for i in resp["data"]["items"] if i.get("name") == "E2EWidget"), None
+        (i for i in (resp.get("data") or {}).get("items") or [] if i.get("name") == "E2EWidget"),
+        None,
     )
     if old:
         req("DELETE", f"/schema-management/schemas/{old['id']}")

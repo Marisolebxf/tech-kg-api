@@ -284,6 +284,8 @@ const queryFormModel = computed(() => ({
   queryRelationFilter: queryRelationFilter.value,
   queryEntityConfidence: queryEntityConfidence.value,
   queryRelationConfidence: queryRelationConfidence.value,
+  // 图空间必填校验读取自 model；缺这行会导致校验恒失败（无论选什么都提示"请选择图空间"）
+  selectedGraphSpace: selectedGraphSpace.value,
 }))
 const queryFormRules = {
   queryKeyword: [{ required: true, message: '请输入实体名称或ID' }],

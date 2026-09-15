@@ -1025,13 +1025,25 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 {"label": "共同成果总数", "value": f"{len(shared_achievement_ids)} 项"}
             )
         if mode == "pair":
-            summary_rows.extend(
-                {
-                    "label": f"成果 {index}",
-                    "value": str(achievement.get("label") or "").strip() or str(achievement["id"]),
-                }
-                for index, achievement in enumerate(shared_achievements, start=1)
-            )
+            achievement_type_labels = {
+                "paper": "合作论文",
+                "patent": "合作专利",
+                "project": "合作项目",
+            }
+            achievement_type_counts: dict[str, int] = {}
+            achievement_summary_rows = []
+            for achievement in shared_achievements:
+                kind = str(achievement.get("kind") or "")
+                prefix = achievement_type_labels.get(kind, "合作成果")
+                achievement_type_counts[prefix] = achievement_type_counts.get(prefix, 0) + 1
+                achievement_summary_rows.append(
+                    {
+                        "label": f"{prefix} {achievement_type_counts[prefix]}",
+                        "value": str(achievement.get("label") or "").strip()
+                        or str(achievement["id"]),
+                    }
+                )
+            summary_rows.extend(achievement_summary_rows)
         if mode == "list":
             summary_rows.append(
                 {

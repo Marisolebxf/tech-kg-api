@@ -2004,21 +2004,51 @@ const enterpriseRelationDescription = (edge: GraphEdgeData): string =>
  * 项目合作关系（LEADS/HAS_PARTICIPANT 按姓名串匹配解析后再求交）。
  * 专家-成果归因边按底层边类型判定：发表（AUTHORED_BY）为论文行作者
  * 字段单行直查=直接；发明（INVENTED_BY）发明人姓名需跨源解析=间接；
- * 负责/参与（LEADS/HAS_PARTICIPANT）按姓名串匹配解析=间接。 */
+ * 负责/参与（LEADS/HAS_PARTICIPANT）按姓名串匹配解析=间接。
+ * 归因边细目对齐全景图关系台账名词：专利发明人/项目负责人/项目参加人。 */
 const coopAchievementRelationDescriptions: Record<string, string> = {
   论文合作关系: "间接关系/论文合作关系",
   专利合作关系: "间接关系/专利合作关系",
   项目合作关系: "间接关系/项目合作关系",
   发表: "直接关系/论文署名关系",
-  发明: "间接关系/专利发明关系",
-  负责: "间接关系/项目牵头关系",
-  参与: "间接关系/项目参与关系",
+  发明: "间接关系/专利发明人",
+  负责: "间接关系/项目负责人",
+  参与: "间接关系/项目参加人",
   关联成果: "间接关系/成果关联关系",
 };
 const coopAchievementRelationDescription = (edge: GraphEdgeData): string =>
   coopAchievementRelationDescriptions[edge.label] ||
   coopAchievementRelationDescriptions[edge.category] ||
   `间接关系/${displayRelationDetail(edge)}`;
+
+/* 单节点间接关系页「关系描述」名词口径（对齐全景图关系台账）：
+ * COAUTHOR_WITH→专家合著关系（画布 label 论文合作）、AFFILIATED_WITH→
+ * 任职关系（画布 label 机构任职）、LEADS→项目负责人（画布 label 为原码）、
+ * HAS_PARTCIPANT→项目参加人（画布 label 项目参与方）。
+ * 未覆盖的边类型沿用通用映射，前缀固定间接关系。 */
+const indirectRelationDescriptions: Record<string, string> = {
+  论文合作: "间接关系/专家合著关系",
+  机构任职: "间接关系/任职关系",
+  LEADS: "间接关系/项目负责人",
+  项目参与方: "间接关系/项目参加人",
+};
+const indirectRelationDescription = (edge: GraphEdgeData): string =>
+  indirectRelationDescriptions[edge.label] ||
+  `间接关系/${displayRelationDetail(edge)}`;
+
+/* 专家直接关系页「关系描述」名词口径（定稿命名）：专家-专家合著边
+ * （后端关系摘要「共论文」，含「同机构 + 共论文」复合标签）→ 论文合著
+ * 关系；专家-机构连线（organization 属性派生，label 关联机构）→
+ * 专家合著关系。其余沿用模块级前缀 + 通用映射。 */
+const expertDirectRelationDescriptions: Record<string, string> = {
+  关联机构: "直接关系/专家合著关系",
+};
+const expertDirectRelationDescription = (edge: GraphEdgeData): string => {
+  const mapped = expertDirectRelationDescriptions[edge.label];
+  if (mapped) return mapped;
+  if ((edge.label || "").includes("共论文")) return "直接关系/论文合著关系";
+  return `${displayRelationCategory(edge)}/${displayRelationDetail(edge)}`;
+};
 
 /** TOP-N 事件关系页「关系描述」口径：先判断画布连线对应的图关系类型，再按
  * 关系台账输出「关系类别/关系详情」；关系类别只取直接关系/间接关系。
@@ -2641,7 +2671,11 @@ const liveRelationRows = computed(() => {
           ? enterpriseRelationDescription(relation)
           : isLiveCoop.value
             ? coopAchievementRelationDescription(relation)
-            : `${displayRelationCategory(relation)}/${displayRelationDetail(relation)}`;
+            : isExpertIndirect.value
+              ? indirectRelationDescription(relation)
+              : isExpertDirect.value
+                ? expertDirectRelationDescription(relation)
+                : `${displayRelationCategory(relation)}/${displayRelationDetail(relation)}`;
     const rows: Array<readonly [string, string]> = [
       [
         `关系 ${index + 1}`,

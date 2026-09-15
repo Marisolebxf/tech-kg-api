@@ -4635,6 +4635,7 @@ function clearGraphSelection() {
           value-format="YYYY-MM"
           :placeholder="field.placeholder ?? '请选择年月'"
           allow-clear
+          disabled-input
           :locale="zhCN"
           :title="field.description"
           :aria-label="field.name"

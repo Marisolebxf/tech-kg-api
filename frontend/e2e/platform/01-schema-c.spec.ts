@@ -259,8 +259,15 @@ test.describe.serial('C. Schema 管理与属性管理', () => {
     await bindRow.locator('.source-binding-row__table').click()
     await page.locator('li.arco-select-option:visible', { hasText: 'widgets' }).first().click()
 
-    // 保存并触发抽取
-    await modal.getByRole('button', { name: '保存并触发抽取' }).click()
+    // 保存绑定（与触发解耦：保存不自动触发抽取）
+    await modal.getByRole('button', { name: '保存绑定' }).click()
+    await waitFor(
+      async () => (await page.getByText('来源表绑定已保存', { exact: false }).first().isVisible().catch(() => false)),
+      { label: '保存绑定提示', timeout: 30_000 },
+    )
+
+    // 显式触发抽取
+    await modal.getByRole('button', { name: '触发抽取', exact: true }).click()
     await waitFor(
       async () => (await page.getByText(/抽取已触发（执行/, { exact: false }).first().isVisible().catch(() => false)),
       { label: '抽取触发提示', timeout: 30_000 },

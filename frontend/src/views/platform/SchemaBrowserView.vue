@@ -262,6 +262,8 @@ const sourcesTarget = ref<SchemaDefinition | null>(null)
 const sourcesForm = ref<SourceBindingRow[]>([])
 const sourcesSaving = ref(false)
 const extracting = ref(false)
+// 已保存绑定的快照：保存与触发抽取解耦，未保存的修改不进抽取（触发前比对提示）
+const savedSourcesSnapshot = ref('')
 
 // 回填历史数据（清空来源水位全量重跑）；脚本落后于 Schema 时需强确认
 const backfilling = ref(false)
@@ -332,11 +334,21 @@ async function confirmTriggerExtraction() {
   await triggerExtraction(target)
 }
 
-async function triggerExtractionFromSources() {
+function snapshotSources(rows: SourceBindingRow[]): string {
+  return JSON.stringify(
+    rows.map((row) => [row.datasourceId, row.databaseName, row.tableName, row.pkColumn, row.timeColumn]),
+  )
+}
+
+async function triggerExtractionFromDialog() {
   const target = sourcesTarget.value
-  if (!target || sourcesSaving.value) return
-  const saved = await saveSources()
-  if (saved) await triggerExtraction(sourcesTarget.value || target)
+  if (!target || extracting.value) return
+  if (snapshotSources(sourcesForm.value) !== savedSourcesSnapshot.value) {
+    showToast('来源表绑定有未保存的修改，请先保存后再触发抽取', 'warning')
+    return
+  }
+  const result = await triggerExtraction(target)
+  if (result) sourcesModalOpen.value = false
 }
 
 function openSourcesModal(schema: SchemaDefinition) {
@@ -352,6 +364,7 @@ function openSourcesModal(schema: SchemaDefinition) {
     pkColumn: s.pkColumn,
     timeColumn: s.timeColumn,
   }))
+  savedSourcesSnapshot.value = snapshotSources(sourcesForm.value)
   sourcesModalOpen.value = true
 }
 
@@ -369,7 +382,7 @@ async function saveSources(): Promise<boolean> {
   try {
     await replaceSchemaSources(target.id, payloads, currentUserId)
     showToast('来源表绑定已保存', 'success')
-    sourcesModalOpen.value = false
+    savedSourcesSnapshot.value = snapshotSources(sourcesForm.value)
     await loadSchemas()
     return true
   } catch (error) {
@@ -1184,13 +1197,13 @@ function togglePropertyDetail(schemaId: string): void {
         <aside class="schema-modal__panel sources-panel">
           <header><h2>来源表 · {{ sourcesTarget?.label || sourcesTarget?.name }}</h2><button type="button" @click="sourcesModalOpen = false">×</button></header>
           <div class="schema-modal__body">
-            <p class="sources-note">绑定来源表后，可通过「触发抽取」让平台按各表独立的时间列水位分批读取行数据交给脚本转换并写入图谱；每张表可独立并行推进。「回填历史数据」会清空全部来源水位后全量重跑（新属性对历史数据的补齐需脚本先覆盖该属性）。</p>
+            <p class="sources-note">绑定来源表并保存后，可通过「触发抽取」让平台按各表独立的时间列水位分批读取行数据交给脚本转换并写入图谱（保存绑定不会自动触发抽取，有未保存修改时需先保存）；每张表可独立并行推进。「回填历史数据」会清空全部来源水位后全量重跑（新属性对历史数据的补齐需脚本先覆盖该属性）。</p>
             <SourceBindings v-model="sourcesForm" />
           </div>
           <footer>
             <button type="button" @click="sourcesModalOpen = false">取消</button>
-            <button type="button" :disabled="sourcesSaving || extracting" @click="saveSources">{{ sourcesSaving ? '保存中...' : '仅保存绑定' }}</button>
-            <button type="button" class="primary" :disabled="sourcesSaving || extracting" @click="triggerExtractionFromSources">{{ extracting ? '抽取中...' : '保存并触发抽取' }}</button>
+            <button type="button" class="primary" :disabled="sourcesSaving || extracting" @click="saveSources">{{ sourcesSaving ? '保存中...' : '保存绑定' }}</button>
+            <button type="button" :disabled="sourcesSaving || extracting || backfilling" @click="triggerExtractionFromDialog">{{ extracting ? '抽取中...' : '触发抽取' }}</button>
             <button type="button" :disabled="sourcesSaving || extracting || backfilling" @click="requestBackfill">{{ backfilling ? '回填中...' : '回填历史数据' }}</button>
           </footer>
         </aside>

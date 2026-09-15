@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from application.expert_alumni_relation import ExpertAlumniRelationApplication
 from infra.graph_db import GraphConnectionError
 from service.expert_alumni_relation import ExpertAlumniRelationService, clear_caches
 
@@ -544,3 +545,103 @@ def test_pair_shared_achievements_have_independent_provenance():
     graph_nodes = {n["id"]: n for n in resp["graph"]["nodes"]}
     assert graph_nodes["PT1"]["sourceTable"] == "dwd_patent_test"
     assert graph_nodes["P1"]["sourceTable"] == "trs-graph / space=dev"
+
+
+def _alumni_payload() -> dict[str, Any]:
+    return {
+        "expert": {"id": "person_z"},
+        "items": [
+            {
+                "alumniId": "person_a",
+                "name": "甲",
+                "sharedInstitutions": ["北京大学"],
+                "dimensions": ["同校", "同学历"],
+                "educations": [{"institution": "北京大学", "degree": "博士"}],
+                "interactions": {
+                    "paperCount": 2,
+                    "patentCount": 0,
+                    "projectCount": 1,
+                    "summary": "共同论文 2 篇、共同项目 1 个",
+                },
+                "confidence": 0.9,
+            }
+        ],
+    }
+
+
+def test_persist_relations_creates_edge_in_vid_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "techkg_prod")
+    graph = MagicMock()
+    graph.get_node_edges.return_value = []
+    with patch("application.expert_alumni_relation.TRSGraphClient", return_value=graph) as client:
+        result = ExpertAlumniRelationApplication._persist_relations(_alumni_payload())
+
+    assert client.call_args.args[0].space == "techkg_prod"
+    graph.create_edge.assert_called_once()
+    assert graph.create_edge.call_args.args[:3] == ("person_a", "person_z", "ALUMNI")
+    props = graph.create_edge.call_args.args[3]
+    assert props["shared_institutions"] == '["北京大学"]'
+    assert props["dimensions_json"] == '["同校", "同学历"]'
+    assert props["paper_count"] == 2
+    assert props["project_count"] == 1
+    assert props["source"] == "expert_alumni_relation_service"
+    assert result == {
+        "space": "techkg_prod",
+        "edgeType": "ALUMNI",
+        "created": 1,
+        "updated": 0,
+        "total": 1,
+    }
+    graph.close.assert_called_once()
+
+
+def test_persist_relations_updates_existing_edge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "dev")
+    graph = MagicMock()
+    graph.get_node_edges.return_value = [_edge("ALUMNI", "person_z", "person_a")]
+    with patch("application.expert_alumni_relation.TRSGraphClient", return_value=graph):
+        result = ExpertAlumniRelationApplication._persist_relations(_alumni_payload())
+
+    graph.create_edge.assert_not_called()
+    graph.update_edge.assert_called_once()
+    assert graph.update_edge.call_args.args[0] == "person_z->person_a@0"
+    assert graph.update_edge.call_args.kwargs["edge_type"] == "ALUMNI"
+    assert result == {"space": "dev", "edgeType": "ALUMNI", "created": 0, "updated": 1, "total": 1}
+
+
+def test_persist_relations_degrades_gracefully_without_edges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "dev")
+    graph = MagicMock()
+    graph.execute_write.side_effect = RuntimeError("graph unavailable")
+    with patch("application.expert_alumni_relation.TRSGraphClient", return_value=graph):
+        result = ExpertAlumniRelationApplication._persist_relations(_alumni_payload())
+
+    graph.create_edge.assert_not_called()
+    assert result == {"space": "dev", "edgeType": "ALUMNI", "created": 0, "updated": 0, "total": 0}
+    graph.close.assert_called_once()
+
+
+def test_query_appends_persistence_without_mutating_service_payload() -> None:
+    application = ExpertAlumniRelationApplication()
+    data: dict[str, Any] = {"expert": {"id": "S1"}, "total": 0, "items": []}
+    application._service = MagicMock()  # type: ignore[method-assign]
+    application._service.query = MagicMock(return_value=data)
+
+    with patch.object(
+        application,
+        "_persist_relations",
+        return_value={"space": "dev", "edgeType": "ALUMNI", "created": 0, "updated": 0, "total": 0},
+    ) as persist:
+        result = application.query(expert_id="S1")
+
+    assert result["persistence"]["edgeType"] == "ALUMNI"
+    assert result["total"] == 0
+    # 服务层缓存命中返回共享对象:落盘结果只能并入副本,不能写穿原始 payload。
+    assert "persistence" not in data
+    assert persist.call_args.args[0]["expert"]["id"] == "S1"

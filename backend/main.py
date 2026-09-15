@@ -59,16 +59,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     }:
         correction_dispatcher = asyncio.create_task(_run_correction_dispatcher())
     try:
-        # 确保 platform_llm_config 表存在（LLM 配置持久化，schema 作业默认 LLM 绑定依赖）。
-        # MySQL 不可达时跳过建表：CI 无 MySQL 服务，运行期访问 LLM 配置接口会单独报错。
+        # 确保 platform_llm_config / kg_indirect_relation_annotation 表存在
+        # （LLM 配置持久化；间接关系人工标注）。
+        # MySQL 不可达时跳过建表：CI 无 MySQL 服务，运行期访问相关接口会单独报错。
         from db_model.base import Base
+        from db_model.indirect_relation_annotation import IndirectRelationAnnotation
         from db_model.llm_config import LlmConfig
         from infra.mysql import get_engine
 
         try:
-            Base.metadata.create_all(get_engine(), tables=[LlmConfig.__table__])
+            Base.metadata.create_all(
+                get_engine(),
+                tables=[LlmConfig.__table__, IndirectRelationAnnotation.__table__],
+            )
         except Exception as exc:
-            logger.warning("跳过 platform_llm_config 建表：MySQL 不可达 %s", exc)
+            logger.warning(
+                "跳过 platform_llm_config/kg_indirect_relation_annotation 建表：MySQL 不可达 %s",
+                exc,
+            )
         if os.getenv("SCHEMA_AUTO_INIT", "false").lower() == "true":
             from script.init_schema_management import initialize_schema_management
 

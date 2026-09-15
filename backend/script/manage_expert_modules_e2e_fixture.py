@@ -3,6 +3,8 @@
 覆盖模块：
 1. 科技专家两点合作成果
 2. 科技专家校友关系
+3. 科技专家论文合作关系（合作论文被引链路：dwd_zh_paper_citation 源表 +
+   图上 CITED_BY/CITES 双向边，被引次数=边数，引用方可经 AUTHORED_BY 追溯作者）
 
 安全约束：默认只输出计划；只有 ``--apply`` 才写库；``--cleanup`` 必须同时提供
 ``--confirm-cleanup EXPERT_MODULES_E2E_V1``。脚本仅允许
@@ -680,6 +682,33 @@ COAUTHORS: tuple[tuple[int, int, int], ...] = (
     (1, 11, 1),  # 只有合著边，无共同成果
 )
 
+# 论文引用（引用方论文 no，被引论文 no）。引用方年份均晚于被引方，符合引用时序。
+# 链路与真实 ETL 一致：MySQL dwd_zh_paper_citation 为权威源（id=被引论文、doi=引用方 DOI），
+# 图上建 CITED_BY（被引→引用方，citation_identifier=引用方 DOI）与 CITES（引用方→被引，
+# reference_identifier=被引 DOI）双向边；引用方均为库内真实 Paper，再经 AUTHORED_BY
+# 关联到作者，"哪篇被引、谁引用"全程可溯。论文合作模块的被引次数即 CITED_BY 边数。
+# 覆盖：person 1/5 的三篇合作论文（5/6/7）分别被引 3/2/1 次，总被引 6、最高 3。
+CITATIONS: tuple[tuple[int, int], ...] = (
+    (2, 5),  # 多源消歧(2021) 引用 增量更新(2018)
+    (3, 5),  # 异构图表示学习(2023) 引用 增量更新(2018)
+    (7, 5),  # 并行查询优化(2024) 引用 增量更新(2018)
+    (3, 6),  # 异构图表示学习(2023) 引用 知识融合(2021)
+    (10, 6),  # 主题发现(2025) 引用 知识融合(2021)
+    (10, 7),  # 主题发现(2025) 引用 并行查询优化(2024)
+    (4, 1),  # 合作网络(2022) 引用 可信推理(2020)
+    (12, 1),  # 数据质量(2022) 引用 可信推理(2020)
+    (11, 3),  # 材料GNN(2024) 引用 异构图表示学习(2023)
+    (11, 4),  # 材料GNN(2024) 引用 合作网络(2022)
+)
+
+
+def cited_counts() -> dict[int, int]:
+    """每篇论文的被引次数（= 图上 CITED_BY 入边数，也回填 MySQL 关系表 citations）。"""
+    counts: dict[int, int] = {}
+    for _citing, cited in CITATIONS:
+        counts[cited] = counts.get(cited, 0) + 1
+    return counts
+
 
 ALLOWED_GRAPH_SPACES = frozenset({"dev", "test"})
 
@@ -728,6 +757,12 @@ def scenario_manifest() -> dict[str, list[str]]:
             "源专家不存在",
             "目标专家不存在",
         ],
+        "论文合作关系": [
+            "合作论文被引次数（CITED_BY 边数）",
+            "被引论文与引用论文互链（CITED_BY/CITES 双向）",
+            "引用论文经 AUTHORED_BY 关联引用作者",
+            "被引次数为 0（未被引用的论文）",
+        ],
     }
 
 
@@ -750,6 +785,9 @@ def plan() -> dict[str, Any]:
             "authoredByEdges": sum(len(x.authors) for x in pas),
             "projectPersonEdges": sum(1 + len(x.participants) for x in prs),
             "inventedByEdges": sum(len(x.inventors) for x in pts),
+            "citationRows": len(CITATIONS),
+            "citedByEdges": len(CITATIONS),
+            "citesEdges": len(CITATIONS),
         },
         "sampleIds": {
             "person1": ps[0].vid,
@@ -796,6 +834,12 @@ def _delete_mysql(con) -> None:
             "OR scholar_id LIKE :legacy_prefix OR paper_id BETWEEN :legacy_paper_low AND :legacy_paper_high"
         ),
         {**sid_params, **paper_params, **legacy},
+    )
+    # 引用表：id 为 varchar，按本批次号段字符串删除；data_source 兜底防残留。
+    cit_id_in, cit_id_params = _sql_in("id", [str(i) for i in paper_ids], "cit")
+    con.execute(
+        text(f"DELETE FROM dwd_zh_paper_citation WHERE ({cit_id_in}) OR data_source = :batch"),
+        {**cit_id_params, "batch": BATCH},
     )
     con.execute(
         text(
@@ -904,6 +948,8 @@ def write_mysql() -> dict[str, int]:
                     "paper_id": p.mysql_id,
                     "year": p.year or 0,
                     "sid": people()[n - 1].scholar_id,
+                    # citations=该论文被引次数，与图上 CITED_BY 边数一致（同一作者多行同值）。
+                    "citations": cited_counts().get(p.no, 0),
                     "published": datetime(p.year, 6, 1) if p.year else None,
                     "now": now,
                 }
@@ -913,8 +959,24 @@ def write_mysql() -> dict[str, int]:
             con.execute(
                 text("""INSERT INTO dwd_scholar_paper_relation
                 (paper_id,year,scholar_id,citations,publish_time,status,create_time,update_time,publication_id,related_paper_id)
-                VALUES (:paper_id,:year,:sid,0,:published,1,:now,:now,0,:paper_id)"""),
+                VALUES (:paper_id,:year,:sid,:citations,:published,1,:now,:now,0,:paper_id)"""),
                 paper_relations,
+            )
+            # 引用权威源：id=被引论文 id、doi/zh_name=引用方论文（真实 ETL 的 CITED_BY 数据源）。
+            con.execute(
+                text("""INSERT INTO dwd_zh_paper_citation
+                (id,publication_id,doi,zh_name,publication_zh_name,data_source,created_time,updated_time)
+                VALUES (:id,0,:doi,:zh_name,'Journal of Knowledge Engineering',:batch,:now,:now)"""),
+                [
+                    {
+                        "id": str(papers()[cited - 1].mysql_id),
+                        "doi": f"10.1000/fxkg.{papers()[citing - 1].mysql_id}",
+                        "zh_name": papers()[citing - 1].title,
+                        "batch": BATCH,
+                        "now": now,
+                    }
+                    for citing, cited in CITATIONS
+                ],
             )
             con.execute(
                 text("""INSERT INTO dwd_zh_project
@@ -1096,6 +1158,17 @@ def sync_graph_from_mysql() -> dict[str, int]:
                 .mappings()
                 .all()
             )
+            citation_rows = (
+                con.execute(
+                    text(
+                        "SELECT id,doi FROM dwd_zh_paper_citation "
+                        "WHERE data_source = :batch ORDER BY id,doi"
+                    ),
+                    {"batch": BATCH},
+                )
+                .mappings()
+                .all()
+            )
     finally:
         client.dispose()
 
@@ -1166,6 +1239,30 @@ def sync_graph_from_mysql() -> dict[str, int]:
                 f"person_{row['scholar_id']}",
                 "AUTHORED_BY",
                 f"paper:{row['paper_id']}:author:{row['scholar_id']}",
+            )
+        # 引用链路：引用方 DOI 在库内时对齐到真实 Paper vid（与真实 ETL 的对齐形态一致，
+        # 不建 paper_cit_ 桩）；CITED_BY 被引→引用方，CITES 引用方→被引，互为反向。
+        paper_doi_by_vid = {f"paper_{row['id']}": str(row["doi"] or "") for row in paper_rows}
+        paper_vid_by_doi = {doi: vid for vid, doi in paper_doi_by_vid.items() if doi}
+        for row in citation_rows:
+            cited_vid = f"paper_{row['id']}"
+            citing_doi = str(row["doi"] or "")
+            citing_vid = paper_vid_by_doi.get(citing_doi)
+            if not citing_vid or citing_vid == cited_vid:
+                continue
+            merge_edge(
+                cited_vid,
+                citing_vid,
+                "CITED_BY",
+                f"cited_by:{citing_vid}:{cited_vid}",
+                {"citation_identifier": citing_doi, "confidence": 1.0},
+            )
+            merge_edge(
+                citing_vid,
+                cited_vid,
+                "CITES",
+                f"cites:{cited_vid}:{citing_vid}",
+                {"reference_identifier": paper_doi_by_vid.get(cited_vid, ""), "confidence": 1.0},
             )
         for query in (
             "CREATE EDGE IF NOT EXISTS STUDIED_AT("
@@ -1336,6 +1433,7 @@ def verify() -> dict[str, Any]:
     expected = plan()["counts"]
     sid_in, sid_params = _sql_in("scholar_id", fixture_scholar_ids(), "s")
     paper_id_in, paper_id_params = _sql_in("id", fixture_paper_ids(), "pi")
+    paper_in, paper_params = _sql_in("paper_id", fixture_paper_ids(), "p")
     proj_in, proj_params = _sql_in("id", fixture_project_ids(), "pj")
     patent_in, patent_params = _sql_in("patent_id", fixture_patent_ids(), "pt")
     client = MySQLClient(database="gkx_element")
@@ -1365,6 +1463,19 @@ def verify() -> dict[str, Any]:
             ),
             sid_params,
         ).scalar_one()
+        citation_rows = con.execute(
+            text("SELECT COUNT(*) FROM dwd_zh_paper_citation WHERE data_source = :batch"),
+            {"batch": BATCH},
+        ).scalar_one()
+        relation_citations = dict(
+            con.execute(
+                text(
+                    f"SELECT paper_id,MAX(citations) FROM dwd_scholar_paper_relation "
+                    f"WHERE {paper_in} GROUP BY paper_id"
+                ),
+                paper_params,
+            ).all()
+        )
     client.dispose()
     graph = get_trs_graph_client()
     try:
@@ -1398,6 +1509,26 @@ def verify() -> dict[str, Any]:
                 or str(getattr(e, "source_id", "") or "") == sample.vid
                 for e in (out_edges or [])
             )
+        # 被引链路一致性：图上 CITED_BY/CITES 边数 = MySQL 引用行数 = 关系表 citations 值，
+        # 且每条 CITED_BY 的目标都是库内真实论文（无 paper_cit_ 桩）。
+        citation_edges_ok = True
+        for p in papers():
+            expected_cites = cited_counts().get(p.no, 0)
+            try:
+                cited_by = graph.get_node_edges(
+                    p.vid, direction="out", edge_type="CITED_BY", limit=100
+                )
+                cites_in = graph.get_node_edges(p.vid, direction="in", edge_type="CITES", limit=100)
+            except Exception:  # noqa: BLE001
+                citation_edges_ok = False
+                continue
+            if len(cited_by or []) != expected_cites or len(cites_in or []) != expected_cites:
+                citation_edges_ok = False
+            for edge in cited_by or []:
+                if not str(getattr(edge, "target_id", "") or "").startswith("paper_8899"):
+                    citation_edges_ok = False
+            if int(relation_citations.get(p.mysql_id, 0)) != expected_cites:
+                citation_edges_ok = False
     finally:
         close_trs_graph_client()
     ok = (
@@ -1406,6 +1537,8 @@ def verify() -> dict[str, Any]:
         and encoding_errors == 0
         and not field_mismatches
         and studied_ok
+        and citation_rows == expected["citationRows"]
+        and citation_edges_ok
     )
     return {
         "ok": ok,
@@ -1415,6 +1548,8 @@ def verify() -> dict[str, Any]:
         "encodingErrors": encoding_errors,
         "fieldMismatches": field_mismatches,
         "studiedAtSampleOk": studied_ok,
+        "citationRows": citation_rows,
+        "citationEdgesOk": citation_edges_ok,
         "sampleIds": plan()["sampleIds"],
         "scenarioManifest": scenario_manifest(),
     }

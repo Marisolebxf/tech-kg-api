@@ -162,9 +162,7 @@ def _shrink_chain_value(value: Any, *, budget: int, label: str) -> Any:
     stats = value.get("stats") if isinstance(value, dict) else None
     if isinstance(stats, dict) and _json_size(stats) <= 4096:
         marker["stats"] = stats
-    logger.warning(
-        "%s 序列化后 %d 字节超预算 %d，步间透传已截断为标记", label, size, budget
-    )
+    logger.warning("%s 序列化后 %d 字节超预算 %d，步间透传已截断为标记", label, size, budget)
     return marker
 
 
@@ -1602,7 +1600,6 @@ class SchemaExtractWorkflow:
                                 transform_request: dict[str, Any] = {
                                     "scriptPath": plan["scriptPath"],
                                     "functionName": step["fn"],
-                                    "rows": chunk,
                                     "source": source,
                                     "kind": kind,
                                     "timeoutSeconds": timeout_seconds,
@@ -1614,8 +1611,9 @@ class SchemaExtractWorkflow:
                                 if multi_step:
                                     transform_request["ctxStepId"] = step_ctx_id
                                 if seq:
-                                    # 第 N>1 步：input=上一步完整输出、prevOutputs=已完成
-                                    # 各步输出；超预算截断为标记（防 gRPC 上限炸批次）
+                                    # 第 N>1 步：不带 rows（省一半请求体积），input=上一步
+                                    # 完整输出、prevOutputs=已完成各步输出；超预算截断为
+                                    # 标记（防 gRPC 上限炸批次）
                                     transform_request["input"] = _shrink_chain_value(
                                         prev_output,
                                         budget=_MAX_STEP_CHAIN_BYTES,
@@ -1629,12 +1627,13 @@ class SchemaExtractWorkflow:
                                         )
                                         for sid, out in step_outputs.items()
                                     }
+                                else:
+                                    # 第 1 步：与单步 transform 请求形状一致
+                                    transform_request["rows"] = chunk
                                 transformed = await workflow.execute_activity(
                                     execute_transform,
                                     transform_request,
-                                    start_to_close_timeout=timedelta(
-                                        seconds=timeout_seconds + 60
-                                    ),
+                                    start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
                                     retry_policy=ACTIVITY_RETRY_POLICY,
                                 )
                                 records = (

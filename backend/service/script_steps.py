@@ -42,9 +42,7 @@ def extract_step_list(source: str, *, filename: str = "<script>") -> list[dict[s
 def step_list_from_tree(tree: ast.Module) -> list[dict[str, str]] | None:
     """从已解析的 AST 里取顶层 STEPS 清单；规则同 :func:`extract_step_list`。"""
     functions = {
-        node.name
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     literal: ast.List | None = None
     for node in tree.body:
@@ -58,7 +56,9 @@ def step_list_from_tree(tree: ast.Module) -> list[dict[str, str]] | None:
                 value = node.value
         if value is not None:
             if not isinstance(value, ast.List):
-                raise ValueError('STEPS 必须赋值为 list 字面量（如 STEPS = [{"id": ..., "fn": ...}]）')
+                raise ValueError(
+                    'STEPS 必须赋值为 list 字面量（如 STEPS = [{"id": ..., "fn": ...}]）'
+                )
             literal = value  # 多次赋值取最后一次（与 Python 执行语义一致）
     if literal is None:
         return None

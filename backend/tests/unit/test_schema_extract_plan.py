@@ -145,9 +145,7 @@ async def test_load_schema_extract_plan_parses_steps_declaration(
     plan_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """STEPS 脚本：plan 展开步清单（只含 id/fn 字符串键），multiStep=True。"""
-    monkeypatch.setattr(
-        "infra.s3.get_schema_s3_storage", lambda: FakeS3(STEPS_SCRIPT)
-    )
+    monkeypatch.setattr("infra.s3.get_schema_s3_storage", lambda: FakeS3(STEPS_SCRIPT))
     plan = await load_schema_extract_plan("schema-1")
     assert plan["steps"] == [
         {"id": "normalize", "fn": "step_normalize"},

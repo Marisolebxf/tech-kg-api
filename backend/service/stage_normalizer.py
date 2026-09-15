@@ -107,11 +107,7 @@ def pipeline_steps(output: dict[str, Any] | None) -> list[dict[str, Any]]:
         # kg.schema.extract 多步脚本的分步统计：records/failed 直接当
         # 处理数量/异常数量展示（str 化，异常数量 0 需为 "0" 才不触发前端
         # 的 has-review 判定）；kg.custom.steps 仍走 attempt 分支
-        count = (
-            str(state["records"])
-            if "records" in state
-            else state.get("attempt", "-")
-        )
+        count = str(state["records"]) if "records" in state else state.get("attempt", "-")
         abnormal = str(state["failed"]) if "failed" in state else "-"
         result.append(
             {

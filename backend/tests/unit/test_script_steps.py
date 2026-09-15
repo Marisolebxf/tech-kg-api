@@ -6,8 +6,8 @@ import ast
 
 import pytest
 
-from service.script_steps import MAX_STEPS, extract_step_list
 from service.schema_management import SchemaManagementService, SchemaScriptError
+from service.script_steps import MAX_STEPS, extract_step_list
 from service.temporal_workflows import (
     _MAX_PREV_OUTPUT_BYTES,
     _MAX_STEP_CHAIN_BYTES,
@@ -74,9 +74,7 @@ class TestExtractStepList:
 
     def test_rejects_non_list_literal(self):
         with pytest.raises(ValueError, match="list 字面量"):
-            extract_step_list(
-                'STEPS = make_steps()\n\ndef make_steps():\n    return []\n'
-            )
+            extract_step_list("STEPS = make_steps()\n\ndef make_steps():\n    return []\n")
 
     def test_rejects_non_dict_item(self):
         with pytest.raises(ValueError, match="第 1 项必须是 dict"):
@@ -84,9 +82,7 @@ class TestExtractStepList:
 
     def test_rejects_non_literal_item(self):
         with pytest.raises(ValueError, match="dict 字面量"):
-            extract_step_list(
-                'STEPS = [make_item()]\n\ndef make_item():\n    return {}\n'
-            )
+            extract_step_list("STEPS = [make_item()]\n\ndef make_item():\n    return {}\n")
 
     def test_rejects_missing_id(self):
         source = 'STEPS = [{"fn": "fa"}]\n\ndef fa(payload):\n    return {}\n'
@@ -123,9 +119,7 @@ class TestExtractStepList:
             extract_step_list(source)
 
     def test_rejects_too_many_steps(self):
-        entries = ", ".join(
-            f'{{"id": "s{i}", "fn": "f{i}"}}' for i in range(MAX_STEPS + 1)
-        )
+        entries = ", ".join(f'{{"id": "s{i}", "fn": "f{i}"}}' for i in range(MAX_STEPS + 1))
         functions = "\n".join(f"def f{i}(payload):\n    return {{}}" for i in range(MAX_STEPS + 1))
         source = f"STEPS = [{entries}]\n\n{functions}\n"
         with pytest.raises(ValueError, match=f"最长 {MAX_STEPS} 步"):
@@ -143,10 +137,16 @@ class TestExtractStepList:
 
 class TestValidateScriptEntry:
     def test_transform_script_unchanged(self):
-        assert SchemaManagementService._validate_script("a.py", b"def transform(p):\n    return {}\n") == "transform"
+        assert (
+            SchemaManagementService._validate_script("a.py", b"def transform(p):\n    return {}\n")
+            == "transform"
+        )
 
     def test_workflow_script_unchanged(self):
-        assert SchemaManagementService._validate_script("a.py", b"def workflow(p):\n    return {}\n") == "workflow"
+        assert (
+            SchemaManagementService._validate_script("a.py", b"def workflow(p):\n    return {}\n")
+            == "workflow"
+        )
 
     def test_no_entry_returns_none(self):
         assert SchemaManagementService._validate_script("a.py", b"x = 1\n") is None

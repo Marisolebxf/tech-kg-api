@@ -162,12 +162,11 @@ async def test_execute_transform_step_chain_payload_and_ctx(tmp_path) -> None:
     )
     assert first["cleaned"] == [{"id": "1", "name": "甲", "ok": True}]
 
-    # 第 2 步：input/prevOutputs 由 worker 注入
+    # 第 2 步：input/prevOutputs 由 worker 注入，请求不再带 rows
     second = await execute_transform(
         {
             "scriptPath": str(script),
             "functionName": "step_emit",
-            "rows": [],  # 第 N>1 步 worker 不再传 rows（payload 里无该键）
             "source": source,
             "kind": "entity",
             "timeoutSeconds": 30,

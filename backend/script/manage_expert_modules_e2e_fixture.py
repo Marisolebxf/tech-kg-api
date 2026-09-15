@@ -853,19 +853,23 @@ def _delete_mysql(con) -> None:
         "legacy_paper_high": LEGACY_PAPER_ID_BASE + 99,
     }
 
+    # coauthor 只删两端都是本批次学者的行：单端是本批次学者的行可能连接
+    # 人工补充的真实合作关系，不能因重跑注入被冲掉。
     con.execute(
         text(
-            f"DELETE FROM dwd_scholar_coauthor WHERE ({sid_in}) OR ({cosid_in}) "
+            f"DELETE FROM dwd_scholar_coauthor WHERE (({sid_in}) AND ({cosid_in})) "
             "OR scholar_id LIKE :legacy_prefix OR co_scholar_id LIKE :legacy_prefix"
         ),
         {**sid_params, **cosid_params, **legacy},
     )
+    # 论文-学者关系只按本批次论文号删：本批次学者与非本批次论文的关系行
+    # 属于补充数据（如手工加的共同论文），重跑注入必须保留。
     con.execute(
         text(
-            f"DELETE FROM dwd_scholar_paper_relation WHERE ({sid_in}) OR ({paper_in}) "
+            f"DELETE FROM dwd_scholar_paper_relation WHERE ({paper_in}) "
             "OR scholar_id LIKE :legacy_prefix OR paper_id BETWEEN :legacy_paper_low AND :legacy_paper_high"
         ),
-        {**sid_params, **paper_params, **legacy},
+        {**paper_params, **legacy},
     )
     # 引用表：id 为 varchar，按本批次号段字符串删除；data_source 兜底防残留。
     cit_id_in, cit_id_params = _sql_in("id", [str(i) for i in paper_ids], "cit")
@@ -1151,6 +1155,32 @@ def write_mysql() -> dict[str, int]:
     return plan()["counts"]
 
 
+def _drop_batch_edges(graph: Any, vids: list[str]) -> int:
+    """只删除带本批次 ``ingest_batch`` 标记的边，保留其余一切边。
+
+    供 ``sync_graph_from_mysql`` / ``cleanup`` 复用：重跑注入时清掉本脚本
+    上一次写入、且本次不再重建的边，同时保住挂在这些节点上的运行期数据
+    （如 ALUMNI 判定落盘边、人工补充的成果边）。旧版本脚本写入的边大多
+    没有标记，本次重跑会被 upsert 覆盖并补上标记；确已从数据定义中移除
+    的无标记旧边会残留，需要时手工清理。
+    """
+    deleted = 0
+    for vid in vids:
+        try:
+            edges = graph.get_node_edges(vid, limit=500)
+        except Exception:
+            continue
+        for edge in edges:
+            if str((edge.properties or {}).get("ingest_batch") or "") != BATCH:
+                continue
+            try:
+                if graph.delete_edge(edge.id, edge_type=edge.type):
+                    deleted += 1
+            except Exception:
+                continue
+    return deleted
+
+
 def sync_graph_from_mysql() -> dict[str, int]:
     """只从刚写入 MySQL 的隔离记录回读，再幂等同步到当前 TRS_GRAPH_SPACE；不使用内存定义直接写图。"""
     scholar_ids = fixture_scholar_ids()
@@ -1272,14 +1302,47 @@ def sync_graph_from_mysql() -> dict[str, int]:
     output_awards = {r["id"]: r["output_awards"] for r in project_output_rows}
     research_fields_by_sid = {r["scholar_id"]: r["fields"] or "" for r in research_rows}
 
-    for fixture_vid in [*legacy_fixture_vids(), *fixture_vids()]:
-        graph.delete_node(fixture_vid, detach=True)
+    # 旧版号段节点是纯本批次残留，仍整体迁移删除；现役节点不再 detach 全删：
+    # detach 会把挂在本批次节点上、但不属于本脚本的数据一并冲掉（运行期落盘
+    # 的 ALUMNI 判定边、人工补充的 AUTHORED_BY/成果边等）。改为只删带本批次
+    # ingest_batch 标记的边，节点本身由下方 merge_node 幂等覆盖。
+    for legacy_vid in legacy_fixture_vids():
+        graph.delete_node(legacy_vid, detach=True)
+    _drop_batch_edges(graph, fixture_vids())
+
+    # 边统一带 ingest_batch 标记（_drop_batch_edges 依赖它做定向清理），但历史
+    # EDGE 结构未必有这两列（如本空间 CITED_BY）：先幂等补列，否则 create_edge
+    # 报 Unknown column 400。列已存在时 ALTER 报错，按既有 DDL 惯例跳过。
+    for edge_type in (
+        "AUTHORED_BY",
+        "CITED_BY",
+        "CITES",
+        "HAS_KEYWORD",
+        "STUDIED_AT",
+        "LEADS",
+        "HAS_PARTICIPANT",
+        "INVENTED_BY",
+        "COAUTHOR_WITH",
+    ):
+        try:
+            graph.execute_write(
+                f"ALTER EDGE {edge_type} ADD (ingest_batch string, ingest_time string)"
+            )
+            time.sleep(3)  # DDL 有 schema 传播延迟，与上方 CREATE EDGE 同口径
+        except Exception as exc:  # noqa: BLE001
+            print(f"skip ddl: ALTER EDGE {edge_type} | {exc}")
 
     def merge_edge(
         source: str, target: str, edge_type: str, key: str, props: dict[str, Any] | None = None
     ) -> None:
         _ = key
-        graph.create_edge(source, target, edge_type, props or {})
+        # 所有本脚本写入的边统一携带批次标记，重跑时据此做定向清理。
+        graph.create_edge(
+            source,
+            target,
+            edge_type,
+            {"ingest_batch": BATCH, "ingest_time": now, **(props or {})},
+        )
 
     try:
         for row in scholar_rows:
@@ -1721,11 +1784,33 @@ def verify() -> dict[str, Any]:
 
 
 def cleanup() -> dict[str, Any]:
-    """仅删除本批次节点和 MySQL 记录；detach 会一并删除本批次关联边。"""
+    """仅删除本批次：MySQL 记录 + 图中带批次标记的边 + 无残留边的本批次节点。
+
+    不再对现役节点 detach 全删——那会把挂在本批次节点上的非本脚本数据
+    （ALUMNI 落盘边、人工补充边等）一并冲掉；节点仅在没有剩余边时删除。
+    """
     graph = get_trs_graph_client()
+    batch_edges_deleted = 0
+    nodes_removed: list[str] = []
+    nodes_kept: list[str] = []
     try:
-        for vid in [*legacy_fixture_vids(), *fixture_vids()]:
-            graph.delete_node(vid, detach=True)
+        for legacy_vid in legacy_fixture_vids():
+            graph.delete_node(legacy_vid, detach=True)
+        vids = fixture_vids()
+        batch_edges_deleted = _drop_batch_edges(graph, vids)
+        for vid in vids:
+            try:
+                remaining = graph.get_node_edges(vid, limit=1)
+            except Exception:
+                remaining = None  # 查询失败时保守保留节点
+            if remaining:
+                nodes_kept.append(vid)
+                continue
+            try:
+                if graph.delete_node(vid, detach=False):
+                    nodes_removed.append(vid)
+            except Exception:
+                nodes_kept.append(vid)
     finally:
         close_trs_graph_client()
     client = MySQLClient(database="gkx_element")
@@ -1734,7 +1819,13 @@ def cleanup() -> dict[str, Any]:
             _delete_mysql(con)
     finally:
         client.dispose()
-    return {"cleaned": BATCH, "sampleIdsRemoved": plan()["sampleIds"]}
+    return {
+        "cleaned": BATCH,
+        "batchEdgesDeleted": batch_edges_deleted,
+        "nodesRemoved": len(nodes_removed),
+        "nodesKeptWithExternalEdges": len(nodes_kept),
+        "sampleIdsRemoved": plan()["sampleIds"],
+    }
 
 
 def main() -> None:

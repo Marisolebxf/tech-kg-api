@@ -562,6 +562,12 @@ def _venue_type(paper: dict[str, Any]) -> str:
 
 
 def _venue_level(node: dict[str, Any]) -> str:
+    """场馆分级：JCR 分区 > 中科院分区 > 分区 > Top 期刊 > SCI > 中文核心（北大核心/CSCD/EI 等）。
+
+    中文核心体系（Journal.zh_core，源列 dwd_zh_journal.classify_list）排在 SCI 之后：
+    SCIE 收录刊先按 JCR/中科院分级，zh_core 面向未被 SCIE 收录的中文核心刊
+    （如北大核心/CSCD/EI），有多个标识时按影响力用「/」连接展示。
+    """
     props = node.get("properties") or {}
     # 优先使用 Paper 节点上的 venue_level 字段
     if props.get("venue_level") and props["venue_level"] != "未分级":
@@ -576,6 +582,9 @@ def _venue_level(node: dict[str, Any]) -> str:
         return "Top期刊"
     if str(props.get("is_sci") or "").lower() in {"1", "true"}:
         return "SCI"
+    zh_core = str(props.get("zh_core") or "").strip()
+    if zh_core:
+        return zh_core
     return "未分级"
 
 
@@ -927,7 +936,7 @@ def _build_rules(result: dict[str, Any]) -> list[dict[str, Any]]:
             "type": "事实聚合规则",
             "target": "共同论文及其 PUBLISHED_IN、HAS_KEYWORD、CITED_BY、作者关系",
             "trigger": "命中共同论文路径",
-            "logic": "主题按关键词出现次数取前 8；期刊/会议按论文类型和场馆分级属性统计；被引数依次读取论文 citation_count、作者边 citations、CITED_BY 边数量；共同作者按共同论文次数排序取前 5。",
+            "logic": "主题按关键词出现次数取前 8；期刊/会议级别依次取场馆的 JCR 分区、中科院分区、分区、Top 期刊、SCI、中文核心（北大核心/CSCD/EI 等，zh_core）属性；被引数依次读取论文 citation_count、作者边 citations、CITED_BY 边数量；共同作者按共同论文次数排序取前 5。",
             "output": "论文主题、期刊/会议级别、总被引、最高单篇被引和核心合作人员；未构成稳定团队时输出原因说明（stableTeamNote）",
             "threshold": "稳定团队成员须共同论文数 >= 2 且至少覆盖 2 个不同发表年份",
             "audit": audit,

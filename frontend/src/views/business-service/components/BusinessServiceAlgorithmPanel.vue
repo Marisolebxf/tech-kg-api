@@ -5890,6 +5890,9 @@ function clearGraphSelection() {
 
 .result-panel__tabs {
   display: inline-flex;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
   gap: 0;
   padding: 2px;
   border: 1px solid var(--border);
@@ -5898,6 +5901,8 @@ function clearGraphSelection() {
 }
 
 .result-panel__tabs button {
+  flex: 0 0 auto;
+  white-space: nowrap;
   height: 26px;
   padding: 0 6px;
   border: 0;
@@ -6228,6 +6233,7 @@ function clearGraphSelection() {
 
 .result-panel__rules header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;

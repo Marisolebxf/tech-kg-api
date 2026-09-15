@@ -56,9 +56,9 @@ TSINGHUA_UNIVERSITY = "Tsinghua University"
 
 BATCH = "EXPERT_MODULES_E2E_V1"
 # 预留号段：形态像真，与现网抽样不冲突；清理靠白名单 + BATCH 确认。
-PAPER_ID_BASE = 889900000  # paper ids: 889900001 .. 889900080
+PAPER_ID_BASE = 889900000  # paper ids: 889900001 .. 889900081
 EXPECTED_PERSONS = 100
-EXPECTED_ACHIEVEMENTS = 100
+EXPECTED_ACHIEVEMENTS = 101
 # 旧版 ID（expert_e2e_v1_* / 9930…），apply/cleanup 时一并清除以免残留。
 LEGACY_PREFIX = "expert_e2e_v1_"
 LEGACY_PAPER_ID_BASE = 9930000000000000
@@ -193,6 +193,8 @@ class Project:
     participants: tuple[int, ...]
     fields: tuple[str, ...]
     awards: tuple[str, ...] = ()
+    # 成果评价（图 Project.evaluation 属性，两点合作成果「奖项/评价」行的评价来源）
+    evaluation: str = ""
 
     @property
     def mysql_id(self) -> str:
@@ -212,6 +214,8 @@ class Patent:
     year: int
     inventors: tuple[int, ...]
     fields: tuple[str, ...]
+    # 成果评价（图 Patent.evaluation 属性，两点合作成果「奖项/评价」行的评价来源）
+    evaluation: str = ""
 
     @property
     def patent_id(self) -> str:
@@ -692,6 +696,19 @@ def papers() -> list[Paper]:
                 1 + (no % 3),
             )
         )
+    # 2023-01 起的时间窗内 1↔4 可见的共同论文（带领域与奖项，供「所属领域」
+    # 「奖项/评价」摘要行有数据）。
+    rows.append(
+        Paper(
+            81,
+            "大规模知识图谱质量评价方法",
+            "Quality Evaluation for Large-scale Knowledge Graphs",
+            2024,
+            (1, 4),
+            ("知识图谱构建", "质量评价"),
+            ("科技创新优秀成果奖",),
+        )
+    )
     return rows
 
 
@@ -707,7 +724,16 @@ def projects() -> list[Project]:
             ("数字科技应用示范奖",),
         ),
         Project(2, "高性能图数据库查询引擎研制", 2024, 1, (7,), ("图数据库", "高性能计算")),
-        Project(3, "跨领域科研成果智能发现平台", 2023, 4, (1,), ("成果发现", "人工智能")),
+        Project(
+            3,
+            "跨领域科研成果智能发现平台",
+            2023,
+            4,
+            (1,),
+            ("成果发现", "人工智能"),
+            ("省部级科技进步一等奖",),
+            "结题验收优秀，成果已在多家科研单位示范应用",
+        ),
         Project(4, "先进材料智能设计与验证平台", 2024, 9, (10,), ("先进材料", "智能设计")),
     ]
     project_topics = (
@@ -761,6 +787,7 @@ def patents() -> list[Patent]:
             2023,
             (1, 4),
             ("语义计算", "数据治理"),
+            "已落地应用于科技情报检索系统",
         ),
         Patent(
             4,
@@ -939,7 +966,8 @@ def plan() -> dict[str, Any]:
             "citedByEdges": len(CITATIONS),
             "citesEdges": len(CITATIONS),
             "classificationRows": sum(1 for x in pas if x.fields),
-            "keywordEdges": sum(len(x.fields) for x in pas if x.fields),
+            "keywordEdges": sum(len(x.fields) for x in pas if x.fields)
+            + sum(len(x.fields) for x in prs if x.fields),
             "researchDirectionRows": len(research_fields_by_person()),
             "journalRows": len(pas),
             "journalNodes": len(journals()),
@@ -978,19 +1006,23 @@ def _delete_mysql(con) -> None:
         "legacy_paper_high": LEGACY_PAPER_ID_BASE + 99,
     }
 
+    # coauthor 只删两端都是本批次学者的行：单端是本批次学者的行可能连接
+    # 人工补充的真实合作关系，不能因重跑注入被冲掉。
     con.execute(
         text(
-            f"DELETE FROM dwd_scholar_coauthor WHERE ({sid_in}) OR ({cosid_in}) "
+            f"DELETE FROM dwd_scholar_coauthor WHERE (({sid_in}) AND ({cosid_in})) "
             "OR scholar_id LIKE :legacy_prefix OR co_scholar_id LIKE :legacy_prefix"
         ),
         {**sid_params, **cosid_params, **legacy},
     )
+    # 论文-学者关系只按本批次论文号删：本批次学者与非本批次论文的关系行
+    # 属于补充数据（如手工加的共同论文），重跑注入必须保留。
     con.execute(
         text(
-            f"DELETE FROM dwd_scholar_paper_relation WHERE ({sid_in}) OR ({paper_in}) "
+            f"DELETE FROM dwd_scholar_paper_relation WHERE ({paper_in}) "
             "OR scholar_id LIKE :legacy_prefix OR paper_id BETWEEN :legacy_paper_low AND :legacy_paper_high"
         ),
-        {**sid_params, **paper_params, **legacy},
+        {**paper_params, **legacy},
     )
     # 引用表：id 为 varchar，按本批次号段字符串删除；data_source 兜底防残留。
     cit_id_in, cit_id_params = _sql_in("id", [str(i) for i in paper_ids], "cit")
@@ -1313,6 +1345,32 @@ def write_mysql() -> dict[str, int]:
     return plan()["counts"]
 
 
+def _drop_batch_edges(graph: Any, vids: list[str]) -> int:
+    """只删除带本批次 ``ingest_batch`` 标记的边，保留其余一切边。
+
+    供 ``sync_graph_from_mysql`` / ``cleanup`` 复用：重跑注入时清掉本脚本
+    上一次写入、且本次不再重建的边，同时保住挂在这些节点上的运行期数据
+    （如 ALUMNI 判定落盘边、人工补充的成果边）。旧版本脚本写入的边大多
+    没有标记，本次重跑会被 upsert 覆盖并补上标记；确已从数据定义中移除
+    的无标记旧边会残留，需要时手工清理。
+    """
+    deleted = 0
+    for vid in vids:
+        try:
+            edges = graph.get_node_edges(vid, limit=500)
+        except Exception:
+            continue
+        for edge in edges:
+            if str((edge.properties or {}).get("ingest_batch") or "") != BATCH:
+                continue
+            try:
+                if graph.delete_edge(edge.id, edge_type=edge.type):
+                    deleted += 1
+            except Exception:
+                continue
+    return deleted
+
+
 def sync_graph_from_mysql() -> dict[str, int]:
     """只从刚写入 MySQL 的隔离记录回读，再幂等同步到当前 TRS_GRAPH_SPACE；不使用内存定义直接写图。"""
     scholar_ids = fixture_scholar_ids()
@@ -1445,14 +1503,54 @@ def sync_graph_from_mysql() -> dict[str, int]:
     output_awards = {r["id"]: r["output_awards"] for r in project_output_rows}
     research_fields_by_sid = {r["scholar_id"]: r["fields"] or "" for r in research_rows}
 
-    for fixture_vid in [*legacy_fixture_vids(), *fixture_vids()]:
-        graph.delete_node(fixture_vid, detach=True)
+    # 旧版号段节点是纯本批次残留，仍整体迁移删除；现役节点不再 detach 全删：
+    # detach 会把挂在本批次节点上、但不属于本脚本的数据一并冲掉（运行期落盘
+    # 的 ALUMNI 判定边、人工补充的 AUTHORED_BY/成果边等）。改为只删带本批次
+    # ingest_batch 标记的边，节点本身由下方 merge_node 幂等覆盖。
+    for legacy_vid in legacy_fixture_vids():
+        graph.delete_node(legacy_vid, detach=True)
+    _drop_batch_edges(graph, fixture_vids())
+
+    # 边统一带 ingest_batch 标记（_drop_batch_edges 依赖它做定向清理），但历史
+    # EDGE 结构未必有这两列（如本空间 CITED_BY）：先幂等补列，否则 create_edge
+    # 报 Unknown column 400。列已存在时 ALTER 报错，按既有 DDL 惯例跳过。
+    for edge_type in (
+        "AUTHORED_BY",
+        "CITED_BY",
+        "CITES",
+        "HAS_KEYWORD",
+        "STUDIED_AT",
+        "LEADS",
+        "HAS_PARTICIPANT",
+        "INVENTED_BY",
+        "COAUTHOR_WITH",
+    ):
+        try:
+            graph.execute_write(
+                f"ALTER EDGE {edge_type} ADD (ingest_batch string, ingest_time string)"
+            )
+            time.sleep(3)  # DDL 有 schema 传播延迟，与上方 CREATE EDGE 同口径
+        except Exception as exc:  # noqa: BLE001
+            print(f"skip ddl: ALTER EDGE {edge_type} | {exc}")
+    # 成果评价列（「奖项/评价」行的评价来源）；output_awards/keywords 列本空间已有。
+    for tag in ("Patent", "Project"):
+        try:
+            graph.execute_write(f"ALTER TAG {tag} ADD (evaluation string)")
+            time.sleep(3)
+        except Exception as exc:  # noqa: BLE001
+            print(f"skip ddl: ALTER TAG {tag} | {exc}")
 
     def merge_edge(
         source: str, target: str, edge_type: str, key: str, props: dict[str, Any] | None = None
     ) -> None:
         _ = key
-        graph.create_edge(source, target, edge_type, props or {})
+        # 所有本脚本写入的边统一携带批次标记，重跑时据此做定向清理。
+        graph.create_edge(
+            source,
+            target,
+            edge_type,
+            {"ingest_batch": BATCH, "ingest_time": now, **(props or {})},
+        )
 
     try:
         for row in scholar_rows:
@@ -1488,6 +1586,8 @@ def sync_graph_from_mysql() -> dict[str, int]:
                 },
             )
         paper_defs = {p.mysql_id: p for p in papers()}
+        project_defs = {p.mysql_id: p for p in projects()}
+        patent_defs = {p.patent_id: p for p in patents()}
         for row in paper_rows:
             definition = paper_defs[row["id"]]
             graph.merge_node(
@@ -1501,6 +1601,14 @@ def sync_graph_from_mysql() -> dict[str, int]:
                     if row["cover_date_start"]
                     else "",
                     "doi": row["doi"],
+                    # 获奖（与 Project.output_awards 同构，模块按 AWARD_KEYS 读取）
+                    "output_awards": json.dumps(
+                        [
+                            {"year": definition.year or "", "title": name}
+                            for name in definition.awards
+                        ],
+                        ensure_ascii=False,
+                    ),
                     "source": BATCH,
                 },
             )
@@ -1543,7 +1651,12 @@ def sync_graph_from_mysql() -> dict[str, int]:
             keywords = [kw.strip() for kw in str(row["keywords"] or "").split(",") if kw.strip()]
             for kw in keywords:
                 kvid = f"keyword_{hashlib.md5(kw.encode('utf-8')).hexdigest()}"
-                if graph.get_node(kvid) is None:
+                try:
+                    kword_exists = graph.get_node(kvid) is not None
+                except Exception:  # noqa: BLE001
+                    # DDL 后偶发瞬时读失败：按不存在处理，merge_node 幂等兜底
+                    kword_exists = False
+                if not kword_exists:
                     graph.merge_node(["Keyword"], {"vid": kvid}, {"keyword": kw})
                 merge_edge(
                     f"paper_{row['id']}",
@@ -1680,6 +1793,7 @@ def sync_graph_from_mysql() -> dict[str, int]:
                     awards_n = int(bool(parsed_awards))
             except json.JSONDecodeError:
                 awards_n = 0 if awards_json in ("", "[]") else 1
+            project_definition = project_defs[row["id"]]
             graph.merge_node(
                 ["Project"],
                 {"vid": pvid},
@@ -1689,6 +1803,9 @@ def sync_graph_from_mysql() -> dict[str, int]:
                     "abstract": row["abstract"] or "",
                     "awards_count": awards_n,
                     "output_awards": awards_json,
+                    # 所属领域（与真实项目 ETL 的 keywords → HAS_KEYWORD 双写口径一致）
+                    "keywords": row["keywords"] or "[]",
+                    "evaluation": project_definition.evaluation,
                     "source_system": "gkx_element",
                     "source_table": "dwd_zh_project",
                     "source_record_id": row["id"],
@@ -1696,6 +1813,30 @@ def sync_graph_from_mysql() -> dict[str, int]:
                     "ingest_time": now,
                 },
             )
+            # 项目关键词（HAS_KEYWORD，源 dwd_zh_project.keywords；kvid 与论文侧同构）
+            for kw in json.loads(row["keywords"] or "[]"):
+                kw = str(kw).strip()
+                if not kw:
+                    continue
+                kvid = f"keyword_{hashlib.md5(kw.encode('utf-8')).hexdigest()}"
+                try:
+                    kword_exists = graph.get_node(kvid) is not None
+                except Exception:  # noqa: BLE001
+                    kword_exists = False
+                if not kword_exists:
+                    graph.merge_node(["Keyword"], {"vid": kvid}, {"keyword": kw})
+                merge_edge(
+                    pvid,
+                    kvid,
+                    "HAS_KEYWORD",
+                    f"has_keyword:{pvid}:{kvid}",
+                    {
+                        "source_table": "dwd_zh_project",
+                        "source_record_id": str(row["id"]),
+                        "ingest_batch": BATCH,
+                        "ingest_time": now,
+                    },
+                )
             host = row["project_host"]
             if host:
                 merge_edge(pvid, f"person_{host}", "LEADS", f"project:{row['id']}:lead:{host}")
@@ -1728,6 +1869,7 @@ def sync_graph_from_mysql() -> dict[str, int]:
                         str(publication.get("date") or "").replace("-", "") or 0
                     ),
                     "keywords": json.dumps(keywords, ensure_ascii=False),
+                    "evaluation": patent_defs[row["patent_id"]].evaluation,
                     "publication_number": row["publication_number"],
                     "patent_id": row["patent_id"],
                     "db_source": BATCH,
@@ -1875,8 +2017,10 @@ def verify() -> dict[str, Any]:
                 citation_edges_ok = False
         # 论文主题链路：每篇种子论文的 HAS_KEYWORD 出边数 = 源表关键词数，
         # 且关键词目标节点真实存在（keyword_{md5} 共享维度节点）。
+        # 项目侧同构校验（所属领域 HAS_KEYWORD），并抽验论文获奖属性。
         keyword_edges_ok = True
         keyword_sample: list[str] = []
+        awards_props_ok = True
         for p in papers():
             try:
                 kw_edges = graph.get_node_edges(
@@ -1887,6 +2031,10 @@ def verify() -> dict[str, Any]:
                 continue
             if len(kw_edges or []) != len(p.fields):
                 keyword_edges_ok = False
+            node = graph.get_node(p.vid)
+            node_props = (node.properties if node else None) or {}
+            if p.awards and p.awards[0] not in str(node_props.get("output_awards") or ""):
+                awards_props_ok = False
             for edge in kw_edges or []:
                 kvid = str(getattr(edge, "target_id", "") or "")
                 knode = graph.get_node(kvid) if kvid else None
@@ -1895,6 +2043,16 @@ def verify() -> dict[str, Any]:
                     keyword_edges_ok = False
                 elif kprops["keyword"] not in keyword_sample:
                     keyword_sample.append(str(kprops["keyword"]))
+        for prj in projects():
+            try:
+                kw_edges = graph.get_node_edges(
+                    prj.vid, direction="out", edge_type="HAS_KEYWORD", limit=50
+                )
+            except Exception:  # noqa: BLE001
+                keyword_edges_ok = False
+                continue
+            if len(kw_edges or []) != len(prj.fields):
+                keyword_edges_ok = False
         # 研究方向回退：有成果领域的专家，Person.research_fields 必须非空。
         research_fields_ok = True
         for person_no in research_fields_by_person():
@@ -1949,6 +2107,7 @@ def verify() -> dict[str, Any]:
         and research_rows == expected["researchDirectionRows"]
         and journal_rows == expected["journalRows"]
         and keyword_edges_ok
+        and awards_props_ok
         and research_fields_ok
         and published_in_ok
     )
@@ -1966,6 +2125,7 @@ def verify() -> dict[str, Any]:
         "researchDirectionRows": research_rows,
         "journalRows": journal_rows,
         "keywordEdgesOk": keyword_edges_ok,
+        "awardsPropsOk": awards_props_ok,
         "keywordSample": sorted(keyword_sample),
         "researchFieldsOk": research_fields_ok,
         "publishedInOk": published_in_ok,
@@ -1976,11 +2136,33 @@ def verify() -> dict[str, Any]:
 
 
 def cleanup() -> dict[str, Any]:
-    """仅删除本批次节点和 MySQL 记录；detach 会一并删除本批次关联边。"""
+    """仅删除本批次：MySQL 记录 + 图中带批次标记的边 + 无残留边的本批次节点。
+
+    不再对现役节点 detach 全删——那会把挂在本批次节点上的非本脚本数据
+    （ALUMNI 落盘边、人工补充边等）一并冲掉；节点仅在没有剩余边时删除。
+    """
     graph = get_trs_graph_client()
+    batch_edges_deleted = 0
+    nodes_removed: list[str] = []
+    nodes_kept: list[str] = []
     try:
-        for vid in [*legacy_fixture_vids(), *fixture_vids()]:
-            graph.delete_node(vid, detach=True)
+        for legacy_vid in legacy_fixture_vids():
+            graph.delete_node(legacy_vid, detach=True)
+        vids = fixture_vids()
+        batch_edges_deleted = _drop_batch_edges(graph, vids)
+        for vid in vids:
+            try:
+                remaining = graph.get_node_edges(vid, limit=1)
+            except Exception:
+                remaining = None  # 查询失败时保守保留节点
+            if remaining:
+                nodes_kept.append(vid)
+                continue
+            try:
+                if graph.delete_node(vid, detach=False):
+                    nodes_removed.append(vid)
+            except Exception:
+                nodes_kept.append(vid)
     finally:
         close_trs_graph_client()
     client = MySQLClient(database="gkx_element")
@@ -1989,7 +2171,13 @@ def cleanup() -> dict[str, Any]:
             _delete_mysql(con)
     finally:
         client.dispose()
-    return {"cleaned": BATCH, "sampleIdsRemoved": plan()["sampleIds"]}
+    return {
+        "cleaned": BATCH,
+        "batchEdgesDeleted": batch_edges_deleted,
+        "nodesRemoved": len(nodes_removed),
+        "nodesKeptWithExternalEdges": len(nodes_kept),
+        "sampleIdsRemoved": plan()["sampleIds"],
+    }
 
 
 def main() -> None:

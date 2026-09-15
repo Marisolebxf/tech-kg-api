@@ -53,8 +53,8 @@ test.describe.serial('E. 任务中心', () => {
     await page.goto('/graph-build')
     await page.waitForLoadState('networkidle')
 
-    // 页面左上角标题为「图谱构建」（不是「任务中心」）
-    await expect(page.getByRole('heading', { name: '图谱构建' })).toBeVisible()
+    // 页面左上角标题为「图谱构建」（不是「任务中心」）；设计规范改版移除 h1 后标题在面包屑
+    await expect(page.locator('.app-breadcrumb__current', { hasText: '图谱构建' })).toBeVisible()
 
     // 四个汇总卡
     for (const label of ['运行中', '已完成', '运行失败', '已暂停']) {
@@ -100,9 +100,7 @@ test.describe.serial('E. 任务中心', () => {
     await expect(dialog).toBeVisible()
 
     await dialog.locator('input[placeholder="如：论文-专家抽取"]').fill(jobName)
-    // 任务类型 = 数据抽取
-    await dialog.locator('[aria-label="任务类型"]').click()
-    await page.locator('li.arco-select-option:visible', { hasText: '数据抽取' }).first().click()
+    // 任务类型已是静态「数据抽取」（D2/D4 下线其余通道后弹窗只建抽取任务），无需选择
     // 先选图空间再选 Schema（M4 联动：换空间会清空已选 schemaId 并按空间重查）
     await dialog.locator('.arco-select-view-single:has(input[placeholder="默认空间"])').click()
     await page.locator('li.arco-select-option:visible', { hasText: 'dev2' }).first().click()
@@ -165,6 +163,7 @@ test.describe.serial('E. 任务中心', () => {
   })
 
   test('E3 新建「多脚本串行」任务（chain）', async ({ page, request }) => {
+    test.skip(true, 'chain 建任务 UI 已随 D2/D4 下线（2026-09-14），待按新任务中心形态重写')
     test.setTimeout(300_000)
     const jobName = `e2e任务-串行-${suffix}`
     await page.goto('/graph-build')
@@ -227,6 +226,7 @@ test.describe.serial('E. 任务中心', () => {
   })
 
   test('E4 新建「单脚本抽取」任务', async ({ page, request }) => {
+    test.skip(true, 'single 建任务 UI 已随 D2/D4 下线（2026-09-14），待按新任务中心形态重写')
     test.setTimeout(300_000)
     const jobName = `e2e任务-单脚本-${suffix}`
     await page.goto('/graph-build')
@@ -264,6 +264,7 @@ test.describe.serial('E. 任务中心', () => {
   })
 
   test('E5 新建「上传脚本」任务', async ({ page, request }) => {
+    test.skip(true, 'upload 建任务 UI 已随 D2/D4 下线（2026-09-14），待按新任务中心形态重写')
     test.setTimeout(300_000)
     const jobName = `e2e任务-上传-${suffix}`
     await page.goto('/graph-build')
@@ -309,6 +310,7 @@ test.describe.serial('E. 任务中心', () => {
   })
 
   test('E6 周期性任务 + 暂停调度', async ({ page, request }) => {
+    test.skip(true, 'upload 建任务 UI 已随 D2/D4 下线（2026-09-14）；暂停调度链路待改用 extract 周期任务重写')
     const jobName = `e2e任务-周期-${suffix}`
     await page.goto('/graph-build')
     await page.waitForLoadState('networkidle')
@@ -438,8 +440,9 @@ test.describe.serial('E. 任务中心', () => {
     await expect(page.locator('.trigger-chip', { hasText: '手动触发' }).first()).toBeVisible()
     // 执行历史表
     await expect(page.getByText('执行历史')).toBeVisible()
-    // 步骤侧栏 ✓ 状态
-    await expect(page.locator('.process-step.is-成功').first()).toBeVisible({ timeout: 60_000 })
+    // 步骤侧栏：D3 删除静态 7 步模板后，单 transform 抽取无 stages 输出 → 空态文案；
+    // STEPS 多步脚本才渲染分步。两者取其一
+    await expect(page.locator('.process-step.is-成功, .process-empty').first()).toBeVisible({ timeout: 60_000 })
     // IO Tab：输入/输出 JSON（实际访问资源卡仅在脚本上报 access 时渲染）
     await page.locator('.detail-tabs button', { hasText: '输入输出' }).click()
     await expect(page.getByText(/实际访问资源|输入数据|输出结果|阶段真实输入输出/).first()).toBeVisible()

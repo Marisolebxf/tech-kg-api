@@ -87,13 +87,13 @@ test.describe('A. 平台总览 /overview', () => {
 
     await page.getByRole('link', { name: '查看任务' }).first().click()
     await page.waitForURL('**/graph-build')
-    await expect(page.getByRole('heading', { name: '图谱构建' })).toBeVisible()
+    await expect(page.locator('.app-breadcrumb__current', { hasText: '图谱构建' })).toBeVisible()
 
     await page.goBack()
     await page.waitForLoadState('networkidle')
     await page.getByRole('link', { name: '查看全部任务 →' }).first().click()
     await page.waitForURL('**/graph-build')
-    await expect(page.getByRole('heading', { name: '图谱构建' })).toBeVisible()
+    await expect(page.locator('.app-breadcrumb__current', { hasText: '图谱构建' })).toBeVisible()
 
     await page.goBack()
     await page.waitForLoadState('networkidle')

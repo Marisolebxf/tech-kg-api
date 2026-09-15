@@ -26,8 +26,9 @@ test.describe.serial('D. 配置管理', () => {
     // 五个分类均可加载（LLM 类至少一条现网配置）
     for (const cat of ['语言模型', '向量模型', 'MySQL 数据源', '向量数据空间', '图数据空间']) {
       await page.getByRole('button', { name: cat, exact: false }).first().click()
+      // 设计规范改版后主列表区不再有 h2，改以表格渲染为加载信号
       await waitFor(
-        async () => (await page.locator('h2').first().innerText()).length > 0,
+        async () => ((await page.locator('thead').first().isVisible()) ? 1 : null),
         { label: `${cat} 列表加载` },
       )
     }

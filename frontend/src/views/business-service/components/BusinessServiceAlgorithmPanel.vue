@@ -5375,8 +5375,9 @@ function clearGraphSelection() {
   background-color: #e5e6eb;
 }
 
+/* 未选择（显示「请选择」占位）时也用正文黑色，与输入框文字一致，避免灰字 */
 .service-console__params select.is-empty-control {
-  color: #bfbfbf;
+  color: #1f1f1f;
 }
 
 .service-console__params select {

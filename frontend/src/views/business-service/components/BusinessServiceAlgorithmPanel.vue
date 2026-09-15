@@ -1974,31 +1974,29 @@ const paperCoopRelationDescription = (edge: GraphEdgeData): string =>
   paperCoopRelationDescriptions[edge.category] ||
   `直接关系/${displayRelationDetail(edge)}`;
 
-/* 企业关联页「关系描述」专用口径：映射到核实过的 13 条关系（名词名）。
- * 治理任职为人-企业直连边（cooperation_mode 与边类型一一对应：高管任职
+/* 企业关联页「关系描述」专用口径：按《图数据库关系分类对照表》逐边登记
+ * 「关系类别/关系详情」。该模块涉及的图边（EXECUTIVE_OF/LEGAL_REP_OF/
+ * ACTUAL_CONTROLLER_OF/BENEFICIAL_OWNER_OF/SHAREHOLDER_OF/AFFILIATED_WITH/
+ * LEADS/HAS_PARTICIPANT/FUNDED_BY/PARTICIPATES_IN/INVENTED_BY/APPLIED_BY）
+ * 在对照表中均判间接关系。cooperation_mode 与边类型一一对应（高管任职
  * EXECUTIVE_OF、法人代表 LEGAL_REP_OF、实际控制 ACTUAL_CONTROLLER_OF、
  * 受益所有 BENEFICIAL_OWNER_OF、股东持股 SHAREHOLDER_OF、任职
- * AFFILIATED_WITH），全部单表直查=直接。
- * 项目合作是 专家→项目→企业 两跳组合：人侧 项目负责人/项目参加人、机构侧
- * 项目资助方/项目参与机构，均单表直查=直接（前端数据不区分 LEADS 与
- * HAS_PARTICIPANT，展示两侧代表名称）。
- * 专利合作是 专家→专利→企业：人侧 专利发明人（dwd_patent.inventors，直接）；
- * 机构侧 专利申请方 APPLIED_BY——图上 94% 边经 milvus_bm25_dense_hybrid
- * 对齐到企业实体才成立，判间接。 */
+ * AFFILIATED_WITH）；项目/专利合作为两跳组合，前端数据不区分 LEADS 与
+ * HAS_PARTICIPANT，展示两侧代表名称。 */
 const enterpriseRelationDescriptions: Record<string, string> = {
-  高管任职: "直接关系/高管任职关系",
-  法人代表: "直接关系/法定代表关系",
-  实际控制: "直接关系/实际控制关系",
-  受益所有: "直接关系/最终受益关系",
-  股东持股: "直接关系/股东持股关系",
-  任职: "直接关系/任职关系",
-  项目合作: "直接关系/项目参加人、项目资助方",
-  专利合作: "直接关系/专利发明人、间接关系/专利申请方",
+  高管任职: "间接关系/高管任职关系",
+  法人代表: "间接关系/法定代表关系",
+  实际控制: "间接关系/实际控制关系",
+  受益所有: "间接关系/最终受益关系",
+  股东持股: "间接关系/股东持股关系",
+  任职: "间接关系/任职关系",
+  项目合作: "间接关系/项目参加人、项目资助方",
+  专利合作: "间接关系/专利发明人、专利申请方",
 };
 const enterpriseRelationDescription = (edge: GraphEdgeData): string =>
   enterpriseRelationDescriptions[edge.label] ||
   enterpriseRelationDescriptions[edge.category] ||
-  `直接关系/${displayRelationDetail(edge)}`;
+  `间接关系/${displayRelationDetail(edge)}`;
 
 /* 两点合作成果页「关系描述」专用口径：先判直接关系/间接关系，再拼业务
  * 细目。三条专家-专家合成边均由双端成果边邻居集合求交得到（多表 join

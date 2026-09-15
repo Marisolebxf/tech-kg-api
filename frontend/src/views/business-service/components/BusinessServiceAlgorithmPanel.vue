@@ -2372,7 +2372,7 @@ function buildLiveSummary(
     out["合作团队特征"] =
       (sr.stableTeamMembers || []).length > 0
         ? `长期稳定合作团队（${sr.stableTeamMembers.length} 人）`
-        : "暂无数据";
+        : sr.stableTeamNote || "暂无数据";
   }
   return out;
 }

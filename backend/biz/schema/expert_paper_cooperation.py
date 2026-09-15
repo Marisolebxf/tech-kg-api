@@ -126,6 +126,9 @@ class StructuredPaperCooperationResult(BaseModel):
     cooperationFrequency: int = Field(..., description="合作频次。")
     academicImpactScore: float = Field(..., description="学术影响力/核心贡献评分。")
     stableTeamMembers: list[str] = Field(default_factory=list, description="长期稳定合作团队成员。")
+    stableTeamNote: str = Field(
+        default="", description="未构成长期稳定合作团队时的原因说明；已构成时为空。"
+    )
     coreCollaborators: list[str] = Field(default_factory=list, description="核心合作人员。")
     sharedContribution: list[str] = Field(default_factory=list, description="合作贡献标签。")
     relationConfidences: dict[str, float] = Field(

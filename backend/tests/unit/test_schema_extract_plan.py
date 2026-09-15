@@ -121,6 +121,52 @@ def plan_env(monkeypatch: pytest.MonkeyPatch):
     engine.dispose()
 
 
+STEPS_SCRIPT = (
+    b'STEPS = [{"id": "normalize", "fn": "step_normalize"}, {"id": "emit", "fn": "step_emit"}]\n'
+    b"\n"
+    b"def step_normalize(payload):\n"
+    b'    return {"cleaned": payload.get("rows", [])}\n'
+    b"\n"
+    b"def step_emit(payload):\n"
+    b'    return {"entities": []}\n'
+)
+
+
+@pytest.mark.asyncio
+async def test_load_schema_extract_plan_single_step_fallback(plan_env) -> None:
+    """单入口脚本（无 STEPS 声明）：steps 兜底单步 _default，multiStep=False。"""
+    plan = await load_schema_extract_plan("schema-1")
+    assert plan["steps"] == [{"id": "_default", "fn": plan["functionName"]}]
+    assert plan["multiStep"] is False
+
+
+@pytest.mark.asyncio
+async def test_load_schema_extract_plan_parses_steps_declaration(
+    plan_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """STEPS 脚本：plan 展开步清单（只含 id/fn 字符串键），multiStep=True。"""
+    monkeypatch.setattr(
+        "infra.s3.get_schema_s3_storage", lambda: FakeS3(STEPS_SCRIPT)
+    )
+    plan = await load_schema_extract_plan("schema-1")
+    assert plan["steps"] == [
+        {"id": "normalize", "fn": "step_normalize"},
+        {"id": "emit", "fn": "step_emit"},
+    ]
+    assert plan["multiStep"] is True
+
+
+@pytest.mark.asyncio
+async def test_load_schema_extract_plan_rejects_invalid_steps(
+    plan_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """绕过上传通道的非法 STEPS（fn 未定义）在 plan 组装时报清晰错误。"""
+    broken = b'STEPS = [{"id": "a", "fn": "missing"}]\n\ndef fa(p):\n    return {}\n'
+    monkeypatch.setattr("infra.s3.get_schema_s3_storage", lambda: FakeS3(broken))
+    with pytest.raises(ValueError, match="STEPS 声明非法.*未在脚本顶层定义"):
+        await load_schema_extract_plan("schema-1")
+
+
 @pytest.mark.asyncio
 async def test_load_schema_extract_plan_includes_all_properties(plan_env) -> None:
     """软删退役：activeProps 为目录属性全集（用户脚本多出的列写图前再剔除兜底）。"""

@@ -336,3 +336,58 @@ async def test_backfill_stale_requires_force(extract_api, monkeypatch: pytest.Mo
         assert forced.json()["data"]["forced"] is True
 
     assert len(executions) == 1  # 被拦的那次没有下发
+
+
+STEPS_SCRIPT = (
+    b'STEPS = [{"id": "clean", "fn": "step_clean"}, {"id": "emit", "fn": "step_emit"}]\n'
+    b"\n"
+    b"def step_clean(payload):\n"
+    b'    return {"cleaned": payload.get("rows", [])}\n'
+    b"\n"
+    b"def step_emit(payload):\n"
+    b'    return {"entities": []}\n'
+)
+
+
+@pytest.mark.asyncio
+async def test_extract_with_steps_script(extract_api) -> None:
+    """STEPS 多步脚本：上传 200（入口名存第一步 fn）→ 绑来源 → 触发抽取 201。"""
+    _, _set_actor, executions, _storage = extract_api
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        entity = await _create_entity(client)
+
+        response = await client.put(
+            f"/api/v1/schema-management/schemas/{entity['id']}/script",
+            files={"script": ("widget_steps.py", STEPS_SCRIPT, "text/x-python")},
+        )
+        assert response.status_code == 200
+        script = (await _detail(client, entity["id"]))["script"]
+        # 多步脚本 workflowFunctionName 只存第一步 fn（展示参考；执行时 plan 重新解析）
+        assert script["workflowFunctionName"] == "step_clean"
+        assert script["stale"] is False
+
+        await _bind_sources(client, entity["id"])
+        triggered = await client.post(
+            f"/api/v1/schema-management/schemas/{entity['id']}/extract",
+            json={"batchSize": 100},
+        )
+        assert triggered.status_code == 201
+
+    assert len(executions) == 1
+    assert executions[0]["definition"]["workflowType"] == "kg.schema.extract"
+
+
+@pytest.mark.asyncio
+async def test_upload_rejects_invalid_steps_script(extract_api) -> None:
+    """非法 STEPS（fn 未在顶层定义）上传即 400，中文报错。"""
+    _, _set_actor, executions, _storage = extract_api
+    broken = b'STEPS = [{"id": "clean", "fn": "missing_fn"}]\n\ndef step_clean(p):\n    return {}\n'
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        entity = await _create_entity(client)
+        response = await client.put(
+            f"/api/v1/schema-management/schemas/{entity['id']}/script",
+            files={"script": ("broken.py", broken, "text/x-python")},
+        )
+        assert response.status_code == 400
+        assert "未在脚本顶层定义" in response.json()["detail"]
+    assert executions == []

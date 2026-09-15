@@ -25,7 +25,7 @@ Schema 管理是图谱构建的**元数据中枢**：定义实体/关系结构�
 
 ### 3. 抽取脚本管理（kg_schema_script + S3）
 
-- 上传 `.py` 脚本：大小上限（`max_script_bytes`）、UTF-8（含 BOM 容忍）、`ast.parse` 语法检查、**必须有 `transform(payload)` 入口**（旧 `workflow(payload)` 兼容）——脚本只做"接收行数据 → 输出 `{entities|edges, failures}` JSON"的纯转换。
+- 上传 `.py` 脚本：大小上限（`max_script_bytes`）、UTF-8（含 BOM 容忍）、`ast.parse` 语法检查、**必须有 `transform(payload)` 入口**（旧 `workflow(payload)` 兼容），或在顶层声明 **`STEPS` 多步清单**（`[{"id": ..., "fn": ...}, ...]` list 字面量，id 匹配 `[A-Za-z0-9_-]{1,64}` 且唯一、fn 必须是顶层函数、与 `transform` 互斥、最长 16 步，`service/script_steps.py` 上传时静态校验尽早报错）——脚本只做"接收行数据 → 输出 `{entities|edges, failures}` JSON"的纯转换。
 - **LLM 安全校验**（`service/script_security.py`）：审计危险 import/eval/exec/网络/文件越界/混淆代码，判定纯计算变换才放行；结论（safe/issues/summary）落库到脚本的 `safety_summary`/`safety_issues`。
 - **SSE 流式上传校验**：`POST /schemas/{id}/script/verify` 边校验边推 `progress`/`error` 事件（前端走 `fetchEventSource`，支持 POST + 流式，不能用 axios）；流前失败（不存在/无权限）映射 HTTP 4xx，流中失败发 `type=error` 事件；整个流程在专用线程 + 独立 Session 中驱动（避免跨线程会话）。
 - 脚本本体存 **S3/RustFS**（`SCHEMA_S3_*` 配置），MySQL 只存元数据（bucket/object_key/sha256/etag/original_filename/size）；下载回放带 `X-Content-SHA256` 校验头。
@@ -36,6 +36,7 @@ Schema 管理是图谱构建的**元数据中枢**：定义实体/关系结构�
 
 - **触发**（`POST /{id}/extract`）：要求已上传脚本 + ≥1 来源绑定，否则 409；由 schema 定义**合成** workflow definition（`schema-extract-{key}`，worker 端 activity 从 S3 下载脚本本体）。
 - **读取模式**：querySql 绑定走水位/pk keyset 游标（合成唯一 pk）；普通表走 LIMIT/OFFSET。
+- **多步脚本（脚本内声明 `STEPS`）**：单 `transform` = 单步特例，九域既有脚本零改动。多步时批内步序串行，每步一次 `execute_transform` activity（第 k 步失败由 Temporal 只重试第 k 步，前序步输出经事件历史重放）；第 1 步 payload 与单步相同（`rows`/`source_table`/`kind`/`source`），第 N>1 步 payload 为 `{"input": 上一步完整输出, ...}`（无 `rows`），`ctx.prev_outputs`（`kg_sdk.current_context()`）可读本批次已完成各步输出、`ctx.step_id` 形如 `source:{绑定id}#{stepId}`（仅观测，水位键仍是来源级）。任意一步返回 `entities`/`edges` 即在该步之后写图（实体再接消歧），`failures`/`pendingReview` 跨步聚合进现有链路。步间透传有大小防护（input 单值 512KB / prevOutputs 单值 128KB / 额外键合计 256KB，超限截断为 `_truncated` 标记并告警，防 gRPC 上限炸批次）。水位仍是**来源全部批次整链成功后**一次性推进，不做 per-step 水位（`kg_script_watermark` 的 step_id 语义不变）；重跑模式（`recordIdsBySource`）语义不变。执行结果与进度摘要带分步计数 `steps: {stepId: {records, written, failed}}`（任务详情页经 `pipeline_steps` 渲染）。
 - **写图必须走 nGQL `INSERT VERTEX`**（trs-graph `/nodes/merge` 会把 id/name/vid 从属性剥离，DDL 的 NOT NULL id/name 会 400）；同名冲突检测（消歧）；实体重建 Milvus 索引失败降级不拖垮抽取；逐行失败落 **T_EXTRACT_FAIL** 审核 case（队列 category=C）。
 - **失败重跑**：`POST /manual-reviews/production/rerun-extract-failures` → 所选 case 按 schema 合并为新执行，`triggerSource=RERUN`（与 MANUAL/SCHEDULE 同列展示）。
 - **回填**（`POST /{id}/backfill`）：清空该 Schema 全部来源水位后全量重跑，可反复执行；脚本落后时未带 `force` 返回 409，前端强确认后重发。
@@ -156,7 +157,7 @@ kg_script_watermark（业务库，definition_id+step_id 主键）
 
 - **三态一致性**：MySQL 目录 ↔ Nebula 图结构（DDL 同步执行/ALTER）↔ S3 脚本，任何一环失败都有明确的落库状态（ddl_status、last_run_status、safety_*）。
 - **并发抽取检测**：`find_running_execution` 阻止同一 Schema 重复触发（判定"实际运行中"而非仅看记录状态）。
-- **脚本约定**：`transform(payload)` 只输出 `{entities|edges, failures}`；平台负责读源/写图/消歧/索引/游标——脚本零副作用，安全边界靠 LLM 审计 + 入口检查兜底。
+- **脚本约定**：`transform(payload)` 只输出 `{entities|edges, failures}`；多步脚本在顶层声明 `STEPS` 清单（与 `transform` 互斥），每步同契约、额外键流向下一步 `input`（示例见 `docs/抽取脚本示例/多步示例_三步出边.py`）；平台负责读源/写图/消歧/索引/游标——脚本零副作用，安全边界靠 LLM 审计 + 入口检查兜底。
 - **写图铁律**：实体写图必须 nGQL `INSERT VERTEX`，不走 `/nodes/merge`（id/name/vid 属性剥离问题）。
 
 ## 五、工作时序图
@@ -219,7 +220,7 @@ sequenceDiagram
         API-->>FE: HTTP 404/403（不进入 SSE 流）
     end
     SVC-->>FE: SSE: progress(stage=syntax) "语法检查中..."
-    SVC->>SVC: ast.parse + 入口检查（优先 transform(payload)，兼容 workflow(payload)）
+    SVC->>SVC: ast.parse + 入口检查（优先 transform(payload)，兼容 workflow(payload)；或顶层 STEPS 多步清单）
     alt 语法错误 / 无入口 / 超 max_script_bytes / 非 UTF-8
         SVC-->>FE: SSE: error（不保存）
     end
@@ -270,7 +271,7 @@ sequenceDiagram
     WK->>S3: 下载脚本到临时文件（load_schema_extract_plan 活动取元数据）
     loop 每来源 × 分批
         WK->>SRC: read_source_batch（querySql→水位/pk keyset；普通表→LIMIT/OFFSET）
-        WK->>WK: 脚本 transform(payload) → {entities|edges, failures}（只做转换）
+        WK->>WK: 脚本 transform(payload) → {entities|edges, failures}（只做转换）<br/>（多步脚本：按 STEPS 逐步 execute_transform，第 N>1 步 payload.input=上一步输出）
         WK->>TG: INSERT VERTEX / EDGE（UPSERT，不走 /nodes/merge）
         WK->>TG: detect_extract_collisions（同名 → T_LINK 消歧队列）
         WK->>MR: failures 逐行 → T_EXTRACT_FAIL 审核 case（category=C）

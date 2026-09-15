@@ -19,12 +19,24 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError
 
+from service.script_steps import extract_step_list
+
 logger = logging.getLogger(__name__)
 
 # 单批行 JSON 序列化字节预算。两个 4MB 限制都要过：单条 activity 结果/输入
 # 的 gRPC 上限，以及 workflow task 完成时**聚合多个在飞批次结果**的事务上限
 # （max_inflight=3 + 队列积压，实测 3MB/批时事务 4.29MB 超限）→ 收紧到 512KB
 _MAX_BATCH_ROWS_BYTES = 512 * 1024
+
+# 多步链（脚本顶层 STEPS 声明）的步间透传预算（第 N>1 步 request 的 input 单值 /
+# prevOutputs 单值上限）。步输出既要作为 activity 返回值过 gRPC 上限，又要随批间
+# 并发聚合进 workflow 事件历史，故与批行预算同量级；超限值截断为 _truncated 标记
+# （stats 小则保留）——脚本应避免在步间传递超大数据，需要重负载时直接读源表。
+_MAX_STEP_CHAIN_BYTES = 512 * 1024
+_MAX_PREV_OUTPUT_BYTES = 128 * 1024
+# 步输出中「额外键」（entities/edges/failures/pendingReview 之外的中转数据）的
+# 序列化预算：超限在 activity 返回前截断为标记，防巨型中间输出先炸 activity 完成事件。
+_MAX_STEP_EXTRA_BYTES = 256 * 1024
 
 ACTIVITY_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=2),
@@ -127,6 +139,57 @@ def _strip_watermark_meta(output: Any) -> Any:
         output.pop("_watermark", None)
         output.pop("_checkpoint", None)
     return output
+
+
+def _json_size(value: Any) -> int:
+    """值的 JSON 序列化字节数（不可序列化时返回 0，交由上游正常失败）。"""
+    try:
+        return len(json.dumps(value, ensure_ascii=False, default=str).encode())
+    except (TypeError, ValueError):
+        return 0
+
+
+def _shrink_chain_value(value: Any, *, budget: int, label: str) -> Any:
+    """步间透传大小防护：超预算的步输出截断为 ``_truncated`` 标记（stats 小则保留）。
+
+    纯函数（仅依赖入参），workflow 内调用重放安全。被截断时记 warning 便于排查
+    「下游步拿不到完整上一步输出」的问题。
+    """
+    size = _json_size(value)
+    if size <= budget:
+        return value
+    marker: dict[str, Any] = {"_truncated": True, "_originalBytes": size}
+    stats = value.get("stats") if isinstance(value, dict) else None
+    if isinstance(stats, dict) and _json_size(stats) <= 4096:
+        marker["stats"] = stats
+    logger.warning(
+        "%s 序列化后 %d 字节超预算 %d，步间透传已截断为标记", label, size, budget
+    )
+    return marker
+
+
+def _truncate_step_extras(output: dict[str, Any]) -> dict[str, Any]:
+    """步输出的额外键（中转数据）超预算时截断，保住平台契约键与 stats。
+
+    多步链里中间步可能返回大体积中转数据：它既要作为本 activity 的返回值过
+    gRPC 上限，又要作为下一步 input 透传，故在返回前就把额外键压到预算内；
+    ``entities``/``edges``/``failures`` 是平台契约键（写图/审核要用），不截断。
+    """
+    extras = {k: v for k, v in output.items() if k not in ("entities", "edges", "failures")}
+    size = _json_size(extras)
+    if size <= _MAX_STEP_EXTRA_BYTES:
+        return output
+    truncated = {k: v for k, v in output.items() if k in ("entities", "edges", "failures")}
+    stats = extras.get("stats")
+    if isinstance(stats, dict) and _json_size(stats) <= 4096:
+        truncated["stats"] = stats
+    truncated["_stepExtras"] = {"_truncated": True, "_originalBytes": size}
+    logger.warning(
+        "步输出额外键合计 %d 字节超预算 %d，已截断（保留 entities/edges/failures 与 stats）",
+        size,
+        _MAX_STEP_EXTRA_BYTES,
+    )
+    return truncated
 
 
 def _merge_access(stdout_access: Any, sidecar_path: str | None) -> Any:
@@ -503,6 +566,16 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         suffix=".py",
         data=data,
     )
+    # STEPS 多步声明解析：脚本顶层 STEPS 清单 → 多步链；无声明 → 单步兜底
+    # （入口名沿用上传时存的 functionName）。上传时 _validate_script 已校验过形状，
+    # 这里重新解析兜住绕过上传通道的脚本，非法即失败（workflow 报清晰错误）。
+    try:
+        declared_steps = extract_step_list(
+            data.decode("utf-8-sig", errors="replace"), filename=object_key
+        )
+    except ValueError as exc:
+        raise ValueError(f"Schema 脚本 STEPS 声明非法: {exc}") from exc
+    steps = declared_steps or [{"id": "_default", "fn": function_name}]
     return {
         "schemaId": schema_id,
         "schemaKey": schema_key,
@@ -513,6 +586,9 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         "sources": sources,
         "scriptPath": script_path,
         "functionName": function_name,
+        # steps 只放 id/fn 两个 str 键（plan 要经 Temporal 序列化进事件历史）
+        "steps": steps,
+        "multiStep": declared_steps is not None,
         "timeoutSeconds": timeout_seconds,
         "maxInflight": max_inflight,
         "failureCaseCap": failure_case_cap,
@@ -753,9 +829,18 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
 async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
     """把批次行交给脚本转换：payload["rows"] = 行 JSON，调脚本入口（默认 transform）。
 
+    多步脚本（顶层 STEPS 声明）时每个 step 调一次本 activity（各自独立 Temporal 重试）：
+    - 第 1 步与单步 transform 同构（request/payload 均相同）；
+    - 第 N>1 步 request 额外带 ``input``（上一步完整输出 dict）与 ``prevOutputs``
+      （已完成各步 {stepId: 输出}），payload 换为 ``{"input": ..., "source_table": ...,
+      "kind": ..., "source": ...}``（不再带 rows）；ctx.prev_outputs 同步可读；
+    - ``ctxStepId``（多步时形如 ``source:{绑定id}#{stepId}``）只进脚本 ctx 与审核
+      case 做观测标识；水位键仍是 ``request.stepId``（source:{绑定id}），语义不变。
+
     脚本只做转换，返回 ``{"entities": [{id, props}]}`` / ``{"edges": [{fromId, toId, props}]}``；
     可选 ``failures: [{recordId, error}]``（逐行解析失败 → 平台记 T_EXTRACT_FAIL 审核重跑）
     与 ``pendingReview: [...]``（低置信/消歧候选 → 审核队列，item 可带 templateId=T_LINK）。
+    返回值里的额外键原样透传给下一步（超预算截断为标记，见 _truncate_step_extras）。
     ctx 注入触发时选择的 mysql/graph/llm/embedding（未显式选 mysql 时回退来源绑定数据源，
     脚本内 resolver 可用 ``current_context().mysql.engine`` 加载查找表）。
     脚本的 ``_watermark``/``_checkpoint`` 元字段被忽略（水位由平台管理）。
@@ -764,15 +849,22 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
     if not script_path.is_file():
         raise ValueError(f"脚本不存在: {script_path}")
     function_name = request.get("functionName", "transform")
-    rows = request.get("rows") or []
     source = request.get("source") or {}
     kind = request.get("kind", "entity")
     payload = {
-        "rows": rows,
+        "rows": request.get("rows") or [],
         "source_table": f"{source.get('databaseName')}.{source.get('tableName')}",
         "kind": kind,
         "source": source,
     }
+    if "input" in request:
+        # 第 N>1 步：消费上一步完整输出（额外键/entities 等原样在内），不带 rows
+        payload = {
+            "input": request.get("input") or {},
+            "source_table": payload["source_table"],
+            "kind": kind,
+            "source": source,
+        }
     resolved = _resolve_resources(
         request.get("selectors") or {},
         request.get("definitionId"),
@@ -791,6 +883,15 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             logger.warning("解析来源数据源 %s 失败: %s", source["datasourceId"], exc)
     resolved["source"] = {k: v for k, v in source.items() if k != "datasourceId"}
+    # ctx 观测标识：多步用「来源#步」复合 id；水位读取键保持 request.stepId 不变
+    resolved["stepId"] = request.get("ctxStepId") or request.get("stepId") or "_default"
+    try:
+        resolved["attempt"] = activity.info().attempt
+    except RuntimeError:
+        # 单测直调（无 activity 上下文）时给占位 attempt；真实运行恒有上下文
+        resolved["attempt"] = 1
+    if request.get("prevOutputs") is not None:
+        resolved["prevOutputs"] = request["prevOutputs"]
     sidecar_path: str | None = None
     try:
         wrapped, sidecar_path = await _spawn_script(
@@ -814,9 +915,14 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
         pending = output.pop("pendingReview", []) if isinstance(output, dict) else []
         if pending:
             _enqueue_pending_review(
-                {**request, "stepId": request.get("stepId") or "extract"}, pending, 1
+                {
+                    **request,
+                    "stepId": request.get("ctxStepId") or request.get("stepId") or "extract",
+                },
+                pending,
+                1,
             )
-        return output if isinstance(output, dict) else {}
+        return _truncate_step_extras(output) if isinstance(output, dict) else {}
     finally:
         _cleanup_sidecar(sidecar_path)
 
@@ -1256,6 +1362,11 @@ class SchemaExtractWorkflow:
     - 来源间 ``asyncio.gather`` 并行；来源内 1 reader（串行读推进游标）+ N worker
       （转换→写图→冲突检测）经 ``asyncio.Queue(maxsize=N)`` 背压并发——十万级数据
       也不会一次进内存/一次跑完。
+    - 脚本可在顶层声明 ``STEPS`` 清单做多步转换（单 ``transform`` = 单步特例）：
+      批内步序串行，每步一次 ``execute_transform`` activity（第 k 步失败由 Temporal
+      只重试第 k 步）；第 N>1 步 payload 为 ``{"input": 上一步输出, ...}``，
+      ``ctx.prev_outputs`` 可读已完成各步输出；任意一步出 entities/edges 即在该步后
+      写图，failures 跨步聚合。水位仍是来源级整链推进，不做 per-step 水位。
     - 游标（水位或 pk keyset）在该来源**全部批次成功后**一次性推进——并发处理下
       逐批推进会留洞；批次 activity 重试耗尽 → workflow FAILED，游标停在上一轮，
       下轮从断点续读（merge 写图幂等）。
@@ -1312,6 +1423,13 @@ class SchemaExtractWorkflow:
         timeout_seconds = max(int(plan.get("timeoutSeconds", 3600)), 60)
         kind = plan.get("kind", "entity")
         definition_id = f"schema-extract-{plan['schemaKey']}"
+        # 步清单：STEPS 声明脚本为多步链（批内步序串行，每步一次 execute_transform
+        # 独立重试）；单 transform 脚本及升级窗口内在飞重放的旧 plan（无 steps 键）
+        # 都兜底单步，行为与历史版本逐字段一致
+        steps: list[dict[str, str]] = plan.get("steps") or [
+            {"id": "_default", "fn": plan["functionName"]}
+        ]
+        multi_step = bool(plan.get("multiStep"))
 
         # 周期 Schedule 触发：request 是扁平 shape（非 {definitionId, payload}），
         # 直接调注册 activity 落 execution/task 行（幂等）。
@@ -1450,6 +1568,13 @@ class SchemaExtractWorkflow:
                     return {"batches": idx, "watermark": final_wm, "pkCursor": None}
                 return {"batches": idx, **final}
 
+            # 分步聚合计数（多步脚本才有；stepId → records/written/failed）
+            step_totals: dict[str, dict[str, int]] = (
+                {s["id"]: {"records": 0, "written": 0, "failed": 0} for s in steps}
+                if multi_step
+                else {}
+            )
+
             async def worker() -> list[dict[str, Any]]:
                 failures: list[dict[str, Any]] = []
                 while True:
@@ -1462,63 +1587,110 @@ class SchemaExtractWorkflow:
                         chunk = rows[start : start + batch_size]
                         chunk_ids = [str(r.get(pk_column)) for r in chunk]
                         written = 0
+                        chunk_step_stats: dict[str, dict[str, int]] = {}
                         batch_failures: list[dict[str, Any]] = []
                         try:
-                            transformed = await workflow.execute_activity(
-                                execute_transform,
-                                {
+                            # 步链串行执行（批间并行度仍由 max_inflight 的队列背压管）：
+                            # 每步一次 execute_transform，带各自的 functionName/payload，
+                            # 第 k 步失败由 Temporal 只重试第 k 步（前序步输出在事件
+                            # 历史里重放）。任意一步出了 entities/edges 就在该步之后
+                            # 写图（实体再接消歧）；failures 跨步聚合。
+                            prev_output: dict[str, Any] = {}
+                            step_outputs: dict[str, Any] = {}
+                            for seq, step in enumerate(steps):
+                                step_ctx_id = f"{step_id}#{step['id']}" if multi_step else step_id
+                                transform_request: dict[str, Any] = {
                                     "scriptPath": plan["scriptPath"],
-                                    "functionName": plan["functionName"],
+                                    "functionName": step["fn"],
                                     "rows": chunk,
                                     "source": source,
                                     "kind": kind,
                                     "timeoutSeconds": timeout_seconds,
                                     "selectors": selectors,
                                     "definitionId": definition_id,
+                                    # 水位读取键（kg_script_watermark）保持来源级，不随步变
                                     "stepId": step_id,
-                                },
-                                start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
-                                retry_policy=ACTIVITY_RETRY_POLICY,
-                            )
-                            records = transformed.get("entities") or transformed.get("edges") or []
-                            if records:
-                                write_result = await workflow.execute_activity(
-                                    write_records,
-                                    {
-                                        "kind": kind,
-                                        "name": plan["name"],
-                                        "activeProps": plan["activeProps"],
-                                        "records": records,
-                                        "graph": graph,
-                                        "sourceTable": table_label,
-                                    },
-                                    start_to_close_timeout=timedelta(seconds=600),
-                                    retry_policy=ACTIVITY_RETRY_POLICY,
-                                )
-                                written = int(write_result.get("written", 0))
-                            if kind == "entity" and records and detect_collisions:
-                                await workflow.execute_activity(
-                                    detect_extract_collisions,
-                                    {
-                                        "name": plan["name"],
-                                        "records": records,
-                                        "graph": graph,
-                                        "schemaKey": plan["schemaKey"],
-                                        "stepId": step_id,
-                                    },
-                                    start_to_close_timeout=timedelta(seconds=120),
-                                    retry_policy=ACTIVITY_RETRY_POLICY,
-                                )
-                            batch_failures = [
-                                {
-                                    "sourceBindingId": source_id,
-                                    "sourceTable": table_label,
-                                    "recordId": str(f.get("recordId") or ""),
-                                    "error": str(f.get("error") or ""),
                                 }
-                                for f in (transformed.get("failures") or [])
-                                if isinstance(f, dict) and f.get("recordId") is not None
-                            ]
+                                if multi_step:
+                                    transform_request["ctxStepId"] = step_ctx_id
+                                if seq:
+                                    # 第 N>1 步：input=上一步完整输出、prevOutputs=已完成
+                                    # 各步输出；超预算截断为标记（防 gRPC 上限炸批次）
+                                    transform_request["input"] = _shrink_chain_value(
+                                        prev_output,
+                                        budget=_MAX_STEP_CHAIN_BYTES,
+                                        label=f"步 {step['id']} 的 input",
+                                    )
+                                    transform_request["prevOutputs"] = {
+                                        sid: _shrink_chain_value(
+                                            out,
+                                            budget=_MAX_PREV_OUTPUT_BYTES,
+                                            label=f"prevOutputs[{sid}]",
+                                        )
+                                        for sid, out in step_outputs.items()
+                                    }
+                                transformed = await workflow.execute_activity(
+                                    execute_transform,
+                                    transform_request,
+                                    start_to_close_timeout=timedelta(
+                                        seconds=timeout_seconds + 60
+                                    ),
+                                    retry_policy=ACTIVITY_RETRY_POLICY,
+                                )
+                                records = (
+                                    transformed.get("entities") or transformed.get("edges") or []
+                                )
+                                step_written = 0
+                                if records:
+                                    write_result = await workflow.execute_activity(
+                                        write_records,
+                                        {
+                                            "kind": kind,
+                                            "name": plan["name"],
+                                            "activeProps": plan["activeProps"],
+                                            "records": records,
+                                            "graph": graph,
+                                            "sourceTable": table_label,
+                                        },
+                                        start_to_close_timeout=timedelta(seconds=600),
+                                        retry_policy=ACTIVITY_RETRY_POLICY,
+                                    )
+                                    step_written = int(write_result.get("written", 0))
+                                if kind == "entity" and records and detect_collisions:
+                                    await workflow.execute_activity(
+                                        detect_extract_collisions,
+                                        {
+                                            "name": plan["name"],
+                                            "records": records,
+                                            "graph": graph,
+                                            "schemaKey": plan["schemaKey"],
+                                            "stepId": step_ctx_id,
+                                        },
+                                        start_to_close_timeout=timedelta(seconds=120),
+                                        retry_policy=ACTIVITY_RETRY_POLICY,
+                                    )
+                                step_failures = [
+                                    {
+                                        "sourceBindingId": source_id,
+                                        "sourceTable": table_label,
+                                        "recordId": str(f.get("recordId") or ""),
+                                        "error": str(f.get("error") or ""),
+                                    }
+                                    for f in (transformed.get("failures") or [])
+                                    if isinstance(f, dict) and f.get("recordId") is not None
+                                ]
+                                batch_failures.extend(step_failures)
+                                written += step_written
+                                if multi_step:
+                                    chunk_step_stats[step["id"]] = {
+                                        "records": len(records),
+                                        "written": step_written,
+                                        "failed": len(step_failures),
+                                    }
+                                # access 溯源报告是平台观测数据，不进步间链
+                                chained = {k: v for k, v in transformed.items() if k != "access"}
+                                prev_output = chained
+                                step_outputs[step["id"]] = chained
                         except ActivityError:
                             if not rerun_mode:
                                 raise
@@ -1538,6 +1710,14 @@ class SchemaExtractWorkflow:
                             "written": prev["written"] + written,
                             "failed": prev["failed"] + len(batch_failures),
                         }
+                        if multi_step:
+                            # 分步计数聚合进来源级 step_totals（get_progress/结果摘要用）
+                            for sid, stat in chunk_step_stats.items():
+                                total = step_totals.setdefault(
+                                    sid, {"records": 0, "written": 0, "failed": 0}
+                                )
+                                for key in total:
+                                    total[key] += int(stat.get(key, 0))
                 return failures
 
             async def guarded_reader() -> dict[str, Any]:
@@ -1592,6 +1772,8 @@ class SchemaExtractWorkflow:
                 "rows": total_rows,
                 "written": total_written,
                 "failed": len(source_failures),
+                # 分步聚合计数（多步脚本才有；单步摘要形状保持不变）
+                **({"steps": step_totals} if multi_step else {}),
             }
             return {
                 "source": step_id,
@@ -1603,6 +1785,7 @@ class SchemaExtractWorkflow:
                 "failures": source_failures,
                 "watermark": read_summary.get("watermark"),
                 "pkCursor": read_summary.get("pkCursor"),
+                **({"steps": step_totals} if multi_step else {}),
             }
 
         results = await asyncio.gather(*(extract_source(source) for source in plan["sources"]))
@@ -1659,6 +1842,18 @@ class SchemaExtractWorkflow:
                     retry_policy=ACTIVITY_RETRY_POLICY,
                 )
 
+        # 多步脚本的全局分步聚合计数（跨来源求和）。status 供任务详情
+        # pipeline_steps 把每步渲染成「成功」；单步脚本不加该键，结果形状与历史一致。
+        aggregated_steps: dict[str, dict[str, int]] = {}
+        if multi_step:
+            for r in results:
+                for sid, stat in (r.get("steps") or {}).items():
+                    agg = aggregated_steps.setdefault(
+                        sid, {"records": 0, "written": 0, "failed": 0}
+                    )
+                    for key in agg:
+                        agg[key] += int(stat.get(key, 0))
+
         return {
             "status": "completed",
             "schemaId": schema_id,
@@ -1666,6 +1861,16 @@ class SchemaExtractWorkflow:
             "kind": kind,
             "triggerSource": request.get("triggerSource", "MANUAL"),
             "sources": [{k: v for k, v in r.items() if k != "failures"} for r in results],
+            **(
+                {
+                    "steps": {
+                        sid: {**stat, "status": "COMPLETED"}
+                        for sid, stat in aggregated_steps.items()
+                    }
+                }
+                if multi_step
+                else {}
+            ),
             "failures": {
                 "count": len(all_failures),
                 "recorded": len(capped),

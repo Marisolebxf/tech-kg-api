@@ -104,16 +104,25 @@ def pipeline_steps(output: dict[str, Any] | None) -> list[dict[str, Any]]:
         if not isinstance(state, dict):
             continue
         raw_status = str(state.get("status", "-"))
+        # kg.schema.extract 多步脚本的分步统计：records/failed 直接当
+        # 处理数量/异常数量展示（str 化，异常数量 0 需为 "0" 才不触发前端
+        # 的 has-review 判定）；kg.custom.steps 仍走 attempt 分支
+        count = (
+            str(state["records"])
+            if "records" in state
+            else state.get("attempt", "-")
+        )
+        abnormal = str(state["failed"]) if "failed" in state else "-"
         result.append(
             {
                 "id": step_id,
                 "name": state.get("name") or step_id,
                 "phase": "图谱构建",
-                "description": "脚本 activity step",
+                "description": state.get("description") or "脚本 activity step",
                 "status": _STEP_STATUS_LABELS.get(raw_status, "运行中"),
                 "rawStatus": raw_status,
-                "count": state.get("attempt", "-"),
-                "abnormal": "-",
+                "count": count,
+                "abnormal": abnormal,
                 "duration": "-",
                 "input": state.get("input"),
                 "output": state.get("output"),

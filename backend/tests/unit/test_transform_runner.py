@@ -99,6 +99,96 @@ async def test_execute_transform_invokes_script_workflow(tmp_path) -> None:
     assert "_watermark" not in output
 
 
+MULTI_STEP_PROBE_SCRIPT = """
+import json
+
+from kg_sdk import current_context
+
+
+def step_clean(payload):
+    # 第 1 步：与单步 transform 同构（rows/source_table/kind/source）
+    assert "rows" in payload and "input" not in payload
+    ctx = current_context()
+    return {"cleaned": [r for r in payload["rows"] if r.get("ok")], "failures": []}
+
+
+def step_emit(payload):
+    # 第 N>1 步：payload["input"] = 上一步完整输出，无 rows；ctx 带复合 stepId/prevOutputs
+    ctx = current_context()
+    assert "rows" not in payload and "input" in payload
+    return {
+        "entities": [
+            {"id": "E_" + r["id"], "props": {"name": r["name"]}} for r in payload["input"]["cleaned"]
+        ],
+        "_probe": json.dumps(
+            {
+                "stepId": ctx.step_id if ctx else None,
+                "attempt": ctx.attempt if ctx else None,
+                "prevKeys": sorted((ctx.prev_outputs or {}).keys()) if ctx else [],
+                "prevStats": (ctx.prev_outputs or {}).get("clean", {}).get("stats"),
+            },
+            ensure_ascii=False,
+        ),
+    }
+"""
+
+
+@pytest.mark.asyncio
+async def test_execute_transform_step_chain_payload_and_ctx(tmp_path) -> None:
+    """多步链的第 N>1 步：payload= {input: 上一步输出}（无 rows），ctx 带 stepId/attempt/prevOutputs。"""
+    script = tmp_path / "steps.py"
+    script.write_text(MULTI_STEP_PROBE_SCRIPT, encoding="utf-8")
+    source = {
+        "datasourceId": "MYSQL-1",
+        "databaseName": "gkx",
+        "tableName": "scholar",
+        "pkColumn": "id",
+        "timeColumn": "update_time",
+    }
+    # 第 1 步：请求形状与单步 transform 相同
+    first = await execute_transform(
+        {
+            "scriptPath": str(script),
+            "functionName": "step_clean",
+            "rows": [{"id": "1", "name": "甲", "ok": True}, {"id": "2", "name": "乙", "ok": False}],
+            "source": source,
+            "kind": "entity",
+            "timeoutSeconds": 30,
+            "selectors": {},
+            "definitionId": "schema-extract-widget",
+            "stepId": "source:bind-1",
+            "ctxStepId": "source:bind-1#clean",
+        }
+    )
+    assert first["cleaned"] == [{"id": "1", "name": "甲", "ok": True}]
+
+    # 第 2 步：input/prevOutputs 由 worker 注入
+    second = await execute_transform(
+        {
+            "scriptPath": str(script),
+            "functionName": "step_emit",
+            "rows": [],  # 第 N>1 步 worker 不再传 rows（payload 里无该键）
+            "source": source,
+            "kind": "entity",
+            "timeoutSeconds": 30,
+            "selectors": {},
+            "definitionId": "schema-extract-widget",
+            "stepId": "source:bind-1",
+            "ctxStepId": "source:bind-1#emit",
+            "input": first,
+            "prevOutputs": {"clean": {**first, "stats": {"cleaned": 1}}},
+        }
+    )
+    import json as _json
+
+    probe = _json.loads(second["_probe"])
+    assert probe["stepId"] == "source:bind-1#emit"
+    assert probe["attempt"] == 1  # 单测直调无 activity 上下文 → 占位 1
+    assert probe["prevKeys"] == ["clean"]
+    assert probe["prevStats"] == {"cleaned": 1}
+    assert [e["id"] for e in second["entities"]] == ["E_1"]
+
+
 @pytest.mark.asyncio
 async def test_write_records_filters_non_active_props(fake_graph) -> None:
     records = [

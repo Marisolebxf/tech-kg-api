@@ -1022,7 +1022,12 @@ body {
     flex-wrap: wrap;
   }
 
+  .app-workspace .business-service .graph-panel > .kg-panel__header {
+    flex: 0 0 auto;
+  }
+
   .app-workspace .business-service .graph-panel__legend {
+    flex: 0 0 auto;
     height: auto;
     padding-block: 8px;
   }
@@ -1081,8 +1086,7 @@ body {
 }
 
 /*
- * Compact desktop layout keeps the graph and details side by side. The
- * workspace owns vertical scrolling when there is less room below the form.
+ * Compact workspaces stack panels when two readable columns cannot fit.
  */
 @media (min-width: 768px) and (max-width: 1280px) {
   .app-workspace:has(> .business-service) {
@@ -1100,7 +1104,7 @@ body {
 
   .app-workspace .business-service .business-service__main {
     flex: none;
-    grid-template-columns: minmax(0, 633fr) minmax(0, 511fr) !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)) !important;
     height: auto !important;
     min-height: 0 !important;
     overflow: visible !important;
@@ -1151,7 +1155,7 @@ body {
 
   .app-workspace .business-service .developer-view__cards {
     display: grid !important;
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)) !important;
     height: auto !important;
     min-height: 0 !important;
     overflow: visible !important;
@@ -1338,7 +1342,7 @@ body {
   gap: 8px;
 }
 
-.app-workspace .business-service .developer-view__meta :is(input, select) {
+.app-workspace .business-service .developer-view__meta label > :is(input, select) {
   height: 32px;
   padding-inline: 12px;
   border-radius: 4px;
@@ -1641,7 +1645,7 @@ body {
 }
 
 @media (min-width: 768px) {
-@container business-workspace (min-width: 400px) and (max-width: 1100px) {
+@container business-workspace (max-width: 1100px) {
   .app-workspace .business-service {
     height: 100% !important;
     min-height: 0 !important;
@@ -1725,7 +1729,7 @@ body {
 
   .app-workspace .business-service .developer-view__cards {
     display: grid !important;
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)) !important;
     flex: 0 0 auto !important;
     width: 100% !important;
     height: auto !important;
@@ -1785,7 +1789,7 @@ body {
 
   .app-workspace .business-service .business-service__main {
     flex: none !important;
-    grid-template-columns: minmax(0, 633fr) minmax(0, 511fr) !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)) !important;
     height: auto !important;
     min-height: 0 !important;
     overflow: visible !important;

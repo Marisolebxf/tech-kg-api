@@ -4559,7 +4559,7 @@ watch(activeServiceKey, () => {
 
 const pageMeta = computed(() => {
   const map: Record<PlatformTab, { title: string }> = {
-    overview: { title: '亿级科技知识图谱平台' },
+    overview: { title: '亿级科技知识图谱引擎' },
     processing: { title: '数据处理与结构化输出' },
     construction: { title: '图谱构建与治理' },
     query: { title: '综合图谱查询' },

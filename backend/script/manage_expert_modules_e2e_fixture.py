@@ -710,6 +710,33 @@ def cited_counts() -> dict[int, int]:
     return counts
 
 
+def research_fields_by_person() -> dict[int, list[str]]:
+    """专家研究方向 = 本人全部成果领域（论文/项目/专利 fields）的并集，保序去重。
+
+    与项目结构对齐：MySQL 写 dwd_scholar_research_direction.fields（分号分隔，
+    老实现与图 Person.research_fields 回退都按分号切分）。
+    """
+    fields: dict[int, list[str]] = {}
+
+    def add(person_no: int, items: tuple[str, ...]) -> None:
+        bucket = fields.setdefault(person_no, [])
+        for item in items:
+            if item and item not in bucket:
+                bucket.append(item)
+
+    for p in papers():
+        for n in p.authors:
+            add(n, p.fields)
+    for prj in projects():
+        add(prj.host, prj.fields)
+        for n in prj.participants:
+            add(n, prj.fields)
+    for pt in patents():
+        for n in pt.inventors:
+            add(n, pt.fields)
+    return fields
+
+
 ALLOWED_GRAPH_SPACES = frozenset({"dev", "test"})
 
 
@@ -762,6 +789,8 @@ def scenario_manifest() -> dict[str, list[str]]:
             "被引论文与引用论文互链（CITED_BY/CITES 双向）",
             "引用论文经 AUTHORED_BY 关联引用作者",
             "被引次数为 0（未被引用的论文）",
+            "论文主题（HAS_KEYWORD→Keyword，源表 dwd_zh_paper_classification）",
+            "专家研究方向（dwd_scholar_research_direction → Person.research_fields 回退）",
         ],
     }
 
@@ -788,6 +817,9 @@ def plan() -> dict[str, Any]:
             "citationRows": len(CITATIONS),
             "citedByEdges": len(CITATIONS),
             "citesEdges": len(CITATIONS),
+            "classificationRows": sum(1 for x in pas if x.fields),
+            "keywordEdges": sum(len(x.fields) for x in pas if x.fields),
+            "researchDirectionRows": len(research_fields_by_person()),
         },
         "sampleIds": {
             "person1": ps[0].vid,
@@ -840,6 +872,17 @@ def _delete_mysql(con) -> None:
     con.execute(
         text(f"DELETE FROM dwd_zh_paper_citation WHERE ({cit_id_in}) OR data_source = :batch"),
         {**cit_id_params, "batch": BATCH},
+    )
+    # 论文关键词分类表（HAS_KEYWORD 源表），同样按号段字符串 + 批次删除。
+    con.execute(
+        text(
+            f"DELETE FROM dwd_zh_paper_classification WHERE ({cit_id_in}) OR data_source = :batch"
+        ),
+        {**cit_id_params, "batch": BATCH},
+    )
+    con.execute(
+        text(f"DELETE FROM dwd_scholar_research_direction WHERE ({sid_in})"),
+        sid_params,
     )
     con.execute(
         text(
@@ -976,6 +1019,36 @@ def write_mysql() -> dict[str, int]:
                         "now": now,
                     }
                     for citing, cited in CITATIONS
+                ],
+            )
+            # 论文关键词权威源：逗号分隔（真实 ETL 的 HAS_KEYWORD 数据源），仅写有领域的论文。
+            con.execute(
+                text("""INSERT INTO dwd_zh_paper_classification
+                (id,keywords,data_source,created_time,updated_time)
+                VALUES (:id,:keywords,:batch,:now,:now)"""),
+                [
+                    {
+                        "id": str(p.mysql_id),
+                        "keywords": ",".join(p.fields),
+                        "batch": BATCH,
+                        "now": now,
+                    }
+                    for p in papers()
+                    if p.fields
+                ],
+            )
+            # 专家研究方向：分号分隔（老实现与图 Person.research_fields 回退均按分号切分）。
+            con.execute(
+                text("""INSERT INTO dwd_scholar_research_direction
+                (scholar_id,fields,create_time,update_time)
+                VALUES (:sid,:fields,:now,:now)"""),
+                [
+                    {
+                        "sid": people()[person_no - 1].scholar_id,
+                        "fields": ";".join(fields),
+                        "now": now,
+                    }
+                    for person_no, fields in sorted(research_fields_by_person().items())
                 ],
             )
             con.execute(
@@ -1169,12 +1242,35 @@ def sync_graph_from_mysql() -> dict[str, int]:
                 .mappings()
                 .all()
             )
+            classification_rows = (
+                con.execute(
+                    text(
+                        "SELECT id,keywords FROM dwd_zh_paper_classification "
+                        "WHERE data_source = :batch ORDER BY id"
+                    ),
+                    {"batch": BATCH},
+                )
+                .mappings()
+                .all()
+            )
+            research_rows = (
+                con.execute(
+                    text(
+                        "SELECT scholar_id,fields FROM dwd_scholar_research_direction "
+                        f"WHERE {sid_in} ORDER BY scholar_id"
+                    ),
+                    sid_params,
+                )
+                .mappings()
+                .all()
+            )
     finally:
         client.dispose()
 
     graph = get_trs_graph_client()
     now = datetime.now().strftime("%F %T")
     output_awards = {r["id"]: r["output_awards"] for r in project_output_rows}
+    research_fields_by_sid = {r["scholar_id"]: r["fields"] or "" for r in research_rows}
 
     for fixture_vid in [*legacy_fixture_vids(), *fixture_vids()]:
         graph.delete_node(fixture_vid, detach=True)
@@ -1208,6 +1304,8 @@ def sync_graph_from_mysql() -> dict[str, int]:
                     ]
                     or "",
                     "education_background_degree_zh": row["education_background_degree_zh"] or "",
+                    # 研究方向（分号分隔）：论文合作模块在无 HAS_KEYWORD 边时的主题回退来源。
+                    "research_fields": research_fields_by_sid.get(sid, ""),
                     "source_system": "gkx_element",
                     "source_table": "dwd_scholar",
                     "source_record_id": sid,
@@ -1264,6 +1362,28 @@ def sync_graph_from_mysql() -> dict[str, int]:
                 f"cites:{cited_vid}:{citing_vid}",
                 {"reference_identifier": paper_doi_by_vid.get(cited_vid, ""), "confidence": 1.0},
             )
+        # 论文关键词（HAS_KEYWORD 源表 dwd_zh_paper_classification，逗号分隔）：
+        # Keyword 桩 vid 与真实 ETL（load_paper_relation.load_has_keyword）同为
+        # keyword_{md5(keyword)}，是跨批次共享维度节点——已存在则不覆盖，也不进
+        # fixture_vids（cleanup 删论文时 detach 掉本批次的边即可，节点留给真实数据）。
+        for row in classification_rows:
+            keywords = [kw.strip() for kw in str(row["keywords"] or "").split(",") if kw.strip()]
+            for kw in keywords:
+                kvid = f"keyword_{hashlib.md5(kw.encode('utf-8')).hexdigest()}"
+                if graph.get_node(kvid) is None:
+                    graph.merge_node(["Keyword"], {"vid": kvid}, {"keyword": kw})
+                merge_edge(
+                    f"paper_{row['id']}",
+                    kvid,
+                    "HAS_KEYWORD",
+                    f"has_keyword:paper_{row['id']}:{kvid}",
+                    {
+                        "source_table": "dwd_zh_paper_classification",
+                        "source_record_id": str(row["id"]),
+                        "ingest_batch": BATCH,
+                        "ingest_time": now,
+                    },
+                )
         for query in (
             "CREATE EDGE IF NOT EXISTS STUDIED_AT("
             "degree_zh string, degree_en string, education_date string, "
@@ -1467,6 +1587,14 @@ def verify() -> dict[str, Any]:
             text("SELECT COUNT(*) FROM dwd_zh_paper_citation WHERE data_source = :batch"),
             {"batch": BATCH},
         ).scalar_one()
+        classification_rows = con.execute(
+            text("SELECT COUNT(*) FROM dwd_zh_paper_classification WHERE data_source = :batch"),
+            {"batch": BATCH},
+        ).scalar_one()
+        research_rows = con.execute(
+            text(f"SELECT COUNT(*) FROM dwd_scholar_research_direction WHERE {sid_in}"),
+            sid_params,
+        ).scalar_one()
         relation_citations = dict(
             con.execute(
                 text(
@@ -1529,6 +1657,34 @@ def verify() -> dict[str, Any]:
                     citation_edges_ok = False
             if int(relation_citations.get(p.mysql_id, 0)) != expected_cites:
                 citation_edges_ok = False
+        # 论文主题链路：每篇种子论文的 HAS_KEYWORD 出边数 = 源表关键词数，
+        # 且关键词目标节点真实存在（keyword_{md5} 共享维度节点）。
+        keyword_edges_ok = True
+        keyword_sample: list[str] = []
+        for p in papers():
+            try:
+                kw_edges = graph.get_node_edges(
+                    p.vid, direction="out", edge_type="HAS_KEYWORD", limit=50
+                )
+            except Exception:  # noqa: BLE001
+                keyword_edges_ok = False
+                continue
+            if len(kw_edges or []) != len(p.fields):
+                keyword_edges_ok = False
+            for edge in kw_edges or []:
+                kvid = str(getattr(edge, "target_id", "") or "")
+                knode = graph.get_node(kvid) if kvid else None
+                kprops = (knode.properties if knode else None) or {}
+                if not kprops.get("keyword"):
+                    keyword_edges_ok = False
+                elif kprops["keyword"] not in keyword_sample:
+                    keyword_sample.append(str(kprops["keyword"]))
+        # 研究方向回退：有成果领域的专家，Person.research_fields 必须非空。
+        research_fields_ok = True
+        for person_no in research_fields_by_person():
+            node = graph.get_node(people()[person_no - 1].vid)
+            if not ((node.properties if node else None) or {}).get("research_fields"):
+                research_fields_ok = False
     finally:
         close_trs_graph_client()
     ok = (
@@ -1539,6 +1695,10 @@ def verify() -> dict[str, Any]:
         and studied_ok
         and citation_rows == expected["citationRows"]
         and citation_edges_ok
+        and classification_rows == expected["classificationRows"]
+        and research_rows == expected["researchDirectionRows"]
+        and keyword_edges_ok
+        and research_fields_ok
     )
     return {
         "ok": ok,
@@ -1550,6 +1710,11 @@ def verify() -> dict[str, Any]:
         "studiedAtSampleOk": studied_ok,
         "citationRows": citation_rows,
         "citationEdgesOk": citation_edges_ok,
+        "classificationRows": classification_rows,
+        "researchDirectionRows": research_rows,
+        "keywordEdgesOk": keyword_edges_ok,
+        "keywordSample": sorted(keyword_sample),
+        "researchFieldsOk": research_fields_ok,
         "sampleIds": plan()["sampleIds"],
         "scenarioManifest": scenario_manifest(),
     }

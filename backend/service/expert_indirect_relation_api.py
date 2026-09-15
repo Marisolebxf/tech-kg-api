@@ -402,7 +402,7 @@ def _enumerate_paths(
     max_depth: int,
     min_strength: float,
     requested_types: set[str],
-) -> tuple[set[str], list[dict[str, Any]]]:
+) -> tuple[set[str], list[dict[str, Any]], list[dict[str, Any]]]:
     adjacency: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
     for edge in edges:
         source = str(edge.get("source") or "")
@@ -458,11 +458,11 @@ def _enumerate_paths(
         deduped.values(),
         key=lambda item: (-item["strength"], item["depth"], item["pathText"]),
     )[:MAX_RESULT_PATHS]
-    # directNodes 是最终命中路径中的第一跳节点，与 paths 使用同一过滤结果。
+    # directNodes 是命中路径（所有候选，含去重/截断前的路径）的第一跳节点。
     matched_direct_ids = {
-        str(path["nodes"][1]["id"]) for path in paths if len(path.get("nodes") or []) > 1
+        str(path["nodes"][1]["id"]) for path in candidates if len(path.get("nodes") or []) > 1
     }
-    return matched_direct_ids, paths
+    return matched_direct_ids, paths, candidates
 
 
 def _build_result(
@@ -476,7 +476,7 @@ def _build_result(
         str(node.get("id") or ""): node for node in [core_node, *raw_nodes] if node.get("id")
     }
     edges = _dedupe_edges(list(subgraph.get("edges") or []))
-    direct_ids, paths = _enumerate_paths(
+    direct_ids, paths, all_paths = _enumerate_paths(
         core_id,
         nodes_by_id,
         edges,
@@ -485,13 +485,16 @@ def _build_result(
         requested_types=set(body.relation_types),
     )
 
+    # 统计口径：间接关系数量（relationTypeCount）、路径数量（pathCount）、
+    # 关联强度与间接节点均以「所有命中路径」（all_paths，去重与展示截断前）
+    # 为准；paths 只是去重 + 截断后的展示列表，两者数字可能不同属预期。
     indirect_by_id: dict[str, dict[str, Any]] = {}
-    for path in paths:
+    for path in all_paths:
         target = path["targetNode"]
         indirect_by_id[target["id"]] = target
 
-    relation_counts = Counter(path["relationType"] for path in paths)
-    strengths = [float(path["strength"]) for path in paths]
+    relation_counts = Counter(path["relationType"] for path in all_paths)
+    strengths = [float(path["strength"]) for path in all_paths]
     direct_nodes = [
         _node_brief(nodes_by_id[node_id])
         for node_id in sorted(direct_ids)
@@ -508,7 +511,7 @@ def _build_result(
         "minStrength": body.min_strength,
         "directNodeCount": len(direct_ids),
         "indirectNodeCount": len(indirect_nodes),
-        "pathCount": len(paths),
+        "pathCount": len(all_paths),
         "relationTypeCount": dict(relation_counts),
         "averageStrength": round(sum(strengths) / len(strengths), 4) if strengths else 0.0,
         "maxStrength": max(strengths, default=0.0),

@@ -33,6 +33,11 @@ test.describe.serial('C. Schema 管理与属性管理', () => {
       '列 schema',
     )
     for (const item of data.items ?? []) {
+      // 先删关系行再删实体行：实体被 E2E_RELATES 引用时 DELETE 返回 409，
+      // 残留的活行让 C2 的 create 也 409（图库 TAG 却已被清，目录/图库漂移）
+      if (item.name === 'E2E_RELATES') await api(request, 'DELETE', `/schema-management/schemas/${item.id}`)
+    }
+    for (const item of data.items ?? []) {
       if (item.name === NAME) await api(request, 'DELETE', `/schema-management/schemas/${item.id}`)
     }
     await dropGraphEdge('E2E_RELATES')
@@ -171,8 +176,14 @@ test.describe.serial('C. Schema 管理与属性管理', () => {
     await expect(newRow).toBeVisible({ timeout: 30_000 })
     await expect(newRow.getByText('price:int64', { exact: false })).toBeVisible()
 
-    // 图库 + API 复核
-    const cols = await describeColumns(request, 'dev2', 'TAG', NAME)
+    // 图库 + API 复核（CREATE TAG 后 DDL 有传播延迟，TagNotFound 需重试）
+    const cols = await waitFor(
+      async () => {
+        const c = await describeColumns(request, 'dev2', 'TAG', NAME)
+        return c.length ? c : null
+      },
+      { label: '图库 TAG 生效（DDL 传播）', timeout: 60_000 },
+    )
     for (const c of ['id', 'name', 'price']) expect(cols).toContain(c)
     const data = await apiMust<any>(
       request,

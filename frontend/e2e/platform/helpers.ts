@@ -106,31 +106,55 @@ export async function graphCount(request: APIRequestContext, space: string, patt
   return Number(records?.[0]?.c ?? -1)
 }
 
-/** 直连 trs-graph 执行语句（绕过 graph-console 的 DDL 禁令，仅测试环境造数/清理用）。 */
+/** 直连 trs-graph 执行语句（绕过 graph-console 的 DDL 禁令，仅测试环境造数/清理用）。
+ *
+ * 必须打在 trs-graph 本体（:8090）——经 web(:8091)/api 转发是 404，且旧实现
+ * 不检查响应体，DROP TAG 静默变 no-op：旧 TAG 带着已被 ALTER DROP 过的列名
+ * 残留，Nebula 对已删列名报 "Schema exisited before"，重跑 C5 必红（f3cf3b3 引入）。
+ */
 export async function graphWrite(statement: string, space = 'dev2'): Promise<any> {
-  const resp = await fetch(`http://localhost:8091/api/v1/query/write`, {
+  const resp = await fetch(`http://localhost:8090/api/v1/query/write`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-API-Key': 'ysukeg', 'X-Graph-Space': space },
     body: JSON.stringify({ query: statement }),
   })
-  return resp.json()
+  const body: any = await resp.json()
+  if (!resp.ok || body?.error) {
+    throw new Error(`graphWrite 失败[${statement.slice(0, 60)}]: HTTP ${resp.status} ${JSON.stringify(body)?.slice(0, 200)}`)
+  }
+  return body
 }
 
-/** 清理图库残留 TAG/EDGE（删点 → DROP），供测试前重置。 */
+/** 清理图库残留 TAG/EDGE（删点 → DROP），供测试前重置。
+ *
+ * 幂等：TAG/EDGE 本就不存在时 MATCH 报 Unknown edge type / TagNotFound，
+ * 视为已清理跳过（否则首跑即炸）。
+ */
+const NOT_EXISTED = /Unknown edge type|Unknown tag|TagNotFound|not existed|Existed false/i
+
+async function graphWriteTolerant(statement: string, space: string): Promise<any> {
+  try {
+    return await graphWrite(statement, space)
+  } catch (err) {
+    if (NOT_EXISTED.test(String(err))) return { records: [] }
+    throw err
+  }
+}
+
 export async function dropGraphTag(tag: string, space = 'dev2'): Promise<void> {
-  const res: any = await graphWrite(`MATCH (v:${tag}) RETURN id(v) AS vid`, space)
+  const res: any = await graphWriteTolerant(`MATCH (v:${tag}) RETURN id(v) AS vid`, space)
   for (const r of res.records ?? []) {
     await graphWrite(`DELETE VERTEX "${r.vid}" WITH EDGE`, space)
   }
-  await graphWrite(`DROP TAG IF EXISTS ${tag}`, space)
+  await graphWriteTolerant(`DROP TAG IF EXISTS ${tag}`, space)
 }
 
 export async function dropGraphEdge(edge: string, space = 'dev2'): Promise<void> {
-  const res: any = await graphWrite(`MATCH ()-[e:${edge}]->() RETURN id(e) AS eid`, space)
+  const res: any = await graphWriteTolerant(`MATCH ()-[e:${edge}]->() RETURN id(e) AS eid`, space)
   for (const r of res.records ?? []) {
     await graphWrite(`DELETE EDGE ${edge} ${String(r.eid).replace(/"/g, '')}`, space)
   }
-  await graphWrite(`DROP EDGE IF EXISTS ${edge}`, space)
+  await graphWriteTolerant(`DROP EDGE IF EXISTS ${edge}`, space)
 }
 
 /** DESCRIBE TAG/EDGE 字段列表（图库复核）。 */

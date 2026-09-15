@@ -1816,8 +1816,9 @@ const relationCategoryByModule: Record<string, string> = {
   "expert-direct": "直接关系",
   "node-indirect": "间接关系",
   // 两点合作成果：三条合成边（论文/专利/项目合作）均由双端成果边邻居集合
-  // 求交得到（多表 join 口径），前缀统一为「间接」，业务细目见边 label。
-  "two-point-achievement": "间接",
+  // 求交得到（多表 join 口径），前缀统一为「间接关系」，业务细目见边 label；
+  // 每条边的具体文案优先走下方 coopAchievementRelationDescription 台账。
+  "two-point-achievement": "间接关系",
   // 同事/校友模块的类别不走此静态映射,由 displayRelationCategory 按边
   // 动态判定:命中下方关系详情映射(梳理文档中的直接关系)标"直接关系",
   // 未命中默认"间接关系"。这里的值仅作兜底,正常不会读到。
@@ -1993,6 +1994,29 @@ const enterpriseRelationDescription = (edge: GraphEdgeData): string =>
   enterpriseRelationDescriptions[edge.label] ||
   enterpriseRelationDescriptions[edge.category] ||
   `直接关系/${displayRelationDetail(edge)}`;
+
+/* 两点合作成果页「关系描述」专用口径：先判直接关系/间接关系，再拼业务
+ * 细目。三条专家-专家合成边均由双端成果边邻居集合求交得到（多表 join
+ * 口径），判间接：论文合作关系（AUTHORED_BY 邻居求交）、专利合作关系
+ * （INVENTED_BY 发明人姓名+机构跨源解析到学者实体后再求交，双重间接）、
+ * 项目合作关系（LEADS/HAS_PARTICIPANT 按姓名串匹配解析后再求交）。
+ * 专家-成果归因边按底层边类型判定：发表（AUTHORED_BY）为论文行作者
+ * 字段单行直查=直接；发明（INVENTED_BY）发明人姓名需跨源解析=间接；
+ * 负责/参与（LEADS/HAS_PARTICIPANT）按姓名串匹配解析=间接。 */
+const coopAchievementRelationDescriptions: Record<string, string> = {
+  论文合作关系: "间接关系/论文合作关系",
+  专利合作关系: "间接关系/专利合作关系",
+  项目合作关系: "间接关系/项目合作关系",
+  发表: "直接关系/论文署名关系",
+  发明: "间接关系/专利发明关系",
+  负责: "间接关系/项目牵头关系",
+  参与: "间接关系/项目参与关系",
+  关联成果: "间接关系/成果关联关系",
+};
+const coopAchievementRelationDescription = (edge: GraphEdgeData): string =>
+  coopAchievementRelationDescriptions[edge.label] ||
+  coopAchievementRelationDescriptions[edge.category] ||
+  `间接关系/${displayRelationDetail(edge)}`;
 
 /** TOP-N 事件关系页「关系描述」口径：先判断画布连线对应的图关系类型，再按
  * 关系台账输出「关系类别/关系详情」；关系类别只取直接关系/间接关系。
@@ -2450,20 +2474,21 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
         { label: "成果分布", value: "" },
         { label: "成果1", value: "" },
         { label: "完成时间", value: "" },
-        { label: "直接/所属领域", value: "" },
+        { label: "直接关系/所属领域", value: "" },
         { label: "奖项/评价", value: "" },
         { label: "核心贡献", value: "" },
         { label: "合作模式", value: "" },
-        { label: "图空间", value: "" },
       ];
     }
     if (data.summaryRows?.length) {
-      return data.summaryRows.map((row) => ({
-        // 所属领域取自成果 HAS_KEYWORD 关键词（论文行字段直接抽取），
-        // 按统一口径补「直接/」前缀；其余摘要行不变。
-        label: row.label === "所属领域" ? "直接/所属领域" : row.label,
-        value: row.value,
-      }));
+      return data.summaryRows
+        .filter((row) => row.label !== "图空间")
+        .map((row) => ({
+          // 所属领域取自成果 HAS_KEYWORD 关键词（论文行字段直接抽取），
+          // 按统一口径补「直接关系/」前缀；图空间是运行环境信息，不在摘要展示。
+          label: row.label === "所属领域" ? "直接关系/所属领域" : row.label,
+          value: row.value,
+        }));
     }
     const s = data.summary;
     const firstItem = data.items?.[0];
@@ -2498,14 +2523,10 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       },
       { label: "成果1", value: firstTitle },
       { label: "完成时间", value: firstTime },
-      { label: "直接/所属领域", value: firstFields },
+      { label: "直接关系/所属领域", value: firstFields },
       { label: "奖项/评价", value: firstAwards },
       { label: "核心贡献", value: data.coreContribution || "—" },
       { label: "合作模式", value: data.cooperationMode || "—" },
-      {
-        label: "图空间",
-        value: data.sourceMeta?.space || "—",
-      },
     ];
   }
   return null;
@@ -2572,7 +2593,11 @@ const liveRelationRows = computed(() => {
     : graphEdges.value.filter(
         (edge) =>
           (isPanorama.value || edge.inferred !== true) &&
-          (!isLiveCoop.value || edge.category === "科研合作"),
+          // 两点合作成果：专家-专家合成边（科研合作）和专家-成果归因边
+          // （发表/发明/负责/参与）都进关系 Tab，否则共同成果明细展示不全。
+          (!isLiveCoop.value ||
+            edge.category === "科研合作" ||
+            edge.category === "成果关联"),
       );
   if (!relationEdges.length) {
     return [] as Array<readonly [string, string]>;
@@ -2597,7 +2622,9 @@ const liveRelationRows = computed(() => {
         ? paperCoopRelationDescription(relation)
         : isLiveEnterpriseRelation.value
           ? enterpriseRelationDescription(relation)
-          : `${displayRelationCategory(relation)}/${displayRelationDetail(relation)}`;
+          : isLiveCoop.value
+            ? coopAchievementRelationDescription(relation)
+            : `${displayRelationCategory(relation)}/${displayRelationDetail(relation)}`;
     return [
       [
         `关系 ${index + 1}`,

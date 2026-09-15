@@ -1723,6 +1723,7 @@ const relationTypeDisplay: Record<string, string> = {
   HAS_NEWS: "企业动态关系",
   INVOLVED_IN: "事件参与关系",
   // 图库中其余边类型的中文名，避免关系页回退显示英文代码（如 LEGAL_REP_OF）。
+  ALUMNI: "校友关系",
   ACQUIRES: "收购关系",
   ACTUAL_CONTROLLER_OF: "实际控制关系",
   APPLIED_BY: "专利申请关系",

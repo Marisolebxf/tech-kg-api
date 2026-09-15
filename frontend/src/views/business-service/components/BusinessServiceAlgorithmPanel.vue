@@ -3462,8 +3462,8 @@ function computeExpertDirectSummaryRows(
       compactSummaryText(`共同论文${item.coPaperCount}篇`),
     );
     overrides.set(
-      "代表成果",
-      achievementTitles.join("；") || "暂无可核实的共同成果标题",
+      "论文成果",
+      achievementTitles.map((title) => `《${title}》`).join("；") || "暂无可核实的共同论文标题",
     );
     overrides.set(
       "关系置信度",
@@ -3474,7 +3474,7 @@ function computeExpertDirectSummaryRows(
     const overrideValue = overrides.get(row.label);
     return [
       row.label,
-      row.label === "代表成果"
+      row.label === "论文成果"
         ? (overrideValue ?? row.value)
         : compactSummaryText(overrideValue ?? row.value),
     ] as const;

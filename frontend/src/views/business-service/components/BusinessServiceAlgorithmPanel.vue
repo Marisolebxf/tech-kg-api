@@ -559,9 +559,6 @@ const summaryRelationPage = ref(0);
 let expertDirectAbortController: AbortController | null = null;
 const expertIndirectResponse = ref<ExpertIndirectRelationResponse | null>(null);
 const expertIndirectError = ref<string | null>(null);
-/** 间接关系页面的人工标注（仅前端态，不入库）：节点 id → 标注名。
- * 标注非空时画布节点显示标注名，为空时显示原名称；重新执行查询后清空。 */
-const nodeAnnotations = ref<Record<string, string>>({});
 const expertColleagueResponse = ref<ExpertColleagueRelationResponse | null>(
   null,
 );
@@ -1656,18 +1653,9 @@ const graphEdges = computed<GraphEdgeData[]>(() => {
       nodes.some((node) => node.id === edge.to),
   );
 });
-const displayedGraphNodes = computed(() => {
-  // 间接关系页面：画布节点优先显示人工标注名（标注为空/未标注保持原名称）。
-  // 只在展示层覆盖 label，graphNodes（实体页/溯源）仍用原始名称。
-  if (!isExpertIndirect.value) return graphNodes.value;
-  return graphNodes.value.map((node) => {
-    const annotation = nodeAnnotations.value[node.id]?.trim();
-    return annotation ? { ...node, label: annotation } : node;
-  });
-});
 const displayedGraphEdges = computed(() => {
   const visibleNodeIds = new Set(
-    displayedGraphNodes.value.map((node) => node.id),
+    graphNodes.value.map((node) => node.id),
   );
   return graphEdges.value.filter(
     (edge) => visibleNodeIds.has(edge.from) && visibleNodeIds.has(edge.to),
@@ -1676,7 +1664,7 @@ const displayedGraphEdges = computed(() => {
 const graphLegendItems = computed(() =>
   Array.from(
     new Map(
-      displayedGraphNodes.value.map((node) => [
+      graphNodes.value.map((node) => [
         node.nodeType,
         {
           type: node.nodeType,
@@ -3831,8 +3819,6 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       expertIndirectError.value = null;
       selectedGraphNodeId.value = null;
       selectedGraphEdgeId.value = null;
-      // 画布数据整体重建，上一轮的人工标注一并作废。
-      nodeAnnotations.value = {};
       resultMode.value = "summary";
       const now = new Date();
       lastTestTime.value = formatTimestamp(now);
@@ -4782,13 +4768,13 @@ function clearGraphSelection() {
           <small>请检查专家 ID 后重新执行测试</small>
         </div>
         <output
-          v-else-if="!displayedGraphNodes.length"
+          v-else-if="!graphNodes.length"
           class="graph-panel__empty"
         >
           <span>暂无图谱数据，请填写参数并点击「执行测试」后查看结果</span>
         </output>
         <KgGraphCanvas
-          :nodes="displayedGraphNodes"
+          :nodes="graphNodes"
           :edges="displayedGraphEdges"
           node-shape="circle"
           :layout-options="isPanorama ? { levelOneRingRadius: 170 } : undefined"
@@ -4977,25 +4963,6 @@ function clearGraphSelection() {
               查看全部实体
             </button>
             <span>当前：{{ selectedNode.label }}</span>
-          </div>
-          <div
-            v-if="isExpertIndirect && selectedNode"
-            class="result-panel__annotation"
-          >
-            <label class="result-panel__annotation-label" for="node-annotation-input">
-              节点标注
-            </label>
-            <input
-              id="node-annotation-input"
-              v-model="nodeAnnotations[selectedNode.id]"
-              class="result-panel__annotation-input"
-              type="text"
-              maxlength="64"
-              :placeholder="`输入标注后，图中的「${selectedNode.label}」将显示标注名`"
-            />
-            <small class="result-panel__annotation-hint">
-              标注仅在本页生效（暂不保存）；标注为空时图中显示原名称。
-            </small>
           </div>
           <dl class="result-panel__table">
             <div
@@ -6053,41 +6020,6 @@ function clearGraphSelection() {
 
 .result-panel__back span {
   color: var(--text-secondary);
-  font-size: 12px;
-}
-
-/* 间接关系实体页的「节点标注」编辑栏：标注非空时画布节点显示标注名。 */
-.result-panel__annotation {
-  display: grid;
-  gap: 4px;
-  margin: 0 0 12px;
-}
-
-.result-panel__annotation-label {
-  color: var(--text-tertiary);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.result-panel__annotation-input {
-  box-sizing: border-box;
-  width: 100%;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: #fff;
-  color: var(--text-primary);
-  font-size: 14px;
-  line-height: 20px;
-}
-
-.result-panel__annotation-input:focus {
-  outline: none;
-  border-color: #004ecc;
-}
-
-.result-panel__annotation-hint {
-  color: var(--text-tertiary);
   font-size: 12px;
 }
 

@@ -85,7 +85,7 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
     <section class="login-intro" aria-label="平台介绍">
       <div class="login-brand">
         <img :src="logoKg" alt="" />
-        <span>亿级知识图谱平台</span>
+        <span>亿级科技知识图谱引擎</span>
       </div>
       <div class="login-intro__content">
         <p class="login-kicker">TECHNOLOGY KNOWLEDGE GRAPH</p>

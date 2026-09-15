@@ -13,7 +13,7 @@ const PORTAL_SOURCE = import.meta.env.VITE_PORTAL_SOURCE || 'tech-kg-api'
 function routeTitle(title: unknown): string {
   return typeof title === 'string' && title.trim()
     ? title.trim()
-    : '亿级知识图谱平台'
+    : '亿级科技知识图谱引擎'
 }
 
 export function usePortalIntegration() {

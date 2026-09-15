@@ -3,7 +3,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from service.expert_direct_relation import ExpertDirectRelationService, _matchable_names
+from service.expert_direct_relation import (
+    ExpertDirectRelationService,
+    _matchable_names,
+    clear_caches,
+)
 
 
 def test_time_filter_uses_relation_time_for_items_total_and_graph_source() -> None:
@@ -123,21 +127,26 @@ class _FakeResult:
 
 
 class _RecordingSession:
-    """按 SQL 里的标记分发结果，并记录每次执行的语句（供断言二级回退是否触发）。"""
+    """按 SQL/参数标记分发结果，并记录每次执行的语句（供断言各层回退是否触发）。"""
 
-    def __init__(self, level1_rows, level2_rows, level2_params=None):
+    def __init__(self, level1_rows, level2_rows, level2_params=None, pool_rows=None):
         self.level1_rows = level1_rows
         self.level2_rows = level2_rows
         self.level2_params = level2_params or {}
+        self.pool_rows = pool_rows or []
+        self.pool_params: dict | None = None
         self.executed: list[str] = []
 
     def execute(self, sql, params):
         sql_text = str(sql)
         self.executed.append(sql_text)
-        if "authors LIKE" in sql_text:
+        if "n0" in params:  # 锚点论文池（:n0/:n1 + :pool_limit）
+            self.pool_params = params
+            return _FakeResult(self.pool_rows)
+        if "authors LIKE" in sql_text:  # 单对双方姓名联查
             assert params == self.level2_params
             return _FakeResult(self.level2_rows)
-        assert params == {"a": "a1", "b": "b2"}
+        assert set(params) == {"a", "b"}  # 关系表自连接
         return _FakeResult(self.level1_rows)
 
 
@@ -233,6 +242,58 @@ def test_shared_paper_titles_from_mysql_skips_name_match_in_listing_mode(monkeyp
 def test_matchable_names_filters_unusable_forms():
     """过短、空、VID 兜底串都不可作为姓名匹配素材。"""
     assert _matchable_names(("杨", "person_a1", "沈定刚", "")) == ["沈定刚"]
+
+
+@pytest.mark.asyncio
+async def test_representative_achievements_listing_uses_anchor_pool(monkeypatch):
+    """列表模式（仅A）用锚点论文池：一次扫描建池，内存按对端姓名逐行过滤。"""
+    clear_caches()
+    client = AsyncMock()
+    client.get_node_edges.return_value = []
+    # 对端节点姓名（每行一个对端；锚点姓名直接来自 anchor_node，不查图）
+    client.get_node.side_effect = [
+        {"properties": {"name_zh": "王翊", "name_en": "Wang Yi"}},
+        {"properties": {"name_zh": "雷凯", "name_en": "Lei Kai"}},
+    ]
+    anchor_node = {
+        "id": "person_anchor1",
+        "properties": {"name_zh": "王祎", "name_en": "Yi Wang"},
+    }
+    rows: list[dict[str, object]] = [
+        {"expert_a_id": "person_anchor1", "expert_b_id": "person_p1", "relation_key": "k1"},
+        {"expert_a_id": "person_anchor1", "expert_b_id": "person_p2", "relation_key": "k2"},
+    ]
+
+    session = _RecordingSession(
+        level1_rows=[],
+        level2_rows=[],
+        pool_rows=[
+            {"doi": "10.9/1", "title": "共同论文一", "authors": "王祎, 王翊, 其他作者"},
+            {"doi": "10.9/2", "title": "Joint Paper Two", "authors": "Yi Wang; Wang Yi; C. X"},
+            {"doi": "10.9/3", "title": "锚点独著", "authors": "王祎"},
+            {"doi": "10.9/4", "title": "与雷凯合著", "authors": "王祎, 雷凯"},
+        ],
+    )
+
+    class FakeSessionScope:
+        def __enter__(self):
+            return session
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr("service.expert_direct_relation.session_scope", lambda: FakeSessionScope())
+    service = ExpertDirectRelationService()
+    await service._attach_representative_achievements(client, rows, anchor_node=anchor_node)
+    clear_caches()
+    assert [a["title"] for a in rows[0]["representative_achievements"]] == [
+        "共同论文一",
+        "Joint Paper Two",
+    ]
+    assert [a["title"] for a in rows[1]["representative_achievements"]] == ["与雷凯合著"]
+    # 池只建一次（懒加载），参数带锚点双姓名形态；总共 2 次自连接 + 1 次建池
+    assert session.pool_params == {"n0": "%王祎%", "n1": "%Yi Wang%", "pool_limit": 2000}
+    assert len(session.executed) == 3
 
 
 def test_build_graph_institution_edges_carry_confidence():

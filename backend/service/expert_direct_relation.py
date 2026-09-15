@@ -11,9 +11,11 @@
 6. 代表成果：优先图上 AUTHORED_BY 共同论文；真实专家常无 AUTHORED_BY 边
    （跨域兜底 ETL 默认关闭），此时回退 MySQL 两级：先 ``dwd_scholar_paper_relation``
    自连接（标题按 paper_id / related_paper_id 两个号段从 ``dwd_scholar_papers`` /
-   ``dwd_zh_paper`` / ``dwd_en_paper`` 核实）；仍无标题且为单对查询时，按双方
-   姓名同时出现在 ``dwd_scholar_papers.authors`` 反查（真实行 id 未灌、只能按
-   姓名关联）。两级均仅保留查得到标题的行。
+   ``dwd_zh_paper`` / ``dwd_en_paper`` 核实）；仍无标题时按姓名反查
+   ``dwd_scholar_papers.authors``（真实行 id 未灌、只能按姓名关联）——单对查询
+   用双方姓名联查 SQL，列表模式（仅指定 A）按锚点姓名一次扫描建论文池（进程内
+   缓存），逐行在内存按对端姓名过滤，避免每行一次全表扫描。两级均仅保留
+   查得到标题的行。
 
 查询结果一律来自图库；未命中或图服务异常时返回空结果并在 ``source.reason`` 标明原因，
 不返回内置示例数据。
@@ -45,10 +47,20 @@ _RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
 _result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _result_cache_lock = threading.Lock()
 
+# 锚点论文池的进程内缓存：列表模式一次 dwd_scholar_papers 全表扫描（约 2.5s）
+# 的结果供 TTL 内各查询复用，避免换过滤条件就重扫。
+_PAPER_POOL_CACHE_TTL = 300.0
+_PAPER_POOL_CACHE_MAX = 16
+_PAPER_POOL_LIMIT = 2000
+_paper_pool_cache: dict[tuple[str, ...], tuple[float, list[dict[str, Any]]]] = {}
+_paper_pool_cache_lock = threading.Lock()
+
 
 def clear_caches() -> None:
     """清空进程内缓存（测试隔离用）。"""
     _result_cache.clear()
+    with _paper_pool_cache_lock:
+        _paper_pool_cache.clear()
 
 
 logger = logging.getLogger(__name__)
@@ -164,7 +176,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                             else:
                                 rows = [row]
                 if rows:
-                    await self._attach_representative_achievements(client, rows)
+                    await self._attach_representative_achievements(client, rows, anchor_node=node_a)
         except GraphAPIError as exc:
             logger.warning("graph API unavailable: %s", exc)
             fallback_reason = "graph_api_error"
@@ -329,11 +341,19 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         return rows
 
     async def _attach_representative_achievements(
-        self, client: Any, rows: list[dict[str, Any]]
+        self,
+        client: Any,
+        rows: list[dict[str, Any]],
+        anchor_node: dict[str, Any] | None = None,
     ) -> None:
         paper_ids: dict[str, set[str]] = {}
         titles: dict[str, str] = {}
         edge_type = "AUTHORED" if TRSGraphSettings.from_env().space == "techkg" else "AUTHORED_BY"
+        single_pair = len(rows) == 1
+        # 列表模式的锚点论文池（懒加载）：一次全表扫描服务全部行。
+        pool: list[dict[str, Any]] | None = None
+        anchor_vid = str((anchor_node or {}).get("id") or "")
+        peer_name_forms: dict[str, tuple[str, ...]] = {}
         for row in rows:
             try:
                 for person_id in (row["expert_a_id"], row["expert_b_id"]):
@@ -378,20 +398,39 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         break
                 if not achievements:
                     # 真实专家常无 AUTHORED_BY 边（跨域兜底 ETL 默认关闭且 Paper
-                    # 顶点缺失）：回退 MySQL。姓名反查要扫 dwd_scholar_papers
-                    # 全表（约 2.5s），只在单对查询（A+B 都指定）时启用，列表
-                    # 模式仅走关系表自连接的索引查询。
-                    a_names, b_names = await self._person_name_forms(
-                        client, row["expert_a_id"], row["expert_b_id"]
-                    )
+                    # 顶点缺失）：回退 MySQL。单对查询（A+B 都指定）用双方姓名
+                    # 联查 SQL；列表模式先走关系表自连接的索引查询，仍无标题
+                    # 再按锚点姓名一次扫描建论文池（进程内缓存），逐行在内存
+                    # 按对端姓名过滤——避免每行一次约 2.5s 的全表扫描。
+                    a_names: tuple[str, ...] = ()
+                    b_names: tuple[str, ...] = ()
+                    if single_pair:
+                        a_names, b_names = await self._person_name_forms(
+                            client, row["expert_a_id"], row["expert_b_id"]
+                        )
                     achievements = await asyncio.to_thread(
                         self._shared_paper_titles_from_mysql,
                         row["expert_a_id"],
                         row["expert_b_id"],
                         a_names,
                         b_names,
-                        len(rows) == 1,
+                        single_pair,
                     )
+                    if not achievements and not single_pair and anchor_vid:
+                        if pool is None:
+                            pool = await asyncio.to_thread(
+                                _anchor_paper_pool, _node_name_forms(anchor_node or {})
+                            )
+                        peer_vid = (
+                            row["expert_b_id"]
+                            if row["expert_a_id"] == anchor_vid
+                            else row["expert_a_id"]
+                        )
+                        if peer_vid not in peer_name_forms:
+                            peer_name_forms[peer_vid] = await self._one_person_name_forms(
+                                client, peer_vid
+                            )
+                        achievements = _pool_shared_titles(pool, peer_name_forms[peer_vid])
                 row["representative_achievements"] = achievements
             except GraphAPIError:
                 logger.warning(
@@ -403,21 +442,19 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         client: Any, a_vid: str, b_vid: str
     ) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """取两位专家的中英文姓名（姓名反查回退的匹配素材）。"""
-        forms: list[tuple[str, ...]] = []
-        for vid in (a_vid, b_vid):
-            try:
-                node = await client.get_node(vid)
-            except GraphAPIError:
-                node = None
-            props = (node or {}).get("properties") or {}
-            forms.append(
-                tuple(
-                    str(props[key]).strip()
-                    for key in ("name_zh", "name_en")
-                    if str(props.get(key) or "").strip()
-                )
-            )
-        return forms[0], forms[1]
+        return (
+            await ExpertDirectRelationService._one_person_name_forms(client, a_vid),
+            await ExpertDirectRelationService._one_person_name_forms(client, b_vid),
+        )
+
+    @staticmethod
+    async def _one_person_name_forms(client: Any, vid: str) -> tuple[str, ...]:
+        """取一位专家的中英文姓名（姓名反查回退的匹配素材）。"""
+        try:
+            node = await client.get_node(vid)
+        except GraphAPIError:
+            node = None
+        return _node_name_forms(node or {})
 
     @staticmethod
     def _shared_paper_titles_from_mysql(
@@ -1136,3 +1173,79 @@ def _shared_paper_titles_by_author_names(
         for row in rows
         if row["title"]
     ]
+
+
+def _node_name_forms(node: Mapping[str, Any]) -> tuple[str, ...]:
+    """从节点属性提取中英文姓名（姓名反查回退的匹配素材）。"""
+    props = node.get("properties") or {}
+    return tuple(
+        str(props[key]).strip()
+        for key in ("name_zh", "name_en")
+        if str(props.get(key) or "").strip()
+    )
+
+
+def _anchor_paper_pool(anchor_names: tuple[str, ...]) -> list[dict[str, Any]]:
+    """锚点专家的论文池：authors 含其任一姓名形态，按发表时间降序取前若干条。
+
+    列表模式逐对反查要扫 ``dwd_scholar_papers`` 全表（约 2.5s/行），改为按锚点
+    姓名一次扫描建池（进程内缓存），再在内存里按对端姓名过滤。池只保留最新
+    ``_PAPER_POOL_LIMIT`` 条，代表成果本就取最新在前，截断只影响更老的合著。
+    """
+    usable = _matchable_names(anchor_names)
+    if not usable:
+        return []
+    key = tuple(sorted(usable))
+    with _paper_pool_cache_lock:
+        entry = _paper_pool_cache.get(key)
+    if entry and entry[0] > time.monotonic():
+        return entry[1]
+    where = " OR ".join(f"authors LIKE :n{i}" for i in range(len(usable)))
+    params = {f"n{i}": f"%{name}%" for i, name in enumerate(usable)}
+    sql = text(
+        "SELECT doi, COALESCE(NULLIF(zh_name, ''), NULLIF(en_name, '')) AS title, authors "
+        "FROM dwd_scholar_papers "
+        f"WHERE ({where}) "
+        "ORDER BY cover_date_start DESC LIMIT :pool_limit"
+    )
+    try:
+        with session_scope() as session:
+            rows = (
+                session.execute(sql, {**params, "pool_limit": _PAPER_POOL_LIMIT}).mappings().all()
+            )
+    except Exception:  # noqa: BLE001
+        logger.warning("representative achievements anchor paper pool failed: %s", usable[0])
+        return []
+    pool = [
+        {
+            "id": str(row["doi"] or row["title"]),
+            "title": str(row["title"]),
+            "authors_lc": str(row["authors"] or "").lower(),
+        }
+        for row in rows
+        if row["title"]
+    ]
+    with _paper_pool_cache_lock:
+        _paper_pool_cache[key] = (time.monotonic() + _PAPER_POOL_CACHE_TTL, pool)
+        while len(_paper_pool_cache) > _PAPER_POOL_CACHE_MAX:
+            _paper_pool_cache.pop(next(iter(_paper_pool_cache)))
+    return pool
+
+
+def _pool_shared_titles(
+    pool: list[dict[str, Any]], peer_names: tuple[str, ...]
+) -> list[dict[str, str]]:
+    """从锚点论文池里筛对端也署名的论文（池已按时间降序，取前 3 条）。
+
+    与 SQL 联查口径一致：对端中/英文名任一形态命中 authors（大小写不敏感）。
+    """
+    names = [name.lower() for name in _matchable_names(peer_names)]
+    if not names:
+        return []
+    achievements: list[dict[str, str]] = []
+    for paper in pool:
+        if any(name in paper["authors_lc"] for name in names):
+            achievements.append({"id": paper["id"], "title": paper["title"]})
+            if len(achievements) == 3:
+                break
+    return achievements

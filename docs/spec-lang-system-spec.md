@@ -29,12 +29,12 @@ Binding              // 独立于 Spec 的技术绑定；binding-guarantee = 绑
 | # | 修正 |
 |---|---|
 | 1 | 模块目录是 **12 个**（`service/module_catalog.py` 逐行数过），带 `status` 字段：仅 `expert_cooperation_achievement`、`expert_alumni_relation` 为 `ready`，其余 10 个 `scaffold`。"九大模块"只是预热端点集合；目录(12) ≠ 预热(9) ≠ 实际路由集，三者不对齐 |
-| 2 | 边界策略实际有**四种身份**：公开（auth 自解析）、会话、服务身份（`require_graph_service`：Bearer `GRAPH_BUILD_SERVICE_TOKEN` 或 HMAC-SHA256 时间戳签名，未配置 503，`biz/dependencies/review_service_auth.py:12-35`）、网关身份（review 的 HMAC 签名 `X-User-*` 头）；`is_admin` 之外另有 5 个 review 角色码 |
+| 2 | 边界策略实际有**三种身份**：公开（auth 自解析）、会话、网关身份（review 的 HMAC 签名 `X-User-*` 头）；`is_admin` 之外另有 5 个 review 角色码（原第四种服务身份 `require_graph_service` 已随 graph-build 移交通道删除，2026-09-15） |
 | 3 | `get_techkg_client()` **不固定 techkg 空间**——与默认单例同读 `TRS_GRAPH_SPACE`（`infra/graph_db/__init__.py:85-97` docstring）；真正按空间的是第三层 `get_space_client(space)` 缓存（`:113-125`） |
 | 4 | schema 脚本安全**没有 AST 白名单**：`ast.parse` 仅语法检查 + **LLM 评审（fail-closed）**（`service/script_security.py:94-103`），且 LLM 门只在 `/script/verify`（SSE）路径生效，裸 `PUT /script` 不过审（`service/schema_management.py:586-594`）。脚本是 **Python transform 函数**（隔离子进程执行），不是 nGQL 作者 |
 | 5 | workflow 控制面是 **MySQL `techkg_control`**（`WORKFLOW_DATABASE_PATH` 在仓库中已不存在，grep 验证）；**进程内 Temporal worker 已删除**（commit `932fc82`，2026-08-25），只剩独立 worker；并发上限动机是防重试风暴，非"保护图会话池" |
 | 6 | **算子不参与工作流编排**——工作流组合单元是上传的 Python 函数（declarative / python / steps / chain 四种定义格式）；算子注册表是独立体系，仅经 HTTP 同步调用 |
-| 7 | manual review：完整 **outbox 模式** + `REVIEW_RERUN_MODE` 默认 **mock**；review worker **进程内直调** `process_outbox`（每 2s），不调 HTTP（`script/run_manual_review_worker.py:16-37`）；`T_DIRECT` 模板旁路直写 Nebula；"category=A/B/C"是查询期模板映射，不是表列（`service/manual_review_production.py:311-322`） |
+| 7 | manual review：**无移交通道**（outbox / correction / review worker / 内部端点已删，2026-09-15）——submit 只记录决议即落 RESOLVED，T_LINK 合并执行由向量对齐合并引擎落地（后续任务）；`T_DIRECT` 模板旁路直写 Nebula；"category=A/C"是查询期模板映射，不是表列（`service/manual_review_production.py`） |
 | 8 | correction：**默认 `CORRECTION_SYNC_MODE=projection` 根本不写图**（只写 MySQL 隔离投影层，注释"业务数据保持隔离"，`service/correction.py:240-244`）；MySQL 先落、图失败不回滚、无 saga 补偿，终态 FAILED 后库图分歧持续存在直至人工 retry |
 | 9 | "404/400/500"大多是**信封业务码**（HTTP 200 + `ApiResponse.code`），但 expert_indirect / expert_paper 两个模块用**真 HTTP 状态码**——两种错误约定并存 |
 | 10 | 演示态是一等公民：task_center 硬编码变更数 / 静态源健康表 / `temporal_health` 死分支（`biz/handler/task_center.py:88` `hasattr` 永假）、platform_overview 四个板块永远 demo（`service/platform_overview.py`）、`data_mode:"mock"` 字段、`AUTH_ENABLED=false` 下 operation-logs 返回 mock |
@@ -49,19 +49,17 @@ Binding              // 独立于 Spec 的技术绑定；binding-guarantee = 绑
 Unit TechKGPlatform
   kind: system
   // FastAPI 单进程（无 ASGI 中间件——middleware/ 为空文件，无 CORS/限流/请求日志）
-  // + 可选独立进程：temporal worker、manual-review worker
+  // + 可选独立进程：temporal worker（manual-review worker 已随移交通道删除）
 
   Contract:
     provides:
       Http.v1                          // ~120 条路由，统一信封 ApiResponse{code,success,data,msg}
-        policy:                        // 边界身份（路由级声明，register.py 三组 + 逐路由补丁）
+        policy:                        // 边界身份（路由级声明，register.py 两组 + 逐路由补丁）
           public      → auth 端点，身份在 handler 内自解析（register.py:58 无依赖）
           session     → require_authenticated_user（33 个路由，register.py:60-101）
           admin       → session + is_admin（manual-reviews / operators / admin-members，
-                        register.py:102-109；另有 3 个写端点逐路由叠加 admin：
+                        register.py；另有 3 个写端点逐路由叠加 admin：
                         relation build / annotate / mine）
-          service     → require_graph_service：Bearer 或 HMAC 签名（±300s）；
-                        token 未配置 → 503（manual_review_internal + operator_internal）
           owner       → schema / 配置资源：admin 或 owner（service 层 assert_mutable /
                         ensure_owner_access，403）
         envelope-exceptions:            // 信封一致性的例外，契约必须写明
@@ -86,7 +84,6 @@ Unit TechKGPlatform
       IdentityProvider         // 统一用户中心 OAuth2
       TextSynthesis?           // LLM：DB 配置优先 → env 兜底；缺席即降级，全程不抛错
       Embedding?               // 双提供者：GLM embedding-3（infra/llm.py:127-169）与 m3e 服务
-      GraphBuildHandoff?       // 审核续跑回调目标；REVIEW_RERUN_MODE=mock 时不绑定
 
   Behavior boot                          // main.py:41-95 实测顺序
     REGISTRY.initialize_store → start_watcher        // 算子：S3 同步 + 0.25s 轮询热加载
@@ -115,7 +112,7 @@ Unit TechKGPlatform
 ```text
 Unit ApiSurface
   // 无中间件层；全局异常处理器 2 个（见 L0 envelope-exceptions）；自托管 Swagger（/docs + /static/swagger）
-  contains: RouterRegister(三组+补丁), Envelope, ExceptionHandlers, Prewarm,
+  contains: RouterRegister(两组+补丁), Envelope, ExceptionHandlers, Prewarm,
             ResultCache(infra/result_cache.py)
   // ResultCache：进程内 dict 存预序列化 JSON 串（key → (monotonic到期, str)），
   // TTL 默认 60s（压测配 600s），刻意无锁（GIL 下 dict 原子，docstring 明示禁止加锁）
@@ -275,22 +272,16 @@ Unit ManualReviewSubsystem
       RerunExtractFailures               // 角色门(reviewer/data_quality/graph_governance/approver/
                                           //   review_admin) → 按 schema 分组 → mark→trigger→失败回退
       Evidence.upload                    // 预签名 S3 上传（20MB 上限，pdf/png/jpeg/plain）
-      InternalApi            [service身份] // review-required / correction / execution-events；
-                                          //   Idempotency-Key==eventId 强制
     accepts: ExtractFailureCase(T_EXTRACT_FAIL)   // 查询期映射 category=C（非列）：
-        // A=(T_DIRECT,T_LINK,T_EVIDENCE) B=(T_MAP,T_DQ_FILL,T_DQ_MERGE,T_ATTR) C=(T_EXTRACT_FAIL)
-    emits: ResumeRequest(via outbox)
-  Behavior dispatchOutbox                // 条件UPDATE抢锁 → 60s 陈锁回收 → 指数退避(封顶5min)
-                                          // → 5 次 DEAD；REVIEW_RERUN_MODE 默认 mock！
-                                          // 真实模式 POST {GRAPH_BUILD_INTERNAL_URL}/internal/review-resumes
-                                          // + Idempotency-Key=correctionId，超时 10s
-  Behavior executionCallback            // 事件阶段单调递增 + 每事件允许状态映射：
-                                          // RERUN_SUCCEEDED→VERIFYING→(VERIFICATION_SUCCEEDED)→RESOLVED
-  // case 生命周期：OPEN→CLAIMED→IN_REVIEW→(PENDING_APPROVAL)→APPLYING→RERUNNING→VERIFYING→RESOLVED
-  //   ± APPLY_FAILED / RERUN_FAILED；终态 REJECTED/CANCELLED/EXPIRED
-  // SLA：P0 认领15m/解决30m，P1 1h/4h，P2 4h/1d；9 个模板；dedupe_key=sha(taskId,step,objectId,fingerprint)
-  contains: CaseStore(9 张表), TemplateSet, Outbox, EvidenceStore, ReclaimReaper
-  // review worker 进程内直调 process_outbox+reclaim（每 2s）；HTTP 版端点仅 admin 手动触发
+        // A=(T_DIRECT,T_LINK) C=(T_EXTRACT_FAIL)；建案唯一入口 = workflow 内
+        // create_direct_case（T_LINK 同名冲突 / T_EXTRACT_FAIL 逐行失败 / T_DIRECT 低置信候选）
+    emits: nothing                        // 无移交通道：submit 只记录决议（decision+audit）；
+                                          //   T_LINK 合并执行由向量对齐合并引擎落地（后续任务）
+  // case 生命周期：OPEN→CLAIMED→IN_REVIEW→(PENDING_APPROVAL)→RESOLVED
+  //   ± REJECTED/CANCELLED/EXPIRED；T_EXTRACT_FAIL 重跑生命周期 RERUNNING/RERUN_FAILED
+  // SLA：P0 认领15m/解决30m，P1 1h/4h，P2 4h/1d；3 个产活模板；dedupe_key=sha(taskId,step,objectId,fingerprint)
+  contains: CaseStore(5 张表), TemplateSet, EvidenceStore, ReclaimReaper
+  // reclaim 由 admin 手动端点触发（POST /production/internal/reclaim-expired）
 ```
 
 ### 4.8 CorrectionSubsystem
@@ -312,7 +303,7 @@ Unit CorrectionSubsystem
     ⚠ 无补偿：MySQL 已落不回滚；终态 FAILED 后库图分歧持续存在直至人工 retry（attempts 归零）
   contains: Ledger, StateMachine, SyncDispatcher(main.py 后台循环，间隔≥5s默认30s),
             ProjectionStore(kg_correction_projection 隔离投影层), ReviewHistory, AdminAudit
-  // ⚠ 命名陷阱：review 侧 ReviewCorrection（续跑）与本子系统 ManualCorrection（台账）零共享表
+  // ⚠ 命名陷阱：原 review 侧 ReviewCorrection（续跑，已删）与本子系统 ManualCorrection（台账）零共享表
 ```
 
 ### 4.9 SpaceSubsystem
@@ -478,12 +469,11 @@ Binding dev2
   IdentityProvider  → 统一用户中心（门户 cookie 交换）
   TextSynthesis     → platform_llm_config 优先 → env(LLM_API_KEY/ZHIPUAI_API_KEY) → 缺席=降级
   Embedding         → GLM embedding-3 或 m3e-embedding:8010/v1（按用途）
-  GraphBuildHandoff → REVIEW_RERUN_MODE=mock（默认！）→ 不绑定真实服务
 
 Binding tests / CI
   AuthN.mode        → AUTH_ENABLED=false（人人 local_admin，权限 "*"）
   SessionStore      → memory
-  GraphEndpoint     → httpx.MockTransport（graph / user_center / graph-build 替身全可注入；
+  GraphEndpoint     → httpx.MockTransport（graph / user_center 替身全可注入；
                       tests/conftest.py 唯一 fixture async_client，141 个测试文件）
   Correction.worker → disabled；PREWARM → off；demo 数据 → WORKFLOW_DEMO_DATA_ENABLED
 ```
@@ -492,13 +482,13 @@ Binding tests / CI
 
 ## 7. 派生视图与诊断（Compiler 可跑的检查表）
 
-**派生 Context(TechKGPlatform)**：前端 SPA、门户 iframe、trs-graph、MySQL×3（gkx_element / gkx_local / techkg_control）、Milvus、RustFS、Redis、Temporal、m3e、GLM/用户中心、graph-build 服务（mock 时缺席）、temporal worker、review worker。
+**派生 Context(TechKGPlatform)**：前端 SPA、门户 iframe、trs-graph、MySQL×3（gkx_element / gkx_local / techkg_control）、Milvus、RustFS、Redis、Temporal、m3e、GLM/用户中心、temporal worker。
 
 **依赖解析发现的结构性问题**（每条对应具体代码）：
 
 1. **同能力双提供者**：`GraphQuery` 既有直连路径又有 graph-search 自调用路径 → 5 个模块绕过自家 HTTP 边界访问图（层级倒置）。
 2. **声明未接线清单**：`require_permission` + 6 权限码、`InvalidRoleTypeError`、三个 stub DAO（industry_chain / paper / relation）、`response_model` 纯装饰、`temporal_health` 死分支、CLAUDE.md 的 SQLite 控制面与进程内 worker（均已不存在）。
-3. **命名碰撞**：ReviewCorrection vs ManualCorrection 两套无关机制；`category` 列存模板标题而 A/B/C 是查询映射；目录 12 ≠ 预热 9 ≠ 路由集。
+3. **命名碰撞**：~~ReviewCorrection vs ManualCorrection~~（前者已随移交通道删除）；`category` 列存模板标题而 A/C 是查询映射；目录 12 ≠ 预热 9 ≠ 路由集。
 4. **错误通道双轨**：信封业务码 vs 真 HTTP 状态（indirect / paper）——消费方无法统一处理。
 5. **缓存惯用法 ≥6 种**（锁/无锁、预序列化/对象、TTL 60/300/600、SWR 与否）——同一能力无统一契约。
 6. **mock/演示面清单**：rerun mock 默认、task_center 3 处、overview 4 板块、auth operation-logs——需要 precision 标注才不会被误当真实能力。
@@ -510,7 +500,7 @@ Binding tests / CI
 
 1. **precision 必须是机器可读的一级元数据**。"不同层次不同精度"被代码验证得更彻底：精度不是层级属性，是**逐能力的属性**（同一模块里 ready 的 query 和 mock 的 overview 板块共存；`data_mode:"mock"`、`degraded:true`、catalog `status` 都是手写的精度标记）。建议 `provides` 支持 `precision: ready|scaffold|mock`，且由 Binding 区分"绑定了 mock"与"代码本身就是演示"。
 2. **边界策略是可派生视图，不是原语**。四种身份 + 逐路由补丁 + owner 作用域全部用 `policy:` 注解 + 编译器归并即可表达，未逼出新概念——验证了元模型的核心压缩。
-3. **Binding 级 mock 优雅，代码级演示不优雅**。`REVIEW_RERUN_MODE=mock` 是完美的 Binding 缺席实例；但 task_center 的硬编码数字住在代码里，Binding 表达不了——这是语言的真实边界：规格与实现的差距要么进 precision 元数据，要么永远是诊断噪音。
+3. **Binding 级 mock 优雅，代码级演示不优雅**。原 `REVIEW_RERUN_MODE=mock` 曾是完美的 Binding 缺席实例（该通道已整体删除）；但 task_center 的硬编码数字住在代码里，Binding 表达不了——这是语言的真实边界：规格与实现的差距要么进 precision 元数据，要么永远是诊断噪音。
 4. **错误需要通道限定符**。`errors: X → 404` 不够——必须区分 `envelope:404` 与 `http:404`，本系统两种并存且消费方行为不同。
 5. **"读操作带写副作用"要求 Behavior 是契约的一部分而非注释**（colleague 回写、build 清标注）。
 6. **同能力多提供者 + 惯用法分歧**是最有价值的诊断类别：一眼暴露架构演化痕迹（新模块走自调用网关、老模块直连客户端）。
@@ -527,6 +517,6 @@ Binding tests / CI
 | 基础设施 | graph_db 全部文件、mysql/gkx/gkx_element/redis/workflow_mysql/result_cache/llm/milvus/s3/operator_store |
 | Schema+抽取 | schema_management handler+service、script_security、temporal_workflows 抽取链、register_platform_extraction、水位表、entity_search、dev2_extract_e2e.py |
 | Workflow+算子 | workflow_system handler、workflow_repository/models、temporal_runtime、operator_registry/builtins/store、run_temporal_worker |
-| 审核+修正 | manual_review 两 router、manual_review_production/domain、db_model/manual_review 9 表、correction 全链、platform_governance 8 表 |
+| 审核+修正 | manual_review router、manual_review_production/domain、db_model/manual_review 5 表、correction 全链、platform_governance 8 表 |
 | 设施+配置 | task_center / platform_overview / entity_search / graph_console / graph_search / graph_space / common_capability / 4 配置路由 |
 | 横切 | application 26 文件、dao 全量、db_model 22 文件 ~120 表、tests 141 文件、pyproject、script/ 与 organization_ETL/ 全量清单、schemas/ DDL |

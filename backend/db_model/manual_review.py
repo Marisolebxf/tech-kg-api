@@ -107,37 +107,6 @@ class ReviewEvidence(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
-class ReviewCorrection(Base):
-    __tablename__ = "manual_review_correction"
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    case_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
-    adapter: Mapped[str] = mapped_column(String(64), nullable=False)
-    payload: Mapped[str] = mapped_column(Text, nullable=False)
-    correction_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    # 抽取消歧的 step id 形如 "source:{绑定行uuid}"（44 字符）
-    rerun_step_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False)
-    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    last_error: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    applied_at: Mapped[datetime | None] = mapped_column(DateTime)
-
-
-class ReviewExecution(Base):
-    __tablename__ = "manual_review_execution"
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    case_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
-    resume_node: Mapped[str] = mapped_column(String(64), nullable=False)
-    workflow_type: Mapped[str] = mapped_column(String(128), nullable=False)
-    workflow_id: Mapped[str] = mapped_column(String(256), nullable=False)
-    run_id: Mapped[str | None] = mapped_column(String(256))
-    status: Mapped[str] = mapped_column(String(32), nullable=False)
-    error: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
-
-
 class ReviewAuditLog(Base):
     __tablename__ = "manual_review_audit_log"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -149,31 +118,4 @@ class ReviewAuditLog(Base):
     old_status: Mapped[str | None] = mapped_column(String(32))
     new_status: Mapped[str | None] = mapped_column(String(32))
     detail: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-
-
-class ReviewOutbox(Base):
-    __tablename__ = "manual_review_outbox"
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    case_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
-    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    payload: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False)
-    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    available_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    locked_at: Mapped[datetime | None] = mapped_column(DateTime)
-    last_error: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    processed_at: Mapped[datetime | None] = mapped_column(DateTime)
-
-
-class ReviewExecutionEvent(Base):
-    __tablename__ = "manual_review_execution_event"
-    event_id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    case_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
-    execution_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    stage: Mapped[int] = mapped_column(Integer, nullable=False)
-    payload: Mapped[str] = mapped_column(Text, nullable=False)
-    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

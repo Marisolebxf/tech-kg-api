@@ -9,7 +9,7 @@
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage --coverage.reporter=text --coverage.reporter=html --coverage.reporter=lcov --exclude src/__tests__/review-full-integration.spec.ts",
+    "test:coverage": "vitest run --coverage --coverage.reporter=text --coverage.reporter=html --coverage.reporter=lcov",
     "test:watch": "vitest",
     "docs:dev": "vitepress dev docsite",
     "docs:build": "vitepress build docsite",

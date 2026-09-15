@@ -1,4 +1,9 @@
-"""Production manual-review service and graph-build handoff boundary."""
+"""生产人工审核服务（队列 / 领取 / 裁决 / 直判写图 / 抽取失败重跑）。
+
+2026-09-15 起移除「外部 graph-build 服务」移交通道（内部入口 / correction /
+outbox / resume 派发 / 执行回调）：审核模块只管裁决与记录决议，
+合并执行由向量对齐功能的合并引擎落地（后续任务）。
+"""
 
 from __future__ import annotations
 
@@ -10,26 +15,20 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-import httpx
 from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from db_model.manual_review import (
     ReviewAuditLog,
     ReviewCase,
-    ReviewCorrection,
     ReviewDecision,
     ReviewDraft,
     ReviewEvidence,
-    ReviewExecution,
-    ReviewExecutionEvent,
-    ReviewOutbox,
 )
 from infra.mysql import get_session_factory
 from infra.s3 import S3Storage
 from service.manual_review_domain import (
     EDITABLE_STATUSES,
-    EVENT_STAGE,
     PIPELINE_STEPS,
     TEMPLATES,
     TERMINAL_STATUSES,
@@ -38,16 +37,12 @@ from service.manual_review_domain import (
     ReviewIdentity,
     ReviewValidationError,
     canonical_template,
-    choose_template,
     require_domain_access,
     require_role,
     requires_approval,
-    rerun_step,
-    risk_policy,
     role_can_review,
     template_contract,
     validate_action,
-    validate_step_template,
     write_target,
 )
 
@@ -83,172 +78,8 @@ def _risk_label(v: str | None) -> str:
 
 
 class ManualReviewService:
-    def __init__(self, session_factory=None, http_client_factory=None):
+    def __init__(self, session_factory=None):
         self.sf = session_factory or get_session_factory()
-        self.http_client_factory = http_client_factory or (lambda: httpx.AsyncClient())
-
-    def _legacy_step(self, p):
-        n = str(p.get("stepId") or p.get("nodeId") or "").lower()
-        phase = p.get("phase")
-        for x in PIPELINE_STEPS:
-            if x in n:
-                return x
-        if phase == "数据处理":
-            return "normalize"
-        return "validate"
-
-    def create_case(self, p, a):
-        step = self._legacy_step(p)
-        tpl = canonical_template(
-            p.get("templateId")
-            or choose_template(
-                p.get("errorType", ""), p.get("nodeId", step), p.get("objectType", "")
-            )
-        )
-        legacy_batch = p.get("scopeHint") == "batch" or (
-            step == "schema" and "映射失败" in p.get("errorType", "")
-        )
-        p = {
-            **p,
-            "stepId": step,
-            "templateId": tpl,
-            "eventId": p.get("eventId") or f"legacy-{uuid4().hex}",
-            "occurredAt": now(),
-            "workflow": p.get("workflow")
-            or {
-                "workflowType": "legacy",
-                "workflowId": p.get("sourceTaskId", "legacy"),
-                "runId": None,
-                "taskQueue": "legacy",
-                "resumeToken": f"legacy:{p.get('sourceTaskId', 'unknown')}",
-            },
-            "object": {
-                "id": p.get("objectId", ""),
-                "type": p.get("objectType", ""),
-                "name": p.get("objectName", ""),
-            },
-            "exception": {
-                "code": p.get("exceptionCode", "LEGACY_REVIEW_REQUIRED"),
-                "message": p.get("diagnosis") or p.get("errorType", "人工审核"),
-                "fingerprint": p.get("errorFingerprint")
-                or sha([p.get("errorType"), p.get("candidate")]),
-                "severity": p.get("riskLevel") or ("P0" if legacy_batch else "P1"),
-                "scope": "BATCH" if legacy_batch else "OBJECT",
-            },
-            "inputSnapshot": p.get("input", {}),
-            "candidateSnapshot": p.get("candidate", {}),
-            "evidence": p.get("evidence", []),
-        }
-        ingress = self.create_review_required(p, a.user_id)
-        detail = self.get_case(ingress["reviewId"], a)
-        detail["duplicate"] = ingress["duplicate"]
-        return detail
-
-    def create_review_required(self, p, service_actor="graph-build"):
-        step = p["stepId"]
-        tpl = validate_step_template(step, p["templateId"])
-        ex = p["exception"]
-        obj = p["object"]
-        wf = p["workflow"]
-        if ex["scope"] == "BATCH" and ex["severity"] != "P0":
-            raise ReviewValidationError("BATCH 异常必须为 P0")
-        snapshot_size = len(
-            dump(
-                {
-                    "input": p.get("inputSnapshot", {}),
-                    "candidate": p.get("candidateSnapshot", {}),
-                    "evidence": p.get("evidence", []),
-                }
-            ).encode()
-        )
-        if snapshot_size > int(os.getenv("REVIEW_SNAPSHOT_MAX_BYTES", "2097152")):
-            raise ReviewValidationError("异常快照超过大小限制，请改用证据附件")
-        dk = sha([p["sourceTaskId"], step, obj["id"], ex["fingerprint"]])
-        risk, scope, claim, resolve = risk_policy(ex["message"], ex["scope"], ex["severity"])
-        t = now()
-        c = ReviewCase(
-            id=f"MR-{t:%Y%m%d}-{uuid4().hex[:12].upper()}",
-            dedupe_key=dk,
-            event_id=p["eventId"],
-            source_task_id=p["sourceTaskId"],
-            batch_id=p.get("batchId"),
-            node_id=step,
-            pipeline_step_id=step,
-            object_id=obj["id"],
-            object_type=obj["type"],
-            object_name=obj["name"],
-            error_type=ex["message"],
-            error_fingerprint=ex["fingerprint"],
-            category=TEMPLATES[tpl]["title"],
-            template_id=tpl,
-            template_version=p.get("templateVersion", "1.0"),
-            domain=p.get("domain", "graph"),
-            phase=PIPELINE_STEPS[step]["phase"],
-            risk_level=risk,
-            scope=scope,
-            status="OPEN",
-            version=1,
-            sla_claim_at=claim,
-            sla_resolve_at=resolve,
-            source_table=p.get("sourceTable"),
-            source_record_id=p.get("sourceRecordId"),
-            rule_version=p.get("ruleVersion"),
-            model_version=p.get("modelVersion"),
-            workflow_type=wf["workflowType"],
-            workflow_id=wf["workflowId"],
-            workflow_run_id=wf.get("runId"),
-            task_queue=wf["taskQueue"],
-            resume_token=wf["resumeToken"],
-            exception_code=ex["code"],
-            isolation_scope=ex["scope"],
-            template_payload_version=p.get("templateVersion", "1.0"),
-            input_snapshot=dump(p.get("inputSnapshot", {})),
-            candidate_snapshot=dump(
-                {**p.get("candidateSnapshot", {}), "reportedEvidence": p.get("evidence", [])}
-            ),
-            diagnosis=ex["message"],
-            created_at=t,
-            updated_at=t,
-        )
-        actor = ReviewIdentity(
-            service_actor,
-            service_actor,
-            frozenset({"review_admin"}),
-            frozenset({"*"}),
-            "service",
-            p["eventId"],
-        )
-        with self.sf() as s:
-            existing = s.scalar(
-                select(ReviewCase).where(
-                    or_(ReviewCase.event_id == p["eventId"], ReviewCase.dedupe_key == dk)
-                )
-            )
-            if existing:
-                return self._ingress_response(existing, True)
-            try:
-                s.add(c)
-                self.audit(
-                    s,
-                    c,
-                    actor,
-                    "CASE_CREATED",
-                    None,
-                    "OPEN",
-                    {"stepId": step, "exceptionCode": ex["code"]},
-                )
-                s.commit()
-            except IntegrityError:
-                s.rollback()
-                c = s.scalar(
-                    select(ReviewCase).where(
-                        or_(ReviewCase.event_id == p["eventId"], ReviewCase.dedupe_key == dk)
-                    )
-                )
-                if not c:
-                    raise
-                return self._ingress_response(c, True)
-            return self._ingress_response(c, False)
 
     def _ingress_response(self, c, duplicate):
         return {
@@ -290,14 +121,11 @@ class ManualReviewService:
         if f.get("status_group") in status_groups:
             q.append(status_groups[f["status_group"]])
         # 对象种类：T_DIRECT 案例 object_type 即 kind（entity/relation）；
-        # 其他模板按模板语义兜底（T_LINK=实体对齐、T_EVIDENCE=关系证据）
-        if f.get("kind") in ("entity", "relation"):
-            q.append(
-                or_(
-                    ReviewCase.object_type == f["kind"],
-                    ReviewCase.template_id == ("T_LINK" if f["kind"] == "entity" else "T_EVIDENCE"),
-                )
-            )
+        # T_LINK 是实体对齐，按实体兜底
+        if f.get("kind") == "entity":
+            q.append(or_(ReviewCase.object_type == "entity", ReviewCase.template_id == "T_LINK"))
+        elif f.get("kind") == "relation":
+            q.append(ReviewCase.object_type == "relation")
         queues = {
             "mine": ReviewCase.assignee_id == a.user_id,
             "unclaimed": ReviewCase.status == "OPEN",
@@ -307,19 +135,14 @@ class ManualReviewService:
         }
         if f.get("queue") in queues:
             q.append(queues[f["queue"]])
-        # category 过滤：A=入库决策（T_DIRECT/T_LINK/T_EVIDENCE）；B=数据修正（T_MAP/T_DQ_FILL/T_DQ_MERGE/T_ATTR）；
-        # C=抽取失败重跑（T_EXTRACT_FAIL）；不传=所有 template；T_RUNTIME 始终不进审核队列
-        # （属于代码问题，自动重试/告警另行处理）
+        # category 过滤：A=入库决策（T_DIRECT/T_LINK）；C=抽取失败重跑（T_EXTRACT_FAIL）；
+        # 不传=所有 template
         categories = {
-            "A": ("T_DIRECT", "T_LINK", "T_EVIDENCE"),
-            "B": ("T_MAP", "T_DQ_FILL", "T_DQ_MERGE", "T_ATTR"),
+            "A": ("T_DIRECT", "T_LINK"),
             "C": ("T_EXTRACT_FAIL",),
         }
         if f.get("category") in categories:
             q.append(ReviewCase.template_id.in_(categories[f["category"]]))
-        else:
-            # 默认排除 T_RUNTIME（即使没传 category，T_RUNTIME 也不应在审核队列显示）
-            q.append(ReviewCase.template_id != "T_RUNTIME")
         if a.domains and "*" not in a.domains and not a.has_any("review_admin", "auditor"):
             q.append(ReviewCase.domain.in_(a.domains))
         if f.get("keyword"):
@@ -471,8 +294,9 @@ class ManualReviewService:
             if approval:
                 c.status = "PENDING_APPROVAL"
             else:
-                self.enqueue_correction(s, c, d, result)
-                c.status = "APPLYING"
+                # TODO: 合并执行由向量对齐功能的合并引擎落地（后续任务）
+                c.status = "RESOLVED"
+                c.completed_at = t
             c.version += 1
             c.updated_at = t
             self.audit(s, c, a, "DECISION_SUBMITTED", old, c.status, {"actionId": action})
@@ -501,8 +325,9 @@ class ManualReviewService:
             d.decided_at = now()
             if ok:
                 d.status = "APPROVED"
-                self.enqueue_correction(s, c, d, load(d.result))
-                c.status = "APPLYING"
+                # TODO: 合并执行由向量对齐功能的合并引擎落地（后续任务）
+                c.status = "RESOLVED"
+                c.completed_at = now()
             else:
                 d.status = "REJECTED"
                 c.status = "REJECTED"
@@ -905,7 +730,7 @@ class ManualReviewService:
     ) -> dict[str, Any]:
         """kg.custom.steps T_DIRECT 案例两步决策：accept 直接写图，reject 丢弃。
 
-        不调 enqueue_correction、不重启 workflow、不要求 submit 阶段。
+        不重启 workflow、不要求 submit 阶段。
         candidate 传"修正后的完整候选"（仅 accept 有效）：``_`` 前缀元字段
         （写图目标/审计元数据）一律以快照为准，防止改写 label/端点注入。
         """
@@ -1080,382 +905,6 @@ class ManualReviewService:
                 )
         return mapped
 
-    def enqueue_correction(self, s, c, d, result):
-        payload = {"decisionId": d.id, "result": result}
-        digest = sha(payload)
-        step = rerun_step(c.pipeline_step_id, d.action_id)
-        x = ReviewCorrection(
-            id=f"COR-{uuid4().hex[:16].upper()}",
-            case_id=c.id,
-            adapter=TEMPLATES[canonical_template(c.template_id)]["adapter"],
-            payload=dump(payload),
-            correction_version=1,
-            payload_sha256=digest,
-            rerun_step_id=step,
-            status="PENDING",
-            attempts=0,
-            created_at=now(),
-        )
-        s.add(x)
-        self.outbox(s, c.id, "RESUME_REQUESTED", {"correctionId": x.id})
-
-    def correction(self, i):
-        with self.sf() as s:
-            c = self.need(s, i)
-            x = s.scalar(
-                select(ReviewCorrection)
-                .where(ReviewCorrection.case_id == i)
-                .order_by(ReviewCorrection.created_at.desc())
-            )
-            if not x:
-                raise KeyError(i)
-            d = s.scalar(
-                select(ReviewDecision)
-                .where(ReviewDecision.case_id == i, ReviewDecision.status == "APPROVED")
-                .order_by(ReviewDecision.id.desc())
-            )
-            ev = s.scalars(select(ReviewEvidence).where(ReviewEvidence.case_id == i)).all()
-            return {
-                "reviewId": i,
-                "correctionId": x.id,
-                "correctionVersion": x.correction_version,
-                "templateId": canonical_template(c.template_id),
-                "actionId": d.action_id if d else None,
-                "stepId": x.rerun_step_id,
-                "scope": c.isolation_scope,
-                "payload": load(x.payload),
-                "evidenceRefs": [{"id": e.id, "sha256": e.sha256} for e in ev],
-                "ruleSedimentation": bool((load(d.result) if d else {}).get("sedimentRule")),
-                "submittedBy": d.submitted_by if d else None,
-                "approvedBy": d.approved_by if d else None,
-                "payloadSha256": x.payload_sha256,
-            }
-
-    async def process_outbox(self, limit=20):
-        done = failed = 0
-        stale_before = now() - timedelta(
-            seconds=int(os.getenv("REVIEW_OUTBOX_LOCK_TIMEOUT_SECONDS", "60"))
-        )
-        with self.sf() as s:
-            s.execute(
-                update(ReviewOutbox)
-                .where(ReviewOutbox.status == "PROCESSING", ReviewOutbox.locked_at < stale_before)
-                .values(status="RETRY", available_at=now(), locked_at=None)
-            )
-            s.commit()
-            ids = [
-                x.id
-                for x in s.scalars(
-                    select(ReviewOutbox)
-                    .where(
-                        ReviewOutbox.status.in_(("PENDING", "RETRY")),
-                        ReviewOutbox.available_at <= now(),
-                    )
-                    .order_by(ReviewOutbox.created_at)
-                    .limit(limit)
-                ).all()
-            ]
-        for oid in ids:
-            with self.sf() as claim_session:
-                claimed = claim_session.execute(
-                    update(ReviewOutbox)
-                    .where(
-                        ReviewOutbox.id == oid,
-                        ReviewOutbox.status.in_(("PENDING", "RETRY")),
-                        ReviewOutbox.available_at <= now(),
-                    )
-                    .values(status="PROCESSING", locked_at=now())
-                )
-                claim_session.commit()
-                if claimed.rowcount != 1:
-                    continue
-            with self.sf() as s:
-                x = s.get(ReviewOutbox, oid)
-                if not x or x.status != "PROCESSING":
-                    continue
-                if x.event_type != "RESUME_REQUESTED":
-                    x.status = "DONE"
-                    x.processed_at = now()
-                    s.commit()
-                    done += 1
-                    continue
-                c = self.need(s, x.case_id)
-                cor = s.scalar(
-                    select(ReviewCorrection).where(
-                        ReviewCorrection.id == load(x.payload)["correctionId"]
-                    )
-                )
-                try:
-                    response = await self.dispatch_resume(c, cor)
-                    execution_id = response["executionId"]
-                    existing = s.get(ReviewExecution, execution_id)
-                    if existing and existing.case_id != c.id:
-                        raise RuntimeError("图谱构建返回了已属于其他审核单的 executionId")
-                    if not existing:
-                        s.add(
-                            ReviewExecution(
-                                id=execution_id,
-                                case_id=c.id,
-                                resume_node=cor.rerun_step_id,
-                                workflow_type=c.workflow_type or "graph-build",
-                                workflow_id=response.get("workflowId") or c.workflow_id or "",
-                                run_id=response.get("runId"),
-                                status=response.get("status", "QUEUED"),
-                                created_at=now(),
-                            )
-                        )
-                    old_status = c.status
-                    cor.status = "DISPATCHED"
-                    c.status = "RERUNNING"
-                    c.version += 1
-                    c.updated_at = now()
-                    x.status = "DONE"
-                    x.processed_at = now()
-                    self.audit(
-                        s,
-                        c,
-                        ReviewIdentity(
-                            "outbox-worker",
-                            "Outbox Worker",
-                            frozenset({"review_admin"}),
-                            frozenset({"*"}),
-                            "system",
-                            oid,
-                        ),
-                        "RESUME_ACCEPTED",
-                        old_status,
-                        "RERUNNING",
-                        {"executionId": execution_id},
-                    )
-                    s.commit()
-                    done += 1
-                except Exception as exc:
-                    s.rollback()
-                    x = s.get(ReviewOutbox, oid)
-                    c = self.need(s, x.case_id)
-                    cor = s.scalar(
-                        select(ReviewCorrection).where(
-                            ReviewCorrection.id == load(x.payload)["correctionId"]
-                        )
-                    )
-                    x.attempts += 1
-                    x.last_error = str(exc)
-                    x.status = (
-                        "DEAD"
-                        if x.attempts >= int(os.getenv("REVIEW_RESUME_MAX_ATTEMPTS", "5"))
-                        else "RETRY"
-                    )
-                    x.available_at = now() + timedelta(seconds=min(300, 2**x.attempts))
-                    c.status = "APPLY_FAILED"
-                    c.version += 1
-                    c.updated_at = now()
-                    cor.status = "PENDING"
-                    cor.last_error = str(exc)
-                    cor.attempts += 1
-                    s.commit()
-                    failed += 1
-        return {"processed": done, "failed": failed}
-
-    async def dispatch_resume(self, c, cor):
-        payload = {
-            "reviewId": c.id,
-            "correctionId": cor.id,
-            "correctionVersion": cor.correction_version,
-            "stepId": cor.rerun_step_id,
-            "scope": c.isolation_scope,
-            "sourceTaskId": c.source_task_id,
-            "batchId": c.batch_id,
-            "workflow": {
-                "workflowType": c.workflow_type,
-                "workflowId": c.workflow_id,
-                "runId": c.workflow_run_id,
-                "taskQueue": c.task_queue,
-                "resumeToken": c.resume_token,
-            },
-            "correctionUrl": f"/api/v1/internal/manual-reviews/{c.id}/correction",
-        }
-        if os.getenv("REVIEW_RERUN_MODE", "mock") == "mock":
-            return {
-                "accepted": True,
-                "executionId": f"MOCK-{cor.id}",
-                "workflowId": c.workflow_id or f"mock-{c.id}",
-                "runId": "mock",
-                "status": "QUEUED",
-            }
-        base = os.getenv("GRAPH_BUILD_INTERNAL_URL", "").rstrip("/")
-        if not base:
-            raise RuntimeError("GRAPH_BUILD_INTERNAL_URL 未配置")
-        headers = {
-            "Authorization": f"Bearer {os.getenv('GRAPH_BUILD_SERVICE_TOKEN', '')}",
-            "Idempotency-Key": cor.id,
-        }
-        async with self.http_client_factory() as client:
-            r = await client.post(
-                base + "/internal/review-resumes",
-                json=payload,
-                headers=headers,
-                timeout=float(os.getenv("REVIEW_RESUME_TIMEOUT_SECONDS", "10")),
-            )
-            r.raise_for_status()
-            data = r.json()
-        if not data.get("accepted") or not data.get("executionId"):
-            raise RuntimeError("图谱构建拒绝或返回无效恢复响应")
-        return data
-
-    def execution_event(self, i, p):
-        stage = EVENT_STAGE[p["type"]]
-        occurred = p["occurredAt"]
-        occurred = occurred.replace(tzinfo=None) if hasattr(occurred, "replace") else now()
-        with self.sf() as s:
-            c = self.need(s, i)
-            # 允许回调 stepId == 审核单原节点（同节点重跑）；唯一例外是 validate +
-            # reject-extract 回退到 extract。其余跨节点回调一律拒绝。
-            step_ok = p["stepId"] == c.pipeline_step_id or (
-                p["stepId"] == "extract" and c.pipeline_step_id == "validate"
-            )
-            if not step_ok:
-                raise ReviewValidationError("回调 stepId 与审核单不匹配")
-            if s.get(ReviewExecutionEvent, p["eventId"]):
-                return {"reviewId": i, "status": c.status, "duplicate": True}
-            previous = (
-                s.scalar(
-                    select(func.max(ReviewExecutionEvent.stage)).where(
-                        ReviewExecutionEvent.case_id == i,
-                        ReviewExecutionEvent.execution_id == p["executionId"],
-                    )
-                )
-                or 0
-            )
-            if stage < previous:
-                raise ReviewConflictError("执行事件乱序，禁止状态回退")
-            typ = p["type"]
-            allowed = {
-                "CORRECTION_ACCEPTED": {"APPLYING", "RERUNNING"},
-                "RERUN_STARTED": {"APPLYING", "RERUNNING"},
-                "RERUN_PROGRESS": {"RERUNNING"},
-                "RERUN_SUCCEEDED": {"RERUNNING"},
-                "RERUN_FAILED": {"RERUNNING"},
-                "VERIFICATION_SUCCEEDED": {"VERIFYING"},
-                "VERIFICATION_FAILED": {"VERIFYING"},
-            }
-            if c.status not in allowed[typ]:
-                raise ReviewConflictError(f"状态 {c.status} 不接受事件 {typ}")
-            x = s.get(ReviewExecution, p["executionId"])
-            if x and x.case_id != i:
-                raise ReviewValidationError("executionId 已属于其他审核单")
-            if not x:
-                x = ReviewExecution(
-                    id=p["executionId"],
-                    case_id=i,
-                    resume_node=p["stepId"],
-                    workflow_type=c.workflow_type or "graph-build",
-                    workflow_id=p.get("workflowId") or c.workflow_id or "",
-                    run_id=p.get("runId"),
-                    status="QUEUED",
-                    created_at=now(),
-                )
-                s.add(x)
-            old = c.status
-            if typ in ("CORRECTION_ACCEPTED", "RERUN_STARTED", "RERUN_PROGRESS"):
-                c.status = "RERUNNING"
-                x.status = "RUNNING"
-            elif typ == "RERUN_SUCCEEDED":
-                c.status = "VERIFYING"
-                x.status = "RERUN_SUCCEEDED"
-            elif typ in ("RERUN_FAILED", "VERIFICATION_FAILED"):
-                c.status = "RERUN_FAILED"
-                x.status = "FAILED"
-                x.error = p.get("error")
-                x.completed_at = now()
-            elif typ == "VERIFICATION_SUCCEEDED":
-                c.status = "RESOLVED"
-                c.completed_at = now()
-                x.status = "COMPLETED"
-                x.completed_at = now()
-                cor = s.scalar(
-                    select(ReviewCorrection)
-                    .where(ReviewCorrection.case_id == i)
-                    .order_by(ReviewCorrection.created_at.desc())
-                )
-                cor.status = "APPLIED"
-                cor.applied_at = now()
-            s.add(
-                ReviewExecutionEvent(
-                    event_id=p["eventId"],
-                    case_id=i,
-                    execution_id=p["executionId"],
-                    event_type=typ,
-                    stage=stage,
-                    payload=dump(p),
-                    occurred_at=occurred,
-                    created_at=now(),
-                )
-            )
-            c.version += 1
-            c.updated_at = now()
-            self.audit(
-                s,
-                c,
-                ReviewIdentity(
-                    "graph-build",
-                    "Graph Build",
-                    frozenset({"review_admin"}),
-                    frozenset({"*"}),
-                    "service",
-                    p["eventId"],
-                ),
-                typ,
-                old,
-                c.status,
-                {"executionId": p["executionId"]},
-            )
-            s.commit()
-            return {"reviewId": i, "status": c.status, "duplicate": False}
-
-    def complete_execution(self, i, eid, success, error, a):
-        require_role(a, "review_admin")
-        with self.sf() as s:
-            c = self.need(s, i)
-            step = c.pipeline_step_id
-        return self.execution_event(
-            i,
-            {
-                "eventId": f"legacy-{eid}-{uuid4().hex}",
-                "executionId": eid,
-                "type": "VERIFICATION_SUCCEEDED" if success else "RERUN_FAILED",
-                "occurredAt": now(),
-                "stepId": step,
-                "workflowId": None,
-                "runId": None,
-                "result": {},
-                "error": error,
-                "metrics": {},
-            },
-        )
-
-    def retry(self, i, v, a):
-        with self.sf() as s:
-            c = self.need(s, i)
-            require_domain_access(a, c.domain)
-            if c.version != v or c.status not in ("APPLY_FAILED", "RERUN_FAILED"):
-                raise ReviewConflictError("仅失败任务可重试，且版本必须匹配")
-            cor = s.scalar(
-                select(ReviewCorrection)
-                .where(ReviewCorrection.case_id == i)
-                .order_by(ReviewCorrection.created_at.desc())
-            )
-            old = c.status
-            cor.status = "PENDING"
-            cor.last_error = None
-            cor.attempts += 1
-            c.status = "APPLYING"
-            c.version += 1
-            c.updated_at = now()
-            self.outbox(s, i, "RESUME_REQUESTED", {"correctionId": cor.id, "retry": True})
-            self.audit(s, c, a, "CASE_RETRIED", old, c.status, {})
-            s.commit()
-            return self.detail(s, c)
-
     def cancel(self, i, v, reason, a):
         _ = reason
         require_role(a, "review_admin")
@@ -1484,9 +933,6 @@ class ManualReviewService:
                     .order_by(ReviewAuditLog.created_at)
                 ).all()
             ]
-
-    def executions(self, i, a):
-        return self.get_case(i, a)["executions"]
 
     def evidence_upload(self, i, file_name, content_type, size, digest, a):
         if size < 1 or size > int(os.getenv("REVIEW_EVIDENCE_MAX_BYTES", "20971520")):
@@ -1618,20 +1064,6 @@ class ManualReviewService:
             )
         )
 
-    def outbox(self, s, i, e, p):
-        s.add(
-            ReviewOutbox(
-                id=f"OUT-{uuid4().hex[:16].upper()}",
-                case_id=i,
-                event_type=e,
-                payload=dump(p),
-                status="PENDING",
-                attempts=0,
-                available_at=now(),
-                created_at=now(),
-            )
-        )
-
     def case_dict(self, c):
         return {
             "id": c.id,
@@ -1691,22 +1123,6 @@ class ManualReviewService:
                 .order_by(ReviewEvidence.created_at)
             ).all()
         ]
-        execs = [
-            {
-                "id": x.id,
-                "resumeNode": x.resume_node,
-                "workflowType": x.workflow_type,
-                "workflowId": x.workflow_id,
-                "runId": x.run_id,
-                "status": x.status,
-                "error": x.error,
-            }
-            for x in s.scalars(
-                select(ReviewExecution)
-                .where(ReviewExecution.case_id == c.id)
-                .order_by(ReviewExecution.created_at.desc())
-            ).all()
-        ]
         d.update(
             {
                 "draft": load(dr.payload) if dr else {},
@@ -1733,7 +1149,6 @@ class ManualReviewService:
                     "runId": c.workflow_run_id,
                     "taskQueue": c.task_queue,
                 },
-                "executions": execs,
                 "duplicate": duplicate,
             }
         )

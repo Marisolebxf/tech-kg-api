@@ -42,7 +42,7 @@ const reviewTotalPages = computed(() => Math.max(1, Math.ceil(reviewTotal.value 
 
 watch(() => route.query.keyword, (value) => { keyword.value = clampSearchKeyword(String(value || '')) })
 
-/** 审核队列分类：A=入库决策（T_DIRECT/T_LINK/T_EVIDENCE）；C=抽取失败重跑（T_EXTRACT_FAIL）。 */
+/** 审核队列分类：A=入库决策（T_DIRECT/T_LINK）；C=抽取失败重跑（T_EXTRACT_FAIL）。 */
 const reviewCategory = ref<'A' | 'C'>('A')
 /** C 类二级视图：cases=失败列表（默认）；history=重跑记录（按执行维度）。 */
 const rerunView = ref<'cases' | 'history'>('cases')
@@ -171,8 +171,7 @@ onUnmounted(() => {
 async function loadReviews() {
   if (props.mode !== 'review') return
   try {
-    // A=入库决策（T_DIRECT/T_LINK/T_EVIDENCE）；C=抽取失败重跑（T_EXTRACT_FAIL）；
-    // B 类数据修正在 TODO，先不混入
+    // A=入库决策（T_DIRECT/T_LINK）；C=抽取失败重跑（T_EXTRACT_FAIL）
     const response = await getProductionReviews({
       category: reviewCategory.value,
       keyword: keyword.value || undefined,

@@ -4,6 +4,8 @@
 > B 类（T_MAP/T_DQ_FILL/T_DQ_MERGE/T_ATTR）数据修正任务 deferred 到 TODO，不在本次范围。
 > T_RUNTIME 不入审核队列（瞬态自动重试 / 永久告警，另开任务）。
 
+> **历史文档**（2026-09-15）：graph-build 移交通道与 6 个休眠模板（含本文的 T_EVIDENCE 等）已删除；现行设计见 `docs/人工审核模块.md`。本文保留作设计过程记录。
+
 ## A 类范围
 
 3 个 template，都是"判入库 yes/no"型决策：

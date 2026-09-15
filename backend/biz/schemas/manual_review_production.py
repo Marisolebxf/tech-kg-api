@@ -8,19 +8,6 @@ from biz.schemas.text_rules import check_text
 _ID_FIELDS = (
     "assigneeId",
     "actionId",
-    "sourceTaskId",
-    "batchId",
-    "nodeId",
-    "objectId",
-    "objectType",
-    "errorFingerprint",
-    "templateId",
-    "domain",
-    "phase",
-    "sourceTable",
-    "sourceRecordId",
-    "ruleVersion",
-    "modelVersion",
     "sha256",
     "evidenceId",
     "bucket",
@@ -30,15 +17,10 @@ _TEXT_FIELDS = (
     "assigneeName",
     "note",
     "reason",
-    "objectName",
-    "category",
-    "scopeHint",
-    "diagnosis",
     "fileName",
     "contentType",
     "objectKey",
     "source",
-    "error",
 )
 
 
@@ -107,29 +89,6 @@ class CancelRequest(VersionRequest):
     reason: str = Field(min_length=1)
 
 
-class CreateCaseRequest(_TextRuleMixin):
-    sourceTaskId: str
-    batchId: str | None = None
-    nodeId: str
-    objectId: str
-    objectType: str
-    objectName: str
-    errorType: str
-    errorFingerprint: str | None = None
-    category: str = "其他流程异常"
-    templateId: str | None = None
-    domain: str
-    phase: str
-    scopeHint: str | None = None
-    sourceTable: str | None = None
-    sourceRecordId: str | None = None
-    ruleVersion: str | None = None
-    modelVersion: str | None = None
-    diagnosis: str = ""
-    input: dict[str, Any] = Field(default_factory=dict)
-    candidate: dict[str, Any] = Field(default_factory=dict)
-
-
 class EvidenceUploadRequest(_TextRuleMixin):
     fileName: str
     contentType: str
@@ -143,11 +102,6 @@ class EvidenceCompleteRequest(EvidenceUploadRequest):
     objectKey: str
     source: str = ""
     trustLevel: str = "UNVERIFIED"
-
-
-class ExecutionCompleteRequest(_TextRuleMixin):
-    success: bool
-    error: str = ""
 
 
 class ExtractFailuresRerunRequest(BaseModel):

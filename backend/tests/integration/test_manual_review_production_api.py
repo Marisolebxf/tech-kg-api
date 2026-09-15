@@ -31,84 +31,86 @@ def production_api(monkeypatch):
     app.dependency_overrides.pop(get_review_identity, None)
 
 
+def _link_kwargs(**overrides):
+    """同名冲突 T_LINK 建案参数（建案走 service 层 create_direct_case）。"""
+    value = dict(
+        task_id="TASK-API",
+        execution_id="EXEC-API",
+        step_id="align",
+        kind="entity",
+        candidate={
+            "scholar_id": "S-API",
+            "name_zh": "测试专家",
+            "existingCandidates": [{"id": "E-1"}],
+        },
+        object_id="S-API",
+        reason="同名冲突待人工裁决",
+        confidence=0.9,
+        domain="talent",
+        template_id="T_LINK",
+    )
+    value.update(overrides)
+    return value
+
+
 @pytest.mark.anyio
-async def test_http_create_queue_claim_draft_submit(async_client, production_api):
-    body = {
-        "sourceTaskId": "TASK-API",
-        "nodeId": "quality",
-        "objectId": "OBJ-API",
-        "objectType": "论文",
-        "objectName": "测试论文",
-        "errorType": "标题缺失",
-        "domain": "talent",
-        "phase": "数据处理",
-    }
-    created = (await async_client.post("/api/v1/manual-reviews/internal/cases", json=body)).json()[
-        "data"
-    ]
+async def test_http_queue_claim_draft_submit(async_client, production_api):
+    _, service = production_api
+    created = service.create_direct_case(**_link_kwargs())
+    case_id = created["reviewId"]
     queue = (
         await async_client.get(
             "/api/v1/manual-reviews/production/queue", params={"queue": "unclaimed"}
         )
     ).json()["data"]
     assert queue["total"] == 1
-    assert queue["items"][0]["id"] == created["id"]
+    assert queue["items"][0]["id"] == case_id
     claimed = (
         await async_client.post(
-            f"/api/v1/manual-reviews/production/{created['id']}/claim",
-            json={"version": created["version"]},
+            f"/api/v1/manual-reviews/production/{case_id}/claim",
+            json={"version": 1},  # 新建 case version=1（建案响应不含 version）
         )
     ).json()["data"]
     drafted = (
         await async_client.put(
-            f"/api/v1/manual-reviews/production/{created['id']}/draft",
-            json={"version": claimed["version"], "payload": {"titleZh": "修正标题"}},
+            f"/api/v1/manual-reviews/production/{case_id}/draft",
+            json={"version": claimed["version"], "payload": {"entityVerdict": "create"}},
         )
     ).json()["data"]
     submitted = (
         await async_client.post(
-            f"/api/v1/manual-reviews/production/{created['id']}/submit",
+            f"/api/v1/manual-reviews/production/{case_id}/submit",
             json={
                 "version": drafted["version"],
-                "actionId": "save-fill-rerun",
-                "result": {"titleZh": "修正标题"},
+                "actionId": "entity-confirm",
+                "result": {"entityVerdict": "create"},
                 "note": "已核验",
             },
         )
     ).json()["data"]
-    assert submitted["status"] == "APPLYING"
+    # 无移交通道：submit 只记录决议，直接落 RESOLVED
+    assert submitted["status"] == "RESOLVED"
 
 
 @pytest.mark.anyio
 async def test_http_p0_requires_second_approver(async_client, production_api):
     app, service = production_api
-    body = {
-        "sourceTaskId": "TASK-P0",
-        "nodeId": "schema",
-        "objectId": "OBJ-P0",
-        "objectType": "企业",
-        "objectName": "企业记录",
-        "errorType": "Schema 字段映射失败",
-        "templateId": "T_MAP",
-        "domain": "talent",
-        "phase": "图谱构建",
-    }
-    created = (await async_client.post("/api/v1/manual-reviews/internal/cases", json=body)).json()[
-        "data"
-    ]
+    # confidence < 0.7 → P0，submit 进四方签核
+    created = service.create_direct_case(**_link_kwargs(confidence=0.4, task_id="TASK-P0"))
+    case_id = created["reviewId"]
     claimed = (
         await async_client.post(
-            f"/api/v1/manual-reviews/production/{created['id']}/claim",
-            json={"version": created["version"]},
+            f"/api/v1/manual-reviews/production/{case_id}/claim",
+            json={"version": 1},  # 新建 case version=1（建案响应不含 version）
         )
     ).json()["data"]
     submitted = (
         await async_client.post(
-            f"/api/v1/manual-reviews/production/{created['id']}/submit",
+            f"/api/v1/manual-reviews/production/{case_id}/submit",
             json={
                 "version": claimed["version"],
-                "actionId": "save-map-rerun",
-                "result": {"mappings": [{"source": "a", "target": "b"}]},
+                "actionId": "entity-confirm",
+                "result": {"entityVerdict": "merge", "targetEntityId": "E-1"},
             },
         )
     ).json()["data"]
@@ -116,8 +118,8 @@ async def test_http_p0_requires_second_approver(async_client, production_api):
     app.dependency_overrides[get_review_identity] = lambda: identity("approver-2", ("approver",))
     approved = (
         await async_client.post(
-            f"/api/v1/manual-reviews/production/{created['id']}/approve",
+            f"/api/v1/manual-reviews/production/{case_id}/approve",
             json={"version": submitted["version"], "note": "批准"},
         )
     ).json()["data"]
-    assert approved["status"] == "APPLYING"
+    assert approved["status"] == "RESOLVED"

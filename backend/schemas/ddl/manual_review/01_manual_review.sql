@@ -1,3 +1,7 @@
+-- 人工审核 5 张产活表：manual_review_case / draft / decision / evidence / audit_log。
+-- manual_review_correction / execution / execution_event / outbox 为 graph-build 移交通道时期的表：
+-- 模型已于 2026-09-15 删除，存量表保留历史数据（不 DROP），新代码不再读写。
+
 CREATE TABLE manual_review_audit_log (
 	id INTEGER NOT NULL AUTO_INCREMENT, 
 	case_id VARCHAR(64) NOT NULL, 

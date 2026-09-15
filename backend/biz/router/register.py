@@ -32,7 +32,6 @@ from biz.handler.industry_node_top_events_business import (
 from biz.handler.kg_construction import router as kg_construction_router
 from biz.handler.llm_config import router as llm_config_router
 from biz.handler.manual_review import router as manual_review_router
-from biz.handler.manual_review_internal import router as manual_review_internal_router
 from biz.handler.milvus_config import router as milvus_config_router
 from biz.handler.mysql_datasource import router as mysql_datasource_router
 from biz.handler.options import router as options_router
@@ -98,4 +97,3 @@ def register_routers(app: FastAPI) -> None:
     )
     for router in admin_routers:
         app.include_router(router, prefix=API_V1_PREFIX, dependencies=admin_dependencies)
-    app.include_router(manual_review_internal_router, prefix=API_V1_PREFIX)

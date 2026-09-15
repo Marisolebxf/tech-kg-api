@@ -11,12 +11,10 @@ from biz.schemas.common import ApiResponse
 from biz.schemas.manual_review_production import (
     ApprovalRequest,
     CancelRequest,
-    CreateCaseRequest,
     DirectDecideRequest,
     DraftRequest,
     EvidenceCompleteRequest,
     EvidenceUploadRequest,
-    ExecutionCompleteRequest,
     ExtractFailuresRerunRequest,
     SubmitRequest,
     TransferRequest,
@@ -48,14 +46,6 @@ def _raise_production_error(exc: Exception) -> None:
     raise exc
 
 
-@router.post("/internal/cases", response_model=ApiResponse)
-async def create_production_case(body: CreateCaseRequest, identity: ReviewIdentityDep):
-    try:
-        return ApiResponse(data=production_service.create_case(body.model_dump(), identity))
-    except Exception as exc:
-        _raise_production_error(exc)
-
-
 @router.get("/production/queue", response_model=ApiResponse)
 async def production_queue(
     identity: ReviewIdentityDep,
@@ -76,8 +66,7 @@ async def production_queue(
     assignee_id: str | None = Query(None, alias="assigneeId"),
     category: str | None = Query(
         None,
-        description="A=入库决策 (T_DIRECT/T_LINK/T_EVIDENCE)；B=数据修正 (T_MAP/T_DQ_FILL/T_DQ_MERGE/T_ATTR)；"
-        "不传=所有；T_RUNTIME 不在审核队列，请求时即被过滤",
+        description="A=入库决策 (T_DIRECT/T_LINK)；C=抽取失败重跑 (T_EXTRACT_FAIL)；不传=所有",
     ),
     keyword: str | None = None,
     page: int = 1,
@@ -228,39 +217,6 @@ async def cancel_case(case_id: str, body: CancelRequest, identity: ReviewIdentit
         _raise_production_error(exc)
 
 
-@router.post("/production/{case_id}/retry", response_model=ApiResponse)
-async def retry_case(case_id: str, body: VersionRequest, identity: ReviewIdentityDep):
-    try:
-        return ApiResponse(data=production_service.retry(case_id, body.version, identity))
-    except Exception as exc:
-        _raise_production_error(exc)
-
-
-@router.post("/production/{case_id}/executions/{execution_id}/complete", response_model=ApiResponse)
-async def complete_case_execution(
-    case_id: str,
-    execution_id: str,
-    body: ExecutionCompleteRequest,
-    identity: ReviewIdentityDep,
-):
-    try:
-        return ApiResponse(
-            data=production_service.complete_execution(
-                case_id, execution_id, body.success, body.error, identity
-            )
-        )
-    except Exception as exc:
-        _raise_production_error(exc)
-
-
-@router.get("/production/{case_id}/executions", response_model=ApiResponse)
-async def case_executions(case_id: str, identity: ReviewIdentityDep):
-    try:
-        return ApiResponse(data={"items": production_service.executions(case_id, identity)})
-    except Exception as exc:
-        _raise_production_error(exc)
-
-
 @router.get("/production/{case_id}/audit-logs", response_model=ApiResponse)
 async def case_audit_logs(case_id: str, identity: ReviewIdentityDep):
     try:
@@ -295,17 +251,6 @@ async def evidence_complete(
         return ApiResponse(
             data=production_service.evidence_complete(case_id, body.model_dump(), identity)
         )
-    except Exception as exc:
-        _raise_production_error(exc)
-
-
-@router.post("/production/internal/process-outbox", response_model=ApiResponse)
-async def process_review_outbox(identity: ReviewIdentityDep):
-    try:
-        from service.manual_review_domain import require_role
-
-        require_role(identity, "review_admin")
-        return ApiResponse(data=await production_service.process_outbox())
     except Exception as exc:
         _raise_production_error(exc)
 

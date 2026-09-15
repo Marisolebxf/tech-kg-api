@@ -30,11 +30,11 @@ docker build --target builder --build-arg NPM_REGISTRY=https://registry.npmmirro
   --build-arg VITE_BASE=/ --build-arg VITE_API_BASE=/api \
   -t tech-kg-dev2-frontend-test ./frontend
 docker run --rm tech-kg-dev2-frontend-test \
-  pnpm vitest run --exclude "src/__tests__/review-full-integration.spec.ts"
+  pnpm vitest run
 ```
 
 - typecheck + build 也走容器：`docker compose -f docker-compose.dev2.yml build web-dev2`（builder 阶段 `vue-tsc -b && vite build`，现含 `pnpm docs:build`）；
-- `src/__tests__/review-full-integration.spec.ts` 是**环境门控**测试：自己起 uvicorn 后端 + MinIO + 工作流 MySQL，现有容器都不满足——它在任何环境失败都是环境问题而非回归，一律 exclude。
+- 原 `src/__tests__/review-full-integration.spec.ts`（环境门控全链路测试）已随 graph-build 移交通道一并删除（2026-09-15）。
 
 ## 覆盖率口径
 

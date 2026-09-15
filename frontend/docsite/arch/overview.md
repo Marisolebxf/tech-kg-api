@@ -22,7 +22,7 @@ main.py → biz/router/register.py → biz/handler/* → application/* → servi
 
 ## 路由分组
 
-Router 分三组：**protected**（依赖 `require_authenticated_user`）、**admin**（再加 `require_platform_admin`）、**internal**（无鉴权：`manual_review_internal`）。
+Router 分两组：**protected**（依赖 `require_authenticated_user`）、**admin**（再加 `require_platform_admin`）。原 internal 组（graph-build 移交通道）已删除。
 
 ## infra/ 基础设施一览
 

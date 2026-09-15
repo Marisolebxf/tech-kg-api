@@ -1,12 +1,17 @@
+"""人工审核核心生命周期单测：建案幂等 / 领取乐观锁 / 裁决记录 / 四方签核 / 直判写图。
+
+建案入口是 ``create_direct_case``（kg.custom.steps / 同名冲突 / 抽取失败共用）；
+graph-build 移交通道（内部入口 / correction / outbox）已删除，submit 只记录决议。
+"""
+
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db_model.base import Base
-from db_model.manual_review import ReviewCorrection, ReviewOutbox
 from service.manual_review_domain import (
     ReviewConflictError,
     ReviewForbiddenError,
@@ -20,8 +25,7 @@ def actor(uid="reviewer-1", roles=("reviewer",)):
     return ReviewIdentity(uid, uid, frozenset(roles), frozenset({"talent"}), "org", "req-1")
 
 
-@pytest.fixture
-def service():
+def _make_service():
     engine = create_engine(
         "sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -29,40 +33,48 @@ def service():
     return ManualReviewService(sessionmaker(engine, expire_on_commit=False))
 
 
-def payload(**overrides):
-    value = {
-        "sourceTaskId": "TASK-1",
-        "nodeId": "quality",
-        "objectId": "OBJ-1",
-        "objectType": "论文",
-        "objectName": "真实对象",
-        "errorType": "标题缺失",
-        "domain": "talent",
-        "phase": "数据处理",
-        "input": {"title": ""},
-        "candidate": {},
-    }
+@pytest.fixture
+def service():
+    return _make_service()
+
+
+def link_case_kwargs(**overrides):
+    """同名冲突 T_LINK 建案参数（confidence 决定 P0/P1）。"""
+    value = dict(
+        task_id="TASK-1",
+        execution_id="EXEC-1",
+        step_id="align",
+        kind="entity",
+        candidate={"scholar_id": "S-1", "name_zh": "张三", "existingCandidates": [{"id": "E-1"}]},
+        object_id="S-1",
+        reason="同名冲突待人工裁决",
+        confidence=0.9,
+        domain="talent",
+        template_id="T_LINK",
+    )
     value.update(overrides)
     return value
 
 
-def claimed(service, p=None):
-    case = service.create_case(p or payload(), actor())
-    return service.claim(case["id"], case["version"], actor())
+def claimed(service, **overrides):
+    case = service.create_direct_case(**link_case_kwargs(**overrides))
+    return service.claim(
+        case["reviewId"], 1, actor()
+    )  # 新建 case version=1（建案响应不含 version）
 
 
 def test_create_is_idempotent(service):
-    first = service.create_case(payload(), actor())
-    second = service.create_case(payload(), actor())
-    assert first["id"] == second["id"]
+    first = service.create_direct_case(**link_case_kwargs())
+    second = service.create_direct_case(**link_case_kwargs())
+    assert first["reviewId"] == second["reviewId"]
     assert second["duplicate"] is True
 
 
 def test_atomic_claim_and_optimistic_lock(service):
-    case = service.create_case(payload(), actor())
-    service.claim(case["id"], 1, actor())
+    case = service.create_direct_case(**link_case_kwargs())
+    service.claim(case["reviewId"], 1, actor())
     with pytest.raises(ReviewConflictError):
-        service.claim(case["id"], 1, actor("reviewer-2"))
+        service.claim(case["reviewId"], 1, actor("reviewer-2"))
 
 
 def test_template_action_is_server_validated(service):
@@ -71,46 +83,30 @@ def test_template_action_is_server_validated(service):
         service.submit(case["id"], case["version"], "force-pass", {}, "", actor())
 
 
-def test_ordinary_decision_creates_correction_and_outbox(service):
+def test_ordinary_decision_records_verdict_and_resolves(service):
     case = claimed(service)
-    case = service.draft(case["id"], case["version"], {"titleZh": "修正标题"}, actor())
+    case = service.draft(case["id"], case["version"], {"entityVerdict": "create"}, actor())
     case = service.submit(
         case["id"],
         case["version"],
-        "save-fill-rerun",
-        {"titleZh": "修正标题"},
-        "证据已核验",
+        "entity-confirm",
+        {"entityVerdict": "create"},
+        "已核验，判定为新建实体",
         actor(),
     )
-    assert case["status"] == "APPLYING"
-    with service.sf() as session:
-        assert (
-            session.scalar(select(ReviewCorrection).where(ReviewCorrection.case_id == case["id"]))
-            is not None
-        )
-        assert (
-            session.scalar(
-                select(ReviewOutbox).where(
-                    ReviewOutbox.case_id == case["id"],
-                    ReviewOutbox.event_type == "RESUME_REQUESTED",
-                )
-            )
-            is not None
-        )
+    # 只记录决议：无外部移交通道，submit 直接落 RESOLVED
+    assert case["status"] == "RESOLVED"
+    assert case["consequence"]["writeTarget"]
 
 
 def test_p0_requires_different_approver(service):
-    case = claimed(
-        service,
-        payload(
-            errorType="Schema 字段映射失败", nodeId="schema", templateId="T_MAP", phase="图谱构建"
-        ),
-    )
+    # confidence < 0.7 → P0，submit 进四方签核
+    case = claimed(service, confidence=0.4)
     case = service.submit(
         case["id"],
         case["version"],
-        "save-map-rerun",
-        {"mappings": [{"source": "a", "target": "b"}]},
+        "entity-confirm",
+        {"entityVerdict": "merge", "targetEntityId": "E-1"},
         "",
         actor(),
     )
@@ -120,11 +116,143 @@ def test_p0_requires_different_approver(service):
     approved = service.approve(
         case["id"], case["version"], True, "", actor("approver-2", ("approver",))
     )
-    assert approved["status"] == "APPLYING"
+    assert approved["status"] == "RESOLVED"
 
 
 def test_stale_draft_does_not_overwrite(service):
     case = claimed(service)
-    service.draft(case["id"], case["version"], {"titleZh": "v1"}, actor())
+    service.draft(case["id"], case["version"], {"entityVerdict": "create"}, actor())
     with pytest.raises(ReviewConflictError):
-        service.draft(case["id"], case["version"], {"titleZh": "stale"}, actor())
+        service.draft(case["id"], case["version"], {"entityVerdict": "merge"}, actor())
+
+
+# ------------------------------------------------------------------
+# T_DIRECT 直判写图（accept 走 nGQL INSERT VERTEX / create_edge）
+# ------------------------------------------------------------------
+
+
+class FakeGraph:
+    def __init__(self, fields):
+        self.fields = fields
+        self.merged: list[tuple[list[str], dict, dict]] = []
+        self.edges: list[tuple[str, str, str, dict]] = []
+        self.writes: list[str] = []
+
+    def execute_query(self, ngql):
+        return {"records": [{"Field": f} for f in self.fields]}
+
+    def execute_write(self, ngql):
+        self.writes.append(ngql)
+        return {"records": []}
+
+    def merge_node(self, labels, key, props):
+        self.merged.append((labels, key, props))
+
+    def create_edge(self, from_id, to_id, edge_type, props):
+        self.edges.append((from_id, to_id, edge_type, props))
+
+
+def _reviewer():
+    return ReviewIdentity(
+        "r1", "r1", frozenset({"reviewer"}), frozenset({"*"}), "org", "req-direct"
+    )
+
+
+def _direct_case(svc, monkeypatch, **overrides):
+    graph = FakeGraph(["scholar_id", "name_zh", "name_en"])
+    monkeypatch.setattr("infra.graph_db.get_trs_graph_client", lambda: graph)
+    kwargs = dict(
+        task_id="TASK-1",
+        execution_id="EXEC-1",
+        step_id="extract",
+        kind="entity",
+        candidate={"scholar_id": "S-1", "name_zh": "张三", "name_en": "Zhang San"},
+        object_id="S-1",
+        node_label="Scholar",
+        reason="low confidence",
+        confidence=0.4,
+    )
+    kwargs.update(overrides)
+    created = svc.create_direct_case(**kwargs)
+    return created["reviewId"], graph
+
+
+def test_direct_decide_accept_with_modified_candidate_writes_corrected_fields(monkeypatch):
+    svc = _make_service()
+    case_id, graph = _direct_case(svc, monkeypatch)
+    identity = _reviewer()
+    result = svc.direct_decide(
+        case_id,
+        1,
+        True,
+        "字段修正",
+        identity,
+        candidate={"scholar_id": "S-1", "name_zh": "李四", "org": "清华"},
+    )
+    assert result["status"] == "RESOLVED"
+    assert graph.writes, "实体直写走 nGQL INSERT VERTEX"
+    stmt = graph.writes[0]
+    assert stmt.startswith("INSERT VERTEX Scholar(")  # label 以快照为准
+    assert '"S-1":' in stmt  # 写图 vid 固定取 object_id
+    assert '"李四"' in stmt  # 修正后的字段值
+    # org 不在 schema 且无 extra_json，被 _coerce_to_schema 丢弃
+    assert "org" not in stmt
+    assert '"S-1"' in stmt  # scholar_id
+
+
+def test_direct_decide_candidate_meta_fields_ignored(monkeypatch):
+    svc = _make_service()
+    case_id, graph = _direct_case(svc, monkeypatch)
+    svc.direct_decide(
+        case_id,
+        1,
+        True,
+        "",
+        _reviewer(),
+        candidate={
+            "scholar_id": "S-1",
+            "name_zh": "李四",
+            "_nodeLabel": "Paper",
+            "_fromId": "EVIL",
+        },
+    )
+    assert graph.writes, "实体直写走 nGQL INSERT VERTEX"
+    assert graph.writes[0].startswith(
+        "INSERT VERTEX Scholar("
+    )  # 元字段以快照为准（Scholar），传入 _nodeLabel=Paper 被忽略
+
+
+def test_direct_decide_empty_or_underscore_only_candidate_rejected(monkeypatch):
+    svc = _make_service()
+    case_id, _ = _direct_case(svc, monkeypatch)
+    with pytest.raises(ReviewValidationError, match="不能为空"):
+        svc.direct_decide(case_id, 1, True, "", _reviewer(), candidate={"_nodeLabel": "Paper"})
+
+
+def test_direct_decide_reject_with_candidate_rejected(monkeypatch):
+    svc = _make_service()
+    case_id, graph = _direct_case(svc, monkeypatch)
+    with pytest.raises(ReviewValidationError, match="驳回"):
+        svc.direct_decide(case_id, 1, False, "", _reviewer(), candidate={"name_zh": "李四"})
+    assert graph.merged == []
+
+
+def test_direct_decide_audit_records_modified_fields(monkeypatch):
+    svc = _make_service()
+    case_id, _ = _direct_case(svc, monkeypatch)
+    svc.direct_decide(
+        case_id,
+        1,
+        True,
+        "修正",
+        _reviewer(),
+        candidate={"scholar_id": "S-1", "name_zh": "李四", "title": "教授"},
+    )
+    entries = svc.logs(case_id, _reviewer())
+    accept = [e for e in entries if e["eventType"] == "DIRECT_ACCEPTED"][-1]
+    detail = accept["detail"]
+    assert detail["candidateModified"] is True
+    assert detail["modifiedFields"]["added"] == ["title"]
+    assert detail["modifiedFields"]["changed"] == ["name_zh"]
+    assert detail["modifiedFields"]["removed"] == ["name_en"]
+    assert detail["originalCandidateSha256"]

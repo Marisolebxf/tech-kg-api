@@ -125,13 +125,14 @@ export const retryTask = (taskId: string, reason = 'manual retry') => unwrap(htt
 
 // ---- 生产级人工处理 API ----
 
-export type ProductionReviewStatus = 'OPEN' | 'CLAIMED' | 'IN_REVIEW' | 'PENDING_APPROVAL' | 'APPLYING' | 'RERUNNING' | 'VERIFYING' | 'RESOLVED' | 'REJECTED' | 'CANCELLED' | 'APPLY_FAILED' | 'RERUN_FAILED' | 'EXPIRED'
+/** 无移交通道：submit/direct-decide 只记录决议即落终态；RERUNNING/RERUN_FAILED 属 T_EXTRACT_FAIL 重跑生命周期。 */
+export type ProductionReviewStatus = 'OPEN' | 'CLAIMED' | 'IN_REVIEW' | 'PENDING_APPROVAL' | 'RERUNNING' | 'RESOLVED' | 'REJECTED' | 'CANCELLED' | 'RERUN_FAILED' | 'EXPIRED'
 export interface ProductionReviewCase {
   id: string; sourceTaskId: string; batchId?: string; nodeId: string; objectId: string; objectType: string; objectName: string
   errorType: string; category: string; templateId: string; domain: string; phase: string; riskLevel: 'P0'|'P1'|'P2'; scope: string
   status: ProductionReviewStatus; assigneeId?: string; assigneeName?: string; version: number; slaClaimAt: string; slaResolveAt: string
   diagnosis: string; sourceTable?: string; sourceRecordId?: string; createdAt: string; updatedAt: string
-  draft?: Record<string, unknown>; input?: Record<string, unknown>; candidate?: Record<string, unknown>; evidence?: Record<string, unknown>[]; executions?: Record<string, unknown>[]
+  draft?: Record<string, unknown>; input?: Record<string, unknown>; candidate?: Record<string, unknown>; evidence?: Record<string, unknown>[]
   pipelineStepId?: string; pipelineStepName?: string; exceptionCode?: string; isolationScope?: string; workflowType?: string; workflowId?: string; workflowRunId?: string
   template?: { id:string; version:string; title:string; displaySchema:{ sections:Array<{type:string;source?:string;target?:string;field?:string;options?:string[]}> }; resultSchema:Record<string,unknown>; allowedActions:string[] }
   data?: {
@@ -152,7 +153,6 @@ export const saveProductionReviewDraft = (id: string, version: number, payload: 
 export const submitProductionReview = (id: string, data: { version:number; actionId:string; result:Record<string,unknown>; note?:string }) => unwrap(http.post(`/v1/manual-reviews/production/${id}/submit`, data)) as Promise<ProductionReviewCase>
 export const approveProductionReview = (id: string, version:number, note='') => unwrap(http.post(`/v1/manual-reviews/production/${id}/approve`, { version, note })) as Promise<ProductionReviewCase>
 export const rejectProductionReview = (id: string, version:number, note='') => unwrap(http.post(`/v1/manual-reviews/production/${id}/reject`, { version, note })) as Promise<ProductionReviewCase>
-export const retryProductionReview = (id: string, version:number) => unwrap(http.post(`/v1/manual-reviews/production/${id}/retry`, { version })) as Promise<ProductionReviewCase>
 
 /** T_EXTRACT_FAIL 抽取失败记录重跑：所选 case 按 schema 合并为新执行（triggerSource=RERUN）。 */
 export const rerunExtractFailures = (data: { caseIds?: string[]; executionId?: string; batchSize?: number }) =>

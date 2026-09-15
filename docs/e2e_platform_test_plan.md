@@ -14,7 +14,7 @@
 - **断言三层**：① 界面可见反馈（文案/角标/表格行）② API 复核（curl 8002 对应端点）③ 图库复核（graph-console 执行 `DESCRIBE TAG` / `MATCH ... RETURN count(v)`）。
 - **原生 confirm 弹窗**：配置删除、任务删除用 `window.confirm`，Playwright 以 `page.on('dialog')` 接受。
 - **用例落点**：`frontend/e2e/platform/*.spec.ts` + 新增 `frontend/playwright.platform.config.ts`（baseURL `http://localhost:8089`，chromium）。宿主机执行。
-- **已知环境噪音**（非回归，不记 bug）：`review-full-integration.spec.ts` 需独占环境，不在本方案执行。
+- 原 `review-full-integration.spec.ts` 需独占环境、不在本方案执行；该测试已随 graph-build 移交通道删除（2026-09-15），此条噪音不再存在。
 - **已知缺陷（待修复，非噪音）**：embedding 服务故障（如 key 过期 401）时索引构建**静默降级**——`index.degraded` 只写入执行结果 JSON（`temporal_workflows.py`），前端零渲染、任务仍显示成功。用户已判定不可接受：服务出错必须显式提醒，验收用例 F6。
 
 ---

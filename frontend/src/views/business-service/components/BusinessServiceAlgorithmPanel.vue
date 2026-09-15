@@ -3425,6 +3425,15 @@ function derivedGraphFromExpertResponse(
   return { nodes, edges };
 }
 
+/** 代表成果类型码 → 摘要行前缀；顺序即展示顺序，无数据的类型不显示该行。
+ * 当前后端只回论文（无 type 字段时归入 paper）；专利/项目接入后补码位即可。 */
+const ACHIEVEMENT_TYPE_LABELS: Record<string, string> = {
+  paper: "论文",
+  patent: "专利",
+  project: "项目",
+};
+const ACHIEVEMENT_TYPE_ORDER = ["paper", "patent", "project"] as const;
+
 function computeExpertDirectSummaryRows(
   resp: ExpertDirectRelationQueryResponse,
 ): ReadonlyArray<readonly [string, string]> {
@@ -3448,10 +3457,25 @@ function computeExpertDirectSummaryRows(
         .filter(Boolean)
         .join("｜"),
     );
-    const achievementTitles =
-      item.representativeAchievements
-        ?.map((achievement) => achievement.title)
-        .filter(Boolean) ?? [];
+    // 代表成果按类型分组成行（论文/专利/项目各一行），无数据的类型不显示。
+    const achievementsByType = new Map<string, string[]>();
+    for (const achievement of item.representativeAchievements ?? []) {
+      const title = achievement.title?.trim();
+      if (!title) continue;
+      const type =
+        achievement.type && ACHIEVEMENT_TYPE_LABELS[achievement.type]
+          ? achievement.type
+          : "paper";
+      const titles = achievementsByType.get(type) ?? [];
+      titles.push(`《${title}》`);
+      achievementsByType.set(type, titles);
+    }
+    const achievementLines = ACHIEVEMENT_TYPE_ORDER.filter((type) =>
+      achievementsByType.get(type)?.length,
+    ).map(
+      (type) =>
+        `${ACHIEVEMENT_TYPE_LABELS[type]}：${achievementsByType.get(type)!.join("，")}`,
+    );
     overrides.set("专家 A", expertALabel || "—");
     overrides.set("专家 B", expertBLabel || "—");
     overrides.set(
@@ -3476,8 +3500,8 @@ function computeExpertDirectSummaryRows(
       compactSummaryText(`共同论文${item.coPaperCount}篇`),
     );
     overrides.set(
-      "论文成果",
-      achievementTitles.map((title) => `《${title}》`).join("；") || "暂无可核实的共同论文标题",
+      "代表成果",
+      achievementLines.join("\n") || "暂无可核实的共同成果标题",
     );
     overrides.set(
       "关系置信度",
@@ -3488,7 +3512,7 @@ function computeExpertDirectSummaryRows(
     const overrideValue = overrides.get(row.label);
     return [
       row.label,
-      row.label === "论文成果"
+      row.label === "代表成果"
         ? (overrideValue ?? row.value)
         : compactSummaryText(overrideValue ?? row.value),
     ] as const;
@@ -4878,7 +4902,13 @@ function clearGraphSelection() {
               :key="`${label}-${index}`"
             >
               <dt>{{ label }}</dt>
-              <dd>{{ value || "—" }}</dd>
+              <dd
+                :class="{
+                  'result-panel__value--prewrap': label === '代表成果',
+                }"
+              >
+                {{ value || "—" }}
+              </dd>
             </div>
           </dl>
           <nav
@@ -6072,6 +6102,11 @@ function clearGraphSelection() {
 .result-panel__table dd {
   color: var(--text-primary);
   overflow-wrap: anywhere;
+}
+
+/* 摘要「代表成果」按类型分多行（论文/专利/项目各一行），保留换行渲染。 */
+.result-panel__table dd.result-panel__value--prewrap {
+  white-space: pre-line;
 }
 
 .result-provenance {

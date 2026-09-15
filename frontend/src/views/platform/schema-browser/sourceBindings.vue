@@ -6,10 +6,15 @@ import { useToast } from '../../../composables/use-toast'
 import { emptySourceBindingRow, type SourceBindingRow } from './sourceBindingRows'
 import SourceBindingRowVue from './sourceBindingRow.vue'
 
-const props = defineProps<{
-  modelValue: SourceBindingRow[]
-  showAddButton?: boolean
-}>()
+// showAddButton 默认 true：Boolean prop 不给默认值时缺省为 false，
+// 行级「来源表」弹窗会丢「＋ 绑定来源表」按钮（新建弹窗显式传 false 复用自己的加号）
+const props = withDefaults(
+  defineProps<{
+    modelValue: SourceBindingRow[]
+    showAddButton?: boolean
+  }>(),
+  { showAddButton: true },
+)
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: SourceBindingRow[]): void
@@ -58,7 +63,7 @@ function updateRow(index: number, value: SourceBindingRow) {
       @update:model-value="(value) => updateRow(index, value)"
       @remove="removeRow(index)"
     />
-    <button v-if="showAddButton !== false" type="button" class="source-bindings__add" @click="addRow">＋ 绑定来源表</button>
+    <button v-if="showAddButton" type="button" class="source-bindings__add" @click="addRow">＋ 绑定来源表</button>
   </div>
 </template>
 

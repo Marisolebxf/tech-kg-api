@@ -52,6 +52,63 @@ async def test_representative_achievements_use_shared_paper_titles():
     client.get_node.assert_awaited_once_with("paper_2")
 
 
+@pytest.mark.asyncio
+async def test_representative_achievements_fall_back_to_mysql_when_graph_empty(monkeypatch):
+    """图上无 AUTHORED_BY 共同论文时回退 MySQL 自连接；仅保留可核实标题。"""
+    client = AsyncMock()
+    client.get_node_edges.return_value = []
+    rows = [{"expert_a_id": "person_a1", "expert_b_id": "person_b2", "relation_key": "a:b"}]
+
+    class FakeResult:
+        def __init__(self, rows_):
+            self._rows = rows_
+
+        def mappings(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+    class FakeSession:
+        def execute(self, _sql, params):
+            assert params == {"a": "a1", "b": "b2"}
+            return FakeResult(
+                [
+                    {"paper_id": 11, "title": "可信图计算"},
+                    {"paper_id": 12, "title": None},  # 查不到标题的行必须被丢弃
+                ]
+            )
+
+    class FakeSessionScope:
+        def __enter__(self):
+            return FakeSession()
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr("service.expert_direct_relation.session_scope", lambda: FakeSessionScope())
+    service = ExpertDirectRelationService()
+    await service._attach_representative_achievements(client, rows)
+    item = service._build_item(rows[0])
+    assert item["representativeAchievements"] == [{"id": "paper_11", "title": "可信图计算"}]
+
+
+@pytest.mark.asyncio
+async def test_representative_achievements_mysql_failure_degrades_to_empty(monkeypatch):
+    """MySQL 回退异常时吞掉告警并回到空列表，不影响主结果。"""
+
+    def _boom():
+        raise RuntimeError("mysql unavailable")
+
+    monkeypatch.setattr("service.expert_direct_relation.session_scope", _boom)
+    client = AsyncMock()
+    client.get_node_edges.return_value = []
+    rows = [{"expert_a_id": "person_a1", "expert_b_id": "person_b2", "relation_key": "a:b"}]
+    service = ExpertDirectRelationService()
+    await service._attach_representative_achievements(client, rows)
+    assert rows[0]["representative_achievements"] == []
+
+
 def test_build_graph_institution_edges_carry_confidence():
     """机构从属边是 organization 属性直读派生，应带边类型兜底置信度，
     前端按 data.strength/100 换算后不再显示"暂无"。"""

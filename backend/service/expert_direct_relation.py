@@ -1,4 +1,4 @@
-"""科技专家/人才直接关系——通过 FastAPI 图查询 API 实现（不直连 DAO/MySQL）。
+"""科技专家/人才直接关系——通过 FastAPI 图查询 API 实现（MySQL 仅作代表成果回退）。
 
 数据流：
 1. ``expertAId`` 必填。按 VID / scholar_id / 姓名定位专家A；查不到 → 空结果。
@@ -8,6 +8,11 @@
    ``COAUTHOR_WITH`` 边；找不到 → 空结果。找到则据此组装唯一一条关系。
 4. 机构过滤 & 时间过滤：在服务层按 ``institution`` 关键字、``relation_time`` 过滤该条关系。
 5. 图数据/详情：按业务格式组装 items + graph + provenance。
+6. 代表成果：优先图上 AUTHORED_BY 共同论文；真实专家常无 AUTHORED_BY 边
+   （跨域兜底 ETL 默认关闭），此时回退 MySQL ``dwd_scholar_paper_relation``
+   自连接取共同论文标题（标题按 paper_id / related_paper_id 两个号段从
+   ``dwd_scholar_papers`` / ``dwd_zh_paper`` / ``dwd_en_paper`` 核实，仅保留
+   查得到标题的行）。
 
 查询结果一律来自图库；未命中或图服务异常时返回空结果并在 ``source.reason`` 标明原因，
 不返回内置示例数据。
@@ -25,8 +30,11 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+from sqlalchemy import text
+
 from infra.graph_api_client import GraphAPIError, graph_api
 from infra.graph_db.config import TRSGraphSettings
+from infra.mysql import session_scope
 from service.base_module import KGModuleScaffoldService
 from service.confidence_scoring import edge_confidence
 from service.provenance_recorder import record_node_source
@@ -367,11 +375,54 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         achievements.append({"id": paper_id, "title": titles[paper_id]})
                     if len(achievements) == 3:
                         break
+                if not achievements:
+                    # 真实专家常无 AUTHORED_BY 边（跨域兜底 ETL 默认关闭且 Paper
+                    # 顶点缺失）：回退 MySQL 关系表自连接，取有标题的共同论文。
+                    achievements = await asyncio.to_thread(
+                        self._shared_paper_titles_from_mysql,
+                        row["expert_a_id"],
+                        row["expert_b_id"],
+                    )
                 row["representative_achievements"] = achievements
             except GraphAPIError:
                 logger.warning(
                     "Could not retrieve representative papers for %s", row["relation_key"]
                 )
+
+    @staticmethod
+    def _shared_paper_titles_from_mysql(a_vid: str, b_vid: str) -> list[dict[str, str]]:
+        """MySQL 回退：共同论文标题（仅保留标题可核实的行，按被引降序取 3 条）。"""
+        a_scholar = a_vid.removeprefix("person_")
+        b_scholar = b_vid.removeprefix("person_")
+        if not a_scholar or not b_scholar or a_scholar == b_scholar:
+            return []
+        sql = text(
+            "SELECT r.paper_id, COALESCE(NULLIF(p.zh_name, ''), NULLIF(p.en_name, ''), "
+            "NULLIF(zh.zh_name, ''), NULLIF(zh.en_name, ''), "
+            "NULLIF(en.zh_name, ''), NULLIF(en.en_name, '')) AS title "
+            "FROM dwd_scholar_paper_relation r "
+            "JOIN dwd_scholar_paper_relation r2 "
+            "ON r2.paper_id = r.paper_id AND r2.scholar_id = :b "
+            "LEFT JOIN dwd_scholar_papers p ON p.id = r.paper_id "
+            "LEFT JOIN dwd_zh_paper zh ON zh.id = r.related_paper_id "
+            "LEFT JOIN dwd_en_paper en ON en.id = r.related_paper_id "
+            "WHERE r.scholar_id = :a "
+            "ORDER BY GREATEST(COALESCE(r.citations, 0), COALESCE(r2.citations, 0)) DESC, r.paper_id "
+            "LIMIT 3"
+        )
+        try:
+            with session_scope() as session:
+                rows = session.execute(sql, {"a": a_scholar, "b": b_scholar}).mappings().all()
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "representative achievements mysql fallback failed: %s x %s", a_vid, b_vid
+            )
+            return []
+        return [
+            {"id": f"paper_{row['paper_id']}", "title": str(row["title"])}
+            for row in rows
+            if row["title"]
+        ]
 
     async def _find_person(self, client: Any, keyword: str) -> dict[str, Any] | None:
         """按 VID / scholar_id / 姓名定位一个 Person 节点。

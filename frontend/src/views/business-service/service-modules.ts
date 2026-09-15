@@ -215,11 +215,10 @@ export const serviceModules: ServiceModule[] = [
       { label: '成果分布', value: '' },
       { label: '成果1', value: '论文/专利/项目名称' },
       { label: '完成时间', value: '' },
-      { label: '直接/所属领域', value: '' },
+      { label: '直接关系/所属领域', value: '' },
       { label: '奖项/评价', value: '' },
       { label: '核心贡献', value: '' },
       { label: '合作模式', value: '' },
-      { label: '图空间', value: '' },
     ],
     evidence: [
       '按论文、专利、项目邻居求交汇总共同成果。',

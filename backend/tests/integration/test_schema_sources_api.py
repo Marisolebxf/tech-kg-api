@@ -59,6 +59,11 @@ def sources_api(monkeypatch):
     app.dependency_overrides[get_workflow_session] = override_session
     monkeypatch.setattr("service.schema_management.get_schema_s3_storage", lambda: storage)
     monkeypatch.setenv("SCHEMA_AUTO_PROVENANCE", "false")
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "techkg")
+    monkeypatch.setattr(
+        "service.schema_ddl.list_graph_spaces",
+        lambda: ["techkg"],
+    )
     # 数据源存在性校验走业务库——单测里直接放行（存在性语义单测覆盖）
     monkeypatch.setattr("service.schema_management._validate_datasource_exists", lambda ds_id: None)
 

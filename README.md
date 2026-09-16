@@ -1,7 +1,10 @@
 # tech-kg-api
 
 科技知识图谱 monorepo：后端 API（Python FastAPI）+ 前端（Vue 3）。
-图库为 NebulaGraph，通过 **trs-graph-service**（Java Spring Boot REST 服务）访问，后端用 `infra/graph_db.TRSGraphClient` 做 ORM 风格封装。
+图库为 NebulaGraph，通过
+ **trs-graph-service**（Java Spring Boot REST 服务）访问，后端用 `infra/graph_db.TRSGraphClient` 做 ORM 风格封装。
+
+update
 
 ## 环境要求
 
@@ -112,7 +115,7 @@ curl -f http://127.0.0.1:9093/healthz
 当前服务器部署信息：
 
 | 场景 | URI |
-|------|-----|
+| ------ | ----- |
 | 服务器本机 | `http://127.0.0.1:19531` |
 | 同一 Docker Compose 网络中的容器 | `http://milvus:19530` |
 | 其他机器远程连接 | `http://211.81.248.211:19531` |
@@ -184,7 +187,7 @@ pnpm dev                    # /api 代理到 VITE_API_TARGET（默认 http://loc
 请求链路：`main.py` → `biz/router/register.py` → `biz/handler/*` → `application/*` → `service/*` → `dao/*` + `db_model/*` + `infra/*`。
 
 | 目录 | 职责 |
-|------|------|
+| ------ | ------ |
 | `biz/handler/` | FastAPI `APIRouter`（路由唯一入口），挂载在 `/api/v1` 下；薄层：解析请求→调 application |
 | `biz/schemas/` | Pydantic v2 请求/响应模型，每模块一文件 |
 | `application/` | 编排层，每模块一个类，包装一个 service |
@@ -314,7 +317,6 @@ path = g.shortest_path("Alice", "bob", edge_type="DemoKnows", max_depth=10)
 
 DDL（CREATE/ALTER TAG/EDGE/SPACE）走 nGQL。注意 Nebula 属性投影需用 tag 限定写法 `n.Tag.prop`（`n.prop` 返回空）。
 
-
 ```python
 # 通用查询
 r = g.execute_query('MATCH (n:DemoPerson) WHERE id(n)=="Alice" RETURN n LIMIT 1;')
@@ -404,7 +406,7 @@ tech-kg-api/                       # monorepo 根
 ## 环境变量
 
 | 变量名 | 默认值 | 说明 |
-|--------|--------|------|
+| -------- | -------- | ------ |
 | `TRS_GRAPH_BASE_URL` | `http://localhost:8090` | trs-graph-service 地址 |
 | `TRS_GRAPH_SPACE` | `dev` | 图空间（所有运行时图客户端均读取此项） |
 | `TRS_GRAPH_API_KEY` | — | `X-API-Key` 认证（必填） |

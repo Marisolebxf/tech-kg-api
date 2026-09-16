@@ -329,6 +329,8 @@ export interface SchemaSource {
   tableName: string
   pkColumn: string
   timeColumn: string
+  /** 复杂 SQL 绑定（非空时分批读该查询而非整表） */
+  querySql?: string | null
   position: number
 }
 

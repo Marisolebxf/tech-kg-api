@@ -32,6 +32,9 @@ import {
 } from "../../../api/expertDirectRelation";
 import {
   analyzeExpertIndirectRelation,
+  fetchIndirectRelationAnnotations,
+  indirectRelationEdgeKey,
+  upsertIndirectRelationAnnotation,
   type ExpertIndirectRelationResponse,
 } from "../../../api/expertIndirectRelation";
 import {
@@ -51,6 +54,7 @@ import type {
   GraphPreset,
 } from "../../../data/graph-presets";
 import { invokeKgService } from "../../../api/kgService";
+import { getErrorMessage } from "../../../api/http";
 import type { ServiceModule, ServiceSummaryRow } from "../service-modules";
 import {
   collectPanoramaEntities,
@@ -559,6 +563,11 @@ const summaryRelationPage = ref(0);
 let expertDirectAbortController: AbortController | null = null;
 const expertIndirectResponse = ref<ExpertIndirectRelationResponse | null>(null);
 const expertIndirectError = ref<string | null>(null);
+/** 间接关系人工标注（业务库 kg_indirect_relation_annotation，不入图库）：
+ * key 为两端 VID 归一拼接的边主键；drafts 是输入框草稿，saving 标记保存中。 */
+const relationAnnotations = ref<Record<string, string>>({});
+const relationAnnotationDrafts = ref<Record<string, string>>({});
+const relationAnnotationSaving = ref<Record<string, boolean>>({});
 const expertColleagueResponse = ref<ExpertColleagueRelationResponse | null>(
   null,
 );
@@ -2658,6 +2667,9 @@ const liveEntityRows = computed(() => {
   ]);
 });
 
+/** 关系页信息行；edgeKey 有值的行为可编辑的关系标注行（间接模块）。 */
+type RelationRow = { label: string; value: string; edgeKey?: string };
+
 const liveRelationRows = computed(() => {
   const relationEdges = selectedEdge.value
     ? [selectedEdge.value]
@@ -2671,7 +2683,7 @@ const liveRelationRows = computed(() => {
             edge.category === "成果关联"),
       );
   if (!relationEdges.length) {
-    return [] as Array<readonly [string, string]>;
+    return [] as Array<RelationRow>;
   }
 
   const nodesById = new Map(graphNodes.value.map((node) => [node.id, node]));
@@ -2701,17 +2713,78 @@ const liveRelationRows = computed(() => {
               : isExpertDirect.value
                 ? expertDirectRelationDescription(relation)
                 : `${displayRelationCategory(relation)}/${displayRelationDetail(relation)}`;
-    const rows: Array<readonly [string, string]> = [
-      [
-        `关系 ${index + 1}`,
-        `${from?.label || relation.from} → ${to?.label || relation.to}`,
-      ],
-      ["关系描述", relationDescription],
-      ["置信度", formatRelationConfidence(relation)],
+    const rows: Array<RelationRow> = [
+      {
+        label: `关系 ${index + 1}`,
+        value: `${from?.label || relation.from} → ${to?.label || relation.to}`,
+      },
+      { label: "关系描述", value: relationDescription },
+      { label: "置信度", value: formatRelationConfidence(relation) },
     ];
+    // 间接模块：关系栏追加可编辑的标注行，标注按边主键存业务库（不入图库）。
+    if (isExpertIndirect.value) {
+      rows.push({
+        label: "关系标注",
+        value: relationAnnotations.value[
+          indirectRelationEdgeKey(relation.from, relation.to)
+        ] ?? "",
+        edgeKey: indirectRelationEdgeKey(relation.from, relation.to),
+      });
+    }
     return rows;
   });
 });
+
+/** 查询成功后批量拉取当前画布关系的已有标注；查不到数据的关系展示为空标注。 */
+async function loadIndirectRelationAnnotations() {
+  const keys = Array.from(
+    new Set(
+      graphEdges.value.map((edge) =>
+        indirectRelationEdgeKey(edge.from, edge.to),
+      ),
+    ),
+  );
+  relationAnnotations.value = {};
+  relationAnnotationDrafts.value = {};
+  if (!keys.length) return;
+  try {
+    const annotations = await fetchIndirectRelationAnnotations(keys);
+    relationAnnotations.value = annotations;
+    relationAnnotationDrafts.value = { ...annotations };
+  } catch {
+    // 标注查询失败时静默降级：关系栏展示空标注，不影响查询结果本身。
+  }
+}
+
+/** 确认保存一条关系标注（按边主键 upsert 到业务库），成功后同步本地标注。 */
+async function saveRelationAnnotation(edgeKey: string) {
+  if (relationAnnotationSaving.value[edgeKey]) return;
+  const [sourceVid, targetVid] = edgeKey.split(":");
+  const annotation = (relationAnnotationDrafts.value[edgeKey] ?? "").trim();
+  relationAnnotationSaving.value = {
+    ...relationAnnotationSaving.value,
+    [edgeKey]: true,
+  };
+  try {
+    await upsertIndirectRelationAnnotation(sourceVid, targetVid, annotation);
+    relationAnnotations.value = {
+      ...relationAnnotations.value,
+      [edgeKey]: annotation,
+    };
+    relationAnnotationDrafts.value = {
+      ...relationAnnotationDrafts.value,
+      [edgeKey]: annotation,
+    };
+    showToast(annotation ? "关系标注已保存" : "关系标注已清空", "success");
+  } catch (error) {
+    showToast(getErrorMessage(error, "关系标注保存失败"), "warning");
+  } finally {
+    relationAnnotationSaving.value = {
+      ...relationAnnotationSaving.value,
+      [edgeKey]: false,
+    };
+  }
+}
 
 const colleagueProvenance = computed(() =>
   colleagueProvenanceCards(
@@ -3537,6 +3610,9 @@ watch(
     expertDirectError.value = null;
     expertIndirectResponse.value = null;
     expertIndirectError.value = null;
+    relationAnnotations.value = {};
+    relationAnnotationDrafts.value = {};
+    relationAnnotationSaving.value = {};
     expertColleagueResponse.value = null;
     resetParameters({ notify: false });
   },
@@ -3600,6 +3676,9 @@ function resetParameters({ notify = true }: { notify?: boolean } = {}) {
   expertDirectError.value = null;
   expertIndirectResponse.value = null;
   expertIndirectError.value = null;
+  relationAnnotations.value = {};
+  relationAnnotationDrafts.value = {};
+  relationAnnotationSaving.value = {};
 
   if (isLiveModule.value) void loadModuleDescribe();
   if (notify) showToast("已清空参数", "info");
@@ -3847,6 +3926,10 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       const now = new Date();
       lastTestTime.value = formatTimestamp(now);
       lastUpdateTime.value = now.getTime();
+      // 关系标注是业务库数据（与图查询缓存解耦）：查询成功后单独批量拉取。
+      // 必须放在 lastTestTime 赋值之后——graphNodes 以 lastTestTime 为
+      // 「已有查询结果」门槛，过早读取会拿到空画布导致漏拉标注。
+      void loadIndirectRelationAnnotations();
       const pathCount = response.structuredResult.pathCount;
       showToast(
         pathCount > 0
@@ -5018,12 +5101,28 @@ function clearGraphSelection() {
             <span>当前：已选中一条关系</span>
           </div>
           <dl class="result-panel__table">
-            <div
-              v-for="([label, value], index) in liveRelationRows"
-              :key="`rel-${label}-${index}`"
-            >
-              <dt>{{ label }}</dt>
-              <dd>{{ value }}</dd>
+            <div v-for="(row, index) in liveRelationRows" :key="`rel-${row.label}-${index}`">
+              <dt>{{ row.label }}</dt>
+              <dd v-if="row.edgeKey" class="result-panel__annotation">
+                <input
+                  v-model="relationAnnotationDrafts[row.edgeKey]"
+                  class="result-panel__annotation-input"
+                  type="text"
+                  maxlength="64"
+                  placeholder="输入关系标注，如：重点关注"
+                  :disabled="relationAnnotationSaving[row.edgeKey]"
+                  @keyup.enter="saveRelationAnnotation(row.edgeKey)"
+                />
+                <button
+                  type="button"
+                  class="kg-button kg-button--secondary result-panel__annotation-save"
+                  :disabled="relationAnnotationSaving[row.edgeKey]"
+                  @click="saveRelationAnnotation(row.edgeKey)"
+                >
+                  {{ relationAnnotationSaving[row.edgeKey] ? "保存中…" : "确认" }}
+                </button>
+              </dd>
+              <dd v-else>{{ row.value }}</dd>
             </div>
           </dl>
         </div>
@@ -6615,6 +6714,55 @@ function clearGraphSelection() {
   color: #1d2129;
   overflow-wrap: anywhere;
   white-space: normal;
+}
+
+/* 关系标注行：可编辑输入框 + 确认按钮，与其他信息项同一 dl 表格网格，
+   控件高度 28px 贴齐行内视觉（与 service-console 输入框同款描边）。 */
+.result-panel__annotation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.result-panel__annotation-input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  background: #fff;
+  color: #1d2129;
+  font-size: 14px;
+  line-height: 26px;
+  transition: border-color 0.2s;
+}
+
+.result-panel__annotation-input::placeholder {
+  color: #bfbfbf;
+}
+
+.result-panel__annotation-input:hover {
+  border-color: #4096ff;
+}
+
+.result-panel__annotation-input:focus {
+  border-color: #1677ff;
+  outline: none;
+}
+
+.result-panel__annotation-input:disabled {
+  background: #f5f5f5;
+  cursor: not-allowed;
+}
+
+.result-panel__annotation-save {
+  flex: 0 0 auto;
+  height: 28px;
+  padding-inline: 12px;
+  font-size: 14px;
+  line-height: 26px;
 }
 
 .result-panel__empty {

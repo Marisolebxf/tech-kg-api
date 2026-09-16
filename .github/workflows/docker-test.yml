@@ -2,9 +2,9 @@ name: Container Deployment and Integration Tests
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "kgetl"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "kgetl"]
 
 jobs:
   deploy:

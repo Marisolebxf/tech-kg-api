@@ -59,6 +59,7 @@ def extract_api(monkeypatch):
             yield session
 
     app.dependency_overrides[get_workflow_session] = override_session
+    app.dependency_overrides[require_platform_admin] = lambda: None
     monkeypatch.setattr("service.schema_management.get_schema_s3_storage", lambda: storage)
     monkeypatch.setenv("SCHEMA_AUTO_PROVENANCE", "false")
     monkeypatch.setenv("TRS_GRAPH_SPACE", "techkg")
@@ -98,7 +99,6 @@ def extract_api(monkeypatch):
     set_actor("admin-1", True)
     yield engine, set_actor, executions, storage
     app.dependency_overrides.pop(get_workflow_session, None)
-    app.dependency_overrides[require_platform_admin] = lambda: None
     app.dependency_overrides.pop(require_platform_actor, None)
     app.dependency_overrides.pop(require_platform_admin, None)
     engine.dispose()

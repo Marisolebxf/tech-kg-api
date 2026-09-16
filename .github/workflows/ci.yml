@@ -10,11 +10,31 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci_test_password
+          MYSQL_ROOT_HOST: "%"
+          MYSQL_DATABASE: techkg_control_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_test_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
     defaults:
       run:
         working-directory: backend
 
     env:
+      WORKFLOW_MYSQL_HOST: 127.0.0.1
+      WORKFLOW_MYSQL_PORT: "3306"
+      WORKFLOW_MYSQL_DATABASE: techkg_control_ci
+      WORKFLOW_MYSQL_USERNAME: root
+      WORKFLOW_MYSQL_PASSWORD: ci_test_password
       GRAPH_DB_BACKEND: trsgraph
       TRSGRAPH_HOST: 127.0.0.1
       TRSGRAPH_PORT: 9669

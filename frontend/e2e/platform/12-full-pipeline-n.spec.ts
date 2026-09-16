@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { api, apiMust, autoAcceptConfirms, graphWrite, mysql, runId, waitFor } from './helpers'
+import { api, apiMust, autoAcceptConfirms, graphWrite, mysql, runId, switchGraphSpace, waitFor } from './helpers'
 
 const execFileAsync = promisify(execFile)
 
@@ -175,20 +175,15 @@ test.describe.serial('N. 一对一脚本全量管道', () => {
     // UI 表单建 1 个实体（Paper）：新空间全流程（幂等：已存在则跳过 UI 建）
     await page.goto('/schema')
     await page.waitForLoadState('networkidle')
-    await page.locator('.space-picker .arco-select-view-single').click()
-    await page.locator('li.arco-select-option:visible', { hasText: SPACE }).first().click()
-    await waitFor(
-      async () => (await page.getByText(`图空间：${SPACE}`).first().isVisible().catch(() => false)),
-      { label: '空间切换生效' },
-    )
+    // 空间经顶栏全局选择器切换（页面/弹窗内均无空间控件），提交固定落当前全局空间
+    await switchGraphSpace(page, SPACE)
+    await expect(page.locator('.app-space-select .arco-select-view-value')).toHaveText(SPACE)
     await page.waitForTimeout(800)
     let uiPaper = await apiMust<any>(request, 'GET', `/schema-management/schemas?graphSpace=${SPACE}&keyword=Paper`, undefined, '查 Paper')
     if (!(uiPaper.items ?? []).length) {
       await page.getByRole('button', { name: '＋ 增加' }).click()
       const modal = page.locator('.schema-create-modal')
       await expect(modal).toBeVisible()
-      const spaceVal = await modal.locator('.create-field', { hasText: '图空间' }).locator('.arco-select-view-value').first().innerText()
-      expect(spaceVal).toContain(SPACE)
       await modal.locator('input[placeholder="Gadget"]').fill('Paper')
       await modal.locator('input[placeholder="如：技术"]').fill('论文')
       await modal.getByRole('button', { name: '预览并创建' }).click()

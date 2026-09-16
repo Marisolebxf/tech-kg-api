@@ -24,15 +24,6 @@ import {
   type MysqlDatasource,
 } from '../../api/mysqlDatasource'
 import {
-  createMilvusConfig,
-  deleteMilvusConfig,
-  listMilvusConfigs,
-  setDefaultMilvusConfig,
-  testMilvusConfig,
-  updateMilvusConfig,
-  type MilvusConfig,
-} from '../../api/milvusConfig'
-import {
   createEmbeddingConfig,
   deleteEmbeddingConfig,
   listEmbeddingConfigs,
@@ -53,7 +44,7 @@ import { currentUserIsAdmin } from '../../api/currentUser'
 import { useToast } from '../../composables/use-toast'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 
-type ConfigKind = 'llm' | 'embedding' | 'mysql' | 'milvus'
+type ConfigKind = 'llm' | 'embedding' | 'mysql'
 type ConfigStatus = '正常' | '停用' | '异常'
 
 type ConfigItem = {
@@ -84,12 +75,6 @@ type ConfigItem = {
   password?: string
   hasPassword?: boolean
   passwordMasked?: string
-  // milvus
-  uri?: string
-  defaultDb?: string
-  token?: string
-  hasToken?: boolean
-  tokenMasked?: string
 }
 
 const { showToast } = useToast()
@@ -98,7 +83,6 @@ const categories = [
   { key: '语言模型', label: '语言模型', icon: 'AI', hint: 'LLM 语言模型配置' },
   { key: '向量模型', label: '向量模型', icon: 'EM', hint: 'embedding 向量模型配置' },
   { key: 'MySQL 数据源', label: 'MySQL 数据源', icon: 'MY', hint: 'MySQL 关系库连接' },
-  { key: '向量数据空间', label: '向量数据空间', icon: 'ML', hint: 'Milvus 向量数据库' },
   { key: '图数据空间', label: '图数据空间', icon: 'GS', hint: '我的图空间绑定' },
 ]
 
@@ -133,9 +117,6 @@ type ConfigForm = {
   defaultDatabase?: string
   username?: string
   password?: string
-  uri?: string
-  token?: string
-  defaultDb?: string
   isDefault?: boolean
 }
 
@@ -174,8 +155,6 @@ const formKind = computed<ConfigKind | null>(() => {
       return 'embedding'
     case 'MySQL 数据源':
       return 'mysql'
-    case '向量数据空间':
-      return 'milvus'
     default:
       return null
   }
@@ -184,7 +163,7 @@ const formKind = computed<ConfigKind | null>(() => {
 const visibleItems = computed(() => items.value.filter((item) => {
   const matchCategory = item.category === activeCategory.value
   const query = keyword.value.trim().toLowerCase()
-  const endpointOrUrl = item.baseUrl || item.host || item.uri || item.endpoint
+  const endpointOrUrl = item.baseUrl || item.host || item.endpoint
   const matchKeyword = !query || `${item.name}${item.id}${item.type}${endpointOrUrl}${item.model || ''}`.toLowerCase().includes(query)
   const matchStatus = !statusFilter.value || statusFilter.value === '全部状态' || item.status === statusFilter.value
   return matchCategory && matchKeyword && matchStatus
@@ -203,7 +182,7 @@ const {
 watch([keyword, statusFilter, activeCategory], resetConfigPage)
 
 function defaultIcon(kind: ConfigKind) {
-  return kind === 'llm' ? 'AI' : kind === 'embedding' ? 'EM' : kind === 'mysql' ? 'MY' : 'ML'
+  return kind === 'llm' ? 'AI' : kind === 'embedding' ? 'EM' : 'MY'
 }
 
 function categoryCount(key: string) {
@@ -217,7 +196,7 @@ function buildUsage(kind: ConfigKind, isDefault: boolean): string {
   if (isDefault) {
     if (kind === 'llm') return '默认语言模型'
     if (kind === 'embedding') return '默认向量模型'
-    return kind === 'mysql' ? '默认 MySQL 数据源' : '默认向量库'
+    return '默认 MySQL 数据源'
   }
   return '尚未引用'
 }
@@ -228,7 +207,7 @@ function configStatus(status: string): ConfigStatus {
   return '异常'
 }
 
-function toConfigItem(kind: ConfigKind, cfg: LlmConfig | MysqlDatasource | MilvusConfig | EmbeddingConfig): ConfigItem {
+function toConfigItem(kind: ConfigKind, cfg: LlmConfig | MysqlDatasource | EmbeddingConfig): ConfigItem {
   const common = {
     id: cfg.id,
     kind,
@@ -252,8 +231,7 @@ function toConfigItem(kind: ConfigKind, cfg: LlmConfig | MysqlDatasource | Milvu
     const c = cfg as MysqlDatasource
     return { ...common, category: 'MySQL 数据源', type: 'MySQL 数据源', endpoint: `${c.host}:${c.port}`, host: c.host, port: c.port, defaultDatabase: c.defaultDatabase, username: c.username, hasPassword: c.hasPassword, passwordMasked: c.passwordMasked }
   }
-  const c = cfg as MilvusConfig
-  return { ...common, category: '向量数据空间', type: 'Milvus 向量库', endpoint: c.uri || '(env)', uri: c.uri, defaultDb: c.defaultDb, hasToken: c.hasToken, tokenMasked: c.tokenMasked }
+  throw new Error(`未知配置类型：${kind}`)
 }
 
 async function loadByCategory(key: string) {
@@ -270,8 +248,6 @@ async function loadByCategory(key: string) {
       loaded = (await listEmbeddingConfigs(currentUserId())).map((c) => toConfigItem('embedding', c))
     } else if (key === 'MySQL 数据源') {
       loaded = (await listMysqlDatasources(currentUserId())).map((c) => toConfigItem('mysql', c))
-    } else if (key === '向量数据空间') {
-      loaded = (await listMilvusConfigs(currentUserId())).map((c) => toConfigItem('milvus', c))
     }
   } catch (err) {
     showToast(`加载配置失败：${(err as Error).message}`, 'warning')
@@ -353,7 +329,7 @@ function emptyForm(kind: ConfigKind): ConfigForm {
   if (kind === 'mysql') {
     return { name: '', host: '127.0.0.1', port: 3306, defaultDatabase: '', username: 'root', password: '', owner: '平台运维组', description: '', isDefault: false }
   }
-  return { name: '', uri: '', token: '', defaultDb: 'default', owner: '平台运维组', description: '', isDefault: false }
+  return { name: '', description: '', isDefault: false }
 }
 
 function openCreate() {
@@ -437,16 +413,6 @@ async function saveConfig() {
         description: String(form.value.description || '').trim(),
         isDefault: Boolean(form.value.isDefault),
       }, currentUserId())
-    } else {
-      await createMilvusConfig({
-        name: String(form.value.name).trim(),
-        uri: String(form.value.uri || '').trim(),
-        token: String(form.value.token || ''),
-        defaultDb: String(form.value.defaultDb || 'default').trim(),
-        owner: String(form.value.owner || '').trim(),
-        description: String(form.value.description || '').trim(),
-        isDefault: Boolean(form.value.isDefault),
-      }, currentUserId())
     }
     dialogOpen.value = false
     showToast(`“${String(form.value.name)}”已保存。`, 'success')
@@ -484,12 +450,6 @@ async function saveDetail() {
         password: item.password || '', owner: item.owner, status: item.status,
       }, currentUserId())
       selected.value = { ...selected.value, ...toConfigItem('mysql', updated), password: '' }
-    } else {
-      const updated = await updateMilvusConfig(item.id, {
-        name: item.name, description: item.description, uri: item.uri || '', token: item.token || '',
-        defaultDb: item.defaultDb || 'default', owner: item.owner, status: item.status,
-      }, currentUserId())
-      selected.value = { ...selected.value, ...toConfigItem('milvus', updated), token: '' }
     }
     await loadByCategory(activeCategory.value)
     showToast(`“${item.name}”的修改已保存。`, 'success')
@@ -508,10 +468,8 @@ async function testConnection(item: ConfigItem) {
       result = await testLlmConfig(item.id, currentUserId())
     } else if (item.kind === 'embedding') {
       result = await testEmbeddingConfig(item.id, currentUserId())
-    } else if (item.kind === 'mysql') {
-      result = await testMysqlDatasource(item.id, currentUserId())
     } else {
-      result = await testMilvusConfig(item.id, currentUserId())
+      result = await testMysqlDatasource(item.id, currentUserId())
     }
     if (result.ok) {
       item.status = '正常'
@@ -536,8 +494,6 @@ async function toggleItem(item: ConfigItem) {
       Object.assign(item, toConfigItem('embedding', await updateEmbeddingConfig(item.id, { status: nextStatus }, currentUserId())))
     } else if (item.kind === 'mysql') {
       Object.assign(item, toConfigItem('mysql', await updateMysqlDatasource(item.id, { status: nextStatus }, currentUserId())))
-    } else {
-      Object.assign(item, toConfigItem('milvus', await updateMilvusConfig(item.id, { status: nextStatus }, currentUserId())))
     }
     showToast(`${item.name}已${nextStatus === '停用' ? '停用' : '启用'}。`, 'info')
     await loadByCategory(activeCategory.value)
@@ -554,8 +510,6 @@ async function setAsDefault(item: ConfigItem) {
       await setDefaultEmbeddingConfig(item.id, currentUserId())
     } else if (item.kind === 'mysql') {
       await setDefaultMysqlDatasource(item.id, currentUserId())
-    } else {
-      await setDefaultMilvusConfig(item.id, currentUserId())
     }
     showToast(`“${item.name}”已设为默认。`, 'success')
     await loadByCategory(activeCategory.value)
@@ -575,8 +529,6 @@ async function removeConfig(item: ConfigItem) {
       await deleteEmbeddingConfig(item.id, currentUserId())
     } else if (item.kind === 'mysql') {
       await deleteMysqlDatasource(item.id, currentUserId())
-    } else {
-      await deleteMilvusConfig(item.id, currentUserId())
     }
     showToast(`“${item.name}”已删除。`, 'success')
     selected.value = null
@@ -586,13 +538,12 @@ async function removeConfig(item: ConfigItem) {
   }
 }
 
-/** 首屏并行加载全部四类，让分类计数固定展示（loadByCategory 是替换式合并，并发会互相覆盖）。 */
+/** 首屏并行加载全部三类，让分类计数固定展示（loadByCategory 是替换式合并，并发会互相覆盖）。 */
 async function loadAllCategories() {
-  const [llm, embedding, mysql, milvus] = await Promise.allSettled([
+  const [llm, embedding, mysql] = await Promise.allSettled([
     listLlmConfigs(currentUserId()),
     listEmbeddingConfigs(currentUserId()),
     listMysqlDatasources(currentUserId()),
-    listMilvusConfigs(currentUserId()),
   ])
   const loaded: ConfigItem[] = []
   const failed: string[] = []
@@ -602,8 +553,6 @@ async function loadAllCategories() {
   else failed.push('向量模型')
   if (mysql.status === 'fulfilled') loaded.push(...mysql.value.map((c) => toConfigItem('mysql', c)))
   else failed.push('MySQL 数据源')
-  if (milvus.status === 'fulfilled') loaded.push(...milvus.value.map((c) => toConfigItem('milvus', c)))
-  else failed.push('向量数据空间')
   if (failed.length) showToast(`加载${[...new Set(failed)].join('、')}配置失败`, 'warning')
   items.value = loaded
 }
@@ -646,7 +595,7 @@ onMounted(() => {
             <tbody>
               <tr v-for="item in pagedItems" :key="item.id" @click="selected=item">
                 <td><div class="config-name"><i>{{ defaultIcon(item.kind) }}</i><span><strong>{{ item.name }}<b v-if="item.isDefault" class="default-tag">默认</b></strong><small>{{ item.id }} · {{ item.description }}</small></span></div></td>
-                <td><strong class="type-name">{{ item.type }}<template v-if="item.model"> · {{ item.model }}</template></strong><code>{{ item.baseUrl || item.host && `${item.host}:${item.port}` || item.uri || item.endpoint }}</code></td>
+                <td><strong class="type-name">{{ item.type }}<template v-if="item.model"> · {{ item.model }}</template></strong><code>{{ item.baseUrl || item.host && `${item.host}:${item.port}` || item.endpoint }}</code></td>
                 <td class="config-status-col"><span class="status" :class="`is-${item.status}`"><i />{{ item.status }}</span></td>
                 <td class="config-usage-col">{{ item.usage }}</td>
                 <td class="config-time-col"><span>{{ item.owner }}</span><small class="updated">{{ item.updatedAt }}</small></td>
@@ -689,7 +638,7 @@ onMounted(() => {
             <a-form-item label="访问凭据"><input aria-label="input-field" :value="selected.apiKeyMasked || (selected.hasApiKey ? '••••••••' : '未设置')" readonly /></a-form-item>
             <a-form-item class="wide" label="更新 API Key（留空保留原值）"><input aria-label="输入新 Key 覆盖原值" v-model="selected.apiKey" type="password" placeholder="输入新 Key 覆盖原值" /></a-form-item>
           </template>
-          <template v-else-if="selected.kind === 'mysql'">
+          <template v-else>
             <a-form-item field="host" label="主机" required><input aria-label="host" v-model="selected.host" /></a-form-item>
             <a-form-item label="端口"><input aria-label="number-input" v-model.number="selected.port" type="number" /></a-form-item>
             <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="selected.defaultDatabase" /></a-form-item>
@@ -697,15 +646,9 @@ onMounted(() => {
             <a-form-item label="访问凭据"><input aria-label="input-field" :value="selected.passwordMasked || (selected.hasPassword ? '••••••••' : '未设置')" readonly /></a-form-item>
             <a-form-item class="wide" label="更新密码（留空保留原值）"><input aria-label="输入新密码覆盖原值" v-model="selected.password" type="password" placeholder="输入新密码覆盖原值" /></a-form-item>
           </template>
-          <template v-else>
-            <a-form-item class="wide" label="URI"><input aria-label="留空回退 env MILVUS_*" v-model="selected.uri" placeholder="留空回退 env MILVUS_*" /></a-form-item>
-            <a-form-item label="默认库"><input aria-label="defaultDb" v-model="selected.defaultDb" /></a-form-item>
-            <a-form-item label="访问凭据"><input aria-label="input-field" :value="selected.tokenMasked || (selected.hasToken ? '••••••••' : '未设置')" readonly /></a-form-item>
-            <a-form-item class="wide" label="更新 Token（留空保留原值）"><input aria-label="输入新 Token 覆盖原值" v-model="selected.token" type="password" placeholder="输入新 Token 覆盖原值" /></a-form-item>
-          </template>
           <a-form-item class="wide" label="配置说明"><a-textarea v-model="selected.description" /></a-form-item>
         </a-form>
-        <section class="reference-card"><header><strong>引用关系</strong><span>{{ selected.usage }}</span></header><p>配置变更将在下次脚本调用时生效（context 按触发时所选数据源 / 图空间 / Milvus / LLM / embedding 注入）。</p></section>
+        <section class="reference-card"><header><strong>引用关系</strong><span>{{ selected.usage }}</span></header><p>配置变更将在下次脚本调用时生效（context 按触发时所选数据源 / 图空间 / LLM / embedding 注入；向量库随图空间自动同名创建）。</p></section>
       </div>
       <footer>
         <button v-if="!selected.isDefault" type="button" @click="setAsDefault(selected)">设为默认</button>
@@ -739,19 +682,13 @@ onMounted(() => {
           <a-form-item v-if="formKind === 'embedding'" field="dimensions" label="维度"><input aria-label="number-input" v-model.number="form.dimensions" type="number" /></a-form-item>
           <a-form-item class="wide" field="apiKey" label="API Key" required><input aria-label="必填；验证通过后才能保存，明文入库脱敏展示" v-model="form.apiKey" type="password" placeholder="必填；验证通过后才能保存，明文入库脱敏展示" /></a-form-item>
         </template>
-        <template v-else-if="formKind === 'mysql'">
+        <template v-else>
           <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="name" v-model="form.name" /></a-form-item>
           <a-form-item field="host" label="主机" required><input aria-label="host" v-model="form.host" /></a-form-item>
           <a-form-item label="端口"><input aria-label="number-input" v-model.number="form.port" type="number" /></a-form-item>
           <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="form.defaultDatabase" /></a-form-item>
           <a-form-item field="username" label="用户名" required><input aria-label="username" v-model="form.username" /></a-form-item>
           <a-form-item class="wide" label="密码"><input aria-label="password" v-model="form.password" type="password" /></a-form-item>
-        </template>
-        <template v-else-if="formKind === 'milvus'">
-          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="name" v-model="form.name" /></a-form-item>
-          <a-form-item class="wide" label="URI"><input aria-label="留空回退 env MILVUS_*" v-model="form.uri" placeholder="留空回退 env MILVUS_*" /></a-form-item>
-          <a-form-item label="默认库"><input aria-label="defaultDb" v-model="form.defaultDb" /></a-form-item>
-          <a-form-item class="wide" label="Token"><input aria-label="token" v-model="form.token" type="password" /></a-form-item>
         </template>
         <a-form-item class="wide" label="说明"><a-textarea v-model="form.description" :max-length="200" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" /></a-form-item>
         <a-form-item class="wide" field="isDefault"><a-checkbox v-model="form.isDefault" class="default-config-checkbox">设为默认（同一类别仅一条默认生效）</a-checkbox></a-form-item>

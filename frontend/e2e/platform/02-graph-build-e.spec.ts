@@ -6,6 +6,7 @@ import {
   graphCount,
   mysql,
   runId,
+  switchGraphSpace,
   waitFor,
 } from './helpers'
 
@@ -95,15 +96,14 @@ test.describe.serial('E. 任务中心', () => {
 
     await page.goto('/graph-build')
     await page.waitForLoadState('networkidle')
+    // 弹窗内已无图空间选择：可抽取 Schema 按全局选择器当前空间拉取
+    await switchGraphSpace(page, 'dev2')
     await page.getByRole('button', { name: '＋ 新建任务' }).click()
     const dialog = page.locator('[class*="job-launch"], .arco-modal, [class*="modal"]').filter({ hasText: '新建任务' }).first()
     await expect(dialog).toBeVisible()
 
     await dialog.locator('input[placeholder="如：论文-专家抽取"]').fill(jobName)
     // 任务类型已是静态「数据抽取」（D2/D4 下线其余通道后弹窗只建抽取任务），无需选择
-    // 先选图空间再选 Schema（M4 联动：换空间会清空已选 schemaId 并按空间重查）
-    await dialog.locator('.arco-select-view-single:has(input[placeholder="默认空间"])').click()
-    await page.locator('li.arco-select-option:visible', { hasText: 'dev2' }).first().click()
     await dialog.locator('input[placeholder="选择要抽取的实体/关系"]').click()
     const widgetOpt = page.locator('li.arco-select-option:visible', { hasText: 'E2EWidget' }).first()
     await waitFor(async () => (await widgetOpt.isVisible().catch(() => false)), { label: 'E2EWidget 选项出现' })

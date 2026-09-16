@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from biz.dependencies.auth import require_platform_actor
+from biz.dependencies.auth import require_platform_actor, require_platform_admin
 from infra.s3 import StoredObject
 from infra.workflow_mysql import get_workflow_session
 from main import app
@@ -77,7 +77,9 @@ def property_api(monkeypatch):
     set_actor("admin-1", True)
     yield engine, set_actor
     app.dependency_overrides.pop(get_workflow_session, None)
+    app.dependency_overrides[require_platform_admin] = lambda: None
     app.dependency_overrides.pop(require_platform_actor, None)
+    app.dependency_overrides.pop(require_platform_admin, None)
     engine.dispose()
 
 

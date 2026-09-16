@@ -2,9 +2,9 @@ name: Code Quality and Unit Tests
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "kgetl"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "kgetl"]
 
 jobs:
   build:

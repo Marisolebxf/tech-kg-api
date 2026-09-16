@@ -6,6 +6,7 @@ import type { EmbeddingConfig } from '../api/embeddingConfig'
 import type { MysqlDatasource } from '../api/mysqlDatasource'
 import { listAllSchemas, type SchemaDefinition } from '../api/schemaManagement'
 import { currentUserId as getCurrentUserId } from '../api/currentUser'
+import { currentGraphSpace } from '../api/currentGraphSpace'
 import { useToast } from '../composables/use-toast'
 import { buildScheduleCron, describeCron, type ScheduleFrequency } from '../utils/cronSchedule'
 import {
@@ -20,7 +21,6 @@ const props = defineProps<{
   llmConfigs: LlmConfig[]
   embeddingConfigs: EmbeddingConfig[]
   mysqlDatasources: MysqlDatasource[]
-  graphSpaces: string[]
 }>()
 
 const emit = defineEmits<{
@@ -39,7 +39,8 @@ const extractBatchSize = ref<number | null>(null)
 const extractSchemas = ref<SchemaDefinition[]>([])
 const schemasLoading = ref(false)
 
-const graphSpace = ref('')
+// 图空间跟随右上角全局选择器（弹窗内不再单独选择）
+const graphSpace = computed(() => currentGraphSpace())
 const llmConfigId = ref('')
 const embeddingConfigId = ref('')
 const mysqlDatasourceId = ref('')
@@ -91,7 +92,6 @@ function reset() {
   extractSchemaId.value = ''
   extractBatchSize.value = null
   runNow.value = true
-  graphSpace.value = ''
   llmConfigId.value = ''
   embeddingConfigId.value = ''
   mysqlDatasourceId.value = ''
@@ -191,12 +191,6 @@ async function submit() {
 
         <div class="job-field-group">
           <div class="job-row">
-            <div class="job-field">
-              <span>图空间</span>
-              <a-select v-model="graphSpace" class="job-select" placeholder="默认空间" allow-clear>
-                <a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option>
-              </a-select>
-            </div>
             <div class="job-field">
               <span>大模型配置</span>
               <a-select v-model="llmConfigId" class="job-select" placeholder="使用默认" allow-clear>

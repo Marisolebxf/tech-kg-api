@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import {
   computed,
-  onMounted,
   ref,
   watch,
 } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   getSubgraph,
-  listGraphSpaces,
   unwrapApiResponse,
   getGraphNode,
   searchGraphNodes,
@@ -18,7 +16,8 @@ import {
   type GraphNode,
 } from '../../api/graphSearch'
 import { runNgql, type GraphConsoleResult } from '../../api/graphConsole'
-import { graphSpace } from '../../config'
+import { currentGraphSpace } from '../../api/currentGraphSpace'
+import { useGraphSpaceStore } from '../../stores/graphSpace'
 import ListPagination from '../../components/list-pagination.vue'
 import { useClientPagination } from '../../composables/use-client-pagination'
 import { getErrorMessage } from '../../api/http'
@@ -286,12 +285,9 @@ const queryFormModel = computed(() => ({
   queryRelationFilter: queryRelationFilter.value,
   queryEntityConfidence: queryEntityConfidence.value,
   queryRelationConfidence: queryRelationConfidence.value,
-  // 图空间规则校验读 model.selectedGraphSpace，缺键时 required 永假 → 查询全被拦（3f0ef4c 引入）
-  selectedGraphSpace: selectedGraphSpace.value,
 }))
 const queryFormRules = {
   queryKeyword: [{ required: true, message: '请输入实体名称或ID' }],
-  selectedGraphSpace: [{ required: true, message: '请选择图空间' }],
 }
 const queryApplied = ref(false)
 const queryLastTestTime = ref('—')
@@ -309,22 +305,17 @@ const selectedGraphEdgeId = ref<string | null>(null)
 const queryDetailMode = ref<'summary' | 'entity' | 'relation' | 'provenance'>('summary')
 
 /**
- * 实际请求使用的 TRSGraph 图空间。
+ * 实际请求使用的 TRSGraph 图空间：跟随右上角全局图空间选择器。
  *
  * 页面原来的“图谱范围”继续表示业务子图类型，
  * 不改变负责人要求保留的页面结构和样式。
  */
-const defaultGraphSpace = graphSpace?.trim() || 'test'
-
-const selectedGraphSpace = ref(defaultGraphSpace)
-
-/** 查询页图空间选项（后端按用户隔离：普通用户仅返回绑定空间）。 */
-const graphSpaceOptions = ref<string[]>([])
+const graphSpaceStore = useGraphSpaceStore()
+const selectedGraphSpace = computed(() => currentGraphSpace())
 
 /** 查询模式：参数查询 | nGQL 直查。 */
 const queryMode = ref<'params' | 'ngql'>('params')
 const ngqlStatement = ref('')
-const ngqlSpace = ref(defaultGraphSpace)
 const ngqlLoading = ref(false)
 const ngqlResult = ref<GraphConsoleResult | null>(null)
 // nGQL 结果客户端分页：后端不限制返回行数，大结果集翻页展示（表头徽标仍显示总行数）
@@ -4411,20 +4402,15 @@ async function handleNgqlQuery(): Promise<void> {
     return
   }
 
-  // 图空间必选：清空后不允许执行（后端按 X-Graph-Space 路由）
-  if (!ngqlSpace.value) {
-    showToast('请选择图空间', 'warning')
-    return
-  }
-
   ngqlLoading.value = true
   ngqlResult.value = null
   resetNgqlPage()
 
   try {
+    // 图空间跟随右上角全局选择器（后端按 X-Graph-Space 路由）
     ngqlResult.value =
       await runNgql(
-        ngqlSpace.value,
+        currentGraphSpace(),
         statement,
       )
   } catch (error) {
@@ -4437,42 +4423,21 @@ async function handleNgqlQuery(): Promise<void> {
   }
 }
 
-async function initializeGraphSpace(): Promise<void> {
-  try {
-    const response =
-      await listGraphSpaces()
-
-    const data =
-      unwrapHttpApiResponse(
-        response,
-      )
-
-    graphSpaceOptions.value = data.spaces
-
-    if (
-      data.spaces.includes(defaultGraphSpace)
-    ) {
-      selectedGraphSpace.value =
-        defaultGraphSpace
-      ngqlSpace.value =
-        defaultGraphSpace
-
-      return
-    }
-
-    const fallback =
-      data.spaces.includes('dev')
-        ? 'dev'
-        : data.spaces[0]
-          ?? defaultGraphSpace
-    selectedGraphSpace.value = fallback
-    ngqlSpace.value = fallback
-  } catch {
-    // 空间列表加载失败时继续使用构建环境指定的默认图空间。
-    selectedGraphSpace.value =
-      defaultGraphSpace
-  }
-}
+// 全局图空间切换：清空既有查询结果，防止跨空间陈旧数据继续展示
+watch(
+  () => graphSpaceStore.current,
+  () => {
+    queryApplied.value = false
+    appliedGraphQuery.value = null
+    isLiveGraphResult.value = false
+    queryGraphNodes.value = []
+    queryGraphEdges.value = []
+    selectedGraphNodeId.value = null
+    selectedGraphEdgeId.value = null
+    queryDetailMode.value = 'summary'
+    ngqlResult.value = null
+  },
+)
 
 async function loadPlatformOverview(): Promise<void> {
   try {
@@ -4507,14 +4472,6 @@ watch(activeTab, (tab) => {
   }
 }, { immediate: true })
 
-onMounted(async () => {
-  /*
-   * 图空间为查询页所需，挂载即加载；
-   * 图谱查询仅在用户点击「查询图谱」按钮或回车时执行，不在挂载时自动触发。
-   */
-  await initializeGraphSpace()
-})
-
 async function handleQuery(): Promise<void> {
   const validationErrors = await queryFormRef.value?.validate()
   if (validationErrors) return
@@ -4527,12 +4484,6 @@ async function handleQuery(): Promise<void> {
       'info',
     )
 
-    return
-  }
-
-  // 图空间必选：清空后不允许发起查询（后端按 X-Graph-Space 路由）
-  if (!selectedGraphSpace.value) {
-    showToast('请选择图空间', 'warning')
     return
   }
 
@@ -5017,12 +4968,6 @@ const pageMeta = computed(() => {
             }}
           </button>
           <div v-else class="platform-ngql-header-actions">
-            <div class="platform-ngql-input__space-field">
-              <label>图空间</label>
-              <a-select v-model="ngqlSpace" class="platform-ngql-input__space" :scrollbar="false">
-                <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
-              </a-select>
-            </div>
             <button
               class="kg-button"
               type="button"
@@ -5061,11 +5006,6 @@ const pageMeta = computed(() => {
           <a-form-item class="platform-form-field" field="queryRelationConfidence" label="关系置信度">
             <a-select v-model="queryRelationConfidence" allow-clear placeholder="不限">
               <a-option v-for="item in confidenceOptions" :key="`relation-${item}`" :value="item">{{ item }}</a-option>
-            </a-select>
-          </a-form-item>
-          <a-form-item class="platform-form-field" field="selectedGraphSpace" label="图空间" required>
-            <a-select v-model="selectedGraphSpace" allow-clear placeholder="请选择图空间" :scrollbar="false">
-              <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
             </a-select>
           </a-form-item>
         </a-form>
@@ -8580,15 +8520,6 @@ print(response.json())</pre>
 .platform-query-mode-toggle__item:hover:not(.is-active){background:#fff;color:#004ecc}
 .platform-ngql-input{display:grid;gap:16px;padding:16px 0}
 .platform-ngql-header-actions{display:flex;align-items:center;gap:16px;flex:0 0 auto}
-.platform-ngql-input__space-field{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;white-space:nowrap}.platform-ngql-input__space-field>label{flex:0 0 auto}
-.platform-ngql-input__space-field :deep(.arco-select){width:180px;min-width:180px;max-width:180px;flex:0 0 180px}
-.platform-ngql-input__space-field :deep(.arco-select-view){display:inline-flex;box-sizing:border-box;width:180px;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;align-items:center}
-.platform-ngql-input__space-field :deep(.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
-.platform-ngql-input__space-field :deep(.arco-select-view:focus-within),.platform-ngql-input__space-field :deep(.arco-select-view-focus){border-color:#004ecc!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.platform-ngql-input__space :deep(.arco-select-view-input){box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-.platform-ngql-input__space :deep(.arco-select-view-input:focus),.platform-ngql-input__space :deep(.arco-select-view-input:focus-visible){border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
-.platform-ngql-input__space :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
-.platform-ngql-input__space :deep(.arco-select-view-value){min-width:0;overflow:hidden;color:#1d2129;font-size:14px;line-height:30px;text-overflow:ellipsis;white-space:nowrap}
 .platform-ngql-input__textarea{box-sizing:border-box;width:100%;padding:10px 12px;border:1px solid #e5e6eb;border-radius:4px;background:#0d1117;color:#e6edf3;font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical;outline:0}
 .platform-ngql-input__textarea:focus{border-color:#004ecc;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
 .platform-ngql-result{overflow:hidden}
@@ -8614,7 +8545,4 @@ print(response.json())</pre>
 </style>
 <style>
 /* The SelectView owns the only visible shell; its readonly input must never paint over the selected value. */
-.app-workspace .platform-query .platform-ngql-input__space input.arco-select-view-input{box-sizing:border-box;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
-.app-workspace .platform-query .platform-ngql-input__space input.arco-select-view-input:focus,.app-workspace .platform-query .platform-ngql-input__space input.arco-select-view-input:focus-visible{border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
-.app-workspace .platform-query .platform-ngql-input__space input.arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
 </style>

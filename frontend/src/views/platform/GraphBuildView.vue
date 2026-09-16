@@ -16,7 +16,6 @@ import { schemaErrorMessage } from '../../api/schemaManagement'
 import { listLlmConfigs, type LlmConfig } from '../../api/llmConfig'
 import { listEmbeddingConfigs, type EmbeddingConfig } from '../../api/embeddingConfig'
 import { listMysqlDatasources, type MysqlDatasource } from '../../api/mysqlDatasource'
-import { listGraphSpaces } from '../../api/graphSpace'
 import { currentUserId as getCurrentUserId } from '../../api/currentUser'
 import JobLaunchDialog from '../../components/JobLaunchDialog.vue'
 import ListPagination from '../../components/list-pagination.vue'
@@ -33,7 +32,6 @@ const jobs = ref<WorkflowJob[]>([])
 const llmConfigs = ref<LlmConfig[]>([])
 const embeddingConfigs = ref<EmbeddingConfig[]>([])
 const mysqlDatasources = ref<MysqlDatasource[]>([])
-const graphSpaces = ref<string[]>([])
 const loading = ref(false)
 const createOpen = ref(false)
 const triggeringJobId = ref('')
@@ -96,16 +94,14 @@ async function loadData() {
 
 async function loadDialogResources() {
   try {
-    const [llm, embedding, mysql, spaces] = await Promise.all([
+    const [llm, embedding, mysql] = await Promise.all([
       listLlmConfigs(currentUserId),
       listEmbeddingConfigs(currentUserId),
       listMysqlDatasources(currentUserId),
-      listGraphSpaces(currentUserId),
     ])
     llmConfigs.value = llm
     embeddingConfigs.value = embedding
     mysqlDatasources.value = mysql
-    graphSpaces.value = spaces
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
   }
@@ -282,7 +278,6 @@ onMounted(loadData)
       :llm-configs="llmConfigs"
       :embedding-configs="embeddingConfigs"
       :mysql-datasources="mysqlDatasources"
-      :graph-spaces="graphSpaces"
       @close="createOpen = false"
       @created="loadData"
     />

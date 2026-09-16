@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 import hljs from 'highlight.js/lib/core'
 import python from 'highlight.js/lib/languages/python'
@@ -30,8 +30,8 @@ import {
   type SchemaScript,
 } from '../../api/schemaManagement'
 import { currentUserId as getCurrentUserId } from '../../api/currentUser'
-import { graphSpace } from '../../config'
-import { listGraphSpaces } from '../../api/graphSpace'
+import { currentGraphSpace } from '../../api/currentGraphSpace'
+import { useGraphSpaceStore } from '../../stores/graphSpace'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import {
   PROP_NAME_RULE,
@@ -67,7 +67,6 @@ type Entity = { id: string; name: string; label: string; level: '核心实体' |
 type Relation = { id: string; name: string; label: string; source: string; target: string; basis: string; schema: SchemaDefinition }
 
 type CreateForm = {
-  graphSpace: string
   name: string
   label: string
   description: string
@@ -80,9 +79,9 @@ type CreateForm = {
 const currentUserId = getCurrentUserId()
 
 const activeTab = ref('标准实体')
-// Schema 管理按图空间维度隔离：列表/拓扑/新建都以当前空间为准
-const graphSpaces = ref<string[]>([])
-const activeSpace = ref('')
+// Schema 管理按图空间维度隔离：列表/拓扑/新建统一跟随右上角全局图空间选择器
+const graphSpaceStore = useGraphSpaceStore()
+const activeSpace = computed(() => currentGraphSpace())
 const keyword = ref('')
 // 版本记录（已隐藏）
 // const schemaVersionMessage = ref('')
@@ -559,7 +558,6 @@ const viewCodeRef = ref<HTMLElement | null>(null)
 
 function emptyCreateForm(): CreateForm {
   return {
-    graphSpace: activeSpace.value,
     name: '',
     label: '',
     description: '',
@@ -750,32 +748,16 @@ function onKeywordInput() {
   }, 300)
 }
 
-async function loadSpaces() {
-  try {
-    graphSpaces.value = await listGraphSpaces(currentUserId)
-  } catch {
-    graphSpaces.value = []
-  }
-  if (!activeSpace.value && graphSpaces.value.length) {
-    // 构建期注入的 VITE_GRAPH_SPACE 优先（与部署环境默认空间一致），不在列表再回退首个
-    const preferred = graphSpace
-    activeSpace.value =
-      preferred && graphSpaces.value.includes(preferred) ? preferred : graphSpaces.value[0]
-  }
-}
-
-async function switchSpace(value: string | number | boolean | Record<string, unknown> | unknown[]) {
-  const space = String(value ?? '')
-  if (space === activeSpace.value) return
-  // 清空（未选择）= 不按空间过滤，列出所有可见空间的 Schema
-  activeSpace.value = space
-  resetPages()
-  try {
-    await Promise.all([loadSchemas(), loadTopology()])
-  } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
-  }
-}
+// 全局图空间切换：重置页码后按新空间重载列表与拓扑
+watch(
+  () => graphSpaceStore.current,
+  () => {
+    resetPages()
+    void Promise.all([loadSchemas(), loadTopology()]).catch((error: unknown) => {
+      showToast(schemaErrorMessage(error), 'warning')
+    })
+  },
+)
 
 function openCreate() {
   createForm.value = emptyCreateForm()
@@ -801,10 +783,6 @@ async function saveItem() {
     return
   }
   const f = createForm.value
-  if (!f.graphSpace) {
-    showToast('请选择图空间', 'warning')
-    return
-  }
   if (!f.name.trim()) {
     showToast(isRelationTab() ? '请填写关系英文名（UPPER_SNAKE_CASE）' : '请填写实体名（PascalCase）', 'warning')
     return
@@ -865,7 +843,7 @@ async function saveItem() {
         relationCategory: activeTab.value === '事实关系' ? 'fact' : 'inferred',
         properties,
         llmConfigId: null,
-        graphSpace: f.graphSpace,
+        graphSpace: activeSpace.value,
       }
       const result = await createRelationSchema(payload, currentUserId)
       toastCreateResult(result)
@@ -880,7 +858,7 @@ async function saveItem() {
         properties,
         isCore: false,
         llmConfigId: null,
-        graphSpace: f.graphSpace,
+        graphSpace: activeSpace.value,
       }
       const result = await createEntitySchema(payload, currentUserId)
       toastCreateResult(result)
@@ -1006,7 +984,6 @@ async function openViewModal(rowId: string, rowName: string) {
 
 onMounted(async () => {
   try {
-    await loadSpaces()
     await loadSchemas()
     await loadTopology()
   } catch (error) {
@@ -1065,22 +1042,6 @@ function togglePropertyDetail(schemaId: string): void {
           <button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="switchTab(tab)">{{ tab }}</button>
         </div>
         <div class="schema-toolbar__actions">
-          <div class="space-picker">
-            <span>图空间</span>
-            <a-select
-              id="schema-space-select"
-              :model-value="activeSpace || undefined"
-              class="schema-space-select"
-              allow-clear
-              placeholder="全部空间"
-              :scrollbar="false"
-              style="width: 170px"
-              @change="switchSpace"
-              @clear="switchSpace('')"
-            >
-              <a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option>
-            </a-select>
-          </div>
           <a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`" @input="onKeywordInput">
             <template #prefix><IconSearch /></template>
           </a-input>
@@ -1115,18 +1076,6 @@ function togglePropertyDetail(schemaId: string): void {
         <aside class="schema-modal__panel schema-create-panel">
           <header><h2>新增{{ activeTab }}</h2><button type="button" @click="modalOpen = false">×</button></header>
           <a-form ref="createFormRef" :model="createForm" :rules="createFormRules" class="schema-modal__body schema-create-body" layout="vertical">
-            <a-form-item class="create-field create-field--full" field="graphSpace" label="图空间" label-component="div" required>
-              <a-select
-                v-model="createForm.graphSpace"
-                class="schema-create-select"
-                placeholder="选择目标图空间"
-                popup-container=".schema-create-modal"
-                :scrollbar="false"
-              >
-                <a-option v-for="s in graphSpaces" :key="s" :value="s">{{ s }}</a-option>
-              </a-select>
-            </a-form-item>
-
             <div class="create-row">
               <a-form-item class="create-field" field="name" :label="isRelationTab() ? '关系英文名' : '实体名'" required>
                 <input aria-label="name" v-model="createForm.name" class="create-text-input" :maxlength="SCHEMA_ENTITY_NAME_RULE.max" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
@@ -1468,8 +1417,7 @@ function togglePropertyDetail(schemaId: string): void {
 .schema-version-table{max-height:470px}.schema-version-table td:nth-child(6){min-width:280px}.schema-version-actions{display:flex;gap:6px}.schema-version-actions button{padding:3px 7px;border:1px solid #bdd0ea;border-radius:4px;background:#fff;color:#165dff;font-size:9px;white-space:nowrap;cursor:pointer}.schema-version-actions button.danger{border-color:#f6b9b4;color:#b42318}
 
 .schema-toolbar__actions{display:flex;align-items:center;gap:10px}
-.schema-tabs>.schema-toolbar__actions{min-width:0;margin-left:auto}.schema-tabs .space-picker{flex:0 0 auto}
-.space-picker{display:flex;align-items:center;gap:8px;font-size:12px;color:#4e5969}
+.schema-tabs>.schema-toolbar__actions{min-width:0;margin-left:auto}
 .prop-len--invalid,.property-add-form__len--invalid{border-color:#e5484d!important;background:#fff3f3!important}
 .schema-toolbar .primary{height:32px;padding:0 14px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:13px;cursor:pointer}
 .schema-toolbar .primary:hover{background:#0e4ed8}
@@ -1706,8 +1654,7 @@ function togglePropertyDetail(schemaId: string): void {
 .schema-toolbar strong,.trace-card h2,.trace-layout h2,.property-section__head strong,.schema-modal__panel header h2{font-size:16px;line-height:24px;font-weight:600}
 .schema-tabs button,.schema-toolbar .primary,.schema-tabs .primary,.schema-action-link{font-size:14px;line-height:22px;font-weight:400}
 .schema-tabs button.active{font-weight:500}
-.space-picker,.space-picker>span{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
-.schema-space-select :deep(.arco-select-view-input),.schema-space-select :deep(.arco-select-view-value),.schema-search-input :deep(.arco-input),.schema-llm-select :deep(.arco-select-view-input),.schema-llm-select :deep(.arco-select-view-value){font-size:14px!important;line-height:22px!important;font-weight:400;letter-spacing:0}
+.schema-search-input :deep(.arco-input),.schema-llm-select :deep(.arco-select-view-input),.schema-llm-select :deep(.arco-select-view-value){font-size:14px!important;line-height:22px!important;font-weight:400;letter-spacing:0}
 .schema-table-wrap table,.trace-layout table,.schema-table-wrap td,.trace-layout td{font-size:14px;line-height:22px;font-weight:400}
 .schema-table-wrap th,.property-table__row--head{font-size:14px;line-height:22px;font-weight:500}
 .schema-table-wrap td b{font-weight:400}
@@ -1733,24 +1680,9 @@ function togglePropertyDetail(schemaId: string): void {
 .schema-tabs__items button:hover:not(.active){background:#fff;color:#165dff}
 .schema-tabs__items button:focus-visible{outline:2px solid rgba(22,93,255,.28);outline-offset:1px}
 
-/* 新增 Schema：图空间下拉框对齐“新建任务”的任务类型控件。 */
-:deep(.schema-create-select.arco-select-view){display:inline-flex;box-sizing:border-box;width:100%;min-width:0;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;align-items:center}
-:deep(.schema-create-select.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
-:deep(.schema-create-select.arco-select-view:focus-within),:deep(.schema-create-select.arco-select-view-focus){border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-:deep(.schema-create-select.arco-select-view .arco-select-view-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-:deep(.schema-create-select.arco-select-view .arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
-:deep(.schema-create-select.arco-select-view .arco-select-view-value),:deep(.schema-create-select.arco-select-view .arco-select-view-placeholder){min-width:0;overflow:hidden;background:transparent!important;font-size:14px;line-height:30px;text-overflow:ellipsis;white-space:nowrap}
-
 /* 新增 Schema：说明文本框对齐“新建配置”的说明控件。 */
 :deep(.schema-description-textarea.arco-textarea-wrapper){box-sizing:border-box;width:100%;height:auto;min-height:80px;max-height:none;border:1px solid #e5e6eb;border-radius:4px;background:#fff!important;box-shadow:none;transition:border-color .1s ease,box-shadow .1s ease}
 </style>
 <style>
 .app-workspace .schema-toolbar__actions .schema-search-input.arco-input-wrapper .arco-input{height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;outline:none!important}
-.app-workspace .schema-tabs #schema-space-select.schema-space-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
-.app-workspace .schema-tabs #schema-space-select.schema-space-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}
-.app-workspace .schema-tabs #schema-space-select.schema-space-select.arco-select-view:focus-within,.app-workspace .schema-tabs #schema-space-select.schema-space-select.arco-select-view-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.app-workspace .schema-tabs #schema-space-select input.arco-select-view-input{box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-.app-workspace .schema-tabs #schema-space-select .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}
-.app-workspace .schema-tabs #schema-space-select .arco-select-view-value{min-width:0;overflow:hidden;line-height:30px;text-overflow:ellipsis;white-space:nowrap}
-.app-workspace .schema-tabs #schema-space-select :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
 </style>

@@ -1,5 +1,5 @@
 # 使用 Python 3.11.13 slim 镜像
-FROM python:3.11.13-slim
+FROM python:3.11.13-slim AS runtime
 
 # 设置工作目录
 WORKDIR /app
@@ -26,10 +26,14 @@ RUN uv sync --frozen --no-dev \
 # （api / temporal-worker 不加载模型，仅多占约 100MB）。层放在 COPY 代码之前，
 # 代码变更重建时模型层直接命中缓存。构建机无法直连 HuggingFace 时
 # 用 --build-arg HF_ENDPOINT=https://hf-mirror.com（或反向改回官方）覆盖。
+ARG PRELOAD_EMBEDDING_MODEL=true
 ARG HF_ENDPOINT=https://hf-mirror.com
 ENV HF_HOME=/models/huggingface \
     HF_ENDPOINT=${HF_ENDPOINT}
-RUN .venv/bin/python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('moka-ai/m3e-small', device='cpu')" \
+RUN mkdir -p /models/huggingface \
+    && if [ "$PRELOAD_EMBEDDING_MODEL" = "true" ]; then \
+         .venv/bin/python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('moka-ai/m3e-small', device='cpu')"; \
+       fi \
     && chmod -R a+rX /models/huggingface
 
 # 仅复制运行所需代码，防止测试数据、凭据文件或构建上下文意外进入镜像。
@@ -61,3 +65,12 @@ EXPOSE 8000
 
 # 启动命令（直接用 venv 的 uvicorn，避免 uv run 在容器启动时重新同步依赖）
 CMD [".venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# CI image includes test dependencies and fixtures; production stays the default target.
+FROM runtime AS test
+USER root
+RUN uv sync --frozen --dev
+COPY tests ./tests
+USER app
+
+FROM runtime AS production

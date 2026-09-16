@@ -1024,8 +1024,8 @@ onMounted(async () => {
   }
 })
 
-// 列表属性 chip 展示（前 6 个 + 溢出展开明细）
-const PROPERTY_CHIP_LIMIT = 6
+// 列表属性 chip 展示（前 3 个 + 溢出 +N 展开全部明细）
+const PROPERTY_CHIP_LIMIT = 3
 const expandedPropertyRows = ref<Set<string>>(new Set())
 
 function propertyChips(schema: SchemaDefinition): string[] {

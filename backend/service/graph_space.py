@@ -2,6 +2,8 @@
 
 图空间本体在 NebulaGraph 侧；本 service 通过 trs-graph 的默认空间客户端执行 DDL。
 删除一律只解绑，绝不 DROP 空间。
+创建/绑定时同步在 Milvus 建同名 database 并登记映射（kg_graph_space_vector_db），
+向量侧失败只降级登记 failed，不影响图空间操作本身。
 """
 
 from __future__ import annotations
@@ -11,12 +13,14 @@ import os
 import re
 import time
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db_model.platform_governance import UserGraphSpace
+from db_model.platform_governance import GraphSpaceVectorDatabase, UserGraphSpace
 from infra.graph_db import TRSGraphClient, TRSGraphSettings, get_trs_graph_client
+from infra.milvus import get_milvus_client
 from service.platform_access import PlatformActor
 
 logger = logging.getLogger(__name__)
@@ -45,15 +49,27 @@ def default_graph_space() -> str:
 
 
 class GraphSpaceService:
-    def __init__(self, session: Session, client: TRSGraphClient | None = None) -> None:
+    def __init__(
+        self,
+        session: Session,
+        client: TRSGraphClient | None = None,
+        milvus_client: Any | None = None,
+    ) -> None:
         self._session = session
         self._client = client
+        self._milvus_client = milvus_client
 
     @property
     def client(self) -> TRSGraphClient:
         if self._client is None:
             self._client = get_trs_graph_client()
         return self._client
+
+    @property
+    def milvus_client(self) -> Any:
+        if self._milvus_client is None:
+            self._milvus_client = get_milvus_client()
+        return self._milvus_client
 
     # ---------- 查询 ----------
 
@@ -108,7 +124,9 @@ class GraphSpaceService:
                 )
             )
             self._session.commit()
-        return {"name": space_name, "bound": True, "mine": True}
+        # 已有空间（可能早于向量库登记机制存在）绑定时同样 ensure
+        db_status, _ = self._ensure_vector_database(space_name)
+        return self._space_result(space_name, db_status)
 
     def unbind(self, actor: PlatformActor, space_name: str) -> bool:
         """解除当前用户与空间的绑定；只删绑定行，不动图数据。"""
@@ -164,7 +182,8 @@ class GraphSpaceService:
                 )
             )
             self._session.commit()
-        return {"name": space_name, "bound": True, "mine": True}
+        db_status, _ = self._ensure_vector_database(space_name)
+        return self._space_result(space_name, db_status)
 
     def _wait_for_space(self, space_name: str) -> bool:
         for _ in range(_PROPAGATION_ATTEMPTS):
@@ -175,3 +194,102 @@ class GraphSpaceService:
                 pass
             time.sleep(_PROPAGATION_INTERVAL_SECONDS)
         return False
+
+    # ---------- 向量库一一对应登记 ----------
+
+    def _space_result(self, space_name: str, vector_db_status: str) -> dict:
+        result = {
+            "name": space_name,
+            "bound": True,
+            "mine": True,
+            "vectorDbStatus": vector_db_status,
+        }
+        if vector_db_status != "ready":
+            result["vectorDbWarning"] = "图空间已创建，但同名向量库创建失败，将在服务重启时自动重试"
+        return result
+
+    def _ensure_vector_database(self, space_name: str) -> tuple[str, str]:
+        """确保 Milvus 同名 database 存在并登记映射（幂等、可降级）。
+
+        返回 (status, error)，status ∈ {'ready', 'failed'}。Milvus 不可达或建库
+        失败不影响图空间创建/绑定本身，仅登记 failed 行，由启动 backfill 重试。
+        pymilvus 的 create_database 不幂等（已存在报 "already exist"），先
+        list_databases 预查；并发竞态下收到 already exist 视为成功。
+        """
+        try:
+            client = self.milvus_client
+            if space_name not in client.list_databases():
+                client.create_database(space_name)
+        except Exception as exc:  # noqa: BLE001
+            if "already exist" in str(exc).lower():
+                self._upsert_vector_db_mapping(space_name, "ready", "")
+                return ("ready", "")
+            logger.warning("图空间 %s 向量库确保失败: %s", space_name, exc)
+            error = str(exc)[:2000]
+            self._upsert_vector_db_mapping(space_name, "failed", error)
+            return ("failed", error)
+        self._upsert_vector_db_mapping(space_name, "ready", "")
+        return ("ready", "")
+
+    def _upsert_vector_db_mapping(self, space_name: str, status: str, error: str) -> None:
+        row = (
+            self._session.execute(
+                select(GraphSpaceVectorDatabase).where(
+                    GraphSpaceVectorDatabase.graph_space == space_name
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if row is None:
+            self._session.add(
+                GraphSpaceVectorDatabase(
+                    graph_space=space_name,
+                    vector_database=space_name,
+                    status=status,
+                    last_error=error,
+                )
+            )
+        else:
+            row.vector_database = space_name
+            row.status = status
+            row.last_error = error
+        self._session.commit()
+
+
+def backfill_vector_databases(
+    session: Session | None = None, milvus_client: Any | None = None
+) -> dict:
+    """对所有已绑定空间 ensure 向量库登记（best-effort、幂等）。
+
+    映射行缺失或 status != ready 的空间重试。session 缺省时从 infra.mysql 取
+    业务库会话；可注入参数供单测使用。挂 main.py lifespan 启动钩子。
+    """
+    if session is not None:
+        return _backfill_vector_databases_with(session, milvus_client)
+    from infra.mysql import session_scope
+
+    with session_scope() as scoped:
+        return _backfill_vector_databases_with(scoped, milvus_client)
+
+
+def _backfill_vector_databases_with(session: Session, milvus_client: Any | None) -> dict:
+    bound_spaces = sorted({r.space_name for r in session.execute(select(UserGraphSpace)).scalars()})
+    status_by_space = {
+        r.graph_space: r.status for r in session.execute(select(GraphSpaceVectorDatabase)).scalars()
+    }
+    targets = [name for name in bound_spaces if status_by_space.get(name) != "ready"]
+    service = GraphSpaceService(session, milvus_client=milvus_client)
+    ensured = failed = 0
+    for name in targets:
+        status, _ = service._ensure_vector_database(name)
+        if status == "ready":
+            ensured += 1
+        else:
+            failed += 1
+    return {
+        "bound": len(bound_spaces),
+        "pending": len(targets),
+        "ensured": ensured,
+        "failed": failed,
+    }

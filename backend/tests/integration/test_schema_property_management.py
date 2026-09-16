@@ -60,6 +60,11 @@ def property_api(monkeypatch):
     monkeypatch.setattr("service.schema_management.get_schema_s3_storage", lambda: storage)
     monkeypatch.delenv("SCHEMA_ALLOW_SYSTEM_DELETE", raising=False)
     monkeypatch.setenv("SCHEMA_AUTO_PROVENANCE", "false")
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "techkg")
+    monkeypatch.setattr(
+        "service.schema_ddl.list_graph_spaces",
+        lambda: ["techkg"],
+    )
     # 硬删除前置 guard 默认放行（无运行中抽取任务）；具体用例覆盖
     monkeypatch.setattr(
         "service.schema_management.find_running_extraction", lambda definition: None

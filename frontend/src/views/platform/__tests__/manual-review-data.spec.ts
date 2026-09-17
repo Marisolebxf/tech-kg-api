@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   PIPELINE_STEPS,
   reviewRecords,
+  extractCaseStatusBadge,
   getReviewRecord,
   getReviewTemplateId,
   getReviewTemplate,
@@ -158,5 +159,17 @@ describe('演示数据标识（生产模式门控的前置契约）', () => {
     expect(reviewRecords.length).toBe(3)
     expect(reviewRecords.every((r) => r.id.startsWith('PI-'))).toBe(true)
     expect(reviewRecords.every((r) => getReviewTemplateId(r) === 'T_LINK')).toBe(true)
+  })
+})
+
+describe('extractCaseStatusBadge', () => {
+  it('RERUNNING/RERUN_FAILED 细化，其余维持既有映射', () => {
+    expect(extractCaseStatusBadge('RERUNNING')).toBe('重跑中')
+    expect(extractCaseStatusBadge('RERUN_FAILED')).toBe('重跑失败')
+    expect(extractCaseStatusBadge('RESOLVED')).toBe('已完成')
+    expect(extractCaseStatusBadge('REJECTED')).toBe('已驳回')
+    expect(extractCaseStatusBadge('CANCELLED')).toBe('已撤销')
+    expect(extractCaseStatusBadge('OPEN')).toBe('待处理')
+    expect(extractCaseStatusBadge('CLAIMED')).toBe('待处理')
   })
 })

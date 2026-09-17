@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from biz.dependencies.review_identity import get_review_identity
 from biz.schemas.common import ApiResponse
 from biz.schemas.manual_review_production import (
-    ApprovalRequest,
     CancelRequest,
     DirectDecideRequest,
     DraftRequest,
@@ -144,26 +143,6 @@ async def submit_case(case_id: str, body: SubmitRequest, identity: ReviewIdentit
         _raise_production_error(exc)
 
 
-@router.post("/production/{case_id}/approve", response_model=ApiResponse)
-async def approve_case(case_id: str, body: ApprovalRequest, identity: ReviewIdentityDep):
-    try:
-        return ApiResponse(
-            data=production_service.approve(case_id, body.version, True, body.note, identity)
-        )
-    except Exception as exc:
-        _raise_production_error(exc)
-
-
-@router.post("/production/{case_id}/reject", response_model=ApiResponse)
-async def reject_case(case_id: str, body: ApprovalRequest, identity: ReviewIdentityDep):
-    try:
-        return ApiResponse(
-            data=production_service.approve(case_id, body.version, False, body.note, identity)
-        )
-    except Exception as exc:
-        _raise_production_error(exc)
-
-
 @router.post("/production/{case_id}/direct-decide", response_model=ApiResponse)
 async def direct_decide_case(case_id: str, body: DirectDecideRequest, identity: ReviewIdentityDep):
     """kg.custom.steps T_DIRECT 案例两步决策：accept 直接写图，reject 丢弃。"""
@@ -213,6 +192,15 @@ async def cancel_case(case_id: str, body: CancelRequest, identity: ReviewIdentit
         return ApiResponse(
             data=production_service.cancel(case_id, body.version, body.reason, identity)
         )
+    except Exception as exc:
+        _raise_production_error(exc)
+
+
+@router.delete("/production/{case_id}", response_model=ApiResponse)
+async def delete_case(case_id: str, identity: ReviewIdentityDep):
+    """物理删除未处理 case（review_admin；已终态的记录保留作历史不可删）。"""
+    try:
+        return ApiResponse(data=production_service.delete_case(case_id, identity))
     except Exception as exc:
         _raise_production_error(exc)
 

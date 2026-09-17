@@ -1,16 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { claimProductionReview, directDecideProductionReview, getProductionReview, heartbeatProductionReview, rerunExtractFailures, submitProductionReview, type ProductionReviewCase } from '../../api/workflowOperations'
+import { directDecideProductionReview, getProductionReview, heartbeatProductionReview, rerunExtractFailures, submitProductionReview, type ProductionReviewCase } from '../../api/workflowOperations'
 
 import {
   getHandleCategory,
-  getImpactScope,
   getReviewConsequence,
   getReviewTemplate,
-  getSedimentHint,
   labelZh,
-  resolvePipelineStep,
   type ReviewAction,
   type ReviewRecord,
 } from './manual-review-data'
@@ -123,12 +120,11 @@ const directTitle = computed(() => {
 })
 const isEditable = computed(() => {
   if (isDirectCase.value) return productionCase.value?.status === 'OPEN'
-  return ['CLAIMED','IN_REVIEW'].includes(productionCase.value?.status || '')
+  // 直审模式：OPEN 打开即可裁决（无需领取）；CLAIMED/IN_REVIEW 为存量已领取 case
+  return ['OPEN','CLAIMED','IN_REVIEW'].includes(productionCase.value?.status || '')
 })
-const canClaim = computed(() => productionCase.value?.status === 'OPEN' && !isDirectCase.value)
 
 const template = computed(() => (record.value ? getReviewTemplate(record.value) : null))
-const impactScope = computed(() => (record.value ? getImpactScope(record.value) : '任务级'))
 // 生产 case 的模板以服务端 templateId 为准（T_DIRECT/T_EXTRACT_FAIL/T_LINK
 // 专用工作台依赖它路由）；legacy 映射只对旧 demo record 生效
 const templateId = computed(
@@ -139,9 +135,6 @@ const consequence = computed(() => {
   if (productionCase.value?.consequence) return { ...productionCase.value.consequence, rerunAnchor: productionCase.value.pipelineStepName || productionCase.value.consequence.rerunStepId, phase: record.value?.module || '图谱构建' }
   return record.value ? getReviewConsequence(record.value) : null
 })
-const pipelineStep = computed(() => (record.value ? resolvePipelineStep(record.value) : null))
-const sedimentHint = computed(() => (record.value ? getSedimentHint(record.value) : ''))
-const sedimentRule = ref(false)
 
 const note = ref(record.value?.decisionNote ?? '')
 const feedback = ref('')
@@ -160,6 +153,43 @@ const preferredProductionAction = computed(() => {
 })
 
 const entityVerdict = ref<'merge' | 'create' | 'reject'>('merge')
+
+/** T_LINK 消歧 v2：候选快照里的真实候选（existingCandidates）与待入库记录（_incoming）。 */
+const linkSnapshot = computed<Record<string, unknown> | null>(() => {
+  const snapshot = productionCase.value?.candidate
+  return snapshot && typeof snapshot === 'object' ? (snapshot as Record<string, unknown>) : null
+})
+const linkCandidates = computed(() => {
+  const raw = linkSnapshot.value?.existingCandidates
+  if (!Array.isArray(raw) || !raw.length) return []
+  return raw
+    .filter((c): c is { vid?: string; name?: string; score?: number } => Boolean(c) && typeof c === 'object')
+    .filter((c) => c.vid)
+    .map((c) => ({
+      vid: String(c.vid),
+      name: c.name || '—',
+      score: typeof c.score === 'number' ? c.score : null,
+    }))
+})
+const linkIncoming = computed(() => {
+  const raw = linkSnapshot.value?._incoming
+  return raw && typeof raw === 'object' ? (raw as { vid?: string; sourceTable?: string }) : null
+})
+const linkResolution = computed(() => {
+  const raw = linkSnapshot.value?._resolution
+  return raw && typeof raw === 'object'
+    ? (raw as { matchScore?: number; margin?: number | null })
+    : null
+})
+/** merge 裁决的并入目标（targetEntityId）——服务端校验必须属于候选集。 */
+const selectedTarget = ref('')
+watch(
+  linkCandidates,
+  (list) => {
+    if (list.length && !selectedTarget.value) selectedTarget.value = list[0].vid
+  },
+  { immediate: true },
+)
 
 const manualReviewFormRef = ref()
 const manualReviewFormModel = computed(() => ({
@@ -199,14 +229,6 @@ async function loadReview() {
     initWorkspace(record.value)
     startHeartbeat()
   } catch (error) { feedback.value = error instanceof Error ? error.message : '人工处理详情加载失败' }
-}
-
-async function claimCase() {
-  if (!productionCase.value) return
-  try {
-    productionCase.value = await claimProductionReview(productionCase.value.id, productionCase.value.version)
-    record.value = mapProductionRecord(productionCase.value); startHeartbeat(); feedback.value = '领取成功，系统已开始保持处理心跳。'
-  } catch (error) { feedback.value = error instanceof Error ? `${error.message}，请重新加载。` : '领取失败' }
 }
 
 onMounted(loadReview)
@@ -263,13 +285,6 @@ const primaryActionLabel = computed(() => preferredProductionAction.value?.label
 
 const isPrimaryDisabled = computed(() => !isEditable.value || !preferredProductionAction.value)
 
-const footerHint = computed(() => {
-  if (isHistory.value) return record.value?.status === '已撤销' ? '任务已撤销' : '处理已完成'
-  const write = consequence.value?.writeTarget ?? '处理结果'
-  const sediment = sedimentRule.value && sedimentHint.value ? ' · 同时沉淀为规则' : ''
-  return `确认后：裁决回写「${write}」${sediment}`
-})
-
 const backPath = computed(() => (
   isHistory.value ? '/manual-review?tab=history' : `/manual-review?batch=${record.value?.batch ?? ''}`
 ))
@@ -286,7 +301,7 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
     const validationErrors = await manualReviewFormRef.value?.validate()
     if (validationErrors) return
   }
-  // kg.custom.steps T_DIRECT 案例：accept 直接写图，reject 丢弃，不走 claim/submit/approve 4-eyes 流程
+  // kg.custom.steps T_DIRECT 案例：accept 直接写图，reject 丢弃，不走 submit 通道
   if (isDirectCase.value && productionCase.value && ['accept', 'accept-fix', 'reject'].includes(action.id)) {
     const patched = action.id === 'accept-fix' ? directPatchedCandidate.value : undefined
     if (action.id === 'accept-fix' && !patched) {
@@ -319,10 +334,16 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
   }
   // T_LINK 主按钮跟随裁决值：选「不是同一实体」时按驳回候选提交
   const actionId = action.id === 'entity-confirm' && entityVerdict.value === 'reject' ? 'reject-candidate' : action.id
+  // merge 必须指定并入目标（服务端校验 targetEntityId ∈ 候选集，缺失会被 400 拒绝）
+  if (entityVerdict.value === 'merge' && linkCandidates.value.length && !selectedTarget.value) {
+    feedback.value = '请先选择要并入的候选实体'
+    return
+  }
   const result: Record<string, unknown> = {
     entityVerdict: entityVerdict.value,
     handleCategory: handleCategory.value,
   }
+  if (entityVerdict.value === 'merge' && selectedTarget.value) result.targetEntityId = selectedTarget.value
   try {
     if (productionCase.value) {
       productionCase.value = await submitProductionReview(reviewRecord.id, { version: productionCase.value.version, actionId, note: note.value, result })
@@ -330,7 +351,6 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
       window.clearInterval(heartbeatTimer)
     }
     feedback.value = `裁决已回写「${consequence.value?.writeTarget ?? '处理结果'}」。`
-    if (sedimentRule.value && sedimentHint.value) feedback.value += ' 裁决已勾选沉淀为规则。'
   } catch (error) {
     feedback.value = error instanceof Error ? error.message : '人工处理提交失败'
   }
@@ -339,10 +359,6 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
 const runPrimary = () => {
   if (preferredProductionAction.value) handleAction(preferredProductionAction.value)
 }
-
-const secondaryActions = computed(() => (
-  productionActions.value.filter((action) => action.id !== preferredProductionAction.value?.id)
-))
 </script>
 
 <template>
@@ -353,49 +369,15 @@ const secondaryActions = computed(() => (
         <h1>{{ directTitle }}</h1>
         <p>
           <code>{{ record.id }}</code>
-          <span v-if="!isDirectCase">{{ record.handler }}</span>
-          <em v-if="!isDirectCase">{{ pipelineStep?.name || record.node }} · {{ record.type }} · {{ record.ruleId }}</em>
         </p>
       </div>
       <div v-if="!isDirectCase" class="rw-head__badges">
-        <span class="cat-pill">{{ handleCategory }}</span>
-        <span :class="['scope', impactScope === '批次级' ? 'is-batch' : 'is-task']">{{ impactScope }}{{ impactScope === '批次级' ? ' · 已阻断' : '' }}</span>
         <span :class="['status', `is-${record.status}`]">{{ record.status }}</span>
       </div>
     </header>
 
-    <section v-if="!isDirectCase" class="rw-sec rw-sec--evidence" aria-label="证据">
-      <header class="rw-sec__head"><div><h2>案件信息与证据</h2><p>对象信息、系统结论与证据摘要 · 本屏信息应足够做出决定</p></div></header>
-      <div class="rw-diag">
-        <div>
-          <strong>{{ record.object }}</strong>
-          <span>{{ record.objectType }} · {{ record.objectId }}</span>
-        </div>
-        <div>
-          <span>来源</span>
-          <em>{{ record.sourceTable }} / {{ record.sourceRecordId }}</em>
-        </div>
-        <div>
-          <span>系统结论</span>
-          <em>{{ record.sourceResult }}</em>
-        </div>
-        <div v-if="record.score">
-          <span>置信度</span>
-          <em>{{ record.score }}</em>
-        </div>
-        <p class="rw-diag__evidence">{{ record.evidence }}</p>
-      </div>
-    </section>
-
     <main class="rw-body">
       <a-form ref="manualReviewFormRef" :model="manualReviewFormModel" :rules="manualReviewFormRules" class="manual-review-form" layout="vertical">
-      <header v-if="!isDirectCase" class="rw-zone-head">
-        <div>
-          <h2>裁决 · {{ template?.title }}</h2>
-          <p>{{ template?.question }} · {{ record.suggestion }}</p>
-        </div>
-      </header>
-
       <!-- T_DIRECT：kg.custom.steps 候选入库决策 5 段式布局 -->
       <section v-if="templateId === 'T_DIRECT'" class="zone zone-direct">
         <!-- ① 候选：要审核的实体/关系（最显眼，一上来就让人知道审什么） -->
@@ -437,13 +419,7 @@ const secondaryActions = computed(() => (
         <!-- ② 为什么需要你确认：confidence 追溯 -->
         <section class="direct-why">
           <h3>② 为什么需要你确认</h3>
-          <p v-if="directConfidence !== null">
-            LLM 输出的 <code class="direct-confidence-inline">confidence = {{ directConfidence.toFixed(2) }}</code>，
-            系统阈值 <strong>0.85</strong>。
-            <strong>{{ directConfidence.toFixed(2) }} &lt; 0.85</strong>
-            → 未达自动入库线 → 候选被隔离在写图前。通过则写入图，驳回则丢弃。
-          </p>
-          <p v-else>
+          <p v-if="directConfidence === null">
             系统未给出置信度，候选被隔离在写图前，等待人工决策。
           </p>
           <details class="direct-trace">
@@ -579,7 +555,40 @@ const secondaryActions = computed(() => (
       <!-- T_LINK -->
       <section v-else-if="templateId === 'T_LINK'" class="zone zone-entity">
         <p v-if="record.type === '单任务执行失败'" class="zone-banner">对齐任务超时未生成候选，请基于源记录人工裁决后重跑。</p>
-        <div class="entity-compare">
+
+        <!-- 消歧 v2：快照带真实候选（existingCandidates + _incoming）时渲染候选选择 -->
+        <template v-if="linkCandidates.length">
+          <div class="link-incoming">
+            <span>待入库记录（已扣留，未写图）</span>
+            <strong>{{ record.object }}</strong>
+            <p>来源：{{ linkIncoming?.sourceTable || '—' }} · 记录 <code>{{ linkIncoming?.vid || record.objectId }}</code></p>
+            <p v-if="linkResolution">消歧得分 {{ linkResolution.matchScore ?? '—' }} · 候选分差 {{ linkResolution.margin ?? '—' }} · 灰区人工裁决</p>
+          </div>
+          <p class="link-candidates-title">选择要并入的候选（merge 时生效）：</p>
+          <ul class="link-candidates">
+            <li
+              v-for="cand in linkCandidates"
+              :key="cand.vid"
+              :class="{ selected: selectedTarget === cand.vid }"
+            >
+              <label>
+                <input
+                  v-model="selectedTarget"
+                  type="radio"
+                  name="link-target"
+                  :value="cand.vid"
+                  :disabled="!isEditable || entityVerdict !== 'merge'"
+                />
+                <strong>{{ cand.name }}</strong>
+                <small><code>{{ cand.vid }}</code></small>
+                <em v-if="cand.score !== null">得分 {{ cand.score }}</em>
+              </label>
+            </li>
+          </ul>
+        </template>
+
+        <!-- 无候选快照（存量写后 case / 演示数据）沿用原对照卡 -->
+        <div v-else class="entity-compare">
           <article>
             <span>候选</span>
             <strong>{{ candidateCard?.name }}</strong>
@@ -598,11 +607,15 @@ const secondaryActions = computed(() => (
         </div>
         <a-form-item field="entityVerdict" hide-label>
         <a-radio-group v-model="entityVerdict" class="verdict" aria-label="实体对齐裁决">
-          <a-radio value="merge" :disabled="!isEditable">合并到右侧存量实体</a-radio>
-          <a-radio value="create" :disabled="!isEditable">保留为新建实体</a-radio>
-          <a-radio value="reject" :disabled="!isEditable">不是同一实体，驳回候选</a-radio>
+          <a-radio value="merge" :disabled="!isEditable">合并到所选候选（写入图）</a-radio>
+          <a-radio value="create" :disabled="!isEditable">确认为新实体（写入图）</a-radio>
+          <a-radio value="reject" :disabled="!isEditable">均不匹配，驳回候选（丢弃该记录）</a-radio>
         </a-radio-group>
         </a-form-item>
+        <label v-if="isEditable" class="verdict-note">
+          <span>备注（可选）</span>
+          <input aria-label="审核备注" v-model="note" placeholder="审核备注…" />
+        </label>
       </section>
 
       <div v-if="!isEditable" class="rw-readonly">
@@ -615,34 +628,9 @@ const secondaryActions = computed(() => (
       <p v-if="feedback" class="rw-feedback">{{ feedback }}</p>
     </main>
 
-    <section v-if="!isDirectCase" class="rw-sec rw-sec--consequence" aria-label="后果">
-      <header class="rw-sec__head"><div><h2>决策影响</h2><p>确认前请核对：回写哪里、影响范围</p></div></header>
-      <div class="tri-grid">
-        <div><span>回写目标</span><strong>{{ consequence?.writeTarget }}</strong></div>
-        <div><span>裁决锚点</span><strong>{{ consequence?.rerunAnchor }}</strong><em v-if="pipelineStep">· {{ pipelineStep.id }}</em></div>
-        <div><span>影响范围</span><strong>{{ impactScope }}{{ impactScope === '批次级' ? ' · 恢复公共流程' : ' · 仅本对象' }}</strong></div>
-      </div>
-      <p v-if="pipelineStep" class="pipeline-hint">流水线：{{ pipelineStep.phase }} · 节点 <code>{{ pipelineStep.id }}</code>（{{ pipelineStep.name }}）· 原始节点「{{ record.node }}」</p>
-      <a-checkbox v-if="isEditable && sedimentHint" v-model="sedimentRule" class="sediment-line">
-        <span>{{ sedimentHint }}</span>
-      </a-checkbox>
-    </section>
-
-    <footer v-if="!isDirectCase" class="rw-foot">
-      <span>{{ footerHint }}</span>
-      <button v-if="canClaim" class="primary" type="button" @click="claimCase">领取任务</button>
-      <div v-if="isEditable" class="rw-foot__actions">
-        <button
-          v-for="action in secondaryActions"
-          :key="action.id"
-          type="button"
-          :class="{ danger: action.kind === 'danger' }"
-          @click="handleAction(action)"
-        >
-          {{ action.label }}
-        </button>
-        <label class="note-inline"><span class="sr-only">备注（可选）</span><input v-model="note" placeholder="备注（可选）" /></label>
-        <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ primaryActionLabel }}</button>
+    <footer v-if="!isDirectCase && isEditable" class="rw-foot">
+      <div class="rw-foot__actions">
+        <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ templateId === 'T_LINK' ? '确认' : primaryActionLabel }}</button>
       </div>
     </footer>
   </div>
@@ -1006,6 +994,99 @@ const secondaryActions = computed(() => (
   background: #f5f8ff;
 }
 
+/* T_LINK 裁决框内备注（可选） */
+.verdict-note {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  color: #718099;
+  font-size: 11px;
+}
+
+.verdict-note input {
+  padding: 8px 10px;
+  border: 1px solid #dce8f8;
+  border-radius: 5px;
+  font: 13px/1.5 inherit;
+  color: #17233b;
+}
+
+/* T_LINK 消歧 v2：待入库记录卡 + 候选选择列表 */
+.link-incoming {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px dashed #b8d0ee;
+  border-radius: 8px;
+  background: #f7fbff;
+}
+
+.link-incoming span {
+  color: #7890b5;
+  font-size: 10px;
+}
+
+.link-incoming strong {
+  display: block;
+  margin: 6px 0;
+  font-size: 14px;
+}
+
+.link-incoming p {
+  margin: 3px 0 0;
+  color: #475467;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.link-candidates-title {
+  margin: 0 0 8px;
+  color: #475467;
+  font-size: 12px;
+}
+
+.link-candidates {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.link-candidates li {
+  border: 1px solid #d4dfed;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.link-candidates li.selected {
+  border-color: #165dff;
+  background: #f5f8ff;
+}
+
+.link-candidates label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.link-candidates small {
+  color: #7890b5;
+}
+
+.link-candidates em {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #eaf2ff;
+  color: #175cd3;
+  font-size: 11px;
+  font-style: normal;
+}
+
 .rw-readonly {
   margin-top: 16px;
   padding: 12px;
@@ -1204,14 +1285,14 @@ const secondaryActions = computed(() => (
 </style>
 <style scoped>
 /* DESIGN_RULES: manual review detail contract. */
-.rw{overflow:hidden;color:#1d2129}.rw-head{align-items:center;gap:16px;margin-bottom:16px}.rw-head h1{margin:4px 0;font-size:20px;line-height:28px;font-weight:600}.rw-head p,.rw-head a{font-size:12px;line-height:20px}
+.rw{overflow:visible;height:auto;min-height:100%;color:#1d2129}.rw-head{align-items:center;gap:16px;margin-bottom:16px}.rw-head h1{margin:4px 0;font-size:20px;line-height:28px;font-weight:600}.rw-head p,.rw-head a{font-size:12px;line-height:20px}
 .scope,.status{display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.scope::before,.status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}.scope.is-batch,.scope.is-task,.status.is-待处理,.status.is-已完成,.status.is-已撤销,.status.is-已驳回{background:transparent}
 .rw-diag{gap:8px 16px;margin-bottom:16px;padding:16px;border-color:#e5e6eb;border-radius:6px;background:#f7f8fa}.rw-diag strong{font-size:14px;line-height:22px}.rw-diag span,.rw-diag em{font-size:12px;line-height:20px}
-.rw-body{flex:1;overflow:auto;padding:16px;border-color:#e5e6eb;border-radius:6px}
+.rw-body{flex:none;overflow:visible;padding:16px;border-color:#e5e6eb;border-radius:6px}
 .rw-zone-head{gap:8px;margin-bottom:16px}.rw-zone-head h2,.rw-sec__head h2{font-size:16px;line-height:24px;font-weight:600}.rw-zone-head p,.rw-sec__head p{font-size:12px;line-height:20px}
 .rw-sec{margin-bottom:16px;padding:16px;border:0;border-radius:6px;background:#f7f8fa}.rw-sec__head{gap:8px;margin-bottom:16px}
 .cat-pill{padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.tri-grid{gap:16px}.tri-grid>div{gap:4px;padding:8px 16px;border-color:#e5e6eb;border-radius:4px}.tri-grid span,.tri-grid em{font-size:12px;line-height:20px}.tri-grid strong{font-size:14px;line-height:22px}
 .rw :is(button,input,select,textarea){font-size:14px;line-height:22px}.rw :is(button,input,select){min-height:32px;border-radius:4px}.rw textarea{border-radius:4px}
 .direct-actions{gap:16px}.direct-accept,.direct-reject{min-height:32px;padding:8px 16px;border-radius:4px;font-size:14px}.direct-accept strong,.direct-reject strong{font-size:14px;line-height:22px}.direct-accept em,.direct-reject em{font-size:12px;line-height:20px}
-@media(max-width:960px){.rw{overflow:auto}.rw-body{overflow:visible}.tri-grid{grid-template-columns:1fr}}
+@media(max-width:960px){.tri-grid{grid-template-columns:1fr}}
 </style>

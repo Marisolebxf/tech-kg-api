@@ -76,17 +76,18 @@ test.describe.serial('F. 批次抽取管道', () => {
     await page.waitForLoadState('networkidle')
     await page.locator('.alert-tabs button', { hasText: '抽取失败重跑' }).click()
     await expect(page.getByText('失败列表').first()).toBeVisible()
-    // 默认视图混有历史已处理行：先筛「待处理」
-    await page.locator('.ops-filter .arco-select-view-single').first().click()
+    // 默认视图混有历史已处理行：先筛「待处理」（C 类状态下拉在表格「状态」表头）
+    await page.locator('.th-status-filter .arco-select-view-single').first().click()
     await page.locator('li.arco-select-option:visible', { hasText: '待处理' }).first().click()
     const row = page.locator('tbody tr', { hasText: 'w3' }).first()
     await expect(row).toBeVisible({ timeout: 30_000 })
-    // 阻断节点徽标（任务级蓝 / 批次级红）与状态、操作
+    // 阻断节点徽标（任务级蓝 / 批次级红）与状态、操作（C 类行操作=日志/重跑/删除）
     await expect(row.getByText(/任务级|批次级/).first()).toBeVisible()
     await expect(row.getByText(/待处理|重跑中|已完成/).first()).toBeVisible()
     const openRow = page.locator('tbody tr', { hasText: 'w3' }).filter({ hasText: '待处理' }).first()
-    await expect(openRow.getByRole('link', { name: '进入处理 →' })).toBeVisible()
-    await expect(openRow.getByRole('button', { name: '重跑该记录' })).toBeVisible()
+    await expect(openRow.getByRole('button', { name: '日志' })).toBeVisible()
+    await expect(openRow.getByRole('button', { name: '重跑' })).toBeVisible()
+    await expect(openRow.getByRole('button', { name: '删除' })).toBeVisible()
   })
 
   test('F2 单条重跑闭环（工作台）', async ({ page, request }) => {
@@ -103,11 +104,11 @@ test.describe.serial('F. 批次抽取管道', () => {
       },
       { timeout: 60_000, label: '定位当前 w3 case' },
     )
-    // UI 侧同样可见该行（失败列表）
+    // UI 侧同样可见该行（失败列表；C 类状态下拉在表格「状态」表头）
     await page.goto('/manual-review')
     await page.waitForLoadState('networkidle')
     await page.locator('.alert-tabs button', { hasText: '抽取失败重跑' }).click()
-    await page.locator('.ops-filter .arco-select-view-single').first().click()
+    await page.locator('.th-status-filter .arco-select-view-single').first().click()
     await page.locator('li.arco-select-option:visible', { hasText: '待处理' }).first().click()
     const row = page.locator('tbody tr', { hasText: 'w3' }).filter({ hasText: '待处理' }).first()
     await expect(row).toBeVisible({ timeout: 30_000 })
@@ -176,7 +177,7 @@ test.describe.serial('F. 批次抽取管道', () => {
     await page.waitForLoadState('networkidle')
     await page.locator('.alert-tabs button', { hasText: '抽取失败重跑' }).click()
     await expect(page.getByText('失败列表').first()).toBeVisible()
-    await page.locator('.ops-filter .arco-select-view-single').first().click()
+    await page.locator('.th-status-filter .arco-select-view-single').first().click()
     await page.locator('li.arco-select-option:visible', { hasText: '待处理' }).first().click()
 
     // 勾选 ≥2 行（当前 OPEN 的 w4 case）

@@ -110,3 +110,9 @@ class ExtractFailuresRerunRequest(BaseModel):
     caseIds: list[str] | None = Field(default=None, max_length=2000)
     executionId: str | None = None
     batchSize: int | None = Field(default=None, ge=1, le=5000)
+
+
+class DeleteCasesRequest(BaseModel):
+    """T_EXTRACT_FAIL 失败记录硬删除：单条（caseIds 一个）/ 批量勾选共用。"""
+
+    caseIds: list[str] = Field(min_length=1, max_length=2000)

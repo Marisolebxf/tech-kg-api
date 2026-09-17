@@ -7,11 +7,12 @@ graph-build 移交通道（内部入口 / correction / outbox）已删除，subm
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select, update
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db_model.base import Base
+from db_model.manual_review import ReviewAuditLog, ReviewCase
 from service.manual_review_domain import (
     ReviewConflictError,
     ReviewForbiddenError,
@@ -256,3 +257,107 @@ def test_direct_decide_audit_records_modified_fields(monkeypatch):
     assert detail["modifiedFields"]["changed"] == ["name_zh"]
     assert detail["modifiedFields"]["removed"] == ["name_en"]
     assert detail["originalCandidateSha256"]
+
+
+# ── 失败列表：队列排序 + 硬删除 ─────────────────────────────────────────────
+
+
+def extract_case_kwargs(**overrides):
+    """抽取失败 T_EXTRACT_FAIL 建案参数（domain 与 actor 的 talent 匹配）。"""
+    value = dict(
+        task_id="TASK-E",
+        execution_id="EXEC-E",
+        step_id="extract",
+        kind="entity",
+        candidate={"recordId": "R-1", "error": "boom"},
+        object_id="R-1",
+        reason="抽取失败",
+        source_table="dwd_paper",
+        source_record_id="R-1",
+        domain="talent",
+        template_id="T_EXTRACT_FAIL",
+    )
+    value.update(overrides)
+    return value
+
+
+def _set_case_times(service, case_id, created, updated):
+    """直接拨 created_at/updated_at，制造确定性排序时序。"""
+    with service.sf() as s:
+        s.execute(
+            update(ReviewCase)
+            .where(ReviewCase.id == case_id)
+            .values(created_at=created, updated_at=updated)
+        )
+        s.commit()
+
+
+def test_queue_sort_by_updated_at(service):
+    from datetime import datetime, timedelta
+
+    base = datetime(2026, 9, 17, 12, 0, 0)
+    old_case = service.create_direct_case(
+        **extract_case_kwargs(
+            object_id="R-OLD",
+            source_record_id="R-OLD",
+            candidate={"recordId": "R-OLD", "error": "boom"},
+        )
+    )
+    new_case = service.create_direct_case(
+        **extract_case_kwargs(
+            object_id="R-NEW",
+            source_record_id="R-NEW",
+            candidate={"recordId": "R-NEW", "error": "boom"},
+        )
+    )
+    # 创建顺序 old→new；old 创建早但更新晚，两种排序口径结果相反
+    _set_case_times(service, old_case["reviewId"], base, base + timedelta(hours=1))
+    _set_case_times(service, new_case["reviewId"], base + timedelta(minutes=1), base)
+
+    def queue_ids(extra=None):
+        return [
+            x["id"]
+            for x in service.list_cases({**{"category": "C"}, **(extra or {})}, actor())["items"]
+        ]
+
+    # 默认排序保持 风险级→创建时间升序（不传 sort）
+    assert queue_ids() == [old_case["reviewId"], new_case["reviewId"]]
+    # sort=updatedAt desc：更新时间新的在前
+    assert queue_ids({"sort": "updatedAt", "order": "desc"}) == [
+        old_case["reviewId"],
+        new_case["reviewId"],
+    ]
+    # sort=updatedAt asc
+    assert queue_ids({"sort": "updatedAt", "order": "asc"}) == [
+        new_case["reviewId"],
+        old_case["reviewId"],
+    ]
+
+
+def test_delete_cases_hard_deletes_extract_fail_only(service):
+    extract = service.create_direct_case(**extract_case_kwargs())
+    link = service.create_direct_case(**link_case_kwargs(domain="talent"))
+    admin = actor("admin-1", ("reviewer", "review_admin"))
+
+    result = service.delete_cases([extract["reviewId"], link["reviewId"], "MR-NOT-EXIST"], admin)
+    assert result == {"deleted": 1, "skipped": 2}
+
+    # C 类队列不再出现；A 类 case 不受影响
+    remaining_c = {x["id"] for x in service.list_cases({"category": "C"}, actor())["items"]}
+    assert extract["reviewId"] not in remaining_c
+    all_ids = {x["id"] for x in service.list_cases({}, actor())["items"]}
+    assert link["reviewId"] in all_ids
+    # 审计等子记录一并清除
+    with service.sf() as s:
+        assert (
+            s.scalars(
+                select(ReviewAuditLog).where(ReviewAuditLog.case_id == extract["reviewId"])
+            ).all()
+            == []
+        )
+
+
+def test_delete_cases_requires_review_admin(service):
+    extract = service.create_direct_case(**extract_case_kwargs())
+    with pytest.raises(ReviewForbiddenError):
+        service.delete_cases([extract["reviewId"]], actor())

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { apiMust, graphWrite, waitFor } from './helpers'
+import { apiMust, graphWrite, switchGraphSpace, waitFor } from './helpers'
 
 // B. 图谱查询（/graph-query，PlatformWorkbenchView 的 query Tab）
 // 环境说明：dev2 已为各 TAG 的搜索字段建属性索引（e2e_idx_*，见测试报告）；
@@ -101,9 +101,9 @@ test.describe('B. 图谱查询', () => {
     await page.waitForLoadState('networkidle')
     await page.getByRole('button', { name: 'nGQL 模式' }).click()
 
-    // nGQL 面板内图空间选 dev2
-    await page.locator('.platform-ngql-input__space-field .arco-select-view-single').click()
-    await page.locator('li.arco-select-option:visible', { hasText: 'dev2' }).first().click()
+    // nGQL 面板内已无图空间控件：执行空间跟随顶栏全局选择器
+    await expect(page.locator('.platform-ngql-input__space-field')).toHaveCount(0)
+    await switchGraphSpace(page, 'dev2')
 
     const textarea = page.locator('textarea[placeholder*="MATCH (v:专家)"]')
     // 第一条：5 行记录（Ctrl+Enter 提交）

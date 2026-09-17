@@ -2,22 +2,21 @@ import { expect, test } from '@playwright/test'
 import {
   api,
   apiMust,
-  autoAcceptConfirms,
   describeColumns,
   dropGraphEdge,
   dropGraphTag,
   graphCount,
   graphWrite,
   mysql,
-  runId,
   selectArcoScrolled,
+  switchGraphSpace,
   waitFor,
 } from './helpers'
 
-// M. 图空间维度横切：一切图相关操作可选图空间（schema 展示/创建/关系/查询/抽取写入）
+// M. 图空间维度横切：一切图相关操作可选图空间（schema 展示/创建/关系/查询/抽取写入）；
+// 空间统一由右上角全局选择器切换，业务页联动重载
 test.describe.serial('M. 图空间横切', () => {
   const SPACE_B = 'e2e_verify_space'
-  const suffix = runId()
 
   test.beforeAll(async ({ request }) => {
     // 清理 M 组历史残留（目录 + 图库 TAG/EDGE），保证 e2e_verify_space 空态
@@ -46,18 +45,21 @@ test.describe.serial('M. 图空间横切', () => {
     await dropGraphEdge('E2E_SPACE_RELATES', SPACE_B)
     await dropGraphTag('E2eSpaceWidget', SPACE_B)
     await dropGraphTag('E2eDevOnly')
+    // 选择器列表已收敛为「默认+本人绑定」（对所有用户生效）：M 组要切的两个
+    // 目标空间先绑定到测试账号（bind 幂等）；D5 结束时会解绑 e2e_verify_space
+    await api(request, 'POST', `/graph-spaces/${SPACE_B}/bind`, {})
+    await api(request, 'POST', '/graph-spaces/algo_test/bind', {})
   })
 
-  test('M1 Schema 管理页：图空间选择与按空间过滤', async ({ page, request }) => {
+  test('M1 Schema 管理页：全局图空间切换与按空间过滤', async ({ page, request }) => {
     await page.goto('/schema')
     await page.waitForLoadState('networkidle')
 
-    // 空间选择器存在（默认 dev2）
-    await expect(page.locator('.space-picker')).toBeVisible()
+    // 顶栏全局图空间选择器存在（默认 dev2）
+    await expect(page.locator('.app-space-select')).toBeVisible()
 
     // 切到 e2e_verify_space（空）→ 空态而非报错
-    await page.locator('.space-picker .arco-select-view-single').click()
-    await selectOption(page, SPACE_B)
+    await switchGraphSpace(page, SPACE_B)
     await waitFor(
       async () => (await page.locator('tbody tr').count()) === 0,
       { label: '空空间列表为空' },
@@ -65,8 +67,7 @@ test.describe.serial('M. 图空间横切', () => {
     await expect(page.getByText('暂无实体 Schema', { exact: false }).first()).toBeVisible({ timeout: 15_000 })
 
     // 切回 dev2 → 非空，与 API 一致
-    await page.locator('.space-picker .arco-select-view-single').click()
-    await selectOption(page, 'dev2')
+    await switchGraphSpace(page, 'dev2')
     await waitFor(
       async () => (await page.locator('tbody tr').count()) > 0,
       { label: 'dev2 列表恢复' },
@@ -76,23 +77,15 @@ test.describe.serial('M. 图空间横切', () => {
   })
 
   test('M2 在指定图空间创建实体 Schema（双向隔离）', async ({ page, request }) => {
-    // e2e_verify_space 建 e2e_SpaceWidget（UI 全流程）
+    // e2e_verify_space 建 e2e_SpaceWidget（UI 全流程；空间取全局选择器当前值）
     await page.goto('/schema')
     await page.waitForLoadState('networkidle')
-    await page.locator('.space-picker .arco-select-view-single').click()
-    await selectOption(page, SPACE_B)
+    await switchGraphSpace(page, SPACE_B)
     await expect(page.getByText('暂无实体 Schema', { exact: false }).first()).toBeVisible({ timeout: 15_000 })
 
     await page.getByRole('button', { name: '＋ 增加' }).click()
     let modal = page.locator('.schema-create-modal')
     await expect(modal).toBeVisible()
-    // 新建弹窗内图空间默认跟随 activeSpace=e2e_verify_space
-    const spaceVal = await modal
-      .locator('.create-field', { hasText: '图空间' })
-      .locator('.arco-select-view-value')
-      .first()
-      .innerText()
-    expect(spaceVal).toContain(SPACE_B)
     await modal.locator('input[placeholder="Gadget"]').fill('E2eSpaceWidget')
     await modal.locator('input[placeholder="如：技术"]').fill('E2E空间挂件')
     await modal.getByRole('button', { name: '预览并创建' }).click()
@@ -100,10 +93,19 @@ test.describe.serial('M. 图空间横切', () => {
     expect(ddl).toContain('CREATE TAG')
     await modal.getByRole('button', { name: '确认创建' }).click()
     await expect(page.locator('tbody tr', { hasText: 'E2eSpaceWidget' }).first()).toBeVisible({ timeout: 30_000 })
+    // 弹窗已无图空间字段：落库归属改为按目录数据断言（graphSpace=当前全局空间）
+    const bSchemas = await apiMust<any>(
+      request,
+      'GET',
+      `/schema-management/schemas?graphSpace=${SPACE_B}&pageSize=100`,
+      undefined,
+      `列 ${SPACE_B} schema`,
+    )
+    const spaceWidget = (bSchemas.items ?? []).find((s: any) => s.name === 'E2eSpaceWidget')
+    expect(spaceWidget?.graphSpace).toBe(SPACE_B)
 
     // dev2 建 e2e_DevOnly
-    await page.locator('.space-picker .arco-select-view-single').click()
-    await selectOption(page, 'dev2')
+    await switchGraphSpace(page, 'dev2')
     await waitFor(async () => (await page.locator('tbody tr').count()) > 0, { label: 'dev2 列表' })
     await page.getByRole('button', { name: '＋ 增加' }).click()
     modal = page.locator('.schema-create-modal')
@@ -115,11 +117,9 @@ test.describe.serial('M. 图空间横切', () => {
     await expect(page.locator('tbody tr', { hasText: 'E2eDevOnly' }).first()).toBeVisible({ timeout: 30_000 })
 
     // 双向隔离：e2e_verify_space 看不到 e2e_DevOnly；dev2 看不到 e2e_SpaceWidget（目录）
-    await page.locator('.space-picker .arco-select-view-single').click()
-    await selectOption(page, SPACE_B)
+    await switchGraphSpace(page, SPACE_B)
     await expect(page.locator('tbody tr', { hasText: 'E2eDevOnly' })).toHaveCount(0)
-    await page.locator('.space-picker .arco-select-view-single').click()
-    await selectOption(page, 'dev2')
+    await switchGraphSpace(page, 'dev2')
     await expect(page.locator('tbody tr', { hasText: 'E2eSpaceWidget' })).toHaveCount(0)
 
     // 图库复核：TAG 只在各自空间存在
@@ -138,8 +138,7 @@ test.describe.serial('M. 图空间横切', () => {
     // e2e_verify_space 新建关系：起点下拉可见 e2e_SpaceWidget、不可见 e2e_DevOnly
     await page.goto('/schema')
     await page.waitForLoadState('networkidle')
-    await page.locator('.space-picker .arco-select-view-single').click()
-    await selectOption(page, SPACE_B)
+    await switchGraphSpace(page, SPACE_B)
     await waitFor(
       async () => (await page.locator('tbody tr', { hasText: 'E2eSpaceWidget' }).count()) > 0,
       { label: '空间 B 实体就绪' },
@@ -167,8 +166,7 @@ test.describe.serial('M. 图空间横切', () => {
     expect(edgeCols.length).toBeGreaterThan(0)
 
     // dev2 的关系新建下拉正好相反（可见 e2e_DevOnly，不可见 e2e_SpaceWidget）
-    await page.locator('.space-picker .arco-select-view-single').click()
-    await selectOption(page, 'dev2')
+    await switchGraphSpace(page, 'dev2')
     await waitFor(async () => (await page.locator('tbody tr').count()) >= 0, { label: 'dev2 关系列表' })
     await page.getByRole('button', { name: '＋ 增加' }).click()
     modal = page.locator('.schema-create-modal')
@@ -180,35 +178,34 @@ test.describe.serial('M. 图空间横切', () => {
     await modal.locator('header button').click()
   })
 
-  test('M4 任务中心 schemaId 下拉按空间联动', async ({ page, request }) => {
+  test('M4 任务中心 schemaId 下拉按空间联动', async ({ page }) => {
     await page.goto('/graph-build')
     await page.waitForLoadState('networkidle')
-    await page.getByRole('button', { name: '＋ 新建任务' }).click()
-    const dialog = page.locator('[class*="job-launch"]').filter({ hasText: '新建任务' }).first()
-    await expect(dialog).toBeVisible()
-    await dialog.locator('[aria-label="任务类型"]').click()
-    await page.locator('li.arco-select-option:visible', { hasText: '数据抽取' }).first().click()
 
-    // 图空间切 e2e_verify_space → 该空间无可抽取 schema（e2e_SpaceWidget 无脚本/来源）
-    await dialog.locator('.arco-select-view-single:has(input[placeholder="默认空间"])').click()
-    await page.locator('li.arco-select-option:visible', { hasText: SPACE_B }).first().click()
+    // 全局切 e2e_verify_space → 弹窗按该空间拉可抽取 schema（该空间 schema 无脚本/来源）
+    await switchGraphSpace(page, SPACE_B)
+    await page.getByRole('button', { name: '＋ 新建任务' }).click()
+    let dialog = page.locator('[class*="job-launch"]').filter({ hasText: '新建任务' }).first()
+    await expect(dialog).toBeVisible()
     await expect(dialog.getByText('暂无可抽取 Schema——请先在 Schema 管理页上传抽取脚本并绑定来源表')).toBeVisible({ timeout: 30_000 })
 
-    // 切回 dev2 → E2EWidget 出现（有脚本+来源）
-    await dialog.locator('.arco-select-view-single:has(input[placeholder="默认空间"])').click()
-    await page.locator('li.arco-select-option:visible', { hasText: 'dev2' }).first().click()
+    // 关弹窗切回 dev2 再开 → E2EWidget 出现（有脚本+来源）
+    await dialog.getByRole('button', { name: '取消' }).click()
+    await switchGraphSpace(page, 'dev2')
+    await page.getByRole('button', { name: '＋ 新建任务' }).click()
+    dialog = page.locator('[class*="job-launch"]').filter({ hasText: '新建任务' }).first()
+    await expect(dialog).toBeVisible()
     await dialog.locator('input[placeholder="选择要抽取的实体/关系"]').click()
     const widgetOpt = page.locator('li.arco-select-option:visible', { hasText: 'E2EWidget' }).first()
     await waitFor(async () => (await widgetOpt.isVisible().catch(() => false)), { label: 'dev2 下拉出现 E2EWidget' })
   })
 
-  test('M5 查询与实体列表空间切换（回归）', async ({ page, request }) => {
-    // nGQL 模式换空间执行
+  test('M5 查询与实体列表空间切换（回归）', async ({ page }) => {
+    // nGQL 模式：换全局空间后执行（面板自身已无空间控件）
     await page.goto('/graph-query')
     await page.waitForLoadState('networkidle')
     await page.getByRole('button', { name: 'nGQL 模式' }).click()
-    await page.locator('.platform-ngql-input__space-field .arco-select-view-single').click()
-    await page.locator('li.arco-select-option:visible', { hasText: 'algo_test' }).first().click()
+    await switchGraphSpace(page, 'algo_test')
     const ta = page.locator('textarea[placeholder*="MATCH (v:专家)"]')
     await ta.fill('MATCH (v) RETURN count(v) AS c')
     await page.getByRole('button', { name: '执行 nGQL' }).click()
@@ -217,8 +214,7 @@ test.describe.serial('M. 图空间横切', () => {
     // 实体列表切空间 + 关键词搜索
     await page.goto('/graph-query/entities')
     await page.waitForLoadState('networkidle')
-    await page.locator('span.arco-select-view-single:has(input[placeholder="默认图空间"])').click()
-    await page.locator('li.arco-select-option:visible', { hasText: 'dev2' }).first().click()
+    await switchGraphSpace(page, 'dev2')
     await waitFor(
       async () => /空间 dev2/.test(await page.locator('body').innerText()),
       { label: '实体列表切回 dev2' },
@@ -234,7 +230,7 @@ test.describe.serial('M. 图空间横切', () => {
     )
   })
 
-  test('M6 抽取写入指定图空间', async ({ page, request }) => {
+  test('M6 抽取写入指定图空间', async ({ request }) => {
     test.setTimeout(420_000)
     // 前置：e2e_verify_space 建 E2EWidget TAG（列结构对齐 dev2）
     const cols = await describeColumns(request, 'dev2', 'TAG', 'E2EWidget')
@@ -286,7 +282,9 @@ test.describe.serial('M. 图空间横切', () => {
     expect(String((execDetail.payload || {}).graphSpace || '')).toContain(SPACE_B)
   })
 
-  test('D5 图数据空间绑定/解绑', async ({ page, request }) => {
+  test('D5 图数据空间绑定/解绑（选择器联动）', async ({ page, request }) => {
+    // beforeAll 已绑定 SPACE_B 供 M1-M6 切换；先 API 解绑复位，再走 UI 完整绑定/解绑
+    await api(request, 'DELETE', `/graph-spaces/${SPACE_B}`)
     await page.goto('/configurations')
     await page.waitForLoadState('networkidle')
     await page.getByRole('button', { name: '图数据空间', exact: false }).first().click()
@@ -302,6 +300,12 @@ test.describe.serial('M. 图空间横切', () => {
       },
       { label: 'API bound=true' },
     )
+    // 绑定对所有用户生效：配置页改动会刷新顶栏选择器，SPACE_B 立即出现在可选列表
+    await page.locator('.app-space-select .arco-select-view-single').click()
+    await expect(page.locator('li.arco-select-option:visible', { hasText: SPACE_B }).first()).toBeVisible({
+      timeout: 15_000,
+    })
+    await page.keyboard.press('Escape')
 
     // 解绑（confirm 文案核对后接受）
     page.once('dialog', (d) => {
@@ -316,10 +320,8 @@ test.describe.serial('M. 图空间横切', () => {
       },
       { label: 'API bound=false' },
     )
+    // 选择器列表同步移除该空间（后续 N 组如需切换会在自己的 beforeAll 重新绑定）
+    await page.locator('.app-space-select .arco-select-view-single').click()
+    await expect(page.locator('li.arco-select-option:visible', { hasText: SPACE_B })).toHaveCount(0)
   })
 })
-
-async function selectOption(page: import('@playwright/test').Page, text: string): Promise<void> {
-  const opt = page.locator('li.arco-select-option:visible', { hasText: text }).first()
-  await opt.click({ timeout: 15_000 })
-}

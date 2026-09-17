@@ -13,11 +13,7 @@ import {
   type WorkflowJob,
 } from '../../api/workflowOperations'
 import { schemaErrorMessage } from '../../api/schemaManagement'
-import { listLlmConfigs, type LlmConfig } from '../../api/llmConfig'
-import { listEmbeddingConfigs, type EmbeddingConfig } from '../../api/embeddingConfig'
-import { listMysqlDatasources, type MysqlDatasource } from '../../api/mysqlDatasource'
-import { listGraphSpaces } from '../../api/graphSpace'
-import { currentUserId as getCurrentUserId } from '../../api/currentUser'
+import { useGraphSpaceStore } from '../../stores/graphSpace'
 import JobLaunchDialog from '../../components/JobLaunchDialog.vue'
 import ListPagination from '../../components/list-pagination.vue'
 import { useClientPagination } from '../../composables/use-client-pagination'
@@ -27,13 +23,9 @@ import { describeCron } from '../../utils/cronSchedule'
 
 const { showToast } = useToast()
 const router = useRouter()
-const currentUserId = getCurrentUserId()
+const graphSpaceStore = useGraphSpaceStore()
 
 const jobs = ref<WorkflowJob[]>([])
-const llmConfigs = ref<LlmConfig[]>([])
-const embeddingConfigs = ref<EmbeddingConfig[]>([])
-const mysqlDatasources = ref<MysqlDatasource[]>([])
-const graphSpaces = ref<string[]>([])
 const loading = ref(false)
 const createOpen = ref(false)
 const triggeringJobId = ref('')
@@ -41,6 +33,23 @@ const triggeringJobId = ref('')
 const filterName = ref('')
 const filterStatus = ref('')
 const filterTaskType = ref('')
+
+/** 「全部空间」开关持久化：默认关闭=任务列表跟随顶栏当前全局图空间 */
+const SHOW_ALL_SPACES_KEY = 'tech-kg-graph-build-all-spaces'
+const showAllSpaces = ref(
+  (() => {
+    try {
+      return localStorage.getItem(SHOW_ALL_SPACES_KEY) === '1'
+    } catch {
+      return false
+    }
+  })(),
+)
+
+/** 任务归属空间：payload 未带 graphSpace 的历史任务落当时的默认业务空间（空间列表首位恒为默认）。 */
+function jobSpace(job: WorkflowJob): string {
+  return job.graphSpace || graphSpaceStore.spaces[0] || graphSpaceStore.current
+}
 
 /** 历史键 single/chain/upload 已停止新建（D2），存量行仍需中文展示 */
 const TASK_TYPE_LABELS: Record<string, string> = {
@@ -50,24 +59,27 @@ const TASK_TYPE_LABELS: Record<string, string> = {
   upload: '上传脚本',
 }
 
+const filteredJobs = computed(() => {
+  const name = filterName.value.trim().toLowerCase()
+  const space = graphSpaceStore.current
+  return jobs.value.filter((job) => {
+    if (!showAllSpaces.value && jobSpace(job) !== space) return false
+    if (name && !job.name.toLowerCase().includes(name)) return false
+    if (filterStatus.value && deriveJobUnifiedStatus(job) !== filterStatus.value) return false
+    if (filterTaskType.value && job.taskType !== filterTaskType.value) return false
+    return true
+  })
+})
+
+// 状态卡片与表格同口径：跟随当前筛选范围（含当前空间过滤）
 const summaryItems = computed(() => {
-  const counts = countJobUnifiedStatuses(jobs.value)
+  const counts = countJobUnifiedStatuses(filteredJobs.value)
   return [
     { label: '运行中', value: counts['运行中'], hint: '正在执行的任务' },
     { label: '已完成', value: counts['已完成'], hint: '最近一次执行成功' },
     { label: '运行失败', value: counts['运行失败'], hint: '最近一次执行出错' },
     { label: '已暂停', value: counts['已暂停'], hint: '已暂停触发' },
   ]
-})
-
-const filteredJobs = computed(() => {
-  const name = filterName.value.trim().toLowerCase()
-  return jobs.value.filter((job) => {
-    if (name && !job.name.toLowerCase().includes(name)) return false
-    if (filterStatus.value && deriveJobUnifiedStatus(job) !== filterStatus.value) return false
-    if (filterTaskType.value && job.taskType !== filterTaskType.value) return false
-    return true
-  })
 })
 
 // 任务列表客户端分页（后端按 created_at desc，最新任务总在第 1 页——e2e 按名称找行依赖这一点）
@@ -80,7 +92,14 @@ const {
   changePage: changeJobPage,
   changePageSize: changeJobPageSize,
 } = useClientPagination(filteredJobs, 10)
-watch([filterName, filterStatus, filterTaskType], resetJobPage)
+watch([filterName, filterStatus, filterTaskType, showAllSpaces, () => graphSpaceStore.current], resetJobPage)
+watch(showAllSpaces, (value) => {
+  try {
+    localStorage.setItem(SHOW_ALL_SPACES_KEY, value ? '1' : '0')
+  } catch {
+    // localStorage 不可用（隐私模式等）：仅内存态生效
+  }
+})
 
 async function loadData() {
   loading.value = true
@@ -94,25 +113,7 @@ async function loadData() {
   }
 }
 
-async function loadDialogResources() {
-  try {
-    const [llm, embedding, mysql, spaces] = await Promise.all([
-      listLlmConfigs(currentUserId),
-      listEmbeddingConfigs(currentUserId),
-      listMysqlDatasources(currentUserId),
-      listGraphSpaces(currentUserId),
-    ])
-    llmConfigs.value = llm
-    embeddingConfigs.value = embedding
-    mysqlDatasources.value = mysql
-    graphSpaces.value = spaces
-  } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
-  }
-}
-
 function openCreate() {
-  void loadDialogResources()
   createOpen.value = true
 }
 
@@ -219,6 +220,7 @@ onMounted(loadData)
             <a-option value="upload">上传脚本</a-option>
           </a-select>
           <a-input id="graph-build-filter-name" v-model="filterName" class="gb-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="按名称搜索" placeholder="按名称搜索"><template #prefix><IconSearch /></template></a-input>
+          <a-checkbox v-model="showAllSpaces" class="gb-space-toggle" title="默认仅显示当前图空间（顶栏全局选择器）的任务">全部空间</a-checkbox>
         </div>
       </header>
       <div class="gb-jobs-panel">
@@ -279,10 +281,6 @@ onMounted(loadData)
 
     <JobLaunchDialog
       :open="createOpen"
-      :llm-configs="llmConfigs"
-      :embedding-configs="embeddingConfigs"
-      :mysql-datasources="mysqlDatasources"
-      :graph-spaces="graphSpaces"
       @close="createOpen = false"
       @created="loadData"
     />
@@ -306,6 +304,8 @@ onMounted(loadData)
 .gb-section-title::before{position:absolute;top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#165dff;content:""}
 .gb-jobs-panel{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #e5e6eb;border-radius:6px;background:#fff;box-shadow:none;flex-direction:column}
 .gb-filters{display:flex;align-items:center;gap:8px;font-weight:400}
+/* 全部空间开关：跟随筛选条尺寸合同，不换行不被压缩 */
+.gb-filters .gb-space-toggle{flex:0 0 auto;margin:0;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap;color:#4e5969;cursor:pointer}
 .gb-task-table{flex:1;min-height:0;overflow:auto;padding:0}
 /* 与 Schema 管理表一致：由内容语义自动分配列宽，空间不足时由表格容器承接横向滚动。 */
 .gb-task-table table{width:100%;margin:0;border-collapse:collapse;font-size:14px;line-height:22px}

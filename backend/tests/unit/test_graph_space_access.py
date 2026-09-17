@@ -126,7 +126,8 @@ class TestEnsureSpaceAccess:
         assert exc_info.value.status_code == 403
 
 
-async def test_ordinary_space_list_fallback_only_exposes_configured_default(monkeypatch) -> None:
+async def test_space_list_fallback_only_exposes_configured_default(monkeypatch) -> None:
+    """绑定库不可用时，管理员与普通用户同样只回退默认空间，不直查图服务列全量。"""
     monkeypatch.setattr(
         graph_search,
         "create_session",
@@ -139,6 +140,8 @@ async def test_ordinary_space_list_fallback_only_exposes_configured_default(monk
     )
     response = await graph_search.list_spaces(_actor(USER_A))
     assert response.data == {"spaces": ["shared_business"]}
+    admin_response = await graph_search.list_spaces(_actor("admin", is_admin=True))
+    assert admin_response.data == {"spaces": ["shared_business"]}
 
 
 class TestValidateResourceSelectors:

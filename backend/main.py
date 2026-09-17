@@ -68,7 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from db_model.llm_config import LlmConfig
         from db_model.milvus_config import MilvusConfig
         from db_model.mysql_datasource import MysqlDatasource
-        from db_model.platform_governance import UserGraphSpace
+        from db_model.platform_governance import GraphSpaceVectorDatabase, UserGraphSpace
         from db_model.script_watermark import ScriptWatermark
         from infra.mysql import get_engine
 
@@ -82,10 +82,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     EmbeddingConfig.__table__,
                     ScriptWatermark.__table__,
                     UserGraphSpace.__table__,
+                    GraphSpaceVectorDatabase.__table__,
                 ],
             )
         except Exception as exc:
             logger.warning("跳过平台配置表建表：MySQL 不可达 %s", exc)
+        # 图空间↔向量库映射 backfill：对已绑定空间补 ensure Milvus 同名 database
+        # （幂等、best-effort；Milvus 不可达只记 failed 行，下次重启重试）
+        if _env_bool("GRAPH_SPACE_VECTOR_DB_BACKFILL", True):
+            from service.graph_space import backfill_vector_databases
+
+            async def _run_vector_db_backfill() -> None:
+                try:
+                    summary = await asyncio.to_thread(backfill_vector_databases)
+                    logger.info("图空间向量库 backfill 完成: %s", summary)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("图空间向量库 backfill 失败（忽略）: %s", exc)
+
+            asyncio.get_running_loop().create_task(_run_vector_db_backfill())
         if os.getenv("SCHEMA_AUTO_INIT", "false").lower() == "true":
             from script.init_schema_management import initialize_schema_management
 

@@ -185,6 +185,19 @@ const linkResolution = computed(() => {
     ? (raw as { matchScore?: number; margin?: number | null })
     : null
 })
+/** 待入库记录卡的「类型」行：T_DIRECT 带具体节点/边类型；T_LINK 固定实体（同名冲突对齐）。 */
+const incomingKindLabel = computed(() => {
+  if (templateId.value === 'T_LINK') return '实体（同名冲突对齐）'
+  if (directKind.value === 'relation') return `关系（${labelZh(directEdgeType.value) || directEdgeType.value || '—'}）`
+  return `实体（${labelZh(directNodeLabel.value) || directNodeLabel.value || '—'}）`
+})
+/** 待入库记录卡的「来源记录」行：T_LINK 取扣留快照 _incoming；T_DIRECT 取 case 的来源表/记录 id。 */
+const incomingSource = computed(() => {
+  if (templateId.value === 'T_LINK') {
+    return { table: linkIncoming.value?.sourceTable || '—', id: linkIncoming.value?.vid || record.value?.objectId || '—' }
+  }
+  return { table: directSourceTable.value || productionCase.value?.workflowType || '—', id: directSourceRecordId.value || record.value?.objectId || '—' }
+})
 /** merge 裁决的并入目标（targetEntityId）——服务端校验必须属于候选集。 */
 const selectedTarget = ref('')
 watch(
@@ -468,12 +481,14 @@ const runPrimary = () => {
         <div class="link-incoming">
           <span>待入库记录（已扣留，未写图）</span>
           <strong>{{ record.object }}</strong>
+          <dl class="link-incoming-meta">
+            <div><dt>类型</dt><dd>{{ incomingKindLabel }}</dd></div>
+            <div><dt>来源记录</dt><dd>{{ incomingSource.table }} · <code>{{ incomingSource.id }}</code></dd></div>
+          </dl>
           <template v-if="templateId === 'T_LINK'">
-            <p>来源：{{ linkIncoming?.sourceTable || '—' }} · 记录 <code>{{ linkIncoming?.vid || record.objectId }}</code></p>
             <p v-if="linkResolution">消歧得分 {{ linkResolution.matchScore ?? '—' }} · 候选分差 {{ linkResolution.margin ?? '—' }} · 灰区人工裁决</p>
           </template>
           <template v-else>
-            <p>来源：{{ directSourceTable || productionCase?.workflowType || '—' }} · 记录 <code>{{ directSourceRecordId || record.objectId }}</code></p>
             <p v-if="directKind === 'relation' && directFromId">关系端点：<code>{{ directFromId }}</code> -[{{ labelZh(directEdgeType) || directEdgeType }}]-&gt; <code>{{ directToId }}</code></p>
             <p>抽取置信度 {{ directConfidence ?? '—' }} · 低于自动入库阈值 0.85，需人工复核</p>
           </template>
@@ -562,10 +577,6 @@ const runPrimary = () => {
           <a-radio value="reject" :disabled="!isEditable">驳回·丢弃（候选不写图）</a-radio>
         </a-radio-group>
         </a-form-item>
-        <label v-if="isEditable" class="verdict-note">
-          <span>备注（可选）</span>
-          <input aria-label="审核备注" v-model="note" placeholder="审核备注…" />
-        </label>
 
         <!-- T_DIRECT 溯源 / 原始记录 / 抽取推理过程（折叠保留，不改变裁决框主布局） -->
         <template v-if="templateId === 'T_DIRECT'">
@@ -991,21 +1002,35 @@ const runPrimary = () => {
   background: #f5f8ff;
 }
 
-/* T_LINK 裁决框内备注（可选） */
-.verdict-note {
+/* 待入库记录卡：类型 / 来源记录 标签行 */
+.link-incoming-meta {
   display: grid;
-  gap: 6px;
-  margin-top: 12px;
-  color: #718099;
+  gap: 4px;
+  margin: 8px 0 0;
+}
+
+.link-incoming-meta > div {
+  display: flex;
+  gap: 10px;
+}
+
+.link-incoming-meta dt {
+  flex: 0 0 auto;
+  color: #7890b5;
   font-size: 11px;
 }
 
-.verdict-note input {
-  padding: 8px 10px;
-  border: 1px solid #dce8f8;
-  border-radius: 5px;
-  font: 13px/1.5 inherit;
-  color: #17233b;
+.link-incoming-meta dd {
+  margin: 0;
+  color: #344054;
+  font-size: 12px;
+}
+
+.link-incoming-meta dd code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #eef4ff;
+  color: #175cd3;
 }
 
 /* T_LINK 消歧 v2：待入库记录卡 + 候选选择列表 */

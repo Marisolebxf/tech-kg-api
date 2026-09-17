@@ -135,8 +135,7 @@ test.describe.serial('G. 人工审核（A 类）', () => {
     await page.waitForLoadState('networkidle')
     await expect(page.getByText('待入库记录（已扣留，未写图）').first()).toBeVisible({ timeout: 30_000 })
 
-    // 填备注 → 选「驳回·丢弃」→ 底部「确认」
-    await page.locator('input[placeholder="审核备注…"]').fill('e2e 驳回：候选不可信')
+    // 选「驳回·丢弃」→ 底部「确认」（备注行已下线，裁决不再带备注输入）
     await page.getByText('驳回·丢弃（候选不写图）').first().click()
     await page.getByRole('button', { name: '确认', exact: true }).click()
     await waitFor(

@@ -9,11 +9,11 @@
 
 ```text
 平台（按时间列水位分批读源表行）
-   └─ payload["rows"] ──▶ workflow(payload)   ← 脚本：纯转换，返回实体/关系
+   └─ payload["rows"] ──▶ transform(payload)  ← 脚本：纯转换，返回实体/关系
                               └─ 返回 dict ──▶ 平台 merge_node / merge_edge 写图 + 推水位
 ```
 
-- **入口签名不变**：仍是 `def workflow(payload)`（单参）或 step 双参约定；
+- **入口**：`def transform(payload)`（单参；旧 `workflow` 名仍兼容），多步用脚本顶层 `STEPS` 清单（每步同样单参）；
 - 脚本**不自读库、不自写图**——批次行由平台传入，写图由平台完成；
 - 每张来源表独立水位（默认时间列 `update_time`），多表并行、单表内批次串行。
 
@@ -22,7 +22,7 @@
 `props` 的键必须存在于 Schema 目录（未删除属性）；已删属性「插空」= 省略键即可。
 
 ```python
-def workflow(payload):
+def transform(payload):
     rows = payload["rows"]          # 本批行（JSON dict）
     table = payload["source_table"] # "库名.表名"
     kind = payload["kind"]          # "entity" | "relation"
@@ -40,7 +40,7 @@ def workflow(payload):
 
 脚本返回的 `_watermark` / `_checkpoint` 元字段**被忽略**——平台按每批最大时间列值推进
 `schema-extract-{schemaKey}` + `source:{绑定行 id}` 的独立水位。批次失败不推水位，
-重跑时重读上次成功水位，重处理同一窗口（幂等语义与 step 水位一致）。
+重跑时重读上次成功水位，重处理同一窗口（幂等）。
 
 ## 相关端点
 

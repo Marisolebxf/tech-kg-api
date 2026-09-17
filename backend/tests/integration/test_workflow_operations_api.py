@@ -222,3 +222,92 @@ async def test_execute_definition_rejects_duplicate_workflow_id(
     )
     assert response.status_code == 409
     assert "工作流已存在" in response.json()["detail"]
+
+
+@pytest.fixture
+def fake_chain_schemas(monkeypatch: pytest.MonkeyPatch):
+    """chain 任务创建逐个 load_extract_schema：测试库无 schema，fake 出两个可抽取 schema。"""
+    from service import schema_extraction
+
+    def _load(schema_id):
+        return {
+            "id": schema_id,
+            "schema_key": schema_id.removeprefix("schema-"),
+            "name": schema_id.removeprefix("schema-").title(),
+            "label": f"{schema_id.removeprefix('schema-')}标签",
+            "kind": "entity",
+            "graph_space": "dev2",
+            "property_revision": 1,
+            "captured_revision": 1,
+        }
+
+    monkeypatch.setattr(schema_extraction, "load_extract_schema", _load)
+
+
+async def test_create_and_trigger_chain_job_api(async_client, fake_temporal, fake_chain_schemas):
+    """chain 任务 API：创建合成 kg.schema.extract.chain 定义，触发带扁平 schemaIds payload。"""
+    created = await async_client.post(
+        "/api/v1/workflow-system/jobs",
+        json={
+            "name": "论文→专家串行",
+            "taskType": "chain",
+            "schemaIds": ["schema-paper", "schema-scholar"],
+            "batchSize": 300,
+        },
+    )
+    assert created.status_code == 200
+    job = created.json()["data"]
+    assert job["definitionId"].startswith("chain-")
+    assert job["schemaIds"] == ["schema-paper", "schema-scholar"]
+    assert job["schemaLabels"] == ["paper标签", "scholar标签"]
+
+    definition = repository.get_definition(job["definitionId"])
+    assert definition is not None
+    assert definition["workflowType"] == "kg.schema.extract.chain"
+    assert [s["schemaId"] for s in definition["steps"]] == ["schema-paper", "schema-scholar"]
+
+    triggered = await async_client.post(f"/api/v1/workflow-system/jobs/{job['id']}/trigger")
+    assert triggered.status_code == 200
+    executions = repository.list_executions(limit=10, job_id=job["id"])
+    assert executions
+    payload = executions[0]["payload"]
+    assert payload["schemaIds"] == ["schema-paper", "schema-scholar"]
+    assert payload["chainDefinitionId"] == job["definitionId"]
+    assert "schemaId" not in payload
+
+
+@pytest.mark.parametrize("schema_ids", [["schema-paper"], [f"schema-s{i}" for i in range(21)]])
+async def test_create_chain_validation_rejected(
+    async_client, fake_temporal, fake_chain_schemas, schema_ids
+):
+    """chain schemaIds 长度校验（pydantic min 2 / max 20）。
+
+    jobs 端点走平台约定：HTTP 200 + 业务 code 422（main.py 的
+    RequestValidationError 包装，仅 definitions/{id}/execute 等白名单走真 422）。
+    """
+    response = await async_client.post(
+        "/api/v1/workflow-system/jobs",
+        json={"name": "非法链", "taskType": "chain", "schemaIds": schema_ids},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["code"] == 422
+    assert body["success"] is False
+    # 确是 schemaIds 长度校验拦下，而非其他字段
+    assert any("schemaIds" in str(e.get("loc")) for e in body["data"])
+
+
+async def test_create_chain_duplicate_schemas_rejected(
+    async_client, fake_temporal, fake_chain_schemas
+):
+    """chain schemaIds 重复 → 服务层拒绝（400）。"""
+    response = await async_client.post(
+        "/api/v1/workflow-system/jobs",
+        json={
+            "name": "重复链",
+            "taskType": "chain",
+            "schemaIds": ["schema-paper", "schema-paper"],
+        },
+    )
+    assert response.status_code == 400
+    assert "重复" in response.json()["detail"]

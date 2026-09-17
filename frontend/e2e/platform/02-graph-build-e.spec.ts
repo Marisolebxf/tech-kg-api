@@ -1,10 +1,12 @@
 import { expect, test } from '@playwright/test'
 import {
+  API_BASE,
   api,
   apiMust,
   autoAcceptConfirms,
   graphCount,
   mysql,
+  resetWidgetRows,
   runId,
   switchGraphSpace,
   waitFor,
@@ -16,6 +18,19 @@ from typing import Any, Mapping
 
 def workflow(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {"status": "ok", "echo": str(payload.get("hello", ""))}
+`
+
+/** E3 素材：第二个可抽取 Schema 的转换脚本（与 WIDGET_SCRIPT 同形，tag 不同） */
+const WIDGET_B_SCRIPT = `"""E2EWidgetB 转换脚本：出实体 + 写图。"""
+from typing import Any, Mapping
+
+
+def transform(payload: Mapping[str, Any]) -> dict[str, Any]:
+    rows = payload.get("rows") or []
+    entities = []
+    for row in rows:
+        entities.append({"id": "widgetb_" + str(row["id"]), "props": {"id": str(row["id"]), "name": str(row.get("name") or "")}})
+    return {"entities": entities, "failures": []}
 `
 
 // E. 任务中心（/graph-build）
@@ -37,17 +52,6 @@ test.describe.serial('E. 任务中心', () => {
     )
     const widget = (schemas.items ?? []).find((s: any) => s.name === 'E2EWidget')
     test.skip(!widget, 'C 组未产出 E2EWidget')
-    // E3 前置：上传两个 echo python 定义（链式任务素材）
-    for (const name of [`e2e-echo-a-${suffix}`, `e2e-echo-b-${suffix}`]) {
-      const form = new FormData()
-      form.append('file', new Blob([ECHO_SCRIPT], { type: 'text/x-python' }), `${name}.py`)
-      form.append('function_name', 'workflow')
-      form.append('name', name)
-      await request.post('http://localhost:8002/api/v1/workflow-system/definitions/python', {
-        multipart: form,
-        headers: { 'X-User-Id': 'local-dev' },
-      })
-    }
   })
 
   test('E1 任务列表 + 标题 + 汇总卡 + 筛选', async ({ page, request }) => {
@@ -163,9 +167,67 @@ test.describe.serial('E. 任务中心', () => {
   })
 
   test('E3 新建「多脚本串行」任务（chain）', async ({ page, request }) => {
-    test.skip(true, 'chain 建任务 UI 已随 D2/D4 下线（2026-09-14），待按新任务中心形态重写')
     test.setTimeout(300_000)
     const jobName = `e2e任务-串行-${suffix}`
+
+    // ---- 前置：两个可抽取 Schema（E2EWidget 来自 C 组；E2EWidgetB 现场造：建目录 → 传脚本 → 绑来源）
+    const schemas = await apiMust<any>(
+      request,
+      'GET',
+      '/schema-management/schemas?graphSpace=dev2&pageSize=100&includeDetails=true',
+      undefined,
+      '列 schema',
+    )
+    const widget = (schemas.items ?? []).find((s: any) => s.name === 'E2EWidget')
+    test.skip(!widget, 'C 组未产出 E2EWidget')
+    const widgetB = (schemas.items ?? []).find((s: any) => s.name === 'E2EWidgetB')
+    if (!widgetB) {
+      const created = await apiMust<any>(
+        request,
+        'POST',
+        '/schema-management/schemas/entities',
+        {
+          schemaKey: 'e2e_widget_b',
+          name: 'E2EWidgetB',
+          label: 'E2E测试挂件B',
+          description: 'e2e chain 串行素材',
+          identityKey: 'id',
+          properties: [
+            { name: 'id', dataType: 'string', required: true, rule: '', category: 'required' },
+            { name: 'name', dataType: 'string', required: true, rule: '', category: 'required' },
+          ],
+          graphSpace: 'dev2',
+        },
+        '建 E2EWidgetB',
+      )
+      widgetB.id = created.id
+    }
+    // 幂等重跑：脚本与来源绑定每次都重放（上次中断也能补齐）
+    const scriptResp = await request.put(`${API_BASE}/schema-management/schemas/${widgetB.id}/script`, {
+      multipart: {
+        script: {
+          name: 'e2e_widget_b_extract.py',
+          mimeType: 'text/x-python',
+          buffer: Buffer.from(WIDGET_B_SCRIPT, 'utf-8'),
+        },
+      },
+    })
+    expect(scriptResp.ok(), `上传 E2EWidgetB 脚本: HTTP ${scriptResp.status()}`).toBeTruthy()
+    const ds = await apiMust<any>(request, 'GET', '/mysql-datasources', undefined, '列数据源')
+    const dsList = Array.isArray(ds) ? ds : (ds.items ?? [])
+    const e2eDs = dsList.find((d: any) => d.name === 'e2e-mysql-src' && d.host === 'temporal-mysql-dev2')
+    expect(e2eDs, 'e2e-mysql-src 数据源存在').toBeTruthy()
+    await apiMust<any>(
+      request,
+      'PUT',
+      `/schema-management/schemas/${widgetB.id}/sources`,
+      { sources: [{ datasourceId: e2eDs.id, databaseName: 'techkg_e2e', tableName: 'widgets' }] },
+      '绑来源',
+    )
+    // 推水位：两环都有新行可写
+    await resetWidgetRows()
+
+    // ---- UI：新建 chain 任务
     await page.goto('/graph-build')
     await page.waitForLoadState('networkidle')
     await page.getByRole('button', { name: '＋ 新建任务' }).click()
@@ -175,20 +237,30 @@ test.describe.serial('E. 任务中心', () => {
     await dialog.locator('[aria-label="任务类型"]').click()
     await page.locator('li.arco-select-option:visible', { hasText: '多脚本串行' }).first().click()
 
-    // 仅选 1 个时被拦（创建按钮禁用 + 提示文案）；chain 的选择器占位符与 single 不同
-    const pick = dialog.locator('input[placeholder="搜索并添加脚本"]')
-    await pick.click()
-    const optA = page.locator('li.arco-select-option:visible', { hasText: `e2e-echo-a-${suffix}` }).first()
-    await waitFor(async () => (await optA.isVisible().catch(() => false)), { label: 'echo-a 选项' })
-    await optA.click()
-    await expect(dialog.getByText('多脚本串行任务至少选择 2 个脚本')).toBeVisible()
-    await expect(dialog.getByRole('button', { name: '创建任务' })).toBeDisabled()
+    // 先选图空间（M4 联动：chain 队列同样按空间过滤）
+    await dialog.locator('.arco-select-view-single:has(input[placeholder="默认空间"])').click()
+    await page.locator('li.arco-select-option:visible', { hasText: 'dev2' }).first().click()
 
-    // 追加第二个脚本（chain 选择后输入框自动清空，直接再开下拉）
+    // 添加第一个 Schema：仅 1 个时被拦（创建按钮禁用 + 提示文案）
+    const pick = dialog.locator('input[placeholder="搜索并添加 Schema"]')
     await pick.click()
-    const optB = page.locator('li.arco-select-option:visible', { hasText: `e2e-echo-b-${suffix}` }).first()
-    await waitFor(async () => (await optB.isVisible().catch(() => false)), { label: 'echo-b 选项' })
+    const optA = page.locator('li.arco-select-option:visible', { hasText: 'E2EWidgetB' }).first()
+    await waitFor(async () => (await optA.isVisible().catch(() => false)), { label: 'E2EWidgetB 选项' })
+    await optA.click()
+    await expect(dialog.getByText('多脚本串行任务至少选择 2 个 Schema')).toBeVisible()
+    await expect(dialog.getByRole('button', { name: '创建任务' })).toBeDisabled()
+    await expect(dialog.locator('.chain-steps li')).toHaveCount(1)
+
+    // 追加第二个 Schema（chain 选择后输入框自动清空，直接再开下拉）。
+    // 'E2EWidget' 是 'E2EWidgetB' 的子串——用右括号锚定精确匹配 E2EWidget
+    await pick.click()
+    const optB = page.locator('li.arco-select-option:visible', { hasText: '· E2EWidget）' }).first()
+    await waitFor(async () => (await optB.isVisible().catch(() => false)), { label: 'E2EWidget 选项' })
     await optB.click()
+    await expect(dialog.locator('.chain-steps li')).toHaveCount(2)
+    // 顺序可调：把第 2 项上移成第 1 项（E2EWidget 打头）
+    await dialog.locator('.chain-steps li').nth(1).getByRole('button', { name: '上移' }).click()
+    await expect(dialog.getByRole('button', { name: '创建任务' })).toBeEnabled()
     await dialog.getByRole('button', { name: '创建任务' }).click()
     await waitFor(
       async () => (await page.getByText(`任务「${jobName}」已创建并触发执行`).first().isVisible().catch(() => false)),
@@ -198,11 +270,13 @@ test.describe.serial('E. 任务中心', () => {
     const jobs = await waitFor(
       async () => {
         const list = await apiMust<any>(request, 'GET', '/workflow-system/jobs', undefined, '任务列表')
-        return (list.items ?? []).find((j: any) => j.name === jobName) ?? null
+        const job = (list.items ?? []).find((j: any) => j.name === jobName) ?? null
+        return job?.schemaIds?.length === 2 ? job : null
       },
-      { label: 'chain 任务入列' },
+      { label: 'chain 任务入列（带 schemaIds）' },
     )
     chainJobId = jobs.id
+    expect(jobs.schemaLabels.join('→')).toContain('E2E')
     const exec = await waitFor(
       async () => {
         const detail = await api<any>(request, 'GET', `/workflow-system/jobs/${chainJobId}`)
@@ -212,16 +286,29 @@ test.describe.serial('E. 任务中心', () => {
       },
       { timeout: 240_000, label: 'chain 执行完成' },
     )
+    // 两环串行都写了图（w1/w2 各写一份）；output 在执行详情端点（同 E2 的取法）
+    const execDetail = await apiMust<any>(
+      request,
+      'GET',
+      `/workflow-system/executions/${exec.id}`,
+      undefined,
+      'chain 执行详情',
+    )
+    const written = (execDetail.output?.steps ?? {}) as Record<string, any>
+    const writtenTotal = Object.values(written).reduce((sum, s) => sum + (s.written ?? 0), 0)
+    expect(writtenTotal).toBeGreaterThanOrEqual(2)
 
-    // 详情页：步骤侧栏两个脚本级子步骤（成功 ✓）
+    // ---- 详情页：每个 Schema 一个抽屉，展开是脚本内转换步
     await page.goto(`/graph-build/jobs/${chainJobId}`)
     await page.waitForLoadState('networkidle')
-    const steps = page.locator('.process-step')
-    await waitFor(async () => (await steps.count()) >= 2, { label: '两个脚本步骤' })
+    const stepBtns = page.locator('.process-step')
+    await waitFor(async () => (await stepBtns.count()) >= 2, { label: '两个 Schema 阶段' })
     expect(await page.locator('.process-step.is-成功').count()).toBeGreaterThanOrEqual(2)
-    // IO Tab：输入/输出 JSON（echo 脚本不访问外部资源，无「实际访问资源」卡）
-    await page.locator('.detail-tabs button', { hasText: '输入输出' }).click()
-    await expect(page.getByText(/实际访问资源|输入数据|输出结果|阶段真实输入输出/).first()).toBeVisible()
+    // 抽屉展开：点击第一个 Schema 阶段 → 内层转换步（单 transform 聚合为 1 条，name=函数名）
+    await stepBtns.first().click()
+    const substep = page.locator('.process-substep', { hasText: 'transform' }).first()
+    await expect(substep).toBeVisible()
+    await expect(substep.getByText(/行 · 写图/)).toBeVisible()
     expect(exec.status).toBe('COMPLETED')
   })
 

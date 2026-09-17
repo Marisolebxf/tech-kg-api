@@ -1,6 +1,6 @@
 # 任务中心与公共能力
 
-> 来源：`backend/docs/workflow_operations_api.md` · `CLAUDE.md`
+> 来源：`docs/工作流系统模块.md` · `CLAUDE.md`
 
 ## 任务中心（Job 注册表）
 

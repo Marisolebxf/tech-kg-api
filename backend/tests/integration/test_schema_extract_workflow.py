@@ -15,7 +15,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 with workflow.unsafe.imports_passed_through():
-    from service.temporal_workflows import SchemaExtractWorkflow
+    from service.temporal_workflows import SchemaExtractChainWorkflow, SchemaExtractWorkflow
 
 pytestmark = pytest.mark.external
 
@@ -43,6 +43,37 @@ PLAN = {
     "maxInflight": 2,
     "failureCaseCap": 10,
     "indexTimeoutSeconds": 60,
+}
+
+# chain（kg.schema.extract.chain）两环测试计划：alpha 实体全好行；beta 关系带毒行
+CHAIN_PLANS = {
+    "schema-alpha": {
+        **PLAN,
+        "schemaId": "schema-alpha",
+        "schemaKey": "alpha",
+        "name": "Alpha",
+        "label": "甲实体",
+        "sources": [{**PLAN["sources"][0], "id": "bind-a", "tableName": "dwd_alpha"}],
+    },
+    "schema-beta": {
+        **PLAN,
+        "schemaId": "schema-beta",
+        "schemaKey": "beta",
+        "kind": "relation",
+        "name": "Beta",
+        "label": "乙关系",
+        "sources": [{**PLAN["sources"][0], "id": "bind-b", "tableName": "dwd_beta"}],
+    },
+}
+CHAIN_ROWS = {
+    "schema-extract-alpha": [
+        {"id": "a1", "name": "甲1", "update_time": "2026-09-01 00:00:00"},
+        {"id": "a2", "name": "甲2", "update_time": "2026-09-01 00:01:00"},
+    ],
+    "schema-extract-beta": [
+        {"id": "b1", "name": "乙1", "update_time": "2026-09-01 00:00:00"},
+        {"id": "bad", "name": "毒", "update_time": "2026-09-01 00:01:00"},
+    ],
 }
 
 MULTI_STEP_PLAN = {
@@ -442,3 +473,215 @@ class TestSchemaExtractMultiStep:
             "step_clean",
             "step_resolve",
         ]
+
+
+def _make_chain_activities(state: dict[str, Any], *, fail_schema: str | None = None):
+    """chain 假 activity 集：load_plan 按 schemaId 分发计划，读/转换按 definitionId
+    （schema-extract-{schemaKey}）区分两环；fail_schema 传 schemaId（如 schema-alpha），
+    其转换批次崩溃。注意 definitionId 用 schemaKey（去 schema- 前缀）拼键，别双拼前缀。"""
+    fail_definition = (
+        "schema-extract-" + fail_schema.removeprefix("schema-") if fail_schema else None
+    )
+
+    @activity.defn(name="load_schema_extract_plan")
+    async def load_plan(schema_id: str) -> dict[str, Any]:
+        state.setdefault("plan_order", []).append(schema_id)
+        return CHAIN_PLANS[schema_id]
+
+    @activity.defn(name="read_source_batch")
+    async def read_batch(request: dict[str, Any]) -> dict[str, Any]:
+        definition_id = request["definitionId"]
+        seq = state.setdefault("read_seq", {}).get(definition_id, 0)
+        state["read_seq"][definition_id] = seq + 1
+        if seq >= 1:
+            return {"rows": [], "recordIds": [], "maxTime": None, "maxPk": None}
+        rows = CHAIN_ROWS[definition_id]
+        return {
+            "rows": rows,
+            "recordIds": [str(r["id"]) for r in rows],
+            "maxTime": "2026-09-01 00:05:00",
+            "maxPk": rows[-1]["id"],
+        }
+
+    @activity.defn(name="execute_transform")
+    async def transform(request: dict[str, Any]) -> dict[str, Any]:
+        definition_id = request["definitionId"]
+        if fail_definition is not None and definition_id == fail_definition:
+            raise RuntimeError(f"{fail_schema} 批次脚本崩溃")
+        records, failures = [], []
+        for row in request.get("rows") or []:
+            if row["id"] == "bad":
+                failures.append({"recordId": "bad", "error": "ValueError: 毒行"})
+            else:
+                records.append({"id": f"rec_{row['id']}", "props": {"name": row["name"]}})
+        if request.get("kind") == "relation":
+            return {"edges": records, "failures": failures}
+        return {"entities": records, "failures": failures}
+
+    @activity.defn(name="write_records")
+    async def write_records(request: dict[str, Any]) -> dict[str, Any]:
+        state.setdefault("writes", []).append(request["name"])
+        return {"written": len(request.get("records") or [])}
+
+    @activity.defn(name="advance_schema_extract_watermark")
+    async def advance(request: dict[str, Any]) -> dict[str, Any]:
+        state.setdefault("advances", []).append(request["definitionId"])
+        return {"ok": True}
+
+    @activity.defn(name="detect_extract_collisions")
+    async def collisions(request: dict[str, Any]) -> dict[str, Any]:
+        state.setdefault("collisions_calls", []).append(request.get("stepId"))
+        return {"collisions": 0}
+
+    @activity.defn(name="record_extract_failures")
+    async def record_failures(request: dict[str, Any]) -> dict[str, Any]:
+        state.setdefault("record_failures", []).extend(request.get("failures") or [])
+        return {"recorded": len(request.get("failures") or [])}
+
+    @activity.defn(name="resolve_failure_cases")
+    async def resolve(request: dict[str, Any]) -> dict[str, Any]:
+        state.setdefault("resolve", []).append(request)
+        return {"resolved": 1, "refailed": 0, "recreated": 0}
+
+    @activity.defn(name="build_entity_index")
+    async def build_index(request: dict[str, Any]) -> dict[str, Any]:
+        state.setdefault("index", []).append(request)
+        return {"reindexed": {}}
+
+    return [
+        load_plan,
+        read_batch,
+        transform,
+        write_records,
+        advance,
+        collisions,
+        record_failures,
+        resolve,
+        build_index,
+    ]
+
+
+async def _run_chain(client, task_queue, request):
+    return await client.execute_workflow(
+        SchemaExtractChainWorkflow.run,
+        request,
+        id=f"chain-{activity.__name__}-{id(request):x}",
+        task_queue=task_queue,
+    )
+
+
+@pytest.mark.asyncio
+class TestSchemaExtractChain:
+    async def test_chain_runs_schemas_sequentially(self):
+        """两环串行：顺序执行、每环独立水位/索引、单 transform 也聚合 activities、失败跨环汇总。"""
+        state: dict[str, Any] = {}
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-chain-1",
+                workflows=[SchemaExtractChainWorkflow],
+                activities=_make_chain_activities(state),
+            ):
+                result = await _run_chain(
+                    env.client,
+                    "t-chain-1",
+                    {
+                        "schemaIds": ["schema-alpha", "schema-beta"],
+                        "chainDefinitionId": "chain-test000001",
+                        "graphSpace": "dev2",
+                        "batchSize": 5,
+                        "triggerSource": "MANUAL",
+                    },
+                )
+        assert result["status"] == "completed"
+        assert result["chain"] is True
+        assert result["schemaIds"] == ["schema-alpha", "schema-beta"]
+        assert result["definitionId"] == "chain-test000001"
+        # 严格串行：alpha 全部跑完才轮到 beta
+        assert state["plan_order"] == ["schema-alpha", "schema-beta"]
+        # 每环水位各自推进一次（键仍是 schema-extract-{schemaKey}）
+        assert state["advances"] == ["schema-extract-alpha", "schema-extract-beta"]
+        # 实体环重建索引 + 消歧；关系环不重建
+        assert len(state.get("index", [])) == 1
+        assert len(state.get("collisions_calls", [])) == 1
+        steps = result["steps"]
+        assert list(steps) == ["schema:schema-alpha", "schema:schema-beta"]
+        alpha = steps["schema:schema-alpha"]
+        assert alpha["status"] == "COMPLETED"
+        assert alpha["name"] == "甲实体"
+        assert alpha["records"] == 2
+        assert alpha["written"] == 2
+        assert alpha["failed"] == 0
+        # chain 模式 force_step_totals：单 transform 脚本聚合为 1 条（key=_default，
+        # name=函数名），详情页抽屉有内容
+        assert alpha["activities"] == {
+            "_default": {
+                "status": "COMPLETED",
+                "name": "transform",
+                "records": 2,
+                "written": 2,
+                "failed": 0,
+            }
+        }
+        beta = steps["schema:schema-beta"]
+        assert beta["status"] == "COMPLETED"
+        assert beta["records"] == 2
+        assert beta["written"] == 1
+        assert beta["failed"] == 1
+        assert beta["activities"]["_default"]["failed"] == 1
+        # 毒行失败跨环汇总；写图两环各一次
+        assert result["failures"] == {"count": 1, "recorded": 1, "truncated": False}
+        assert state["writes"] == ["Alpha", "Beta"]
+        assert state["record_failures"][0]["recordId"] == "bad"
+
+    async def test_chain_aborts_on_first_schema_failure(self):
+        """第一环批次崩溃 → workflow FAILED、后续环不再执行、水位全部不推进。"""
+        state: dict[str, Any] = {}
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-chain-2",
+                workflows=[SchemaExtractChainWorkflow],
+                activities=_make_chain_activities(state, fail_schema="schema-alpha"),
+            ):
+                with pytest.raises(WorkflowFailureError):
+                    await _run_chain(
+                        env.client,
+                        "t-chain-2",
+                        {
+                            "schemaIds": ["schema-alpha", "schema-beta"],
+                            "graphSpace": "dev2",
+                            "batchSize": 5,
+                        },
+                    )
+        # 中止语义：beta 从未加载，无写图、无水位推进
+        assert state["plan_order"] == ["schema-alpha"]
+        assert state.get("writes") in (None, [])
+        assert state.get("advances") in (None, [])
+
+    async def test_chain_rejects_rerun_payload(self):
+        """chain 拒绝失败记录重跑 payload（重跑只支持单 Schema）。"""
+        state: dict[str, Any] = {}
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-chain-3",
+                workflows=[SchemaExtractChainWorkflow],
+                activities=_make_chain_activities(state),
+            ):
+                with pytest.raises(WorkflowFailureError) as excinfo:
+                    await _run_chain(
+                        env.client,
+                        "t-chain-3",
+                        {
+                            "schemaIds": ["schema-alpha", "schema-beta"],
+                            "recordIdsBySource": {"bind-a": ["a1"]},
+                            "rerunCaseIds": ["MR-1"],
+                            "triggerSource": "RERUN",
+                        },
+                    )
+        # WorkflowFailureError 的 str 是笼统的 "Workflow execution failed"，
+        # 业务错误信息在 cause（ApplicationError.message）
+        assert "不支持失败记录重跑" in str(excinfo.value.cause)
+        # 入口直接拒绝：任何 activity 都没跑
+        assert state.get("plan_order") in (None, [])

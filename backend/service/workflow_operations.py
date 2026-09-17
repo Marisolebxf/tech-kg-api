@@ -93,6 +93,25 @@ class WorkflowOperationsService:
         task["batch"] = self.repo.get_batch(task["batchId"])
         return task
 
+    async def query_step_state(self, task: dict[str, Any]) -> dict[str, Any] | None:
+        """chain 任务（kg.schema.extract.chain）：查 Temporal 实时 get_steps 填 pipeline。
+
+        已结束且被历史淘汰的 workflow 查询会抛错——吞掉返回 None，调用方回退
+        落库 output.steps（stage_normalizer.pipeline_steps 渲染嵌套抽屉）。
+        """
+        if task.get("workflowType") != "kg.schema.extract.chain":
+            return None
+        workflow_id = task.get("workflowId")
+        if not workflow_id:
+            return None
+        try:
+            client = await temporal_runtime.client()
+            handle = client.get_workflow_handle(workflow_id)
+            state = await handle.query("get_steps")
+        except Exception:  # noqa: BLE001
+            return None
+        return state if isinstance(state, dict) else None
+
     @staticmethod
     def create_task_for_execution(
         definition: dict[str, Any], execution: dict[str, Any], payload: dict[str, Any]

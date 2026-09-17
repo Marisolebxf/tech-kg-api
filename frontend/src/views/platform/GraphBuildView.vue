@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { IconInfoCircle, IconSearch } from '@arco-design/web-vue/es/icon'
 import {
@@ -101,17 +101,36 @@ watch(showAllSpaces, (value) => {
   }
 })
 
-async function loadData() {
-  loading.value = true
+async function loadData(silent = false) {
+  // silent：轮询刷新用，不转 loading、失败不弹 toast（避免每几秒闪一次）
+  if (!silent) loading.value = true
   try {
     const jobList = await listJobs()
     jobs.value = jobList.items
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    if (!silent) showToast(schemaErrorMessage(error), 'warning')
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
 }
+
+// 有「运行中」任务时轮询列表（后端 list 会惰性复核 RUNNING 执行并翻新状态），
+// 全部到达终态后停止；页面切到后台时跳过本轮
+const hasRunningJob = computed(() => jobs.value.some((job) => deriveJobUnifiedStatus(job) === '运行中'))
+let pollTimer: ReturnType<typeof setInterval> | null = null
+watch(hasRunningJob, (running) => {
+  if (running && pollTimer === null) {
+    pollTimer = setInterval(() => {
+      if (!document.hidden) void loadData(true)
+    }, 5000)
+  } else if (!running && pollTimer !== null) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}, { immediate: true })
+onUnmounted(() => {
+  if (pollTimer !== null) clearInterval(pollTimer)
+})
 
 function openCreate() {
   createOpen.value = true
@@ -183,7 +202,7 @@ onMounted(loadData)
   <main class="graph-build-page">
     <div class="gb-actions">
       <button type="button" class="primary" @click="openCreate">＋ 新建任务</button>
-      <button type="button" :disabled="loading" @click="loadData">{{ loading ? '刷新中…' : '刷新' }}</button>
+      <button type="button" :disabled="loading" @click="loadData()">{{ loading ? '刷新中…' : '刷新' }}</button>
     </div>
 
     <section class="gb-summary">
@@ -282,7 +301,7 @@ onMounted(loadData)
     <JobLaunchDialog
       :open="createOpen"
       @close="createOpen = false"
-      @created="loadData"
+      @created="loadData()"
     />
   </main>
 </template>

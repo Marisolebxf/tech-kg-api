@@ -136,11 +136,10 @@ test.describe('B. 图谱查询', () => {
     await expect(page.getByText('Degree算法：', { exact: false })).toBeVisible()
     await page.getByRole('button', { name: 'PageRank算法' }).click()
 
-    // 主表单只留关系类型；迭代/重置概率等收进「高级参数」折叠区（默认收起）
+    // 业务输入保留，高级参数入口及执行提示已移除。
     await expect(page.locator('.platform-query-algo__labels')).toBeVisible()
-    const advanced = page.locator('.platform-query-algo__advanced')
-    await expect(advanced).toBeVisible()
-    await expect(advanced).not.toHaveAttribute('open')
+    await expect(page.locator('.platform-query-algo__advanced')).toHaveCount(0)
+    await expect(page.locator('.platform-query-algo__actions-hint')).toHaveCount(0)
 
     // 边类型多选（真实 metadata）：选 HAS_KEYWORD；dev2 边类型较多、弹层内需滚动，
     // Escape 不再收起（焦点停在选项上），点面板外区域关闭弹层
@@ -251,17 +250,9 @@ test.describe('B. 图谱查询', () => {
     await page.getByRole('button', { name: 'Louvain算法' }).click()
     await expect(page.getByText('Louvain算法：', { exact: false })).toBeVisible()
 
-    // 主表单只留关系类型；三个算法参数全部收进高级区（默认化）
+    // 调优参数使用默认值，页面只展示关系类型。
     await expect(page.locator('.platform-query-algo__labels')).toBeVisible()
-    const advanced = page.locator('.platform-query-algo__advanced')
-    await expect(advanced).not.toHaveAttribute('open')
-    await advanced.locator('summary').click()
-    await expect(advanced).toHaveAttribute('open')
-    for (const label of ['最大迭代', '内部迭代', '收敛阈值']) {
-      await expect(advanced.getByText(label, { exact: true })).toBeVisible()
-    }
-    await advanced.locator('summary').click()
-    await expect(advanced).not.toHaveAttribute('open')
+    await expect(page.locator('.platform-query-algo__advanced')).toHaveCount(0)
 
     // 选边类型并提交 → 轮询两轮到 succeeded → 社区发现结果
     await page.locator('.platform-query-algo__labels .arco-select-view').click()

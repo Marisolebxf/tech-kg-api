@@ -328,17 +328,8 @@ const selectedAlgorithmDef = computed<GraphAlgorithmDefinition>(
   () => GRAPH_ALGORITHMS.find((item) => item.id === selectedAlgorithm.value) ?? GRAPH_ALGORITHMS[0],
 )
 const algoParamDefs = computed<AlgorithmParamDef[]>(() => selectedAlgorithmDef.value.params)
-/** 主表单参数（非 advanced）：只保留业务必填项，算法调优参数折叠进高级区。 */
+/** 仅展示业务输入，调优参数使用默认值。 */
 const mainParamDefs = computed(() => algoParamDefs.value.filter((param) => !param.advanced))
-/** 高级参数（advanced 标记）：与权重 / VID 编码 / 分区数一起收进「高级参数」折叠区。 */
-const advancedParamDefs = computed(() => algoParamDefs.value.filter((param) => param.advanced))
-/** 高级参数里偏离默认值的个数：折叠收起时在标题旁显示「已调整 n 项」，避免改动被藏住。 */
-const advancedTunedCount = computed(() => {
-  const values = algoParamValues.value[selectedAlgorithm.value] ?? {}
-  return advancedParamDefs.value.filter(
-    (param) => param.default !== undefined && values[param.key] !== param.default,
-  ).length
-})
 const algoRows = computed(() => algoResult.value?.rows ?? [])
 const algoResultColumns = computed<string[]>(() =>
   algoRows.value.length ? Object.keys(algoRows.value[0]) : [],
@@ -1805,7 +1796,7 @@ const pageMeta = computed(() => {
             算法引擎当前不可用（{{ algoMetadata.engine.message ?? 'Spark 运行器未就绪' }}），提交可能失败，可稍后重试
           </p>
           <p class="platform-query-algo__desc">{{ selectedAlgorithmDef.label }}：{{ selectedAlgorithmDef.description }}</p>
-          <!-- 主表单：只保留业务必填项（关系类型 + 非 advanced 参数），调优参数折叠进高级区 -->
+          <!-- 仅展示业务输入；算法调优和计算选项使用默认值。 -->
           <div class="platform-form-grid platform-query-algo__form">
             <div class="platform-form-field platform-query-algo__labels">
               <label class="platform-form-label"><i class="platform-query-algo__required">*</i>关系类型（可多选）</label>
@@ -1868,99 +1859,6 @@ const pageMeta = computed(() => {
               <span v-if="param.hint && param.type !== 'bool'" class="platform-query-algo__param-hint">{{ param.hint }}</span>
             </div>
           </div>
-          <!-- 高级参数折叠区：算法调优（迭代/概率/阈值…）+ 计算选项（权重 / VID 编码 / 分区数），均有默认值 -->
-          <details class="platform-query-algo__advanced">
-            <summary>
-              高级参数
-              <span v-if="advancedTunedCount" class="platform-query-algo__advanced-count">已调整 {{ advancedTunedCount }} 项</span>
-              <em>算法调优与计算选项均有默认值，普通用户可不调整</em>
-            </summary>
-            <div class="platform-form-grid">
-              <p v-if="advancedParamDefs.length" class="platform-query-algo__group-caption">算法调优</p>
-              <div v-for="param in advancedParamDefs" :key="param.key" class="platform-form-field">
-                <label class="platform-form-label" :for="`algo-param-${param.key}`">
-                  <i v-if="param.required" class="platform-query-algo__required">*</i>{{ param.label }}
-                </label>
-                <a-select
-                  v-if="param.type === 'enum'"
-                  :id="`algo-param-${param.key}`"
-                  v-model="algoParamValues[selectedAlgorithm][param.key]"
-                  :scrollbar="false"
-                >
-                  <a-option
-                    v-for="option in param.options ?? []"
-                    :key="option.value"
-                    :value="option.value"
-                  >{{ option.label }}</a-option>
-                </a-select>
-                <label v-else-if="param.type === 'bool'" class="platform-query-algo__check">
-                  <input
-                    :id="`algo-param-${param.key}`"
-                    v-model="algoParamValues[selectedAlgorithm][param.key]"
-                    type="checkbox"
-                  />
-                  <span>{{ param.hint ?? '启用' }}</span>
-                </label>
-                <input
-                  v-else-if="param.type === 'int' || param.type === 'float'"
-                  :id="`algo-param-${param.key}`"
-                  v-model.number="algoParamValues[selectedAlgorithm][param.key]"
-                  class="platform-query-algo__input"
-                  type="number"
-                  :min="param.min"
-                  :max="param.max"
-                  :step="param.type === 'float' ? (param.step ?? 0.01) : 1"
-                  :placeholder="param.placeholder"
-                />
-                <input
-                  v-else
-                  :id="`algo-param-${param.key}`"
-                  v-model="algoParamValues[selectedAlgorithm][param.key]"
-                  class="platform-query-algo__input"
-                  type="text"
-                  :placeholder="param.placeholder"
-                />
-                <span v-if="param.hint && param.type !== 'bool'" class="platform-query-algo__param-hint">{{ param.hint }}</span>
-              </div>
-              <p class="platform-query-algo__group-caption">计算选项</p>
-              <div class="platform-form-field">
-                <label class="platform-form-label">边权重</label>
-                <label class="platform-query-algo__check">
-                  <input v-model="algoHasWeight" type="checkbox" />
-                  <span>按边属性加权计算</span>
-                </label>
-              </div>
-              <template v-for="label in algoLabels" :key="label">
-                <div v-if="algoHasWeight" class="platform-form-field">
-                  <label class="platform-form-label">{{ label }} 权重属性</label>
-                  <input
-                    v-model="algoWeightCols[label]"
-                    class="platform-query-algo__input"
-                    type="text"
-                    placeholder="边上的权重属性名，如 weight"
-                  />
-                </div>
-              </template>
-              <div class="platform-form-field">
-                <label class="platform-form-label">VID 编码</label>
-                <label class="platform-query-algo__check">
-                  <input v-model="algoEncodeId" type="checkbox" />
-                  <span>字符串 VID 编码（图库 VID 为字符串，建议保持开启）</span>
-                </label>
-              </div>
-              <div class="platform-form-field">
-                <label class="platform-form-label" for="algo-partition">Spark 分区数</label>
-                <input
-                  id="algo-partition"
-                  v-model.number="algoPartitionNum"
-                  class="platform-query-algo__input"
-                  type="number"
-                  min="1"
-                  max="10000"
-                />
-              </div>
-            </div>
-          </details>
           <div class="platform-query-algo__actions">
             <button
               class="kg-button"
@@ -1970,7 +1868,6 @@ const pageMeta = computed(() => {
             >
               {{ algoSubmitLoading ? '提交中…' : '提交算法作业' }}
             </button>
-            <span class="platform-query-algo__actions-hint">作业在 Spark 引擎执行，同一时刻仅允许一个作业</span>
           </div>
           <div v-if="algoJob" class="platform-query-algo__job">
             <div class="platform-query-algo__job-meta">
@@ -5191,7 +5088,7 @@ print(response.json())</pre>
 .platform-query .platform-query-algo__labels :deep(.arco-select-view-value){display:flex;width:auto!important;min-width:0;overflow:visible;flex:1 1 auto!important;flex-wrap:wrap;gap:2px 0;line-height:20px;text-overflow:clip;white-space:normal}
 .platform-query .platform-query-algo__labels :deep(.arco-tag){margin:2px 4px 2px 0}
 .platform-query-algo__actions{display:flex;align-items:center;gap:12px}
-.platform-query-algo__actions-hint{color:#86909c;font-size:12px;line-height:20px}
+
 .platform-query-algo__job{display:grid;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;padding:10px 12px;gap:8px}
 .platform-query-algo__job-meta{display:flex;align-items:center;gap:12px;color:#4e5969;font-size:13px;line-height:20px;flex-wrap:wrap}
 .platform-query-algo__job-id{color:#1d2129;font-weight:500}
@@ -5199,19 +5096,6 @@ print(response.json())</pre>
 .platform-query-algo__job-error p{margin:0;color:#b42318;font-size:13px;line-height:20px;overflow-wrap:anywhere}
 .platform-query-algo__job-error pre{max-height:160px;margin:0;overflow:auto;padding:8px;border-radius:4px;background:#0d1117;color:#e6edf3;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
 .platform-query-algo__truncated{margin:12px 16px 0;padding:8px 12px;border:1px solid #ffe3bd;border-radius:4px;background:#fff7e8;color:#b26b00;font-size:12px;line-height:20px}
-/* 高级参数折叠区：默认收起，summary 去 marker 自绘箭头 */
-.platform-query-algo__advanced{display:grid;border:1px dashed #e5e6eb;border-radius:4px;background:#fafbfc}
-.platform-query-algo__advanced>summary{display:flex;align-items:center;gap:8px;min-height:36px;padding:0 12px;color:#4e5969;font-size:13px;line-height:20px;cursor:pointer;list-style:none;user-select:none}
-.platform-query-algo__advanced>summary::-webkit-details-marker{display:none}
-.platform-query-algo__advanced>summary::before{color:#86909c;font-size:12px;content:"▸";transition:transform .2s}
-.platform-query-algo__advanced[open]>summary::before{transform:rotate(90deg)}
-.platform-query-algo__advanced>summary em{color:#86909c;font-size:12px;font-style:normal}
-/* 已调整计数徽标：收起状态也能看出有参数偏离默认值 */
-.platform-query-algo__advanced-count{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:9px;background:#e8f3ff;color:#165dff;font-size:12px;line-height:18px;font-weight:500}
-.platform-query-algo__advanced .platform-form-grid{padding:4px 12px 12px}
-/* 高级区内的分组小标题（算法调优 / 计算选项）：通栏，虚线分隔 */
-.platform-query-algo__group-caption{grid-column:1/-1;margin:0;padding-top:10px;border-top:1px dashed #e5e6eb;color:#86909c;font-size:12px;line-height:20px}
-.platform-query-algo__advanced .platform-query-algo__group-caption:first-of-type{padding-top:0;border-top:0}
 /* PageRank 结果：重要性排名表 + 图谱高亮并排（覆盖 __body 的纵向 flex） */
 .platform-query-algo__rank-body{display:grid;grid-template-columns:minmax(0,1fr) 400px;overflow:hidden}
 .platform-query-algo__rank-table{display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid #e5e6eb}

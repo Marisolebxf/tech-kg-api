@@ -307,3 +307,92 @@ def test_queue_rows_expose_execution_and_workflow_id(service):
     row = page["items"][0]
     assert row["executionId"] == "EXEC-1"
     assert row["workflowId"] is None or isinstance(row["workflowId"], str)
+
+
+def test_queue_rows_expose_job_id(service, monkeypatch):
+    # 来源记录跳任务详情：快照 jobId（建案写入）优先，存量案靠 EXEC→job 批量解析兜底
+    import service.manual_review_production as mrp
+
+    resolved: list[list[str]] = []
+
+    def fake_resolve(ids):
+        resolved.append([i for i in ids if i])
+        return {"EXEC-9": "job-legacy"}
+
+    monkeypatch.setattr(mrp, "resolve_job_ids", fake_resolve)
+    service.create_direct_case(**link_case_kwargs(extra_snapshot={"jobId": "job-snap"}))
+    service.create_direct_case(
+        **link_case_kwargs(
+            execution_id="EXEC-9",
+            object_id="S-9",
+            candidate={
+                "scholar_id": "S-9",
+                "name_zh": "李四",
+                "existingCandidates": [{"id": "E-1"}],
+            },
+            reason="同名冲突待人工裁决（第二条）",
+        )
+    )
+    page = service.list_cases({"category": "A"}, actor("r", ("reviewer",)))
+    by_exec = {row["executionId"]: row for row in page["items"]}
+    assert by_exec["EXEC-1"]["jobId"] == "job-snap"
+    assert by_exec["EXEC-9"]["jobId"] == "job-legacy"
+    # 一次列表查询只做一次批量解析，入参为本页执行 ID 集合
+    assert resolved == [["EXEC-1", "EXEC-9"]]
+
+
+def test_detail_includes_resolved_job_id(service, monkeypatch):
+    # 详情页「所属任务」：无快照 jobId 的存量 case 由 detail 单条解析补齐
+    import service.manual_review_production as mrp
+
+    monkeypatch.setattr(mrp, "resolve_job_ids", lambda ids: {"EXEC-1": "job-x"})
+    created = service.create_direct_case(**link_case_kwargs())
+    d = service.get_case(created["reviewId"], actor())
+    assert d["jobId"] == "job-x"
+
+
+def test_resolve_job_ids_swallows_control_plane_failure(monkeypatch):
+    # 控制面库不可达：吞异常返回空映射，不拖垮审核队列
+    import sys
+    import types
+
+    import service.manual_review_production as mrp
+
+    fake_module = types.ModuleType("service.workflow_repository")
+
+    def boom(ids):
+        raise RuntimeError("control-plane down")
+
+    fake_module.repository = types.SimpleNamespace(job_ids_by_execution_ids=boom)
+    monkeypatch.setitem(sys.modules, "service.workflow_repository", fake_module)
+    assert mrp.resolve_job_ids(["EXEC-1"]) == {}
+    assert mrp.resolve_job_ids([]) == {}
+    assert mrp.resolve_job_ids([None, ""]) == {}
+
+
+def test_job_ids_by_execution_ids_batch():
+    # EXEC→jobId 批量解析（控制面 sqlite 注入；host 无控制面 MySQL 时跳过）
+    try:
+        from service.workflow_repository import WorkflowRepository as Repo
+    except Exception:
+        pytest.skip("workflow_repository 单例 import 需控制面 MySQL，仅容器内验证")
+
+    engine = create_engine(
+        "sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    repo = Repo(engine=engine)
+    base = {
+        "definitionId": "schema:paper",
+        "workflowId": "wf",
+        "runId": None,
+        "status": "COMPLETED",
+        "startedAt": "2026-09-17 10:00:00",
+    }
+    repo.save_execution({**base, "id": "E1", "workflowId": "wf-1", "jobId": "job-a"})
+    repo.save_execution({**base, "id": "E2", "workflowId": "wf-2", "jobId": "job-b"})
+    repo.save_execution({**base, "id": "E3", "workflowId": "wf-3"})  # 无 jobId 的行剔除
+    assert repo.job_ids_by_execution_ids(["E1", "E2", "E3", "E4", None, ""]) == {
+        "E1": "job-a",
+        "E2": "job-b",
+    }
+    assert repo.job_ids_by_execution_ids([]) == {}

@@ -621,6 +621,7 @@ def _enqueue_pending_review(request: dict[str, Any], pending: list[Any], attempt
                     source_record_id=item.get("sourceRecordId"),
                     llm_input=item.get("llmInput"),
                     llm_output=item.get("llmOutput"),
+                    extra_snapshot={"jobId": execution.get("jobId")},
                 )
             except Exception as exc:
                 logging.getLogger("workflow.kg.custom.steps").warning(
@@ -1591,6 +1592,7 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
                     resume_token=f"extract-resolve:{execution_id}:{record.get('id')}",
                     source_table=source_table or None,
                     source_record_id=str(record.get("id")),
+                    extra_snapshot={"jobId": execution.get("jobId")},
                 )
                 stats["withheld"] += 1
             except Exception as exc:  # noqa: BLE001
@@ -1709,6 +1711,7 @@ async def detect_extract_collisions(request: dict[str, Any]) -> dict[str, Any]:
                 workflow_type="kg.schema.extract",
                 exception_code="KG_EXTRACT_NAME_COLLISION",
                 resume_token=f"extract-link:{execution_id}:{display}",
+                extra_snapshot={"jobId": execution.get("jobId")},
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("同名冲突 case 创建失败 name=%s: %s", display, exc)
@@ -1736,7 +1739,8 @@ async def record_extract_failures(request: dict[str, Any]) -> dict[str, Any]:
     name = request.get("name")
     schema_id = request.get("schemaId")
     schema_key = request.get("schemaKey")
-    job_id = request.get("jobId")
+    # jobId 优先取 workflow 入参，兜底执行记录（来源记录跳任务详情）
+    job_id = request.get("jobId") or execution.get("jobId")
 
     from service.manual_review_production import manual_review_service
 

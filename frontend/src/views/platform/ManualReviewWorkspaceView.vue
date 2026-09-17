@@ -106,6 +106,8 @@ const directLlmOutput = computed<string | null>(() =>
 const directExecutionId = computed<string>(() =>
   String((productionCase.value?.input as Record<string, unknown> | undefined)?.executionId || ''),
 )
+// 所属图谱构建任务（job-xxx）：快照 jobId 或后端按执行关联解析，跳任务详情
+const directJobId = computed<string>(() => productionCase.value?.jobId || '')
 // 标题带具体类型：论文实体入库审核 / 引用关系入库审核
 const directTitle = computed(() => {
   if (!isDirectCase.value) {
@@ -423,7 +425,7 @@ const runPrimary = () => {
               <div><dt>来源绑定</dt><dd><code>{{ String(extractInput.sourceBindingId ?? '—') }}</code></dd></div>
               <div><dt>原执行</dt><dd><RouterLink :to="`/processing-instance/${String(extractInput.executionId ?? '')}`" class="direct-trace-link"><code>{{ String(extractInput.executionId ?? '—') }}</code></RouterLink></dd></div>
               <div v-if="extractRerunExecutionId"><dt>重跑执行</dt><dd><RouterLink :to="`/processing-instance/${extractRerunExecutionId}`" class="direct-trace-link"><code>{{ extractRerunExecutionId }}</code></RouterLink></dd></div>
-              <div v-if="extractInput.jobId"><dt>所属任务</dt><dd><code>{{ String(extractInput.jobId) }}</code></dd></div>
+              <div v-if="extractInput.jobId"><dt>所属任务</dt><dd><RouterLink :to="`/graph-build/jobs/${String(extractInput.jobId)}`" class="direct-trace-link"><code>{{ String(extractInput.jobId) }}</code></RouterLink></dd></div>
             </dl>
           </details>
         </section>
@@ -556,6 +558,7 @@ const runPrimary = () => {
               <div><dt>workflow</dt><dd><RouterLink :to="`/processing-instance/${productionCase?.workflowId || ''}`" class="direct-trace-link"><code>{{ productionCase?.workflowId || '—' }}</code></RouterLink></dd></div>
               <div><dt>workflow 类型</dt><dd>{{ productionCase?.workflowType || '—' }}</dd></div>
               <div><dt>执行 ID</dt><dd><RouterLink :to="`/processing-instance/${directExecutionId || ''}`" class="direct-trace-link"><code>{{ directExecutionId || '—' }}</code></RouterLink></dd></div>
+              <div v-if="directJobId"><dt>所属任务</dt><dd><RouterLink :to="`/graph-build/jobs/${directJobId}`" class="direct-trace-link"><code>{{ directJobId }}</code></RouterLink></dd></div>
               <div><dt>来源任务</dt><dd><RouterLink :to="`/processing-instance/${productionCase?.sourceTaskId || ''}`" class="direct-trace-link"><code>{{ productionCase?.sourceTaskId || '—' }}</code></RouterLink></dd></div>
               <div><dt>产生 step</dt><dd>{{ productionCase?.pipelineStepId || '—' }}</dd></div>
             </dl>

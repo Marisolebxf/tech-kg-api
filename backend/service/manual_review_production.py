@@ -157,21 +157,31 @@ class ManualReviewService:
                     ReviewCase.source_record_id.like(x),
                 )
             )
+        # 更新时间窗口过滤（队列页「时间」下拉）：1h/24h/7d/30d
+        updated_within_hours = {"1h": 1, "24h": 24, "7d": 24 * 7, "30d": 24 * 30}
+        if f.get("updated_within") in updated_within_hours:
+            q.append(
+                ReviewCase.updated_at
+                >= datetime.now() - timedelta(hours=updated_within_hours[f["updated_within"]])
+            )
+        # 排序：updated_desc/updated_asc 按更新时间；默认 风险等级 + 创建时间
+        if f.get("sort") == "updated_desc":
+            order = [ReviewCase.updated_at.desc()]
+        elif f.get("sort") == "updated_asc":
+            order = [ReviewCase.updated_at.asc()]
+        else:
+            order = [
+                case(
+                    {"高": "P0", "中": "P1"},
+                    value=ReviewCase.risk_level,
+                    else_=ReviewCase.risk_level,
+                ),
+                ReviewCase.created_at,
+            ]
         with self.sf() as s:
             total = s.scalar(select(func.count()).select_from(ReviewCase).where(*q)) or 0
             rows = s.scalars(
-                select(ReviewCase)
-                .where(*q)
-                .order_by(
-                    case(
-                        {"高": "P0", "中": "P1"},
-                        value=ReviewCase.risk_level,
-                        else_=ReviewCase.risk_level,
-                    ),
-                    ReviewCase.created_at,
-                )
-                .offset((page - 1) * size)
-                .limit(size)
+                select(ReviewCase).where(*q).order_by(*order).offset((page - 1) * size).limit(size)
             ).all()
             return {
                 "items": [self.case_dict(x) for x in rows],

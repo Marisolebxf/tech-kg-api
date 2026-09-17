@@ -14,7 +14,6 @@ from sqlalchemy.pool import StaticPool
 from db_model.base import Base
 from service.manual_review_domain import (
     ReviewConflictError,
-    ReviewForbiddenError,
     ReviewIdentity,
     ReviewValidationError,
 )
@@ -83,6 +82,23 @@ def test_template_action_is_server_validated(service):
         service.submit(case["id"], case["version"], "force-pass", {}, "", actor())
 
 
+def test_submit_directly_from_open_without_claim(service):
+    # 直审模式：建案即 OPEN，无需领取直接提交即执行
+    created = service.create_direct_case(**link_case_kwargs())
+    detail = service.get_case(created["reviewId"], actor())
+    out = service.submit(
+        detail["id"],
+        detail["version"],
+        "entity-confirm",
+        {"entityVerdict": "create"},
+        "打开即裁，无需领取",
+        actor(),
+    )
+    assert out["status"] == "RESOLVED"
+    # OPEN 直审时 assignee 记为提交人（历史可追溯，队列不再显示待领取）
+    assert out["assigneeId"] == actor().user_id
+
+
 def test_ordinary_decision_records_verdict_and_resolves(service):
     case = claimed(service)
     case = service.draft(case["id"], case["version"], {"entityVerdict": "create"}, actor())
@@ -99,8 +115,8 @@ def test_ordinary_decision_records_verdict_and_resolves(service):
     assert case["consequence"]["writeTarget"]
 
 
-def test_p0_requires_different_approver(service):
-    # confidence < 0.7 → P0，submit 进四方签核
+def test_p0_executes_at_submit_without_approval(service):
+    # 直审模式：confidence < 0.7 → P0 同样提交即执行，无四方签核
     case = claimed(service, confidence=0.4)
     case = service.submit(
         case["id"],
@@ -110,13 +126,7 @@ def test_p0_requires_different_approver(service):
         "",
         actor(),
     )
-    assert case["status"] == "PENDING_APPROVAL"
-    with pytest.raises(ReviewForbiddenError):
-        service.approve(case["id"], case["version"], True, "", actor("reviewer-1", ("approver",)))
-    approved = service.approve(
-        case["id"], case["version"], True, "", actor("approver-2", ("approver",))
-    )
-    assert approved["status"] == "RESOLVED"
+    assert case["status"] == "RESOLVED"
 
 
 def test_stale_draft_does_not_overwrite(service):

@@ -21,7 +21,6 @@ from sqlalchemy.pool import StaticPool
 from db_model.base import Base
 from db_model.manual_review import ReviewCase
 from service.manual_review_domain import (
-    HIGH_RISK_ACTIONS,
     PIPELINE_STEPS,
     RESULT_SCHEMAS,
     TEMPLATES,
@@ -30,7 +29,6 @@ from service.manual_review_domain import (
     ReviewIdentity,
     ReviewValidationError,
     canonical_template,
-    requires_approval,
     role_can_review,
     template_contract,
     validate_action,
@@ -77,10 +75,11 @@ def direct_kwargs(**overrides):
     return value
 
 
-def claim_and_submit(service, action, result, **overrides):
+def open_and_submit(service, action, result, **overrides):
+    """直审模式：建案即 OPEN，get_case 取 version 后直接提交（无需领取）。"""
     created = service.create_direct_case(**direct_kwargs(**overrides))
     a = identity()
-    case = service.claim(created["reviewId"], 1, a)  # 新建 case version=1（建案响应不含 version）
+    case = service.get_case(created["reviewId"], a)  # 新建 case version=1（建案响应不含 version）
     return service.submit(case["id"], case["version"], action, result, "证据已核验", a), a
 
 
@@ -171,14 +170,18 @@ def test_legacy_alias_t_entity_resolves_to_t_link():
 
 
 # --------------------------------------------------------------------------- #
-# 3. P0 风险 / 隔离策略
+# 3. 直审模式：提交即执行（无审批环节，P0 亦然）
 # --------------------------------------------------------------------------- #
-def test_requires_approval_matrix():
-    assert requires_approval("P0", "entity-confirm", {}) is True
-    assert requires_approval("P1", "entity-confirm", {"highValueEntity": True}) is True
-    assert requires_approval("P1", "entity-confirm", {}) is False
-    # 机制保留：现有动作集内已无高危动作
-    assert HIGH_RISK_ACTIONS == set()
+def test_submit_executes_immediately_for_all_risk_levels(service):
+    # 直审模式：P0/P1 提交均直接落 RESOLVED，不产生 PENDING_APPROVAL
+    for confidence in (0.4, 0.9):
+        case, _ = open_and_submit(
+            service,
+            "entity-confirm",
+            {"entityVerdict": "merge", "targetEntityId": "E-1"},
+            confidence=confidence,
+        )
+        assert case["status"] == "RESOLVED"
 
 
 def test_ingress_response_reports_object_isolation(service):
@@ -214,34 +217,25 @@ def test_optimistic_lock_blocks_stale_mutation(service):
         service.claim(created["reviewId"], 1, identity("reviewer-2"))
 
 
-def test_p0_same_submitter_cannot_approve(service):
-    submitter = identity("user-1", ("reviewer", "approver"))
-    created = service.create_direct_case(**direct_kwargs(confidence=0.4))
-    case = service.claim(created["reviewId"], 1, submitter)
-    case = service.submit(
-        case["id"],
-        case["version"],
-        "entity-confirm",
-        {"entityVerdict": "merge", "targetEntityId": "E-1"},
-        "",
-        submitter,
-    )
-    assert case["status"] == "PENDING_APPROVAL"
+def test_claimed_by_other_blocks_submit(service):
+    # 领取为可选保留：已被他人领取的 case 仍限领取人 / review_admin 提交
+    created = service.create_direct_case(**direct_kwargs())
+    service.claim(created["reviewId"], 1, identity("user-1"))
+    detail = service.get_case(created["reviewId"], identity("user-2"))
     with pytest.raises(ReviewForbiddenError):
-        service.approve(case["id"], case["version"], True, "批准", submitter)
+        service.submit(
+            detail["id"],
+            detail["version"],
+            "entity-confirm",
+            {"entityVerdict": "create"},
+            "",
+            identity("user-2"),
+        )
 
 
-def test_reject_decision_terminates_as_rejected(service):
-    case, _ = claim_and_submit(
-        service,
-        "entity-confirm",
-        {"entityVerdict": "merge", "targetEntityId": "E-1"},
-        confidence=0.4,
-    )
-    rejected = service.approve(
-        case["id"], case["version"], False, "拒绝", identity("approver-2", ("approver",))
-    )
-    assert rejected["status"] == "REJECTED"
+def test_reject_candidate_terminates_with_completion_time(service):
+    case, _ = open_and_submit(service, "reject-candidate", {"entityVerdict": "reject"})
+    assert case["status"] == "RESOLVED"
     with service.sf() as s:
         row = s.get(ReviewCase, case["id"])
         assert row.completed_at is not None  # 终态记录完成时间

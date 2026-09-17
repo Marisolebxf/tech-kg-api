@@ -146,13 +146,10 @@ export interface ProductionReviewCase {
 }
 export const getProductionReviews = (params: Record<string, unknown> = {}) => unwrap(http.get('/v1/manual-reviews/production/queue', { params })) as Promise<{ items: ProductionReviewCase[]; total: number; page: number; pageSize: number }>
 export const getProductionReview = (id: string) => unwrap(http.get(`/v1/manual-reviews/production/${id}`)) as Promise<ProductionReviewCase>
-export const claimProductionReview = (id: string, version: number) => unwrap(http.post(`/v1/manual-reviews/production/${id}/claim`, { version })) as Promise<ProductionReviewCase>
 export const heartbeatProductionReview = (id: string, version: number) => unwrap(http.post(`/v1/manual-reviews/production/${id}/heartbeat`, { version })) as Promise<ProductionReviewCase>
 export const releaseProductionReview = (id: string, version: number) => unwrap(http.post(`/v1/manual-reviews/production/${id}/release`, { version })) as Promise<ProductionReviewCase>
 export const saveProductionReviewDraft = (id: string, version: number, payload: Record<string, unknown>) => unwrap(http.put(`/v1/manual-reviews/production/${id}/draft`, { version, payload })) as Promise<ProductionReviewCase>
 export const submitProductionReview = (id: string, data: { version:number; actionId:string; result:Record<string,unknown>; note?:string }) => unwrap(http.post(`/v1/manual-reviews/production/${id}/submit`, data)) as Promise<ProductionReviewCase>
-export const approveProductionReview = (id: string, version:number, note='') => unwrap(http.post(`/v1/manual-reviews/production/${id}/approve`, { version, note })) as Promise<ProductionReviewCase>
-export const rejectProductionReview = (id: string, version:number, note='') => unwrap(http.post(`/v1/manual-reviews/production/${id}/reject`, { version, note })) as Promise<ProductionReviewCase>
 
 /** T_EXTRACT_FAIL 抽取失败记录重跑：所选 case 按 schema 合并为新执行（triggerSource=RERUN）。 */
 export const rerunExtractFailures = (data: { caseIds?: string[]; executionId?: string; batchSize?: number }) =>

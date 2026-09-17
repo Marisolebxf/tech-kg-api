@@ -93,33 +93,24 @@ async def test_http_queue_claim_draft_submit(async_client, production_api):
 
 
 @pytest.mark.anyio
-async def test_http_p0_requires_second_approver(async_client, production_api):
-    app, service = production_api
-    # confidence < 0.7 → P0，submit 进四方签核
+async def test_http_p0_submit_executes_directly(async_client, production_api):
+    _, service = production_api
+    # 直审模式：confidence < 0.7 → P0 同样提交即执行；审批环节（approve 端点）已移除
     created = service.create_direct_case(**_link_kwargs(confidence=0.4, task_id="TASK-P0"))
     case_id = created["reviewId"]
-    claimed = (
-        await async_client.post(
-            f"/api/v1/manual-reviews/production/{case_id}/claim",
-            json={"version": 1},  # 新建 case version=1（建案响应不含 version）
-        )
-    ).json()["data"]
     submitted = (
         await async_client.post(
             f"/api/v1/manual-reviews/production/{case_id}/submit",
             json={
-                "version": claimed["version"],
+                "version": 1,  # 新建 case version=1（建案响应不含 version），无需领取
                 "actionId": "entity-confirm",
                 "result": {"entityVerdict": "merge", "targetEntityId": "E-1"},
             },
         )
     ).json()["data"]
-    assert submitted["status"] == "PENDING_APPROVAL"
-    app.dependency_overrides[get_review_identity] = lambda: identity("approver-2", ("approver",))
-    approved = (
-        await async_client.post(
-            f"/api/v1/manual-reviews/production/{case_id}/approve",
-            json={"version": submitted["version"], "note": "批准"},
-        )
-    ).json()["data"]
-    assert approved["status"] == "RESOLVED"
+    assert submitted["status"] == "RESOLVED"
+    approve_gone = await async_client.post(
+        f"/api/v1/manual-reviews/production/{case_id}/approve",
+        json={"version": submitted["version"], "note": "批准"},
+    )
+    assert approve_gone.status_code == 404

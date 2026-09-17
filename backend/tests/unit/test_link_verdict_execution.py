@@ -1,5 +1,6 @@
 """T_LINK 裁决执行器单测：merge/create 真实写图 / 候选注入拒绝 / 空值保护 /
-待定关系补写 / P0 四方签核 / 存量写后 case 兼容 / 关系端点扣留与改写。"""
+待定关系补写 / OPEN 直审（含 P0，提交即执行） / 存量写后 case 兼容 /
+关系端点扣留与改写。"""
 
 from __future__ import annotations
 
@@ -15,10 +16,6 @@ from service.manual_review_production import ManualReviewService
 
 def actor(uid="reviewer-1", roles=("reviewer",)):
     return ReviewIdentity(uid, uid, frozenset(roles), frozenset({"talent"}), "org", "req-1")
-
-
-def approver():
-    return actor("approver-1", ("approver",))
 
 
 def _make_service():
@@ -98,9 +95,10 @@ def gray_case_kwargs(**overrides):
     return value
 
 
-def claimed(service, **overrides):
+def opened(service, **overrides):
+    """直审模式：建案即 OPEN，get_case 取 id/version 后直接提交（无需领取）。"""
     case = service.create_direct_case(**gray_case_kwargs(**overrides))
-    detail = service.claim(case["reviewId"], 1, actor())
+    detail = service.get_case(case["reviewId"], actor())
     return detail["id"], detail["version"]
 
 
@@ -120,7 +118,7 @@ def test_merge_writes_withheld_vertex_to_target_and_flushes_pending(service, gra
             }
         )
     )
-    detail = service.claim(case["reviewId"], 1, actor())
+    detail = service.get_case(case["reviewId"], actor())
     out = service.submit(
         detail["id"],
         detail["version"],
@@ -140,7 +138,7 @@ def test_merge_writes_withheld_vertex_to_target_and_flushes_pending(service, gra
 
 
 def test_create_writes_to_reserved_vid(service, graph):
-    case_id, version = claimed(service)
+    case_id, version = opened(service)
     out = service.submit(
         case_id, version, "entity-confirm", {"entityVerdict": "create"}, "", actor()
     )
@@ -150,7 +148,7 @@ def test_create_writes_to_reserved_vid(service, graph):
 
 
 def test_merge_target_outside_candidates_rejected_then_retry_succeeds(service, graph):
-    case_id, version = claimed(service)
+    case_id, version = opened(service)
     with pytest.raises(ReviewValidationError):
         service.submit(
             case_id,
@@ -183,7 +181,7 @@ def test_legacy_post_write_case_records_verdict_without_writing(service, graph):
             }
         )
     )
-    detail = service.claim(case["reviewId"], 1, actor())
+    detail = service.get_case(case["reviewId"], actor())
     out = service.submit(
         detail["id"],
         detail["version"],
@@ -197,7 +195,7 @@ def test_legacy_post_write_case_records_verdict_without_writing(service, graph):
 
 
 def test_reject_candidate_writes_nothing(service, graph):
-    case_id, version = claimed(service)
+    case_id, version = opened(service)
     out = service.submit(
         case_id, version, "reject-candidate", {"entityVerdict": "reject"}, "", actor()
     )
@@ -206,10 +204,11 @@ def test_reject_candidate_writes_nothing(service, graph):
     assert graph.edges == []
 
 
-def test_p0_link_case_executes_only_after_approval(service, graph):
+def test_p0_link_case_executes_at_submit_without_approval(service, graph):
+    # 直审模式：P0（confidence 0.5）同样提交即执行，不再走四方签核
     case = service.create_direct_case(**gray_case_kwargs(confidence=0.5))
-    detail = service.claim(case["reviewId"], 1, actor())
-    submitted = service.submit(
+    detail = service.get_case(case["reviewId"], actor())
+    out = service.submit(
         detail["id"],
         detail["version"],
         "entity-confirm",
@@ -217,9 +216,6 @@ def test_p0_link_case_executes_only_after_approval(service, graph):
         "",
         actor(),
     )
-    assert submitted["status"] == "PENDING_APPROVAL"
-    assert graph.writes == []  # 四方签核未通过前不写图
-    out = service.approve(detail["id"], submitted["version"], True, "同意", approver())
     assert out["status"] == "RESOLVED"
     assert 'VALUES "org_9"' in graph.writes[0]
 
@@ -243,7 +239,7 @@ def test_park_edges_on_open_case_then_rewrite_after_merge(service, graph):
     )
     assert again["parked"] == 1
     # 裁决 merge 后：暂存边已随裁决补写；迟到的新边端点改写为目标实体
-    detail = service.claim(case["reviewId"], 1, actor())
+    detail = service.get_case(case["reviewId"], actor())
     service.submit(
         detail["id"],
         detail["version"],
@@ -260,7 +256,7 @@ def test_park_edges_on_open_case_then_rewrite_after_merge(service, graph):
 
 
 def test_park_drops_edges_to_rejected_endpoint(service, graph):
-    case_id, version = claimed(service)
+    case_id, version = opened(service)
     service.submit(case_id, version, "reject-candidate", {"entityVerdict": "reject"}, "", actor())
     out = service.park_or_rewrite_edges(
         "EMPLOYED_BY", [{"fromId": "person_1", "toId": "org_new_1", "props": {}}]

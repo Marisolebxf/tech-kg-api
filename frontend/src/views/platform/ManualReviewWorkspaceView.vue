@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { claimProductionReview, directDecideProductionReview, getProductionReview, heartbeatProductionReview, rerunExtractFailures, submitProductionReview, type ProductionReviewCase } from '../../api/workflowOperations'
+import { directDecideProductionReview, getProductionReview, heartbeatProductionReview, rerunExtractFailures, submitProductionReview, type ProductionReviewCase } from '../../api/workflowOperations'
 
 import {
   getHandleCategory,
@@ -123,9 +123,9 @@ const directTitle = computed(() => {
 })
 const isEditable = computed(() => {
   if (isDirectCase.value) return productionCase.value?.status === 'OPEN'
-  return ['CLAIMED','IN_REVIEW'].includes(productionCase.value?.status || '')
+  // 直审模式：OPEN 打开即可裁决（无需领取）；CLAIMED/IN_REVIEW 为存量已领取 case
+  return ['OPEN','CLAIMED','IN_REVIEW'].includes(productionCase.value?.status || '')
 })
-const canClaim = computed(() => productionCase.value?.status === 'OPEN' && !isDirectCase.value)
 
 const template = computed(() => (record.value ? getReviewTemplate(record.value) : null))
 const impactScope = computed(() => (record.value ? getImpactScope(record.value) : '任务级'))
@@ -238,14 +238,6 @@ async function loadReview() {
   } catch (error) { feedback.value = error instanceof Error ? error.message : '人工处理详情加载失败' }
 }
 
-async function claimCase() {
-  if (!productionCase.value) return
-  try {
-    productionCase.value = await claimProductionReview(productionCase.value.id, productionCase.value.version)
-    record.value = mapProductionRecord(productionCase.value); startHeartbeat(); feedback.value = '领取成功，系统已开始保持处理心跳。'
-  } catch (error) { feedback.value = error instanceof Error ? `${error.message}，请重新加载。` : '领取失败' }
-}
-
 onMounted(loadReview)
 onBeforeUnmount(() => window.clearInterval(heartbeatTimer))
 
@@ -323,7 +315,7 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
     const validationErrors = await manualReviewFormRef.value?.validate()
     if (validationErrors) return
   }
-  // kg.custom.steps T_DIRECT 案例：accept 直接写图，reject 丢弃，不走 claim/submit/approve 4-eyes 流程
+  // kg.custom.steps T_DIRECT 案例：accept 直接写图，reject 丢弃，不走 submit 通道
   if (isDirectCase.value && productionCase.value && ['accept', 'accept-fix', 'reject'].includes(action.id)) {
     const patched = action.id === 'accept-fix' ? directPatchedCandidate.value : undefined
     if (action.id === 'accept-fix' && !patched) {
@@ -706,7 +698,6 @@ const secondaryActions = computed(() => (
 
     <footer v-if="!isDirectCase" class="rw-foot">
       <span>{{ footerHint }}</span>
-      <button v-if="canClaim" class="primary" type="button" @click="claimCase">领取任务</button>
       <div v-if="isEditable" class="rw-foot__actions">
         <button
           v-for="action in secondaryActions"

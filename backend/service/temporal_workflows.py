@@ -1157,16 +1157,16 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
             try:
                 desc = client.execute_query(f"DESCRIBE TAG `{name_tag}`")
                 fields = {
-                    f
-                    for f in (r.get("Field") for r in desc.records or [])
-                    if isinstance(f, str)
+                    f for f in (r.get("Field") for r in desc.records or []) if isinstance(f, str)
                 }
                 name_cols = name_columns_in(fields)
             except Exception:  # noqa: BLE001
                 logger.warning("DESCRIBE TAG %s 失败，同名召回按 name 列兜底", name_tag)
                 name_cols = ["name"]
             if not name_cols:
-                logger.info("tag %s 无显示名列（name/name_cn/name_en/name_zh），跳过同名召回", name_tag)
+                logger.info(
+                    "tag %s 无显示名列（name/name_cn/name_en/name_zh），跳过同名召回", name_tag
+                )
             else:
                 names = list(by_name)
                 name_list = ",".join(json.dumps(n, ensure_ascii=False) for n in names)
@@ -1175,8 +1175,7 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
                     f"v.`{col}` AS `nm{idx}`" for idx, col in enumerate(name_cols)
                 )
                 base_match = (
-                    f"MATCH (v:`{name_tag}`) WHERE {where} "
-                    f"RETURN id(v) AS vid, {select_names}"
+                    f"MATCH (v:`{name_tag}`) WHERE {where} RETURN id(v) AS vid, {select_names}"
                 )
                 try:
                     result = client.execute_read(f"{base_match}, properties(v) AS props LIMIT 200")
@@ -1200,9 +1199,7 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
                     else:
                         nm = display_name(props)
                     if nm and vid:
-                        existing.setdefault(nm, []).append(
-                            {"vid": vid, "name": nm, "props": props}
-                        )
+                        existing.setdefault(nm, []).append({"vid": vid, "name": nm, "props": props})
         finally:
             try:
                 client.close()

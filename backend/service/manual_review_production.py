@@ -1,9 +1,11 @@
-"""生产人工审核服务（队列 / 领取 / 裁决 / 直判写图 / 抽取失败重跑）。
+"""生产人工审核服务（队列 / 直审裁决 / 直判写图 / 抽取失败重跑）。
 
 2026-09-15 起移除「外部 graph-build 服务」移交通道（内部入口 / correction /
 outbox / resume 派发 / 执行回调）：审核模块只管裁决与记录决议。
 2026-09-17 起 T_LINK 裁决接入真实执行（写前扣留 case 写图 + 待定关系补写，
 见 ``_apply_link_verdict``）；存量写后 case（无 ``_incoming`` 快照）仍只记录决议。
+2026-09-17 起改为直审模式：OPEN 打开即可 submit（领取为可选保留），一切提交
+即执行——审批环节（PENDING_APPROVAL 四方签核）已移除。
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from infra.s3 import S3Storage
 from service.manual_review_domain import (
     EDITABLE_STATUSES,
     PIPELINE_STEPS,
+    SUBMITTABLE_STATUSES,
     TEMPLATES,
     TERMINAL_STATUSES,
     ReviewConflictError,
@@ -40,7 +43,6 @@ from service.manual_review_domain import (
     canonical_template,
     require_domain_access,
     require_role,
-    requires_approval,
     role_can_review,
     template_contract,
     validate_action,
@@ -271,12 +273,22 @@ class ManualReviewService:
             return self.detail(s, c)
 
     def submit(self, i, v, action, result, note, a):
+        """直审模式：OPEN 可直接提交（领取为可选），一切提交即执行、不设审批。
+
+        已被他人领取的 case 仍限领取人 / review_admin 操作；并发仍是 version
+        乐观锁——两人同开一个 case，先提交者生效，后提交者报版本冲突。
+        """
         with self.sf() as s:
-            c = self.owned(s, i, a)
-            if c.version != v or c.status not in EDITABLE_STATUSES:
+            c = self.need(s, i)
+            require_domain_access(a, c.domain)
+            if not role_can_review(a, c.phase):
+                raise ReviewForbiddenError("角色与任务阶段不匹配")
+            if c.status in ("CLAIMED", "IN_REVIEW") and c.assignee_id != a.user_id:
+                if not a.has_any("review_admin"):
+                    raise ReviewForbiddenError("任务未由当前用户领取")
+            if c.version != v or c.status not in SUBMITTABLE_STATUSES:
                 raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
             validate_action(c.template_id, action, result)
-            approval = requires_approval(_risk_label(c.risk_level), action, result)
             t = now()
             d = ReviewDecision(
                 case_id=i,
@@ -284,23 +296,24 @@ class ManualReviewService:
                 result=dump(result),
                 note=note,
                 submitted_by=a.user_id,
-                status="PENDING_APPROVAL" if approval else "APPROVED",
+                status="APPROVED",
                 created_at=t,
-                decided_at=None if approval else t,
+                decided_at=t,
             )
             s.add(d)
             s.flush()
             old = c.status
             c.submitted_by = a.user_id
+            # OPEN 直审时记录处理人，历史里可追溯（队列不再显示"待领取"）
+            if not c.assignee_id:
+                c.assignee_id = a.user_id
+                c.assignee_name = a.user_name
             apply_detail: dict[str, Any] | None = None
-            if approval:
-                c.status = "PENDING_APPROVAL"
-            else:
-                if canonical_template(c.template_id) == "T_LINK" and action == "entity-confirm":
-                    # 消歧裁决真实执行（写前扣留 case 写图；存量写后 case 仅记录决议）
-                    apply_detail = self._apply_link_verdict(c, result)
-                c.status = "RESOLVED"
-                c.completed_at = t
+            if canonical_template(c.template_id) == "T_LINK" and action == "entity-confirm":
+                # 消歧裁决真实执行（写前扣留 case 写图；存量写后 case 仅记录决议）
+                apply_detail = self._apply_link_verdict(c, result)
+            c.status = "RESOLVED"
+            c.completed_at = t
             c.version += 1
             c.updated_at = t
             self.audit(
@@ -311,52 +324,6 @@ class ManualReviewService:
                 old,
                 c.status,
                 {"actionId": action, **(apply_detail or {})},
-            )
-            s.commit()
-            return self.detail(s, c)
-
-    def approve(self, i, v, ok, note, a):
-        require_role(a, "approver")
-        with self.sf() as s:
-            c = self.need(s, i)
-            require_domain_access(a, c.domain)
-            if c.version != v or c.status != "PENDING_APPROVAL":
-                raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
-            d = s.scalar(
-                select(ReviewDecision)
-                .where(ReviewDecision.case_id == i, ReviewDecision.status == "PENDING_APPROVAL")
-                .order_by(ReviewDecision.id.desc())
-            )
-            if not d:
-                raise ReviewConflictError("待审批裁决不存在")
-            if d.submitted_by == a.user_id:
-                raise ReviewForbiddenError("提交人与批准人必须不同")
-            old = c.status
-            d.approved_by = a.user_id
-            d.note = (d.note + "\n审批意见: " + note).strip()
-            d.decided_at = now()
-            apply_detail: dict[str, Any] | None = None
-            if ok:
-                d.status = "APPROVED"
-                if canonical_template(c.template_id) == "T_LINK":
-                    # 消歧裁决真实执行（提交人裁决 + 批准人通过后落图）
-                    apply_detail = self._apply_link_verdict(c, load(d.result) or {})
-                c.status = "RESOLVED"
-                c.completed_at = now()
-            else:
-                d.status = "REJECTED"
-                c.status = "REJECTED"
-                c.completed_at = now()
-            c.version += 1
-            c.updated_at = now()
-            self.audit(
-                s,
-                c,
-                a,
-                "DECISION_APPROVED" if ok else "DECISION_REJECTED",
-                old,
-                c.status,
-                {"actionId": d.action_id, **(apply_detail or {})},
             )
             s.commit()
             return self.detail(s, c)
@@ -393,7 +360,7 @@ class ManualReviewService:
         resume_token: str | None = None,
         extra_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """直接 OPEN 状态入队（不走 4-eyes claim/submit）。
+        """直接 OPEN 状态入队（打开即可裁决，无需领取）。
 
         默认 T_DIRECT（kg.custom.steps pendingReview）：candidate_snapshot 附加
         kind/nodeLabel/edgeType/fromId/toId 元字段，direct_decide 读这些字段写图。
@@ -825,7 +792,7 @@ class ManualReviewService:
         return {"records": kept, "parked": len(parked_records), "dropped": dropped}
 
     def _graph_client_for(self, snapshot: dict[str, Any]) -> Any:
-        """按快照记载的图空间建客户端（缺省走环境默认空间）。"""
+        """按快照记载的图空间建客户端（缺省走环境默认空间）并完成连接。"""
         from infra.graph_db.client import TRSGraphClient
         from infra.graph_db.config import TRSGraphSettings
 
@@ -833,7 +800,9 @@ class ManualReviewService:
         space = snapshot.get("_graphSpace")
         if space:
             settings.space = space
-        return TRSGraphClient(settings)
+        client = TRSGraphClient(settings)
+        client.connect()
+        return client
 
     def _apply_link_verdict(self, c: ReviewCase, result: dict[str, Any]) -> dict[str, Any]:
         """T_LINK 裁决执行：merge→扣留记录并入所选候选；create→按预留 vid 新建。
@@ -896,11 +865,7 @@ class ManualReviewService:
         """DESCRIBE TAG 取列集合；失败返回 None（调用方走兜底）。"""
         try:
             desc = client.execute_query(f"DESCRIBE TAG `{label}`")
-            return {
-                f
-                for f in (r.get("Field") for r in desc.records or [])
-                if isinstance(f, str)
-            }
+            return {f for f in (r.get("Field") for r in desc.records or []) if isinstance(f, str)}
         except Exception:  # noqa: BLE001
             logger.warning("DESCRIBE TAG %s 失败，写图按旧兜底补审计列", label)
             return None

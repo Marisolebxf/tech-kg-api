@@ -1113,6 +1113,7 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
         TOP_K,
         decide,
         display_name,
+        name_columns_in,
         normalize_display_name,
         score_candidate,
     )
@@ -1150,24 +1151,58 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
         client = TRSGraphClient(settings)
         try:
             client.connect()
-            names = list(by_name)
-            name_list = ",".join(json.dumps(n, ensure_ascii=False) for n in names)
-            base_match = (
-                f"MATCH (v:`{name_tag}`) WHERE v.name IN [{name_list}] "
-                f"RETURN id(v) AS vid, v.name AS nm"
-            )
+            # 不同来源的 tag 主名列不一（schema 管理建 name，vendor ETL 的
+            # Organization 是 name_cn）：DESCRIBE 探测实际存在的名字列再拼 WHERE，
+            # 引用不存在的列会直接 SemanticError
             try:
-                result = client.execute_read(f"{base_match}, properties(v) AS props LIMIT 200")
+                desc = client.execute_query(f"DESCRIBE TAG `{name_tag}`")
+                fields = {
+                    f
+                    for f in (r.get("Field") for r in desc.records or [])
+                    if isinstance(f, str)
+                }
+                name_cols = name_columns_in(fields)
             except Exception:  # noqa: BLE001
-                logger.warning("同名召回 properties() 失败，降级为仅名称比对")
-                result = client.execute_read(f"{base_match} LIMIT 200")
-            for rec in result.records or []:
-                nm = str(rec.get("nm") or "")
-                vid = str(rec.get("vid") or "")
-                if nm and vid:
-                    existing.setdefault(nm, []).append(
-                        {"vid": vid, "name": nm, "props": rec.get("props") or {}}
-                    )
+                logger.warning("DESCRIBE TAG %s 失败，同名召回按 name 列兜底", name_tag)
+                name_cols = ["name"]
+            if not name_cols:
+                logger.info("tag %s 无显示名列（name/name_cn/name_en/name_zh），跳过同名召回", name_tag)
+            else:
+                names = list(by_name)
+                name_list = ",".join(json.dumps(n, ensure_ascii=False) for n in names)
+                where = " OR ".join(f"v.`{col}` IN [{name_list}]" for col in name_cols)
+                select_names = ", ".join(
+                    f"v.`{col}` AS `nm{idx}`" for idx, col in enumerate(name_cols)
+                )
+                base_match = (
+                    f"MATCH (v:`{name_tag}`) WHERE {where} "
+                    f"RETURN id(v) AS vid, {select_names}"
+                )
+                try:
+                    result = client.execute_read(f"{base_match}, properties(v) AS props LIMIT 200")
+                    name_only = False
+                except Exception:  # noqa: BLE001
+                    logger.warning("同名召回 properties() 失败，降级为仅名称比对")
+                    result = client.execute_read(f"{base_match} LIMIT 200")
+                    name_only = True
+                for rec in result.records or []:
+                    vid = str(rec.get("vid") or "")
+                    props = {} if name_only else (rec.get("props") or {})
+                    if name_only:
+                        nm = next(
+                            (
+                                str(rec.get(f"nm{idx}") or "")
+                                for idx in range(len(name_cols))
+                                if rec.get(f"nm{idx}")
+                            ),
+                            "",
+                        )
+                    else:
+                        nm = display_name(props)
+                    if nm and vid:
+                        existing.setdefault(nm, []).append(
+                            {"vid": vid, "name": nm, "props": props}
+                        )
         finally:
             try:
                 client.close()

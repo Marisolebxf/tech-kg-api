@@ -8,9 +8,18 @@ from service.entity_disambiguation import (
     MERGE_THRESHOLD,
     decide,
     display_name,
+    name_columns_in,
     normalize_display_name,
     score_candidate,
 )
+
+
+def test_name_columns_in_picks_existing_by_priority():
+    # vendor ETL 的 Organization 只有 name_cn；schema 管理的 tag 有 name
+    assert name_columns_in({"name_cn", "province"}) == ["name_cn"]
+    assert name_columns_in({"name", "name_cn"}) == ["name", "name_cn"]
+    assert name_columns_in({"name_en", "name_zh"}) == ["name_en", "name_zh"]
+    assert name_columns_in({"org_id", "address"}) == []  # 无显示名列 → 召回跳过
 
 
 def test_display_name_prefers_name_then_localized():

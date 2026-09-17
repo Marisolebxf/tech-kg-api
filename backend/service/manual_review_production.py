@@ -891,6 +891,20 @@ class ManualReviewService:
             "pendingRelationsWritten": written_edges,
         }
 
+    @staticmethod
+    def _tag_fields(client: Any, label: str) -> set[str] | None:
+        """DESCRIBE TAG 取列集合；失败返回 None（调用方走兜底）。"""
+        try:
+            desc = client.execute_query(f"DESCRIBE TAG `{label}`")
+            return {
+                f
+                for f in (r.get("Field") for r in desc.records or [])
+                if isinstance(f, str)
+            }
+        except Exception:  # noqa: BLE001
+            logger.warning("DESCRIBE TAG %s 失败，写图按旧兜底补审计列", label)
+            return None
+
     def _insert_withheld_vertex(
         self,
         client: Any,
@@ -912,11 +926,20 @@ class ManualReviewService:
             if value not in (None, "")
         }
         props = self._coerce_to_schema(client, node_label, props)
-        props.setdefault("id", vid)
+        # 审计/身份列按 tag 实际 schema 补（vendor ETL 的 Organization 没有
+        # id/create_time 等列，强塞会 Unknown column 400）；schema 查不出来时
+        # 维持旧兜底让 trs-graph 报错暴露问题
+        fields = self._tag_fields(client, node_label)
         now_str = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
-        props.setdefault("create_time", now_str)
-        props.setdefault("update_time", now_str)
-        props.setdefault("source_table", incoming.get("sourceTable") or "schema_extract")
+        audit = {
+            "id": vid,
+            "create_time": now_str,
+            "update_time": now_str,
+            "source_table": incoming.get("sourceTable") or "schema_extract",
+        }
+        for key, value in audit.items():
+            if fields is None or key in fields:
+                props.setdefault(key, value)
 
         def _ngql_value(value: Any) -> str:
             if isinstance(value, bool):

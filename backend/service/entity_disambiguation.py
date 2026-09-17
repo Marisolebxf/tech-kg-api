@@ -16,6 +16,7 @@ Milvus 模糊召回为后续增强；名称相似度用 RapidFuzz 词面比对�
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from rapidfuzz import fuzz
@@ -44,6 +45,16 @@ def display_name(props: dict[str, Any] | None) -> str:
 
 def normalize_display_name(value: Any) -> str:
     return normalize_alignment_text(value)
+
+
+def name_columns_in(fields: Iterable[str]) -> list[str]:
+    """从 tag 实际 schema 列里挑存在的显示名列（按 ``_NAME_KEYS`` 优先级）。
+
+    不同来源的 tag 主名列不一：schema 管理建的是 ``name``，vendor ETL 的
+    Organization 是 ``name_cn``——同名召回的 WHERE 只能引用实际存在的列，
+    否则 NebulaGraph 直接 SemanticError。
+    """
+    return [key for key in _NAME_KEYS if key in fields]
 
 
 def _comparable(value: Any) -> str | None:

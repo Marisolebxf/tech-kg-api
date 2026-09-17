@@ -58,6 +58,8 @@ services:
       API_DOCS_ENABLED: ${API_DOCS_ENABLED:-true}
       # 独立部署不跑人工修正后台同步,避免与主部署对同一 MySQL/图库双写
       CORRECTION_SYNC_WORKER_ENABLED: "false"
+      # gkx 读库路由:原 .env 指向的 gkx_local 全量库已不在本服务器,现存采样库为 gkx_element
+      PAPER_COOP_MYSQL_DATABASE: gkx_element
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

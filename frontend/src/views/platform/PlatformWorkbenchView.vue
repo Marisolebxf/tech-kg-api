@@ -4450,7 +4450,8 @@ async function loadPlatformOverview(): Promise<void> {
       dataMode: data.dataMode,
       warnings: data.warnings,
     }
-    assetOverviewGroups.value = data.assetOverviewGroups
+    // 属性值数据卡片（key=property）为占位统计（待接入），总览页不展示
+    assetOverviewGroups.value = data.assetOverviewGroups.filter((item) => item.key !== 'property')
     assetChangeRows.value = data.assetChangeRows
     entityStructure.value = data.entityStructure
     relationStructure.value = data.relationStructure
@@ -4668,7 +4669,7 @@ const pageMeta = computed(() => {
     </header>
 
     <main v-if="activeTab === 'overview'" class="platform-content platform-overview">
-      <section class="platform-summary-grid" aria-label="实体、关系与属性值数据总览">
+      <section class="platform-summary-grid" aria-label="实体与关系数据总览">
         <article v-for="group in assetOverviewGroups" :key="group.key" :class="['kg-panel', 'platform-summary-card', `is-${group.key}`]">
           <header><div><strong>{{ group.title }}</strong><span><i />数据已更新</span></div><button type="button" @click="selectedAssetChange = group.key">查看今日新增 →</button></header>
           <div class="platform-summary-card__main"><section><strong>{{ group.total }}</strong><span>{{ group.totalLabel }}</span></section><section class="is-added"><strong>{{ group.added }}</strong><span>{{ group.addedLabel }}</span></section></div>
@@ -5671,7 +5672,7 @@ print(response.json())</pre>
 .platform-metric.is-red strong { color: #b42318; }
 
 /* 加载态预留就绪高度（3 卡实测 202px）：避免数据到达撑高后把下方资产饼图挤出视口闪现 */
-.platform-summary-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;min-height:202px; }
+.platform-summary-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;min-height:202px; }
 .platform-summary-card { position:relative;min-width:0;overflow:hidden; }
 .platform-summary-card::after { position:absolute;right:-35px;bottom:-55px;width:130px;height:130px;border-radius:50%;background:rgba(22,93,255,.045);content:"";pointer-events:none; }
 .platform-summary-card>header { display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px;border-bottom:1px solid #dce8f8;background:rgba(255,255,255,.75); }

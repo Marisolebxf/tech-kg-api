@@ -71,7 +71,7 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     expect(navigation.text()).not.toContain('工作台')
     expect(navigation.text()).not.toContain('图谱建设与治理')
     expect(navigation.text()).not.toContain('平台管理')
-    expect(navigation.text()).not.toContain('查询与服务')
+    expect(navigation.text()).not.toContain('知识图谱构建服务')
     expect(navigation.text()).toContain('科技专家/人才知识推理构建服务')
     for (const path of sharedPaths) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
     for (const path of managementPaths) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(false)
@@ -82,7 +82,7 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
   it('管理员继续看到全部原有分组及管理端入口', async () => {
     const { wrapper } = await renderLayout(true, '/graph-query')
     const navigation = wrapper.get('.app-nav')
-    for (const name of ['工作台', '图谱建设与治理', '平台管理', '查询与服务', '科技专家/人才知识推理构建服务']) {
+    for (const name of ['工作台', '图谱建设与治理', '平台管理', '知识图谱构建服务', '科技专家/人才知识推理构建服务']) {
       expect(navigation.text()).toContain(name)
     }
     for (const path of [...managementPaths, ...sharedPaths]) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)

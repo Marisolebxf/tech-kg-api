@@ -37,9 +37,10 @@ const reviewLoadError = ref('')
 
 const reviewRows = computed(() => reviewRecords.value)
 
-/** 分页状态：服务端分页，翻页/改页大小都会重新拉取当前筛选下的数据。 */
+/** 分页状态：服务端分页，翻页/改页大小都会重新拉取当前筛选下的数据。
+ *  默认每页 20：表格区可视高度约 13~14 行，10 行填不满会在面板内留大片空白。 */
 const reviewPage = ref(1)
-const reviewPageSize = ref(10)
+const reviewPageSize = ref(20)
 const reviewPageSizeOptions = [10, 20, 50]
 const reviewTotalPages = computed(() => Math.max(1, Math.ceil(reviewTotal.value / reviewPageSize.value)))
 
@@ -220,10 +221,16 @@ async function loadReviews() {
       return loadReviews()
     }
     reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
-      id: row.id, templateId: row.templateId, rawStatus: row.status, graphBuildId: row.executionId || row.workflowId || '', batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: row.updatedAt, sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
+      id: row.id, templateId: row.templateId, rawStatus: row.status, graphBuildId: row.executionId || row.workflowId || '', batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
     }))
     reviewLoadError.value = ''
   } catch (error) { reviewLoadError.value = error instanceof Error ? error.message : '人工处理队列加载失败' }
+}
+
+/** 后端 ISO 时间（2026-09-17T09:30:00）转界面习惯的 2026-09-17 09:30:00。 */
+function fmtReviewTime(value?: string): string {
+  if (!value) return ''
+  return value.replace('T', ' ').slice(0, 19)
 }
 
 function changeReviewPage(page: number) {
@@ -279,14 +286,17 @@ onMounted(loadReviews)
           </div>
           <a-input v-model="keyword" class="review-search-input review-filter-search" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录"><template #prefix><IconSearch /></template></a-input>
         </div>
-        <button
-          v-if="reviewCategory === 'C'"
-          class="rerun-batch-action"
-          type="button"
-          :disabled="!rerunSelection.size || rerunSubmitting"
-          @click="rerunSelected()"
-        >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
       </div>
+    </div>
+
+    <!-- 批量重跑：单独一行右对齐（不挤在筛选栏里） -->
+    <div v-if="reviewCategory === 'C'" class="rerun-batch-row">
+      <button
+        class="rerun-batch-action"
+        type="button"
+        :disabled="!rerunSelection.size || rerunSubmitting"
+        @click="rerunSelected()"
+      >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
     </div>
 
     <section class="ops-panel">
@@ -303,6 +313,17 @@ onMounted(loadReviews)
       </div>
 
       <div class="ops-review-table-scroll"><table class="review-case-table" :class="{ 'review-case-table--selectable': reviewCategory === 'C' }">
+        <!-- 固定列宽：有数据/无数据切换时表头列位不漂移（待处理对象列吃剩余宽度） -->
+        <colgroup>
+          <col v-if="reviewCategory === 'C'" class="col-pick" />
+          <col class="col-id" />
+          <col class="col-object" />
+          <col class="col-kind" />
+          <col class="col-source" />
+          <col class="col-status" />
+          <col class="col-time" />
+          <col class="col-actions" />
+        </colgroup>
         <thead>
           <tr>
             <th v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
@@ -537,6 +558,8 @@ onMounted(loadReviews)
 .ops-review-table-scroll td{color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle}
 .ops-review-table-scroll td>b,.ops-review-table-scroll td>strong{font-weight:400}
 /* 抽取失败重跑：批量重跑按钮 / 重跑反馈条 / 状态徽标扩展 */
+/* 批量重跑单独一行右对齐（贴合分段切换行下方，负 margin 收紧与上行的间距） */
+.rerun-batch-row{display:flex;box-sizing:border-box;width:100%;min-height:32px;margin:-8px 0 12px;align-items:center;justify-content:flex-end;flex:0 0 auto}
 .rerun-batch-action{height:32px;padding:0 16px;border:1px solid #165dff;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
 .rerun-batch-action:hover:not(:disabled){border-color:#4080ff;background:#4080ff}
 .rerun-batch-action:active:not(:disabled){border-color:#0e42d2;background:#0e42d2}
@@ -579,11 +602,23 @@ onMounted(loadReviews)
 .ops-review-table-scroll .review-action-col{position:static;box-sizing:border-box;width:auto;min-width:0;box-shadow:none;white-space:nowrap}
 .review-action-col .alert-actions{display:flex;width:max-content;min-width:0;align-items:center;gap:8px}
 .ops-review-table-scroll th,.ops-review-table-scroll td{box-sizing:border-box;padding-right:16px;padding-left:16px}
-.ops-review-table-scroll table,.ops-review-table-scroll table.review-case-table,.ops-review-table-scroll table.review-case-table--selectable{width:100%;min-width:0;table-layout:auto}
+.ops-review-table-scroll table,.ops-review-table-scroll table.review-case-table,.ops-review-table-scroll table.review-case-table--selectable{width:100%;min-width:0;table-layout:fixed}
 .ops-review-table-scroll td{white-space:normal}
 .ops-review-table-scroll :is(code,.review-id-cell,.review-status){white-space:nowrap}
 .ops-review-table-scroll :is(th,td):last-child{white-space:nowrap}
 .ops-review-table-scroll .review-id-cell,.ops-review-table-scroll .review-source-cell{min-width:0}
+/* 固定布局下的列宽合同：col.col-object 不设宽吃剩余空间；宽内容列超长省略号截断 */
+.review-case-table col.col-pick{width:52px}
+.review-case-table col.col-id{width:264px}
+.review-case-table col.col-kind{width:88px}
+.review-case-table col.col-source{width:220px}
+.review-case-table col.col-status{width:104px}
+.review-case-table col.col-time{width:200px}
+.review-case-table col.col-actions{width:136px}
+.ops-review-table-scroll .review-id-cell{overflow:hidden;text-overflow:ellipsis}
+.ops-review-table-scroll .review-id-cell :is(code,.link){display:inline-block;box-sizing:border-box;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}
+/* 滚动条出现/消失（数据多少切换）不挤动列宽 */
+.ops-review-table-scroll{scrollbar-gutter:stable}
 /* 筛选字段标签 / 类型徽标 / 勾选禁用态 / 删除按钮 */
 .review-filter-field{display:flex;flex:0 0 auto;align-items:center;gap:8px}
 .review-filter-label{color:#4e5969;font-size:14px;line-height:22px;white-space:nowrap}

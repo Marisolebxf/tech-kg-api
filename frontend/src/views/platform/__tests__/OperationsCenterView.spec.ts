@@ -76,6 +76,9 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
 
     await switchToCategoryC(wrapper)
     expect(wrapper.find('.rerun-batch-action').exists()).toBe(true)
+    // 批量重跑按钮单独一行右对齐，不挤在筛选栏里
+    expect(wrapper.find('.review-toolbar-actions .rerun-batch-action').exists()).toBe(false)
+    expect(wrapper.find('.rerun-batch-row .rerun-batch-action').exists()).toBe(true)
     expect(wrapper.find('thead .pick-col').exists()).toBe(true)
   })
 

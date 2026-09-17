@@ -707,6 +707,7 @@ class ManualReviewService:
             case = item["case"]
             snapshot = item["snapshot"]
             failure = item["failure"]
+            next_attempt = int(snapshot.get("attempt") or 1) + 1
             try:
                 self.create_direct_case(
                     task_id=case.source_task_id or task_id,
@@ -717,6 +718,10 @@ class ManualReviewService:
                         "recordId": str(case.source_record_id),
                         "error": str(failure.get("error") or ""),
                         "schemaKey": snapshot.get("schemaKey"),
+                        # attempt 必须进去重键：原 case 的 candidate 与本调用完全
+                        # 相同（同 task/step/record/error），不带 attempt 会命中
+                        # 原案去重，attempt+1 新 case 永远建不出来
+                        "attempt": next_attempt,
                     },
                     object_id=str(case.source_record_id),
                     object_name=case.object_name,
@@ -734,7 +739,7 @@ class ManualReviewService:
                     resume_token=f"extract-fail:{rerun_execution_id}:{case.source_record_id}",
                     extra_snapshot={
                         **{k: v for k, v in snapshot.items() if k != "rerunExecutionId"},
-                        "attempt": int(snapshot.get("attempt") or 1) + 1,
+                        "attempt": next_attempt,
                         "rerunOfExecutionId": snapshot.get("executionId"),
                         "executionId": rerun_execution_id,
                     },

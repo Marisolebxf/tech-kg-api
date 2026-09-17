@@ -435,7 +435,9 @@ const rankNodeInfo = ref<Record<string, RankNodeInfo | null>>({})
 const rankNodeLoading = ref(false)
 
 async function resolveRankNodes(vids: string[]): Promise<void> {
-  if (!algoSpace.value) return
+  // 结果行属于提交时冻结的图空间，节点解析同样用冻结空间；
+  // 用实时空间会在切换空间后全部 404，名称/类型列退化成 '-'
+  if (!algoJobSpace.value) return
   const pending = [...new Set(vids)].filter((vid) => !rankNodeInfoCache.has(vid))
   if (!pending.length) return
   rankNodeLoading.value = true
@@ -443,7 +445,7 @@ async function resolveRankNodes(vids: string[]): Promise<void> {
     const results = await Promise.allSettled(
       pending.map(async (vid) => {
         // 拦截器运行时已解包为 ApiResponse（类型层面仍是 AxiosResponse，做一次窄化断言）
-        const body = (await getGraphNode(vid, algoSpace.value)) as unknown as ApiResponse<GraphNode>
+        const body = (await getGraphNode(vid, algoJobSpace.value)) as unknown as ApiResponse<GraphNode>
         return unwrapApiResponse(body)
       }),
     )
@@ -517,8 +519,13 @@ function highlightRadius(vid: string): number | undefined {
   return Math.round(12 + ratio * 12)
 }
 
+/** 高亮请求序号：并发点击时只认最后一次，过期响应直接丢弃。 */
+let highlightReqSeq = 0
+
 async function loadHighlight(vid: string, options?: { scrollIntoView?: boolean }): Promise<void> {
-  if (!algoSpace.value) return
+  // 邻域同样按提交时冻结的图空间查询（结果 vid 来自该空间）
+  if (!algoJobSpace.value) return
+  const seq = ++highlightReqSeq
   highlightVid.value = vid
   highlightLoading.value = true
   highlightError.value = ''
@@ -528,8 +535,9 @@ async function loadHighlight(vid: string, options?: { scrollIntoView?: boolean }
     const body = (await getSubgraph(vid, {
       depth: 1,
       limit: HIGHLIGHT_NEIGHBOR_LIMIT,
-      space: algoSpace.value,
+      space: algoJobSpace.value,
     })) as unknown as ApiResponse<GraphData>
+    if (seq !== highlightReqSeq) return
     const graph = unwrapApiResponse(body)
     const nodes: GraphNodeData[] = graph.nodes.map((node) => {
       const tags = node.labels ?? []
@@ -563,10 +571,12 @@ async function loadHighlight(vid: string, options?: { scrollIntoView?: boolean }
       highlightAsideRef.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
     }
   } catch (error) {
+    if (seq !== highlightReqSeq) return
     highlightError.value = getErrorMessage(error, '图谱高亮加载失败')
     showToast(highlightError.value, 'warning')
   } finally {
-    highlightLoading.value = false
+    // 过期请求不清除新一轮的加载态
+    if (seq === highlightReqSeq) highlightLoading.value = false
   }
 }
 

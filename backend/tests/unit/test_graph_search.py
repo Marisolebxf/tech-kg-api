@@ -5,7 +5,7 @@
 HTTP 200 + 业务 code 422 + success false。
 """
 
-from typing import Any
+from typing import Any, cast
 
 from fastapi.testclient import TestClient
 from httpx import Response
@@ -172,3 +172,107 @@ def test_neighbours_reject_invalid_direction() -> None:
     error = body["data"][0]
 
     assert error["type"] == "literal_error"
+
+
+def test_subgraph_accepts_vid_containing_slash() -> None:
+    """含 ``/`` 的 VID（DOI 类，如 paper_ref_10.1111/jth.14768）应命中子图路由。
+
+    网关/uvicorn 会把 %2F 解码成路径分隔符，单段路径参数直接 404 Not Found
+    （前端 PageRank 排名行点击图谱高亮即此坑）。路径改用 path 转换器后，
+    解码后的多段 URL 也能匹配。用非法 depth 触发统一参数校验 422 作为
+    「路由已命中」的确定性判据（路由未命中是 HTTP 404 detail=Not Found）。
+    """
+
+    response = client.get(
+        f"{BASE_URL}/subgraph/paper_ref_10.1111/jth.14768",
+        params={"depth": 9},
+    )
+
+    assert_validation_error(response, "depth")
+
+    # %2F 编码形态同样应命中（前端 encodeURIComponent 的原样输出）
+    response_encoded = client.get(
+        f"{BASE_URL}/subgraph/paper_ref_10.1111%2Fjth.14768",
+        params={"depth": 9},
+    )
+
+    assert_validation_error(response_encoded, "depth")
+
+
+def test_get_node_accepts_vid_containing_slash() -> None:
+    """含 ``/`` 的 VID 应命中节点详情路由（同子图接口的 path 转换器）。"""
+
+    response = client.get(
+        f"{BASE_URL}/nodes/paper_ref_10.1111/jth.14768",
+    )
+
+    # 只断言「命中路由、返回统一 ApiResponse 信封」：不连接真实图库时
+    # 走 _graph_query_error（业务 500），连接时可能业务 200/404，
+    # 但都不会是路由级 404 的 {"detail": "Not Found"}。
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body.get("success"), bool)
+    assert "detail" not in body
+
+
+def test_collect_subgraph_keeps_dangling_vertex_center() -> None:
+    """悬挂点（无 tag 属性但有边，如引用边的 DOI 端点）应渲染占位中心而非 404。
+
+    dev2 的 CITES 数据里中心与邻居可能同为悬挂点：边端点也需占位进入 nodes，
+    否则画布上边指向幽灵节点。
+    """
+
+    from biz.handler.graph_search import _collect_subgraph
+    from infra.graph_db import TRSGraphClient
+    from infra.graph_db.models import GraphEdge, GraphNode
+
+    class _FakeClient:
+        """悬挂点模拟：中心与邻居 VID 均查不到属性。"""
+
+        def __init__(self, edges: list[GraphEdge]) -> None:
+            self._edges = edges
+
+        def get_node(self, vid: str) -> GraphNode | None:
+            if vid in ("paper_ref_10.1111/jth.14768", "paper_812578243168174080"):
+                return None  # 悬挂点：FETCH/MATCH 均不可见
+            return GraphNode(id=vid, labels=["Paper"], properties={"name": "论文A"})
+
+        def get_node_edges(self, vid: str, **_: object) -> list[GraphEdge]:
+            return self._edges
+
+    edges = [
+        GraphEdge(
+            id="e1",
+            type="CITES",
+            source_id="paper_ref_10.1111/jth.14768",
+            target_id="paper_812578243168174080",
+        )
+    ]
+
+    subgraph = _collect_subgraph(
+        cast(TRSGraphClient, _FakeClient(edges)),
+        "paper_ref_10.1111/jth.14768",
+        1,
+        40,
+        0,
+        None,
+        "both",
+    )
+
+    assert subgraph is not None
+    assert subgraph["nodes"][0].id == "paper_ref_10.1111/jth.14768"
+    assert subgraph["nodes"][0].labels == []
+    # 悬挂邻居占位出现在 nodes（边端点必须可画）
+    neighbor = next(n for n in subgraph["nodes"] if n.id == "paper_812578243168174080")
+    assert neighbor.labels == []
+    assert subgraph["edges"][0].type == "CITES"
+
+    # 完全不存在的 vid（无属性也无边）仍返回 None → 业务 404
+    class _GhostClient(_FakeClient):
+        def get_node(self, vid: str) -> GraphNode | None:
+            return None
+
+    assert (
+        _collect_subgraph(cast(TRSGraphClient, _GhostClient([])), "ghost", 1, 40, 0, None, "both")
+        is None
+    )

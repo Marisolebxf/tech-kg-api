@@ -51,6 +51,20 @@ logger = logging.getLogger("infra.graph_db")
 _VID_KEYS: tuple[str, ...] = ("vid", "id", "name")
 
 
+def _vid_has_slash(node_id: Any) -> bool:
+    """DOI 类业务 VID 本身含 ``/``（如 paper_ref_10.1111/jth.14768）。
+
+    trs-graph REST 的 ``/nodes/{id}``、``/traversal/{id}/edges`` 是单段路径
+    参数，斜杠 VID（无论是否 %2F 编码）都路由不匹配，需改走 nGQL 查询端点。
+    """
+    return "/" in str(node_id)
+
+
+def _ngql_quote(value: Any) -> str:
+    """值转为 nGQL 双引号字符串字面量（转义反斜杠与双引号，防注入）。"""
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def _error_detail(resp: httpx.Response) -> str:
     """从 trs-graph 错误响应体里提取人类可读信息（如 Nebula SemanticError）。"""
     try:
@@ -198,6 +212,8 @@ class TRSGraphClient:
         return _trs_node_to_model(resp.json())
 
     def get_node(self, node_id: Any) -> GraphNode | None:
+        if _vid_has_slash(node_id):
+            return self._get_node_via_ngql(node_id)
         try:
             resp = self._request("GET", f"/api/v1/nodes/{node_id}")
         except GraphNotFoundError:
@@ -406,6 +422,10 @@ class TRSGraphClient:
         limit: int = 100,
         offset: int = 0,
     ) -> list[GraphEdge]:
+        if _vid_has_slash(node_id):
+            return self._get_node_edges_via_ngql(
+                node_id, direction=direction, edge_type=edge_type, limit=limit, offset=offset
+            )
         params: dict[str, Any] = {"direction": direction, "limit": limit}
         if offset:
             params["offset"] = offset
@@ -415,6 +435,54 @@ class TRSGraphClient:
         data = resp.json()
         items = data if isinstance(data, list) else data.get("items", [])
         return [_trs_edge_to_model(e) for e in items]
+
+    def _get_node_via_ngql(self, node_id: Any) -> GraphNode | None:
+        """含 ``/`` 的 VID（DOI 类）经 nGQL FETCH 取节点。
+
+        trs-graph REST 的 ``/nodes/{id}`` 是单段路径参数，斜杠 VID 直接
+        路由 404，必须走查询端点。
+        """
+        result = self.execute_query(f"FETCH PROP ON * {_ngql_quote(node_id)} YIELD vertex AS v")
+        for record in result.records:
+            vertex = record.get("v")
+            if isinstance(vertex, dict) and vertex.get("id") is not None:
+                return _trs_node_to_model(vertex)
+        return None
+
+    def _get_node_edges_via_ngql(
+        self,
+        node_id: Any,
+        *,
+        direction: str,
+        edge_type: str | None,
+        limit: int,
+        offset: int,
+    ) -> list[GraphEdge]:
+        """含 ``/`` 的 VID（DOI 类）经 nGQL GO 取一跳边（REST 路径参数无法承载）。
+
+        边不带属性（子图渲染只用类型与端点）；GO 不做服务端分页，Python 侧切片。
+        edge_type 只放行字母数字下划线，防 nGQL 注入。
+        """
+        over = "*"
+        if edge_type and edge_type.replace("_", "a").isalnum():
+            over = edge_type
+        direction_clause = {"in": "REVERSELY", "both": "BIDIRECT"}.get(direction, "")
+        statement = (
+            f"GO 1 STEP FROM {_ngql_quote(node_id)} OVER {over}"
+            + (f" {direction_clause}" if direction_clause else "")
+            + " YIELD id($^) AS src, id($$) AS dst, type(edge) AS etype"
+        )
+        result = self.execute_query(statement)
+        edges = [
+            GraphEdge(
+                id=f"{record.get('src')}|{record.get('etype')}|{record.get('dst')}",
+                type=str(record.get("etype")),
+                source_id=record.get("src"),
+                target_id=record.get("dst"),
+            )
+            for record in result.records
+        ]
+        return edges[offset : offset + limit]
 
     def get_neighbours(
         self,

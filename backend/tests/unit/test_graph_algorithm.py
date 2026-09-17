@@ -57,6 +57,14 @@ def algo_backend(monkeypatch):
         def edge_types(self):
             return ["HAS_KEYWORD", "EMPLOYED_BY"]
 
+        def execute_read(self, query: str):
+            # Degree nGQL 双向聚合：按箭头方向区分出度 / 入度
+            if "<-[e:" in query:
+                return SimpleNamespace(
+                    records=[{"vid": "a", "cnt": 1}, {"vid": "c", "cnt": 4}]
+                )
+            return SimpleNamespace(records=[{"vid": "a", "cnt": 2}, {"vid": "b", "cnt": 5}])
+
     graph_client = GraphClient()
 
     class AlgoClient:
@@ -209,7 +217,58 @@ def test_get_result_passthrough_with_truncated(algo_backend) -> None:
     assert data["truncated"] is False
 
 
+def test_degree_via_ngql_returns_merged_result(algo_backend) -> None:
+    # degreestatic 不走 Spark（字符串 VID 限制），nGQL 同步算完直接 succeeded
+    data = submit_job(_actor(), "shared_business", "degreestatic", ["HAS_KEYWORD"], {})
+    assert data["status"] == "succeeded"
+    assert algo_backend.submit_calls == []  # 未触碰 Spark 提交
+    result = get_result(_actor(), "shared_business", data["jobId"])
+    # 出度 {a:2,b:5}、入度 {a:1,c:4} 合并后按总度降序
+    assert result["rows"] == [
+        {"vid": "b", "out_degree": "5", "in_degree": "0", "degree": "5"},
+        {"vid": "c", "out_degree": "0", "in_degree": "4", "degree": "4"},
+        {"vid": "a", "out_degree": "2", "in_degree": "1", "degree": "3"},
+    ]
+    assert result["count"] == 3
+    assert result["truncated"] is False
+    job = get_job(_actor(), "shared_business", data["jobId"])
+    assert job["status"] == "succeeded"
+
+
+def test_degree_unknown_label_rejected(algo_backend) -> None:
+    with pytest.raises(GraphAlgorithmError) as exc_info:
+        submit_job(_actor(), "shared_business", "degreestatic", ["NOT_AN_EDGE"], {})
+    assert "不存在边类型" in str(exc_info.value)
+    assert algo_backend.submit_calls == []
+
+
 def test_list_edge_types(algo_backend) -> None:
+    # Schema 目录不可读（假 Session 无 query）→ 回退图库 SHOW EDGES
+    assert list_edge_types(_actor(), "shared_business") == ["HAS_KEYWORD", "EMPLOYED_BY"]
+
+
+def test_list_edge_types_prefers_schema_catalog(algo_backend, monkeypatch) -> None:
+    # 目录顺序即展示顺序；不在图库中的目录项（COAUTHOR_WITH）被过滤
+    monkeypatch.setattr(
+        "service.graph_algorithm._relation_schema_keys",
+        lambda space: ["EMPLOYED_BY", "COAUTHOR_WITH"],
+    )
+    assert list_edge_types(_actor(), "shared_business") == ["EMPLOYED_BY"]
+
+
+def test_list_edge_types_disjoint_catalog_falls_back(algo_backend, monkeypatch) -> None:
+    # 目录与图库完全无交集：回退完整图库列表，避免有目录反而看不到边类型
+    monkeypatch.setattr(
+        "service.graph_algorithm._relation_schema_keys",
+        lambda space: ["COAUTHOR_WITH", "CITES"],
+    )
+    assert list_edge_types(_actor(), "shared_business") == ["HAS_KEYWORD", "EMPLOYED_BY"]
+
+
+def test_list_edge_types_falls_back_when_catalog_empty(algo_backend, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "service.graph_algorithm._relation_schema_keys", lambda space: []
+    )
     assert list_edge_types(_actor(), "shared_business") == ["HAS_KEYWORD", "EMPLOYED_BY"]
 
 

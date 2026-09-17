@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 from application.workflow_jobs import workflow_job_application
 from application.workflow_operations import workflow_operations_application
@@ -21,6 +23,7 @@ from biz.schemas.workflow_operations import (
     WorkflowExecuteRequest,
     WorkflowScheduleRequest,
 )
+from service.job_events import hub as job_event_hub
 from service.platform_access import PlatformActor
 from service.temporal_runtime import temporal_runtime
 from service.workflow_jobs import WorkflowJobError
@@ -293,6 +296,41 @@ async def list_jobs(
 ) -> ApiResponse:
     items = await job_service.list_jobs(actor, name=name, status=status, task_type=task_type)
     return ApiResponse(data={"items": items, "total": len(items)})
+
+
+# SSE 心跳周期须小于 nginx proxy_read_timeout（默认 60s），防代理掐空闲连接
+_SSE_HEARTBEAT_SECONDS = 15.0
+
+
+@router.get("/jobs/events")
+async def stream_job_events() -> StreamingResponse:
+    """任务/执行变更推送（SSE）：控制面表变化即下发 jobs-changed 事件。
+
+    鉴权沿用路由组依赖（cookie 会话同源自动携带，EventSource 无法自定义头）。
+    客户端断开由生成器取消触发 finally 退订；无订阅者时后端监视协程停转。
+    """
+    queue = job_event_hub.subscribe()
+
+    async def event_stream():
+        try:
+            yield "retry: 5000\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECONDS)
+                except TimeoutError:
+                    yield ": keep-alive\n\n"
+                    continue
+                data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+                yield f"event: jobs-changed\ndata: {data}\n\n"
+        finally:
+            job_event_hub.unsubscribe(queue)
+
+    # X-Accel-Buffering: no —— nginx 默认缓冲代理响应，会攒住 SSE 流
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/jobs", response_model=ApiResponse)

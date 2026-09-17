@@ -13,6 +13,7 @@ import {
   type WorkflowJob,
 } from '../../api/workflowOperations'
 import { schemaErrorMessage } from '../../api/schemaManagement'
+import { subscribeJobEvents } from '../../api/jobEvents'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import JobLaunchDialog from '../../components/JobLaunchDialog.vue'
 import ListPagination from '../../components/list-pagination.vue'
@@ -114,12 +115,11 @@ async function loadData(silent = false) {
   }
 }
 
-// 状态轮询：有「运行中」任务时 5s 高频，否则 30s 低频兜底不停摆——周期任务
-// 到点被 Schedule 触发翻「执行中」同样依赖轮询发现（后端 list 会惰性复核
-// RUNNING 执行并翻新状态）。页面隐藏时跳过本轮；运行中任务到达终态时弹
-// toast 告知结果（与报错同款提示形式）
-const hasRunningJob = computed(() => jobs.value.some((job) => deriveJobUnifiedStatus(job) === '运行中'))
-let pollTimer: ReturnType<typeof setTimeout> | null = null
+// 状态更新走服务端推送（SSE）：后端监视控制面表，Schedule 到点起跑/执行翻终态/
+// 暂停恢复/增删即时下发 jobs-changed，前端不再定时轮询。断线由 EventSource
+// 自动重连，重连成功时全量重拉补齐漏掉的事件；运行中任务到达终态时弹 toast
+// 告知结果（与报错同款提示形式）
+let unsubscribeJobEvents: (() => void) | null = null
 
 function announceFinished(prevJobs: WorkflowJob[]) {
   const prev = new Map(prevJobs.map((job) => [job.id, deriveJobUnifiedStatus(job)]))
@@ -131,18 +131,14 @@ function announceFinished(prevJobs: WorkflowJob[]) {
   }
 }
 
-function schedulePoll() {
-  pollTimer = setTimeout(async () => {
-    const prevJobs = [...jobs.value]
-    if (!document.hidden) {
-      await loadData(true)
-      announceFinished(prevJobs)
-    }
-    schedulePoll()
-  }, hasRunningJob.value ? 5000 : 30000)
+async function reloadOnEvent(announce: boolean) {
+  const prevJobs = [...jobs.value]
+  await loadData(true)
+  if (announce) announceFinished(prevJobs)
 }
+
 onUnmounted(() => {
-  if (pollTimer !== null) clearTimeout(pollTimer)
+  unsubscribeJobEvents?.()
 })
 
 function openCreate() {
@@ -215,7 +211,14 @@ function executionStatusClass(status: string): string {
 
 onMounted(() => {
   void loadData()
-  schedulePoll()
+  unsubscribeJobEvents = subscribeJobEvents(
+    () => {
+      void reloadOnEvent(!document.hidden) // 页面隐藏时静默刷新，不弹无人看的 toast
+    },
+    () => {
+      void loadData(true) // 连接/重连成功：静默全量重拉，补齐断线期间的变化
+    },
+  )
 })
 </script>
 

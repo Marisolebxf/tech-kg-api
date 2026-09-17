@@ -171,16 +171,69 @@ def get_result(actor: PlatformActor, space: str, job_id: str) -> dict:
     return data
 
 
+def _relation_schema_keys(space: str) -> list[str]:
+    """读 MySQL Schema 目录（kg_schema_definition）中该空间的关系类型。
+
+    与 Schema 管理页同源：按 graph_space 过滤、只取 kind=relation、剔除软删，
+    展示顺序沿用目录的 display_order。注意取 name 列——它是 DDL 落到图库的
+    EDGE 类型名（schema_key 只是 UI slug，kebab-case，与图库边名不一致）；
+    仅取 ddl_status=succeeded，未落库的类型提交算法只会得到空结果。
+    读取失败（库不可用等）返回空列表，由调用方回退图库 SHOW EDGES。
+    """
+    try:
+        from sqlalchemy import select
+
+        from db_model.schema_management import GraphSchemaDefinition
+        from infra.mysql import create_session
+
+        session = create_session()
+        try:
+            rows = session.execute(
+                select(GraphSchemaDefinition.name)
+                .where(
+                    GraphSchemaDefinition.graph_space == space,
+                    GraphSchemaDefinition.kind == "relation",
+                    GraphSchemaDefinition.is_deleted.is_(False),
+                    GraphSchemaDefinition.ddl_status == "succeeded",
+                )
+                .order_by(
+                    GraphSchemaDefinition.display_order.asc(),
+                    GraphSchemaDefinition.name.asc(),
+                )
+            ).all()
+            return [name for (name,) in rows if name]
+        finally:
+            session.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("图算法读 Schema 目录失败，回退图库 SHOW EDGES: %s", exc)
+        return []
+
+
 def list_edge_types(actor: PlatformActor, space: str) -> list[str]:
-    """列出空间内的 EDGE 类型名（算法 labels 的取值来源）。"""
+    """列出空间内的关系类型（算法 labels 的取值来源）。
+
+    以图库 SHOW EDGES 为准（保证类型真实存在、提交算法不空跑），当该空间
+    在 MySQL Schema 目录中有建模时，用目录做策展：只保留目录中的类型并按
+    目录顺序排序——过滤测试遗留/空壳边类型。目录为空（空间未在 Schema
+    管理建模）或与图库完全无交集时，回退完整图库边类型列表。
+    """
     from infra.graph_db import get_space_client
 
     _ensure_space_access(actor, space)
     try:
-        return list(get_space_client(space).edge_types())
+        graph_types = list(get_space_client(space).edge_types())
     except Exception as exc:  # noqa: BLE001
         logger.warning("图算法列边类型失败: %s", exc)
         raise GraphAlgorithmError(f"获取边类型失败: {exc}", status_code=502) from exc
+
+    catalog = _relation_schema_keys(space)
+    if not catalog:
+        return graph_types
+    graph_set = set(graph_types)
+    curated = [name for name in catalog if name in graph_set]
+    # 目录与图库完全脱节（目录归属与 DDL 实际落点不一致等）：不裁剪，
+    # 避免有目录反而看不到任何边类型
+    return curated or graph_types
 
 
 def engine_status(actor: PlatformActor, space: str) -> dict:

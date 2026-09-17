@@ -210,6 +210,32 @@ def test_get_result_passthrough_with_truncated(algo_backend) -> None:
 
 
 def test_list_edge_types(algo_backend) -> None:
+    # Schema 目录不可读（假 Session 无 query）→ 回退图库 SHOW EDGES
+    assert list_edge_types(_actor(), "shared_business") == ["HAS_KEYWORD", "EMPLOYED_BY"]
+
+
+def test_list_edge_types_prefers_schema_catalog(algo_backend, monkeypatch) -> None:
+    # 目录顺序即展示顺序；不在图库中的目录项（COAUTHOR_WITH）被过滤
+    monkeypatch.setattr(
+        "service.graph_algorithm._relation_schema_keys",
+        lambda space: ["EMPLOYED_BY", "COAUTHOR_WITH"],
+    )
+    assert list_edge_types(_actor(), "shared_business") == ["EMPLOYED_BY"]
+
+
+def test_list_edge_types_disjoint_catalog_falls_back(algo_backend, monkeypatch) -> None:
+    # 目录与图库完全无交集：回退完整图库列表，避免有目录反而看不到边类型
+    monkeypatch.setattr(
+        "service.graph_algorithm._relation_schema_keys",
+        lambda space: ["COAUTHOR_WITH", "CITES"],
+    )
+    assert list_edge_types(_actor(), "shared_business") == ["HAS_KEYWORD", "EMPLOYED_BY"]
+
+
+def test_list_edge_types_falls_back_when_catalog_empty(algo_backend, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "service.graph_algorithm._relation_schema_keys", lambda space: []
+    )
     assert list_edge_types(_actor(), "shared_business") == ["HAS_KEYWORD", "EMPLOYED_BY"]
 
 

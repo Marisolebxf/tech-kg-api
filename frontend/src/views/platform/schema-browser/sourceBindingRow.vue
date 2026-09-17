@@ -147,9 +147,10 @@ function applyColumnDefaults() {
       allow-search
       :loading="false"
       popup-container=".schema-modal"
+      :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="onDatasourceChange"
     >
-      <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id" :label="`${ds.name}（${ds.host}）`">
+      <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id" :label="`${ds.name}（${ds.host}）`" :title="`${ds.name}（${ds.host}）`">
         {{ ds.name }}（{{ ds.host }}）
       </a-option>
     </a-select>
@@ -161,9 +162,10 @@ function applyColumnDefaults() {
       :loading="loadingDatabases"
       :disabled="!row.datasourceId"
       popup-container=".schema-modal"
+      :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="onDatabaseChange"
     >
-      <a-option v-for="db in databases" :key="db" :value="db">{{ db }}</a-option>
+      <a-option v-for="db in databases" :key="db" :value="db" :title="db">{{ db }}</a-option>
     </a-select>
     <a-select
       :model-value="row.tableName"
@@ -173,9 +175,10 @@ function applyColumnDefaults() {
       :loading="loadingTables"
       :disabled="!row.databaseName"
       popup-container=".schema-modal"
+      :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="onTableChange"
     >
-      <a-option v-for="t in tables" :key="t.name" :value="t.name">{{ t.name }}</a-option>
+      <a-option v-for="t in tables" :key="t.name" :value="t.name" :title="t.name">{{ t.name }}</a-option>
     </a-select>
     <a-select
       :model-value="row.pkColumn"
@@ -185,9 +188,10 @@ function applyColumnDefaults() {
       :loading="loadingColumns"
       :disabled="!row.tableName"
       popup-container=".schema-modal"
+      :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="(value) => patch({ pkColumn: asString(value) })"
     >
-      <a-option v-for="c in columns" :key="c.name" :value="c.name">{{ c.name }}</a-option>
+      <a-option v-for="c in columns" :key="c.name" :value="c.name" :title="c.name">{{ c.name }}</a-option>
     </a-select>
     <a-select
       :model-value="row.timeColumn"
@@ -197,9 +201,10 @@ function applyColumnDefaults() {
       :loading="loadingColumns"
       :disabled="!row.tableName"
       popup-container=".schema-modal"
+      :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="(value) => patch({ timeColumn: asString(value) })"
     >
-      <a-option v-for="c in columns" :key="c.name" :value="c.name">{{ c.name }}</a-option>
+      <a-option v-for="c in columns" :key="c.name" :value="c.name" :title="c.name">{{ c.name }}</a-option>
     </a-select>
     <button
       v-if="removable"
@@ -214,7 +219,9 @@ function applyColumnDefaults() {
 </template>
 
 <style scoped>
-.source-binding-row{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,0.9fr) minmax(0,1fr) minmax(90px,0.7fr) minmax(110px,0.8fr) 24px;gap:8px;align-items:center}
+/* 列给像素下限并整行 min-width：弹窗窄时不会被压扁，由外层
+   .source-bindings 的 overflow-x 横向拖动看全（触发器内省略号+title 兜底） */
+.source-binding-row{display:grid;grid-template-columns:minmax(150px,1.1fr) minmax(120px,0.9fr) minmax(150px,1fr) minmax(105px,0.7fr) minmax(125px,0.8fr) 24px;gap:8px;align-items:center;min-width:720px}
 .source-binding-row__select{min-width:0}
 :deep(.source-binding-row__select.arco-select-view){display:inline-flex;box-sizing:border-box;align-items:center;width:100%;min-width:0;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;font-size:14px;line-height:22px;box-shadow:none!important}
 :deep(.source-binding-row__select.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
@@ -225,4 +232,13 @@ function applyColumnDefaults() {
 :deep(.source-binding-row__select.arco-select-view .arco-select-view-value),:deep(.source-binding-row__select.arco-select-view .arco-select-view-placeholder){min-width:0;overflow:hidden;background:transparent!important;font-size:14px;line-height:30px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 .source-binding-row__remove{width:24px;height:24px;border:0;border-radius:4px;background:transparent;color:#e54848;font-size:16px;cursor:pointer}
 .source-binding-row__remove:hover{background:#fff3f3}
+</style>
+
+<style>
+/* 弹层 teleport 到 .schema-modal（popup-container），scoped 够不到，
+   经 triggerProps contentClass 打标。触发器列宽有限，长选项（数据源名/host、
+   长 URLs 等）按内容自然宽撑开 + 面板横向滚动，保证下拉里能看全要选什么 */
+.source-binding-popup .arco-select-dropdown-list-wrapper{overflow-x:auto}
+.source-binding-popup .arco-select-option{width:max-content;min-width:100%}
+.source-binding-popup .arco-select-option-content{overflow:visible}
 </style>

@@ -876,7 +876,8 @@ async function saveItem() {
       await bindSourcesAfterCreate(result.id, f.sources)
     }
     modalOpen.value = false
-    await loadSchemas()
+    // 展开状态下同步刷拓扑，让新建实体/关系立即出现在浏览图（收起态展开时会重拉）
+    await Promise.all([loadSchemas(), ...(topologyExpanded.value ? [loadTopology()] : [])])
     void loadEntityOptions()
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')

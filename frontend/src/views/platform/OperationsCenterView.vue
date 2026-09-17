@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 
-import { deleteProductionReview, getProductionReview, getProductionReviewAuditLogs, getProductionReviews, rerunExtractFailures, type ProductionReviewAuditEntry, type ProductionReviewCase } from '../../api/workflowOperations'
+import { deleteProductionReviewCases, getProductionReview, getProductionReviewAuditLogs, getProductionReviews, rerunExtractFailures, type ProductionReviewAuditEntry, type ProductionReviewCase } from '../../api/workflowOperations'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import {
   extractCaseStatusBadge,
@@ -23,7 +23,7 @@ const reviewTotal = ref(0)
 /** 队列行 = manual-review-data 的 ReviewRecord + 重跑/删除/跳转所需的原始字段。 */
 type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; graphBuildId?: string }
 
-/** 可重跑/可删除：与后端 rerun 门控同口径（未处理）。 */
+/** 可重跑：与后端 rerun 门控同口径（未处理）。 */
 const isRerunnable = (row: ReviewRow) => row.rawStatus === 'OPEN' || row.rawStatus === 'RERUN_FAILED'
 
 /** 类型列：objectType（entity/relation）→ 实体/关系；T_LINK 是实体对齐，恒实体。 */
@@ -48,8 +48,10 @@ watch(() => route.query.keyword, (value) => { keyword.value = clampSearchKeyword
 
 /** 审核队列分类：A=入库决策（T_DIRECT/T_LINK）；C=抽取失败重跑（T_EXTRACT_FAIL）。 */
 const reviewCategory = ref<'A' | 'C'>('A')
-/** C 类勾选的待重跑 case。 */
-const rerunSelection = ref<Set<string>>(new Set())
+/** C 类勾选行跨页保持；重跑只取可重跑子集，删除使用全部勾选。 */
+const rowSelection = ref<Set<string>>(new Set())
+const selectedRerunIds = ref<Set<string>>(new Set())
+const reviewUpdatedAtSort = ref<'' | 'desc' | 'asc'>('')
 const rerunSubmitting = ref(false)
 /** 批量重跑结果反馈（替代 alert）：展示新执行可跳转链接，15s 自动消失。 */
 const rerunFeedback = ref<{ type: 'success' | 'error'; text: string; executions: Array<{ executionId: string; schemaId: string; cases: number; records: number }> } | null>(null)
@@ -64,28 +66,34 @@ const reviewStatusOptions = computed(() => (
     : ['全部', '待处理', '已处理']
 ))
 
-/** 当前页可重跑行的全选/半选态（跨页勾选由 rerunSelection 保持，按钮数字展示总数）。 */
-const rerunPageEligibleIds = computed(() => reviewRows.value.filter(isRerunnable).map((row) => row.id))
-const rerunAllChecked = computed(() => rerunPageEligibleIds.value.length > 0 && rerunPageEligibleIds.value.every((id) => rerunSelection.value.has(id)))
-const rerunSomeChecked = computed(() => !rerunAllChecked.value && rerunPageEligibleIds.value.some((id) => rerunSelection.value.has(id)))
+/** 表头全选覆盖当前页；重跑资格单独保存，避免将已处理行下发重跑。 */
+const pageRowIds = computed(() => reviewRows.value.map((row) => row.id))
+const allChecked = computed(() => pageRowIds.value.length > 0 && pageRowIds.value.every((id) => rowSelection.value.has(id)))
+const someChecked = computed(() => !allChecked.value && pageRowIds.value.some((id) => rowSelection.value.has(id)))
 
 function switchReviewCategory(category: 'A' | 'C') {
   if (reviewCategory.value === category) return
   reviewCategory.value = category
-  rerunSelection.value = new Set()
+  rowSelection.value = new Set()
+  selectedRerunIds.value = new Set()
+  reviewStatusFilter.value = '全部'
   reviewPage.value = 1
   void loadReviews()
 }
 
-function toggleRerunPick(id: string, checked: boolean) {
-  if (checked) rerunSelection.value.add(id)
-  else rerunSelection.value.delete(id)
+function toggleRowPick(row: ReviewRow, checked: boolean) {
+  if (checked) {
+    rowSelection.value.add(row.id)
+    if (isRerunnable(row)) selectedRerunIds.value.add(row.id)
+  } else {
+    rowSelection.value.delete(row.id)
+    selectedRerunIds.value.delete(row.id)
+  }
 }
 
-/** 表头全选/取消：只作用于当前页可重跑行（不可重跑行禁用不勾选）；跨页勾选保持，按钮数字展示总数。 */
-function toggleRerunPickAll(event: Event) {
+function toggleRowPickAll(event: Event) {
   const checked = (event.target as HTMLInputElement).checked
-  for (const id of rerunPageEligibleIds.value) toggleRerunPick(id, checked)
+  for (const row of reviewRows.value) toggleRowPick(row, checked)
 }
 
 function showRerunFeedback(type: 'success' | 'error', text: string, executions: Array<{ executionId: string; schemaId: string; cases: number; records: number }>) {
@@ -95,7 +103,7 @@ function showRerunFeedback(type: 'success' | 'error', text: string, executions: 
 }
 
 async function rerunSelected(caseIds: string[] | undefined = undefined, skipConfirm = false) {
-  const ids = caseIds ?? [...rerunSelection.value]
+  const ids = caseIds ?? [...selectedRerunIds.value]
   if (!ids.length || rerunSubmitting.value) return
   if (!skipConfirm && ids.length > 20) {
     rerunConfirmVisible.value = true
@@ -105,7 +113,8 @@ async function rerunSelected(caseIds: string[] | undefined = undefined, skipConf
   try {
     const result = await rerunExtractFailures({ caseIds: ids })
     showRerunFeedback('success', `已下发重跑：${result.cases} 条失败记录 → ${result.executions.length} 个新执行（类别=重新执行）`, result.executions)
-    rerunSelection.value = new Set()
+    rowSelection.value = new Set()
+    selectedRerunIds.value = new Set()
     void loadReviews()
   } catch (error) {
     showRerunFeedback('error', error instanceof Error ? error.message : '重跑下发失败', [])
@@ -168,27 +177,31 @@ async function openLog(row: ReviewRow) {
   }
 }
 
-/** 删除：二次确认后物理删除（仅未处理可删，与重跑同门控）。 */
-const deleteTarget = ref<ReviewRow>()
+/** 单条/批量删除 C 类失败记录，保留 A 类原有删除端点。 */
+const pendingDeleteIds = ref<string[]>([])
 const deleteVisible = ref(false)
 const deleteSubmitting = ref(false)
 const deleteError = ref('')
 
-function askDelete(row: ReviewRow) {
-  deleteTarget.value = row
+function askDelete(caseIds: string[] = [...rowSelection.value]) {
+  if (!caseIds.length || deleteSubmitting.value) return
+  pendingDeleteIds.value = caseIds
   deleteError.value = ''
   deleteVisible.value = true
 }
 
 async function confirmDelete() {
-  const target = deleteTarget.value
-  if (!target || deleteSubmitting.value) return
+  if (!pendingDeleteIds.value.length || deleteSubmitting.value) return
   deleteSubmitting.value = true
   try {
-    await deleteProductionReview(target.id)
+    const result = await deleteProductionReviewCases(pendingDeleteIds.value)
     deleteVisible.value = false
-    rerunSelection.value.delete(target.id)
-    showRerunFeedback('success', `已删除失败记录 ${target.id}`, [])
+    for (const id of pendingDeleteIds.value) {
+      rowSelection.value.delete(id)
+      selectedRerunIds.value.delete(id)
+    }
+    const skipped = result.skipped ? `（跳过 ${result.skipped} 条非抽取失败类或不存在的记录）` : ''
+    showRerunFeedback('success', `已删除 ${result.deleted} 条失败记录${skipped}`, [])
     void loadReviews()
   } catch (error) {
     deleteError.value = error instanceof Error ? error.message : '删除失败'
@@ -199,6 +212,7 @@ async function confirmDelete() {
 
 onUnmounted(() => {
   window.clearTimeout(rerunFeedbackTimer)
+  window.clearTimeout(reviewKeywordTimer)
 })
 
 async function loadReviews() {
@@ -211,6 +225,8 @@ async function loadReviews() {
       statusGroup: reviewStatusFilter.value === '待处理' ? 'pending' : reviewStatusFilter.value === '已处理' ? 'processed' : undefined,
       status: reviewStatusFilter.value === '重跑中' ? 'RERUNNING' : reviewStatusFilter.value === '重跑失败' ? 'RERUN_FAILED' : undefined,
       kind: !reviewKindFilter.value || reviewKindFilter.value === '全部' ? undefined : reviewKindFilter.value === '实体' ? 'entity' : 'relation',
+      sort: reviewCategory.value === 'C' && reviewUpdatedAtSort.value ? 'updatedAt' : undefined,
+      order: reviewCategory.value === 'C' ? reviewUpdatedAtSort.value || undefined : undefined,
       page: reviewPage.value,
       pageSize: reviewPageSize.value,
     })
@@ -223,6 +239,11 @@ async function loadReviews() {
     reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
       id: row.id, templateId: row.templateId, rawStatus: row.status, graphBuildId: row.executionId || row.workflowId || '', batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
     }))
+    for (const row of reviewRecords.value) {
+      if (!rowSelection.value.has(row.id)) continue
+      if (isRerunnable(row)) selectedRerunIds.value.add(row.id)
+      else selectedRerunIds.value.delete(row.id)
+    }
     reviewLoadError.value = ''
   } catch (error) { reviewLoadError.value = error instanceof Error ? error.message : '人工处理队列加载失败' }
 }
@@ -264,6 +285,14 @@ watch(keyword, () => {
     void loadReviews()
   }, 300)
 })
+/** 更新时间排序循环：默认 → 降序 → 升序。 */
+function toggleUpdatedAtSort() {
+  reviewUpdatedAtSort.value = reviewUpdatedAtSort.value === '' ? 'desc' : reviewUpdatedAtSort.value === 'desc' ? 'asc' : ''
+}
+watch(reviewUpdatedAtSort, () => {
+  reviewPage.value = 1
+  void loadReviews()
+})
 onMounted(loadReviews)
 </script>
 
@@ -276,7 +305,7 @@ onMounted(loadReviews)
       </nav>
       <div class="review-toolbar-actions">
         <div class="ops-filter is-review review-filter-row">
-          <div class="review-filter-field">
+          <div v-if="reviewCategory === 'A'" class="review-filter-field">
             <span class="review-filter-label">状态</span>
             <a-select v-model="reviewStatusFilter" class="review-filter-select" :options="reviewStatusOptions" />
           </div>
@@ -294,9 +323,10 @@ onMounted(loadReviews)
       <button
         class="rerun-batch-action"
         type="button"
-        :disabled="!rerunSelection.size || rerunSubmitting"
+        :disabled="!selectedRerunIds.size || rerunSubmitting"
         @click="rerunSelected()"
-      >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
+      >{{ rerunSubmitting ? '下发中…' : `批量重跑（${selectedRerunIds.size}）` }}</button>
+      <button class="rerun-batch-action is-danger" type="button" :disabled="!rowSelection.size || deleteSubmitting" @click="askDelete()">{{ deleteSubmitting ? '删除中…' : `批量删除（${rowSelection.size}）` }}</button>
     </div>
 
     <section class="ops-panel">
@@ -328,26 +358,32 @@ onMounted(loadReviews)
           <tr>
             <th v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
               type="checkbox"
-              :checked="rerunAllChecked"
-              :indeterminate="rerunSomeChecked"
-              @change="toggleRerunPickAll"
+              :checked="allChecked"
+              :indeterminate="someChecked"
+              @change="toggleRowPickAll"
             /></th>
             <th>处理实例 ID</th>
             <th>待处理对象</th>
             <th>类型</th>
             <th>来源记录</th>
-            <th>状态</th>
-            <th>更新时间</th>
-            <th class="review-action-col">操作</th>
+            <th v-if="reviewCategory === 'C'" class="th-status-filter">
+              <span class="th-filter-label">状态</span>
+              <a-select v-model="reviewStatusFilter" :options="reviewStatusOptions" aria-label="状态筛选" />
+            </th>
+            <th v-else>状态</th>
+            <th v-if="reviewCategory === 'C'" :aria-sort="reviewUpdatedAtSort === 'desc' ? 'descending' : reviewUpdatedAtSort === 'asc' ? 'ascending' : 'none'">
+              <button type="button" class="th-sort" @click="toggleUpdatedAtSort">更新时间<span class="th-sort-arrow">{{ reviewUpdatedAtSort === 'desc' ? '↓' : reviewUpdatedAtSort === 'asc' ? '↑' : '↕' }}</span></button>
+            </th>
+            <th v-else>更新时间</th>
+            <th class="review-action-col" :class="{ 'is-sticky': reviewCategory === 'C' }">操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="row in reviewRows" :key="row.id">
             <td v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
               type="checkbox"
-              :disabled="!isRerunnable(row)"
-              :checked="rerunSelection.has(row.id)"
-              @change="((event?: Event) => toggleRerunPick(row.id, Boolean((event?.target as HTMLInputElement)?.checked)))"
+              :checked="rowSelection.has(row.id)"
+              @change="((event?: Event) => toggleRowPick(row, Boolean((event?.target as HTMLInputElement)?.checked)))"
             /></td>
             <td class="review-id-cell"><code class="review-id-plain">{{ row.id }}</code></td>
             <td class="review-object-cell">
@@ -360,7 +396,7 @@ onMounted(loadReviews)
             </td>
             <td><span :class="['review-status', `is-${row.status}`]">{{ row.status }}</span></td>
             <td>{{ row.completedAt || row.updatedAt }}</td>
-            <td class="review-action-col">
+            <td class="review-action-col" :class="{ 'is-sticky': reviewCategory === 'C' }">
               <div v-if="reviewCategory === 'A'" class="alert-actions">
                 <RouterLink class="link" :to="`/manual-review/task/${row.id}`">查看记录 →</RouterLink>
               </div>
@@ -374,11 +410,10 @@ onMounted(loadReviews)
                   @click="rerunSelected([row.id])"
                 >重跑</button>
                 <button
-                  v-if="isRerunnable(row)"
                   class="link rerun-link is-danger"
                   type="button"
                   :disabled="deleteSubmitting"
-                  @click="askDelete(row)"
+                  @click="askDelete([row.id])"
                 >删除</button>
               </div>
             </td>
@@ -414,7 +449,7 @@ onMounted(loadReviews)
       :ok-loading="rerunSubmitting"
       @ok="rerunSelected(undefined, true)"
     >
-      <p class="rerun-confirm-text">即将对已勾选的 {{ rerunSelection.size }} 条失败记录下发重跑，按 schema 合并为新执行（类别=重新执行）。重跑成功的记录自动关闭，仍失败的会重新进入失败列表。</p>
+      <p class="rerun-confirm-text">即将对已勾选的 {{ selectedRerunIds.size }} 条失败记录下发重跑，按 schema 合并为新执行（类别=重新执行）。重跑成功的记录自动关闭，仍失败的会重新进入失败列表。</p>
     </a-modal>
 
     <a-modal
@@ -474,7 +509,7 @@ onMounted(loadReviews)
       :ok-loading="deleteSubmitting"
       @ok="confirmDelete"
     >
-      <p class="rerun-confirm-text">即将物理删除失败记录 <code>{{ deleteTarget?.id }}</code>（{{ deleteTarget?.object }}），连同其草稿/决议/审计一并清除，不可恢复。仅未处理记录可删除。</p>
+      <p class="rerun-confirm-text">即将物理删除失败记录 {{ pendingDeleteIds.length }} 条，连同其草稿/决议/审计一并清除，不可恢复。非抽取失败类或不存在的记录会跳过。</p>
       <p v-if="deleteError" class="case-log-error-text">{{ deleteError }}</p>
     </a-modal>
   </div>
@@ -559,7 +594,7 @@ onMounted(loadReviews)
 .ops-review-table-scroll td>b,.ops-review-table-scroll td>strong{font-weight:400}
 /* 抽取失败重跑：批量重跑按钮 / 重跑反馈条 / 状态徽标扩展 */
 /* 批量重跑单独一行右对齐（贴合分段切换行下方，负 margin 收紧与上行的间距） */
-.rerun-batch-row{display:flex;box-sizing:border-box;width:100%;min-height:32px;margin:-8px 0 12px;align-items:center;justify-content:flex-end;flex:0 0 auto}
+.rerun-batch-row{display:flex;box-sizing:border-box;width:100%;min-height:32px;margin:-8px 0 12px;align-items:center;justify-content:flex-end;gap:12px;flex:0 0 auto}
 .rerun-batch-action{height:32px;padding:0 16px;border:1px solid #165dff;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
 .rerun-batch-action:hover:not(:disabled){border-color:#4080ff;background:#4080ff}
 .rerun-batch-action:active:not(:disabled){border-color:#0e42d2;background:#0e42d2}
@@ -645,6 +680,20 @@ onMounted(loadReviews)
 .case-log-status{color:#4e5969}
 .case-log-actor{color:#86909c}
 .case-log-empty{color:#86909c}
+/* C 类表头筛选和排序；固定操作列在水平滚动时持续可见。 */
+.review-case-table--selectable col.col-status{width:180px}
+.ops-review-table-scroll table.review-case-table--selectable{min-width:1450px}
+.ops-review-table-scroll td.review-action-col.is-sticky{position:sticky;right:0;z-index:1;background:#fff;box-shadow:-8px 0 12px -8px rgba(23,35,59,.22)}
+.ops-review-table-scroll th.review-action-col.is-sticky{position:sticky;right:0;z-index:3}
+.th-status-filter .th-filter-label{margin-right:8px}
+.th-status-filter :deep(.arco-select){width:104px}
+.th-status-filter :deep(.arco-select-view){height:28px;min-height:28px;background:#fff;border:1px solid #c9d8ee;font-size:12px}
+.th-sort{display:inline-flex;align-items:center;gap:4px;padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}
+.th-sort:hover{color:#165dff}
+.th-sort-arrow{font-size:12px;color:#98a2b3}
+.rerun-batch-action.is-danger{border-color:#f53f3f;background:#f53f3f}
+.rerun-batch-action.is-danger:hover:not(:disabled){border-color:#ff7d7d;background:#ff7d7d}
+.rerun-batch-action.is-danger:disabled{border-color:#fdaaa5;background:#fdaaa5;color:#fff}
 </style>
 <style>
 /* Keep the Arco input's native field transparent; the wrapper is the only visible input shell. */

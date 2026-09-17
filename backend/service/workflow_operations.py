@@ -17,6 +17,64 @@ def _now() -> str:
     return datetime.now(UTC).astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _rerun_scope_line(payload: Any) -> str | None:
+    """重跑执行的范围行：N 条失败记录（M 个来源），原执行 EXEC-xxx。
+
+    payload.recordIdsBySource 下发时即有（output 要等工作流结束才回填），
+    让任务日志在 RERUNNING 阶段就有数据可看。
+    """
+    if not isinstance(payload, dict):
+        return None
+    by_source = payload.get("recordIdsBySource")
+    if not isinstance(by_source, dict) or not by_source:
+        return None
+    record_count = sum(len(v or []) for v in by_source.values())
+    return (
+        f"重跑范围：{record_count} 条失败记录（{len(by_source)} 个来源），"
+        f"原执行 {payload.get('rerunOfExecutionId') or '—'}"
+    )
+
+
+def _extract_result_log_lines(execution: dict[str, Any]) -> list[str]:
+    """把抽取执行的 payload/output 提炼成任务日志数据行（人工审核「日志」弹窗内容）。
+
+    - 重跑范围来自 payload（下发时即有）；
+    - 逐来源批次/读行/写入/失败/游标来自 output.sources（工作流结束回填）；
+    - 失败汇总来自 output.failures——重跑模式 recorded 恒 0（仍失败记录由
+      resolve 重建为新审核 case），此时引导看失败队列而非 recorded。
+    """
+    lines: list[str] = []
+    scope = _rerun_scope_line(execution.get("payload"))
+    if scope:
+        lines.append(scope)
+    output = execution.get("output")
+    if not isinstance(output, dict):
+        return lines
+    for src in output.get("sources") or []:
+        if not isinstance(src, dict):
+            continue
+        cursor = src.get("watermark") or src.get("pkCursor")
+        cursor_text = f"，游标 {cursor}" if cursor else ""
+        lines.append(
+            f"来源 {src.get('source')}（{src.get('table')}）："
+            f"{_safe_int(src.get('batches'))} 批 / 读 {_safe_int(src.get('rows'))} 行 / "
+            f"写入 {_safe_int(src.get('written'))} / 失败 {_safe_int(src.get('failed'))}{cursor_text}"
+        )
+    failures = output.get("failures")
+    if isinstance(failures, dict) and _safe_int(failures.get("count")):
+        recorded = _safe_int(failures.get("recorded"))
+        detail = f"已落审核 case {recorded} 条" if recorded else "详见人工审核失败队列"
+        lines.append(f"失败汇总：{failures.get('count')} 条（{detail}）")
+    return lines
+
+
 class WorkflowOperationsService:
     def __init__(self, repo: WorkflowRepository = repository) -> None:
         self.repo = repo
@@ -118,6 +176,11 @@ class WorkflowOperationsService:
     ) -> dict[str, Any]:
         """由 execution 构造任务中心任务行（execute_definition 与周期任务 activity 共用）。"""
         task_id = f"PI-{datetime.now().strftime('%Y%m%d')}-{uuid4().hex[:6].upper()}"
+        # 重跑执行下发即带范围行（output 未回填前日志就有数据）
+        logs = [execution["message"]]
+        scope = _rerun_scope_line(payload)
+        if scope:
+            logs.append(scope)
         return {
             "id": task_id,
             "batchId": f"UPD-{datetime.now().strftime('%Y%m%d')}",
@@ -148,7 +211,8 @@ class WorkflowOperationsService:
             "jobId": execution.get("jobId"),
             "input": payload,
             "output": None,
-            "logs": [execution["message"]],
+            # 重跑执行下发即带范围行（output 未回填前日志就有数据）
+            "logs": logs,
         }
 
     async def execute_definition(
@@ -263,6 +327,13 @@ class WorkflowOperationsService:
             return
         already_in_sync = task.get("taskStatus") == new_task_status
         output = execution.get("output")
+        # 抽取数据行（重跑范围/逐来源统计/失败汇总）：按内容去重幂等，
+        # 已同步过但缺数据行的历史任务（本次补日志前完成的执行）也会补上
+        data_lines = [
+            line
+            for line in _extract_result_log_lines(execution)
+            if line not in (task.get("logs") or [])
+        ]
         normalized_steps = normalize_stages(output)
         # steps/chain 工作流：output.steps 保留每步真实 input/output JSON，
         # 优先于 normalize_stages（后者会丢弃每步输入输出）
@@ -277,7 +348,9 @@ class WorkflowOperationsService:
             # (kg.custom.python 的 {status, result, ...} 也走这里)
             task["output"] = output
         if already_in_sync and task.get("status") == new_status:
-            # 状态已一致，避免重复 log 累积
+            # 状态已一致，避免重复 log 累积；缺的抽取数据行仍要补
+            if data_lines:
+                task["logs"] = (task.get("logs") or []) + data_lines
             self.repo.save_task(task)
             return
         task["taskStatus"] = new_task_status
@@ -290,7 +363,7 @@ class WorkflowOperationsService:
             log_msg = f"执行状态同步：{status}（output.stages 类型不支持归一化）"
         else:
             log_msg = f"执行状态同步：{status}（output 无 stages，仅回写状态）"
-        task["logs"] = (task.get("logs") or []) + [log_msg]
+        task["logs"] = (task.get("logs") or []) + [log_msg, *data_lines]
         self.repo.save_task(task)
 
     async def trigger_extract_all(self, request: dict[str, Any]) -> dict[str, Any]:

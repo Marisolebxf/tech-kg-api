@@ -52,7 +52,7 @@ const reviewTotalPages = computed(() => Math.max(1, Math.ceil(reviewTotal.value 
 
 watch(() => route.query.keyword, (value) => { keyword.value = clampSearchKeyword(String(value || '')) })
 
-/** 审核队列分类：A=入库决策（T_DIRECT/T_LINK）；C=抽取失败重跑（T_EXTRACT_FAIL）。 */
+/** 审核队列分类：A=入库决策（Tab 只筛 T_LINK 实体对齐，T_DIRECT 详情由工作台总览/实例详情直达）；C=抽取失败重跑（T_EXTRACT_FAIL）。 */
 const reviewCategory = ref<'A' | 'C'>('A')
 /** C 类勾选的待重跑 case。 */
 const rerunSelection = ref<Set<string>>(new Set())
@@ -244,9 +244,11 @@ onUnmounted(() => {
 async function loadReviews() {
   if (props.mode !== 'review') return
   try {
-    // A=入库决策（T_DIRECT/T_LINK）；C=抽取失败重跑（T_EXTRACT_FAIL）
+    // A=入库决策：Tab 只筛 T_LINK（实体对齐裁决）——T_DIRECT case 不进队列，
+    // 详情由工作台总览/处理实例详情直达；C=抽取失败重跑（T_EXTRACT_FAIL）
     const response = await getProductionReviews({
       category: reviewCategory.value,
+      templateId: reviewCategory.value === 'A' ? 'T_LINK' : undefined,
       keyword: keyword.value || undefined,
       statusGroup: reviewStatusFilter.value === '待处理' ? 'pending' : reviewStatusFilter.value === '已处理' ? 'processed' : undefined,
       status: reviewStatusFilter.value === '重跑中' ? 'RERUNNING' : reviewStatusFilter.value === '重跑失败' ? 'RERUN_FAILED' : undefined,

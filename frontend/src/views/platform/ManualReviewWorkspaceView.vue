@@ -1130,19 +1130,24 @@ const runPrimary = () => {
 
 .rw-foot__actions {
   display: flex;
+  flex: 1;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: stretch;
   justify-content: flex-end;
   gap: 8px;
 }
 
+/* 最终确认按钮：加大并撑满所在容器（rw-foot 整行） */
 .rw-foot button {
-  height: 34px;
-  padding: 0 12px;
+  width: 100%;
+  height: 48px;
+  padding: 0 16px;
   border: 1px solid #bdd0ea;
   border-radius: 6px;
   background: #fff;
   color: #40516d;
+  font-size: 16px;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -1290,6 +1295,8 @@ const runPrimary = () => {
 .rw-sec{margin-bottom:16px;padding:16px;border:0;border-radius:6px;background:#f7f8fa}.rw-sec__head{gap:8px;margin-bottom:16px}
 .cat-pill{padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.tri-grid{gap:16px}.tri-grid>div{gap:4px;padding:8px 16px;border-color:#e5e6eb;border-radius:4px}.tri-grid span,.tri-grid em{font-size:12px;line-height:20px}.tri-grid strong{font-size:14px;line-height:22px}
 .rw :is(button,input,select,textarea){font-size:14px;line-height:22px}.rw :is(button,input,select){min-height:32px;border-radius:4px}.rw textarea{border-radius:4px}
+/* 最终确认按钮：撑满 rw-foot 整行并加大（覆盖上面的通用 button 字号） */
+.rw-foot__actions{flex:1}.rw-foot button{width:100%;height:48px;padding:0 16px;font-size:16px;font-weight:600}
 .direct-actions{gap:16px}.direct-accept,.direct-reject{min-height:32px;padding:8px 16px;border-radius:4px;font-size:14px}.direct-accept strong,.direct-reject strong{font-size:14px;line-height:22px}.direct-accept em,.direct-reject em{font-size:12px;line-height:20px}
 @media(max-width:960px){.tri-grid{grid-template-columns:1fr}}
 </style>

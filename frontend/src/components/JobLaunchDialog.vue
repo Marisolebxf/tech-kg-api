@@ -1,9 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { createJob } from '../api/workflowOperations'
-import type { LlmConfig } from '../api/llmConfig'
-import type { EmbeddingConfig } from '../api/embeddingConfig'
-import type { MysqlDatasource } from '../api/mysqlDatasource'
 import { listAllSchemas, type SchemaDefinition } from '../api/schemaManagement'
 import { currentUserId as getCurrentUserId } from '../api/currentUser'
 import { currentGraphSpace } from '../api/currentGraphSpace'
@@ -11,16 +8,12 @@ import { useToast } from '../composables/use-toast'
 import { buildScheduleCron, describeCron, type ScheduleFrequency } from '../utils/cronSchedule'
 import {
   JOB_NAME_RULE,
-  MYSQL_DB_RULE,
   SINCE_RULE,
   validateText,
 } from '../utils/textInput'
 
 const props = defineProps<{
   open: boolean
-  llmConfigs: LlmConfig[]
-  embeddingConfigs: EmbeddingConfig[]
-  mysqlDatasources: MysqlDatasource[]
 }>()
 
 const emit = defineEmits<{
@@ -39,12 +32,10 @@ const extractBatchSize = ref<number | null>(null)
 const extractSchemas = ref<SchemaDefinition[]>([])
 const schemasLoading = ref(false)
 
-// 图空间跟随右上角全局选择器（弹窗内不再单独选择）
+// 图空间跟随右上角全局选择器（弹窗内不再单独选择）。
+// 大模型/Embedding/MySQL 数据源/数据库四项已下线：抽取读源走 Schema 来源绑定，
+// 脚本 ctx 资源缺省回落 env 默认（temporal_workflows._resolve_resources）
 const graphSpace = computed(() => currentGraphSpace())
-const llmConfigId = ref('')
-const embeddingConfigId = ref('')
-const mysqlDatasourceId = ref('')
-const mysqlDatabase = ref('')
 const since = ref('')
 
 const executeMode = ref<'once' | 'recurring'>('once')
@@ -60,16 +51,13 @@ const schedulePreview = computed(() =>
 const submitting = ref(false)
 
 const nameError = computed(() => validateText('任务名称', name.value, JOB_NAME_RULE))
-const dbError = computed(() =>
-  mysqlDatabase.value.trim() ? validateText('数据库', mysqlDatabase.value, MYSQL_DB_RULE) : null,
-)
 const sinceError = computed(() =>
   since.value.trim() ? validateText('增量游标', since.value, SINCE_RULE) : null,
 )
 
 const canSubmit = computed(() =>
   Boolean(name.value.trim() && extractSchemaId.value)
-  && !nameError.value && !dbError.value && !sinceError.value,
+  && !nameError.value && !sinceError.value,
 )
 
 async function loadExtractSchemas(force = false) {
@@ -92,10 +80,6 @@ function reset() {
   extractSchemaId.value = ''
   extractBatchSize.value = null
   runNow.value = true
-  llmConfigId.value = ''
-  embeddingConfigId.value = ''
-  mysqlDatasourceId.value = ''
-  mysqlDatabase.value = ''
   since.value = ''
   executeMode.value = 'once'
   frequency.value = '每天'
@@ -130,10 +114,6 @@ async function submit() {
         : { kind: 'once' },
       runNow: executeMode.value === 'once' && runNow.value,
       graphSpace: graphSpace.value || undefined,
-      llmConfigId: llmConfigId.value || undefined,
-      embeddingConfigId: embeddingConfigId.value || undefined,
-      mysqlDatasourceId: mysqlDatasourceId.value || undefined,
-      mysqlDatabase: mysqlDatabase.value || undefined,
       since: since.value.trim() || undefined,
     })
     showToast(`任务「${job.name}」已创建${runNow.value && executeMode.value === 'once' ? '并触发执行' : ''}`, 'success')
@@ -189,42 +169,11 @@ async function submit() {
           </label>
         </div>
 
-        <div class="job-field-group">
-          <div class="job-row">
-            <div class="job-field">
-              <span>大模型配置</span>
-              <a-select v-model="llmConfigId" class="job-select" placeholder="使用默认" allow-clear>
-                <a-option v-for="c in llmConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）</a-option>
-              </a-select>
-            </div>
-          </div>
-          <div class="job-row">
-            <div class="job-field">
-              <span>MySQL 数据源</span>
-              <a-select v-model="mysqlDatasourceId" class="job-select" placeholder="使用默认" allow-clear>
-                <a-option v-for="d in mysqlDatasources" :key="d.id" :value="d.id">{{ d.name }}</a-option>
-              </a-select>
-            </div>
-            <label class="job-field">
-              <span>数据库</span>
-              <input aria-label="如 gkx_element（默认取数据源配置）" v-model="mysqlDatabase" :maxlength="MYSQL_DB_RULE.max" placeholder="如 gkx_element（默认取数据源配置）" />
-              <small v-if="dbError" class="field-error">{{ dbError }}</small>
-            </label>
-          </div>
-          <div class="job-row">
-            <div class="job-field">
-              <span>Embedding 配置</span>
-              <a-select v-model="embeddingConfigId" class="job-select" placeholder="使用默认" allow-clear>
-                <a-option v-for="c in embeddingConfigs" :key="c.id" :value="c.id">{{ c.name }}（{{ c.model }}）</a-option>
-              </a-select>
-            </div>
-            <label class="job-field">
-              <span>增量游标 since（可空）</span>
-              <input aria-label="如 2026-08-01 00:00:00" v-model="since" :maxlength="SINCE_RULE.max" placeholder="如 2026-08-01 00:00:00" />
-              <small v-if="sinceError" class="field-error">{{ sinceError }}</small>
-            </label>
-          </div>
-        </div>
+        <label class="job-field">
+          <span>增量游标 since（可空）</span>
+          <input aria-label="如 2026-08-01 00:00:00" v-model="since" :maxlength="SINCE_RULE.max" placeholder="如 2026-08-01 00:00:00" />
+          <small v-if="sinceError" class="field-error">{{ sinceError }}</small>
+        </label>
 
         <div class="job-field-group">
           <div class="job-row">

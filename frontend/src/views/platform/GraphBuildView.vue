@@ -13,10 +13,6 @@ import {
   type WorkflowJob,
 } from '../../api/workflowOperations'
 import { schemaErrorMessage } from '../../api/schemaManagement'
-import { listLlmConfigs, type LlmConfig } from '../../api/llmConfig'
-import { listEmbeddingConfigs, type EmbeddingConfig } from '../../api/embeddingConfig'
-import { listMysqlDatasources, type MysqlDatasource } from '../../api/mysqlDatasource'
-import { currentUserId as getCurrentUserId } from '../../api/currentUser'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import JobLaunchDialog from '../../components/JobLaunchDialog.vue'
 import ListPagination from '../../components/list-pagination.vue'
@@ -28,12 +24,8 @@ import { describeCron } from '../../utils/cronSchedule'
 const { showToast } = useToast()
 const router = useRouter()
 const graphSpaceStore = useGraphSpaceStore()
-const currentUserId = getCurrentUserId()
 
 const jobs = ref<WorkflowJob[]>([])
-const llmConfigs = ref<LlmConfig[]>([])
-const embeddingConfigs = ref<EmbeddingConfig[]>([])
-const mysqlDatasources = ref<MysqlDatasource[]>([])
 const loading = ref(false)
 const createOpen = ref(false)
 const triggeringJobId = ref('')
@@ -121,23 +113,7 @@ async function loadData() {
   }
 }
 
-async function loadDialogResources() {
-  try {
-    const [llm, embedding, mysql] = await Promise.all([
-      listLlmConfigs(currentUserId),
-      listEmbeddingConfigs(currentUserId),
-      listMysqlDatasources(currentUserId),
-    ])
-    llmConfigs.value = llm
-    embeddingConfigs.value = embedding
-    mysqlDatasources.value = mysql
-  } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
-  }
-}
-
 function openCreate() {
-  void loadDialogResources()
   createOpen.value = true
 }
 
@@ -305,9 +281,6 @@ onMounted(loadData)
 
     <JobLaunchDialog
       :open="createOpen"
-      :llm-configs="llmConfigs"
-      :embedding-configs="embeddingConfigs"
-      :mysql-datasources="mysqlDatasources"
       @close="createOpen = false"
       @created="loadData"
     />

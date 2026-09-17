@@ -157,6 +157,13 @@ class ManualReviewService:
                     ReviewCase.source_record_id.like(x),
                 )
             )
+        # 更新时间窗口过滤（队列页「时间」下拉）：1h/24h/7d/30d
+        updated_within_hours = {"1h": 1, "24h": 24, "7d": 24 * 7, "30d": 24 * 30}
+        if f.get("updated_within") in updated_within_hours:
+            q.append(
+                ReviewCase.updated_at
+                >= datetime.now() - timedelta(hours=updated_within_hours[f["updated_within"]])
+            )
         # 排序：sort=updatedAt 时按更新时间（order=asc|desc，默认 desc）；
         # 不传 sort 保持既有默认 风险级→创建时间升序（前端 e2e 按创建时间升序的假设依赖它）
         if f.get("sort") == "updatedAt":

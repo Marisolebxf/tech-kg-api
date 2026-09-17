@@ -77,6 +77,11 @@ async def production_queue(
         None,
         description="排序方向：asc/desc（配合 sort=updatedAt，默认 desc）",
     ),
+    updated_within: str | None = Query(
+        None,
+        alias="updatedWithin",
+        description="按更新时间过滤：1h/24h/7d/30d；不传=不限",
+    ),
     page: int = 1,
     page_size: int = Query(50, alias="pageSize"),
 ):

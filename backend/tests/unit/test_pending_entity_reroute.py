@@ -140,6 +140,7 @@ class _RecallGraph:
     def __init__(self, rows):
         self.rows = rows
         self.writes: list[str] = []
+        self.queries: list[str] = []
 
     def connect(self):
         pass
@@ -159,6 +160,8 @@ class _RecallGraph:
         return _Result()
 
     def execute_read(self, q):
+        self.queries.append(q)
+
         class _Result:
             records = self.rows
 
@@ -231,6 +234,9 @@ class TestEnqueueEntityPending:
         assert snap["_graphSpace"] == "dev2"
         assert snap["_resolution"]["policyVersion"] == "script-pending-gray-v1"
         assert "脚本挂起改道消歧" in case.diagnosis
+        # 名称列必须 tag 限定：多 tag 顶点（ETL 混 organization_base）上非限定
+        # 属性访问被解析成 NULL，WHERE 静默不命中，召回凭空变空
+        assert any("v.`Person`.`name`" in q for q in graph.queries)
 
     def test_no_recall_candidates_still_links_with_empty_candidates(
         self, review_service, monkeypatch

@@ -16,8 +16,7 @@ The design principle is one graph entity Tag per entrypoint:
 
 ## Legacy-equivalent behavior
 
-Entity data content is strictly aligned with the legacy scripts (see
-`docs/实体抽取脚本旧新逻辑等价性清单.md` for the full checklist):
+Entity data content is strictly aligned with the legacy scripts:
 
 - Stable VID conventions replicate the legacy formulas exactly, including
   `person_{md5(kind|org|name|birth|country)}`, `product_{md5(normalized name)}`

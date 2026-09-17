@@ -24,7 +24,7 @@ update
 - **MySQL 8.0**（业务数据）
 - （可选）智谱 GLM API Key——仅「企业背景关联分析」用，未配置时自动降级
 
-根 Compose 另外启动一个独立 RustFS（`operator-rustfs`），用 S3 兼容协议统一承载 schema 管理脚本、用户上传的 Python 算子源码和 Milvus 的内部对象存储；栈内**不依赖 MinIO**。
+根 Compose 另外启动一个独立 RustFS（`operator-rustfs`），用 S3 兼容协议统一承载 schema 管理脚本和 Milvus 的内部对象存储；栈内**不依赖 MinIO**。
 
 ## 快速开始
 
@@ -108,7 +108,7 @@ docker compose logs -f milvus
 curl -f http://127.0.0.1:9093/healthz
 ```
 
-数据保存在 Docker 命名卷 `tech-kg-api_milvus-etcd-data`、`tech-kg-api_milvus-data`（Milvus 主数据）和 `tech-kg-api_operator-rustfs-data`（Milvus 内部对象存储，与 schema/算子共用）中。停止容器可执行 `docker compose stop milvus milvus-etcd operator-rustfs`；不要使用 `down -v`，否则会删除数据卷。
+数据保存在 Docker 命名卷 `tech-kg-api_milvus-etcd-data`、`tech-kg-api_milvus-data`（Milvus 主数据）和 `tech-kg-api_operator-rustfs-data`（Milvus 内部对象存储，与 schema 脚本共用）中。停止容器可执行 `docker compose stop milvus milvus-etcd operator-rustfs`；不要使用 `down -v`，否则会删除数据卷。
 
 #### 连接 Milvus
 

@@ -1,6 +1,6 @@
 # 环境变量参考
 
-> 来源：根/backend `README.md` · `docker-compose*.yml` · `CLAUDE.md`。配置统一走 env / `.env`（python-dotenv）；`backend/config/*.yml` 是遗留文件，**不加载**。
+> 来源：根/backend `README.md` · `docker-compose*.yml` · `CLAUDE.md`。配置统一走 env / `.env`（python-dotenv）；`backend/config/*.yml` 已删除（历史遗留，从未被加载）。
 
 ## 图数据库（trs-graph）
 

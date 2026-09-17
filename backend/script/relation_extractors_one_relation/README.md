@@ -80,7 +80,7 @@
 - `script/paper_milvus/align_paper_relations.py` — 论文 DOI 桩 → `SAME_AS`。
 - `script/align_project_relations.py` — 项目边精确 + Milvus 对齐增强。
 
-## 执行顺序（对齐 docs/九个业务服务图谱实体关系依赖分析.md 的入图顺序）
+## 执行顺序（对齐 docs/九大业务图谱实体关系与数据源梳理.md 的入图顺序）
 
 1. 实体脚本全部先行（`entity_extractors_one_entity/`）。
 2. 结构边：产业链 5 条、专利 HAS_KEYWORD/MEMBER_OF_FAMILY、论文 AUTHORED_BY/PUBLISHED_IN/HAS_KEYWORD、COAUTHOR_WITH。

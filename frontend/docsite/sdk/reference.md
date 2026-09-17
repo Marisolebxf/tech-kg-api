@@ -25,7 +25,7 @@
 | `mysql_engine(database="gkx_element")` | env 驱动 Engine（pool_pre_ping）；ctx 场景改用 `ctx.mysql.engine` |
 | `graph_client()` | env 驱动 TRSGraphClient（自动 connect）；ctx 场景用 `ctx.graph` |
 | `build_parser(description)` | 通用 7 参数 argparse（log-level/database/batch-size/limit/since/dry-run/ingest-batch） |
-| `common_args_from_payload(payload)` | workflow payload → 同形态参数 dict（build_parser 的镜像） |
+| `common_args_from_payload(payload)` | 脚本 payload → 同形态参数 dict（build_parser 的镜像） |
 | `print_json(payload)` | ensure_ascii=False 缩进输出 |
 | `now_utc()` | UTC ISO 秒级时间戳（仅 R） |
 

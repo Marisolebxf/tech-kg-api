@@ -130,12 +130,25 @@ def env(monkeypatch):
     temporal = FakeTemporal()
     monkeypatch.setattr("service.workflow_operations.workflow_operations_service", ops)
     monkeypatch.setattr("service.workflow_jobs.temporal_runtime", temporal)
-    # extract 任务走 schema_extraction 合成定义；单测里 fake 掉，不碰真实 Schema/S3
+    # extract/chain 任务走 schema_extraction 合成定义；单测里 fake 掉落库，不碰真实 Schema/S3
     import service.schema_extraction as schema_extraction
 
-    monkeypatch.setattr(
-        schema_extraction, "load_extract_schema", lambda schema_id: {"schemaId": schema_id}
-    )
+    def _fake_load(schema_id):
+        if schema_id == "schema-ghost":
+            raise ValueError("Schema 不存在或未上传脚本")
+        # build_extract_chain_definition 真跑：info 需带 id/schema_key/name/label
+        return {
+            "id": schema_id,
+            "schema_key": schema_id.removeprefix("schema-"),
+            "name": schema_id.removeprefix("schema-").title(),
+            "label": f"{schema_id.removeprefix('schema-')}标签",
+            "kind": "entity",
+            "sources": [{"id": "src-1"}],
+            "script": {"function_name": "transform"},
+            "graph_space": "dev2",
+        }
+
+    monkeypatch.setattr(schema_extraction, "load_extract_schema", _fake_load)
     monkeypatch.setattr(
         schema_extraction,
         "build_extract_definition",
@@ -149,11 +162,13 @@ def env(monkeypatch):
     )
 
     def _persist(definition):
-        # 真实 persist_extract_definition 落控制库，trigger_job 按 definitionId 取回
+        # 真实 persist_* 落控制库，trigger_job 按 definitionId 取回
         repo.definitions[definition["id"]] = definition
         return definition
 
     monkeypatch.setattr(schema_extraction, "persist_extract_definition", _persist)
+    # build_extract_chain_definition 保持真跑（校验步序/命名），只 fake 落库
+    monkeypatch.setattr(schema_extraction, "persist_extract_chain_definition", _persist)
     service = WorkflowJobService(repo=repo)
     return service, repo, ops, temporal
 
@@ -177,13 +192,145 @@ async def test_create_extract_job(env):
 
 
 async def test_create_rejects_legacy_task_types(env):
-    """single/chain/upload 已随 D2 下线：非 extract 一律拒绝。"""
+    """single/upload 已随 D2 下线（chain 已按 Schema 串行形态恢复，单独测试）。"""
     service, _, _, _ = env
-    for task_type in ("single", "chain", "upload"):
+    for task_type in ("single", "upload"):
         with pytest.raises(WorkflowJobError, match="extract"):
             await service.create_job(
                 _actor("u1"), {"name": "x", "taskType": task_type, "schemaId": "schema-widget"}
             )
+
+
+async def test_create_chain_job_builds_definition_and_steps(env):
+    """chain 任务：合成 kg.schema.extract.chain 定义，job 记 schemaIds/schemaLabels。"""
+    service, repo, _, _ = env
+    job = await service.create_job(
+        _actor("u1"),
+        {
+            "name": "论文→专家串行",
+            "taskType": "chain",
+            "schemaIds": ["schema-paper", "schema-scholar"],
+            "schedule": {"kind": "once"},
+            "batchSize": 300,
+        },
+    )
+    assert job["definitionId"].startswith("chain-")
+    assert job["definitionIds"] == [job["definitionId"]]
+    assert job["schemaIds"] == ["schema-paper", "schema-scholar"]
+    assert job["schemaLabels"] == ["paper标签", "scholar标签"]
+    assert job["batchSize"] == 300
+    definition = repo.definitions[job["definitionId"]]
+    assert definition["workflowType"] == "kg.schema.extract.chain"
+    assert definition["sourceKind"] == "extract"
+    assert [s["schemaId"] for s in definition["steps"]] == ["schema-paper", "schema-scholar"]
+    assert definition["name"] == "paper标签 → scholar标签"
+
+
+async def test_create_chain_requires_two_unique_schemas(env):
+    """chain 校验：≥2 个、不重复、逐个可抽取。"""
+    service, _, _, _ = env
+    with pytest.raises(WorkflowJobError, match="至少选择 2 个"):
+        await service.create_job(
+            _actor("u1"),
+            {"name": "x", "taskType": "chain", "schemaIds": ["schema-paper"]},
+        )
+    with pytest.raises(WorkflowJobError, match="不能包含重复"):
+        await service.create_job(
+            _actor("u1"),
+            {"name": "x", "taskType": "chain", "schemaIds": ["schema-paper", "schema-paper"]},
+        )
+    with pytest.raises(WorkflowJobError, match="不可抽取"):
+        await service.create_job(
+            _actor("u1"),
+            {"name": "x", "taskType": "chain", "schemaIds": ["schema-paper", "schema-ghost"]},
+        )
+
+
+async def test_trigger_chain_job_payload(env):
+    """chain 触发 payload：扁平 schemaIds/chainDefinitionId，不带 schemaId。"""
+    service, _, ops, _ = env
+    job = await service.create_job(
+        _actor("u1"),
+        {
+            "name": "串行",
+            "taskType": "chain",
+            "schemaIds": ["schema-paper", "schema-scholar"],
+            "schedule": {"kind": "once"},
+            "batchSize": 200,
+        },
+    )
+    await service.trigger_job(_actor("u1"), job["id"])
+    definition, payload = ops.executed[0]["definition"], ops.executed[0]["payload"]
+    assert definition["workflowType"] == "kg.schema.extract.chain"
+    assert payload["schemaIds"] == ["schema-paper", "schema-scholar"]
+    assert payload["chainDefinitionId"] == job["definitionId"]
+    assert payload["triggerSource"] == "MANUAL"
+    assert payload["batchSize"] == 200
+    assert "schemaId" not in payload
+
+
+async def test_create_chain_cron_job_schedule_payload(env):
+    """chain 周期任务：Schedule payload 同为扁平 schemaIds/chainDefinitionId。"""
+    service, repo, _, temporal = env
+    job = await service.create_job(
+        _actor("u1"),
+        {
+            "name": "每夜串行",
+            "taskType": "chain",
+            "schemaIds": ["schema-paper", "schema-scholar"],
+            "schedule": {"kind": "cron", "cron": "0 3 * * *"},
+        },
+    )
+    schedule = repo.schedules[job["scheduleId"]]
+    assert schedule["payload"]["schemaIds"] == ["schema-paper", "schema-scholar"]
+    assert schedule["payload"]["chainDefinitionId"] == job["definitionId"]
+    assert schedule["payload"]["jobId"] == job["id"]
+    assert job["scheduleId"] in temporal.schedules
+
+
+async def test_update_chain_job_reorders_steps(env):
+    """chain 编辑步序：同 definitionId 原地重建，steps 顺序刷新。"""
+    service, repo, _, _ = env
+    job = await service.create_job(
+        _actor("u1"),
+        {
+            "name": "串行",
+            "taskType": "chain",
+            "schemaIds": ["schema-paper", "schema-scholar"],
+            "schedule": {"kind": "once"},
+        },
+    )
+    old_definition_id = job["definitionId"]
+    updated = await service.update_job(
+        _actor("u1"),
+        job["id"],
+        {"schemaIds": ["schema-scholar", "schema-paper", "schema-patent"]},
+    )
+    assert updated["definitionId"] == old_definition_id
+    assert updated["schemaIds"] == ["schema-scholar", "schema-paper", "schema-patent"]
+    definition = repo.definitions[old_definition_id]
+    assert [s["schemaId"] for s in definition["steps"]] == [
+        "schema-scholar",
+        "schema-paper",
+        "schema-patent",
+    ]
+
+
+async def test_trigger_legacy_chain_job_rejected(env):
+    """存量旧链任务（定义 workflowType=kg.custom.chain）触发被拦截并引导重建。"""
+    service, repo, _, _ = env
+    job = await service.create_job(
+        _actor("u1"),
+        {
+            "name": "旧链",
+            "taskType": "chain",
+            "schemaIds": ["schema-paper", "schema-scholar"],
+            "schedule": {"kind": "once"},
+        },
+    )
+    repo.definitions[job["definitionId"]]["workflowType"] = "kg.custom.chain"
+    with pytest.raises(WorkflowJobError, match="旧版多脚本串行"):
+        await service.trigger_job(_actor("u1"), job["id"])
 
 
 async def test_create_cron_job_saves_schedule_with_job_id(env):

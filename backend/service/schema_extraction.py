@@ -25,6 +25,7 @@ from service.schema_management import (
 logger = logging.getLogger(__name__)
 
 EXTRACT_WORKFLOW_TYPE = "kg.schema.extract"
+CHAIN_WORKFLOW_TYPE = "kg.schema.extract.chain"
 DEFAULT_BATCH_SIZE = 500
 MAX_BATCH_SIZE = 5000
 
@@ -94,6 +95,60 @@ def persist_extract_definition(definition: dict[str, Any]) -> dict[str, Any]:
         "sourceKind": "extract",
         "active": True,
         "steps": ["extract"],
+        "timeoutSeconds": definition["timeoutSeconds"],
+    }
+    repository.save_definition(merged)
+    return merged
+
+
+def build_extract_chain_definition(
+    infos: list[dict[str, Any]], definition_id: str
+) -> dict[str, Any]:
+    """由多个可抽取 schema 构造 kg.schema.extract.chain 串行链定义。
+
+    ``steps`` 顺序即执行顺序（每步 schemaId/schemaKey/name/label）。
+    ``sourceKind="extract"`` 与单 Schema 抽取一致：temporal_runtime 扁平
+    payload 语义复用（Schedule 只 merge ``_scheduleId``）；不能用旧的
+    ``"chain"``——那是 kg.custom.chain 的 ``{definitionId, payload}`` 包装分支。
+    """
+    steps = [
+        {
+            "schemaId": info["id"],
+            "schemaKey": info["schema_key"],
+            "name": info["name"],
+            "label": info.get("label") or info["schema_key"],
+        }
+        for info in infos
+    ]
+    name = " → ".join(step["label"] for step in steps)
+    return {
+        "id": definition_id,
+        "workflowType": CHAIN_WORKFLOW_TYPE,
+        "name": name[:120],
+        "category": "extract",
+        "sourceKind": "extract",
+        "active": True,
+        "steps": steps,
+        "timeoutSeconds": int(os.getenv("SCHEMA_WORKFLOW_TIMEOUT_SECONDS", "3600")),
+    }
+
+
+def persist_extract_chain_definition(definition: dict[str, Any]) -> dict[str, Any]:
+    """chain 合成定义幂等落库（merge 时刷新名称/步序；update_job 同 id 重建用）。"""
+    from service.workflow_repository import repository
+
+    existing = repository.get_definition(definition["id"])
+    if existing is None:
+        repository.save_definition(definition)
+        return definition
+    merged = {
+        **existing,
+        "name": definition["name"],
+        "workflowType": definition["workflowType"],
+        "category": "extract",
+        "sourceKind": "extract",
+        "active": True,
+        "steps": definition["steps"],
         "timeoutSeconds": definition["timeoutSeconds"],
     }
     repository.save_definition(merged)

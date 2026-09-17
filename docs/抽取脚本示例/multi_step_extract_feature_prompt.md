@@ -4,7 +4,7 @@
 
 本仓库的 schema 抽取主通道是 Temporal workflow `kg.schema.extract`（`backend/service/temporal_workflows.py:1252` `SchemaExtractWorkflow`）：平台按来源绑定分批读源 → 调用户上传脚本的**单个** `transform(payload)` → 平台写图/消歧/索引/推水位。
 
-历史上曾有一条平行的多步流水线通道 `kg.custom.steps`（`StepPipelineWorkflow` + `POST /definitions/steps` + `execute_pipeline_step` activity），已于 2026-09-14 批次4-D2 下线（见 `docs/无用代码清理与合并清单.md` 第五节、commit `bf28410`）。
+历史上曾有一条平行的多步流水线通道 `kg.custom.steps`（`StepPipelineWorkflow` + `POST /definitions/steps` + `execute_pipeline_step` activity），已于 2026-09-14 批次4-D2 下线（commit `bf28410`）。
 
 **本次目标**：把多步能力并入 `kg.schema.extract`——保持单一上传入口不变（Schema 管理页上传 .py → S3），但允许用户在脚本里**声明多个 step**，平台按序执行、逐步 Temporal 重试、任意步可产出实体/边。**不恢复**独立上传通道、不恢复双参 runner。
 

@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import tempfile
+from collections.abc import Iterator
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -190,6 +191,168 @@ def _truncate_step_extras(output: dict[str, Any]) -> dict[str, Any]:
         _MAX_STEP_EXTRA_BYTES,
     )
     return truncated
+
+
+# ---------------------------------------------------------------------------
+# 抽取载荷 S3 中转（claim-check）共用的纯函数 / activity 内 IO 助手。
+# 纯函数部分可被 workflow 代码直接调用（只依赖入参，重放安全）。
+# ---------------------------------------------------------------------------
+
+
+def _source_table_label(source: dict[str, Any]) -> str:
+    """来源绑定的展示标签（与 workflow 内 table_label 逐字一致）。"""
+    if source.get("tableName"):
+        return f"{source.get('databaseName')}.{source.get('tableName')}"
+    return "自定义查询"
+
+
+def _shape_step_failures(
+    raw_failures: Any, *, source_binding_id: Any, table_label: str
+) -> list[dict[str, Any]]:
+    """脚本 ``failures`` 整形为平台失败记录（无 recordId 的条目丢弃，error 不截断）。"""
+    return [
+        {
+            "sourceBindingId": source_binding_id,
+            "sourceTable": table_label,
+            "recordId": str(f.get("recordId") or ""),
+            "error": str(f.get("error") or ""),
+        }
+        for f in (raw_failures or [])
+        if isinstance(f, dict) and f.get("recordId") is not None
+    ]
+
+
+def _failure_entries_count(entries: list[dict[str, Any]]) -> int:
+    """失败条目计数：内联 dict 每条 1；S3 中转 ref 按其 count。"""
+    return sum(int(e.get("count") or 0) if "failuresKey" in e else 1 for e in entries)
+
+
+def _iter_batch_chunks(
+    batch: dict[str, Any], batch_size: int, pk_column: str
+) -> Iterator[dict[str, Any]]:
+    """批内 chunk 统一化（纯函数，workflow 内重放安全）。
+
+    - S3 中转形状（read 返回 ``chunks`` 元数据）：逐 chunk 透传 key/行数/记录 id；
+    - 内联旧形状（在飞 run 重放 / 未开 flag）：按 batch_size 切 rows，与历史行为一致。
+    """
+    if "chunks" in batch:
+        for position, meta in enumerate(batch["chunks"] or []):
+            yield {
+                "index": position,
+                "rowCount": int(meta.get("rowCount") or 0),
+                "recordIds": meta.get("recordIds") or [],
+                "rowsKey": meta.get("key"),
+            }
+        return
+    rows = batch.get("rows") or []
+    for start in range(0, len(rows), batch_size):
+        chunk_rows = rows[start : start + batch_size]
+        yield {
+            "index": start // batch_size,
+            "rowCount": len(chunk_rows),
+            "recordIds": [str(r.get(pk_column)) for r in chunk_rows],
+            "rows": chunk_rows,
+        }
+
+
+def _split_rows_for_upload(
+    rows: list[dict[str, Any]], batch_size: int, budget: int
+) -> list[list[dict[str, Any]]]:
+    """载荷上传分组：先按 batch_size 分组，超预算组递归折半（单行超预算原样上传）。"""
+    groups: list[list[dict[str, Any]]] = []
+
+    def emit(group: list[dict[str, Any]]) -> None:
+        if len(group) <= 1 or _json_size(group) <= budget:
+            groups.append(group)
+            return
+        mid = len(group) // 2
+        emit(group[:mid])
+        emit(group[mid:])
+
+    for start in range(0, len(rows), batch_size):
+        emit(rows[start : start + batch_size])
+    return groups
+
+
+def _activity_info_safe() -> Any:
+    """activity 上下文；单测直调（无 activity 上下文）时给 local- 占位。"""
+    from types import SimpleNamespace
+
+    try:
+        return activity.info()
+    except RuntimeError:
+        return SimpleNamespace(workflow_id=f"local-{uuid4().hex}", workflow_run_id=None, attempt=1)
+
+
+async def _load_records_from_key(records_key: str) -> list[Any]:
+    """recordsKey 下载：全量输出对象（dict）取 entities/edges；消歧产物（list）直用。"""
+    from service.extract_payload_store import load_extract_payload_json
+
+    data = await asyncio.to_thread(load_extract_payload_json, records_key)
+    if isinstance(data, dict):
+        return data.get("entities") or data.get("edges") or []
+    return data if isinstance(data, list) else []
+
+
+async def _expand_failure_items(request: dict[str, Any]) -> list[dict[str, Any]]:
+    """失败条目展开：内联清单 + failureRefs 逐个下载（IO 在 activity 内，失败交重试）。"""
+    items = [f for f in (request.get("failures") or []) if isinstance(f, dict)]
+    refs = request.get("failureRefs") or []
+    if not refs:
+        return items
+    from service.extract_payload_store import load_extract_payload_json
+
+    for ref in refs:
+        key = (ref or {}).get("failuresKey")
+        if not key:
+            continue
+        data = await asyncio.to_thread(load_extract_payload_json, key)
+        if isinstance(data, list):
+            items.extend(f for f in data if isinstance(f, dict))
+    return items
+
+
+async def _transform_result_via_s3(
+    request: dict[str, Any], output: Any, access: Any
+) -> dict[str, Any]:
+    """S3 中转下的 execute_transform 返回形状：全量输出与失败清单归档，历史只进元数据。
+
+    ``output`` 为脚本原始输出（pendingReview 已弹出、水位元字段已剥离、access 未混入
+    ——access 属平台观测数据，保持内联返回的现行为）。
+    """
+    from service.extract_payload_store import put_extract_payload_json
+
+    output_dict = output if isinstance(output, dict) else {}
+    records = output_dict.get("entities") or output_dict.get("edges") or []
+    source = request.get("source") or {}
+    step_key_id = request.get("ctxStepId") or request.get("stepId") or "_default"
+    batch_idx = int(request.get("batchIdx") or 0)
+    chunk_tag = f"{int(request.get('chunkIdx') or 0):02d}"
+    out_key = await asyncio.to_thread(
+        put_extract_payload_json, step_key_id, batch_idx, f"out-{chunk_tag}", output
+    )
+    shaped = _shape_step_failures(
+        output_dict.get("failures"),
+        source_binding_id=source.get("id"),
+        table_label=_source_table_label(source),
+    )
+    result: dict[str, Any] = {
+        "outKey": out_key,
+        "hasRecords": bool(records),
+        "entityCount": len(output_dict.get("entities") or []),
+        "edgeCount": len(output_dict.get("edges") or []),
+        "failureCount": len(shaped),
+    }
+    if shaped:
+        result["failuresKey"] = await asyncio.to_thread(
+            put_extract_payload_json, step_key_id, batch_idx, f"failures-{chunk_tag}", shaped
+        )
+    stats = output_dict.get("stats")
+    if isinstance(stats, dict) and _json_size(stats) <= 4096:
+        result["stats"] = stats
+    if access is not None:
+        result["access"] = access
+    return result
 
 
 def _merge_access(stdout_access: Any, sidecar_path: str | None) -> Any:
@@ -781,10 +944,24 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
         password=params["password"],
     )
 
+    # —— S3 中转（claim-check）总开关：全链路唯一一处读 env 做控制流分支的位置 ——
+    # 开启时批行按 chunk 归档 S3、activity 结果只带 chunks 元数据；workflow 按
+    # 「已记录进历史的结果形状」分支（chunks 在则走中转），下游不受 env 翻转影响，
+    # 在飞旧 run 重放安全。关闭时行为与历史版本逐字节一致。
+    from service.extract_payload_store import (
+        payload_max_bytes,
+        payload_s3_enabled,
+        put_extract_payload_json,
+    )
+
+    s3_relay = payload_s3_enabled()
     # Temporal 单条 activity 结果/输入受 gRPC 4MB 限制：大文本行（专利摘要等）
     # 一批 500 行轻易超限，activity 完成报 ResourceExhausted 无限重试。这里对
     # 游标/offset 模式自适应折半 LIMIT 直到序列化结果 ≤ 预算；未取的尾部行由
     # 下一批重读（游标按实际返回行推进），语义不丢数据。
+    # 预算语义随中转切换：中转开 = 单载荷对象预算（默认 8MB，脚本进程内存量级，
+    # 大文本行批吞吐恢复）；中转关 = gRPC 传输预算（512KB，历史行为）。
+    budget = payload_max_bytes() if s3_relay else _MAX_BATCH_ROWS_BYTES
     effective_batch = batch_size
 
     def _fetch(n: int) -> list[dict[str, Any]]:
@@ -812,10 +989,7 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
                 effective_batch = n
                 if n <= 1:
                     break
-                if (
-                    len(json.dumps(rows, ensure_ascii=False, default=str).encode())
-                    <= _MAX_BATCH_ROWS_BYTES
-                ):
+                if len(json.dumps(rows, ensure_ascii=False, default=str).encode()) <= budget:
                     break
                 n = max(1, n // 2)
     finally:
@@ -831,6 +1005,37 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
             candidate = row.get(time_column)
             if candidate is not None and (max_time is None or str(candidate) > max_time):
                 max_time = str(candidate)
+    if s3_relay:
+        # 批行归档 S3（worker 的批内切分逻辑下沉到这里），结果只带元数据：
+        # 每批行数受折半预算约束 ≤ 载荷预算；ids 模式全量读，按 batchSize/预算
+        # 分组上传。key 由 batchIdx + chunk 序确定性派生，activity 重试同 key
+        # 覆盖写（幂等）。ids 模式回传各 chunk 的 recordIds（重跑失败合成要用）。
+        step_key_id = request.get("stepId") or "source"
+        batch_idx = int(request.get("batchIdx") or 0)
+        chunks_meta: list[dict[str, Any]] = []
+        for position, group in enumerate(_split_rows_for_upload(rows, batch_size, budget)):
+            key = await asyncio.to_thread(
+                put_extract_payload_json,
+                step_key_id,
+                batch_idx,
+                f"rows-{position:02d}",
+                group,
+            )
+            meta: dict[str, Any] = {"key": key, "rowCount": len(group)}
+            if cursor_kind == "ids":
+                meta["recordIds"] = [
+                    str(r.get(pk_column)) for r in group if r.get(pk_column) is not None
+                ]
+            chunks_meta.append(meta)
+        return {
+            "chunks": chunks_meta,
+            "totalRows": len(rows),
+            "maxTime": max_time,
+            "maxPk": max_pk,
+            "effectiveBatchSize": effective_batch,
+            # offset 模式回传本批生效的增量水位（时间列过滤起点），reader 链式透传
+            **({"watermark": binds.get("wm")} if cursor_kind == "offset" else {}),
+        }
     return {
         "rows": rows,
         "recordIds": [str(r.get(pk_column)) for r in rows if r.get(pk_column) is not None],
@@ -892,6 +1097,13 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
     - ``ctxStepId``（多步时形如 ``source:{绑定id}#{stepId}``）只进脚本 ctx 与审核
       case 做观测标识；水位键仍是 ``request.stepId``（source:{绑定id}），语义不变。
 
+    载荷 S3 中转（claim-check，双形状并存，脚本契约不变）：
+    - 入参兼容 ``rows`` / ``rowsKey``、``input``/``prevOutputs`` / ``inputKey``/``prevKeys``；
+      key 形状在 activity 内下载后组装与内联路径逐字节等价的 payload，脚本对 S3 无感；
+    - 中转入参（rowsKey 或 inputKey 在）时输出侧同样走 S3：全量输出与整形后的失败
+      清单归档，返回元数据（outKey + 计数 + stats + access）；内联路径返回原样
+      （额外键超预算截断，见 _truncate_step_extras）。
+
     脚本只做转换，返回 ``{"entities": [{id, props}]}`` / ``{"edges": [{fromId, toId, props}]}``；
     可选 ``failures: [{recordId, error}]``（逐行解析失败 → 平台记 T_EXTRACT_FAIL 审核重跑）
     与 ``pendingReview: [...]``（低置信/消歧候选 → 审核队列，item 可带 templateId=T_LINK）。
@@ -908,16 +1120,29 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
     function_name = request.get("functionName", "transform")
     source = request.get("source") or {}
     kind = request.get("kind", "entity")
+    rows_key = request.get("rowsKey")
+    input_key = request.get("inputKey")
+    from service.extract_payload_store import load_extract_payload_json
+
+    if rows_key:
+        # 中转：批行从 S3 下载（脚本看到的 payload dict 形状与内联路径逐字节等价）
+        rows = await asyncio.to_thread(load_extract_payload_json, rows_key)
+    else:
+        rows = request.get("rows") or []
     payload = {
-        "rows": request.get("rows") or [],
+        "rows": rows,
         "source_table": f"{source.get('databaseName')}.{source.get('tableName')}",
         "kind": kind,
         "source": source,
     }
-    if "input" in request:
-        # 第 N>1 步：消费上一步完整输出（额外键/entities 等原样在内），不带 rows
+    if "input" in request or input_key:
+        # 第 N>1 步：消费上一步完整输出（额外键/entities 等原样在内），不带 rows；
+        # 中转形状从 S3 下载，无截断（「拿到什么 = 上一步返回什么」）
+        input_value = request.get("input")
+        if input_key:
+            input_value = await asyncio.to_thread(load_extract_payload_json, input_key)
         payload = {
-            "input": request.get("input") or {},
+            "input": input_value or {},
             "source_table": payload["source_table"],
             "kind": kind,
             "source": source,
@@ -949,6 +1174,12 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
         resolved["attempt"] = 1
     if request.get("prevOutputs") is not None:
         resolved["prevOutputs"] = request["prevOutputs"]
+    elif request.get("prevKeys"):
+        # 中转：已完成各步输出按 key 下载（ctx.prev_outputs 与内联路径同构）
+        resolved["prevOutputs"] = {
+            sid: await asyncio.to_thread(load_extract_payload_json, key)
+            for sid, key in (request.get("prevKeys") or {}).items()
+        }
     sidecar_path: str | None = None
     try:
         wrapped, sidecar_path = await _spawn_script(
@@ -965,8 +1196,6 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
         )
         stdout_access = wrapped.pop("_access", None) if isinstance(wrapped, dict) else None
         access = _merge_access(stdout_access, sidecar_path)
-        if access is not None and isinstance(output, dict):
-            output = {**output, "access": access}
         # 忽略脚本的 _watermark/_checkpoint（平台按批次游标管理水位）
         output = _strip_watermark_meta(output)
         pending = output.pop("pendingReview", []) if isinstance(output, dict) else []
@@ -979,6 +1208,11 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
                 pending,
                 1,
             )
+        if rows_key or input_key:
+            # 中转：全量输出/失败清单归档 S3，返回元数据（access 保持内联）
+            return await _transform_result_via_s3(request, output, access)
+        if access is not None and isinstance(output, dict):
+            output = {**output, "access": access}
         return _truncate_step_extras(output) if isinstance(output, dict) else {}
     finally:
         _cleanup_sidecar(sidecar_path)
@@ -1005,7 +1239,11 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
     kind = request["kind"]
     name = request["name"]
     active_props = set(request.get("activeProps") or [])
-    records = request.get("records") or []
+    records = request.get("records")
+    if records is None and request.get("recordsKey"):
+        # S3 中转：全量输出对象（dict）取 entities/edges；消歧产物（list）直用
+        records = await _load_records_from_key(request["recordsKey"])
+    records = records or []
     graph = request.get("graph") or {}
     source_table = str(request.get("sourceTable") or "")
 
@@ -1187,7 +1425,11 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
     )
 
     name_tag = request["name"]
-    records = [dict(r) for r in (request.get("records") or [])]
+    records_in = request.get("records")
+    if records_in is None and request.get("recordsKey"):
+        # S3 中转：同 write_records 的提取语义（dict 全量输出 → entities/edges）
+        records_in = await _load_records_from_key(request["recordsKey"])
+    records = [dict(r) for r in (records_in or [])]
     graph = request.get("graph") or {}
     source_table = str(request.get("sourceTable") or "")
     batch_vids = {str(r.get("id")) for r in records}
@@ -1274,7 +1516,7 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
             except Exception:  # noqa: BLE001
                 logger.exception("关闭图客户端失败")
 
-    info = activity.info()
+    info = _activity_info_safe()
     try:
         from service.workflow_repository import repository
 
@@ -1357,6 +1599,18 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
         else:
             stats["new"] += 1
             kept.append(record)
+    if request.get("recordsKey"):
+        # S3 中转：消歧改写后的 records 重新归档，写图/冲突检测拿 key（历史不进本体）
+        from service.extract_payload_store import put_extract_payload_json
+
+        out_key = await asyncio.to_thread(
+            put_extract_payload_json,
+            request.get("stepId") or "align",
+            int(request.get("batchIdx") or 0),
+            f"resolved-{int(request.get('chunkIdx') or 0):02d}",
+            kept,
+        )
+        return {"outKey": out_key, "keptCount": len(kept), **stats}
     return {"records": kept, **stats}
 
 
@@ -1371,7 +1625,11 @@ async def detect_extract_collisions(request: dict[str, Any]) -> dict[str, Any]:
     from infra.graph_db.config import TRSGraphSettings
 
     name_tag = request["name"]
-    records = request.get("records") or []
+    records = request.get("records")
+    if records is None and request.get("recordsKey"):
+        # S3 中转：消歧产物（list）或全量输出对象（dict）提取
+        records = await _load_records_from_key(request["recordsKey"])
+    records = records or []
     graph = request.get("graph") or {}
     schema_key = request.get("schemaKey")
 
@@ -1410,7 +1668,7 @@ async def detect_extract_collisions(request: dict[str, Any]) -> dict[str, Any]:
         except Exception:  # noqa: BLE001
             logger.exception("关闭图客户端失败")
 
-    info = activity.info()
+    info = _activity_info_safe()
     try:
         from service.workflow_repository import repository
 
@@ -1459,8 +1717,13 @@ async def detect_extract_collisions(request: dict[str, Any]) -> dict[str, Any]:
 
 @activity.defn
 async def record_extract_failures(request: dict[str, Any]) -> dict[str, Any]:
-    """把逐行抽取失败落成 T_EXTRACT_FAIL 审核case（前端人工审核页展示、点击重跑）。"""
-    info = activity.info()
+    """把逐行抽取失败落成 T_EXTRACT_FAIL 审核case（前端人工审核页展示、点击重跑）。
+
+    失败条目双来源：``failures``（内联清单，旧路径/重跑合成）+ ``failureRefs``
+    （S3 中转的 failuresKey 引用，activity 内下载展开）；``cap``>0 时截前 cap 条
+    建 case（「超 cap 不建 case 但 count 如实」语义与原 workflow 侧截断一致）。
+    """
+    info = _activity_info_safe()
     try:
         from service.workflow_repository import repository
 
@@ -1477,8 +1740,12 @@ async def record_extract_failures(request: dict[str, Any]) -> dict[str, Any]:
 
     from service.manual_review_production import manual_review_service
 
+    items = await _expand_failure_items(request)
+    cap = int(request.get("cap") or 0)
+    if cap > 0 and len(items) > cap:
+        items = items[:cap]
     recorded = 0
-    for item in request.get("failures") or []:
+    for item in items:
         if not isinstance(item, dict):
             continue
         record_id = str(item.get("recordId") or "")
@@ -1523,8 +1790,12 @@ async def record_extract_failures(request: dict[str, Any]) -> dict[str, Any]:
 
 @activity.defn
 async def resolve_failure_cases(request: dict[str, Any]) -> dict[str, Any]:
-    """重跑执行结束后回写 T_EXTRACT_FAIL case：成功→RESOLVED；仍失败→新 case（attempt+1）。"""
-    info = activity.info()
+    """重跑执行结束后回写 T_EXTRACT_FAIL case：成功→RESOLVED；仍失败→新 case（attempt+1）。
+
+    失败条目双来源（同 record_extract_failures）：内联 + failureRefs 下载展开；
+    重跑语义拿全量失败键（无 cap 截断）。
+    """
+    info = _activity_info_safe()
     try:
         from service.workflow_repository import repository
 
@@ -1535,9 +1806,10 @@ async def resolve_failure_cases(request: dict[str, Any]) -> dict[str, Any]:
 
     from service.manual_review_production import manual_review_service
 
+    failed_records = await _expand_failure_items(request)
     result = manual_review_service.resolve_extract_rerun(
         rerun_case_ids=request.get("rerunCaseIds") or [],
-        failed_records=request.get("failures") or [],
+        failed_records=failed_records,
         rerun_execution_id=execution.get("id"),
         task_id=task_id,
         kind=request.get("kind", "entity"),
@@ -1915,12 +2187,17 @@ class SchemaExtractWorkflow:
                 while True:
                     batch = await workflow.execute_activity(
                         read_source_batch,
-                        {**read_base, **cursor},
+                        {**read_base, "batchIdx": idx, **cursor},
                         start_to_close_timeout=timedelta(seconds=600),
                         retry_policy=ACTIVITY_RETRY_POLICY,
                     )
-                    rows = batch.get("rows") or []
-                    if not rows:
+                    # 批结果双形状：S3 中转（chunks 元数据 + totalRows）或内联 rows
+                    # （在飞旧 run 重放 / 未开 flag）。分支只看已记录进历史的形状。
+                    if "chunks" in batch:
+                        total_rows = int(batch.get("totalRows") or 0)
+                    else:
+                        total_rows = len(batch.get("rows") or [])
+                    if not total_rows:
                         break
                     await queue.put((idx, batch))
                     idx += 1
@@ -1928,7 +2205,7 @@ class SchemaExtractWorkflow:
                         final_wm = batch["maxTime"]
                     if plain_table:
                         # 普通表 offset 分页（主键不保证唯一）；增量水位链式透传
-                        offset += len(rows)
+                        offset += total_rows
                         cursor = {"offset": offset, "chained": True}
                         if batch.get("watermark") is not None:
                             cursor["watermark"] = batch["watermark"]
@@ -1938,10 +2215,10 @@ class SchemaExtractWorkflow:
                         if final["watermark"] is None and final["pkCursor"] is None:
                             break
                         cursor = {k: v for k, v in final.items() if v is not None}
-                    # 大文本行时 activity 会折半 LIMIT（结果 ≤ 4MB gRPC 上限）：
-                    # 终止判断用本批实际请求量，防早停丢尾批
+                    # 大文本行时 activity 会折半 LIMIT（中转开 = 载荷预算 8MB，
+                    # 关 = gRPC 预算 512KB）：终止判断用本批实际请求量，防早停丢尾批
                     effective = int(batch.get("effectiveBatchSize") or batch_size)
-                    if len(rows) < effective:
+                    if total_rows < effective:
                         break
                 if plain_table:
                     return {"batches": idx, "watermark": final_wm, "pkCursor": None}
@@ -1961,10 +2238,9 @@ class SchemaExtractWorkflow:
                     if item is None:
                         break
                     idx, batch = item
-                    rows = batch.get("rows") or []
-                    for start in range(0, len(rows), batch_size):
-                        chunk = rows[start : start + batch_size]
-                        chunk_ids = [str(r.get(pk_column)) for r in chunk]
+                    # 批内 chunk 统一化：S3 中转形状遍历 chunks 元数据（行数据在 S3），
+                    # 内联形状按 batch_size 切 rows（与历史行为一致，重放安全）
+                    for chunk in _iter_batch_chunks(batch, batch_size, pk_column):
                         written = 0
                         chunk_step_stats: dict[str, dict[str, int]] = {}
                         batch_failures: list[dict[str, Any]] = []
@@ -1991,40 +2267,88 @@ class SchemaExtractWorkflow:
                                     "definitionId": definition_id,
                                     # 水位读取键（kg_script_watermark）保持来源级，不随步变
                                     "stepId": step_id,
+                                    # 载荷 key 的确定性派生字段（batch/chunk 序，内联路径多带无害）
+                                    "batchIdx": idx,
+                                    "chunkIdx": chunk["index"],
                                 }
                                 if multi_step:
                                     transform_request["ctxStepId"] = step_ctx_id
                                 if seq:
-                                    # 第 N>1 步：不带 rows（省一半请求体积），input=上一步
-                                    # 完整输出、prevOutputs=已完成各步输出；超预算截断为
-                                    # 标记（防 gRPC 上限炸批次）
-                                    transform_request["input"] = _shrink_chain_value(
-                                        prev_output,
-                                        budget=_MAX_STEP_CHAIN_BYTES,
-                                        label=f"步 {step['id']} 的 input",
-                                    )
-                                    transform_request["prevOutputs"] = {
-                                        sid: _shrink_chain_value(
-                                            out,
-                                            budget=_MAX_PREV_OUTPUT_BYTES,
-                                            label=f"prevOutputs[{sid}]",
+                                    if "outKey" in prev_output:
+                                        # S3 中转：input/prevOutputs 以 key 传递（无截断，
+                                        # 「拿到什么 = 上一步返回什么」），activity 内下载
+                                        transform_request["inputKey"] = prev_output["outKey"]
+                                        transform_request["prevKeys"] = {
+                                            sid: out["outKey"]
+                                            for sid, out in step_outputs.items()
+                                            if "outKey" in out
+                                        }
+                                    else:
+                                        # 第 N>1 步（内联路径，在飞旧 run 重放兼容）：
+                                        # 不带 rows（省一半请求体积），input=上一步完整输出、
+                                        # prevOutputs=已完成各步输出；超预算截断为标记
+                                        # （防 gRPC 上限炸批次）
+                                        transform_request["input"] = _shrink_chain_value(
+                                            prev_output,
+                                            budget=_MAX_STEP_CHAIN_BYTES,
+                                            label=f"步 {step['id']} 的 input",
                                         )
-                                        for sid, out in step_outputs.items()
-                                    }
+                                        transform_request["prevOutputs"] = {
+                                            sid: _shrink_chain_value(
+                                                out,
+                                                budget=_MAX_PREV_OUTPUT_BYTES,
+                                                label=f"prevOutputs[{sid}]",
+                                            )
+                                            for sid, out in step_outputs.items()
+                                        }
+                                elif "rowsKey" in chunk:
+                                    # 第 1 步（S3 中转）：批行以 key 传递
+                                    transform_request["rowsKey"] = chunk["rowsKey"]
                                 else:
                                     # 第 1 步：与单步 transform 请求形状一致
-                                    transform_request["rows"] = chunk
+                                    transform_request["rows"] = chunk["rows"]
                                 transformed = await workflow.execute_activity(
                                     execute_transform,
                                     transform_request,
                                     start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
                                     retry_policy=ACTIVITY_RETRY_POLICY,
                                 )
-                                records = (
-                                    transformed.get("entities") or transformed.get("edges") or []
-                                )
+                                # 转换结果双形状：S3 中转（outKey 元数据）或内联（重放兼容）。
+                                # records_arg 随形状携带：中转传 recordsKey（全量输出对象，
+                                # 消歧/写图/冲突检测 activity 内提取），内联传 records 本体。
+                                step_fail_count = 0
+                                if "outKey" in transformed:
+                                    records_count = int(transformed.get("entityCount") or 0) + int(
+                                        transformed.get("edgeCount") or 0
+                                    )
+                                    records_arg = {"recordsKey": transformed["outKey"]}
+                                    step_fail_count = int(transformed.get("failureCount") or 0)
+                                    if transformed.get("failuresKey"):
+                                        # 失败清单在 S3：历史只过 key + 计数（终态建 case
+                                        # 时由 activity 下载展开）
+                                        batch_failures.append(
+                                            {
+                                                "failuresKey": transformed["failuresKey"],
+                                                "count": step_fail_count,
+                                            }
+                                        )
+                                else:
+                                    records = (
+                                        transformed.get("entities")
+                                        or transformed.get("edges")
+                                        or []
+                                    )
+                                    records_count = len(records)
+                                    records_arg = {"records": records}
+                                    step_failures = _shape_step_failures(
+                                        transformed.get("failures"),
+                                        source_binding_id=source_id,
+                                        table_label=table_label,
+                                    )
+                                    step_fail_count = len(step_failures)
+                                    batch_failures.extend(step_failures)
                                 step_written = 0
-                                if records and kind == "entity":
+                                if records_count and kind == "entity":
                                     # 消歧 v2（写前判定）：同名召回+评分，改写 vid 并入 /
                                     # 灰区扣留建 T_LINK case / 其余原样——灰区记录从本批
                                     # 剔除（不写图），后续由人工裁决执行器补写
@@ -2032,61 +2356,57 @@ class SchemaExtractWorkflow:
                                         resolve_entity_batch,
                                         {
                                             "name": plan["name"],
-                                            "records": records,
                                             "graph": graph,
                                             "schemaKey": plan["schemaKey"],
                                             "stepId": step_ctx_id,
                                             "sourceTable": table_label,
+                                            "batchIdx": idx,
+                                            "chunkIdx": chunk["index"],
+                                            **records_arg,
                                         },
                                         start_to_close_timeout=timedelta(seconds=300),
                                         retry_policy=ACTIVITY_RETRY_POLICY,
                                     )
-                                    records = resolved.get("records") or []
-                                if records:
+                                    if "outKey" in resolved:
+                                        records_count = int(resolved.get("keptCount") or 0)
+                                        records_arg = {"recordsKey": resolved["outKey"]}
+                                    else:
+                                        records_count = len(resolved.get("records") or [])
+                                        records_arg = {"records": resolved.get("records") or []}
+                                if records_count:
                                     write_result = await workflow.execute_activity(
                                         write_records,
                                         {
                                             "kind": kind,
                                             "name": plan["name"],
                                             "activeProps": plan["activeProps"],
-                                            "records": records,
                                             "graph": graph,
                                             "sourceTable": table_label,
+                                            **records_arg,
                                         },
                                         start_to_close_timeout=timedelta(seconds=600),
                                         retry_policy=ACTIVITY_RETRY_POLICY,
                                     )
                                     step_written = int(write_result.get("written", 0))
-                                if kind == "entity" and records and detect_collisions:
+                                if kind == "entity" and records_count and detect_collisions:
                                     await workflow.execute_activity(
                                         detect_extract_collisions,
                                         {
                                             "name": plan["name"],
-                                            "records": records,
                                             "graph": graph,
                                             "schemaKey": plan["schemaKey"],
                                             "stepId": step_ctx_id,
+                                            **records_arg,
                                         },
                                         start_to_close_timeout=timedelta(seconds=120),
                                         retry_policy=ACTIVITY_RETRY_POLICY,
                                     )
-                                step_failures = [
-                                    {
-                                        "sourceBindingId": source_id,
-                                        "sourceTable": table_label,
-                                        "recordId": str(f.get("recordId") or ""),
-                                        "error": str(f.get("error") or ""),
-                                    }
-                                    for f in (transformed.get("failures") or [])
-                                    if isinstance(f, dict) and f.get("recordId") is not None
-                                ]
-                                batch_failures.extend(step_failures)
                                 written += step_written
                                 if track_steps:
                                     chunk_step_stats[step["id"]] = {
-                                        "records": len(records),
+                                        "records": records_count,
                                         "written": step_written,
-                                        "failed": len(step_failures),
+                                        "failed": step_fail_count,
                                     }
                                 # access 溯源报告是平台观测数据，不进步间链
                                 chained = {k: v for k, v in transformed.items() if k != "access"}
@@ -2102,14 +2422,14 @@ class SchemaExtractWorkflow:
                                     "recordId": rid,
                                     "error": "批次执行失败（脚本或写图异常，整批记录待重跑）",
                                 }
-                                for rid in chunk_ids
+                                for rid in chunk["recordIds"]
                             ]
                         failures.extend(batch_failures)
                         prev = slots.get(idx) or {"rows": 0, "written": 0, "failed": 0}
                         slots[idx] = {
-                            "rows": prev["rows"] + len(chunk),
+                            "rows": prev["rows"] + chunk["rowCount"],
                             "written": prev["written"] + written,
-                            "failed": prev["failed"] + len(batch_failures),
+                            "failed": prev["failed"] + _failure_entries_count(batch_failures),
                         }
                         if track_steps:
                             # 分步计数聚合进来源级 step_totals（get_progress/结果摘要用）
@@ -2147,6 +2467,7 @@ class SchemaExtractWorkflow:
                 )
             total_rows = sum(s["rows"] for s in slots.values())
             total_written = sum(s["written"] for s in slots.values())
+            source_failed = _failure_entries_count(source_failures)
 
             # 游标一次性推进（全部批次成功才到这里；失败路径 gather 直接抛出）
             if not rerun_mode and read_summary.get("batches"):
@@ -2172,7 +2493,7 @@ class SchemaExtractWorkflow:
                 "batches": read_summary.get("batches", 0),
                 "rows": total_rows,
                 "written": total_written,
-                "failed": len(source_failures),
+                "failed": source_failed,
                 # 分步聚合计数（多步脚本/chain 模式；单步单跑摘要形状保持不变）
                 **({"steps": step_totals} if track_steps else {}),
             }
@@ -2182,7 +2503,7 @@ class SchemaExtractWorkflow:
                 "batches": read_summary.get("batches", 0),
                 "rows": total_rows,
                 "written": total_written,
-                "failed": len(source_failures),
+                "failed": source_failed,
                 "failures": source_failures,
                 "watermark": read_summary.get("watermark"),
                 "pkCursor": read_summary.get("pkCursor"),
@@ -2191,8 +2512,13 @@ class SchemaExtractWorkflow:
 
         results = await asyncio.gather(*(extract_source(source) for source in plan["sources"]))
         all_failures = [f for r in results for f in (r.get("failures") or [])]
-        truncated = len(all_failures) > failure_cap
-        capped = all_failures[:failure_cap]
+        # 失败聚合双形状：S3 中转的清单以 failuresKey 引用（历史只过 key + 计数），
+        # 内联条目（旧路径 / 重跑合成）原样；终态建 case 的 activity 内下载展开
+        failure_refs = [f for f in all_failures if "failuresKey" in f]
+        inline_failures = [f for f in all_failures if "failuresKey" not in f]
+        failures_total = _failure_entries_count(failure_refs) + len(inline_failures)
+        truncated = failures_total > failure_cap
+        recorded_count = 0
         index_summary: Any = None
         if rerun_mode:
             # 重跑：resolve 必调且拿全量失败键（未截断），仍失败记录由服务端重建 case
@@ -2201,7 +2527,8 @@ class SchemaExtractWorkflow:
                 {
                     "rerunCaseIds": rerun_case_ids,
                     "rerunOfExecutionId": request.get("rerunOfExecutionId"),
-                    "failures": all_failures,
+                    "failures": inline_failures,
+                    "failureRefs": failure_refs,
                     "schemaId": schema_id,
                     "schemaKey": plan["schemaKey"],
                     "kind": kind,
@@ -2228,11 +2555,13 @@ class SchemaExtractWorkflow:
                     index_summary = (index_result or {}).get("reindexed")
                 except ActivityError as exc:
                     index_summary = {"degraded": True, "error": str(exc)[:300]}
-            if capped:
-                await workflow.execute_activity(
+            if failures_total:
+                fail_resp = await workflow.execute_activity(
                     record_extract_failures,
                     {
-                        "failures": capped,
+                        "failures": inline_failures,
+                        "failureRefs": failure_refs,
+                        "cap": failure_cap,
                         "schemaId": schema_id,
                         "schemaKey": plan["schemaKey"],
                         "kind": kind,
@@ -2242,6 +2571,7 @@ class SchemaExtractWorkflow:
                     start_to_close_timeout=timedelta(seconds=600),
                     retry_policy=ACTIVITY_RETRY_POLICY,
                 )
+                recorded_count = int((fail_resp or {}).get("recorded") or 0)
 
         # 多步脚本（及 chain 模式）的全局分步聚合计数（跨来源求和）。status 供任务
         # 详情 pipeline_steps 把每步渲染成「成功」；单步单跑不加该键，形状与历史一致。
@@ -2276,8 +2606,8 @@ class SchemaExtractWorkflow:
                 else {}
             ),
             "failures": {
-                "count": len(all_failures),
-                "recorded": len(capped),
+                "count": failures_total,
+                "recorded": recorded_count,
                 "truncated": truncated,
             },
             "rerun": (

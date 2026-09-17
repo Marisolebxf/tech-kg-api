@@ -52,6 +52,55 @@ def transform(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {"entities": entities, "failures": failures}
 '''
 
+# 大文本行脚本：批行 ~300KB/行，验证 S3 中转（批不折半、脚本对 S3 无感）
+BIG_SCRIPT = '''"""E2E 大文本行转换脚本：行含 ~300KB 大字段，输出只留小属性。"""
+from typing import Any, Mapping
+
+
+def transform(payload: Mapping[str, Any]) -> dict[str, Any]:
+    rows = payload.get("rows") or []
+    return {
+        "entities": [
+            {
+                "id": "big_" + str(r["id"]),
+                "props": {"id": str(r["id"]), "name": str(r.get("name") or "")},
+            }
+            for r in rows
+        ]
+    }
+'''
+
+
+def _docker_exec_py(code: str) -> str:
+    """在 api-dev2 容器内跑 python（boto3/temporalio 只装在容器里）。"""
+    import subprocess
+
+    r = subprocess.run(
+        ["docker", "exec", "-w", "/app", "tech-kg-api-dev2", ".venv/bin/python", "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if r.returncode != 0:
+        raise SystemExit(f"容器内 python 失败: {r.stderr[-500:]}")
+    return r.stdout.strip()
+
+
+def _temporal_history_stats(workflow_id: str) -> str:
+    code = (
+        "import asyncio, os\n"
+        "from temporalio.client import Client\n"
+        "\n"
+        "async def main():\n"
+        f"    client = await Client.connect(os.environ['TEMPORAL_ADDRESS'])\n"
+        f"    hist = await client.get_workflow_handle({workflow_id!r}).fetch_history()\n"
+        "    total = sum(len(e.SerializeToString()) for e in hist.events)\n"
+        "    print(len(hist.events), total)\n"
+        "\n"
+        "asyncio.run(main())\n"
+    )
+    return _docker_exec_py(code)
+
 
 def step(msg):
     print(f"\n=== {msg}")
@@ -85,6 +134,13 @@ def main():
          "UPDATE techkg_e2e.widgets SET name='POISON又坏', update_time=NOW() WHERE id='w4';"],
         check=True, capture_output=True,
     )
+
+    # 清理历史遗留的待处理 C 类 case（步骤 6/8 按全局队列断言，需干净起点）
+    code, resp = req("GET", "/manual-reviews/production/queue?category=C&statusGroup=pending&pageSize=100")
+    stale = [i["id"] for i in (resp.get("data") or {}).get("items") or []]
+    if stale:
+        code, resp = req("POST", "/manual-reviews/production/delete-cases", {"caseIds": stale})
+        ok(code in (200, 201), f"清理历史 C 类 case {len(stale)} 条: {str(resp)[:100]}")
 
     # 1. 数据源
     step("1. 准备数据源（temporal-mysql-dev2 / techkg_e2e）")
@@ -227,7 +283,9 @@ def main():
     import subprocess
     subprocess.run(
         ["docker", "exec", "tech-kg-temporal-mysql-dev2", "mysql", "-uroot", "-ptemporal", "-e",
-         "UPDATE techkg_e2e.widgets SET name='修复好的行', update_time=update_time WHERE id IN ('w3','w4');"],
+         # 消歧（#256）会把批内同名记录并入先到 vid——两行给不同名，各写各的节点
+         "UPDATE techkg_e2e.widgets SET name='修复好的行3', update_time=update_time WHERE id='w3'; "
+         "UPDATE techkg_e2e.widgets SET name='修复好的行4', update_time=update_time WHERE id='w4';"],
         check=True, capture_output=True,
     )
     code, resp = req("POST", "/manual-reviews/production/rerun-extract-failures", {"caseIds": case_ids})
@@ -283,6 +341,133 @@ def main():
     records = graph.get("data", {}).get("records") or graph.get("records") or []
     vids = {rec.get("vid") for rec in records}
     ok({"widget_w1", "widget_w2", "widget_w3", "widget_w4"} <= vids, f"4 个节点入库（{sorted(vids)}）")
+
+    # 12. 大文本行 S3 中转（claim-check）：batchSize=2 × 4 行 × ~300KB
+    #     旧 512KB 预算会把批折半到 1 行/批（batches=4）；中转开（8MB 载荷预算）
+    #     应保持 2 批，且事件历史里没有批行本体（载荷在 runs/ 下留档）
+    step("12. 大文本行 S3 中转：批不折半（4 行 → 2 批）+ runs/ 载荷留档")
+    import subprocess
+
+    subprocess.run(
+        ["docker", "exec", "tech-kg-temporal-mysql-dev2", "mysql", "-uroot", "-ptemporal", "-e",
+         "CREATE TABLE IF NOT EXISTS techkg_e2e.big_widgets "
+         "(id VARCHAR(32) PRIMARY KEY, name VARCHAR(64), update_time DATETIME, big_text MEDIUMTEXT); "
+         "DELETE FROM techkg_e2e.big_widgets; "
+         "INSERT INTO techkg_e2e.big_widgets (id, name, update_time, big_text) VALUES "
+         "('b1','大文本1',NOW(),REPEAT('甲',102400)),"
+         "('b2','大文本2',NOW(),REPEAT('乙',102400)),"
+         "('b3','大文本3',NOW(),REPEAT('丙',102400)),"
+         "('b4','大文本4',NOW(),REPEAT('丁',102400));"],
+        check=True, capture_output=True,
+    )
+
+    code, resp = req("GET", "/schema-management/schemas?keyword=E2EBigWidget&pageSize=100")
+    old = next(
+        (i for i in (resp.get("data") or {}).get("items") or [] if i.get("name") == "E2EBigWidget"),
+        None,
+    )
+    if old:
+        req("DELETE", f"/schema-management/schemas/{old['id']}")
+    code, resp = req(
+        "POST",
+        "/schema-management/schemas/entities",
+        {
+            "schemaKey": f"e2e-big-widget-{run}",
+            "name": "E2EBigWidget",
+            "label": "E2E大文本挂件",
+            "description": "抽取 e2e 大文本",
+            "identityKey": "id",
+            "properties": [
+                {"name": "id", "dataType": "string", "required": True, "category": "core", "rule": ""},
+                {"name": "name", "dataType": "string", "required": False, "category": "core", "rule": ""},
+            ],
+            "isCore": False,
+            "version": "v1.0",
+        },
+    )
+    ok(code in (200, 201), f"创建大文本 schema {code}: {str(resp)[:150]}")
+    big_schema_id = resp["data"]["id"]
+
+    big_script_file = pathlib.Path(f"/tmp/e2e_big_widget_{run}.py")
+    big_script_file.write_text(BIG_SCRIPT, encoding="utf-8")
+    r = subprocess.run(
+        [
+            "curl", "-sS", "-m", "60", "-X", "PUT",
+            f"{API}/schema-management/schemas/{big_schema_id}/script",
+            "-F", f"script=@{big_script_file}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    resp = json.loads(r.stdout or "{}")
+    ok(resp.get("code", 0) == 200, f"上传大文本脚本 inner={resp.get('code')}")
+
+    code, resp = req(
+        "PUT",
+        f"/schema-management/schemas/{big_schema_id}/sources",
+        {
+            "sources": [
+                {
+                    "datasourceId": datasource_id,
+                    "databaseName": "techkg_e2e",
+                    "tableName": "big_widgets",
+                    "pkColumn": "id",
+                    "timeColumn": "update_time",
+                }
+            ]
+        },
+    )
+    ok(code in (200, 201), f"绑定大文本来源 {code}")
+
+    code, resp = req(
+        "POST",
+        "/workflow-system/jobs",
+        {
+            "name": f"e2e大文本抽取-{run}",
+            "taskType": "extract",
+            "schemaId": big_schema_id,
+            "schedule": {"kind": "once"},
+            "graphSpace": "dev2",
+            "batchSize": 2,
+        },
+    )
+    ok(code in (200, 201), f"创建大文本任务 {code}")
+    big_job_id = resp["data"]["id"]
+    code, resp = req("POST", f"/workflow-system/jobs/{big_job_id}/trigger")
+    ok(code in (200, 201), f"触发大文本抽取 {code}")
+    exec_big = resp["data"]["id"]
+
+    execution_big = wait_execution(exec_big, timeout=300)
+    big_out = execution_big.get("output") or {}
+    ok(execution_big["status"] == "COMPLETED",
+       f"大文本执行 COMPLETED（{execution_big['status']} {str(execution_big.get('message'))[:120]}）")
+    big_sources = (big_out.get("sources") or [{}])[0]
+    ok(big_sources.get("rows") == 4,
+       f"大文本读取 4 行（实际 {big_sources.get('rows')}）")
+    ok(big_sources.get("batches") == 2,
+       f"大文本 2 批未折半（实际 {big_sources.get('batches')}；折半=4 说明中转未生效）")
+    ok(big_sources.get("written") == 4, f"大文本写图 4 实体（实际 {big_sources.get('written')}）")
+
+    # runs/{workflowId}/ 下应有 rows-/out-/resolved- 载荷留档（S3 对象真存在）
+    big_wf = execution_big.get("workflowId") or ""
+    ok(bool(big_wf), f"拿到 workflowId（{big_wf}）")
+    keys = json.loads(_docker_exec_py(
+        "import json\n"
+        "from infra.s3 import get_schema_s3_storage\n"
+        f"objs = get_schema_s3_storage().list_objects('runs/{big_wf}/')\n"
+        "print(json.dumps([o.object_key for o in objs]))\n"
+    ))
+    tails = [k.rsplit('/', 1)[-1] for k in keys]
+    print(f"  runs/ 留档对象 {len(keys)} 个")
+    ok(sum(t.startswith('rows-') for t in tails) >= 2, f"rows- 载荷 ≥2（{len(tails)} 对象）")
+    ok(sum(t.startswith('out-') for t in tails) >= 2, "out- 载荷 ≥2")
+    ok(sum(t.startswith('resolved-') for t in tails) >= 2, "resolved- 载荷 ≥2")
+
+    # 对照输出：事件历史事件数 / 字节数（批行本体已不进历史）
+    small_wf = execution.get("workflowId") or ""
+    if small_wf:
+        print(f"  小文本执行 history(事件数, 序列化字节): {_temporal_history_stats(small_wf)}")
+    print(f"  大文本执行 history(事件数, 序列化字节): {_temporal_history_stats(big_wf)}")
 
     print("\n全部 E2E 通过 ✔")
 

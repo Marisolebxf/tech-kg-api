@@ -262,3 +262,60 @@ def test_park_drops_edges_to_rejected_endpoint(service, graph):
         "EMPLOYED_BY", [{"fromId": "person_1", "toId": "org_new_1", "props": {}}]
     )
     assert out == {"records": [], "parked": 0, "dropped": 1}
+
+
+class SchemaGraph(FakeGraph):
+    """DESCRIBE 返回平台 DDL 风格 schema（NOT NULL 审计列存在）。"""
+
+    def __init__(self):
+        super().__init__()
+        self.tag_fields = ("name", "province", "create_time", "update_time", "source_table")
+        self.edge_fields = ("role", "create_time", "update_time", "source_table")
+
+    def execute_query(self, q):
+        fields = self.edge_fields if "DESCRIBE EDGE" in q else self.tag_fields
+
+        class _Result:
+            records = [{"Field": f, "Type": "string", "Null": "NO"} for f in fields]
+
+        return _Result()
+
+
+def test_parked_edge_write_injects_not_null_audit_columns(service, monkeypatch):
+    """平台 DDL 给边注入 NOT NULL create_time/update_time（无默认值）：暂存边
+    属性缺这些列时补写会被 Nebula 拒（400 not nullable）——按边 schema 补缺省。"""
+    fake = SchemaGraph()
+    monkeypatch.setattr(ManualReviewService, "_graph_client_for", lambda self, snapshot: fake)
+    case = service.create_direct_case(
+        **gray_case_kwargs(
+            candidate={
+                **gray_case_kwargs()["candidate"],
+                "_pendingRelations": [
+                    {
+                        "edgeType": "EMPLOYED_BY",
+                        "fromId": "org_new_1",
+                        "toId": "person_1",
+                        "props": {"role": "engineer", "source_table": "db.org"},
+                    }
+                ],
+            }
+        )
+    )
+    detail = service.get_case(case["reviewId"], actor())
+    out = service.submit(
+        detail["id"],
+        detail["version"],
+        "entity-confirm",
+        {"entityVerdict": "merge", "targetEntityId": "org_9"},
+        "",
+        actor(),
+    )
+    assert out["status"] == "RESOLVED"
+    ((frm, to, etype, props),) = fake.edges
+    assert (frm, to, etype) == ("org_9", "person_1", "EMPLOYED_BY")
+    # NOT NULL 审计列缺省即补（空串也是补了值，Nebula 不再 400）
+    assert props["create_time"]
+    assert props["update_time"]
+    # 业务列与原溯源值保留，不被覆盖
+    assert props["role"] == "engineer"
+    assert props["source_table"] == "db.org"

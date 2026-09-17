@@ -56,6 +56,11 @@ def now():
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def _now_str() -> str:
+    """图库审计列用的本地时间串（与 write_records 溯源列补值同格式）。"""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def dump(v):
     return json.dumps(v, ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str)
 
@@ -844,6 +849,7 @@ class ManualReviewService:
             self._insert_withheld_vertex(client, c, snapshot, incoming, vid)
             old_vid = str(incoming.get("vid") or c.object_id)
             written_edges = 0
+            edge_fields: dict[str, set[str] | None] = {}
             for rel in snapshot.get("_pendingRelations") or []:
                 edge_type = rel.get("edgeType")
                 frm, to = str(rel.get("fromId")), str(rel.get("toId"))
@@ -856,6 +862,20 @@ class ManualReviewService:
                 props = self._coerce_to_schema(
                     client, edge_type, rel.get("props") or {}, is_edge=True
                 )
+                # 平台 DDL 给边注入 NOT NULL create_time/update_time（无默认值），
+                # 暂存边属性没有这些列 → INSERT 被 Nebula 拒（400 not nullable）。
+                # 按边实际 schema 补审计列（与 _insert_withheld_vertex 同策略：
+                # 列存在才补，schema 查不出时旧兜底照补）。
+                if edge_type not in edge_fields:
+                    edge_fields[edge_type] = self._edge_fields(client, edge_type)
+                fields = edge_fields[edge_type]
+                for key, value in (
+                    ("create_time", _now_str()),
+                    ("update_time", _now_str()),
+                    ("source_table", props.get("source_table") or "schema_extract"),
+                ):
+                    if fields is None or key in fields:
+                        props.setdefault(key, value)
                 client.create_edge(frm, to, edge_type, props)
                 written_edges += 1
         finally:
@@ -878,6 +898,16 @@ class ManualReviewService:
             return {f for f in (r.get("Field") for r in desc.records or []) if isinstance(f, str)}
         except Exception:  # noqa: BLE001
             logger.warning("DESCRIBE TAG %s 失败，写图按旧兜底补审计列", label)
+            return None
+
+    @staticmethod
+    def _edge_fields(client: Any, edge_type: str) -> set[str] | None:
+        """DESCRIBE EDGE 取列集合；失败返回 None（调用方走兜底补审计列）。"""
+        try:
+            desc = client.execute_query(f"DESCRIBE EDGE `{edge_type}`")
+            return {f for f in (r.get("Field") for r in desc.records or []) if isinstance(f, str)}
+        except Exception:  # noqa: BLE001
+            logger.warning("DESCRIBE EDGE %s 失败，补边按旧兜底补审计列", edge_type)
             return None
 
     def _insert_withheld_vertex(

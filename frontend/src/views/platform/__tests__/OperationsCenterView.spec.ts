@@ -76,6 +76,20 @@ afterEach(() => {
 })
 
 describe('审核队列 C 类（抽取失败重跑）', () => {
+  it('入库决策 Tab（A 类）只筛 T_LINK：请求带 templateId=T_LINK；C 类不传', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    // A 类默认加载即带 T_LINK 过滤（T_DIRECT 详情走工作台总览/实例详情直达）
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'A', templateId: 'T_LINK' }),
+    )
+
+    await switchToCategoryC(wrapper)
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'C', templateId: undefined }),
+    )
+  })
+
   it('A 类不渲染批量重跑按钮与勾选列；C 类才渲染', async () => {
     const wrapper = renderReview()
     await flushPromises()

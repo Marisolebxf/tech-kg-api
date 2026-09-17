@@ -10,9 +10,18 @@ schema 迁移互不影响。表结构与原 SQLite 实现等价，仅做方言�
 
 from __future__ import annotations
 
-from sqlalchemy import Integer, String
+from sqlalchemy import Integer, String, Text
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+def _longtext() -> Text:
+    """MySQL 用 LONGTEXT（JSON payload 可超 64KB），SQLite（单测）退化为 TEXT。
+
+    与 db_model/entity_search.py 同一惯用法：裸 LONGTEXT 是 MySQL 方言类型，
+    SQLite 的 create_all 编译不过（PR #267 的单测即栽在这里）。
+    """
+    return Text().with_variant(LONGTEXT(), "mysql")
 
 
 class Base(DeclarativeBase):
@@ -24,7 +33,7 @@ class WorkflowBatch(Base):
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
     update_date: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    payload: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
+    payload: Mapped[str] = mapped_column(_longtext(), nullable=False)
 
 
 class WorkflowTask(Base):
@@ -37,7 +46,7 @@ class WorkflowTask(Base):
     domain: Mapped[str] = mapped_column(String(64), nullable=False)
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
     processed_at: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    payload: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
+    payload: Mapped[str] = mapped_column(_longtext(), nullable=False)
 
 
 class WorkflowSourceUpdate(Base):
@@ -46,14 +55,14 @@ class WorkflowSourceUpdate(Base):
     seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     domain: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     detected_at: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    payload: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
+    payload: Mapped[str] = mapped_column(_longtext(), nullable=False)
 
 
 class WorkflowSetting(Base):
     __tablename__ = "settings"
 
     key: Mapped[str] = mapped_column(String(128), primary_key=True)
-    payload: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
+    payload: Mapped[str] = mapped_column(_longtext(), nullable=False)
 
 
 class WorkflowDefinition(Base):
@@ -65,7 +74,7 @@ class WorkflowDefinition(Base):
     workflow_type: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     category: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    payload: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
+    payload: Mapped[str] = mapped_column(_longtext(), nullable=False)
 
 
 class WorkflowExecution(Base):
@@ -78,7 +87,7 @@ class WorkflowExecution(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     started_at: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     job_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
-    payload: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
+    payload: Mapped[str] = mapped_column(_longtext(), nullable=False)
 
 
 class WorkflowSchedule(Base):
@@ -87,7 +96,7 @@ class WorkflowSchedule(Base):
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
     definition_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     active: Mapped[str] = mapped_column(Integer, nullable=False, default=1)
-    payload: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
+    payload: Mapped[str] = mapped_column(_longtext(), nullable=False)
 
 
 class WorkflowJob(Base):
@@ -107,7 +116,7 @@ class WorkflowJob(Base):
     schedule_kind: Mapped[str] = mapped_column(String(8), nullable=False)
     cron: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    payload: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
+    payload: Mapped[str] = mapped_column(_longtext(), nullable=False)
 
 
 __all__ = [

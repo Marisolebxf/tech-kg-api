@@ -69,10 +69,6 @@ class SubmitRequest(VersionRequest):
     note: str = ""
 
 
-class ApprovalRequest(VersionRequest):
-    note: str = ""
-
-
 class DirectDecideRequest(VersionRequest):
     """kg.custom.steps T_DIRECT 案例直接决策：accept 写图，reject 丢弃。
 

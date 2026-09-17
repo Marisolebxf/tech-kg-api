@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from io import BytesIO
 from types import SimpleNamespace
 
@@ -22,6 +23,7 @@ from service.schema_extraction import (
     extract_definition_id,
 )
 from service.temporal_workflows import (
+    _rematerialize_run_script,
     advance_schema_extract_watermark,
     load_schema_extract_plan,
 )
@@ -49,9 +51,25 @@ class FakeBody(BytesIO):
 class FakeS3:
     def __init__(self, content: bytes) -> None:
         self.content = content
+        self.uploads: list[tuple[str, bytes]] = []
+
+    @property
+    def bucket(self) -> str:
+        return "b"
 
     def get_object(self, bucket: str, key: str) -> FakeBody:
+        # 先查已上传对象（run 副本重物化场景），否则回退到 schema 当前脚本内容
+        for uploaded_key, data in reversed(self.uploads):
+            if uploaded_key == key:
+                return FakeBody(data)
         return FakeBody(self.content)
+
+    def put_bytes(self, key: str, data: bytes, content_type: str) -> SimpleNamespace:
+        self.uploads.append((key, data))
+        return SimpleNamespace(bucket=self.bucket, object_key=key, etag=None)
+
+    def delete_object(self, bucket: str, key: str) -> None:
+        self.uploads = [(k, d) for k, d in self.uploads if k != key]
 
 
 @pytest.fixture
@@ -154,14 +172,43 @@ async def test_load_schema_extract_plan_parses_steps_declaration(
     assert plan["multiStep"] is True
 
 
+DECORATED_SCRIPT = (
+    b"from kg_sdk import step\n"
+    b"\n"
+    b"\n"
+    b"@step\n"
+    b"def normalize(payload):\n"
+    b'    return {"cleaned": payload.get("rows", [])}\n'
+    b"\n"
+    b"\n"
+    b'@step("emit-rows")\n'
+    b"def do_emit(payload):\n"
+    b'    return {"entities": []}\n'
+)
+
+
+@pytest.mark.asyncio
+async def test_load_schema_extract_plan_parses_step_decorators(
+    plan_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """@step 装饰器脚本：步顺序 = 源码顺序，显式 id 可含 -，multiStep=True。"""
+    monkeypatch.setattr("infra.s3.get_schema_s3_storage", lambda: FakeS3(DECORATED_SCRIPT))
+    plan = await load_schema_extract_plan("schema-1")
+    assert plan["steps"] == [
+        {"id": "normalize", "fn": "normalize"},
+        {"id": "emit-rows", "fn": "do_emit"},
+    ]
+    assert plan["multiStep"] is True
+
+
 @pytest.mark.asyncio
 async def test_load_schema_extract_plan_rejects_invalid_steps(
     plan_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """绕过上传通道的非法 STEPS（fn 未定义）在 plan 组装时报清晰错误。"""
+    """绕过上传通道的非法多步声明（fn 未定义）在 plan 组装时报清晰错误。"""
     broken = b'STEPS = [{"id": "a", "fn": "missing"}]\n\ndef fa(p):\n    return {}\n'
     monkeypatch.setattr("infra.s3.get_schema_s3_storage", lambda: FakeS3(broken))
-    with pytest.raises(ValueError, match="STEPS 声明非法.*未在脚本顶层定义"):
+    with pytest.raises(ValueError, match="多步声明非法.*未在脚本顶层定义"):
         await load_schema_extract_plan("schema-1")
 
 
@@ -194,6 +241,64 @@ async def test_load_schema_extract_plan_includes_all_properties(plan_env) -> Non
 async def test_load_schema_extract_plan_requires_script_and_sources(plan_env) -> None:
     with pytest.raises(ValueError, match="Schema 不存在"):
         await load_schema_extract_plan("missing")
+
+
+@pytest.mark.asyncio
+async def test_load_schema_extract_plan_pins_run_copy(
+    plan_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """plan 钉住 run 级脚本副本：S3 写入 runs/{id}/script.py，plan 带 key + sha256。"""
+    content = b"def workflow(payload):\n    return {}\n"
+    fake = FakeS3(content)
+    monkeypatch.setattr("infra.s3.get_schema_s3_storage", lambda: fake)
+    plan = await load_schema_extract_plan("schema-1")
+    assert len(fake.uploads) == 1
+    key, data = fake.uploads[0]
+    assert key.startswith("runs/") and key.endswith("/script.py")
+    assert data == content
+    assert plan["scriptRunKey"] == key
+    assert plan["scriptSha256"] == hashlib.sha256(content).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_rematerialize_run_script_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """tempfile 丢失后按 run 副本重物化：下载字节、校验通过、落成新临时文件。"""
+    content = b"def transform(payload):\n    return {}\n"
+    fake = FakeS3(content)
+    monkeypatch.setattr("infra.s3.get_schema_s3_storage", lambda: fake)
+    path = await _rematerialize_run_script(
+        {
+            "scriptPath": "/tmp/gone.py",
+            "scriptRunKey": "runs/w1/script.py",
+            "scriptSha256": hashlib.sha256(content).hexdigest(),
+        }
+    )
+    with open(path, "rb") as handle:
+        assert handle.read() == content
+
+
+@pytest.mark.asyncio
+async def test_rematerialize_run_script_rejects_sha_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """副本内容与钉住的 sha256 不符：硬失败，绝不执行不确定版本的脚本。"""
+    fake = FakeS3(b"tampered")
+    monkeypatch.setattr("infra.s3.get_schema_s3_storage", lambda: fake)
+    with pytest.raises(RuntimeError, match="sha256 校验失败"):
+        await _rematerialize_run_script(
+            {
+                "scriptPath": "/tmp/gone.py",
+                "scriptRunKey": "runs/w1/script.py",
+                "scriptSha256": hashlib.sha256(b"expected").hexdigest(),
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_rematerialize_run_script_requires_copy_reference() -> None:
+    """升级窗口内在飞旧 plan 无 run 副本字段：保持旧的明确失败语义。"""
+    with pytest.raises(ValueError, match="脚本不存在且无 run 副本"):
+        await _rematerialize_run_script({"scriptPath": "/tmp/gone.py"})
 
 
 @pytest.mark.asyncio

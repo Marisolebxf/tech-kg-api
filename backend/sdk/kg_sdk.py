@@ -1,8 +1,8 @@
 """用户抽取脚本 SDK。
 
 activity 在子进程外把"已解析的连接参数"（不是活对象）序列化进 ``KG_SCRIPT_CTX``
-环境变量。脚本一律单参入口（``transform(payload)`` 或 STEPS 多步的
-``step_fn(payload)``），函数内取上下文：
+环境变量。脚本一律单参入口（``transform(payload)``，或用 ``@step`` 装饰器 / 顶层
+``STEPS`` 清单声明多步），函数内取上下文：
 
 - ``from kg_sdk import current_context``，``ctx = current_context()``
   （未配置时返回 None，脚本降级），直接 ``ctx.mysql`` / ``ctx.graph`` /
@@ -207,6 +207,36 @@ def reset_current_context() -> None:
     """测试用：清缓存。"""
     global _current
     _current = _UNSET
+
+
+def step(fn=None, *, id=None):
+    """``@step`` 装饰器：把顶层函数声明为抽取步（推荐的多步脚本写法）。
+
+    平台在上传校验与执行计划组装时用 AST 静态识别该装饰器（不执行脚本）：
+
+    - 步顺序 = 函数在源码中的出现顺序；
+    - step id 默认取函数名，也可显式指定（可含 ``-``）::
+
+        from kg_sdk import step
+
+        @step                # id = "normalize"
+        def normalize(payload): ...
+
+        @step("resolve")     # id = "resolve"
+        def do_resolve(payload): ...
+
+    运行时本装饰器恒等返回原函数（sync/async 均可，runner 会 await）——步调度由
+    Temporal workflow 按 plan 里的步清单逐 activity 驱动，装饰器不参与运行时调度。
+    """
+    if callable(fn) and id is None:
+        return fn  # @step 裸形式：恒等返回原函数
+
+    # @step("id") / @step(id="id") / @step()：fn 位是 id 字符串（或 None），返回恒等装饰器
+
+    def decorate(f):
+        return f
+
+    return decorate
 
 
 # 溯源采集（runner 子进程用：`from kg_sdk import access_report, flush_access_sidecar`）

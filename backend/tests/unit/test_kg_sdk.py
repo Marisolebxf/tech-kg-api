@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import sys
 import types
 
@@ -18,7 +19,7 @@ from sdk.access import (
     report_from_sidecar,
     reset_access_report,
 )
-from sdk.kg_sdk import Context, current_context, reset_current_context
+from sdk.kg_sdk import Context, current_context, reset_current_context, step
 
 
 def test_none_when_raw_empty() -> None:
@@ -160,6 +161,32 @@ def test_current_context_returns_none_without_env(monkeypatch: pytest.MonkeyPatc
     monkeypatch.delenv("KG_SCRIPT_CTX", raising=False)
     assert current_context() is None
     reset_current_context()
+
+
+# ---- @step 装饰器（运行时恒等；声明识别在 service/script_steps.py 静态做） ----
+
+
+def test_step_decorator_identity_bare_and_with_id() -> None:
+    """@step 与 @step("id") 两种用法对 sync/async 函数都恒等返回原函数。"""
+
+    @step
+    def clean(payload):
+        return payload
+
+    @step("emit")
+    async def emit(payload):
+        return payload
+
+    @step(id="resolve")
+    def resolve(payload):
+        return payload
+
+    assert clean({"a": 1}) == {"a": 1}
+    assert inspect.iscoroutinefunction(emit)
+    assert resolve({"b": 2}) == {"b": 2}
+    # 恒等：装饰后拿到的就是原函数（平台调度按函数名 getattr，不依赖装饰器行为）
+    assert clean.__name__ == "clean"
+    assert emit.__name__ == "emit"
 
 
 # ---- 访问溯源采集（sdk/access.py） ----

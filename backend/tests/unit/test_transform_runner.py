@@ -188,6 +188,69 @@ async def test_execute_transform_step_chain_payload_and_ctx(tmp_path) -> None:
     assert [e["id"] for e in second["entities"]] == ["E_1"]
 
 
+DECORATED_ASYNC_PROBE_SCRIPT = """
+from kg_sdk import step
+
+
+@step
+async def clean(payload):
+    # 装饰器在子进程里恒等返回；async 入口由 runner await
+    return {"cleaned": [r for r in payload["rows"] if r.get("ok")]}
+
+
+@step("emit")
+def emit(payload):
+    return {
+        "entities": [{"id": "E_" + r["id"], "props": {}} for r in payload["input"]["cleaned"]]
+    }
+"""
+
+
+@pytest.mark.asyncio
+async def test_execute_transform_decorated_async_step(tmp_path) -> None:
+    """@step 装饰器脚本：kg_sdk.step 运行时恒等可用，async 步函数被 runner 正常 await。"""
+    script = tmp_path / "decorated.py"
+    script.write_text(DECORATED_ASYNC_PROBE_SCRIPT, encoding="utf-8")
+    source = {
+        "datasourceId": "MYSQL-1",
+        "databaseName": "gkx",
+        "tableName": "scholar",
+        "pkColumn": "id",
+        "timeColumn": "update_time",
+    }
+    first = await execute_transform(
+        {
+            "scriptPath": str(script),
+            "functionName": "clean",
+            "rows": [{"id": "1", "ok": True}, {"id": "2", "ok": False}],
+            "source": source,
+            "kind": "entity",
+            "timeoutSeconds": 30,
+            "selectors": {},
+            "definitionId": "schema-extract-widget",
+            "stepId": "source:bind-1",
+            "ctxStepId": "source:bind-1#clean",
+        }
+    )
+    assert first["cleaned"] == [{"id": "1", "ok": True}]
+    second = await execute_transform(
+        {
+            "scriptPath": str(script),
+            "functionName": "emit",
+            "source": source,
+            "kind": "entity",
+            "timeoutSeconds": 30,
+            "selectors": {},
+            "definitionId": "schema-extract-widget",
+            "stepId": "source:bind-1",
+            "ctxStepId": "source:bind-1#emit",
+            "input": first,
+            "prevOutputs": {"clean": first},
+        }
+    )
+    assert [e["id"] for e in second["entities"]] == ["E_1"]
+
+
 @pytest.mark.asyncio
 async def test_write_records_filters_non_active_props(fake_graph) -> None:
     records = [

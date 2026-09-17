@@ -1,8 +1,11 @@
-"""生产人工审核服务（队列 / 领取 / 裁决 / 直判写图 / 抽取失败重跑）。
+"""生产人工审核服务（队列 / 直审裁决 / 直判写图 / 抽取失败重跑）。
 
 2026-09-15 起移除「外部 graph-build 服务」移交通道（内部入口 / correction /
-outbox / resume 派发 / 执行回调）：审核模块只管裁决与记录决议，
-合并执行由向量对齐功能的合并引擎落地（后续任务）。
+outbox / resume 派发 / 执行回调）：审核模块只管裁决与记录决议。
+2026-09-17 起 T_LINK 裁决接入真实执行（写前扣留 case 写图 + 待定关系补写，
+见 ``_apply_link_verdict``）；存量写后 case（无 ``_incoming`` 快照）仍只记录决议。
+2026-09-17 起改为直审模式：OPEN 打开即可 submit（领取为可选保留），一切提交
+即执行——审批环节（PENDING_APPROVAL 四方签核）已移除。
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import case, func, or_, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from db_model.manual_review import (
@@ -30,6 +33,7 @@ from infra.s3 import S3Storage
 from service.manual_review_domain import (
     EDITABLE_STATUSES,
     PIPELINE_STEPS,
+    SUBMITTABLE_STATUSES,
     TEMPLATES,
     TERMINAL_STATUSES,
     ReviewConflictError,
@@ -39,7 +43,6 @@ from service.manual_review_domain import (
     canonical_template,
     require_domain_access,
     require_role,
-    requires_approval,
     role_can_review,
     template_contract,
     validate_action,
@@ -270,12 +273,22 @@ class ManualReviewService:
             return self.detail(s, c)
 
     def submit(self, i, v, action, result, note, a):
+        """直审模式：OPEN 可直接提交（领取为可选），一切提交即执行、不设审批。
+
+        已被他人领取的 case 仍限领取人 / review_admin 操作；并发仍是 version
+        乐观锁——两人同开一个 case，先提交者生效，后提交者报版本冲突。
+        """
         with self.sf() as s:
-            c = self.owned(s, i, a)
-            if c.version != v or c.status not in EDITABLE_STATUSES:
+            c = self.need(s, i)
+            require_domain_access(a, c.domain)
+            if not role_can_review(a, c.phase):
+                raise ReviewForbiddenError("角色与任务阶段不匹配")
+            if c.status in ("CLAIMED", "IN_REVIEW") and c.assignee_id != a.user_id:
+                if not a.has_any("review_admin"):
+                    raise ReviewForbiddenError("任务未由当前用户领取")
+            if c.version != v or c.status not in SUBMITTABLE_STATUSES:
                 raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
             validate_action(c.template_id, action, result)
-            approval = requires_approval(_risk_label(c.risk_level), action, result)
             t = now()
             d = ReviewDecision(
                 case_id=i,
@@ -283,59 +296,34 @@ class ManualReviewService:
                 result=dump(result),
                 note=note,
                 submitted_by=a.user_id,
-                status="PENDING_APPROVAL" if approval else "APPROVED",
+                status="APPROVED",
                 created_at=t,
-                decided_at=None if approval else t,
+                decided_at=t,
             )
             s.add(d)
             s.flush()
             old = c.status
             c.submitted_by = a.user_id
-            if approval:
-                c.status = "PENDING_APPROVAL"
-            else:
-                # TODO: 合并执行由向量对齐功能的合并引擎落地（后续任务）
-                c.status = "RESOLVED"
-                c.completed_at = t
+            # OPEN 直审时记录处理人，历史里可追溯（队列不再显示"待领取"）
+            if not c.assignee_id:
+                c.assignee_id = a.user_id
+                c.assignee_name = a.user_name
+            apply_detail: dict[str, Any] | None = None
+            if canonical_template(c.template_id) == "T_LINK" and action == "entity-confirm":
+                # 消歧裁决真实执行（写前扣留 case 写图；存量写后 case 仅记录决议）
+                apply_detail = self._apply_link_verdict(c, result)
+            c.status = "RESOLVED"
+            c.completed_at = t
             c.version += 1
             c.updated_at = t
-            self.audit(s, c, a, "DECISION_SUBMITTED", old, c.status, {"actionId": action})
-            s.commit()
-            return self.detail(s, c)
-
-    def approve(self, i, v, ok, note, a):
-        require_role(a, "approver")
-        with self.sf() as s:
-            c = self.need(s, i)
-            require_domain_access(a, c.domain)
-            if c.version != v or c.status != "PENDING_APPROVAL":
-                raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
-            d = s.scalar(
-                select(ReviewDecision)
-                .where(ReviewDecision.case_id == i, ReviewDecision.status == "PENDING_APPROVAL")
-                .order_by(ReviewDecision.id.desc())
-            )
-            if not d:
-                raise ReviewConflictError("待审批裁决不存在")
-            if d.submitted_by == a.user_id:
-                raise ReviewForbiddenError("提交人与批准人必须不同")
-            old = c.status
-            d.approved_by = a.user_id
-            d.note = (d.note + "\n审批意见: " + note).strip()
-            d.decided_at = now()
-            if ok:
-                d.status = "APPROVED"
-                # TODO: 合并执行由向量对齐功能的合并引擎落地（后续任务）
-                c.status = "RESOLVED"
-                c.completed_at = now()
-            else:
-                d.status = "REJECTED"
-                c.status = "REJECTED"
-                c.completed_at = now()
-            c.version += 1
-            c.updated_at = now()
             self.audit(
-                s, c, a, "DECISION_APPROVED" if ok else "DECISION_REJECTED", old, c.status, {}
+                s,
+                c,
+                a,
+                "DECISION_SUBMITTED",
+                old,
+                c.status,
+                {"actionId": action, **(apply_detail or {})},
             )
             s.commit()
             return self.detail(s, c)
@@ -372,7 +360,7 @@ class ManualReviewService:
         resume_token: str | None = None,
         extra_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """直接 OPEN 状态入队（不走 4-eyes claim/submit）。
+        """直接 OPEN 状态入队（打开即可裁决，无需领取）。
 
         默认 T_DIRECT（kg.custom.steps pendingReview）：candidate_snapshot 附加
         kind/nodeLabel/edgeType/fromId/toId 元字段，direct_decide 读这些字段写图。
@@ -719,6 +707,216 @@ class ManualReviewService:
                 logger.warning("重跑仍失败的新 case 创建失败: %s", case.id, exc_info=True)
         return {"resolved": resolved, "refailed": len(refailed), "recreated": recreated}
 
+    # ------------------------------------------------------------------
+    # T_LINK：实体对齐裁决执行（写前扣留 case 真实写图）
+    # ------------------------------------------------------------------
+
+    def park_or_rewrite_edges(
+        self, edge_type: str, records: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """关系写图前端点消歧处理（``write_records`` 关系分支调用，跨执行兜底）。
+
+        - 端点命中未决 T_LINK 灰区 case → 该边挂到 case 快照 ``_pendingRelations``
+          （裁决 merge/create 时统一补写，不产生 Nebula 悬挂点；按边类型+端点去重幂等）；
+        - 端点 case 已裁决 merge → 端点改写为目标实体后正常返回写；
+        - 端点实体已被驳回（verdict=reject）→ 该边一并丢弃；
+        - 其余（含已裁决 create，预留 vid 已入库）→ 原样返回写。
+        """
+        if not records:
+            return {"records": [], "parked": 0, "dropped": 0}
+        endpoints = {str(r.get("fromId")) for r in records} | {str(r.get("toId")) for r in records}
+        verdicts: dict[str, tuple[str | None, str | None]] = {}
+        with self.sf() as s:
+            cases = s.scalars(
+                select(ReviewCase).where(
+                    ReviewCase.template_id == "T_LINK",
+                    ReviewCase.object_id.in_(endpoints),
+                )
+            ).all()
+            open_cases = {c.object_id: c for c in cases if c.status not in TERMINAL_STATUSES}
+            for c in cases:
+                if c.object_id in open_cases:
+                    continue
+                d = s.scalar(
+                    select(ReviewDecision)
+                    .where(ReviewDecision.case_id == c.id)
+                    .order_by(ReviewDecision.id.desc())
+                )
+                res = (load(d.result) or {}) if d else {}
+                verdicts[c.object_id] = (res.get("entityVerdict"), res.get("targetEntityId"))
+            parked_records = [
+                r
+                for r in records
+                if str(r.get("fromId")) in open_cases or str(r.get("toId")) in open_cases
+            ]
+            for record in parked_records:
+                vid = next(
+                    v
+                    for v in (str(record.get("fromId")), str(record.get("toId")))
+                    if v in open_cases
+                )
+                case = open_cases[vid]
+                snapshot = load(case.candidate_snapshot) or {}
+                pending = snapshot.setdefault("_pendingRelations", [])
+                rel = {
+                    "edgeType": edge_type,
+                    "fromId": str(record.get("fromId")),
+                    "toId": str(record.get("toId")),
+                    "props": record.get("props") or {},
+                }
+                if not any(
+                    p.get("edgeType") == rel["edgeType"]
+                    and p.get("fromId") == rel["fromId"]
+                    and p.get("toId") == rel["toId"]
+                    for p in pending
+                ):
+                    pending.append(rel)
+                    case.candidate_snapshot = dump(snapshot)
+                    case.updated_at = now()
+            s.commit()
+        kept: list[dict[str, Any]] = []
+        dropped = 0
+        for record in records:
+            frm, to = str(record.get("fromId")), str(record.get("toId"))
+            if frm in open_cases or to in open_cases:
+                continue
+            if "reject" in (verdicts.get(frm, (None, None))[0], verdicts.get(to, (None, None))[0]):
+                dropped += 1
+                continue
+            out = dict(record)
+            for key, vid in (("fromId", frm), ("toId", to)):
+                verdict, target = verdicts.get(vid, (None, None))
+                if verdict == "merge" and target:
+                    out[key] = str(target)
+            kept.append(out)
+        return {"records": kept, "parked": len(parked_records), "dropped": dropped}
+
+    def _graph_client_for(self, snapshot: dict[str, Any]) -> Any:
+        """按快照记载的图空间建客户端（缺省走环境默认空间）并完成连接。"""
+        from infra.graph_db.client import TRSGraphClient
+        from infra.graph_db.config import TRSGraphSettings
+
+        settings = TRSGraphSettings.from_env()
+        space = snapshot.get("_graphSpace")
+        if space:
+            settings.space = space
+        client = TRSGraphClient(settings)
+        client.connect()
+        return client
+
+    def _apply_link_verdict(self, c: ReviewCase, result: dict[str, Any]) -> dict[str, Any]:
+        """T_LINK 裁决执行：merge→扣留记录并入所选候选；create→按预留 vid 新建。
+
+        写前扣留 case（快照含 ``_incoming``）：INSERT VERTEX 幂等 upsert，merge 与
+        create 是同一条语句、仅 vid 不同；空值列不写＝不覆盖目标已有值；``_pendingRelations``
+        里的待定边在实体落图后按改写端点补写。图写失败异常上抛 → 事务回滚 → 审核
+        员重新提交即重试（幂等安全）。存量写后 case（无 ``_incoming``）只记录决议。
+        """
+        snapshot = load(c.candidate_snapshot) or {}
+        incoming = snapshot.get("_incoming")
+        if not incoming:
+            return {"applied": False, "note": "存量写后 case：实体已在图，仅记录决议"}
+        verdict = result.get("entityVerdict")
+        if verdict == "merge":
+            target = str(result.get("targetEntityId") or "")
+            allowed = {
+                str(x.get("vid")) for x in snapshot.get("existingCandidates") or [] if x.get("vid")
+            }
+            if target not in allowed:
+                raise ReviewValidationError("目标实体不在候选集内")
+            vid = target
+        elif verdict == "create":
+            vid = str(incoming.get("vid") or c.object_id)
+        else:
+            raise ReviewValidationError("retype 暂不支持：请驳回后修正脚本重跑")
+        client = self._graph_client_for(snapshot)
+        try:
+            self._insert_withheld_vertex(client, c, snapshot, incoming, vid)
+            old_vid = str(incoming.get("vid") or c.object_id)
+            written_edges = 0
+            for rel in snapshot.get("_pendingRelations") or []:
+                edge_type = rel.get("edgeType")
+                frm, to = str(rel.get("fromId")), str(rel.get("toId"))
+                if not edge_type:
+                    continue
+                if frm == old_vid:
+                    frm = vid
+                if to == old_vid:
+                    to = vid
+                props = self._coerce_to_schema(
+                    client, edge_type, rel.get("props") or {}, is_edge=True
+                )
+                client.create_edge(frm, to, edge_type, props)
+                written_edges += 1
+        finally:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                logger.exception("关闭图客户端失败")
+        return {
+            "applied": True,
+            "verdict": verdict,
+            "vid": vid,
+            "pendingRelationsWritten": written_edges,
+        }
+
+    @staticmethod
+    def _tag_fields(client: Any, label: str) -> set[str] | None:
+        """DESCRIBE TAG 取列集合；失败返回 None（调用方走兜底）。"""
+        try:
+            desc = client.execute_query(f"DESCRIBE TAG `{label}`")
+            return {f for f in (r.get("Field") for r in desc.records or []) if isinstance(f, str)}
+        except Exception:  # noqa: BLE001
+            logger.warning("DESCRIBE TAG %s 失败，写图按旧兜底补审计列", label)
+            return None
+
+    def _insert_withheld_vertex(
+        self,
+        client: Any,
+        c: ReviewCase,
+        snapshot: dict[str, Any],
+        incoming: dict[str, Any],
+        vid: str,
+    ) -> None:
+        """扣留实体写入指定 vid（幂等 upsert；空值列不写＝不覆盖目标已有值）。"""
+        import json as _json
+        from datetime import datetime as _dt
+
+        node_label = snapshot.get("_nodeLabel")
+        if not node_label:
+            raise ReviewValidationError("实体候选缺 nodeLabel")
+        props = {
+            key: value
+            for key, value in (incoming.get("props") or {}).items()
+            if value not in (None, "")
+        }
+        props = self._coerce_to_schema(client, node_label, props)
+        # 审计/身份列按 tag 实际 schema 补（vendor ETL 的 Organization 没有
+        # id/create_time 等列，强塞会 Unknown column 400）；schema 查不出来时
+        # 维持旧兜底让 trs-graph 报错暴露问题
+        fields = self._tag_fields(client, node_label)
+        now_str = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+        audit = {
+            "id": vid,
+            "create_time": now_str,
+            "update_time": now_str,
+            "source_table": incoming.get("sourceTable") or "schema_extract",
+        }
+        for key, value in audit.items():
+            if fields is None or key in fields:
+                props.setdefault(key, value)
+
+        def _ngql_value(value: Any) -> str:
+            if isinstance(value, bool):
+                return "true" if value else "false"
+            if isinstance(value, (int, float)):
+                return str(value)
+            return _json.dumps(str(value), ensure_ascii=False)
+
+        cols = ", ".join(f"`{key}`" for key in props)
+        values = ", ".join(_ngql_value(props[key]) for key in props)
+        client.execute_write(f'INSERT VERTEX `{node_label}`({cols}) VALUES "{vid}":({values})')
+
     def direct_decide(
         self,
         case_id: str,
@@ -912,6 +1110,25 @@ class ManualReviewService:
             i, v, a, {"status": "CANCELLED", "completed_at": now()}, "CASE_CANCELLED", True
         )
 
+    def delete_case(self, i, a):
+        """物理删除未处理 case（连同草稿/决议/附件/审计一并删除，不可恢复）。
+
+        仅非终态（OPEN/RERUN_FAILED 等未处理）可删——与可重跑同门控；
+        已处理的记录保留作历史，不给删。review_admin 专用。
+        """
+        require_role(a, "review_admin")
+        with self.sf() as s:
+            c = self.need(s, i)
+            if c.status in TERMINAL_STATUSES:
+                raise ReviewConflictError("已处理的记录不可删除")
+            s.execute(delete(ReviewDraft).where(ReviewDraft.case_id == i))
+            s.execute(delete(ReviewDecision).where(ReviewDecision.case_id == i))
+            s.execute(delete(ReviewEvidence).where(ReviewEvidence.case_id == i))
+            s.execute(delete(ReviewAuditLog).where(ReviewAuditLog.case_id == i))
+            s.delete(c)
+            s.commit()
+        return {"id": i, "deleted": True}
+
     def logs(self, i, a):
         with self.sf() as s:
             c = self.need(s, i)
@@ -1069,6 +1286,9 @@ class ManualReviewService:
             "id": c.id,
             "sourceTaskId": c.source_task_id,
             "batchId": c.batch_id,
+            # 图谱构建ID：产生该 case 的抽取执行（EXEC-xxx，前端跳 /processing-instance）
+            "executionId": (load(c.input_snapshot) or {}).get("executionId"),
+            "workflowId": c.workflow_id,
             "nodeId": c.pipeline_step_id,
             "pipelineStepId": c.pipeline_step_id,
             # kg.custom.steps 流水线的 step id 是 manifest 自定义的（如 seed），

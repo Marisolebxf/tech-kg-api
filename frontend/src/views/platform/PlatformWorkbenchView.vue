@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   computed,
+  nextTick,
   onUnmounted,
   ref,
   watch,
@@ -452,7 +453,7 @@ async function resolveRankNodes(vids: string[]): Promise<void> {
         const node: GraphNode = result.value
         rankNodeInfoCache.set(vid, {
           name: String(node.properties?.name ?? ''),
-          type: node.labels?.[0] ?? '',
+          type: specificNodeLabel(node.labels ?? []),
         })
       } else {
         rankNodeInfoCache.set(vid, null)
@@ -471,6 +472,10 @@ const highlightVid = ref('')
 const highlightLoading = ref(false)
 const highlightNodes = ref<GraphNodeData[]>([])
 const highlightEdges = ref<GraphEdgeData[]>([])
+/** 邻域子图加载失败的错误信息；非空时面板展示失败态 + 重试按钮。 */
+const highlightError = ref('')
+/** 面板根节点引用：窄屏堆叠布局下点击排名行后滚动定位用。 */
+const highlightAsideRef = ref<HTMLElement | null>(null)
 
 /** 图库 tag → 画布 nodeType（决定配色）；未命中回退 source。 */
 const RANK_NODE_TYPE_RULES: Array<[RegExp, GraphNodeType]> = [
@@ -490,6 +495,16 @@ function rankNodeType(tags: string[]): GraphNodeType {
   return 'source'
 }
 
+/** 泛化底座标签（挂在所有节点上、非业务类型）；过滤口径与
+ *  business-service/indirect-relation-view.ts 保持一致。 */
+const GENERIC_NODE_LABELS = new Set(['organization_base', 'Entity', 'Base'])
+
+/** 取展示用节点类型：跳过泛化底座标签取第一个业务 tag；只有底座标签时原样返回。 */
+function specificNodeLabel(tags: string[]): string {
+  const specific = tags.filter((tag) => !GENERIC_NODE_LABELS.has(tag))
+  return specific[0] ?? tags[0] ?? ''
+}
+
 /** 分值 → 节点半径：结果集内节点 12~24 线性缩放，中心节点 26；不在结果集内的返回 undefined 走默认。 */
 function highlightRadius(vid: string): number | undefined {
   if (vid === highlightVid.value) return 26
@@ -502,10 +517,11 @@ function highlightRadius(vid: string): number | undefined {
   return Math.round(12 + ratio * 12)
 }
 
-async function loadHighlight(vid: string): Promise<void> {
+async function loadHighlight(vid: string, options?: { scrollIntoView?: boolean }): Promise<void> {
   if (!algoSpace.value) return
   highlightVid.value = vid
   highlightLoading.value = true
+  highlightError.value = ''
   highlightNodes.value = []
   highlightEdges.value = []
   try {
@@ -526,7 +542,7 @@ async function loadHighlight(vid: string): Promise<void> {
         y: node.id === vid ? 270 : 270 + (Math.random() - 0.5) * 220,
         radius: highlightRadius(node.id),
         level: node.id === vid ? 0 : 1,
-        entityType: tags[0] ?? '未知类型',
+        entityType: specificNodeLabel(tags) || '未知类型',
         relations: '',
         evidence: [],
       }
@@ -540,8 +556,15 @@ async function loadHighlight(vid: string): Promise<void> {
       label: edge.type,
       category: edge.type,
     }))
+    // 窄屏（≤1080px）下面板堆叠在排名表之后、常落在视口外；
+    // 用户主动切换中心时滚动到面板，避免「点了排名行右边没图」
+    if (options?.scrollIntoView && window.matchMedia('(max-width: 1080px)').matches) {
+      await nextTick()
+      highlightAsideRef.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
   } catch (error) {
-    showToast(getErrorMessage(error, '图谱高亮加载失败'), 'warning')
+    highlightError.value = getErrorMessage(error, '图谱高亮加载失败')
+    showToast(highlightError.value, 'warning')
   } finally {
     highlightLoading.value = false
   }
@@ -551,7 +574,13 @@ async function loadHighlight(vid: string): Promise<void> {
 function selectHighlight(vid: string): void {
   if (vid === highlightVid.value && highlightNodes.value.length) return
   if (!pagerankRows.value?.some((row) => row.vid === vid)) return
-  void loadHighlight(vid)
+  void loadHighlight(vid, { scrollIntoView: true })
+}
+
+/** 图谱高亮加载失败后的重试：仍以当前中心重新拉邻域。 */
+function retryHighlight(): void {
+  if (!highlightVid.value) return
+  void loadHighlight(highlightVid.value, { scrollIntoView: true })
 }
 
 // 新结果到达：重置排名视图并自动高亮第一名；结果清空/换算法时同步清空高亮
@@ -2019,7 +2048,7 @@ const pageMeta = computed(() => {
               @change-size="changePagerankPageSize"
             />
           </div>
-          <aside class="platform-query-algo__highlight" aria-label="图谱高亮">
+          <aside ref="highlightAsideRef" class="platform-query-algo__highlight" aria-label="图谱高亮">
             <div class="platform-query-algo__highlight-head">
               <h3>图谱高亮</h3>
               <p>选中节点的 1 跳邻域，节点大小按 PageRank 分值映射；点击排名行切换中心</p>
@@ -2033,6 +2062,10 @@ const pageMeta = computed(() => {
               aria-label="PageRank 图谱高亮"
               @select-node="(node) => selectHighlight(node.id)"
             />
+            <div v-else-if="highlightError" class="platform-query-result__empty platform-query-algo__highlight-error">
+              <span>图谱高亮加载失败：{{ highlightError }}</span>
+              <button class="kg-button kg-button--text" type="button" @click="retryHighlight">重试</button>
+            </div>
             <div v-else class="platform-query-result__empty">点击排名行查看图谱高亮</div>
           </aside>
         </div>
@@ -5136,6 +5169,7 @@ print(response.json())</pre>
 .platform-query-algo__score i{display:block;height:6px;min-width:2px;border-radius:3px;background:linear-gradient(90deg,#165dff,#4080ff)}
 /* 图谱高亮面板 */
 .platform-query-algo__highlight{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:#fff}
+.platform-query-algo__highlight-error{display:flex;flex-direction:column;align-items:center;gap:8px;justify-content:center;color:#b42318}
 .platform-query-algo__highlight-head{display:grid;padding:10px 12px 6px;gap:2px;border-bottom:1px solid #f0f2f5}
 .platform-query-algo__highlight-head h3{margin:0;color:#1d2129;font-size:14px;line-height:22px;font-weight:500}
 .platform-query-algo__highlight-head p{margin:0;color:#86909c;font-size:12px;line-height:18px}

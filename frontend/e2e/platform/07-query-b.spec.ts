@@ -88,8 +88,14 @@ test.describe('B. 图谱查询', () => {
         }),
       })
     })
-    // 图谱高亮：中心节点 1 跳邻域（p2 为分值第一名，自动高亮）
+    // 图谱高亮：中心节点 1 跳邻域（p2 为分值第一名，自动高亮）。
+    // subgraphFail 置真时返回 500，用于失败态 + 重试链路。
+    let subgraphFail = false
     await page.route(/\/api\/v1\/graph-search\/subgraph\/[^/]+(?:\?.*)?$/, async (route) => {
+      if (subgraphFail) {
+        await route.fulfill({ status: 500, json: { detail: '邻域服务暂不可用' } })
+        return
+      }
       await route.fulfill({
         json: ok({
           nodes: [
@@ -164,9 +170,15 @@ test.describe('B. 图谱查询', () => {
     await expect(highlight.getByRole('img', { name: 'PageRank 图谱高亮' })).toBeVisible()
     await expect(page.getByText('作业 job-e2e-1')).toBeVisible()
 
-    // 点击第 2 名（p1）行：图谱高亮中心切换
+    // 点击第 2 名（p1）行：图谱高亮中心切换；先制造邻域接口失败，验证失败态 + 重试恢复
+    subgraphFail = true
     await rankTable.getByText('普通论文').click()
     await expect(rankTable.locator('tr.is-selected')).toContainText('普通论文')
+    await expect(page.getByText('图谱高亮加载失败', { exact: false })).toBeVisible()
+    await expect(page.getByRole('button', { name: '重试' })).toBeVisible()
+    subgraphFail = false
+    await page.getByRole('button', { name: '重试' }).click()
+    await expect(highlight.getByRole('img', { name: 'PageRank 图谱高亮' })).toBeVisible()
 
     // 切回 nGQL 模式恢复输入面板
     await page.getByRole('button', { name: 'nGQL 模式' }).click()

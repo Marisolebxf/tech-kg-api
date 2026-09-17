@@ -1,102 +1,10 @@
 import { expect, test } from '@playwright/test'
-import { apiMust, graphWrite, waitFor } from './helpers'
+import { waitFor } from './helpers'
 
 // B. 图谱查询（/graph-query，PlatformWorkbenchView 的 query Tab）
-// 环境说明：dev2 已为各 TAG 的搜索字段建属性索引（e2e_idx_*，见测试报告）；
-// 科研成果域实体（Paper/Journal/Report/Project/Patent）现网均无名称数据，
-// 「科研成果图谱」按名查中心实体会走「未查询到实体」分支——作为校验分支覆盖。
+// 参数模式已移除：查询页签收敛为「nGQL 模式 | 图算法」。
 test.describe('B. 图谱查询', () => {
-  const PERSON_NAME = '吴边'
-  const ORG_NAME = '平安银行股份有限公司'
-
-  test.beforeAll(async () => {
-    // B1 机构查询素材：原种子机构已随 dev2 数据演进消失（现仅剩 ETL 测试残留的
-    // name_cn 外文机构），幂等补一个机构点保证断言数据无关（搜索字段 name_cn，
-    // 索引 e2e_idx_org_name_cn；Organization 全列可空）
-    await graphWrite(
-      'INSERT VERTEX Organization (name_cn, name_en, source_system) VALUES "e2e_org_pingan":("平安银行股份有限公司", "Ping An Bank Co., Ltd. (e2e)", "e2e-b1")',
-      'dev2',
-    )
-  })
-
-  test('B1 参数模式查询：画布 + 统计 + 详情四 Tab + 动态图例', async ({ page }) => {
-    await page.goto('/graph-query')
-    await page.waitForLoadState('networkidle')
-
-    // 关键词为空时「查询图谱」不可用（校验分支）
-    const queryBtn = page.getByRole('button', { name: '查询图谱', exact: true })
-    await expect(queryBtn).toBeDisabled()
-
-    await page.locator('input[placeholder="请输入实体名称或节点ID"]').fill(PERSON_NAME)
-    await expect(queryBtn).toBeEnabled()
-    await queryBtn.click()
-
-    // 综合图谱展示：「N 个节点 / M 条关系」统计（N≥1，设计规范改版后统计在详情面板「图谱规模」）
-    await waitFor(
-      async () => {
-        const text = await page.getByText(/\d+ 个节点 \/ \d+ 条关系/).first().innerText()
-        const m = text.match(/(\d+) 个节点 \/ (\d+) 条关系/)
-        return m && Number(m[1]) >= 1 ? text : null
-      },
-      { label: '图谱统计' },
-    )
-    await expect(page.locator('[aria-label="图谱查询结果"] .platform-node').first()).toBeVisible()
-
-    // 实体类型图例跟随本次结果动态渲染
-    const legend = page.locator('[aria-label="实体类型图例"]')
-    await expect(legend).toBeVisible()
-    const legendBefore = await legend.innerText()
-
-    // 详情面板四个 Tab 均可切换
-    const tabs = page.locator('[aria-label="图谱详情类型"] button')
-    for (const name of ['摘要', '实体', '关系', '溯源']) {
-      await tabs.filter({ hasText: name }).click()
-      await expect(tabs.filter({ hasText: name })).toHaveClass(/is-active/)
-    }
-
-    // 换一个机构实体重查（结果更收敛），图例随之变化
-    await page.locator('input[placeholder="请输入实体名称或节点ID"]').fill(ORG_NAME)
-    await queryBtn.click()
-    await waitFor(
-      async () => {
-        // 设计规范改版后统计移入详情面板「图谱规模」，面板头不再有统计 span
-        const text = await page.getByText(/\d+ 个节点 \/ \d+ 条关系/).first().innerText()
-        const m = text.match(/(\d+) 个节点 \/ (\d+) 条关系/)
-        return m && Number(m[1]) >= 1 ? text : null
-      },
-      { label: '机构查询统计' },
-    )
-    await waitFor(
-      async () => {
-        const now = await legend.innerText()
-        return now && now !== legendBefore ? now : null
-      },
-      { label: '图例随结果收敛变化' },
-    )
-
-    // 科研成果图谱 + 人名 → 「未查询到实体」校验分支（域内实体无名称数据）
-    await page.locator('input[placeholder="请输入实体名称或节点ID"]').fill(PERSON_NAME)
-    await page
-      .locator('.platform-form-field', { hasText: '图谱范围' })
-      .locator('.arco-select-view-single')
-      .first()
-      .click()
-    await page.locator('li.arco-select-option:visible', { hasText: '科研成果图谱' }).click()
-    await queryBtn.click()
-    await waitFor(
-      async () =>
-        (await page
-          .getByText(/未查询到实体/, { exact: false })
-          .first()
-          .isVisible()
-          .catch(() => false)),
-      { label: '科研成果图谱未查询到提示', timeout: 15_000 },
-    ).catch(() => {
-      /* 条件分支：域内出现可命中实体时画布出结果，同样合法 */
-    })
-  })
-
-  test('B2 nGQL 模式执行（Ctrl+Enter + 按钮，两种结果态）', async ({ page }) => {
+  test('B1 nGQL 模式执行（Ctrl+Enter + 按钮，两种结果态）', async ({ page }) => {
     await page.goto('/graph-query')
     await page.waitForLoadState('networkidle')
     await page.getByRole('button', { name: 'nGQL 模式' }).click()
@@ -124,63 +32,92 @@ test.describe('B. 图谱查询', () => {
     )
   })
 
-  test('B3 溯源三要素（实体/关系）+ 构建详情跳转（条件分支）', async ({ page, request }) => {
-    // 专利「一种改性y型分子筛及其制备方法」有 HAS_KEYWORD 边（关系溯源素材），
-    // 且属于科研成果域（顺带覆盖范围过滤命中路径）
-    const PATENT_TITLE = '一种改性y型分子筛及其制备方法'
-    const search = await apiMust<any>(
-      request,
-      'POST',
-      '/graph-search/nodes/search?label=Patent&limit=5&space=dev2',
-      { title_zh: PATENT_TITLE },
-      '按名搜 Patent',
-    )
-    test.skip(!search?.items?.length, 'dev2 无该专利数据')
-    const vid = String(search.items[0].id)
-    const sourceTable = String(search.items[0].properties?.source_table ?? '')
+  test('B2 图算法 tab（mock 提交→轮询→结果全链路）', async ({ page }) => {
+    // 作业三接口用 route mock（Spark 运行器未就绪，真实提交必然失败）：
+    // 提交回 running，轮询第一轮 running、之后 succeeded，结果 2 行 csv。
+    // metadata / engine 不 mock，走真实 dev2 接口（引擎徽标对 正常/不可用 均兼容）。
+    const ok = (data: unknown) => ({ code: 200, success: true, data, msg: 'success' })
+    let pollCount = 0
+
+    await page.route('**/api/v1/graph-algorithms/jobs', async (route) => {
+      const request = route.request()
+      if (request.method() !== 'POST') {
+        await route.continue()
+        return
+      }
+      const body = request.postDataJSON() as { algorithm: string; labels: string[] }
+      expect(body.algorithm).toBe('pagerank')
+      expect(body.labels).toContain('HAS_KEYWORD')
+      await route.fulfill({ json: ok({ jobId: 'job-e2e-1', status: 'running' }) })
+    })
+    // 注意：GET 带查询串（?space=…），glob 按「含查询串的完整 URL」匹配会漏，
+    // 必须用正则并显式兼容尾部查询串。
+    await page.route(/\/api\/v1\/graph-algorithms\/jobs\/job-e2e-1\/result(?:\?.*)?$/, async (route) => {
+      await route.fulfill({
+        json: ok({
+          jobId: 'job-e2e-1',
+          sink: 'csv',
+          rows: [
+            { vid: 'p1', pagerank: '0.15' },
+            { vid: 'p2', pagerank: '0.20' },
+          ],
+          count: 2,
+          truncated: false,
+        }),
+      })
+    })
+    await page.route(/\/api\/v1\/graph-algorithms\/jobs\/job-e2e-1(?:\?.*)?$/, async (route) => {
+      pollCount += 1
+      await route.fulfill({
+        json: ok(
+          pollCount === 1
+            ? { jobId: 'job-e2e-1', status: 'running' }
+            : { jobId: 'job-e2e-1', status: 'succeeded', finishedAt: '2026-09-17T08:00:10Z' },
+        ),
+      })
+    })
 
     await page.goto('/graph-query')
     await page.waitForLoadState('networkidle')
-    await page.locator('input[placeholder="请输入实体名称或节点ID"]').fill(PATENT_TITLE)
-    await page.getByRole('button', { name: '查询图谱', exact: true }).click()
-    // 设计规范改版：查询画布 uniform-node-size，中心节点不再渲染 --center 加粗类，
-    // 按标题定位中心实体节点（子图首个节点即查询命中的中心实体）
-    const centerNode = page
-      .locator('[aria-label="图谱查询结果"] .platform-node', { hasText: PATENT_TITLE })
-      .first()
+
+    // 默认落在 nGQL 模式：结果区常驻（未执行时空数据占位）；切到图算法 tab 出面板
+    await expect(page.getByRole('heading', { name: 'nGQL 执行结果' })).toBeVisible()
+    await expect(page.getByText('暂无数据，执行 nGQL 语句后在此查看结果')).toBeVisible()
+    await page.getByRole('button', { name: '图算法' }).click()
+    await expect(page.getByRole('heading', { name: '图算法' })).toBeVisible()
+
+    // 引擎徽标必渲染（Spark 未就绪时为「不可用」，就绪后为「正常」，均为通过态）
     await waitFor(
-      async () => (await centerNode.isVisible().catch(() => false)),
-      { label: '中心节点渲染' },
+      async () => (await page.getByText(/^算法引擎(正常|不可用)$/).isVisible().catch(() => false)),
+      { label: '算法引擎状态徽标' },
     )
 
-    // 选中心实体节点 → 溯源 Tab → 三要素齐全且与图库一致
-    await centerNode.click()
-    await page.locator('[aria-label="图谱详情类型"] button', { hasText: '溯源' }).click()
-    const detail = page.locator('.platform-detail')
-    await expect(detail.getByText('实体溯源')).toBeVisible({ timeout: 10_000 })
-    const traceText = await detail.innerText()
-    expect(traceText).toContain('源数据表')
-    expect(traceText).toContain('英文字段名')
-    expect(traceText).toContain('图空间 VID')
-    // 经平台抽取入库的实体必有三点（源表、vid 与图库一致）
-    if (sourceTable) expect(traceText).toContain(sourceTable)
-    expect(traceText).toContain(vid)
+    // 三个算法页签（对齐人工审核「抽取失败重跑」二级子页签样式）：默认 PageRank，切换后描述联动
+    await expect(page.getByRole('button', { name: 'PageRank算法' })).toBeVisible()
+    await expect(page.getByText('PageRank算法：', { exact: false })).toBeVisible()
+    await page.getByRole('button', { name: 'Louvain算法' }).click()
+    await expect(page.getByText('Louvain算法：', { exact: false })).toBeVisible()
+    await page.getByRole('button', { name: 'Degree算法' }).click()
+    await expect(page.getByText('Degree算法：', { exact: false })).toBeVisible()
+    await page.getByRole('button', { name: 'PageRank算法' }).click()
 
-    // 选一条关系（视觉层与命中层重叠，需 force 点击命中层；点完重进溯源 Tab 确保渲染）
-    await page.locator('[aria-label="图谱查询结果"] .platform-network-hit-area').first().click({ force: true })
-    await page.locator('[aria-label="图谱详情类型"] button', { hasText: '溯源' }).click()
-    await expect(detail.getByText('关系溯源')).toBeVisible({ timeout: 10_000 })
-    const relText = await detail.innerText()
-    expect(relText).toContain('两端实体来源')
-    expect(relText).toContain('源数据表')
-    expect(relText).toContain('图空间 VID')
+    // 边类型多选（真实 metadata）：选 HAS_KEYWORD
+    await page.locator('.platform-query-algo__labels .arco-select-view').click()
+    await page.locator('li.arco-select-option:visible', { hasText: 'HAS_KEYWORD' }).first().click()
+    await page.keyboard.press('Escape')
 
-    // 构建详情跳转（条件分支：无构建来源数据时按钮不出现）
-    const buildLink = page.getByRole('button', { name: '查看构建详情 →' })
-    if (await buildLink.isVisible().catch(() => false)) {
-      await buildLink.first().click()
-      await page.waitForURL(/processing-instance|task-detail|graph-build\/jobs/, { timeout: 15_000 })
-      await expect(page.locator('body')).not.toContainText('页面启动异常')
-    }
+    // 提交 → 轮询（3s 间隔，两轮内到 succeeded）→ 结果表
+    await page.getByRole('button', { name: '提交算法作业' }).click()
+    await waitFor(
+      async () => (await page.getByRole('heading', { name: '算法执行结果' }).isVisible().catch(() => false)),
+      { label: '算法执行结果面板' },
+    )
+    await expect(page.getByText('2 行记录')).toBeVisible()
+    await expect(page.locator('table[aria-label="图算法执行结果"]')).toContainText('0.15')
+    await expect(page.getByText('作业 job-e2e-1')).toBeVisible()
+
+    // 切回 nGQL 模式恢复输入面板
+    await page.getByRole('button', { name: 'nGQL 模式' }).click()
+    await expect(page.locator('textarea[placeholder*="MATCH (v:专家)"]')).toBeVisible()
   })
 })

@@ -15,6 +15,7 @@ from biz.router.register import register_routers
 from biz.schemas.common import ApiResponse
 from infra.graph_db import (
     close_algorithm_client,
+    close_space_algorithm_clients,
     close_space_clients,
     close_trs_graph_client,
 )
@@ -111,6 +112,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         close_trs_graph_client()
         close_algorithm_client()
         close_space_clients()
+        close_space_algorithm_clients()
         close_workflow_engine()
 
 

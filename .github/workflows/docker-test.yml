@@ -1,10 +1,16 @@
 name: Container Deployment and Integration Tests
 
+# CICD 测试分支：验证通过后把 test/cicd 换成 kgetl（保留 main）
 on:
   push:
-    branches: ["main"]
+    branches: ["test/cicd"]
   pull_request:
-    branches: ["main"]
+    branches: ["test/cicd"]
+  workflow_dispatch:
+
+concurrency:
+  group: docker-test-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   deploy:

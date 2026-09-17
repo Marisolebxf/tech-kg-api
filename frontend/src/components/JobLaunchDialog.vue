@@ -65,9 +65,12 @@ async function loadExtractSchemas(force = false) {
   if (!force && extractSchemas.value.length) return
   schemasLoading.value = true
   try {
-    // M4 图空间联动：下拉只列所选空间绑定的可抽取 schema，随空间切换重查
+    // M4 图空间联动：下拉只列所选空间绑定的可抽取 schema，随空间切换重查；
+    // script.available=false 是目录占位（如系统 Schema 种子，S3 无脚本本体）——选了必失败，直接排除
     const all = await listAllSchemas(getCurrentUserId(), graphSpace.value || undefined)
-    extractSchemas.value = all.filter((s) => s.script && (s.sources?.length ?? 0) > 0)
+    extractSchemas.value = all.filter(
+      (s) => s.script && (s.sources?.length ?? 0) > 0 && s.script.available !== false,
+    )
   } catch {
     extractSchemas.value = []
   } finally {

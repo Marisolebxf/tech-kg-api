@@ -114,22 +114,35 @@ async function loadData(silent = false) {
   }
 }
 
-// 有「运行中」任务时轮询列表（后端 list 会惰性复核 RUNNING 执行并翻新状态），
-// 全部到达终态后停止；页面切到后台时跳过本轮
+// 状态轮询：有「运行中」任务时 5s 高频，否则 30s 低频兜底不停摆——周期任务
+// 到点被 Schedule 触发翻「执行中」同样依赖轮询发现（后端 list 会惰性复核
+// RUNNING 执行并翻新状态）。页面隐藏时跳过本轮；运行中任务到达终态时弹
+// toast 告知结果（与报错同款提示形式）
 const hasRunningJob = computed(() => jobs.value.some((job) => deriveJobUnifiedStatus(job) === '运行中'))
-let pollTimer: ReturnType<typeof setInterval> | null = null
-watch(hasRunningJob, (running) => {
-  if (running && pollTimer === null) {
-    pollTimer = setInterval(() => {
-      if (!document.hidden) void loadData(true)
-    }, 5000)
-  } else if (!running && pollTimer !== null) {
-    clearInterval(pollTimer)
-    pollTimer = null
+let pollTimer: ReturnType<typeof setTimeout> | null = null
+
+function announceFinished(prevJobs: WorkflowJob[]) {
+  const prev = new Map(prevJobs.map((job) => [job.id, deriveJobUnifiedStatus(job)]))
+  for (const job of jobs.value) {
+    const now = deriveJobUnifiedStatus(job)
+    if (prev.get(job.id) !== '运行中') continue // 只报「运行中→终态」的翻转，历史终态不弹
+    if (now === '已完成') showToast(`任务「${job.name}」执行完成`, 'success')
+    else if (now === '运行失败') showToast(`任务「${job.name}」执行失败，点任务名查看原因`, 'warning')
   }
-}, { immediate: true })
+}
+
+function schedulePoll() {
+  pollTimer = setTimeout(async () => {
+    const prevJobs = [...jobs.value]
+    if (!document.hidden) {
+      await loadData(true)
+      announceFinished(prevJobs)
+    }
+    schedulePoll()
+  }, hasRunningJob.value ? 5000 : 30000)
+}
 onUnmounted(() => {
-  if (pollTimer !== null) clearInterval(pollTimer)
+  if (pollTimer !== null) clearTimeout(pollTimer)
 })
 
 function openCreate() {
@@ -195,7 +208,10 @@ function executionStatusClass(status: string): string {
   return 'run'
 }
 
-onMounted(loadData)
+onMounted(() => {
+  void loadData()
+  schedulePoll()
+})
 </script>
 
 <template>

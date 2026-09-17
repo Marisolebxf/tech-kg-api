@@ -51,6 +51,8 @@ export interface SchemaScript {
   lastRunError: string | null
   stale: boolean
   staleBehind: number
+  /** 脚本对象在对象存储真实存在（系统 Schema 种子行只是目录占位，available=false） */
+  available?: boolean
   downloadUrl: string
 }
 

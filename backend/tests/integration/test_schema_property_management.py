@@ -31,6 +31,9 @@ class FakeS3Storage:
     def delete_object(self, bucket: str, object_key: str) -> None:
         self.objects.pop((bucket, object_key), None)
 
+    def object_exists(self, bucket: str, object_key: str) -> bool:
+        return (bucket, object_key) in self.objects
+
 
 def _actor(user_id: str, is_admin: bool) -> PlatformActor:
     return PlatformActor(
@@ -491,3 +494,56 @@ async def test_stats_after_hard_delete(property_api, monkeypatch: pytest.MonkeyP
         overview_after = await client.get("/api/v1/schema-management/overview")
         after = overview_after.json()["data"]["propertyFields"]
         assert after == before - 1
+
+
+@pytest.mark.asyncio
+async def test_list_script_available_flag(property_api) -> None:
+    """script.available 标记脚本对象在存储中是否真实存在。
+
+    目录里的 script 行可能只是占位（如系统 Schema 种子行，object_key 指向
+    不存在的对象，触发抽取必失败）——新建任务下拉按 available!==false 过滤。
+    """
+    from uuid import uuid4
+
+    from db_model.schema_management import GraphSchemaScript
+    from service.schema_management import get_schema_s3_storage
+
+    engine, _set_actor = property_api
+    storage = get_schema_s3_storage()  # fixture patch 后即 FakeS3Storage 实例
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        entity = await _create_entity(client)
+
+    # 直接落一条目录 script 行、S3 无本体：模拟系统 Schema 种子占位
+    script = GraphSchemaScript(
+        id=uuid4().hex,
+        schema_id=entity["id"],
+        bucket=storage.bucket,
+        object_key="paper/transform_papers.py",
+        original_filename="transform_papers.py",
+        sha256="0" * 64,
+        size_bytes=0,
+        uploaded_by="seed",
+        captured_revision=1,
+    )
+    with Session(engine) as session:
+        session.add(script)
+        session.commit()
+        script_bucket, script_key = script.bucket, script.object_key
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        listing = await client.get(
+            "/api/v1/schema-management/schemas",
+            params={"kind": "entity", "pageSize": 100, "includeDetails": True},
+        )
+        item = next(i for i in listing.json()["data"]["items"] if i["id"] == entity["id"])
+        assert item["script"]["available"] is False
+
+        # 补上对象本体后翻 True
+        storage.objects[(script_bucket, script_key)] = b"def transform(payload):\n    return {}\n"
+        listing = await client.get(
+            "/api/v1/schema-management/schemas",
+            params={"kind": "entity", "pageSize": 100, "includeDetails": True},
+        )
+        item = next(i for i in listing.json()["data"]["items"] if i["id"] == entity["id"])
+        assert item["script"]["available"] is True

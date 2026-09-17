@@ -1152,13 +1152,24 @@ class SchemaManagementService:
             "position": item.position,
         }
 
-    @staticmethod
+    def _script_object_available(self, script: GraphSchemaScript) -> bool:
+        """脚本对象是否真实存在于对象存储——目录里的 script 行可能只是
+        系统 Schema 的种子占位（object_key 指向不存在的 key，触发会在
+        worker 下载处失败）。探测异常按 True 处理：S3 抖动不应把可选
+        Schema 清空，触发时 ensure_extract_script_ready 还有兜底拦截。
+        """
+        try:
+            return self._storage.object_exists(script.bucket, script.object_key)
+        except Exception:  # noqa: BLE001
+            return True
+
     def _serialize_script(
-        script: GraphSchemaScript | None, definition: GraphSchemaDefinition
+        self, script: GraphSchemaScript | None, definition: GraphSchemaDefinition
     ) -> dict[str, Any] | None:
         if script is None:
             return None
         stale_behind = _stale_behind(definition.property_revision, script.captured_revision)
+        available = self._script_object_available(script)
         return {
             "filename": script.original_filename,
             "contentType": script.content_type,
@@ -1174,6 +1185,7 @@ class SchemaManagementService:
             "lastRunError": script.last_run_error,
             "stale": stale_behind > 0,
             "staleBehind": stale_behind,
+            "available": available,
             "downloadUrl": f"/api/v1/schema-management/schemas/{definition.id}/script",
         }
 

@@ -12,6 +12,13 @@ from __future__ import annotations
 
 import threading
 
+from infra.graph_db.algorithm_client import (
+    AlgorithmJob,
+    AlgorithmJobBusyError,
+    AlgorithmJobFailedError,
+    AlgorithmJobTimeoutError,
+    TRSAlgorithmClient,
+)
 from infra.graph_db.client import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
 from infra.graph_db.exceptions import (
@@ -32,11 +39,18 @@ from infra.graph_db.models import (
 
 __all__ = [
     "TRSGraphClient",
+    "TRSAlgorithmClient",
     "TRSGraphSettings",
     "get_trs_graph_client",
     "close_trs_graph_client",
+    "get_algorithm_client",
+    "close_algorithm_client",
     "get_space_client",
     "close_space_clients",
+    "AlgorithmJob",
+    "AlgorithmJobBusyError",
+    "AlgorithmJobFailedError",
+    "AlgorithmJobTimeoutError",
     "GraphNode",
     "GraphEdge",
     "GraphPath",
@@ -82,6 +96,37 @@ def close_trs_graph_client() -> None:
 
 _space_clients: dict[str, TRSGraphClient] = {}
 _space_clients_lock = threading.Lock()
+
+
+_algo_client: TRSAlgorithmClient | None = None
+_algo_client_lock = threading.Lock()
+
+
+def get_algorithm_client() -> TRSAlgorithmClient:
+    """Return the process-wide connected TRSAlgorithmClient singleton (lazy, thread-safe).
+
+    图算法作业走独立的 Spark 计算通道（/api/v1/algorithms/**），连接参数与
+    TRSGraphClient 相同（TRS_GRAPH_* env）。仅在首次真正提交算法作业时建连。
+    """
+    global _algo_client
+    if _algo_client is not None:
+        return _algo_client
+    with _algo_client_lock:
+        if _algo_client is not None:
+            return _algo_client
+        client = TRSAlgorithmClient(TRSGraphSettings.from_env())
+        client.connect()  # may raise; only cache on success
+        _algo_client = client
+    return _algo_client
+
+
+def close_algorithm_client() -> None:
+    """关闭并释放图算法客户端单例（应用停机时调用）。"""
+    global _algo_client
+    with _algo_client_lock:
+        if _algo_client is not None:
+            _algo_client.close()
+            _algo_client = None
 
 
 def get_space_client(space: str) -> TRSGraphClient:

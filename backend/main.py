@@ -13,7 +13,11 @@ from fastapi.staticfiles import StaticFiles
 from biz.auth_cookies import AuthSessionMiddleware
 from biz.router.register import register_routers
 from biz.schemas.common import ApiResponse
-from infra.graph_db import close_space_clients, close_trs_graph_client
+from infra.graph_db import (
+    close_algorithm_client,
+    close_space_clients,
+    close_trs_graph_client,
+)
 from infra.graph_db.exceptions import GraphRepoError
 from infra.mysql import session_scope
 from infra.redis import close_redis_client
@@ -105,6 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await correction_dispatcher
         await close_redis_client()
         close_trs_graph_client()
+        close_algorithm_client()
         close_space_clients()
         close_workflow_engine()
 

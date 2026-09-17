@@ -134,6 +134,39 @@ def test_create_space_creates_and_binds(session_factory) -> None:
     assert row is not None and row.status == "ready" and row.vector_database == "u1_test"
 
 
+def test_create_space_defaults_to_single_replica(session_factory, monkeypatch) -> None:
+    """交付环境 storaged 单副本：默认 replica_factor=1（3 在单主机集群报 Host not enough）。"""
+    monkeypatch.delenv("GRAPH_SPACE_REPLICA_FACTOR", raising=False)
+    client = FakeGraphClient(spaces=["dev2"])
+    service = _service(session_factory, client, FakeMilvusClient())
+    service.create_space(_actor(USER_A), "u1_replica_default")
+    stmt = next(s for s in client.statements if "CREATE SPACE" in s)
+    assert "replica_factor = 1" in stmt
+
+
+def test_create_space_replica_env_override(session_factory, monkeypatch) -> None:
+    monkeypatch.setenv("GRAPH_SPACE_REPLICA_FACTOR", "3")
+    client = FakeGraphClient(spaces=["dev2"])
+    service = _service(session_factory, client, FakeMilvusClient())
+    service.create_space(_actor(USER_A), "u1_replica_env")
+    stmt = next(s for s in client.statements if "CREATE SPACE" in s)
+    assert "replica_factor = 3" in stmt
+
+
+def test_create_space_host_not_enough_hint(session_factory, monkeypatch) -> None:
+    """副本数超过在线主机数时，报错附 GRAPH_SPACE_REPLICA_FACTOR 可操作提示。"""
+    monkeypatch.setenv("GRAPH_SPACE_REPLICA_FACTOR", "3")
+
+    class NoHostClient(FakeGraphClient):
+        def execute_write(self, query: str, params=None):  # noqa: ANN001
+            raise RuntimeError("ExecuteError: Host not enough!")
+
+    service = _service(session_factory, NoHostClient(spaces=["dev2"]), FakeMilvusClient())
+    with pytest.raises(GraphSpaceError) as exc_info:
+        service.create_space(_actor(USER_A), "u1_no_host")
+    assert "GRAPH_SPACE_REPLICA_FACTOR" in str(exc_info.value)
+
+
 def test_create_space_rejects_invalid_name(session_factory) -> None:
     service = _service(session_factory, FakeGraphClient())
     for bad in ("", "1abc", "a-b", "a b", "drop;x", "A" * 65):

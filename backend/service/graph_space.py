@@ -165,9 +165,10 @@ class GraphSpaceService:
             raise GraphSpaceError(f"图服务不可用: {exc}") from exc
         if space_name in existing:
             raise GraphSpaceError(f"图空间 {space_name} 已存在")
-        # 副本数与分区数可按集群规模配置：单存储节点集群 replica_factor=3 会
-        # "Host not enough!"（Nebula 按副本数找主机），默认 3 适配生产多节点
-        replica = int(os.getenv("GRAPH_SPACE_REPLICA_FACTOR", "3"))
+        # 副本数与分区数可按集群规模配置：副本数超过在线 storaged 主机数时 Nebula 报
+        # "Host not enough!"（按副本数找主机）。交付环境 storaged 单副本（config.py
+        # 文档同述），默认 1；多节点生产集群设 GRAPH_SPACE_REPLICA_FACTOR=3
+        replica = int(os.getenv("GRAPH_SPACE_REPLICA_FACTOR", "1"))
         partition = int(os.getenv("GRAPH_SPACE_PARTITION_NUM", "100"))
         try:
             self.client.execute_write(
@@ -175,7 +176,10 @@ class GraphSpaceService:
                 f"(vid_type = FIXED_STRING(64), partition_num = {partition}, replica_factor = {replica});"
             )
         except Exception as exc:  # noqa: BLE001
-            raise GraphSpaceError(f"创建图空间失败: {exc}") from exc
+            hint = ""
+            if "host not enough" in str(exc).lower():
+                hint = f"（副本数 {replica} 超过集群在线 storaged 主机数，可调小 GRAPH_SPACE_REPLICA_FACTOR）"
+            raise GraphSpaceError(f"创建图空间失败: {exc}{hint}") from exc
 
         if not self._wait_for_space(space_name):
             logger.warning(

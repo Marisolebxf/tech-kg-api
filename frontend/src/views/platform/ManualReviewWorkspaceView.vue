@@ -153,6 +153,8 @@ const preferredProductionAction = computed(() => {
 })
 
 const entityVerdict = ref<'merge' | 'create' | 'reject'>('merge')
+// T_DIRECT 入库决策（与 T_LINK 裁决框统一布局）：通过写图 / 驳回丢弃
+const directVerdict = ref<'accept' | 'reject'>('accept')
 
 /** T_LINK 消歧 v2：候选快照里的真实候选（existingCandidates）与待入库记录（_incoming）。 */
 const linkSnapshot = computed<Record<string, unknown> | null>(() => {
@@ -194,10 +196,12 @@ watch(
 const manualReviewFormRef = ref()
 const manualReviewFormModel = computed(() => ({
   entityVerdict: entityVerdict.value,
+  directVerdict: directVerdict.value,
   note: note.value,
 }))
 const manualReviewFormRules = {
   entityVerdict: [{ required: true, message: '请选择实体裁决结果' }],
+  directVerdict: [{ required: true, message: '请选择入库决策' }],
 }
 
 const initWorkspace = (item?: ReviewRecord) => {
@@ -283,7 +287,11 @@ const stockCard = computed(() => {
 
 const primaryActionLabel = computed(() => preferredProductionAction.value?.label || '无可用动作')
 
-const isPrimaryDisabled = computed(() => !isEditable.value || !preferredProductionAction.value)
+const isPrimaryDisabled = computed(() => {
+  // T_DIRECT 主按钮由裁决单选驱动（不依赖模板目录回传动作），可编辑即可点
+  if (templateId.value === 'T_DIRECT') return !isEditable.value
+  return !isEditable.value || !preferredProductionAction.value
+})
 
 const backPath = computed(() => (
   isHistory.value ? '/manual-review?tab=history' : `/manual-review?batch=${record.value?.batch ?? ''}`
@@ -357,6 +365,12 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
 }
 
 const runPrimary = () => {
+  // T_DIRECT：底部「确认」跟随裁决单选 —— 驳回走 reject；通过且有字段修正走 accept-fix
+  if (templateId.value === 'T_DIRECT') {
+    const actionId = directVerdict.value === 'reject' ? 'reject' : directPatchedCandidate.value ? 'accept-fix' : 'accept'
+    handleAction({ id: actionId, label: actionId === 'reject' ? '驳回·丢弃' : '通过·入库', kind: actionId === 'reject' ? 'danger' : 'primary' })
+    return
+  }
   if (preferredProductionAction.value) handleAction(preferredProductionAction.value)
 }
 </script>
@@ -371,136 +385,15 @@ const runPrimary = () => {
           <code>{{ record.id }}</code>
         </p>
       </div>
-      <div v-if="!isDirectCase" class="rw-head__badges">
+      <div class="rw-head__badges">
         <span :class="['status', `is-${record.status}`]">{{ record.status }}</span>
       </div>
     </header>
 
     <main class="rw-body">
       <a-form ref="manualReviewFormRef" :model="manualReviewFormModel" :rules="manualReviewFormRules" class="manual-review-form" layout="vertical">
-      <!-- T_DIRECT：kg.custom.steps 候选入库决策 5 段式布局 -->
-      <section v-if="templateId === 'T_DIRECT'" class="zone zone-direct">
-        <!-- ① 候选：要审核的实体/关系（最显眼，一上来就让人知道审什么） -->
-        <section class="direct-candidate">
-          <header class="direct-candidate-head">
-            <h3>① 候选</h3>
-            <button v-if="isEditable && !directEditing" type="button" class="direct-edit-toggle" @click="toggleDirectEdit">编辑字段</button>
-            <button v-else-if="directEditing && isEditable" type="button" class="direct-edit-toggle is-active" @click="toggleDirectEdit">取消编辑</button>
-          </header>
-          <header class="direct-target">
-            <span class="direct-target-tag">{{ directKind === 'relation' ? '审核关系' : '审核实体' }}</span>
-            <template v-if="directKind === 'entity'">
-              <strong class="direct-target-nodelabel">{{ labelZh(directNodeLabel) || '(未指定标签)' }}</strong>
-              <code class="direct-target-id">{{ productionCase?.objectId || '—' }}</code>
-              <em class="direct-target-name">{{ productionCase?.objectName || '' }}</em>
-            </template>
-            <template v-else-if="directKind === 'relation'">
-              <code>{{ directFromId || '—' }}</code>
-              <em class="direct-target-edge">-[{{ directEdgeType || '?' }}]-&gt;</em>
-              <code>{{ directToId || '—' }}</code>
-            </template>
-            <template v-else>
-              <em>未知候选类型 · {{ directKind || 'no kind' }}</em>
-            </template>
-          </header>
-          <table v-if="directCandidateFields.length" class="direct-fields" :class="{ 'is-editing': directEditing }">
-            <tbody>
-              <tr v-for="[key, val] in directCandidateFields" :key="String(key)" :class="{ 'is-edited': directEditing && directEdits[key] !== undefined && directEdits[key] !== directOriginalText(val) }">
-                <th>{{ key }}</th>
-                <td v-if="directEditing"><input aria-label="directEdits[key]" v-model="directEdits[key]" :placeholder="directOriginalText(val)" /></td>
-                <td v-else>{{ directOriginalText(val) }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <p v-else class="direct-empty">暂无候选字段</p>
-          <p v-if="directEditing" class="direct-edit-hint">发现 schema 映射字段不对时可在此修正；修改后用「修正后入库」提交，修改内容会记入审计日志。</p>
-        </section>
-
-        <!-- ② 为什么需要你确认：confidence 追溯 -->
-        <section class="direct-why">
-          <h3>② 为什么需要你确认</h3>
-          <p v-if="directConfidence === null">
-            系统未给出置信度，候选被隔离在写图前，等待人工决策。
-          </p>
-          <details class="direct-trace">
-            <summary>溯源信息（点击 ID 跳转任务详情）</summary>
-            <dl>
-              <div><dt>workflow</dt><dd><RouterLink :to="`/processing-instance/${productionCase?.workflowId || ''}`" class="direct-trace-link"><code>{{ productionCase?.workflowId || '—' }}</code></RouterLink></dd></div>
-              <div><dt>workflow 类型</dt><dd>{{ productionCase?.workflowType || '—' }}</dd></div>
-              <div><dt>执行 ID</dt><dd><RouterLink :to="`/processing-instance/${directExecutionId || ''}`" class="direct-trace-link"><code>{{ directExecutionId || '—' }}</code></RouterLink></dd></div>
-              <div><dt>来源任务</dt><dd><RouterLink :to="`/processing-instance/${productionCase?.sourceTaskId || ''}`" class="direct-trace-link"><code>{{ productionCase?.sourceTaskId || '—' }}</code></RouterLink></dd></div>
-              <div><dt>产生 step</dt><dd>{{ productionCase?.pipelineStepId || '—' }}</dd></div>
-            </dl>
-          </details>
-        </section>
-
-        <!-- ③ 原始记录：源表完整行（折叠） -->
-        <details class="direct-section-details">
-          <summary>
-            ③ 原始记录
-            <span v-if="directSourceTable" class="direct-section-meta">· 来源表 <code>{{ directSourceTable }}</code> / 记录 <code>{{ directSourceRecordId }}</code></span>
-            <span v-else class="direct-section-meta">· 暂无</span>
-          </summary>
-          <div class="direct-section-body">
-            <table v-if="directSourceRecordFields.length" class="direct-fields">
-              <tbody>
-                <tr v-for="[key, val] in directSourceRecordFields" :key="String(key)">
-                  <th>{{ key }}</th>
-                  <td>{{ typeof val === 'object' ? JSON.stringify(val) : String(val) }}</td>
-                </tr>
-              </tbody>
-            </table>
-            <p v-else class="direct-empty">暂无原始记录（旧 case 未存源行）</p>
-          </div>
-        </details>
-
-        <!-- ④ 抽取推理过程：LLM 输入 + 输出（折叠） -->
-        <section class="direct-extraction">
-          <h3>④ 抽取推理过程</h3>
-          <details v-if="directLlmInput" class="direct-llm-io">
-            <summary>LLM 输入（system prompt + user message）</summary>
-            <div class="direct-llm-section">
-              <h4>system prompt</h4>
-              <pre>{{ directLlmInput.system }}</pre>
-              <h4>user message</h4>
-              <pre>{{ directLlmInput.user }}</pre>
-            </div>
-          </details>
-          <details v-if="directLlmOutput" class="direct-llm-io">
-            <summary>LLM 输出（JSON）</summary>
-            <pre>{{ directLlmOutput }}</pre>
-          </details>
-          <p v-if="!directLlmInput && !directLlmOutput" class="direct-empty">暂无 LLM 记录（旧 case 未存 prompt/响应）</p>
-        </section>
-
-        <!-- ⑤ 决策：通过入库 / 驳回丢弃 -->
-        <section class="direct-decision">
-          <h3>⑤ 决策</h3>
-          <label v-if="isEditable" class="direct-note">
-            <span>备注（可选）</span>
-            <input aria-label="审核备注..." v-model="note" placeholder="审核备注..." />
-          </label>
-          <!-- 已处理（终态）按钮保留但置灰，状态文字照常展示 -->
-          <div class="direct-actions">
-            <button type="button" v-if="directEditing" class="direct-accept direct-accept-fix" :disabled="submitting || !directPatchedCandidate" @click="handleAction({ id: 'accept-fix', label: '修正后入库', kind: 'primary' })">
-              <strong>修正后入库</strong>
-              <em>{{ directPatchedCandidate ? `覆盖 ${directEditedKeys.length} 个字段并写图 · 记入审计` : '请先在①候选中修改字段' }}</em>
-            </button>
-            <button type="button" v-if="!directEditing" class="direct-accept" :disabled="submitting || !isEditable" @click="handleAction({ id: 'accept', label: '通过·入库', kind: 'primary' })">
-              <strong>通过·入库</strong>
-              <em>{{ directKind === 'relation' ? `创建${labelZh(directEdgeType) || '?'}边` : `创建${labelZh(directNodeLabel) || '?'}节点` }}</em>
-            </button>
-            <button type="button" class="direct-reject" :disabled="submitting || !isEditable" @click="handleAction({ id: 'reject', label: '驳回·丢弃', kind: 'danger' })">
-              <strong>驳回·丢弃</strong>
-              <em>候选丢弃，不写图</em>
-            </button>
-          </div>
-          <p v-if="!isEditable" class="direct-done">已决策 · 状态 {{ record.status }}</p>
-        </section>
-      </section>
-
       <!-- T_EXTRACT_FAIL：抽取失败记录重跑 -->
-      <section v-else-if="templateId === 'T_EXTRACT_FAIL'" class="zone zone-direct">
+      <section v-if="templateId === 'T_EXTRACT_FAIL'" class="zone zone-direct">
         <section class="direct-candidate">
           <header class="direct-candidate-head"><h3>失败记录</h3></header>
           <header class="direct-target">
@@ -553,18 +446,27 @@ const runPrimary = () => {
         </section>
       </section>
 
-      <!-- T_LINK -->
-      <section v-else-if="templateId === 'T_LINK'" class="zone zone-entity">
+      <!-- A 类（T_LINK / T_DIRECT）统一裁决框布局 -->
+      <section v-else-if="templateId === 'T_LINK' || templateId === 'T_DIRECT'" class="zone zone-entity">
         <p v-if="record.type === '单任务执行失败'" class="zone-banner">对齐任务超时未生成候选，请基于源记录人工裁决后重跑。</p>
 
-        <!-- 消歧 v2：快照带真实候选（existingCandidates + _incoming）时渲染候选选择 -->
-        <template v-if="linkCandidates.length">
-          <div class="link-incoming">
-            <span>待入库记录（已扣留，未写图）</span>
-            <strong>{{ record.object }}</strong>
+        <!-- 待入库记录卡（T_LINK：消歧扣留记录；T_DIRECT：低置信抽取候选） -->
+        <div class="link-incoming">
+          <span>待入库记录（已扣留，未写图）</span>
+          <strong>{{ record.object }}</strong>
+          <template v-if="templateId === 'T_LINK'">
             <p>来源：{{ linkIncoming?.sourceTable || '—' }} · 记录 <code>{{ linkIncoming?.vid || record.objectId }}</code></p>
             <p v-if="linkResolution">消歧得分 {{ linkResolution.matchScore ?? '—' }} · 候选分差 {{ linkResolution.margin ?? '—' }} · 灰区人工裁决</p>
-          </div>
+          </template>
+          <template v-else>
+            <p>来源：{{ directSourceTable || productionCase?.workflowType || '—' }} · 记录 <code>{{ directSourceRecordId || record.objectId }}</code></p>
+            <p v-if="directKind === 'relation' && directFromId">关系端点：<code>{{ directFromId }}</code> -[{{ labelZh(directEdgeType) || directEdgeType }}]-&gt; <code>{{ directToId }}</code></p>
+            <p>抽取置信度 {{ directConfidence ?? '—' }} · 低于自动入库阈值 0.85，需人工复核</p>
+          </template>
+        </div>
+
+        <!-- T_LINK：快照带真实候选（existingCandidates + _incoming）时渲染候选选择 -->
+        <template v-if="linkCandidates.length">
           <p class="link-candidates-title">选择要并入的候选（merge 时生效）：</p>
           <ul class="link-candidates">
             <li
@@ -588,6 +490,26 @@ const runPrimary = () => {
           </ul>
         </template>
 
+        <!-- T_DIRECT：待入库候选字段（可修正，确认时按修正后写图） -->
+        <div v-else-if="templateId === 'T_DIRECT'" class="direct-fields-block">
+          <header class="direct-candidate-head">
+            <p class="link-candidates-title">待入库候选字段（{{ directKind === 'relation' ? (labelZh(directEdgeType) || '关系') : (labelZh(directNodeLabel) || '实体') }}）：</p>
+            <button v-if="isEditable && !directEditing" type="button" class="direct-edit-toggle" @click="toggleDirectEdit">编辑字段</button>
+            <button v-else-if="directEditing && isEditable" type="button" class="direct-edit-toggle is-active" @click="toggleDirectEdit">取消编辑</button>
+          </header>
+          <table v-if="directCandidateFields.length" class="direct-fields" :class="{ 'is-editing': directEditing }">
+            <tbody>
+              <tr v-for="[key, val] in directCandidateFields" :key="String(key)" :class="{ 'is-edited': directEditing && directEdits[key] !== undefined && directEdits[key] !== directOriginalText(val) }">
+                <th>{{ key }}</th>
+                <td v-if="directEditing"><input aria-label="directEdits[key]" v-model="directEdits[key]" :placeholder="directOriginalText(val)" /></td>
+                <td v-else>{{ directOriginalText(val) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else class="direct-empty">暂无候选字段</p>
+          <p v-if="directEditing" class="direct-edit-hint">发现 schema 映射字段不对时可在此修正；点底部「确认」将按修正后候选写图（修改 {{ directEditedKeys.length }} 个字段，记入审计）。</p>
+        </div>
+
         <!-- 无候选快照（存量写后 case / 演示数据）沿用原对照卡 -->
         <div v-else class="entity-compare">
           <article>
@@ -606,17 +528,70 @@ const runPrimary = () => {
             <p v-if="stockCard?.id !== '—'">ID：{{ stockCard?.id }}</p>
           </article>
         </div>
-        <a-form-item field="entityVerdict" hide-label>
+
+        <!-- 裁决单选：T_LINK 三选（merge/create/reject）；T_DIRECT 通过或驳回 -->
+        <a-form-item v-if="templateId === 'T_LINK'" field="entityVerdict" hide-label>
         <a-radio-group v-model="entityVerdict" class="verdict" aria-label="实体对齐裁决">
           <a-radio value="merge" :disabled="!isEditable">合并到所选候选（写入图）</a-radio>
           <a-radio value="create" :disabled="!isEditable">确认为新实体（写入图）</a-radio>
           <a-radio value="reject" :disabled="!isEditable">均不匹配，驳回候选（丢弃该记录）</a-radio>
         </a-radio-group>
         </a-form-item>
+        <a-form-item v-else field="directVerdict" hide-label>
+        <a-radio-group v-model="directVerdict" class="verdict" aria-label="入库决策">
+          <a-radio value="accept" :disabled="!isEditable">通过·入库（{{ directKind === 'relation' ? `创建${labelZh(directEdgeType) || '?'}边` : `创建${labelZh(directNodeLabel) || '?'}节点` }}，直接写图）</a-radio>
+          <a-radio value="reject" :disabled="!isEditable">驳回·丢弃（候选不写图）</a-radio>
+        </a-radio-group>
+        </a-form-item>
         <label v-if="isEditable" class="verdict-note">
           <span>备注（可选）</span>
           <input aria-label="审核备注" v-model="note" placeholder="审核备注…" />
         </label>
+
+        <!-- T_DIRECT 溯源 / 原始记录 / 抽取推理过程（折叠保留，不改变裁决框主布局） -->
+        <template v-if="templateId === 'T_DIRECT'">
+          <details class="direct-trace zone-extra">
+            <summary>溯源信息（点击 ID 跳转任务详情）</summary>
+            <dl>
+              <div><dt>workflow</dt><dd><RouterLink :to="`/processing-instance/${productionCase?.workflowId || ''}`" class="direct-trace-link"><code>{{ productionCase?.workflowId || '—' }}</code></RouterLink></dd></div>
+              <div><dt>workflow 类型</dt><dd>{{ productionCase?.workflowType || '—' }}</dd></div>
+              <div><dt>执行 ID</dt><dd><RouterLink :to="`/processing-instance/${directExecutionId || ''}`" class="direct-trace-link"><code>{{ directExecutionId || '—' }}</code></RouterLink></dd></div>
+              <div><dt>来源任务</dt><dd><RouterLink :to="`/processing-instance/${productionCase?.sourceTaskId || ''}`" class="direct-trace-link"><code>{{ productionCase?.sourceTaskId || '—' }}</code></RouterLink></dd></div>
+              <div><dt>产生 step</dt><dd>{{ productionCase?.pipelineStepId || '—' }}</dd></div>
+            </dl>
+          </details>
+          <details class="direct-section-details zone-extra">
+            <summary>
+              原始记录
+              <span v-if="directSourceTable" class="direct-section-meta">· 来源表 <code>{{ directSourceTable }}</code> / 记录 <code>{{ directSourceRecordId }}</code></span>
+              <span v-else class="direct-section-meta">· 暂无</span>
+            </summary>
+            <div class="direct-section-body">
+              <table v-if="directSourceRecordFields.length" class="direct-fields">
+                <tbody>
+                  <tr v-for="[key, val] in directSourceRecordFields" :key="String(key)">
+                    <th>{{ key }}</th>
+                    <td>{{ typeof val === 'object' ? JSON.stringify(val) : String(val) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p v-else class="direct-empty">暂无原始记录（旧 case 未存源行）</p>
+            </div>
+          </details>
+          <details v-if="directLlmInput" class="direct-llm-io zone-extra">
+            <summary>LLM 输入（system prompt + user message）</summary>
+            <div class="direct-llm-section">
+              <h4>system prompt</h4>
+              <pre>{{ directLlmInput.system }}</pre>
+              <h4>user message</h4>
+              <pre>{{ directLlmInput.user }}</pre>
+            </div>
+          </details>
+          <details v-if="directLlmOutput" class="direct-llm-io zone-extra">
+            <summary>LLM 输出（JSON）</summary>
+            <pre>{{ directLlmOutput }}</pre>
+          </details>
+        </template>
       </section>
 
       <div v-if="!isEditable" class="rw-readonly">
@@ -629,10 +604,10 @@ const runPrimary = () => {
       <p v-if="feedback" class="rw-feedback">{{ feedback }}</p>
     </main>
 
-    <!-- 已处理（终态）也保留底部按钮，仅置灰不可点击 -->
-    <footer v-if="!isDirectCase" class="rw-foot">
+    <!-- 底部确认按钮全模板保留；已处理（终态）置灰不可点击；A 类（T_LINK/T_DIRECT）统一为「确认」 -->
+    <footer class="rw-foot">
       <div class="rw-foot__actions">
-        <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ templateId === 'T_LINK' ? '确认' : primaryActionLabel }}</button>
+        <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ templateId === 'T_EXTRACT_FAIL' ? primaryActionLabel : '确认' }}</button>
       </div>
     </footer>
   </div>
@@ -1087,6 +1062,20 @@ const runPrimary = () => {
   color: #175cd3;
   font-size: 11px;
   font-style: normal;
+}
+
+/* A 类统一裁决框：T_DIRECT 候选字段表 + 折叠辅助区间距 */
+.zone-entity .direct-fields-block {
+  margin-bottom: 14px;
+}
+
+.zone-entity .direct-fields-block .link-candidates-title {
+  margin: 0;
+}
+
+.zone-entity .zone-extra {
+  display: block;
+  margin-top: 12px;
 }
 
 .rw-readonly {

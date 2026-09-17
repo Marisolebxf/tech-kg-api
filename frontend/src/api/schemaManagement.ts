@@ -49,8 +49,12 @@ export interface SchemaScript {
   capturedRevision: number
   lastRunStatus: 'none' | 'ok' | 'failed'
   lastRunError: string | null
+  /** 最近一次抽取收尾时间：null = 从未运行；早于 uploadedAt = 脚本已更新待重跑 */
+  lastRunAt: string | null
   stale: boolean
   staleBehind: number
+  /** 脚本上传后从未跑过、或上传时间晚于最近一次收尾（变更尚未应用到图数据） */
+  needsRun: boolean
   downloadUrl: string
 }
 

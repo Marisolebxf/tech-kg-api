@@ -2687,6 +2687,8 @@ async def record_schema_script_run(request: dict[str, Any]) -> dict[str, Any]:
             return {"ok": False, "reason": "script-missing"}
         row.last_run_status = status
         row.last_run_error = error if status == "failed" else None
+        # 回写收尾时间：uploaded_at > last_run_at 即"脚本已更新待重跑"提示的消除条件
+        row.last_run_at = datetime.now()
         session.commit()
     run_key = request.get("runScriptKey")
     if run_key:

@@ -1,6 +1,16 @@
 export type ReviewStatus = '待处理' | '已完成' | '已撤销' | '已驳回' | '重跑中' | '重跑失败'
 export type ReviewPriority = 'P0' | 'P1' | 'P2'
 
+/** C 类队列状态徽标：在既有映射上细化 RERUNNING/RERUN_FAILED（此前都 fallback 到"待处理"）。 */
+export const extractCaseStatusBadge = (rawStatus: string): ReviewStatus => {
+  if (rawStatus === 'RERUNNING') return '重跑中'
+  if (rawStatus === 'RERUN_FAILED') return '重跑失败'
+  if (rawStatus === 'RESOLVED') return '已完成'
+  if (rawStatus === 'REJECTED') return '已驳回'
+  if (rawStatus === 'CANCELLED') return '已撤销'
+  return '待处理'
+}
+
 export type ReviewRecord = {
   id: string
   batch: string

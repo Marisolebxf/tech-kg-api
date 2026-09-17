@@ -338,6 +338,13 @@ const algoParamDefs = computed<AlgorithmParamDef[]>(() => selectedAlgorithmDef.v
 const mainParamDefs = computed(() => algoParamDefs.value.filter((param) => !param.advanced))
 /** 高级参数（advanced 标记）：与权重 / VID 编码 / 分区数一起收进「高级参数」折叠区。 */
 const advancedParamDefs = computed(() => algoParamDefs.value.filter((param) => param.advanced))
+/** 高级参数里偏离默认值的个数：折叠收起时在标题旁显示「已调整 n 项」，避免改动被藏住。 */
+const advancedTunedCount = computed(() => {
+  const values = algoParamValues.value[selectedAlgorithm.value] ?? {}
+  return advancedParamDefs.value.filter(
+    (param) => param.default !== undefined && values[param.key] !== param.default,
+  ).length
+})
 const algoRows = computed(() => algoResult.value?.rows ?? [])
 const algoResultColumns = computed<string[]>(() =>
   algoRows.value.length ? Object.keys(algoRows.value[0]) : [],
@@ -1643,6 +1650,7 @@ const pageMeta = computed(() => {
       :class="['platform-content', 'platform-query', { 'is-fixed-result': queryMode === 'ngql' }]"
     >
       <section class="kg-panel platform-query-form">
+        <!-- 头部一行收拢：模式切换 + 算法页签在左，引擎状态 / 执行按钮在右 -->
         <div class="kg-panel__header">
           <div class="platform-query-mode-group">
             <div class="platform-query-mode-toggle" role="tablist" aria-label="查询模式切换">
@@ -1661,6 +1669,16 @@ const pageMeta = computed(() => {
                 图算法
               </button>
             </div>
+            <!-- 算法切换页签并入头部行：贴合模式切换，下划线落在头部分隔线上（对齐二级子页签动效） -->
+            <nav v-if="queryMode === 'algo'" class="platform-query-algo__tabs" aria-label="算法切换">
+              <button
+                v-for="algo in GRAPH_ALGORITHMS"
+                :key="algo.id"
+                type="button"
+                :class="{ 'is-active': selectedAlgorithm === algo.id }"
+                @click="selectedAlgorithm = algo.id"
+              >{{ algo.label }}</button>
+            </nav>
             <div v-if="queryMode === 'ngql'" class="platform-ngql-permission-hint" role="note">
               <IconInfoCircle aria-hidden="true" />
               <span>只读语句所有用户可执行</span>
@@ -1670,7 +1688,21 @@ const pageMeta = computed(() => {
               <span>DDL 禁止执行</span>
             </div>
           </div>
-          <div v-if="queryMode === 'ngql'" class="platform-ngql-header-actions">
+          <div v-if="queryMode === 'algo'" class="platform-query-algo__engine">
+            <span
+              :class="['platform-status', algoEngineStatus.tone]"
+              :title="algoMetadata?.engine?.message ?? undefined"
+            >算法引擎{{ algoEngineStatus.label }}</span>
+            <button
+              class="kg-button kg-button--text"
+              type="button"
+              :disabled="algoMetadataLoading || !algoSpace"
+              @click="refreshAlgoEngine"
+            >
+              重新检测
+            </button>
+          </div>
+          <div v-else class="platform-ngql-header-actions">
             <button
               class="kg-button"
               type="button"
@@ -1693,88 +1725,21 @@ const pageMeta = computed(() => {
             @keydown.meta.enter="handleNgqlQuery"
           />
         </div>
-      </section>
-
-      <!-- 结果区常驻：未执行时空数据占位，执行后填充（不再整块隐藏/出现引起布局跳动） -->
-      <section v-if="queryMode === 'ngql'" class="platform-query-result">
-        <header class="platform-query-result__head">
-          <h2 class="platform-query-result__title">nGQL 执行结果</h2>
-          <span v-if="ngqlResult" class="platform-query-result__meta">{{ ngqlResult.records.length }} 行记录</span>
-        </header>
-        <div class="platform-query-result__body">
-          <div class="platform-query-result__table">
-            <table v-if="ngqlResult && ngqlResult.records.length" aria-label="nGQL 查询结果">
-              <thead>
-                <tr>
-                  <th v-for="column in ngqlResult.columns" :key="column">{{ column }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(record, index) in pagedNgqlRecords" :key="index">
-                  <td v-for="column in ngqlResult.columns" :key="column">
-                    <pre>{{ formatNgqlCell(record[column]) }}</pre>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <div v-else class="platform-query-result__empty">
-              {{ ngqlResult ? '语句执行成功，无返回记录' : '暂无数据，执行 nGQL 语句后在此查看结果' }}
-            </div>
-          </div>
-          <ListPagination
-            v-if="ngqlTotal > 0"
-            :total="ngqlTotal"
-            :page="ngqlPage"
-            :page-size="ngqlPageSize"
-            :disabled="ngqlLoading"
-            @change="changeNgqlPage"
-            @change-size="changeNgqlPageSize"
-          />
-        </div>
-      </section>
-
-      <section v-if="queryMode === 'algo'" class="kg-panel platform-query-algo">
-        <div class="kg-panel__header">
-          <h2 class="kg-panel__title">图算法</h2>
-          <div class="platform-query-algo__engine">
-            <span
-              :class="['platform-status', algoEngineStatus.tone]"
-              :title="algoMetadata?.engine?.message ?? undefined"
-            >算法引擎{{ algoEngineStatus.label }}</span>
-            <button
-              class="kg-button kg-button--text"
-              type="button"
-              :disabled="algoMetadataLoading || !algoSpace"
-              @click="refreshAlgoEngine"
-            >
-              重新检测
-            </button>
-          </div>
-        </div>
-        <div class="platform-query-algo__body">
-          <!-- 算法切换页签：版式对齐人工审核「抽取失败重跑」二级子页签（纯文字 + 蓝色下划线动效） -->
-          <nav class="platform-query-algo__tabs" aria-label="算法切换">
-            <button
-              v-for="algo in GRAPH_ALGORITHMS"
-              :key="algo.id"
-              type="button"
-              :class="{ 'is-active': selectedAlgorithm === algo.id }"
-              @click="selectedAlgorithm = algo.id"
-            >{{ algo.label }}</button>
-          </nav>
+        <div v-else class="platform-query-algo__body">
           <p v-if="algoMetadata?.engine?.status === 'DOWN'" class="platform-query-algo__engine-hint" role="note">
             算法引擎当前不可用（{{ algoMetadata.engine.message ?? 'Spark 运行器未就绪' }}），提交可能失败，可稍后重试
           </p>
           <p class="platform-query-algo__desc">{{ selectedAlgorithmDef.label }}：{{ selectedAlgorithmDef.description }}</p>
           <!-- 主表单：只保留业务必填项（关系类型 + 非 advanced 参数），调优参数折叠进高级区 -->
-          <div class="platform-form-grid">
+          <div class="platform-form-grid platform-query-algo__form">
             <div class="platform-form-field platform-query-algo__labels">
-              <label class="platform-form-label">关系类型（可多选）<i class="platform-query-algo__required">*</i></label>
+              <label class="platform-form-label"><i class="platform-query-algo__required">*</i>关系类型（可多选）</label>
               <a-select
                 v-model="algoLabels"
                 multiple
                 allow-clear
                 placeholder="选择参与计算的关系类型"
+                :max-tag-count="4"
                 :scrollbar="false"
               >
                 <a-option v-for="item in algoMetadata?.edgeTypes ?? []" :key="item" :value="item">
@@ -1784,7 +1749,7 @@ const pageMeta = computed(() => {
             </div>
             <div v-for="param in mainParamDefs" :key="param.key" class="platform-form-field">
               <label class="platform-form-label" :for="`algo-param-${param.key}`">
-                {{ param.label }}<i v-if="param.required" class="platform-query-algo__required">*</i>
+                <i v-if="param.required" class="platform-query-algo__required">*</i>{{ param.label }}
               </label>
               <a-select
                 v-if="param.type === 'enum'"
@@ -1828,13 +1793,18 @@ const pageMeta = computed(() => {
               <span v-if="param.hint && param.type !== 'bool'" class="platform-query-algo__param-hint">{{ param.hint }}</span>
             </div>
           </div>
-          <!-- 高级参数折叠区：算法调优参数（迭代/概率/阈值…）+ 权重 / VID 编码 / 分区数等工程选项 -->
+          <!-- 高级参数折叠区：算法调优（迭代/概率/阈值…）+ 计算选项（权重 / VID 编码 / 分区数），均有默认值 -->
           <details class="platform-query-algo__advanced">
-            <summary>高级参数<em>迭代、概率、收敛阈值、边权重、引擎选项等，均有默认值，普通用户可不调整</em></summary>
+            <summary>
+              高级参数
+              <span v-if="advancedTunedCount" class="platform-query-algo__advanced-count">已调整 {{ advancedTunedCount }} 项</span>
+              <em>算法调优与计算选项均有默认值，普通用户可不调整</em>
+            </summary>
             <div class="platform-form-grid">
+              <p v-if="advancedParamDefs.length" class="platform-query-algo__group-caption">算法调优</p>
               <div v-for="param in advancedParamDefs" :key="param.key" class="platform-form-field">
                 <label class="platform-form-label" :for="`algo-param-${param.key}`">
-                  {{ param.label }}<i v-if="param.required" class="platform-query-algo__required">*</i>
+                  <i v-if="param.required" class="platform-query-algo__required">*</i>{{ param.label }}
                 </label>
                 <a-select
                   v-if="param.type === 'enum'"
@@ -1877,6 +1847,7 @@ const pageMeta = computed(() => {
                 />
                 <span v-if="param.hint && param.type !== 'bool'" class="platform-query-algo__param-hint">{{ param.hint }}</span>
               </div>
+              <p class="platform-query-algo__group-caption">计算选项</p>
               <div class="platform-form-field">
                 <label class="platform-form-label">边权重</label>
                 <label class="platform-query-algo__check">
@@ -1939,6 +1910,44 @@ const pageMeta = computed(() => {
               <pre v-if="algoJob.logTail">{{ algoJob.logTail }}</pre>
             </div>
           </div>
+        </div>
+      </section>
+
+      <!-- 结果区常驻：未执行时空数据占位，执行后填充（不再整块隐藏/出现引起布局跳动） -->
+      <section v-if="queryMode === 'ngql'" class="platform-query-result">
+        <header class="platform-query-result__head">
+          <h2 class="platform-query-result__title">nGQL 执行结果</h2>
+          <span v-if="ngqlResult" class="platform-query-result__meta">{{ ngqlResult.records.length }} 行记录</span>
+        </header>
+        <div class="platform-query-result__body">
+          <div class="platform-query-result__table">
+            <table v-if="ngqlResult && ngqlResult.records.length" aria-label="nGQL 查询结果">
+              <thead>
+                <tr>
+                  <th v-for="column in ngqlResult.columns" :key="column">{{ column }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(record, index) in pagedNgqlRecords" :key="index">
+                  <td v-for="column in ngqlResult.columns" :key="column">
+                    <pre>{{ formatNgqlCell(record[column]) }}</pre>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-else class="platform-query-result__empty">
+              {{ ngqlResult ? '语句执行成功，无返回记录' : '暂无数据，执行 nGQL 语句后在此查看结果' }}
+            </div>
+          </div>
+          <ListPagination
+            v-if="ngqlTotal > 0"
+            :total="ngqlTotal"
+            :page="ngqlPage"
+            :page-size="ngqlPageSize"
+            :disabled="ngqlLoading"
+            @change="changeNgqlPage"
+            @change-size="changeNgqlPageSize"
+          />
         </div>
       </section>
 
@@ -5022,11 +5031,11 @@ print(response.json())</pre>
 .platform-query .platform-status{display:inline-flex;align-items:center;gap:6px;min-height:22px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.platform-query .platform-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .platform-query .platform-table th,.platform-query .platform-table td{height:40px;padding:0 16px;font-size:14px;line-height:22px}.platform-query .platform-table th{background:#f7f8fa;font-weight:500}
 .platform-query-empty{gap:8px;padding:24px 16px}.platform-query-empty strong{font-size:16px;line-height:24px;font-weight:600}.platform-query-empty p{font-size:14px;line-height:22px}
-@media(max-width:1100px){.platform-query .platform-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:1100px){.platform-query .platform-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.platform-query-algo__labels{grid-column:span 2}.platform-query-form .kg-panel__header{flex-wrap:wrap;height:auto;min-height:40px}.platform-query-mode-group{flex-wrap:wrap;row-gap:0}.platform-query-algo__tabs{width:100%;margin-left:0}}
 .platform-query .platform-form-field :deep(.arco-select-view){box-sizing:border-box;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important}
 .platform-query .platform-form-field :deep(.arco-select-view:hover){border-color:#c9cdd4!important}
 .platform-query .platform-form-field :deep(.arco-select-view-focus){border-color:#004ecc!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-@media(max-width:768px){.platform-query .platform-form-grid{grid-template-columns:1fr}}
+@media(max-width:768px){.platform-query .platform-form-grid{grid-template-columns:1fr}.platform-query-algo__labels{grid-column:auto}}
 /* nGQL 查询模式 */
 .platform-query-mode-group{display:flex;min-width:0;align-items:center;gap:16px;margin-right:auto}
 .platform-query-mode-toggle{display:inline-flex;box-sizing:border-box;height:40px;gap:0;margin-right:0;padding:4px;border:0;border-radius:4px;background:#f2f3f5;overflow:visible;flex:0 0 auto}
@@ -5064,12 +5073,13 @@ print(response.json())</pre>
 .platform-query.is-fixed-result .platform-query-result__body{flex:1;min-height:0}
 .platform-query.is-fixed-result .platform-query-result__table{flex:1;min-height:0;max-height:none;overflow:auto}
 .platform-query.is-fixed-result .platform-query-result__empty{height:100%}
-/* 图算法 tab */
-.platform-query-algo__engine{display:flex;align-items:center;gap:12px}
-.platform-query-algo__body{display:grid;padding:0 16px 16px;gap:12px}
-/* 算法切换页签：对齐人工审核「抽取失败重跑」二级子页签（纯文字按钮 + 蓝色下划线动效，负 margin 抵消 body 内边距） */
-.platform-query-algo__tabs{display:flex;flex:0 0 auto;margin:0 -16px}
-.platform-query-algo__tabs button{position:relative;height:36px;padding:0 16px;border:0;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer;transition:color .2s cubic-bezier(0,0,1,1)}
+/* 图算法 tab（表单并入查询面板：无独立标题行，页签在头部行内） */
+.platform-query-algo__engine{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.platform-query-algo__body{display:grid;padding:4px 0 0;gap:14px}
+.platform-query-algo__body .platform-form-grid{padding:0}
+/* 算法切换页签：并入头部行（贴合模式切换），按钮撑满头部高度使下划线落在头部分隔线上 */
+.platform-query-algo__tabs{display:flex;flex:0 0 auto;align-self:stretch;margin-left:12px}
+.platform-query-algo__tabs button{position:relative;min-height:36px;padding:0 14px;border:0;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer;transition:color .2s cubic-bezier(0,0,1,1)}
 .platform-query-algo__tabs button::after{position:absolute;right:0;bottom:0;left:0;height:2px;background:#165dff;content:"";opacity:0;transform:scaleX(0);transition:opacity .2s cubic-bezier(0,0,1,1),transform .2s cubic-bezier(.34,.69,.1,1)}
 .platform-query-algo__tabs button:hover{color:#1d2129}
 .platform-query-algo__tabs button.is-active{color:#165dff;font-weight:500}
@@ -5077,14 +5087,15 @@ print(response.json())</pre>
 .platform-query-algo__tabs button:focus-visible{border-radius:2px;outline:2px solid rgba(22,93,255,.28);outline-offset:2px}
 .platform-query-algo__engine-hint{margin:0;padding:8px 12px;border:1px solid #ffd6c6;border-radius:4px;background:#fff3ea;color:#b42318;font-size:12px;line-height:20px}
 .platform-query-algo__desc{margin:0;color:#4e5969;font-size:12px;line-height:20px}
-.platform-query-algo__required{margin-left:2px;color:#b42318;font-style:normal}
+.platform-query-algo__required{margin:2px 2px 0 0;color:#b42318;font-style:normal}
 .platform-query-algo__input{box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:22px;outline:0}
 .platform-query-algo__input:focus{border-color:#004ecc;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
 .platform-query-algo__check{display:inline-flex;align-items:center;gap:8px;min-height:32px;color:#1d2129;font-size:14px;line-height:22px;cursor:pointer}
 .platform-query-algo__check input{width:14px;height:14px;accent-color:#004ecc}
 .platform-query-algo__param-hint{color:#86909c;font-size:12px;line-height:20px}
-/* 边类型多选：解除上面单选裁剪规则（.platform-form-field 的 width:0/overflow:hidden 会毁掉多选 tag） */
-.platform-query .platform-query-algo__labels :deep(.arco-select-view){height:auto!important;min-height:32px;padding:2px 12px!important;align-items:center}
+/* 边类型多选：占半行（6 列栅格 span 3）给 tag 留空间，解除单选裁剪规则并放宽高度 */
+.platform-query-algo__labels{grid-column:span 3}
+.platform-query .platform-query-algo__labels :deep(.arco-select-view){height:auto!important;min-height:36px;padding:4px 8px!important;align-items:center}
 .platform-query .platform-query-algo__labels :deep(.arco-select-view-value){display:flex;width:auto!important;min-width:0;overflow:visible;flex:1 1 auto!important;flex-wrap:wrap;gap:2px 0;line-height:20px;text-overflow:clip;white-space:normal}
 .platform-query .platform-query-algo__labels :deep(.arco-tag){margin:2px 4px 2px 0}
 .platform-query-algo__actions{display:flex;align-items:center;gap:12px}
@@ -5103,7 +5114,12 @@ print(response.json())</pre>
 .platform-query-algo__advanced>summary::before{color:#86909c;font-size:12px;content:"▸";transition:transform .2s}
 .platform-query-algo__advanced[open]>summary::before{transform:rotate(90deg)}
 .platform-query-algo__advanced>summary em{color:#86909c;font-size:12px;font-style:normal}
+/* 已调整计数徽标：收起状态也能看出有参数偏离默认值 */
+.platform-query-algo__advanced-count{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:9px;background:#e8f3ff;color:#165dff;font-size:12px;line-height:18px;font-weight:500}
 .platform-query-algo__advanced .platform-form-grid{padding:4px 12px 12px}
+/* 高级区内的分组小标题（算法调优 / 计算选项）：通栏，虚线分隔 */
+.platform-query-algo__group-caption{grid-column:1/-1;margin:0;padding-top:10px;border-top:1px dashed #e5e6eb;color:#86909c;font-size:12px;line-height:20px}
+.platform-query-algo__advanced .platform-query-algo__group-caption:first-of-type{padding-top:0;border-top:0}
 /* PageRank 结果：重要性排名表 + 图谱高亮并排（覆盖 __body 的纵向 flex） */
 .platform-query-algo__rank-body{display:grid;grid-template-columns:minmax(0,1fr) 400px;overflow:hidden}
 .platform-query-algo__rank-table{display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid #e5e6eb}

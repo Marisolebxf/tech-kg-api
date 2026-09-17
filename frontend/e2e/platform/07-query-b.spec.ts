@@ -112,7 +112,8 @@ test.describe('B. 图谱查询', () => {
     // 图算法边类型/引擎状态按全局图空间加载：先切到 dev2 再进图算法面板
     await switchGraphSpace(page, 'dev2')
     await page.getByRole('button', { name: '图算法' }).click()
-    await expect(page.getByRole('heading', { name: '图算法' })).toBeVisible()
+    // 面板无独立标题行：算法页签并入头部行，以「算法切换」导航可见作为出面板标志
+    await expect(page.getByRole('navigation', { name: '算法切换' })).toBeVisible()
 
     // 引擎徽标必渲染（Spark 未就绪时为「不可用」，就绪后为「正常」，均为通过态）
     await waitFor(

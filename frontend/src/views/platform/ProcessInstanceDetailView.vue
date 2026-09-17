@@ -71,6 +71,11 @@ const steps = computed<Step[]>(() => {
       output: instance.output,
     }]
   }
+  if (processingInstance.value?.workflowType === 'kg.schema.extract') {
+    // 平台喂数抽取：workflow 不上报 pipeline step（任务 steps 恒空），用任务
+    // 回写的真实统计合成步骤——否则概况卡全落占位符（运行状态=待执行、处理数量=-）
+    return [buildExtractStep(processingInstance.value)]
+  }
   if (isPipelineTask.value) {
     const built = buildPipelineSteps()
     // kg.custom.steps 单脚本：流程 step 与脚本内 activity step 一一对应
@@ -178,6 +183,41 @@ function buildActivityStep(scriptId: string, activityId: string): Step | null {
     input: entry.info.input,
     output: entry.info.output,
     access: entry.info.access,
+  }
+}
+
+/** kg.schema.extract 任务：用任务回写的真实统计（output.sources/failures）合成流程步骤。
+ *
+ * 只读 instance 自身字段——setup 期 initialStepId 就会触发 steps 求值，
+ * 不能引用声明在其后的 extractOutput/selectedExecution（TDZ）。 */
+function buildExtractStep(instance: ProcessingInstance): Step {
+  const output = (instance.output ?? {}) as {
+    sources?: Array<{ source?: string; table?: string; rows?: number; written?: number; failed?: number; watermark?: string | null; pkCursor?: string | null }>
+    failures?: { count?: number }
+  }
+  const sources = output.sources ?? []
+  const rows = sources.reduce((sum, item) => sum + Number(item.rows ?? 0), 0)
+  const written = sources.reduce((sum, item) => sum + Number(item.written ?? 0), 0)
+  const failed = Number(output.failures?.count ?? sources.reduce((sum, item) => sum + Number(item.failed ?? 0), 0))
+  const errored = instance.taskStatus === '执行出错'
+  const pending = instance.taskStatus === '等待人工审核'
+  const lastCursor = [...sources].reverse().find((item) => item.watermark || item.pkCursor)
+  const cursorText = lastCursor?.watermark || (lastCursor?.pkCursor ? `pk > ${lastCursor.pkCursor}` : '')
+  return {
+    id: 'extract',
+    phase: '图谱构建',
+    name: instance.objectName || '平台喂数抽取',
+    status: instance.taskStatus === '执行中' ? '运行中' : errored || pending ? '需人工处理' : '成功',
+    risk: (errored ? '高风险' : failed > 0 ? '中风险' : '低风险') as RiskLevel,
+    count: rows ? `${rows} 行 · 写入 ${written}` : '-',
+    abnormal: errored ? '1' : String(failed || 0),
+    duration: '-',
+    description: sources.length
+      ? `kg.schema.extract · ${sources.map((item) => item.table ?? item.source ?? '来源').join('、')}${cursorText ? ` · 水位 ${cursorText}` : ''}`
+      : 'kg.schema.extract · 未产出批次结果（启动失败或仍在执行）',
+    engine: 'Temporal KG Worker',
+    input: instance.input,
+    output: instance.output,
   }
 }
 
@@ -395,6 +435,10 @@ const lineageResultSummary = computed(() => {
   const failed = output.failures?.count ?? 0
   return `写入 ${written} 行${failed ? ` · 失败 ${failed} 转人工审核` : ''}`
 })
+/** 验收摘要：抽取任务用回写统计（task.result 只是「工作流已下发」回执，不是结果）。 */
+const resultVerdict = computed(() => (extractOutput.value?.sources?.length
+  ? lineageResultSummary.value
+  : processingInstance.value?.result || '输出通过当前质量规则'))
 const taskLogLines = computed(() => (processingInstance.value?.logs ?? []).map(String))
 const executionOutput = computed(() => processingInstance.value?.output ?? (selectedExecution.value as { output?: unknown } | null)?.output ?? null)
 
@@ -539,7 +583,7 @@ onMounted(async () => {
       <strong>⚠ 实体索引构建失败（已降级）</strong>
       <span>图数据写入正常，但实体检索索引未重建——关键词 / 语义检索将缺失本次新增实体。</span>
       <code v-if="indexDegrade.error">{{ indexDegrade.error }}</code>
-      <em>请检查 embedding 服务可用性后，在实体列表页对该图空间「重建索引」。</em>
+      <em>该告警针对选中的执行 {{ selectedExecutionId || '最新一次' }}（后续成功执行可能已重建索引）；请检查 embedding 服务可用性后，在实体列表页对该图空间「重建索引」。</em>
     </div>
 
     <section class="detail-workspace">
@@ -573,7 +617,7 @@ onMounted(async () => {
         <div v-if="activeTab === 'overview'" class="overview-content">
           <section class="metric-card"><h3>节点结果</h3><dl><div v-for="row in genericMetrics" :key="row[0]"><dt>{{ row[0] }}</dt><dd>{{ row[1] }}</dd></div></dl></section>
           <section v-if="needsReview" class="result-card alert"><h3>执行结果与业务验收</h3><template v-if="isExecutionInterrupted"><p><strong>执行结果：</strong>任务未运行完成，尚未产生可验收结果。</p><p><strong>置信度：</strong>无，因为没有模型结果。</p></template><template v-else><p><strong>执行结果：</strong>程序已正常运行完成并生成输出。</p><p><strong>验收结果：</strong>{{ processingInstance?.result }}，当前不能视为正确结果。</p></template><p><strong>后续处理：</strong>{{ blockingStrategy }}。</p></section>
-          <section v-else class="result-card success"><h3>执行结果与业务验收</h3><p><strong>执行成功：</strong>程序正常结束。 <strong>结果已通过：</strong>{{ processingInstance?.result || '输出通过当前质量规则' }}。两项状态分别记录，不相互替代。</p></section>
+          <section v-else class="result-card success"><h3>执行结果与业务验收</h3><p><strong>执行成功：</strong>程序正常结束。 <strong>结果已通过：</strong>{{ resultVerdict }}。两项状态分别记录，不相互替代。</p></section>
         </div>
 
         <div v-else-if="activeTab === 'io'" class="io-content">

@@ -266,3 +266,44 @@ def test_direct_decide_audit_records_modified_fields(monkeypatch):
     assert detail["modifiedFields"]["changed"] == ["name_zh"]
     assert detail["modifiedFields"]["removed"] == ["name_en"]
     assert detail["originalCandidateSha256"]
+
+
+def test_delete_open_case_removes_cascade(service):
+    # 物理删除未处理 case：case 与草稿/审计一并删除，详情查不到
+    # （先领取再存草稿：OPEN 未领取的 case 不允许写草稿——直审模式既有门控）
+    detail = claimed(service)
+    detail = service.draft(detail["id"], detail["version"], {"note": "占位草稿"}, actor())
+    admin = actor("admin-1", ("review_admin",))
+    out = service.delete_case(detail["id"], admin)
+    assert out == {"id": detail["id"], "deleted": True}
+    with pytest.raises(KeyError):
+        service.get_case(detail["id"], admin)
+
+
+def test_delete_rejects_terminal_case(service):
+    # 已处理的记录保留作历史，不给删
+    case = claimed(service)
+    case = service.submit(
+        case["id"], case["version"], "entity-confirm", {"entityVerdict": "create"}, "", actor()
+    )
+    admin = actor("admin-1", ("review_admin",))
+    with pytest.raises(ReviewConflictError):
+        service.delete_case(case["id"], admin)
+
+
+def test_delete_requires_review_admin(service):
+    # 物理删除仅 review_admin（普通审核员禁止）
+    from service.manual_review_domain import ReviewForbiddenError
+
+    created = service.create_direct_case(**link_case_kwargs())
+    with pytest.raises(ReviewForbiddenError):
+        service.delete_case(created["reviewId"], actor())
+
+
+def test_queue_rows_expose_execution_and_workflow_id(service):
+    # 图谱构建ID：队列行带产生该 case 的执行 id / workflow id
+    service.create_direct_case(**link_case_kwargs())
+    page = service.list_cases({"category": "A"}, actor("r", ("reviewer",)))
+    row = page["items"][0]
+    assert row["executionId"] == "EXEC-1"
+    assert row["workflowId"] is None or isinstance(row["workflowId"], str)

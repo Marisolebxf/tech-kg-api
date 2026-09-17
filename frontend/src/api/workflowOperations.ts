@@ -129,6 +129,8 @@ export const retryTask = (taskId: string, reason = 'manual retry') => unwrap(htt
 export type ProductionReviewStatus = 'OPEN' | 'CLAIMED' | 'IN_REVIEW' | 'PENDING_APPROVAL' | 'RERUNNING' | 'RESOLVED' | 'REJECTED' | 'CANCELLED' | 'RERUN_FAILED' | 'EXPIRED'
 export interface ProductionReviewCase {
   id: string; sourceTaskId: string; batchId?: string; nodeId: string; objectId: string; objectType: string; objectName: string
+  /** 图谱构建ID：产生该 case 的抽取执行（EXEC-xxx，跳 /processing-instance 用）；缺省看 workflowId。 */
+  executionId?: string
   errorType: string; category: string; templateId: string; domain: string; phase: string; riskLevel: 'P0'|'P1'|'P2'; scope: string
   status: ProductionReviewStatus; assigneeId?: string; assigneeName?: string; version: number; slaClaimAt: string; slaResolveAt: string
   diagnosis: string; sourceTable?: string; sourceRecordId?: string; createdAt: string; updatedAt: string
@@ -150,6 +152,18 @@ export const heartbeatProductionReview = (id: string, version: number) => unwrap
 export const releaseProductionReview = (id: string, version: number) => unwrap(http.post(`/v1/manual-reviews/production/${id}/release`, { version })) as Promise<ProductionReviewCase>
 export const saveProductionReviewDraft = (id: string, version: number, payload: Record<string, unknown>) => unwrap(http.put(`/v1/manual-reviews/production/${id}/draft`, { version, payload })) as Promise<ProductionReviewCase>
 export const submitProductionReview = (id: string, data: { version:number; actionId:string; result:Record<string,unknown>; note?:string }) => unwrap(http.post(`/v1/manual-reviews/production/${id}/submit`, data)) as Promise<ProductionReviewCase>
+
+/** case 审计日志（建案/领取/提交/重跑等事件时间线）。 */
+export interface ProductionReviewAuditEntry {
+  eventType: string; actorId?: string; actorName?: string; requestId?: string
+  oldStatus?: string | null; newStatus?: string | null; detail?: Record<string, unknown> | null; createdAt: string
+}
+export const getProductionReviewAuditLogs = (id: string) =>
+  unwrap(http.get(`/v1/manual-reviews/production/${id}/audit-logs`)) as Promise<{ items: ProductionReviewAuditEntry[] }>
+
+/** 物理删除未处理 case（review_admin；已终态的后端 409）。 */
+export const deleteProductionReview = (id: string) =>
+  unwrap(http.delete(`/v1/manual-reviews/production/${id}`)) as Promise<{ id: string; deleted: boolean }>
 
 /** T_EXTRACT_FAIL 抽取失败记录重跑：所选 case 按 schema 合并为新执行（triggerSource=RERUN）。 */
 export const rerunExtractFailures = (data: { caseIds?: string[]; executionId?: string; batchSize?: number }) =>

@@ -5,12 +5,9 @@ import { directDecideProductionReview, getProductionReview, heartbeatProductionR
 
 import {
   getHandleCategory,
-  getImpactScope,
   getReviewConsequence,
   getReviewTemplate,
-  getSedimentHint,
   labelZh,
-  resolvePipelineStep,
   type ReviewAction,
   type ReviewRecord,
 } from './manual-review-data'
@@ -128,7 +125,6 @@ const isEditable = computed(() => {
 })
 
 const template = computed(() => (record.value ? getReviewTemplate(record.value) : null))
-const impactScope = computed(() => (record.value ? getImpactScope(record.value) : '任务级'))
 // 生产 case 的模板以服务端 templateId 为准（T_DIRECT/T_EXTRACT_FAIL/T_LINK
 // 专用工作台依赖它路由）；legacy 映射只对旧 demo record 生效
 const templateId = computed(
@@ -139,9 +135,6 @@ const consequence = computed(() => {
   if (productionCase.value?.consequence) return { ...productionCase.value.consequence, rerunAnchor: productionCase.value.pipelineStepName || productionCase.value.consequence.rerunStepId, phase: record.value?.module || '图谱构建' }
   return record.value ? getReviewConsequence(record.value) : null
 })
-const pipelineStep = computed(() => (record.value ? resolvePipelineStep(record.value) : null))
-const sedimentHint = computed(() => (record.value ? getSedimentHint(record.value) : ''))
-const sedimentRule = ref(false)
 
 const note = ref(record.value?.decisionNote ?? '')
 const feedback = ref('')
@@ -292,13 +285,6 @@ const primaryActionLabel = computed(() => preferredProductionAction.value?.label
 
 const isPrimaryDisabled = computed(() => !isEditable.value || !preferredProductionAction.value)
 
-const footerHint = computed(() => {
-  if (isHistory.value) return record.value?.status === '已撤销' ? '任务已撤销' : '处理已完成'
-  const write = consequence.value?.writeTarget ?? '处理结果'
-  const sediment = sedimentRule.value && sedimentHint.value ? ' · 同时沉淀为规则' : ''
-  return `确认后：裁决回写「${write}」${sediment}`
-})
-
 const backPath = computed(() => (
   isHistory.value ? '/manual-review?tab=history' : `/manual-review?batch=${record.value?.batch ?? ''}`
 ))
@@ -365,7 +351,6 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
       window.clearInterval(heartbeatTimer)
     }
     feedback.value = `裁决已回写「${consequence.value?.writeTarget ?? '处理结果'}」。`
-    if (sedimentRule.value && sedimentHint.value) feedback.value += ' 裁决已勾选沉淀为规则。'
   } catch (error) {
     feedback.value = error instanceof Error ? error.message : '人工处理提交失败'
   }
@@ -374,10 +359,6 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
 const runPrimary = () => {
   if (preferredProductionAction.value) handleAction(preferredProductionAction.value)
 }
-
-const secondaryActions = computed(() => (
-  productionActions.value.filter((action) => action.id !== preferredProductionAction.value?.id)
-))
 </script>
 
 <template>
@@ -388,49 +369,15 @@ const secondaryActions = computed(() => (
         <h1>{{ directTitle }}</h1>
         <p>
           <code>{{ record.id }}</code>
-          <span v-if="!isDirectCase">{{ record.handler }}</span>
-          <em v-if="!isDirectCase">{{ pipelineStep?.name || record.node }} · {{ record.type }} · {{ record.ruleId }}</em>
         </p>
       </div>
       <div v-if="!isDirectCase" class="rw-head__badges">
-        <span class="cat-pill">{{ handleCategory }}</span>
-        <span :class="['scope', impactScope === '批次级' ? 'is-batch' : 'is-task']">{{ impactScope }}{{ impactScope === '批次级' ? ' · 已阻断' : '' }}</span>
         <span :class="['status', `is-${record.status}`]">{{ record.status }}</span>
       </div>
     </header>
 
-    <section v-if="!isDirectCase" class="rw-sec rw-sec--evidence" aria-label="证据">
-      <header class="rw-sec__head"><div><h2>案件信息与证据</h2><p>对象信息、系统结论与证据摘要 · 本屏信息应足够做出决定</p></div></header>
-      <div class="rw-diag">
-        <div>
-          <strong>{{ record.object }}</strong>
-          <span>{{ record.objectType }} · {{ record.objectId }}</span>
-        </div>
-        <div>
-          <span>来源</span>
-          <em>{{ record.sourceTable }} / {{ record.sourceRecordId }}</em>
-        </div>
-        <div>
-          <span>系统结论</span>
-          <em>{{ record.sourceResult }}</em>
-        </div>
-        <div v-if="record.score">
-          <span>置信度</span>
-          <em>{{ record.score }}</em>
-        </div>
-        <p class="rw-diag__evidence">{{ record.evidence }}</p>
-      </div>
-    </section>
-
     <main class="rw-body">
       <a-form ref="manualReviewFormRef" :model="manualReviewFormModel" :rules="manualReviewFormRules" class="manual-review-form" layout="vertical">
-      <header v-if="!isDirectCase" class="rw-zone-head">
-        <div>
-          <h2>裁决 · {{ template?.title }}</h2>
-          <p>{{ template?.question }} · {{ record.suggestion }}</p>
-        </div>
-      </header>
-
       <!-- T_DIRECT：kg.custom.steps 候选入库决策 5 段式布局 -->
       <section v-if="templateId === 'T_DIRECT'" class="zone zone-direct">
         <!-- ① 候选：要审核的实体/关系（最显眼，一上来就让人知道审什么） -->
@@ -671,6 +618,10 @@ const secondaryActions = computed(() => (
           <a-radio value="reject" :disabled="!isEditable">均不匹配，驳回候选（丢弃该记录）</a-radio>
         </a-radio-group>
         </a-form-item>
+        <label v-if="isEditable" class="verdict-note">
+          <span>备注（可选）</span>
+          <input aria-label="审核备注" v-model="note" placeholder="审核备注…" />
+        </label>
       </section>
 
       <div v-if="!isEditable" class="rw-readonly">
@@ -683,33 +634,9 @@ const secondaryActions = computed(() => (
       <p v-if="feedback" class="rw-feedback">{{ feedback }}</p>
     </main>
 
-    <section v-if="!isDirectCase" class="rw-sec rw-sec--consequence" aria-label="后果">
-      <header class="rw-sec__head"><div><h2>决策影响</h2><p>确认前请核对：回写哪里、影响范围</p></div></header>
-      <div class="tri-grid">
-        <div><span>回写目标</span><strong>{{ consequence?.writeTarget }}</strong></div>
-        <div><span>裁决锚点</span><strong>{{ consequence?.rerunAnchor }}</strong><em v-if="pipelineStep">· {{ pipelineStep.id }}</em></div>
-        <div><span>影响范围</span><strong>{{ impactScope }}{{ impactScope === '批次级' ? ' · 恢复公共流程' : ' · 仅本对象' }}</strong></div>
-      </div>
-      <p v-if="pipelineStep" class="pipeline-hint">流水线：{{ pipelineStep.phase }} · 节点 <code>{{ pipelineStep.id }}</code>（{{ pipelineStep.name }}）· 原始节点「{{ record.node }}」</p>
-      <a-checkbox v-if="isEditable && sedimentHint" v-model="sedimentRule" class="sediment-line">
-        <span>{{ sedimentHint }}</span>
-      </a-checkbox>
-    </section>
-
-    <footer v-if="!isDirectCase" class="rw-foot">
-      <span>{{ footerHint }}</span>
-      <div v-if="isEditable" class="rw-foot__actions">
-        <button
-          v-for="action in secondaryActions"
-          :key="action.id"
-          type="button"
-          :class="{ danger: action.kind === 'danger' }"
-          @click="handleAction(action)"
-        >
-          {{ action.label }}
-        </button>
-        <label class="note-inline"><span class="sr-only">备注（可选）</span><input v-model="note" placeholder="备注（可选）" /></label>
-        <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ primaryActionLabel }}</button>
+    <footer v-if="!isDirectCase && isEditable" class="rw-foot">
+      <div class="rw-foot__actions">
+        <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ templateId === 'T_LINK' ? '确认' : primaryActionLabel }}</button>
       </div>
     </footer>
   </div>
@@ -1071,6 +998,23 @@ const secondaryActions = computed(() => (
 .verdict label.active {
   border-color: #165dff;
   background: #f5f8ff;
+}
+
+/* T_LINK 裁决框内备注（可选） */
+.verdict-note {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  color: #718099;
+  font-size: 11px;
+}
+
+.verdict-note input {
+  padding: 8px 10px;
+  border: 1px solid #dce8f8;
+  border-radius: 5px;
+  font: 13px/1.5 inherit;
+  color: #17233b;
 }
 
 /* T_LINK 消歧 v2：待入库记录卡 + 候选选择列表 */

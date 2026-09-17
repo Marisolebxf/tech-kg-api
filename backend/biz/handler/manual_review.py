@@ -196,6 +196,15 @@ async def cancel_case(case_id: str, body: CancelRequest, identity: ReviewIdentit
         _raise_production_error(exc)
 
 
+@router.delete("/production/{case_id}", response_model=ApiResponse)
+async def delete_case(case_id: str, identity: ReviewIdentityDep):
+    """物理删除未处理 case（review_admin；已终态的记录保留作历史不可删）。"""
+    try:
+        return ApiResponse(data=production_service.delete_case(case_id, identity))
+    except Exception as exc:
+        _raise_production_error(exc)
+
+
 @router.get("/production/{case_id}/audit-logs", response_model=ApiResponse)
 async def case_audit_logs(case_id: str, identity: ReviewIdentityDep):
     try:

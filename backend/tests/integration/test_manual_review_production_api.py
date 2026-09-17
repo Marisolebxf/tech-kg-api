@@ -114,3 +114,44 @@ async def test_http_p0_submit_executes_directly(async_client, production_api):
         json={"version": submitted["version"], "note": "批准"},
     )
     assert approve_gone.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_http_delete_open_case_and_queue_exposes_execution_id(async_client, production_api):
+    app, service = production_api
+
+    def as_admin():
+        return identity("admin-1", ("review_admin",))
+
+    # 队列行带图谱构建ID（executionId）
+    created = service.create_direct_case(**_link_kwargs(task_id="TASK-DEL"))
+    case_id = created["reviewId"]
+    queue = (
+        await async_client.get("/api/v1/manual-reviews/production/queue", params={"category": "A"})
+    ).json()["data"]
+    row = next(r for r in queue["items"] if r["id"] == case_id)
+    assert row["executionId"] == "EXEC-API"
+
+    # DELETE 仅 review_admin：reviewer 403，admin 物理删除后详情 404
+    forbidden = await async_client.delete(f"/api/v1/manual-reviews/production/{case_id}")
+    assert forbidden.status_code == 403
+    app.dependency_overrides[get_review_identity] = as_admin
+    try:
+        deleted = await async_client.delete(f"/api/v1/manual-reviews/production/{case_id}")
+        assert deleted.status_code == 200
+        assert deleted.json()["data"] == {"id": case_id, "deleted": True}
+        detail = await async_client.get(f"/api/v1/manual-reviews/production/{case_id}")
+        assert detail.status_code == 404
+    finally:
+        app.dependency_overrides[get_review_identity] = lambda: identity()
+
+    # 已处理（终态）case 不给删：409
+    resolved = service.create_direct_case(**_link_kwargs(task_id="TASK-DEL-2"))
+    other_id = resolved["reviewId"]
+    service.submit(other_id, 1, "entity-confirm", {"entityVerdict": "create"}, "", identity())
+    app.dependency_overrides[get_review_identity] = as_admin
+    try:
+        conflict = await async_client.delete(f"/api/v1/manual-reviews/production/{other_id}")
+        assert conflict.status_code == 409
+    finally:
+        app.dependency_overrides[get_review_identity] = lambda: identity()

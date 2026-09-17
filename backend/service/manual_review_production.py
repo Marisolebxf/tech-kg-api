@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import case, func, or_, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from db_model.manual_review import (
@@ -1110,6 +1110,25 @@ class ManualReviewService:
             i, v, a, {"status": "CANCELLED", "completed_at": now()}, "CASE_CANCELLED", True
         )
 
+    def delete_case(self, i, a):
+        """物理删除未处理 case（连同草稿/决议/附件/审计一并删除，不可恢复）。
+
+        仅非终态（OPEN/RERUN_FAILED 等未处理）可删——与可重跑同门控；
+        已处理的记录保留作历史，不给删。review_admin 专用。
+        """
+        require_role(a, "review_admin")
+        with self.sf() as s:
+            c = self.need(s, i)
+            if c.status in TERMINAL_STATUSES:
+                raise ReviewConflictError("已处理的记录不可删除")
+            s.execute(delete(ReviewDraft).where(ReviewDraft.case_id == i))
+            s.execute(delete(ReviewDecision).where(ReviewDecision.case_id == i))
+            s.execute(delete(ReviewEvidence).where(ReviewEvidence.case_id == i))
+            s.execute(delete(ReviewAuditLog).where(ReviewAuditLog.case_id == i))
+            s.delete(c)
+            s.commit()
+        return {"id": i, "deleted": True}
+
     def logs(self, i, a):
         with self.sf() as s:
             c = self.need(s, i)
@@ -1267,6 +1286,9 @@ class ManualReviewService:
             "id": c.id,
             "sourceTaskId": c.source_task_id,
             "batchId": c.batch_id,
+            # 图谱构建ID：产生该 case 的抽取执行（EXEC-xxx，前端跳 /processing-instance）
+            "executionId": (load(c.input_snapshot) or {}).get("executionId"),
+            "workflowId": c.workflow_id,
             "nodeId": c.pipeline_step_id,
             "pipelineStepId": c.pipeline_step_id,
             # kg.custom.steps 流水线的 step id 是 manifest 自定义的（如 seed），

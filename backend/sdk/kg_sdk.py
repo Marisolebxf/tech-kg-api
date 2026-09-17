@@ -1,8 +1,8 @@
 """用户抽取脚本 SDK。
 
 activity 在子进程外把"已解析的连接参数"（不是活对象）序列化进 ``KG_SCRIPT_CTX``
-环境变量。脚本一律单参入口（``transform(payload)``，或用 ``@step`` 装饰器 / 顶层
-``STEPS`` 清单声明多步），函数内取上下文：
+环境变量。脚本一律用 ``@step`` 装饰器声明抽取步（单参顶层函数；单步 ``transform``
+与顶层 ``STEPS`` 清单已下线），函数内取上下文：
 
 - ``from kg_sdk import current_context``，``ctx = current_context()``
   （未配置时返回 None，脚本降级），直接 ``ctx.mysql`` / ``ctx.graph`` /
@@ -210,7 +210,7 @@ def reset_current_context() -> None:
 
 
 def step(fn=None, *, id=None):
-    """``@step`` 装饰器：把顶层函数声明为抽取步（推荐的多步脚本写法）。
+    """``@step`` 装饰器：把顶层函数声明为抽取步（脚本唯一的入口声明方式）。
 
     平台在上传校验与执行计划组装时用 AST 静态识别该装饰器（不执行脚本）：
 

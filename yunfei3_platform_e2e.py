@@ -24,8 +24,11 @@ DS_DB = "techkg_e2e"
 PAPER_SCRIPT = '''"""论文抽取：papers 行 → Paper 实体。"""
 from typing import Any, Mapping
 
+from kg_sdk import step
 
-def transform(payload: Mapping[str, Any]) -> dict[str, Any]:
+
+@step
+def emit_paper(payload: Mapping[str, Any]) -> dict[str, Any]:
     rows = payload.get("rows") or []
     entities, failures = [], []
     for row in rows:
@@ -48,8 +51,11 @@ def transform(payload: Mapping[str, Any]) -> dict[str, Any]:
 EXPERT_SCRIPT = '''"""专家抽取：experts 行 → Expert 实体。"""
 from typing import Any, Mapping
 
+from kg_sdk import step
 
-def transform(payload: Mapping[str, Any]) -> dict[str, Any]:
+
+@step
+def emit_expert(payload: Mapping[str, Any]) -> dict[str, Any]:
     rows = payload.get("rows") or []
     entities, failures = [], []
     for row in rows:
@@ -73,8 +79,11 @@ def transform(payload: Mapping[str, Any]) -> dict[str, Any]:
 AUTHORED_SCRIPT = '''"""关系抽取：papers JOIN experts（作者名=专家名）→ AUTHORED 边。"""
 from typing import Any, Mapping
 
+from kg_sdk import step
 
-def transform(payload: Mapping[str, Any]) -> dict[str, Any]:
+
+@step
+def emit_authored(payload: Mapping[str, Any]) -> dict[str, Any]:
     rows = payload.get("rows") or []
     edges, failures = [], []
     for row in rows:
@@ -213,6 +222,15 @@ def ensure_datasource(run: str) -> str:
     return ds["id"]
 
 
+def _find_same_name(name: str) -> str | None:
+    """找 yunfei_test 空间下同名 schema id；命中则复用（不删除重建——关系引用会挡删除）。"""
+    code, resp = req("GET", f"/schema-management/schemas?keyword={name}&pageSize=100")
+    for item in (resp.get("data") or {}).get("items") or []:
+        if item.get("name") == name and item.get("graphSpace") == GRAPH_SPACE:
+            return item["id"]
+    return None
+
+
 def create_entity_schema(run: str, name: str, label: str, props: list[dict]) -> str:
     return _create_schema(run, "/schema-management/schemas/entities", name, label, props)
 
@@ -226,17 +244,12 @@ def create_relation_schema(run: str, name: str, label: str, props: list[dict],
     )
 
 
-def _delete_same_name(name: str) -> None:
-    code, resp = req("GET", f"/schema-management/schemas?keyword={name}&pageSize=100")
-    for item in (resp.get("data") or {}).get("items") or []:
-        if item.get("name") == name and item.get("graphSpace") == GRAPH_SPACE:
-            req("DELETE", f"/schema-management/schemas/{item['id']}")
-
-
 def _create_schema(run: str, path: str, name: str, label: str, props: list[dict],
                    extra: dict | None = None) -> str:
-    # 幂等：删 yunfei_test 空间下同名旧 schema（techkg 等其它空间不动）
-    _delete_same_name(name)
+    existing = _find_same_name(name)
+    if existing:
+        print(f"  复用已有 {name}（id={existing}），重传脚本+重绑来源即可")
+        return existing
     body = {
         "schemaKey": f"e2e-{name.lower()}-{run}",
         "name": name,
@@ -351,9 +364,7 @@ def main():
     datasource_id = ensure_datasource(run)
     print(f"  datasource={datasource_id}")
 
-    step("2. 创建实体 Schema：Paper / Expert（graphSpace=yunfei_test，DDL 定向该空间）")
-    # 幂等清理顺序：先删关系（AUTHORED 引用实体，不先删则实体删除被 409 拒绝）
-    _delete_same_name("AUTHORED")
+    step("2. 创建实体 Schema：Paper / Expert（graphSpace=yunfei_test；同名复用，DDL 定向该空间）")
     paper_id = create_entity_schema(
         run, "Paper", "论文",
         [

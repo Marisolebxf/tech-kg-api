@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # （max_inflight=3 + 队列积压，实测 3MB/批时事务 4.29MB 超限）→ 收紧到 512KB
 _MAX_BATCH_ROWS_BYTES = 512 * 1024
 
-# 多步链（脚本顶层 STEPS 声明）的步间透传预算（第 N>1 步 request 的 input 单值 /
+# 多步链（脚本顶层 @step 声明）的步间透传预算（第 N>1 步 request 的 input 单值 /
 # prevOutputs 单值上限）。步输出既要作为 activity 返回值过 gRPC 上限，又要随批间
 # 并发聚合进 workflow 事件历史，故与批行预算同量级；超限值截断为 _truncated 标记
 # （stats 小则保留）——脚本应避免在步间传递超大数据，需要重负载时直接读源表。
@@ -534,7 +534,6 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         script = definition.script
         bucket = script.bucket if script else None
         object_key = script.object_key if script else None
-        function_name = (script.workflow_function_name if script else None) or "transform"
         timeout_seconds = int(os.getenv("SCHEMA_WORKFLOW_TIMEOUT_SECONDS", "3600"))
         max_inflight = max(1, int(os.getenv("SCHEMA_EXTRACT_MAX_INFLIGHT", "3")))
         failure_case_cap = max(0, int(os.getenv("SCHEMA_EXTRACT_FAILURE_CASE_CAP", "2000")))
@@ -579,17 +578,15 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         suffix=".py",
         data=data,
     )
-    # 多步声明解析：@step 装饰器（推荐）或顶层 STEPS 清单（兼容）→ 多步链；
-    # 无声明 → 单步兜底（入口名沿用上传时存的 functionName）。上传时
-    # _validate_script 已校验过形状，这里重新解析兜住绕过上传通道的脚本，
+    # 步声明解析：@step 装饰器是唯一脚本形态（单步 transform / STEPS 清单已删除）。
+    # 上传时 _validate_script 已校验过，这里重新解析兜住绕过上传通道的脚本，
     # 非法即失败（workflow 报清晰错误）。
     try:
-        declared_steps = extract_declared_steps(
+        steps = extract_declared_steps(
             data.decode("utf-8-sig", errors="replace"), filename=object_key
         )
     except ValueError as exc:
-        raise ValueError(f"Schema 脚本多步声明非法: {exc}") from exc
-    steps = declared_steps or [{"id": "_default", "fn": function_name}]
+        raise ValueError(f"Schema 脚本步声明非法: {exc}") from exc
     return {
         "schemaId": schema_id,
         "schemaKey": schema_key,
@@ -602,10 +599,8 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         # run 级脚本副本定位：execute_transform 的 tempfile 丢失时按此重物化
         "scriptRunKey": run_key,
         "scriptSha256": script_sha256,
-        "functionName": function_name,
         # steps 只放 id/fn 两个 str 键（plan 要经 Temporal 序列化进事件历史）
         "steps": steps,
-        "multiStep": declared_steps is not None,
         "timeoutSeconds": timeout_seconds,
         "maxInflight": max_inflight,
         "failureCaseCap": failure_case_cap,
@@ -899,10 +894,10 @@ async def _rematerialize_run_script(request: dict[str, Any]) -> str:
 
 @activity.defn
 async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
-    """把批次行交给脚本转换：payload["rows"] = 行 JSON，调脚本入口（默认 transform）。
+    """把批次行交给脚本转换：payload["rows"] = 行 JSON，调 request.functionName 指定步。
 
-    多步脚本（顶层 STEPS 声明）时每个 step 调一次本 activity（各自独立 Temporal 重试）：
-    - 第 1 步与单步 transform 同构（request/payload 均相同）；
+    @step 声明的多步脚本每个 step 调一次本 activity（各自独立 Temporal 重试）：
+    - 第 1 步消费平台读的源表行（request/payload 同单步形态）；
     - 第 N>1 步 request 额外带 ``input``（上一步完整输出 dict）与 ``prevOutputs``
       （已完成各步 {stepId: 输出}），payload 换为 ``{"input": ..., "source_table": ...,
       "kind": ..., "source": ...}``（不再带 rows）；ctx.prev_outputs 同步可读；
@@ -922,7 +917,7 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
         # worker 崩溃/容器重建导致本地 tempfile 丢失：按 run 副本重物化
         # （sha256 钉版本，换 worker 接手也拿到同一份字节）
         script_path = Path(await _rematerialize_run_script(request))
-    function_name = request.get("functionName", "transform")
+    function_name = request["functionName"]
     source = request.get("source") or {}
     kind = request.get("kind", "entity")
     payload = {
@@ -1660,11 +1655,11 @@ class SchemaExtractWorkflow:
     - 来源间 ``asyncio.gather`` 并行；来源内 1 reader（串行读推进游标）+ N worker
       （转换→写图→冲突检测）经 ``asyncio.Queue(maxsize=N)`` 背压并发——十万级数据
       也不会一次进内存/一次跑完。
-    - 脚本可在顶层声明 ``STEPS`` 清单做多步转换（单 ``transform`` = 单步特例）：
-      批内步序串行，每步一次 ``execute_transform`` activity（第 k 步失败由 Temporal
-      只重试第 k 步）；第 N>1 步 payload 为 ``{"input": 上一步输出, ...}``，
-      ``ctx.prev_outputs`` 可读已完成各步输出；任意一步出 entities/edges 即在该步后
-      写图，failures 跨步聚合。水位仍是来源级整链推进，不做 per-step 水位。
+    - 脚本用 ``@step`` 装饰器声明转换步（唯一形态，单步 ``transform`` / ``STEPS``
+      清单已删除）：批内步序串行，每步一次 ``execute_transform`` activity（第 k 步
+      失败由 Temporal 只重试第 k 步）；第 N>1 步 payload 为 ``{"input": 上一步输出,
+      ...}``，``ctx.prev_outputs`` 可读已完成各步输出；任意一步出 entities/edges
+      即在该步后写图，failures 跨步聚合。水位仍是来源级整链推进，不做 per-step 水位。
     - 游标（水位或 pk keyset）在该来源**全部批次成功后**一次性推进——并发处理下
       逐批推进会留洞；批次 activity 重试耗尽 → workflow FAILED，游标停在上一轮，
       下轮从断点续读（merge 写图幂等）。
@@ -1752,12 +1747,12 @@ class SchemaExtractWorkflow:
                 }
                 raise
             sources = result.get("sources") or []
-            # 内层 activities = 该脚本各转换步聚合（单 transform 脚本聚合为 1 条）
+            # 内层 activities = 该脚本各 @step 转换步聚合
             activities: dict[str, dict[str, Any]] = {}
             for sid, stat in (result.get("steps") or {}).items():
                 activities[sid] = {
                     "status": stat.get("status", "COMPLETED"),
-                    "name": (result.get("functionName") or sid) if sid == "_default" else sid,
+                    "name": sid,
                     "records": int(stat.get("records", 0)),
                     "written": int(stat.get("written", 0)),
                     "failed": int(stat.get("failed", 0)),
@@ -1814,17 +1809,12 @@ class SchemaExtractWorkflow:
         timeout_seconds = max(int(plan.get("timeoutSeconds", 3600)), 60)
         kind = plan.get("kind", "entity")
         definition_id = f"schema-extract-{plan['schemaKey']}"
-        # 步清单：STEPS 声明脚本为多步链（批内步序串行，每步一次 execute_transform
-        # 独立重试）；单 transform 脚本及升级窗口内在飞重放的旧 plan（无 steps 键）
-        # 都兜底单步，行为与历史版本逐字段一致
-        steps: list[dict[str, str]] = plan.get("steps") or [
-            {"id": "_default", "fn": plan["functionName"]}
-        ]
-        multi_step = bool(plan.get("multiStep"))
+        # 步清单：@step 声明是唯一脚本形态（上传与计划组装双重校验），批内步序
+        # 串行，每步一次 execute_transform 独立重试
+        steps: list[dict[str, str]] = plan["steps"]
         self._run_script_object = plan.get("scriptRunKey")
-        # 分步聚合计数开关：多步脚本原生开启；chain 模式（force_step_totals）下单
-        # transform 脚本也聚合为 1 条（key=_default），保证详情页每个 Schema 抽屉有内容
-        track_steps = multi_step or force_step_totals
+        # 分步聚合计数：详情页每个 Schema 抽屉展示各转换步统计
+        track_steps = True
 
         # 周期 Schedule 触发：request 是扁平 shape（非 {definitionId, payload}），
         # 直接调注册 activity 落 execution/task 行（幂等）。chain 模式下控制面
@@ -1994,10 +1984,9 @@ class SchemaExtractWorkflow:
                             prev_output: dict[str, Any] = {}
                             step_outputs: dict[str, Any] = {}
                             for seq, step in enumerate(steps):
-                                step_ctx_id = f"{step_id}#{step['id']}" if multi_step else step_id
                                 transform_request: dict[str, Any] = {
                                     "scriptPath": plan["scriptPath"],
-                                    # run 副本定位（.get 兼容升级窗口内在飞旧 plan 的重放）
+                                    # run 副本定位（tempfile 丢失时按此重物化）
                                     "scriptRunKey": plan.get("scriptRunKey"),
                                     "scriptSha256": plan.get("scriptSha256"),
                                     "functionName": step["fn"],
@@ -2008,9 +1997,8 @@ class SchemaExtractWorkflow:
                                     "definitionId": definition_id,
                                     # 水位读取键（kg_script_watermark）保持来源级，不随步变
                                     "stepId": step_id,
+                                    "ctxStepId": f"{step_id}#{step['id']}",
                                 }
-                                if multi_step:
-                                    transform_request["ctxStepId"] = step_ctx_id
                                 if seq:
                                     # 第 N>1 步：不带 rows（省一半请求体积），input=上一步
                                     # 完整输出、prevOutputs=已完成各步输出；超预算截断为
@@ -2029,7 +2017,7 @@ class SchemaExtractWorkflow:
                                         for sid, out in step_outputs.items()
                                     }
                                 else:
-                                    # 第 1 步：与单步 transform 请求形状一致
+                                    # 第 1 步：消费平台读的源表行
                                     transform_request["rows"] = chunk
                                 transformed = await workflow.execute_activity(
                                     execute_transform,
@@ -2052,7 +2040,7 @@ class SchemaExtractWorkflow:
                                             "records": records,
                                             "graph": graph,
                                             "schemaKey": plan["schemaKey"],
-                                            "stepId": step_ctx_id,
+                                            "stepId": f"{step_id}#{step['id']}",
                                             "sourceTable": table_label,
                                         },
                                         start_to_close_timeout=timedelta(seconds=300),
@@ -2082,7 +2070,7 @@ class SchemaExtractWorkflow:
                                             "records": records,
                                             "graph": graph,
                                             "schemaKey": plan["schemaKey"],
-                                            "stepId": step_ctx_id,
+                                            "stepId": f"{step_id}#{step['id']}",
                                         },
                                         start_to_close_timeout=timedelta(seconds=120),
                                         retry_policy=ACTIVITY_RETRY_POLICY,
@@ -2285,9 +2273,8 @@ class SchemaExtractWorkflow:
                         sid: {**stat, "status": "COMPLETED"}
                         for sid, stat in aggregated_steps.items()
                     },
-                    # chain 外层阶段命名（label 优先）与单 transform 步命名（函数名）
+                    # chain 外层阶段命名（label 优先）
                     "schemaLabel": plan.get("label") or plan["name"],
-                    "functionName": plan["functionName"],
                 }
                 if track_steps
                 else {}
@@ -2391,7 +2378,7 @@ class SchemaExtractChainWorkflow(SchemaExtractWorkflow):
     """多脚本串行链：复用 SchemaExtractWorkflow 全部逻辑，payload.schemaIds ≥2 时串行逐 Schema 抽取。
 
     temporalio 要求 defn 子类显式重写 run；分发在基类 run 顶端完成，行为全部继承。
-    详情页按 workflowType 区分 chain 渲染（每 Schema 一个抽屉，内层为脚本 STEPS 步）。
+    详情页按 workflowType 区分 chain 渲染（每 Schema 一个抽屉，内层为脚本 @step 转换步）。
     """
 
     @workflow.run

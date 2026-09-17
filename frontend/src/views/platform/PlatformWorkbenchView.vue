@@ -416,13 +416,6 @@ function formatPagerankScore(value: number): string {
   return value.toExponential(2)
 }
 
-/** 排名表内联分值条宽度（相对最大分值，最小 2% 保证可见）。 */
-function pagerankScoreBar(row: PageRankRow): string {
-  const max = pagerankRows.value?.[0]?.score ?? 0
-  if (max <= 0) return '0%'
-  return `${Math.max(2, Math.round((row.score / max) * 100))}%`
-}
-
 // ----- 排名表节点类型/名称解析（getGraphNode 按页懒解析 + 缓存） -----
 interface RankNodeInfo {
   name: string
@@ -496,6 +489,18 @@ function rankNodeType(tags: string[]): GraphNodeType {
   }
   return 'source'
 }
+
+/** 图谱高亮图例：当前邻域内出现的实体类型（样式对齐九大业务模块的图谱图例）。 */
+const highlightLegendItems = computed(() =>
+  Array.from(
+    new Map(
+      highlightNodes.value.map((node) => [
+        node.nodeType,
+        { type: node.nodeType, label: node.entityType },
+      ]),
+    ).values(),
+  ),
+)
 
 /** 泛化底座标签（挂在所有节点上、非业务类型）；过滤口径与
  *  business-service/indirect-relation-view.ts 保持一致。 */
@@ -2038,11 +2043,11 @@ const pageMeta = computed(() => {
                     <span v-if="rankNodeInfo[row.vid]?.name" :title="row.vid">{{ row.vid }}</span>
                   </td>
                   <td>{{ rankNodeInfo[row.vid]?.type || (rankNodeLoading ? '…' : '-') }}</td>
-                  <td>
-                    <div class="platform-query-algo__score" :title="`PageRank ${row.score}`">
-                      <span>{{ formatPagerankScore(row.score) }}</span>
-                      <i :style="{ width: pagerankScoreBar(row) }"></i>
-                    </div>
+                  <td
+                    class="platform-query-algo__score"
+                    :title="`PageRank ${row.score}`"
+                  >
+                    {{ formatPagerankScore(row.score) }}
                   </td>
                 </tr>
               </tbody>
@@ -2062,6 +2067,19 @@ const pageMeta = computed(() => {
             <div class="platform-query-algo__highlight-head">
               <h3>图谱高亮</h3>
               <p>选中节点的 1 跳邻域，节点大小按 PageRank 分值映射；点击排名行切换中心</p>
+            </div>
+            <div
+              v-if="highlightLegendItems.length"
+              class="platform-query-algo__legend"
+              aria-label="图谱实体类型图例"
+            >
+              <span
+                v-for="item in highlightLegendItems"
+                :key="item.type"
+                :class="`is-${item.type}`"
+              >
+                <i />{{ item.label }}
+              </span>
             </div>
             <div v-if="highlightLoading" class="platform-query-result__empty">邻域子图加载中…</div>
             <KgGraphCanvas
@@ -5174,15 +5192,24 @@ print(response.json())</pre>
 .platform-query-algo__rank-table tbody tr.is-selected td{background:#eef4ff}
 .platform-query-algo__node-cell strong{display:block;max-width:260px;overflow:hidden;color:#1d2129;font-size:14px;text-overflow:ellipsis;white-space:nowrap}
 .platform-query-algo__node-cell span{display:block;max-width:260px;overflow:hidden;color:#86909c;font-size:12px;line-height:16px;text-overflow:ellipsis;white-space:nowrap}
-.platform-query-algo__score{display:flex;align-items:center;gap:8px;min-width:120px}
-.platform-query-algo__score span{flex:0 0 auto;color:#1d2129;font-variant-numeric:tabular-nums}
-.platform-query-algo__score i{display:block;height:6px;min-width:2px;border-radius:3px;background:linear-gradient(90deg,#165dff,#4080ff)}
+.platform-query-algo__score{color:#1d2129;font-variant-numeric:tabular-nums}
 /* 图谱高亮面板 */
 .platform-query-algo__highlight{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:#fff}
 .platform-query-algo__highlight-error{display:flex;flex-direction:column;align-items:center;gap:8px;justify-content:center;color:#b42318}
 .platform-query-algo__highlight-head{display:grid;padding:10px 12px 6px;gap:2px;border-bottom:1px solid #f0f2f5}
 .platform-query-algo__highlight-head h3{margin:0;color:#1d2129;font-size:14px;line-height:22px;font-weight:500}
 .platform-query-algo__highlight-head p{margin:0;color:#86909c;font-size:12px;line-height:18px}
+.platform-query-algo__legend{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;min-height:38px;padding:7px 12px;border-bottom:1px solid #f0f2f5;background:#fbfdff}
+.platform-query-algo__legend span{display:inline-flex;align-items:center;gap:6px;color:#86909c;font-size:12px;white-space:nowrap}
+.platform-query-algo__legend i{width:9px;height:9px;border-radius:50%;background:#eb2f96}
+.platform-query-algo__legend .is-main i{background:#f43f5e}
+.platform-query-algo__legend .is-expert i{background:#168cff}
+.platform-query-algo__legend .is-org i{background:#0ea5a4}
+.platform-query-algo__legend .is-company i{background:#36c414}
+.platform-query-algo__legend .is-paper i{background:#f5b700}
+.platform-query-algo__legend .is-project i{background:#ff9f0a}
+.platform-query-algo__legend .is-event i{background:#d97706}
+.platform-query-algo__legend .is-topic i{background:#722ed1}
 .platform-query-algo__highlight .platform-query-result__empty{flex:1}
 /* Louvain：社区列表（chips）+ 社区色点 */
 .platform-query-algo__community-list{display:flex;flex:0 0 auto;flex-wrap:wrap;gap:6px;max-height:132px;overflow:auto;padding:8px 12px;border-top:1px solid #f0f2f5}

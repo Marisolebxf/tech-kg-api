@@ -449,4 +449,49 @@ test.describe.serial('E. 任务中心', () => {
     const ioText = await page.locator('.step-detail').innerText()
     expect(ioText.length).toBeGreaterThan(0)
   })
+
+  test('E9 任务列表按当前图空间过滤 + 「全部空间」开关', async ({ page, request }) => {
+    test.setTimeout(120_000)
+    // 造一个别的空间的任务（admin 绕过绑定校验，直接落 algo_test 空间；不触发执行）
+    const jobName = `e2e任务-跨空间-${suffix}`
+    const schemas = await apiMust<any>(
+      request,
+      'GET',
+      '/schema-management/schemas?graphSpace=dev2&pageSize=100',
+      undefined,
+      '列 schema',
+    )
+    const widget = (schemas.items ?? []).find((s: any) => s.name === 'E2EWidget')
+    test.skip(!widget, '无 E2EWidget schema')
+    const otherJob = await apiMust<any>(
+      request,
+      'POST',
+      '/workflow-system/jobs',
+      {
+        name: jobName,
+        taskType: 'extract',
+        schemaId: widget.id,
+        schedule: { kind: 'once' },
+        graphSpace: 'algo_test',
+        batchSize: 2,
+      },
+      '建跨空间任务',
+    )
+    try {
+      await page.goto('/graph-build')
+      await page.waitForLoadState('networkidle')
+      // 默认跟随当前全局空间（dev2）：跨空间任务不可见
+      await expect(page.locator('tbody tr', { hasText: jobName })).toHaveCount(0)
+      // 打开「全部空间」→ 任务可见，图空间列显示 algo_test
+      await page.locator('.gb-space-toggle').click()
+      const row = page.locator('tbody tr', { hasText: jobName }).first()
+      await expect(row).toBeVisible({ timeout: 15_000 })
+      await expect(row.getByText('algo_test')).toBeVisible()
+      // 关闭开关 → 回到当前空间过滤（隐藏）
+      await page.locator('.gb-space-toggle').click()
+      await expect(page.locator('tbody tr', { hasText: jobName })).toHaveCount(0)
+    } finally {
+      await api(request, 'DELETE', `/workflow-system/jobs/${otherJob.id}`)
+    }
+  })
 })

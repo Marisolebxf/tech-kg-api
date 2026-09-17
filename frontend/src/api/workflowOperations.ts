@@ -195,10 +195,6 @@ export interface ProductionReviewLogEntry {
 export const getProductionReviewLogs = (id: string) =>
   unwrap(http.get(`/v1/manual-reviews/production/${id}/audit-logs`)) as Promise<{ items: ProductionReviewLogEntry[] }>
 
-/** T_EXTRACT_FAIL 失败记录硬删除（单条/批量共用，review_admin）：连同草稿/证据/裁决/审计一并删除。 */
-export const deleteProductionReviewCases = (caseIds: string[]) =>
-  unwrap(http.post('/v1/manual-reviews/production/delete-cases', { caseIds })) as Promise<{ deleted: number; skipped: number }>
-
 /** kg.custom.steps T_DIRECT 案例直接决策：accept 写图，reject 丢弃。不走 4-eyes claim/submit 流程。
  * candidate 为"修正后的完整候选"（仅 accepted 时有意义）：覆盖候选快照后写图并记审计。 */
 export const directDecideProductionReview = (

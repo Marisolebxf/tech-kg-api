@@ -1093,7 +1093,9 @@ class ManualReviewService:
     ) -> dict[str, Any]:
         """把 candidate 字段对齐到 tag/edge schema。
 
-        - schema 里有的字段：保留，值转 string（NebulaGraph tag 属性多为 string）
+        - schema 里有的字段：string 列值转 string（NebulaGraph tag 属性多为
+          string）；int/double 列保留数字字面量（转成字符串会被 Nebula 拒
+          "The data type does not meet the requirements"）
         - schema 里有 ``extra_json``：多余字段塞进 extra_json（JSON 串），不丢数据
         - schema 里没有 extra_json：丢弃多余字段（记 warning）
         - schema 查询失败：原样发（让 trs-graph 报 400 暴露问题）
@@ -1113,6 +1115,11 @@ class ManualReviewService:
             schema_fields = {
                 r.get("Field") for r in records if isinstance(r, dict) and r.get("Field")
             }
+            column_types = {
+                r.get("Field"): str(r.get("Type") or "").lower()
+                for r in records
+                if isinstance(r, dict) and r.get("Field")
+            }
         except Exception as exc:  # noqa: BLE001
             log.warning(
                 "DESCRIBE %s %s 失败，原样灌图: %s", "EDGE" if is_edge else "TAG", label, exc
@@ -1122,11 +1129,24 @@ class ManualReviewService:
         if not schema_fields:
             return {k: v if isinstance(v, str) else str(v) for k, v in candidate.items()}
 
+        def _typed(key: str, value: Any) -> Any:
+            col_type = column_types.get(key, "")
+            if col_type.startswith(("int", "double", "float")):
+                if isinstance(value, bool):
+                    return int(value)
+                if isinstance(value, (int, float)):
+                    return value
+                try:
+                    return float(value) if col_type.startswith(("double", "float")) else int(value)
+                except (TypeError, ValueError):
+                    return value  # 无法解析按原样发，让图库报错暴露
+            return value if isinstance(value, str) else str(value)
+
         mapped: dict[str, Any] = {}
         extras: dict[str, Any] = {}
         for k, v in candidate.items():
             if k in schema_fields:
-                mapped[k] = v if isinstance(v, str) else str(v)
+                mapped[k] = _typed(k, v)
             else:
                 extras[k] = v
 

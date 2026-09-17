@@ -331,14 +331,14 @@ onMounted(loadReviews)
           v-if="reviewCategory === 'A' || rerunView === 'cases'"
           class="ops-filter is-review review-filter-row"
         >
-          <label class="review-filter-field">
+          <div class="review-filter-field">
             <span class="review-filter-label">状态</span>
             <a-select v-model="reviewStatusFilter" class="review-filter-select" :options="reviewStatusOptions" />
-          </label>
-          <label class="review-filter-field">
+          </div>
+          <div class="review-filter-field">
             <span class="review-filter-label">类型</span>
             <a-select v-model="reviewKindFilter" class="review-filter-select" :options="['全部', '实体', '关系']" />
-          </label>
+          </div>
           <a-input v-model="keyword" class="review-search-input review-filter-search" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录"><template #prefix><IconSearch /></template></a-input>
         </div>
       </div>
@@ -423,10 +423,10 @@ onMounted(loadReviews)
                 reviewRows.forEach((row) => toggleRerunPick(row.id, checked && isRerunnable(row)))
               })()"
             /></th>
-            <th>处理ID</th>
-            <th>实体关系名称</th>
+            <th>处理实例 ID</th>
+            <th>待处理对象</th>
             <th>类型</th>
-            <th>图谱构建ID</th>
+            <th>来源记录</th>
             <th>状态</th>
             <th>更新时间</th>
             <th class="review-action-col">操作</th>
@@ -440,10 +440,9 @@ onMounted(loadReviews)
               :checked="rerunSelection.has(row.id)"
               @change="((event?: Event) => toggleRerunPick(row.id, Boolean((event?.target as HTMLInputElement)?.checked)))"
             /></td>
-            <td class="review-id-cell"><code>{{ row.id }}</code></td>
+            <td class="review-id-cell"><code class="review-id-plain">{{ row.id }}</code></td>
             <td class="review-object-cell">
               <strong>{{ row.object || '—' }}</strong>
-              <small>{{ row.type }}</small>
             </td>
             <td><span :class="['review-kind-badge', `is-${rowKindLabel(row)}`]">{{ rowKindLabel(row) }}</span></td>
             <td class="review-id-cell">
@@ -715,6 +714,8 @@ onMounted(loadReviews)
 /* 筛选字段标签 / 类型徽标 / 勾选禁用态 / 删除按钮 */
 .review-filter-field{display:flex;flex:0 0 auto;align-items:center;gap:8px}
 .review-filter-label{color:#4e5969;font-size:14px;line-height:22px;white-space:nowrap}
+/* 处理实例 ID 纯文本：中性色，区别于可点击的链接蓝 */
+.review-id-cell .review-id-plain{color:#4e5969}
 .review-kind-badge{display:inline-flex;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#4e5969;font-size:12px;line-height:20px}
 .review-kind-badge.is-实体{background:#eaf2ff;color:#175cd3}
 .review-kind-badge.is-关系{background:#fff3d8;color:#b54708}

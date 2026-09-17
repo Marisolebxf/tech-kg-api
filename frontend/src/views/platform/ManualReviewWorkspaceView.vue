@@ -419,13 +419,7 @@ const runPrimary = () => {
         <!-- ② 为什么需要你确认：confidence 追溯 -->
         <section class="direct-why">
           <h3>② 为什么需要你确认</h3>
-          <p v-if="directConfidence !== null">
-            LLM 输出的 <code class="direct-confidence-inline">confidence = {{ directConfidence.toFixed(2) }}</code>，
-            系统阈值 <strong>0.85</strong>。
-            <strong>{{ directConfidence.toFixed(2) }} &lt; 0.85</strong>
-            → 未达自动入库线 → 候选被隔离在写图前。通过则写入图，驳回则丢弃。
-          </p>
-          <p v-else>
+          <p v-if="directConfidence === null">
             系统未给出置信度，候选被隔离在写图前，等待人工决策。
           </p>
           <details class="direct-trace">

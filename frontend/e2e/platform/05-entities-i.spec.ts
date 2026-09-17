@@ -3,6 +3,11 @@ import { api, apiMust, sleep, switchGraphSpace, waitFor } from './helpers'
 
 // I. 实体列表 /graph-query/entities（图空间跟随顶栏全局选择器，本页无空间控件）
 test.describe('I. 实体列表', () => {
+  test.beforeAll(async ({ request }) => {
+    // 选择器列表已收敛为「默认+本人绑定」：I1 要切的 dev 先绑定（bind 幂等）
+    await api(request, 'POST', '/graph-spaces/dev/bind', {})
+  })
+
   test('I1 浏览模式 + 类型/空间/分页', async ({ page, request }) => {
     await page.goto('/graph-query/entities')
     await page.waitForLoadState('networkidle')
@@ -120,9 +125,12 @@ test.describe('I. 实体列表', () => {
     // 说明：关键词空态（「未找到匹配“X”的实体」）在混合检索下不可构造——语义
     // top-k 对任意乱词也返回结果（实测 zzz_no_hit_zzz 命中 0.016 分）。改用空
     // 图空间浏览空态覆盖空态文案分支。空空间动态探测（N 组会写 e2e_verify_space，
-    // 固定名字在全量回归里不成立）。
+    // 固定名字在全量回归里不成立）。选择器只列「默认+本人绑定」，候选同样
+    // 限定 bound=true（否则选中的空间在全局选择器里根本切不过去）。
     const spaces = await apiMust<any>(request, 'GET', '/graph-spaces', undefined, '图空间列表')
-    const candidates = (spaces.items ?? spaces).map((x: any) => x.name).filter((n: string) => n !== 'dev2')
+    const candidates = (spaces.items ?? spaces)
+      .filter((x: any) => x.bound && x.name !== 'dev2')
+      .map((x: any) => x.name)
     let emptySpace = ''
     for (const name of candidates) {
       const r = await api<any>(request, 'POST', '/graph-console/query', { space: name, statement: 'MATCH (v) RETURN count(v) AS c' })

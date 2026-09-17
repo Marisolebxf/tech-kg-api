@@ -45,6 +45,10 @@ test.describe.serial('M. 图空间横切', () => {
     await dropGraphEdge('E2E_SPACE_RELATES', SPACE_B)
     await dropGraphTag('E2eSpaceWidget', SPACE_B)
     await dropGraphTag('E2eDevOnly')
+    // 选择器列表已收敛为「默认+本人绑定」（对所有用户生效）：M 组要切的两个
+    // 目标空间先绑定到测试账号（bind 幂等）；D5 结束时会解绑 e2e_verify_space
+    await api(request, 'POST', `/graph-spaces/${SPACE_B}/bind`, {})
+    await api(request, 'POST', '/graph-spaces/algo_test/bind', {})
   })
 
   test('M1 Schema 管理页：全局图空间切换与按空间过滤', async ({ page, request }) => {
@@ -278,7 +282,9 @@ test.describe.serial('M. 图空间横切', () => {
     expect(String((execDetail.payload || {}).graphSpace || '')).toContain(SPACE_B)
   })
 
-  test('D5 图数据空间绑定/解绑', async ({ page, request }) => {
+  test('D5 图数据空间绑定/解绑（选择器联动）', async ({ page, request }) => {
+    // beforeAll 已绑定 SPACE_B 供 M1-M6 切换；先 API 解绑复位，再走 UI 完整绑定/解绑
+    await api(request, 'DELETE', `/graph-spaces/${SPACE_B}`)
     await page.goto('/configurations')
     await page.waitForLoadState('networkidle')
     await page.getByRole('button', { name: '图数据空间', exact: false }).first().click()
@@ -294,6 +300,12 @@ test.describe.serial('M. 图空间横切', () => {
       },
       { label: 'API bound=true' },
     )
+    // 绑定对所有用户生效：配置页改动会刷新顶栏选择器，SPACE_B 立即出现在可选列表
+    await page.locator('.app-space-select .arco-select-view-single').click()
+    await expect(page.locator('li.arco-select-option:visible', { hasText: SPACE_B }).first()).toBeVisible({
+      timeout: 15_000,
+    })
+    await page.keyboard.press('Escape')
 
     // 解绑（confirm 文案核对后接受）
     page.once('dialog', (d) => {
@@ -308,5 +320,8 @@ test.describe.serial('M. 图空间横切', () => {
       },
       { label: 'API bound=false' },
     )
+    // 选择器列表同步移除该空间（后续 N 组如需切换会在自己的 beforeAll 重新绑定）
+    await page.locator('.app-space-select .arco-select-view-single').click()
+    await expect(page.locator('li.arco-select-option:visible', { hasText: SPACE_B })).toHaveCount(0)
   })
 })

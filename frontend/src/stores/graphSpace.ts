@@ -24,8 +24,9 @@ function persistSpace(space: string): void {
 
 /**
  * 全局图空间上下文：右上角选择器的数据源，业务模块统一从这里取当前空间。
- * 空间列表来自 GET /v1/graph-search/spaces（角色自适应：普通用户=默认+绑定，
- * 管理员=全量）；加载失败静默降级，当前值走 localStorage > 构建默认 > 'dev'。
+ * 空间列表来自 GET /v1/graph-search/spaces（所有用户=默认业务空间+本人绑定，
+ * 绑定对所有用户生效，管理员经配置页修改绑定）；加载失败静默降级，
+ * 当前值走 localStorage > 构建默认 > 'dev'。
  */
 export const useGraphSpaceStore = defineStore('graphSpace', {
   state: () => ({

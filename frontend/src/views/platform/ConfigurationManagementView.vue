@@ -41,6 +41,7 @@ import {
   type GraphSpaceItem,
 } from '../../api/graphSpace'
 import { currentUserIsAdmin } from '../../api/currentUser'
+import { useGraphSpaceStore } from '../../stores/graphSpace'
 import { useToast } from '../../composables/use-toast'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 
@@ -78,6 +79,7 @@ type ConfigItem = {
 }
 
 const { showToast } = useToast()
+const graphSpaceStore = useGraphSpaceStore()
 
 const categories = [
   { key: '语言模型', label: '语言模型', icon: 'AI', hint: 'LLM 语言模型配置' },
@@ -273,6 +275,8 @@ async function createSpace() {
     spaceDialogOpen.value = false
     newSpaceName.value = ''
     await loadGraphSpaces()
+    // 顶栏全局选择器同步出现新空间（创建即绑定）
+    void graphSpaceStore.ensureLoaded(true)
   } catch (err) {
     showToast(`创建失败：${(err as Error).message}`, 'warning')
   } finally {
@@ -289,6 +293,8 @@ async function bindSpace() {
     showToast(`图数据空间“${name}”已绑定。`)
     bindTarget.value = ''
     await loadGraphSpaces()
+    // 绑定对所有用户生效：顶栏选择器立即出现该空间
+    void graphSpaceStore.ensureLoaded(true)
   } catch (err) {
     showToast(`绑定失败：${(err as Error).message}`, 'warning')
   } finally {
@@ -302,6 +308,8 @@ async function unbindSpace(name: string) {
     await unbindGraphSpace(name)
     showToast(`已解除与“${name}”的绑定（图数据空间数据保留）。`)
     await loadGraphSpaces()
+    // 选择器列表移除该空间；若当前全局空间正是它，store 归一会回退默认空间
+    void graphSpaceStore.ensureLoaded(true)
   } catch (err) {
     showToast(`解除绑定失败：${(err as Error).message}`, 'warning')
   }

@@ -139,7 +139,10 @@ test.describe.serial('N. 一对一脚本全量管道', () => {
   }
 
   test.beforeAll(async ({ request }) => {
-    // N0：空间就绪（见顶部偏差说明）。清理 N 组残留目录（保留 M 组的
+    // N0：空间就绪（见顶部偏差说明）。D5（11 组）结束时解绑了本空间，而全局
+    // 选择器已收敛为「默认+本人绑定」——N1 切换前重新绑定（bind 幂等）。
+    await api(request, 'POST', `/graph-spaces/${SPACE}/bind`, {})
+    // 清理 N 组残留目录（保留 M 组的
     // E2eSpaceWidget / E2E_SPACE_RELATES）
     const stale = await api<any>(request, 'GET', `/schema-management/schemas?graphSpace=${SPACE}&pageSize=100&includeDetails=true`)
     const leftovers = (stale.data?.items ?? []).filter(

@@ -186,6 +186,40 @@ def test_list_spaces_for_actor(session_factory, monkeypatch) -> None:
     assert {item["name"] for item in admin_view if item["mine"]} == set()
 
 
+def test_list_work_spaces_for_actor(session_factory, monkeypatch) -> None:
+    """可工作空间对管理员同样收敛为默认 + 本人绑定（绑定对所有用户生效）。"""
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "dev2")
+    client = FakeGraphClient(spaces=["dev2", "techkg", "algo_test"])
+    service = _service(session_factory, client)
+    service.bind(_actor(USER_A), "techkg")
+
+    # 管理员同样只见默认 + 自己绑定（未绑定时仅默认），而非全量
+    admin = _actor("admin", is_admin=True)
+    assert service.list_work_spaces_for_actor(admin) == [
+        {"name": "dev2", "bound": False, "mine": False}
+    ]
+    service.bind(admin, "algo_test")
+    assert service.list_work_spaces_for_actor(admin) == [
+        {"name": "dev2", "bound": False, "mine": False},
+        {"name": "algo_test", "bound": True, "mine": True},
+    ]
+    # 普通用户同规则（默认 + 本人绑定）
+    assert service.list_work_spaces_for_actor(_actor(USER_A)) == [
+        {"name": "dev2", "bound": False, "mine": False},
+        {"name": "techkg", "bound": True, "mine": True},
+    ]
+    # 未绑定任何空间的用户仅见默认
+    assert service.list_work_spaces_for_actor(_actor(USER_B)) == [
+        {"name": "dev2", "bound": False, "mine": False}
+    ]
+    # 全量列表（配置页绑定入口）不受影响：管理员仍可见全部空间
+    assert {item["name"] for item in service.list_spaces_for_actor(admin)} == {
+        "dev2",
+        "techkg",
+        "algo_test",
+    }
+
+
 def test_new_user_reads_configured_default_without_binding(session_factory, monkeypatch) -> None:
     monkeypatch.setenv("TRS_GRAPH_SPACE", "delivery_graph")
     client = FakeGraphClient(spaces=["delivery_graph", "private_graph"])

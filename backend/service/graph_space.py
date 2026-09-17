@@ -92,14 +92,22 @@ class GraphSpaceService:
         )
         return self._session.execute(stmt).scalars().first() is not None
 
-    def list_spaces_for_actor(self, actor: PlatformActor) -> list[dict]:
-        """管理员看全量；普通用户可读默认业务空间及原有绑定空间。"""
+    def list_work_spaces_for_actor(self, actor: PlatformActor) -> list[dict]:
+        """当前用户可工作空间：默认业务空间 + 本人绑定，绑定对所有用户（含管理员）生效。
+
+        共享读取不落永久绑定，也不赋予创建空间或图写入权限。
+        """
         bound_names = [item["name"] for item in self.bound_spaces(actor.user_id)]
         bound = set(bound_names)
+        names = dict.fromkeys([default_graph_space(), *bound_names])
+        return [{"name": name, "bound": name in bound, "mine": name in bound} for name in names]
+
+    def list_spaces_for_actor(self, actor: PlatformActor) -> list[dict]:
+        """配置页绑定入口：管理员看全量（需可选列表），普通用户按可工作空间收敛。"""
         if not actor.is_admin:
-            # 共享读取不落永久绑定，也不赋予创建空间或图写入权限。
-            names = dict.fromkeys([default_graph_space(), *bound_names])
-            return [{"name": name, "bound": name in bound, "mine": name in bound} for name in names]
+            return self.list_work_spaces_for_actor(actor)
+        bound_names = [item["name"] for item in self.bound_spaces(actor.user_id)]
+        bound = set(bound_names)
         try:
             all_spaces = self.client.list_spaces()
         except Exception as exc:  # noqa: BLE001

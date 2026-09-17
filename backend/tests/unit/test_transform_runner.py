@@ -253,3 +253,39 @@ async def test_write_records_without_active_props_writes_all(fake_graph) -> None
     )
     query = fake_graph[0].written_queries[0]
     assert "`id`" in query and "`extra`" in query
+
+
+@pytest.mark.asyncio
+async def test_write_records_backfills_entity_id_from_record(fake_graph) -> None:
+    # 脚本只管业务字段（文档口径）时，id 身份列由平台用记录 id 兜底：
+    # 未输出 id 与显式空串都不落库为 ""（id 是注入的 NOT NULL 身份列）
+    records = [
+        {"id": "S-1", "props": {"name": "张三"}},
+        {"id": "S-2", "props": {"id": "", "name": "李四"}},
+    ]
+    result = await write_records(
+        {
+            "kind": "entity",
+            "name": "Scholar",
+            "activeProps": ["id", "name"],
+            "records": records,
+            "graph": {},
+        }
+    )
+    assert result["written"] == 2
+    queries = fake_graph[0].written_queries
+    # vid + id 列各出现一次记录 id，即身份列已兜底
+    assert queries[0].count('"S-1"') == 2
+    assert queries[1].count('"S-2"') == 2
+    # 白名单未声明 id 列时不注入（避免给未声明 id 的 Schema 加未知列）
+    await write_records(
+        {
+            "kind": "entity",
+            "name": "Widget",
+            "activeProps": ["name"],
+            "records": [{"id": "W-1", "props": {"name": "甲"}}],
+            "graph": {},
+        }
+    )
+    widget_query = fake_graph[1].written_queries[0]
+    assert "`id`" not in widget_query

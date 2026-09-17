@@ -14,7 +14,6 @@ from sqlalchemy.pool import StaticPool
 from db_model.base import Base
 from service.manual_review_domain import (
     ReviewConflictError,
-    ReviewForbiddenError,
     ReviewIdentity,
     ReviewValidationError,
 )
@@ -83,6 +82,23 @@ def test_template_action_is_server_validated(service):
         service.submit(case["id"], case["version"], "force-pass", {}, "", actor())
 
 
+def test_submit_directly_from_open_without_claim(service):
+    # 直审模式：建案即 OPEN，无需领取直接提交即执行
+    created = service.create_direct_case(**link_case_kwargs())
+    detail = service.get_case(created["reviewId"], actor())
+    out = service.submit(
+        detail["id"],
+        detail["version"],
+        "entity-confirm",
+        {"entityVerdict": "create"},
+        "打开即裁，无需领取",
+        actor(),
+    )
+    assert out["status"] == "RESOLVED"
+    # OPEN 直审时 assignee 记为提交人（历史可追溯，队列不再显示待领取）
+    assert out["assigneeId"] == actor().user_id
+
+
 def test_ordinary_decision_records_verdict_and_resolves(service):
     case = claimed(service)
     case = service.draft(case["id"], case["version"], {"entityVerdict": "create"}, actor())
@@ -99,8 +115,8 @@ def test_ordinary_decision_records_verdict_and_resolves(service):
     assert case["consequence"]["writeTarget"]
 
 
-def test_p0_requires_different_approver(service):
-    # confidence < 0.7 → P0，submit 进四方签核
+def test_p0_executes_at_submit_without_approval(service):
+    # 直审模式：confidence < 0.7 → P0 同样提交即执行，无四方签核
     case = claimed(service, confidence=0.4)
     case = service.submit(
         case["id"],
@@ -110,13 +126,7 @@ def test_p0_requires_different_approver(service):
         "",
         actor(),
     )
-    assert case["status"] == "PENDING_APPROVAL"
-    with pytest.raises(ReviewForbiddenError):
-        service.approve(case["id"], case["version"], True, "", actor("reviewer-1", ("approver",)))
-    approved = service.approve(
-        case["id"], case["version"], True, "", actor("approver-2", ("approver",))
-    )
-    assert approved["status"] == "RESOLVED"
+    assert case["status"] == "RESOLVED"
 
 
 def test_stale_draft_does_not_overwrite(service):
@@ -256,3 +266,44 @@ def test_direct_decide_audit_records_modified_fields(monkeypatch):
     assert detail["modifiedFields"]["changed"] == ["name_zh"]
     assert detail["modifiedFields"]["removed"] == ["name_en"]
     assert detail["originalCandidateSha256"]
+
+
+def test_delete_open_case_removes_cascade(service):
+    # 物理删除未处理 case：case 与草稿/审计一并删除，详情查不到
+    # （先领取再存草稿：OPEN 未领取的 case 不允许写草稿——直审模式既有门控）
+    detail = claimed(service)
+    detail = service.draft(detail["id"], detail["version"], {"note": "占位草稿"}, actor())
+    admin = actor("admin-1", ("review_admin",))
+    out = service.delete_case(detail["id"], admin)
+    assert out == {"id": detail["id"], "deleted": True}
+    with pytest.raises(KeyError):
+        service.get_case(detail["id"], admin)
+
+
+def test_delete_rejects_terminal_case(service):
+    # 已处理的记录保留作历史，不给删
+    case = claimed(service)
+    case = service.submit(
+        case["id"], case["version"], "entity-confirm", {"entityVerdict": "create"}, "", actor()
+    )
+    admin = actor("admin-1", ("review_admin",))
+    with pytest.raises(ReviewConflictError):
+        service.delete_case(case["id"], admin)
+
+
+def test_delete_requires_review_admin(service):
+    # 物理删除仅 review_admin（普通审核员禁止）
+    from service.manual_review_domain import ReviewForbiddenError
+
+    created = service.create_direct_case(**link_case_kwargs())
+    with pytest.raises(ReviewForbiddenError):
+        service.delete_case(created["reviewId"], actor())
+
+
+def test_queue_rows_expose_execution_and_workflow_id(service):
+    # 图谱构建ID：队列行带产生该 case 的执行 id / workflow id
+    service.create_direct_case(**link_case_kwargs())
+    page = service.list_cases({"category": "A"}, actor("r", ("reviewer",)))
+    row = page["items"][0]
+    assert row["executionId"] == "EXEC-1"
+    assert row["workflowId"] is None or isinstance(row["workflowId"], str)

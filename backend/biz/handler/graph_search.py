@@ -662,27 +662,21 @@ async def shortest_path(
 
 @router.get("/spaces", response_model=ApiResponse)
 async def list_spaces(actor: CurrentActor) -> ApiResponse:
-    """管理员看全量；普通用户仅默认业务空间及自己绑定的空间。"""
+    """全局选择器数据源：所有用户均为默认业务空间 + 本人绑定（绑定对所有用户生效）。"""
     try:
         from service.graph_space import GraphSpaceService
 
         session = create_session()
         try:
-            items = GraphSpaceService(session).list_spaces_for_actor(actor)
+            items = GraphSpaceService(session).list_work_spaces_for_actor(actor)
         finally:
             session.close()
         return ApiResponse(data={"spaces": [item["name"] for item in items]})
-    except Exception as exc:  # noqa: BLE001
-        # 绑定库不可用时，普通用户仍仅得到默认业务空间，不泄露其他空间列表。
-        if not actor.is_admin:
-            from service.graph_space import default_graph_space
+    except Exception:  # noqa: BLE001
+        # 绑定库不可用时仅返回默认业务空间，不泄露其他空间列表。
+        from service.graph_space import default_graph_space
 
-            return ApiResponse(data={"spaces": [default_graph_space()]})
-        # 管理员保留直接从图服务列空间的兜底。
-        try:
-            return ApiResponse(data={"spaces": _get_client(None).list_spaces()})
-        except Exception:  # noqa: BLE001
-            return ApiResponse(code=500, success=False, msg=str(exc))
+        return ApiResponse(data={"spaces": [default_graph_space()]})
 
 
 @router.get("/stats")

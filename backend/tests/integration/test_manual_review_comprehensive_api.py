@@ -70,17 +70,13 @@ def set_identity(review_api, uid, roles):
     review_api[0].dependency_overrides[get_review_identity] = lambda: identity(uid, roles)
 
 
-async def _claim_submit(async_client, review_id, version, action, result):
-    claimed = (
-        await async_client.post(
-            f"/api/v1/manual-reviews/production/{review_id}/claim", json={"version": version}
-        )
-    ).json()["data"]
+async def _submit(async_client, review_id, version, action, result):
+    """直审模式：OPEN 直接提交（无需领取）。"""
     return (
         await async_client.post(
             f"/api/v1/manual-reviews/production/{review_id}/submit",
             json={
-                "version": claimed["version"],
+                "version": version,
                 "actionId": action,
                 "result": result,
                 "note": "已核验",
@@ -110,33 +106,25 @@ async def test_each_template_renders_correct_display_schema(
 
 
 # --------------------------------------------------------------------------- #
-# 2. 拒绝终态端到端（P0 四方签核后 reject）
+# 2. 驳回候选终态端到端（直审：提交即执行）
 # --------------------------------------------------------------------------- #
 @pytest.mark.anyio
 async def test_reject_terminates_review(async_client, review_api):
     _, service = review_api
     created = service.create_direct_case(**_kwargs("align", "T_LINK", confidence=0.4))
     rid = created["reviewId"]
-    submitted = await _claim_submit(
+    submitted = await _submit(
         async_client,
         rid,
-        1,  # 新建 case version=1（建案响应不含 version）
-        "entity-confirm",
-        {"entityVerdict": "merge", "targetEntityId": "E-1"},
+        1,  # 新建 case version=1（建案响应不含 version），无需领取
+        "reject-candidate",
+        {"entityVerdict": "reject"},
     )
-    assert submitted["status"] == "PENDING_APPROVAL"
-    set_identity(review_api, "approver-2", ("approver",))
-    rejected = (
-        await async_client.post(
-            f"/api/v1/manual-reviews/production/{rid}/reject",
-            json={"version": submitted["version"], "note": "拒绝"},
-        )
-    ).json()["data"]
-    assert rejected["status"] == "REJECTED"
+    assert submitted["status"] == "RESOLVED"
     # 终态后不可再领取
     set_identity(review_api, "reviewer-1", ("reviewer",))
     again = await async_client.post(
-        f"/api/v1/manual-reviews/production/{rid}/claim", json={"version": rejected["version"]}
+        f"/api/v1/manual-reviews/production/{rid}/claim", json={"version": submitted["version"]}
     )
     assert again.status_code == 409
 

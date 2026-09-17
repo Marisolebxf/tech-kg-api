@@ -80,6 +80,31 @@ class UserGraphSpace(Base):
     )
 
 
+class GraphSpaceVectorDatabase(Base):
+    """图空间 ↔ Milvus 向量库（database）登记关系。
+
+    登记性映射：实际的向量数据隔离仍由 kg_entity 单 collection 的 graph_space
+    字段分区承担；本表记录"该图空间对应的 Milvus database"（现阶段同名一一
+    对应），为后续按空间路由向量客户端的消费方留口。创建/绑定图空间时同步
+    ensure，Milvus 不可达时落 failed 行，由启动 backfill 重试。
+    """
+
+    __tablename__ = "kg_graph_space_vector_db"
+    __table_args__ = (UniqueConstraint("graph_space", name="uk_kg_graph_space_vector_db"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    graph_space: Mapped[str] = mapped_column(String(64), nullable=False)
+    vector_database: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="ready")
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class ManualCorrection(Base):
     __tablename__ = "kg_manual_correction"
     __table_args__ = (

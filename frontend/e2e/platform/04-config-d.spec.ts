@@ -18,13 +18,16 @@ test.describe.serial('D. 配置管理', () => {
   let llmId = ''
   let mysqlId = ''
 
-  test('D1 五类配置列表与筛选', async ({ page }) => {
+  test('D1 四类配置列表与筛选', async ({ page }) => {
     await page.goto('/configurations')
     await page.waitForLoadState('networkidle')
     await expect(page.getByText('配置分类').first()).toBeVisible()
 
-    // 五个分类均可加载（LLM 类至少一条现网配置）
-    for (const cat of ['语言模型', '向量模型', 'MySQL 数据源', '向量数据空间', '图数据空间']) {
+    // 向量数据空间分类已下线（向量库随图空间自动同名创建），分类导航不再出现
+    await expect(page.locator('.category-nav button', { hasText: '向量数据空间' })).toHaveCount(0)
+
+    // 四个分类均可加载（LLM 类至少一条现网配置）
+    for (const cat of ['语言模型', '向量模型', 'MySQL 数据源', '图数据空间']) {
       await page.getByRole('button', { name: cat, exact: false }).first().click()
       // 设计规范改版后主列表区不再有 h2，改以表格渲染为加载信号
       await waitFor(
@@ -249,11 +252,11 @@ test.describe.serial('D. 配置管理', () => {
     )
   })
 
-  test('D5 图数据空间绑定/解绑', async ({ page, request }) => {
+  test('D5 图数据空间绑定/解绑', async () => {
     test.skip(true, 'e2e_verify_space 已被 M 组用作空空间素材；本用例的绑定/解绑改在 M 组流程内覆盖（绑定状态切换）')
   })
 
-  test('D6 Milvus / Embedding 配置冒烟', async ({ page, request }) => {
+  test('D6 Embedding 配置冒烟', async ({ page }) => {
     test.setTimeout(240_000)
     const glmKey = process.env.E2E_GLM_EMBEDDING_KEY ?? (await containerEnv('LLM_API_KEY'))
     test.skip(!glmKey, '无可用 GLM key（E2E_GLM_EMBEDDING_KEY 未设）')
@@ -261,38 +264,13 @@ test.describe.serial('D. 配置管理', () => {
     await page.goto('/configurations')
     await page.waitForLoadState('networkidle')
 
-    // Milvus：新建 + 测试连接 + 删除
-    await page.getByRole('button', { name: '向量数据空间', exact: false }).first().click()
-    await page.getByRole('button', { name: '＋ 新建配置' }).click()
-    let dialog = page.locator('.config-create-dialog')
-    await expect(dialog).toBeVisible()
-    await dialog.locator('.arco-form-item', { hasText: '配置名称' }).locator('input').first().fill('e2e_milvus')
-    await dialog.locator('.arco-form-item', { hasText: 'URI' }).locator('input').first().fill('http://milvus:19530')
-    await dialog.getByRole('button', { name: /保存|提交/ }).last().click()
-    await waitFor(
-      async () => (await page.getByText('e2e_milvus').first().isVisible().catch(() => false)),
-      { label: 'milvus 配置入列' },
-    )
-    await page.getByText('e2e_milvus').first().click()
-    let drawer = page.locator('.detail-drawer')
-    await expect(drawer).toBeVisible({ timeout: 15_000 })
-    await expect(drawer.getByText('e2e_milvus').first()).toBeVisible()
-    await drawer.getByRole('button', { name: '测试连接' }).click()
-    await waitFor(
-      async () => (await page.getByText(/连接测试成功，延迟/).first().isVisible().catch(() => false)),
-      { timeout: 60_000, label: 'milvus 测试连接' },
-    )
-    autoAcceptConfirms(page)
-    await drawer.getByRole('button', { name: '删除', exact: true }).click()
-    await waitFor(
-      async () => !(await page.getByText('e2e_milvus').first().isVisible().catch(() => false)),
-      { label: 'milvus 配置删除' },
-    )
+    // Milvus 配置 UI 已随「向量数据空间」分类下线（向量库随图空间自动同名创建，
+    // 连接冒烟由后端路由测试覆盖）；此处仅保留 Embedding 全流程。
 
     // Embedding：新建 + 测试连接 + 删除
     await page.getByRole('button', { name: '向量模型', exact: false }).first().click()
     await page.getByRole('button', { name: '＋ 新建配置' }).click()
-    dialog = page.locator('.config-create-dialog')
+    const dialog = page.locator('.config-create-dialog')
     await expect(dialog).toBeVisible()
     const field = (label: string) => dialog.locator('.arco-form-item', { hasText: label }).locator('input').first()
     await field('配置名称').fill('e2e_embedding')
@@ -308,7 +286,7 @@ test.describe.serial('D. 配置管理', () => {
       { label: 'embedding 配置入列' },
     )
     await page.getByText('e2e_embedding').first().click()
-    drawer = page.locator('.detail-drawer')
+    const drawer = page.locator('.detail-drawer')
     await expect(drawer).toBeVisible({ timeout: 15_000 })
     await expect(drawer.getByText('e2e_embedding').first()).toBeVisible()
     await drawer.getByRole('button', { name: '测试连接' }).click()

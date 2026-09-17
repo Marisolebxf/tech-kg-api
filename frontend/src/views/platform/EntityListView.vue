@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 
 import {
@@ -14,9 +14,10 @@ import {
   type EntityListResult,
   type EntityTypeCount,
 } from '../../api/entitySearch'
-import { listGraphSpaces } from '../../api/graphSearch'
+import { currentGraphSpace } from '../../api/currentGraphSpace'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import { useToast } from '../../composables/use-toast'
+import { useGraphSpaceStore } from '../../stores/graphSpace'
 
 const { showToast } = useToast()
 
@@ -26,8 +27,9 @@ const PROPERTY_CHIP_LIMIT = 4
 const keyword = ref('')
 const appliedKeyword = ref('')
 const entityType = ref('')
-const space = ref('')
-const spaces = ref<string[]>([])
+// 图空间跟随右上角全局选择器（本页不再有空间筛选控件）
+const space = computed(() => currentGraphSpace())
+const graphSpaceStore = useGraphSpaceStore()
 const pageSize = ref(10)
 const page = ref(1)
 
@@ -56,16 +58,6 @@ const modeLabel = computed(() => {
   if (mode === 'dense') return '语义'
   return '关键词'
 })
-
-async function loadSpaces() {
-  try {
-    // http 拦截器已解包为 ApiResponse（运行时），axios 泛型声明与运行时不同，故做一次窄化断言
-    const payload = (await listGraphSpaces()) as unknown as { data?: { spaces?: string[] } }
-    spaces.value = payload.data?.spaces ?? []
-  } catch {
-    // 空间列表加载失败不阻塞页面（仍可用默认空间）
-  }
-}
 
 async function loadIndexInfo() {
   try {
@@ -119,12 +111,6 @@ function onEntityTypeChange() {
   resetPagingAndSearch()
 }
 
-function onSpaceChange() {
-  page.value = 1
-  appliedKeyword.value = ''
-  void loadIndexInfo().then(() => doSearch())
-}
-
 function onPageSizeChange() {
   page.value = 1
   void doSearch()
@@ -174,9 +160,18 @@ function toggleRowDetail(vid: string) {
 }
 
 onMounted(() => {
-  void loadSpaces()
   void loadIndexInfo().then(() => doSearch())
 })
+
+// 全局图空间切换：重置分页与关键词后按新空间重查
+watch(
+  () => graphSpaceStore.current,
+  () => {
+    page.value = 1
+    appliedKeyword.value = ''
+    void loadIndexInfo().then(() => doSearch())
+  },
+)
 </script>
 
 <template>
@@ -184,17 +179,6 @@ onMounted(() => {
     <section class="entity-toolbar-shell" aria-label="实体检索">
       <div class="entity-toolbar">
         <div class="entity-toolbar__left">
-          <a-select
-            id="entity-filter-space"
-            v-model="space"
-            class="entity-filter-select"
-            placeholder="默认图空间"
-            allow-clear
-            :scrollbar="false"
-            @change="onSpaceChange"
-          >
-            <a-option v-for="item in spaces" :key="item" :value="item">{{ item }}</a-option>
-          </a-select>
           <a-select
             id="entity-filter-type"
             v-model="entityType"
@@ -385,13 +369,13 @@ onMounted(() => {
 .app-workspace .entity-toolbar-shell #entity-filter-name.arco-input-focus .arco-input-prefix{color:#165dff}
 .app-workspace .entity-toolbar-shell #entity-filter-name .arco-input-prefix svg{width:16px;height:16px;font-size:16px}
 .app-workspace .entity-toolbar-shell #entity-filter-name input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-.app-workspace .entity-toolbar-shell :is(#entity-filter-space,#entity-filter-type).entity-filter-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:160px;min-width:160px;max-width:160px;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 160px}
-.app-workspace .entity-toolbar-shell :is(#entity-filter-space,#entity-filter-type).entity-filter-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}
-.app-workspace .entity-toolbar-shell :is(#entity-filter-space,#entity-filter-type).entity-filter-select.arco-select-view:focus-within,.app-workspace .entity-toolbar-shell :is(#entity-filter-space,#entity-filter-type).entity-filter-select.arco-select-view-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.app-workspace .entity-toolbar-shell :is(#entity-filter-space,#entity-filter-type) input.arco-select-view-input{box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-.app-workspace .entity-toolbar-shell :is(#entity-filter-space,#entity-filter-type) .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}
-.app-workspace .entity-toolbar-shell :is(#entity-filter-space,#entity-filter-type) .arco-select-view-value{min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
-.app-workspace .entity-toolbar-shell :is(#entity-filter-space,#entity-filter-type) :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
+.app-workspace .entity-toolbar-shell #entity-filter-type.entity-filter-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:160px;min-width:160px;max-width:160px;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 160px}
+.app-workspace .entity-toolbar-shell #entity-filter-type.entity-filter-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}
+.app-workspace .entity-toolbar-shell #entity-filter-type.entity-filter-select.arco-select-view:focus-within,.app-workspace .entity-toolbar-shell #entity-filter-type.entity-filter-select.arco-select-view-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+.app-workspace .entity-toolbar-shell #entity-filter-type input.arco-select-view-input{box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
+.app-workspace .entity-toolbar-shell #entity-filter-type .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}
+.app-workspace .entity-toolbar-shell #entity-filter-type .arco-select-view-value{min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
+.app-workspace .entity-toolbar-shell #entity-filter-type :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
 .app-workspace .entity-result-shell #entity-page-size.entity-pagination__size-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:72px;min-width:72px;max-width:72px;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 72px}
 .app-workspace .entity-result-shell #entity-page-size.entity-pagination__size-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}
 .app-workspace .entity-result-shell #entity-page-size.entity-pagination__size-select.arco-select-view:focus-within,.app-workspace .entity-result-shell #entity-page-size.entity-pagination__size-select.arco-select-view-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}

@@ -248,6 +248,20 @@ services:
       MILVUS_PORT: ${MILVUS_PORT:-19530}
       MILVUS_URI: ${MILVUS_URI:-}
       MILVUS_TOKEN: ${MILVUS_TOKEN:-}
+      # worker 按需从 S3 下载用户脚本（D2），缺省回退 127.0.0.1:9020 在容器内必连不上
+      SCHEMA_S3_ENDPOINT_URL: ${SCHEMA_S3_ENDPOINT_URL:-http://operator-rustfs:9000}
+      SCHEMA_S3_ACCESS_KEY: ${SCHEMA_S3_ACCESS_KEY:-rustfsadmin}
+      SCHEMA_S3_SECRET_KEY: ${SCHEMA_S3_SECRET_KEY:-rustfsadmin}
+      SCHEMA_S3_BUCKET: ${SCHEMA_S3_BUCKET:-tech-kg-schema-scripts}
+      SCHEMA_S3_REGION: ${SCHEMA_S3_REGION:-us-east-1}
+      SCHEMA_S3_SECURE: ${SCHEMA_S3_SECURE:-false}
+      # 实体检索索引重建（build_entity_index）在 worker 侧调 embedding：
+      # 缺 base_url 会回退智谱线上端点，本地 m3e key 在那边必 401
+      PATENT_EMBEDDING_PROVIDER: ${PATENT_EMBEDDING_PROVIDER:-openai}
+      PATENT_EMBEDDING_BASE_URL: ${PATENT_EMBEDDING_BASE_URL:-http://m3e-embedding:8010/v1}
+      PATENT_EMBEDDING_MODEL: ${PATENT_EMBEDDING_MODEL:-moka-ai/m3e-small}
+      PATENT_EMBEDDING_DIM: ${PATENT_EMBEDDING_DIM:-512}
+      PATENT_EMBEDDING_API_KEY: ${PATENT_EMBEDDING_API_KEY:-local-no-auth}
       ORG_MILVUS_STATE_DIR: ${ORG_MILVUS_STATE_DIR:-/var/lib/tech-kg/organization_milvus}
     volumes:
       # 用户脚本已全在 S3（D2 后 worker 按需下载）；本卷只承载 worker 本地运行态

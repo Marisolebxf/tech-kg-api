@@ -51,7 +51,8 @@ export const router = createRouter({
     },
     {
       path: '/',
-      redirect: '/overview',
+      // 落地页可由部署期构建参数 VITE_DEFAULT_HOME 指定（如 /graph-build），默认平台总览
+      redirect: () => import.meta.env.VITE_DEFAULT_HOME || '/overview',
     },
     {
       path: '/overview',

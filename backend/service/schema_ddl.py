@@ -8,13 +8,13 @@ DDL，使 catalog 与图结构一致。图空间默认取 ``TRS_GRAPH_SPACE``，
 from __future__ import annotations
 
 import logging
-import os
 import re
 import time
 from datetime import datetime
 from typing import Any
 
 from infra.graph_db import GraphRequestError, get_space_client, get_trs_graph_client
+from infra.graph_db.config import TRSGraphSettings
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,11 @@ DDL_MAX_RETRIES = 3
 
 
 def default_graph_space() -> str:
-    return os.getenv("TRS_GRAPH_SPACE", "techkg")
+    # 与默认 client 的真实空间同源（service.graph_space.default_graph_space 同口径）。
+    # 不能再用独立的 env 回退字面量：TRS_GRAPH_SPACE 未设时 TRSGraphSettings 回退
+    # "dev"，若这里回退 "techkg"，显式指定默认空间名的 Schema DDL 会被 _ddl_client
+    # 静默路由进默认空间（目录登记的空间与 DDL 实际落点不一致）。
+    return TRSGraphSettings.from_env().space
 
 
 def list_graph_spaces() -> list[str]:

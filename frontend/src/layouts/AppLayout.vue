@@ -35,6 +35,7 @@ import navTasks from "../assets/icons/nav-tasks.svg";
 import navTools from "../assets/icons/nav-tools.svg";
 import { useAppStore } from "../stores/app";
 import { useAuthStore } from "../stores/auth";
+import GraphSpaceSelector from "../components/GraphSpaceSelector.vue";
 import logoKg from "../assets/images/logo-kg.png";
 
 const route = useRoute();
@@ -654,6 +655,7 @@ onBeforeUnmount(() => {
             >
               <img :src="iconBook" alt="" aria-hidden="true" />
             </a>
+            <GraphSpaceSelector />
             <div
               class="app-alert-entry"
               @mouseenter="alertPreviewOpen = !alertDrawerOpen"

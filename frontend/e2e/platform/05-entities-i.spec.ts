@@ -1,22 +1,19 @@
 import { expect, test } from '@playwright/test'
-import { api, apiMust, sleep, waitFor } from './helpers'
+import { api, apiMust, sleep, switchGraphSpace, waitFor } from './helpers'
 
-// I. 实体列表 /graph-query/entities
+// I. 实体列表 /graph-query/entities（图空间跟随顶栏全局选择器，本页无空间控件）
 test.describe('I. 实体列表', () => {
+  test.beforeAll(async ({ request }) => {
+    // 选择器列表已收敛为「默认+本人绑定」：I1 要切的 dev 先绑定（bind 幂等）
+    await api(request, 'POST', '/graph-spaces/dev/bind', {})
+  })
+
   test('I1 浏览模式 + 类型/空间/分页', async ({ page, request }) => {
     await page.goto('/graph-query/entities')
     await page.waitForLoadState('networkidle')
 
-    // 状态行：已索引 N 个实体 · M 种类型 · 空间 dev2 · 更新于 ...
-    const statusText = await waitFor(
-      async () => {
-        const t = await page.locator('body').innerText()
-        return /已索引 \d+ 个实体/.test(t) ? t : null
-      },
-      { label: '实体索引状态行' },
-    )
-    expect(statusText).toContain('已索引')
-    expect(statusText).toContain('更新于')
+    // 全局选择器默认 dev2（归一链 localStorage > 构建默认 > 列表第一）
+    await expect(page.locator('.app-space-select .arco-select-view-value')).toHaveText('dev2')
 
     // API 对照：类型下拉计数（响应为 {items: [{name, count}]}）
     const typesData = await apiMust<any>(request, 'GET', '/entity-search/types?space=dev2', undefined, '实体类型')
@@ -43,13 +40,13 @@ test.describe('I. 实体列表', () => {
     // 翻页按钮存在
     await expect(page.getByRole('button', { name: '下一页' })).toBeVisible()
 
-    // 切图空间 dev（类型下拉/表格重置，不报错）
-    await page.locator('span.arco-select-view-single:has(input[placeholder="默认图空间"])').click()
-    await page.locator('li.arco-select-option:visible', { hasText: 'dev' }).first().click()
-    await waitFor(
-      async () => (await page.locator('body').innerText()).includes('空间 dev'),
-      { label: '切空间后状态行' },
+    // 切图空间 dev（类型/索引状态按新空间重查，不报错）
+    const devTypes = page.waitForRequest(
+      (r) => r.url().includes('/entity-search/types') && /[?&]space=dev(&|$)/.test(r.url()),
     )
+    await switchGraphSpace(page, 'dev')
+    await devTypes
+    await expect(page.locator('.app-space-select .arco-select-view-value')).toHaveText('dev')
     expect(rows).toBeTruthy()
   })
 
@@ -128,9 +125,12 @@ test.describe('I. 实体列表', () => {
     // 说明：关键词空态（「未找到匹配“X”的实体」）在混合检索下不可构造——语义
     // top-k 对任意乱词也返回结果（实测 zzz_no_hit_zzz 命中 0.016 分）。改用空
     // 图空间浏览空态覆盖空态文案分支。空空间动态探测（N 组会写 e2e_verify_space，
-    // 固定名字在全量回归里不成立）。
+    // 固定名字在全量回归里不成立）。选择器只列「默认+本人绑定」，候选同样
+    // 限定 bound=true（否则选中的空间在全局选择器里根本切不过去）。
     const spaces = await apiMust<any>(request, 'GET', '/graph-spaces', undefined, '图空间列表')
-    const candidates = (spaces.items ?? spaces).map((x: any) => x.name).filter((n: string) => n !== 'dev2')
+    const candidates = (spaces.items ?? spaces)
+      .filter((x: any) => x.bound && x.name !== 'dev2')
+      .map((x: any) => x.name)
     let emptySpace = ''
     for (const name of candidates) {
       const r = await api<any>(request, 'POST', '/graph-console/query', { space: name, statement: 'MATCH (v) RETURN count(v) AS c' })
@@ -140,15 +140,14 @@ test.describe('I. 实体列表', () => {
 
     await page.goto('/graph-query/entities')
     await page.waitForLoadState('networkidle')
-    await page.locator('span.arco-select-view-single:has(input[placeholder="默认图空间"])').click()
-    await page.locator('li.arco-select-option:visible', { hasText: emptySpace }).first().click()
+    await switchGraphSpace(page, emptySpace)
     await expect(page.getByText('当前图空间暂无实体').first()).toBeVisible({ timeout: 30_000 })
-    // 切回 dev2 恢复
-    await page.locator('span.arco-select-view-single:has(input[placeholder="默认图空间"])').click()
-    await page.locator('li.arco-select-option:visible', { hasText: 'dev2' }).first().click()
-    await waitFor(
-      async () => /已索引 \d+ 个实体/.test(await page.locator('body').innerText()),
-      { label: '切回 dev2 状态行' },
+    // 切回 dev2 恢复（类型/索引状态按 dev2 重查）
+    const dev2Reload = page.waitForRequest(
+      (r) => r.url().includes('/entity-search/') && /[?&]space=dev2(&|$)/.test(r.url()),
     )
+    await switchGraphSpace(page, 'dev2')
+    await dev2Reload
+    await expect(page.locator('.app-space-select .arco-select-view-value')).toHaveText('dev2')
   })
 })

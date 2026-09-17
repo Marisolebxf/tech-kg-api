@@ -3,19 +3,12 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 
-import { getExecution, getProductionReviews, listExecutions, rerunExtractFailures, type ProductionReviewCase } from '../../api/workflowOperations'
+import { deleteProductionReview, getProductionReview, getProductionReviewAuditLogs, getProductionReviews, rerunExtractFailures, type ProductionReviewAuditEntry, type ProductionReviewCase } from '../../api/workflowOperations'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import {
-  getImpactScope,
-  resolvePipelineStep,
+  extractCaseStatusBadge,
   type ReviewRecord,
 } from './manual-review-data'
-import {
-  extractCaseStatusBadge,
-  isRerunExecutionRunning,
-  mapRerunExecutionRow,
-  type RerunExecutionRow,
-} from './rerun-history'
 
 type CenterMode = 'review'
 
@@ -27,16 +20,27 @@ const keyword = ref(clampSearchKeyword(String(route.query.keyword || '')))
 const reviewStatusFilter = ref<'全部' | '待处理' | '已处理' | '重跑中' | '重跑失败' | undefined>('全部')
 const reviewKindFilter = ref<'全部' | '实体' | '关系' | undefined>('全部')
 const reviewTotal = ref(0)
-/** 队列行 = manual-review-data 的 ReviewRecord + C 类重跑所需的原始状态与模板 id。 */
-type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string }
+/** 队列行 = manual-review-data 的 ReviewRecord + 重跑/删除/跳转所需的原始字段。 */
+type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; graphBuildId?: string }
+
+/** 可重跑/可删除：与后端 rerun 门控同口径（未处理）。 */
+const isRerunnable = (row: ReviewRow) => row.rawStatus === 'OPEN' || row.rawStatus === 'RERUN_FAILED'
+
+/** 类型列：objectType（entity/relation）→ 实体/关系；T_LINK 是实体对齐，恒实体。 */
+function rowKindLabel(row: ReviewRow): string {
+  if (row.templateId === 'T_LINK' || row.objectType === 'entity') return '实体'
+  if (row.objectType === 'relation') return '关系'
+  return '—'
+}
 const reviewRecords = ref<ReviewRow[]>([])
 const reviewLoadError = ref('')
 
 const reviewRows = computed(() => reviewRecords.value)
 
-/** 分页状态：服务端分页，翻页/改页大小都会重新拉取当前筛选下的数据。 */
+/** 分页状态：服务端分页，翻页/改页大小都会重新拉取当前筛选下的数据。
+ *  默认每页 20：表格区可视高度约 13~14 行，10 行填不满会在面板内留大片空白。 */
 const reviewPage = ref(1)
-const reviewPageSize = ref(10)
+const reviewPageSize = ref(20)
 const reviewPageSizeOptions = [10, 20, 50]
 const reviewTotalPages = computed(() => Math.max(1, Math.ceil(reviewTotal.value / reviewPageSize.value)))
 
@@ -44,8 +48,6 @@ watch(() => route.query.keyword, (value) => { keyword.value = clampSearchKeyword
 
 /** 审核队列分类：A=入库决策（T_DIRECT/T_LINK）；C=抽取失败重跑（T_EXTRACT_FAIL）。 */
 const reviewCategory = ref<'A' | 'C'>('A')
-/** C 类二级视图：cases=失败列表（默认）；history=重跑记录（按执行维度）。 */
-const rerunView = ref<'cases' | 'history'>('cases')
 /** C 类勾选的待重跑 case。 */
 const rerunSelection = ref<Set<string>>(new Set())
 const rerunSubmitting = ref(false)
@@ -53,11 +55,6 @@ const rerunSubmitting = ref(false)
 const rerunFeedback = ref<{ type: 'success' | 'error'; text: string; executions: Array<{ executionId: string; schemaId: string; cases: number; records: number }> } | null>(null)
 /** 勾选 >20 条时的 a-modal 二次确认。 */
 const rerunConfirmVisible = ref(false)
-/** 重跑记录（triggerSource=RERUN 执行）行 + 轮询状态。 */
-const rerunExecutions = ref<RerunExecutionRow[]>([])
-const rerunHistoryLoading = ref(false)
-const rerunHistoryError = ref('')
-let rerunPollTimer: number | undefined
 let rerunFeedbackTimer: number | undefined
 
 /** A 类只有 全部/待处理/已处理；C 类追加 重跑中/重跑失败（后端 status 精确过滤）。 */
@@ -67,31 +64,28 @@ const reviewStatusOptions = computed(() => (
     : ['全部', '待处理', '已处理']
 ))
 
-/** 当前页 OPEN 行的全选/半选态（跨页勾选由 rerunSelection 保持，按钮数字展示总数）。 */
-const rerunPageOpenIds = computed(() => reviewRows.value.filter((row) => row.rawStatus === 'OPEN').map((row) => row.id))
-const rerunAllChecked = computed(() => rerunPageOpenIds.value.length > 0 && rerunPageOpenIds.value.every((id) => rerunSelection.value.has(id)))
-const rerunSomeChecked = computed(() => !rerunAllChecked.value && rerunPageOpenIds.value.some((id) => rerunSelection.value.has(id)))
+/** 当前页可重跑行的全选/半选态（跨页勾选由 rerunSelection 保持，按钮数字展示总数）。 */
+const rerunPageEligibleIds = computed(() => reviewRows.value.filter(isRerunnable).map((row) => row.id))
+const rerunAllChecked = computed(() => rerunPageEligibleIds.value.length > 0 && rerunPageEligibleIds.value.every((id) => rerunSelection.value.has(id)))
+const rerunSomeChecked = computed(() => !rerunAllChecked.value && rerunPageEligibleIds.value.some((id) => rerunSelection.value.has(id)))
 
 function switchReviewCategory(category: 'A' | 'C') {
   if (reviewCategory.value === category) return
   reviewCategory.value = category
-  rerunView.value = 'cases'
-  stopRerunPoll()
   rerunSelection.value = new Set()
   reviewPage.value = 1
   void loadReviews()
 }
 
-function switchRerunView(view: 'cases' | 'history') {
-  if (rerunView.value === view) return
-  rerunView.value = view
-  if (view === 'history') void loadRerunExecutions()
-  else stopRerunPoll()
-}
-
 function toggleRerunPick(id: string, checked: boolean) {
   if (checked) rerunSelection.value.add(id)
   else rerunSelection.value.delete(id)
+}
+
+/** 表头全选/取消：只作用于当前页可重跑行（不可重跑行禁用不勾选）；跨页勾选保持，按钮数字展示总数。 */
+function toggleRerunPickAll(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked
+  for (const id of rerunPageEligibleIds.value) toggleRerunPick(id, checked)
 }
 
 function showRerunFeedback(type: 'success' | 'error', text: string, executions: Array<{ executionId: string; schemaId: string; cases: number; records: number }>) {
@@ -113,7 +107,6 @@ async function rerunSelected(caseIds: string[] | undefined = undefined, skipConf
     showRerunFeedback('success', `已下发重跑：${result.cases} 条失败记录 → ${result.executions.length} 个新执行（类别=重新执行）`, result.executions)
     rerunSelection.value = new Set()
     void loadReviews()
-    if (rerunView.value === 'history') void loadRerunExecutions()
   } catch (error) {
     showRerunFeedback('error', error instanceof Error ? error.message : '重跑下发失败', [])
   } finally {
@@ -121,50 +114,90 @@ async function rerunSelected(caseIds: string[] | undefined = undefined, skipConf
   }
 }
 
-async function loadRerunExecutions() {
-  rerunHistoryLoading.value = true
+// ---- C 类操作列：日志弹窗 / 删除 ----
+
+/** 日志弹窗：并行拉 case 详情 + 审计日志，展示失败原因/记录信息/溯源/处理时间线。 */
+const logVisible = ref(false)
+const logLoading = ref(false)
+const logError = ref('')
+const logCase = ref<ProductionReviewCase>()
+const logEntries = ref<ProductionReviewAuditEntry[]>([])
+
+const logInput = computed<Record<string, unknown>>(() =>
+  ((logCase.value?.data?.input || logCase.value?.input || {}) as Record<string, unknown>))
+const logRerunExecutionId = computed(() => String(logInput.value.rerunExecutionId ?? ''))
+const logAttempt = computed(() => Number(logInput.value.attempt ?? 1))
+
+/** 审计事件中文化（未收录的兜底显示原文）。 */
+const AUDIT_EVENT_LABELS: Record<string, string> = {
+  CASE_CREATED: '建案',
+  CASE_CLAIMED: '领取',
+  CASE_RELEASED: '释放',
+  CASE_TRANSFERRED: '转派',
+  CASE_CANCELLED: '取消',
+  CLAIM_EXPIRED: '领取超时回收',
+  DRAFT_SAVED: '存草稿',
+  DECISION_SUBMITTED: '提交决议',
+  DIRECT_ACCEPTED: '直判通过（写图）',
+  DIRECT_REJECTED: '直判驳回',
+  RERUN_STARTED: '下发重跑',
+  RERUN_SUCCEEDED: '重跑成功',
+  RERUN_FAILED: '重跑仍失败（重建新记录）',
+  RERUN_PROGRESS: '重跑回滚',
+  HEARTBEAT: '心跳续约',
+  EVIDENCE_ADDED: '附件登记',
+}
+
+async function openLog(row: ReviewRow) {
+  logVisible.value = true
+  logLoading.value = true
+  logError.value = ''
+  logCase.value = undefined
+  logEntries.value = []
   try {
-    const response = await listExecutions(50, { triggerSource: 'RERUN' })
-    rerunExecutions.value = response.items.map(mapRerunExecutionRow)
-    rerunHistoryError.value = ''
+    const [detail, logs] = await Promise.all([
+      getProductionReview(row.id),
+      getProductionReviewAuditLogs(row.id),
+    ])
+    logCase.value = detail
+    logEntries.value = logs.items || []
   } catch (error) {
-    rerunHistoryError.value = error instanceof Error ? error.message : '重跑记录加载失败'
+    logError.value = error instanceof Error ? error.message : '日志加载失败'
   } finally {
-    rerunHistoryLoading.value = false
+    logLoading.value = false
   }
-  scheduleRerunPoll()
 }
 
-/** 列表接口不触发 Temporal refresh，RUNNING 行需逐条 getExecution 单刷（会刷新并落库）。 */
-async function refreshRunningRerunExecutions() {
-  const running = rerunExecutions.value.filter(isRerunExecutionRunning)
-  if (!running.length) return
-  const results = await Promise.all(running.map((row) => getExecution(row.executionId).catch(() => null)))
-  const byId = new Map(rerunExecutions.value.map((row) => [row.executionId, row]))
-  for (const execution of results) {
-    if (execution) byId.set(execution.id, mapRerunExecutionRow(execution))
+/** 删除：二次确认后物理删除（仅未处理可删，与重跑同门控）。 */
+const deleteTarget = ref<ReviewRow>()
+const deleteVisible = ref(false)
+const deleteSubmitting = ref(false)
+const deleteError = ref('')
+
+function askDelete(row: ReviewRow) {
+  deleteTarget.value = row
+  deleteError.value = ''
+  deleteVisible.value = true
+}
+
+async function confirmDelete() {
+  const target = deleteTarget.value
+  if (!target || deleteSubmitting.value) return
+  deleteSubmitting.value = true
+  try {
+    await deleteProductionReview(target.id)
+    deleteVisible.value = false
+    rerunSelection.value.delete(target.id)
+    showRerunFeedback('success', `已删除失败记录 ${target.id}`, [])
+    void loadReviews()
+  } catch (error) {
+    deleteError.value = error instanceof Error ? error.message : '删除失败'
+  } finally {
+    deleteSubmitting.value = false
   }
-  rerunExecutions.value = [...byId.values()]
-}
-
-/** 子视图可见且存在 RUNNING 行时每 8s 轮询单刷；切视图/切 tab/卸载都会停。 */
-function scheduleRerunPoll() {
-  window.clearTimeout(rerunPollTimer)
-  if (props.mode !== 'review' || reviewCategory.value !== 'C' || rerunView.value !== 'history') return
-  if (!rerunExecutions.value.some(isRerunExecutionRunning)) return
-  rerunPollTimer = window.setTimeout(async () => {
-    await refreshRunningRerunExecutions()
-    scheduleRerunPoll()
-  }, 8000)
-}
-
-function stopRerunPoll() {
-  window.clearTimeout(rerunPollTimer)
-  rerunPollTimer = undefined
 }
 
 onUnmounted(() => {
-  stopRerunPoll()
   window.clearTimeout(rerunFeedbackTimer)
 })
 
@@ -188,10 +221,16 @@ async function loadReviews() {
       return loadReviews()
     }
     reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
-      id: row.id, templateId: row.templateId, rawStatus: row.status, batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待领取', status: extractCaseStatusBadge(row.status), updatedAt: row.updatedAt, sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
+      id: row.id, templateId: row.templateId, rawStatus: row.status, graphBuildId: row.executionId || row.workflowId || '', batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
     }))
     reviewLoadError.value = ''
   } catch (error) { reviewLoadError.value = error instanceof Error ? error.message : '人工处理队列加载失败' }
+}
+
+/** 后端 ISO 时间（2026-09-17T09:30:00）转界面习惯的 2026-09-17 09:30:00。 */
+function fmtReviewTime(value?: string): string {
+  if (!value) return ''
+  return value.replace('T', ' ').slice(0, 19)
 }
 
 function changeReviewPage(page: number) {
@@ -208,9 +247,9 @@ function changeReviewPageSize(size: unknown) {
   void loadReviews()
 }
 
-/** 筛选条件变化：回到第 1 页重新加载（重跑记录子视图不消费这些筛选）。 */
+/** 筛选条件变化：回到第 1 页重新加载。 */
 watch([reviewStatusFilter, reviewKindFilter], () => {
-  if (props.mode !== 'review' || (reviewCategory.value === 'C' && rerunView.value === 'history')) return
+  if (props.mode !== 'review') return
   reviewPage.value = 1
   void loadReviews()
 })
@@ -218,7 +257,7 @@ watch([reviewStatusFilter, reviewKindFilter], () => {
 /** 关键字输入防抖后走服务端检索（与分页/筛选同口径，避免页内客户端过滤与总数不一致）。 */
 let reviewKeywordTimer: number | undefined
 watch(keyword, () => {
-  if (props.mode !== 'review' || (reviewCategory.value === 'C' && rerunView.value === 'history')) return
+  if (props.mode !== 'review') return
   window.clearTimeout(reviewKeywordTimer)
   reviewKeywordTimer = window.setTimeout(() => {
     reviewPage.value = 1
@@ -236,36 +275,28 @@ onMounted(loadReviews)
         <button type="button" :class="{ active: reviewCategory === 'C' }" @click="switchReviewCategory('C')">抽取失败重跑</button>
       </nav>
       <div class="review-toolbar-actions">
-        <div
-          v-if="reviewCategory === 'A' || rerunView === 'cases'"
-          class="ops-filter is-review review-filter-row"
-        >
-          <a-select v-model="reviewStatusFilter" class="review-filter-select" :options="reviewStatusOptions" />
-          <a-select v-model="reviewKindFilter" class="review-filter-select" :options="['全部', '实体', '关系']" />
+        <div class="ops-filter is-review review-filter-row">
+          <div class="review-filter-field">
+            <span class="review-filter-label">状态</span>
+            <a-select v-model="reviewStatusFilter" class="review-filter-select" :options="reviewStatusOptions" />
+          </div>
+          <div class="review-filter-field">
+            <span class="review-filter-label">类型</span>
+            <a-select v-model="reviewKindFilter" class="review-filter-select" :options="['全部', '实体', '关系']" />
+          </div>
           <a-input v-model="keyword" class="review-search-input review-filter-search" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录"><template #prefix><IconSearch /></template></a-input>
         </div>
       </div>
     </div>
 
-    <div v-if="mode === 'review' && reviewCategory === 'C'" class="rerun-subtabs">
-      <nav>
-        <button type="button" :class="{ active: rerunView === 'cases' }" @click="switchRerunView('cases')">失败列表</button>
-        <button type="button" :class="{ active: rerunView === 'history' }" @click="switchRerunView('history')">重跑记录</button>
-      </nav>
+    <!-- 批量重跑：单独一行右对齐（不挤在筛选栏里） -->
+    <div v-if="reviewCategory === 'C'" class="rerun-batch-row">
       <button
-        v-if="rerunView === 'cases'"
         class="rerun-batch-action"
         type="button"
         :disabled="!rerunSelection.size || rerunSubmitting"
         @click="rerunSelected()"
       >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
-      <button
-        v-else
-        class="rerun-refresh"
-        type="button"
-        :disabled="rerunHistoryLoading"
-        @click="loadRerunExecutions"
-      >{{ rerunHistoryLoading ? '加载中…' : '刷新' }}</button>
     </div>
 
     <section class="ops-panel">
@@ -281,57 +312,30 @@ onMounted(loadReviews)
         <button class="rerun-feedback-close" type="button" @click="rerunFeedback = null">×</button>
       </div>
 
-      <div v-if="rerunView === 'history'" class="ops-review-table-scroll rerun-history-scroll"><table>
-        <thead>
-          <tr>
-            <th>执行 ID</th>
-            <th>Schema</th>
-            <th>状态</th>
-            <th>触发时间</th>
-            <th>重跑记录</th>
-            <th>失败记录</th>
-            <th>来源执行</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in rerunExecutions" :key="row.executionId">
-            <td class="review-id-cell"><RouterLink class="link" :to="`/processing-instance/${row.executionId}`">{{ row.executionId }}</RouterLink></td>
-            <td><code>{{ row.schemaId }}</code></td>
-            <td><span :class="['review-status', `is-${row.statusLabel}`]">{{ row.statusLabel }}</span></td>
-            <td>{{ row.startedAt }}</td>
-            <td>{{ row.caseCount ?? '—' }} 条 / {{ row.recordCount ?? '—' }} 行</td>
-            <td><span :class="{ 'rerun-fail-count': (row.failureCount ?? 0) > 0 }">{{ row.failureCount ?? '—' }}</span></td>
-            <td>
-              <RouterLink v-if="row.rerunOfExecutionId" class="link" :to="`/processing-instance/${row.rerunOfExecutionId}`">{{ row.rerunOfExecutionId }}</RouterLink>
-              <template v-else>—</template>
-            </td>
-            <td><RouterLink class="link" :to="`/processing-instance/${row.executionId}`">查看详情 →</RouterLink></td>
-          </tr>
-          <tr v-if="!rerunExecutions.length">
-            <td class="review-empty" :colspan="8">{{ rerunHistoryError || '暂无重跑记录' }}</td>
-          </tr>
-        </tbody>
-      </table></div>
-
-      <div v-else class="ops-review-table-scroll"><table class="review-case-table" :class="{ 'review-case-table--selectable': reviewCategory === 'C' }">
+      <div class="ops-review-table-scroll"><table class="review-case-table" :class="{ 'review-case-table--selectable': reviewCategory === 'C' }">
+        <!-- 固定列宽：有数据/无数据切换时表头列位不漂移（待处理对象列吃剩余宽度） -->
+        <colgroup>
+          <col v-if="reviewCategory === 'C'" class="col-pick" />
+          <col class="col-id" />
+          <col class="col-object" />
+          <col class="col-kind" />
+          <col class="col-source" />
+          <col class="col-status" />
+          <col class="col-time" />
+          <col class="col-actions" />
+        </colgroup>
         <thead>
           <tr>
             <th v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
               type="checkbox"
               :checked="rerunAllChecked"
               :indeterminate="rerunSomeChecked"
-              @change="((event?: Event) => {
-                const checked = ((event?.target as HTMLInputElement) || {} as HTMLInputElement).checked
-                reviewRows.forEach((row) => toggleRerunPick(row.id, checked && row.rawStatus === 'OPEN'))
-              })()"
+              @change="toggleRerunPickAll"
             /></th>
             <th>处理实例 ID</th>
             <th>待处理对象</th>
-            <th>阻断节点</th>
+            <th>类型</th>
             <th>来源记录</th>
-            <th>更新批次</th>
-            <th>处理人</th>
             <th>状态</th>
             <th>更新时间</th>
             <th class="review-action-col">操作</th>
@@ -340,53 +344,52 @@ onMounted(loadReviews)
         <tbody>
           <tr v-for="row in reviewRows" :key="row.id">
             <td v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
-              v-if="row.rawStatus === 'OPEN'"
               type="checkbox"
+              :disabled="!isRerunnable(row)"
               :checked="rerunSelection.has(row.id)"
               @change="((event?: Event) => toggleRerunPick(row.id, Boolean((event?.target as HTMLInputElement)?.checked)))"
             /></td>
+            <td class="review-id-cell"><code class="review-id-plain">{{ row.id }}</code></td>
+            <td class="review-object-cell">
+              <strong>{{ row.object || '—' }}</strong>
+            </td>
+            <td><span :class="['review-kind-badge', `is-${rowKindLabel(row)}`]">{{ rowKindLabel(row) }}</span></td>
             <td class="review-id-cell">
-              <RouterLink class="link" :to="`/manual-review/task/${row.id}`">{{ row.id }}</RouterLink>
+              <RouterLink v-if="row.graphBuildId" class="link" :to="`/processing-instance/${row.graphBuildId}`">{{ row.graphBuildId }}</RouterLink>
+              <template v-else>—</template>
             </td>
-            <td>
-              <strong>{{ row.object }}</strong>
-              <small>{{ row.objectType }} · {{ row.type }}</small>
-            </td>
-            <td>
-              <b>{{ resolvePipelineStep(row).name }}</b>
-              <small>{{ resolvePipelineStep(row).phase }} · {{ row.node }}</small>
-              <small :class="getImpactScope(row) === '批次级' ? 'scope-batch' : 'scope-task'">{{ getImpactScope(row) }}{{ getImpactScope(row) === '批次级' ? ' · 已阻断' : '' }}</small>
-            </td>
-            <td class="review-source-cell">
-              <strong>{{ row.sourceTable || '—' }}</strong>
-              <small><code>{{ row.sourceRecordId || '—' }}</code></small>
-            </td>
-            <td><code>{{ row.batch }}</code></td>
-            <td>{{ row.handler }}</td>
             <td><span :class="['review-status', `is-${row.status}`]">{{ row.status }}</span></td>
             <td>{{ row.completedAt || row.updatedAt }}</td>
             <td class="review-action-col">
-              <div class="alert-actions">
-                <RouterLink class="link" :to="`/manual-review/task/${row.id}`">
-                  {{ row.status === '待处理' ? '进入处理' : '查看记录' }} →
-                </RouterLink>
+              <div v-if="reviewCategory === 'A'" class="alert-actions">
+                <RouterLink class="link" :to="`/manual-review/task/${row.id}`">查看记录 →</RouterLink>
+              </div>
+              <div v-else class="alert-actions">
+                <button class="link rerun-link" type="button" @click="openLog(row)">日志</button>
                 <button
-                  v-if="reviewCategory === 'C' && row.rawStatus === 'OPEN'"
+                  v-if="isRerunnable(row)"
                   class="link rerun-link"
                   type="button"
                   :disabled="rerunSubmitting"
                   @click="rerunSelected([row.id])"
-                >重跑该记录</button>
+                >重跑</button>
+                <button
+                  v-if="isRerunnable(row)"
+                  class="link rerun-link is-danger"
+                  type="button"
+                  :disabled="deleteSubmitting"
+                  @click="askDelete(row)"
+                >删除</button>
               </div>
             </td>
           </tr>
           <tr v-if="!reviewRows.length">
-            <td class="review-empty" :colspan="reviewCategory === 'C' ? 10 : 9">{{ reviewLoadError || (reviewStatusFilter === '全部' && reviewKindFilter === '全部' && !keyword ? '暂无人工处理记录' : '暂无符合条件的记录') }}</td>
+            <td class="review-empty" :colspan="reviewCategory === 'C' ? 8 : 7">{{ reviewLoadError || (reviewStatusFilter === '全部' && reviewKindFilter === '全部' && !keyword ? '暂无人工处理记录' : '暂无符合条件的记录') }}</td>
           </tr>
         </tbody>
       </table></div>
 
-      <footer v-if="reviewCategory === 'A' || rerunView === 'cases'" class="review-pagination">
+      <footer class="review-pagination">
         <span>共 {{ reviewTotal }} 条 · 第 {{ reviewPage }} / {{ reviewTotalPages }} 页</span>
         <span class="review-page-size">每页
           <a-select class="review-page-size-select" :model-value="reviewPageSize" :options="reviewPageSizeOptions" :scrollbar="false" @change="changeReviewPageSize" />
@@ -412,6 +415,67 @@ onMounted(loadReviews)
       @ok="rerunSelected(undefined, true)"
     >
       <p class="rerun-confirm-text">即将对已勾选的 {{ rerunSelection.size }} 条失败记录下发重跑，按 schema 合并为新执行（类别=重新执行）。重跑成功的记录自动关闭，仍失败的会重新进入失败列表。</p>
+    </a-modal>
+
+    <a-modal
+      v-model:visible="logVisible"
+      modal-class="case-log-modal"
+      :title="`日志 · ${logCase?.id || ''}`"
+      :width="720"
+      :footer="false"
+    >
+      <p v-if="logLoading" class="case-log-loading">加载中…</p>
+      <p v-else-if="logError" class="case-log-error-text">{{ logError }}</p>
+      <template v-else-if="logCase">
+        <section class="case-log-sec">
+          <h4>失败原因</h4>
+          <pre class="case-log-error-text">{{ logCase.diagnosis || '—' }}</pre>
+        </section>
+        <section class="case-log-sec">
+          <h4>记录信息</h4>
+          <dl class="case-log-dl">
+            <div><dt>来源表</dt><dd>{{ logCase.sourceTable || '—' }}</dd></div>
+            <div><dt>记录 ID</dt><dd><code>{{ logCase.sourceRecordId || '—' }}</code></dd></div>
+            <div><dt>尝试次数</dt><dd>第 {{ logAttempt }} 次</dd></div>
+          </dl>
+        </section>
+        <section class="case-log-sec">
+          <h4>溯源</h4>
+          <dl class="case-log-dl">
+            <div><dt>Schema</dt><dd><code>{{ String(logInput.schemaKey ?? '—') }}</code></dd></div>
+            <div><dt>来源绑定</dt><dd><code>{{ String(logInput.sourceBindingId ?? '—') }}</code></dd></div>
+            <div><dt>原执行</dt><dd><RouterLink class="link" :to="`/processing-instance/${String(logInput.executionId ?? '')}`"><code>{{ String(logInput.executionId ?? '—') }}</code></RouterLink></dd></div>
+            <div v-if="logRerunExecutionId"><dt>重跑执行</dt><dd><RouterLink class="link" :to="`/processing-instance/${logRerunExecutionId}`"><code>{{ logRerunExecutionId }}</code></RouterLink></dd></div>
+            <div v-if="logInput.jobId"><dt>所属任务</dt><dd><code>{{ String(logInput.jobId) }}</code></dd></div>
+          </dl>
+        </section>
+        <section class="case-log-sec">
+          <h4>处理时间线</h4>
+          <ul class="case-log-timeline">
+            <li v-for="(entry, index) in logEntries" :key="index">
+              <span class="case-log-time">{{ entry.createdAt }}</span>
+              <span class="case-log-event">{{ AUDIT_EVENT_LABELS[entry.eventType] || entry.eventType }}</span>
+              <span v-if="entry.oldStatus || entry.newStatus" class="case-log-status">{{ entry.oldStatus || '—' }} → {{ entry.newStatus || '—' }}</span>
+              <span class="case-log-actor">{{ entry.actorName || entry.actorId || '' }}</span>
+            </li>
+            <li v-if="!logEntries.length" class="case-log-empty">暂无处理记录</li>
+          </ul>
+        </section>
+      </template>
+    </a-modal>
+
+    <a-modal
+      v-model:visible="deleteVisible"
+      modal-class="rerun-confirm-modal"
+      title="确认删除"
+      :width="560"
+      ok-text="删除"
+      cancel-text="取消"
+      :ok-loading="deleteSubmitting"
+      @ok="confirmDelete"
+    >
+      <p class="rerun-confirm-text">即将物理删除失败记录 <code>{{ deleteTarget?.id }}</code>（{{ deleteTarget?.object }}），连同其草稿/决议/审计一并清除，不可恢复。仅未处理记录可删除。</p>
+      <p v-if="deleteError" class="case-log-error-text">{{ deleteError }}</p>
     </a-modal>
   </div>
 </template>
@@ -493,27 +557,17 @@ onMounted(loadReviews)
 .review-tabs .ops-filter.is-review :deep(.arco-select-view-value){font-size:14px;line-height:22px;font-weight:400}
 .ops-review-table-scroll td{color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle}
 .ops-review-table-scroll td>b,.ops-review-table-scroll td>strong{font-weight:400}
-/* 抽取失败重跑：二级子视图 / 重跑反馈条 / 状态徽标扩展 */
-.rerun-subtabs{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;padding:0 16px;border:0;background:transparent}
-.rerun-subtabs nav{display:flex;gap:0}
-.rerun-subtabs nav button{position:relative;padding:9px 0;border:0;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer;transition:color .2s cubic-bezier(0,0,1,1)}
-.rerun-subtabs nav button::after{position:absolute;right:0;bottom:0;left:0;height:2px;background:#165dff;content:"";opacity:0;transform:scaleX(0);transition:opacity .2s cubic-bezier(0,0,1,1),transform .2s cubic-bezier(.34,.69,.1,1)}
-.rerun-subtabs nav button:hover{color:#1d2129}
-.rerun-subtabs nav button.active{color:#165dff;font-weight:500}
-.rerun-subtabs nav button.active::after{opacity:1;transform:scaleX(1)}
-.rerun-subtabs nav button:focus-visible{border-radius:2px;outline:2px solid rgba(22,93,255,.28);outline-offset:2px}
+/* 抽取失败重跑：批量重跑按钮 / 重跑反馈条 / 状态徽标扩展 */
+/* 批量重跑单独一行右对齐（贴合分段切换行下方，负 margin 收紧与上行的间距） */
+.rerun-batch-row{display:flex;box-sizing:border-box;width:100%;min-height:32px;margin:-8px 0 12px;align-items:center;justify-content:flex-end;flex:0 0 auto}
 .rerun-batch-action{height:32px;padding:0 16px;border:1px solid #165dff;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
 .rerun-batch-action:hover:not(:disabled){border-color:#4080ff;background:#4080ff}
 .rerun-batch-action:active:not(:disabled){border-color:#0e42d2;background:#0e42d2}
 .rerun-batch-action:disabled{border-color:#94bfff;background:#94bfff;color:#fff;cursor:not-allowed}
-.rerun-refresh{height:28px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#4e5969;font-size:12px;cursor:pointer}
-.rerun-refresh:disabled{opacity:.5;cursor:not-allowed}
 .rerun-feedback{flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid #a6f4c5;background:#ecfdf3;color:#067647;font-size:12px;line-height:20px}
 .rerun-feedback.is-error{border-color:#f5b8b3;background:#fef3f2;color:#b42318}
 .rerun-feedback-close{margin-left:auto;width:22px;height:22px;border:0;border-radius:4px;background:transparent;color:inherit;font-size:14px;cursor:pointer}
 .rerun-confirm-text{margin:0;color:#4e5969;font-size:13px;line-height:22px}
-.rerun-history-scroll table{min-width:0}
-.rerun-fail-count{color:#b42318;font-weight:600}
 .review-status.is-重跑中,.review-status.is-执行中{color:#175cd3}
 .review-status.is-重跑失败,.review-status.is-失败{color:#b42318}
 .review-status.is-已完成{color:#067647}
@@ -542,20 +596,55 @@ onMounted(loadReviews)
 .review-pagination :deep(.review-page-size-select .arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
 .review-pagination :deep(.review-page-size-select .arco-select-view-value){min-width:0;font-size:14px;line-height:22px;font-weight:400}
 .ops-review-table-scroll .pick-col{vertical-align:middle;text-align:center}.ops-review-table-scroll .pick-col input[type="checkbox"]{display:block;width:14px;height:14px;margin:0 auto;vertical-align:middle;cursor:pointer}
-.rerun-subtabs{min-height:36px}
-.rerun-subtabs nav button{height:36px;padding:0 16px}
 .rerun-batch-action:focus-visible{outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.2)}
-.rerun-refresh{height:32px;padding:0 16px;font-size:14px;line-height:22px;font-weight:400}
 .rerun-feedback{gap:8px;padding:8px 16px}.rerun-feedback-close{width:24px;height:24px}
 .rerun-confirm-text{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 .ops-review-table-scroll .review-action-col{position:static;box-sizing:border-box;width:auto;min-width:0;box-shadow:none;white-space:nowrap}
 .review-action-col .alert-actions{display:flex;width:max-content;min-width:0;align-items:center;gap:8px}
 .ops-review-table-scroll th,.ops-review-table-scroll td{box-sizing:border-box;padding-right:16px;padding-left:16px}
-.ops-review-table-scroll table,.ops-review-table-scroll table.review-case-table,.ops-review-table-scroll table.review-case-table--selectable{width:100%;min-width:0;table-layout:auto}
+.ops-review-table-scroll table,.ops-review-table-scroll table.review-case-table,.ops-review-table-scroll table.review-case-table--selectable{width:100%;min-width:0;table-layout:fixed}
 .ops-review-table-scroll td{white-space:normal}
 .ops-review-table-scroll :is(code,.review-id-cell,.review-status){white-space:nowrap}
 .ops-review-table-scroll :is(th,td):last-child{white-space:nowrap}
 .ops-review-table-scroll .review-id-cell,.ops-review-table-scroll .review-source-cell{min-width:0}
+/* 固定布局下的列宽合同：col.col-object 不设宽吃剩余空间；宽内容列超长省略号截断 */
+.review-case-table col.col-pick{width:52px}
+.review-case-table col.col-id{width:264px}
+.review-case-table col.col-kind{width:88px}
+.review-case-table col.col-source{width:220px}
+.review-case-table col.col-status{width:104px}
+.review-case-table col.col-time{width:200px}
+.review-case-table col.col-actions{width:136px}
+.ops-review-table-scroll .review-id-cell{overflow:hidden;text-overflow:ellipsis}
+.ops-review-table-scroll .review-id-cell :is(code,.link){display:inline-block;box-sizing:border-box;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}
+/* 滚动条出现/消失（数据多少切换）不挤动列宽 */
+.ops-review-table-scroll{scrollbar-gutter:stable}
+/* 筛选字段标签 / 类型徽标 / 勾选禁用态 / 删除按钮 */
+.review-filter-field{display:flex;flex:0 0 auto;align-items:center;gap:8px}
+.review-filter-label{color:#4e5969;font-size:14px;line-height:22px;white-space:nowrap}
+/* 处理实例 ID 纯文本：中性色，区别于可点击的链接蓝 */
+.review-id-cell .review-id-plain{color:#4e5969}
+.review-kind-badge{display:inline-flex;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#4e5969;font-size:12px;line-height:20px}
+.review-kind-badge.is-实体{background:#eaf2ff;color:#175cd3}
+.review-kind-badge.is-关系{background:#fff3d8;color:#b54708}
+.rerun-link.is-danger{color:#b42318}
+.ops-review-table-scroll .pick-col input[type="checkbox"]:disabled{opacity:.35;cursor:not-allowed}
+/* 日志弹窗内容（弹体外壳样式在全局块） */
+.case-log-sec{margin:0 0 16px}
+.case-log-sec h4{margin:0 0 8px;color:#1d2129;font-size:14px;line-height:22px;font-weight:600}
+.case-log-dl{display:grid;grid-template-columns:88px 1fr;gap:6px 12px;margin:0}
+.case-log-dl dt{color:#86909c;font-size:12px;line-height:20px}
+.case-log-dl dd{margin:0;color:#1d2129;font-size:13px;line-height:20px;word-break:break-all}
+.case-log-error-text{margin:0;padding:10px 12px;border:1px solid #f6c6b4;border-radius:4px;background:#fff8f5;color:#b42318;font:12px/19px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
+.case-log-loading{margin:0;padding:24px;color:#86909c;text-align:center}
+.case-log-timeline{margin:0;padding:0;list-style:none}
+.case-log-timeline li{display:flex;flex-wrap:wrap;gap:4px 12px;padding:7px 0;border-bottom:1px dashed #e5e6eb;font-size:12px;line-height:20px}
+.case-log-timeline li:last-child{border-bottom:0}
+.case-log-time{color:#86909c;font-variant-numeric:tabular-nums}
+.case-log-event{color:#165dff}
+.case-log-status{color:#4e5969}
+.case-log-actor{color:#86909c}
+.case-log-empty{color:#86909c}
 </style>
 <style>
 /* Keep the Arco input's native field transparent; the wrapper is the only visible input shell. */
@@ -563,4 +652,7 @@ onMounted(loadReviews)
 .app-workspace .ops-page .ops-filter.is-review .review-search-input.arco-input-wrapper input.arco-input:focus{border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
 .rerun-confirm-modal{border-radius:8px;font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 .rerun-confirm-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}.rerun-confirm-modal .arco-modal-title{font-size:16px;line-height:24px;font-weight:600;letter-spacing:0}.rerun-confirm-modal .arco-modal-body{padding:24px}.rerun-confirm-modal .arco-modal-footer{box-sizing:border-box;min-height:64px;padding:16px 24px}.rerun-confirm-modal .arco-btn{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}.rerun-confirm-modal .arco-btn+.arco-btn{margin-left:16px}
+/* 日志弹窗（teleport 到 body，需全局控制弹体） */
+.case-log-modal{border-radius:8px;font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
+.case-log-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}.case-log-modal .arco-modal-title{font-size:16px;line-height:24px;font-weight:600;letter-spacing:0}.case-log-modal .arco-modal-body{max-height:70vh;overflow:auto;padding:16px 24px}
 </style>

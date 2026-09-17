@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -13,6 +14,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from temporalio import activity, workflow
@@ -558,6 +560,19 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
                 body.close()
             except Exception:  # noqa: BLE001
                 logger.exception("关闭脚本流失败: %s", schema_id)
+    # run 专属脚本副本：把本次 run 用的脚本字节钉进 run 级 key（run 期间不可变）。
+    # worker 中途崩溃换 worker 接手时，execute_transform 凭 runKey + sha256 重新
+    # 物化，版本由校验保证一致；schema 上传新版本删除旧对象也不影响在飞 run。
+    try:
+        workflow_id = activity.info().workflow_id
+    except RuntimeError:
+        workflow_id = f"local-{uuid4().hex}"  # 单测直调无 activity 上下文
+    run_key = f"runs/{workflow_id}/script.py"
+    try:
+        storage.put_bytes(run_key, data, "text/x-python")
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"创建 run 脚本副本失败: {exc}") from exc
+    script_sha256 = hashlib.sha256(data).hexdigest()
     script_path = await asyncio.to_thread(
         _write_private_tempfile,
         prefix=f"kg_schema_extract_{schema_key}_",
@@ -583,6 +598,9 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         "activeProps": active_props,
         "sources": sources,
         "scriptPath": script_path,
+        # run 级脚本副本定位：execute_transform 的 tempfile 丢失时按此重物化
+        "scriptRunKey": run_key,
+        "scriptSha256": script_sha256,
         "functionName": function_name,
         # steps 只放 id/fn 两个 str 键（plan 要经 Temporal 序列化进事件历史）
         "steps": steps,
@@ -823,6 +841,44 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _rematerialize_run_script(request: dict[str, Any]) -> str:
+    """tempfile 丢失时按 run 级 S3 副本重物化脚本；sha256 校验不过即硬失败。
+
+    版本一致性优先：副本内容与本 run 开始时钉住的 sha256 不匹配（理论上不该
+    发生——run key 不可变）或下载失败都直接抛错，交由 Temporal 重试/失败，
+    绝不执行不确定版本的脚本。升级窗口内在飞的旧 plan 没有 run 副本字段，
+    保持旧的明确失败语义。
+    """
+    run_key = request.get("scriptRunKey")
+    expected = request.get("scriptSha256")
+    if not run_key or not expected:
+        raise ValueError(f"脚本不存在且无 run 副本可重物化: {request.get('scriptPath')}")
+    from infra.s3 import get_schema_s3_storage
+
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+    storage = get_schema_s3_storage()
+    body = None
+    try:
+        body = storage.get_object(storage.bucket, run_key)
+        data = body.read()
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"下载 run 脚本副本失败: {run_key}: {exc}") from exc
+    finally:
+        if body is not None:
+            try:
+                body.close()
+            except Exception:  # noqa: BLE001
+                logger.exception("关闭 run 脚本流失败: %s", run_key)
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise RuntimeError(f"run 脚本副本 sha256 校验失败: {run_key}")
+    return await asyncio.to_thread(
+        _write_private_tempfile,
+        prefix="kg_schema_extract_run_",
+        suffix=".py",
+        data=data,
+    )
+
+
 @activity.defn
 async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
     """把批次行交给脚本转换：payload["rows"] = 行 JSON，调脚本入口（默认 transform）。
@@ -845,7 +901,9 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
     """
     script_path = Path(request["scriptPath"])
     if not script_path.is_file():
-        raise ValueError(f"脚本不存在: {script_path}")
+        # worker 崩溃/容器重建导致本地 tempfile 丢失：按 run 副本重物化
+        # （sha256 钉版本，换 worker 接手也拿到同一份字节）
+        script_path = Path(await _rematerialize_run_script(request))
     function_name = request.get("functionName", "transform")
     source = request.get("source") or {}
     kind = request.get("kind", "entity")
@@ -1063,10 +1121,36 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                     raise
 
         written = 0
+        if kind == "relation" and records:
+            # 关系写图前端点消歧（跨执行兜底）：端点命中未决 T_LINK case 的边
+            # 暂存进 case 快照（裁决时补写，不产生悬挂点）；已裁决 merge 的端点
+            # 改写为目标实体；端点实体被驳回的边丢弃。查询失败按原样写，不阻塞批次
+            from service.manual_review_production import manual_review_service
+
+            try:
+                parked = manual_review_service.park_or_rewrite_edges(name, records)
+                records = parked.get("records") or []
+                if parked.get("parked"):
+                    logger.info(
+                        "关系端点待消歧，暂存 %s 条（随 T_LINK 裁决补写）", parked["parked"]
+                    )
+                if parked.get("dropped"):
+                    logger.info("关系端点实体已被驳回，丢弃 %s 条", parked["dropped"])
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("关系端点消歧查询失败，按原样写图: %s", exc)
         for record in records:
             props = filtered(record.get("props"))
             if kind == "entity" and not props:
                 continue
+            if (
+                kind == "entity"
+                and (not active_props or "id" in active_props)
+                and not str(props.get("id") or "").strip()
+            ):
+                # 身份列 id 平台兜底：vid 即记录 id，脚本未显式输出（或输出空串）时
+                # 补齐——id 是 Schema 注入的 NOT NULL 身份列，落空串会让身份失去意义。
+                # 仅在 id 属于白名单时注入，避免给未声明 id 列的 Schema 加未知列。
+                props["id"] = str(record["id"])
             write_with_self_heal(record, props)
             written += 1
         return {"written": written}
@@ -1075,6 +1159,204 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
             client.close()
         except Exception:  # noqa: BLE001
             logger.exception("关闭图客户端失败")
+
+
+@activity.defn
+async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
+    """消歧 v2（写前判定）：转换产出的实体在写图前先做同名召回 + 多证据评分。
+
+    三分支：得分 ≥0.85 且分差足够 → 改写 vid 并入已有实体（后续 INSERT VERTEX
+    幂等 upsert，"合并"=属性覆盖到目标节点）；灰区 [0.65, 0.85) → 扣留该记录
+    并创建 T_LINK case（候选+得分+待定关系随快照走，case 即待写队列）；<0.65 →
+    新实体原样写。返回过滤后的 records 供 write_records 继续使用；建案失败时
+    fail-open（记录照写，行为退回消歧 v1），不丢数据。阈值见
+    service/entity_disambiguation.py（v1 初值，待人工复核样本校准）。
+    """
+    from infra.graph_db.client import TRSGraphClient
+    from infra.graph_db.config import TRSGraphSettings
+    from service.entity_disambiguation import (
+        GRAY_LOW,
+        MERGE_THRESHOLD,
+        TOP_K,
+        decide,
+        display_name,
+        name_columns_in,
+        normalize_display_name,
+        score_candidate,
+    )
+
+    name_tag = request["name"]
+    records = [dict(r) for r in (request.get("records") or [])]
+    graph = request.get("graph") or {}
+    source_table = str(request.get("sourceTable") or "")
+    batch_vids = {str(r.get("id")) for r in records}
+
+    # 1) 批内同名去重：同显示名的后到记录改写为先到记录的 vid（同批 upsert 合并）
+    first_by_name: dict[str, str] = {}
+    deduped = 0
+    for record in records:
+        key = normalize_display_name(display_name(record.get("props")))
+        if not key:
+            continue
+        first_vid = first_by_name.setdefault(key, str(record.get("id")))
+        if first_vid != str(record.get("id")):
+            record["id"] = first_vid
+            deduped += 1
+
+    # 2) 图库同名召回（带候选完整属性供评分；properties() 失败降级为仅名称）
+    by_name: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        display = display_name(record.get("props"))
+        if display:
+            by_name.setdefault(display, []).append(record)
+
+    existing: dict[str, list[dict[str, Any]]] = {}
+    if by_name:
+        settings = TRSGraphSettings.from_env()
+        if graph.get("space"):
+            settings.space = graph["space"]
+        client = TRSGraphClient(settings)
+        try:
+            client.connect()
+            # 不同来源的 tag 主名列不一（schema 管理建 name，vendor ETL 的
+            # Organization 是 name_cn）：DESCRIBE 探测实际存在的名字列再拼 WHERE，
+            # 引用不存在的列会直接 SemanticError
+            try:
+                desc = client.execute_query(f"DESCRIBE TAG `{name_tag}`")
+                fields = {
+                    f for f in (r.get("Field") for r in desc.records or []) if isinstance(f, str)
+                }
+                name_cols = name_columns_in(fields)
+            except Exception:  # noqa: BLE001
+                logger.warning("DESCRIBE TAG %s 失败，同名召回按 name 列兜底", name_tag)
+                name_cols = ["name"]
+            if not name_cols:
+                logger.info(
+                    "tag %s 无显示名列（name/name_cn/name_en/name_zh），跳过同名召回", name_tag
+                )
+            else:
+                names = list(by_name)
+                name_list = ",".join(json.dumps(n, ensure_ascii=False) for n in names)
+                where = " OR ".join(f"v.`{col}` IN [{name_list}]" for col in name_cols)
+                select_names = ", ".join(
+                    f"v.`{col}` AS `nm{idx}`" for idx, col in enumerate(name_cols)
+                )
+                base_match = (
+                    f"MATCH (v:`{name_tag}`) WHERE {where} RETURN id(v) AS vid, {select_names}"
+                )
+                try:
+                    result = client.execute_read(f"{base_match}, properties(v) AS props LIMIT 200")
+                    name_only = False
+                except Exception:  # noqa: BLE001
+                    logger.warning("同名召回 properties() 失败，降级为仅名称比对")
+                    result = client.execute_read(f"{base_match} LIMIT 200")
+                    name_only = True
+                for rec in result.records or []:
+                    vid = str(rec.get("vid") or "")
+                    props = {} if name_only else (rec.get("props") or {})
+                    if name_only:
+                        nm = next(
+                            (
+                                str(rec.get(f"nm{idx}") or "")
+                                for idx in range(len(name_cols))
+                                if rec.get(f"nm{idx}")
+                            ),
+                            "",
+                        )
+                    else:
+                        nm = display_name(props)
+                    if nm and vid:
+                        existing.setdefault(nm, []).append({"vid": vid, "name": nm, "props": props})
+        finally:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                logger.exception("关闭图客户端失败")
+
+    info = activity.info()
+    try:
+        from service.workflow_repository import repository
+
+        execution = repository.get_execution_by_workflow(info.workflow_id) or {}
+    except Exception:  # noqa: BLE001
+        execution = {}
+    task_id = execution.get("taskId") or f"PI-extract-{info.workflow_id[:12]}"
+    execution_id = execution.get("id")
+
+    from service.manual_review_production import manual_review_service
+
+    kept: list[dict[str, Any]] = []
+    stats = {"merged": 0, "withheld": 0, "deduped": deduped, "new": 0}
+    for record in records:
+        display = display_name(record.get("props"))
+        scored = []
+        for cand in existing.get(display, []):
+            if cand["vid"] in batch_vids:
+                continue
+            score, detail = score_candidate(
+                display, record.get("props"), cand["name"], cand.get("props")
+            )
+            scored.append(
+                {"vid": cand["vid"], "name": cand["name"], "score": round(score, 3), **detail}
+            )
+        outcome = decide(scored)
+        if outcome["decision"] == "merge":
+            record["id"] = outcome["targetVid"]
+            stats["merged"] += 1
+            kept.append(record)
+        elif outcome["decision"] == "gray":
+            try:
+                manual_review_service.create_direct_case(
+                    task_id=task_id,
+                    execution_id=execution_id,
+                    step_id=request.get("stepId") or "align",
+                    kind="entity",
+                    candidate={
+                        "name": display,
+                        "newIds": [str(record.get("id"))],
+                        "existingCandidates": [
+                            {"vid": c["vid"], "name": c["name"], "score": c["score"]}
+                            for c in sorted(scored, key=lambda x: x["score"], reverse=True)[:TOP_K]
+                        ],
+                        "_incoming": {
+                            "vid": str(record.get("id")),
+                            "props": record.get("props") or {},
+                            "sourceTable": source_table,
+                        },
+                        "_pendingRelations": [],
+                        "_graphSpace": graph.get("space"),
+                        "_resolution": {
+                            "matchScore": outcome["score"],
+                            "margin": outcome["margin"],
+                            "policyVersion": "disambiguation-gray-v1",
+                            "thresholds": {"merge": MERGE_THRESHOLD, "grayLow": GRAY_LOW},
+                        },
+                    },
+                    object_id=str(record.get("id")),
+                    object_name=display,
+                    node_label=name_tag,
+                    reason=(
+                        f"消歧得分 {outcome['score']:.2f} 落入灰区 "
+                        f"[{GRAY_LOW}, {MERGE_THRESHOLD})，需人工裁决是否并入已有实体"
+                    ),
+                    confidence=outcome["score"],
+                    workflow_id=info.workflow_id,
+                    workflow_run_id=info.workflow_run_id,
+                    template_id="T_LINK",
+                    workflow_type="kg.schema.extract",
+                    exception_code="KG_ENTITY_DISAMBIGUATION_GRAY",
+                    resume_token=f"extract-resolve:{execution_id}:{record.get('id')}",
+                    source_table=source_table or None,
+                    source_record_id=str(record.get("id")),
+                )
+                stats["withheld"] += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("灰区消歧建案失败 vid=%s，记录按原样写图: %s", record.get("id"), exc)
+                kept.append(record)
+        else:
+            stats["new"] += 1
+            kept.append(record)
+    return {"records": kept, **stats}
 
 
 @activity.defn
@@ -1379,6 +1661,7 @@ class SchemaExtractWorkflow:
         self._sources: dict[str, dict[str, Any]] = {}
         self._slots: dict[str, dict[int, dict[str, Any]]] = {}
         self._current_source: str | None = None
+        self._run_script_object: str | None = None
 
     async def _report_script_run(self, schema_id: str, *, ok: bool, error: str | None) -> None:
         """收尾回写脚本健康信号（best-effort，失败不影响主流程状态）。"""
@@ -1389,6 +1672,8 @@ class SchemaExtractWorkflow:
                     "schemaId": schema_id,
                     "status": "ok" if ok else "failed",
                     "error": error,
+                    # 顺带清理 run 脚本副本（activity 内 best-effort 删除）
+                    "runScriptKey": self._run_script_object,
                 },
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=ACTIVITY_RETRY_POLICY,
@@ -1428,6 +1713,7 @@ class SchemaExtractWorkflow:
             {"id": "_default", "fn": plan["functionName"]}
         ]
         multi_step = bool(plan.get("multiStep"))
+        self._run_script_object = plan.get("scriptRunKey")
 
         # 周期 Schedule 触发：request 是扁平 shape（非 {definitionId, payload}），
         # 直接调注册 activity 落 execution/task 行（幂等）。
@@ -1599,6 +1885,9 @@ class SchemaExtractWorkflow:
                                 step_ctx_id = f"{step_id}#{step['id']}" if multi_step else step_id
                                 transform_request: dict[str, Any] = {
                                     "scriptPath": plan["scriptPath"],
+                                    # run 副本定位（.get 兼容升级窗口内在飞旧 plan 的重放）
+                                    "scriptRunKey": plan.get("scriptRunKey"),
+                                    "scriptSha256": plan.get("scriptSha256"),
                                     "functionName": step["fn"],
                                     "source": source,
                                     "kind": kind,
@@ -1640,6 +1929,24 @@ class SchemaExtractWorkflow:
                                     transformed.get("entities") or transformed.get("edges") or []
                                 )
                                 step_written = 0
+                                if records and kind == "entity":
+                                    # 消歧 v2（写前判定）：同名召回+评分，改写 vid 并入 /
+                                    # 灰区扣留建 T_LINK case / 其余原样——灰区记录从本批
+                                    # 剔除（不写图），后续由人工裁决执行器补写
+                                    resolved = await workflow.execute_activity(
+                                        resolve_entity_batch,
+                                        {
+                                            "name": plan["name"],
+                                            "records": records,
+                                            "graph": graph,
+                                            "schemaKey": plan["schemaKey"],
+                                            "stepId": step_ctx_id,
+                                            "sourceTable": table_label,
+                                        },
+                                        start_to_close_timeout=timedelta(seconds=300),
+                                        retry_policy=ACTIVITY_RETRY_POLICY,
+                                    )
+                                    records = resolved.get("records") or []
                                 if records:
                                     write_result = await workflow.execute_activity(
                                         write_records,
@@ -1942,6 +2249,18 @@ async def record_schema_script_run(request: dict[str, Any]) -> dict[str, Any]:
         row.last_run_status = status
         row.last_run_error = error if status == "failed" else None
         session.commit()
+    run_key = request.get("runScriptKey")
+    if run_key:
+        # run 脚本副本随 run 结束清理（best-effort：删除失败只记日志，孤儿对象
+        # 无副作用；S3 delete 对不存在 key 幂等，activity 重试安全）
+        try:
+            from infra.s3 import get_schema_s3_storage
+
+            load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+            storage = get_schema_s3_storage()
+            storage.delete_object(storage.bucket, run_key)
+        except Exception:  # noqa: BLE001
+            logger.exception("清理 run 脚本副本失败: %s", run_key)
     return {"ok": True, "status": status}
 
 
@@ -1957,6 +2276,7 @@ ACTIVITIES = [
     read_source_batch,
     execute_transform,
     write_records,
+    resolve_entity_batch,
     advance_schema_extract_watermark,
     record_schema_script_run,
     detect_extract_collisions,

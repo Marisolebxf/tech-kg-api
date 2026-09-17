@@ -243,6 +243,11 @@ export async function selectArcoScrolled(page: Page, trigger: import('@playwrigh
   throw new Error(`下拉选项「${text}」滚动查找未命中`)
 }
 
+/** 切换右上角全局图空间选择器（.app-space-select）到指定空间；各业务页 watch 联动重载。 */
+export async function switchGraphSpace(page: Page, space: string): Promise<void> {
+  await selectArcoScrolled(page, page.locator('.app-space-select .arco-select-view-single'), space)
+}
+
 /** path 路由跳转并等页面骨架渲染（createWebHistory，非 hash 模式）。 */
 export async function gotoRoute(page: Page, route: string): Promise<void> {
   await page.goto(route.startsWith('/') ? route : `/${route}`)

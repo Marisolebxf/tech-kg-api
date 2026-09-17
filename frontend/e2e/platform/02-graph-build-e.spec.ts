@@ -6,6 +6,7 @@ import {
   graphCount,
   mysql,
   runId,
+  switchGraphSpace,
   waitFor,
 } from './helpers'
 
@@ -95,15 +96,14 @@ test.describe.serial('E. 任务中心', () => {
 
     await page.goto('/graph-build')
     await page.waitForLoadState('networkidle')
+    // 弹窗内已无图空间选择：可抽取 Schema 按全局选择器当前空间拉取
+    await switchGraphSpace(page, 'dev2')
     await page.getByRole('button', { name: '＋ 新建任务' }).click()
     const dialog = page.locator('[class*="job-launch"], .arco-modal, [class*="modal"]').filter({ hasText: '新建任务' }).first()
     await expect(dialog).toBeVisible()
 
     await dialog.locator('input[placeholder="如：论文-专家抽取"]').fill(jobName)
     // 任务类型已是静态「数据抽取」（D2/D4 下线其余通道后弹窗只建抽取任务），无需选择
-    // 先选图空间再选 Schema（M4 联动：换空间会清空已选 schemaId 并按空间重查）
-    await dialog.locator('.arco-select-view-single:has(input[placeholder="默认空间"])').click()
-    await page.locator('li.arco-select-option:visible', { hasText: 'dev2' }).first().click()
     await dialog.locator('input[placeholder="选择要抽取的实体/关系"]').click()
     const widgetOpt = page.locator('li.arco-select-option:visible', { hasText: 'E2EWidget' }).first()
     await waitFor(async () => (await widgetOpt.isVisible().catch(() => false)), { label: 'E2EWidget 选项出现' })
@@ -448,5 +448,50 @@ test.describe.serial('E. 任务中心', () => {
     await expect(page.getByText(/实际访问资源|输入数据|输出结果|阶段真实输入输出/).first()).toBeVisible()
     const ioText = await page.locator('.step-detail').innerText()
     expect(ioText.length).toBeGreaterThan(0)
+  })
+
+  test('E9 任务列表按当前图空间过滤 + 「全部空间」开关', async ({ page, request }) => {
+    test.setTimeout(120_000)
+    // 造一个别的空间的任务（admin 绕过绑定校验，直接落 algo_test 空间；不触发执行）
+    const jobName = `e2e任务-跨空间-${suffix}`
+    const schemas = await apiMust<any>(
+      request,
+      'GET',
+      '/schema-management/schemas?graphSpace=dev2&pageSize=100',
+      undefined,
+      '列 schema',
+    )
+    const widget = (schemas.items ?? []).find((s: any) => s.name === 'E2EWidget')
+    test.skip(!widget, '无 E2EWidget schema')
+    const otherJob = await apiMust<any>(
+      request,
+      'POST',
+      '/workflow-system/jobs',
+      {
+        name: jobName,
+        taskType: 'extract',
+        schemaId: widget.id,
+        schedule: { kind: 'once' },
+        graphSpace: 'algo_test',
+        batchSize: 2,
+      },
+      '建跨空间任务',
+    )
+    try {
+      await page.goto('/graph-build')
+      await page.waitForLoadState('networkidle')
+      // 默认跟随当前全局空间（dev2）：跨空间任务不可见
+      await expect(page.locator('tbody tr', { hasText: jobName })).toHaveCount(0)
+      // 打开「全部空间」→ 任务可见，图空间列显示 algo_test
+      await page.locator('.gb-space-toggle').click()
+      const row = page.locator('tbody tr', { hasText: jobName }).first()
+      await expect(row).toBeVisible({ timeout: 15_000 })
+      await expect(row.getByText('algo_test')).toBeVisible()
+      // 关闭开关 → 回到当前空间过滤（隐藏）
+      await page.locator('.gb-space-toggle').click()
+      await expect(page.locator('tbody tr', { hasText: jobName })).toHaveCount(0)
+    } finally {
+      await api(request, 'DELETE', `/workflow-system/jobs/${otherJob.id}`)
+    }
   })
 })

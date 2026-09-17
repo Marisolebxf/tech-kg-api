@@ -141,7 +141,7 @@ kg_script_watermark（业务库，definition_id+step_id 主键）
 
 - **property**：schema_id FK CASCADE、name、data_type、required、rule、category、position、UNIQUE(schema_id, name)。
 - **mapping**：schema_id FK CASCADE、source_name（来源对象名，展示用）、position、UNIQUE(schema_id, source_name)。
-- **script**：schema_id FK CASCADE（1:1）、bucket/object_key/original_filename/content_type/size_bytes/etag/**sha256**、uploaded_by、workflow_definition_id/function_name（工作流注册回填）、**captured_revision**（上传时快照）、last_run_status（none/ok/failed，抽取收尾回写）/last_run_error、safety_summary/safety_issues（LLM 审计结论）。
+- **script**：schema_id FK CASCADE（1:1）、bucket/object_key/original_filename/content_type/size_bytes/etag/**sha256**、uploaded_by、workflow_definition_id/function_name（兼容保留列，恒为 NULL——工作流注册已随 2026-09-14 D1 删除）、**captured_revision**（上传时快照）、last_run_status（none/ok/failed，抽取收尾回写）/last_run_error、safety_summary/safety_issues（LLM 审计结论）。
 - **source**：schema_id FK CASCADE、datasource_id（→配置管理）、database_name/table_name、pk_column（默认 id）/time_column（默认 update_time）、query_sql（复杂 SQL）、position、UNIQUE(schema_id, datasource_id, database_name, table_name)。
 
 ### kg_script_watermark（业务库）
@@ -233,7 +233,6 @@ sequenceDiagram
     SVC-->>FE: SSE: progress(stage=storage) "保存中..."
     SVC->>S3: PUT 脚本对象（schemas/... 路径）
     SVC->>DB: upsert kg_schema_script（sha256/etag/original_filename/<br/>captured_revision=当前 property_revision/safety_summary/safety_issues）
-    SVC->>TP: 注册/更新对应工作流定义（workflow_definition_id 回填）
     SVC-->>FE: SSE: done（"脚本已通过安全校验并保存"）
     note over FE: 另有 PUT /schemas/{id}/script 直传旧入口（不走 SSE/LLM 校验）
 ```

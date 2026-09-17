@@ -181,6 +181,62 @@ def test_pipeline_steps_preserves_activities() -> None:
     assert by_id["legacy-script"]["activities"] is None
 
 
+def test_pipeline_steps_chain_extract_output_shape() -> None:
+    """kg.schema.extract.chain 落库输出：schema:{id} 键 + records/failed 计数 + 嵌套 activities。"""
+    output = {
+        "status": "completed",
+        "chain": True,
+        "schemaIds": ["sch-paper", "sch-scholar"],
+        "steps": {
+            "schema:sch-paper": {
+                "status": "COMPLETED",
+                "schemaId": "sch-paper",
+                "name": "论文（Paper）",
+                "description": "kg.schema.extract · entity 抽取（2 个来源）",
+                "records": 1200,
+                "written": 1180,
+                "failed": 3,
+                "output": {"status": "completed"},
+                "activities": {
+                    "clean": {
+                        "status": "COMPLETED",
+                        "name": "clean",
+                        "records": 900,
+                        "written": 0,
+                        "failed": 1,
+                    },
+                    "extract": {
+                        "status": "COMPLETED",
+                        "name": "extract",
+                        "records": 700,
+                        "written": 690,
+                        "failed": 2,
+                    },
+                },
+            },
+            "schema:sch-scholar": {
+                "status": "FAILED",
+                "schemaId": "sch-scholar",
+                "name": "专家（Scholar）",
+                "error": "第三批写图失败",
+                "activities": {},
+            },
+        },
+        "failures": {"count": 3, "recorded": 3, "truncated": False},
+    }
+    steps = pipeline_steps(output)
+    by_id = {s["id"]: s for s in steps}
+    paper = by_id["schema:sch-paper"]
+    assert paper["name"] == "论文（Paper）"
+    assert paper["status"] == "成功"
+    assert paper["count"] == "1200"
+    assert paper["abnormal"] == "3"
+    assert paper["activities"]["extract"]["written"] == 690
+    scholar = by_id["schema:sch-scholar"]
+    assert scholar["status"] == "需人工处理"
+    assert scholar["error"] == "第三批写图失败"
+
+
 def test_pipeline_steps_empty_for_non_pipeline_output() -> None:
     assert pipeline_steps(None) == []
     assert pipeline_steps({"status": "completed", "result": {...}}) == []

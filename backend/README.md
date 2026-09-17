@@ -17,7 +17,7 @@
 | Redis | `127.0.0.1:6379`，DB `0` | `redis` | - | 无密码 |
 | Kafka | `127.0.0.1:9092` | `kafka` | - | Consumer Group `techkg` |
 | Milvus | `127.0.0.1:19530` | `milvus` | - | 无账号密码配置 |
-| RustFS（schema 脚本 / 用户算子 / Milvus 内部存储共用） | API `127.0.0.1:9020`，控制台 `127.0.0.1:9021` | `operator-rustfs` | `rustfsadmin` | `rustfsadmin`，Python 通过 S3 API 使用，栈内不部署 MinIO |
+| RustFS（schema 脚本 / Milvus 内部存储共用） | API `127.0.0.1:9020`，控制台 `127.0.0.1:9021` | `operator-rustfs` | `rustfsadmin` | `rustfsadmin`，Python 通过 S3 API 使用，栈内不部署 MinIO |
 
 后端直接在宿主机运行时，MySQL 地址通常使用 `127.0.0.1`；后端在项目 Compose 的 `api` 容器内运行时，通过外部 Docker 网络使用服务名 `mysql`。Milvus 使用 Compose 服务名 `milvus`，M3E 向量服务使用 `m3e-embedding`。实际连接值以 `.env` 和 Compose 的 `environment` 覆盖项为准。 后期环境若使用 `tdsql-mysql`，通过部署环境设置 `MYSQL_HOST=tdsql-mysql`，无需修改代码。
 
@@ -72,7 +72,7 @@ backend/
 ├── utils/          # 日志、配置、错误码、常量和工具函数
 ├── middleware/     # 日志、鉴权、trace_id、异常处理
 ├── idl/            # 接口定义文件
-├── config/         # dev、stage、product 环境配置
+├── config/         # 认证配置（auth.py；历史 yml 已删且从不加载）
 ├── script/         # 初始化和维护脚本
 ├── tests/          # 测试
 └── main.py         # FastAPI 应用入口

@@ -72,6 +72,11 @@ async def get_task(task_id: str) -> ApiResponse:
         task = service.get_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="任务不存在") from exc
+    # chain（kg.schema.extract.chain）任务：用 Temporal 实时 get_steps 填 pipeline
+    # 字段（详情页抽屉渲染）；查询失败（已结束/淘汰）返回 None 走落库 steps 回退
+    step_state = await service.query_step_state(task)
+    if step_state is not None:
+        task["pipeline"] = step_state
     return ApiResponse(data=task)
 
 

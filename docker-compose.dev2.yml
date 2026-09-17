@@ -85,6 +85,11 @@ services:
       SCHEMA_S3_BUCKET: ${SCHEMA_S3_BUCKET:-tech-kg-schema-scripts}
       SCHEMA_S3_REGION: ${SCHEMA_S3_REGION:-us-east-1}
       SCHEMA_S3_SECURE: ${SCHEMA_S3_SECURE:-false}
+      # 抽取批载荷 S3 中转（claim-check）：dev2 默认开（验证新链路；生产根 compose 不带
+      # 该 env → 默认关，flag 全量验证后 Phase 4 再收口）
+      SCHEMA_EXTRACT_PAYLOAD_S3_ENABLED: ${SCHEMA_EXTRACT_PAYLOAD_S3_ENABLED:-true}
+      SCHEMA_EXTRACT_PAYLOAD_RETENTION_DAYS: ${SCHEMA_EXTRACT_PAYLOAD_RETENTION_DAYS:-7}
+      SCHEMA_EXTRACT_PAYLOAD_CLEANUP_ENABLED: ${SCHEMA_EXTRACT_PAYLOAD_CLEANUP_ENABLED:-true}
       SCHEMA_SCRIPT_MAX_BYTES: ${SCHEMA_SCRIPT_MAX_BYTES:-10485760}
       SCHEMA_ADMIN_USER_IDS: ${SCHEMA_ADMIN_USER_IDS:-schema-admin}
       PATENT_EMBEDDING_PROVIDER: ${PATENT_EMBEDDING_PROVIDER:-openai}
@@ -173,6 +178,11 @@ services:
       SCHEMA_S3_BUCKET: ${SCHEMA_S3_BUCKET:-tech-kg-schema-scripts}
       SCHEMA_S3_REGION: ${SCHEMA_S3_REGION:-us-east-1}
       SCHEMA_S3_SECURE: ${SCHEMA_S3_SECURE:-false}
+      # 抽取批载荷 S3 中转（claim-check）：dev2 默认开（验证新链路；生产根 compose 不带
+      # 该 env → 默认关，flag 全量验证后 Phase 4 再收口）
+      SCHEMA_EXTRACT_PAYLOAD_S3_ENABLED: ${SCHEMA_EXTRACT_PAYLOAD_S3_ENABLED:-true}
+      SCHEMA_EXTRACT_PAYLOAD_RETENTION_DAYS: ${SCHEMA_EXTRACT_PAYLOAD_RETENTION_DAYS:-7}
+      SCHEMA_EXTRACT_PAYLOAD_CLEANUP_ENABLED: ${SCHEMA_EXTRACT_PAYLOAD_CLEANUP_ENABLED:-true}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

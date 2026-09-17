@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 
-import { deleteProductionReview, getProductionReview, getProductionReviewAuditLogs, getProductionReviews, rerunExtractFailures, type ProductionReviewAuditEntry, type ProductionReviewCase } from '../../api/workflowOperations'
+import { deleteProductionReview, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import {
   extractCaseStatusBadge,
@@ -19,9 +19,15 @@ const keyword = ref(clampSearchKeyword(String(route.query.keyword || '')))
  *  undefined = 未选择（清空），语义等同「全部」。 */
 const reviewStatusFilter = ref<'全部' | '待处理' | '已处理' | '重跑中' | '重跑失败' | undefined>('全部')
 const reviewKindFilter = ref<'全部' | '实体' | '关系' | undefined>('全部')
+/** 时间过滤（按更新时间）：全部/近1小时/近24小时/近7天/近30天 → updatedWithin 查询参数。 */
+const reviewTimeFilter = ref<'全部' | '近1小时' | '近24小时' | '近7天' | '近30天' | undefined>('全部')
+const reviewTimeOptions = ['全部', '近1小时', '近24小时', '近7天', '近30天']
+const REVIEW_TIME_PARAMS: Record<string, string | undefined> = { '全部': undefined, '近1小时': '1h', '近24小时': '24h', '近7天': '7d', '近30天': '30d' }
+/** 更新时间排序：default=风险+创建时间（默认）；desc=新→旧；asc=旧→新。 */
+const reviewTimeSort = ref<'default' | 'desc' | 'asc'>('default')
 const reviewTotal = ref(0)
 /** 队列行 = manual-review-data 的 ReviewRecord + 重跑/删除/跳转所需的原始字段。 */
-type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; graphBuildId?: string }
+type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; graphBuildId?: string; jobId?: string }
 
 /** 可重跑/可删除：与后端 rerun 门控同口径（未处理）。 */
 const isRerunnable = (row: ReviewRow) => row.rawStatus === 'OPEN' || row.rawStatus === 'RERUN_FAILED'
@@ -114,38 +120,66 @@ async function rerunSelected(caseIds: string[] | undefined = undefined, skipConf
   }
 }
 
-// ---- C 类操作列：日志弹窗 / 删除 ----
+// ---- C 类操作列：日志弹窗（工作流执行日志）/ 删除 ----
 
-/** 日志弹窗：并行拉 case 详情 + 审计日志，展示失败原因/记录信息/溯源/处理时间线。 */
+/** 日志弹窗：按 case 关联的抽取工作流执行（重跑执行优先）拉 getExecution + 任务(PI-) logs，
+ *  展示执行概要/阶段状态/任务执行日志；旧的 case 审计时间线等内容不再展示。 */
 const logVisible = ref(false)
 const logLoading = ref(false)
 const logError = ref('')
 const logCase = ref<ProductionReviewCase>()
-const logEntries = ref<ProductionReviewAuditEntry[]>([])
+const logExecution = ref<WorkflowExecution | null>(null)
+const logTask = ref<ProcessingInstance | null>(null)
+const logExecutionMissing = ref(false)
+/** 当前展示哪个执行：rerun=重跑执行（最新一次处理）；original=原执行。 */
+const logExecutionChoice = ref<'rerun' | 'original'>('rerun')
 
 const logInput = computed<Record<string, unknown>>(() =>
   ((logCase.value?.data?.input || logCase.value?.input || {}) as Record<string, unknown>))
+const logOriginalExecutionId = computed(() => String(logInput.value.executionId ?? ''))
 const logRerunExecutionId = computed(() => String(logInput.value.rerunExecutionId ?? ''))
-const logAttempt = computed(() => Number(logInput.value.attempt ?? 1))
+const logActiveExecutionId = computed(() =>
+  logExecutionChoice.value === 'rerun' && logRerunExecutionId.value ? logRerunExecutionId.value : logOriginalExecutionId.value)
 
-/** 审计事件中文化（未收录的兜底显示原文）。 */
-const AUDIT_EVENT_LABELS: Record<string, string> = {
-  CASE_CREATED: '建案',
-  CASE_CLAIMED: '领取',
-  CASE_RELEASED: '释放',
-  CASE_TRANSFERRED: '转派',
-  CASE_CANCELLED: '取消',
-  CLAIM_EXPIRED: '领取超时回收',
-  DRAFT_SAVED: '存草稿',
-  DECISION_SUBMITTED: '提交决议',
-  DIRECT_ACCEPTED: '直判通过（写图）',
-  DIRECT_REJECTED: '直判驳回',
-  RERUN_STARTED: '下发重跑',
-  RERUN_SUCCEEDED: '重跑成功',
-  RERUN_FAILED: '重跑仍失败（重建新记录）',
-  RERUN_PROGRESS: '重跑回滚',
-  HEARTBEAT: '心跳续约',
-  EVIDENCE_ADDED: '附件登记',
+/** 抽取执行 output 汇总（kg.schema.extract）：写入/失败计数（多来源求和）。 */
+const logExtractSummary = computed(() => {
+  const output = logExecution.value?.output as Record<string, unknown> | null | undefined
+  if (!output || typeof output !== 'object') return null
+  const sources = Array.isArray(output.sources) ? (output.sources as Array<Record<string, unknown>>) : []
+  const written = sources.reduce((sum, item) => sum + Number(item.written || 0), 0)
+  const failed = Number((output.failures as Record<string, unknown> | undefined)?.count ?? 0)
+  if (!sources.length && !failed) return null
+  return { written, failed, sourceCount: sources.length }
+})
+
+/** 执行日志行：任务 logs 数组优先；无任务记录时退回执行 message 单行。 */
+const logLines = computed<string[]>(() => {
+  const lines = logTask.value?.logs
+  if (Array.isArray(lines) && lines.length) return lines.map(String)
+  const message = logExecution.value?.message
+  return message ? [message] : []
+})
+
+async function loadExecutionLog(executionId: string) {
+  logExecution.value = null
+  logTask.value = null
+  logExecutionMissing.value = false
+  if (!executionId) {
+    logExecutionMissing.value = true
+    return
+  }
+  try {
+    const execution = await getExecution(executionId)
+    logExecution.value = execution ?? null
+    if (!execution) logExecutionMissing.value = true
+    else if (execution.taskId) {
+      // 任务（PI-）记录携带工作流执行日志数组与阶段回写 steps
+      try { logTask.value = await getTask(execution.taskId) } catch { logTask.value = null }
+    }
+  } catch {
+    logExecution.value = null
+    logExecutionMissing.value = true
+  }
 }
 
 async function openLog(row: ReviewRow) {
@@ -153,19 +187,25 @@ async function openLog(row: ReviewRow) {
   logLoading.value = true
   logError.value = ''
   logCase.value = undefined
-  logEntries.value = []
+  logExecution.value = null
+  logTask.value = null
   try {
-    const [detail, logs] = await Promise.all([
-      getProductionReview(row.id),
-      getProductionReviewAuditLogs(row.id),
-    ])
-    logCase.value = detail
-    logEntries.value = logs.items || []
+    logCase.value = await getProductionReview(row.id)
+    // 重跑执行优先展示（最新一次对该记录的处理）；无重跑则展示原执行
+    logExecutionChoice.value = logRerunExecutionId.value ? 'rerun' : 'original'
+    await loadExecutionLog(logActiveExecutionId.value)
   } catch (error) {
     logError.value = error instanceof Error ? error.message : '日志加载失败'
   } finally {
     logLoading.value = false
   }
+}
+
+/** 切换 原执行/重跑执行 视图。 */
+function switchLogExecution(choice: 'rerun' | 'original') {
+  if (choice === logExecutionChoice.value) return
+  logExecutionChoice.value = choice
+  void loadExecutionLog(logActiveExecutionId.value)
 }
 
 /** 删除：二次确认后物理删除（仅未处理可删，与重跑同门控）。 */
@@ -211,6 +251,8 @@ async function loadReviews() {
       statusGroup: reviewStatusFilter.value === '待处理' ? 'pending' : reviewStatusFilter.value === '已处理' ? 'processed' : undefined,
       status: reviewStatusFilter.value === '重跑中' ? 'RERUNNING' : reviewStatusFilter.value === '重跑失败' ? 'RERUN_FAILED' : undefined,
       kind: !reviewKindFilter.value || reviewKindFilter.value === '全部' ? undefined : reviewKindFilter.value === '实体' ? 'entity' : 'relation',
+      updatedWithin: REVIEW_TIME_PARAMS[reviewTimeFilter.value || '全部'],
+      sort: reviewTimeSort.value === 'default' ? undefined : `updated_${reviewTimeSort.value}`,
       page: reviewPage.value,
       pageSize: reviewPageSize.value,
     })
@@ -221,7 +263,7 @@ async function loadReviews() {
       return loadReviews()
     }
     reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
-      id: row.id, templateId: row.templateId, rawStatus: row.status, graphBuildId: row.executionId || row.workflowId || '', batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
+      id: row.id, templateId: row.templateId, rawStatus: row.status, graphBuildId: row.executionId || row.workflowId || '', jobId: row.jobId || '', batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
     }))
     reviewLoadError.value = ''
   } catch (error) { reviewLoadError.value = error instanceof Error ? error.message : '人工处理队列加载失败' }
@@ -247,8 +289,15 @@ function changeReviewPageSize(size: unknown) {
   void loadReviews()
 }
 
+/** 更新时间表头排序：三态循环 默认 → 新→旧 → 旧→新 → 默认。 */
+function toggleReviewTimeSort() {
+  reviewTimeSort.value = reviewTimeSort.value === 'default' ? 'desc' : reviewTimeSort.value === 'desc' ? 'asc' : 'default'
+  reviewPage.value = 1
+  void loadReviews()
+}
+
 /** 筛选条件变化：回到第 1 页重新加载。 */
-watch([reviewStatusFilter, reviewKindFilter], () => {
+watch([reviewStatusFilter, reviewKindFilter, reviewTimeFilter], () => {
   if (props.mode !== 'review') return
   reviewPage.value = 1
   void loadReviews()
@@ -283,6 +332,10 @@ onMounted(loadReviews)
           <div class="review-filter-field">
             <span class="review-filter-label">类型</span>
             <a-select v-model="reviewKindFilter" class="review-filter-select" :options="['全部', '实体', '关系']" />
+          </div>
+          <div class="review-filter-field">
+            <span class="review-filter-label">时间</span>
+            <a-select v-model="reviewTimeFilter" class="review-filter-select" :options="reviewTimeOptions" />
           </div>
           <a-input v-model="keyword" class="review-search-input review-filter-search" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录"><template #prefix><IconSearch /></template></a-input>
         </div>
@@ -337,7 +390,7 @@ onMounted(loadReviews)
             <th>类型</th>
             <th>来源记录</th>
             <th>状态</th>
-            <th>更新时间</th>
+            <th class="th-time-sort" :class="{ 'is-active': reviewTimeSort !== 'default' }" title="按更新时间排序" @click="toggleReviewTimeSort">更新时间<span class="sort-arrow">{{ reviewTimeSort === 'desc' ? '↓' : reviewTimeSort === 'asc' ? '↑' : '↕' }}</span></th>
             <th class="review-action-col">操作</th>
           </tr>
         </thead>
@@ -355,7 +408,10 @@ onMounted(loadReviews)
             </td>
             <td><span :class="['review-kind-badge', `is-${rowKindLabel(row)}`]">{{ rowKindLabel(row) }}</span></td>
             <td class="review-id-cell">
-              <RouterLink v-if="row.graphBuildId" class="link" :to="`/processing-instance/${row.graphBuildId}`">{{ row.graphBuildId }}</RouterLink>
+              <!-- 来源记录：优先跳图谱构建任务详情（job 维度，含执行历史）；
+                   无 jobId 的存量 case 回落执行详情（EXEC 维度） -->
+              <RouterLink v-if="row.jobId" class="link" :to="`/graph-build/jobs/${row.jobId}`">{{ row.jobId }}</RouterLink>
+              <RouterLink v-else-if="row.graphBuildId" class="link" :to="`/processing-instance/${row.graphBuildId}`">{{ row.graphBuildId }}</RouterLink>
               <template v-else>—</template>
             </td>
             <td><span :class="['review-status', `is-${row.status}`]">{{ row.status }}</span></td>
@@ -384,7 +440,7 @@ onMounted(loadReviews)
             </td>
           </tr>
           <tr v-if="!reviewRows.length">
-            <td class="review-empty" :colspan="reviewCategory === 'C' ? 8 : 7">{{ reviewLoadError || (reviewStatusFilter === '全部' && reviewKindFilter === '全部' && !keyword ? '暂无人工处理记录' : '暂无符合条件的记录') }}</td>
+            <td class="review-empty" :colspan="reviewCategory === 'C' ? 8 : 7">{{ reviewLoadError || (reviewStatusFilter === '全部' && reviewKindFilter === '全部' && reviewTimeFilter === '全部' && !keyword ? '暂无人工处理记录' : '暂无符合条件的记录') }}</td>
           </tr>
         </tbody>
       </table></div>
@@ -420,47 +476,47 @@ onMounted(loadReviews)
     <a-modal
       v-model:visible="logVisible"
       modal-class="case-log-modal"
-      :title="`日志 · ${logCase?.id || ''}`"
-      :width="720"
+      :title="`执行日志 · ${logCase?.id || ''}`"
+      :width="760"
       :footer="false"
     >
       <p v-if="logLoading" class="case-log-loading">加载中…</p>
       <p v-else-if="logError" class="case-log-error-text">{{ logError }}</p>
       <template v-else-if="logCase">
-        <section class="case-log-sec">
-          <h4>失败原因</h4>
-          <pre class="case-log-error-text">{{ logCase.diagnosis || '—' }}</pre>
-        </section>
-        <section class="case-log-sec">
-          <h4>记录信息</h4>
-          <dl class="case-log-dl">
-            <div><dt>来源表</dt><dd>{{ logCase.sourceTable || '—' }}</dd></div>
-            <div><dt>记录 ID</dt><dd><code>{{ logCase.sourceRecordId || '—' }}</code></dd></div>
-            <div><dt>尝试次数</dt><dd>第 {{ logAttempt }} 次</dd></div>
-          </dl>
-        </section>
-        <section class="case-log-sec">
-          <h4>溯源</h4>
-          <dl class="case-log-dl">
-            <div><dt>Schema</dt><dd><code>{{ String(logInput.schemaKey ?? '—') }}</code></dd></div>
-            <div><dt>来源绑定</dt><dd><code>{{ String(logInput.sourceBindingId ?? '—') }}</code></dd></div>
-            <div><dt>原执行</dt><dd><RouterLink class="link" :to="`/processing-instance/${String(logInput.executionId ?? '')}`"><code>{{ String(logInput.executionId ?? '—') }}</code></RouterLink></dd></div>
-            <div v-if="logRerunExecutionId"><dt>重跑执行</dt><dd><RouterLink class="link" :to="`/processing-instance/${logRerunExecutionId}`"><code>{{ logRerunExecutionId }}</code></RouterLink></dd></div>
-            <div v-if="logInput.jobId"><dt>所属任务</dt><dd><code>{{ String(logInput.jobId) }}</code></dd></div>
-          </dl>
-        </section>
-        <section class="case-log-sec">
-          <h4>处理时间线</h4>
-          <ul class="case-log-timeline">
-            <li v-for="(entry, index) in logEntries" :key="index">
-              <span class="case-log-time">{{ entry.createdAt }}</span>
-              <span class="case-log-event">{{ AUDIT_EVENT_LABELS[entry.eventType] || entry.eventType }}</span>
-              <span v-if="entry.oldStatus || entry.newStatus" class="case-log-status">{{ entry.oldStatus || '—' }} → {{ entry.newStatus || '—' }}</span>
-              <span class="case-log-actor">{{ entry.actorName || entry.actorId || '' }}</span>
-            </li>
-            <li v-if="!logEntries.length" class="case-log-empty">暂无处理记录</li>
-          </ul>
-        </section>
+        <!-- 原执行/重跑执行切换（两者都有时才显示；默认看重跑执行=最新一次处理） -->
+        <div v-if="logRerunExecutionId && logOriginalExecutionId" class="case-log-switch">
+          <button type="button" :class="{ active: logExecutionChoice === 'rerun' }" @click="switchLogExecution('rerun')">重跑执行</button>
+          <button type="button" :class="{ active: logExecutionChoice === 'original' }" @click="switchLogExecution('original')">原执行</button>
+        </div>
+        <p v-if="logExecutionMissing" class="case-log-missing">未找到关联的工作流执行记录（{{ logActiveExecutionId || '该记录未关联执行 ID' }}）——执行记录可能已随环境重置被清理。</p>
+        <template v-else-if="logExecution">
+          <section class="case-log-sec">
+            <h4>执行概要</h4>
+            <dl class="case-log-dl">
+              <div><dt>执行 ID</dt><dd><RouterLink class="link" :to="`/processing-instance/${logExecution.id}`"><code>{{ logExecution.id }}</code></RouterLink></dd></div>
+              <div><dt>触发方式</dt><dd>{{ TRIGGER_SOURCE_LABEL[logExecution.triggerSource || 'MANUAL'] || logExecution.triggerSource || '—' }}</dd></div>
+              <div><dt>状态</dt><dd>{{ logExecution.status }}</dd></div>
+              <div><dt>开始时间</dt><dd>{{ logExecution.startedAt || '—' }}</dd></div>
+              <div><dt>完成时间</dt><dd>{{ logExecution.completedAt || '—' }}</dd></div>
+              <div v-if="logExtractSummary"><dt>抽取结果</dt><dd>写入 {{ logExtractSummary.written }} · 失败 {{ logExtractSummary.failed }}（{{ logExtractSummary.sourceCount }} 个来源）</dd></div>
+            </dl>
+          </section>
+          <section v-if="logTask && logTask.steps.length" class="case-log-sec">
+            <h4>阶段状态</h4>
+            <ul class="case-log-steps">
+              <li v-for="step in logTask.steps" :key="step.id">
+                <span class="case-log-step-name">{{ step.name }}</span>
+                <span :class="['case-log-step-status', `is-${step.status}`]">{{ step.status }}</span>
+              </li>
+            </ul>
+          </section>
+          <section class="case-log-sec">
+            <h4>执行日志</h4>
+            <pre v-if="logLines.length" class="case-log-console">{{ logLines.join('\n') }}</pre>
+            <p v-else class="case-log-empty">该执行暂无任务日志。</p>
+          </section>
+        </template>
+        <p v-else class="case-log-missing">该记录未关联工作流执行（无 executionId），无法展示执行日志。</p>
       </template>
     </a-modal>
 
@@ -599,7 +655,8 @@ onMounted(loadReviews)
 .rerun-batch-action:focus-visible{outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.2)}
 .rerun-feedback{gap:8px;padding:8px 16px}.rerun-feedback-close{width:24px;height:24px}
 .rerun-confirm-text{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
-.ops-review-table-scroll .review-action-col{position:static;box-sizing:border-box;width:auto;min-width:0;box-shadow:none;white-space:nowrap}
+/* 操作列撤销旧的右侧固定列实现；static 只作用 td——表头单元格要保留全局 th 的吸顶 */
+.ops-review-table-scroll td.review-action-col{position:static;box-sizing:border-box;width:auto;min-width:0;box-shadow:none;white-space:nowrap}
 .review-action-col .alert-actions{display:flex;width:max-content;min-width:0;align-items:center;gap:8px}
 .ops-review-table-scroll th,.ops-review-table-scroll td{box-sizing:border-box;padding-right:16px;padding-left:16px}
 .ops-review-table-scroll table,.ops-review-table-scroll table.review-case-table,.ops-review-table-scroll table.review-case-table--selectable{width:100%;min-width:0;table-layout:fixed}
@@ -632,19 +689,34 @@ onMounted(loadReviews)
 /* 日志弹窗内容（弹体外壳样式在全局块） */
 .case-log-sec{margin:0 0 16px}
 .case-log-sec h4{margin:0 0 8px;color:#1d2129;font-size:14px;line-height:22px;font-weight:600}
-.case-log-dl{display:grid;grid-template-columns:88px 1fr;gap:6px 12px;margin:0}
+/* dt/dd 两列网格下沉到行 div：dl 直接网格化会把整行 div 当格子，落在 88px 窄格的值被硬折行 */
+.case-log-dl{display:grid;gap:6px 0;margin:0}
+.case-log-dl>div{display:grid;grid-template-columns:88px 1fr;column-gap:12px}
 .case-log-dl dt{color:#86909c;font-size:12px;line-height:20px}
-.case-log-dl dd{margin:0;color:#1d2129;font-size:13px;line-height:20px;word-break:break-all}
+.case-log-dl dd{margin:0;color:#1d2129;font-size:13px;line-height:20px;overflow-wrap:anywhere}
 .case-log-error-text{margin:0;padding:10px 12px;border:1px solid #f6c6b4;border-radius:4px;background:#fff8f5;color:#b42318;font:12px/19px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
 .case-log-loading{margin:0;padding:24px;color:#86909c;text-align:center}
-.case-log-timeline{margin:0;padding:0;list-style:none}
-.case-log-timeline li{display:flex;flex-wrap:wrap;gap:4px 12px;padding:7px 0;border-bottom:1px dashed #e5e6eb;font-size:12px;line-height:20px}
-.case-log-timeline li:last-child{border-bottom:0}
-.case-log-time{color:#86909c;font-variant-numeric:tabular-nums}
-.case-log-event{color:#165dff}
-.case-log-status{color:#4e5969}
-.case-log-actor{color:#86909c}
+/* 执行日志弹窗：原执行/重跑执行切换 + 概要 + 阶段状态 + 日志终端 */
+.case-log-switch{display:flex;gap:8px;margin:0 0 12px}
+.case-log-switch button{height:28px;padding:0 14px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#4e5969;font-size:13px;line-height:20px;cursor:pointer}
+.case-log-switch button.active{border-color:#165dff;background:#165dff;color:#fff}
+.case-log-missing{margin:0;padding:14px;border:1px dashed #e5e6eb;border-radius:4px;background:#f7f8fa;color:#86909c;font-size:13px;line-height:20px;word-break:break-all}
+.case-log-console{margin:0;max-height:280px;overflow:auto;padding:12px 14px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;color:#1d2129;font:12px/20px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
+.case-log-steps{display:flex;flex-wrap:wrap;gap:8px;margin:0;padding:0;list-style:none}
+.case-log-steps li{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:12px;line-height:20px}
+.case-log-step-name{color:#4e5969}
+.case-log-step-status{color:#165dff}
+.case-log-step-status.is-成功{color:#067647}
+.case-log-step-status.is-运行中{color:#175cd3}
+.case-log-step-status.is-需人工处理{color:#b54708}
+.case-log-step-status.is-待执行{color:#86909c}
 .case-log-empty{color:#86909c}
+/* 更新时间表头三态排序 */
+.th-time-sort{cursor:pointer;user-select:none}
+.th-time-sort:hover{color:#165dff}
+.th-time-sort.is-active{color:#165dff}
+.th-time-sort .sort-arrow{margin-left:4px;color:#86909c;font-size:12px}
+.th-time-sort.is-active .sort-arrow{color:#165dff}
 </style>
 <style>
 /* Keep the Arco input's native field transparent; the wrapper is the only visible input shell. */

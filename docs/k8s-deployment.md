@@ -2,9 +2,9 @@
 
 本文档描述将 `tech-kg-api`（FastAPI 后端 + Vue3 前端）及其依赖中间件部署到 Kubernetes 集群的完整方案。对应仓库根目录的 `docker-compose.yml`，按 K8s 原生方式重新组织。
 
-> 说明：仓库内 README.md 描述的是旧的 Neo4j 版本，已过时；以本文与 `docker-compose.yml`、`CLAUDE.md` 为准。
+> 说明：以本文与 `docker-compose.yml`、`CLAUDE.md` 为准。
 >
-> **对象存储已统一为 `operator-rustfs`（S3 兼容），不依赖 MinIO**：schema 脚本、operator 包、Milvus 内部存储共用同一个 RustFS 实例（`rustfsadmin` 凭证）。Milvus 的 `MINIO_*` 环境变量只是 Milvus 自身的配置项命名，指向的也是 RustFS。
+> **对象存储已统一为 `operator-rustfs`（S3 兼容），不依赖 MinIO**：schema 脚本、Milvus 内部存储共用同一个 RustFS 实例（`rustfsadmin` 凭证）。Milvus 的 `MINIO_*` 环境变量只是 Milvus 自身的配置项命名，指向的也是 RustFS。
 > 交付版部署文档（含真实镜像仓库地址与全部部署清单）见 `docs/k8s-bkg/K8s部署文档.md`。命名空间统一为 `bkg`：TRS Graph 图数据库平台（trs-graph-service 等）同在 `bkg` 命名空间，本项目后端的 `TRS_GRAPH_BASE_URL=http://trs-graph-service:8090` 依赖同命名空间解析，**不可部署到其他命名空间**。
 
 ---
@@ -25,7 +25,7 @@
 | 组件 | 镜像 | 端口 | 持久化 |
 |------|------|------|--------|
 | `auth-redis` | redis:7.4-alpine | 6379 | `/data` (appendonly) |
-| `operator-rustfs` | rustfs/rustfs:latest | 9000 / 9001 | `/data` (uid 10001)，schema 脚本 / operator 包 / milvus 内部存储共用的 S3 |
+| `operator-rustfs` | rustfs/rustfs:latest | 9000 / 9001 | `/data` (uid 10001)，schema 脚本 / milvus 内部存储共用的 S3 |
 | `milvus-etcd` | quay.io/coreos/etcd:v3.5.5 | 2379 | `/etcd` |
 | `milvus` | milvusdb/milvus:v2.4.17 | 19530 / 9091 | `/var/lib/milvus` |
 | `temporal-mysql` | mysql:8.4 | 3306 | `/var/lib/mysql`，temporal 元数据 + 控制面库 `techkg_control` |
@@ -157,7 +157,7 @@ data:
   WORKFLOW_MYSQL_PORT: "3306"
   WORKFLOW_MYSQL_DATABASE: techkg_control
   WORKFLOW_MYSQL_USERNAME: root
-  # ---- schema S3（与 operator / milvus 共用 operator-rustfs） ----
+  # ---- schema S3（与 milvus 共用 operator-rustfs） ----
   SCHEMA_AUTO_INIT: "true"
   SCHEMA_S3_ENDPOINT_URL: http://operator-rustfs:9000
   SCHEMA_S3_BUCKET: bkg-schema-scripts
@@ -1062,7 +1062,7 @@ kubectl -n bkg rollout restart deploy/api
 | m3e-embedding | 1 / 2 | 2Gi / 4Gi | CPU 推理，单副本 |
 | milvus | 1 / 4 | 4Gi / 8Gi | 向量库主进程 |
 | auth-redis | 100m / 500m | 128Mi / 512Mi | 仅 session |
-| operator-rustfs | 200m / 1 | 256Mi / 1Gi | schema/operator/milvus 共用 |
+| operator-rustfs | 200m / 1 | 256Mi / 1Gi | schema/milvus 共用 |
 | temporal | 500m / 2 | 512Mi / 2Gi | |
 | temporal-mysql | 500m / 2 | 512Mi / 2Gi | temporal 元数据 + techkg_control |
 
@@ -1085,7 +1085,7 @@ kubectl -n bkg rollout status deploy/api
 
 - **MySQL**：业务库（`gkx_element`、`gkx_local`）走 DBA 既定的备份策略。
 - **temporal-mysql-data**：定期 `mysqldump`（含 temporal 库与 `techkg_control` 控制面库）或 Velero 卷快照。
-- **operator-rustfs**：schema 脚本 / operator 包 / milvus 内部对象都在这一实例，通过 rustfs CLI（S3 兼容）同步到异地对象存储。
+- **operator-rustfs**：schema 脚本 / milvus 内部对象都在这一实例，通过 rustfs CLI（S3 兼容）同步到异地对象存储。
 - **workflow-state**：`scripts/` 脚本目录，建议每日 rsync 到备份盘。
 - **Cluster 整体**：推荐 Velero 做 namespace 级别备份与迁移。
 

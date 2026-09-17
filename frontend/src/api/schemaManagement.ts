@@ -320,6 +320,39 @@ export interface SchemaDeleteResult {
   id: string
   deleted: boolean
   scriptCleanupSucceeded?: boolean
+  /** 图数据删除统计（真删：该类型全部点/边 + DROP TAG/EDGE） */
+  graphData?: {
+    status: 'succeeded' | 'failed'
+    error: string | null
+    typeExisted: boolean
+    verticesDeleted: number
+    edgesDeleted: number
+    dropStatement: string | null
+  }
+}
+
+/** 删除影响预览：实体返回仍引用它的关系清单（删除确认弹窗展示） */
+export interface SchemaDeleteImpact {
+  id: string
+  kind: 'entity' | 'relation'
+  kindLabel: '实体' | '关系'
+  graphSpace: string
+  name: string
+  label: string
+  isSystem: boolean
+  canDelete: boolean
+  referencingRelations: Array<{ id: string; name: string; label: string }>
+}
+
+export async function getSchemaDeleteImpact(
+  schemaId: string,
+  userId: string,
+): Promise<SchemaDeleteImpact> {
+  return unwrap(
+    await asApiPromise<SchemaDeleteImpact>(
+      http.get(`${PREFIX}/schemas/${schemaId}/delete-impact`, { headers: headers(userId) }),
+    ),
+  )
 }
 
 export interface SchemaSource {

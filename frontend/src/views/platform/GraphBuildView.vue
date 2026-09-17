@@ -51,7 +51,7 @@ function jobSpace(job: WorkflowJob): string {
   return job.graphSpace || graphSpaceStore.spaces[0] || graphSpaceStore.current
 }
 
-/** 历史键 single/chain/upload 已停止新建（D2），存量行仍需中文展示 */
+/** extract/chain 可新建；single/upload 为历史键（D2 停止新建），存量行仍需中文展示 */
 const TASK_TYPE_LABELS: Record<string, string> = {
   extract: '数据抽取',
   single: '单脚本抽取',
@@ -119,6 +119,11 @@ function openCreate() {
 
 function jobScriptLabel(job: WorkflowJob): string {
   if (job.taskType === 'chain') {
+    // 新链任务带 schemaLabels（首个 + N）；存量旧链任务回退 definitionIds 口径
+    if (job.schemaLabels?.length) {
+      const first = job.schemaLabels[0]
+      return job.schemaLabels.length > 1 ? `${first} +${job.schemaLabels.length - 1}` : first
+    }
     const first = job.definitionIds[0] || job.definitionId
     return job.definitionIds.length > 1 ? `${first} +${job.definitionIds.length - 1}` : first
   }

@@ -22,7 +22,7 @@ frontend/docsite/
 ├── .vitepress/config.ts   # 站点配置：base、导航、侧边栏、本地搜索
 ├── index.md               # 首页（hero + feature 卡片）
 ├── guide/maintain.md      # 本页
-├── sdk/                   # kg_sdk 使用文档（8 页）
+├── sdk/                   # kg_sdk 使用文档（9 页）
 ├── arch/                  # 项目架构（9 页）
 └── deploy/                # 部署运维（3 页）
 ```

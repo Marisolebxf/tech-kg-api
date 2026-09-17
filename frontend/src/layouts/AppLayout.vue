@@ -497,7 +497,7 @@ onBeforeUnmount(() => {
             </RouterLink>
 
             <div v-if="!sidebarCollapsed" class="app-nav__group">
-              <span>查询与服务</span>
+              <span>知识图谱构建服务</span>
             </div>
             <div class="app-nav__query-group">
               <button

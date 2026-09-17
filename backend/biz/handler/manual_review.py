@@ -68,6 +68,15 @@ async def production_queue(
         description="A=入库决策 (T_DIRECT/T_LINK)；C=抽取失败重跑 (T_EXTRACT_FAIL)；不传=所有",
     ),
     keyword: str | None = None,
+    updated_within: str | None = Query(
+        None,
+        alias="updatedWithin",
+        description="按更新时间过滤：1h/24h/7d/30d；不传=不限",
+    ),
+    sort: str | None = Query(
+        None,
+        description="排序：updated_desc/updated_asc（按更新时间）；不传=默认风险+创建时间",
+    ),
     page: int = 1,
     page_size: int = Query(50, alias="pageSize"),
 ):

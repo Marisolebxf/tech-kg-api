@@ -71,8 +71,9 @@ test.describe.serial('C. Schema 管理与属性管理', () => {
     await page.goto('/schema')
     await page.waitForLoadState('networkidle')
 
-    // 拓扑画布 + 顶栏全局图空间选择器（页面内已无独立空间控件）
+    // 拓扑画布 + 顶栏全局图空间选择器（#253 后拓扑默认收起，先点「展开」再断言画布）
     await expect(page.getByText('Schema 拓扑总览')).toBeVisible()
+    await page.locator('.schema-topology-toggle').click()
     await expect(page.locator('[aria-label="Schema 实体关系拓扑"]')).toBeVisible()
     await expect(page.locator('.app-space-select')).toBeVisible()
 
@@ -166,10 +167,14 @@ test.describe.serial('C. Schema 管理与属性管理', () => {
     expect(ddl).toContain('price')
     await modal.getByRole('button', { name: '确认创建' }).click()
 
-    // 表格出现新行 + 属性 chip
+    // 表格出现新行 + 属性展示。#253 后属性列 chip 最多 3 个（平台公共属性占满），
+    // price 落在溢出区：点行内 +N 展开明细行（tr 兄弟节点）后断言
     const newRow = page.locator('tbody tr', { hasText: NAME }).first()
     await expect(newRow).toBeVisible({ timeout: 30_000 })
-    await expect(newRow.getByText('price:int64', { exact: false })).toBeVisible()
+    await newRow.locator('.prop-chip--more').click()
+    const detailRow = page.locator('.schema-prop-detail-row').filter({ hasText: 'price' })
+    await expect(detailRow.locator('code', { hasText: 'price' })).toBeVisible()
+    await expect(detailRow.locator('em', { hasText: 'int64' })).toBeVisible()
 
     // 图库 + API 复核（CREATE TAG 后 DDL 有传播延迟，TagNotFound 需重试）
     const cols = await waitFor(

@@ -44,9 +44,9 @@ const batch = computed(() => processingInstance.value?.batch ?? fallbackBatch)
 const isConstructionTask = computed(() => processingInstance.value?.stage === '图谱构建' || String(route.params.area) === 'construction')
 const needsTaskReview = computed(() => ['执行出错', '等待人工审核'].includes(processingInstance.value?.taskStatus ?? ''))
 const activeTab = ref<DetailTab>('overview')
-const isPipelineTask = computed(() => ['kg.custom.steps', 'kg.custom.chain'].includes(processingInstance.value?.workflowType ?? ''))
-/** 多脚本串行任务：流程里每个 step 是一个脚本，点击在按钮下方展开该脚本的 activity steps。 */
-const isChainTask = computed(() => processingInstance.value?.workflowType === 'kg.custom.chain')
+const isPipelineTask = computed(() => ['kg.custom.steps', 'kg.custom.chain', 'kg.schema.extract.chain'].includes(processingInstance.value?.workflowType ?? ''))
+/** 多脚本串行任务：流程里每个 step 是一个 Schema 抽取（旧版为一个脚本），点击在按钮下方展开其 activity steps。 */
+const isChainTask = computed(() => ['kg.custom.chain', 'kg.schema.extract.chain'].includes(processingInstance.value?.workflowType ?? ''))
 /** chain 内联展开：当前展开的脚本 step 与选中的 activity step。 */
 const selectedActivityId = ref(String(route.query.activity || ''))
 const expandedScriptId = ref(selectedActivityId.value ? String(route.query.step || '') : '')
@@ -121,14 +121,16 @@ function buildPipelineSteps(): Step[] {
     name: info.name || id,
     status: mapPipelineStatus(info.status),
     risk: (info.status === 'FAILED' ? '高风险' : '低风险') as RiskLevel,
-    count: info.activities
-      ? `${Object.keys(info.activities).length} 个 activity`
-      : info.attempt
-        ? `attempt=${info.attempt}`
-        : '-',
-    abnormal: info.error ? '1' : '0',
+    count: typeof info.records === 'number'
+      ? `${info.records} 行 / 写图 ${info.written ?? 0} 条`
+      : info.activities
+        ? `${Object.keys(info.activities).length} 个 activity`
+        : info.attempt
+          ? `attempt=${info.attempt}`
+          : '-',
+    abnormal: typeof info.failed === 'number' ? String(info.failed) : info.error ? '1' : '0',
     duration: '-',
-    description: info.error || `${engine} · ${info.status}`,
+    description: info.error || info.description || `${engine} · ${info.status}`,
     engine,
     input: info.input,
     output: info.output,
@@ -157,9 +159,11 @@ function buildPipelineSteps(): Step[] {
   return built
 }
 
-/** chain 任务：某脚本 step 的 activity steps（Temporal activity 真实状态）。 */
+/** chain 任务：某脚本/Schema step 的 activity steps（实时 query 优先，落库 steps 回退）。 */
 function chainActivities(scriptId: string): Array<{ id: string; info: PipelineActivityInfo }> {
   const activities = processingInstance.value?.pipeline?.steps?.[scriptId]?.activities
+    // 实时 query 失败（workflow 已结束被历史淘汰）时，回退落库 task.steps（pipeline_steps 透传 activities）
+    ?? processingInstance.value?.steps?.find((s) => s.id === scriptId)?.activities
   if (!activities) return []
   return Object.entries(activities).map(([id, info]) => ({ id, info }))
 }
@@ -168,14 +172,18 @@ function chainActivities(scriptId: string): Array<{ id: string; info: PipelineAc
 function buildActivityStep(scriptId: string, activityId: string): Step | null {
   const entry = chainActivities(scriptId).find((item) => item.id === activityId)
   if (!entry) return null
-  const scriptName = processingInstance.value?.pipeline?.steps?.[scriptId]?.name || scriptId
+  const scriptName = processingInstance.value?.pipeline?.steps?.[scriptId]?.name
+    || processingInstance.value?.steps?.find((s) => s.id === scriptId)?.name
+    || scriptId
   return {
     id: `${scriptId}::${activityId}`,
     phase: '图谱构建',
     name: `${scriptName} · ${entry.info.name || activityId}`,
     status: mapPipelineStatus(entry.info.status),
     risk: (entry.info.status === 'FAILED' ? '高风险' : '低风险') as RiskLevel,
-    count: entry.info.attempt ? `attempt=${entry.info.attempt}` : '-',
+    count: typeof entry.info.records === 'number'
+      ? `${entry.info.records} 行 / 写图 ${entry.info.written ?? 0} 条`
+      : entry.info.attempt ? `attempt=${entry.info.attempt}` : '-',
     abnormal: entry.info.error ? '1' : '0',
     duration: '-',
     description: entry.info.error || `脚本 activity step（${activityId}）· 输入输出为该 activity 真实上报 JSON`,
@@ -601,7 +609,7 @@ onMounted(async () => {
             <template v-if="isChainTask && expandedScriptId === step.id">
               <button v-for="act in chainActivities(step.id)" :key="`${step.id}::${act.id}`" type="button" :class="['process-substep', `is-${mapPipelineStatus(act.info.status)}`, { active: selectedActivityId === act.id && selectedStepId === step.id }]" @click="selectActivity(step.id, act.id)">
                 <i>{{ mapPipelineStatus(act.info.status) === '成功' ? '✓' : mapPipelineStatus(act.info.status) === '需人工处理' ? '!' : '·' }}</i>
-                <span><strong>{{ act.info.name || act.id }}</strong><em>{{ act.info.error ? '执行失败' : act.info.output !== undefined && act.info.output !== null ? '已上报输出 JSON' : '无输出记录' }}<template v-if="act.info.attempt"> · attempt={{ act.info.attempt }}</template></em></span>
+                <span><strong>{{ act.info.name || act.id }}</strong><em>{{ act.info.error ? '执行失败' : typeof act.info.records === 'number' ? `${act.info.records} 行 · 写图 ${act.info.written ?? 0} 条` : act.info.output !== undefined && act.info.output !== null ? '已上报输出 JSON' : '无输出记录' }}<template v-if="act.info.attempt"> · attempt={{ act.info.attempt }}</template></em></span>
                 <small>{{ mapPipelineStatus(act.info.status) }}</small>
               </button>
               <p v-if="!chainActivities(step.id).length" class="process-substep-empty">暂无 activity step 记录：脚本可能仍在执行，或为旧版本执行的链（重新执行可记录逐步状态）。</p>

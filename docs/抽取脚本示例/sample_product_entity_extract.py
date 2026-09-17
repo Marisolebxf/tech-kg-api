@@ -39,7 +39,8 @@ KG_SCRIPT_CTX 注入；未选择对应资源时属性为 None，脚本判空降�
 - ``ctx.step_id`` / ``ctx.attempt``：多步时 step_id 形如
   ``source:{绑定id}#{stepId}``，用于日志/审核观测；
 - ``ctx.prev_outputs``：本批次已完成各步 ``{stepId: 输出}``，可跨非相邻步
-  取数；大输出会被平台按预算截断，只作旁路观测，业务数据走 ``input``。
+  取数；S3 中转开时步间透传无截断（关时大输出按预算截断），
+  只作旁路观测，业务数据走 ``input``。
 
 模拟来源表 demo_product 的列（换成真实表时同步调整 step_normalize 即可）：
     id, name, category, description, tech_fields, price, status, updated_time
@@ -186,8 +187,8 @@ def step_enrich(payload: Mapping[str, Any]) -> dict[str, Any]:
     cleaned = payload["input"].get("cleaned") or []
 
     # SDK 演示：ctx.prev_outputs 按 stepId 读任意已完成步的输出（这里是第 1
-    # 步的 stats）。仅作旁路观测/分支用——大输出会被平台按预算截断，业务
-    # 数据请走 payload["input"]。
+    # 步的 stats）。仅作旁路观测/分支用——S3 中转开时无截断（关时大输出按
+    # 预算截断），业务数据请走 payload["input"]。
     normalize_stats = (
         (ctx.prev_outputs.get("normalize", {}).get("stats") if ctx else None) or {}
     )

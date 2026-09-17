@@ -33,11 +33,11 @@ Binding              // 独立于 Spec 的技术绑定；binding-guarantee = 绑
 | 3 | `get_techkg_client()` **不固定 techkg 空间**——与默认单例同读 `TRS_GRAPH_SPACE`（`infra/graph_db/__init__.py:85-97` docstring）；真正按空间的是第三层 `get_space_client(space)` 缓存（`:113-125`） |
 | 4 | schema 脚本安全**没有 AST 白名单**：`ast.parse` 仅语法检查 + **LLM 评审（fail-closed）**（`service/script_security.py:94-103`），且 LLM 门只在 `/script/verify`（SSE）路径生效，裸 `PUT /script` 不过审（`service/schema_management.py:586-594`）。脚本是 **Python transform 函数**（隔离子进程执行），不是 nGQL 作者 |
 | 5 | workflow 控制面是 **MySQL `techkg_control`**（`WORKFLOW_DATABASE_PATH` 在仓库中已不存在，grep 验证）；**进程内 Temporal worker 已删除**（commit `932fc82`，2026-08-25），只剩独立 worker；并发上限动机是防重试风暴，非"保护图会话池" |
-| 6 | **算子不参与工作流编排**——工作流组合单元是上传的 Python 函数（declarative / python / steps / chain 四种定义格式）；算子注册表是独立体系，仅经 HTTP 同步调用 |
+| 6 | **算子注册表已整体下线（2026-09-14 D4）**；工作流定义只剩 declarative（`kg.custom.configurable`）与平台合成的 `kg.schema.extract`——原 python/steps/chain 三种独立上传格式已随 D2 删除，脚本组合单元收敛为 Schema 管理上传的 transform 函数（可顶层声明 `STEPS`） |
 | 7 | manual review：**无移交通道**（outbox / correction / review worker / 内部端点已删，2026-09-15）——submit 只记录决议即落 RESOLVED，T_LINK 合并执行由向量对齐合并引擎落地（后续任务）；`T_DIRECT` 模板旁路直写 Nebula；"category=A/C"是查询期模板映射，不是表列（`service/manual_review_production.py`） |
 | 8 | correction：**默认 `CORRECTION_SYNC_MODE=projection` 根本不写图**（只写 MySQL 隔离投影层，注释"业务数据保持隔离"，`service/correction.py:240-244`）；MySQL 先落、图失败不回滚、无 saga 补偿，终态 FAILED 后库图分歧持续存在直至人工 retry |
 | 9 | "404/400/500"大多是**信封业务码**（HTTP 200 + `ApiResponse.code`），但 expert_indirect / expert_paper 两个模块用**真 HTTP 状态码**——两种错误约定并存 |
-| 10 | 演示态是一等公民：task_center 硬编码变更数 / 静态源健康表 / `temporal_health` 死分支（`biz/handler/task_center.py:88` `hasattr` 永假）、platform_overview 四个板块永远 demo（`service/platform_overview.py`）、`data_mode:"mock"` 字段、`AUTH_ENABLED=false` 下 operation-logs 返回 mock |
+| 10 | 演示态已大幅收敛（2026-09-14 批次3 删除 task_center 硬编码变更数 / 静态源健康表 / `temporal_health` 死分支与 operation-logs mock）；残留：platform_overview 部分板块 `data_mode:"mock"/"partial"` demo-fallback（`service/platform_overview.py:193-243`） |
 | 11 | 各模块图访问有**两种惯用法**：直连 `TRSGraphClient`（cooperation / alumni / topn / build 系）vs **ASGI 自调用自家 `/graph-search` API**（direct / indirect / paper / panorama / key-enterprise） |
 | 12 | colleague 模块会**回写 COLLEAGUE 边**（业务查询模块中唯一写者，`application/expert_colleague_relation.py:182-249`）；build 会把 role/日期重置为 `""`（先标注后重建会清空标注，`service/expert_enterprise_relation.py:149-155`）；paper 模块按图空间切换边方向语义（techkg 与 dev 相反，`service/expert_paper_cooperation_api.py:151-166`） |
 
@@ -57,7 +57,7 @@ Unit TechKGPlatform
         policy:                        // 边界身份（路由级声明，register.py 两组 + 逐路由补丁）
           public      → auth 端点，身份在 handler 内自解析（register.py:58 无依赖）
           session     → require_authenticated_user（33 个路由，register.py:60-101）
-          admin       → session + is_admin（manual-reviews / operators / admin-members，
+          admin       → session + is_admin（manual-reviews / admin-members，
                         register.py；另有 3 个写端点逐路由叠加 admin：
                         relation build / annotate / mine）
           owner       → schema / 配置资源：admin 或 owner（service 层 assert_mutable /
@@ -78,7 +78,7 @@ Unit TechKGPlatform
       VendorElement            // gkx_element 业务表 —— 只读【强制：SET TRANSACTION READ ONLY，
                                //   gkx_element.py:49-53，且永远 rollback】
       VectorIndex              // Milvus
-      ObjectStorage            // RustFS：schema 脚本 / 算子包 / 审核证据（三个桶）
+      ObjectStorage            // RustFS：schema 脚本 / 审核证据（两个桶；算子桶已随 D4 删除）
       SessionStore             // Redis（async）：OAuth state / 会话 / bearer缓存 / 用户审计
       DurableExecution         // Temporal
       IdentityProvider         // 统一用户中心 OAuth2
@@ -86,7 +86,6 @@ Unit TechKGPlatform
       Embedding?               // 双提供者：GLM embedding-3（infra/llm.py:127-169）与 m3e 服务
 
   Behavior boot                          // main.py:41-95 实测顺序
-    REGISTRY.initialize_store → start_watcher        // 算子：S3 同步 + 0.25s 轮询热加载
     [CORRECTION_SYNC_WORKER_ENABLED] start dispatchLoop   // 代码默认 false；compose 里 true
     ensureConfigTables                  // 6 张平台配置表；MySQL 不可达 → warn 跳过
     [SCHEMA_AUTO_INIT] seedSchemaCatalog       // 只写 MySQL 47 条系统 schema，不跑图 DDL
@@ -94,11 +93,11 @@ Unit TechKGPlatform
     [PREWARM_BUSINESS] prewarm_business(app)   // 默认 false；ASGI 自 POST 9 个端点暖各 worker 缓存
 
   Behavior shutdown
-    cancel dispatcher → stop watcher → close redis → close 三层图客户端 → close 控制面引擎
+    cancel dispatcher → close redis → close 三层图客户端 → close 控制面引擎
 
   contains:
     ApiSurface, AuthSubsystem, KgConstructionSubsystem, SchemaSubsystem,
-    WorkflowSubsystem, OperatorSubsystem, ManualReviewSubsystem,
+    WorkflowSubsystem, ManualReviewSubsystem,
     CorrectionSubsystem, SpaceSubsystem, PlatformFacilities, ConfigCenter,
     SharedAdapters
 ```
@@ -193,7 +192,8 @@ Unit SchemaSubsystem
     provides:
       Schema.crud                       // 实体/关系 schema + 属性 + 来源绑定（一 schema 多 source，
                                         //   唯一键 (schema_id,datasource_id,database,table)）
-      Script.upload                     // S3 put → 注册 workflow → DB → commit；失败回滚并删已传对象；
+      Script.upload                     // S3 put → DB → commit（不再注册 workflow——`_register_workflow`
+                                        //   已随 2026-09-14 D1 删除）；失败回滚并删已传对象；
                                         //   旧对象成功后清理（失败仅标记 previousScriptCleanupSucceeded）
       Script.verify                     // SSE：语法(ast.parse/大小/入口函数) → LLM 安全评审(fail-closed) → 保存
       Script.upload.plain               // ⚠ 裸 PUT /script 不过 LLM 评审
@@ -213,48 +213,34 @@ Unit SchemaSubsystem
 Unit WorkflowSubsystem                  // precision: 结构完整；⚠ 无 stop/cancel 端点
   Contract:
     provides:
-      Definition.manage                 // 4 种格式：declarative(步骤仅记账 no-op！) /
-                                        //   python(隔离子进程, AST检查, ≤1MiB, 默认超时60s) /
-                                        //   steps(StepManifest 各自带 retryPolicy，默认1次) /
-                                        //   chain(引用其他 python 定义)
+      Definition.manage                 // 2 种：declarative(kg.custom.configurable，步骤仅记账 no-op！) /
+                                        //   平台合成 schema-extract-{key}(kg.schema.extract，由
+                                        //   Schema 脚本+来源绑定合成；原 python/steps/chain 三种
+                                        //   独立上传格式已随 2026-09-14 D2 删除)
       Execution.run/status              // Temporal down → dispatchMode=LOCAL_FALLBACK，QUEUED，
                                         //   ⚠ 永不自愈（workflow_operations.py:274-286）
       Schedule.manage / Job.manage      // cron 落 Temporal Schedules(默认时区 Asia/Shanghai)；
                                         //   创建失败本地 LOCAL_SAVED；暂停让运行中执行跑完
-      TaskCenter.view                   // ⚠ 部分 demo：变更数硬编码 / 源健康静态 /
-                                        //   temporal_health 死分支；真实部分：详情透查 Temporal
-                                        //   活动步骤、retry=ResetWorkflowExecution 回放
-    requires: DurableExecution, ControlStore, OperatorRegistry.invoke
+      TaskCenter.view                   // 详情透查 Temporal 活动步骤、retry=ResetWorkflowExecution
+                                        //   回放（demo 假数据已随批次3 删除）
+    requires: DurableExecution, ControlStore
   quality: TEMPORAL_MAX_CONCURRENT_ACTIVITIES=4；SCHEMA_EXTRACT_MAX_INFLIGHT=3(cap 8)；
            ACTIVITY_RETRY_POLICY 硬编码：初始2s/倍增2.0/封顶30s/最多5次
            // 动机 = 防重试风暴（commit 932fc82 "prevent project retry storm (#124)"）
-  contains: ControlPlane(MySQL techkg_control, 9 表：batches/tasks/reviews/source_updates/
+  contains: ControlPlane(MySQL techkg_control, 8 表：batches/tasks/source_updates/
             settings/workflow_definitions/workflow_executions/workflow_schedules/workflow_jobs，
-            启动 create_all + 手工幂等 ALTER；demo 数据由 WORKFLOW_DEMO_DATA_ENABLED 门控),
-            TemporalClient(进程内 client 单例), 15 workflow + 15 activity 定义
-  // ⚠ 算子不在工作流 spec 里——两体系仅通过 invoke 交汇
+            启动 create_all + 手工幂等 ALTER；reviews 表与 demo seed 已于 2026-09-14 删除),
+            TemporalClient(进程内 client 单例), 2 workflow + 12 activity 定义
   // ⚠ worker 仅独立进程（script/run_temporal_worker.py）；进程内 worker 已删除
 ```
 
-### 4.6 OperatorSubsystem
+### 4.6 OperatorSubsystem（已删除）
 
-```text
-Unit OperatorSubsystem
-  Contract:
-    provides:
-      Registry.invoke                   // list[dict]→operator(data,ctx)→list[dict]；深拷贝入参，
-                                        // 出参校验 list[dict] 且可 JSON 序列化；asyncio.to_thread 执行
-      Registry.reload                   // 0.25s 轮询 + (mtime,size,sha256) 快照比对；
-                                        //   单算子加载失败保留旧版；删除文件即清理
-      Operator.crud            [admin]  // S3 先写 → 本地原子写(.tmp+os.replace) → reload
-                                        //   → 广播 /internal/operators/reload 到
-                                        //   OPERATOR_WORKER_BASE_URIS 各 worker（带 X-Operator-Reload-Token）
-    requires: ObjectStorage?            // OPERATOR_S3_BUCKET 空 → 纯本地模式（store=None）
-  contains: Builtins(5: data_normalize / entity_extract / relation_extract /
-            entity_load·仅生成plan / relation_load·仅生成plan),
-            UserOperators(operators/user/), Watcher,
-            ScholarOperators(5 个，经 script/register_scholar_operators.py HTTP 注册)
-```
+> 整个子系统已于 2026-09-14 清理批次4-D4 下线（commit `3b20eb6`）：`service/operator_registry.py`、
+> `service/operator_builtins.py`、`infra/operator_store.py`、`/api/v1/operators` 与
+> `/internal/operators` 端点、`operators/` 目录、`OPERATOR_*` env 与 RustFS 算子桶全部删除。
+> 学者域 5 个"算子"的能力本体保留在 `script/` 下 ETL（D5 暂缓处置）。用户代码唯一入口是
+> Schema 管理上传，唯一执行引擎是 `kg.schema.extract`。
 
 ### 4.7 ManualReviewSubsystem
 
@@ -377,7 +363,7 @@ Unit SharedAdapters
                             //   synthesize_json 三级降级 json_schema→json_object→prompt_only
     MilvusClient            // 连接失败 2s 冷却（冷却期直接重抛旧错）；host "milvus" 不可解析时
                             //   重写为 127.0.0.1:19531；hybrid_search dense 0.45 / sparse 0.55
-    S3Stores ×3             // schema 脚本桶 / 算子桶(可缺席) / review 证据桶
+    S3Stores ×2             // schema 脚本桶 / review 证据桶（算子桶已随 D4 删除）
     UserCenterClient        // 每次调用新建 httpx.AsyncClient，超时 15s，非单例
 ```
 
@@ -463,7 +449,7 @@ Binding dev2
   VendorSource      → MySQL gkx_local        binding-guarantee: 只读·约定级
   VendorElement     → MySQL gkx_element 业务表 binding-guarantee: 只读·强制(SET TRANSACTION READ ONLY)
   VectorIndex       → Milvus 19531（连接失败 2s 冷却）
-  ObjectStorage     → RustFS：tech-kg-schema-scripts / bkg-operators / review-evidence 三桶
+  ObjectStorage     → RustFS：tech-kg-schema-scripts / review-evidence 两桶（bkg-operators 已随 D4 删除）
   SessionStore      → Redis（async；AUTH_SESSION_BACKEND 精确 =="memory" 才用内存）
   DurableExecution  → Temporal temporal-dev2（namespace=default，queue=tech-kg-workflows）
   IdentityProvider  → 统一用户中心（门户 cookie 交换）
@@ -475,7 +461,7 @@ Binding tests / CI
   SessionStore      → memory
   GraphEndpoint     → httpx.MockTransport（graph / user_center 替身全可注入；
                       tests/conftest.py 唯一 fixture async_client，141 个测试文件）
-  Correction.worker → disabled；PREWARM → off；demo 数据 → WORKFLOW_DEMO_DATA_ENABLED
+  Correction.worker → disabled；PREWARM → off（demo seed 已随批次3 删除）
 ```
 
 ---
@@ -514,9 +500,9 @@ Binding tests / CI
 | 路由/信封/中间件/生命周期 | register.py 全文、~35 个 handler 的全部路由装饰器、main.py 全文、prewarm_business |
 | 认证 | dependencies/auth.py、config/auth.py、service/auth.py、infra/user_center.py、admin_member、审计双轨 |
 | 12+2 业务模块 | 每个 handler+service（部分含 application/schemas/dao），含参考子系统逐行 |
-| 基础设施 | graph_db 全部文件、mysql/gkx/gkx_element/redis/workflow_mysql/result_cache/llm/milvus/s3/operator_store |
+| 基础设施 | graph_db 全部文件、mysql/gkx/gkx_element/redis/workflow_mysql/result_cache/llm/milvus/s3（operator_store 已随 D4 删除） |
 | Schema+抽取 | schema_management handler+service、script_security、temporal_workflows 抽取链、register_platform_extraction、水位表、entity_search、dev2_extract_e2e.py |
-| Workflow+算子 | workflow_system handler、workflow_repository/models、temporal_runtime、operator_registry/builtins/store、run_temporal_worker |
+| Workflow | workflow_system handler、workflow_repository/models、temporal_runtime、run_temporal_worker（operator_registry/builtins/store 已随 D4 删除） |
 | 审核+修正 | manual_review router、manual_review_production/domain、db_model/manual_review 5 表、correction 全链、platform_governance 8 表 |
 | 设施+配置 | task_center / platform_overview / entity_search / graph_console / graph_search / graph_space / common_capability / 4 配置路由 |
 | 横切 | application 26 文件、dao 全量、db_model 22 文件 ~120 表、tests 141 文件、pyproject、script/ 与 organization_ETL/ 全量清单、schemas/ DDL |

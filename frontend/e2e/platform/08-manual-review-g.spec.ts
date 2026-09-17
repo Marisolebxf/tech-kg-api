@@ -15,7 +15,7 @@ async function execDocker(sql: string): Promise<void> {
   )
 }
 
-// G. 人工审核（A 类：入库决策）
+// G. 人工审核（A 类：入库决策 Tab 只筛 T_LINK；T_DIRECT 直达工作台 URL 处理）
 // 造数：容器内直调 create_direct_case（管道同款入口）注入 T_DIRECT 合成 case。
 test.describe.serial('G. 人工审核（A 类）', () => {
   const suffix = runId()
@@ -83,79 +83,62 @@ test.describe.serial('G. 人工审核（A 类）', () => {
     await purgeExtractFailCases()
     await seedDirectCasesViaWorkflow(request)
   })
-  test('G1 队列与筛选', async ({ page, request }) => {
+  test('G1 队列与筛选（入库决策 Tab 只筛 T_LINK）', async ({ page, request }) => {
     await page.goto('/manual-review')
     await page.waitForLoadState('networkidle')
-    // 入库决策 Tab（默认 A 类）；队列按创建时间升序，新 case 可能不在首页——
-    // 用关键词防抖搜索收敛定位
+    // 入库决策 Tab（默认 A 类）只筛 T_LINK：搜 T_DIRECT 造数名应无命中（防抖后落到条件空态）
     await page.locator('.review-search-input input').fill(directNames[0])
-    await expect(page.getByText(directNames[0]).first()).toBeVisible({ timeout: 30_000 })
-    // 清空筛选：列表恢复非空（新 case 按时间升序可能不在首页，不做点名断言）
-    await page.getByRole('button', { name: '清空筛选' }).click()
-    await waitFor(
-      async () => (await page.locator('tbody tr').count()) >= 1,
-      { label: '清空后恢复' },
-    )
+    await expect(page.getByText('暂无符合条件的记录').first()).toBeVisible({ timeout: 30_000 })
 
-    // 表格与 queue API 一致
+    // 表格与 queue API 一致：后端 category=A 语义不变（仍含 T_DIRECT/T_LINK），
+    // 入库决策 Tab 的实际请求是 A + templateId=T_LINK → 只回 T_LINK
     const q = await apiMust<any>(request, 'GET', '/manual-reviews/production/queue?category=A&statusGroup=pending&pageSize=50', undefined, 'A 队列')
     expect((q.items ?? []).length).toBeGreaterThanOrEqual(2)
+    const qLink = await apiMust<any>(request, 'GET', '/manual-reviews/production/queue?category=A&templateId=T_LINK&statusGroup=pending&pageSize=50', undefined, 'A·T_LINK 队列')
+    expect((qLink.items ?? []).every((i: any) => i.templateId === 'T_LINK')).toBe(true)
+    expect((qLink.items ?? []).some((i: any) => i.objectName === directNames[0])).toBe(false)
   })
 
-  test('G2 T_DIRECT 五段式处理：修正后入库', async ({ page, request }) => {
-    await page.goto('/manual-review')
+  test('G2 T_DIRECT 裁决框处理：修正后入库', async ({ page, request }) => {
+    // 入库决策 Tab 只筛 T_LINK 后，T_DIRECT case 不再出现在队列——
+    // 用 beforeAll 记下的 case id 直达工作台 URL
+    await page.goto(`/manual-review/task/${caseA}`)
     await page.waitForLoadState('networkidle')
-    await page.locator('.review-search-input input').fill(directNames[0])
-    const row = page.locator('tbody tr', { hasText: directNames[0] }).first()
-    await expect(row).toBeVisible({ timeout: 30_000 })
-    await row.getByRole('link', { name: '进入处理 →' }).click()
-    await page.waitForURL(/manual-review\/task\//, { timeout: 15_000 })
 
-    // 五段式（专用工作台）
-    await expect(page.getByText('① 候选').first()).toBeVisible({ timeout: 30_000 })
-    await expect(page.getByText('② 为什么需要你确认').first()).toBeVisible()
-    await expect(page.getByText(/0\.42/).first()).toBeVisible()
-    await expect(page.getByText('③ 原始记录').first()).toBeVisible()
-    await expect(page.getByText('④ 抽取推理过程').first()).toBeVisible()
-    await expect(page.getByText('⑤ 决策').first()).toBeVisible()
+    // A 类统一裁决框布局：待入库记录卡 + 候选字段 + 裁决单选
+    await expect(page.getByText('待入库记录（已扣留，未写图）').first()).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByText(/抽取置信度 0\.42/).first()).toBeVisible()
+    await expect(page.getByText('待入库候选字段').first()).toBeVisible()
+    await expect(page.getByText('通过·入库').first()).toBeVisible()
+    await expect(page.getByText('驳回·丢弃').first()).toBeVisible()
 
-    // 编辑字段（name + 后缀）→ 出现「修正后入库」；未改字段时其提示为“请先在①候选中修改字段”
+    // 编辑字段（name + 后缀）→ 底部「确认」自动按修正后候选走 accept-fix
     await page.getByRole('button', { name: '编辑字段' }).click()
-    const fixBtn = page.getByRole('button', { name: '修正后入库' })
-    await expect(fixBtn).toBeVisible()
-    await expect(page.getByText('请先在①候选中修改字段').first()).toBeVisible()
-    const nameInput = page.locator('.direct-fields input').last()
+    const nameInput = page.locator(`.direct-fields input[placeholder="${directNames[0]}"]`)
+    await expect(nameInput).toBeVisible()
     await nameInput.fill(`${directNames[0]}修正`)
-    await fixBtn.click()
-    await waitFor(
-      async () => (await page.getByText(/已决策|已处理/).first().isVisible().catch(() => false)),
-      { label: '决策完成' },
-      ).catch(async () => {
-        const detail = await api<any>(request, 'GET', `/manual-reviews/production/${caseA}`)
-        expect(['RESOLVED', 'COMPLETED']).toContain(detail.data?.status)
-      })
+    await expect(page.getByText('修改 1 个字段').first()).toBeVisible()
+    await page.getByRole('button', { name: '确认', exact: true }).click()
+    await expect(page.getByText(/已按修正后候选写入图/).first()).toBeVisible({ timeout: 30_000 })
     // case 终态
-    const detail = await api<any>(request, 'GET', `/manual-reviews/production/${caseA}`)
-    expect(['RESOLVED', 'COMPLETED']).toContain(detail.data?.status)
+    await waitFor(
+      async () => {
+        const detail = await api<any>(request, 'GET', `/manual-reviews/production/${caseA}`)
+        return ['RESOLVED', 'COMPLETED'].includes(detail.data?.status) ? true : null
+      },
+      { timeout: 60_000, label: '修正后入库终态' },
+    )
   })
 
   test('G3 驳回·丢弃', async ({ page, request }) => {
-    await page.goto('/manual-review')
+    await page.goto(`/manual-review/task/${caseB}`)
     await page.waitForLoadState('networkidle')
-    await page.locator('.review-search-input input').fill(directNames[1])
-    const row = page.locator('tbody tr', { hasText: directNames[1] }).first()
-    await expect(row).toBeVisible({ timeout: 30_000 })
-    await row.getByRole('link', { name: '进入处理 →' }).click()
-    await page.waitForURL(/manual-review\/task\//, { timeout: 15_000 })
-    await expect(page.getByText('① 候选').first()).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByText('待入库记录（已扣留，未写图）').first()).toBeVisible({ timeout: 30_000 })
 
-    // 填备注 → 驳回·丢弃
-    await page.locator('input[placeholder="审核备注..."], textarea[placeholder="审核备注..."]').first()
-      .fill('e2e 驳回：候选不可信')
-      .catch(async () => {
-        await page.getByPlaceholder('审核备注...').fill('e2e 驳回：候选不可信')
-      })
-    await page.getByRole('button', { name: '驳回·丢弃' }).click()
+    // 填备注 → 选「驳回·丢弃」→ 底部「确认」
+    await page.locator('input[placeholder="审核备注…"]').fill('e2e 驳回：候选不可信')
+    await page.getByText('驳回·丢弃（候选不写图）').first().click()
+    await page.getByRole('button', { name: '确认', exact: true }).click()
     await waitFor(
       async () => {
         const detail = await api<any>(request, 'GET', `/manual-reviews/production/${caseB}`)

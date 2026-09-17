@@ -27,7 +27,7 @@ const REVIEW_TIME_PARAMS: Record<string, string | undefined> = { '全部': undef
 const reviewTimeSort = ref<'default' | 'desc' | 'asc'>('default')
 const reviewTotal = ref(0)
 /** 队列行 = manual-review-data 的 ReviewRecord + 重跑/删除/跳转所需的原始字段。 */
-type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; graphBuildId?: string }
+type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; graphBuildId?: string; jobId?: string }
 
 /** 可重跑/可删除：与后端 rerun 门控同口径（未处理）。 */
 const isRerunnable = (row: ReviewRow) => row.rawStatus === 'OPEN' || row.rawStatus === 'RERUN_FAILED'
@@ -52,7 +52,7 @@ const reviewTotalPages = computed(() => Math.max(1, Math.ceil(reviewTotal.value 
 
 watch(() => route.query.keyword, (value) => { keyword.value = clampSearchKeyword(String(value || '')) })
 
-/** 审核队列分类：A=入库决策（T_DIRECT/T_LINK）；C=抽取失败重跑（T_EXTRACT_FAIL）。 */
+/** 审核队列分类：A=入库决策（Tab 只筛 T_LINK 实体对齐，T_DIRECT 详情由工作台总览/实例详情直达）；C=抽取失败重跑（T_EXTRACT_FAIL）。 */
 const reviewCategory = ref<'A' | 'C'>('A')
 /** C 类勾选的待重跑 case。 */
 const rerunSelection = ref<Set<string>>(new Set())
@@ -244,9 +244,11 @@ onUnmounted(() => {
 async function loadReviews() {
   if (props.mode !== 'review') return
   try {
-    // A=入库决策（T_DIRECT/T_LINK）；C=抽取失败重跑（T_EXTRACT_FAIL）
+    // A=入库决策：Tab 只筛 T_LINK（实体对齐裁决）——T_DIRECT case 不进队列，
+    // 详情由工作台总览/处理实例详情直达；C=抽取失败重跑（T_EXTRACT_FAIL）
     const response = await getProductionReviews({
       category: reviewCategory.value,
+      templateId: reviewCategory.value === 'A' ? 'T_LINK' : undefined,
       keyword: keyword.value || undefined,
       statusGroup: reviewStatusFilter.value === '待处理' ? 'pending' : reviewStatusFilter.value === '已处理' ? 'processed' : undefined,
       status: reviewStatusFilter.value === '重跑中' ? 'RERUNNING' : reviewStatusFilter.value === '重跑失败' ? 'RERUN_FAILED' : undefined,
@@ -263,7 +265,7 @@ async function loadReviews() {
       return loadReviews()
     }
     reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
-      id: row.id, templateId: row.templateId, rawStatus: row.status, graphBuildId: row.executionId || row.workflowId || '', batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
+      id: row.id, templateId: row.templateId, rawStatus: row.status, graphBuildId: row.executionId || row.workflowId || '', jobId: row.jobId || '', batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
     }))
     reviewLoadError.value = ''
   } catch (error) { reviewLoadError.value = error instanceof Error ? error.message : '人工处理队列加载失败' }
@@ -408,7 +410,10 @@ onMounted(loadReviews)
             </td>
             <td><span :class="['review-kind-badge', `is-${rowKindLabel(row)}`]">{{ rowKindLabel(row) }}</span></td>
             <td class="review-id-cell">
-              <RouterLink v-if="row.graphBuildId" class="link" :to="`/processing-instance/${row.graphBuildId}`">{{ row.graphBuildId }}</RouterLink>
+              <!-- 来源记录：优先跳图谱构建任务详情（job 维度，含执行历史）；
+                   无 jobId 的存量 case 回落执行详情（EXEC 维度） -->
+              <RouterLink v-if="row.jobId" class="link" :to="`/graph-build/jobs/${row.jobId}`">{{ row.jobId }}</RouterLink>
+              <RouterLink v-else-if="row.graphBuildId" class="link" :to="`/processing-instance/${row.graphBuildId}`">{{ row.graphBuildId }}</RouterLink>
               <template v-else>—</template>
             </td>
             <td><span :class="['review-status', `is-${row.status}`]">{{ row.status }}</span></td>

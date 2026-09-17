@@ -163,6 +163,25 @@ def create_relation_schema(
         _raise_domain_error(exc)
 
 
+@router.get("/schemas/{schema_id}/delete-impact")
+def get_schema_delete_impact(
+    schema_id: str,
+    actor: CurrentActor,
+    session: Annotated[Session, Depends(get_workflow_session)],
+) -> ApiResponse:
+    """删除影响预览：实体返回仍引用它的关系清单（前端删除确认弹窗展示）。"""
+    try:
+        return ApiResponse(
+            data=_application(session).delete_impact(
+                schema_id,
+                actor.user_id,
+                is_platform_admin=actor.is_admin,
+            )
+        )
+    except SchemaManagementError as exc:
+        _raise_domain_error(exc)
+
+
 @router.delete("/schemas/{schema_id}")
 def delete_schema(
     schema_id: str,

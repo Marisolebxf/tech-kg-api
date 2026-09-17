@@ -146,6 +146,8 @@ export interface ProductionReviewCase {
   id: string; sourceTaskId: string; batchId?: string; nodeId: string; objectId: string; objectType: string; objectName: string
   /** 图谱构建ID：产生该 case 的抽取执行（EXEC-xxx，跳 /processing-instance 用）；缺省看 workflowId。 */
   executionId?: string
+  /** 图谱构建任务（job-xxx，「来源记录」跳 /graph-build/jobs 用）；后端快照/执行关联解析。 */
+  jobId?: string
   errorType: string; category: string; templateId: string; domain: string; phase: string; riskLevel: 'P0'|'P1'|'P2'; scope: string
   status: ProductionReviewStatus; assigneeId?: string; assigneeName?: string; version: number; slaClaimAt: string; slaResolveAt: string
   diagnosis: string; sourceTable?: string; sourceRecordId?: string; createdAt: string; updatedAt: string

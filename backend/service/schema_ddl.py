@@ -184,3 +184,129 @@ def describe_schema_columns(
             if field:
                 columns.append(str(field))
     return columns
+
+
+def _quote_vid(value: Any) -> str:
+    """nGQL 字符串 VID 字面量：转义反斜杠与双引号后包双引号。"""
+    text = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{text}"'
+
+
+def _graph_type_names(kind: str, client: Any) -> set[str] | None:
+    """``SHOW TAGS/EDGES`` 列出图空间已有类型名；查询失败返回 ``None``（无法判定）。"""
+    query = "SHOW TAGS;" if kind == "entity" else "SHOW EDGES;"
+    try:
+        result = client.execute_query(query)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("%s 失败: %s", query, exc)
+        return None
+    names: set[str] = set()
+    for record in result.records or []:
+        if isinstance(record, dict):
+            name = record.get("Name")
+            if name:
+                names.add(str(name))
+    return names
+
+
+# 批量 DELETE 单条语句打包的点/边数上限（防超长语句）
+BULK_DELETE_CHUNK = 256
+
+
+def delete_schema_graph_data(
+    kind: str, name: str, graph_space: str | None = None
+) -> dict[str, Any]:
+    """删除图空间中该 Schema 的全部数据并 ``DROP TAG/EDGE IF EXISTS``（真删，不可逆）。
+
+    删除 Schema 目录前的图数据清理：按类型分页枚举存量点/边，nGQL 批量
+    ``DELETE VERTEX`` / ``DELETE EDGE`` 物理删除，随后 DROP 类型定义。
+    类型不存在（创建时 DDL 未执行过）则跳过数据删除，幂等可重试。
+    返回 ``{status, error, typeExisted, verticesDeleted, edgesDeleted, dropStatement}``。
+    """
+    keyword = "TAG" if kind == "entity" else "EDGE"
+    result: dict[str, Any] = {
+        "status": "succeeded",
+        "error": None,
+        "typeExisted": True,
+        "verticesDeleted": 0,
+        "edgesDeleted": 0,
+        "dropStatement": None,
+    }
+    try:
+        client = _ddl_client(graph_space)
+    except Exception as exc:  # noqa: BLE001
+        result.update(status="failed", error=f"图服务连接失败: {exc}")
+        return result
+
+    existing = _graph_type_names(kind, client)
+    if existing is not None and name not in existing:
+        # 图库里本就没有该 TAG/EDGE：无数据可删，也无需 DROP
+        result["typeExisted"] = False
+        return result
+
+    try:
+        if kind == "entity":
+            result["verticesDeleted"] = _delete_all_vertices(client, name)
+        else:
+            result["edgesDeleted"] = _delete_all_edges(client, name)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("删除图数据失败: %s %s", keyword, name)
+        result.update(status="failed", error=f"图数据删除失败: {exc}")
+        return result
+
+    drop = f"DROP {keyword} IF EXISTS {name};"
+    status, error = execute_schema_ddl(drop, graph_space)
+    result["dropStatement"] = drop
+    if status != "succeeded":
+        result.update(status="failed", error=f"DROP {keyword} 失败: {error}")
+    return result
+
+
+def _delete_all_vertices(client: Any, label: str) -> int:
+    """分页枚举 TAG 全部点并批量 ``DELETE VERTEX``，返回删除数。
+
+    边删边取：已删除的点从枚举结果消失、剩余点前移，因此每页固定取
+    offset=0，直到取空（用 offset 递增会跳过前移上来的剩余点）。
+    """
+    deleted = 0
+    prev_first: str | None = None
+    while True:
+        page = client.get_nodes_by_label(label, limit=BULK_DELETE_CHUNK, offset=0)
+        if not page.items:
+            break
+        first = str(page.items[0].id)
+        if first == prev_first:
+            # 删除未生效（枚举结果没变）：报错退出，避免死循环
+            raise RuntimeError(f"DELETE VERTEX 未生效，仍枚举到点 {first}")
+        prev_first = first
+        vids = [_quote_vid(node.id) for node in page.items]
+        client.execute_write(f"DELETE VERTEX {', '.join(vids)};")
+        deleted += len(vids)
+    return deleted
+
+
+def _delete_all_edges(client: Any, edge_type: str) -> int:
+    """分页枚举 EDGE 类型全部边并批量 ``DELETE EDGE``，返回删除数。
+
+    同 ``_delete_all_vertices``：边删边取，每页固定 offset=0。
+    """
+    from infra.graph_db.convert import _parse_edge_id
+
+    deleted = 0
+    prev_first: str | None = None
+    while True:
+        page = client.get_edges_by_type(edge_type, limit=BULK_DELETE_CHUNK, offset=0)
+        if not page.items:
+            break
+        first = str(page.items[0].id)
+        if first == prev_first:
+            # 删除未生效（枚举结果没变）：报错退出，避免死循环
+            raise RuntimeError(f"DELETE EDGE 未生效，仍枚举到边 {first}")
+        prev_first = first
+        specs = []
+        for edge in page.items:
+            source, target, ranking = _parse_edge_id(str(edge.id))
+            specs.append(f"{_quote_vid(source)} -> {_quote_vid(target)}@{ranking}")
+        client.execute_write(f"DELETE EDGE {edge_type} {', '.join(specs)};")
+        deleted += len(specs)
+    return deleted

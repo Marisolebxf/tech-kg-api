@@ -27,6 +27,7 @@ from infra.llm import LLMClient, get_llm_client
 from infra.s3 import S3Storage, get_schema_s3_storage
 from service.schema_ddl import (
     default_graph_space,
+    delete_schema_graph_data,
     describe_schema_columns,
     run_alter_add_ddl,
     run_alter_drop_ddl,
@@ -919,6 +920,12 @@ class SchemaManagementService:
         *,
         is_platform_admin: bool = False,
     ) -> dict[str, Any]:
+        """硬删除 Schema：图数据全删 + DROP 类型 → 目录物理删行 + S3 脚本清理。
+
+        Guard 顺序：系统 Schema（默认禁删）→ 权限（owner/管理员）→ 运行中
+        抽取任务（防边删边写）→ 实体被关系引用（先删关系）。图数据删除失败
+        则目录不动（Schema 保留可重试），成功后才物理删目录行，不可逆。
+        """
         user_id = user_id.strip()
         if not user_id:
             raise SchemaPermissionError("登录用户 ID 不能为空")
@@ -933,8 +940,23 @@ class SchemaManagementService:
             references = self._dao.referenced_relation_names(schema_id)
             if references:
                 raise SchemaConflictError(
-                    f"该实体 Schema 仍被关系引用，请先删除关系: {', '.join(references[:5])}"
+                    f"该实体 Schema 仍被 {len(references)} 个关系引用，"
+                    f"请先删除关系: {', '.join(references[:5])}"
                 )
+        running = find_running_extraction(definition)
+        if running is not None:
+            raise SchemaConflictError(
+                f"任务「{running['name']}」正在抽取该 Schema，请先到任务中心停止，任务结束后重试"
+            )
+
+        # 先删图数据（该类型的全部点/边 + DROP TAG/EDGE），失败则目录不动可重试
+        graph_result = delete_schema_graph_data(
+            definition.kind, definition.name, definition.graph_space
+        )
+        if graph_result["status"] != "succeeded":
+            raise SchemaDdlError(
+                f"图数据删除失败，Schema 目录未变动（可重试）: {graph_result['error']}"
+            )
 
         script = self._script_snapshot(definition.script)
         self._dao.delete(definition)
@@ -947,7 +969,43 @@ class SchemaManagementService:
             except Exception:
                 cleanup_succeeded = False
                 logger.exception("Schema 已删除，但 S3 脚本清理失败: %s", schema_id)
-        return {"id": schema_id, "deleted": True, "scriptCleanupSucceeded": cleanup_succeeded}
+        return {
+            "id": schema_id,
+            "deleted": True,
+            "graphData": graph_result,
+            "scriptCleanupSucceeded": cleanup_succeeded,
+        }
+
+    def delete_impact(
+        self,
+        schema_id: str,
+        user_id: str | None,
+        *,
+        is_platform_admin: bool = False,
+    ) -> dict[str, Any]:
+        """删除影响预览：实体返回仍引用它的关系清单（删除确认弹窗展示用）。"""
+        user_id = user_id.strip() if user_id else None
+        definition = self._require_schema(schema_id)
+        references = (
+            self._dao.referencing_relations(definition.id) if definition.kind == "entity" else []
+        )
+        return {
+            "id": definition.id,
+            "kind": definition.kind,
+            "kindLabel": "实体" if definition.kind == "entity" else "关系",
+            "graphSpace": definition.graph_space,
+            "name": definition.name,
+            "label": definition.label,
+            "isSystem": definition.is_system,
+            "canDelete": bool(
+                user_id
+                and not definition.is_system
+                and (is_platform_admin or definition.created_by == user_id)
+            ),
+            "referencingRelations": [
+                {"id": item.id, "name": item.name, "label": item.label} for item in references
+            ],
+        }
 
     def get_script(self, schema_id: str) -> tuple[GraphSchemaScript, Any]:
         definition = self._require_schema(schema_id)

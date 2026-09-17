@@ -180,3 +180,49 @@ def pending_review_items(
             item["templateId"] = template_id
         items.append(item)
     return items
+
+
+def pending_entity_items(
+    pendings: Iterable[Any],
+    *,
+    source_table: str,
+    node_label: str,
+) -> list[dict[str, Any]]:
+    """把脚本内歧义实体（dict 或 PendingEntity）转成 pendingReview 实体项。
+
+    挂实体改道写前消歧（2026-09）：平台对实体项做同名召回+评分建 T_LINK
+    （强制人裁），不再产生 T_DIRECT。两个硬约束：
+
+    - ``objectId`` 必须是脚本按归一名生成的确定性 vid（同名字段归并同一挂起
+      case，边端点按 object_id 暂存/补写）；
+    - ``candidate`` 只放按名字段稳定的内容——平台的 dedupe_key 对
+      candidate_snapshot 求哈希，掺入行级 id（source_record_id 等）会把同一
+      实体拆成多个 case；行级溯源放 item 层的 sourceRecordId（不进快照哈希）。
+    """
+
+    def pick(pending: Any, name: str, default: Any = None) -> Any:
+        if isinstance(pending, Mapping):
+            return pending.get(name, default)
+        return getattr(pending, name, default)
+
+    items: list[dict[str, Any]] = []
+    for pending in pendings:
+        name = str(pick(pending, "name") or "").strip()
+        vid = str(pick(pending, "vid") or "").strip()
+        if not (name and vid):
+            continue
+        items.append(
+            {
+                "kind": "entity",
+                "nodeLabel": pick(pending, "node_label") or node_label,
+                "objectId": vid,
+                "objectName": name,
+                "candidate": {"name": name, "props": {"name": name}},
+                "reason": str(pick(pending, "reason") or "歧义实体待人工确认"),
+                "confidence": pick(pending, "confidence"),
+                "evidence": pick(pending, "evidence") or [],
+                "sourceTable": pick(pending, "source_table") or source_table,
+                "sourceRecordId": pick(pending, "source_record_id"),
+            }
+        )
+    return items

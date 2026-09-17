@@ -564,76 +564,193 @@ def _stamp_job_latest(execution: dict[str, Any]) -> None:
         pass
 
 
-def _enqueue_pending_review(request: dict[str, Any], pending: list[Any], attempt: int) -> None:
-    """把 step 返回的 pendingReview 项写入 ReviewCase 队列（T_DIRECT 模板）。
+def _pending_graph_client(space: str | None) -> Any:
+    """为 pendingReview 挂实体消歧建图客户端（space 缺省走环境默认空间）。
 
-    入队失败不阻塞 pipeline——记 warning，继续；dedupe_key 保证幂等。
+    独立成模块级函数便于单测 monkeypatch（不真连图）。调用方负责 close。
+    """
+    from infra.graph_db.client import TRSGraphClient
+    from infra.graph_db.config import TRSGraphSettings
+
+    settings = TRSGraphSettings.from_env()
+    if space:
+        settings.space = space
+    client = TRSGraphClient(settings)
+    client.connect()
+    return client
+
+
+def _enqueue_entity_pending_item(
+    item: dict[str, Any],
+    *,
+    step_id: str,
+    client: Any,
+    space: str | None,
+    task_id: str,
+    execution_id: str | None,
+    workflow_id: str,
+    workflow_run_id: str | None,
+    job_id: str | None = None,
+) -> None:
+    """单个挂起实体项 → 图库同名召回 + 评分 → T_LINK case（强制灰区人裁）。
+
+    与 ``resolve_entity_batch`` 灰区分支同构（_incoming/existingCandidates/
+    _pendingRelations），前端与 _apply_link_verdict 直接复用；但**不走 decide 的
+    auto-merge**——挂起实体的边端点悬在未决 vid 上，自动并入已有实体会让边永远
+    挂在无人裁决的 vid 上（park_or_rewrite 只认 case.object_id），必须由人裁
+    merge/create 改写端点后补写。``objectId`` 必须是脚本按归一名生成的确定性
+    vid（同名字段归并到同一 case），dedupe_key 即按它稳定。
+    """
+    from service import entity_disambiguation as ed
+    from service.entity_disambiguation import GRAY_LOW, MERGE_THRESHOLD, TOP_K
+    from service.manual_review_production import manual_review_service
+
+    candidate = item.get("candidate") or {}
+    display = str(item.get("objectName") or candidate.get("name") or "").strip()
+    vid = str(item.get("objectId") or "").strip()
+    node_label = str(item.get("nodeLabel") or "").strip()
+    if not (display and vid and node_label):
+        raise ValueError("pendingReview 实体项缺 objectName/objectId/nodeLabel")
+    incoming_props = dict(candidate.get("props") or {})
+    incoming_props.setdefault("name", display)
+    scored: list[dict[str, Any]] = []
+    for cand in ed.recall_same_name(client, node_label, [display]).get(display, []):
+        if cand["vid"] == vid:
+            continue
+        score, detail = ed.score_candidate(display, incoming_props, cand["name"], cand.get("props"))
+        scored.append(
+            {"vid": cand["vid"], "name": cand["name"], "score": round(score, 3), **detail}
+        )
+    top = sorted(scored, key=lambda x: x["score"], reverse=True)[:TOP_K]
+    reason = (
+        f"脚本挂起改道消歧：{item.get('reason') or '歧义实体待人工确认'}；同名候选 {len(scored)} 个"
+    )
+    if top:
+        reason += f"，最高得分 {top[0]['score']:.2f}"
+    manual_review_service.create_direct_case(
+        task_id=task_id,
+        execution_id=execution_id,
+        step_id=step_id,
+        kind="entity",
+        candidate={
+            "name": display,
+            "newIds": [vid],
+            "existingCandidates": [
+                {"vid": c["vid"], "name": c["name"], "score": c["score"]} for c in top
+            ],
+            "_incoming": {
+                "vid": vid,
+                "props": incoming_props,
+                "sourceTable": item.get("sourceTable") or "",
+            },
+            "_pendingRelations": [],
+            "_graphSpace": space,
+            "_resolution": {
+                "policyVersion": "script-pending-gray-v1",
+                "scriptReason": item.get("reason"),
+                "thresholds": {"merge": MERGE_THRESHOLD, "grayLow": GRAY_LOW},
+            },
+        },
+        object_id=vid,
+        object_name=display,
+        node_label=node_label,
+        reason=reason,
+        confidence=item.get("confidence"),
+        evidence=item.get("evidence") or [],
+        workflow_id=workflow_id,
+        workflow_run_id=workflow_run_id,
+        domain=item.get("domain", "graph"),
+        source_record=item.get("sourceRecord"),
+        source_table=item.get("sourceTable"),
+        source_record_id=item.get("sourceRecordId"),
+        llm_input=item.get("llmInput"),
+        llm_output=item.get("llmOutput"),
+        # 来源记录跳任务详情（同 lizhou_fix 64f815c 的观测契约）：jobId 进
+        # input_snapshot，前端 T_LINK case 的「来源记录」列据此跳图谱构建任务
+        extra_snapshot={"jobId": job_id},
+        template_id="T_LINK",
+        workflow_type="kg.schema.extract",
+        exception_code="KG_ENTITY_DISAMBIGUATION_GRAY",
+        resume_token=f"extract-resolve:{execution_id}:{vid}",
+    )
+
+
+def _enqueue_pending_review(request: dict[str, Any], pending: list[Any], attempt: int) -> None:
+    """把 step 返回的 pendingReview 项写入审核队列（挂实体改道写前消歧）。
+
+    - 实体项（kind=entity）：图库同名召回 + 评分 → **T_LINK** case，强制人工
+      裁决（挂起实体的边端点悬在未决 vid 上，自动并入会让边无人改写——见
+      _enqueue_entity_pending_item）。平台的两个分岔保持不变：失败重跑 / 进
+      消歧；不再产生新 T_DIRECT。
+    - 关系项：已废弃（歧义即端点实体歧义，脚本改挂实体后不再产生），丢弃并
+      告警。
+
+    入队失败不阻塞 pipeline——记 warning，继续；dedupe_key 保证幂等（重跑时
+    create_direct_case 按已存 dedupe_key 跳过）。
     """
     import logging
 
-    info = activity.info()
-    workflow_id = info.workflow_id
-    workflow_run_id = info.workflow_run_id
+    log = logging.getLogger("workflow.kg.custom.steps")
+    try:
+        info = activity.info()
+        workflow_id = info.workflow_id
+        workflow_run_id = info.workflow_run_id
+    except RuntimeError:
+        # 单测直调（无 activity 上下文）
+        workflow_id = "test-workflow"
+        workflow_run_id = None
     try:
         from service.workflow_repository import repository
 
         execution = repository.get_execution_by_workflow(workflow_id) or {}
     except Exception as exc:
-        logging.getLogger("workflow.kg.custom.steps").warning(
-            "lookup execution for workflow %s failed: %s", workflow_id, exc
-        )
+        log.warning("lookup execution for workflow %s failed: %s", workflow_id, exc)
         execution = {}
     task_id = execution.get("taskId") or f"PI-kgstep-{workflow_id[:12]}"
     execution_id = execution.get("id")
+    space = (request.get("selectors") or {}).get("graph_space") or None
+    step_id = str(request.get("stepId") or "extract")
+    client = None
     try:
-        from service.manual_review_production import manual_review_service
-
         for item in pending:
             if not isinstance(item, dict):
                 continue
+            if str(item.get("kind") or "entity") != "entity":
+                log.warning(
+                    "pendingReview 关系项已废弃（歧义改挂实体，走 T_LINK），丢弃: "
+                    "step=%s obj=%s reason=%s",
+                    step_id,
+                    item.get("objectId"),
+                    item.get("reason"),
+                )
+                continue
             try:
-                manual_review_service.create_direct_case(
+                if client is None:
+                    client = _pending_graph_client(space)
+                _enqueue_entity_pending_item(
+                    item,
+                    step_id=step_id,
+                    client=client,
+                    space=space,
                     task_id=task_id,
                     execution_id=execution_id,
-                    step_id=request["stepId"],
-                    template_id=str(item.get("templateId") or "T_DIRECT"),
-                    workflow_type=(
-                        "kg.schema.extract"
-                        if str(item.get("templateId") or "T_DIRECT") != "T_DIRECT"
-                        else None
-                    ),
-                    kind=item.get("kind", "entity"),
-                    candidate=item.get("candidate", {}),
-                    object_id=item.get("objectId"),
-                    object_name=item.get("objectName"),
-                    node_label=item.get("nodeLabel"),
-                    edge_type=item.get("edgeType"),
-                    from_id=item.get("fromId"),
-                    to_id=item.get("toId"),
-                    reason=item.get("reason", ""),
-                    confidence=item.get("confidence"),
-                    evidence=item.get("evidence", []),
                     workflow_id=workflow_id,
                     workflow_run_id=workflow_run_id,
-                    domain=item.get("domain", "graph"),
-                    source_record=item.get("sourceRecord"),
-                    source_table=item.get("sourceTable"),
-                    source_record_id=item.get("sourceRecordId"),
-                    llm_input=item.get("llmInput"),
-                    llm_output=item.get("llmOutput"),
-                    extra_snapshot={"jobId": execution.get("jobId")},
+                    job_id=execution.get("jobId"),
                 )
-            except Exception as exc:
-                logging.getLogger("workflow.kg.custom.steps").warning(
-                    "create_direct_case failed step=%s obj=%s reason=%s",
-                    request["stepId"],
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "pendingReview 实体项建 T_LINK 失败 step=%s obj=%s reason=%s",
+                    step_id,
                     item.get("objectId"),
                     exc,
                 )
-    except Exception as exc:
-        logging.getLogger("workflow.kg.custom.steps").warning(
-            "enqueue pending review unavailable (service load failed): %s", exc
-        )
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                log.exception("关闭消歧改道图客户端失败")
 
 
 # ---------------------------------------------------------------------------
@@ -1420,8 +1537,8 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
         TOP_K,
         decide,
         display_name,
-        name_columns_in,
         normalize_display_name,
+        recall_same_name,
         score_candidate,
     )
 
@@ -1462,55 +1579,7 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
         client = TRSGraphClient(settings)
         try:
             client.connect()
-            # 不同来源的 tag 主名列不一（schema 管理建 name，vendor ETL 的
-            # Organization 是 name_cn）：DESCRIBE 探测实际存在的名字列再拼 WHERE，
-            # 引用不存在的列会直接 SemanticError
-            try:
-                desc = client.execute_query(f"DESCRIBE TAG `{name_tag}`")
-                fields = {
-                    f for f in (r.get("Field") for r in desc.records or []) if isinstance(f, str)
-                }
-                name_cols = name_columns_in(fields)
-            except Exception:  # noqa: BLE001
-                logger.warning("DESCRIBE TAG %s 失败，同名召回按 name 列兜底", name_tag)
-                name_cols = ["name"]
-            if not name_cols:
-                logger.info(
-                    "tag %s 无显示名列（name/name_cn/name_en/name_zh），跳过同名召回", name_tag
-                )
-            else:
-                names = list(by_name)
-                name_list = ",".join(json.dumps(n, ensure_ascii=False) for n in names)
-                where = " OR ".join(f"v.`{col}` IN [{name_list}]" for col in name_cols)
-                select_names = ", ".join(
-                    f"v.`{col}` AS `nm{idx}`" for idx, col in enumerate(name_cols)
-                )
-                base_match = (
-                    f"MATCH (v:`{name_tag}`) WHERE {where} RETURN id(v) AS vid, {select_names}"
-                )
-                try:
-                    result = client.execute_read(f"{base_match}, properties(v) AS props LIMIT 200")
-                    name_only = False
-                except Exception:  # noqa: BLE001
-                    logger.warning("同名召回 properties() 失败，降级为仅名称比对")
-                    result = client.execute_read(f"{base_match} LIMIT 200")
-                    name_only = True
-                for rec in result.records or []:
-                    vid = str(rec.get("vid") or "")
-                    props = {} if name_only else (rec.get("props") or {})
-                    if name_only:
-                        nm = next(
-                            (
-                                str(rec.get(f"nm{idx}") or "")
-                                for idx in range(len(name_cols))
-                                if rec.get(f"nm{idx}")
-                            ),
-                            "",
-                        )
-                    else:
-                        nm = display_name(props)
-                    if nm and vid:
-                        existing.setdefault(nm, []).append({"vid": vid, "name": nm, "props": props})
+            existing = recall_same_name(client, name_tag, list(by_name))
         finally:
             try:
                 client.close()
@@ -2687,6 +2756,8 @@ async def record_schema_script_run(request: dict[str, Any]) -> dict[str, Any]:
             return {"ok": False, "reason": "script-missing"}
         row.last_run_status = status
         row.last_run_error = error if status == "failed" else None
+        # 回写收尾时间：uploaded_at > last_run_at 即"脚本已更新待重跑"提示的消除条件
+        row.last_run_at = datetime.now()
         session.commit()
     run_key = request.get("runScriptKey")
     if run_key:

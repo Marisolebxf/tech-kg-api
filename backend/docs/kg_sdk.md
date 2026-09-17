@@ -221,7 +221,7 @@ def transform(payload):
 注意：
 
 - 可选 `failures: [{recordId, error}]`——逐行解析失败由平台记 **T_EXTRACT_FAIL** 审核 case（`POST /manual-reviews/production/rerun-extract-failures` 可按执行重跑）；
-- 可选 `pendingReview: [...]`——低置信/消歧候选进审核队列（item 可带 `templateId=T_LINK`，同名冲突裁决）；
+- 可选 `pendingReview: [...]`——**只收实体项**（`kind=entity`，挂实体改道写前消歧）：脚本对拿不准的实体按归一名生成确定性 vid 填 `objectId`（同名字段恒同 vid），平台做图库同名召回+评分后建 **T_LINK** 人工裁决 case（强制人裁，分数再高也不自动并入）；指向该 vid 的边照常输出（`resolution_status=pending_review`），端点未决的边自动暂存进 case，裁决 merge/create 后随实体一起落图。`candidate` 只放按名字段稳定的内容（dedupe_key 对快照哈希，行级 id 放 item 层 `sourceRecordId`）。**关系项已废弃**（歧义即端点实体歧义，改由脚本挂端点实体处理）——平台丢弃并告警，不再产生新 T_DIRECT；
 - 脚本返回的 `_watermark` / `_checkpoint` 元字段**被忽略**——水位由平台按批次最大时间列值管理（见 §3）；
 - 多张来源表并行抽取、单表内批次串行；执行进度在任务中心 / `get_progress` 查询可见，多步脚本带分步计数 `steps: {stepId: {records, written, failed}}`。
 

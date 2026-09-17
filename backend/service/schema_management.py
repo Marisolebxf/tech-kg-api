@@ -1220,6 +1220,10 @@ class SchemaManagementService:
         if script is None:
             return None
         stale_behind = _stale_behind(definition.property_revision, script.captured_revision)
+        # 脚本上传后从未跑过、或上传时间晚于最近一次收尾 → 脚本变更尚未应用到图数据。
+        # 与 staleness（版本号落后，提示"更新脚本"）接力：更新后 stale 消除、
+        # needsRun 接管提示"重跑"，重跑收尾回写 last_run_at 后两者皆清。
+        needs_run = script.last_run_at is None or script.uploaded_at > script.last_run_at
         return {
             "filename": script.original_filename,
             "contentType": script.content_type,
@@ -1233,8 +1237,10 @@ class SchemaManagementService:
             "capturedRevision": script.captured_revision,
             "lastRunStatus": script.last_run_status,
             "lastRunError": script.last_run_error,
+            "lastRunAt": _iso(script.last_run_at),
             "stale": stale_behind > 0,
             "staleBehind": stale_behind,
+            "needsRun": needs_run,
             "downloadUrl": f"/api/v1/schema-management/schemas/{definition.id}/script",
         }
 

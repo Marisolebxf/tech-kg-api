@@ -10,7 +10,11 @@
 - 项目证据来自旧 ``project_context``：项目 host/participants/
   funded_institution/participating_institution 名称集合，按产出专利号唯一匹配
   到的 patent_vid 累积（仅图内已有 Project 的行）；
-- 未唯一确认 → 不自动建边，写 review JSONL（output/ 目录，字段与旧一致）；
+- 未唯一确认 → **挂实体改道写前消歧**：发明人按归一名生成确定性 vid
+  （pending_entity_vid，同名字段恒同 vid）进 pendingReview 实体项，平台做
+  同名召回+评分建 T_LINK（强制人裁）；边照常输出指向该 vid
+  （resolution_status=pending_review，match_method=manual_pending），端点
+  未决的边自动暂存进 case，人裁 merge/create 后实体与名下所有边一起落图；
 - rank=发明人数组序号，同 (edge,src,dst,rank) 去重保留 confidence 高者；
 - 旧脚本的 Milvus 向量提升为可选对齐步骤，不在本脚本迁移。
 
@@ -21,7 +25,7 @@ Person/Organization/Patent 端点直接取图内真实 vid，不做端点验存�
 from collections import Counter
 from typing import Any
 
-from script.extract_transform_common import edge_transform, pending_review_items
+from script.extract_transform_common import edge_transform, pending_entity_items
 from script.relation_extractors_one_relation.common import (
     EdgeRecord,
     ensure_edge_schema,
@@ -30,8 +34,7 @@ from script.relation_extractors_one_relation.common import (
 )
 from script.relation_extractors_one_relation.patent_matching import (
     EDGE_PROPERTY_SCHEMAS,
-    ReviewRecord,
-    candidate_view,
+    PendingEntity,
     canonical_entities,
     make_edge_deduper,
     make_index,
@@ -39,6 +42,7 @@ from script.relation_extractors_one_relation.patent_matching import (
     normalize_name,
     party_items,
     patent_indexes,
+    pending_entity_vid,
     person_org_names,
     project_evidence_context,
 )
@@ -55,7 +59,7 @@ def invented_by_mapper(
     person_index: dict[str, list[dict]],
     org_index: dict[str, list[dict]],
     project_evidence: dict[str, set[str]],
-    reviews: list[ReviewRecord],
+    pendings: list[PendingEntity],
     stats: Counter,
 ):
     accept = make_edge_deduper()
@@ -117,7 +121,7 @@ def invented_by_mapper(
                 if accepted is not None:
                     records.append(accepted)
             else:
-                stats["INVENTED_BY:review"] += 1
+                stats["INVENTED_BY:pending_entity"] += 1
                 reason = (
                     "同名候选仍有多个"
                     if len(candidates) > 1
@@ -125,23 +129,44 @@ def invented_by_mapper(
                     if len(candidates) == 1
                     else "人才表未找到同名人员"
                 )
-                reviews.append(
-                    ReviewRecord(
-                        patent_id=str(row["patent_id"]),
-                        relation_type="INVENTED_BY",
-                        source_name=name,
+                # 挂实体改道：歧义发明人按归一名生成确定性 vid 挂起（平台召回+
+                # 评分建 T_LINK 强制人裁），边照常输出指向该 vid——端点未决自动
+                # 暂存进 case，人裁 merge/create 后实体与名下所有边一起落图
+                pending_vid = pending_entity_vid("person", name)
+                pendings.append(
+                    PendingEntity(
+                        name=name,
+                        vid=pending_vid,
                         reason=reason,
                         confidence=0.60 if len(candidates) == 1 else None,
-                        candidates=[candidate_view(c, "Person") for c in candidates],
                         evidence=["姓名精确匹配", "申请/权利机构和项目证据未能唯一确认"]
                         if candidates
                         else ["无姓名精确候选"],
-                        patent_vid=patent_vid,
-                        sequence=sequence,
-                        role="inventor",
+                        node_label="Person",
                         source_record_id=f"{row['id']}:inventors:{sequence}",
                     )
                 )
+                accepted = accept(
+                    EdgeRecord(
+                        "INVENTED_BY",
+                        patent_vid,
+                        pending_vid,
+                        {
+                            "sequence": sequence,
+                            "source_name": name,
+                            "confidence": 0.60 if len(candidates) == 1 else 0.50,
+                            "subject_type": "Person",
+                            "resolution_status": "pending_review",
+                            "match_method": "manual_pending",
+                            "match_evidence": reason,
+                            "source_table": "dwd_patent",
+                            "source_record_id": f"{row['id']}:inventors:{sequence}",
+                        },
+                        rank=sequence,
+                    )
+                )
+                if accepted is not None:
+                    records.append(accepted)
         return records
 
     return mapper
@@ -178,18 +203,20 @@ SOURCES = [
 
 
 def transform(payload: dict[str, Any]) -> dict[str, Any]:
-    """kg.schema.extract 转换入口：rows → edges JSON；歧义候选进 pendingReview（人工审核）。"""
+    """kg.schema.extract 转换入口：rows → edges JSON；歧义发明人挂实体进 pendingReview（写前消歧改道）。"""
     database = (payload.get("source") or {}).get("databaseName") or "gkx_element"
     vid_by_id, person_index, org_index, project_evidence = _load_indexes(database, dry_run=False)
-    reviews: list[ReviewRecord] = []
+    pendings: list[PendingEntity] = []
     stats: Counter = Counter()
     result = edge_transform(
         payload,
         builder=invented_by_mapper(
-            vid_by_id, person_index, org_index, project_evidence, reviews, stats
+            vid_by_id, person_index, org_index, project_evidence, pendings, stats
         ),
     )
-    result["pendingReview"] = pending_review_items(reviews, source_table="dwd_patent")
-    stats["review_records"] = len(reviews)
+    result["pendingReview"] = pending_entity_items(
+        pendings, source_table="dwd_patent", node_label="Person"
+    )
+    stats["review_records"] = len(pendings)
     result["stats"] = {**(result.get("stats") or {}), **dict(stats)}
     return result

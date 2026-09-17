@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import unicodedata
@@ -108,6 +109,35 @@ class ReviewRecord:
     role: str = ""
     is_current: bool | None = None
     source_record_id: str = ""
+
+
+@dataclass
+class PendingEntity:
+    """歧义实体挂起项（挂实体改道写前消歧）。
+
+    与 ReviewRecord 的本质区别：歧义不再停在「这条边建不建」上，而是停在
+    「这个端点实体是谁」上——脚本按归一名生成确定性 vid（同名字段恒同 vid），
+    边照常输出指向该 vid；平台对实体项做同名召回+评分建 T_LINK（强制人裁），
+    端点未决的边自动暂存进 case，人裁 merge/create 后实体与名下所有边一起落图。
+    """
+
+    name: str
+    vid: str
+    reason: str
+    confidence: float | None
+    evidence: list[str]
+    node_label: str
+    source_record_id: str = ""
+
+
+def pending_entity_vid(prefix: str, name: Any) -> str:
+    """挂起实体确定性 vid：``pending-{prefix}-{sha256(normalize_name)[:12]}``。
+
+    同名（normalize_name 归一后相同）恒得同一 vid——N 件专利的同一发明人/
+    申请人归并到同一个 T_LINK case，全部边暂存一处，人裁一次补写全部。
+    """
+    digest = hashlib.sha256(normalize_name(name).encode("utf-8")).hexdigest()[:12]
+    return f"pending-{prefix}-{digest}"
 
 
 def normalize_name(value: Any) -> str:
@@ -416,8 +446,13 @@ def party_properties(
     evidence: str,
     source_id: str,
     current: bool | None = None,
+    resolution_status: str = "automatic",
 ) -> dict[str, Any]:
-    """旧 common_party_properties（元组顺序改为 dict 顺序）。"""
+    """旧 common_party_properties（元组顺序改为 dict 顺序）。
+
+    ``resolution_status`` 默认 automatic；指向挂起 vid 的边传 pending_review
+    （人裁落图后即最终状态，不回写）。
+    """
     props: dict[str, Any] = {"sequence": sequence, "role": role}
     if current is not None:
         props["is_current"] = current
@@ -426,7 +461,7 @@ def party_properties(
             "source_name": source_name,
             "confidence": confidence,
             "subject_type": subject_type,
-            "resolution_status": "automatic",
+            "resolution_status": resolution_status,
             "match_method": method,
             "match_evidence": evidence,
             "source_table": "dwd_patent",

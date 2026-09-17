@@ -314,6 +314,7 @@ async def test_record_script_run_ok_clears_error(script_engine):
         row = _get_script_by_schema_id(session, "schema-1")
         assert row.last_run_status == "ok"
         assert row.last_run_error is None
+        assert row.last_run_at is not None
 
 
 @pytest.mark.asyncio
@@ -326,6 +327,7 @@ async def test_record_script_run_failed_truncates_error(script_engine):
         row = _get_script_by_schema_id(session, "schema-1")
         assert row.last_run_status == "failed"
         assert len(row.last_run_error) == 1024
+        assert row.last_run_at is not None
 
 
 @pytest.mark.asyncio

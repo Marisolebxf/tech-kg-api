@@ -16,14 +16,6 @@ const showEmpty = computed(
     !graphSpaceStore.spaces.length,
 )
 
-// 宽度跟随当前空间名：按字符估宽（全角≈14px、半角≈8px，14px 字号），加内边距+下拉箭头，
-// clamp 到 [150, 340]px——名字短不塌陷、名字长尽量显示齐，超长走 arco 自带的 title 悬停
-const selectWidth = computed(() => {
-  const text = graphSpaceStore.current || '图空间'
-  const textWidth = [...text].reduce((width, ch) => width + (ch.charCodeAt(0) > 0xff ? 14 : 8), 0)
-  return `${Math.min(340, Math.max(150, textWidth + 56))}px`
-})
-
 onMounted(() => {
   void graphSpaceStore.ensureLoaded()
 })
@@ -38,7 +30,6 @@ watch(
 <template>
   <div
     class="app-space-select"
-    :style="{ '--space-select-w': selectWidth }"
     :title="graphSpaceStore.loadError ? `图空间列表加载失败，当前使用默认空间 ${graphSpaceStore.current}` : '切换当前工作图空间'"
   >
     <span class="app-space-select__label">图空间</span>
@@ -49,7 +40,7 @@ watch(
       :loading="graphSpaceStore.loading"
       :scrollbar="false"
       :disabled="graphSpaceStore.loading"
-      :trigger-props="{ autoFitPopupWidth: false, autoFitPopupMinWidth: true }"
+      :trigger-props="{ contentClass: 'app-space-select-popup' }"
       @change="(value: unknown) => graphSpaceStore.setCurrent(String(value ?? ''))"
     >
       <a-option v-if="showEmpty" disabled>暂无可用图空间</a-option>
@@ -63,7 +54,7 @@ watch(
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  /* 顶栏空间紧张时不被 flex 压缩（宽度由下方 --space-select-w 控制） */
+  /* 顶栏空间紧张时不被 flex 压缩 */
   flex: 0 0 auto;
 }
 
@@ -76,6 +67,25 @@ watch(
 /* arco <a-select> 不透传 scoped data-v 到视图元素，类选择器匹配不上
    （旧 .app-space-select__input{width} 是死规则），必须经包裹层 :deep 下钻 */
 .app-space-select :deep(.arco-select-view) {
-  width: var(--space-select-w, 160px);
+  width: 200px;
+}
+</style>
+
+<style>
+/* 弹层 teleport 到 body，scoped 够不到，经 triggerProps contentClass 打标。
+   选择框固定默认宽，超长空间名：触发栏截断（arco 自带省略号+title 悬停），
+   下拉面板整体横向滚动查看（选项不省略，悬停 title 兜底）。 */
+.app-space-select-popup .arco-select-dropdown-list-wrapper {
+  overflow-x: auto;
+}
+
+.app-space-select-popup .arco-select-option {
+  /* 按内容自然宽撑开以触发横向滚动，短选项仍占满整行可点 */
+  width: max-content;
+  min-width: 100%;
+}
+
+.app-space-select-popup .arco-select-option-content {
+  overflow: visible;
 }
 </style>

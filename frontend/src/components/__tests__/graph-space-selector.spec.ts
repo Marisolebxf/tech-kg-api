@@ -55,20 +55,18 @@ describe('GraphSpaceSelector', () => {
     expect(wrapper.get('.arco-select-view-value').text()).toBe('dev')
   })
 
-  it('选择框宽度经 --space-select-w 跟随当前空间名伸缩', async () => {
-    // arco <a-select> 不透传 scoped data-v，宽度只能经包裹层 CSS 变量下钻；
-    // 本用例守住该机制不被改回死规则（.app-space-select__input{width}）
-    vi.mocked(listGraphSpaces).mockResolvedValue({ data: { spaces: ['dev', 'techkg_production_空间'] } } as never)
+  it('选择框固定默认宽 + 下拉弹层带横向滚动打标', async () => {
+    // arco <a-select> 不透传 scoped data-v，宽度只能经包裹层 :deep 下钻；
+    // 弹层 teleport 到 body，只能经 triggerProps contentClass 打标横向滚动容器。
+    // 本用例守住这两个机制不被改回死规则/裸类选择器
+    vi.mocked(listGraphSpaces).mockResolvedValue({ data: { spaces: ['dev', 'techkg'] } } as never)
     const wrapper = mountSelector()
     await flushPromises()
-    const style = () => wrapper.get('.app-space-select').attributes('style') ?? ''
-    // 短名取下限 150px
-    expect(style()).toContain('--space-select-w: 150px')
-    const store = useGraphSpaceStore()
-    store.setCurrent('techkg_production_空间')
-    await nextTick()
-    // 长名按字符估宽放大（18 半角*8 + 2 全角*14 + 56 = 228）
-    expect(style()).toContain('--space-select-w: 228px')
+    const select = wrapper.findComponent(ASelect)
+    expect(select.props('triggerProps')).toEqual({ contentClass: 'app-space-select-popup' })
+    // 选项悬停 title 兜底显示完整空间名
+    const option = wrapper.findAllComponents(AOption)[0]
+    expect(option.attributes('title')).toBe('dev')
   })
 
   it('列表为空时展示“暂无可用图空间”兜底选项', async () => {

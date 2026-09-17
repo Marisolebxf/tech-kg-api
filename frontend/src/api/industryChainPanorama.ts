@@ -16,7 +16,8 @@ import { http } from "./http";
  * 请求参数。
  */
 export interface IndustryChainPanoramaQueryRequest {
-  industry?: string | null;
+  /** 产业关键词，必填，如 人工智能 / 集成电路。 */
+  industry: string;
   anchorId?: string | null;
   depth?: number;
   topK?: number;
@@ -36,6 +37,12 @@ export interface PanoramaKeyEntity {
   subtitle: string | null;
   metric: string | null;
   metricValue: number | null;
+  /** 分层实体自身的入图溯源字段（与 PanoramaGraphNode 同款），缺失时为 null。 */
+  sourceTable?: string | null;
+  sourceField?: string | null;
+  sourceRecordId?: string | null;
+  ingestBatch?: string | null;
+  ingestTime?: string | null;
 }
 
 /**
@@ -62,6 +69,12 @@ export interface PanoramaGraphNode {
   type: string;
   label: string;
   subtitle: string | null;
+  /** 子图（展开层）节点的入图溯源字段，来自图节点 properties；缺失时为 null。 */
+  sourceTable?: string | null;
+  sourceField?: string | null;
+  sourceRecordId?: string | null;
+  ingestBatch?: string | null;
+  ingestTime?: string | null;
   data: Record<string, unknown>;
 }
 
@@ -82,6 +95,8 @@ export interface PanoramaGraphEdge {
  */
 export interface PanoramaSummary {
   industry: string | null;
+  /** 图库中的产业链名称（如 集成电路 / 低空经济），供摘要「产业链名称」统计展示。 */
+  industryChains?: string[];
   totalNodes: number;
   totalEdges: number;
   nodesByLabel: Record<string, number>;

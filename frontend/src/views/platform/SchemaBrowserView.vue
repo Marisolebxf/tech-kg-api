@@ -185,6 +185,8 @@ const confirming = ref(false)
 const scriptByRow = ref<Record<string, SchemaScript>>({})
 
 // Schema 拓扑总览（实体 -关系-> 实体 元图谱）
+// 卡片默认收起（首屏不加载不渲染画布），右上角按钮手动展开；切换图空间时自动展开
+const topologyExpanded = ref(false)
 const topologyNodes = ref<GraphNodeData[]>([])
 const topologyEdges = ref<GraphEdgeData[]>([])
 
@@ -242,6 +244,12 @@ async function loadTopology() {
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
   }
+}
+
+async function toggleTopology() {
+  topologyExpanded.value = !topologyExpanded.value
+  // 每次展开都重新拉取，保证收起期间目录变动（新建/删除）后看到的是最新拓扑
+  if (topologyExpanded.value) await loadTopology()
 }
 
 // 上传脚本弹窗（行级「上传脚本/更换脚本」）
@@ -539,7 +547,8 @@ async function confirmDelete() {
     showToast(`已删除 ${target.label || target.name}`, 'success')
     deleteModalOpen.value = false
     deleteTarget.value = null
-    await Promise.all([loadSchemas(), loadTopology()])
+    // 收起状态下不必刷新拓扑：下次展开时 toggleTopology 会重新拉取
+    await Promise.all([loadSchemas(), ...(topologyExpanded.value ? [loadTopology()] : [])])
     void loadEntityOptions()
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
@@ -748,10 +757,12 @@ function onKeywordInput() {
   }, 300)
 }
 
-// 全局图空间切换：重置页码后按新空间重载列表与拓扑
+// 全局图空间切换：自动展开拓扑、重置页码后按新空间重载列表与拓扑
 watch(
   () => graphSpaceStore.current,
   () => {
+    // 切换图空间自动展开拓扑，直观确认目标空间的元图谱
+    topologyExpanded.value = true
     resetPages()
     void Promise.all([loadSchemas(), loadTopology()]).catch((error: unknown) => {
       showToast(schemaErrorMessage(error), 'warning')
@@ -985,14 +996,13 @@ async function openViewModal(rowId: string, rowName: string) {
 onMounted(async () => {
   try {
     await loadSchemas()
-    await loadTopology()
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
   }
 })
 
-// 列表属性 chip 展示（前 6 个 + 溢出展开明细）
-const PROPERTY_CHIP_LIMIT = 6
+// 列表属性 chip 展示（前 3 个 + 溢出 +N 展开全部明细）
+const PROPERTY_CHIP_LIMIT = 3
 const expandedPropertyRows = ref<Set<string>>(new Set())
 
 function propertyChips(schema: SchemaDefinition): string[] {
@@ -1016,15 +1026,27 @@ function togglePropertyDetail(schemaId: string): void {
 
 <template>
   <main class="schema-page">
-    <section class="schema-shell schema-topology-shell" aria-label="Schema 拓扑总览">
+    <section
+      class="schema-shell schema-topology-shell"
+      :class="{ 'schema-topology-shell--collapsed': !topologyExpanded }"
+      aria-label="Schema 拓扑总览"
+    >
       <div class="schema-toolbar">
         <div><strong>Schema 拓扑总览</strong><span>实体与关系的元图谱</span></div>
         <div class="schema-topology-legend" aria-label="图例">
           <span class="legend-item"><i class="legend-node"></i>实体 {{ overview.entityTypes }}</span>
           <span class="legend-item"><i class="legend-edge"></i>关系 {{ overview.relationTypes }}</span>
         </div>
+        <button
+          type="button"
+          class="schema-topology-toggle"
+          :aria-expanded="topologyExpanded"
+          @click="toggleTopology"
+        >
+          {{ topologyExpanded ? '收起' : '展开' }}<i>{{ topologyExpanded ? '▴' : '▾' }}</i>
+        </button>
       </div>
-      <div class="schema-topology-canvas">
+      <div v-if="topologyExpanded" class="schema-topology-canvas">
         <KgGraphCanvas
           v-if="topologyNodes.length"
           :nodes="topologyNodes"
@@ -1644,6 +1666,10 @@ function togglePropertyDetail(schemaId: string): void {
 .schema-create-body>.create-field,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{margin-bottom:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
 /* Schema 拓扑总览 */
 .schema-topology-shell{margin-bottom:16px;padding-bottom:0}
+.schema-topology-shell--collapsed{flex:0 0 auto}
+.schema-topology-toggle{display:flex;flex:0 0 auto;align-items:center;gap:4px;height:26px;padding:0 10px;border:1px solid #c7d8ef;border-radius:5px;background:#fff;color:#40536f;font-size:11px;line-height:1;cursor:pointer}
+.schema-topology-toggle:hover{border-color:#4080ff;color:#165dff}
+.schema-topology-toggle i{font-style:normal;font-size:10px}
 .schema-topology-canvas{height:260px;overflow:hidden;border-top:1px solid #e5e6eb;background: #fff;}
 .schema-topology-canvas__empty{display:grid;place-items:center;height:100%;color:#86909c;font-size:12px}
 

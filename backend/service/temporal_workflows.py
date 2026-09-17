@@ -19,7 +19,7 @@ from uuid import uuid4
 from dotenv import load_dotenv
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ActivityError
+from temporalio.exceptions import ActivityError, ApplicationError
 
 from service.script_steps import extract_declared_steps
 
@@ -284,7 +284,7 @@ async def _spawn_script(
     # 上传脚本需要 backend 模块（infra/dao/sdk）与凭据（MySQL/TRSGraph）。
     # worker 进程不 import infra，故这里显式加载 backend/.env，并把 backend + backend/sdk
     # 目录加入 PYTHONPATH。密钥经 env 传递的安全面与 MYSQL_PASSWORD 等
-    # sub_env={**os.environ} 一致（见 docs/workflow_operations_api.md）。
+    # sub_env={**os.environ} 一致。
     backend_dir = Path(__file__).resolve().parents[1]
     load_dotenv(backend_dir / ".env")
     sdk_dir = backend_dir / "sdk"
@@ -1680,6 +1680,10 @@ class SchemaExtractWorkflow:
         self._slots: dict[str, dict[int, dict[str, Any]]] = {}
         self._current_source: str | None = None
         self._run_script_object: str | None = None
+        # chain（多 Schema 串行，kg.schema.extract.chain）进度：schema:{id} →
+        # 外层阶段状态；get_steps 查询实时返回（旧 kg.custom.chain 同契约）
+        self._chain_steps: dict[str, dict[str, Any]] = {}
+        self._current_schema: str | None = None
 
     async def _report_script_run(self, schema_id: str, *, ok: bool, error: str | None) -> None:
         """收尾回写脚本健康信号（best-effort，失败不影响主流程状态）。"""
@@ -1701,17 +1705,103 @@ class SchemaExtractWorkflow:
 
     @workflow.run
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        schema_id = request["schemaId"]
+        schema_ids = request.get("schemaIds") or []
+        if len(schema_ids) >= 2:
+            # chain 模式（kg.schema.extract.chain）：多 Schema 严格串行。
+            # 失败记录重跑只支持单 Schema（rerun_failed_records 按单 Schema 建执行）。
+            if request.get("recordIdsBySource"):
+                raise ApplicationError("多脚本串行任务不支持失败记录重跑（重跑请单 Schema 执行）")
+            return await self._run_chain(request, schema_ids)
+        schema_id = request.get("schemaId") or (schema_ids[0] if schema_ids else None)
+        if not schema_id:
+            raise ApplicationError("缺少 schemaId")
+        return await self._run_single(request, schema_id)
+
+    async def _run_single(
+        self, request: dict[str, Any], schema_id: str, *, force_step_totals: bool = False
+    ) -> dict[str, Any]:
+        """单 Schema 抽取：包装逻辑与历史 run() 逐字段一致（事件序列不变，重放安全）。"""
         try:
-            result = await self._extract(request)
+            result = await self._extract_schema(
+                request, schema_id, force_step_totals=force_step_totals
+            )
         except Exception as exc:
             await self._report_script_run(schema_id, ok=False, error=str(exc)[:1000])
             raise
         await self._report_script_run(schema_id, ok=True, error=None)
         return result
 
-    async def _extract(self, request: dict[str, Any]) -> dict[str, Any]:
-        schema_id = request["schemaId"]
+    async def _run_chain(self, request: dict[str, Any], schema_ids: list[str]) -> dict[str, Any]:
+        """多 Schema 严格串行：任一环失败即置 FAILED 并中止（恢复走 reset 回放）。"""
+        failures_total = {"count": 0, "recorded": 0, "truncated": False}
+        for pos, schema_id in enumerate(schema_ids):
+            step_key = f"schema:{schema_id}"
+            self._current_schema = schema_id
+            self._chain_steps[step_key] = {
+                "status": "RUNNING",
+                "schemaId": schema_id,
+                "position": pos + 1,
+            }
+            try:
+                result = await self._run_single(request, schema_id, force_step_totals=True)
+            except Exception as exc:
+                self._chain_steps[step_key] = {
+                    **self._chain_steps[step_key],
+                    "status": "FAILED",
+                    "error": str(exc)[:500],
+                }
+                raise
+            sources = result.get("sources") or []
+            # 内层 activities = 该脚本各转换步聚合（单 transform 脚本聚合为 1 条）
+            activities: dict[str, dict[str, Any]] = {}
+            for sid, stat in (result.get("steps") or {}).items():
+                activities[sid] = {
+                    "status": stat.get("status", "COMPLETED"),
+                    "name": (result.get("functionName") or sid) if sid == "_default" else sid,
+                    "records": int(stat.get("records", 0)),
+                    "written": int(stat.get("written", 0)),
+                    "failed": int(stat.get("failed", 0)),
+                }
+            fail = result.get("failures") or {}
+            failures_total["count"] += int(fail.get("count", 0))
+            failures_total["recorded"] += int(fail.get("recorded", 0))
+            failures_total["truncated"] = failures_total["truncated"] or bool(fail.get("truncated"))
+            self._chain_steps[step_key] = {
+                **self._chain_steps[step_key],
+                "status": "COMPLETED",
+                "name": result.get("schemaLabel") or result.get("schemaKey") or schema_id,
+                "kind": result.get("kind"),
+                "description": (
+                    f"kg.schema.extract · {result.get('kind', 'entity')} 抽取"
+                    f"（{len(sources)} 个来源）"
+                ),
+                "records": sum(int(s.get("rows", 0)) for s in sources),
+                "written": sum(int(s.get("written", 0)) for s in sources),
+                "failed": int(fail.get("count", 0)),
+                "output": result,
+                "activities": activities,
+            }
+        return {
+            "status": "completed",
+            "chain": True,
+            "definitionId": request.get("chainDefinitionId"),
+            "schemaIds": schema_ids,
+            "triggerSource": request.get("triggerSource", "MANUAL"),
+            "steps": self._chain_steps,
+            "failures": failures_total,
+        }
+
+    async def _extract_schema(
+        self,
+        request: dict[str, Any],
+        schema_id: str,
+        *,
+        force_step_totals: bool = False,
+    ) -> dict[str, Any]:
+        # chain 串行的下一环运行前重置来源级进度，防跨 Schema 串台
+        self._sources = {}
+        self._slots = {}
+        self._current_source = None
         graph_space = request.get("graphSpace") or request.get("graph_space")
         batch_size = min(max(int(request.get("batchSize", 500)), 1), 5000)
         graph = {"space": graph_space} if graph_space else {}
@@ -1732,16 +1822,20 @@ class SchemaExtractWorkflow:
         ]
         multi_step = bool(plan.get("multiStep"))
         self._run_script_object = plan.get("scriptRunKey")
+        # 分步聚合计数开关：多步脚本原生开启；chain 模式（force_step_totals）下单
+        # transform 脚本也聚合为 1 条（key=_default），保证详情页每个 Schema 抽屉有内容
+        track_steps = multi_step or force_step_totals
 
         # 周期 Schedule 触发：request 是扁平 shape（非 {definitionId, payload}），
-        # 直接调注册 activity 落 execution/task 行（幂等）。
+        # 直接调注册 activity 落 execution/task 行（幂等）。chain 模式下控制面
+        # execution/task 行挂在 chain 定义上（chainDefinitionId）；水位读写键不变。
         schedule_id = request.get("_scheduleId")
         if schedule_id:
             info = workflow.info()
             await workflow.execute_activity(
                 register_scheduled_execution,
                 {
-                    "definitionId": definition_id,
+                    "definitionId": request.get("chainDefinitionId") or definition_id,
                     "scheduleId": schedule_id,
                     "workflowId": info.workflow_id,
                     "runId": info.run_id,
@@ -1870,10 +1964,10 @@ class SchemaExtractWorkflow:
                     return {"batches": idx, "watermark": final_wm, "pkCursor": None}
                 return {"batches": idx, **final}
 
-            # 分步聚合计数（多步脚本才有；stepId → records/written/failed）
+            # 分步聚合计数（多步脚本或 chain 模式；stepId → records/written/failed）
             step_totals: dict[str, dict[str, int]] = (
                 {s["id"]: {"records": 0, "written": 0, "failed": 0} for s in steps}
-                if multi_step
+                if track_steps
                 else {}
             )
 
@@ -2005,7 +2099,7 @@ class SchemaExtractWorkflow:
                                 ]
                                 batch_failures.extend(step_failures)
                                 written += step_written
-                                if multi_step:
+                                if track_steps:
                                     chunk_step_stats[step["id"]] = {
                                         "records": len(records),
                                         "written": step_written,
@@ -2034,7 +2128,7 @@ class SchemaExtractWorkflow:
                             "written": prev["written"] + written,
                             "failed": prev["failed"] + len(batch_failures),
                         }
-                        if multi_step:
+                        if track_steps:
                             # 分步计数聚合进来源级 step_totals（get_progress/结果摘要用）
                             for sid, stat in chunk_step_stats.items():
                                 total = step_totals.setdefault(
@@ -2096,8 +2190,8 @@ class SchemaExtractWorkflow:
                 "rows": total_rows,
                 "written": total_written,
                 "failed": len(source_failures),
-                # 分步聚合计数（多步脚本才有；单步摘要形状保持不变）
-                **({"steps": step_totals} if multi_step else {}),
+                # 分步聚合计数（多步脚本/chain 模式；单步单跑摘要形状保持不变）
+                **({"steps": step_totals} if track_steps else {}),
             }
             return {
                 "source": step_id,
@@ -2109,7 +2203,7 @@ class SchemaExtractWorkflow:
                 "failures": source_failures,
                 "watermark": read_summary.get("watermark"),
                 "pkCursor": read_summary.get("pkCursor"),
-                **({"steps": step_totals} if multi_step else {}),
+                **({"steps": step_totals} if track_steps else {}),
             }
 
         results = await asyncio.gather(*(extract_source(source) for source in plan["sources"]))
@@ -2166,10 +2260,10 @@ class SchemaExtractWorkflow:
                     retry_policy=ACTIVITY_RETRY_POLICY,
                 )
 
-        # 多步脚本的全局分步聚合计数（跨来源求和）。status 供任务详情
-        # pipeline_steps 把每步渲染成「成功」；单步脚本不加该键，结果形状与历史一致。
+        # 多步脚本（及 chain 模式）的全局分步聚合计数（跨来源求和）。status 供任务
+        # 详情 pipeline_steps 把每步渲染成「成功」；单步单跑不加该键，形状与历史一致。
         aggregated_steps: dict[str, dict[str, int]] = {}
-        if multi_step:
+        if track_steps:
             for r in results:
                 for sid, stat in (r.get("steps") or {}).items():
                     agg = aggregated_steps.setdefault(
@@ -2190,9 +2284,12 @@ class SchemaExtractWorkflow:
                     "steps": {
                         sid: {**stat, "status": "COMPLETED"}
                         for sid, stat in aggregated_steps.items()
-                    }
+                    },
+                    # chain 外层阶段命名（label 优先）与单 transform 步命名（函数名）
+                    "schemaLabel": plan.get("label") or plan["name"],
+                    "functionName": plan["functionName"],
                 }
-                if multi_step
+                if track_steps
                 else {}
             ),
             "failures": {
@@ -2209,8 +2306,15 @@ class SchemaExtractWorkflow:
         }
 
     @workflow.query
+    def get_steps(self) -> dict[str, Any]:
+        """chain 模式实时分步状态（旧 kg.custom.chain get_steps 同契约，前端直读）。"""
+        return {"current": self._current_schema, "steps": self._chain_steps}
+
+    @workflow.query
     def get_progress(self) -> dict[str, Any]:
         return {
+            "chain": bool(self._chain_steps),
+            "schema": self._current_schema,
             "current": self._current_source,
             "sources": self._sources,
             "slots": self._slots,
@@ -2282,9 +2386,23 @@ async def record_schema_script_run(request: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "status": status}
 
 
+@workflow.defn(name="kg.schema.extract.chain")
+class SchemaExtractChainWorkflow(SchemaExtractWorkflow):
+    """多脚本串行链：复用 SchemaExtractWorkflow 全部逻辑，payload.schemaIds ≥2 时串行逐 Schema 抽取。
+
+    temporalio 要求 defn 子类显式重写 run；分发在基类 run 顶端完成，行为全部继承。
+    详情页按 workflowType 区分 chain 渲染（每 Schema 一个抽屉，内层为脚本 STEPS 步）。
+    """
+
+    @workflow.run
+    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
+        return await super().run(request)
+
+
 WORKFLOW_CLASSES = [
     ConfigurableWorkflow,
     SchemaExtractWorkflow,
+    SchemaExtractChainWorkflow,
 ]
 
 ACTIVITIES = [

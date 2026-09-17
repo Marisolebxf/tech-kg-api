@@ -23,10 +23,12 @@ const emit = defineEmits<{
 
 const { showToast } = useToast()
 
+type TaskType = 'extract' | 'chain'
+const taskType = ref<TaskType>('extract')
 const name = ref('')
 const runNow = ref(true)
 
-// 数据抽取任务（唯一类型）：选 Schema（须已传脚本且绑定来源表），平台分批并发喂数转换
+// 数据抽取任务：选 Schema（须已传脚本且绑定来源表），平台分批并发喂数转换
 const extractSchemaId = ref('')
 const extractBatchSize = ref<number | null>(null)
 const extractSchemas = ref<SchemaDefinition[]>([])
@@ -36,6 +38,9 @@ const schemasLoading = ref(false)
 // 大模型/Embedding/MySQL 数据源/数据库四项已下线：抽取读源走 Schema 来源绑定，
 // 脚本 ctx 资源缺省回落 env 默认（temporal_workflows._resolve_resources）
 const graphSpace = computed(() => currentGraphSpace())
+// 多脚本串行任务：按序串联多个 Schema 抽取脚本（kg.schema.extract.chain）
+const chainPick = ref('')
+const chainSteps = ref<Array<{ id: string; name: string }>>([])
 const since = ref('')
 
 const executeMode = ref<'once' | 'recurring'>('once')
@@ -55,10 +60,12 @@ const sinceError = computed(() =>
   since.value.trim() ? validateText('增量游标', since.value, SINCE_RULE) : null,
 )
 
-const canSubmit = computed(() =>
-  Boolean(name.value.trim() && extractSchemaId.value)
-  && !nameError.value && !sinceError.value,
-)
+const canSubmit = computed(() => {
+  if (!name.value.trim()) return false
+  if (nameError.value || sinceError.value) return false
+  if (taskType.value === 'chain') return chainSteps.value.length >= 2
+  return Boolean(extractSchemaId.value)
+})
 
 async function loadExtractSchemas(force = false) {
   if (schemasLoading.value) return
@@ -79,9 +86,12 @@ async function loadExtractSchemas(force = false) {
 }
 
 function reset() {
+  taskType.value = 'extract'
   name.value = ''
   extractSchemaId.value = ''
   extractBatchSize.value = null
+  chainPick.value = ''
+  chainSteps.value = []
   runNow.value = true
   since.value = ''
   executeMode.value = 'once'
@@ -100,8 +110,36 @@ watch(() => props.open, (open) => {
 watch(graphSpace, () => {
   // 换空间后原选择不再属于该空间：清空并按新空间重查
   extractSchemaId.value = ''
+  chainSteps.value = []
   loadExtractSchemas(true)
 })
+
+function schemaOptionLabel(s: SchemaDefinition) {
+  return `${s.label}（${s.kind === 'entity' ? '实体' : '关系'} · ${s.name}）`
+}
+
+function addChainStep(value: string | number | boolean | Record<string, any> | undefined) {
+  const id = String(value ?? '')
+  if (!id) return
+  if (chainSteps.value.some((s) => s.id === id)) {
+    showToast('该 Schema 已在队列中', 'warning')
+    return
+  }
+  const schema = extractSchemas.value.find((s) => s.id === id)
+  chainSteps.value.push({ id, name: schema ? schemaOptionLabel(schema) : id })
+  chainPick.value = ''
+}
+
+function removeChainStep(index: number) {
+  chainSteps.value.splice(index, 1)
+}
+
+function moveChainStep(index: number, delta: -1 | 1) {
+  const target = index + delta
+  if (target < 0 || target >= chainSteps.value.length) return
+  const steps = chainSteps.value
+  ;[steps[index], steps[target]] = [steps[target], steps[index]]
+}
 
 async function submit() {
   if (!canSubmit.value || submitting.value) return
@@ -109,8 +147,9 @@ async function submit() {
   try {
     const job = await createJob({
       name: name.value.trim(),
-      taskType: 'extract',
-      schemaId: extractSchemaId.value,
+      taskType: taskType.value,
+      schemaId: taskType.value === 'extract' ? extractSchemaId.value : undefined,
+      schemaIds: taskType.value === 'chain' ? chainSteps.value.map((s) => s.id) : undefined,
       batchSize: extractBatchSize.value || undefined,
       schedule: executeMode.value === 'recurring'
         ? { kind: 'cron', cron: buildScheduleCron(frequency.value, executionTime.value, weekday.value), timezone: 'Asia/Shanghai' }
@@ -154,16 +193,19 @@ async function submit() {
                 role="status"
               >暂无可抽取 Schema——请先在 Schema 管理页上传抽取脚本并绑定来源表</small>
             </div>
-            <div class="job-type-static">数据抽取</div>
+            <!-- label 会把点击转发给 a-select 内部 input 造成"开→关"双切换，包 a-select 的字段一律用 div -->
+            <a-select v-model="taskType" class="job-select" aria-label="任务类型">
+              <a-option value="extract">数据抽取</a-option>
+              <a-option value="chain">多脚本串行</a-option>
+            </a-select>
           </div>
         </div>
 
-        <div class="job-row">
-          <!-- label 会把点击转发给 a-select 内部 input 造成"开→关"双切换，包 a-select 的字段一律用 div -->
+        <div v-if="taskType === 'extract'" class="job-row">
           <div class="job-field">
             <span>目标 Schema（已传脚本并绑定来源表）</span>
             <a-select v-model="extractSchemaId" class="job-select" :loading="schemasLoading" placeholder="选择要抽取的实体/关系" allow-search allow-clear>
-              <a-option v-for="s in extractSchemas" :key="s.id" :value="s.id">{{ s.label }}（{{ s.kind === 'entity' ? '实体' : '关系' }} · {{ s.name }}）</a-option>
+              <a-option v-for="s in extractSchemas" :key="s.id" :value="s.id">{{ schemaOptionLabel(s) }}</a-option>
             </a-select>
           </div>
           <label class="job-field">
@@ -172,8 +214,33 @@ async function submit() {
           </label>
         </div>
 
+        <template v-else>
+          <div class="job-field">
+            <span>串联 Schema 队列（按顺序串行执行，任一失败即中止）</span>
+            <a-select :model-value="chainPick" class="job-select" :loading="schemasLoading" placeholder="搜索并添加 Schema" allow-search allow-clear @change="addChainStep">
+              <a-option v-for="s in extractSchemas" :key="s.id" :value="s.id">{{ schemaOptionLabel(s) }}</a-option>
+            </a-select>
+            <ol v-if="chainSteps.length" class="chain-steps">
+              <li v-for="(step, i) in chainSteps" :key="step.id">
+                <em>{{ i + 1 }}</em>
+                <code>{{ step.name }}</code>
+                <button type="button" title="上移" aria-label="上移" :disabled="i === 0" @click="moveChainStep(i, -1)">↑</button>
+                <button type="button" title="下移" aria-label="下移" :disabled="i === chainSteps.length - 1" @click="moveChainStep(i, 1)">↓</button>
+                <button type="button" title="移除" aria-label="移除" class="danger" @click="removeChainStep(i)">×</button>
+              </li>
+            </ol>
+            <small v-if="chainSteps.length === 1" class="muted-warn">多脚本串行任务至少选择 2 个 Schema</small>
+          </div>
+          <div class="job-row">
+            <label class="job-field">
+              <span>批大小（默认 500，对每个 Schema 生效）</span>
+              <input aria-label="500" v-model.number="extractBatchSize" type="number" min="1" max="5000" placeholder="500" />
+            </label>
+          </div>
+        </template>
+
         <label class="job-field">
-          <span>增量游标 since（可空）</span>
+          <span>增量游标 since（可空，对每个 Schema 生效）</span>
           <input aria-label="如 2026-08-01 00:00:00" v-model="since" :maxlength="SINCE_RULE.max" placeholder="如 2026-08-01 00:00:00" />
           <small v-if="sinceError" class="field-error">{{ sinceError }}</small>
         </label>
@@ -243,7 +310,6 @@ async function submit() {
 .job-field>input:not([type="file"]){box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:14px;outline:0;box-shadow:none}
 .job-field>input:not([type="file"]):hover{border-color:#4080ff}
 .job-field>input:not([type="file"]):focus,.job-field>input:not([type="file"]):focus-visible{border-color:#004ecc;outline:0;box-shadow:0 0 0 2px rgba(0,78,204,.1)}
-.job-type-static{box-sizing:border-box;display:flex;align-items:center;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;color:#1d2129;font-size:14px;line-height:22px}
 :deep(.job-select.arco-select-view){display:inline-flex;box-sizing:border-box;width:100%;min-width:0;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;align-items:center}
 :deep(.job-select.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
 :deep(.job-select.arco-select-view:focus-within),:deep(.job-select.arco-select-view-focus){border-color:#004ecc;background:#fff!important;box-shadow:0 0 0 2px rgba(0,78,204,.1)!important}
@@ -256,6 +322,13 @@ async function submit() {
 .job-launch-dialog footer button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:14px;font-weight:400;cursor:pointer}
 .job-launch-dialog footer .primary{border-color:#004ecc;background:#004ecc;color:#fff}
 .job-launch-dialog footer button:disabled{opacity:.5;cursor:not-allowed}
+.chain-steps{display:flex;flex-direction:column;gap:6px;margin:6px 0 0;padding:0;list-style:none}
+.chain-steps li{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid #d5e4f7;border-radius:5px;background:#f8fbff}
+.chain-steps em{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#e9f2ff;color:#004ecc;font-size:12px;line-height:20px;font-style:normal;font-weight:400}
+.chain-steps code{flex:1;padding:1px 5px;border-radius:3px;background:#edf4ff;color:#004ecc;font-family:inherit;font-size:12px;line-height:20px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chain-steps button{width:24px;height:24px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:12px;line-height:20px;font-weight:400;cursor:pointer}
+.chain-steps button:disabled{opacity:.35;cursor:not-allowed}
+.chain-steps button.danger{border-color:#f6b9b4;color:#b42318}
 .muted-warn{margin:0;color:#ff7d00;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schedule-preview{margin:0;color:#4e5969;font-size:12px;line-height:20px}
 .field-error{color:#e4322d;font-size:12px;line-height:18px}

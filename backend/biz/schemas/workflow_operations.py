@@ -152,12 +152,16 @@ class JobScheduleSpec(BaseModel):
 
 
 class JobCreateRequest(BaseModel):
-    """任务中心新建任务：extract 数据抽取（唯一类型，D2 后脚本通道已收敛到 Schema 管理）。"""
+    """任务中心新建任务：extract 数据抽取 / chain 多脚本串行（串联 Schema 抽取脚本）。"""
 
     name: str = Field(min_length=1, max_length=128)
-    task_type: Literal["extract"] = Field(default="extract", alias="taskType")
-    # 目标 Schema（须已传脚本且绑定来源表）
+    task_type: Literal["extract", "chain"] = Field(default="extract", alias="taskType")
+    # extract：目标 Schema（须已传脚本且绑定来源表）
     schema_id: str | None = Field(default=None, alias="schemaId")
+    # chain：按序串联的 Schema 列表（每个须已传脚本且绑定来源表；顺序即执行顺序）
+    schema_ids: list[str] | None = Field(
+        default=None, min_length=2, max_length=20, alias="schemaIds"
+    )
     batch_size: int | None = Field(default=None, ge=1, le=5000, alias="batchSize")
     schedule: JobScheduleSpec = Field(default_factory=JobScheduleSpec)
     run_now: bool = Field(default=False, alias="runNow")
@@ -174,9 +178,12 @@ class JobCreateRequest(BaseModel):
 
 
 class JobUpdateRequest(BaseModel):
-    """编辑任务：名称 / 资源选择器 / cron。"""
+    """编辑任务：名称 / 资源选择器 / cron；chain 任务可改 schemaIds（同 id 重建步序）。"""
 
     name: str | None = Field(default=None, min_length=1, max_length=128)
+    schema_ids: list[str] | None = Field(
+        default=None, min_length=2, max_length=20, alias="schemaIds"
+    )
     schedule: JobScheduleSpec | None = None
     llm_config_id: str | None = Field(default=None, alias="llmConfigId")
     embedding_config_id: str | None = Field(default=None, alias="embeddingConfigId")

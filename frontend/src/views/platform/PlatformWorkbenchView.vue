@@ -8,7 +8,6 @@ import {
 import { useRouter } from 'vue-router'
 import { runNgql, type GraphConsoleResult } from '../../api/graphConsole'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
-import { useGraphSpaceStore } from '../../stores/graphSpace'
 import ListPagination from '../../components/list-pagination.vue'
 import { useClientPagination } from '../../composables/use-client-pagination'
 import { getErrorMessage } from '../../api/http'
@@ -273,13 +272,8 @@ const processingReason = ref('')
 const processingStartDate = ref('2026-07-12')
 const processingEndDate = ref('2026-07-13')
 const isActionLoading = ref(false)
-
-/**
- * 实际请求使用的 TRSGraph 图空间：跟随右上角全局图空间选择器。
- *
- * 页面内不再单独提供图空间下拉，nGQL 与图算法两种模式共用全局选择。
- */
-const graphSpaceStore = useGraphSpaceStore()
+// 查询统一跟随顶栏全局图空间。
+let graphContextVersion = 0
 
 /** 查询模式：nGQL 直查 | 图算法。 */
 const queryMode = ref<'ngql' | 'algo'>('ngql')
@@ -299,7 +293,6 @@ const {
 } = useClientPagination(ngqlRecords, 20)
 
 // ---------- 图算法模式 ----------
-/** 图算法空间跟随顶栏全局选择器（切换即重载边类型与引擎状态）。 */
 const algoSpace = computed(() => currentGraphSpace())
 const selectedAlgorithm = ref(GRAPH_ALGORITHMS[0].id)
 const algoLabels = ref<string[]>([])
@@ -583,6 +576,9 @@ function formatNgqlCell(value: unknown): string {
 }
 
 async function handleNgqlQuery(): Promise<void> {
+  if (ngqlLoading.value) return
+  const context = graphContextVersion
+  const space = currentGraphSpace()
   const statement =
     ngqlStatement.value.trim()
 
@@ -601,18 +597,17 @@ async function handleNgqlQuery(): Promise<void> {
 
   try {
     // 图空间跟随右上角全局选择器（后端按 X-Graph-Space 路由）
-    ngqlResult.value =
-      await runNgql(
-        currentGraphSpace(),
-        statement,
-      )
+    const result = await runNgql(space, statement)
+    if (context !== graphContextVersion) return
+    ngqlResult.value = result
   } catch (error) {
+    if (context !== graphContextVersion) return
     showToast(
       getErrorMessage(error, 'nGQL 执行失败'),
       'warning',
     )
   } finally {
-    ngqlLoading.value = false
+    if (context === graphContextVersion) ngqlLoading.value = false
   }
 }
 
@@ -623,38 +618,31 @@ let algoMetadataLoadedFor = ''
 async function loadAlgoMetadata(force = false): Promise<void> {
   if (!algoSpace.value) return
   if (!force && algoMetadataLoadedFor === algoSpace.value) return
+  const context = graphContextVersion
+  const space = algoSpace.value
   algoMetadataLoading.value = true
   try {
-    algoMetadata.value = await fetchGraphAlgorithmMetadata(algoSpace.value)
-    algoMetadataLoadedFor = algoSpace.value
+    const metadata = await fetchGraphAlgorithmMetadata(space)
+    if (context !== graphContextVersion) return
+    algoMetadata.value = metadata
+    algoMetadataLoadedFor = space
   } catch (error) {
+    if (context !== graphContextVersion) return
     showToast(getErrorMessage(error, '图算法元数据加载失败'), 'warning')
   } finally {
-    algoMetadataLoading.value = false
+    if (context === graphContextVersion) algoMetadataLoading.value = false
   }
 }
 
-// 全局图空间切换：清空既有查询结果，防止跨空间陈旧数据继续展示
-watch(
-  () => graphSpaceStore.current,
-  () => {
-    ngqlResult.value = null
-    resetNgqlPage()
-    // 图算法作业与结果绑定提交时的空间：停轮询并清空展示，避免跨空间陈旧数据
-    stopAlgoPoll()
-    algoJob.value = null
-    algoJobSpace.value = ''
-    algoResult.value = null
-    resetAlgoPage()
-  },
-)
-
 async function refreshAlgoEngine(): Promise<void> {
   if (!algoSpace.value) return
+  const context = graphContextVersion
   try {
     const engine = await fetchGraphAlgorithmEngine(algoSpace.value)
+    if (context !== graphContextVersion) return
     algoMetadata.value = { edgeTypes: algoMetadata.value?.edgeTypes ?? [], engine }
   } catch (error) {
+    if (context !== graphContextVersion) return
     showToast(getErrorMessage(error, '算法引擎状态检测失败'), 'warning')
   }
 }
@@ -668,6 +656,7 @@ function stopAlgoPoll(): void {
 
 function scheduleAlgoPoll(): void {
   stopAlgoPoll()
+  if (queryMode.value !== 'algo' || activeTab.value !== 'query') return
   algoPollTimer = window.setTimeout(() => {
     void pollAlgoJob()
   }, 3000)
@@ -678,8 +667,11 @@ async function pollAlgoJob(): Promise<void> {
   // 离开图算法面板或查询页签即停轮询
   if (!algoJob.value || !algoJobSpace.value) return
   if (queryMode.value !== 'algo' || activeTab.value !== 'query') return
+  const context = graphContextVersion
+  const jobId = algoJob.value.jobId
   try {
-    const job = await getAlgorithmJob(algoJobSpace.value, algoJob.value.jobId)
+    const job = await getAlgorithmJob(algoJobSpace.value, jobId)
+    if (context !== graphContextVersion || algoJob.value?.jobId !== jobId) return
     algoJob.value = job
     algoPollFailures = 0
     if (job.status === 'succeeded') {
@@ -690,6 +682,7 @@ async function pollAlgoJob(): Promise<void> {
       scheduleAlgoPoll()
     }
   } catch (error) {
+    if (context !== graphContextVersion || algoJob.value?.jobId !== jobId) return
     showToast(getErrorMessage(error, '算法作业状态查询失败'), 'warning')
     // 连续 3 次轮询失败即停止，避免页面后台空转打接口
     algoPollFailures += 1
@@ -699,10 +692,15 @@ async function pollAlgoJob(): Promise<void> {
 
 async function fetchAlgoResult(): Promise<void> {
   if (!algoJob.value || !algoJobSpace.value) return
+  const context = graphContextVersion
+  const jobId = algoJob.value.jobId
   try {
-    algoResult.value = await getAlgorithmJobResult(algoJobSpace.value, algoJob.value.jobId)
+    const result = await getAlgorithmJobResult(algoJobSpace.value, jobId)
+    if (context !== graphContextVersion || algoJob.value?.jobId !== jobId) return
+    algoResult.value = result
     resetAlgoPage()
   } catch (error) {
+    if (context !== graphContextVersion || algoJob.value?.jobId !== jobId) return
     showToast(getErrorMessage(error, '算法结果获取失败'), 'warning')
   }
 }
@@ -710,12 +708,16 @@ async function fetchAlgoResult(): Promise<void> {
 /** 手动刷新作业状态；仍在运行则重新挂上轮询。 */
 async function refreshAlgoJob(): Promise<void> {
   if (!algoJob.value || !algoJobSpace.value) return
+  const context = graphContextVersion
+  const jobId = algoJob.value.jobId
   try {
-    const job = await getAlgorithmJob(algoJobSpace.value, algoJob.value.jobId)
+    const job = await getAlgorithmJob(algoJobSpace.value, jobId)
+    if (context !== graphContextVersion || algoJob.value?.jobId !== jobId) return
     algoJob.value = job
     if (job.status === 'succeeded') await fetchAlgoResult()
     else if (job.status === 'running') scheduleAlgoPoll()
   } catch (error) {
+    if (context !== graphContextVersion || algoJob.value?.jobId !== jobId) return
     showToast(getErrorMessage(error, '算法作业状态查询失败'), 'warning')
   }
 }
@@ -733,6 +735,7 @@ function collectAlgoParams(): Record<string, number | string | boolean> {
 }
 
 async function handleAlgoSubmit(): Promise<void> {
+  if (algoSubmitLoading.value) return
   if (!algoSpace.value) {
     showToast('请选择图空间', 'warning')
     return
@@ -773,9 +776,14 @@ async function handleAlgoSubmit(): Promise<void> {
 
   algoSubmitLoading.value = true
   stopAlgoPoll()
+  const context = graphContextVersion
+  const space = algoSpace.value
+  algoJob.value = null
+  algoResult.value = null
+  algoPollFailures = 0
   try {
     const job = await submitAlgorithmJob({
-      space: algoSpace.value,
+      space,
       algorithm: def.id,
       labels: [...algoLabels.value],
       params: collectAlgoParams(),
@@ -784,9 +792,10 @@ async function handleAlgoSubmit(): Promise<void> {
       encodeId: algoEncodeId.value,
       partitionNum: algoPartitionNum.value,
     })
+    if (context !== graphContextVersion) return
     algoJob.value = job
-    // 冻结提交时的图空间：轮询与取结果固定使用，中途切空间不受影响
-    algoJobSpace.value = algoSpace.value
+    // 使用发出请求时的空间；切换空间后旧请求不会再回写页面。
+    algoJobSpace.value = space
     algoResult.value = null
     resetAlgoPage()
     if (job.status === 'running') {
@@ -797,9 +806,10 @@ async function handleAlgoSubmit(): Promise<void> {
       showToast('算法作业执行失败，详情见作业状态面板', 'warning')
     }
   } catch (error) {
+    if (context !== graphContextVersion) return
     showToast(getErrorMessage(error, '算法作业提交失败'), 'warning')
   } finally {
-    algoSubmitLoading.value = false
+    if (context === graphContextVersion) algoSubmitLoading.value = false
   }
 }
 
@@ -809,18 +819,38 @@ watch(selectedAlgorithm, (id) => {
 })
 
 // 进入图算法模式：懒加载元数据；离开：停轮询
-watch(queryMode, (mode) => {
-  if (mode === 'algo') void loadAlgoMetadata()
-  else stopAlgoPoll()
+watch([queryMode, activeTab], ([mode, tab]) => {
+  if (mode === 'algo' && tab === 'query') {
+    void loadAlgoMetadata()
+    if (algoJob.value?.status === 'running') scheduleAlgoPoll()
+  } else stopAlgoPoll()
 })
 
 // 切换图空间：边类型与引擎状态按空间重新加载
 watch(algoSpace, () => {
+  graphContextVersion += 1
+  stopAlgoPoll()
+  ngqlResult.value = null
+  ngqlLoading.value = false
+  resetNgqlPage()
+  algoLabels.value = []
+  algoWeightCols.value = {}
+  algoMetadata.value = null
+  algoMetadataLoading.value = false
   algoMetadataLoadedFor = ''
-  if (queryMode.value === 'algo') void loadAlgoMetadata()
-})
+  algoJob.value = null
+  algoJobSpace.value = ''
+  algoResult.value = null
+  algoSubmitLoading.value = false
+  algoPollFailures = 0
+  resetAlgoPage()
+  if (queryMode.value === 'algo' && activeTab.value === 'query') void loadAlgoMetadata()
+}, { flush: 'sync' })
 
-onUnmounted(stopAlgoPoll)
+onUnmounted(() => {
+  graphContextVersion += 1
+  stopAlgoPoll()
+})
 
 async function loadPlatformOverview(): Promise<void> {
   try {
@@ -833,7 +863,8 @@ async function loadPlatformOverview(): Promise<void> {
       dataMode: data.dataMode,
       warnings: data.warnings,
     }
-    assetOverviewGroups.value = data.assetOverviewGroups
+    // 属性值数据卡片（key=property）为占位统计（待接入），总览页不展示
+    assetOverviewGroups.value = data.assetOverviewGroups.filter((item) => item.key !== 'property')
     assetChangeRows.value = data.assetChangeRows
     entityStructure.value = data.entityStructure
     relationStructure.value = data.relationStructure
@@ -914,7 +945,7 @@ const pageMeta = computed(() => {
     </header>
 
     <main v-if="activeTab === 'overview'" class="platform-content platform-overview">
-      <section class="platform-summary-grid" aria-label="实体、关系与属性值数据总览">
+      <section class="platform-summary-grid" aria-label="实体与关系数据总览">
         <article v-for="group in assetOverviewGroups" :key="group.key" :class="['kg-panel', 'platform-summary-card', `is-${group.key}`]">
           <header><div><strong>{{ group.title }}</strong><span><i />数据已更新</span></div><button type="button" @click="selectedAssetChange = group.key">查看今日新增 →</button></header>
           <div class="platform-summary-card__main"><section><strong>{{ group.total }}</strong><span>{{ group.totalLabel }}</span></section><section class="is-added"><strong>{{ group.added }}</strong><span>{{ group.addedLabel }}</span></section></div>
@@ -1867,7 +1898,7 @@ print(response.json())</pre>
 .platform-metric.is-red strong { color: #b42318; }
 
 /* 加载态预留就绪高度（3 卡实测 202px）：避免数据到达撑高后把下方资产饼图挤出视口闪现 */
-.platform-summary-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;min-height:202px; }
+.platform-summary-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;min-height:202px; }
 .platform-summary-card { position:relative;min-width:0;overflow:hidden; }
 .platform-summary-card::after { position:absolute;right:-35px;bottom:-55px;width:130px;height:130px;border-radius:50%;background:rgba(22,93,255,.045);content:"";pointer-events:none; }
 .platform-summary-card>header { display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px;border-bottom:1px solid #dce8f8;background:rgba(255,255,255,.75); }

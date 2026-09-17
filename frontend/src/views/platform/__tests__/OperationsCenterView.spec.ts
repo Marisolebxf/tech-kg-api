@@ -1,4 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { h } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import OperationsCenterView from '../OperationsCenterView.vue'
@@ -7,8 +8,10 @@ const mocks = vi.hoisted(() => ({
   getProductionReviews: vi.fn(),
   rerunExtractFailures: vi.fn(),
   getProductionReview: vi.fn(),
-  getProductionReviewAuditLogs: vi.fn(),
   deleteProductionReview: vi.fn(),
+  getExecution: vi.fn(),
+  getTask: vi.fn(),
+  TRIGGER_SOURCE_LABEL: { MANUAL: '手动触发', SCHEDULE: '定期触发', RERUN: '重新执行' },
 }))
 vi.mock('../../../api/workflowOperations', () => ({ ...mocks }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
@@ -36,7 +39,8 @@ const renderReview = () => {
       components: {
         ASelect: { name: 'ASelect', setup: () => () => null },
         AInput: { name: 'AInput', setup: () => () => null },
-        AModal: { name: 'AModal', setup: () => () => null },
+        // 弹窗 stub 直渲染默认插槽，让日志弹窗内容可被断言
+        AModal: { name: 'AModal', setup: (_props: Record<string, unknown>, { slots }: { slots: { default?: () => unknown } }) => () => h('div', slots.default?.()) },
         APagination: { name: 'APagination', setup: () => () => null },
       },
       stubs: { RouterLink: true },
@@ -61,6 +65,10 @@ const batchButton = (wrapper: ReturnType<typeof mount>) => wrapper.get('.rerun-b
 beforeEach(() => {
   mocks.getProductionReviews.mockReset().mockResolvedValue({ items: C_ROWS, total: 4, page: 1, pageSize: 10 })
   mocks.rerunExtractFailures.mockReset().mockResolvedValue({ executions: [], cases: 2 })
+  mocks.getProductionReview.mockReset()
+  mocks.deleteProductionReview.mockReset()
+  mocks.getExecution.mockReset()
+  mocks.getTask.mockReset()
 })
 
 afterEach(() => {
@@ -137,5 +145,51 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     await batchButton(wrapper).trigger('click')
 
     expect(mocks.rerunExtractFailures).toHaveBeenCalledWith({ caseIds: ['MR-1', 'MR-2'] })
+  })
+
+  it('更新时间表头三态排序：默认 → 新→旧 → 旧→新 → 默认，请求带对应 sort 参数', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    const th = wrapper.get('.th-time-sort')
+    expect(th.text()).toContain('更新时间')
+
+    await th.trigger('click')
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ sort: 'updated_desc' }))
+    await th.trigger('click')
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ sort: 'updated_asc' }))
+    await th.trigger('click')
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ sort: undefined }))
+  })
+
+  it('「日志」弹窗展示关联工作流执行日志（重跑执行优先，概要/阶段/任务日志）', async () => {
+    mocks.getProductionReview.mockResolvedValue({
+      ...caseRow('MR-1', 'RERUN_FAILED'),
+      data: { input: { executionId: 'EXEC-ORIG-1', rerunExecutionId: 'EXEC-RERUN-9', attempt: 2 } },
+    })
+    mocks.getExecution.mockResolvedValue({
+      id: 'EXEC-RERUN-9', definitionId: 'schema:paper', workflowId: 'wf-1', status: 'COMPLETED',
+      startedAt: '2026-09-17 10:00:00', completedAt: '2026-09-17 10:02:00', triggerSource: 'RERUN',
+      taskId: 'PI-1', message: '执行完成', output: { sources: [{ written: 120, failed: 1 }], failures: { count: 1 } },
+    })
+    mocks.getTask.mockResolvedValue({
+      id: 'PI-1', logs: ['2026-09-17 10:00:00 执行启动', '阶段回写：1 个 stage'],
+      steps: [{ id: 's1', phase: '数据处理', name: '抽取', status: '成功', count: '120', abnormal: '0', duration: '2m', description: '' }],
+    })
+
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+    // 操作列第一个按钮是「日志」
+    await wrapper.findAll('tbody .rerun-link')[0].trigger('click')
+    await flushPromises()
+
+    // 重跑执行优先展示，且不拉旧的审计日志
+    expect(mocks.getExecution).toHaveBeenCalledWith('EXEC-RERUN-9')
+    expect(mocks.getTask).toHaveBeenCalledWith('PI-1')
+    expect(wrapper.text()).toContain('执行概要')
+    expect(wrapper.text()).toContain('重新执行')
+    expect(wrapper.text()).toContain('写入 120 · 失败 1')
+    expect(wrapper.text()).toContain('阶段回写：1 个 stage')
+    expect(wrapper.text()).not.toContain('处理时间线')
   })
 })

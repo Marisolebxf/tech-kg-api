@@ -886,9 +886,8 @@ data:
   WORKFLOW_MYSQL_PORT: "3306"
   WORKFLOW_MYSQL_DATABASE: "techkg_control"
   WORKFLOW_MYSQL_USERNAME: "root"
-  WORKFLOW_DEMO_DATA_ENABLED: "false"
 
-  # ---- S3（operator-rustfs，schema 脚本 / operator 包 / milvus 内部存储共用）----
+  # ---- S3（operator-rustfs，schema 脚本 / milvus 内部存储共用）----
   SCHEMA_S3_ENDPOINT_URL: "http://operator-rustfs:9000"
   SCHEMA_S3_BUCKET: "bkg-schema-scripts"
   SCHEMA_S3_REGION: "us-east-1"

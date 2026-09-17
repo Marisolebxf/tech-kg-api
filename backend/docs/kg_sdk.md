@@ -2,21 +2,23 @@
 
 > 本文档的在线版本在平台文档中心（部署后访问 `/docs/sdk/`，VitePress，源 `frontend/docsite/sdk/`）。
 > 面向在平台上编写"实体/关系抽取脚本"的开发者。脚本运行时由平台注入一个 `Context` 对象，
-> 里面提供已配置好的 MySQL / trs-graph / Milvus / LLM / embedding 客户端，以及一个带
-> `watermark`（上次成功运行时间）的 `config`，支撑增量抽取。
+> 里面提供已配置好的 MySQL / trs-graph / Milvus / LLM / embedding 客户端，以及该来源绑定的
+> `watermark`（上次成功抽取游标），支撑增量语义。
 
 ## 1. 概览
 
-平台支持两种用户脚本：
+平台只有**一条**用户脚本通道：Schema 管理页上传 `.py`（SSE 流式校验：语法检查 → LLM 安全校验 → 存 S3），由 Temporal workflow `kg.schema.extract` 执行。脚本**只做转换**——平台按来源绑定分批读源表行、把行放进 payload 调脚本，脚本返回实体/关系 JSON，写图/消歧/索引/推水位全部由平台完成。
 
-| 工作流类型 | 脚本签名 | Context 入口 |
+| 脚本形态 | 签名 | 说明 |
 |---|---|---|
-| `kg.custom.steps`（多步流水线，推荐） | `def step_xxx(payload: dict, ctx: Context) -> dict` | `ctx` 已被平台包装成 `Context`，直接用 `ctx.mysql` 等 |
-| `kg.custom.python`（单函数，旧） | `def workflow(payload: dict) -> dict` | `from kg_sdk import current_context; ctx = current_context()` |
+| 单步（默认） | `def transform(payload: dict) -> dict` | 旧入口名 `workflow` 仍兼容，新脚本请用 `transform` |
+| 多步 | 顶层声明 `STEPS = [{"id": ..., "fn": ...}, ...]`，每个 `fn` 均为单参顶层函数 | 与 `transform` 互斥，最长 16 步（`service/script_steps.py` 上传时静态校验） |
 
-`Context` 里的客户端是**懒构造**的——第一次访问 `.mysql` / `.graph` / `.milvus` / `.llm` / `.embedding` 时才建连，并缓存。
+> 原 `kg.custom.python` / `kg.custom.steps` 独立上传通道（`POST /definitions/python|steps`、双参 step runner）已于 2026-09-14 清理批次4-D2 下线；多步能力并入脚本顶层 `STEPS` 声明。
 
-**降级约定**：触发任务时如果没有选某个资源（数据源/图空间/Milvus/LLM/embedding），对应的属性返回 `None`，**不抛异常**。脚本务必 `if ctx.llm:` 判空后再用——这与 `infra.llm.get_llm_client()` 既有约定一致。一条脚本里同时用数据库、LLM、向量库做"抽取→对齐→落库"非常常见。
+`Context` 里的客户端是**懒构造**的——第一次访问 `.mysql` / `.graph` / `.milvus` / `.llm` / `.embedding` 时才建连，并缓存。需要 Context 时用 `from kg_sdk import current_context`。
+
+**降级约定**：触发时如果没有选某个资源（图空间/Milvus/LLM/embedding），对应的属性返回 `None`，**不抛异常**。脚本务必 `if ctx.llm:` 判空后再用——这与 `infra.llm.get_llm_client()` 既有约定一致。
 
 `Context` 由平台在 worker 子进程外解析好"连接参数"（不是活对象，无法跨进程 pickle），序列化进 `KG_SCRIPT_CTX` 环境变量；`kg_sdk.Context` 据此按需构造客户端。密钥经 env 传递，安全面与脚本本就能读到的 `MYSQL_PASSWORD` 等 `sub_env` 一致。
 
@@ -30,7 +32,7 @@ from kg_sdk import Context, current_context
 
 | 属性 | 类型 | 说明 |
 |---|---|---|
-| `ctx.mysql` | `infra.mysql.MySQLClient \| None` | 触发时所选 MySQL 数据源 + 库；未选则 `None`。可用 `.create_session()` / `.session_scope()` |
+| `ctx.mysql` | `infra.mysql.MySQLClient \| None` | 触发任务所选 MySQL 数据源 + 库；未显式选时**自动回退到来源表绑定的数据源**（脚本内可 `ctx.mysql.engine` 加载查找表） |
 | `ctx.graph` | `infra.graph_db.TRSGraphClient \| None` | 触发时所选图数据空间（NebulaGraph 图空间）；构造时已 `connect()`。未选则 `None` |
 | `ctx.milvus` | `pymilvus.MilvusClient \| None` | 触发时所选向量数据空间（Milvus 向量库）+ 库；未选则 `None` |
 | `ctx.llm` | `infra.llm.LLMClient \| None` | 触发时所选语言模型（OpenAI 兼容，chat）；未选或缺 key 则 `None`。`.synthesize(prompt)` 返回 `str \| None` |
@@ -40,61 +42,41 @@ from kg_sdk import Context, current_context
 
 | 属性 | 类型 | 说明 |
 |---|---|---|
-| `ctx.config.watermark` | `str \| None` | 上次**成功**运行该 (definition, step) 的时间（ISO `YYYY-MM-DDTHH:MM:SS`）。首次运行为 `None` |
-| `ctx.config.checkpoint` | `dict \| None` | 上次成功运行脚本自填的检查点（见 §3） |
-| `ctx.step_id` | `str \| None` | 当前 step id（`kg.custom.steps` 有；单参为 `None`） |
-| `ctx.attempt` | `int \| None` | 当前 step 的 activity 重试次数（第 1 次 = 1；单参为 `None`） |
-| `ctx.prev_outputs` | `dict` | 前面各 step 的返回值，键为 step id（`kg.custom.steps` 有；单参为 `{}`） |
+| `ctx.config.watermark` | `str \| None` | 该来源绑定**上次成功抽取**的时间列水位（ISO `YYYY-MM-DDTHH:MM:SS`）。首次运行为 `None`。**只读**（见 §3） |
+| `ctx.config.checkpoint` | `dict \| None` | querySql 绑定走 pk keyset 游标时，游标在 `checkpoint.pkCursor` |
+| `ctx.step_id` | `str` | 观测标识：多步形如 `source:{绑定id}#{stepId}`，单步为 `_default` |
+| `ctx.attempt` | `int` | 当前步 activity 的 Temporal 重试次数（第 1 次 = 1） |
+| `ctx.prev_outputs` | `dict` | 本批次已完成各步的返回值 `{stepId: 输出}`（单步脚本为 `{}`） |
 | `ctx.execution_id` | `str \| None` | 工作流执行记录 id |
 | `ctx.task_id` | `str \| None` | 任务中心 task id |
-| `ctx.definition_id` | `str \| None` | 工作流定义 id（水位按此 + step_id 索引） |
+| `ctx.definition_id` | `str \| None` | 合成工作流定义 id（`schema-extract-{key}`） |
 
-> 单参脚本（`workflow(payload)`）只有 `definition_id` / `execution_id` / `task_id` / `config`（水位 step 固定为 `"_default"`）可用；`step_id` / `attempt` / `prev_outputs` 为 `None`/`{}`，因为单函数脚本没有 step 概念。
+## 3. 水位：只读语义
 
-## 3. 增量抽取
+水位由**平台管理，脚本不可覆盖**——脚本返回值里的 `_watermark` / `_checkpoint` 元字段会被剥离忽略（`_strip_watermark_meta`）。语义：
 
-`config.watermark` 记录上次成功运行时间。平台在 step **成功返回后**自动写入本次水位（默认 = 当前时间）。脚本可以在返回 dict 里带 `_watermark` / `_checkpoint` 覆盖默认值——例如用本批数据的最大 `updated_at` 做水位，下次只跑增量。
+- 每个**来源绑定**独立水位（`kg_script_watermark`，键 `schema-extract-{key}` + `source:{绑定行 id}`），类比 Kafka consumer offset；
+- 只有该来源**全部批次整链成功后**才一次性推进；任一批失败不推进，重跑重读上次成功水位、重处理同一窗口（幂等）；不做 per-step 水位；
+- 读取模式：`query_sql` 绑定走水位/pk keyset 游标（合成唯一 pk，游标存 `checkpoint.pkCursor`）；普通表走 LIMIT/OFFSET（与旧脚本同语义）；
+- `ctx.config.watermark` / `ctx.config.checkpoint` 可读——脚本自读库（经 `ctx.mysql`）做查找表加载等辅助读取时可作参考，但抽取主链路的增量由平台读源时保证。
 
-```python
-def step_load(payload, ctx):
-    sql = "SELECT id, name, updated_at FROM paper WHERE updated_at > :wm ORDER BY updated_at"
-    rows = []
-    with ctx.mysql.session_scope() as s:
-        result = s.execute(text(sql), {"wm": ctx.config.watermark or "1970-01-01"})
-        rows = [dict(r._mapping) for r in result]
-    # 用本批最大 updated_at 做下次水位；空批则保留旧水位（传 None → 平台写 now()，
-    # 这里显式回传旧值更精确：空批不前进水位）
-    max_ts = max((r["updated_at"] for r in rows), default=None)
-    return {
-        "count": len(rows),
-        "items": rows,
-        "_watermark": max_ts.isoformat() if max_ts else ctx.config.watermark,
-    }
-```
+## 4. 多步脚本：顶层 `STEPS` 声明
 
-- 平台写水位用 `_watermark`（ISO 字符串，解析失败回退 `now()`）和 `_checkpoint`（任意 JSON，例如 `{"last_id": 12345}`）。
-- 这两个字段会从 step 输出里剥离，不会出现在任务详情页的 step 结果里。
-- step 失败/超时不写水位——下次重置（reset）后重读上次成功水位，重处理同一窗口，幂等。
-- 不同 step 各有独立水位（按 `(definition_id, step_id)` 索引）。
-
-## 4. 多步流水线：`prev_outputs` 链式
-
-`kg.custom.steps` 里前一步返回的 dict 自动作为后一步 `ctx.prev_outputs[step_id]`：
+脚本顶层用 list 字面量声明步清单（上传时 `service/script_steps.py` 纯 ast 静态校验：id 匹配 `[A-Za-z0-9_-]{1,64}` 且唯一、fn 必须是顶层函数、与 `transform` 互斥、最长 16 步）：
 
 ```python
-def step_extract(payload, ctx):
-    papers = ctx.prev_outputs.get("load", {}).get("items", [])
-    extracted = []
-    for p in papers:
-        ents = extract_entities(p["name"], ctx)   # 用 ctx.llm
-        extracted.append({"paper_id": p["id"], "entities": ents})
-    return {"items": extracted}
-
-def step_persist(payload, ctx):
-    for rec in ctx.prev_outputs.get("extract", {}).get("items", []):
-        ctx.graph.merge_node(["Paper"], {"vid": rec["paper_id"], ...})
-    return {"persisted": len(rec)}
+STEPS = [
+    {"id": "normalize", "fn": "step_normalize"},   # 第一步消费平台读的源表行
+    {"id": "resolve",   "fn": "step_resolve"},     # 后续步消费上一步输出
+    {"id": "emit",      "fn": "step_emit"},
+]
 ```
+
+- 第 1 步 payload 与单步相同：`{"rows": [...], "source_table": "库.表", "kind": "entity"|"relation", "source": {...}}`；
+- 第 N>1 步 payload 为 `{"input": 上一步完整输出, "source_table": ..., "kind": ..., "source": ...}`（**不再带 rows**）；`ctx.prev_outputs` 可读本批次已完成各步输出；
+- 每步一次 `execute_transform` activity，第 k 步失败由 Temporal **只重试第 k 步**（前序步输出经事件历史重放）；任意一步返回 `entities`/`edges` 即在该步之后写图（实体再接消歧）；
+- 步间透传有大小防护（input 单值 512KB / prevOutputs 单值 128KB / 额外键合计 256KB，超限截断为 `_truncated` 标记并告警）；
+- `failures` / `pendingReview` 跨步聚合进现有链路（见 §9）。
 
 ## 5. LLM / embedding 降级
 
@@ -119,32 +101,33 @@ def embed_and_store(rec, ctx):
         ctx.milvus.upsert("paper", [{**rec, "dense_vector": vec}])
 ```
 
-## 6. 单参脚本入口
+## 6. 脚本入口与 `current_context`
 
-`kg.custom.python` 的 `workflow(payload)` 是单参签名，平台不向其传 `ctx`。需要 Context 时用 `current_context()`：
+入口是单参 `transform(payload)`，平台不向其传 `ctx`。需要 Context 时用 `current_context()`：
 
 ```python
 from kg_sdk import current_context
 
 
-def workflow(payload):
+def transform(payload):
     ctx = current_context()
     if ctx is None:
-        # legacy 运行 / 本地 dev：没有注入 context，自行回退
+        # 本地 dev：没有注入 context，自行回退
         return {"status": "no-context"}
-    with ctx.mysql.session_scope() as s:
-        ...
-    return {"status": "ok", "_watermark": "2026-08-25T12:00:00"}
+    rows = payload["rows"]  # 平台读好的本批行
+    ...
+    return {"entities": [...]}
 ```
 
-`current_context()` 在同一子进程内缓存；未配置 `KG_SCRIPT_CTX` 时返回 `None`（不影响没用 SDK 的老脚本）。
+`current_context()` 在同一子进程内缓存；未配置 `KG_SCRIPT_CTX` 时返回 `None`（不影响没用 SDK 的脚本）。
 
 ## 7. 触发端字段名
 
-调用 `POST /api/v1/workflow-system/definitions/{id}/execute` 时，除 `payload` 外可选传以下字段（均为可选；不传 = 该资源走默认/env，对应 `ctx` 属性为 `None`）。资源统一在**配置管理**页维护，共五个分类：**语言模型 / 向量模型 / MySQL 数据源 / 向量数据空间 / 图数据空间**；列表行内可直接 停用/启用、删除，右上角"＋ 新建配置"新增：
+创建任务（`POST /api/v1/workflow-system/jobs`，`taskType` 固定为 `extract`，选 Schema + 批大小）时可选传以下资源字段（不传 = 该资源走默认/env，对应 `ctx` 属性为 `None`；`ctx.mysql` 未选时回退来源绑定数据源）。资源统一在**配置管理**页维护，共五个分类：**语言模型 / 向量模型 / MySQL 数据源 / 向量数据空间 / 图数据空间**：
 
 | 字段 | 作用 |
 |---|---|
+| `schemaId` + `batchSize` | 目标 Schema（须已有脚本+来源绑定）与批大小（1–5000） |
 | `mysqlDatasourceId` | 选 MySQL 数据源（配置管理 → MySQL 数据源） |
 | `mysqlDatabase` | 覆盖该数据源的默认库（下拉从 `GET /mysql-datasources/{id}/databases` 取） |
 | `graphSpace` | 选图数据空间（配置管理 → 图数据空间，`GET /graph-spaces` 列出） |
@@ -152,122 +135,77 @@ def workflow(payload):
 | `milvusDatabase` | 覆盖该配置的默认库（`GET /milvus-configs/{id}/databases`） |
 | `llmConfigId` | 选语言模型（配置管理 → 语言模型，OpenAI 兼容 chat 模型） |
 | `embeddingConfigId` | 选向量模型（配置管理 → 向量模型） |
-| `since` | 业务自带的"起始时间"提示（透传进 payload，与 `watermark` 无关） |
 
-示例：
+一次性直触发（不经任务）走 `POST /api/v1/schema-management/schemas/{id}/extract`，仅接受 `graphSpace` / `batchSize`。回填走 `POST /schemas/{id}/backfill`（清水位全量重跑，脚本落后时需 `force`）。
 
-```bash
-curl -X POST http://api:8000/api/v1/workflow-system/definitions/paper-pipeline/execute \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "payload": {"stage": "all", "max_records": 1000},
-    "mysqlDatasourceId": "MYSQL-AB12CD34",
-    "mysqlDatabase": "gkx_element",
-    "graphSpace": "techkg",
-    "milvusConfigId": "MILVUS-EF56GH78",
-    "milvusDatabase": "techkg",
-    "llmConfigId": "LLM-1234ABCD",
-    "embeddingConfigId": "EMB-5678EFGH"
-  }'
-```
+## 8. 完整最小示例：STEPS 三步流水线
 
-## 8. 完整最小示例：4-step 论文流水线
-
-`paper_pipeline.py`（上传到 `POST /workflow-system/definitions/steps`，附 step manifest）：
+`paper_pipeline.py`（Schema 管理页上传，SSE 校验通过后存 S3）：
 
 ```python
-"""论文实体流水线：增量加载 → LLM 抽取 → 向量化 → 落图。"""
+"""论文实体流水线：行规整 → 查找表富集 → 输出实体。"""
 
-import json
 from sqlalchemy import text
 
+from kg_sdk import current_context
 
-def step_load(payload, ctx):
-    """增量加载：只取 watermark 之后的论文。"""
-    with ctx.mysql.session_scope() as s:
-        rows = s.execute(
-            text(
-                "SELECT id, title, abstract, updated_at FROM paper "
-                "WHERE updated_at > :wm ORDER BY updated_at LIMIT :n"
-            ),
-            {"wm": ctx.config.watermark or "1970-01-01", "n": payload.get("max_records", 500)},
-        ).fetchall()
-    items = [
-        {"id": r.id, "title": r.title, "abstract": r.abstract, "updated_at": r.updated_at}
-        for r in rows
-    ]
-    max_ts = max((r["updated_at"] for r in items), default=None)
-    return {
-        "items": items,
-        "_watermark": max_ts.isoformat() if max_ts else ctx.config.watermark,
-        "_checkpoint": {"batch_size": len(items)},
-    }
-
-
-def step_extract(payload, ctx):
-    """LLM 抽取实体（未配 LLM 则降级规则）。"""
-    items = ctx.prev_outputs.get("load", {}).get("items", [])
-    out = []
-    for p in items:
-        if ctx.llm is None:
-            ents = []
-        else:
-            raw = ctx.llm.synthesize(f"从论文标题抽取关键实体，返回 JSON 数组：\n{p['title']}")
-            ents = json.loads(raw) if raw else []
-        out.append({"paper_id": p["id"], "entities": ents})
-    return {"items": out}
-
-
-def step_embed(payload, ctx):
-    """向量化标题并写 Milvus（未配则跳过）。"""
-    items = ctx.prev_outputs.get("extract", {}).get("items", [])
-    if ctx.embedding is None or ctx.milvus is None:
-        return {"embedded": 0, "skipped": True}
-    titles = [i["paper_id"] for i in items]  # 简化：实际应 embed 标题
-    vecs = ctx.embedding.embed([i["paper_id"] for i in items]) or []
-    records = [{"vid": i["paper_id"], "dense_vector": v} for i, v in zip(items, vecs)]
-    if records:
-        ctx.milvus.upsert("paper", records)
-    return {"embedded": len(records)}
-
-
-def step_persist(payload, ctx):
-    """落图：merge Paper 节点 + AUTHOR 边。"""
-    items = ctx.prev_outputs.get("extract", {}).get("items", [])
-    for p in items:
-        ctx.graph.merge_node(["Paper"], {"vid": p["paper_id"], "title": p.get("title", "")})
-    return {"persisted": len(items)}
-```
-
-对应 manifest（上传时 `steps` 表单字段，JSON 编码）：
-
-```json
-[
-  {"id": "load",    "name": "增量加载",  "functionName": "step_load",    "timeoutSeconds": 600,  "retryPolicy": {"maximumAttempts": 3}},
-  {"id": "extract","name": "LLM 抽取",  "functionName": "step_extract", "timeoutSeconds": 1200, "retryPolicy": {"maximumAttempts": 3}},
-  {"id": "embed",  "name": "向量化",    "functionName": "step_embed",    "timeoutSeconds": 600,  "retryPolicy": {"maximumAttempts": 2}},
-  {"id": "persist","name": "落图",      "functionName": "step_persist", "timeoutSeconds": 1800, "retryPolicy": {"maximumAttempts": 1}}
+STEPS = [
+    {"id": "normalize", "fn": "step_normalize"},
+    {"id": "enrich",    "fn": "step_enrich"},
+    {"id": "emit",      "fn": "step_emit"},
 ]
+
+
+def step_normalize(payload):
+    """第 1 步：消费平台读的源表行，规整字段。"""
+    rows = payload["rows"]
+    return {"items": [
+        {"id": r["id"], "title": (r.get("title") or "").strip(), "org_id": r.get("org_id")}
+        for r in rows
+    ]}
+
+
+def step_enrich(payload):
+    """第 2 步：用 ctx.mysql 查找表富集（mysql 未选时自动用来源绑定数据源）。"""
+    ctx = current_context()
+    items = payload["input"]["items"]
+    if ctx is not None and ctx.mysql is not None:
+        with ctx.mysql.session_scope() as s:
+            org_names = dict(
+                s.execute(text("SELECT id, name FROM org")).fetchall()
+            )  # 简化示意
+        for it in items:
+            it["org_name"] = org_names.get(it.get("org_id"))
+    return {"items": items}
+
+
+def step_emit(payload):
+    """第 3 步：输出实体（平台负责写图/消歧/索引/推水位）。"""
+    items = payload["input"]["items"]
+    return {
+        "entities": [
+            {"id": it["id"], "props": {"id": it["id"], "name": it["title"]}}
+            for it in items
+        ]
+    }
 ```
 
-触发（带选择器，见 §7）后：每步成功，平台自动写 `(paper-pipeline, load)` 等水位；下次只增量加载 `updated_at > 上次水位` 的论文。失败步走 `POST /task-center/tasks/{id}/retry` reset，已完成步靠 Temporal event history replay 不重跑，失败步重读上次成功水位重处理同一窗口。
+每步成功由平台按来源推进水位；失败批不推水位，重跑重读上次成功水位重处理同一窗口。
 
-## 9. 平台喂数模式（Schema 抽取）
+## 9. 平台喂数模式（与自读库的区别）
 
-在 Schema 管理页上传脚本并绑定来源表后，`POST /api/v1/schema-management/schemas/{id}/extract`
-触发 `kg.schema.extract` 工作流。与 §6 的自读库模式不同，**平台负责读源表与写图**：
+平台喂数是**唯一**模式：平台负责读源表与写图，脚本只做转换。
 
 1. 平台按每张来源表绑定的**时间列水位**（默认 `update_time`，每张表独立）分批读取行：
-   `SELECT * FROM db.table WHERE time_col > :水位 ORDER BY time_col, pk LIMIT :batchSize`；
-2. 把行 JSON 放进 `payload["rows"]`，调脚本的 `workflow(payload)`（**入口签名不变**）；
-3. 脚本**只做转换**：返回实体或关系 dict，不自读库、不自写图；
-4. 平台对返回结果 `merge_node` / `merge_edge` 写图（只写 Schema 目录中未删除的属性——已删属性
-   「插空」即省略键），然后推进该来源表的水位。
+   `SELECT * FROM db.table WHERE time_col > :水位 ORDER BY time_col, pk LIMIT :batchSize`（querySql 绑定走水位/pk keyset；普通表走 LIMIT/OFFSET）；
+2. 把行 JSON 放进 `payload["rows"]`，调脚本的 `transform(payload)`（旧 `workflow` 名兼容）；
+3. 脚本**只做转换**：返回实体或关系 dict，不自读库（查找表除外）、不自写图；
+4. 平台对返回结果写图（实体走 nGQL `INSERT VERTEX`；只写 Schema 目录中未删除的属性——已删属性「插空」即省略键），然后推进该来源表的水位。
 
-返回格式（二选一，`props` 键名须在 Schema 目录内）：
+返回格式（`props` 键名须在 Schema 目录内）：
 
 ```python
-def workflow(payload):
+def transform(payload):
     rows = payload["rows"]  # 本批行（JSON dict）
     table = payload["source_table"]  # "库名.表名"
     kind = payload["kind"]  # "entity" | "relation"
@@ -282,9 +220,10 @@ def workflow(payload):
 
 注意：
 
-- 脚本返回的 `_watermark` / `_checkpoint` 元字段**被忽略**——水位由平台按批次最大时间列值管理；
-- 需要外部资源（MySQL/图/LLM）时仍可用 `current_context()`（触发时可带 §7 的选择器）；
-- 多张来源表并行抽取、单表内批次串行；执行进度在任务中心 / `get_progress` 查询可见。
+- 可选 `failures: [{recordId, error}]`——逐行解析失败由平台记 **T_EXTRACT_FAIL** 审核 case（`POST /manual-reviews/production/rerun-extract-failures` 可按执行重跑）；
+- 可选 `pendingReview: [...]`——低置信/消歧候选进审核队列（item 可带 `templateId=T_LINK`，同名冲突裁决）；
+- 脚本返回的 `_watermark` / `_checkpoint` 元字段**被忽略**——水位由平台按批次最大时间列值管理（见 §3）；
+- 多张来源表并行抽取、单表内批次串行；执行进度在任务中心 / `get_progress` 查询可见，多步脚本带分步计数 `steps: {stepId: {records, written, failed}}`。
 
 ## 附：相关后端端点
 
@@ -294,10 +233,10 @@ def workflow(payload):
 | `POST /mysql-datasources/{id}/set-default` · `POST /{id}/test` · `GET /{id}/databases` | 设默认 / 测连 / 列库 |
 | `GET/POST/PUT/DELETE /api/v1/milvus-configs[/{id}]` + `/set-default` `/test` `/databases` | Milvus 配置同款 |
 | `GET/POST/PUT/DELETE /api/v1/embedding-config[/{id}]` + `/set-default` `/test` | embedding 模型同款 |
-| `GET/POST/PUT/DELETE /api/v1/llm-config/llm-configs[/{id}]` + `/set-default` `/test` | LLM 同款（已有） |
+| `GET/POST/PUT/DELETE /api/v1/llm-config/llm-configs[/{id}]` + `/set-default` `/test` | LLM 同款 |
 | `GET /api/v1/graph-spaces` | 列出图空间（只读） |
-| `POST /api/v1/workflow-system/definitions/steps` | 上传 step pipeline 脚本 + manifest |
-| `POST /api/v1/workflow-system/definitions/{id}/execute` | 触发（带 §7 选择器） |
+| `POST /api/v1/workflow-system/jobs` | 创建 extract 任务（§7 资源选择器） |
 | `PUT /api/v1/schema-management/schemas/{id}/sources` | 绑定来源表（§9 平台喂数） |
-| `POST /api/v1/schema-management/schemas/{id}/extract` | 触发平台喂数抽取（§9） |
+| `POST /api/v1/schema-management/schemas/{id}/extract` | 触发平台喂数抽取（`graphSpace`/`batchSize`） |
+| `POST /api/v1/schema-management/schemas/{id}/backfill` | 清水位全量重跑（脚本落后需 `force`） |
 | `GET /mysql-datasources/{id}/tables?database=` · `GET /{id}/tables/{t}/columns` | 来源表绑定选表 / 选列 |

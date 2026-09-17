@@ -1,6 +1,6 @@
 # 重建图谱数据所需脚本
 
-> 在 TRSGraph `dev` 空间重建「国内外论文/期刊」「重点关注科技企业关系」「科技产业链点 TOP-N 事件关系」三类数据需要运行的脚本。统一在 `backend/` 下执行：`cd backend && PYTHONPATH=. .venv/bin/python <脚本>` 或上传到工作流平台由 `workflow(payload)` 调用。
+> 在 TRSGraph `dev` 空间重建「国内外论文/期刊」「重点关注科技企业关系」「科技产业链点 TOP-N 事件关系」三类数据需要运行的脚本。统一在 `backend/` 下执行：`cd backend && PYTHONPATH=. .venv/bin/python <脚本>`。（原 kg.custom.python 上传通道已于 2026-09-14 D2 下线，脚本一律手工执行。）
 
 ## 一、国内外论文、期刊（Paper / Person 作者 / Journal / Report + AUTHORED_BY / PUBLISHED_IN / CITED_BY 等）
 
@@ -12,14 +12,14 @@
    - `script/paper_journal_relation/attach_provenance.py`（挂 organization_base 溯源 tag）
    - `script/paper_journal_relation/backfill_edge_confidence.py`（回填边 confidence）
    - `script/paper_journal_relation/backfill_stub_journals.py`（补桩 Journal + PUBLISHED_IN）
-4. 工作流入口（全量/增量，封装上述点边）：`script/workflow/paper_journal_chain_etl.py`，`function_name="workflow"`，`payload={}` 全量、`{"mode":"incremental","since":"2026-07-01"}` 增量。
+4. 封装脚本（D5 暂缓保留）：`script/workflow/paper_journal_chain_etl.py` 封装上述点边（`workflow(payload)`，`{}` 全量、`{"mode":"incremental","since":"2026-07-01"}` 增量）——平台提交通道已随 D2 下线，当前仅可 import 后手工调用。
 
 ## 二、重点关注科技企业关系（Organization / Person 任职 / News-Event + EMPLOYED_BY / 治理类边）
 
 1. 建 schema：`python -m script.organization_entity_etl init-schema`（Organization/Person/News/Event 等 tag）。
 2. 灌机构域实体（Organization/Person/News/Event/Project/Product 顶点，**只建点不建边**）：`python -m script.organization_entity_etl load --full --write`（可加 `--table dwd_org_base_info` 单表）。
 3. 灌机构域关系（EMPLOYED_BY/EXECUTIVE_OF/LEGAL_REP_OF/SHAREHOLDER_OF/AFFILIATED_WITH/INVOLVED_IN 等，**只建边不建点**）：`python -m script.organization_relation_etl --relation all --write`（可 `--relation governance`/`project` 等单类，先 `--dry-run` 预览）。
-4. 工作流入口：`script/workflows/organization_ingest_workflow.py`，`function_name="workflow"`（封装实体+关系）。
+4. 封装脚本（D5 暂缓保留）：`script/workflows/organization_ingest_workflow.py`（`workflow(payload)` 封装实体+关系）——同上，仅可 import 后手工调用。
 5. Milvus 索引（向量检索用，可选）：`python -m script.organization_milvus_index`。
 - 说明：企业背景（行业地位/经营状况）从 Organization 节点 `extra_json` 摊平读取，无需单独脚本；治理类边无任职起止时间，合作时间仅项目/专利/学者工作经历可取（已知数据现状）。
 
@@ -28,7 +28,7 @@
 1. 灌产业链节点与边：`script/industry_chain_etl/load_industry_chain_graph.py`（dwd_industry_chain_info → IndustryChain/IndustryNode + HAS_NODE/CHILD_OF/DOWNSTREAM_OF；dwd_org_industry_chain_dtl → BELONGS_TO_NODE(org→node, chain_score)；dwd_industry_chain_news_info → News + COVERS_CHAIN）。建缺失 schema 并加载。
 2. 回填链节点关联企业：`script/industry_chain_etl/backfill_chain_org_nodes.py`（补 org_{antitypic} 节点及其 BELONGS_TO_NODE）。
 3. 事件与风险（INVOLVED_IN org→Event）：事件顶点来自 `organization_entity_etl load`，INVOLVED_IN 边来自 `organization_relation_etl --relation event`（或 `all`）。TOP-N 服务按 event_type 权重 + chain_score 排序取 TOP-N，无需单独脚本。
-- 说明：`paper_journal_chain_etl.py` 工作流的「产业链」部分也覆盖链节点/边，可与论文/期刊一并提交执行。
+- 说明：`paper_journal_chain_etl.py` 的「产业链」部分也覆盖链节点/边，可与论文/期刊一并手工执行。
 - **事件 ↔ 专家**：TOP-N 只读图。缺高管 Person / `EXECUTIVE_OF` 时页面只有事件没有专家。共享空间 Person 若是学者 schema，须先 `init-schema` 再灌高管。补完图后旧 API 也能出专家；本分支才会覆盖替换瑞芯微/励民。映射、先点后边、最小补数与接口验收见 `docs/industry_chain_topn_event_expert_etl.md`。
 
 ## 运行顺序建议（三类都要重建时）

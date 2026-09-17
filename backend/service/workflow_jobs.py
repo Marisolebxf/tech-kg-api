@@ -137,30 +137,42 @@ class WorkflowJobService:
 
     async def create_job(self, actor: PlatformActor, request: dict[str, Any]) -> dict[str, Any]:
         task_type = request.get("taskType", "extract")
-        if task_type != "extract":
-            # single/chain/upload 已随 D2 下线：脚本唯一通道是 Schema 管理
-            raise WorkflowJobError("任务类型必须是 extract（数据抽取）")
+        if task_type not in {"extract", "chain"}:
+            # single/upload 已随 D2 下线：脚本唯一通道是 Schema 管理。chain 为
+            # 多 Schema 串行（kg.schema.extract.chain），串联对象同样是 Schema 脚本。
+            raise WorkflowJobError("任务类型必须是 extract（数据抽取）或 chain（多脚本串行）")
         name = (request.get("name") or "").strip()
         if not name:
             raise WorkflowJobError("任务名称不能为空")
 
         job_hex = uuid4().hex[:12]
-        schema_id = request.get("schemaId")
-        if not schema_id:
-            raise WorkflowJobError("数据抽取任务必须选择 Schema")
-        from service.schema_extraction import (
-            build_extract_definition,
-            ensure_extract_script_ready,
-            persist_extract_definition,
-        )
+        if task_type == "extract":
+            schema_id = request.get("schemaId")
+            if not schema_id:
+                raise WorkflowJobError("数据抽取任务必须选择 Schema")
+            from service.schema_extraction import (
+                build_extract_definition,
+                ensure_extract_script_ready,
+                persist_extract_definition,
+            )
 
-        # 预检：目录已登记脚本+来源，且脚本对象在 S3 真实存在（系统 Schema 的
-        # 种子 script 行不传脚本本体，不预检的话要等 worker 重试耗尽才 FAILED）
-        try:
-            info = ensure_extract_script_ready(schema_id)
-        except Exception as exc:
-            raise WorkflowJobError(str(exc)) from exc
-        definition = persist_extract_definition(build_extract_definition(info))
+            # 预检：目录已登记脚本+来源，且脚本对象在 S3 真实存在（系统 Schema 的
+            # 种子 script 行不传脚本本体，不预检的话要等 worker 重试耗尽才 FAILED）
+            try:
+                info = ensure_extract_script_ready(schema_id)
+            except Exception as exc:
+                raise WorkflowJobError(str(exc)) from exc
+            definition = persist_extract_definition(build_extract_definition(info))
+        else:
+            infos = self._load_chain_infos(request.get("schemaIds"))
+            from service.schema_extraction import (
+                build_extract_chain_definition,
+                persist_extract_chain_definition,
+            )
+
+            definition = persist_extract_chain_definition(
+                build_extract_chain_definition(infos, f"chain-{job_hex}")
+            )
 
         schedule = request.get("schedule") or {"kind": "once"}
         if schedule.get("kind") not in {"once", "cron"}:
@@ -187,7 +199,11 @@ class WorkflowJobService:
         for key in _SELECTOR_KEYS:
             if request.get(key) not in (None, ""):
                 job[key] = request[key]
-        job["schemaId"] = schema_id
+        if task_type == "extract":
+            job["schemaId"] = request.get("schemaId")
+        else:
+            job["schemaIds"] = [step["schemaId"] for step in definition["steps"]]
+            job["schemaLabels"] = [step["label"] for step in definition["steps"]]
         if request.get("batchSize"):
             job["batchSize"] = min(max(int(request["batchSize"]), 1), 5000)
 
@@ -216,6 +232,15 @@ class WorkflowJobService:
                 else:
                     job[key] = request[key]
         job["updatedAt"] = _now()
+
+        # chain 任务改步序：同 id 原地重建定义（只影响后续触发）
+        if job.get("taskType") == "chain" and request.get("schemaIds") is not None:
+            definition = await self._rebuild_chain_definition(job, request["schemaIds"])
+            job["schemaIds"] = [step["schemaId"] for step in definition["steps"]]
+            job["schemaLabels"] = [step["label"] for step in definition["steps"]]
+            job["definitionName"] = definition.get("name", job.get("definitionName"))
+            if job["schedule"].get("kind") == "cron" and job.get("scheduleId"):
+                await self._create_job_schedule(job["scheduleId"], job, definition)
 
         new_schedule = request.get("schedule")
         if new_schedule and new_schedule.get("kind") != (job.get("schedule") or {}).get("kind"):
@@ -264,7 +289,20 @@ class WorkflowJobService:
         payload = self.selector_payload(job)
         payload["jobId"] = job["id"]
         payload["jobName"] = job["name"]
-        if job.get("taskType") == "extract":
+        if job.get("taskType") == "chain":
+            from service.schema_extraction import CHAIN_WORKFLOW_TYPE
+
+            if definition.get("workflowType") != CHAIN_WORKFLOW_TYPE:
+                # 存量旧链任务（kg.custom.chain，D2 已下线通道）定义不可执行
+                raise WorkflowJobError(
+                    "该任务是旧版多脚本串行任务（旧脚本上传通道已下线），请删除后按 Schema 重新创建"
+                )
+            payload["schemaIds"] = job.get("schemaIds") or []
+            payload["chainDefinitionId"] = job["definitionId"]
+            payload["triggerSource"] = "MANUAL"
+            if job.get("batchSize"):
+                payload["batchSize"] = job["batchSize"]
+        elif job.get("taskType") == "extract":
             payload["schemaId"] = job.get("schemaId")
             payload["triggerSource"] = "MANUAL"
             if job.get("batchSize"):
@@ -309,6 +347,38 @@ class WorkflowJobService:
 
     # ---------- 辅助 ----------
 
+    def _load_chain_infos(self, schema_ids: Any) -> list[dict[str, Any]]:
+        """校验 chain 步序列表并逐个加载可抽取 schema（已传脚本 + ≥1 来源 + S3 有脚本本体）。"""
+        from service.schema_extraction import ensure_extract_script_ready
+
+        if not isinstance(schema_ids, list) or len(schema_ids) < 2:
+            raise WorkflowJobError("多脚本串行任务至少选择 2 个 Schema")
+        if len(schema_ids) > 20:
+            raise WorkflowJobError("多脚本串行任务最多选择 20 个 Schema")
+        if len(set(schema_ids)) != len(schema_ids):
+            raise WorkflowJobError("多脚本串行任务不能包含重复 Schema")
+        infos: list[dict[str, Any]] = []
+        for schema_id in schema_ids:
+            try:
+                infos.append(ensure_extract_script_ready(schema_id))
+            except Exception as exc:
+                raise WorkflowJobError(f"Schema {schema_id} 不可抽取: {exc}") from exc
+        return infos
+
+    async def _rebuild_chain_definition(
+        self, job: dict[str, Any], schema_ids: Any
+    ) -> dict[str, Any]:
+        """用新的步序在同一定义 id 上原地重建 chain 定义。"""
+        from service.schema_extraction import (
+            build_extract_chain_definition,
+            persist_extract_chain_definition,
+        )
+
+        infos = self._load_chain_infos(schema_ids)
+        return persist_extract_chain_definition(
+            build_extract_chain_definition(infos, job["definitionId"])
+        )
+
     def selector_payload(self, job: dict[str, Any]) -> dict[str, Any]:
         """job 上的 camelCase 选择器 → workflow payload 的 snake_case 键。"""
         payload: dict[str, Any] = {}
@@ -324,6 +394,12 @@ class WorkflowJobService:
         if job.get("taskType") == "extract":
             # kg.schema.extract 收扁平 payload：schemaId/batchSize 直接并入
             schedule_payload["schemaId"] = job.get("schemaId")
+            if job.get("batchSize"):
+                schedule_payload["batchSize"] = job["batchSize"]
+        elif job.get("taskType") == "chain":
+            # chain 同为扁平 payload（sourceKind=extract）：schemaIds/chainDefinitionId 并入
+            schedule_payload["schemaIds"] = job.get("schemaIds") or []
+            schedule_payload["chainDefinitionId"] = job["definitionId"]
             if job.get("batchSize"):
                 schedule_payload["batchSize"] = job["batchSize"]
         schedule = {

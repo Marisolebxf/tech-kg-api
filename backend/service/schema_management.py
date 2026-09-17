@@ -233,20 +233,22 @@ def _execution_actually_running(execution: dict[str, Any]) -> bool:
 
 
 def find_running_extraction(definition: GraphSchemaDefinition) -> dict[str, Any] | None:
-    """查该 Schema 是否有运行中的 kg.schema.extract 执行记录（删除属性前拦截用）。
+    """查该 Schema 是否有运行中的抽取执行（删除属性前拦截用）。
 
+    覆盖两种形态：单 Schema 抽取（payload.schemaId）与 chain 串行链
+    （kg.schema.extract.chain，挂在 chain-{hex} 定义下、payload.schemaIds
+    携带全部串联 Schema）——统一按 payload 匹配，扫最近 200 条执行。
     返回 ``{executionId, name}``（name 为任务中心展示名）或 ``None``。
     """
-    from service.schema_extraction import extract_definition_id
     from service.workflow_repository import repository
 
-    executions = repository.list_executions(
-        definition_id=extract_definition_id(definition.schema_key), limit=100
-    )
+    executions = repository.list_executions(limit=200)
     for execution in executions:
         if execution.get("status") != "RUNNING":
             continue
-        if (execution.get("payload") or {}).get("schemaId") != definition.id:
+        payload = execution.get("payload") or {}
+        chain_schema_ids = payload.get("schemaIds") or []
+        if payload.get("schemaId") != definition.id and definition.id not in chain_schema_ids:
             continue
         if not _execution_actually_running(execution):
             # 陈旧 RUNNING：回写终态，不拦截

@@ -32,6 +32,12 @@ export interface ProcessStep {
   description: string
   risk?: '低风险' | '中风险' | '高风险'
   engine?: string
+  rawStatus?: string
+  input?: Record<string, unknown>
+  output?: Record<string, unknown>
+  error?: string
+  /** chain（kg.schema.extract.chain）任务：抽屉内该 Schema 脚本各转换步（STEPS）聚合。 */
+  activities?: Record<string, PipelineActivityInfo>
 }
 
 export interface ProcessingInstance {
@@ -85,6 +91,11 @@ export interface PipelineStepInfo {
   access?: AccessReport
   /** kg.custom.chain 专用：该脚本内部的 activity steps（Temporal activity 真实状态）。 */
   activities?: Record<string, PipelineActivityInfo>
+  /** kg.schema.extract.chain 专用：该 Schema 抽取的读取/写图/失败行数与阶段描述。 */
+  description?: string
+  records?: number
+  written?: number
+  failed?: number
 }
 
 export interface PipelineActivityInfo {
@@ -95,6 +106,10 @@ export interface PipelineActivityInfo {
   error?: string
   attempt?: number
   access?: AccessReport
+  /** chain 任务：该转换步的读取行数 / 写图条数 / 失败行数。 */
+  records?: number
+  written?: number
+  failed?: number
 }
 
 /** 脚本数据访问溯源报告（后端 sdk/access.py 渲染）。各桶 key 以 `_` 开头的是元信息（_unparsed/_ngql）。 */
@@ -171,6 +186,14 @@ export const rerunExtractFailures = (data: { caseIds?: string[]; executionId?: s
     executions: Array<{ executionId: string; schemaId: string; records: number; cases: number }>
     cases: number
   }>
+
+/** case 事件流水（audit-logs）：创建/领取/重跑/状态变迁，含操作人与时间。 */
+export interface ProductionReviewLogEntry {
+  eventType: string; actorId?: string; actorName?: string; requestId?: string
+  oldStatus?: string; newStatus?: string; detail?: Record<string, unknown>; createdAt: string
+}
+export const getProductionReviewLogs = (id: string) =>
+  unwrap(http.get(`/v1/manual-reviews/production/${id}/audit-logs`)) as Promise<{ items: ProductionReviewLogEntry[] }>
 
 /** kg.custom.steps T_DIRECT 案例直接决策：accept 写图，reject 丢弃。不走 4-eyes claim/submit 流程。
  * candidate 为"修正后的完整候选"（仅 accepted 时有意义）：覆盖候选快照后写图并记审计。 */
@@ -255,10 +278,14 @@ export interface JobScheduleSpec {
 export interface WorkflowJob {
   id: string
   name: string
-  /** 历史值 single/chain/upload 已随 D2 停止新建，仅存量行还带（触发会因 workflow 未注册而失败） */
+  /** single/upload 已随 D2 停止新建；chain 现为 Schema 串行（kg.schema.extract.chain）。存量旧 chain 触发会被服务端拦截。 */
   taskType: 'single' | 'chain' | 'upload' | 'extract'
   definitionIds: string[]
   schemaId?: string
+  /** chain：按序串联的 Schema id 列表（顺序即执行顺序）。 */
+  schemaIds?: string[]
+  /** chain：各串联 Schema 展示名（与 schemaIds 一一对应）。 */
+  schemaLabels?: string[]
   batchSize?: number
   definitionId: string
   definitionName?: string
@@ -286,9 +313,11 @@ export interface WorkflowJob {
 
 export interface JobCreateInput {
   name: string
-  /** D2 后唯一类型：数据抽取（脚本通道收敛到 Schema 管理） */
-  taskType: 'extract'
+  /** extract 数据抽取（单 Schema）/ chain 多脚本串行（≥2 个 Schema 按序串联） */
+  taskType: 'extract' | 'chain'
   schemaId?: string
+  /** chain：按序串联的 Schema 列表（≥2，顺序即执行顺序）。 */
+  schemaIds?: string[]
   batchSize?: number
   schedule?: JobScheduleSpec
   runNow?: boolean

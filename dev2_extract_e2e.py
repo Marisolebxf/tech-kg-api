@@ -135,12 +135,15 @@ def main():
         check=True, capture_output=True,
     )
 
-    # 清理历史遗留的待处理 C 类 case（步骤 6/8 按全局队列断言，需干净起点）
+    # 清理历史遗留的待处理 C 类 case（步骤 6/8 按全局队列断言，需干净起点）；
+    # 批量删除接口已随灰区版移除，逐条物理删除未处理 case
     code, resp = req("GET", "/manual-reviews/production/queue?category=C&statusGroup=pending&pageSize=100")
     stale = [i["id"] for i in (resp.get("data") or {}).get("items") or []]
+    for case_id in stale:
+        code, resp = req("DELETE", f"/manual-reviews/production/{case_id}")
+        ok(code == 200, f"清理历史 C 类 case {case_id}: {str(resp)[:80]}")
     if stale:
-        code, resp = req("POST", "/manual-reviews/production/delete-cases", {"caseIds": stale})
-        ok(code in (200, 201), f"清理历史 C 类 case {len(stale)} 条: {str(resp)[:100]}")
+        print(f"  清理历史 C 类 case {len(stale)} 条")
 
     # 1. 数据源
     step("1. 准备数据源（temporal-mysql-dev2 / techkg_e2e）")

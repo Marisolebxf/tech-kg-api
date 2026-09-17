@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -13,6 +14,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from temporalio import activity, workflow
@@ -558,6 +560,19 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
                 body.close()
             except Exception:  # noqa: BLE001
                 logger.exception("关闭脚本流失败: %s", schema_id)
+    # run 专属脚本副本：把本次 run 用的脚本字节钉进 run 级 key（run 期间不可变）。
+    # worker 中途崩溃换 worker 接手时，execute_transform 凭 runKey + sha256 重新
+    # 物化，版本由校验保证一致；schema 上传新版本删除旧对象也不影响在飞 run。
+    try:
+        workflow_id = activity.info().workflow_id
+    except RuntimeError:
+        workflow_id = f"local-{uuid4().hex}"  # 单测直调无 activity 上下文
+    run_key = f"runs/{workflow_id}/script.py"
+    try:
+        storage.put_bytes(run_key, data, "text/x-python")
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"创建 run 脚本副本失败: {exc}") from exc
+    script_sha256 = hashlib.sha256(data).hexdigest()
     script_path = await asyncio.to_thread(
         _write_private_tempfile,
         prefix=f"kg_schema_extract_{schema_key}_",
@@ -583,6 +598,9 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         "activeProps": active_props,
         "sources": sources,
         "scriptPath": script_path,
+        # run 级脚本副本定位：execute_transform 的 tempfile 丢失时按此重物化
+        "scriptRunKey": run_key,
+        "scriptSha256": script_sha256,
         "functionName": function_name,
         # steps 只放 id/fn 两个 str 键（plan 要经 Temporal 序列化进事件历史）
         "steps": steps,
@@ -823,6 +841,44 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _rematerialize_run_script(request: dict[str, Any]) -> str:
+    """tempfile 丢失时按 run 级 S3 副本重物化脚本；sha256 校验不过即硬失败。
+
+    版本一致性优先：副本内容与本 run 开始时钉住的 sha256 不匹配（理论上不该
+    发生——run key 不可变）或下载失败都直接抛错，交由 Temporal 重试/失败，
+    绝不执行不确定版本的脚本。升级窗口内在飞的旧 plan 没有 run 副本字段，
+    保持旧的明确失败语义。
+    """
+    run_key = request.get("scriptRunKey")
+    expected = request.get("scriptSha256")
+    if not run_key or not expected:
+        raise ValueError(f"脚本不存在且无 run 副本可重物化: {request.get('scriptPath')}")
+    from infra.s3 import get_schema_s3_storage
+
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+    storage = get_schema_s3_storage()
+    body = None
+    try:
+        body = storage.get_object(storage.bucket, run_key)
+        data = body.read()
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"下载 run 脚本副本失败: {run_key}: {exc}") from exc
+    finally:
+        if body is not None:
+            try:
+                body.close()
+            except Exception:  # noqa: BLE001
+                logger.exception("关闭 run 脚本流失败: %s", run_key)
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise RuntimeError(f"run 脚本副本 sha256 校验失败: {run_key}")
+    return await asyncio.to_thread(
+        _write_private_tempfile,
+        prefix="kg_schema_extract_run_",
+        suffix=".py",
+        data=data,
+    )
+
+
 @activity.defn
 async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
     """把批次行交给脚本转换：payload["rows"] = 行 JSON，调脚本入口（默认 transform）。
@@ -845,7 +901,9 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
     """
     script_path = Path(request["scriptPath"])
     if not script_path.is_file():
-        raise ValueError(f"脚本不存在: {script_path}")
+        # worker 崩溃/容器重建导致本地 tempfile 丢失：按 run 副本重物化
+        # （sha256 钉版本，换 worker 接手也拿到同一份字节）
+        script_path = Path(await _rematerialize_run_script(request))
     function_name = request.get("functionName", "transform")
     source = request.get("source") or {}
     kind = request.get("kind", "entity")
@@ -1388,6 +1446,7 @@ class SchemaExtractWorkflow:
         self._sources: dict[str, dict[str, Any]] = {}
         self._slots: dict[str, dict[int, dict[str, Any]]] = {}
         self._current_source: str | None = None
+        self._run_script_object: str | None = None
 
     async def _report_script_run(self, schema_id: str, *, ok: bool, error: str | None) -> None:
         """收尾回写脚本健康信号（best-effort，失败不影响主流程状态）。"""
@@ -1398,6 +1457,8 @@ class SchemaExtractWorkflow:
                     "schemaId": schema_id,
                     "status": "ok" if ok else "failed",
                     "error": error,
+                    # 顺带清理 run 脚本副本（activity 内 best-effort 删除）
+                    "runScriptKey": self._run_script_object,
                 },
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=ACTIVITY_RETRY_POLICY,
@@ -1437,6 +1498,7 @@ class SchemaExtractWorkflow:
             {"id": "_default", "fn": plan["functionName"]}
         ]
         multi_step = bool(plan.get("multiStep"))
+        self._run_script_object = plan.get("scriptRunKey")
 
         # 周期 Schedule 触发：request 是扁平 shape（非 {definitionId, payload}），
         # 直接调注册 activity 落 execution/task 行（幂等）。
@@ -1608,6 +1670,9 @@ class SchemaExtractWorkflow:
                                 step_ctx_id = f"{step_id}#{step['id']}" if multi_step else step_id
                                 transform_request: dict[str, Any] = {
                                     "scriptPath": plan["scriptPath"],
+                                    # run 副本定位（.get 兼容升级窗口内在飞旧 plan 的重放）
+                                    "scriptRunKey": plan.get("scriptRunKey"),
+                                    "scriptSha256": plan.get("scriptSha256"),
                                     "functionName": step["fn"],
                                     "source": source,
                                     "kind": kind,
@@ -1951,6 +2016,18 @@ async def record_schema_script_run(request: dict[str, Any]) -> dict[str, Any]:
         row.last_run_status = status
         row.last_run_error = error if status == "failed" else None
         session.commit()
+    run_key = request.get("runScriptKey")
+    if run_key:
+        # run 脚本副本随 run 结束清理（best-effort：删除失败只记日志，孤儿对象
+        # 无副作用；S3 delete 对不存在 key 幂等，activity 重试安全）
+        try:
+            from infra.s3 import get_schema_s3_storage
+
+            load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+            storage = get_schema_s3_storage()
+            storage.delete_object(storage.bucket, run_key)
+        except Exception:  # noqa: BLE001
+            logger.exception("清理 run 脚本副本失败: %s", run_key)
     return {"ok": True, "status": status}
 
 

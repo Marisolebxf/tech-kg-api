@@ -1,0 +1,107 @@
+# baixinfeng 独立部署(与主部署/lizhou/songfeiyang/yunfei 等互不影响):
+# - 复用主部署的基础设施容器(redis/temporal/milvus/schema-minio/rustfs/m3e,经共享网络 tech-kg-api_app)
+# - MySQL / trs-graph 走宿主机地址(backend/.env,登录已关闭)
+# - api/web 用独立容器名、独立端口(8007/8096)和私有网络
+# 启动:docker compose -f docker-compose.baixinfeng.yml up -d --build
+name: baixinfeng
+
+# 服务名用 api-baixinfeng(compose 默认会把"服务名"注册为各网络的 DNS 别名,
+# 不能叫 api,否则在共享网络上会与主部署的 api 别名轮询冲突)。
+# nginx 的 proxy_pass http://api:8000 由私有网络 app 上的显式别名 api 满足。
+services:
+  api-baixinfeng:
+    build:
+      context: ./backend
+      args:
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+    container_name: tech-kg-api-baixinfeng
+    ports:
+      - "8007:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      # 与主部署共享基础设施容器,按容器名访问
+      REDIS_URL: redis://auth-redis:6379/0
+      AUTH_SESSION_BACKEND: redis
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      # 独立 task queue,避免与主部署/其它部署的 workflow worker 互相抢任务
+      TEMPORAL_TASK_QUEUE: tech-kg-workflows-baixinfeng
+      WORKFLOW_DATABASE_PATH: /var/lib/tech-kg/workflows.db
+      WORKFLOW_SCRIPT_DIR: /var/lib/tech-kg/scripts
+      WORKFLOW_DEMO_DATA_ENABLED: "false"
+      SCHEMA_AUTO_INIT: "true"
+      SCHEMA_S3_ENDPOINT_URL: http://schema-minio:9000
+      SCHEMA_S3_ACCESS_KEY: minioadmin
+      SCHEMA_S3_SECRET_KEY: minioadmin
+      SCHEMA_S3_BUCKET: tech-kg-schema-scripts
+      SCHEMA_S3_REGION: us-east-1
+      SCHEMA_S3_SECURE: "false"
+      OPERATOR_DIR: /app/operators/user
+      OPERATOR_S3_ENDPOINT_URL: http://operator-rustfs:9000
+      OPERATOR_S3_BUCKET: tech-kg-operators
+      OPERATOR_S3_PREFIX: operators
+      OPERATOR_S3_ACCESS_KEY_ID: rustfsadmin
+      OPERATOR_S3_SECRET_ACCESS_KEY: rustfsadmin
+      OPERATOR_S3_REGION: us-east-1
+      PATENT_EMBEDDING_PROVIDER: openai
+      PATENT_EMBEDDING_BASE_URL: http://m3e-embedding:8010/v1
+      PATENT_EMBEDDING_MODEL: moka-ai/m3e-small
+      PATENT_EMBEDDING_DIM: "512"
+      PATENT_EMBEDDING_API_KEY: local-no-auth
+      PATENT_INDEX_STATE_DIR: /app/var/patent_indexes
+      # 受保护接口返回开发管理员上下文需同时满足
+      # AUTH_ENABLED=false + APP_ENV=dev + AUTH_ALLOW_INSECURE_DEV_CONTEXT=true
+      APP_ENV: ${APP_ENV:-dev}
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      AUTH_ALLOW_INSECURE_DEV_CONTEXT: ${AUTH_ALLOW_INSECURE_DEV_CONTEXT:-true}
+      API_DOCS_ENABLED: ${API_DOCS_ENABLED:-true}
+      # 独立部署不跑人工修正后台同步,避免与主部署对同一 MySQL/图库双写
+      CORRECTION_SYNC_WORKER_ENABLED: "false"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - operator-data:/app/operators/user
+      - patent-index-state:/app/var/patent_indexes
+      - workflow-state:/var/lib/tech-kg
+    networks:
+      # 私有网络:显式加 api 别名,供 web 的 nginx proxy_pass http://api:8000 使用
+      app:
+        aliases:
+          - api
+      # 共享网络:只暴露容器名和 api-baixinfeng,不占用 api 别名
+      shared-app: {}
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        VITE_BASE: ${VITE_BASE:-./}
+        VITE_API_BASE: ${VITE_API_BASE:-}
+        VITE_AUTH_ENABLED: ${VITE_AUTH_ENABLED:-false}
+    container_name: tech-kg-web-baixinfeng
+    # 根路径直连部署：镜像为哨兵构建，部署前缀由运行时 APP_BASE 决定（缺省 /bkg_zpt 门户前缀）
+    environment:
+      APP_BASE: ""
+    ports:
+      - "8096:80"
+    depends_on:
+      - api-baixinfeng
+    networks:
+      - app
+    restart: unless-stopped
+
+volumes:
+  operator-data:
+  patent-index-state:
+  workflow-state:
+
+networks:
+  # 本部署私有网络:web 的 nginx proxy_pass http://api:8000 只会解析到本部署的 api
+  app: {}
+  # 主部署的 app 网络,用于按容器名访问 redis/temporal/milvus/minio/rustfs/m3e
+  shared-app:
+    external: true
+    name: tech-kg-api_app

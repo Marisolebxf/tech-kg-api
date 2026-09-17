@@ -25,20 +25,26 @@ const edgeLabels: Record<string, string> = {
   MEMBER_OF: "成员关系",
 };
 
+// 实体类别统一映射到业务口径 12 类（科技专家/机构/企业/论文/专利/项目/
+// 科技成果/产业链/产业链节点/事件/技术主题/院校）；Report/Product 等无法
+// 细分的成果类统一归入科技成果，Journal 按出版机构口径归入机构。
 const entityTypeLabels: Record<string, string> = {
   Person: "科技专家",
   Scholar: "科技专家",
   Expert: "科技专家",
-  Organization: "科研机构",
-  Project: "科研项目",
-  Paper: "论文成果",
-  Patent: "专利成果",
-  PatentFamily: "专利族",
-  Product: "科技产品",
-  Keyword: "研究主题",
-  Event: "科技事件",
-  News: "新闻资讯",
-  Report: "研究报告",
+  Organization: "机构",
+  Project: "项目",
+  Paper: "论文",
+  Patent: "专利",
+  PatentFamily: "专利",
+  Product: "科技成果",
+  Keyword: "技术主题",
+  Event: "事件",
+  News: "事件",
+  Report: "科技成果",
+  Journal: "机构",
+  IndustryChain: "产业链",
+  IndustryNode: "产业链节点",
 };
 
 const graphNodeType = (node: IndirectNode, isCore = false): GraphNodeType => {
@@ -60,7 +66,7 @@ const graphNodeType = (node: IndirectNode, isCore = false): GraphNodeType => {
 };
 
 const displayEntityType = (node: IndirectNode, isCore = false) => {
-  if (isCore) return "核心专家";
+  if (isCore) return "科技专家";
   const semanticLabel = node.labels.find(
     (label) => !["organization_base", "Entity", "Base"].includes(label),
   );
@@ -104,6 +110,15 @@ const propertyNumber = (properties: Record<string, unknown>, key: string) => {
   return Number.isFinite(value) ? value : undefined;
 };
 
+const nodeConfidence = (node: IndirectNode) => {
+  const confidence = propertyNumber(node.properties, "confidence");
+  // 本模块查询的是已经完成结构化入图的实体：图中有值时展示真实值；
+  // 历史节点缺少该字段时，按结构化数据一一映射的口径记为 1.0。
+  if (confidence === undefined) return 1.0;
+  const normalized = confidence > 1 ? confidence / 100 : confidence;
+  return Math.min(1, Math.max(0, normalized));
+};
+
 const nodeSourceTable = (node: IndirectNode) =>
   propertyString(node.properties, "organization_base") ||
   propertyString(node.properties, "source_table");
@@ -138,7 +153,6 @@ export function buildIndirectRelationGraph(
     [result.coreNode.id, result.coreNode],
   ]);
   const nodeLevels = new Map<string, number>([[result.coreNode.id, 0]]);
-  const nodeStrengths = new Map<string, number>([[result.coreNode.id, 0.96]]);
 
   selectedPaths.forEach((path) => {
     path.nodes.forEach((node, index) => {
@@ -146,10 +160,6 @@ export function buildIndirectRelationGraph(
       nodeLevels.set(
         node.id,
         Math.min(nodeLevels.get(node.id) ?? index, index),
-      );
-      nodeStrengths.set(
-        node.id,
-        Math.max(nodeStrengths.get(node.id) ?? 0, path.strength),
       );
     });
   });
@@ -176,7 +186,7 @@ export function buildIndirectRelationGraph(
       x: 85 + level * (550 / maxLevel),
       y,
       entityType: displayEntityType(node, node.id === result.coreNode.id),
-      confidence: nodeStrengths.get(node.id) ?? 0.8,
+      confidence: nodeConfidence(node),
       relations:
         level === 0
           ? "核心节点"
@@ -241,7 +251,7 @@ export function indirectSummaryRows(result: ExpertIndirectRelationResult) {
   return [
     [
       "核心节点",
-      `${result.coreNode.name}｜${result.coreNode.entityType}`,
+      `${result.coreNode.name}｜${displayEntityType(result.coreNode, true)}`,
     ] as const,
     ["路径分析深度", `${result.pathDepth} 跳`] as const,
     [

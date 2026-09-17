@@ -83,6 +83,8 @@ test.describe('B. 图谱查询', () => {
     // 默认落在 nGQL 模式：结果区常驻（未执行时空数据占位）；切到图算法 tab 出面板
     await expect(page.getByRole('heading', { name: 'nGQL 执行结果' })).toBeVisible()
     await expect(page.getByText('暂无数据，执行 nGQL 语句后在此查看结果')).toBeVisible()
+    // 图算法边类型/引擎状态按全局图空间加载：先切到 dev2 再进图算法面板
+    await switchGraphSpace(page, 'dev2')
     await page.getByRole('button', { name: '图算法' }).click()
     await expect(page.getByRole('heading', { name: '图算法' })).toBeVisible()
 
@@ -101,12 +103,11 @@ test.describe('B. 图谱查询', () => {
     await expect(page.getByText('Degree算法：', { exact: false })).toBeVisible()
     await page.getByRole('button', { name: 'PageRank算法' }).click()
 
-    // 边类型多选（真实 metadata）：选 HAS_KEYWORD
+    // 边类型多选（真实 metadata）：选 HAS_KEYWORD；dev2 边类型较多、弹层内需滚动，
+    // Escape 不再收起（焦点停在选项上），点面板外区域关闭弹层
     await page.locator('.platform-query-algo__labels .arco-select-view').click()
     await page.locator('li.arco-select-option:visible', { hasText: 'HAS_KEYWORD' }).first().click()
-    await page.keyboard.press('Escape')
-    // 多选弹层可能保持展开，点击面板标题关闭，避免遮挡提交按钮。
-    await page.getByRole('heading', { name: '图算法', exact: true }).click()
+    await page.locator('.platform-query-algo__desc').click()
 
     // 提交 → 轮询（3s 间隔，两轮内到 succeeded）→ 结果表
     await page.getByRole('button', { name: '提交算法作业' }).click()

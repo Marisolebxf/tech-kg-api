@@ -10,6 +10,7 @@ from biz.dependencies.review_identity import get_review_identity
 from biz.schemas.common import ApiResponse
 from biz.schemas.manual_review_production import (
     CancelRequest,
+    DeleteCasesRequest,
     DirectDecideRequest,
     DraftRequest,
     EvidenceCompleteRequest,
@@ -68,6 +69,14 @@ async def production_queue(
         description="A=入库决策 (T_DIRECT/T_LINK)；C=抽取失败重跑 (T_EXTRACT_FAIL)；不传=所有",
     ),
     keyword: str | None = None,
+    sort: str | None = Query(
+        None,
+        description="排序字段：updatedAt=按更新时间；不传=默认（风险级→创建时间升序）",
+    ),
+    order: str | None = Query(
+        None,
+        description="排序方向：asc/desc（配合 sort=updatedAt，默认 desc）",
+    ),
     page: int = 1,
     page_size: int = Query(50, alias="pageSize"),
 ):
@@ -182,6 +191,20 @@ async def rerun_extract_failures(body: ExtractFailuresRerunRequest, identity: Re
         return ApiResponse(data=data, msg="重跑已下发")
     except SchemaConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_production_error(exc)
+
+
+@router.post("/production/delete-cases", response_model=ApiResponse)
+async def delete_cases(body: DeleteCasesRequest, identity: ReviewIdentityDep):
+    """T_EXTRACT_FAIL 失败记录硬删除（单条/批量勾选共用，review_admin）。
+
+    连同草稿/证据/裁决/审计记录一并删除，不可恢复；非 T_EXTRACT_FAIL 的 id 跳过。
+    """
+    try:
+        return ApiResponse(
+            data=production_service.delete_cases(body.caseIds, identity), msg="删除完成"
+        )
     except Exception as exc:
         _raise_production_error(exc)
 

@@ -75,18 +75,19 @@ test.describe.serial('F. 批次抽取管道', () => {
     await page.goto('/manual-review')
     await page.waitForLoadState('networkidle')
     await page.locator('.alert-tabs button', { hasText: '抽取失败重跑' }).click()
-    await expect(page.getByText('失败列表').first()).toBeVisible()
-    // 默认视图混有历史已处理行：先筛「待处理」
-    await page.locator('.ops-filter .arco-select-view-single').first().click()
+    await expect(page.locator('.review-case-table--selectable')).toBeVisible()
+    // 默认视图混有历史已处理行：先筛「待处理」（C 类状态下拉在表格「状态」表头）
+    await page.locator('.th-status-filter .arco-select-view-single').first().click()
     await page.locator('li.arco-select-option:visible', { hasText: '待处理' }).first().click()
     const row = page.locator('tbody tr', { hasText: 'w3' }).first()
     await expect(row).toBeVisible({ timeout: 30_000 })
-    // 阻断节点徽标（任务级蓝 / 批次级红）与状态、操作
-    await expect(row.getByText(/任务级|批次级/).first()).toBeVisible()
+    // kgetl 精简列保留类型、状态与日志/重跑/删除操作
+    await expect(row.locator('.review-kind-badge')).toHaveText('实体')
     await expect(row.getByText(/待处理|重跑中|已完成/).first()).toBeVisible()
     const openRow = page.locator('tbody tr', { hasText: 'w3' }).filter({ hasText: '待处理' }).first()
-    await expect(openRow.getByRole('link', { name: '进入处理 →' })).toBeVisible()
-    await expect(openRow.getByRole('button', { name: '重跑该记录' })).toBeVisible()
+    await expect(openRow.getByRole('button', { name: '日志' })).toBeVisible()
+    await expect(openRow.getByRole('button', { name: '重跑' })).toBeVisible()
+    await expect(openRow.getByRole('button', { name: '删除' })).toBeVisible()
   })
 
   test('F2 单条重跑闭环（工作台）', async ({ page, request }) => {
@@ -103,11 +104,11 @@ test.describe.serial('F. 批次抽取管道', () => {
       },
       { timeout: 60_000, label: '定位当前 w3 case' },
     )
-    // UI 侧同样可见该行（失败列表）
+    // UI 侧同样可见该行（失败列表；C 类状态下拉在表格「状态」表头）
     await page.goto('/manual-review')
     await page.waitForLoadState('networkidle')
     await page.locator('.alert-tabs button', { hasText: '抽取失败重跑' }).click()
-    await page.locator('.ops-filter .arco-select-view-single').first().click()
+    await page.locator('.th-status-filter .arco-select-view-single').first().click()
     await page.locator('li.arco-select-option:visible', { hasText: '待处理' }).first().click()
     const row = page.locator('tbody tr', { hasText: 'w3' }).filter({ hasText: '待处理' }).first()
     await expect(row).toBeVisible({ timeout: 30_000 })
@@ -133,20 +134,17 @@ test.describe.serial('F. 批次抽取管道', () => {
     await page.goto('/manual-review')
     await page.waitForLoadState('networkidle')
     await page.locator('.alert-tabs button', { hasText: '抽取失败重跑' }).click()
-    await page.getByRole('button', { name: '重跑记录' }).click()
-    // 重跑记录表按执行 ID 列行；取最新 RERUN 执行 ID 匹配
+    // 执行历史已归入任务详情；用 RERUN 执行 API 定位本次执行
     const latestRerun = await apiMust<any>(request, 'GET', '/workflow-system/executions?limit=5&triggerSource=RERUN', undefined, 'RERUN 执行')
     const rerunExecId = (latestRerun.items ?? latestRerun)[0]?.id ?? ''
     expect(rerunExecId).toBeTruthy()
-    const rerunRow = page.locator('tbody tr', { hasText: rerunExecId }).first()
-    await expect(rerunRow).toBeVisible({ timeout: 30_000 })
 
     // 重跑执行完成 → w3 case 变 已完成（RERUN 执行落图成功）
     await waitFor(
       async () => {
         const q = await api<any>(request, 'GET', '/manual-reviews/production/queue?category=C&statusGroup=processed&pageSize=50')
         const items = q.data?.items ?? []
-        return items.some((i: any) => (i.payload?.recordId ?? JSON.stringify(i.payload)).includes('w3')) ? items : null
+        return items.some((i: any) => i.id === caseId) ? items : null
       },
       { timeout: 120_000, label: 'w3 case 进入已处理' },
     ).catch(async () => {
@@ -156,9 +154,10 @@ test.describe.serial('F. 批次抽取管道', () => {
       expect(open.length).toBe(0)
     })
 
-    // 执行详情页可从「查看详情 →」进入并渲染（触发方式=RERUN 经 API 复核；
-    // 触发方式 chips 在 job 维度详情页展示，见 F5/E8）
-    await rerunRow.getByRole('link', { name: '查看详情 →' }).click()
+    // C 类日志保留重跑执行的溯源链接，可跳转执行详情。
+    const completedRow = page.locator('tbody tr', { hasText: caseId }).first()
+    await completedRow.getByRole('button', { name: '日志' }).click()
+    await page.locator(`.case-log-modal a[href*="${rerunExecId}"]`).click()
     await page.waitForURL(/processing-instance\//, { timeout: 15_000 })
     await expect(page.getByText('← 返回图谱构建')).toBeVisible({ timeout: 30_000 })
     const rerunDetail = await apiMust<any>(request, 'GET', `/workflow-system/executions/${rerunExecId}`, undefined, '重跑执行详情')
@@ -175,8 +174,8 @@ test.describe.serial('F. 批次抽取管道', () => {
     await page.goto('/manual-review')
     await page.waitForLoadState('networkidle')
     await page.locator('.alert-tabs button', { hasText: '抽取失败重跑' }).click()
-    await expect(page.getByText('失败列表').first()).toBeVisible()
-    await page.locator('.ops-filter .arco-select-view-single').first().click()
+    await expect(page.locator('.review-case-table--selectable')).toBeVisible()
+    await page.locator('.th-status-filter .arco-select-view-single').first().click()
     await page.locator('li.arco-select-option:visible', { hasText: '待处理' }).first().click()
 
     // 勾选 ≥2 行（当前 OPEN 的 w4 case）
@@ -196,8 +195,7 @@ test.describe.serial('F. 批次抽取管道', () => {
       { label: '批量重跑反馈条' },
     )
 
-    // 重跑记录子 Tab 新增对应执行且最终完成
-    await page.getByRole('button', { name: '重跑记录' }).click()
+    // 重跑执行 API 返回新增执行；反馈条保留跳转入口
     await waitFor(
       async () => {
         const latest = await api<any>(request, 'GET', '/workflow-system/executions?limit=5&triggerSource=RERUN')
@@ -215,17 +213,23 @@ test.describe.serial('F. 批次抽取管道', () => {
     ).catch(() => {})
   })
 
-  test('F4 重跑记录视图', async ({ page }) => {
+  test('F4 失败列表排序与固定操作列', async ({ page }) => {
     await page.goto('/manual-review')
     await page.waitForLoadState('networkidle')
     await page.locator('.alert-tabs button', { hasText: '抽取失败重跑' }).click()
-    await page.getByText('重跑记录', { exact: false }).first().click()
-
+    await expect(page.locator('.th-status-filter')).toBeVisible()
+    for (const order of ['desc', 'asc']) {
+      const response = page.waitForResponse((r) => r.url().includes('/production/queue') && r.url().includes(`order=${order}`))
+      await page.locator('.th-sort').click()
+      expect((await response).ok()).toBe(true)
+    }
+    await expect(page.locator('thead .review-action-col')).toHaveCSS('position', 'sticky')
     const header = await page.locator('thead').first().innerText()
-    for (const col of ['执行 ID', 'Schema', '状态', '触发时间', '重跑记录', '失败记录', '来源执行']) {
+    for (const col of ['处理实例 ID', '待处理对象', '类型', '来源记录', '状态', '更新时间', '操作']) {
       expect(header).toContain(col)
     }
-    await expect(page.locator('tbody tr').first()).toBeVisible({ timeout: 30_000 })
+    expect(header).not.toContain('更新批次')
+    expect(header).not.toContain('处理人')
   })
 
   test('F5 水位增量语义（API 触发再执行）', async ({ page, request }) => {

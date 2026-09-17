@@ -16,11 +16,33 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    # kgetl 的测试在收集阶段就需要连 MySQL（workflow 控制面等模块），
+    # GH runner 上没有容器网络，用 service 容器映射到 localhost。
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci_test_password
+          MYSQL_ROOT_HOST: "%"
+          MYSQL_DATABASE: techkg_control_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_test_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
     defaults:
       run:
         working-directory: backend
 
     env:
+      WORKFLOW_MYSQL_HOST: 127.0.0.1
+      WORKFLOW_MYSQL_PORT: "3306"
+      WORKFLOW_MYSQL_DATABASE: techkg_control_ci
+      WORKFLOW_MYSQL_USERNAME: root
+      WORKFLOW_MYSQL_PASSWORD: ci_test_password
       GRAPH_DB_BACKEND: trsgraph
       TRSGRAPH_HOST: 127.0.0.1
       TRSGRAPH_PORT: 9669
@@ -60,8 +82,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # action 不认 defaults.working-directory，会去仓库根找 package.json，
+      # 必须显式给版本号（与 frontend/package.json 的 packageManager 一致）。
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
 
       - name: Install Node
         uses: actions/setup-node@v4

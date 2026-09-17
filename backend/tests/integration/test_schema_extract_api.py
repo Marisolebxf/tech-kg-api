@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from biz.dependencies.auth import require_platform_actor
+from biz.dependencies.auth import require_platform_actor, require_platform_admin
 from infra.s3 import StoredObject
 from infra.workflow_mysql import get_workflow_session
 from main import app
@@ -59,8 +59,14 @@ def extract_api(monkeypatch):
             yield session
 
     app.dependency_overrides[get_workflow_session] = override_session
+    app.dependency_overrides[require_platform_admin] = lambda: None
     monkeypatch.setattr("service.schema_management.get_schema_s3_storage", lambda: storage)
     monkeypatch.setenv("SCHEMA_AUTO_PROVENANCE", "false")
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "techkg")
+    monkeypatch.setattr(
+        "service.schema_ddl.list_graph_spaces",
+        lambda: ["techkg"],
+    )
     monkeypatch.setattr("service.schema_management._validate_datasource_exists", lambda ds_id: None)
 
     executions: list[dict] = []
@@ -94,6 +100,7 @@ def extract_api(monkeypatch):
     yield engine, set_actor, executions, storage
     app.dependency_overrides.pop(get_workflow_session, None)
     app.dependency_overrides.pop(require_platform_actor, None)
+    app.dependency_overrides.pop(require_platform_admin, None)
     engine.dispose()
 
 

@@ -1,6 +1,11 @@
 name: Container Deployment and Integration Tests
 
 # CICD 测试分支：验证通过后把 test/cicd 换成 kgetl（保留 main）
+#
+# 不再用根 docker-compose.yml：它包含 m3e-embedding（构建期要连 hf-mirror.com
+# 下载模型，GH runner 连不上）、Milvus/Temporal/RustFS 等集成测试不需要的服务。
+# 这里内联一个最小 compose（mysql + redis + api），api 镜像用 test target、
+# 关闭模型预下载、依赖走 pypi.org。
 on:
   push:
     branches: ["test/cicd"]
@@ -15,80 +20,103 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 25
     env:
       LLM_API_KEY: ${{ secrets.GLM_API_KEY }}
       ZHIPUAI_API_KEY: ${{ secrets.GLM_API_KEY }}
-      # Build the CI-only image stage that includes pytest and integration tests.
-      API_BUILD_TARGET: test
-      # Integration tests provide their own SQLite Schema store; CI has no MySQL service.
-      SCHEMA_AUTO_INIT: "false"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Create .env for docker compose
+      - name: Create isolated CI compose configuration
         run: |
-          cat > backend/.env <<EOF
-          GRAPH_DB_BACKEND=trsgraph
-          TRSGRAPH_HOST=127.0.0.1
-          TRSGRAPH_PORT=9669
-          TRSGRAPH_USERNAME=root
-          TRSGRAPH_PASSWORD=trsadmin
-          TRSGRAPH_SPACE=techkg
-          MYSQL_HOST=127.0.0.1
-          MYSQL_PORT=3306
-          MYSQL_DATABASE=gkx_local
-          MYSQL_USERNAME=root
-          MYSQL_PASSWORD=123456789
-          REDIS_HOST=127.0.0.1
-          REDIS_PORT=6379
-          LLM_API_KEY=${LLM_API_KEY}
-          ZHIPUAI_API_KEY=${ZHIPUAI_API_KEY}
-          LLM_MODEL=glm-5.1
+          cat > compose.ci.yml <<'EOF'
+          services:
+            mysql:
+              image: mysql:8.0
+              environment:
+                MYSQL_ROOT_PASSWORD: ci_test_password
+                MYSQL_ROOT_HOST: "%"
+                MYSQL_DATABASE: gkx_ci
+              healthcheck:
+                test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pci_test_password"]
+                interval: 5s
+                timeout: 5s
+                retries: 30
+            redis:
+              image: redis:7.4-alpine
+              healthcheck:
+                test: ["CMD", "redis-cli", "ping"]
+                interval: 5s
+                timeout: 5s
+                retries: 20
+            api:
+              build:
+                context: ./backend
+                target: test
+                args:
+                  PYPI_INDEX_URL: https://pypi.org/simple/
+                  PRELOAD_EMBEDDING_MODEL: "false"
+              ports:
+                - "8001:8000"
+              environment:
+                APP_ENV: test
+                GRAPH_DB_BACKEND: trsgraph
+                TRS_GRAPH_BASE_URL: http://127.0.0.1:8090
+                TRS_GRAPH_SPACE: techkg
+                MYSQL_HOST: mysql
+                MYSQL_PORT: "3306"
+                MYSQL_DATABASE: gkx_ci
+                MYSQL_USERNAME: root
+                MYSQL_PASSWORD: ci_test_password
+                WORKFLOW_MYSQL_HOST: mysql
+                WORKFLOW_MYSQL_PORT: "3306"
+                WORKFLOW_MYSQL_DATABASE: techkg_control_ci
+                WORKFLOW_MYSQL_USERNAME: root
+                WORKFLOW_MYSQL_PASSWORD: ci_test_password
+                REDIS_URL: redis://redis:6379/0
+                AUTH_ENABLED: "false"
+                AUTH_ALLOW_INSECURE_DEV_CONTEXT: "true"
+                AUTH_COOKIE_SECURE: "false"
+                AUTH_COOKIE_PATH: /
+                SCHEMA_AUTO_INIT: "false"
+                CORRECTION_SYNC_WORKER_ENABLED: "false"
+                PREWARM_BUSINESS: "false"
+                LLM_API_KEY: ${LLM_API_KEY}
+                ZHIPUAI_API_KEY: ${ZHIPUAI_API_KEY}
+              depends_on:
+                mysql:
+                  condition: service_healthy
+                redis:
+                  condition: service_healthy
           EOF
+          docker compose -f compose.ci.yml config --quiet
 
-      - name: Build Docker image
-        run: docker compose build
+      - name: Build Docker test image
+        run: docker compose -f compose.ci.yml build api
 
-      - name: Create external Docker networks
+      - name: Deploy FastAPI with test infrastructure
+        run: docker compose -f compose.ci.yml up -d
+
+      - name: Wait for FastAPI health
         run: |
-          docker network inspect tech-kg-engine_default >/dev/null 2>&1 || docker network create tech-kg-engine_default
-          docker network inspect trs-graph-service_default >/dev/null 2>&1 || docker network create trs-graph-service_default
-
-      - name: Deploy FastAPI
-        run: docker compose up -d
-
-      - name: Wait for services to be ready
-        run: |
-          echo "Waiting for FastAPI to start..."
           for attempt in $(seq 1 30); do
-            if response="$(curl --fail --silent --show-error http://127.0.0.1:8001/health)" \
-              && [ "${response}" = '{"status":"ok"}' ]; then
-              echo "FastAPI is ready."
+            if response="$(curl --fail --silent http://127.0.0.1:8001/health)" && [ "$response" = '{"status":"ok"}' ]; then
               exit 0
             fi
-
-            if ! docker compose ps --status running --services api | grep --quiet '^api$'; then
-              echo "FastAPI container stopped before becoming ready."
-              docker compose ps --all
-              docker compose logs --no-color api operator-rustfs schema-minio
-              exit 1
-            fi
-
-            echo "FastAPI is not ready yet (attempt ${attempt}/30)."
             sleep 5
           done
-
-          echo "Timed out waiting for FastAPI."
-          docker compose ps --all
-          docker compose logs --no-color api operator-rustfs schema-minio
+          docker compose -f compose.ci.yml logs --no-color
           exit 1
 
       - name: Run integration tests
-        run: docker compose exec -T api env PYTHONPATH=. AUTH_ENABLED=false AUTH_COOKIE_SECURE=false AUTH_COOKIE_PATH=/ .venv/bin/pytest tests/integration -m "not external" -v
+        run: docker compose -f compose.ci.yml exec -T api env PYTHONPATH=. .venv/bin/pytest tests/integration -m "not external" -v
 
-      - name: Tear down
+      - name: Print logs on failure
+        if: failure()
+        run: docker compose -f compose.ci.yml logs --no-color
+
+      - name: Tear down temporary infrastructure
         if: always()
-        run: docker compose down
+        run: docker compose -f compose.ci.yml down -v

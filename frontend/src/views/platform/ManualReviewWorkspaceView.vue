@@ -175,28 +175,24 @@ const linkCandidates = computed(() => {
       score: typeof c.score === 'number' ? c.score : null,
     }))
 })
-const linkIncoming = computed(() => {
-  const raw = linkSnapshot.value?._incoming
-  return raw && typeof raw === 'object' ? (raw as { vid?: string; sourceTable?: string }) : null
-})
 const linkResolution = computed(() => {
   const raw = linkSnapshot.value?._resolution
   return raw && typeof raw === 'object'
     ? (raw as { matchScore?: number; margin?: number | null })
     : null
 })
-/** 待入库记录卡的「类型」行：T_DIRECT 带具体节点/边类型；T_LINK 固定实体（同名冲突对齐）。 */
-const incomingKindLabel = computed(() => {
-  if (templateId.value === 'T_LINK') return '实体（同名冲突对齐）'
-  if (directKind.value === 'relation') return `关系（${labelZh(directEdgeType.value) || directEdgeType.value || '—'}）`
-  return `实体（${labelZh(directNodeLabel.value) || directNodeLabel.value || '—'}）`
-})
-/** 待入库记录卡的「来源记录」行：T_LINK 取扣留快照 _incoming；T_DIRECT 取 case 的来源表/记录 id。 */
-const incomingSource = computed(() => {
-  if (templateId.value === 'T_LINK') {
-    return { table: linkIncoming.value?.sourceTable || '—', id: linkIncoming.value?.vid || record.value?.objectId || '—' }
-  }
-  return { table: directSourceTable.value || productionCase.value?.workflowType || '—', id: directSourceRecordId.value || record.value?.objectId || '—' }
+/** 待入库记录卡的「类型」行：只展示 实体/关系 二选一（T_LINK 恒实体对齐）。 */
+const incomingKindLabel = computed(() => (
+  templateId.value === 'T_LINK' || directKind.value !== 'relation' ? '实体' : '关系'
+))
+/** 待入库记录卡的「来源记录」行：与 A 类队列同口径——优先所属任务(job)跳任务详情，
+ *  回落执行/工作流 id 跳执行详情，都没有则不渲染链接。 */
+const incomingSourceLink = computed(() => {
+  const jobId = productionCase.value?.jobId || ''
+  if (jobId) return { to: `/graph-build/jobs/${jobId}`, label: jobId }
+  const execId = productionCase.value?.executionId || productionCase.value?.workflowId || ''
+  if (execId) return { to: `/processing-instance/${execId}`, label: execId }
+  return null
 })
 /** merge 裁决的并入目标（targetEntityId）——服务端校验必须属于候选集。 */
 const selectedTarget = ref('')
@@ -483,7 +479,10 @@ const runPrimary = () => {
           <strong>{{ record.object }}</strong>
           <dl class="link-incoming-meta">
             <div><dt>类型</dt><dd>{{ incomingKindLabel }}</dd></div>
-            <div><dt>来源记录</dt><dd>{{ incomingSource.table }} · <code>{{ incomingSource.id }}</code></dd></div>
+            <div><dt>来源记录</dt><dd>
+              <RouterLink v-if="incomingSourceLink" class="direct-trace-link" :to="incomingSourceLink.to"><code>{{ incomingSourceLink.label }}</code></RouterLink>
+              <template v-else>—</template>
+            </dd></div>
           </dl>
           <template v-if="templateId === 'T_LINK'">
             <p v-if="linkResolution">消歧得分 {{ linkResolution.matchScore ?? '—' }} · 候选分差 {{ linkResolution.margin ?? '—' }} · 灰区人工裁决</p>
@@ -624,12 +623,6 @@ const runPrimary = () => {
           </details>
         </template>
       </section>
-
-      <div v-if="!isEditable" class="rw-readonly">
-        <strong>{{ record.decision }}</strong>
-        <p>{{ record.decisionNote }}</p>
-        <em>{{ record.completedAt }}</em>
-      </div>
 
       </a-form>
       <p v-if="feedback" class="rw-feedback">{{ feedback }}</p>
@@ -1121,25 +1114,6 @@ const runPrimary = () => {
 .zone-entity .zone-extra {
   display: block;
   margin-top: 12px;
-}
-
-.rw-readonly {
-  margin-top: 16px;
-  padding: 12px;
-  border-radius: 6px;
-  background: #f5f8ff;
-}
-
-.rw-readonly p {
-  margin: 6px 0;
-  color: #667085;
-  font-size: 12px;
-}
-
-.rw-readonly em {
-  color: #98a2b3;
-  font-size: 11px;
-  font-style: normal;
 }
 
 .rw-feedback {

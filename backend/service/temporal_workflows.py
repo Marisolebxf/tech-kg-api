@@ -1063,6 +1063,23 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                     raise
 
         written = 0
+        if kind == "relation" and records:
+            # 关系写图前端点消歧（跨执行兜底）：端点命中未决 T_LINK case 的边
+            # 暂存进 case 快照（裁决时补写，不产生悬挂点）；已裁决 merge 的端点
+            # 改写为目标实体；端点实体被驳回的边丢弃。查询失败按原样写，不阻塞批次
+            from service.manual_review_production import manual_review_service
+
+            try:
+                parked = manual_review_service.park_or_rewrite_edges(name, records)
+                records = parked.get("records") or []
+                if parked.get("parked"):
+                    logger.info(
+                        "关系端点待消歧，暂存 %s 条（随 T_LINK 裁决补写）", parked["parked"]
+                    )
+                if parked.get("dropped"):
+                    logger.info("关系端点实体已被驳回，丢弃 %s 条", parked["dropped"])
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("关系端点消歧查询失败，按原样写图: %s", exc)
         for record in records:
             props = filtered(record.get("props"))
             if kind == "entity" and not props:
@@ -1075,6 +1092,172 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
             client.close()
         except Exception:  # noqa: BLE001
             logger.exception("关闭图客户端失败")
+
+
+@activity.defn
+async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
+    """消歧 v2（写前判定）：转换产出的实体在写图前先做同名召回 + 多证据评分。
+
+    三分支：得分 ≥0.85 且分差足够 → 改写 vid 并入已有实体（后续 INSERT VERTEX
+    幂等 upsert，"合并"=属性覆盖到目标节点）；灰区 [0.65, 0.85) → 扣留该记录
+    并创建 T_LINK case（候选+得分+待定关系随快照走，case 即待写队列）；<0.65 →
+    新实体原样写。返回过滤后的 records 供 write_records 继续使用；建案失败时
+    fail-open（记录照写，行为退回消歧 v1），不丢数据。阈值见
+    service/entity_disambiguation.py（v1 初值，待人工复核样本校准）。
+    """
+    from infra.graph_db.client import TRSGraphClient
+    from infra.graph_db.config import TRSGraphSettings
+    from service.entity_disambiguation import (
+        GRAY_LOW,
+        MERGE_THRESHOLD,
+        TOP_K,
+        decide,
+        display_name,
+        normalize_display_name,
+        score_candidate,
+    )
+
+    name_tag = request["name"]
+    records = [dict(r) for r in (request.get("records") or [])]
+    graph = request.get("graph") or {}
+    source_table = str(request.get("sourceTable") or "")
+    batch_vids = {str(r.get("id")) for r in records}
+
+    # 1) 批内同名去重：同显示名的后到记录改写为先到记录的 vid（同批 upsert 合并）
+    first_by_name: dict[str, str] = {}
+    deduped = 0
+    for record in records:
+        key = normalize_display_name(display_name(record.get("props")))
+        if not key:
+            continue
+        first_vid = first_by_name.setdefault(key, str(record.get("id")))
+        if first_vid != str(record.get("id")):
+            record["id"] = first_vid
+            deduped += 1
+
+    # 2) 图库同名召回（带候选完整属性供评分；properties() 失败降级为仅名称）
+    by_name: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        display = display_name(record.get("props"))
+        if display:
+            by_name.setdefault(display, []).append(record)
+
+    existing: dict[str, list[dict[str, Any]]] = {}
+    if by_name:
+        settings = TRSGraphSettings.from_env()
+        if graph.get("space"):
+            settings.space = graph["space"]
+        client = TRSGraphClient(settings)
+        try:
+            client.connect()
+            names = list(by_name)
+            name_list = ",".join(json.dumps(n, ensure_ascii=False) for n in names)
+            base_match = (
+                f"MATCH (v:`{name_tag}`) WHERE v.name IN [{name_list}] "
+                f"RETURN id(v) AS vid, v.name AS nm"
+            )
+            try:
+                result = client.execute_read(f"{base_match}, properties(v) AS props LIMIT 200")
+            except Exception:  # noqa: BLE001
+                logger.warning("同名召回 properties() 失败，降级为仅名称比对")
+                result = client.execute_read(f"{base_match} LIMIT 200")
+            for rec in result.records or []:
+                nm = str(rec.get("nm") or "")
+                vid = str(rec.get("vid") or "")
+                if nm and vid:
+                    existing.setdefault(nm, []).append(
+                        {"vid": vid, "name": nm, "props": rec.get("props") or {}}
+                    )
+        finally:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                logger.exception("关闭图客户端失败")
+
+    info = activity.info()
+    try:
+        from service.workflow_repository import repository
+
+        execution = repository.get_execution_by_workflow(info.workflow_id) or {}
+    except Exception:  # noqa: BLE001
+        execution = {}
+    task_id = execution.get("taskId") or f"PI-extract-{info.workflow_id[:12]}"
+    execution_id = execution.get("id")
+
+    from service.manual_review_production import manual_review_service
+
+    kept: list[dict[str, Any]] = []
+    stats = {"merged": 0, "withheld": 0, "deduped": deduped, "new": 0}
+    for record in records:
+        display = display_name(record.get("props"))
+        scored = []
+        for cand in existing.get(display, []):
+            if cand["vid"] in batch_vids:
+                continue
+            score, detail = score_candidate(
+                display, record.get("props"), cand["name"], cand.get("props")
+            )
+            scored.append(
+                {"vid": cand["vid"], "name": cand["name"], "score": round(score, 3), **detail}
+            )
+        outcome = decide(scored)
+        if outcome["decision"] == "merge":
+            record["id"] = outcome["targetVid"]
+            stats["merged"] += 1
+            kept.append(record)
+        elif outcome["decision"] == "gray":
+            try:
+                manual_review_service.create_direct_case(
+                    task_id=task_id,
+                    execution_id=execution_id,
+                    step_id=request.get("stepId") or "align",
+                    kind="entity",
+                    candidate={
+                        "name": display,
+                        "newIds": [str(record.get("id"))],
+                        "existingCandidates": [
+                            {"vid": c["vid"], "name": c["name"], "score": c["score"]}
+                            for c in sorted(scored, key=lambda x: x["score"], reverse=True)[:TOP_K]
+                        ],
+                        "_incoming": {
+                            "vid": str(record.get("id")),
+                            "props": record.get("props") or {},
+                            "sourceTable": source_table,
+                        },
+                        "_pendingRelations": [],
+                        "_graphSpace": graph.get("space"),
+                        "_resolution": {
+                            "matchScore": outcome["score"],
+                            "margin": outcome["margin"],
+                            "policyVersion": "disambiguation-gray-v1",
+                            "thresholds": {"merge": MERGE_THRESHOLD, "grayLow": GRAY_LOW},
+                        },
+                    },
+                    object_id=str(record.get("id")),
+                    object_name=display,
+                    node_label=name_tag,
+                    reason=(
+                        f"消歧得分 {outcome['score']:.2f} 落入灰区 "
+                        f"[{GRAY_LOW}, {MERGE_THRESHOLD})，需人工裁决是否并入已有实体"
+                    ),
+                    confidence=outcome["score"],
+                    workflow_id=info.workflow_id,
+                    workflow_run_id=info.workflow_run_id,
+                    template_id="T_LINK",
+                    workflow_type="kg.schema.extract",
+                    exception_code="KG_ENTITY_DISAMBIGUATION_GRAY",
+                    resume_token=f"extract-resolve:{execution_id}:{record.get('id')}",
+                    source_table=source_table or None,
+                    source_record_id=str(record.get("id")),
+                )
+                stats["withheld"] += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("灰区消歧建案失败 vid=%s，记录按原样写图: %s", record.get("id"), exc)
+                kept.append(record)
+        else:
+            stats["new"] += 1
+            kept.append(record)
+    return {"records": kept, **stats}
 
 
 @activity.defn
@@ -1640,6 +1823,24 @@ class SchemaExtractWorkflow:
                                     transformed.get("entities") or transformed.get("edges") or []
                                 )
                                 step_written = 0
+                                if records and kind == "entity":
+                                    # 消歧 v2（写前判定）：同名召回+评分，改写 vid 并入 /
+                                    # 灰区扣留建 T_LINK case / 其余原样——灰区记录从本批
+                                    # 剔除（不写图），后续由人工裁决执行器补写
+                                    resolved = await workflow.execute_activity(
+                                        resolve_entity_batch,
+                                        {
+                                            "name": plan["name"],
+                                            "records": records,
+                                            "graph": graph,
+                                            "schemaKey": plan["schemaKey"],
+                                            "stepId": step_ctx_id,
+                                            "sourceTable": table_label,
+                                        },
+                                        start_to_close_timeout=timedelta(seconds=300),
+                                        retry_policy=ACTIVITY_RETRY_POLICY,
+                                    )
+                                    records = resolved.get("records") or []
                                 if records:
                                     write_result = await workflow.execute_activity(
                                         write_records,
@@ -1957,6 +2158,7 @@ ACTIVITIES = [
     read_source_batch,
     execute_transform,
     write_records,
+    resolve_entity_batch,
     advance_schema_extract_watermark,
     record_schema_script_run,
     detect_extract_collisions,

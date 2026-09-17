@@ -133,7 +133,7 @@ def template_contract(template_id: str) -> dict[str, Any]:
 
 def write_target(template_id: str) -> str:
     return {
-        "T_LINK": "实体对齐决议（合并执行由向量对齐合并引擎落地，后续任务）",
+        "T_LINK": "实体对齐决议（merge 并入所选实体 / create 新建入库，裁决即写图）",
         "T_DIRECT": "图数据库直写（accept 时 merge_node/create_edge）",
         "T_EXTRACT_FAIL": "失败记录重跑（重新执行抽取）",
     }[canonical_template(template_id)]

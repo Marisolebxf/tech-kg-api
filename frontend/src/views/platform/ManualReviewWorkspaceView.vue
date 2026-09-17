@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { claimProductionReview, directDecideProductionReview, getProductionReview, heartbeatProductionReview, rerunExtractFailures, submitProductionReview, type ProductionReviewCase } from '../../api/workflowOperations'
 
@@ -161,6 +161,43 @@ const preferredProductionAction = computed(() => {
 
 const entityVerdict = ref<'merge' | 'create' | 'reject'>('merge')
 
+/** T_LINK 消歧 v2：候选快照里的真实候选（existingCandidates）与待入库记录（_incoming）。 */
+const linkSnapshot = computed<Record<string, unknown> | null>(() => {
+  const snapshot = productionCase.value?.candidate
+  return snapshot && typeof snapshot === 'object' ? (snapshot as Record<string, unknown>) : null
+})
+const linkCandidates = computed(() => {
+  const raw = linkSnapshot.value?.existingCandidates
+  if (!Array.isArray(raw) || !raw.length) return []
+  return raw
+    .filter((c): c is { vid?: string; name?: string; score?: number } => Boolean(c) && typeof c === 'object')
+    .filter((c) => c.vid)
+    .map((c) => ({
+      vid: String(c.vid),
+      name: c.name || '—',
+      score: typeof c.score === 'number' ? c.score : null,
+    }))
+})
+const linkIncoming = computed(() => {
+  const raw = linkSnapshot.value?._incoming
+  return raw && typeof raw === 'object' ? (raw as { vid?: string; sourceTable?: string }) : null
+})
+const linkResolution = computed(() => {
+  const raw = linkSnapshot.value?._resolution
+  return raw && typeof raw === 'object'
+    ? (raw as { matchScore?: number; margin?: number | null })
+    : null
+})
+/** merge 裁决的并入目标（targetEntityId）——服务端校验必须属于候选集。 */
+const selectedTarget = ref('')
+watch(
+  linkCandidates,
+  (list) => {
+    if (list.length && !selectedTarget.value) selectedTarget.value = list[0].vid
+  },
+  { immediate: true },
+)
+
 const manualReviewFormRef = ref()
 const manualReviewFormModel = computed(() => ({
   entityVerdict: entityVerdict.value,
@@ -319,10 +356,16 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
   }
   // T_LINK 主按钮跟随裁决值：选「不是同一实体」时按驳回候选提交
   const actionId = action.id === 'entity-confirm' && entityVerdict.value === 'reject' ? 'reject-candidate' : action.id
+  // merge 必须指定并入目标（服务端校验 targetEntityId ∈ 候选集，缺失会被 400 拒绝）
+  if (entityVerdict.value === 'merge' && linkCandidates.value.length && !selectedTarget.value) {
+    feedback.value = '请先选择要并入的候选实体'
+    return
+  }
   const result: Record<string, unknown> = {
     entityVerdict: entityVerdict.value,
     handleCategory: handleCategory.value,
   }
+  if (entityVerdict.value === 'merge' && selectedTarget.value) result.targetEntityId = selectedTarget.value
   try {
     if (productionCase.value) {
       productionCase.value = await submitProductionReview(reviewRecord.id, { version: productionCase.value.version, actionId, note: note.value, result })
@@ -579,7 +622,40 @@ const secondaryActions = computed(() => (
       <!-- T_LINK -->
       <section v-else-if="templateId === 'T_LINK'" class="zone zone-entity">
         <p v-if="record.type === '单任务执行失败'" class="zone-banner">对齐任务超时未生成候选，请基于源记录人工裁决后重跑。</p>
-        <div class="entity-compare">
+
+        <!-- 消歧 v2：快照带真实候选（existingCandidates + _incoming）时渲染候选选择 -->
+        <template v-if="linkCandidates.length">
+          <div class="link-incoming">
+            <span>待入库记录（已扣留，未写图）</span>
+            <strong>{{ record.object }}</strong>
+            <p>来源：{{ linkIncoming?.sourceTable || '—' }} · 记录 <code>{{ linkIncoming?.vid || record.objectId }}</code></p>
+            <p v-if="linkResolution">消歧得分 {{ linkResolution.matchScore ?? '—' }} · 候选分差 {{ linkResolution.margin ?? '—' }} · 灰区人工裁决</p>
+          </div>
+          <p class="link-candidates-title">选择要并入的候选（merge 时生效）：</p>
+          <ul class="link-candidates">
+            <li
+              v-for="cand in linkCandidates"
+              :key="cand.vid"
+              :class="{ selected: selectedTarget === cand.vid }"
+            >
+              <label>
+                <input
+                  v-model="selectedTarget"
+                  type="radio"
+                  name="link-target"
+                  :value="cand.vid"
+                  :disabled="!isEditable || entityVerdict !== 'merge'"
+                />
+                <strong>{{ cand.name }}</strong>
+                <small><code>{{ cand.vid }}</code></small>
+                <em v-if="cand.score !== null">得分 {{ cand.score }}</em>
+              </label>
+            </li>
+          </ul>
+        </template>
+
+        <!-- 无候选快照（存量写后 case / 演示数据）沿用原对照卡 -->
+        <div v-else class="entity-compare">
           <article>
             <span>候选</span>
             <strong>{{ candidateCard?.name }}</strong>
@@ -598,9 +674,9 @@ const secondaryActions = computed(() => (
         </div>
         <a-form-item field="entityVerdict" hide-label>
         <a-radio-group v-model="entityVerdict" class="verdict" aria-label="实体对齐裁决">
-          <a-radio value="merge" :disabled="!isEditable">合并到右侧存量实体</a-radio>
-          <a-radio value="create" :disabled="!isEditable">保留为新建实体</a-radio>
-          <a-radio value="reject" :disabled="!isEditable">不是同一实体，驳回候选</a-radio>
+          <a-radio value="merge" :disabled="!isEditable">合并到所选候选（写入图）</a-radio>
+          <a-radio value="create" :disabled="!isEditable">确认为新实体（写入图）</a-radio>
+          <a-radio value="reject" :disabled="!isEditable">均不匹配，驳回候选（丢弃该记录）</a-radio>
         </a-radio-group>
         </a-form-item>
       </section>
@@ -1004,6 +1080,82 @@ const secondaryActions = computed(() => (
 .verdict label.active {
   border-color: #165dff;
   background: #f5f8ff;
+}
+
+/* T_LINK 消歧 v2：待入库记录卡 + 候选选择列表 */
+.link-incoming {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px dashed #b8d0ee;
+  border-radius: 8px;
+  background: #f7fbff;
+}
+
+.link-incoming span {
+  color: #7890b5;
+  font-size: 10px;
+}
+
+.link-incoming strong {
+  display: block;
+  margin: 6px 0;
+  font-size: 14px;
+}
+
+.link-incoming p {
+  margin: 3px 0 0;
+  color: #475467;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.link-candidates-title {
+  margin: 0 0 8px;
+  color: #475467;
+  font-size: 12px;
+}
+
+.link-candidates {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.link-candidates li {
+  border: 1px solid #d4dfed;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.link-candidates li.selected {
+  border-color: #165dff;
+  background: #f5f8ff;
+}
+
+.link-candidates label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.link-candidates small {
+  color: #7890b5;
+}
+
+.link-candidates em {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #eaf2ff;
+  color: #175cd3;
+  font-size: 11px;
+  font-style: normal;
 }
 
 .rw-readonly {

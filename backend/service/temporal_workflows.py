@@ -1067,6 +1067,15 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
             props = filtered(record.get("props"))
             if kind == "entity" and not props:
                 continue
+            if (
+                kind == "entity"
+                and (not active_props or "id" in active_props)
+                and not str(props.get("id") or "").strip()
+            ):
+                # 身份列 id 平台兜底：vid 即记录 id，脚本未显式输出（或输出空串）时
+                # 补齐——id 是 Schema 注入的 NOT NULL 身份列，落空串会让身份失去意义。
+                # 仅在 id 属于白名单时注入，避免给未声明 id 列的 Schema 加未知列。
+                props["id"] = str(record["id"])
             write_with_self_heal(record, props)
             written += 1
         return {"written": written}

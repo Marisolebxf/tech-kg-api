@@ -57,6 +57,14 @@ def algo_backend(monkeypatch):
         def edge_types(self):
             return ["HAS_KEYWORD", "EMPLOYED_BY"]
 
+        def execute_read(self, query: str):
+            # Degree nGQL 双向聚合：按箭头方向区分出度 / 入度
+            if "<-[e:" in query:
+                return SimpleNamespace(
+                    records=[{"vid": "a", "cnt": 1}, {"vid": "c", "cnt": 4}]
+                )
+            return SimpleNamespace(records=[{"vid": "a", "cnt": 2}, {"vid": "b", "cnt": 5}])
+
     graph_client = GraphClient()
 
     class AlgoClient:
@@ -207,6 +215,31 @@ def test_get_result_passthrough_with_truncated(algo_backend) -> None:
     ]
     assert data["count"] == 2
     assert data["truncated"] is False
+
+
+def test_degree_via_ngql_returns_merged_result(algo_backend) -> None:
+    # degreestatic 不走 Spark（字符串 VID 限制），nGQL 同步算完直接 succeeded
+    data = submit_job(_actor(), "shared_business", "degreestatic", ["HAS_KEYWORD"], {})
+    assert data["status"] == "succeeded"
+    assert algo_backend.submit_calls == []  # 未触碰 Spark 提交
+    result = get_result(_actor(), "shared_business", data["jobId"])
+    # 出度 {a:2,b:5}、入度 {a:1,c:4} 合并后按总度降序
+    assert result["rows"] == [
+        {"vid": "b", "out_degree": "5", "in_degree": "0", "degree": "5"},
+        {"vid": "c", "out_degree": "0", "in_degree": "4", "degree": "4"},
+        {"vid": "a", "out_degree": "2", "in_degree": "1", "degree": "3"},
+    ]
+    assert result["count"] == 3
+    assert result["truncated"] is False
+    job = get_job(_actor(), "shared_business", data["jobId"])
+    assert job["status"] == "succeeded"
+
+
+def test_degree_unknown_label_rejected(algo_backend) -> None:
+    with pytest.raises(GraphAlgorithmError) as exc_info:
+        submit_job(_actor(), "shared_business", "degreestatic", ["NOT_AN_EDGE"], {})
+    assert "不存在边类型" in str(exc_info.value)
+    assert algo_backend.submit_calls == []
 
 
 def test_list_edge_types(algo_backend) -> None:

@@ -21,6 +21,7 @@ from biz.handler.expert_enterprise_mining import router as expert_enterprise_min
 from biz.handler.expert_enterprise_relation import router as expert_enterprise_relation_router
 from biz.handler.expert_indirect_relation import router as expert_indirect_relation_router
 from biz.handler.expert_paper_cooperation import router as expert_paper_cooperation_router
+from biz.handler.graph_algorithm import router as graph_algorithm_router
 from biz.handler.graph_console import router as graph_console_router
 from biz.handler.graph_search import router as graph_search_router
 from biz.handler.graph_space import router as graph_space_router
@@ -69,6 +70,7 @@ def register_routers(app: FastAPI) -> None:
         industry_chain_panorama_router,
         graph_search_router,
         graph_console_router,
+        graph_algorithm_router,
         entity_search_router,
         correction_router,
         expert_colleague_service_router,

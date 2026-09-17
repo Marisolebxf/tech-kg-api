@@ -47,6 +47,8 @@ __all__ = [
     "close_algorithm_client",
     "get_space_client",
     "close_space_clients",
+    "get_space_algorithm_client",
+    "close_space_algorithm_clients",
     "AlgorithmJob",
     "AlgorithmJobBusyError",
     "AlgorithmJobFailedError",
@@ -150,3 +152,34 @@ def close_space_clients() -> None:
         for client in _space_clients.values():
             client.close()
         _space_clients.clear()
+
+
+_space_algo_clients: dict[str, TRSAlgorithmClient] = {}
+_space_algo_clients_lock = threading.Lock()
+
+
+def get_space_algorithm_client(space: str) -> TRSAlgorithmClient:
+    """获取指向指定图空间的算法作业客户端（按空间名缓存，连接参数仍取自 env）。
+
+    综合查询页「图算法」模式允许用户切换图空间提交作业，而 get_algorithm_client
+    固定指向 TRS_GRAPH_SPACE，故镜像 get_space_client 提供按空间版本。
+    """
+    if space in _space_algo_clients:
+        return _space_algo_clients[space]
+    with _space_algo_clients_lock:
+        if space in _space_algo_clients:
+            return _space_algo_clients[space]
+        settings = TRSGraphSettings.from_env()
+        settings.space = space
+        client = TRSAlgorithmClient(settings)
+        client.connect()
+        _space_algo_clients[space] = client
+        return client
+
+
+def close_space_algorithm_clients() -> None:
+    """关闭并清空所有按空间缓存的算法作业客户端（应用停机时调用）。"""
+    with _space_algo_clients_lock:
+        for client in _space_algo_clients.values():
+            client.close()
+        _space_algo_clients.clear()

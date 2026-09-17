@@ -636,12 +636,16 @@ def build_source_batch_sql(
     query_sql: str | None = None,
     cursor_kind: str = "watermark",
     record_ids: list[Any] | None = None,
+    pk_cursor: str | None = None,
 ) -> str:
     """构造来源批次 SQL（纯函数，便于单测）。
 
     - 基表：``query_sql`` 存在时包成子查询（须暴露与 time/pk 同名的列），
       否则 ``{database}.{table}`` 全表；
     - watermark 模式（time_column 非空）：``WHERE time > :wm ORDER BY time, pk LIMIT :n``；
+      提供 ``pk_cursor``（批间/跨执行续游标）时用组合条件
+      ``time > :wm OR (time = :wm AND pk > :cursor)``——同秒多行只按时间比较
+      会把与水位同秒的尾行永久切掉（水位已推进，跨执行也读不回）；
     - keyset 模式（time_column 为空）：``WHERE pk > :cursor ORDER BY pk LIMIT :n``（游标存 checkpoint）；
     - offset 模式（普通表，主键不保证唯一）：``[WHERE time > :wm] ORDER BY pk LIMIT :n OFFSET :offset``
       ——与旧脚本 LIMIT/OFFSET 同语义，增量靠时间列过滤 + 结束后一次性推水位；
@@ -665,6 +669,11 @@ def build_source_batch_sql(
         return f"{base}{where} ORDER BY `{pk_column}` LIMIT :n OFFSET :offset"
     if not time_column:
         raise ValueError("watermark 模式必须提供 timeColumn")
+    if pk_cursor:
+        return (
+            f"{base} WHERE (`{time_column}` > :wm OR (`{time_column}` = :wm "
+            f"AND `{pk_column}` > :cursor)) ORDER BY `{time_column}`, `{pk_column}` LIMIT :n"
+        )
     return f"{base} WHERE `{time_column}` > :wm ORDER BY `{time_column}`, `{pk_column}` LIMIT :n"
 
 
@@ -724,6 +733,7 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
         cursor_kind = "keyset"
 
     binds: dict[str, Any] = {}
+    pk_cursor: str | None = None
     if cursor_kind == "ids":
         pass  # 每块单独构造 binds
     elif cursor_kind == "offset":
@@ -737,10 +747,16 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
                 binds["wm"] = str(watermark)
     elif cursor_kind == "watermark":
         watermark = request.get("watermark")
+        pk_cursor = request.get("pkCursor")
         if watermark is None:
             wm_row = read_watermark(request.get("definitionId"), request.get("stepId") or "")
             watermark = (wm_row or {}).get("watermark") or "1970-01-01 00:00:00"
+            # 跨执行续跑：持久化 checkpoint 的 pkCursor 与水位同进组合条件，
+            # 否则上次执行同秒尾行永久丢失
+            pk_cursor = pk_cursor or ((wm_row or {}).get("checkpoint") or {}).get("pkCursor")
         binds = {"wm": str(watermark), "n": batch_size}
+        if pk_cursor:
+            binds["cursor"] = str(pk_cursor)
     else:
         cursor = request.get("cursor")
         if cursor is None:
@@ -769,6 +785,7 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
             pk_column=pk_column,
             query_sql=query_sql,
             cursor_kind=cursor_kind,
+            pk_cursor=pk_cursor if cursor_kind == "watermark" else None,
         )
         sqls.append((sql, binds))
 

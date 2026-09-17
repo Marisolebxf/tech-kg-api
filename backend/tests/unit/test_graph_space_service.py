@@ -1,15 +1,19 @@
-"""图空间管理 service 单测：fake trs-graph 客户端 + SQLite 内存库。"""
+"""图空间管理 service 单测：fake trs-graph/Milvus 客户端 + SQLite 内存库。"""
 
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db_model.base import Base
-from db_model.platform_governance import UserGraphSpace
-from service.graph_space import GraphSpaceError, GraphSpaceService
+from db_model.platform_governance import GraphSpaceVectorDatabase, UserGraphSpace
+from service.graph_space import (
+    GraphSpaceError,
+    GraphSpaceService,
+    backfill_vector_databases,
+)
 from service.platform_access import PlatformActor
 
 USER_A = "101"
@@ -37,6 +41,32 @@ class FakeGraphClient:
         return None
 
 
+class FakeMilvusClient:
+    """记录建库调用的假 Milvus 客户端（list_databases/create_database）。"""
+
+    def __init__(
+        self,
+        databases: list[str] | None = None,
+        fail_on_connect: Exception | None = None,
+        fail_on_create: Exception | None = None,
+    ) -> None:
+        self.databases = list(databases or ["default"])
+        self.created: list[str] = []
+        self.fail_on_connect = fail_on_connect
+        self.fail_on_create = fail_on_create
+
+    def list_databases(self) -> list[str]:
+        if self.fail_on_connect is not None:
+            raise self.fail_on_connect
+        return list(self.databases)
+
+    def create_database(self, db_name: str) -> None:
+        if self.fail_on_create is not None:
+            raise self.fail_on_create
+        self.created.append(db_name)
+        self.databases.append(db_name)
+
+
 def _actor(user_id: str, is_admin: bool = False) -> PlatformActor:
     return PlatformActor(
         user_id=user_id, username="u", display_name="u", email="", is_admin=is_admin
@@ -51,28 +81,90 @@ def session_factory():
         poolclass=StaticPool,
         connect_args={"check_same_thread": False},
     )
-    Base.metadata.create_all(engine, tables=[UserGraphSpace.__table__])
+    Base.metadata.create_all(
+        engine, tables=[UserGraphSpace.__table__, GraphSpaceVectorDatabase.__table__]
+    )
     factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
     yield factory
     engine.dispose()
 
 
-def _service(session_factory, client: FakeGraphClient) -> GraphSpaceService:
-    return GraphSpaceService(session_factory(), client=client)
+def _service(
+    session_factory, client: FakeGraphClient, milvus: FakeMilvusClient | None = None
+) -> GraphSpaceService:
+    return GraphSpaceService(
+        session_factory(), client=client, milvus_client=milvus or FakeMilvusClient()
+    )
+
+
+def _mapping_row(session_factory, space_name: str) -> GraphSpaceVectorDatabase | None:
+    with session_factory() as session:
+        return (
+            session.execute(
+                select(GraphSpaceVectorDatabase).where(
+                    GraphSpaceVectorDatabase.graph_space == space_name
+                )
+            )
+            .scalars()
+            .first()
+        )
 
 
 def test_create_space_creates_and_binds(session_factory) -> None:
     client = FakeGraphClient(spaces=["dev2"])
-    service = _service(session_factory, client)
+    milvus = FakeMilvusClient()
+    service = _service(session_factory, client, milvus)
 
     result = service.create_space(_actor(USER_A), "u1_test")
 
-    assert result == {"name": "u1_test", "bound": True, "mine": True}
+    assert result == {
+        "name": "u1_test",
+        "bound": True,
+        "mine": True,
+        "vectorDbStatus": "ready",
+    }
     assert "u1_test" in client.spaces
     assert any("CREATE SPACE" in s and "u1_test" in s for s in client.statements)
     # 绑定关系落库
     assert service.is_bound(USER_A, "u1_test")
     assert not service.is_bound(USER_B, "u1_test")
+    # 同名向量库已建 + 映射行 ready
+    assert milvus.created == ["u1_test"]
+    row = _mapping_row(session_factory, "u1_test")
+    assert row is not None and row.status == "ready" and row.vector_database == "u1_test"
+
+
+def test_create_space_defaults_to_single_replica(session_factory, monkeypatch) -> None:
+    """交付环境 storaged 单副本：默认 replica_factor=1（3 在单主机集群报 Host not enough）。"""
+    monkeypatch.delenv("GRAPH_SPACE_REPLICA_FACTOR", raising=False)
+    client = FakeGraphClient(spaces=["dev2"])
+    service = _service(session_factory, client, FakeMilvusClient())
+    service.create_space(_actor(USER_A), "u1_replica_default")
+    stmt = next(s for s in client.statements if "CREATE SPACE" in s)
+    assert "replica_factor = 1" in stmt
+
+
+def test_create_space_replica_env_override(session_factory, monkeypatch) -> None:
+    monkeypatch.setenv("GRAPH_SPACE_REPLICA_FACTOR", "3")
+    client = FakeGraphClient(spaces=["dev2"])
+    service = _service(session_factory, client, FakeMilvusClient())
+    service.create_space(_actor(USER_A), "u1_replica_env")
+    stmt = next(s for s in client.statements if "CREATE SPACE" in s)
+    assert "replica_factor = 3" in stmt
+
+
+def test_create_space_host_not_enough_hint(session_factory, monkeypatch) -> None:
+    """副本数超过在线主机数时，报错附 GRAPH_SPACE_REPLICA_FACTOR 可操作提示。"""
+    monkeypatch.setenv("GRAPH_SPACE_REPLICA_FACTOR", "3")
+
+    class NoHostClient(FakeGraphClient):
+        def execute_write(self, query: str, params=None):  # noqa: ANN001
+            raise RuntimeError("ExecuteError: Host not enough!")
+
+    service = _service(session_factory, NoHostClient(spaces=["dev2"]), FakeMilvusClient())
+    with pytest.raises(GraphSpaceError) as exc_info:
+        service.create_space(_actor(USER_A), "u1_no_host")
+    assert "GRAPH_SPACE_REPLICA_FACTOR" in str(exc_info.value)
 
 
 def test_create_space_rejects_invalid_name(session_factory) -> None:
@@ -127,6 +219,40 @@ def test_list_spaces_for_actor(session_factory, monkeypatch) -> None:
     assert {item["name"] for item in admin_view if item["mine"]} == set()
 
 
+def test_list_work_spaces_for_actor(session_factory, monkeypatch) -> None:
+    """可工作空间对管理员同样收敛为默认 + 本人绑定（绑定对所有用户生效）。"""
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "dev2")
+    client = FakeGraphClient(spaces=["dev2", "techkg", "algo_test"])
+    service = _service(session_factory, client)
+    service.bind(_actor(USER_A), "techkg")
+
+    # 管理员同样只见默认 + 自己绑定（未绑定时仅默认），而非全量
+    admin = _actor("admin", is_admin=True)
+    assert service.list_work_spaces_for_actor(admin) == [
+        {"name": "dev2", "bound": False, "mine": False}
+    ]
+    service.bind(admin, "algo_test")
+    assert service.list_work_spaces_for_actor(admin) == [
+        {"name": "dev2", "bound": False, "mine": False},
+        {"name": "algo_test", "bound": True, "mine": True},
+    ]
+    # 普通用户同规则（默认 + 本人绑定）
+    assert service.list_work_spaces_for_actor(_actor(USER_A)) == [
+        {"name": "dev2", "bound": False, "mine": False},
+        {"name": "techkg", "bound": True, "mine": True},
+    ]
+    # 未绑定任何空间的用户仅见默认
+    assert service.list_work_spaces_for_actor(_actor(USER_B)) == [
+        {"name": "dev2", "bound": False, "mine": False}
+    ]
+    # 全量列表（配置页绑定入口）不受影响：管理员仍可见全部空间
+    assert {item["name"] for item in service.list_spaces_for_actor(admin)} == {
+        "dev2",
+        "techkg",
+        "algo_test",
+    }
+
+
 def test_new_user_reads_configured_default_without_binding(session_factory, monkeypatch) -> None:
     monkeypatch.setenv("TRS_GRAPH_SPACE", "delivery_graph")
     client = FakeGraphClient(spaces=["delivery_graph", "private_graph"])
@@ -159,3 +285,84 @@ def test_created_at_populated(session_factory) -> None:
     assert len(bound) == 1
     assert bound[0]["name"] == "dev2"
     assert bound[0]["createdAt"]
+
+
+# ---------- 图空间 ↔ 向量库一一对应 ----------
+
+
+def test_ensure_vector_database_idempotent(session_factory) -> None:
+    milvus = FakeMilvusClient(databases=["dev2", "default"])
+    service = _service(session_factory, FakeGraphClient(spaces=["dev2"]), milvus)
+
+    service.bind(_actor(USER_A), "dev2")
+
+    assert milvus.created == []  # 已存在不重复建
+    row = _mapping_row(session_factory, "dev2")
+    assert row is not None and row.status == "ready"
+
+
+def test_create_space_survives_milvus_outage(session_factory) -> None:
+    client = FakeGraphClient(spaces=["dev2"])
+    milvus = FakeMilvusClient(fail_on_connect=RuntimeError("connect refused"))
+    service = _service(session_factory, client, milvus)
+
+    result = service.create_space(_actor(USER_A), "u1_outage")
+
+    # 图空间创建/绑定不受向量侧失败影响
+    assert "u1_outage" in client.spaces
+    assert service.is_bound(USER_A, "u1_outage")
+    assert result["vectorDbStatus"] == "failed"
+    assert "vectorDbWarning" in result
+    row = _mapping_row(session_factory, "u1_outage")
+    assert row is not None and row.status == "failed" and "connect refused" in row.last_error
+
+
+def test_ensure_vector_database_already_exist_race(session_factory) -> None:
+    # 并发竞态：预查缺失后 create_database 收到 already exist → 视为成功
+    milvus = FakeMilvusClient(fail_on_create=RuntimeError("database already exists"))
+    service = _service(session_factory, FakeGraphClient(spaces=["dev2"]), milvus)
+
+    status, error = service._ensure_vector_database("dev2")
+
+    assert status == "ready" and error == ""
+    row = _mapping_row(session_factory, "dev2")
+    assert row is not None and row.status == "ready"
+
+
+def test_bind_ensures_vector_database_for_existing_space(session_factory) -> None:
+    milvus = FakeMilvusClient()
+    service = _service(session_factory, FakeGraphClient(spaces=["legacy_space"]), milvus)
+
+    result = service.bind(_actor(USER_A), "legacy_space")
+
+    assert result["vectorDbStatus"] == "ready"
+    assert milvus.created == ["legacy_space"]
+    row = _mapping_row(session_factory, "legacy_space")
+    assert row is not None and row.status == "ready"
+
+
+def test_backfill_retries_failed_rows(session_factory) -> None:
+    client = FakeGraphClient(spaces=["dev2"])
+    milvus = FakeMilvusClient()
+    # 前置：u1 创建时 Milvus 挂（failed 行）；dev2 无映射行
+    outage = _service(
+        session_factory, client, FakeMilvusClient(fail_on_connect=RuntimeError("down"))
+    )
+    outage.create_space(_actor(USER_A), "u1_retry")
+    outage.bind(_actor(USER_B), "dev2")
+    assert _mapping_row(session_factory, "u1_retry").status == "failed"
+    assert _mapping_row(session_factory, "dev2").status == "failed"
+
+    summary = backfill_vector_databases(session_factory(), milvus_client=milvus)
+
+    assert summary == {"bound": 2, "pending": 2, "ensured": 2, "failed": 0}
+    assert sorted(milvus.created) == ["dev2", "u1_retry"]
+    assert _mapping_row(session_factory, "u1_retry").status == "ready"
+    assert _mapping_row(session_factory, "dev2").status == "ready"
+    # 幂等：全部 ready 后再跑为空操作
+    assert backfill_vector_databases(session_factory(), milvus_client=milvus) == {
+        "bound": 2,
+        "pending": 0,
+        "ensured": 0,
+        "failed": 0,
+    }

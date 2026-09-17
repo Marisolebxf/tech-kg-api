@@ -93,10 +93,10 @@ RESULT_SCHEMAS: dict[str, dict[str, Any]] = {
     },
 }
 
-# 机制保留（P0 / 高价值实体仍触发四方签核）；现有动作集内已无高危动作。
-HIGH_RISK_ACTIONS: set[str] = set()
 TERMINAL_STATUSES = {"RESOLVED", "REJECTED", "CANCELLED", "EXPIRED"}
 EDITABLE_STATUSES = {"CLAIMED", "IN_REVIEW"}
+# 直审模式：submit 可从 OPEN 直接提交（领取为可选，不再强制）
+SUBMITTABLE_STATUSES = {"OPEN", "CLAIMED", "IN_REVIEW"}
 
 
 def canonical_template(value: str) -> str:
@@ -133,16 +133,10 @@ def template_contract(template_id: str) -> dict[str, Any]:
 
 def write_target(template_id: str) -> str:
     return {
-        "T_LINK": "实体对齐决议（合并执行由向量对齐合并引擎落地，后续任务）",
+        "T_LINK": "实体对齐决议（merge 并入所选实体 / create 新建入库，裁决即写图）",
         "T_DIRECT": "图数据库直写（accept 时 merge_node/create_edge）",
         "T_EXTRACT_FAIL": "失败记录重跑（重新执行抽取）",
     }[canonical_template(template_id)]
-
-
-def requires_approval(risk_level: str, action_id: str, result: dict[str, Any]) -> bool:
-    return (
-        risk_level == "P0" or action_id in HIGH_RISK_ACTIONS or bool(result.get("highValueEntity"))
-    )
 
 
 def require_domain_access(i: ReviewIdentity, d: str) -> None:

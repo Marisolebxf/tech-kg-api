@@ -93,33 +93,65 @@ async def test_http_queue_claim_draft_submit(async_client, production_api):
 
 
 @pytest.mark.anyio
-async def test_http_p0_requires_second_approver(async_client, production_api):
-    app, service = production_api
-    # confidence < 0.7 → P0，submit 进四方签核
+async def test_http_p0_submit_executes_directly(async_client, production_api):
+    _, service = production_api
+    # 直审模式：confidence < 0.7 → P0 同样提交即执行；审批环节（approve 端点）已移除
     created = service.create_direct_case(**_link_kwargs(confidence=0.4, task_id="TASK-P0"))
     case_id = created["reviewId"]
-    claimed = (
-        await async_client.post(
-            f"/api/v1/manual-reviews/production/{case_id}/claim",
-            json={"version": 1},  # 新建 case version=1（建案响应不含 version）
-        )
-    ).json()["data"]
     submitted = (
         await async_client.post(
             f"/api/v1/manual-reviews/production/{case_id}/submit",
             json={
-                "version": claimed["version"],
+                "version": 1,  # 新建 case version=1（建案响应不含 version），无需领取
                 "actionId": "entity-confirm",
                 "result": {"entityVerdict": "merge", "targetEntityId": "E-1"},
             },
         )
     ).json()["data"]
-    assert submitted["status"] == "PENDING_APPROVAL"
-    app.dependency_overrides[get_review_identity] = lambda: identity("approver-2", ("approver",))
-    approved = (
-        await async_client.post(
-            f"/api/v1/manual-reviews/production/{case_id}/approve",
-            json={"version": submitted["version"], "note": "批准"},
-        )
+    assert submitted["status"] == "RESOLVED"
+    approve_gone = await async_client.post(
+        f"/api/v1/manual-reviews/production/{case_id}/approve",
+        json={"version": submitted["version"], "note": "批准"},
+    )
+    assert approve_gone.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_http_delete_open_case_and_queue_exposes_execution_id(async_client, production_api):
+    app, service = production_api
+
+    def as_admin():
+        return identity("admin-1", ("review_admin",))
+
+    # 队列行带图谱构建ID（executionId）
+    created = service.create_direct_case(**_link_kwargs(task_id="TASK-DEL"))
+    case_id = created["reviewId"]
+    queue = (
+        await async_client.get("/api/v1/manual-reviews/production/queue", params={"category": "A"})
     ).json()["data"]
-    assert approved["status"] == "RESOLVED"
+    row = next(r for r in queue["items"] if r["id"] == case_id)
+    assert row["executionId"] == "EXEC-API"
+
+    # DELETE 仅 review_admin：reviewer 403，admin 物理删除后详情 404
+    forbidden = await async_client.delete(f"/api/v1/manual-reviews/production/{case_id}")
+    assert forbidden.status_code == 403
+    app.dependency_overrides[get_review_identity] = as_admin
+    try:
+        deleted = await async_client.delete(f"/api/v1/manual-reviews/production/{case_id}")
+        assert deleted.status_code == 200
+        assert deleted.json()["data"] == {"id": case_id, "deleted": True}
+        detail = await async_client.get(f"/api/v1/manual-reviews/production/{case_id}")
+        assert detail.status_code == 404
+    finally:
+        app.dependency_overrides[get_review_identity] = lambda: identity()
+
+    # 已处理（终态）case 不给删：409
+    resolved = service.create_direct_case(**_link_kwargs(task_id="TASK-DEL-2"))
+    other_id = resolved["reviewId"]
+    service.submit(other_id, 1, "entity-confirm", {"entityVerdict": "create"}, "", identity())
+    app.dependency_overrides[get_review_identity] = as_admin
+    try:
+        conflict = await async_client.delete(f"/api/v1/manual-reviews/production/{other_id}")
+        assert conflict.status_code == 409
+    finally:
+        app.dependency_overrides[get_review_identity] = lambda: identity()

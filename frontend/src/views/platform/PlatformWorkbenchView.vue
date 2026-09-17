@@ -1,19 +1,14 @@
 <script setup lang="ts">
 import {
   computed,
-  onMounted,
   onUnmounted,
   ref,
   watch,
 } from 'vue'
 import { useRouter } from 'vue-router'
-import {
-  listGraphSpaces,
-  unwrapApiResponse,
-  type ApiResponse,
-} from '../../api/graphSearch'
 import { runNgql, type GraphConsoleResult } from '../../api/graphConsole'
-import { graphSpace } from '../../config'
+import { currentGraphSpace } from '../../api/currentGraphSpace'
+import { useGraphSpaceStore } from '../../stores/graphSpace'
 import ListPagination from '../../components/list-pagination.vue'
 import { useClientPagination } from '../../composables/use-client-pagination'
 import { getErrorMessage } from '../../api/http'
@@ -278,16 +273,17 @@ const processingReason = ref('')
 const processingStartDate = ref('2026-07-12')
 const processingEndDate = ref('2026-07-13')
 const isActionLoading = ref(false)
-/** 实际请求使用的 TRSGraph 图空间。 */
-const defaultGraphSpace = graphSpace?.trim() || 'test'
 
-/** 查询页图空间选项（后端按用户隔离：普通用户仅返回绑定空间）。 */
-const graphSpaceOptions = ref<string[]>([])
+/**
+ * 实际请求使用的 TRSGraph 图空间：跟随右上角全局图空间选择器。
+ *
+ * 页面内不再单独提供图空间下拉，nGQL 与图算法两种模式共用全局选择。
+ */
+const graphSpaceStore = useGraphSpaceStore()
 
 /** 查询模式：nGQL 直查 | 图算法。 */
 const queryMode = ref<'ngql' | 'algo'>('ngql')
 const ngqlStatement = ref('')
-const ngqlSpace = ref(defaultGraphSpace)
 const ngqlLoading = ref(false)
 const ngqlResult = ref<GraphConsoleResult | null>(null)
 // nGQL 结果客户端分页：后端不限制返回行数，大结果集翻页展示（表头徽标仍显示总行数）
@@ -303,7 +299,8 @@ const {
 } = useClientPagination(ngqlRecords, 20)
 
 // ---------- 图算法模式 ----------
-const algoSpace = ref(defaultGraphSpace)
+/** 图算法空间跟随顶栏全局选择器（切换即重载边类型与引擎状态）。 */
+const algoSpace = computed(() => currentGraphSpace())
 const selectedAlgorithm = ref(GRAPH_ALGORITHMS[0].id)
 const algoLabels = ref<string[]>([])
 /** 按算法 id 分桶的参数值；切换算法时按目录默认值初始化该桶。 */
@@ -372,27 +369,6 @@ function initAlgoParams(algorithmId: string): void {
 initAlgoParams(selectedAlgorithm.value)
 
 const { showToast } = useToast()
-
-/**
- * 兼容 Axios 原始响应和 http.ts 拦截器拆包后的响应。
- *
- * http.ts 当前会通过响应拦截器直接返回 response.data，
- * 但 Axios 的静态类型仍可能将结果识别为 AxiosResponse。
- */
-function unwrapHttpApiResponse<T>(
-  response:
-    | ApiResponse<T>
-    | {
-        data: ApiResponse<T>
-      },
-): T {
-  const apiResponse =
-    'success' in response
-      ? response
-      : response.data
-
-  return unwrapApiResponse(apiResponse)
-}
 
 const activeService = computed(() => modules.find((item) => item.key === activeServiceKey.value) ?? modules[0])
 const activeRequestJson = computed(() => JSON.stringify(activeService.value.requestExample, null, 2))
@@ -619,20 +595,15 @@ async function handleNgqlQuery(): Promise<void> {
     return
   }
 
-  // 图空间必选：清空后不允许执行（后端按 X-Graph-Space 路由）
-  if (!ngqlSpace.value) {
-    showToast('请选择图空间', 'warning')
-    return
-  }
-
   ngqlLoading.value = true
   ngqlResult.value = null
   resetNgqlPage()
 
   try {
+    // 图空间跟随右上角全局选择器（后端按 X-Graph-Space 路由）
     ngqlResult.value =
       await runNgql(
-        ngqlSpace.value,
+        currentGraphSpace(),
         statement,
       )
   } catch (error) {
@@ -643,40 +614,6 @@ async function handleNgqlQuery(): Promise<void> {
   } finally {
     ngqlLoading.value = false
   }
-}
-
-async function initializeGraphSpace(): Promise<void> {
-  try {
-    const response =
-      await listGraphSpaces()
-
-    const data =
-      unwrapHttpApiResponse(
-        response,
-      )
-
-    graphSpaceOptions.value = data.spaces
-
-    if (
-      data.spaces.includes(defaultGraphSpace)
-    ) {
-      ngqlSpace.value = defaultGraphSpace
-
-      return
-    }
-
-    const fallback =
-      data.spaces.includes('dev')
-        ? 'dev'
-        : data.spaces[0]
-          ?? defaultGraphSpace
-    ngqlSpace.value = fallback
-  } catch {
-    // 空间列表加载失败时继续使用构建环境指定的默认图空间。
-    ngqlSpace.value = defaultGraphSpace
-  }
-  // 图算法模式的空间选择与 nGQL 模式保持同一默认值
-  algoSpace.value = ngqlSpace.value
 }
 
 // ---------- 图算法：元数据 / 提交 / 轮询 ----------
@@ -696,6 +633,21 @@ async function loadAlgoMetadata(force = false): Promise<void> {
     algoMetadataLoading.value = false
   }
 }
+
+// 全局图空间切换：清空既有查询结果，防止跨空间陈旧数据继续展示
+watch(
+  () => graphSpaceStore.current,
+  () => {
+    ngqlResult.value = null
+    resetNgqlPage()
+    // 图算法作业与结果绑定提交时的空间：停轮询并清空展示，避免跨空间陈旧数据
+    stopAlgoPoll()
+    algoJob.value = null
+    algoJobSpace.value = ''
+    algoResult.value = null
+    resetAlgoPage()
+  },
+)
 
 async function refreshAlgoEngine(): Promise<void> {
   if (!algoSpace.value) return
@@ -903,13 +855,6 @@ watch(activeTab, (tab) => {
   }
 }, { immediate: true })
 
-onMounted(async () => {
-  /*
-   * 图空间为查询页所需，挂载即加载；
-   * nGQL 仅在用户点击「执行 nGQL」按钮或 Ctrl+Enter 时执行，不在挂载时自动触发。
-   */
-  await initializeGraphSpace()
-})
 
 function handleStartTask() {
   const priority = processingPriority.value === '紧急' ? '紧急优先' : '普通优先级'
@@ -1258,12 +1203,6 @@ const pageMeta = computed(() => {
             </div>
           </div>
           <div v-if="queryMode === 'ngql'" class="platform-ngql-header-actions">
-            <div class="platform-ngql-input__space-field">
-              <label>图空间</label>
-              <a-select v-model="ngqlSpace" class="platform-ngql-input__space" :scrollbar="false">
-                <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
-              </a-select>
-            </div>
             <button
               class="kg-button"
               type="button"
@@ -1360,12 +1299,6 @@ const pageMeta = computed(() => {
           </p>
           <p class="platform-query-algo__desc">{{ selectedAlgorithmDef.label }}：{{ selectedAlgorithmDef.description }}</p>
           <div class="platform-form-grid">
-            <div class="platform-form-field">
-              <label class="platform-form-label" for="algo-space-select">图空间</label>
-              <a-select id="algo-space-select" v-model="algoSpace" :scrollbar="false">
-                <a-option v-for="item in graphSpaceOptions" :key="item" :value="item">{{ item }}</a-option>
-              </a-select>
-            </div>
             <div class="platform-form-field platform-query-algo__labels">
               <label class="platform-form-label">边类型（可多选）</label>
               <a-select
@@ -4440,15 +4373,6 @@ print(response.json())</pre>
 .platform-query-mode-toggle__item:hover:not(.is-active){background:#fff;color:#004ecc}
 .platform-ngql-input{display:grid;gap:16px;padding:16px 0}
 .platform-ngql-header-actions{display:flex;align-items:center;gap:16px;flex:0 0 auto}
-.platform-ngql-input__space-field{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;white-space:nowrap}.platform-ngql-input__space-field>label{flex:0 0 auto}
-.platform-ngql-input__space-field :deep(.arco-select){width:180px;min-width:180px;max-width:180px;flex:0 0 180px}
-.platform-ngql-input__space-field :deep(.arco-select-view){display:inline-flex;box-sizing:border-box;width:180px;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;align-items:center}
-.platform-ngql-input__space-field :deep(.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
-.platform-ngql-input__space-field :deep(.arco-select-view:focus-within),.platform-ngql-input__space-field :deep(.arco-select-view-focus){border-color:#004ecc!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.platform-ngql-input__space :deep(.arco-select-view-input){box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-.platform-ngql-input__space :deep(.arco-select-view-input:focus),.platform-ngql-input__space :deep(.arco-select-view-input:focus-visible){border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
-.platform-ngql-input__space :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
-.platform-ngql-input__space :deep(.arco-select-view-value){min-width:0;overflow:hidden;color:#1d2129;font-size:14px;line-height:30px;text-overflow:ellipsis;white-space:nowrap}
 .platform-ngql-input__textarea{box-sizing:border-box;width:100%;padding:10px 12px;border:1px solid #e5e6eb;border-radius:4px;background:#0d1117;color:#e6edf3;font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical;outline:0}
 .platform-ngql-input__textarea:focus{border-color:#004ecc;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
 /* 执行结果（nGQL / 图算法共用）：版式对齐原「综合图谱展示」区（左蓝条标题 + 白底描边内容盒），
@@ -4521,7 +4445,4 @@ print(response.json())</pre>
 </style>
 <style>
 /* The SelectView owns the only visible shell; its readonly input must never paint over the selected value. */
-.app-workspace .platform-query .platform-ngql-input__space input.arco-select-view-input{box-sizing:border-box;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
-.app-workspace .platform-query .platform-ngql-input__space input.arco-select-view-input:focus,.app-workspace .platform-query .platform-ngql-input__space input.arco-select-view-input:focus-visible{border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
-.app-workspace .platform-query .platform-ngql-input__space input.arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
 </style>

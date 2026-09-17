@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { waitFor } from './helpers'
+import { switchGraphSpace, waitFor } from './helpers'
 
 // B. 图谱查询（/graph-query，PlatformWorkbenchView 的 query Tab）
 // 参数模式已移除：查询页签收敛为「nGQL 模式 | 图算法」。
@@ -9,9 +9,9 @@ test.describe('B. 图谱查询', () => {
     await page.waitForLoadState('networkidle')
     await page.getByRole('button', { name: 'nGQL 模式' }).click()
 
-    // nGQL 面板内图空间选 dev2
-    await page.locator('.platform-ngql-input__space-field .arco-select-view-single').click()
-    await page.locator('li.arco-select-option:visible', { hasText: 'dev2' }).first().click()
+    // nGQL 面板内已无图空间控件：执行空间跟随顶栏全局选择器
+    await expect(page.locator('.platform-ngql-input__space-field')).toHaveCount(0)
+    await switchGraphSpace(page, 'dev2')
 
     const textarea = page.locator('textarea[placeholder*="MATCH (v:专家)"]')
     // 第一条：5 行记录（Ctrl+Enter 提交）
@@ -83,6 +83,8 @@ test.describe('B. 图谱查询', () => {
     // 默认落在 nGQL 模式：结果区常驻（未执行时空数据占位）；切到图算法 tab 出面板
     await expect(page.getByRole('heading', { name: 'nGQL 执行结果' })).toBeVisible()
     await expect(page.getByText('暂无数据，执行 nGQL 语句后在此查看结果')).toBeVisible()
+    // 图算法边类型/引擎状态按全局图空间加载：先切到 dev2 再进图算法面板
+    await switchGraphSpace(page, 'dev2')
     await page.getByRole('button', { name: '图算法' }).click()
     await expect(page.getByRole('heading', { name: '图算法' })).toBeVisible()
 
@@ -101,10 +103,11 @@ test.describe('B. 图谱查询', () => {
     await expect(page.getByText('Degree算法：', { exact: false })).toBeVisible()
     await page.getByRole('button', { name: 'PageRank算法' }).click()
 
-    // 边类型多选（真实 metadata）：选 HAS_KEYWORD
+    // 边类型多选（真实 metadata）：选 HAS_KEYWORD；dev2 边类型较多、弹层内需滚动，
+    // Escape 不再收起（焦点停在选项上），点面板外区域关闭弹层
     await page.locator('.platform-query-algo__labels .arco-select-view').click()
     await page.locator('li.arco-select-option:visible', { hasText: 'HAS_KEYWORD' }).first().click()
-    await page.keyboard.press('Escape')
+    await page.locator('.platform-query-algo__desc').click()
 
     // 提交 → 轮询（3s 间隔，两轮内到 succeeded）→ 结果表
     await page.getByRole('button', { name: '提交算法作业' }).click()

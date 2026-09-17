@@ -8,6 +8,7 @@ import {
   graphCount,
   resetWidgetRows,
   selectArcoScrolled,
+  switchGraphSpace,
   waitFor,
   WIDGET_SCRIPT,
 } from './helpers'
@@ -70,10 +71,10 @@ test.describe.serial('C. Schema 管理与属性管理', () => {
     await page.goto('/schema')
     await page.waitForLoadState('networkidle')
 
-    // 拓扑画布 + 图空间选择器
+    // 拓扑画布 + 顶栏全局图空间选择器（页面内已无独立空间控件）
     await expect(page.getByText('Schema 拓扑总览')).toBeVisible()
     await expect(page.locator('[aria-label="Schema 实体关系拓扑"]')).toBeVisible()
-    await expect(page.locator('.space-picker')).toBeVisible()
+    await expect(page.locator('.app-space-select')).toBeVisible()
 
     // 两个 Tab 可切换，行数与 API 一致
     const data = await apiMust<any>(
@@ -135,21 +136,15 @@ test.describe.serial('C. Schema 管理与属性管理', () => {
   test('C2 新增标准实体（含 nGQL 预览）', async ({ page, request }) => {
     await page.goto('/schema')
     await page.waitForLoadState('networkidle')
-    await page.locator('.space-picker .arco-select-view-single').click()
-    await page.locator('li.arco-select-option:visible', { hasText: 'dev2' }).first().click()
+    // 全局选择器切 dev2（默认即 dev2，显式切换保证幂等重跑语义一致）
+    await switchGraphSpace(page, 'dev2')
     await waitFor(async () => (await page.locator('tbody tr').count()) > 0, { label: '切空间后列表' })
 
     await page.getByRole('button', { name: '＋ 增加' }).click()
     const modal = page.locator('.schema-create-modal')
     await expect(modal).toBeVisible()
 
-    // 图空间默认跟随 activeSpace=dev2（无需重选；重选会因值未变合层导致点击悬空）
-    const spaceValue = await modal
-      .locator('.create-field', { hasText: '图空间' })
-      .locator('.arco-select-view-value')
-      .first()
-      .innerText()
-    expect(spaceValue).toContain('dev2')
+    // 新建弹窗已无图空间字段：提交固定落当前全局空间（dev2），落库归属由后续 API 复核
     await modal.locator('input[placeholder="Gadget"]').fill(NAME)
     await modal.locator('input[placeholder="如：技术"]').fill('E2E测试挂件')
     await modal.locator('textarea').first().fill('e2e 属性管理验收')
@@ -468,12 +463,7 @@ test.describe.serial('C. Schema 管理与属性管理', () => {
     await page.getByRole('button', { name: '＋ 增加' }).click()
     const modal = page.locator('.schema-create-modal')
     await expect(modal).toBeVisible()
-    const relSpace = await modal
-      .locator('.create-field', { hasText: '图空间' })
-      .locator('.arco-select-view-value')
-      .first()
-      .innerText()
-    expect(relSpace).toContain('dev2')
+    // 关系同样落当前全局空间（dev2），无弹窗内空间字段
     await modal.locator('input[placeholder="USES_TECHNOLOGY"]').fill('E2E_RELATES')
     await modal.locator('input[placeholder="如：技术"]').fill('E2E挂件关系')
     // 起点/终点选 E2EWidget（下拉只列当前空间实体；长列表虚拟滚动需滚动查找）

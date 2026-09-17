@@ -164,33 +164,24 @@ class ManualReviewService:
                 ReviewCase.updated_at
                 >= datetime.now() - timedelta(hours=updated_within_hours[f["updated_within"]])
             )
-        # 排序：sort=updatedAt 时按更新时间（order=asc|desc，默认 desc）；
-        # 不传 sort 保持既有默认 风险级→创建时间升序（前端 e2e 按创建时间升序的假设依赖它）
-        if f.get("sort") == "updatedAt":
-            ordering = (
-                (
-                    ReviewCase.updated_at.asc()
-                    if f.get("order") == "asc"
-                    else ReviewCase.updated_at.desc()
-                ),
-            )
+        # 排序：updated_desc/updated_asc 按更新时间；默认 风险等级 + 创建时间
+        if f.get("sort") == "updated_desc":
+            order = [ReviewCase.updated_at.desc()]
+        elif f.get("sort") == "updated_asc":
+            order = [ReviewCase.updated_at.asc()]
         else:
-            ordering = (
+            order = [
                 case(
                     {"高": "P0", "中": "P1"},
                     value=ReviewCase.risk_level,
                     else_=ReviewCase.risk_level,
                 ),
                 ReviewCase.created_at,
-            )
+            ]
         with self.sf() as s:
             total = s.scalar(select(func.count()).select_from(ReviewCase).where(*q)) or 0
             rows = s.scalars(
-                select(ReviewCase)
-                .where(*q)
-                .order_by(*ordering)
-                .offset((page - 1) * size)
-                .limit(size)
+                select(ReviewCase).where(*q).order_by(*order).offset((page - 1) * size).limit(size)
             ).all()
             return {
                 "items": [self.case_dict(x) for x in rows],
@@ -1147,29 +1138,6 @@ class ManualReviewService:
             s.delete(c)
             s.commit()
         return {"id": i, "deleted": True}
-
-    def delete_cases(self, ids, a):
-        """硬删除 T_EXTRACT_FAIL case（连同草稿/证据/裁决/审计记录），供失败列表清理。
-
-        仅限 T_EXTRACT_FAIL——A 类入库决策 case 不走此通道；不存在或模板不符的
-        id 跳过并在 skipped 里计数。删除不可恢复，调用方（前端）需自行二次确认。
-        """
-        require_role(a, "review_admin")
-        wanted = list(dict.fromkeys(ids or []))
-        if not wanted:
-            return {"deleted": 0, "skipped": 0}
-        with self.sf() as s:
-            rows = s.scalars(
-                select(ReviewCase).where(
-                    ReviewCase.id.in_(wanted), ReviewCase.template_id == "T_EXTRACT_FAIL"
-                )
-            ).all()
-            for c in rows:
-                for model in (ReviewDraft, ReviewDecision, ReviewEvidence, ReviewAuditLog):
-                    s.execute(delete(model).where(model.case_id == c.id))
-                s.delete(c)
-            s.commit()
-        return {"deleted": len(rows), "skipped": len(wanted) - len(rows)}
 
     def logs(self, i, a):
         with self.sf() as s:

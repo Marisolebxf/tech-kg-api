@@ -68,6 +68,24 @@ def sha(v):
     return hashlib.sha256(dump(v).encode()).hexdigest()
 
 
+def resolve_job_ids(execution_ids: list[str | None]) -> dict[str, str]:
+    """EXEC 执行 ID → 所属图谱构建任务 ID（job-xxx）批量解析。
+
+    人工审核「来源记录」跳任务详情用；控制面库（techkg_control）不可达时
+    返回空映射，不影响审核队列本身——建案时快照里有 jobId 的 case 不依赖此查询。
+    """
+    ids = [i for i in execution_ids if i]
+    if not ids:
+        return {}
+    try:
+        from service.workflow_repository import repository
+
+        return repository.job_ids_by_execution_ids(execution_ids)
+    except Exception:  # noqa: BLE001
+        logger.warning("resolve jobId for review cases failed", exc_info=True)
+        return {}
+
+
 logger = logging.getLogger("service.manual_review")
 
 
@@ -183,8 +201,12 @@ class ManualReviewService:
             rows = s.scalars(
                 select(ReviewCase).where(*q).order_by(*order).offset((page - 1) * size).limit(size)
             ).all()
+            # 来源记录跳任务详情：一次 IN 查询批量解析本页 EXEC→jobId（快照已有 jobId 的行跳过）
+            job_map = resolve_job_ids(
+                [(load(x.input_snapshot) or {}).get("executionId") for x in rows]
+            )
             return {
-                "items": [self.case_dict(x) for x in rows],
+                "items": [self.case_dict(x, job_map) for x in rows],
                 "total": total,
                 "page": page,
                 "pageSize": size,
@@ -1291,13 +1313,18 @@ class ManualReviewService:
             )
         )
 
-    def case_dict(self, c):
+    def case_dict(self, c, job_map: dict[str, str] | None = None):
+        input_data = load(c.input_snapshot) or {}
+        execution_id = input_data.get("executionId")
         return {
             "id": c.id,
             "sourceTaskId": c.source_task_id,
             "batchId": c.batch_id,
+            # 图谱构建任务：产生该 case 的 job（job-xxx，前端「来源记录」跳 /graph-build/jobs）。
+            # 优先建案时写入快照的 jobId；存量 case 靠 job_map（EXEC→job 批量解析）兜底。
+            "jobId": input_data.get("jobId") or (job_map or {}).get(execution_id or ""),
             # 图谱构建ID：产生该 case 的抽取执行（EXEC-xxx，前端跳 /processing-instance）
-            "executionId": (load(c.input_snapshot) or {}).get("executionId"),
+            "executionId": execution_id,
             "workflowId": c.workflow_id,
             "nodeId": c.pipeline_step_id,
             "pipelineStepId": c.pipeline_step_id,
@@ -1332,10 +1359,10 @@ class ManualReviewService:
         }
 
     def detail(self, s, c, duplicate=False):
-        d = self.case_dict(c)
+        input_data = load(c.input_snapshot) or {}
+        d = self.case_dict(c, resolve_job_ids([input_data.get("executionId")]))
         dr = s.get(ReviewDraft, c.id)
         reported = (load(c.candidate_snapshot) or {}).pop("reportedEvidence", [])
-        input_data = load(c.input_snapshot) or {}
         files = [
             {
                 "id": x.id,

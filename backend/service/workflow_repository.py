@@ -257,6 +257,20 @@ class WorkflowRepository:
             )
             return json.loads(row.payload) if row else None
 
+    def job_ids_by_execution_ids(self, execution_ids: list[str | None]) -> dict[str, str]:
+        """按执行 ID 批量取所属 jobId（人工审核「来源记录」跳图谱构建任务详情）。"""
+        ids = [i for i in execution_ids if i]
+        if not ids:
+            return {}
+        with workflow_session_scope() as session:
+            rows = session.execute(
+                select(WorkflowExecution.id, WorkflowExecution.job_id).where(
+                    WorkflowExecution.id.in_(ids),
+                    WorkflowExecution.job_id.isnot(None),
+                )
+            ).all()
+            return {execution_id: job_id for execution_id, job_id in rows}
+
     def list_executions(
         self,
         limit: int = 100,

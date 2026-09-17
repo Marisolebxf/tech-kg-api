@@ -193,3 +193,32 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(wrapper.text()).not.toContain('处理时间线')
   })
 })
+
+describe('来源记录跳图谱构建任务详情', () => {
+  it('有 jobId 跳 /graph-build/jobs；无 jobId 回落执行详情；都没有显示占位符', async () => {
+    mocks.getProductionReviews.mockReset().mockResolvedValue({
+      items: [
+        { ...caseRow('MR-1', 'OPEN'), jobId: 'job-abc123def456' },
+        caseRow('MR-2', 'OPEN'),
+        { ...caseRow('MR-3', 'OPEN'), executionId: undefined, workflowId: undefined },
+      ],
+      total: 3, page: 1, pageSize: 10,
+    })
+
+    const wrapper = renderReview()
+    await flushPromises()
+
+    // 来源记录单元格（区别于首列处理实例 ID 单元格：后者无链接）；
+    // RouterLink stub 不渲染插槽，标签文本断言从单元格取
+    const sourceLinks = wrapper.findAll('tbody tr td.review-id-cell router-link-stub')
+    expect(sourceLinks).toHaveLength(2)
+    expect(sourceLinks[0].attributes('to')).toBe('/graph-build/jobs/job-abc123def456')
+    // 存量 case 无 jobId：保持原执行详情跳转
+    expect(sourceLinks[1].attributes('to')).toBe('/processing-instance/EXEC-MR-2')
+
+    // 两个 ID 都缺：显示占位符，不渲染链接
+    const thirdSourceCell = wrapper.findAll('tbody tr td.review-id-cell')[4 + 1]
+    expect(thirdSourceCell.find('router-link-stub').exists()).toBe(false)
+    expect(thirdSourceCell.text()).toBe('—')
+  })
+})

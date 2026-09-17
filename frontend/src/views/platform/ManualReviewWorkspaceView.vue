@@ -192,6 +192,18 @@ watch(
   },
   { immediate: true },
 )
+/** T_LINK 空候选（脚本挂实体改道、图库召回无同名）：merge 无目标可选，
+ *  降级为 create/reject 两键——服务端 create 会落在挂起 vid（object_id）上。 */
+const linkMergeDisabled = computed(
+  () => templateId.value === 'T_LINK' && !!linkSnapshot.value && !linkCandidates.value.length,
+)
+watch(
+  linkMergeDisabled,
+  (disabled) => {
+    if (disabled && entityVerdict.value === 'merge') entityVerdict.value = 'create'
+  },
+  { immediate: true },
+)
 
 const manualReviewFormRef = ref()
 const manualReviewFormModel = computed(() => ({
@@ -490,6 +502,11 @@ const runPrimary = () => {
           </ul>
         </template>
 
+        <!-- T_LINK 空候选（脚本挂实体改道、召回无同名）：无 merge 目标，降级为新建/驳回 -->
+        <p v-else-if="templateId === 'T_LINK' && linkSnapshot" class="zone-banner">
+          图库无同名候选，无法并入——请「确认为新实体」落图，或驳回丢弃该挂起实体及其暂存边。
+        </p>
+
         <!-- T_DIRECT：待入库候选字段（可修正，确认时按修正后写图） -->
         <div v-else-if="templateId === 'T_DIRECT'" class="direct-fields-block">
           <header class="direct-candidate-head">
@@ -532,7 +549,7 @@ const runPrimary = () => {
         <!-- 裁决单选：T_LINK 三选（merge/create/reject）；T_DIRECT 通过或驳回 -->
         <a-form-item v-if="templateId === 'T_LINK'" field="entityVerdict" hide-label>
         <a-radio-group v-model="entityVerdict" class="verdict" aria-label="实体对齐裁决">
-          <a-radio value="merge" :disabled="!isEditable">合并到所选候选（写入图）</a-radio>
+          <a-radio value="merge" :disabled="!isEditable || linkMergeDisabled">合并到所选候选（写入图）</a-radio>
           <a-radio value="create" :disabled="!isEditable">确认为新实体（写入图）</a-radio>
           <a-radio value="reject" :disabled="!isEditable">均不匹配，驳回候选（丢弃该记录）</a-radio>
         </a-radio-group>

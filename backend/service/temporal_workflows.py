@@ -21,7 +21,7 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError
 
-from service.script_steps import extract_step_list
+from service.script_steps import extract_declared_steps
 
 logger = logging.getLogger(__name__)
 
@@ -579,15 +579,16 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         suffix=".py",
         data=data,
     )
-    # STEPS 多步声明解析：脚本顶层 STEPS 清单 → 多步链；无声明 → 单步兜底
-    # （入口名沿用上传时存的 functionName）。上传时 _validate_script 已校验过形状，
-    # 这里重新解析兜住绕过上传通道的脚本，非法即失败（workflow 报清晰错误）。
+    # 多步声明解析：@step 装饰器（推荐）或顶层 STEPS 清单（兼容）→ 多步链；
+    # 无声明 → 单步兜底（入口名沿用上传时存的 functionName）。上传时
+    # _validate_script 已校验过形状，这里重新解析兜住绕过上传通道的脚本，
+    # 非法即失败（workflow 报清晰错误）。
     try:
-        declared_steps = extract_step_list(
+        declared_steps = extract_declared_steps(
             data.decode("utf-8-sig", errors="replace"), filename=object_key
         )
     except ValueError as exc:
-        raise ValueError(f"Schema 脚本 STEPS 声明非法: {exc}") from exc
+        raise ValueError(f"Schema 脚本多步声明非法: {exc}") from exc
     steps = declared_steps or [{"id": "_default", "fn": function_name}]
     return {
         "schemaId": schema_id,

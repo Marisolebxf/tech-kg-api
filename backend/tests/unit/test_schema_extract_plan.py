@@ -172,14 +172,43 @@ async def test_load_schema_extract_plan_parses_steps_declaration(
     assert plan["multiStep"] is True
 
 
+DECORATED_SCRIPT = (
+    b"from kg_sdk import step\n"
+    b"\n"
+    b"\n"
+    b"@step\n"
+    b"def normalize(payload):\n"
+    b'    return {"cleaned": payload.get("rows", [])}\n'
+    b"\n"
+    b"\n"
+    b'@step("emit-rows")\n'
+    b"def do_emit(payload):\n"
+    b'    return {"entities": []}\n'
+)
+
+
+@pytest.mark.asyncio
+async def test_load_schema_extract_plan_parses_step_decorators(
+    plan_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """@step 装饰器脚本：步顺序 = 源码顺序，显式 id 可含 -，multiStep=True。"""
+    monkeypatch.setattr("infra.s3.get_schema_s3_storage", lambda: FakeS3(DECORATED_SCRIPT))
+    plan = await load_schema_extract_plan("schema-1")
+    assert plan["steps"] == [
+        {"id": "normalize", "fn": "normalize"},
+        {"id": "emit-rows", "fn": "do_emit"},
+    ]
+    assert plan["multiStep"] is True
+
+
 @pytest.mark.asyncio
 async def test_load_schema_extract_plan_rejects_invalid_steps(
     plan_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """绕过上传通道的非法 STEPS（fn 未定义）在 plan 组装时报清晰错误。"""
+    """绕过上传通道的非法多步声明（fn 未定义）在 plan 组装时报清晰错误。"""
     broken = b'STEPS = [{"id": "a", "fn": "missing"}]\n\ndef fa(p):\n    return {}\n'
     monkeypatch.setattr("infra.s3.get_schema_s3_storage", lambda: FakeS3(broken))
-    with pytest.raises(ValueError, match="STEPS 声明非法.*未在脚本顶层定义"):
+    with pytest.raises(ValueError, match="多步声明非法.*未在脚本顶层定义"):
         await load_schema_extract_plan("schema-1")
 
 

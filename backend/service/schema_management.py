@@ -33,7 +33,7 @@ from service.schema_ddl import (
     run_schema_ddl,
 )
 from service.script_security import review_script_security
-from service.script_steps import step_list_from_tree
+from service.script_steps import declared_steps_from_tree
 
 OWN_SCHEMA_SCRIPT_REQUIRED = "只能更换自己创建的 Schema 脚本"
 SYSTEM_SCHEMA_ADMIN_REQUIRED = "只有 Schema 管理员可以更换系统 Schema 脚本"
@@ -1040,17 +1040,18 @@ class SchemaManagementService:
             for node in tree.body
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
-        # 多步声明：顶层 STEPS 清单（list 字面量），与 transform 互斥（同时声明即报歧义）
+        # 多步声明：@step 装饰器（推荐）或顶层 STEPS 清单（兼容），与 transform 互斥
+        # （同时声明即报歧义）
         try:
-            declared_steps = step_list_from_tree(tree)
+            declared_steps = declared_steps_from_tree(tree)
         except ValueError as exc:
             raise SchemaScriptError(str(exc)) from exc
         # 优先平台喂数抽取入口 transform(payload)；旧全量脚本入口 workflow(payload) 兼容
         if "transform" in functions:
             return "transform"
         if declared_steps is not None:
-            # STEPS 脚本的 workflow_function_name 只存第一步 fn（详情页展示/排查参考）；
-            # 执行时 load_schema_extract_plan 会重新 ast 解析 STEPS，不依赖该列
+            # 多步脚本的 workflow_function_name 只存第一步 fn（详情页展示/排查参考）；
+            # 执行时 load_schema_extract_plan 会重新 ast 解析声明，不依赖该列
             return declared_steps[0]["fn"]
         return "workflow" if "workflow" in functions else None
 

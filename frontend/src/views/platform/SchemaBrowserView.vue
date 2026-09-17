@@ -1322,7 +1322,7 @@ function togglePropertyDetail(schemaId: string): void {
           <header><h2>上传脚本 · {{ uploadTargetName }}</h2><button type="button" @click="closeUploadModal">×</button></header>
           <div class="schema-modal__body">
             <div v-if="uploadState === 'idle'" class="upload-idle">
-              <p>选择 .py 脚本文件，上传后将通过 LLM 进行安全校验，校验通过才会保存。支持在脚本内声明 STEPS 多步清单（每步一个 <code>step_fn(payload)</code>，平台按序执行、逐步重试）。</p>
+              <p>选择 .py 脚本文件，上传后将通过 LLM 进行安全校验，校验通过才会保存。支持多步脚本：<code>from kg_sdk import step</code> 后在顶层函数上标注 <code>@step</code>（顺序 = 函数出现顺序，平台按序执行、逐步重试；也兼容顶层 STEPS 清单声明）。</p>
               <button type="button" class="primary" @click="pickUploadFile">选择 .py 文件</button>
             </div>
             <div v-else-if="uploadState === 'working'" class="upload-working">

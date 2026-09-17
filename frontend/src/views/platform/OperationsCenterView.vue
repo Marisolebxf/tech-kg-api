@@ -330,8 +330,6 @@ onMounted(loadReviews)
             <th>待处理对象</th>
             <th>阻断节点</th>
             <th>来源记录</th>
-            <th>更新批次</th>
-            <th>处理人</th>
             <th>状态</th>
             <th>更新时间</th>
             <th class="review-action-col">操作</th>
@@ -361,8 +359,6 @@ onMounted(loadReviews)
               <strong>{{ row.sourceTable || '—' }}</strong>
               <small><code>{{ row.sourceRecordId || '—' }}</code></small>
             </td>
-            <td><code>{{ row.batch }}</code></td>
-            <td>{{ row.handler }}</td>
             <td><span :class="['review-status', `is-${row.status}`]">{{ row.status }}</span></td>
             <td>{{ row.completedAt || row.updatedAt }}</td>
             <td class="review-action-col">
@@ -381,7 +377,7 @@ onMounted(loadReviews)
             </td>
           </tr>
           <tr v-if="!reviewRows.length">
-            <td class="review-empty" :colspan="reviewCategory === 'C' ? 10 : 9">{{ reviewLoadError || (reviewStatusFilter === '全部' && reviewKindFilter === '全部' && !keyword ? '暂无人工处理记录' : '暂无符合条件的记录') }}</td>
+            <td class="review-empty" :colspan="reviewCategory === 'C' ? 8 : 7">{{ reviewLoadError || (reviewStatusFilter === '全部' && reviewKindFilter === '全部' && !keyword ? '暂无人工处理记录' : '暂无符合条件的记录') }}</td>
           </tr>
         </tbody>
       </table></div>

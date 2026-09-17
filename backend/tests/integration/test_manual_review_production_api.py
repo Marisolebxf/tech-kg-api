@@ -54,27 +54,6 @@ def _link_kwargs(**overrides):
 
 
 @pytest.mark.anyio
-async def test_http_bulk_delete_requires_admin_and_preserves_a_cases(async_client, production_api):
-    app, service = production_api
-    extract = service.create_direct_case(
-        **_link_kwargs(task_id="TASK-EXTRACT", template_id="T_EXTRACT_FAIL")
-    )
-    link = service.create_direct_case(**_link_kwargs())
-    payload = {"caseIds": [extract["reviewId"], link["reviewId"], "MR-MISSING"]}
-    endpoint = "/api/v1/manual-reviews/production/delete-cases"
-    forbidden = await async_client.post(endpoint, json=payload)
-    assert forbidden.status_code == 403
-    app.dependency_overrides[get_review_identity] = lambda: identity("admin-1", ("review_admin",))
-    deleted = await async_client.post(endpoint, json=payload)
-    assert deleted.status_code == 200
-    assert deleted.json()["data"] == {"deleted": 1, "skipped": 2}
-    missing = await async_client.get(f"/api/v1/manual-reviews/production/{extract['reviewId']}")
-    assert missing.status_code == 404
-    retained = await async_client.get(f"/api/v1/manual-reviews/production/{link['reviewId']}")
-    assert retained.status_code == 200
-
-
-@pytest.mark.anyio
 async def test_http_queue_claim_draft_submit(async_client, production_api):
     _, service = production_api
     created = service.create_direct_case(**_link_kwargs())

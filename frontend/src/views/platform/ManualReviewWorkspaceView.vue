@@ -480,21 +480,22 @@ const runPrimary = () => {
             <span>备注（可选）</span>
             <input aria-label="审核备注..." v-model="note" placeholder="审核备注..." />
           </label>
-          <div v-if="isEditable" class="direct-actions">
+          <!-- 已处理（终态）按钮保留但置灰，状态文字照常展示 -->
+          <div class="direct-actions">
             <button type="button" v-if="directEditing" class="direct-accept direct-accept-fix" :disabled="submitting || !directPatchedCandidate" @click="handleAction({ id: 'accept-fix', label: '修正后入库', kind: 'primary' })">
               <strong>修正后入库</strong>
               <em>{{ directPatchedCandidate ? `覆盖 ${directEditedKeys.length} 个字段并写图 · 记入审计` : '请先在①候选中修改字段' }}</em>
             </button>
-            <button type="button" v-if="!directEditing" class="direct-accept" :disabled="submitting" @click="handleAction({ id: 'accept', label: '通过·入库', kind: 'primary' })">
+            <button type="button" v-if="!directEditing" class="direct-accept" :disabled="submitting || !isEditable" @click="handleAction({ id: 'accept', label: '通过·入库', kind: 'primary' })">
               <strong>通过·入库</strong>
               <em>{{ directKind === 'relation' ? `创建${labelZh(directEdgeType) || '?'}边` : `创建${labelZh(directNodeLabel) || '?'}节点` }}</em>
             </button>
-            <button type="button" class="direct-reject" :disabled="submitting" @click="handleAction({ id: 'reject', label: '驳回·丢弃', kind: 'danger' })">
+            <button type="button" class="direct-reject" :disabled="submitting || !isEditable" @click="handleAction({ id: 'reject', label: '驳回·丢弃', kind: 'danger' })">
               <strong>驳回·丢弃</strong>
               <em>候选丢弃，不写图</em>
             </button>
           </div>
-          <p v-else class="direct-done">已决策 · 状态 {{ record.status }}</p>
+          <p v-if="!isEditable" class="direct-done">已决策 · 状态 {{ record.status }}</p>
         </section>
       </section>
 
@@ -537,17 +538,17 @@ const runPrimary = () => {
         <section class="direct-decision">
           <h3>操作</h3>
           <div class="direct-actions">
+            <!-- 已处理（终态）重跑按钮保留但置灰 -->
             <button type="button"
-              v-if="productionCase?.status === 'OPEN'"
               class="direct-accept"
-              :disabled="extractRerunSubmitting"
+              :disabled="extractRerunSubmitting || productionCase?.status !== 'OPEN'"
               @click="rerunThisRecord"
             >
               <strong>{{ extractRerunSubmitting ? '下发中…' : '重跑该记录' }}</strong>
               <em>只重读该记录 · 新执行类别=重新执行</em>
             </button>
-            <p v-else-if="extractRerunning" class="direct-done">重跑执行中（{{ extractRerunExecutionId || '新执行' }}）· 完成后自动关闭，仍失败会生成新记录</p>
-            <p v-else class="direct-done">已处理 · 状态 {{ record.status }}</p>
+            <p v-if="extractRerunning" class="direct-done">重跑执行中（{{ extractRerunExecutionId || '新执行' }}）· 完成后自动关闭，仍失败会生成新记录</p>
+            <p v-else-if="productionCase?.status !== 'OPEN'" class="direct-done">已处理 · 状态 {{ record.status }}</p>
           </div>
         </section>
       </section>
@@ -628,7 +629,8 @@ const runPrimary = () => {
       <p v-if="feedback" class="rw-feedback">{{ feedback }}</p>
     </main>
 
-    <footer v-if="!isDirectCase && isEditable" class="rw-foot">
+    <!-- 已处理（终态）也保留底部按钮，仅置灰不可点击 -->
+    <footer v-if="!isDirectCase" class="rw-foot">
       <div class="rw-foot__actions">
         <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ templateId === 'T_LINK' ? '确认' : primaryActionLabel }}</button>
       </div>
@@ -1278,7 +1280,10 @@ const runPrimary = () => {
 .direct-reject{border:2px solid #d92d20;background:#d92d20;color:#fff}
 .direct-accept strong,.direct-reject strong{font-size:15px;font-weight:700}
 .direct-accept em,.direct-reject em{color:rgba(255,255,255,.85);font-style:normal;font-size:11px}
-.direct-accept:disabled,.direct-reject:disabled{opacity:.5;cursor:not-allowed}
+/* 终态/提交中置灰（与底部 footer 禁用色一致） */
+.direct-accept:disabled,.direct-reject:disabled{border-color:#d0d5dd;background:#eaecf0;color:#98a2b3;cursor:not-allowed}
+.direct-accept:disabled em,.direct-reject:disabled em{color:#98a2b3}
+.direct-actions .direct-done{grid-column:1/-1}
 .direct-accept:hover:not(:disabled),.direct-reject:hover:not(:disabled){opacity:.92}
 .direct-done{margin:0;padding:14px;text-align:center;color:#475569;font-size:13px;background:#fff;border-radius:6px;border:1px solid #e4ecf6}
 .extract-error-text{margin:0;padding:10px 12px;border:1px solid #f6c6b4;border-radius:6px;background:#fff8f5;color:#b42318;font-size:12px;line-height:19px;white-space:pre-wrap;word-break:break-all}

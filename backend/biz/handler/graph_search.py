@@ -23,6 +23,7 @@ from biz.handler import get_cache
 from biz.schemas.common import ApiResponse
 from infra.graph_db import TRSGraphClient, get_space_client, get_trs_graph_client
 from infra.graph_db.exceptions import GraphRequestError
+from infra.graph_db.models import GraphNode
 from infra.mysql import create_session
 
 router = APIRouter(prefix="/graph-search", tags=["graph-search"])
@@ -339,14 +340,20 @@ def _typed_path_from_record(
 # ---------- API 端点 ----------
 
 
-@router.get("/nodes/{node_id}")
+@router.get("/nodes/{node_id:path}")
 async def get_node(
     actor: CurrentActor,
     node_id: str,
     space: str | None = Query(None, description="图空间，如 dev/techkg，缺省用默认空间"),
 ) -> ApiResponse:
-    """按 VID 查单个节点详情。"""
+    """按 VID 查单个节点详情。
+
+    路径参数用 path 转换器：DOI 等业务 VID 本身含 ``/``（如
+    ``paper_ref_10.1111/jth.14768``），经网关/uvicorn 解码后是多个路径段，
+    单段参数会直接 404 Not Found。
+    """
     _ensure_space_access(actor, space)
+    node_id = node_id.strip('"')
     try:
         node = await asyncio.to_thread(_get_client(space).get_node, node_id)
         if node is None:
@@ -435,7 +442,7 @@ async def search_typed_paths(body: TypedPathSearchRequest, actor: CurrentActor) 
         return _graph_query_error("search_typed_paths")
 
 
-@router.get("/subgraph/{node_id}")
+@router.get("/subgraph/{node_id:path}")
 async def get_subgraph(
     actor: CurrentActor,
     node_id: str,
@@ -446,8 +453,12 @@ async def get_subgraph(
     direction: Literal["out", "in", "both"] = Query("both", description="方向: out/in/both"),
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:
-    """查某节点的 N 跳子图（点 + 边），前端直接渲染图谱。"""
+    """查某节点的 N 跳子图（点 + 边），前端直接渲染图谱。
+
+    路径参数用 path 转换器：同 /nodes/{node_id}，兼容含 ``/`` 的 VID（DOI）。
+    """
     _ensure_space_access(actor, space)
+    node_id = node_id.strip('"')
     try:
         subgraph = await asyncio.to_thread(
             _collect_subgraph,
@@ -476,10 +487,13 @@ def _collect_subgraph(
     direction: str,
 ) -> dict[str, Any] | None:
     """同步收集 N 跳子图（多步图查询，整体放线程里执行以免卡住事件循环）。"""
-    # 中心节点
+    # 中心节点；查不到属性但有边（Nebula 悬挂点，如引用边的 DOI 端点，
+    # FETCH/MATCH 均不可见）时以占位节点继续，保证邻域子图仍可渲染。
     center = client.get_node(node_id)
     if center is None:
-        return None
+        if not client.get_node_edges(node_id, direction="both", limit=1):
+            return None
+        center = GraphNode(id=node_id, labels=[], properties={})
 
     nodes: list[GraphNodeData] = [_node_to_data(center)]
     edges: list[GraphEdgeData] = []
@@ -505,11 +519,14 @@ def _collect_subgraph(
                 neighbor_id = str(e.target_id if str(e.source_id) == vid else e.source_id)
                 if neighbor_id not in seen_vids:
                     neighbor = client.get_node(neighbor_id)
-                    if neighbor:
-                        n_data = _node_to_data(neighbor)
-                        nodes.append(n_data)
-                        seen_vids.add(n_data.id)
-                        next_frontier.append(n_data.id)
+                    if neighbor is None:
+                        # 悬挂点邻居（边端点无 tag，FETCH/MATCH 不可见）：占位渲染。
+                        # 边已收集，端点必须出现在 nodes 里，否则画布上边指向幽灵节点。
+                        neighbor = GraphNode(id=neighbor_id, labels=[], properties={})
+                    n_data = _node_to_data(neighbor)
+                    nodes.append(n_data)
+                    seen_vids.add(n_data.id)
+                    next_frontier.append(n_data.id)
         frontier = next_frontier
 
     # 边按页限制；节点需包含中心点和本页所有边端点。

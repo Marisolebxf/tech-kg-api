@@ -2,9 +2,16 @@
 # （APP_BASE 缺省 /bkg_zpt，见 Dockerfile ENV）。根路径部署（APP_BASE 空）的
 # 302 自指/空前缀 location 由 docker/40-app-runtime-config.sh 修正。
 # 注意：$uri/$host 等 nginx 变量未被环境定义，envsubst 不会替换。
+# 同时监听 80 与 8080：8080 对齐 nginx-unprivileged 基镜像约定与 Dockerfile EXPOSE
+# （主栈映射 *:8080），80 兼容各私有栈的「主机端口:80」映射（8096:80 等）。
+# 只写其一会让另一种映射的栈在镜像更新后连接被重置。
 server {
   listen 80;
+  listen 8080;
   server_name _;
+  # Location 用相对路径：默认 absolute_redirect 会拼出容器端口（:8080）的绝对地址，
+  # 本地 compose 直访主机端口时会被重定向到错误端口
+  absolute_redirect off;
 
   root /usr/share/nginx/html;
   index index.html;

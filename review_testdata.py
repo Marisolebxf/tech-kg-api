@@ -85,6 +85,18 @@ def info(msg):
     print("  - " + msg)
 
 
+def wait_for(pred, timeout=15, interval=2):
+    """边写入后 traversal 端点有秒级可见性延迟：正断言短轮询。"""
+    deadline = time.time() + timeout
+    while True:
+        value = pred()
+        if value:
+            return value
+        if time.time() >= deadline:
+            return value
+        time.sleep(interval)
+
+
 def wait_execution(execution_id, timeout=240):
     for _ in range(timeout // 3):
         code, resp = req("GET", f"/workflow-system/executions/{execution_id}")
@@ -107,8 +119,11 @@ def queue_pending():
 
 
 def ours(item):
+    # T_EXTRACT_FAIL 的 sourceTable 是全限定名、objectName 是 表#记录 格式，都得兜住
+    st = str(item.get("sourceTable") or "")
     return (
-        item.get("sourceTable") == "review_widgets"
+        st == "review_widgets"
+        or st.endswith(".review_widgets")
         or str(item.get("objectName") or "").startswith("审测")
     )
 
@@ -163,6 +178,13 @@ def graph_edges(vid):
         return []
     data = resp.get("data") or {}
     return data if isinstance(data, list) else data.get("items") or []
+
+
+def audit_logs(case_id):
+    code, resp = req("GET", f"/manual-reviews/production/{case_id}/audit-logs")
+    if code != 200:
+        return []
+    return ((resp.get("data") or {}).get("items")) or []
 
 
 def task_logs(task_id):
@@ -660,16 +682,24 @@ def buttons(gray_case, pending_case, dual_case, coll_case):
     ok(code == 200, f"create 提交 {code}: {str(resp)[:150]}")
     node = graph_node("rwpend-rw204")
     ok(node is not None, "挂起实体按预留 vid 落图")
-    edges = graph_edges("rwpend-rw204")
-    linked = [e for e in edges if RELATION_NAME in json.dumps(e, ensure_ascii=False)]
-    ok(len(linked) >= 1, f"暂存边补写：REVIEW_LINKED 边已落图（实际 {edges}）")
+    linked = wait_for(lambda: [
+        e for e in graph_edges("rwpend-rw204")
+        if RELATION_NAME in json.dumps(e, ensure_ascii=False)
+    ])
+    ok(len(linked) >= 1, f"暂存边补写：REVIEW_LINKED 边已落图（实际 {linked}）")
     ok(case_detail(pending_case["id"]).get("status") == "RESOLVED", "挂起案 RESOLVED")
 
-    step("buttons.3 T_LINK reject：零写入")
+    step("buttons.3 T_LINK reject：零写入、决议落审计")
     code, resp = submit(dual_case["id"], "reject-candidate", note="审测-驳回")
     ok(code == 200, f"reject 提交 {code}: {str(resp)[:150]}")
     ok(graph_node("rw301") is None, "驳回后图中无 rw301（零写入）")
-    ok(case_detail(dual_case["id"]).get("status") == "REJECTED", "双候选案 REJECTED")
+    # production 提交路径任何 action 都终态 RESOLVED（REJECTED 仅旧 T_DIRECT 通道），
+    # 驳回证据在审计：DECISION_SUBMITTED + actionId=reject-candidate
+    ok(case_detail(dual_case["id"]).get("status") == "RESOLVED", "双候选案 RESOLVED")
+    ok(any(a.get("eventType") == "DECISION_SUBMITTED"
+           and (a.get("detail") or {}).get("actionId") == "reject-candidate"
+           for a in audit_logs(dual_case["id"])),
+       "审计含 DECISION_SUBMITTED(reject-candidate)（驳回决议已落库）")
 
     step("buttons.4 碰撞案(存量写后) merge：只记决策、不再改图")
     code, resp = submit(coll_case["id"], "entity-confirm",
@@ -704,7 +734,7 @@ def open_cases(entity_schema_id):
 案 1 灰区裁决 {gray['id']}  对象「审测-灰区」
     按钮「通过/确认」(merge)：选候选 rw202 → 预期 rw202 节点属性被补写，不出现新 vid
     按钮「新建」(create)  ：预期图中出现新 vid（扣留记录落图）
-    按钮「驳回」          ：预期图零变化，案 REJECTED
+    按钮「驳回」          ：预期图零变化，案 RESOLVED（审计记录 reject-candidate 决议）
 案 2 挂起裁决 {pend['id']}  对象「审测-挂起2」
     「新建」→ 图中出现 rwpend-rwp-{run} 节点；「驳回」→ 零写入
 案 3 失败重跑 {fail['id']}  记录 rwx-{run}「审测-毒丙」

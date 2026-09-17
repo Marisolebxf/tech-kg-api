@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   rerunExtractFailures: vi.fn(),
   getProductionReview: vi.fn(),
   getProductionReviewAuditLogs: vi.fn(),
-  deleteProductionReview: vi.fn(),
+  deleteProductionReviewCases: vi.fn(),
 }))
 vi.mock('../../../api/workflowOperations', () => ({ ...mocks }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
@@ -16,7 +16,7 @@ vi.mock('@arco-design/web-vue/es/icon', () => ({
   IconSearch: { name: 'IconSearch', setup: () => () => null },
 }))
 
-/** C 类队列行：OPEN/RERUN_FAILED 可勾选，RERUNNING/RESOLVED 不可。 */
+/** C 类所有行可勾选删除，只有 OPEN/RERUN_FAILED 可下发重跑。 */
 const caseRow = (id: string, status: string) => ({
   id, sourceTaskId: `task-${id}`, batchId: 'B-1', nodeId: 'extract', objectId: id,
   objectType: 'entity', objectName: `对象${id}`, executionId: `EXEC-${id}`,
@@ -61,6 +61,7 @@ const batchButton = (wrapper: ReturnType<typeof mount>) => wrapper.get('.rerun-b
 beforeEach(() => {
   mocks.getProductionReviews.mockReset().mockResolvedValue({ items: C_ROWS, total: 4, page: 1, pageSize: 10 })
   mocks.rerunExtractFailures.mockReset().mockResolvedValue({ executions: [], cases: 2 })
+  mocks.deleteProductionReviewCases.mockReset().mockResolvedValue({ deleted: 4, skipped: 0 })
 })
 
 afterEach(() => {
@@ -82,7 +83,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(wrapper.find('thead .pick-col').exists()).toBe(true)
   })
 
-  it('表头全选只勾选当前页可重跑行（OPEN/RERUN_FAILED），批量重跑按钮随之点亮', async () => {
+  it('表头全选全部行用于删除，批量重跑只包含 OPEN/RERUN_FAILED', async () => {
     const wrapper = renderReview()
     await flushPromises()
     await switchToCategoryC(wrapper)
@@ -94,10 +95,8 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     await header.trigger('change')
 
     const checked = rowCheckboxes(wrapper).map((input) => (input.element as HTMLInputElement).checked)
-    expect(checked).toEqual([true, true, false, false])
-    // 不可重跑行保持禁用
-    expect((rowCheckboxes(wrapper)[2].element as HTMLInputElement).disabled).toBe(true)
-    expect((rowCheckboxes(wrapper)[3].element as HTMLInputElement).disabled).toBe(true)
+    expect(checked).toEqual([true, true, true, true])
+    expect(wrapper.get('.rerun-batch-action.is-danger').text()).toBe('批量删除（4）')
     // 批量按钮点亮并显示勾选数
     expect(batchButton(wrapper).attributes().disabled).toBeUndefined()
     expect(batchButton(wrapper).text()).toBe('批量重跑（2）')
@@ -137,5 +136,59 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     await batchButton(wrapper).trigger('click')
 
     expect(mocks.rerunExtractFailures).toHaveBeenCalledWith({ caseIds: ['MR-1', 'MR-2'] })
+  })
+
+  it('更新时间排序循环传递服务端参数，切回 A 类恢复默认排序', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+    for (const order of ['desc', 'asc', undefined]) {
+      await wrapper.get('.th-sort').trigger('click')
+      await flushPromises()
+      expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({
+        category: 'C', sort: order ? 'updatedAt' : undefined, order, page: 1,
+      }))
+    }
+    await wrapper.get('.th-sort').trigger('click')
+    await wrapper.findAll('.review-tabs nav button')[0].trigger('click')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({
+      category: 'A', sort: undefined, order: undefined,
+    }))
+    expect(wrapper.find('.th-status-filter').exists()).toBe(false)
+  })
+
+  it('C 类表头筛选重跑失败，切回 A 类清除不兼容状态', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+    wrapper.findAllComponents({ name: 'ASelect' })[1].vm.$emit('update:modelValue', '重跑失败')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'RERUN_FAILED' }))
+    await wrapper.findAll('.review-tabs nav button')[0].trigger('click')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'A', status: undefined }))
+  })
+
+  it('批量删除需确认，成功后清空选择；日志仍保留详情与审计查询', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+    const header = headerCheckbox(wrapper)
+    ;(header.element as HTMLInputElement).checked = true
+    await header.trigger('change')
+    await wrapper.get('.rerun-batch-action.is-danger').trigger('click')
+    expect(mocks.deleteProductionReviewCases).not.toHaveBeenCalled()
+    const modal = wrapper.findAllComponents({ name: 'AModal' }).at(-1)!
+    modal.vm.$emit('ok')
+    await flushPromises()
+    expect(mocks.deleteProductionReviewCases).toHaveBeenCalledWith(['MR-1', 'MR-2', 'MR-3', 'MR-4'])
+    expect(wrapper.get('.rerun-batch-action.is-danger').text()).toBe('批量删除（0）')
+    mocks.getProductionReview.mockResolvedValue(C_ROWS[0])
+    mocks.getProductionReviewAuditLogs.mockResolvedValue({ items: [] })
+    await wrapper.findAll('tbody .alert-actions button')[0].trigger('click')
+    await flushPromises()
+    expect(mocks.getProductionReview).toHaveBeenCalledWith('MR-1')
+    expect(mocks.getProductionReviewAuditLogs).toHaveBeenCalledWith('MR-1')
   })
 })

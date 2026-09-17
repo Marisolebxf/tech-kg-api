@@ -1,4 +1,4 @@
-"""STEPS 多步声明解析单测：接受/拒绝矩阵、上传入口校验、步间透传大小防护。"""
+"""多步声明解析单测：@step 装饰器与 STEPS 清单的接受/拒绝矩阵、上传入口校验、步间透传大小防护。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import ast
 import pytest
 
 from service.schema_management import SchemaManagementService, SchemaScriptError
-from service.script_steps import MAX_STEPS, extract_step_list
+from service.script_steps import MAX_STEPS, extract_declared_steps, extract_step_list
 from service.temporal_workflows import (
     _MAX_PREV_OUTPUT_BYTES,
     _MAX_STEP_CHAIN_BYTES,
@@ -25,6 +25,21 @@ def step_normalize(payload):
     return {"cleaned": []}
 
 def step_emit(payload):
+    return {"edges": []}
+"""
+
+VALID_DECORATED_SCRIPT = """
+from kg_sdk import step
+
+@step
+def normalize(payload):
+    return {"cleaned": []}
+
+def _helper(x):
+    return x
+
+@step("emit-rows")
+def do_emit(payload):
     return {"edges": []}
 """
 
@@ -216,3 +231,160 @@ class TestStepChainSizeGuards:
         from service.script_steps import step_list_from_tree
 
         assert step_list_from_tree(tree) is not None
+
+
+# ---------------------------------------------------------------------------
+# @step 装饰器声明（推荐写法）接受 / 拒绝矩阵
+# ---------------------------------------------------------------------------
+
+
+class TestDecoratedSteps:
+    def test_valid_decorators_in_source_order(self):
+        """顺序 = 源码出现顺序；未标注的辅助函数不进清单。"""
+        assert extract_declared_steps(VALID_DECORATED_SCRIPT) == [
+            {"id": "normalize", "fn": "normalize"},
+            {"id": "emit-rows", "fn": "do_emit"},
+        ]
+
+    def test_bare_decorator_id_defaults_to_function_name(self):
+        source = "from kg_sdk import step\n\n@step\ndef clean(payload):\n    return {}\n"
+        assert extract_declared_steps(source) == [{"id": "clean", "fn": "clean"}]
+
+    def test_keyword_id_accepted(self):
+        source = (
+            'from kg_sdk import step\n\n@step(id="emit")\ndef do_emit(payload):\n    return {}\n'
+        )
+        assert extract_declared_steps(source) == [{"id": "emit", "fn": "do_emit"}]
+
+    def test_empty_call_defaults_to_function_name(self):
+        source = "from kg_sdk import step\n\n@step()\ndef clean(payload):\n    return {}\n"
+        assert extract_declared_steps(source) == [{"id": "clean", "fn": "clean"}]
+
+    def test_dotted_kg_sdk_step_accepted(self):
+        """import kg_sdk 后的 @kg_sdk.step 点式写法同样识别（裸与带参都认）。"""
+        source = (
+            "import kg_sdk\n"
+            "\n"
+            "@kg_sdk.step\n"
+            "def clean(payload):\n"
+            "    return {}\n"
+            "\n"
+            '@kg_sdk.step("emit")\n'
+            "def do_emit(payload):\n"
+            "    return {}\n"
+        )
+        assert extract_declared_steps(source) == [
+            {"id": "clean", "fn": "clean"},
+            {"id": "emit", "fn": "do_emit"},
+        ]
+
+    def test_async_function_accepted(self):
+        source = "from kg_sdk import step\n\n@step\nasync def clean(payload):\n    return {}\n"
+        assert extract_declared_steps(source) == [{"id": "clean", "fn": "clean"}]
+
+    def test_workflow_entry_coexists_with_decorators(self):
+        """旧 workflow 入口与 @step 共存不报错（多步声明优先生效）。"""
+        source = VALID_DECORATED_SCRIPT + "\n\ndef workflow(payload):\n    return {}\n"
+        assert extract_declared_steps(source) is not None
+
+    def test_no_declaration_returns_none(self):
+        assert extract_declared_steps("def transform(payload):\n    return {}\n") is None
+
+    def test_rejects_transform_and_decorators_coexistence(self):
+        source = VALID_DECORATED_SCRIPT + "\n\ndef transform(payload):\n    return {}\n"
+        with pytest.raises(ValueError, match="不能同时声明"):
+            extract_declared_steps(source)
+
+    def test_rejects_decorators_and_steps_coexistence(self):
+        source = VALID_DECORATED_SCRIPT + "\nSTEPS = []\n"
+        with pytest.raises(ValueError, match="不能同时声明"):
+            extract_declared_steps(source)
+
+    def test_steps_only_path_unchanged(self):
+        """只有 STEPS 时合并入口走旧路径（兼容存量脚本）。"""
+        assert extract_declared_steps(VALID_STEPS_SCRIPT) == [
+            {"id": "normalize", "fn": "step_normalize"},
+            {"id": "emit", "fn": "step_emit"},
+        ]
+
+    def test_rejects_non_constant_decorator_arg(self):
+        source = "from kg_sdk import step\n\n@step(name)\ndef clean(payload):\n    return {}\n"
+        with pytest.raises(ValueError, match="只接受一个可选的 step id 字符串常量"):
+            extract_declared_steps(source)
+
+    def test_rejects_non_string_decorator_arg(self):
+        source = "from kg_sdk import step\n\n@step(1)\ndef clean(payload):\n    return {}\n"
+        with pytest.raises(ValueError, match="只接受一个可选的 step id 字符串常量"):
+            extract_declared_steps(source)
+
+    def test_rejects_bad_id_charset(self):
+        source = 'from kg_sdk import step\n\n@step("a:b")\ndef clean(payload):\n    return {}\n'
+        with pytest.raises(ValueError, match="id 非法"):
+            extract_declared_steps(source)
+
+    def test_rejects_blank_explicit_id(self):
+        source = 'from kg_sdk import step\n\n@step("  ")\ndef clean(payload):\n    return {}\n'
+        with pytest.raises(ValueError, match="不能为空白字符串"):
+            extract_declared_steps(source)
+
+    def test_rejects_non_ascii_function_name_default_id(self):
+        """中文函数名不匹配 id 字符集：报错并提示显式传 ASCII id。"""
+        source = "from kg_sdk import step\n\n@step\ndef 清洗(payload):\n    return {}\n"
+        with pytest.raises(ValueError, match="显式指定"):
+            extract_declared_steps(source)
+
+    def test_rejects_duplicate_ids(self):
+        source = (
+            "from kg_sdk import step\n"
+            "\n"
+            "@step\n"
+            "def clean(payload):\n"
+            "    return {}\n"
+            "\n"
+            '@step("clean")\n'
+            "def other(payload):\n"
+            "    return {}\n"
+        )
+        with pytest.raises(ValueError, match="id 重复"):
+            extract_declared_steps(source)
+
+    def test_rejects_double_decoration(self):
+        source = "from kg_sdk import step\n\n@step\n@step\ndef clean(payload):\n    return {}\n"
+        with pytest.raises(ValueError, match="重复标注"):
+            extract_declared_steps(source)
+
+    def test_rejects_decorator_on_class(self):
+        source = "from kg_sdk import step\n\n@step\nclass Cleaner:\n    pass\n"
+        with pytest.raises(ValueError, match="只能标注在函数上"):
+            extract_declared_steps(source)
+
+    def test_rejects_too_many_steps(self):
+        functions = "\n\n".join(
+            f"@step\ndef f{i}(payload):\n    return {{}}" for i in range(MAX_STEPS + 1)
+        )
+        source = f"from kg_sdk import step\n\n{functions}\n"
+        with pytest.raises(ValueError, match=f"最长 {MAX_STEPS} 步"):
+            extract_declared_steps(source)
+
+    def test_syntax_error_wrapped(self):
+        with pytest.raises(ValueError, match="语法错误"):
+            extract_declared_steps("def broken(:\n")
+
+
+class TestValidateScriptDecorators:
+    def test_decorated_script_stores_first_fn(self):
+        # workflow_function_name 存第一步 fn（展示参考；执行时 plan 重新 ast 解析）
+        assert (
+            SchemaManagementService._validate_script("a.py", VALID_DECORATED_SCRIPT.encode())
+            == "normalize"
+        )
+
+    def test_decorated_with_transform_rejected(self):
+        source = VALID_DECORATED_SCRIPT + "\n\ndef transform(p):\n    return {}\n"
+        with pytest.raises(SchemaScriptError, match="不能同时声明"):
+            SchemaManagementService._validate_script("a.py", source.encode())
+
+    def test_invalid_decorator_rejected_with_reason(self):
+        source = "from kg_sdk import step\n\n@step(1)\ndef clean(p):\n    return {}\n"
+        with pytest.raises(SchemaScriptError, match="只接受一个可选的 step id 字符串常量"):
+            SchemaManagementService._validate_script("a.py", source.encode())

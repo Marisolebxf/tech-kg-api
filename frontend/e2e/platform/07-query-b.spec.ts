@@ -105,6 +105,8 @@ test.describe('B. 图谱查询', () => {
     await page.locator('.platform-query-algo__labels .arco-select-view').click()
     await page.locator('li.arco-select-option:visible', { hasText: 'HAS_KEYWORD' }).first().click()
     await page.keyboard.press('Escape')
+    // 多选弹层可能保持展开，点击面板标题关闭，避免遮挡提交按钮。
+    await page.getByRole('heading', { name: '图算法', exact: true }).click()
 
     // 提交 → 轮询（3s 间隔，两轮内到 succeeded）→ 结果表
     await page.getByRole('button', { name: '提交算法作业' }).click()

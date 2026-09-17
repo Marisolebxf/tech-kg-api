@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from uuid import uuid4
-
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from db_model.schema_management import (
@@ -219,18 +216,26 @@ class SchemaManagementDAO:
         return list(self.session.scalars(statement).all())
 
     def delete(self, definition: GraphSchemaDefinition) -> None:
-        """目录假删：置 is_deleted 标记保留物理行（审计/图库存量数据不受影响）。
+        """目录硬删除：物理删除 definition 行及其属性/映射/来源/脚本子行。
 
-        同时改写 schema_key/name 释放 (key,graph_space)/(name,graph_space) 唯一键，
-        否则删除后无法在同名空间重建同名 schema（假删行仍占用唯一约束）。
+        图数据已由调用方（service.delete_schema）先行全量删除。历史假删
+        （is_deleted）的关系行仍以 FK 引用本实体，DB 层 ondelete=RESTRICT
+        会拦物理删除——先把这些死行的 source/target 置空解除引用（不删行，
+        保留审计痕迹），再 session.delete 让 ORM 级联删子行。
         """
-        now = datetime.now()
-        stamp = now.strftime("%Y%m%d%H%M%S") + uuid4().hex[:4]
-        definition.is_deleted = True
-        definition.deleted_at = now
-        definition.schema_key = f"{definition.schema_key[:48]}#del-{stamp}"
-        definition.name = f"{definition.name[:110]}#del-{stamp}"
-        self.session.add(definition)
+        self.session.execute(
+            update(GraphSchemaDefinition)
+            .where(
+                GraphSchemaDefinition.kind == "relation",
+                GraphSchemaDefinition.is_deleted.is_(True),
+                or_(
+                    GraphSchemaDefinition.source_schema_id == definition.id,
+                    GraphSchemaDefinition.target_schema_id == definition.id,
+                ),
+            )
+            .values(source_schema_id=None, target_schema_id=None)
+        )
+        self.session.delete(definition)
 
     def stats(self, graph_space: str | None = None) -> dict[str, int]:
         space_filters = [GraphSchemaDefinition.is_deleted.is_(False)]

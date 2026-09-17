@@ -215,11 +215,10 @@ export const serviceModules: ServiceModule[] = [
       { label: '成果分布', value: '' },
       { label: '成果1', value: '论文/专利/项目名称' },
       { label: '完成时间', value: '' },
-      { label: '所属领域', value: '' },
+      { label: '直接关系/所属领域', value: '' },
       { label: '奖项/评价', value: '' },
       { label: '核心贡献', value: '' },
       { label: '合作模式', value: '' },
-      { label: '图空间', value: '' },
     ],
     evidence: [
       '按论文、专利、项目邻居求交汇总共同成果。',
@@ -310,11 +309,11 @@ export const serviceModules: ServiceModule[] = [
     ],
     summaryRows: [
       { label: '专家', value: '' },
-      { label: '模式', value: '' },
       { label: '校友数', value: '' },
-      { label: '关联维度', value: '' },
-      { label: '截断', value: '' },
-      { label: '图空间', value: '' },
+      { label: '维度目录', value: '' },
+      { label: '命中校友', value: '' },
+      { label: '关系维度统计', value: '' },
+      { label: '共同成果', value: '' },
     ],
     evidence: [
       '同校为成立校友的必要条件（院校字段 NFKC 归一后比较）。',
@@ -454,7 +453,7 @@ export const serviceModules: ServiceModule[] = [
     method: 'POST',
     moduleRequirement: '科技产业链全景图服务通过整合知识图谱中科技产业链各环节的实体、关系、事件等数据，运用产业链架构建模与可视化算法，构建覆盖全产业链的结构化全景图。服务会清晰展示产业链各环节的核心节点、关联关系与数据流向，标注各环节的关键技术、重点企业与核心专家，同时支持根据用户需求进行层级展开、关系筛选与动态更新，为用户全面掌握科技产业链的整体结构、运行态势与发展机遇提供直观的可视化工具。',
     requestFields: [
-      { name: 'industry', type: 'string', required: '否', description: '产业关键词，如 人工智能 / 集成电路，最多 64 个字符，不能包含 !@#￥%& 等异常字符' },
+      { name: 'industry', type: 'string', required: '是', placeholder: '请输入产业关键词，如 集成电路', description: '产业关键词，必填，如 人工智能 / 集成电路，最多 64 个字符，不能包含 !@#￥%& 等异常字符' },
       { name: 'anchorId', type: 'string', required: '否', description: '核心节点 VID，用于生成扩展子图，最多 64 个字符，不能包含空格或 !@#￥%& 等异常字符' },
       { name: 'depth', type: 'select', options: ['1', '2', '3'], defaultValue: '2', required: '否', description: '从核心节点向外展开的层级（跳数），可选 1-3，默认 2；层级越大子图越完整但越慢' },
       { name: 'relationTypes', type: 'multi-select', required: '否', description: '只保留选中的关系类型：产业链归属 / 论文合作 / 机构任职，留空表示不筛选' },
@@ -504,7 +503,6 @@ export const serviceModules: ServiceModule[] = [
     ],
     summaryRows: [
       { label: '产业链名称', value: '人工智能计算产业链' },
-      { label: '产业链标识', value: 'AI-COMPUTING' },
       { label: '展开层级', value: '3 级' },
       { label: '核心环节', value: '上游基础资源、中游核心技术、下游应用场景' },
       { label: '核心节点', value: '算力芯片、数据资源、知识图谱、大模型、行业应用' },
@@ -514,7 +512,6 @@ export const serviceModules: ServiceModule[] = [
       { label: '重点企业', value: '华为昇腾、寒武纪、百度智能云等 48 家' },
       { label: '核心专家', value: '张明远、李佳宁、陈思远等' },
       { label: '产业动态事件', value: '智算中心扩容、国产算力适配、多模态模型升级' },
-      { label: '图谱规模', value: '186 个节点｜420 条关系' },
       { label: '动态更新', value: '尚未更新，点击"刷新数据"或开启自动更新' },
     ],
     evidence: ['整合产业链实体、关系、事件数据。', '展示核心节点、关联关系和数据流向。', '支持层级展开、关系筛选和动态更新。'],

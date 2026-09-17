@@ -39,7 +39,6 @@ import {
   type ExpertColleagueRelationResponse,
 } from "../../../api/expertColleagueRelation";
 import {
-  colleagueEntityRows,
   colleagueProvenanceCards,
 } from "../expert-colleague-details";
 import KgGraphCanvas from "../../../components/kg-graph-canvas.vue";
@@ -54,8 +53,12 @@ import type {
 import { invokeKgService } from "../../../api/kgService";
 import type { ServiceModule, ServiceSummaryRow } from "../service-modules";
 import {
-  collectPanoramaTechnologyLabels,
+  collectPanoramaEntities,
+  collectPanoramaIndustryChainLabels,
   panoramaEdgeConfidence,
+  panoramaLayerConfidence,
+  panoramaNodeRelationSummaries,
+  panoramaProvenanceCards,
   selectPanoramaIndustryCenter,
 } from "../panorama-graph";
 import { actualServiceRules } from "../actual-service-rules";
@@ -103,7 +106,7 @@ const PANORAMA_LAYER_VISUAL: Record<
 > = {
   core_technology: {
     nodeType: "topic",
-    entityType: "关键技术",
+    entityType: "技术主题",
     level: 1,
     y: 140,
     edgeLabel: "关键技术",
@@ -111,7 +114,7 @@ const PANORAMA_LAYER_VISUAL: Record<
   },
   leading_enterprise: {
     nodeType: "company",
-    entityType: "重点企业",
+    entityType: "企业",
     level: 2,
     y: 235,
     edgeLabel: "重点企业",
@@ -119,7 +122,7 @@ const PANORAMA_LAYER_VISUAL: Record<
   },
   leading_expert: {
     nodeType: "expert",
-    entityType: "核心专家",
+    entityType: "科技专家",
     level: 2,
     y: 320,
     edgeLabel: "核心专家",
@@ -127,7 +130,7 @@ const PANORAMA_LAYER_VISUAL: Record<
   },
   flagship_achievement: {
     nodeType: "event",
-    entityType: "产业动态事件",
+    entityType: "事件",
     level: 3,
     y: 395,
     edgeLabel: "产业动态事件",
@@ -602,9 +605,10 @@ function colleagueConfidenceText(
 }
 
 function formatRelationConfidence(edge: GraphEdgeData): string {
-  if (isPanorama.value && edge.inferred && edge.confidence === undefined) {
-    return "不适用（分层展示连线）";
-  }
+  // 全景图分层展示连线已带上分层实体同款数值置信度（见
+  // derivedGraphFromResponse），真实边置信度由 panoramaEdgeConfidence 按
+  // 「原始值优先、边类型规则兜底」给出，页面不再出现「不适用（分层展示
+  // 连线）」。
   if (isPaperCooperation.value && edge.confidence === undefined) {
     return "不适用（统计关系）";
   }
@@ -632,6 +636,11 @@ function mapLiveGraph(
         relations: string;
         evidence: string[];
         level?: number;
+        sourceTable?: string;
+        sourceRecordId?: string;
+        sourceField?: string;
+        ingestBatch?: string;
+        ingestTime?: string;
       }>
     | undefined,
   edges:
@@ -686,6 +695,11 @@ function mapLiveGraph(
       relations: node.relations ?? "",
       evidence: node.evidence ?? [],
       level: node.level,
+      sourceTable: node.sourceTable,
+      sourceRecordId: node.sourceRecordId,
+      sourceField: node.sourceField,
+      ingestBatch: node.ingestBatch,
+      ingestTime: node.ingestTime,
     })),
     edges: (edges || []).map((edge) => ({
       id: edge.id,
@@ -743,31 +757,38 @@ function mapPanoramaGraphNodeType(type: string): {
 } {
   const t = (type || "").toLowerCase();
   if (t.includes("person") || t.includes("scholar") || t.includes("expert")) {
-    return { nodeType: "expert", entityType: "扩展专家" };
+    return { nodeType: "expert", entityType: "科技专家" };
   }
-  if (
-    t.includes("organization") ||
-    t.includes("company") ||
-    t.includes("institution")
-  ) {
-    return { nodeType: "org", entityType: "扩展机构" };
+  if (t.includes("company") || t.includes("enterprise")) {
+    return { nodeType: "company", entityType: "企业" };
   }
-  if (
-    t.includes("paper") ||
-    t.includes("patent") ||
-    t.includes("publication")
-  ) {
-    return { nodeType: "paper", entityType: "扩展成果" };
+  if (t.includes("organization") || t.includes("institution")) {
+    return { nodeType: "org", entityType: "机构" };
   }
-  if (t.includes("event")) {
-    return { nodeType: "event", entityType: "扩展事件" };
+  if (t.includes("patent")) {
+    return { nodeType: "paper", entityType: "专利" };
   }
-  if (t.includes("product") || t.includes("project")) {
-    return { nodeType: "project", entityType: "扩展产品" };
+  if (t.includes("paper") || t.includes("publication")) {
+    return { nodeType: "paper", entityType: "论文" };
+  }
+  // 报告属科技产出，按科技成果归类（词表内类别）。
+  if (t.includes("report")) {
+    return { nodeType: "paper", entityType: "科技成果" };
+  }
+  // 资讯（News）与事件同类，统一按事件展示，不再落到技术主题。
+  if (t.includes("event") || t.includes("news")) {
+    return { nodeType: "event", entityType: "事件" };
+  }
+  // 产品属科技产出，按科技成果归类；项目单列。
+  if (t.includes("product")) {
+    return { nodeType: "project", entityType: "科技成果" };
+  }
+  if (t.includes("project")) {
+    return { nodeType: "project", entityType: "项目" };
   }
   // IndustryNode、Keyword 等产业技术节点在不同图空间中的 label 并不完全
-  // 一致；无法映射到专家、机构、成果等明确类型时，统一按关键技术展示。
-  return { nodeType: "topic", entityType: "关键技术" };
+  // 一致；无法映射到专家、机构、成果等明确类型时，统一按技术主题展示。
+  return { nodeType: "topic", entityType: "技术主题" };
 }
 
 /**
@@ -806,6 +827,19 @@ function pickPanoramaExpandedNodes(
   );
 }
 
+/** 画布连线 → PanoramaGraphEdge：供「关系」行统计、关系页与溯源页按画布
+ * 口径复用（置信度沿用画布已换算的最终值）；分层展示连线带 data.inferred
+ * 标记，溯源页据此在关系卡内注明「非图库真实关系」。 */
+function canvasEdgeToPanoramaEdge(edge: GraphEdgeData): PanoramaGraphEdge {
+  return {
+    source: edge.from,
+    target: edge.to,
+    label: edge.label,
+    confidence: edge.confidence,
+    data: edge.inferred === true ? { inferred: true } : {},
+  };
+}
+
 function derivedGraphFromResponse(
   resp: IndustryChainPanoramaQueryResponse,
 ): GraphPreset {
@@ -828,6 +862,11 @@ function derivedGraphFromResponse(
   if (centerSource?.id) layerIds.add(centerSource.id);
   const expandedCandidates = pickPanoramaExpandedNodes(resp, layerIds);
   const expandedNodes = expandedCandidates.slice(0, PANORAMA_EXPANDED_LIMIT);
+  // 子图实体置信度：与实体页同口径（相邻边置信度最大值推导），画布展开层
+  // 节点不再使用硬编码展示值。
+  const entityConfidenceById = new Map(
+    collectPanoramaEntities(resp).map((entity) => [entity.id, entity.confidence]),
+  );
   const hasExpanded = expandedNodes.length > 0;
   // 有子图扩展节点时压缩分层区域，为画布底部的展开层腾出空间。
   const layerY = (y: number) =>
@@ -836,7 +875,7 @@ function derivedGraphFromResponse(
     id: centerId,
     label: centerSource?.label || industryLabel,
     nodeType: "main",
-    entityType: "产业链核心",
+    entityType: "产业链",
     x: 380,
     y: hasExpanded ? 24 : 50,
     radius: 34,
@@ -868,6 +907,7 @@ function derivedGraphFromResponse(
       if (item.id === center.id || idMap.has(item.id)) return;
 
       const x = count === 1 ? 380 : 70 + ((700 - 70) * idx) / (count - 1);
+      const layerConfidence = panoramaLayerConfidence(item.metricValue);
       const node: GraphNodeData = {
         id: item.id,
         label: item.label,
@@ -876,10 +916,7 @@ function derivedGraphFromResponse(
         x,
         y: layerY(visual.y),
         radius: 22,
-        confidence:
-          item.metricValue != null
-            ? Math.min(1, Math.max(0.4, Number(item.metricValue) / 100))
-            : 0.75,
+        confidence: layerConfidence,
         relations: item.subtitle || item.metric || visual.entityType,
         evidence: [layer.title],
         level: visual.level,
@@ -900,6 +937,9 @@ function derivedGraphFromResponse(
           label: visual.edgeLabel,
           category: visual.edgeCategory,
           inferred: true,
+          // 分层展示连线不是图库关系，但页面各处需要展示具体数值：取该分层
+          // 实体的展示置信度（同指标换算），与实体页该节点的置信度一致。
+          confidence: layerConfidence,
           confidenceReasons: ["页面分层展示连线，不对应图库中的真实关系"],
         });
       }
@@ -923,10 +963,17 @@ function derivedGraphFromResponse(
       x: rowCount === 1 ? 380 : 60 + ((700 - 60) * col) / (rowCount - 1),
       y: 340 + row * 50,
       radius: 13,
-      confidence: 0.6,
+      confidence: entityConfidenceById.get(item.id) ?? 0.6,
       relations: item.subtitle || item.type || visual.entityType,
       evidence: [`子图扩展 · depth=${resp.input?.depth ?? "—"}`],
       level: 4 + row,
+      // 展开层节点在证据列表里没有对应记录，带上入图溯源字段，
+      // 供溯源筛选在点击时现场合成证据卡。
+      sourceTable: item.sourceTable || undefined,
+      sourceField: item.sourceField || undefined,
+      sourceRecordId: item.sourceRecordId || undefined,
+      ingestBatch: item.ingestBatch || undefined,
+      ingestTime: item.ingestTime || undefined,
     };
     nodes.push(node);
     idMap.set(node.id, node);
@@ -948,26 +995,18 @@ function derivedGraphFromResponse(
     });
   });
 
-  // 「命中关系」按每个节点在 edges 中真实相连的对端 + 中文关系类型统计，
-  // 不再用机构名/统计文案顶替；机构名等属性信息仍保留在 evidence 里。
-  const relationsByNode = new Map<string, string[]>();
-  for (const edge of edges) {
-    const fromNode = idMap.get(edge.from);
-    const toNode = idMap.get(edge.to);
-    if (!fromNode || !toNode) continue;
-    const typeLabel = displayRelationType(edge.label);
-    const fromList = relationsByNode.get(edge.from) ?? [];
-    fromList.push(`${typeLabel} → ${toNode.label}`);
-    relationsByNode.set(edge.from, fromList);
-    const toList = relationsByNode.get(edge.to) ?? [];
-    toList.push(`${typeLabel} ← ${fromNode.label}`);
-    relationsByNode.set(edge.to, toList);
-  }
+  // 节点相邻关系统计与关系页同口径：统计画布全部连线（真实图库边 + 分层
+  // 展示连线，连线类型即分层名），每个节点列出全部相邻关系与对端、带总数
+  // 前缀、不截断；结果写入 node.relations 供画布悬停提示使用；标签取画布
+  // 节点名（虚拟中心也能正确显示产业名）。
+  const relationSummaries = panoramaNodeRelationSummaries(resp, {
+    edgeLabelDisplay: displayRelationType,
+    edges: edges.map(canvasEdgeToPanoramaEdge),
+    labelById: new Map(nodes.map((node) => [node.id, node.label])),
+  });
   for (const node of nodes) {
-    const rels = relationsByNode.get(node.id);
-    if (rels?.length) {
-      node.relations = rels.slice(0, 5).join("；");
-    }
+    const summary = relationSummaries.get(node.id);
+    if (summary) node.relations = summary;
   }
 
   return { nodes, edges };
@@ -1002,6 +1041,118 @@ function formatCooperationPeriod(
 ): string {
   if (!period?.start) return "";
   return `${period.start}${period.end ? ` 至 ${period.end}` : " 至今"}`;
+}
+
+/** 论文合作：后端按"查到即记"组装的真实子图（专家/论文/研究主题/期刊/合作者）。
+ * 节点 id 即真实 vid，溯源点击筛选直接精确匹配，无需 preset 别名换算。 */
+function buildPaperCoopRealGraph(
+  sr: Record<string, any>,
+  graph: { nodes: any[]; edges: any[] },
+): { nodes: GraphNodeData[]; edges: GraphEdgeData[] } {
+  const relationConfidences = sr.relationConfidences || {};
+  const nodeTypeByBackend: Record<string, GraphNodeData["nodeType"]> = {
+    expert: "expert",
+    paper: "paper",
+    keyword: "topic",
+    venue: "org",
+    collaborator: "expert",
+  };
+  const entityTypeByBackend: Record<string, string> = {
+    expert: "科技专家",
+    paper: "论文",
+    keyword: "技术主题",
+    venue: "机构",
+    collaborator: "科技专家",
+  };
+  // 布局：两位专家左右分列，合作论文绕中心，主题/期刊/合作者在外圈。
+  const experts = graph.nodes.filter((node) => node.type === "expert");
+  const others = graph.nodes.filter((node) => node.type !== "expert");
+  const positions = new Map<string, { x: number; y: number }>();
+  experts.forEach((node, index) => {
+    positions.set(String(node.id), {
+      x: index === 0 ? 200 : 660,
+      y: 300,
+    });
+  });
+  others.forEach((node, index) => {
+    const angle =
+      (Math.PI * 2 * index) / Math.max(1, others.length) - Math.PI / 2;
+    const radius = node.type === "paper" ? 190 : 280;
+    positions.set(String(node.id), {
+      x: 430 + Math.cos(angle) * radius,
+      y: 300 + Math.sin(angle) * radius * 0.8,
+    });
+  });
+  const nodes: GraphNodeData[] = graph.nodes.map((node) => {
+    const type = String(node.type || "");
+    const position = positions.get(String(node.id));
+    return {
+      id: String(node.id),
+      label: String(node.label || node.id),
+      nodeType: nodeTypeByBackend[type] || "expert",
+      x: position?.x ?? 220,
+      y: position?.y ?? 200,
+      entityType: entityTypeByBackend[type] || "科技成果",
+      relations: String(node.subtitle || ""),
+      // 机构名等属性信息保留在 evidence 里，命中关系由下方按边统计。
+      evidence: node.subtitle ? [String(node.subtitle)] : [],
+      // 后端按证据规则算出的实体置信度（专家/论文/主题/期刊/合著者）。
+      confidence:
+        typeof node.data?.confidence === "number" ? node.data.confidence : undefined,
+      confidenceSource: node.data?.confidenceSource,
+      confidenceBasis: node.data?.confidenceBasis,
+    };
+  });
+  const categoryByLabel: Record<string, string> = {
+    论文合作: "论文合作",
+    发表: "论文作者",
+    研究主题: "论文主题",
+    发表于: "期刊/会议",
+    参与合著: "合作团队",
+  };
+  // 关系置信度：后端 relationConfidences 按边语义映射，与无真实子图时的
+  // preset 兜底路径同口径（论文合作→paperCooperation、发表→authorship、
+  // 研究主题→researchTopic、发表于→publicationVenue、参与合著→teamMembership），
+  // 不再让真实子图的边退化为"不适用（统计关系）"。
+  const confidenceByLabel: Record<string, number | undefined> = {
+    论文合作: relationConfidences.paperCooperation,
+    发表: relationConfidences.authorship,
+    研究主题: relationConfidences.researchTopic,
+    发表于: relationConfidences.publicationVenue,
+    参与合著: relationConfidences.teamMembership,
+  };
+  const edges: GraphEdgeData[] = graph.edges.map((edge, index) => {
+    const label = String(edge.label || "");
+    return {
+      id: `paper-coop-edge-${index}`,
+      from: String(edge.source),
+      to: String(edge.target),
+      label,
+      category: categoryByLabel[label] || label || "关联",
+      confidence: confidenceByLabel[label],
+    };
+  });
+  // 节点相邻关系统计（真实相连的对端 + 关系类型）保留在 node.relations，
+  // 供画布悬停提示使用；实体详情页只展示实体自身信息，不再显示命中关系。
+  // 机构名保留在 evidence 里。
+  const labelById = new Map(nodes.map((n) => [n.id, n.label]));
+  const relationsByNode = new Map<string, string[]>();
+  for (const edge of edges) {
+    const fromLabel = labelById.get(edge.from);
+    const toLabel = labelById.get(edge.to);
+    if (!fromLabel || !toLabel) continue;
+    const fromList = relationsByNode.get(edge.from) ?? [];
+    fromList.push(`${edge.label} → ${toLabel}`);
+    relationsByNode.set(edge.from, fromList);
+    const toList = relationsByNode.get(edge.to) ?? [];
+    toList.push(`${edge.label} ← ${fromLabel}`);
+    relationsByNode.set(edge.to, toList);
+  }
+  for (const node of nodes) {
+    const rels = relationsByNode.get(node.id);
+    if (rels?.length) node.relations = rels.slice(0, 5).join("；");
+  }
+  return { nodes, edges };
 }
 
 function buildLiveGraph(
@@ -1156,11 +1307,13 @@ function buildLiveGraph(
       // 事件节点标签用「类型+日期」短文案：新闻标题 20-40 字，做标签必然截断出省略号；
       // 完整标题放 relations 副标题与悬浮提示（title），摘要"核心事件"行也展示 TOP1 标题。
       // 实体 tab 的「关系」只展示事件标题，不把 impact_score 拼进去。
+      // 实体类别固定为受控词表的「事件」：事件类型文案（如「上市企业财务
+      // 信息」）含「企业」等字样，按文本归类会把事件节点误判成企业。
       addNode(
         ev0.event_id,
         `${displayEventType(ev0.event_type)} ${displayEventDate(ev0.occur_date)}`,
         "event",
-        displayEventType(ev0.event_type),
+        "事件",
         ev0.title || displayEventType(ev0.event_type),
         // 事件置信度用后端 EVENT_CONFIDENCE 值（风险 0.9 / 财务 0.85 / 中标 0.8 / 资讯 0.7）
         typeof ev0.confidence === "number" ? ev0.confidence : undefined,
@@ -1179,7 +1332,7 @@ function buildLiveGraph(
         rel.expert_id,
         rel.expert_name,
         "expert",
-        "专家",
+        "科技专家",
         [rel.role, rel.org_name].filter(Boolean).join("｜") || "企业高管",
         data.entity_provenance?.[rel.expert_id]?.confidence,
         data.entity_provenance?.[rel.expert_id],
@@ -1193,9 +1346,15 @@ function buildLiveGraph(
       );
     }
   } else if (key === "paper-cooperation") {
-    // 保持 preset 图结构（节点位置/类型/边连接）不变，仅用 API 查询结果覆盖节点与边信息
+    // 优先使用后端"查到即记"组装的真实子图（graph 与 structuredResult 平级）；
+    // 无 graph 字段时回退 preset 演示图
     const sr = res?.structuredResult || data?.structuredResult;
     if (!sr) return null;
+    const realGraph = res?.graph || data?.graph;
+    if (realGraph?.nodes?.length) {
+      return buildPaperCoopRealGraph(sr, realGraph);
+    }
+    // 保持 preset 图结构（节点位置/类型/边连接）不变，仅用 API 查询结果覆盖节点与边信息
     const preset = getServiceGraphPreset("paper-cooperation");
     const authors = sr.authorList || [];
     const units = sr.authorUnits || [];
@@ -1378,12 +1537,25 @@ const liveModuleGraph = computed(() => {
           nodeType = "org";
         } else if (node.type === "expert") {
           nodeType = "expert";
+        } else if (["paper", "patent", "report", "award"].includes(node.type)) {
+          nodeType = "paper";
         }
-        let entityType = "合作成果";
+        // 实体类别统一用业务口径 12 类：同事成果按 paper/patent/project/
+        // report/award 映射，report/award 等无法细分的成果归入科技成果。
+        const achievementEntityTypes: Record<string, string> = {
+          paper: "论文",
+          patent: "专利",
+          project: "项目",
+          report: "科技成果",
+          award: "科技成果",
+        };
+        let entityType: string;
         if (node.type === "expert") {
           entityType = "科技专家";
         } else if (node.type === "organization") {
-          entityType = "共同机构";
+          entityType = "机构";
+        } else {
+          entityType = achievementEntityTypes[node.type] || "科技成果";
         }
         return {
           id: node.id,
@@ -1550,6 +1722,45 @@ const relationTypeDisplay: Record<string, string> = {
   HAS_NODE: "产业链节点关系",
   HAS_NEWS: "企业动态关系",
   INVOLVED_IN: "事件参与关系",
+  // 图库中其余边类型的中文名，避免关系页回退显示英文代码（如 LEGAL_REP_OF）。
+  ACQUIRES: "收购关系",
+  ACTUAL_CONTROLLER_OF: "实际控制关系",
+  APPLIED_BY: "专利申请关系",
+  AUTHORED_BY: "论文撰写关系",
+  BENEFICIAL_OWNER_OF: "受益所有关系",
+  BID_FOR: "中标关系",
+  CHILD_OF: "环节层级关系",
+  CITED_BY: "被引用关系",
+  CITES: "引用关系",
+  COLLEAGUE: "同事关系",
+  COOPERATED_WITH: "论文合作关系",
+  COVERS_CHAIN: "链上资讯关系",
+  DOWNSTREAM_OF: "下游环节关系",
+  EMPLOYED_BY: "任职关系",
+  EXECUTIVE_OF: "高管任职关系",
+  FUNDED_BY: "资助关系",
+  HAS_KEYWORD: "技术关键词关系",
+  HAS_OUTPUT: "成果产出关系",
+  HAS_PARTICIPANT: "参与方关系",
+  HAS_TOPIC: "研究主题关系",
+  INVENTED_BY: "专利发明关系",
+  INVESTS_IN: "投资关系",
+  LEADS: "项目负责关系",
+  LEGAL_REP_OF: "法定代表人关系",
+  MEMBER_OF_FAMILY: "家族成员关系",
+  OUTPUT_OF: "成果归属关系",
+  OWNED_BY: "权属关系",
+  PAPER_COOPERATED_WITH: "论文合作关系",
+  PARTICIPATES_IN: "项目参与关系",
+  PRODUCES: "产品生产关系",
+  PUBLISHED_IN: "期刊发表关系",
+  REFERENCED_BY: "参考引用关系",
+  RELATED_TO: "关联关系",
+  SAME_AS: "同一实体关系",
+  SHAREHOLDER_OF: "股东关系",
+  SOURCED_FROM: "数据来源关系",
+  STUDIED_AT: "求学经历关系",
+  SUBSIDIARY_OF: "子公司关系",
   governance: "治理任职",
   project_cooperation: "项目合作",
   patent_cooperation: "专利合作",
@@ -1562,50 +1773,352 @@ const relationTypeDisplay: Record<string, string> = {
   recruit: "招聘",
   change_record: "工商变更",
 };
-const relationCategoryDisplay: Record<string, string> = {
-  AFFILIATED_WITH: "任职",
-  COAUTHOR_WITH: "论文合著",
-  BELONGS_TO_NODE: "产业链归属",
-  HAS_NODE: "产业链节点",
-  HAS_NEWS: "企业动态",
-  INVOLVED_IN: "事件参与",
-  governance: "治理任职",
-  project_cooperation: "项目合作",
-  patent_cooperation: "专利合作",
-  relation: "企业关联",
-  chain: "产业链归属",
-  event: "事件参与",
-  expert: "专家任职",
+
+Object.assign(relationTypeDisplay, {
+  ACQUIRES: "并购关系",
+  ACTUAL_CONTROLLER_OF: "实际控制关系",
+  AFFILIATED_WITH: "隶属机构关系",
+  AUTHORED_BY: "论文署名关系",
+  BELONGS_TO_NODE: "归属产业节点关系",
+  BENEFICIAL_OWNER_OF: "最终受益关系",
+  CHILD_OF: "上下级节点关系",
+  COAUTHOR_WITH: "合著关系",
+  COVERS_CHAIN: "产业链报道关系",
+  DOWNSTREAM_OF: "产业下游关系",
+  EMPLOYED_BY: "企业任职合作关系",
+  FUNDED_BY: "项目资助关系",
+  HAS_KEYWORD: "关键词关系",
+  HAS_NEWS: "关联资讯关系",
+  HAS_NODE: "包含产业节点关系",
+  HAS_PARTICIPANT: "项目参与人员关系",
+  INVOLVED_IN: "涉及事件关系",
+  LEADS: "项目牵头关系",
+  LEGAL_REP_OF: "法定代表关系",
+  MEMBER_OF_FAMILY: "专利族归属关系",
+  OUTPUT_OF: "项目成果关系",
+  PARTICIPATES_IN: "参与项目关系",
+  REFERENCED_BY: "被参考关系",
+  RELATED_TO: "一般关联关系",
+  SHAREHOLDER_OF: "股东持股关系",
+  STUDIED_AT: "教育经历关系",
+  SUBSIDIARY_OF: "母子公司关系",
+  直接关系: "合著关系",
+  间接关系: "一般关联关系",
+  同事关系: "隶属机构关系",
+  校友关系: "教育经历关系",
+  论文合作: "合著关系",
+  科研合作: "合著关系",
+  项目合作: "项目牵头关系",
+  专利合作: "专利发明关系",
+});
+
+const relationCategoryByModule: Record<string, string> = {
+  "expert-direct": "直接关系",
+  "node-indirect": "间接关系",
+  // 两点合作成果：三条合成边（论文/专利/项目合作）均由双端成果边邻居集合
+  // 求交得到（多表 join 口径），前缀统一为「间接关系」，业务细目见边 label；
+  // 每条边的具体文案优先走下方 coopAchievementRelationDescription 台账。
+  "two-point-achievement": "间接关系",
+  // 同事/校友模块的类别不走此静态映射,由 displayRelationCategory 按边
+  // 动态判定:命中下方关系详情映射(梳理文档中的直接关系)标"直接关系",
+  // 未命中默认"间接关系"。这里的值仅作兜底,正常不会读到。
+  "expert-colleague": "直接关系",
+  "expert-alumni": "直接关系",
+  "paper-cooperation": "合作关系",
+  "enterprise-relation": "企业关联关系",
+  "industry-chain-event": "产业链关联关系",
+  "industry-chain-panorama": "产业链关联关系",
 };
+
+// 关系详情:同事/校友模块只展示梳理文档(md)中的关系名(名词),不带后缀
+// (如"直接关系/同事");动词类关系名加"关系"构成名词(任职→任职关系)。
+// key 为画布边 label(同事边 label="同事关系"、任职边 label="AFFILIATED_WITH"、
+// 校友边 label="校友关系"、共同成果边 label="发表"/"发明"/"参与"或原始边类型)。
+const colleagueRelationDetails: Record<string, string> = {
+  同事关系: "同事",
+  AFFILIATED_WITH: "任职关系",
+  COAUTHOR_WITH: "合著关系",
+  AUTHORED_BY: "署名关系",
+  INVENTED_BY: "发明人",
+  LEADS: "项目负责人",
+  HAS_PARTICIPANT: "项目参与者",
+  // #7 反向变体(人→项目),与 HAS_PARTICIPANT 同属项目参与关系
+  PARTICIPATES_IN: "项目参与者",
+  // #12 共享节点(Report/Award/Team 等)关联边,类型不统一,按业务口径算直接
+  RELATED_TO: "关联关系",
+};
+
+const alumniRelationDetails: Record<string, string> = {
+  校友关系: "校友",
+  STUDIED_AT: "就读关系",
+  COAUTHOR_WITH: "合著关系",
+  // 校友图谱共同成果边用中文 label(后端 expertRelations):发表/发明/负责/参与,
+  // 与原始边类型(AUTHORED_BY/INVENTED_BY/LEADS/HAS_PARTICIPANT)同属一条关系。
+  发表: "署名关系",
+  发明: "发明人",
+  负责: "项目负责人",
+  参与: "项目参与者",
+  AUTHORED_BY: "署名关系",
+  INVENTED_BY: "发明人",
+  LEADS: "项目负责人",
+  HAS_PARTICIPANT: "项目参与者",
+};
+
+const relationDetailByModule: Record<string, Record<string, string>> = {
+  "expert-colleague": colleagueRelationDetails,
+  "expert-alumni": alumniRelationDetails,
+};
+
+const activeRelationCategory = computed(
+  () => relationCategoryByModule[props.moduleInfo.key] || "直接关系",
+);
+
+/** 实体页「实体类别」统一归一到受控词表：科技专家/机构/企业/论文/专利/
+ * 项目/科技成果/产业链/产业链节点/事件/技术主题/院校。任何输入都只返回
+ * 词表内的类别，不再把「扩展产品」等原文透出到实体页。 */
+function normalizeEntityCategory(node: GraphNodeData): string {
+  const entityType = `${node.entityType || ""}`.toLowerCase();
+  const value = `${entityType} ${node.nodeType}`.toLowerCase();
+  if (/院校|学校|school|university/u.test(value)) return "院校";
+  if (/产业链节点|industry.?node/u.test(value)) return "产业链节点";
+  if (/产业链|chain/u.test(value)) return "产业链";
+  if (/企业|company|enterprise/u.test(value)) return "企业";
+  if (/专家|人才|学者|expert|person|scholar/u.test(value)) return "科技专家";
+  if (/机构|院所|organization|institution|\borg\b/u.test(value)) return "机构";
+  // 科技成果（entityType 明示）先于论文/项目判定：报告、产品类成果节点在
+  // 画布上复用 paper/project 形态，若先按 nodeType 匹配会被误归为论文/项目。
+  // 用「科技成果」全词而非「成果」，避免把「论文成果」「合作成果」提前截走。
+  if (/科技成果|achievement|output/u.test(entityType)) return "科技成果";
+  // 专利判定需先于论文：专利节点在画布上复用 paper 形态（nodeType=paper），
+  // 若先匹配论文会把「专利 paper」误归为论文。
+  if (/专利|patent/u.test(value)) return "专利";
+  if (/论文|paper|journal|report/u.test(value)) return "论文";
+  if (/项目|project/u.test(value)) return "项目";
+  if (/事件|资讯|event|news/u.test(value)) return "事件";
+  if (/技术|主题|关键词|topic|keyword|field/u.test(value)) return "技术主题";
+  if (/成果|achievement|output/u.test(value)) return "科技成果";
+  // entityType 文本未命中时按画布 nodeType（受控枚举）归类，保证实体页
+  // 「实体类别」始终落在受控词表内，不把原文透出到实体页。
+  switch ((node.nodeType || "").toLowerCase()) {
+    case "event":
+      return "事件";
+    case "expert":
+      return "科技专家";
+    case "company":
+      return "企业";
+    case "org":
+      return "机构";
+    case "paper":
+      return "论文";
+    case "project":
+      return "项目";
+    case "topic":
+      return "技术主题";
+    case "main":
+      return "产业链";
+    default:
+      return "技术主题";
+  }
+}
+
 const displayRelationType = (value?: string) =>
   (value && (relationTypeDisplay[value] || eventTypeLabel[value])) ||
   value ||
   "—";
-const displayRelationCategory = (value?: string) =>
-  (value && (relationCategoryDisplay[value] || eventTypeLabel[value])) ||
-  value ||
-  "—";
 
-const alumniInteractionText = (edge: GraphEdgeData) => {
-  const interactions = edge.interactions;
-  if (!interactions) return "—";
-  const parts = [
-    interactions.paperCount ? `共同论文 ${interactions.paperCount} 篇` : null,
-    interactions.patentCount ? `共同专利 ${interactions.patentCount} 项` : null,
-    interactions.projectCount
-      ? `共同项目 ${interactions.projectCount} 项`
-      : null,
-  ].filter((part): part is string => Boolean(part));
-  return parts.join("、") || "无共同成果";
+const displayRelationDetail = (edge: GraphEdgeData) => {
+  const detailMap = relationDetailByModule[props.moduleInfo.key];
+  if (detailMap) {
+    const detail = detailMap[edge.label || edge.category || ""];
+    if (detail) return detail;
+  }
+  return displayRelationType(edge.label || edge.category);
 };
 
-const confidenceSourceText = (source?: "original" | "derived") =>
-  source === "original"
-    ? "图数据库原始值"
-    : source === "derived"
-      ? "规则推导"
-      : "—";
+// 关系类别:同事/校友模块按边动态判定——命中梳理文档(md)中的直接关系
+// 映射时标"直接关系",未命中默认"间接关系";其余模块沿用模块级类别。
+const displayRelationCategory = (edge: GraphEdgeData): string => {
+  const detailMap = relationDetailByModule[props.moduleInfo.key];
+  if (detailMap) {
+    return detailMap[edge.label || edge.category || ""] ? "直接关系" : "间接关系";
+  }
+  return activeRelationCategory.value;
+};
 
+/* 论文合作页「关系描述」专用口径：直接/间接 + 核实过的关系名（统一名词
+ * 形式，动词性名称加「关系」后缀）。该模块全部关系均为直接关系（单表一行
+ * 可查：署名 dwd_zh/en_author、合著 dwd_scholar_coauthor、期刊
+ * dwd_zh/en_journal、主题 paper.keywords、被引 dwd_*_paper_reference）。
+ * 画布边是展示语义（发表/参与合著/作者单位等），按边语义映射回关系名：
+ * 人↔人→专家合著关系，论文↔人→论文署名关系（作者单位是署名记录的
+ * affiliation 列，也归入论文署名），论文→期刊→论文发表关系，
+ * 论文→关键词→论文主题。 */
+const paperCoopRelationDescriptions: Record<string, string> = {
+  论文合作: "直接关系/专家合著关系",
+  发表: "直接关系/论文署名关系",
+  共同作者: "直接关系/论文署名关系",
+  参与合著: "直接关系/论文署名关系",
+  团队成员: "直接关系/论文署名关系",
+  作者单位: "直接关系/论文署名关系",
+  研究主题: "直接关系/论文主题",
+  发表于: "直接关系/论文发表关系",
+  发表级别: "直接关系/论文发表关系",
+};
+const paperCoopRelationDescription = (edge: GraphEdgeData): string =>
+  paperCoopRelationDescriptions[edge.label] ||
+  paperCoopRelationDescriptions[edge.category] ||
+  `直接关系/${displayRelationDetail(edge)}`;
+
+/* 企业关联页「关系描述」专用口径：映射到核实过的 13 条关系（名词名）。
+ * 治理任职为人-企业直连边（cooperation_mode 与边类型一一对应：高管任职
+ * EXECUTIVE_OF、法人代表 LEGAL_REP_OF、实际控制 ACTUAL_CONTROLLER_OF、
+ * 受益所有 BENEFICIAL_OWNER_OF、股东持股 SHAREHOLDER_OF、任职
+ * AFFILIATED_WITH），全部单表直查=直接。
+ * 项目合作是 专家→项目→企业 两跳组合：人侧 项目负责人/项目参加人、机构侧
+ * 项目资助方/项目参与机构，均单表直查=直接（前端数据不区分 LEADS 与
+ * HAS_PARTICIPANT，展示两侧代表名称）。
+ * 专利合作是 专家→专利→企业：人侧 专利发明人（dwd_patent.inventors，直接）；
+ * 机构侧 专利申请方 APPLIED_BY——图上 94% 边经 milvus_bm25_dense_hybrid
+ * 对齐到企业实体才成立，判间接。 */
+const enterpriseRelationDescriptions: Record<string, string> = {
+  高管任职: "直接关系/高管任职关系",
+  法人代表: "直接关系/法定代表关系",
+  实际控制: "直接关系/实际控制关系",
+  受益所有: "直接关系/最终受益关系",
+  股东持股: "直接关系/股东持股关系",
+  任职: "直接关系/任职关系",
+  项目合作: "直接关系/项目参加人、项目资助方",
+  专利合作: "直接关系/专利发明人、间接关系/专利申请方",
+};
+const enterpriseRelationDescription = (edge: GraphEdgeData): string =>
+  enterpriseRelationDescriptions[edge.label] ||
+  enterpriseRelationDescriptions[edge.category] ||
+  `直接关系/${displayRelationDetail(edge)}`;
+
+/* 两点合作成果页「关系描述」专用口径：先判直接关系/间接关系，再拼业务
+ * 细目。三条专家-专家合成边均由双端成果边邻居集合求交得到（多表 join
+ * 口径），判间接：论文合作关系（AUTHORED_BY 邻居求交）、专利合作关系
+ * （INVENTED_BY 发明人姓名+机构跨源解析到学者实体后再求交，双重间接）、
+ * 项目合作关系（LEADS/HAS_PARTICIPANT 按姓名串匹配解析后再求交）。
+ * 专家-成果归因边按底层边类型判定：发表（AUTHORED_BY）为论文行作者
+ * 字段单行直查=直接；发明（INVENTED_BY）发明人姓名需跨源解析=间接；
+ * 负责/参与（LEADS/HAS_PARTICIPANT）按姓名串匹配解析=间接。 */
+const coopAchievementRelationDescriptions: Record<string, string> = {
+  论文合作关系: "间接关系/论文合作关系",
+  专利合作关系: "间接关系/专利合作关系",
+  项目合作关系: "间接关系/项目合作关系",
+  发表: "直接关系/论文署名关系",
+  发明: "间接关系/专利发明关系",
+  负责: "间接关系/项目牵头关系",
+  参与: "间接关系/项目参与关系",
+  关联成果: "间接关系/成果关联关系",
+};
+const coopAchievementRelationDescription = (edge: GraphEdgeData): string =>
+  coopAchievementRelationDescriptions[edge.label] ||
+  coopAchievementRelationDescriptions[edge.category] ||
+  `间接关系/${displayRelationDetail(edge)}`;
+
+/** TOP-N 事件关系页「关系描述」口径：先判断画布连线对应的图关系类型，再按
+ * 关系台账输出「关系类别/关系详情」；关系类别只取直接关系/间接关系。
+ * - 产业链归属 → BELONGS_TO_NODE：企业归属产业链节点（源表单行直查，直接）；
+ * - 事件参与 → INVOLVED_IN/HAS_NEWS：企业参与事件/企业关联资讯（直接；
+ *   「资讯」出自 dwd_org_important_news_info，其余出自各事件源表）；
+ * - 专家任职 → EventExpertRelation（事件←企业←治理边 两跳派生，间接）。 */
+function industryEventRelationInfo(
+  edge: GraphEdgeData,
+): { category: "直接关系" | "间接关系"; detail: string } | null {
+  if (edge.category === "产业链归属") {
+    return { category: "直接关系", detail: "企业归属产业链节点" };
+  }
+  if (edge.category === "事件参与") {
+    return edge.label === "资讯"
+      ? { category: "直接关系", detail: "企业关联资讯" }
+      : { category: "直接关系", detail: "企业参与事件" };
+  }
+  if (edge.category === "专家任职") {
+    return { category: "间接关系", detail: "事件关联专家" };
+  }
+  return null;
+}
+
+/** 全景图「关系类别/关系详情」关系台账：真实图库边按边类型码给出关系
+ * 类别（只取直接关系/间接关系）与关系详情（按业务划分类别的中文细目）。
+ * 间接口径：FUNDED_BY 靠机构名解析（可选 Milvus 对齐）、APPLIED_BY 经
+ * 向量对齐到企业实体才能成立。 */
+const PANORAMA_RELATION_LEDGER: Record<
+  string,
+  { category: "直接关系" | "间接关系"; detail: string }
+> = {
+  // 产业链关联关系
+  HAS_NODE: { category: "直接关系", detail: "产业链包含产业节点" },
+  CHILD_OF: { category: "直接关系", detail: "产业节点上下级" },
+  DOWNSTREAM_OF: { category: "直接关系", detail: "产业上下游" },
+  BELONGS_TO_NODE: { category: "直接关系", detail: "企业归属产业链节点" },
+  COVERS_CHAIN: { category: "直接关系", detail: "产业资讯报道产业链" },
+  PRODUCES: { category: "直接关系", detail: "企业生产产品" },
+  // 企业关联关系
+  AFFILIATED_WITH: { category: "直接关系", detail: "任职关系" },
+  EXECUTIVE_OF: { category: "直接关系", detail: "高管任职关系" },
+  LEGAL_REP_OF: { category: "直接关系", detail: "法定代表关系" },
+  ACTUAL_CONTROLLER_OF: { category: "直接关系", detail: "实际控制关系" },
+  BENEFICIAL_OWNER_OF: { category: "直接关系", detail: "最终受益关系" },
+  SHAREHOLDER_OF: { category: "直接关系", detail: "股东持股关系" },
+  INVOLVED_IN: { category: "直接关系", detail: "企业参与事件" },
+  HAS_NEWS: { category: "直接关系", detail: "企业关联资讯" },
+  // 合作关系（论文/项目/专利）
+  AUTHORED_BY: { category: "直接关系", detail: "论文署名关系" },
+  COAUTHOR_WITH: { category: "直接关系", detail: "专家合著关系" },
+  PUBLISHED_IN: { category: "直接关系", detail: "论文发表关系" },
+  HAS_KEYWORD: { category: "直接关系", detail: "论文主题" },
+  CITES: { category: "直接关系", detail: "论文被引关系" },
+  CITED: { category: "直接关系", detail: "论文被引关系" },
+  CITED_BY: { category: "直接关系", detail: "论文被引关系" },
+  RELATED_TO: { category: "直接关系", detail: "论文关联" },
+  LEADS: { category: "直接关系", detail: "项目负责人" },
+  HAS_PARTICIPANT: { category: "直接关系", detail: "项目参加人" },
+  PARTICIPATES_IN: { category: "直接关系", detail: "项目参与机构" },
+  INVENTED_BY: { category: "直接关系", detail: "专利发明人" },
+  FUNDED_BY: { category: "间接关系", detail: "项目获机构资助" },
+  APPLIED_BY: { category: "间接关系", detail: "专利申请方" },
+  // 校友关系
+  STUDIED_AT: { category: "直接关系", detail: "就读所属院校" },
+};
+
+/** 全景图分层展示连线（inferred）的「关系详情」文案：按连线所在分层给出
+ * 业务语义描述，不出现「分层展示」字样；关系类别仍为间接关系。 */
+const PANORAMA_INFERRED_RELATION_DETAIL: Record<string, string> = {
+  关键技术: "产业链环节涉及关键技术",
+  重点企业: "产业链节点关联企业",
+  核心专家: "链上机构关联专家",
+  产业动态事件: "产业链关联动态事件",
+};
+
+/** 全景图「关系描述」口径：先判断连线对应的图关系类型，再按台账输出
+ * 「关系类别/关系详情」。
+ * - 分层展示连线（inferred）不是图库关系：统一按间接，详情按分层取业务
+ *   语义文案（如产业链节点关联企业）；
+ * - 台账外的真实边：SAME_AS 出自 Milvus 对齐按间接，其余 ETL 均为源表
+ *   单行直查按直接，详情沿用既有边类型中文名，保证关系类别始终二值。 */
+function panoramaRelationInfo(
+  edge: GraphEdgeData,
+): { category: "直接关系" | "间接关系"; detail: string } {
+  if (edge.inferred === true) {
+    return {
+      category: "间接关系",
+      detail:
+        PANORAMA_INFERRED_RELATION_DETAIL[edge.label] || "产业链关联",
+    };
+  }
+  const code = String(edge.label || "").toUpperCase();
+  const hit = PANORAMA_RELATION_LEDGER[code];
+  if (hit) return hit;
+  if (code === "SAME_AS") {
+    return { category: "间接关系", detail: displayRelationType(edge.label) };
+  }
+  return { category: "直接关系", detail: displayRelationType(edge.label) };
+}
+
+/* 暂不展示“评分依据”，保留格式化代码以便后续恢复。
 const confidenceBreakdownLabels: Record<string, string> = {
   originalConfidence: "原始置信度",
   typeFallback: "关系类型兜底",
@@ -1651,52 +2164,8 @@ const confidenceBasisText = (edge: GraphEdgeData) => {
   const rule = confidenceRuleLabels[basis.rule] || basis.rule;
   return [rule, edgeType, breakdown].filter(Boolean).join("；") || "—";
 };
+*/
 
-const relationDetailRows = computed(() => {
-  const edge = activeRelationEdge.value;
-  const from = selectedEdgeNodes.value.from;
-  const to = selectedEdgeNodes.value.to;
-
-  if (!edge || !from || !to) return [];
-
-  return [
-    ["源实体", `${from.label} / ${from.entityType}`] as const,
-
-    ["目标实体", `${to.label} / ${to.entityType}`] as const,
-
-    ["关系类型", displayRelationType(edge.label)] as const,
-
-    ["关系分类", displayRelationCategory(edge.category)] as const,
-
-    ...(isLiveAlumni.value
-      ? [
-          ["关系维度", edge.dimensions?.join("、") || "—"] as const,
-          ["共同院校", edge.sharedInstitutions?.join("、") || "—"] as const,
-          ["关系说明", edge.summary || "—"] as const,
-          ["互动证据", alumniInteractionText(edge)] as const,
-        ]
-      : []),
-
-    [
-      "置信度",
-
-      // 直接展示后端关系 confidence，并兼容统计关系和历史缺失字段。
-      formatRelationConfidence(edge),
-    ] as const,
-
-    ...((isLiveAlumni.value || isLiveCoop.value) && edge.confidenceSource
-      ? [
-          ["评分来源", confidenceSourceText(edge.confidenceSource)] as const,
-          ["评分依据", confidenceBasisText(edge)] as const,
-        ]
-      : []),
-
-    [
-      "命中规则",
-      props.moduleInfo.rules[0]?.name ?? "已命中关系识别规则",
-    ] as const,
-  ];
-});
 const selectedProvenanceTarget = computed(() => {
   const node =
     selectedNode.value ?? (!selectedEdge.value ? graphNodes.value[0] : null);
@@ -1917,7 +2386,7 @@ function buildLiveSummary(
     out["合作团队特征"] =
       (sr.stableTeamMembers || []).length > 0
         ? `长期稳定合作团队（${sr.stableTeamMembers.length} 人）`
-        : "暂无数据";
+        : sr.stableTeamNote || "暂无数据";
   }
   return out;
 }
@@ -1935,18 +2404,17 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
     if (!data) {
       return [
         { label: "专家", value: "" },
-        { label: "模式", value: "" },
         { label: "校友数", value: "" },
         { label: "维度目录", value: "" },
-        { label: "截断", value: "" },
-        { label: "图空间", value: "" },
       ];
     }
     if (data.summaryRows?.length) {
-      return data.summaryRows.map((row) => ({
-        label: row.label,
-        value: row.value,
-      }));
+      return data.summaryRows
+        .filter((row) => !["模式", "截断", "图空间"].includes(row.label))
+        .map((row) => ({
+          label: row.label,
+          value: row.value,
+        }));
     }
   }
   if (isLiveColleague.value) {
@@ -2020,18 +2488,21 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
         { label: "成果分布", value: "" },
         { label: "成果1", value: "" },
         { label: "完成时间", value: "" },
-        { label: "所属领域", value: "" },
+        { label: "直接关系/所属领域", value: "" },
         { label: "奖项/评价", value: "" },
         { label: "核心贡献", value: "" },
         { label: "合作模式", value: "" },
-        { label: "图空间", value: "" },
       ];
     }
     if (data.summaryRows?.length) {
-      return data.summaryRows.map((row) => ({
-        label: row.label,
-        value: row.value,
-      }));
+      return data.summaryRows
+        .filter((row) => row.label !== "图空间")
+        .map((row) => ({
+          // 所属领域取自成果 HAS_KEYWORD 关键词（论文行字段直接抽取），
+          // 按统一口径补「直接关系/」前缀；图空间是运行环境信息，不在摘要展示。
+          label: row.label === "所属领域" ? "直接关系/所属领域" : row.label,
+          value: row.value,
+        }));
     }
     const s = data.summary;
     const firstItem = data.items?.[0];
@@ -2066,14 +2537,10 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       },
       { label: "成果1", value: firstTitle },
       { label: "完成时间", value: firstTime },
-      { label: "所属领域", value: firstFields },
+      { label: "直接关系/所属领域", value: firstFields },
       { label: "奖项/评价", value: firstAwards },
       { label: "核心贡献", value: data.coreContribution || "—" },
       { label: "合作模式", value: data.cooperationMode || "—" },
-      {
-        label: "图空间",
-        value: data.sourceMeta?.space || "—",
-      },
     ];
   }
   return null;
@@ -2084,12 +2551,6 @@ const liveRules = computed<Array<Record<string, any>>>(() => {
 });
 
 const liveEntityRows = computed(() => {
-  if (isLiveColleague.value) {
-    return colleagueEntityRows(
-      liveResponse.value?.data?.graph?.nodes ?? [],
-      selectedNode.value?.id,
-    );
-  }
   const selected = selectedNode.value;
   const entityConfidence = (value: number | undefined) => {
     if (isLiveColleague.value) {
@@ -2104,74 +2565,90 @@ const liveEntityRows = computed(() => {
     return formatConfidence(value);
   };
   if (selected && !isExpertDirect.value) {
+    // 实体详情只展示实体自身信息（名称/类型/置信度/证据）；关系统计属于
+    // 关系口径，实体页不再显示「命中关系」行（关系内容看关系页/画布连线）。
+    // 全景图置信度为画布口径，直接取选中节点自身。
     const rows: Array<readonly [string, string]> = [
-      ["实体名称", selected.label],
-      ["实体类型", selected.entityType],
-      ["命中关系", selected.relations],
-      ["置信度", entityConfidence(selected.confidence)],
+      ["实体 1", `${selected.label}（${selected.id}）`],
+      ["实体类别", normalizeEntityCategory(selected)],
+      [
+        "置信度",
+        isPanorama.value
+          ? formatConfidence(selected.confidence)
+          : entityConfidence(selected.confidence),
+      ],
     ];
-    if (selected.evidence?.length) {
-      rows.push(["证据", selected.evidence.join("；")]);
-    }
     return rows;
+  }
+  // 全景图：实体页与画布同口径，逐个列出画布渲染节点（产业链中心 + 分层 +
+  // 展开层），数量与画布节点数一致；只展示实体自身信息（类型/置信度）。
+  if (isPanorama.value && panoramaResponse.value) {
+    return panoramaEntityList.value.flatMap(
+      (entity, index): Array<readonly [string, string]> => [
+        [`实体 ${index + 1}`, `${entity.label}（${entity.id}）`],
+        ["实体类别", normalizeEntityCategory(entity)],
+        ["置信度", formatConfidence(entity.confidence)],
+      ],
+    );
   }
   const entities =
     isExpertDirect.value && selected ? [selected] : graphNodes.value;
   if (!entities.length) return [] as Array<readonly [string, string]>;
   return entities.flatMap((entity, index) => [
     [`实体 ${index + 1}`, `${entity.label}（${entity.id}）`] as const,
-    ["类型", entity.entityType] as const,
-    ["关系", entity.relations || "—"] as const,
+    ["实体类别", normalizeEntityCategory(entity)] as const,
     ["置信度", entityConfidence(entity.confidence)] as const,
   ]);
 });
 
 const liveRelationRows = computed(() => {
-  if (selectedEdge.value) return relationDetailRows.value;
-  // 机构从属边（"关联机构"）不是专家间的直接关系，关系 Tab 只展示真实的专家关系边，
-  // 否则会出现 total=3 却显示 9 条这类"关系数量对不上"的问题。
-  const relationEdges = graphEdges.value.filter(
-    (edge) =>
-      edge.category !== "机构关联" &&
-      // 全景图的分层展示连线并非图库真实关系，不应进入关系详情并显示
-      // 非数值置信度；关系页只列出带原始边语义的真实关系。
-      (!isPanorama.value || edge.inferred !== true) &&
-      (!isLiveCoop.value || edge.category === "科研合作"),
-  );
-  if (!relationEdges.length) return [] as Array<readonly [string, string]>;
+  const relationEdges = selectedEdge.value
+    ? [selectedEdge.value]
+    : graphEdges.value.filter(
+        (edge) =>
+          (isPanorama.value || edge.inferred !== true) &&
+          // 两点合作成果：专家-专家合成边（科研合作）和专家-成果归因边
+          // （发表/发明/负责/参与）都进关系 Tab，否则共同成果明细展示不全。
+          (!isLiveCoop.value ||
+            edge.category === "科研合作" ||
+            edge.category === "成果关联"),
+      );
+  if (!relationEdges.length) {
+    return [] as Array<readonly [string, string]>;
+  }
+
   const nodesById = new Map(graphNodes.value.map((node) => [node.id, node]));
   return relationEdges.flatMap((relation, index) => {
     const from = nodesById.get(relation.from);
     const to = nodesById.get(relation.to);
-    return [
+    // TOP-N 事件关系页 / 全景图页：关系描述一行展示「关系类别/关系详情」
+    // （如 间接关系/产业链环节涉及关键技术），类别只取直接关系/间接关系，
+    // 详情按关系台账（先判断连线对应的图关系类型，再取对应文案）；论文
+    // 合作/企业关系用各自专用文案；其余模块按边动态判定关系类别（同事/
+    // 校友命中梳理文档映射时为直接关系）。
+    const relationInfo = isLiveIndustryEvent.value
+      ? industryEventRelationInfo(relation)
+      : isPanorama.value
+        ? panoramaRelationInfo(relation)
+        : null;
+    const relationDescription = relationInfo
+      ? `${relationInfo.category}/${relationInfo.detail}`
+      : isPaperCooperation.value
+        ? paperCoopRelationDescription(relation)
+        : isLiveEnterpriseRelation.value
+          ? enterpriseRelationDescription(relation)
+          : isLiveCoop.value
+            ? coopAchievementRelationDescription(relation)
+            : `${displayRelationCategory(relation)}/${displayRelationDetail(relation)}`;
+    const rows: Array<readonly [string, string]> = [
       [
         `关系 ${index + 1}`,
         `${from?.label || relation.from} → ${to?.label || relation.to}`,
-      ] as const,
-      ["类型", displayRelationType(relation.label)] as const,
-      ["分类", displayRelationCategory(relation.category)] as const,
-      ...(isLiveAlumni.value
-        ? [
-            ["关系维度", relation.dimensions?.join("、") || "—"] as const,
-            [
-              "共同院校",
-              relation.sharedInstitutions?.join("、") || "—",
-            ] as const,
-            ["关系说明", relation.summary || "—"] as const,
-            ["互动证据", alumniInteractionText(relation)] as const,
-          ]
-        : []),
-      ["置信度", formatRelationConfidence(relation)] as const,
-      ...((isLiveAlumni.value || isLiveCoop.value) && relation.confidenceSource
-        ? [
-            [
-              "评分来源",
-              confidenceSourceText(relation.confidenceSource),
-            ] as const,
-            ["评分依据", confidenceBasisText(relation)] as const,
-          ]
-        : []),
+      ],
+      ["关系描述", relationDescription],
+      ["置信度", formatRelationConfidence(relation)],
     ];
+    return rows;
   });
 });
 
@@ -2188,6 +2665,59 @@ const colleagueProvenance = computed(() =>
         }
       : undefined,
   ),
+);
+
+/**
+ * 全景图溯源卡片：与同事关系页同款样式与格式，口径与画布一致——仅画布
+ * 渲染的实体出实体卡、画布渲染的真实边出关系卡；未点击展示全部，点击
+ * 节点/边只展示对应卡片。点击分层展示连线也能出关系卡（两端实体的溯源
+ * 三要素照常展示，卡内注明连线性质），只有画布虚拟中心等纯展示元素
+ * 选中时由空态提示说明。
+ */
+const panoramaProvenance = computed(() => {
+  if (!isPanorama.value || !panoramaResponse.value) return [];
+  return panoramaProvenanceCards(panoramaResponse.value, {
+    selectedNodeId: selectedNode.value?.id,
+    selectedEdge: selectedEdge.value
+      ? {
+          source: selectedEdge.value.from,
+          target: selectedEdge.value.to,
+          label: selectedEdge.value.label,
+        }
+      : undefined,
+    edgeLabelDisplay: displayRelationType,
+    visibleNodeIds: new Set(graphNodes.value.map((node) => node.id)),
+    edges: panoramaCanvasRealEdges.value,
+    // 选中边在画布全部连线（含分层展示连线）内匹配：分层连线不在真实边
+    // 集合里，若只按真实边匹配，点击后溯源页会落空（只显示空态提示）。
+    matchEdges: panoramaCanvasEdges.value,
+    // 端点名取画布节点标签：虚拟产业链中心也能显示产业名，而不是内部
+    // 合成 id（__panorama_center__）。
+    labelById: new Map(graphNodes.value.map((node) => [node.id, node.label])),
+  });
+});
+
+/** 全景图画布口径的全部连线（真实图库边 + 分层展示连线）：关系页与实体
+ * 「关系」行共用，数量与画布连线一致；分层展示连线带分层实体同款数值
+ * 置信度。 */
+const panoramaCanvasEdges = computed<PanoramaGraphEdge[]>(() => {
+  if (!isPanorama.value) return [];
+  return graphEdges.value.map(canvasEdgeToPanoramaEdge);
+});
+
+/** 全景图画布口径的真实图库边（不含分层展示连线）：溯源页关系卡只用真实
+ * 边，虚拟连线无图库溯源信息。 */
+const panoramaCanvasRealEdges = computed<PanoramaGraphEdge[]>(() => {
+  if (!isPanorama.value) return [];
+  return graphEdges.value
+    .filter((edge) => edge.inferred !== true)
+    .map(canvasEdgeToPanoramaEdge);
+});
+
+/** 全景图画布口径实体列表：与画布渲染节点一一对应（产业链中心 + 分层 +
+ * 展开层），实体页数量即画布节点数；不再使用「分层 ∪ 子图」全量并集。 */
+const panoramaEntityList = computed<GraphNodeData[]>(() =>
+  isPanorama.value && panoramaResponse.value ? graphNodes.value : [],
 );
 
 const liveProvenance = computed(() => {
@@ -2241,62 +2771,114 @@ const liveProvenance = computed(() => {
   return null;
 });
 
-/** 溯源证据列表：未点击时全量，点击节点/边时按 graphVid 筛选。 */
-const displayedProvenanceEvidences = computed(() => {
-  const pv = liveProvenance.value;
-  if (!pv?.evidences?.length) return [];
-  const node = selectedNode.value;
-  const edge = selectedEdge.value;
-  if (!node && !edge) return pv.evidences;
-  if (node) {
-    const filtered = pv.evidences.filter((ev: any) => ev.graphVid === node.id);
-    return filtered.length ? filtered : pv.evidences;
-  }
-  if (edge) {
-    // 机构从属边（"关联机构"）连接的是虚拟机构节点，溯源里没有对应记录，
-    // 不能按专家关系边的规则去匹配，否则永远 0 命中而回退展示全部证据。
-    if (edge.category === "机构关联") {
-      return [];
-    }
-    // 点击边 → 展示两端实体的溯源（单实体溯源的 graphVid 不可能同时包含两端，
-    // 原来的 && 条件永远不命中而回退全量，不符合"点击边溯源跟着更新"）。
-    const filtered = pv.evidences.filter((ev: any) => {
-      const vid = String(ev.graphVid || "");
-      return vid.includes(edge.from) || vid.includes(edge.to);
-    });
-    return filtered.length ? filtered : pv.evidences;
-  }
-  return pv.evidences;
+/** 论文合作：响应无 graph 字段，画板用 preset 语义节点（core/expert-1/paper-1…）。
+ * 后端证据按固定顺序生成（专家A、专家B、其后为论文实体），据此把真实 vid
+ * 映射到 preset 节点 id，让"点击节点/边筛选溯源"与其它模块口径一致。 */
+const paperCoopEvidenceAlias = computed(() => {
+  const map = new Map<string, Set<string>>();
+  if (!isPaperCooperation.value) return map;
+  const evs = liveProvenance.value?.evidences ?? [];
+  const paperVids = new Set<string>();
+  evs.forEach((ev: any, index: number) => {
+    const vid = String(ev.graphVid || "");
+    if (!vid) return;
+    if (index === 0) map.set("core", new Set([vid]));
+    else if (index === 1) map.set("expert-1", new Set([vid]));
+    else paperVids.add(vid);
+  });
+  if (paperVids.size) map.set("paper-1", paperVids);
+  return map;
 });
 
-/** 溯源筛选提示：点击时若筛选命中则显示筛选范围，未命中回退全量时提示。 */
-const provenanceFilterHint = computed(() => {
-  const node = selectedNode.value;
-  const edge = selectedEdge.value;
-  if (!node && !edge) return "";
+/** 九大模块（同事关系/产业链全景已有各自实现）溯源卡片：与同事关系页同款
+ * 样式与口径——画布节点出「实体来源」卡，画布边出关系卡（两端实体各一节）。
+ * 溯源三要素优先取节点自带入图元数据（全景展开层节点等），缺失时回退响应
+ * provenance.evidences 按图空间 VID 匹配；复合 vid（"A -> B" 关系证据）不
+ * 参与实体匹配。未点击展示全部，点击节点/边只展示对应卡片。 */
+const moduleProvenanceCards = computed(() => {
+  if (isLiveColleague.value || isPanorama.value) return [];
   const pv = liveProvenance.value;
-  if (!pv?.evidences?.length) return "";
-  const total = pv.evidences.length;
-  const shown = displayedProvenanceEvidences.value.length;
-  if (node) {
-    return shown < total
-      ? `已筛选：节点 ${node.label}（${shown}/${total}）`
-      : `节点 ${node.label} 无独立溯源，展示全部`;
-  }
-  if (edge) {
-    if (edge.category === "机构关联") {
-      return "机构从属边无对应溯源记录";
-    }
-    return shown < total
-      ? `已筛选：边 ${edge.from}→${edge.to}（${shown}/${total}）`
-      : `该边无独立溯源，展示全部`;
-  }
-  return "";
-});
+  const evidences = (pv?.evidences ?? []) as Array<Record<string, any>>;
+  const hasNodeProvenance = (node: GraphNodeData) =>
+    Boolean(
+      node.sourceTable || node.sourceField || node.ingestBatch || node.sourceSystem,
+    );
+  // 无任何溯源信号（未查询 / 纯 preset 演示画板）时不出卡片。
+  if (!evidences.length && !graphNodes.value.some(hasNodeProvenance)) return [];
 
-const usesThreeFieldProvenance = computed(
-  () => isExpertIndirect.value || isPaperCooperation.value,
-);
+  const evByVid = new Map<string, Record<string, any>>();
+  for (const ev of evidences) {
+    const vid = String(ev.graphVid || "");
+    if (vid && !vid.includes("->")) evByVid.set(vid, ev);
+  }
+  const vidsOf = (node: GraphNodeData): string[] => {
+    // 论文合作无 graph 字段时画板用 preset 语义节点，换算回真实 vid。
+    const alias = isPaperCooperation.value
+      ? paperCoopEvidenceAlias.value.get(node.id)
+      : undefined;
+    return alias?.size ? [...alias] : [node.id];
+  };
+  const text = (...values: unknown[]) =>
+    values
+      .map((item) => (item == null ? "" : String(item).trim()))
+      .find((item) => item && item !== "-" && item !== "未提供") ?? "";
+  const sectionRows = (
+    node: GraphNodeData,
+  ): Array<readonly [string, string]> => {
+    const ev = vidsOf(node)
+      .map((vid) => evByVid.get(vid))
+      .find(Boolean);
+    return [
+      // 两点合作成果/校友的证据不带 sourceTable，真实表名在 technicalTable
+      // （businessTable 是"科技专家"这类业务口径标签，不作为表名兜底）。
+      [
+        "源数据表",
+        text(node.sourceTable, ev?.sourceTable, ev?.technicalTable) || "未提供",
+      ],
+      [
+        "英文字段名",
+        text(node.sourceField, ev?.sourceField, ev?.fieldIdentifier) || "未提供",
+      ],
+      ["图空间 VID", vidsOf(node).join("、") || node.id],
+    ];
+  };
+
+  const byId = new Map(graphNodes.value.map((node) => [node.id, node]));
+  const selected = selectedNode.value;
+  const selectedEdgeData = selectedEdge.value;
+  const nodeCards = (
+    selected ? [selected] : selectedEdgeData ? [] : graphNodes.value
+  ).map((node) => ({
+    id: `node:${node.id}`,
+    title: `${node.label} · 实体来源`,
+    sections: [{ title: "", rows: sectionRows(node) }],
+  }));
+  const edgeCards = (
+    selectedEdgeData
+      ? [selectedEdgeData]
+      : selected
+        ? []
+        : graphEdges.value
+  ).map((edge) => {
+    const source = byId.get(edge.from);
+    const target = byId.get(edge.to);
+    return {
+      id: `edge:${edge.id}`,
+      title: `${source?.label ?? edge.from} → ${target?.label ?? edge.to} · ${
+        edge.label || "关联"
+      }`,
+      sections: [
+        ...(source
+          ? [{ title: `源实体：${source.label}`, rows: sectionRows(source) }]
+          : []),
+        ...(target
+          ? [{ title: `目标实体：${target.label}`, rows: sectionRows(target) }]
+          : []),
+      ],
+    };
+  });
+  return [...nodeCards, ...edgeCards];
+});
 
 /** 摘要分页总页数：一条关系一页，按真实数据量出现。 */
 const summaryPageTotal = computed(
@@ -2473,17 +3055,6 @@ function isPanoramaEmpty(resp: IndustryChainPanoramaQueryResponse): boolean {
   );
 }
 
-/** 统一展示「源数据表 / 英文字段名 / 图空间 VID」。 */
-const isUnifiedProvenance = computed(
-  () =>
-    isExpertDirect.value ||
-    isPanorama.value ||
-    isLiveCoop.value ||
-    isLiveAlumni.value ||
-    isLiveEnterpriseRelation.value ||
-    isLiveIndustryEvent.value,
-);
-
 function computePanoramaSummaryRows(
   resp: IndustryChainPanoramaQueryResponse,
 ): ReadonlyArray<readonly [string, string]> {
@@ -2491,27 +3062,32 @@ function computePanoramaSummaryRows(
     // 查不到数据时不回落到静态示例值，避免把示例误当成真实结果
     return props.moduleInfo.summaryRows.map((row) => [row.label, "—"] as const);
   }
-  const layerLabel = (key: PanoramaLayerKey) => {
-    const layer = resp.layers.find((l) => l.key === key);
-    if (!layer) return "—";
-    if (!layer.items.length) return "0项";
-    const lead = layer.items[0]?.label || layer.title;
-    const suffix = layer.total > 1 ? `等${layer.total}项` : "";
+  // 关键技术 / 重点企业 / 核心专家 / 产业动态事件的总数与画布一致：从画布
+  // 实际渲染的节点（与画布同一个 derivedGraphFromResponse）按 entityType
+  // 分组统计，首项取该分类在画布上的第一个节点；后端 layer.total 是命中
+  // 总数（受 topK 限制画布未必全部渲染），不作为页面展示口径。
+  const canvasNodes = derivedGraphFromResponse(resp).nodes;
+  const canvasLabel = (entityType: string) => {
+    const nodes = canvasNodes.filter((node) => node.entityType === entityType);
+    if (!nodes.length) return "0项";
+    const lead = nodes[0]?.label || entityType;
+    const suffix = nodes.length > 1 ? `等${nodes.length}项` : "";
     return compactSummaryText(lead, SUMMARY_DISPLAY_MAX, suffix);
   };
-  const technologyLabel = () => {
-    const layer = resp.layers.find((l) => l.key === "core_technology");
-    const labels = collectPanoramaTechnologyLabels(resp);
-
-    const count = Math.max(layer?.total ?? 0, labels.length);
-    if (!count || !labels.length) return "0项";
-    const suffix = count > 1 ? `等${count}项` : "";
-    return compactSummaryText(labels[0], SUMMARY_DISPLAY_MAX, suffix);
-  };
-  const industry =
-    resp.summary.industry ||
-    (resp.input?.industry as string | undefined) ||
-    "—";
+  // 未输入产业关键词（如重置参数后执行）时，统计图库中的产业链并展示为
+  // 「集成电路等2项」样式，而不是显示为空。
+  const inputIndustry =
+    resp.summary.industry || (resp.input?.industry as string | undefined) || "";
+  const chainLabels = collectPanoramaIndustryChainLabels(resp);
+  const industryValue = inputIndustry
+    ? compactSummaryText(inputIndustry)
+    : chainLabels.length
+      ? compactSummaryText(
+          chainLabels[0],
+          SUMMARY_DISPLAY_MAX,
+          chainLabels.length > 1 ? `等${chainLabels.length}项` : "",
+        )
+      : "—";
   const rawDepth = resp.input?.depth as number | undefined;
   const rawTopK = resp.input?.topK as number | undefined;
   const depthValue: number | string =
@@ -2522,7 +3098,7 @@ function computePanoramaSummaryRows(
     (l) => l.key === ("core_technology" as PanoramaLayerKey),
   );
   const overrides = new Map<string, string>([
-    ["产业链名称", compactSummaryText(industry)],
+    ["产业链名称", industryValue],
     ["展开层级", `第 ${depthValue} 跳（topK=${topKValue}）`],
     [
       "核心环节",
@@ -2530,16 +3106,10 @@ function computePanoramaSummaryRows(
         ? compactSummaryText(coreSegment.items[0].label)
         : "—",
     ],
-    ["关键技术", technologyLabel()],
-    ["重点企业", layerLabel("leading_enterprise")],
-    ["核心专家", layerLabel("leading_expert")],
-    ["产业动态事件", layerLabel("flagship_achievement")],
-    [
-      "图谱规模",
-      compactSummaryText(
-        `子图${resp.graph.nodes.length}点${resp.graph.edges.length}边，全库${resp.summary.totalNodes}点${resp.summary.totalEdges}边`,
-      ),
-    ],
+    ["关键技术", canvasLabel("技术主题")],
+    ["重点企业", canvasLabel("企业")],
+    ["核心专家", canvasLabel("科技专家")],
+    ["产业动态事件", canvasLabel("事件")],
     ["动态更新", updateStatus.value],
   ]);
   return props.moduleInfo.summaryRows.map((row) => {
@@ -2575,7 +3145,7 @@ function buildPanoramaRequest(
     .map((value) => value.trim())
     .filter(Boolean);
   return {
-    industry: (raw.industry ?? "").trim() || undefined,
+    industry: (raw.industry ?? "").trim(),
     anchorId: (raw.anchorId ?? "").trim() || undefined,
     depth: clampInt(raw.depth ?? "", 1, 3, 2, "展开层级"),
     topK: clampInt((raw.topK ?? "").trim(), 1, PANORAMA_TOP_K_MAX, 5, "topK"),
@@ -2621,7 +3191,7 @@ function mapExpertNodeType(type: string): GraphNodeType {
 
 function mapExpertEntityType(type: string): string {
   const normalized = type.toLowerCase();
-  if (normalized === "expert" || normalized === "person") return "专家";
+  if (normalized === "expert" || normalized === "person") return "科技专家";
   if (
     normalized === "institution" ||
     normalized === "organization" ||
@@ -2629,11 +3199,13 @@ function mapExpertEntityType(type: string): string {
   )
     return "机构";
   if (normalized === "company" || normalized === "enterprise") return "企业";
-  if (normalized === "paper" || normalized === "publication") return "成果";
+  if (normalized === "paper" || normalized === "publication") return "论文";
+  if (normalized === "patent") return "专利";
   if (normalized === "project") return "项目";
   if (normalized === "event") return "事件";
-  if (normalized === "topic" || normalized === "keyword") return "关键词";
-  return type || "节点";
+  if (normalized === "topic" || normalized === "keyword") return "技术主题";
+  // 无法识别的类型按业务口径 12 类兜底为科技成果，避免实体页出现类别外文案。
+  return "科技成果";
 }
 
 function derivedGraphFromExpertResponse(
@@ -2764,7 +3336,13 @@ function derivedGraphFromExpertResponse(
   const nodeIds = new Set(nodes.map((n) => n.id));
   rawEdges.forEach((edge: DirectRelationGraphEdge, idx) => {
     if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) return;
-    const label = edge.label || "直接关系";
+    // 后端把边 label 拼成「直接关系 / <关系摘要>」（expert_direct_relation 的
+    // _build_graph），关系页会再拼模块前缀「直接关系/」，出现双重前缀；这里
+    // 剥掉 label 自带的前缀，只留业务细目（共论文/同机构 + 共论文等）。
+    const rawLabel = edge.label || "直接关系";
+    const label = rawLabel.startsWith("直接关系 / ")
+      ? rawLabel.slice("直接关系 / ".length)
+      : rawLabel;
     // 后端已在 edge.data.strength 里算好置信度（0-99），映射时补上，
     // 否则 GraphEdgeData.confidence 一直是 undefined，前端只能显示"暂无"。
     const strength = edge.data?.strength;
@@ -2775,7 +3353,10 @@ function derivedGraphFromExpertResponse(
       from: edge.source,
       to: edge.target,
       label,
-      category: label.includes("机构") ? "机构关联" : "直接关系",
+      // 机构从属边的 label 恒为"关联机构"（后端 _build_graph 固定值），必须精确匹配；
+      // 子串匹配会把"直接关系 / 同机构 + 共论文"这类真实关系边误判成机构从属边，
+      // 导致溯源/关系列表把它当机构边处理。
+      category: label === "关联机构" ? "机构关联" : "直接关系",
       confidence,
     });
   });
@@ -3002,7 +3583,7 @@ function buildAlumniGraph(
       nodeType: "expert",
       x: cx + Math.cos(angle) * radius + 200,
       y: cy + Math.sin(angle) * radius,
-      entityType: "校友专家",
+      entityType: "科技专家",
       relations: `与${data.expert.name || data.expert.id}存在校友关系（${dimensionText}；共同院校：${sharedInstitutionText}）`,
       evidence: [
         `共同院校：${item.sharedInstitutions.join("、") || "—"}`,
@@ -3037,6 +3618,13 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
   liveError.value = null;
 
   if (isPanorama.value) {
+    const industry = (parameterValues.value.industry ?? "").trim();
+    if (!industry) {
+      parameterErrors.value = { industry: "请输入产业关键词" };
+      running.value = false;
+      showToast("请完善必填项后再执行", "warning");
+      return;
+    }
     const panoramaErrors = collectParameterErrors([
       "industry",
       "anchorId",
@@ -4321,36 +4909,6 @@ function clearGraphSelection() {
         </p>
         <section
           v-else-if="
-            resultMode === 'provenance' &&
-            liveProvenance &&
-            usesThreeFieldProvenance
-          "
-          class="result-provenance"
-        >
-          <header><strong>数据溯源</strong><span>实体来源</span></header>
-          <h3>实体溯源</h3>
-          <div class="result-provenance__evidence-list">
-            <article
-              v-for="(ev, index) in liveProvenance.evidences"
-              :key="`${ev.graphVid || index}-${index}`"
-            >
-              <header>
-                <strong>{{ ev.title }}</strong>
-              </header>
-              <span
-                >源数据表：<code>{{ ev.sourceTable || "-" }}</code></span
-              >
-              <span
-                >英文字段名：<code>{{ ev.sourceField || "-" }}</code></span
-              >
-              <span
-                >图空间 VID：<code>{{ ev.graphVid || "-" }}</code></span
-              >
-            </article>
-          </div>
-        </section>
-        <section
-          v-else-if="
             resultMode === 'provenance' && isLiveColleague && liveResponse
           "
           class="result-provenance"
@@ -4387,75 +4945,84 @@ function clearGraphSelection() {
           </div>
         </section>
         <section
+          v-else-if="
+            resultMode === 'provenance' && isPanorama && panoramaResponse
+          "
+          class="result-provenance"
+        >
+          <header>
+            <strong>数据溯源</strong
+            ><span>{{
+              selectedNode
+                ? "选中实体"
+                : selectedEdge
+                  ? "选中关系"
+                  : "全部实体和关系"
+            }}</span>
+          </header>
+          <div class="result-provenance__evidence-list">
+            <article v-for="card in panoramaProvenance" :key="card.id">
+              <header>
+                <strong>{{ card.title }}</strong>
+              </header>
+              <div
+                v-for="(section, index) in card.sections"
+                :key="index"
+                class="colleague-provenance-section"
+              >
+                <h4 v-if="section.title">{{ section.title }}</h4>
+                <p v-for="row in section.rows" :key="row[0]">
+                  <b>{{ row[0] }}：</b><span>{{ row[1] }}</span>
+                </p>
+              </div>
+            </article>
+            <p v-if="!panoramaProvenance.length">
+              {{
+                selectedNode || selectedEdge
+                  ? "当前选中项为页面展示元素，无图库溯源信息。"
+                  : "暂无可追溯对象，请先执行查询。"
+              }}
+            </p>
+          </div>
+        </section>
+        <section
           v-else-if="resultMode === 'provenance' && liveProvenance"
           class="result-provenance"
         >
           <header>
             <strong>数据溯源</strong
             ><span>{{
-              isLiveCoop
-                ? "合作成果查询"
-                : isLiveAlumni
-                  ? "校友查询"
-                  : "查询结果"
+              selectedNode
+                ? "选中实体"
+                : selectedEdge
+                  ? "选中关系"
+                  : "全部实体和关系"
             }}</span>
           </header>
-          <div class="result-provenance__target">
-            <strong>{{ liveProvenance.sourceDatabase }}</strong>
-            <span>{{ liveProvenance.summary || "—" }}</span>
-          </div>
-          <p v-if="provenanceFilterHint" class="result-provenance__filter-hint">
-            {{ provenanceFilterHint }}
-          </p>
-          <h3>证据列表</h3>
-          <div
-            v-if="displayedProvenanceEvidences.length"
-            class="result-provenance__evidence-list"
-          >
-            <article
-              v-for="(ev, index) in displayedProvenanceEvidences"
-              :key="`${ev.recordId}-${index}`"
-            >
+          <div class="result-provenance__evidence-list">
+            <article v-for="card in moduleProvenanceCards" :key="card.id">
               <header>
-                <strong>{{ ev.title }}</strong>
+                <strong>{{ card.title }}</strong>
               </header>
-              <p>
-                <b>{{ ev.summary }}</b>
-              </p>
-              <template v-if="isUnifiedProvenance">
-                <span
-                  >源数据表：<code>{{
-                    ev.sourceTable || ev.technicalTable || "—"
-                  }}</code></span
-                >
-                <span
-                  >英文字段名：<code>{{
-                    ev.sourceField || ev.fieldIdentifier || "—"
-                  }}</code></span
-                >
-                <span
-                  >图空间 VID：<code>{{
-                    ev.graphVid || ev.recordId || "—"
-                  }}</code></span
-                >
-              </template>
-              <template v-else>
-                <span>业务表：{{ ev.businessTable }}</span>
-                <span
-                  >技术表：<code>{{ ev.technicalTable }}</code></span
-                >
-                <span
-                  >记录 ID：<code>{{ ev.recordId }}</code></span
-                >
-                <span
-                  >字段：<code>{{ ev.fieldIdentifier }}</code></span
-                >
-              </template>
+              <div
+                v-for="(section, index) in card.sections"
+                :key="index"
+                class="colleague-provenance-section"
+              >
+                <h4 v-if="section.title">{{ section.title }}</h4>
+                <p v-for="row in section.rows" :key="row[0]">
+                  <b>{{ row[0] }}：</b><span>{{ row[1] }}</span>
+                </p>
+              </div>
             </article>
+            <p v-if="!moduleProvenanceCards.length">
+              {{
+                selectedNode || selectedEdge
+                  ? "当前选中项无独立溯源信息。"
+                  : "暂无可追溯对象，请先执行查询。"
+              }}
+            </p>
           </div>
-          <p v-else class="result-provenance__empty">
-            {{ provenanceFilterHint || "暂无溯源证据" }}
-          </p>
         </section>
         <section
           v-else-if="resultMode === 'provenance' && liveResponse"

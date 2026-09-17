@@ -2,7 +2,21 @@ import type { ColleagueGraphNode, ColleagueGraphEdge } from '../../api/expertCol
 
 type Row = readonly [string, string];
 const text = (value: unknown) => value == null || value === '' || value === '-' ? '未提供' : String(value);
-const entityType = (node: ColleagueGraphNode) => node.type === 'expert' ? '科技专家' : node.type === 'organization' ? '共同机构' : '合作成果';
+// 实体类别统一用业务口径 12 类：同事成果按 paper/patent/project/report/award
+// 映射，report/award 等无法细分的成果归入科技成果。
+const achievementEntityTypes: Record<string, string> = {
+  paper: '论文',
+  patent: '专利',
+  project: '项目',
+  report: '科技成果',
+  award: '科技成果',
+};
+const entityType = (node: ColleagueGraphNode) =>
+  node.type === 'expert'
+    ? '科技专家'
+    : node.type === 'organization'
+      ? '机构'
+      : achievementEntityTypes[node.type] ?? '科技成果';
 
 export function colleagueEntityRows(nodes: ColleagueGraphNode[], selectedId?: string): Row[] {
   const visible = selectedId ? nodes.filter(node => node.id === selectedId) : nodes;

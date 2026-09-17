@@ -1,0 +1,9 @@
+name: Push Trigger Probe
+
+on: push
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "push event fired for ${{ github.ref }} at ${{ github.sha }}"

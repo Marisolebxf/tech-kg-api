@@ -404,7 +404,6 @@ onBeforeUnmount(() => {
             </RouterLink>
           </template>
           <template v-else>
-            <template v-if="isAdminUser">
             <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>工作台</span>
             </div>
@@ -422,6 +421,8 @@ onBeforeUnmount(() => {
               <span v-if="!sidebarCollapsed">平台总览</span>
             </RouterLink>
 
+            <!-- 图谱建设与治理/平台管理仅管理员可见；工作台、图谱查询与业务服务对普通用户开放。 -->
+            <template v-if="isAdminUser">
             <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>图谱建设与治理</span>
             </div>
@@ -485,6 +486,7 @@ onBeforeUnmount(() => {
             <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>知识图谱构建服务</span>
             </div>
+            </template>
             <div class="app-nav__query-group">
               <button
                 class="app-nav__item app-nav__item--top app-nav__item--button"
@@ -545,7 +547,6 @@ onBeforeUnmount(() => {
                 >
               </aside>
             </div>
-            </template>
             <div class="app-nav__service-group">
               <button
                 class="app-nav__item app-nav__item--top app-nav__item--button"

@@ -59,7 +59,7 @@ export const router = createRouter({
       name: 'overview',
       component: PlatformWorkbenchView,
       props: { initialTab: 'overview' },
-      meta: { title: '平台总览', admin: true },
+      meta: { title: '平台总览' },
     },
     {
       path: '/data-processing',
@@ -70,13 +70,13 @@ export const router = createRouter({
       name: 'graph-query',
       component: PlatformWorkbenchView,
       props: { initialTab: 'query' },
-      meta: { title: '综合查询', admin: true },
+      meta: { title: '综合查询' },
     },
     {
       path: '/graph-query/entities',
       name: 'graph-query-entities',
       component: EntityListView,
-      meta: { title: '实体列表', admin: true },
+      meta: { title: '实体列表' },
     },
     { path: '/admin/corrections', name: 'admin-corrections', component: CorrectionCenterView, props: { scope: 'admin' }, meta: { title: '修正记录', admin: true } },
     { path: '/admin/members', name: 'admin-members', component: MemberManagementView, meta: { title: '成员管理', admin: true } },
@@ -123,10 +123,7 @@ router.beforeEach(async (to) => {
       return loginRedirect(to.fullPath, '登录状态已失效或已超时，请重新登录')
     }
     const requiredPermission = typeof to.meta.permission === 'string' ? to.meta.permission : ''
-    // 首页和旧 OAuth 回跳统一落到当前角色可访问的默认页面。
-    if (to.name === 'overview' && !profile.isAdmin) {
-      return { path: '/expert-direct', query: to.query, hash: to.hash }
-    }
+    // 平台总览对所有登录用户开放；卡片入口对普通用户只读（见 PlatformWorkbenchView）。
     if (to.meta.admin === true && !profile.isAdmin) {
       return { path: '/forbidden', query: { redirect: to.fullPath } }
     }

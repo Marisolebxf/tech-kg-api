@@ -20,15 +20,15 @@ vi.mock('../api/graphSearch', () => ({
 }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({ IconHistory: { template: '<i />' }, IconSwap: { template: '<i />' } }))
 
-// 普通用户侧栏按产品决策收紧：仅保留业务服务组，图谱查询并入管理端。
+// 普通用户可见工作台（平台总览）、图谱查询与业务服务组；图谱建设与治理/平台管理仅管理员。
 const sharedPaths = [
   '/expert-direct', '/node-indirect', '/two-point-achievement',
   '/expert-colleague', '/expert-alumni', '/paper-cooperation', '/enterprise-relation',
   '/industry-chain-event', '/industry-chain-panorama',
 ]
+const queryPaths = ['/graph-query', '/graph-query/entities']
 const managementPaths = [
-  '/overview', '/schema', '/graph-build', '/manual-review', '/configurations',
-  '/graph-query', '/graph-query/entities',
+  '/schema', '/graph-build', '/manual-review', '/configurations',
 ]
 const wrappers: ReturnType<typeof mount>[] = []
 
@@ -65,15 +65,16 @@ async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed
 }
 
 describe('既有侧边栏按有效管理员身份显隐', () => {
-  it('普通用户只见业务服务，展开时所有业务子菜单保留', async () => {
+  it('普通用户可见工作台/平台总览与业务服务，管理菜单隐藏', async () => {
     const { wrapper } = await renderLayout(false)
     const navigation = wrapper.get('.app-nav')
-    expect(navigation.text()).not.toContain('工作台')
+    expect(navigation.text()).toContain('工作台')
     expect(navigation.text()).not.toContain('图谱建设与治理')
     expect(navigation.text()).not.toContain('平台管理')
     expect(navigation.text()).not.toContain('知识图谱构建服务')
     expect(navigation.text()).toContain('科技专家/人才知识推理构建服务')
-    for (const path of sharedPaths) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
+    expect(navigation.find('a[href="/overview"]').exists()).toBe(true)
+    for (const path of [...queryPaths, ...sharedPaths]) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
     for (const path of managementPaths) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(false)
     await wrapper.get('.app-top-actions__user').trigger('click')
     expect(wrapper.find('.portal-switch').exists()).toBe(false)
@@ -85,7 +86,7 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     for (const name of ['工作台', '图谱建设与治理', '平台管理', '知识图谱构建服务', '科技专家/人才知识推理构建服务']) {
       expect(navigation.text()).toContain(name)
     }
-    for (const path of [...managementPaths, ...sharedPaths]) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
+    for (const path of ['/overview', ...queryPaths, ...managementPaths, ...sharedPaths]) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
     await wrapper.get('.app-top-actions__user').trigger('click')
     expect(wrapper.get('.portal-switch').text()).toBe('进入管理端')
   })
@@ -94,7 +95,7 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     const { wrapper } = await renderLayout(false, '/expert-direct', true)
     const navigation = wrapper.get('.app-nav')
     for (const path of managementPaths) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(false)
-    for (const path of sharedPaths) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
+    for (const path of ['/overview', ...queryPaths, ...sharedPaths]) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
   })
 
   it('有效角色刷新为普通用户后现有管理菜单立即隐藏', async () => {
@@ -102,7 +103,7 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     auth.profile!.isAdmin = false
     await nextTick()
     expect(wrapper.find('.app-nav a[href="/schema"]').exists()).toBe(false)
-    expect(wrapper.find('.app-nav a[href="/graph-query"]').exists()).toBe(false)
+    expect(wrapper.find('.app-nav a[href="/graph-build"]').exists()).toBe(false)
   })
 
   it('管理端侧栏仅对管理员保留原有成员管理等入口', async () => {

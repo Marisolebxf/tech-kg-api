@@ -15,7 +15,6 @@ from service.auth import AuthContext
 from service.platform_access import PlatformActor
 
 ADMIN_ROUTERS = [
-    "platform_overview_router",
     "schema_management_router",
     "task_center_router",
     "workflow_system_router",
@@ -42,6 +41,11 @@ USER_ROUTERS = [
     "industry_chain_panorama_router",
     "options_router",
     "correction_router",
+    # 平台总览页数据 + 图空间列表/任务列表/审核队列的只读入口对所有登录用户开放。
+    "platform_overview_router",
+    "workflow_system_readonly_router",
+    "manual_review_readonly_router",
+    "graph_space_readonly_router",
 ]
 
 

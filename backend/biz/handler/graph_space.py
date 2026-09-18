@@ -17,6 +17,9 @@ from service.graph_space import GraphSpaceError, GraphSpaceService
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/graph-spaces", tags=["graph-space"])
+# 顶栏图空间选择器对所有登录用户可用：仅空间列表（普通用户按可工作空间收敛），
+# 创建/绑定/删除仍走管理端路由组。
+readonly_router = APIRouter(prefix="/graph-spaces", tags=["graph-space-readonly"])
 
 
 class GraphSpaceCreateRequest(BaseModel):
@@ -37,6 +40,9 @@ def list_graph_spaces(
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     return ApiResponse(data={"items": _service(session).list_spaces_for_actor(actor)})
+
+
+readonly_router.get("", response_model=ApiResponse)(list_graph_spaces)
 
 
 @router.post("", response_model=ApiResponse)

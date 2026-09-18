@@ -18,6 +18,10 @@ import PlatformWorkbenchView from '../PlatformWorkbenchView.vue'
 
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('../../../api/graphConsole', () => ({ runNgql: vi.fn() }))
+vi.mock('../../../api/graphSearch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../api/graphSearch')>()
+  return { ...actual, getGraphNode: vi.fn(), getSubgraph: vi.fn() }
+})
 vi.mock('../../../api/graphAlgorithm', () => ({
   fetchGraphAlgorithmMetadata: vi.fn(),
   fetchGraphAlgorithmEngine: vi.fn(),
@@ -52,6 +56,10 @@ function queryResult(value: string): GraphConsoleResult {
 
 function algorithmResult(value: string): AlgorithmResultPayload {
   return { jobId: 'job-a', sink: 'csv', rows: [{ vertex: value, pagerank: '0.5' }] }
+}
+
+function truncatedAlgorithmResult(value: string): AlgorithmResultPayload {
+  return { jobId: 'job-a', sink: 'csv', rows: [{ id: value, pagerank: '0.5' }], truncated: true }
 }
 
 let wrapper: VueWrapper
@@ -109,6 +117,39 @@ async function switchSpace(space = 'space-b') {
 }
 
 describe('PlatformWorkbench query graph-space context', () => {
+  it('uses a left-side relation selector, a right-side primary submit action and secondary status actions', async () => {
+    await enterAlgorithms()
+
+    const controls = wrapper.get('.platform-query-algo__controls')
+    expect(controls.element.firstElementChild).toBe(controls.get('.platform-query-algo__form').element)
+    expect(controls.element.lastElementChild).toBe(controls.get('.platform-query-algo__actions').element)
+    expect(controls.get('.platform-query-algo__labels').text()).toContain('关系类型')
+    expect(controls.get('.platform-query-algo__actions button').classes()).not.toContain('kg-button--secondary')
+
+    const recheckButton = wrapper.findAll('button').find((item) => item.text() === '重新检测')
+    expect(recheckButton?.classes()).toContain('kg-button--secondary')
+
+    await submitAlgorithm()
+    const refreshButton = wrapper.findAll('button').find((item) => item.text() === '刷新状态')
+    expect(refreshButton?.classes()).toContain('kg-button--secondary')
+    expect(wrapper.get('.platform-query-form').classes()).toContain('platform-query-form--no-divider')
+  })
+
+  it('shows a truncated-result notice beside the result title without a right-side record count', async () => {
+    vi.mocked(getAlgorithmJob).mockResolvedValueOnce({ jobId: 'job-a', status: 'succeeded' })
+    vi.mocked(getAlgorithmJobResult).mockResolvedValueOnce(truncatedAlgorithmResult('limited-result'))
+    await enterAlgorithms()
+    await submitAlgorithm()
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+
+    const resultHead = wrapper.get('.platform-query-algo-result .platform-query-result__head')
+    expect(resultHead.text()).toContain('节点重要性排名')
+    expect(resultHead.text()).toContain('结果已达服务端上限 10000 行，已截断展示')
+    expect(resultHead.find('.platform-query-result__meta').exists()).toBe(false)
+    expect(wrapper.find('.platform-query-algo__truncated').exists()).toBe(false)
+  })
+
   it('executes nGQL in the global space and clears completed results when that space changes', async () => {
     vi.mocked(runNgql).mockResolvedValueOnce(queryResult('result-a')).mockResolvedValueOnce(queryResult('result-b'))
     await wrapper.get('textarea').setValue('  MATCH (v) RETURN v  ')

@@ -1715,7 +1715,13 @@ const pageMeta = computed(() => {
       v-else-if="activeTab === 'query'"
       :class="['platform-content', 'platform-query', { 'is-fixed-result': queryMode === 'ngql' }]"
     >
-      <section class="kg-panel platform-query-form">
+      <section
+        :class="[
+          'kg-panel',
+          'platform-query-form',
+          { 'platform-query-form--no-divider': queryMode === 'algo' },
+        ]"
+      >
         <!-- 一级模式切换；算法页签和引擎状态位于下方独立一行。 -->
         <div class="kg-panel__header">
           <div class="platform-query-mode-group">
@@ -1784,7 +1790,7 @@ const pageMeta = computed(() => {
                 :title="algoMetadata?.engine?.message ?? undefined"
               >算法引擎{{ algoEngineStatus.label }}</span>
               <button
-                class="kg-button kg-button--text"
+                class="kg-button kg-button--secondary"
                 type="button"
                 :disabled="algoMetadataLoading || !algoSpace"
                 @click="refreshAlgoEngine"
@@ -1880,7 +1886,7 @@ const pageMeta = computed(() => {
               <span class="platform-query-algo__job-id">作业 {{ algoJob.jobId }}</span>
               <span v-if="algoJob.startedAt">开始 {{ algoJob.startedAt }}</span>
               <span v-if="algoJob.finishedAt">完成 {{ algoJob.finishedAt }}</span>
-              <button class="kg-button kg-button--text" type="button" @click="refreshAlgoJob">刷新状态</button>
+              <button class="kg-button kg-button--secondary" type="button" @click="refreshAlgoJob">刷新状态</button>
             </div>
             <div v-if="algoJob.status === 'failed'" class="platform-query-algo__job-error">
               <p><strong>失败原因：</strong>{{ algoJob.error ?? '（服务端未返回原因）' }}</p>
@@ -1930,16 +1936,15 @@ const pageMeta = computed(() => {
 
       <section v-if="queryMode === 'algo' && algoResult" class="platform-query-result platform-query-algo-result">
         <header class="platform-query-result__head">
-          <h2 class="platform-query-result__title">
-            {{ usePagerankView ? '节点重要性排名' : useLouvainView ? '社区发现结果' : '算法执行结果' }}
-          </h2>
-          <span class="platform-query-result__meta">{{
-            usePagerankView ? pagerankTotal : useLouvainView ? louvainTotal : algoRows.length
-          }} 行记录</span>
+          <div class="platform-query-result__heading">
+            <h2 class="platform-query-result__title">
+              {{ usePagerankView ? '节点重要性排名' : useLouvainView ? '社区发现结果' : '算法执行结果' }}
+            </h2>
+            <span v-if="algoResult.truncated" class="platform-query-algo__limit-note">
+              结果已达服务端上限 10000 行，已截断展示
+            </span>
+          </div>
         </header>
-        <p v-if="algoResult.truncated" class="platform-query-algo__truncated">
-          结果已达服务端上限 10000 行，已截断展示
-        </p>
         <!-- PageRank 专属：重要性排名表 + 图谱高亮 -->
         <div v-if="usePagerankView" class="platform-query-result__body platform-query-algo__rank-body">
           <div class="platform-query-algo__rank-table">
@@ -4998,7 +5003,7 @@ print(response.json())</pre>
 @media(max-width:760px){.asset-change-drawer{width:94vw}.asset-change-table table{min-width:700px}}
 
 .platform-query-algo__toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:40px;border-bottom:1px solid #e5e6eb}
-.platform-query-algo__controls{display:flex;align-items:center;gap:24px}
+.platform-query-algo__controls{display:flex;width:100%;min-width:0;align-items:center;justify-content:space-between;gap:24px}
 .platform-query .platform-query-algo__form{display:flex;flex:1;min-width:0;gap:16px;flex-wrap:wrap}
 .platform-query .platform-query-algo__labels{display:flex;flex:1;flex-direction:row;align-items:center;gap:12px;grid-column:auto}
 .platform-query .platform-query-algo__labels .platform-form-label{display:inline-flex;align-items:baseline;flex:0 0 auto;white-space:nowrap}
@@ -5019,6 +5024,7 @@ print(response.json())</pre>
 .platform-query .kg-panel__header{min-height:40px;padding:8px 16px;border-color:#e5e6eb;background:#f7f8fa}
 .platform-query .kg-panel__title{font-size:16px;line-height:24px;font-weight:600}
 .platform-query .platform-query-form{margin:0;overflow:visible;border:0!important;border-bottom:1px dashed #c9cdd4!important;border-radius:0!important;background:transparent!important}.platform-query-form .kg-panel__header{box-sizing:border-box;height:40px;min-height:40px;padding:0;border:0!important;background:transparent!important}
+.platform-query .platform-query-form--no-divider{border-bottom:0!important}
 .platform-query .platform-form-grid{grid-template-columns:repeat(6,minmax(0,1fr));column-gap:16px;row-gap:16px;padding:16px 0}
 .platform-query .platform-form-grid :deep(.arco-form-item){width:100%;min-width:0;margin-bottom:0}
 .platform-query .platform-form-field :deep(.arco-form-item-wrapper-col),.platform-query .platform-form-field :deep(.arco-form-item-content-wrapper),.platform-query .platform-form-field :deep(.arco-form-item-content){box-sizing:border-box;width:100%;min-width:0;max-width:100%;flex:1 1 0%}
@@ -5064,6 +5070,7 @@ print(response.json())</pre>
    表格对齐图谱构建任务列表（40px 行高、#e5edf8 分隔线、hover 高亮）。 */
 .platform-query-result{display:flex;flex-direction:column;gap:16px}
 .platform-query-result__head{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:16px;min-height:24px}
+.platform-query-result__heading{display:flex;min-width:0;align-items:center;gap:12px;flex-wrap:wrap}
 .platform-query-result__title{position:relative;padding-left:11px;margin:0;color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
 .platform-query-result__title::before{position:absolute;top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#004ecc;content:""}
 .platform-query-result__meta{color:#86909c;font-size:12px;line-height:20px;white-space:nowrap}
@@ -5115,7 +5122,7 @@ print(response.json())</pre>
 .platform-query-algo__job-error{display:grid;border:1px solid #ffd6c6;border-radius:4px;background:#fff;padding:8px 12px;gap:8px}
 .platform-query-algo__job-error p{margin:0;color:#b42318;font-size:13px;line-height:20px;overflow-wrap:anywhere}
 .platform-query-algo__job-error pre{max-height:160px;margin:0;overflow:auto;padding:8px;border-radius:4px;background:#0d1117;color:#e6edf3;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
-.platform-query-algo__truncated{margin:0 0 12px;padding:0;border:0;background:transparent;color:#86909c;font-size:12px;line-height:20px}
+.platform-query-algo__limit-note{color:#86909c;font-size:12px;line-height:20px;font-weight:400;white-space:nowrap}
 /* PageRank 结果：重要性排名表 + 图谱高亮并排（覆盖 __body 的纵向 flex） */
 .platform-query-algo__rank-body{display:grid;grid-template-columns:minmax(0,1fr) 400px;overflow:hidden}
 .platform-query-algo__rank-table{display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid #e5e6eb}

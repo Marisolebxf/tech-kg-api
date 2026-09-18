@@ -5,7 +5,7 @@ import {
   ref,
   watch,
 } from 'vue'
-import { useRouter } from 'vue-router'
+import { RouterLink, useRouter, type RouteLocationRaw } from 'vue-router'
 import { runNgql, type GraphConsoleResult } from '../../api/graphConsole'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
 import ListPagination from '../../components/list-pagination.vue'
@@ -40,6 +40,8 @@ import {
 } from '@arco-design/web-vue'
 import QueryResultTable from './QueryResultTable.vue'
 import { IconInfoCircle } from '@arco-design/web-vue/es/icon'
+import { authDisabled } from '../../config'
+import { useAuthStore } from '../../stores/auth'
 import {
   fetchGraphAlgorithmEngine,
   fetchGraphAlgorithmMetadata,
@@ -269,6 +271,16 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
+
+// 平台总览对所有登录用户开放；卡片内跳往管理页（图谱构建/人工审核/任务详情）的
+// 入口对普通用户保持可见但不可点击（渲染为无 href 的 <a class="is-locked">）。
+const authStore = useAuthStore()
+const canEnterAdminPages = computed(() => authDisabled || authStore.isAdmin)
+const adminLinkComponent = computed(() => (canEnterAdminPages.value ? RouterLink : 'a'))
+const adminLockTip = computed(() => (canEnterAdminPages.value ? undefined : '需要管理员权限'))
+function adminLinkTo(to: RouteLocationRaw): RouteLocationRaw | undefined {
+  return canEnterAdminPages.value ? to : undefined
+}
 
 const activeTab = ref<PlatformTab>(props.initialTab ?? 'overview')
 const activeServiceKey = ref(props.initialServiceKey ?? modules[0]?.key ?? '')
@@ -1070,7 +1082,7 @@ const pageMeta = computed(() => {
       <div class="platform-hero__main">
         <h1>{{ pageMeta.title }}</h1>
       </div>
-      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><RouterLink to="/graph-build">查看任务</RouterLink><RouterLink to="/manual-review">进入人工处理</RouterLink></div>
+      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><component :is="adminLinkComponent" :to="adminLinkTo('/graph-build')" :class="{ 'is-locked': !canEnterAdminPages }" :title="adminLockTip">查看任务</component><component :is="adminLinkComponent" :to="adminLinkTo('/manual-review')" :class="{ 'is-locked': !canEnterAdminPages }" :title="adminLockTip">进入人工处理</component></div>
     </header>
 
     <header v-else-if="activeTab !== 'query'" class="platform-page-head">
@@ -1097,48 +1109,48 @@ const pageMeta = computed(() => {
 
       <section class="platform-overview-main">
         <div class="kg-panel platform-jobs-panel">
-          <div class="kg-panel__header"><div><h2 class="kg-panel__title">图谱构建</h2></div><RouterLink to="/graph-build">查看全部任务 →</RouterLink></div>
+          <div class="kg-panel__header"><div><h2 class="kg-panel__title">图谱构建</h2></div><component :is="adminLinkComponent" :to="adminLinkTo('/graph-build')" :class="{ 'is-locked': !canEnterAdminPages }" :title="adminLockTip">查看全部任务 →</component></div>
           <template v-if="overviewJobsState === 'ready'">
             <div class="platform-jobs-stats">
               <article v-for="stat in overviewJobStats" :key="stat.label"><span :class="`is-${stat.tone}`">{{ stat.value }}</span><em>{{ stat.label }}</em></article>
             </div>
             <div class="platform-jobs-list" v-if="recentOverviewJobs.length">
-              <RouterLink v-for="job in recentOverviewJobs" :key="job.id" :to="`/graph-build/jobs/${job.id}`">
+              <component :is="adminLinkComponent" v-for="job in recentOverviewJobs" :key="job.id" :to="adminLinkTo(`/graph-build/jobs/${job.id}`)" :class="{ 'is-locked': !canEnterAdminPages }" :title="adminLockTip">
                 <strong>{{ job.name }}</strong>
                 <span :class="JOB_STATUS_TONE[deriveJobUnifiedStatus(job)]">{{ deriveJobUnifiedStatus(job) }}</span>
                 <em>{{ job.lastRunAt || job.createdAt }}</em>
-              </RouterLink>
+              </component>
             </div>
             <div v-else class="platform-card-empty">
               <strong>暂无构建任务</strong>
               <p>创建一次性 / 周期性任务，触发脚本抽取写入图空间。</p>
-              <RouterLink class="primary" to="/graph-build">去新建任务</RouterLink>
+              <component :is="adminLinkComponent" class="primary" :to="adminLinkTo('/graph-build')" :class="{ 'is-locked': !canEnterAdminPages }" :title="adminLockTip">去新建任务</component>
             </div>
           </template>
           <div v-else-if="overviewJobsState === 'loading'" class="platform-card-empty"><strong>任务数据加载中…</strong></div>
-          <div v-else class="platform-card-empty"><strong>任务数据暂不可用</strong><p>{{ overviewJobsError }}</p><RouterLink to="/graph-build">前往图谱构建 →</RouterLink></div>
+          <div v-else class="platform-card-empty"><strong>任务数据暂不可用</strong><p>{{ overviewJobsError }}</p><component :is="adminLinkComponent" :to="adminLinkTo('/graph-build')" :class="{ 'is-locked': !canEnterAdminPages }" :title="adminLockTip">前往图谱构建 →</component></div>
         </div>
 
         <aside class="kg-panel platform-review-panel">
-          <div class="kg-panel__header"><div><h2 class="kg-panel__title">人工审核</h2></div><RouterLink to="/manual-review">查看处理队列 →</RouterLink></div>
+          <div class="kg-panel__header"><div><h2 class="kg-panel__title">人工审核</h2></div><component :is="adminLinkComponent" :to="adminLinkTo('/manual-review')" :class="{ 'is-locked': !canEnterAdminPages }" :title="adminLockTip">查看处理队列 →</component></div>
           <template v-if="overviewReviewsState === 'ready'">
             <div class="platform-review-count">待处理 <strong>{{ overviewReviewsTotal }}</strong> 条</div>
             <div class="platform-review-list">
-              <RouterLink v-for="item in overviewReviews" :key="item.id" :to="reviewItemRoute(item)">
+              <component :is="adminLinkComponent" v-for="item in overviewReviews" :key="item.id" :to="adminLinkTo(reviewItemRoute(item))" :class="{ 'is-locked': !canEnterAdminPages }" :title="adminLockTip">
                 <strong>{{ item.objectName || item.objectId }}</strong>
                 <em>{{ item.category }}</em>
                 <span class="is-risk">风险 {{ item.riskLevel }}</span>
-              </RouterLink>
+              </component>
             </div>
           </template>
           <div v-else-if="overviewReviewsState === 'empty'" class="platform-card-empty">
             <strong>当前没有待审核任务</strong>
             <p>构建流程发现的低置信度候选会进入这里等待人工决策。</p>
-            <RouterLink to="/manual-review">前往人工审核</RouterLink>
+            <component :is="adminLinkComponent" :to="adminLinkTo('/manual-review')" :class="{ 'is-locked': !canEnterAdminPages }" :title="adminLockTip">前往人工审核</component>
           </div>
           <div v-else-if="overviewReviewsState === 'loading'" class="platform-card-empty"><strong>审核队列加载中…</strong></div>
-          <div v-else-if="overviewReviewsState === 'forbidden'" class="platform-card-empty"><strong>暂无审核权限</strong><p>需要审核角色（reviewer / 数据质量 / 图谱治理）后才能查看队列。</p><RouterLink to="/manual-review">前往人工审核</RouterLink></div>
-          <div v-else class="platform-card-empty"><strong>审核队列暂不可用</strong><p>{{ overviewReviewsError }}</p><RouterLink to="/manual-review">前往人工审核 →</RouterLink></div>
+          <div v-else-if="overviewReviewsState === 'forbidden'" class="platform-card-empty"><strong>暂无审核权限</strong><p>需要审核角色（reviewer / 数据质量 / 图谱治理）后才能查看队列。</p><component :is="adminLinkComponent" :to="adminLinkTo('/manual-review')" :class="{ 'is-locked': !canEnterAdminPages }" :title="adminLockTip">前往人工审核</component></div>
+          <div v-else class="platform-card-empty"><strong>审核队列暂不可用</strong><p>{{ overviewReviewsError }}</p><component :is="adminLinkComponent" :to="adminLinkTo('/manual-review')" :class="{ 'is-locked': !canEnterAdminPages }" :title="adminLockTip">前往人工审核 →</component></div>
         </aside>
       </section>
     </main>
@@ -2088,6 +2100,11 @@ print(response.json())</pre>
 .platform-operations-grid { display:grid;grid-template-columns:minmax(0,1.7fr) minmax(320px,.8fr);gap:14px; }
 .platform-recent-tasks,.platform-alert-overview { min-width:0;overflow:hidden; }
 .platform-recent-tasks .kg-panel__header a,.platform-alert-overview .kg-panel__header a { color:#004ecc;font-size:12px;text-decoration:none; }
+/* 平台总览对普通用户只读：管理页入口保持可见但不可点（无 href 的 <a class="is-locked">） */
+.platform-hero__actions a.is-locked,.kg-panel__header a.is-locked,.platform-card-empty a.is-locked,.platform-jobs-list a.is-locked,.platform-review-list a.is-locked { cursor:not-allowed;opacity:.82; }
+.platform-hero__actions a.is-locked:hover { border-color:#9ec2f7;background:rgba(255,255,255,.72);color:#004ecc; }
+.platform-hero__actions a.is-locked:last-child:hover { border-color:#004ecc;background:#004ecc;color:#fff; }
+.platform-jobs-list a.is-locked:hover,.platform-review-list a.is-locked:hover { background:#fff; }
 .platform-recent-tasks td small { display:block;margin-top:2px;color:#52627a;font-size:10px; }
 .platform-status.is-阻断 { background:#fee4e2;color:#b42318; }
 .platform-status.is-成功,.platform-status.is-完成,.platform-status.is-正常 { background:#dcfae6;color:#067647; }

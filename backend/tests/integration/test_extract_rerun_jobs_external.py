@@ -66,7 +66,7 @@ def _case(case_id, record_id, binding, schema_id="schema-paper", execution="EXEC
         "recordId": record_id,
         "sourceBindingId": binding,
         "schemaId": schema_id,
-        "schemaKey": "paper",
+        "schemaKey": schema_id.removeprefix("schema-"),
         "executionId": execution,
         "jobId": "job-9",
         "attempt": 1,
@@ -142,6 +142,60 @@ class TestRerunFailedRecords:
             await rerun_failed_records(case_ids=["MR-1"])
         assert fake_review.reverted
         assert fake_review.attached == []
+
+    async def test_skips_unresolvable_schema_and_reruns_rest(self, rerun_env, monkeypatch):
+        """某个 schema 已删/不在当前控制面:只跳过该组,其余 schema 正常重跑。"""
+        fake_review, fake_ops = rerun_env
+        real_load = schema_extraction.load_extract_schema
+
+        def _load(schema_id):
+            if schema_id == "schema-patent":
+                raise schema_extraction.SchemaConflictError(f"Schema 不存在: {schema_id}")
+            return real_load(schema_id)
+
+        monkeypatch.setattr(schema_extraction, "load_extract_schema", _load)
+        result = await rerun_failed_records(case_ids=["MR-1", "MR-2", "MR-3", "MR-4"])
+        assert len(fake_ops.calls) == 1  # 只剩 paper 组真正触发
+        assert result["cases"] == 2
+        assert result["skipped"] == [
+            {
+                "schemaId": "schema-patent",
+                "schemaKey": "patent",
+                "cases": 1,
+                "reason": "Schema 不存在: schema-patent",
+            }
+        ]
+        assert fake_review.marked == [["MR-1", "MR-2"]]  # 被跳过的组不标记 RERUNNING
+
+    async def test_all_skipped_raises_with_each_schema_reason(self, rerun_env, monkeypatch):
+        """全部 schema 不可用时整体 409,报文聚合各组原因。"""
+        def _always_missing(schema_id):
+            raise schema_extraction.SchemaConflictError(f"Schema 不存在: {schema_id}")
+
+        monkeypatch.setattr(schema_extraction, "load_extract_schema", _always_missing)
+        with pytest.raises(schema_extraction.SchemaConflictError) as ei:
+            await rerun_failed_records(case_ids=["MR-1", "MR-3"])
+        msg = str(ei.value)
+        assert "均无法重跑" in msg
+        assert "paper" in msg and "patent" in msg
+
+    async def test_graph_space_falls_back_to_schema_space(self, rerun_env, monkeypatch):
+        """原执行缺失/未带图空间时,回落 schema 自身空间而非环境默认空间。"""
+        fake_review, fake_ops = rerun_env
+        fake_review._cases.append(
+            _case("MR-9", "100", "bind-9", schema_id="schema-orphan", execution="EXEC-404")
+        )
+        real_load = schema_extraction.load_extract_schema
+
+        def _load(schema_id):
+            info = dict(real_load(schema_id))
+            info["graph_space"] = "yunfei_test"
+            return info
+
+        monkeypatch.setattr(schema_extraction, "load_extract_schema", _load)
+        await rerun_failed_records(case_ids=["MR-9"])
+        _, payload = fake_ops.calls[-1]
+        assert payload["graphSpace"] == "yunfei_test"
 
 
 class _FakeRepo:

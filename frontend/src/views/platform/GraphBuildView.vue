@@ -174,12 +174,19 @@ async function onTrigger(job: WorkflowJob) {
 }
 
 async function onToggleState(job: WorkflowJob) {
-  // 方向必须按统一状态推导：运行中(含已暂停但仍在跑)→暂停；已暂停→恢复。
-  // 用原始 job.status 推导会在「运行中点暂停」后再点变成反向操作。
-  const active = deriveJobUnifiedStatus(job) === '已暂停'
+  // 方向按 job.status：暂停→恢复；其余（含运行中）→暂停。
+  // 暂停只停后续调度，正在跑的执行会继续到结束——toast 必须说清，否则用户以为暂停无效。
+  const active = job.status === '暂停'
   try {
     await updateJobState(job.id, active)
-    showToast(active ? '已恢复' : '已暂停', 'success')
+    showToast(
+      active
+        ? '已恢复'
+        : job.lastExecutionStatus === 'RUNNING'
+          ? '已暂停调度：正在运行的执行会继续到结束'
+          : '已暂停',
+      'success',
+    )
     await loadData()
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
@@ -298,10 +305,9 @@ onMounted(() => {
               <td class="gb-job-actions">
                 <div class="gb-job-actions__inner">
                   <button v-if="['未运行', '运行失败'].includes(deriveJobUnifiedStatus(job))" type="button" class="primary" :disabled="triggeringJobId === job.id" @click="onTrigger(job)">{{ deriveJobUnifiedStatus(job) === '运行失败' ? '重新执行' : '执行' }}</button>
-                  <button v-if="deriveJobUnifiedStatus(job) === '运行中'" type="button" @click="onToggleState(job)">暂停</button>
-                  <button v-if="deriveJobUnifiedStatus(job) === '已暂停'" type="button" class="primary" @click="onToggleState(job)">恢复</button>
+                  <button v-if="job.status !== '暂停' && deriveJobUnifiedStatus(job) !== '已暂停'" type="button" @click="onToggleState(job)">暂停</button>
+                  <button v-else type="button" class="primary" @click="onToggleState(job)">恢复</button>
                   <button type="button" @click="openJobDetail(job)">查看详情</button>
-                  <button v-if="deriveJobUnifiedStatus(job) === '已完成' && job.schedule.kind === 'cron'" type="button" @click="onToggleState(job)">暂停调度</button>
                   <button v-if="deriveJobUnifiedStatus(job) !== '运行中'" type="button" class="danger" @click="onDelete(job)">删除</button>
                 </div>
               </td>

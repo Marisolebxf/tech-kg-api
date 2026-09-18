@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { deriveJobUnifiedStatus, getExecution, getJob, getTask, listExecutions, retryTask, TRIGGER_SOURCE_LABEL, type AccessReport, type PipelineActivityInfo, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch, type WorkflowExecution, type WorkflowJob } from '../../api/workflowOperations'
 import { getSchemaDetail, type SchemaDefinition } from '../../api/schemaManagement'
@@ -506,6 +506,27 @@ async function selectExecution(executionId: string) {
     pipelineMessage.value = `执行详情加载失败：${(error as Error).message}`
   }
 }
+
+// 选中的执行仍在运行时轮询刷新（重拉执行 + 任务详情），终态即停；
+// 页面切到后台时跳过本轮，避免不可见时白白打接口
+let execPollTimer: ReturnType<typeof setInterval> | null = null
+watch(
+  () => selectedExecution.value?.status === 'RUNNING',
+  (running) => {
+    if (running && execPollTimer === null) {
+      execPollTimer = setInterval(() => {
+        if (!document.hidden && selectedExecutionId.value) void selectExecution(selectedExecutionId.value)
+      }, 5000)
+    } else if (!running && execPollTimer !== null) {
+      clearInterval(execPollTimer)
+      execPollTimer = null
+    }
+  },
+  { immediate: true },
+)
+onUnmounted(() => {
+  if (execPollTimer !== null) clearInterval(execPollTimer)
+})
 
 watch(() => route.query.step, (step) => {
   if (step && steps.value.some((item) => item.id === String(step))) selectedStepId.value = String(step)

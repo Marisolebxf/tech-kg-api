@@ -149,6 +149,9 @@ def env(monkeypatch):
         }
 
     monkeypatch.setattr(schema_extraction, "load_extract_schema", _fake_load)
+    # create/trigger 的 S3 脚本对象预检也 fake 掉（extract/chain 都走它，委托 _fake_load；
+    # 预检缺失用例单独覆盖）
+    monkeypatch.setattr(schema_extraction, "ensure_extract_script_ready", _fake_load)
     monkeypatch.setattr(
         schema_extraction,
         "build_extract_definition",
@@ -199,6 +202,47 @@ async def test_create_rejects_legacy_task_types(env):
             await service.create_job(
                 _actor("u1"), {"name": "x", "taskType": task_type, "schemaId": "schema-widget"}
             )
+
+
+async def test_create_rejects_when_script_object_missing(env, monkeypatch):
+    """脚本对象在 S3 不存在（系统 Schema 种子占位）时，建任务即报清晰错误。
+
+    不预检的话任务能建成功，但要等 worker 下载脚本重试耗尽（约 100 秒）
+    才 FAILED，报错只剩一句 "Workflow execution failed"。
+    """
+    service, _, _, _ = env
+    import service.schema_extraction as schema_extraction
+
+    def _missing(schema_id):
+        raise schema_extraction.SchemaConflictError(
+            "脚本对象 tech-kg-schema-scripts/paper/transform_papers.py 在对象存储中不存在"
+        )
+
+    monkeypatch.setattr(schema_extraction, "ensure_extract_script_ready", _missing)
+    with pytest.raises(WorkflowJobError, match="对象存储中不存在"):
+        await service.create_job(
+            _actor("u1"), {"name": "x", "taskType": "extract", "schemaId": "schema-paper"}
+        )
+
+
+async def test_trigger_rejects_when_script_object_missing(env, monkeypatch):
+    """脚本对象缺失的任务触发时被预检拦截，不下发必失败的执行。"""
+    service, _, ops, _ = env
+    import service.schema_extraction as schema_extraction
+
+    job = await service.create_job(
+        _actor("u1"), {"name": "x", "taskType": "extract", "schemaId": "schema-widget"}
+    )
+
+    def _missing(schema_id):
+        raise schema_extraction.SchemaConflictError(
+            "脚本对象 tech-kg-schema-scripts/paper/transform_papers.py 在对象存储中不存在"
+        )
+
+    monkeypatch.setattr(schema_extraction, "ensure_extract_script_ready", _missing)
+    with pytest.raises(WorkflowJobError, match="对象存储中不存在"):
+        await service.trigger_job(_actor("u1"), job["id"])
+    assert not ops.executed, "预检失败不应下发执行"
 
 
 async def test_create_chain_job_builds_definition_and_steps(env):

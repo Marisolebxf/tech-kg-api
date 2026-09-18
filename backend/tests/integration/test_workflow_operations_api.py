@@ -226,7 +226,11 @@ async def test_execute_definition_rejects_duplicate_workflow_id(
 
 @pytest.fixture
 def fake_chain_schemas(monkeypatch: pytest.MonkeyPatch):
-    """chain 任务创建逐个 load_extract_schema：测试库无 schema，fake 出两个可抽取 schema。"""
+    """chain 任务创建逐个预检 schema：测试库无 schema/脚本对象，fake 出两个可抽取 schema。
+
+    extract/chain 建任务都走 ensure_extract_script_ready（目录校验 + S3 脚本对象
+    存在性探测），一并 fake 掉 S3 探测，委托同一个 _load。
+    """
     from service import schema_extraction
 
     def _load(schema_id):
@@ -242,6 +246,7 @@ def fake_chain_schemas(monkeypatch: pytest.MonkeyPatch):
         }
 
     monkeypatch.setattr(schema_extraction, "load_extract_schema", _load)
+    monkeypatch.setattr(schema_extraction, "ensure_extract_script_ready", _load)
 
 
 async def test_create_and_trigger_chain_job_api(async_client, fake_temporal, fake_chain_schemas):

@@ -66,7 +66,7 @@ rows = iter_rows(engine, sql, batch_size=500, params={"since": since} if since e
 
 ## transform 脚本与增量的关系
 
-平台通道里**脚本不做增量读源**——平台按来源水位分批把 `rows` 送进 `transform(payload)`，脚本只做逐批转换。`iter_rows` / `apply_since` 供脚本内自建读取用（如增量加载查找表），或独立 CLI 运行旧 ETL 脚本（回退手段，D5 暂缓）：
+平台通道里**脚本不做增量读源**——平台按来源水位分批把 `rows` 送进 `@step` 声明的抽取步（第 1 步消费 `rows`），脚本只做逐批转换。`iter_rows` / `apply_since` 供脚本内自建读取用（如增量加载查找表），或独立 CLI 运行旧 ETL 脚本（回退手段，D5 暂缓）：
 
 ```python
 def transform(payload: dict) -> dict:

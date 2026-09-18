@@ -68,7 +68,8 @@ function updateRow(index: number, value: SourceBindingRow) {
 </template>
 
 <style scoped>
-.source-bindings{display:flex;flex-direction:column;gap:8px}
+/* 行内五列有像素下限（行 min-width 720px），弹窗窄时整块横向拖动看全 */
+.source-bindings{display:flex;flex-direction:column;gap:8px;overflow-x:auto}
 .source-bindings__empty{padding:8px 16px;border:1px dashed #e5e6eb;border-radius:6px;color:#86909c;font-size:12px;line-height:20px}
 .source-bindings__add{align-self:flex-start;height:28px;padding:0 12px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#165dff;font-size:12px;cursor:pointer}
 .source-bindings__add:hover{border-color:#165dff}

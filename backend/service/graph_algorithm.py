@@ -11,7 +11,7 @@ import logging
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from service.platform_access import PlatformActor
@@ -121,10 +121,12 @@ _degree_jobs_lock = threading.Lock()
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _save_degree_job(space: str, labels: list[str], rows: list[dict[str, str]], truncated: bool) -> dict[str, Any]:
+def _save_degree_job(
+    space: str, labels: list[str], rows: list[dict[str, str]], truncated: bool
+) -> dict[str, Any]:
     """本地登记 Degree 作业（同步计算，入表即 succeeded）并返回快照；顺手清理过期/超量条目。"""
     job_id = uuid.uuid4().hex
     now = _utc_now_iso()
@@ -139,7 +141,8 @@ def _save_degree_job(space: str, labels: list[str], rows: list[dict[str, str]], 
     }
     with _degree_jobs_lock:
         expired = [
-            key for key, stored in _degree_jobs.items()
+            key
+            for key, stored in _degree_jobs.items()
             if time.time() - stored["saved_at"] > _DEGREE_JOB_TTL_SECONDS
         ]
         for key in expired:
@@ -189,12 +192,10 @@ def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str,
     edge_expr = "|".join(labels)
     # MATCH 聚合在图库服务端完成，只回传逐顶点计数；两个方向分别查后按 vid 合并
     out_result = client.execute_read(
-        f"MATCH (v)-[e:{edge_expr}]->(v2) "
-        "RETURN id(v) AS vid, count(e) AS cnt"
+        f"MATCH (v)-[e:{edge_expr}]->(v2) RETURN id(v) AS vid, count(e) AS cnt"
     )
     in_result = client.execute_read(
-        f"MATCH (v)<-[e:{edge_expr}]-(v2) "
-        "RETURN id(v) AS vid, count(e) AS cnt"
+        f"MATCH (v)<-[e:{edge_expr}]-(v2) RETURN id(v) AS vid, count(e) AS cnt"
     )
     degrees: dict[str, dict[str, int]] = {}
 

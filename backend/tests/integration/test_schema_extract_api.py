@@ -128,7 +128,8 @@ async def _upload_script(client: AsyncClient, schema_id: str) -> None:
         files={
             "script": (
                 "widget.py",
-                b"def workflow(payload):\n    return {'entities': []}\n",
+                b"from kg_sdk import step\n\n\n@step\ndef emit_widget(payload):\n"
+                b"    return {'entities': []}\n",
                 "text/x-python",
             )
         },
@@ -339,11 +340,15 @@ async def test_backfill_stale_requires_force(extract_api, monkeypatch: pytest.Mo
 
 
 STEPS_SCRIPT = (
-    b'STEPS = [{"id": "clean", "fn": "step_clean"}, {"id": "emit", "fn": "step_emit"}]\n'
+    b"from kg_sdk import step\n"
     b"\n"
+    b"\n"
+    b"@step\n"
     b"def step_clean(payload):\n"
     b'    return {"cleaned": payload.get("rows", [])}\n'
     b"\n"
+    b"\n"
+    b"@step\n"
     b"def step_emit(payload):\n"
     b'    return {"entities": []}\n'
 )
@@ -351,7 +356,7 @@ STEPS_SCRIPT = (
 
 @pytest.mark.asyncio
 async def test_extract_with_steps_script(extract_api) -> None:
-    """STEPS 多步脚本：上传 200（入口名存第一步 fn）→ 绑来源 → 触发抽取 201。"""
+    """@step 多步脚本：上传 200（入口名存第一步 fn）→ 绑来源 → 触发抽取 201。"""
     _, _set_actor, executions, _storage = extract_api
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         entity = await _create_entity(client)
@@ -378,16 +383,21 @@ async def test_extract_with_steps_script(extract_api) -> None:
 
 
 @pytest.mark.asyncio
-async def test_upload_rejects_invalid_steps_script(extract_api) -> None:
-    """非法 STEPS（fn 未在顶层定义）上传即 400，中文报错。"""
+async def test_upload_rejects_legacy_transform_script(extract_api) -> None:
+    """旧单步 transform 脚本上传即 400，中文报错引导迁移 @step。"""
     _, _set_actor, executions, _storage = extract_api
-    broken = b'STEPS = [{"id": "clean", "fn": "missing_fn"}]\n\ndef step_clean(p):\n    return {}\n'
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         entity = await _create_entity(client)
         response = await client.put(
             f"/api/v1/schema-management/schemas/{entity['id']}/script",
-            files={"script": ("broken.py", broken, "text/x-python")},
+            files={
+                "script": (
+                    "legacy.py",
+                    b"def transform(payload):\n    return {}\n",
+                    "text/x-python",
+                )
+            },
         )
         assert response.status_code == 400
-        assert "未在脚本顶层定义" in response.json()["detail"]
+        assert "已下线" in response.json()["detail"]
     assert executions == []

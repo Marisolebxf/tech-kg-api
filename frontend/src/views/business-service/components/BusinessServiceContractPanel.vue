@@ -603,13 +603,11 @@ defineEmits<{
     min-height: 40px;
     padding: 10px 12px;
     line-height: 20px;
-    overflow-wrap: normal;
+    overflow-wrap: anywhere;
     word-break: normal;
   }
 
-  .prototype-table th,
-  .prototype-table td:first-child,
-  .prototype-table td:nth-child(2) {
+  .prototype-table th {
     white-space: nowrap;
   }
 

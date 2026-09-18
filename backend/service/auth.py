@@ -541,7 +541,9 @@ class AuthService:
             raise AuthenticationError(str(exc), status_code=exc.status_code) from exc
         if not user_id or str(user.get("id", "")) != user_id:
             raise AuthenticationError("统一用户中心返回的门户身份与登录用户不一致", status_code=502)
-        if user.get("status") != 0:
+        # open-api get-by-token 实测不返回 status 字段（2026-09-18），缺失不得视为停用；
+        # 仅在接口显式返回非零状态时拒绝（yudao 常量：0=开启 1=停用）
+        if user.get("status") not in (0, None):
             raise AuthenticationError("统一用户中心账号已停用")
         gkx_user = user.get("gkxUser")
         role = gkx_user.get("role") if isinstance(gkx_user, dict) else None

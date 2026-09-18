@@ -31,7 +31,6 @@ import navSchema from "../assets/icons/nav-schema.svg";
 import navQuery from "../assets/icons/nav-query.svg";
 import navReview from "../assets/icons/nav-review.svg";
 import navServices from "../assets/icons/nav-services.svg";
-import navTasks from "../assets/icons/nav-tasks.svg";
 import navTools from "../assets/icons/nav-tools.svg";
 import { useAppStore } from "../stores/app";
 import { useAuthStore } from "../stores/auth";
@@ -229,7 +228,7 @@ function toggleUserMenu() {
 
 async function switchPortal() {
   userMenuOpen.value = false;
-  await router.push(isAdminArea.value ? "/overview" : "/admin/reviews");
+  await router.push(isAdminArea.value ? "/overview" : "/admin/corrections");
 }
 
 async function handleAccountAction(
@@ -389,19 +388,6 @@ onBeforeUnmount(() => {
                 aria-hidden="true"
               ></span
               ><span v-if="!sidebarCollapsed">修正记录</span>
-            </RouterLink>
-            <RouterLink
-              class="app-nav__item app-nav__item--top app-nav__item--leaf"
-              active-class="app-nav__item--active"
-              to="/admin/reviews"
-              :title="sidebarCollapsed ? '审核与同步' : undefined"
-            >
-              <span
-                class="app-nav__icon"
-                :style="navIconStyle(navTasks)"
-                aria-hidden="true"
-              ></span
-              ><span v-if="!sidebarCollapsed">审核与同步</span>
             </RouterLink>
             <RouterLink
               class="app-nav__item app-nav__item--top app-nav__item--leaf"

@@ -91,14 +91,6 @@ export async function cancelCorrection(id: string) {
   return unwrap(await http.delete<ApiResponse<CorrectionRecord>, ApiResponse<CorrectionRecord>>(`/v1/corrections/${id}`))
 }
 
-export async function reviewCorrection(id: string, decision: 'approve' | 'reject', note: string) {
-  return unwrap(await http.post<ApiResponse<CorrectionRecord>, ApiResponse<CorrectionRecord>>(`/v1/corrections/${id}/review`, { decision, note }))
-}
-
-export async function retryCorrection(id: string, note = '') {
-  return unwrap(await http.post<ApiResponse<CorrectionRecord>, ApiResponse<CorrectionRecord>>(`/v1/corrections/${id}/retry`, { note }))
-}
-
 export async function listPlatformMembers() {
   return unwrap(await http.get<ApiResponse<{ items: PlatformMember[]; total: number }>, ApiResponse<{ items: PlatformMember[]; total: number }>>('/v1/admin/members', { timeout: 3_000 }))
 }

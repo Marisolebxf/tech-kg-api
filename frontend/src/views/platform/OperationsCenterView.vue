@@ -15,9 +15,10 @@ type CenterMode = 'review'
 const props = defineProps<{ mode: CenterMode }>()
 const route = useRoute()
 const keyword = ref(clampSearchKeyword(String(route.query.keyword || '')))
-/** 人工审核筛选：状态分组（待处理/已处理）与对象种类（实体/关系/都看）；C 类额外支持 重跑中/重跑失败 精确过滤。
+/** 人工审核筛选：状态分组（待处理/已处理）与对象种类（实体/关系/都看）；C 类额外支持 重跑中 精确过滤。
+ *  重跑仍失败的记录会重建为新待处理案（attempt+1），不存在「重跑失败」状态，故不提供该筛选项。
  *  undefined = 未选择（清空），语义等同「全部」。 */
-const reviewStatusFilter = ref<'全部' | '待处理' | '已处理' | '重跑中' | '重跑失败' | undefined>('全部')
+const reviewStatusFilter = ref<'全部' | '待处理' | '已处理' | '重跑中' | undefined>('全部')
 const reviewKindFilter = ref<'全部' | '实体' | '关系' | undefined>('全部')
 /** 时间过滤（按更新时间）：全部/近1小时/近24小时/近7天/近30天 → updatedWithin 查询参数。 */
 const reviewTimeFilter = ref<'全部' | '近1小时' | '近24小时' | '近7天' | '近30天' | undefined>('全部')
@@ -63,10 +64,10 @@ const rerunFeedback = ref<{ type: 'success' | 'warning' | 'error'; text: string;
 const rerunConfirmVisible = ref(false)
 let rerunFeedbackTimer: number | undefined
 
-/** A 类只有 全部/待处理/已处理；C 类追加 重跑中/重跑失败（后端 status 精确过滤）。 */
+/** A 类只有 全部/待处理/已处理；C 类追加 重跑中（后端 status 精确过滤）。 */
 const reviewStatusOptions = computed(() => (
   reviewCategory.value === 'C'
-    ? ['全部', '待处理', '已处理', '重跑中', '重跑失败']
+    ? ['全部', '待处理', '已处理', '重跑中']
     : ['全部', '待处理', '已处理']
 ))
 
@@ -260,7 +261,7 @@ async function loadReviews() {
       templateId: reviewCategory.value === 'A' ? 'T_LINK' : undefined,
       keyword: keyword.value || undefined,
       statusGroup: reviewStatusFilter.value === '待处理' ? 'pending' : reviewStatusFilter.value === '已处理' ? 'processed' : undefined,
-      status: reviewStatusFilter.value === '重跑中' ? 'RERUNNING' : reviewStatusFilter.value === '重跑失败' ? 'RERUN_FAILED' : undefined,
+      status: reviewStatusFilter.value === '重跑中' ? 'RERUNNING' : undefined,
       kind: !reviewKindFilter.value || reviewKindFilter.value === '全部' ? undefined : reviewKindFilter.value === '实体' ? 'entity' : 'relation',
       updatedWithin: REVIEW_TIME_PARAMS[reviewTimeFilter.value || '全部'],
       sort: reviewTimeSort.value === 'default' ? undefined : `updated_${reviewTimeSort.value}`,

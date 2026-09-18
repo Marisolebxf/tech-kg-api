@@ -51,7 +51,7 @@ function queryResult(value: string): GraphConsoleResult {
 }
 
 function algorithmResult(value: string): AlgorithmResultPayload {
-  return { jobId: 'job-a', sink: 'csv', rows: [{ vertex: value, pagerank: '0.5' }] }
+  return { jobId: 'job-a', sink: 'csv', rows: [{ vid: value, pagerank: '0.5' }] }
 }
 
 let wrapper: VueWrapper
@@ -59,6 +59,11 @@ let store: ReturnType<typeof useGraphSpaceStore>
 
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: false, media: query, onchange: null,
+    addListener: vi.fn(), removeListener: vi.fn(),
+    addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+  }))
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   localStorage.clear()
   const pinia = createPinia()
@@ -115,14 +120,14 @@ describe('PlatformWorkbench query graph-space context', () => {
     await clickButton('执行 nGQL')
     await flushPromises()
     expect(runNgql).toHaveBeenLastCalledWith('space-a', 'MATCH (v) RETURN v')
-    expect(wrapper.get('table[aria-label="nGQL 查询结果"]').text()).toContain('result-a')
+    expect(wrapper.get('.query-result-table[aria-label="nGQL 查询结果"]').text()).toContain('result-a')
 
     await switchSpace()
-    expect(wrapper.find('table[aria-label="nGQL 查询结果"]').exists()).toBe(false)
+    expect(wrapper.find('.query-result-table[aria-label="nGQL 查询结果"]').exists()).toBe(false)
     await clickButton('执行 nGQL')
     await flushPromises()
     expect(runNgql).toHaveBeenLastCalledWith('space-b', 'MATCH (v) RETURN v')
-    expect(wrapper.get('table[aria-label="nGQL 查询结果"]').text()).toContain('result-b')
+    expect(wrapper.get('.query-result-table[aria-label="nGQL 查询结果"]').text()).toContain('result-b')
   })
 
   it('ignores an old nGQL response while the new space request remains in progress', async () => {
@@ -139,7 +144,7 @@ describe('PlatformWorkbench query graph-space context', () => {
     expect(wrapper.get('.platform-ngql-header-actions button').attributes('disabled')).toBeDefined()
     newRequest.resolve(queryResult('fresh-result'))
     await flushPromises()
-    expect(wrapper.get('table').text()).toContain('fresh-result')
+    expect(wrapper.get('.query-result-table').text()).toContain('fresh-result')
   })
 
   it('uses the current space for metadata, submission, polling and result retrieval', async () => {
@@ -155,10 +160,10 @@ describe('PlatformWorkbench query graph-space context', () => {
     await flushPromises()
     expect(getAlgorithmJob).toHaveBeenLastCalledWith('space-b', 'job-a')
     expect(getAlgorithmJobResult).toHaveBeenLastCalledWith('space-b', 'job-a')
-    expect(wrapper.get('table[aria-label="图算法执行结果"]').text()).toContain('current-result')
+    expect(wrapper.get('.query-result-table[aria-label="图算法执行结果"]').text()).toContain('current-result')
     await switchSpace('space-c')
     expect(wrapper.find('.platform-query-algo__job').exists()).toBe(false)
-    expect(wrapper.find('table[aria-label="图算法执行结果"]').exists()).toBe(false)
+    expect(wrapper.find('.query-result-table[aria-label="图算法执行结果"]').exists()).toBe(false)
   })
 
   it('clears labels and cancels a running job when the global space changes', async () => {
@@ -195,28 +200,73 @@ describe('PlatformWorkbench query graph-space context', () => {
     expect(submitAlgorithmJob).toHaveBeenCalledTimes(1)
   })
 
-  it('renders algorithm-specific advanced params per tab and hides them for degree', async () => {
+  it('removes advanced controls from all three algorithm tabs', async () => {
     await enterAlgorithms()
-    expect(wrapper.text()).toContain('最大迭代次数')
-    expect(wrapper.text()).toContain('重置概率')
-    await clickButton('Louvain算法')
-    expect(wrapper.text()).toContain('内部迭代')
-    expect(wrapper.text()).not.toContain('重置概率')
+    for (const label of ['PageRank算法', 'Louvain算法', 'Degree算法']) {
+      await clickButton(label)
+      expect(wrapper.text()).not.toContain('高级参数')
+      expect(wrapper.find('.platform-query-algo__input').exists()).toBe(false)
+      expect(wrapper.find('.platform-query-algo__labels').exists()).toBe(true)
+    }
+  })
+
+  it('keeps completed results and relation selections separate for each algorithm', async () => {
+    await enterAlgorithms()
+    for (const [index, label] of ['Degree算法', 'Louvain算法', 'PageRank算法'].entries()) {
+      await clickButton(label)
+      expect(wrapper.find('.platform-query-algo__job').exists()).toBe(false)
+      expect(wrapper.find('.query-result-table[aria-label="图算法执行结果"]').exists()).toBe(false)
+      const select = wrapper.get('.platform-query-algo__labels select').element as HTMLSelectElement
+      expect(select.selectedOptions).toHaveLength(0)
+      vi.mocked(submitAlgorithmJob).mockResolvedValueOnce({ jobId: `job-${index}`, status: 'succeeded' })
+      vi.mocked(getAlgorithmJobResult).mockResolvedValueOnce(algorithmResult(`result-${index}`))
+      await submitAlgorithm()
+      expect(wrapper.get('.query-result-table[aria-label="图算法执行结果"]').text()).toContain(`result-${index}`)
+    }
+    for (const [index, label] of ['Degree算法', 'Louvain算法', 'PageRank算法'].entries()) {
+      await clickButton(label)
+      expect(wrapper.get('.platform-query-algo__job').text()).toContain(`job-${index}`)
+      expect(wrapper.get('.query-result-table[aria-label="图算法执行结果"]').text()).toContain(`result-${index}`)
+    }
+  })
+
+  it('stores a late submission in its original tab and resumes polling on return', async () => {
+    const request = deferred<AlgorithmJobSnapshot>()
+    vi.mocked(submitAlgorithmJob).mockReturnValueOnce(request.promise)
+    await enterAlgorithms()
+    await submitAlgorithm()
     await clickButton('Degree算法')
-    expect(wrapper.text()).toContain('当前算法无可调参数')
-    expect(wrapper.find('.platform-query-algo__input').exists()).toBe(false)
+    expect(wrapper.get('.platform-query-algo__actions button').attributes('disabled')).toBeUndefined()
+    request.resolve({ jobId: 'pagerank-job', status: 'running' })
+    await flushPromises()
+    expect(wrapper.find('.platform-query-algo__job').exists()).toBe(false)
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(getAlgorithmJob).not.toHaveBeenCalled()
     await clickButton('PageRank算法')
-    await clickButton('收起高级参数')
-    expect(wrapper.text()).not.toContain('最大迭代次数')
-    await clickButton('高级参数（2 个）')
-    expect(wrapper.text()).toContain('最大迭代次数')
+    expect(wrapper.get('.platform-query-algo__job').text()).toContain('pagerank-job')
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(getAlgorithmJob).toHaveBeenCalledWith('space-a', 'pagerank-job')
+  })
+
+  it('keeps an in-flight result in its original algorithm tab', async () => {
+    const request = deferred<AlgorithmResultPayload>()
+    vi.mocked(submitAlgorithmJob).mockResolvedValueOnce({ jobId: 'job-a', status: 'succeeded' })
+    vi.mocked(getAlgorithmJobResult).mockReturnValueOnce(request.promise)
+    await enterAlgorithms()
+    await submitAlgorithm()
+    await clickButton('Louvain算法')
+    request.resolve(algorithmResult('pagerank-only-result'))
+    await flushPromises()
+    expect(wrapper.find('.query-result-table[aria-label="图算法执行结果"]').exists()).toBe(false)
+    await clickButton('PageRank算法')
+    expect(wrapper.get('.query-result-table').text()).toContain('pagerank-only-result')
   })
 
   it('marks the submit button as running and shows the running panel while a job is in progress', async () => {
     await enterAlgorithms()
     await submitAlgorithm()
     const button = wrapper.get('.platform-query-algo__actions button')
-    expect(button.text()).toContain('作业运行中')
+    expect(button.text()).toBe('提交算法作业')
     expect(button.attributes('disabled')).toBeDefined()
     expect(wrapper.get('.platform-query-algo__job-running').text()).toContain('算法作业运行中')
   })
@@ -273,7 +323,7 @@ describe('PlatformWorkbench query graph-space context', () => {
     await switchSpace()
     oldResult.resolve(algorithmResult('stale-algorithm-result'))
     await flushPromises()
-    expect(wrapper.find('.platform-query-algo-result').exists()).toBe(false)
+    expect(wrapper.find('.query-result-table[aria-label="图算法执行结果"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('stale-algorithm-result')
   })
 
@@ -292,7 +342,94 @@ describe('PlatformWorkbench query graph-space context', () => {
     await flushPromises()
     expect(getAlgorithmJob).toHaveBeenCalledTimes(1)
     expect(getAlgorithmJob).toHaveBeenCalledWith('space-a', 'job-a')
-    expect(wrapper.get('table[aria-label="图算法执行结果"]').text()).toContain('current-result')
+    expect(wrapper.get('.query-result-table[aria-label="图算法执行结果"]').text()).toContain('current-result')
     expect(fetchGraphAlgorithmMetadata).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+describe('Algorithm result lists', () => {
+  it('shows progress below the unchanged submit button before the submit response', async () => {
+    const request = deferred<AlgorithmJobSnapshot>()
+    vi.mocked(submitAlgorithmJob).mockReturnValueOnce(request.promise)
+    await enterAlgorithms()
+    await clickButton('Degree算法')
+    await submitAlgorithm()
+    expect(wrapper.get('.platform-query-algo__actions button').text()).toBe('提交算法作业')
+    expect(wrapper.get('.platform-query-algo__job-running').text()).toContain('正在提交')
+    request.resolve({ jobId: 'degree-job', status: 'running' })
+    await flushPromises()
+    expect(wrapper.get('.platform-query-algo__job-running').text()).toContain('运行中')
+  })
+
+  it('paginates, searches and numerically sorts a large result without graph panels', async () => {
+    vi.mocked(submitAlgorithmJob).mockResolvedValueOnce({ jobId: 'job-a', status: 'succeeded' })
+    vi.mocked(getAlgorithmJobResult).mockResolvedValueOnce({
+      jobId: 'job-a', sink: 'csv', truncated: true,
+      rows: Array.from({ length: 10000 }, (_, index) => ({ vid: `node-${index}`, degree: String(index) })),
+    })
+    await enterAlgorithms()
+    await clickButton('Degree算法')
+    await submitAlgorithm()
+    expect(wrapper.findAll('tbody tr')).toHaveLength(20)
+    expect(wrapper.findAll('tbody tr')[0]!.text()).toContain('node-9999')
+    expect(wrapper.text()).toContain('非全部')
+    expect(wrapper.find('aside').exists()).toBe(false)
+    await wrapper.get('input[aria-label="搜索图 VID"]').setValue('node-1234')
+    expect(wrapper.findAll('tbody tr')).toHaveLength(1)
+    expect(wrapper.get('tbody').text()).toContain('node-1234')
+    await wrapper.get('input[aria-label="搜索图 VID"]').setValue('missing-node')
+    expect(wrapper.text()).toContain('没有匹配')
+  })
+
+  it('places the nGQL toolbar below the shared mode header', async () => {
+    const header = wrapper.get('.platform-query-form .kg-panel__header')
+    expect(header.text()).toContain('图算法')
+    expect(header.text()).not.toContain('执行 nGQL')
+    expect(wrapper.get('.platform-ngql-toolbar').text()).toContain('执行 nGQL')
+  })
+})
+
+
+describe('Query page concise controls and graph VIDs', () => {
+  it.each(['vid', '_id', 'id'])('shows and filters original graph VID from %s without matching algorithm values', async (key) => {
+    vi.mocked(submitAlgorithmJob).mockResolvedValueOnce({ jobId: 'job-a', status: 'succeeded' })
+    vi.mocked(getAlgorithmJobResult).mockResolvedValueOnce({
+      jobId: 'job-a', sink: 'csv', rows: [
+        { [key]: 'person_AbC', pagerank: '0.123', community: 'community-77' },
+        { [key]: 'paper_XyZ', pagerank: '0.456', community: 'community-88' },
+      ],
+    })
+    await enterAlgorithms()
+    await submitAlgorithm()
+    expect(wrapper.get('.query-result-table').text()).toContain('图 VID')
+    const input = wrapper.get('input[aria-label="搜索图 VID"]')
+    await input.setValue('person_AbC')
+    expect(wrapper.findAll('.query-result-table tbody tr')).toHaveLength(1)
+    expect(wrapper.get('.query-result-table').text()).toContain('person_AbC')
+    await input.setValue('0.123')
+    expect(wrapper.find('.query-result-table').exists()).toBe(false)
+    await input.setValue('community-77')
+    expect(wrapper.find('.query-result-table').exists()).toBe(false)
+    await input.setValue('person_abc')
+    expect(wrapper.find('.query-result-table').exists()).toBe(false)
+  })
+
+  it('removes the redundant parameter notice and keeps relation help next to its label', async () => {
+    await enterAlgorithms()
+    expect(wrapper.text()).not.toContain('当前算法无可调参数')
+    expect(wrapper.find('.arco-form-item-extra').exists()).toBe(false)
+    expect(wrapper.get('.arco-form-item-label').text()).toContain('可多选，最多 20 个')
+    expect(wrapper.find('.platform-query-algo__desc').exists()).toBe(false)
+    expect(wrapper.find('button[aria-label="查看算法说明"]').exists()).toBe(true)
+  })
+
+  it('uses the same primary button style in both modes and validates an empty query on click', async () => {
+    expect(wrapper.get('.platform-ngql-header-actions button').classes()).toContain('arco-btn-primary')
+    expect(wrapper.get('.platform-ngql-header-actions button').attributes('disabled')).toBeUndefined()
+    await clickButton('执行 nGQL')
+    expect(runNgql).not.toHaveBeenCalled()
+    await enterAlgorithms()
+    expect(wrapper.get('.platform-query-algo__actions button').classes()).toContain('arco-btn-primary')
   })
 })

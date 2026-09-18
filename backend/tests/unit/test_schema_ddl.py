@@ -167,3 +167,137 @@ def test_describe_schema_columns_missing_schema_returns_none(
     client = _DescribeClient(error=GraphRequestError("Tag not found", status_code=400))
     monkeypatch.setattr("service.schema_ddl.get_trs_graph_client", lambda: client)
     assert describe_schema_columns("entity", "Missing") is None
+
+
+class _FakeGraphClient:
+    """delete_schema_graph_data 单测桩：SHOW/分页枚举/批量 DELETE。"""
+
+    def __init__(self, *, tags=None, edges=None, nodes_by_label=None, edges_by_type=None):
+        self.tags = tags if tags is not None else []
+        self.edges_types = edges if edges is not None else []
+        self.nodes_by_label = nodes_by_label if nodes_by_label is not None else {}
+        self.edges_by_type = edges_by_type if edges_by_type is not None else {}
+        self.writes: list[str] = []
+
+    def execute_query(self, query: str):
+        if query == "SHOW TAGS;":
+            return _FakeQueryResult([{"Name": name} for name in self.tags])
+        if query == "SHOW EDGES;":
+            return _FakeQueryResult([{"Name": name} for name in self.edges_types])
+        return _FakeQueryResult([])
+
+    def execute_write(self, query: str):
+        self.writes.append(query)
+        # DELETE 语句里出现的点/边从枚举池移除，模拟删除生效
+        if query.startswith("DELETE VERTEX "):
+            vids = {
+                token.strip().rstrip(";").strip('"')
+                for token in query[len("DELETE VERTEX ") :].split(", ")
+            }
+            for label, nodes in self.nodes_by_label.items():
+                self.nodes_by_label[label] = [n for n in nodes if str(n.id) not in vids]
+        elif query.startswith("DELETE EDGE "):
+            for edge_type in self.edges_by_type:
+                self.edges_by_type[edge_type] = []
+
+    def get_nodes_by_label(self, label: str, *, limit: int = 100, offset: int = 0):
+        from infra.graph_db.models import GraphPagedResult
+
+        return GraphPagedResult(
+            items=self.nodes_by_label.get(label, [])[:limit],
+            total=len(self.nodes_by_label.get(label, [])),
+        )
+
+    def get_edges_by_type(self, edge_type: str, *, limit: int = 100, offset: int = 0):
+        from infra.graph_db.models import GraphPagedResult
+
+        items = self.edges_by_type.get(edge_type, [])[:limit]
+        return GraphPagedResult(items=items, total=len(self.edges_by_type.get(edge_type, [])))
+
+
+def _patch_drop(monkeypatch: pytest.MonkeyPatch, client: _FakeGraphClient):
+    captured: dict[str, str] = {}
+
+    def fake_execute(ddl: str, graph_space: str | None = None):
+        captured["ddl"] = ddl
+        client.execute_write(ddl)
+        return "succeeded", None
+
+    monkeypatch.setattr("service.schema_ddl.execute_schema_ddl", fake_execute)
+    return captured
+
+
+def test_delete_schema_graph_data_entity(monkeypatch: pytest.MonkeyPatch) -> None:
+    from infra.graph_db.models import GraphNode
+    from service.schema_ddl import delete_schema_graph_data
+
+    client = _FakeGraphClient(
+        tags=["Scholar", "Expert"],
+        nodes_by_label={"Expert": [GraphNode(id="v1"), GraphNode(id="v2"), GraphNode(id="v3")]},
+    )
+    monkeypatch.setattr("service.schema_ddl.get_trs_graph_client", lambda: client)
+    captured = _patch_drop(monkeypatch, client)
+
+    result = delete_schema_graph_data("entity", "Expert")
+    assert result["status"] == "succeeded"
+    assert result["typeExisted"] is True
+    assert result["verticesDeleted"] == 3
+    assert result["dropStatement"] == "DROP TAG IF EXISTS Expert;"
+    assert captured["ddl"] == "DROP TAG IF EXISTS Expert;"
+    assert client.writes[0] == 'DELETE VERTEX "v1", "v2", "v3";'
+    assert client.nodes_by_label["Expert"] == []
+
+
+def test_delete_schema_graph_data_edge(monkeypatch: pytest.MonkeyPatch) -> None:
+    from infra.graph_db.models import GraphEdge
+    from service.schema_ddl import delete_schema_graph_data
+
+    client = _FakeGraphClient(
+        edges=["EMPLOYED_BY"],
+        edges_by_type={
+            "EMPLOYED_BY": [
+                GraphEdge(id="s1->t1@0", type="EMPLOYED_BY", source_id="s1", target_id="t1"),
+                GraphEdge(id="s2->t2@3", type="EMPLOYED_BY", source_id="s2", target_id="t2"),
+            ]
+        },
+    )
+    monkeypatch.setattr("service.schema_ddl.get_trs_graph_client", lambda: client)
+    captured = _patch_drop(monkeypatch, client)
+
+    result = delete_schema_graph_data("relation", "EMPLOYED_BY")
+    assert result["status"] == "succeeded"
+    assert result["edgesDeleted"] == 2
+    assert captured["ddl"] == "DROP EDGE IF EXISTS EMPLOYED_BY;"
+    assert client.writes[0] == 'DELETE EDGE EMPLOYED_BY "s1" -> "t1"@0, "s2" -> "t2"@3;'
+
+
+def test_delete_schema_graph_data_type_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    from service.schema_ddl import delete_schema_graph_data
+
+    client = _FakeGraphClient(tags=["Scholar"])
+    monkeypatch.setattr("service.schema_ddl.get_trs_graph_client", lambda: client)
+    captured = _patch_drop(monkeypatch, client)
+
+    result = delete_schema_graph_data("entity", "Ghost")
+    assert result["status"] == "succeeded"
+    assert result["typeExisted"] is False
+    assert result["verticesDeleted"] == 0
+    assert "ddl" not in captured  # 无类型可 DROP
+
+
+def test_delete_schema_graph_data_delete_not_taking_effect(monkeypatch) -> None:
+    """删除未生效（枚举结果不变）→ 报错退出而非死循环。"""
+    from infra.graph_db.models import GraphNode
+    from service.schema_ddl import delete_schema_graph_data
+
+    class _StuckClient(_FakeGraphClient):
+        def execute_write(self, query: str):
+            self.writes.append(query)  # 记录但不移除任何点（模拟删除失效）
+
+    client = _StuckClient(tags=["Expert"], nodes_by_label={"Expert": [GraphNode(id="v1")]})
+    monkeypatch.setattr("service.schema_ddl.get_trs_graph_client", lambda: client)
+    _patch_drop(monkeypatch, client)
+
+    result = delete_schema_graph_data("entity", "Expert")
+    assert result["status"] == "failed"
+    assert "未生效" in result["error"]

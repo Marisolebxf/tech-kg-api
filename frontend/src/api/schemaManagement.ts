@@ -49,10 +49,14 @@ export interface SchemaScript {
   capturedRevision: number
   lastRunStatus: 'none' | 'ok' | 'failed'
   lastRunError: string | null
+  /** 最近一次抽取收尾时间：null = 从未运行；早于 uploadedAt = 脚本已更新待重跑 */
+  lastRunAt: string | null
   stale: boolean
   staleBehind: number
   /** 脚本对象在对象存储真实存在（系统 Schema 种子行只是目录占位，available=false） */
   available?: boolean
+  /** 脚本上传后从未跑过、或上传时间晚于最近一次收尾（变更尚未应用到图数据） */
+  needsRun: boolean
   downloadUrl: string
 }
 
@@ -322,6 +326,39 @@ export interface SchemaDeleteResult {
   id: string
   deleted: boolean
   scriptCleanupSucceeded?: boolean
+  /** 图数据删除统计（真删：该类型全部点/边 + DROP TAG/EDGE） */
+  graphData?: {
+    status: 'succeeded' | 'failed'
+    error: string | null
+    typeExisted: boolean
+    verticesDeleted: number
+    edgesDeleted: number
+    dropStatement: string | null
+  }
+}
+
+/** 删除影响预览：实体返回仍引用它的关系清单（删除确认弹窗展示） */
+export interface SchemaDeleteImpact {
+  id: string
+  kind: 'entity' | 'relation'
+  kindLabel: '实体' | '关系'
+  graphSpace: string
+  name: string
+  label: string
+  isSystem: boolean
+  canDelete: boolean
+  referencingRelations: Array<{ id: string; name: string; label: string }>
+}
+
+export async function getSchemaDeleteImpact(
+  schemaId: string,
+  userId: string,
+): Promise<SchemaDeleteImpact> {
+  return unwrap(
+    await asApiPromise<SchemaDeleteImpact>(
+      http.get(`${PREFIX}/schemas/${schemaId}/delete-impact`, { headers: headers(userId) }),
+    ),
+  )
 }
 
 export interface SchemaSource {

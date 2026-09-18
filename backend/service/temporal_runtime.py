@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from datetime import UTC, datetime
 from typing import Any
@@ -18,6 +20,8 @@ from temporalio.service import RPCError
 from temporalio.worker import Worker
 
 from service.temporal_workflows import ACTIVITIES, WORKFLOW_CLASSES
+
+logger = logging.getLogger(__name__)
 
 
 def _format_workflow_failure(exc: BaseException) -> str:
@@ -227,7 +231,30 @@ class TemporalRuntime:
             activities=ACTIVITIES,
             max_concurrent_activities=self.max_concurrent_activities,
         )
-        await worker.run()
+        # 抽取载荷（runs/ 前缀）每日兜底清理：lifecycle 规则之外的保险，worker
+        # 进程内直接跑（纯 S3 扫描删除，不占 Temporal 任务队列）
+        from service.extract_payload_store import payload_cleanup_enabled
+
+        housekeeping: asyncio.Task[None] | None = None
+        if payload_cleanup_enabled():
+            housekeeping = asyncio.create_task(self._payload_housekeeping_loop())
+        try:
+            await worker.run()
+        finally:
+            if housekeeping is not None:
+                housekeeping.cancel()
+
+    async def _payload_housekeeping_loop(self) -> None:
+        """启动即清一次、之后每日一次；失败只告警，绝不影响 worker 主循环。"""
+        while True:
+            try:
+                from service.extract_payload_store import cleanup_run_artifacts
+
+                result = await asyncio.to_thread(cleanup_run_artifacts)
+                logger.info("载荷留档每日清理完成: %s", result)
+            except Exception:  # noqa: BLE001
+                logger.warning("载荷留档清理失败（下次循环重试）", exc_info=True)
+            await asyncio.sleep(24 * 3600)
 
     @staticmethod
     def execution_record(

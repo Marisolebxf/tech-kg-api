@@ -57,6 +57,22 @@ def schema_api(monkeypatch):
     # 系统保护与 provenance 注入取默认行为，避免容器 env 影响断言
     monkeypatch.delenv("SCHEMA_ALLOW_SYSTEM_DELETE", raising=False)
     monkeypatch.setenv("SCHEMA_AUTO_PROVENANCE", "false")
+    # 删除前置 guard 默认放行（无运行中抽取任务）；图数据删除默认成功，
+    # 具体断言在各用例内另行打桩
+    monkeypatch.setattr(
+        "service.schema_management.find_running_extraction", lambda definition: None
+    )
+    monkeypatch.setattr(
+        "service.schema_management.delete_schema_graph_data",
+        lambda kind, name, graph_space=None: {
+            "status": "succeeded",
+            "error": None,
+            "typeExisted": True,
+            "verticesDeleted": 0,
+            "edgesDeleted": 0,
+            "dropStatement": f"DROP {'TAG' if kind == 'entity' else 'EDGE'} IF EXISTS {name};",
+        },
+    )
     yield engine, storage
     app.dependency_overrides.pop(get_workflow_session, None)
     engine.dispose()
@@ -81,6 +97,21 @@ async def test_schema_management_full_flow(schema_api, monkeypatch: pytest.Monke
     monkeypatch.setattr("service.schema_management.run_schema_ddl", fake_run_ddl)
     # 空间校验走桩，避免测试依赖真实图服务
     monkeypatch.setattr("service.schema_ddl.list_graph_spaces", lambda: ["techkg"])
+    # 图数据真删走桩并记录调用（删除关系 → 全部边；删除实体 → 全部点 + DROP）
+    graph_deletes: list[tuple[str, str]] = []
+
+    def fake_graph_delete(kind: str, name: str, graph_space=None) -> dict:
+        graph_deletes.append((kind, name))
+        return {
+            "status": "succeeded",
+            "error": None,
+            "typeExisted": True,
+            "verticesDeleted": 3 if kind == "entity" else 0,
+            "edgesDeleted": 0 if kind == "entity" else 5,
+            "dropStatement": f"DROP {'TAG' if kind == 'entity' else 'EDGE'} IF EXISTS {name};",
+        }
+
+    monkeypatch.setattr("service.schema_management.delete_schema_graph_data", fake_graph_delete)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         overview = await client.get("/api/v1/schema-management/overview")
@@ -209,15 +240,143 @@ async def test_schema_management_full_flow(schema_api, monkeypatch: pytest.Monke
             headers={"X-User-Id": "user-a"},
         )
         assert deleted_relation.status_code == 200
+        assert deleted_relation.json()["data"]["graphData"]["edgesDeleted"] == 5
         deleted_entity = await client.delete(
             f"/api/v1/schema-management/schemas/{entity['id']}",
             headers={"X-User-Id": "user-a"},
         )
         assert deleted_entity.status_code == 200
+        assert deleted_entity.json()["data"]["graphData"]["verticesDeleted"] == 3
         assert len(storage.objects) == 1  # expert.py
+
+        # 真删后目录行物理消失（同名可重建），图数据删除按类型各调一次
+        relisting = await client.get(
+            "/api/v1/schema-management/schemas",
+            params={"kind": "entity", "pageSize": 100},
+        )
+        names = [item["name"] for item in relisting.json()["data"]["items"]]
+        assert "Technology" not in names
+        assert graph_deletes == [("relation", "USES_TECHNOLOGY"), ("entity", "Technology")]
 
     assert ddl_calls[0][0] == "entity"
     assert ddl_calls[1][0] == "relation"
+
+
+@pytest.mark.asyncio
+async def test_delete_impact_lists_referencing_relations(
+    schema_api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """删除影响预览：实体返回未删关系清单，关系返回空清单。"""
+    monkeypatch.setattr("service.schema_ddl.list_graph_spaces", lambda: ["techkg"])
+
+    def fake_run_ddl(kind, name, properties, graph_space=None):
+        return {"statement": "", "status": "succeeded", "error": None, "executed_at": None}
+
+    monkeypatch.setattr("service.schema_management.run_schema_ddl", fake_run_ddl)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        entity_payload = {
+            "schemaKey": "gadget",
+            "name": "Gadget",
+            "label": "小工具",
+            "description": "",
+            "properties": [{"name": "gadget_id", "dataType": "string", "required": True}],
+        }
+        created_entity = await client.post(
+            "/api/v1/schema-management/schemas/entities",
+            headers={"X-User-Id": "user-a"},
+            json=entity_payload,
+        )
+        assert created_entity.status_code == 201
+        entity = created_entity.json()["data"]
+
+        relation_payload = {
+            "schemaKey": "uses-gadget",
+            "name": "USES_GADGET",
+            "label": "使用小工具",
+            "description": "",
+            "sourceSchemaId": entity["id"],
+            "targetSchemaId": entity["id"],
+            "properties": [{"name": "source", "dataType": "string", "required": True}],
+        }
+        created_relation = await client.post(
+            "/api/v1/schema-management/schemas/relations",
+            headers={"X-User-Id": "user-a"},
+            json=relation_payload,
+        )
+        assert created_relation.status_code == 201
+        relation = created_relation.json()["data"]
+
+        entity_impact = await client.get(
+            f"/api/v1/schema-management/schemas/{entity['id']}/delete-impact"
+        )
+        assert entity_impact.status_code == 200
+        entity_data = entity_impact.json()["data"]
+        assert entity_data["kind"] == "entity"
+        assert entity_data["referencingRelations"] == [
+            {"id": relation["id"], "name": "USES_GADGET", "label": "使用小工具"}
+        ]
+
+        relation_impact = await client.get(
+            f"/api/v1/schema-management/schemas/{relation['id']}/delete-impact"
+        )
+        assert relation_impact.status_code == 200
+        assert relation_impact.json()["data"]["referencingRelations"] == []
+
+        missing_impact = await client.get(
+            "/api/v1/schema-management/schemas/not-exist/delete-impact"
+        )
+        assert missing_impact.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_schema_graph_failure_keeps_catalog(
+    schema_api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """图数据删除失败 → 目录不动（Schema 保留可重试）。"""
+    monkeypatch.setattr("service.schema_ddl.list_graph_spaces", lambda: ["techkg"])
+
+    def fake_run_ddl(kind, name, properties, graph_space=None):
+        return {"statement": "", "status": "succeeded", "error": None, "executed_at": None}
+
+    monkeypatch.setattr("service.schema_management.run_schema_ddl", fake_run_ddl)
+
+    def failing_graph_delete(kind: str, name: str, graph_space=None) -> dict:
+        return {
+            "status": "failed",
+            "error": "图服务连接失败",
+            "typeExisted": True,
+            "verticesDeleted": 0,
+            "edgesDeleted": 0,
+            "dropStatement": None,
+        }
+
+    monkeypatch.setattr("service.schema_management.delete_schema_graph_data", failing_graph_delete)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        entity_payload = {
+            "schemaKey": "widget",
+            "name": "Widget",
+            "label": "挂件",
+            "description": "",
+            "properties": [{"name": "widget_id", "dataType": "string", "required": True}],
+        }
+        created = await client.post(
+            "/api/v1/schema-management/schemas/entities",
+            headers={"X-User-Id": "user-a"},
+            json=entity_payload,
+        )
+        entity = created.json()["data"]
+
+        deleted = await client.delete(
+            f"/api/v1/schema-management/schemas/{entity['id']}",
+            headers={"X-User-Id": "user-a"},
+        )
+        assert deleted.status_code == 502
+
+        listing = await client.get(
+            "/api/v1/schema-management/schemas", params={"kind": "entity", "pageSize": 100}
+        )
+        names = [item["name"] for item in listing.json()["data"]["items"]]
+        assert "Widget" in names
 
 
 @pytest.mark.asyncio

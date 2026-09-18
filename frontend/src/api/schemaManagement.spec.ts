@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
 import { http } from './http'
-import { getSchemaOverview } from './schemaManagement'
+import { getSchemaDeleteImpact, getSchemaOverview } from './schemaManagement'
 
 vi.mock('./http', () => ({
   http: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
@@ -69,5 +69,41 @@ describe('unwrap 422 字段级错误透出', () => {
       data: null,
     })
     await expect(getSchemaOverview()).rejects.toThrow('schemaKey 或 Schema 名称已存在')
+  })
+})
+
+describe('getSchemaDeleteImpact 删除影响预览', () => {
+  beforeEach(() => {
+    vi.mocked(http.get).mockReset()
+  })
+
+  it('携带 X-User-Id 请求 delete-impact 并解包返回', async () => {
+    const impact = {
+      id: 'schema-1',
+      kind: 'entity' as const,
+      kindLabel: '实体' as const,
+      graphSpace: 'dev2',
+      name: 'Technology',
+      label: '技术',
+      isSystem: false,
+      canDelete: true,
+      referencingRelations: [{ id: 'rel-1', name: 'USES_TECHNOLOGY', label: '使用技术' }],
+    }
+    vi.mocked(http.get).mockResolvedValue({ code: 200, success: true, msg: 'ok', data: impact })
+    await expect(getSchemaDeleteImpact('schema-1', 'user-a')).resolves.toEqual(impact)
+    expect(http.get).toHaveBeenCalledWith(
+      '/v1/schema-management/schemas/schema-1/delete-impact',
+      { headers: { 'X-User-Id': 'user-a' } },
+    )
+  })
+
+  it('Schema 不存在时透出后端 msg', async () => {
+    vi.mocked(http.get).mockResolvedValue({
+      code: 404,
+      success: false,
+      msg: 'Schema 不存在: nope',
+      data: null,
+    })
+    await expect(getSchemaDeleteImpact('nope', 'user-a')).rejects.toThrow('Schema 不存在: nope')
   })
 })

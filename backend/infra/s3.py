@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import threading
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, BinaryIO
 
 import boto3
@@ -20,6 +21,15 @@ class StoredObject:
     bucket: str
     object_key: str
     etag: str | None
+
+
+@dataclass(frozen=True)
+class ObjectSummary:
+    """list_objects 结果项（清理任务按 last_modified 判过期）。"""
+
+    object_key: str
+    size: int
+    last_modified: datetime | None
 
 
 class S3Storage:
@@ -116,6 +126,46 @@ class S3Storage:
 
     def delete_object(self, bucket: str, object_key: str) -> None:
         self.client.delete_object(Bucket=bucket, Key=object_key)
+
+    def list_objects(self, prefix: str) -> list[ObjectSummary]:
+        """列前缀下全部对象（ListObjectsV2 自动翻页）。"""
+        self.ensure_bucket()
+        summaries: list[ObjectSummary] = []
+        token: str | None = None
+        while True:
+            params: dict[str, Any] = {"Bucket": self.bucket, "Prefix": prefix}
+            if token:
+                params["ContinuationToken"] = token
+            response = self.client.list_objects_v2(**params)
+            for item in response.get("Contents", []):
+                summaries.append(
+                    ObjectSummary(
+                        object_key=item["Key"],
+                        size=int(item.get("Size", 0)),
+                        last_modified=item.get("LastModified"),
+                    )
+                )
+            token = response.get("NextContinuationToken")
+            if not token:
+                return summaries
+
+    def get_lifecycle_rules(self) -> list[dict[str, Any]]:
+        """读 bucket lifecycle 规则（未配置时返回空表）。"""
+        try:
+            response = self.client.get_bucket_lifecycle_configuration(Bucket=self.bucket)
+        except ClientError as exc:
+            if str(exc.response.get("Error", {}).get("Code", "")) in {
+                "NoSuchLifecycleConfiguration",
+                "NoSuchBucket",
+            }:
+                return []
+            raise
+        return list(response.get("Rules", []))
+
+    def put_lifecycle_rules(self, rules: list[dict[str, Any]]) -> None:
+        self.client.put_bucket_lifecycle_configuration(
+            Bucket=self.bucket, LifecycleConfiguration={"Rules": rules}
+        )
 
 
 _storage: S3Storage | None = None

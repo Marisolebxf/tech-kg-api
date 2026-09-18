@@ -1038,3 +1038,104 @@ class TestSingleton:
             get_trs_graph_client()
         assert graph_pkg._client is None
         close_trs_graph_client()
+
+
+class TestSlashVidNgqlFallback:
+    """含 / 的 VID（DOI 类，如 paper_ref_10.1111/jth.14768）应改走 nGQL。
+
+    trs-graph REST 的 /nodes/{id}、/traversal/{id}/edges 是单段路径参数，
+    斜杠 VID 路由不匹配（Spring 404 / Tomcat 拒绝 %2F）。
+    """
+
+    @staticmethod
+    def _query_handler(captured, records):
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            if request.url.path == "/api/v1/query":
+                captured.append(json.loads(request.content)["query"])
+                return httpx.Response(200, json={"records": records, "summary": {}})
+            return httpx.Response(404, json={"error": "NotFound"})
+
+        return handler
+
+    def test_get_node_slash_vid_uses_fetch(self):
+        captured: list[str] = []
+        records = [
+            {
+                "v": {
+                    "id": "paper_ref_10.1111/jth.14768",
+                    "labels": ["Paper", "organization_base"],
+                    "properties": {"doi": "10.1111/jth.14768"},
+                }
+            }
+        ]
+        repo = _make_repo(self._query_handler(captured, records))
+
+        node = repo.get_node("paper_ref_10.1111/jth.14768")
+
+        assert node is not None
+        assert node.id == "paper_ref_10.1111/jth.14768"
+        assert node.labels == ["Paper", "organization_base"]
+        assert len(captured) == 1
+        assert 'FETCH PROP ON * "paper_ref_10.1111/jth.14768" YIELD vertex AS v' in captured[0]
+
+    def test_get_node_slash_vid_missing_returns_none(self):
+        captured: list[str] = []
+        repo = _make_repo(self._query_handler(captured, []))
+
+        assert repo.get_node("paper_ref_10.1111/jth.14768") is None
+
+    def test_get_node_edges_slash_vid_uses_go(self):
+        captured: list[str] = []
+        records = [
+            {
+                "src": "paper_ref_10.1111/jth.14768",
+                "dst": "paper_812578243168174080",
+                "etype": "CITES",
+            },
+            {
+                "src": "paper_864145551824782225",
+                "dst": "paper_ref_10.1111/jth.14768",
+                "etype": "CITES",
+            },
+        ]
+        repo = _make_repo(self._query_handler(captured, records))
+
+        edges = repo.get_node_edges(
+            "paper_ref_10.1111/jth.14768", direction="both", edge_type="CITES", limit=1, offset=0
+        )
+
+        # GO 一跳边 + Python 侧分页切片
+        assert len(edges) == 1
+        assert edges[0].type == "CITES"
+        assert str(edges[0].source_id) == "paper_ref_10.1111/jth.14768"
+        assert "BIDIRECT" in captured[0]
+        assert "OVER CITES" in captured[0]
+
+    def test_get_node_edges_slash_vid_rejects_injected_edge_type(self):
+        captured: list[str] = []
+        repo = _make_repo(self._query_handler(captured, []))
+
+        repo.get_node_edges("a/b", edge_type="CITES; DROP SPACE dev2", limit=10)
+
+        # 非法边类型不下入 nGQL，回退 OVER *
+        assert "OVER *" in captured[0]
+        assert "DROP SPACE" not in captured[0]
+
+    def test_normal_vid_still_uses_rest(self):
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            if request.url.path == "/api/v1/nodes/person_1":
+                return httpx.Response(
+                    200, json={"id": "person_1", "labels": ["Person"], "properties": {}}
+                )
+            return httpx.Response(404, json={"error": "NotFound"})
+
+        repo = _make_repo(handler)
+
+        node = repo.get_node("person_1")
+
+        assert node is not None
+        assert node.id == "person_1"

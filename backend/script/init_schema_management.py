@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from uuid import NAMESPACE_URL, uuid5
 
@@ -51,6 +52,14 @@ INCREMENTAL_COLUMNS = {
         "ddl_error": "VARCHAR(1024) NULL",
         "ddl_executed_at": "DATETIME NULL",
         "property_revision": "INT NOT NULL DEFAULT 1",
+        # 多图空间目录（对齐 GraphSchemaDefinition 模型）：存量行归入部署默认
+        # 空间；软删两列供读取路径统一过滤
+        "graph_space": (
+            "VARCHAR(64) NOT NULL DEFAULT "
+            f"'{os.getenv('TRS_GRAPH_SPACE', 'techkg')}'"
+        ),
+        "is_deleted": "TINYINT(1) NOT NULL DEFAULT 0",
+        "deleted_at": "DATETIME NULL",
     },
     "kg_schema_property": {
         "category": "VARCHAR(16) NOT NULL DEFAULT 'core'",

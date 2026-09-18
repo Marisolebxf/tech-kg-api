@@ -131,8 +131,10 @@ function nodeHeight(node: GraphNodeData) {
   return node.level === 0 && !props.uniformNodeSize ? 54 : 46
 }
 
-/** 圆形节点半径，渲染与连线偏移共用，避免节点/连线半径不一致。 */
+/** 圆形节点半径，渲染与连线偏移共用，避免节点/连线半径不一致。
+ *  节点自带 radius（如 PageRank 重要性分值映射）时优先使用。 */
 function nodeRadius(node: GraphNodeData) {
+  if (node.radius !== undefined && !props.uniformNodeSize) return node.radius
   return node.level === 0 && !props.uniformNodeSize ? 20 : 15
 }
 

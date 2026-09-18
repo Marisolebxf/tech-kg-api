@@ -29,8 +29,9 @@ SDK 用法（``from kg_sdk import current_context``）：
   第 1 步演示读取；
 - ``ctx.step_id`` / ``ctx.attempt``：多步时 step_id 形如
   ``source:{绑定id}#{stepId}``，用于日志/审核观测；
-- ``ctx.prev_outputs``：按 stepId 读本批次已完成步输出（仅旁路观测用，
-  大输出会被平台按预算截断，业务数据走 ``payload["input"]``）；
+- ``ctx.prev_outputs``：按 stepId 读本批次已完成步输出（仅旁路观测用；
+  批载荷 S3 中转开时步间透传无截断，关时大输出按预算截断，
+  业务数据统一走 ``payload["input"]``）；
 - ``ctx.graph``：本示例不需要（不做端点验存）；需要按图内现存实体过滤
   候选时可用 ``ctx.graph.execute_read(...)``。
 
@@ -266,7 +267,7 @@ def step_emit(payload: Mapping[str, Any]) -> dict[str, Any]:
     from kg_sdk import current_context
 
     # SDK 演示：prev_outputs 按 stepId 读任意已完成步输出（仅旁路观测——
-    # 大输出会被平台按预算截断，业务数据走 payload["input"]）
+    # S3 中转开时无截断，关时大输出按预算截断，业务数据走 payload["input"]）
     ctx = current_context()
     resolve_stats = (
         (ctx.prev_outputs.get("resolve", {}).get("stats") if ctx else None) or {}

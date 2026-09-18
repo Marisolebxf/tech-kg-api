@@ -56,6 +56,11 @@ def now():
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def _now_str() -> str:
+    """图库审计列用的本地时间串（与 write_records 溯源列补值同格式）。"""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def dump(v):
     return json.dumps(v, ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str)
 
@@ -66,6 +71,24 @@ def load(v):
 
 def sha(v):
     return hashlib.sha256(dump(v).encode()).hexdigest()
+
+
+def resolve_job_ids(execution_ids: list[str | None]) -> dict[str, str]:
+    """EXEC 执行 ID → 所属图谱构建任务 ID（job-xxx）批量解析。
+
+    人工审核「来源记录」跳任务详情用；控制面库（techkg_control）不可达时
+    返回空映射，不影响审核队列本身——建案时快照里有 jobId 的 case 不依赖此查询。
+    """
+    ids = [i for i in execution_ids if i]
+    if not ids:
+        return {}
+    try:
+        from service.workflow_repository import repository
+
+        return repository.job_ids_by_execution_ids(execution_ids)
+    except Exception:  # noqa: BLE001
+        logger.warning("resolve jobId for review cases failed", exc_info=True)
+        return {}
 
 
 logger = logging.getLogger("service.manual_review")
@@ -183,8 +206,12 @@ class ManualReviewService:
             rows = s.scalars(
                 select(ReviewCase).where(*q).order_by(*order).offset((page - 1) * size).limit(size)
             ).all()
+            # 来源记录跳任务详情：一次 IN 查询批量解析本页 EXEC→jobId（快照已有 jobId 的行跳过）
+            job_map = resolve_job_ids(
+                [(load(x.input_snapshot) or {}).get("executionId") for x in rows]
+            )
             return {
-                "items": [self.case_dict(x) for x in rows],
+                "items": [self.case_dict(x, job_map) for x in rows],
                 "total": total,
                 "page": page,
                 "pageSize": size,
@@ -680,6 +707,7 @@ class ManualReviewService:
             case = item["case"]
             snapshot = item["snapshot"]
             failure = item["failure"]
+            next_attempt = int(snapshot.get("attempt") or 1) + 1
             try:
                 self.create_direct_case(
                     task_id=case.source_task_id or task_id,
@@ -690,6 +718,10 @@ class ManualReviewService:
                         "recordId": str(case.source_record_id),
                         "error": str(failure.get("error") or ""),
                         "schemaKey": snapshot.get("schemaKey"),
+                        # attempt 必须进去重键：原 case 的 candidate 与本调用完全
+                        # 相同（同 task/step/record/error），不带 attempt 会命中
+                        # 原案去重，attempt+1 新 case 永远建不出来
+                        "attempt": next_attempt,
                     },
                     object_id=str(case.source_record_id),
                     object_name=case.object_name,
@@ -707,7 +739,7 @@ class ManualReviewService:
                     resume_token=f"extract-fail:{rerun_execution_id}:{case.source_record_id}",
                     extra_snapshot={
                         **{k: v for k, v in snapshot.items() if k != "rerunExecutionId"},
-                        "attempt": int(snapshot.get("attempt") or 1) + 1,
+                        "attempt": next_attempt,
                         "rerunOfExecutionId": snapshot.get("executionId"),
                         "executionId": rerun_execution_id,
                     },
@@ -844,6 +876,7 @@ class ManualReviewService:
             self._insert_withheld_vertex(client, c, snapshot, incoming, vid)
             old_vid = str(incoming.get("vid") or c.object_id)
             written_edges = 0
+            edge_fields: dict[str, set[str] | None] = {}
             for rel in snapshot.get("_pendingRelations") or []:
                 edge_type = rel.get("edgeType")
                 frm, to = str(rel.get("fromId")), str(rel.get("toId"))
@@ -856,6 +889,20 @@ class ManualReviewService:
                 props = self._coerce_to_schema(
                     client, edge_type, rel.get("props") or {}, is_edge=True
                 )
+                # 平台 DDL 给边注入 NOT NULL create_time/update_time（无默认值），
+                # 暂存边属性没有这些列 → INSERT 被 Nebula 拒（400 not nullable）。
+                # 按边实际 schema 补审计列（与 _insert_withheld_vertex 同策略：
+                # 列存在才补，schema 查不出时旧兜底照补）。
+                if edge_type not in edge_fields:
+                    edge_fields[edge_type] = self._edge_fields(client, edge_type)
+                fields = edge_fields[edge_type]
+                for key, value in (
+                    ("create_time", _now_str()),
+                    ("update_time", _now_str()),
+                    ("source_table", props.get("source_table") or "schema_extract"),
+                ):
+                    if fields is None or key in fields:
+                        props.setdefault(key, value)
                 client.create_edge(frm, to, edge_type, props)
                 written_edges += 1
         finally:
@@ -878,6 +925,16 @@ class ManualReviewService:
             return {f for f in (r.get("Field") for r in desc.records or []) if isinstance(f, str)}
         except Exception:  # noqa: BLE001
             logger.warning("DESCRIBE TAG %s 失败，写图按旧兜底补审计列", label)
+            return None
+
+    @staticmethod
+    def _edge_fields(client: Any, edge_type: str) -> set[str] | None:
+        """DESCRIBE EDGE 取列集合；失败返回 None（调用方走兜底补审计列）。"""
+        try:
+            desc = client.execute_query(f"DESCRIBE EDGE `{edge_type}`")
+            return {f for f in (r.get("Field") for r in desc.records or []) if isinstance(f, str)}
+        except Exception:  # noqa: BLE001
+            logger.warning("DESCRIBE EDGE %s 失败，补边按旧兜底补审计列", edge_type)
             return None
 
     def _insert_withheld_vertex(
@@ -1063,7 +1120,9 @@ class ManualReviewService:
     ) -> dict[str, Any]:
         """把 candidate 字段对齐到 tag/edge schema。
 
-        - schema 里有的字段：保留，值转 string（NebulaGraph tag 属性多为 string）
+        - schema 里有的字段：string 列值转 string（NebulaGraph tag 属性多为
+          string）；int/double 列保留数字字面量（转成字符串会被 Nebula 拒
+          "The data type does not meet the requirements"）
         - schema 里有 ``extra_json``：多余字段塞进 extra_json（JSON 串），不丢数据
         - schema 里没有 extra_json：丢弃多余字段（记 warning）
         - schema 查询失败：原样发（让 trs-graph 报 400 暴露问题）
@@ -1083,6 +1142,11 @@ class ManualReviewService:
             schema_fields = {
                 r.get("Field") for r in records if isinstance(r, dict) and r.get("Field")
             }
+            column_types = {
+                r.get("Field"): str(r.get("Type") or "").lower()
+                for r in records
+                if isinstance(r, dict) and r.get("Field")
+            }
         except Exception as exc:  # noqa: BLE001
             log.warning(
                 "DESCRIBE %s %s 失败，原样灌图: %s", "EDGE" if is_edge else "TAG", label, exc
@@ -1092,11 +1156,24 @@ class ManualReviewService:
         if not schema_fields:
             return {k: v if isinstance(v, str) else str(v) for k, v in candidate.items()}
 
+        def _typed(key: str, value: Any) -> Any:
+            col_type = column_types.get(key, "")
+            if col_type.startswith(("int", "double", "float")):
+                if isinstance(value, bool):
+                    return int(value)
+                if isinstance(value, (int, float)):
+                    return value
+                try:
+                    return float(value) if col_type.startswith(("double", "float")) else int(value)
+                except (TypeError, ValueError):
+                    return value  # 无法解析按原样发，让图库报错暴露
+            return value if isinstance(value, str) else str(value)
+
         mapped: dict[str, Any] = {}
         extras: dict[str, Any] = {}
         for k, v in candidate.items():
             if k in schema_fields:
-                mapped[k] = v if isinstance(v, str) else str(v)
+                mapped[k] = _typed(k, v)
             else:
                 extras[k] = v
 
@@ -1291,13 +1368,18 @@ class ManualReviewService:
             )
         )
 
-    def case_dict(self, c):
+    def case_dict(self, c, job_map: dict[str, str] | None = None):
+        input_data = load(c.input_snapshot) or {}
+        execution_id = input_data.get("executionId")
         return {
             "id": c.id,
             "sourceTaskId": c.source_task_id,
             "batchId": c.batch_id,
+            # 图谱构建任务：产生该 case 的 job（job-xxx，前端「来源记录」跳 /graph-build/jobs）。
+            # 优先建案时写入快照的 jobId；存量 case 靠 job_map（EXEC→job 批量解析）兜底。
+            "jobId": input_data.get("jobId") or (job_map or {}).get(execution_id or ""),
             # 图谱构建ID：产生该 case 的抽取执行（EXEC-xxx，前端跳 /processing-instance）
-            "executionId": (load(c.input_snapshot) or {}).get("executionId"),
+            "executionId": execution_id,
             "workflowId": c.workflow_id,
             "nodeId": c.pipeline_step_id,
             "pipelineStepId": c.pipeline_step_id,
@@ -1332,10 +1414,10 @@ class ManualReviewService:
         }
 
     def detail(self, s, c, duplicate=False):
-        d = self.case_dict(c)
+        input_data = load(c.input_snapshot) or {}
+        d = self.case_dict(c, resolve_job_ids([input_data.get("executionId")]))
         dr = s.get(ReviewDraft, c.id)
         reported = (load(c.candidate_snapshot) or {}).pop("reportedEvidence", [])
-        input_data = load(c.input_snapshot) or {}
         files = [
             {
                 "id": x.id,

@@ -106,6 +106,8 @@ const directLlmOutput = computed<string | null>(() =>
 const directExecutionId = computed<string>(() =>
   String((productionCase.value?.input as Record<string, unknown> | undefined)?.executionId || ''),
 )
+// 所属图谱构建任务（job-xxx）：快照 jobId 或后端按执行关联解析，跳任务详情
+const directJobId = computed<string>(() => productionCase.value?.jobId || '')
 // 标题带具体类型：论文实体入库审核 / 引用关系入库审核
 const directTitle = computed(() => {
   if (!isDirectCase.value) {
@@ -173,15 +175,24 @@ const linkCandidates = computed(() => {
       score: typeof c.score === 'number' ? c.score : null,
     }))
 })
-const linkIncoming = computed(() => {
-  const raw = linkSnapshot.value?._incoming
-  return raw && typeof raw === 'object' ? (raw as { vid?: string; sourceTable?: string }) : null
-})
 const linkResolution = computed(() => {
   const raw = linkSnapshot.value?._resolution
   return raw && typeof raw === 'object'
     ? (raw as { matchScore?: number; margin?: number | null })
     : null
+})
+/** 待入库记录卡的「类型」行：只展示 实体/关系 二选一（T_LINK 恒实体对齐）。 */
+const incomingKindLabel = computed(() => (
+  templateId.value === 'T_LINK' || directKind.value !== 'relation' ? '实体' : '关系'
+))
+/** 待入库记录卡的「来源记录」行：与 A 类队列同口径——优先所属任务(job)跳任务详情，
+ *  回落执行/工作流 id 跳执行详情，都没有则不渲染链接。 */
+const incomingSourceLink = computed(() => {
+  const jobId = productionCase.value?.jobId || ''
+  if (jobId) return { to: `/graph-build/jobs/${jobId}`, label: jobId }
+  const execId = productionCase.value?.executionId || productionCase.value?.workflowId || ''
+  if (execId) return { to: `/processing-instance/${execId}`, label: execId }
+  return null
 })
 /** merge 裁决的并入目标（targetEntityId）——服务端校验必须属于候选集。 */
 const selectedTarget = ref('')
@@ -189,6 +200,18 @@ watch(
   linkCandidates,
   (list) => {
     if (list.length && !selectedTarget.value) selectedTarget.value = list[0].vid
+  },
+  { immediate: true },
+)
+/** T_LINK 空候选（脚本挂实体改道、图库召回无同名）：merge 无目标可选，
+ *  降级为 create/reject 两键——服务端 create 会落在挂起 vid（object_id）上。 */
+const linkMergeDisabled = computed(
+  () => templateId.value === 'T_LINK' && !!linkSnapshot.value && !linkCandidates.value.length,
+)
+watch(
+  linkMergeDisabled,
+  (disabled) => {
+    if (disabled && entityVerdict.value === 'merge') entityVerdict.value = 'create'
   },
   { immediate: true },
 )
@@ -423,7 +446,7 @@ const runPrimary = () => {
               <div><dt>来源绑定</dt><dd><code>{{ String(extractInput.sourceBindingId ?? '—') }}</code></dd></div>
               <div><dt>原执行</dt><dd><RouterLink :to="`/processing-instance/${String(extractInput.executionId ?? '')}`" class="direct-trace-link"><code>{{ String(extractInput.executionId ?? '—') }}</code></RouterLink></dd></div>
               <div v-if="extractRerunExecutionId"><dt>重跑执行</dt><dd><RouterLink :to="`/processing-instance/${extractRerunExecutionId}`" class="direct-trace-link"><code>{{ extractRerunExecutionId }}</code></RouterLink></dd></div>
-              <div v-if="extractInput.jobId"><dt>所属任务</dt><dd><code>{{ String(extractInput.jobId) }}</code></dd></div>
+              <div v-if="extractInput.jobId"><dt>所属任务</dt><dd><RouterLink :to="`/graph-build/jobs/${String(extractInput.jobId)}`" class="direct-trace-link"><code>{{ String(extractInput.jobId) }}</code></RouterLink></dd></div>
             </dl>
           </details>
         </section>
@@ -454,12 +477,17 @@ const runPrimary = () => {
         <div class="link-incoming">
           <span>待入库记录（已扣留，未写图）</span>
           <strong>{{ record.object }}</strong>
+          <dl class="link-incoming-meta">
+            <div><dt>类型</dt><dd>{{ incomingKindLabel }}</dd></div>
+            <div><dt>来源记录</dt><dd>
+              <RouterLink v-if="incomingSourceLink" class="direct-trace-link" :to="incomingSourceLink.to"><code>{{ incomingSourceLink.label }}</code></RouterLink>
+              <template v-else>—</template>
+            </dd></div>
+          </dl>
           <template v-if="templateId === 'T_LINK'">
-            <p>来源：{{ linkIncoming?.sourceTable || '—' }} · 记录 <code>{{ linkIncoming?.vid || record.objectId }}</code></p>
             <p v-if="linkResolution">消歧得分 {{ linkResolution.matchScore ?? '—' }} · 候选分差 {{ linkResolution.margin ?? '—' }} · 灰区人工裁决</p>
           </template>
           <template v-else>
-            <p>来源：{{ directSourceTable || productionCase?.workflowType || '—' }} · 记录 <code>{{ directSourceRecordId || record.objectId }}</code></p>
             <p v-if="directKind === 'relation' && directFromId">关系端点：<code>{{ directFromId }}</code> -[{{ labelZh(directEdgeType) || directEdgeType }}]-&gt; <code>{{ directToId }}</code></p>
             <p>抽取置信度 {{ directConfidence ?? '—' }} · 低于自动入库阈值 0.85，需人工复核</p>
           </template>
@@ -489,6 +517,11 @@ const runPrimary = () => {
             </li>
           </ul>
         </template>
+
+        <!-- T_LINK 空候选（脚本挂实体改道、召回无同名）：无 merge 目标，降级为新建/驳回 -->
+        <p v-else-if="templateId === 'T_LINK' && linkSnapshot" class="zone-banner">
+          图库无同名候选，无法并入——请「确认为新实体」落图，或驳回丢弃该挂起实体及其暂存边。
+        </p>
 
         <!-- T_DIRECT：待入库候选字段（可修正，确认时按修正后写图） -->
         <div v-else-if="templateId === 'T_DIRECT'" class="direct-fields-block">
@@ -532,7 +565,7 @@ const runPrimary = () => {
         <!-- 裁决单选：T_LINK 三选（merge/create/reject）；T_DIRECT 通过或驳回 -->
         <a-form-item v-if="templateId === 'T_LINK'" field="entityVerdict" hide-label>
         <a-radio-group v-model="entityVerdict" class="verdict" aria-label="实体对齐裁决">
-          <a-radio value="merge" :disabled="!isEditable">合并到所选候选（写入图）</a-radio>
+          <a-radio value="merge" :disabled="!isEditable || linkMergeDisabled">合并到所选候选（写入图）</a-radio>
           <a-radio value="create" :disabled="!isEditable">确认为新实体（写入图）</a-radio>
           <a-radio value="reject" :disabled="!isEditable">均不匹配，驳回候选（丢弃该记录）</a-radio>
         </a-radio-group>
@@ -543,10 +576,6 @@ const runPrimary = () => {
           <a-radio value="reject" :disabled="!isEditable">驳回·丢弃（候选不写图）</a-radio>
         </a-radio-group>
         </a-form-item>
-        <label v-if="isEditable" class="verdict-note">
-          <span>备注（可选）</span>
-          <input aria-label="审核备注" v-model="note" placeholder="审核备注…" />
-        </label>
 
         <!-- T_DIRECT 溯源 / 原始记录 / 抽取推理过程（折叠保留，不改变裁决框主布局） -->
         <template v-if="templateId === 'T_DIRECT'">
@@ -556,6 +585,7 @@ const runPrimary = () => {
               <div><dt>workflow</dt><dd><RouterLink :to="`/processing-instance/${productionCase?.workflowId || ''}`" class="direct-trace-link"><code>{{ productionCase?.workflowId || '—' }}</code></RouterLink></dd></div>
               <div><dt>workflow 类型</dt><dd>{{ productionCase?.workflowType || '—' }}</dd></div>
               <div><dt>执行 ID</dt><dd><RouterLink :to="`/processing-instance/${directExecutionId || ''}`" class="direct-trace-link"><code>{{ directExecutionId || '—' }}</code></RouterLink></dd></div>
+              <div v-if="directJobId"><dt>所属任务</dt><dd><RouterLink :to="`/graph-build/jobs/${directJobId}`" class="direct-trace-link"><code>{{ directJobId }}</code></RouterLink></dd></div>
               <div><dt>来源任务</dt><dd><RouterLink :to="`/processing-instance/${productionCase?.sourceTaskId || ''}`" class="direct-trace-link"><code>{{ productionCase?.sourceTaskId || '—' }}</code></RouterLink></dd></div>
               <div><dt>产生 step</dt><dd>{{ productionCase?.pipelineStepId || '—' }}</dd></div>
             </dl>
@@ -593,12 +623,6 @@ const runPrimary = () => {
           </details>
         </template>
       </section>
-
-      <div v-if="!isEditable" class="rw-readonly">
-        <strong>{{ record.decision }}</strong>
-        <p>{{ record.decisionNote }}</p>
-        <em>{{ record.completedAt }}</em>
-      </div>
 
       </a-form>
       <p v-if="feedback" class="rw-feedback">{{ feedback }}</p>
@@ -971,21 +995,35 @@ const runPrimary = () => {
   background: #f5f8ff;
 }
 
-/* T_LINK 裁决框内备注（可选） */
-.verdict-note {
+/* 待入库记录卡：类型 / 来源记录 标签行 */
+.link-incoming-meta {
   display: grid;
-  gap: 6px;
-  margin-top: 12px;
-  color: #718099;
+  gap: 4px;
+  margin: 8px 0 0;
+}
+
+.link-incoming-meta > div {
+  display: flex;
+  gap: 10px;
+}
+
+.link-incoming-meta dt {
+  flex: 0 0 auto;
+  color: #7890b5;
   font-size: 11px;
 }
 
-.verdict-note input {
-  padding: 8px 10px;
-  border: 1px solid #dce8f8;
-  border-radius: 5px;
-  font: 13px/1.5 inherit;
-  color: #17233b;
+.link-incoming-meta dd {
+  margin: 0;
+  color: #344054;
+  font-size: 12px;
+}
+
+.link-incoming-meta dd code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #eef4ff;
+  color: #175cd3;
 }
 
 /* T_LINK 消歧 v2：待入库记录卡 + 候选选择列表 */
@@ -1078,25 +1116,6 @@ const runPrimary = () => {
   margin-top: 12px;
 }
 
-.rw-readonly {
-  margin-top: 16px;
-  padding: 12px;
-  border-radius: 6px;
-  background: #f5f8ff;
-}
-
-.rw-readonly p {
-  margin: 6px 0;
-  color: #667085;
-  font-size: 12px;
-}
-
-.rw-readonly em {
-  color: #98a2b3;
-  font-size: 11px;
-  font-style: normal;
-}
-
 .rw-feedback {
   margin: 14px 0 0;
   padding: 10px 12px;
@@ -1127,19 +1146,24 @@ const runPrimary = () => {
 
 .rw-foot__actions {
   display: flex;
+  flex: 1;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: stretch;
   justify-content: flex-end;
   gap: 8px;
 }
 
+/* 最终确认按钮：加大并撑满所在容器（rw-foot 整行） */
 .rw-foot button {
-  height: 34px;
-  padding: 0 12px;
+  width: 100%;
+  height: 48px;
+  padding: 0 16px;
   border: 1px solid #bdd0ea;
   border-radius: 6px;
   background: #fff;
   color: #40516d;
+  font-size: 16px;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -1287,6 +1311,8 @@ const runPrimary = () => {
 .rw-sec{margin-bottom:16px;padding:16px;border:0;border-radius:6px;background:#f7f8fa}.rw-sec__head{gap:8px;margin-bottom:16px}
 .cat-pill{padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.tri-grid{gap:16px}.tri-grid>div{gap:4px;padding:8px 16px;border-color:#e5e6eb;border-radius:4px}.tri-grid span,.tri-grid em{font-size:12px;line-height:20px}.tri-grid strong{font-size:14px;line-height:22px}
 .rw :is(button,input,select,textarea){font-size:14px;line-height:22px}.rw :is(button,input,select){min-height:32px;border-radius:4px}.rw textarea{border-radius:4px}
+/* 最终确认按钮：撑满 rw-foot 整行并加大（覆盖上面的通用 button 字号） */
+.rw-foot__actions{flex:1}.rw-foot button{width:100%;height:48px;padding:0 16px;font-size:16px;font-weight:600}
 .direct-actions{gap:16px}.direct-accept,.direct-reject{min-height:32px;padding:8px 16px;border-radius:4px;font-size:14px}.direct-accept strong,.direct-reject strong{font-size:14px;line-height:22px}.direct-accept em,.direct-reject em{font-size:12px;line-height:20px}
 @media(max-width:960px){.tri-grid{grid-template-columns:1fr}}
 </style>

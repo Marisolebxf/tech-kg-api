@@ -200,6 +200,9 @@ class GraphSchemaScript(Base):
     # 抽取工作流收尾回写的健康信号：none（未跑过）/ ok / failed
     last_run_status: Mapped[str] = mapped_column(String(16), nullable=False, default="none")
     last_run_error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # 最近一次抽取收尾回写时间：uploaded_at > last_run_at 即"脚本已更新但未重跑"，
+    # 配合 staleness（版本号）接力提示"更新脚本 → 重跑"闭环
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     safety_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     safety_issues: Mapped[str] = mapped_column(Text, nullable=False, default="")
     uploaded_at: Mapped[datetime] = mapped_column(

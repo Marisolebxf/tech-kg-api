@@ -38,6 +38,9 @@ class SchemaManagementApplication:
     def delete_schema(self, schema_id: str, user_id: str, **kwargs) -> dict[str, Any]:
         return self._service.delete_schema(schema_id, user_id, **kwargs)
 
+    def delete_impact(self, schema_id: str, user_id: str | None, **kwargs) -> dict[str, Any]:
+        return self._service.delete_impact(schema_id, user_id, **kwargs)
+
     def add_property(self, **kwargs) -> dict[str, Any]:
         return self._service.add_property(**kwargs)
 

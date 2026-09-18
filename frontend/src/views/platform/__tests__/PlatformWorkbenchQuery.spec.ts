@@ -364,20 +364,20 @@ describe('Algorithm result lists', () => {
     }
   })
 
-  it('marks unexecuted result panels for the standard bottom safe spacing', async () => {
+  it('fills the remaining height with unexecuted result panels so the workspace keeps its 16px inset', async () => {
     const ngqlResult = wrapper.get('.platform-query-result')
-    expect(ngqlResult.classes()).toContain('platform-query-result--empty')
+    expect(ngqlResult.classes()).toContain('platform-query-result--fill')
     expect(ngqlResult.text()).toContain('暂无数据，执行 nGQL 语句后在此查看结果')
     await enterAlgorithms()
     const algorithmResult = wrapper.get('.platform-query-algo-result')
-    expect(algorithmResult.classes()).toContain('platform-query-result--empty')
+    expect(algorithmResult.classes()).toContain('platform-query-result--fill')
     expect(algorithmResult.text()).toContain('暂无数据，提交算法作业后在此查看结果')
   })
 
   it('keeps the query page scrollable without showing its scrollbar in either mode', async () => {
-    expect(wrapper.get('.platform-query').classes()).toContain('platform-query--scrollbar-hidden')
+    expect(wrapper.get('.platform-query').classes()).toContain('platform-query--scrollbar-suppressed')
     await enterAlgorithms()
-    expect(wrapper.get('.platform-query').classes()).toContain('platform-query--scrollbar-hidden')
+    expect(wrapper.get('.platform-query').classes()).toContain('platform-query--scrollbar-suppressed')
   })
 
   it('does not show the verbose server-truncation alert', async () => {

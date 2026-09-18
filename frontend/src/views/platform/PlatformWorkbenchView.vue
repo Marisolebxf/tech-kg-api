@@ -1326,7 +1326,7 @@ const pageMeta = computed(() => {
     <!-- 两种查询模式共用固定结果列表，表格内部滚动。 -->
     <main
       v-else-if="activeTab === 'query'"
-      :class="['platform-content', 'platform-query', 'platform-query--scrollbar-hidden']"
+      :class="['platform-content', 'platform-query', 'platform-query--scrollbar-suppressed']"
     >
       <section class="kg-panel platform-query-form">
         <!-- 一级模式切换；算法页签和引擎状态位于下方独立一行。 -->
@@ -1515,7 +1515,7 @@ const pageMeta = computed(() => {
       <!-- 结果区常驻：未执行时空数据占位，执行后填充（不再整块隐藏/出现引起布局跳动） -->
       <section
         v-if="queryMode === 'ngql'"
-        :class="['platform-query-result', { 'platform-query-result--empty': !ngqlResult }]"
+        :class="['platform-query-result', { 'platform-query-result--fill': !ngqlResult }]"
       >
         <header class="platform-query-result__head">
           <h2 class="platform-query-result__title">
@@ -1547,7 +1547,7 @@ const pageMeta = computed(() => {
         :class="[
           'platform-query-result',
           'platform-query-algo-result',
-          { 'platform-query-result--empty': !algoResult },
+          { 'platform-query-result--fill': !algoResult },
         ]"
       >
         <header class="platform-query-result__head">
@@ -4487,8 +4487,8 @@ print(response.json())</pre>
 
 /* 综合图谱展示 / 查询结果：复用科技专家同事关系页的预览与详情布局。 */
 .platform-query{grid-row:1/-1;height:100%;min-height:0;align-self:stretch;overflow:auto}
-.platform-query--scrollbar-hidden{scrollbar-width:none;-ms-overflow-style:none}
-.platform-query--scrollbar-hidden::-webkit-scrollbar{display:none;width:0;height:0}
+.platform-query.platform-query--scrollbar-suppressed{scrollbar-width:none!important;scrollbar-color:transparent transparent!important;scrollbar-gutter:auto!important;-ms-overflow-style:none}
+.platform-query.platform-query--scrollbar-suppressed::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
 .platform-query .platform-status{display:inline-flex;align-items:center;gap:6px;min-height:22px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.platform-query .platform-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .platform-query .platform-table th,.platform-query .platform-table td{height:40px;padding:0 16px;font-size:14px;line-height:22px}.platform-query .platform-table th{background:#f7f8fa;font-weight:500}
 .platform-query-empty{gap:8px;padding:24px 16px}.platform-query-empty strong{font-size:16px;line-height:24px;font-weight:600}.platform-query-empty p{font-size:14px;line-height:22px}
@@ -4603,7 +4603,10 @@ print(response.json())</pre>
 .platform-query-result__table{overflow:hidden}
 .platform-query-result__empty{min-height:180px;color:var(--color-text-3)}
 .platform-query-result__empty :deep(.arco-empty-description){font-size:14px;color:var(--color-text-3)}
-.platform-query-result--empty{margin-bottom:16px}
+.platform-query .platform-query-result--fill{min-height:0;flex:1 0 auto}
+.platform-query .platform-query-result--fill .platform-query-result__body{min-height:180px;flex:1 1 auto}
+.platform-query .platform-query-result--fill .platform-query-result__table{display:flex;min-height:0;flex:1 1 auto}
+.platform-query .platform-query-result--fill .platform-query-result__empty{width:100%;flex:1 1 auto}
 .platform-algo-list-toolbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;color:var(--color-text-3);font-size:12px}
 .platform-algo-search{width:320px;max-width:100%}
 .platform-algo-list-toolbar>button{margin-left:auto}

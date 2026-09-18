@@ -40,7 +40,7 @@ async function login(portal: "business" | "admin") {
   if (submitting.value || authStore.loading) return;
   submitting.value = portal;
   feedback.value = "";
-  const defaultTarget = portal === "admin" ? "/admin/reviews" : "/overview";
+  const defaultTarget = portal === "admin" ? "/admin/corrections" : "/overview";
   const target = redirectPath.value && (portal === "admin") === redirectPath.value.startsWith("/admin") ? redirectPath.value : defaultTarget;
   try {
     if (await authStore.loadCurrentUser(true)) {

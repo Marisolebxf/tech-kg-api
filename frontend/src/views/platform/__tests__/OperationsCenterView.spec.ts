@@ -14,7 +14,9 @@ const mocks = vi.hoisted(() => ({
   TRIGGER_SOURCE_LABEL: { MANUAL: '手动触发', SCHEDULE: '定期触发', RERUN: '重新执行' },
 }))
 vi.mock('../../../api/workflowOperations', () => ({ ...mocks }))
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
+// 路由 query 可按用例覆写（?category=C 深链直达抽取失败重跑子页）
+const routeState = vi.hoisted(() => ({ query: {} as Record<string, string> }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeState.query }) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({
   IconSearch: { name: 'IconSearch', setup: () => () => null },
 }))
@@ -63,6 +65,7 @@ const rowCheckboxes = (wrapper: ReturnType<typeof mount>) =>
 const batchButton = (wrapper: ReturnType<typeof mount>) => wrapper.get('.rerun-batch-action')
 
 beforeEach(() => {
+  routeState.query = {}
   mocks.getProductionReviews.mockReset().mockResolvedValue({ items: C_ROWS, total: 4, page: 1, pageSize: 10 })
   mocks.rerunExtractFailures.mockReset().mockResolvedValue({ executions: [], cases: 2 })
   mocks.getProductionReview.mockReset()
@@ -100,6 +103,25 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     await switchToCategoryC(wrapper)
     expect(wrapper.findAllComponents({ name: 'ASelect' })[0].props('options'))
       .toEqual(['全部', '待处理', '已处理', '重跑中'])
+  })
+
+  it('?category=C 深链直达抽取失败重跑子页：首次加载即按 C 类请求且 Tab 高亮；带 keyword 时填入搜索定位该实例', async () => {
+    routeState.query = { category: 'C' }
+    const wrapper = renderReview()
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'C', templateId: undefined }),
+    )
+    expect(wrapper.findAll('.review-tabs nav button')[1].classes()).toContain('active')
+    expect(wrapper.find('.rerun-batch-action').exists()).toBe(true)
+
+    // 工作台总览「抽取失败重跑」卡片跳转携带对象名：首次加载即按关键字过滤
+    routeState.query = { category: 'C', keyword: 'MR-1' }
+    const keywordWrapper = renderReview()
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'C', templateId: undefined, keyword: 'MR-1' }),
+    )
   })
 
   it('A 类不渲染批量重跑按钮与勾选列；C 类才渲染', async () => {

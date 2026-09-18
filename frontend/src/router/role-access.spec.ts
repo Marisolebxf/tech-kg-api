@@ -41,7 +41,7 @@ import { router } from './index'
 const restrictedPaths = [
   '/schema', '/graph-build', '/graph-build/jobs/job-1', '/manual-review',
   '/manual-review/task/instance-1', '/configurations', '/task-detail/extract/task-1',
-  '/processing-instance/instance-1', '/admin/members', '/admin/reviews', '/admin/corrections',
+  '/processing-instance/instance-1', '/admin/members', '/admin/corrections',
   '/admin/task-detail/extract/task-1', '/admin/processing-instance/instance-1',
   '/graph-query', '/graph-query/entities',
 ]

@@ -79,7 +79,6 @@ export const router = createRouter({
       meta: { title: '实体列表', admin: true },
     },
     { path: '/admin/corrections', name: 'admin-corrections', component: CorrectionCenterView, props: { scope: 'admin' }, meta: { title: '修正记录', admin: true } },
-    { path: '/admin/reviews', name: 'admin-reviews', component: CorrectionCenterView, props: { scope: 'admin', mode: 'review' }, meta: { title: '审核与同步', admin: true } },
     { path: '/admin/members', name: 'admin-members', component: MemberManagementView, meta: { title: '成员管理', admin: true } },
     { path: '/schema', name: 'schema', component: SchemaBrowserView, meta: { title: 'Schema 管理', admin: true } },
     { path: '/graph-build', name: 'graph-build', component: GraphBuildView, meta: { title: '图谱构建', admin: true } },

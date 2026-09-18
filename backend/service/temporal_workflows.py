@@ -1723,9 +1723,12 @@ async def detect_extract_collisions(request: dict[str, Any]) -> dict[str, Any]:
         client.connect()
         names = list(by_name)
         name_list = ",".join(json.dumps(n, ensure_ascii=False) for n in names)
+        # 名称列必须 tag 限定（同 recall_same_name 的口径）：空间里多个 tag 都有
+        # name 属性时（Person/Organization…），未限定的 v.name 被引擎解析成 NULL，
+        # WHERE 静默不命中——同名碰撞永远查空，碰撞 case 建不出来。
         ngql = (
-            f"MATCH (v:`{name_tag}`) WHERE v.name IN [{name_list}] "
-            f"RETURN id(v) AS vid, v.name AS nm LIMIT 200"
+            f"MATCH (v:`{name_tag}`) WHERE v.`{name_tag}`.`name` IN [{name_list}] "
+            f"RETURN id(v) AS vid, v.`{name_tag}`.`name` AS nm LIMIT 200"
         )
         result = client.execute_read(ngql)
         for rec in result.records or []:

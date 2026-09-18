@@ -4459,7 +4459,7 @@ print(response.json())</pre>
 .platform-query .kg-panel{border-color:#e5e6eb!important;border-radius:6px!important;background:#fff!important;box-shadow:none!important}
 .platform-query .kg-panel__header{min-height:40px;padding:8px 16px;border-color:#e5e6eb;background:#f7f8fa}
 .platform-query .kg-panel__title{font-size:16px;line-height:24px;font-weight:600}
-.platform-query .platform-query-form{margin:0;overflow:visible;border:0!important;border-bottom:1px dashed #c9cdd4!important;border-radius:0!important;background:transparent!important}.platform-query-form .kg-panel__header{box-sizing:border-box;height:40px;min-height:40px;padding:0;border:0!important;background:transparent!important}
+.platform-query .platform-query-form{margin:0;overflow:visible;border:0!important;border-bottom:1px dashed #c9cdd4!important;border-radius:0!important;background:transparent!important}.platform-query-form .kg-panel__header{box-sizing:border-box;flex-wrap:wrap;gap:8px 16px;height:auto;min-height:40px;padding:0;border:0!important;background:transparent!important}
 .platform-query .platform-form-grid{grid-template-columns:repeat(6,minmax(0,1fr));column-gap:16px;row-gap:16px;padding:16px 0}
 .platform-query .platform-form-grid :deep(.arco-form-item){width:100%;min-width:0;margin-bottom:0}
 .platform-query .platform-form-field :deep(.arco-form-item-wrapper-col),.platform-query .platform-form-field :deep(.arco-form-item-content-wrapper),.platform-query .platform-form-field :deep(.arco-form-item-content){box-sizing:border-box;width:100%;min-width:0;max-width:100%;flex:1 1 0%}
@@ -4487,9 +4487,10 @@ print(response.json())</pre>
 .platform-query .platform-form-field :deep(.arco-select-view-focus){border-color:#004ecc!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 @media(max-width:768px){.platform-query .platform-form-grid{grid-template-columns:1fr}.platform-query-algo__labels{grid-column:auto}}
 /* nGQL 查询模式 */
-.platform-query-mode-group{display:flex;min-width:0;align-items:center;gap:16px;margin-right:auto}
+.platform-query-mode-group{display:flex;flex:1 1 540px;flex-wrap:wrap;min-width:0;max-width:100%;align-items:center;gap:8px 16px;margin-right:auto}
 .platform-query-mode-toggle{display:inline-flex;box-sizing:border-box;height:40px;gap:0;margin-right:0;padding:4px;border:0;border-radius:4px;background:#f2f3f5;overflow:visible;flex:0 0 auto}
-.platform-ngql-permission-hint{display:inline-flex;min-width:0;align-items:center;gap:8px;color:#86909c;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0;white-space:nowrap}
+.platform-ngql-permission-hint{display:inline-flex;flex-wrap:wrap;min-width:0;align-items:center;gap:4px 8px;color:#86909c;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
+.platform-ngql-permission-hint>span{white-space:nowrap}
 .platform-ngql-permission-hint>svg{width:16px;height:16px;color:#86909c;font-size:16px;flex:0 0 auto}
 .platform-ngql-permission-hint>i{width:1px;height:12px;background:#c9cdd4;flex:0 0 auto}
 .platform-query-mode-toggle__item{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:120px;height:32px!important;min-height:32px!important;padding:5px 16px!important;border:0;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;text-align:center;cursor:pointer}
@@ -4498,7 +4499,7 @@ print(response.json())</pre>
 .platform-query-mode-toggle__item.is-active+.platform-query-mode-toggle__item{border-left-color:transparent}
 .platform-query-mode-toggle__item:hover:not(.is-active){background:#fff;color:#004ecc}
 .platform-ngql-input{display:grid;gap:16px;padding:16px 0}
-.platform-ngql-header-actions{display:flex;align-items:center;gap:16px;flex:0 0 auto}
+.platform-ngql-header-actions{display:flex;align-items:center;gap:16px;flex:0 0 auto;margin-left:auto}
 .platform-ngql-input__textarea{box-sizing:border-box;width:100%;padding:10px 12px;border:1px solid #e5e6eb;border-radius:4px;background:#0d1117;color:#e6edf3;font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical;outline:0}
 .platform-ngql-input__textarea:focus{border-color:#004ecc;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
 /* 执行结果（nGQL / 图算法共用）：版式对齐原「综合图谱展示」区（左蓝条标题 + 白底描边内容盒），
@@ -4540,7 +4541,9 @@ print(response.json())</pre>
 .platform-query .platform-query-algo__labels :deep(.arco-select-view){height:auto!important;min-height:32px;padding:0 12px!important;align-items:center}
 .platform-query .platform-query-algo__labels :deep(.arco-select-view-value){display:flex;width:auto!important;min-width:0;overflow:visible;flex:1 1 auto!important;flex-wrap:wrap;gap:2px 0;line-height:20px;text-overflow:clip;white-space:normal}
 .platform-query .platform-query-algo__labels :deep(.arco-tag){margin:2px 4px 2px 0}
-.platform-query-algo__actions{display:flex;align-items:center;gap:12px}
+/* 提交按钮保留完整文字，窄屏时允许操作区换行。 */
+.platform-query-algo__actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.platform-query-algo__actions>button{flex:0 0 auto;white-space:nowrap}
 
 .platform-query-algo__job{display:grid;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;padding:10px 12px;gap:8px}
 .platform-query-algo__job-running{display:flex;align-items:center;gap:8px;color:#1d2129;font-size:13px;line-height:20px}

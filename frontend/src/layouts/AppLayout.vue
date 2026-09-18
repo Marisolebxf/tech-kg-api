@@ -1,9 +1,6 @@
 <script setup lang="ts">
 import { appBase, authDisabled } from "../config";
-import {
-  IconHistory,
-  IconSwap,
-} from "@arco-design/web-vue/es/icon";
+import { IconHistory } from "@arco-design/web-vue/es/icon";
 import {
   computed,
   nextTick,
@@ -56,7 +53,6 @@ const userDisplayName = computed(() =>
 const userRoleDescription = computed(() =>
   isAdminUser.value ? "系统管理与审核权限" : "知识图谱业务服务",
 );
-const isAdminArea = computed(() => route.path.startsWith("/admin"));
 const pageTitle = computed(() => String(route.meta.title ?? "亿级知识图谱"));
 const routeError = ref("");
 const serviceNavCollapsed = ref(false);
@@ -226,11 +222,6 @@ function toggleUserMenu() {
   userMenuOpen.value = willOpen;
 }
 
-async function switchPortal() {
-  userMenuOpen.value = false;
-  await router.push(isAdminArea.value ? "/overview" : "/admin/corrections");
-}
-
 async function handleAccountAction(
   action: "个人中心" | "账号与安全" | "操作记录" | "退出登录",
 ) {
@@ -372,41 +363,9 @@ onBeforeUnmount(() => {
         </div>
 
         <nav class="app-nav" aria-label="平台功能导航">
-          <template v-if="isAdminArea && isAdminUser">
-            <div v-if="!sidebarCollapsed" class="app-nav__group">
-              <span>工作台</span>
-            </div>
-            <RouterLink
-              class="app-nav__item app-nav__item--top app-nav__item--leaf"
-              active-class="app-nav__item--active"
-              to="/admin/corrections"
-              :title="sidebarCollapsed ? '修正记录' : undefined"
-            >
-              <span
-                class="app-nav__icon"
-                :style="navIconStyle(navReview)"
-                aria-hidden="true"
-              ></span
-              ><span v-if="!sidebarCollapsed">修正记录</span>
-            </RouterLink>
-            <RouterLink
-              class="app-nav__item app-nav__item--top app-nav__item--leaf"
-              active-class="app-nav__item--active"
-              to="/admin/members"
-              :title="sidebarCollapsed ? '成员管理' : undefined"
-            >
-              <span
-                class="app-nav__icon"
-                :style="navIconStyle(navTools)"
-                aria-hidden="true"
-              ></span
-              ><span v-if="!sidebarCollapsed">成员管理</span>
-            </RouterLink>
-          </template>
-          <template v-else>
-            <div v-if="!sidebarCollapsed" class="app-nav__group">
-              <span>工作台</span>
-            </div>
+          <div v-if="!sidebarCollapsed" class="app-nav__group">
+            <span>工作台</span>
+          </div>
             <RouterLink
               class="app-nav__item app-nav__item--top app-nav__item--leaf"
               active-class="app-nav__item--active"
@@ -607,7 +566,6 @@ onBeforeUnmount(() => {
                 >
               </aside>
             </div>
-          </template>
         </nav>
       </aside>
 
@@ -721,15 +679,6 @@ onBeforeUnmount(() => {
                   </div>
                 </header>
                 <nav aria-label="功能导航 2">
-                  <button
-                    v-if="isAdminUser"
-                    class="portal-switch"
-                    type="button"
-                    @click="switchPortal"
-                  >
-                    <IconSwap class="app-user-menu__icon" />
-                    <span>{{ isAdminArea ? "返回用户端" : "进入管理端" }}</span>
-                  </button>
                   <button
                     :class="{ active: route.path === '/user-center' }"
                     type="button"

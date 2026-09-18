@@ -32,8 +32,6 @@ vi.mock('../views/platform/SchemaBrowserView.vue', () => ({ default: {} }))
 vi.mock('../views/platform/GraphBuildView.vue', () => ({ default: {} }))
 vi.mock('../views/platform/EntityListView.vue', () => ({ default: {} }))
 vi.mock('../views/platform/ConfigurationManagementView.vue', () => ({ default: {} }))
-vi.mock('../views/admin/CorrectionCenterView.vue', () => ({ default: {} }))
-vi.mock('../views/admin/MemberManagementView.vue', () => ({ default: {} }))
 
 import { router } from './index'
 
@@ -41,8 +39,7 @@ import { router } from './index'
 const restrictedPaths = [
   '/schema', '/graph-build', '/graph-build/jobs/job-1', '/manual-review',
   '/manual-review/task/instance-1', '/configurations', '/task-detail/extract/task-1',
-  '/processing-instance/instance-1', '/admin/members', '/admin/corrections',
-  '/admin/task-detail/extract/task-1', '/admin/processing-instance/instance-1',
+  '/processing-instance/instance-1',
 ]
 const sharedPaths = [
   '/expert-direct', '/node-indirect',

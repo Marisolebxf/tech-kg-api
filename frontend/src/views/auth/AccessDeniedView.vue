@@ -6,9 +6,9 @@ const router = useRouter()
 
 <template>
   <section class="denied-page">
-    <h1>当前账号没有管理端权限</h1>
-    <p>你仍可进入用户端进行图谱查询、关系分析并提交人工修正申请。</p>
-    <a-button type="primary" @click="router.replace('/overview')">返回用户端</a-button>
+    <h1>当前账号没有管理员权限</h1>
+    <p>该页面仅对平台管理员开放。你仍可使用图谱查询、业务服务等其他功能。</p>
+    <a-button type="primary" @click="router.replace('/overview')">返回平台总览</a-button>
   </section>
 </template>
 

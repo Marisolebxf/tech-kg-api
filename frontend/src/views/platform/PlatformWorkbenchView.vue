@@ -303,6 +303,46 @@ const {
   changePageSize: changeNgqlPageSize,
 } = useClientPagination(ngqlRecords, 20)
 
+/** nGQL 结果列名 → 中文展示名：收录常见英文别名与「未起别名时的函数表达式」列名，
+ *  未收录的原样展示；命中映射时表头只显示中文名，原始列名保留在 title 悬停提示中。 */
+const NGQL_COLUMN_LABELS: Record<string, string> = {
+  rel: '边类型',
+  src: '起点ID',
+  dst: '终点ID',
+  vid: '节点ID',
+  id: 'ID',
+  name: '名称',
+  type: '类型',
+  tag: '标签',
+  tags: '标签',
+  rank: '边权重',
+  count: '数量',
+  vertex: '节点',
+  vertices: '节点',
+  edge: '边',
+  edges: '边',
+  // RETURN 未起别名时，NebulaGraph 以函数表达式原样作列名
+  'type(e)': '边类型',
+  'id(v)': '节点ID',
+  'id(e)': '边ID',
+  'src(e)': '起点ID',
+  'dst(e)': '终点ID',
+  'rank(e)': '边权重',
+  'tags(v)': '标签',
+  'properties(v)': '节点属性',
+  'properties(e)': '边属性',
+}
+
+/** 列名中文展示：先精确匹配，再忽略大小写匹配，均未命中则原样返回。 */
+function ngqlColumnLabel(column: string): string {
+  return NGQL_COLUMN_LABELS[column] ?? NGQL_COLUMN_LABELS[column.toLowerCase()] ?? column
+}
+
+/** 结果表头：{原列名, 中文展示名}（原列名同时用于取单元格值与 key）。 */
+const ngqlColumnsLabeled = computed(() =>
+  (ngqlResult.value?.columns ?? []).map((column) => ({ column, label: ngqlColumnLabel(column) })),
+)
+
 // ---------- 图算法模式 ----------
 const algoSpace = computed(() => currentGraphSpace())
 const selectedAlgorithm = ref(GRAPH_ALGORITHMS[0].id)
@@ -1952,7 +1992,9 @@ const pageMeta = computed(() => {
             <table v-if="ngqlResult && ngqlResult.records.length" aria-label="nGQL 查询结果">
               <thead>
                 <tr>
-                  <th v-for="column in ngqlResult.columns" :key="column">{{ column }}</th>
+                  <th v-for="{ column, label } in ngqlColumnsLabeled" :key="column" :title="`原始列名：${column}`">
+                    {{ label }}
+                  </th>
                 </tr>
               </thead>
               <tbody>

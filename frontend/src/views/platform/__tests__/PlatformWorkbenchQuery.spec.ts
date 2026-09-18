@@ -142,6 +142,25 @@ describe('PlatformWorkbench query graph-space context', () => {
     expect(wrapper.get('table').text()).toContain('fresh-result')
   })
 
+  it('renders common nGQL result columns as Chinese-only headers', async () => {
+    vi.mocked(runNgql).mockResolvedValueOnce({
+      columns: ['rel', 'src', 'custom_col'],
+      records: [{ rel: 'HAS_KEYWORD', src: 'patent-a', custom_col: 'x' }],
+      summary: {},
+      kind: 'read',
+    })
+    await wrapper.get('textarea').setValue('MATCH (v:Patent)-[e:HAS_KEYWORD]->() RETURN type(e) AS rel, id(v) AS src LIMIT 3')
+    await clickButton('执行 nGQL')
+    await flushPromises()
+    const headers = wrapper.get('table[aria-label="nGQL 查询结果"]').findAll('th')
+    // 命中映射：只显示中文名，不再附带英文原列名（原始列名仅保留在 title 悬停提示）
+    expect(headers[0].text()).toBe('边类型')
+    expect(headers[0].attributes('title')).toContain('rel')
+    expect(headers[1].text()).toBe('起点ID')
+    // 未收录的列名原样展示
+    expect(headers[2].text()).toBe('custom_col')
+  })
+
   it('uses the current space for metadata, submission, polling and result retrieval', async () => {
     await switchSpace()
     await enterAlgorithms()

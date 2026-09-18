@@ -32,6 +32,8 @@ const jobs = ref<WorkflowJob[]>([])
 const loading = ref(false)
 /** 暂停确认中：点击暂停 → 后端信号送达且执行真正挂起（workflow paused=true）→ 才变已暂停 */
 const pausingJobIds = ref<Record<string, boolean>>({})
+/** 恢复确认中：点击恢复 → 信号送达且执行离开挂起点（paused=false）→ 才翻运行中 */
+const resumingJobIds = ref<Record<string, boolean>>({})
 const createOpen = ref(false)
 const triggeringJobId = ref('')
 
@@ -177,15 +179,18 @@ async function onTrigger(job: WorkflowJob) {
   }
 }
 
-/** 轮询执行的工作流查询，确认真正到达挂起点（当前步结束、下一步未开始）。 */
-async function confirmPaused(executionId: string): Promise<boolean> {
+/** 轮询执行的工作流查询，确认到达期望的暂停态（paused=true=已挂起 / false=已离开挂起点）。 */
+async function confirmPausedState(executionId: string, expected: boolean): Promise<boolean> {
   for (let i = 0; i < 10; i++) {
     await new Promise((resolve) => setTimeout(resolve, 2000))
     try {
       const execution = (await getExecution(executionId)) as { taskId?: string }
       if (!execution.taskId) continue
       const task = await getTask(execution.taskId)
-      if ((task.pipeline as { paused?: boolean } | undefined)?.paused) return true
+      // 执行已到终态（暂停期间失败/完成）：无需再确认
+      if (task.taskStatus && task.taskStatus !== '执行中') return true
+      const pipeline = task.pipeline as { paused?: boolean } | undefined
+      if (pipeline?.paused != null && pipeline.paused === expected) return true
     } catch {
       // 单次轮询失败忽略（工作流刚结束被淘汰等），下一轮再试
     }
@@ -203,10 +208,21 @@ async function onToggleState(job: WorkflowJob) {
       await loadData()
       return
     }
+    if (active) {
+      // 恢复运行中执行：等 workflow 离开挂起点（paused=false）再翻状态
+      resumingJobIds.value = { ...resumingJobIds.value, [job.id]: true }
+      await loadData()
+      const confirmed = await confirmPausedState(job.lastExecutionId as string, false)
+      delete resumingJobIds.value[job.id]
+      resumingJobIds.value = { ...resumingJobIds.value }
+      showToast(confirmed ? '已恢复：从挂起的断点继续执行' : '已恢复（确认超时，执行状态以详情页为准）', confirmed ? 'success' : 'warning')
+      await loadData()
+      return
+    }
     // 暂停运行中的执行：信号已发，等 workflow 到达挂起点（get_progress.paused）再翻状态
     pausingJobIds.value = { ...pausingJobIds.value, [job.id]: true }
     await loadData()
-    const confirmed = await confirmPaused(job.lastExecutionId as string)
+    const confirmed = await confirmPausedState(job.lastExecutionId as string, true)
     delete pausingJobIds.value[job.id]
     pausingJobIds.value = { ...pausingJobIds.value }
     showToast(
@@ -321,6 +337,7 @@ onMounted(() => {
               </td>
               <td>
                 <span v-if="pausingJobIds[job.id]" class="warn">暂停中…</span>
+                <span v-else-if="resumingJobIds[job.id]" class="ok">恢复中…</span>
                 <span v-else :class="JOB_STATUS_TONE[deriveJobUnifiedStatus(job)]">{{ deriveJobUnifiedStatus(job) }}</span>
               </td>
               <td>
@@ -347,9 +364,10 @@ onMounted(() => {
                     v-else-if="job.status === '暂停' || deriveJobUnifiedStatus(job) === '已暂停'"
                     type="button"
                     class="primary"
+                    :disabled="Boolean(resumingJobIds[job.id])"
                     @click="onToggleState(job)"
                   >
-                    恢复
+                    {{ resumingJobIds[job.id] ? '恢复中…' : '恢复' }}
                   </button>
                   <button type="button" @click="openJobDetail(job)">查看详情</button>
                   <button v-if="deriveJobUnifiedStatus(job) !== '运行中'" type="button" class="danger" @click="onDelete(job)">删除</button>

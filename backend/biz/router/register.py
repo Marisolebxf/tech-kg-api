@@ -25,6 +25,7 @@ from biz.handler.graph_algorithm import router as graph_algorithm_router
 from biz.handler.graph_console import router as graph_console_router
 from biz.handler.graph_search import router as graph_search_router
 from biz.handler.graph_space import router as graph_space_router
+from biz.handler.graph_space import readonly_router as graph_space_readonly_router
 from biz.handler.industry_chain_panorama import router as industry_chain_panorama_router
 from biz.handler.industry_chain_topn_event import router as industry_chain_topn_event_router
 from biz.handler.industry_node_top_events_business import (
@@ -32,6 +33,7 @@ from biz.handler.industry_node_top_events_business import (
 )
 from biz.handler.kg_construction import router as kg_construction_router
 from biz.handler.llm_config import router as llm_config_router
+from biz.handler.manual_review import readonly_router as manual_review_readonly_router
 from biz.handler.manual_review import router as manual_review_router
 from biz.handler.milvus_config import router as milvus_config_router
 from biz.handler.mysql_datasource import router as mysql_datasource_router
@@ -43,6 +45,7 @@ from biz.handler.task_center import router as task_center_router
 from biz.handler.tech_enterprise_relation_business import (
     router as tech_enterprise_relation_business_router,
 )
+from biz.handler.workflow_system import readonly_router as workflow_system_readonly_router
 from biz.handler.workflow_system import router as workflow_system_router
 
 API_V1_PREFIX = "/api/v1"
@@ -76,6 +79,11 @@ def register_routers(app: FastAPI) -> None:
         expert_colleague_service_router,
         tech_enterprise_relation_business_router,
         industry_node_top_events_business_router,
+        # 平台总览页数据对所有登录用户只读开放（页面卡片对普通用户不可点击）：
+        platform_overview_router,
+        workflow_system_readonly_router,
+        manual_review_readonly_router,
+        graph_space_readonly_router,
     )
     for router in protected_routers:
         app.include_router(
@@ -85,7 +93,6 @@ def register_routers(app: FastAPI) -> None:
         )
     admin_dependencies = [Depends(require_authenticated_user), Depends(require_platform_admin)]
     admin_routers = (
-        platform_overview_router,
         task_center_router,
         workflow_system_router,
         schema_management_router,

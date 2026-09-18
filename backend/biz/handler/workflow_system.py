@@ -32,6 +32,9 @@ SCHEDULE_NOT_FOUND = "Schedule 不存在"
 WORKFLOW_DEFINITION_NOT_FOUND = "工作流定义不存在"
 
 router = APIRouter(prefix="/workflow-system", tags=["workflow-system"])
+# 平台总览「图谱构建」卡片对普通用户只读开放：仅任务列表（按 owner 收敛），
+# 其余工作流接口仍走管理端路由组。挂载见 biz/router/register.py 的 protected 组。
+readonly_router = APIRouter(prefix="/workflow-system", tags=["workflow-system-readonly"])
 service = workflow_operations_application.service
 job_service = workflow_job_application.service
 logger = logging.getLogger(__name__)
@@ -296,6 +299,9 @@ async def list_jobs(
 ) -> ApiResponse:
     items = await job_service.list_jobs(actor, name=name, status=status, task_type=task_type)
     return ApiResponse(data={"items": items, "total": len(items)})
+
+
+readonly_router.get("/jobs", response_model=ApiResponse)(list_jobs)
 
 
 # SSE 心跳周期须小于 nginx proxy_read_timeout（默认 60s），防代理掐空闲连接

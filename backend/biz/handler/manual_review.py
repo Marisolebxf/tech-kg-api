@@ -31,6 +31,8 @@ REVIEW_TASK_NOT_FOUND = "人工处理任务不存在"
 
 ReviewIdentityDep = Annotated[ReviewIdentity, Depends(get_review_identity)]
 router = APIRouter(prefix="/manual-reviews", tags=["manual-review"])
+# 平台总览「人工审核」卡片对普通用户只读开放：仅队列查询；处理/认领等仍走管理端路由组。
+readonly_router = APIRouter(prefix="/manual-reviews", tags=["manual-review-readonly"])
 
 
 def _raise_production_error(exc: Exception) -> None:
@@ -84,6 +86,9 @@ async def production_queue(
         return ApiResponse(data=production_service.list_cases(locals(), identity))
     except Exception as exc:
         _raise_production_error(exc)
+
+
+readonly_router.get("/production/queue", response_model=ApiResponse)(production_queue)
 
 
 @router.get("/production/{case_id}", response_model=ApiResponse)

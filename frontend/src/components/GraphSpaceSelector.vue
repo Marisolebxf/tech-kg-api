@@ -35,6 +35,7 @@ watch(
     <span class="app-space-select__label">图空间</span>
     <a-select
       class="app-space-select__input"
+      aria-label="图空间"
       :model-value="graphSpaceStore.current"
       placeholder="图空间"
       :loading="graphSpaceStore.loading"
@@ -69,6 +70,23 @@ watch(
 .app-space-select :deep(.arco-select-view) {
   width: 200px;
 }
+
+@media (max-width: 767px) {
+  .app-space-select {
+    flex: 1 1 80px;
+    min-width: 0;
+  }
+
+  .app-space-select__label {
+    display: none;
+  }
+
+  .app-space-select :deep(.arco-select-view) {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
 </style>
 
 <style>

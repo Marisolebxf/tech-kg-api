@@ -1106,7 +1106,7 @@ body {
 
   .app-workspace .business-service .business-service__main {
     flex: none;
-    grid-template-columns: minmax(0, 633fr) minmax(0, 511fr) !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)) !important;
     height: auto !important;
     min-height: 0 !important;
     overflow: visible !important;
@@ -1245,12 +1245,17 @@ body {
 }
 
 .app-workspace .business-service .result-panel__tabs {
-  height: 40px;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+  height: auto;
   padding: 4px;
   border-radius: 4px;
 }
 
 .app-workspace .business-service .result-panel__tabs button {
+  flex: 0 0 auto;
+  white-space: nowrap;
   height: 32px;
   padding-inline: 16px;
   border-radius: 4px;
@@ -1791,7 +1796,7 @@ body {
 
   .app-workspace .business-service .business-service__main {
     flex: none !important;
-    grid-template-columns: minmax(0, 633fr) minmax(0, 511fr) !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)) !important;
     height: auto !important;
     min-height: 0 !important;
     overflow: visible !important;

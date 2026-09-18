@@ -6275,13 +6275,16 @@ function clearGraphSelection() {
   background: #fff !important;
 }
 
+/* 标题和刷新控件按可用宽度换行，行高由内容撑开。 */
 .graph-panel > .kg-panel__header {
-  flex: 0 0 22px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
-/* 全景图 header 有「刷新图谱」按钮，按内容自适应高度，避免按钮顶部被 overflow:hidden 裁切 */
-.graph-panel--panorama > .kg-panel__header {
+.graph-panel .kg-panel__title {
   flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .graph-panel .kg-panel__title,
@@ -6305,10 +6308,17 @@ function clearGraphSelection() {
 }
 
 .graph-panel__time {
+  flex-wrap: wrap;
+  max-width: 100%;
   gap: 8px;
   color: #59636f;
   font-size: 12px;
   line-height: 20px;
+}
+
+.graph-panel__time > :is(button, label, span, strong) {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .graph-panel__time strong {
@@ -6534,7 +6544,8 @@ function clearGraphSelection() {
 
 /* 结果详情切换：选中标签填满整个模块，不显示内嵌白框。 */
 .result-panel__tabs {
-  height: 40px !important;
+  height: auto !important;
+  min-height: 40px;
   padding: 4px !important;
   border-radius: 4px !important;
 }

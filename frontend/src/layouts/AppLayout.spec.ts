@@ -18,7 +18,7 @@ vi.mock('../api/auth', () => ({
 vi.mock('../api/graphSearch', () => ({
   listGraphSpaces: vi.fn(async () => ({ data: { spaces: ['dev2'] } })),
 }))
-vi.mock('@arco-design/web-vue/es/icon', () => ({ IconHistory: { template: '<i />' }, IconSwap: { template: '<i />' } }))
+vi.mock('@arco-design/web-vue/es/icon', () => ({ IconHistory: { template: '<i />' } }))
 
 // 普通用户可见工作台（平台总览）、图谱查询与业务服务组；图谱建设与治理/平台管理仅管理员。
 const sharedPaths = [
@@ -76,19 +76,15 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     expect(navigation.find('a[href="/overview"]').exists()).toBe(true)
     for (const path of [...queryPaths, ...sharedPaths]) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
     for (const path of managementPaths) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(false)
-    await wrapper.get('.app-top-actions__user').trigger('click')
-    expect(wrapper.find('.portal-switch').exists()).toBe(false)
   })
 
-  it('管理员继续看到全部原有分组及管理端入口', async () => {
+  it('管理员继续看到全部原有分组', async () => {
     const { wrapper } = await renderLayout(true, '/graph-query')
     const navigation = wrapper.get('.app-nav')
     for (const name of ['工作台', '图谱建设与治理', '平台管理', '知识图谱构建服务', '科技专家/人才知识推理构建服务']) {
       expect(navigation.text()).toContain(name)
     }
     for (const path of ['/overview', ...queryPaths, ...managementPaths, ...sharedPaths]) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
-    await wrapper.get('.app-top-actions__user').trigger('click')
-    expect(wrapper.get('.portal-switch').text()).toBe('进入管理端')
   })
 
   it('侧边栏收起后普通用户不能通过图标或飞出菜单进入管理页', async () => {
@@ -104,14 +100,6 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     await nextTick()
     expect(wrapper.find('.app-nav a[href="/schema"]').exists()).toBe(false)
     expect(wrapper.find('.app-nav a[href="/graph-build"]').exists()).toBe(false)
-  })
-
-  it('管理端侧栏仅对管理员保留原有成员管理等入口', async () => {
-    const { wrapper, auth } = await renderLayout(true, '/admin/members')
-    expect(wrapper.find('.app-nav a[href="/admin/members"]').exists()).toBe(true)
-    auth.profile!.isAdmin = false
-    await nextTick()
-    expect(wrapper.find('.app-nav a[href="/admin/members"]').exists()).toBe(false)
   })
 
   it('显式免登录开发模式保留原有管理菜单', async () => {

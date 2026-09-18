@@ -50,7 +50,9 @@ import { useToast } from '../../composables/use-toast'
 import {
   buildRequiredPropertyRows,
   emptyPropertyRow,
+  FIXED_STRING_MAX,
   FIXED_STRING_MAX_INPUT_CHARS,
+  FIXED_STRING_MIN,
   PROPERTY_TYPES,
   sanitizeLengthInput,
   validateFixedLength,
@@ -672,21 +674,16 @@ const propListLimitNote = computed(() => {
   const fields: string[] = []
   createForm.value.properties.forEach((row, index) => {
     if (!row.locked && row.name.length >= PROP_NAME_RULE.max) fields.push(`第 ${index + 1} 行属性名已达 ${PROP_NAME_RULE.max} 字上限`)
-    if (row.dataType === 'fixed_string' && row.length.length >= FIXED_STRING_MAX_INPUT_CHARS) {
-      fields.push(`第 ${index + 1} 行长度输入已达 ${FIXED_STRING_MAX_INPUT_CHARS} 字符上限`)
-    }
   })
   return fields.length ? `${fields.join('；')}，无法继续输入` : ''
 })
 
 /** 属性管理弹窗「新增属性」表单：同上汇总提示。 */
 const propertyAddLimitNote = computed(() => {
-  const fields: string[] = []
-  if (propertyForm.value.name.length >= PROP_NAME_RULE.max) fields.push(`属性名已达 ${PROP_NAME_RULE.max} 字上限`)
-  if (propertyForm.value.dataType === 'fixed_string' && propertyForm.value.length.length >= FIXED_STRING_MAX_INPUT_CHARS) {
-    fields.push(`长度输入已达 ${FIXED_STRING_MAX_INPUT_CHARS} 字符上限`)
+  if (propertyForm.value.name.length >= PROP_NAME_RULE.max) {
+    return `属性名已达 ${PROP_NAME_RULE.max} 字上限，无法继续输入`
   }
-  return fields.length ? `${fields.join('；')}，无法继续输入` : ''
+  return ''
 })
 
 /** 首个 fixed_string 长度校验错误文案（用于 toast）；全部合法返回 null */
@@ -1217,9 +1214,8 @@ function togglePropertyDetail(schemaId: string): void {
                 </div>
               </template>
               <div class="create-prop-list">
+                <template v-for="(p, i) in createForm.properties" :key="i">
                 <div
-                v-for="(p, i) in createForm.properties"
-                :key="i"
                 class="create-prop-row"
                 :class="{ 'create-prop-row--has-length': p.dataType === 'fixed_string', 'create-prop-row--locked': p.locked }"
               >
@@ -1237,11 +1233,13 @@ function togglePropertyDetail(schemaId: string): void {
                   <a-select v-model="p.dataType" class="schema-select prop-type" popup-container=".schema-create-modal" :scrollbar="false">
                     <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                   </a-select>
-                  <input aria-label="1~1024" v-if="p.dataType === 'fixed_string'" :value="p.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="prop-len" :class="{ 'prop-len--invalid': fixedLengthInvalid(p), 'is-at-limit': atLimit(p.length, FIXED_STRING_MAX_INPUT_CHARS) }" :title="validateFixedLength(p.length) || undefined" placeholder="1~1024" @input="onLengthInput(p, $event)" />
+                  <input aria-label="1~1024" v-if="p.dataType === 'fixed_string'" :value="p.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="prop-len" :class="{ 'prop-len--invalid': fixedLengthInvalid(p) }" :title="validateFixedLength(p.length) || undefined" placeholder="1~1024" @input="onLengthInput(p, $event)" />
                   <a-checkbox v-model="p.required" class="prop-required">必填</a-checkbox>
                   <button type="button" class="prop-remove" @click="removeProperty(i)" title="删除">×</button>
                 </template>
                 </div>
+                <p v-if="p.dataType === 'fixed_string'" class="prop-length-live" :class="{ 'prop-length-live--invalid': fixedLengthInvalid(p) }">长度：当前 {{ p.length || '—' }}，可定义 {{ FIXED_STRING_MIN }}~{{ FIXED_STRING_MAX }}</p>
+                </template>
               </div>
               <p v-if="propListLimitNote" class="limit-field-note">{{ propListLimitNote }}</p>
             </a-form-item>
@@ -1336,10 +1334,11 @@ function togglePropertyDetail(schemaId: string): void {
                 <a-select v-model="propertyForm.dataType" class="property-add-form__type" popup-container=".property-modal" :scrollbar="false">
                   <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                 </a-select>
-                <input aria-label="1~1024" v-if="propertyForm.dataType === 'fixed_string'" :value="propertyForm.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="property-add-form__len" :class="{ 'property-add-form__len--invalid': propertyLengthInvalid, 'is-at-limit': atLimit(propertyForm.length, FIXED_STRING_MAX_INPUT_CHARS) }" :title="propertyLengthError || undefined" placeholder="1~1024" @input="onPropertyLengthInput" />
+                <input aria-label="1~1024" v-if="propertyForm.dataType === 'fixed_string'" :value="propertyForm.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="property-add-form__len" :class="{ 'property-add-form__len--invalid': propertyLengthInvalid }" :title="propertyLengthError || undefined" placeholder="1~1024" @input="onPropertyLengthInput" />
                 <label class="property-add-form__required"><input aria-label="required" v-model="propertyForm.required" type="checkbox" />必填</label>
                 <button type="button" class="primary" :disabled="propertySaving" @click="submitAddProperty">{{ propertySaving ? '新增中...' : '＋ 新增属性' }}</button>
               </div>
+              <p v-if="propertyForm.dataType === 'fixed_string'" class="prop-length-live" :class="{ 'prop-length-live--invalid': propertyLengthInvalid }">长度：当前 {{ propertyForm.length || '—' }}，可定义 {{ FIXED_STRING_MIN }}~{{ FIXED_STRING_MAX }}</p>
               <p v-if="propertyAddLimitNote" class="limit-field-note">{{ propertyAddLimitNote }}</p>
             </div>
           </div>
@@ -1561,6 +1560,10 @@ function togglePropertyDetail(schemaId: string): void {
 .limit-field{position:relative;display:flex;flex:1 1 180px;min-width:0;max-width:280px}
 .limit-field .schema-search-input.arco-input-wrapper{flex:1 1 auto;max-width:none;width:auto}
 .limit-field__hint{position:absolute;top:calc(100% + 4px);right:0;z-index:30;white-space:nowrap;padding:2px 8px;border-radius:4px;background:#fee4e2;color:#b42318;font-size:12px;line-height:20px;box-shadow:0 2px 8px rgba(50,64,93,.12)}
+/* fixed_string 长度实时提示：随输入显示当前定义值（1~1024 取自常量，不写死）；超范围转红 */
+.prop-length-live{margin:0;color:#86909c;font-size:12px;line-height:20px}
+.prop-length-live--invalid{color:#b42318}
+.create-prop-list .prop-length-live{grid-column:1/-1;margin-top:-8px}
 /* 表单项内容改纵向排布：输入框与达上限提示行上下排（默认 flex 会把提示挤到输入框右侧） */
 .create-field--limit-note :deep(.arco-form-item-content){display:block}
 .create-props :deep(.arco-form-item-content){display:block}

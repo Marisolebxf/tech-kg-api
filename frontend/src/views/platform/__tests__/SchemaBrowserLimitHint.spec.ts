@@ -42,6 +42,16 @@ const ATextareaStub = defineComponent({
   template: `<textarea :value="modelValue" @input="$emit('update:modelValue', $event.target.value)"></textarea>`,
 })
 const SlotStub = defineComponent({ template: '<div><slot /></div>' })
+// Select 需可交互：fixed_string 长度提示的用例要切属性类型
+const ASelectStub = defineComponent({
+  props: ['modelValue'],
+  emits: ['update:modelValue'],
+  template: `<select :value="modelValue" @change="$emit('update:modelValue', $event.target.value)"><slot /></select>`,
+})
+const AOptionStub = defineComponent({
+  props: ['value'],
+  template: '<option :value="value"><slot /></option>',
+})
 // FormItem 需渲染 label 插槽：属性列表头部的「＋ 添加属性」按钮在 label 插槽里
 const AFormItemStub = defineComponent({ template: '<div><slot name="label" /><slot /></div>' })
 const ACheckboxStub = defineComponent({
@@ -75,7 +85,7 @@ function mountView() {
     global: {
       components: {
         AInput: AInputStub, ATextarea: ATextareaStub, AForm: SlotStub, AFormItem: AFormItemStub,
-        ASelect: SlotStub, AOption: SlotStub, ACheckbox: ACheckboxStub, ATooltip: SlotStub,
+        ASelect: ASelectStub, AOption: AOptionStub, ACheckbox: ACheckboxStub, ATooltip: SlotStub,
       },
       stubs: { KgGraphCanvas: true, teleport: true },
     },
@@ -156,5 +166,47 @@ describe('Schema 管理输入框达上限提示', () => {
     // setValue 触发重渲染会替换输入框节点，重新查询拿最新 class（旧 wrapper 是游离节点）
     expect(view.get('input.property-add-form__name').classes()).toContain('is-at-limit')
     expect(view.get('.property-section .limit-field-note').text()).toContain('属性名已达 128 字上限')
+  })
+
+  it('新建弹窗属性行 fixed_string 长度实时提示随输入变化', async () => {
+    const view = mountView()
+    await flushPromises()
+    await view.get('.schema-tabs .primary').trigger('click')
+    await view.get('.create-props__add').trigger('click')
+
+    // 新增行（唯一可编辑行）类型切到 fixed_string，出现长度输入框与实时提示（默认 64）
+    await view.get('.create-prop-list select').setValue('fixed_string')
+    expect(view.get('.create-prop-list .prop-length-live').text()).toContain('当前 64，可定义 1~1024')
+
+    await view.get('input.prop-len').setValue('300')
+    expect(view.get('.create-prop-list .prop-length-live').text()).toContain('当前 300，可定义 1~1024')
+
+    // 超出 1024：提示转红（输入框红边走既有范围校验）
+    await view.get('input.prop-len').setValue('5000')
+    const invalidLive = view.get('.create-prop-list .prop-length-live')
+    expect(invalidLive.text()).toContain('当前 5000')
+    expect(invalidLive.classes()).toContain('prop-length-live--invalid')
+
+    // 清空后显示占位符
+    await view.get('input.prop-len').setValue('')
+    expect(view.get('.create-prop-list .prop-length-live').text()).toContain('当前 —')
+  })
+
+  it('属性管理弹窗 fixed_string 长度实时提示随输入变化', async () => {
+    vi.mocked(listSchemasPaged).mockResolvedValue({ items: [schemaFixture()], total: 1, page: 1, pageSize: 10 })
+    const view = mountView()
+    await flushPromises()
+
+    const manageButton = view.findAll('button.schema-action-link').find((button) => button.text() === '属性管理')
+    expect(manageButton).toBeTruthy()
+    await manageButton!.trigger('click')
+
+    await view.get('.property-add-form select').setValue('fixed_string')
+    expect(view.get('.property-section .prop-length-live').text()).toContain('当前 64，可定义 1~1024')
+
+    await view.get('input.property-add-form__len').setValue('1024')
+    const live = view.get('.property-section .prop-length-live')
+    expect(live.text()).toContain('当前 1024，可定义 1~1024')
+    expect(live.classes()).not.toContain('prop-length-live--invalid')
   })
 })

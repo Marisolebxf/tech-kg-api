@@ -454,12 +454,13 @@ class TestSchemaExtractMultiStep:
         # 只有 emit 步出了 edges → write_records 只拿到那一步的记录
         assert len(state["writes"]) == 1
         assert [e["fromId"] for e in state["writes"][0]] == ["w_1"]
-        # 分步统计：聚合计数 + COMPLETED 状态
-        assert result["steps"] == {
-            "clean": {"records": 0, "written": 0, "failed": 1, "status": "COMPLETED"},
-            "resolve": {"records": 0, "written": 0, "failed": 0, "status": "COMPLETED"},
-            "emit": {"records": 1, "written": 1, "failed": 0, "status": "COMPLETED"},
-        }
+        # 分步统计：聚合计数 + COMPLETED 状态 + 步序/起止时间（详情页排序与耗时列）
+        for sid, pos, failed in (("clean", 1, 1), ("resolve", 2, 0), ("emit", 3, 0)):
+            stat = result["steps"][sid]
+            assert stat["position"] == pos
+            assert stat["failed"] == failed
+            assert stat["status"] == "COMPLETED"
+            assert stat["startedAt"] and stat["finishedAt"]
         assert result["sources"][0]["steps"] == {
             "clean": {"records": 0, "written": 0, "failed": 1},
             "resolve": {"records": 0, "written": 0, "failed": 0},
@@ -649,6 +650,7 @@ class TestSchemaExtractChain:
             "clean": {
                 "status": "COMPLETED",
                 "name": "clean",
+                "position": 1,
                 "records": 2,
                 "written": 2,
                 "failed": 0,
@@ -1124,12 +1126,12 @@ class TestSchemaExtractS3Relay:
         assert len(state["objects"]["out-step_resolve-0-0"]["resolved"]) == 2
         # 关系链只写 emit 步的边；分步统计聚合
         assert state["writes"] == [2]
-        assert result["steps"]["emit"] == {
-            "records": 2,
-            "written": 2,
-            "failed": 0,
-            "status": "COMPLETED",
-        }
+        emit_stat = result["steps"]["emit"]
+        assert emit_stat["records"] == 2
+        assert emit_stat["written"] == 2
+        assert emit_stat["failed"] == 0
+        assert emit_stat["status"] == "COMPLETED"
+        assert emit_stat["position"] == 3
         # clean 步毒行失败以 failuresKey 引用聚合，终态建 case 交 refs 展开
         assert result["failures"]["count"] == 1
         recorded = state["record_failure_requests"][0]

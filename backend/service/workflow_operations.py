@@ -365,6 +365,10 @@ class WorkflowOperationsService:
             # output 是 dict 时一律写到 task 上便于详情页查看
             # (kg.custom.python 的 {status, result, ...} 也走这里)
             task["output"] = output
+        payload = execution.get("payload")
+        if isinstance(payload, dict) and payload:
+            # Temporal 下发的触发 payload 回填「任务输入」（详情页输入输出 tab）
+            task["input"] = payload
         if already_in_sync and task.get("status") == new_status:
             # 状态已一致，避免重复 log 累积；缺的抽取数据行仍要补
             if data_lines:

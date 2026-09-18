@@ -2151,6 +2151,21 @@ class SchemaExtractWorkflow:
                 "failed": int(fail.get("count", 0)),
                 "startedAt": step_started.isoformat(sep=" ", timespec="seconds"),
                 "finishedAt": workflow.now().astimezone().isoformat(sep=" ", timespec="seconds"),
+                # 输入 = 该环的触发上下文与来源绑定（详情页「阶段真实输入输出」卡片）
+                "input": {
+                    "schemaId": schema_id,
+                    "graphSpace": request.get("graph_space"),
+                    "batchSize": request.get("batchSize"),
+                    "triggerSource": request.get("triggerSource", "MANUAL"),
+                    "sources": [
+                        {
+                            "source": s.get("source"),
+                            "table": s.get("table"),
+                            "batches": s.get("batches"),
+                        }
+                        for s in sources
+                    ],
+                },
                 "output": result,
                 "activities": activities,
             }
@@ -2734,15 +2749,34 @@ class SchemaExtractWorkflow:
 
         # 多步脚本（及 chain 模式）的全局分步聚合计数（跨来源求和）。status 供任务
         # 详情 pipeline_steps 把每步渲染成「成功」；单步单跑不加该键，形状与历史一致。
-        aggregated_steps: dict[str, dict[str, int]] = {}
+        aggregated_steps: dict[str, dict[str, Any]] = {}
         if track_steps:
             for r in results:
                 for sid, stat in (r.get("steps") or {}).items():
                     agg = aggregated_steps.setdefault(
-                        sid, {"records": 0, "written": 0, "failed": 0}
+                        sid,
+                        {
+                            # 步序与起止时间随聚合保留（Temporal 编码按 key
+                            # 排序，详情页步序/耗时列依赖这些字段）
+                            "position": int(stat.get("position") or 0),
+                            "startedAt": stat.get("startedAt"),
+                            "finishedAt": stat.get("finishedAt"),
+                            "records": 0,
+                            "written": 0,
+                            "failed": 0,
+                        },
                     )
-                    for key in agg:
+                    for key in ("records", "written", "failed"):
                         agg[key] += int(stat.get(key, 0))
+                    # 多来源并行：取最早开始 / 最晚结束
+                    if stat.get("startedAt") and (
+                        not agg["startedAt"] or stat["startedAt"] < agg["startedAt"]
+                    ):
+                        agg["startedAt"] = stat["startedAt"]
+                    if stat.get("finishedAt") and (
+                        not agg["finishedAt"] or stat["finishedAt"] > agg["finishedAt"]
+                    ):
+                        agg["finishedAt"] = stat["finishedAt"]
 
         return {
             "status": "completed",

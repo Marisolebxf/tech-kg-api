@@ -2042,7 +2042,7 @@ class SchemaExtractWorkflow:
         """暂停挂起点：在每个转换步/环开始前调用（步内不打断，activity 无法中断）。"""
         if self._paused:
             workflow.logger.info("任务已暂停，挂起在下一步开始前")
-        await workflow.condition(lambda: not self._paused)
+        await workflow.wait_condition(lambda: not self._paused)
 
     async def _report_script_run(self, schema_id: str, *, ok: bool, error: str | None) -> None:
         """收尾回写脚本健康信号（best-effort，失败不影响主流程状态）。"""

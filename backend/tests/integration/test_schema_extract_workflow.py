@@ -285,9 +285,12 @@ class TestSchemaExtractOrchestration:
         assert state.get("record_failures") in (None, [])
 
 
-def _make_step_activities(state: dict[str, Any], *, fail_on=None):
+def _make_step_activities(state: dict[str, Any], *, fail_on=None, block_on=None, gate=None):
     """多步链假 activity：step_clean 只出中转数据，step_resolve 出 pending+failures，
-    step_emit 出边；记录每次 execute_transform 的请求形状供链路断言。"""
+    step_emit 出边；记录每次 execute_transform 的请求形状供链路断言。
+
+    block_on + gate：指定步的 transform 阻塞在 gate 事件上（暂停语义测试用）。
+    """
 
     @activity.defn(name="load_schema_extract_plan")
     async def load_plan(schema_id: str) -> dict[str, Any]:
@@ -326,6 +329,12 @@ def _make_step_activities(state: dict[str, Any], *, fail_on=None):
             }
         )
         fn = request["functionName"]
+        if block_on and gate and fn == block_on:
+            state.setdefault("gate_reached", []).append(fn)
+        if block_on and gate and fn == block_on:
+            gate_sync = gate
+            while not gate_sync.is_set():
+                await asyncio.sleep(0.05)
         if fail_on == fn:
             raise RuntimeError(f"step {fn} 崩溃")
         if fn == "step_clean":
@@ -659,15 +668,18 @@ class TestSchemaExtractChain:
     async def test_pause_signal_suspends_between_steps_and_resume_continues(self):
         """暂停信号：当前步正常结束后挂起（不再执行下一步），恢复后从断点继续。
 
-        Temporal 无原生 pause：workflow 用 signal + condition 在步边界挂起。
+        Temporal 无原生 pause：workflow 用 signal + wait_condition 在步边界挂起。
+        门控第二步：clean 完成 → resolve 阻塞在事件上 → 发暂停 → 放行 resolve →
+        resolve 结束后 workflow 应挂在 emit 之前，直到恢复信号。
         """
         state: dict[str, Any] = {}
+        gate = asyncio.Event()
         async with await WorkflowEnvironment.start_time_skipping() as env:
             async with Worker(
                 env.client,
                 task_queue="t-pause",
                 workflows=[SchemaExtractWorkflow],
-                activities=_make_step_activities(state),
+                activities=_make_step_activities(state, block_on="step_resolve", gate=gate),
             ):
                 handle = await env.client.start_workflow(
                     SchemaExtractWorkflow.run,
@@ -675,28 +687,28 @@ class TestSchemaExtractChain:
                     id="wf-pause-1",
                     task_queue="t-pause",
                 )
-                # 等第一个转换步发生
+                # 等 resolve 步进入阻塞（clean 已完成）
                 for _ in range(50):
-                    if state.get("transform_calls"):
+                    if state.get("gate_reached"):
                         break
                     await asyncio.sleep(0.1)
-                assert state["transform_calls"], "首个转换步未开始"
+                assert state.get("gate_reached"), "第二步未进入"
 
                 await handle.signal("pause_extraction")
-                await asyncio.sleep(1.0)  # 已在跑的活动正常结束，随后挂起
+                gate.set()  # 放行 resolve：它正常结束后 workflow 应挂在 emit 之前
+                await asyncio.sleep(1.5)
                 described = await handle.describe()
                 assert described.status.name == "RUNNING", "挂起期间 workflow 不应结束"
-
                 calls_when_paused = len(state["transform_calls"])
+                assert calls_when_paused == 2, f"挂起点应在 resolve 之后 emit 之前（实际 {calls_when_paused}）"
+
                 await asyncio.sleep(1.0)
-                assert len(state["transform_calls"]) == calls_when_paused, (
-                    "挂起期间不应有新的转换步执行"
-                )
+                assert len(state["transform_calls"]) == calls_when_paused, "挂起期间不应有新的转换步执行"
 
                 await handle.signal("resume_extraction")
                 result = await asyncio.wait_for(handle.result(), timeout=30)
                 assert result["status"] == "completed"
-                assert len(state["transform_calls"]) > calls_when_paused, "恢复后应从断点继续"
+                assert len(state["transform_calls"]) == 3, "恢复后 emit 步应继续执行"
 
     async def test_chain_aborts_on_first_schema_failure(self):
         """第一环批次崩溃 → workflow FAILED、后续环不再执行、水位全部不推进。"""

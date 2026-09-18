@@ -152,23 +152,30 @@ class WorkflowOperationsService:
         return task
 
     async def query_step_state(self, task: dict[str, Any]) -> dict[str, Any] | None:
-        """chain 任务（kg.schema.extract.chain）：查 Temporal 实时 get_steps 填 pipeline。
+        """抽取任务查 Temporal 实时状态填 pipeline（chain 用 get_steps，单 Schema 用 get_progress）。
 
         已结束且被历史淘汰的 workflow 查询会抛错——吞掉返回 None，调用方回退
         落库 output.steps（stage_normalizer.pipeline_steps 渲染嵌套抽屉）。
+        单 Schema 抽取只取 paused（前端「暂停中 → 已暂停」确认用）。
         """
-        if task.get("workflowType") != "kg.schema.extract.chain":
+        workflow_type = task.get("workflowType")
+        if workflow_type not in {"kg.schema.extract.chain", "kg.schema.extract"}:
             return None
         workflow_id = task.get("workflowId")
         if not workflow_id:
             return None
+        query = "get_steps" if workflow_type == "kg.schema.extract.chain" else "get_progress"
         try:
             client = await temporal_runtime.client()
             handle = client.get_workflow_handle(workflow_id)
-            state = await handle.query("get_steps")
+            state = await handle.query(query)
         except Exception:  # noqa: BLE001
             return None
-        return state if isinstance(state, dict) else None
+        if not isinstance(state, dict):
+            return None
+        if workflow_type == "kg.schema.extract":
+            return {"paused": state.get("paused") is True}
+        return state
 
     @staticmethod
     def create_task_for_execution(

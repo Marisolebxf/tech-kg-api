@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -654,6 +655,48 @@ class TestSchemaExtractChain:
         assert result["failures"] == {"count": 1, "recorded": 1, "truncated": False}
         assert state["writes"] == ["Alpha", "Beta"]
         assert state["record_failures"][0]["recordId"] == "bad"
+
+    async def test_pause_signal_suspends_between_steps_and_resume_continues(self):
+        """暂停信号：当前步正常结束后挂起（不再执行下一步），恢复后从断点继续。
+
+        Temporal 无原生 pause：workflow 用 signal + condition 在步边界挂起。
+        """
+        state: dict[str, Any] = {}
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-pause",
+                workflows=[SchemaExtractWorkflow],
+                activities=_make_step_activities(state),
+            ):
+                handle = await env.client.start_workflow(
+                    SchemaExtractWorkflow.run,
+                    {"schemaId": "schema-e2e", "graphSpace": "dev2", "batchSize": 5},
+                    id="wf-pause-1",
+                    task_queue="t-pause",
+                )
+                # 等第一个转换步发生
+                for _ in range(50):
+                    if state.get("transform_calls"):
+                        break
+                    await asyncio.sleep(0.1)
+                assert state["transform_calls"], "首个转换步未开始"
+
+                await handle.signal("pause_extraction")
+                await asyncio.sleep(1.0)  # 已在跑的活动正常结束，随后挂起
+                described = await handle.describe()
+                assert described.status.name == "RUNNING", "挂起期间 workflow 不应结束"
+
+                calls_when_paused = len(state["transform_calls"])
+                await asyncio.sleep(1.0)
+                assert len(state["transform_calls"]) == calls_when_paused, (
+                    "挂起期间不应有新的转换步执行"
+                )
+
+                await handle.signal("resume_extraction")
+                result = await asyncio.wait_for(handle.result(), timeout=30)
+                assert result["status"] == "completed"
+                assert len(state["transform_calls"]) > calls_when_paused, "恢复后应从断点继续"
 
     async def test_chain_aborts_on_first_schema_failure(self):
         """第一环批次崩溃 → workflow FAILED、后续环不再执行、水位全部不推进。"""

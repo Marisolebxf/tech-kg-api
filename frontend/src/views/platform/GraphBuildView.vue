@@ -6,6 +6,8 @@ import {
   countJobUnifiedStatuses,
   deleteJob,
   deriveJobUnifiedStatus,
+  getExecution,
+  getTask,
   JOB_STATUS_TONE,
   listJobs,
   triggerJob,
@@ -28,6 +30,8 @@ const graphSpaceStore = useGraphSpaceStore()
 
 const jobs = ref<WorkflowJob[]>([])
 const loading = ref(false)
+/** 暂停确认中：点击暂停 → 后端信号送达且执行真正挂起（workflow paused=true）→ 才变已暂停 */
+const pausingJobIds = ref<Record<string, boolean>>({})
 const createOpen = ref(false)
 const triggeringJobId = ref('')
 
@@ -173,22 +177,45 @@ async function onTrigger(job: WorkflowJob) {
   }
 }
 
+/** 轮询执行的工作流查询，确认真正到达挂起点（当前步结束、下一步未开始）。 */
+async function confirmPaused(executionId: string): Promise<boolean> {
+  for (let i = 0; i < 10; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+    try {
+      const execution = (await getExecution(executionId)) as { taskId?: string }
+      if (!execution.taskId) continue
+      const task = await getTask(execution.taskId)
+      if ((task.pipeline as { paused?: boolean } | undefined)?.paused) return true
+    } catch {
+      // 单次轮询失败忽略（工作流刚结束被淘汰等），下一轮再试
+    }
+  }
+  return false
+}
+
 async function onToggleState(job: WorkflowJob) {
   // 方向按 job.status：暂停→恢复；其余（含运行中）→暂停。
-  // 暂停只停后续调度，正在跑的执行会继续到结束——toast 必须说清，否则用户以为暂停无效。
   const active = job.status === '暂停'
   try {
     await updateJobState(job.id, active)
+    if (active || job.lastExecutionStatus !== 'RUNNING') {
+      showToast(active ? '已恢复' : '已暂停', 'success')
+      await loadData()
+      return
+    }
+    // 暂停运行中的执行：信号已发，等 workflow 到达挂起点（get_progress.paused）再翻状态
+    pausingJobIds.value = { ...pausingJobIds.value, [job.id]: true }
+    await loadData()
+    const confirmed = await confirmPaused(job.lastExecutionId as string)
+    delete pausingJobIds.value[job.id]
+    pausingJobIds.value = { ...pausingJobIds.value }
     showToast(
-      active
-        ? '已恢复'
-        : job.lastExecutionStatus === 'RUNNING'
-          ? '已暂停调度：正在运行的执行会继续到结束'
-          : '已暂停',
-      'success',
+      confirmed ? '已暂停：当前步结束后挂起，恢复后从断点继续' : '已暂停调度（挂起确认超时，执行状态以详情页为准）',
+      confirmed ? 'success' : 'warning',
     )
     await loadData()
   } catch (error) {
+    delete pausingJobIds.value[job.id]
     showToast(schemaErrorMessage(error), 'warning')
   }
 }
@@ -292,7 +319,10 @@ onMounted(() => {
                 >{{ describeCron(job.schedule.cron ?? '') }}</span>
                 <span v-else>单次</span>
               </td>
-              <td><span :class="JOB_STATUS_TONE[deriveJobUnifiedStatus(job)]">{{ deriveJobUnifiedStatus(job) }}</span></td>
+              <td>
+                <span v-if="pausingJobIds[job.id]" class="warn">暂停中…</span>
+                <span v-else :class="JOB_STATUS_TONE[deriveJobUnifiedStatus(job)]">{{ deriveJobUnifiedStatus(job) }}</span>
+              </td>
               <td>
                 <code v-if="job.lastExecutionId">{{ job.lastExecutionId }}</code>
                 <span v-else class="muted">—</span>
@@ -305,7 +335,14 @@ onMounted(() => {
               <td class="gb-job-actions">
                 <div class="gb-job-actions__inner">
                   <button v-if="['未运行', '运行失败'].includes(deriveJobUnifiedStatus(job))" type="button" class="primary" :disabled="triggeringJobId === job.id" @click="onTrigger(job)">{{ deriveJobUnifiedStatus(job) === '运行失败' ? '重新执行' : '执行' }}</button>
-                  <button v-if="job.status !== '暂停' && deriveJobUnifiedStatus(job) !== '已暂停'" type="button" @click="onToggleState(job)">暂停</button>
+                  <button
+                    v-if="job.status !== '暂停' && deriveJobUnifiedStatus(job) !== '已暂停'"
+                    type="button"
+                    :disabled="Boolean(pausingJobIds[job.id])"
+                    @click="onToggleState(job)"
+                  >
+                    {{ pausingJobIds[job.id] ? '暂停中…' : '暂停' }}
+                  </button>
                   <button v-else type="button" class="primary" @click="onToggleState(job)">恢复</button>
                   <button type="button" @click="openJobDetail(job)">查看详情</button>
                   <button v-if="deriveJobUnifiedStatus(job) !== '运行中'" type="button" class="danger" @click="onDelete(job)">删除</button>

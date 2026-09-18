@@ -2024,6 +2024,25 @@ class SchemaExtractWorkflow:
         # 外层阶段状态；get_steps 查询实时返回（旧 kg.custom.chain 同契约）
         self._chain_steps: dict[str, dict[str, Any]] = {}
         self._current_schema: str | None = None
+        # 步间暂停（pause_extraction/resume_extraction 信号）：当前步/环正常
+        # 结束后，下一步开始前挂起在 workflow.condition 上——Temporal 无原生
+        # pause，这是官方推荐的 signal + condition 模式；重放安全（信号在
+        # 事件历史里有序记录）
+        self._paused = False
+
+    @workflow.signal
+    def pause_extraction(self) -> None:
+        self._paused = True
+
+    @workflow.signal
+    def resume_extraction(self) -> None:
+        self._paused = False
+
+    async def _wait_if_paused(self) -> None:
+        """暂停挂起点：在每个转换步/环开始前调用（步内不打断，activity 无法中断）。"""
+        if self._paused:
+            workflow.logger.info("任务已暂停，挂起在下一步开始前")
+        await workflow.condition(lambda: not self._paused)
 
     async def _report_script_run(self, schema_id: str, *, ok: bool, error: str | None) -> None:
         """收尾回写脚本健康信号（best-effort，失败不影响主流程状态）。"""
@@ -2075,8 +2094,11 @@ class SchemaExtractWorkflow:
         """多 Schema 严格串行：任一环失败即置 FAILED 并中止（恢复走 reset 回放）。"""
         failures_total = {"count": 0, "recorded": 0, "truncated": False}
         for pos, schema_id in enumerate(schema_ids):
+            # 步间暂停挂起点：当前环正常结束后、下一环开始前等待恢复
+            await self._wait_if_paused()
             step_key = f"schema:{schema_id}"
             self._current_schema = schema_id
+            step_started = workflow.now().astimezone()
             self._chain_steps[step_key] = {
                 "status": "RUNNING",
                 "schemaId": schema_id,
@@ -2089,6 +2111,10 @@ class SchemaExtractWorkflow:
                     **self._chain_steps[step_key],
                     "status": "FAILED",
                     "error": str(exc)[:500],
+                    "startedAt": step_started.isoformat(sep=" ", timespec="seconds"),
+                    "finishedAt": workflow.now()
+                    .astimezone()
+                    .isoformat(sep=" ", timespec="seconds"),
                 }
                 raise
             sources = result.get("sources") or []
@@ -2120,6 +2146,8 @@ class SchemaExtractWorkflow:
                 "records": sum(int(s.get("rows", 0)) for s in sources),
                 "written": sum(int(s.get("written", 0)) for s in sources),
                 "failed": int(fail.get("count", 0)),
+                "startedAt": step_started.isoformat(sep=" ", timespec="seconds"),
+                "finishedAt": workflow.now().astimezone().isoformat(sep=" ", timespec="seconds"),
                 "output": result,
                 "activities": activities,
             }
@@ -2307,6 +2335,8 @@ class SchemaExtractWorkflow:
                 return {"batches": idx, **final}
 
             # 分步聚合计数（多步脚本或 chain 模式；stepId → position/records/written/failed）
+            # step_times：各转换步首末批时间（耗时列展示；暂停时长计入不剔除）
+            step_times: dict[str, dict[str, str]] = {}
             step_totals: dict[str, dict[str, int]] = (
                 {
                     s["id"]: {"position": pos + 1, "records": 0, "written": 0, "failed": 0}
@@ -2338,6 +2368,9 @@ class SchemaExtractWorkflow:
                             prev_output: dict[str, Any] = {}
                             step_outputs: dict[str, Any] = {}
                             for seq, step in enumerate(steps):
+                                # 步间暂停挂起点：当前步结束后、下一步开始前等待
+                                await self._wait_if_paused()
+                                step_started = workflow.now().astimezone()
                                 transform_request: dict[str, Any] = {
                                     "scriptPath": plan["scriptPath"],
                                     # run 副本定位（tempfile 丢失时按此重物化）
@@ -2485,6 +2518,7 @@ class SchemaExtractWorkflow:
                                         retry_policy=ACTIVITY_RETRY_POLICY,
                                     )
                                 written += step_written
+                                step_finished = workflow.now().astimezone()
                                 if track_steps:
                                     chunk_step_stats[step["id"]] = {
                                         # position：Temporal JSON 编码会按 key 排序，
@@ -2494,6 +2528,18 @@ class SchemaExtractWorkflow:
                                         "written": step_written,
                                         "failed": step_fail_count,
                                     }
+                                    # 首末批时间：started 取首见，finished 取最后一次
+                                    step_times.setdefault(
+                                        step["id"],
+                                        {
+                                            "startedAt": step_started.isoformat(
+                                                sep=" ", timespec="seconds"
+                                            ),
+                                        },
+                                    )
+                                    step_times[step["id"]]["finishedAt"] = step_finished.isoformat(
+                                        sep=" ", timespec="seconds"
+                                    )
                                 # access 溯源报告是平台观测数据，不进步间链
                                 chained = {k: v for k, v in transformed.items() if k != "access"}
                                 prev_output = chained
@@ -2587,7 +2633,16 @@ class SchemaExtractWorkflow:
                 "written": total_written,
                 "failed": source_failed,
                 # 分步聚合计数（多步脚本/chain 模式；单步单跑摘要形状保持不变）
-                **({"steps": step_totals} if track_steps else {}),
+                **(
+                    {
+                        "steps": {
+                            sid: {**stat, **step_times.get(sid, {})}
+                            for sid, stat in step_totals.items()
+                        }
+                    }
+                    if track_steps
+                    else {}
+                ),
             }
             return {
                 "source": step_id,
@@ -2599,7 +2654,16 @@ class SchemaExtractWorkflow:
                 "failures": source_failures,
                 "watermark": read_summary.get("watermark"),
                 "pkCursor": read_summary.get("pkCursor"),
-                **({"steps": step_totals} if track_steps else {}),
+                **(
+                    {
+                        "steps": {
+                            sid: {**stat, **step_times.get(sid, {})}
+                            for sid, stat in step_totals.items()
+                        }
+                    }
+                    if track_steps
+                    else {}
+                ),
             }
 
         results = await asyncio.gather(*(extract_source(source) for source in plan["sources"]))
@@ -2712,7 +2776,12 @@ class SchemaExtractWorkflow:
     @workflow.query
     def get_steps(self) -> dict[str, Any]:
         """chain 模式实时分步状态（旧 kg.custom.chain get_steps 同契约，前端直读）。"""
-        return {"current": self._current_schema, "steps": self._chain_steps}
+        return {
+            "current": self._current_schema,
+            "steps": self._chain_steps,
+            # 暂停确认：前端「暂停中 → 已暂停」以此为准（信号已收且到达挂起点）
+            "paused": self._paused,
+        }
 
     @workflow.query
     def get_progress(self) -> dict[str, Any]:
@@ -2722,6 +2791,7 @@ class SchemaExtractWorkflow:
             "current": self._current_source,
             "sources": self._sources,
             "slots": self._slots,
+            "paused": self._paused,
         }
 
 

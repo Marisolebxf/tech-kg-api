@@ -87,6 +87,23 @@ _STEP_STATUS_LABELS = {
 }
 
 
+def _step_duration(started_at: Any, finished_at: Any) -> str:
+    """步骤起止时间 → 展示耗时（"42s" / "3m05s"）；缺任一端点返回 "-"。"""
+    from datetime import datetime
+
+    if not started_at or not finished_at:
+        return "-"
+    try:
+        start = datetime.strptime(str(started_at), "%Y-%m-%d %H:%M:%S")
+        end = datetime.strptime(str(finished_at), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return "-"
+    seconds = max(int((end - start).total_seconds()), 0)
+    if seconds < 60:
+        return f"{seconds}s"
+    return f"{seconds // 60}m{seconds % 60:02d}s"
+
+
 def pipeline_steps(output: dict[str, Any] | None) -> list[dict[str, Any]]:
     """把 steps/chain 工作流的 ``output.steps`` 映射为保留输入输出的步骤列表。
 
@@ -119,7 +136,7 @@ def pipeline_steps(output: dict[str, Any] | None) -> list[dict[str, Any]]:
                 "rawStatus": raw_status,
                 "count": count,
                 "abnormal": abnormal,
-                "duration": "-",
+                "duration": _step_duration(state.get("startedAt"), state.get("finishedAt")),
                 # position：Temporal JSON 编码按 key 排序，dict 序 ≠ 执行序，
                 # 详情页须按 position 还原（无 position 的旧形状保持原序）
                 "position": state.get("position"),

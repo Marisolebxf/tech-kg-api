@@ -99,6 +99,12 @@ class TemporalRuntime:
             "status": "RUNNING",
         }
 
+    async def signal_workflow(self, workflow_id: str, run_id: str | None, signal_name: str) -> None:
+        """向运行中的 workflow 发信号（步间暂停/恢复用；已结束会抛 RPCError）。"""
+        client = await self.client()
+        handle = client.get_workflow_handle(workflow_id, run_id=run_id)
+        await handle.signal(signal_name)
+
     async def refresh_execution(self, execution: dict[str, Any]) -> dict[str, Any]:
         if execution.get("dispatchMode") == "LOCAL_FALLBACK":
             return execution

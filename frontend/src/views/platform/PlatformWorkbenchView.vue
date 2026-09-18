@@ -593,6 +593,15 @@ async function loadOverviewCards(): Promise<void> {
     overviewReviewsState.value = isForbiddenError(error) ? 'forbidden' : 'error'
   }
 }
+
+/** 审核卡片跳转：抽取失败重跑（T_EXTRACT_FAIL）直达人工审核页的「抽取失败重跑」子页，
+ *  并把对象名带进搜索框定位到该实例（队列按 id/对象名/来源记录匹配，与卡片展示一致）；
+ *  其余（入库决策）保持进入审核详情。 */
+function reviewItemRoute(item: ProductionReviewCase): string | { path: string; query: Record<string, string> } {
+  if (item.templateId !== 'T_EXTRACT_FAIL') return `/manual-review/task/${item.id}`
+  const keyword = (item.objectName || item.sourceRecordId || item.id).trim()
+  return { path: '/manual-review', query: keyword ? { category: 'C', keyword } : { category: 'C' } }
+}
 const activeAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === selectedAssetChange.value))
 const entityAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'entity'))
 const relationAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'relation'))
@@ -1113,7 +1122,7 @@ const pageMeta = computed(() => {
           <template v-if="overviewReviewsState === 'ready'">
             <div class="platform-review-count">待处理 <strong>{{ overviewReviewsTotal }}</strong> 条</div>
             <div class="platform-review-list">
-              <RouterLink v-for="item in overviewReviews" :key="item.id" :to="`/manual-review/task/${item.id}`">
+              <RouterLink v-for="item in overviewReviews" :key="item.id" :to="reviewItemRoute(item)">
                 <strong>{{ item.objectName || item.objectId }}</strong>
                 <em>{{ item.category }}</em>
                 <span class="is-risk">风险 {{ item.riskLevel }}</span>

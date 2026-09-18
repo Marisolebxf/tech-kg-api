@@ -1226,7 +1226,13 @@ class SchemaManagementService:
         # 脚本上传后从未跑过、或上传时间晚于最近一次收尾 → 脚本变更尚未应用到图数据。
         # 与 staleness（版本号落后，提示"更新脚本"）接力：更新后 stale 消除、
         # needsRun 接管提示"重跑"，重跑收尾回写 last_run_at 后两者皆清。
-        needs_run = script.last_run_at is None or script.uploaded_at > script.last_run_at
+        # uploaded_at 为 NULL 的存量行（增量迁移加列前上传）按"需重跑"处理，
+        # 且不能进大小比较（None > datetime 会 TypeError）
+        needs_run = (
+            script.last_run_at is None
+            or script.uploaded_at is None
+            or script.uploaded_at > script.last_run_at
+        )
         return {
             "filename": script.original_filename,
             "contentType": script.content_type,

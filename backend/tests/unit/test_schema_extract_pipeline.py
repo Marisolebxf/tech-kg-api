@@ -58,6 +58,32 @@ class TestBuildSourceBatchSql:
         assert sql.startswith("SELECT * FROM (SELECT p.id AS source_row_id")
         assert "AS src WHERE `update_time` > :wm" in sql
 
+    def test_watermark_with_pk_cursor_uses_composite_condition(self):
+        # 同秒多行：纯 time > :wm 会把与水位同秒的尾行永久切掉，
+        # 提供 pk_cursor 时必须用组合条件续翻页
+        sql = build_source_batch_sql(
+            database="gkx",
+            table=None,
+            time_column="update_time",
+            pk_column="paper_id",
+            query_sql="SELECT p.id AS paper_id, p.update_time FROM papers p",
+            cursor_kind="watermark",
+            pk_cursor="p2",
+        )
+        assert "`update_time` > :wm OR (`update_time` = :wm AND `paper_id` > :cursor)" in sql
+        assert "ORDER BY `update_time`, `paper_id` LIMIT :n" in sql
+
+    def test_watermark_without_pk_cursor_keeps_plain_condition(self):
+        # 首跑（无游标）保持纯时间条件
+        sql = build_source_batch_sql(
+            database="gkx",
+            table="t",
+            time_column="update_time",
+            pk_column="id",
+            cursor_kind="watermark",
+        )
+        assert ":cursor" not in sql
+
     def test_ids_mode_placeholders(self):
         sql = build_source_batch_sql(
             database="gkx",

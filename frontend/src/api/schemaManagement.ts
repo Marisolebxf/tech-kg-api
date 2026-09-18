@@ -53,6 +53,8 @@ export interface SchemaScript {
   lastRunAt: string | null
   stale: boolean
   staleBehind: number
+  /** 脚本对象在对象存储真实存在（系统 Schema 种子行只是目录占位，available=false） */
+  available?: boolean
   /** 脚本上传后从未跑过、或上传时间晚于最近一次收尾（变更尚未应用到图数据） */
   needsRun: boolean
   downloadUrl: string

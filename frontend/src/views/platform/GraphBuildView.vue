@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { IconInfoCircle, IconSearch } from '@arco-design/web-vue/es/icon'
 import {
@@ -13,6 +13,7 @@ import {
   type WorkflowJob,
 } from '../../api/workflowOperations'
 import { schemaErrorMessage } from '../../api/schemaManagement'
+import { subscribeJobEvents } from '../../api/jobEvents'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import JobLaunchDialog from '../../components/JobLaunchDialog.vue'
 import ListPagination from '../../components/list-pagination.vue'
@@ -101,17 +102,44 @@ watch(showAllSpaces, (value) => {
   }
 })
 
-async function loadData() {
-  loading.value = true
+async function loadData(silent = false) {
+  // silent：轮询刷新用，不转 loading、失败不弹 toast（避免每几秒闪一次）
+  if (!silent) loading.value = true
   try {
     const jobList = await listJobs()
     jobs.value = jobList.items
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    if (!silent) showToast(schemaErrorMessage(error), 'warning')
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
 }
+
+// 状态更新走服务端推送（SSE）：后端监视控制面表，Schedule 到点起跑/执行翻终态/
+// 暂停恢复/增删即时下发 jobs-changed，前端不再定时轮询。断线由 EventSource
+// 自动重连，重连成功时全量重拉补齐漏掉的事件；运行中任务到达终态时弹 toast
+// 告知结果（与报错同款提示形式）
+let unsubscribeJobEvents: (() => void) | null = null
+
+function announceFinished(prevJobs: WorkflowJob[]) {
+  const prev = new Map(prevJobs.map((job) => [job.id, deriveJobUnifiedStatus(job)]))
+  for (const job of jobs.value) {
+    const now = deriveJobUnifiedStatus(job)
+    if (prev.get(job.id) !== '运行中') continue // 只报「运行中→终态」的翻转，历史终态不弹
+    if (now === '已完成') showToast(`任务「${job.name}」执行完成`, 'success')
+    else if (now === '运行失败') showToast(`任务「${job.name}」执行失败，点任务名查看原因`, 'warning')
+  }
+}
+
+async function reloadOnEvent(announce: boolean) {
+  const prevJobs = [...jobs.value]
+  await loadData(true)
+  if (announce) announceFinished(prevJobs)
+}
+
+onUnmounted(() => {
+  unsubscribeJobEvents?.()
+})
 
 function openCreate() {
   createOpen.value = true
@@ -181,14 +209,24 @@ function executionStatusClass(status: string): string {
   return 'run'
 }
 
-onMounted(loadData)
+onMounted(() => {
+  void loadData()
+  unsubscribeJobEvents = subscribeJobEvents(
+    () => {
+      void reloadOnEvent(!document.hidden) // 页面隐藏时静默刷新，不弹无人看的 toast
+    },
+    () => {
+      void loadData(true) // 连接/重连成功：静默全量重拉，补齐断线期间的变化
+    },
+  )
+})
 </script>
 
 <template>
   <main class="graph-build-page">
     <div class="gb-actions">
       <button type="button" class="primary" @click="openCreate">＋ 新建任务</button>
-      <button type="button" :disabled="loading" @click="loadData">{{ loading ? '刷新中…' : '刷新' }}</button>
+      <button type="button" :disabled="loading" @click="loadData()">{{ loading ? '刷新中…' : '刷新' }}</button>
     </div>
 
     <section class="gb-summary">
@@ -287,7 +325,7 @@ onMounted(loadData)
     <JobLaunchDialog
       :open="createOpen"
       @close="createOpen = false"
-      @created="loadData"
+      @created="loadData()"
     />
   </main>
 </template>
@@ -298,17 +336,17 @@ onMounted(loadData)
 .gb-actions{display:flex;gap:8px;margin-bottom:12px}
 .gb-actions button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
 .gb-actions .primary{border-color:#165dff;background:#165dff;color:#fff}
-.gb-summary{display:flex;gap:16px;margin-bottom:16px}
+.gb-summary{display:grid;flex-shrink:0;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:16px;margin-bottom:16px}
 .gb-summary article{display:flex;flex:1;min-height:80px;gap:8px;padding:12px 16px;border:1px solid #e5e6eb;border-radius:6px;background:#fff;flex-direction:column;justify-content:center}
 .gb-summary span{color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
 .gb-summary strong{color:#1d2129;font-size:28px;line-height:32px;font-weight:600;letter-spacing:0}
 .gb-summary__label,.gb-summary__task-stats{display:flex;align-items:center;min-width:0}.gb-summary__label{gap:8px}.gb-summary__hint{display:inline-flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;height:24px;padding:0;border:0;border-radius:4px;background:transparent;color:#86909c;cursor:help}.gb-summary__hint:hover,.gb-summary__hint:focus-visible{background:#f2f3f5;color:#165dff}.gb-summary__hint svg{width:16px;height:16px}
 .gb-jobs-section{display:flex;flex:1;min-height:0;flex-direction:column;gap:16px}
-.gb-jobs-toolbar{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:16px;min-height:32px;box-sizing:border-box;color:#1d2129}
+.gb-jobs-toolbar{display:flex;flex-wrap:wrap;flex:0 0 auto;align-items:center;justify-content:space-between;gap:16px;min-height:32px;box-sizing:border-box;color:#1d2129}
 .gb-section-title{position:relative;padding-left:11px;font-size:16px;line-height:24px;font-weight:600}
 .gb-section-title::before{position:absolute;top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#165dff;content:""}
 .gb-jobs-panel{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #e5e6eb;border-radius:6px;background:#fff;box-shadow:none;flex-direction:column}
-.gb-filters{display:flex;align-items:center;gap:8px;font-weight:400}
+.gb-filters{display:flex;flex:1 1 480px;min-width:0;flex-wrap:wrap;align-items:center;gap:8px;font-weight:400}
 /* 全部空间开关：跟随筛选条尺寸合同，不换行不被压缩 */
 .gb-filters .gb-space-toggle{flex:0 0 auto;margin:0;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap;color:#4e5969;cursor:pointer}
 .gb-task-table{flex:1;min-height:0;overflow:auto;padding:0}
@@ -334,14 +372,26 @@ span.ok{color:#067647}
 span.err{color:#b42318}
 span.warn{color:#b54708}
 span.run{color:#175cd3}
+
+@media (max-width: 1024px) {
+  .graph-build-page {
+    overflow-y: auto;
+  }
+
+  .gb-jobs-section {
+    flex: 1 0 auto;
+    min-height: 300px;
+  }
+}
+
 </style>
 <style>
-.app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper{box-sizing:border-box;width:280px;min-width:280px;max-width:280px;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 280px}
+.app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper{box-sizing:border-box;width:280px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:1 1 240px}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper:focus-within,.app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 .app-workspace .gb-filters #graph-build-filter-name .arco-input-prefix{padding-right:8px;color:#4e5969}.app-workspace .gb-filters #graph-build-filter-name.arco-input-focus .arco-input-prefix{color:#165dff}.app-workspace .gb-filters #graph-build-filter-name .arco-input-prefix svg{width:16px;height:16px;font-size:16px}
 .app-workspace .gb-filters #graph-build-filter-name input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:160px;min-width:160px;max-width:160px;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 160px}
+.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:160px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:1 1 140px}
 .app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}
 .app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view:focus-within,.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 .app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type) input.arco-select-view-input{box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}

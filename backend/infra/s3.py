@@ -114,6 +114,16 @@ class S3Storage:
         response = self.client.get_object(Bucket=bucket, Key=object_key)
         return response["Body"]
 
+    def object_exists(self, bucket: str, object_key: str) -> bool:
+        """HEAD 探测对象是否存在（不存在返回 False，其它错误照抛）。"""
+        try:
+            self.client.head_object(Bucket=bucket, Key=object_key)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+                return False
+            raise
+        return True
+
     def delete_object(self, bucket: str, object_key: str) -> None:
         self.client.delete_object(Bucket=bucket, Key=object_key)
 

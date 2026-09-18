@@ -1095,25 +1095,14 @@ class SchemaManagementService:
             raise SchemaScriptError(
                 f"Python 脚本语法错误（第 {exc.lineno or 0} 行）: {exc.msg}"
             ) from exc
-        functions = {
-            node.name
-            for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
-        # 多步声明：@step 装饰器（推荐）或顶层 STEPS 清单（兼容），与 transform 互斥
-        # （同时声明即报歧义）
+        # 唯一合法声明：顶层 @step 装饰器（单步 transform / STEPS 清单已下线）
         try:
             declared_steps = declared_steps_from_tree(tree)
         except ValueError as exc:
             raise SchemaScriptError(str(exc)) from exc
-        # 优先平台喂数抽取入口 transform(payload)；旧全量脚本入口 workflow(payload) 兼容
-        if "transform" in functions:
-            return "transform"
-        if declared_steps is not None:
-            # 多步脚本的 workflow_function_name 只存第一步 fn（详情页展示/排查参考）；
-            # 执行时 load_schema_extract_plan 会重新 ast 解析声明，不依赖该列
-            return declared_steps[0]["fn"]
-        return "workflow" if "workflow" in functions else None
+        # workflow_function_name 只存第一步 fn（详情页展示/排查参考）；
+        # 执行时 load_schema_extract_plan 会重新 ast 解析声明，不依赖该列
+        return declared_steps[0]["fn"]
 
     def _require_schema(self, schema_id: str) -> GraphSchemaDefinition:
         definition = self._dao.get(schema_id)
@@ -1214,12 +1203,26 @@ class SchemaManagementService:
         }
 
     @staticmethod
+    def _script_object_available(script: GraphSchemaScript) -> bool:
+        """脚本对象是否真实存在于对象存储——目录里的 script 行可能只是
+        系统 Schema 的种子占位（object_key 指向不存在的 key，触发会在
+        worker 下载处失败）。探测异常按 True 处理：S3 抖动不应把可选
+        Schema 清空，触发时 ensure_extract_script_ready 还有兜底拦截。
+        """
+        try:
+            # get_schema_s3_storage 为模块级单例，与实例 self._storage 同源
+            return get_schema_s3_storage().object_exists(script.bucket, script.object_key)
+        except Exception:  # noqa: BLE001
+            return True
+
+    @staticmethod
     def _serialize_script(
         script: GraphSchemaScript | None, definition: GraphSchemaDefinition
     ) -> dict[str, Any] | None:
         if script is None:
             return None
         stale_behind = _stale_behind(definition.property_revision, script.captured_revision)
+        available = SchemaManagementService._script_object_available(script)
         # 脚本上传后从未跑过、或上传时间晚于最近一次收尾 → 脚本变更尚未应用到图数据。
         # 与 staleness（版本号落后，提示"更新脚本"）接力：更新后 stale 消除、
         # needsRun 接管提示"重跑"，重跑收尾回写 last_run_at 后两者皆清。
@@ -1240,6 +1243,7 @@ class SchemaManagementService:
             "lastRunAt": _iso(script.last_run_at),
             "stale": stale_behind > 0,
             "staleBehind": stale_behind,
+            "available": available,
             "needsRun": needs_run,
             "downloadUrl": f"/api/v1/schema-management/schemas/{definition.id}/script",
         }

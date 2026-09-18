@@ -125,7 +125,7 @@ def plan_env(monkeypatch: pytest.MonkeyPatch):
             size_bytes=10,
             sha256="x" * 64,
             uploaded_by="u",
-            workflow_function_name="workflow",
+            workflow_function_name="normalize",
         )
         session.add(definition)
         session.commit()
@@ -133,43 +133,39 @@ def plan_env(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr("infra.workflow_mysql.get_workflow_engine", lambda: engine)
     monkeypatch.setattr(
-        "infra.s3.get_schema_s3_storage", lambda: FakeS3(b"def workflow(payload):\n    return {}\n")
+        "infra.s3.get_schema_s3_storage",
+        lambda: FakeS3(
+            b"from kg_sdk import step\n\n\n@step\ndef normalize(payload):\n    return {}\n"
+        ),
     )
     yield engine
     engine.dispose()
 
 
-STEPS_SCRIPT = (
-    b'STEPS = [{"id": "normalize", "fn": "step_normalize"}, {"id": "emit", "fn": "step_emit"}]\n'
-    b"\n"
-    b"def step_normalize(payload):\n"
-    b'    return {"cleaned": payload.get("rows", [])}\n'
-    b"\n"
-    b"def step_emit(payload):\n"
-    b'    return {"entities": []}\n'
-)
-
-
 @pytest.mark.asyncio
-async def test_load_schema_extract_plan_single_step_fallback(plan_env) -> None:
-    """单入口脚本（无 STEPS 声明）：steps 兜底单步 _default，multiStep=False。"""
-    plan = await load_schema_extract_plan("schema-1")
-    assert plan["steps"] == [{"id": "_default", "fn": plan["functionName"]}]
-    assert plan["multiStep"] is False
-
-
-@pytest.mark.asyncio
-async def test_load_schema_extract_plan_parses_steps_declaration(
+async def test_load_schema_extract_plan_rejects_legacy_single_entry(
     plan_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """STEPS 脚本：plan 展开步清单（只含 id/fn 字符串键），multiStep=True。"""
-    monkeypatch.setattr("infra.s3.get_schema_s3_storage", lambda: FakeS3(STEPS_SCRIPT))
-    plan = await load_schema_extract_plan("schema-1")
-    assert plan["steps"] == [
-        {"id": "normalize", "fn": "step_normalize"},
-        {"id": "emit", "fn": "step_emit"},
-    ]
-    assert plan["multiStep"] is True
+    """旧单步 transform/workflow 脚本在 plan 组装即拒绝（唯一形态是 @step）。"""
+    monkeypatch.setattr(
+        "infra.s3.get_schema_s3_storage",
+        lambda: FakeS3(b"def transform(payload):\n    return {}\n"),
+    )
+    with pytest.raises(ValueError, match="已下线"):
+        await load_schema_extract_plan("schema-1")
+
+
+@pytest.mark.asyncio
+async def test_load_schema_extract_plan_rejects_steps_literal(
+    plan_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """STEPS 清单声明已删除：plan 组装报下线错误。"""
+    monkeypatch.setattr(
+        "infra.s3.get_schema_s3_storage",
+        lambda: FakeS3(b'STEPS = [{"id": "a", "fn": "fa"}]\n\ndef fa(payload):\n    return {}\n'),
+    )
+    with pytest.raises(ValueError, match="STEPS 清单声明已下线"):
+        await load_schema_extract_plan("schema-1")
 
 
 DECORATED_SCRIPT = (
@@ -191,24 +187,23 @@ DECORATED_SCRIPT = (
 async def test_load_schema_extract_plan_parses_step_decorators(
     plan_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """@step 装饰器脚本：步顺序 = 源码顺序，显式 id 可含 -，multiStep=True。"""
+    """@step 装饰器脚本：步顺序 = 源码顺序，显式 id 可含 -，plan 只带 id/fn 键。"""
     monkeypatch.setattr("infra.s3.get_schema_s3_storage", lambda: FakeS3(DECORATED_SCRIPT))
     plan = await load_schema_extract_plan("schema-1")
     assert plan["steps"] == [
         {"id": "normalize", "fn": "normalize"},
         {"id": "emit-rows", "fn": "do_emit"},
     ]
-    assert plan["multiStep"] is True
 
 
 @pytest.mark.asyncio
 async def test_load_schema_extract_plan_rejects_invalid_steps(
     plan_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """绕过上传通道的非法多步声明（fn 未定义）在 plan 组装时报清晰错误。"""
-    broken = b'STEPS = [{"id": "a", "fn": "missing"}]\n\ndef fa(p):\n    return {}\n'
+    """绕过上传通道的非法 @step 声明在 plan 组装时报清晰错误。"""
+    broken = b"from kg_sdk import step\n\n@step(1)\ndef f(p):\n    return {}\n"
     monkeypatch.setattr("infra.s3.get_schema_s3_storage", lambda: FakeS3(broken))
-    with pytest.raises(ValueError, match="多步声明非法.*未在脚本顶层定义"):
+    with pytest.raises(ValueError, match="步声明非法.*只接受一个可选的 step id"):
         await load_schema_extract_plan("schema-1")
 
 
@@ -230,11 +225,10 @@ async def test_load_schema_extract_plan_includes_all_properties(plan_env) -> Non
             "querySql": None,
         }
     ]
-    # 入口名以脚本上传时存储为准（旧脚本 workflow，新脚本 transform）
-    assert plan["functionName"] in ("workflow", "transform")
+    # 入口名不再进 plan：@step 是唯一形态，步清单由 plan["steps"] 给出
     assert plan["maxInflight"] >= 1 and plan["failureCaseCap"] >= 0
     with open(plan["scriptPath"], "rb") as handle:
-        assert b"def workflow(payload)" in handle.read()
+        assert b"@step" in handle.read()
 
 
 @pytest.mark.asyncio
@@ -248,7 +242,7 @@ async def test_load_schema_extract_plan_pins_run_copy(
     plan_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """plan 钉住 run 级脚本副本：S3 写入 runs/{id}/script.py，plan 带 key + sha256。"""
-    content = b"def workflow(payload):\n    return {}\n"
+    content = b"from kg_sdk import step\n\n\n@step\ndef normalize(payload):\n    return {}\n"
     fake = FakeS3(content)
     monkeypatch.setattr("infra.s3.get_schema_s3_storage", lambda: fake)
     plan = await load_schema_extract_plan("schema-1")

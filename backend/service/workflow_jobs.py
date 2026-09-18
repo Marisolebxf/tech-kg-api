@@ -152,12 +152,14 @@ class WorkflowJobService:
                 raise WorkflowJobError("数据抽取任务必须选择 Schema")
             from service.schema_extraction import (
                 build_extract_definition,
-                load_extract_schema,
+                ensure_extract_script_ready,
                 persist_extract_definition,
             )
 
+            # 预检：目录已登记脚本+来源，且脚本对象在 S3 真实存在（系统 Schema 的
+            # 种子 script 行不传脚本本体，不预检的话要等 worker 重试耗尽才 FAILED）
             try:
-                info = load_extract_schema(schema_id)
+                info = ensure_extract_script_ready(schema_id)
             except Exception as exc:
                 raise WorkflowJobError(str(exc)) from exc
             definition = persist_extract_definition(build_extract_definition(info))
@@ -275,6 +277,15 @@ class WorkflowJobService:
         definition = self.repo.get_definition(job["definitionId"])
         if definition is None:
             raise WorkflowJobError(f"任务脚本定义已丢失: {job['definitionId']}")
+        if job.get("taskType") == "extract" and job.get("schemaId"):
+            # 与 create_job 同款预检：脚本对象缺失（如系统 Schema 种子占位）时
+            # 触发即报错，而不是下发后 worker 重试耗尽才 FAILED
+            from service.schema_extraction import ensure_extract_script_ready
+
+            try:
+                ensure_extract_script_ready(job["schemaId"])
+            except Exception as exc:
+                raise WorkflowJobError(str(exc)) from exc
         payload = self.selector_payload(job)
         payload["jobId"] = job["id"]
         payload["jobName"] = job["name"]
@@ -337,8 +348,8 @@ class WorkflowJobService:
     # ---------- 辅助 ----------
 
     def _load_chain_infos(self, schema_ids: Any) -> list[dict[str, Any]]:
-        """校验 chain 步序列表并逐个加载可抽取 schema（已传脚本 + ≥1 来源）。"""
-        from service.schema_extraction import load_extract_schema
+        """校验 chain 步序列表并逐个加载可抽取 schema（已传脚本 + ≥1 来源 + S3 有脚本本体）。"""
+        from service.schema_extraction import ensure_extract_script_ready
 
         if not isinstance(schema_ids, list) or len(schema_ids) < 2:
             raise WorkflowJobError("多脚本串行任务至少选择 2 个 Schema")
@@ -349,7 +360,7 @@ class WorkflowJobService:
         infos: list[dict[str, Any]] = []
         for schema_id in schema_ids:
             try:
-                infos.append(load_extract_schema(schema_id))
+                infos.append(ensure_extract_script_ready(schema_id))
             except Exception as exc:
                 raise WorkflowJobError(f"Schema {schema_id} 不可抽取: {exc}") from exc
         return infos

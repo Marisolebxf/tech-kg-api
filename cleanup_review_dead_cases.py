@@ -8,8 +8,13 @@
   → workflow_executions（含 payload.taskId/message）→ tasks.payload.logs；
   执行记录不存在 => 空文案；有 task logs 或执行 message 之一 => 有数据。
 
-清理规则：C 类要求 来源记录可打开 且 日志有数据；A 类（T_DIRECT/T_LINK）只要求
-来源记录可打开。任一不满足即删除（连同 8 张子表行）。
+清理规则（用户口径：能看到日志数据 **或** 来源记录能跳转到对应详情页即保留）：
+- C 类（T_EXTRACT_FAIL，有日志按钮）：来源记录可打开 **或** 日志有数据 → 保留，两项都死才删；
+- A 类（T_DIRECT/T_LINK，无日志按钮）：只看来源记录可打开。
+
+⚠ 判定用的控制面库 = 运行本脚本的容器的 WORKFLOW_MYSQL_*（与该部署页面点开的效果一致）。
+要按门户 edu.itic-sci.com/bkg_zpt 的效果判定，须在门户对应部署的 api 容器里跑
+（dev2/zpt 共用 temporal-mysql-dev2 的 techkg_control），在 lizhou 容器里跑只反映本地栈。
 
 跑法（host，脚本在 api 容器内执行以复用其 pymysql 与 MYSQL_* env）：
     # 干跑（默认）：打印死/活判定统计，不动数据
@@ -157,7 +162,10 @@ def analyze(cur, control_cur, out) -> tuple[list[str], dict]:
             log_ok, log_desc = log_alive(snap, execs, exec_meta, task_logs)
             if not log_ok:
                 fails.append(f"日志空({log_desc})")
-        ok = not fails
+            # C 类：日志或来源记录任一有数据即保留（两项都死才删）
+            ok = src_ok or log_ok
+        else:
+            ok = src_ok
         (alive if ok else dead).append((cid, tmpl, status, day))
         if not ok:
             # 汇总口径只看失败项组合（来源记录空/日志空），具体悬空 id 不进分布

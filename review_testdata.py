@@ -177,7 +177,9 @@ def graph_edges(vid):
     if code != 200:
         return []
     data = resp.get("data") or {}
-    return data if isinstance(data, list) else data.get("items") or []
+    # 该端点信封是 data.edges（不是 items）；读错键会恒返回 []，负断言空转通过、
+    # 正断言（暂存边补写）误报失败
+    return data if isinstance(data, list) else data.get("edges") or data.get("items") or []
 
 
 def audit_logs(case_id):
@@ -306,12 +308,20 @@ def setup():
         )
         ok(code_del == 200, f"删除旧关系 schema {old_rel_del['id']}: {str(resp_del)[:80]}")
     code, resp = req("GET", f"/schema-management/schemas?keyword={ENTITY_NAME}&pageSize=100")
+    # 实体 schema 删除前先清原生索引，否则 DROP TAG 被索引卡住（见 drop_graph_index）
+    drop_graph_index()
     for old in (
         i for i in (resp.get("data") or {}).get("items") or [] if i.get("name") == ENTITY_NAME
     ):
         # 每次重建：新 schema = 新来源绑定 = 空水位，避免旧水位跳读重插的行
         code_del, resp_del = req("DELETE", f"/schema-management/schemas/{old['id']}")
         ok(code_del == 200, f"删除旧实体 schema {old['id']}: {str(resp_del)[:80]}")
+    if any(i.get("name") == ENTITY_NAME for i in (resp.get("data") or {}).get("items") or []):
+        # schema 删除（hard delete 旧点 + DROP TAG）在存储层异步生效：立刻同名重建
+        # TAG 并重插同 vid（rw101...）会撞上迟到的清理，新写的点被一并带走
+        # （实测 written=3 但 MATCH id(v) 空）。等两个心跳周期的传播再重建。
+        info("等待 DDL 传播（15s）……")
+        time.sleep(15)
     code, resp = req(
         "POST", "/schema-management/schemas/entities",
         {
@@ -411,6 +421,19 @@ def ensure_graph_index():
     r = subprocess.run(GRAPH_DOCKER + [code], capture_output=True, text=True)
     ok("rebuilt" in r.stdout,
        f"ReviewWidget name 原生索引就绪（{r.stderr.strip()[:100]}）")
+
+
+def drop_graph_index():
+    """重跑前清掉 ensure_graph_index 建的原生索引：Nebula 里 TAG 还挂着索引时
+    DROP TAG 被拒（Related index exists, please drop index first）→ schema 删除
+    接口 400 造数中断。首跑无此索引，忽略失败即可。"""
+    code = (
+        "from infra.graph_db.config import TRSGraphSettings\n"
+        "from infra.graph_db.client import TRSGraphClient\n"
+        "c = TRSGraphClient(TRSGraphSettings.from_env()); c.connect()\n"
+        "c.execute_write('DROP TAG INDEX IF EXISTS rw_name_idx')"
+    )
+    subprocess.run(GRAPH_DOCKER + [code], capture_output=True, text=True)
 
 
 def rebuild_index():

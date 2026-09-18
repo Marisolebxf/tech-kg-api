@@ -132,7 +132,13 @@ async def test_schema_management_full_flow(schema_api, monkeypatch: pytest.Monke
         forged_header_script = await client.put(
             f"/api/v1/schema-management/schemas/{expert['id']}/script",
             headers={"X-User-Id": "user-a"},
-            files={"script": ("expert.py", b"value = 1\n", "text/x-python")},
+            files={
+                "script": (
+                    "expert.py",
+                    b"from kg_sdk import step\n\n\n@step\ndef clean_row(payload):\n    return payload\n",
+                    "text/x-python",
+                )
+            },
         )
         # X-User-Id 已不参与鉴权；测试环境登录身份是全局管理员。
         assert forged_header_script.status_code == 200
@@ -143,7 +149,7 @@ async def test_schema_management_full_flow(schema_api, monkeypatch: pytest.Monke
             files={
                 "script": (
                     "expert.py",
-                    b"def transform(row):\n    return row\n",
+                    b"from kg_sdk import step\n\n\n@step\ndef clean_row(payload):\n    return payload\n",
                     "text/x-python",
                 )
             },
@@ -213,7 +219,13 @@ async def test_schema_management_full_flow(schema_api, monkeypatch: pytest.Monke
         global_admin_replace = await client.put(
             f"/api/v1/schema-management/schemas/{relation['id']}/script",
             headers={"X-User-Id": "user-b"},
-            files={"script": ("relation-v2.py", b"value = 2\n", "text/x-python")},
+            files={
+                "script": (
+                    "relation-v2.py",
+                    b"from kg_sdk import step\n\n\n@step\ndef emit_rel(payload):\n    return payload\n",
+                    "text/x-python",
+                )
+            },
         )
         assert global_admin_replace.status_code == 200
 
@@ -384,7 +396,7 @@ async def test_schema_script_upload_registers_no_workflow_avatar(schema_api) -> 
             files={
                 "script": (
                     "organization.py",
-                    b"def workflow(payload):\n    return payload\n",
+                    b"from kg_sdk import step\n\n\n@step\ndef emit_rows(payload):\n    return payload\n",
                     "text/x-python",
                 )
             },
@@ -394,4 +406,4 @@ async def test_schema_script_upload_registers_no_workflow_avatar(schema_api) -> 
     script = response.json()["data"]["script"]
     # 化身停用：列保留做兼容，值恒为空；函数名探测（transform/workflow）保留
     assert script["workflowDefinitionId"] is None
-    assert script["workflowFunctionName"] == "workflow"
+    assert script["workflowFunctionName"] == "emit_rows"

@@ -262,3 +262,82 @@ def test_park_drops_edges_to_rejected_endpoint(service, graph):
         "EMPLOYED_BY", [{"fromId": "person_1", "toId": "org_new_1", "props": {}}]
     )
     assert out == {"records": [], "parked": 0, "dropped": 1}
+
+
+class SchemaGraph(FakeGraph):
+    """DESCRIBE 返回平台 DDL 风格 schema（NOT NULL 审计列 + 数字列存在）。"""
+
+    EDGE_FIELDS = {
+        "role": "string",
+        "sequence": "int64",
+        "confidence": "double",
+        "create_time": "string",
+        "update_time": "string",
+        "source_table": "string",
+    }
+    TAG_FIELDS = {
+        "name": "string",
+        "province": "string",
+        "create_time": "string",
+        "update_time": "string",
+        "source_table": "string",
+    }
+
+    def execute_query(self, q):
+        fields = self.EDGE_FIELDS if "DESCRIBE EDGE" in q else self.TAG_FIELDS
+
+        class _Result:
+            records = [{"Field": f, "Type": t, "Null": "NO"} for f, t in fields.items()]
+
+        return _Result()
+
+
+def test_parked_edge_write_injects_not_null_audit_columns(service, monkeypatch):
+    """平台 DDL 给边注入 NOT NULL create_time/update_time（无默认值）：暂存边
+    属性缺这些列时补写会被 Nebula 拒（400 not nullable）——按边 schema 补缺省；
+    数字列（int64/double）保留数字字面量，转字符串同样被 Nebula 拒。"""
+    fake = SchemaGraph()
+    monkeypatch.setattr(ManualReviewService, "_graph_client_for", lambda self, snapshot: fake)
+    case = service.create_direct_case(
+        **gray_case_kwargs(
+            candidate={
+                **gray_case_kwargs()["candidate"],
+                "_pendingRelations": [
+                    {
+                        "edgeType": "EMPLOYED_BY",
+                        "fromId": "org_new_1",
+                        "toId": "person_1",
+                        "props": {
+                            "role": "engineer",
+                            "sequence": 2,
+                            "confidence": 0.6,
+                            "source_table": "db.org",
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    detail = service.get_case(case["reviewId"], actor())
+    out = service.submit(
+        detail["id"],
+        detail["version"],
+        "entity-confirm",
+        {"entityVerdict": "merge", "targetEntityId": "org_9"},
+        "",
+        actor(),
+    )
+    assert out["status"] == "RESOLVED"
+    ((frm, to, etype, props),) = fake.edges
+    assert (frm, to, etype) == ("org_9", "person_1", "EMPLOYED_BY")
+    # NOT NULL 审计列缺省即补（空串也是补了值，Nebula 不再 400）
+    assert props["create_time"]
+    assert props["update_time"]
+    # 数字列保留数字字面量（字符串化会触发 Storage Error 类型不匹配）
+    assert props["sequence"] == 2
+    assert isinstance(props["sequence"], int)
+    assert props["confidence"] == 0.6
+    assert isinstance(props["confidence"], float)
+    # 业务列与原溯源值保留，不被覆盖
+    assert props["role"] == "engineer"
+    assert props["source_table"] == "db.org"

@@ -76,6 +76,10 @@ def env(monkeypatch):
     monkeypatch.setattr(
         schema_extraction, "load_extract_schema", lambda schema_id: {"schemaId": schema_id}
     )
+    # create/trigger 的 S3 脚本对象预检 fake 掉（默认放行）
+    monkeypatch.setattr(
+        schema_extraction, "ensure_extract_script_ready", lambda schema_id: {"schemaId": schema_id}
+    )
     monkeypatch.setattr(
         schema_extraction,
         "build_extract_definition",
@@ -388,3 +392,25 @@ async def test_retry_task_on_local_fallback_execution_raises_runtime_error(env):
             await real_ops.retry_task("PI-20260916-000001", "manual retry")
     finally:
         rt.temporal_runtime.reset_workflow = orig_reset  # type: ignore[method-assign]
+
+
+def test_format_workflow_failure_expands_cause_chain():
+    """refresh_execution 的失败文案必须展开 cause 链。
+
+    最外层 WorkflowFailureError 只有一句 "Workflow execution failed"，
+    activity 抛的业务错误（如脚本对象不存在）在 __cause__ 里——不展开的话
+    前端详情页无从得知真实失败原因。
+    """
+    from service.temporal_runtime import _format_workflow_failure
+
+    inner = ValueError("下载 Schema 脚本失败: NoSuchKey")
+    outer = RuntimeError("Workflow execution failed")
+    outer.__cause__ = inner
+    text = _format_workflow_failure(outer)
+    assert "Workflow execution failed" in text
+    assert "NoSuchKey" in text
+    # 三层链也全部展开，且重复文案去重
+    deepest = KeyError("no such key: scripts/paper.py")
+    inner.__cause__ = deepest
+    text2 = _format_workflow_failure(outer)
+    assert "scripts/paper.py" in text2

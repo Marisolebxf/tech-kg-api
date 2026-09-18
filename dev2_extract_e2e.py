@@ -39,8 +39,11 @@ def req(method: str, path: str, body=None, headers: dict | None = None, raw: byt
 SCRIPT = '''"""E2E 毒行转换脚本：POISON 行报 failures，其余出实体。"""
 from typing import Any, Mapping
 
+from kg_sdk import step
 
-def transform(payload: Mapping[str, Any]) -> dict[str, Any]:
+
+@step
+def emit_widget(payload: Mapping[str, Any]) -> dict[str, Any]:
     rows = payload.get("rows") or []
     entities, failures = [], []
     for row in rows:

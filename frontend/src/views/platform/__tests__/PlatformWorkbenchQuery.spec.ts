@@ -177,6 +177,50 @@ describe('PlatformWorkbench query graph-space context', () => {
     expect(getAlgorithmJob).not.toHaveBeenCalled()
   })
 
+  it('blocks submission when more than 20 edge types are selected', async () => {
+    const manyEdges = Array.from({ length: 21 }, (_, index) => `edge-${index + 1}`)
+    vi.mocked(fetchGraphAlgorithmMetadata).mockResolvedValueOnce({
+      edgeTypes: manyEdges,
+      engine: { status: 'UP' },
+    })
+    await enterAlgorithms()
+    await wrapper.get('.platform-query-algo__labels select').setValue(manyEdges)
+    await clickButton('提交算法作业')
+    expect(submitAlgorithmJob).not.toHaveBeenCalled()
+    expect(wrapper.find('.platform-query-algo__job').exists()).toBe(false)
+
+    await wrapper.get('.platform-query-algo__labels select').setValue(manyEdges.slice(0, 20))
+    await clickButton('提交算法作业')
+    await flushPromises()
+    expect(submitAlgorithmJob).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders algorithm-specific advanced params per tab and hides them for degree', async () => {
+    await enterAlgorithms()
+    expect(wrapper.text()).toContain('最大迭代次数')
+    expect(wrapper.text()).toContain('重置概率')
+    await clickButton('Louvain算法')
+    expect(wrapper.text()).toContain('内部迭代')
+    expect(wrapper.text()).not.toContain('重置概率')
+    await clickButton('Degree算法')
+    expect(wrapper.text()).toContain('当前算法无可调参数')
+    expect(wrapper.find('.platform-query-algo__input').exists()).toBe(false)
+    await clickButton('PageRank算法')
+    await clickButton('收起高级参数')
+    expect(wrapper.text()).not.toContain('最大迭代次数')
+    await clickButton('高级参数（2 个）')
+    expect(wrapper.text()).toContain('最大迭代次数')
+  })
+
+  it('marks the submit button as running and shows the running panel while a job is in progress', async () => {
+    await enterAlgorithms()
+    await submitAlgorithm()
+    const button = wrapper.get('.platform-query-algo__actions button')
+    expect(button.text()).toContain('作业运行中')
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.platform-query-algo__job-running').text()).toContain('算法作业运行中')
+  })
+
   it('does not restore metadata from a space whose request completed late', async () => {
     const oldRequest = deferred<GraphAlgorithmMetadata>()
     vi.mocked(fetchGraphAlgorithmMetadata).mockReturnValueOnce(oldRequest.promise)

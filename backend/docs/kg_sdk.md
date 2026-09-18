@@ -11,10 +11,7 @@
 
 | 脚本形态 | 签名 | 说明 |
 |---|---|---|
-| 单步（默认） | `def transform(payload: dict) -> dict` | 旧入口名 `workflow` 仍兼容，新脚本请用 `transform` |
-| 多步 | 顶层声明 `STEPS = [{"id": ..., "fn": ...}, ...]`，每个 `fn` 均为单参顶层函数 | 与 `transform` 互斥，最长 16 步（`service/script_steps.py` 上传时静态校验） |
-
-> 原 `kg.custom.python` / `kg.custom.steps` 独立上传通道（`POST /definitions/python|steps`、双参 step runner）已于 2026-09-14 清理批次4-D2 下线；多步能力并入脚本顶层 `STEPS` 声明。
+| @step 声明（唯一） | 顶层函数标 `@step` / `@step("id")`，单参 `fn(payload: dict) -> dict` | 步顺序 = 源码出现顺序，最长 16 步（`service/script_steps.py` 上传时静态校验）；旧单步 `transform` 入口与顶层 `STEPS` 清单已下线（2026-09-17） |
 
 `Context` 里的客户端是**懒构造**的——第一次访问 `.mysql` / `.graph` / `.milvus` / `.llm` / `.embedding` 时才建连，并缓存。需要 Context 时用 `from kg_sdk import current_context`。
 
@@ -60,16 +57,18 @@ from kg_sdk import Context, current_context
 - 读取模式：`query_sql` 绑定走水位/pk keyset 游标（合成唯一 pk，游标存 `checkpoint.pkCursor`）；普通表走 LIMIT/OFFSET（与旧脚本同语义）；
 - `ctx.config.watermark` / `ctx.config.checkpoint` 可读——脚本自读库（经 `ctx.mysql`）做查找表加载等辅助读取时可作参考，但抽取主链路的增量由平台读源时保证。
 
-## 4. 多步脚本：顶层 `STEPS` 声明
+## 4. 步声明：`@step` 装饰器（唯一方式）
 
-脚本顶层用 list 字面量声明步清单（上传时 `service/script_steps.py` 纯 ast 静态校验：id 匹配 `[A-Za-z0-9_-]{1,64}` 且唯一、fn 必须是顶层函数、与 `transform` 互斥、最长 16 步）：
+顶层抽取函数标 `@step` 装饰器（上传时 `service/script_steps.py` 纯 ast 静态校验：id 匹配 `[A-Za-z0-9_-]{1,64}` 且唯一、最长 16 步；旧单步 `transform` 入口与顶层 `STEPS` 清单声明已下线，上传即报错）：
 
 ```python
-STEPS = [
-    {"id": "normalize", "fn": "step_normalize"},   # 第一步消费平台读的源表行
-    {"id": "resolve",   "fn": "step_resolve"},     # 后续步消费上一步输出
-    {"id": "emit",      "fn": "step_emit"},
-]
+from kg_sdk import step
+
+@step                    # 第一步消费平台读的源表行（id 默认取函数名）
+def normalize(payload): ...
+
+@step("resolve")         # 显式指定步 id（可含 -）
+def do_resolve(payload): ...
 ```
 
 - 第 1 步 payload 与单步相同：`{"rows": [...], "source_table": "库.表", "kind": "entity"|"relation", "source": {...}}`；
@@ -103,13 +102,14 @@ def embed_and_store(rec, ctx):
 
 ## 6. 脚本入口与 `current_context`
 
-入口是单参 `transform(payload)`，平台不向其传 `ctx`。需要 Context 时用 `current_context()`：
+入口是 `@step` 标注的单参函数，平台不向其传 `ctx`。需要 Context 时用 `current_context()`：
 
 ```python
-from kg_sdk import current_context
+from kg_sdk import current_context, step
 
 
-def transform(payload):
+@step
+def emit(payload):
     ctx = current_context()
     if ctx is None:
         # 本地 dev：没有注入 context，自行回退
@@ -138,7 +138,7 @@ def transform(payload):
 
 一次性直触发（不经任务）走 `POST /api/v1/schema-management/schemas/{id}/extract`，仅接受 `graphSpace` / `batchSize`。回填走 `POST /schemas/{id}/backfill`（清水位全量重跑，脚本落后时需 `force`）。
 
-## 8. 完整最小示例：STEPS 三步流水线
+## 8. 完整最小示例：@step 三步流水线
 
 `paper_pipeline.py`（Schema 管理页上传，SSE 校验通过后存 S3）：
 
@@ -147,16 +147,11 @@ def transform(payload):
 
 from sqlalchemy import text
 
-from kg_sdk import current_context
-
-STEPS = [
-    {"id": "normalize", "fn": "step_normalize"},
-    {"id": "enrich",    "fn": "step_enrich"},
-    {"id": "emit",      "fn": "step_emit"},
-]
+from kg_sdk import current_context, step
 
 
-def step_normalize(payload):
+@step
+def normalize(payload):
     """第 1 步：消费平台读的源表行，规整字段。"""
     rows = payload["rows"]
     return {"items": [
@@ -165,7 +160,8 @@ def step_normalize(payload):
     ]}
 
 
-def step_enrich(payload):
+@step
+def enrich(payload):
     """第 2 步：用 ctx.mysql 查找表富集（mysql 未选时自动用来源绑定数据源）。"""
     ctx = current_context()
     items = payload["input"]["items"]
@@ -179,7 +175,8 @@ def step_enrich(payload):
     return {"items": items}
 
 
-def step_emit(payload):
+@step
+def emit(payload):
     """第 3 步：输出实体（平台负责写图/消歧/索引/推水位）。"""
     items = payload["input"]["items"]
     return {
@@ -198,14 +195,18 @@ def step_emit(payload):
 
 1. 平台按每张来源表绑定的**时间列水位**（默认 `update_time`，每张表独立）分批读取行：
    `SELECT * FROM db.table WHERE time_col > :水位 ORDER BY time_col, pk LIMIT :batchSize`（querySql 绑定走水位/pk keyset；普通表走 LIMIT/OFFSET）；
-2. 把行 JSON 放进 `payload["rows"]`，调脚本的 `transform(payload)`（旧 `workflow` 名兼容）；
+2. 把行 JSON 放进 `payload["rows"]`，调脚本的 `@step` 声明步（第 1 步消费 rows）；
 3. 脚本**只做转换**：返回实体或关系 dict，不自读库（查找表除外）、不自写图；
 4. 平台对返回结果写图（实体走 nGQL `INSERT VERTEX`；只写 Schema 目录中未删除的属性——已删属性「插空」即省略键），然后推进该来源表的水位。
 
 返回格式（`props` 键名须在 Schema 目录内）：
 
 ```python
-def transform(payload):
+from kg_sdk import step
+
+
+@step
+def emit(payload):
     rows = payload["rows"]  # 本批行（JSON dict）
     table = payload["source_table"]  # "库名.表名"
     kind = payload["kind"]  # "entity" | "relation"
@@ -221,7 +222,7 @@ def transform(payload):
 注意：
 
 - 可选 `failures: [{recordId, error}]`——逐行解析失败由平台记 **T_EXTRACT_FAIL** 审核 case（`POST /manual-reviews/production/rerun-extract-failures` 可按执行重跑）；
-- 可选 `pendingReview: [...]`——低置信/消歧候选进审核队列（item 可带 `templateId=T_LINK`，同名冲突裁决）；
+- 可选 `pendingReview: [...]`——**只收实体项**（`kind=entity`，挂实体改道写前消歧）：脚本对拿不准的实体按归一名生成确定性 vid 填 `objectId`（同名字段恒同 vid），平台做图库同名召回+评分后建 **T_LINK** 人工裁决 case（强制人裁，分数再高也不自动并入）；指向该 vid 的边照常输出（`resolution_status=pending_review`），端点未决的边自动暂存进 case，裁决 merge/create 后随实体一起落图。`candidate` 只放按名字段稳定的内容（dedupe_key 对快照哈希，行级 id 放 item 层 `sourceRecordId`）。**关系项已废弃**（歧义即端点实体歧义，改由脚本挂端点实体处理）——平台丢弃并告警，不再产生新 T_DIRECT；
 - 脚本返回的 `_watermark` / `_checkpoint` 元字段**被忽略**——水位由平台按批次最大时间列值管理（见 §3）；
 - 多张来源表并行抽取、单表内批次串行；执行进度在任务中心 / `get_progress` 查询可见，多步脚本带分步计数 `steps: {stepId: {records, written, failed}}`。
 

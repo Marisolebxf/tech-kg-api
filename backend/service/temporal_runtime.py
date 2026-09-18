@@ -24,6 +24,25 @@ from service.temporal_workflows import ACTIVITIES, WORKFLOW_CLASSES
 logger = logging.getLogger(__name__)
 
 
+def _format_workflow_failure(exc: BaseException) -> str:
+    """展开 failure cause 链，取到 activity 抛出的真实业务错误。
+
+    最外层 WorkflowFailureError 只有一句笼统的 "Workflow execution failed"，
+    真实原因（如「下载 Schema 脚本失败: NoSuchKey」）在 __cause__ 链里，
+    不展开的话前端只能看到一句无信息量的失败文案。
+    """
+    parts: list[str] = []
+    cur: BaseException | None = exc
+    for _ in range(10):
+        if cur is None:
+            break
+        text = str(cur).strip()
+        if text and text not in parts:
+            parts.append(text)
+        cur = cur.__cause__
+    return " · ".join(parts)
+
+
 class TemporalRuntime:
     def __init__(self) -> None:
         self.address = os.getenv("TEMPORAL_ADDRESS", "localhost:7233")
@@ -114,7 +133,7 @@ class TemporalRuntime:
             try:
                 await handle.result()
             except Exception as exc:
-                refreshed["message"] = str(exc)
+                refreshed["message"] = _format_workflow_failure(exc)
         return refreshed
 
     async def reset_workflow(self, workflow_id: str, run_id: str | None, reason: str) -> str:

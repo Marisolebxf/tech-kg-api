@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # （max_inflight=3 + 队列积压，实测 3MB/批时事务 4.29MB 超限）→ 收紧到 512KB
 _MAX_BATCH_ROWS_BYTES = 512 * 1024
 
-# 多步链（脚本顶层 STEPS 声明）的步间透传预算（第 N>1 步 request 的 input 单值 /
+# 多步链（脚本顶层 @step 声明）的步间透传预算（第 N>1 步 request 的 input 单值 /
 # prevOutputs 单值上限）。步输出既要作为 activity 返回值过 gRPC 上限，又要随批间
 # 并发聚合进 workflow 事件历史，故与批行预算同量级；超限值截断为 _truncated 标记
 # （stats 小则保留）——脚本应避免在步间传递超大数据，需要重负载时直接读源表。
@@ -564,76 +564,193 @@ def _stamp_job_latest(execution: dict[str, Any]) -> None:
         pass
 
 
-def _enqueue_pending_review(request: dict[str, Any], pending: list[Any], attempt: int) -> None:
-    """把 step 返回的 pendingReview 项写入 ReviewCase 队列（T_DIRECT 模板）。
+def _pending_graph_client(space: str | None) -> Any:
+    """为 pendingReview 挂实体消歧建图客户端（space 缺省走环境默认空间）。
 
-    入队失败不阻塞 pipeline——记 warning，继续；dedupe_key 保证幂等。
+    独立成模块级函数便于单测 monkeypatch（不真连图）。调用方负责 close。
+    """
+    from infra.graph_db.client import TRSGraphClient
+    from infra.graph_db.config import TRSGraphSettings
+
+    settings = TRSGraphSettings.from_env()
+    if space:
+        settings.space = space
+    client = TRSGraphClient(settings)
+    client.connect()
+    return client
+
+
+def _enqueue_entity_pending_item(
+    item: dict[str, Any],
+    *,
+    step_id: str,
+    client: Any,
+    space: str | None,
+    task_id: str,
+    execution_id: str | None,
+    workflow_id: str,
+    workflow_run_id: str | None,
+    job_id: str | None = None,
+) -> None:
+    """单个挂起实体项 → 图库同名召回 + 评分 → T_LINK case（强制灰区人裁）。
+
+    与 ``resolve_entity_batch`` 灰区分支同构（_incoming/existingCandidates/
+    _pendingRelations），前端与 _apply_link_verdict 直接复用；但**不走 decide 的
+    auto-merge**——挂起实体的边端点悬在未决 vid 上，自动并入已有实体会让边永远
+    挂在无人裁决的 vid 上（park_or_rewrite 只认 case.object_id），必须由人裁
+    merge/create 改写端点后补写。``objectId`` 必须是脚本按归一名生成的确定性
+    vid（同名字段归并到同一 case），dedupe_key 即按它稳定。
+    """
+    from service import entity_disambiguation as ed
+    from service.entity_disambiguation import GRAY_LOW, MERGE_THRESHOLD, TOP_K
+    from service.manual_review_production import manual_review_service
+
+    candidate = item.get("candidate") or {}
+    display = str(item.get("objectName") or candidate.get("name") or "").strip()
+    vid = str(item.get("objectId") or "").strip()
+    node_label = str(item.get("nodeLabel") or "").strip()
+    if not (display and vid and node_label):
+        raise ValueError("pendingReview 实体项缺 objectName/objectId/nodeLabel")
+    incoming_props = dict(candidate.get("props") or {})
+    incoming_props.setdefault("name", display)
+    scored: list[dict[str, Any]] = []
+    for cand in ed.recall_same_name(client, node_label, [display]).get(display, []):
+        if cand["vid"] == vid:
+            continue
+        score, detail = ed.score_candidate(display, incoming_props, cand["name"], cand.get("props"))
+        scored.append(
+            {"vid": cand["vid"], "name": cand["name"], "score": round(score, 3), **detail}
+        )
+    top = sorted(scored, key=lambda x: x["score"], reverse=True)[:TOP_K]
+    reason = (
+        f"脚本挂起改道消歧：{item.get('reason') or '歧义实体待人工确认'}；同名候选 {len(scored)} 个"
+    )
+    if top:
+        reason += f"，最高得分 {top[0]['score']:.2f}"
+    manual_review_service.create_direct_case(
+        task_id=task_id,
+        execution_id=execution_id,
+        step_id=step_id,
+        kind="entity",
+        candidate={
+            "name": display,
+            "newIds": [vid],
+            "existingCandidates": [
+                {"vid": c["vid"], "name": c["name"], "score": c["score"]} for c in top
+            ],
+            "_incoming": {
+                "vid": vid,
+                "props": incoming_props,
+                "sourceTable": item.get("sourceTable") or "",
+            },
+            "_pendingRelations": [],
+            "_graphSpace": space,
+            "_resolution": {
+                "policyVersion": "script-pending-gray-v1",
+                "scriptReason": item.get("reason"),
+                "thresholds": {"merge": MERGE_THRESHOLD, "grayLow": GRAY_LOW},
+            },
+        },
+        object_id=vid,
+        object_name=display,
+        node_label=node_label,
+        reason=reason,
+        confidence=item.get("confidence"),
+        evidence=item.get("evidence") or [],
+        workflow_id=workflow_id,
+        workflow_run_id=workflow_run_id,
+        domain=item.get("domain", "graph"),
+        source_record=item.get("sourceRecord"),
+        source_table=item.get("sourceTable"),
+        source_record_id=item.get("sourceRecordId"),
+        llm_input=item.get("llmInput"),
+        llm_output=item.get("llmOutput"),
+        # 来源记录跳任务详情（同 lizhou_fix 64f815c 的观测契约）：jobId 进
+        # input_snapshot，前端 T_LINK case 的「来源记录」列据此跳图谱构建任务
+        extra_snapshot={"jobId": job_id},
+        template_id="T_LINK",
+        workflow_type="kg.schema.extract",
+        exception_code="KG_ENTITY_DISAMBIGUATION_GRAY",
+        resume_token=f"extract-resolve:{execution_id}:{vid}",
+    )
+
+
+def _enqueue_pending_review(request: dict[str, Any], pending: list[Any], attempt: int) -> None:
+    """把 step 返回的 pendingReview 项写入审核队列（挂实体改道写前消歧）。
+
+    - 实体项（kind=entity）：图库同名召回 + 评分 → **T_LINK** case，强制人工
+      裁决（挂起实体的边端点悬在未决 vid 上，自动并入会让边无人改写——见
+      _enqueue_entity_pending_item）。平台的两个分岔保持不变：失败重跑 / 进
+      消歧；不再产生新 T_DIRECT。
+    - 关系项：已废弃（歧义即端点实体歧义，脚本改挂实体后不再产生），丢弃并
+      告警。
+
+    入队失败不阻塞 pipeline——记 warning，继续；dedupe_key 保证幂等（重跑时
+    create_direct_case 按已存 dedupe_key 跳过）。
     """
     import logging
 
-    info = activity.info()
-    workflow_id = info.workflow_id
-    workflow_run_id = info.workflow_run_id
+    log = logging.getLogger("workflow.kg.custom.steps")
+    try:
+        info = activity.info()
+        workflow_id = info.workflow_id
+        workflow_run_id = info.workflow_run_id
+    except RuntimeError:
+        # 单测直调（无 activity 上下文）
+        workflow_id = "test-workflow"
+        workflow_run_id = None
     try:
         from service.workflow_repository import repository
 
         execution = repository.get_execution_by_workflow(workflow_id) or {}
     except Exception as exc:
-        logging.getLogger("workflow.kg.custom.steps").warning(
-            "lookup execution for workflow %s failed: %s", workflow_id, exc
-        )
+        log.warning("lookup execution for workflow %s failed: %s", workflow_id, exc)
         execution = {}
     task_id = execution.get("taskId") or f"PI-kgstep-{workflow_id[:12]}"
     execution_id = execution.get("id")
+    space = (request.get("selectors") or {}).get("graph_space") or None
+    step_id = str(request.get("stepId") or "extract")
+    client = None
     try:
-        from service.manual_review_production import manual_review_service
-
         for item in pending:
             if not isinstance(item, dict):
                 continue
+            if str(item.get("kind") or "entity") != "entity":
+                log.warning(
+                    "pendingReview 关系项已废弃（歧义改挂实体，走 T_LINK），丢弃: "
+                    "step=%s obj=%s reason=%s",
+                    step_id,
+                    item.get("objectId"),
+                    item.get("reason"),
+                )
+                continue
             try:
-                manual_review_service.create_direct_case(
+                if client is None:
+                    client = _pending_graph_client(space)
+                _enqueue_entity_pending_item(
+                    item,
+                    step_id=step_id,
+                    client=client,
+                    space=space,
                     task_id=task_id,
                     execution_id=execution_id,
-                    step_id=request["stepId"],
-                    template_id=str(item.get("templateId") or "T_DIRECT"),
-                    workflow_type=(
-                        "kg.schema.extract"
-                        if str(item.get("templateId") or "T_DIRECT") != "T_DIRECT"
-                        else None
-                    ),
-                    kind=item.get("kind", "entity"),
-                    candidate=item.get("candidate", {}),
-                    object_id=item.get("objectId"),
-                    object_name=item.get("objectName"),
-                    node_label=item.get("nodeLabel"),
-                    edge_type=item.get("edgeType"),
-                    from_id=item.get("fromId"),
-                    to_id=item.get("toId"),
-                    reason=item.get("reason", ""),
-                    confidence=item.get("confidence"),
-                    evidence=item.get("evidence", []),
                     workflow_id=workflow_id,
                     workflow_run_id=workflow_run_id,
-                    domain=item.get("domain", "graph"),
-                    source_record=item.get("sourceRecord"),
-                    source_table=item.get("sourceTable"),
-                    source_record_id=item.get("sourceRecordId"),
-                    llm_input=item.get("llmInput"),
-                    llm_output=item.get("llmOutput"),
-                    extra_snapshot={"jobId": execution.get("jobId")},
+                    job_id=execution.get("jobId"),
                 )
-            except Exception as exc:
-                logging.getLogger("workflow.kg.custom.steps").warning(
-                    "create_direct_case failed step=%s obj=%s reason=%s",
-                    request["stepId"],
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "pendingReview 实体项建 T_LINK 失败 step=%s obj=%s reason=%s",
+                    step_id,
                     item.get("objectId"),
                     exc,
                 )
-    except Exception as exc:
-        logging.getLogger("workflow.kg.custom.steps").warning(
-            "enqueue pending review unavailable (service load failed): %s", exc
-        )
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                log.exception("关闭消歧改道图客户端失败")
 
 
 # ---------------------------------------------------------------------------
@@ -698,7 +815,6 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         script = definition.script
         bucket = script.bucket if script else None
         object_key = script.object_key if script else None
-        function_name = (script.workflow_function_name if script else None) or "transform"
         timeout_seconds = int(os.getenv("SCHEMA_WORKFLOW_TIMEOUT_SECONDS", "3600"))
         max_inflight = max(1, int(os.getenv("SCHEMA_EXTRACT_MAX_INFLIGHT", "3")))
         failure_case_cap = max(0, int(os.getenv("SCHEMA_EXTRACT_FAILURE_CASE_CAP", "2000")))
@@ -743,17 +859,15 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         suffix=".py",
         data=data,
     )
-    # 多步声明解析：@step 装饰器（推荐）或顶层 STEPS 清单（兼容）→ 多步链；
-    # 无声明 → 单步兜底（入口名沿用上传时存的 functionName）。上传时
-    # _validate_script 已校验过形状，这里重新解析兜住绕过上传通道的脚本，
+    # 步声明解析：@step 装饰器是唯一脚本形态（单步 transform / STEPS 清单已删除）。
+    # 上传时 _validate_script 已校验过，这里重新解析兜住绕过上传通道的脚本，
     # 非法即失败（workflow 报清晰错误）。
     try:
-        declared_steps = extract_declared_steps(
+        steps = extract_declared_steps(
             data.decode("utf-8-sig", errors="replace"), filename=object_key
         )
     except ValueError as exc:
-        raise ValueError(f"Schema 脚本多步声明非法: {exc}") from exc
-    steps = declared_steps or [{"id": "_default", "fn": function_name}]
+        raise ValueError(f"Schema 脚本步声明非法: {exc}") from exc
     return {
         "schemaId": schema_id,
         "schemaKey": schema_key,
@@ -766,10 +880,8 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         # run 级脚本副本定位：execute_transform 的 tempfile 丢失时按此重物化
         "scriptRunKey": run_key,
         "scriptSha256": script_sha256,
-        "functionName": function_name,
         # steps 只放 id/fn 两个 str 键（plan 要经 Temporal 序列化进事件历史）
         "steps": steps,
-        "multiStep": declared_steps is not None,
         "timeoutSeconds": timeout_seconds,
         "maxInflight": max_inflight,
         "failureCaseCap": failure_case_cap,
@@ -800,12 +912,16 @@ def build_source_batch_sql(
     query_sql: str | None = None,
     cursor_kind: str = "watermark",
     record_ids: list[Any] | None = None,
+    pk_cursor: str | None = None,
 ) -> str:
     """构造来源批次 SQL（纯函数，便于单测）。
 
     - 基表：``query_sql`` 存在时包成子查询（须暴露与 time/pk 同名的列），
       否则 ``{database}.{table}`` 全表；
     - watermark 模式（time_column 非空）：``WHERE time > :wm ORDER BY time, pk LIMIT :n``；
+      提供 ``pk_cursor``（批间/跨执行续游标）时用组合条件
+      ``time > :wm OR (time = :wm AND pk > :cursor)``——同秒多行只按时间比较
+      会把与水位同秒的尾行永久切掉（水位已推进，跨执行也读不回）；
     - keyset 模式（time_column 为空）：``WHERE pk > :cursor ORDER BY pk LIMIT :n``（游标存 checkpoint）；
     - offset 模式（普通表，主键不保证唯一）：``[WHERE time > :wm] ORDER BY pk LIMIT :n OFFSET :offset``
       ——与旧脚本 LIMIT/OFFSET 同语义，增量靠时间列过滤 + 结束后一次性推水位；
@@ -829,6 +945,11 @@ def build_source_batch_sql(
         return f"{base}{where} ORDER BY `{pk_column}` LIMIT :n OFFSET :offset"
     if not time_column:
         raise ValueError("watermark 模式必须提供 timeColumn")
+    if pk_cursor:
+        return (
+            f"{base} WHERE (`{time_column}` > :wm OR (`{time_column}` = :wm "
+            f"AND `{pk_column}` > :cursor)) ORDER BY `{time_column}`, `{pk_column}` LIMIT :n"
+        )
     return f"{base} WHERE `{time_column}` > :wm ORDER BY `{time_column}`, `{pk_column}` LIMIT :n"
 
 
@@ -888,6 +1009,7 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
         cursor_kind = "keyset"
 
     binds: dict[str, Any] = {}
+    pk_cursor: str | None = None
     if cursor_kind == "ids":
         pass  # 每块单独构造 binds
     elif cursor_kind == "offset":
@@ -901,10 +1023,16 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
                 binds["wm"] = str(watermark)
     elif cursor_kind == "watermark":
         watermark = request.get("watermark")
+        pk_cursor = request.get("pkCursor")
         if watermark is None:
             wm_row = read_watermark(request.get("definitionId"), request.get("stepId") or "")
             watermark = (wm_row or {}).get("watermark") or "1970-01-01 00:00:00"
+            # 跨执行续跑：持久化 checkpoint 的 pkCursor 与水位同进组合条件，
+            # 否则上次执行同秒尾行永久丢失
+            pk_cursor = pk_cursor or ((wm_row or {}).get("checkpoint") or {}).get("pkCursor")
         binds = {"wm": str(watermark), "n": batch_size}
+        if pk_cursor:
+            binds["cursor"] = str(pk_cursor)
     else:
         cursor = request.get("cursor")
         if cursor is None:
@@ -933,6 +1061,7 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
             pk_column=pk_column,
             query_sql=query_sql,
             cursor_kind=cursor_kind,
+            pk_cursor=pk_cursor if cursor_kind == "watermark" else None,
         )
         sqls.append((sql, binds))
 
@@ -1088,10 +1217,10 @@ async def _rematerialize_run_script(request: dict[str, Any]) -> str:
 
 @activity.defn
 async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
-    """把批次行交给脚本转换：payload["rows"] = 行 JSON，调脚本入口（默认 transform）。
+    """把批次行交给脚本转换：payload["rows"] = 行 JSON，调 request.functionName 指定步。
 
-    多步脚本（顶层 STEPS 声明）时每个 step 调一次本 activity（各自独立 Temporal 重试）：
-    - 第 1 步与单步 transform 同构（request/payload 均相同）；
+    @step 声明的多步脚本每个 step 调一次本 activity（各自独立 Temporal 重试）：
+    - 第 1 步消费平台读的源表行（request/payload 同单步形态）；
     - 第 N>1 步 request 额外带 ``input``（上一步完整输出 dict）与 ``prevOutputs``
       （已完成各步 {stepId: 输出}），payload 换为 ``{"input": ..., "source_table": ...,
       "kind": ..., "source": ...}``（不再带 rows）；ctx.prev_outputs 同步可读；
@@ -1118,7 +1247,7 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
         # worker 崩溃/容器重建导致本地 tempfile 丢失：按 run 副本重物化
         # （sha256 钉版本，换 worker 接手也拿到同一份字节）
         script_path = Path(await _rematerialize_run_script(request))
-    function_name = request.get("functionName", "transform")
+    function_name = request["functionName"]
     source = request.get("source") or {}
     kind = request.get("kind", "entity")
     rows_key = request.get("rowsKey")
@@ -1420,8 +1549,8 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
         TOP_K,
         decide,
         display_name,
-        name_columns_in,
         normalize_display_name,
+        recall_same_name,
         score_candidate,
     )
 
@@ -1462,55 +1591,7 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
         client = TRSGraphClient(settings)
         try:
             client.connect()
-            # 不同来源的 tag 主名列不一（schema 管理建 name，vendor ETL 的
-            # Organization 是 name_cn）：DESCRIBE 探测实际存在的名字列再拼 WHERE，
-            # 引用不存在的列会直接 SemanticError
-            try:
-                desc = client.execute_query(f"DESCRIBE TAG `{name_tag}`")
-                fields = {
-                    f for f in (r.get("Field") for r in desc.records or []) if isinstance(f, str)
-                }
-                name_cols = name_columns_in(fields)
-            except Exception:  # noqa: BLE001
-                logger.warning("DESCRIBE TAG %s 失败，同名召回按 name 列兜底", name_tag)
-                name_cols = ["name"]
-            if not name_cols:
-                logger.info(
-                    "tag %s 无显示名列（name/name_cn/name_en/name_zh），跳过同名召回", name_tag
-                )
-            else:
-                names = list(by_name)
-                name_list = ",".join(json.dumps(n, ensure_ascii=False) for n in names)
-                where = " OR ".join(f"v.`{col}` IN [{name_list}]" for col in name_cols)
-                select_names = ", ".join(
-                    f"v.`{col}` AS `nm{idx}`" for idx, col in enumerate(name_cols)
-                )
-                base_match = (
-                    f"MATCH (v:`{name_tag}`) WHERE {where} RETURN id(v) AS vid, {select_names}"
-                )
-                try:
-                    result = client.execute_read(f"{base_match}, properties(v) AS props LIMIT 200")
-                    name_only = False
-                except Exception:  # noqa: BLE001
-                    logger.warning("同名召回 properties() 失败，降级为仅名称比对")
-                    result = client.execute_read(f"{base_match} LIMIT 200")
-                    name_only = True
-                for rec in result.records or []:
-                    vid = str(rec.get("vid") or "")
-                    props = {} if name_only else (rec.get("props") or {})
-                    if name_only:
-                        nm = next(
-                            (
-                                str(rec.get(f"nm{idx}") or "")
-                                for idx in range(len(name_cols))
-                                if rec.get(f"nm{idx}")
-                            ),
-                            "",
-                        )
-                    else:
-                        nm = display_name(props)
-                    if nm and vid:
-                        existing.setdefault(nm, []).append({"vid": vid, "name": nm, "props": props})
+            existing = recall_same_name(client, name_tag, list(by_name))
         finally:
             try:
                 client.close()
@@ -1919,11 +2000,11 @@ class SchemaExtractWorkflow:
     - 来源间 ``asyncio.gather`` 并行；来源内 1 reader（串行读推进游标）+ N worker
       （转换→写图→冲突检测）经 ``asyncio.Queue(maxsize=N)`` 背压并发——十万级数据
       也不会一次进内存/一次跑完。
-    - 脚本可在顶层声明 ``STEPS`` 清单做多步转换（单 ``transform`` = 单步特例）：
-      批内步序串行，每步一次 ``execute_transform`` activity（第 k 步失败由 Temporal
-      只重试第 k 步）；第 N>1 步 payload 为 ``{"input": 上一步输出, ...}``，
-      ``ctx.prev_outputs`` 可读已完成各步输出；任意一步出 entities/edges 即在该步后
-      写图，failures 跨步聚合。水位仍是来源级整链推进，不做 per-step 水位。
+    - 脚本用 ``@step`` 装饰器声明转换步（唯一形态，单步 ``transform`` / ``STEPS``
+      清单已删除）：批内步序串行，每步一次 ``execute_transform`` activity（第 k 步
+      失败由 Temporal 只重试第 k 步）；第 N>1 步 payload 为 ``{"input": 上一步输出,
+      ...}``，``ctx.prev_outputs`` 可读已完成各步输出；任意一步出 entities/edges
+      即在该步后写图，failures 跨步聚合。水位仍是来源级整链推进，不做 per-step 水位。
     - 游标（水位或 pk keyset）在该来源**全部批次成功后**一次性推进——并发处理下
       逐批推进会留洞；批次 activity 重试耗尽 → workflow FAILED，游标停在上一轮，
       下轮从断点续读（merge 写图幂等）。
@@ -2011,12 +2092,12 @@ class SchemaExtractWorkflow:
                 }
                 raise
             sources = result.get("sources") or []
-            # 内层 activities = 该脚本各转换步聚合（单 transform 脚本聚合为 1 条）
+            # 内层 activities = 该脚本各 @step 转换步聚合
             activities: dict[str, dict[str, Any]] = {}
             for sid, stat in (result.get("steps") or {}).items():
                 activities[sid] = {
                     "status": stat.get("status", "COMPLETED"),
-                    "name": (result.get("functionName") or sid) if sid == "_default" else sid,
+                    "name": sid,
                     "records": int(stat.get("records", 0)),
                     "written": int(stat.get("written", 0)),
                     "failed": int(stat.get("failed", 0)),
@@ -2073,17 +2154,12 @@ class SchemaExtractWorkflow:
         timeout_seconds = max(int(plan.get("timeoutSeconds", 3600)), 60)
         kind = plan.get("kind", "entity")
         definition_id = f"schema-extract-{plan['schemaKey']}"
-        # 步清单：STEPS 声明脚本为多步链（批内步序串行，每步一次 execute_transform
-        # 独立重试）；单 transform 脚本及升级窗口内在飞重放的旧 plan（无 steps 键）
-        # 都兜底单步，行为与历史版本逐字段一致
-        steps: list[dict[str, str]] = plan.get("steps") or [
-            {"id": "_default", "fn": plan["functionName"]}
-        ]
-        multi_step = bool(plan.get("multiStep"))
+        # 步清单：@step 声明是唯一脚本形态（上传与计划组装双重校验），批内步序
+        # 串行，每步一次 execute_transform 独立重试
+        steps: list[dict[str, str]] = plan["steps"]
         self._run_script_object = plan.get("scriptRunKey")
-        # 分步聚合计数开关：多步脚本原生开启；chain 模式（force_step_totals）下单
-        # transform 脚本也聚合为 1 条（key=_default），保证详情页每个 Schema 抽屉有内容
-        track_steps = multi_step or force_step_totals
+        # 分步聚合计数：详情页每个 Schema 抽屉展示各转换步统计
+        track_steps = True
 
         # 周期 Schedule 触发：request 是扁平 shape（非 {definitionId, payload}），
         # 直接调注册 activity 落 execution/task 行（幂等）。chain 模式下控制面
@@ -2257,10 +2333,9 @@ class SchemaExtractWorkflow:
                             prev_output: dict[str, Any] = {}
                             step_outputs: dict[str, Any] = {}
                             for seq, step in enumerate(steps):
-                                step_ctx_id = f"{step_id}#{step['id']}" if multi_step else step_id
                                 transform_request: dict[str, Any] = {
                                     "scriptPath": plan["scriptPath"],
-                                    # run 副本定位（.get 兼容升级窗口内在飞旧 plan 的重放）
+                                    # run 副本定位（tempfile 丢失时按此重物化）
                                     "scriptRunKey": plan.get("scriptRunKey"),
                                     "scriptSha256": plan.get("scriptSha256"),
                                     "functionName": step["fn"],
@@ -2271,12 +2346,11 @@ class SchemaExtractWorkflow:
                                     "definitionId": definition_id,
                                     # 水位读取键（kg_script_watermark）保持来源级，不随步变
                                     "stepId": step_id,
+                                    "ctxStepId": f"{step_id}#{step['id']}",
                                     # 载荷 key 的确定性派生字段（batch/chunk 序，内联路径多带无害）
                                     "batchIdx": idx,
                                     "chunkIdx": chunk["index"],
                                 }
-                                if multi_step:
-                                    transform_request["ctxStepId"] = step_ctx_id
                                 if seq:
                                     if "outKey" in prev_output:
                                         # S3 中转：input/prevOutputs 以 key 传递（无截断，
@@ -2309,7 +2383,7 @@ class SchemaExtractWorkflow:
                                     # 第 1 步（S3 中转）：批行以 key 传递
                                     transform_request["rowsKey"] = chunk["rowsKey"]
                                 else:
-                                    # 第 1 步：与单步 transform 请求形状一致
+                                    # 第 1 步：消费平台读的源表行
                                     transform_request["rows"] = chunk["rows"]
                                 transformed = await workflow.execute_activity(
                                     execute_transform,
@@ -2362,7 +2436,7 @@ class SchemaExtractWorkflow:
                                             "name": plan["name"],
                                             "graph": graph,
                                             "schemaKey": plan["schemaKey"],
-                                            "stepId": step_ctx_id,
+                                            "stepId": f"{step_id}#{step['id']}",
                                             "sourceTable": table_label,
                                             "batchIdx": idx,
                                             "chunkIdx": chunk["index"],
@@ -2399,7 +2473,7 @@ class SchemaExtractWorkflow:
                                             "name": plan["name"],
                                             "graph": graph,
                                             "schemaKey": plan["schemaKey"],
-                                            "stepId": step_ctx_id,
+                                            "stepId": f"{step_id}#{step['id']}",
                                             **records_arg,
                                         },
                                         start_to_close_timeout=timedelta(seconds=120),
@@ -2602,9 +2676,8 @@ class SchemaExtractWorkflow:
                         sid: {**stat, "status": "COMPLETED"}
                         for sid, stat in aggregated_steps.items()
                     },
-                    # chain 外层阶段命名（label 优先）与单 transform 步命名（函数名）
+                    # chain 外层阶段命名（label 优先）
                     "schemaLabel": plan.get("label") or plan["name"],
-                    "functionName": plan["functionName"],
                 }
                 if track_steps
                 else {}
@@ -2710,7 +2783,7 @@ class SchemaExtractChainWorkflow(SchemaExtractWorkflow):
     """多脚本串行链：复用 SchemaExtractWorkflow 全部逻辑，payload.schemaIds ≥2 时串行逐 Schema 抽取。
 
     temporalio 要求 defn 子类显式重写 run；分发在基类 run 顶端完成，行为全部继承。
-    详情页按 workflowType 区分 chain 渲染（每 Schema 一个抽屉，内层为脚本 STEPS 步）。
+    详情页按 workflowType 区分 chain 渲染（每 Schema 一个抽屉，内层为脚本 @step 转换步）。
     """
 
     @workflow.run

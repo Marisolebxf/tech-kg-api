@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { IconInfoCircle, IconSearch } from '@arco-design/web-vue/es/icon'
 import {
@@ -13,6 +13,7 @@ import {
   type WorkflowJob,
 } from '../../api/workflowOperations'
 import { schemaErrorMessage } from '../../api/schemaManagement'
+import { subscribeJobEvents } from '../../api/jobEvents'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import JobLaunchDialog from '../../components/JobLaunchDialog.vue'
 import ListPagination from '../../components/list-pagination.vue'
@@ -101,17 +102,44 @@ watch(showAllSpaces, (value) => {
   }
 })
 
-async function loadData() {
-  loading.value = true
+async function loadData(silent = false) {
+  // silent：轮询刷新用，不转 loading、失败不弹 toast（避免每几秒闪一次）
+  if (!silent) loading.value = true
   try {
     const jobList = await listJobs()
     jobs.value = jobList.items
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    if (!silent) showToast(schemaErrorMessage(error), 'warning')
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
 }
+
+// 状态更新走服务端推送（SSE）：后端监视控制面表，Schedule 到点起跑/执行翻终态/
+// 暂停恢复/增删即时下发 jobs-changed，前端不再定时轮询。断线由 EventSource
+// 自动重连，重连成功时全量重拉补齐漏掉的事件；运行中任务到达终态时弹 toast
+// 告知结果（与报错同款提示形式）
+let unsubscribeJobEvents: (() => void) | null = null
+
+function announceFinished(prevJobs: WorkflowJob[]) {
+  const prev = new Map(prevJobs.map((job) => [job.id, deriveJobUnifiedStatus(job)]))
+  for (const job of jobs.value) {
+    const now = deriveJobUnifiedStatus(job)
+    if (prev.get(job.id) !== '运行中') continue // 只报「运行中→终态」的翻转，历史终态不弹
+    if (now === '已完成') showToast(`任务「${job.name}」执行完成`, 'success')
+    else if (now === '运行失败') showToast(`任务「${job.name}」执行失败，点任务名查看原因`, 'warning')
+  }
+}
+
+async function reloadOnEvent(announce: boolean) {
+  const prevJobs = [...jobs.value]
+  await loadData(true)
+  if (announce) announceFinished(prevJobs)
+}
+
+onUnmounted(() => {
+  unsubscribeJobEvents?.()
+})
 
 function openCreate() {
   createOpen.value = true
@@ -181,14 +209,24 @@ function executionStatusClass(status: string): string {
   return 'run'
 }
 
-onMounted(loadData)
+onMounted(() => {
+  void loadData()
+  unsubscribeJobEvents = subscribeJobEvents(
+    () => {
+      void reloadOnEvent(!document.hidden) // 页面隐藏时静默刷新，不弹无人看的 toast
+    },
+    () => {
+      void loadData(true) // 连接/重连成功：静默全量重拉，补齐断线期间的变化
+    },
+  )
+})
 </script>
 
 <template>
   <main class="graph-build-page">
     <div class="gb-actions">
       <button type="button" class="primary" @click="openCreate">＋ 新建任务</button>
-      <button type="button" :disabled="loading" @click="loadData">{{ loading ? '刷新中…' : '刷新' }}</button>
+      <button type="button" :disabled="loading" @click="loadData()">{{ loading ? '刷新中…' : '刷新' }}</button>
     </div>
 
     <section class="gb-summary">
@@ -287,7 +325,7 @@ onMounted(loadData)
     <JobLaunchDialog
       :open="createOpen"
       @close="createOpen = false"
-      @created="loadData"
+      @created="loadData()"
     />
   </main>
 </template>

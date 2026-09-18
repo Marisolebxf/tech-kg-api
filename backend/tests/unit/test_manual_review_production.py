@@ -6,12 +6,15 @@ graph-build 移交通道（内部入口 / correction / outbox）已删除，subm
 
 from __future__ import annotations
 
+import json
+
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db_model.base import Base
+from db_model.manual_review import ReviewCase
 from service.manual_review_domain import (
     ReviewConflictError,
     ReviewIdentity,
@@ -396,3 +399,91 @@ def test_job_ids_by_execution_ids_batch():
         "E2": "job-b",
     }
     assert repo.job_ids_by_execution_ids([]) == {}
+
+
+# ----------------------------------------------------------------------
+# T_EXTRACT_FAIL 重跑仍失败：attempt+1 新 case 必须真的建出来
+# （candidate 不带 attempt 时去重键与原案相同，新 case 被静默吞掉）
+# ----------------------------------------------------------------------
+
+
+def _make_extract_fail_case(service, *, attempt=1, execution_id="EXEC-1"):
+    """模拟 record_extract_failures activity 建案（attempt 记在 input_snapshot）。"""
+    resp = service.create_direct_case(
+        task_id="TASK-E1",
+        execution_id=execution_id,
+        step_id="extract",
+        kind="entity",
+        candidate={"recordId": "w3", "error": "ValueError: POISON", "schemaKey": "widget"},
+        object_id="w3",
+        object_name="db.widgets#w3",
+        node_label="E2EWidget",
+        reason="记录解析失败: ValueError: POISON",
+        template_id="T_EXTRACT_FAIL",
+        workflow_type="kg.schema.extract",
+        source_table="db.widgets",
+        source_record_id="w3",
+        extra_snapshot={
+            "schemaId": "s1",
+            "schemaKey": "widget",
+            "sourceBindingId": "b1",
+            "jobId": "job-1",
+            "attempt": attempt,
+        },
+    )
+    return resp["reviewId"]
+
+
+def _refail_once(service, case_id, rerun_execution_id):
+    """一轮重跑仍失败：标记 RERUNNING → 回写（与 resolve_failure_cases activity 同参）。"""
+    service.mark_extract_rerun([case_id])
+    return service.resolve_extract_rerun(
+        rerun_case_ids=[case_id],
+        failed_records=[{"sourceBindingId": "b1", "recordId": "w3", "error": "ValueError: POISON"}],
+        rerun_execution_id=rerun_execution_id,
+        task_id="TASK-E1",
+        kind="entity",
+        name="E2EWidget",
+    )
+
+
+def test_extract_rerun_refail_recreates_next_attempt_case(service):
+    case1 = _make_extract_fail_case(service)
+    result = _refail_once(service, case1, "EXEC-R1")
+    assert result == {"resolved": 1, "refailed": 1, "recreated": 1}
+
+    with service.sf() as s:
+        row1 = s.scalar(select(ReviewCase).where(ReviewCase.id == case1))
+        assert row1.status == "RESOLVED"  # 原案被取代
+        reopened = s.scalars(
+            select(ReviewCase).where(
+                ReviewCase.source_record_id == "w3", ReviewCase.status == "OPEN"
+            )
+        ).all()
+    assert len(reopened) == 1, "仍失败记录必须以新 case 回到待处理队列"
+    snap = json.loads(reopened[0].input_snapshot)
+    assert snap["attempt"] == 2
+    assert snap["executionId"] == "EXEC-R1"
+    assert snap["rerunOfExecutionId"] == "EXEC-1"
+
+
+def test_extract_rerun_refail_chain_each_attempt_distinct(service):
+    # 连续两轮重跑都失败 → attempt 2 / 3 各一条 case，不互相去重吞案
+    case1 = _make_extract_fail_case(service)
+    _refail_once(service, case1, "EXEC-R1")
+    with service.sf() as s:
+        case2 = s.scalar(
+            select(ReviewCase.id).where(
+                ReviewCase.source_record_id == "w3", ReviewCase.status == "OPEN"
+            )
+        )
+    result = _refail_once(service, case2, "EXEC-R2")
+    assert result["recreated"] == 1
+
+    with service.sf() as s:
+        rows = s.scalars(select(ReviewCase).where(ReviewCase.source_record_id == "w3")).all()
+    attempts = sorted(json.loads(c.input_snapshot)["attempt"] for c in rows)
+    assert attempts == [1, 2, 3]
+    open_rows = [c for c in rows if c.status == "OPEN"]
+    assert len(open_rows) == 1
+    assert json.loads(open_rows[0].input_snapshot)["attempt"] == 3

@@ -31,6 +31,17 @@ type Step = {
   access?: AccessReport
   /** chain 任务：脚本 step 内含的 activity step 数（抽屉可展开）。 */
   activityCount?: number
+  /** 执行序（内部排序用） */
+  position?: number
+}
+
+function stepDuration(startedAt?: string, finishedAt?: string): string {
+  if (!startedAt || !finishedAt) return '-'
+  const start = new Date(startedAt.replace(' ', 'T')).getTime()
+  const end = new Date(finishedAt.replace(' ', 'T')).getTime()
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return '-'
+  const seconds = Math.max(Math.round((end - start) / 1000), 0)
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, '0')}s`
 }
 
 const route = useRoute()
@@ -129,20 +140,29 @@ function buildPipelineSteps(): Step[] {
           ? `attempt=${info.attempt}`
           : '-',
     abnormal: typeof info.failed === 'number' ? String(info.failed) : info.error ? '1' : '0',
-    duration: '-',
+    duration: stepDuration(info.startedAt, info.finishedAt),
     description: info.error || info.description || `${engine} · ${info.status}`,
     engine,
+    position: info.position,
     input: info.input,
     output: info.output,
     access: info.access,
     activityCount: info.activities ? Object.keys(info.activities).length : undefined,
   }))
+  // Temporal JSON 编码按 key 排序：按 position 还原执行序（无 position 保持原序）
+  if (built.some((step) => step.position != null)) {
+    built.sort((a, b) =>
+      (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER))
+  }
   // 正在执行的 step 尚未写入 state：用 current 补一个「运行中」节点，避免流程断档
-  if (state.current && !state.steps[state.current]) {
+  const currentKey = state.current
+  const currentKnown =
+    currentKey != null && Boolean(state.steps[currentKey] || state.steps[`schema:${currentKey}`])
+  if (currentKey && !currentKnown) {
     built.push({
-      id: state.current,
+      id: currentKey,
       phase: '图谱构建',
-      name: state.current,
+      name: currentKey,
       status: '运行中',
       risk: '低风险',
       count: '-',
@@ -150,6 +170,7 @@ function buildPipelineSteps(): Step[] {
       duration: '-',
       description: `${engine} · 执行中`,
       engine,
+      position: undefined,
       input: undefined,
       output: undefined,
       access: undefined,

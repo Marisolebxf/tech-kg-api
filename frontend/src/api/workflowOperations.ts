@@ -81,6 +81,10 @@ export interface PipelineStepState {
 
 export interface PipelineStepInfo {
   status: 'COMPLETED' | 'RUNNING' | 'FAILED'
+  /** 执行序（Temporal JSON 编码按 key 排序，步序必须显式携带） */
+  position?: number
+  startedAt?: string
+  finishedAt?: string
   /** 该 step 的输入 payload（kg.custom.steps / kg.custom.chain 的 get_steps 返回）。 */
   input?: Record<string, unknown>
   output?: Record<string, unknown>

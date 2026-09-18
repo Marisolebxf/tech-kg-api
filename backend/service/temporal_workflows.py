@@ -2097,7 +2097,10 @@ class SchemaExtractWorkflow:
             # 步间暂停挂起点：当前环正常结束后、下一环开始前等待恢复
             await self._wait_if_paused()
             step_key = f"schema:{schema_id}"
-            self._current_schema = schema_id
+            # current 与 chain_steps 键同形（带 schema: 前缀）：前端以
+            # current 是否命中 steps 判断「当前环」补位节点，裸 id 恒未命中
+            # 会在任务完成后仍显示一个「执行中」幻影步
+            self._current_schema = step_key
             step_started = workflow.now().astimezone()
             self._chain_steps[step_key] = {
                 "status": "RUNNING",
